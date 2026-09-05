@@ -50,6 +50,7 @@ import warnings
 from typing import NamedTuple
 
 import numpy as np
+import scipy.sparse as _sp
 from numpy.polynomial.legendre import leggauss
 
 from . import _aca, _ground_refl, _near_interface, _sommerfeld_below
@@ -1224,24 +1225,39 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
             direct.append((Ac, Bc, iA, iB))
 
     if direct:
-        specs, rho_cat, z_cat, zp_cat = [], [], [], []
-        for AX, BX, iA, iB in direct:
+        # One buffer per column, filled block by block in place (momwire#914).
+        # What stood here built a (nA, nB) rho, ravelled it, and materialised a
+        # repeat and a tile per block, then concatenated 146 of each — three
+        # full copies of the asked set on top of the per-block temporaries.
+        # The destination slices are views of a contiguous buffer, so the
+        # broadcasts below write the same values with nothing in between.
+        specs = []
+        sizes = [iA.size * iB.size for _AX, _BX, iA, iB in direct]
+        ntot = int(sum(sizes))
+        rho_all = np.empty(ntot, dtype=float)
+        z_all = np.empty(ntot, dtype=float)
+        zp_all = np.empty(ntot, dtype=float)
+        off = 0
+        for (AX, BX, iA, iB), nel in zip(direct, sizes):
             pa, pb = AX["nodes"][iA], BX["nodes"][iB]
-            rho = np.hypot(
+            shp = (iA.size, iB.size)
+            specs.append((AX, BX, iA, iB, shp))
+            sl = slice(off, off + nel)
+            np.hypot(
                 pa[:, 0][:, None] - pb[:, 0][None, :],
                 pa[:, 1][:, None] - pb[:, 1][None, :],
+                out=rho_all[sl].reshape(shp),
             )
-            specs.append((AX, BX, iA, iB, rho.shape))
-            rho_cat.append(rho.ravel())
-            z_cat.append(np.repeat(pa[:, 2] - gz, iB.size))
-            zp_cat.append(np.tile(pb[:, 2] - gz, iA.size))
+            z_all[sl].reshape(shp)[:] = (pa[:, 2] - gz)[:, None]
+            zp_all[sl].reshape(shp)[:] = (pb[:, 2] - gz)[None, :]
+            off += nel
         tab = _tables(
             ctx,
             eps_t,
             k_p,
-            np.concatenate(rho_cat),
-            np.concatenate(z_cat),
-            np.concatenate(zp_cat),
+            rho_all,
+            z_all,
+            zp_all,
             _CROSS_RTOL,
             memo=memo,
         )
@@ -1352,17 +1368,69 @@ def _g_of_r(k, R):
     return np.exp(-1j * k * R) / R
 
 
+def _fdw_sparse(ax):
+    """`Fd · w` as a CSR, built from the axis's own segment tables and cached
+    on the axis (momwire#914).
+
+    `Fd` is block-sparse by construction: on the nodes of segment g only the
+    rows `seg_rows[g]` can be nonzero, and `seg_runs[g]` gives that segment's
+    node run. The pattern the tables imply is EXACT here, not a superset —
+    measured 13,192 index pairs against 13,192 actual nonzeros on the N = 113
+    BLE below-axis, i.e. 0.23 % density.
+
+    Built from the STRUCTURE rather than by handing the dense array to
+    `csr_matrix`: the dense scan is the cost. On that axis the end-to-node
+    product is 71.4 ms dense, 28.5 ms via a CSR scanned out of the dense
+    array, and 4.2 ms via this one, all three including construction.
+    """
+    cached = ax.get("_fdw_csr")
+    if cached is not None:
+        return cached
+    Fd, w = ax["Fd"], ax["w"]
+    runs, seg_rows = ax.get("seg_runs"), ax.get("seg_rows")
+    rows_i, cols_i = [], []
+    if runs is not None and seg_rows is not None:
+        for g, rc in runs.items():
+            rows = seg_rows.get(int(g))
+            if rows is None or rows.size == 0:
+                continue
+            cols = np.arange(rc[0], rc[0] + rc[1])
+            rows_i.append(np.repeat(rows, cols.size))
+            cols_i.append(np.tile(cols, rows.size))
+    if rows_i:
+        ri = np.concatenate(rows_i)
+        ci = np.concatenate(cols_i)
+        out = _sp.csr_matrix((Fd[ri, ci] * w[ci], (ri, ci)), shape=Fd.shape)
+    else:
+        # No tables (an axis built before #912, or one with no live wings):
+        # the dense product is the reference and stays available.
+        out = _sp.csr_matrix(Fd * w)
+    ax["_fdw_csr"] = out
+    return out
+
+
 def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     """The same-medium by-parts boundary shape on one axis (β = 1):
     −test-end rows, −source-end columns, +corner — the derivation's
     −,−,+ sign structure. Closed-form kernel G = e^{−jkR}/R at
     R = √(‖Δr‖² + a²), source positions mirrored through the interface
-    for the image family. Returns (bnd, corner)."""
+    for the image family.
+
+    Returns `(live, row_term, col_term, corner)` — the SUPPORT of the shape,
+    not two dense (n, n) blocks (momwire#914). `fvT` is the ends' basis
+    values, and a wire end touches only the basis functions whose support
+    reaches it, so every term here is confined to those rows: the row term to
+    `live × all`, the column term to `all × live`, the corner to
+    `live × live`. Measured 317 live of 1278 on the N = 113 BLE below-axis.
+    The caller scatters them; nothing here is ever materialised at (n, n).
+
+    Same sums, different order of summation — as the stacked form this
+    replaces already said, read to scale, never to the bit. The residual
+    against the dense form measures 5.7e-14 on that axis; the gate is the
+    crossgate tolerance, not `array_equal`.
+    """
     pts = ax["nodes"]
-    Fdw = ax["Fd"] * ax["w"]
     n = ax["n_basis"]
-    bnd = np.zeros((n, n), dtype=np.complex128)
-    corner = np.zeros((n, n), dtype=np.complex128)
 
     def _mir(p):
         p = np.array(p, dtype=float, copy=True)
@@ -1371,8 +1439,10 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
         return p
 
     ends = ax["ends"]
+    empty = np.zeros(0, dtype=np.int64)
     if not ends:
-        return bnd, corner
+        z = np.zeros((0, n), dtype=np.complex128)
+        return empty, z, z.T.copy(), np.zeros((0, 0), dtype=np.complex128)
     # Every term below is a sum of outer products over the E wire ends, i.e.
     # a rank-E product. Stacked, the three loops are two matmuls:
     #   bnd    = -(FT^T diag(sig) Gt)  -(Gs^T diag(sig) FS)
@@ -1386,21 +1456,28 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     ptE = np.array([np.asarray(e[0], dtype=float) for e in ends])  # (E, 3)
     sig = np.array([float(e[1]) for e in ends])  # (E,)
     fvT = np.array([np.asarray(e[2], dtype=np.complex128) for e in ends])  # (E, n)
+    # The ends' live basis rows. Every term is confined to them, so the two
+    # (n, n) blocks this used to allocate and fill were mostly exact zeros.
+    live = np.flatnonzero(np.any(fvT != 0, axis=0))
+    sf = sig[:, None] * fvT[:, live]  # (E, L)
     src = _mir(pts)  # (P, 3) source nodes (mirrored for the image family)
     pe = _mir(ptE)  # (E, 3) source ends (mirrored)
     a2 = a_wire * a_wire
+    Fsp = _fdw_sparse(ax)  # (n, P) CSR of Fd*w
     # test ends (unmirrored observation) against mirrored source nodes
     d = src[None, :, :] - ptE[:, None, :]
-    Gt = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d))) @ Fdw.T  # (E, n)
+    Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, P)
+    Gt = (Fsp @ Ge.T).T  # (E, n)
     # source ends (mirrored) against unmirrored observation nodes
     d = pts[None, :, :] - pe[:, None, :]
-    Gs = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d))) @ Fdw.T  # (E, n)
-    bnd -= (sig[:, None] * fvT).T @ Gt
-    bnd -= Gs.T @ (sig[:, None] * fvT)
+    Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (P, E) rows
+    Gs = (Fsp @ Ge.T).T  # (E, n)
+    row_term = -(sf.T @ Gt)  # (L, n)
+    col_term = -(Gs.T @ sf)  # (n, L)
     d = ptE[:, None, :] - pe[None, :, :]
     Gee = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, E)
-    corner += (sig[:, None] * fvT).T @ Gee @ (sig[:, None] * fvT)
-    return bnd, corner
+    corner = sf.T @ Gee @ sf  # (L, L)
+    return live, row_term, col_term, corner
 
 
 def self_completions(ctx, ax_b, ax_a):
@@ -1414,9 +1491,19 @@ def self_completions(ctx, ax_b, ax_a):
     omega, eps0 = ctx.omega, ctx.eps
     total = np.zeros((ax_b["n_basis"],) * 2, dtype=np.complex128)
     for ax, k, wgt, eps in ((ax_b, k_m, a_m, eps_m), (ax_a, k_p, c2, eps0)):
-        bnd_dir, cor_dir = _bnd_and_corner(ax, k, a_wire, gz, mirror=False)
-        bnd_img, cor_img = _bnd_and_corner(ax, k, a_wire, gz, mirror=True)
         beta_dir = 1.0 / (1j * omega * eps * 4 * np.pi)
         beta_img = wgt / (1j * omega * eps * 4 * np.pi)
-        total += beta_dir * (bnd_dir + cor_dir) - beta_img * (bnd_img + cor_img)
+        for beta, mirror in ((beta_dir, False), (-beta_img, True)):
+            live, row_term, col_term, corner = _bnd_and_corner(
+                ax, k, a_wire, gz, mirror=mirror
+            )
+            if live.size == 0:
+                continue
+            # Scattered rather than added as two dense (n, n) blocks: the shape
+            # is confined to `live` on one side or both (momwire#914). The
+            # three writes are disjoint in the sense that matters — each adds
+            # its own term, exactly as the dense sum did.
+            total[live, :] += beta * row_term
+            total[:, live] += beta * col_term
+            total[np.ix_(live, live)] += beta * corner
     return total
