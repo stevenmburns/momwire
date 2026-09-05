@@ -84,13 +84,17 @@ def kernel_column(calls, eps_t, k2, p=None):
     t0 = time.perf_counter()
     ncol = 0
     for fresh in calls:
+        # Production's grouping: by rho alone since momwire#899 (z' rides
+        # in the exponential like z); (rho, z') before it.
         cols = {}
         for key in fresh:
-            cols.setdefault((key[0], key[2]), []).append(key[1])
+            cols.setdefault(key[0], []).append(key)
         ncol += len(cols)
         with pin():
-            for (r, zp), zs in cols.items():
-                ni.six_columns(eps_t, k2, r, zs, zp, p=p)
+            for r, members in cols.items():
+                zs = [m[1] for m in members]
+                zps = [m[2] for m in members]
+                ni.six_columns(eps_t, k2, r, zs, zps, p=p)
     return time.perf_counter() - t0, ncol
 
 
