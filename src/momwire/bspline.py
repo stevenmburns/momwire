@@ -505,6 +505,38 @@ _BURIED_CROSS_GRAZING_REFUSAL = (
 )
 
 
+def _pair_extents_below(x, y, d_b, rows=256):
+    """`(r1_max, th_min)` over every node pair for the below/below plan —
+    the largest image distance hypot(rho, h_i + h_j) and the shallowest
+    angle atan2(h_i + h_j, rho) — without an (n, n) array ever being live.
+
+    momwire#910: the all-pairs spelling built six (n, n) arrays over the
+    3,924 buried nodes of a 12-radial screen (123 MB each) and spent 0.6 s,
+    a third of it in arctan2, to find two scalars. Rows are walked in
+    chunks, the squared distance is accumulated in place, and the angle is
+    ONE atan at the end: on the closed quadrant hh, rho >= 0 the map
+    atan2(hh, rho) is monotone in hh / rho, so the minimum angle is the
+    minimum ratio. rho = 0 only where a node meets itself, where hh > 0 and
+    the ratio is +inf — never the minimum, so the divide is ignored. Same
+    two numbers to 1e-12 as the all-pairs form (gated).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    d_b = np.asarray(d_b, dtype=np.float64)
+    r1sq_max = 0.0
+    ratio_min = np.inf
+    for i0 in range(0, x.shape[0], rows):
+        i1 = min(i0 + rows, x.shape[0])
+        rho2 = (x[i0:i1, None] - x[None, :]) ** 2
+        rho2 += (y[i0:i1, None] - y[None, :]) ** 2
+        hh = d_b[i0:i1, None] + d_b[None, :]
+        r1sq_max = max(r1sq_max, float(np.max(rho2 + hh * hh)))
+        np.sqrt(rho2, out=rho2)
+        with np.errstate(divide="ignore"):
+            ratio_min = min(ratio_min, float(np.min(hh / rho2)))
+    return float(np.sqrt(r1sq_max)), float(np.arctan(ratio_min))
+
+
 class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
@@ -2701,7 +2733,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 obs, t_obs, src, t_src, gz, self.k, grid
             )
             fq = proj.reshape(i1 - i0, q, n_seg, q)
-            Jc = np.einsum("piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W)
+            # optimize=True (momwire#910): as one three-operand loop numpy
+            # walks every index at once — 16.6 ms per chunk on the 12-radial
+            # screen; contracted pairwise it is 3.6 ms, same sum to roundoff.
+            Jc = np.einsum("piq,iqjr,Pjr->pPij", W[:, i0:i1], fq, W, optimize=True)
             for a in range(d + 1):
                 sm = supp_seg[:, a]
                 # Wings of this chunk only; every wing lands in exactly one
@@ -4776,7 +4811,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 t_src,
             )
             fq = proj.reshape(i1 - i0, q, n_src, q)
-            Jc = np.einsum("piq,iqjr,Pjr->pPij", W_obs[:, i0:i1], fq, W_src)
+            # optimize=True: pairwise contraction, momwire#910 (see the
+            # remainder's twin above for the measurement).
+            Jc = np.einsum(
+                "piq,iqjr,Pjr->pPij", W_obs[:, i0:i1], fq, W_src, optimize=True
+            )
             for a in range(d + 1):
                 pm = pos_o[supp_seg[:, a]]
                 rows = np.nonzero((pm >= i0) & (pm < i1))[0]
@@ -4922,13 +4961,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # --- below/below: R1 = |two depths added|, theta = atan2(h, rho) ---
         d_b = gz - obs_b[:, 2]
-        dx = obs_b[:, 0][:, None] - obs_b[:, 0][None, :]
-        dy = obs_b[:, 1][:, None] - obs_b[:, 1][None, :]
-        rho = np.hypot(dx, dy)
-        hh = d_b[:, None] + d_b[None, :]
-        r1 = np.hypot(rho, hh)
-        r1_max = float(np.max(r1))
-        th_min = float(np.min(np.arctan2(hh, rho)))
+        r1_max, th_min = _pair_extents_below(obs_b[:, 0], obs_b[:, 1], d_b)
         cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
         if r1_max > cap:
             raise ValueError(
