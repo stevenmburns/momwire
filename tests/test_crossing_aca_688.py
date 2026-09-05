@@ -76,8 +76,11 @@ def test_g688_1_partition_is_total_and_corner_adjacent_stays_near():
 def test_g688_2_shared_memo_is_bit_identical_and_skips_reevaluation(monkeypatch):
     """The caller-owned memo (designed_tables' cross-call dedup): values
     through the memo are the SAME floats as fresh evaluation, and a
-    repeated call evaluates nothing new. Forced onto the numpy walk so
-    the evaluation count is a statement about the reference path."""
+    repeated call evaluates nothing new. Forced onto the POINT route's
+    numpy walk so the evaluation count is a statement about the reference
+    path; the column route (momwire#895) never calls `six_point` at all,
+    and the dedup being pinned here sits upstream of both."""
+    monkeypatch.setattr(_near_interface, "_ROUTE", "point")
     monkeypatch.setattr(_near_interface, "_FORCE_NUMPY", True)
     k = 2.0 * np.pi / WL7
     calls = []

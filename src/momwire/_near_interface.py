@@ -25,8 +25,26 @@ ladder, neither moving anything pinned):
     at full depth. Inactive for every near-interface pair.
 
 This module deliberately has no grid: every value is a direct contour
-evaluation, O(ms)/point, because the crossing fill's pair count is small
-and the corner cannot be interpolated from a grid that must exclude it.
+evaluation, because the corner cannot be interpolated from a grid that
+must exclude it. Two ROUTES evaluate that same integrand on that same
+path and differ only in where the panels come from (momwire#895):
+
+  point   : `six_point` (or its C++ twin) — panels chosen adaptively per
+            (ρ, z, z′) triple, O(ms)/point;
+  column  : `six_columns` — panels fixed ONCE per (ρ, z′) column and
+            shared by every z in it, converged for the column's smallest
+            s, O(µs)/point after the column's setup.
+
+The column route is not an approximation and not a grid: in `_core` the
+only z dependence is e^{−γ₊z} and the only ρ dependence is the Bessel /
+Hankel factor, so a column shares the path, the nodes, the weights, the
+path derivative AND the Bessel factor exactly, and a point is one
+exponential per node plus a (6 × K)·K product. The corner is served by
+the same contour as everything else, which is why it does not bite.
+
+Measured (#895 census): every point of a real crossing set sits in a
+(ρ, z′) column of ≥ 32 mast heights, so the route is 11–15× the C++
+point twin whole-deck, single-threaded.
 
 Convention gate: e^{+jωt}, ε̃ = ε_r − jσ/ωε₀, asserted at import.
 """
@@ -60,6 +78,22 @@ _RAY = np.exp(1j * np.pi / 4.0)
 _MAX_RAY_PANELS = 90
 _FAR_PAIR_KILL = 60.0
 
+# Column-rule resolution: each seeded interval (`_sub_seed`) is split into
+# 2^p fixed Gauss panels. p carries no structure — `_sub_seed` does — so it
+# is pure margin, and the measured margin at p = 0 is already four decades:
+# the #680 ledger reads 1.5e-15 against the reference walk, a 240-point
+# random ladder over 1.8–50 MHz, ε_r 1.5–30, σ 1e-4–5, ρ 1e-5–60 m reads
+# 2.0e-11 worst, and BLE N = 4/16 whole-deck reads 2.1e-14 against the C++
+# twin. p = 1 costs 2.3× the wall and moves none of those numbers, which is
+# what the converged-pair gate says: the rule is converged AT p = 0.
+_COLUMN_P = 0
+
+# Largest (nz × K) exponential block a column materialises at once. K grows
+# with ρ (one panel per J₀ oscillation), so a long-radial column times a tall
+# mast is the shape that would allocate hundreds of MB in one go. Rows are
+# independent, so chunking z is invisible to the answer.
+_COLUMN_Z_CHUNK = 1 << 22
+
 # The twin's capability flag — its OWN symbol (`near_interface_680`), never a
 # shared one: a .so built at an earlier arc exports the #568 entries but not
 # this one, and a shared flag would claim a contract it cannot serve.
@@ -73,10 +107,34 @@ _HAVE_NEAR_INTERFACE_ACCEL = _nia is not None and bool(
 # is the per-test one. `_use_near_interface_accel` reads both at CALL time.
 _FORCE_NUMPY = bool(os.environ.get("MOMWIRE_NEAR_INTERFACE_FORCE_NUMPY"))
 
+# The route `designed_tables` fills through (momwire#895). Same switch shape
+# as `_FORCE_NUMPY` one level up: `MOMWIRE_NEAR_INTERFACE_ROUTE` is the
+# whole-run spelling (a timing comparison, a bisect),
+# `monkeypatch.setattr(ni, "_ROUTE", "point")` the per-test one, and both are
+# read at CALL time. `point` selects the per-point walk — the C++ twin when
+# built, else `six_point` — which is also the parity gates' reference.
+_ROUTES = ("column", "point")
+_ROUTE = os.environ.get("MOMWIRE_NEAR_INTERFACE_ROUTE", "column")
+
 
 def _use_near_interface_accel():
     """The C++ walk twin serves when built and not forced off."""
     return _HAVE_NEAR_INTERFACE_ACCEL and not _FORCE_NUMPY
+
+
+def _use_column_route():
+    """The fixed per-column rule serves unless the point route is asked for.
+
+    An unrecognised spelling REFUSES rather than falling back: a typo in the
+    whole-run env switch would otherwise silently select the route it was
+    set to avoid, which is exactly the bisect this switch exists for.
+    """
+    if _ROUTE not in _ROUTES:
+        raise ValueError(
+            f"near-interface route {_ROUTE!r} is not one of {_ROUTES} "
+            "(MOMWIRE_NEAR_INTERFACE_ROUTE)"
+        )
+    return _ROUTE == "column"
 
 
 # --- convention gate (e^{+jωt}: the lossy k_m must make e^{−jk_m R} decay) --
@@ -213,9 +271,204 @@ def six_point(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     return head + mid + tail
 
 
+def _fixed_gauss(edges, p):
+    """Gauss nodes/weights on each [e_i, e_{i+1}], split into 2^p panels.
+
+    The fixed stand-in for `_adaptive_segment`: same `_GX`/`_GW` rule, same
+    per-interval scope, bisection depth read off `p` instead of off the
+    integrand. p = 0 is one 24-point panel per seeded interval, i.e. the
+    adaptive walk's own starting point before any bisection.
+    """
+    xs, ws = [], []
+    for e0, e1 in zip(edges[:-1], edges[1:]):
+        sub = np.linspace(e0, e1, 2**p + 1)
+        for a, b in zip(sub[:-1], sub[1:]):
+            mid, half = 0.5 * (a + b), 0.5 * (b - a)
+            xs.append(mid + half * _GX)
+            ws.append(_GW * half)
+    return np.concatenate(xs), np.concatenate(ws)
+
+
+def _sub_seed(edges, rho):
+    """Sub-seed a sorted edge list so no interval spans more than a doubling
+    in λ or one oscillation of J₀(λρ).
+
+    The adaptive walk gets both of these for free by bisecting on the
+    integrand; a FIXED rule has to seed them, and both rules are already in
+    the house rather than invented here:
+
+      * doubling — `_ray_integral`'s own panel rule ("panels START at the λ0
+        scale and double"), for its own stated reason: the structure scale
+        of the log family is λ itself. It is what resolves γ_p's branch
+        point at λ = k_p, which `_head` seeds edges AROUND (±15 %, ±40 %)
+        and then leaves in a single interval reaching the first seventh of
+        a_head — a factor 12.5 in λ at σ = 3 S/m class, measured 1.8e-8;
+      * one oscillation — `_tail_below`'s J₀ zero lattice, read at 2π/ρ
+        (every second zero) rather than π/ρ. Without it a 41 m radial puts
+        12 oscillations in one 24-point panel and reads 110 % wrong; 4 per
+        panel, which is a 13.6 m one, already costs 8e-14.
+
+    On a BLE 45 ft column neither fires in the HEAD — `_head`'s own edges
+    already satisfy both — so the whole of this is the mid's seeding there,
+    and the head only starts paying where it was genuinely under-resolved.
+    """
+    lat = (2.0 * np.pi / rho) if rho > 0.0 else np.inf
+    out = [edges[0]]
+    for e in edges[1:]:
+        while True:
+            lo = out[-1]
+            step = min(e - lo, lat, lo) if lo > 0.0 else min(e - lo, lat)
+            if lo + step >= e:
+                break
+            out.append(lo + step)
+        out.append(e)
+    return out
+
+
+def _column_rule(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
+    """Nodes λ_k and weights w_k for one (ρ, z′) column, path derivative and
+    Bessel/Hankel factor folded in. Returns (λ, w), both (K,) complex.
+
+    Every path decision below is `six_point`'s, cited by the line it
+    mirrors, evaluated ONCE for the column instead of once per point. The
+    only thing the column has to choose for itself is `s_min`: the smallest
+    s = z − z′ in the column, which is the slowest-decaying member and so
+    the one the extents must be converged for. Points with larger s then
+    carry nodes past their own decay, where the integrand underflows to
+    exact 0.0 — the tail being zero, the walk's own quiet rule.
+    """
+    # `_COLUMN_P` is read at CALL time, like the two route switches: a
+    # default argument would bind it at import and the resolution ladder
+    # could not be driven from a test or a probe.
+    p = _COLUMN_P if p is None else int(p)
+    # `six_point`: kk / a_head / lam_top, verbatim.
+    kk = max(k_p, abs(k_m))
+    a_head = 1.1 * kk
+    lam_top = lam_mult * kk
+    # `six_point`'s far-pair kill cap, on the column's SMALLEST s: that is
+    # the largest 60/s, so the extents are the least capped any member
+    # would ask for and no member loses range it needed.
+    if s_min > 0.0 and _FAR_PAIR_KILL / s_min < lam_top:
+        lam_kill = _FAR_PAIR_KILL / s_min
+        a_head = max(2.2 * k_p, min(a_head, lam_kill))
+        lam_top = max(1.5 * a_head, lam_kill)
+
+    # --- head: `_head`'s detour, H rule and seeded edges. H depends on ρ
+    # alone, so it is column-shared exactly.
+    H = min(0.35 * a_head, _DETOUR / max(rho, 1e-12))
+    H = max(H, 1e-6 * a_head)
+    edges = {0.0, a_head}
+    for i in range(1, 7):
+        edges.add(a_head * i / 7.0)
+    for mk in (k_p, abs(k_m.real)):  # `six_point`'s `marks` argument
+        for w in (0.0, -0.15, 0.15, -0.4, 0.4):
+            v = mk * (1.0 + w)
+            if 0.0 < v < a_head:
+                edges.add(v)
+    t, wt = _fixed_gauss(_sub_seed(sorted(edges), rho), p)
+    lam_h = t + 1j * H * np.sin(np.pi * t / a_head)
+    dl_h = 1.0 + 1j * H * (np.pi / a_head) * np.cos(np.pi * t / a_head)
+    b0, _ = _bessel_j0_j1x(lam_h * rho)  # `six_point`'s `f_j0`
+    w_h = wt * dl_h * b0
+
+    # --- mid: the real axis [a_head, lam_top], same J₀ factor. `six_point`
+    # hands the WHOLE range to one `_adaptive_segment`, so unlike the head
+    # it carries no seeding at all and `_sub_seed` supplies all of it.
+    t, wt = _fixed_gauss(_sub_seed([a_head, lam_top], rho), p)
+    lam_m = t.astype(np.complex128)
+    b0, _ = _bessel_j0_j1x(lam_m * rho)
+    w_m = wt * b0
+
+    # --- tail: `_ray_integral`'s geometric panels — starting at the λ₀
+    # scale and doubling toward the decay scale, which is what resolves the
+    # 1/λ log content when s + ρ is tiny — run out to 60 decay lengths
+    # instead of to the adaptive quiet test. e^{−60} = 9e−27 of the total:
+    # the same dead-range constant `_FAR_PAIR_KILL` uses, 16 decades inside
+    # any rtol a caller asks for, which is why this rule is rtol-free.
+    scale = np.sqrt(2.0) / (s_min + rho)
+    step = min(0.25 * scale, lam_top)
+    t_edges = [0.0]
+    while t_edges[-1] < _FAR_PAIR_KILL * scale:
+        t_edges.append(t_edges[-1] + step)
+        step *= 2.0
+    tt, wtt = _fixed_gauss(t_edges, p)
+    if rho == 0.0:
+        # `six_point`: the single up-ray, J₀(0) = 1, no Hankel split.
+        lam_t = lam_top + tt * _RAY
+        w_t = wtt * _RAY
+    else:
+        up = lam_top + tt * _RAY
+        dn = lam_top + tt * np.conj(_RAY)
+        lam_t = np.concatenate([up, dn])
+        w_t = np.concatenate(
+            [
+                wtt * _RAY * 0.5 * hankel1(0, up * rho),
+                wtt * np.conj(_RAY) * 0.5 * hankel2(0, dn * rho),
+            ]
+        )
+    return np.concatenate([lam_h, lam_m, lam_t]), np.concatenate([w_h, w_m, w_t])
+
+
+def _column_factors(lam, w, k_p, k_m):
+    """`_core` at every node with its z-dependent exponential factored out
+    and the weights folded in: F (6, K) and the two γ (K,), such that
+    six(z, z′) = F @ exp(γ_m z′ − γ_p z). Index order is `_core`'s."""
+    g_p = _gamma(lam, k_p)
+    g_m = _gamma(lam, k_m)
+    u = 2.0 * lam / (g_p + g_m)
+    v = 2.0 * lam / (k_m * k_m * g_p + k_p * k_p * g_m)
+    wv = (g_p - g_m) * v
+    return np.stack([u, v, wv, -g_p * wv, -g_p * g_m * v, g_m * wv]) * w, g_p, g_m
+
+
+def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
+    """The six designed integrals for ONE (ρ, z′) column: every z in `zs`
+    at that ρ and z′, z ≥ 0 ≥ z′, R = hypot(ρ, z − z′) > 0 for each.
+    Returns (len(zs), 6) complex, row i for zs[i].
+
+    Same domain contract and same refusals as `six_point`. `rtol` is
+    accepted for signature parity and does not move the rule: the fixed
+    rule's resolution is `p` and its extents are the e^{−60} dead-range
+    constant, both rtol-free (see `_column_rule`). What says the rule is
+    converged is therefore the p / p+1 pair, not a tolerance argument.
+
+    A member's value depends on the column it was evaluated in, through
+    `s_min` — at the 1e-13 level measured, both values converged. So this
+    route does not promise the same BITS for a triple served in two
+    differently-grouped calls, only the same answer; the memo in
+    `designed_tables` is what keeps one call's duplicates identical.
+    """
+    k_p = float(k2)
+    k_m = k_medium(complex(eps_t), k_p)
+    rho, zp = float(rho), float(zp)
+    zs = np.atleast_1d(np.asarray(zs, dtype=float))
+    bad = zs[zs < 0.0]
+    if bad.size or zp > 0.0:
+        z_bad = float(bad[0]) if bad.size else float(zs.flat[0])
+        raise ValueError(f"need z >= 0 >= zp, got {(z_bad, zp)!r}")
+    s = zs - zp
+    if rho < 0.0 or np.any(s + rho <= 0.0):
+        s_bad = float(s[np.argmin(s)])
+        raise ValueError(f"need R > 0, got rho={rho!r}, s={s_bad!r}")
+
+    lam, w = _column_rule(rho, k_p, k_m, float(np.min(s)), lam_mult=lam_mult, p=p)
+    F, g_p, g_m = _column_factors(lam, w, k_p, k_m)
+    # Underflow to exact 0.0 is the answer, not a warning: a member whose s
+    # is far above the column's s_min carries nodes past its own decay, and
+    # the high-σ far pair underflows e^{−1330} on every node of the tail.
+    out = np.empty((zs.size, 6), dtype=np.complex128)
+    step = max(1, _COLUMN_Z_CHUNK // lam.size)
+    with np.errstate(under="ignore"):
+        for i0 in range(0, zs.size, step):
+            zc = zs[i0 : i0 + step]
+            e = np.exp(g_m[None, :] * zp - g_p[None, :] * zc[:, None])  # (nz, K)
+            out[i0 : i0 + step] = e @ F.T
+    return out
+
+
 def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
-    """Broadcast wrapper over `six_point`. Accepts z′ = 0 and z = 0
-    exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
+    """Broadcast wrapper over the designed evaluation. Accepts z′ = 0 and
+    z = 0 exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
 
     Duplicate (ρ, z, z′) triples are evaluated ONCE per call (ε̃, k₂,
     rtol are fixed inside a call, so the triple determines the value):
@@ -234,11 +487,18 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     lifetime — the key is the triple alone, exactly as within a call.
     Filled entries are (6,) complex arrays; unfilled sentinel is None.
 
-    The memo layer stays HERE even when the C++ twin serves (#680 U2): the
-    dedup happens first, and only the unique triples cross into
-    `near_interface_six_batch` (that list is also U3's parallel unit). The
-    numpy `six_point` walk below is the reference; the twin is gated
-    against it at 1e-12 RELATIVE, never bit.
+    The memo layer stays HERE whichever route serves: the dedup happens
+    first, and only the unique triples reach `six_columns` (#895), the C++
+    batch (#680 U2, which is also U3's parallel unit), or the `six_point`
+    loop. The numpy `six_point` walk is the reference for all three; the
+    twin is gated against it at 1e-12 RELATIVE and the column route at the
+    reference's own 1e-10, never bit.
+
+    On the column route the unique triples are grouped by exact (ρ, z′) and
+    each group evaluated once, which is where the 11–15× comes from: a
+    real crossing set puts every point in a column of ≥ 32 mast heights.
+    The dedup, the key order and the scatter below are the same on every
+    route — only the arithmetic that fills `memo` differs.
     """
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
@@ -255,7 +515,18 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
             if key not in memo:
                 unique.append(key)
             memo[key] = None  # first-appearance order, filled below
-    if _use_near_interface_accel() and unique:
+    if _use_column_route() and unique:
+        # First-appearance order is already fixed above, so the grouping is
+        # free to reorder: it decides only which rule serves a triple, never
+        # which key the memo holds or in what order it was seen.
+        columns = {}
+        for key in unique:
+            columns.setdefault((key[0], key[2]), []).append(key[1])
+        for (r, zpc), zs in columns.items():
+            vals = six_columns(eps_t, k2, r, zs, zpc, rtol=rtol, lam_mult=lam_mult)
+            for zc, row in zip(zs, vals):
+                memo[(r, zc, zpc)] = row
+    elif _use_near_interface_accel() and unique:
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
         tri = np.asarray(unique, dtype=float).reshape(-1, 3)
