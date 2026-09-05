@@ -46,6 +46,7 @@ import numpy as np
 import pytest
 
 import momwire._bspline_kernels as _bk
+import momwire.bspline as _bs
 from momwire._bspline_kernels import (
     _EK,
     _gl01,
@@ -398,3 +399,109 @@ def test_g906_9_the_selector_is_the_one_the_study_binned_by():
     assert np.allclose(r, r.T)
     t, w = _gl01(4)
     assert np.isclose(w.sum(), 1.0) and (0 < t).all() and (t < 1).all()
+
+
+# ----------------------------------------------------------------------
+# G-921 — one fill, one ladder, on the BURIED path too
+# ----------------------------------------------------------------------
+
+
+def _buried_mixed_mesh_deck(**over):
+    """A buried deck built to straddle the kL = 0.5 guard.
+
+    A 60-segment radial at lambda/120 — fine enough that its own same-edge
+    block holds pairs past ratio 16, and far under the ceiling on its own —
+    plus ONE 0.3-lambda buried segment that puts any window spanning it well
+    over. That is the whole bug in a deck: the sweep sees the coarse segment
+    and the same-edge correction does not.
+    """
+    fine = np.array([[0.0, 0.0, -0.05], [0.5, 0.0, -0.05]])
+    coarse = np.array([[0.0, 0.3, -0.05], [0.3, 0.3, -0.05]])
+    d = dict(
+        wires=[fine, coarse],
+        n_per_edge_per_wire=[[60], [1]],
+        feeds=[(0, 0.25, 1 + 0j)],
+        wavelength=1.0,
+        wire_radius=1e-4,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    )
+    d.update(over)
+    return d
+
+
+def _ladders_seen(deck):
+    """Every `ladder=` a fill hands the off-edge kernel, with the effective
+    (post-guard) ladder each block would resolve for itself."""
+    s = BSplineSolver(**deck)
+    seen = []
+    real = _bs._seg_seg_full_moments_offedge
+
+    def spy(sli, sri, slj, srj, a, k, max_d, n_qp, **kw):
+        passed = _normalize_ladder(kw.get("ladder"), n_qp)
+        seen.append(
+            (
+                passed,
+                _ladder_for_block(passed, k, sli, sri, slj, srj),
+                int((_pair_ratio(sli, sri, slj, srj) >= 16.0).sum()),
+            )
+        )
+        return real(sli, sri, slj, srj, a, k, max_d, n_qp, **kw)
+
+    _bs._seg_seg_full_moments_offedge = spy
+    try:
+        z, _ = s.compute_impedance()
+    finally:
+        _bs._seg_seg_full_moments_offedge = real
+    return z, seen
+
+
+@pytest.mark.filterwarnings("ignore:crossing node")
+def test_g921_one_fill_resolves_one_ladder_on_the_buried_path():
+    """momwire#921: the sweep and the same-edge correction it subtracts back
+    must have run the SAME quadrature on every pair.
+
+    `corr = (A_st + A_reg) - J_edge` cancels only if both arms agree, and
+    before #907's `_fill_ladder` the buried path passed `pair_order_ladder`
+    raw — so on this deck the sweep resolved to ((2, 8),) and the correction
+    to ((2, 8), (16, 4)), leaving the difference in Z as an artefact of which
+    window happened to span the coarse segment.
+    """
+    _z, seen = _ladders_seen(_buried_mixed_mesh_deck())
+    assert seen, "no off-edge kernel call — the deck stopped exercising the fill"
+    with_far = [(passed, eff) for passed, eff, far in seen if far]
+    assert with_far, "no window holds a far pair — the gate would be vacuous"
+    # One ladder handed out ...
+    assert len({p for p, _ in with_far}) == 1, seen
+    # ... and, because it was resolved against the whole subset, every window
+    # agrees on what survives the guard. This is the assertion that fails on
+    # the raw property.
+    assert len({e for _, e in with_far}) == 1, seen
+
+
+@pytest.mark.filterwarnings("ignore:crossing node")
+def test_g921_the_gate_is_not_vacuous_a_uniform_buried_deck_does_tier():
+    """The control for the gate above: strip the coarse segment and the same
+    fill tiers, on every window. Without this, a build that silently stopped
+    laddering buried decks would pass G-921 by agreeing on nothing."""
+    _z, seen = _ladders_seen(
+        _buried_mixed_mesh_deck(
+            wires=[np.array([[0.0, 0.0, -0.05], [0.5, 0.0, -0.05]])]
+        )
+        | {"n_per_edge_per_wire": [[60]]}
+    )
+    with_far = [(passed, eff) for passed, eff, far in seen if far]
+    assert with_far, "no window holds a far pair"
+    assert len({e for _, e in with_far}) == 1, seen
+    eff = with_far[0][1]
+    assert eff == ((2.0, 8), (16.0, 4)), eff
+
+
+@pytest.mark.filterwarnings("ignore:crossing node")
+def test_g921_the_buried_hub_z_is_unchanged(record_property):
+    """The fix must not move the deck #906 certified on."""
+    z, _ = BSplineSolver(**hub_deck()).compute_impedance()
+    record_property("z_hub", f"{z:.9f}")
+    z_flat, _ = BSplineSolver(**hub_deck(pair_order_ladder=())).compute_impedance()
+    assert abs(z - z_flat) < 1e-6, f"{z} vs {z_flat}"

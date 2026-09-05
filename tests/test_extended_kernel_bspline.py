@@ -2934,6 +2934,20 @@ _U1_ACCEL_ENTRY_POINTS = (
     "seg_seg_full_moments_bspline_swept",
     "seg_seg_full_moments_bspline_ek",
     "seg_seg_full_moments_bspline_swept_ek",
+    # ... and the reduced symbols' TIERED twins (momwire#906/#907). Since the
+    # free-space pair-order ladder came on, a reduced off-edge block may be
+    # served by these instead, so a probe that counts only the plain symbol
+    # can no longer tell "EK stayed idle" from "nothing ran".
+    "seg_seg_full_moments_bspline_tiered",
+    "seg_seg_full_moments_bspline_cplx_tiered",
+)
+
+# The reduced (non-EK) off-edge entries, whichever tier serves the block.
+_REDUCED_OFFEDGE_ENTRIES = (
+    "seg_seg_full_moments_bspline",
+    "seg_seg_full_moments_bspline_swept",
+    "seg_seg_full_moments_bspline_tiered",
+    "seg_seg_full_moments_bspline_cplx_tiered",
 )
 
 
@@ -3707,10 +3721,16 @@ def test_u2_ek_off_never_reaches_the_offedge_ek_entry_points(accel_spy, name):
     # off-edge work at all, where momwire#759 skips the pre-pass rather than
     # computing it and overwriting every block. Asserted both ways so this
     # stays a guard rather than becoming a tolerance.
+    #
+    # Counted over the reduced entries as a SET since momwire#907: with the
+    # free-space ladder on, one of these decks is served by the tiered twin
+    # rather than the plain symbol, and the guard is about whether the reduced
+    # path ran at all, not about which tier it picked.
+    reduced = sum(accel_spy.counts[e] for e in _REDUCED_OFFEDGE_ENTRIES)
     if _has_offedge_work(_G7_BSPLINE[name]):
-        assert accel_spy.counts["seg_seg_full_moments_bspline"] > 0
+        assert reduced > 0, accel_spy.counts
     else:
-        assert accel_spy.counts["seg_seg_full_moments_bspline"] == 0
+        assert reduced == 0, accel_spy.counts
 
 
 @pytestmark_u2
