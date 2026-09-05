@@ -507,25 +507,12 @@ def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=No
     u_phys = np.concatenate(u_l)
     segof = np.concatenate(segpos)
 
-    F = np.zeros((n_basis, len(u_phys)))
-    Fd = np.zeros((n_basis, len(u_phys)))
-    for m in range(n_basis):
-        for a_ in range(supp_seg.shape[1]):
-            # supp_seg rows are zero-padded; a slot is live only if its
-            # polynomial is nonzero (the padding trap).
-            if not np.any(polys[m, a_] != 0.0):
-                continue
-            sel = np.nonzero(segof == supp_seg[m, a_])[0]
-            if sel.size == 0:
-                continue
-            u = u_phys[sel]
-            for p in range(d + 1):
-                c = polys[m, a_, p]
-                if c == 0.0:
-                    continue
-                F[m, sel] += c * u**p
-                if p >= 1:
-                    Fd[m, sel] += p * c * u ** (p - 1)
+    # Every segment's nodes are ONE contiguous run (appended per `g` above),
+    # so the axis carries a run table — the thing `_support_rows` and
+    # `_main_split`'s block indexing used to rediscover by scanning `segof`
+    # or F (momwire#912).
+    seg_runs = _segment_runs(segof)
+    F, Fd, seg_rows = _basis_samples(supp_seg, polys, seg_runs, u_phys)
 
     # Signed wire-end table: (point, sign, per-basis value there). σ = −1
     # at a wire's first segment's u = 0 end, +1 at its last segment's
@@ -533,6 +520,7 @@ def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=No
     seg_off = geom.seg_offsets
     ends = []
     on_axis = set(int(g) for g in seg_idx)
+    live = np.any(polys != 0.0, axis=2)
     for w in range(len(seg_off) - 1):
         first, last = seg_off[w], seg_off[w + 1] - 1
         if first not in on_axis:
@@ -541,11 +529,7 @@ def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=No
             hh = geom.h[gseg]
             u = hh if u_end is None else 0.0
             pt = geom.seg_l[gseg] + (u / hh) * (geom.seg_r[gseg] - geom.seg_l[gseg])
-            fv = np.zeros(n_basis)
-            for m in range(n_basis):
-                for a_ in range(supp_seg.shape[1]):
-                    if supp_seg[m, a_] == gseg and np.any(polys[m, a_] != 0.0):
-                        fv[m] += sum(polys[m, a_, p] * u**p for p in range(d + 1))
+            fv = _end_values(supp_seg, polys, live, gseg, u, d)
             if np.any(fv != 0.0):
                 ends.append((pt, sign, fv))
     return dict(
@@ -557,7 +541,92 @@ def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=No
         ends=ends,
         n_basis=n_basis,
         segof=segof,
+        seg_runs=seg_runs,
+        seg_rows=seg_rows,
     )
+
+
+def _segment_runs(segof):
+    """`{segment: (start, count)}` — each segment's contiguous node run on
+    an axis. Exact because `axis_data` appends one segment's nodes at a
+    time; asserted rather than assumed."""
+    uniq, start, counts = np.unique(segof, return_index=True, return_counts=True)
+    for g, s0, c in zip(uniq, start, counts):
+        if not np.all(segof[s0 : s0 + c] == g):
+            raise AssertionError(f"segment {g}'s nodes are not one contiguous run")
+    return {int(g): (int(s0), int(c)) for g, s0, c in zip(uniq, start, counts)}
+
+
+def _basis_samples(supp_seg, polys, seg_runs, u_phys):
+    """F / Fd — every basis polynomial and its derivative sampled at the
+    axis nodes of its support segments — and `seg_rows`, the basis rows
+    with a LIVE wing on each segment (momwire#912).
+
+    The same terms in the same order as the per-row loop this replaces:
+    `F[m, sel] += c·u^p` for p ascending, one live wing at a time, which the
+    `np.add.at` per p reproduces because no basis row carries the same
+    segment in two live wings (asserted). supp_seg rows are zero-padded,
+    and a slot is live only if its polynomial is nonzero (the padding
+    trap), so the mask is on the POLYNOMIAL, never on the segment id.
+    """
+    n_basis, n_wings, n_p = polys.shape
+    n_nodes = u_phys.shape[0]
+    F = np.zeros((n_basis, n_nodes))
+    Fd = np.zeros((n_basis, n_nodes))
+    live = np.any(polys != 0.0, axis=2)
+    m_idx, a_idx = np.nonzero(live)
+    segs = supp_seg[m_idx, a_idx]
+    on = np.array([int(g) in seg_runs for g in segs], dtype=bool)
+    m_idx, a_idx, segs = m_idx[on], a_idx[on], segs[on]
+    seg_rows: dict[int, np.ndarray] = {}
+    if m_idx.size:
+        pairs = np.stack([m_idx, segs], axis=1)
+        if np.unique(pairs, axis=0).shape[0] != pairs.shape[0]:
+            raise AssertionError("a basis row carries one segment in two live wings")
+        start = np.array([seg_runs[int(g)][0] for g in segs], dtype=np.int64)
+        cnt = np.array([seg_runs[int(g)][1] for g in segs], dtype=np.int64)
+        row = np.repeat(m_idx, cnt)
+        node = np.repeat(start - (np.cumsum(cnt) - cnt), cnt) + np.arange(
+            int(cnt.sum())
+        )
+        u = u_phys[node]
+        coef = polys[m_idx, a_idx]  # (L, n_p)
+        for p in range(n_p):
+            c = np.repeat(coef[:, p], cnt)
+            np.add.at(F, (row, node), c * u**p)
+            if p >= 1:
+                np.add.at(Fd, (row, node), (p * c) * u ** (p - 1))
+        order = np.argsort(segs, kind="stable")
+        keys, groups = _group_sorted(segs[order], m_idx[order])
+        for g, rows in zip(keys, groups):
+            seg_rows[int(g)] = np.sort(rows)
+    return F, Fd, seg_rows
+
+
+def _group_sorted(keys, values):
+    """Split `values` by runs of equal `keys` (keys already sorted)."""
+    if keys.size == 0:
+        return [], []
+    cuts = np.flatnonzero(np.diff(keys)) + 1
+    return keys[np.concatenate(([0], cuts))], np.split(values, cuts)
+
+
+def _end_values(supp_seg, polys, live, gseg, u, d):
+    """Per-basis value at arclength `u` of segment `gseg`, summed over the
+    live wings that carry it — the wire-end table's entry, in the loop
+    form's summation order (p ascending within a wing)."""
+    n_basis = polys.shape[0]
+    fv = np.zeros(n_basis)
+    hit = (supp_seg == gseg) & live
+    for a_ in range(supp_seg.shape[1]):
+        rows = np.flatnonzero(hit[:, a_])
+        if rows.size == 0:
+            continue
+        acc = np.zeros(rows.size)
+        for p in range(d + 1):
+            acc = acc + polys[rows, a_, p] * u**p
+        fv[rows] += acc
+    return fv
 
 
 def path_test_axis(n_basis, rows):
@@ -750,7 +819,12 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
             _CROSS_RTOL,
             memo=memo,
         )
-        t_ab += c1 * sign * np.outer(fv, FdB_w @ te["V"])
+        # momwire#912: `fv` is a value-1 tent's end value — a handful of
+        # nonzeros in n_basis — so the rank-1 update lands on those rows only.
+        # The same products where fv != 0; where it is 0 the full outer
+        # added an exact 0.
+        nz = np.flatnonzero(fv)
+        t_ab[nz] += c1 * sign * np.outer(fv[nz], FdB_w @ te["V"])
     for pt, sign, fv in B["ends"]:
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
         te = _tables(
@@ -763,8 +837,9 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
             _CROSS_RTOL,
             memo=memo,
         )
-        t_ab += -c1 * sign * np.outer((FA_w * tzA) @ te["W"], fv)
-        t_ab += c1 * sign * np.outer(FdA_w @ te["V"], fv)
+        nz = np.flatnonzero(fv)
+        t_ab[:, nz] += -c1 * sign * np.outer((FA_w * tzA) @ te["W"], fv[nz])
+        t_ab[:, nz] += c1 * sign * np.outer(FdA_w @ te["V"], fv[nz])
 
     # The designed corner: node tents against each other through V at
     # R = a exactly. The sign is STRUCTURAL and orientation-carried:
@@ -802,7 +877,10 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
                         eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL
                     )[1]
                 )
-            t_ab += (-sig_a * sig_b * c1 * v_corner) * np.outer(fv_a, fv_b)
+            nza, nzb = np.flatnonzero(fv_a), np.flatnonzero(fv_b)
+            t_ab[np.ix_(nza, nzb)] += (-sig_a * sig_b * c1 * v_corner) * np.outer(
+                fv_a[nza], fv_b[nzb]
+            )
     return t_ab
 
 
@@ -976,9 +1054,35 @@ def _support_rows(ax, ii):
     — never a guess. NaN compares unequal to zero, so a poisoned row stays in
     and still propagates rather than being silently dropped.
     """
-    return np.flatnonzero(
-        np.any(ax["F"][:, ii] != 0, axis=1) | np.any(ax["Fd"][:, ii] != 0, axis=1)
-    )
+    seg_rows = ax.get("seg_rows")
+    if seg_rows is None:
+        return np.flatnonzero(
+            np.any(ax["F"][:, ii] != 0, axis=1) | np.any(ax["Fd"][:, ii] != 0, axis=1)
+        )
+    # momwire#912: the same superset from the axis's own segment→rows map —
+    # a row is live over `ii` only through a live wing on one of the block's
+    # segments, and every such row is in the map. Restricting to extra rows
+    # that happen to sample as exact zeros is still an exact restriction.
+    segs = np.unique(ax["segof"][ii])
+    rows = [seg_rows[int(g)] for g in segs if int(g) in seg_rows]
+    if not rows:
+        return np.zeros(0, dtype=np.int64)
+    return np.unique(np.concatenate(rows))
+
+
+def _nodes_of(ax, segs):
+    """The axis's node indices on `segs`, ascending — `_main_split`'s block
+    indexing from the run table instead of a per-block `np.isin` scan over
+    every node (momwire#912)."""
+    runs = ax["seg_runs"]
+    parts = []
+    for g in segs:
+        rc = runs.get(int(g))
+        if rc is not None:
+            parts.append(np.arange(rc[0], rc[0] + rc[1]))
+    if not parts:
+        return np.zeros(0, dtype=np.int64)
+    return np.sort(np.concatenate(parts))
 
 
 def _sandwich_dense(A, B, iA, iB, K, k2sq):
@@ -1105,13 +1209,13 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
     # mirrored blocks are the same triples.
     direct, far_aca = [], []
     for cs, ct in near:
-        iA = np.flatnonzero(np.isin(A["segof"], seg_a[cs.indices]))
-        iB = np.flatnonzero(np.isin(B["segof"], seg_b[ct.indices]))
+        iA = _nodes_of(A, seg_a[cs.indices])
+        iB = _nodes_of(B, seg_b[ct.indices])
         if iA.size and iB.size:
             direct.append((A, B, iA, iB))
     for cs, ct in far:
-        iA = np.flatnonzero(np.isin(Ac["segof"], seg_a[cs.indices]))
-        iB = np.flatnonzero(np.isin(Bc["segof"], seg_b[ct.indices]))
+        iA = _nodes_of(Ac, seg_a[cs.indices])
+        iB = _nodes_of(Bc, seg_b[ct.indices])
         if iA.size == 0 or iB.size == 0:
             continue
         if iA.size * iB.size > _ACA_COST_GUARD * (iA.size + iB.size):
