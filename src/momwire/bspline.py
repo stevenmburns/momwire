@@ -136,6 +136,14 @@ _HAVE_BSPLINE_WINDOWED_CPLX_EPS_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_W_WINDOWED_CPLX_EPS_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_weighted_windowed_cplx_eps"
 )
+# momwire#914 unit 1: the below/below plan extents in C++. Gated on the #914
+# capability flag AND the symbol — the flag alone would be satisfied by a .so
+# whose binding moved, and the symbol alone by a build predating the contract.
+_HAVE_PLAN_EXTENTS_ACCEL = (
+    _acc is not None
+    and getattr(_acc, "plan_extents_914", False)
+    and hasattr(_acc, "pair_extents_below")
+)
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
@@ -541,6 +549,15 @@ def _pair_extents_below(x, y, d_b, rows=256):
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     d_b = np.asarray(d_b, dtype=np.float64)
+    if _HAVE_PLAN_EXTENTS_ACCEL and x.size:
+        # momwire#914 unit 1. The C++ twin walks the upper triangle (the pair
+        # matrix is exactly symmetric) and minimises hh^2/rho^2, the same
+        # argmin on the non-negative quadrant, so the per-pair sqrt is gone:
+        # 2.31 s -> 0.062 s over the 246 M pairs of a 48-radial screen.
+        # The numpy form below stays the reference and the fallback, and is
+        # what G-914-1 gates against.
+        r1_max, th_min = _acc.pair_extents_below(x, y, d_b)
+        return float(r1_max), float(th_min)
     r1sq_max = 0.0
     ratio_min = np.inf
     for i0 in range(0, x.shape[0], rows):

@@ -122,7 +122,14 @@ def _all_pairs(x, y, d_b):
     return float(np.max(np.hypot(rho, hh))), float(np.min(np.arctan2(hh, rho)))
 
 
-def test_g910_2_the_chunked_extents_are_the_all_pairs_numbers():
+def test_g910_2_the_chunked_extents_are_the_all_pairs_numbers(monkeypatch):
+    # Pinned to the numpy path (momwire#914 unit 1). `_pair_extents_below`
+    # now dispatches to a C++ twin when one is built, which ignores `rows`
+    # entirely — so with the accelerator live all four chunk sizes below
+    # would take the same C++ path and the chunking this gate exists to
+    # test would go unexercised. The twin has its own gate in
+    # test_plan_extents_914.py; this one stays the CHUNKED form's.
+    monkeypatch.setattr(_bs, "_HAVE_PLAN_EXTENTS_ACCEL", False)
     rng = np.random.default_rng(2)
     n = 1500
     x = rng.uniform(-11, 11, n)
@@ -137,6 +144,14 @@ def test_g910_2_the_chunked_extents_are_the_all_pairs_numbers():
     # and never the minimum, so no divide warning escapes.
     with np.errstate(divide="raise"):
         _pair_extents_below(x[:3], y[:3], d_b[:3])
+
+
+def test_g910_2_the_chunked_form_is_reachable_at_all(monkeypatch):
+    """The guard above is only meaningful if the flag it clears is the one
+    the dispatch reads: a renamed flag would make `monkeypatch.setattr`
+    silently create a new attribute and the test would pass while still
+    running C++."""
+    assert hasattr(_bs, "_HAVE_PLAN_EXTENTS_ACCEL")
 
 
 @pytest.mark.filterwarnings("ignore:crossing node")

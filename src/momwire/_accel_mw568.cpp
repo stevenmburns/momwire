@@ -1274,6 +1274,105 @@ static py::tuple transmitted_field_proj_batch(
 
 
 
+// ---------------------------------------------------------------------------
+// momwire#914 unit 1: the below/below plan extents.
+//
+// `(r1_max, th_min)` over every node pair: the largest image distance
+// hypot(rho, h_i + h_j) and the shallowest angle atan2(h_i + h_j, rho). The
+// numpy twin (`bspline._pair_extents_below`) walks the pair matrix in row
+// chunks and costs 2.3 s over the 246 M pairs of a 48-radial screen, to find
+// two scalars.
+//
+// Two properties the chunked numpy form cannot exploit and this one does:
+//
+//   * The pair matrix is EXACTLY symmetric. rho2 is a difference squared, so
+//     (x_i - x_j)^2 and (x_j - x_i)^2 are bit-identical (IEEE negation is
+//     exact), and hh = d_i + d_j is symmetric. So the upper triangle carries
+//     every distinct value and the work halves.
+//   * atan2(hh, rho) is monotone in hh / rho on the closed quadrant, which is
+//     why the numpy form already minimises the RATIO and takes one atan at the
+//     end. The ratio is non-negative, so minimising hh^2 / rho2 finds the same
+//     pair — which removes the per-pair sqrt entirely, leaving ONE sqrt and
+//     one atan for the whole cloud.
+//
+// Degenerate input: rho2 == 0 happens where a node meets itself (or a
+// duplicated node). There hh > 0 for any buried cloud and the ratio is +inf,
+// never the minimum — the divide is deliberate and its inf is harmless.
+//
+// If hh is ALSO zero — a node exactly ON the interface — the quotient is
+// 0/0 = NaN, and the two paths then DISAGREE. That is measured, and it is out
+// of contract rather than a defect in either:
+//
+//   * the reference's `np.min` propagates the NaN to the CHUNK result, and the
+//     outer Python `min(ratio_min, nan)` then evaluates `nan < inf` as False
+//     and keeps inf — so the whole chunk is discarded, real pairs included,
+//     and a two-node cloud returns atan(inf) = pi/2;
+//   * this twin drops only the offending PAIR (a NaN compare is false), and
+//     returns the minimum over the well-defined ones.
+//
+// Neither answer is meaningful, because hh == 0 means a node at zero depth and
+// `_pair_extents_below` is documented for a buried cloud ("rho = 0 only where
+// a node meets itself, where hh > 0"). The grazing refusal upstream rejects
+// such a deck before this is reached. It is written down because an earlier
+// draft of this twin added NaN propagation "to match numpy" on the assumption
+// that numpy propagated — it does not, and the assumption was the only thing
+// making the physical cases disagree. The gate below covers d_b > 0, which is
+// the whole contract; this paragraph is here so the next reader does not
+// rediscover it from a confusing diff.
+
+static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
+                                                        py::array::forcecast> x,
+                                    py::array_t<double, py::array::c_style |
+                                                        py::array::forcecast> y,
+                                    py::array_t<double, py::array::c_style |
+                                                        py::array::forcecast> d_b) {
+    auto xb = x.unchecked<1>();
+    auto yb = y.unchecked<1>();
+    auto db = d_b.unchecked<1>();
+    const py::ssize_t n = xb.shape(0);
+    if (yb.shape(0) != n || db.shape(0) != n)
+        throw std::invalid_argument("x, y and d_b must have the same length");
+    if (n == 0)
+        throw std::invalid_argument("pair_extents_below needs at least one node");
+
+    const double *xp = x.data();
+    const double *yp = y.data();
+    const double *dp = d_b.data();
+
+    double r1sq_max = 0.0;
+    double q_min = std::numeric_limits<double>::infinity();
+
+    {
+        py::gil_scoped_release release;
+        // `guided`: the triangular loop gives row 0 n columns and row n-1
+        // one, so a static split hands the first thread most of the matrix.
+        #pragma omp parallel for schedule(guided) \
+            reduction(max : r1sq_max) reduction(min : q_min)
+        for (py::ssize_t i = 0; i < n; ++i) {
+            const double xi = xp[i], yi = yp[i], di = dp[i];
+            double r1_row = 0.0;
+            double q_row = std::numeric_limits<double>::infinity();
+            // j >= i: the upper triangle, diagonal included.
+            for (py::ssize_t j = i; j < n; ++j) {
+                const double dx = xi - xp[j];
+                const double dy = yi - yp[j];
+                const double rho2 = dx * dx + dy * dy;
+                const double hh = di + dp[j];
+                const double hh2 = hh * hh;
+                const double r1sq = rho2 + hh2;
+                if (r1sq > r1_row) r1_row = r1sq;
+                const double q = hh2 / rho2;   // +inf at rho2 == 0, hh > 0
+                if (q < q_row) q_row = q;   // NaN compares false: dropped,
+                                            // exactly as Python's min does
+            }
+            if (r1_row > r1sq_max) r1sq_max = r1_row;
+            if (q_row < q_min) q_min = q_row;
+        }
+    }
+
+    return py::make_tuple(std::sqrt(r1sq_max), std::atan(std::sqrt(q_min)));
+}
+
 void register_mw568(py::module_ &m) {
     // The three #568 capability flags, set HERE beside the bindings they
     // vouch for (#710 review): `_sommerfeld_below` and
@@ -1298,7 +1397,21 @@ void register_mw568(py::module_ &m) {
     // `_sommerfeld_transmitted` a missing symbol instead of the graceful
     // numpy fallback the guard exists to give.
     m.attr("transmitted_fills_568") = true;
+    // momwire#914 unit 1: the below/below plan extents in C++. Its OWN flag,
+    // on the same argument as the three above — a .so built before #914
+    // exports every #568 symbol and would otherwise claim this contract too.
+    m.attr("plan_extents_914") = true;
 
+    m.def("pair_extents_below", &pair_extents_below,
+          "(r1_max, th_min) over every below/below node pair -- the C++ twin "
+          "of bspline._pair_extents_below. Walks the upper triangle only (the "
+          "pair matrix is exactly symmetric) and minimises hh^2/rho^2 rather "
+          "than hh/rho, which is the same argmin on the non-negative quadrant "
+          "and leaves one sqrt and one atan for the whole cloud. Returns "
+          "A pair with rho == hh == 0 yields 0/0; it is dropped from the "
+          "minimum, which is what the numpy reference's Python-level min does "
+          "with the same NaN.",
+          py::arg("x"), py::arg("y"), py::arg("d_b"));
     m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
           "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
           "_sommerfeld._bessel_j0_j1x, with the same |x| < 1e-6 series switch. "
