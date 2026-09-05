@@ -660,10 +660,11 @@ static py::array_t<std::complex<double>> near_interface_six_batch(
 
 // `six_columns` over CONCATENATED columns: column c owns the members
 // offsets[c] .. offsets[c+1] of (z, zp), all at rho[c]. One call for a whole
-// fill's grouping, because the parallel unit is the column and a per-column
-// call would hand OpenMP one column at a time — which is precisely the
-// scaling the numpy route does not have (#898). Returns the (n, 6) table in
-// the members' own order, so the caller scatters with the same offsets.
+// fill's grouping, because the parallel units live INSIDE it (see the split
+// below) and a per-column call would hand OpenMP one column at a time —
+// which is precisely the scaling the numpy route does not have (#898).
+// Returns the (n, 6) table in the members' own order, so the caller
+// scatters with the same offsets.
 static py::array_t<std::complex<double>> near_interface_six_columns(
     double k_p, std::complex<double> k_m,
     py::array_t<double, py::array::c_style | py::array::forcecast> rho,
