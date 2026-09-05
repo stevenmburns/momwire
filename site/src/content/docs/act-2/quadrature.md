@@ -130,13 +130,36 @@ soil-A crossing fan:
 | 16 | 141.0601 − 42.4754j | 0.698 Ω |
 | 64 | 140.9366 − 43.1577j | 0.005 Ω |
 
-That class is why the cross-edge default moved from 4 to 8, and it is the one
-place the accelerated kernel's `n_qp² ≤ 64` scratch buffer binds — reaching the
-bottom row needs the numpy path today
-([momwire#762](https://github.com/stevenmburns/momwire/issues/762)). The honest
-summary is narrower than this chapter used to claim: the smooth-pair quadrature
-is as settled as the dipole makes it look *for smooth pairs*, and a near-singular
-cross-edge pair is not one.
+That class is why the cross-edge default moved from 4 to 8, and why buried
+decks resolve to 32. The accelerated kernel's `n_qp² ≤ 64` scratch buffer used
+to bind here — reaching the bottom row needed the numpy path — until
+[momwire#762](https://github.com/stevenmburns/momwire/issues/762) made the
+buffer a tile width, so every order in that table now runs accelerated. The
+honest summary is narrower than this chapter used to claim: the smooth-pair
+quadrature is as settled as the dipole makes it look *for smooth pairs*, and a
+near-singular cross-edge pair is not one.
+
+## Paying the high order only where it is owed
+
+A radial screen of 654 buried segments has 428,000 segment pairs, and at
+order 32 each one paid a 1,024-point grid — two calls of one kernel were 6.3 of
+the solve's 11.3 s. But the near-singular class above lives on the pairs that
+nearly touch; a pair sixteen segment lengths apart is the far pair of the
+figure at the top of this chapter, at machine precision by 4 points. Binning
+every pair's error by its **centre distance over the longer segment** made that
+exact ([momwire#906](https://github.com/stevenmburns/momwire/issues/906)):
+order 8 is within 1e-13 of order 32 beyond two lengths, order 4 within 3e-14
+beyond sixteen, for real and lossy-medium wavenumbers alike, and the order-8
+threshold does not care about electrical length at all (the order-4 tier does,
+so a block whose longest segment passes kL = 0.5 loses it).
+
+So the cross-edge order is now a **ladder**: buried decks run 32 on the pairs
+under two lengths apart — about one pair in a hundred on that screen — 8 out to
+sixteen lengths, and 4 beyond, which is 87 % of them. The two kernel calls went
+from 2.4 s each to 0.08 s at the same impedance to every printed digit, and the
+12-radial screen from 11.3 s to 5.7 s. Free space keeps a single order for now,
+until the same flip is measured there
+([momwire#907](https://github.com/stevenmburns/momwire/issues/907)).
 
 The matrix is now filled honestly — smooth where it can be, exact where it must
 be, and explicit about the one place the smooth rule strains. Which raises the question this whole act has been circling: filled honestly
