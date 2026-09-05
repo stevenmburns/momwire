@@ -425,7 +425,16 @@ def _graded_u(h, toward_end, a, growth=2.0, gx=_GX8, gw=_GW8):
     return u, w
 
 
-def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=None):
+def axis_data(
+    ctx,
+    seg_idx,
+    coarse=False,
+    *,
+    growth=None,
+    panel_order=None,
+    q=None,
+    share_from=None,
+):
     """Everything one axis of the crossing blocks needs: quadrature nodes,
     per-node tangents and weights, per-basis value/derivative samples, and
     the signed wire-end table for the by-parts terms.
@@ -513,7 +522,24 @@ def axis_data(ctx, seg_idx, coarse=False, *, growth=None, panel_order=None, q=No
     # `_main_split`'s block indexing used to rediscover by scanning `segof`
     # or F (momwire#912).
     seg_runs = _segment_runs(segof)
-    F, Fd, seg_rows = _basis_samples(supp_seg, polys, seg_runs, u_phys)
+    # momwire#919: the coarse (far-block) axis and the near one are the SAME
+    # sampling whenever their density knobs agree — which they do today
+    # (`_FAR_Q == _NEAR_Q == 4`, `_FAR_GROWTH == _NEAR_GROWTH == 4.0` since
+    # #692) — so the caller can hand the dense axis in and skip rebuilding a
+    # second copy of F/Fd. On the 48-radial screen that copy is 445 MB.
+    #
+    # Guarded on the SAMPLING, not on the flag: the node count and positions
+    # are what make the two identical, and they are exactly what a future
+    # divergence of the knobs would change. If they ever differ, this falls
+    # through to a real build with no edit here.
+    if (
+        share_from is not None
+        and share_from["F"].shape == (polys.shape[0], u_phys.shape[0])
+        and np.array_equal(share_from["nodes"], nodes)
+    ):
+        F, Fd, seg_rows = share_from["F"], share_from["Fd"], share_from["seg_rows"]
+    else:
+        F, Fd, seg_rows = _basis_samples(supp_seg, polys, seg_runs, u_phys)
 
     # Signed wire-end table: (point, sign, per-basis value there). σ = −1
     # at a wire's first segment's u = 0 end, +1 at its last segment's
@@ -795,6 +821,76 @@ def cross_complete_block(ctx, A, B, *, corner=True):
     return t_ab
 
 
+def _real_matvec_c(M, v):
+    """`M @ v` for a REAL matrix and a COMPLEX vector, without upcasting M.
+
+    momwire#919, and the largest single term at the peak once the weight fold
+    and the rank-1 buffer were in. `np.matmul` promotes both operands to a
+    common dtype, so a float64 (n_basis, n_nodes) matrix against a complex
+    vector materialises a COMPLEX COPY OF THE MATRIX first — 445 MB on the
+    48-radial screen, to produce a 43 kB answer. Two real matvecs are the same
+    flops and allocate nothing but the result.
+
+    Invisible in the source it replaces, which reads as a matrix-vector
+    product and is one; only the dtypes give it away.
+    """
+    return (M @ v.real) + 1j * (M @ v.imag)
+
+
+class _Rank1Buffer:
+    """One reusable scratch array for the by-parts rank-1 updates
+    (momwire#919).
+
+    THE PEAK IS A MOMENT, NOT A SET OF ARRAYS. Whoever measures this next:
+    freeing memory that is live at some *other* phase moves nothing. The
+    duplicate coarse F/Fd pair on the 48-radial screen is a genuine 445 MB and
+    removing it changed the peak by zero, because the high-water is reached
+    here and it simply relocated. Equally, an RSS-by-region trace says where
+    the program WAS at the high-water, not what allocated it — it reads like
+    attribution and is not. Use `tracemalloc` grouped by traceback, and
+    snapshot AT the peak: at 87 % of peak this routine does not even appear,
+    at 100 % it is the top term.
+
+    What it replaces: `t_ab[nz] += c1 * sign * np.outer(a, b)` builds the outer
+    product, then the sign scaling, then the c1 scaling, then the gather, then
+    the sum — five (len(nz), n_basis) complex temporaries in flight for one
+    update. `fv` is NOT the "handful of nonzeros" the #912 comment assumes on a
+    wide screen: at 48 radials the hub carries ~866 live rows, so each of those
+    is ~37 MB and the routine measured 445 MB across twelve of them.
+    """
+
+    __slots__ = ("_buf",)
+
+    def __init__(self):
+        self._buf = None
+
+    def take(self, rows, cols):
+        need = rows * cols
+        if self._buf is None or self._buf.size < need:
+            self._buf = np.empty(need, dtype=np.complex128)
+        return self._buf[:need].reshape(rows, cols)
+
+
+def _rank1_add(t_ab, nz, a, b, scale, buf):
+    """`t_ab[nz] += scale * outer(a, b)` through one reused buffer."""
+    if nz.size == 0:
+        return
+    out = buf.take(nz.size, b.size)
+    np.multiply.outer(a, b, out=out)
+    out *= scale
+    t_ab[nz] += out
+
+
+def _rank1_add_cols(t_ab, nz, a, b, scale, buf):
+    """`t_ab[:, nz] += scale * outer(a, b)` through one reused buffer."""
+    if nz.size == 0:
+        return
+    out = buf.take(a.size, nz.size)
+    np.multiply.outer(a, b, out=out)
+    out *= scale
+    t_ab[:, nz] += out
+
+
 def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
@@ -802,9 +898,21 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
     V(a) rides `six_point` at `_CORNER_RTOL`, outside any memo)."""
     t_ab = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
     _txA, _tyA, tzA = A["t"].T
-    FA_w = A["F"] * A["w"]
-    FdA_w = A["Fd"] * A["w"]
-    FdB_w = B["Fd"] * B["w"]
+
+    # THE NODE WEIGHTS FOLD INTO THE SHORT VECTOR, NOT THE TALL MATRIX
+    # (momwire#919). `(B["Fd"] * B["w"]) @ te["V"]` is `B["Fd"] @ (B["w"] *
+    # te["V"])`: the same contraction over the nodes, but the weighting is
+    # applied to a length-n_nodes vector instead of an (n_basis, n_nodes)
+    # matrix. On the 48-radial screen that product was 222.6 MB, live for the
+    # whole routine and second only to the rank-1 updates below.
+    #
+    # NOT bit-identical to the old spelling: (Fd*w)·V and Fd·(w*V) round
+    # differently. Gated at 1e-12 relative.
+    wA = A["w"]
+    wB = B["w"]
+    wA_tz = wA * tzA
+    buf = _Rank1Buffer()
+    bufT = _Rank1Buffer()
 
     # The by-parts boundary terms — test-side Φ (BT), source-side W and Φ
     # (SW, SQ) — each an end against the other axis's line, radius folded.
@@ -825,7 +933,9 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
         # The same products where fv != 0; where it is 0 the full outer
         # added an exact 0.
         nz = np.flatnonzero(fv)
-        t_ab[nz] += c1 * sign * np.outer(fv[nz], FdB_w @ te["V"])
+        _rank1_add(
+            t_ab, nz, fv[nz], _real_matvec_c(B["Fd"], wB * te["V"]), c1 * sign, buf
+        )
     for pt, sign, fv in B["ends"]:
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
         te = _tables(
@@ -839,8 +949,12 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
             memo=memo,
         )
         nz = np.flatnonzero(fv)
-        t_ab[:, nz] += -c1 * sign * np.outer((FA_w * tzA) @ te["W"], fv[nz])
-        t_ab[:, nz] += c1 * sign * np.outer(FdA_w @ te["V"], fv[nz])
+        _rank1_add_cols(
+            t_ab, nz, _real_matvec_c(A["F"], wA_tz * te["W"]), fv[nz], -c1 * sign, bufT
+        )
+        _rank1_add_cols(
+            t_ab, nz, _real_matvec_c(A["Fd"], wA * te["V"]), fv[nz], c1 * sign, bufT
+        )
 
     # The designed corner: node tents against each other through V at
     # R = a exactly. The sign is STRUCTURAL and orientation-carried:
@@ -1200,8 +1314,9 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
     t_main = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
 
     if far:
-        Ac = axis_data(ctx, a_idx, coarse=True)
-        Bc = axis_data(ctx, b_idx, coarse=True)
+        # Share the dense axes' sampled F/Fd (momwire#919) — see `axis_data`.
+        Ac = axis_data(ctx, a_idx, coarse=True, share_from=A)
+        Bc = axis_data(ctx, b_idx, coarse=True, share_from=B)
 
     # ---- direct blocks: near pairs on the dense axes + small far blocks
     # on the coarse axes (sampling a small block costs more than its full
