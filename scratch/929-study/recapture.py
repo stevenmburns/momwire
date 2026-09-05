@@ -37,8 +37,14 @@ def run(deck, timeout=900):
     with tempfile.TemporaryDirectory(prefix="nec5_929_") as td:
         (Path(td) / "m.nec").write_text(deck)
         try:
-            subprocess.run([EXE], input="m.nec\nm.out\n\n", text=True,
-                           capture_output=True, cwd=td, timeout=timeout)
+            subprocess.run(
+                [EXE],
+                input="m.nec\nm.out\n\n",
+                text=True,
+                capture_output=True,
+                cwd=td,
+                timeout=timeout,
+            )
         except subprocess.TimeoutExpired:
             return None
         out = Path(td) / "m.out"
@@ -46,8 +52,10 @@ def run(deck, timeout=900):
 
 
 def parse_z(text):
-    m = re.search(r"- - - ANTENNA INPUT PARAMETERS - - -(.*?)(?:\n\s*\n\s*\n|$)", text, re.S)
-    for line in (m.group(1).splitlines() if m else []):
+    m = re.search(
+        r"- - - ANTENNA INPUT PARAMETERS - - -(.*?)(?:\n\s*\n\s*\n|$)", text, re.S
+    )
+    for line in m.group(1).splitlines() if m else []:
         t = line.split()
         if len(t) >= 12 and re.fullmatch(r"\d+", t[0]):
             return complex(float(t[7]), float(t[8]))
@@ -70,7 +78,9 @@ def parse_currents(text):
     """
     lines = text.splitlines()
     try:
-        start = next(i for i, ln in enumerate(lines) if "- - - Wire Currents - - -" in ln)
+        start = next(
+            i for i, ln in enumerate(lines) if "- - - Wire Currents - - -" in ln
+        )
     except StopIteration:
         return ()
     rows = []
@@ -104,8 +114,10 @@ if args.verify:
         flag = "ok " if (dz < 1e-6 and same) else "BAD"
         if flag == "BAD":
             bad += 1
-        print(f"  {flag} {name:26s} dZ={dz:.2e}  currents_match={same}"
-              f"  rows={len(cur)}/{len(d['currents'])}")
+        print(
+            f"  {flag} {name:26s} dZ={dz:.2e}  currents_match={same}"
+            f"  rows={len(cur)}/{len(d['currents'])}"
+        )
         if not same and cur:
             print(f"        first row got {cur[0]}  want {d['currents'][0]}")
     for name, deck in ANCHOR_DECKS.items():
@@ -116,7 +128,9 @@ if args.verify:
     raise SystemExit(1 if bad else 0)
 
 print("RE-CAPTURE under the documented flag: old vs new, 23 current decks\n")
-print(f"{'deck':28s} {'flag-1 Z':>22s} {'documented-flag Z':>22s} {'spike old':>10s} {'new':>8s}")
+print(
+    f"{'deck':28s} {'flag-1 Z':>22s} {'documented-flag Z':>22s} {'spike old':>10s} {'new':>8s}"
+)
 
 
 def spike(rows):
@@ -144,9 +158,13 @@ for name, d in list(DECKS.items())[: args.limit or None]:
 
 neg_old = sum(1 for _n, zo, _zn, _so, _sn, _c in table if zo and zo.real < 0)
 neg_new = sum(1 for _n, _zo, zn, _so, _sn, _c in table if zn and zn.real < 0)
-print(f"\nnegative printed R:  flag-1 {neg_old}/{len(table)}   documented {neg_new}/{len(table)}")
+print(
+    f"\nnegative printed R:  flag-1 {neg_old}/{len(table)}   documented {neg_new}/{len(table)}"
+)
 sp_old = [t[3] for t in table if t[3] == t[3]]
 sp_new = [t[4] for t in table if t[4] == t[4]]
 if sp_old:
-    print(f"feed spike ratio:    flag-1 min {min(sp_old):.2f} max {max(sp_old):.2f}"
-          f"   documented min {min(sp_new):.2f} max {max(sp_new):.2f}")
+    print(
+        f"feed spike ratio:    flag-1 min {min(sp_old):.2f} max {max(sp_old):.2f}"
+        f"   documented min {min(sp_new):.2f} max {max(sp_new):.2f}"
+    )

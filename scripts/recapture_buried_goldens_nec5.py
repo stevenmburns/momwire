@@ -19,6 +19,7 @@ transcribed here.
 Usage:  NEC5_EXE=/path/to/nec5cl python scripts/recapture_buried_goldens_nec5.py
 """
 
+import json
 import os
 import re
 import subprocess
@@ -38,8 +39,14 @@ OUT = ROOT / "tests" / "golden_buried_currents_nec5.py"
 def run(deck):
     with tempfile.TemporaryDirectory(prefix="nec5_929_") as td:
         (Path(td) / "m.nec").write_text(deck)
-        subprocess.run([EXE], input="m.nec\nm.out\n\n", text=True,
-                       capture_output=True, cwd=td, timeout=1800)
+        subprocess.run(
+            [EXE],
+            input="m.nec\nm.out\n\n",
+            text=True,
+            capture_output=True,
+            cwd=td,
+            timeout=1800,
+        )
         out = Path(td) / "m.out"
         if not out.is_file():
             raise RuntimeError("NEC-5 produced no printout")
@@ -47,8 +54,10 @@ def run(deck):
 
 
 def parse_z(text):
-    m = re.search(r"- - - ANTENNA INPUT PARAMETERS - - -(.*?)(?:\n\s*\n\s*\n|$)", text, re.S)
-    for line in (m.group(1).splitlines() if m else []):
+    m = re.search(
+        r"- - - ANTENNA INPUT PARAMETERS - - -(.*?)(?:\n\s*\n\s*\n|$)", text, re.S
+    )
+    for line in m.group(1).splitlines() if m else []:
         t = line.split()
         if len(t) >= 12 and re.fullmatch(r"\d+", t[0]):
             return complex(float(t[7]), float(t[8]))
@@ -76,10 +85,23 @@ def parse_currents(text):
     return tuple(rows)
 
 
-def documented(deck):
-    new = re.sub(r"^GE\s+1\s*,\s*-1\s*$", "GE -1,0", deck, count=1, flags=re.M)
-    if new == deck:
-        raise RuntimeError(f"deck did not carry the expected card:\n{deck[:120]}")
+_GE = re.compile(r"^GE\s*[-\d]+\s*,\s*[-\d]+\s*$", re.M)
+
+DOCUMENTED_CARD = "GE -1,0"
+ORIGINAL_CARD = "GE 1,-1"
+
+
+def with_card(deck, card):
+    """The deck with its ground card replaced, whichever card it starts from.
+
+    Written this way so the generator is IDEMPOTENT: after one run the golden
+    file carries the documented card, and a version that could only rewrite
+    `GE 1,-1` would fail on its own output. A generator that works exactly
+    once is a trap, not a tool.
+    """
+    new, n = _GE.subn(card, deck, count=1)
+    if n != 1:
+        raise RuntimeError(f"no single ground card found in:\n{deck[:160]}")
     return new
 
 
@@ -132,8 +154,23 @@ DECKS = {
 '''
 
 
-def fmt_rows(rows):
-    return "".join(f"            ({e}, {z!r}, {re_!r}, {im!r}),\n" for e, z, re_, im in rows)
+def fmt_z(z):
+    """`complex(re, im)` rather than the complex repr.
+
+    repr gives `(417.89-420.55j)`; the formatter wants spaces around the
+    operator, so a repr-emitted file is reformatted on every regeneration and
+    the generator and the format gate fight forever. The call form has no
+    operator to space, and it is what the original golden used.
+    """
+    return f"complex({z.real!r}, {z.imag!r})"
+
+
+def fmt_rows(rows, indent):
+    """Row lines at `indent` spaces. The witness rows nest one level deeper
+    than the primary ones, and emitting both at the same depth is what made
+    the generated file fail `ruff format --check` on every regeneration."""
+    pad = " " * indent
+    return "".join(f"{pad}({e}, {z!r}, {re_!r}, {im!r}),\n" for e, z, re_, im in rows)
 
 
 def main():
@@ -142,22 +179,29 @@ def main():
         return 1
     body = []
     for name, d in DECKS.items():
-        new_deck = documented(d["deck"])
+        new_deck = with_card(d["deck"], DOCUMENTED_CARD)
         new_text = run(new_deck)
-        old_text = run(d["deck"])
+        old_text = run(with_card(d["deck"], ORIGINAL_CARD))
         old_z, old_cur = parse_z(old_text), parse_currents(old_text)
-        if old_z != d["input_z"] or old_cur != d["currents"]:
-            print(f"PROVENANCE FAILED on {name}: the original card no longer "
-                  f"reproduces its banked capture", file=sys.stderr)
+        want = d.get("witness_flag1", d)
+        if old_z != want["input_z"] or old_cur != want["currents"]:
+            print(
+                f"PROVENANCE FAILED on {name}: the original card no longer "
+                f"reproduces its banked capture",
+                file=sys.stderr,
+            )
             return 2
+        # json.dumps rather than repr: repr emits SINGLE quotes, which the
+        # repo's ruff config rejects (Q000), and a generated file that fails
+        # lint on every regeneration is a generator bug, not a file to patch.
         body.append(
-            f"    {name!r}: {{\n"
-            f"        \"deck\": {new_deck!r},\n"
-            f"        \"input_z\": {parse_z(new_text)!r},\n"
-            f"        \"currents\": (\n{fmt_rows(parse_currents(new_text))}        ),\n"
-            f"        \"witness_flag1\": {{\n"
-            f"            \"input_z\": {old_z!r},\n"
-            f"            \"currents\": (\n{fmt_rows(old_cur)}            ),\n"
+            f"    {json.dumps(name)}: {{\n"
+            f'        "deck": {json.dumps(new_deck)},\n'
+            f'        "input_z": {fmt_z(parse_z(new_text))},\n'
+            f'        "currents": (\n{fmt_rows(parse_currents(new_text), 12)}        ),\n'
+            f'        "witness_flag1": {{\n'
+            f'            "input_z": {fmt_z(old_z)},\n'
+            f'            "currents": (\n{fmt_rows(old_cur, 16)}            ),\n'
             f"        }},\n"
             f"    }},\n"
         )
