@@ -1,0 +1,34 @@
+
+== BLE 45 ft, N = 4 (for the columns): Z = 56.2105-84.0093j, wall 14.0 s
+   asked 21140, unique 7628 (2.77x dup)
+   distinct z' 30: [-1.52400000e-01 -1.48845090e-01 -1.35503515e-01 -1.18096485e-01
+   distinct z  109
+   (z, z') groups 3269; rho per group min/median/max 1/1/41
+   share of unique points in (z, z') groups of size >= k:  k=2: 0.59  k=4: 0.59  k=8: 0.59  k=32: 0.59
+   on-axis pairs (rho == a-fold 0.00163): 3268 of 7628 = mast x rise; off-axis (mast x radials): 4360
+   share in (rho, z') columns of size >= k:  k=2: 1.00  k=4: 1.00  k=8: 1.00  k=32: 1.00
+   rho range 0.00163..13.62, s range 0.0001132..21.48
+
+== on-axis, hub depth: rho 0.00163, z' -0.1524, 108 z in [0.000113, 21.3], s_min 0.153
+   p=(0,0,0) K=  792  max rel 1.10e-10 (z=5.26, dzW)  median rel 2.0e-11  27.9 us/pt
+   p=(1,1,1) K= 1584  max rel 2.66e-13 (z=0.00831, dzW)  median rel 1.4e-15  68.8 us/pt
+   p=(2,2,2) K= 3168  max rel 2.55e-13 (z=0.00831, dzW)  median rel 7.6e-16  127.1 us/pt
+   p=(3,3,3) K= 6336  max rel 2.26e-13 (z=0.0166, dzW)  median rel 7.0e-16  230.0 us/pt
+
+== on-axis, z' = 0: rho 0.00163, z' 0, 108 z in [0.000113, 21.3], s_min 0.000113
+   p=(0,0,0) K= 1128  max rel 4.07e-10 (z=0.000113, dzW)  median rel 2.0e-11  42.0 us/pt
+   p=(1,1,1) K= 2256  max rel 1.11e-13 (z=0.201, dzW)  median rel 8.4e-16  84.3 us/pt
+   p=(2,2,2) K= 4512  max rel 1.79e-10 (z=0.000113, dzW)  median rel 5.8e-16  169.2 us/pt
+   p=(3,3,3) K= 9024  max rel 2.07e-10 (z=0.000113, dzW)  median rel 4.6e-16  358.5 us/pt
+
+== mid radial: rho 0.919, z' -0.1524, 109 z in [0, 21.3], s_min 0.152
+   p=(0,0,0) K=  792  max rel 1.11e-10 (z=5.26, dzW)  median rel 4.0e-11  28.6 us/pt
+   p=(1,1,1) K= 1584  max rel 1.98e-14 (z=8.56, dzW)  median rel 9.2e-16  52.5 us/pt
+   p=(2,2,2) K= 3168  max rel 2.40e-14 (z=4.82, dzW)  median rel 8.4e-16  118.0 us/pt
+   p=(3,3,3) K= 6336  max rel 2.43e-14 (z=3.88, dzW)  median rel 8.2e-16  195.7 us/pt
+
+== radial end: rho 13.62, z' -0.1524, 109 z in [0, 21.3], s_min 0.152
+   p=(0,0,0) K=  792  max rel 2.54e-09 (z=0, dzpV)  median rel 1.1e-10  22.2 us/pt
+   p=(1,1,1) K= 1584  max rel 7.16e-13 (z=0.0259, dzpV)  median rel 2.2e-14  43.8 us/pt
+   p=(2,2,2) K= 3168  max rel 7.59e-14 (z=0.000113, dzpV)  median rel 5.2e-16  92.2 us/pt
+   p=(3,3,3) K= 6336  max rel 3.23e-13 (z=0.00473, dzpV)  median rel 6.1e-16  177.5 us/pt
