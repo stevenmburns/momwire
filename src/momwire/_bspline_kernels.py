@@ -159,6 +159,15 @@ _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_CPLX_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_cplx"
 )
+# momwire#906: the distance-adaptive (ladder) twins of the plain off-edge
+# kernel, real and complex k. Absent both, a ladder is still honoured — by the
+# numpy twin, which is the reference the C++ gate compares against.
+_HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_tiered"
+)
+_HAVE_BSPLINE_OFFEDGE_CPLX_TIERED_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_cplx_tiered"
+)
 _BSPLINE_ACCEL_MAX_D = 2
 
 MAX_D_SUPPORTED = 2
@@ -809,8 +818,119 @@ def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp, *, ek=None):
     return _seg_seg_reg_moments_from_geometry(geo, k)
 
 
+# ----------------------------------------------------------------------
+# THE PAIR-ORDER LADDER: distance-adaptive off-edge quadrature (momwire#906)
+# ----------------------------------------------------------------------
+#
+# Every off-edge pair used to pay the same Gauss-Legendre grid, n_qp x n_qp,
+# whether the two segments touch or sit a hundred lengths apart. The buried
+# fill's order is 32 (`BURIED_N_QP_PAIR`, momwire#760), so a 654-segment
+# radial screen spent 6.3 of its 11.3 s in two calls of this kernel.
+#
+# The study behind the ladder (issue #906) measured, per pair, the error of a
+# lower order against the 32-point block relative to the block's per-moment
+# max, binned by the pair's CENTRE DISTANCE OVER THE LONGER SEGMENT — an O(1)
+# quantity a kernel computes from what it already holds:
+#
+#     ratio bin   share    @8        @4
+#     [1.5, 2)    0.3 %    2e-13     2e-7
+#     [2, 4)      1.1 %    9e-14     2e-7
+#     [4, 16)     11 %     6e-16     6e-10
+#     [16, inf)   87 %     2e-16     3e-14
+#
+# and a synthetic two-segment grid (four geometries, real and complex k, kL
+# from 0.03 to 1.0) says WHY: the order-8 threshold is a pure 1/R-curvature
+# effect, independent of electrical length (<= 3e-15 beyond three lengths,
+# 1e-12 at two, 5e-10 at 1.5, at every kL); the order-4 tier is PHASE-limited
+# past ratio 8 — at ratio 16 it reads 2e-12 for kL <= 0.1, 1.3e-11 at 0.3,
+# 1.3e-9 at 0.6, 3e-8 at 1.0. Hence the per-call guard below: a tier under
+# order 8 is dropped when the block's longest segment exceeds kL = 0.5, which
+# keeps every served pair at <= 1e-9 relative.
+#
+# A ladder is a tuple of (ratio, n_qp) with ratios strictly ascending and
+# orders strictly descending below the base order; pair order = the highest
+# tier whose threshold the pair meets, else the base. Four ladders reproduce
+# the uniform-32 buried-screen Z to every printed digit (issue #906).
+
+_LADDER_PHASE_LIMITED_BELOW = 8
+_LADDER_PHASE_KL_CEILING = 0.5
+
+
+def _normalize_ladder(ladder, n_qp):
+    """Validate a pair-order ladder against its base order.
+
+    Returns a tuple of `(ratio, n_qp)` pairs. `None` and `()` both mean no
+    ladder. Raises rather than reorders: a ladder that is not monotone is a
+    typo, not a preference.
+    """
+    if ladder is None:
+        return ()
+    out = tuple((float(r), int(n)) for r, n in ladder)
+    prev_r, prev_n = 0.0, int(n_qp)
+    for r, n in out:
+        if not r > prev_r:
+            raise ValueError(
+                f"pair-order ladder: ratio thresholds must strictly ascend "
+                f"and exceed 0, got {out}"
+            )
+        if not 1 <= n < prev_n:
+            raise ValueError(
+                f"pair-order ladder: orders must strictly descend below the "
+                f"base order {n_qp}, got {out}"
+            )
+        prev_r, prev_n = r, n
+    return out
+
+
+def _ladder_for_block(ladder, k, seg_l_i, seg_r_i, seg_l_j, seg_r_j):
+    """The ladder a block may use: the phase-limited tiers are dropped when
+    the block's longest segment is past `_LADDER_PHASE_KL_CEILING`."""
+    if not ladder:
+        return ()
+    len_max = max(
+        float(np.linalg.norm(np.asarray(seg_r_i) - np.asarray(seg_l_i), axis=1).max()),
+        float(np.linalg.norm(np.asarray(seg_r_j) - np.asarray(seg_l_j), axis=1).max()),
+    )
+    if abs(k) * len_max <= _LADDER_PHASE_KL_CEILING:
+        return ladder
+    return tuple((r, n) for r, n in ladder if n >= _LADDER_PHASE_LIMITED_BELOW)
+
+
+def _pair_ratio(seg_l_i, seg_r_i, seg_l_j, seg_r_j):
+    """The ladder's selector: centre distance over the longer segment,
+    shape (N_i, N_j). The C++ kernel computes the same quantity in place."""
+    seg_l_i, seg_r_i = np.asarray(seg_l_i), np.asarray(seg_r_i)
+    seg_l_j, seg_r_j = np.asarray(seg_l_j), np.asarray(seg_r_j)
+    len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
+    len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
+    c_i = 0.5 * (seg_l_i + seg_r_i)
+    c_j = 0.5 * (seg_l_j + seg_r_j)
+    dist = np.linalg.norm(c_i[:, None, :] - c_j[None, :, :], axis=2)
+    return dist / np.maximum(len_i[:, None], len_j[None, :])
+
+
+def _gl01(n_qp):
+    """Gauss-Legendre nodes and weights mapped to [0, 1]."""
+    gl_xi, gl_w = leggauss(n_qp)
+    return 0.5 * (gl_xi + 1.0), 0.5 * gl_w
+
+
+def _ladder_arrays(n_qp, ladder):
+    """The C++ ladder contract: concatenated nodes, weights, per-tier orders
+    and thresholds, tier 0 being the base rule at threshold 0."""
+    orders = [int(n_qp)] + [n for _, n in ladder]
+    ratios = [0.0] + [r for r, _ in ladder]
+    rules = [_gl01(n) for n in orders]
+    return (
+        np.ascontiguousarray(np.concatenate([t for t, _ in rules]), dtype=np.float64),
+        np.ascontiguousarray(np.concatenate([w for _, w in rules]), dtype=np.float64),
+        np.ascontiguousarray(orders, dtype=np.int64),
+        np.ascontiguousarray(ratios, dtype=np.float64),
+    )
+
+
 def _seg_seg_full_moments_offedge(
-    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, max_d, n_qp, *, ek=None
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k, max_d, n_qp, *, ek=None, ladder=None
 ):
     """Full-kernel moment integrals on all segment pairs.
 
@@ -845,9 +965,20 @@ def _seg_seg_full_moments_offedge(
     """
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
     in_medium = _complex_k(k)
-    gl_xi, gl_w = leggauss(n_qp)
-    t01 = 0.5 * (gl_xi + 1.0)
-    w01 = 0.5 * gl_w
+    t01, w01 = _gl01(n_qp)
+    # momwire#906: the pair-order ladder, validated, then trimmed for THIS
+    # block's electrical length. Serves the plain kernel only — the extended
+    # kernel's coaxial factor has not been measured on a ladder, and no caller
+    # combines the two (EK is refused on buried decks, and the free-space
+    # default ladder is empty).
+    ladder = _ladder_for_block(
+        _normalize_ladder(ladder, n_qp), k, seg_l_i, seg_r_i, seg_l_j, seg_r_j
+    )
+    if ladder and ek is not None:
+        raise NotImplementedError(
+            "the pair-order ladder (momwire#906) serves the plain off-edge "
+            "kernel only; pass ladder=None with an extended-kernel spec"
+        )
 
     # `n_qp` belongs in these predicates for the same reason `max_d` does: it
     # is a shape the kernels do not serve, and the numpy path does
@@ -906,13 +1037,40 @@ def _seg_seg_full_moments_offedge(
                         if ek is not None
                         else None
                     ),
+                    ladder=ladder,
                 )
                 for s, e in zip(starts, stops)
             ],
             axis=2,
         )
 
-    if accel_ok:
+    _tiered_accel = (
+        _HAVE_BSPLINE_OFFEDGE_CPLX_TIERED_ACCEL
+        if in_medium
+        else _HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL
+    )
+    if accel_ok and ladder and _tiered_accel:
+        tier_t, tier_w, tier_n_qp, tier_ratio = _ladder_arrays(n_qp, ladder)
+        _fn = (
+            _acc.seg_seg_full_moments_bspline_cplx_tiered
+            if in_medium
+            else _acc.seg_seg_full_moments_bspline_tiered
+        )
+        return _fn(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            float(a) * float(a),
+            complex(k) if in_medium else float(k),
+            int(max_d),
+            tier_t,
+            tier_w,
+            tier_n_qp,
+            tier_ratio,
+        )
+
+    if accel_ok and not ladder:
         # `float(k)` would silently truncate an in-medium wavenumber, which is
         # the whole hazard class momwire#553 U1 named — so the complex branch
         # is a different ENTRY POINT taking `complex(k)`, not a widened arg.
@@ -954,38 +1112,50 @@ def _seg_seg_full_moments_offedge(
             float(_ek_radius(ek, a)),
         )
 
-    len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
-    len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
+    def _numpy_block(t01, w01):
+        len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
+        len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
 
-    pos_i = (1 - t01[None, :, None]) * seg_l_i[:, None, :] + t01[
-        None, :, None
-    ] * seg_r_i[:, None, :]
-    pos_j = (1 - t01[None, :, None]) * seg_l_j[:, None, :] + t01[
-        None, :, None
-    ] * seg_r_j[:, None, :]
+        pos_i = (1 - t01[None, :, None]) * seg_l_i[:, None, :] + t01[
+            None, :, None
+        ] * seg_r_i[:, None, :]
+        pos_j = (1 - t01[None, :, None]) * seg_l_j[:, None, :] + t01[
+            None, :, None
+        ] * seg_r_j[:, None, :]
 
-    u_i = t01[None, :] * len_i[:, None]
-    u_j = t01[None, :] * len_j[:, None]
-    w_i = w01[None, :] * len_i[:, None]
-    w_j = w01[None, :] * len_j[:, None]
+        u_i = t01[None, :] * len_i[:, None]
+        u_j = t01[None, :] * len_j[:, None]
+        w_i = w01[None, :] * len_i[:, None]
+        w_j = w01[None, :] * len_j[:, None]
 
-    diff = pos_i[:, :, None, None, :] - pos_j[None, None, :, :, :]
-    a2 = a * a if np.ndim(a) == 0 else (a * a)[:, None, None, None]
-    R = np.sqrt((diff * diff).sum(-1) + a2)
-    G = np.exp(-1j * k * R) / (4 * np.pi * R)
-    if ek is not None:
-        a_ek = _ek_radius(ek, a)
-        a_b = a_ek if np.ndim(a_ek) == 0 else a_ek[:, None, None, None]
-        mask = _ek_pair_mask(ek, R.shape[0], R.shape[2])
-        fac = np.where(mask[:, None, :, None], _ek_factor(R, a_b, k), 1.0)
-        G = G * fac
+        diff = pos_i[:, :, None, None, :] - pos_j[None, None, :, :, :]
+        a2 = a * a if np.ndim(a) == 0 else (a * a)[:, None, None, None]
+        R = np.sqrt((diff * diff).sum(-1) + a2)
+        G = np.exp(-1j * k * R) / (4 * np.pi * R)
+        if ek is not None:
+            a_ek = _ek_radius(ek, a)
+            a_b = a_ek if np.ndim(a_ek) == 0 else a_ek[:, None, None, None]
+            mask = _ek_pair_mask(ek, R.shape[0], R.shape[2])
+            fac = np.where(mask[:, None, :, None], _ek_factor(R, a_b, k), 1.0)
+            G = G * fac
 
-    u_pow_i = np.stack([u_i**p for p in range(max_d + 1)], axis=0)
-    u_pow_j = np.stack([u_j**p for p in range(max_d + 1)], axis=0)
-    wu_i = w_i[None, :, :] * u_pow_i
-    wu_j = w_j[None, :, :] * u_pow_j
+        u_pow_i = np.stack([u_i**p for p in range(max_d + 1)], axis=0)
+        u_pow_j = np.stack([u_j**p for p in range(max_d + 1)], axis=0)
+        wu_i = w_i[None, :, :] * u_pow_i
+        wu_j = w_j[None, :, :] * u_pow_j
 
-    return np.einsum("piq,iqjr,Pjr->pPij", wu_i, G, wu_j)
+        return np.einsum("piq,iqjr,Pjr->pPij", wu_i, G, wu_j)
+
+    block = _numpy_block(t01, w01)
+    if not ladder:
+        return block
+    # The numpy twin of the tiered kernel: one block per tier, the pair's
+    # order chosen by the same ratio the C++ selector computes in place.
+    ratio = _pair_ratio(seg_l_i, seg_r_i, seg_l_j, seg_r_j)
+    for r, n in ladder:
+        tier_block = _numpy_block(*_gl01(n))
+        block = np.where(ratio[None, None] >= r, tier_block, block)
+    return block
 
 
 def _seg_seg_full_moments_offedge_swept(
