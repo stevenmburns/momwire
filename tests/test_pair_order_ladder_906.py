@@ -398,8 +398,13 @@ def test_g906_8c_every_pair_gets_ONE_order_however_the_fill_is_cut(spy):
         (slice(0, 201), slice(150, 201)),
     ):
         sub = _pair_orders(
-            seg_l[rows], seg_r[rows], seg_l[cols], seg_r[cols],
-            k, s.n_qp_pair, ((16.0, 4),),
+            seg_l[rows],
+            seg_r[rows],
+            seg_l[cols],
+            seg_r[cols],
+            k,
+            s.n_qp_pair,
+            ((16.0, 4),),
         )
         assert np.array_equal(sub, ref[rows, cols]), (rows, cols)
 
@@ -466,7 +471,9 @@ def _pair_orders(sli, sri, slj, srj, k, n_qp, ladder):
     ratio = _pair_ratio(sli, sri, slj, srj)
     li = np.linalg.norm(np.asarray(sri) - np.asarray(sli), axis=1)
     lj = np.linalg.norm(np.asarray(srj) - np.asarray(slj), axis=1)
-    kl_ok = (np.maximum(li[:, None], lj[None, :]) * abs(k)) <= _bk._LADDER_PHASE_KL_CEILING
+    kl_ok = (
+        np.maximum(li[:, None], lj[None, :]) * abs(k)
+    ) <= _bk._LADDER_PHASE_KL_CEILING
     out = np.full(ratio.shape, int(n_qp))
     for r, n in lad:
         sel = ratio >= r
@@ -585,7 +592,9 @@ def test_g920_uniform_decks_are_bit_identical_and_never_split():
     sl, sr = _chain_deck(n=40)
     for k in (K_REAL, K_CPLX):
         assert _bk._phase_split_needed(LADDER, k, sl, sr, sl, sr) is None
-        got = _seg_seg_full_moments_offedge(sl, sr, sl, sr, 1e-3, k, 2, 32, ladder=LADDER)
+        got = _seg_seg_full_moments_offedge(
+            sl, sr, sl, sr, 1e-3, k, 2, 32, ladder=LADDER
+        )
         # the same call with the guard already applied by the caller, which is
         # what the fill did before #920
         trimmed = _ladder_for_block(LADDER, k, sl, sr, sl, sr)
@@ -631,7 +640,14 @@ def test_g920_a_straddling_block_splits_and_matches_pair_by_pair():
 
     # The old block-level answer differs — otherwise this gate is vacuous.
     old = _seg_seg_full_moments_offedge(
-        sl, sr, sl, sr, 1e-3, k, 2, 32,
+        sl,
+        sr,
+        sl,
+        sr,
+        1e-3,
+        k,
+        2,
+        32,
         ladder=_ladder_for_block(LADDER, k, sl, sr, sl, sr),
     )
     assert not np.array_equal(got, old)
