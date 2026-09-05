@@ -853,10 +853,17 @@ class _Rank1Buffer:
 
     What it replaces: `t_ab[nz] += c1 * sign * np.outer(a, b)` builds the outer
     product, then the sign scaling, then the c1 scaling, then the gather, then
-    the sum — five (len(nz), n_basis) complex temporaries in flight for one
-    update. `fv` is NOT the "handful of nonzeros" the #912 comment assumes on a
-    wide screen: at 48 radials the hub carries ~866 live rows, so each of those
-    is ~37 MB and the routine measured 445 MB across twelve of them.
+    the sum — five temporaries in flight for one update. Each is SMALL here:
+    `fv` really is the "handful of nonzeros" #912 describes, `nz` measuring 1
+    or 2 even at 48 radials. This buffer is worth its lines for the 197 calls,
+    not for any one of them.
+
+    It is NOT where the 445 MB at the old peak came from — that was
+    `_real_matvec_c`'s upcast, on the same source line, and tracemalloc
+    attributes a numpy temporary to the Python line that triggered it. Reading
+    that number as "the outer products are huge" is the mistake this paragraph
+    exists to stop; it cost one wrong hypothesis before the shapes were
+    printed.
     """
 
     __slots__ = ("_buf",)
