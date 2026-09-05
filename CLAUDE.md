@@ -166,6 +166,18 @@ must not depend on it. It moves in the 6th digit here only because the same-edge
 bit-identical by N=400. `test_n_qp_pair_same_edge_is_the_memory_knob_and_moves_nothing`
 holds that at a 1e-2 span. Raise the **cross-edge** knob for accuracy.
 
+**Since momwire#906 the cross-edge order is a LADDER, not one number.** A
+pair's order follows its centre distance over the longer segment: buried decks
+resolve `pair_order_ladder` to `((2, 8), (16, 4))` under the base 32, so the
+32 is paid only by pairs under two lengths apart (~1 % of a radial screen) and
+87 % of the pairs run at 4, at the same Z to the printed digit. Free space
+resolves to no ladder until momwire#907 measures the flip, so every real-k
+fill is still the pre-#906 kernel bit for bit (`tests/test_pair_order_ladder_906.py`
+G-906-2). Consequences: a buried timing at `n_qp_pair=32` is no longer the
+4.8x #760 measured, and a per-pair accuracy claim about "the order" must say
+which tier — the numpy twin carries the same selection, so it remains a sound
+oracle for the C++ path.
+
 **Measure the cross-edge knob on a BENT deck.** Since momwire#759 a straight
 wire has one edge and never enters the off-edge kernel at all, so `n_qp_pair`
 moves nothing there and a straight-wire sweep converges *vacuously* — the
