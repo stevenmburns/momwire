@@ -481,10 +481,15 @@ def test_g524_3_triple_memo_is_bit_identical_and_dedups(monkeypatch):
     deck's cross mesh repeats triples IEEE-exactly (the 4-radial fan is
     exactly 4.00× duplicated, probe40), which is what this buys.
 
-    Forced onto the numpy walk: the counting monkeypatch and the
-    bit-equality assertions are statements about the REFERENCE path (the
-    C++ twin routes around `six_point` entirely and is gated at 1e-12
-    relative, never bit, in test_near_interface_accel_680)."""
+    Forced onto the numpy walk of the POINT route: the counting
+    monkeypatch and the bit-equality assertions are statements about the
+    REFERENCE path. The other two routes reach neither — the C++ twin
+    routes around `six_point` entirely (gated at 1e-12 relative, never
+    bit, in test_near_interface_accel_680) and the column route evaluates
+    a whole (ρ, z′) group at once (momwire#895, gated the same way in
+    test_near_interface_columns_895). The dedup this pins is upstream of
+    all three and identical on all three."""
+    monkeypatch.setattr(_near_interface, "_ROUTE", "point")
     monkeypatch.setattr(_near_interface, "_FORCE_NUMPY", True)
     k = 2.0 * np.pi / WL7
     rho = np.array([[0.3, 0.5, 0.3], [0.3, 0.5, 0.3]])
