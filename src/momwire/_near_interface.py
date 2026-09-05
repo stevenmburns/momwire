@@ -31,19 +31,19 @@ path and differ only in where the panels come from (momwire#895):
 
   point   : `six_point` (or its C++ twin) — panels chosen adaptively per
             (ρ, z, z′) triple, O(ms)/point;
-  column  : `six_columns` — panels fixed ONCE per (ρ, z′) column and
-            shared by every z in it, converged for the column's smallest
-            s, O(µs)/point after the column's setup.
+  column  : `six_columns` — panels fixed ONCE per ρ column and shared by
+            every (z, z′) in it, converged for the column's smallest s,
+            O(µs)/point after the column's setup.
 
 The column route is not an approximation and not a grid: in `_core` the
-only z dependence is e^{−γ₊z} and the only ρ dependence is the Bessel /
-Hankel factor, so a column shares the path, the nodes, the weights, the
-path derivative AND the Bessel factor exactly, and a point is one
-exponential per node plus a (6 × K)·K product. The corner is served by
+only z and z′ dependence is e^{γ₋z′ − γ₊z} and the only ρ dependence is
+the Bessel / Hankel factor, so a column shares the path, the nodes, the
+weights, the path derivative AND the Bessel factor exactly, and a point is
+one exponential per node plus a (6 × K)·K product. The corner is served by
 the same contour as everything else, which is why it does not bite.
 
-Measured (#895): every point of a real crossing set sits in a (ρ, z′)
-column of ≥ 32 mast heights, so on BLE 45 ft the route runs 17.9× (N = 4)
+Measured (#895): every point of a real crossing set sits in a column of
+≥ 32 mast heights, so on BLE 45 ft the route runs 17.9× (N = 4)
 and 19.3× (N = 16) the C++ point twin over the same unique triples,
 single-threaded — 47 µs/point against 0.84 ms — for the same impedance to
 every printed digit.
@@ -476,9 +476,17 @@ def _column_factors(lam, w, k_p, k_m):
 
 
 def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
-    """The six designed integrals for ONE (ρ, z′) column: every z in `zs`
-    at that ρ and z′, z ≥ 0 ≥ z′, R = hypot(ρ, z − z′) > 0 for each.
-    Returns (len(zs), 6) complex, row i for zs[i].
+    """The six designed integrals for ONE ρ column: every (z, z′) pair at
+    that ρ, z ≥ 0 ≥ z′, R = hypot(ρ, z − z′) > 0 for each. `zp` is either a
+    scalar shared by every z or an array paired with `zs` element-wise.
+    Returns (len(zs), 6) complex, row i for (zs[i], zp[i]).
+
+    A column is a ρ, not a (ρ, z′) (momwire#899): in `_core` z and z′ both
+    enter only through e^{γ₋z′ − γ₊z}, so every path decision — the nodes,
+    the weights, the derivative, the Bessel factor — is shared across BOTH,
+    and a point is one exponential per node whichever z′ it carries. The
+    only thing the members share beyond ρ is `s_min`, the column's smallest
+    z − z′, which sets the extents (see `_column_rule`).
 
     Same domain contract and same refusals as `six_point`. `rtol` is
     accepted for signature parity and does not move the rule: the fixed
@@ -495,13 +503,14 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     """
     k_p = float(k2)
     k_m = k_medium(complex(eps_t), k_p)
-    rho, zp = float(rho), float(zp)
+    rho = float(rho)
     zs = np.atleast_1d(np.asarray(zs, dtype=float))
-    bad = zs[zs < 0.0]
-    if bad.size or zp > 0.0:
-        z_bad = float(bad[0]) if bad.size else float(zs.flat[0])
-        raise ValueError(f"need z >= 0 >= zp, got {(z_bad, zp)!r}")
-    s = zs - zp
+    zps = np.broadcast_to(np.asarray(zp, dtype=float), zs.shape)
+    bad = (zs < 0.0) | (zps > 0.0)
+    if np.any(bad):
+        i = int(np.argmax(bad))
+        raise ValueError(f"need z >= 0 >= zp, got {(float(zs[i]), float(zps[i]))!r}")
+    s = zs - zps
     if rho < 0.0 or np.any(s + rho <= 0.0):
         s_bad = float(s[np.argmin(s)])
         raise ValueError(f"need R > 0, got rho={rho!r}, s={s_bad!r}")
@@ -515,8 +524,9 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     step = max(1, _COLUMN_Z_CHUNK // lam.size)
     with np.errstate(under="ignore"):
         for i0 in range(0, zs.size, step):
-            zc = zs[i0 : i0 + step]
-            e = np.exp(g_m[None, :] * zp - g_p[None, :] * zc[:, None])  # (nz, K)
+            zc = zs[i0 : i0 + step, None]
+            zpc = zps[i0 : i0 + step, None]
+            e = np.exp(g_m[None, :] * zpc - g_p[None, :] * zc)  # (nz, K)
             out[i0 : i0 + step] = e @ F.T
     return out
 
@@ -549,23 +559,27 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     twin is gated against it at 1e-12 RELATIVE and the column route at the
     reference's own 1e-10, never bit.
 
-    On the column route the unique triples are grouped by exact (ρ, z′) and
-    each group evaluated once, which is where the 11–15× comes from: a
-    real crossing set puts every point in a column of ≥ 32 mast heights.
+    On the column route the unique triples are grouped by exact ρ and each
+    group evaluated once, which is where the 11–15× comes from: a real
+    crossing set puts every point in a column of ≥ 32 mast heights. The
+    grouping was by (ρ, z′) until momwire#899; keying on ρ alone merges
+    the per-z′ columns of one radial (138 → 84 groups on BLE N = 4) and
+    halves the singletons, each of which paid a full rule for one point.
     The dedup, the key order and the scatter below are the same on every
     route — only the arithmetic that fills `memo` differs.
+
+    The dedup is one `np.unique` over the asked triples (momwire#899): the
+    asked set is ~3× the unique set on a crossing fill, and the two Python
+    passes over it that stood here were 10–15 % of the column route.
     """
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
     )
-    out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
     if memo is None:
         memo = {}
-    it = np.nditer(rho_b, flags=["multi_index"])
+    keys, inverse = _unique_triples(rho_b, z_b, zp_b)
     unique = []
-    for _ in it:
-        ix = it.multi_index
-        key = (float(rho_b[ix]), float(z_b[ix]), float(zp_b[ix]))
+    for key in keys:
         if memo.get(key) is None:
             if key not in memo:
                 unique.append(key)
@@ -576,12 +590,14 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         # which key the memo holds or in what order it was seen.
         columns = {}
         for key in unique:
-            columns.setdefault((key[0], key[2]), []).append(key[1])
+            columns.setdefault(key[0], []).append(key)
         with _blas_physical_cores():
-            for (r, zpc), zs in columns.items():
-                vals = six_columns(eps_t, k2, r, zs, zpc, rtol=rtol, lam_mult=lam_mult)
-                for zc, row in zip(zs, vals):
-                    memo[(r, zc, zpc)] = row
+            for r, members in columns.items():
+                zs = [m[1] for m in members]
+                zps = [m[2] for m in members]
+                vals = six_columns(eps_t, k2, r, zs, zps, rtol=rtol, lam_mult=lam_mult)
+                for key, row in zip(members, vals):
+                    memo[key] = row
     elif _use_near_interface_accel() and unique:
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
@@ -612,12 +628,31 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
                 rtol=rtol,
                 lam_mult=lam_mult,
             )
-    it = np.nditer(rho_b, flags=["multi_index"])
-    for _ in it:
-        ix = it.multi_index
-        key = (float(rho_b[ix]), float(z_b[ix]), float(zp_b[ix]))
-        out[(slice(None),) + ix] = memo[key]
+    if keys:
+        vals = np.stack([memo[key] for key in keys])  # (n_unique, 6)
+        out = np.ascontiguousarray(vals[inverse].T).reshape((6,) + rho_b.shape)
+    else:
+        out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
     return dict(zip(KEYS, out))
+
+
+def _unique_triples(rho_b, z_b, zp_b):
+    """The distinct (ρ, z, z′) triples of a broadcast ask, as Python-float
+    tuples in FIRST-APPEARANCE order, plus the (flat) index of each asked
+    point into that list. One `np.unique` over the asked set; the memo's
+    key contract (float triple, first seen first) is unchanged, and −0.0
+    and 0.0 fold together here exactly as they do as dict keys."""
+    tri = np.stack([rho_b.ravel(), z_b.ravel(), zp_b.ravel()], axis=1)
+    if tri.shape[0] == 0:
+        return [], np.empty(0, dtype=np.intp)
+    rows, first, inverse = np.unique(
+        tri, axis=0, return_index=True, return_inverse=True
+    )
+    order = np.argsort(first, kind="stable")
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size)
+    keys = [tuple(r) for r in rows[order].tolist()]
+    return keys, rank[np.asarray(inverse).ravel()]
 
 
 def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None):
