@@ -62,6 +62,7 @@ from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _ek_axis_groups,
+    _normalize_ladder,
     _refuse_complex_k,
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
@@ -99,6 +100,18 @@ from ._port_solution import PortSolution, _SweptPortSolutions
 # measurements and for why the buried order is not applied everywhere.
 DEFAULT_N_QP_PAIR = 8
 BURIED_N_QP_PAIR = 32
+
+# The distance-adaptive pair-order LADDER (momwire#906), resolved per deck by
+# `BSplineSolver.pair_order_ladder` alongside `n_qp_pair`: a pair whose centre
+# distance is >= 2 segment lengths takes order 8, >= 16 lengths order 4, the
+# rest the base order. Measured on the 654-segment buried screen: every
+# ladder tried reproduces uniform-32 Z to the printed digit while ~87 % of
+# the pairs run at order 4. Free space keeps NO ladder for now — not because
+# the thresholds differ there (the study says they do not) but because that
+# fill's pinned constants have not been re-run under one; flipping it is its
+# own measured change.
+DEFAULT_PAIR_ORDER_LADDER = ()
+BURIED_PAIR_ORDER_LADDER = ((2.0, 8), (16.0, 4))
 
 _HAVE_BSPLINE_ASSEMBLE_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_bspline")
 _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
@@ -582,6 +595,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         There is a saving available here (2 is bit-identical to 4 at N=400)
         but it also governs #631's near-image analytic block, which has not
         been measured at 2, so the default stays where it was.
+    pair_order_ladder : the distance-adaptive off-edge quadrature ladder
+        (momwire#906): a tuple of `(ratio, n_qp)` with ratios strictly
+        ascending and orders strictly descending below `n_qp_pair`. A pair
+        whose centre distance over the longer segment meets a tier's ratio
+        takes that tier's order; the rest pay `n_qp_pair`. Resolved from the
+        deck like `n_qp_pair` when None: buried decks get
+        `BURIED_PAIR_ORDER_LADDER` = ((2, 8), (16, 4)), free-space decks get
+        no ladder (see the constants for why). Tiers at or above the base
+        order are dropped, so an explicit `n_qp_pair=8` under the buried
+        default leaves ((16, 4),). The per-block phase guard in
+        `_seg_seg_full_moments_offedge` drops the order-4 tier when the
+        longest segment passes kL = 0.5.
+
+        What it buys: on the 654-segment radial screen the two buried pair
+        blocks went from 6.3 s to well under a second at the same Z, because
+        87 % of the pairs sit 16+ segment lengths apart and the study
+        measured order 4 there at 3e-14 relative to order 32.
     extended_kernel : NEC's EK card for this basis family (#249). False —
         the default, and what this solver did before #249 — is the reduced
         ("thin-wire") kernel: the source current is a filament on the wire
@@ -765,6 +795,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         node_gaps=None,
         n_qp_pair=None,
         n_qp_pair_same_edge=4,
+        pair_order_ladder=None,
         n_qp_source=16,
         extended_kernel=False,
         wavelength=22,
@@ -1027,6 +1058,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._n_qp_pair_arg = None if n_qp_pair is None else int(n_qp_pair)
         self._n_qp_pair_resolved = None
         self.n_qp_pair_same_edge = int(n_qp_pair_same_edge)
+        # Same contract as `n_qp_pair`: None defers to the deck, an explicit
+        # ladder (including the empty one) always wins (momwire#906).
+        self._pair_order_ladder_arg = (
+            None
+            if pair_order_ladder is None
+            else tuple((float(r), int(n)) for r, n in pair_order_ladder)
+        )
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
         # When enabled, adds ONE extra basis per (wire, end_pos) tuple at each
@@ -1677,6 +1715,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 else DEFAULT_N_QP_PAIR
             )
         return self._n_qp_pair_resolved
+
+    @property
+    def pair_order_ladder(self):
+        """The off-edge pair-order ladder for this deck (momwire#906).
+
+        Explicit wins; otherwise buried decks get `BURIED_PAIR_ORDER_LADDER`
+        and free-space decks `DEFAULT_PAIR_ORDER_LADDER`. Tiers that do not
+        sit strictly below the resolved `n_qp_pair` are dropped rather than
+        refused — a ladder written for the buried 32 is still a valid wish
+        under an explicit 8, just a shorter one. What survives is validated
+        by the kernel module's `_normalize_ladder`.
+        """
+        if self._pair_order_ladder_arg is not None:
+            ladder = self._pair_order_ladder_arg
+        elif self.ground_z is not None and self._has_buried_wires():
+            ladder = BURIED_PAIR_ORDER_LADDER
+        else:
+            ladder = DEFAULT_PAIR_ORDER_LADDER
+        base = self.n_qp_pair
+        return _normalize_ladder(tuple((r, n) for r, n in ladder if n < base), base)
 
     @property
     def _accel_serves_n_qp_pair(self):
@@ -4780,6 +4838,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k,
             d,
             self.n_qp_pair,
+            ladder=self.pair_order_ladder,
         )
         if not mirror_sources:
             # Same-edge overwrite, per edge of each subset wire. The image

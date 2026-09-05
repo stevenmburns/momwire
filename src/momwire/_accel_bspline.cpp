@@ -1,4 +1,6 @@
 #include "_accel_common.h"
+#include <algorithm>
+#include <vector>
 #include "_stable_inline.h"
 
 #include "_bspline_static_moments_inline.h"
@@ -302,9 +304,97 @@ seg_seg_reg_moments_bspline_swept_ek(
 //
 // `if (COMPLEX_K)` rather than `if constexpr`: the build is -std=gnu++11, and
 // this is the idiom `if (EK)` already uses here. The branch folds at -O3.
+// The distance-adaptive pair-order ladder (momwire#906). Tier 0 is the base
+// Gauss-Legendre rule and always eligible; tier t > 0 serves a pair whose
+// centre distance over the longer segment is >= ratio[t]. Thresholds ascend,
+// so the highest eligible tier is the pair's order. Rules are concatenated:
+// tier t's nodes are t[off[t] .. off[t+1]) and its weights likewise.
+//
+// Why this shape and not a per-pair n_qp array: the selector is O(1) per pair
+// from data the kernel already holds, so the ladder is three small vectors
+// and the (N_i, N_j) decision never leaves the parallel loop.
+struct PairOrderLadder {
+    std::vector<double> t;
+    std::vector<double> w;
+    std::vector<size_t> off;    // n_tiers + 1 prefix offsets into t / w
+    std::vector<double> ratio;  // n_tiers thresholds; ratio[0] is unused
+    size_t n_tiers() const { return ratio.size(); }
+    size_t n_qp(size_t tier) const { return off[tier + 1] - off[tier]; }
+    const double *t_at(size_t tier) const { return &t[off[tier]]; }
+    const double *w_at(size_t tier) const { return &w[off[tier]]; }
+};
+
+// One tier: the pre-#906 (gl_t, gl_w) contract, unchanged for every caller
+// that does not pass a ladder.
+static PairOrderLadder ladder_from_rule(
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+) {
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    PairOrderLadder L;
+    const size_t n = (size_t)glt.shape(0);
+    L.t.resize(n);
+    L.w.resize(n);
+    for (size_t q = 0; q < n; q++) { L.t[q] = glt(q); L.w[q] = glw(q); }
+    L.off = {0, n};
+    L.ratio = {0.0};
+    return L;
+}
+
+// A full ladder from the Python side's concatenated arrays. Validated here
+// rather than trusted: a non-ascending threshold would make the selector's
+// early `break` pick the wrong tier silently.
+static PairOrderLadder ladder_from_arrays(
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio
+) {
+    auto tt = tier_t.unchecked<1>();
+    auto tw = tier_w.unchecked<1>();
+    auto tn = tier_n_qp.unchecked<1>();
+    auto tr = tier_ratio.unchecked<1>();
+    const size_t n_tiers = (size_t)tn.shape(0);
+    if (n_tiers < 1 || (size_t)tr.shape(0) != n_tiers) {
+        throw std::runtime_error(
+            "pair-order ladder: tier_n_qp and tier_ratio must have the same "
+            "length, at least 1");
+    }
+    if (tt.shape(0) != tw.shape(0)) {
+        throw std::runtime_error("pair-order ladder: tier_t and tier_w must match");
+    }
+    PairOrderLadder L;
+    L.off.resize(n_tiers + 1);
+    L.off[0] = 0;
+    for (size_t tier = 0; tier < n_tiers; tier++) {
+        if (tn(tier) < 1) {
+            throw std::runtime_error("pair-order ladder: every tier needs n_qp >= 1");
+        }
+        L.off[tier + 1] = L.off[tier] + (size_t)tn(tier);
+        if (tier >= 1 && !(tr(tier) > tr(tier - 1))) {
+            throw std::runtime_error(
+                "pair-order ladder: ratio thresholds must strictly ascend");
+        }
+    }
+    if (L.off[n_tiers] != (size_t)tt.shape(0)) {
+        throw std::runtime_error(
+            "pair-order ladder: tier_n_qp must sum to the length of tier_t");
+    }
+    L.t.resize(L.off[n_tiers]);
+    L.w.resize(L.off[n_tiers]);
+    for (size_t q = 0; q < L.off[n_tiers]; q++) { L.t[q] = tt(q); L.w[q] = tw(q); }
+    L.ratio.resize(n_tiers);
+    for (size_t tier = 0; tier < n_tiers; tier++) L.ratio[tier] = tr(tier);
+    return L;
+}
+
 template<int D, bool COMPLEX_K>
 static py::array_t<std::complex<double>>
-seg_seg_full_moments_bspline_kernel(
+seg_seg_full_moments_bspline_kernel_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
@@ -312,8 +402,7 @@ seg_seg_full_moments_bspline_kernel(
     double a_squared,
     double k,
     double k_im,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+    const PairOrderLadder& ladder
 ) {
     static constexpr int NM = D + 1;          // moments per axis
     static constexpr int NMM = NM * NM;       // total moments
@@ -322,8 +411,6 @@ seg_seg_full_moments_bspline_kernel(
     auto sri = seg_r_i.unchecked<2>();
     auto slj = seg_l_j.unchecked<2>();
     auto srj = seg_r_j.unchecked<2>();
-    auto glt = gl_t.unchecked<1>();
-    auto glw = gl_w.unchecked<1>();
 
     if (sli.shape(1) != 3 || sri.shape(1) != 3 ||
         slj.shape(1) != 3 || srj.shape(1) != 3) {
@@ -332,14 +419,10 @@ seg_seg_full_moments_bspline_kernel(
     if (sli.shape(0) != sri.shape(0) || slj.shape(0) != srj.shape(0)) {
         throw std::runtime_error("seg_l and seg_r must have matching N");
     }
-    if (glt.shape(0) != glw.shape(0)) {
-        throw std::runtime_error("gl_t and gl_w must have matching length");
-    }
-    size_t n_qp_in = glt.shape(0);
 
     size_t N_i = sli.shape(0);
     size_t N_j = slj.shape(0);
-    size_t n_qp = n_qp_in;
+    const size_t n_tiers = ladder.n_tiers();
 
     py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, N_i, N_j});
     auto j_view = J.mutable_unchecked<4>();
@@ -349,10 +432,10 @@ seg_seg_full_moments_bspline_kernel(
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
 
-    // Per-segment quadrature-point positions and lengths -- k-independent,
-    // computed once outside the parallel region.
-    std::vector<double> pos_i(N_i * n_qp * 3);
-    std::vector<double> pos_j(N_j * n_qp * 3);
+    // Per-segment lengths and, PER TIER, quadrature-point positions --
+    // k-independent, computed once outside the parallel region. With one
+    // tier this is the pre-#906 precompute split into two loops: the same
+    // expressions produce the same doubles.
     std::vector<double> len_i(N_i);
     std::vector<double> len_j(N_j);
     for (size_t i = 0; i < N_i; i++) {
@@ -360,23 +443,51 @@ seg_seg_full_moments_bspline_kernel(
         double dy = sri(i,1) - sli(i,1);
         double dz = sri(i,2) - sli(i,2);
         len_i[i] = std::sqrt(dx*dx + dy*dy + dz*dz);
-        for (size_t q = 0; q < n_qp; q++) {
-            double t = glt(q);
-            pos_i[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
-            pos_i[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
-            pos_i[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
-        }
     }
     for (size_t j = 0; j < N_j; j++) {
         double dx = srj(j,0) - slj(j,0);
         double dy = srj(j,1) - slj(j,1);
         double dz = srj(j,2) - slj(j,2);
         len_j[j] = std::sqrt(dx*dx + dy*dy + dz*dz);
-        for (size_t r = 0; r < n_qp; r++) {
-            double t = glt(r);
-            pos_j[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
-            pos_j[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
-            pos_j[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+    }
+    std::vector<std::vector<double>> pos_i(n_tiers);
+    std::vector<std::vector<double>> pos_j(n_tiers);
+    for (size_t tier = 0; tier < n_tiers; tier++) {
+        const size_t n_qp = ladder.n_qp(tier);
+        const double *gt = ladder.t_at(tier);
+        pos_i[tier].resize(N_i * n_qp * 3);
+        pos_j[tier].resize(N_j * n_qp * 3);
+        std::vector<double>& pi_t = pos_i[tier];
+        std::vector<double>& pj_t = pos_j[tier];
+        for (size_t i = 0; i < N_i; i++) {
+            for (size_t q = 0; q < n_qp; q++) {
+                double t = gt[q];
+                pi_t[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
+                pi_t[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
+                pi_t[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
+            }
+        }
+        for (size_t j = 0; j < N_j; j++) {
+            for (size_t r = 0; r < n_qp; r++) {
+                double t = gt[r];
+                pj_t[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
+                pj_t[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
+                pj_t[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+            }
+        }
+    }
+    // Segment centres, only read when there is a tier to choose (#906): the
+    // selector is centre distance over the longer segment, the O(1)-per-pair
+    // quantity the study binned by.
+    std::vector<double> c_i, c_j;
+    if (n_tiers > 1) {
+        c_i.resize(N_i * 3);
+        c_j.resize(N_j * 3);
+        for (size_t i = 0; i < N_i; i++) {
+            for (int d = 0; d < 3; d++) c_i[i*3 + d] = 0.5 * (sli(i,d) + sri(i,d));
+        }
+        for (size_t j = 0; j < N_j; j++) {
+            for (int d = 0; d < 3; d++) c_j[j*3 + d] = 0.5 * (slj(j,d) + srj(j,d));
         }
     }
 
@@ -405,8 +516,24 @@ seg_seg_full_moments_bspline_kernel(
             double acc_re[NMM], acc_im[NMM];
             for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
 
-            const double *pi = &pos_i[i * n_qp * 3];
-            const double *pj = &pos_j[j * n_qp * 3];
+            // Pick the pair's tier: the highest whose ratio threshold the
+            // pair meets (thresholds ascend, validated at construction).
+            size_t tier = 0;
+            if (n_tiers > 1) {
+                const double dx = c_i[i*3 + 0] - c_j[j*3 + 0];
+                const double dy = c_i[i*3 + 1] - c_j[j*3 + 1];
+                const double dz = c_i[i*3 + 2] - c_j[j*3 + 2];
+                const double ratio = std::sqrt(dx*dx + dy*dy + dz*dz)
+                                     / std::max(len_i[i], len_j[j]);
+                for (size_t t = 1; t < n_tiers; t++) {
+                    if (ratio >= ladder.ratio[t]) tier = t; else break;
+                }
+            }
+            const size_t n_qp = ladder.n_qp(tier);
+            const double *gt = ladder.t_at(tier);
+            const double *gw = ladder.w_at(tier);
+            const double *pi = &pos_i[tier][i * n_qp * 3];
+            const double *pj = &pos_j[tier][j * n_qp * 3];
             const double Li = len_i[i];
             const double Lj = len_j[j];
             const size_t n_pairs = n_qp * n_qp;
@@ -425,10 +552,10 @@ seg_seg_full_moments_bspline_kernel(
                     const double dz = pi[q*3 + 2] - pj[r*3 + 2];
                     R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
 
-                    const double wi = glw(q) * Li;
-                    const double ui = glt(q) * Li;
-                    const double wj = glw(r) * Lj;
-                    const double uj = glt(r) * Lj;
+                    const double wi = gw[q] * Li;
+                    const double ui = gt[q] * Li;
+                    const double wj = gw[r] * Lj;
+                    const double uj = gt[r] * Lj;
                     double ui_pow[NM], uj_pow[NM];
                     ui_pow[0] = 1.0;
                     uj_pow[0] = 1.0;
@@ -518,6 +645,25 @@ seg_seg_full_moments_bspline_kernel(
     }
 
     return J;
+}
+
+// The single-rule entry the pre-#906 callers use: one tier, the same loop.
+template<int D, bool COMPLEX_K>
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_kernel(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    double k,
+    double k_im,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w
+) {
+    return seg_seg_full_moments_bspline_kernel_impl<D, COMPLEX_K>(
+        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, k_im,
+        ladder_from_rule(gl_t, gl_w));
 }
 
 // Batched (swept-k) variant of seg_seg_full_moments_bspline_kernel.
@@ -2836,6 +2982,78 @@ seg_seg_full_moments_bspline_cplx(
 }
 
 
+// Distance-adaptive twins of the two entries above (momwire#906): the same
+// kernel with a pair-order LADDER instead of one rule. tier 0 is the base
+// order; tier t >= 1 serves pairs at centre distance >= tier_ratio[t]
+// segment lengths. Real k and complex k are separate entry points for the
+// same reason the plain pair is (`float(k)` must never truncate a medium's
+// wavenumber, momwire#553 U1).
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_tiered(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    double k,
+    int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio
+) {
+    PairOrderLadder ladder = ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
+    switch (max_d) {
+        case 1:
+            return seg_seg_full_moments_bspline_kernel_impl<1, false>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, ladder);
+        case 2:
+            return seg_seg_full_moments_bspline_kernel_impl<2, false>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, ladder);
+        default:
+            throw std::runtime_error(
+                "seg_seg_full_moments_bspline_tiered: max_d must be 1 or 2 "
+                "(add an explicit template instantiation in _accelerators.cpp)");
+    }
+}
+
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_cplx_tiered(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    std::complex<double> k,
+    int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio
+) {
+    if (k.imag() > 0.0) {
+        throw std::runtime_error(
+            "seg_seg_full_moments_bspline_cplx_tiered: Im k > 0 is the growing "
+            "exponential branch; e^{+jwt} requires Im k <= 0 so e^{-jkR} decays");
+    }
+    PairOrderLadder ladder = ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
+    switch (max_d) {
+        case 1:
+            return seg_seg_full_moments_bspline_kernel_impl<1, true>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
+                k.real(), k.imag(), ladder);
+        case 2:
+            return seg_seg_full_moments_bspline_kernel_impl<2, true>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
+                k.real(), k.imag(), ladder);
+        default:
+            throw std::runtime_error(
+                "seg_seg_full_moments_bspline_cplx_tiered: max_d must be 1 or 2 "
+                "(add an explicit template instantiation in _accelerators.cpp)");
+    }
+}
+
+
 // Runtime dispatch wrapper for the batched (swept-k) off-edge kernel.
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_swept(
@@ -3531,6 +3749,32 @@ void register_bspline(py::module_ &m) {
           py::arg("a_squared"), py::arg("k"),
           py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"));
+    m.def("seg_seg_full_moments_bspline_tiered",
+          &seg_seg_full_moments_bspline_tiered,
+          "Distance-adaptive twin of seg_seg_full_moments_bspline "
+          "(momwire#906). Same contract and output, but the Gauss-Legendre "
+          "rule is a LADDER: tier 0 (the first tier_n_qp[0] entries of "
+          "tier_t / tier_w) is the base order, and tier t >= 1 serves every "
+          "pair whose centre distance over the longer segment is >= "
+          "tier_ratio[t] (thresholds strictly ascending). One tier reproduces "
+          "the plain entry bit for bit.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("max_d"),
+          py::arg("tier_t"), py::arg("tier_w"),
+          py::arg("tier_n_qp"), py::arg("tier_ratio"));
+    m.def("seg_seg_full_moments_bspline_cplx_tiered",
+          &seg_seg_full_moments_bspline_cplx_tiered,
+          "In-medium (complex-k) twin of seg_seg_full_moments_bspline_tiered "
+          "(momwire#906): the ladder contract above with the #778 complex-k "
+          "continuation, Im k <= 0.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("max_d"),
+          py::arg("tier_t"), py::arg("tier_w"),
+          py::arg("tier_n_qp"), py::arg("tier_ratio"));
     m.def("seg_seg_full_moments_bspline_swept",
           &seg_seg_full_moments_bspline_swept,
           "Batched (swept-k) off-edge full-kernel polynomial moments for the "
