@@ -1801,13 +1801,18 @@ M4_REFS = {
     # theta = 90 stencil rows are identical before and after), and its
     # answer shifted ~1.4e-5 relative. The other somm rows moved < 1e-7
     # and keep their original pins.
+    # Re-pinned 2026-09-05 (momwire#902): the six values below carried the
+    # 1 % nearest-rung Im(eps) snap's own offset — they sat 7.0e-5 from the
+    # exact-ladder answer (MOMWIRE_SOMM_EPS_IM_BUCKET=0: gal_161
+    # 56.409343-8.707922j). With the 10 % pair blend they sit 3e-7 from it.
+    # The vertical and lshape somm rows moved 2.5e-6 and < 3e-6 and stay.
     ("m4_dipole", "somm"): dict(
-        gal_161=56.409088 - 8.711934j,
-        rich_gal=56.408525 - 8.638329j,
-        coll_161=56.399389 - 8.801206j,
-        rich_coll=56.406591 - 8.664271j,
-        bspl_161=56.404930 - 8.722257j,
-        rich_bspl=56.408855 - 8.641187j,
+        gal_161=56.409328 - 8.707945j,
+        rich_gal=56.408768 - 8.634340j,
+        coll_161=56.399629 - 8.797216j,
+        rich_coll=56.406834 - 8.660275j,
+        bspl_161=56.405171 - 8.718268j,
+        rich_bspl=56.409098 - 8.637198j,
     ),
     ("m4_vertical", "pec"): dict(
         gal_161=75.632971 - 26.411502j,
