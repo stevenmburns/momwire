@@ -1,0 +1,44 @@
+
+== BLE 45 ft, N = 4: Z = 56.2105-84.0093j, wall 14.1 s
+   asked 21140, unique 7628 (2.77x dup)
+   distinct z' 30: [-1.52400000e-01 -1.48845090e-01 -1.35503515e-01 -1.18096485e-01
+ -1.04754910e-01 -9.76450896e-02 -8.43035147e-02 -6.68964853e-02
+ -5.35549104e-02 -4.86981529e-02 -4.38123223e-02 -3.74376777e-02
+ -3.25518471e-02 -2.99481529e-02 -2.50623223e-02 -1.86876777e-02
+ -1.38018471e-02 -1.20660510e-02 -1.04374408e-02 -8.31255924e-03
+ -6.68394903e-03 -5.92922488e-03 -4.72535621e-03 -3.15464379e-03
+ -1.95077512e-03 -1.51682609e-03 -1.09208455e-03 -5.37915449e-04
+ -1.13173906e-04  0.00000000e+00]
+   distinct z  109
+   (z, z') groups 3269; rho per group min/median/max 1/1/41
+   share of unique points in (z, z') groups of size >= k:  k=2: 0.59  k=4: 0.59  k=8: 0.59  k=32: 0.59
+   on-axis pairs (rho == a-fold 0.00163): 3268 of 7628 = mast x rise; off-axis (mast x radials): 4360
+   share in (rho, z') columns of size >= k:  k=2: 1.00  k=4: 1.00  k=8: 1.00  k=32: 1.00
+   rho range 0.00163..13.62, s range 0.0001132..21.48
+   sample 240: numpy 9.12 ms/pt (median 9.02), C++ 0.899 ms/pt single-thread
+     corner  s+rho < 0.02   n=   3  numpy 10.43 ms/pt  kR ~ 0.00
+     near    0.02..0.5      n=  31  numpy 9.29 ms/pt  kR ~ 0.03
+     mid     0.5..5         n=  23  numpy 8.70 ms/pt  kR ~ 0.78
+     far     >= 5           n= 183  numpy 9.12 ms/pt  kR ~ 3.66
+
+== BLE 45 ft, N = 16: Z = 31.1352-97.0803j, wall 14.3 s
+   asked 74756, unique 14604 (5.12x dup)
+   distinct z' 30: [-1.52400000e-01 -1.48845090e-01 -1.35503515e-01 -1.18096485e-01
+ -1.04754910e-01 -9.76450896e-02 -8.43035147e-02 -6.68964853e-02
+ -5.35549104e-02 -4.86981529e-02 -4.38123223e-02 -3.74376777e-02
+ -3.25518471e-02 -2.99481529e-02 -2.50623223e-02 -1.86876777e-02
+ -1.38018471e-02 -1.20660510e-02 -1.04374408e-02 -8.31255924e-03
+ -6.68394903e-03 -5.92922488e-03 -4.72535621e-03 -3.15464379e-03
+ -1.95077512e-03 -1.51682609e-03 -1.09208455e-03 -5.37915449e-04
+ -1.13173906e-04  0.00000000e+00]
+   distinct z  109
+   (z, z') groups 3269; rho per group min/median/max 1/1/105
+   share of unique points in (z, z') groups of size >= k:  k=2: 0.78  k=4: 0.78  k=8: 0.78  k=32: 0.78
+   on-axis pairs (rho == a-fold 0.00163): 3268 of 14604 = mast x rise; off-axis (mast x radials): 11336
+   share in (rho, z') columns of size >= k:  k=2: 1.00  k=4: 1.00  k=8: 1.00  k=32: 1.00
+   rho range 0.00163..13.62, s range 0.0001132..21.48
+   sample 120: numpy 9.17 ms/pt (median 9.10), C++ 0.933 ms/pt single-thread
+     corner  s+rho < 0.02   n=   3  numpy 10.09 ms/pt  kR ~ 0.00
+     near    0.02..0.5      n=  10  numpy 9.19 ms/pt  kR ~ 0.03
+     mid     0.5..5         n=  21  numpy 8.94 ms/pt  kR ~ 0.63
+     far     >= 5           n=  86  numpy 9.20 ms/pt  kR ~ 3.19

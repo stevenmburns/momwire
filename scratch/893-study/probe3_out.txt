@@ -1,0 +1,16 @@
+
+== BLE 45 ft, N = 4: Z = 56.2105-84.0093j, wall 14.0 s
+   twin batch (1 thread): 6.81 s = 0.892 ms/pt
+   column route: 70 columns, mean K 1725; setup 0.10 s + eval 0.50 s = 0.60 s = 78 us/pt  -> 11.4x
+   kernel agreement: max rel 1.56e-10, 99th pct 9.8e-12
+   Z via twin table: 56.210465-84.009292j
+   Z via column table: 56.210465-84.009292j
+   |dZ| = 1.543e-11 ohm
+
+== BLE 45 ft, N = 16: Z = 31.1352-97.0803j, wall 14.3 s
+   twin batch (1 thread): 13.53 s = 0.926 ms/pt
+   column route: 134 columns, mean K 1658; setup 0.18 s + eval 0.76 s = 0.93 s = 64 us/pt  -> 14.5x
+   kernel agreement: max rel 1.56e-10, 99th pct 5.8e-12
+   Z via twin table: 31.135159-97.080337j
+   Z via column table: 31.135159-97.080337j
+   |dZ| = 1.966e-11 ohm
