@@ -118,6 +118,15 @@ _HAVE_BSPLINE_ASSEMBLE_W_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_weighted"
 )
 _HAVE_ENRICH_ACCEL = _acc is not None and hasattr(_acc, "assemble_Z_enrich")
+# momwire#910: the in-medium (complex eps~) twins of the two assemblers. The
+# buried fill used to take the numpy einsum loop for both of its assemblies
+# because the C++ entries' `double eps` would truncate eps~.
+_HAVE_BSPLINE_ASSEMBLE_CPLX_EPS_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_cplx_eps"
+)
+_HAVE_BSPLINE_ASSEMBLE_W_CPLX_EPS_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_weighted_cplx_eps"
+)
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
@@ -2516,8 +2525,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         whose constant tables carry A_m = (1 − ε̃)/(1 + ε̃) instead.
 
         `eps` is the same seam `_assemble_Z` names: the buried image's Φ term
-        divides by ε̃_m = ε₀·ε̃, and a complex one takes the numpy branch by
-        force because the C++ kernel's signature is `double eps`."""
+        divides by ε̃_m = ε₀·ε̃. A complex one used to take the numpy branch by
+        force because the C++ kernel's signature is `double eps`; since
+        momwire#910 it takes the complex-eps twin, with the numpy loop as the
+        reference it is gated against."""
         d = self.degree
         eps_z = self.eps if eps is None else eps
         in_medium = np.iscomplexobj(eps_z)
@@ -2534,6 +2545,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(w_Phi, dtype=np.complex128),
                 float(self.omega),
                 float(eps_z),
+                float(self.mu),
+                int(d),
+                self._cancel_flag,
+            )
+        if (
+            _HAVE_BSPLINE_ASSEMBLE_W_CPLX_EPS_ACCEL
+            and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and in_medium
+        ):
+            # momwire#910: the complex-eps~ twin (see `_assemble_Z`).
+            return _acc.assemble_Z_bspline_weighted_cplx_eps(
+                np.ascontiguousarray(J_img, dtype=np.complex128),
+                np.ascontiguousarray(supp_seg, dtype=np.int64),
+                np.ascontiguousarray(polys, dtype=np.float64),
+                np.ascontiguousarray(w_A, dtype=np.complex128),
+                np.ascontiguousarray(w_Phi, dtype=np.complex128),
+                float(self.omega),
+                complex(eps_z),
                 float(self.mu),
                 int(d),
                 self._cancel_flag,
@@ -3193,11 +3222,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `float(self.eps)` seam momwire#553 U5 finally lands. A BURIED pair
         block's mixed potential is written in the LOWER medium: jωμ₀ still
         multiplies the A term (μ_r = 1 is this arc's scope), and the Φ term
-        divides by ε̃_m = ε₀·ε̃ rather than by ε₀. A complex `eps` takes the
-        numpy branch by force — the C++ assembler's signature is `double
+        divides by ε̃_m = ε₀·ε̃ rather than by ε₀. A complex `eps` used to take
+        the numpy branch by force — the C++ assembler's signature is `double
         eps` and `float()` on a complex raises, which is the silent-
-        truncation class U1 killed one level down. `eps=None` is the
-        pre-#553 spelling, same branch and same bytes.
+        truncation class U1 killed one level down; since momwire#910 it takes
+        the complex-eps ENTRY POINT instead, gated against that numpy loop.
+        `eps=None` is the pre-#553 spelling, same branch and same bytes.
         """
         d = self.degree
         n_basis, n_wings, n_poly = polys.shape
@@ -3222,6 +3252,25 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.ascontiguousarray(td_all, dtype=np.float64),
                 float(self.omega),
                 float(eps_z),
+                float(self.mu),
+                int(d),
+                self._cancel_flag,
+            )
+        if (
+            _HAVE_BSPLINE_ASSEMBLE_CPLX_EPS_ACCEL
+            and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and in_medium
+        ):
+            # momwire#910: the complex-eps~ ENTRY POINT, never `float()` on a
+            # complex (the #553 U1 hazard class). The numpy loop below stays
+            # the reference it is gated against.
+            return _acc.assemble_Z_bspline_cplx_eps(
+                np.ascontiguousarray(J, dtype=np.complex128),
+                np.ascontiguousarray(supp_seg, dtype=np.int64),
+                np.ascontiguousarray(polys, dtype=np.float64),
+                np.ascontiguousarray(td_all, dtype=np.float64),
+                float(self.omega),
+                complex(eps_z),
                 float(self.mu),
                 int(d),
                 self._cancel_flag,

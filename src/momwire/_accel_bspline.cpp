@@ -1400,7 +1400,7 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
 //
 // Single-k for now (BSplineSolver doesn't have a swept path yet); the inputs
 // are scalar omega instead of an omega_array.
-template<int D>
+template<int D, bool COMPLEX_EPS>
 static py::array_t<std::complex<double>>
 assemble_Z_bspline_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
@@ -1410,7 +1410,9 @@ assemble_Z_bspline_kernel(
     double omega,
     double eps_,
     double mu_,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    double c_re = 0.0,
+    double c_im = 0.0
 ) {
     static constexpr int NM = D + 1;
 
@@ -1441,6 +1443,8 @@ assemble_Z_bspline_kernel(
     // For Z_A_accum = re + j*im:    j*omega*mu * (re + j*im) = -omega*mu*im + j*omega*mu*re
     // For Z_Phi_accum = re + j*im:  (re + j*im)/(j*omega*eps) = im/(omega*eps) - j*re/(omega*eps)
     const double omega_mu = omega * mu_;
+    // With COMPLEX_EPS the real eps_ is unused (the wrapper passes 1.0 so the
+    // divide below is finite) and c = 1/(j*omega*eps~) carries the medium.
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
     PYSIM_CANCEL_SETUP(cancel_flag);
@@ -1485,8 +1489,18 @@ assemble_Z_bspline_kernel(
                 }
             }
 
-            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
-            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            double Zre, Zim;
+            if (COMPLEX_EPS) {
+                // Z = j*omega*mu*zA + c*zPhi with c = 1/(j*omega*eps~) COMPLEX
+                // (momwire#910): the medium's eps~ enters this kernel only
+                // here, so the buried assembly is the real-eps loop above
+                // with a complex scalar in the combine.
+                Zre = -omega_mu * zA_im + (c_re * zPhi_re - c_im * zPhi_im);
+                Zim = omega_mu * zA_re + (c_re * zPhi_im + c_im * zPhi_re);
+            } else {
+                Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+                Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            }
             z_view(m, n) = std::complex<double>(Zre, Zim);
         }
     }
@@ -1964,9 +1978,9 @@ assemble_Z_bspline(
 ) {
     switch (max_d) {
         case 1:
-            return assemble_Z_bspline_kernel<1>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
+            return assemble_Z_bspline_kernel<1, false>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
         case 2:
-            return assemble_Z_bspline_kernel<2>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
+            return assemble_Z_bspline_kernel<2, false>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
         default:
             throw std::runtime_error(
                 "assemble_Z_bspline: max_d must be 1 or 2");
@@ -1981,7 +1995,7 @@ assemble_Z_bspline(
 // the PEC kernel — takes its own complex per-pair image-charge table
 // wPhi_all. Same loop structure, same J tensor, one pass; the PEC kernel is
 // the wA = t·Mt (real), wPhi = 1 special case.
-template<int D>
+template<int D, bool COMPLEX_EPS>
 static py::array_t<std::complex<double>>
 assemble_Z_bspline_weighted_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
@@ -1992,7 +2006,9 @@ assemble_Z_bspline_weighted_kernel(
     double omega,
     double eps_,
     double mu_,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    double c_re = 0.0,
+    double c_im = 0.0
 ) {
     static constexpr int NM = D + 1;
 
@@ -2024,6 +2040,8 @@ assemble_Z_bspline_weighted_kernel(
     py::gil_scoped_release release;
 
     const double omega_mu = omega * mu_;
+    // With COMPLEX_EPS the real eps_ is unused (the wrapper passes 1.0 so the
+    // divide below is finite) and c = 1/(j*omega*eps~) carries the medium.
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
     PYSIM_CANCEL_SETUP(cancel_flag);
@@ -2069,8 +2087,18 @@ assemble_Z_bspline_weighted_kernel(
                 }
             }
 
-            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
-            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            double Zre, Zim;
+            if (COMPLEX_EPS) {
+                // Z = j*omega*mu*zA + c*zPhi with c = 1/(j*omega*eps~) COMPLEX
+                // (momwire#910): the medium's eps~ enters this kernel only
+                // here, so the buried assembly is the real-eps loop above
+                // with a complex scalar in the combine.
+                Zre = -omega_mu * zA_im + (c_re * zPhi_re - c_im * zPhi_im);
+                Zim = omega_mu * zA_re + (c_re * zPhi_im + c_im * zPhi_re);
+            } else {
+                Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+                Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            }
             z_view(m, n) = std::complex<double>(Zre, Zim);
         }
     }
@@ -2094,12 +2122,77 @@ assemble_Z_bspline_weighted(
 ) {
     switch (max_d) {
         case 1:
-            return assemble_Z_bspline_weighted_kernel<1>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
+            return assemble_Z_bspline_weighted_kernel<1, false>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
         case 2:
-            return assemble_Z_bspline_weighted_kernel<2>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
+            return assemble_Z_bspline_weighted_kernel<2, false>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
         default:
             throw std::runtime_error(
                 "assemble_Z_bspline_weighted: max_d must be 1 or 2");
+    }
+}
+
+
+// In-medium twins of the two assemblers above (momwire#910). The buried fill
+// divides its charge term by eps~_m = eps0 * eps~ with eps~ COMPLEX, and the
+// real-eps entries' `double eps` would truncate it — the same hazard class as
+// `float(k)` on the pair kernels (momwire#553 U1) — so, as there, the complex
+// case is a separate ENTRY POINT taking std::complex<double>, not a widened
+// argument. The kernel body is the real-eps loop; only the final combine
+// differs, and the real instantiation is textually unchanged.
+static py::array_t<std::complex<double>>
+assemble_Z_bspline_cplx_eps(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> td_all,
+    double omega,
+    std::complex<double> eps_,
+    double mu_,
+    int max_d,
+    uintptr_t cancel_flag = 0
+) {
+    const std::complex<double> c = 1.0 / (std::complex<double>(0.0, omega) * eps_);
+    switch (max_d) {
+        case 1:
+            return assemble_Z_bspline_kernel<1, true>(
+                J, support_seg, polys, td_all, omega, 1.0, mu_, cancel_flag,
+                c.real(), c.imag());
+        case 2:
+            return assemble_Z_bspline_kernel<2, true>(
+                J, support_seg, polys, td_all, omega, 1.0, mu_, cancel_flag,
+                c.real(), c.imag());
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline_cplx_eps: max_d must be 1 or 2");
+    }
+}
+
+static py::array_t<std::complex<double>>
+assemble_Z_bspline_weighted_cplx_eps(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_all,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_all,
+    double omega,
+    std::complex<double> eps_,
+    double mu_,
+    int max_d,
+    uintptr_t cancel_flag = 0
+) {
+    const std::complex<double> c = 1.0 / (std::complex<double>(0.0, omega) * eps_);
+    switch (max_d) {
+        case 1:
+            return assemble_Z_bspline_weighted_kernel<1, true>(
+                J, support_seg, polys, wA_all, wPhi_all, omega, 1.0, mu_,
+                cancel_flag, c.real(), c.imag());
+        case 2:
+            return assemble_Z_bspline_weighted_kernel<2, true>(
+                J, support_seg, polys, wA_all, wPhi_all, omega, 1.0, mu_,
+                cancel_flag, c.real(), c.imag());
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline_weighted_cplx_eps: max_d must be 1 or 2");
     }
 }
 
@@ -3894,6 +3987,25 @@ void register_bspline(py::module_ &m) {
           "terms — wA_all (Fresnel dyad tangent table) on the A term, "
           "wPhi_all (image-charge weight) on the Φ term. Templated on "
           "max_d in {1, 2}; single-k.",
+          py::arg("J"), py::arg("support_seg"),
+          py::arg("polys"), py::arg("wA_all"), py::arg("wPhi_all"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"),
+          py::arg("max_d"),
+          py::arg("cancel_flag") = 0);
+    m.def("assemble_Z_bspline_cplx_eps", &assemble_Z_bspline_cplx_eps,
+          "In-medium twin of assemble_Z_bspline (momwire#910): the same "
+          "contract with eps a COMPLEX permittivity, for the buried fill's "
+          "charge term divided by eps0 * eps~.",
+          py::arg("J"), py::arg("support_seg"),
+          py::arg("polys"), py::arg("td_all"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"),
+          py::arg("max_d"),
+          py::arg("cancel_flag") = 0);
+    m.def("assemble_Z_bspline_weighted_cplx_eps",
+          &assemble_Z_bspline_weighted_cplx_eps,
+          "In-medium twin of assemble_Z_bspline_weighted (momwire#910): the "
+          "same contract with eps a COMPLEX permittivity, for the buried "
+          "image block.",
           py::arg("J"), py::arg("support_seg"),
           py::arg("polys"), py::arg("wA_all"), py::arg("wPhi_all"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
