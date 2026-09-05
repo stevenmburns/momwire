@@ -1373,6 +1373,276 @@ static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
     return py::make_tuple(std::sqrt(r1sq_max), std::atan(std::sqrt(q_min)));
 }
 
+// --- momwire#914 unit 2: the field-form Galerkin assembly -------------------
+//
+// `bspline._field_galerkin_block`'s inner two contractions, per observer
+// chunk. The Python spells them as
+//
+//     Jc[p,P,i,j] = sum_qr W_obs[p,i,q] * fq[i,q,j,r] * W_src[P,j,r]
+//     Q[m,n]     += sum_ab sum_pP polys[m,a,p] * Jc[p,P,i(m,a),j(n,b)]
+//                                              * polys[n,b,P]
+//
+// where i(m,a) = pos_o[supp_seg[m,a]] - i0 and j(n,b) = pos_s[supp_seg[n,b]],
+// a row or column being live only when its index is on this axis at all.
+//
+// THE FUSION. The p and P sums do not need Jc, because the only way p enters
+// Q[m,n] is through polys[m,a,p] * W_obs[p, i(m,a), q] -- and i is a function
+// of (m, a). So each sum collapses, once, into a q-vector per row-wing and
+// per column-wing:
+//
+//     g[m,a,q] = sum_p polys[m,a,p] * W_obs[p, i(m,a), q]
+//     h[n,b,r] = sum_P polys[n,b,P] * W_src[P, j(n,b), r]
+//     Q[m,n]  += sum_ab sum_qr g[m,a,q] * fq[i(m,a),q,j(n,b),r] * h[n,b,r]
+//
+// which is then two stages: contract g against this chunk's projected rows
+// into F[j,r] -- one AXPY per quadrature point over a whole row of `proj` --
+// then dot F against h. Nothing of shape (d+1, d+1, n_chunk, n_src) is ever
+// live, the (d+1)^2 fancy-index gather per wing pair disappears, and the
+// arithmetic drops on top of that. `fused=false` selects the literal Jc
+// transcription instead; it exists because the choice was asked to be
+// measured rather than argued, and it doubles as an independent second route
+// to the same numbers.
+//
+// PARALLELISM. Both stages thread over the SOURCE axis -- the flattened (j,r)
+// in stage 1, the basis column n in stage 2 -- never over the row-wings,
+// which is the one decomposition that would race: a basis row m owns Q[m, :]
+// across every wing a, so two wings of one m landing in the same chunk would
+// have two threads writing one row. Threading columns makes each thread the
+// sole owner of every Q entry it touches, whatever the support overlap does.
+//
+// Row-wings sharing an observer index are batched so one streaming pass over
+// that index's q rows of `proj` feeds all of them. A batch never holds one
+// basis row twice: stage 2 keeps one accumulator per batch slot and adds it
+// to Q[m, n] once, so a repeated m would drop one of its own wings. The batch
+// bookkeeping is deliberately OUTSIDE the parallel regions -- it is a few
+// hundred nanoseconds against a millisecond of contraction, and inside one it
+// would need a `single` whose writes every other thread would have to be
+// barriered against.
+
+namespace {
+
+constexpr py::ssize_t FG_BATCH = 4;
+// h is built on the stack per column; q is a quadrature order (6 here), not
+// a mesh dimension, so a fixed bound is honest rather than a limit anyone
+// meets. Checked below.
+constexpr py::ssize_t FG_MAX_Q = 64;
+
+}  // namespace
+
+static void assemble_field_galerkin(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        proj,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W_obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W_src,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> supp_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> pos_o,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> pos_s,
+    py::ssize_t i0,
+    py::array_t<std::complex<double>, py::array::c_style> Q,
+    bool fused) {
+    typedef std::complex<double> cd;
+
+    if (W_obs.ndim() != 3 || W_src.ndim() != 3)
+        throw std::invalid_argument("W_obs and W_src must be 3-D (P, n, q)");
+    if (polys.ndim() != 3) throw std::invalid_argument("polys must be 3-D");
+    if (supp_seg.ndim() != 2) throw std::invalid_argument("supp_seg must be 2-D");
+    if (proj.ndim() != 2) throw std::invalid_argument("proj must be 2-D");
+    if (Q.ndim() != 2) throw std::invalid_argument("Q must be 2-D");
+    if (pos_o.ndim() != 1 || pos_s.ndim() != 1)
+        throw std::invalid_argument("pos_o and pos_s must be 1-D");
+
+    const py::ssize_t P = W_obs.shape(0);
+    const py::ssize_t nc = W_obs.shape(1);
+    const py::ssize_t q = W_obs.shape(2);
+    const py::ssize_t ns = W_src.shape(1);
+    const py::ssize_t nb = polys.shape(0);
+    const py::ssize_t A = polys.shape(1);
+    const py::ssize_t nsq = ns * q;
+    const py::ssize_t n_seg = pos_o.shape(0);
+
+    if (W_src.shape(0) != P || W_src.shape(2) != q)
+        throw std::invalid_argument("W_src must share W_obs's P and q");
+    if (polys.shape(2) != P)
+        throw std::invalid_argument("polys' last axis must be W_obs's P");
+    if (supp_seg.shape(0) != nb || supp_seg.shape(1) != A)
+        throw std::invalid_argument("supp_seg must be (n_basis, d+1)");
+    if (proj.shape(0) != nc * q || proj.shape(1) != nsq)
+        throw std::invalid_argument("proj must be (n_chunk*q, n_src*q)");
+    if (Q.shape(0) != nb || Q.shape(1) != nb)
+        throw std::invalid_argument("Q must be (n_basis, n_basis)");
+    if (pos_s.shape(0) != n_seg)
+        throw std::invalid_argument("pos_o and pos_s must have one entry per segment");
+    if (q <= 0 || nc <= 0 || ns <= 0 || nb <= 0 || A <= 0 || P <= 0)
+        throw std::invalid_argument("assemble_field_galerkin got a degenerate shape");
+    if (q > FG_MAX_Q)
+        throw std::invalid_argument("assemble_field_galerkin: q above FG_MAX_Q");
+
+    const cd *pj = proj.data();
+    const double *wo = W_obs.data();
+    const double *ws = W_src.data();
+    const double *pl = polys.data();
+    const std::int64_t *ss = supp_seg.data();
+    const std::int64_t *po = pos_o.data();
+    const std::int64_t *ps = pos_s.data();
+    cd *Qp = static_cast<cd *>(Q.mutable_data());
+
+    // The Python indexes pos_o/pos_s with supp_seg directly, so an id outside
+    // them is a caller bug and not a mask. Check it HERE rather than read off
+    // the end of the array under a released GIL.
+    for (py::ssize_t e = 0; e < nb * A; ++e)
+        if (ss[e] < 0 || ss[e] >= n_seg)
+            throw std::invalid_argument("supp_seg holds a segment id outside pos_o");
+
+    // The column wings, once per call: their source index and their h-vector.
+    // js < 0 is a wing belonging to the other medium, which drops out of the
+    // block rather than being clamped into it.
+    std::vector<std::int64_t> js_of(static_cast<size_t>(nb) * A);
+    std::vector<double> hcol(static_cast<size_t>(nb) * A * q);
+    // Row-wings whose observer segment is in this chunk, bucketed by local
+    // observer index so one pass over `proj` serves every one of them.
+    std::vector<std::vector<std::pair<py::ssize_t, py::ssize_t>>> at(nc);
+    for (py::ssize_t a = 0; a < A; ++a)
+        for (py::ssize_t m = 0; m < nb; ++m) {
+            const std::int64_t io = po[ss[m * A + a]];
+            if (io >= i0 && io < i0 + nc) at[io - i0].emplace_back(m, a);
+        }
+
+    std::vector<cd> F, T, Jc;
+    std::vector<double> g;
+    if (fused) {
+        F.assign(static_cast<size_t>(FG_BATCH) * nsq, cd(0.0, 0.0));
+        g.assign(static_cast<size_t>(FG_BATCH) * q, 0.0);
+    } else {
+        T.assign(static_cast<size_t>(P) * nc * nsq, cd(0.0, 0.0));
+        Jc.assign(static_cast<size_t>(P) * P * nc * ns, cd(0.0, 0.0));
+    }
+    py::ssize_t mb[FG_BATCH];
+
+    {
+        py::gil_scoped_release release;
+
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t e = 0; e < nb * A; ++e) {
+            const std::int64_t js = ps[ss[e]];
+            js_of[e] = js;
+            if (js < 0) continue;
+            for (py::ssize_t r = 0; r < q; ++r) {
+                double acc = 0.0;
+                for (py::ssize_t p = 0; p < P; ++p)
+                    acc += pl[e * P + p] * ws[(p * ns + js) * q + r];
+                hcol[e * q + r] = acc;
+            }
+        }
+
+        if (fused) {
+            for (py::ssize_t ic = 0; ic < nc; ++ic) {
+                const auto &bucket = at[ic];
+                py::ssize_t taken = 0;
+                while (taken < static_cast<py::ssize_t>(bucket.size())) {
+                    py::ssize_t nk = 0;
+                    while (taken < static_cast<py::ssize_t>(bucket.size()) &&
+                           nk < FG_BATCH) {
+                        const py::ssize_t m = bucket[taken].first;
+                        const py::ssize_t a = bucket[taken].second;
+                        bool dup = false;
+                        for (py::ssize_t u = 0; u < nk; ++u)
+                            if (mb[u] == m) dup = true;
+                        if (dup) break;
+                        mb[nk] = m;
+                        for (py::ssize_t iq = 0; iq < q; ++iq) {
+                            double acc = 0.0;
+                            for (py::ssize_t p = 0; p < P; ++p)
+                                acc += pl[(m * A + a) * P + p] * wo[(p * nc + ic) * q + iq];
+                            g[nk * q + iq] = acc;
+                        }
+                        ++nk;
+                        ++taken;
+                    }
+
+                    // Stage 1: F[k, j, r] = sum_q g[k,q] * proj[ic*q+q, j*q+r]
+                    #pragma omp parallel for schedule(static)
+                    for (py::ssize_t jr = 0; jr < nsq; ++jr) {
+                        cd acc[FG_BATCH];
+                        for (py::ssize_t k = 0; k < nk; ++k) acc[k] = cd(0.0, 0.0);
+                        for (py::ssize_t iq = 0; iq < q; ++iq) {
+                            const cd v = pj[(ic * q + iq) * nsq + jr];
+                            for (py::ssize_t k = 0; k < nk; ++k)
+                                acc[k] += g[k * q + iq] * v;
+                        }
+                        for (py::ssize_t k = 0; k < nk; ++k) F[k * nsq + jr] = acc[k];
+                    }
+
+                    // Stage 2: one basis column per thread, so every Q entry a
+                    // thread writes is its own.
+                    #pragma omp parallel for schedule(static)
+                    for (py::ssize_t n = 0; n < nb; ++n) {
+                        cd s[FG_BATCH];
+                        for (py::ssize_t k = 0; k < nk; ++k) s[k] = cd(0.0, 0.0);
+                        for (py::ssize_t b = 0; b < A; ++b) {
+                            const std::int64_t js = js_of[n * A + b];
+                            if (js < 0) continue;
+                            const double *h = &hcol[(n * A + b) * q];
+                            for (py::ssize_t k = 0; k < nk; ++k) {
+                                const cd *fp = &F[k * nsq + js * q];
+                                cd t(0.0, 0.0);
+                                for (py::ssize_t r = 0; r < q; ++r) t += fp[r] * h[r];
+                                s[k] += t;
+                            }
+                        }
+                        for (py::ssize_t k = 0; k < nk; ++k) Qp[mb[k] * nb + n] += s[k];
+                    }
+                }
+            }
+        } else {
+            // The literal transcription, Jc materialised: the alternative the
+            // fused route above was measured against.
+            #pragma omp parallel for collapse(2) schedule(static)
+            for (py::ssize_t p = 0; p < P; ++p)
+                for (py::ssize_t ic = 0; ic < nc; ++ic) {
+                    cd *out = &T[(p * nc + ic) * nsq];
+                    for (py::ssize_t iq = 0; iq < q; ++iq) {
+                        const double w = wo[(p * nc + ic) * q + iq];
+                        const cd *row = &pj[(ic * q + iq) * nsq];
+                        for (py::ssize_t jr = 0; jr < nsq; ++jr) out[jr] += w * row[jr];
+                    }
+                }
+
+            #pragma omp parallel for collapse(2) schedule(static)
+            for (py::ssize_t p = 0; p < P; ++p)
+                for (py::ssize_t Pp = 0; Pp < P; ++Pp)
+                    for (py::ssize_t ic = 0; ic < nc; ++ic)
+                        for (py::ssize_t j = 0; j < ns; ++j) {
+                            const cd *tp = &T[(p * nc + ic) * nsq + j * q];
+                            cd acc(0.0, 0.0);
+                            for (py::ssize_t r = 0; r < q; ++r)
+                                acc += tp[r] * ws[(Pp * ns + j) * q + r];
+                            Jc[((p * P + Pp) * nc + ic) * ns + j] = acc;
+                        }
+
+            for (py::ssize_t ic = 0; ic < nc; ++ic)
+                for (const auto &ma : at[ic]) {
+                    const py::ssize_t m = ma.first, a = ma.second;
+                    #pragma omp parallel for schedule(static)
+                    for (py::ssize_t n = 0; n < nb; ++n) {
+                        cd s(0.0, 0.0);
+                        for (py::ssize_t b = 0; b < A; ++b) {
+                            const std::int64_t js = js_of[n * A + b];
+                            if (js < 0) continue;
+                            for (py::ssize_t p = 0; p < P; ++p) {
+                                const double cpa = pl[(m * A + a) * P + p];
+                                for (py::ssize_t Pp = 0; Pp < P; ++Pp)
+                                    s += cpa * pl[(n * A + b) * P + Pp] *
+                                         Jc[((p * P + Pp) * nc + ic) * ns + js];
+                            }
+                        }
+                        Qp[m * nb + n] += s;
+                    }
+                }
+        }
+    }
+}
+
 void register_mw568(py::module_ &m) {
     // The three #568 capability flags, set HERE beside the bindings they
     // vouch for (#710 review): `_sommerfeld_below` and
@@ -1401,6 +1671,11 @@ void register_mw568(py::module_ &m) {
     // on the same argument as the three above — a .so built before #914
     // exports every #568 symbol and would otherwise claim this contract too.
     m.attr("plan_extents_914") = true;
+    // momwire#914 unit 2: the field-form Galerkin assembly in C++. Its OWN
+    // flag again, for the same reason -- a .so built at unit 1 exports
+    // `pair_extents_below` and every #568 symbol, and would otherwise claim
+    // this contract too.
+    m.attr("field_galerkin_914") = true;
 
     m.def("pair_extents_below", &pair_extents_below,
           "(r1_max, th_min) over every below/below node pair -- the C++ twin "
@@ -1412,6 +1687,20 @@ void register_mw568(py::module_ &m) {
           "minimum, which is what the numpy reference's Python-level min does "
           "with the same NaN.",
           py::arg("x"), py::arg("y"), py::arg("d_b"));
+    m.def("assemble_field_galerkin", &assemble_field_galerkin,
+          "Accumulate one observer chunk of bspline._field_galerkin_block's "
+          "assembly into Q, in place. Fuses the two moment sums into a "
+          "q-vector per row-wing and per column-wing, so the "
+          "(d+1, d+1, n_chunk, n_src) Jc and its per-wing-pair fancy-index "
+          "gather are never materialised. `fused=False` runs the literal Jc "
+          "transcription instead -- an independent second route to the same "
+          "numbers, kept because the choice between them was measured. "
+          "Threads the source axis in both stages, never the row-wings: a "
+          "basis row owns its whole Q row across every wing.",
+          py::arg("proj"), py::arg("W_obs"), py::arg("W_src"),
+          py::arg("supp_seg"), py::arg("polys"), py::arg("pos_o"),
+          py::arg("pos_s"), py::arg("i0"), py::arg("Q"),
+          py::arg("fused") = true);
     m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
           "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
           "_sommerfeld._bessel_j0_j1x, with the same |x| < 1e-6 series switch. "

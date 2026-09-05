@@ -144,6 +144,20 @@ _HAVE_PLAN_EXTENTS_ACCEL = (
     and getattr(_acc, "plan_extents_914", False)
     and hasattr(_acc, "pair_extents_below")
 )
+_HAVE_FIELD_GALERKIN_ACCEL = (
+    _acc is not None
+    and getattr(_acc, "field_galerkin_914", False)
+    and hasattr(_acc, "assemble_field_galerkin")
+)
+# Which of the accelerator's two routes to the same numbers to take. The
+# fused one skips `Jc` entirely and is what production wants (measured
+# momwire#914: 0.70 s against 1.47 s on the 48-radial screen). The literal
+# transcription stays REACHABLE rather than being a `fused=True` the C++
+# hard-codes, for two reasons: an unreachable branch in the TU is untested
+# code that still ships, and a second independent route is the strongest
+# available cross-check on the fused one's index arithmetic. Tests flip it;
+# nothing else should.
+_FIELD_GALERKIN_FUSED = True
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
@@ -4898,6 +4912,25 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 src,
                 t_src,
             )
+            if _HAVE_FIELD_GALERKIN_ACCEL:
+                # momwire#914 unit 2. The C++ twin fuses both moment sums into
+                # a q-vector per wing, so it never materialises `Jc` nor the
+                # per-wing-pair gather below; it accumulates into `Q` in place.
+                # Everything after this line is the reference it is gated
+                # against, and the fallback when the .so predates the contract.
+                _acc.assemble_field_galerkin(
+                    proj,
+                    np.ascontiguousarray(W_obs[:, i0:i1]),
+                    W_src,
+                    supp_seg,
+                    polys,
+                    pos_o,
+                    pos_s,
+                    i0,
+                    Q,
+                    _FIELD_GALERKIN_FUSED,
+                )
+                continue
             fq = proj.reshape(i1 - i0, q, n_src, q)
             # optimize=True: pairwise contraction, momwire#910 (see the
             # remainder's twin above for the measurement).
