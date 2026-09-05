@@ -1521,7 +1521,7 @@ assemble_Z_bspline_kernel(
 // are skipped here), so per-chunk work stays proportional to the window.
 // Each (m, n) pair is visited once per call, so the parallel += on
 // z_view(m, n) is contention-free.
-template<int D>
+template<int D, bool COMPLEX_EPS>
 static void
 assemble_Z_bspline_windowed_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
@@ -1535,7 +1535,9 @@ assemble_Z_bspline_windowed_kernel(
     double eps_,
     double mu_,
     py::array_t<std::complex<double>> Z,  // any strides: F-order lets the caller's LAPACK solve factor in place
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    double c_re = 0.0,
+    double c_im = 0.0
 ) {
     static constexpr int NM = D + 1;
 
@@ -1578,6 +1580,8 @@ assemble_Z_bspline_windowed_kernel(
     py::gil_scoped_release release;
 
     const double omega_mu = omega * mu_;
+    // With COMPLEX_EPS the real eps_ is unused (the wrapper passes 1.0 so the
+    // divide below is finite) and c = 1/(j*omega*eps~) carries the medium.
     const double inv_omega_eps = 1.0 / (omega * eps_);
     size_t n_m = (size_t)m_idx.shape(0);
     size_t n_n = (size_t)n_idx.shape(0);
@@ -1634,8 +1638,16 @@ assemble_Z_bspline_windowed_kernel(
                 }
             }
 
-            double Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
-            double Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            double Zre, Zim;
+            if (COMPLEX_EPS) {
+                // Z = j*omega*mu*zA + c*zPhi, c = 1/(j*omega*eps~) complex
+                // (momwire#915, the #910 pattern on the windowed twin).
+                Zre = -omega_mu * zA_im + (c_re * zPhi_re - c_im * zPhi_im);
+                Zim = omega_mu * zA_re + (c_re * zPhi_im + c_im * zPhi_re);
+            } else {
+                Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+                Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+            }
             z_view(m, n) += std::complex<double>(Zre, Zim);
         }
     }
@@ -1661,12 +1673,12 @@ assemble_Z_bspline_windowed(
 ) {
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
-            assemble_Z_bspline_windowed_kernel<1>(
+            assemble_Z_bspline_windowed_kernel<1, false>(
                 J_chunk, support_seg, polys, tangents, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
             return;
         case 2:
-            assemble_Z_bspline_windowed_kernel<2>(
+            assemble_Z_bspline_windowed_kernel<2, false>(
                 J_chunk, support_seg, polys, tangents, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
             return;
@@ -1694,7 +1706,7 @@ assemble_Z_bspline_windowed(
 // every weight lookup is window-relative — (sm - i0, sn - j0) — the same
 // shift J_chunk already needs. The caller therefore never has to keep two
 // global complex (N, N) tables alive across the whole fill.
-template<int D>
+template<int D, bool COMPLEX_EPS>
 static void
 assemble_Z_bspline_weighted_windowed_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
@@ -1710,7 +1722,9 @@ assemble_Z_bspline_weighted_windowed_kernel(
     double mu_,
     std::complex<double> scale,
     py::array_t<std::complex<double>> Z,  // any strides: F-order lets the caller's LAPACK solve factor in place
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    double c_re = 0.0,
+    double c_im = 0.0
 ) {
     static constexpr int NM = D + 1;
 
@@ -1749,6 +1763,8 @@ assemble_Z_bspline_weighted_windowed_kernel(
     py::gil_scoped_release release;
 
     const double omega_mu = omega * mu_;
+    // With COMPLEX_EPS the real eps_ is unused (the wrapper passes 1.0 so the
+    // divide below is finite) and c = 1/(j*omega*eps~) carries the medium.
     const double inv_omega_eps = 1.0 / (omega * eps_);
     size_t n_m = (size_t)m_idx.shape(0);
     size_t n_n = (size_t)n_idx.shape(0);
@@ -1797,9 +1813,19 @@ assemble_Z_bspline_weighted_windowed_kernel(
             }
 
             // Z_win = j*omega*mu*zA + zPhi/(j*omega*eps), then scaled.
-            std::complex<double> Zc(
-                -omega_mu * zA.imag() + zPhi.imag() * inv_omega_eps,
-                omega_mu * zA.real() - zPhi.real() * inv_omega_eps);
+            std::complex<double> Zc;
+            if (COMPLEX_EPS) {
+                // c = 1/(j*omega*eps~) complex (momwire#915).
+                Zc = std::complex<double>(
+                    -omega_mu * zA.imag()
+                        + (c_re * zPhi.real() - c_im * zPhi.imag()),
+                    omega_mu * zA.real()
+                        + (c_re * zPhi.imag() + c_im * zPhi.real()));
+            } else {
+                Zc = std::complex<double>(
+                    -omega_mu * zA.imag() + zPhi.imag() * inv_omega_eps,
+                    omega_mu * zA.real() - zPhi.real() * inv_omega_eps);
+            }
             std::complex<double> add = scale * Zc;
             z_view(m, n) += add;
         }
@@ -1828,12 +1854,12 @@ assemble_Z_bspline_weighted_windowed(
 ) {
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
-            assemble_Z_bspline_weighted_windowed_kernel<1>(
+            assemble_Z_bspline_weighted_windowed_kernel<1, false>(
                 J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
             return;
         case 2:
-            assemble_Z_bspline_weighted_windowed_kernel<2>(
+            assemble_Z_bspline_weighted_windowed_kernel<2, false>(
                 J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
             return;
@@ -2193,6 +2219,81 @@ assemble_Z_bspline_weighted_cplx_eps(
         default:
             throw std::runtime_error(
                 "assemble_Z_bspline_weighted_cplx_eps: max_d must be 1 or 2");
+    }
+}
+
+
+// In-medium twins of the two WINDOWED assemblers (momwire#915): the chunked
+// fill+assemble route for a buried deck whose dense tensor does not fit the
+// budget. Same discipline as #910's twins — a separate entry point taking
+// std::complex<double> eps, the real instantiations textually unchanged.
+static void
+assemble_Z_bspline_windowed_cplx_eps(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tangents,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega,
+    std::complex<double> eps_,
+    double mu_,
+    py::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag = 0
+) {
+    const std::complex<double> c = 1.0 / (std::complex<double>(0.0, omega) * eps_);
+    switch ((int)support_seg.shape(1) - 1) {
+        case 1:
+            assemble_Z_bspline_windowed_kernel<1, true>(
+                J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag());
+            return;
+        case 2:
+            assemble_Z_bspline_windowed_kernel<2, true>(
+                J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag());
+            return;
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline_windowed_cplx_eps: max_d must be 1 or 2");
+    }
+}
+
+static void
+assemble_Z_bspline_weighted_windowed_cplx_eps(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> support_seg,
+    py::array_t<double, py::array::c_style | py::array::forcecast> polys,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wA_win,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> wPhi_win,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> m_idx,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> n_idx,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega,
+    std::complex<double> eps_,
+    double mu_,
+    std::complex<double> scale,
+    py::array_t<std::complex<double>> Z,
+    uintptr_t cancel_flag = 0
+) {
+    const std::complex<double> c = 1.0 / (std::complex<double>(0.0, omega) * eps_);
+    switch ((int)support_seg.shape(1) - 1) {
+        case 1:
+            assemble_Z_bspline_weighted_windowed_kernel<1, true>(
+                J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag,
+                c.real(), c.imag());
+            return;
+        case 2:
+            assemble_Z_bspline_weighted_windowed_kernel<2, true>(
+                J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag,
+                c.real(), c.imag());
+            return;
+        default:
+            throw std::runtime_error(
+                "assemble_Z_bspline_weighted_windowed_cplx_eps: max_d must be 1 or 2");
     }
 }
 
@@ -3953,6 +4054,24 @@ void register_bspline(py::module_ &m) {
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps_"), py::arg("mu_"),
           py::arg("scale"), py::arg("Z"), py::arg("cancel_flag") = 0);
+    m.def("assemble_Z_bspline_windowed_cplx_eps", &assemble_Z_bspline_windowed_cplx_eps,
+          "In-medium twin of assemble_Z_bspline_windowed (momwire#915): the "
+          "same window contract with eps a COMPLEX permittivity.",
+          py::arg("J_chunk"), py::arg("support_seg"), py::arg("polys"),
+          py::arg("tangents"), py::arg("m_idx"), py::arg("n_idx"),
+          py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"),
+          py::arg("Z"), py::arg("cancel_flag") = 0);
+    m.def("assemble_Z_bspline_weighted_windowed_cplx_eps",
+          &assemble_Z_bspline_weighted_windowed_cplx_eps,
+          "In-medium twin of assemble_Z_bspline_weighted_windowed "
+          "(momwire#915): the same window contract with eps a COMPLEX "
+          "permittivity.",
+          py::arg("J_chunk"), py::arg("support_seg"), py::arg("polys"),
+          py::arg("wA_win"), py::arg("wPhi_win"), py::arg("m_idx"), py::arg("n_idx"),
+          py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
+          py::arg("omega"), py::arg("eps"), py::arg("mu"), py::arg("scale"),
+          py::arg("Z"), py::arg("cancel_flag") = 0);
     m.def("assemble_Z_bspline_windowed", &assemble_Z_bspline_windowed,
           "Accumulate one rectangular segment window's contribution into a "
           "caller-provided Z from a chunked moment tensor J_chunk of shape "

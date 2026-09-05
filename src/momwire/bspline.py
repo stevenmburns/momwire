@@ -127,6 +127,15 @@ _HAVE_BSPLINE_ASSEMBLE_CPLX_EPS_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_ASSEMBLE_W_CPLX_EPS_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_weighted_cplx_eps"
 )
+# momwire#915: the complex-eps~ twins of the two WINDOWED assemblers, which
+# are what let a buried deck take the chunked fill+assemble route instead of
+# refusing when its dense tensor does not fit the budget.
+_HAVE_BSPLINE_WINDOWED_CPLX_EPS_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_windowed_cplx_eps"
+)
+_HAVE_BSPLINE_W_WINDOWED_CPLX_EPS_ACCEL = _acc is not None and hasattr(
+    _acc, "assemble_Z_bspline_weighted_windowed_cplx_eps"
+)
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
@@ -446,13 +455,13 @@ _BURIED_EXTENDED_KERNEL_REFUSAL = (
     "Solve the buried deck with extended_kernel=False, which is the default"
 )
 _BURIED_DENSE_BUDGET_REFUSAL = (
-    "a deck with buried wires is filled through the DENSE moment tensor and "
-    "this one does not fit: {n} segments need about {need:.0f} MB per tensor "
-    "against a swept_mem_mb budget of {budget} MB. The chunked fill+assemble "
-    "route (momwire#136) has no medium — its windowed C++ assembler takes a "
-    "`double k` and a `double eps` — so momwire#553 U5 routes buried decks to "
-    "the dense path and refuses rather than silently truncating the medium. "
-    "Raise swept_mem_mb, or mesh the deck coarser"
+    "a deck with buried wires is filled through the DENSE moment tensor on "
+    "this build and this one does not fit: {n} segments need about {need:.0f} "
+    "MB per tensor against a swept_mem_mb budget of {budget} MB. The chunked "
+    "fill+assemble route (momwire#915) needs the windowed C++ assemblers' "
+    "complex-eps twins, which this accelerator build does not export, so the "
+    "fill refuses rather than silently truncating the medium. Rebuild the "
+    "accelerators, raise swept_mem_mb, or mesh the deck coarser"
 )
 _BURIED_PAST_CAP_REFUSAL = (
     "this deck's buried wires reach a below/below pair separation of "
@@ -544,6 +553,19 @@ def _pair_extents_below(x, y, d_b, rows=256):
         with np.errstate(divide="ignore"):
             ratio_min = min(ratio_min, float(np.min(hh / rho2)))
     return float(np.sqrt(r1sq_max)), float(np.arctan(ratio_min))
+
+
+def _contiguous_runs(idx):
+    """`[(start, stop), ...]` — the maximal runs of consecutive integers in
+    a sorted index array (a subset that is a union of whole wires is a few
+    of these)."""
+    idx = np.asarray(idx, dtype=np.int64)
+    if idx.size == 0:
+        return []
+    cuts = np.flatnonzero(np.diff(idx) != 1) + 1
+    starts = np.concatenate(([0], cuts))
+    stops = np.concatenate((cuts, [idx.size]))
+    return [(int(idx[s0]), int(idx[s1 - 1]) + 1) for s0, s1 in zip(starts, stops)]
 
 
 class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
@@ -4969,7 +4991,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if self.extended_kernel:
             raise NotImplementedError(_BURIED_EXTENDED_KERNEL_REFUSAL)
         n = int(geom["n_segs_total"])
-        if not self._dense_tensor_fits_budget(n):
+        if not self._dense_tensor_fits_budget(n) and not self._buried_chunked_serves:
             raise NotImplementedError(
                 _BURIED_DENSE_BUDGET_REFUSAL.format(
                     n=n,
@@ -4977,6 +4999,202 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     budget=self.swept_mem_mb,
                 )
             )
+
+    @property
+    def _buried_chunked_serves(self):
+        """Whether the buried fill can take the chunked fill+assemble route
+        (momwire#915): both windowed assemblers have their complex-eps~
+        twins and the degree is one they instantiate."""
+        return (
+            _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+            and _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL
+            and _HAVE_BSPLINE_WINDOWED_CPLX_EPS_ACCEL
+            and _HAVE_BSPLINE_W_WINDOWED_CPLX_EPS_ACCEL
+            and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+        )
+
+    def _accumulate_Z_subset_chunked(
+        self,
+        Z,
+        geom,
+        k,
+        seg_idx,
+        supp_seg,
+        polys,
+        *,
+        mirror_sources,
+        eps,
+        scale,
+        weight=None,
+    ):
+        """`_build_J_blocks_subset` + its assembly, accumulated into `Z`
+        window by window and never holding a (d+1, d+1, N, N) tensor
+        (momwire#915) — the buried fill's twin of `_compute_Z_dense_chunked`
+        and `_accumulate_Z_image_chunked`.
+
+        `seg_idx` is a union of whole wires, so it is a few contiguous runs
+        of global segment index; every (observer chunk × source run)
+        rectangle is one off-edge window handed to the windowed assembler
+        with the bases that touch it. `weight` is None for a direct block
+        (the assembler forms t_m·t_n itself, as `_assemble_Z`'s default
+        `td_all` does) or the scalar the image block multiplies
+        (t_m·t_image_n, 1) by — C₂ above, A_m below — produced per window so
+        nothing (N, N) is ever built. `scale` is +1 for the direct blocks and
+        −1 for the image ones: the dense path's `Z +=` / `Z -=`, folded into
+        the accumulator. `eps` complex takes the #915 twins, real the
+        shipped entries — the same seam `_assemble_Z` names, one level down.
+
+        The same-edge overwrite of the dense path is the same-edge fixup
+        here: for a direct block each edge's (analytic static + regularised)
+        block MINUS the off-edge block the sweep added, accumulated as a
+        correction window, exactly as the free-space chunked fill does. The
+        image block has no fixup on either route.
+        """
+        d = self.degree
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        a_row = self._seg_radius(geom)
+        tangents = geom["tangents"]
+        src_l, src_r = seg_l, seg_r
+        src_t = tangents
+        if mirror_sources:
+            src_l = self._image_positions(seg_l)
+            src_r = self._image_positions(seg_r)
+            src_t = _ground_mirror.mirror_tangents(tangents)
+        supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
+        polys_c = np.ascontiguousarray(polys, dtype=np.float64)
+        tan_c = np.ascontiguousarray(tangents, dtype=np.float64)
+        in_medium = np.iscomplexobj(eps)
+        eps_arg = complex(eps) if in_medium else float(eps)
+        if weight is None:
+            fn = (
+                _acc.assemble_Z_bspline_windowed_cplx_eps
+                if in_medium
+                else _acc.assemble_Z_bspline_windowed
+            )
+        else:
+            fn = (
+                _acc.assemble_Z_bspline_weighted_windowed_cplx_eps
+                if in_medium
+                else _acc.assemble_Z_bspline_weighted_windowed
+            )
+        ladder = self.pair_order_ladder
+
+        def _bases_touching(lo, hi):
+            mask = ((supp_c >= lo) & (supp_c < hi)).any(axis=1)
+            return np.nonzero(mask)[0].astype(np.int64)
+
+        def _accumulate(J_win, i0, i1, j0, j1):
+            J_win = np.ascontiguousarray(J_win, dtype=np.complex128)
+            m_idx = _bases_touching(i0, i1)
+            n_idx = _bases_touching(j0, j1)
+            if m_idx.size == 0 or n_idx.size == 0:
+                return
+            if weight is None:
+                if scale != 1.0:
+                    J_win = J_win * scale
+                fn(
+                    J_win,
+                    supp_c,
+                    polys_c,
+                    tan_c,
+                    m_idx,
+                    n_idx,
+                    int(i0),
+                    int(i1),
+                    int(j0),
+                    int(j1),
+                    float(self.omega),
+                    eps_arg,
+                    float(self.mu),
+                    Z,
+                    self._cancel_flag,
+                )
+            else:
+                w_A = np.ascontiguousarray(
+                    weight * (tangents[i0:i1] @ src_t[j0:j1].T), dtype=np.complex128
+                )
+                w_Phi = np.full((i1 - i0, j1 - j0), weight, dtype=np.complex128)
+                fn(
+                    J_win,
+                    supp_c,
+                    polys_c,
+                    w_A,
+                    w_Phi,
+                    m_idx,
+                    n_idx,
+                    int(i0),
+                    int(i1),
+                    int(j0),
+                    int(j1),
+                    float(self.omega),
+                    eps_arg,
+                    float(self.mu),
+                    complex(scale),
+                    Z,
+                    self._cancel_flag,
+                )
+
+        runs = _contiguous_runs(seg_idx)
+        n_sub = int(seg_idx.size)
+        row_bytes = (d + 1) ** 2 * n_sub * 16
+        chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
+        for r0, r1 in runs:
+            for i0 in range(r0, r1, chunk):
+                self._checkpoint()  # per observer chunk of the buried subset fill
+                i1 = min(i0 + chunk, r1)
+                for j0, j1 in runs:
+                    J_win = _seg_seg_full_moments_offedge(
+                        seg_l[i0:i1],
+                        seg_r[i0:i1],
+                        src_l[j0:j1],
+                        src_r[j0:j1],
+                        a_row[i0:i1],
+                        k,
+                        d,
+                        self.n_qp_pair,
+                        ladder=ladder,
+                    )
+                    _accumulate(J_win, i0, i1, j0, j1)
+                    del J_win  # one window live at a time (#338)
+
+        if mirror_sources:
+            return
+        # Same-edge fixup, per edge of each subset wire (the dense path's
+        # overwrite, as a correction window).
+        per_wire = geom["per_wire"]
+        seg_off = geom["seg_offsets"]
+        on_subset = np.zeros(int(geom["n_segs_total"]), dtype=bool)
+        on_subset[seg_idx] = True
+        for w in range(len(per_wire)):
+            if not on_subset[seg_off[w]]:
+                continue
+            pw = per_wire[w]
+            ed_off = pw["edge_offsets"]
+            ed_arc = pw["edge_arc_edges"]
+            base = seg_off[w]
+            a_w = float(self._radius_per_wire[w])
+            for i_e in range(len(ed_off) - 1):
+                self._checkpoint()  # per same-edge correction block
+                sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
+                A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
+                A_reg = _seg_seg_reg_moments(
+                    ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
+                )
+                J_edge = _seg_seg_full_moments_offedge(
+                    seg_l[sl],
+                    seg_r[sl],
+                    seg_l[sl],
+                    seg_r[sl],
+                    a_row[sl],
+                    k,
+                    d,
+                    self.n_qp_pair,
+                    ladder=ladder,
+                )
+                corr = (A_st + A_reg) - J_edge
+                del J_edge
+                _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop)
 
     def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m, crossing=False):
         """Grid extents for the three field-form blocks, or a named refusal.
@@ -5184,39 +5402,97 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             crossing=bool(a_idx.size and crossing_j),
         )
 
-        # --- the two direct blocks, each in its own medium -----------------
-        self._checkpoint()
-        Z = self._assemble_Z(
-            self._build_J_blocks_subset(geom, k_m, b_idx),
-            supp_seg,
-            polys,
-            geom,
-            eps=eps_m,
-        )
-        td_img = self._image_tangent_dot(geom["tangents"])
-        if a_idx.size:
+        # --- the two direct blocks and the two image blocks, each in its
+        #     own medium. Chunked whenever the windowed assemblers' complex-
+        #     eps~ twins are built (momwire#915): the same four terms with the
+        #     same signs, never a (d+1, d+1, N, N) tensor, and faster even
+        #     where the tensor fits (12 radials: 3.5 -> 2.7 s) because the
+        #     zero-padded scatter of `_build_J_blocks_subset` is gone. The
+        #     dense route below is the REFERENCE every buried gate was pinned
+        #     on and the chunked route is gated against it at 1e-12.
+        if not self._buried_chunked_serves:
             self._checkpoint()
-            Z += self._assemble_Z(
-                self._build_J_blocks_subset(geom, k_p, a_idx), supp_seg, polys, geom
-            )
-            self._checkpoint()
-            Z -= self._image_Z_weighted(
-                self._build_J_blocks_subset(geom, k_p, a_idx, mirror_sources=True),
+            Z = self._assemble_Z(
+                self._build_J_blocks_subset(geom, k_m, b_idx),
                 supp_seg,
                 polys,
-                c2 * td_img.astype(np.complex128),
-                np.full(td_img.shape, c2, dtype=np.complex128),
+                geom,
+                eps=eps_m,
             )
-        self._checkpoint()
-        Z -= self._image_Z_weighted(
-            self._build_J_blocks_subset(geom, k_m, b_idx, mirror_sources=True),
-            supp_seg,
-            polys,
-            a_m * td_img.astype(np.complex128),
-            np.full(td_img.shape, a_m, dtype=np.complex128),
-            eps=eps_m,
-        )
-        del td_img
+            td_img = self._image_tangent_dot(geom["tangents"])
+            if a_idx.size:
+                self._checkpoint()
+                Z += self._assemble_Z(
+                    self._build_J_blocks_subset(geom, k_p, a_idx), supp_seg, polys, geom
+                )
+                self._checkpoint()
+                Z -= self._image_Z_weighted(
+                    self._build_J_blocks_subset(geom, k_p, a_idx, mirror_sources=True),
+                    supp_seg,
+                    polys,
+                    c2 * td_img.astype(np.complex128),
+                    np.full(td_img.shape, c2, dtype=np.complex128),
+                )
+            self._checkpoint()
+            Z -= self._image_Z_weighted(
+                self._build_J_blocks_subset(geom, k_m, b_idx, mirror_sources=True),
+                supp_seg,
+                polys,
+                a_m * td_img.astype(np.complex128),
+                np.full(td_img.shape, a_m, dtype=np.complex128),
+                eps=eps_m,
+            )
+            del td_img
+        else:
+            n_basis = supp_seg.shape[0]
+            Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+            self._accumulate_Z_subset_chunked(
+                Z,
+                geom,
+                k_m,
+                b_idx,
+                supp_seg,
+                polys,
+                mirror_sources=False,
+                eps=eps_m,
+                scale=1.0,
+            )
+            if a_idx.size:
+                self._accumulate_Z_subset_chunked(
+                    Z,
+                    geom,
+                    k_p,
+                    a_idx,
+                    supp_seg,
+                    polys,
+                    mirror_sources=False,
+                    eps=self.eps,
+                    scale=1.0,
+                )
+                self._accumulate_Z_subset_chunked(
+                    Z,
+                    geom,
+                    k_p,
+                    a_idx,
+                    supp_seg,
+                    polys,
+                    mirror_sources=True,
+                    eps=self.eps,
+                    scale=-1.0,
+                    weight=complex(c2),
+                )
+            self._accumulate_Z_subset_chunked(
+                Z,
+                geom,
+                k_m,
+                b_idx,
+                supp_seg,
+                polys,
+                mirror_sources=True,
+                eps=eps_m,
+                scale=-1.0,
+                weight=complex(a_m),
+            )
 
         # --- the three field-form blocks -----------------------------------
         if a_idx.size:
