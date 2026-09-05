@@ -56,6 +56,7 @@ exercise, `test_g524_7` already does.
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 
@@ -223,6 +224,34 @@ def test_g524_1_detached_buried_screen_is_untouched():
 # ----------------------------------------------------------------------
 
 
+def _radial_dirs(n_radials):
+    """N evenly spaced radial directions (momwire#924).
+
+    Both fan and hub decks used to slice a fixed 4-tuple,
+    `((1,0),(0,1),(-1,0),(0,-1))[:n_radials]`, while their junction lists were
+    still written for `range(n_radials)`. Above four that built FOUR radials
+    and a junction naming more members than there were radials, so the extra
+    indices silently absorbed the rise and the monopole — and the error that
+    came back was a coincidence complaint naming a distance that was really
+    `depth`, which points away from the cause.
+
+    At n_radials = 4 these ARE the old directions to floating point: cos/sin of
+    0, pi/2, pi, 3pi/2. Gated by `test_g924_the_four_radial_decks_did_not_move`
+    so that is a measurement rather than an expectation.
+    """
+    if n_radials < 1:
+        raise ValueError(
+            f"a radial screen needs at least one radial, got {n_radials}"
+        )
+    return [
+        (
+            math.cos(2.0 * math.pi * i / n_radials),
+            math.sin(2.0 * math.pi * i / n_radials),
+        )
+        for i in range(n_radials)
+    ]
+
+
 def fan_rise_deck(n_radials=4, depth=0.15, **override):
     """The connected radial screen, rise-spelled (momwire#524 fan
     widening): `contact_deck`'s monopole junction-joined at the node to
@@ -236,7 +265,7 @@ def fan_rise_deck(n_radials=4, depth=0.15, **override):
     these gates are momwire-internal (both sides of every comparison feed
     at 4.3333), so the banked prints stand. The old trap also stands: an
     improvised feed at 10 − 4.333 is silently ~50 Ω wrong."""
-    dirs = ((1, 0), (0, 1), (-1, 0), (0, -1))[:n_radials]
+    dirs = _radial_dirs(n_radials)
     wires = [
         np.array([(5.0 * dx, 5.0 * dy, -depth), (0.0, 0.0, -depth), (0.0, 0.0, 0.0)])
         for dx, dy in dirs
@@ -399,7 +428,7 @@ def hub_deck(n_radials=4, depth=0.15, **override):
     never gated against each other. The hub's by-parts end terms cancel
     through its own KCL row to the DIGIT (probe39 measured the stripped
     and unstripped solves identical through production)."""
-    dirs = ((1, 0), (0, 1), (-1, 0), (0, -1))[:n_radials]
+    dirs = _radial_dirs(n_radials)
     wires = [
         np.array([(5.0 * dx, 5.0 * dy, -depth), (0.0, 0.0, -depth)]) for dx, dy in dirs
     ]
@@ -1042,3 +1071,50 @@ def test_g696_9_an_empty_deck_reports_nothing_and_stays_quiet():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert _crossing_fill.warn_coarse_node([]) is None
+
+
+# ---------------------------------------------------------------------------
+# G-924 — the generated radial directions
+# ---------------------------------------------------------------------------
+
+
+def test_g924_the_four_radial_decks_did_not_move():
+    """The four-radial directions are bit-identical to the tuple they replace.
+
+    `_radial_dirs(4)` is cos/sin of 0, pi/2, pi, 3pi/2, which is (1,0), (0,1),
+    (-1,0), (0,-1) — but cos(pi/2) is 6.1e-17, not 0, so "identical" is a claim
+    about the DECK rather than about the angles. This pins the geometry every
+    existing four-radial gate is built on, so momwire#924's change cannot move
+    a banked number without failing here first.
+    """
+    old = ((1, 0), (0, 1), (-1, 0), (0, -1))
+    for builder in (fan_rise_deck, hub_deck):
+        gen = builder(n_radials=4)["wires"]
+        for i, (dx, dy) in enumerate(old):
+            # the radial's FAR end carries the direction, scaled by 5 m
+            far = np.asarray(gen[i][0], dtype=float)
+            assert far[0] == pytest.approx(5.0 * dx, abs=1e-12), (builder, i)
+            assert far[1] == pytest.approx(5.0 * dy, abs=1e-12), (builder, i)
+
+
+def test_g924_more_than_four_radials_builds_that_many():
+    """The argument now means what it says. Before momwire#924 this built four
+    radials whatever was asked and then raised from the junction list."""
+    for n in (1, 2, 3, 4, 6, 12):
+        for builder, extra in ((fan_rise_deck, 1), (hub_deck, 2)):
+            wires = builder(n_radials=n)["wires"]
+            assert len(wires) == n + extra, (builder, n, len(wires))
+        # every junction member indexes a wire that exists
+        for builder in (fan_rise_deck, hub_deck):
+            build = builder(n_radials=n)
+            n_w = len(build["wires"])
+            for j in build["junctions"]:
+                for w, _end in j:
+                    assert 0 <= w < n_w, (builder, n, w, n_w)
+
+
+def test_g924_zero_radials_refuses_by_name():
+    """The one limit left, said plainly rather than as an index error."""
+    for builder in (fan_rise_deck, hub_deck):
+        with pytest.raises(ValueError, match="at least one radial"):
+            builder(n_radials=0)
