@@ -409,17 +409,17 @@ def test_g906_9_the_selector_is_the_one_the_study_binned_by():
 def _buried_mixed_mesh_deck(**over):
     """A buried deck built to straddle the kL = 0.5 guard.
 
-    A 60-segment radial at lambda/120 — fine enough that its own same-edge
+    A 38-segment radial at lambda/119 — fine enough that its own same-edge
     block holds pairs past ratio 16, and far under the ceiling on its own —
     plus ONE 0.3-lambda buried segment that puts any window spanning it well
     over. That is the whole bug in a deck: the sweep sees the coarse segment
     and the same-edge correction does not.
     """
-    fine = np.array([[0.0, 0.0, -0.05], [0.5, 0.0, -0.05]])
+    fine = np.array([[0.0, 0.0, -0.05], [0.32, 0.0, -0.05]])
     coarse = np.array([[0.0, 0.3, -0.05], [0.3, 0.3, -0.05]])
     d = dict(
         wires=[fine, coarse],
-        n_per_edge_per_wire=[[60], [1]],
+        n_per_edge_per_wire=[[38], [1]],
         feeds=[(0, 0.25, 1 + 0j)],
         wavelength=1.0,
         wire_radius=1e-4,
