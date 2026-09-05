@@ -628,18 +628,30 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     )
     if memo is None:
         memo = {}
-    keys, inverse = _unique_triples(rho_b, z_b, zp_b)
-    unique = []
-    for key in keys:
-        if memo.get(key) is None:
+    rows, inverse = _unique_rows(rho_b, z_b, zp_b)
+    keys = [tuple(r) for r in rows.tolist()]
+    # `block` is the (n_unique, 6) the scatter needs. Filling it AS the values
+    # are produced is momwire#904 lever 2: the fill branches already hold every
+    # fresh row, so re-reading them out of the memo one key at a time to
+    # restack them was pure round trip. Cached rows still come from the dict —
+    # they are the only ones this call did not compute.
+    block = np.empty((len(keys), 6), dtype=np.complex128)
+    unique, fresh_idx, n_filled = [], [], 0
+    for i, key in enumerate(keys):
+        cached = memo.get(key)
+        if cached is None:
             if key not in memo:
                 unique.append(key)
+                fresh_idx.append(i)
             memo[key] = None  # first-appearance order, filled below
+        else:
+            block[i] = cached
+            n_filled += 1
     if _use_column_route() and unique:
         # First-appearance order is already fixed above, so the grouping is
         # free to reorder: it decides only which rule serves a triple, never
         # which key the memo holds or in what order it was seen.
-        groups = group_columns(unique)
+        fresh_pos = np.asarray(fresh_idx, dtype=np.intp)
         if _use_column_accel():
             # The twin's parallel unit is the COLUMN, so the whole grouping
             # goes in ONE call: a call per column would hand OpenMP one
@@ -657,14 +669,17 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
             # policy, and `psutil`, live on this side.
             k_p = float(k2)
             k_m = k_medium(complex(eps_t), k_p)
-            members = [m for group in groups.values() for m in group]
-            sizes = [len(group) for group in groups.values()]
-            offsets = np.zeros(len(sizes) + 1, dtype=np.intp)
+            # momwire#904 lever 1: the rows are already a float array on this
+            # side, so the twin is handed slices of it. What stood here turned
+            # the unique rows into key tuples, grouped the tuples, and then
+            # turned the tuples back into a float array — a round trip through
+            # Python objects for data that never stopped being an array.
+            sub = rows[fresh_pos]
+            rho_c, sizes, member_order = _column_blocks(sub)
+            offsets = np.zeros(sizes.size + 1, dtype=np.intp)
             offsets[1:] = np.cumsum(sizes)
-            tri = np.asarray(members, dtype=float).reshape(-1, 3)
-            rho_c = np.asarray(list(groups), dtype=float)
-            zs = np.ascontiguousarray(tri[:, 1])
-            zps = np.ascontiguousarray(tri[:, 2])
+            zs = np.ascontiguousarray(sub[member_order, 1])
+            zps = np.ascontiguousarray(sub[member_order, 2])
             # Refused HERE, in the walk's words with the offending member's
             # numbers: the twin refuses the same set (before it builds a
             # single column), but from C++ it cannot spell the values.
@@ -683,9 +698,13 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
                 _GX,
                 _GW,
             )
-            for key, row in zip(members, vals):
-                memo[key] = row
+            placed = fresh_pos[member_order]
+            block[placed] = vals
+            n_filled += placed.size
+            for j, row in zip(placed, vals):
+                memo[keys[j]] = row
         else:
+            groups = group_columns(unique)
             with _blas_physical_cores():
                 for members in groups.values():
                     r = members[0][0]
@@ -727,8 +746,15 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
                 lam_mult=lam_mult,
             )
     if keys:
-        vals = np.stack([memo[key] for key in keys])  # (n_unique, 6)
-        out = np.ascontiguousarray(vals[inverse].T).reshape((6,) + rho_b.shape)
+        if n_filled != len(keys):
+            # A route that does not fill `block` as it goes (the numpy column
+            # loop, the point batch, the `six_point` walk), or a memo carrying
+            # a None sentinel from a call that raised part-way. Restack from
+            # the memo, which is what stood here before momwire#904 — and on
+            # the sentinel it raises exactly as it did then rather than
+            # scattering an uninitialised row.
+            block = np.stack([memo[key] for key in keys])  # (n_unique, 6)
+        out = np.ascontiguousarray(block[inverse].T).reshape((6,) + rho_b.shape)
     else:
         out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
     return dict(zip(KEYS, out))
@@ -766,23 +792,77 @@ def group_columns(keys):
     return columns
 
 
+def _unique_rows(rho_b, z_b, zp_b):
+    """The distinct (ρ, z, z′) rows of a broadcast ask as a float (n, 3)
+    ARRAY in first-appearance order, plus the flat index of each asked point
+    into it. `_unique_triples` is this plus the tuple build.
+
+    A lexsort over the three columns, not `np.unique(axis=0)`. Same rows and
+    same inverse — `axis=0` sorts a structured VOID view of the rows, and on
+    the real BLE asked sets that machinery is most of the dedup: measured
+    48.5 ms against 7.5 ms here over the N = 16 solve's 74,756 asked rows,
+    with rows and inverse array-equal on every call (momwire#904).
+
+    The two agree on the awkward values as well, which is why the swap is
+    safe: −0.0 and 0.0 fold together in both (and so as dict keys), and NaN
+    rows stay distinct in both, because `!=` is true of every NaN pair here
+    exactly as the void compare makes it.
+    """
+    tri = np.ascontiguousarray(
+        np.stack([rho_b.ravel(), z_b.ravel(), zp_b.ravel()], axis=1)
+    )
+    n = tri.shape[0]
+    if n == 0:
+        return np.empty((0, 3), dtype=float), np.empty(0, dtype=np.intp)
+    idx = np.lexsort((tri[:, 2], tri[:, 1], tri[:, 0]))
+    srt = tri[idx]
+    new_group = np.empty(n, dtype=bool)
+    new_group[0] = True
+    np.any(srt[1:] != srt[:-1], axis=1, out=new_group[1:])
+    gid = np.cumsum(new_group) - 1
+    first = idx[new_group]  # one representative per group, sorted order
+    inverse = np.empty(n, dtype=np.intp)
+    inverse[idx] = gid
+    order = np.argsort(first, kind="stable")  # groups, first-appearance order
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size)
+    return tri[first[order]], rank[inverse]
+
+
 def _unique_triples(rho_b, z_b, zp_b):
     """The distinct (ρ, z, z′) triples of a broadcast ask, as Python-float
     tuples in FIRST-APPEARANCE order, plus the (flat) index of each asked
-    point into that list. One `np.unique` over the asked set; the memo's
-    key contract (float triple, first seen first) is unchanged, and −0.0
-    and 0.0 fold together here exactly as they do as dict keys."""
-    tri = np.stack([rho_b.ravel(), z_b.ravel(), zp_b.ravel()], axis=1)
-    if tri.shape[0] == 0:
-        return [], np.empty(0, dtype=np.intp)
-    rows, first, inverse = np.unique(
-        tri, axis=0, return_index=True, return_inverse=True
-    )
+    point into that list. The memo's key contract (float triple, first seen
+    first) is unchanged, and −0.0 and 0.0 fold together here exactly as they
+    do as dict keys.
+
+    Kept at this exact signature because it IS the #899 contract gate's
+    subject; `designed_tables` calls `_unique_rows` directly so it can group
+    and scatter on the array without the tuple round trip."""
+    rows, inverse = _unique_rows(rho_b, z_b, zp_b)
+    if rows.shape[0] == 0:
+        return [], inverse
+    return [tuple(r) for r in rows.tolist()], inverse
+
+
+def _column_blocks(sub):
+    """`group_columns`' partition of `sub` (an (m, 3) float array), as index
+    arithmetic: the distinct ρ in first-appearance order, each group's size,
+    and the member order within the concatenation.
+
+    Exactly `group_columns`' ordering — groups in first-seen ρ order, members
+    in first-seen order inside a group — so the twin is handed the same
+    columns in the same order it was handed before, and the rule each column
+    picks is unchanged. Returns (rho_c, sizes, member_order)."""
+    rho = np.ascontiguousarray(sub[:, 0])
+    uniq, first, inv = np.unique(rho, return_index=True, return_inverse=True)
     order = np.argsort(first, kind="stable")
     rank = np.empty_like(order)
     rank[order] = np.arange(order.size)
-    keys = [tuple(r) for r in rows[order].tolist()]
-    return keys, rank[np.asarray(inverse).ravel()]
+    gid = rank[np.asarray(inv).ravel()]
+    member_order = np.argsort(gid, kind="stable")  # stable: keeps first-seen
+    sizes = np.bincount(gid, minlength=order.size).astype(np.intp)
+    return uniq[order], sizes, member_order
 
 
 def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None):
