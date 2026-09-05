@@ -5089,7 +5089,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k,
             d,
             self.n_qp_pair,
-            ladder=self.pair_order_ladder,
+            ladder=self._fill_ladder(k, seg_l[seg_idx], seg_r[seg_idx], None),
         )
         if not mirror_sources:
             # Same-edge overwrite, per edge of each subset wire. The image
@@ -5219,7 +5219,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if in_medium
                 else _acc.assemble_Z_bspline_weighted_windowed
             )
-        ladder = self.pair_order_ladder
+        # momwire#921: ONE ladder for this fill, resolved against the subset
+        # it will actually window over — not `pair_order_ladder` raw. The
+        # same-edge correction below subtracts what the sweep added, and
+        # `_ladder_for_block` keys on each block's longest segment, so the raw
+        # property let a sweep window spanning a coarse segment drop the
+        # order-4 tier while a correction window for one fine edge kept it.
+        # The dense twin `_build_J_blocks_subset` resolves the same way, so
+        # the two routes to this block stay the same arithmetic.
+        ladder = self._fill_ladder(k, seg_l[seg_idx], seg_r[seg_idx], None)
 
         def _bases_touching(lo, hi):
             mask = ((supp_c >= lo) & (supp_c < hi)).any(axis=1)
