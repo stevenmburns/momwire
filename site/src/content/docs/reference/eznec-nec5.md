@@ -226,15 +226,16 @@ capability statements rather than deck errors:
 - **Buried wires now serve — with measured edges.** Wires strictly below
   the interface over the Sommerfeld ground get **impedance, currents and
   charges**: detached buried radials and screens, buried fed elements, and
-  elevated feeds over buried counterpoises. Validation is deliberately
-  engine-independent below ground — the NEC family's buried-conductor
-  weakness is documented publicly (LLNL-TR-490316; corroborated in our
-  licensed materials, details in private notes) — so the gates are exact
-  identities (the lossless-limit collapse onto free space at 4×10⁻¹⁵, the
-  deep-burial limit onto the infinite-medium solve) plus, on the
-  radial/counterpoise classes where the reference engine's convergence
-  ladders are clean, ladder-limit agreement at the half-percent class with
-  the buried-coupling differential matching to ~1 mΩ. Two honest notes: a
+  elevated feeds over buried counterpoises. Validation below ground stands
+  on exact identities (the lossless-limit collapse onto free space at
+  4×10⁻¹⁵, the deep-burial limit onto the infinite-medium solve), on
+  ladder-limit agreement at the half-percent class on the
+  radial/counterpoise classes with the buried-coupling differential
+  matching to ~1 mΩ, and on a licensed NEC-5 asked with its documented
+  below-ground card: the two engines agree to 0.2 % in resistance on a
+  wholly buried fed dipole across depths and to a few percent on a
+  bonded-base vertical over buried radials, and both reproduce the shape
+  of Brown, Lewis and Epstein's 1937 measured radial-count curve. Two honest notes: a
   deck's first buried solve builds its below-interface Sommerfeld tables
   (about a minute or two today — the accelerated fills are momwire#568),
   and the refusals below are the map of where the capability ends.
