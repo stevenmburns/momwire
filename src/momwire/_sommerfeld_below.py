@@ -1537,6 +1537,53 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
 # ---------------------------------------------------------------------------
 
 
+# momwire#914 item 5 — ACA on this projection.
+#
+# TOLERANCE IS NOT A FREE PARAMETER. The grid's own interpolation error is
+# ~1.6e-5 relative (measured against the exact surfaces on a captured block),
+# and that error is a FULL-RANK perturbation on an operator that is rank 4.
+# Compressing below the floor therefore stops compressing and starts fitting
+# interpolation noise: ACA would add pivots until the block is full rank and
+# cost more than the dense fill. 1e-6 sits an order of magnitude inside the
+# floor and is where the measured rank is small.
+#
+# `eta` is deliberately loose (2.0). This deck class is electrically small —
+# the 48-radial screen is a fraction of a wavelength across — so the kernel is
+# smooth at separations a wave-oriented eta would call inadmissible, and the
+# measured rank at eta = 2 is the same 6.5 as at eta = 1 while the admissible
+# fraction rises from 61% to 66%.
+ACA_ETA = 2.0
+ACA_TOL = 1e-6
+ACA_LEAF = 128
+
+_ACA_STATS = {
+    "calls": 0,
+    "clusters": 0,
+    "admissible": 0,
+    "rank_sum": 0,
+    "pairs_evaluated": 0,
+    "pairs_dense": 0,
+}
+
+
+def _use_below_aca():
+    """Whether the ACA route is available AND enabled.
+
+    Its own capability flag on the #914 pattern, and its own module switch so
+    the dense kernel stays reachable as the reference the gates compare
+    against — an unreachable reference is not a reference.
+    """
+    return (
+        _USE_BELOW_ACA
+        and _acc is not None
+        and getattr(_acc, "below_projection_aca_914", False)
+        and hasattr(_acc, "remainder_field_proj_batch_below_aca")
+    )
+
+
+_USE_BELOW_ACA = True
+
+
 def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid):
     """Projected below/below remainder table t_m · F(r_m, r_n) · t_n.
 
@@ -1608,7 +1655,7 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
         filled_before = tuple(r["filled"] for r in grid._regions)
 
         def _run():
-            return _acc.remainder_field_proj_batch_below(
+            args = (
                 obs,
                 t_obs,
                 src,
@@ -1620,6 +1667,22 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
                 float(grid.th_band_hi),
                 *grid_cpp_args(grid),
             )
+            if _use_below_aca():
+                # momwire#914 item 5. Admissible blocks compressed; near
+                # blocks are the dense expression bit for bit; the extremes
+                # come from a geometry-only pass over EVERY pair, so the
+                # domain refusals below see the same numbers either way.
+                r = _acc.remainder_field_proj_batch_below_aca(
+                    *args, eta=ACA_ETA, aca_tol=ACA_TOL, leaf=ACA_LEAF
+                )
+                _ACA_STATS["calls"] += 1
+                _ACA_STATS["clusters"] += r[4]
+                _ACA_STATS["admissible"] += r[5]
+                _ACA_STATS["rank_sum"] += r[6]
+                _ACA_STATS["pairs_evaluated"] += r[7]
+                _ACA_STATS["pairs_dense"] += r[8]
+                return r[:4]
+            return _acc.remainder_field_proj_batch_below(*args)
 
         out, mx_r1, mn_th, mx_th = _run()
         # The three domain refusals are NOT transcribed into C++. The kernel

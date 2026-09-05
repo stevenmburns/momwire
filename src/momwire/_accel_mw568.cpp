@@ -618,6 +618,366 @@ static py::tuple remainder_field_proj_batch_below(
 }
 
 
+// --- momwire#914 item 5: ACA on the below/below remainder projection -------
+//
+// The dense twin above fills an (M, S) table by evaluating `proj_one_below`
+// once per pair: 243 M evaluations on the 48-radial screen, which is 45 % of
+// that solve and the largest single term left after #922.
+//
+// WHY LOW RANK APPLIES, and where its floor is. Measured on a captured block
+// (30 observers x 48 sources, separation 5.40 m, eta 0.17) from the 12-radial
+// deck:
+//
+//     surfaces                 rank@1e-6  1e-8  1e-10  1e-12   of 30
+//     grid-interpolated             4      28     30      30
+//     direct (exact)                2       4      4       7
+//
+// The OPERATOR is rank 4 — as it should be, since that deck is 0.3 lambda
+// across, so every pair is near field and the kernel is smooth and slowly
+// varying. But the shipped grid differs from the exact surfaces by 1.6e-5
+// relative, and that interpolation error is a FULL-RANK perturbation sitting
+// on top of a rank-4 operator.
+//
+// So the tolerance is not a free parameter. Below the grid's own floor, ACA
+// stops compressing and starts fitting interpolation noise: it would add
+// pivots until the block is full rank and cost MORE than the dense fill it
+// replaced. `ACA_TOL_DEFAULT` is 1e-6, an order of magnitude inside the
+// measured floor, and `max_rank` below is the belt to that braces.
+//
+// THE EXTREMES ARE NOT COMPRESSED. The caller uses (r1_max, th_lo, th_hi) to
+// raise the grid's domain refusals, so under-reporting them would let an
+// out-of-domain deck through silently. They are pure geometry — no table, no
+// dyad — so they get their own exact pass over every pair. momwire#914 unit 1
+// measured that shape at 0.3 ns/pair, which is noise against the ~30 ns of a
+// full evaluation.
+
+namespace {
+
+constexpr double ACA_ETA_DEFAULT = 0.5;   // max(diam) <= eta * dist
+constexpr double ACA_TOL_DEFAULT = 1e-6;  // see the floor note above
+constexpr py::ssize_t ACA_LEAF_DEFAULT = 256;
+
+struct Box {
+    double lo[3], hi[3];
+    void reset() {
+        for (int d = 0; d < 3; ++d) { lo[d] = 1e300; hi[d] = -1e300; }
+    }
+    void add(double x, double y, double z) {
+        const double p[3] = {x, y, z};
+        for (int d = 0; d < 3; ++d) {
+            if (p[d] < lo[d]) lo[d] = p[d];
+            if (p[d] > hi[d]) hi[d] = p[d];
+        }
+    }
+    double diam() const {
+        double s = 0.0;
+        for (int d = 0; d < 3; ++d) { const double e = hi[d] - lo[d]; s += e * e; }
+        return std::sqrt(s);
+    }
+    static double dist(const Box &a, const Box &b) {
+        double s = 0.0;
+        for (int d = 0; d < 3; ++d) {
+            const double gap = std::max(0.0, std::max(a.lo[d] - b.hi[d], b.lo[d] - a.hi[d]));
+            s += gap * gap;
+        }
+        return std::sqrt(s);
+    }
+};
+
+
+// A binary space partition over point indices: split the longest box axis at
+// the median until a leaf holds <= `leaf` points. Contiguous INDEX runs were
+// the first attempt and they do not work here — the samples are ordered along
+// each wire, so a run of 256 spans most of a radial and its diameter is the
+// size of the whole screen. Nothing was ever admissible. Clusters have to be
+// compact in space, not in index order.
+inline void build_leaves(const double *px, const double *py_, const double *pz,
+                         std::vector<py::ssize_t> &idx, py::ssize_t lo,
+                         py::ssize_t hi, py::ssize_t leaf,
+                         std::vector<std::pair<py::ssize_t, py::ssize_t>> &out) {
+    if (hi - lo <= leaf) {
+        out.emplace_back(lo, hi);
+        return;
+    }
+    Box b; b.reset();
+    for (py::ssize_t i = lo; i < hi; ++i) b.add(px[idx[i]], py_[idx[i]], pz[idx[i]]);
+    int axis = 0;
+    double best = b.hi[0] - b.lo[0];
+    for (int d = 1; d < 3; ++d)
+        if (b.hi[d] - b.lo[d] > best) { best = b.hi[d] - b.lo[d]; axis = d; }
+    if (!(best > 0.0)) { out.emplace_back(lo, hi); return; }
+    const double *co = axis == 0 ? px : (axis == 1 ? py_ : pz);
+    const py::ssize_t mid = lo + (hi - lo) / 2;
+    std::nth_element(idx.begin() + lo, idx.begin() + mid, idx.begin() + hi,
+                     [&](py::ssize_t a, py::ssize_t c) { return co[a] < co[c]; });
+    build_leaves(px, py_, pz, idx, lo, mid, leaf, out);
+    build_leaves(px, py_, pz, idx, mid, hi, leaf, out);
+}
+
+}  // namespace
+
+static py::tuple remainder_field_proj_batch_below_aca(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_obs,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_src,
+    double ground_z, double k_p, std::complex<double> k_m, double th_min,
+    double th_band_hi, double r1_max, double r_break, double th_split,
+    double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    double eta, double aca_tol, py::ssize_t leaf) {
+    using somm_proj::cd;
+    auto ob = obs.unchecked<2>();
+    auto tob = t_obs.unchecked<2>();
+    auto sb = src.unchecked<2>();
+    auto tsb = t_src.unchecked<2>();
+    if (ob.shape(1) != 3 || tob.shape(1) != 3 || sb.shape(1) != 3 ||
+        tsb.shape(1) != 3)
+        throw std::runtime_error("obs/src/tangent arrays must have shape (*, 3)");
+    if (ob.shape(0) != tob.shape(0) || sb.shape(0) != tsb.shape(0))
+        throw std::runtime_error("points and tangents must have matching length");
+    if (reg_vals.size() != 9)
+        throw std::runtime_error(
+            "the below/below grid is nine regions (3 R1 zones x 3 theta bands) "
+            "since momwire#838; got a different count, which means a stale "
+            "_sommerfeld_below.py");
+    if (!(eta > 0.0) || !(aca_tol > 0.0) || leaf < 1)
+        throw std::invalid_argument("eta, aca_tol must be positive and leaf >= 1");
+
+    const py::ssize_t M = ob.shape(0);
+    const py::ssize_t S = sb.shape(0);
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
+        reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
+        reg_vals);
+
+    py::array_t<std::complex<double>> out({M, S});
+    auto out_m = out.mutable_unchecked<2>();
+    const cd km(k_m);
+
+    double mx_r1 = 0.0, mn_th = 0.5 * M_PI, mx_th = 0.0;
+    py::ssize_t n_clusters = 0, n_admissible = 0, rank_sum = 0;
+    py::ssize_t pairs_dense = 0, pairs_evaluated = 0;
+
+    {
+        py::gil_scoped_release release;
+        std::vector<double> sx(S), sy(S), sz(S), ux(S), uy(S), thsrc(S), tzsrc(S);
+        for (py::ssize_t n = 0; n < S; ++n) {
+            sx[n] = sb(n, 0); sy[n] = sb(n, 1); sz[n] = sb(n, 2);
+            somm_proj::tangent_decomp(tsb(n, 0), tsb(n, 1), tsb(n, 2), ux[n],
+                                      uy[n], thsrc[n], tzsrc[n]);
+        }
+
+        // --- the extremes, exactly, over EVERY pair (geometry only) --------
+        std::vector<double> row_r1(M > 0 ? M : 1, 0.0);
+        std::vector<double> row_tlo(M > 0 ? M : 1, 0.5 * M_PI);
+        std::vector<double> row_thi(M > 0 ? M : 1, 0.0);
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t m = 0; m < M; ++m) {
+            const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
+            double rmax = 0.0, tlo = 0.5 * M_PI, thi = 0.0;
+            for (py::ssize_t n = 0; n < S; ++n) {
+                const double dx = ox - sx[n], dy = oy - sy[n];
+                const double rho = std::hypot(dx, dy);
+                const double hh = (ground_z - oz) + (ground_z - sz[n]);
+                const double r1 = std::sqrt(rho * rho + hh * hh);
+                const double th = std::atan2(hh, rho);
+                if (r1 > rmax) rmax = r1;
+                if (th < tlo) tlo = th;
+                if (th > thi) thi = th;
+            }
+            row_r1[m] = rmax; row_tlo[m] = tlo; row_thi[m] = thi;
+        }
+        for (py::ssize_t m = 0; m < M; ++m) {
+            if (row_r1[m] > mx_r1) mx_r1 = row_r1[m];
+            if (row_tlo[m] < mn_th) mn_th = row_tlo[m];
+            if (row_thi[m] > mx_th) mx_th = row_thi[m];
+        }
+
+        // one entry of the block, the dense kernel's own expression
+        auto entry = [&](py::ssize_t m, py::ssize_t n) -> cd {
+            double r1q, thq;
+            return mw568_below::proj_one_below(
+                G, th_min, th_band_hi, ground_z, k_p, km, ob(m, 0), ob(m, 1),
+                ob(m, 2), tob(m, 0), tob(m, 1), tob(m, 2), sx[n], sy[n], sz[n],
+                ux[n], uy[n], thsrc[n], tzsrc[n], r1q, thq);
+        };
+
+        // Cluster BOTH axes spatially. The observer chunk spans metres too,
+        // so leaving it as one block caps admissibility just as hard as an
+        // uncompact source cluster does.
+        std::vector<double> oxv(M), oyv(M), ozv(M);
+        for (py::ssize_t m = 0; m < M; ++m) {
+            oxv[m] = ob(m, 0); oyv[m] = ob(m, 1); ozv[m] = ob(m, 2);
+        }
+        std::vector<py::ssize_t> oidx(M), sidx(S);
+        for (py::ssize_t m = 0; m < M; ++m) oidx[m] = m;
+        for (py::ssize_t n = 0; n < S; ++n) sidx[n] = n;
+        std::vector<std::pair<py::ssize_t, py::ssize_t>> oleaf, sleaf;
+        build_leaves(oxv.data(), oyv.data(), ozv.data(), oidx, 0, M, leaf, oleaf);
+        build_leaves(sx.data(), sy.data(), sz.data(), sidx, 0, S, leaf, sleaf);
+
+        std::vector<Box> obox(oleaf.size()), sbox(sleaf.size());
+        for (size_t a = 0; a < oleaf.size(); ++a) {
+            obox[a].reset();
+            for (py::ssize_t i = oleaf[a].first; i < oleaf[a].second; ++i)
+                obox[a].add(oxv[oidx[i]], oyv[oidx[i]], ozv[oidx[i]]);
+        }
+        for (size_t c = 0; c < sleaf.size(); ++c) {
+            sbox[c].reset();
+            for (py::ssize_t j = sleaf[c].first; j < sleaf[c].second; ++j)
+                sbox[c].add(sx[sidx[j]], sy[sidx[j]], sz[sidx[j]]);
+        }
+
+        // One flat list of block pairs, threaded. The blocks are independent
+        // — each writes a disjoint set of `out` entries — and this is the ONLY
+        // place the parallelism can live: the dense twin is `omp parallel for`
+        // over the whole table, and ACA's pivot loop is an inherently serial
+        // dependency chain. A first version threaded only the inner fills and
+        // measured 0.5-1.2x against dense: it had traded 8x parallelism for 2x
+        // fewer evaluations, which is a loss however good the compression is.
+        std::vector<std::pair<size_t, size_t>> blocks;
+        blocks.reserve(oleaf.size() * sleaf.size());
+        for (size_t a = 0; a < oleaf.size(); ++a)
+            for (size_t c = 0; c < sleaf.size(); ++c) blocks.emplace_back(a, c);
+        n_clusters = (py::ssize_t)blocks.size();
+
+        #pragma omp parallel for schedule(dynamic) \
+            reduction(+ : n_admissible, rank_sum, pairs_evaluated, pairs_dense)
+        for (py::ssize_t bi = 0; bi < (py::ssize_t)blocks.size(); ++bi) {
+            {
+                const size_t a = blocks[bi].first, c = blocks[bi].second;
+                const py::ssize_t Mo = oleaf[a].second - oleaf[a].first;
+                const py::ssize_t *orow = &oidx[oleaf[a].first];
+                const py::ssize_t Sc = sleaf[c].second - sleaf[c].first;
+                const py::ssize_t *scol = &sidx[sleaf[c].first];
+                const double sep = Box::dist(obox[a], sbox[c]);
+                const bool admissible =
+                    sep > 0.0 &&
+                    std::max(obox[a].diam(), sbox[c].diam()) <= eta * sep &&
+                    Sc >= 4 && Mo >= 4;
+
+                if (!admissible) {
+                    pairs_dense += Mo * Sc;
+                    pairs_evaluated += Mo * Sc;
+                    for (py::ssize_t i = 0; i < Mo; ++i)
+                        for (py::ssize_t j = 0; j < Sc; ++j)
+                            out_m(orow[i], scol[j]) = entry(orow[i], scol[j]);
+                    continue;
+                }
+                n_admissible += 1;
+
+                // --- ACA with partial pivoting ---------------------------
+                // Rank capped at a quarter of the block: past that the dense
+                // fill is cheaper, and a block still growing there is chasing
+                // the grid's interpolation noise rather than the operator
+                // (see the header). Such a block falls back to dense, so the
+                // answer is never a half-converged approximation.
+                const py::ssize_t max_rank =
+                    std::max<py::ssize_t>(1, std::min(Mo, Sc) / 4);
+                std::vector<cd> U, V;
+                std::vector<char> row_used(Mo, 0), col_used(Sc, 0);
+                std::vector<cd> u(Mo), v(Sc);
+                double approx_fro2 = 0.0;
+                py::ssize_t rank = 0, i_piv = 0, local_evals = 0;
+                bool converged = false;
+
+                while (rank < max_rank) {
+                    for (py::ssize_t j = 0; j < Sc; ++j) {
+                        cd t = entry(orow[i_piv], scol[j]);
+                        for (py::ssize_t k = 0; k < rank; ++k)
+                            t -= U[k * Mo + i_piv] * V[k * Sc + j];
+                        v[j] = t;
+                    }
+                    local_evals += Sc;
+                    row_used[i_piv] = 1;
+                    py::ssize_t j_piv = -1;
+                    double best = 0.0;
+                    for (py::ssize_t j = 0; j < Sc; ++j)
+                        if (!col_used[j] && std::abs(v[j]) > best) {
+                            best = std::abs(v[j]); j_piv = j;
+                        }
+                    if (j_piv < 0 || best == 0.0) { converged = true; break; }
+                    const cd inv = cd(1.0, 0.0) / v[j_piv];
+                    for (py::ssize_t j = 0; j < Sc; ++j) v[j] *= inv;
+                    col_used[j_piv] = 1;
+
+                    for (py::ssize_t i = 0; i < Mo; ++i) {
+                        cd t = entry(orow[i], scol[j_piv]);
+                        for (py::ssize_t k = 0; k < rank; ++k)
+                            t -= U[k * Mo + i] * V[k * Sc + j_piv];
+                        u[i] = t;
+                    }
+                    local_evals += Mo;
+
+                    double un2 = 0.0, vn2 = 0.0;
+                    for (py::ssize_t i = 0; i < Mo; ++i) un2 += std::norm(u[i]);
+                    for (py::ssize_t j = 0; j < Sc; ++j) vn2 += std::norm(v[j]);
+                    double cross = 0.0;
+                    for (py::ssize_t k = 0; k < rank; ++k) {
+                        cd du(0.0, 0.0), dv(0.0, 0.0);
+                        for (py::ssize_t i = 0; i < Mo; ++i)
+                            du += std::conj(U[k * Mo + i]) * u[i];
+                        for (py::ssize_t j = 0; j < Sc; ++j)
+                            dv += std::conj(V[k * Sc + j]) * v[j];
+                        cross += 2.0 * std::real(du * std::conj(dv));
+                    }
+                    approx_fro2 += un2 * vn2 + cross;
+
+                    U.insert(U.end(), u.begin(), u.end());
+                    V.insert(V.end(), v.begin(), v.end());
+                    ++rank;
+
+                    if (un2 * vn2 <=
+                        aca_tol * aca_tol * std::max(approx_fro2, 1e-300)) {
+                        converged = true;
+                        break;
+                    }
+                    py::ssize_t next = -1;
+                    double bu = 0.0;
+                    for (py::ssize_t i = 0; i < Mo; ++i)
+                        if (!row_used[i] && std::abs(u[i]) > bu) {
+                            bu = std::abs(u[i]); next = i;
+                        }
+                    if (next < 0) { converged = true; break; }
+                    i_piv = next;
+                }
+
+                if (!converged) {
+                    // Did not reach tolerance inside the rank cap: take the
+                    // dense answer rather than ship an approximation nobody
+                    // gated.
+                    pairs_dense += Mo * Sc;
+                    pairs_evaluated += Mo * Sc + local_evals;
+                    --n_admissible;
+                    for (py::ssize_t i = 0; i < Mo; ++i)
+                        for (py::ssize_t j = 0; j < Sc; ++j)
+                            out_m(orow[i], scol[j]) = entry(orow[i], scol[j]);
+                    continue;
+                }
+
+                rank_sum += rank;
+                pairs_evaluated += local_evals;
+                for (py::ssize_t i = 0; i < Mo; ++i)
+                    for (py::ssize_t j = 0; j < Sc; ++j) {
+                        cd t(0.0, 0.0);
+                        for (py::ssize_t k = 0; k < rank; ++k)
+                            t += U[k * Mo + i] * V[k * Sc + j];
+                        out_m(orow[i], scol[j]) = t;
+                    }
+            }
+        }
+    }
+
+    return py::make_tuple(out, mx_r1, mn_th, mx_th, n_clusters, n_admissible,
+                          rank_sum, pairs_evaluated, pairs_dense);
+}
+
 // --------------------------------------------------------------------------
 // momwire#568 unit 3 -- the TRANSMITTED family on the shared contour engine.
 //
@@ -1676,6 +2036,10 @@ void register_mw568(py::module_ &m) {
     // `pair_extents_below` and every #568 symbol, and would otherwise claim
     // this contract too.
     m.attr("field_galerkin_914") = true;
+    // momwire#914 item 5: ACA on the below/below remainder projection. Its
+    // OWN flag again — a .so built at unit 2 exports every symbol above and
+    // would otherwise claim this contract too.
+    m.attr("below_projection_aca_914") = true;
 
     m.def("pair_extents_below", &pair_extents_below,
           "(r1_max, th_min) over every below/below node pair -- the C++ twin "
@@ -1687,6 +2051,28 @@ void register_mw568(py::module_ &m) {
           "minimum, which is what the numpy reference's Python-level min does "
           "with the same NaN.",
           py::arg("x"), py::arg("y"), py::arg("d_b"));
+    m.def("remainder_field_proj_batch_below_aca",
+          &remainder_field_proj_batch_below_aca,
+          "The below/below projected table with admissible blocks compressed "
+          "by ACA (momwire#914 item 5). Same answer as the dense twin to "
+          "`aca_tol`; near blocks are the dense expression bit for bit. The "
+          "grid's own interpolation floor is ~1e-5 relative, so a tolerance "
+          "below that chases noise to full rank and costs more than the dense "
+          "fill -- 1e-6 is the default for that reason, not for accuracy. "
+          "Returns (table, r1_max, th_lo, th_hi, n_clusters, n_admissible, "
+          "rank_sum, pairs_evaluated, pairs_dense); the extremes are computed "
+          "over EVERY pair by a geometry-only pass, never from the compressed "
+          "sample, because the caller raises the grid's domain refusals off "
+          "them.",
+          py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
+          py::arg("ground_z"), py::arg("k_p"), py::arg("k_m"),
+          py::arg("th_min"), py::arg("th_band_hi"), py::arg("r1_max"),
+          py::arg("r_break"), py::arg("th_split"), py::arg("r_near"),
+          py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
+          py::arg("reg_dth"), py::arg("reg_vals"),
+          py::arg("eta") = ACA_ETA_DEFAULT,
+          py::arg("aca_tol") = ACA_TOL_DEFAULT,
+          py::arg("leaf") = ACA_LEAF_DEFAULT);
     m.def("assemble_field_galerkin", &assemble_field_galerkin,
           "Accumulate one observer chunk of bspline._field_galerkin_block's "
           "assembly into Q, in place. Fuses the two moment sums into a "
