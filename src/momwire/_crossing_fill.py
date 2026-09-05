@@ -1049,10 +1049,16 @@ def _ends_and_corner_reversed(
     t_ba = np.zeros((P["n_basis"], Q["n_basis"]), dtype=np.complex128)
     _txP, _tyP, tzP = P["t"].T
     _txQ, _tyQ, tzQ = Q["t"].T
-    FP_w = P["F"] * P["w"]
-    FdP_w = P["Fd"] * P["w"]
-    FQ_w = Q["F"] * Q["w"]
-    FdQ_w = Q["Fd"] * Q["w"]
+    # The same three momwire#919 shapes as the forward twin, and they MUST
+    # move together: `test_the_main_sandwich_is_the_forward_transposed` pins
+    # this block bit-equal to the forward's transpose, so reassociating one
+    # side alone breaks a real invariant. (It did, in CI, which is what this
+    # comment is here to stop happening again.)
+    wP, wQ = P["w"], Q["w"]
+    wP_tz = wP * tzP
+    wQ_tz = wQ * tzQ
+    buf = _Rank1Buffer()
+    bufT = _Rank1Buffer()
 
     # BT — the test axis's ends. P is below, so its z lands in the z′ slot
     # (clamped at the plane, the mirror of the forward's `max(..., 0.0)`).
@@ -1068,11 +1074,21 @@ def _ends_and_corner_reversed(
             _CROSS_RTOL,
             memo=memo,
         )
-        t_ba += c1 * sign * np.outer(fv, FdQ_w @ te["V"])
+        nz = np.flatnonzero(fv)
+        _rank1_add(
+            t_ba, nz, fv[nz], _real_matvec_c(Q["Fd"], wQ * te["V"]), c1 * sign, buf
+        )
         if sw_end == SW_BY_PARTS:
             # SW paired with s_w1 by the by-parts that produced it: on the
             # BELOW axis's ends, contracting the ABOVE axis's t̂z (5312ca5).
-            t_ba += -c1 * sign * np.outer(fv, (FQ_w * tzQ) @ te["W"])
+            _rank1_add(
+                t_ba,
+                nz,
+                fv[nz],
+                _real_matvec_c(Q["F"], wQ_tz * te["W"]),
+                -c1 * sign,
+                buf,
+            )
 
     # SQ — the source axis's ends (+ SW under the rejected "by_role" reading).
     for pt, sign, fv in Q["ends"]:
@@ -1087,9 +1103,19 @@ def _ends_and_corner_reversed(
             _CROSS_RTOL,
             memo=memo,
         )
+        nzq = np.flatnonzero(fv)
         if sw_end == SW_BY_ROLE:
-            t_ba += -c1 * sign * np.outer((FP_w * tzP) @ te["W"], fv)
-        t_ba += c1 * sign * np.outer(FdP_w @ te["V"], fv)
+            _rank1_add_cols(
+                t_ba,
+                nzq,
+                _real_matvec_c(P["F"], wP_tz * te["W"]),
+                fv[nzq],
+                -c1 * sign,
+                bufT,
+            )
+        _rank1_add_cols(
+            t_ba, nzq, _real_matvec_c(P["Fd"], wP * te["V"]), fv[nzq], c1 * sign, bufT
+        )
 
     if not corner:
         return t_ba
