@@ -42,9 +42,11 @@ path derivative AND the Bessel factor exactly, and a point is one
 exponential per node plus a (6 × K)·K product. The corner is served by
 the same contour as everything else, which is why it does not bite.
 
-Measured (#895 census): every point of a real crossing set sits in a
-(ρ, z′) column of ≥ 32 mast heights, so the route is 11–15× the C++
-point twin whole-deck, single-threaded.
+Measured (#895): every point of a real crossing set sits in a (ρ, z′)
+column of ≥ 32 mast heights, so on BLE 45 ft the route runs 17.9× (N = 4)
+and 19.3× (N = 16) the C++ point twin over the same unique triples,
+single-threaded — 47 µs/point against 0.84 ms — for the same impedance to
+every printed digit.
 
 Convention gate: e^{+jωt}, ε̃ = ε_r − jσ/ωε₀, asserted at import.
 """
@@ -432,8 +434,9 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     constant, both rtol-free (see `_column_rule`). What says the rule is
     converged is therefore the p / p+1 pair, not a tolerance argument.
 
-    A member's value depends on the column it was evaluated in, through
-    `s_min` — at the 1e-13 level measured, both values converged. So this
+    A member's value depends on which column it was evaluated in, through
+    `s_min` alone: measured 7.9e-16 worst between a ledger point read as a
+    column of one and the same point read inside a 31-z column. So this
     route does not promise the same BITS for a triple served in two
     differently-grouped calls, only the same answer; the memo in
     `designed_tables` is what keeps one call's duplicates identical.
