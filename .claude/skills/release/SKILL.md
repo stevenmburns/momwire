@@ -39,9 +39,10 @@ Publishing). Every step below was learned the hard way; do them in order.
 
 ## The signed drop-in (momwire#711)
 
-The same tag also triggers `eznec-dropin`, which Authenticode-signs
-`momwire-eznec.exe` and its `-razor-nec5` twin with Azure Artifact Signing
-before zipping them. Non-tag builds sign with a throwaway self-signed cert,
+The same tag also triggers `eznec-dropin`, which Authenticode-signs the
+frozen engine, `momwire-eznec.exe`, and one launcher copy per entry of
+`SHIPPED_VARIANTS` in `scripts/eznec_freeze/build.py` (today `-razor-2p`
+and `-razor-nec5`) with Azure Artifact Signing before zipping them. Non-tag builds sign with a throwaway self-signed cert,
 so a tag is the ONLY time the real certificate is exercised.
 
 **Before tagging**, confirm the credential has not expired — an expired
@@ -65,8 +66,15 @@ tag, no GitHub release, repeatable.
 
 ```
 chain verified
-signature present on all 2 executables
+signature present on all N executables
 ```
+
+where N is `len(SHIPPED_VARIANTS) + 2` — the engine, the default launcher,
+and one copy per shipped variant — so **4** as of v0.48.0. The number moves
+whenever a launcher variant is added (#817 took it from 2 to 4); a count
+below the current one means a copy arrived unsigned and the build already
+failed on it, so read the line for the count you expect rather than the
+one written here.
 
 `chain verified` is the hard gate — it means the signature validates to a
 trusted root, not that the check was waived. The waiver
