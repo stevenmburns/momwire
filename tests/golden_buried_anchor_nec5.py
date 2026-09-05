@@ -56,15 +56,36 @@ ANCHOR_DECKS = {
 ANCHOR_LONE_RADIAL = 92.1300 - 70.1410j
 ANCHOR_FOUR_RADIAL = 90.0510 - 70.7310j
 
-# ANCHOR_FOUR_RADIAL is the engine's DETACHED-STAKE convention:
-# its radials stop 15 cm down and a point-electrode fiction
-# carries the current across. momwire's served spelling of the
-# same screen is the CONNECTED fan (radials rise to the node, or
-# join a buried hub - momwire#524 fan widening), which is a
-# different physical deck with its own banked soil-A answer
-# (scratch/524-phase2/results/probe38-fan-widening.json). The
-# two are a documented convention difference, never a parity
-# target in either direction.
+# THESE TWO ARE NOT "WHAT THE ENGINE ANSWERS" (momwire#929).
+#
+# Both anchors stand a monopole's lower END in the plane with detached radials
+# below it and nothing continuing under the node, and both carry `GE 1,-1` —
+# ground flag 1 with the segment-check field at -1. antennaknobs#1025 found the
+# wrapper that wrote those cards had the two fields transposed. Flag 1 is
+# documented as not usable when wires go below the surface; the flag that IS
+# usable leaves the current expansion alone, which gives a wire ending at z=0
+# no basis function there, so the same decks read 25.9420 - 968.5600j and
+# 25.2270 - 967.9100j under it — an open-circuited monopole, a 93 % change.
+#
+# So this geometry has no documented spelling at all: one flag is excluded by
+# the burial, the other cannot feed a conductor that stops on the interface
+# (antennaknobs#925). The numbers above are faithful captures — they reproduce
+# to the digit, which the re-capture script checks before it writes anything —
+# but they are prints of a combination the engine does not document, and must
+# not be cited as the licensed engine's answer for this class, in refusal prose
+# or anywhere else.
+#
+# The CONNECTED spelling is the one with an answer. A rise from the buried hub
+# up to the node continues the conductor through the interface, and under the
+# documented card that deck agrees with momwire to 2.6 % in R at four radials
+# and 3.9 % at twelve (antennaknobs#1025). Verified against our licensed
+# materials; conclusions only.
+#
+# The convention note this replaced said momwire's connected fan and the
+# engine's detached stake were "a documented convention difference, never a
+# parity target in either direction". The first half stands — they are
+# different physical decks. The second half was measured against a print that
+# had no valid spelling behind it.
 
 # The momwire#524 crossing refinement ladder, FOR THE RECORD ONLY:
 # the engine's crossing junction was adjudicated 2026-08-26 as two

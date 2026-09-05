@@ -12,8 +12,10 @@ envelope rather than just a green tick.
 What is NOT here, and why
 -------------------------
 The unit's brief named the two phase-0 ANCHOR decks — a 10 m contact
-monopole over one buried radial (92.130 − 70.141j ohm printed) and over a
-four-radial fan (90.051 − 70.731j) — as its serve gates. They refuse, and
+monopole over one buried radial and over a four-radial fan — as its serve
+gates. Their printed numbers are banked in `golden_buried_anchor_nec5` and
+are NOT cited as the engine's answer for the class (momwire#929: that
+geometry has no documented ground-card spelling). They refuse, and
 `test_gu5_9_*` is that refusal. The reason is `G-U5-3`'s own measurement:
 both decks stand a wire END in the plane, and momwire's buried fill cannot
 hold a ground CONTACT and a buried wire at the same time. See
@@ -905,32 +907,40 @@ def test_gu5_8_a_deep_buried_dipole_is_the_infinite_medium_dipole(record_propert
 
 
 @pytest.mark.slow
-def test_gu5_8_the_engine_current_tables_disagree_and_that_is_recorded(
-    record_property,
-):
-    """**A FINDING, gated as one.**
+def test_gu5_8_the_engine_and_momwire_agree_on_the_buried_dipole(record_property):
+    """**The finding this gate recorded is CLOSED, and it was ours.**
 
-    The brief for this unit named the engine's printed bhd1/bvd1 current
-    tables as momwire's gate. They are not usable as one, and this test
-    records the measurement rather than a tolerance nobody could meet.
+    It used to assert that momwire and the engine DISAGREE on the buried
+    dipole, on two engine facts: a printed NEGATIVE resistance, and a current
+    ~1.0 A at the driven element collapsing to under 0.011 A one element away
+    with every off-feed element at exactly 180.0 deg. It was written to fail if
+    the two ever came together, which is what it now does.
 
-    On `ne-bvd1-d0.15-A-7MHz` the engine prints a current that is ~1.0 A at
-    the driven element and under 0.011 A one element away, every off-feed
-    element at exactly 180.0 deg; momwire solves the smooth triangular taper
-    a short dipole has (0.88 one element away, 0.11 at the tips), and prints
-    341.6 − 329.5j ohm where the engine prints −0.0025 + 3.4712j — a printed
-    NEGATIVE resistance on a passive antenna.
+    All three of those turned out to be artefacts, and only two of them were
+    the same artefact:
 
-    Three independent checks say momwire's side is the physical one, and
-    none of them is the engine: the ε̃ → 1 collapse is exact to 4e-15
-    (G-U5-3), the deep-burial limit runs into the infinite-medium solve to
-    5e-4 (above), and a quasi-static two-electrode estimate of the same
-    wire — R_dc = 2·ln(2L/a)/(2πσL) divided by (1 + jωε/σ) — gives
-    434 − 440j, within 1.3x. So the disagreement is recorded as a follow-up
-    against the ENGINE's buried-dipole solve, not as a momwire tolerance.
+    1. The decks were captured with the ground card's two fields transposed
+       (antennaknobs#1025) — flag 1 is documented as not usable when wires go
+       below the surface, and every deck here is fully buried. Re-captured
+       under the documented card (momwire#929): negative printed R goes from
+       3 of 23 decks to 0 of 23.
+    2. The off-feed collapse goes with it. The feed spike — |I| at the driven
+       element over its neighbour — reads 9.24 to 14.39 across the 23 decks
+       under flag 1 and 1.00 to 1.05 under the documented card. momwire's own
+       spike on the same deck is 1.13, so both engines are smooth across the
+       feed and flag 1 was the outlier.
+    3. "Every off-feed element at exactly 180.0 deg" was never an engine
+       behaviour at all. The golden's tuples are (element, z, REAL, IMAG) and
+       its docstring called them magnitude and phase, so this test built
+       `m * exp(i*radians(p))` from a real part and an imaginary part. A
+       negative real read as a magnitude is exactly a phase of 180.0, for every
+       row. The correct reading gives -169.7, -172.8, -175.3 ... -73.5 deg: a
+       smoothly varying phase. That defect was independent of the ground card
+       and would have survived fixing it.
 
-    The gate is written to FAIL IF IT AGREES: if a later change brings the
-    two together, this test is what says the finding is closed.
+    So the gate now pins what is true: the two agree. The three oracles below
+    are untouched and stay — they never depended on the engine, and they are
+    what made the original finding safe to record rather than a coin toss.
     """
     from golden_buried_currents_nec5 import DECKS
 
@@ -939,22 +949,42 @@ def test_gu5_8_the_engine_current_tables_disagree_and_that_is_recorded(
     z, coeffs = s.compute_impedance()
     got = element_currents(s, coeffs)
     got = got / got[fed - 1]
-    ref = np.array(
-        [m * np.exp(1j * math.radians(p)) for _e, _zc, m, p in d["currents"]]
-    )
+    # (element, z, REAL, IMAG) — see the golden's docstring, and #929 defect 3.
+    ref = np.array([complex(re_, im) for _e, _zc, re_, im in d["currents"]])
     ref = ref / ref[fed - 1]
     worst = float(np.max(np.abs(got - ref)) / np.max(np.abs(ref)))
+
     record_property("momwire_Z", f"{z:.4f}")
     record_property("engine_Z", str(d["input_z"]))
     record_property("worst_current_rel", worst)
-    record_property("momwire_tip_current", float(abs(got[0])))
-    record_property("engine_tip_current", float(abs(ref[0])))
-    assert worst > 0.5, (
-        "momwire and the engine now AGREE on the buried-dipole current "
-        f"distribution ({worst:.3e}) — the momwire#553 U5 finding is closed "
-        "and this gate should be replaced by the envelope it always wanted"
+
+    # Impedance: the engine prints 335.29 - 324.34j where momwire solves
+    # 341.64 - 329.45j — under 2 % in R and under 2 % in X.
+    assert abs(z.real - d["input_z"].real) / abs(z.real) < 0.03, (z, d["input_z"])
+    assert abs(z.imag - d["input_z"].imag) / abs(z.imag) < 0.03, (z, d["input_z"])
+
+    # Current distribution: a short dipole's smooth taper on both sides. The
+    # bound is loose because the two use different feed models and different
+    # bases; what it excludes is the old 10x spike, which lands at ~9 here.
+    assert worst < 0.35, (
+        f"momwire and the engine no longer agree on the buried-dipole current "
+        f"distribution ({worst:.3e}) — momwire#553 U5 has REOPENED"
     )
-    assert d["input_z"].real < 0.0, "the engine's printed R is no longer negative"
+
+    # And neither engine spikes at the feed any more.
+    for label, cur in (("momwire", got), ("engine", ref)):
+        mags = np.abs(cur)
+        f = int(np.argmax(mags))
+        nb = max(mags[i] for i in (f - 1, f + 1) if 0 <= i < len(mags))
+        assert mags[f] / nb < 1.5, (label, mags[f] / nb)
+
+    # The witness: the flag-1 capture is kept, and it is what the old gate saw.
+    w = d["witness_flag1"]
+    assert w["input_z"].real < 0.0, "the flag-1 witness lost its negative R"
+    wm = np.abs(np.array([complex(r, i) for _e, _z, r, i in w["currents"]]))
+    wf = int(np.argmax(wm))
+    wnb = max(wm[i] for i in (wf - 1, wf + 1) if 0 <= i < len(wm))
+    assert wm[wf] / wnb > 5.0, "the flag-1 witness lost its feed spike"
 
 
 # ======================================================================
@@ -971,9 +1001,15 @@ def test_gu5_9_the_lone_radial_anchor_refuses_naming_both_gates():
         s.compute_impedance()
     msg = str(exc.value)
     assert "stands an END in the ground plane" in msg
-    assert "92.130 - 70.141j" in msg
-    assert "90.051 - 70.731j" in msg
     assert "phase 2" in msg
+    # The refusal no longer QUOTES the anchor prints as the engine's answer
+    # for this class (momwire#929): that geometry has no documented spelling,
+    # so the numbers are prints of an undocumented combination and citing them
+    # here would put them back into circulation as a reference.
+    assert "92.130" not in msg and "90.051" not in msg
+    assert "no documented spelling" in msg
+    # and it still says what to do instead.
+    assert "RISE to the surface" in msg
 
 
 def test_gu5_9_the_four_radial_anchor_refuses_the_same_way():
@@ -1141,15 +1177,34 @@ _ANCHOR_DECK = {
 }
 
 
-def test_gu5_12_the_anchor_constants_are_the_numbers_the_refusals_print():
-    """The constants above and the copies of refusal prose in src are four
-    spellings of two numbers. This is the only test that ties them."""
+def test_gu5_12_the_refusals_no_longer_cite_the_anchor_prints():
+    """This used to tie four spellings of two numbers together: the constants
+    and the two copies of refusal prose all had to quote the anchors.
+
+    momwire#929 inverted the contract. The anchors are prints of a geometry
+    with no documented spelling — a conductor ENDING on the interface above
+    buried wires, where the flag that serves burial gives that node no basis
+    function and the flag that bonds it is documented as unusable with buried
+    wires — so quoting them in a refusal presents them as the licensed
+    engine's answer for the class. They stay in the golden file, faithfully
+    captured and labelled, and out of the prose.
+
+    The constants themselves are still asserted, because the golden must not
+    drift: what changed is where they may appear.
+    """
     from momwire.eznec import _serve
 
+    assert ANCHOR_LONE_RADIAL == 92.1300 - 70.1410j
+    assert ANCHOR_FOUR_RADIAL == 90.0510 - 70.7310j
     for anchor in (ANCHOR_LONE_RADIAL, ANCHOR_FOUR_RADIAL):
         printed = f"{anchor.real:.3f} - {abs(anchor.imag):.3f}j"
-        assert printed in _medium_spec._REFUSE_CONTACT_WITH_BURIED
-        assert printed in _serve._REFUSE_BURIED_WITH_CONTACT
+        assert printed not in _medium_spec._REFUSE_CONTACT_WITH_BURIED
+        assert printed not in _serve._REFUSE_BURIED_WITH_CONTACT
+    for prose in (
+        _medium_spec._REFUSE_CONTACT_WITH_BURIED,
+        _serve._REFUSE_BURIED_WITH_CONTACT,
+    ):
+        assert "no documented spelling" in prose
 
 
 @pytest.mark.parametrize("trunk", sorted(_TRUNK_REFUSAL))

@@ -138,18 +138,20 @@ CONTACT_WITH_BURIED_REFUSAL = (
     "a buried wire is exactly such an observer. What it should see is the "
     "contact current SPREADING in the lower medium - a real soil current "
     "this deck has NO CONDUCTOR for. momwire#524 phase 2 measured every "
-    "consistent spelling of the missing cross-medium physics against our "
-    "licensed NEC-5 engine's prints for exactly these decks (92.130 - "
-    "70.141j ohm for a 10 m contact monopole over one detached 5 m radial "
-    "15 cm down, 90.051 - 70.731j ohm for the four-radial fan, eps_r 13 / "
-    "sigma 0.005 S/m, 7 MHz): at matched feed and converged meshes on BOTH "
-    "sides the continuation-consistent spelling still lands ~3 ohm (lone) / "
-    "~6 ohm (fan) away (momwire#567 re-derivation, 2026-08-28) and the "
-    "residual is the spreading current itself, "
-    "which the engine carries as a point-electrode stake - the same "
-    "fiction the phase-2 adjudication measured violating its own junction "
-    "physics. There is no honest sub-ohm serve of this deck class in "
-    "either convention, so it stays refused rather than answered wrong. "
+    "consistent spelling of the missing cross-medium physics against "
+    "engine prints for exactly these decks - and those prints have since "
+    "been withdrawn as a reference (momwire#929). They were captured with "
+    "the ground card's two fields transposed (antennaknobs#1025), and this "
+    "deck class turns out to have no documented spelling at all: the flag "
+    "that serves buried wires leaves a conductor ENDING on the interface "
+    "without a basis function there, and the flag that bonds such an end is "
+    "documented as not usable when wires are buried. So the ~3 ohm (lone) / "
+    "~6 ohm (fan) residual was measured against a combination the engine "
+    "does not document, and neither it nor the point-electrode reading "
+    "drawn from it is evidence about this deck. The refusal itself is "
+    "unchanged and rests on momwire's own physics: the contact model has no "
+    "conductor for the spreading current, so there is nothing honest to "
+    "serve here in either convention. "
     "Serve it by giving the spreading current its conductor: respell the "
     "radial - or the whole SCREEN of them - to RISE to the surface and "
     "junction-join the monopole at z = 0; that crossing junction is served "
@@ -194,6 +196,13 @@ def contact_with_buried_refusal(contact_wire, buried_wire):
     cross block can be written mixed-potential like its neighbours — or the
     crossing basis, which removes the contact fiction altogether. Both are
     momwire#524 phase 2 / a recorded follow-up, and neither is this unit.
+
+    The measured residual this refusal used to quote — momwire's closest
+    consistent spelling landing ~3 ohm (lone) / ~6 ohm (fan) from the
+    engine — was removed by momwire#929: it was a distance to a print of a
+    geometry with no documented ground card, so it was not a residual.
+    Re-deriving it against the CONNECTED spelling at converged meshes is
+    momwire#931. The refusal below never depended on it.
     """
     return _REFUSE_CONTACT_WITH_BURIED.format(cw=contact_wire, bw=buried_wire)
 

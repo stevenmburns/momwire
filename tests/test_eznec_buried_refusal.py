@@ -34,7 +34,7 @@ from momwire.eznec._serve import refusal
 from momwire.eznec._shell import render
 
 # The anchors, their envelope and the printed-Z reader all live somewhere
-# else already; two copies of 92.130 - 70.141j would be two numbers to keep
+# else already; two copies of an anchor print would be two numbers to keep
 # equal, which is the defect momwire#567 found in the first place.
 from test_buried_serve_553 import (
     ANCHOR_ENVELOPE_OHM,
@@ -152,13 +152,18 @@ def test_a_buried_wire_over_a_ground_with_no_lower_medium_refuses(ground, card, 
 # ----------------------------------------------------------------------
 
 
-def test_a_contact_wire_plus_a_buried_wire_refuses_with_both_anchors():
+def test_a_contact_wire_plus_a_buried_wire_refuses_and_says_why():
+    """The refusal used to quote both anchor prints. It no longer does
+    (momwire#929): that geometry has no documented ground-card spelling, so
+    the prints are of an undocumented combination and quoting them here
+    presented them as the licensed engine's answer for the class. The refusal
+    keeps its physics reason and its way out."""
     r = why(deck(-0.15, "1,-1", GN0))
     assert r is not None
     assert "stands an END in the ground plane" in r
-    assert "92.130 - 70.141j" in r
-    assert "90.051 - 70.731j" in r
     assert "phase 2" in r
+    assert "no documented spelling" in r
+    assert "92.130" not in r and "90.051" not in r
     assert "elevated feed over a buried counterpoise is served" in r
 
 
