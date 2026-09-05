@@ -150,8 +150,11 @@ _HAVE_FIELD_GALERKIN_ACCEL = (
     and hasattr(_acc, "assemble_field_galerkin")
 )
 # Which of the accelerator's two routes to the same numbers to take. The
-# fused one skips `Jc` entirely and is what production wants (measured
-# momwire#914: 0.70 s against 1.47 s on the 48-radial screen). The literal
+# fused one skips `Jc` entirely and is what production wants: on the
+# 48-radial screen it assembles in 0.70 s against the other's 1.51 s
+# (momwire#914, medians of three). That gap is the whole margin -- the #914
+# budget for this term was 1.5 s, which the fused route clears by 2x and the
+# Jc one does not clear at all. The literal
 # transcription stays REACHABLE rather than being a `fused=True` the C++
 # hard-codes, for two reasons: an unreachable branch in the TU is untested
 # code that still ships, and a second independent route is the strongest
