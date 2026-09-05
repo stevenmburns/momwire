@@ -53,10 +53,12 @@ Convention gate: e^{+jωt}, ε̃ = ε_r − jσ/ωε₀, asserted at import.
 
 from __future__ import annotations
 
+import functools
 import os
 
 import numpy as np
 from scipy.special import hankel1, hankel2
+from threadpoolctl import ThreadpoolController
 
 from ._sommerfeld_below import _adaptive_segment, _head
 from ._sommerfeld_transmitted import (
@@ -137,6 +139,34 @@ def _use_column_route():
             "(MOMWIRE_NEAR_INTERFACE_ROUTE)"
         )
     return _ROUTE == "column"
+
+
+# The BLAS thread pool is pinned to ONE thread for the length of a column
+# fill (momwire#898). The column route's only BLAS call is the small
+# (nz × K)·(K × 6) complex gemm per column, and OpenBLAS threads it — then
+# the pool SPINS after the call and steals the next column's numpy / scipy
+# work (the exponential, the Bessel and Hankel factors), which is where
+# the whole route's time goes. Measured on a 4c/8t box, one 109-z column:
+# 10.0 ms at the default 8 threads against 5.9 ms pinned; the gemm itself
+# is 0.06 ms either way. The same spin artifact, measured on the solver's
+# own gemms, is antennaknobs#1052.
+#
+# The controller is built ONCE (a library scan, ~0.7 ms) and its `limit`
+# context costs ~20 µs to enter and leave, so the pin wraps a whole fill
+# call, not a column. It sets the process-wide OpenBLAS count and restores
+# it on exit, so a concurrent BLAS-heavy solve in another thread of the
+# same process would see one thread for the duration of a fill; the served
+# solver runs solves one at a time, which is why that is acceptable here.
+@functools.lru_cache(maxsize=1)
+def _blas_controller():
+    """The process's one `ThreadpoolController`, built on first use — after
+    numpy and scipy have loaded their BLAS, which is what it scans for."""
+    return ThreadpoolController()
+
+
+def _blas_single_thread():
+    """Context manager pinning every loaded BLAS to one thread."""
+    return _blas_controller().limit(limits=1, user_api="blas")
 
 
 # --- convention gate (e^{+jωt}: the lossy k_m must make e^{−jk_m R} decay) --
@@ -525,10 +555,11 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         columns = {}
         for key in unique:
             columns.setdefault((key[0], key[2]), []).append(key[1])
-        for (r, zpc), zs in columns.items():
-            vals = six_columns(eps_t, k2, r, zs, zpc, rtol=rtol, lam_mult=lam_mult)
-            for zc, row in zip(zs, vals):
-                memo[(r, zc, zpc)] = row
+        with _blas_single_thread():
+            for (r, zpc), zs in columns.items():
+                vals = six_columns(eps_t, k2, r, zs, zpc, rtol=rtol, lam_mult=lam_mult)
+                for zc, row in zip(zs, vals):
+                    memo[(r, zc, zpc)] = row
     elif _use_near_interface_accel() and unique:
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)

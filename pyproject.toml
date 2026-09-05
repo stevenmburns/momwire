@@ -28,6 +28,9 @@ classifiers = [
 dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
+    # Pins the BLAS pool to one thread around the near-interface column
+    # fill (momwire#898); pure Python, the same package scikit-learn uses.
+    "threadpoolctl>=3",
 ]
 
 [project.optional-dependencies]
