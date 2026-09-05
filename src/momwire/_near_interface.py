@@ -141,22 +141,26 @@ def _use_column_route():
     return _ROUTE == "column"
 
 
-# The BLAS thread pool is pinned to ONE thread for the length of a column
-# fill (momwire#898). The column route's only BLAS call is the small
-# (nz × K)·(K × 6) complex gemm per column, and OpenBLAS threads it — then
-# the pool SPINS after the call and steals the next column's numpy / scipy
-# work (the exponential, the Bessel and Hankel factors), which is where
-# the whole route's time goes. Measured on a 4c/8t box, one 109-z column:
-# 10.0 ms at the default 8 threads against 5.9 ms pinned; the gemm itself
-# is 0.06 ms either way. The same spin artifact, measured on the solver's
-# own gemms, is antennaknobs#1052.
+# The BLAS pool is held to the PHYSICAL core count for the length of a
+# column fill (momwire#898). The column route's only BLAS call is the small
+# (nz × K)·(K × 6) complex gemm per column; OpenBLAS threads it across the
+# logical count, and the pool then SPINS after the call on the hyperthread
+# siblings of the core running the next column's numpy / scipy work (the
+# exponential, the Bessel and Hankel factors), which is where the route's
+# time goes. Measured on a 4c/8t box, one 109-z column: BLAS limited to 1,
+# 2 and 4 threads all read ~6 ms; 8 reads ~11 ms; the gemm itself is
+# 0.06 ms either way. So the artifact is the siblings, not threading as
+# such, and physical cores is the fix — the same policy antennaknobs'
+# server applies process-wide (its thread-policy block; antennaknobs#1050,
+# #1051, #1052 are the measurements behind it).
 #
-# The controller is built ONCE (a library scan, ~0.7 ms) and its `limit`
-# context costs ~20 µs to enter and leave, so the pin wraps a whole fill
-# call, not a column. It sets the process-wide OpenBLAS count and restores
-# it on exit, so a concurrent BLAS-heavy solve in another thread of the
-# same process would see one thread for the duration of a fill; the served
-# solver runs solves one at a time, which is why that is acceptable here.
+# The limit never RAISES a count: a caller who already pinned lower (the
+# served app at physical, a bisect at OPENBLAS_NUM_THREADS=1) keeps theirs.
+# The controller is built once (a library scan, ~0.7 ms) and the context
+# costs ~20 µs to enter and leave, so it wraps a whole fill call, not a
+# column. It sets the process-wide OpenBLAS count and restores it on exit.
+
+
 @functools.lru_cache(maxsize=1)
 def _blas_controller():
     """The process's one `ThreadpoolController`, built on first use — after
@@ -164,9 +168,27 @@ def _blas_controller():
     return ThreadpoolController()
 
 
-def _blas_single_thread():
-    """Context manager pinning every loaded BLAS to one thread."""
-    return _blas_controller().limit(limits=1, user_api="blas")
+@functools.lru_cache(maxsize=1)
+def _physical_cpu_count():
+    """Physical cores, not HT siblings: psutil when present (portable), else
+    the logical count — never "logical / 2", which misfires on parts
+    without HT (antennaknobs' server has the history)."""
+    try:
+        import psutil  # noqa: PLC0415 — optional, imported on use
+    except ImportError:
+        return max(1, os.cpu_count() or 1)
+    return psutil.cpu_count(logical=False) or max(1, os.cpu_count() or 1)
+
+
+def _blas_physical_cores():
+    """Context manager holding every loaded BLAS to at most the physical
+    core count, and to no more than it already has."""
+    ctl = _blas_controller()
+    n = _physical_cpu_count()
+    for lib in ctl.lib_controllers:
+        if lib.user_api == "blas":
+            n = min(n, lib.num_threads)
+    return ctl.limit(limits=n, user_api="blas")
 
 
 # --- convention gate (e^{+jωt}: the lossy k_m must make e^{−jk_m R} decay) --
@@ -555,7 +577,7 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         columns = {}
         for key in unique:
             columns.setdefault((key[0], key[2]), []).append(key[1])
-        with _blas_single_thread():
+        with _blas_physical_cores():
             for (r, zpc), zs in columns.items():
                 vals = six_columns(eps_t, k2, r, zs, zpc, rtol=rtol, lam_mult=lam_mult)
                 for zc, row in zip(zs, vals):

@@ -80,7 +80,7 @@ def kernel_column(calls, eps_t, k2, p=None):
     """The replay runs under the same BLAS pin `designed_tables` applies
     around its column loop (momwire#898), so the kernel clock reads what
     production pays; before #898 there was no pin and this is a no-op."""
-    pin = getattr(ni, "_blas_single_thread", contextlib.nullcontext)
+    pin = getattr(ni, "_blas_physical_cores", contextlib.nullcontext)
     t0 = time.perf_counter()
     ncol = 0
     for fresh in calls:
