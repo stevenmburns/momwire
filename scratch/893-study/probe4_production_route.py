@@ -84,17 +84,16 @@ def kernel_column(calls, eps_t, k2, p=None):
     t0 = time.perf_counter()
     ncol = 0
     for fresh in calls:
-        # Production's grouping: by rho alone since momwire#899 (z' rides
-        # in the exponential like z); (rho, z') before it.
-        cols = {}
-        for key in fresh:
-            cols.setdefault(key[0], []).append(key)
+        # PRODUCTION's grouping, by calling it: a replay that re-implements
+        # the grouping can mirror one that exists at no commit (the #899
+        # study's E2 block did exactly that). (rho, z') before #899.
+        cols = ni.group_columns(fresh)
         ncol += len(cols)
         with pin():
-            for r, members in cols.items():
+            for members in cols.values():
                 zs = [m[1] for m in members]
                 zps = [m[2] for m in members]
-                ni.six_columns(eps_t, k2, r, zs, zps, p=p)
+                ni.six_columns(eps_t, k2, members[0][0], zs, zps, p=p)
     return time.perf_counter() - t0, ncol
 
 

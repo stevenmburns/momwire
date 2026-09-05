@@ -520,14 +520,20 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     # Underflow to exact 0.0 is the answer, not a warning: a member whose s
     # is far above the column's s_min carries nodes past its own decay, and
     # the high-σ far pair underflows e^{−1330} on every node of the tail.
+    # The exponent is built per DISTINCT z': g_m * z' is one (K,) product
+    # shared by every z that carries that z', never an (nz x K) product of
+    # its own — that product was the #899 study's +44 % (`group_columns`).
+    # A column of one z' is the #895 path, the same bits.
     out = np.empty((zs.size, 6), dtype=np.complex128)
     step = max(1, _COLUMN_Z_CHUNK // lam.size)
     with np.errstate(under="ignore"):
-        for i0 in range(0, zs.size, step):
-            zc = zs[i0 : i0 + step, None]
-            zpc = zps[i0 : i0 + step, None]
-            e = np.exp(g_m[None, :] * zpc - g_p[None, :] * zc)  # (nz, K)
-            out[i0 : i0 + step] = e @ F.T
+        for zp_one in np.unique(zps):
+            rows = np.flatnonzero(zps == zp_one)
+            base = g_m * zp_one  # (K,)
+            for i0 in range(0, rows.size, step):
+                sel = rows[i0 : i0 + step]
+                e = np.exp(base[None, :] - g_p[None, :] * zs[sel, None])  # (nz, K)
+                out[sel] = e @ F.T
     return out
 
 
@@ -559,14 +565,12 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     twin is gated against it at 1e-12 RELATIVE and the column route at the
     reference's own 1e-10, never bit.
 
-    On the column route the unique triples are grouped by exact ρ and each
-    group evaluated once, which is where the 11–15× comes from: a real
-    crossing set puts every point in a column of ≥ 32 mast heights. The
-    grouping was by (ρ, z′) until momwire#899; keying on ρ alone merges
-    the per-z′ columns of one radial (138 → 84 groups on BLE N = 4) and
-    halves the singletons, each of which paid a full rule for one point.
-    The dedup, the key order and the scatter below are the same on every
-    route — only the arithmetic that fills `memo` differs.
+    On the column route the unique triples are grouped by `group_columns`
+    (exact ρ) and each group evaluated once, which is where the 11–15× comes from: a real crossing
+    set puts every point in a column of ≥ 32 mast heights. The grouping was
+    by (ρ, z′) until momwire#899; see `group_columns` for why it is not ρ
+    alone. The dedup, the key order and the scatter below are the same on
+    every route — only the arithmetic that fills `memo` differs.
 
     The dedup is one `np.unique` over the asked triples (momwire#899): the
     asked set is ~3× the unique set on a crossing fill, and the two Python
@@ -588,11 +592,9 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         # First-appearance order is already fixed above, so the grouping is
         # free to reorder: it decides only which rule serves a triple, never
         # which key the memo holds or in what order it was seen.
-        columns = {}
-        for key in unique:
-            columns.setdefault(key[0], []).append(key)
         with _blas_physical_cores():
-            for r, members in columns.items():
+            for members in group_columns(unique).values():
+                r = members[0][0]
                 zs = [m[1] for m in members]
                 zps = [m[2] for m in members]
                 vals = six_columns(eps_t, k2, r, zs, zps, rtol=rtol, lam_mult=lam_mult)
@@ -634,6 +636,38 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     else:
         out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
     return dict(zip(KEYS, out))
+
+
+def group_columns(keys):
+    """Group unique (rho, z, z') triples into the columns `designed_tables`
+    evaluates: exact rho. Returns {rho: [triples]}, first-seen order inside
+    a group. The ONE grouping production uses; a replay (probe4) calls this
+    too, so it can never mirror a grouping that exists at no commit.
+
+    Why rho alone, measured on the real BLE asked sets (the #899 study,
+    clock-free: setups, and node-evaluations sum(n_members * K) with K from
+    `_column_rule` itself):
+
+        BLE N = 4, 7628 triples     columns   singletons   sum n*K
+          by (rho, z')                 138          68     7.02e6
+          by rho                        84          40     7.54e6
+          by (rho, s within x2)        412          48     6.59e6
+
+    A column's K is set by s_min (tail extents, kill cap), so merging widens
+    the rule for some members: +7.5 % node-evaluations here against 54 fewer
+    setups of ~1.5 ms each. Banding by s to avoid the widening is a loss —
+    a single (rho, z') column already spans ~16 factor-two bands of s, so
+    the band splits far more than it merges. The +26 % that grouping by rho
+    first measured (Skylake, E3 block) was NOT the widened rule: it was the
+    per-member z' making the exponent's argument a second full (nz x K)
+    complex product, which the same study's E2 block isolated at +44 % on
+    the unchanged grouping. `six_columns` now evaluates the exponent per
+    distinct z' inside a column, so that product is gone.
+    """
+    columns = {}
+    for key in keys:
+        columns.setdefault(key[0], []).append(key)
+    return columns
 
 
 def _unique_triples(rho_b, z_b, zp_b):
