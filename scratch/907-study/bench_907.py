@@ -90,8 +90,10 @@ def run(deck, kw, reps):
 
 
 def report(name, ts):
-    fifth = max(1, len(ts) // 5)
-    first, last = statistics.mean(ts[:fifth]), statistics.mean(ts[-fifth:])
+    # Thirds, not fifths: at 7 reps a "fifth" is a single sample and the
+    # drift column becomes noise rather than a thermal read.
+    third = max(2, len(ts) // 3)
+    first, last = statistics.mean(ts[:third]), statistics.mean(ts[-third:])
     drift = 100 * (last - first) / first
     return (statistics.median(ts), drift)
 
