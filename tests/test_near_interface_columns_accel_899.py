@@ -261,6 +261,32 @@ def test_g899c_7_force_numpy_turns_this_twin_off_too(monkeypatch):
     assert seen == [], "the point route reached the column twin"
 
 
+def test_g899c_7b_the_twin_serves_by_default_and_the_numpy_rule_does_not(monkeypatch):
+    """The positive half of the dispatch: with nothing forced, one call to
+    `designed_tables` on the column route is ONE call to the twin carrying
+    every column, and `six_columns` is never reached. Without this the
+    routing gate below could pass with the twin silently unreachable — both
+    sides would then be the numpy rule agreeing with itself."""
+    twin_calls, numpy_calls = [], []
+    real_twin = ni._nia.near_interface_six_columns
+
+    def spy_twin(k_p, k_m, rho, offsets, *a, **kw):
+        twin_calls.append((len(rho), int(offsets[-1])))
+        return real_twin(k_p, k_m, rho, offsets, *a, **kw)
+
+    monkeypatch.setattr(ni._nia, "near_interface_six_columns", spy_twin)
+    monkeypatch.setattr(ni, "six_columns", lambda *a, **kw: numpy_calls.append(1))
+    monkeypatch.setattr(ni, "_FORCE_NUMPY", False)
+    monkeypatch.setattr(ni, "_ROUTE", "column")
+    rho = np.array([0.3, 2.0, 13.6])[None, :, None]
+    z = np.array([0.01, 0.5, 2.0, 9.0])[:, None, None]
+    zp = np.array([-0.1524, -0.9])[None, None, :]
+    out = ni.designed_tables(SOIL_A, K7, rho, z, zp)
+    assert twin_calls == [(3, 24)], twin_calls  # three columns, 24 members, one call
+    assert numpy_calls == []
+    assert all(out[k].shape == (4, 3, 2) for k in ni.KEYS)
+
+
 def test_g899c_8_designed_tables_refuses_before_it_hands_anything_over():
     """A bad member anywhere in the ask refuses in the WALK's words, with
     the offending member's own numbers, and before the twin is called at
