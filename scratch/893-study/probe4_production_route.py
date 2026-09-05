@@ -18,6 +18,7 @@ Two clocks, because they answer two different questions:
     is now the largest term the column route does not remove.
 """
 
+import contextlib
 import os
 import sys
 import time
@@ -76,6 +77,10 @@ def solve(build, route, p=None):
 
 
 def kernel_column(calls, eps_t, k2, p=None):
+    """The replay runs under the same BLAS pin `designed_tables` applies
+    around its column loop (momwire#898), so the kernel clock reads what
+    production pays; before #898 there was no pin and this is a no-op."""
+    pin = getattr(ni, "_blas_single_thread", contextlib.nullcontext)
     t0 = time.perf_counter()
     ncol = 0
     for fresh in calls:
@@ -83,8 +88,9 @@ def kernel_column(calls, eps_t, k2, p=None):
         for key in fresh:
             cols.setdefault((key[0], key[2]), []).append(key[1])
         ncol += len(cols)
-        for (r, zp), zs in cols.items():
-            ni.six_columns(eps_t, k2, r, zs, zp, p=p)
+        with pin():
+            for (r, zp), zs in cols.items():
+                ni.six_columns(eps_t, k2, r, zs, zp, p=p)
     return time.perf_counter() - t0, ncol
 
 
