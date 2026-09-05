@@ -10,6 +10,13 @@ fill, through the same `threadpoolctl` the pin uses, and again after. A
 timing gate would be a statement about the box; this one is a statement
 about the code. The timing itself is probe4 (`scratch/893-study`), run on
 a box, and its number is in the #898 record.
+
+The pin is the NUMPY column rule's, and since momwire#899 item 1 that rule
+is the route's fallback rather than its default — so the two gates below
+force it with `_FORCE_NUMPY`. The C++ column twin has no gemm to pin; it
+reaches the same conclusion by a different road, taking the physical core
+count as an argument (its own kernel saturates a core's FPU through
+libmvec, so the siblings contend there too).
 """
 
 import numpy as np
@@ -39,7 +46,13 @@ def test_g898_1_column_fill_holds_blas_to_physical_cores_and_releases(monkeypatc
     """Inside the column loop every BLAS reports at most the physical core
     count and no more than it had; after the call every BLAS is back to
     what it was. Read through a spy on `six_columns`, so the observation
-    is made exactly where the gemm runs."""
+    is made exactly where the gemm runs.
+
+    `_FORCE_NUMPY` because this pin belongs to the NUMPY column rule and to
+    nothing else: since momwire#899 item 1 the column route prefers the C++
+    twin, which has no gemm to pin (it gets the physical count through its
+    own `n_threads` argument instead). Forced off, `six_columns` serves and
+    the pin is where it always was."""
     before = _blas_threads()
     if not before:
         pytest.skip("no BLAS loaded that threadpoolctl can see")
@@ -52,6 +65,7 @@ def test_g898_1_column_fill_holds_blas_to_physical_cores_and_releases(monkeypatc
 
     monkeypatch.setattr(ni, "six_columns", spy)
     monkeypatch.setattr(ni, "_ROUTE", "column")
+    monkeypatch.setattr(ni, "_FORCE_NUMPY", True)
     rho = np.array([0.3, 0.5, 13.6])
     z = np.array([[0.2], [1.0], [4.0]])
     ni.designed_tables(SOIL_A, K7, rho, z, -0.2)
@@ -62,7 +76,8 @@ def test_g898_1_column_fill_holds_blas_to_physical_cores_and_releases(monkeypatc
 
 def test_g898_1b_the_limit_never_raises_a_lower_pin(monkeypatch):
     """A caller who already pinned BELOW physical (the served app, a bisect
-    at OPENBLAS_NUM_THREADS=1) keeps that inside the fill."""
+    at OPENBLAS_NUM_THREADS=1) keeps that inside the fill. `_FORCE_NUMPY`
+    for the reason above: the pin is the numpy column rule's."""
     if not _blas_threads():
         pytest.skip("no BLAS loaded that threadpoolctl can see")
     seen, real = [], ni.six_columns
@@ -73,6 +88,7 @@ def test_g898_1b_the_limit_never_raises_a_lower_pin(monkeypatch):
 
     monkeypatch.setattr(ni, "six_columns", spy)
     monkeypatch.setattr(ni, "_ROUTE", "column")
+    monkeypatch.setattr(ni, "_FORCE_NUMPY", True)
     with ThreadpoolController().limit(limits=1, user_api="blas"):
         ni.designed_tables(SOIL_A, K7, 0.3, 0.2, -0.2)
     assert seen and all(all(n == 1 for n in c) for c in seen), seen

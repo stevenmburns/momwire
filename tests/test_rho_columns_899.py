@@ -80,7 +80,13 @@ def test_g899_3_refusals_name_the_offending_member():
 def test_g899_4_designed_tables_makes_one_column_call_per_distinct_rho(monkeypatch):
     """A crossing-shaped mesh: 3 radial ρ × 4 mast z × 2 buried z′. Before
     #899 that was 6 columns; now 3, one per ρ, each carrying 8 members —
-    and the answer, the memo keys and their order are the point route's."""
+    and the answer, the memo keys and their order are the point route's.
+
+    `_FORCE_NUMPY` because the spy is on `six_columns`: item 1 of the same
+    issue put a C++ twin in front of it, which takes the whole grouping in
+    one call and so is not where "one call per distinct ρ" can be read. The
+    grouping under test is `group_columns`', which both machines share;
+    `test_g899c_9` is the same statement about the twin's dispatch."""
     calls, real = [], ni.six_columns
 
     def spy(eps_t, k2, rho, zs, zp, **kw):
@@ -88,6 +94,7 @@ def test_g899_4_designed_tables_makes_one_column_call_per_distinct_rho(monkeypat
         return real(eps_t, k2, rho, zs, zp, **kw)
 
     monkeypatch.setattr(ni, "six_columns", spy)
+    monkeypatch.setattr(ni, "_FORCE_NUMPY", True)
     rho = np.array([0.3, 2.0, 13.6])[None, :, None]
     z = np.array([0.01, 0.5, 2.0, 9.0])[:, None, None]
     zp = np.array([-0.1524, -0.9])[None, None, :]

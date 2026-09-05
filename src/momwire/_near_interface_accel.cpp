@@ -1,6 +1,13 @@
-// The C++ twin of `_near_interface.six_point` (momwire#680 U2).
+// The C++ twins of the designed near-interface walk: `six_point` per triple
+// (momwire#680 U2) and `six_columns` per rho column (momwire#899 item 1).
 //
-// This is a WALK port, not an integrand port (the house twin rule: shared
+// TWO ENTRIES, ONE INTEGRAND. `near_interface_six_batch` walks each triple
+// adaptively; `near_interface_six_columns` builds the FIXED per-column rule
+// once and spends one exponential per node per member. They are the two
+// routes `_near_interface.designed_tables` dispatches between, and each is
+// the twin of the numpy walk of the same name — never of the other.
+//
+// Both are WALK ports, not integrand ports (the house twin rule: shared
 // walk + limit, never pointwise): the head/mid machinery is the very same
 // templated engine `_accelerators.cpp` rides (`_contour_engine_inline.h`,
 // momwire#568 U1 — `adaptive_segment`, `head_contour`, the complex J0/J1
@@ -45,6 +52,16 @@
 // parallel region (a throw cannot cross an omp boundary); the one in-loop
 // failure mode (a ray that never goes quiet) sets a flag that is raised
 // afterwards in the Python walk's own words.
+//
+// The COLUMN entry (#899 item 1) carries the rule as well as the sum, and
+// that is the whole point of it: on the measured BLE column a third of the
+// numpy route's wall is `_column_rule` + `_column_factors` (complex-argument
+// Bessel/Hankel through scipy, the `_sub_seed` loop in Python, the Gauss
+// panels) and two thirds the (nz x K) exponential, so a twin that only did
+// exp + dot would leave the third behind. Its parallel unit is the COLUMN,
+// not the point: a column's rule is built by the thread that owns it, every
+// scratch buffer is thread-local, and there is no shared mutable state — so
+// it also supplies the thread scaling the numpy route has none of (#898).
 
 #define _USE_MATH_DEFINES
 
@@ -54,13 +71,51 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <stdexcept>
+#include <vector>
+
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #include "_contour_engine_inline.h"
 #include "_branch_cut_inline.h"
 #include "xsf/bessel.h"
 
 namespace py = pybind11;
+
+// The column entry's inner loop is exp + sincos per node per member, which
+// is exactly what glibc's libmvec vectorizes (`-lmvec` is already on this
+// extension's link line). Ubuntu's <cmath> carries no `omp declare simd`
+// markers for them, so GCC cannot substitute `_ZGVdN4v_exp` / `_ZGVdN4v_cos`
+// / `_ZGVdN4v_sin` inside an `omp simd` loop without these declarations; the
+// std:: overloads still resolve to the same extern-C symbols, so the calls
+// below pick the vectorized form up for free. Same block, same gating and
+// same reason as `_accel_common.h`'s (the sibling extension's) — MSVC has no
+// libmvec and would choke on redeclaring the CRT's exp/sin/cos, and macOS
+// has neither libmvec nor the AVX2 simdlen(4) form.
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+#pragma omp declare simd notinbranch simdlen(4)
+extern "C" double exp(double);
+
+#pragma omp declare simd notinbranch simdlen(4)
+extern "C" double cos(double);
+
+#pragma omp declare simd notinbranch simdlen(4)
+extern "C" double sin(double);
+#endif
+
+// `omp simd` neutralization for MSVC, whose /openmp:llvm rejects the
+// directive outright (the `_accel_common.h` note has the long form). The
+// pragmas below are a vectorization hint and nothing else: the arithmetic is
+// a plain reduction either way, so dropping them costs speed, never bits.
+#if defined(_MSC_VER)
+#define MW_NI_SIMD(clauses)
+#else
+#define MW_NI_PRAGMA_(x) _Pragma(#x)
+#define MW_NI_SIMD(clauses) MW_NI_PRAGMA_(omp simd clauses)
+#endif
 
 namespace mw680 {
 using mw_contour::cd;
@@ -242,6 +297,301 @@ static bool six_point_one(double k_p, const cd &k_m, double rho, double z,
 }
 }  // namespace mw680
 
+// ---------------------------------------------------------------------------
+// momwire#899 item 1: the twin of `_near_interface.six_columns` — the FIXED
+// per-rho column rule, built once per column and shared by every member.
+// ---------------------------------------------------------------------------
+namespace mw899 {
+using mw_branch::gamma_cut;
+using mw_contour::cd;
+using mw_contour::MW_PI;
+
+// The exponent's real part below which e^{Re} is EXACTLY 0.0 in IEEE double:
+// the smallest subnormal is e^{-744.44}, so anything under -746 rounds to
+// zero and the whole term e^{Re}(cos, sin) is (+-0, +-0). Skipping such a
+// node is therefore bit-identical to evaluating it, not a tolerance — it is
+// the walk's own quiet rule read from the other end. The column's extents
+// are converged for its SMALLEST s (`_column_rule`), so every member with a
+// larger s carries tail nodes past its own decay, and on a high-sigma far
+// pair that is the whole tail (`six_columns`' underflow comment).
+static const double MW_EXP_ZERO = -746.0;
+
+// Nodes are processed in blocks of this many so the underflow skip can be
+// taken a BLOCK at a time: the exponent grows along the contour, so the dead
+// nodes are a contiguous run, and a per-node branch would sit inside the
+// vectorized loop instead of in front of it.
+static const int MW_BLOCK = 64;
+
+// `_fixed_gauss`: the shipped Gauss rule on each [e_i, e_{i+1}], each split
+// into 2^p equal panels. numpy's linspace is start + i*(stop - start)/n with
+// the last node set to stop exactly; spelled that way here so the panels are
+// the same floats and not merely the same partition.
+static void fixed_gauss(const std::vector<double> &edges, int p,
+                        const double *gx, const double *gw, int ng,
+                        std::vector<double> &t, std::vector<double> &wt) {
+    t.clear();
+    wt.clear();
+    const int npan = 1 << p;
+    for (size_t i = 0; i + 1 < edges.size(); ++i) {
+        const double e0 = edges[i], e1 = edges[i + 1];
+        const double d = (e1 - e0) / static_cast<double>(npan);
+        for (int j = 0; j < npan; ++j) {
+            const double a = e0 + static_cast<double>(j) * d;
+            const double b =
+                (j + 1 == npan) ? e1 : e0 + static_cast<double>(j + 1) * d;
+            const double mid = 0.5 * (a + b), half = 0.5 * (b - a);
+            for (int q = 0; q < ng; ++q) {
+                t.push_back(mid + half * gx[q]);
+                wt.push_back(gw[q] * half);
+            }
+        }
+    }
+}
+
+// `_sub_seed`: no interval spans more than a doubling in lam or one
+// oscillation of J0(lam rho). BOTH halves are load-bearing and the doubling
+// one is easy to get subtly wrong — the step is min(e - lo, lat, lo), with
+// the `lo` term dropped only at lo = 0, and the inner loop terminates on
+// lo + step >= e rather than on a count. Neuter it and the 41 m radial reads
+// 110 % wrong (`test_g895_7` is the red/green proof).
+static void sub_seed(const std::vector<double> &edges, double rho,
+                     std::vector<double> &out) {
+    const double lat = (rho > 0.0) ? (2.0 * MW_PI / rho)
+                                   : std::numeric_limits<double>::infinity();
+    out.clear();
+    out.push_back(edges[0]);
+    for (size_t i = 1; i < edges.size(); ++i) {
+        const double e = edges[i];
+        for (;;) {
+            const double lo = out.back();
+            double step = std::min(e - lo, lat);
+            if (lo > 0.0) step = std::min(step, lo);
+            if (lo + step >= e) break;
+            out.push_back(lo + step);
+        }
+        out.push_back(e);
+    }
+}
+
+// Per-column scratch. Held by the thread that owns the column, so nothing
+// here is shared and nothing needs a lock; the vectors are members only so a
+// column's allocations are one block rather than a dozen.
+struct Scratch {
+    std::vector<double> edges, seeded, t, wt;
+    std::vector<cd> lam, w;
+    // The factors, SPLIT into real and imaginary parts: the member loop is a
+    // real-arithmetic reduction, and interleaved std::complex<double> would
+    // hand the vectorizer a stride-2 gather on every operand.
+    std::vector<double> gpr, gpi, gmr, gmi, fr, fi;
+};
+
+// The column's smallest s = z - z', which is the one thing the rule needs
+// from its members: the slowest-decaying member, and so the one the extents
+// must be converged for.
+template <class ZB, class PB>
+static double s_min_of(const ZB &zb, const PB &pb, py::ssize_t lo,
+                       py::ssize_t hi) {
+    double s_min = zb(lo) - pb(lo);
+    for (py::ssize_t i = lo + 1; i < hi; ++i)
+        s_min = std::min(s_min, zb(i) - pb(i));
+    return s_min;
+}
+
+// `_column_rule`: nodes and weights for one rho column, path derivative and
+// Bessel/Hankel factor folded in. Every path decision is `six_point`'s,
+// evaluated once for the column; the only thing the column chooses for
+// itself is `s_min`, the smallest s = z - z' in it, which is the
+// slowest-decaying member and so the one the extents must be converged for.
+static void column_rule(double rho, double k_p, const cd &k_m, double s_min,
+                        double lam_mult, int p, double detour, const double *gx,
+                        const double *gw, int ng, Scratch &s) {
+    const double kk = std::max(k_p, std::abs(k_m));
+    double a_head = 1.1 * kk;
+    double lam_top = lam_mult * kk;
+    // `six_point`'s far-pair kill cap, on the column's SMALLEST s: that is
+    // the largest 60/s, so the extents are the least capped any member would
+    // ask for and no member loses range it needed.
+    if (s_min > 0.0 && mw680::MW_FAR_PAIR_KILL / s_min < lam_top) {
+        const double lam_kill = mw680::MW_FAR_PAIR_KILL / s_min;
+        a_head = std::max(2.2 * k_p, std::min(a_head, lam_kill));
+        lam_top = std::max(1.5 * a_head, lam_kill);
+    }
+    s.lam.clear();
+    s.w.clear();
+
+    // --- head: `_head`'s detour, H rule and seeded edges (2 endpoints, 6
+    // sevenths, 5 seeds per mark), then sub-seeded. H depends on rho alone,
+    // so it is column-shared exactly. The Python side builds a SET and sorts
+    // it; sort + exact-equality unique is the same thing, and it matters —
+    // a duplicate edge would be a zero-width panel.
+    double H = std::min(0.35 * a_head, detour / std::max(rho, 1e-12));
+    H = std::max(H, 1e-6 * a_head);
+    s.edges.clear();
+    s.edges.push_back(0.0);
+    s.edges.push_back(a_head);
+    for (int i = 1; i < 7; ++i) s.edges.push_back(a_head * i / 7.0);
+    const double marks[2] = {k_p, std::fabs(k_m.real())};
+    const double ws[5] = {0.0, -0.15, 0.15, -0.4, 0.4};
+    for (int m = 0; m < 2; ++m) {
+        for (int j = 0; j < 5; ++j) {
+            const double v = marks[m] * (1.0 + ws[j]);
+            if (v > 0.0 && v < a_head) s.edges.push_back(v);
+        }
+    }
+    std::sort(s.edges.begin(), s.edges.end());
+    s.edges.erase(std::unique(s.edges.begin(), s.edges.end()), s.edges.end());
+    sub_seed(s.edges, rho, s.seeded);
+    fixed_gauss(s.seeded, p, gx, gw, ng, s.t, s.wt);
+    for (size_t i = 0; i < s.t.size(); ++i) {
+        const double t = s.t[i];
+        const cd l(t, H * std::sin(MW_PI * t / a_head));
+        const cd dl(1.0, H * (MW_PI / a_head) * std::cos(MW_PI * t / a_head));
+        cd b0, b1x;
+        mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
+        s.lam.push_back(l);
+        s.w.push_back(s.wt[i] * dl * b0);
+    }
+
+    // --- mid: the real axis [a_head, lam_top], same J0 factor. `six_point`
+    // hands the WHOLE range to one adaptive segment, so unlike the head it
+    // carries no seeding of its own and `sub_seed` supplies all of it.
+    s.edges.clear();
+    s.edges.push_back(a_head);
+    s.edges.push_back(lam_top);
+    sub_seed(s.edges, rho, s.seeded);
+    fixed_gauss(s.seeded, p, gx, gw, ng, s.t, s.wt);
+    for (size_t i = 0; i < s.t.size(); ++i) {
+        const cd l(s.t[i], 0.0);
+        cd b0, b1x;
+        mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
+        s.lam.push_back(l);
+        s.w.push_back(s.wt[i] * b0);
+    }
+
+    // --- tail: `_ray_integral`'s geometric panels — starting at the lam0
+    // scale and doubling toward the decay scale, which is what resolves the
+    // 1/lam log content when s + rho is tiny — run out to 60 decay lengths
+    // instead of to the adaptive quiet test. e^{-60} = 9e-27 of the total,
+    // 16 decades inside any rtol a caller asks for, which is why this rule
+    // takes no rtol at all.
+    const double scale = std::sqrt(2.0) / (s_min + rho);
+    double step = std::min(0.25 * scale, lam_top);
+    s.edges.clear();
+    s.edges.push_back(0.0);
+    while (s.edges.back() < mw680::MW_FAR_PAIR_KILL * scale) {
+        s.edges.push_back(s.edges.back() + step);
+        step *= 2.0;
+    }
+    fixed_gauss(s.edges, p, gx, gw, ng, s.t, s.wt);
+    const cd ray = std::exp(cd(0.0, 0.25 * MW_PI));
+    if (rho == 0.0) {
+        // `six_point`: the single up-ray, J0(0) = 1, no Hankel split.
+        for (size_t i = 0; i < s.t.size(); ++i) {
+            s.lam.push_back(lam_top + s.t[i] * ray);
+            s.w.push_back(s.wt[i] * ray);
+        }
+    } else {
+        for (size_t i = 0; i < s.t.size(); ++i) {
+            const cd up = lam_top + s.t[i] * ray;
+            s.lam.push_back(up);
+            s.w.push_back(s.wt[i] * ray * 0.5 *
+                          xsf::cyl_hankel_1(0.0, up * rho));
+        }
+        for (size_t i = 0; i < s.t.size(); ++i) {
+            const cd dn = lam_top + s.t[i] * std::conj(ray);
+            s.lam.push_back(dn);
+            s.w.push_back(s.wt[i] * std::conj(ray) * 0.5 *
+                          xsf::cyl_hankel_2(0.0, dn * rho));
+        }
+    }
+}
+
+// `_column_factors`: `_core` at every node with its z-dependent exponential
+// factored out and the weights folded in, such that
+// six(z, z') = F @ exp(gamma_m z' - gamma_p z). Index order is `_core`'s:
+// 0 U, 1 V, 2 W, 3 dzW, 4 dz dz' V, 5 dz'W.
+static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
+    const size_t K = s.lam.size();
+    const cd kp2 = k_p * k_p, km2 = k_m * k_m;
+    s.gpr.resize(K);
+    s.gpi.resize(K);
+    s.gmr.resize(K);
+    s.gmi.resize(K);
+    s.fr.resize(6 * K);
+    s.fi.resize(6 * K);
+    for (size_t k = 0; k < K; ++k) {
+        const cd l = s.lam[k], wk = s.w[k];
+        const cd g_p = gamma_cut(l, k_p);
+        const cd g_m = gamma_cut(l, k_m);
+        const cd u = 2.0 * l / (g_p + g_m);
+        const cd v = 2.0 * l / (km2 * g_p + kp2 * g_m);
+        const cd wv = (g_p - g_m) * v;
+        const cd f[6] = {u * wk,
+                         v * wk,
+                         wv * wk,
+                         (-g_p * wv) * wk,
+                         (-(g_p * g_m) * v) * wk,
+                         (g_m * wv) * wk};
+        for (int c = 0; c < 6; ++c) {
+            s.fr[c * K + k] = f[c].real();
+            s.fi[c * K + k] = f[c].imag();
+        }
+        s.gpr[k] = g_p.real();
+        s.gpi[k] = g_p.imag();
+        s.gmr[k] = g_m.real();
+        s.gmi[k] = g_m.imag();
+    }
+}
+
+// One member of a built column: the fused exponential and six dot products,
+// out[c] = sum_k F[c][k] e^{gamma_m z' - gamma_p z}.
+//
+// Fused deliberately. The numpy route materialises the (nz x K) exponential
+// and hands it to a gemm, which on the measured column is 1.7 MB written and
+// read back for 0.06 ms of arithmetic; here a member's exponentials live in
+// L1 for the length of its own reduction and nothing but the answer is
+// stored. The z' factor is NOT hoisted per distinct z' as the numpy route
+// hoists it: there it saves a whole (nz x K) complex product, here it would
+// save one multiply against a transcendental pair.
+static void column_member(const Scratch &s, size_t K, double z, double zp,
+                          cd *out) {
+    double accr[6] = {0, 0, 0, 0, 0, 0}, acci[6] = {0, 0, 0, 0, 0, 0};
+    double ar[MW_BLOCK], ai[MW_BLOCK], er[MW_BLOCK], ei[MW_BLOCK];
+    const double *gpr = s.gpr.data(), *gpi = s.gpi.data();
+    const double *gmr = s.gmr.data(), *gmi = s.gmi.data();
+    for (size_t k0 = 0; k0 < K; k0 += MW_BLOCK) {
+        const int nb =
+            static_cast<int>(std::min<size_t>(MW_BLOCK, K - k0));
+        double amax = -std::numeric_limits<double>::infinity();
+        for (int j = 0; j < nb; ++j) {
+            ar[j] = gmr[k0 + j] * zp - gpr[k0 + j] * z;
+            amax = std::max(amax, ar[j]);
+        }
+        if (amax < MW_EXP_ZERO) continue;  // exactly zero, see MW_EXP_ZERO
+        MW_NI_SIMD()
+        for (int j = 0; j < nb; ++j) {
+            ai[j] = gmi[k0 + j] * zp - gpi[k0 + j] * z;
+            const double ex = exp(ar[j]);
+            er[j] = ex * cos(ai[j]);
+            ei[j] = ex * sin(ai[j]);
+        }
+        for (int c = 0; c < 6; ++c) {
+            const double *fr = s.fr.data() + c * K + k0;
+            const double *fi = s.fi.data() + c * K + k0;
+            double sr = 0.0, si = 0.0;
+            MW_NI_SIMD(reduction(+ : sr, si))
+            for (int j = 0; j < nb; ++j) {
+                sr += er[j] * fr[j] - ei[j] * fi[j];
+                si += er[j] * fi[j] + ei[j] * fr[j];
+            }
+            accr[c] += sr;
+            acci[c] += si;
+        }
+    }
+    for (int c = 0; c < 6; ++c) out[c] = cd(accr[c], acci[c]);
+}
+}  // namespace mw899
+
 // `six_point` over parallel (rho, z, zp) arrays: the (n, 6) table, OpenMP
 // across points with the GIL released. The wavenumbers arrive DERIVED
 // (k_p real, k_m complex on the Im <= 0 branch) rather than as eps~, so the
@@ -308,15 +658,164 @@ static py::array_t<std::complex<double>> near_interface_six_batch(
     return vals;
 }
 
+// `six_columns` over CONCATENATED columns: column c owns the members
+// offsets[c] .. offsets[c+1] of (z, zp), all at rho[c]. One call for a whole
+// fill's grouping, because the parallel unit is the column and a per-column
+// call would hand OpenMP one column at a time — which is precisely the
+// scaling the numpy route does not have (#898). Returns the (n, 6) table in
+// the members' own order, so the caller scatters with the same offsets.
+static py::array_t<std::complex<double>> near_interface_six_columns(
+    double k_p, std::complex<double> k_m,
+    py::array_t<double, py::array::c_style | py::array::forcecast> rho,
+    py::array_t<py::ssize_t, py::array::c_style | py::array::forcecast> offsets,
+    py::array_t<double, py::array::c_style | py::array::forcecast> z,
+    py::array_t<double, py::array::c_style | py::array::forcecast> zp,
+    double lam_mult, int p, double detour, int n_threads,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw) {
+    if (rho.ndim() != 1 || offsets.ndim() != 1 || z.ndim() != 1 ||
+        zp.ndim() != 1)
+        throw std::invalid_argument("rho, offsets, z and zp must be 1-D");
+    auto rb = rho.unchecked<1>();
+    auto ob = offsets.unchecked<1>();
+    auto zb = z.unchecked<1>();
+    auto pb = zp.unchecked<1>();
+    const py::ssize_t nc = rb.shape(0);
+    const py::ssize_t n = zb.shape(0);
+    if (ob.shape(0) != nc + 1)
+        throw std::invalid_argument("offsets must have len(rho) + 1 entries");
+    if (pb.shape(0) != n)
+        throw std::invalid_argument("z and zp must have the same length");
+    if (ob(0) != 0 || ob(nc) != n)
+        throw std::invalid_argument("offsets must span 0 .. len(z)");
+    for (py::ssize_t c = 0; c < nc; ++c)
+        if (ob(c + 1) < ob(c))
+            throw std::invalid_argument("offsets must be non-decreasing");
+    if (gx.ndim() != 1 || gw.ndim() != 1 || gx.shape(0) != gw.shape(0) ||
+        gx.shape(0) < 1)
+        throw std::invalid_argument("bad Gauss rule");
+    // `p` is the resolution ladder, not a size knob: 2^p panels per seeded
+    // interval. Bounded so a typo asks for a refusal rather than a terabyte.
+    if (p < 0 || p > 20) throw std::invalid_argument("column p out of range");
+    const double *gxp = gx.data();
+    const double *gwp = gw.data();
+    const int ng = static_cast<int>(gx.shape(0));
+
+    // The Python walk's domain raises, BEFORE the parallel region (a throw
+    // cannot cross an omp boundary) and before any column is built — a bad
+    // member anywhere refuses the whole call, as `six_columns` does.
+    for (py::ssize_t c = 0; c < nc; ++c) {
+        for (py::ssize_t i = ob(c); i < ob(c + 1); ++i) {
+            if (!(zb(i) >= 0.0 && pb(i) <= 0.0))
+                throw std::invalid_argument("need z >= 0 >= zp");
+            if (rb(c) < 0.0 || (zb(i) - pb(i)) + rb(c) <= 0.0)
+                throw std::invalid_argument("need R > 0");
+        }
+    }
+
+    py::array_t<std::complex<double>> vals({n, py::ssize_t(6)});
+    auto vb = vals.mutable_unchecked<2>();
+    const mw_contour::cd kpc(k_p, 0.0);
+    const mw_contour::cd km(k_m);
+
+    // The thread count is the CALLER's policy, held to what OpenMP would
+    // have used anyway so a pin below it survives: `_near_interface` passes
+    // the PHYSICAL core count, for the reason #898 measured on the numpy
+    // route's gemm and this kernel repeats — libmvec exp/sincos saturates a
+    // core's FPU, so the hyperthread siblings contend rather than add. On
+    // this 4c/8t box the BLE N = 4 kernel reads 95 ms at 1 thread, 40 ms at
+    // 4 and 46 ms at 8.
+    int nt = 1;
+#ifdef _OPENMP
+    nt = omp_get_max_threads();
+    if (n_threads > 0) nt = std::min(nt, n_threads);
+    nt = std::max(nt, 1);
+#endif
+
+    // TWO parallel units, because a fill's columns differ by three orders in
+    // member count and one unit cannot serve both. Measured on BLE 45 ft
+    // N = 4 (the #899 census): 84 columns over four `designed_tables` calls,
+    // and the largest call is one column of 3,024 members beside forty of
+    // 108. Parallelising over columns alone left that one column — 40 % of
+    // the call's members — on a single thread, and the kernel measured 1.0x
+    // from one thread to four.
+    //
+    // The split is a FAIR SHARE, not a fixed size: a column carrying more
+    // members than one thread's share of the whole call cannot be a unit,
+    // because no schedule can divide it. Everything else stays a column,
+    // which matters in the other direction — those forty 108-member columns
+    // are better parallelised as columns than as forty serial rule builds.
+    // At one thread the share is the whole call and nothing splits, which is
+    // the right answer there too.
+    //
+    //   * by_column: `dynamic`, since K grows with rho (one panel per J0
+    //     oscillation) and a fill's columns arrive in geometry order;
+    //   * by_member: the rule built once in front of the loop, serial, then
+    //     every member of it on all threads.
+    const py::ssize_t share = (n + nt - 1) / nt;
+    std::vector<py::ssize_t> by_column, by_member;
+    for (py::ssize_t c = 0; c < nc; ++c) {
+        if (ob(c + 1) == ob(c)) continue;
+        (ob(c + 1) - ob(c) > share ? by_member : by_column).push_back(c);
+    }
+    const py::ssize_t n_col = static_cast<py::ssize_t>(by_column.size());
+    const py::ssize_t n_mem = static_cast<py::ssize_t>(by_member.size());
+
+    {
+        py::gil_scoped_release release;
+        #pragma omp parallel for schedule(dynamic) num_threads(nt)
+        for (py::ssize_t j = 0; j < n_col; ++j) {
+            const py::ssize_t c = by_column[j];
+            const py::ssize_t lo = ob(c), hi = ob(c + 1);
+            mw899::Scratch s;
+            mw899::column_rule(rb(c), k_p, km, mw899::s_min_of(zb, pb, lo, hi),
+                               lam_mult, p, detour, gxp, gwp, ng, s);
+            mw899::column_factors(kpc, km, s);
+            const size_t K = s.lam.size();
+            for (py::ssize_t i = lo; i < hi; ++i) {
+                mw_contour::cd out[6];
+                mw899::column_member(s, K, zb(i), pb(i), out);
+                for (int q = 0; q < 6; ++q) vb(i, q) = out[q];
+            }
+        }
+        for (py::ssize_t j = 0; j < n_mem; ++j) {
+            const py::ssize_t c = by_member[j];
+            const py::ssize_t lo = ob(c), hi = ob(c + 1);
+            mw899::Scratch s;
+            mw899::column_rule(rb(c), k_p, km, mw899::s_min_of(zb, pb, lo, hi),
+                               lam_mult, p, detour, gxp, gwp, ng, s);
+            mw899::column_factors(kpc, km, s);
+            const size_t K = s.lam.size();
+            // `dynamic`: members of one column do NOT cost the same. The
+            // rule is converged for the column's smallest s, so a member
+            // with a larger s underflows part of its own tail and skips it
+            // (see MW_EXP_ZERO) — the exact saving the numpy route cannot
+            // take, and it makes the cheap members the deep ones.
+            #pragma omp parallel for schedule(dynamic, 32) num_threads(nt)
+            for (py::ssize_t i = lo; i < hi; ++i) {
+                mw_contour::cd out[6];
+                mw899::column_member(s, K, zb(i), pb(i), out);
+                for (int q = 0; q < 6; ++q) vb(i, q) = out[q];
+            }
+        }
+    }
+    return vals;
+}
+
 PYBIND11_MODULE(_near_interface_accel, m) {
     m.doc() =
-        "momwire#680 U2: the C++ twin of _near_interface.six_point. "
-        "Optional; _near_interface falls back to the numpy walk without it.";
+        "momwire#680 U2 and #899 item 1: the C++ twins of "
+        "_near_interface.six_point and _near_interface.six_columns. "
+        "Optional; _near_interface falls back to the numpy walks without it.";
     // The capability flag `_near_interface._HAVE_NEAR_INTERFACE_ACCEL`
     // keys on. Its OWN name (not contour_engine_568 / below_fills_568): a
     // .so built at an earlier arc exports those but not this entry, and a
     // shared flag would claim a contract it cannot serve.
     m.attr("near_interface_680") = true;
+    // The column twin's flag, and for the same reason its OWN name: a .so
+    // built between #680 and #899 exports `near_interface_680` and not this
+    // one, so the two entries have to be asked about separately.
+    m.attr("near_interface_columns_899") = true;
     m.def("near_interface_six_batch", &near_interface_six_batch,
           py::arg("k_p"), py::arg("k_m"), py::arg("rho"), py::arg("z"),
           py::arg("zp"), py::arg("rtol"), py::arg("lam_mult"),
@@ -324,4 +823,16 @@ PYBIND11_MODULE(_near_interface_accel, m) {
           "six_point over parallel (rho, z, zp) arrays -> (n, 6) complex. "
           "k_p/k_m arrive derived (k_medium keeps the branch choice); the "
           "U1 memo layer in Python hands this UNIQUE triples only.");
+    m.def("near_interface_six_columns", &near_interface_six_columns,
+          py::arg("k_p"), py::arg("k_m"), py::arg("rho"), py::arg("offsets"),
+          py::arg("z"), py::arg("zp"), py::arg("lam_mult"), py::arg("p"),
+          py::arg("detour"), py::arg("n_threads"), py::arg("gx"),
+          py::arg("gw"),
+          "six_columns over CONCATENATED columns -> (n, 6) complex. Column c "
+          "owns members offsets[c]..offsets[c+1], all at rho[c]; the answer "
+          "keeps the members' order. Parallel over columns, and over the "
+          "MEMBERS of any column too big to be a unit, so a whole fill's "
+          "grouping belongs in ONE call. `n_threads` <= 0 takes OpenMP's own "
+          "count and is never raised above it. No rtol: the fixed rule's "
+          "resolution is `p` and its extents the e^{-60} dead range.");
 }

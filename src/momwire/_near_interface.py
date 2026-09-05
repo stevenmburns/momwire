@@ -31,9 +31,19 @@ path and differ only in where the panels come from (momwire#895):
 
   point   : `six_point` (or its C++ twin) — panels chosen adaptively per
             (ρ, z, z′) triple, O(ms)/point;
-  column  : `six_columns` — panels fixed ONCE per ρ column and shared by
-            every (z, z′) in it, converged for the column's smallest s,
-            O(µs)/point after the column's setup.
+  column  : `six_columns` (or its C++ twin) — panels fixed ONCE per ρ
+            column and shared by every (z, z′) in it, converged for the
+            column's smallest s, O(µs)/point after the column's setup.
+
+Each route has a C++ twin and each twin is the twin of ITS OWN numpy walk,
+gated against it and against nothing else (momwire#680 U2, #899 item 1);
+both live in `_near_interface_accel` behind their own capability flags, and
+`MOMWIRE_NEAR_INTERFACE_FORCE_NUMPY` turns both off together, because
+"the numpy walks are the machine" is one question and not two. The column
+twin carries the RULE as well as the sum — a third of the numpy column
+route's wall is `_column_rule` + `_column_factors` — and it parallelises
+across columns, which is where the column route's thread scaling comes
+from (the numpy one has none; momwire#898 is why).
 
 The column route is not an approximation and not a grid: in `_core` the
 only z and z′ dependence is e^{γ₋z′ − γ₊z} and the only ρ dependence is
@@ -98,11 +108,16 @@ _COLUMN_P = 0
 # independent, so chunking z is invisible to the answer.
 _COLUMN_Z_CHUNK = 1 << 22
 
-# The twin's capability flag — its OWN symbol (`near_interface_680`), never a
-# shared one: a .so built at an earlier arc exports the #568 entries but not
-# this one, and a shared flag would claim a contract it cannot serve.
+# The twins' capability flags — each its OWN symbol (`near_interface_680`,
+# `near_interface_columns_899`), never a shared one: a .so built at an earlier
+# arc exports the #568 entries but not the point twin's, and one built between
+# the two arcs exports the point twin's but not the column twin's. A shared
+# flag would claim a contract it cannot serve.
 _HAVE_NEAR_INTERFACE_ACCEL = _nia is not None and bool(
     getattr(_nia, "near_interface_680", False)
+)
+_HAVE_NEAR_INTERFACE_COLUMNS_ACCEL = _nia is not None and bool(
+    getattr(_nia, "near_interface_columns_899", False)
 )
 
 # The tests' handle on the dispatch — parity gates drive BOTH machines inside
@@ -124,6 +139,15 @@ _ROUTE = os.environ.get("MOMWIRE_NEAR_INTERFACE_ROUTE", "column")
 def _use_near_interface_accel():
     """The C++ walk twin serves when built and not forced off."""
     return _HAVE_NEAR_INTERFACE_ACCEL and not _FORCE_NUMPY
+
+
+def _use_column_accel():
+    """The C++ COLUMN twin serves the column route when built and not forced
+    off. Same switch as the point twin's, deliberately: `_FORCE_NUMPY` means
+    "the numpy walks are the machine", and a timing comparison or a bisect
+    that turned off one twin and not the other would answer neither
+    question."""
+    return _HAVE_NEAR_INTERFACE_COLUMNS_ACCEL and not _FORCE_NUMPY
 
 
 def _use_column_route():
@@ -475,6 +499,28 @@ def _column_factors(lam, w, k_p, k_m):
     return np.stack([u, v, wv, -g_p * wv, -g_p * g_m * v, g_m * wv]) * w, g_p, g_m
 
 
+def _refuse_bad_members(rho, zs, zps):
+    """`six_point`'s domain contract over a SET of members: z ≥ 0 ≥ z′ and
+    R > 0, refused in the walk's own words with the offending member's own
+    numbers. Returns s = z − z′ for the caller that needs it.
+
+    One copy, because two machines evaluate columns (`six_columns` and the
+    C++ twin) and a refusal is part of the contract, not an implementation
+    detail: a second spelling could drift into refusing a different set.
+    """
+    bad = (zs < 0.0) | (zps > 0.0)
+    if np.any(bad):
+        i = int(np.argmax(bad))
+        raise ValueError(f"need z >= 0 >= zp, got {(float(zs[i]), float(zps[i]))!r}")
+    s = zs - zps
+    rhos = np.broadcast_to(np.asarray(rho, dtype=float), s.shape)
+    bad = (rhos < 0.0) | (s + rhos <= 0.0)
+    if np.any(bad):
+        i = int(np.argmax(bad))
+        raise ValueError(f"need R > 0, got rho={float(rhos[i])!r}, s={float(s[i])!r}")
+    return s
+
+
 def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     """The six designed integrals for ONE ρ column: every (z, z′) pair at
     that ρ, z ≥ 0 ≥ z′, R = hypot(ρ, z − z′) > 0 for each. `zp` is either a
@@ -506,14 +552,7 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     rho = float(rho)
     zs = np.atleast_1d(np.asarray(zs, dtype=float))
     zps = np.broadcast_to(np.asarray(zp, dtype=float), zs.shape)
-    bad = (zs < 0.0) | (zps > 0.0)
-    if np.any(bad):
-        i = int(np.argmax(bad))
-        raise ValueError(f"need z >= 0 >= zp, got {(float(zs[i]), float(zps[i]))!r}")
-    s = zs - zps
-    if rho < 0.0 or np.any(s + rho <= 0.0):
-        s_bad = float(s[np.argmin(s)])
-        raise ValueError(f"need R > 0, got rho={rho!r}, s={s_bad!r}")
+    s = _refuse_bad_members(rho, zs, zps)
 
     lam, w = _column_rule(rho, k_p, k_m, float(np.min(s)), lam_mult=lam_mult, p=p)
     F, g_p, g_m = _column_factors(lam, w, k_p, k_m)
@@ -559,11 +598,19 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     Filled entries are (6,) complex arrays; unfilled sentinel is None.
 
     The memo layer stays HERE whichever route serves: the dedup happens
-    first, and only the unique triples reach `six_columns` (#895), the C++
-    batch (#680 U2, which is also U3's parallel unit), or the `six_point`
-    loop. The numpy `six_point` walk is the reference for all three; the
-    twin is gated against it at 1e-12 RELATIVE and the column route at the
-    reference's own 1e-10, never bit.
+    first, and only the unique triples reach one of the four machines. The
+    dispatch, in order:
+
+      column route (default), twin built  : `near_interface_six_columns`,
+                                            the whole grouping in ONE call;
+      column route, twin off              : the `six_columns` loop, under
+                                            the #898 BLAS pin;
+      point route, twin built             : `near_interface_six_batch`;
+      point route, twin off               : the `six_point` loop.
+
+    The numpy `six_point` walk is the reference for all of them; each twin
+    is gated against ITS OWN numpy walk at 1e-12 RELATIVE and the column
+    route against the reference's own 1e-10, never bit.
 
     On the column route the unique triples are grouped by `group_columns`
     (exact ρ) and each group evaluated once, which is where the 11–15× comes from: a real crossing
@@ -592,14 +639,63 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         # First-appearance order is already fixed above, so the grouping is
         # free to reorder: it decides only which rule serves a triple, never
         # which key the memo holds or in what order it was seen.
-        with _blas_physical_cores():
-            for members in group_columns(unique).values():
-                r = members[0][0]
-                zs = [m[1] for m in members]
-                zps = [m[2] for m in members]
-                vals = six_columns(eps_t, k2, r, zs, zps, rtol=rtol, lam_mult=lam_mult)
-                for key, row in zip(members, vals):
-                    memo[key] = row
+        groups = group_columns(unique)
+        if _use_column_accel():
+            # The twin's parallel unit is the COLUMN, so the whole grouping
+            # goes in ONE call: a call per column would hand OpenMP one
+            # column at a time and give back exactly the scaling the numpy
+            # route lacks. The concatenation keeps each group contiguous and
+            # `offsets` says where each starts, so the scatter below reads
+            # the members in the order they were handed over.
+            #
+            # No BLAS pin here — the twin has no gemm to pin. It gets the
+            # PHYSICAL core count instead, which is #898's finding applied
+            # to its own arithmetic: libmvec exp/sincos saturates a core's
+            # FPU, so the hyperthread siblings contend rather than add (this
+            # kernel measured 40 ms at 4 threads and 46 ms at 8 on a 4c/8t
+            # box). The count is passed IN rather than guessed there: the
+            # policy, and `psutil`, live on this side.
+            k_p = float(k2)
+            k_m = k_medium(complex(eps_t), k_p)
+            members = [m for group in groups.values() for m in group]
+            sizes = [len(group) for group in groups.values()]
+            offsets = np.zeros(len(sizes) + 1, dtype=np.intp)
+            offsets[1:] = np.cumsum(sizes)
+            tri = np.asarray(members, dtype=float).reshape(-1, 3)
+            rho_c = np.asarray(list(groups), dtype=float)
+            zs = np.ascontiguousarray(tri[:, 1])
+            zps = np.ascontiguousarray(tri[:, 2])
+            # Refused HERE, in the walk's words with the offending member's
+            # numbers: the twin refuses the same set (before it builds a
+            # single column), but from C++ it cannot spell the values.
+            _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
+            vals = _nia.near_interface_six_columns(
+                k_p,
+                k_m,
+                rho_c,
+                offsets,
+                zs,
+                zps,
+                float(lam_mult),
+                int(_COLUMN_P),
+                float(_DETOUR),
+                _physical_cpu_count(),
+                _GX,
+                _GW,
+            )
+            for key, row in zip(members, vals):
+                memo[key] = row
+        else:
+            with _blas_physical_cores():
+                for members in groups.values():
+                    r = members[0][0]
+                    zs = [m[1] for m in members]
+                    zps = [m[2] for m in members]
+                    vals = six_columns(
+                        eps_t, k2, r, zs, zps, rtol=rtol, lam_mult=lam_mult
+                    )
+                    for key, row in zip(members, vals):
+                        memo[key] = row
     elif _use_near_interface_accel() and unique:
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
