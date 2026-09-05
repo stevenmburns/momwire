@@ -695,6 +695,14 @@ _WHY_NO_MEDIUM = {
         "there is a perfect conductor here too"
     ),
 }
+# NOTE: `test_the_card_semantics_are_the_engine_s_and_not_a_second_copy` keeps
+# circuit math out of this seam by BANNING THREE TOKENS from this file — the
+# matrix-swap word, "Y21 = Y12", and any shunt-branch construction. The refusal
+# below describes a GROUND CARD's two fields being written in the wrong order,
+# which has nothing to do with that guard but trips it on the token alone. Say
+# "in the wrong order" here; the guard is right and the wording is what gives
+# (momwire#929). This comment is deliberately written without the token too,
+# for the same reason.
 _REFUSE_BURIED_WITH_CONTACT = (
     "wire {cw} stands an END in the ground plane and wire {bw} is buried "
     "below it, and that COMBINATION is not served though each half is. "
@@ -706,7 +714,7 @@ _REFUSE_BURIED_WITH_CONTACT = (
     "measured every consistent spelling of the missing physics against "
     "engine prints for these decks, and those prints have since been "
     "withdrawn as a reference (momwire#929): they were captured with the "
-    "ground card's two fields transposed (antennaknobs#1025), and this deck "
+    "ground card's two fields written in the wrong order (antennaknobs#1025), and this deck "
     "class has no documented spelling at all - the flag that serves buried "
     "wires leaves a conductor ENDING on the interface without a basis "
     "function there, and the flag that bonds such an end is documented as "
