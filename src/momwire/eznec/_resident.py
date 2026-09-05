@@ -130,7 +130,15 @@ def accelerator_status() -> str:
     """
     from .. import _accel, _near_interface
 
-    live = (_accel.LOADED, _near_interface._HAVE_NEAR_INTERFACE_ACCEL)
+    # The near-interface extension is live only when BOTH its entries are:
+    # a .so built between #680 and #899 exports the point twin and not the
+    # column twin, and would log the fast path as loaded while the column
+    # route (the default) was serving from the numpy rule.
+    live = (
+        _accel.LOADED,
+        _near_interface._HAVE_NEAR_INTERFACE_ACCEL
+        and _near_interface._HAVE_NEAR_INTERFACE_COLUMNS_ACCEL,
+    )
     missing = [name for name, ok in zip(_EXTENSIONS, live) if not ok]
     if missing:
         return f"accelerators: PURE-PYTHON FALLBACK ({', '.join(missing)} did not load)"
