@@ -1888,21 +1888,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     def _fill_ladder(self, k, seg_l, seg_r, ek):
         """The pair-order ladder for a WHOLE fill, resolved once (momwire#907).
 
-        `_ladder_for_block` keys its phase guard on the block's LONGEST
-        segment, so resolving per window lets two windows covering the SAME
-        pair disagree. That is not cosmetic: the chunked fills add every pair
-        in a sweep and then subtract same-edge blocks back as
-        `corr = (A_st + A_reg) - J_edge`, and the cancellation is exact only
-        if both arms ran the same quadrature. A sweep window spanning one
-        coarse segment drops the order-4 tier while the correction window for
-        a finely meshed edge keeps it — measured on a 61-segment buried deck
-        as ((2, 8),) against ((2, 8), (16, 4)), over 33,738 far pairs on the
-        free-space twin.
+        The problem this solves (momwire#921) is that two windows covering the
+        SAME pair must not disagree about its quadrature order. The chunked
+        fills add every pair in a sweep and subtract same-edge blocks back as
+        `corr = (A_st + A_reg) - J_edge`, and that cancellation is exact only
+        if both arms ran the same rule. When the phase guard was answered per
+        BLOCK, a sweep window spanning one coarse segment dropped the order-4
+        tier while the correction window for a finely meshed edge kept it —
+        measured on a 61-segment buried deck as ((2, 8),) against
+        ((2, 8), (16, 4)), over 33,738 far pairs on the free-space twin.
 
-        Resolving against the whole mesh removes the disagreement by
-        construction rather than by care: no sub-block is longer than the
-        mesh, so a tier the mesh keeps is a tier every window keeps, and the
-        kernel's own per-block call is then idempotent on the result.
+        #921 fixed that by resolving the guard once against the whole mesh
+        here. momwire#920 replaced the mechanism: the guard is now answered
+        PER PAIR inside the kernel, so a pair's order depends only on the
+        pair and two windows cannot disagree about it however they are cut.
+        This method therefore hands the ladder over intact — trimming it here
+        would re-impose the deck-wide cliff #920 removed — and #921's
+        invariant holds for a better reason than it did.
 
         Empty under the extended kernel, whose coaxial factor the ladder has
         not been measured against — the kernel refuses the combination
@@ -1911,14 +1913,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if ek is not None:
             return ()
-        return _ladder_for_block(
-            _normalize_ladder(self.pair_order_ladder, self.n_qp_pair),
-            k,
-            seg_l,
-            seg_r,
-            seg_l,
-            seg_r,
-        )
+        return _normalize_ladder(self.pair_order_ladder, self.n_qp_pair)
 
     @property
     def _accel_serves_n_qp_pair(self):

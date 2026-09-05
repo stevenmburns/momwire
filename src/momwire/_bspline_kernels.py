@@ -896,6 +896,35 @@ def _ladder_for_block(ladder, k, seg_l_i, seg_r_i, seg_l_j, seg_r_j):
     return tuple((r, n) for r, n in ladder if n >= _LADDER_PHASE_LIMITED_BELOW)
 
 
+def _phase_row_mask(k, seg_l, seg_r):
+    """Which segments are short enough for a phase-limited tier (#920).
+
+    The guard is `|k| * max(L_i, L_j) <= ceiling` for a PAIR, and that
+    factorizes: the pair passes exactly when BOTH its segments do. So the
+    per-pair test is the outer product of one per-row mask with itself, which
+    is what lets the block be split by index instead of masked per pair — no
+    kernel change, and the split is exact rather than conservative.
+    """
+    lengths = np.linalg.norm(np.asarray(seg_r) - np.asarray(seg_l), axis=1)
+    return lengths * abs(k) <= _LADDER_PHASE_KL_CEILING
+
+
+def _phase_split_needed(ladder, k, seg_l_i, seg_r_i, seg_l_j, seg_r_j):
+    """(rows_ok, cols_ok) when this block STRADDLES the guard, else None.
+
+    None means every pair answers the guard the same way, so the block-level
+    trim in `_ladder_for_block` is already exact and the fill runs as one
+    call — which is every uniformly meshed deck, i.e. almost all of them.
+    """
+    if not ladder or all(n >= _LADDER_PHASE_LIMITED_BELOW for _r, n in ladder):
+        return None
+    rows_ok = _phase_row_mask(k, seg_l_i, seg_r_i)
+    cols_ok = _phase_row_mask(k, seg_l_j, seg_r_j)
+    if (rows_ok.all() and cols_ok.all()) or not (rows_ok.any() and cols_ok.any()):
+        return None
+    return rows_ok, cols_ok
+
+
 def _pair_ratio(seg_l_i, seg_r_i, seg_l_j, seg_r_j):
     """The ladder's selector: centre distance over the longer segment,
     shape (N_i, N_j). The C++ kernel computes the same quantity in place."""
@@ -964,6 +993,49 @@ def _seg_seg_full_moments_offedge(
     rather than the whole-block case.
     """
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
+
+    # momwire#920: the phase guard is a PAIR property, but `_ladder_for_block`
+    # can only answer it for a whole block, so one coarse segment used to
+    # disable the ladder for every pair in the deck — measured at 1.51x on a
+    # 400-segment loop that gained exactly that from the ladder.
+    #
+    # The guard factorizes (see `_phase_row_mask`), so the fix is an index
+    # split rather than a per-pair mask inside the kernels: partition rows and
+    # columns into short/long and recurse. Each sub-block is then uniform in
+    # the guard, `_ladder_for_block` answers it exactly, and BOTH the C++ and
+    # numpy tier selectors run unchanged. A deck whose segments all answer the
+    # same way never reaches this and is bit-identical to before.
+    _split = _phase_split_needed(
+        _normalize_ladder(ladder, n_qp), k, seg_l_i, seg_r_i, seg_l_j, seg_r_j
+    )
+    if _split is not None:
+        rows_ok, cols_ok = _split
+        seg_l_i, seg_r_i = np.asarray(seg_l_i), np.asarray(seg_r_i)
+        seg_l_j, seg_r_j = np.asarray(seg_l_j), np.asarray(seg_r_j)
+        out = np.empty(
+            (max_d + 1, max_d + 1, seg_l_i.shape[0], seg_l_j.shape[0]),
+            dtype=np.complex128,
+        )
+        for ri in (np.flatnonzero(rows_ok), np.flatnonzero(~rows_ok)):
+            if ri.size == 0:
+                continue
+            for cj in (np.flatnonzero(cols_ok), np.flatnonzero(~cols_ok)):
+                if cj.size == 0:
+                    continue
+                out[:, :, ri[:, None], cj[None, :]] = _seg_seg_full_moments_offedge(
+                    seg_l_i[ri],
+                    seg_r_i[ri],
+                    seg_l_j[cj],
+                    seg_r_j[cj],
+                    a[ri] if np.ndim(a) else a,
+                    k,
+                    max_d,
+                    n_qp,
+                    ek=ek,
+                    ladder=ladder,
+                )
+        return out
+
     in_medium = _complex_k(k)
     t01, w01 = _gl01(n_qp)
     # momwire#906: the pair-order ladder, validated, then trimmed for THIS
