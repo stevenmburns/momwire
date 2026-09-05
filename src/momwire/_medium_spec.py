@@ -141,7 +141,7 @@ CONTACT_WITH_BURIED_REFUSAL = (
     "consistent spelling of the missing cross-medium physics against "
     "engine prints for exactly these decks - and those prints have since "
     "been withdrawn as a reference (momwire#929). They were captured with "
-    "the ground card's two fields transposed (antennaknobs#1025), and this "
+    "the ground card's two fields written in the wrong order (antennaknobs#1025), and this "
     "deck class turns out to have no documented spelling at all: the flag "
     "that serves buried wires leaves a conductor ENDING on the interface "
     "without a basis function there, and the flag that bonds such an end is "
