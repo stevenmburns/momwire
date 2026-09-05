@@ -106,7 +106,11 @@ def test_g910_1_the_complex_eps_assemblers_match_the_numpy_loop(monkeypatch, d):
 
 
 @pytest.mark.filterwarnings("ignore:crossing node")
-def test_g910_1b_the_buried_hub_reaches_the_complex_eps_assemblers(spy):
+def test_g910_1b_the_buried_hub_reaches_the_complex_eps_assemblers(spy, monkeypatch):
+    """On the DENSE route (forced here by taking the windowed twin away —
+    momwire#915 made the chunked route the default) the hub reaches both
+    non-windowed complex-eps twins."""
+    monkeypatch.setattr(_bs, "_HAVE_BSPLINE_WINDOWED_CPLX_EPS_ACCEL", False)
     z, _ = BSplineSolver(**hub_deck()).compute_impedance()
     assert spy.counts[CPLX] >= 1 and spy.counts[CPLX_W] >= 1, spy.counts
     assert np.isfinite(z)

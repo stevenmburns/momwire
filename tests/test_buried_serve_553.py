@@ -814,7 +814,19 @@ def test_gu5_7_the_extended_kernel_refuses_a_buried_deck():
         s.compute_impedance()
 
 
-def test_gu5_7_the_dense_budget_refuses_rather_than_chunking():
+def test_gu5_7_the_dense_budget_refuses_rather_than_chunking(monkeypatch):
+    """Since momwire#915 the buried fill HAS a chunked route — the windowed
+    assemblers' complex-eps twins — so a budget the dense tensor does not
+    fit is served through it, to the dense answer. The refusal this gate
+    was written for survives on a build WITHOUT the twins, and still names
+    the tensor and the budget."""
+    import momwire.bspline as _bs
+
+    if _bs._HAVE_BSPLINE_WINDOWED_CPLX_EPS_ACCEL:
+        z_chunked, _ = served_deck(8, swept_mem_mb=1).compute_impedance()
+        z_dense, _ = served_deck(8).compute_impedance()
+        assert abs(z_chunked - z_dense) <= 1e-12 * abs(z_dense)
+    monkeypatch.setattr(_bs, "_HAVE_BSPLINE_WINDOWED_CPLX_EPS_ACCEL", False)
     s = served_deck(8, swept_mem_mb=1)
     with pytest.raises(NotImplementedError) as exc:
         s.compute_impedance()
