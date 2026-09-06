@@ -941,12 +941,40 @@ class PrintControl:
 
     @property
     def suppressed(self) -> bool:
-        return self.flag == -1
+        """No ``CURRENTS AND LOCATION`` section at all — banner and rows.
+
+        Two forms, and the second is momwire#655. ``PT -1`` is the documented
+        toggle. A POSITIVE flag carrying a real ``first`` also empties the
+        section: measured, ``PT 1 1 2 4`` / ``PT 2 1 2 4`` / ``PT 3 1 2 4`` /
+        ``PT 1 0 2 4`` / ``PT 1 1 2 0`` / ``PT 1 1 3 3`` all print no section,
+        while the same flags WITHOUT a first print the full table.
+
+        Negative flags other than -1 do not: ``PT -2 1 2 4`` and
+        ``PT -3 1 2 4`` both print everything, so this is `flag > 0` and not
+        "any nonzero flag".
+        """
+        return self.flag == -1 or (self.flag > 0 and self.first != 0)
 
     @property
     def restricted(self) -> bool:
-        """True for the ``PT 0`` form with a real range on it."""
-        return self.flag == 0 and bool(self.first or self.last)
+        """True for the ``PT 0`` form with a real range on it.
+
+        ``first`` is the switch, not ``first or last`` (momwire#655): the
+        oracle prints the FULL table for ``PT 0 1 0 4``, so a ``last`` with no
+        ``first`` restricts nothing. See :meth:`row_range` for what a zero
+        ``last`` then means.
+        """
+        return self.flag == 0 and self.first != 0
+
+    @property
+    def row_range(self) -> tuple[int, int]:
+        """``(first, last)`` for a restricted card, with the oracle's default.
+
+        ``last = 0`` means "just ``first``", not "to the end": ``PT 0 1 2 0``
+        prints segment 2 alone (measured). Only meaningful when
+        :attr:`restricted`.
+        """
+        return self.first, self.last or self.first
 
 
 @dataclass(frozen=True)
@@ -3220,13 +3248,20 @@ def _printed_segments(pt: PrintControl | None, solver: DeckSolver) -> list[_Segm
 
     Only the ``PT 0 <tag> <first> <last>`` form restricts anything, and its
     range is addressed the way an ``EX`` card addresses a segment: relative to
-    the tag, with ``tag = 0`` meaning absolute segment numbers. ``PT 0 <tag> 0
-    0`` prints everything (measured), so an all-zero range is "no restriction".
+    the tag, with ``tag = 0`` meaning absolute segment numbers. A zero
+    ``first`` prints everything (measured), so it is ``first`` that switches
+    the restriction on -- and a zero ``last`` then means "just ``first``"
+    rather than "to the end" (``PT 0 1 2 0`` prints segment 2 alone).
+    :attr:`PrintControl.row_range` owns that default.
+
+    The suppressing forms never reach here: the render half reads
+    :attr:`PrintControl.suppressed` and emits no section at all.
     """
     if pt is None or not pt.restricted:
         return solver.segments
-    first = solver.global_segment(*solver.structure.locate(pt.tag, pt.first))
-    last = solver.global_segment(*solver.structure.locate(pt.tag, pt.last))
+    lo, hi = pt.row_range
+    first = solver.global_segment(*solver.structure.locate(pt.tag, lo))
+    last = solver.global_segment(*solver.structure.locate(pt.tag, hi))
     return [s for s in solver.segments if first <= s.number <= last]
 
 

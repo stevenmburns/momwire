@@ -1936,6 +1936,80 @@ def test_an_all_zero_pt_range_prints_everything():
         assert len(currents_tables(run_deck(deck)[0])[0]) == 18
 
 
+# momwire#655. `first` is the switch on a PT card, and what it switches
+# depends on the sign of the flag. Every row measured on the oracle
+# (`5b4az.ae6ty.1.23`, 5-segment dipole) by
+# `scratch/655-study/probe_pt_oracle.py`; None means the CURRENTS AND LOCATION
+# section is absent entirely, banner and all, not a table with no rows.
+#
+#   card            oracle rows        what it shows
+#   PT 0 1 2 4      2 3 4              the documented restricting form
+#   PT 0 1 3 3      3                  a one-segment range
+#   PT 0 1 2 0      2                  last = 0 means JUST first, not "to end"
+#   PT 0 1 0 4      1 2 3 4 5          first = 0 is no restriction, whatever
+#                                      last says -- so it is not `first or last`
+#   PT 1 1 0 0      1 2 3 4 5          a positive flag alone changes nothing
+#   PT 1 1 2 4      (absent)           positive flag + first empties the section
+#   PT 1 1 2 0      (absent)           ...on `first` alone, not on a full range
+#   PT 1 1 3 3      (absent)
+#   PT 1 0 2 4      (absent)           not about the tag either
+#   PT 2 1 2 0      (absent)
+#   PT -2 1 2 4     1 2 3 4 5          negative flags other than -1 do NOT
+#   PT -3 1 2 4     1 2 3 4 5          suppress, so it is `flag > 0`
+_PT_ORACLE_ROWS = {
+    "PT 0 1 2 4": ["2", "3", "4"],
+    "PT 0 1 3 3": ["3"],
+    "PT 0 1 2 0": ["2"],
+    "PT 0 1 0 4": ["1", "2", "3", "4", "5"],
+    "PT 1 1 0 0": ["1", "2", "3", "4", "5"],
+    "PT 1 1 2 4": None,
+    "PT 1 1 2 0": None,
+    "PT 1 1 3 3": None,
+    "PT 1 0 2 4": None,
+    "PT 2 1 2 0": None,
+    "PT -2 1 2 4": ["1", "2", "3", "4", "5"],
+    "PT -3 1 2 4": ["1", "2", "3", "4", "5"],
+}
+
+_PT_PROBE_DECK = (
+    "CM pt probe\nCE\n"
+    "GW 1 5 0. 0. -2.5 0. 0. 2.5 0.001\n"
+    "GE 0\n"
+    "EX 0 1 3 0 1. 0.\n"
+    "FR 0 1 0 0 30. 0.\n"
+    "{pt}\n"
+    "XQ 0\n"
+    "EN\n"
+)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("card", sorted(_PT_ORACLE_ROWS))
+def test_pt_matches_the_oracle_on_flag_and_range(card):
+    """momwire#655: a positive flag WITH a range empties the table.
+
+    `restricted` read `flag == 0 and (first or last)`, so a positive flag was
+    treated as "no restriction" and the full table printed where the oracle
+    prints no section at all. Re-measuring the whole card space to fix it
+    turned up two more divergences in the same property, both on the flag-0
+    form the issue thought was correct: `PT 0 1 2 0` printed NO rows where the
+    oracle prints segment 2, and `PT 0 1 0 4` restricted where the oracle
+    prints everything. One rule covers all three -- `first` is the switch, and
+    a zero `last` means just `first`.
+    """
+    text = run_deck(_PT_PROBE_DECK.format(pt=card))[0]
+    tables = currents_tables(text)
+    want = _PT_ORACLE_ROWS[card]
+    if want is None:
+        assert not tables, (
+            f"{card}: expected no CURRENTS AND LOCATION section, got "
+            f"{len(tables)} table(s) with {len(tables[0]) if tables else 0} rows"
+        )
+        return
+    assert len(tables) == 1, f"{card}: expected one table, got {len(tables)}"
+    assert [r[0] for r in tables[0]] == want, card
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("flag", [-2, 1, 2, 3])
 def test_the_other_pt_flags_print_the_ordinary_table(flag):
