@@ -1003,18 +1003,24 @@ def test_gu2_4_below_the_grazing_floor_refuses(small_below_grid):
     this contour does not evaluate). So the floor is a domain edge, named.
 
     momwire#838 moved that edge from 1° to 0.1° with a third uniform θ band,
-    which is why the probe angle here is 0.05° and not 0.2°: 0.2° is now
-    SERVED (it is BLE 1937's 135 ft radial tip, at 0.21°, which is the point
-    of the band). What did not change is that the edge exists — below 0.1°
-    `_MAX_TAIL_PANELS` binds before the contour converges (momwire#841).
+    and momwire#935 moved it again to 0.05° with a fourth. What did not
+    change is that the edge EXISTS — past it `_MAX_TAIL_PANELS` binds before
+    the contour converges (momwire#841).
+
+    The probe angle is therefore DERIVED from the floor, not written down.
+    It was a literal 0.05°, chosen when the floor was 0.1; #935 made 0.05 the
+    floor itself and the precondition below — which exists precisely to say
+    "this angle is outside the domain" — became false. Half the floor is
+    outside by construction, at whatever the floor is.
 
     An earlier version of this docstring said the drift is something "no
     uniform lattice resolves". That is true of a single GLOBAL Δθ and false
     of a banded one; see the table beside `_SOMM_BELOW_DTH_BAND_DEG`."""
     grid, _, _ = small_below_grid
-    assert np.degrees(np.radians(0.05)) < below._SOMM_BELOW_TH_MIN_DEG
+    probe_deg = 0.5 * below._SOMM_BELOW_TH_MIN_DEG
+    assert probe_deg < below._SOMM_BELOW_TH_MIN_DEG
     with pytest.raises(ValueError, match="grazing floor"):
-        grid.eval(np.array([0.5 * grid.r1_max]), np.array([np.radians(0.05)]))
+        grid.eval(np.array([0.5 * grid.r1_max]), np.array([np.radians(probe_deg)]))
 
 
 @pytest.mark.slow
