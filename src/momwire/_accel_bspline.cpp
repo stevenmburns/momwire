@@ -119,7 +119,7 @@ seg_seg_reg_moments_bspline_swept_impl(
     // n_d^2 moment accumulation reuses each (q, r) Greg value across all
     // polynomial orders — the streaming property that avoids the numpy
     // einsum's (n_k, N*n_qp, N*n_qp) phase intermediate.
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N; i++) {
         for (size_t j = 0; j < N; j++) {
             alignas(32) double R[64];
@@ -143,14 +143,14 @@ seg_seg_reg_moments_bspline_swept_impl(
                     R[q * n_qp + r] = Rr(iq, j * n_qp + r);
                 }
             }
-            PYSIM_OMP_SIMD()
+            MW_OMP_SIMD()
             for (size_t qr = 0; qr < n_pairs; qr++) {
                 inv_R_4pi[qr] = inv_4pi / R[qr];
             }
             if (EK) {
                 // `_ek_factor`'s r2/r4 and T1/T2, plus the reciprocal of the
                 // final 4πR divisor. All k-independent.
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     double r2 = R[qr] * R[qr];
                     double r4 = r2 * r2;
@@ -162,20 +162,20 @@ seg_seg_reg_moments_bspline_swept_impl(
 
             for (size_t kk = 0; kk < n_k; kk++) {
                 double k = ka(kk);
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     phases[qr] = -k * R[qr];
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     half_phases[qr] = std::sin(0.5 * phases[qr]);
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     sin_phases[qr] = std::sin(phases[qr]);
                 }
                 if (EK) {
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t qr = 0; qr < n_pairs; qr++) {
                         double kr = k * R[qr];
                         double kr2 = kr * kr;
@@ -210,7 +210,7 @@ seg_seg_reg_moments_bspline_swept_impl(
                         Gim[qr] = numi * scl[qr];
                     }
                 } else {
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t qr = 0; qr < n_pairs; qr++) {
                     // exp(-j k R) - 1 = -2 sin²(kR/2) + j sin(-kR)
                     double hp = half_phases[qr];
@@ -498,7 +498,7 @@ seg_seg_full_moments_bspline_kernel_impl(
     // exact; and at n_qp <= 8 there is exactly ONE chunk spanning the whole
     // range, so both the arithmetic and its order are unchanged and the
     // output is bit-identical to the untiled kernel.
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
             alignas(32) double R[BSPLINE_QR_TILE];
@@ -574,26 +574,26 @@ seg_seg_full_moments_bspline_kernel_impl(
                 }
 
                 // Stage 1: phases = -k_re * R, then sincos via libmvec.
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     phases[t] = -k * R[t];
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     cos_phases[t] = std::cos(phases[t]);
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     sin_phases[t] = std::sin(phases[t]);
                 }
                 if (COMPLEX_K) {
                     // exp(k_im * R) with k_im <= 0 — decaying, so no overflow,
                     // and underflow to +0 at large R is the physical answer.
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         decay[t] = std::exp(k_im * R[t]);
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         inv_R_4pi[t] = inv_4pi / R[t];
                         const double sc = decay[t] * inv_R_4pi[t];
@@ -604,7 +604,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                     // Textually unchanged from the pre-#778 kernel so the
                     // real-k path stays bit-identical — proven by rebuilding
                     // and array_equal, not by reading (the #762 protocol).
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         inv_R_4pi[t] = inv_4pi / R[t];
                         G_re[t] = cos_phases[t] * inv_R_4pi[t];
@@ -764,7 +764,7 @@ seg_seg_full_moments_bspline_swept_kernel(
     // kernel the very reuse it exists for. The first chunk assigns and later
     // chunks accumulate, so at n_qp <= 8 (one chunk) the write is the same
     // plain assignment it always was and the output is bit-identical.
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
             alignas(32) double R[BSPLINE_QR_TILE];
@@ -815,7 +815,7 @@ seg_seg_full_moments_bspline_swept_kernel(
 
                     if (++r == n_qp) { r = 0; ++q; }
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     inv_R_4pi[t] = inv_4pi / R[t];
                 }
@@ -823,19 +823,19 @@ seg_seg_full_moments_bspline_swept_kernel(
                 // Per-k: only the exp(-jkR) phase changes.
                 for (size_t kk = 0; kk < n_k; kk++) {
                     double k = ka(kk);
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         phases[t] = -k * R[t];
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         cos_phases[t] = std::cos(phases[t]);
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         sin_phases[t] = std::sin(phases[t]);
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         G_re[t] = cos_phases[t] * inv_R_4pi[t];
                         G_im[t] = sin_phases[t] * inv_R_4pi[t];
@@ -1002,7 +1002,7 @@ seg_seg_full_moments_bspline_kernel_ek(
     // SEGMENT pair, not of the quadrature sub-pair, so it is decided once
     // outside the chunk loop and every chunk sees the same branch. One chunk
     // at n_qp <= 8, so the output is bit-identical.
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
             alignas(32) double R[BSPLINE_QR_TILE];
@@ -1056,19 +1056,19 @@ seg_seg_full_moments_bspline_kernel_ek(
                     if (++r == n_qp) { r = 0; ++q; }
                 }
 
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     phases[t] = -k * R[t];
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     cos_phases[t] = std::cos(phases[t]);
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     sin_phases[t] = std::sin(phases[t]);
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     inv_R_4pi[t] = inv_4pi / R[t];
                     G_re[t] = cos_phases[t] * inv_R_4pi[t];
@@ -1082,7 +1082,7 @@ seg_seg_full_moments_bspline_kernel_ek(
                 if (eligible) {
                     // `_ek_factor`'s spelling, term by term: T1, T2, C1, C2,
                     // fac = T1*C2 - T2*C1 + 1, then G *= fac (complex).
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         double Rq = R[t];
                         double r2 = Rq * Rq;
@@ -1237,7 +1237,7 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     // T2 are still built once per chunk and reused across the sweep), with
     // kernel 3's EK factor stage inside the per-k body. First chunk assigns,
     // later chunks accumulate; one chunk at n_qp <= 8, so bit-identical.
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
             alignas(32) double R[BSPLINE_QR_TILE];
@@ -1289,14 +1289,14 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
 
                     if (++r == n_qp) { r = 0; ++q; }
                 }
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     inv_R_4pi[t] = inv_4pi / R[t];
                 }
                 if (eligible) {
                     // T1, T2: functions of R and a_ek alone, so they hoist out
                     // of the k loop exactly as the same-edge swept twin's do.
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         double r2 = R[t] * R[t];
                         double r4 = r2 * r2;
@@ -1307,25 +1307,25 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
 
                 for (size_t kk = 0; kk < n_k; kk++) {
                     double k = ka(kk);
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         phases[t] = -k * R[t];
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         cos_phases[t] = std::cos(phases[t]);
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         sin_phases[t] = std::sin(phases[t]);
                     }
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
                         G_re[t] = cos_phases[t] * inv_R_4pi[t];
                         G_im[t] = sin_phases[t] * inv_R_4pi[t];
                     }
                     if (eligible) {
-                        PYSIM_OMP_SIMD()
+                        MW_OMP_SIMD()
                         for (size_t t = 0; t < m; t++) {
                             double kr = k * R[t];
                             double kr2 = kr * kr;
@@ -1447,11 +1447,11 @@ assemble_Z_bspline_kernel(
     // divide below is finite) and c = 1/(j*omega*eps~) carries the medium.
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < n_basis; m++) {
         for (size_t n = 0; n < n_basis; n++) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             double zA_re = 0.0, zA_im = 0.0;
             double zPhi_re = 0.0, zPhi_im = 0.0;
 
@@ -1505,7 +1505,7 @@ assemble_Z_bspline_kernel(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -1586,11 +1586,11 @@ assemble_Z_bspline_windowed_kernel(
     size_t n_m = (size_t)m_idx.shape(0);
     size_t n_n = (size_t)n_idx.shape(0);
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t mi = 0; mi < n_m; mi++) {
         for (size_t ni = 0; ni < n_n; ni++) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             int64_t m = mi_view(mi);
             int64_t n = ni_view(ni);
             double zA_re = 0.0, zA_im = 0.0;
@@ -1652,7 +1652,7 @@ assemble_Z_bspline_windowed_kernel(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
 }
 
 
@@ -1769,11 +1769,11 @@ assemble_Z_bspline_weighted_windowed_kernel(
     size_t n_m = (size_t)m_idx.shape(0);
     size_t n_n = (size_t)n_idx.shape(0);
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t mi = 0; mi < n_m; mi++) {
         for (size_t ni = 0; ni < n_n; ni++) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             int64_t m = mi_view(mi);
             int64_t n = ni_view(ni);
             std::complex<double> zA(0.0, 0.0);
@@ -1831,7 +1831,7 @@ assemble_Z_bspline_weighted_windowed_kernel(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
 }
 
 
@@ -1937,7 +1937,7 @@ assemble_Z_bspline_swept_kernel(
     // Release the GIL for the heavy compute region below.
     py::gil_scoped_release release;
 
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < n_basis; m++) {
         for (size_t n = 0; n < n_basis; n++) {
             for (size_t kk = 0; kk < n_k; kk++) {
@@ -2070,11 +2070,11 @@ assemble_Z_bspline_weighted_kernel(
     // divide below is finite) and c = 1/(j*omega*eps~) carries the medium.
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < n_basis; m++) {
         for (size_t n = 0; n < n_basis; n++) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             double zA_re = 0.0, zA_im = 0.0;
             double zPhi_re = 0.0, zPhi_im = 0.0;
 
@@ -2129,7 +2129,7 @@ assemble_Z_bspline_weighted_kernel(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -2451,11 +2451,11 @@ bspline_assemble_offedge_block_kernel(
     const double omega_mu = omega * mu_;
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < nI; m++) {
         for (size_t n = 0; n < nJ; n++) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             double zA_re = 0.0, zA_im = 0.0, zPhi_re = 0.0, zPhi_im = 0.0;
 
             for (int a = 0; a < NM; a++) {
@@ -2508,7 +2508,7 @@ bspline_assemble_offedge_block_kernel(
 
                                 if (++r == n_qp) { r = 0; ++q; }
                             }
-                            PYSIM_OMP_SIMD()
+                            MW_OMP_SIMD()
                             for (size_t tt = 0; tt < mm; tt++) {
                                 double inv = inv_4pi / R[tt];
                                 double ph = -k * R[tt];
@@ -2604,7 +2604,7 @@ bspline_assemble_offedge_block_kernel(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return Z;
 }
 
@@ -2832,11 +2832,11 @@ bspline_assemble_offedge_block_kernel_ek(
     const double a2_ek = a_ek * a_ek;
     const double a4_ek = a2_ek * a2_ek;
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < nI; m++) {
         for (size_t n = 0; n < nJ; n++) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             double zA_re = 0.0, zA_im = 0.0, zPhi_re = 0.0, zPhi_im = 0.0;
 
             for (int a = 0; a < NM; a++) {
@@ -2896,7 +2896,7 @@ bspline_assemble_offedge_block_kernel_ek(
 
                                 if (++r == n_qp) { r = 0; ++q; }
                             }
-                            PYSIM_OMP_SIMD()
+                            MW_OMP_SIMD()
                             for (size_t tt = 0; tt < mm; tt++) {
                                 double inv = inv_4pi / R[tt];
                                 double ph = -k * R[tt];
@@ -2907,7 +2907,7 @@ bspline_assemble_offedge_block_kernel_ek(
                                 // `_ek_factor`'s spelling, term by term: T1, T2,
                                 // C1, C2, fac = T1*C2 - T2*C1 + 1, G *= fac —
                                 // unit 2's off-edge twin, transcribed again.
-                                PYSIM_OMP_SIMD()
+                                MW_OMP_SIMD()
                                 for (size_t tt = 0; tt < mm; tt++) {
                                     double Rq = R[tt];
                                     double r2 = Rq * Rq;
@@ -3018,7 +3018,7 @@ bspline_assemble_offedge_block_kernel_ek(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return Z;
 }
 

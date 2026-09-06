@@ -210,10 +210,10 @@ sinusoidal_field_tensor_impl(
     const size_t S = n_qp + 2;
     const size_t P = N * S;
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; m++) {
-        PYSIM_CANCEL_POLL();
+        MW_CANCEL_POLL();
         // Per-iteration scratch (per-thread under the parallel-for). Sizes are
         // tiny (P ~ N*(n_qp+2)); allocation cost is negligible next to the
         // sincos + assembly work it feeds.
@@ -279,9 +279,9 @@ sinusoidal_field_tensor_impl(
         // Split cos and sin into separate omp-simd loops (libmvec has no vector
         // sincos) so each body stays vectorizable to _ZGVdN4v_{cos,sin}
         // (AVX2, 4 doubles per call).
-        PYSIM_OMP_SIMD()
+        MW_OMP_SIMD()
         for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
-        PYSIM_OMP_SIMD()
+        MW_OMP_SIMD()
         for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
 
         // ---- Stage C: assembly --------------------------------------------
@@ -510,7 +510,7 @@ sinusoidal_field_tensor_impl(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return std::make_tuple(Phi_const, Phi_sin, Phi_cos);
 }
 
@@ -859,10 +859,10 @@ sinusoidal_field_tensor_ek_impl(
     const size_t S = n_qp + 2;
     const size_t P = N * S;
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; m++) {
-        PYSIM_CANCEL_POLL();
+        MW_CANCEL_POLL();
         std::vector<double> ph(P), cphb(P), sphb(P);
         std::vector<EkGeomRow> gmr(N);
         std::vector<double> r0q_inv_a(N * n_qp);
@@ -941,9 +941,9 @@ sinusoidal_field_tensor_ek_impl(
         }
 
         // ---- Stage B: vectorized sincos over every phase ------------------
-        PYSIM_OMP_SIMD()
+        MW_OMP_SIMD()
         for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
-        PYSIM_OMP_SIMD()
+        MW_OMP_SIMD()
         for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
 
         // ---- Stage C: assembly --------------------------------------------
@@ -1048,7 +1048,7 @@ sinusoidal_field_tensor_ek_impl(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return std::make_tuple(Phi_const, Phi_sin, Phi_cos);
 }
 
@@ -1382,10 +1382,10 @@ galerkin_far_fill_impl(
     const size_t S = n_qp + 3;
     const size_t P = N * S;
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; m++) {
-        PYSIM_CANCEL_POLL();
+        MW_CANCEL_POLL();
         size_t e0 = (size_t)st_(m), e1 = (size_t)st_(m + 1);
         if (e1 == e0) continue;  // segment carries no basis support
 
@@ -1494,9 +1494,9 @@ galerkin_far_fill_impl(
             }
 
             // ---- Stage B: vectorized sincos over every phase --------------
-            PYSIM_OMP_SIMD()
+            MW_OMP_SIMD()
             for (size_t i = 0; i < P; i++) cphb[i] = std::cos(ph[i]);
-            PYSIM_OMP_SIMD()
+            MW_OMP_SIMD()
             for (size_t i = 0; i < P; i++) sphb[i] = std::sin(ph[i]);
 
             // ---- Stage C: assembly + plain tangential projection ----------
@@ -1867,7 +1867,7 @@ galerkin_far_fill_impl(
                 double *rc  = reinterpret_cast<double *>(bc + (e - e0) * N);
                 double *rs  = reinterpret_cast<double *>(bs + (e - e0) * N);
                 double *rco = reinterpret_cast<double *>(bco + (e - e0) * N);
-                PYSIM_OMP_SIMD()
+                MW_OMP_SIMD()
                 for (size_t n = 0; n < N; n++) {
                     rc[2*n]     += wr * phi_c_re[n]  - wi * phi_c_im[n];
                     rc[2*n + 1] += wr * phi_c_im[n]  + wi * phi_c_re[n];
@@ -1894,12 +1894,12 @@ galerkin_far_fill_impl(
                     // Re and im are the same scaling, so the interleaved
                     // buffer is one flat axpy. At scale −1 this is exactly
                     // `np.subtract(dst, value, out=dst)`.
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t i = 0; i < 2 * nrows * N; i++) {
                         d[i] += fold_re * b[i];
                     }
                 } else {
-                    PYSIM_OMP_SIMD()
+                    MW_OMP_SIMD()
                     for (size_t i = 0; i < nrows * N; i++) {
                         double vr = b[2*i], vi = b[2*i + 1];
                         d[2*i]     += fold_re * vr - fold_im * vi;
@@ -1910,7 +1910,7 @@ galerkin_far_fill_impl(
         }
     }
 
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return std::make_tuple(out_const, out_sin, out_cos);
 }
 

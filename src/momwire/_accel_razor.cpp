@@ -236,7 +236,7 @@ razor_seg_moments_impl(
     const double inv4pi = 1.0 / (4.0 * M_PI);
     const size_t n_obs_tiles = (n_obs + RAZOR_OBS_TILE - 1) / RAZOR_OBS_TILE;
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
 #pragma omp parallel
     {
     // Per-segment-tile gathers, allocated ONCE PER THREAD and refilled per
@@ -255,7 +255,7 @@ razor_seg_moments_impl(
 
 #pragma omp for schedule(static)
     for (size_t tile = 0; tile < n_obs_tiles; tile++) {
-        PYSIM_CANCEL_POLL();
+        MW_CANCEL_POLL();
         const size_t p_lo = tile * RAZOR_OBS_TILE;
         const size_t p_hi = std::min(p_lo + RAZOR_OBS_TILE, n_obs);
 
@@ -451,7 +451,7 @@ razor_seg_moments_impl(
         }
     }
     }
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
 
     return {M0, M1};
 }
@@ -609,7 +609,7 @@ razor_assemble_t1(
 
     py::gil_scoped_release release;
 
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t r = 0; r < n_rows; r++) {
         for (size_t j = 0; j < n_basis; j++) {
             const size_t ja = static_cast<size_t>(sa(j));
@@ -867,7 +867,7 @@ razor_assemble_t1_weighted(
 
     py::gil_scoped_release release;
 
-    PYSIM_OMP_PARALLEL_FOR_COLLAPSE2
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t r = 0; r < n_rows; r++) {
         for (size_t j = 0; j < n_basis; j++) {
             const size_t ja = static_cast<size_t>(sa(j));
