@@ -33,6 +33,8 @@ from momwire._sommerfeld import _SOMM_TH_SPLIT_DEG, _SURF_KEYS  # noqa: E402
 from momwire._sommerfeld import SommerfeldGrid  # noqa: E402
 from test_below_fills_568 import force_numpy  # noqa: E402
 
+RI = below.region_index
+
 C0 = 299792458.0
 EPS0 = 8.8541878128e-12
 SOILS = {"A": (13.0, 0.005), "B": (20.0, 0.03), "C": (5.0, 0.001)}
@@ -49,10 +51,17 @@ BAND_BAR = 1.8e-5
 
 # Panel-cap headroom for every node the band fills. The floor sits where it
 # does because `_MAX_TAIL_PANELS` binds before convergence does (momwire#841),
-# and the margin is THIN: measured worst across SPEC soils A/B/C x 7/21 MHz x
-# R1/lambda_m in {0, 0.02, 0.05, 0.2, 1, 2} is 3868 of 4000 = 96.7%, at
-# (C, 21 MHz, R1 = 0.05 lambda_m). An early reading of 3542 (90%) was one deck
-# only -- soil A at 7 MHz -- and understated it.
+# and the margin is THIN. Measured worst across SPEC soils A/B/C x 7/21 MHz x
+# R1/lambda_m in {0, 0.02, 0.05, 0.2, 1, 2}, at (C, 21 MHz, R1 = 0.05
+# lambda_m) both times:
+#
+#   at the 0.1 deg floor / 4000 budget   3868 = 96.7 %   (before #935)
+#   at the 0.05 deg floor / 8000 budget  7610 = 95.1 %   (now)
+#
+# An early reading of 3542 (90%) was one deck only -- soil A at 7 MHz -- and
+# understated it. #935 moved BOTH the floor and the budget and the ratio
+# barely changed, which is the point: the cap was raised to buy the new band,
+# not to buy headroom.
 #
 # So this bound is 0.98, not a comfortable round number, because 0.98 is what
 # the measurement leaves room for. `nonconvergent == 0` below is the hard
@@ -82,7 +91,19 @@ def _grid(soil, f):
 
 
 def _band_theta_nodes(g):
-    reg = g._regions[0]
+    """Theta nodes of the MID band -- #838's [0.1, 1] deg -- in the inner zone.
+
+    This said `_regions[0]` until momwire#935 put a fourth band UNDER it and
+    renumbered every region. Region 0 is now the low band and this helper
+    would have gone on returning nodes, from the wrong lattice, in silence.
+    """
+    reg = g._regions[RI(below._ZONE_INNER, below._BAND_MID)]
+    return reg["th0"] + reg["dth"] * np.arange(reg["n_th"])
+
+
+def _band_lo_theta_nodes(g):
+    """Theta nodes of the LOW band -- #935's [0.05, 0.1] deg -- inner zone."""
+    reg = g._regions[RI(below._ZONE_INNER, below._BAND_LO)]
     return reg["th0"] + reg["dth"] * np.arange(reg["n_th"])
 
 
@@ -108,11 +129,11 @@ def test_the_band_divides_the_interval_exactly():
     band's FIRST node have to be the same float, because the old band's
     first node is what every old-domain query at theta = 1 deg reads.
     """
-    span = below._SOMM_BELOW_TH_BAND_HI_DEG - below._SOMM_BELOW_TH_MIN_DEG
+    span = below._SOMM_BELOW_TH_BAND_HI_DEG - below._SOMM_BELOW_TH_BAND_LO_HI_DEG
     cells = span / below._SOMM_BELOW_DTH_BAND_DEG
     assert abs(cells - round(cells)) < 1e-12, (
         f"_SOMM_BELOW_DTH_BAND_DEG = {below._SOMM_BELOW_DTH_BAND_DEG} does not "
-        f"divide the band [{below._SOMM_BELOW_TH_MIN_DEG}, "
+        f"divide the band [{below._SOMM_BELOW_TH_BAND_LO_HI_DEG}, "
         f"{below._SOMM_BELOW_TH_BAND_HI_DEG}] deg: {cells} cells. The last node "
         "then overshoots th_band_hi, the new band and the old grazing band "
         "share no node, and every old-domain cell at theta = th_band_hi moves. "
@@ -127,7 +148,10 @@ def test_the_band_divides_the_interval_exactly():
         f"{math.degrees(g.th_band_hi):.6g}"
     )
     # regions 1 and 4 are the old grazing band, per R1 zone.
-    for idx in (1, 4):
+    for idx in (
+        RI(below._ZONE_INNER, below._BAND_GRAZE),
+        RI(below._ZONE_NEAR, below._BAND_GRAZE),
+    ):
         assert g._regions[idx]["th0"] == g.th_band_hi
         assert g._regions[idx]["dth"] == math.radians(below._SOMM_BELOW_DTH_GRAZE_DEG)
 
@@ -143,22 +167,22 @@ def test_theta_at_the_band_edge_routes_to_the_old_band():
     be the same float.
     """
     g, eps_t, k2, om, lam_m = _grid("A", 7e6)
-    reg = g._regions[4]  # outer R1 zone, old grazing band
+    reg = g._regions[RI(below._ZONE_NEAR, below._BAND_GRAZE)]
     r_node = reg["r0"] + reg["dr"] * 6
     th = np.array([g.th_band_hi])
     # Routing on the FILL STATE, which is exact and portable -- see the long
     # note in `test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward`
     # for why float equality is the wrong instrument for this question.
-    # Region 3 is the NEAR zone's sub-1 deg band and fills lazily; region 4
-    # is its old grazing band.
+    # The NEAR zone's MID band fills lazily; its GRAZE band is the old one.
+    mid_near = RI(below._ZONE_NEAR, below._BAND_MID)
     fresh = below.SommerfeldGridBelow(eps_t, k2, g.r1_max, omega=om)
     fresh.eval(np.array([r_node]), th)
-    assert not fresh._regions[3]["filled"], (
+    assert not fresh._regions[mid_near]["filled"], (
         "theta = th_band_hi routed into the sub-1 deg band; it belongs to the "
         "OLD grazing band, which is what keeps the old domain unmoved there"
     )
     fresh.eval(np.array([r_node]), np.array([np.nextafter(g.th_band_hi, 0.0)]))
-    assert fresh._regions[3]["filled"], (
+    assert fresh._regions[mid_near]["filled"], (
         "one ulp below th_band_hi did not reach the sub-1 deg band, so the "
         "band edge is not a boundary at all"
     )
@@ -183,9 +207,10 @@ def test_theta_at_the_band_edge_routes_to_the_old_band():
     # someone widens the band so the arithmetic no longer lands exactly, the
     # `<` is what keeps the old domain's readings coming from the old band.
     band_nodes = _band_theta_nodes(g)
-    assert band_nodes[-1] == g._regions[4]["th0"], (
+    graze_near = g._regions[RI(below._ZONE_NEAR, below._BAND_GRAZE)]
+    assert band_nodes[-1] == graze_near["th0"], (
         f"the two bands' shared node is not the same float: "
-        f"{band_nodes[-1]!r} vs {g._regions[4]['th0']!r}"
+        f"{band_nodes[-1]!r} vs {graze_near['th0']!r}"
     )
     th_lo = np.array([np.nextafter(g.th_band_hi, 0.0)])
     got_lo = g.eval(np.array([r_node]), th_lo)
@@ -240,7 +265,10 @@ def _legacy_eval(g, r1, th):
     th = np.atleast_1d(np.asarray(th, dtype=float))
     out = np.empty((len(_SURF_KEYS), r1.size), dtype=np.complex128)
     for n in range(r1.size):
-        idx = (0 if r1[n] <= g.r_break else 3) + (1 if th[n] <= th_split else 2)
+        idx = RI(
+            below._ZONE_INNER if r1[n] <= g.r_break else below._ZONE_NEAR,
+            below._BAND_GRAZE if th[n] <= th_split else below._BAND_STEEP,
+        )
         reg = g._regions[idx]
         fr = (r1[n] - reg["r0"]) / reg["dr"]
         ft = (th[n] - reg["th0"]) / reg["dth"]
@@ -425,7 +453,7 @@ FAR_BAR = 1.5e-4
 
 def _far_band_bounds(g, band):
     """(lo, hi) in radians for one theta band, and its far-zone region."""
-    reg = g._regions[6 + band]
+    reg = g._regions[RI(below._ZONE_FAR, band)]
     lo = reg["th0"]
     return lo, lo + reg["dth"] * (reg["n_th"] - 1), reg
 
@@ -439,13 +467,16 @@ def test_the_far_zone_dtheta_divides_its_band_exactly():
     counts into decimals later.
     """
     g, *_ = _grid("A", 7e6)
-    for band, hi_deg in ((1, below._SOMM_TH_SPLIT_DEG), (2, 90.0)):
+    for band, hi_deg in (
+        (below._BAND_GRAZE, below._SOMM_TH_SPLIT_DEG),
+        (below._BAND_STEEP, 90.0),
+    ):
         lo, hi, reg = _far_band_bounds(g, band)
         assert abs(hi - math.radians(hi_deg)) < 1e-12, (
             f"far band {band} ends at {math.degrees(hi):.6f} deg, not {hi_deg}"
         )
         # and it meets the inner zone's band at the SAME theta nodes
-        inner = g._regions[3 + band]
+        inner = g._regions[RI(below._ZONE_NEAR, band)]
         assert reg["th0"] == inner["th0"], (band, reg["th0"], inner["th0"])
 
 
@@ -456,7 +487,8 @@ def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
     node, so the reading must be the direct surface bit for bit.
     """
     g, eps_t, k2, om, lam_m = _grid("A", 7e6)
-    near, far = g._regions[4], g._regions[7]
+    near = g._regions[RI(below._ZONE_NEAR, below._BAND_GRAZE)]
+    far = g._regions[RI(below._ZONE_FAR, below._BAND_GRAZE)]
     # the shared boundary is a node of both R1 axes
     assert any(
         abs(near["r0"] + near["dr"] * i - g.r_near) < 1e-9 for i in range(near["n_r"])
@@ -482,17 +514,18 @@ def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
     #
     # The lazy fill gives an exact, integer-valued one instead: a region is
     # materialized if and only if a query routes into it. theta =
-    # `th_band_hi` is band 1 (the old grazing band, by the strict `<`), so
-    # the far-zone region it would reach is 6 + 1 = 7.
+    # `th_band_hi` is the GRAZE band by the strict `<`, so the far-zone
+    # region it would reach is `RI(_ZONE_FAR, _BAND_GRAZE)`.
+    graze_far = RI(below._ZONE_FAR, below._BAND_GRAZE)
     th = np.array([g.th_band_hi])
     fresh = below.SommerfeldGridBelow(eps_t, k2, g.r1_max, omega=om)
     fresh.eval(np.array([fresh.r_near]), th)
-    assert not fresh._regions[7]["filled"], (
+    assert not fresh._regions[graze_far]["filled"], (
         "R1 = r_near routed OUTWARD into the far annulus; it belongs to the "
         "near zone, the way theta = th_band_hi belongs to the old grazing band"
     )
     fresh.eval(np.array([np.nextafter(fresh.r_near, np.inf)]), th)
-    assert fresh._regions[7]["filled"], (
+    assert fresh._regions[graze_far]["filled"], (
         "a query one ulp past r_near did not reach the far zone, so the seam "
         "is not a boundary at all"
     )
@@ -540,19 +573,23 @@ def test_the_far_zone_is_deferred_until_something_reaches_it():
     deferred per theta BAND rather than as a block.
     """
     g, eps_t, k2, om, lam_m = _grid("B", 7e6)
-    assert not any(g._regions[i]["filled"] for i in (6, 7, 8)), (
+    far_all = [RI(below._ZONE_FAR, b) for b in range(below._N_BANDS)]
+    assert not any(g._regions[i]["filled"] for i in far_all), (
         "the far annulus was filled at construction"
     )
     g.eval(np.array([1.0 * lam_m]), np.array([math.radians(45.0)]))
-    assert not any(g._regions[i]["filled"] for i in (6, 7, 8)), (
+    assert not any(g._regions[i]["filled"] for i in far_all), (
         "an inner-domain query filled the far annulus"
     )
     g.eval(np.array([3.0 * lam_m]), np.array([math.radians(45.0)]))
-    assert g._regions[8]["filled"], "the far steep band was not filled on demand"
-    assert not g._regions[6]["filled"], (
-        "a steep far query filled the far zone's sub-1 deg band, which is 68 % "
-        "of its panels -- the deferral is per theta band, not per zone"
+    assert g._regions[RI(below._ZONE_FAR, below._BAND_STEEP)]["filled"], (
+        "the far steep band was not filled on demand"
     )
+    for b in (below._BAND_LO, below._BAND_MID):
+        assert not g._regions[RI(below._ZONE_FAR, b)]["filled"], (
+            "a steep far query filled a far-zone grazing band, which is most "
+            "of its panels -- the deferral is per theta band, not per zone"
+        )
 
 
 @pytest.mark.slow
@@ -591,8 +628,23 @@ def test_the_far_zone_interpolates_to_the_bar():
 # The ladder below is the one the floor was chosen from, so these gates and
 # `_SOMM_BELOW_TH_MIN_DEG` cannot drift apart.
 
-_TAIL_CAP_SERVED = (0.12, 0.10, 0.09)
-_TAIL_CAP_REFUSED = (0.08, 0.05, 0.023)
+# RE-MEASURED at `_MAX_TAIL_PANELS = 8000` (momwire#935 raised it from 4000).
+# The old pins were (0.12, 0.10, 0.09) served / (0.08, 0.05, 0.023) refused;
+# every rung down to 0.05 is now served and 0.04 is the first that is not.
+# Measured on this gate's own deck -- soil A / 7 MHz / R1 = lambda_m -- by
+# `scratch/935-study/probe_cap_ladder_at_8000.py`:
+#
+#   0.120  2965    0.090  3925    0.060  5827    0.040  CAPPED
+#   0.100  3542    0.080  4402    0.050  6959    0.030  CAPPED
+#
+# 0.05 is BOTH the last served rung here and the floor, which was not true of
+# the old pair: 0.09 was served on this deck while the floor was 0.1, because
+# the floor answers to the worst SPEC soil. That is still how it is chosen --
+# `test_the_floor_itself_is_untouched_by_the_refusal` is the gate that holds
+# the floor to every soil, and it is the one to read if these two disagree
+# again.
+_TAIL_CAP_SERVED = (0.12, 0.10, 0.09, 0.08, 0.06, 0.05)
+_TAIL_CAP_REFUSED = (0.04, 0.03, 0.023)
 
 
 def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
@@ -609,13 +661,12 @@ def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
 
 
 def test_the_tail_cap_refuses_by_name_below_the_floor():
-    """The measured ladder, pinned: converged at 0.09-0.12 deg, capped below.
+    """The measured ladder, pinned: converged at 0.05-0.12 deg, capped below.
 
-    0.09 deg is the last rung that converges on soil A at R1 = lambda_m (it
-    is NOT the floor -- across all SPEC soils 0.09 caps, which is why
-    `_SOMM_BELOW_TH_MIN_DEG` is 0.1). Both halves matter: a change that made
-    the contour cheaper would move the served rungs down and this gate would
-    say so.
+    Both halves matter: a change that made the contour cheaper would move the
+    served rungs down and this gate would say so -- which is exactly what
+    momwire#935 did deliberately, by raising the budget rather than by making
+    the contour cheaper. The pins above were re-measured, not relaxed.
     """
     for th_deg in _TAIL_CAP_SERVED:
         got = _direct_at("A", 7e6, th_deg)
@@ -628,10 +679,10 @@ def test_the_tail_cap_refuses_by_name_below_the_floor():
 def test_the_cap_refusal_names_the_query_and_the_way_out():
     """A refusal that does not say which knob to move is a crash with prose."""
     with pytest.raises(ValueError) as exc:
-        _direct_at("A", 7e6, 0.05)
+        _direct_at("A", 7e6, 0.03)
     msg = str(exc.value)
     for want in (
-        "theta = 0.05",  # the angle asked for
+        "theta = 0.03",  # the angle asked for
         "R1 = ",  # and the separation
         "_MAX_TAIL_PANELS",  # the budget it hit, by name
         f"{below._MAX_TAIL_PANELS}",  # and its value
@@ -648,7 +699,7 @@ def test_the_health_counter_still_bumps_before_the_refusal():
     off a refused point, which only works if `note` runs first."""
     h = below.Health()
     with pytest.raises(ValueError):
-        _direct_at("A", 7e6, 0.05, health=h)
+        _direct_at("A", 7e6, 0.03, health=h)
     d = h.as_dict()
     assert d["nonconvergent"] == 1, d
     assert d["max_tail_panels"] == below._MAX_TAIL_PANELS, d
@@ -667,7 +718,7 @@ def test_both_dispatches_refuse_at_the_cap():
             ctx.__enter__()
         try:
             with pytest.raises(ValueError) as exc:
-                _direct_at("A", 7e6, 0.05)
+                _direct_at("A", 7e6, 0.03)
             msgs.append(str(exc.value))
         finally:
             if ctx:
