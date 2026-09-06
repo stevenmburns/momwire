@@ -302,18 +302,32 @@ def test_site3_the_below_below_floor_is_never_exempted():
     refuses. `crossing=True` does not reach that check — it is asked before
     the early return, over the same nodes, on every buried deck."""
     floor = _sommerfeld_below._SOMM_BELOW_TH_MIN_DEG
-    # A SHALLOW fan: radials 9 m out at 1 cm depth. theta_min ~ 0.06 deg,
-    # under the floor, while R1_max ~ 18 m stays inside the 2-wavelength cap
-    # (20.0 m at soil A) — the cap fires first on any deck made grazing by
-    # LENGTH, so the deck has to be made grazing by DEPTH to read the floor.
-    build = fan_rise_deck(depth=0.01)
+    # A SHALLOW fan: radials 9 m out, just deep enough to be UNDER the floor.
+    # R1_max ~ 18 m stays inside the 2-wavelength cap (20.0 m at soil A) — the
+    # cap fires first on any deck made grazing by LENGTH, so the deck has to be
+    # made grazing by DEPTH to read the floor.
+    #
+    # The depth is DERIVED from the floor rather than written down, because
+    # this deck rotted once already: it was a flat 1 cm, giving theta_min =
+    # 0.0639 deg, which sat under the 0.1 deg floor of the day and above the
+    # 0.05 deg floor momwire#935 moved to — so the precondition below started
+    # failing on a deck that was fine and a floor that was fine. theta_min is
+    # linear in depth (0.0639 deg at 1 cm on this span), so this targets 60 %
+    # of whatever the floor currently is and follows it down.
+    _depth = 0.01 * (0.6 * floor) / 0.0639
+    build = fan_rise_deck(depth=_depth)
     build["wires"] = [
-        np.array([(9.0 * dx, 9.0 * dy, -0.01), (0.0, 0.0, -0.01), (0.0, 0.0, 0.0)])
+        np.array([(9.0 * dx, 9.0 * dy, -_depth), (0.0, 0.0, -_depth), (0.0, 0.0, 0.0)])
         for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1))
     ] + [build["wires"][-1]]
     s = BSplineSolver(**build)
     r1, th_min, lam_m, _rho = _below_extents(s)
-    assert th_min < floor, (th_min, floor)
+    assert th_min < floor, (
+        f"the fixture deck is no longer under the floor: theta_min = {th_min} "
+        f"deg against a floor of {floor} deg. The deck's depth is derived from "
+        "the floor above, so this means the linear scaling assumed there has "
+        "broken, not that the floor moved."
+    )
     assert r1 / lam_m < _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M, (
         "the R1 cap must NOT be what fires here, or the gate proves the wrong limit"
     )
