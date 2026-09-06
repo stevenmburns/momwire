@@ -425,16 +425,16 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     py::array_t<std::complex<double>> out({n, py::ssize_t(6)});
     auto ob = out.mutable_unchecked<2>();
     const somm::cd et(eps_t);
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
 
     #pragma omp parallel for schedule(dynamic)
     for (py::ssize_t i = 0; i < n; ++i) {
-        PYSIM_CANCEL_POLL();
+        MW_CANCEL_POLL();
         somm::cd res[6];
         somm::six_integrals(et, k2, rb(i), hb(i), rtol, form, res);
         for (int j = 0; j < 6; ++j) ob(i, j) = res[j];
     }
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return out;
 }
 
@@ -505,10 +505,10 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
                                   thsrc[n], tzsrc[n]);
     }
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
     for (py::ssize_t m = 0; m < M; ++m) {
-        PYSIM_CANCEL_POLL();
+        MW_CANCEL_POLL();
         const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
         const double tox = tob(m, 0), toy = tob(m, 1), toz = tob(m, 2);
         for (py::ssize_t n = 0; n < S; ++n) {
@@ -517,7 +517,7 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
                 ux[n], uy[n], thsrc[n], tzsrc[n]);
         }
     }
-    PYSIM_THROW_IF_ABORTED();
+    MW_THROW_IF_ABORTED();
     return out;
 }
 
@@ -640,7 +640,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     std::vector<py::ssize_t> rows;
     rows.reserve((size_t)std::min<py::ssize_t>(nI, band * d1 + d1));
 
-    PYSIM_CANCEL_SETUP(cancel_flag);
+    MW_CANCEL_SETUP(cancel_flag);
     for (py::ssize_t i0 = 0; i0 < nsI; i0 += band) {
         const py::ssize_t i1 = std::min<py::ssize_t>(i0 + band, nsI);
         const py::ssize_t ib = i1 - i0;
@@ -649,7 +649,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         // Stage 1: fill the band's moment slab.
         #pragma omp parallel for schedule(dynamic)
         for (py::ssize_t i = i0; i < i1; ++i) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             const double tox = tgI(i, 0), toy = tgI(i, 1), toz = tgI(i, 2);
             std::vector<cd> fblk((size_t)q * q);
             for (py::ssize_t j = 0; j < nsJ; ++j) {
@@ -679,7 +679,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
                 }
             }
         }
-        PYSIM_THROW_IF_ABORTED();
+        MW_THROW_IF_ABORTED();
 
         // Which basis rows have at least one wing landing in this band? A
         // row is listed once however many of its wings are in-band, so the
@@ -701,7 +701,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         const py::ssize_t n_rows = (py::ssize_t)rows.size();
         #pragma omp parallel for schedule(static)
         for (py::ssize_t r = 0; r < n_rows; ++r) {
-            PYSIM_CANCEL_POLL();
+            MW_CANCEL_POLL();
             const py::ssize_t m = rows[(size_t)r];
             for (py::ssize_t n = 0; n < nJ; ++n) {
                 cd qmn = Qm(m, n);  // seeded, so the a-order is preserved
@@ -727,7 +727,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
                 Qm(m, n) = qmn;
             }
         }
-        PYSIM_THROW_IF_ABORTED();
+        MW_THROW_IF_ABORTED();
     }
     return Q;
 }

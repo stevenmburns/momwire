@@ -95,11 +95,11 @@ Also verify/drop `#include <complex.h>` (line 4) — on MSVC it defines a
 `complex` macro that collides with `std::complex`. The file uses `std::complex`
 throughout, so `<complex.h>` is likely unnecessary; remove it or guard it.
 
-The `#pragma omp simd` sites (19) are routed through a `PYSIM_OMP_SIMD(...)`
+The `#pragma omp simd` sites (19) are routed through a `MW_OMP_SIMD(...)`
 macro that expands to nothing under `_MSC_VER` (so `/arch:AVX2` autovec handles
 those loops) and to the real `omp simd` directive on GCC. The
 `#pragma omp parallel for collapse(2)` sites (7) go through a
-`PYSIM_OMP_PARALLEL_FOR_COLLAPSE2` macro (plain `parallel for` on MSVC, full
+`MW_OMP_PARALLEL_FOR_COLLAPSE2` macro (plain `parallel for` on MSVC, full
 `collapse(2)` on GCC). `/openmp:llvm` would accept `collapse` and `size_t`
 indices natively; the macros just keep Windows OpenMP usage minimal.
 
@@ -189,7 +189,7 @@ requirement). Submodule can stay for source/dev; the wheel is for consumers.
    no single mode compiles them correctly. Resolution: build with
    **`/openmp:llvm`** (no loop-counter changes needed — it takes `collapse` and
    `size_t` natively) and **neutralize the `omp simd` directives under
-   `_MSC_VER`** via a `PYSIM_OMP_SIMD()` macro, leaving `/arch:AVX2`
+   `_MSC_VER`** via a `MW_OMP_SIMD()` macro, leaving `/arch:AVX2`
    autovectorization to handle the inner loops as correct scalar-reduction code.
    `collapse(2)` is additionally macro-dropped on MSVC to keep Windows OpenMP
    usage minimal (optional under `:llvm`). The GCC build is untouched and still

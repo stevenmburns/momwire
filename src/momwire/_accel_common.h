@@ -68,7 +68,7 @@ extern "C" double sin(double);
 // momwire#762 made it a tile width instead. Growing the buffers was the wrong
 // fix and is measured as such in that issue: at n_qp^2 = 4096 `wuwu` alone is
 // 295 KB, an order of magnitude past L1, and the fixed sizes are what the full
-// unroll and PYSIM_OMP_SIMD vectorization depend on. Nothing carries state
+// unroll and MW_OMP_SIMD vectorization depend on. Nothing carries state
 // across quadrature pairs, so walking qr in chunks of this width is exact —
 // and at n_qp <= 8 it is ONE chunk, so the arithmetic and its order are
 // unchanged and the output is bit-identical to the untiled kernel.
@@ -99,17 +99,17 @@ constexpr size_t BSPLINE_MAX_N_QP = static_cast<size_t>(-1);
 constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 
 // Stringizing helpers so a token sequence can be turned into a _Pragma.
-#define PYSIM_STR_(x) #x
-#define PYSIM_PRAGMA_(x) _Pragma(PYSIM_STR_(x))
+#define MW_STR_(x) #x
+#define MW_PRAGMA_(x) _Pragma(MW_STR_(x))
 
 // The (i, j)-grid parallel loops below use `collapse(2)` for finer load
 // balancing. We keep the Windows OpenMP usage conservative and drop it to plain
 // outer-loop parallelism under MSVC — same results, only coarser scheduling
 // across the grid. GCC (and MSVC's /openmp:llvm) keeps collapse(2).
 #if defined(_MSC_VER)
-#  define PYSIM_OMP_PARALLEL_FOR_COLLAPSE2 _Pragma("omp parallel for schedule(static)")
+#  define MW_OMP_PARALLEL_FOR_COLLAPSE2 _Pragma("omp parallel for schedule(static)")
 #else
-#  define PYSIM_OMP_PARALLEL_FOR_COLLAPSE2 \
+#  define MW_OMP_PARALLEL_FOR_COLLAPSE2 \
        _Pragma("omp parallel for collapse(2) schedule(static)")
 #endif
 
@@ -122,9 +122,9 @@ constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 // Reduction-clause commas are protected by the inner parens, so they pass as a
 // single macro argument.
 #if defined(_MSC_VER)
-#  define PYSIM_OMP_SIMD(clauses)
+#  define MW_OMP_SIMD(clauses)
 #else
-#  define PYSIM_OMP_SIMD(clauses) PYSIM_PRAGMA_(omp simd clauses)
+#  define MW_OMP_SIMD(clauses) MW_PRAGMA_(omp simd clauses)
 #endif
 
 // --------------------------------------------------------------------------
@@ -146,19 +146,19 @@ struct AbortedError : std::exception {
     const char *what() const noexcept override { return "accelerator solve aborted"; }
 };
 
-#define PYSIM_CANCEL_SETUP(flag_addr)                                          \
+#define MW_CANCEL_SETUP(flag_addr)                                          \
     const volatile int32_t *pysim_cancel =                                     \
         reinterpret_cast<const volatile int32_t *>(flag_addr);                 \
     std::atomic<bool> pysim_aborted { false }
 
 // Drain-poll. Place at the very top of a parallel loop body; `continue` targets
 // the enclosing for-loop by design, so use only inside a braced loop body.
-#define PYSIM_CANCEL_POLL()                                                    \
+#define MW_CANCEL_POLL()                                                    \
     if (pysim_aborted.load(std::memory_order_relaxed)) continue;              \
     if (pysim_cancel && *pysim_cancel) {                                       \
         pysim_aborted.store(true, std::memory_order_relaxed);                  \
         continue;                                                              \
     }
 
-#define PYSIM_THROW_IF_ABORTED()                                               \
+#define MW_THROW_IF_ABORTED()                                               \
     if (pysim_aborted.load(std::memory_order_relaxed)) throw AbortedError {}
