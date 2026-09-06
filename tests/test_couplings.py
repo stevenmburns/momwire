@@ -240,9 +240,7 @@ def test_the_stepped_radius_junction_refusal_needs_the_step():
     and it would send a user to the wrong workaround. Uniform-radius junctions
     are the overwhelmingly common case and are untouched.
     """
-    c = _find_for(
-        SinusoidalGalerkinSolver, "kernel", "extended", "junction_ports", "True"
-    )
+    c = _find_for(SinusoidalGalerkinSolver, "kernel", "extended", "junctions", "True")
     assert c.condition, "the conditional entry lost its condition"
 
     with pytest.raises((NotImplementedError, ValueError)) as exc:
@@ -251,6 +249,46 @@ def test_the_stepped_radius_junction_refusal_needs_the_step():
 
     # ...and the same geometry with ONE radius is served.
     SinusoidalGalerkinSolver(**_junction_deck(1e-3))
+
+
+def test_the_stepped_radius_row_names_junctions_not_junction_ports():
+    """momwire#886: the row said `junction_ports`; the refusal keys on
+    `junctions`, and they are different concepts — a junction, versus a PORT
+    at one, which is its own constructor keyword.
+
+    The previous gate could not catch this. Its deck has a junction AND
+    stepped radii and no `junction_ports` at all, so it passes under either
+    label. The two decks below are the ones that tell the labels apart, and
+    each rules out one reading:
+
+      * stepped radii with NO `junction_ports` kwarg still REFUSES — so the
+        refusal cannot be keyed on `junction_ports`;
+      * a uniform-radius deck WITH a `junction_ports` kwarg is SERVED — so
+        `junction_ports` alone does not trigger it.
+
+    Both measured before the relabel, not derived from reading the source.
+    """
+    c = _find_for(SinusoidalGalerkinSolver, "kernel", "extended", "junctions", "True")
+    assert c.axis_b == "junctions", (
+        f"the row names {c.axis_b!r}; the refusal keys on `self.junctions` "
+        "and `junction_ports` is a different concept (momwire#886)"
+    )
+
+    # (1) no port anywhere, and it still refuses.
+    no_port = _junction_deck([1e-3, 2e-3])
+    assert "junction_ports" not in no_port, "the deck must carry no port kwarg"
+    with pytest.raises((NotImplementedError, ValueError)) as exc:
+        SinusoidalGalerkinSolver(**no_port)
+    assert c.reason in str(exc.value)
+
+    # (2) a port, uniform radius, and it is served.
+    SinusoidalGalerkinSolver(**_junction_deck(1e-3), junction_ports=[0])
+
+    # (3) and a port does not RESCUE a stepped deck either — the step is what
+    # the refusal is about, with or without a port on the junction.
+    with pytest.raises((NotImplementedError, ValueError)) as exc:
+        SinusoidalGalerkinSolver(**_junction_deck([1e-3, 2e-3]), junction_ports=[0])
+    assert c.reason in str(exc.value)
 
 
 # ---- momwire#888: the singular-enrichment rows and ground contact ---------
@@ -466,7 +504,7 @@ def test_every_reason_IS_the_module_constant_and_not_a_copy():
         ("solve_strategy", "wire_position"): _H.capabilities.refusals["buried"],
         ("kernel", "wire_position"): _BURIED_EXTENDED_KERNEL_REFUSAL,
         ("kernel", "near_correction"): _EK_NEAR_CORRECTION_REFUSAL,
-        ("kernel", "junction_ports"): _EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
+        ("kernel", "junctions"): _EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
         # momwire#888
         ("kernel", "singular_enrichment"): _ENRICHMENT_EXTENDED_KERNEL_REFUSAL,
         (

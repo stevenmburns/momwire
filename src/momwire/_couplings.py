@@ -173,10 +173,19 @@ COUPLINGS: tuple[Coupling, ...] = (
     # are untouched, which is the overwhelmingly common case. Stating this one
     # flat would tell a user the extended kernel refuses junctions, which is
     # false and would send them to the wrong workaround.
+    #
+    # `junctions`, not `junction_ports` (momwire#886). The refusal keys on
+    # `self.junctions` — any junction whose member wires have more than one
+    # distinct radius — while `junction_ports` is a separate constructor
+    # keyword naming a PORT at a junction, and a different concept. Measured
+    # on the two decks that tell the labels apart: stepped radii with NO
+    # `junction_ports` kwarg is refused, and a uniform-radius deck WITH one is
+    # served. The old label survived a gate because that gate's deck had both,
+    # so it passed under either reading.
     Coupling(
         axis_a="kernel",
         value_a="extended",
-        axis_b="junction_ports",
+        axis_b="junctions",
         value_b="True",
         reason=_EK_STEPPED_RADIUS_JUNCTION_REFUSAL,
         issue="momwire#398",
