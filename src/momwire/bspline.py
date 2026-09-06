@@ -1575,11 +1575,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     self.insulation_radius[w_idx]
                 ):
                     jacket_b = float(self.insulation_radius[w_idx])
-                h_floor = (
-                    jacket_b
-                    if jacket_b is not None
-                    else _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
-                )
+                # ONE owner since momwire#926 — the crossing advisory prices
+                # node grading against this same number, and two copies of it
+                # is how the two rules came to disagree in the first place.
+                h_floor = self._stand_off_floor(w_idx)
                 h_edge = pl_arr[:, 2] - gz
                 low = (h_edge > tol) & (h_edge < h_floor)
                 if np.any(low[:-1] & low[1:]):
@@ -1610,10 +1609,49 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             "below this bare bound"
                         )
                     )
+                    # momwire#926: say so when this vertex came from GRADING.
+                    # The refusal is about a conductor lying alongside the
+                    # interface, but on a sloping arm the vertex is usually
+                    # not something the user placed — it is what
+                    # `CoarseCrossingNode` asked them to add, and that
+                    # advisory used to name an unconditional ~6 mm which this
+                    # floor forbids. Without this sentence the two rules read
+                    # as unrelated subsystems disagreeing.
+                    #
+                    # Detected locally, from facts this loop already has: the
+                    # wire ends ON the plane at a JUNCTION (so it is a node
+                    # arm), it has interior vertices at all (a single-edge arm
+                    # cannot have been graded), and a refused vertex IS one of
+                    # them. No call into the crossing machinery, which would
+                    # re-enter this method.
+                    graded = ""
+                    n_v = pl_arr.shape[0]
+                    node_end = (z_at[0] and start_status[w_idx] != "free") or (
+                        z_at[-1] and end_status[w_idx] != "free"
+                    )
+                    low_idx = np.flatnonzero(low)
+                    interior = np.any((low_idx > 0) & (low_idx < n_v - 1))
+                    if node_end and n_v > 2 and interior:
+                        e0 = 0 if z_at[0] else n_v - 2
+                        edge = pl_arr[e0 + 1] - pl_arr[e0]
+                        seg_len = float(np.linalg.norm(edge))
+                        slope = abs(float(edge[2])) / seg_len if seg_len > 0 else 0.0
+                        l_min = _crossing_fill.node_panel_floor(h_floor, slope)
+                        if l_min is not None:
+                            graded = (
+                                f" This vertex came from node grading "
+                                f"(CoarseCrossingNode, momwire#674/#696): on "
+                                f"this arm's {slope * 100:.1f} % slope the "
+                                f"shortest panel the floor above allows is "
+                                f"L_min = {l_min * 1e3:.1f} mm, so grade from "
+                                f"there rather than from the ~6 mm that "
+                                f"advisory names on a level arm. The two rules "
+                                f"are connected: momwire#926."
+                            )
                     raise ValueError(
                         f"wire {w_idx} runs at h = {h_min * 1e3:.3f} mm above "
-                        f"the interface, h/a = {h_min / a_w:.2f}, {why}. See "
-                        f"{_surface_height.SURFACE_HEIGHT_CLASS.issue}"
+                        f"the interface, h/a = {h_min / a_w:.2f}, {why}.{graded}"
+                        f" See {_surface_height.SURFACE_HEIGHT_CLASS.issue}"
                     )
                 # Advisory candidates: served, but inside the sensitive band.
                 adv = (h_edge > tol) & (
@@ -1933,6 +1971,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """`(n_segs,)` bool: this segment is in the lower medium."""
         return _medium_spec.segment_media(self._wire_media(), geom["seg_offsets"])
 
+    def _stand_off_floor(self, w_idx):
+        """The height wire `w_idx` must clear above the interface.
+
+        `b` for a jacketed conductor — a jacket may REST on the soil but not
+        sink into it — and `floor_h_over_a * a` for a bare one. This is the
+        quantity `_wire_endpoint_status` refuses below; momwire#926 gave it a
+        name so the crossing advisory can price node grading against the SAME
+        number rather than a second copy of the rule.
+        """
+        a_w = float(self._conductor_radius_per_wire[w_idx])
+        if self.insulation_radius is not None and np.isfinite(
+            self.insulation_radius[w_idx]
+        ):
+            return float(self.insulation_radius[w_idx])
+        return _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
+
     def _crossing_node_members(self, crossing, media):
         """A `_crossing_fill.NodeArm` per member of every crossing junction.
 
@@ -1962,18 +2016,40 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     range(len(npe)) if end == "start" else range(len(npe) - 1, -1, -1)
                 )
                 h_resolved = h_adjacent = None
+                slope = 0.0
                 walked = 0.0
                 for e in order:
                     if walked > 0.0 and walked >= reach:
                         break
-                    length = float(np.linalg.norm(pl[e + 1] - pl[e]))
+                    edge = np.asarray(pl[e + 1], dtype=float) - np.asarray(
+                        pl[e], dtype=float
+                    )
+                    length = float(np.linalg.norm(edge))
                     h = length / int(npe[e])
                     if h_adjacent is None:
                         h_adjacent = h
+                        # momwire#926: the NODE-ADJACENT edge's rise per unit
+                        # arclength. This is what prices the stand-off floor
+                        # against node grading — the arm leaves the interface
+                        # at this slope, so a vertex at arclength l sits at
+                        # h = slope * l. Taken from the first edge rather than
+                        # end to end because grading only ever puts vertices
+                        # inside it.
+                        slope = abs(float(edge[2])) / length if length > 0 else 0.0
                     h_resolved = h if h_resolved is None else min(h_resolved, h)
                     walked += length
                 side = "above" if media[w] == _medium_spec.ABOVE else "below"
-                out.append(_crossing_fill.NodeArm(h_resolved, h_adjacent, w, end, side))
+                out.append(
+                    _crossing_fill.NodeArm(
+                        h_resolved,
+                        h_adjacent,
+                        w,
+                        end,
+                        side,
+                        slope,
+                        self._stand_off_floor(w) if side == "above" else None,
+                    )
+                )
         return out
 
     def _crossing_context(self, geom, supp_seg, polys):
