@@ -30,13 +30,22 @@ static inline void lagrange4(double u, double *w) {
 // (4, n_r, n_th) C-contiguous value tables plus their axis origins/spacings,
 // and the region-select breakpoints. Populated from the pybind arrays by both
 // callers (build_grid_view).
-// Sized 9 for the below/below family's momwire#838 layout (3 R1 zones x 3
-// theta bands). The +-=+ family still uses 4 or 6 of these; the extra slots
-// cost a few hundred bytes on a struct built once per batch.
+// Sized `MAX_REGIONS` for the below/below family's momwire#935 layout (3 R1
+// zones x 4 theta bands). The +-=+ family still uses 4 or 6 of these; the
+// extra slots cost a few hundred bytes on a struct built once per batch.
+//
+// The capacity is a NAMED constant and `build_grid_view` bounds-checks
+// against it, because the failure mode when it is too small is silent: the
+// fill loop runs to `reg_vals.size()` and simply writes past every array.
+// #935 took this from 9 to 12 and the count check below is what makes a
+// future band addition say so instead of corrupting the heap.
+static constexpr size_t MAX_REGIONS = 12;
+
 struct GridView {
-    const cd *vptr[9];
-    py::ssize_t nR[9], nTh[9];
-    double rr0[9], rdr[9], rth0[9], rdth[9];
+    const cd *vptr[MAX_REGIONS];
+    py::ssize_t nR[MAX_REGIONS], nTh[MAX_REGIONS];
+    double rr0[MAX_REGIONS], rdr[MAX_REGIONS], rth0[MAX_REGIONS],
+        rdth[MAX_REGIONS];
     double r1_max, r_break, th_split, r_near, tiny, half_pi;
 };
 
@@ -48,13 +57,19 @@ static GridView build_grid_view(
     const py::detail::unchecked_reference<double, 1> &dthb,
     const std::vector<py::array_t<cd, py::array::c_style | py::array::forcecast>>
         &reg_vals) {
-    // 4/6 since the momwire#443 inner-zone theta split, and 9 since
-    // momwire#838 gave the below/below family three theta bands across three
-    // R1 zones; any other count means a stale momwire/_sommerfeld*.py — fail
-    // loudly either way.
+    // 4/6 since the momwire#443 inner-zone theta split; 9 since momwire#838
+    // gave the below/below family three theta bands across three R1 zones;
+    // 12 since momwire#935 made that four bands. Any other count means a
+    // stale momwire/_sommerfeld*.py — fail loudly either way.
+    //
+    // This is the SHARED builder, so it accepts every family's count and the
+    // per-family kernel is what pins one. `proj_one_below` checks 12 exactly;
+    // #935 found this second gate only by tripping it, which is the check
+    // working — a below grid that grew a band reached here first.
     const size_t n_reg = reg_vals.size();
-    if (n_reg != 4 && n_reg != 6 && n_reg != 9)
-        throw std::runtime_error("expected 4, 6 or 9 region value tables");
+    if (n_reg != 4 && n_reg != 6 && n_reg != 9 && n_reg != 12)
+        throw std::runtime_error("expected 4, 6, 9 or 12 region value tables");
+    static_assert(MAX_REGIONS >= 12, "GridView too small for the #935 layout");
     GridView G;
     for (size_t g = 0; g < n_reg; ++g) {
         auto v = reg_vals[g].template unchecked<3>();
@@ -73,8 +88,11 @@ static GridView build_grid_view(
     G.th_split = th_split;
     // 4-region grids have r_near == r1_max, so clamped queries never route
     // far; guard anyway so a stale r_near can't index missing tables. The
-    // 9-region below layout carries a real far zone and needs the true value.
-    G.r_near = (n_reg == 6 || n_reg == 9) ? r_near : r1_max;
+    // 9- and 12-region below layouts carry a real far zone and need the true
+    // value. Omitting 12 here does NOT fail loudly — it collapses the far
+    // zone into the near one and every far query silently reads the wrong
+    // table, so this list must grow with every layout added above.
+    G.r_near = (n_reg == 6 || n_reg == 9 || n_reg == 12) ? r_near : r1_max;
     G.tiny = 1e-12 * r1_max;
     G.half_pi = 0.5 * M_PI;
     return G;

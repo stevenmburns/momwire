@@ -84,6 +84,11 @@ _FIXTURE_GROUP_FILES = (
     # this entry is what stops the warm being paid once per worker.
     "test_grazing_band_838.py",
     "test_below_fills_568.py",
+    # momwire#935 added a fourth theta band whose nodes cost about twice a
+    # mid-band node (7610 tail panels against 3868), and its module fixture
+    # warms BOTH grazing bands on two decks. Scattered, each worker pays that
+    # fill again -- the same shape as the entry above, with a steeper price.
+    "test_grazing_band_lo_935.py",
     # momwire#865: the surface-radial anchor's decks are Sommerfeld solves of
     # 5.7 s (N = 4) to 35 s (N = 16), and its assertions share them through a
     # module-level cache. Scattered, each worker re-solved: measured 282 s
