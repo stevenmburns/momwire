@@ -41,6 +41,7 @@ from ._wire_loading import insulation_inductance, wire_internal_impedance
 # same objects rather than becoming a fourth spelling. The private names keep
 # working, so nothing inside this tree or in a consumer moves.
 from ._ground_spec import ground_touch_tol
+from .bspline import below_reach_refusal
 from ._medium_spec import grounded_crossing_exemption
 
 # `accelerated` is True iff the optional C++ accelerator loaded; consumers can
@@ -63,6 +64,7 @@ __all__ = [
     "wire_internal_impedance",
     "insulation_inductance",
     "wire_to_element",
+    "below_reach_refusal",
     "ground_touch_tol",
     "grounded_crossing_exemption",
 ]

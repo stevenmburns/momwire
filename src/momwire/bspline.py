@@ -573,6 +573,70 @@ _BURIED_CROSS_GRAZING_REFUSAL = (
 )
 
 
+def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
+    """The below/below refusal these buried points would draw, or None.
+
+    A PRE-FLIGHT for callers that want to know before paying for a fill:
+    antennaknobs#1135 wants a knob combination to fail at construction rather
+    than 20 s into a solve, and the app's knob panel wants to grey it rather
+    than offer it. `_buried_serve_plan` raises these same two sentences from
+    inside the fill; this returns them instead, formatted from the same
+    templates and the same constants, so there is exactly one copy of both.
+
+    `points` is (n, 3) in metres; `ground_eps` is the `(eps_r, sigma)` pair a
+    solver takes, and `freq_hz` the solve frequency. Those two rather than a
+    derived `eps_tilde`/`k` on purpose: a caller that had to build the medium
+    itself would be carrying a third copy of the conversion, which is the
+    thing this function exists to avoid. Only rows at or below `ground_z` are
+    read — an above-ground wire has no below/below pair to bound.
+
+    ON WHAT THE CALLER SHOULD PASS. The fill measures its extents on the
+    QUADRATURE NODES, which are strictly interior to their segments; a caller
+    that has only a polyline can pass its VERTICES instead, and that is safe
+    in the one direction that matters. Vertices reach further and lie
+    shallower than any node, so the verdict is conservative: it can over-refuse
+    a deck the fill would serve, never the reverse. Measured on the 4-radial
+    connected screen -- vertices give r1_max 10.0045 m / theta_min 1.71836 deg
+    against the nodes' 9.9707 m / 1.72418 deg, i.e. 0.3 % tighter on the
+    binding axis and the same verdict.
+
+    Returns None when the geometry is served, or when there is nothing below.
+    """
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError(f"points must be (n, 3), got {pts.shape}")
+    gz = float(ground_z)
+    d_b = gz - pts[:, 2]
+    keep = d_b >= 0.0
+    if not np.any(keep):
+        return None
+    x, y, d_b = pts[keep, 0], pts[keep, 1], d_b[keep]
+    omega = 2.0 * math.pi * float(freq_hz)
+    k2 = omega / 299792458.0
+    eps_t = _ground_refl.eps_tilde(
+        (float(ground_eps[0]), float(ground_eps[1])), omega, 8.8541878128e-12
+    )
+    k_m = _sommerfeld_below.k_medium(eps_t, k2)
+    lam_m = 2.0 * np.pi / abs(k_m)
+    r1_max, th_min = _pair_extents_below(x, y, d_b)
+    cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
+    if r1_max > cap:
+        return _BURIED_PAST_CAP_REFUSAL.format(
+            r1=r1_max,
+            wl=r1_max / lam_m,
+            cap=cap,
+            capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
+            lam_m=lam_m,
+        )
+    if th_min < math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG):
+        return _BURIED_GRAZING_REFUSAL.format(
+            th=math.degrees(th_min),
+            floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
+            depth=2.0 * float(np.min(d_b)),
+        )
+    return None
+
+
 def _pair_extents_below(x, y, d_b, rows=256):
     """`(r1_max, th_min)` over every node pair for the below/below plan —
     the largest image distance hypot(rho, h_i + h_j) and the shallowest
