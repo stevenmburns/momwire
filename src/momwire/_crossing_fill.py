@@ -76,6 +76,14 @@ class NodeArm(NamedTuple):
     wire: int
     end: str
     side: str
+    # momwire#926: what the stand-off floor needs to price this arm's
+    # grading. `slope` is |dz/dl| along the node-adjacent edge (0 for a
+    # level arm, 1 for a plumb one); `h_floor` is the height that arm's
+    # own radius/jacket must clear, or None where the floor cannot apply
+    # (a below-side arm never rises through the interface). Defaulted so a
+    # caller that does not know them still builds an arm.
+    slope: float = 0.0
+    h_floor: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +305,42 @@ _WARN_TARGET = (
 )
 
 
+# The panel this advisory asks for at the node, in metres. It was a bare
+# "~6 mm" in the message text until momwire#926 needed to COMPARE it with
+# something.
+NODE_TARGET_PANEL = 0.006
+
+
+def node_panel_floor(h_floor_m, slope):
+    """Shortest node panel the stand-off floor permits on this slope, or None.
+
+    momwire#926: a conductor leaving a node ON the interface at slope `s`
+    (rise per unit arclength) sits at height h = s·l, so momwire#865's
+    stand-off floor h ≥ h_floor forbids any vertex closer to the node than
+
+        L_min = h_floor / s
+
+    Grading toward the node is precisely the act of putting vertices there,
+    so this advisory's instruction walks a sloping deck into that refusal —
+    the two rules did not know about each other, which is the whole of #926.
+    On the issue's own deck (5 % slope, a = 1 mm, bare) the floor is 2 mm and
+    L_min is 40 mm, against the ~6 mm asked for unconditionally before.
+
+    None when the floor cannot bind, and both cases are real rather than
+    defensive: a LEVEL arm (s = 0) never approaches the interface by moving
+    toward the node, so no panel length is forbidden — that is the flat
+    buried radial, and it must keep the old text; and `h_floor` is None for a
+    below-side arm, which never rises through the plane at all.
+
+    The floor grows without limit as the slope flattens, which is worth
+    knowing before reading the number: a radial rising 0.1 m over 10 m
+    cannot have a node panel under 200 mm.
+    """
+    if h_floor_m is None or not (slope > 0.0) or not (h_floor_m > 0.0):
+        return None
+    return h_floor_m / slope
+
+
 def warn_coarse_node(arms):
     """Warn when a crossing junction's node region is unresolved.
 
@@ -324,6 +368,42 @@ def warn_coarse_node(arms):
             f"but nothing within {NODE_REACH * 1000:.0f} mm of the node is "
             f"finer than the figure above)"
         )
+    # momwire#926: on a SLOPING arm the stand-off floor forbids the panel
+    # this advisory would otherwise ask for, so ask for the shortest one it
+    # permits and say why. Silent where the floor cannot bind, which keeps
+    # every level and below-side deck's text byte for byte what it was.
+    #
+    # Chosen across ALL arms, not read off `worst`. Grading a node means
+    # grading its arms together, so what binds is the TIGHTEST floor any of
+    # them imposes — and that is usually not the worst-meshed arm. On #926's
+    # own deck the worst arm is the plumb mast, whose slope of 1 puts L_min
+    # at 2 mm; the 40 mm that makes the deck refuse belongs to a 5 % radial
+    # the mesh bar does not single out. Reading the floor off `worst` printed
+    # the old text on the one deck the issue is about.
+    floor_arm, l_min = None, None
+    for a in arms:
+        cand = node_panel_floor(a.h_floor, a.slope)
+        if cand is not None and (l_min is None or cand > l_min):
+            floor_arm, l_min = a, cand
+    if l_min is not None and l_min > NODE_TARGET_PANEL:
+        panel = (
+            f"from L_min = {l_min * 1000:.1f} mm at the node (wire "
+            f"{floor_arm.wire} leaves the node on a "
+            f"{floor_arm.slope * 100:.1f} % slope, so the stand-off floor "
+            f"forbids anything shorter: a vertex closer than that to the node "
+            f"sits below h = {floor_arm.h_floor * 1000:.2f} mm, that wire's "
+            f"floor, and the fill is REFUSED by name; momwire#865/#926) "
+            f"growing"
+        )
+        cannot = (
+            f" Note this is coarser than the ~{NODE_TARGET_PANEL * 1000:.0f} "
+            f"mm this advisory asks for on a level arm, so on this slope the "
+            f"node cannot be graded to the bar at all: raising n_qp_pair is "
+            f"the lever that is left."
+        )
+    else:
+        panel = f"~{NODE_TARGET_PANEL * 1000:.0f} mm at the node growing"
+        cannot = ""
     warnings.warn(
         f"crossing node: wire {worst.wire}'s {worst.end} is the {worst.side} "
         f"member, and the finest mesh within {NODE_REACH * 1000:.0f} mm of "
@@ -333,10 +413,11 @@ def warn_coarse_node(arms):
         f"density sweep will report it as converged while it is not "
         f"(momwire#674, re-derived in momwire#760). Grade the node: "
         f"geometric panels toward "
-        f"the shared point, ~6 mm at the node growing to the design's own "
+        f"the shared point, {panel} to the design's own "
         f"segment length away from it, spelled as extra VERTICES in the "
         f"wire's polyline with per-edge counts in n_per_edge_per_wire so "
-        f"the grading cannot change junction topology. {_RAISE_THE_ORDER}. "
+        f"the grading cannot change junction topology.{cannot} "
+        f"{_RAISE_THE_ORDER}. "
         f"Advisory: nothing is remeshed. See stevenmburns/momwire#696.",
         CoarseCrossingNode,
         **_WARN_TARGET,
