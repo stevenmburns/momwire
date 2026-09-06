@@ -25,6 +25,28 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 bad=0
 
+shape_saying() { # shape_saying <name> <expected substring> <command...>
+  # An expect-FAIL shape that also pins WHY it failed. Two different shapes
+  # here exit 3 (a retired basis, and a name that selects nothing), so an
+  # exit-code assertion alone cannot tell them apart, and a row that cannot
+  # tell them apart would go on passing if the retirement were reverted.
+  local name=$1 want=$2; shift 2
+  echo "################  $name  (expect fail, saying: $want)"
+  local out rc
+  out=$("$@" 2>&1); rc=$?
+  echo "$out"
+  echo
+  if [[ $rc -eq 0 ]]; then
+    echo "!!!!!!!!!!!!!!!!  $name: expected fail, driver exited 0"
+    bad=$((bad + 1))
+  elif [[ $out != *"$want"* ]]; then
+    echo "!!!!!!!!!!!!!!!!  $name: failed as expected but did not say" \
+         "'$want' -- the reason is not the one this row pins"
+    bad=$((bad + 1))
+  fi
+  echo
+}
+
 shape() { # shape <name> <expected: pass|fail> <command...>
   local name=$1 expect=$2; shift 2
   echo "################  $name  (expect $expect)"
@@ -55,8 +77,33 @@ shape "path with a space" pass \
   "$java" "$driver" "$work/dir with space/momwire-nec2c-bspline" "${decks[@]}"
 
 # 4. Selecting a different basis by the file name alone (momwire#528).
+#
+# This row used razor-2p until momwire#821 retired razor from the nec2 front
+# door (`ef5e9dc`, 2026-09-02; Steve's decision (a), 2026-09-03). Every parsed
+# nec2 deck carries feeds and `RazorSolver.capabilities.centre_feeds` is False,
+# so razor now refuses this dialect BY NAME and the row's expected pass became
+# a guaranteed fail. `sinusoidal` is a basis that does serve nec2 and is not
+# the one shape 3 already uses, so name-selection is still exercised.
+ln -s "$engine" "$work/momwire-nec2c-sinusoidal"
+shape "name-selected engine (sinusoidal)" pass \
+  "$java" "$driver" "$work/momwire-nec2c-sinusoidal" "${decks[@]}"
+
+# 4b. And the retirement itself, as a shape rather than as a footnote: a
+# razor-2p drop-in must refuse, and must refuse for the STATED reason.
+#
+# The sentence is checked, not just the exit code. Shape 5 below also exits 3,
+# so a code-only assertion would pass on either failure and could not tell
+# "razor is retired" from "that name selects nothing" -- the two readings this
+# row exists to separate.
+#
+# NOTE for `-f momwire=momwire==0.46.0` and earlier: this row pins CURRENT
+# behaviour and will fail against a pre-0.47.0 engine, where razor-2p still
+# served. That is the row reporting a real difference between releases rather
+# than a broken check -- v0.47.0 (2026-09-03) is the first release carrying
+# the retirement.
 ln -s "$engine" "$work/momwire-nec2c-razor-2p"
-shape "name-selected engine (razor-2p)" pass \
+shape_saying "name-selected engine (razor-2p, retired by momwire#821)" \
+  "does not serve the nec2 dialect" \
   "$java" "$driver" "$work/momwire-nec2c-razor-2p" "${decks[@]}"
 
 # 5. A name that selects nothing: momwire exits 3 at the probe and says why.
