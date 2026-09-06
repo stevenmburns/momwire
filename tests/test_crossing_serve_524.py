@@ -44,7 +44,9 @@ spelling 140.9839−43.6025j, a DIFFERENT structure; probe38) stay
 RECORDS, and so does the study's own graded print: every #674 number
 was taken at a FIXED n_qp_pair=4, which momwire#760 measures 6.8 Ω
 from the quadrature limit. `FAN_SOIL_A_N2` is re-banked at converged
-quadrature and is the only one of them that is a gate. The ε̃ = 1
+quadrature — twice: first at q=64, then at momwire#760's closing
+q=256 limit, 0.0129 Ω further — and is the only one of them that is a
+gate. The ε̃ = 1
 collapses run in the merge-to-main `crossgate` lane (multi-minute
 certification solves, the memgate reasoning) while the PR slow lane
 keeps `test_g524_4` as the per-PR crossing regression pin. The HUB spelling's collapse is a banked
@@ -391,12 +393,45 @@ _FAN_GRADES = {
 #
 # The old 143.9327 - 26.2135j base-mesh print stays a record, never a
 # gate, and now carries the same fixed-q=4 caveat.
-FAN_SOIL_A_N2 = 140.9358 - 43.1622j
+#
+# RE-BANKED at momwire#760's closing measurement. The value above was read
+# at q=64, which is 0.0045 ohm from the quadrature limit -- inside its own
+# 0.05 gate, but not the limit. Walking the flat ladder out to q=256:
+#
+#     q=  96   140.933786 - 43.174773j
+#     q= 128   140.933745 - 43.175002j   step 0.0002329
+#     q= 160   140.933742 - 43.175015j   step 0.0000139
+#     q= 192   140.933742 - 43.175016j   step 0.0000009
+#     q= 256   140.933742 - 43.175016j   step 0.0000001
+#
+# so the limit is 140.93374 - 43.17502j with a bar of ~1e-6, and the old
+# bank sat 0.0129 ohm from it. That is the whole of what this re-pin moves.
+#
+# Path-independent: the numpy fallback this gate runs and the accelerated
+# path (tiled past n_qp <= 8 by momwire#762) agree to 4e-11 at q=64 and
+# 1.1e-10 at q=128, so the limit is not an artefact of either.
+#
+# The #906/#907 PAIR-ORDER LADDER does not move it. Buried decks now default
+# to `BURIED_N_QP_PAIR = 32` with `BURIED_PAIR_ORDER_LADDER`, and the ladder
+# IS live on this deck -- laddered and flat answers differ, so it is plumbed
+# rather than silently dropped -- but they differ at 1e-11. Every pair that
+# matters here is inside the ladder's near tier, so the answer is set by the
+# base order alone. Worth recording because "the ladder changed nothing" and
+# "the ladder never ran" look identical in a result table and are not the
+# same fact (momwire#920).
+#
+# What a USER now gets is a separate number: the shipped buried default of
+# 32 lands 0.092 ohm from this anchor -- outside the 0.05 gate below, which
+# is why the gate names its own q explicitly rather than relying on defaults.
+FAN_SOIL_A_N2 = 140.93374 - 43.17502j
 
-# Cross-edge quadrature order at which the anchor deck sits 0.005 ohm
-# from its limit — 10x inside the gate below. Past the accelerated
-# kernel's n_qp <= 8 refusal, so the anchor runs the numpy twin; ~6 s,
-# which is what this lane's multi-minute certification budget is for.
+# Cross-edge quadrature order at which the anchor deck sits 0.0045 ohm
+# from its limit (re-measured at momwire#760's re-pin; the old comment
+# said 0.005 against the old bank and the figure survives) — 11x inside
+# the gate below. Past the accelerated kernel's n_qp <= 8 refusal, so the
+# anchor runs the numpy twin, which is what this gate forces anyway: 5.9 s
+# measured, against 0.4 s accelerated. That is what this lane's
+# multi-minute certification budget is for.
 FAN_SOIL_A_N2_QP = 64
 
 
@@ -775,8 +810,8 @@ def test_g674_2_soil_a_fan_anchor(record_property, monkeypatch):
     assert abs(z - FAN_SOIL_A_N2) <= 0.05, (
         f"the n2-graded soil-A fan answers {z:.4f} at n_qp_pair="
         f"{FAN_SOIL_A_N2_QP} where the banked converged answer is "
-        f"{FAN_SOIL_A_N2:.4f} — {abs(z - FAN_SOIL_A_N2):.4f} ohm apart "
-        "(node axis 0.0059, far-mesh 0.022, quadrature 0.005; NEVER "
+        f"{FAN_SOIL_A_N2:.5f} — {abs(z - FAN_SOIL_A_N2):.4f} ohm apart "
+        "(node axis 0.0059, far-mesh 0.022, quadrature 0.0045; NEVER "
         "re-gate against #674's q=4 print or the engine print)"
     )
 
