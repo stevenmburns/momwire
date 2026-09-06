@@ -1233,7 +1233,7 @@ def _nodes_of(ax, segs):
     return np.sort(np.concatenate(parts))
 
 
-def _sandwich_dense(A, B, iA, iB, K, k2sq):
+def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
     restricted to (iA, iB) — the same term order as the reference fill.
 
@@ -1262,9 +1262,22 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq):
         + P4 @ K["W"] @ Q3.T
         - P4 @ K["V"] @ Q4.T
     )
-    out = np.zeros((A["F"].shape[0], B["F"].shape[0]), dtype=block.dtype)
-    out[np.ix_(rA, rB)] = block
-    return out
+    if out is not None:
+        # ACCUMULATE IN PLACE (momwire#914). The caller used to write
+        # `t_main += _sandwich_dense(...)`, and this function answered with a
+        # full (n_basis, n_basis) array carrying the restricted block and
+        # zeros everywhere else. On the 48-radial screen that is 146 blocks x
+        # 114.5 MB allocated, zeroed and added — 16.7 GB of traffic — to carry
+        # a median of 5 live rows by 28 live columns, an occupancy of 0.002 %.
+        #
+        # BIT-IDENTICAL, not merely close: the entries this skips were exact
+        # zeros in the array being added, and adding an exact zero changes no
+        # bits. The products and their order are untouched.
+        out[np.ix_(rA, rB)] += block
+        return out
+    full = np.zeros((A["F"].shape[0], B["F"].shape[0]), dtype=block.dtype)
+    full[np.ix_(rA, rB)] = block
+    return full
 
 
 def _axis_segment_tree(geom, seg_idx, leaf):
@@ -1414,7 +1427,7 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
             nel = shp[0] * shp[1]
             K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
             off += nel
-            t_main += _sandwich_dense(AX, BX, iA, iB, K, k2sq)
+            _sandwich_dense(AX, BX, iA, iB, K, k2sq, out=t_main)
 
     # ---- large far blocks: coarse axes, low-rank ACA per kernel. The
     # row/column samples ride the SAME memo — identical matrices in

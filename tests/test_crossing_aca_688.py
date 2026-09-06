@@ -246,11 +246,16 @@ def _captured_near_blocks(build, limit=12):
 
     real = cf._sandwich_dense
 
-    def spy(*args):
+    def spy(*args, **kw):
+        # `out=` since momwire#914: the fill accumulates its restricted block
+        # straight into `t_main` instead of returning a full-size array for
+        # the caller to add. The positional six are what this helper hands
+        # back, so the kwarg is swallowed and the recorded tuple is unchanged
+        # — the tests below call `_sandwich_dense` in its standalone form.
         grabbed.append(args)
         if len(grabbed) >= limit:
             raise _Enough
-        return real(*args)
+        return real(*args, **kw)
 
     orig, cf._sandwich_dense = cf._sandwich_dense, spy
     try:
