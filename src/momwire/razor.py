@@ -762,7 +762,9 @@ _BURIED_FILL_REFUSAL = (
     "by decision (2026-09-03, momwire#813/#814): razor-2p is the "
     "above-ground twin of licensed NEC-5, and underground the engine is "
     "BSplineSolver and the reference is measurement (momwire#838); the "
-    "shelved arc is momwire#651"
+    "arc is momwire#651, CLOSED as the declared refusal below rather than "
+    "as a serve (2026-09-06): razor's buried units momwire#812-#814 are "
+    "closed not-planned, and the second buried solver is SinusoidalSolver"
 )
 
 

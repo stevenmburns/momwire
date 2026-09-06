@@ -1153,9 +1153,15 @@ ANCHOR_ENVELOPE_OHM = 6.0
 # What each trunk refuses these decks with TODAY. Since momwire#651 routed
 # razor's buried readings through `_medium_spec.wire_media`, BOTH trunks
 # refuse the anchor decks with the SAME shared contact+buried sentence.
-# Razor's own buried fill is still missing (its own-gap sentence covers the
-# wholly-buried DETACHED decks bspline serves), so arming razor's row needs
-# both momwire#567 and the momwire#651 continuation.
+#
+# The two rows are NOT symmetric in what would arm them, and that asymmetry
+# is now permanent rather than pending (momwire#651 closed 2026-09-06).
+# bspline's row arms if momwire#567 ever lifts the contact+buried refusal.
+# Razor's never does: razor declares `buried` False and refuses the class by
+# name, its buried units momwire#812-#814 are closed not-planned, and the
+# second buried solver is SinusoidalSolver rather than razor. So razor's
+# `why` names a DECISION, not a wait -- an xfail whose reason promises a
+# continuation that no longer exists reads as work in flight.
 _TRUNK_REFUSAL = {
     "bspline": (
         BSplineSolver,
@@ -1165,9 +1171,10 @@ _TRUNK_REFUSAL = {
     "razor": (
         RazorSolver,
         "stands an END in the ground plane",
-        "the shared contact+buried sentence (momwire#651); razor's own "
-        "buried fill is still missing, so momwire#567 alone will not arm "
-        "this row",
+        "the shared contact+buried sentence (momwire#651); razor DECLARES "
+        "buried False and has no buried fill by decision, so this row does "
+        "not arm on momwire#567 or on anything else - solve buried decks "
+        "with BSplineSolver (momwire#812-#814 closed not-planned)",
     ),
 }
 
@@ -1316,3 +1323,64 @@ def test_651_razors_own_gap_sentence_names_the_serving_trunk():
     assert "RazorSolver has no buried fill" in msg
     assert "BSplineSolver" in msg
     assert "momwire#651" in msg
+
+
+# ======================================================================
+# momwire#651 closes as a DECLARED refusal, not as a serve
+# ======================================================================
+
+
+def test_g651_razor_declares_buried_and_names_what_serves_it():
+    """The end of momwire#651 (2026-09-06).
+
+    The issue's remaining scope was razor's testing side consuming the
+    basis-agnostic buried tables. That arc is closed not-planned
+    (momwire#812-#814) and the second buried solver is SinusoidalSolver, so
+    the issue ends where a declared refusal ends: the capability says False,
+    the refusal row carries a sentence, and the sentence names what DOES
+    serve the class.
+
+    All three are asserted because they fail differently. A cell without a
+    row leaves `capabilities.refusal("buried")` answering None on the one
+    deck class razor is certain to raise on -- which is the state
+    momwire#651's first half fixed. A row whose prose does not name an
+    alternative leaves a user with a refusal and nowhere to go.
+    """
+    assert RazorSolver.capabilities.buried is False
+    assert BSplineSolver.capabilities.buried is True
+    row = RazorSolver.capabilities.refusals["buried"]
+    assert row, "razor declares buried False with no refusal row"
+    assert "BSplineSolver" in row, (
+        "the refusal does not name what serves buried decks, so it leaves a "
+        f"user with nowhere to go: {row[:200]!r}"
+    )
+    assert "momwire#651" in row
+
+
+def test_g651_the_declared_sentence_is_what_a_buried_deck_actually_raises():
+    """The row and the raise are ONE sentence, checked by raising it.
+
+    A declared row that the code does not use is the shape momwire#651's
+    first half found: the refusal existed inline and the row said None. This
+    keys the two together on a real deck rather than on the constant.
+    """
+    row = RazorSolver.capabilities.refusals["buried"]
+    build = dict(
+        wires=[np.array([(0.0, 0.0, -0.15), (5.0, 0.0, -0.15)])],
+        n_per_edge_per_wire=[[10]],
+        feeds=[(0, 2.5, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    with pytest.raises(ValueError) as exc:
+        RazorSolver(**build).compute_impedance()
+    assert row in str(exc.value), (
+        "the wholly-buried detached deck no longer raises the DECLARED "
+        f"sentence — it says {str(exc.value)[:200]!r}"
+    )
+    # and the same deck is served by the solver the sentence names
+    z, _ = BSplineSolver(**build).compute_impedance()
+    assert np.isfinite(complex(z).real)

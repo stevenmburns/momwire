@@ -245,7 +245,7 @@ renders in host dialogs.
 
 - `RazorSolver` `buried`
 
-  > RazorSolver has no buried fill: the momwire#553 buried serve (direct + image + Sommerfeld-remainder blocks in the lower medium) is written for BSplineSolver's testing side only. A detached buried wire is a LEGAL deck - solve it with BSplineSolver, which serves buried ground since momwire#553, or raise the wire clear of the plane. Razor's own below-plane fill (momwire#812) and crossing fill (momwire#813) exist behind `_SERVE_BURIED` and stay OFF by decision (2026-09-03, momwire#813/#814): razor-2p is the above-ground twin of licensed NEC-5, and underground the engine is BSplineSolver and the reference is measurement (momwire#838); the shelved arc is momwire#651
+  > RazorSolver has no buried fill: the momwire#553 buried serve (direct + image + Sommerfeld-remainder blocks in the lower medium) is written for BSplineSolver's testing side only. A detached buried wire is a LEGAL deck - solve it with BSplineSolver, which serves buried ground since momwire#553, or raise the wire clear of the plane. Razor's own below-plane fill (momwire#812) and crossing fill (momwire#813) exist behind `_SERVE_BURIED` and stay OFF by decision (2026-09-03, momwire#813/#814): razor-2p is the above-ground twin of licensed NEC-5, and underground the engine is BSplineSolver and the reference is measurement (momwire#838); the arc is momwire#651, CLOSED as the declared refusal below rather than as a serve (2026-09-06): razor's buried units momwire#812-#814 are closed not-planned, and the second buried solver is SinusoidalSolver
 
 - `RazorSolver` `centre_feeds`
 
