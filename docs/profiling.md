@@ -1,9 +1,17 @@
-# Profiling pysim
+# Profiling momwire
 
-The N=21 hentenna sin sweep is our standard interactive-UI workload
-(`scripts/vtune_hentenna_width_sweep.py`). When tuning it, pick the
-right tool for the question you're asking — none of them is "always
-the best one."
+The N=21 hentenna sin sweep is our standard interactive-UI workload. When
+tuning it, pick the right tool for the question you're asking — none of
+them is "always the best one."
+
+The width-sweep harness the command lines below were written around,
+`scripts/vtune_hentenna_width_sweep.py`, has been removed;
+`scripts/compare_hentenna_solvers.py` is the hentenna workload in the tree
+today. Substitute it (or a throwaway script around the solver you are
+tuning) where the commands name the old harness — the tool invocations are
+the part that matters. `scripts/bench_converge.py` and
+`scripts/bench_runtime_arcs.py`, cited further down, live in antennaknobs'
+`scripts/`, not here.
 
 ## Quick guide
 
@@ -132,10 +140,10 @@ branch. When you need them:
 1. `pip install pyitt` into your dev venv.
 2. Add `@pyitt.task` decorators (or `with pyitt.task("name"):` blocks)
    to the specific functions / regions you want attributed. Edit them
-   into `src/pysim/*.py` or wrap them at the harness level — whichever
+   into `src/momwire/*.py` or wrap them at the harness level — whichever
    gives you the granularity you need.
 3. Run VTune as above and read the report.
-4. Revert your edits with `git checkout HEAD -- src/pysim/...` before
+4. Revert your edits with `git checkout HEAD -- src/momwire/...` before
    committing anything else. Library code stays clean; `pyitt` stays
    out of any committed requirements file.
 

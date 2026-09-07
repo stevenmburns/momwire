@@ -1,7 +1,7 @@
-# Hierarchical (H-matrix / ACA) MoM accelerator — `HMatrixPySim`
+# Hierarchical (H-matrix / ACA) MoM accelerator — `HMatrixSolver`
 
-`pysim.hmatrix.HMatrixPySim` is a distance-based accelerator for the B-spline
-Galerkin MoM. It is a subclass of `BSplinePySim` and reuses that solver's
+`momwire.hmatrix.HMatrixSolver` is a distance-based accelerator for the B-spline
+Galerkin MoM. It is a subclass of `BSplineSolver` and reuses that solver's
 geometry build, basis-polynomial extraction, kernels, source vectors, and KCL
 machinery verbatim. The only thing it replaces is the **dense O(N²)
 impedance-matrix assembly + dense LU solve**, with:
@@ -56,15 +56,15 @@ in pure numpy/scipy, deferring the constant-factor C++ work. Where it stands:
    system `[Z Aᵀ; A 0]` and factorised once with `splu` — used both as the
    GMRES preconditioner and the initial guess. Z is applied via the
    H-matvec. Free-space, no-enrichment only; ground-plane and
-   singular-enrichment cases fall back to the dense `BSplinePySim` path.
+   singular-enrichment cases fall back to the dense `BSplineSolver` path.
 
 ## Validation
 
-Against the dense `BSplinePySim` at matched mesh:
+Against the dense `BSplineSolver` at matched mesh:
 
 - `zblock` (exact `same_edge=True` mode) reproduces arbitrary sub-blocks of
   the dense Z to ~1e-16.
-- end-to-end `PysimEngine(...).impedance()` matches the dense bspline engine
+- end-to-end `MomwireEngine(...).impedance()` (antennaknobs) matches the dense bspline engine
   to **~1.1e-4 (rhombic)** and **~2.1e-5 (all 8 bowtiearray2x4 feeds)** at
   `aca_tol=1e-5` — far below the ~1% engine-to-engine variation (1.1e-4 on
   rhombic's 680 Ω is 0.07 Ω). The far-block off-edge GL kernel deviates from
@@ -114,7 +114,7 @@ What this shows:
 
 - **C++ ACA fill — done.** `_accelerators.bspline_assemble_offedge_block`
   fuses the off-edge moment quadrature and the Galerkin combine for the ACA
-  row/column sampling (used by `HMatrixPySim._offedge_block_evaluators`,
+  row/column sampling (used by `HMatrixSolver._offedge_block_evaluators`,
   gated by `hmatrix_use_accel`). Falls back to the pure-numpy `zblock` path
   when the extension is absent or `degree > 2`.
 - **Remaining C++ targets:** the per-block ACA pivoting loop itself
@@ -159,16 +159,16 @@ What this shows:
 ## Usage
 
 ```python
-from pysim import HMatrixPySim
-from antenna_designer.engines.pysim import PysimEngine
+from momwire import HMatrixSolver
+from antennaknobs.engines import MomwireEngine
 
 # directly
-sim = HMatrixPySim(wires=[...], degree=1, aca_tol=1e-5, aca_eta=2.0)
+sim = HMatrixSolver(wires=[...], degree=1, aca_tol=1e-5, aca_eta=2.0)
 z, coeffs = sim.compute_impedance()
 
-# via the engine (selectable like any other pysim solver)
-eng = PysimEngine(
-    builder, solver=HMatrixPySim, solver_kwargs={"degree": 1, "aca_tol": 1e-5}
+# via the engine (selectable like any other momwire solver)
+eng = MomwireEngine(
+    builder, solver=HMatrixSolver, solver_kwargs={"degree": 1, "aca_tol": 1e-5}
 )
 z = eng.impedance()
 ```
@@ -180,4 +180,4 @@ size), `aca_tol` (ACA relative tolerance), `solve_tol` (GMRES tolerance),
 `swept_dense_max_bases` (basis-count ceiling below which frequency sweeps
 take the batched dense route instead of rebuilding the operator per k —
 issue #262; 0 disables the dispatch, `None` takes the class default),
-plus all the inherited `BSplinePySim` parameters (`degree`, `n_qp_pair`, …).
+plus all the inherited `BSplineSolver` parameters (`degree`, `n_qp_pair`, …).

@@ -1,5 +1,16 @@
 # Pulse-Basis (d=0) Extension Plan for `BSplinePySim`
 
+> **Historical note (2026-09-07):** written when this package was called
+> pysim, before the rename to momwire; the names below are the ones of the
+> time and the body is kept as a record, not updated. `BSplinePySim` /
+> `HMatrixPySim` / `SinusoidalPySim` / `ArrayBlockPySim` / `PulsePySim` are
+> today's `BSplineSolver` / `HMatrixSolver` / `SinusoidalSolver` /
+> `ArrayBlockSolver` / `PulseSolver`; `PysimEngine` is antennaknobs'
+> `MomwireEngine` (`antenna_designer` was antennaknobs' old name); the
+> retired `TriangularPySim` is `BSplineSolver(degree=1)` (see
+> `docs/triangular-retirement-plan.md`); the extension module is still
+> `_accelerators`, loaded through `momwire._accel`.
+
 Author: smburns47 (planning session 2026-06-16)
 Status: **Superseded / shelved (2026-06-17).** This plan's step 7 ("at d=0 the
 entire Z_Φ block is zero") is physically wrong — dropping the scalar potential

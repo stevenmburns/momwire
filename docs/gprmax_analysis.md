@@ -1,5 +1,16 @@
 # gprMax analysis
 
+> **Historical note (2026-09-07):** written when this package was called
+> pysim, before the rename to momwire; the names below are the ones of the
+> time and the body is kept as a record, not updated. `BSplinePySim` /
+> `HMatrixPySim` / `SinusoidalPySim` / `ArrayBlockPySim` / `PulsePySim` are
+> today's `BSplineSolver` / `HMatrixSolver` / `SinusoidalSolver` /
+> `ArrayBlockSolver` / `PulseSolver`; `PysimEngine` is antennaknobs'
+> `MomwireEngine` (`antenna_designer` was antennaknobs' old name); the
+> retired `TriangularPySim` is `BSplineSolver(degree=1)` (see
+> `docs/triangular-retirement-plan.md`); the extension module is still
+> `_accelerators`, loaded through `momwire._accel`.
+
 Notes from evaluating gprMax as (1) a candidate third-reference solver for the
 pysim/PyNEC fan-dipole junction discrepancy (NEXT_STEPS item 8) and (2) a tool
 for antenna-over-terrain scenarios that exceed the assumptions of NEC's
