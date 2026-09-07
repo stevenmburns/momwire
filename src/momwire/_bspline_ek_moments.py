@@ -1,6 +1,6 @@
 """Inline closed-form D_pq^EK = ∫∫ (s-α)^p (s'-A)^q Δg(s-s') ds' ds,
 the extended-kernel correction to the static moments on a single
-straight edge, for p, q ∈ {0..2} (momwire#249).
+straight edge, for p, q ∈ {0..3} (momwire#249).
 
     Δg(ξ) = -a²/(2R³) + 3a⁴/(4R⁵),   R = √(ξ² + a²)
 
@@ -61,6 +61,22 @@ def D_ek_moment(p, q, alpha, beta, A, B, a):
                     -1 / np.sqrt(a**2 + (-B + beta) ** 2)
                     + 1 / np.sqrt(a**2 + (-B + alpha) ** 2)
                 )
+            )
+        )
+    elif (p, q) == (0, 3):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -6 * J_static_moment(0, 1, alpha, beta, A, B, a)
+                - (-A + B) ** 3
+                * (
+                    -1 / np.sqrt(a**2 + (-B + beta) ** 2)
+                    + 1 / np.sqrt(a**2 + (-B + alpha) ** 2)
+                )
+                + 3
+                * (-A + B) ** 2
+                * (-np.arcsinh((-B + alpha) / a) + np.arcsinh((-B + beta) / a))
             )
         )
     elif (p, q) == (1, 0):
@@ -131,6 +147,32 @@ def D_ek_moment(p, q, alpha, beta, A, B, a):
                         + np.sqrt(a**2 + (-B + beta) ** 2) * np.arcsinh((-B + beta) / a)
                     )
                     / np.sqrt(a**2 + (-B + beta) ** 2)
+                )
+            )
+        )
+    elif (p, q) == (1, 3):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -6 * J_static_moment(1, 1, alpha, beta, A, B, a)
+                - (-A + B) ** 3
+                * (
+                    -np.arcsinh((-B + alpha) / a)
+                    + (
+                        alpha
+                        - beta
+                        + np.sqrt(a**2 + (-B + beta) ** 2) * np.arcsinh((-B + beta) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + beta) ** 2)
+                )
+                + 3
+                * (-A + B) ** 2
+                * (
+                    -(B - alpha) * np.arcsinh((-B + alpha) / a)
+                    + (B - alpha) * np.arcsinh((-B + beta) / a)
+                    - np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + np.sqrt(a**2 + (-B + beta) ** 2)
                 )
             )
         )
@@ -277,5 +319,346 @@ def D_ek_moment(p, q, alpha, beta, A, B, a):
                 )
             )
         )
+    elif (p, q) == (2, 3):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -6 * J_static_moment(2, 1, alpha, beta, A, B, a)
+                - (-A + B) ** 3
+                * (
+                    (
+                        2 * a**2
+                        + (-B + beta) ** 2
+                        - 2 * (-B + beta) * (B - alpha)
+                        - (B - alpha) ** 2
+                        + 2
+                        * (B - alpha)
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + beta) ** 2)
+                    - (
+                        2 * a**2
+                        + (-B + alpha) ** 2
+                        - 2 * (-B + alpha) * (B - alpha)
+                        - (B - alpha) ** 2
+                        + 2
+                        * (B - alpha)
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + alpha) ** 2)
+                )
+                + 3
+                * (-A + B) ** 2
+                * (
+                    (1 / 2) * a**2 * np.arcsinh((-B + alpha) / a)
+                    - 1 / 2 * a**2 * np.arcsinh((-B + beta) / a)
+                    - 1 / 2 * (-B + alpha) * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + (1 / 2) * (-B + beta) * np.sqrt(a**2 + (-B + beta) ** 2)
+                    - (B - alpha) ** 2 * np.arcsinh((-B + alpha) / a)
+                    + (B - alpha) ** 2 * np.arcsinh((-B + beta) / a)
+                    - 2 * (B - alpha) * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + 2 * (B - alpha) * np.sqrt(a**2 + (-B + beta) ** 2)
+                )
+            )
+        )
+    elif (p, q) == (3, 0):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -1
+                / 2
+                * (
+                    3 * a**2 * (-B + beta)
+                    + 12 * a**2 * (B - alpha)
+                    - 3
+                    * a**2
+                    * np.sqrt(a**2 + (-B + beta) ** 2)
+                    * np.arcsinh((-B + beta) / a)
+                    + (-B + beta) ** 3
+                    + 6 * (-B + beta) ** 2 * (B - alpha)
+                    - 6 * (-B + beta) * (B - alpha) ** 2
+                    - 2 * (B - alpha) ** 3
+                    + 6
+                    * (B - alpha) ** 2
+                    * np.sqrt(a**2 + (-B + beta) ** 2)
+                    * np.arcsinh((-B + beta) / a)
+                )
+                / np.sqrt(a**2 + (-B + beta) ** 2)
+                + (1 / 2)
+                * (
+                    3 * a**2 * (-B + alpha)
+                    + 12 * a**2 * (B - alpha)
+                    - 3
+                    * a**2
+                    * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    * np.arcsinh((-B + alpha) / a)
+                    + (-B + alpha) ** 3
+                    + 6 * (-B + alpha) ** 2 * (B - alpha)
+                    - 6 * (-B + alpha) * (B - alpha) ** 2
+                    - 2 * (B - alpha) ** 3
+                    + 6
+                    * (B - alpha) ** 2
+                    * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    * np.arcsinh((-B + alpha) / a)
+                )
+                / np.sqrt(a**2 + (-B + alpha) ** 2)
+                + (1 / 2)
+                * (
+                    3 * a**2 * (-A + beta)
+                    + 12 * a**2 * (A - alpha)
+                    - 3
+                    * a**2
+                    * np.sqrt(a**2 + (-A + beta) ** 2)
+                    * np.arcsinh((-A + beta) / a)
+                    + (-A + beta) ** 3
+                    + 6 * (-A + beta) ** 2 * (A - alpha)
+                    - 6 * (-A + beta) * (A - alpha) ** 2
+                    - 2 * (A - alpha) ** 3
+                    + 6
+                    * (A - alpha) ** 2
+                    * np.sqrt(a**2 + (-A + beta) ** 2)
+                    * np.arcsinh((-A + beta) / a)
+                )
+                / np.sqrt(a**2 + (-A + beta) ** 2)
+                - 1
+                / 2
+                * (
+                    3 * a**2 * (-A + alpha)
+                    + 12 * a**2 * (A - alpha)
+                    - 3
+                    * a**2
+                    * np.sqrt(a**2 + (-A + alpha) ** 2)
+                    * np.arcsinh((-A + alpha) / a)
+                    + (-A + alpha) ** 3
+                    + 6 * (-A + alpha) ** 2 * (A - alpha)
+                    - 6 * (-A + alpha) * (A - alpha) ** 2
+                    - 2 * (A - alpha) ** 3
+                    + 6
+                    * (A - alpha) ** 2
+                    * np.sqrt(a**2 + (-A + alpha) ** 2)
+                    * np.arcsinh((-A + alpha) / a)
+                )
+                / np.sqrt(a**2 + (-A + alpha) ** 2)
+            )
+        )
+    elif (p, q) == (3, 1):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -3 / 2 * a**2 * (A - alpha) * np.arcsinh((-A + alpha) / a)
+                + (3 / 2) * a**2 * (A - alpha) * np.arcsinh((-A + beta) / a)
+                + (3 / 2) * a**2 * (B - alpha) * np.arcsinh((-B + alpha) / a)
+                - 3 / 2 * a**2 * (B - alpha) * np.arcsinh((-B + beta) / a)
+                - 2 / 3 * a**2 * np.sqrt(a**2 + (-A + alpha) ** 2)
+                + (2 / 3) * a**2 * np.sqrt(a**2 + (-A + beta) ** 2)
+                + (2 / 3) * a**2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                - 2 / 3 * a**2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                + (1 / 3) * (-A + alpha) ** 2 * np.sqrt(a**2 + (-A + alpha) ** 2)
+                + (3 / 2)
+                * (-A + alpha)
+                * (A - alpha)
+                * np.sqrt(a**2 + (-A + alpha) ** 2)
+                - 1 / 3 * (-A + beta) ** 2 * np.sqrt(a**2 + (-A + beta) ** 2)
+                - 3 / 2 * (-A + beta) * (A - alpha) * np.sqrt(a**2 + (-A + beta) ** 2)
+                + (A - B)
+                * (
+                    (1 / 2)
+                    * (
+                        3 * a**2 * (-B + beta)
+                        + 12 * a**2 * (B - alpha)
+                        - 3
+                        * a**2
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                        + (-B + beta) ** 3
+                        + 6 * (-B + beta) ** 2 * (B - alpha)
+                        - 6 * (-B + beta) * (B - alpha) ** 2
+                        - 2 * (B - alpha) ** 3
+                        + 6
+                        * (B - alpha) ** 2
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + beta) ** 2)
+                    - 1
+                    / 2
+                    * (
+                        3 * a**2 * (-B + alpha)
+                        + 12 * a**2 * (B - alpha)
+                        - 3
+                        * a**2
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                        + (-B + alpha) ** 3
+                        + 6 * (-B + alpha) ** 2 * (B - alpha)
+                        - 6 * (-B + alpha) * (B - alpha) ** 2
+                        - 2 * (B - alpha) ** 3
+                        + 6
+                        * (B - alpha) ** 2
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + alpha) ** 2)
+                )
+                + (A - alpha) ** 3 * np.arcsinh((-A + alpha) / a)
+                - (A - alpha) ** 3 * np.arcsinh((-A + beta) / a)
+                + 3 * (A - alpha) ** 2 * np.sqrt(a**2 + (-A + alpha) ** 2)
+                - 3 * (A - alpha) ** 2 * np.sqrt(a**2 + (-A + beta) ** 2)
+                - 1 / 3 * (-B + alpha) ** 2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                - 3 / 2 * (-B + alpha) * (B - alpha) * np.sqrt(a**2 + (-B + alpha) ** 2)
+                + (1 / 3) * (-B + beta) ** 2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                + (3 / 2) * (-B + beta) * (B - alpha) * np.sqrt(a**2 + (-B + beta) ** 2)
+                - (B - alpha) ** 3 * np.arcsinh((-B + alpha) / a)
+                + (B - alpha) ** 3 * np.arcsinh((-B + beta) / a)
+                - 3 * (B - alpha) ** 2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                + 3 * (B - alpha) ** 2 * np.sqrt(a**2 + (-B + beta) ** 2)
+            )
+        )
+    elif (p, q) == (3, 2):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -2 * J_static_moment(3, 0, alpha, beta, A, B, a)
+                + (-2 * A + 2 * B)
+                * (
+                    (3 / 2) * a**2 * (B - alpha) * np.arcsinh((-B + alpha) / a)
+                    - 3 / 2 * a**2 * (B - alpha) * np.arcsinh((-B + beta) / a)
+                    + (2 / 3) * a**2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    - 2 / 3 * a**2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                    - 1 / 3 * (-B + alpha) ** 2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    - 3
+                    / 2
+                    * (-B + alpha)
+                    * (B - alpha)
+                    * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + (1 / 3) * (-B + beta) ** 2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                    + (3 / 2)
+                    * (-B + beta)
+                    * (B - alpha)
+                    * np.sqrt(a**2 + (-B + beta) ** 2)
+                    - (B - alpha) ** 3 * np.arcsinh((-B + alpha) / a)
+                    + (B - alpha) ** 3 * np.arcsinh((-B + beta) / a)
+                    - 3 * (B - alpha) ** 2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + 3 * (B - alpha) ** 2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                )
+                - (-A + B) ** 2
+                * (
+                    (1 / 2)
+                    * (
+                        3 * a**2 * (-B + beta)
+                        + 12 * a**2 * (B - alpha)
+                        - 3
+                        * a**2
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                        + (-B + beta) ** 3
+                        + 6 * (-B + beta) ** 2 * (B - alpha)
+                        - 6 * (-B + beta) * (B - alpha) ** 2
+                        - 2 * (B - alpha) ** 3
+                        + 6
+                        * (B - alpha) ** 2
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + beta) ** 2)
+                    - 1
+                    / 2
+                    * (
+                        3 * a**2 * (-B + alpha)
+                        + 12 * a**2 * (B - alpha)
+                        - 3
+                        * a**2
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                        + (-B + alpha) ** 3
+                        + 6 * (-B + alpha) ** 2 * (B - alpha)
+                        - 6 * (-B + alpha) * (B - alpha) ** 2
+                        - 2 * (B - alpha) ** 3
+                        + 6
+                        * (B - alpha) ** 2
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + alpha) ** 2)
+                )
+            )
+        )
+    elif (p, q) == (3, 3):
+        return (
+            (1 / 4)
+            * a**2
+            * (
+                -6 * J_static_moment(3, 1, alpha, beta, A, B, a)
+                - (-A + B) ** 3
+                * (
+                    (1 / 2)
+                    * (
+                        3 * a**2 * (-B + beta)
+                        + 12 * a**2 * (B - alpha)
+                        - 3
+                        * a**2
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                        + (-B + beta) ** 3
+                        + 6 * (-B + beta) ** 2 * (B - alpha)
+                        - 6 * (-B + beta) * (B - alpha) ** 2
+                        - 2 * (B - alpha) ** 3
+                        + 6
+                        * (B - alpha) ** 2
+                        * np.sqrt(a**2 + (-B + beta) ** 2)
+                        * np.arcsinh((-B + beta) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + beta) ** 2)
+                    - 1
+                    / 2
+                    * (
+                        3 * a**2 * (-B + alpha)
+                        + 12 * a**2 * (B - alpha)
+                        - 3
+                        * a**2
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                        + (-B + alpha) ** 3
+                        + 6 * (-B + alpha) ** 2 * (B - alpha)
+                        - 6 * (-B + alpha) * (B - alpha) ** 2
+                        - 2 * (B - alpha) ** 3
+                        + 6
+                        * (B - alpha) ** 2
+                        * np.sqrt(a**2 + (-B + alpha) ** 2)
+                        * np.arcsinh((-B + alpha) / a)
+                    )
+                    / np.sqrt(a**2 + (-B + alpha) ** 2)
+                )
+                + 3
+                * (-A + B) ** 2
+                * (
+                    (3 / 2) * a**2 * (B - alpha) * np.arcsinh((-B + alpha) / a)
+                    - 3 / 2 * a**2 * (B - alpha) * np.arcsinh((-B + beta) / a)
+                    + (2 / 3) * a**2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    - 2 / 3 * a**2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                    - 1 / 3 * (-B + alpha) ** 2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    - 3
+                    / 2
+                    * (-B + alpha)
+                    * (B - alpha)
+                    * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + (1 / 3) * (-B + beta) ** 2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                    + (3 / 2)
+                    * (-B + beta)
+                    * (B - alpha)
+                    * np.sqrt(a**2 + (-B + beta) ** 2)
+                    - (B - alpha) ** 3 * np.arcsinh((-B + alpha) / a)
+                    + (B - alpha) ** 3 * np.arcsinh((-B + beta) / a)
+                    - 3 * (B - alpha) ** 2 * np.sqrt(a**2 + (-B + alpha) ** 2)
+                    + 3 * (B - alpha) ** 2 * np.sqrt(a**2 + (-B + beta) ** 2)
+                )
+            )
+        )
     else:
-        raise ValueError(f"(p, q) = ({p}, {q}) not in [0, 2]²")
+        raise ValueError(f"(p, q) = ({p}, {q}) not in [0, 3]²")

@@ -98,16 +98,16 @@ universal on them for the same reason free space is not a ground cell.
 *not described* is a row carrying no compositional declaration at all —
 a gap, not a claim of emptiness.
 
-| solver                     | `basis`               | `testing`      | `charge_support` | `kernel`           | `quadrature`     | `solve_strategy` | `feed_model`            | `ground_model`                      | `wire_position`          |
-| -------------------------- | --------------------- | -------------- | ---------------- | ------------------ | ---------------- | ---------------- | ----------------------- | ----------------------------------- | ------------------------ |
-| `BSplineSolver`            | bspline-1 / bspline-2 | galerkin       | spline           | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / buried / contact |
-| `HMatrixSolver`            | bspline-1 / bspline-2 | galerkin       | spline           | extended / reduced | converged        | aca              | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
-| `ArrayBlockSolver`         | bspline-1 / bspline-2 | galerkin       | spline           | extended / reduced | converged        | element-block    | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
-| `SinusoidalSolver`         | sinusoidal-3term      | point-matching | basis-implied    | extended / reduced | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
-| `SinusoidalGalerkinSolver` | sinusoidal-3term      | galerkin       | basis-implied    | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
-| `RazorSolver`              | tent                  | path           | basis-implied    | extended / reduced | converged / nec5 | dense            | node-port               | free / pec / refl-coef / sommerfeld | above / contact          |
-| `HarringtonSolver`         | pulse                 | point-matching | dual-cell        | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
-| `PulseSolver`              | pulse                 | point-matching | point            | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
+| solver                     | `basis`                           | `testing`      | `charge_support` | `kernel`           | `quadrature`     | `solve_strategy` | `feed_model`            | `ground_model`                      | `wire_position`          |
+| -------------------------- | --------------------------------- | -------------- | ---------------- | ------------------ | ---------------- | ---------------- | ----------------------- | ----------------------------------- | ------------------------ |
+| `BSplineSolver`            | bspline-1 / bspline-2 / bspline-3 | galerkin       | spline           | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / buried / contact |
+| `HMatrixSolver`            | bspline-1 / bspline-2 / bspline-3 | galerkin       | spline           | extended / reduced | converged        | aca              | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
+| `ArrayBlockSolver`         | bspline-1 / bspline-2 / bspline-3 | galerkin       | spline           | extended / reduced | converged        | element-block    | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
+| `SinusoidalSolver`         | sinusoidal-3term                  | point-matching | basis-implied    | extended / reduced | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
+| `SinusoidalGalerkinSolver` | sinusoidal-3term                  | galerkin       | basis-implied    | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
+| `RazorSolver`              | tent                              | path           | basis-implied    | extended / reduced | converged / nec5 | dense            | node-port               | free / pec / refl-coef / sommerfeld | above / contact          |
+| `HarringtonSolver`         | pulse                             | point-matching | dual-cell        | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
+| `PulseSolver`              | pulse                             | point-matching | point            | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
 
 ## The recorded reasons
 

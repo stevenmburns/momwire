@@ -324,9 +324,18 @@ def test_g4_generated_expressions_all_carry_an_explicit_a_squared():
 
     from momwire import _bspline_ek_moments
 
+    from momwire._bspline_static_moments import MAX_D
+
     src = inspect.getsource(_bspline_ek_moments.D_ek_moment)
     returns = [ln for ln in src.splitlines() if ln.strip().startswith("return")]
-    assert len(returns) == 9, f"expected 9 moment branches, found {len(returns)}"
+    # (MAX_D + 1)² branches, read off the generated file's own MAX_D rather
+    # than pinned at 9 — the count is a fact about what was generated, and
+    # pinning it made raising MAX_D look like a regression (momwire#883).
+    # Still a real check: it fails if the emitter drops or duplicates a branch.
+    want = (MAX_D + 1) ** 2
+    assert len(returns) == want, (
+        f"expected {want} moment branches, found {len(returns)}"
+    )
     bodies = src.split("return")[1:]
     for body in bodies:
         head = "".join(body.split())[:20]

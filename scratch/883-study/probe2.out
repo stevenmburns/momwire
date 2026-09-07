@@ -1,0 +1,16 @@
+/home/smburns/stevenmburns/antennaknobs/.venv/lib/python3.14/site-packages/scipy/integrate/_quadpack_py.py:1286: IntegrationWarning: The occurrence of roundoff error is detected, which prevents 
+  the requested tolerance from being achieved.  The error may be 
+  underestimated.
+  quad_r = quad(f, low, high, args=args, full_output=self.full_output,
+momwire#883 — regenerated moments at MAX_D = 3, against quadrature
+
+  offset pair: alpha=0.3 beta=0.95 A=0.1 B=0.7 a=0.023
+
+  alpha=A=0: alpha=0.0 beta=1.0 A=0.0 B=1.0 a=0.01
+
+  separated: alpha=0.5 beta=2.5 A=4.0 B=5.5 a=0.05
+
+  worst relative error, pre-existing (p,q <= 2): 2.237e-12
+  worst relative error, NEW degree-3 entries:    1.225e-11   (42 checked)
+
+  OK
