@@ -48,7 +48,8 @@ differ between a terminal and a GUI app: the terminal's environment, a
 scrubbed GUI-launch environment, a path with a space, a name-selected basis,
 a name that selects no basis (must fail, exit 3), and an entry point whose
 interpreter is gone (must fail, exit 127). `.github/workflows/simnec-driver.yml`
-runs it on macOS, Linux and Windows against the wheel on PyPI.
+runs it on macOS, Linux and Windows against the wheel on PyPI, on demand
+only (`gh workflow run simnec-driver.yml --ref main`); it is not a CI gate.
 
 ## Reading a failure
 

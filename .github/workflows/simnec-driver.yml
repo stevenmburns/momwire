@@ -1,7 +1,11 @@
 # SimNEC launch-shape check: drive the PyPI-installed portal entry point the
 # way SimNEC drives an engine (scripts/simnec_driver/SimNECDriver.java), on
-# the three desktops SimNEC runs on. Exists to reproduce, on a machine we can
-# see, the report "works from the terminal, SimNEC says NEC Failure Code".
+# the three desktops SimNEC runs on. Written to reproduce, on a machine we
+# could see, the 2026-08 report "works from the terminal, SimNEC says NEC
+# Failure Code"; that report was resolved on the reporter's side, so this is
+# now an on-demand check rather than a CI gate. It exists because a macOS
+# runner is otherwise out of reach: run it when a SimNEC-facing question
+# comes up, not on every push.
 #
 # The PyPI legs install what a user installs (a wheel into a venv) rather
 # than this checkout, so a green run here says the RELEASED engine launches
@@ -10,8 +14,11 @@
 # without it gets the numpy fallback and a warning on stderr, and stderr is
 # a pipe SimNEC never drains.
 #
-# Manual: `gh workflow run simnec-driver.yml --ref <branch>` (optionally
-# `-f momwire=momwire==0.45.0` to test another release).
+# Dispatch only. It used to fire on pushes and PRs touching the driver and
+# the portal, but its verdict tracks what PyPI serves, not this tree, so a
+# release could turn it red with no push to notice it by (#948 sat red four
+# days that way). Run: `gh workflow run simnec-driver.yml --ref <branch>`
+# (optionally `-f momwire=momwire==0.45.0` to test another release).
 name: simnec-driver
 
 on:
@@ -21,16 +28,6 @@ on:
         description: "pip requirement for the engine under test"
         default: momwire
         type: string
-  pull_request:
-    paths:
-      - scripts/simnec_driver/**
-      - .github/workflows/simnec-driver.yml
-  push:
-    branches: [main]
-    paths:
-      - scripts/simnec_driver/**
-      - .github/workflows/simnec-driver.yml
-      - src/momwire/portal/**
 
 permissions:
   contents: read
