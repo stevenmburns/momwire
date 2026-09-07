@@ -32,11 +32,52 @@ scope allows, which is what keeps the single V(a) evaluation honest.
 
 Scope guards this module inherits from the derivation:
 
-  * segments on both axes must be purely horizontal or vertical — the W
-    by-parts move uses t̂⊥·∇⊥ = d/dl, exact only there;
   * one wire radius across the deck — the radius rule ρ_eff = √(ρ² + a²)
     is the corner's regularization and a per-pair radius has no pinned
     convention yet.
+
+TILTED SEGMENTS ARE SERVED (momwire#936). They were refused until
+2026-09-07 on the reading that "the W by-parts move uses t̂⊥·∇⊥ = d/dl,
+exact only" for axis-aligned segments. Measured, that reading does not
+survive: THE ASSEMBLY NEVER MAKES THAT SUBSTITUTION.
+
+The decisive evidence is an absence. The substituted form needs the
+SOURCE-side derivative kernels, `dzpW` / `dzpV` — and this module does not
+reference either of them anywhere. What it contracts is `W` against the
+other axis's `Fd`, which is the DIRECT spelling; `dzW` appears only inside
+`k²V − ∂zW`, the ẑẑ dyad's own coefficient, not as a substituted
+derivative. Every term of the
+main sandwich is written in tangent COMPONENTS — s_u pairs tx/ty through
+U, s_zz pairs tz through k²V − ∂zW, and the W terms carry tz against the
+other axis's Fd — and Fd is the filament charge ∇·(F t̂) = dF/dl, which is
+the arclength derivative at ANY orientation. The `tz` in the by-parts
+boundary terms is the ẑ-dyad's own coefficient, not an alignment
+assumption.
+
+Four measurements, in `scratch/936-study/`:
+
+  * by parts is orientation-EXACT: the direct and by-parted spellings of
+    the W term agree to 1e-11..1e-13 at every α, at every node-grading
+    rung, with the segment end ON the interface (probe1, probe5). The
+    spelling the ASSEMBLY uses is the direct one, so it is exact at any
+    orientation; probe1's third column re-implemented the substitution
+    the OLD docstring described, and that is the only thing that differs
+    with α. A scope note describing a move the code does not make is what
+    kept this refused;
+  * the non-W structure is orientation-general: the ε̃ = 1 collapse holds
+    for a tilted above member, 0.163 against the untilted 0.145 — the
+    same node-mesh class, and W ≡ 0 there so the test isolates the rest
+    (probe2);
+  * end to end against NEC-5 on the OP deck, the lean 0 → 45° sweep adds
+    0.70 pp to a residual that is already 4.48 pp at lean 0 (probe9);
+  * and restoring the supposedly-dropped −(t⊥·ρ̂)∂W/∂ρ makes the answer
+    WORSE, −5.18 % → −11.46 % at 45°, while vanishing identically at
+    lean 0 as it must (probe10).
+
+The 0.70 pp lean drift is a KNOWN RESIDUAL, not a fixed defect: it scales
+as ~sin²α (1 : 4.3 : 10 at 15/30/45°) where the dropped term would enter
+linearly in sin α (1 : 1.9 : 2.7), so its signature is a discretisation
+difference between two engines as the geometry leaves axis alignment.
 
 `bspline.BSplineSolver._compute_Z_operator_buried` is the only caller today;
 it hands the fill a `CrossingContext` (below) rather than itself (momwire#801).
@@ -425,8 +466,6 @@ def warn_coarse_node(arms):
     return worst
 
 
-_TILT_TOL = 1e-12
-
 # How far off `ground_z` a point may sit and still BE the interface.
 #
 # One number, used by two things that must agree: `axis_data`'s decision that
@@ -574,12 +613,6 @@ def axis_data(
         sl, sr = geom.seg_l[g], geom.seg_r[g]
         h = geom.h[g]
         tang = geom.tangents[g]
-        if abs(tang[2]) > _TILT_TOL and np.hypot(tang[0], tang[1]) > _TILT_TOL:
-            raise NotImplementedError(
-                "crossing fill: tilted segments need the tilt tables — the "
-                "W by-parts move is exact only for purely horizontal or "
-                "vertical segments"
-            )
         touch_lo = abs(sl[2] - gz) < tol
         touch_hi = abs(sr[2] - gz) < tol
         if touch_lo or touch_hi:
