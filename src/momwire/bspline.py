@@ -5,7 +5,7 @@ solver — d=1 reproduces it to roundoff on knot-fed meshes (see
 tests/test_tent_parity.py); this
 module extends to arbitrary degree d on multi-wire polylines with K-wire
 junctions, primarily as an in-codebase arbiter for the hentenna question
-(NEXT_STEPS.md items 9, 13, 14): does the tent basis converge to the
+(docs/2026-07-08-next-steps.md items 9, 13, 14): does the tent basis converge to the
 correct value, or is it converged-to-the-wrong-place?
 
 Scope:

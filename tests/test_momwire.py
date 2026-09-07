@@ -1976,7 +1976,7 @@ def test_sinusoidal_dipole_matches_nec2(nsegs):
 def test_sinusoidal_hentenna_reproduces_pynec():
     """Sinusoidal-basis momwire reproduces PyNEC's hentenna numbers to
     ~0.05 Ohm. Validates the K=2/K=3 junction-basis path against the
-    NEXT_STEPS.md item 13 PyNEC reference.
+    docs/2026-07-08-next-steps.md item 13 PyNEC reference.
     """
     C_LIGHT = 299_792_458.0
     freq_mhz = 28.47
@@ -2023,7 +2023,7 @@ def test_sinusoidal_hentenna_reproduces_pynec():
         junctions=junctions,
     )
     z, _ = sim.compute_impedance()
-    # PyNEC reference at n=21 (NEXT_STEPS.md item 13): 45.604 - j4.604.
+    # PyNEC reference at n=21 (docs/2026-07-08-next-steps.md item 13): 45.604 - j4.604.
     assert abs(z.real - 45.604) < 0.1, f"R={z.real}"
     assert abs(z.imag - (-4.604)) < 0.1, f"X={z.imag}"
 
