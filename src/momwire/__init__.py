@@ -23,7 +23,11 @@ from .sinusoidal_galerkin import SinusoidalGalerkinSolver
 # Wire-material physics helpers (#133): the per-metre quantities behind the
 # distributed wire loading, exported for consumers that mirror the loading
 # into other tools (e.g. antennaknobs' NEC LD-5/LD-2 card emission).
-from ._wire_loading import insulation_inductance, wire_internal_impedance
+from ._wire_loading import (
+    equivalent_radius,
+    insulation_inductance,
+    wire_internal_impedance,
+)
 
 # The two interface-side geometry answers (#855), on `wire_to_element`'s
 # precedent and for the same reason: a consumer that must refuse a deck the
@@ -43,6 +47,29 @@ from ._wire_loading import insulation_inductance, wire_internal_impedance
 from ._ground_spec import ground_touch_tol
 from .bspline import below_reach_refusal
 from ._medium_spec import grounded_crossing_exemption
+
+# The capability axes (#884) and the coated-wire pair (#876), on the same
+# precedent again. Both were reached through privately by antennaknobs, and in
+# both cases A VERSION CHECK CANNOT REPLACE THE REACH: momwire's submodule
+# pointer runs ahead of its PyPI release by convention, so a build WITH these
+# names and a build WITHOUT them declare the same version. A consumer asking
+# "does this build know X" has to ask the build, and promoting the names is
+# what lets it ask without importing a private module.
+#
+# `axes_for` is the SINGLE derivation point for the derived axes
+# (`ground_model` from `grounds`, `wire_position` from `buried`/`contact`);
+# `AXIS_VALUES` is the vocabulary a consumer rendering those axes needs, and
+# `DERIVED_AXES` says which are computed rather than declared. Promoting
+# `axes_for` alone would just delay the next census entry.
+#
+# `SURFACE_HEIGHT_CLASS` is exported as the OBJECT rather than behind a
+# `models_coated_wire()` predicate: identity is the point here (a predicate
+# would be a new thing to keep true), the consumer probes for
+# `equivalent_radius` and this separately so it can refuse by naming which
+# half is absent, and the tuple carries the numbers (`floor_h_over_a`,
+# `advisory_h_over_a`) that a consumer's own advisory quotes.
+from ._capabilities import AXIS_VALUES, DERIVED_AXES, axes_for
+from ._surface_height import SURFACE_HEIGHT_CLASS
 
 # `accelerated` is True iff the optional C++ accelerator loaded; consumers can
 # assert it to guard against a silent fall-back to the slow pure-Python path.
@@ -67,4 +94,9 @@ __all__ = [
     "below_reach_refusal",
     "ground_touch_tol",
     "grounded_crossing_exemption",
+    "axes_for",
+    "AXIS_VALUES",
+    "DERIVED_AXES",
+    "equivalent_radius",
+    "SURFACE_HEIGHT_CLASS",
 ]
