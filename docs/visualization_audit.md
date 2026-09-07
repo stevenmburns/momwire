@@ -1,5 +1,16 @@
 # Web UI visualization audit
 
+> **Historical note (2026-09-07):** written when this package was called
+> pysim, before the rename to momwire; the names below are the ones of the
+> time and the body is kept as a record, not updated. `BSplinePySim` /
+> `HMatrixPySim` / `SinusoidalPySim` / `ArrayBlockPySim` / `PulsePySim` are
+> today's `BSplineSolver` / `HMatrixSolver` / `SinusoidalSolver` /
+> `ArrayBlockSolver` / `PulseSolver`; `PysimEngine` is antennaknobs'
+> `MomwireEngine` (`antenna_designer` was antennaknobs' old name); the
+> retired `TriangularPySim` is `BSplineSolver(degree=1)` (see
+> `docs/triangular-retirement-plan.md`); the extension module is still
+> `_accelerators`, loaded through `momwire._accel`.
+
 Trace of where the antenna-canvas and far-field rendering diverges from
 what the solver actually computed. Done after PR #51 (the orig=1
 enrichment sign fix) to be sure nothing else was actively wrong.

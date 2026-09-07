@@ -1,5 +1,16 @@
 # Triangular retirement — transfer the batched sweep to BSpline, then delete
 
+> **Historical note (2026-09-07):** written when this package was called
+> pysim, before the rename to momwire; the names below are the ones of the
+> time and the body is kept as a record, not updated. `BSplinePySim` /
+> `HMatrixPySim` / `SinusoidalPySim` / `ArrayBlockPySim` / `PulsePySim` are
+> today's `BSplineSolver` / `HMatrixSolver` / `SinusoidalSolver` /
+> `ArrayBlockSolver` / `PulseSolver`; `PysimEngine` is antennaknobs'
+> `MomwireEngine` (`antenna_designer` was antennaknobs' old name); the
+> retired `TriangularPySim` is `BSplineSolver(degree=1)` (this
+> document); the extension module is still
+> `_accelerators`, loaded through `momwire._accel`.
+
 **STATUS: EXECUTED (2026-07-08, branch `feat/retire-triangular`)** — all
 phases below are done except the release (Phase 4). PR #125 landed first
 as planned. Measured results are inlined per phase.
