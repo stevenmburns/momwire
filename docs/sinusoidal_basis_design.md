@@ -17,7 +17,7 @@ Pulled from the NEC2 Theory Manual (Burke & Poggio, LLNL UCID-18834, 1981 —
 The goal of this implementation is **scientific**: not a re-creation of the
 NEC2 code, but a from-the-spec implementation we can compare with PyNEC /
 nec2c on the hentenna to learn whether the X drift documented in
-`NEXT_STEPS.md` item 13 is reproduced by the basis itself or by some other
+`docs/2026-07-08-next-steps.md` item 13 is reproduced by the basis itself or by some other
 piece of NEC's machinery.
 
 ## Scope
@@ -525,7 +525,7 @@ Three phases:
    *every* wire passing through the junction.
 
 The deliverable test is: run the same hentenna geometry as
-`NEXT_STEPS.md` item 13 (params_50, 28.47 MHz, r = 0.5 mm, uniform N
+`docs/2026-07-08-next-steps.md` item 13 (params_50, 28.47 MHz, r = 0.5 mm, uniform N
 segments per non-feed edge) and report the per-N convergence of R + jX.
 Compare to PyNEC's tabulated values.
 
