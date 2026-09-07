@@ -1,6 +1,8 @@
-# Next steps — pysim
+# Next steps — pysim (status as of 2026-07-08)
 
-Living roadmap of what's done and what's left. Updated as work lands.
+The project roadmap as it stood on 2026-07-08, its last update. It was kept
+as a living list at the repository root until then; it is now a dated status
+record and is not maintained. Open work is tracked on the GitHub issues.
 
 > **Historical note (2026-07-08):** this log predates the pysim → momwire
 > rename; class/module names below are the old ones. `TriangularPySim` /

@@ -188,7 +188,7 @@ needed batching, in pure Python:
       package).
 - [x] Docstrings de-staled (sinusoidal.py "the default", bspline.py
       TriangularSolver cross-references, `_bspline_kernels.py`
-      bit-for-bit claim now stated correctly); NEXT_STEPS.md carries a
+      bit-for-bit claim now stated correctly); `docs/2026-07-08-next-steps.md` carries a
       retirement banner; the consolidation-plan doc stays on the
       superseded PR #101 branch (close #101 unmerged).
 - [x] Net: −2900 lines (triangular.py 1091, kernels 272, ~630 C++,
