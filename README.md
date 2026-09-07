@@ -131,6 +131,57 @@ and what refusals look like:
 momwire may import from it. The SimNEC protocol is the portal's business
 alone, and a test enforces that.
 
+## Public names
+
+Everything importable from `momwire` itself. `__all__` is the source of
+truth — `tests/test_public_surface_954.py` fails if this list and `__all__`
+disagree in either direction, so a name promoted without a line here (or a
+line here for a name that was never exported) is a red test, not a stale doc.
+
+Solvers — see [Solvers](#solvers) above for what distinguishes them:
+
+- `BSplineSolver` — degree-d Galerkin, the default.
+- `HMatrixSolver`, `ArrayBlockSolver` — structural accelerators over it.
+- `SinusoidalSolver`, `SinusoidalGalerkinSolver` — NEC2's three-term basis.
+- `RazorSolver` — the NEC-5 formulation twin, free space only.
+- `PulseSolver`, `HarringtonSolver` — the textbook pair.
+
+Results and control:
+
+- `PortSolution` — a solved port network's currents, voltages and Z.
+- `Capabilities` — what a solver class declares it spans.
+- `CancelToken`, `SolveAborted` — cooperative cancellation for a long solve.
+- `LatticeFFTUnavailable` — raised when a lattice deck cannot take the FFT path.
+- `accelerated` — True iff the C++ accelerator loaded. Assert it rather than
+  discovering a silent fall-back to pure Python by its runtime.
+
+Wire material, for a consumer mirroring the loading into another tool:
+
+- `wire_internal_impedance`, `insulation_inductance` — the per-metre quantities.
+- `equivalent_radius` — the coated-wire pair's effective radius.
+
+Answers a consumer must give IDENTICALLY to momwire, exported so it cannot
+answer them differently:
+
+- `ground_touch_tol` — is this wire end on the plane (a per-wire *relative*
+  tolerance; an invented absolute one disagrees at the margin).
+- `grounded_crossing_exemption` — does this in-plane junction earn the
+  crossing exemption.
+- `below_reach_refusal` — how far a buried structure may span before the
+  below/below remainder stops being tabulated.
+- `wire_to_element` — the geometry conversion the array-block path uses.
+- `SURFACE_HEIGHT_CLASS` — the low-stand-off class's measured conditioning,
+  including the validity floor a consumer refuses against.
+
+Capability axes:
+
+- `axes_for` — every axis of one capability row, declared union derived. The
+  single derivation point: a consumer re-deriving `ground_model` from
+  `grounds`, or `wire_position` from `buried`/`contact`, is the drift this
+  exists to prevent.
+- `AXIS_VALUES` — the declared vocabulary.
+- `DERIVED_AXES` — which axes are computed rather than declared.
+
 ## Install
 
 ```bash
