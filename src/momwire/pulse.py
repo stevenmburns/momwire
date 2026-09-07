@@ -405,7 +405,8 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     nsegs: default segment count when `n_per_edge_per_wire` doesn't specify.
     wire_radius: scalar thin-wire radius, the a in R = sqrt(|r−r'|² + a²).
     ground_z: height of a ground plane, or None for free space.
-    ground_eps: complex relative permittivity of the ground; None (the
+    ground_eps: the ground, as a complex relative permittivity or an
+        (eps_r, sigma) pair with sigma in S/m; None (the
         default) with `ground_z` set is the PEC image.
     ground_phi_mode: image-charge weighting for the reflection-coefficient
         ground, passed through to `PotentialGround` untouched. Accepted and
@@ -550,7 +551,12 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
         if ground_model == "sommerfeld" and ground_eps is None:
             raise ValueError("ground_model='sommerfeld' requires ground_eps")
-        self.ground_eps = None if ground_eps is None else complex(ground_eps)
+        # Stored as given, like every other family: a complex eps-tilde or the
+        # (eps_r, sigma) pair, folded by `_ground_refl.eps_tilde` at solve
+        # time. `complex(pair)` used to sit here and raised TypeError on the
+        # spelling antennaknobs' engine passes, while the capability row
+        # declared refl-coef and sommerfeld served.
+        self.ground_eps = ground_eps
         self.ground_model = ground_model
         self.ground_phi_mode = ground_phi_mode
 
