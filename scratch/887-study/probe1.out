@@ -1,0 +1,29 @@
+momwire#887 — coated fine-mesh study, eps_r = 9.0, 600 MHz
+lambda = 499.654 mm, a = 3.175 mm, b = 6.35 mm, a'/a = 1.8517
+
+  arm table for SinusoidalSolver, eps_r = 9.0:
+    bare     kernel a = 3.175000 mm   L' = 0.000000 nH/m
+    a-only   kernel a = 5.879304 mm   L' = 0.000000 nH/m
+    L-only   kernel a = 3.175000 mm   L' = 123.226165 nH/m
+    a'+L     kernel a = 5.879304 mm   L' = 123.226165 nH/m
+
+  conductance-peak h/lambda, SinusoidalSolver:
+    arm        lam/120    lam/160    lam/240    lam/320  
+    bare       0.2202     0.2202     0.2202     0.2202      drift 0.0000
+    a-only     0.2101     0.2101     0.2101     0.2081      drift 0.0020
+    L-only     0.2001     0.2001     0.2001     0.2001      drift 0.0000
+    a'+L       0.1881     0.1861     0.1861     0.2642      drift 0.0781
+
+  arm table for BSplineSolver, eps_r = 9.0:
+    bare     kernel a = 3.175000 mm   L' = 0.000000 nH/m
+    a-only   kernel a = 5.879304 mm   L' = 0.000000 nH/m
+    L-only   kernel a = 3.175000 mm   L' = 123.226165 nH/m
+    a'+L     kernel a = 5.879304 mm   L' = 123.226165 nH/m
+
+  conductance-peak h/lambda, BSplineSolver:
+    arm        lam/120    lam/160    lam/240    lam/320  
+    bare       0.2222     0.2202     0.2202     0.2202      drift 0.0020
+    a-only     0.2121     0.2101     0.2101     0.2081      drift 0.0040
+    L-only     0.2021     0.2021     0.2001     0.2001      drift 0.0020
+    a'+L       0.1881     0.1881     0.1861     0.2982      drift 0.1121
+
