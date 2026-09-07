@@ -71,7 +71,7 @@ _AXES = (
 # `nec5_quadrature=`, `extended_kernel=`, `feed_model=` — so a class row
 # declares WHICH VALUES IT CAN BE CONFIGURED TO, and a preset name picks one
 # point. Declaring a single value would have to lie about `BSplineSolver`,
-# which is both bspline-1 and bspline-2.
+# which is both bspline-1, bspline-2 and bspline-3.
 #
 # This is DATA, deliberately: the module contract at the top of this file says
 # one NamedTuple plus one method, no validation machinery. Nothing here
@@ -80,7 +80,20 @@ _AXES = (
 # column per axis. A row that declares a value not listed here is a row that
 # found a value this comment has not caught up with.
 AXIS_VALUES: Mapping[str, tuple[str, ...]] = {
-    "basis": ("pulse", "tent", "bspline-1", "bspline-2", "sinusoidal-3term"),
+    "basis": (
+        "pulse",
+        "tent",
+        "bspline-1",
+        "bspline-2",
+        # momwire#883. The axis stopped at 2 because the generated same-edge
+        # moment tables did; it now stops at 3 for the same reason, and
+        # raising `MAX_D` in scripts/derive_bspline_static_moments.py is what
+        # moves it. bspline-3 solves the standard decks but takes the numpy
+        # same-edge path (the C++ dispatch is a 9-case switch), so it costs
+        # 5-10x degree 2 for a few percent less error at equal N.
+        "bspline-3",
+        "sinusoidal-3term",
+    ),
     "testing": ("point-matching", "galerkin", "path"),
     "charge_support": ("point", "dual-cell", "spline", "basis-implied"),
     "kernel": ("reduced", "extended"),

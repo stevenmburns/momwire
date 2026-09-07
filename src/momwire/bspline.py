@@ -72,6 +72,7 @@ from ._bspline_kernels import (
     _seg_seg_reg_moments_from_geometry_swept,
     _seg_seg_static_moments,
 )
+from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._quadrature import leggauss
 
 from . import _bspline_kernels
@@ -196,6 +197,21 @@ _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_weighted_windowed"
 )
 
+# The C++ same-edge dispatch is a hard 9-case `p*3 + q` switch over the
+# generated inline moments (`_accel_bspline.cpp`), so it stops at degree 2 even
+# though the generated headers now carry degree 3 (momwire#883). Degree 3 falls
+# to the numpy twin through the `d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D` guards
+# below, which is correct and slower; extending the switch to 4x4 (and checking
+# the far multipole series at p, q = 3) is its own unit. The switch's `default`
+# throws rather than returning a wrong number, so a guard that ever leaked
+# would be loud.
+# The highest degree the generated same-edge moment tables cover. Read from
+# the generated file so that raising `MAX_D` in
+# scripts/derive_bspline_static_moments.py and re-running is the whole of
+# extending the basis axis; a hand-written copy here is how the two drift
+# (momwire#883).
+_BSPLINE_MAX_DEGREE = _BSPLINE_MOMENTS_MAX_D
+
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
 
@@ -205,9 +221,24 @@ _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 # per-segment scipy.linalg.solve. With u_local = h_seg * [0, 1/d, ..., 1],
 # the Vandermonde factors as Vmat = V_unit @ diag(1, h, h², ..., h^d), so
 # coeffs_p = (V_unit_inv @ vals)_p / h_seg^p — pure matmul + column scaling.
+#
+# Written out rather than computed with `np.linalg.inv`: every entry below is
+# an exact binary float (integers, and halves at d = 3), so the literals are
+# the exact inverse while a numerical inversion would put roundoff into the
+# d = 1 and d = 2 answers that ship today. They were derived exactly —
+# `sympy.Matrix([[u**p ...]]).inv()` on u_i = i/d — and `tests/…` checks each
+# one against its Vandermonde rather than trusting the transcription.
 _V_UNIT_INV: dict[int, np.ndarray] = {
     1: np.array([[1.0, 0.0], [-1.0, 1.0]]),
     2: np.array([[1.0, 0.0, 0.0], [-3.0, 4.0, -1.0], [2.0, -4.0, 2.0]]),
+    3: np.array(
+        [
+            [1.0, 0.0, 0.0, 0.0],
+            [-5.5, 9.0, -4.5, 1.0],
+            [9.0, -22.5, 18.0, -4.5],
+            [-4.5, 13.5, -13.5, 4.5],
+        ]
+    ),
 }
 
 
@@ -726,8 +757,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     n_per_edge_per_wire : list of (int | sequence | None). Per-wire segment
         counts per edge. None for a wire ⇒ use `nsegs` on every edge; int ⇒
         same count for every edge; sequence ⇒ explicit per-edge count.
-    degree : B-spline degree (1 ≤ degree ≤ 2 currently; static-moment file
-        only covers max_d=2). d=1 IS the tent basis (it reproduced the
+    degree : B-spline degree (1 ≤ degree ≤ 3 currently; the static-moment
+        file covers max_d=3 since momwire#883). d=1 IS the tent basis (it
+        reproduced the
         retired TriangularSolver to roundoff whenever the feed lands on a
         knot; for a between-knots feed arclength triangular snapped to the
         nearest knot while this solver excites the exact arclength).
@@ -927,10 +959,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # "pec")` answered None while `_medium_spec.wire_media` raised.
     capabilities = Capabilities(
         # Compositional row (antennaknobs#1006). `degree=` is a kwarg, so
-        # this class IS both tent and quadratic — the set, not one value.
+        # this class IS tent, quadratic and cubic — the set, not one value.
         # `extended_kernel=` likewise gives it both kernels.
         axes={
-            "basis": ("bspline-1", "bspline-2"),
+            "basis": ("bspline-1", "bspline-2", "bspline-3"),
             "testing": ("galerkin",),
             "charge_support": ("spline",),
             "kernel": ("reduced", "extended"),
@@ -1024,10 +1056,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cancel = cancel
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
-        if degree > 2:
+        if degree > _BSPLINE_MAX_DEGREE:
             raise NotImplementedError(
-                "degree > 2 needs scripts/derive_bspline_static_moments.py "
-                "to be re-run with a larger MAX_D"
+                f"degree > {_BSPLINE_MAX_DEGREE} needs "
+                "scripts/derive_bspline_static_moments.py to be re-run with a "
+                "larger MAX_D"
             )
         if not wires:
             raise ValueError("wires must be non-empty")

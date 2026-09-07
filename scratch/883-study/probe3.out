@@ -1,0 +1,61 @@
+momwire#883 — bspline degree 1 / 2 / 3, lambda = 8.0 m, a = 0.01 m
+Each degree is scored against its OWN finest mesh (see the docstring).
+
+BOTH feed models are run because the point (delta-gap) drive has a
+convergence story of its own — the same log divergence as Delta -> 0
+that momwire#887 ran into — and if it dominates, every degree scores
+the FEED and the basis comparison is blind. Compare the two blocks:
+orders that are the same across degrees in both blocks are the feed's.
+
+=== feed_model = 'point'
+
+  dipole
+    d=1  N10: 69.877 -3.040j  N20: 71.565 -0.454j  N40: 72.273 +0.889j  N80: 72.703 +1.802j
+          |dZ| vs own finest: 5.61e+00 2.53e+00 1.01e+00   order  1.24      13.8 ms at N=80
+    d=2  N10: 72.078 +2.161j  N20: 72.422 +2.567j  N40: 72.723 +3.049j  N80: 73.001 +3.539j
+          |dZ| vs own finest: 1.66e+00 1.13e+00 5.63e-01   order  0.78      24.9 ms at N=80
+    d=3  N10: 72.394 +2.455j  N20: 72.666 +2.931j  N40: 72.936 +3.400j  N80: 73.192 +3.837j
+          |dZ| vs own finest: 1.60e+00 1.05e+00 5.07e-01   order  0.83     131.1 ms at N=80
+
+  inv-vee
+    d=1  N10: 60.547+49.425j  N20: 61.518+51.215j  N40: 62.259+52.447j  N80: 63.109+53.454j
+          |dZ| vs own finest: 4.78e+00 2.75e+00 1.32e+00   order  0.93      44.7 ms at N=80
+    d=2  N10: 60.029+52.025j  N20: 60.953+52.938j  N40: 61.725+53.762j  N80: 62.500+54.533j
+          |dZ| vs own finest: 3.52e+00 2.22e+00 1.09e+00   order  0.84      54.0 ms at N=80
+    d=3  N10: 60.811+52.764j  N20: 61.568+53.567j  N40: 62.271+54.301j  N80: 63.096+54.984j
+          |dZ| vs own finest: 3.19e+00 2.08e+00 1.07e+00   order  0.79     504.6 ms at N=80
+
+  two-wire
+    d=1  N10: 23.825+14.976j  N20: 25.248+20.095j  N40: 26.033+22.801j  N80: 26.639+24.786j
+          |dZ| vs own finest: 1.02e+01 4.89e+00 2.08e+00   order  1.15      29.9 ms at N=80
+    d=2  N10: 25.360+21.763j  N20: 25.965+23.598j  N40: 26.494+25.193j  N80: 26.978+26.619j
+          |dZ| vs own finest: 5.12e+00 3.19e+00 1.51e+00   order  0.88      61.3 ms at N=80
+    d=3  N10: 25.881+23.297j  N20: 26.397+24.888j  N40: 26.866+26.277j  N80: 27.312+27.547j
+          |dZ| vs own finest: 4.49e+00 2.81e+00 1.35e+00   order  0.87     664.1 ms at N=80
+
+=== feed_model = 'segment'
+
+  dipole
+    d=1  N10: 73.135 -1.495j  N20: 72.348 +0.796j  N40: 72.435 +1.833j  N80: 72.704 +2.593j
+          |dZ| vs own finest: 4.11e+00 1.83e+00 8.06e-01   order  1.18      17.9 ms at N=80
+    d=2  N10: 74.236 +2.020j  N20: 72.953 +2.552j  N40: 72.856 +3.050j  N80: 73.035 +3.529j
+          |dZ| vs own finest: 1.93e+00 9.81e-01 5.12e-01   order  0.96      23.6 ms at N=80
+    d=3  N10: 74.446 +3.204j  N20: 73.150 +3.482j  N40: 73.028 +3.810j  N80: 73.187 +4.180j
+          |dZ| vs own finest: 1.59e+00 6.99e-01 4.03e-01   order  0.99     125.8 ms at N=80
+
+  inv-vee
+    d=1  N10: 59.508+50.259j  N20: 60.378+51.567j  N40: 61.213+52.655j  N80: 62.015+53.635j
+          |dZ| vs own finest: 4.20e+00 2.64e+00 1.27e+00   order  0.87      47.7 ms at N=80
+    d=2  N10: 60.410+52.395j  N20: 60.988+53.038j  N40: 61.689+53.793j  N80: 62.453+54.546j
+          |dZ| vs own finest: 2.97e+00 2.10e+00 1.07e+00   order  0.73      67.0 ms at N=80
+    d=3  N10: 60.434+53.237j  N20: 61.032+53.742j  N40: 61.730+54.398j  N80: 62.457+55.075j
+          |dZ| vs own finest: 2.73e+00 1.95e+00 9.93e-01   order  0.73     519.0 ms at N=80
+
+  two-wire
+    d=1  N10: 24.673+15.775j  N20: 25.283+20.374j  N40: 25.892+22.891j  N80: 26.461+24.816j
+          |dZ| vs own finest: 9.22e+00 4.60e+00 2.01e+00   order  1.10      29.5 ms at N=80
+    d=2  N10: 26.174+22.412j  N20: 26.167+23.771j  N40: 26.545+25.239j  N80: 26.994+26.631j
+          |dZ| vs own finest: 4.30e+00 2.98e+00 1.46e+00   order  0.78      86.6 ms at N=80
+    d=3  N10: 26.493+23.998j  N20: 26.462+25.079j  N40: 26.808+26.328j  N80: 27.229+27.559j
+          |dZ| vs own finest: 3.64e+00 2.60e+00 1.30e+00   order  0.74     516.7 ms at N=80
+

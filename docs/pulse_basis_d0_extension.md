@@ -57,8 +57,16 @@ if degree > 2:
     )
 ```
 
-Change to `if degree < 0` / leave `degree > 2` as is. Update the
-docstring's `1 ≤ degree ≤ 2` band accordingly.
+Change to `if degree < 0` / leave the upper refusal as is. Update the
+docstring's degree band accordingly.
+
+> **Stale quote (momwire#883).** The snippet above is the code as it stood
+> when this proposal was written. The upper bound is now
+> `degree > _BSPLINE_MAX_DEGREE`, read from the generated moment tables'
+> own `MAX_D`, and it is 3 rather than 2. Nothing about the d = 0 argument
+> changes — the lower refusal is still `degree < 1` — but the line to edit
+> is spelled differently now, and `_V_UNIT_INV` has a d = 3 row alongside
+> the ones below.
 
 ### 2. Add `_V_UNIT_INV[0]`
 

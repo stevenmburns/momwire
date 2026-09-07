@@ -70,7 +70,11 @@ N_TERMS = 64
 # module docstring for why this is derived and not tuned.
 FAR_RATIO = 0.5
 
-MAX_P = 2  # what `_bspline_static_moments` is generated for
+# What `_bspline_static_moments` is generated for, read from the generated
+# file rather than restated here (momwire#883). The series below is generic in
+# p — `_centred_moments` expands (û + h/2)^p for any p — so this is a guard
+# keeping the two spellings' domains equal, not a limit of the derivation.
+from ._bspline_static_moments import MAX_D as MAX_P  # noqa: E402
 
 
 def _centred_moments(p, h, nmax):

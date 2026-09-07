@@ -269,16 +269,16 @@ def test_the_two_lanes_switch_on_the_same_pairs():
 # ======================================================================
 GENERATED = {
     "_bspline_static_moments.py": (
-        "6c09cb94e7d5774d9cd16f420c34eabdca92f4c27bbdd4a6befc8339ff998a9b"
+        "49c96f47cf963a8d415957391f3aa1ef2ca3b0f2ac0acf9153769fa76cd0514e"
     ),
     "_bspline_static_moments_inline.h": (
-        "f11b6b65abf0b9b1f1257a1ffb0ebd71563650068266b6109c5b396f6c01b441"
+        "35e8d4a40dedcb099332f6afcb44afbef848efb563db8babb059f7f6550d9014"
     ),
     "_bspline_ek_moments.py": (
-        "01a91dac847a18e91127d9e359bf56df469714447a79c12e10624dbd69d13956"
+        "73ec9f74203daac665d73bdcb54913fdb40168adbe0aa94b9e04206cc6aa9488"
     ),
     "_bspline_ek_moments_inline.h": (
-        "86aa450dfc3fbe59e793b7cc140d5eb3b8fb3b7aca481c4609c52e216283d8bb"
+        "ecc95e2b6a35cf5b9eee8a4d664813b53d8f6d5f2f2b5266b102eced227f2afe"
     ),
 }
 

@@ -116,6 +116,7 @@ from collections import namedtuple
 
 import numpy as np
 
+from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._bspline_ek_moments import D_ek_moment
 from ._bspline_static_far import J_static_stable as J_static_moment
 from ._quadrature import leggauss
@@ -168,9 +169,16 @@ _HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_CPLX_TIERED_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_cplx_tiered"
 )
+# The C++ same-edge dispatch is a hard 9-case `p*3 + q` switch over the
+# generated inline moments, so the accelerated path stops at degree 2 even
+# though the tables now reach 3 (momwire#883). Degree 3 takes the numpy twin,
+# which is the reference the C++ gate compares against anyway.
 _BSPLINE_ACCEL_MAX_D = 2
 
-MAX_D_SUPPORTED = 2
+# What the generated tables actually cover, read from the generated file rather
+# than restated (momwire#883): re-running the deriver with a larger MAX_D is
+# then the whole of extending the basis axis.
+MAX_D_SUPPORTED = _BSPLINE_MOMENTS_MAX_D
 
 
 # ----------------------------------------------------------------------

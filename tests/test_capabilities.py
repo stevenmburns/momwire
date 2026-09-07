@@ -1041,7 +1041,7 @@ def test_no_row_restates_a_derived_axis():
 def test_axes_for_returns_declared_union_derived():
     """The single derivation, checked on a real row and on the empty one."""
     got = axes_for(BSplineSolver.capabilities)
-    assert got["basis"] == frozenset({"bspline-1", "bspline-2"})
+    assert got["basis"] == frozenset({"bspline-1", "bspline-2", "bspline-3"})
     assert got["ground_model"] == frozenset({"free", "pec", "refl-coef", "sommerfeld"})
     assert got["wire_position"] == frozenset({"above", "contact", "buried"})
 

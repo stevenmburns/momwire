@@ -29,20 +29,31 @@ is the second generated family.
     O(a²) residue of a catastrophic cancellation (momwire#205 class).
 
 The derivation route is by parts, not brute force. With
-`H(ξ) = −a²/(4√(ξ²+a²))` one has `H″ = Δg` exactly, so for `Q(t) = (t−A)^q`
-with q ≤ 2 (hence constant `Q″ = q(q−1)`),
+`H(ξ) = −a²/(4√(ξ²+a²))` one has `H″ = Δg` exactly, so for `Q(t) = (t−A)^q`,
+whose second derivative is `Q″(t) = q(q−1)·(t−A)^(q−2)`,
 
-    ∫_A^B Q(t) H″(s−t) dt = −[Q H′]_A^B − [Q′ H]_A^B + q(q−1)·∫_A^B H(s−t) dt
+    ∫_A^B Q(t) H″(s−t) dt = −[Q H′]_A^B − [Q′ H]_A^B
+                            + q(q−1)·∫_A^B (t−A)^(q−2) H(s−t) dt
 
 and therefore
 
-    D_pq = −∫ P(s)[Q H′]_A^B ds − ∫ P(s)[Q′ H]_A^B ds − q(q−1)·(a²/4)·J_p0
+    D_pq = −∫ P(s)[Q H′]_A^B ds − ∫ P(s)[Q′ H]_A^B ds − q(q−1)·(a²/4)·J_{p,q−2}
 
 i.e. boundary terms in `H` and `H′ = a²ξ/(4R³)` — 1-D integrals of a
 polynomial against an elementary antiderivative, a second each — plus a
 scaled copy of the already-derived, already-audited J family. Handing the
 combined Δg straight to two nested `sp.integrate` calls also works and
 returns the identical D₀₀, but costs 553 s for that one moment alone.
+
+    THE q INDEX ON THAT J CALL IS q−2, NOT 0 (momwire#883). Q″ is a
+    CONSTANT only for q ≤ 2, and this file had only ever been run at
+    MAX_D = 2, where q−2 and 0 are the same number — and at q ∈ {0, 1} the
+    q(q−1) factor is zero, so the call is dead either way. Every value ever
+    generated is therefore unaffected. The first value that is NOT is
+    q = 3, where emitting J_{p,0} is wrong by a FACTOR of 5 to 21, measured
+    against direct 2-D quadrature of Δg
+    (`scratch/883-study/probe1_ek_q3_is_wrong.py`). Raising MAX_D without
+    this would have silently shipped wrong EK moments.
 
 Every emitted D expression carries an explicit `a²` factor at the top
 level, so the a → 0 collapse onto the reduced kernel is structural. (It is
@@ -83,7 +94,7 @@ import sympy as sp
 from sympy.printing.cxx import CXX11CodePrinter
 from sympy.printing.numpy import NumPyPrinter
 
-MAX_D = 2
+MAX_D = 3
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 OUT_PATH_PY = REPO_ROOT / "src" / "momwire" / "_bspline_static_moments.py"
@@ -128,6 +139,12 @@ def emit_py(entries, path, max_d):
         '"""',
         "",
         "import numpy as np",
+        "",
+        "# The highest p, q this file was generated for. `bspline.py` reads it as",
+        "# the degree bound rather than carrying its own copy, so raising MAX_D in",
+        "# the generator and re-running is the WHOLE of extending the basis axis",
+        "# (momwire#883). A second hand-written bound is how the two drift.",
+        f"MAX_D = {max_d}",
         "",
         "",
         "def J_static_moment(p, q, alpha, beta, A, B, a):",
@@ -203,8 +220,9 @@ def derive_ek_all(max_d):
         for q in range(max_d + 1):
             # Q(t) = (t-A)^q and its derivative, evaluated at the two source
             # endpoints. 0^0 = 1, so Q(A) survives only at q = 0 and Q'(A)
-            # only at q = 1; Q'' = q(q-1) is the constant that scales the
-            # reused J_p0 double integral.
+            # only at q = 1; Q'' = q(q-1)·(t-A)^(q-2), so the reused double
+            # integral is J_{p,q-2} scaled by q(q-1) — see the module
+            # docstring for why that index is not 0 (momwire#883).
             q_at_b = (B - A) ** q
             q_at_a = sp.Integer(1 if q == 0 else 0)
             qp_at_b = q * (B - A) ** (q - 1) if q >= 1 else sp.Integer(0)
@@ -213,13 +231,17 @@ def derive_ek_all(max_d):
             bracket += qp_at_b * corner(f0, p, B) - qp_at_a * corner(f0, p, A)
             bracket += -sp.Integer(q * (q - 1)) * J_CALL
             expr = sp.Rational(1, 4) * a**2 * bracket
+            j_q = max(0, q - 2)  # dead whenever q(q-1) == 0; see the docstring
             np_code = (
                 np_printer.doprint(expr)
                 .replace("numpy.", "np.")
-                .replace(J_CALL.name, f"J_static_moment({p}, 0, alpha, beta, A, B, a)")
+                .replace(
+                    J_CALL.name,
+                    f"J_static_moment({p}, {j_q}, alpha, beta, A, B, a)",
+                )
             )
             cxx_code = cxx_printer.doprint(expr).replace(
-                J_CALL.name, f"J_static_pq_{p}_0(alpha, beta, A, B, a)"
+                J_CALL.name, f"J_static_pq_{p}_{j_q}(alpha, beta, A, B, a)"
             )
             entries.append((p, q, np_code, cxx_code))
     return entries
