@@ -5,6 +5,7 @@ rank we can put the quantity the stopping rule TESTS beside the true residual
 it is meant to bound.
 """
 
+import os
 import sys
 
 import numpy as np
@@ -23,7 +24,7 @@ _orig = HM.aca_partial
 
 
 def traced(get_row, get_col, m, n, tol=1e-3, max_rank=None):
-    if m != n or m < 100:                      # only the global Sommerfeld block
+    if m != n or m < 100:  # only the global Sommerfeld block
         return _orig(get_row, get_col, m, n, tol=tol, max_rank=max_rank)
     dense = np.empty((m, n), dtype=np.complex128)
     for i in range(m):
@@ -86,14 +87,22 @@ def main():
     base = bc.default_nseg("loops.skyloop_lmatch")
     b = cls()
     b.nominal_nsegs = base * 2
-    eng = MomwireEngine(b, solver=HMatrixSolver,
-                        solver_kwargs={"degree": 2, "aca_tol": float(__import__("os").environ.get("ACA_TOL","1e-6"))},
-                        ground=("finite", 13.0, 0.005))
+    tol = float(os.environ.get("ACA_TOL", "1e-6"))
+    eng = MomwireEngine(
+        b,
+        solver=HMatrixSolver,
+        solver_kwargs={"degree": 2, "aca_tol": tol},
+        ground=("finite", 13.0, 0.005),
+    )
     z = eng.impedance()[0]
-    print(f"Z {z.real:.6f}{z.imag:+.6f}j     aca_tol {__import__("os").environ.get("ACA_TOL","1e-6")}\n")
-    print(f"{'rank':>5s} {'||u||*||v||':>13s} {'tol*||A~||':>13s} {'stop?':>6s} {'TRUE rel err':>14s}")
+    print(f"Z {z.real:.6f}{z.imag:+.6f}j     aca_tol {tol:.0e}\n")
+    print(
+        f"{'rank':>5s} {'||u||*||v||':>13s} {'tol*||A~||':>13s} {'stop?':>6s} {'TRUE rel err':>14s}"
+    )
     for rank, tested, bound, stop, true_rel in TRACE:
-        print(f"{rank:5d} {tested:13.5e} {bound:13.5e} {str(stop):>6s} {true_rel:14.5e}")
+        print(
+            f"{rank:5d} {tested:13.5e} {bound:13.5e} {str(stop):>6s} {true_rel:14.5e}"
+        )
 
 
 main()
