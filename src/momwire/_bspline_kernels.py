@@ -634,8 +634,19 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None):
     w_q = (w01[None, :] * h_seg[:, None]) * np.ones((N, 1))
 
     s_flat = s_q.ravel()
-    diff = s_flat[:, None] - s_flat[None, :]
-    R = np.sqrt(diff * diff + a * a)
+    # IN PLACE (momwire#966). The readable spelling —
+    #     diff = s_flat[:, None] - s_flat[None, :]
+    #     R = np.sqrt(diff * diff + a * a)
+    # — holds THREE (N·n_qp, N·n_qp) float64 arrays at once: `diff`, the
+    # squared temporary, and the result. At one edge of 4,001 segments that
+    # is 3 x 2,049 MB. Every step below is elementwise on an array nothing
+    # else references, and `diff` is dead after the sqrt, so the whole
+    # expression collapses onto one buffer. Bit-identical: the operations and
+    # their order are unchanged, only their destination.
+    R = s_flat[:, None] - s_flat[None, :]
+    R *= R
+    R += a * a
+    np.sqrt(R, out=R)
 
     # u^p evaluated at every quadrature node, weight-folded
     u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)  # (max_d+1, N, n_qp)

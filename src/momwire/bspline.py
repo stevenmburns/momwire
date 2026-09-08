@@ -212,6 +212,21 @@ _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL = _acc is not None and hasattr(
 # (momwire#883).
 _BSPLINE_MAX_DEGREE = _BSPLINE_MOMENTS_MAX_D
 
+# The same-edge correction's chunked route is the DEFAULT; this switch turns it
+# off so the dense whole-edge route stays available as the reference every
+# pre-#966 gate was pinned on. Flipped by tests (module attribute, the way the
+# accelerator flags are flipped), never by a caller: chunking changes only the
+# ORDER of a floating-point accumulation, so a user has no reason to choose and
+# a gate has every reason to compare. Same shape as momwire#915's dense route.
+_SAME_EDGE_CORR_CHUNKED = True
+
+# The second half of momwire#966, switched separately because it is a separate
+# residency worth a separate measurement: R is dead the moment `A_reg` exists
+# on a single-k solve, and holding it to the end of the correction costs
+# (N_e·n_qp)²·8 bytes — measured 806 MB on the 4,001-segment wire, 201 MB on
+# the gate's own deck. Off, the pre-#966 lifetime returns.
+_SAME_EDGE_DROP_R = True
+
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
 
@@ -3820,6 +3835,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Same-edge fixup: the sweep above added the full-kernel block for
         # every pair; each same-edge block must instead be the analytic
         # static + regularised split, so accumulate the difference.
+        built_prep_here = same_edge_prep is None
         if same_edge_prep is None:
             per_wire = geom["per_wire"]
             seg_off = geom["seg_offsets"]
@@ -3841,6 +3857,32 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         ek=ek_se,
                     )
                     same_edge_prep.append((sl, A_st, reg_geo))
+        # THE CORRECTION IS CHUNKED TOO (momwire#966). The sweep above is
+        # bounded by `swept_mem_mb`; this block used to be bounded only by the
+        # EDGE, which is the same thing on every deck whose edges are short
+        # and a different thing entirely on one 4,001-segment wire — where a
+        # single edge IS the whole mesh and the block reached 7 GB against a
+        # 0.26 GB answer.
+        #
+        # Three separate residencies, and it took a re-profile AFTER fixing
+        # the first to find the second (see `_seg_seg_reg_geometry`):
+        #
+        #   1. R, the (N·n_qp)² distance table — now built in place, and
+        #      DROPPED here as soon as `A_reg` exists rather than living to
+        #      the end of the loop. Only when this function built the prep
+        #      itself: a swept caller owns the list and reuses R across k.
+        #   2. `J_edge`, the whole-edge full-kernel block — now produced one
+        #      observer window at a time, exactly as the sweep does it.
+        #   3. `corr = (A_st + A_reg) - J_edge`, which materialised two more
+        #      whole-edge temporaries. Per window it is two window-sized ones.
+        #
+        # What is NOT chunked is `A_st` and `A_reg`. Both are whole-edge by
+        # construction: the C++ same-edge reg kernel checks that R is square,
+        # `(N·n_qp, N·n_qp)`, and refuses a rectangular window, so a row
+        # window there needs a rectangular twin of that kernel (and of its EK
+        # sibling) rather than a call-site change. That is momwire#966's
+        # remaining half and is deliberately not smuggled in here.
+        owns_prep = built_prep_here
         for sl, A_st, reg in same_edge_prep:
             self._checkpoint()  # per same-edge correction block
             A_reg = (
@@ -3848,27 +3890,52 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if isinstance(reg, dict)
                 else reg
             )
-            # The correction subtracts what the sweep above already added for
-            # these pairs, so it must be filled with exactly the sweep's own
-            # EK treatment — the sliced whole-mesh spec, not `ek_se`. (They
-            # agree pair by pair on a same-edge block; slicing keeps the two
-            # windows the same arithmetic rather than merely the same value.)
-            J_edge = _seg_seg_full_moments_offedge(
-                seg_l[sl],
-                seg_r[sl],
-                seg_l[sl],
-                seg_r[sl],
-                a_row[sl],
-                k,
-                d,
-                self.n_qp_pair,
-                ek=_ek_slice(ek, rows=sl, cols=sl),
-                ladder=ladder,  # the sweep's, not this block's (#907)
-            )
-            corr = (A_st + A_reg) - J_edge
-            del J_edge  # same lifetime discipline as the sweep above (#338)
+            if owns_prep and _SAME_EDGE_DROP_R and isinstance(reg, dict):
+                # R is dead the moment A_reg exists on a single-k solve.
+                # Guarded on ownership: a swept caller's prep is reused for
+                # every k in the sweep, and clearing it would make the second
+                # k rebuild the geometry — or fail.
+                reg.clear()
+            n_edge = sl.stop - sl.start
             e_idx = _bases_touching(sl.start, sl.stop)
-            _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop, e_idx, e_idx)
+            # Same budget and the same arithmetic as the sweep's `row_bytes`,
+            # against this edge's own column count rather than the mesh's.
+            corr_row_bytes = (d + 1) ** 2 * n_edge * 16 + (
+                self._offedge_fallback_row_bytes(n_edge)
+            )
+            corr_chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // corr_row_bytes))
+            if not _SAME_EDGE_CORR_CHUNKED:
+                corr_chunk = max(1, n_edge)  # the pre-#966 whole-edge route
+            for r0 in range(sl.start, sl.stop, corr_chunk):
+                r1 = min(r0 + corr_chunk, sl.stop)
+                win = slice(r0, r1)
+                # The correction subtracts what the sweep above already added
+                # for these pairs, so it must be filled with exactly the
+                # sweep's own EK treatment — the sliced whole-mesh spec, not
+                # `ek_se`. (They agree pair by pair on a same-edge block;
+                # slicing keeps the two windows the same arithmetic rather
+                # than merely the same value.)
+                J_win = _seg_seg_full_moments_offedge(
+                    seg_l[win],
+                    seg_r[win],
+                    seg_l[sl],
+                    seg_r[sl],
+                    a_row[win],
+                    k,
+                    d,
+                    self.n_qp_pair,
+                    ek=_ek_slice(ek, rows=win, cols=sl),
+                    ladder=ladder,  # the sweep's, not this block's (#907)
+                )
+                lo = r0 - sl.start
+                hi = r1 - sl.start
+                corr = (A_st[:, :, lo:hi, :] + A_reg[:, :, lo:hi, :]) - J_win
+                del J_win  # drop the window before the next is built (#338)
+                _accumulate(
+                    corr, r0, r1, sl.start, sl.stop, _bases_touching(r0, r1), e_idx
+                )
+                del corr
+            del A_reg
 
         return Z
 
