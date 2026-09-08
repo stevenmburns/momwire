@@ -227,6 +227,14 @@ _SAME_EDGE_CORR_CHUNKED = True
 # the gate's own deck. Off, the pre-#966 lifetime returns.
 _SAME_EDGE_DROP_R = True
 
+# momwire#968's reference switch. On (the default), `A_st` and `A_reg` are built
+# per observer window inside the correction's chunk loop; off, they are built
+# whole-edge once, which is the #967 route and is what the memory gate measures
+# against. Like its two siblings above this is for gates, never for callers:
+# a window is the square answer's sub-block bit for bit, so there is nothing to
+# choose between.
+_SAME_EDGE_WINDOW_BLOCKS = True
+
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
 
@@ -3836,10 +3844,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # every pair; each same-edge block must instead be the analytic
         # static + regularised split, so accumulate the difference.
         built_prep_here = same_edge_prep is None
+        edge_ingredients = None
         if same_edge_prep is None:
+            # momwire#968: keep the INGREDIENTS, not the whole-edge blocks.
+            # `A_st` and `A_reg` are `(d+1, d+1, N_e, N_e)` each and were the
+            # last two whole-edge residencies left after #967 chunked
+            # everything around them; built per observer window they never
+            # exist at full height. `ed_arc` and `a_w` are O(N_e).
             per_wire = geom["per_wire"]
             seg_off = geom["seg_offsets"]
-            same_edge_prep = []
+            edge_ingredients = []
             for w in range(len(per_wire)):
                 pw = per_wire[w]
                 ed_off = pw["edge_offsets"]
@@ -3848,15 +3862,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
                     sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek_se)
-                    reg_geo = _seg_seg_reg_geometry(
-                        ed_arc[i_e],
-                        a_w,
-                        max_d=d,
-                        n_qp=self.n_qp_pair_same_edge,
-                        ek=ek_se,
-                    )
-                    same_edge_prep.append((sl, A_st, reg_geo))
+                    edge_ingredients.append((sl, ed_arc[i_e], a_w))
+            same_edge_prep = []
         # THE CORRECTION IS CHUNKED TOO (momwire#966). The sweep above is
         # bounded by `swept_mem_mb`; this block used to be bounded only by the
         # EDGE, which is the same thing on every deck whose edges are short
@@ -3883,19 +3890,51 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # sibling) rather than a call-site change. That is momwire#966's
         # remaining half and is deliberately not smuggled in here.
         owns_prep = built_prep_here
-        for sl, A_st, reg in same_edge_prep:
+        # Two shapes of entry, one loop body. When this call built the prep it
+        # holds INGREDIENTS and windows `A_st` / `A_reg` per observer chunk
+        # (momwire#968); when a swept caller passed one in, the blocks are
+        # already materialised for its k and are sliced as before. The swept
+        # path is deliberately untouched: its blocks are hoisted once and
+        # reused across every k in the sweep, so windowing them there would
+        # rebuild per k and trade memory for a cost the sweep exists to avoid.
+        if owns_prep and _SAME_EDGE_WINDOW_BLOCKS:
+            entries = [(sl, None, None, arc, a_w) for sl, arc, a_w in edge_ingredients]
+        elif owns_prep:
+            # The pre-#968 route, kept as the reference: whole-edge blocks
+            # built once, then sliced per window.
+            entries = [
+                (
+                    sl,
+                    _seg_seg_static_moments(arc, a_w, max_d=d, ek=ek_se),
+                    _seg_seg_reg_geometry(
+                        arc,
+                        a_w,
+                        max_d=d,
+                        n_qp=self.n_qp_pair_same_edge,
+                        ek=ek_se,
+                    ),
+                    None,
+                    None,
+                )
+                for sl, arc, a_w in edge_ingredients
+            ]
+        else:
+            entries = [(sl, A_st, reg, None, None) for sl, A_st, reg in same_edge_prep]
+        for sl, A_st, reg, ed_arc_e, a_w in entries:
             self._checkpoint()  # per same-edge correction block
-            A_reg = (
-                _seg_seg_reg_moments_from_geometry(reg, k)
-                if isinstance(reg, dict)
-                else reg
-            )
-            if owns_prep and _SAME_EDGE_DROP_R and isinstance(reg, dict):
-                # R is dead the moment A_reg exists on a single-k solve.
-                # Guarded on ownership: a swept caller's prep is reused for
-                # every k in the sweep, and clearing it would make the second
-                # k rebuild the geometry — or fail.
-                reg.clear()
+            A_reg = None
+            if reg is not None:
+                A_reg = (
+                    _seg_seg_reg_moments_from_geometry(reg, k)
+                    if isinstance(reg, dict)
+                    else reg
+                )
+                if owns_prep and _SAME_EDGE_DROP_R and isinstance(reg, dict):
+                    # R is dead the moment A_reg exists on a single-k solve.
+                    # Guarded on ownership: a swept caller's prep is reused for
+                    # every k in the sweep, and clearing it would make the
+                    # second k rebuild the geometry — or fail.
+                    reg.clear()
             n_edge = sl.stop - sl.start
             e_idx = _bases_touching(sl.start, sl.stop)
             # Same budget and the same arithmetic as the sweep's `row_bytes`,
@@ -3929,8 +3968,27 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
                 lo = r0 - sl.start
                 hi = r1 - sl.start
-                corr = (A_st[:, :, lo:hi, :] + A_reg[:, :, lo:hi, :]) - J_win
-                del J_win  # drop the window before the next is built (#338)
+                if ed_arc_e is not None:
+                    win = slice(lo, hi)
+                    A_st_w = _seg_seg_static_moments(
+                        ed_arc_e, a_w, max_d=d, ek=ek_se, rows=win
+                    )
+                    A_reg_w = _seg_seg_reg_moments_from_geometry(
+                        _seg_seg_reg_geometry(
+                            ed_arc_e,
+                            a_w,
+                            max_d=d,
+                            n_qp=self.n_qp_pair_same_edge,
+                            ek=ek_se,
+                            rows=win,
+                        ),
+                        k,
+                    )
+                else:
+                    A_st_w = A_st[:, :, lo:hi, :]
+                    A_reg_w = A_reg[:, :, lo:hi, :]
+                corr = (A_st_w + A_reg_w) - J_win
+                del J_win, A_st_w, A_reg_w  # before the next window (#338)
                 _accumulate(
                     corr, r0, r1, sl.start, sl.stop, _bases_touching(r0, r1), e_idx
                 )
