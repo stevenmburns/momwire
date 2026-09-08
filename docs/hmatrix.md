@@ -72,6 +72,30 @@ Against the dense `BSplineSolver` at matched mesh:
   tightening `aca_tol` and keeping `same_edge=True` recovers ~1e-7 agreement
   at higher fill cost.
 
+> **`aca_tol` IS NOT THE ERROR IN Z** (momwire#971). It bounds the rank
+> truncation of ONE admissible block; the error in the driving-point impedance
+> is the accumulation over all of them, and measured it runs **10² to 10³
+> times** `aca_tol`, erratically. The default was 1e-4 and left up to **7.4 %**
+> on repeated-element decks — the two numbers above are what a *favourable*
+> deck gives, not a bound. It is 1e-6 now, which held every ladder cell inside
+> 1.2e-4.
+>
+> It is also **not monotone in the mesh**, which is what made it look like a
+> divergence. `arrays.folded_invveearray` against dense degree 2 at
+> `aca_tol=1e-4`, relative:
+>
+> | nominal_nsegs | 21 | 31 | 42 | 52 | 63 | 84 |
+> |---|--|--|--|--|--|--|
+> | hmatrix | 8.4e-3 | 8.0e-3 | **3.7e-2** | **3.9e-2** | 5.7e-3 | 6.0e-3 |
+> | arrayblock | 1.5e-2 | 9.9e-3 | **7.4e-2** | 5.0e-2 | 5.8e-3 | 1.0e-2 |
+>
+> It spikes at 42–52 and comes back down; a two-rung ladder sampling 21 and 42
+> reads that as growth with refinement, and it is not. At `aca_tol=1e-8` all
+> six rungs are 1e-7…4e-6, flat — the ACA converges.
+>
+> `aca_eta` is not the knob for this even though it looks like it on one rung:
+> 1.0 → 0.7 took n=42 from 3.7e-2 to 1.75e-4 and made n=21 slightly *worse*.
+
 ## Scaling (`scripts/hmatrix_scaling.py`)
 
 Fixed-length wire, mesh refined, `aca_tol=1e-5`, `aca_eta=2.0`, degree 1:
@@ -176,7 +200,9 @@ z = eng.impedance()
 Web UI / server: registered under the `hmatrix` model key.
 
 Knobs: `aca_eta` (admissibility looseness), `aca_leaf_size` (cluster leaf
-size), `aca_tol` (ACA relative tolerance), `solve_tol` (GMRES tolerance),
+size), `aca_tol` (per-block ACA truncation tolerance, default **1e-6** since
+momwire#971 — see the warning below; it is NOT the error in Z), `solve_tol`
+(GMRES tolerance),
 `swept_dense_max_bases` (basis-count ceiling below which frequency sweeps
 take the batched dense route instead of rebuilding the operator per k —
 issue #262; 0 disables the dispatch, `None` takes the class default),

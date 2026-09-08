@@ -296,6 +296,45 @@ class _AugmentedFactoredSolve:
         return X, [total_iters] * s
 
 
+# The per-block ACA truncation tolerance every H-matrix-family solver starts
+# from. `ArrayBlockSolver` subclasses `HMatrixSolver` and inherits this
+# constructor, so this is the one place it is written down.
+#
+# 1e-6 SINCE momwire#971, from 1e-4. The old default left up to 7.4 % relative
+# error on the driving-point impedance of repeated-element decks, and the
+# reason it was not obvious is worth keeping:
+#
+#   THE ASSEMBLED ERROR IS NOT THE PER-BLOCK TOLERANCE. `aca_tol` bounds the
+#   rank truncation of ONE admissible block; the error in Z is the
+#   accumulation over all of them, and measured it runs 10^2 to 10^3 times
+#   `aca_tol`, erratically. So 1e-4 reads as "0.1 % accurate" and delivered 7 %.
+#
+#   IT IS NOT MONOTONE IN THE MESH, which is what made it look like a
+#   divergence rather than a loose tolerance. `arrays.folded_invveearray`
+#   against dense BSplineSolver(degree=2), relative error at `aca_tol=1e-4`:
+#
+#       nominal_nsegs   21     31     42     52     63     84
+#       hmatrix       8.4e-3 8.0e-3 3.7e-2 3.9e-2 5.7e-3 6.0e-3
+#       arrayblock    1.5e-2 9.9e-3 7.4e-2 5.0e-2 5.8e-3 1.0e-2
+#
+#   It SPIKES at 42-52 and comes back down. A two-rung ladder that sampled 21
+#   and 42 read that as "the error grows with refinement", which it does not.
+#   At `aca_tol=1e-8` every one of those six rungs is 1e-7 to 4e-6, flat — the
+#   ACA converges, and nothing about the geometry or the grouping is wrong.
+#
+# `aca_eta` is NOT the knob for this, though it looks like it on one rung:
+# tightening it 1.0 -> 0.7 took the n=42 error from 3.7e-2 to 1.75e-4 but made
+# n=21 slightly WORSE (8.41e-3 -> 8.88e-3). It shuffles which blocks are
+# approximated and happens to step off the spike; a real admissibility fault
+# would move every rung the same way.
+#
+# COST, measured on `arrays.folded_invveearray` at four rungs: +18-24 % wall
+# time against 1e-4, and ArrayBlock stays 1.7-3.3x faster than dense. That is
+# the trade momwire#971 records: a few percent of a 10-45x win, to stop
+# returning 7 %-wrong answers at meshes a user can land on.
+DEFAULT_ACA_TOL = 1e-6
+
+
 class HMatrixSolver(BSplineSolver):
     """Distance-based hierarchical accelerator for the B-spline MoM.
 
@@ -2070,7 +2109,7 @@ class HMatrixSolver(BSplineSolver):
         *args,
         aca_eta=1.0,
         aca_leaf_size=32,
-        aca_tol=1e-4,
+        aca_tol=DEFAULT_ACA_TOL,
         solve_tol=1e-6,
         hmatrix_use_accel=True,
         precond_eta=None,
