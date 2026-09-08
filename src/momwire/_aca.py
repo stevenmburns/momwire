@@ -132,7 +132,7 @@ def build_block_tree(s, t, eta, leaf_size_stop=None):
     return far, near
 
 
-def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None):
+def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None, return_pivots=False):
     """Adaptive Cross Approximation with partial pivoting.
 
     Builds a low-rank factorisation A ~ U @ V (U: (m, r), V: (r, n)) of an
@@ -141,7 +141,22 @@ def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None):
     newest rank-1 update's Frobenius norm drops below `tol` times the running
     Frobenius norm of the accumulated approximation.
 
-    Returns (U, V). Pure linear algebra — knows nothing about the kernel.
+    Returns (U, V), or (U, V, used_rows, used_cols) with `return_pivots`.
+    Pure linear algebra — knows nothing about the kernel.
+
+    THE STOPPING RULE CANNOT DETECT STAGNATION (#973). It tests the newest
+    update against the accumulated norm, and partial pivoting can exhaust a
+    subspace: the updates then go small because the pivots are trapped, not
+    because the approximation is good. Measured on the skyloop_lmatch global
+    Sommerfeld remainder, the true relative error froze at 0.782 while
+    ||u||*||v|| fell six orders of magnitude, and at a tolerance two decades
+    tighter it stayed frozen for FORTY further ranks before a pivot escaped
+    and the error collapsed. In that regime the tested quantity is
+    anti-correlated with progress, so no threshold on it — and no choice of
+    `tol` — separates "converged" from "stuck". A caller that needs a
+    trustworthy factorisation must check the result against the kernel from
+    OUTSIDE this loop; `return_pivots` exists so it can sample entries this
+    run never looked at.
     """
     if max_rank is None:
         max_rank = min(m, n)
@@ -201,11 +216,11 @@ def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None):
         i_star = int(np.argmax(abscol))
 
     if rank == 0:
-        return (
-            np.zeros((m, 0), dtype=np.complex128),
-            np.zeros((0, n), dtype=np.complex128),
-        )
-    return np.array(U).T.copy(), np.array(V).copy()
+        Uz = np.zeros((m, 0), dtype=np.complex128)
+        Vz = np.zeros((0, n), dtype=np.complex128)
+        return (Uz, Vz, used_rows, used_cols) if return_pivots else (Uz, Vz)
+    Uo, Vo = np.array(U).T.copy(), np.array(V).copy()
+    return (Uo, Vo, used_rows, used_cols) if return_pivots else (Uo, Vo)
 
 
 class HMatrix(_Cancelable):
