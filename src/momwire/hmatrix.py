@@ -38,6 +38,7 @@ instead of the full m·n.
 """
 
 import math
+import warnings
 
 import numpy as np
 import scipy.sparse as sp
@@ -333,6 +334,56 @@ class _AugmentedFactoredSolve:
 # the trade momwire#971 records: a few percent of a 10-45x win, to stop
 # returning 7 %-wrong answers at meshes a user can land on.
 DEFAULT_ACA_TOL = 1e-6
+
+# When the cluster tree FRAGMENTS, the H-matrix route stops paying and the
+# dense one is faster (momwire#972). Thresholds measured, not chosen:
+#
+#   deck                     far blocks   n_basis   far/basis   mean far
+#   verticals.elt_whip           18,354    12,405      1.48        56.3
+#   arrays.bowtie4x4                984     1,440      0.68        35.3
+#   arrays.yagiarray                316       660      0.48        30.8
+#   ... every other catalog deck   <=278               <=0.48
+#
+# elt_whip is 4,067 separate wires, so the tree splits into tens of thousands
+# of blocks; it exceeds 600 s on the accelerators against 83 s dense, and 55 %
+# of that is ACA fetching one row or column at a time through the off-edge
+# kernel. Block SIZE is not the signal — elt_whip's blocks are LARGER than the
+# decks that win — the COUNT is.
+#
+# The ratio separates the catalog with a 2.2x margin (1.48 against 0.68) and
+# the absolute floor keeps a small deck from ever tripping it: 18,354 against
+# 984 is 18.7x. Both must hold.
+_FRAG_FAR_PER_BASIS = 1.0
+_FRAG_MIN_FAR_BLOCKS = 2000
+
+# ...but only if dense can actually run. `_hmatrix_unsupported` records why a
+# silent dense route is the wrong kindness on a deck this class exists to
+# serve: it turns a slow answer into an out-of-memory one. A fragmented deck
+# is exactly the shape that can be too big for the fallback, so the dense
+# matrix is sized first (16 bytes a complex entry) and the route only changes
+# when it fits. elt_whip is 12,405 bases = 2.46 GB and fits; a fragmented deck
+# twice that would not, and keeps the slow-but-bounded H-matrix path with a
+# different sentence.
+_FRAG_DENSE_MAX_GB = 6.0
+
+
+def _dense_matrix_gb(n_basis):
+    """GB the dense complex Z would occupy at this basis count.
+
+    A function rather than an inline expression so the fallback's size guard
+    can be gated on arithmetic instead of on a deck: exercising
+    `_FRAG_DENSE_MAX_GB`'s default otherwise needs ~19,400 bases, which is
+    larger than anything in the catalog and far too slow for a lane.
+    """
+    return 16.0 * float(n_basis) * float(n_basis) / 1e9
+
+
+class HMatrixFragmented(UserWarning):
+    """The cluster tree fragmented, so the H-matrix route is not paying.
+
+    Advisory only — the answer is unchanged either way, and which route ran is
+    named in the text. Raised once per solver.
+    """
 
 
 class HMatrixSolver(BSplineSolver):
@@ -1734,6 +1785,62 @@ class HMatrixSolver(BSplineSolver):
         X, self._last_solve_iters = fac.solve(B, self.solve_tol)
         return X
 
+    def _fragmentation(self):
+        """(far_blocks, n_basis, ratio) when the tree has fragmented, else None.
+
+        Reads the cached partition, so this costs nothing after the first call
+        (1.6 s on the worst catalog deck, against a solve that exceeded 600 s).
+        """
+        part = self.build_partition()
+        far = len(part["far"])
+        n_basis = int(part["root"].size)
+        if n_basis <= 0 or far < _FRAG_MIN_FAR_BLOCKS:
+            return None
+        ratio = far / n_basis
+        if ratio <= _FRAG_FAR_PER_BASIS:
+            return None
+        return far, n_basis, ratio
+
+    def _prefers_dense_for_fragmentation(self):
+        """True when the tree fragmented AND dense can hold the matrix.
+
+        Separate from `_hmatrix_unsupported`, which means "this path CANNOT
+        serve the deck". This one means "it can, and should not" — a
+        performance route change, not a capability one, and keeping the two
+        apart is what stops a future capability edit silently changing when
+        the fallback fires.
+        """
+        frag = self._fragmentation()
+        if frag is None:
+            return False
+        far, n_basis, ratio = frag
+        dense_gb = _dense_matrix_gb(n_basis)
+        fits = dense_gb <= _FRAG_DENSE_MAX_GB
+        if not getattr(self, "_frag_warned", False):
+            self._frag_warned = True
+            if fits:
+                warnings.warn(
+                    f"the cluster tree fragmented ({far} far blocks over "
+                    f"{n_basis} bases, {ratio:.2f} per basis) — the H-matrix "
+                    "route fetches one row or column per block and is slower "
+                    "than the dense fill here, so this solve took the DENSE "
+                    "route. The answer is BSplineSolver's.",
+                    HMatrixFragmented,
+                    stacklevel=3,
+                )
+            else:
+                warnings.warn(
+                    f"the cluster tree fragmented ({far} far blocks over "
+                    f"{n_basis} bases, {ratio:.2f} per basis), so the "
+                    "H-matrix route is slower than a dense fill would be — but "
+                    f"the dense matrix would need {dense_gb:.1f} GB, over the "
+                    f"{_FRAG_DENSE_MAX_GB:.0f} GB this fallback allows, so the "
+                    "H-matrix route ran anyway. Expect it to be slow.",
+                    HMatrixFragmented,
+                    stacklevel=3,
+                )
+        return fits
+
     def _hmatrix_unsupported(self):
         """The H-matrix path supports free space, PEC ground (per-block
         image term folded into the near/far block fill — see
@@ -1806,7 +1913,7 @@ class HMatrixSolver(BSplineSolver):
         back in with the sweep's hoisted same-edge block — and is ignored on
         the accelerated path, which builds its own blocks.
         """
-        if self._hmatrix_unsupported():
+        if self._hmatrix_unsupported() or self._prefers_dense_for_fragmentation():
             return super().compute_port_solution(same_edge_prep=same_edge_prep)
         ctx = self._context()
         geom = ctx["geom"]
@@ -1848,7 +1955,7 @@ class HMatrixSolver(BSplineSolver):
         method with the hoist. Before it did, an enriched sweep on an
         H-matrix solver raised `TypeError` from inside the base sweep.
         """
-        if self._hmatrix_unsupported():
+        if self._hmatrix_unsupported() or self._prefers_dense_for_fragmentation():
             return super().compute_impedance(same_edge_prep=same_edge_prep)
         ctx = self._context()
         geom = ctx["geom"]
@@ -2017,7 +2124,11 @@ class HMatrixSolver(BSplineSolver):
         consults the same predicate, so swept Z and swept Y are never on
         different engines.
         """
-        if self._hmatrix_unsupported() or self._swept_prefers_dense():
+        if (
+            self._hmatrix_unsupported()
+            or self._swept_prefers_dense()
+            or self._prefers_dense_for_fragmentation()
+        ):
             return super().compute_impedance_swept(k_array)
         _refuse_complex_k(k_array, "HMatrixSolver.compute_impedance_swept")
         k_array = np.asarray(k_array, dtype=float)
@@ -2094,7 +2205,11 @@ class HMatrixSolver(BSplineSolver):
         also where the base sweep's batched same-edge precompute is worth
         having.
         """
-        if self._hmatrix_unsupported() or self._swept_prefers_dense():
+        if (
+            self._hmatrix_unsupported()
+            or self._swept_prefers_dense()
+            or self._prefers_dense_for_fragmentation()
+        ):
             yield from super()._port_solutions_swept(k_array)
             return
         _refuse_complex_k(k_array, "HMatrixSolver._port_solutions_swept")

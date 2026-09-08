@@ -1142,6 +1142,24 @@ class ArrayBlockSolver(HMatrixSolver):
             f"{hint} — or drop require_lattice_fft."
         )
 
+    def _prefers_dense_for_fragmentation(self):
+        """The H-matrix fragmentation check, with the element partition built
+        FIRST so its own advisory still reaches the user (momwire#972).
+
+        Order matters and is the whole point of this override. The base check
+        routes straight to the dense path, and on a fragmented deck that meant
+        `array_partition()` was never called — so `ArrayBlockNoRepeats` never
+        fired and a user of THIS class saw only "the tree fragmented", with no
+        word about why an ArrayBlock solve was on the H-matrix route at all.
+
+        `verticals.elt_whip` is the deck that shows it: one connected
+        structure of 4,067 wires, so there is nothing to block AND the tree
+        fragments. Both sentences are true, they read as one story in that
+        order, and exactly one of them — this one — changes the route.
+        """
+        self.array_partition()
+        return super()._prefers_dense_for_fragmentation()
+
     def _degenerate_partition(self):
         """True when the element partition offers nothing the block solver
         can exploit: no shape class has two members (so neither the self-block
