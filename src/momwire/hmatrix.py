@@ -335,6 +335,39 @@ class _AugmentedFactoredSolve:
 # returning 7 %-wrong answers at meshes a user can land on.
 DEFAULT_ACA_TOL = 1e-6
 
+# Sampled-residual gate on the GLOBAL Sommerfeld remainder factorisation
+# (#973). The ACA's own stopping test cannot see pivot stagnation -- there the
+# tested update is anti-correlated with progress -- so the factorisation is
+# checked against the kernel on entries the run never pivoted on, and the
+# global low-rank route is abandoned for that solve when they disagree.
+#
+# This is a CORRECTNESS gate, not an accuracy knob, and the threshold sits in a
+# measured gap rather than on a slope. Probe residual over 98 antennaknobs
+# catalog designs at the refined mesh, aca_tol 1e-6, sommerfeld ground:
+#
+#     95 healthy   median 3.4e-05, max 1.66e-03 (loops.triangular_skyloop)
+#      3 stagnant  1.0000 (dipoles.dipole_turnstile, loops.horizontal_loop),
+#                  1.1287 (loops.skyloop_lmatch)
+#
+# Nothing lands between 1.7e-03 and 1.0 -- a 602x empty band -- so 1e-2 clears
+# every healthy deck by 6x and sits two decades under every stagnant one. The
+# two designs at exactly 1.0000 are the degenerate case the gap makes obvious:
+# U @ V collapsed to ~0, i.e. the remainder correction was absent entirely.
+# Erring low is the safe direction: a false positive costs a dense fill (time),
+# a false negative ships a wrong impedance.
+#
+# IT IS A CATASTROPHE DETECTOR, NOT AN ERROR BOUND, and the mesh ladder says so.
+# Over six rungs of the skyloop geometry (52 to 280 bases) four rungs stagnate
+# outright -- probe 1.16 to 1.21, current error 5.5e-03, fixed to ~1e-06 -- and
+# two do not. One of the two that does not, at 232 bases, carries a MILD
+# degradation the check misses: probe 2.2e-03, current error 7.7e-04, no
+# fallback. That probe sits only 1.3x above the worst healthy catalog deck
+# (1.66e-03), so no threshold separates mild degradation from health; the
+# 600x gap that IS clean is the one between catastrophic stagnation and
+# everything else, and 1e-2 sits in it. `_last_somm_residual` is exposed so a
+# ladder can record the value rather than only the verdict (#977).
+DEFAULT_SOMM_RESIDUAL_TOL = 1e-2
+
 # When the cluster tree FRAGMENTS, the H-matrix route stops paying and the
 # dense one is faster (momwire#972). Thresholds measured, not chosen:
 #
@@ -384,6 +417,52 @@ class HMatrixFragmented(UserWarning):
     Advisory only — the answer is unchanged either way, and which route ran is
     named in the text. Raised once per solver.
     """
+
+
+def _sampled_residual(U, V, used_rows, used_cols, n, block, n_probe=6, rng_seed=0):
+    """Max relative disagreement between `U @ V` and the true kernel, on
+    entries the ACA never pivoted on.
+
+    This is the ONLY thing that catches #973's stagnation: the ACA's own
+    stopping test is anti-correlated with progress there (see `aca_partial`),
+    so the check has to come from outside the loop and has to avoid the rows
+    and columns the run already looked at -- a stagnated pivot subspace is
+    exactly where the approximation IS good.
+
+    `block(rows, cols)` returns the true sub-block in ONE call. Probing entry
+    by entry is what a first version did and it cost 1.76x on the sommerfeld
+    test lane (13.1s -> 23.1s on test_g17/g18): each 1x1 evaluation re-pays the
+    grid marshalling. One k x k call gives k^2 probes for one setup instead of
+    k probes for k setups.
+
+    Rows and columns are drawn from the unused sets, extremes included, since a
+    trapped pivot subspace is spatially clustered and the basis ordering
+    follows the geometry.
+    """
+    free_r = np.flatnonzero(~used_rows)
+    free_c = np.flatnonzero(~used_cols)
+    if free_r.size == 0 or free_c.size == 0:
+        return 0.0, 0.0
+    rng = np.random.default_rng(rng_seed)
+    kr = min(n_probe, free_r.size)
+    kc = min(n_probe, free_c.size)
+    rows = np.unique(
+        np.concatenate([rng.choice(free_r, size=kr, replace=False), free_r[[0, -1]]])
+    )
+    cols = np.unique(
+        np.concatenate([rng.choice(free_c, size=kc, replace=False), free_c[[0, -1]]])
+    )
+    true = np.asarray(block(rows, cols), dtype=np.complex128).reshape(
+        rows.size, cols.size
+    )
+    approx = (
+        U[np.ix_(rows, np.arange(U.shape[1]))] @ V[:, cols]
+        if U.shape[1]
+        else np.zeros_like(true)
+    )
+    scale = float(np.abs(true).max())
+    worst = float(np.abs(true - approx).max())
+    return (worst / scale if scale > 0.0 else 0.0), scale
 
 
 class HMatrixSolver(BSplineSolver):
@@ -1133,8 +1212,29 @@ class HMatrixSolver(BSplineSolver):
                 idx, idx[j : j + 1], k=k, eps_t=eps_t, grid_args=grid_args
             ).ravel()
 
-        U, V = aca_partial(get_row, get_col, n, n, tol=self.aca_tol)
+        U, V, used_rows, used_cols = aca_partial(
+            get_row, get_col, n, n, tol=self.aca_tol, return_pivots=True
+        )
         self._last_somm_rank = U.shape[1]
+
+        def block(rows, cols):
+            return self._zblock_sommerfeld_remainder(
+                idx[rows], idx[cols], k=k, eps_t=eps_t, grid_args=grid_args
+            )
+
+        resid, scale = _sampled_residual(U, V, used_rows, used_cols, n, block)
+        self._last_somm_residual = resid
+        self._last_somm_fallback = False
+        if resid > self.somm_residual_tol:
+            # The ACA stopped on a stagnated pivot subspace, which its own
+            # criterion cannot see (#973). Fill Q directly for this solve.
+            self._last_somm_fallback = True
+            Q = self._zblock_sommerfeld_remainder(
+                idx, idx, k=k, eps_t=eps_t, grid_args=grid_args
+            )
+            self._last_somm_rank = n
+            return Q, np.eye(n, dtype=np.complex128)
+        _ = scale
         return U, V
 
     def _zblock_image_refl(self, I, J, k=None):
@@ -2225,6 +2325,7 @@ class HMatrixSolver(BSplineSolver):
         aca_eta=1.0,
         aca_leaf_size=32,
         aca_tol=DEFAULT_ACA_TOL,
+        somm_residual_tol=DEFAULT_SOMM_RESIDUAL_TOL,
         solve_tol=1e-6,
         hmatrix_use_accel=True,
         precond_eta=None,
@@ -2235,6 +2336,7 @@ class HMatrixSolver(BSplineSolver):
         self.aca_eta = float(aca_eta)
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)
+        self.somm_residual_tol = float(somm_residual_tol)
         self.solve_tol = float(solve_tol)
         # Preconditioner near-field admissibility. The GMRES preconditioner
         # uses a *stronger* (tighter-eta) near-field than the operator: every
