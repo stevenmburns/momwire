@@ -210,9 +210,16 @@ def test_chunked_matches_dense_where_chunking_actually_engages(degree):
 #
 # Measured on this box, three arms of the same deck:
 #
-#   chunked + R dropped   810.9 MB    ships
-#   chunked, R held      1011.8 MB    ratio 1.25 to shipped
-#   dense whole edge     1494.8 MB    ratio 1.84 to shipped
+#   chunked + R dropped   810.9 MB    the #967 route
+#   chunked, R held      1011.8 MB    ratio 1.25
+#   dense whole edge     1494.8 MB    ratio 1.84
+#
+# ALL THREE ARMS RUN WITH momwire#968's WINDOWING OFF. #968 builds A_st/A_reg
+# per observer window, which makes the reg geometry per-window as well, so R
+# dies with its window and there is no drop left to measure — the two arms
+# came out 338 MB to 338 MB, ratio 1.00, and this gate failed in CI on exactly
+# that. What it gates is the route it was written for, and #968 subsuming the
+# drop on the DEFAULT route is a fact its own gates cover.
 _RSS_N, _RSS_DEGREE, _RSS_MEM = 1500, 2, 64
 # Measured 1.84 and 1.25; pinned well under both so a different allocator has
 # room, and well over 1.0 so neither can be met by two identical routes.
@@ -238,6 +245,12 @@ _ARM = textwrap.dedent(
     import momwire.bspline as bs
     bs._SAME_EDGE_CORR_CHUNKED = sys.argv[1] == "1"
     bs._SAME_EDGE_DROP_R = sys.argv[2] == "1"
+    # momwire#968 windows A_st/A_reg per chunk, which makes the reg geometry
+    # per-window too — so R dies with its window and `_SAME_EDGE_DROP_R` has
+    # nothing left to drop. This gate is about the pre-#968 route, where the
+    # geometry is built whole-edge and the drop is the difference; it says so
+    # by turning windowing off in every arm.
+    bs._SAME_EDGE_WINDOW_BLOCKS = False
     tracemalloc.start()
     s = bs.BSplineSolver(
         wires=[np.array([(0.0, 0.0, 0.0), (0.0, 4000.0, 0.0)])],
