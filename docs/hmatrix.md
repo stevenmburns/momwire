@@ -199,6 +199,18 @@ z = eng.impedance()
 
 Web UI / server: registered under the `hmatrix` model key.
 
+> **The route steps aside when the tree FRAGMENTS** (momwire#972). A structure
+> split into thousands of separate wires makes a cluster tree of tens of
+> thousands of small blocks, and ACA then fetches one row or column per block
+> through the off-edge kernel — measured 55 % of the time on
+> `verticals.elt_whip` (4,067 wires, 12,405 bases, 18,354 far blocks), which
+> exceeded 600 s against 83 s dense. Above `_FRAG_FAR_PER_BASIS` far blocks
+> per basis, and with at least `_FRAG_MIN_FAR_BLOCKS` of them, the solve takes
+> the dense route and says so through an `HMatrixFragmented` advisory. It only
+> switches if the dense matrix fits `_FRAG_DENSE_MAX_GB` — a fragmented deck
+> is exactly the shape that can be too big for the fallback, and trading a
+> slow answer for an out-of-memory one is not a fix.
+
 Knobs: `aca_eta` (admissibility looseness), `aca_leaf_size` (cluster leaf
 size), `aca_tol` (per-block ACA truncation tolerance, default **1e-6** since
 momwire#971 — see the warning below; it is NOT the error in Z), `solve_tol`
