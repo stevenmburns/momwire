@@ -15,6 +15,7 @@ square answer by 5.3e-15 relative on a handful of entries.
 """
 
 import itertools
+import platform
 import sys
 from pathlib import Path
 
@@ -47,9 +48,23 @@ def main(dest):
         out[f"statek/{N}/{max_d}"] = _acc.seg_seg_static_moments_bspline_uniform_ek(
             H, A, N, max_d, A_EK
         )
+    # THE FINGERPRINT IS PART OF THE FIXTURE. Bit-identity is a claim about
+    # THIS toolchain rebuilding the same source, not a portable property: the
+    # closed forms and the reg kernel come out with different last bits under
+    # a different compiler and libm. A fixture banked on Linux/GCC failed on
+    # macOS in CI, correctly. The gate skips unless the fingerprint matches.
+    out["_fingerprint"] = np.array(
+        [
+            platform.system(),
+            platform.machine(),
+            platform.python_version(),
+            np.__version__,
+        ],
+        dtype=object,
+    )
     Path(dest).parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(dest, **out)
-    print(f"banked {len(out)} arrays to {dest}")
+    print(f"banked {len(out) - 1} arrays to {dest} for {out['_fingerprint']}")
 
 
 if __name__ == "__main__":
