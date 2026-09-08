@@ -66,27 +66,47 @@
 //
 // T1, T2 and `scl` are functions of R and a_ek alone, so they hoist out of
 // the k loop next to `inv_R_4pi`; only C1/C2 and the phase are per-k.
+// RECTANGULAR SINCE momwire#968. The observer axis (`i`, rows) and the source
+// axis (`j`, columns) were always independent in the loop nest below — `wu` was
+// indexed `wu(p, i, q)` on one side and `wu(P, j, r)` on the other, and R as
+// `Rr(i*n_qp+q, j*n_qp+r)`. Nothing here ever used `i == j`, a transpose, or a
+// triangle. So taking a SEPARATE row-side and column-side `wu_pow` is the whole
+// generalisation: the square call passes the same array twice and executes the
+// identical instruction stream in the identical order, which is why the
+// existing entry point stays bit-identical rather than merely close.
+//
+// It exists so a caller can build one observer WINDOW of a same-edge block
+// instead of the whole (d+1, d+1, N, N) — the other half of momwire#966, whose
+// first half chunked everything except this and `A_st`.
 template <bool EK>
 static py::array_t<std::complex<double>>
 seg_seg_reg_moments_bspline_swept_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> R,
-    py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_row,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_col,
     py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
     double a_ek
 ) {
     auto Rr = R.unchecked<2>();
-    auto wu = wu_pow.unchecked<3>();
+    auto wu = wu_row.unchecked<3>();
+    auto wuc = wu_col.unchecked<3>();
     auto ka = k_array.unchecked<1>();
 
     size_t n_d  = wu.shape(0);
     size_t N    = wu.shape(1);
     size_t n_qp = wu.shape(2);
+    size_t n_col = wuc.shape(1);
     size_t n_k  = ka.shape(0);
 
-    if (Rr.shape(0) != (py::ssize_t)(N * n_qp) ||
-        Rr.shape(1) != (py::ssize_t)(N * n_qp)) {
+    if ((size_t)wuc.shape(0) != n_d || (size_t)wuc.shape(2) != n_qp) {
         throw std::runtime_error(
-            "R must be (N*n_qp, N*n_qp) consistent with wu_pow (n_d, N, n_qp)");
+            "wu_col must agree with wu_row in (n_d, n_qp)");
+    }
+    if (Rr.shape(0) != (py::ssize_t)(N * n_qp) ||
+        Rr.shape(1) != (py::ssize_t)(n_col * n_qp)) {
+        throw std::runtime_error(
+            "R must be (n_row*n_qp, n_col*n_qp) consistent with wu_row "
+            "(n_d, n_row, n_qp) and wu_col (n_d, n_col, n_qp)");
     }
     if (n_d > 8) {
         throw std::runtime_error("n_d too large (max_d must be <= 7)");
@@ -107,7 +127,7 @@ seg_seg_reg_moments_bspline_swept_impl(
     const double a2_ek = a_ek * a_ek;
     const double a4_ek = a2_ek * a2_ek;
 
-    py::array_t<std::complex<double>> out({n_k, n_d, n_d, N, N});
+    py::array_t<std::complex<double>> out({n_k, n_d, n_d, N, n_col});
     auto o = out.mutable_unchecked<5>();
 
     // Phase 0: release the GIL for the heavy compute region below.
@@ -121,7 +141,7 @@ seg_seg_reg_moments_bspline_swept_impl(
     // einsum's (n_k, N*n_qp, N*n_qp) phase intermediate.
     MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N; i++) {
-        for (size_t j = 0; j < N; j++) {
+        for (size_t j = 0; j < n_col; j++) {
             alignas(32) double R[64];
             alignas(32) double inv_R_4pi[64];
             alignas(32) double phases[64];
@@ -226,7 +246,7 @@ seg_seg_reg_moments_bspline_swept_impl(
                         for (size_t q = 0; q < n_qp; q++) {
                             double wp = wu(p, i, q);
                             for (size_t r = 0; r < n_qp; r++) {
-                                double w = wp * wu(P, j, r);
+                                double w = wp * wuc(P, j, r);
                                 size_t qr = q * n_qp + r;
                                 mre += w * Gre[qr];
                                 mim += w * Gim[qr];
@@ -241,13 +261,17 @@ seg_seg_reg_moments_bspline_swept_impl(
     return out;
 }
 
+// The square entry points: the same array on both axes. Deliberately a
+// DELEGATION and not a copy of the loop — a second body is how the two spellings
+// drift, and bit-identity here is the whole contract (momwire#762, #968).
 static py::array_t<std::complex<double>>
 seg_seg_reg_moments_bspline_swept(
     py::array_t<double, py::array::c_style | py::array::forcecast> R,
     py::array_t<double, py::array::c_style | py::array::forcecast> wu_pow,
     py::array_t<double, py::array::c_style | py::array::forcecast> k_array
 ) {
-    return seg_seg_reg_moments_bspline_swept_impl<false>(R, wu_pow, k_array, 0.0);
+    return seg_seg_reg_moments_bspline_swept_impl<false>(R, wu_pow, wu_pow,
+                                                        k_array, 0.0);
 }
 
 static py::array_t<std::complex<double>>
@@ -257,7 +281,34 @@ seg_seg_reg_moments_bspline_swept_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
     double a_ek
 ) {
-    return seg_seg_reg_moments_bspline_swept_impl<true>(R, wu_pow, k_array, a_ek);
+    return seg_seg_reg_moments_bspline_swept_impl<true>(R, wu_pow, wu_pow,
+                                                       k_array, a_ek);
+}
+
+// The rectangular twins (momwire#968): one observer WINDOW of the same-edge
+// block. `wu_row` carries the window's segments, `wu_col` the whole edge's, and
+// R is (n_row*n_qp, n_col*n_qp). Output is (n_k, n_d, n_d, n_row, n_col).
+static py::array_t<std::complex<double>>
+seg_seg_reg_moments_bspline_swept_window(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_row,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_col,
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array
+) {
+    return seg_seg_reg_moments_bspline_swept_impl<false>(R, wu_row, wu_col,
+                                                        k_array, 0.0);
+}
+
+static py::array_t<std::complex<double>>
+seg_seg_reg_moments_bspline_swept_ek_window(
+    py::array_t<double, py::array::c_style | py::array::forcecast> R,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_row,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wu_col,
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
+    double a_ek
+) {
+    return seg_seg_reg_moments_bspline_swept_impl<true>(R, wu_row, wu_col,
+                                                       k_array, a_ek);
 }
 
 
@@ -3448,6 +3499,39 @@ static double D_ek_dispatch(int p, int q,
 // default, and no EK code is entered to produce it.
 template <bool EK>
 static py::array_t<double>
+seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
+                                          int max_d, double a_ek) {
+    if (max_d < 0 || max_d > 2) {
+        throw std::runtime_error("max_d out of range [0, 2]");
+    }
+    size_t NM = (size_t)(max_d + 1);
+    size_t n_delta = 2 * N - 1;
+    py::array_t<double> out({NM, NM, n_delta});
+    auto v = out.mutable_unchecked<3>();
+    py::gil_scoped_release release;
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+    for (size_t p = 0; p < NM; p++) {
+        for (size_t q = 0; q < NM; q++) {
+            for (size_t di = 0; di < n_delta; di++) {
+                long long delta = (long long)di - (long long)(N - 1);
+                double alpha = 0.0;
+                double beta = h;
+                double A_ = (double)delta * h;
+                double B_ = ((double)delta + 1.0) * h;
+                double val = J_static_dispatch((int)p, (int)q, alpha, beta, A_, B_, a);
+                if (EK) {
+                    val = val + D_ek_dispatch((int)p, (int)q, alpha, beta, A_, B_,
+                                              a_ek);
+                }
+                v(p, q, di) = val * inv_4pi;
+            }
+        }
+    }
+    return out;
+}
+
+template <bool EK>
+static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
                                             int max_d, double a_ek) {
     if (max_d < 0 || max_d > 2) {
@@ -3463,26 +3547,29 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
     // 2N-1 unique Toeplitz values per moment, indexed by Δ = j - i ∈ [-(N-1), N-1].
     // delta_idx = Δ + (N - 1) ∈ [0, 2N-2].
     size_t n_delta = 2 * N - 1;
-    const double inv_4pi = 1.0 / (4.0 * M_PI);
 
-    // Build (NM, NM, n_delta) Toeplitz table
+    // ONE HOME FOR THE CLOSED FORMS (momwire#968). The table loop used to be
+    // written out here as well as in the table producer below, and the
+    // duplicate cost bit-identity: with two copies in the translation unit,
+    // GCC made different inlining choices for `J_static_dispatch` in each and
+    // the square answer moved by 5.3e-15 relative on a handful of entries
+    // against a rebuild of the pre-change source. Nothing about the algebra
+    // changed — but "bit-identical" is the contract this entry point carries
+    // (momwire#762), and a second copy of a 9 x (2N-1) sympy-derived
+    // evaluation is exactly the kind of thing a compiler is free to schedule
+    // differently. Calling the producer keeps one copy, so there is nothing to
+    // schedule two ways.
     std::vector<double> table(NM * NM * n_delta);
-    for (size_t p = 0; p < NM; p++) {
-        for (size_t q = 0; q < NM; q++) {
-            for (size_t di = 0; di < n_delta; di++) {
-                long long delta = (long long)di - (long long)(N - 1);
-                double alpha = 0.0;
-                double beta = h;
-                double A_ = (double)delta * h;
-                double B_ = ((double)delta + 1.0) * h;
-                double val = J_static_dispatch((int)p, (int)q, alpha, beta, A_, B_, a);
-                if (EK) {
-                    // numpy's `vals = vals + D_ek_moment(...)` then `* inv4pi`,
-                    // in that order (_bspline_kernels._seg_seg_static_moments).
-                    val = val + D_ek_dispatch((int)p, (int)q, alpha, beta, A_, B_,
-                                              a_ek);
+    {
+        py::gil_scoped_acquire acquire;
+        auto tab = seg_seg_static_moments_bspline_table_impl<EK>(h, a, N, max_d,
+                                                                 a_ek);
+        auto t = tab.template unchecked<3>();
+        for (size_t p = 0; p < NM; p++) {
+            for (size_t q = 0; q < NM; q++) {
+                for (size_t di = 0; di < n_delta; di++) {
+                    table[(p * NM + q) * n_delta + di] = t(p, q, di);
                 }
-                table[(p * NM + q) * n_delta + di] = val * inv_4pi;
             }
         }
     }
@@ -3511,6 +3598,31 @@ static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_ek(double h, double a, size_t N, int max_d,
                                           double a_ek) {
     return seg_seg_static_moments_bspline_uniform_impl<true>(h, a, N, max_d, a_ek);
+}
+
+// THE TABLE ALONE (momwire#968). A windowed caller wants rows [r0, r1) of the
+// gather, and the first spelling of this exposed exactly that — an
+// `..._uniform_window(h, a, N, max_d, r0, r1)`. Measured, it was 3.7x SLOWER
+// across a whole edge than the single square call, because each window rebuilt
+// the 2N-1 Toeplitz table: 9 x 8,001 sympy-derived closed forms per window at
+// d=2, nine times over on the ladder's finest rung. The gather is trivial; the
+// table is the work.
+//
+// So the table is what crosses the boundary. It is (NM, NM, 2N-1) — 576 kB at
+// N = 4001 against the 2.3 GB gather it feeds — and the caller gathers whatever
+// rows it wants from it in numpy. Bit-identical to the square call by
+// construction: same table, and a gather copies values rather than computing
+// them.
+static py::array_t<double>
+seg_seg_static_moments_bspline_uniform_table(double h, double a, size_t N,
+                                             int max_d) {
+    return seg_seg_static_moments_bspline_table_impl<false>(h, a, N, max_d, 0.0);
+}
+
+static py::array_t<double>
+seg_seg_static_moments_bspline_uniform_ek_table(double h, double a, size_t N,
+                                                int max_d, double a_ek) {
+    return seg_seg_static_moments_bspline_table_impl<true>(h, a, N, max_d, a_ek);
 }
 
 
@@ -3921,6 +4033,25 @@ void register_bspline(py::module_ &m) {
           "seg_seg_static_moments_bspline_uniform_ek. Same-edge blocks are "
           "eligible in their entirety, so there are no per-pair group labels.",
           py::arg("R"), py::arg("wu_pow"), py::arg("k_array"), py::arg("a_ek"));
+    m.def("seg_seg_reg_moments_bspline_swept_window",
+          &seg_seg_reg_moments_bspline_swept_window,
+          "Rectangular twin of seg_seg_reg_moments_bspline_swept "
+          "(momwire#968): ONE OBSERVER WINDOW of a same-edge block. R is "
+          "(n_row*n_qp, n_col*n_qp), wu_row (n_d, n_row, n_qp) carries the "
+          "window's segments and wu_col (n_d, n_col, n_qp) the whole edge's; "
+          "the result is (n_k, n_d, n_d, n_row, n_col). Same kernel body as "
+          "the square call, which delegates to it with one array on both "
+          "axes — the observer and source axes were always independent.",
+          py::arg("R"), py::arg("wu_row"), py::arg("wu_col"),
+          py::arg("k_array"));
+    m.def("seg_seg_reg_moments_bspline_swept_ek_window",
+          &seg_seg_reg_moments_bspline_swept_ek_window,
+          "Rectangular twin of seg_seg_reg_moments_bspline_swept_ek "
+          "(momwire#968). Same windowing contract as "
+          "seg_seg_reg_moments_bspline_swept_window, same EK remainder as the "
+          "square call.",
+          py::arg("R"), py::arg("wu_row"), py::arg("wu_col"),
+          py::arg("k_array"), py::arg("a_ek"));
     m.def("seg_seg_full_moments_bspline", &seg_seg_full_moments_bspline,
           "Single-k full-kernel polynomial moment integrals for the B-spline "
           "Galerkin MoM. Returns J of shape (max_d+1, max_d+1, N_i, N_j) "
@@ -4034,6 +4165,24 @@ void register_bspline(py::module_ &m) {
           "is, so it rides the same 2N-1 Toeplitz table. `a_ek` is separate "
           "from the regularization radius `a` because _EK.a may override it; "
           "on every eligible pair they are equal.",
+          py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
+          py::arg("a_ek"));
+    m.def("seg_seg_static_moments_bspline_uniform_table",
+          &seg_seg_static_moments_bspline_uniform_table,
+          "The 2N-1 Toeplitz TABLE behind "
+          "seg_seg_static_moments_bspline_uniform (momwire#968), shape "
+          "(max_d+1, max_d+1, 2N-1) with the 1/(4 pi) prefactor folded in. The "
+          "square call gathers it into (max_d+1, max_d+1, N, N); a caller "
+          "streaming one edge in observer windows gathers whatever rows it "
+          "wants instead, and gets the square answer's sub-block bit for bit. "
+          "Exposed rather than a row-window gather because the TABLE is the "
+          "work: rebuilding it per window measured 3.7x slower across an edge.",
+          py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"));
+    m.def("seg_seg_static_moments_bspline_uniform_ek_table",
+          &seg_seg_static_moments_bspline_uniform_ek_table,
+          "EK twin of seg_seg_static_moments_bspline_uniform_table "
+          "(momwire#968): each entry carries the D_pq^EK correction the square "
+          "EK call adds.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
           py::arg("a_ek"));
     m.def("assemble_Z_bspline_weighted_windowed", &assemble_Z_bspline_weighted_windowed,

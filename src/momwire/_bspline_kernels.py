@@ -114,6 +114,8 @@ class the reduced kernels have always had).
 
 from collections import namedtuple
 
+from functools import lru_cache
+
 import numpy as np
 
 from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
@@ -513,7 +515,42 @@ def _ek_pair_mask(ek, n_i, n_j):
     return (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
 
 
-def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
+@lru_cache(maxsize=8)
+def _static_toeplitz_table(h, a, N, max_d, a_ek):
+    """The (NM, NM, 2N-1) closed-form table, memoised across observer windows.
+
+    Windowing the same-edge static block (momwire#968) calls this once per
+    window, and the TABLE is the work: without the cache a 9-window edge
+    rebuilt 9 x (max_d+1)^2 x (2N-1) sympy-derived closed forms and ran 3.7x
+    slower across the edge than the single square call. With it, 1.7x — the
+    remainder being the per-window gather, which is a copy.
+
+    Keyed on the scalars it is a pure function of; `maxsize=8` because a solve
+    touches one edge geometry at a time and a stale entry costs 576 kB at
+    N = 4001. `a_ek` is None on the reduced kernel.
+    """
+    if a_ek is None:
+        return _acc.seg_seg_static_moments_bspline_uniform_table(
+            float(h), float(a), int(N), int(max_d)
+        )
+    return _acc.seg_seg_static_moments_bspline_uniform_ek_table(
+        float(h), float(a), int(N), int(max_d), float(a_ek)
+    )
+
+
+def _toeplitz_gather(table, N, r0, r1):
+    """Rows [r0, r1) of the (NM, NM, N, N) gather of a (NM, NM, 2N-1) table.
+
+    `v[p, q, i, j] = table[p, q, j - i + (N - 1)]`, which is a COPY and not a
+    computation — so a window is the square answer's sub-block bit for bit,
+    and the whole cost of the windowed static path is this indexing rather
+    than a rebuilt table (momwire#968).
+    """
+    idx = np.arange(N)[None, :] - np.arange(r0, r1)[:, None] + (N - 1)
+    return np.ascontiguousarray(table[:, :, idx])
+
+
+def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None, rows=None):
     """Closed-form same-edge static-kernel moment integrals.
 
     seg_endpoints: (N+1,) array of arc lengths along a single straight edge.
@@ -548,13 +585,16 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
     n_d = max_d + 1
     inv4pi = 1.0 / (4 * np.pi)
 
+    r0, r1 = (0, N) if rows is None else rows.indices(N)[:2]
+    n_row = max(0, r1 - r0)
+
     uniform = N >= 1 and np.allclose(h_seg, h_seg[0], rtol=1e-12, atol=1e-15)
     if not uniform:
-        alpha = sl[:, None]
-        beta = sr[:, None]
+        alpha = sl[r0:r1, None]
+        beta = sr[r0:r1, None]
         A = sl[None, :]
         B = sr[None, :]
-        out = np.empty((n_d, n_d, N, N), dtype=np.float64)
+        out = np.empty((n_d, n_d, n_row, N), dtype=np.float64)
         for p in range(n_d):
             for q in range(n_d):
                 vals = J_static_moment(p, q, alpha, beta, A, B, a)
@@ -570,8 +610,15 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
     if _HAVE_BSPLINE_STATIC_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and ek is None:
         # C++ inlined sympy-derived closed forms — ~50× faster than numpy
         # because each call escapes per-op dispatch overhead.
-        return _acc.seg_seg_static_moments_bspline_uniform(
-            float(h), float(a), int(N), int(max_d)
+        if rows is None:
+            return _acc.seg_seg_static_moments_bspline_uniform(
+                float(h), float(a), int(N), int(max_d)
+            )
+        return _toeplitz_gather(
+            _static_toeplitz_table(float(h), float(a), int(N), int(max_d), None),
+            N,
+            r0,
+            r1,
         )
     if (
         ek is not None
@@ -582,8 +629,17 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
         # Only the UNIFORM edge reaches here — a non-uniform edge returned
         # above on the numpy dense path, which the C++ kernel does not serve
         # for either kernel flavour.
-        return _acc.seg_seg_static_moments_bspline_uniform_ek(
-            float(h), float(a), int(N), int(max_d), float(_ek_radius(ek, a))
+        if rows is None:
+            return _acc.seg_seg_static_moments_bspline_uniform_ek(
+                float(h), float(a), int(N), int(max_d), float(_ek_radius(ek, a))
+            )
+        return _toeplitz_gather(
+            _static_toeplitz_table(
+                float(h), float(a), int(N), int(max_d), float(_ek_radius(ek, a))
+            ),
+            N,
+            r0,
+            r1,
         )
 
     # numpy Toeplitz fallback: J_pq[i, j] = vals_pq[j - i + (N - 1)]
@@ -592,9 +648,9 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
     beta = np.full_like(delta, h)
     A = delta * h
     B = (delta + 1.0) * h
-    j_minus_i = np.arange(N)[None, :] - np.arange(N)[:, None]
+    j_minus_i = np.arange(N)[None, :] - np.arange(r0, r1)[:, None]
     gather_idx = j_minus_i + (N - 1)
-    out = np.empty((n_d, n_d, N, N), dtype=np.float64)
+    out = np.empty((n_d, n_d, n_row, N), dtype=np.float64)
     for p in range(n_d):
         for q in range(n_d):
             vals = J_static_moment(p, q, alpha, beta, A, B, a)
@@ -605,7 +661,7 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None):
     return out
 
 
-def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None):
+def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
     """k-independent precompute for `_seg_seg_reg_moments`.
 
     Everything in the smooth-kernel moment integral except the `exp(-jkR)`
@@ -634,6 +690,12 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None):
     w_q = (w01[None, :] * h_seg[:, None]) * np.ones((N, 1))
 
     s_flat = s_q.ravel()
+    # `rows` (momwire#968) takes ONE OBSERVER WINDOW: R becomes
+    # (n_row·n_qp, N·n_qp) and the dict carries a row-side `wu_row` beside the
+    # column-side `wu_pow`. That is the whole rectangular contract — the
+    # observer and source axes were always independent in the kernel.
+    r0, r1 = (0, N) if rows is None else rows.indices(N)[:2]
+    s_row = s_flat if rows is None else s_q[r0:r1].ravel()
     # IN PLACE (momwire#966). The readable spelling —
     #     diff = s_flat[:, None] - s_flat[None, :]
     #     R = np.sqrt(diff * diff + a * a)
@@ -643,7 +705,7 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None):
     # else references, and `diff` is dead after the sqrt, so the whole
     # expression collapses onto one buffer. Bit-identical: the operations and
     # their order are unchanged, only their destination.
-    R = s_flat[:, None] - s_flat[None, :]
+    R = s_row[:, None] - s_flat[None, :]
     R *= R
     R += a * a
     np.sqrt(R, out=R)
@@ -652,7 +714,15 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None):
     u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)  # (max_d+1, N, n_qp)
     wu_pow = w_q[None, :, :] * u_pow
 
-    return {"R": R, "wu_pow": wu_pow, "N": N, "n_qp": n_qp, "a": a, "ek": ek}
+    geo = {"R": R, "wu_pow": wu_pow, "N": N, "n_qp": n_qp, "a": a, "ek": ek}
+    if rows is not None:
+        # `wu_pow` stays the COLUMN side so every existing reader keeps its
+        # meaning; the row side is additive. `_seg_seg_reg_moments_from_geometry`
+        # dispatches on the presence of `wu_row`, so a whole-edge dict takes the
+        # square kernel exactly as before.
+        geo["wu_row"] = np.ascontiguousarray(wu_pow[:, r0:r1, :])
+        geo["n_row"] = max(0, r1 - r0)
+    return geo
 
 
 def _ek_reg_kernel(R, a, k):
@@ -685,6 +755,12 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     N = geo["N"]
     n_qp = geo["n_qp"]
     ek = geo.get("ek")
+    # momwire#968: a windowed geometry carries a distinct row side. Absent it,
+    # every branch below is the pre-#968 square call, unchanged — which is what
+    # keeps the shipped path bit-identical and gated by the banked oracle.
+    wu_row = geo.get("wu_row")
+    windowed = wu_row is not None
+    n_row = geo.get("n_row", N)
     in_medium = _complex_k(k)
     # Single-k case (the non-swept compute_impedance): the same streaming C++
     # kernel serves it with a length-1 k axis, which we squeeze back off. This
@@ -704,6 +780,13 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
         cap=_SAME_EDGE_MAX_N_QP,
     )
     if _HAVE_BSPLINE_REG_SWEPT_ACCEL and ek is None and not in_medium and _se_serves:
+        if windowed:
+            return _acc.seg_seg_reg_moments_bspline_swept_window(
+                np.ascontiguousarray(R, dtype=np.float64),
+                np.ascontiguousarray(wu_row, dtype=np.float64),
+                np.ascontiguousarray(wu_pow, dtype=np.float64),
+                np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
+            )[0]
         return _acc.seg_seg_reg_moments_bspline_swept(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
@@ -717,6 +800,14 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     ):
         # The EK twin (momwire#270), same length-1 k axis. Whole-block
         # eligibility, as below — the C++ kernel takes no group labels.
+        if windowed:
+            return _acc.seg_seg_reg_moments_bspline_swept_ek_window(
+                np.ascontiguousarray(R, dtype=np.float64),
+                np.ascontiguousarray(wu_row, dtype=np.float64),
+                np.ascontiguousarray(wu_pow, dtype=np.float64),
+                np.ascontiguousarray(np.asarray([k], dtype=np.float64)),
+                float(_ek_radius(ek, geo["a"])),
+            )[0]
         return _acc.seg_seg_reg_moments_bspline_swept_ek(
             np.ascontiguousarray(R, dtype=np.float64),
             np.ascontiguousarray(wu_pow, dtype=np.float64),
@@ -727,16 +818,26 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
         # Whole-block eligibility, as in `_seg_seg_static_moments`: a
         # same-edge block is one straight run of one wire at one radius.
         G_ek = _ek_reg_kernel(R, _ek_radius(ek, geo["a"]), k)
-        G_ek_block = G_ek.reshape(N, n_qp, N, n_qp)
-        return np.einsum("piq,iqjr,Pjr->pPij", wu_pow, G_ek_block, wu_pow)
+        G_ek_block = G_ek.reshape(n_row, n_qp, N, n_qp)
+        return np.einsum(
+            "piq,iqjr,Pjr->pPij",
+            wu_row if windowed else wu_pow,
+            G_ek_block,
+            wu_pow,
+        )
     # (exp(-jkR) - 1) / (4π R). At R = a small, this is bounded → -jk/(4π) in
     # the a → 0, kR → 0 limit; no quadrature pathology. The remainder is
     # spelled cancellation-free (momwire#799) — the literal subtraction returns
     # its real part to an ABSOLUTE ε, which is 7e-11 relative at kR = 1e-3.
     G_reg = _expm1_neg_jkR(k, R) / (4 * np.pi * R)
-    G_block = G_reg.reshape(N, n_qp, N, n_qp)
-    # J_reg[p, P, i, j] = sum_{q, r} wu_pow[p, i, q] G[i, q, j, r] wu_pow[P, j, r]
-    return np.einsum("piq,iqjr,Pjr->pPij", wu_pow, G_block, wu_pow)
+    G_block = G_reg.reshape(n_row, n_qp, N, n_qp)
+    # J_reg[p, P, i, j] = sum_{q, r} wu_row[p, i, q] G[i, q, j, r] wu_pow[P, j, r]
+    return np.einsum(
+        "piq,iqjr,Pjr->pPij",
+        wu_row if windowed else wu_pow,
+        G_block,
+        wu_pow,
+    )
 
 
 def _seg_seg_reg_moments_from_geometry_swept(geo, k_array, max_chunk_bytes=256 << 20):
