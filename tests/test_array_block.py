@@ -755,13 +755,28 @@ _SOMM = {"ground_eps": (10.0, 0.002), "ground_model": "sommerfeld"}
 def test_sommerfeld_array_matches_dense():
     """ArrayBlock + Sommerfeld ground runs on the FAST path (C2-scaled
     image blocks + one global low-rank remainder in `extra_lowrank`) and
-    matches the dense bspline sommerfeld Y at ACA/GMRES tolerance."""
+    matches the dense bspline sommerfeld Y at ACA/GMRES tolerance.
+
+    PINNED AT `aca_tol=1e-4`, the tolerance the rank bound below was
+    calibrated for, rather than following the default. The remainder's rank
+    tracks the tolerance directly — measured on this deck: 18 at 1e-4, 56 at
+    1e-6, 64 at 1e-8 — and this deck has only ~72 bases, so at the #971
+    default the "low rank" the bound is checking for is 78 % of full and the
+    assertion stops meaning anything. Pinning keeps the guard at the strength
+    it was written with; what it guards (the fast path does not degenerate to
+    a dense remainder) is a property of the path, not of the default.
+
+    A real low-rank claim at the new default wants a deck big enough for the
+    rank to be a small fraction of the basis count; this one is not it.
+    """
     reset_array_caches()
     half = 0.962 * 22 / 4
     # z-centre 6.0: the vertical dipoles (half ~5.29) must sit strictly
     # above the plane for sommerfeld (min z ~0.71).
     offsets = [(-9.0, 6.0), (-3.0, 6.0), (3.0, 6.0), (9.0, 6.0)]
-    sim = _ground_array(offsets, [half] * 4, ArrayBlockSolver, nsegs=16, **_SOMM)
+    sim = _ground_array(
+        offsets, [half] * 4, ArrayBlockSolver, nsegs=16, aca_tol=1e-4, **_SOMM
+    )
     ya = sim.compute_y_matrix()
     yd = _ground_array(
         offsets, [half] * 4, BSplineSolver, nsegs=16, **_SOMM
