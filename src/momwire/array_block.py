@@ -68,6 +68,7 @@ reuses BSplineSolver's geometry/basis build. Nothing here touches the kernel.
 """
 
 import itertools
+import warnings
 
 import numpy as np
 from scipy.fft import fftn, ifftn, next_fast_len
@@ -374,6 +375,24 @@ def _shape_classes(geom, seg_groups, seg_a, groups, supp_seg, polys, tol=1e-6):
             label_of_sig[s] = len(label_of_sig)
         shape_of_elem[e] = label_of_sig[s]
     return shape_of_elem
+
+
+class ArrayBlockNoRepeats(UserWarning):
+    """`ArrayBlockSolver` found no repeated translated elements to block.
+
+    Advisory only — nothing is refused and nothing is remeshed. The solve runs
+    the inherited H-matrix path and the answer is the one `HMatrixSolver`
+    would give; what the user does not get is the element-block speedup they
+    chose this class for, and momwire#972 exists because they could not
+    previously tell.
+
+    A refusal was considered and measured against the antennaknobs catalog:
+    103 designs, and only 27 carry a repeated shape. Refusing would have taken
+    working capability off 72 decks — including the Yagi class, where "no
+    repeated elements" is true precisely BECAUSE the elements are deliberately
+    different lengths (`beams.owa_yagi` is 4 elements of 4 shapes) — to fix
+    what is an information problem, not a wrong answer. So it advises.
+    """
 
 
 def element_groups(sim, tol=1e-6):
@@ -983,12 +1002,65 @@ class ArrayBlockSolver(HMatrixSolver):
         return self.use_singular_enrichment
 
     def array_partition(self, tol=1e-6):
-        """Element/shape partition of the bases (cached)."""
+        """Element/shape partition of the bases (cached).
+
+        Emits `ArrayBlockNoRepeats` the FIRST time a partition with no repeated
+        shape is built on this solver (momwire#972). Once, not per call: this
+        is reached from the fill, the preconditioner and the swept path, and a
+        user reading three copies of one advisory learns nothing the first did
+        not tell them.
+        """
         cached = getattr(self, "_array_partition", None)
         if cached is None:
             cached = element_groups(self, tol=tol)
             self._array_partition = cached
+            self._warn_if_no_repeats(cached)
         return cached
+
+    @staticmethod
+    def _no_shape_reuse(part):
+        """True when no shape class has two members, so nothing is reused.
+
+        THE SAME TEST `_degenerate_partition` MAKES, written once. That method
+        falls back for either of two reasons — this one, or an element too
+        large for its dense self-block — and only this one is what the
+        advisory is about.
+        """
+        if part.n_elem == 0:
+            return False
+        counts = np.bincount(part.shape_of_elem, minlength=part.n_shapes)
+        return not bool((counts >= 2).any())
+
+    def _warn_if_no_repeats(self, part):
+        """One advisory when there is no array structure to exploit.
+
+        Covers the single-structure case (one element of one shape) with no
+        special branch: one member is not two.
+
+        WHAT IT DOES NOT COVER, said here rather than left to be discovered:
+        `_degenerate_partition` also falls back when an element exceeds
+        `array_max_elem_bases` (issue #143), and that user equally gets the
+        H-matrix path without being told. It is a different sentence — the
+        deck HAS repeats, they are just too big to block — and momwire#972
+        scoped the advisory to the no-repeats reason. The oversize one is
+        worth its own line if anyone hits it.
+        """
+        if getattr(self, "_no_repeats_warned", False):
+            return
+        if not self._no_shape_reuse(part):
+            return
+        self._no_repeats_warned = True
+        one = part.n_elem == 1
+        warnings.warn(
+            f"no repeated translated elements "
+            f"({part.n_elem} element{'' if one else 's'}, "
+            f"{part.n_shapes} distinct shape{'' if one else 's'}) — "
+            "ArrayBlockSolver has nothing to block and ran the H-matrix path; "
+            "the answer is HMatrixSolver's. Use HMatrixSolver directly, or "
+            "BSplineSolver for the dense route.",
+            ArrayBlockNoRepeats,
+            stacklevel=2,
+        )
 
     def _self_block_key(self, ctx, segs, basis_idx, k):
         """Content-addressed key for an element's dense self-block: the
@@ -1080,8 +1152,7 @@ class ArrayBlockSolver(HMatrixSolver):
         part = self.array_partition()
         if part.n_elem == 0:
             return True
-        counts = np.bincount(part.shape_of_elem, minlength=part.n_shapes)
-        no_reuse = not bool((counts >= 2).any())
+        no_reuse = self._no_shape_reuse(part)
         oversize = int(part.sizes.max()) > self.array_max_elem_bases
         return no_reuse or oversize
 

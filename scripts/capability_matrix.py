@@ -156,6 +156,15 @@ def render() -> str:
         "`HMatrixSolver` and `ArrayBlockSolver` are separate `--basis` entries",
         "over a row they inherit almost entirely from `BSplineSolver`.",
         "",
+        "`ArrayBlockSolver`'s advantage is a CAPABILITY OF THE DECK, not of",
+        "the class, so no boolean here carries it: on a structure with no",
+        "repeated translated elements it has nothing to block and runs",
+        "`HMatrixSolver`'s path, saying so through an `ArrayBlockNoRepeats`",
+        "advisory rather than refusing (momwire#972 — only 27 of the",
+        "antennaknobs catalog's 103 designs carry a repeated shape, so",
+        "refusing would take working capability off the rest, the Yagi class",
+        "included).",
+        "",
     ]
     lines += _table(
         ["class", "`--basis`", *(f"`{a}`" for a in AXES)],
