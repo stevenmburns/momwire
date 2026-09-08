@@ -230,9 +230,10 @@ _WIRE_LOADING_REFUSAL = (
 # not ever.
 _REFERENCE_ROW = (
     "this family is momwire's REFERENCE row - the pulse basis with point "
-    "matching, kept as written so a momwire number can be compared against "
-    "the formulation NEC-2 identifies with rather than against a better one "
-    "wearing its name (momwire#416, #557) - and it is deliberately NOT "
+    "matching, the oldest thin-wire moment-method scheme (Harrington 1967), "
+    "kept as written so a momwire number can be compared against that "
+    "formulation rather than against a better one wearing its name "
+    "(momwire#416, #557) - and it is deliberately NOT "
     "extended: an axis the sibling families grew afterwards would change "
     "the thing being measured. This cell is a NEVER, not a not-yet"
 )
