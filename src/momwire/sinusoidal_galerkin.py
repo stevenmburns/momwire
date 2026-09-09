@@ -322,13 +322,15 @@ sinusoidal shapes, closed-form per segment, in `_apply_loading`.
 """
 
 import collections
+import contextlib
 
 import numpy as np
 import scipy.linalg
 import scipy.sparse
 import scipy.spatial.distance
 
-from . import _field_ground, _ground_mirror, _wire_loading
+from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
+from . import _medium_spec, _wire_loading
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from .bspline import SINGULAR_ENRICHMENT_NEVER
@@ -344,6 +346,19 @@ from .sinusoidal import (
     _SegmentBasis,
     _recip_sin_gap,
     _sin_minus_arg,
+)
+
+# D1 serves a FULLY-buried deck: one pair class, one medium. A deck with
+# segments on both sides of the interface needs the above/below and
+# cross-medium classes as well, which is #980 D2 — refused by name here
+# rather than filled as though the whole deck were in one medium, which is
+# the failure mode that would produce a plausible wrong number.
+_MIXED_MEDIUM_REFUSAL = (
+    "a deck with wires BOTH above and below the ground plane is not served "
+    "by SinusoidalGalerkinSolver yet (momwire#980 D1 serves fully-buried "
+    "decks): the mixed deck needs the above/below and cross-medium pair "
+    "classes, which are D2. Solve the buried wires alone, or use "
+    "BSplineSolver, which serves the mixed deck today"
 )
 
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
@@ -1095,6 +1110,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # needs no gap feed, same as junction ports (#172/#305).
         self._node_drive_declared = bool(node_ports or node_gaps)
         super().__init__(**kwargs)
+        # Per-instance medium-label memo (momwire#980 D1), the same slot
+        # bspline and razor keep for the same reason: geometry and the three
+        # ground kwargs are frozen after construction, so the labels are
+        # computed once. Deliberately NOT hoisted into `_below_interface` —
+        # the module is functions over data and holds no solver state.
+        self._cached_wire_media: tuple | None = None
+        # The medium the CURRENT solve runs in, set by `_operating_medium`
+        # for the duration of one solve. `None` outside it, which is what
+        # keeps every non-buried path structurally unchanged.
+        self._active_medium = None
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
         self.n_qp_node = int(n_qp_node)
@@ -2938,6 +2963,156 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             row_group=nq,
         )
 
+    # ---------------------------------------------------------------
+    # Below-interface plumbing (momwire#980 D1). Thin wrappers over
+    # `_below_interface`, which holds the shared bodies; what stays here is
+    # this solver's own state, per that module's docstring.
+    # ---------------------------------------------------------------
+
+    def _serves_buried(self):
+        """momwire#980 D1: this family serves a FULLY-buried deck over a
+        Sommerfeld ground, and nothing else below the interface.
+
+        Answered from the ground alone, because `_build_geometry` asks it
+        before any medium label exists. The narrower questions come later and
+        by name: `_medium_spec.wire_media` refuses a buried deck over a PEC
+        or reflection-coefficient ground, and `_fill_medium` refuses a MIXED
+        deck (`_MIXED_MEDIUM_REFUSAL`) — so lifting the geometry refusal here
+        widens what is *attempted*, never what is silently answered.
+        """
+        return self._lower_medium()
+
+    def _lower_medium(self):
+        """Whether this solve's ground has a HALF-SPACE below the interface."""
+        return _below_interface.lower_medium(self.ground_eps, self.ground_model)
+
+    def _grounded_junction_ends(self):
+        """The crossing-junction exemption `_medium_spec.wire_media` keys on.
+
+        D1 has no crossing deck, but `wire_media` still needs the exemption
+        SET to answer at all — an empty one is the honest input here, not a
+        skipped argument.
+        """
+        if self.ground_z is None or not self.junctions:
+            return frozenset()
+        return _below_interface.grounded_junction_ends(
+            self.wires_polylines, self.ground_z, self.junctions
+        )
+
+    def _wire_media(self):
+        """One `_medium_spec` label per wire, cached per instance.
+
+        Raises the crossing / no-lower-medium refusals by name, which is how
+        this trunk answers a buried deck it cannot serve identically to
+        bspline's rather than with a shape of its own.
+        """
+        cached = self._cached_wire_media
+        if cached is None:
+            cached = _medium_spec.wire_media(
+                self.wires_polylines,
+                self.ground_z,
+                lower_medium=self._lower_medium(),
+                pec=self.ground_eps is None,
+                crossing_ends=self._grounded_junction_ends(),
+            )
+            self._cached_wire_media = cached
+        return cached
+
+    def _below_segments(self, geom):
+        """`(n_segs,)` bool: this segment is in the lower medium.
+
+        This trunk's geometry carries `wire_first`/`wire_last` rather than
+        bspline's `seg_offsets`, so the offsets are DERIVED here from the
+        per-wire spans and asserted contiguous — rather than a second
+        segment-labelling rule, which is what `_medium_spec`'s module
+        docstring says there must not be.
+        """
+        first = np.asarray(geom["wire_first"], dtype=np.int64)
+        last = np.asarray(geom["wire_last"], dtype=np.int64)
+        offsets = np.append(first, int(geom["n_segs"]))
+        if not np.array_equal(last + 1, offsets[1:]):
+            raise AssertionError(
+                "wire segment spans are not contiguous; `segment_media` "
+                "broadcasts over offsets and would mislabel"
+            )
+        return _medium_spec.segment_media(self._wire_media(), offsets)
+
+    @contextlib.contextmanager
+    def _operating_medium(self, geom):
+        """Run a solve at the LOWER MEDIUM's operating point, then restore.
+
+        Yields the `Medium` (or `None` for a deck that is not fully buried,
+        in which case nothing is touched and the shipped path is entered
+        unchanged).
+
+        Scoped rather than permanent, and applied around the WHOLE solve
+        rather than around the matrix alone, because `k` and `eta` are read
+        on both sides of it: `_drive_columns` builds the excitation at `k`
+        and `_lumped_pair_block` reads `self.eta` directly. Setting only the
+        fill's `k` would leave the drive in air and produce a plausible
+        wrong number rather than a failure — the exact shape of error this
+        step is most exposed to.
+
+        This is the momwire#980 step-A test seam (`s.k = k_m; s.eta = ...`)
+        made a real route: same operating point, but resolved from the deck's
+        own medium labels and guaranteed to be restored.
+        """
+        medium = self._fill_medium(geom)
+        if medium is None:
+            yield None
+            return
+        _below_interface.refuse_out_of_scope(
+            use_singular_enrichment=getattr(self, "use_singular_enrichment", False),
+            extended_kernel=self.extended_kernel,
+            n=int(geom["seg_l"].shape[0]),
+            degree=1,
+            dense_fits=True,
+            chunked_serves=True,
+            swept_mem_mb=getattr(self, "swept_mem_mb", None),
+        )
+        # k and eta ONLY. `self.eps` is deliberately not touched: it is the
+        # FREE-SPACE permittivity that `_ground_refl.eps_tilde` folds the
+        # soil against, so moving it would corrupt eps_tilde itself. The
+        # medium reaches the fill entirely through these two — the closed
+        # forms' prefactor is eta/(4*pi*k), and eta_m/k_m = 1/(omega*eps_m)
+        # with eta_m*k_m = omega*mu, which is exactly the mixed potential's
+        # 1/(j*omega*eps_m) on Phi and j*omega*mu on A. Same pair the step-A
+        # seam set, for the same reason.
+        saved = (self.k, self.eta, self._active_medium)
+        try:
+            self.k = medium.k_m
+            self.eta = np.sqrt(self.mu / medium.eps_m)
+            self._active_medium = medium
+            yield medium
+        finally:
+            self.k, self.eta, self._active_medium = saved
+
+    def _fill_medium(self, geom):
+        """The medium this deck's fill runs in, or `None` for free space/air.
+
+        D1's scope decision, and the reason it is ONE object rather than a
+        per-pair dispatch: a deck every segment of which is below the
+        interface has exactly one pair class, so the medium is a property of
+        the SOLVE. A mixed deck has three, and that is D2's dispatch — which
+        is why this returns `None` there rather than guessing, leaving the
+        existing (above-only) path exactly as it was.
+
+        Returns `_crossing_fill.buried_medium`'s `Medium` record
+        `(eps_t, eps_m, k_p, k_m, c2, a_m)`.
+        """
+        if self.ground_z is None or not self._lower_medium():
+            return None
+        below = self._below_segments(geom)
+        if not below.any():
+            return None
+        if not below.all():
+            # Mixed deck: above/below and cross-medium pair classes, which is
+            # D2. Refused by name rather than filled as if it were uniform.
+            raise NotImplementedError(_MIXED_MEDIUM_REFUSAL)
+        return _crossing_fill.buried_medium(
+            self.ground_eps, self.omega, self.eps, self.k
+        )
+
     def _assemble_Z(self, geom, k):
         """Galerkin system matrix G (basis i tested against source basis j).
 
@@ -2990,6 +3165,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         `compute_port_solution`/`compute_y_matrix`, both swept loops, and
         `_assemble_Z_ported`, which wraps this one.
         """
+        # momwire#980 D1: a fully-buried deck fills in the LOWER MEDIUM —
+        # k_m, eta_m and eps_m throughout — and reaches its ground through
+        # the below family rather than the above one. Resolved here because
+        # this is the scope that fixes k, and returned as one object because
+        # a fully-buried deck has exactly one pair class (a mixed deck has
+        # three, and is refused above until D2).
+        #
+        # `None` keeps the shipped path structurally untouched, not merely
+        # skipped: at free space or an above-only deck nothing below this
+        # line differs, which is the same standard `field_ground_for`'s
+        # `None` is held to.
         seg_view = self._basis_coefs(geom, k)
         ctx = self._test_context(geom, seg_view, k)
 
@@ -3789,8 +3975,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self._refuse_junction_port_solve()
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field fill
-        G, seg_view = self._assemble_Z_ported(geom, self.k)
-        U = self._drive_columns(geom, seg_view, self.k)
+        # The medium wraps the WHOLE solve, not the matrix alone: the drive
+        # columns are built at `k` too (momwire#980 D1).
+        with self._operating_medium(geom):
+            G, seg_view = self._assemble_Z_ported(geom, self.k)
+            U = self._drive_columns(geom, seg_view, self.k)
         voltages = self._port_voltages()
         self._checkpoint()  # after assembly, before the dense solve
 
