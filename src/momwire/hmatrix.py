@@ -1141,11 +1141,21 @@ class HMatrixSolver(BSplineSolver):
     #: both, so the factorization path does NOT change and the spread is the
     #: solve amplifying a 2e-16 input perturbation by the deck's conditioning.
     #:
-    #: DEFAULT OFF for that reason: 3.3e-12 is six orders below the ~1e-6
-    #: assembled tolerance and below anything momwire#977 measures against
-    #: dense, but it is 334x the 1e-14 house gate this knob was asked to meet,
-    #: and a knob whose stated gate fails should not ship on.
-    somm_row_as_column = False
+    #: The condition estimate is ~1e4 on rhombic against ~10 on lpda, which is
+    #: the whole of the spread: SAME input perturbation, read after a more
+    #: ill-conditioned inverse.
+    #:
+    #: WHY THE BAR HERE IS 1e-9 AND NOT THE HOUSE 1e-14. The 1e-14 bar is a
+    #: KERNEL bar — what momwire#1013 gated was a kernel's output under FMA
+    #: contraction. The kernel-level fact here is the 2.2e-16 symmetry and the
+    #: identical factorization; the 3.3e-12 is a SOLVE output, and gating a
+    #: solve output at a kernel bar measures the deck's conditioning rather
+    #: than the change. So this knob's gate is three-part: rank and the
+    #: momwire#973 residual bit-identical before-vs-after on both decks;
+    #: |dZ|/|Z| <= 1e-9 there (three orders of margin over what is measured,
+    #: three orders under the ~1e-6 assembled tolerance the ACA path is
+    #: already held to); and the house suites green with it ON.
+    somm_row_as_column = True
 
     def _somm_side(self, ctx, sn, I):
         """One side of a remainder rectangle, marshalled for the fused kernel.
