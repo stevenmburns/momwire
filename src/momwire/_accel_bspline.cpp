@@ -3751,7 +3751,45 @@ seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
             double coef[BSPLINE_FAR_TERMS + 1];
             bspline_far_coeffs((int)p, (int)q, h, h, coef);
             // The offsets are independent and, since the hoist, this loop IS
-            // the cost. Nothing inside can throw.
+            // the cost of a table.
+            //
+            // NO DRAIN HERE, AND THE REASON IS NOT THAT CANCELLATION DOES NOT
+            // MATTER -- it is that this entry point has no cancel_flag to poll.
+            //
+            // What the flag is FOR: a user changes a knob in the app while a
+            // solve is running, so the in-flight run must stop and a new one be
+            // issued. The twelve entry points that take a `cancel_flag` are the
+            // O(N^2) fills where that latency is felt, and they use
+            // `_accel_common.h`'s drain -- set a flag, `continue` so the
+            // remaining iterations are no-ops, throw AFTER the loop, because an
+            // exception must never escape an OpenMP region and cancellation can
+            // become true part-way through one.
+            //
+            // The static-moment table is NOT one of those: `bspline.py` calls it
+            // separately from the cancellable fills, so it is an uncancellable
+            // window inside an otherwise-cancellable solve. Adding a drain here
+            // would mean threading a cancel_flag through this entry point and
+            // its Python caller, which is a real change and not this one.
+            //
+            // What #1006 did do is make that window small. Table build at
+            // max_d=2, this box:
+            //
+            //     N=81    25.6 ms -> 0.44 ms
+            //     N=401  130.2 ms -> 1.98 ms
+            //     N=801  264.9 ms -> 8.84 ms
+            //
+            // A knob-change used to wait out a quarter of a second on a long
+            // edge; now it waits ~9 ms. That is why the missing drain is
+            // tolerable rather than why it is unnecessary.
+            //
+            // Separately: nothing in this body can throw, so the region is safe
+            // as written. The only throw it ever had was `bspline_unreachable_pq`,
+            // a bound on (p, q), which do not vary across offsets -- so the check
+            // sits above the region and the throw site is not in here at all.
+            // That is stronger than a drain for THAT hazard, and it is not a
+            // substitute for cancellation, which is a different thing. If you add
+            // anything to this body that can throw, or a cancel_flag to poll,
+            // then the drain becomes necessary and this comment is wrong.
             #pragma omp parallel for schedule(static)
             for (long long di_s = 0; di_s < (long long)n_delta; di_s++) {
                 const size_t di = (size_t)di_s;
