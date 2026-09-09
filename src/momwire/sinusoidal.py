@@ -874,6 +874,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # Geometry build
     # ------------------------------------------------------------------
 
+    def _crossing_junction_indices(self):
+        """Indices of junctions that CROSS the interface (momwire#980 D3).
+
+        Empty on this family by default. A crossing junction's members must
+        NOT take the grounded-junction self-image atom: that atom is the
+        contact physics for a wire meeting its OWN image, and at a crossing
+        node the partner is a real wire in the other medium whose interface
+        content the crossing fill's corner already carries. Taking it would
+        price the node twice — the same double-counting an eps-weighted
+        basis condition would have been.
+        """
+        return frozenset()
+
     def _serves_buried(self):
         """Whether THIS solver can fill a deck below the interface.
 
@@ -1112,6 +1125,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # the plane) is the N⁻ side, end-2 (seg_r) the N⁺ side.
         ground_minus = np.zeros(n_segs, dtype=bool)
         ground_plus = np.zeros(n_segs, dtype=bool)
+        # The crossing node's C0 ends (momwire#980 D3): interior branch, no
+        # atom. Kept as their own arrays rather than folded into the ground
+        # ones so that "which branch, and does it carry an atom" stays two
+        # separate questions in `_basis_coefs`.
+        crossing_minus = np.zeros(n_segs, dtype=bool)
+        crossing_plus = np.zeros(n_segs, dtype=bool)
         gz = self.ground_z
         if gz is not None:
             junctioned = set()
@@ -1147,12 +1166,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # is ground-connected INSTEAD of inter-connected (its junction
             # entries were skipped above) — the members couple through
             # their images.
+            crossing_j = self._crossing_junction_indices()
             for j_i in grounded_junctions:
+                # A CROSSING junction (momwire#980 D3) takes the interior
+                # value-1 normalisation with NO P-sum atom: no coupling to a
+                # partner (its junction entries were skipped above, like every
+                # grounded junction) and no self-image atom either, because
+                # the partner is a real wire in the other medium rather than
+                # this one's mirror. That is "the ordinary recipe minus the
+                # coupling" — the C0 node the crossing fill's by-parts and
+                # corner terms are written to complete.
+                target = crossing_minus if j_i in crossing_j else ground_minus
+                target_p = crossing_plus if j_i in crossing_j else ground_plus
                 for w, end in self.junctions[j_i]:
                     if end == "start":
-                        ground_minus[wire_first_seg[w]] = True
+                        target[wire_first_seg[w]] = True
                     else:
-                        ground_plus[wire_last_seg[w]] = True
+                        target_p[wire_last_seg[w]] = True
 
         self._cached_geometry = {
             "seg_l": seg_l,
@@ -1175,6 +1205,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "feed_segs": feed_segs,
             "feed_xi": feed_xi,
             "ground_minus": ground_minus,
+            "crossing_minus": crossing_minus,
+            "crossing_plus": crossing_plus,
             "ground_plus": ground_plus,
             # Junctions whose node lies in the ground plane: their members are
             # ground-connected INSTEAD of inter-connected, so they emit no
@@ -1327,8 +1359,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # the rare end / isolated branches via boolean masks. For a
         # hentenna (closed loop) every segment is interior; for a dipole
         # the wire-tip segments hit only_minus / only_plus.
-        has_minus = (nm_count > 0) | ground_minus
-        has_plus = (np_count > 0) | ground_plus
+        # A CROSSING end takes the interior branch — value-1 at the node,
+        # not the free-end X = 0 — but contributes NO P-sum atom above, so
+        # its slope is free. That pair of facts IS the C0 node (momwire#980
+        # D3): "the ordinary recipe minus the coupling", with continuity and
+        # the AGARD slope left for the crossing fill's by-parts and corner
+        # to determine, exactly as bspline's knot multiplicity leaves them.
+        crossing_minus = geom.get("crossing_minus")
+        crossing_plus = geom.get("crossing_plus")
+        if crossing_minus is None:
+            crossing_minus = np.zeros(n_segs, dtype=bool)
+            crossing_plus = np.zeros(n_segs, dtype=bool)
+        has_minus = (nm_count > 0) | ground_minus | crossing_minus
+        has_plus = (np_count > 0) | ground_plus | crossing_plus
         both = has_minus & has_plus
 
         # Interior branch (Eqs 49-53). Compute everywhere using a_minus =

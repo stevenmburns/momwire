@@ -3546,6 +3546,33 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             for sb in tensor
         ]
 
+    def _crossing_junction_indices(self):
+        """Junctions that CROSS the interface (momwire#980 D3), by index.
+
+        Answered through `_below_interface`, so this trunk's scope check and
+        its refusals are bspline's — one wire radius, the buried hub, no
+        second crossing node — rather than a second reading of the same
+        rules. Empty whenever the deck has no lower medium, which keeps every
+        shipped path on the base's empty answer.
+        """
+        if self.ground_z is None or not self._lower_medium() or not self.junctions:
+            return frozenset()
+        return _below_interface.crossing_junctions(
+            self._wire_media(),
+            self.junctions,
+            self._grounded_junctions(),
+            self.wires_polylines,
+            self.ground_z,
+            self._radius_per_wire,
+        )
+
+    def _grounded_junctions(self):
+        """Junctions whose shared point lies in the plane — their KCL row is
+        dropped, because current may flow into the ground stake."""
+        return _below_interface.grounded_junctions(
+            self.wires_polylines, self.ground_z, self.junctions
+        )
+
     def _serves_buried(self):
         """momwire#980 D1: this family serves a FULLY-buried deck over a
         Sommerfeld ground, and nothing else below the interface.
