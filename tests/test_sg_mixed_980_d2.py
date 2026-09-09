@@ -75,6 +75,10 @@ BELOW_NEAR = np.array([(0.0, 0.0, -1.15), (0.0, 0.0, -0.15)])
 # ----------------------------------------------------------------------
 
 
+# `slow` because this is GRID-bound, not mesh-bound: trimming the deck from
+# 21 segments to 9 moved it 32.14 s -> 32.00 s. Do not "optimise" it into the
+# PR lane by shrinking the deck — that only makes it test less. Same for the
+# three gates below.
 @pytest.mark.slow
 def test_far_apart_diagonal_blocks_reproduce_the_single_class_solves():
     """The (C) shape's whole correctness argument, as a measurement.
