@@ -153,6 +153,88 @@ jobs:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
 
+  smoke_pythons:
+    # Which interpreters the smoke matrix covers. Computed rather than written
+    # twice, because it has to track `build_wheels`' two modes: tags and manual
+    # runs build pyproject's full cp310-cp315 matrix, while a main push builds
+    # cp312 only as a compiler canary (#220). A fixed six-way matrix would fail
+    # five ways on every main push looking for wheels that were never built.
+    name: which pythons to smoke
+    needs: changes
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.pick.outputs.versions }}
+    steps:
+      - id: pick
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || \
+             [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo 'versions=["3.10","3.11","3.12","3.13","3.14","3.15"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'versions=["3.12"]' >> "$GITHUB_OUTPUT"
+          fi
+
+  wheel_smoke:
+    # momwire#1014. `windows_cross_engine` installs and imports the cp312 wheel
+    # and nothing else, so cp313/cp314/cp315 were BUILT and shipped without ever
+    # being imported by anything we run. A user on 3.14.7 lost hours to that on
+    # Windows (AC6LA, 2026-09-10). There was no known defect in those wheels --
+    # the point is that if there had been, nothing would have seen it, and 3.12
+    # was the only version we could honestly vouch for.
+    #
+    # This installs EVERY built wheel into its own interpreter and runs
+    # scripts/smoke_wheel.py, which asserts three things the import alone does
+    # not: that the module resolved out of site-packages rather than this
+    # checkout, that `momwire.accelerated` is True, and that a tiny solve
+    # returns a plausible impedance. The middle one is the load-bearing check --
+    # `setup.py` falls back to pure Python by design, so a wheel with a missing
+    # vendored runtime imports perfectly and is silently ~50x slower.
+    #
+    # Windows and macOS only: Linux wheels are manylinux and already imported by
+    # `linux_cross_engine`, and the vendoring hazards this guards (delvewheel's
+    # libomp140/msvcp140; delocate against Homebrew libomp) are the other two.
+    name: smoke ${{ matrix.python }} wheel on ${{ matrix.os }}
+    needs: [build_wheels, smoke_pythons]
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-14]
+        python: ${{ fromJSON(needs.smoke_pythons.outputs.versions) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          # 3.15 is an rc until October; without this setup-python cannot
+          # resolve it and the leg fails on a version we deliberately ship.
+          allow-prereleases: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: wheels-${{ matrix.os }}
+          path: wheelhouse
+      - name: Install the built wheel for this interpreter
+        # bash on Windows too, so the glob expands (pwsh passes it through).
+        # The tag is cp3XX with no dot: 3.10 -> cp310.
+        shell: bash
+        run: |
+          tag="cp$(echo '${{ matrix.python }}' | tr -d .)"
+          shopt -s nullglob
+          matches=(wheelhouse/momwire-*-${tag}-*.whl)
+          if [ ${#matches[@]} -ne 1 ]; then
+            echo "expected exactly one ${tag} wheel, found ${#matches[@]}:"
+            ls -1 wheelhouse/ || true
+            exit 1
+          fi
+          echo "installing ${matches[0]}"
+          python -m pip install --upgrade pip
+          python -m pip install "${matches[0]}"
+      - name: Import, assert accelerated, and solve
+        shell: bash
+        run: python scripts/smoke_wheel.py
+
   macos_cross_engine:
     # Validate the shared-libomp fix on real macOS hardware against the REAL
     # built wheel: run the PyNEC cross-validation suite with momwire + PyNEC in
@@ -300,7 +382,13 @@ jobs:
 
   release:
     name: attach wheels + sdist to release
-    needs: [build_wheels, make_sdist]
+    # `wheel_smoke` is a GATE, not a report (momwire#1014). Without it here the
+    # smoke runs in PARALLEL with publication on a tag, so a wheel that fails to
+    # import would be attached and uploaded anyway -- advisory on precisely the
+    # event where #1014's user got hurt. `fail-fast: false` on the matrix means
+    # every leg still reports before this blocks, so a failure names all the
+    # broken interpreters rather than the first one.
+    needs: [build_wheels, make_sdist, wheel_smoke]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
@@ -344,7 +432,13 @@ jobs:
     # skip-existing makes re-runs of an already-published version a no-op instead
     # of an error. Tag-gated, same as the GitHub Release job.
     name: publish to PyPI
-    needs: [build_wheels, make_sdist]
+    # `wheel_smoke` is a GATE, not a report (momwire#1014). Without it here the
+    # smoke runs in PARALLEL with publication on a tag, so a wheel that fails to
+    # import would be attached and uploaded anyway -- advisory on precisely the
+    # event where #1014's user got hurt. `fail-fast: false` on the matrix means
+    # every leg still reports before this blocks, so a failure names all the
+    # broken interpreters rather than the first one.
+    needs: [build_wheels, make_sdist, wheel_smoke]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     permissions:
