@@ -1149,9 +1149,20 @@ sinusoidal_field_tensor_ek_refl(
 // spelling needs (see `S` at the top of the fill).
 
 // sin(u) − u, without the u²/6 cancellation of the literal difference.
-static inline double sin_minus_arg(double u) {
-    double u2 = u * u;
-    if (std::fabs(u) < 0.1) {
+//
+// Templated on the scalar type for momwire#980 step E: the complex-k twin
+// needs the same series at std::complex<double>, and these two helpers are
+// the ONLY code the real fill and the twin share (the fills themselves are
+// separate bodies — see `galerkin_far_fill_cplx_impl` and the issue it
+// cites). The branch compares std::abs, which is |u| for a complex argument
+// and exactly `fabs` for a real one, matching what `_sin_minus_arg` does on
+// the Python side. The real path's bytes are unchanged by the templating and
+// that is checked by rebuilding and hashing the fill's output, not by
+// reading this diff (the momwire#762 protocol).
+template <typename T>
+static inline T sin_minus_arg(T u) {
+    T u2 = u * u;
+    if (std::abs(u) < 0.1) {
         return -(u * u2) / 6.0 *
                (1.0 - u2 / 20.0 *
                           (1.0 - u2 / 42.0 *
@@ -1163,9 +1174,10 @@ static inline double sin_minus_arg(double u) {
 // asinh(x) − x, taking the caller's t = asinh(x) so the fill pays for one
 // asinh either way. The series is in t because sinh t − t converges
 // factorially where the asinh series does not.
-static inline double asinh_minus_arg_from_t(double t) {
-    double t2 = t * t;
-    if (std::fabs(t) < 1.0) {
+template <typename T>
+static inline T asinh_minus_arg_from_t(T t) {
+    T t2 = t * t;
+    if (std::abs(t) < 1.0) {
         return -(t * t2) / 6.0 *
                (1.0 + t2 / 20.0 *
                           (1.0 + t2 / 42.0 *
@@ -1961,6 +1973,394 @@ static bool galerkin_fold_block(
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// The complex-wavenumber twin (momwire#980 step E).
+//
+// A SEPARATE BODY, not a template instantiation of the fill above, and that is
+// a deliberate decision recorded in momwire#991. `galerkin_far_fill_impl` is
+// not written in terms of a scalar type: it keeps a REAL phase table
+// (`std::vector<double> ph, cphb, sphb`), sweeps it with a vectorized real
+// sincos (Stage B), rebuilds full angles from halves by the double-angle
+// identity to avoid a second sincos (#205, #799), and multiplies through an
+// explicit re/im `cmul` lambda. At a complex k every one of those becomes a
+// different shape, so a `template<typename T>` at T = double would NOT emit
+// the arithmetic above — it would reassociate — and the real path's bytes
+// would move. Those bytes are a gate (#762), so the copy buys a mechanically
+// checkable guarantee that a shared body could only approximate.
+//
+// What IS shared: `sin_minus_arg` and `asinh_minus_arg_from_t`, templated on
+// the scalar type, their series branch comparing `std::abs` — |u| for a
+// complex argument, exactly `fabs` for a real one.
+//
+// CONVENTION. Im k <= 0 (`_IM_K_CONVENTION`), R is real positive, so every
+// exponent here has Re(-jkR) = Im(k)*R <= 0 and the exponentials decay. No
+// branch cut is crossed: `std::exp` is entire, and the only multivalued
+// function in the body is `std::asinh`, which is evaluated at REAL arguments
+// (X and the endpoint ratios are geometry, never k), so it takes the same
+// principal branch it takes in the real fill.
+//
+// The folded third shape's cancellation-free spellings are preserved rather
+// than re-derived: e^{jy} - 1 is carried as 2j·sin(y/2)·e^{jy/2}, which for a
+// real y is bit-for-bit the `-2s^2 + 2jsc` the fill above writes, and for a
+// complex one is the same identity with complex sin/exp.
+static inline std::complex<double> cexp_i(std::complex<double> z) {
+    return std::exp(std::complex<double>(0.0, 1.0) * z);
+}
+
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+galerkin_far_fill_cplx_impl(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_hh,
+    std::complex<double> k, std::complex<double> eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> w_entry,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
+    uintptr_t cancel_flag,
+    const GalerkinFoldBlock *fold
+) {
+    typedef std::complex<double> C;
+    const C J(0.0, 1.0);
+
+    auto oc = obs_centers.unchecked<2>();
+    auto ot = obs_tangents.unchecked<2>();
+    auto ar = obs_radius.unchecked<1>();
+    auto sc = src_centers.unchecked<2>();
+    auto st = src_tangents.unchecked<2>();
+    auto sh = src_hh.unchecked<1>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+    auto we = w_entry.unchecked<2>();
+    auto st_ = starts.unchecked<1>();
+
+    if (oc.shape(1) != 3 || ot.shape(1) != 3 ||
+        sc.shape(1) != 3 || st.shape(1) != 3) {
+        throw std::runtime_error("center/tangent arrays must have shape (N, 3)");
+    }
+    if (sc.shape(0) != st.shape(0) || sc.shape(0) != sh.shape(0)) {
+        throw std::runtime_error("src arrays must all have matching N");
+    }
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    if (st_.shape(0) < 1) {
+        throw std::runtime_error("starts must have length n_test_segments + 1");
+    }
+    // The growing-exponential branch, refused here as well as in Python: a
+    // kernel that silently conjugated would rescue a caller who built k on
+    // the wrong branch and leave every other quantity inconsistent.
+    if (k.imag() > 0.0) {
+        throw std::runtime_error(
+            "complex k with Im k > 0: e^{+jwt} requires Im k <= 0 so that "
+            "e^{-jkR} decays");
+    }
+
+    size_t M = (size_t)st_.shape(0) - 1;
+    size_t nq = (size_t)we.shape(1);
+    size_t nnz = (size_t)we.shape(0);
+    size_t N = (size_t)sc.shape(0);
+    size_t n_qp = (size_t)glt.shape(0);
+
+    if ((size_t)oc.shape(0) != M * nq || (size_t)ot.shape(0) != M * nq ||
+        (size_t)ar.shape(0) != M * nq) {
+        throw std::runtime_error(
+            "obs_centers/obs_tangents/obs_radius must have M*nq rows");
+    }
+    if ((size_t)st_(st_.shape(0) - 1) != nnz) {
+        throw std::runtime_error("starts[-1] must equal w_entry's row count");
+    }
+
+    const bool folding = (fold != nullptr);
+    py::array_t<std::complex<double>> out_const =
+        folding ? fold->dst_const : py::array_t<std::complex<double>>({nnz, N});
+    py::array_t<std::complex<double>> out_sin =
+        folding ? fold->dst_sin : py::array_t<std::complex<double>>({nnz, N});
+    py::array_t<std::complex<double>> out_cos =
+        folding ? fold->dst_cos : py::array_t<std::complex<double>>({nnz, N});
+    const C fold_scale = folding ? C(fold->s_re, fold->s_im) : C(1.0, 0.0);
+    std::complex<double> *oc_p = out_const.mutable_data();
+    std::complex<double> *os_p = out_sin.mutable_data();
+    std::complex<double> *oco_p = out_cos.mutable_data();
+    const std::complex<double> *w_p = w_entry.data();
+
+    py::gil_scoped_release release;
+
+    // Per-source-segment k-dependent scalars. Complex where the real fill
+    // keeps doubles; the SPELLING is the same, including cos kH - 1 taken as
+    // -2 sin^2(kH/2) rather than as a subtraction (#205).
+    std::vector<double> H_n(N);
+    std::vector<C> sin_kH(N), cos_kH(N), cos_kH_m1(N), smarg_kH(N);
+    for (size_t n = 0; n < N; n++) {
+        H_n[n] = sh(n);
+        C kH = k * H_n[n];
+        sin_kH[n] = std::sin(kH);
+        cos_kH[n] = std::cos(kH);
+        C hs = std::sin(0.5 * kH);
+        cos_kH_m1[n] = -2.0 * hs * hs;
+        smarg_kH[n] = sin_minus_arg(kH);
+    }
+    std::vector<double> glt_v(n_qp), glw_v(n_qp), gl_step(n_qp);
+    std::vector<char> gl_near2(n_qp);
+    double w_hi = 0.0, w_lo = 0.0;
+    for (size_t q = 0; q < n_qp; q++) {
+        glt_v[q] = glt(q);
+        glw_v[q] = glw(q);
+        gl_near2[q] = glt_v[q] >= 0.0;
+        gl_step[q] = gl_near2[q] ? (1.0 - glt_v[q]) : -(1.0 + glt_v[q]);
+        (gl_near2[q] ? w_hi : w_lo) += glw_v[q];
+    }
+    w_hi -= 1.0;
+    w_lo -= 1.0;
+
+    const C four_pi_k = 4.0 * M_PI * k;
+    const C pref_z = eta / four_pi_k;
+    const C pref_rho_const = -eta / four_pi_k;
+
+    MW_CANCEL_SETUP(cancel_flag);
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; m++) {
+        MW_CANCEL_POLL();
+        size_t e0 = (size_t)st_(m), e1 = (size_t)st_(m + 1);
+        if (e1 == e0) continue;
+
+        size_t nrows = e1 - e0;
+        std::vector<C> band;
+        C *bc, *bs, *bco;
+        if (folding) {
+            band.assign(3 * nrows * N, C(0.0, 0.0));
+            bc = band.data();
+            bs = bc + nrows * N;
+            bco = bs + nrows * N;
+        } else {
+            bc  = oc_p  + e0 * N;
+            bs  = os_p  + e0 * N;
+            bco = oco_p + e0 * N;
+            std::fill(bc, bc + nrows * N, C(0.0, 0.0));
+            std::fill(bs, bs + nrows * N, C(0.0, 0.0));
+            std::fill(bco, bco + nrows * N, C(0.0, 0.0));
+        }
+
+        std::vector<C> phi_c(N), phi_s(N), phi_co(N);
+
+        for (size_t qt = 0; qt < nq; qt++) {
+            size_t o = m * nq + qt;
+            double cmx = oc(o, 0), cmy = oc(o, 1), cmz = oc(o, 2);
+            double tmx = ot(o, 0), tmy = ot(o, 1), tmz = ot(o, 2);
+            double a_sq = ar(o) * ar(o);
+
+            for (size_t n = 0; n < N; n++) {
+                // ---- Geometry: real, and identical to the real fill -------
+                double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
+                double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
+                double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
+                double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
+                double rho_vx = rvx - z_eval * tnx;
+                double rho_vy = rvy - z_eval * tny;
+                double rho_vz = rvz - z_eval * tnz;
+                double rho_axis =
+                    std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
+                double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
+                double td = tmx*tnx + tmy*tny + tmz*tnz;
+                double rho_proj_factor = (rho_vx*tmx + rho_vy*tmy + rho_vz*tmz)
+                                         / rho_eval;
+                double H = H_n[n];
+                double dz2 = z_eval - H;
+                double dz1 = z_eval + H;
+                double rho2 = rho_eval * rho_eval;
+                double r0_2 = std::sqrt(rho2 + dz2*dz2);
+                double r0_1 = std::sqrt(rho2 + dz1*dz1);
+                double inv_r0_2 = 1.0 / r0_2, inv_r0_1 = 1.0 / r0_1;
+
+                // ---- Phases: complex. Halves, as #205 needs them ----------
+                C ph2 = -0.5 * k * r0_2;
+                C ph1 = -0.5 * k * r0_1;
+                C eh2 = cexp_i(ph2), eh1 = cexp_i(ph1);
+                C s_h2 = std::sin(ph2), s_h1 = std::sin(ph1);
+                C ef2 = eh2 * eh2, ef1 = eh1 * eh1;   // e^{-jkr}
+                C phi_ang = 2.0 * k * H * z_eval / (r0_1 + r0_2);
+
+                C G0_2 = ef2 * inv_r0_2;
+                C G0_1 = ef1 * inv_r0_1;
+                C one_jkr_2 = (1.0 + J * k * r0_2) * (inv_r0_2 * inv_r0_2);
+                C one_jkr_1 = (1.0 + J * k * r0_1) * (inv_r0_1 * inv_r0_1);
+
+                // ---- Const source (Eqs 78, 79) ---------------------------
+                C term_const2 = one_jkr_2 * G0_2;
+                C term_const1 = one_jkr_1 * G0_1;
+                C rho_diff = rho_eval * (term_const2 - term_const1);
+                C Erho_const = J * pref_rho_const * rho_diff;
+
+                double int_inv_r0 = stable_asinh_diff(-dz1, -dz2, rho2,
+                                                      r0_1, r0_2);
+                C int_reg(0.0, 0.0);
+                // Per-node delta phases, kept exact the way the real fill
+                // keeps them: delta_q is built from the observer-independent
+                // difference, and the node's half angle is the SUM of the
+                // reference half angle and the delta half angle (#799).
+                for (size_t q = 0; q < n_qp; q++) {
+                    double z_q = H * glt_v[q];
+                    double dz_q = z_eval - z_q;
+                    double r0_q = std::sqrt(rho2 + dz_q*dz_q);
+                    double inv_r0_q = 1.0 / r0_q;
+                    double dz_ref = gl_near2[q] ? dz2 : dz1;
+                    double r_ref  = gl_near2[q] ? r0_2 : r0_1;
+                    double delta = H * gl_step[q] * (dz_q + dz_ref)
+                                   / (r0_q + r_ref);
+                    C ph_d = -0.5 * k * delta;
+                    C ph_q = (gl_near2[q] ? ph2 : ph1) + ph_d;
+                    // e^{jy} - 1 = 2j sin(y/2) e^{jy/2}, y = 2*ph_q.
+                    C em1_q = 2.0 * J * std::sin(ph_q) * cexp_i(ph_q);
+                    int_reg += em1_q * inv_r0_q * glw_v[q];
+                }
+                int_reg *= H;
+                C int_G0 = int_inv_r0 + int_reg;
+
+                C Ez_boundary = dz2 * term_const2 - dz1 * term_const1;
+                C k_sq = k * k;
+                C inside = Ez_boundary + k_sq * int_G0;
+                C Ez_const = -J * pref_z * inside;
+
+                // ---- Sine source (Eqs 76, 77) ----------------------------
+                C sin2 = sin_kH[n], cos2 = cos_kH[n];
+                C sin1 = -sin2, cos1 = cos2;
+                C inner_2 = 1.0 - dz2*dz2 * one_jkr_2;
+                C inner_1 = 1.0 - dz1*dz1 * one_jkr_1;
+                C bsin2 = G0_2 * (k*dz2*cos2 + inner_2*sin2);
+                C bsin1 = G0_1 * (k*dz1*cos1 + inner_1*sin1);
+                C pref_rho = pref_rho_const / rho_eval;
+                C Erho_sin = J * pref_rho * (bsin2 - bsin1);
+                C bszin2 = G0_2 * (k*cos2 - dz2*one_jkr_2*sin2);
+                C bszin1 = G0_1 * (k*cos1 - dz1*one_jkr_1*sin1);
+                C Ez_sin = J * pref_z * (bszin2 - bszin1);
+
+                // ---- Folded source (I = cos k(xi) - 1), #205 -------------
+                C cm1 = cos_kH_m1[n];
+                // X and t_sing are GEOMETRY — no k anywhere — so `std::asinh`
+                // here sees the same real argument it sees in the real fill.
+                double X = (dz1 * dz2 >= 0.0)
+                    ? 2.0 * H * (dz1 + dz2) / (dz1 * r0_2 + dz2 * r0_1)
+                    : (dz1 * r0_2 - dz2 * r0_1) / rho2;
+                double t_asx = std::asinh(X);
+                double t_sing =
+                    (std::fabs(X) < 1.0)
+                        ? asinh_minus_arg_from_t(t_asx)
+                              + H * rho2 * X * X / ((r0_1 + r0_2) * r0_1 * r0_2)
+                        : t_asx - H * (inv_r0_1 + inv_r0_2);
+
+                C g2 = 2.0 * J * s_h2 * eh2 * inv_r0_2;   // (e^{-jkr}-1)/r
+                C g1 = 2.0 * J * s_h1 * eh1 * inv_r0_1;
+                C m_reg = w_hi * g2 + w_lo * g1;
+                for (size_t q = 0; q < n_qp; q++) {
+                    double z_q = H * glt_v[q];
+                    double dz_q = z_eval - z_q;
+                    double r0_q = std::sqrt(rho2 + dz_q*dz_q);
+                    double inv_r0_q = 1.0 / r0_q;
+                    bool hi = gl_near2[q];
+                    double dz_ref = hi ? dz2 : dz1;
+                    double r_ref  = hi ? r0_2 : r0_1;
+                    double delta = H * gl_step[q] * (dz_q + dz_ref)
+                                   / (r0_q + r_ref);
+                    C ph_d = -0.5 * k * delta;
+                    C em1 = 2.0 * J * std::sin(ph_d) * cexp_i(ph_d);
+                    C e_ref = hi ? ef2 : ef1;
+                    C gr = hi ? g2 : g1;
+                    double w = glw_v[q] * inv_r0_q;
+                    m_reg += w * (e_ref * em1 - gr * delta);
+                }
+                C smarg = smarg_kH[n];
+                C d_int = t_sing + H * m_reg - (smarg / k) * (G0_1 + G0_2);
+                C inner_cos = k_sq * d_int - cm1 * Ez_boundary;
+                C Ez_cos = J * pref_z * inner_cos;
+
+                C kH = k * H;
+                C A_ang = kH + phi_ang, B_ang = kH - phi_ang;
+                double d_lin = -8.0 * H * H * H * z_eval * rho2
+                               / ((rho2 + dz1 * dz2 + r0_1 * r0_2)
+                                  * (r0_1 + r0_2) * r0_1 * r0_2);
+                C cph_p = std::cos(phi_ang), sph_p = std::sin(phi_ang);
+                C w_even =
+                    (A_ang * sin_minus_arg(B_ang) - B_ang * sin_minus_arg(A_ang))
+                        / kH
+                    + (d_lin / H) * sin2 * cph_p;
+                C w_odd = sin2 * (-(rho2 * X) / (r0_1 * r0_2)) * sph_p;
+                // e^{-jk(r1+r2)/2} = e^{-jkr2}·e^{-j*phi}
+                C W = (ef2 * cexp_i(-phi_ang)) * (w_even + J * w_odd);
+                C b_rho = -k * W + rho2 * cm1 * (term_const2 - term_const1);
+                C Erho_cos = J * pref_rho * b_rho;
+
+                phi_c[n]  = td * Ez_const + rho_proj_factor * Erho_const;
+                phi_s[n]  = td * Ez_sin   + rho_proj_factor * Erho_sin;
+                phi_co[n] = td * Ez_cos   + rho_proj_factor * Erho_cos;
+            }
+
+            // ---- Test reduction, same order as `_tested_contrib_rows` ----
+            for (size_t e = e0; e < e1; e++) {
+                C w = w_p[e * nq + qt];
+                C *rc  = bc  + (e - e0) * N;
+                C *rs  = bs  + (e - e0) * N;
+                C *rco = bco + (e - e0) * N;
+                for (size_t n = 0; n < N; n++) {
+                    rc[n]  += w * phi_c[n];
+                    rs[n]  += w * phi_s[n];
+                    rco[n] += w * phi_co[n];
+                }
+            }
+        }
+
+        if (folding) {
+            const C *src[3] = {bc, bs, bco};
+            C *dst[3] = {oc_p + e0 * N, os_p + e0 * N, oco_p + e0 * N};
+            for (int b = 0; b < 3; b++) {
+                for (size_t i = 0; i < nrows * N; i++) {
+                    dst[b][i] += fold_scale * src[b][i];
+                }
+            }
+        }
+    }
+    MW_THROW_IF_ABORTED();
+    return std::make_tuple(out_const, out_sin, out_cos);
+}
+
+// The complex entry point. Separate from `sinusoidal_galerkin_far_fill` by
+// design (momwire#980 step E): the real symbol's signature and branch
+// conditions are untouched, so its bytes are unchanged and that is checked by
+// rebuilding and hashing the fill's output rather than by reading a diff.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_galerkin_far_fill_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_hh,
+    std::complex<double> k, std::complex<double> eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    py::array_t<std::complex<double>,
+                py::array::c_style | py::array::forcecast> w_entry,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
+    uintptr_t cancel_flag = 0,
+    py::object out = py::none(),
+    std::complex<double> scale = std::complex<double>(1.0, 0.0)
+) {
+    GalerkinFoldBlock fold;
+    bool folding = galerkin_fold_block(
+        out, scale, w_entry.shape(0), src_centers.shape(0), fold);
+    return galerkin_far_fill_cplx_impl(
+        obs_centers, obs_tangents, obs_radius, src_centers, src_tangents,
+        src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag,
+        folding ? &fold : nullptr);
+}
+
 // The reduced entry point. Byte-frozen against its pre-#246 build: the
 // instantiation below has WITH_EK false, so not one line of the delta is
 // compiled into it (gate G-C2). momwire#356's `out`/`scale` are additive and
@@ -2186,6 +2586,27 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("cancel_flag") = 0,
           py::arg("out") = py::none(),
           py::arg("scale") = std::complex<double>(1.0, 0.0));
+    m.def("sinusoidal_galerkin_far_fill_cplx",
+          &sinusoidal_galerkin_far_fill_cplx,
+          "Complex-wavenumber twin of sinusoidal_galerkin_far_fill "
+          "(momwire#980 step E): the same three arrays for an IN-MEDIUM "
+          "k_m = k0*sqrt(eps_tilde) and its eta_m, both std::complex. A "
+          "separate body rather than a template instantiation, so the real "
+          "symbol's bytes are unchanged — see momwire#991 for what differs "
+          "and the gate that would retire the copy. Requires Im k <= 0 (the "
+          "e^{+jwt} convention) and raises otherwise rather than conjugating. "
+          "No extended-kernel twin: EK stays real-k, and its Bessel-polynomial "
+          "split assumes jkR is purely imaginary.",
+          py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("obs_radius"),
+          py::arg("src_centers"), py::arg("src_tangents"), py::arg("src_hh"),
+          py::arg("k"), py::arg("eta"),
+          py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("w_entry"), py::arg("starts"),
+          py::arg("cancel_flag") = 0,
+          py::arg("out") = py::none(),
+          py::arg("scale") = std::complex<double>(1.0, 0.0));
+
     m.def("sinusoidal_galerkin_far_fill_ek", &sinusoidal_galerkin_far_fill_ek,
           "Extended-kernel twin of sinusoidal_galerkin_far_fill "
           "(momwire#246): the same fused far fill, plus the folded EK delta "

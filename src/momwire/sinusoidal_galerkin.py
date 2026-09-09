@@ -414,6 +414,14 @@ _HAVE_GALERKIN_FAR_FILL_EK = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill_ek"
 )
 
+# The complex-wavenumber twin (momwire#980 step E). Flagged separately from
+# the real fill because a wheel built before step E carries the real symbol
+# and not this one, and such a build must keep taking the numpy path at an
+# in-medium k rather than failing to find the entry point.
+_HAVE_GALERKIN_FAR_FILL_CPLX = _acc is not None and hasattr(
+    _acc, "sinusoidal_galerkin_far_fill_cplx"
+)
+
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
 # scratch inside the field kernel stays bounded regardless of model size. It
 # is still literally the block for `_ek_bracket_correction_tested`, whose
@@ -2394,11 +2402,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         src_c = geom["seg_centers"] if src_c is None else src_c
         src_t = geom["seg_tangents"] if src_t is None else src_t
 
+        # An in-medium (complex) k reaches the complex twin when the build
+        # carries it (momwire#980 step E) and the numpy path when it does not
+        # — `eta` too, since eta_m = sqrt(mu/(eps*eps_tilde)) goes complex
+        # with k_m and the REAL kernel's signature takes a double for it.
+        # There is no complex EK twin: the extended kernel's Bessel-polynomial
+        # split assumes jkR is purely imaginary, so an EK solve in the medium
+        # stays on numpy.
+        in_medium = np.iscomplexobj(k) or np.iscomplexobj(self.eta)
         if (
             _HAVE_GALERKIN_FAR_FILL
-            # `double k` in the kernel: an in-medium (complex) k takes the
-            # numpy path below, like an absent accelerator (momwire#980).
-            and not np.iscomplexobj(k)
+            and (
+                not in_medium
+                or (_HAVE_GALERKIN_FAR_FILL_CPLX and not self.extended_kernel)
+            )
             and projector is _plain_projection
             and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
         ):
@@ -2609,6 +2626,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             else np.full(n_obs, float(a_obs))
         )
         gx, gw = self._leggauss_cached(self.n_qp_const)
+        # Which entry point this call takes. Decided from the VALUES rather
+        # than from the solver's ground, because `k` arrives per block.
+        _cplx_fill = np.iscomplexobj(k) or np.iscomplexobj(self.eta)
+        if _cplx_fill and not _HAVE_GALERKIN_FAR_FILL_CPLX:
+            raise RuntimeError(
+                "complex-k far fill requested from a build without "
+                "sinusoidal_galerkin_far_fill_cplx; the caller should have "
+                "taken the numpy path"
+            )
         args = (
             np.ascontiguousarray(ctx["obs_c"], dtype=np.float64),
             np.ascontiguousarray(ctx["obs_t"], dtype=np.float64),
@@ -2616,8 +2642,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.ascontiguousarray(src_c, dtype=np.float64),
             np.ascontiguousarray(src_t, dtype=np.float64),
             np.ascontiguousarray(ctx["hh"], dtype=np.float64),
-            float(k),
-            float(self.eta),
+            # Complex in the medium, and the SCALAR CAST is the guard: at a
+            # real k `float()` would raise on a complex value rather than
+            # truncate it, which is the silent-truncation class momwire#980
+            # step A exists to keep out.
+            complex(k) if _cplx_fill else float(k),
+            complex(self.eta) if _cplx_fill else float(self.eta),
             np.ascontiguousarray(gx, dtype=np.float64),
             np.ascontiguousarray(gw, dtype=np.float64),
             np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
@@ -2629,6 +2659,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # to the EK call's positionals alone, never touching the fold.
         fold = {} if out is None else {"out": tuple(out), "scale": complex(scale)}
         if ek is None:
+            if _cplx_fill:
+                return _acc.sinusoidal_galerkin_far_fill_cplx(
+                    *args, self._cancel_flag, **fold
+                )
             return _acc.sinusoidal_galerkin_far_fill(*args, self._cancel_flag, **fold)
         # The EK twin takes the payload at the shapes the kernel indexes: one
         # radius per SOURCE segment, the pair rule's group labels — one per
