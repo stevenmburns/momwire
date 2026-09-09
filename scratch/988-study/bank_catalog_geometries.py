@@ -1,7 +1,8 @@
 """Regenerate tests/fixtures/catalog_geometries.json (momwire#988).
 
 Captures `BSplineSolver(degree=2)` constructor kwargs for the antennaknobs
-catalog designs the fallback tests use, WITHOUT solving: the spy raises as soon
+catalog designs the fallback tests use, at every mesh multiplier those tests
+actually parametrise (x1, x2, x4), WITHOUT solving: the spy raises as soon
 as it has the kwargs, so a 4,000-wire deck costs a mesh build rather than a
 98-second solve.
 
@@ -90,7 +91,7 @@ def capture(design, mult):
 def main():
     cells = {}
     for design in DESIGNS:
-        for mult, rung in ((2, "default"), (4, "refined")):
+        for mult, rung in ((1, "coarse"), (2, "default"), (4, "refined")):
             rec = capture(design, mult)
             cells[f"{design}|{rung}"] = rec
             print(
