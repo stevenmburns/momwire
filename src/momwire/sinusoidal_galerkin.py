@@ -3453,9 +3453,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         finally:
             self.eta = saved
 
-    def _assemble_mixed_contribs(
-        self, geom, ctx, below, medium, plan, crossing=False
-    ):
+    def _assemble_mixed_contribs(self, geom, ctx, below, medium, plan, crossing=False):
         """The three pair classes of a mixed deck, into one (nnz, N) triple.
 
         Quadrants, and the masks are the point. A class fill computes every
