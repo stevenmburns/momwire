@@ -190,9 +190,17 @@ def test_the_eps_tilde_one_collapse(eps_one):
     wires merely approach the plane reads 2.3e-10 at a 0.5 m gap, 5.8e-09 at
     0.1 m, 1.6e-07 at 0.02 m and 1.9e-07 at 0.005 m, so a deck whose wires MEET
     in the plane landing at 1.4e-06 is that sequence continued to zero gap.
-    bspline reads 1.8e-07 on the same deck. The bar is set to catch a
-    formulation change (the free-end spelling this replaced read 4.6e-01), not
-    to pin the floor.
+
+    And it is not this family's floor alone. `BSplineSolver`'s OWN collapse on
+    the same deck and the same rungs reads 1.47e-07 / 2.73e-06 / 1.94e-06 —
+    the same order as ours for n >= 31, and LARGER than ours at those two
+    rungs. (The 1.8e-07 this comment used to cite for bspline was its n = 15
+    reading taken as if it were a floor; it is not one.) Both families sitting
+    at ~1e-06 once the mesh is refined is what makes the near-plane
+    transmitted block, which they share, the suspect rather than either basis.
+
+    The bar is set to catch a formulation change (the free-end spelling this
+    replaced read 4.6e-01), not to pin the floor.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
