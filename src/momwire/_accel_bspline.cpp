@@ -1734,9 +1734,14 @@ assemble_Z_bspline_windowed(
                 J_chunk, support_seg, polys, tangents, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
             return;
+        case 3:
+            assemble_Z_bspline_windowed_kernel<3, false>(
+                J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag);
+            return;
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_windowed: max_d must be 1 or 2");
+                "assemble_Z_bspline_windowed: max_d must be 1, 2 or 3");
     }
 }
 
@@ -1915,9 +1920,14 @@ assemble_Z_bspline_weighted_windowed(
                 J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
                 i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
             return;
+        case 3:
+            assemble_Z_bspline_weighted_windowed_kernel<3, false>(
+                J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag);
+            return;
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_weighted_windowed: max_d must be 1 or 2");
+                "assemble_Z_bspline_weighted_windowed: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2059,9 +2069,11 @@ assemble_Z_bspline(
             return assemble_Z_bspline_kernel<1, false>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
         case 2:
             return assemble_Z_bspline_kernel<2, false>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
+        case 3:
+            return assemble_Z_bspline_kernel<3, false>(J, support_seg, polys, td_all, omega, eps_, mu_, cancel_flag);
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline: max_d must be 1 or 2");
+                "assemble_Z_bspline: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2203,9 +2215,11 @@ assemble_Z_bspline_weighted(
             return assemble_Z_bspline_weighted_kernel<1, false>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
         case 2:
             return assemble_Z_bspline_weighted_kernel<2, false>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
+        case 3:
+            return assemble_Z_bspline_weighted_kernel<3, false>(J, support_seg, polys, wA_all, wPhi_all, omega, eps_, mu_, cancel_flag);
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_weighted: max_d must be 1 or 2");
+                "assemble_Z_bspline_weighted: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2239,9 +2253,13 @@ assemble_Z_bspline_cplx_eps(
             return assemble_Z_bspline_kernel<2, true>(
                 J, support_seg, polys, td_all, omega, 1.0, mu_, cancel_flag,
                 c.real(), c.imag());
+        case 3:
+            return assemble_Z_bspline_kernel<3, true>(
+                J, support_seg, polys, td_all, omega, 1.0, mu_, cancel_flag,
+                c.real(), c.imag());
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_cplx_eps: max_d must be 1 or 2");
+                "assemble_Z_bspline_cplx_eps: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2268,9 +2286,13 @@ assemble_Z_bspline_weighted_cplx_eps(
             return assemble_Z_bspline_weighted_kernel<2, true>(
                 J, support_seg, polys, wA_all, wPhi_all, omega, 1.0, mu_,
                 cancel_flag, c.real(), c.imag());
+        case 3:
+            return assemble_Z_bspline_weighted_kernel<3, true>(
+                J, support_seg, polys, wA_all, wPhi_all, omega, 1.0, mu_,
+                cancel_flag, c.real(), c.imag());
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_weighted_cplx_eps: max_d must be 1 or 2");
+                "assemble_Z_bspline_weighted_cplx_eps: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2306,9 +2328,14 @@ assemble_Z_bspline_windowed_cplx_eps(
                 J_chunk, support_seg, polys, tangents, m_idx, n_idx,
                 i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag());
             return;
+        case 3:
+            assemble_Z_bspline_windowed_kernel<3, true>(
+                J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag());
+            return;
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_windowed_cplx_eps: max_d must be 1 or 2");
+                "assemble_Z_bspline_windowed_cplx_eps: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2343,9 +2370,15 @@ assemble_Z_bspline_weighted_windowed_cplx_eps(
                 i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag,
                 c.real(), c.imag());
             return;
+        case 3:
+            assemble_Z_bspline_weighted_windowed_kernel<3, true>(
+                J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag,
+                c.real(), c.imag());
+            return;
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_weighted_windowed_cplx_eps: max_d must be 1 or 2");
+                "assemble_Z_bspline_weighted_windowed_cplx_eps: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2372,9 +2405,13 @@ assemble_Z_bspline_swept(
             return assemble_Z_bspline_swept_kernel<2>(
                 J, support_seg, polys, tangents_row, tangents_col,
                 omega_array, eps_, mu_);
+        case 3:
+            return assemble_Z_bspline_swept_kernel<3>(
+                J, support_seg, polys, tangents_row, tangents_col,
+                omega_array, eps_, mu_);
         default:
             throw std::runtime_error(
-                "assemble_Z_bspline_swept: max_d must be 1 or 2");
+                "assemble_Z_bspline_swept: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2688,9 +2725,14 @@ bspline_assemble_offedge_block(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
                 segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
                 cancel_flag);
+        case 3:
+            return bspline_assemble_offedge_block_kernel<3, false>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                cancel_flag);
         default:
             throw std::runtime_error(
-                "bspline_assemble_offedge_block: max_d must be 1 or 2");
+                "bspline_assemble_offedge_block: max_d must be 1, 2 or 3");
     }
 }
 
@@ -2728,9 +2770,14 @@ bspline_assemble_offedge_block_refl(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
                 segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
                 cancel_flag, eps_t, phi_c0, phi_c1);
+        case 3:
+            return bspline_assemble_offedge_block_kernel<3, true>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                cancel_flag, eps_t, phi_c0, phi_c1);
         default:
             throw std::runtime_error(
-                "bspline_assemble_offedge_block_refl: max_d must be 1 or 2");
+                "bspline_assemble_offedge_block_refl: max_d must be 1, 2 or 3");
     }
 }
 
@@ -3105,9 +3152,14 @@ bspline_assemble_offedge_block_ek(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
                 segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
                 group_I, group_J, a_ek, cancel_flag);
+        case 3:
+            return bspline_assemble_offedge_block_kernel_ek<3, false>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                group_I, group_J, a_ek, cancel_flag);
         default:
             throw std::runtime_error(
-                "bspline_assemble_offedge_block_ek: max_d must be 1 or 2");
+                "bspline_assemble_offedge_block_ek: max_d must be 1, 2 or 3");
     }
 }
 
@@ -3149,9 +3201,14 @@ bspline_assemble_offedge_block_refl_ek(
                 supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
                 segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
                 group_I, group_J, a_ek, cancel_flag, eps_t, phi_c0, phi_c1);
+        case 3:
+            return bspline_assemble_offedge_block_kernel_ek<3, true>(
+                supp_I, polys_I, segl_I, segr_I, tan_I, supp_J, polys_J,
+                segl_J, segr_J, tan_J, a_squared, k, omega, eps_, mu_, gl_t, gl_w,
+                group_I, group_J, a_ek, cancel_flag, eps_t, phi_c0, phi_c1);
         default:
             throw std::runtime_error(
-                "bspline_assemble_offedge_block_refl_ek: max_d must be 1 or 2");
+                "bspline_assemble_offedge_block_refl_ek: max_d must be 1, 2 or 3");
     }
 }
 
@@ -3177,9 +3234,12 @@ seg_seg_full_moments_bspline(
         case 2:
             return seg_seg_full_moments_bspline_kernel<2, false>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, gl_t, gl_w);
+        case 3:
+            return seg_seg_full_moments_bspline_kernel<3, false>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, gl_t, gl_w);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3220,9 +3280,13 @@ seg_seg_full_moments_bspline_cplx(
             return seg_seg_full_moments_bspline_kernel<2, true>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
                 k.real(), k.imag(), gl_t, gl_w);
+        case 3:
+            return seg_seg_full_moments_bspline_kernel<3, true>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
+                k.real(), k.imag(), gl_t, gl_w);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline_cplx: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline_cplx: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3256,9 +3320,12 @@ seg_seg_full_moments_bspline_tiered(
         case 2:
             return seg_seg_full_moments_bspline_kernel_impl<2, false>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, ladder);
+        case 3:
+            return seg_seg_full_moments_bspline_kernel_impl<3, false>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, ladder);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline_tiered: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline_tiered: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3292,9 +3359,13 @@ seg_seg_full_moments_bspline_cplx_tiered(
             return seg_seg_full_moments_bspline_kernel_impl<2, true>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
                 k.real(), k.imag(), ladder);
+        case 3:
+            return seg_seg_full_moments_bspline_kernel_impl<3, true>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared,
+                k.real(), k.imag(), ladder);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline_cplx_tiered: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline_cplx_tiered: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3320,9 +3391,12 @@ seg_seg_full_moments_bspline_swept(
         case 2:
             return seg_seg_full_moments_bspline_swept_kernel<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w);
+        case 3:
+            return seg_seg_full_moments_bspline_swept_kernel<3>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline_swept: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline_swept: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3354,9 +3428,13 @@ seg_seg_full_moments_bspline_ek(
             return seg_seg_full_moments_bspline_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
                 group_i, group_j, a_ek);
+        case 3:
+            return seg_seg_full_moments_bspline_kernel_ek<3>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
+                group_i, group_j, a_ek);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline_ek: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline_ek: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3388,9 +3466,13 @@ seg_seg_full_moments_bspline_swept_ek(
             return seg_seg_full_moments_bspline_swept_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w,
                 group_i, group_j, a_ek);
+        case 3:
+            return seg_seg_full_moments_bspline_swept_kernel_ek<3>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w,
+                group_i, group_j, a_ek);
         default:
             throw std::runtime_error(
-                "seg_seg_full_moments_bspline_swept_ek: max_d must be 1 or 2 "
+                "seg_seg_full_moments_bspline_swept_ek: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -3618,8 +3700,9 @@ template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
                                           int max_d, double a_ek) {
-    if (max_d < 0 || max_d > 2) {
-        throw std::runtime_error("max_d out of range [0, 2]");
+    if (max_d < 0 || max_d > BSPLINE_MOMENT_MAX_D) {
+        throw std::runtime_error("max_d out of range [0, " +
+                                 std::to_string(BSPLINE_MOMENT_MAX_D) + "]");
     }
     size_t NM = (size_t)(max_d + 1);
     size_t n_delta = 2 * N - 1;
@@ -3651,8 +3734,9 @@ template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
                                             int max_d, double a_ek) {
-    if (max_d < 0 || max_d > 2) {
-        throw std::runtime_error("max_d out of range [0, 2]");
+    if (max_d < 0 || max_d > BSPLINE_MOMENT_MAX_D) {
+        throw std::runtime_error("max_d out of range [0, " +
+                                 std::to_string(BSPLINE_MOMENT_MAX_D) + "]");
     }
     size_t NM = (size_t)(max_d + 1);
     py::array_t<double> out({NM, NM, N, N});

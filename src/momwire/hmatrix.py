@@ -114,7 +114,10 @@ _HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block_refl_ek"
 )
 
-_OFFEDGE_BLOCK_ACCEL_MAX_D = 2
+# Read from the binary for the same reason as `_bspline_kernels`'
+# `_BSPLINE_ACCEL_MAX_D`, and with the same pre-#999 fallback: an older .so
+# does not export this and does stop at 2 (momwire#999 step 3).
+_OFFEDGE_BLOCK_ACCEL_MAX_D = getattr(_acc, "BSPLINE_MOMENT_MAX_D", 2) if _acc else 0
 
 
 class _SparseAugPrecond:

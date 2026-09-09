@@ -171,11 +171,17 @@ _HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_CPLX_TIERED_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_cplx_tiered"
 )
-# The C++ same-edge dispatch is a hard 9-case `p*3 + q` switch over the
-# generated inline moments, so the accelerated path stops at degree 2 even
-# though the tables now reach 3 (momwire#883). Degree 3 takes the numpy twin,
-# which is the reference the C++ gate compares against anyway.
-_BSPLINE_ACCEL_MAX_D = 2
+# READ FROM THE BINARY, not restated here (momwire#999 step 3). The extension
+# module exports the degree its dispatch actually covers, so this cannot drift
+# from the kernels the way it did between #883 and #999: #883 raised the
+# generated tables to 3, this constant stayed at 2, and the whole degree-3 half
+# of the C++ families sat in the shipped .so with nothing able to call it.
+#
+# The default is 2 rather than 3 on purpose. An .so built before #999 does not
+# export the attribute AND genuinely stops at 2, so the fallback has to be the
+# old ceiling; defaulting to `MAX_D_SUPPORTED` would route degree 3 into a
+# dispatch that throws.
+_BSPLINE_ACCEL_MAX_D = getattr(_acc, "BSPLINE_MOMENT_MAX_D", 2) if _acc else 0
 
 # What the generated tables actually cover, read from the generated file rather
 # than restated (momwire#883): re-running the deriver with a larger MAX_D is
