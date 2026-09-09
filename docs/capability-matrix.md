@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-45 sentences across 78 declared cells, verbatim. A sentence shared by several rows is printed
+45 sentences across 77 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -268,7 +268,7 @@ renders in host dialogs.
 
   > singular enrichment is not built for RazorSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
-- `SinusoidalGalerkinSolver` `buried`, `SinusoidalGalerkinSolver` `buried+crossing_junction`
+- `SinusoidalGalerkinSolver` `buried+crossing_junction`
 
   > a junction IN the ground plane joining an above-ground wire to a buried one - a CROSSING junction (the connected radial screen, the bonded-base vertical) - is not served by SinusoidalGalerkinSolver yet (momwire#980 D3): the mixed serve (momwire#980 D2) fills pairs across the interface as transmitted field blocks, which carry no basis at the node, so a crossing deck would solve to a wrong number rather than a refusal (momwire#1000). Use BSplineSolver, which serves the crossing junction, or the detached spelling (the screen's hub below the plane, nothing reaching it) for a second opinion on the screen without its node
 
