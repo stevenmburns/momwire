@@ -41,6 +41,9 @@ TOLERANCE_FIXED = [
     "wire.sterba_bl",
 ]
 STEP_NOT_TOLERANCE = "loops.skyloop_lmatch"
+# The pre-#979 operator: the sampled-residual check can never fire, so the
+# step-function defect #973 was filed on is reproduced rather than described.
+_NO_CHECK = {"somm_residual_tol": float("inf")}
 GROUND = ("finite", 13.0, 0.005)
 
 pytest.importorskip("antennaknobs", reason="the ladder's decks live in antennaknobs")
@@ -126,44 +129,59 @@ def test_the_old_default_fails_that_bar(mult):
 @pytest.mark.slow
 @pytest.mark.parametrize("mult", [1, 2], ids=["default", "refined"])
 def test_the_step_design_is_unchanged_by_this_default(mult):
-    """`loops.skyloop_lmatch` is NOT fixed by the tolerance, and this asserts
-    exactly that rather than quietly widening the bar to cover it.
+    """`loops.skyloop_lmatch` is not fixed by the TOLERANCE — and since #979 it
+    is fixed by the sampled-residual check instead.
 
-    Both halves matter. That the two tolerances AGREE is the evidence the
-    mechanism is not truncation — a converging scheme would move. That the
-    error is bounded is what stops this reading as permission for any error at
-    all.
+    Both arms are asserted, so neither can pass vacuously. With the check
+    DISABLED (`somm_residual_tol=inf`, the pre-#979 operator) the tolerance is
+    still irrelevant and the error is still ~4.8e-03, which is the premise
+    #973 was filed on. With the check ON — the shipped default — the design
+    agrees with dense at every tolerance.
     """
     ref = _z(STEP_NOT_TOLERANCE, mult, BSplineSolver)
-    old = _z(STEP_NOT_TOLERANCE, mult, HMatrixSolver, aca_tol=1e-4)
-    new = _z(STEP_NOT_TOLERANCE, mult, HMatrixSolver)
-    rel = abs(new - ref) / abs(ref)
-    moved = abs(new - old) / abs(ref)
-    # As a RATIO against the error, not an absolute: the two tolerances do
-    # differ in the last bits (a different ACA rank path), and the claim is
-    # not that they are identical but that the tolerance is irrelevant to the
-    # error. Measured, it moves the answer by ~1e-6 of the error it leaves.
-    assert moved < rel * 1e-4, (
-        f"the tolerance now moves this design by {moved:.3e} against an error "
-        f"of {rel:.3e}; it is filed as a separate step-function defect on the "
+    off_old = _z(STEP_NOT_TOLERANCE, mult, HMatrixSolver, aca_tol=1e-4, **_NO_CHECK)
+    off_new = _z(STEP_NOT_TOLERANCE, mult, HMatrixSolver, **_NO_CHECK)
+    rel_off = abs(off_new - ref) / abs(ref)
+    moved = abs(off_new - off_old) / abs(ref)
+    # The original claim, still true of the operator underneath: the two
+    # tolerances agree to ~1e-6 of the error they leave, so the mechanism is
+    # not truncation. A converging scheme would move.
+    assert moved < rel_off * 1e-4, (
+        f"with the check disabled the tolerance now moves this design by "
+        f"{moved:.3e} against an error of {rel_off:.3e}; #973 rests on the "
         f"premise that it does not"
     )
-    assert 1e-3 < rel < 6e-3, f"skyloop_lmatch moved: {rel:.3e}"
+    assert 1e-3 < rel_off < 6e-3, f"skyloop_lmatch moved: {rel_off:.3e}"
+
+    # And what #979 changed: the shipped default fixes it.
+    on_new = _z(STEP_NOT_TOLERANCE, mult, HMatrixSolver)
+    rel_on = abs(on_new - ref) / abs(ref)
+    assert rel_on < 1e-5, f"the sampled check should fix this design, got {rel_on:.3e}"
+    assert rel_on < rel_off / 100.0
 
 
 @pytest.mark.slow
 def test_the_step_really_is_a_step_and_not_slow_convergence():
-    """The claim the separate filing rests on: flat, then a cliff.
+    """The claim #973's separate filing rests on: flat, then a cliff — and
+    that #979's check removes it rather than tightening into it.
 
+    Measured on the pre-#979 operator (`somm_residual_tol=inf`): 4.802e-03,
+    4.803e-03, 4.803e-03 across aca_tol 1e-4/1e-6/1e-7, then 3.59e-07 at 1e-8.
     If this were ordinary convergence the middle rungs would improve
     gradually and the right answer would be to tighten the default further.
     They do not.
     """
     ref = _z(STEP_NOT_TOLERANCE, 2, BSplineSolver)
-    rels = {}
+    off, on = {}, {}
     for tol in (1e-4, 1e-6, 1e-7, 1e-8):
-        got = _z(STEP_NOT_TOLERANCE, 2, HMatrixSolver, aca_tol=tol)
-        rels[tol] = abs(got - ref) / abs(ref)
-    flat = [rels[t] for t in (1e-4, 1e-6, 1e-7)]
-    assert max(flat) / min(flat) < 1.01, f"the plateau is not flat: {rels}"
-    assert rels[1e-8] < flat[0] / 1e3, f"no cliff between 1e-7 and 1e-8: {rels}"
+        off[tol] = abs(
+            _z(STEP_NOT_TOLERANCE, 2, HMatrixSolver, aca_tol=tol, **_NO_CHECK) - ref
+        ) / abs(ref)
+        on[tol] = abs(
+            _z(STEP_NOT_TOLERANCE, 2, HMatrixSolver, aca_tol=tol) - ref
+        ) / abs(ref)
+    flat = [off[t] for t in (1e-4, 1e-6, 1e-7)]
+    assert max(flat) / min(flat) < 1.01, f"the plateau is not flat: {off}"
+    assert off[1e-8] < flat[0] / 1e3, f"no cliff between 1e-7 and 1e-8: {off}"
+    # #979: with the check on there is no plateau to step over.
+    assert max(on.values()) < 1e-5, f"the check should flatten all rungs: {on}"
