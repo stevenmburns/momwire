@@ -263,8 +263,14 @@ def test_the_operating_point_is_scoped_and_restores():
     assert s.k == k_before and s.eta == eta_before
 
 
-def test_a_mixed_deck_is_refused_by_name():
-    """Above AND below is D2's three pair classes, not this serve's one."""
+def test_a_mixed_deck_is_served_since_d2():
+    """Above AND below is D2's three pair classes.
+
+    D1 refused this deck by name; D2 serves it, so what this gate pins now is
+    that the refusal is GONE and the deck solves — the D1 suite's job is to
+    show D2 did not move anything D1 answered, and this row is the one place
+    D1's answer was "no".
+    """
     s = SinusoidalGalerkinSolver(
         wires=[
             np.array([(0.0, 0.0, -2.0), (0.0, 0.0, -1.0)]),
@@ -278,8 +284,8 @@ def test_a_mixed_deck_is_refused_by_name():
         ground_eps=SOIL_A,
         ground_model="sommerfeld",
     )
-    with pytest.raises(NotImplementedError, match="BOTH above and below"):
-        s.compute_impedance()
+    z = complex(s.compute_impedance()[0])
+    assert np.isfinite(z.real) and np.isfinite(z.imag)
 
 
 @pytest.mark.parametrize(

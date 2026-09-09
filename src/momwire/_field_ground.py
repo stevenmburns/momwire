@@ -384,6 +384,7 @@ class FieldGround:
         "_geom",
         "_k",
         "_omega",
+        "_geom_rem",
         "_medium",
         "_r1_below",
         "_remainders",
@@ -409,6 +410,7 @@ class FieldGround:
         standard_fresnel=True,
         medium=None,
         r1_below=None,
+        remainder_geom=None,
     ):
         self._solver = solver
         self._geom = geom
@@ -426,6 +428,13 @@ class FieldGround:
         # ε̃ with the above one and differ in everything else.
         self._medium = medium
         self._r1_below = r1_below
+        # The geometry the REMAINDER is prepared over, when it differs from
+        # the one the IMAGE mirrors (momwire#980 D2). On a mixed deck a
+        # class's ground images the whole deck — the out-of-class columns are
+        # discarded by the caller's quadrant mask — but its remainder models
+        # ONE medium and refuses the other's geometry outright. `None` keeps
+        # the two the same, which is every shipped ground.
+        self._geom_rem = geom if remainder_geom is None else remainder_geom
 
     def image_sources(self) -> tuple:
         """The mirror map: `(src_c, src_t)` for the image sources, source
@@ -548,7 +557,7 @@ class FieldGround:
             got = Remainder(
                 self._solver,
                 self._solver._somm_remainder_below_prepare(
-                    self._geom, self._medium, self._r1_below, cos_shape=cos_shape
+                    self._geom_rem, self._medium, self._r1_below, cos_shape=cos_shape
                 ),
                 replay="_replay_somm_remainder_below",
             )
@@ -559,14 +568,14 @@ class FieldGround:
             # O(N²) per call was the dominant cost of the banded fill
             # (momwire#367); hoisted with the prepare it feeds, which is
             # where the fill used to hoist it by hand.
-            geom = self._geom
+            geom = self._geom_rem
             r1_max = _sommerfeld.max_image_distance(
                 geom["seg_l"], geom["seg_r"], self._solver.ground_z
             )
             got = Remainder(
                 self._solver,
                 self._solver._sommerfeld_remainder_prepare(
-                    self._geom,
+                    self._geom_rem,
                     self._k,
                     self.eps_tilde,
                     cos_shape=cos_shape,
@@ -578,7 +587,7 @@ class FieldGround:
 
 
 def field_ground_for(
-    solver, geom, k, omega, medium=None, r1_below=None
+    solver, geom, k, omega, medium=None, r1_below=None, remainder_geom=None
 ) -> FieldGround | None:
     """The factory: `solver`'s ground as one object, or `None` for free
     space.
@@ -631,6 +640,7 @@ def field_ground_for(
             standard_fresnel=False,
             medium=medium,
             r1_below=r1_below,
+            remainder_geom=remainder_geom,
         )
     cfg = _ground_spec.ground_config(solver, omega)
     if cfg is None:
@@ -645,4 +655,5 @@ def field_ground_for(
         eps_tilde=cfg.eps_tilde,
         image_coefficient=cfg.image_coefficient,
         standard_fresnel=cfg.standard_fresnel,
+        remainder_geom=remainder_geom,
     )
