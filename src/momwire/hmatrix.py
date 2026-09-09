@@ -342,31 +342,48 @@ DEFAULT_ACA_TOL = 1e-6
 # global low-rank route is abandoned for that solve when they disagree.
 #
 # This is a CORRECTNESS gate, not an accuracy knob, and the threshold sits in a
-# measured gap rather than on a slope. Probe residual over 98 antennaknobs
-# catalog designs at the refined mesh, aca_tol 1e-6, sommerfeld ground:
+# measured gap rather than on a slope, and it is chosen from TWO independent
+# datasets rather than by fiat.
 #
-#     95 healthy   median 3.4e-05, max 1.66e-03 (loops.triangular_skyloop)
-#      3 stagnant  1.0000 (dipoles.dipole_turnstile, loops.horizontal_loop),
-#                  1.1287 (loops.skyloop_lmatch)
+# (a) Probe residual over 98 antennaknobs catalog designs at the refined mesh,
+#     aca_tol 1e-6, sommerfeld ground:
+#         95 healthy   median 3.4e-05, max 1.66e-03 (loops.triangular_skyloop)
+#          3 stagnant  1.0000 (dipoles.dipole_turnstile, loops.horizontal_loop),
+#                      1.1287 (loops.skyloop_lmatch)
+# (b) The #977 crossover ladder (momwire 16699bf): healthy rhombic d=1/d=2
+#     finite cells from N=1010 to 8072 span 9.00e-06 to 1.01e-04; stagnant
+#     skyloop cells sit at 1.16-1.20 and fall back correctly.
 #
-# Nothing lands between 1.7e-03 and 1.0 -- a 602x empty band -- so 1e-2 clears
-# every healthy deck by 6x and sits two decades under every stagnant one. The
-# two designs at exactly 1.0000 are the degenerate case the gap makes obvious:
-# U @ V collapsed to ~0, i.e. the remainder correction was absent entirely.
-# Erring low is the safe direction: a false positive costs a dense fill (time),
-# a false negative ships a wrong impedance.
+# THE POPULATIONS ARE THREE, NOT TWO, and the middle one is why this number
+# moved from 1e-2 to 4e-3 rather than to something tighter:
 #
-# IT IS A CATASTROPHE DETECTOR, NOT AN ERROR BOUND, and the mesh ladder says so.
-# Over six rungs of the skyloop geometry (52 to 280 bases) four rungs stagnate
-# outright -- probe 1.16 to 1.21, current error 5.5e-03, fixed to ~1e-06 -- and
-# two do not. One of the two that does not, at 232 bases, carries a MILD
-# degradation the check misses: probe 2.2e-03, current error 7.7e-04, no
-# fallback. That probe sits only 1.3x above the worst healthy catalog deck
-# (1.66e-03), so no threshold separates mild degradation from health; the
-# 600x gap that IS clean is the one between catastrophic stagnation and
-# everything else, and 1e-2 sits in it. `_last_somm_residual` is exposed so a
-# ladder can record the value rather than only the verdict (#977).
-DEFAULT_SOMM_RESIDUAL_TOL = 1e-2
+#     healthy              probe <= 2.52e-03    |dZ|/|Z| ~1e-05 or better
+#     mildly degraded      probe 2.20e-03       |dZ|/|Z| 7.71e-04   <- MISSED
+#                          probe 9.74e-03       |dZ|/|Z| 1.26e-03   <- caught
+#     stagnated            probe >= 1.0         |dZ|/|Z| ~5.5e-03
+#
+# 4e-3 catches the skyloop d=1 N=90 cell that 1e-2 missed (#984) while
+# clearing every healthy probe in either dataset.
+#
+# THE HEALTHY EDGE DRIFTS, which is why the margin is stated rather than
+# assumed. loops.triangular_skyloop -- the worst healthy deck in the 98-design
+# scan -- probed 1.66e-03 when that scan was taken and probes 2.52e-03 on this
+# revision, a 1.5x move with its |dZ| unchanged at 2.6e-06. The probe samples
+# entries the ACA did not pivot on, so its VALUE tracks the pivot path while
+# its VERDICT does not. Margin on this revision is therefore 1.6x below the
+# threshold, not the 2.4x the older number implied.
+#
+# That drift is the argument against tightening: catching the 2.20e-03 rung
+# would put the threshold under a healthy deck that has already moved past it
+# once, and a false positive is a silent catalog-wide dense fill. That cell
+# stays a documented miss.
+#
+# IT IS A CATASTROPHE DETECTOR, NOT AN ERROR BOUND. The boundary between
+# health and mild degradation lies somewhere in (1.66e-03, 2.20e-03), a factor
+# of 1.3, so no threshold separates them; the clean separation is the one
+# between stagnation and everything else. `_last_somm_residual` is exposed so
+# a ladder can record the value rather than only the verdict (#977).
+DEFAULT_SOMM_RESIDUAL_TOL = 4e-3
 
 # When the cluster tree FRAGMENTS, the H-matrix route stops paying and the
 # dense one is faster (momwire#972). Thresholds measured, not chosen:
