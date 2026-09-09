@@ -75,6 +75,7 @@ from ._bspline_kernels import (
 from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._quadrature import leggauss
 
+from . import _below_interface
 from . import _bspline_kernels
 from . import _crossing_fill
 from . import _ground_mirror
@@ -501,7 +502,7 @@ _ENRICHMENT_EXTENDED_KERNEL_REFUSAL = (
 )
 # The Gauss order the buried fill's field-form blocks run at — see
 # `BSplineSolver._n_qp_buried_field` for the measurement that sets it.
-_N_QP_BURIED_FIELD = 6
+_N_QP_BURIED_FIELD = _below_interface.N_QP_BURIED_FIELD
 
 _ENRICHMENT_PER_WIRE_RADIUS_REFUSAL = (
     "use_singular_enrichment + mixed per-wire radii together "
@@ -541,90 +542,14 @@ SINGULAR_ENRICHMENT_NEVER = (
 # the same sentence, because the two buried Sommerfeld families refuse rather
 # than clamp — there is no negligible tail to freeze below the interface —
 # and a serve-time refusal with no numbers in it is not actionable.
-_BURIED_ENRICHMENT_REFUSAL = (
-    "use_singular_enrichment=True + a wire below the ground plane is not "
-    "served: the enrichment DOFs are a SECOND kernel implementation with "
-    "their own quadrature over the s^(-1/2) shapes, in C++ with a `double k` "
-    "and in a numpy twin, and neither carries an in-medium wavenumber or the "
-    "buried image and remainder blocks (momwire#553 U5 widens the polynomial "
-    "moment fill only). Solve the buried deck without singular enrichment"
-)
-_BURIED_EXTENDED_KERNEL_REFUSAL = (
-    "extended_kernel=True + a wire below the ground plane is not served: the "
-    "extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping "
-    "scored across the whole geometry, and momwire#553 measured neither what "
-    "that grouping means for a pair spanning two media (the tube expansion's "
-    "O(a^2) term is written at one wavenumber) nor what the mirror labels "
-    "mean when the image of a buried source lands in the OTHER medium. "
-    "Solve the buried deck with extended_kernel=False, which is the default"
-)
-_BURIED_DENSE_BUDGET_REFUSAL = (
-    "a deck with buried wires is filled through the DENSE moment tensor on "
-    "this build and this one does not fit: {n} segments need about {need:.0f} "
-    "MB per tensor against a swept_mem_mb budget of {budget} MB. The chunked "
-    "fill+assemble route (momwire#915) needs the windowed C++ assemblers' "
-    "complex-eps twins, which this accelerator build does not export, so the "
-    "fill refuses rather than silently truncating the medium. Rebuild the "
-    "accelerators, raise swept_mem_mb, or mesh the deck coarser"
-)
-_BURIED_PAST_CAP_REFUSAL = (
-    "this deck's buried wires reach a below/below pair separation of "
-    "R1 = {r1:.6g} m ({wl:.3g} in-medium wavelengths), past the {cap:.6g} m "
-    "({capwl:g} in-medium wavelengths, lambda_m = {lam_m:.4g} m) the "
-    "below/below remainder is tabulated to. There is no honest clamp out "
-    "there: unlike the reflected-wave remainder above the interface, the "
-    "below/below remainder GROWS relative to the direct term with range "
-    "(measured 12x and 168x direct+image at working range, momwire#553 U2), "
-    "so freezing the surface amplitude would return a confident wrong "
-    "number. Shrink the buried structure, or densify the far annulus of the "
-    "below/below grid (a recorded follow-up, and it wants the C++ twin first)"
-)
-_BURIED_GRAZING_REFUSAL = (
-    "this deck's buried wires reach a below/below pair elevation of "
-    "theta = {th:.4g} deg, below the {floor:g} deg grazing floor the "
-    "below/below surfaces are tabulated from (the pair's two depths add to "
-    "{depth:.4g} m, and theta = atan2(depth sum, horizontal separation)). "
-    "Below the floor the surfaces carry the lateral wave's LOGARITHMIC "
-    "structure — measured drift 1.1 to 3.3 of scale between 2 and 0.05 deg — "
-    "which no uniform lattice resolves, and theta = 0 has no node at all "
-    "because h = 0 leaves the tail without its exponential decay. Bury the "
-    "wires deeper, shorten them, or wait for the log-spaced grazing band "
-    "(momwire#553 U2's recorded follow-up)"
-)
-_BURIED_CROSS_RANGE_REFUSAL = (
-    "this deck's cross-medium pairs reach an observer radius of R = {r:.6g} m "
-    "({wl:.3g} free-space wavelengths) about a buried source's ground "
-    "projection, past the {cap:.6g} m ({capwl:g} free-space wavelengths) the "
-    "transmitted family is tabulated to. The transmitted integral is the "
-    "WHOLE field above a buried source, not a remainder, so there is no "
-    "negligible tail to freeze and no honest clamp. Extending the log-R axis "
-    "is cheap and honest work (7 nodes per doubling of range); extrapolating "
-    "past it is not"
-)
-_BURIED_DEPTH_REFUSAL = (
-    "this deck buries a wire {d:.6g} m down, past the {cap:.6g} m "
-    "({capwl:g} in-medium wavelengths, lambda_m = {lam_m:.4g} m) the "
-    "transmitted family's z' ladder reaches. Beyond a quarter lambda_m the "
-    "two-ray (lambda_1/lambda_2 saddle) structure of the transmitted "
-    "integral returns and the single e^(-j k_m |z'|) divide-out the whole "
-    "ladder architecture rests on no longer flattens it (momwire#524 phase 0 "
-    "measured >33 nodes over the deep range at every soil, and a spherical-"
-    "phase divide is no better). Bury the wire shallower, or extend the "
-    "ladder — about 8 extra rungs per additional quarter lambda_m, each rung "
-    "a full (R, theta) fill"
-)
-_BURIED_CROSS_GRAZING_REFUSAL = (
-    "this deck's cross-medium pairs reach an observer elevation of "
-    "theta = {th:.4g} deg, below the {floor:.4g} deg this transmitted grid "
-    "can pay for. That floor is a COST law rather than a physics one: the "
-    "transmitted tail is panelled on the J0(lam rho) zeros and must reach "
-    "lam ~ 35/(z + |z'|), so a node costs about 16*cot(theta_true) panels, "
-    "and at this deck's range {r:.6g} m over a shallowest buried depth of "
-    "{depth:.6g} m the bottom row runs out of budget. A truncated tail here "
-    "does NOT degrade gracefully — the acceleration fallback was measured "
-    "4.5e+3 relative wrong — so it refuses. Raise the above-ground wires "
-    "clear of the plane, bury the wires deeper, or shrink the deck's extent"
-)
+_BURIED_ENRICHMENT_REFUSAL = _below_interface.BURIED_ENRICHMENT_REFUSAL
+_BURIED_EXTENDED_KERNEL_REFUSAL = _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
+_BURIED_DENSE_BUDGET_REFUSAL = _below_interface.BURIED_DENSE_BUDGET_REFUSAL
+_BURIED_PAST_CAP_REFUSAL = _below_interface.BURIED_PAST_CAP_REFUSAL
+_BURIED_GRAZING_REFUSAL = _below_interface.BURIED_GRAZING_REFUSAL
+_BURIED_CROSS_RANGE_REFUSAL = _below_interface.BURIED_CROSS_RANGE_REFUSAL
+_BURIED_DEPTH_REFUSAL = _below_interface.BURIED_DEPTH_REFUSAL
+_BURIED_CROSS_GRAZING_REFUSAL = _below_interface.BURIED_CROSS_GRAZING_REFUSAL
 
 
 def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
@@ -1801,13 +1726,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _lower_medium(self):
         """Whether this solve's ground has a HALF-SPACE below the interface —
-        a medium with a wavenumber of its own, not just a boundary condition.
-
-        Exactly the Sommerfeld ground. `_ground_spec.ground_config` answers
-        the same question in its own vocabulary (`mode == "compose"`), but it
-        needs an ω to fold ε̃ at and this one is asked at geometry time.
-        """
-        return self.ground_eps is not None and self.ground_model == "sommerfeld"
+        `_below_interface.lower_medium` (momwire#553 U5, moved in #980)."""
+        return _below_interface.lower_medium(self.ground_eps, self.ground_model)
 
     def _wire_media(self):
         """One `_medium_spec` label per wire, cached per instance.
@@ -1829,152 +1749,30 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return cached
 
     def _grounded_junction_ends(self):
-        """The `(wire, "start"|"end")` pairs that participate in a junction
-        whose shared point lies IN the ground plane — the crossing-junction
-        exemption `_medium_spec.wire_media` keys on (momwire#524 phase 2).
-
-        Pure geometry: no media labels yet (the labels are what this
-        feeds). Which of those junctions actually SPAN the interface, and
-        whether the deck is inside the crossing serve's scope, is
-        `_crossing_junctions`' question, asked after the labels exist.
-
-        Groups with fewer than two members are skipped (momwire#698). A
-        one-member group is legal (momwire#172 — its KCL row pins
-        I_end = 0, and as a junction PORT it is a lone attachment), but one
-        wire end cannot join two media, so such a group can NEVER be the
-        crossing junction this exemption is granted for. Admitting it
-        handed a contact+buried deck a silent escape from
-        `_medium_spec.wire_media`'s refusal while `_crossing_junctions`
-        still declined it (one member never spans), dropping the deck onto
-        the field-form transmitted block — the O(1)-boundary-term
-        configuration the refusal exists to prevent. The count is the
-        cheapest NECESSARY condition for crossing and it is pure geometry,
-        so it belongs here; the SUFFICIENT condition needs labels and is
-        `_crossing_junctions`'. A junction no member of which reaches ABOVE
-        the plane is skipped for the same shape of reason and by the same
-        argument (momwire#700): it has no above side to cross TO, so it can
-        never span the interface either, and admitting it handed a
-        WHOLLY-BELOW deck the exemption on a deck where nothing crosses.
-
-        The conditions themselves live in
-        `_medium_spec.grounded_crossing_exemption`, shared with
-        `RazorSolver._grounded_junction_ends` (momwire#700): the two trunks
-        differ only in where the junction GROUPS come from — declared here,
-        detected there — and momwire#700 is what two copies of the geometry
-        cost.
-        """
+        """The `(wire, "start"|"end")` pairs in a junction whose shared point
+        lies IN the ground plane — the crossing-junction exemption
+        `_medium_spec.wire_media` keys on. `_below_interface.grounded_junction_ends`
+        over the DECLARED groups; razor hands the same function its detected
+        ones (momwire#700 is what two copies of the geometry cost)."""
         if self.ground_z is None or not self.junctions:
             return frozenset()
-        return _medium_spec.grounded_crossing_exemption(
+        return _below_interface.grounded_junction_ends(
             self.wires_polylines, self.ground_z, self.junctions
         )
 
     def _crossing_junctions(self):
-        """Indices of junctions that CROSS the interface — grounded
-        junctions joining an ABOVE wire to a BELOW wire — after checking
-        the deck against the crossing serve's scope (momwire#524 phase 2).
-
-        The scope is what the phase-2 adjudication validated, refused by
-        name past it:
-
-        * exactly ONE above member per crossing junction, N ≥ 1 below
-          members — the node fan (a monopole over a buried radial screen
-          risen to the node, momwire#524 fan widening). Multiple above
-          members share the interface corner between above tents, a pair
-          class no adjudicator has measured;
-        * ONE wire radius across the deck — the radius rule
-          ρ_eff = √(ρ² + a²) is the corner's regularization and a
-          per-pair radius has no pinned convention;
-        * OTHER junctions only wholly BELOW and off the plane — the
-          buried hub (one rise + N radials joined at depth, the screen's
-          other spelling). Its by-parts end terms cancel through the
-          hub's own KCL row (probe35: fan M+hub ≡ M to the digit), and
-          the hub ≡ N-rises gate holds the two spellings of the same
-          screen together. An above-side or in-plane other junction
-          stays refused: only the below axis's completion machinery has
-          that cancellation measured.
-        """
-        media = self._wire_media()
-        if _medium_spec.BELOW not in media or not self.junctions:
-            return ()
-        grounded = self._grounded_junctions()
-        crossing = []
-        for j_idx, jw in enumerate(self.junctions):
-            if j_idx not in grounded:
-                continue
-            sides = {media[w] for w, _e in jw}
-            if len(sides) == 2:
-                crossing.append(j_idx)
-
-        # The exemption audit (momwire#698), before the empty-crossing
-        # return because the escape it closes is exactly the empty case.
-        #
-        # `_grounded_junction_ends` grants its exemption on GEOMETRY — a
-        # junction whose shared point lies in the plane — and that
-        # exemption silences `_medium_spec.wire_media`'s contact+buried
-        # refusal. Only a junction that actually CROSSES earns the silence:
-        # the crossing fill is what carries the contact end's current into
-        # the lower medium, and a grounded junction that turned out not to
-        # span the interface (one member, or every member above it) leaves
-        # the deck on the field-form transmitted block with the contact
-        # basis's O(1) boundary term unaccounted for. So re-ask the refusal
-        # predicate here with the exemption narrowed from "touches the
-        # plane" to "validated as crossing".
-        #
-        # Here and not in `wire_media`: crossing-ness is a MEDIA question
-        # and the exemption set is computed before the labels exist. Here
-        # and not at the dispatch site: this is the single function both
-        # dispatch arms consult, and it already requires the ground attrs
-        # (`_wire_media`, `_grounded_junctions`), so it cannot fire on a
-        # bare `__new__` probe — the momwire#660 misplacement trap.
-        earned = {tuple(m) for j_idx in crossing for m in self.junctions[j_idx]}
-        stranded = [
-            c
-            for c in _ground_spec.contact_ends(self.wires_polylines, self.ground_z)
-            if c not in earned
-        ]
-        if stranded:
-            raise ValueError(
-                _medium_spec.contact_with_buried_refusal(
-                    stranded[0][0], media.index(_medium_spec.BELOW)
-                )
-            )
-
-        if not crossing:
-            return ()
-        for j_idx in crossing:
-            n_above = sum(
-                1 for w, _e in self.junctions[j_idx] if media[w] == _medium_spec.ABOVE
-            )
-            if n_above != 1:
-                raise NotImplementedError(
-                    "crossing junction with more than one above member: the "
-                    "crossing serve joins ONE above wire to N below wires "
-                    "at the interface (momwire#524 fan widening); the "
-                    "above-tent × above-tent interface corner has no "
-                    "measured convention"
-                )
-        for j_idx, jw in enumerate(self.junctions):
-            if j_idx in crossing:
-                continue
-            if j_idx in grounded or any(media[w] != _medium_spec.BELOW for w, _e in jw):
-                raise NotImplementedError(
-                    "a deck with a crossing junction and an above-side or "
-                    "in-plane OTHER junction is not served: the complete "
-                    "crossing spelling completes every value-1 end on its "
-                    "axes, and only the below axis's completions (the "
-                    "crossing node and the buried hub) are measured "
-                    "(momwire#524 phase 2)"
-                )
-        radii = np.asarray(self._radius_per_wire, dtype=float)
-        if float(radii.max()) - float(radii.min()) > 0.0:
-            raise NotImplementedError(
-                "crossing serve with per-wire radii: the radius rule "
-                "rho_eff = sqrt(rho^2 + a^2) regularizes the corner with "
-                "ONE wire radius, and a mixed-radius convention is not "
-                "pinned (momwire#524 phase 2)"
-            )
-        return tuple(crossing)
+        """Indices of junctions that CROSS the interface, after the crossing
+        serve's scope check — `_below_interface.crossing_junctions` over the
+        declared groups (momwire#524 phase 2; the scope and the #698 exemption
+        audit are documented there, shared with razor since #980)."""
+        return _below_interface.crossing_junctions(
+            self._wire_media(),
+            self.junctions,
+            self._grounded_junctions(),
+            self.wires_polylines,
+            self.ground_z,
+            self._radius_per_wire,
+        )
 
     @property
     def n_qp_pair(self):
@@ -2108,69 +1906,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return _surface_height.SURFACE_HEIGHT_CLASS.floor_h_over_a * a_w
 
     def _crossing_node_members(self, crossing, media):
-        """A `_crossing_fill.NodeArm` per member of every crossing junction.
-
-        Each arm is walked OUTWARD from the shared point, edge by edge,
-        until the walk passes `_crossing_fill.NODE_REACH`. Two lengths
-        come back per arm: the finest segment length seen inside that
-        reach (`h_resolved`, what the advisory gates) and the length of
-        the segment actually touching the node (`h_adjacent`).
-
-        They are gated separately because the touching segment does not
-        predict the error — a 50 mm feed gap in front of a chain graded
-        to 6 mm is a resolved node, while a single 667 mm tent is not,
-        and node-adjacent h reads those 13x apart when their errors are
-        ~200x apart. `_crossing_fill`'s constants carry the measurement.
-
-        The first edge always counts, however long it is: an arm made of
-        one coarse edge must not read as "unmeasured" and escape.
-        """
-        reach = _crossing_fill.NODE_REACH
-        out = []
-        for j_idx in crossing:
-            for w, end in self.junctions[j_idx]:
-                pl = self.wires_polylines[w]
-                npe = self.n_per_edge_per_wire[w]
-                # Edge indices ordered from the node outward.
-                order = (
-                    range(len(npe)) if end == "start" else range(len(npe) - 1, -1, -1)
-                )
-                h_resolved = h_adjacent = None
-                slope = 0.0
-                walked = 0.0
-                for e in order:
-                    if walked > 0.0 and walked >= reach:
-                        break
-                    edge = np.asarray(pl[e + 1], dtype=float) - np.asarray(
-                        pl[e], dtype=float
-                    )
-                    length = float(np.linalg.norm(edge))
-                    h = length / int(npe[e])
-                    if h_adjacent is None:
-                        h_adjacent = h
-                        # momwire#926: the NODE-ADJACENT edge's rise per unit
-                        # arclength. This is what prices the stand-off floor
-                        # against node grading — the arm leaves the interface
-                        # at this slope, so a vertex at arclength l sits at
-                        # h = slope * l. Taken from the first edge rather than
-                        # end to end because grading only ever puts vertices
-                        # inside it.
-                        slope = abs(float(edge[2])) / length if length > 0 else 0.0
-                    h_resolved = h if h_resolved is None else min(h_resolved, h)
-                    walked += length
-                side = "above" if media[w] == _medium_spec.ABOVE else "below"
-                out.append(
-                    _crossing_fill.NodeArm(
-                        h_resolved,
-                        h_adjacent,
-                        w,
-                        end,
-                        side,
-                        slope,
-                        self._stand_off_floor(w) if side == "above" else None,
-                    )
-                )
-        return out
+        """A `_crossing_fill.NodeArm` per member of every crossing junction —
+        `_below_interface.crossing_node_members` over the declared groups, with
+        this solver's stand-off floor for the above-side arms (momwire#926)."""
+        return _below_interface.crossing_node_members(
+            crossing,
+            media,
+            self.junctions,
+            self.wires_polylines,
+            self.n_per_edge_per_wire,
+            self._stand_off_floor,
+        )
 
     def _crossing_context(self, geom, supp_seg, polys):
         """What the crossing fill reads off this solver, as data
@@ -2196,23 +1942,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _grounded_junctions(self):
-        """Indices of junctions whose shared point lies in the ground plane.
-
-        Their KCL row (Σ signed outflows = 0) is dropped: at a grounded
-        node current may flow into the ground stake (completed by the
-        image), so enforcing closure among the real wires alone would be
-        wrong physics."""
-        gz = self.ground_z
-        if gz is None or not self.junctions:
-            return frozenset()
-        grounded = set()
-        for j_idx, jw in enumerate(self.junctions):
-            w, end = jw[0]
-            pl = self.wires_polylines[w]
-            pt = pl[0] if end == "start" else pl[-1]
-            if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl):
-                grounded.add(j_idx)
-        return frozenset(grounded)
+        """Indices of junctions whose shared point lies in the ground plane —
+        `_below_interface.grounded_junctions`. Their KCL row is dropped: at a
+        grounded node current may flow into the ground stake."""
+        return _below_interface.grounded_junctions(
+            self.wires_polylines, self.ground_z, self.junctions
+        )
 
     def _split_kcl_ports(self, kcl_A):
         """Split the assembled KCL matrix into (constraint rows, port rows,
@@ -3003,13 +2738,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return M + remainder.evaluate(supp_seg, polys)
 
     def _somm_grid(self, eps_t, r1_max):
-        return _sommerfeld.get_grid(
-            eps_t,
-            self.k,
-            r1_max,
-            omega=self.omega,
-            mu=self.mu,
-            cancel_flag=self._cancel_flag,
+        return _below_interface.somm_grid(
+            eps_t, self.k, r1_max, self.omega, self.mu, self._cancel_flag
         )
 
     def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t):
@@ -5218,68 +4948,25 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _n_qp_buried_field(self):
-        """Gauss order for the buried fill's THREE field-form blocks.
-
-        **This is momwire#553's fifth inversion, and it is a tolerance
-        inherited from "the remainder is small".** `n_qp_sommerfeld` is 3
-        because the ±=+ remainder is a smooth correction over a segment — no
-        near zone, nothing to resolve. Two of the three blocks here are
-        remainders and 3 would serve them. The CROSS block is not a remainder:
-        the transmitted integral is the WHOLE field, near zone and all, so the
-        quantity a cross pair integrates over a segment falls like 1/R³ and
-        3-point Gauss under-resolves it exactly where an above wire and a
-        buried wire come close — which on a buried radial screen is every
-        pair that matters.
-
-        Measured at ε̃ = 1, where the whole cross block must reproduce the
-        free-space mixed-potential block over the same pairs and the two
-        disagree only by quadrature and interpolation (worst entry, relative
-        to the block's largest):
-
-            deck                       q=3      q=4      q=6      q=8
-            10 m mono / 5 m radial,
-            3 + 2 segments           6.6e-3   3.1e-3   6.8e-4   6.8e-4
-            15 + 10 segments         3.9e-4   1.1e-5   1.0e-5   1.0e-5
-
-        — the floor in each row is the GRID's own interpolation error, which
-        the quadrature cannot go below, and q = 6 reaches it on both. Cost is
-        q² per pair on a table the grid fill already dwarfs, so the order is
-        set at the measurement rather than at the cheapest passing rung.
-
-        `n_qp_sommerfeld` still raises it if a caller asked for more: the
-        knob keeps meaning "at least this".
-
-        Since momwire#692 the CROSSING fill's axes no longer route through
-        this knob — its density ladder (shallow AND deep rungs) banked its
-        own `_NEAR_Q`/`_FAR_Q` in `_crossing_fill`. The q = 6 measurement
-        above stays authoritative for the three grid field-form blocks.
-        """
-        return max(int(self.n_qp_sommerfeld), _N_QP_BURIED_FIELD)
+        """Gauss order for the buried fill's three field-form blocks —
+        `_below_interface.n_qp_buried_field` (momwire#553's fifth inversion;
+        the measurement that set the order is documented there)."""
+        return _below_interface.n_qp_buried_field(self.n_qp_sommerfeld)
 
     def _buried_nodes(self, geom, seg_idx):
-        """`(points, tangents, W)` for the field-form quadrature over a
-        SUBSET of segments — `_Z_sommerfeld_remainder`'s own node rule,
-        restricted, at `_n_qp_buried_field`'s order.
-
-        `W[p, i, q] = w_q·u_q^p` is the moment weight the basis polynomials
-        apply against, and the nodes are strictly interior to each segment,
-        which is what keeps a wire ending IN the plane off its own
-        singularity and what bounds every grid extent this fill sizes.
-        """
-        seg_l = geom["seg_l"][seg_idx]
-        seg_r = geom["seg_r"][seg_idx]
-        tang = geom["tangents"][seg_idx]
-        h = geom["h_per_seg"][seg_idx]
+        """`(points, tangents, W)` for the field-form quadrature over a SUBSET
+        of segments: `_below_interface.field_nodes`' basis-agnostic nodes with
+        the polynomial moment weights `W[p, i, q] = w_q·u_q^p` folded on."""
+        nodes, tang, u_phys, w_node = _below_interface.field_nodes(
+            geom["seg_l"][seg_idx],
+            geom["seg_r"][seg_idx],
+            geom["tangents"][seg_idx],
+            geom["h_per_seg"][seg_idx],
+            self._n_qp_buried_field(),
+        )
         d = self.degree
-        q = self._n_qp_buried_field()
-        xg, wg = leggauss(q)
-        tq = 0.5 * (xg + 1.0)
-        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
-        u_phys = h[:, None] * tq[None, :]
-        w_node = 0.5 * h[:, None] * wg[None, :]
         W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
-        n = seg_l.shape[0]
-        return nodes.reshape(n * q, 3), np.repeat(tang, q, axis=0), W
+        return nodes, tang, W
 
     def _field_galerkin_block(
         self,
@@ -5454,25 +5141,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return J
 
     def _refuse_buried_out_of_scope(self, geom):
-        """The three solver configurations a buried deck may not reach.
-
-        Each one is a SECOND kernel that has no medium, not a tolerance:
-        refusing by name is the same discipline U1 applied one level down to
-        the fills it did not widen.
-        """
-        if self.use_singular_enrichment:
-            raise NotImplementedError(_BURIED_ENRICHMENT_REFUSAL)
-        if self.extended_kernel:
-            raise NotImplementedError(_BURIED_EXTENDED_KERNEL_REFUSAL)
+        """The three solver configurations a buried deck may not reach —
+        `_below_interface.refuse_out_of_scope`, with this solver's flags."""
         n = int(geom["n_segs_total"])
-        if not self._dense_tensor_fits_budget(n) and not self._buried_chunked_serves:
-            raise NotImplementedError(
-                _BURIED_DENSE_BUDGET_REFUSAL.format(
-                    n=n,
-                    need=(self.degree + 1) ** 2 * n * n * 16 / (1 << 20),
-                    budget=self.swept_mem_mb,
-                )
-            )
+        _below_interface.refuse_out_of_scope(
+            use_singular_enrichment=self.use_singular_enrichment,
+            extended_kernel=self.extended_kernel,
+            n=n,
+            degree=self.degree,
+            dense_fits=self._dense_tensor_fits_budget(n),
+            chunked_serves=self._buried_chunked_serves,
+            swept_mem_mb=self.swept_mem_mb,
+        )
 
     @property
     def _buried_chunked_serves(self):
@@ -5679,123 +5359,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop)
 
     def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m, crossing=False):
-        """Grid extents for the three field-form blocks, or a named refusal.
-
-        Every extent is measured on the QUADRATURE NODES the fill will
-        actually query, not on segment endpoints. That is not an
-        optimisation: a wire standing in the plane has an endpoint AT the
-        interface, whose transmitted-grid radius about a buried source's
-        ground projection is zero, and the nodes are strictly interior, so
-        the node set is both the honest domain and a smaller one.
-
-        Nothing here clamps. Both buried families' `eval` already refuse
-        rather than freeze an amplitude — their remainder is not a negligible
-        tail and the transmitted surface is the whole field — so a geometry
-        past a cap has no answer to give, and the refusal is raised HERE,
-        before an 80-second grid fill, with the deck's own numbers and the
-        limit in the same sentence.
-
-        `crossing=True` skips the cross-medium section entirely: a crossing
-        deck's cross pair is `_crossing_fill`'s designed DIRECT evaluation —
-        no transmitted grid is ever built — so its θ-floor cost law must not
-        refuse the deck (a node-graded crossing mesh routinely puts
-        quadrature nodes fractions of a millimetre below the plane, which is
-        exactly the grazing geometry the grid can't pay for and the designed
-        evaluator doesn't care about).
-        """
-        gz = self.ground_z
-        lam_p = 2.0 * np.pi / k_p
-        lam_m = 2.0 * np.pi / abs(k_m)
-        plan = {}
-
-        # --- below/below: R1 = |two depths added|, theta = atan2(h, rho) ---
-        d_b = gz - obs_b[:, 2]
-        r1_max, th_min = _pair_extents_below(obs_b[:, 0], obs_b[:, 1], d_b)
-        cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
-        if r1_max > cap:
-            raise ValueError(
-                _BURIED_PAST_CAP_REFUSAL.format(
-                    r1=r1_max,
-                    wl=r1_max / lam_m,
-                    cap=cap,
-                    capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
-                    lam_m=lam_m,
-                )
-            )
-        floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
-        if th_min < floor:
-            raise ValueError(
-                _BURIED_GRAZING_REFUSAL.format(
-                    th=math.degrees(th_min),
-                    floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
-                    depth=float(np.min(d_b)) + float(np.min(d_b)),
-                )
-            )
-        plan["r1_below"] = r1_max
-
-        if a_idx.size == 0:
-            return plan
-
-        # --- above/above: the shipped sizing, over the above segments -----
-        plan["r1_above"] = _sommerfeld.max_image_distance(
-            geom["seg_l"][a_idx], geom["seg_r"][a_idx], gz
+        """Grid extents for the three field-form blocks, or a named refusal —
+        `_below_interface.serve_plan` over this fill's quadrature nodes, with
+        `_pair_extents_below` (this module's accelerated kernel, looked up at
+        call time so its tests can monkeypatch it here) as the extents."""
+        return _below_interface.serve_plan(
+            self.ground_z,
+            geom["seg_l"],
+            geom["seg_r"],
+            a_idx,
+            obs_a,
+            obs_b,
+            k_p,
+            k_m,
+            crossing=crossing,
+            pair_extents=_pair_extents_below,
         )
-
-        if crossing:
-            return plan
-
-        # --- cross-medium: observer polar radius about the SOURCE's ground
-        #     projection, and the source depth ladder -----------------------
-        z_a = obs_a[:, 2] - gz
-        cdx = obs_a[:, 0][:, None] - obs_b[:, 0][None, :]
-        cdy = obs_a[:, 1][:, None] - obs_b[:, 1][None, :]
-        crho = np.hypot(cdx, cdy)
-        r_obs = np.hypot(crho, z_a[:, None])
-        r_lo = float(np.min(r_obs))
-        r_hi = float(np.max(r_obs))
-        zp_lo = float(np.min(d_b))
-        zp_hi = float(np.max(d_b))
-
-        r_cap = _sommerfeld_transmitted._R_CAP_LAMBDA_P * lam_p
-        if r_hi > r_cap:
-            raise ValueError(
-                _BURIED_CROSS_RANGE_REFUSAL.format(
-                    r=r_hi,
-                    wl=r_hi / lam_p,
-                    cap=r_cap,
-                    capwl=_sommerfeld_transmitted._R_CAP_LAMBDA_P,
-                )
-            )
-        zp_cap = _sommerfeld_transmitted._ZPRIME_MAX_LAMBDA_M * lam_m
-        if zp_hi > zp_cap:
-            raise ValueError(
-                _BURIED_DEPTH_REFUSAL.format(
-                    d=zp_hi,
-                    cap=zp_cap,
-                    capwl=_sommerfeld_transmitted._ZPRIME_MAX_LAMBDA_M,
-                    lam_m=lam_m,
-                )
-            )
-        th_cross = float(np.min(np.arctan2(z_a[:, None], crho)))
-        # Against the domain the grid will HAVE, not the one asked for: r_max
-        # buckets up and that raises the floor (`grid_extent`).
-        _rmin_eff, r_hi_eff, th_floor = _sommerfeld_transmitted.grid_extent(
-            k_p, r_hi, zp_lo, r_min=r_lo
-        )
-        if th_cross < th_floor:
-            raise ValueError(
-                _BURIED_CROSS_GRAZING_REFUSAL.format(
-                    th=math.degrees(th_cross),
-                    floor=math.degrees(th_floor),
-                    r=r_hi_eff,
-                    depth=zp_lo,
-                )
-            )
-        plan["r_cross_max"] = r_hi
-        plan["r_cross_min"] = r_lo
-        plan["zp_min"] = zp_lo
-        plan["zp_max"] = zp_hi
-        return plan
 
     def _compute_Z_operator_buried(self, geom, supp_seg, polys):
         """The mixed-medium dense Z: per-segment media, three pair classes,
