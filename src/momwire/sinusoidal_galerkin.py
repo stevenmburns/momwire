@@ -402,6 +402,28 @@ _CROSSING_JUNCTION_REFUSAL = (
     "reaching it) for a second opinion on the screen without its node"
 )
 
+_COINCIDENT_CROSSING_MEMBERS_REFUSAL = (
+    "crossing junction {j} joins members whose node-adjacent edges are "
+    "geometrically COINCIDENT (wires {a} and {b} run the same path within one "
+    "wire radius): this family cannot solve that deck. The thin-wire kernel "
+    "regularizes a pair at zero separation to the wire radius, which is what "
+    "it does for a segment against ITSELF, so coincident members contribute "
+    "near-identical rows and columns and the matrix is ill-conditioned rather "
+    "than wrong in any one entry. Measured in FREE SPACE, no ground and no "
+    "junction at all, on N coincident wires each carrying its own distinct "
+    "arm: max|alpha| runs 2.3 / 41 / 184 for N = 1 / 2 / 4 against "
+    "BSplineSolver's 2.0e-3 / 4.0e-3 / 9.0e-3, and over a Sommerfeld ground "
+    "the same deck reaches 8.4e32. So this is a property of the family, not "
+    "of the crossing serve, and it is refused here because a crossing "
+    "junction is where the spelling that provokes it is natural: writing each "
+    "radial of a buried screen as far-end -> hub -> RISE gives every radial "
+    "the same rise. Respell the screen with ONE rise and the radials joined "
+    "to it at depth (the buried-hub spelling, which this serve covers and "
+    "which agrees with BSplineSolver to 8.4e-03 on a 12-radial screen), or "
+    "run each radial straight from its far end to the node so no two members "
+    "share a path."
+)
+
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
 )
@@ -3815,7 +3837,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         if self.ground_z is None or not self._lower_medium() or not self.junctions:
             return frozenset()
-        return _below_interface.crossing_junctions(
+        crossing = _below_interface.crossing_junctions(
             self._wire_media(),
             self.junctions,
             self._grounded_junctions(),
@@ -3823,6 +3845,41 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self.ground_z,
             self._radius_per_wire,
         )
+        self._refuse_coincident_crossing_members(crossing)
+        return crossing
+
+    def _node_adjacent_edge(self, w, end):
+        """The member's node-adjacent polyline edge, node vertex FIRST."""
+        pl = np.asarray(self.wires_polylines[w], dtype=float)
+        return (pl[0], pl[1]) if end == "start" else (pl[-1], pl[-2])
+
+    def _refuse_coincident_crossing_members(self, crossing):
+        """Refuse a crossing junction whose members run the same path.
+
+        Geometry only, and asked of the POLYLINES rather than the mesh: two
+        members are coincident when both endpoints of their node-adjacent
+        edges agree to within one wire radius, which is the separation below
+        which the thin-wire kernel stops distinguishing them at all.
+
+        `BSplineSolver` serves this spelling, so the refusal lives here rather
+        than in `_below_interface.crossing_junctions`, which both families
+        share.
+        """
+        if not crossing:
+            return
+        a = float(np.max(self._radius_per_wire))
+        for j in crossing:
+            members = list(self.junctions[j])
+            edges = [self._node_adjacent_edge(w, e) for w, e in members]
+            for i in range(len(edges)):
+                for jj in range(i + 1, len(edges)):
+                    (n0, f0), (n1, f1) = edges[i], edges[jj]
+                    if np.linalg.norm(n0 - n1) <= a and np.linalg.norm(f0 - f1) <= a:
+                        raise NotImplementedError(
+                            _COINCIDENT_CROSSING_MEMBERS_REFUSAL.format(
+                                j=j, a=members[i][0], b=members[jj][0]
+                            )
+                        )
 
     def _grounded_junctions(self):
         """Junctions whose shared point lies in the plane — their KCL row is
