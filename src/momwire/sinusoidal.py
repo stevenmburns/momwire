@@ -35,6 +35,7 @@ Scope (deliberately narrow):
     independently, with no inter-wire junction entries.
 """
 
+import cmath
 import math
 from collections import namedtuple
 from dataclasses import dataclass
@@ -267,6 +268,22 @@ _KNOT_FEEDS_REFUSAL = (
 )
 
 
+def _complex_k(k):
+    """Whether `k` is an in-medium (complex) wavenumber — momwire#980.
+
+    A buried segment's basis and fields live at k_m = k₀·√ε̃, Im k_m ≤ 0. The
+    numpy closed forms are analytic in k and serve it unchanged once the
+    real-only casts are gone (this is the seam the #980 spike measured: SG at
+    k_m against bspline's infinite-medium solve to 6e-9 at N=161). The C++
+    kernels take `double k`, so every accelerator gate on the fill path also
+    asks this and takes the numpy reference path for a complex k, exactly as
+    it does when the accelerator is absent — `float(k)` on a complex raises
+    rather than truncating, so a gate that forgot would fail loudly, not
+    silently.
+    """
+    return bool(np.iscomplexobj(k))
+
+
 def _sin_minus_arg(u):
     """sin(u) − u to full relative precision.
 
@@ -278,7 +295,7 @@ def _sin_minus_arg(u):
     subtraction costs at most 6ε/u² = 1.3e-13 and the series would need more
     terms, so that is where the two swap.
     """
-    u = np.asarray(u, dtype=float)
+    u = np.asarray(u)  # complex-safe (#980): float in, float64 out unchanged
     u2 = u * u
     series = (
         -(u * u2)
@@ -308,7 +325,7 @@ def _recip_sin_gap(kd):
     `_sin_minus_arg` and `_asinh_minus_arg` above: never subtract two things
     that are about to agree.
     """
-    kd = np.asarray(kd, dtype=float)
+    kd = np.asarray(kd)  # complex-safe (#980)
     s4 = np.sin(0.25 * kd)
     return s4 * s4 / (np.sin(0.5 * kd) * np.cos(0.5 * kd))
 
@@ -325,7 +342,7 @@ def _asinh_minus_arg(x):
     Above |t| = 1 the plain subtraction is already accurate (the answer is
     within a factor 6 of sinh t there) and is used instead.
     """
-    t = np.asarray(np.arcsinh(x), dtype=float)
+    t = np.asarray(np.arcsinh(x))  # complex-safe (#980)
     t2 = t * t
     series = (
         (t * t2)
@@ -1272,9 +1289,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # Per-basis P_minus[i] = Σ_{j ∈ N⁻(i)} atom[j], via scatter-sum on
         # the flat nm arrays. Same for P_plus[i] over N⁺.
-        P_minus_arr = np.zeros(n_segs, dtype=np.float64)
+        P_minus_arr = np.zeros(n_segs, dtype=P_minus_atom.dtype)  # cplx at k_m (#980)
         np.add.at(P_minus_arr, nm_basis, P_minus_atom[nm_seg])
-        P_plus_arr = np.zeros(n_segs, dtype=np.float64)
+        P_plus_arr = np.zeros(n_segs, dtype=P_minus_atom.dtype)
         np.add.at(P_plus_arr, np_basis, -P_minus_atom[np_seg])
 
         # Ground junction (#151): an end at the ground plane is connected
@@ -1706,7 +1723,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # marshalling below is untouched by it (which is what keeps the
         # default bit-exact; see the #233 off-path armor).
         literal_cos = cos_shape == "cos"
-        if _HAVE_FIELD_TENSOR_EK and self.extended_kernel and literal_cos:
+        if (
+            _HAVE_FIELD_TENSOR_EK
+            and self.extended_kernel
+            and literal_cos
+            and not _complex_k(k)
+        ):
             gx, gw = self._leggauss_cached(self.n_qp_const)
             # Both tables are indexed by SOURCE segment, and the image build
             # mirrors the source geometry without reordering it, so the same
@@ -1752,7 +1774,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # solve reaches this branch only when the accelerator is unavailable —
         # in which case it takes the numpy reference path below, same as an
         # EK-OFF solve would.
-        if _HAVE_FIELD_TENSOR and not self.extended_kernel and literal_cos:
+        if (
+            _HAVE_FIELD_TENSOR
+            and not self.extended_kernel
+            and literal_cos
+            and not _complex_k(k)
+        ):
             gx, gw = self._leggauss_cached(self.n_qp_const)
 
             def _call(rows, a):
@@ -3412,6 +3439,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         literal_cos = cos_shape == "cos"
         if (
             _HAVE_FIELD_TENSOR_EK_REFL
+            and not _complex_k(k)
             and self.extended_kernel
             and ground.standard_fresnel
             and literal_cos
@@ -3475,6 +3503,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # as an EK-OFF solve would.
         if (
             _HAVE_FIELD_TENSOR_REFL
+            and not _complex_k(k)
             and not self.extended_kernel
             and ground.standard_fresnel
             and literal_cos
@@ -4553,13 +4582,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return complex((amp * sig * seg_view["AC"][s:e]).sum())
         # cos(kξ) − 1 spelled as −2sin²(kξ/2), the same well-scaled shape set
         # the fill and `_basis_value` use (#203/#606).
-        half = math.sin(0.5 * self.k * xi)
+        _sin = cmath.sin if _complex_k(self.k) else math.sin  # #980
+        half = _sin(0.5 * self.k * xi)
         return complex(
             (
                 amp
                 * (
                     sig * seg_view["AC"][s:e]
-                    + seg_view["B"][s:e] * math.sin(self.k * xi)
+                    + seg_view["B"][s:e] * _sin(self.k * xi)
                     - 2.0 * sig * seg_view["C"][s:e] * half * half
                 )
             ).sum()
