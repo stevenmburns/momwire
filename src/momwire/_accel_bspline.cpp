@@ -3659,13 +3659,20 @@ static double J_static_dispatch(int p, int q,
 // instead of once per offset. See `bspline_far_coeffs` for why that is legal
 // on a uniform edge and why it is worth 47x on the branch that serves almost
 // every offset.
+// NOTHROW: the (p, q) range check is the caller's, made ONCE before the offset
+// loop, because p and q are invariant across it. That is what lets the loop be
+// an OpenMP region: `_accel_common.h` is emphatic that an exception must never
+// escape one, and the house answer is the drain pattern (set a flag, continue,
+// throw after). Draining is the right tool when the condition can BECOME true
+// mid-loop, which is what cancellation does. Here it cannot: the only throw was
+// a bound on loop-invariant indices, so hoisting removes the throw site from
+// the region entirely rather than arranging to survive it. There is nothing
+// left inside to drain, and no "unreachable" claim that could rot -- the call
+// is not there.
 static double J_static_dispatch_coeffs(int p, int q,
                                        double alpha, double beta,
                                        double A, double B, double a,
                                        const double *coef) {
-    if (p < 0 || p > BSPLINE_MOMENT_MAX_D || q < 0 || q > BSPLINE_MOMENT_MAX_D) {
-        bspline_unreachable_pq(p, q, "J_static");
-    }
     if (bspline_far_ratio(alpha, beta, A, B, a) <= BSPLINE_FAR_RATIO) {
         return bspline_J_static_far_with_coeffs(alpha, beta, A, B, a, coef);
     }
@@ -3734,9 +3741,20 @@ seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
             // Hoisted out of the offset loop (momwire#1006): on this uniform
             // edge every offset has h1 = h2 = h, so the far series' whole
             // coefficient vector is the same for all 2N-1 of them.
+            //
+            // The range check happens HERE, once, outside the parallel region
+            // below -- see `J_static_dispatch_coeffs`. p and q are invariant
+            // across offsets, so this is the only place it can fire.
+            if (p > (size_t)BSPLINE_MOMENT_MAX_D || q > (size_t)BSPLINE_MOMENT_MAX_D) {
+                bspline_unreachable_pq((int)p, (int)q, "J_static");
+            }
             double coef[BSPLINE_FAR_TERMS + 1];
             bspline_far_coeffs((int)p, (int)q, h, h, coef);
-            for (size_t di = 0; di < n_delta; di++) {
+            // The offsets are independent and, since the hoist, this loop IS
+            // the cost. Nothing inside can throw.
+            #pragma omp parallel for schedule(static)
+            for (long long di_s = 0; di_s < (long long)n_delta; di_s++) {
+                const size_t di = (size_t)di_s;
                 long long delta = (long long)di - (long long)(N - 1);
                 double alpha = 0.0;
                 double beta = h;
