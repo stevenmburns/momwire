@@ -717,6 +717,21 @@ class SinusoidalBasisSampler:
         self._sigAC = sig * seg_view["AC"]
         self._B = np.asarray(seg_view["B"], dtype=np.complex128)
         self._sigC = sig * seg_view["C"]
+        # Per-ENTRY k (momwire#980 D2/D3). A MIXED view's coefficients follow
+        # each segment's medium, and so must the sin/cos the shape set is
+        # written in: an entry built at k_m and evaluated at k_p is a
+        # different function, and `ends`, `F` and `Fd` would then describe
+        # three of them. `axis_data` samples BOTH axes through ONE basis
+        # object, so this cannot be fixed by handing the below axis its own
+        # sampler — the fill re-enters `axis_data` itself for the coarse
+        # axes. Carrying k where the coefficients are carried is the same
+        # move `_stitch_basis_coefs` makes, one level down.
+        #
+        # Absent on a single-medium view, where the scalar k is the whole
+        # truth and every shipped path keeps the identical arithmetic.
+        k_entry = seg_view.get("k_entry")
+        self._k = np.asarray(k) if k_entry is None else np.asarray(k_entry)
+        self._k_per_entry = k_entry is not None
 
     def _entries(self, seg):
         s, e = int(self._starts[seg]), int(self._starts[seg + 1])
@@ -729,7 +744,7 @@ class SinusoidalBasisSampler:
         """(value, derivative) of every entry in `sl` at the arcs `xi`
         (from the segment centre): (n_entries, n_xi) each."""
         sigAC, B, sigC = self._sigAC[sl, None], self._B[sl, None], self._sigC[sl, None]
-        k = self.k
+        k = self._k[sl, None] if self._k_per_entry else self._k
         f = _basis_value(sigAC, B, sigC, k, xi[None, :])
         fd = k * (B * np.cos(k * xi[None, :]) - sigC * np.sin(k * xi[None, :]))
         return f, fd
@@ -3281,6 +3296,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             a = np.array(view_p[key], copy=True)
             a[entry_below] = np.asarray(view_m[key])[entry_below]
             out[key] = a
+        # The k each entry was built at, carried alongside the coefficients so
+        # that anything sampling this view (`SinusoidalBasisSampler`, and so
+        # the whole crossing fill) writes the entry's shape in its own
+        # medium's sin/cos rather than the above medium's.
+        out["k_entry"] = np.where(entry_below, k_m, k_p)
         return out
 
     def _stitch_test_context(self, geom, seg_view, below, k_p, k_m):
@@ -3672,10 +3692,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         seg_h = np.asarray(geom["seg_h"], dtype=float)
         below = np.asarray(below, dtype=bool)
         col = N + len(self.junction_ports)
-        segs, bases, A, B, C, AC, sig = [], [], [], [], [], [], []
+        segs, bases, A, B, C, AC, sig, kent = [], [], [], [], [], [], [], []
         for j_idx in cj:
             for m, sgn in self._junction_members(geom, j_idx):
                 k = medium.k_m if below[m] else medium.k_p
+                kent.append(k)
                 kd = k * float(seg_h[m])
                 # q = 1/tan(kΔ/2): the extension carries a·tan(kΔ/2) into the
                 # node, so this is the unit-inflow scale with `a` divided out.
@@ -3707,7 +3728,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 ]
             )[order]
 
-        return {
+        out = {
             "starts": new_starts,
             "jbasis": np.concatenate(
                 [np.asarray(base_view["jbasis"]), np.asarray(bases, dtype=np.int64)]
@@ -3718,6 +3739,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "AC": _cat("AC", AC),
             "sigma": _cat("sigma", sig, dtype=np.int8),
         }
+        if "k_entry" in base_view:
+            out["k_entry"] = _cat("k_entry", kent)
+        return out
 
     def _is_crossing(self, geom):
         """Does this deck have a junction that CROSSES the interface?
