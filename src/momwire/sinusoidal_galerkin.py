@@ -2309,6 +2309,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         if (
             _HAVE_GALERKIN_FAR_FILL
+            # `double k` in the kernel: an in-medium (complex) k takes the
+            # numpy path below, like an absent accelerator (momwire#980).
+            and not np.iscomplexobj(k)
             and projector is _plain_projection
             and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
         ):
