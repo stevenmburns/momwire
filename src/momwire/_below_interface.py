@@ -489,6 +489,16 @@ def serve_plan(
     `pair_extents(x, y, d_b) -> (r1_max, th_min)` is the caller's — bspline's
     `_pair_extents_below`, an accelerated kernel with a numpy twin whose own
     tests monkeypatch it through `bspline`.
+
+    **`obs_a` / `obs_b` must be the union of EVERY rule the caller will query
+    with, not just its field rule** (momwire#980 D2). bspline never meets
+    this: both axes of a transmitted pair use the same buried field rule, so
+    its plan and its fill query the same points. The Galerkin trunk tests on
+    its own quadrature (`n_qp_test`, 8) while sourcing on the field rule (6),
+    and the higher rule's outermost node sits CLOSER to a segment end —
+    0.150945 m against 0.151608 m on a 21-segment radial — so a plan sized on
+    the field nodes alone builds a z' ladder the fill then queries outside of,
+    and the grid refuses. Pass both rules' points.
     """
     gz = ground_z
     lam_p = 2.0 * np.pi / k_p

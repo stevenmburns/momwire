@@ -319,6 +319,27 @@ sweep that produces them is most of the kernel.
 Distributed series wire loading is served in the testing scheme's own form
 (momwire#395): the Galerkin overlap Σ_w Z'_w·∫f_i f_j of the three-term
 sinusoidal shapes, closed-form per segment, in `_apply_loading`.
+
+## (k, η) live on the SOLVER, not in the argument list — momwire#980
+
+`k` is passed down the fill as an argument; **`η` is not** — the closed
+forms read `self.eta`, and so do `_drive_columns` (through `k`) and
+`_lumped_pair_block`. Three separate places take the operating point from
+solver state rather than from an argument, and every one of them has now
+produced a wrong number with no failure during the buried serve:
+
+* D1: setting only the fill's `k` left the DRIVE columns in air;
+* D1: `_lumped_pair_block` reads `self.eta` directly, so the operating
+  point has to wrap the whole solve rather than the matrix;
+* D2: filling the buried block at `k_m` with AIR's `eta` is wrong by
+  |η₀/η_m| = **4.27×** at soil A / 7 MHz — the below quadrant came out
+  3.4× wrong until `_at_class_eta` was added, and the deck solved and
+  returned a plausible number throughout.
+
+A mixed deck is where this stops being containable by a solver-level
+operating point, because two are live at once. Making (k, η) arguments is
+filed as a hardening item against momwire#980; until then, anything that
+fills at a non-default wavenumber must set BOTH and restore them.
 """
 
 import collections
