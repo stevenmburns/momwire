@@ -874,6 +874,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # Geometry build
     # ------------------------------------------------------------------
 
+    def _serves_buried(self):
+        """Whether THIS solver can fill a deck below the interface.
+
+        False on this family by default — every fill here takes the
+        free-space wavenumber and reaches the ground through an image or a
+        reflection weight above the interface. `SinusoidalGalerkinSolver`
+        overrides it for the fully-buried serve (momwire#980 D1); the
+        geometry refusal below is what that override lifts, and it is a
+        method rather than a flag so a subclass that serves only SOME buried
+        decks can say which.
+        """
+        return False
+
     def _build_geometry(self):
         """Discretize wires into segments and build the N^-/N^+ neighbor
         tables for every segment, with arc-flip σ signs.
@@ -1108,7 +1121,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for w_idx, pl in enumerate(self.wires_polylines):
                 pl_arr = np.asarray(pl, dtype=np.float64)
                 tol = _ground_spec.ground_touch_tol(pl_arr)
-                if float(pl_arr[:, 2].min()) < gz - tol:
+                if float(pl_arr[:, 2].min()) < gz - tol and not self._serves_buried():
                     raise ValueError(
                         f"wire {w_idx} dips below the ground plane "
                         f"(min z = {pl_arr[:, 2].min():.6g} < ground_z = "
