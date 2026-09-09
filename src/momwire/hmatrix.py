@@ -388,6 +388,39 @@ DEFAULT_ACA_TOL = 1e-6
 # a ladder can record the value rather than only the verdict (#977).
 DEFAULT_SOMM_RESIDUAL_TOL = 4e-3
 
+# momwire#1019: Q's error measured against the OPERATOR's magnitude on the
+# probe entries — published as a diagnostic, and DELIBERATELY NOT A BAR.
+#
+# The bar above is relative to the remainder block Q's own magnitude
+# (`_sampled_residual` returns `worst / max|Q_probe|`), which is not what the
+# answer is made of: Q is subtracted from the operator, so its error reaches Z
+# reduced by however much Q contributes. `resid * scale / max|Z_probe|` is that
+# quantity, and it was built to close the hole where `skyloop_lmatch` at
+# nseg 14 sits 1.6x under the 4e-3 bar and carries relZ 4.71e-04 against dense.
+#
+# IT DOES NOT CLOSE IT, and the measurement is why this is a diagnostic:
+#
+#   deck / nseg             residQ     residZ    relZ vs dense    ratio
+#   skyloop_lmatch / 7     9.87e-06   2.15e-09      2.02e-07         94
+#   skyloop_lmatch / 14    2.49e-03   8.66e-08      4.71e-04      5,444
+#   wire.rhombic / 21      1.94e-05   1.53e-11      2.74e-07     17,921
+#   broadband.lpda / 21    1.81e-05   1.64e-11      1.04e-06     63,293
+#
+# The amplification from an ENTRYWISE operator error to the SOLVED impedance
+# varies 700x across these decks, because it is the conditioning of the solve
+# and not a property of the block. So no threshold on an entrywise probe
+# predicts relZ: a bar that catches nseg 14 (8.66e-08) while sparing nseg 7
+# (2.15e-09) has under 10x of margin on either side and is fitted to two
+# adjacent measurements — which is precisely how the 4e-3 above came to admit
+# a wrong answer. Fitting a second one at a new number would repeat it.
+#
+# What the diagnostic is good for: it is queryable (`_last_somm_z_residual`),
+# it is three to four orders apart between the far-fraction classes and the
+# compact one, and it is the input any real fix needs. What a real fix looks
+# like is open — probing a SOLVED quantity rather than an entrywise one is the
+# shape to try, and it is momwire#1019's remaining work.
+DEFAULT_SOMM_Z_RESIDUAL_TOL = float("inf")
+
 # When the cluster tree FRAGMENTS, the H-matrix route stops paying and the
 # dense one is faster (momwire#972). Thresholds measured, not chosen:
 #
@@ -462,7 +495,7 @@ def _sampled_residual(U, V, used_rows, used_cols, n, block, n_probe=6, rng_seed=
     free_r = np.flatnonzero(~used_rows)
     free_c = np.flatnonzero(~used_cols)
     if free_r.size == 0 or free_c.size == 0:
-        return 0.0, 0.0
+        return 0.0, 0.0, np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
     rng = np.random.default_rng(rng_seed)
     kr = min(n_probe, free_r.size)
     kc = min(n_probe, free_c.size)
@@ -482,7 +515,11 @@ def _sampled_residual(U, V, used_rows, used_cols, n, block, n_probe=6, rng_seed=
     )
     scale = float(np.abs(true).max())
     worst = float(np.abs(true - approx).max())
-    return (worst / scale if scale > 0.0 else 0.0), scale
+    # `rows`/`cols` ride along so the caller can sample the OPERATOR at the
+    # same entries and judge Q's error where the answer lives (momwire#1019).
+    # Element 0 keeps its meaning — the Q-relative residual — because
+    # `tests/test_somm_aca_stagnation_973.py` reads it by index.
+    return (worst / scale if scale > 0.0 else 0.0), scale, rows, cols
 
 
 class HMatrixSolver(BSplineSolver):
@@ -1338,10 +1375,25 @@ class HMatrixSolver(BSplineSolver):
                 idx[rows], idx[cols], k=k, eps_t=eps_t, grid_args=grid_args
             )
 
-        resid, scale = _sampled_residual(U, V, used_rows, used_cols, n, block)
+        resid, scale, probe_r, probe_c = _sampled_residual(
+            U, V, used_rows, used_cols, n, block
+        )
         self._last_somm_residual = resid
+        # Q's error judged against the OPERATOR's magnitude on the same probe
+        # entries (momwire#1019). `resid * scale` is the absolute error in Q;
+        # `max|Z_probe|` is what the answer is made of there. Costs one extra
+        # sub-block of the size the probe already fills (<= 8 x 8).
+        rel_z = 0.0
+        if probe_r.size and scale > 0.0:
+            z_probe = np.abs(self.zblock(probe_r, probe_c, k=k)).max()
+            if z_probe > 0.0:
+                rel_z = resid * scale / float(z_probe)
+        self._last_somm_z_residual = rel_z
         self._last_somm_fallback = False
-        if resid > self.somm_residual_tol:
+        # `somm_z_residual_tol` defaults to inf: the Z-relative probe is a
+        # diagnostic, not a bar (momwire#1019 — see the constant). A caller
+        # that sets it opts into a second fallback condition.
+        if resid > self.somm_residual_tol or rel_z > self.somm_z_residual_tol:
             # The ACA stopped on a stagnated pivot subspace, which its own
             # criterion cannot see (#973). Fill Q directly for this solve.
             self._last_somm_fallback = True
@@ -2442,6 +2494,7 @@ class HMatrixSolver(BSplineSolver):
         aca_leaf_size=32,
         aca_tol=DEFAULT_ACA_TOL,
         somm_residual_tol=DEFAULT_SOMM_RESIDUAL_TOL,
+        somm_z_residual_tol=DEFAULT_SOMM_Z_RESIDUAL_TOL,
         solve_tol=1e-6,
         hmatrix_use_accel=True,
         precond_eta=None,
@@ -2453,6 +2506,8 @@ class HMatrixSolver(BSplineSolver):
         self.aca_leaf_size = int(aca_leaf_size)
         self.aca_tol = float(aca_tol)
         self.somm_residual_tol = float(somm_residual_tol)
+        self.somm_z_residual_tol = float(somm_z_residual_tol)
+        self._last_somm_z_residual = None
         self.solve_tol = float(solve_tol)
         # Preconditioner near-field admissibility. The GMRES preconditioner
         # uses a *stronger* (tighter-eta) near-field than the operator: every
