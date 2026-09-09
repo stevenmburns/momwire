@@ -619,6 +619,82 @@ def _basis_value(sigAC, B, sigC, k, xi):
     return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
 
 
+class SinusoidalBasisSampler:
+    """`_crossing_fill.BasisSampler` for the NEC three-term basis (momwire#980
+    step B): what the crossing trunk reads of this solver's basis, as data.
+
+    Built from `_basis_coefs`' `seg_view` — the CSR-by-segment table of
+    (basis, A, B, C, AC, σ) entries — so it carries exactly the coefficients
+    the fill and the readouts use, in the well-scaled shape set
+    {1, sin kξ, cos kξ − 1} (#203/#606). The trunk's arc coordinate is `u ∈
+    [0, h]` from `seg_l`; the shape set is written in ξ from the segment
+    CENTRE, so ξ = u − h/2 and
+
+        f  = σ·AC + B·sin kξ − 2σC·sin²(kξ/2)
+        f' = k·(B·cos kξ − σC·sin kξ)
+
+    — `_basis_value` and `_evaluate_basis_slope_at_points`' derivative, one
+    entry at a time instead of summed over α. The samples are complex128
+    because the coefficients are stored complex; at a real k their imaginary
+    parts are exactly zero, and every consumer of the axis dict is
+    dtype-agnostic (the #980 spike ran the same trunk at complex k_m).
+
+    Each (segment, basis) pair is one CSR entry, so a segment's rows are
+    unique — asserted, since `_basis_samples` asserts the same for wings.
+    """
+
+    def __init__(self, seg_view, k, seg_h, n_basis):
+        self.k = k
+        self.n_basis = int(n_basis)
+        self._h = np.asarray(seg_h, dtype=float)
+        self._starts = np.asarray(seg_view["starts"], dtype=np.int64)
+        self._jbasis = np.asarray(seg_view["jbasis"], dtype=np.int64)
+        sig = np.asarray(seg_view["sigma"]).astype(np.complex128)
+        self._sigAC = sig * seg_view["AC"]
+        self._B = np.asarray(seg_view["B"], dtype=np.complex128)
+        self._sigC = sig * seg_view["C"]
+
+    def _entries(self, seg):
+        s, e = int(self._starts[seg]), int(self._starts[seg + 1])
+        rows = self._jbasis[s:e]
+        if np.unique(rows).shape[0] != rows.shape[0]:
+            raise AssertionError(f"segment {seg} carries a basis in two entries")
+        return slice(s, e), rows
+
+    def _value_and_slope(self, sl, xi):
+        """(value, derivative) of every entry in `sl` at the arcs `xi`
+        (from the segment centre): (n_entries, n_xi) each."""
+        sigAC, B, sigC = self._sigAC[sl, None], self._B[sl, None], self._sigC[sl, None]
+        k = self.k
+        f = _basis_value(sigAC, B, sigC, k, xi[None, :])
+        fd = k * (B * np.cos(k * xi[None, :]) - sigC * np.sin(k * xi[None, :]))
+        return f, fd
+
+    def samples(self, seg_runs, u_phys):
+        n_nodes = u_phys.shape[0]
+        F = np.zeros((self.n_basis, n_nodes), dtype=np.complex128)
+        Fd = np.zeros((self.n_basis, n_nodes), dtype=np.complex128)
+        seg_rows: dict[int, np.ndarray] = {}
+        for g, (s0, cnt) in seg_runs.items():
+            sl, rows = self._entries(g)
+            if rows.size == 0:
+                continue
+            xi = u_phys[s0 : s0 + cnt] - 0.5 * self._h[g]
+            f, fd = self._value_and_slope(sl, xi)
+            F[rows, s0 : s0 + cnt] = f
+            Fd[rows, s0 : s0 + cnt] = fd
+            seg_rows[int(g)] = np.sort(rows)
+        return F, Fd, seg_rows
+
+    def end_values(self, gseg, u):
+        fv = np.zeros(self.n_basis, dtype=np.complex128)
+        sl, rows = self._entries(gseg)
+        if rows.size:
+            xi = np.array([float(u) - 0.5 * self._h[gseg]])
+            fv[rows] = self._value_and_slope(sl, xi)[0][:, 0]
+        return fv
+
+
 # The unweighted projector, serving the FREE-SPACE block here and returned by
 # `FieldGround.projector` for every ground that has no dyad. It is bound, not
 # defined: `_tested_contribs` gates its fused C++ far fill on `projector is
@@ -1704,6 +1780,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # ------------------------------------------------------------------
     # Galerkin matrix assembly
     # ------------------------------------------------------------------
+
+    def _crossing_basis(self, geom, k=None, seg_view=None):
+        """This solver's basis as the crossing trunk reads it (momwire#980
+        step B): a `SinusoidalBasisSampler` over `_basis_coefs`' entries at
+        `k`. The segment bases only — a junction-port column (#209) is a
+        current distribution on real segments and has no wing of its own on
+        the interface axes."""
+        k = self.k if k is None else k
+        if seg_view is None:
+            seg_view = self._basis_coefs(geom, k)
+        return SinusoidalBasisSampler(seg_view, k, geom["seg_h"], geom["n_segs"])
 
     def _test_context(self, geom, seg_view, k):
         """Everything the TEST side of the Galerkin integral needs, built once
