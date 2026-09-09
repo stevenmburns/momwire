@@ -1124,7 +1124,45 @@ class HMatrixSolver(BSplineSolver):
         ctx["somm_nodes"] = cached
         return cached
 
-    def _zblock_sommerfeld_remainder(self, I, J, k=None, eps_t=None, grid_args=None):
+    #: Take an ACA ROW as a transposed column (momwire#981). `Q` is symmetric
+    #: to 2.2e-16, and the fused kernel batches over the observer axis, so the
+    #: n x 1 orientation runs at 3.8x the bulk rate against a 1 x n row's 8.4x.
+    #: NOT bit-identical — it is a different float path through a symmetric
+    #: matrix — so it is a flag rather than an unconditional rewrite, and the
+    #: hoist below stands on its own without it. Measured: Z agrees with the
+    #: native-row path to 4e-15 relative on three grounded decks, with the ACA
+    #: rank and the #973 sampled residual unchanged, against an assembled
+    #: tolerance nine orders looser. DEFAULT OFF because bit-identity is the
+    #: gate this branch was asked to meet and this cannot meet it; flipping it
+    #: is a decision with a number attached, not a tidy-up.
+    somm_row_as_column = False
+
+    def _somm_side(self, ctx, sn, I):
+        """One side of a remainder rectangle, marshalled for the fused kernel.
+
+        Split out so the ACA driver can build it ONCE for the full-index side
+        and reuse it across every sample (momwire#981). An ACA row is
+        `1 x n` and a column `n x 1`, so one side of every sample is the whole
+        basis set and was being re-marshalled identically O(rank) times —
+        `np.unique`, `searchsorted` and four `ascontiguousarray` copies over
+        `nodes[seg]`, `tangents[seg]`, `W[:, seg]` and `polys[I]`. Measured at
+        41-44 % of a column call, flat from n = 312 to n = 3968.
+        """
+        supp_seg = ctx["supp_seg"]
+        seg = np.unique(supp_seg[I].ravel())
+        loc = np.searchsorted(seg, supp_seg[I])
+        return (
+            seg,
+            np.ascontiguousarray(sn["nodes"][seg], dtype=np.float64),
+            np.ascontiguousarray(ctx["tangents"][seg], dtype=np.float64),
+            np.ascontiguousarray(sn["W"][:, seg], dtype=np.float64),
+            np.ascontiguousarray(loc, dtype=np.int64),
+            np.ascontiguousarray(ctx["polys"][I], dtype=np.float64),
+        )
+
+    def _zblock_sommerfeld_remainder(
+        self, I, J, k=None, eps_t=None, grid_args=None, side_I=None, side_J=None
+    ):
         """Rectangular Galerkin block Q[I][:, J] of the smooth Sommerfeld
         remainder — `BSplineSolver._Z_sommerfeld_remainder` restricted to
         a basis rectangle. This is the ACA sampler for the global low-rank
@@ -1141,37 +1179,39 @@ class HMatrixSolver(BSplineSolver):
         if k is None:
             k = self.k
         ctx = self._context()
-        supp_seg = ctx["supp_seg"]
-        polys = ctx["polys"]
-        tang = ctx["tangents"]
         if eps_t is None:
             eps_t, _c2 = self._somm_eps_c2()
         sn = self._somm_nodes(ctx)
-        nodes, W, q = sn["nodes"], sn["W"], sn["q"]
+        q = sn["q"]
         grid = self._somm_grid(eps_t, sn["r1_max"])
 
         I = np.asarray(I, dtype=np.int64)
         J = np.asarray(J, dtype=np.int64)
-        seg_I = np.unique(supp_seg[I].ravel())
-        seg_J = np.unique(supp_seg[J].ravel())
         self._checkpoint()  # per sampled rectangle (ACA row/col granularity)
-        loc_I = np.searchsorted(seg_I, supp_seg[I])
-        loc_J = np.searchsorted(seg_J, supp_seg[J])
+        # `side_I` / `side_J` are `_somm_side` bundles the caller has already
+        # built; `None` marshals here exactly as before, so every dense-block
+        # caller is untouched.
+        if side_I is None:
+            side_I = self._somm_side(ctx, sn, I)
+        if side_J is None:
+            side_J = self._somm_side(ctx, sn, J)
+        seg_I, nodes_I, tang_I, W_I, loc_I, polys_I = side_I
+        seg_J, nodes_J, tang_J, W_J, loc_J, polys_J = side_J
 
         if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
             if grid_args is None:
                 grid_args = _sommerfeld.grid_cpp_args(grid)
             return _acc.sommerfeld_remainder_bspline_Q(
-                np.ascontiguousarray(nodes[seg_I], dtype=np.float64),
-                np.ascontiguousarray(tang[seg_I], dtype=np.float64),
-                np.ascontiguousarray(W[:, seg_I], dtype=np.float64),
-                np.ascontiguousarray(nodes[seg_J], dtype=np.float64),
-                np.ascontiguousarray(tang[seg_J], dtype=np.float64),
-                np.ascontiguousarray(W[:, seg_J], dtype=np.float64),
-                np.ascontiguousarray(loc_I, dtype=np.int64),
-                np.ascontiguousarray(polys[I], dtype=np.float64),
-                np.ascontiguousarray(loc_J, dtype=np.int64),
-                np.ascontiguousarray(polys[J], dtype=np.float64),
+                nodes_I,
+                tang_I,
+                W_I,
+                nodes_J,
+                tang_J,
+                W_J,
+                loc_I,
+                polys_I,
+                loc_J,
+                polys_J,
                 self.ground_z,
                 k,
                 *grid_args,
@@ -1179,20 +1219,20 @@ class HMatrixSolver(BSplineSolver):
             )
 
         proj = _sommerfeld.remainder_field_proj(
-            nodes[seg_I].reshape(-1, 3),
-            np.repeat(tang[seg_I], q, axis=0),
-            nodes[seg_J].reshape(-1, 3),
-            np.repeat(tang[seg_J], q, axis=0),
+            nodes_I.reshape(-1, 3),
+            np.repeat(tang_I, q, axis=0),
+            nodes_J.reshape(-1, 3),
+            np.repeat(tang_J, q, axis=0),
             self.ground_z,
             k,
             grid,
         )
         fq = proj.reshape(seg_I.size, q, seg_J.size, q)
-        Jf = np.einsum("piq,iqjr,Pjr->pPij", W[:, seg_I], fq, W[:, seg_J])
+        Jf = np.einsum("piq,iqjr,Pjr->pPij", W_I, fq, W_J)
 
         d = self.degree
-        pI = polys[I]
-        pJ = polys[J]
+        pI = polys_I
+        pJ = polys_J
         Q = np.zeros((I.size, J.size), dtype=np.complex128)
         for a in range(d + 1):
             sm = loc_I[:, a]
@@ -1222,15 +1262,51 @@ class HMatrixSolver(BSplineSolver):
             grid = self._somm_grid(eps_t, sn["r1_max"])
             grid_args = _sommerfeld.grid_cpp_args(grid)
 
-        def get_row(i):
+        # The full-index side of every sample is the same, so marshal it once
+        # (momwire#981). `_somm_side` measured 41-44 % of a column call.
+        ctx_full = self._somm_side(ctx, self._somm_nodes(ctx), idx)
+        side_cache = {}
+
+        def _one(j):
+            side = side_cache.get(j)
+            if side is None:
+                side = self._somm_side(ctx, self._somm_nodes(ctx), idx[j : j + 1])
+                side_cache[j] = side
             return self._zblock_sommerfeld_remainder(
-                idx[i : i + 1], idx, k=k, eps_t=eps_t, grid_args=grid_args
+                idx,
+                idx[j : j + 1],
+                k=k,
+                eps_t=eps_t,
+                grid_args=grid_args,
+                side_I=ctx_full,
+                side_J=side,
             ).ravel()
 
-        def get_col(j):
+        # Q IS SYMMETRIC, so a row is a column and every sample is taken in the
+        # cheap orientation (momwire#981). Measured max|Q - Q.T|/max|Q| =
+        # 2.2e-16, and a row against the transposed column agrees to ~2e-16 at
+        # every index probed. It is worth the fill: the fused kernel batches
+        # over the OBSERVER axis, so a 1 x n row runs at 8.4x the bulk rate
+        # against a n x 1 column's 3.8x, flat from n = 312 to 3968. Reciprocity
+        # is the reason it holds — this is a Galerkin block of a reciprocal
+        # kernel — but it is asserted from measurement, not from the argument.
+        def _row_native(i):
+            side = side_cache.get(i)
+            if side is None:
+                side = self._somm_side(ctx, self._somm_nodes(ctx), idx[i : i + 1])
+                side_cache[i] = side
             return self._zblock_sommerfeld_remainder(
-                idx, idx[j : j + 1], k=k, eps_t=eps_t, grid_args=grid_args
+                idx[i : i + 1],
+                idx,
+                k=k,
+                eps_t=eps_t,
+                grid_args=grid_args,
+                side_I=side,
+                side_J=ctx_full,
             ).ravel()
+
+        get_row = _one if self.somm_row_as_column else _row_native
+        get_col = _one
 
         U, V, used_rows, used_cols = aca_partial(
             get_row, get_col, n, n, tol=self.aca_tol, return_pivots=True
