@@ -25,11 +25,13 @@ and gated below as UNCHANGED — this PR neither fixes nor breaks it.
 
 from __future__ import annotations
 
-import importlib
+
 import warnings
 
+import numpy as np
 import pytest
 
+from _catalog_fixture import catalog_cell
 from momwire import ArrayBlockSolver, BSplineSolver, HMatrixSolver
 from momwire.hmatrix import DEFAULT_ACA_TOL
 
@@ -46,22 +48,19 @@ STEP_NOT_TOLERANCE = "loops.skyloop_lmatch"
 _NO_CHECK = {"somm_residual_tol": float("inf")}
 GROUND = ("finite", 13.0, 0.005)
 
-pytest.importorskip("antennaknobs", reason="the ladder's decks live in antennaknobs")
+# momwire#988: these decks gate momwire's own accelerator behaviour, so they
+# read the banked geometry rather than importing antennaknobs -- no momwire CI
+# lane installs it, so the old importorskip meant this whole file ran nowhere,
+# and three of its cases sat red through a nine-lane dispatch.
+# This file parametrises mult as [1, 2]; the bank names those rungs.
+_RUNG = {1: "coarse", 2: "default", 4: "refined"}
 
 
 def _z(design, mult, cls, **kw):
-    from antennaknobs.engines.momwire import MomwireEngine
-
-    builder = importlib.import_module(f"antennaknobs.designs.{design}").Builder
-    b = builder()
-    b.nominal_nsegs = int(b.nominal_nsegs) * mult
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return complex(
-            MomwireEngine(
-                b, solver=cls, solver_kwargs={"degree": 2, **kw}, ground=GROUND
-            ).impedance()[0]
-        )
+        solver = cls(**catalog_cell(design, _RUNG[mult], degree=2, **kw))
+        return complex(np.asarray(solver.compute_impedance()[0]).ravel()[0])
 
 
 def test_the_default_is_the_one_written_down_once():

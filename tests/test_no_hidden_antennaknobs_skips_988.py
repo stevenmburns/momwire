@@ -38,17 +38,22 @@ ALLOWED = {
     # `test_g984_the_catalog_verdicts_are_what_the_threshold_promises`, which
     # reads tests/fixtures/catalog_geometries.json and needs nothing installed.
     "test_somm_aca_stagnation_973.py": "drift check only; the gate is fixture-driven",
-    # Still to bank (#988 items 1-3). Counted here so the debt is visible and
-    # cannot grow silently rather than being discovered again by accident.
-    "test_aca_tol_default_971.py": "#988 follow-up: geometries not yet banked",
-    "test_arrayblock_no_repeats_972.py": "#988 follow-up: geometries not yet banked",
-    "test_fragmentation_fallback_972.py": "#988 follow-up: geometries not yet banked",
-    # These two ARE the comparison against antennaknobs' importer -- the
-    # reference is the other codebase, so there is no fixture that could stand
-    # in for it. Found by this tripwire, not by the hand grep that opened #988,
-    # which missed submodule guards like importorskip("antennaknobs.nec_import").
-    "test_deck_nec2_corpus.py": "the antennaknobs importer IS the reference",
-    "test_deck_nec2_xnec2c_corpus.py": "the antennaknobs importer IS the reference",
+    # These four MOVE to antennaknobs' tests/ (antennaknobs#1299), where both
+    # packages are installed and CI runs against the recorded pointer. Until
+    # that lands they stay here and stay guarded; the entry is a pointer to the
+    # decision, not a promise to bank them.
+    #
+    # WHOLE-CATALOG CENSUSES. These walk `antennaknobs.designs` with pkgutil
+    # and assert a property over EVERY design ("exactly one deck trips the
+    # fragmentation predicate", "repeats are not the common case"). The
+    # catalog IS the subject, so there is no fixture that could stand in --
+    # banking one deck, or thirteen, would change what they measure. They are
+    # NOT the same category as a test that merely needed a geometry, and the
+    # #988 fix does not apply to them.
+    "test_arrayblock_no_repeats_972.py": "whole-catalog census; moves to AK, antennaknobs#1299",
+    "test_fragmentation_fallback_972.py": "whole-catalog census; moves to AK, antennaknobs#1299",
+    "test_deck_nec2_corpus.py": "the AK importer IS the reference; moves to AK, antennaknobs#1299",
+    "test_deck_nec2_xnec2c_corpus.py": "the AK importer IS the reference; moves to AK, antennaknobs#1299",
 }
 
 
