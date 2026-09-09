@@ -1401,7 +1401,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
           solver, read as a statement about the TESTING rather than the basis.
         """
         N = geom["n_segs"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + self._n_extra_cols()
         grounded = geom["grounded_junctions"]
         out = np.zeros((n_basis, len(self.node_ports)), dtype=np.complex128)
         starts = seg_view["starts"]
@@ -1718,7 +1718,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the mirrored separation is exact rather than an approximation.
         """
         N = geom["n_segs"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + self._n_extra_cols()
         a = float(self._uniform_radius)
         seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
         hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
@@ -3554,17 +3554,33 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     def _add_crossing_blocks(self, geom, seg_view, medium, below, G):
         """The crossing junction's blocks, onto the assembled G.
 
-        bspline's spelling exactly — `Z -= t_ab; Z -= t_ab.T; Z +=
-        self_completions` — because the block is returned in the subtracting
-        field-block convention and the opposite block is this one's
-        TRANSPOSE for Galerkin rows (it is not, for path-tested rows, which
-        is why `cross_complete_block_reversed` exists and this trunk does not
-        need it).
+        NOT bspline's spelling, and the two differences were measured on the
+        node block rather than argued. bspline writes `Z -= t_ab; Z -= t_ab.T;
+        Z += self_completions`; this trunk adds the cross block and takes no
+        self completions at all.
+
+        **No self completions.** They exist because bspline's polynomial fill
+        evaluates the by-parts integrand pointwise and so drops the boundary
+        content at a value-1 end. This family's source fields are the exact
+        per-shape ones, and the constant shape's own charge INCLUDES the
+        endpoint deltas, so the base fill already carries that content: on
+        `crossing_deck(1)` at ε̃ = 1 the base fill puts −0.948·Q on the node
+        wing's diagonal (Q = 1/(jωε·4πa), the point-charge scale) where
+        `self_completions` would add +0.862·Q. Adding them CANCELS the term
+        instead of completing it — the assembled diagonal came out at
+        −0.085·Q, the node choked to 1.5e-6 against an ordinary junction's
+        1.9e-4, and the collapse gate read 4.6e-01.
+
+        **Plus, not minus.** With the completions gone the cross block's sign
+        is fixed by the node's KCL, which the answer alone cannot see: both
+        signs give the same Z to seven digits, and Σ inflow at the node is
+        4.6e-08 with `+` against 3.8e-04 with `−` — the latter larger than
+        the 1.9e-04 node current itself. Same deck, same ε̃ = 1.
 
         Nothing here imposes a node condition. Continuity through the node
         and the AGARD slope EMERGE from these terms — the by-parts ends and
-        the corner — which is why the basis was left C0: the two objects
-        must not both carry the interface.
+        the corner — which is why the segment bases were left as free ends
+        and the node was given its own dofs (`_crossing_wing_view`).
         """
         ctx_x = self._crossing_context(geom, seg_view, medium)
         a_idx = np.nonzero(~np.asarray(below))[0]
@@ -3584,9 +3600,124 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 f"(crossing block is {t_ab.shape[0]} x {t_ab.shape[1]}, "
                 f"G is {n} x {n})"
             )
-        G = G - t_ab - t_ab.T
-        G = G + _crossing_fill.self_completions(ctx_x, ax_b, ax_a)
-        return G
+        return G + t_ab + t_ab.T
+
+    def _n_crossing_wings(self):
+        """How many NODE-WING columns the crossing junctions add: one per
+        member wire-end.
+
+        That count is `BSplineSolver`'s, not a new convention. Its
+        `_build_basis_polynomials` keeps every member's value-1 directional
+        basis at a junction and, at a GROUNDED one — which every crossing
+        junction is — drops the KCL row that would otherwise tie them
+        together. So a crossing node carries K free node dofs. The
+        KCL-closed through-tent is one combination of those K and lives in
+        their span, so this widens the space without picking between the
+        two readings; which one the physics wants is then a MEASUREMENT on
+        the solved coefficients rather than a choice made in the basis.
+
+        Geometry-free, so every `n_basis` site can ask it without a geom.
+        """
+        cj = self._crossing_junction_indices()
+        return sum(len(self.junctions[j]) for j in sorted(cj))
+
+    def _n_extra_cols(self):
+        """Basis columns beyond the one-per-segment expansion: the junction
+        ports' (#209) and the crossing nodes' wings (#980 D3)."""
+        return len(self.junction_ports) + self._n_crossing_wings()
+
+    def _crossing_wing_view(self, geom, base_view, below, medium):
+        """Append one node-wing column per crossing-junction member.
+
+        The wing is the three-term extension a real neighbour would carry
+        across the node — `_junction_port_view`'s `ext_m`, which is also the
+        shape `_basis_coefs` puts on an N⁻ entry — normalised so the
+        member's current INTO the node is 1 and its value at the member's
+        FAR end is 0. It lives on ONE segment, in ONE medium, at that
+        segment's own k, so D2's per-entry stitch is untouched and no basis
+        spans the interface.
+
+        Why a column at all. With one dof per segment, a segment's own basis
+        cannot carry a free value AND a free slope at the node: its end
+        condition fixes the ratio, and all three conditions available are
+        wrong here — I = 0 (a free end), dI/ds = 0 (the contact/image shape,
+        which the C1-kink lesson rules out, since the charge must be free to
+        jump), and a neighbour extension (there is no neighbour in this
+        medium). The measured collapse said as much: the C0 end came out at
+        3.4e-21 against an ordinary junction's 9.9e-5, i.e. formulation (b)
+        was a free end in disguise, `axis_data` then kept no end for it
+        (nnz = 0), and the by-parts and corner terms it was supposed to feed
+        vanished with it. So the node gets its OWN dof, which is what
+        bspline's C0 knot does, and the segment bases keep the free end they
+        already have.
+
+        Normalisation is free, and deliberately NOT "value 1 against
+        bspline's tents": every term in the trunk is linear in the basis —
+        the main sandwich in F/Fd, the by-parts terms rank-1 in fv, the
+        corner's outer(fv_a, fv_b) — so scaling a column scales its row, its
+        column and its solved coefficient inversely and the solve is
+        invariant. What the fill requires is only that `ends`, `F` and `Fd`
+        describe the SAME function, which one sampler guarantees. Unit
+        INFLOW is chosen because it makes the KCL combination a row of ones,
+        which is what the tent-vs-wings measurement needs to be cheap.
+
+        The `a_m` of the extension's own Eq-25 log constant cancels in the
+        normalisation — it scales A, B and C alike — so the wing is a pure
+        shape and carries no medium in its coefficients beyond its k.
+        """
+        cj = sorted(self._crossing_junction_indices())
+        if not cj:
+            return base_view
+        N = int(geom["n_segs"])
+        seg_h = np.asarray(geom["seg_h"], dtype=float)
+        below = np.asarray(below, dtype=bool)
+        col = N + len(self.junction_ports)
+        segs, bases, A, B, C, AC, sig = [], [], [], [], [], [], []
+        for j_idx in cj:
+            for m, sgn in self._junction_members(geom, j_idx):
+                k = medium.k_m if below[m] else medium.k_p
+                kd = k * float(seg_h[m])
+                # q = 1/tan(kΔ/2): the extension carries a·tan(kΔ/2) into the
+                # node, so this is the unit-inflow scale with `a` divided out.
+                q = np.cos(0.5 * kd) / np.sin(0.5 * kd)
+                segs.append(m)
+                bases.append(col)
+                A.append(q / np.sin(kd))
+                B.append(q / (2.0 * np.cos(0.5 * kd)))
+                C.append(-q / (2.0 * np.sin(0.5 * kd)))
+                # A + C = q·[1/sin(kΔ) − 1/(2 sin(kΔ/2))] in closed form
+                # (momwire#606) — the same identity the N⁻ entry uses,
+                # because this IS that shape.
+                AC.append(q * _recip_sin_gap(kd))
+                sig.append(sgn)
+                col += 1
+
+        starts = np.asarray(base_view["starts"], dtype=np.int64)
+        base_seg = np.repeat(np.arange(N, dtype=np.int64), np.diff(starts))
+        all_seg = np.concatenate([base_seg, np.asarray(segs, dtype=np.int64)])
+        order = np.argsort(all_seg, kind="stable")
+        new_starts = np.zeros(N + 1, dtype=np.int64)
+        np.cumsum(np.bincount(all_seg, minlength=N), out=new_starts[1:])
+
+        def _cat(key, extra, dtype=np.complex128):
+            return np.concatenate(
+                [
+                    np.asarray(base_view[key], dtype=dtype),
+                    np.asarray(extra, dtype=dtype),
+                ]
+            )[order]
+
+        return {
+            "starts": new_starts,
+            "jbasis": np.concatenate(
+                [np.asarray(base_view["jbasis"]), np.asarray(bases, dtype=np.int64)]
+            )[order],
+            "A": _cat("A", A),
+            "B": _cat("B", B),
+            "C": _cat("C", C),
+            "AC": _cat("AC", AC),
+            "sigma": _cat("sigma", sig, dtype=np.int8),
+        }
 
     def _is_crossing(self, geom):
         """Does this deck have a junction that CROSSES the interface?
@@ -3629,7 +3760,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         return _crossing_fill.CrossingContext(
             basis=SinusoidalBasisSampler(
-                seg_view, medium.k_p, geom["seg_h"], int(geom["n_segs"])
+                seg_view,
+                medium.k_p,
+                geom["seg_h"],
+                int(geom["n_segs"]) + self._n_extra_cols(),
             ),
             geom=_crossing_fill.AxisGeometry(
                 np.asarray(geom["seg_l"]),
@@ -3985,6 +4119,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             if getattr(self, "_loading_active", False):
                 raise NotImplementedError(_MIXED_WIRE_LOADING_REFUSAL)
             seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+            if crossing:
+                # The node's own dofs, appended AFTER the stitch: each wing is
+                # already built at its segment's own k, and the stitch selects
+                # by entry segment, so it would only re-select what is right.
+                seg_view = self._crossing_wing_view(geom, seg_view, below, medium)
             ctx = self._stitch_test_context(
                 geom, seg_view, below, medium.k_p, medium.k_m
             )
@@ -4163,7 +4302,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         N = ctx["N"]
         i_of_entry = ctx["i_of_entry"]
         m_of_entry = ctx["m_of_entry"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + self._n_extra_cols()
         # Source-side coefficient values: the SAME per-entry coefficients the
         # collocation path builds, re-paired to the folded shapes.
         coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
@@ -4310,7 +4449,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         starts = ctx["starts"]
         i_of_entry = ctx["i_of_entry"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + self._n_extra_cols()
         T = tuple(np.zeros((n_basis, cols.size), dtype=np.complex128) for _ in range(3))
         # Test segments per band, capped twice: by the byte budget, and by the
         # scatter the band folds into — a band buffer bigger than T would be
@@ -4411,7 +4550,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         C cell were exact zeros and removing them is exact.
         """
         N = ctx["N"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + self._n_extra_cols()
         coefs = (ctx["sigAC"], ctx["B"], ctx["sigC"])
         row = col_of[ctx["m_of_entry"]]
         sel = row >= 0
@@ -4691,7 +4830,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         N = geom["n_segs"]
         h = np.asarray(geom["seg_h"], dtype=float)
         starts = seg_view["starts"]
-        n_basis = N + len(self.junction_ports)
+        n_basis = N + self._n_extra_cols()
         U = np.zeros((n_basis, self.n_ports), dtype=np.complex128)
         for j, fseg in enumerate(geom["feed_segs"]):
             s, e = starts[fseg], starts[fseg + 1]
