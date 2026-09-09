@@ -88,7 +88,7 @@ from __future__ import annotations
 import os
 import sys
 import warnings
-from typing import NamedTuple
+from typing import NamedTuple, Protocol
 
 import numpy as np
 import scipy.sparse as _sp
@@ -148,6 +148,47 @@ class NodeArm(NamedTuple):
 # function here serves it unchanged. Its rows also want the corner term OFF
 # (`corner=False`): the corner is a Galerkin by-parts term and a path-tested
 # row has no by-parts to do.
+#
+# Since momwire#980 (step B) the basis is not read as polynomials either.
+# `axis_data` needs three things of it -- value and arc-derivative SAMPLES at
+# the quadrature nodes, and the per-basis VALUE at a wire end -- and asks a
+# `BasisSampler` for them. `BasisPolynomials` is the piecewise-polynomial
+# sampler (bspline, razor's tents) and keeps its bytes: its `samples` IS
+# `_basis_samples`. A basis that is not polynomial on a segment -- the NEC
+# three-term sinusoid, `SinusoidalGalerkinSolver` -- hands the fill its own
+# sampler and every block function downstream is unchanged, because nothing
+# downstream of the axis dict knows how F/Fd were produced (the #980 spike:
+# the "moment tables" here are `leggauss` weights on POINT kernel tables).
+
+
+class BasisSampler(Protocol):
+    """What `axis_data` reads of a basis (momwire#980 step B).
+
+    `n_basis`
+        The number of basis rows on this axis's solver.
+    `samples(seg_runs, u_phys)`
+        `(F, Fd, seg_rows)`: every basis's value and arc derivative at the
+        axis nodes, `(n_basis, n_nodes)` each, zero where a basis has no
+        support on the node's segment; and `seg_rows[g]` = the sorted basis
+        rows with a live wing on segment `g`, for every `g` in `seg_runs`.
+        `seg_runs` is `_segment_runs`' `{segment: (start, count)}` and
+        `u_phys[start:start+count]` the local arc `u ∈ [0, h]` from `seg_l`
+        of that segment's nodes, in node order.
+    `end_values(gseg, u)`
+        `(n_basis,)`: every basis's value at arc `u` of segment `gseg`, zero
+        off support. `axis_data` calls it at `u = 0` of a wire's first
+        segment and `u = h` of its last, and keeps the end only if some
+        value is nonzero.
+
+    Complex values are allowed (a basis at an in-medium wavenumber): every
+    consumer of F/Fd/`fv` downstream is dtype-agnostic.
+    """
+
+    n_basis: int
+
+    def samples(self, seg_runs, u_phys): ...
+
+    def end_values(self, gseg, u): ...
 
 
 class BasisPolynomials(NamedTuple):
@@ -163,6 +204,22 @@ class BasisPolynomials(NamedTuple):
     supp_seg: np.ndarray
     polys: np.ndarray
     degree: int
+
+    # -- the BasisSampler face (momwire#980 step B) ------------------------
+    # Delegation, not reimplementation: `samples` is `_basis_samples` and
+    # `end_values` is `_end_values`, so the bspline and razor crossing fills
+    # produce the same bytes they did before the seam existed.
+
+    @property
+    def n_basis(self):
+        return int(self.polys.shape[0])
+
+    def samples(self, seg_runs, u_phys):
+        return _basis_samples(self.supp_seg, self.polys, seg_runs, u_phys)
+
+    def end_values(self, gseg, u):
+        live = np.any(self.polys != 0.0, axis=2)
+        return _end_values(self.supp_seg, self.polys, live, gseg, u, self.degree)
 
 
 class AxisGeometry(NamedTuple):
@@ -209,12 +266,13 @@ class CrossingContext(NamedTuple):
 
     Built by the caller from its own state — `BSplineSolver._crossing_context`
     and, since momwire#813, `RazorSolver._crossing_context`, which spells its
-    tents as `BasisPolynomials` the same way. `a_wire` is the deck's ONE wire
+    tents as `BasisPolynomials` the same way; a non-polynomial basis hands in
+    any `BasisSampler` (momwire#980). `a_wire` is the deck's ONE wire
     radius — the scope guard in the module docstring — and `ground_z` the
     interface height.
     """
 
-    basis: BasisPolynomials
+    basis: BasisSampler
     geom: AxisGeometry
     medium: Medium
     ground_z: float
@@ -589,7 +647,7 @@ def axis_data(
     either alone reads as "converged" at the other's plateau, which is how
     that residual came to be recorded as a property of the source Gauss.
     """
-    d = ctx.basis.degree
+    basis = ctx.basis
     geom = ctx.geom
     if q is None:
         q = _FAR_Q if coarse else _NEAR_Q
@@ -605,8 +663,7 @@ def axis_data(
     a_wire = float(ctx.a_wire)
     tol = _PLANE_TOL
 
-    supp_seg, polys = ctx.basis.supp_seg, ctx.basis.polys
-    n_basis = polys.shape[0]
+    n_basis = basis.n_basis
 
     nodes_l, t_l, w_l, u_l, segpos = [], [], [], [], []
     for g in seg_idx:
@@ -648,12 +705,12 @@ def axis_data(
     # through to a real build with no edit here.
     if (
         share_from is not None
-        and share_from["F"].shape == (polys.shape[0], u_phys.shape[0])
+        and share_from["F"].shape == (n_basis, u_phys.shape[0])
         and np.array_equal(share_from["nodes"], nodes)
     ):
         F, Fd, seg_rows = share_from["F"], share_from["Fd"], share_from["seg_rows"]
     else:
-        F, Fd, seg_rows = _basis_samples(supp_seg, polys, seg_runs, u_phys)
+        F, Fd, seg_rows = basis.samples(seg_runs, u_phys)
 
     # Signed wire-end table: (point, sign, per-basis value there). σ = −1
     # at a wire's first segment's u = 0 end, +1 at its last segment's
@@ -661,7 +718,6 @@ def axis_data(
     seg_off = geom.seg_offsets
     ends = []
     on_axis = set(int(g) for g in seg_idx)
-    live = np.any(polys != 0.0, axis=2)
     for w in range(len(seg_off) - 1):
         first, last = seg_off[w], seg_off[w + 1] - 1
         if first not in on_axis:
@@ -670,7 +726,7 @@ def axis_data(
             hh = geom.h[gseg]
             u = hh if u_end is None else 0.0
             pt = geom.seg_l[gseg] + (u / hh) * (geom.seg_r[gseg] - geom.seg_l[gseg])
-            fv = _end_values(supp_seg, polys, live, gseg, u, d)
+            fv = basis.end_values(gseg, u)
             if np.any(fv != 0.0):
                 ends.append((pt, sign, fv))
     return dict(
