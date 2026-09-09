@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include <algorithm>
+#include <string>
 #include <vector>
 #include "_stable_inline.h"
 
@@ -4004,12 +4005,52 @@ assemble_Z_enrich(
 
 
 
+// The far series on its own, exposed so that its DOMAIN and its VALUES can be
+// gated directly against `_bspline_static_far.J_static_far` (momwire#999).
+//
+// Reaching it through a table entry point cannot do that job: those stop at
+// max_d = 2, so the p = 3 arm of this family -- the arm that read a 3x3
+// binomial table out of bounds from momwire#883 until #999 -- had no path from
+// a test at all. A leaf with no caller a test can reach is a leaf that goes
+// wrong quietly, which is what happened here for a release.
+//
+// Validation sits in this wrapper rather than in `bspline_J_static_far`
+// itself: the leaf runs inside the Toeplitz builders' `gil_scoped_release`
+// region, and every other entry point in this file validates BEFORE releasing
+// the GIL. Keeping the leaf total preserves that.
+static double bspline_j_static_far_py(int p, int q, double alpha, double beta,
+                                      double A, double B, double a) {
+    if (p < 0 || p > BSPLINE_FAR_MAX_P || q < 0 || q > BSPLINE_FAR_MAX_P) {
+        throw std::runtime_error(
+            "bspline_j_static_far: (p, q) = (" + std::to_string(p) + ", " +
+            std::to_string(q) + ") not in [0, " +
+            std::to_string(BSPLINE_FAR_MAX_P) + "]^2");
+    }
+    return bspline_J_static_far(p, q, alpha, beta, A, B, a);
+}
+
+
 void register_bspline(py::module_ &m) {
 
     // Read by momwire._accel so the Python routing guard cannot drift from the
     // kernels' real ceiling (momwire#769).
     m.attr("BSPLINE_MAX_N_QP") = py::int_(BSPLINE_MAX_N_QP);
     m.attr("BSPLINE_SAME_EDGE_MAX_N_QP") = py::int_(BSPLINE_SAME_EDGE_MAX_N_QP);
+
+    // Same contract as the two above, for the far series' shared domain:
+    // exported so a test can pin it to `_bspline_static_moments.MAX_D` rather
+    // than a comment claiming they match (momwire#999).
+    m.attr("BSPLINE_FAR_MAX_P") = py::int_(BSPLINE_FAR_MAX_P);
+
+    m.def("bspline_j_static_far", &bspline_j_static_far_py,
+          "One same-edge static moment by the centred multipole series -- the "
+          "C++ twin of _bspline_static_far.J_static_far, same truncation "
+          "(BSPLINE_FAR_TERMS) and same domain guard. Correct only where "
+          "bspline_far_ratio <= BSPLINE_FAR_RATIO; the caller checks, exactly "
+          "as the numpy twin's docstring says. Exposed for the cross-lane "
+          "gate, which otherwise has no path to p = 3.",
+          py::arg("p"), py::arg("q"), py::arg("alpha"), py::arg("beta"),
+          py::arg("A"), py::arg("B"), py::arg("a"));
 
     m.def("seg_seg_reg_moments_bspline_swept",
           &seg_seg_reg_moments_bspline_swept,
