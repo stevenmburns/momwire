@@ -347,6 +347,7 @@ import numpy as np
 import scipy.linalg
 
 from . import (
+    _below_interface,
     _feed_snap,
     _ground_refl,
     _ground_spec,
@@ -1761,33 +1762,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _grounded_junction_ends(self):
         """The ``(wire, "start"|"end")`` pairs in a junction whose shared
-        point lies IN the ground plane — the crossing-junction exemption
-        `_medium_spec.wire_media` keys on (momwire#524 phase 2), and
-        `BSplineSolver._grounded_junction_ends` under the same name.
-
-        The one difference from that twin is where the groups come from:
-        this formulation has no `junctions=` spec to read (it detects them,
-        `_find_junctions`), so the scan runs over the DETECTED groups —
-        which is also what makes the answer right for a deck that declared
-        nothing, the ordinary case here.
-
-        Groups with fewer than two members are skipped, momwire#698's rule
-        and for its reason: a lone grounded end is a legal group of one in
-        this formulation (it carries the contact tent), but one wire end
-        cannot join two media, so such a group can never be the crossing
-        junction the exemption is granted for. Admitting it would hand a
-        contact+buried deck a silent escape from the refusal. A group no
-        member of which reaches above the plane is skipped for the same
-        shape of reason (momwire#700).
-
-        Both conditions live in `_medium_spec.grounded_crossing_exemption`,
-        which is also what the B-spline twin calls: the DETECTED-vs-declared
-        group source is the only thing the two trunks may differ by here,
-        and momwire#700 is what happened when they differed by more.
-        """
-        if self.ground_z is None:
-            return frozenset()
-        return _medium_spec.grounded_crossing_exemption(
+        point lies IN the ground plane — `_below_interface.grounded_junction_ends`
+        over the DETECTED groups (`_find_junctions`), which is the one thing
+        this trunk and bspline's may differ by here (momwire#700, #980)."""
+        return _below_interface.grounded_junction_ends(
             self.wires_polylines,
             self.ground_z,
             (g["ends"] for g in self._find_junctions()),
@@ -1819,86 +1797,23 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return self._cached_wire_media
 
     def _crossing_junctions(self):
-        """Indices of the DETECTED junctions that cross the interface —
-        grounded junctions joining an ABOVE wire to a BELOW wire — after
-        checking the deck against the crossing serve's scope.
-
-        `BSplineSolver._crossing_junctions`' twin, scope for scope
-        (momwire#524 phase 2): exactly ONE above member per crossing
-        junction with N >= 1 below members, one wire radius across the deck,
-        and other junctions only wholly BELOW and off the plane. The
-        sentences are that method's, because the scope is the adjudication's
-        rather than either formulation's.
-
-        Reading it does NOT mean razor can fill such a deck: the constructor
-        refuses a mixed above/below deck by name until momwire#813's
-        assembly lands. This is the LABEL, which the assembly and
-        antennaknobs#1103 both need to exist before then.
-        """
+        """Indices of the DETECTED junctions that cross the interface, after
+        the crossing serve's scope check — `_below_interface.crossing_junctions`,
+        the same function bspline's declared groups go through (momwire#524
+        phase 2, shared since #980). Reading it does NOT mean razor can fill
+        such a deck: the constructor refuses a mixed above/below deck by name;
+        this is the LABEL the refusal, the scope audit and antennaknobs#1103
+        all need."""
         media = self._wire_media()
-        if _medium_spec.BELOW not in media:
-            return ()
         groups = self._find_junctions()
-        crossing = [
-            j
-            for j, g in enumerate(groups)
-            if g["grounded"] and len({media[w] for w, _e in g["ends"]}) == 2
-        ]
-
-        # momwire#698's exemption audit, and here for the reason the B-spline
-        # twin gives: `_grounded_junction_ends` grants its exemption on
-        # GEOMETRY, before the labels exist, and only a junction that
-        # actually CROSSES earns the silence it buys from the
-        # contact+buried refusal.
-        earned = {tuple(m) for j in crossing for m in groups[j]["ends"]}
-        stranded = [
-            c
-            for c in _ground_spec.contact_ends(self.wires_polylines, self.ground_z)
-            if c not in earned
-        ]
-        if stranded:
-            raise ValueError(
-                _medium_spec.contact_with_buried_refusal(
-                    stranded[0][0], media.index(_medium_spec.BELOW)
-                )
-            )
-        if not crossing:
-            return ()
-        for j in crossing:
-            n_above = sum(
-                1 for w, _e in groups[j]["ends"] if media[w] == _medium_spec.ABOVE
-            )
-            if n_above != 1:
-                raise NotImplementedError(
-                    "crossing junction with more than one above member: the "
-                    "crossing serve joins ONE above wire to N below wires "
-                    "at the interface (momwire#524 fan widening); the "
-                    "above-tent x above-tent interface corner has no "
-                    "measured convention"
-                )
-        for j, g in enumerate(groups):
-            if j in crossing:
-                continue
-            if g["grounded"] or any(
-                media[w] != _medium_spec.BELOW for w, _e in g["ends"]
-            ):
-                raise NotImplementedError(
-                    "a deck with a crossing junction and an above-side or "
-                    "in-plane OTHER junction is not served: the complete "
-                    "crossing spelling completes every value-1 end on its "
-                    "axes, and only the below axis's completions (the "
-                    "crossing node and the buried hub) are measured "
-                    "(momwire#524 phase 2)"
-                )
-        radii = np.asarray(self._radius_per_wire, dtype=float)
-        if float(radii.max()) - float(radii.min()) > 0.0:
-            raise NotImplementedError(
-                "crossing serve with per-wire radii: the radius rule "
-                "rho_eff = sqrt(rho^2 + a^2) regularizes the corner with "
-                "ONE wire radius, and a mixed-radius convention is not "
-                "pinned (momwire#524 phase 2)"
-            )
-        return tuple(crossing)
+        return _below_interface.crossing_junctions(
+            media,
+            [g["ends"] for g in groups],
+            {j for j, g in enumerate(groups) if g["grounded"]},
+            self.wires_polylines,
+            self.ground_z,
+            self._radius_per_wire,
+        )
 
     def _refuse_buried_geometry(self):
         """The construction-time buried readings, through `_medium_spec`.
