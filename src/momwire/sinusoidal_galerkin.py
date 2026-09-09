@@ -371,11 +371,12 @@ from .sinusoidal import (
     _sin_minus_arg,
 )
 
-# D1 serves a FULLY-buried deck: one pair class, one medium. A deck with
-# segments on both sides of the interface needs the above/below and
-# cross-medium classes as well, which is #980 D2 — refused by name here
-# rather than filled as though the whole deck were in one medium, which is
-# the failure mode that would produce a plausible wrong number.
+# D1 serves a FULLY-buried deck (one pair class, one medium) and D2 the
+# MIXED deck (above x above at k_p, below x below at k_m, the transmitted
+# pair both ways). What a buried deck still refuses is refused BY NAME
+# rather than filled with a shape of its own, which is the failure mode that
+# produces a plausible wrong number — momwire#1000 is the one that got
+# through.
 # `_apply_loading` is applied at ONE k, and a mixed deck's classes load at
 # k_p and k_m. Refused by name rather than applied at whichever k was in
 # scope, which would be a wrong number on half the deck with no failure.
@@ -387,12 +388,18 @@ _MIXED_WIRE_LOADING_REFUSAL = (
     "drop the loading"
 )
 
-_MIXED_MEDIUM_REFUSAL = (
-    "a deck with wires BOTH above and below the ground plane is not served "
-    "by SinusoidalGalerkinSolver yet (momwire#980 D1 serves fully-buried "
-    "decks): the mixed deck needs the above/below and cross-medium pair "
-    "classes, which are D2. Solve the buried wires alone, or use "
-    "BSplineSolver, which serves the mixed deck today"
+# momwire#1000. Asked in `_fill_medium`, before any plan or grid, so the
+# sentence a caller reads names the junction and not the panelling.
+_CROSSING_JUNCTION_REFUSAL = (
+    "a junction IN the ground plane joining an above-ground wire to a buried "
+    "one - a CROSSING junction (the connected radial screen, the bonded-base "
+    "vertical) - is not served by SinusoidalGalerkinSolver yet (momwire#980 "
+    "D3): the mixed serve (momwire#980 D2) fills pairs across the interface "
+    "as transmitted field blocks, which carry no basis at the node, so a "
+    "crossing deck would solve to a wrong number rather than a refusal "
+    "(momwire#1000). Use BSplineSolver, which serves the crossing junction, "
+    "or the detached spelling (the screen's hub below the plane, nothing "
+    "reaching it) for a second opinion on the screen without its node"
 )
 
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
@@ -1121,11 +1128,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 cls="SinusoidalGalerkinSolver"
             ),
             # `contact` is still the base's. `buried` is NOT: since #980 D1
-            # this class serves the fully-buried deck, so what is left to
-            # refuse is the MIXED one, and the sentence says which — a row
-            # that still carried the base's "no buried fill" prose would be
-            # false the moment the capability flipped.
-            "buried": _MIXED_MEDIUM_REFUSAL,
+            # this class serves the fully-buried deck and since D2 the mixed
+            # one, so what is left to refuse is the CROSSING JUNCTION, and
+            # the sentence says which — a row that still carried the base's
+            # "no buried fill" prose, or D1's "no mixed deck" prose, would be
+            # false; a served cell's row is what a reader of `refusals` sees.
+            "buried": _CROSSING_JUNCTION_REFUSAL,
             # The three decks a buried serve still refuses, each with the
             # sentence `_medium_spec` actually raises — the same four rows
             # bspline declares, for the same reason: since D1 attempts a
@@ -1134,6 +1142,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
+            # momwire#1000: the one buried class D2 leaves to D3, declared so
+            # a consumer can read it BEFORE the solve (antennaknobs#1286).
+            "buried+crossing_junction": _CROSSING_JUNCTION_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
@@ -3725,12 +3736,40 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return None
         if not self._lower_medium():  # pragma: no cover - wire_media raised
             raise AssertionError("buried deck without a lower medium")
+        # momwire#1000: a CROSSING junction — one in the plane whose members
+        # lie on both sides of it — is D3. The mixed route's transmitted
+        # block has no basis at the node, so without this the deck SOLVES,
+        # to a plausible wrong number: 13285−15217j on a one-radial screen
+        # bspline reads 150.4+18.9j on, and 13258−15205j with four radials —
+        # the mast is open at its base and the screen is not in the answer.
+        # The catalog's connected screen only refused by the transmitted
+        # grid's cost law, an accident of its node grading that names the
+        # wrong thing.
+        self._refuse_crossing_junction()
         # A MIXED deck is served since D2. `_operating_medium` declines it
         # (two k are live, so there is no one operating point) and
         # `_assemble_Z` takes the three-class route instead.
         return _crossing_fill.buried_medium(
             self.ground_eps, self.omega, self.eps, self.k
         )
+
+    def _refuse_crossing_junction(self):
+        """Raise by name on a junction spanning the interface (momwire#1000).
+
+        The predicate is `_below_interface.crossing_junctions`' own — a
+        declared junction with members in BOTH media — asked on the labels
+        `_wire_media` already holds. Those labels exist at all because the
+        grounded-junction exemption let the risers through as BELOW, which
+        is right for bspline's crossing fill and, until D3 lands one here,
+        exactly the trap. D3 deletes this method and the row that carries
+        its sentence.
+        """
+        if not self.junctions:
+            return
+        media = self._wire_media()
+        for group in self.junctions:
+            if len({media[w] for w, _end in group}) == 2:
+                raise NotImplementedError(_CROSSING_JUNCTION_REFUSAL)
 
     def _assemble_Z(self, geom, k):
         """Galerkin system matrix G (basis i tested against source basis j).

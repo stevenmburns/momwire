@@ -241,6 +241,81 @@ def test_a_deck_past_the_transmitted_domain_refuses_with_its_numbers():
         z_of(mk([ABOVE, far], [[11], [11]]))
 
 
+def _connected_screen(tip=(0.0, 0.0, 10.0), n_mast=15):
+    """Four buried radials running straight to a node IN the plane, one mast
+    above it: the connected screen in the DIRECT spelling (far end to node),
+    which shares no geometry between members. COARSE on purpose
+    (momwire#1000): the catalog's node-graded mast trips the transmitted
+    grid's cost law and refuses by accident; this mesh does not, and before
+    the by-name refusal it SOLVED, to 13258−15205j where bspline reads
+    57.0−20.3j — the mast open at its base, the screen absent from the
+    answer. (The N-rises spelling of the same screen blows up to 1e30 on
+    this family for a different reason, coincident rise segments, which is
+    its own issue and not what this gate is about.)"""
+    wires = [
+        np.array([(5.0 * np.cos(a), 5.0 * np.sin(a), -0.15), (0.0, 0.0, 0.0)])
+        for a in (0.0, np.pi / 2, np.pi, 3 * np.pi / 2)
+    ]
+    wires.append(np.array([(0.0, 0.0, 0.0), tip]))
+    return SinusoidalGalerkinSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[12]] * 4 + [[n_mast]],
+        junctions=[[(i, "end") for i in range(4)] + [(4, "start")]],
+        feeds=[(4, 0.25, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        **GROUND,
+    )
+
+
+def test_a_crossing_junction_refuses_by_name():
+    """momwire#1000: the one buried class D2 leaves to D3 must REFUSE, with
+    the sentence its capability row declares — a consumer reads the row
+    before the solve (antennaknobs#1286), so the two must be one string."""
+    from momwire.sinusoidal_galerkin import _CROSSING_JUNCTION_REFUSAL
+
+    s = _connected_screen()
+    with pytest.raises(NotImplementedError) as exc:
+        s.compute_impedance()
+    assert str(exc.value) == _CROSSING_JUNCTION_REFUSAL
+    assert (
+        SinusoidalGalerkinSolver.capabilities.refusal("buried", "crossing_junction")
+        == _CROSSING_JUNCTION_REFUSAL
+    )
+
+
+def test_the_crossing_refusal_precedes_the_cost_law():
+    """A sloped mast puts a quadrature node within 0.01 deg of a radial, which
+    is the deck the transmitted grid's cost law refuses. The junction is the
+    reason and must be the sentence; the panelling is not."""
+    from momwire.sinusoidal_galerkin import _CROSSING_JUNCTION_REFUSAL
+
+    s = _connected_screen(tip=(10.0, 0.0, 0.5))
+    with pytest.raises(NotImplementedError) as exc:
+        s.compute_impedance()
+    assert str(exc.value) == _CROSSING_JUNCTION_REFUSAL
+
+
+def test_a_junction_wholly_below_the_plane_is_not_a_crossing():
+    """The buried hub — radials joined at depth, nothing reaching the plane —
+    is D1's class and stays served; the refusal keys on media, not on
+    junctions existing."""
+    wires = [
+        np.array([(5.0 * np.cos(a), 5.0 * np.sin(a), -0.15), (0.0, 0.0, -0.15)])
+        for a in (0.0, np.pi / 2, np.pi, 3 * np.pi / 2)
+    ]
+    s = SinusoidalGalerkinSolver(
+        wires=wires,
+        n_per_edge_per_wire=[[7]] * 4,
+        junctions=[[(i, "end") for i in range(4)]],
+        feeds=[(0, 0.5, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        **GROUND,
+    )
+    assert np.isfinite(z_of(s))
+
+
 # ----------------------------------------------------------------------
 # The radial effect: SG against BOTH bspline and NEC-5
 # ----------------------------------------------------------------------
