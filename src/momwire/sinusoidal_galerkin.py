@@ -330,7 +330,7 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _sommerfeld_below
+from . import _sommerfeld_below, _sommerfeld_transmitted
 from . import _medium_spec, _wire_loading
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
@@ -355,6 +355,17 @@ from .sinusoidal import (
 # cross-medium classes as well, which is #980 D2 — refused by name here
 # rather than filled as though the whole deck were in one medium, which is
 # the failure mode that would produce a plausible wrong number.
+# `_apply_loading` is applied at ONE k, and a mixed deck's classes load at
+# k_p and k_m. Refused by name rather than applied at whichever k was in
+# scope, which would be a wrong number on half the deck with no failure.
+_MIXED_WIRE_LOADING_REFUSAL = (
+    "distributed wire loading on a deck with wires BOTH above and below the "
+    "ground plane is not served (momwire#980 D2 serves the unloaded mixed "
+    "deck): the loading operator is applied at a single wavenumber and the "
+    "two media load at k_p and k_m. Solve the loaded wires in one medium, or "
+    "drop the loading"
+)
+
 _MIXED_MEDIUM_REFUSAL = (
     "a deck with wires BOTH above and below the ground plane is not served "
     "by SinusoidalGalerkinSolver yet (momwire#980 D1 serves fully-buried "
@@ -2791,7 +2802,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         return fg.projector(lambda: self._image_refl_prep(geom))
 
-    def _fold_ground_block(self, geom, k, ctx, contribs, fg):
+    def _fold_ground_block(
+        self, geom, k, ctx, contribs, fg, obs_mask=None, src_cols=None
+    ):
         """The ground sub-assembly, tested exactly like the free-space block
         and SUBTRACTED from it in place — the same single global minus sign
         the point-matched `_assemble_Z` uses (the image current + image charge
@@ -2890,11 +2903,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         coef = fg.image_coefficient
         for a in img:
             np.multiply(coef, a, out=a)
-        self._tested_sommerfeld_remainder(ctx, fg, img)
+        self._tested_sommerfeld_remainder(
+            ctx, fg, img, obs_mask=obs_mask, src_cols=src_cols
+        )
         for dest, a in zip(contribs, img):
             np.subtract(dest, a, out=dest)
 
-    def _tested_sommerfeld_remainder(self, ctx, fg, subtract_from):
+    def _tested_sommerfeld_remainder(
+        self, ctx, fg, subtract_from, obs_mask=None, src_cols=None
+    ):
         """Test-integrate the smooth Sommerfeld remainder tensor, SUBTRACTING
         it from `subtract_from` (the C2-scaled image triple) as it goes.
 
@@ -2958,6 +2975,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         w_entry = ctx["w_entry"]
         m_of_entry = ctx["m_of_entry"]
         nnz = w_entry.shape[0]
+        starts_pad = np.concatenate((np.asarray(starts), [nnz]))
 
         def _reduce(i0, i1, block):
             # Observer rows i0:i1 are test segments m0:m1 whole, so the
@@ -2975,10 +2993,55 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 )
                 np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
 
+        if obs_mask is None:
+            fg.remainder("cos-1").replay(
+                obs_centers=ctx["obs_c"],
+                obs_tangents=ctx["obs_t"],
+                consume=_reduce,
+                row_group=nq,
+            )
+            return
+        # A CLASS block (momwire#980 D2): this ground models ONE medium, so
+        # its remainder is only defined at that medium's observers — handing
+        # it the whole deck's makes the below family refuse ("needs BOTH
+        # endpoints strictly below ground_z"), correctly. `replay` already
+        # takes an explicit observer set; this is a parameter, not a new
+        # path. The mask is per TEST SEGMENT, so the rows stay whole and
+        # `row_group=nq` still means what it means.
+        seg_keep = np.nonzero(obs_mask)[0]
+        obs_rows = (seg_keep[:, None] * nq + np.arange(nq)[None, :]).ravel()
+        sub_starts = np.concatenate(([0], np.cumsum(np.diff(starts_pad)[seg_keep])))
+
+        def _reduce_masked(i0, i1, block):
+            # `i0:i1` index the KEPT observers; map back to whole test
+            # segments of the full deck and reduce into their own entries.
+            m0, m1 = i0 // nq, i1 // nq
+            for j, m in enumerate(seg_keep[m0:m1]):
+                e0, e1 = starts_pad[m], starts_pad[m + 1]
+                if e1 == e0:
+                    continue
+                w = w_entry[e0:e1]
+                m_loc = np.zeros(e1 - e0, dtype=np.int64)
+                for dest, sblk in zip(subtract_from, block):
+                    rows = self._tested_contrib_rows(
+                        w, m_loc, nq, sblk[j * nq : (j + 1) * nq].reshape(1, nq, -1)
+                    )
+                    if src_cols is None:
+                        np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
+                    else:
+                        # The remainder was prepared over ONE medium's
+                        # geometry, so its source axis is that class's, while
+                        # `dest` is full width. Place it on the class's own
+                        # columns; every other column of this block stays as
+                        # the image left it, which the caller's quadrant mask
+                        # then discards.
+                        dest[np.ix_(np.arange(e0, e1), src_cols)] -= rows
+
+        _ = sub_starts
         fg.remainder("cos-1").replay(
-            obs_centers=ctx["obs_c"],
-            obs_tangents=ctx["obs_t"],
-            consume=_reduce,
+            obs_centers=np.asarray(ctx["obs_c"])[obs_rows],
+            obs_tangents=np.asarray(ctx["obs_t"])[obs_rows],
+            consume=_reduce_masked,
             row_group=nq,
         )
 
@@ -3115,6 +3178,340 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             del block
         return S
 
+    # ---------------------------------------------------------------
+    # Mixed decks (momwire#980 D2). Every wire wholly above or wholly below,
+    # no wire ending in the plane, no junction spanning media.
+    #
+    # SUBSET-COMPUTE, FULL-WIDTH PRESENT — bspline's shape
+    # (`_build_J_blocks_subset`): each class's block is placed into a
+    # full-shaped array and the entries belonging to another pair class stay
+    # ZERO. Correctness rests on "the untouched entries are zero", which is
+    # true by construction, rather than on a renumbering being right. Global
+    # indices throughout, so `_scatter_coef_product`, the drive and the
+    # loading path are unmodified.
+    # ---------------------------------------------------------------
+
+    _CTX_K_FIELDS = ("w_entry", "sigA", "sigAC", "sigC")
+
+    def _is_mixed(self, geom):
+        """Both media present — the D2 route rather than D1's."""
+        if self.ground_z is None or not self._lower_medium():
+            return False
+        below = self._below_segments(geom)
+        return bool(below.any() and not below.all())
+
+    def _class_geom(self, geom, keep):
+        """A segment-level view of `geom` restricted to one medium.
+
+        Only the REMAINDER needs this: it models one medium and refuses the
+        other's geometry outright. The image map keeps the whole deck, whose
+        out-of-class columns the caller's quadrant mask discards.
+        """
+        idx = np.nonzero(keep)[0]
+        out = dict(geom)
+        for key in ("seg_l", "seg_r", "seg_centers", "seg_tangents", "seg_h"):
+            out[key] = np.asarray(geom[key])[idx]
+        out["n_segs"] = int(idx.size)
+        return out
+
+    def _stitch_basis_coefs(self, geom, below, k_p, k_m):
+        """One `seg_view` whose coefficients follow each segment's medium.
+
+        The CSR *topology* is geometry, not k — measured, and asserted here:
+        `starts`, `jbasis` and `sigma` are identical between two views built
+        at different k, and only `A`/`B`/`C`/`AC` move. So this is not a
+        merge of two structures; it is ONE structure with per-segment
+        coefficient selection.
+
+        Licensed only by D2's scope: no basis's support spans both classes,
+        so every entry for a segment comes from bases in that segment's own
+        medium. A cross-class basis would make this WRONG rather than
+        approximate — D3 must replace it, not extend it.
+        """
+        view_p = self._basis_coefs(geom, k_p)
+        view_m = self._basis_coefs(geom, k_m)
+        for key in ("starts", "jbasis", "sigma"):
+            if not np.array_equal(view_p[key], view_m[key]):
+                raise AssertionError(
+                    f"seg_view['{key}'] depends on k; the D2 basis stitch "
+                    "assumes the CSR topology is geometry alone"
+                )
+        starts = np.asarray(view_p["starts"], dtype=np.int64)
+        nnz = np.asarray(view_p["A"]).shape[0]
+        starts_pad = np.concatenate((starts, [nnz]))
+        entry_below = np.zeros(nnz, dtype=bool)
+        for seg in np.nonzero(below)[0]:
+            entry_below[starts_pad[seg] : starts_pad[seg + 1]] = True
+        out = dict(view_p)
+        for key in ("A", "B", "C", "AC"):
+            a = np.array(view_p[key], copy=True)
+            a[entry_below] = np.asarray(view_m[key])[entry_below]
+            out[key] = a
+        return out
+
+    def _stitch_test_context(self, geom, seg_view, below, k_p, k_m):
+        """One test context whose TEST functions follow each segment's medium.
+
+        The test side needs the same treatment as the source side: a test
+        function on a buried segment is a current in the lower medium and its
+        values belong at k_m. Missing this leaves the test side of every
+        buried row in air — a wrong number with no failure, which is D1's
+        drive-column finding one level up.
+
+        The four fields below are the only k-dependent ones in a context —
+        measured — and all are per ENTRY, so they stitch by the entry's own
+        segment exactly as the coefficients do.
+        """
+        ctx_p = self._test_context(geom, seg_view, k_p)
+        ctx_m = self._test_context(geom, seg_view, k_m)
+        entry_below = np.asarray(below)[np.asarray(ctx_p["m_of_entry"])]
+        out = dict(ctx_p)
+        for key in self._CTX_K_FIELDS:
+            a = np.array(ctx_p[key], copy=True)
+            a[entry_below] = np.asarray(ctx_m[key])[entry_below]
+            out[key] = a
+        return out
+
+    def _mixed_serve_plan(self, geom, below, medium, ctx):
+        """`serve_plan` with a non-empty `a_idx` — every extent and every
+        refusal for the three classes, raised before any grid is filled, on
+        the quadrature NODES the fill will query."""
+        q = _below_interface.n_qp_buried_field(self.n_qp_sommerfeld)
+        seg_l = np.asarray(geom["seg_l"])
+        seg_r = np.asarray(geom["seg_r"])
+        tang = np.asarray(geom["seg_tangents"])
+        h = np.asarray(geom["seg_h"])
+        a_idx = np.nonzero(~below)[0]
+        b_idx = np.nonzero(below)[0]
+        obs_a = _below_interface.field_nodes(
+            seg_l[a_idx], seg_r[a_idx], tang[a_idx], h[a_idx], q
+        )[0]
+        obs_b = _below_interface.field_nodes(
+            seg_l[b_idx], seg_r[b_idx], tang[b_idx], h[b_idx], q
+        )[0]
+        # THE TEST OBSERVERS COUNT TOO, and this is where SG differs from
+        # bspline: there both axes of a transmitted pair use the same buried
+        # field rule, so the plan's extents and the fill's queries are the
+        # same points. Here the test side is the GALERKIN quadrature at
+        # `n_qp_test` (8), whose outermost node sits closer to a segment end
+        # than the field rule's (6) — measured 0.150945 m against 0.151608 m
+        # on a 21-segment radial, so a plan sized on the field nodes alone
+        # builds a z' ladder the fill then queries outside of. The extents
+        # are therefore the UNION of both rules' points on this class.
+        nq = ctx["nq"]
+        obs_c_all = np.asarray(ctx["obs_c"])
+        test_rows = (b_idx[:, None] * nq + np.arange(nq)[None, :]).ravel()
+        obs_b = np.concatenate([obs_b, obs_c_all[test_rows]])
+        obs_a = np.concatenate(
+            [
+                obs_a,
+                obs_c_all[(a_idx[:, None] * nq + np.arange(nq)[None, :]).ravel()],
+            ]
+        )
+        return _below_interface.serve_plan(
+            self.ground_z,
+            seg_l,
+            seg_r,
+            a_idx,
+            obs_a,
+            obs_b,
+            medium.k_p,
+            medium.k_m,
+            crossing=False,
+            pair_extents=_bspline._pair_extents_below,
+        )
+
+    def _transmitted_tensor(
+        self, ctx, geom, medium, plan, src_keep, obs_keep, obs_below
+    ):
+        """The above x below pair class as a (3, M, N) field tensor.
+
+        A field-form sandwich — `w_entry` on the test side (applied by the
+        caller's reduction), `shp_w` on the source side, the transmitted
+        projected table between them — at `n_qp_buried_field`, which is at
+        least 6 and NOT this solver's default 3.
+
+        **No near correction, deliberately.** That device replaces the far
+        kernel's cheap quadrature on close pairs of the SAME closed form; the
+        transmitted kernel is a grid interpolation with no closed form to
+        correct against, and bspline's transmitted blocks take none either.
+        What bounds a close cross pair is this order plus `serve_plan`'s
+        theta-floor refusal, which is a cost law rather than a tolerance —
+        and `test_close_cross_pairs_collapse` is the measurement that keeps
+        that honest.
+
+        Full-width in the source axis: out-of-class sources are ZERO, which
+        is the pair mask.
+        """
+        q = _below_interface.n_qp_buried_field(self.n_qp_sommerfeld)
+        idx = np.nonzero(src_keep)[0]
+        seg_l = np.asarray(geom["seg_l"])[idx]
+        seg_r = np.asarray(geom["seg_r"])[idx]
+        tang = np.asarray(geom["seg_tangents"])[idx]
+        h = np.asarray(geom["seg_h"])[idx]
+        nodes, t_src, u_phys, w_node = _below_interface.field_nodes(
+            seg_l, seg_r, tang, h, q
+        )
+        k_src = medium.k_p if obs_below else medium.k_m
+        zloc = u_phys - 0.5 * h[:, None]
+        shp = np.stack(
+            [
+                np.ones_like(zloc, dtype=np.complex128),
+                np.sin(k_src * zloc),
+                -2.0 * np.sin(0.5 * k_src * zloc) ** 2,
+            ]
+        )
+        shp_w = shp * w_node[None]
+        grid = _sommerfeld_transmitted.get_grid_below_above(
+            medium.eps_t,
+            medium.k_p,
+            plan["r_cross_max"],
+            plan["zp_min"],
+            plan["zp_max"],
+            self.omega,
+            mu=self.mu,
+            r_min=plan["r_cross_min"],
+        )
+        proj_fn = (
+            _sommerfeld_transmitted.transmitted_field_proj_above_to_below
+            if obs_below
+            else _sommerfeld_transmitted.transmitted_field_proj_below_to_above
+        )
+        # OBSERVERS are restricted too: each direction's evaluator requires
+        # its observers on one side of the plane and refuses the other by
+        # name. Whole test segments, so the caller's `row_group = nq`
+        # reduction still meets complete groups.
+        nq = ctx["nq"]
+        obs_c_all = np.asarray(ctx["obs_c"])
+        obs_t_all = np.asarray(ctx["obs_t"])
+        seg_keep = np.nonzero(obs_keep)[0]
+        obs_rows = (seg_keep[:, None] * nq + np.arange(nq)[None, :]).ravel()
+        obs_c = obs_c_all[obs_rows]
+        obs_t = obs_t_all[obs_rows]
+        proj = proj_fn(
+            obs_c, obs_t, nodes, t_src, self.ground_z, medium.k_p, medium.k_m, grid
+        )
+        fq = proj.reshape(obs_c.shape[0], idx.size, q)
+        small = np.einsum("snq,mnq->smn", shp_w, fq)
+        # Full width in BOTH axes; every untouched entry stays zero, which is
+        # the pair mask.
+        n_segs = int(geom["n_segs"])
+        out = np.zeros((3, obs_c_all.shape[0], n_segs), dtype=np.complex128)
+        out[np.ix_(np.arange(3), obs_rows, idx)] = small
+        return out
+
+    @contextlib.contextmanager
+    def _at_class_eta(self, medium, is_below):
+        """`self.eta` for one class's block, restored after.
+
+        The fill reads `eta` off the solver — it is not an argument like `k`
+        — so a mixed deck must set it per class as well. Filling the buried
+        block at k_m with AIR's eta is a wrong number with no failure: it is
+        off by |eta_0/eta_m|, measured 4.27x at soil A / 7 MHz, and the
+        below quadrant came out 3.4x wrong until this was added. Same
+        finding as D1's drive-column one, now on the fill itself.
+        """
+        saved = self.eta
+        try:
+            if is_below:
+                self.eta = np.sqrt(self.mu / medium.eps_m)
+            yield
+        finally:
+            self.eta = saved
+
+    def _assemble_mixed_contribs(self, geom, ctx, below, medium, plan):
+        """The three pair classes of a mixed deck, into one (nnz, N) triple.
+
+        Quadrants, and the masks are the point. A class fill computes every
+        observer against every source, so the above fill produces
+        below-observer rows too — and those are not the free-space direct
+        term, they are the transmitted class. Keeping only the cells whose
+        test entry and source share a medium is what stops each pair being
+        counted twice, once with the wrong kernel.
+
+              rows / cols     above sources        below sources
+              above entries   free+ground @ k_p    transmitted (a<-b)
+              below entries   transmitted (b<-a)   free+ground @ k_m
+        """
+        w_entry = np.asarray(ctx["w_entry"])
+        nnz = w_entry.shape[0]
+        n_segs = int(geom["n_segs"])
+        contribs = tuple(np.zeros((nnz, n_segs), dtype=np.complex128) for _ in range(3))
+        entry_below = np.asarray(below)[np.asarray(ctx["m_of_entry"])]
+
+        for keep, rows, k_cls, med in (
+            (~np.asarray(below), ~entry_below, medium.k_p, None),
+            (np.asarray(below), entry_below, medium.k_m, medium),
+        ):
+            if not keep.any() or not rows.any():
+                continue
+            with self._at_class_eta(medium, med is not None):
+                block = self._tested_contribs(geom, k_cls, ctx, _plain_projection)
+            # The ground images the WHOLE deck — its out-of-class columns are
+            # discarded below — but its remainder models ONE medium, so it is
+            # prepared over that medium's geometry and replayed at that
+            # medium's observers.
+            fg = _field_ground.field_ground_for(
+                self,
+                geom,
+                k_cls,
+                self.omega,
+                medium=med,
+                r1_below=plan.get("r1_below") if med is not None else None,
+                remainder_geom=self._class_geom(geom, keep),
+            )
+            if fg is not None:
+                with self._at_class_eta(medium, med is not None):
+                    self._fold_ground_block(
+                        geom,
+                        k_cls,
+                        ctx,
+                        block,
+                        fg,
+                        obs_mask=keep,
+                        src_cols=np.nonzero(keep)[0],
+                    )
+            cols = np.nonzero(keep)[0]
+            for dest, b in zip(contribs, block):
+                dest[np.ix_(np.nonzero(rows)[0], cols)] = b[
+                    np.ix_(np.nonzero(rows)[0], cols)
+                ]
+
+        # The two transmitted directions, subtracted like every field-form
+        # block, each into the quadrant whose observers are in the OTHER
+        # medium from its sources.
+        for src_keep, rows, obs_below in (
+            (np.asarray(below), ~entry_below, False),
+            (~np.asarray(below), entry_below, True),
+        ):
+            if not src_keep.any() or not rows.any():
+                continue
+            obs_keep = np.asarray(below) if obs_below else ~np.asarray(below)
+            tensor = self._transmitted_tensor(
+                ctx, geom, medium, plan, src_keep, obs_keep, obs_below
+            )
+            reduced = self._reduce_field_tensor(ctx, tensor)
+            r_idx = np.nonzero(rows)[0]
+            c_idx = np.nonzero(src_keep)[0]
+            for dest, r in zip(contribs, reduced):
+                dest[np.ix_(r_idx, c_idx)] -= r[np.ix_(r_idx, c_idx)]
+        return contribs
+
+    def _reduce_field_tensor(self, ctx, tensor):
+        """Test-integrate a (3, M, N) field tensor into three (nnz, N) blocks —
+        `_tested_sommerfeld_remainder`'s reduction, lifted so the transmitted
+        block reuses it rather than growing a second one."""
+        nq = ctx["nq"]
+        w_entry = np.asarray(ctx["w_entry"])
+        m_of_entry = np.asarray(ctx["m_of_entry"])
+        n_test = int(np.asarray(ctx["obs_c"]).shape[0] // nq)
+        return [
+            self._tested_contrib_rows(
+                w_entry, m_of_entry, nq, sb.reshape(n_test, nq, sb.shape[-1])
+            )
+            for sb in tensor
+        ]
+
     def _serves_buried(self):
         """momwire#980 D1: this family serves a FULLY-buried deck over a
         Sommerfeld ground, and nothing else below the interface.
@@ -3213,6 +3610,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         made a real route: same operating point, but resolved from the deck's
         own medium labels and guaranteed to be restored.
         """
+        # A mixed deck has TWO live k, so there is no solver-level operating
+        # point: each block is filled at its own k as an argument and the
+        # drive is built per class. Entering here would put one medium's k on
+        # the whole solve — D1's drive-column finding, one level up.
+        if self._is_mixed(geom):
+            yield None
+            return
         medium = self._fill_medium(geom)
         if medium is None:
             yield None
@@ -3300,10 +3704,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return None
         if not self._lower_medium():  # pragma: no cover - wire_media raised
             raise AssertionError("buried deck without a lower medium")
-        if not below.all():
-            # Mixed deck: above/below and cross-medium pair classes, which is
-            # D2. Refused by name rather than filled as if it were uniform.
-            raise NotImplementedError(_MIXED_MEDIUM_REFUSAL)
+        # A MIXED deck is served since D2. `_operating_medium` declines it
+        # (two k are live, so there is no one operating point) and
+        # `_assemble_Z` takes the three-class route instead.
         return _crossing_fill.buried_medium(
             self.ground_eps, self.omega, self.eps, self.k
         )
@@ -3371,6 +3774,38 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # skipped: at free space or an above-only deck nothing below this
         # line differs, which is the same standard `field_ground_for`'s
         # `None` is held to.
+        # A MIXED deck (momwire#980 D2) stitches its basis and its test
+        # context per medium and fills three pair classes. Everything below
+        # is the single-medium path, structurally unchanged.
+        if self._is_mixed(geom):
+            below = self._below_segments(geom)
+            medium = self._fill_medium(geom)
+            # The scope refusals, which a single-medium deck raises inside
+            # `_operating_medium` — the mixed route does not enter it (two k
+            # are live), so they are raised here rather than skipped.
+            _below_interface.refuse_out_of_scope(
+                use_singular_enrichment=getattr(self, "use_singular_enrichment", False),
+                extended_kernel=self.extended_kernel,
+                n=int(geom["n_segs"]),
+                degree=1,
+                dense_fits=True,
+                chunked_serves=True,
+                swept_mem_mb=getattr(self, "swept_mem_mb", None),
+            )
+            if getattr(self, "_loading_active", False):
+                raise NotImplementedError(_MIXED_WIRE_LOADING_REFUSAL)
+            seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+            ctx = self._stitch_test_context(
+                geom, seg_view, below, medium.k_p, medium.k_m
+            )
+            # After `ctx`: the plan's extents must cover the TEST observers
+            # too, not only the field nodes (see `_mixed_serve_plan`).
+            plan = self._mixed_serve_plan(geom, below, medium, ctx)
+            contribs = self._assemble_mixed_contribs(geom, ctx, below, medium, plan)
+            G = self._scatter_coef_product(ctx, contribs)
+            del contribs
+            return G, seg_view
+
         seg_view = self._basis_coefs(geom, k)
         ctx = self._test_context(geom, seg_view, k)
 
