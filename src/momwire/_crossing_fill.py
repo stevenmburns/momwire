@@ -942,7 +942,7 @@ def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
     )
 
 
-def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz):
+def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     """The M + SW + SQ sandwich over (above axis A × below axis B), dense.
 
     Split out of `cross_complete_block` so the REVERSED block (momwire#813)
@@ -958,7 +958,7 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz):
     rho = np.hypot(dx, dy)
     z = np.broadcast_to((A["nodes"][:, 2] - gz)[:, None], rho.shape)
     zp = np.broadcast_to((B["nodes"][:, 2] - gz)[None, :], rho.shape)
-    tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL)
+    tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
     U, V, W, dzW = tables["U"], tables["V"], tables["W"], tables["dzW"]
 
     wA, wB = A["w"], B["w"]
@@ -986,8 +986,13 @@ def cross_complete_block(ctx, A, B, *, corner=True):
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz)
-    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, corner=corner)
+    # One fill = one memo, exactly as `cross_complete_block_split` does it
+    # (momwire#1017). This route built none, so momwire#688's cross-call dedup
+    # — the whole reason the parameter exists — never fired for `RazorSolver`,
+    # whose crossing serve calls straight in here.
+    memo = {}
+    t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
+    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner)
     return t_ab
 
 
@@ -1344,9 +1349,10 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz).T
+    memo = {}  # momwire#1017, as above
+    t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz, memo=memo).T
     t_ba += _ends_and_corner_reversed(
-        ctx, P, Q, eps_t, k_p, c1, gz, corner=corner, sw_end=sw_end
+        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
     )
     return t_ba
 
