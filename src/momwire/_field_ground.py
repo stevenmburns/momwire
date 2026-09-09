@@ -286,11 +286,18 @@ class Remainder:
     `FieldGround` that owns it, which is one fill.
     """
 
-    __slots__ = ("_prepared", "_solver")
+    __slots__ = ("_prepared", "_replay", "_solver")
 
-    def __init__(self, solver, prepared):
+    def __init__(self, solver, prepared, replay="_replay_sommerfeld_remainder"):
         self._solver = solver
         self._prepared = prepared
+        # Which replay this prepared state belongs to. Named rather than
+        # bound so the handle stays picklable-shaped and so the pairing is
+        # visible at the construction site: an above `prepared` replayed by
+        # the below loop (or the reverse) is the one misuse available here,
+        # and the two dicts differ in their keys, so it would raise rather
+        # than answer.
+        self._replay = replay
 
     def replay(self, obs_centers=None, obs_tangents=None, consume=None, row_group=1):
         """Evaluate the remainder at one observer set, returning the
@@ -306,7 +313,7 @@ class Remainder:
         centres and takes the tensor back; the Galerkin fold will pass its
         test-quadrature points, a consumer, and `row_group = nq`.
         """
-        return self._solver._replay_sommerfeld_remainder(
+        return getattr(self._solver, self._replay)(
             self._prepared,
             obs_centers=obs_centers,
             obs_tangents=obs_tangents,
@@ -377,6 +384,8 @@ class FieldGround:
         "_geom",
         "_k",
         "_omega",
+        "_medium",
+        "_r1_below",
         "_remainders",
         "_solver",
         "_weighted",
@@ -398,6 +407,8 @@ class FieldGround:
         eps_tilde,
         image_coefficient,
         standard_fresnel=True,
+        medium=None,
+        r1_below=None,
     ):
         self._solver = solver
         self._geom = geom
@@ -409,6 +420,12 @@ class FieldGround:
         self.eps_tilde = eps_tilde
         self.image_coefficient = image_coefficient
         self.standard_fresnel = standard_fresnel
+        # The BELOW-interface row (momwire#980 D1). `None` on every shipped
+        # ground, and every branch below tests it explicitly rather than
+        # inferring the row from `eps_tilde` — the two buried families share
+        # ε̃ with the above one and differ in everything else.
+        self._medium = medium
+        self._r1_below = r1_below
 
     def image_sources(self) -> tuple:
         """The mirror map: `(src_c, src_t)` for the image sources, source
@@ -523,6 +540,20 @@ class FieldGround:
         if self.eps_tilde is None or self.mode != "compose":
             return None
         got = self._remainders.get(cos_shape)
+        if got is None and self._medium is not None:
+            # The below family: same prepare/replay shape, a different grid
+            # and projector, and the source shapes built at k_m. The extent
+            # is `serve_plan`'s, so the cap and grazing refusals were raised
+            # before this point rather than inside an 80-second grid fill.
+            got = Remainder(
+                self._solver,
+                self._solver._somm_remainder_below_prepare(
+                    self._geom, self._medium, self._r1_below, cos_shape=cos_shape
+                ),
+                replay="_replay_somm_remainder_below",
+            )
+            self._remainders[cos_shape] = got
+            return got
         if got is None:
             # The grid-sizing endpoint scan is band- and k-invariant and at
             # O(N²) per call was the dominant cost of the banded fill
@@ -546,7 +577,9 @@ class FieldGround:
         return got
 
 
-def field_ground_for(solver, geom, k, omega) -> FieldGround | None:
+def field_ground_for(
+    solver, geom, k, omega, medium=None, r1_below=None
+) -> FieldGround | None:
     """The factory: `solver`'s ground as one object, or `None` for free
     space.
 
@@ -575,7 +608,30 @@ def field_ground_for(solver, geom, k, omega) -> FieldGround | None:
     | PEC        | fold    | None         | 1     | None      |
     | refl-coef  | fold    | Fresnel dyad | 1     | None      |
     | sommerfeld | compose | None         | C₂(ε̃) | prepare/replay |
+    | buried     | compose | None         | A_m(ε̃) | below prepare/replay |
+
+    The fifth row (momwire#980 D1) is reached only when `medium` is given —
+    a fully-buried deck's one pair class, resolved by the caller because the
+    medium is a property of the DECK and this factory is handed a k. It is
+    the ±=− family's counterpart of the sommerfeld row: the same mirror map
+    and the same `compose` association, with `A_m = (1−ε̃)/(1+ε̃)` in C₂'s
+    place — MEASURED by phase 0's sign scan, not derived, and the negative
+    of C₂, which is exactly the coincidence that scan exists to keep honest.
     """
+    if medium is not None:
+        return FieldGround(
+            solver,
+            geom,
+            k,
+            omega,
+            mode="compose",
+            weighted=False,
+            eps_tilde=medium.eps_t,
+            image_coefficient=medium.a_m,
+            standard_fresnel=False,
+            medium=medium,
+            r1_below=r1_below,
+        )
     cfg = _ground_spec.ground_config(solver, omega)
     if cfg is None:
         return None

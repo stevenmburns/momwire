@@ -81,7 +81,7 @@ that serves both — and those are the `a+b` keys in the reasons below.
 | `HMatrixSolver`            | yes   | yes         | yes          | yes       | **no**   |
 | `ArrayBlockSolver`         | yes   | yes         | yes          | yes       | **no**   |
 | `SinusoidalSolver`         | yes   | yes         | yes          | yes       | **no**   |
-| `SinusoidalGalerkinSolver` | yes   | yes         | yes          | yes       | **no**   |
+| `SinusoidalGalerkinSolver` | yes   | yes         | yes          | yes       | yes      |
 | `RazorSolver`              | yes   | yes         | yes          | yes       | **no**   |
 | `HarringtonSolver`         | yes   | yes         | yes          | **no**    | **no**   |
 | `PulseSolver`              | yes   | yes         | yes          | **no**    | **no**   |
@@ -113,14 +113,14 @@ a gap, not a claim of emptiness.
 | `HMatrixSolver`            | bspline-1 / bspline-2 / bspline-3 | galerkin       | spline           | extended / reduced | converged        | aca              | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
 | `ArrayBlockSolver`         | bspline-1 / bspline-2 / bspline-3 | galerkin       | spline           | extended / reduced | converged        | element-block    | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
 | `SinusoidalSolver`         | sinusoidal-3term                  | point-matching | basis-implied    | extended / reduced | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
-| `SinusoidalGalerkinSolver` | sinusoidal-3term                  | galerkin       | basis-implied    | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
+| `SinusoidalGalerkinSolver` | sinusoidal-3term                  | galerkin       | basis-implied    | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / buried / contact |
 | `RazorSolver`              | tent                              | path           | basis-implied    | extended / reduced | converged / nec5 | dense            | node-port               | free / pec / refl-coef / sommerfeld | above / contact          |
 | `HarringtonSolver`         | pulse                             | point-matching | dual-cell        | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
 | `PulseSolver`              | pulse                             | point-matching | point            | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
 
 ## The recorded reasons
 
-45 sentences across 73 declared cells, verbatim. A sentence shared by several rows is printed
+45 sentences across 77 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -128,11 +128,11 @@ These reach a user unchanged — as the exception a constructor raises, as
 the printout an EZNEC/NEC-2 seam writes, and as the text antennaknobs
 renders in host dialogs.
 
-- `BSplineSolver` `buried+contact`, `HMatrixSolver` `buried+contact`, `ArrayBlockSolver` `buried+contact`, `RazorSolver` `buried+contact`
+- `BSplineSolver` `buried+contact`, `HMatrixSolver` `buried+contact`, `ArrayBlockSolver` `buried+contact`, `SinusoidalGalerkinSolver` `buried+contact`, `RazorSolver` `buried+contact`
 
   > that COMBINATION is not served, though each half is. momwire's contact model continues the wire's current into the ground as the C2-scaled IMAGE (momwire#151), which is a fiction that works because no observer is ever inside the ground to look at it - and a buried wire is exactly such an observer. What it should see is the contact current SPREADING in the lower medium - a real soil current this deck has NO CONDUCTOR for. momwire#524 phase 2 measured every consistent spelling of the missing cross-medium physics against engine prints for exactly these decks - and those prints have since been withdrawn as a reference (momwire#929). They were captured with the ground card's two fields written in the wrong order (antennaknobs#1025), and this deck class turns out to have no documented spelling at all: the flag that serves buried wires leaves a conductor ENDING on the interface without a basis function there, and the flag that bonds such an end is documented as not usable when wires are buried. So the ~3 ohm (lone) / ~6 ohm (fan) residual was measured against a combination the engine does not document, and neither it nor the point-electrode reading drawn from it is evidence about this deck. The refusal itself is unchanged and rests on momwire's own physics: the contact model has no conductor for the spreading current, so there is nothing honest to serve here in either convention. Serve it by giving the spreading current its conductor: respell the radial - or the whole SCREEN of them - to RISE to the surface and junction-join the monopole at z = 0; that crossing junction is served for one above wire over N below wires (momwire#524 phase 2, fan widening), including the screen's buried-hub spelling (one rise, N radials joined at depth). Or raise the above-ground wire clear of the interface (an elevated feed over a buried counterpoise is served), or solve the buried structure on its own
 
-- `BSplineSolver` `buried+crossing`, `HMatrixSolver` `buried+crossing`, `ArrayBlockSolver` `buried+crossing`, `RazorSolver` `buried+crossing`
+- `BSplineSolver` `buried+crossing`, `HMatrixSolver` `buried+crossing`, `ArrayBlockSolver` `buried+crossing`, `SinusoidalGalerkinSolver` `buried+crossing`, `RazorSolver` `buried+crossing`
 
   > momwire serves wires wholly at or above the interface, wires strictly below it, and current CROSSING it only through a crossing junction (momwire#524 phase 2): split the wire AT the interface into a below wire whose end stands in the plane and an above wire starting there, and declare the junction between them - that deck is served, with continuity of current and the interface slope condition emerging from the fill itself. A single polyline with points on both sides is not, because which point the wire pierces the plane at would be momwire's guess where it must be the model's statement. Alternatively leave the buried part DETACHED (a buried radial screen under a base-fed vertical is served that way, momwire#553), or raise the whole wire clear of the interface
 
@@ -140,11 +140,11 @@ renders in host dialogs.
 
   > extended_kernel=True + a wire below the ground plane is not served: the extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping scored across the whole geometry, and momwire#553 measured neither what that grouping means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor what the mirror labels mean when the image of a buried source lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
 
-- `BSplineSolver` `buried+pec`, `HMatrixSolver` `buried+pec`, `ArrayBlockSolver` `buried+pec`, `RazorSolver` `buried+pec`
+- `BSplineSolver` `buried+pec`, `HMatrixSolver` `buried+pec`, `ArrayBlockSolver` `buried+pec`, `SinusoidalGalerkinSolver` `buried+pec`, `RazorSolver` `buried+pec`
 
   > over a PERFECTLY CONDUCTING ground, which has no lower medium to put it in: the field inside a perfect conductor is identically zero, so a wire there is not buried, it is shorted out. A buried wire is served only under ground_model='sommerfeld' with a ground_eps, where the half-space below the interface is a real medium with a wavenumber k_m = k0*sqrt(eps_tilde) of its own (momwire#553). Raise the wire to or above the plane, or give the solve a Sommerfeld ground
 
-- `BSplineSolver` `buried+refl-coef`, `HMatrixSolver` `buried+refl-coef`, `ArrayBlockSolver` `buried+refl-coef`, `RazorSolver` `buried+refl-coef`
+- `BSplineSolver` `buried+refl-coef`, `HMatrixSolver` `buried+refl-coef`, `ArrayBlockSolver` `buried+refl-coef`, `SinusoidalGalerkinSolver` `buried+refl-coef`, `RazorSolver` `buried+refl-coef`
 
   > under ground_model='refl-coef', which has no lower medium to put it in: the reflection-coefficient ground is a plane-wave boundary condition applied on the UPPER half-space alone - it multiplies an image by a Fresnel coefficient and never solves the field inside the ground at all, so there is nothing there for a wire to be buried in. A buried wire is served only under ground_model='sommerfeld' with a ground_eps, where the half-space below the interface is a real medium with a wavenumber k_m = k0*sqrt(eps_tilde) of its own (momwire#553). Raise the wire to or above the plane, or ask for the Sommerfeld ground
 
@@ -270,7 +270,7 @@ renders in host dialogs.
 
 - `SinusoidalGalerkinSolver` `buried`
 
-  > SinusoidalGalerkinSolver has no buried fill. The momwire#553 buried serve - a direct, an image and a Sommerfeld-remainder block evaluated in the lower medium at k_m = k0*sqrt(eps_tilde) - is written for BSplineSolver's testing side only, and this family has no in-medium kernel at all: every fill here takes the free-space wavenumber and reaches the ground through an image or a reflection weight above the interface. A wire below the plane is a LEGAL deck - solve it with BSplineSolver over ground_model='sommerfeld' - or raise the wire clear of the plane
+  > a deck with wires BOTH above and below the ground plane is not served by SinusoidalGalerkinSolver yet (momwire#980 D1 serves fully-buried decks): the mixed deck needs the above/below and cross-medium pair classes, which are D2. Solve the buried wires alone, or use BSplineSolver, which serves the mixed deck today
 
 - `SinusoidalGalerkinSolver` `extended_kernel+stepped_radius_junction`
 
