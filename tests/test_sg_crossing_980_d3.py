@@ -582,3 +582,55 @@ def test_connected_is_not_detached():
     assert connected.real == pytest.approx(58.04, rel=0.05)
     assert detached.real == pytest.approx(10.46, rel=0.05)
     assert connected.real / detached.real > 3.0
+
+
+# ----------------------------------------------------------------------
+# The two pieces D3 was supposed to bring into use
+# ----------------------------------------------------------------------
+
+
+def test_d3_exercises_the_crossing_trunk_and_the_complex_k_twin():
+    """A D3 solve must actually route through both things #980 built for it:
+    `_crossing_fill`'s designed DIRECT evaluation of the cross pair (step C's
+    trunk) and the complex-k C++ far fill (step E's twin).
+
+    Counted by CALL, not inferred from a flag. The #977 lesson is that a flag
+    saying a path is available says nothing about whether it ran — two rounds
+    of instrumentation there recorded zero calls because the deck never took
+    the path at all.
+    """
+    import momwire.sinusoidal_galerkin as sgm
+
+    calls = {"trunk": 0, "twin": 0}
+    real_trunk = _crossing_fill.cross_complete_block_split
+    real_acc = sgm._acc
+
+    class _CountingAcc:
+        def __getattr__(self, name):
+            attr = getattr(real_acc, name)
+            if name != "sinusoidal_galerkin_far_fill_cplx":
+                return attr
+
+            def counted(*a, **kw):
+                calls["twin"] += 1
+                return attr(*a, **kw)
+
+            return counted
+
+    def counting_trunk(*a, **kw):
+        calls["trunk"] += 1
+        return real_trunk(*a, **kw)
+
+    assert sgm._HAVE_GALERKIN_FAR_FILL_CPLX, "the complex-k twin is not built"
+    _crossing_fill.cross_complete_block_split = counting_trunk
+    sgm._acc = _CountingAcc()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            # Soil A, so k_m is complex and the below class needs the twin.
+            crossing_deck(SOIL_A).compute_impedance()
+    finally:
+        _crossing_fill.cross_complete_block_split = real_trunk
+        sgm._acc = real_acc
+    assert calls["trunk"] > 0, calls
+    assert calls["twin"] > 0, calls
