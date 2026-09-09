@@ -3306,7 +3306,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             out[key] = a
         return out
 
-    def _mixed_serve_plan(self, geom, below, medium, ctx):
+    def _mixed_serve_plan(self, geom, below, medium, ctx, crossing=False):
         """`serve_plan` with a non-empty `a_idx` — every extent and every
         refusal for the three classes, raised before any grid is filled, on
         the quadrature NODES the fill will query."""
@@ -3351,7 +3351,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             obs_b,
             medium.k_p,
             medium.k_m,
-            crossing=False,
+            crossing=crossing,
             pair_extents=_bspline._pair_extents_below,
         )
 
@@ -3453,7 +3453,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         finally:
             self.eta = saved
 
-    def _assemble_mixed_contribs(self, geom, ctx, below, medium, plan):
+    def _assemble_mixed_contribs(
+        self, geom, ctx, below, medium, plan, crossing=False
+    ):
         """The three pair classes of a mixed deck, into one (nnz, N) triple.
 
         Quadrants, and the masks are the point. A class fill computes every
@@ -3514,6 +3516,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # The two transmitted directions, subtracted like every field-form
         # block, each into the quadrant whose observers are in the OTHER
         # medium from its sources.
+        if crossing:
+            # A crossing deck's cross pair is `_crossing_fill`'s, added to
+            # the assembled G afterwards. No transmitted grid is built for
+            # it — `serve_plan(crossing=True)` does not even size one.
+            return contribs
         for src_keep, rows, obs_below in (
             (np.asarray(below), ~entry_below, False),
             (~np.asarray(below), entry_below, True),
@@ -3545,6 +3552,101 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
             for sb in tensor
         ]
+
+    def _add_crossing_blocks(self, geom, seg_view, medium, below, G):
+        """The crossing junction's blocks, onto the assembled G.
+
+        bspline's spelling exactly — `Z -= t_ab; Z -= t_ab.T; Z +=
+        self_completions` — because the block is returned in the subtracting
+        field-block convention and the opposite block is this one's
+        TRANSPOSE for Galerkin rows (it is not, for path-tested rows, which
+        is why `cross_complete_block_reversed` exists and this trunk does not
+        need it).
+
+        Nothing here imposes a node condition. Continuity through the node
+        and the AGARD slope EMERGE from these terms — the by-parts ends and
+        the corner — which is why the basis was left C0: the two objects
+        must not both carry the interface.
+        """
+        ctx_x = self._crossing_context(geom, seg_view, medium)
+        a_idx = np.nonzero(~np.asarray(below))[0]
+        b_idx = np.nonzero(np.asarray(below))[0]
+        ax_a = _crossing_fill.axis_data(ctx_x, a_idx)
+        ax_b = _crossing_fill.axis_data(ctx_x, b_idx)
+        t_ab = _crossing_fill.cross_complete_block_split(
+            ctx_x, a_idx, b_idx, ax_a, ax_b
+        )
+        n = G.shape[0]
+        if t_ab.shape[0] != n:
+            # The port columns `_junction_port_view` appends are not part of
+            # the crossing fill's basis axis; a crossing deck with junction
+            # ports is out of scope rather than silently mis-scattered.
+            raise NotImplementedError(
+                "junction ports on a crossing deck are not served "
+                f"(crossing block is {t_ab.shape[0]} x {t_ab.shape[1]}, "
+                f"G is {n} x {n})"
+            )
+        G = G - t_ab - t_ab.T
+        G = G + _crossing_fill.self_completions(ctx_x, ax_b, ax_a)
+        return G
+
+    def _is_crossing(self, geom):
+        """Does this deck have a junction that CROSSES the interface?
+
+        Asked BEFORE `_is_mixed`, because a crossing deck is mixed too and
+        the two want opposite things from the cross pair: D2 builds a
+        transmitted grid, and a crossing deck must never have one. Measured
+        rather than argued — a crossing deck sent down D2's route is refused
+        by the theta-floor cost law ("observer elevation of 0.07594 deg,
+        below the 0.1445 deg this transmitted grid can pay for"), because
+        its wires touch the plane. `serve_plan(crossing=True)` skips that
+        section for the same reason: the cross pair is `_crossing_fill`'s
+        designed DIRECT evaluation and no grid is ever built for it.
+        """
+        return bool(self._crossing_junction_indices())
+
+    def _seg_offsets(self, geom):
+        """bspline's `seg_offsets` from this trunk's `wire_first`/`wire_last`.
+
+        Derived and asserted contiguous rather than kept as a second
+        segment-labelling rule — the same contract `_below_segments` holds.
+        """
+        first = np.asarray(geom["wire_first"], dtype=np.int64)
+        last = np.asarray(geom["wire_last"], dtype=np.int64)
+        offsets = np.append(first, int(geom["n_segs"]))
+        if not np.array_equal(last + 1, offsets[1:]):
+            raise AssertionError("wire segment spans are not contiguous")
+        return offsets
+
+    def _crossing_context(self, geom, seg_view, medium):
+        """What the crossing fill reads off this solver, as data.
+
+        The basis arrives as a `SinusoidalBasisSampler` rather than as
+        polynomials — the fill never sees the solver, and since momwire#980
+        step B any `BasisSampler` serves. The sampler is built at the
+        ABOVE medium's k because `axis_data` samples both axes through one
+        basis object; each wing's own coefficients already carry its medium,
+        because `seg_view` is D2's per-segment stitch and no basis spans the
+        interface once the node is C0.
+        """
+        return _crossing_fill.CrossingContext(
+            basis=SinusoidalBasisSampler(
+                seg_view, medium.k_p, geom["seg_h"], int(geom["n_segs"])
+            ),
+            geom=_crossing_fill.AxisGeometry(
+                np.asarray(geom["seg_l"]),
+                np.asarray(geom["seg_r"]),
+                np.asarray(geom["seg_h"]),
+                np.asarray(geom["seg_tangents"]),
+                self._seg_offsets(geom),
+            ),
+            medium=medium,
+            ground_z=float(self.ground_z),
+            a_wire=float(self._radius_per_wire[0]),
+            omega=self.omega,
+            mu=self.mu,
+            eps=self.eps,
+        )
 
     def _crossing_junction_indices(self):
         """Junctions that CROSS the interface (momwire#980 D3), by index.
@@ -3869,6 +3971,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if self._is_mixed(geom):
             below = self._below_segments(geom)
             medium = self._fill_medium(geom)
+            crossing = self._is_crossing(geom)
             # The scope refusals, which a single-medium deck raises inside
             # `_operating_medium` — the mixed route does not enter it (two k
             # are live), so they are raised here rather than skipped.
@@ -3889,10 +3992,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
             # After `ctx`: the plan's extents must cover the TEST observers
             # too, not only the field nodes (see `_mixed_serve_plan`).
-            plan = self._mixed_serve_plan(geom, below, medium, ctx)
-            contribs = self._assemble_mixed_contribs(geom, ctx, below, medium, plan)
+            plan = self._mixed_serve_plan(geom, below, medium, ctx, crossing)
+            contribs = self._assemble_mixed_contribs(
+                geom, ctx, below, medium, plan, crossing
+            )
             G = self._scatter_coef_product(ctx, contribs)
             del contribs
+            if crossing:
+                # The cross pair, as the designed DIRECT evaluation rather
+                # than a transmitted grid: the complete mixed-potential
+                # spelling with all by-parts ends and the corner, which is
+                # what supplies continuity and the AGARD slope at the C0
+                # node the basis leaves free.
+                G = self._add_crossing_blocks(geom, seg_view, medium, below, G)
             return G, seg_view
 
         seg_view = self._basis_coefs(geom, k)
