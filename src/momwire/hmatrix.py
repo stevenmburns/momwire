@@ -1127,14 +1127,24 @@ class HMatrixSolver(BSplineSolver):
     #: Take an ACA ROW as a transposed column (momwire#981). `Q` is symmetric
     #: to 2.2e-16, and the fused kernel batches over the observer axis, so the
     #: n x 1 orientation runs at 3.8x the bulk rate against a 1 x n row's 8.4x.
-    #: NOT bit-identical — it is a different float path through a symmetric
-    #: matrix — so it is a flag rather than an unconditional rewrite, and the
-    #: hoist below stands on its own without it. Measured: Z agrees with the
-    #: native-row path to 4e-15 relative on three grounded decks, with the ACA
-    #: rank and the #973 sampled residual unchanged, against an assembled
-    #: tolerance nine orders looser. DEFAULT OFF because bit-identity is the
-    #: gate this branch was asked to meet and this cannot meet it; flipping it
-    #: is a decision with a number attached, not a tidy-up.
+    #: NOT bit-identical, and deliberately not gated as though it should be:
+    #: it is a different float path through a symmetric matrix, which is the
+    #: same shape as the FMA-driven non-identity accepted in momwire#1013 at
+    #: 4.7e-17. Measured here: |dZ|/|Z| = 4e-15 against the native-row path on
+    #: `wire.rhombic` and `broadband.lpda` (the momwire#977 ladder's own
+    #: decks), with the ACA rank and the momwire#973 sampled residual
+    #: unchanged. But the ANSWER moves further than that on an ill-conditioned
+    #: deck, and the two are not the same number: on the momwire#977 ladder's
+    #: own decks at nseg 21, |dZ|/|Z| before-vs-after is **1.9e-15 on
+    #: `broadband.lpda` and 3.3e-12 on `wire.rhombic`** — with rank 34/34 and
+    #: 58/58 and the momwire#973 sampled residual identical to six digits in
+    #: both, so the factorization path does NOT change and the spread is the
+    #: solve amplifying a 2e-16 input perturbation by the deck's conditioning.
+    #:
+    #: DEFAULT OFF for that reason: 3.3e-12 is six orders below the ~1e-6
+    #: assembled tolerance and below anything momwire#977 measures against
+    #: dense, but it is 334x the 1e-14 house gate this knob was asked to meet,
+    #: and a knob whose stated gate fails should not ship on.
     somm_row_as_column = False
 
     def _somm_side(self, ctx, sn, I):
