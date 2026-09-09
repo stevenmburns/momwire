@@ -21,6 +21,8 @@ further ranks before a pivot escapes. That is why the fix is a sampled residual
 checked from outside the loop, not a tighter tolerance.
 """
 
+import pathlib
+
 import numpy as np
 import pytest
 
@@ -184,6 +186,41 @@ FALLBACK_VERDICTS = {
 }
 
 
+def _catalog_cell(design, rung="default"):
+    """One banked BSplineSolver kwargs dict, straight from the fixture.
+
+    momwire#988: these decks gate momwire's OWN fallback, so they must not
+    need antennaknobs to run. The fixture carries its provenance (the AK
+    catalog name and the AK commit it was captured from) and
+    `test_g988_the_fixtures_match_the_live_catalog` is the optional drift
+    check that may skip.
+    """
+    import json
+
+    blob = json.loads(
+        (
+            pathlib.Path(__file__).parent / "fixtures" / "catalog_geometries.json"
+        ).read_text()
+    )
+    raw = blob["cells"][f"{design}|{rung}"]
+
+    def revive(v):
+        if isinstance(v, dict) and "__c__" in v:
+            return complex(*v["__c__"])
+        if isinstance(v, list):
+            return [revive(x) for x in v]
+        return v
+
+    kw = {k: revive(v) for k, v in raw.items()}
+    kw["wires"] = [np.asarray(w, dtype=float) for w in kw["wires"]]
+    kw["feeds"] = [tuple(f) for f in kw["feeds"]]
+    if kw.get("junctions"):
+        kw["junctions"] = [[tuple(m) for m in j] for j in kw["junctions"]]
+    if kw.get("ground_eps") is not None and isinstance(kw["ground_eps"], list):
+        kw["ground_eps"] = tuple(kw["ground_eps"])
+    return kw
+
+
 @pytest.mark.slow
 @pytest.mark.parametrize(
     ("design", "expect_fallback"), sorted(FALLBACK_VERDICTS.items())
@@ -191,15 +228,8 @@ FALLBACK_VERDICTS = {
 def test_g984_the_catalog_verdicts_are_what_the_threshold_promises(
     design, expect_fallback
 ):
-    pytest.importorskip("antennaknobs", reason="the decks live in antennaknobs")
-    import importlib
-
+    """No importorskip: the geometry is banked (#988)."""
     import momwire.hmatrix as HM
-    from antennaknobs.engines.momwire import MomwireEngine
-
-    builder_cls = importlib.import_module(f"antennaknobs.designs.{design}").Builder
-    b = builder_cls()
-    b.nominal_nsegs = b.nominal_nsegs * 2
 
     seen = []
     original = HM._sampled_residual
@@ -211,12 +241,7 @@ def test_g984_the_catalog_verdicts_are_what_the_threshold_promises(
 
     HM._sampled_residual = spy
     try:
-        MomwireEngine(
-            b,
-            solver=HMatrixSolver,
-            solver_kwargs={"degree": 2},
-            ground=("finite", 13.0, 0.005),
-        ).impedance()
+        HMatrixSolver(**_catalog_cell(design)).compute_impedance()
     finally:
         HM._sampled_residual = original
 
@@ -229,3 +254,46 @@ def test_g984_the_catalog_verdicts_are_what_the_threshold_promises(
         f"{expect_fallback}. If this deck is still healthy, re-measure its "
         "probe and move the threshold; do not flip the expectation."
     )
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("design", sorted(FALLBACK_VERDICTS))
+def test_g988_the_fixtures_match_the_live_catalog(design):
+    """The optional drift check -- THIS one may skip, because it compares the
+    bank against antennaknobs rather than protecting momwire."""
+    pytest.importorskip("antennaknobs", reason="drift check only (#988)")
+    import importlib
+
+    from antennaknobs.engines.momwire import MomwireEngine
+    from momwire import BSplineSolver
+
+    class Grab(Exception):
+        pass
+
+    captured = {}
+    original = BSplineSolver.__init__
+
+    def spy(self, *a, **kw):
+        captured.update(kw)
+        raise Grab
+
+    b = importlib.import_module(f"antennaknobs.designs.{design}").Builder()
+    b.nominal_nsegs = int(b.nominal_nsegs) * 2
+    BSplineSolver.__init__ = spy
+    try:
+        MomwireEngine(
+            b,
+            solver=BSplineSolver,
+            solver_kwargs={"degree": 2},
+            ground=("finite", 13.0, 0.005),
+        ).impedance()
+    except Grab:
+        pass
+    finally:
+        BSplineSolver.__init__ = original
+
+    banked = _catalog_cell(design)
+    assert len(captured["wires"]) == len(banked["wires"]), design
+    for live, fixed in zip(captured["wires"], banked["wires"], strict=True):
+        assert np.allclose(np.asarray(live, dtype=float), fixed), design
+    assert captured["n_per_edge_per_wire"] == banked["n_per_edge_per_wire"]
