@@ -21,15 +21,53 @@ aged. Anything that gates momwire's own behaviour must run without
 antennaknobs installed.
 """
 
+import ast
 import pathlib
-import re
 
 TESTS = pathlib.Path(__file__).parent
-SELF = pathlib.Path(__file__).name
+
+
 # Matches the bare package AND submodule paths: `antennaknobs.nec_import`
 # guards `test_deck_nec2_corpus.py` and a pattern anchored on a closing quote
 # right after the package name misses it entirely.
-GUARD = re.compile(r'importorskip\(\s*["\']antennaknobs[.\'"]')
+def _guards_on_antennaknobs(path: pathlib.Path) -> bool:
+    """Does this file CALL `importorskip` on antennaknobs?
+
+    Parsed, not grepped, and that is a correction rather than a refinement.
+    The regex this replaced matched the pattern wherever it appeared --
+    including in prose ABOUT the pattern. It went red on
+    `test_arrayblock_no_repeats_972.py` and `test_fragmentation_fallback_972.py`
+    when antennaknobs#1299 removed their guarded tests and left a comment
+    explaining where the tests went: the comment quoted the guard, so the
+    tripwire read the explanation of a fix as the defect.
+
+    That is the fifth time this repo has hit the shape -- the #936 AST gate,
+    this module's own `SELF` exclusion, and two tripwires written for
+    momwire#999 all matched their own writing about the thing they check. A
+    source tripwire that greps cannot tell code from a description of code;
+    one that parses does not have to be told.
+
+    The `SELF` exclusion is gone with it: this module quotes the pattern
+    constantly and never calls it, so parsing exempts it for the right reason
+    instead of by name.
+    """
+    try:
+        tree = ast.parse(path.read_text(errors="replace"))
+    except SyntaxError:  # pragma: no cover - a test file that will not parse
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", "")
+        if name != "importorskip" or not node.args:
+            continue
+        arg = node.args[0]
+        if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            if arg.value == "antennaknobs" or arg.value.startswith("antennaknobs."):
+                return True
+    return False
+
 
 # Allowlist: file -> why it may still skip. Every entry is a promise that the
 # behaviour it covers is gated somewhere that CI can see.
@@ -38,22 +76,6 @@ ALLOWED = {
     # `test_g984_the_catalog_verdicts_are_what_the_threshold_promises`, which
     # reads tests/fixtures/catalog_geometries.json and needs nothing installed.
     "test_somm_aca_stagnation_973.py": "drift check only; the gate is fixture-driven",
-    # These four MOVE to antennaknobs' tests/ (antennaknobs#1299), where both
-    # packages are installed and CI runs against the recorded pointer. Until
-    # that lands they stay here and stay guarded; the entry is a pointer to the
-    # decision, not a promise to bank them.
-    #
-    # WHOLE-CATALOG CENSUSES. These walk `antennaknobs.designs` with pkgutil
-    # and assert a property over EVERY design ("exactly one deck trips the
-    # fragmentation predicate", "repeats are not the common case"). The
-    # catalog IS the subject, so there is no fixture that could stand in --
-    # banking one deck, or thirteen, would change what they measure. They are
-    # NOT the same category as a test that merely needed a geometry, and the
-    # #988 fix does not apply to them.
-    "test_arrayblock_no_repeats_972.py": "whole-catalog census; moves to AK, antennaknobs#1299",
-    "test_fragmentation_fallback_972.py": "whole-catalog census; moves to AK, antennaknobs#1299",
-    "test_deck_nec2_corpus.py": "the AK importer IS the reference; moves to AK, antennaknobs#1299",
-    "test_deck_nec2_xnec2c_corpus.py": "the AK importer IS the reference; moves to AK, antennaknobs#1299",
 }
 
 
@@ -61,11 +83,7 @@ def test_g988_no_new_file_hides_behind_importorskip_antennaknobs():
     offenders = sorted(
         p.name
         for p in TESTS.glob("test_*.py")
-        # `p.name != SELF`: this file quotes the pattern it looks for, so it
-        # matches itself -- the same self-match an AST gate hit in #936.
-        if p.name != SELF
-        and GUARD.search(p.read_text(errors="replace"))
-        and p.name not in ALLOWED
+        if _guards_on_antennaknobs(p) and p.name not in ALLOWED
     )
     assert not offenders, (
         "these files guard tests behind importorskip('antennaknobs'), which "
@@ -86,7 +104,6 @@ def test_g988_the_allowlist_does_not_name_files_that_are_gone():
     fixed = sorted(
         n
         for n in ALLOWED
-        if (TESTS / n).exists()
-        and not GUARD.search((TESTS / n).read_text(errors="replace"))
+        if (TESTS / n).exists() and not _guards_on_antennaknobs(TESTS / n)
     )
     assert not fixed, f"these no longer use the guard and should leave ALLOWED: {fixed}"

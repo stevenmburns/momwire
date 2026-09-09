@@ -218,51 +218,16 @@ def test_arrayblock_says_both_things_and_only_one_changes_the_route(monkeypatch)
 # ---------------------------------------------------------------------
 
 
-@pytest.mark.slow
-def test_no_catalog_deck_but_the_timing_out_one_trips_the_threshold():
-    """The strong version of "a threshold that catches a winner fails".
-
-    Rather than a list of ladder rows, this asserts the predicate over EVERY
-    catalog deck that builds a partition: exactly one trips it, and it is the
-    one that timed out. Structure only — no solves.
-    """
-    pytest.importorskip("antennaknobs")
-    import importlib
-    import pkgutil
-
-    import antennaknobs.designs as pkg
-    from antennaknobs.engines.momwire import MomwireEngine
-
-    tripped, clear = [], 0
-    for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + "."):
-        if m.ispkg:
-            continue
-        try:
-            builder = importlib.import_module(m.name).Builder
-        except Exception:  # noqa: BLE001 — an unimportable design is not this test's business
-            continue
-        name = m.name.split("antennaknobs.designs.")[-1]
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                b = builder()
-                eng = MomwireEngine(
-                    b,
-                    solver=HMatrixSolver,
-                    solver_kwargs={"degree": 2},
-                    ground=("finite", 13.0, 0.005),
-                )
-                sim = eng._make_solver(wavelength=eng._wavelength_for(b.freq))
-                frag = sim._fragmentation()
-        except Exception:  # noqa: BLE001 — buried decks refuse before the question arises
-            continue
-        if frag is None:
-            clear += 1
-        else:
-            tripped.append((name, frag))
-
-    assert clear >= 90, clear
-    assert [t[0] for t in tripped] == ["verticals.elt_whip"], tripped
-    _far, _n, ratio = tripped[0][1]
-    # The margin the threshold rests on, pinned: the runner-up is 0.68.
-    assert ratio > 1.4, ratio
+# The whole-catalog census that used to close this module --
+# `test_no_catalog_deck_but_the_timing_out_one_trips_the_threshold` -- moved to
+# antennaknobs (antennaknobs#1299, PR #1318). Its subject was THAT catalog: a
+# pkgutil walk of `antennaknobs.designs` asserting a property over every
+# design, with this module's predicate as the instrument. It could not be
+# fixture-driven the way momwire#988 fixed this repo's own behavioural tests,
+# because the catalog IS the measurement.
+#
+# It ran nowhere from here. `importorskip("antennaknobs")` meant no CI lane
+# executed it (momwire#988), AND `@pytest.mark.slow` plus this repo's default
+# `addopts` deselect meant a local run did not even report it as skipped --
+# `--collect-only` showed it as deselected, which `-rs` does not print. In
+# antennaknobs both packages are installed and it runs on every PR.

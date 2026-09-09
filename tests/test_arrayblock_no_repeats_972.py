@@ -34,7 +34,6 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
-import pytest
 
 from momwire import ArrayBlockSolver, HMatrixSolver
 from momwire.array_block import ArrayBlockNoRepeats
@@ -147,52 +146,16 @@ def test_the_advisory_is_discoverable_the_way_antennaknobs_finds_them():
     assert issubclass(ArrayBlockNoRepeats, UserWarning)
 
 
-@pytest.mark.slow
-def test_the_catalog_split_is_what_the_advisory_was_argued_from():
-    """The census the refuse-vs-advise decision rested on, kept honest.
-
-    If a future change made repeats the common case, refusing would become
-    reasonable and this number is the thing that would have to move first.
-    Geometry only — no solves.
-    """
-    pytest.importorskip("antennaknobs")
-    import importlib
-    import pkgutil
-
-    import antennaknobs.designs as pkg
-    from antennaknobs.engines.momwire import MomwireEngine
-
-    from momwire.array_block import element_groups
-
-    repeats, no_repeats, errors = [], [], []
-    for m in pkgutil.walk_packages(pkg.__path__, pkg.__name__ + "."):
-        if m.ispkg:
-            continue
-        try:
-            builder = importlib.import_module(m.name).Builder
-        except Exception:  # noqa: BLE001 — a design that will not import is not this test's business
-            continue
-        name = m.name.split("antennaknobs.designs.")[-1]
-        try:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                eng = MomwireEngine(
-                    builder(),
-                    solver=ArrayBlockSolver,
-                    solver_kwargs={"degree": 2},
-                    ground=("finite", 13.0, 0.005),
-                )
-                part = element_groups(
-                    eng._make_solver(wavelength=eng._wavelength_for(builder().freq))
-                )
-        except Exception:  # noqa: BLE001 — buried decks refuse before the question arises
-            errors.append(name)
-            continue
-        (repeats if part.n_shapes < part.n_elem else no_repeats).append(name)
-
-    assert len(repeats) == 27, sorted(repeats)
-    assert len(no_repeats) == 72, len(no_repeats)
-    assert len(errors) == 4, sorted(errors)
-    # The Yagi class is the reason this advises: multi-element, all distinct.
-    for yagi in ("beams.owa_yagi", "beams.moxon", "broadband.lpda"):
-        assert yagi in no_repeats
+# The whole-catalog census that used to close this module --
+# `test_the_catalog_split_is_what_the_advisory_was_argued_from` -- moved to
+# antennaknobs (antennaknobs#1299, PR #1318). Its subject was THAT catalog: a
+# pkgutil walk of `antennaknobs.designs` asserting a property over every
+# design, with this module's predicate as the instrument. It could not be
+# fixture-driven the way momwire#988 fixed this repo's own behavioural tests,
+# because the catalog IS the measurement.
+#
+# It ran nowhere from here. `importorskip("antennaknobs")` meant no CI lane
+# executed it (momwire#988), AND `@pytest.mark.slow` plus this repo's default
+# `addopts` deselect meant a local run did not even report it as skipped --
+# `--collect-only` showed it as deselected, which `-rs` does not print. In
+# antennaknobs both packages are installed and it runs on every PR.
