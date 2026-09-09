@@ -3410,12 +3410,154 @@ seg_seg_full_moments_bspline_swept_ek(
 // closed forms run in ~0.1 ms / call. Big win on multi-edge polylines like
 // the hentenna where the static moments dominate after the all-pairs J kernel.
 //
-// max_d ∈ {0, 1, 2} currently — extends automatically when the header file
-// is regenerated for larger MAX_D in scripts/derive_bspline_static_moments.py
-// (and the case-list in J_static_dispatch below is extended).
+// The dispatch below is a [p][q] TABLE, not a flattened switch, and that is
+// load-bearing rather than stylistic (momwire#999).
+//
+// It was `switch (p * 3 + q)` with nine cases. That is a correct bijection for
+// p, q ∈ {0,1,2} and it COLLIDES at degree 3: (0,3) and (1,0) both flatten to
+// 3, (1,3) and (2,0) both to 6. So extending the case list alone -- which the
+// comment that stood here used to recommend, saying the dispatch "extends
+// automatically" when the header is regenerated -- compiles, runs, and returns
+// the wrong moment. Measured at a near pair: J(0,3) is 1.302e-06 and the
+// collision hands back J(1,0) = 2.191e-03, wrong by a factor of 1683. Half the
+// degree-3 pairs collided and half fell through to the throw, which is the
+// worst available mix, because a smoke test asserting "degree 3 no longer
+// raises" goes green on the wrong numbers.
+//
+// That comment was also false on its own terms: the header WAS regenerated for
+// MAX_D = 3 by momwire#883, a release before #999, and nothing extended
+// automatically. Two indices cannot collide, and degree 4 is a row.
+// The degree the generated families cover. Mirrors
+// `_bspline_static_moments.MAX_D`, and `static_assert`ed against the far
+// series' copy so the two C++ constants cannot drift from each other; the
+// python side is pinned to `BSPLINE_FAR_MAX_P` by a test.
+static constexpr int BSPLINE_MOMENT_MAX_D = 3;
+static_assert(BSPLINE_MOMENT_MAX_D == BSPLINE_FAR_MAX_P,
+              "the near and far spellings must cover the same degrees");
+
+// Out of range is a throw, not a fall-through: an index with no bound check is
+// momwire#999 step 1 one dimension up. It may throw where it stands.
+// `_accel_common.h` is emphatic that an exception must never escape an OpenMP
+// parallel region, and this file has exactly one (the `#pragma omp parallel`
+// at the far end, in a function that does not reach here) -- both dispatches
+// run in the serial Toeplitz loops below, inside a released GIL, which unwinds
+// correctly.
+[[noreturn]] static void bspline_unreachable_pq(int p, int q, const char *who) {
+    throw std::runtime_error(
+        std::string(who) + ": (p, q) = (" + std::to_string(p) + ", " +
+        std::to_string(q) + ") not in [0, " +
+        std::to_string(BSPLINE_MOMENT_MAX_D) + "]^2");
+}
+
+// NESTED SWITCHES, not a function-pointer table, and the choice is measured.
+// A `BsplineMomentFn tab[4][4]` is the obvious spelling and reads better, but
+// every call through it is INDIRECT. Measured on this box against a d <= 2
+// baseline taken before the change: the pointer table moved all 27 cells,
+// nested switches move 2. Both are last-ulp effects of gcc's codegen, not of
+// arithmetic -- a wrong closed form differs by a factor of 1683, not 1e-21 --
+// but 25 cells bit-identical beats none, and the direct calls cost nothing:
+// the two spellings timed the same to under 0.4% (51.14 vs 51.16 ms at
+// max_d=1, 128.7 vs 128.9 at max_d=2, N=401).
+//
+// The residual 2 cells are `D_ek` at max_d = 2, and the cause is the NESTING
+// rather than the seven arms it added -- a diagnostic build that kept the
+// nesting and dropped the degree-3 arms moved exactly the same 2 cells. The
+// moved entries sit at 7.6e-07 of their table's maximum, i.e. deep in the
+// four-corner cancellation regime #808 documents, where per-element relative
+// error is the wrong bar; against the house bar (max|diff| <= 1e-14 * max
+// |table|) the worst is 2.0e-21.
+//
+// Either spelling is immune to the collision that motivated #999: p and q
+// index independently, so there is no stride to get wrong at degree 4 either.
+static inline double bspline_moment_J(int p, int q, double alpha, double beta,
+                                     double A, double B, double a) {
+    switch (p) {
+        case 0:
+            switch (q) {
+                case 0: return J_static_pq_0_0(alpha, beta, A, B, a);
+                case 1: return J_static_pq_0_1(alpha, beta, A, B, a);
+                case 2: return J_static_pq_0_2(alpha, beta, A, B, a);
+                case 3: return J_static_pq_0_3(alpha, beta, A, B, a);
+            }
+            break;
+        case 1:
+            switch (q) {
+                case 0: return J_static_pq_1_0(alpha, beta, A, B, a);
+                case 1: return J_static_pq_1_1(alpha, beta, A, B, a);
+                case 2: return J_static_pq_1_2(alpha, beta, A, B, a);
+                case 3: return J_static_pq_1_3(alpha, beta, A, B, a);
+            }
+            break;
+        case 2:
+            switch (q) {
+                case 0: return J_static_pq_2_0(alpha, beta, A, B, a);
+                case 1: return J_static_pq_2_1(alpha, beta, A, B, a);
+                case 2: return J_static_pq_2_2(alpha, beta, A, B, a);
+                case 3: return J_static_pq_2_3(alpha, beta, A, B, a);
+            }
+            break;
+        case 3:
+            switch (q) {
+                case 0: return J_static_pq_3_0(alpha, beta, A, B, a);
+                case 1: return J_static_pq_3_1(alpha, beta, A, B, a);
+                case 2: return J_static_pq_3_2(alpha, beta, A, B, a);
+                case 3: return J_static_pq_3_3(alpha, beta, A, B, a);
+            }
+            break;
+    }
+    bspline_unreachable_pq(p, q, "J_static");
+}
+
+static inline double bspline_moment_D_ek(int p, int q, double alpha, double beta,
+                                        double A, double B, double a) {
+    switch (p) {
+        case 0:
+            switch (q) {
+                case 0: return D_ek_pq_0_0(alpha, beta, A, B, a);
+                case 1: return D_ek_pq_0_1(alpha, beta, A, B, a);
+                case 2: return D_ek_pq_0_2(alpha, beta, A, B, a);
+                case 3: return D_ek_pq_0_3(alpha, beta, A, B, a);
+            }
+            break;
+        case 1:
+            switch (q) {
+                case 0: return D_ek_pq_1_0(alpha, beta, A, B, a);
+                case 1: return D_ek_pq_1_1(alpha, beta, A, B, a);
+                case 2: return D_ek_pq_1_2(alpha, beta, A, B, a);
+                case 3: return D_ek_pq_1_3(alpha, beta, A, B, a);
+            }
+            break;
+        case 2:
+            switch (q) {
+                case 0: return D_ek_pq_2_0(alpha, beta, A, B, a);
+                case 1: return D_ek_pq_2_1(alpha, beta, A, B, a);
+                case 2: return D_ek_pq_2_2(alpha, beta, A, B, a);
+                case 3: return D_ek_pq_2_3(alpha, beta, A, B, a);
+            }
+            break;
+        case 3:
+            switch (q) {
+                case 0: return D_ek_pq_3_0(alpha, beta, A, B, a);
+                case 1: return D_ek_pq_3_1(alpha, beta, A, B, a);
+                case 2: return D_ek_pq_3_2(alpha, beta, A, B, a);
+                case 3: return D_ek_pq_3_3(alpha, beta, A, B, a);
+            }
+            break;
+    }
+    bspline_unreachable_pq(p, q, "D_ek");
+}
+
 static double J_static_dispatch(int p, int q,
                                 double alpha, double beta,
                                 double A, double B, double a) {
+    // The far branch needs its own check: `bspline_J_static_far` is
+    // deliberately total -- its guard lives in the py wrapper, because the leaf
+    // runs inside a released GIL -- so an out-of-range (p, q) reaching it would
+    // be answered rather than refused. The near branch checks itself, in the
+    // nested switch's fall-through. Both regimes share one domain.
+    if (p < 0 || p > BSPLINE_MOMENT_MAX_D || q < 0 || q > BSPLINE_MOMENT_MAX_D) {
+        bspline_unreachable_pq(p, q, "J_static");
+    }
     // The closed forms below are sympy's, and they are the NEAR-field half
     // (momwire#808): the value decays like h^5/D while every term in a
     // four-corner closed form grows like D^5, so at 401 segments the (2, 2)
@@ -3426,20 +3568,7 @@ static double J_static_dispatch(int p, int q,
     if (bspline_far_ratio(alpha, beta, A, B, a) <= BSPLINE_FAR_RATIO) {
         return bspline_J_static_far(p, q, alpha, beta, A, B, a);
     }
-    int pq = p * 3 + q;
-    switch (pq) {
-        case 0: return J_static_pq_0_0(alpha, beta, A, B, a);
-        case 1: return J_static_pq_0_1(alpha, beta, A, B, a);
-        case 2: return J_static_pq_0_2(alpha, beta, A, B, a);
-        case 3: return J_static_pq_1_0(alpha, beta, A, B, a);
-        case 4: return J_static_pq_1_1(alpha, beta, A, B, a);
-        case 5: return J_static_pq_1_2(alpha, beta, A, B, a);
-        case 6: return J_static_pq_2_0(alpha, beta, A, B, a);
-        case 7: return J_static_pq_2_1(alpha, beta, A, B, a);
-        case 8: return J_static_pq_2_2(alpha, beta, A, B, a);
-        default:
-            throw std::runtime_error("J_static: (p, q) out of inline range");
-    }
+    return bspline_moment_J(p, q, alpha, beta, A, B, a);
 }
 
 // The extended thin-wire kernel's static correction, same shape of dispatch
@@ -3460,20 +3589,7 @@ static double J_static_dispatch(int p, int q,
 static double D_ek_dispatch(int p, int q,
                             double alpha, double beta,
                             double A, double B, double a) {
-    int pq = p * 3 + q;
-    switch (pq) {
-        case 0: return D_ek_pq_0_0(alpha, beta, A, B, a);
-        case 1: return D_ek_pq_0_1(alpha, beta, A, B, a);
-        case 2: return D_ek_pq_0_2(alpha, beta, A, B, a);
-        case 3: return D_ek_pq_1_0(alpha, beta, A, B, a);
-        case 4: return D_ek_pq_1_1(alpha, beta, A, B, a);
-        case 5: return D_ek_pq_1_2(alpha, beta, A, B, a);
-        case 6: return D_ek_pq_2_0(alpha, beta, A, B, a);
-        case 7: return D_ek_pq_2_1(alpha, beta, A, B, a);
-        case 8: return D_ek_pq_2_2(alpha, beta, A, B, a);
-        default:
-            throw std::runtime_error("D_ek: (p, q) out of inline range");
-    }
+    return bspline_moment_D_ek(p, q, alpha, beta, A, B, a);
 }
 
 // Shared body of the reduced and extended Toeplitz static kernels. `EK` is a
@@ -4030,6 +4146,27 @@ static double bspline_j_static_far_py(int p, int q, double alpha, double beta,
 }
 
 
+// The two NEAR dispatches, exposed on the same reasoning as
+// `bspline_j_static_far` above (momwire#999). Without these the only path to
+// `J_static_dispatch` / `D_ek_dispatch` is a table entry point, and those stop
+// at max_d = 2 -- so the degree-3 half of the generated families, which has
+// been compiled into this .so since momwire#883, had no caller a test could
+// reach. That is how the `p * 3 + q` collision could have shipped: not a weak
+// gate, but no gate, because nothing could call the code.
+//
+// These take the scalar path and never release the GIL, so the dispatch's own
+// range check is the only one needed.
+static double bspline_j_static_moment_py(int p, int q, double alpha, double beta,
+                                         double A, double B, double a) {
+    return J_static_dispatch(p, q, alpha, beta, A, B, a);
+}
+
+static double bspline_d_ek_moment_py(int p, int q, double alpha, double beta,
+                                     double A, double B, double a) {
+    return D_ek_dispatch(p, q, alpha, beta, A, B, a);
+}
+
+
 void register_bspline(py::module_ &m) {
 
     // Read by momwire._accel so the Python routing guard cannot drift from the
@@ -4041,6 +4178,22 @@ void register_bspline(py::module_ &m) {
     // exported so a test can pin it to `_bspline_static_moments.MAX_D` rather
     // than a comment claiming they match (momwire#999).
     m.attr("BSPLINE_FAR_MAX_P") = py::int_(BSPLINE_FAR_MAX_P);
+    m.attr("BSPLINE_MOMENT_MAX_D") = py::int_(BSPLINE_MOMENT_MAX_D);
+
+    m.def("bspline_j_static_moment", &bspline_j_static_moment_py,
+          "One same-edge static moment, dispatching near/far exactly as the "
+          "Toeplitz builders do -- the C++ twin of "
+          "_bspline_static_far.J_static_stable. Exposed for the cross-lane "
+          "gate, which otherwise cannot reach p or q = 3.",
+          py::arg("p"), py::arg("q"), py::arg("alpha"), py::arg("beta"),
+          py::arg("A"), py::arg("B"), py::arg("a"));
+
+    m.def("bspline_d_ek_moment", &bspline_d_ek_moment_py,
+          "One same-edge EXTENDED-kernel static correction -- the C++ twin of "
+          "_bspline_ek_moments.D_ek_moment. No far branch: D_ek has only the "
+          "closed form, unlike J. Same reason for existing as the twin above.",
+          py::arg("p"), py::arg("q"), py::arg("alpha"), py::arg("beta"),
+          py::arg("A"), py::arg("B"), py::arg("a"));
 
     m.def("bspline_j_static_far", &bspline_j_static_far_py,
           "One same-edge static moment by the centred multipole series -- the "
