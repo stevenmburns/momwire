@@ -409,3 +409,176 @@ def test_per_entry_k_is_absent_and_inert_on_a_single_medium_view():
         samp = SinusoidalBasisSampler(view, s.k, geom["seg_h"], int(geom["n_segs"]))
         assert samp._k_per_entry is False
         assert samp.end_values(0, 0.0).shape == (int(geom["n_segs"]),)
+
+
+# ----------------------------------------------------------------------
+# The screen: what D3 exists to serve
+# ----------------------------------------------------------------------
+
+DEPTH = 0.5
+MAST = np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 10.0)])
+
+
+def _dirs(n):
+    return [(np.cos(2 * np.pi * i / n), np.sin(2 * np.pi * i / n)) for i in range(n)]
+
+
+def direct_fan(n_radials):
+    """N buried radials running straight from their far end to the node."""
+    wires = [
+        np.array([(5.0 * dx, 5.0 * dy, -DEPTH), (0.0, 0.0, 0.0)])
+        for dx, dy in _dirs(n_radials)
+    ]
+    npe = [[12] for _ in wires]
+    mono = len(wires)
+    wires.append(MAST)
+    npe.append([15])
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        junctions=[[(i, "end") for i in range(n_radials)] + [(mono, "start")]],
+        feeds=[(mono, 0.25, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+
+
+def buried_hub(n_radials):
+    """ONE rise to the node, N radials joined to it AT DEPTH — the screen's
+    other spelling, named in `_below_interface.crossing_junctions`' scope."""
+    wires = [np.array([(0.0, 0.0, -DEPTH), (0.0, 0.0, 0.0)])]
+    npe = [[2]]
+    for dx, dy in _dirs(n_radials):
+        wires.append(np.array([(5.0 * dx, 5.0 * dy, -DEPTH), (0.0, 0.0, -DEPTH)]))
+        npe.append([10])
+    mono = len(wires)
+    wires.append(MAST)
+    npe.append([15])
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        junctions=[
+            [(0, "end"), (mono, "start")],
+            [(0, "start")] + [(i + 1, "end") for i in range(n_radials)],
+        ],
+        feeds=[(mono, 0.25, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+
+
+def _both(kw):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        zs = complex(SinusoidalGalerkinSolver(**kw).compute_impedance()[0])
+        zb = complex(BSplineSolver(**kw, degree=1).compute_impedance()[0])
+    return zs, zb
+
+
+@pytest.mark.parametrize("n_radials", [1, 2, 4])
+def test_the_direct_fan_agrees_with_the_arbiter(n_radials):
+    """One above wire over N below wires — `crossing_junctions`' fan widening,
+    and the shape D3 was built for.
+
+    Before D3 this deck did not fail; it answered. `SinusoidalGalerkinSolver`
+    on momwire main returns 13284.8 − 15216.6j at N = 1 and 13258.3 − 15204.6j
+    at N = 4 — an answer that does not move with the size of the screen,
+    because the node carried no basis, the mast was open at its base and the
+    screen was simply absent. bspline reads 150.4 and 57.0.
+    """
+    zs, zb = _both(direct_fan(n_radials))
+    assert abs(zs - zb) / abs(zb) < 1e-2, (n_radials, zs, zb)
+
+
+# 5.2 s at 4 radials, 4.6 s at 12: two Sommerfeld solves apiece, and the
+# hub deck carries N+2 wires.
+@pytest.mark.slow
+@pytest.mark.parametrize("n_radials", [4, 12])
+def test_the_buried_hub_agrees_with_the_arbiter(n_radials):
+    """The screen's hub spelling, up to the 12-radial screen of #983."""
+    zs, zb = _both(buried_hub(n_radials))
+    assert abs(zs - zb) / abs(zb) < 1e-2, (n_radials, zs, zb)
+
+
+def test_coincident_members_are_refused_by_name():
+    """#926's `crossing_deck` writes each radial as far-end -> hub -> RISE, so
+    every radial carries the SAME rise. This family cannot solve that: the
+    thin-wire kernel regularizes a zero-separation pair to the wire radius —
+    what it does for a segment against itself — so coincident members give
+    near-identical rows and the matrix is ill-conditioned.
+
+    It is a property of the family and not of the crossing serve: in FREE
+    SPACE, no ground and no junction, N coincident wires each carrying its own
+    distinct arm give max|alpha| 2.3 / 41 / 184 at N = 1 / 2 / 4 against
+    bspline's 2.0e-3 / 4.0e-3 / 9.0e-3. Over the ground the same deck reaches
+    8.4e32. Refused here because a crossing junction is where that spelling is
+    natural, and refused with the two respellings that work.
+    """
+    wires = [
+        np.array([(5.0 * dx, 5.0 * dy, -DEPTH), (0.0, 0.0, -DEPTH), (0.0, 0.0, 0.0)])
+        for dx, dy in _dirs(4)
+    ]
+    npe = [[10, 2] for _ in wires]
+    mono = len(wires)
+    wires.append(MAST)
+    npe.append([15])
+    kw = dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        junctions=[[(i, "end") for i in range(4)] + [(mono, "start")]],
+        feeds=[(mono, 0.25, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(NotImplementedError) as exc:
+            SinusoidalGalerkinSolver(**kw).compute_impedance()
+        # bspline serves it, which is why the refusal is this family's and not
+        # `_below_interface.crossing_junctions`'.
+        BSplineSolver(**kw, degree=1).compute_impedance()
+    msg = str(exc.value)
+    assert "COINCIDENT" in msg
+    assert "buried-hub spelling" in msg
+
+
+# 44.6 s, and all of it is the DETACHED deck: two wires 1 cm off the plane
+# put the transmitted grid at its finest, which is the same near-plane
+# cost the collapse floor above is made of. The crossing solve is 0.8 s.
+@pytest.mark.slow
+def test_connected_is_not_detached():
+    """The gate the D2 bug would have failed: a crossing junction must be
+    doing something. Read on RESISTANCE — the reactance of this deck is set by
+    the mast and barely moves, which is exactly how an absent screen hides."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        connected = complex(crossing_deck(SOIL_A).compute_impedance()[0])
+        # A contact end above a buried wire is itself refused (#151/#524), so
+        # the legal detached comparison lifts both ends clear of the plane.
+        detached = complex(
+            SinusoidalGalerkinSolver(
+                wires=[
+                    np.array([(0.0, 0.0, 0.01), (0.0, 0.0, 2.0)]),
+                    np.array([(0.0, 0.0, -0.01), (2.0, 0.0, -0.5)]),
+                ],
+                n_per_edge_per_wire=[[15], [15]],
+                feeds=[(0, 1.0, 1 + 0j)],
+                wavelength=WL7,
+                wire_radius=0.001,
+                ground_z=0.0,
+                ground_eps=SOIL_A,
+                ground_model="sommerfeld",
+            ).compute_impedance()[0]
+        )
+    assert connected.real == pytest.approx(58.04, rel=0.05)
+    assert detached.real == pytest.approx(10.46, rel=0.05)
+    assert connected.real / detached.real > 3.0
