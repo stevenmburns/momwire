@@ -211,6 +211,22 @@ jobs:
           # 3.15 is an rc until October; without this setup-python cannot
           # resolve it and the leg fails on a version we deliberately ship.
           allow-prereleases: true
+      - name: brew install libomp (macOS only — README step, not a workaround)
+        # The macOS wheel deliberately does NOT vendor libomp: it links
+        # Homebrew's by absolute path so it shares ONE OpenMP runtime with
+        # pynec-accel, which is what stops the duplicate-runtime abort. So
+        # Homebrew's libomp is a documented RUNTIME requirement of the wheel
+        # (README "Install", and momwire's own import warning names the command).
+        #
+        # The first run of this matrix omitted it and all six macOS legs failed
+        # with `Library not loaded: /opt/homebrew/opt/libomp/lib/libomp.dylib`
+        # while all six Windows legs passed. That was this job missing a
+        # documented step -- but it also demonstrated that the requirement is
+        # load-bearing rather than advice: without libomp the wheel imports
+        # cleanly and runs pure-Python, which is exactly the silent shape the
+        # `accelerated` assertion exists to catch.
+        if: runner.os == 'macOS'
+        run: brew install libomp
       - uses: actions/download-artifact@v8
         with:
           name: wheels-${{ matrix.os }}
