@@ -330,18 +330,20 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
+from . import _sommerfeld_below
 from . import _medium_spec, _wire_loading
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from .bspline import SINGULAR_ENRICHMENT_NEVER
+from . import bspline as _bspline
 from ._port_solution import PortSolution
 from .sinusoidal import (
-    _BURIED_REFUSAL,
     _DENSE_ASSEMBLY_THRESHOLD,
     _EKPairs,
     _EULER_GAMMA,
     _N_PANEL_EK_DELTA_NEAR,
     _N_QP_EK_DELTA,
+    _REMAINDER_CHUNK_ELEMS,
     SinusoidalSolver,
     _SegmentBasis,
     _recip_sin_gap,
@@ -1069,6 +1071,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # momwire#673: under `feed_model="point"` the remainder rides in
         # `feed_xi`, so the gap is placed where it was named on either grid.
         centre_feeds=True,
+        # momwire#980 D1: this family serves a FULLY-buried deck over a
+        # Sommerfeld ground — direct at k_m through the complex-k far fill
+        # (step E), image at k_m weighted A_m, and the below-family
+        # remainder. It does NOT serve a MIXED deck (that is D2), which is
+        # why the `buried` refusal below is replaced rather than dropped:
+        # the capability is now True and the sentence names what is still
+        # out of scope, so a caller cannot read "buried" as "any buried".
+        buried=True,
         refusals={
             "junction_ports+finite_ground": _JUNCTION_PORTS_FINITE_GROUND_REFUSAL,
             "junction_ports+mixed_radii": _JUNCTION_PORTS_MIXED_RADII_REFUSAL,
@@ -1078,13 +1088,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "singular_enrichment": SINGULAR_ENRICHMENT_NEVER.format(
                 cls="SinusoidalGalerkinSolver"
             ),
-            # `buried` and `contact` are the base's, unchanged: this class
-            # inherits `_build_geometry`'s scan whole, so the deck it refuses
-            # and the sentence it refuses with are the base's too — only the
-            # class name in the prose differs (momwire#564). Carried across
-            # by hand for the same REPLACE reason as `contact+refl-coef`
-            # above.
-            "buried": _BURIED_REFUSAL.format(cls="SinusoidalGalerkinSolver"),
+            # `contact` is still the base's. `buried` is NOT: since #980 D1
+            # this class serves the fully-buried deck, so what is left to
+            # refuse is the MIXED one, and the sentence says which — a row
+            # that still carried the base's "no buried fill" prose would be
+            # false the moment the capability flipped.
+            "buried": _MIXED_MEDIUM_REFUSAL,
+            # The three decks a buried serve still refuses, each with the
+            # sentence `_medium_spec` actually raises — the same four rows
+            # bspline declares, for the same reason: since D1 attempts a
+            # buried deck, the refusal a caller meets is that module's, not
+            # `_build_geometry`'s blanket one.
+            "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
+            "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
+            "buried+crossing": _medium_spec.CROSSING_REFUSAL,
+            "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
             ),
@@ -1120,6 +1138,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # for the duration of one solve. `None` outside it, which is what
         # keeps every non-buried path structurally unchanged.
         self._active_medium = None
+        self._active_r1_below = None
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
         self.n_qp_node = int(n_qp_node)
@@ -2969,18 +2988,155 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # this solver's own state, per that module's docstring.
     # ---------------------------------------------------------------
 
+    # ---------------------------------------------------------------
+    # The BELOW-interface Sommerfeld remainder (momwire#980 D1).
+    #
+    # The same prepare/replay pair as `SinusoidalSolver`'s above-interface
+    # one, term for term; only the grid/proj pair and the wavenumbers
+    # differ. Written here rather than beside its twin because the
+    # point-matched family has no buried serve — this trunk is the only
+    # consumer, and a shared body would have to carry a branch neither
+    # caller wants.
+    # ---------------------------------------------------------------
+
+    def _somm_remainder_below_prepare(self, geom, medium, r1_below, cos_shape="cos-1"):
+        """Observer-INDEPENDENT half of the BELOW remainder.
+
+        Differences from the above twin, and only these:
+
+        * the grid is `get_grid_below(eps_t, k_p, ...)` — sized on the
+          FREE-SPACE k, which is what that family keys on, while the field
+          is evaluated at both;
+        * the projector is `remainder_field_proj_below(..., k_p, k_m, grid)`,
+          which takes the pair;
+        * the source shapes are built at **k_m**, because they weight a
+          current living in the lower medium, and they are subtracted from a
+          triple the fill built at k_m too.
+
+        `r1_below` comes from `_below_interface.serve_plan`, so the cap and
+        grazing refusals are raised there — before an 80-second grid fill —
+        with the deck's own numbers.
+
+        No submerged-geometry check here: this evaluator's scope is the
+        mirror image of the above one's, and `remainder_field_proj_below`
+        raises on a point ABOVE the plane itself. Re-deriving that guard
+        would be a second scope rule to keep in step with the first.
+        """
+        gz = self.ground_z
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        h_half = 0.5 * geom["seg_h"]
+        N = geom["n_segs"]
+        k_m = medium.k_m
+
+        q = self.n_qp_sommerfeld
+        gx, gw = self._leggauss_cached(q)
+        zloc = h_half[:, None] * gx[None, :]
+        src = seg_c[:, None, :] + zloc[..., None] * seg_t[:, None, :]
+        w_node = h_half[:, None] * gw[None, :]
+        shp_cos = (
+            np.cos(k_m * zloc)
+            if cos_shape == "cos"
+            else -2.0 * np.sin(0.5 * k_m * zloc) ** 2
+        )
+        shp = np.stack(
+            [np.ones_like(zloc, dtype=np.complex128), np.sin(k_m * zloc), shp_cos]
+        )
+
+        grid = _sommerfeld_below.get_grid_below(
+            medium.eps_t, medium.k_p, r1_below, self.omega, mu=self.mu
+        )
+        n_src = N * q
+        return {
+            "k_p": medium.k_p,
+            "k_m": k_m,
+            "gz": gz,
+            "N": N,
+            "q": q,
+            "n_src": n_src,
+            "grid": grid,
+            "srcf": src.reshape(n_src, 3),
+            "t_src": np.repeat(seg_t, q, axis=0),
+            "shp_w": shp * w_node[None],
+            "seg_c": seg_c,
+            "seg_t": seg_t,
+        }
+
+    def _replay_somm_remainder_below(
+        self, prepared, obs_centers=None, obs_tangents=None, consume=None, row_group=1
+    ):
+        """Observer-DEPENDENT half — the above twin's loop, one call swapped.
+
+        Chunking, streaming and `row_group` alignment are that method's
+        contract verbatim, so a consumer written against one works against
+        the other.
+        """
+        N, q = prepared["N"], prepared["q"]
+        srcf, t_src, shp_w = prepared["srcf"], prepared["t_src"], prepared["shp_w"]
+        obs_c = (
+            prepared["seg_c"]
+            if obs_centers is None
+            else np.asarray(obs_centers, dtype=float)
+        )
+        obs_t = (
+            prepared["seg_t"]
+            if obs_tangents is None
+            else np.asarray(obs_tangents, dtype=float)
+        )
+        M = obs_c.shape[0]
+        S = None if consume is not None else np.empty((3, M, N), dtype=np.complex128)
+        chunk = max(1, _REMAINDER_CHUNK_ELEMS // max(prepared["n_src"], 1))
+        if row_group > 1:
+            if M % row_group:
+                raise ValueError(
+                    f"observer count {M} is not a multiple of row_group {row_group}"
+                )
+            chunk = max(row_group, (chunk // row_group) * row_group)
+        for i0 in range(0, M, chunk):
+            self._checkpoint()
+            i1 = min(i0 + chunk, M)
+            proj = _sommerfeld_below.remainder_field_proj_below(
+                obs_c[i0:i1],
+                obs_t[i0:i1],
+                srcf,
+                t_src,
+                prepared["gz"],
+                prepared["k_p"],
+                prepared["k_m"],
+                prepared["grid"],
+            )
+            fq = proj.reshape(i1 - i0, N, q)
+            block = np.einsum("snq,mnq->smn", shp_w, fq)
+            del proj, fq
+            if consume is None:
+                S[:, i0:i1, :] = block
+            else:
+                consume(i0, i1, block)
+            del block
+        return S
+
     def _serves_buried(self):
         """momwire#980 D1: this family serves a FULLY-buried deck over a
         Sommerfeld ground, and nothing else below the interface.
 
-        Answered from the ground alone, because `_build_geometry` asks it
-        before any medium label exists. The narrower questions come later and
-        by name: `_medium_spec.wire_media` refuses a buried deck over a PEC
-        or reflection-coefficient ground, and `_fill_medium` refuses a MIXED
-        deck (`_MIXED_MEDIUM_REFUSAL`) — so lifting the geometry refusal here
-        widens what is *attempted*, never what is silently answered.
+        True unconditionally, and NOT `self._lower_medium()`, which was the
+        first spelling and gave the wrong sentence: over a PEC or
+        reflection-coefficient ground it left `_build_geometry`'s blanket
+        refusal to fire, and that sentence says this family "has no in-medium
+        kernel at all", which stopped being true at D1. What is actually
+        wrong with those decks is that the ground has no half-space below it,
+        and `_medium_spec.wire_media` says exactly that.
+
+        So the geometry refusal is lifted for this family entirely and every
+        narrower question is answered by name, one level down, where the
+        reason is known: `wire_media` for a buried deck over a ground with no
+        lower medium and for a crossing junction, and `_fill_medium` for a
+        MIXED deck. This widens what is *attempted*, never what is silently
+        answered — `_fill_medium` asks `_below_segments` (and so `wire_media`)
+        BEFORE it can return `None`, so a buried deck cannot reach the fill
+        labelled as air.
         """
-        return self._lower_medium()
+        return True
 
     def _lower_medium(self):
         """Whether this solve's ground has a HALF-SPACE below the interface."""
@@ -3078,14 +3234,45 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # with eta_m*k_m = omega*mu, which is exactly the mixed potential's
         # 1/(j*omega*eps_m) on Phi and j*omega*mu on A. Same pair the step-A
         # seam set, for the same reason.
-        saved = (self.k, self.eta, self._active_medium)
+        # The below family's grid extent, and the cap / grazing refusals
+        # that go with it — raised HERE, before an 80-second grid fill, with
+        # the deck's own numbers, which is `serve_plan`'s whole contract.
+        # Measured on the quadrature NODES the fill will query, not on
+        # segment endpoints: the nodes are strictly interior, which is both
+        # the honest domain and a smaller one.
+        obs_b, _t_b, _u, _w = _below_interface.field_nodes(
+            geom["seg_l"],
+            geom["seg_r"],
+            geom["seg_tangents"],
+            geom["seg_h"],
+            _below_interface.n_qp_buried_field(self.n_qp_sommerfeld),
+        )
+        plan = _below_interface.serve_plan(
+            self.ground_z,
+            geom["seg_l"],
+            geom["seg_r"],
+            np.empty(0, dtype=np.int64),  # fully buried: no above segments
+            np.empty((0, 3)),
+            obs_b,
+            medium.k_p,
+            medium.k_m,
+            crossing=False,
+            pair_extents=_bspline._pair_extents_below,
+        )
+        saved = (self.k, self.eta, self._active_medium, self._active_r1_below)
         try:
             self.k = medium.k_m
             self.eta = np.sqrt(self.mu / medium.eps_m)
             self._active_medium = medium
+            self._active_r1_below = plan["r1_below"]
             yield medium
         finally:
-            self.k, self.eta, self._active_medium = saved
+            (
+                self.k,
+                self.eta,
+                self._active_medium,
+                self._active_r1_below,
+            ) = saved
 
     def _fill_medium(self, geom):
         """The medium this deck's fill runs in, or `None` for free space/air.
@@ -3100,11 +3287,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Returns `_crossing_fill.buried_medium`'s `Medium` record
         `(eps_t, eps_m, k_p, k_m, c2, a_m)`.
         """
-        if self.ground_z is None or not self._lower_medium():
+        if self.ground_z is None:
             return None
+        # Asked FIRST, and unconditionally: `_below_segments` reaches
+        # `_medium_spec.wire_media`, which is where a buried deck over a
+        # ground with no lower medium (PEC, reflection-coefficient) and a
+        # crossing junction are refused BY NAME. Returning `None` early on
+        # `not self._lower_medium()` would skip those and let a buried deck
+        # be filled as though it were in air — a wrong number, not a refusal.
         below = self._below_segments(geom)
         if not below.any():
             return None
+        if not self._lower_medium():  # pragma: no cover - wire_media raised
+            raise AssertionError("buried deck without a lower medium")
         if not below.all():
             # Mixed deck: above/below and cross-medium pair classes, which is
             # D2. Refused by name rather than filled as if it were uniform.
@@ -3187,7 +3382,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # (the `extended_kernel=False` standard). Nothing downstream of this
         # line reads `ground_z`, `ground_eps` or `ground_model` on the fill
         # path; what they branch on is `fg.mode`.
-        fg = _field_ground.field_ground_for(self, geom, k, self.omega)
+        medium = self._active_medium
+        fg = _field_ground.field_ground_for(
+            self,
+            geom,
+            k,
+            self.omega,
+            medium=medium,
+            r1_below=self._active_r1_below,
+        )
 
         contribs = self._tested_contribs(geom, k, ctx, _plain_projection)
         if fg is not None:
