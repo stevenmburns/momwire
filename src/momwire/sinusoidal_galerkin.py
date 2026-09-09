@@ -388,20 +388,6 @@ _MIXED_WIRE_LOADING_REFUSAL = (
     "drop the loading"
 )
 
-# momwire#1000. Asked in `_fill_medium`, before any plan or grid, so the
-# sentence a caller reads names the junction and not the panelling.
-_CROSSING_JUNCTION_REFUSAL = (
-    "a junction IN the ground plane joining an above-ground wire to a buried "
-    "one - a CROSSING junction (the connected radial screen, the bonded-base "
-    "vertical) - is not served by SinusoidalGalerkinSolver yet (momwire#980 "
-    "D3): the mixed serve (momwire#980 D2) fills pairs across the interface "
-    "as transmitted field blocks, which carry no basis at the node, so a "
-    "crossing deck would solve to a wrong number rather than a refusal "
-    "(momwire#1000). Use BSplineSolver, which serves the crossing junction, "
-    "or the detached spelling (the screen's hub below the plane, nothing "
-    "reaching it) for a second opinion on the screen without its node"
-)
-
 _COINCIDENT_CROSSING_MEMBERS_REFUSAL = (
     "crossing junction {j} joins members whose node-adjacent edges are "
     "geometrically COINCIDENT (wires {a} and {b} run the same path within one "
@@ -1181,9 +1167,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
-            # momwire#1000: the one buried class D2 leaves to D3, declared so
-            # a consumer can read it BEFORE the solve (antennaknobs#1286).
-            "buried+crossing_junction": _CROSSING_JUNCTION_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
@@ -4080,40 +4063,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return None
         if not self._lower_medium():  # pragma: no cover - wire_media raised
             raise AssertionError("buried deck without a lower medium")
-        # momwire#1000: a CROSSING junction — one in the plane whose members
-        # lie on both sides of it — is D3. The mixed route's transmitted
-        # block has no basis at the node, so without this the deck SOLVES,
-        # to a plausible wrong number: 13285−15217j on a one-radial screen
-        # bspline reads 150.4+18.9j on, and 13258−15205j with four radials —
-        # the mast is open at its base and the screen is not in the answer.
-        # The catalog's connected screen only refused by the transmitted
-        # grid's cost law, an accident of its node grading that names the
-        # wrong thing.
-        self._refuse_crossing_junction()
         # A MIXED deck is served since D2. `_operating_medium` declines it
         # (two k are live, so there is no one operating point) and
         # `_assemble_Z` takes the three-class route instead.
         return _crossing_fill.buried_medium(
             self.ground_eps, self.omega, self.eps, self.k
         )
-
-    def _refuse_crossing_junction(self):
-        """Raise by name on a junction spanning the interface (momwire#1000).
-
-        The predicate is `_below_interface.crossing_junctions`' own — a
-        declared junction with members in BOTH media — asked on the labels
-        `_wire_media` already holds. Those labels exist at all because the
-        grounded-junction exemption let the risers through as BELOW, which
-        is right for bspline's crossing fill and, until D3 lands one here,
-        exactly the trap. D3 deletes this method and the row that carries
-        its sentence.
-        """
-        if not self.junctions:
-            return
-        media = self._wire_media()
-        for group in self.junctions:
-            if len({media[w] for w, _end in group}) == 2:
-                raise NotImplementedError(_CROSSING_JUNCTION_REFUSAL)
 
     def _assemble_Z(self, geom, k):
         """Galerkin system matrix G (basis i tested against source basis j).

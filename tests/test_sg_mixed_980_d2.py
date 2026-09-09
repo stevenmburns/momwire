@@ -29,7 +29,7 @@ import warnings
 import numpy as np
 import pytest
 
-from momwire import SinusoidalGalerkinSolver
+from momwire import BSplineSolver, SinusoidalGalerkinSolver
 
 SOIL_A = (13.0, 0.005)
 C0 = 299792458.0
@@ -241,7 +241,7 @@ def test_a_deck_past_the_transmitted_domain_refuses_with_its_numbers():
         z_of(mk([ABOVE, far], [[11], [11]]))
 
 
-def _connected_screen(tip=(0.0, 0.0, 10.0), n_mast=15):
+def _connected_screen(tip=(0.0, 0.0, 10.0), n_mast=15, cls=None, **extra):
     """Four buried radials running straight to a node IN the plane, one mast
     above it: the connected screen in the DIRECT spelling (far end to node),
     which shares no geometry between members. COARSE on purpose
@@ -257,7 +257,7 @@ def _connected_screen(tip=(0.0, 0.0, 10.0), n_mast=15):
         for a in (0.0, np.pi / 2, np.pi, 3 * np.pi / 2)
     ]
     wires.append(np.array([(0.0, 0.0, 0.0), tip]))
-    return SinusoidalGalerkinSolver(
+    return (cls or SinusoidalGalerkinSolver)(
         wires=wires,
         n_per_edge_per_wire=[[12]] * 4 + [[n_mast]],
         junctions=[[(i, "end") for i in range(4)] + [(4, "start")]],
@@ -265,35 +265,58 @@ def _connected_screen(tip=(0.0, 0.0, 10.0), n_mast=15):
         wavelength=WL7,
         wire_radius=0.001,
         **GROUND,
+        **extra,
     )
 
 
-def test_a_crossing_junction_refuses_by_name():
-    """momwire#1000: the one buried class D2 leaves to D3 must REFUSE, with
-    the sentence its capability row declares — a consumer reads the row
-    before the solve (antennaknobs#1286), so the two must be one string."""
-    from momwire.sinusoidal_galerkin import _CROSSING_JUNCTION_REFUSAL
+# 1.8 s + 1.0 s: an SG solve and a bspline solve on a five-wire screen.
+@pytest.mark.slow
+def test_the_connected_screen_now_solves_and_lands_where_bspline_does():
+    """momwire#980 D3 serves what #1000 refused, on #1000's own deck — which
+    is why these two gates are a conversion rather than a deletion.
 
-    s = _connected_screen()
-    with pytest.raises(NotImplementedError) as exc:
-        s.compute_impedance()
-    assert str(exc.value) == _CROSSING_JUNCTION_REFUSAL
-    assert (
-        SinusoidalGalerkinSolver.capabilities.refusal("buried", "crossing_junction")
-        == _CROSSING_JUNCTION_REFUSAL
+    Before the by-name refusal this deck SOLVED, to 13258 - 15205j, with the
+    mast open at its base and the screen absent from the answer. It now reads
+    57.044 - 19.386j against bspline's 56.979 - 20.693j at this mesh.
+
+    Read on R, which is what the screen sets and what is converged. Refining
+    mast/radial segments 15/12 -> 31/24 -> 61/48, the gap on |Z| halves
+    (2.16e-02 / 1.10e-02 / 5.52e-03) and dR runs +0.065 / +0.044 / -0.0012 —
+    at the finest rung below bspline's OWN step, i.e. the two families agree
+    to within their own discretisation error. X is still moving on both.
+    """
+    zs = complex(_connected_screen().compute_impedance()[0])
+    zb = complex(_connected_screen(cls=BSplineSolver, degree=1).compute_impedance()[0])
+    assert zs.real == pytest.approx(zb.real, rel=5e-3), (zs, zb)
+
+
+# 2.7 s + 2.9 s: the grazing deck is the expensive one on both families.
+@pytest.mark.slow
+def test_the_grazing_screen_serves_because_a_crossing_deck_builds_no_grid():
+    """The deck #1000 chose because the transmitted grid's cost law refuses
+    it — and which D3 serves, for a structural reason rather than a lucky one.
+
+    `_is_crossing` is asked BEFORE `_is_mixed`, and a crossing deck never
+    builds a transmitted grid: the cross pair is `_crossing_fill`'s designed
+    DIRECT evaluation. The cost law is a property of that grid, so with no
+    grid there is nothing to price and the law cannot fire. The refusal was
+    the accident #1000's comment says it was, and D3 removes the accident
+    along with the grid.
+
+    The bar is 5 % on R and the reason is honest: this deck is NOT converged
+    on either family. Refining 15/12 -> 31/24 -> 61/48, the SG-vs-bspline gap
+    on |Z| is 1.34e-01 / 6.55e-02 / 3.29e-02 and dR is -0.880 / -0.426 /
+    -0.238. R is flat to ~0.7 % across the three; X moves several ohm a rung
+    on BOTH, and at the finest rung the gap between the families (3.29e-02) is
+    smaller than bspline's own last step (4.05e-02). So a user gets a served
+    answer where D2 gave a refusal: quote R, and give the ladder.
+    """
+    deck = dict(tip=(10.0, 0.0, 0.5))
+    zs = complex(_connected_screen(**deck).compute_impedance()[0])
+    zb = complex(
+        _connected_screen(cls=BSplineSolver, degree=1, **deck).compute_impedance()[0]
     )
-
-
-def test_the_crossing_refusal_precedes_the_cost_law():
-    """A sloped mast puts a quadrature node within 0.01 deg of a radial, which
-    is the deck the transmitted grid's cost law refuses. The junction is the
-    reason and must be the sentence; the panelling is not."""
-    from momwire.sinusoidal_galerkin import _CROSSING_JUNCTION_REFUSAL
-
-    s = _connected_screen(tip=(10.0, 0.0, 0.5))
-    with pytest.raises(NotImplementedError) as exc:
-        s.compute_impedance()
-    assert str(exc.value) == _CROSSING_JUNCTION_REFUSAL
+    assert zs.real == pytest.approx(zb.real, rel=5e-2), (zs, zb)
 
 
 def test_a_junction_wholly_below_the_plane_is_not_a_crossing():
