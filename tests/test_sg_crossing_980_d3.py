@@ -199,8 +199,9 @@ def test_the_eps_tilde_one_collapse(eps_one):
     at ~1e-06 once the mesh is refined is what makes the near-plane
     transmitted block, which they share, the suspect rather than either basis.
 
-    The bar is set to catch a formulation change (the free-end spelling this
-    replaced read 4.6e-01), not to pin the floor.
+    The bar is set to catch a formulation change, not to pin the floor: the
+    spelling this replaced read 4.45e-01 with no node dof at all, and
+    4.58e-01 with the node dofs present but the block signs uncorrected.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
