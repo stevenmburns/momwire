@@ -614,8 +614,23 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None, rows=None):
     # Uniform-h fast paths
     h = float(h_seg[0])
     if _HAVE_BSPLINE_STATIC_ACCEL and max_d <= _BSPLINE_ACCEL_MAX_D and ek is None:
-        # C++ inlined sympy-derived closed forms — ~50× faster than numpy
-        # because each call escapes per-op dispatch overhead.
+        # C++ inlined sympy-derived closed forms. Measured against the numpy
+        # twin on a uniform edge at max_d=2, after momwire#1006 hoisted the far
+        # series' delta-independent coefficients out of the offset loop:
+        #
+        #     N=81   0.93 ms vs 65.8 ms   71x
+        #     N=401  4.53 ms vs 117.4 ms  26x
+        #     N=801  13.9 ms vs 214.7 ms  15x
+        #
+        # The ratio FALLS with N because numpy's cost is dominated by a fixed
+        # per-op dispatch charge over very large expressions, which amortises,
+        # while the C++ table build is O(N). It no longer crosses: before
+        # #1006 this branch was a PESSIMISATION above N ~ 400 (0.73x at 801)
+        # and nothing measured which side of that line an edge was on.
+        #
+        # The comment here used to read "~50x faster than numpy" with no N
+        # attached, which was true at small N, false at large N, and gave no
+        # way to tell the difference.
         if rows is None:
             return _acc.seg_seg_static_moments_bspline_uniform(
                 float(h), float(a), int(N), int(max_d)

@@ -3653,6 +3653,25 @@ static double J_static_dispatch(int p, int q,
     return bspline_moment_J(p, q, alpha, beta, A, B, a);
 }
 
+// `J_static_dispatch` with the far series' delta-independent half supplied by
+// the caller (momwire#1006). Same predicate, same two regimes, same values --
+// the only change is that the coefficient vector is computed once per (p, q)
+// instead of once per offset. See `bspline_far_coeffs` for why that is legal
+// on a uniform edge and why it is worth 47x on the branch that serves almost
+// every offset.
+static double J_static_dispatch_coeffs(int p, int q,
+                                       double alpha, double beta,
+                                       double A, double B, double a,
+                                       const double *coef) {
+    if (p < 0 || p > BSPLINE_MOMENT_MAX_D || q < 0 || q > BSPLINE_MOMENT_MAX_D) {
+        bspline_unreachable_pq(p, q, "J_static");
+    }
+    if (bspline_far_ratio(alpha, beta, A, B, a) <= BSPLINE_FAR_RATIO) {
+        return bspline_J_static_far_with_coeffs(alpha, beta, A, B, a, coef);
+    }
+    return bspline_moment_J(p, q, alpha, beta, A, B, a);
+}
+
 // The extended thin-wire kernel's static correction, same shape of dispatch
 // (momwire#270 unit 1).
 //
@@ -3712,13 +3731,19 @@ seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
     const double inv_4pi = 1.0 / (4.0 * M_PI);
     for (size_t p = 0; p < NM; p++) {
         for (size_t q = 0; q < NM; q++) {
+            // Hoisted out of the offset loop (momwire#1006): on this uniform
+            // edge every offset has h1 = h2 = h, so the far series' whole
+            // coefficient vector is the same for all 2N-1 of them.
+            double coef[BSPLINE_FAR_TERMS + 1];
+            bspline_far_coeffs((int)p, (int)q, h, h, coef);
             for (size_t di = 0; di < n_delta; di++) {
                 long long delta = (long long)di - (long long)(N - 1);
                 double alpha = 0.0;
                 double beta = h;
                 double A_ = (double)delta * h;
                 double B_ = ((double)delta + 1.0) * h;
-                double val = J_static_dispatch((int)p, (int)q, alpha, beta, A_, B_, a);
+                double val = J_static_dispatch_coeffs((int)p, (int)q, alpha, beta,
+                                                      A_, B_, a, coef);
                 if (EK) {
                     val = val + D_ek_dispatch((int)p, (int)q, alpha, beta, A_, B_,
                                               a_ek);
