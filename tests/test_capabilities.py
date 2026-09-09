@@ -1098,3 +1098,56 @@ def test_the_pairs_the_axes_exist_to_explain_differ_where_they_should():
             f"{a.__name__} vs {b.__name__} differ in {sorted(differ)}, "
             f"expected {sorted(expected)}"
         )
+
+
+def test_no_declared_refusal_names_a_cell_the_solver_serves():
+    """A single-cell `refusals` key must name a cell the solver does NOT
+    serve — otherwise the entry is dead and the matrix DOC lies.
+
+    `Capabilities.refusal` consults a single-cell entry only when
+    `_served(cell)` is False, so an entry for a served axis is unreachable
+    through the API and every gate that goes through it stays green. But
+    `scripts/capability_matrix.py` renders `refusals` DIRECTLY, so the dead
+    sentence keeps appearing in `docs/capability-matrix.md` as though it were
+    live.
+
+    That is not hypothetical. `SinusoidalGalerkinSolver` flipped `buried=True`
+    at momwire#980 D1 and kept a `"buried"` entry reading "the mixed deck
+    needs the above/below and cross-medium pair classes, which are D2. Solve
+    the buried wires alone, or use BSplineSolver, which serves the mixed deck
+    today". D2 landed at momwire#996 and the sentence went on shipping — the
+    published matrix told users to reach for another solver for a deck this
+    one had served for a release, and nothing failed.
+
+    CONDITION TOKENS are exempt and must stay so. `_served` answers True for
+    any token that is not an axis or a ground ("crossing", "bundle", …),
+    because an unmatched condition has to read as served or every solver
+    without that combination key would spuriously refuse it. `RazorSolver`
+    declares a single-cell `"bundle"` on that basis; it is a different shape
+    from the bug above and is deliberately left alone here.
+    """
+    import inspect
+
+    import momwire
+    from momwire import _capabilities
+
+    dead = {}
+    for name in dir(momwire):
+        obj = getattr(momwire, name)
+        if not (inspect.isclass(obj) and hasattr(obj, "capabilities")):
+            continue
+        caps = obj.capabilities
+        if not isinstance(caps, _capabilities.Capabilities):
+            continue
+        known = set(_capabilities._AXES) | {"pec", "refl-coef", "sommerfeld"}
+        offenders = [
+            key
+            for key in caps.refusals
+            if "+" not in key and key in known and caps._served(key)
+        ]
+        if offenders:
+            dead[name] = offenders
+    assert not dead, (
+        "declared refusals for cells the solver SERVES — unreachable through "
+        f"`refusal()` and rendered into the matrix doc anyway: {dead}"
+    )
