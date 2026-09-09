@@ -122,13 +122,40 @@ memgate:
 # ci.yml `lint` job. CI pins ruff==0.16.5; the guard below makes a missing
 # local ruff a clear one-liner instead of a mid-lane stack trace, and names
 # the pin so a version disagreement with CI has a first place to look.
+# The lint tool is PINNED and deliberately does NOT go through $(PY)
+# (momwire#997). `PYTHON` is the right abstraction for build and test targets,
+# where you want the interpreter that will import this package -- which is why
+# it falls back to `../.venv/bin/python`, the PARENT repo's venv, so a build
+# inside antennaknobs' submodule uses antennaknobs' environment on purpose.
+#
+# For lint that fallback is wrong: which venv imports momwire has nothing to do
+# with which ruff should judge its source, and it made `make lint` run whatever
+# ruff happened to be installed wherever `PYTHON` resolved. Measured inside
+# antennaknobs' submodule: the interpreter was antennaknobs' venv. Both venvs
+# happen to carry 0.16.5 today, so nothing was actually mislinted -- but
+# nothing was ENFORCING that either, and "the local gate ran a different tool
+# than CI" is the failure this repo has been bitten by before.
+#
+# `uvx ruff@<version>` needs no venv at all. If uvx is absent we fall back to
+# $(PY) but VERIFY the version first, so the pinned-version guarantee holds on
+# both paths rather than being quietly dropped on one.
+RUFF_VERSION = 0.16.5
+
 lint:
-	@$(PY) ruff --version >/dev/null 2>&1 || { \
-	  echo "ruff is not installed in $(PYTHON)'s environment."; \
-	  echo "CI pins it: pip install ruff==0.16.5    (ci.yml lint job)"; \
-	  exit 1; }
-	$(PY) ruff check
-	$(PY) ruff format --check
+	@if command -v uvx >/dev/null 2>&1; then \
+	  echo "ruff $(RUFF_VERSION) via uvx"; \
+	  uvx ruff@$(RUFF_VERSION) check . && uvx ruff@$(RUFF_VERSION) format --check .; \
+	else \
+	  have=$$($(PY) ruff --version 2>/dev/null | awk '{print $$2}'); \
+	  if [ "$$have" != "$(RUFF_VERSION)" ]; then \
+	    echo "make lint needs ruff $(RUFF_VERSION); $(PYTHON) has \"$$have\"."; \
+	    echo "Install uv (uvx runs the pinned version with no venv), or:"; \
+	    echo "  $(PYTHON) -m pip install ruff==$(RUFF_VERSION)"; \
+	    exit 1; \
+	  fi; \
+	  echo "ruff $(RUFF_VERSION) via $(PYTHON)"; \
+	  $(PY) ruff check . && $(PY) ruff format --check .; \
+	fi
 
 # Everything a merge to main will check, locally. pynec is included (it is a
 # PR + push gate; it self-skips without PyNEC). macos-set is not a separate
