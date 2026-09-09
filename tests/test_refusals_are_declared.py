@@ -56,8 +56,18 @@ they stay out of the matrix rather than out of honesty:
   same ground is served. A row describes the class; this is a property of the
   deck.
 
+* coincident MEMBERS of a crossing junction (`sinusoidal_galerkin.py`,
+  momwire#980 D3 / #1003). Same shape as the one above, one axis over:
+  `SinusoidalGalerkinSolver` serves a crossing junction — the buried hub at
+  3.1e-03 against `BSplineSolver`, the direct-radial fan at 6.5e-03 — and
+  refuses only the spelling in which two members run the same path. A cell
+  saying the class refuses crossing junctions would be false, and one saying
+  it refuses coincident wires would be a claim about a geometry no axis
+  names. The deck decides, not the class.
+
 Both are covered where they belong, by `tests/test_capabilities.py` and
-`tests/test_node_gaps.py`.
+`tests/test_node_gaps.py`; the third by
+`tests/test_sg_crossing_980_d3.py::test_coincident_members_are_refused_by_name`.
 """
 
 import numpy as np
