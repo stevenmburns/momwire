@@ -556,10 +556,27 @@ def _toeplitz_gather(table, N, r0, r1):
     return np.ascontiguousarray(table[:, :, idx])
 
 
-def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None, rows=None):
+def _cancel_ptr(cancel):
+    """The raw flag address the C++ kernels poll, or 0 for "no cancellation".
+
+    Mirrors `_Cancelable._cancel_flag`; taken as an argument here because these
+    are module functions rather than solver methods.
+    """
+    return cancel.ptr if cancel is not None else 0
+
+
+def _seg_seg_static_moments(
+    seg_endpoints, a, max_d, *, ek=None, rows=None, cancel=None
+):
     """Closed-form same-edge static-kernel moment integrals.
 
     seg_endpoints: (N+1,) array of arc lengths along a single straight edge.
+    `cancel`: an optional `CancelToken`. The O(N^2) gather inside the C++
+    entry is the window a knob change waits out -- 85% of the call at N=801,
+    96% at N=3201, and the whole call grows quadratically (107 ms at N=3201,
+    420 ms at N=6401), so it polls. The numpy branches below poll too, per
+    house policy: a fallback that cannot be cancelled is a fallback that
+    hangs the app on the geometries the accelerator declines.
     Returns J_static of shape (max_d+1, max_d+1, N, N), with the 1/(4π)
     prefactor folded in.
 
@@ -603,6 +620,8 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None, rows=None):
         out = np.empty((n_d, n_d, n_row, N), dtype=np.float64)
         for p in range(n_d):
             for q in range(n_d):
+                if cancel is not None:
+                    cancel.raise_if_cancelled()
                 vals = J_static_moment(p, q, alpha, beta, A, B, a)
                 if ek is not None:
                     vals = vals + D_ek_moment(
@@ -633,7 +652,7 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None, rows=None):
         # way to tell the difference.
         if rows is None:
             return _acc.seg_seg_static_moments_bspline_uniform(
-                float(h), float(a), int(N), int(max_d)
+                float(h), float(a), int(N), int(max_d), _cancel_ptr(cancel)
             )
         return _toeplitz_gather(
             _static_toeplitz_table(float(h), float(a), int(N), int(max_d), None),
@@ -652,7 +671,12 @@ def _seg_seg_static_moments(seg_endpoints, a, max_d, *, ek=None, rows=None):
         # for either kernel flavour.
         if rows is None:
             return _acc.seg_seg_static_moments_bspline_uniform_ek(
-                float(h), float(a), int(N), int(max_d), float(_ek_radius(ek, a))
+                float(h),
+                float(a),
+                int(N),
+                int(max_d),
+                float(_ek_radius(ek, a)),
+                _cancel_ptr(cancel),
             )
         return _toeplitz_gather(
             _static_toeplitz_table(
@@ -949,6 +973,12 @@ def _seg_seg_reg_moments(seg_endpoints, a, k, max_d, n_qp, *, ek=None):
     on every same-edge segment pair, via Gauss-Legendre quadrature.
 
     seg_endpoints: (N+1,) array of arc lengths along a single straight edge.
+    `cancel`: an optional `CancelToken`. The O(N^2) gather inside the C++
+    entry is the window a knob change waits out -- 85% of the call at N=801,
+    96% at N=3201, and the whole call grows quadratically (107 ms at N=3201,
+    420 ms at N=6401), so it polls. The numpy branches below poll too, per
+    house policy: a fallback that cannot be cancelled is a fallback that
+    hangs the app on the geometries the accelerator declines.
     a, k: regularization radius and wavenumber.
     max_d: maximum moment degree (inclusive).
     n_qp: Gauss-Legendre nodes per segment per axis.

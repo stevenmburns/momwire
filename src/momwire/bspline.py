@@ -2342,7 +2342,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         d = self.degree
         return _seg_seg_static_moments(
-            arc, a_eff, max_d=d, ek=None
+            arc, a_eff, max_d=d, ek=None, cancel=self._cancel
         ) + _seg_seg_reg_moments(
             arc, a_eff, k, max_d=d, n_qp=self.n_qp_pair_same_edge, ek=None
         )

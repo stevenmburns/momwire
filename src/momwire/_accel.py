@@ -144,6 +144,15 @@ _CANCELLABLE_KERNELS = (
     # poll, so an aborted complex-k fill must remap the same way; listed with
     # its sibling rather than left for the next hole-finding issue.
     "razor_seg_moments_cplx",
+    # momwire#1006. The same-edge static-moment entries became cancellable when
+    # their O(N^2) gather turned out to be the window a knob change waits out:
+    # 85% of the call at N=801, 96% at N=3201, and the whole call grows
+    # quadratically -- 107 ms at N=3201, 420 ms at N=6401. Registering them
+    # here is what makes the C++ `AcceleratorAborted` surface as `SolveAborted`;
+    # a kernel that polls but is not listed raises the wrong exception type and
+    # every caller's `except SolveAborted` misses it.
+    "seg_seg_static_moments_bspline_uniform",
+    "seg_seg_static_moments_bspline_uniform_ek",
 )
 
 

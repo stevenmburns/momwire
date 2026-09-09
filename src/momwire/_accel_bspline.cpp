@@ -3814,7 +3814,8 @@ seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
 template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
-                                            int max_d, double a_ek) {
+                                            int max_d, double a_ek,
+                                            uintptr_t cancel_flag) {
     if (max_d < 0 || max_d > BSPLINE_MOMENT_MAX_D) {
         throw std::runtime_error("max_d out of range [0, " +
                                  std::to_string(BSPLINE_MOMENT_MAX_D) + "]");
@@ -3822,6 +3823,14 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
     size_t NM = (size_t)(max_d + 1);
     py::array_t<double> out({NM, NM, N, N});
     auto v = out.mutable_unchecked<4>();
+
+    // The gather below is O(N^2) and it is the WINDOW A KNOB CHANGE WAITS OUT.
+    // Measured after momwire#1006: table build 4.4 ms at N=3201 against 107 ms
+    // for the whole call -- the gather is 85% of it at N=801, 92% at 1601, 96%
+    // at 3201, and the total grows quadratically (420 ms at N=6401). So this is
+    // where the poll belongs; polling only the table build would drain 4% of
+    // the wait.
+    MW_CANCEL_SETUP(cancel_flag);
 
     // Phase 0: release the GIL for the heavy compute region below.
     py::gil_scoped_release release;
@@ -3857,10 +3866,16 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
     }
 
     // Gather: v(p, q, i, j) = table[p, q, j - i + (N - 1)]
+    //
+    // Polled per ROW, not per element: a row is N copies, so the check costs
+    // O(1) per O(N) work, and the worst-case latency after a knob change is one
+    // row -- 6401 doubles, microseconds. Per element would be a branch in the
+    // innermost loop of a memcpy.
     for (size_t p = 0; p < NM; p++) {
         for (size_t q = 0; q < NM; q++) {
             const double *row = &table[(p * NM + q) * n_delta];
             for (size_t i = 0; i < N; i++) {
+                MW_CANCEL_POLL();
                 for (size_t j = 0; j < N; j++) {
                     size_t di = (size_t)((long long)j - (long long)i + (long long)(N - 1));
                     v(p, q, i, j) = row[di];
@@ -3868,18 +3883,23 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
             }
         }
     }
+    MW_THROW_IF_ABORTED();
     return out;
 }
 
 static py::array_t<double>
-seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d) {
-    return seg_seg_static_moments_bspline_uniform_impl<false>(h, a, N, max_d, 0.0);
+seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d,
+                                       uintptr_t cancel_flag = 0) {
+    return seg_seg_static_moments_bspline_uniform_impl<false>(h, a, N, max_d, 0.0,
+                                                              cancel_flag);
 }
 
 static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_ek(double h, double a, size_t N, int max_d,
-                                          double a_ek) {
-    return seg_seg_static_moments_bspline_uniform_impl<true>(h, a, N, max_d, a_ek);
+                                          double a_ek,
+                                          uintptr_t cancel_flag = 0) {
+    return seg_seg_static_moments_bspline_uniform_impl<true>(h, a, N, max_d, a_ek,
+                                                             cancel_flag);
 }
 
 // THE TABLE ALONE (momwire#968). A windowed caller wants rows [r0, r1) of the
@@ -4512,7 +4532,8 @@ void register_bspline(py::module_ &m) {
           "unique values per moment) and inlined sympy-derived closed forms. "
           "Returns J_static of shape (max_d+1, max_d+1, N, N), with the "
           "1/(4π) prefactor folded in.",
-          py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"));
+          py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
+          py::arg("cancel_flag") = 0);
     m.def("seg_seg_static_moments_bspline_uniform_ek",
           &seg_seg_static_moments_bspline_uniform_ek,
           "Extended-thin-wire-kernel twin of "
@@ -4525,7 +4546,7 @@ void register_bspline(py::module_ &m) {
           "from the regularization radius `a` because _EK.a may override it; "
           "on every eligible pair they are equal.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
-          py::arg("a_ek"));
+          py::arg("a_ek"), py::arg("cancel_flag") = 0);
     m.def("seg_seg_static_moments_bspline_uniform_table",
           &seg_seg_static_moments_bspline_uniform_table,
           "The 2N-1 Toeplitz TABLE behind "
