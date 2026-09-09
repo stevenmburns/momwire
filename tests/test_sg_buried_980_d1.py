@@ -263,6 +263,13 @@ def test_the_operating_point_is_scoped_and_restores():
     assert s.k == k_before and s.eta == eta_before
 
 
+# `slow` because serving a mixed deck builds SOMMERFELD GRIDS, whose cost is
+# fixed rather than mesh-driven: 11.77 s here, 20.50 s on CI, against a 20 s
+# hard ceiling. It sat just inside the ceiling locally and just outside it on
+# a loaded runner — the PR lane passed the same command on the same SHA while
+# the dispatched full run failed — so it belongs in the push lane rather than
+# one runner's worth of headroom away from red.
+@pytest.mark.slow
 def test_a_mixed_deck_is_served_since_d2():
     """Above AND below is D2's three pair classes.
 
