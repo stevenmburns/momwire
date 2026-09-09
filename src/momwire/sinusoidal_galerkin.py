@@ -1127,13 +1127,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "singular_enrichment": SINGULAR_ENRICHMENT_NEVER.format(
                 cls="SinusoidalGalerkinSolver"
             ),
-            # `contact` is still the base's. `buried` is NOT: since #980 D1
-            # this class serves the fully-buried deck and since D2 the mixed
-            # one, so what is left to refuse is the CROSSING JUNCTION, and
-            # the sentence says which — a row that still carried the base's
-            # "no buried fill" prose, or D1's "no mixed deck" prose, would be
-            # false; a served cell's row is what a reader of `refusals` sees.
-            "buried": _CROSSING_JUNCTION_REFUSAL,
+            # `contact` is still the base's. There is deliberately NO bare
+            # `buried` row: since #980 D1 this class serves the fully-buried
+            # deck and since D2 the mixed one, so `buried=True` and
+            # `Capabilities.refusal("buried")` never reads a single-cell
+            # entry again — but `scripts/capability_matrix.py` renders one
+            # verbatim, which is how D1's "no mixed deck" sentence shipped in
+            # the published matrix for a release after D2 made it false
+            # (found on the D3 branch, which gates it). Everything a buried
+            # deck still refuses has its own combination key below.
             # The three decks a buried serve still refuses, each with the
             # sentence `_medium_spec` actually raises — the same four rows
             # bspline declares, for the same reason: since D1 attempts a
