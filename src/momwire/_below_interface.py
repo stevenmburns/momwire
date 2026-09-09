@@ -31,6 +31,7 @@ moment-shaped fills.
 from __future__ import annotations
 
 import math
+from typing import Callable, NamedTuple
 
 import numpy as np
 
@@ -591,3 +592,318 @@ def serve_plan(
     plan["zp_min"] = zp_lo
     plan["zp_max"] = zp_hi
     return plan
+
+
+class BuriedFills(NamedTuple):
+    """The moment-shaped fills, handed in rather than imported.
+
+    Everything here is basis- or solver-shaped: the assemblers own the
+    quadrature and the moment tensors, `crossing_context` names the basis
+    (polynomials for bspline and razor, a sampler for SG), and `nodes` and
+    `wire_media` read per-instance caches. `compute_Z_operator_buried` owns
+    only the ROUTING between the three pair classes, which is the part every
+    formulation shares -- momwire#980 step C part 2.
+    """
+
+    checkpoint: Callable
+    nodes: Callable
+    wire_media: Callable
+    crossing_context: Callable
+    assemble_Z: Callable
+    build_J_blocks_subset: Callable
+    accumulate_Z_subset_chunked: Callable
+    image_Z_weighted: Callable
+    image_tangent_dot: Callable
+    field_galerkin_block: Callable
+    apply_loading: Callable
+
+
+def compute_Z_operator_buried(
+    geom,
+    supp_seg,
+    polys,
+    *,
+    f,
+    below_segments,
+    buried_medium,
+    refuse_out_of_scope_fn,
+    crossing_junctions_fn,
+    serve_plan_fn,
+    somm_grid_fn,
+    crossing_node_members_fn,
+    ground_z,
+    eps,
+    omega,
+    mu,
+    cancel_flag,
+    chunked,
+):
+    """The mixed-medium dense Z: per-segment media, three pair classes,
+    one matrix (momwire#553 U5).
+
+    A deck with buried wires is filled pair class by pair class, and the
+    classes are not variants of each other:
+
+    * **above/above** — the shipped composition, unchanged. Direct at k₀
+      through the mixed potential in air, minus `C₂·image + Q`.
+    * **below/below** — the same SHAPE in the lower medium and nothing
+      else shared. Direct at k_m through the mixed potential written in
+      the medium (jωμ₀ on A, 1/(jωε̃_m) on Φ — the `float(self.eps)` seam
+      this unit lands), minus `A_m·image + Q_below`, with the image
+      mirrored through the interface exactly as the ±=+ one is and
+      `A_m = (1 − ε̃)/(1 + ε̃)` in C₂'s place. The image of a below source
+      is ABOVE, and its interaction with a below observer is the k_m
+      direct kernel at the image distance — the phase-0 composition,
+      EQUATIONS.md §Regime 2.
+    * **cross-medium** — neither. The transmitted integral is the WHOLE
+      field across the interface: no direct term, no image term, no
+      mixed-potential prefactors, just `⟨E, testing⟩` subtracted like any
+      field-form block. Both directions are filled and their agreement is
+      the reciprocity gate.
+
+    The three field-form blocks (the two remainders and the transmitted
+    pair) all subtract, because a field's contribution to the EFIE
+    Galerkin matrix is `−⟨f, E⟩` and the mixed-potential block is that
+    same functional written out; the ±=+ path's single `Z -= (C₂·img + Q)`
+    is the same convention and this method keeps it verbatim.
+
+    **The fifth inversion lives in that last sentence.** "The
+    mixed-potential block is that same functional written out" is true up
+    to an integration-by-parts BOUNDARY TERM `[f_m·Φ_n]` at each end of a
+    basis's support, and momwire has always mixed the two forms — MP for
+    direct and image, field-form for the remainder — because every basis
+    that vanishes at its own ends makes that term identically zero. A
+    ground CONTACT basis does not vanish there. The shipped path gets away
+    with it because its field-form block is a small REMAINDER, so a
+    boundary term on a small block is a small error; this fill's
+    cross-medium block is the WHOLE interaction between the two media, and
+    the same term is O(1) of it. Measured at ε̃ = 1, where the entire
+    buried fill must reproduce the free-space fill exactly: 2.5 relative
+    on the contact basis and 1e-8 on every other one, unmoved by
+    quadrature order, against 1.0e-5 everywhere once the above wire is
+    lifted clear of the plane. That is why `_medium_spec` refuses a
+    ground contact and a buried wire on the same deck, and it is the same
+    shape as the arc's other four inversions: a ±=+ convenience whose
+    licence is "the remainder is small", used where nothing is a
+    remainder. Undoing it wants the transmitted family's scalar
+    POTENTIALS, so the cross block can be written mixed-potential like
+    its neighbours — and on a deck with a CROSSING junction that is now
+    exactly what happens: the crossing branch below fills the cross pair
+    with `_crossing_fill`'s complete designed mixed-potential spelling,
+    boundary terms, corner and all (momwire#524 phase 2, adjudicated
+    2026-08-26). The contact-plus-buried refusal itself still stands
+    while P3 re-scores its anchors under the same machinery.
+
+        Moved verbatim from `BSplineSolver._compute_Z_operator_buried` (momwire
+        #980 step C part 2). The bodies are the solver method's own -- the
+        buried, crossing, transmitted and razor suites pin every number they
+        pinned before the move -- with `self.X` replaced by the data or the
+        callable it stands for and nothing else changed.
+    """
+    below = below_segments(geom)
+    b_idx = np.nonzero(below)[0]
+    a_idx = np.nonzero(~below)[0]
+    eps_t, eps_m, k_p, k_m, c2, a_m = buried_medium()
+    gz = ground_z
+
+    refuse_out_of_scope_fn(geom)
+    obs_a, t_a, W_a = f.nodes(geom, a_idx)
+    obs_b, t_b, W_b = f.nodes(geom, b_idx)
+    # Asked ONCE, and asked UNCONDITIONALLY (momwire#700). It used to sit
+    # inside `bool(a_idx.size and ...)` at the plan site and behind the
+    # same guard again below, so on a WHOLLY-below deck — no above
+    # segment — Python short-circuited both calls and momwire#698's
+    # exemption audit never ran at all. `_crossing_junctions` is a
+    # VALIDATION as much as a label (it is where a grounded junction that
+    # cannot cross gives its exemption back), and a validation behind a
+    # short-circuit is a validation that does not run. Razor asks it
+    # unconditionally in `_refuse_buried_geometry`, which is why the two
+    # trunks answered differently on the same deck.
+    crossing_j = crossing_junctions_fn()
+    plan = serve_plan_fn(
+        geom,
+        a_idx,
+        obs_a,
+        obs_b,
+        k_p,
+        k_m,
+        crossing=bool(a_idx.size and crossing_j),
+    )
+
+    # --- the two direct blocks and the two image blocks, each in its
+    #     own medium. Chunked whenever the windowed assemblers' complex-
+    #     eps~ twins are built (momwire#915): the same four terms with the
+    #     same signs, never a (d+1, d+1, N, N) tensor, and faster even
+    #     where the tensor fits (12 radials: 3.5 -> 2.7 s) because the
+    #     zero-padded scatter of `_build_J_blocks_subset` is gone. The
+    #     dense route below is the REFERENCE every buried gate was pinned
+    #     on and the chunked route is gated against it at 1e-12.
+    if not chunked:
+        f.checkpoint()
+        Z = f.assemble_Z(
+            f.build_J_blocks_subset(geom, k_m, b_idx),
+            supp_seg,
+            polys,
+            geom,
+            eps=eps_m,
+        )
+        td_img = f.image_tangent_dot(geom["tangents"])
+        if a_idx.size:
+            f.checkpoint()
+            Z += f.assemble_Z(
+                f.build_J_blocks_subset(geom, k_p, a_idx), supp_seg, polys, geom
+            )
+            f.checkpoint()
+            Z -= f.image_Z_weighted(
+                f.build_J_blocks_subset(geom, k_p, a_idx, mirror_sources=True),
+                supp_seg,
+                polys,
+                c2 * td_img.astype(np.complex128),
+                np.full(td_img.shape, c2, dtype=np.complex128),
+            )
+        f.checkpoint()
+        Z -= f.image_Z_weighted(
+            f.build_J_blocks_subset(geom, k_m, b_idx, mirror_sources=True),
+            supp_seg,
+            polys,
+            a_m * td_img.astype(np.complex128),
+            np.full(td_img.shape, a_m, dtype=np.complex128),
+            eps=eps_m,
+        )
+        del td_img
+    else:
+        n_basis = supp_seg.shape[0]
+        Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        f.accumulate_Z_subset_chunked(
+            Z,
+            geom,
+            k_m,
+            b_idx,
+            supp_seg,
+            polys,
+            mirror_sources=False,
+            eps=eps_m,
+            scale=1.0,
+        )
+        if a_idx.size:
+            f.accumulate_Z_subset_chunked(
+                Z,
+                geom,
+                k_p,
+                a_idx,
+                supp_seg,
+                polys,
+                mirror_sources=False,
+                eps=eps,
+                scale=1.0,
+            )
+            f.accumulate_Z_subset_chunked(
+                Z,
+                geom,
+                k_p,
+                a_idx,
+                supp_seg,
+                polys,
+                mirror_sources=True,
+                eps=eps,
+                scale=-1.0,
+                weight=complex(c2),
+            )
+        f.accumulate_Z_subset_chunked(
+            Z,
+            geom,
+            k_m,
+            b_idx,
+            supp_seg,
+            polys,
+            mirror_sources=True,
+            eps=eps_m,
+            scale=-1.0,
+            weight=complex(a_m),
+        )
+
+    # --- the three field-form blocks -----------------------------------
+    if a_idx.size:
+        grid_above = somm_grid_fn(eps_t, plan["r1_above"])
+
+        def proj_aa(o, to, s, ts):
+            return _sommerfeld.remainder_field_proj(
+                o, to, s, ts, gz, k_p, grid_above, cancel_flag=cancel_flag
+            )
+
+        Z -= f.field_galerkin_block(
+            supp_seg, polys, proj_aa, a_idx, a_idx, obs_a, t_a, W_a, obs_a, t_a, W_a
+        )
+
+    grid_below = _sommerfeld_below.get_grid_below(
+        eps_t, k_p, plan["r1_below"], omega, mu=mu
+    )
+
+    def proj_bb(o, to, s, ts):
+        return _sommerfeld_below.remainder_field_proj_below(
+            o, to, s, ts, gz, k_p, k_m, grid_below
+        )
+
+    Z -= f.field_galerkin_block(
+        supp_seg, polys, proj_bb, b_idx, b_idx, obs_b, t_b, W_b, obs_b, t_b, W_b
+    )
+
+    crossing = crossing_j if a_idx.size else ()
+    if crossing:
+        # The node-mesh advisory (momwire#696) goes first, because
+        # this is the one place per fill where the crossing serve
+        # actually engages: the plan site above asks the same question
+        # before the deck is committed to the crossing path.
+        _crossing_fill.warn_coarse_node(
+            crossing_node_members_fn(crossing, f.wire_media())
+        )
+        # The crossing serve (momwire#524 phase 2): the cross pair is
+        # the COMPLETE designed mixed-potential spelling on graded
+        # axes. Near / corner-adjacent pairs are direct contour
+        # evaluations — no grid, no interpolation to exclude the
+        # corner — while admissible far blocks ride the #688
+        # admissibility split (coarse axes + low-rank ACA, parity-
+        # gated against the dense fill). The transpose is
+        # reciprocity, measured on the adjudication decks rather
+        # than assumed. The self families get their missing by-parts
+        # bnd + corner content on the dense axes; continuity through
+        # the node and the AGARD slope condition then emerge from
+        # the fill with no constraint row and no merged dof.
+        f.checkpoint()
+        ctx = f.crossing_context(geom, supp_seg, polys)
+        ax_a = _crossing_fill.axis_data(ctx, a_idx)
+        ax_b = _crossing_fill.axis_data(ctx, b_idx)
+        t_ab = _crossing_fill.cross_complete_block_split(ctx, a_idx, b_idx, ax_a, ax_b)
+        Z -= t_ab
+        Z -= t_ab.T
+        Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
+    elif a_idx.size:
+        grid_t = _sommerfeld_transmitted.get_grid_below_above(
+            eps_t,
+            k_p,
+            plan["r_cross_max"],
+            plan["zp_min"],
+            plan["zp_max"],
+            omega,
+            mu=mu,
+            r_min=plan["r_cross_min"],
+        )
+
+        def proj_ab(o, to, s, ts):
+            return _sommerfeld_transmitted.transmitted_field_proj_below_to_above(
+                o, to, s, ts, gz, k_p, k_m, grid_t
+            )
+
+        def proj_ba(o, to, s, ts):
+            return _sommerfeld_transmitted.transmitted_field_proj_above_to_below(
+                o, to, s, ts, gz, k_p, k_m, grid_t
+            )
+
+        Z -= f.field_galerkin_block(
+            supp_seg, polys, proj_ab, a_idx, b_idx, obs_a, t_a, W_a, obs_b, t_b, W_b
+        )
+        Z -= f.field_galerkin_block(
+            supp_seg, polys, proj_ba, b_idx, a_idx, obs_b, t_b, W_b, obs_a, t_a, W_a
+        )
+
+    return f.apply_loading(Z)

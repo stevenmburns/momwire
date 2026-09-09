@@ -53,6 +53,31 @@ def test_g980c_1_the_module_names_no_solver_attribute():
         "_build_geometry",
         "n_qp_sommerfeld",
         "degree",
+        # part 2 (#980 step C): the routing moved, so the names it used to
+        # reach through `self` must not have followed it. Every one of these
+        # is now either a parameter or a member of `BuriedFills`.
+        "_below_segments",
+        "_buried_medium",
+        "_buried_nodes",
+        "_buried_serve_plan",
+        "_buried_chunked_serves",
+        "_refuse_buried_out_of_scope",
+        "_crossing_junctions",
+        "_crossing_node_members",
+        "_crossing_context",
+        "_somm_grid",
+        "_assemble_Z",
+        "_build_J_blocks_subset",
+        "_accumulate_Z_subset_chunked",
+        "_image_Z_weighted",
+        "_image_tangent_dot",
+        "_field_galerkin_block",
+        "_apply_loading",
+        "_checkpoint",
+        "_cancel_flag",
+        "omega",
+        "mu",
+        "eps",
     ):
         assert name not in attrs, name
     imported = {
@@ -148,3 +173,56 @@ def test_g980c_4_the_plan_reads_pair_extents_through_bspline(monkeypatch):
     s.compute_impedance()
     assert seen.get("n", 0) > 0, "the buried plan did not call bspline's extents"
     assert not hasattr(BI, "_pair_extents_below")
+
+
+def test_g980c_5_the_routing_is_a_function_of_data_and_callables():
+    """Part 2's seam, stated as code.
+
+    `compute_Z_operator_buried` may only reach the solver through the
+    `BuriedFills` bundle it is handed. If a future edit gives it a solver
+    argument, or reaches a fill by import instead of by parameter, the
+    routing stops being adoptable by SG and this fails.
+    """
+    fn = next(
+        n
+        for n in ast.walk(ast.parse(inspect.getsource(BI)))
+        if isinstance(n, ast.FunctionDef) and n.name == "compute_Z_operator_buried"
+    )
+    args = {a.arg for a in fn.args.args} | {a.arg for a in fn.args.kwonlyargs}
+    assert "self" not in args and "solver" not in args, args
+
+    # Every fill it calls must come off the bundle, not off a module global.
+    called = {
+        n.func.value.id
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+    }
+    assert "self" not in called, called
+
+    fills = set(BI.BuriedFills._fields)
+    used = {
+        n.func.attr
+        for n in ast.walk(fn)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+        and n.func.value.id == "f"
+    }
+    assert used <= fills, f"reached a non-bundle name through `f`: {used - fills}"
+    # ...and the bundle carries nothing the routing does not use, so it cannot
+    # quietly become a grab-bag of solver state.
+    assert fills - used == set(), f"unused BuriedFills members: {fills - used}"
+
+
+def test_g980c_6_bspline_still_owns_the_moment_shaped_fills():
+    """The other half of the seam: the fills did NOT move."""
+    for name in (
+        "_build_J_blocks_subset",
+        "_accumulate_Z_subset_chunked",
+        "_image_Z_weighted",
+        "_field_galerkin_block",
+    ):
+        assert callable(getattr(_bs.BSplineSolver, name)), name
+        assert not hasattr(BI, name.lstrip("_")), f"{name} should not have moved"
