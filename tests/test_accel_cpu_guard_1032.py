@@ -187,14 +187,25 @@ def test_a_pure_python_install_stays_silent(monkeypatch):
 def test_the_companion_follows_the_chosen_variant():
     """An AVX2 `_near_interface_accel` beside an SSE2 `_accelerators` faults on
     exactly the CPU the split exists for — and from the module nobody is
-    looking at. One decision, read by both."""
+    looking at. One decision, read by both.
+
+    Compared as module NAMES built from the variant's suffix, not as a label
+    against a name: `"legacy"` is the unsuffixed extension, so an `endswith`
+    on the label is false there for a correctly-loaded module. That is the
+    single-variant configuration macOS and every non-x86 build ship, and it is
+    the one this box cannot choose on its own — it cost a red `test-macos` on
+    the certification dispatch, which is the lane that exists to catch it.
+    """
     from momwire import _near_interface as ni
 
     if momwire.accelerator_variant is None:
         pytest.skip("pure-Python install: no variant to agree about")
-    assert _accel.acc.__name__.endswith(momwire.accelerator_variant)
+    suffix = dict(
+        (label, sfx) for label, sfx in (_accel._AVX2, _accel._SSE2, _accel._LEGACY)
+    )[momwire.accelerator_variant]
+    assert _accel.acc.__name__ == f"momwire._accelerators{suffix}"
     if ni._nia is not None:
-        assert ni._nia.__name__.endswith(momwire.accelerator_variant)
+        assert ni._nia.__name__ == f"momwire._near_interface_accel{suffix}"
 
 
 def test_the_historic_name_still_resolves():
