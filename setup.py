@@ -1,10 +1,13 @@
 import glob
 import os
+import subprocess
 import sys
 import warnings
 
 from pybind11.setup_helpers import ParallelCompile, Pybind11Extension
 from setuptools import setup
+from pathlib import Path
+
 from setuptools.command.build_ext import build_ext
 
 # Build-time error classes. setuptools.errors is the modern home (distutils is
@@ -59,6 +62,73 @@ class OptionalBuildExt(build_ext):
             super().build_extension(ext)
         except _OPTIONAL_BUILD_ERRORS as exc:
             self._warn(exc)
+            return
+        if os.environ.get("MOMWIRE_STRIP_SYMBOLS") == "1":
+            self._split_debug(Path(self.get_ext_fullpath(ext.name)))
+
+    @staticmethod
+    def _split_debug(so: Path) -> None:
+        """Move the DWARF out of a built extension, KEEP the symbol table.
+
+        The released Linux wheel shipped both extensions unstripped and the
+        debug info was 38 MB of it — while the Windows wheel ships the same
+        `_accelerators` at 1.8 MB, because MSVC puts debug info in a separate
+        .pdb that is not distributed (momwire#1030).
+
+        `--strip-debug` rather than `-s`, and the difference is worth the
+        bytes. Measured on this extension:
+
+            published (unstripped)   34.8 MB
+            strip --strip-debug       2.2 MB   .symtab kept, 1998 symbols
+            strip -s                  1.9 MB   no symbols at all
+
+        0.4 MB across both extensions buys a segfault backtrace that NAMES our
+        functions instead of printing addresses. The DWARF goes to a sibling
+        `<name>.debug` linked by build ID, so a debugger given both still has
+        everything the unstripped build had.
+
+        `-g` in the compile flags stays either way: it pairs with
+        `-fno-omit-frame-pointer` so a profile can walk the Python/C++
+        boundary, and this runs after the link.
+        """
+        if not so.exists() or sys.platform not in ("linux", "linux2"):
+            return
+        dbg = so.with_suffix(so.suffix + ".debug")
+        try:
+            subprocess.run(
+                ["objcopy", "--only-keep-debug", str(so), str(dbg)], check=True
+            )
+            subprocess.run(["strip", "--strip-debug", str(so)], check=True)
+            # Run from the extension's own directory and name both files
+            # RELATIVELY: `--add-gnu-debuglink` resolves its argument against
+            # the cwd, and objcopy writes its temp file there too, so an
+            # absolute target with a changed cwd fails on the temp file.
+            subprocess.run(
+                ["objcopy", f"--add-gnu-debuglink={dbg.name}", so.name],
+                check=True,
+                cwd=so.parent,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            # binutils absent or refusing: ship the unstripped extension
+            # rather than fail the build. Bigger, never broken.
+            print(f"momwire: could not split debug info from {so.name}: {exc}")
+            return
+        # MOVE the sidecar out of the package directory. `build_py` packages
+        # everything under it, so leaving `<name>.so.debug` there put the DWARF
+        # straight back into the wheel — measured, the first version of this
+        # shipped both. `--add-gnu-debuglink` has already recorded the basename
+        # and its CRC, so a debugger still finds the file through the standard
+        # search path once it is installed alongside; the release artefact is
+        # built from `build/debug/`.
+        out = Path("build") / "debug"
+        try:
+            out.mkdir(parents=True, exist_ok=True)
+            dbg.replace(out / dbg.name)
+        except OSError as exc:
+            dbg.unlink(missing_ok=True)
+            print(f"momwire: dropped {dbg.name} (could not move it aside: {exc})")
+            return
+        print(f"momwire: {so.name} DWARF -> {out / dbg.name}, symbols kept")
 
     @staticmethod
     def _warn(exc):

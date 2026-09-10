@@ -296,6 +296,14 @@ manylinux-x86_64-image = "manylinux_2_28"
 # (the GCC OpenMP runtime, universal on glibc Linux; `apt install libgomp1` if
 # absent — manylinux images already have it for the build).
 repair-wheel-command = "auditwheel repair --exclude libgomp.so.1 -w {dest_dir} {wheel}"
+# Strip the extensions in the PUBLISHED wheel (momwire#1030). setup.py compiles
+# with `-g` on purpose (it pairs with -fno-omit-frame-pointer so profiles walk
+# the Python/C++ boundary), which made the released Linux wheel 48 MB — 38 MB of
+# it DWARF that no user can use, since the wheel ships no source. Stripped it is
+# ~10 MB, and `_accelerators.so` lands at 1.9 MB, which is what the Windows wheel
+# already ships. A wheel built without this variable keeps its symbols; that is
+# the escape hatch if crash triage ever needs them.
+environment = { MOMWIRE_STRIP_SYMBOLS = "1" }
 
 [tool.cibuildwheel.macos]
 # Native Apple Silicon only for this first cut (the macos-14 runner is arm64).
