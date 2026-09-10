@@ -9,10 +9,10 @@ buried Sommerfeld families — so the old single sentence ("buried wires are
 not served") is gone and what replaced it is four narrower ones, each naming
 a DIFFERENT missing thing:
 
-* a wire with points on BOTH sides of the interface — served natively
-  since momwire#524 phase 2, not yet adopted by this seam, and the
-  sentence names the native serve and the adjudicated convention
-  difference instead of quoting the engine's crossing print as a gate;
+* a wire with points STRICTLY on both sides of the interface — the split
+  spelling (a below wire ending in the plane, an above wire starting there)
+  is SERVED since momwire#667, and one GW spanning the plane refuses with
+  a sentence that says to write it as two;
 * a buried wire over ``GN 1`` or a bare ``GD`` — neither card has a lower
   medium at all, and the sentence says which;
 * a buried wire on a deck that ALSO stands a wire end in the plane — the
@@ -99,29 +99,55 @@ def test_the_old_sentence_is_gone():
 # ----------------------------------------------------------------------
 
 
-def test_a_crossing_wire_refuses_naming_the_native_serve():
-    """The seam still refuses interface-crossing decks — including the
-    split-junction spelling the native API serves since momwire#524
-    phase 2 — and the sentence now points at that serve and at the
-    adjudicated convention difference instead of quoting the engine's
-    crossing print as a waiting gate."""
-    text = (
+def _crossing_probe(
+    below_gw: str, above_gw: str, feed: str = "EX 4,2,7,0,1.,0."
+) -> str:
+    return (
         "CM crossing probe\n"
         "CE\n"
-        "GW 1,4,0.,0.,-2.,0.,0.,0.,.001\n"
-        "GW 2,15,0.,0.,0.,0.,0.,10.,.001\n"
+        f"{below_gw}\n"
+        f"{above_gw}\n"
         "GE 1,-1\n"
         "FR 0,1,0,0,7.\n"
         f"{GN0}\n"
-        "EX 4,2,7,0,1.,0.\n"
+        f"{feed}\n"
         "PQ 0\nXQ 0\nEN\n"
+    )
+
+
+def test_the_split_spelling_is_served(record_property):
+    """momwire#667: a buried GW ENDING in the plane, sharing that node with
+    a GW that rises from it, is the crossing junction the native API serves
+    since momwire#524 phase 2 — and this seam now serves it too, instead of
+    reading the end in the plane as "touching both sides"."""
+    text = _crossing_probe(
+        "GW 1,4,0.,0.,-2.,0.,0.,0.,.001", "GW 2,15,0.,0.,0.,0.,0.,10.,.001"
+    )
+    assert why(text) is None
+    out = render(text)
+    assert "NEC ERROR" not in out
+    z = input_impedance(out)
+    record_property("z_split_spelling", f"{z:.4f}")
+    assert z.real > 0.0 and abs(z) < 1e4
+
+
+def test_a_wire_spanning_the_plane_refuses_naming_the_split_spelling():
+    """One GW with points strictly on both sides still refuses on this seam
+    (the NEC-2 portal splits it; this dialect addresses nodes by tag and
+    knot, and a split would move a knot) — and the sentence now says what
+    to write instead of quoting an adjudication that the transposed ground
+    card had produced."""
+    text = _crossing_probe(
+        "GW 1,19,0.,0.,-2.,0.,0.,10.,.001",
+        "GW 2,1,5.,0.,10.,6.,0.,10.,.001",
+        feed="EX 4,1,10,0,1.,0.",
     )
     r = why(text)
     assert r is not None
-    assert "crosses the ground interface" in r
-    assert "momwire#524 phase 2" in r
-    assert "different experiment" in r
-    assert "native API" in r
+    assert "crosses the ground interface mid-span" in r
+    assert "two GW cards meeting at z = 0" in r
+    assert "momwire#667" in r
+    assert "different experiment" not in r
     assert "74.761" not in r
     assert "INTERNAL ERROR" not in r
 
