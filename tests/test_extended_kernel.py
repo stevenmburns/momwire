@@ -39,6 +39,7 @@ import sys
 
 import pytest
 
+import momwire
 from momwire.sinusoidal import SinusoidalSolver
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
@@ -1684,11 +1685,19 @@ _EK_OFF_REFL_PIN = [
 
 
 @pytest.mark.skipif(
-    not (sys.platform == "linux" and platform.machine() in ("x86_64", "AMD64")),
+    not (
+        sys.platform == "linux"
+        and platform.machine() in ("x86_64", "AMD64")
+        and momwire.accelerator_variant in ("avx2", "legacy", None)
+    ),
     reason="the pin is a bit-capture of the x86-64/GCC contraction; other FP "
     "environments (macOS ARM clang, PR #529) contract the same source "
     "differently and the byte claim is meaningless there — the relative "
-    "gates in this file carry the physics on every platform",
+    "gates in this file carry the physics on every platform. Since "
+    "momwire#1032 the BASELINE (sse2) build is one more such environment, on "
+    "this very platform: same source, same compiler, no -mavx2/-mfma, so GCC "
+    "contracts it differently and the literals move. Measured, the physics "
+    "does not — the divergence is 8.9e-14 relative at worst.",
 )
 def test_ek_off_refl_tensor_is_unmoved_by_the_new_kernel():
     """Byte-level armor for the reduced Fresnel tail. #259 edits the file the

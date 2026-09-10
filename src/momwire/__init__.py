@@ -1,4 +1,5 @@
 from ._accel import LOADED as accelerated
+from ._accel import VARIANT as accelerator_variant
 from ._cancel import CancelToken, SolveAborted
 from ._capabilities import Capabilities
 
@@ -88,6 +89,7 @@ __all__ = [
     "CancelToken",
     "SolveAborted",
     "accelerated",
+    "accelerator_variant",
     "wire_internal_impedance",
     "insulation_inductance",
     "wire_to_element",

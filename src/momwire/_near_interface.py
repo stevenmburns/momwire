@@ -70,6 +70,7 @@ import numpy as np
 from scipy.special import hankel1, hankel2
 from threadpoolctl import ThreadpoolController
 
+from . import _accel
 from ._sommerfeld_below import _adaptive_segment, _head
 from ._sommerfeld_transmitted import (
     _ADAPT_DEPTH,
@@ -81,10 +82,15 @@ from ._sommerfeld_transmitted import (
     k_medium,
 )
 
-try:  # the C++ twin (momwire#680 U2) is optional; this walk is the reference
-    from . import _near_interface_accel as _nia
-except ImportError:  # pragma: no cover - pure-Python install
-    _nia = None
+# The C++ twin (momwire#680 U2) is optional; this walk is the reference.
+#
+# Imported through `_accel` rather than directly (momwire#1032) so it comes
+# from the SAME instruction-set variant `_accelerators` did. The two are
+# separate .so files: pairing an AVX2 one with an SSE2 one would fault on
+# exactly the CPU the split exists for, and it would fault from the module
+# nobody was looking at. `import_companion` returns None on a pure-Python
+# install exactly as the old `except ImportError` did.
+_nia = _accel.import_companion("_near_interface_accel")
 
 KEYS = ("U", "V", "W", "dzW", "dzpV", "dzpW")
 _LAM_MULT = 8.0

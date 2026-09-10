@@ -34,6 +34,7 @@ import functools
 import numpy as np
 import pytest
 
+import momwire
 from momwire.sinusoidal import (
     _EKPairs,
     _N_PANEL_EK_DELTA_NEAR,
@@ -1743,11 +1744,26 @@ def test_gc4_the_fold_is_the_allocating_fill_to_the_bit(twin):
         assert np.array_equal(b - r, f)
 
     # A complex scale, spelled the C2 way.
+    #
+    # EXACT on the AVX2 build; a measured bar on the BASELINE one (momwire#1032).
+    # The two structural claims above stay exact on every build and are the ones
+    # that catch the defect this test exists for: `scale=1.0` is a bit-identity,
+    # and the additive fold is `dst − (t1 + t2 + …)` rather than a node-by-node
+    # reassociation. What moves on the baseline build is only how GCC contracts
+    # the complex multiply without -mfma, against numpy's own spelling of it —
+    # measured on the fat-dipole deck, 1571/7686 doubles differ by at most 462
+    # ULP, 8.9e-14 relative. A genuine reassociation or a twice-applied scale
+    # would miss by orders more than that, so the bar still gates the bug.
     c2 = complex(0.3129384756, -0.7182736451)
     scaled = tuple(np.zeros_like(a) for a in ref)
     fill(*args, out=scaled, scale=c2)
+    exact = momwire.accelerator_variant in ("avx2", "legacy", None)
     for r, s in zip(ref, scaled):
-        assert np.array_equal(np.multiply(c2, r), s)
+        want = np.multiply(c2, r)
+        if exact:
+            assert np.array_equal(want, s)
+        else:
+            np.testing.assert_allclose(s, want, rtol=1e-12, atol=0.0)
 
 
 @pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")

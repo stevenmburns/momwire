@@ -803,7 +803,18 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     return vals;
 }
 
-PYBIND11_MODULE(_near_interface_accel, m) {
+// momwire#1032: the module NAME is a build parameter, so the same sources can
+// be compiled twice — once with AVX2/FMA and once at the x86-64 baseline — and
+// loaded by name at import time on a CPU that can run one but not the other.
+// `PYBIND11_MODULE` pastes this token into the init symbol, so a `-D` here is
+// what makes `PyInit__accelerators_sse2` exist. The default keeps an
+// out-of-tree or single-variant build (macOS, arm64) building under the name
+// it has always had.
+#ifndef MOMWIRE_MODULE_NAME
+#define MOMWIRE_MODULE_NAME _near_interface_accel
+#endif
+
+PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     m.doc() =
         "momwire#680 U2 and #899 item 1: the C++ twins of "
         "_near_interface.six_point and _near_interface.six_columns. "
