@@ -37,7 +37,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from types import MappingProxyType
 
-from ._cards import Card, DeckError, parse_card
+from ._cards import _FUSED_FIELD_START, Card, DeckError, parse_card
 
 __all__ = [
     "parse_nec5",
@@ -403,12 +403,12 @@ _REFUSED_BY_NAME = MappingProxyType(
         "dialect",
         "GF": "GF (numerical Green's function) is not part of this engine's nec5 "
         "dialect",
-        "SP": "SP (surface patch) is not part of this engine's nec5 dialect, which "
-        "models wires only",
+        # SP is refused by SHAPE, not by name -- see `_classify_sp` and the
+        # dispatch below. It is absent from this table deliberately.
         "SM": "SM (multiple-patch surface) is not part of this engine's nec5 dialect, "
         "which models wires only",
-        "SC": "SC (surface patch continuation) is not part of this engine's nec5 "
-        "dialect, which models wires only",
+        "SC": "SC is not a NEC-5 command (it is the NEC-2/NEC-4 patch continuation); "
+        "this deck is NEC-2 dialect",
         "CP": "CP (coupling request) is not part of this engine's nec5 dialect",
         "PL": "PL (plot request) is not part of this engine's nec5 dialect",
         "WG": "WG (NGF write request) is not part of this engine's nec5 dialect",
@@ -461,6 +461,66 @@ _EX_KINDS = frozenset({0, 4})
 # a packed set of output-format flags, and an unobserved packing would be a
 # printout this seam has never been shown how to write.
 _RP_XNDA = frozenset({1000, 1001})
+
+
+_SP_SPHERE = (
+    "SP (sphere) is not part of this engine's nec5 dialect, which models wires only"
+)
+_SP_PATCH = (
+    "SP in its NEC-2/NEC-4 surface-patch form is not legal NEC-5 syntax "
+    "(NEC-5's SP is a sphere); this deck is NEC-2 dialect"
+)
+
+
+def _sp_field_tokens(card: Card) -> list[str]:
+    """The card's fields as WRITTEN, not as parsed.
+
+    `Card` keeps only floats, and the classifier below needs to know whether a
+    field was spelled `2` or `2.0` -- integral values are not integer literals.
+    Tokenised exactly as `parse_card` does, fused first field included, so a
+    deck this reader accepts cannot tokenise differently here.
+    """
+    tokens = card.raw.strip().replace(",", " ").split()
+    if not tokens:
+        return []
+    head = tokens[0]
+    if len(head) > 2 and head[:2].isalpha() and head[2] in _FUSED_FIELD_START:
+        tokens = [head[:2], head[2:], *tokens[1:]]
+    return tokens[1:]
+
+
+def _is_int_literal(token: str) -> bool:
+    return token.lstrip("+-").isdigit()
+
+
+def _classify_sp(card: Card) -> str:
+    """`"sphere"` for NEC-5's SP, `"patch"` for the NEC-2/NEC-4 one.
+
+    The two cards share a mnemonic and nothing else, which is why refusing
+    either by the other's name misleads (momwire#1022).
+
+      NEC-2/NEC-4:  ``SP I1 I2 F1 .. F6``  -- two integers (I2 = patch shape
+                    0..3) then real coordinates, at most 8 fields.
+      NEC-5:        ``SP ITAG NTH NPH IALT X0 Y0 Z0 RAD TH1 TH2 PH1 PH2``
+                    -- FOUR integers, two of them patch-edge counts (>= 1),
+                    then eight reals with radius > 0.
+
+    So fields 3 and 4 are integer counts in NEC-5 and real coordinates in
+    NEC-2: a decimal point or exponent in either settles it on sight, and when
+    both are integer literals the field count and a positive radius do. The
+    manual's Example 4 card, ``SP 0 0 .1 .05 .05 0. 0.``, is a patch on sight.
+
+    Reused from antennaknobs' corpus translator (`_classify_sp` in
+    `scripts/nec5_corpus/nec5_corpus.py`), where it was derived from the NEC-5
+    Users Manual's SP layout and measured against the manual's own examples.
+    Adapted only to this `Card` API, which parses fields to float eagerly.
+    """
+    tokens = _sp_field_tokens(card)
+    if len(tokens) < 8 or not all(_is_int_literal(t) for t in tokens[:4]):
+        return "patch"
+    if card.i(1) < 1 or card.i(2) < 1 or card.f(7) <= 0:
+        return "patch"
+    return "sphere"
 
 
 def _complex(card: Card, k: int) -> complex:
@@ -894,6 +954,13 @@ class _Nec5Parser:
                 f"{card.mnemonic} arrives before any CE card; a deck's comment block "
                 f"must be closed by CE before its first data card"
             )
+        if card.mnemonic == "SP":
+            # Refused either way -- this engine models wires only -- but by the
+            # right name: NEC-5's SP is a sphere, and a NEC-2-form patch card
+            # in a deck handed to a NEC-5 reader is a DIALECT error. Stock
+            # NEC5CL reads such a card as a sphere and silently solves without
+            # the box (momwire#1022, from the manual's Example 4).
+            raise DeckError(_SP_SPHERE if _classify_sp(card) == "sphere" else _SP_PATCH)
         if (message := _REFUSED_BY_NAME.get(card.mnemonic)) is not None:
             raise DeckError(message)
         if card.mnemonic not in _VOCABULARY:
