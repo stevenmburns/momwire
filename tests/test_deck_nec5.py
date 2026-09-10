@@ -576,3 +576,104 @@ def test_the_frequency_is_one_point_in_mhz():
     assert deck("0010").frequency_mhz == 299.7925
     assert deck("0002").frequency_mhz == 7.15
     assert deck("0009").frequency_mhz == 7.5
+
+
+# ----------------------------------------------------------------------
+# SP is a SPHERE in NEC-5, and SC is not a NEC-5 command at all (#1022)
+# ----------------------------------------------------------------------
+#
+# The refusal outcome is unchanged -- this engine models wires only -- but the
+# sentence has to name the right card. The nec5 dialect is what the EZNEC
+# drop-in and the portal read, so a NEC-5 user with a sphere deck was being
+# told their card was a surface patch, which it is not.
+#
+# The dialect case is the sharper one. A NEC-2-form SP inside a deck handed to
+# a NEC-5 reader is not an unsupported feature, it is the WRONG DIALECT: stock
+# NEC5CL reads those cards as spheres and silently solves the remaining wires
+# with no box at all (the manual's Example 4, measured by AC6LA 2026-09-09).
+# Saying "surface patch is not supported" would imply the deck is fine and the
+# engine is limited; it is the other way round.
+
+# The manual's Example 4 geometry: three NEC-2 patches, then GX, then wires.
+NEC5_MANUAL_EXAMPLE_4_PATCHES = (
+    "SP 0 0 .1 .05 .05 0. 0.",
+    "SP 0 0 .1 -.05 .05 0. 0.",
+    "SP 0 0 .1 .05 -.05 0. 0.",
+)
+
+# A well-formed NEC-5 sphere: ITAG NTH NPH IALT then eight reals, radius > 0.
+NEC5_SPHERE = "SP 0 12 24 0 0. 0. 0. 1.5 0. 180. 0. 360."
+
+
+def _nec5_body(*cards):
+    lines = DIPOLE.splitlines()
+    at = lines.index("EN")
+    return "\n".join([*lines[:at], *cards, "EN"]) + "\n"
+
+
+def test_a_nec5_sphere_is_refused_as_a_sphere():
+    with pytest.raises(DeckError) as excinfo:
+        parse_nec5(_nec5_body(NEC5_SPHERE))
+    message = str(excinfo.value)
+    assert "SP (sphere)" in message
+    assert "models wires only" in message
+    # The old sentence called it a surface patch. It is not one.
+    assert "surface patch" not in message
+
+
+def test_a_nec2_form_patch_is_refused_as_a_dialect_error():
+    with pytest.raises(DeckError) as excinfo:
+        parse_nec5(_nec5_body(NEC5_MANUAL_EXAMPLE_4_PATCHES[0]))
+    message = str(excinfo.value)
+    assert "NEC-2/NEC-4 surface-patch form" in message
+    assert "NEC-5's SP is a sphere" in message
+    assert "NEC-2 dialect" in message
+
+
+@pytest.mark.parametrize("card", NEC5_MANUAL_EXAMPLE_4_PATCHES)
+def test_every_example_4_patch_reads_as_the_wrong_dialect(card):
+    """Not just the first one: the manual's three patches differ only in sign,
+    and a classifier keyed on something other than shape could split them."""
+    with pytest.raises(DeckError, match="NEC-2 dialect"):
+        parse_nec5(_nec5_body(card))
+
+
+def test_sc_is_refused_as_not_a_nec5_command():
+    with pytest.raises(DeckError) as excinfo:
+        parse_nec5(_nec5_body("SC 0 0 .1 .05 .05 0. 0."))
+    message = str(excinfo.value)
+    assert "SC is not a NEC-5 command" in message
+    assert "NEC-2 dialect" in message
+
+
+def test_sm_still_refuses_by_name():
+    """Unchanged by #1022 -- SM is genuinely a NEC-2/NEC-4 patch card and
+    NEC-5 rejects it, so the existing sentence was already right."""
+    with pytest.raises(DeckError, match="SM"):
+        parse_nec5(_nec5_body("SM 2,2,0.,0.,0.,1.,0.,0."))
+
+
+@pytest.mark.parametrize(
+    ("card", "shape"),
+    [
+        pytest.param(NEC5_SPHERE, "sphere", id="sphere"),
+        pytest.param(NEC5_MANUAL_EXAMPLE_4_PATCHES[0], "patch", id="example-4"),
+        pytest.param("SP 0 0 1 2 3 4 5 6", "patch", id="int-literals-but-nth-zero"),
+        pytest.param("SP 0 1 2.0 3 4. 5. 6. 7.", "patch", id="real-in-a-count-field"),
+        pytest.param(
+            "SP 0 4 4 0 0. 0. 0. 0. 0. 180. 0. 360.", "patch", id="zero-radius"
+        ),
+        pytest.param(
+            "SP0 12 24 0 0. 0. 0. 1.5 0. 180. 0. 360.", "sphere", id="fused-first-field"
+        ),
+    ],
+)
+def test_the_sp_classifier_reads_the_form_not_the_values(card, shape):
+    """The literal spelling matters, not just the parsed number: a count field
+    written `2.0` is a real coordinate, so the card is a patch even though the
+    value is integral. `Card` keeps only floats, which is why the classifier
+    re-tokenises the raw line."""
+    from momwire.deck._cards import parse_card
+    from momwire.deck._nec5 import _classify_sp
+
+    assert _classify_sp(parse_card(card)) == shape
