@@ -60,6 +60,7 @@ from ._aca import (
     HMatrix,
     aca_partial,
     admissible,
+    box_distance,
     build_block_tree,
     build_cluster_tree,
     partition_stats,
@@ -1499,6 +1500,136 @@ class HMatrixSolver(BSplineSolver):
         }
         self._hm_partition = part
         return part
+
+    # ------------------------------------------------------------------
+    # The partition as data (momwire#1021)
+    # ------------------------------------------------------------------
+    def partition_report(self):
+        """The block-cluster partition this solver chose, as plain data.
+
+        Read-only and JSON-serialisable; changes no number. Before a solve it
+        describes the partition alone; after `compute_impedance` / `solve`
+        every far block also carries the ACA rank it was stored at, or
+        ``stored: "dense"`` where the factors would have cost more than the
+        block and the assembler kept it dense, and the summary carries the
+        Sommerfeld remainder's global rank / residual / fallback state
+        (momwire#973, #1019) and the fragmentation guard's numbers
+        (momwire#972, #990).
+
+        Why (momwire#1021): the crossover ladder (#977), the residual census
+        (#1019) and the question "would any deck ever need a per-design
+        partition hint" all read this off a bench harness's spies on
+        private state. A summary not produced from the raw data is not
+        evidence; this is the raw data.
+
+        Returns ``{"summary": {...}, "clusters": [...], "blocks": [...]}``.
+        Clusters are numbered in depth-first order from the root; a block
+        names its two clusters by that id.
+        """
+        part = self.build_partition()
+        root = part["root"]
+        n = int(root.size)
+        ids: dict[int, int] = {}
+        clusters: list[dict] = []
+
+        def walk(node, depth):
+            ids[id(node)] = len(clusters)
+            clusters.append(
+                {
+                    "id": len(clusters),
+                    "depth": depth,
+                    "size": int(node.size),
+                    "leaf": bool(node.is_leaf),
+                    "lo": [float(x) for x in node.lo],
+                    "hi": [float(x) for x in node.hi],
+                    "diam": float(node.diam),
+                }
+            )
+            if not node.is_leaf:
+                walk(node.left, depth + 1)
+                walk(node.right, depth + 1)
+
+        walk(root, 0)
+
+        H = getattr(self, "_hmatrix", None)
+        far_rank: dict = {}
+        dense_keys: set = set()
+        if H is not None:
+            for I, J, U, _V in H.far:
+                far_rank[(I.tobytes(), J.tobytes())] = int(U.shape[1])
+            for I, J, _D in H.near:
+                dense_keys.add((I.tobytes(), J.tobytes()))
+
+        blocks: list[dict] = []
+        for kind, pairs in (("far", part["far"]), ("near", part["near"])):
+            for s_, t_ in pairs:
+                row = {
+                    "s": ids[id(s_)],
+                    "t": ids[id(t_)],
+                    "kind": kind,
+                    "m": int(s_.size),
+                    "n": int(t_.size),
+                    "area": int(s_.size) * int(t_.size),
+                    "distance": float(box_distance(s_, t_)),
+                }
+                if kind == "far" and H is not None:
+                    key = (s_.indices.tobytes(), t_.indices.tobytes())
+                    if key in far_rank:
+                        row["stored"] = "lowrank"
+                        row["rank"] = far_rank[key]
+                    elif key in dense_keys:
+                        row["stored"] = "dense"
+                blocks.append(row)
+
+        ranks = [b["rank"] for b in blocks if "rank" in b]
+        frag = self._fragmentation()
+        n_far = len(part["far"])
+        summary = dict(part["stats"])
+        summary.update(
+            {
+                "eta": float(part["eta"]),
+                "leaf_size": int(part["leaf_size"]),
+                "n_clusters": len(clusters),
+                "depth": max(c["depth"] for c in clusters),
+                "built": H is not None,
+                "far_rank_max": max(ranks) if ranks else None,
+                "far_rank_mean": (sum(ranks) / len(ranks)) if ranks else None,
+                "far_stored_dense": sum(
+                    1 for b in blocks if b.get("stored") == "dense"
+                ),
+                "fragmentation": {
+                    "far_blocks": n_far,
+                    "far_per_basis": (n_far / n) if n else 0.0,
+                    "tripped": frag is not None,
+                    "prefers_dense": bool(
+                        frag is not None and _dense_matrix_gb(n) <= _FRAG_DENSE_MAX_GB
+                    ),
+                },
+                "sommerfeld": {
+                    "rank": getattr(self, "_last_somm_rank", None),
+                    "residual": getattr(self, "_last_somm_residual", None),
+                    "z_residual": getattr(self, "_last_somm_z_residual", None),
+                    "fallback": getattr(self, "_last_somm_fallback", None),
+                },
+                "solve_iters": getattr(self, "_last_solve_iters", None),
+            }
+        )
+        return {"summary": summary, "clusters": clusters, "blocks": blocks}
+
+    def partition_report_jsonl(self, path):
+        """Write `partition_report()` as JSON lines: one ``{"summary": ...}``
+        row, one ``{"cluster": ...}`` row per cluster, one ``{"block": ...}``
+        row per block — produced by the solver, never scraped from a log."""
+        import json
+
+        report = self.partition_report()
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(json.dumps({"summary": report["summary"]}) + "\n")
+            for c in report["clusters"]:
+                f.write(json.dumps({"cluster": c}) + "\n")
+            for b in report["blocks"]:
+                f.write(json.dumps({"block": b}) + "\n")
+        return report
 
     # ------------------------------------------------------------------
     # H-matrix assembly (Phase 2): dense near blocks + ACA far blocks
