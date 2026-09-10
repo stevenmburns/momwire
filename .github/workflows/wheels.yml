@@ -17,6 +17,46 @@ name: wheels
 #     and publish them to PyPI via Trusted Publishing.
 #   - workflow_dispatch: run the full matrix manually on a branch before merging
 #     a build-affecting change, when you want cross-platform coverage pre-merge.
+#
+# DEBUG SYMBOLS IN THE LINUX WHEEL (momwire#1030). setup.py compiles the Linux
+# extensions with `-g` on purpose — it pairs with `-fno-omit-frame-pointer` so a
+# profile can walk the Python/C++ boundary — which shipped a 48 MB wheel, 38 MB
+# of it DWARF that no user could use, the wheel carrying no source to step
+# through. `[tool.cibuildwheel.linux].environment` now sets
+# `MOMWIRE_STRIP_SYMBOLS=1`, and `OptionalBuildExt._split_debug` moves the DWARF
+# into a sibling `<name>.debug` and records a `.gnu_debuglink`. Measured on
+# `_accelerators`:
+#
+#     published (unstripped)   34.8 MB
+#     strip --strip-debug       2.2 MB   .symtab kept, 1998 symbols
+#     strip -s                  1.9 MB   no symbols at all
+#
+# `--strip-debug`, so a user's segfault backtrace still NAMES momwire's
+# functions; 0.4 MB across both extensions is a cheap price for that. Wheel:
+# ~48 MB -> 6.6 MB uncompressed. The Windows wheel already shipped
+# `_accelerators` at 1.8 MB (MSVC puts debug info in a separate .pdb that is not
+# distributed), so this brings the platforms into line rather than trading
+# anything away.
+#
+# A wheel built WITHOUT that variable keeps its symbols — the escape hatch if
+# crash triage on a released build ever needs them. `pip install -e .` and
+# `make build` are unaffected.
+#
+# TWO TRAPS, both found by measuring rather than by reading, both easy to
+# reintroduce:
+#
+#   * `objcopy --add-gnu-debuglink` resolves its argument AND writes its
+#     temporary file against the CWD. Passing an absolute target while setting
+#     `cwd=` fails on the temp file, not on the target — the error message
+#     names the .so and is easy to misread as a permissions problem. Both
+#     names are passed relative, with `cwd` set to the extension's directory.
+#   * the `<name>.debug` sidecars must NOT be left beside the extension.
+#     `build_py` packages everything under the package directory, so the first
+#     version of this put the whole 38 MB of DWARF straight back into the wheel
+#     — the wheel shipped BOTH the stripped .so and its debug file, and looked
+#     like it had worked. They are moved to `build/debug/` after the debuglink
+#     is recorded, which is also where a release job should look to attach
+#     them.
 
 on:
   workflow_dispatch:
