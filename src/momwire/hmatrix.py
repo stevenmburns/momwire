@@ -422,6 +422,18 @@ DEFAULT_SOMM_RESIDUAL_TOL = 4e-3
 # shape to try, and it is momwire#1019's remaining work.
 DEFAULT_SOMM_Z_RESIDUAL_TOL = float("inf")
 
+# How many ACA rows the Sommerfeld remainder factorization fetches per call
+# (momwire#981 step 3b). Partial pivoting asks for one row at a time and the
+# fused kernel batches over the OBSERVER axis, so a 1 x n row runs at 7.6x the
+# bulk sample rate against 32 rows' 1.1x — measured on a grounded 976-basis
+# deck, 1/2/4/8/16/32 rows giving 7.6 / 3.8 / 2.2 / 1.8 / 1.4 / 1.1.
+#
+# `1` keeps `aca_partial`'s own loop and is bit-identical to before this knob
+# existed. Anything above it is BLOCKED ACA — a different pivot sequence, so a
+# different rank and residual — which is why it is a number here rather than a
+# rewrite, and why its callers gate on accuracy rather than identity.
+DEFAULT_SOMM_ACA_BLOCK_ROWS = 1
+
 # When the cluster tree FRAGMENTS, the H-matrix route stops paying and the
 # dense one is faster (momwire#972). Thresholds measured, not chosen:
 #
@@ -1366,8 +1378,27 @@ class HMatrixSolver(BSplineSolver):
         get_row = _one if self.somm_row_as_column else _row_native
         get_col = _one
 
+        def get_rows(ii):
+            side = self._somm_side(ctx, self._somm_nodes(ctx), idx[ii])
+            return self._zblock_sommerfeld_remainder(
+                idx[ii],
+                idx,
+                k=k,
+                eps_t=eps_t,
+                grid_args=grid_args,
+                side_I=side,
+                side_J=ctx_full,
+            )
+
         U, V, used_rows, used_cols = aca_partial(
-            get_row, get_col, n, n, tol=self.aca_tol, return_pivots=True
+            get_row,
+            get_col,
+            n,
+            n,
+            tol=self.aca_tol,
+            return_pivots=True,
+            get_rows=get_rows if self.somm_aca_block_rows > 1 else None,
+            block_rows=self.somm_aca_block_rows,
         )
         self._last_somm_rank = U.shape[1]
 
@@ -2626,6 +2657,7 @@ class HMatrixSolver(BSplineSolver):
         aca_tol=DEFAULT_ACA_TOL,
         somm_residual_tol=DEFAULT_SOMM_RESIDUAL_TOL,
         somm_z_residual_tol=DEFAULT_SOMM_Z_RESIDUAL_TOL,
+        somm_aca_block_rows=DEFAULT_SOMM_ACA_BLOCK_ROWS,
         solve_tol=1e-6,
         hmatrix_use_accel=True,
         precond_eta=None,
@@ -2638,6 +2670,7 @@ class HMatrixSolver(BSplineSolver):
         self.aca_tol = float(aca_tol)
         self.somm_residual_tol = float(somm_residual_tol)
         self.somm_z_residual_tol = float(somm_z_residual_tol)
+        self.somm_aca_block_rows = int(somm_aca_block_rows)
         self._last_somm_z_residual = None
         self.solve_tol = float(solve_tol)
         # Preconditioner near-field admissibility. The GMRES preconditioner

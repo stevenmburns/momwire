@@ -132,7 +132,153 @@ def build_block_tree(s, t, eta, leaf_size_stop=None):
     return far, near
 
 
-def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None, return_pivots=False):
+# How far below the true pivot a pending in-block row may sit and still be
+# spent as a pivot (momwire#981 step 3b). Swept, not chosen — see the ladder in
+# `_aca_blocked`.
+_BLOCK_KEEP_FRAC = 0.5
+
+
+def _aca_blocked(get_rows, get_col, m, n, tol, max_rank, block_rows):
+    """ACA whose ROW fetches are batched (momwire#981 step 3b).
+
+    Partial pivoting picks each pivot from the PREVIOUS residual, so it fetches
+    one row at a time — and the fused Sommerfeld kernel batches over the
+    OBSERVER axis, so a 1 x n row runs at 7.6x the bulk sample rate where 32
+    rows at once run at 1.1x. Measured, grounded 976-basis deck:
+
+        rows/call    1     2     4     8    16    32
+        vs bulk    7.6x  3.8x  2.2x  1.8x  1.4x  1.1x
+
+    So this fetches `block_rows` unused rows in ONE call and spends them: the
+    block is residual-corrected in memory, the best entry in it becomes the
+    pivot, and what is left is re-corrected against the new rank-1 term and
+    reused. One fetch serves up to `block_rows` updates.
+
+    THIS IS A DIFFERENT ALGORITHM, not a faster spelling. The pivot row is
+    chosen from the fetched block rather than from the previous column's
+    maximum, so the pivot sequence, the rank and the residual all differ from
+    `aca_partial`'s. That is why it is opt-in and why its callers gate on
+    accuracy rather than on identity. `aca_partial` with the default
+    `block_rows=1` never reaches here.
+
+    The stopping rule is `aca_partial`'s, and inherits its blindness to
+    stagnation (momwire#973) — a caller that needs a trustworthy factorisation
+    still has to check from outside, which is what `_sampled_residual` is for.
+    """
+    U, V = [], []
+    used_rows = np.zeros(m, dtype=bool)
+    used_cols = np.zeros(n, dtype=bool)
+    approx_norm2 = 0.0
+    rank = 0
+    i_star = 0  # the next row partial pivoting would pick; seeds each block
+    pend_idx = np.empty(0, dtype=np.int64)  # fetched, residual-corrected, unspent
+    pend = np.empty((0, n), dtype=np.complex128)
+
+    while rank < max_rank:
+        if pend_idx.size == 0:
+            free = np.flatnonzero(~used_rows)
+            if free.size == 0:
+                break
+            # SEED THE BLOCK WITH THE PARTIAL-PIVOTING CHOICE. Taking the first
+            # `block_rows` unused rows in index order instead — which is what
+            # this did first — is not blocked ACA, it is ACA with no row
+            # pivoting, and it shows: on `wire.rhombic` the rank went 62 -> N
+            # and the ACA term 0.18 s -> 5.13 s. `i_star` is the row the
+            # previous column's residual maximum points at, exactly as in
+            # `aca_partial`; the rest of the block rides along with it.
+            if i_star is not None and not used_rows[i_star]:
+                rest = free[free != i_star]
+                take = np.concatenate(([i_star], rest[: max(0, block_rows - 1)]))
+            else:
+                take = free[: min(block_rows, free.size)]
+            pend = np.asarray(get_rows(take), dtype=np.complex128).reshape(take.size, n)
+            pend_idx = take
+            for k in range(rank):
+                pend -= np.outer(U[k][pend_idx], V[k])
+
+        absblk = np.abs(pend)
+        absblk[:, used_cols] = -1.0
+        flat = int(np.argmax(absblk))
+        bi, j_star = divmod(flat, n)
+        if absblk[bi, j_star] <= 0.0:
+            used_rows[pend_idx] = True
+            pend_idx, pend = np.empty(0, dtype=np.int64), np.empty((0, n), complex)
+            continue
+
+        row = pend[bi]
+        delta = row[j_star]
+        if np.abs(delta) < 1e-300:
+            used_rows[pend_idx[bi]] = True
+            keep = np.arange(pend_idx.size) != bi
+            pend_idx, pend = pend_idx[keep], pend[keep]
+            continue
+
+        v = row / delta
+        col = np.asarray(get_col(j_star), dtype=np.complex128).copy()
+        for k in range(rank):
+            col -= V[k][j_star] * U[k]
+        used_cols[j_star] = True
+        used_rows[pend_idx[bi]] = True
+        u = col
+
+        un = float(np.linalg.norm(u))
+        vn = float(np.linalg.norm(v))
+        cross = 0.0
+        for k in range(rank):
+            cross += np.real(np.vdot(U[k], u) * np.vdot(V[k], v))
+        approx_norm2 += 2.0 * cross + (un * vn) ** 2
+        U.append(u)
+        V.append(v)
+        rank += 1
+
+        keep = np.arange(pend_idx.size) != bi
+        pend_idx, pend = pend_idx[keep], pend[keep]
+        if pend_idx.size:
+            pend -= np.outer(u[pend_idx], v)  # re-correct what is left
+
+        # Where partial pivoting would go next, kept up to date so the NEXT
+        # block is seeded with it rather than with an arbitrary index.
+        abscol = np.abs(u)
+        abscol[used_rows] = -1.0
+        i_star = int(np.argmax(abscol)) if (~used_rows).any() else None
+
+        # SPEND THE REST OF THE BLOCK ONLY WHILE IT IS WORTH SPENDING. The
+        # column `u` estimates each row's residual magnitude, so a pending row
+        # far below the true pivot's is a bad pivot — and spending it anyway
+        # is what drove `wire.rhombic` from rank 62 to rank N. Dropping the
+        # remainder costs the rest of a fetch; keeping a bad pivot costs a
+        # rank-1 term that buys nothing and never comes back.
+        if pend_idx.size and i_star is not None:
+            best_pend = float(np.abs(u[pend_idx]).max())
+            if best_pend < _BLOCK_KEEP_FRAC * float(abscol[i_star]):
+                pend_idx = np.empty(0, dtype=np.int64)
+                pend = np.empty((0, n), dtype=np.complex128)
+
+        if approx_norm2 <= 0.0 or un * vn <= tol * np.sqrt(approx_norm2):
+            break
+
+    if not U:
+        return (
+            np.zeros((m, 0), dtype=np.complex128),
+            np.zeros((0, n), dtype=np.complex128),
+            used_rows,
+            used_cols,
+        )
+    return np.stack(U, axis=1), np.stack(V, axis=0), used_rows, used_cols
+
+
+def aca_partial(
+    get_row,
+    get_col,
+    m,
+    n,
+    tol=1e-3,
+    max_rank=None,
+    return_pivots=False,
+    *,
+    get_rows=None,
+    block_rows=1,
+):
     """Adaptive Cross Approximation with partial pivoting.
 
     Builds a low-rank factorisation A ~ U @ V (U: (m, r), V: (r, n)) of an
@@ -161,6 +307,15 @@ def aca_partial(get_row, get_col, m, n, tol=1e-3, max_rank=None, return_pivots=F
     if max_rank is None:
         max_rank = min(m, n)
     max_rank = min(max_rank, m, n)
+
+    # momwire#981 step 3b. `block_rows=1` — the default, and what every caller
+    # but the Sommerfeld remainder passes — never enters the blocked path, so
+    # the loop below is reached with the same arithmetic it always had.
+    if block_rows > 1 and get_rows is not None:
+        Ub, Vb, ur, uc = _aca_blocked(
+            get_rows, get_col, m, n, tol, max_rank, int(block_rows)
+        )
+        return (Ub, Vb, ur, uc) if return_pivots else (Ub, Vb)
 
     U = []  # list of (m,) columns
     V = []  # list of (n,) rows
