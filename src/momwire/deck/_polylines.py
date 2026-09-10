@@ -24,9 +24,23 @@ Four things happen here, in this order:
   3. **The chaining.**  Nodes of degree 2 are interior to a polyline; every
      other node ends one.  A change of radius or material at a degree-2 node
      ends one too, because a solver takes one radius and one material per
-     wire.  Pure cycles have no node of any other degree, so they are cut —
-     at a port edge when the loop has one, since that edge has to be its own
-     polyline anyway, and at the lowest-numbered edge when it does not.
+     wire.  So does a degree-2 node IN the ground plane whose two spans lie
+     on opposite sides of it (momwire#667): the solver serves current across
+     the interface only through a declared crossing junction (momwire#524
+     phase 2), so the below wire must END in the plane and the above wire
+     START there, and the node becomes a two-member junction exactly like a
+     cycle cut.  Chained through, the same two cards would be one polyline
+     with points on both sides, which the solver refuses.  Pure cycles have
+     no node of any other degree, so they are cut — at a port edge when the
+     loop has one, since that edge has to be its own polyline anyway, and at
+     the lowest-numbered edge when it does not.
+  0. **The plane split**, before any of that (momwire#667).  A straight
+     card wire that crosses the ground plane mid-span is split where its
+     line meets the plane — for a straight wire that point is exact, not a
+     guess — into a below edge ending in the plane and an above edge
+     starting there, the edge's element count apportioned by length (each
+     side at least one).  Ports address a wire by arclength and node gaps
+     by vertex, so both survive the inserted vertex unchanged in meaning.
   4. **The remap.**  Every port's arclength is recomputed along the polyline
      it ended up on, from that polyline's own edge lengths.
 
@@ -39,13 +53,13 @@ changes hands.  ``tests/test_deck_nec2_corpus.py`` is that measurement.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 from .model import DeckModel, DeckWire, WireMaterial
 
-__all__ = ["Mesh", "to_polylines"]
+__all__ = ["Mesh", "split_at_plane", "to_polylines"]
 
 
 # Node quantization, metres.  antennaknobs' own; see the module docstring for
@@ -229,6 +243,75 @@ def _point(
     return tuple(x + (y - x) * t for x, y in zip(a, b))  # type: ignore[return-value]
 
 
+def _plane_tol(wire: DeckWire) -> float:
+    """The solver's own "touches the plane" distance for one wire: 1e-6 of
+    its length (`_ground_spec.ground_touch_tol`), so the split and the
+    chaining agree with the solver about which side of the line an end in
+    the plane falls on."""
+    return 1e-6 * max(sum(wire.edge_lengths), 1e-9)
+
+
+def split_at_plane(model: DeckModel) -> DeckModel:
+    """The model with every edge that crosses the ground plane mid-span
+    split where it meets the plane (momwire#667).
+
+    A model in free space, or whose wires never straddle the plane, comes
+    back unchanged — the same object, so a deck with nothing to split takes
+    the untouched path.  An edge with one vertex strictly below the plane
+    and the other strictly above it gains a vertex at the crossing; its
+    element count is shared between the two new edges in proportion to
+    their lengths, each side keeping at least one, and the total preserved
+    where it can be (a single-element edge becomes two).  Node gaps address
+    a vertex by index, so those after an inserted vertex move up by one.
+    """
+    if model.ground is None:
+        return model
+    gz = float(model.ground_z)
+    new_wires: list[DeckWire] = []
+    inserted: dict[
+        int, list[int]
+    ] = {}  # wire -> vertex indices inserted (new numbering)
+    changed = False
+    for wire_index, wire in enumerate(model.wires):
+        tol = _plane_tol(wire)
+        vertices: list[tuple[float, float, float]] = [tuple(wire.vertices[0])]
+        elements: list[int] = []
+        for edge, (a, b) in enumerate(zip(wire.vertices[:-1], wire.vertices[1:])):
+            n = wire.edge_elements[edge]
+            za, zb = float(a[2]) - gz, float(b[2]) - gz
+            if (za < -tol and zb > tol) or (za > tol and zb < -tol):
+                t = za / (za - zb)  # where the line meets the plane, exact
+                cross = tuple(float(x + (y - x) * t) for x, y in zip(a, b))
+                cross = (cross[0], cross[1], gz)  # land ON the plane, not 1 ulp off
+                n_first = int(round(n * t))
+                n_first = max(1, min(n - 1, n_first)) if n >= 2 else 1
+                n_second = n - n_first if n >= 2 else 1
+                elements.append(n_first)
+                vertices.append(cross)
+                inserted.setdefault(wire_index, []).append(len(vertices) - 1)
+                elements.append(n_second)
+                vertices.append(tuple(b))
+                changed = True
+            else:
+                elements.append(n)
+                vertices.append(tuple(b))
+        new_wires.append(
+            DeckWire(
+                vertices=tuple(vertices),
+                radius=wire.radius,
+                edge_elements=tuple(elements),
+                material=wire.material,
+            )
+        )
+    if not changed:
+        return model
+    node_gaps = []
+    for wire, vertex, volts in model.node_gaps:
+        shift = sum(1 for v in inserted.get(wire, ()) if v <= vertex)
+        node_gaps.append((wire, vertex + shift, volts))
+    return replace(model, wires=tuple(new_wires), node_gaps=tuple(node_gaps))
+
+
 def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh:
     """Chain a model's wires into polylines and place its ports on them.
 
@@ -236,6 +319,7 @@ def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh
     order; :attr:`Mesh.port_order` says where each one ended up once the
     structure decided the solver's port ordering.
     """
+    model = split_at_plane(model)
     spans = _spans(model, ports)
     if not spans:
         raise ValueError("the model has no wires")
@@ -278,6 +362,22 @@ def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh
             # as a two-member junction below, exactly like a cycle cut, so
             # the current still flows through it.
             boundary[node] = True
+
+    if model.ground is not None:
+        # momwire#667: a degree-2 node in the ground plane between a span
+        # below it and a span above it is a crossing junction, never an
+        # interior knot — see the module docstring, step 3.
+        gz = float(model.ground_z)
+        for node, neighbours in enumerate(adjacency):
+            if boundary[node] or abs(nodes[node][2] - gz) > _NODE_EPS:
+                continue
+            sides = []
+            for other, edge in neighbours:
+                sides.append(float(nodes[other][2]) - gz)
+            if (sides[0] < -_NODE_EPS and sides[1] > _NODE_EPS) or (
+                sides[0] > _NODE_EPS and sides[1] < -_NODE_EPS
+            ):
+                boundary[node] = True
 
     node_gap_nodes = [
         node_id(model.wires[wire].vertices[vertex])

@@ -658,23 +658,15 @@ _REFUSE_NEAR_FIELD_CONTACT = (
 # Impedance, currents and charges serve.  That sentence is the serve matrix
 # and it is repeated in the module docstring.
 _REFUSE_BURIED_CROSSING = (
-    "wire {tag} crosses the ground interface (z runs {zmin:g} to {zmax:g} m "
-    "across z = 0) - a wire wholly below the interface is served over this "
-    "deck's ground card, and a wire wholly at or above it is served, but a "
-    "wire touching BOTH sides is neither, on this seam. momwire's native "
-    "API serves interface-crossing current since momwire#524 phase 2 - a "
-    "below wire ENDING in the plane, junction-joined there to an above "
-    "wire - and this seam has not adopted that serve yet: adopting it "
-    "means deciding which engine printouts are comparable, and the "
-    "adjudication measured that they are NOT - the engine's crossing "
-    "junction is two contact ends plus a point-electrode sink (its own "
-    "printed junction currents violate its AGARD condition divergently), "
-    "so its crossing prints are a different experiment from the exact-EM "
-    "answer, documented as a convention difference rather than gated "
-    "against. Until the seam adopts the serve: leave the buried part "
-    "DETACHED from the part above the plane (a buried radial screen under "
-    "a base-fed vertical is served that way), raise the whole wire clear "
-    "of z = 0, or model through the native API"
+    "wire {tag} crosses the ground interface mid-span (z runs {zmin:g} to "
+    "{zmax:g} m across z = 0). momwire serves current across the interface "
+    "only through a crossing junction (momwire#524 phase 2): a wire wholly "
+    "below the plane that ENDS in it, sharing that node with a wire that "
+    "starts there and rises above it - and this seam serves that spelling "
+    "(momwire#667). Write the wire as two GW cards meeting at z = 0, or "
+    "leave the buried part DETACHED from the part above the plane (a buried "
+    "radial screen under a base-fed vertical is served that way), or raise "
+    "the whole wire clear of z = 0"
 )
 _REFUSE_BURIED_NO_MEDIUM = (
     "wire {tag} runs below the ground plane (min z = {zmin:g} m) under a "
@@ -850,6 +842,24 @@ def refusal(deck: Nec5Deck) -> str | None:
     return None
 
 
+def _crossing_nodes(deck: Nec5Deck) -> set[tuple[int, int, int]]:
+    """The plane nodes a buried wire ENDS on — the below members of the
+    crossing junctions this seam serves since momwire#667. Pure geometry on
+    the solver's own per-wire tolerance; the serve-time check reads the
+    real junction table and has the last word."""
+    nodes: set[tuple[int, int, int]] = set()
+    if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
+        return nodes
+    for w in deck.wires:
+        pl = np.array([w.end1, w.end2], dtype=float)
+        tol = _ground_spec.ground_touch_tol(pl)
+        if float(pl[:, 2].min()) < -tol:
+            for end in pl:
+                if abs(float(end[2])) <= tol:
+                    nodes.add(_node_key(tuple(end)))
+    return nodes
+
+
 def _has_buried_wire(deck: Nec5Deck) -> bool:
     """Whether any wire lies STRICTLY below the plane, on the solver's own
     per-wire tolerance. Read by the two output refusals, which are about the
@@ -874,11 +884,11 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
     refuses is no longer "below the plane". It is three narrower things, and
     each names what is actually missing rather than restating the geometry:
 
-    * a wire with points on BOTH sides of the interface — served by the
-      native API's crossing basis since momwire#524 phase 2 (as the split
-      spelling: a below wire ending in the plane, junction-joined to an
-      above wire), not yet adopted by this seam; a buried GW whose end
-      stands IN the plane is this case here, not the buried one — the
+    * a wire with points STRICTLY on both sides of the interface — the
+      solver serves current across the plane only through a crossing
+      junction (momwire#524 phase 2), and this seam serves that spelling
+      since momwire#667: a buried GW whose end stands IN the plane is the
+      junction's below member, not a crossing, and passes here — the
       tolerance decides, and it is the solver's own;
     * a buried wire under ``GN 1`` or a bare ``GD``, neither of which has a
       lower medium at all — momwire solves both over a PERFECT image, so
@@ -903,10 +913,13 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
         zmin = float(pl[:, 2].min())
         zmax = float(pl[:, 2].max())
         if zmin < -tol:
-            if zmax >= -tol:
+            if zmax > tol:
                 return _REFUSE_BURIED_CROSSING.format(
                     tag=wire.tag, zmin=zmin, zmax=zmax
                 )
+            # zmax within the tolerance of the plane: a buried wire ENDING
+            # in it — the below member of a crossing junction (momwire#667),
+            # served through `grounded_crossing_exemption` at serve time.
             if not sommerfeld:
                 return _REFUSE_BURIED_NO_MEDIUM.format(
                     tag=wire.tag, zmin=zmin, card=card, why=_WHY_NO_MEDIUM[card]
@@ -921,11 +934,21 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
         < -_ground_spec.ground_touch_tol(np.array([w.end1, w.end2], dtype=float))
     ]
     if buried:
-        contacts = [
-            w.tag
-            for w in deck.wires
-            if _ground_spec.contact_ends([np.array([w.end1, w.end2], dtype=float)], 0.0)
-        ]
+        # A contact end that a buried wire also ENDS on is a crossing
+        # junction, not a contact (momwire#667): exempt those nodes here on
+        # geometry alone; the serve-time check reads the real junction table
+        # through `grounded_crossing_exemption` and has the last word.
+        crossing_nodes = _crossing_nodes(deck)
+        contacts = []
+        for w in deck.wires:
+            pl = np.array([w.end1, w.end2], dtype=float)
+            if float(pl[:, 2].max()) <= _ground_spec.ground_touch_tol(pl):
+                continue  # not an above wire
+            for end_index in _ground_spec.contact_ends([pl], 0.0):
+                end = pl[0] if end_index[1] == "start" else pl[1]
+                if _node_key(tuple(end)) not in crossing_nodes:
+                    contacts.append(w.tag)
+                    break
         if contacts:
             return _REFUSE_BURIED_WITH_CONTACT.format(cw=contacts[0], bw=buried[0])
     return None
@@ -1367,7 +1390,11 @@ def _addressed_nodes(deck: Nec5Deck) -> dict[int, set[int]]:
 
 
 def build_mesh(
-    deck: Nec5Deck, structure: Structure, *, solver_class: type = BSplineSolver
+    deck: Nec5Deck,
+    structure: Structure,
+    *,
+    solver_class: type = BSplineSolver,
+    crossing: bool = False,
 ) -> _Mesh:
     """The deck's wires as momwire polylines, with one port per address.
 
@@ -1408,7 +1435,14 @@ def build_mesh(
     polylines — which it now hosts (momwire#608) and still has no use for.
     """
     mesh = _Mesh()
-    cut = issubclass(solver_class, _CUT_SPELLING)
+    # momwire#667: a deck with a crossing junction takes the delta-gap
+    # spelling on every basis. The crossing serve (momwire#524 phase 2)
+    # completes the below axis only, and refuses a deck with any OTHER
+    # junction on the above side — which is exactly what cutting the above
+    # wire at its addressed node would manufacture. The two spellings are
+    # two discretisations of one source (see above), and the uncut one is
+    # the one this deck can be served with.
+    cut = issubclass(solver_class, _CUT_SPELLING) and not crossing
     addressed = _addressed_nodes(deck)
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
     # (tag, node) -> (piece, metres along it), for an addressed node STRICTLY
@@ -3032,7 +3066,9 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         )
 
     structure = structure_of(deck)
-    mesh = build_mesh(deck, structure, solver_class=solver_class)
+    mesh = build_mesh(
+        deck, structure, solver_class=solver_class, crossing=bool(_crossing_nodes(deck))
+    )
     by_address = {site.at: site for site in mesh.sites}
     for load in deck.loads:
         by_address[load.at].load += load.impedance
@@ -3047,7 +3083,14 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     medium = _medium(deck.ground, wavelength)
     _check_basis_can_host(mesh, _ground_kwargs(deck, medium), basis, solver_class)
     cards = _cards(deck, structure, mesh)
-    solver = _solver_for(deck, mesh, wavelength, medium, solver_class, basis_kwargs)
+    try:
+        solver = _solver_for(deck, mesh, wavelength, medium, solver_class, basis_kwargs)
+    except NotImplementedError as exc:
+        # The crossing serve's scope (momwire#524 phase 2: one above member,
+        # no other junction on the above side) is stated by the solver as
+        # NotImplementedError; on this seam that is a refusal by name, not
+        # an INTERNAL ERROR frame (momwire#667).
+        raise ServeRefusal(str(exc)) from None
     solution = solver.compute_port_solution()
     state = _port_state(deck, mesh, cards, solution.y, wavelength)
     # Back across T: the structure is driven by the SOLVER's gap EMFs, which

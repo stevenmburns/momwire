@@ -53,17 +53,16 @@ BELOW = "below"
 
 # The engine's print for the phase-0 crossing deck (a 2 m buried vertical
 # joined at z = 0 to a 10 m monopole over eps_r 13 / sigma 0.005 S/m soil at
-# 7 MHz). Once the waiting gate for phase 2; ADJUDICATED 2026-08-26 as a
-# DIFFERENT EXPERIMENT, not a target: the engine's junction there is two
-# independent contact ends plus a point-electrode sink (its own printed
-# junction currents violate its AGARD condition divergently, with a KCL
-# deficit of ~2 A vanishing into the interface point), while the crossing
-# serve's exact-EM answer for the same deck is 138.77 - 102.99j ohm, with
-# continuity and the AGARD slope emerging from the fill. The two conventions
-# collapse onto each other exactly where the contact fiction becomes
-# physical (sigma -> inf) and only there. Kept for the record and for the
-# convention-difference documentation; NEVER gate the crossing serve
-# against it (the house rule: never gate cross-formulation agreement).
+# 7 MHz), CAPTURED UNDER THE TRANSPOSED GROUND CARD (`GE 1,-1`,
+# antennaknobs#1025 / momwire#929). It was adjudicated on 2026-08-26 as "a
+# different experiment" — a point-electrode sink at the interface with a
+# ~2 A KCL deficit — and that reading was the card, not the engine: under
+# the documented card the engine sits ~2 ohm in R from momwire's crossing
+# serve on the connected screen, flat in radial count and length (#931,
+# #956, still open), and agrees with it to 0.01 ohm on the elevated-detached
+# panel (2026-09-09). Kept as the record of what that card printed; the
+# crossing serve's own answer is pinned by test_crossing_serve_524. NEVER a
+# gate (the house rule: never gate cross-formulation agreement).
 ENGINE_CROSSING_PRINT = "74.761 - 57.730j ohm"
 
 # Each of the four geometry refusals below is a per-deck PREAMBLE naming the
@@ -86,7 +85,8 @@ CROSSING_REFUSAL = (
     "current and the interface slope condition emerging from the fill "
     "itself. A single polyline with points on both sides is not, because "
     "which point the wire pierces the plane at would be momwire's guess "
-    "where it must be the model's statement. Alternatively leave the "
+    "where it must be the model's statement (a card seam splits a STRAIGHT "
+    "wire there for you, momwire#667). Alternatively leave the "
     "buried part DETACHED (a buried radial screen under a base-fed "
     "vertical is served that way, momwire#553), or raise the whole wire "
     "clear of the interface"
