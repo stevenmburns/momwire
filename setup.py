@@ -1,5 +1,6 @@
 import glob
 import os
+import platform
 import subprocess
 import sys
 import warnings
@@ -58,11 +59,23 @@ class OptionalBuildExt(build_ext):
             self._warn(exc)
 
     def build_extension(self, ext):
+        # PER-EXTENSION OBJECT TREE (momwire#1032). distutils names an object
+        # file after its SOURCE path, not after the extension being built, so
+        # two extensions compiled from the SAME sources with DIFFERENT flags
+        # collide in `build/temp.../src/momwire/*.o`: the second link reuses
+        # the first's objects and produces a second .so with the first's code.
+        # That failure is silent and total — the "baseline" extension would
+        # contain AVX2 instructions and fault on exactly the CPUs the double
+        # build exists for, while importing cleanly on every box we own.
+        base_temp = self.build_temp
+        self.build_temp = os.path.join(base_temp, ext.name.rsplit(".", 1)[-1])
         try:
             super().build_extension(ext)
         except _OPTIONAL_BUILD_ERRORS as exc:
             self._warn(exc)
             return
+        finally:
+            self.build_temp = base_temp
         if os.environ.get("MOMWIRE_STRIP_SYMBOLS") == "1":
             self._split_debug(Path(self.get_ext_fullpath(ext.name)))
 
@@ -304,23 +317,91 @@ _NEAR_HEADERS = [
 # so on Windows the parallelism comes from /MP in extra_compile_args above.
 ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 
-ext_modules = [
-    Pybind11Extension(
-        "momwire._accelerators",
-        _ACCEL_SOURCES,
-        depends=_ACCEL_HEADERS,
-        extra_compile_args=extra_compile_args,
+# ---------------------------------------------------------------------------
+# The double build (momwire#1032)
+# ---------------------------------------------------------------------------
+#
+# A wheel built `/arch:AVX2` (MSVC) or `-mavx2 -mfma` (GCC) LOADS on a CPU that
+# predates those instructions and then dies the first time a vectorized loop
+# runs: STATUS_ILLEGAL_INSTRUCTION (0xC000001D) on Windows, SIGILL on Linux, no
+# traceback. `except ImportError` cannot catch a hardware fault, so the
+# pure-Python fallback never ran and the process simply vanished — three days
+# of a user's time on the QRZ thread.
+#
+# So on x86 both extensions are compiled TWICE from the same sources: once with
+# today's flags (`_avx2`) and once at the x86-64 baseline (`_sse2`), and
+# `momwire._accel` picks by a CPU-feature check before importing either. The
+# wheel roughly doubles in size; that is the whole cost.
+#
+# NOT on macOS or non-x86: setup.py's darwin branch passes no AVX flag on
+# either Mac arch (it is the simple-pragmas port), and no other architecture
+# has AVX2 to ask for. Those keep the single, unsuffixed extension they have
+# always had — the loader falls back to that name, so an existing install and
+# a cross-built wheel both keep working.
+_X86_MACHINES = {"x86_64", "amd64", "x86", "i386", "i486", "i586", "i686"}
+_DOUBLE_BUILD = platform.machine().lower() in _X86_MACHINES and sys.platform != "darwin"
+
+# What makes a build AVX2. Removing these leaves each compiler at its own
+# x86-64 default, which IS the SSE2 baseline: MSVC x64 has no /arch below
+# AVX, and GCC's x86-64 target implies SSE2.
+_AVX2_ONLY_FLAGS = {"/arch:AVX2", "-mavx2", "-mfma"}
+
+
+def _baseline(args):
+    """`args` with the AVX2-specific flags removed, order otherwise intact."""
+    return [a for a in args if a not in _AVX2_ONLY_FLAGS]
+
+
+def _variant(base_name, suffix, sources, *, depends, compile_args, include_dirs=None):
+    """One Pybind11Extension for one (module, instruction-set) pair.
+
+    `define_macros` is what makes two extensions from one source legal:
+    `PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m)` pastes this token into the init
+    symbol, so each variant exports its own `PyInit_...`. Without it both
+    builds export `PyInit__accelerators` and the second cannot be imported
+    under its own name at all.
+    """
+    name = base_name + suffix
+    return Pybind11Extension(
+        f"momwire.{name}",
+        sources,
+        depends=depends,
+        include_dirs=include_dirs or [],
+        extra_compile_args=compile_args,
         extra_link_args=extra_link_args,
-    ),
-    Pybind11Extension(
-        "momwire._near_interface_accel",
-        ["src/momwire/_near_interface_accel.cpp"],
-        depends=_NEAR_HEADERS,
-        include_dirs=["extern/xsf/include"],
-        extra_compile_args=_near_compile_args,
-        extra_link_args=extra_link_args,
-    ),
-]
+        define_macros=[("MOMWIRE_MODULE_NAME", name)],
+    )
+
+
+if _DOUBLE_BUILD:
+    _VARIANTS = (
+        ("_avx2", extra_compile_args, _near_compile_args),
+        ("_sse2", _baseline(extra_compile_args), _baseline(_near_compile_args)),
+    )
+else:
+    _VARIANTS = (("", extra_compile_args, _near_compile_args),)
+
+ext_modules = []
+for _suffix, _accel_args, _near_args in _VARIANTS:
+    ext_modules.append(
+        _variant(
+            "_accelerators",
+            _suffix,
+            _ACCEL_SOURCES,
+            depends=_ACCEL_HEADERS,
+            compile_args=_accel_args,
+        )
+    )
+    ext_modules.append(
+        _variant(
+            "_near_interface_accel",
+            _suffix,
+            ["src/momwire/_near_interface_accel.cpp"],
+            depends=_NEAR_HEADERS,
+            compile_args=_near_args,
+            include_dirs=["extern/xsf/include"],
+        )
+    )
 
 setup(
     ext_modules=ext_modules,

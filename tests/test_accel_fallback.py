@@ -18,15 +18,21 @@ from momwire import _bspline_kernels as _bk
 
 
 def _force_import_failure(monkeypatch):
-    """Make `from . import _accelerators` raise ImportError inside _load().
+    """Make every accelerator import inside _load() raise ImportError.
 
     A None entry in sys.modules makes the import fail, but `from package import
     sub` first checks for an already-bound attribute on the package — so the
     real (already-imported) module must be detached too. monkeypatch restores
     both after the test.
+
+    Since momwire#1032 there are THREE names to defeat, not one: `_load()`
+    walks a variant chain (`_avx2`, `_sse2`, then the unsuffixed legacy name),
+    so blanking only the historic name would leave the real variant loading and
+    this helper would quietly stop forcing anything.
     """
-    monkeypatch.setitem(sys.modules, "momwire._accelerators", None)
-    monkeypatch.delattr(momwire, "_accelerators", raising=False)
+    for name in ("_accelerators_avx2", "_accelerators_sse2", "_accelerators"):
+        monkeypatch.setitem(sys.modules, f"momwire.{name}", None)
+        monkeypatch.delattr(momwire, name, raising=False)
 
 
 def test_extension_is_built_in_this_install():
@@ -44,10 +50,10 @@ def test_clean_load_reports_accelerated():
 def _warn_message(monkeypatch) -> str:
     """Force the built-but-unloadable path and return the single RuntimeWarning."""
     _force_import_failure(monkeypatch)
-    monkeypatch.setattr(_accel, "_extension_built", lambda: True)
+    monkeypatch.setattr(_accel, "_extension_built", lambda *_: True)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        mod, loaded = _accel._load()
+        mod, loaded, _variant = _accel._load()
     assert (mod, loaded) == (None, False)
     msgs = [str(w.message) for w in caught if issubclass(w.category, RuntimeWarning)]
     assert len(msgs) == 1
@@ -89,11 +95,11 @@ def test_not_built_is_silent(monkeypatch):
     # Same import failure, but the extension was never built -> pure-Python is
     # the expected, unremarkable outcome; no warning.
     _force_import_failure(monkeypatch)
-    monkeypatch.setattr(_accel, "_extension_built", lambda: False)
+    monkeypatch.setattr(_accel, "_extension_built", lambda *_: False)
 
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        mod, loaded = _accel._load()
+        mod, loaded, _variant = _accel._load()
 
     assert (mod, loaded) == (None, False)
     assert [w for w in caught if issubclass(w.category, RuntimeWarning)] == []
