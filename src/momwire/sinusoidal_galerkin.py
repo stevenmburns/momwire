@@ -3345,9 +3345,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # recomputed in the fill: the plan sizes every grid extent on the
         # quadrature nodes the fill will query, so the two reading different
         # orders is how a fill comes to query outside the ladder it asked for.
-        _sep, _h_max = _below_interface.cross_pair_separation(
-            seg_l, seg_r, a_idx, b_idx
-        )
+        #
+        # Only where a transmitted grid is actually built. A crossing deck's
+        # cross pair is `_crossing_fill`'s designed direct evaluation, and
+        # `_assemble_mixed_contribs` returns before it ever reads this order —
+        # so on those decks the raised order buys nothing and pays for it by
+        # widening the below/below extent the plan sizes on these same nodes.
+        # D3's crossing fan sits at h/separation = 1.62 and DID move, which is
+        # how the guard was found; `compute_Z_operator_buried` skips the rule
+        # on the same condition, so the two trunks scope it alike.
+        _sep = _h_max = None
+        if not crossing:
+            _sep, _h_max = _below_interface.cross_pair_separation(
+                seg_l, seg_r, a_idx, b_idx
+            )
         q = _below_interface.n_qp_buried_field(
             self.n_qp_sommerfeld, separation=_sep, seg_h=_h_max
         )

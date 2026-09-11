@@ -4949,19 +4949,30 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     def _n_qp_buried_field(self):
         """Gauss order for the buried fill's three field-form blocks —
         `_below_interface.n_qp_buried_field` (momwire#553's fifth inversion;
-        the measurement that set the order is documented there)."""
+        the measurement that set the order is documented there).
+
+        The BASE order. A cross block whose two media come closer than a
+        segment needs more, and `compute_Z_operator_buried` raises it there
+        with `_below_interface.near_q_factor` (momwire#1004) — per pair class,
+        because the two same-medium remainders have no such pair and would pay
+        the raised order for nothing."""
         return _below_interface.n_qp_buried_field(self.n_qp_sommerfeld)
 
-    def _buried_nodes(self, geom, seg_idx):
+    def _buried_nodes(self, geom, seg_idx, *, q_factor=1):
         """`(points, tangents, W)` for the field-form quadrature over a SUBSET
         of segments: `_below_interface.field_nodes`' basis-agnostic nodes with
-        the polynomial moment weights `W[p, i, q] = w_q·u_q^p` folded on."""
+        the polynomial moment weights `W[p, i, q] = w_q·u_q^p` folded on.
+
+        `q_factor` multiplies the base order — `near_q_factor`'s answer for
+        this pair class, 1 for every block but a near-plane cross one. The
+        order is not returned: `_field_galerkin_block` reads it back off these
+        arrays' own shapes, so the fill cannot disagree with the nodes."""
         nodes, tang, u_phys, w_node = _below_interface.field_nodes(
             geom["seg_l"][seg_idx],
             geom["seg_r"][seg_idx],
             geom["tangents"][seg_idx],
             geom["h_per_seg"][seg_idx],
-            self._n_qp_buried_field(),
+            self._n_qp_buried_field() * int(q_factor),
         )
         d = self.degree
         W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
@@ -4996,13 +5007,34 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         nothing bigger than `(d+1, d+1, chunk, n_src)` is ever live.
         """
         d = self.degree
-        q = self._n_qp_buried_field()
         n_obs = len(obs_idx)
         n_src = len(src_idx)
         n_basis = polys.shape[0]
         Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
         if n_obs == 0 or n_src == 0:
             return Q
+        # The order is INFERRED from the arrays handed in and never asked of
+        # the solver (momwire#1004). `q` RESHAPES the projected table below,
+        # and the nodes were built at whatever order the caller chose for this
+        # pair class — a cross block near the plane gets a raised one — so an
+        # order taken from a second source that disagreed would reshape a
+        # correct table into a wrong answer with no exception. One derivation,
+        # at the consumer, cross-checked against the moment weights it is about
+        # to contract: `W[p, i, q]` carries the same q, and it is what the C++
+        # twin reads, so the two routes cannot part on it either.
+        q, rem_obs = divmod(len(obs), n_obs)
+        q_src, rem_src = divmod(len(src), n_src)
+        assert rem_obs == 0 and rem_src == 0 and q == q_src, (
+            len(obs),
+            n_obs,
+            len(src),
+            n_src,
+        )
+        assert W_obs.shape[-1] == q and W_src.shape[-1] == q, (
+            W_obs.shape,
+            W_src.shape,
+            q,
+        )
         # Global segment index -> position on each axis; -1 means "not on
         # this axis", which is how a wing that belongs to the other medium
         # drops out of the block rather than being clamped into it.
