@@ -3335,13 +3335,22 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """`serve_plan` with a non-empty `a_idx` — every extent and every
         refusal for the three classes, raised before any grid is filled, on
         the quadrature NODES the fill will query."""
-        q = _below_interface.n_qp_buried_field(self.n_qp_sommerfeld)
         seg_l = np.asarray(geom["seg_l"])
         seg_r = np.asarray(geom["seg_r"])
         tang = np.asarray(geom["seg_tangents"])
         h = np.asarray(geom["seg_h"])
         a_idx = np.nonzero(~below)[0]
         b_idx = np.nonzero(below)[0]
+        # The order is decided HERE and carried on the plan (momwire#1004), not
+        # recomputed in the fill: the plan sizes every grid extent on the
+        # quadrature nodes the fill will query, so the two reading different
+        # orders is how a fill comes to query outside the ladder it asked for.
+        _sep, _h_max = _below_interface.cross_pair_separation(
+            seg_l, seg_r, a_idx, b_idx
+        )
+        q = _below_interface.n_qp_buried_field(
+            self.n_qp_sommerfeld, separation=_sep, seg_h=_h_max
+        )
         obs_a = _below_interface.field_nodes(
             seg_l[a_idx], seg_r[a_idx], tang[a_idx], h[a_idx], q
         )[0]
@@ -3367,7 +3376,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 obs_c_all[(a_idx[:, None] * nq + np.arange(nq)[None, :]).ravel()],
             ]
         )
-        return _below_interface.serve_plan(
+        plan = _below_interface.serve_plan(
             self.ground_z,
             seg_l,
             seg_r,
@@ -3379,6 +3388,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             crossing=crossing,
             pair_extents=_bspline._pair_extents_below,
         )
+        plan["q_buried_field"] = q
+        return plan
 
     def _transmitted_tensor(
         self, ctx, geom, medium, plan, src_keep, obs_keep, obs_below
@@ -3402,7 +3413,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         Full-width in the source axis: out-of-class sources are ZERO, which
         is the pair mask.
         """
-        q = _below_interface.n_qp_buried_field(self.n_qp_sommerfeld)
+        # Read off the plan, never recomputed — see `_mixed_serve_plan`.
+        q = plan["q_buried_field"]
         idx = np.nonzero(src_keep)[0]
         seg_l = np.asarray(geom["seg_l"])[idx]
         seg_r = np.asarray(geom["seg_r"])[idx]
