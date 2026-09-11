@@ -406,6 +406,36 @@ def cross_pair_separation(seg_l, seg_r, a_idx, b_idx):
     return float(d.min()), h
 
 
+def near_q_factor(separation, seg_h):
+    """How many times the base Gauss order the cross block needs (momwire#1004).
+
+    `1` unless the closest above/below pair is nearer than a segment — which is
+    every single-medium deck and every deck in the suite today — and past that
+    `ceil(seg_h / separation)`, capped at `_MAX_NEAR_Q_FACTOR`. `separation`
+    and `seg_h` come from `cross_pair_separation`; either one `None` or
+    non-positive means "no cross pair to resolve" and keeps the base order.
+
+    The rule, its two measured ratios and what it cannot go below are all in
+    `n_qp_buried_field`'s docstring. It is exposed as a FACTOR because the two
+    trunks hold different halves of the order: the sinusoidal-Galerkin plan has
+    `n_qp_sommerfeld` and wants the whole order, while
+    `compute_Z_operator_buried` never sees that knob and only needs to raise an
+    order the solver already chose. One rule, two spellings of the same answer,
+    and neither trunk owns a second copy of the arithmetic.
+
+    The comparison is TOLERANCED because a deck sitting exactly a segment apart
+    is not unusual — it is what a uniform mesh either side of the plane
+    produces — and a bare `ceil` turns h/sep = 1+1e-16 into factor 2, doubling
+    that deck's order for a rounding.
+    """
+    if separation is None or seg_h is None or separation <= 0.0 or seg_h <= 0.0:
+        return 1
+    ratio = seg_h / separation
+    if ratio <= 1.0 + 1e-9:
+        return 1  # a segment or more apart: today's decks, unchanged
+    return min(int(math.ceil(ratio - 1e-9)), _MAX_NEAR_Q_FACTOR)
+
+
 def n_qp_buried_field(n_qp_sommerfeld, *, separation=None, seg_h=None):
     """Gauss order for the buried fill's THREE field-form blocks.
 
@@ -472,18 +502,9 @@ def n_qp_buried_field(n_qp_sommerfeld, *, separation=None, seg_h=None):
     `_NEAR_Q`/`_FAR_Q` in `_crossing_fill`. The q = 6 measurement above
     stays authoritative for the three grid field-form blocks.
     """
-    base = max(int(n_qp_sommerfeld), N_QP_BURIED_FIELD)
-    if separation is None or seg_h is None or separation <= 0.0 or seg_h <= 0.0:
-        return base
-    # The comparison is TOLERANCED because a deck sitting exactly a segment
-    # apart is not unusual — it is what a uniform mesh either side of the
-    # plane produces — and bare `ceil` turns h/sep = 1+1e-16 into factor 2,
-    # doubling the order and moving that deck's numbers for a rounding.
-    ratio = seg_h / separation
-    if ratio <= 1.0 + 1e-9:
-        return base  # a segment or more apart: today's decks, unchanged
-    factor = min(int(math.ceil(ratio - 1e-9)), _MAX_NEAR_Q_FACTOR)
-    return base * factor
+    return max(int(n_qp_sommerfeld), N_QP_BURIED_FIELD) * near_q_factor(
+        separation, seg_h
+    )
 
 
 def field_nodes(seg_l, seg_r, tangents, h, q):
@@ -748,7 +769,10 @@ def compute_Z_operator_buried(
       field across the interface: no direct term, no image term, no
       mixed-potential prefactors, just `⟨E, testing⟩` subtracted like any
       field-form block. Both directions are filled and their agreement is
-      the reciprocity gate.
+      the reciprocity gate. It is also the only block on this fill whose
+      quadrature order depends on the GEOMETRY: `near_q_factor` raises it
+      when the two media come closer than a segment, which is exactly where
+      the calibrated order under-resolves the 1/R^3 integrand (momwire#1004).
 
     The three field-form blocks (the two remainders and the transmitted
     pair) all subtract, because a field's contribution to the EFIE
@@ -809,14 +833,49 @@ def compute_Z_operator_buried(
     # unconditionally in `_refuse_buried_geometry`, which is why the two
     # trunks answered differently on the same deck.
     crossing_j = crossing_junctions_fn()
+    crossing_plan = bool(a_idx.size and crossing_j)
+
+    # --- the cross block's own Gauss order (momwire#1004) ----------------
+    # PER PAIR CLASS, not per fill: the raised order is for the transmitted
+    # blocks, whose two media can come closer than a segment. The two
+    # same-medium remainders above have no such pair — the closest above/above
+    # distance is a mesh spacing, not a clearance — so raising them would
+    # multiply the most expensive blocks in the fill by up to 16 for nothing.
+    # A crossing deck skips the transmitted grid entirely (`_crossing_fill`'s
+    # designed direct evaluation), so it skips this too.
+    #
+    # The nodes carry the order; nothing downstream is told it. Both
+    # `f.field_galerkin_block` calls below read it back off the arrays' own
+    # shapes, which is what makes "the order the nodes were built at" and "the
+    # order the table is reshaped by" one fact instead of two that can part.
+    q_factor = 1
+    if a_idx.size and not crossing_plan:
+        q_factor = near_q_factor(
+            *cross_pair_separation(geom["seg_l"], geom["seg_r"], a_idx, b_idx)
+        )
+    if q_factor > 1:
+        obs_ax, t_ax, W_ax = f.nodes(geom, a_idx, q_factor=q_factor)
+        obs_bx, t_bx, W_bx = f.nodes(geom, b_idx, q_factor=q_factor)
+        # `serve_plan` sizes every extent on "the union of EVERY rule the
+        # caller will query with" — its own D2 contract, and this is the
+        # second trunk to have two rules. A ladder built on the base nodes
+        # alone is one the raised-order fill then queries outside of, and the
+        # grid refuses rather than clamps.
+        plan_a = np.vstack([obs_a, obs_ax])
+        plan_b = np.vstack([obs_b, obs_bx])
+    else:
+        obs_ax, t_ax, W_ax = obs_a, t_a, W_a
+        obs_bx, t_bx, W_bx = obs_b, t_b, W_b
+        plan_a, plan_b = obs_a, obs_b
+
     plan = serve_plan_fn(
         geom,
         a_idx,
-        obs_a,
-        obs_b,
+        plan_a,
+        plan_b,
         k_p,
         k_m,
-        crossing=bool(a_idx.size and crossing_j),
+        crossing=crossing_plan,
     )
 
     # --- the two direct blocks and the two image blocks, each in its
@@ -989,10 +1048,30 @@ def compute_Z_operator_buried(
             )
 
         Z -= f.field_galerkin_block(
-            supp_seg, polys, proj_ab, a_idx, b_idx, obs_a, t_a, W_a, obs_b, t_b, W_b
+            supp_seg,
+            polys,
+            proj_ab,
+            a_idx,
+            b_idx,
+            obs_ax,
+            t_ax,
+            W_ax,
+            obs_bx,
+            t_bx,
+            W_bx,
         )
         Z -= f.field_galerkin_block(
-            supp_seg, polys, proj_ba, b_idx, a_idx, obs_b, t_b, W_b, obs_a, t_a, W_a
+            supp_seg,
+            polys,
+            proj_ba,
+            b_idx,
+            a_idx,
+            obs_bx,
+            t_bx,
+            W_bx,
+            obs_ax,
+            t_ax,
+            W_ax,
         )
 
     return f.apply_loading(Z)
