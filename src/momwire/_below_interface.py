@@ -360,7 +360,83 @@ def crossing_node_members(
 # ---------------------------------------------------------------------------
 
 
-def n_qp_buried_field(n_qp_sommerfeld):
+# The most the separation rule may multiply the base order by (momwire#1004).
+# Measured factors are 4 and 10 (see `n_qp_buried_field`); 16 is the ceiling,
+# not a measurement. Past it the order saturates and the collapse residual
+# rises again — `test_near_plane_collapse_1004` records where that starts, so a
+# deck beyond the cap gets a worse answer rather than an unaffordable fill. The
+# cost is linear in q per source node on a table the grid fill dwarfs, but
+# q = 6 * (h/sep) is unbounded as sep -> 0 and something has to stop it.
+_MAX_NEAR_Q_FACTOR = 16
+
+
+def cross_pair_separation(seg_l, seg_r, a_idx, b_idx):
+    """`(separation, h)` for the closest ABOVE/BELOW segment pair.
+
+    `separation` is the smallest centre-to-centre distance between a segment
+    above the interface and one below it; `h` is the longest segment length
+    among those two classes. Their ratio is what
+    `n_qp_buried_field` reads.
+
+    Centres rather than true segment-to-segment distance: the quantity being
+    resolved is the pair integrand's feature width, which scales with the pair
+    separation, and the centres are what the fill's own pair geometry uses.
+    Cheap — O(n_a x n_b) on centres, against a fill that is O(N^2 q) with a
+    Sommerfeld grid behind it.
+
+    Returns `(None, None)` when either class is empty, which is every
+    single-medium deck and is how the caller keeps today's order.
+    """
+    if a_idx.size == 0 or b_idx.size == 0:
+        return None, None
+    c = 0.5 * (np.asarray(seg_l) + np.asarray(seg_r))
+    ca = c[a_idx]
+    cb = c[b_idx]
+    d = np.linalg.norm(ca[:, None, :] - cb[None, :, :], axis=-1)
+    h = float(
+        max(
+            np.linalg.norm(
+                np.asarray(seg_r)[a_idx] - np.asarray(seg_l)[a_idx], axis=-1
+            ).max(),
+            np.linalg.norm(
+                np.asarray(seg_r)[b_idx] - np.asarray(seg_l)[b_idx], axis=-1
+            ).max(),
+        )
+    )
+    return float(d.min()), h
+
+
+def near_q_factor(separation, seg_h):
+    """How many times the base Gauss order the cross block needs (momwire#1004).
+
+    `1` unless the closest above/below pair is nearer than a segment — which is
+    every single-medium deck and every deck in the suite today — and past that
+    `ceil(seg_h / separation)`, capped at `_MAX_NEAR_Q_FACTOR`. `separation`
+    and `seg_h` come from `cross_pair_separation`; either one `None` or
+    non-positive means "no cross pair to resolve" and keeps the base order.
+
+    The rule, its two measured ratios and what it cannot go below are all in
+    `n_qp_buried_field`'s docstring. It is exposed as a FACTOR because the two
+    trunks hold different halves of the order: the sinusoidal-Galerkin plan has
+    `n_qp_sommerfeld` and wants the whole order, while
+    `compute_Z_operator_buried` never sees that knob and only needs to raise an
+    order the solver already chose. One rule, two spellings of the same answer,
+    and neither trunk owns a second copy of the arithmetic.
+
+    The comparison is TOLERANCED because a deck sitting exactly a segment apart
+    is not unusual — it is what a uniform mesh either side of the plane
+    produces — and a bare `ceil` turns h/sep = 1+1e-16 into factor 2, doubling
+    that deck's order for a rounding.
+    """
+    if separation is None or seg_h is None or separation <= 0.0 or seg_h <= 0.0:
+        return 1
+    ratio = seg_h / separation
+    if ratio <= 1.0 + 1e-9:
+        return 1  # a segment or more apart: today's decks, unchanged
+    return min(int(math.ceil(ratio - 1e-9)), _MAX_NEAR_Q_FACTOR)
+
+
+def n_qp_buried_field(n_qp_sommerfeld, *, separation=None, seg_h=None):
     """Gauss order for the buried fill's THREE field-form blocks.
 
     **This is momwire#553's fifth inversion, and it is a tolerance inherited
@@ -388,13 +464,47 @@ def n_qp_buried_field(n_qp_sommerfeld):
     pair on a table the grid fill already dwarfs, so the order is set at the
     measurement rather than at the cheapest passing rung.
 
+    **SUB-SEGMENT SEPARATION NEEDS MORE (momwire#1004).** The table above was
+    taken on a deck whose above/below pairs are never closer than a segment.
+    When they ARE closer the same 1/R^3 argument bites again, and 6 is short:
+    on two 0.6 m wires with 15 segments each (h = 0.04 m) sitting 5 mm either
+    side of the plane, the cross block misses the free-space block it must
+    reproduce at eps-tilde = 1 by 5.5e-02, thirteen times its own floor.
+
+    The order therefore scales with `seg_h / separation` when that exceeds 1,
+    and the rule is MEASURED at two ratios rather than fitted to one — it
+    predicts the convergence point at both:
+
+        h/separation    rule q    residual at q=6   at the rule's q   converged
+        4  (5 mm gap)      24          5.489e-02        4.118e-03      yes, 24
+        10 (2 mm gap)      60          1.492e+00        1.616e-02      yes, 60
+
+    Raising q past the rule's value buys nothing (q = 48 and 96 at ratio 4 read
+    4.120e-03 and 4.119e-03), and the observer rule is already converged —
+    `n_qp_test` 8 / 32 / 128 at q = 48 reads 4.120e-03 / 4.118e-03 / 4.119e-03.
+    What remains at the rule's q is the GRID's own near-plane interpolation
+    floor, which this knob cannot go below and which grows as the plane is
+    approached: 5.4e-06 / 3.8e-05 / 5.6e-04 / 4.1e-03 at gaps of 0.5 / 0.1 /
+    0.02 / 0.005 m.
+
+    All of those are on the corrected metric — `|G_mixed + G_free| / |G_free|`
+    over the cross block. The mixed cross block is stored NEGATED relative to
+    the free-space one, so a naive `|G_mixed - G_free|` reads a constant 2.0
+    and no knob appears to move anything.
+
+    `separation` / `seg_h` come from `cross_pair_separation`; omitting them
+    keeps the pre-#1004 order exactly, which is what every single-medium deck
+    gets.
+
     `n_qp_sommerfeld` still raises it if a caller asked for more: the knob
     keeps meaning "at least this". Since momwire#692 the CROSSING fill's axes
     no longer route through this knob — its density ladder banked its own
     `_NEAR_Q`/`_FAR_Q` in `_crossing_fill`. The q = 6 measurement above
     stays authoritative for the three grid field-form blocks.
     """
-    return max(int(n_qp_sommerfeld), N_QP_BURIED_FIELD)
+    return max(int(n_qp_sommerfeld), N_QP_BURIED_FIELD) * near_q_factor(
+        separation, seg_h
+    )
 
 
 def field_nodes(seg_l, seg_r, tangents, h, q):
@@ -659,7 +769,10 @@ def compute_Z_operator_buried(
       field across the interface: no direct term, no image term, no
       mixed-potential prefactors, just `⟨E, testing⟩` subtracted like any
       field-form block. Both directions are filled and their agreement is
-      the reciprocity gate.
+      the reciprocity gate. It is also the only block on this fill whose
+      quadrature order depends on the GEOMETRY: `near_q_factor` raises it
+      when the two media come closer than a segment, which is exactly where
+      the calibrated order under-resolves the 1/R^3 integrand (momwire#1004).
 
     The three field-form blocks (the two remainders and the transmitted
     pair) all subtract, because a field's contribution to the EFIE
@@ -720,14 +833,49 @@ def compute_Z_operator_buried(
     # unconditionally in `_refuse_buried_geometry`, which is why the two
     # trunks answered differently on the same deck.
     crossing_j = crossing_junctions_fn()
+    crossing_plan = bool(a_idx.size and crossing_j)
+
+    # --- the cross block's own Gauss order (momwire#1004) ----------------
+    # PER PAIR CLASS, not per fill: the raised order is for the transmitted
+    # blocks, whose two media can come closer than a segment. The two
+    # same-medium remainders above have no such pair — the closest above/above
+    # distance is a mesh spacing, not a clearance — so raising them would
+    # multiply the most expensive blocks in the fill by up to 16 for nothing.
+    # A crossing deck skips the transmitted grid entirely (`_crossing_fill`'s
+    # designed direct evaluation), so it skips this too.
+    #
+    # The nodes carry the order; nothing downstream is told it. Both
+    # `f.field_galerkin_block` calls below read it back off the arrays' own
+    # shapes, which is what makes "the order the nodes were built at" and "the
+    # order the table is reshaped by" one fact instead of two that can part.
+    q_factor = 1
+    if a_idx.size and not crossing_plan:
+        q_factor = near_q_factor(
+            *cross_pair_separation(geom["seg_l"], geom["seg_r"], a_idx, b_idx)
+        )
+    if q_factor > 1:
+        obs_ax, t_ax, W_ax = f.nodes(geom, a_idx, q_factor=q_factor)
+        obs_bx, t_bx, W_bx = f.nodes(geom, b_idx, q_factor=q_factor)
+        # `serve_plan` sizes every extent on "the union of EVERY rule the
+        # caller will query with" — its own D2 contract, and this is the
+        # second trunk to have two rules. A ladder built on the base nodes
+        # alone is one the raised-order fill then queries outside of, and the
+        # grid refuses rather than clamps.
+        plan_a = np.vstack([obs_a, obs_ax])
+        plan_b = np.vstack([obs_b, obs_bx])
+    else:
+        obs_ax, t_ax, W_ax = obs_a, t_a, W_a
+        obs_bx, t_bx, W_bx = obs_b, t_b, W_b
+        plan_a, plan_b = obs_a, obs_b
+
     plan = serve_plan_fn(
         geom,
         a_idx,
-        obs_a,
-        obs_b,
+        plan_a,
+        plan_b,
         k_p,
         k_m,
-        crossing=bool(a_idx.size and crossing_j),
+        crossing=crossing_plan,
     )
 
     # --- the two direct blocks and the two image blocks, each in its
@@ -900,10 +1048,30 @@ def compute_Z_operator_buried(
             )
 
         Z -= f.field_galerkin_block(
-            supp_seg, polys, proj_ab, a_idx, b_idx, obs_a, t_a, W_a, obs_b, t_b, W_b
+            supp_seg,
+            polys,
+            proj_ab,
+            a_idx,
+            b_idx,
+            obs_ax,
+            t_ax,
+            W_ax,
+            obs_bx,
+            t_bx,
+            W_bx,
         )
         Z -= f.field_galerkin_block(
-            supp_seg, polys, proj_ba, b_idx, a_idx, obs_b, t_b, W_b, obs_a, t_a, W_a
+            supp_seg,
+            polys,
+            proj_ba,
+            b_idx,
+            a_idx,
+            obs_bx,
+            t_bx,
+            W_bx,
+            obs_ax,
+            t_ax,
+            W_ax,
         )
 
     return f.apply_loading(Z)
