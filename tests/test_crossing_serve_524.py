@@ -126,7 +126,12 @@ _GRADES = {
 # 2 by 0.36 ohm at x3 and 0.61 at x9 (G1-B, test_bspline_pair_g1b), so the
 # 0.05 gate below is a regression gate at the g1 far mesh, not a
 # far-mesh-converged answer.
-CROSSING_G1 = 138.9619 - 102.6019j
+# momwire#956 re-pinned this from 138.9619 − 102.6019j: the crossing fill's ẑẑ
+# kernel had −∂zW (the test-side W term by parts, counted again as s_w2) where
+# the exact spelling is k²V + ∂z′W with the TW end term. The +36.9 Ω move is
+# the corrected spelling's own answer on this deck, not an engine comparison;
+# the 524 adjudication (probes 29–34) is to be re-run on it.
+CROSSING_G1 = 169.7754 - 82.2803j
 
 # As FAN_SOIL_A_N2_QP, for the same reason and past the same n_qp <= 8
 # accelerator cap (momwire#762). Costs ~1.4 s on this deck; the shipped
@@ -423,7 +428,10 @@ _FAN_GRADES = {
 # What a USER now gets is a separate number: the shipped buried default of
 # 32 lands 0.092 ohm from this anchor -- outside the 0.05 gate below, which
 # is why the gate names its own q explicitly rather than relying on defaults.
-FAN_SOIL_A_N2 = 140.93374 - 43.17502j
+# momwire#956 re-pinned this from 140.93374 − 43.17502j (the ẑẑ kernel is
+# k²V + ∂z′W with the TW end term; the +15.0 Ω move is the corrected
+# spelling's own converged answer, not an engine comparison).
+FAN_SOIL_A_N2 = 148.56710 - 30.21270j
 
 # Cross-edge quadrature order at which the anchor deck sits 0.0045 ohm
 # from its limit (re-measured at momwire#760's re-pin; the old comment

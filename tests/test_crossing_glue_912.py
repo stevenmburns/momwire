@@ -193,8 +193,10 @@ def test_g912_5_the_decks_z_are_unchanged(solved, record_property):
     name, (z, _) = solved
     record_property(f"z_{name}", f"{z:.9f}")
     pinned = {
-        # Printed by these decks on main 624897f, before the edit.
-        "hub": 141.016615417 - 43.425182328j,
-        "crossing": 138.960862256 - 102.609718869j,
+        # Printed by these decks on main 624897f, before the edit; re-pinned
+        # by momwire#956 (k²V + ∂z′W and the TW end term) — see
+        # test_field_galerkin_914.Z_PINNED for the before/after.
+        "hub": 148.634045567 - 30.463037886j,
+        "crossing": 169.775596898 - 82.280023587j,
     }[name]
     assert abs(z - pinned) < 5e-7, (z, pinned)
