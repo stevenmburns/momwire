@@ -42,17 +42,20 @@ exact only" for axis-aligned segments. Measured, that reading does not
 survive: THE ASSEMBLY NEVER MAKES THAT SUBSTITUTION.
 
 The decisive evidence is an absence. The substituted form needs the
-SOURCE-side derivative kernels, `dzpW` / `dzpV` — and this module does not
-reference either of them anywhere. What it contracts is `W` against the
-other axis's `Fd`, which is the DIRECT spelling; `dzW` appears only inside
-`k²V − ∂zW`, the ẑẑ dyad's own coefficient, not as a substituted
-derivative. Every term of the
+SOURCE-side derivative kernels `dzpW` / `dzpV` as substitutes for a
+transverse derivative — and this module makes no such substitution. What it
+contracts is `W` against the other axis's `Fd`, which is the DIRECT
+spelling; `dzpW` appears only inside `k²V + ∂z′W`, the ẑẑ dyad's own
+coefficient (momwire#956), not as a substituted derivative. Every term of the
 main sandwich is written in tangent COMPONENTS — s_u pairs tx/ty through
-U, s_zz pairs tz through k²V − ∂zW, and the W terms carry tz against the
-other axis's Fd — and Fd is the filament charge ∇·(F t̂) = dF/dl, which is
-the arclength derivative at ANY orientation. The `tz` in the by-parts
-boundary terms is the ẑ-dyad's own coefficient, not an alignment
-assumption.
+U, s_zz pairs tz through k²V + ∂z′W (momwire#956: the SOURCE-side
+derivative; it was −∂zW, the test-side W term by parts on a vertical
+test, until #956 found s_w2 counting that term a second time), and the W
+terms carry tz against the other axis's Fd — and Fd is the filament charge
+∇·(F t̂) = dF/dl, which is the arclength derivative at ANY orientation. The
+`tz` in the by-parts boundary terms is the ẑ-dyad's own coefficient, not an
+alignment assumption; the two W end terms (SW on the below ends, TW on the
+above ends) are what the by-parts leave, one per axis.
 
 Four measurements, in `scratch/936-study/`:
 
@@ -575,7 +578,7 @@ _NEAR_GX, _NEAR_GW = leggauss(4)
 # AND memo-dedups against its mirror blocks.
 _ACA_COST_GUARD = 48.0
 _GX4, _GW4 = leggauss(4)
-_CROSS_KEYS = ("U", "V", "W", "dzW")
+_CROSS_KEYS = ("U", "V", "W", "dzpW")
 
 # The whole-run dense-direct switch (a timing comparison, a bisect); parity
 # tests drive both paths in-process by calling the two entries directly.
@@ -959,7 +962,7 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     z = np.broadcast_to((A["nodes"][:, 2] - gz)[:, None], rho.shape)
     zp = np.broadcast_to((B["nodes"][:, 2] - gz)[None, :], rho.shape)
     tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
-    U, V, W, dzW = tables["U"], tables["V"], tables["W"], tables["dzW"]
+    U, V, W, dzpW = tables["U"], tables["V"], tables["W"], tables["dzpW"]
 
     wA, wB = A["w"], B["w"]
     txA, tyA, tzA = A["t"].T
@@ -968,7 +971,16 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     FdA_w, FdB_w = A["Fd"] * wA, B["Fd"] * wB
 
     s_u = (FA_w * txA) @ U @ (FB_w * txB).T + (FA_w * tyA) @ U @ (FB_w * tyB).T
-    s_zz = (FA_w * tzA) @ (k2sq * V - dzW) @ (FB_w * tzB).T
+    # momwire#956 — the exact spelling of the transmitted dyad tested along a
+    # wire of ANY orientation (antennaknobs scratch/956-derivation):
+    #   E^V  = c1 [ k²V ẑ − ∇W + ∇(−∂z′V) ]      E^Hx = c1 [ U x̂ + ∂xW ẑ + ∇(∂xV) ]
+    # By parts on both sides the ẑẑ kernel is k²V + ∂z′W — the W derivative on
+    # the SOURCE coordinate — with both W cross terms on full charges and the
+    # two W end terms (SW on the source ends, TW on the test ends) that the
+    # by-parts leave. The former k²V − ∂zW was the by-parted form of the
+    # test-side W term on a VERTICAL test, so s_w2 counted it twice there
+    # (the +2 Ω rise residual of #956) and it was wrong on a leaning member.
+    s_zz = (FA_w * tzA) @ (k2sq * V + dzpW) @ (FB_w * tzB).T
     s_w1 = (FA_w * tzA) @ W @ FdB_w.T
     s_w2 = FdA_w @ W @ (FB_w * tzB).T
     s_phi = -FdA_w @ V @ FdB_w.T
@@ -1093,6 +1105,8 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
     wA = A["w"]
     wB = B["w"]
     wA_tz = wA * tzA
+    _txB, _tyB, tzB = B["t"].T
+    wB_tz = wB * tzB
     buf = _Rank1Buffer()
     bufT = _Rank1Buffer()
 
@@ -1117,6 +1131,11 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
         nz = np.flatnonzero(fv)
         _rank1_add(
             t_ab, nz, fv[nz], _real_matvec_c(B["Fd"], wB * te["V"]), c1 * sign, buf
+        )
+        # TW (momwire#956): the test-side W end, −σ f_m(E)·∫ f_n t̂z′ W(E,·),
+        # left by testing −∇W along the wire — SW's partner on the other axis.
+        _rank1_add(
+            t_ab, nz, fv[nz], _real_matvec_c(B["F"], wB_tz * te["W"]), -c1 * sign, buf
         )
     for pt, sign, fv in B["ends"]:
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
@@ -1260,7 +1279,7 @@ def _ends_and_corner_reversed(
         _rank1_add(
             t_ba, nz, fv[nz], _real_matvec_c(Q["Fd"], wQ * te["V"]), c1 * sign, buf
         )
-        if sw_end == SW_BY_PARTS:
+        if True:  # SW — under either `sw_end` reading since momwire#956
             # SW paired with s_w1 by the by-parts that produced it: on the
             # BELOW axis's ends, contracting the ABOVE axis's t̂z (5312ca5).
             _rank1_add(
@@ -1286,15 +1305,18 @@ def _ends_and_corner_reversed(
             memo=memo,
         )
         nzq = np.flatnonzero(fv)
-        if sw_end == SW_BY_ROLE:
-            _rank1_add_cols(
-                t_ba,
-                nzq,
-                _real_matvec_c(P["F"], wP_tz * te["W"]),
-                fv[nzq],
-                -c1 * sign,
-                bufT,
-            )
+        # TW (momwire#956): the ABOVE ends' W term — the forward block's
+        # test-side end transposed. With it AND the below ends' SW this block
+        # is `t_ab.T` under either `sw_end` reading; the knob selects nothing
+        # any more and is kept for the API (both terms are the spelling).
+        _rank1_add_cols(
+            t_ba,
+            nzq,
+            _real_matvec_c(P["F"], wP_tz * te["W"]),
+            fv[nzq],
+            -c1 * sign,
+            bufT,
+        )
         _rank1_add_cols(
             t_ba, nzq, _real_matvec_c(P["Fd"], wP * te["V"]), fv[nzq], c1 * sign, bufT
         )
@@ -1433,7 +1455,7 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None):
     block = (
         P1 @ K["U"] @ Q1.T
         + P2 @ K["U"] @ Q2.T
-        + P3 @ (k2sq * K["V"] - K["dzW"]) @ Q3.T
+        + P3 @ (k2sq * K["V"] + K["dzpW"]) @ Q3.T
         + P3 @ K["W"] @ Q4.T
         + P4 @ K["W"] @ Q3.T
         - P4 @ K["V"] @ Q4.T
@@ -1668,7 +1690,7 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
             _lr(P1, "U", Q1)
             + _lr(P2, "U", Q2)
             + k2sq * _lr(P3, "V", Q3)
-            - _lr(P3, "dzW", Q3)
+            + _lr(P3, "dzpW", Q3)
             + _lr(P3, "W", Q4)
             + _lr(P4, "W", Q3)
             - _lr(P4, "V", Q4)

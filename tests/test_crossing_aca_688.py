@@ -220,7 +220,7 @@ def _naive_sandwich(A, B, iA, iB, K, k2sq):
     return (
         P1 @ K["U"] @ Q1.T
         + P2 @ K["U"] @ Q2.T
-        + P3 @ (k2sq * K["V"] - K["dzW"]) @ Q3.T
+        + P3 @ (k2sq * K["V"] + K["dzpW"]) @ Q3.T
         + P3 @ K["W"] @ Q4.T
         + P4 @ K["W"] @ Q3.T
         - P4 @ K["V"] @ Q4.T
