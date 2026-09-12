@@ -44,6 +44,14 @@ So this is **suite-wide drift of the banked probes' own node-cell bookkeeping
 against momwire's current API, with the serve's certification intact** — not a
 physics regression, and not a dead knob. Left OPEN; no bisect was run.
 
+**Added after merge, 2026-09-12: the probe31 half is now settled.** antennaknobs
+`scratch/524-phase2/PROBE41-PRODUCTION-SLOPE.md` reads the junction currents
+from `s.compute_impedance()` directly. On pre-fix `0e72ab4` its g2 slope ratio,
+0.050758−0.016130j, reproduces session 6's banked probe31 value,
+0.05076−0.01606j, to four digits. So session 6's probe31 read what the shipped
+solver reads, and the 1.223 above is the probe composition's drift, not a
+property of either commit.
+
 ## The headline: NEC-5 on a second machine, and the residual is closed
 
 `buried_radial_vertical`, connected spelling, 4 radials, hub 0.15 m, soil A,
@@ -68,7 +76,27 @@ Laptop-control's reading on a different machine: momwire 78.154+46.445j, NEC-5
 27× in R and 10× in X. The per-rung Δ shrinks monotonically on both axes, so the
 extrapolation is not carrying the result.
 
-## probe31 — junction currents: the registered prediction MISSED
+## probe31 — junction currents: MISSED on the probe, HIT on the shipped solver
+
+**Corrected 2026-09-12.** The reading below graded the probe composition's ratio
+by magnitude, and both choices were wrong. The composition fails probe29's ε̃ =
+1 known answer by 35 % (above), so its ratio says nothing about the fix. And the
+ratio is complex, so a magnitude match is not a match. Read from
+`s.compute_impedance()` and graded as \|ratio − 1/ε̃\| / \|1/ε̃\| (antennaknobs
+`scratch/524-phase2/PROBE41-PRODUCTION-SLOPE.md`):
+
+| rung | node segment | main `0e72ab4` | 0.54.0 `260bd91` |
+|---|---|---|---|
+| g1 | 50 mm | 47 % | 0.03 % |
+| g2 | 12.5 mm | 102 % | 0.02 % |
+| g3 | 3.1 mm | 462 % | 0.09 % |
+| g2×2 | 6.25 mm | 191 % | 0.04 % |
+
+Continuity improves with it (1e-5 … 1e-4 → 1e-7). No constraint row imposes
+either, and removing the corner or the self completions breaks both, so the
+check can fail. **The fix is decisive on the slope ratio as well as on the
+driving-point residual.** The original reading follows, kept as the record of
+what was measured.
 
 AGARD |1/ε̃| = 0.054730. Magnitudes, which is §6's own like-for-like (the
 quantity is complex and the phases differ; §6 compares "slope-ratio magnitude").
@@ -92,7 +120,9 @@ rungs. The movement is small — +1.0 % on g2, on a quantity sitting ~16 % above
 AGARD on BOTH commits — and KCL is unmoved to three digits, so continuity is
 neither gained nor lost. The honest statement, and it is not reconciled here:
 **the fix is neutral-to-slightly-adverse on probe31's slope ratio and decisive
-on the driving-point residual.** Both facts stand in the record.
+on the driving-point residual.** Both facts stand in the record. *(The first
+half does not survive on the shipped solver; see the correction at the top of
+this section.)*
 
 ## Traps found in this unit
 
@@ -122,9 +152,12 @@ physics:
   that file; the bank does not carry it.
 
 Both are the banking commit's own warning made real — *"bank the four cited
-studies, **minus the derived bytes**"*. **This is also the most likely
-explanation of the suite-wide §6 non-reproduction**: the phase-2 bank was
-committed without the artifacts its own probes need.
+studies, **minus the derived bytes**"*. **That explains why these two
+probes could not START, and no more.** Once the artifacts were regenerated,
+both probes ran and still disagreed with §6: probe34's five spellings return
+identical Z and probe33 shows no σ-collapse (both below). The missing bytes do
+not explain the numerical non-reproduction, which stays open. *(This record
+first called them its most likely explanation; that was too strong.)*
 
 probe23's blocks are computed FROM momwire, so they were regenerated **per
 commit**. Reusing branch-built blocks under main would have compared a commit
@@ -185,7 +218,7 @@ so it is not attributable to the fix.
 | prediction | verdict |
 |---|---|
 | probe 29 cannot move (W ≡ 0 at ε̃ = 1) | **HIT** — bit-identical on three commits |
-| probe 31 slope ratio closer to 0.0547 than 0.0532 | **MISSED** — branch moves AWAY on both rungs |
+| probe 31 slope ratio closer to 0.0547 than 0.0532 | MISSED on the probe composition; **HIT on the shipped solver** — 0.05473 at g2, 0.02 % in complex form (see the probe31 correction) |
 | probe 33 soil-A Δ moves from +67.2−53.7j | **HIT** |
 | probe 33 Δ still collapses to ~0 at σ = 5 | **MISSED** — no collapse on either commit |
 | g1 deck reads 169.7754−82.2803j (was 138.9619−102.6019j) | **HIT to 2e-4, both sides** |
@@ -193,3 +226,6 @@ so it is not attributable to the fix.
 
 Four hits, two misses, both misses reported as registered and neither
 attributable to the fix in isolation.
+
+With the probe31 correction: **five hits, one miss**. The miss is the σ = 5
+collapse, which main misses too.
