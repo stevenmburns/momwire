@@ -19,12 +19,15 @@ Publishing). Every step below was learned the hard way; do them in order.
 1. **Bump the version BEFORE tagging.** Edit `version = "X.Y.Z"` in
    `pyproject.toml`. The wheels build reads it at build time — tagging first
    mislabels every wheel.
-2. Commit directly to main as
-   `chore: bump version to X.Y.Z (<one-line theme>)` and push. This is the
-   one sanctioned direct-to-main push; do NOT add a CI-skip marker (the tag
-   build must run).
-3. Tag the bump commit and push the tag:
+2. Commit on a branch as
+   `chore: bump version to X.Y.Z (<one-line theme>)`, open a PR, and
+   rebase-merge it once CI is green. No direct pushes to main, not even for
+   the bump. Do NOT add a CI-skip marker (the tag build must run).
+3. Rebase-merge rewrites the SHA, so tag the bump commit **as it landed on
+   main**, never the branch commit:
    ```bash
+   git checkout main && git pull --ff-only
+   git log -1 --format=%s   # must be the bump commit
    git tag vX.Y.Z && git push origin vX.Y.Z
    ```
 4. The tag triggers the `wheels` workflow: it builds all wheels, publishes to
