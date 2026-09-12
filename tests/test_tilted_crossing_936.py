@@ -79,10 +79,18 @@ def test_g936_2_the_tilt_refusal_is_gone_from_the_module():
         and isinstance(n.slice, ast.Constant)
         and isinstance(n.slice.value, str)
     }
-    assert not ({"dzpW", "dzpV"} & used), (
-        f"the crossing fill now indexes {sorted({'dzpW', 'dzpV'} & used)}; the "
-        "momwire#936 argument that the assembly uses the DIRECT spelling "
-        "rests on that absence and must be re-made"
+    # Re-made by momwire#956: the fill indexes `dzpW` — as the ẑẑ dyad's OWN
+    # coefficient k²V + ∂z′W, not as a substitute for a transverse derivative
+    # (the W terms still contract W against the other axis's Fd, the direct
+    # spelling). The positive argument replaced the absence: that spelling
+    # matches momwire's own transmitted-grid field form to 1.2e-5 with either
+    # member leaning up to 60° (antennaknobs scratch/956-derivation, probe6).
+    # `dzpV` — the one kernel a substitution would need — is still absent.
+    assert "dzpW" in used, "the ẑẑ kernel is k²V + ∂z′W (momwire#956)"
+    assert "dzpV" not in used, (
+        "the crossing fill now indexes `dzpV`; the momwire#936 argument that "
+        "the assembly makes no substituted-derivative move rests on that "
+        "absence and must be re-made"
     )
 
 
