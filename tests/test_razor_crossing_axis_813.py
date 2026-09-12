@@ -373,11 +373,12 @@ def test_reciprocity_is_measured_not_assumed():
     on CI and Skylake, ~1e-17 relative on haswell-server's g++ 11.4 build,
     momwire#839), which is the unit's answer: reciprocity holds for the
     path-tested block once SW is paired with `s_w1` as 5312ca5 measured it.
-    `SW_BY_ROLE` — SW read as a source-side end term instead — agrees at
-    eps~ = 1 (W = 0) and is 7.94e-04 away at soil A. The number is pinned as
-    a band so a move in either direction is a finding rather than silent
-    drift, and `BAR_RECIPROCITY` sits eight orders under it so the loosening
-    cannot admit the reading it rejects.
+    `SW_BY_ROLE` — SW read as a source-side end term instead — agreed at
+    eps~ = 1 (W = 0) and was 7.94e-04 away at soil A, pinned here as a band.
+    momwire#956 retired the dichotomy: the exact spelling carries BOTH W end
+    terms (SW on the below ends, TW on the above ends), the knob selects
+    nothing, and the two readings are the same block — so both must now
+    reproduce the transpose to roundoff, in both media, and be identical.
     """
     f = _reversed_setup()
     seen = {}
@@ -391,20 +392,21 @@ def test_reciprocity_is_measured_not_assumed():
     # The by-parts pairing: roundoff in both media (`seen` is already relative).
     assert seen[("eps1", CF.SW_BY_PARTS)] <= BAR_RECIPROCITY, seen
     assert seen[("soilA", CF.SW_BY_PARTS)] <= BAR_RECIPROCITY, seen
-    # The rejected role reading: roundoff where W vanishes...
+    # The other reading is the same spelling since momwire#956 — roundoff in
+    # both media, and identical to the by-parts reading rather than merely
+    # close (the knob is a no-op, measured, not assumed).
     assert seen[("eps1", CF.SW_BY_ROLE)] <= BAR_RECIPROCITY, seen
-    # ...and 7.938e-04 away where it does not, as a band — and explicitly
-    # still OUTSIDE the bar, so the bar can never quietly admit it.
-    assert 5e-4 < seen[("soilA", CF.SW_BY_ROLE)] < 1.2e-3, seen
-    assert seen[("soilA", CF.SW_BY_ROLE)] > 1e8 * BAR_RECIPROCITY, seen
+    assert seen[("soilA", CF.SW_BY_ROLE)] <= BAR_RECIPROCITY, seen
+    assert seen[("soilA", CF.SW_BY_ROLE)] == seen[("soilA", CF.SW_BY_PARTS)], seen
 
 
 @pytest.mark.slow
 def test_only_the_sw_end_term_separates_the_two_spellings():
-    """The whole reciprocity gap is one term. W is the only kernel that
-    vanishes at eps~ = 1 and is nonzero at soil, and SW is the only end
-    term carrying it — so the two spellings agree to roundoff wherever W
-    vanishes.
+    """W is the only kernel that vanishes at eps~ = 1 and is nonzero at soil,
+    and the two W end terms (SW, TW) are the only end terms carrying it — so
+    the two `sw_end` readings agree to roundoff wherever W vanishes. Since
+    momwire#956 they agree everywhere: both end terms are the spelling and
+    the knob selects nothing, which the soil-A tail now pins.
 
     W's zero at eps~ = 1 is arithmetic CANCELLATION, not a structural zero:
     it lands exactly on 0j on CI and Skylake and reads 3.9e-21 on
@@ -433,12 +435,14 @@ def test_only_the_sw_end_term_separates_the_two_spellings():
     assert row_scale > 1.0, row_scale  # the scale the zero is read against
     assert abs(tb["W"][0]) <= BAR_W_ZERO * row_scale, (tb["W"][0], row_scale)
     assert abs(tb["dzW"][0]) <= BAR_W_ZERO * row_scale, (tb["dzW"][0], row_scale)
-    # At soil it does not vanish, and neither does the difference.
+    # At soil W does not vanish — and the two readings are still the same
+    # block, bit for bit (momwire#956): the knob is retired, not re-paired.
     ctx2 = f["rs"]._crossing_context(f["geom"], ground_eps=SOIL_A)
     A2, B2 = CF.axis_data(ctx2, f["a_idx"]), CF.axis_data(ctx2, f["b_idx"])
     c = CF.cross_complete_block_reversed(ctx2, B2, A2, sw_end=CF.SW_BY_ROLE)
     d = CF.cross_complete_block_reversed(ctx2, B2, A2, sw_end=CF.SW_BY_PARTS)
-    assert not np.array_equal(c, d)
+    assert np.array_equal(c, d)
+    assert np.abs(c).max() > 0.0
 
 
 @pytest.mark.slow

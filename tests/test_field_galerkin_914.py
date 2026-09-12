@@ -107,14 +107,19 @@ DECKS = {
 }
 
 # Printed by these decks on the numpy path at f537080, before this edit. The
-# hub and crossing values are #912's own G-912-5 pins, unchanged.
+# hub and crossing values were #912's own G-912-5 pins, unchanged — until
+# momwire#956 re-pinned all three: the crossing fill's ẑẑ kernel is k²V + ∂z′W
+# and the test-end W term TW is emitted, which moves every deck with a
+# vertical member below the plane (hub 141.017−43.425j → 148.634−30.463j,
+# crossing 138.961−102.610j → 169.776−82.280j, screen12 98.787−67.076j →
+# 105.070−54.251j; antennaknobs scratch/956-derivation is the record).
 Z_PINNED = {
-    "hub": 141.016615417 - 43.425182328j,
-    "crossing": 138.960862256 - 102.609718869j,
+    "hub": 148.634045567 - 30.463037886j,
+    "crossing": 169.775596898 - 82.280023587j,
     # Measured on the NUMPY path at f537080 and asserted equal on both here;
     # this deck is new with these tests, so the pin is a same-commit record of
     # the reference's answer rather than a value inherited from before it.
-    "screen12": 98.787052258 - 67.075970581j,
+    "screen12": 105.070030090 - 54.251084913j,
 }
 
 
