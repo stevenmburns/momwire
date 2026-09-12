@@ -64,6 +64,42 @@ def main() -> int:
             "this interpreter."
         )
 
+    # THE VARIANT, and that the wheel really carries both (momwire#1032).
+    #
+    # An AVX2-only wheel imports and solves perfectly on every runner we own —
+    # all of them have AVX2 — and dies with an illegal instruction on the CPUs
+    # this split exists for. So "it worked here" proves nothing about the half
+    # that matters; the presence of the baseline .so on disk is the only thing
+    # a runner can check on the user's behalf.
+    print(f"variant     {momwire.accelerator_variant}")
+    pkg = mod.parent
+    variants = {
+        v: sorted(pkg.glob(f"_accelerators_{v}*"))
+        + sorted(pkg.glob(f"_near_interface_accel_{v}*"))
+        for v in ("avx2", "sse2")
+    }
+    for name, files in variants.items():
+        print(f"  {name:5s} {len(files)} extension file(s)")
+
+    double_build = bool(variants["avx2"]) or bool(variants["sse2"])
+    if double_build:
+        if momwire.accelerator_variant != "avx2":
+            raise SystemExit(
+                f"FAIL: this runner has AVX2, so it must choose the avx2 "
+                f"variant; it chose {momwire.accelerator_variant!r}. Either "
+                f"the CPU check is wrong or the avx2 extension is missing."
+            )
+        if len(variants["sse2"]) != 2:
+            raise SystemExit(
+                "FAIL: the wheel does not carry BOTH baseline extensions "
+                f"(found {[f.name for f in variants['sse2']]}). A wheel "
+                "without them is the AVX2-only wheel that momwire#1032 is "
+                "about, and no runner here can detect that at run time."
+            )
+    else:
+        # macOS and non-x86: one unsuffixed extension, as it has always been.
+        print("  (single-variant platform: no AVX2 split)")
+
     import numpy as np
 
     from momwire.bspline import BSplineSolver

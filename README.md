@@ -154,6 +154,12 @@ Results and control:
 - `LatticeFFTUnavailable` — raised when a lattice deck cannot take the FFT path.
 - `accelerated` — True iff the C++ accelerator loaded. Assert it rather than
   discovering a silent fall-back to pure Python by its runtime.
+- `accelerator_variant` — which build of it loaded: `"avx2"`, `"sse2"`,
+  `"legacy"` (the single unsuffixed extension macOS and non-x86 still ship),
+  or `None` when none did. On x86 the wheel carries the same kernels compiled
+  twice and picks by CPU feature *before* importing either, because an
+  AVX2 binary on an older CPU does not raise ImportError — it kills the
+  interpreter with an illegal instruction (momwire#1032).
 
 Wire material, for a consumer mirroring the loading into another tool:
 
