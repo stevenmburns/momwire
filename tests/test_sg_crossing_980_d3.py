@@ -588,7 +588,11 @@ def test_connected_is_not_detached():
                 ground_model="sommerfeld",
             ).compute_impedance()[0]
         )
-    assert connected.real == pytest.approx(58.04, rel=0.05)
+    # 58.04 until momwire#956 (the crossing fill's ẑẑ kernel is k²V + ∂z′W
+    # with the TW end term, which moves every crossing deck's R up by the
+    # W-term excess: +3.1 Ω here, the same class as the #524 / #674 anchors
+    # re-pinned in #1043). The detached deck has no crossing and does not move.
+    assert connected.real == pytest.approx(61.12, rel=0.05)
     assert detached.real == pytest.approx(10.46, rel=0.05)
     assert connected.real / detached.real > 3.0
 
