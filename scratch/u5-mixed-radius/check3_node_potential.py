@@ -134,9 +134,17 @@ def selfc(ctx, ax_b, ax_a):
             live_p, row, _col, cor = _orig_bnd(ax, k, r_point, gz, mirror=mirror)
             if live.size == 0:
                 continue
-            if not np.array_equal(live, live_p) or live.size != 1:
+            if not np.array_equal(live, live_p) or len(ax["ends"]) != 1:
                 raise RuntimeError(f"node tents on {name}: {live}, {live_p}")
-            CAP[name] = int(live[0])
+            # `live` is every basis with a nonzero end value, roundoff included;
+            # the node tent is the value-1 one
+            fv = np.abs(np.asarray(ax["ends"][0][2]))
+            tent = int(np.argmax(fv))
+            off = float(np.delete(fv, tent).max())
+            if abs(fv[tent] - 1.0) > 1e-12 or off > 1e-12:
+                raise RuntimeError(f"{name}: no clean value-1 tent ({fv[tent]}, {off})")
+            CAP[name], CAP[f"{name}_off"] = tent, off
+            CAP.setdefault("live", set()).update(live.tolist())
             total[live, :] += beta * row
             total[:, live] += beta * col
             total[np.ix_(live, live)] += beta * cor
@@ -176,8 +184,8 @@ def vc_solve(s):
     removal = CAP["pt_a"] + CAP["pt_b"].T - CAP["self_pt"]
     na, nb = CAP["na"], CAP["nb"]
     rows = set(np.flatnonzero(np.any(removal != 0, axis=1)).tolist())
-    if not rows <= {na, nb}:
-        raise RuntimeError(f"node point tests found outside rows {na}, {nb}: {rows}")
+    if not rows <= CAP["live"] or not {na, nb} <= rows:
+        raise RuntimeError(f"node point tests on rows {rows}; live {CAP['live']}")
     u = np.zeros((1, Z.shape[0]))
     u[0, na], u[0, nb] = 1.0, -1.0
     kcl = np.vstack([CAP["kcl"].reshape(-1, Z.shape[0]), u])

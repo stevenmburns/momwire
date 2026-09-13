@@ -1,0 +1,18 @@
+{'rod': 'b', 'momwire_file': '/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/__init__.py'}
+control  obs      z=425.07238-360.56933j kcl=2.61e-05 slope-vs-AGARD=2.887e-01 | VC z=442.12355-355.43337j kcl=4.06e-11 slope-vs-AGARD=2.515e-01  NEC-5 425.38-362.06j
+control  node_A   z=425.07238-360.56933j kcl=2.61e-05 slope-vs-AGARD=2.887e-01 | VC z=442.12355-355.43337j kcl=4.06e-11 slope-vs-AGARD=2.515e-01  NEC-5 425.38-362.06j
+control  node_B   z=425.07238-360.56933j kcl=2.61e-05 slope-vs-AGARD=2.887e-01 | VC z=442.12355-355.43337j kcl=4.06e-11 slope-vs-AGARD=2.515e-01  NEC-5 425.38-362.06j
+control  single_B z=425.07238-360.56933j kcl=2.61e-05 slope-vs-AGARD=2.887e-01 | VC z=442.12355-355.43337j kcl=4.06e-11 slope-vs-AGARD=2.515e-01  NEC-5 425.38-362.06j
+ratio2   obs      z=425.45978-362.68704j kcl=1.53e-05 slope-vs-AGARD=2.917e-01 | VC z=477.63654-391.85201j kcl=4.14e-13 slope-vs-AGARD=8.393e-02  NEC-5 460.77-398.41j
+ratio2   node_A   z=460.59035-396.97527j kcl=1.13e-03 slope-vs-AGARD=4.502e-01 | VC z=477.63654-391.85201j kcl=6.22e-14 slope-vs-AGARD=8.393e-02  NEC-5 460.77-398.41j
+ratio2   node_B   z=460.59259-396.97568j kcl=2.01e-06 slope-vs-AGARD=2.242e-02 | VC z=477.63654-391.85201j kcl=6.11e-13 slope-vs-AGARD=8.393e-02  NEC-5 460.77-398.41j
+ratio2   single_B z=460.594-396.97572j kcl=1.38e-06 slope-vs-AGARD=2.907e-02 | VC z=477.63796-391.85207j kcl=8.03e-13 slope-vs-AGARD=7.781e-02  NEC-5 460.77-398.41j
+ratio4   obs      z=425.92274-364.40029j kcl=9.02e-06 slope-vs-AGARD=2.932e-01 | VC z=513.02081-428.21067j kcl=3.93e-13 slope-vs-AGARD=3.376e-01  NEC-5 496.04-434.71j
+ratio4   node_A   z=495.97712-433.32092j kcl=2.26e-03 slope-vs-AGARD=3.054e+00 | VC z=513.02081-428.21067j kcl=4.59e-13 slope-vs-AGARD=3.376e-01  NEC-5 496.04-434.71j
+ratio4   node_B   z=495.98412-433.32175j kcl=1.02e-05 slope-vs-AGARD=2.794e-01 | VC z=513.02081-428.21067j kcl=7.33e-13 slope-vs-AGARD=3.376e-01  NEC-5 496.04-434.71j
+ratio4   single_B z=495.98678-433.3219j kcl=9.50e-06 slope-vs-AGARD=2.580e-01 | VC z=513.0235-428.21081j kcl=6.25e-14 slope-vs-AGARD=3.164e-01  NEC-5 496.04-434.71j
+ratio05  obs      z=460.93579-394.55824j kcl=2.14e-05 slope-vs-AGARD=2.335e-01 | VC z=442.31569-355.23853j kcl=1.05e-12 slope-vs-AGARD=4.244e-01  NEC-5 425.64-361.92j
+ratio05  node_A   z=425.26105-360.44642j kcl=4.08e-04 slope-vs-AGARD=4.996e-01 | VC z=442.31569-355.23853j kcl=7.59e-13 slope-vs-AGARD=4.244e-01  NEC-5 425.64-361.92j
+ratio05  node_B   z=425.26082-360.44602j kcl=4.61e-05 slope-vs-AGARD=4.558e-01 | VC z=442.31569-355.23853j kcl=1.59e-12 slope-vs-AGARD=4.244e-01  NEC-5 425.64-361.92j
+ratio05  single_B z=425.25995-360.44608j kcl=4.49e-05 slope-vs-AGARD=4.442e-01 | VC z=442.31486-355.23854j kcl=1.10e-12 slope-vs-AGARD=4.134e-01  NEC-5 425.64-361.92j
+saved scratch/u5-mixed-radius/check3_b.json
