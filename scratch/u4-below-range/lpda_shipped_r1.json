@@ -1,0 +1,25 @@
+{
+ "meta": {
+  "momwire_file": "/home/smburns/stevenmburns/momwire-wt-u4/src/momwire/__init__.py",
+  "cap0": 4.0
+ },
+ "result": {
+  "mode": "ladder",
+  "spelling": "shipped",
+  "engine": "momwire",
+  "cap": 4.0,
+  "deck": "/home/smburns/antennas/nec-wild/community/cebik-w4rnl/models/LPDAs/nec/lpma3r5-4-6el86ft75o-buriedradials.nec",
+  "refine": [
+   1
+  ],
+  "stdout": "\n/home/smburns/antennas/nec-wild/community/cebik-w4rnl/models/LPDAs/nec/lpma3r5-4-6el86ft75o-buriedradials.nec  engine momwire\n    r   segs   fed seg (mm)                  Z (ohm)                   step  |step| ratio\n",
+  "error": "ValueError: this deck's buried geometry is outside momwire's below/below domain: this deck's buried wires reach a below/below pair separation of R1 = 74.8718 m (4.69 in-medium wavelengths), past the 63.8636 m (4 in-medium wavelengths, lambda_m = 15.97 m) the below/below remainder is tabulated to. There is no honest clamp out there: unlike the reflected-wave remainder above the interface, the below/below remainder GROWS relative to the direct term with range (measured 12x and 168x direct+image at working range, momwire#553 U2), so freezing the surface amplitude would return a confident wrong number. Shrink the buried structure, or densify the far annulus of the below/below grid (a recorded follow-up, and it wants the C++ twin first)",
+  "stats": {
+   "proj_calls": 0,
+   "pairs": 0,
+   "zeroed_pairs": 0,
+   "grids": []
+  },
+  "seconds": 0.36236000061035156
+ }
+}
