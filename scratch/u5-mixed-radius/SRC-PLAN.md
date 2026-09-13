@@ -121,15 +121,15 @@ anything else. If V2 misses, the equal-radius path was touched, which is a stop.
 
 ## 8. Checks measured before the PR [2026-09-13]
 
-The src branch `u5-two-radius-crossing` is at `adc009c`, local and not yet
-pushed.
+The src branch `u5-two-radius-crossing` is at `adc009c` (V1, V2) and `e88d4d6`
+(V3, V4).
 
 | id | verdict |
 |---|---|
 | V1 | **HIT**. Check 3′'s rows: worst 2.9e-13 over 4 rows (`v1_check2.*`). Step (b′)'s mixed rungs, through antennaknobs' engine: worst 1.8e-12 over 27 rows (`v1_b.*`). Both runs asserted that momwire was imported from the src worktree |
 | V2 | **HIT**. On the catalog `buried_radial_vertical` at 7.1 / 6.8 / 7.4 MHz, soil A, and check 2's rod at equal radii (r = 1 and 2), main and the src branch agree bit for bit (`repr`). The determinism control also held: main reproduced itself exactly. The crossing fill ran 3 times on the catalog decks and 5 in all, so the comparison is not vacuous. The catalog design at 7.1 MHz reads 78.13206040784942+46.33767699982075j on both (`v2_main.*`, `v2_main_repeat.*`, `v2_src.*`) |
-| V3 | lanes running |
-| V4 | see V3 |
+| V3 | `make lint`: green. `make slow`: 338 passed, 7 skipped (12 min 14 s). `make crossgate`: 36 passed, 1 skipped (6 min 49 s). `make test`: the first run had 1 failure, `test_g980c_2`, whose spy on the shared scope check had a fixed signature and broke on the new `two_radius` keyword. It is fixed in `e88d4d6`: the spy forwards keywords and pins that BSpline opts in and razor does not. The rerun: 5110 passed, 0 failed, 17 skipped, 4 xfailed. **The lane still exits 2**, on the conftest's 20 s HARD timing ceiling: 8 unmarked tests this branch does not touch went over (6 on the first run, a different set). **That is local load, not this branch.** Serially the same 8 take 11.63 s on main and 11.62 s on the branch, each within 0.06 s (`v3_ceiling_ab.log`), and momwire's CI passed main `42112b9` under the same gate. `make test` is therefore not green locally; the PR's CI test lane decides (`v3_lanes.log`) |
+| V4 | **HIT**, inside V3: every existing crossing, buried, razor-crossing and SG-crossing test passes in all three lanes, so no banked number moved |
 
 **T3's measured values** (refine 1): R₀ = 186.6216 Ω. Halving the rise radius
 adds +7.861 Ω; halving the top radius adds +0.492 Ω, 0.063 of the rise's
