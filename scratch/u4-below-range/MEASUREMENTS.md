@@ -633,3 +633,31 @@ extension row reported.** The registration said unfinished rows are recorded
 as not run, but named no budget. Only the G-c guard has printed so far, and it
 hit: rem(1.02)/rem(1.01) = 1.972–1.984. The budget is **4 h from the run's
 start at 12:47:38Z**. Rows unfinished at 16:47Z are recorded as not run.
+
+### T1/T2 and the fast lane, measured [2026-09-13]
+
+| id | result |
+|---|---|
+| PT1 | **HIT.** bspline: \|Z_ship − Z_ext\| at r = 1 is 3.143e-5 Ω against the extended table's r = 1 → 3 step of 0.1497 Ω, which is 2.10e-4 of the step (bar 1e-2). Extended at r = 1 and r = 3 reproduce antennaknobs' extended prints to ≤ 2e-14 Ω |
+| PT2 | **HIT.** SG serves the deck. Shipped reads 70.03600738983259+40.93569496905351j and extended 70.03601631488755+40.93566597359472j, so δ = 3.034e-5 Ω against SG's own step of 0.3550 Ω, 8.5e-5 of it (bar 1e-2). The two trunks' δ agree to 3.5 % while their ladder steps differ by 2.4×. That is consistent with the zeroed contribution being a property of the geometry rather than of the basis |
+
+Serially T1 takes 28.7 s and T2 23.3 s. Both exceed the 20 s ceiling, so the
+`slow` mark is required, not a choice.
+
+**PT3 is in progress, and one clause has already missed.** The prediction said
+only the tests named in T3–T7 would be edited.
+- **The missed test.** `make test` failed a test the registration did not name:
+  `test_buried_assembly_910.py::test_g910_2b_the_refusals_still_fire`.
+  - It pinned the range refusal with `match="R1"`.
+  - The registration's greps searched for the refusal sentence and the constant,
+    so none of them matched it.
+  - Its 200 m hub deck now passes the range check and refuses on the grazing
+    floor instead (θ = 0.043°). The range half is retired in src commit e9153d0.
+- **The ceiling breaches are load, not the change.** The same run tripped the
+  20 s hard ceiling on five unmarked tests outside this change: the point-field
+  envelope and four extended-kernel rows.
+  - Run serially, they take 5.3 / 3.8 / 3.3 / 0.4 / 0.2 s.
+  - The breaching run overlapped two of this PR's own normal-priority jobs
+    (numpy G-B and T4), at a load average near 11.
+- **Next.** The lane is being rerun alone. `make slow` and `make crossgate`
+  follow.
