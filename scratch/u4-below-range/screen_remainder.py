@@ -75,6 +75,47 @@ def cases():
     return out
 
 
+# Registered 2026-09-13 before the zeroing src PR (MEASUREMENTS.md, "The src
+# PR"): antennaknobs' served soil presets that the registered screen above did
+# not reach, at the HF band ends. The screen's worst row was its low-loss,
+# shallow, low-frequency corner (SPEC-C-7-0.02 VED), so the extension pushes
+# along exactly those axes. `--extension` runs these instead of `cases()`;
+# the default run is still the registered original.
+EXTENSION_SOILS = {
+    "very-poor": (5.0, 0.001),
+    "fresh-water": (80.0, 0.001),
+    "salt-water": (81.0, 5.0),
+}
+
+
+def extension_cases():
+    out = []
+    for sid, soil in EXTENSION_SOILS.items():
+        for d in (0.02, 0.15):
+            out.append(
+                dict(
+                    name=f"EXT-{sid}-1.8-{d:g}",
+                    soil=soil,
+                    f=1.8e6,
+                    ds=d,
+                    do=d,
+                    delta=None,
+                )
+            )
+    for sid in ("fresh-water", "salt-water"):
+        out.append(
+            dict(
+                name=f"EXT-{sid}-28-0.02",
+                soil=EXTENSION_SOILS[sid],
+                f=28e6,
+                ds=0.02,
+                do=0.02,
+                delta=None,
+            )
+        )
+    return out
+
+
 def _proto(proto_dir):
     sys.path.insert(0, str(proto_dir))
     import buried_proto as bp
@@ -131,6 +172,7 @@ def main():
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--workers", type=int, default=8)
     ap.add_argument("--guard-only", action="store_true")
+    ap.add_argument("--extension", action="store_true")
     args = ap.parse_args()
     proto_file = args.proto / "buried_proto.py"
     meta = dict(
@@ -161,7 +203,7 @@ def main():
 
         rows = []
         skipped = []
-        for c in cases():
+        for c in extension_cases() if args.extension else cases():
             lm = lam_m(c["soil"], c["f"], args.proto)
             delta = c["delta"] if c["delta"] is not None else lm / 26.0
             h = c["ds"] + c["do"]

@@ -425,3 +425,172 @@ comparison mixed two estimators. With both consistent, \|Δ\| = 0.121 Ω
 stays a HIT, closer than first recorded.** PZ-S1 and PZ-S2 use only the last
 ladder step and are unaffected. Estimates in this record come from
 `ladder_estimate`'s form from now on, never a hand-written ×2 formula.
+
+## The src PR: serve past the cap with the remainder zeroed (registered before any src edit) [2026-09-13]
+
+Steve said go. This section registers the design, the tests, and the predictions
+before any src edit and before any run that produces a number for them. The
+src branch is `u4-below-range-zeroing`, from momwire origin/main b284b17. It
+stays unmerged for Steve.
+
+### Design
+
+- **D1. One copy, in the projection.** `remainder_field_proj_below` returns
+  exactly 0 for every pair with R1 > `grid.r1_cap`, which is
+  `_SOMM_BELOW_R1_CAP_LAMBDA_M`·λ_m at grid construction. Every other pair is
+  today's number from today's arithmetic.
+  - The numpy path evaluates the surfaces at min(R1, r1_cap) and zeroes the
+    masked entries.
+  - The C++ path keeps its kernel untouched. It hands `grid.eval` the extremes
+    with R1 clamped to r1_cap. Only when the reported max R1 is past r1_cap
+    does it build the per-pair mask and zero those entries.
+  - All three consumers get the same rule:
+    - bspline, via `_below_interface.compute_Z_operator_buried`;
+    - SG, via `sinusoidal_galerkin` (live: `buried=True`);
+    - razor, via `_potential_ground.BelowMediumGround` (dormant behind
+      `_SERVE_BURIED = False`).
+- **D2. Keyed on the cap, not on `r1_max`.** A grid tabulated SHORT of the cap
+  and then queried past its own `r1_max` is a sizing bug, not a domain edge.
+  `SommerfeldGridBelow.eval` keeps refusing it, because the clamp is to r1_cap
+  and not to r1_max.
+- **D3. Still refused, unchanged.**
+  - **`remainder_field_below`**, the field-point vector. No product code calls
+    it. A lone observer past the cap has no self-scale term for the remainder
+    to be small against: this screen's M1 is 0.46–3.57 against direct at
+    4 λ_m, so there it is not negligible.
+  - **The grazing floor, over ALL pairs, zeroed ones included.** This holds in
+    `serve_plan`, in `below_reach_refusal`, in razor's plan, and in the
+    projection's extremes. The LPDA stays refused.
+  - The tail-cap, z′-ladder depth, cross-range, and cross-grazing refusals.
+- **D4. Refusal sites removed, and the bound documented where they stood.**
+  - The range branch of `_below_interface.serve_plan`.
+  - The range branch of `bspline.below_reach_refusal`.
+  - The range branch of `razor._assemble_Z_below_plane`.
+  - `BURIED_PAST_CAP_REFUSAL`, and its bspline re-export, are deleted.
+- **D5. Stale prose.**
+  - The "2, not 4" cap comment is rewritten. It is history plus what 4 λ_m
+    means now: where the tabulation is gated accurate, and where the bound
+    below takes over.
+  - `get_grid_below`'s "at the 2 λ_m cap" becomes 4.
+  - The `eval` docstring is reconciled. Relative to direct+image the remainder
+    still GROWS with range (#553 U2's 12× and 168× stand). Relative to the
+    self-scale terms that set each row of Z it is ≤ 1.04e-4 at 4 λ_m. That is
+    why the fill may zero it while a point query may not.
+- **D6. The bound, as it will be written at the removed refusal:**
+  - field-level M2 at 4 λ_m ≤ 1.04e-4 over the SPEC and LPDA cases;
+  - Z-level δ = 3.1e-5 Ω on this record's synthetic deck, against its own
+    ladder step of 0.074 Ω (4e-7 of \|Z\|, constant under refinement);
+  - plus the extension rows below, once run.
+  - A pointer to this record.
+
+### Tests
+
+- **T1 (new, `slow`): the bspline bound.** The synthetic deck is built
+  natively from `syn_kwargs_r1.json` / `syn_kwargs_r3.json`. Those are the
+  exact `BSplineSolver` kwargs antennaknobs' engine builds, captured at
+  construction with no fill (`capture_kwargs.py`). Three solves:
+  - `shipped` at r = 1;
+  - `extended` at r = 1 and r = 3, with the cap monkeypatched to 5.
+  - Assert \|Z_ship(1) − Z_ext(1)\| ≤ 1e-2 · \|Z_ext(3) − Z_ext(1)\|.
+  - Guards, all read before δ:
+    - **G-T1:** the shipped plan's R1 is past 4 λ_m and its θ is above the
+      floor (a spy on `serve_plan`).
+    - **G-T2:** the extended grid is tabulated past 4 λ_m.
+    - **G-T3:** δ > 1e-9·\|Z\|. A bit-identical pair would mean the zeroing
+      never ran.
+- **T2 (new, `slow`): the SG bound.** The same deck, bar, and guards, on
+  `SinusoidalGalerkinSolver`.
+- **T3 (changed): the projection past the cap.**
+  - The `past_cap` row of `test_g5689_the_refusals_survive_the_dispatch`
+    becomes: a past-cap pair returns exactly 0 on both paths.
+  - New: a call mixing an in-range pair with a past-cap pair returns the
+    in-range entry bit-identical to that pair queried alone, on each path.
+  - `test_gu2_4_past_the_cap_refuses_instead_of_clamping`, the grid's `eval`,
+    is unchanged.
+- **T4 (changed):** `test_gu5_6_a_buried_structure_past_the_below_cap_refuses`
+  becomes "is served": the 1.5×cap radial solves to a finite Z. The 40 m row
+  stays.
+- **T5 (changed):**
+  - `test_g1135_2`: the far pair is no longer a refusal.
+  - `test_g1135_4` re-points its sweep across the one bound left, the grazing
+    floor, by depth. The "both halves present" scoring rule is unchanged.
+- **T6 (changed):** in `test_on_the_fan_it_is_the_r1_cap_that_soil_moves`, the
+  wet-soil fan past the cap no longer refuses on range. Asserted on the serve
+  plan without solving, keeping the lane fast.
+- **T7 (prose):**
+  - `test_ble_1937_838`'s crossgate: the ε_r 30 / 135 ft screen now serves,
+    and the comments saying "refused" are updated.
+  - `test_g980c_3`'s re-export list drops `PAST_CAP`.
+- **Downstream, not in this PR.** antennaknobs `tests/test_below_reach_preflight_1135.py`
+  asserts the range refusal in three tests:
+  - `test_the_issues_own_case_refuses_by_name`;
+  - `test_the_threshold_sits_where_the_issue_measured_it`;
+  - `test_the_preflight_agrees_with_the_solve`.
+  They run against antennaknobs' submodule pointer, so they change only when
+  the pointer moves past this PR.
+
+### Guards on the src change (local, before the PR opens)
+
+- **G-B: in-range decks are bit-identical.** `fan_rise_deck()` at soil A
+  (inside the cap) gives the same Z bit-for-bit on origin/main and on the
+  branch, on both the C++ and the numpy projection. An empty mask must mean
+  untouched arithmetic.
+- **G-N: the native deck is the measured deck.** Native `extended` Z at r = 1
+  reproduces antennaknobs' `extended` 69.62293392355063+40.69854829336737j to
+  ≤ 1e-6 Ω.
+- **G-X: the branch reproduces the harness.** Branch `shipped` Z at r = 1
+  reproduces `z_gate.py`'s `zeroed` spelling at r = 1 to ≤ 1e-9 Ω. That
+  spelling zeroed the same pairs by R1 > 4 λ_m on an extended grid, so this
+  also tests D1's claim that a grid tabulated further interpolates identically
+  inside 4 λ_m.
+
+### The screen extension (registered; run before the PR opens)
+
+antennaknobs serves soil presets this screen never reached, at the HF band
+ends. The screen's worst row was its low-loss, shallow, low-frequency corner
+(SPEC-C-7-0.02 VED, M2 1.04e-4), so the extension pushes along those axes:
+
+- very poor (5, 0.001) at 1.8 MHz, depths 0.02 and 0.15;
+- fresh water (80, 0.001) at 1.8 MHz, depths 0.02 and 0.15, and at 28 MHz,
+  depth 0.02;
+- salt water (81, 5) at 1.8 MHz, depths 0.02 and 0.15, and at 28 MHz,
+  depth 0.02.
+
+The command is `screen_remainder.py --extension`. The G-c guard runs first, as
+before. Rows the prototype cannot finish inside the run's wall-clock budget
+are recorded as not run.
+
+### Predictions
+
+| id | prediction | result |
+|---|---|---|
+| PX1 | **informed** (the screen's M2 ≤ 1.04e-4 and the decay rates it measured): M2 at 4 λ_m ≤ 2e-4 on every extension row that runs | |
+| PT1 | **informed** (antennaknobs' engine measured δ/b₁₃ = 3.14e-5 / 0.1497 = 2.1e-4): T1 holds at 1e-2·b₁₃, and G-N and G-X hit | |
+| PT2 | **blind**: SG serves the synthetic deck, and T2 holds at the same bar | |
+| PT3 | **blind**: `make test`, `make slow` and `make crossgate` pass locally, with only the tests named in T3–T7 edited | |
+| PB | **blind**: G-B is bit-identical on both paths | |
+
+### Reading rules, fixed now
+
+- **A PX1 miss on any row** stops the PR from opening. That soil and frequency
+  first gets the synthetic Z gate, with the deck rescaled to the same
+  4.76 λ_m. The zeroing is either kept uniform on that measurement, or the
+  miss is scoped and recorded.
+- **A PT2 miss** (SG does not serve the deck) is recorded. T2 then moves to a
+  deck SG does serve past the cap, which must be named in this record before
+  it runs. **A PT2 bound miss** stops the PR, exactly as a PT1 miss would.
+- **A G-B miss** is a defect in D1's implementation, not a finding; fix it
+  before anything else is read.
+
+### What still blocks the LPDA, after this PR
+
+1. **The vertex preflight quirk in antennaknobs.** It pairs z = 0 vertices on
+   different crossing nodes as θ = 0, and the peer is fixing it.
+2. **The node-level grazing floor.** The pairs sit at 0.0239°, against a 0.05°
+   floor.
+3. **The one crossing node.** `_crossing_fill._ends_and_corner` asserts a
+   single crossing node, and the LPDA has eight. The peer measured it on
+   momwire b8232e5: two base-fed verticals, each with its own node, pass the
+   serve plan and die with an AssertionError at `_crossing_fill.py:1218`.
+
+This PR removes none of the three.
