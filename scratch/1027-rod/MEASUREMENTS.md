@@ -405,3 +405,29 @@ re-scored.
 
 The observation points at the source region: the feed wire's two 5 mm
 segments and the delta-gap charge they have to represent. That is 2(b)'s axis.
+
+## Step 2(b) — the source region
+
+### A fact about #1027's ladder, from the decks and not a prediction: the source region is never refined
+
+The emitted GW cards within 30 mm of the feed, identical at refine 1, 8 and 16
+on both lengths:
+
+| L (m) | refine | total segs | lower graded | lower near-feed | feed wire (EX) | upper near-feed | upper graded |
+|---|---|---|---|---|---|---|---|
+| 0.15 | 1 / 8 / 16 | 14 / 22 / 36 | 2 × 18.75 mm | 2 × 6.25 mm | **2 × 5.00 mm** | 2 × 6.25 mm | 2 × 18.75 mm |
+| 0.60 | 1 / 8 / 16 | 22 / 74 / 136 | 2 × 18.75 mm | 2 × 6.25 mm | **2 × 5.00 mm** | 2 × 6.25 mm | 2 × 18.75 mm |
+
+`refine` divides `rest_h`, the size the graded wires relax to far from the
+feed. The grading toward the feed and the feed wire itself, `Wire(lo, hi,
+ex=1)` with no `n_seg`, which auto-mesh gives two segments, do not depend on
+it. So refine 8 → 16 adds panels only away from the source, and **the
+Richardson extrapolation behind every #1027 fraction — and every fraction in
+this record so far — is converged in the far mesh with the source region
+frozen at 5 mm segments.** Both engines are handed the same frozen region.
+NEC-5 excites the knot between the feed wire's two segments (`EX 0 tag 1 2`);
+the momwire feed placement is checked below before anything is read from it.
+
+This matches AK `scratch/g1b-bs1-bs2/RESULTS.md`, whose addendum found an
+electrically short dipole's Z moving several percent with the fed segment's
+length in any medium, approaching a finite limit about as gap^0.5.
