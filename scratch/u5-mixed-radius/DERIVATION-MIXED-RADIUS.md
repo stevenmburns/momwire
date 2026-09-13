@@ -257,6 +257,32 @@ The momwire PR that lifts the refusal and implements §5 is gated on all three:
    ~3e-8, source-side ~0.6–0.9) and the slope ratio against 1/ε̃ (observer-side
    within ~5e-4), so that a future transpose regression fails a test.
 
+**§7 status after §8 and step (b′) [2026-09-13].**
+
+- **Item 1 stands.** Equal radii stay on the shipped single-transpose path. The
+  multiplier form reproduces that path to 5.3e-8 (C3′.0), so switching forms at
+  a ratio of 1 is seamless to that level.
+- **Item 2 is met on step (b)'s rod** under the one-potential spelling, for the
+  split and the multiplier alike (MEASUREMENTS.md Pq.1 and Pq.1k: 0.008–0.105 Ω
+  against bands of 0.50–0.64 Ω). (c)'s corpus decks are still to run, held
+  behind U3's GE −1 scope.
+- **Item 3 is obsolete as written.** Its figures are observer-side's, and §8.8
+  shows observer-side is the wrong rule: its 3e-8 continuity came from not
+  counting the node's potential jump. Step (b′)'s Pq.3 shows the one-potential
+  split's KCL deficit does not converge (1e-6 to 4.6e-5, non-monotone in r).
+  **The KCL gate therefore chooses the multiplier**: the crossing junction
+  carries a KCL row, as same-medium junctions do, and a test asserts its
+  deficit at roundoff.
+- **The transpose guard needs rewriting, and is open.** With an exact KCL row
+  and a transpose-invariant driving-point Z, neither readout sees a transposed
+  rule. One node potential leaves only the line-test radius transposable, so a
+  guard must read currents: the slope once its target is derived (also open),
+  or a fill-level assertion that the node's point tests share one radius and
+  the line tests carry the observer's.
+- **a_n is still a choice.** It is a gauge for Z to ≤ 7 mΩ (P3′.2) under either
+  form. These decks used the buried member's radius. With several buried radii
+  at one node the choice is open.
+
 ## §8 — reopened after step (b) [2026-09-13; timeboxed]
 
 **What is established.** The buried same-medium family carries mixed radii

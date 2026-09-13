@@ -298,3 +298,38 @@ How the outcomes will be read, fixed now:
 - **Pq.4 misses** → the one-potential spelling refines differently from the
   equal-radius fill. That is reported beside Pq.1, and Pq.1 is also read at
   r = 4 alone.
+
+## Step (b′) measured
+
+- **Code and outputs.** `b_ladder_onepot.py` wrote
+  `bq_{control,ratio2,ratio4,ratio05}.json` with their logs, and
+  `bq_verdicts.py` wrote `bq_verdicts.log`.
+- **NEC-5 spot re-run.** It reproduced the banked value exactly in all four
+  configurations.
+- **Control.** `node_B` reproduced step (b)'s banked momwire Z at every rung.
+- **Segment counts** matched at every rung.
+
+| id | verdict |
+|---|---|
+| Pq.1 | **HIT**. \|ΔZ∞(mixed) − ΔZ∞(control)\| at L = 0.30 / 0.60 / 1.20 m is 0.074 / 0.027 / 0.008 Ω at ratio 2, 0.105 / 0.035 / 0.013 Ω at ratio 4, and 0.037 / 0.014 / 0.017 Ω at ratio 0.5. The bands are 0.642 / 0.500 / 0.500 Ω. Observer-side's differences were 10.7–96.6 Ω |
+| Pq.1k | **HIT**, with the same numbers to ≤ 1 mΩ |
+| Pq.2 | **HIT**. The worst \|Z(node_B) − Z(VC_keep)\| over every rung is 0.3 mΩ |
+| Pq.3 | **MISSED**. At r = 4 the split's KCL deficit is 2.1e-5 / 1.0e-5 / 4.5e-6 at ratio 2, 2.4e-5 / 1.2e-5 / 5.2e-6 at ratio 4, and 3.6e-5 / 1.8e-5 / 8.2e-6 at ratio 0.5. That is above 1e-5 at L = 0.30 and 0.60 m in every mixed configuration. It also does not fall steadily: at ratios 2 and 4 it dips at r = 2 (1.1e-6 to 1.0e-5) and rises again at r = 4, and at ratio 0.5 it barely moves (3.5e-5 → 4.6e-5 → 3.6e-5 at L = 0.30 m). The control falls from 7.2e-5 to 3.2e-6 as before |
+| Pq.4 | **HIT**. momwire's step ratios are 0.68–0.91 against the control's 0.69–0.79, all within ±0.15 |
+
+**One caveat on Pq.1.** momwire's own ladder is slower than first order on
+the control too (step ratios 0.69–0.79, where first order would give 0.5), so a
+first-order Richardson extrapolation of the residual is not exact here. Read at
+r = 4 alone, the mixed-minus-control residual is 0.005–0.186 Ω, which is also
+inside every band.
+
+**Reading, as registered:**
+
+- **Pq.1 hits everywhere** → §7's gate item 2 is met on step (b)'s rod, under both
+  one-potential spellings. Across the whole ladder, the two-radius crossing node
+  now sits inside NEC-5's equal-radius residual band, where observer-side was
+  21–150 times its band outside. Step (c) is still held, behind U3's GE −1 scope and
+  Steve's decision.
+- **Pq.3 misses** → the split's continuity does not converge under a_n = a_B, so
+  §7's KCL gate chooses the multiplier. VC_keep's KCL is exact by construction
+  (asserted ≤ 1e-9 at every rung), and its Z equals the split's to 0.3 mΩ.
