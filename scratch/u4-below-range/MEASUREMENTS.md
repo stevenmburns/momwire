@@ -134,3 +134,48 @@ touched.
 screen's cases are lossy soils with λ_m several times shorter, so ρ is
 shorter, but the shallow SPEC depths slow the tail. The run uses parallel
 workers.
+
+## The Z gate, part 1: harness and guards (registered before any Z run)
+
+`z_gate.py` runs with the antennaknobs venv and this worktree's `src` first on
+the path. The worktree's accelerators are built (`make build` exit 0), and the
+import resolves to `momwire-wt-u4/src`. No src change is involved.
+
+### Spellings
+
+| spelling | what changes |
+|---|---|
+| `shipped` | nothing; a deck past the cap refuses by name |
+| `extended` | `_SOMM_BELOW_R1_CAP_LAMBDA_M` 4 → 5. The grid, the serve plan's check, antennaknobs' construction preflight (`momwire.below_reach_refusal`, which reads the constant at call time) and the grid-cache bucket all follow. The far annulus's existing lattice (Δr = `_SOMM_BELOW_DR_LAMBDA_M`·λ_m, and #838's θ cell counts) continues to the deck's R1 |
+| `zeroed` | the `extended` grid, plus a wrapper on `_sommerfeld_below.remainder_field_proj_below`. The wrapper calls the original, then zeroes every observer/source pair whose image distance R1 exceeds 4 λ_m. So `extended` and `zeroed` differ by exactly the beyond-cap remainder, through the same fill |
+
+**Plumbing assertions, recorded with every run:**
+
+- the grids the fill built, with their resolved `r1_max`;
+- the wrapper's call count, pair count and zeroed-pair count.
+
+A zeroing run that shows no wrapper calls, or no zeroed pairs on the LPDA,
+is not a result. That is the silent-failure mode of a flag that changes
+nothing.
+
+### Guards (bars fixed now; a miss stops the Z gate)
+
+| id | check | bar |
+|---|---|---|
+| G-Z1 | **the extended band's own accuracy.** A grid built at the LPDA's soil and frequency (13, 0.005; 3.5 MHz) with the cap at 5 and `r1_max` = 4.7 λ_m, against `iv_surfaces_direct_below` at 28 × 25 off-node points: R1 ∈ (4, 4.7] λ_m, θ ∈ [0.1°, 2.0°]. That covers the LPDA's beyond-cap pairs, whose depth sums of 0.30–1.37 m over R1 ≥ 64 m put θ at about 0.2°–1.2°. The error is worst relative over the four surfaces, as #838's probe measures it | ≤ 2e-4, the in-domain gate |
+| G-Z2 | **`extended` does not move an in-range deck.** The catalog `buried_radial_vertical` through antennaknobs' momwire engine on soil A: Z under `extended` equals `shipped` | bit for bit (`repr`) |
+| G-Z3 | **`zeroed` does not move an in-range deck,** and the wrapper is plumbed. The same design: Z under `zeroed` equals `shipped`, with at least one wrapper call and zero pairs zeroed | bit for bit, `proj_calls` > 0, `zeroed_pairs` = 0 |
+
+### Run plan
+
+1. Guards G-Z1 to G-Z3.
+2. **Part 2 of the registration: the Z predictions.** Written after the prototype
+   screen's results and before any ladder or NEC-5 run on the LPDA.
+3. The LPDA (`lpma3r5-4-6el86ft75o-buriedradials.nec`, sha256
+   `f653f79da804fc55…`) through `antennaknobs ladder`:
+   - momwire under `shipped` (records the refusal), `extended` and `zeroed`;
+   - NEC-5 x13-static on the raw deck (`GN 2`) as the outside reference.
+
+   Rung r = 1 (2,690 segments) is mandatory. r = 3 runs only if rung 1's
+   momwire wall time and memory make it feasible under the 24 GB cap; that
+   decision is recorded, not assumed.
