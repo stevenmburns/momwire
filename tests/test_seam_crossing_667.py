@@ -201,9 +201,26 @@ def test_portal_splits_one_wire_at_the_plane_and_matches_the_split_spelling(
 
 
 @pytest.mark.slow
-def test_portal_ge_minus_one_still_wants_the_interpolated_card():
-    """Unchanged: the portal serves the ground contact only under GE 1, and
-    says so by name — the split adds nothing under GE -1."""
+def test_portal_serves_the_split_spelling_under_ge_minus_one_too(record_property):
+    """antennaknobs plan U3 (#1052): at a crossing junction, GE -1 is the
+    NEC-4/NEC-5 buried-wire flag, not a free contact end. So the portal serves
+    the split spelling under it and prints its GE 1 twin's impedance. This test
+    used to assert that the portal refused GE -1 here; U3 retired that premise,
+    and the slow lane is the only one that ran it."""
+    z_minus = _printed_z(_portal(_nec2(single=False, ge="GE -1")))
+    z_plus = _printed_z(_portal(_nec2(single=False, ge="GE 1")))
+    record_property("z_portal_split_ge_minus_one", f"{z_minus:.6f}")
+    assert abs(z_minus - z_plus) <= 1e-6 * abs(z_plus) + 1e-6
+
+
+def test_portal_ge_minus_one_still_refuses_a_free_end_in_the_plane():
+    """What GE -1 still refuses at the portal: a buried wire that merely ends in
+    the plane has no above member, so the node is a free contact end, and the
+    sentence asks for the interpolated card by name."""
+    deck = (
+        "CE b\nGW 1 5 0 0 0 0 0 -.5 .001\nGE -1\nGN 2 0 0 0 13. .005\n"
+        "EX 0 1 3 0 1.\nFR 0 1 0 0 30.\nXQ\nEN\n"
+    )
     out = io.StringIO()
-    portal_main([], io.StringIO(_nec2(single=False, ge="GE -1")), out, io.StringIO())
+    portal_main([], io.StringIO(deck), out, io.StringIO())
     assert "write GE 1" in out.getvalue()
