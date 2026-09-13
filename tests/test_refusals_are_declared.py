@@ -65,9 +65,15 @@ they stay out of the matrix rather than out of honesty:
   it refuses coincident wires would be a claim about a geometry no axis
   names. The deck decides, not the class.
 
+* a SECOND crossing junction (`_below_interface.crossing_junctions`,
+  antennaknobs#1464). Every trunk that serves a crossing junction serves ONE
+  per deck, so a cell saying the class refuses crossing junctions would be
+  false. How many nodes a deck has is the deck's property.
+
 Both are covered where they belong, by `tests/test_capabilities.py` and
 `tests/test_node_gaps.py`; the third by
-`tests/test_sg_crossing_980_d3.py::test_coincident_members_are_refused_by_name`.
+`tests/test_sg_crossing_980_d3.py::test_coincident_members_are_refused_by_name`,
+the fourth by `tests/test_crossing_serve_524.py`'s second-node tests.
 """
 
 import numpy as np

@@ -206,6 +206,12 @@ def crossing_junctions(
     the per-wire radius. The scope is what the phase-2 adjudication
     validated, refused by name past it:
 
+    * exactly ONE crossing junction per deck. The corner's single V(a)
+      evaluation and the by-parts end terms were adjudicated at one node, and
+      end pairs standing at two DIFFERENT nodes are a pair class no
+      adjudicator has measured. A two-vertical deck used to pass the serve
+      plan and die on `_crossing_fill._ends_and_corner`'s assert
+      (antennaknobs#1464);
     * exactly ONE above member per crossing junction, N ≥ 1 below members —
       the node fan (a monopole over a buried radial screen risen to the node,
       momwire#524 fan widening). Multiple above members share the interface
@@ -258,6 +264,21 @@ def crossing_junctions(
 
     if not crossing:
         return ()
+    if len(crossing) > 1:
+        nodes = []
+        for j_idx in crossing:
+            w, end = groups[j_idx][0]
+            pl = np.asarray(polylines[w], dtype=float)
+            pt = pl[-1] if end == "end" else pl[0]
+            nodes.append(f"({pt[0]:.6g}, {pt[1]:.6g})")
+        raise NotImplementedError(
+            f"a deck with {len(crossing)} crossing junctions, at "
+            f"{', '.join(nodes)}: "
+            "the crossing serve completes ONE crossing node per deck "
+            "(momwire#524 phase 2); its interface corner V(a) is a same-node "
+            "term, and end pairs standing at two different nodes have no "
+            "measured completion"
+        )
     for j_idx in crossing:
         n_above = sum(1 for w, _e in groups[j_idx] if media[w] == _medium_spec.ABOVE)
         if n_above != 1:
