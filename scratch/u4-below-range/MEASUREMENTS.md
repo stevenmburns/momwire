@@ -764,3 +764,31 @@ ceiling trips on origin/main as well.**
 service `u4-screen-extension`. It started at 13:34:34Z, and its budget ends at
 17:34:34Z. The killed run's pause log now also holds the resume line its trap
 wrote after the log was renamed.
+
+**PT3, crossgate.** Run on the rebased head 11dfb0a with `-n 4`: 36 passed,
+1 skipped, 0 failed, in 566 s. **PT3's crossgate clause is a HIT.**
+
+The BLE permittivity-band gate is the one crossgate row whose deck set this
+change moves. It was run again alone on main 90b0887 and compared row by row:
+
+| row, N = 30 | main 90b0887 | branch |
+|---|---|---|
+| ε_r 5 / 45 ft | 32.72 | 32.72 |
+| ε_r 5 / 135 ft | 30.91 | 30.91 |
+| ε_r 15 / 45 ft | 29.34 | 29.34 |
+| ε_r 15 / 135 ft | 31.36 | 31.36 |
+| ε_r 30 / 45 ft | 28.57 | 28.57 |
+| ε_r 30 / 135 ft | refused (4 λ_m cap) | **30.91** |
+| best ε_r, joint miss | 15, 1.6565652103393873 Ω | 15, 1.6565652103372734 Ω |
+
+- **The only served-versus-refused difference is the deck past the cap.**
+  Every in-range row agrees at the precision the gate records.
+- **The joint misses differ by 2.1e-12 Ω.** The two runs are not
+  context-matched at the last digits: the branch value came from inside the
+  xdist crossgate lane, with other tests' grids in the worker cache, while
+  main's came from a standalone run. So that difference is not attributed.
+- **A pre-existing finding, not this change.** On main, the gate's rows no
+  longer match the numbers in its own comment, which were recorded under
+  momwire#838 (ε_r 5 read 31.53 and 29.72 then; best ε_r 5 within 0.6 Ω).
+  Main now reads ε_r 5 at 32.72 and 30.91, with best ε_r 15 at 1.66 Ω. The
+  gate still passes against its 2.5 Ω bar.
