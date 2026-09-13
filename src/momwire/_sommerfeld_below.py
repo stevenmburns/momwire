@@ -164,12 +164,24 @@ _MAX_TAIL_PANELS = 8000
 # term alone. What it is small against is the self-scale field that sets
 # every row of Z:
 #
-#   field  |E_rem(4 λ_m)| / |E_tot(Δ)| ≤ 1.04e-4 over the SPEC and LPDA
-#          cases, falling ~1/R on colinear and vertical pairs and R⁻²…R⁻⁴
-#          side by side;
+#   field  |E_rem(4 λ_m)| / |E_tot(Δ)| ≤ 1.36e-4 over the SPEC and LPDA
+#          cases and antennaknobs' served soil presets at the HF band ends
+#          (very poor, fresh and salt water at 1.8 MHz; salt water at
+#          28 MHz), falling ~1/R on colinear and vertical pairs and faster
+#          side by side. ONE exception: nearly lossless fresh water at 28 MHz
+#          reads 7.2e-4 broadside (φ = 90°), decaying only as R^-1.14.
 #   Z      zeroing every pair past 4 λ_m on a screen 4.76 λ_m across moves Z
-#          by 3.1e-5 Ω against the table's own 0.074 Ω ladder step: 4e-7 of
-#          |Z|, and constant under refinement.
+#          by 3.1e-5 Ω against the table's own 0.074 Ω ladder step at soil A
+#          and 3.5 MHz (2.1e-4 of the step, constant under refinement). On
+#          the same deck rescaled to fresh water at 28 MHz it moves Z by
+#          1.0e-3 Ω against 0.198 Ω: 5.0e-3 of the step, the thinnest margin
+#          measured, and a 16-radial fan there reads 1.6e-3.
+#
+# A radial fan's pairs past the cap are near-colinear (its radials must be
+# more than ~114° apart to reach it), which is why the broadside exception
+# does not reach Z in a fan. A deck of parallel buried wires more than 4 λ_m
+# apart side by side, at a low-loss soil, is the geometry that would carry it,
+# and that geometry is not measured.
 #
 # A POINT query past the cap still refuses (`SommerfeldGridBelow.eval`,
 # `remainder_field_below`): a lone observer has no self term for the
