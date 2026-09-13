@@ -289,3 +289,143 @@ check 1 by construction, and item 1 of the diagnosis is O(ln a).
 **Timebox.** If the source of the ln(a_A/a_B) term is not identified within
 about two working days of 2026-09-13, stop and write up what is known instead.
 Step (c) stays parked until then.
+
+### §8.1 The node's point tests evaluate one potential on two surfaces [derived]
+
+By parts on a half-tent leaves f(0)·Φ(0) at the node, so part of a node row's
+test is a POINT evaluation of the potential there. Per row, those point tests
+are:
+
+- the self completion's node row term and node corner;
+- in t_ab, the test-side end terms at the above node (BT on V, TW on W) and
+  the corner;
+- in the below row, by transpose, the end terms at the below node (SQ on V,
+  SW on W) and the corner.
+
+Everything else in a node row is a line test.
+
+With the current continuous through the node (c_na = c_nb), the merged row
+(na + nb) is the physical test ∫ f E over the whole node tent. By parts over
+the whole tent it has no point term: it is −∫ f′Φ. The potential's jump across
+the node, J = Φ_A(0) − Φ_B(0), enters that form as the field J·δ(s). Split
+into two half-tents, the point terms f(0)Φ(0) of rows na and nb carry opposite
+signs. **They reproduce the merged test if and only if both evaluate the same
+Φ(0).**
+
+Observer-side evaluates row na's point test at a_A and row nb's at a_B. The
+thin-wire potential at the node on surface X, from the local line charge q, is
+≈ (q/2πε)·ln(2h/a_X). The merged row therefore carries an extra
+(q(0)/2πε)·ln(a_B/a_A): it drops the field of the jump. The solution can then
+hold Φ_A(0) ≠ Φ_B(0) at no cost, which amounts to an uncounted EMF of size J at
+the node.
+
+Compare §3. The O(1/a) corner content is the point test against the point
+charges, and check 1 pinned its cancellation. The O(ln a) content is the point
+test against the LINE charges, and check 1 never evaluated it.
+
+### §8.2 Size and sign, and why the radii look exchanged [derived]
+
+On a short buried rise (L ≪ λ_m) the line charge is nearly uniform, q ≈ Q/L.
+The rise's potential is then dominated by its own log term,
+(Q/2πεL)·ln(L/a_B), which is the radius dependence NEC-5 and D1 show. Under
+observer-side the above side sees Φ_A(0) = Φ_B(0) + J, with
+J = (Q/2πεL)·ln(a_B/a_A). That replaces the rise's ln(1/a_B) by ln(1/a_A).
+
+The shift is therefore ∝ −ln(a_A/a_B)/L, carries exactly the physics' weight,
+and makes the rise behave as if it had the above wire's radius. This is
+observation 1 in form, sign and size.
+
+### §8.3 What the same-medium junctions already do [cited from src]
+
+At a same-medium junction, `_build_basis_polynomials` keeps each wire's value-1
+end basis as a directional basis and adds a Lagrange-multiplier KCL row,
+`kcl_A` (±1 per outflow), which `_solve_with_kcl` solves. The multiplier enters
+every node row as one unknown, a single node potential, and it is not evaluated
+at any radius. Φ is single-valued at the node, so J is counted.
+
+D1 and D2i put buried radius steps through that path, and both match NEC-5 to
+about 1 %. The crossing node has no such row. The fill evaluates point tests
+there instead, which momwire#524 phase 2 measured as split ≡ merged ≡
+V-constrained at one radius.
+
+### §8.4 The candidate rule [derived; not implemented]
+
+**Every evaluation takes the radius of its observation point, and the crossing
+node is ONE observation point.**
+
+- Line tests keep the observer wire's radius, as §5 and the same-medium blocks
+  do. That covers the main sandwich, the source-end terms seen from a line and
+  the self column terms.
+- Every point test at the node, in both node rows, uses one radius a_n.
+
+Consequences, derived:
+
+1. **a_n is a gauge for Z.** The merged row no longer depends on a_n, because
+   its point terms cancel under continuity, as the node's point charges do.
+2. **The corner still cancels per row.** All four corners sit at a_n, so their
+   O(1/a) content cancels in each row, and check 1 and check 2's row condition
+   both still hold.
+3. **Continuity is small but not exact.** In the split form it is held by the
+   corner's 1/a_n stiffness. A split row alone is no longer a pointwise test on
+   its own surface, so the KCL deficit stays small but does not reach
+   observer-side's 1e-8. That is observation 4.
+4. **The uniform spellings are this rule.** `single_A` and `single_B` are this
+   rule with a_n at that radius, plus O(a ln a) changes to the line terms. That
+   accounts for observations 2 and 3: `single_B` tracking NEC-5 is a
+   consequence, not a fit.
+5. **A multiplier twin, VC, needs no radius at the node.** Drop the node point
+   tests from both node rows and add a KCL row, exactly as §8.3's junctions do.
+   The column terms from the node's point charges stay at each line observer's
+   radius, and they cancel under the constraint. VC is the reference for
+   consequences 1 to 3.
+6. **Equal radii.** Every spelling reduces to the shipped fill.
+
+**The slope reference changes too.** 1/ε̃ is the one-radius AGARD condition:
+potential continuity at the node with the same log weight on both sides. With
+one node potential and two surface log weights, the node's charge ratio moves
+by O(ln(a_A/a_B)/ln(h/a)). At mixed radii the slope therefore cannot be checked
+against 1/ε̃. Step (b)'s Pb.3 and check 2's slope column were read against a
+reference that does not apply, and §7's slope gate needs a derived target.
+
+### §8.5 Check 3, registered before the run
+
+`check3_node_potential.py`, harness-side (no src change). The spellings
+(line-test radii / node point-test radii):
+
+| spelling | line tests | node point tests |
+|---|---|---|
+| `obs` | own wire | row na at a_A, row nb at a_B |
+| `node_A` | own wire | both rows at a_A |
+| `node_B` | own wire | both rows at a_B |
+| `single_B` | a_B | a_B |
+
+Each spelling is assembled piecewise. VC is built from each run's captured Z
+by removing that run's node point tests from rows na and nb, then adding the
+crossing junction's KCL row.
+
+| id | test | prediction | verdict |
+|---|---|---|---|
+| C3.0a | equal radii (1 mm), check 2's rod, refine 1, all four spellings | reproduce the unpatched Z to ≤ 1e-9 relative (asserted; the run stops otherwise) | pending |
+| C3.0b | equal radii: VC against the shipped split | **derived** (split ≡ V-constrained, momwire#524 phase 2): \|ΔZ\|/\|Z\| ≤ 1e-4, and VC's slope ratio within 1e-3 of 1/ε̃ | pending |
+| C3.0c | VC built from `obs`, `node_A` and `node_B`, every row | agree to ≤ 1e-9 relative (the same terms remain) | pending |
+| P3.1 | a_n is a gauge: check 2's rod, a_A = 1 mm, ratios 2 and 4, refine 1 and 2 | **derived**: \|Z(node_A) − Z(node_B)\| ≤ 0.1 Ω | pending |
+| P3.2 | one node potential | **derived**: \|Z(node_X) − Z(VC)\| ≤ 0.1 Ω, X = A and B, same rows | pending |
+| P3.3 | the jump is the shift | **derived**, with the ln scaling informed by check 2's observer − single rows: Re[Z(obs) − Z(VC)] at ratio 4 over ratio 2 lies in [1.85, 2.15], at both refines | pending |
+| P3.4 | the line rule barely matters | **derived**: \|Z(VC from `single_B`) − Z(VC from `obs`)\| ≤ 0.1 Ω | pending |
+| P3.5 | continuity | **informed** by check 2's `single_A` / `single_B` KCL rows: `node_A` and `node_B` deficits ≤ 1e-3 | pending |
+| P3.6 | slope at mixed radii | **derived, direction only**: VC's slope ratio differs from 1/ε̃ by more than 0.05 (relative) at ratios 2 and 4 | pending |
+| P3.7 | step (b)'s rod, L = 0.30 m, r = 2, ratios 2, 4 and 0.5, against the NEC-5 values in `b_*.json` at the same rung | **informed** by observation 2: \|ΔZ(VC) − ΔZ(control)\| ≤ 0.5 Ω, with ΔZ = NEC-5 − momwire. Also reports P3.1 and P3.2 on this rod | pending |
+
+How the outcomes will be read, fixed now:
+
+- **C3.0b misses** → the VC construction (which terms count as node point tests)
+  is wrong. Fix it before reading anything else.
+- **P3.1, P3.2 and P3.3 hit** → the ln(a_A/a_B) term is identified as the node's
+  point tests evaluated on two surfaces, and the timebox's question is answered.
+  The src candidates are VC, which is preferred (no radius choice at the node,
+  the same construction as the same-medium junctions), or the point tests at
+  one a_n.
+- **P3.1 hits, P3.2 misses** → a_n is a gauge, but the split is not the
+  one-potential form. The missing piece is elsewhere in the node rows.
+- **P3.1 misses** → the point terms do not cancel in the merged row, and §8.1 is
+  wrong.
