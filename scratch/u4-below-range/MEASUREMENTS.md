@@ -187,3 +187,47 @@ nothing.
 | G-Z1 | **HIT, non-vacuous on the second run.** First run (`gz1_band.*`), θ 0.1°–2°: worst 1.4e-8. A second run over the steep band (`gz1_band_steep.*`, θ 30°–90°) gave 1.8e-7, but on inspection **every θ sample was a lattice node**: 2.5° steps against the far annulus's steep Δθ = 60°/72 = 0.833°. About half the R1 samples were nodes too, so that check measured almost nothing along θ. The sampling now uses fractional offsets, (k + 0.37) in R1 and (k + 0.61) in θ, and was re-run (`gz1_offnode_*`): grazing band worst **1.16e-8** (at 4.03 λ_m, 1.97°); steep band worst **7.5e-6** (at 4.01 λ_m, 38.7°). Off-node, the steep band is 40× its on-node figure, so the check discriminates. Both bands are far under 2e-4 over R1 ∈ (4, 4.7] λ_m at the LPDA's soil and frequency |
 | G-Z2 | **HIT.** Catalog `buried_radial_vertical`, soil A: `extended` Z = `shipped` Z = 78.1320604078555+46.337676999899195j, bit for bit. Its below grid is in range (r1_max 15.49 m = 1.56 λ_m) and unchanged by the cap patch (`gz23_identity.*`) |
 | G-Z3 | **HIT.** `zeroed` Z is the same, bit for bit. The wrapper was reached (4 calls, 1,774,224 pairs) and zeroed none |
+
+## The Z gate, part 2: predictions (registered before any Z-producing run)
+
+**Informed by the screen's three LPDA cases**, which completed before this was
+written. The SPEC rows were still running and are not used here.
+
+- **M2 at 4 λ_m is 4.6e-6 to 2.8e-5.** The beyond-cap remainder is at most
+  2.8e-5 of a self-scale field.
+- **M3 is −1.10 (HED colinear), −1.16 (VED) and −2.13 (HED side-by-side).**
+  The slow ~1/R decay on colinear and vertical pairs is why a field floor
+  alone cannot decide.
+- **Rough Z-level estimate.** Beyond-cap pairs outnumber self terms by about
+  130 to 1 on a screen of this size, so the summed effect is bounded near
+  130 × 1e-5 ≈ 1e-3 of |Z| before weighting by the (weaker) outer-radial
+  currents and by the phase cancellation of e^{−jk_pρ} across the screen,
+  both of which shrink it.
+
+| id | prediction | verdict |
+|---|---|---|
+| PZ1 | **the U4 verdict**, informed by the screen's LPDA rows: at r = 1, \|Z(extended) − Z(zeroed)\| ≤ 1e-3·\|Z(extended)\| |  |
+| PZ2 | **informational, blind, low confidence**: \|Z(extended) − Z(NEC-5)\| ≤ 0.10·\|Z(NEC-5)\| at r = 1. The LPDA's crossing node is coarse by #674's measure, which is worth several ohms on the fan decks, and NEC-5 is the reference engine, not the truth. A miss is a separate finding, not a U4 verdict |  |
+
+**Plumbing assertions for these runs** (a failure means the result isn't one):
+
+- **`zeroed`:** `proj_calls` > 0 and `zeroed_pairs` > 0.
+- **`extended` and `zeroed`:** every recorded below grid has `r1_max` ≥ 4.68 λ_m.
+- **`shipped`:** refuses with momwire's past-the-cap sentence, at R1 ≈ 74.7 m.
+
+**r = 3.** Run only if r = 1's `extended` wall time is under 1 h. The rung
+triples the segment count (8,070) and the below/below pair count scales with
+its square. The decision is recorded either way.
+
+How the outcomes will be read, fixed now:
+
+- **PZ1 hits** → **serve beyond the cap with the remainder zeroed.** The src PR:
+  - replaces the refusal with the documented bound (field M2 ≤ 3e-5 at 4 λ_m,
+    and the Z-level δ measured here);
+  - fixes the stale "2, not 4" comment;
+  - adds a test that pins zeroed against extended on a synthetic long-screen
+    deck.
+- **PZ1 misses** → **extend the table.** The far annulus continues past 4 λ_m,
+  with G-Z1's accuracy check extended to the new cap in the src PR's tests.
+- **PZ2**, hit or miss, is reported beside the verdict and does not choose the
+  branch.
