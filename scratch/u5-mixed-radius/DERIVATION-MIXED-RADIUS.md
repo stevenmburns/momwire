@@ -227,3 +227,20 @@ at ratio 2 (≈ 185.3 against 169.5 at ratio 4), and breaks continuity by 1e-5 t
 the row level on a momwire-native two-radius crossing rod. It goes to (b), the
 two-engine ladder, with the source region refined as its own axis and currents
 read beside Z.
+
+## §7 — the gate for the eventual src PR [registered 2026-09-13, before any src change]
+
+The momwire PR that lifts the refusal and implements §5 is gated on all three:
+
+1. **No regression at equal radii:** the catalog `buried_radial_vertical` is
+   bit-identical to the shipped fill (the single-transpose path is kept when
+   the radii are equal).
+2. **The mixed-radius ladder inside the equal-radius band:** step (b)'s Pb.2
+   on the two-radius crossing rod, and (c)'s four corpus decks once U2's
+   imported-deck refinement lands.
+3. **Tests pin node continuity and the slope, not only Z** (raised on review).
+   A transposed (source-side) rule gives the same driving-point Z to every
+   digit (§4′), so a Z-only test would pass it silently. The PR's tests must
+   assert the KCL deficit at a two-radius crossing node (observer-side reads
+   ~3e-8, source-side ~0.6–0.9) and the slope ratio against 1/ε̃ (observer-side
+   within ~5e-4), so that a future transpose regression fails a test.
