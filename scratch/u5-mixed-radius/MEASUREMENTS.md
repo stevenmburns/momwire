@@ -241,3 +241,60 @@ below points at the node instead.
 None of this makes a uniform spelling the rule. That would be a fit, and item 4
 says continuity cannot settle it by itself. The next unit of (a) is
 DERIVATION-MIXED-RADIUS.md §8.
+
+## Step (b′): the ladder under one node potential (registered before the run)
+
+DERIVATION-MIXED-RADIUS.md §8.8 identified observer-side's error. Check 3′ put
+the one-potential spelling against NEC-5 at a single rung (r = 2,
+L = 0.30 m). This re-runs step (b)'s whole ladder under that spelling.
+`b_ladder_onepot.py`.
+
+**Setup, changed from step (b) only where stated:**
+
+- **The same decks.** Same builder, configurations, lengths, refinements,
+  matched ports and asserted settings.
+- **Two momwire spellings at every rung, from one solve each:**
+  - `node_B`: line tests at their own wire's radius, and both node rows' point
+    tests at the buried member's radius.
+  - VC_keep(`node_B`): the same captured matrix with the crossing junction's
+    KCL multiplier added and every point term kept.
+- **NEC-5.** Its rungs are the ones step (b) banked. Before any momwire rung,
+  NEC-5 is re-run at L = 0.30 m, r = 4 in each configuration, and the run stops
+  unless the value reproduces the banked one exactly.
+- **Asserted at every rung:** momwire's segment count equals the banked NEC-5
+  count. On the control, `node_B` reproduces step (b)'s banked momwire Z to
+  ≤ 1e-9 relative, because at equal radii it is the shipped fill. The control's
+  ΔZ∞ and band b(L) are therefore step (b)'s.
+- **Pb.2's definitions, unchanged:**
+  - ΔZ = NEC-5 − momwire at a rung.
+  - ΔZ∞ = 2·ΔZ(r = 4) − ΔZ(r = 2).
+  - b(L) = the control's \|ΔZ(r = 4) − ΔZ(r = 2)\|, floored at 0.5 Ω, which
+    gives 0.642 / 0.500 / 0.500 Ω.
+- **The slope is not read on this rod.** The source sits 25 mm above the node
+  (Pb.3's lesson). The slope target stays open for a separate unit on check 2's
+  rod, where the feed is 4.33 m away: a derived target, or a secant readout over
+  a fixed physical length refined in r.
+
+| id | prediction | verdict |
+|---|---|---|
+| Pq.1 | **the U5 gate** (Pb.2 under `node_B`), **informed** by check 3′'s r = 2, L = 0.30 m rows: \|ΔZ∞(mixed) − ΔZ∞(control)\| ≤ b(L) at every mixed configuration and length |  |
+| Pq.1k | the same gate for VC_keep(`node_B`), **informed** likewise |  |
+| Pq.2 | split ≡ merged, **informed** by P3′.2: \|Z(node_B) − Z(VC_keep(node_B))\| ≤ 0.1 Ω at every rung |  |
+| Pq.3 | the split's continuity, **blind**: `node_B`'s KCL deficit is ≤ 1e-5 at r = 4 in every configuration and length, and falls from r = 1 to r = 4 in each |  |
+| Pq.4 | refinement, **blind**: `node_B`'s momwire step ratio \|Z(4) − Z(2)\| / \|Z(2) − Z(1)\| lies within ±0.15 of the control's momwire ratio at the same L, so the one-potential spelling refines like the equal-radius fill |  |
+
+How the outcomes will be read, fixed now:
+
+- **Pq.1 hits everywhere** → §7's gate item 2 is met on step (b)'s rod. Step (c)
+  is still held, for U3's GE −1 scope and Steve's decision.
+- **Pq.1 misses where Pq.1k hits** → on the ladder the multiplier matters for Z,
+  so the src rule carries it.
+- **Pq.1 and Pq.1k both miss** → one node potential is not enough on the full
+  ladder, and the r = 2 agreement was a single-rung coincidence. Back to §8.
+- **Pq.3 misses** → the split's continuity does not converge under a_n = a_B.
+  §7's KCL gate then chooses the multiplier, whose KCL is exact by construction.
+- **Pq.3 hits** → the split can stand. §7's KCL gate gets a bar derived from this
+  ladder's r = 4 values before any src test is written.
+- **Pq.4 misses** → the one-potential spelling refines differently from the
+  equal-radius fill. That is reported beside Pq.1, and Pq.1 is also read at
+  r = 4 alone.
