@@ -357,3 +357,16 @@ How the outcomes will be read, fixed now:
   - pins zeroed against extended on this deck in a test.
 - **PZ-S1 misses** → **extend the table past 4 λ_m.** The far annulus's lattice
   continues, and G-S4's accuracy check becomes the src test.
+
+### Guards measured (before any Z)
+
+| id | verdict |
+|---|---|
+| G-S0 | **HIT, the guard fires.** On the shallow control, vertex θ_min is 0.0302° at r = 1, 3 and 9, so `within_bounds` is false on every rung. momwire's preflight at cap 5 refuses on the grazing floor ("θ = 0.03016 deg"). At cap 4 it refuses on range first (`gs0_extents_control.*`) |
+| G-S1 | **HIT.** On `synthetic_u4.nec`, vertex R1 is 4.7602 λ_m and θ_min is 0.2262° at r = 1, 3 and 9 (88 / 264 / 792 segments). momwire's preflight at cap 4 gives the range refusal (R1 = 76.0006 m); at cap 5 it serves (`gs1_extents.*`) |
+| G-S2 | recorded inside every `extended` and `zeroed` solve, below |
+| G-S4 | **HIT.** The extended band against direct evaluation off-node, R1 ∈ (4.01, 4.78] λ_m: grazing worst 9.8e-9, steep worst 7.5e-6 (`gs4_band_*`) |
+
+The G-S2 wrapper matches momwire's call: `BSplineSolver._buried_serve_plan`
+passes `k_m` positionally (argument 8) and `pair_extents` as a keyword, both of
+which the wrapper reads.
