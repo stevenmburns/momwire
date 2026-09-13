@@ -362,3 +362,46 @@ to the feed spelling (2(b)). #1027's fraction tracks roughly −0.6 to −0.8 ×
 10 mm feed wire's share of L, and AK `scratch/g1b-bs1-bs2/RESULTS.md` found an
 electrically short dipole's Z moving several percent with the fed segment's
 length in any medium. That is why the prediction points at the feed.
+
+### P2f.4 measured
+
+`step2f_currents.py` on x13-static, `x13/p2f_currents.json`.
+
+| L (m) | R_NEC-5 / R_momwire | \|m_NEC-5 / m_momwire\|² | Δm within 15 mm of the feed | Δm within 15 mm of the ends |
+|---|---|---|---|---|
+| 0.15 | 0.91471 | 0.91474 | 0.396 | 0.082 |
+| 0.60 | 0.97430 | 0.97480 | 0.128 | 0.013 |
+
+| id | verdict |
+|---|---|
+| P2f.4a | **HIT** — agreement to 3e-5 at 0.15 m (bar 2e-2), and 5e-4 at 0.60 m. The R disagreement IS the current-moment disagreement |
+| P2f.4b | **MISSED** — 0.40 and 0.13 of Δm lie within 15 mm of the feed, not more than half |
+
+**What the profile shows instead. Read after the miss, so it is an observation,
+not a verdict.** I/I₀, each engine normalised by its own feed current:
+
+| L (m) | distance from feed | momwire | NEC-5 | NEC-5 / momwire |
+|---|---|---|---|---|
+| 0.15 | 2.50 mm | 0.98287 | 0.93739 | 0.9537 |
+| 0.15 | 8.13 mm | 0.85808 | 0.82690 | 0.9637 |
+| 0.15 | 14.38 mm | 0.77083 | 0.73702 | 0.9561 |
+| 0.15 | 45.63 mm | 0.38387 | 0.36599 | 0.9534 |
+| 0.15 | 65.00 mm | 0.15302 | 0.14396 | 0.9408 |
+| 0.60 | 2.50 mm | 0.99444 | 0.97907 | 0.9845 |
+| 0.60 | 8.12 mm | 0.95393 | 0.94223 | 0.9877 |
+| 0.60 | 14.38 mm | 0.92587 | 0.91248 | 0.9855 |
+| 0.60 | 45.63 mm | 0.80551 | 0.79413 | 0.9859 |
+| 0.60 | 289.88 mm | 0.04509 | 0.04360 | 0.9670 |
+
+From the first segment centre outward the two profiles differ by a roughly
+constant factor, about 0.955 at L = 0.15 m and 0.986 at 0.60 m, and that factor
+is √(moment ratio) (0.9564, 0.9873) to within 0.3 %. So Δm is spread along the
+rod because the whole profile is rescaled, and the rescaling happens between
+the source node and the first segment centre 2.5 mm away. NEC-5's current falls
+6.3 % across that 2.5 mm at L = 0.15 m, momwire's 1.7 %. My localisation
+metric, share of Δm by position, could not see a step that scales everything
+after it. That is a flaw in how P2f.4b was posed, recorded as such rather than
+re-scored.
+
+The observation points at the source region: the feed wire's two 5 mm
+segments and the delta-gap charge they have to represent. That is 2(b)'s axis.
