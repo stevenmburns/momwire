@@ -105,8 +105,13 @@ def mode_band(args):
     try:
         t0 = time.time()
         grid = below.SommerfeldGridBelow(eps_t, k2, args.r1_max * lam_m, omega=om)
-        r = np.linspace(CAP0 * lam_m, grid.r1_max, 29)[1:]
-        th = np.radians(np.linspace(args.th_lo_deg, args.th_hi_deg, 25))
+        # Sample at fractional offsets so no point can sit on a lattice node
+        # along either axis (an on-node sample interpolates exactly and makes
+        # the check vacuous; the first steep-band run put every theta on a node).
+        span_r = grid.r1_max - CAP0 * lam_m
+        r = CAP0 * lam_m + (np.arange(28) + 0.37) * span_r / 28
+        span_t = args.th_hi_deg - args.th_lo_deg
+        th = np.radians(args.th_lo_deg + (np.arange(25) + 0.61) * span_t / 25)
         rr, tt = np.meshgrid(r, th, indexing="ij")
         grid._ensure_for(float(rr.max()), float(tt.min()), float(tt.max()))
         got_d = grid.eval(rr.ravel(), tt.ravel())
