@@ -231,3 +231,29 @@ How the outcomes will be read, fixed now:
   with G-Z1's accuracy check extended to the new cap in the src PR's tests.
 - **PZ2**, hit or miss, is reported beside the verdict and does not choose the
   branch.
+
+## The Z gate on the LPDA: blocked by a second scope limit
+
+**Neither registered Z prediction was measured.** PZ1 and PZ2 are not
+runnable on this deck.
+
+| run | outcome |
+|---|---|
+| `shipped` | refused at construction (0.36 s) by antennaknobs' preflight with momwire's past-the-cap sentence: R1 = 74.87 m, 4.69 λ_m. The preflight measures vertices, which is conservative against the census's node-based 74.7 m (`lpda_shipped_r1.*`) |
+| `extended` | **refused, on the grazing floor.** antennaknobs' vertex preflight reads a below/below pair elevation of θ = 0° (`lpda_extended_r1.*`): the deck's 8 crossing nodes are distinct vertices at z = 0, so a pair of them has a depth sum of 0 at nonzero separation. The wrapper was never reached, and no grid was built |
+| `zeroed` | the same refusal (`lpda_zeroed_r1.*`) |
+| diagnostic: `extended` with antennaknobs' vertex preflight patched out | **momwire's own serve plan refuses too**, before any fill (1.0 s): θ = 0.0239° on quadrature nodes, under the 0.05° floor, for a depth sum of 0.01029 m over about 24.7 m. Those are shallow nodes on rises at two different crossing nodes (`lpda_grazing_nodes.log`). The vertex preflight is not merely over-refusing; the deck is genuinely below the floor |
+
+So the census's one real range deck is also outside momwire's grazing floor.
+That floor is the recorded follow-up for a log-spaced grazing band (momwire#553
+U2), a separate scope limit. The census recorded only each deck's FIRST
+refusal, so this second one went uncounted.
+
+**Status of U4's evidence:**
+
+- **The screen's LPDA rows stand.** The beyond-cap remainder is at most 2.8e-5
+  of a self-scale field, with ~1/R decay on colinear and vertical pairs.
+- **No corpus deck can carry the Z gate** while the grazing floor holds.
+- **What to do next** is a decision for the plan owner: a synthetic deck past
+  the range cap and above the floor, the grazing-floor unit first, or deferring
+  U4's src change.
