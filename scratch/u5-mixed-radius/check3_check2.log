@@ -1,0 +1,22 @@
+{'rod': 'check2', 'momwire_file': '/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/__init__.py'}
+equal radii obs      z=169.77724-82.276335j kcl=6.39e-08 slope-vs-AGARD=2.213e-04 | VC z=197.04476-79.506506j kcl=2.47e-12 slope-vs-AGARD=2.129e+00  rel 3.2e-14  VC-vs-split 1.5e-01
+equal radii node_A   z=169.77724-82.276335j kcl=6.39e-08 slope-vs-AGARD=2.213e-04 | VC z=197.04476-79.506506j kcl=2.47e-12 slope-vs-AGARD=2.129e+00  rel 3.2e-14  VC-vs-split 1.5e-01
+equal radii node_B   z=169.77724-82.276335j kcl=6.39e-08 slope-vs-AGARD=2.213e-04 | VC z=197.04476-79.506506j kcl=2.47e-12 slope-vs-AGARD=2.129e+00  rel 3.2e-14  VC-vs-split 1.5e-01
+equal radii single_B z=169.77724-82.276335j kcl=6.39e-08 slope-vs-AGARD=2.213e-04 | VC z=197.04476-79.506506j kcl=2.47e-12 slope-vs-AGARD=2.129e+00  rel 3.2e-14  VC-vs-split 1.5e-01
+a_A/a_B=2 refine=1 obs      z=169.6059-83.101598j kcl=6.77e-08 slope-vs-AGARD=2.331e-04 | VC z=204.8018-83.995637j kcl=3.53e-12 slope-vs-AGARD=2.738e+00
+a_A/a_B=2 refine=1 node_A   z=177.5921-86.345351j kcl=5.17e-04 slope-vs-AGARD=1.013e+00 | VC z=204.8018-83.995637j kcl=5.38e-12 slope-vs-AGARD=2.738e+00
+a_A/a_B=2 refine=1 node_B   z=177.59092-86.34787j kcl=1.59e-05 slope-vs-AGARD=6.555e-01 | VC z=204.8018-83.995637j kcl=1.06e-11 slope-vs-AGARD=2.738e+00
+a_A/a_B=2 refine=1 single_B z=177.59086-86.34742j kcl=1.35e-05 slope-vs-AGARD=5.493e-01 | VC z=204.80177-83.995182j kcl=6.10e-14 slope-vs-AGARD=2.636e+00
+a_A/a_B=2 refine=2 obs      z=169.28432-83.192415j kcl=4.44e-08 slope-vs-AGARD=4.777e-04 | VC z=204.41076-84.231548j kcl=1.98e-12 slope-vs-AGARD=5.259e+00
+a_A/a_B=2 refine=2 node_A   z=177.24153-86.456881j kcl=8.48e-04 slope-vs-AGARD=1.179e+01 | VC z=204.41076-84.231548j kcl=1.02e-11 slope-vs-AGARD=5.259e+00
+a_A/a_B=2 refine=2 node_B   z=177.24034-86.459389j kcl=2.48e-05 slope-vs-AGARD=1.221e+00 | VC z=204.41076-84.231548j kcl=1.96e-12 slope-vs-AGARD=5.259e+00
+a_A/a_B=2 refine=2 single_B z=177.24031-86.458925j kcl=1.84e-05 slope-vs-AGARD=8.688e-01 | VC z=204.41076-84.231086j kcl=6.13e-14 slope-vs-AGARD=4.908e+00
+a_A/a_B=4 refine=1 obs      z=169.46947-83.780319j kcl=2.92e-08 slope-vs-AGARD=2.584e-04 | VC z=212.43075-88.585877j kcl=2.57e-12 slope-vs-AGARD=3.364e+00
+a_A/a_B=4 refine=1 node_A   z=185.28911-90.52011j kcl=1.04e-03 slope-vs-AGARD=4.463e+00 | VC z=212.43075-88.585877j kcl=3.20e-12 slope-vs-AGARD=3.364e+00
+a_A/a_B=4 refine=1 node_B   z=185.2873-90.523816j kcl=1.84e-05 slope-vs-AGARD=1.312e+00 | VC z=212.43075-88.585877j kcl=5.60e-12 slope-vs-AGARD=3.364e+00
+a_A/a_B=4 refine=1 single_B z=185.2873-90.523089j kcl=1.63e-05 slope-vs-AGARD=1.153e+00 | VC z=212.43078-88.585132j kcl=2.25e-14 slope-vs-AGARD=3.203e+00
+a_A/a_B=4 refine=2 obs      z=169.14634-83.88023j kcl=2.85e-08 slope-vs-AGARD=4.916e-04 | VC z=212.0035-88.858569j kcl=3.36e-12 slope-vs-AGARD=6.475e+00
+a_A/a_B=4 refine=2 node_A   z=184.90684-90.664157j kcl=1.73e-03 slope-vs-AGARD=2.020e+00 | VC z=212.0035-88.858569j kcl=5.02e-13 slope-vs-AGARD=6.475e+00
+a_A/a_B=4 refine=2 node_B   z=184.90504-90.667822j kcl=2.82e-05 slope-vs-AGARD=2.449e+00 | VC z=212.0035-88.858569j kcl=1.01e-12 slope-vs-AGARD=6.475e+00
+a_A/a_B=4 refine=2 single_B z=184.9051-90.667054j kcl=2.26e-05 slope-vs-AGARD=1.919e+00 | VC z=212.00362-88.857792j kcl=1.17e-14 slope-vs-AGARD=5.907e+00
+saved scratch/u5-mixed-radius/check3_check2.json
