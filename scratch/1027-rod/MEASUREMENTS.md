@@ -121,3 +121,19 @@ The miss also sizes the interface. At d = 0.2 m it is worth |ΔZ| ≈ 2.3 Ω of
 momwire's 550−552j, which is a third of the 6.6 Ω disagreement in R alone. An
 interface-only mechanism would need NEC-5 to get that term wrong by about 3×.
 That is an observation, not a verdict: P2a.1 is the test.
+
+### C2a.5 — the two whole-space spellings against a known answer
+
+Registered before its run, and before the P2a results are read. A structure in
+a lossless homogeneous medium is the same structure in free space at
+f·√ε_r, with impedance scaled by 1/√ε_r. The right side goes through each
+engine's ordinary free-space path, so a construction error in either
+whole-space spelling cannot reproduce it. ε_r = 13, σ = 0, L = 0.15 and
+0.60 m, refine 8, the mesh held fixed and checked.
+
+| id | control | verdict |
+|---|---|---|
+| C2a.5 | momwire whole-space Z equals free-space Z(f·√13)/√13 to ≤ 1e-6 relative in Z and ≤ 1e-4 in R; NEC-5 infinite-medium Z equals its free-space Z(f·√13)/√13 to ≤ 1e-4 relative in both (five printed figures) | pending |
+
+If C2a.5 fails on either engine, that engine's whole-space rungs (P2a.1 and
+P2a.3) are withdrawn rather than read.
