@@ -16,6 +16,15 @@ that tests it, and every miss is reported.
   box. Equivalence on the #1027 decks, before anything else: all 9 banked rows of
   `rod_rows.jsonl` at L = 0.15 / 0.60 / 2.40 m, refine 1 / 2 / 4, re-solved here
   with the SAME deck sha256 give the SAME printed impedance.
+- **NEC-5 reference (from 2026-09-13): `~/nec5-timing/nec5cl-x13-static`**,
+  sha256 `7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3`,
+  29,899,344 B, statically linked: the original x13 source and flags, static
+  link. On `nec5_binary_check.py`, which rebuilds each of #1027's 15 banked rows
+  (`rod_rows_1027.jsonl`, copied unchanged), **15/15 rows are identical in deck
+  sha and printed Z on x13-static, and 15/15 on the local build 52a9489f**. The
+  step 1 anchors re-run on x13-static print the same NEC-5 rows as on 52a9489f,
+  row for row (`x13/anchor.json`). Results before the reference arrived are
+  kept under `local-52a9489f/`; results from it onward are under `x13/`.
 - Harness: #1027's `rod_ladder.py`, banked here unchanged as the geometry and
   row definition. Richardson is first order from refine 8 → 16:
   `dR_inf = 2·dR16 − dR8`, fraction = `dR_inf / R_momwire(16)`, dR = NEC-5 −
