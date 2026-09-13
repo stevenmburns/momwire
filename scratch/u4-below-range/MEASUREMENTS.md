@@ -661,3 +661,21 @@ only the tests named in T3–T7 would be edited.
     (numpy G-B and T4), at a load average near 11.
 - **Next.** The lane is being rerun alone. `make slow` and `make crossgate`
   follow.
+
+**PT3, the fast lane, second run (alone).**
+- **Result.** 5113 passed, 0 failed, 17 skipped, 4 xfailed. The lane still
+  exited 2, because five unmarked tests went over the 20 s hard ceiling.
+  - Four were the same above-ground rows as the first run.
+  - The fifth was `test_contact_lane_decays_on_the_high_eps_grounds[monopole-vgood]`.
+- **Why.** No job of this PR was running, but the screen extension was: six
+  prototype workers at nice 15, each still taking about 65 % CPU on this
+  4-core / 8-thread box. The load average was 10–14. Niceness does not protect
+  eight xdist workers on four physical cores.
+- **So the lane is run a third time with the screen paused.** SIGSTOP goes to
+  every process in its systemd scope, and SIGCONT is guaranteed by a trap.
+- **Amendment to the screen's budget, fixed before any extension row
+  reported.** Time the screen spends paused for this PR's local lanes extends
+  its 16:47Z deadline by exactly that interval.
+  - The pause and resume times are logged in `screen_extension.pauses`.
+  - The prototype's verdict metrics are fields, not timings. Only the
+    per-point `seconds` of points in flight during a pause are inflated.
