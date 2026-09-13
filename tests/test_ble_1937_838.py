@@ -360,7 +360,8 @@ def test_the_45_ft_screen_survives_a_high_conductivity_soil():
     in LAMBDA_M rather than in metres.
 
     lambda_m shrinks as conductivity rises, so a screen that is comfortably
-    inside the cap at one soil can refuse at another WITHOUT changing size.
+    inside the cap at one soil can fall past it at another WITHOUT changing
+    size (a refusal until momwire#1053 served past the cap).
     BLE's own 45 ft screen is 1.20 lambda_m at sigma = 2e-3 and 3.02 at
     sigma = 2e-2 -- past the old cap, inside the new one. This was measured
     while building the Fig. 37 gate (a sigma sweep there hit the refusal),
@@ -387,7 +388,8 @@ def test_the_45_ft_screen_survives_a_high_conductivity_soil():
 # member of the band breaking the shape? Measured (momwire#838, the G1-A
 # comment): at N = 30 and sigma 2e-3, 45 ft reads 31.53 / 28.51 / 27.94 over
 # eps_r 5 / 15 / 30 and 135 ft reads 29.72 / 30.52 / refused (eps_r 30 puts the
-# 135 ft screen past the 4 lambda_m cap). eps_r 5 puts
+# 135 ft screen past the 4 lambda_m cap, which refused until momwire#1053 served
+# the remainder there as zero). eps_r 5 puts
 # both within 0.6 ohm of the figures; the assumed 15 puts the 45 ft screen
 # 2.5 ohm low. The N = 113 separation goes 1.75 -> 5.51 ohm against the
 # measured 6.7 at eps_r 5.
@@ -406,7 +408,8 @@ JOINT_BAR_AT_30 = 2.5
 
 def _r_both_at_30(eps):
     """(R_45ft, R_135ft) at N = 30 for this eps_r, or None where the 135 ft
-    screen refuses (the 4 lambda_m cap: lambda_m grows as |eps~| falls)."""
+    screen refuses. Past the 4 lambda_m cap (lambda_m grows as |eps~| falls)
+    it refused until momwire#1053, which serves the remainder there as zero."""
     r45 = _r_of(30, ground_eps=(eps, SIGMA))
     try:
         r135 = _r_of(30, l_radial=L_RADIAL_135, ground_eps=(eps, SIGMA))
@@ -429,7 +432,7 @@ def test_some_plausible_permittivity_puts_both_screens_on_their_figures(
         r2 = _r_of(2, ground_eps=(eps, SIGMA))
         assert r2 > FIG37_OFF_SCALE_AT_N2 > r45, (eps, r2, r45)
         if r135 is None:
-            record_property(f"eps{eps:g}_135ft_N30", "refused (4 lambda_m cap)")
+            record_property(f"eps{eps:g}_135ft_N30", "refused")
             continue
         ran += 1
         record_property(f"eps{eps:g}_135ft_N30", f"{r135:.2f}")

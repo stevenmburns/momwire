@@ -149,7 +149,6 @@ def test_g980c_3_bspline_re_exports_every_historical_name():
         "ENRICHMENT",
         "EXTENDED_KERNEL",
         "DENSE_BUDGET",
-        "PAST_CAP",
         "GRAZING",
         "CROSS_RANGE",
         "DEPTH",
@@ -158,6 +157,10 @@ def test_g980c_3_bspline_re_exports_every_historical_name():
         assert getattr(_bs, f"_BURIED_{name}_REFUSAL") is getattr(
             BI, f"BURIED_{name}_REFUSAL"
         ), name
+    # momwire#1053 retired PAST_CAP: past the below/below cap is served, as
+    # zero, so neither spelling of the name may linger for a caller to raise.
+    assert not hasattr(BI, "BURIED_PAST_CAP_REFUSAL")
+    assert not hasattr(_bs, "_BURIED_PAST_CAP_REFUSAL")
     assert _bs._N_QP_BURIED_FIELD is BI.N_QP_BURIED_FIELD == 6
     from momwire import _couplings
 

@@ -38,6 +38,9 @@ order, complex division is libgcc's rather than numpy's, and the Bessel pair is
 a different algorithm entirely (U1's G-568-1).
 """
 
+import contextlib
+import copy
+
 import numpy as np
 import pytest
 
@@ -631,7 +634,7 @@ def test_g5689_a_duck_typed_surface_source_stays_on_numpy(proj_grid, monkeypatch
 @pytest.mark.parametrize(
     "what,match",
     [
-        ("past_cap", "past the tabulation"),
+        ("short_of_cap", "past the tabulation"),
         ("grazing", "grazing floor"),
         ("wrong_side", "strictly below"),
         ("above_grid", "SommerfeldGridBelow"),
@@ -646,8 +649,15 @@ def test_g5689_the_refusals_survive_the_dispatch(proj_grid, what, match):
     t1 = np.array([[1.0, 0.0, 0.0]])
     src = np.array([[0.0, 0.0, -0.2]])
     g = grid
-    if what == "past_cap":
-        obs = np.array([[5.0 * grid.r1_max, 0.0, -0.2]])
+    if what == "short_of_cap":
+        # momwire#1053 serves past the CAP (as zero, gated below), so what this
+        # row keeps honest is the other half of that rule: a grid tabulated
+        # SHORT of the cap and queried past its own r1_max is a sizing bug, and
+        # both dispatches still name it. A shallow copy with r1_max pulled in
+        # stands for that grid without paying for a second fill.
+        g = copy.copy(grid)
+        g.r1_max = 0.5 * grid.r1_cap
+        obs = np.array([[0.75 * grid.r1_cap, 0.0, -0.2]])
     elif what == "grazing":
         # theta well under the floor, R1 comfortably inside the cap. The
         # depth here tracks `_SOMM_BELOW_TH_MIN_DEG`: momwire#838 lowered the
@@ -681,6 +691,44 @@ def test_g5689_the_refusals_survive_the_dispatch(proj_grid, what, match):
             if ctx:
                 ctx.__exit__()
     assert msgs[0] == msgs[1], msgs
+
+
+def test_g5689_past_the_cap_is_served_as_zero_on_both_dispatches(proj_grid):
+    """momwire#1053: a pair past the CAP is served, as exactly zero, on both
+    dispatches, and an in-range pair sharing the call keeps its own bits — the
+    same entry as that pair queried alone. `proj_grid` is tabulated to the
+    cap, which is where the old refusal fired.
+
+    Both pairs sit at 1.2x the grazing floor, inside the band the fixture has
+    already materialized, so this gate pays for no fill of its own."""
+    grid, (et, kp, om, km, lam_m) = proj_grid
+    assert grid.r1_max == grid.r1_cap
+    th = 1.2 * grid.th_min
+    assert th < grid.th_band_lo_hi, "the pairs must stay in the pre-filled band"
+    hh_near = 0.9 * grid.r1_cap * np.sin(th)
+    hh_far = 1.5 * grid.r1_cap * np.sin(th)
+    src = np.array([[0.0, 0.0, -0.5 * hh_near]])
+    near = np.array([[0.9 * grid.r1_cap * np.cos(th), 0.0, -0.5 * hh_near]])
+    far = np.array([[1.5 * grid.r1_cap * np.cos(th), 0.0, -(hh_far - 0.5 * hh_near)]])
+    t1 = np.array([[1.0, 0.0, 0.0]])
+    for use_numpy in (True, False):
+        with force_numpy() if use_numpy else contextlib.nullcontext():
+            alone = below.remainder_field_proj_below(
+                near, t1, src, t1, GROUND_Z, kp, km, grid
+            )
+            both = below.remainder_field_proj_below(
+                np.vstack([near, far]),
+                np.vstack([t1, t1]),
+                src,
+                t1,
+                GROUND_Z,
+                kp,
+                km,
+                grid,
+            )
+        assert alone[0, 0] != 0.0, use_numpy
+        assert both[0, 0] == alone[0, 0], (use_numpy, both[0, 0], alone[0, 0])
+        assert both[1, 0] == 0.0, (use_numpy, both[1, 0])
 
 
 def test_g5689_an_in_domain_query_at_the_edges_is_served_not_refused(proj_grid):

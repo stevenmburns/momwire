@@ -3629,13 +3629,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         twice exactly as it is over a Sommerfeld ground, with `eps` and the
         ground object swapped.
 
-        The two serve-plan refusals a buried grid can hit
-        (`_BURIED_PAST_CAP_REFUSAL`, `_BURIED_GRAZING_REFUSAL`) are asked
-        here, before any grid is filled, over segment endpoints and
-        centroids — the same R₁ = hypot(ρ, d + d′) and θ = atan2(d + d′, ρ)
-        `BSplineSolver._buried_serve_plan` asks over its nodes.
+        The serve-plan refusal a buried grid can hit
+        (`_BURIED_GRAZING_REFUSAL`) is asked here, before any grid is
+        filled, over segment endpoints and centroids — the same
+        θ = atan2(d + d′, ρ) `BSplineSolver._buried_serve_plan` asks over
+        its nodes. The R₁ cap is not a refusal since momwire#1053: past it
+        `remainder_field_proj_below` serves the remainder as zero.
         """
-        from .bspline import _BURIED_GRAZING_REFUSAL, _BURIED_PAST_CAP_REFUSAL
+        from .bspline import _BURIED_GRAZING_REFUSAL
 
         gz = float(self.ground_z)
         eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
@@ -3644,7 +3645,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         k_m, eps_m = ground.k_m, ground.eps_m
 
-        # The plan's two refusals, over endpoints + centroids.
+        # The plan's refusal, over endpoints + centroids.
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
         pts = np.concatenate(
             [
@@ -3680,20 +3681,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             pts[:, 1][:, None] - pts[:, 1][None, :],
         )
         hh = d[:, None] + d[None, :]
-        r1_max = float(np.max(np.hypot(rho, hh)))
         th_min = float(np.min(np.arctan2(hh, rho)))
-        lam_m = 2.0 * np.pi / abs(k_m)
-        cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
-        if r1_max > cap:
-            raise ValueError(
-                _BURIED_PAST_CAP_REFUSAL.format(
-                    r1=r1_max,
-                    wl=r1_max / lam_m,
-                    cap=cap,
-                    capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
-                    lam_m=lam_m,
-                )
-            )
         floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
         if th_min < floor:
             raise ValueError(
