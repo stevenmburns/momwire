@@ -667,11 +667,12 @@ def serve_plan(
     r1_max, th_min = pair_extents(obs_b[:, 0], obs_b[:, 1], d_b)
     # No range refusal here since momwire#1053. Past the below/below cap
     # (`_SOMM_BELOW_R1_CAP_LAMBDA_M`) the projection serves the remainder as
-    # zero: at 4 lambda_m it is <= 1.04e-4 of the self-scale field that sets
-    # each row of Z, and zeroing every pair past the cap on a screen
-    # 4.76 lambda_m across moved Z by 3.1e-5 ohm against its own 0.074 ohm
-    # ladder step. The measurements are written out at that constant. The
-    # grazing floor below still reads EVERY pair, zeroed ones included.
+    # zero. Zeroing every pair past the cap on a screen 4.76 lambda_m across
+    # moved Z by at most 5.0e-3 of that deck's own ladder step (fresh water at
+    # 28 MHz; 2.1e-4 at soil A and 3.5 MHz). The field-level bound, its one
+    # exception, and the geometry left unmeasured are written out at that
+    # constant. The grazing floor below still reads EVERY pair, zeroed ones
+    # included.
     floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
     if th_min < floor:
         raise ValueError(
