@@ -245,3 +245,61 @@ interface (P2a.2, P2a.1′) and it does not need the soil at all — a lossless
 homogeneous medium, equivalently free space at f·√13, carries it, converged
 under the same Richardson as the buried rows (P2a.3′, P2a.3″). Its size in
 free space is about twice its size in soil A, at all three lengths.
+
+## Step 2(f) — which side moves: known answers that belong to neither engine
+
+Raised on review: before reading the free-space disagreement as rod or feed,
+converge it (done: P2a.3′, P2a.3″) and adjudicate it against answers neither
+engine owns.
+
+### P2f.3 — the short-dipole limit, read from numbers already in hand (not blind)
+
+R_tri = 20π²(L/λ)², the radiation resistance of a short dipole carrying a
+triangular current (Balanis, *Antenna Theory: Analysis and Design*, 3rd ed.,
+2005, §4.3, eq. 4-37). Free space at f = 25.599414 MHz, λ = 11.710911 m,
+Richardson R∞ from P2a.3′ / P2a.3″ multiplied back by √13.
+
+| L (m) | kh | R_tri (Ω) | momwire R∞ | vs R_tri | NEC-5 R∞ | vs R_tri |
+|---|---|---|---|---|---|---|
+| 0.15 | 0.040 | 0.032384 | 0.0310735 | −4.05 % | 0.028521 | −11.93 % |
+| 0.60 | 0.161 | 0.518144 | 0.480526 | −7.26 % | 0.46854 | −9.57 % |
+| 2.40 | 0.644 | 8.29031 | 8.35184 | (+0.74 %) | 8.3032 | (+0.16 %) |
+
+The L = 2.40 m row is outside the formula's range (kh = 0.64) and is shown only
+for completeness.
+
+**This does not name a side, and I am not carrying a correction I cannot
+source.** The triangular value is exact only in the double limit kh → 0 and
+Ω = 2 ln(L/a) → ∞. Here a = 0.5 mm, so Ω = 11.4 at L = 0.15 m and 14.2 at
+0.60 m, and the finite-radius correction to the current's shape is of order
+1/Ω, 7–9 %. That is the same size as both engines' misses. Its sign depends on
+whether charge crowds the rod's ends, lengthening the effective dipole, or the
+feed gap, shortening it. I can neither derive nor cite that sign with
+confidence, so no finite-radius formula is claimed. The engine-independent
+version of this check is to take the radius toward zero at fixed L and
+extrapolate each engine's R / R_tri in 1/Ω, where the known answer is exactly
+1. That is registered as 2(c) once the builder's radius knob is confirmed.
+
+### P2f.1 / P2f.2 — power balance, each engine against itself
+
+Registered before the run. In lossless free space every watt in is radiated,
+so average power gain = P_rad / P_in = 1 on a self-consistent solve. Free space
+at 25.599414 MHz, refine 16, L = 0.15 / 0.60 / 2.40 m.
+
+- **momwire**: P_in from `MomwireEngine.input_power()`; P_rad = η₀k²/(32π²)
+  ∫|M⊥|² dΩ over the full sphere at cell centres (180 × 8; the rod is
+  φ-symmetric), from the engine's own segment dipoles.
+- **NEC-5**: the printed average power gain from an RP run with averaging on,
+  `NEC5Engine.average_power_gain(n_theta=90, n_phi=4)`. The rod is symmetric
+  about θ = 90°, so the upper-hemisphere average is the sphere's. NEC-5's
+  POWER BUDGET is not used: its RADIATED POWER is INPUT − WIRE LOSS by
+  construction, so it cannot fail.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2f.1 | momwire average power gain = 1 ± 1e-3 at all three lengths | pending |
+| P2f.2 | NEC-5 average power gain = 1 ± 1e-3 at all three lengths | pending |
+
+Bar: a 1° midpoint rule on a sin³θ integrand is good to ~1e-5, and NEC-5
+prints six figures, so 1e-3 is about 20× the numerical floor on both sides. If
+both pass, power balance names no side; if one fails, it names that one.
