@@ -257,3 +257,10 @@ refusal, so this second one went uncounted.
 - **What to do next** is a decision for the plan owner: a synthetic deck past
   the range cap and above the floor, the grazing-floor unit first, or deferring
   U4's src change.
+
+**NEC-5 reference on the LPDA (informational).** x13-static (sha256
+`7ebf343d…`), raw deck (`GE -1`, `GN 2` 13/0.005, 3.5 MHz), through `antennaknobs
+ladder` at r = 1: **53.0711 − 3.5390j** (2690 segments, fed segment 152.4 mm,
+424 s; `lpda_nec5_r1.*`). That agrees with the census's published NEC-5 value
+(53.0700 − 3.5386j) to about 1 mΩ. With no momwire answer on this deck, it
+stands as the reference any future serve will be read against.
