@@ -137,3 +137,75 @@ whole-space spelling cannot reproduce it. ε_r = 13, σ = 0, L = 0.15 and
 
 If C2a.5 fails on either engine, that engine's whole-space rungs (P2a.1 and
 P2a.3) are withdrawn rather than read.
+
+### C2a.5 and the P2a ladders, on the local build (52a9489f)
+
+**C2a.5 — MET for NEC-5, MISSED for momwire in Z.**
+
+| L (m) | engine | whole space | free space at f·√13, ÷√13 | rel Z | rel R | bar |
+|---|---|---|---|---|---|---|
+| 0.15 | momwire | 0.00857146−3343.66j | 0.00857195−3343.86j | 5.9e-5 | 5.7e-5 | Z ≤ 1e-6 **missed**, R ≤ 1e-4 met |
+| 0.60 | momwire | 0.133116−1089.23j | 0.133104−1088.90j | 3.0e-4 | 8.8e-5 | Z ≤ 1e-6 **missed**, R ≤ 1e-4 met |
+| 0.15 | NEC-5 | 0.0078139−3220.5j | 0.00781378−3220.59j | 2.8e-5 | 1.5e-5 | met |
+| 0.60 | NEC-5 | 0.12958−1076.9j | 0.129584−1076.92j | 2.1e-5 | 2.7e-5 | met |
+
+The momwire miss is in the reactance: the two paths agree in R to < 1e-4 but
+in X only to 3e-4. A 1e-6 bar assumed two different code paths (the complex-k
+buried direct term and the real-k free-space fill) agree to near machine
+class. They do not. **By the rule registered with C2a.5, momwire's
+whole-space rungs are withdrawn**: P2a.1 and P2a.3 are not read as verdicts.
+Their numbers are kept below, labelled, because a withdrawn reading is still
+a record, and replacements that do not use the switch are registered at the
+end of this section.
+
+This is the second bar in this step set from an estimate rather than a
+measurement (C2a.2 was the first). Both errors went the same way: I assumed
+more agreement or more effect than the code delivers.
+
+**P2a.2 — HIT.** Deep burial, both engines' ordinary buried paths, L = 0.60 m:
+
+| d (m) | 0.2 | 1 | 3 | 10 | 18 |
+|---|---|---|---|---|---|
+| e^{−2αd} | 0.91 | 0.62 | 0.24 | 8.5e-3 | 1.8e-4 |
+| momwire R16 | 550.677 | 549.454 | 549.461 | 549.465 | 549.465 |
+| NEC-5 R16 | 544.19 | 543.00 | 543.01 | 543.01 | 543.01 |
+| **ΔR/R** | **−1.2032 %** | **−1.1998 %** | **−1.1991 %** | **−1.1999 %** | **−1.1999 %** |
+
+Within 0.004 pp of −1.203 % at every depth, while the interface's own weight
+falls by 5000×. **The interface is not in the path.**
+
+**Withdrawn readings (momwire whole-space switch, NEC-5 infinite-medium card).
+Not verdicts.**
+
+| L (m) | σ (mS/m) | momwire R16 | NEC-5 R16 | ΔR/R |
+|---|---|---|---|---|
+| 0.15 | 5 | 1670.43 | 1607.1 | −3.8923 % |
+| 0.15 | 1 | 627.076 | 603.34 | −3.8838 % |
+| 0.15 | 0.1 | 65.0688 | 62.606 | −3.8838 % |
+| 0.15 | 0 | 0.0085946 | 0.0078621 | −8.2312 % |
+| 0.60 | 5 | 549.465 | 543.01 | −1.1999 % |
+| 0.60 | 1 | 206.341 | 203.93 | −1.1911 % |
+| 0.60 | 0.1 | 21.5279 | 21.274 | −1.2050 % |
+| 0.60 | 0 | 0.133201 | 0.12977 | −2.4966 % |
+
+Read as indicative only: the fraction is flat while R falls 26× from 5 to
+0.1 mS/m, which is neither of P2a.3's two competing outcomes. At lossless it
+roughly doubles, 2.12× at 0.15 m and 2.08× at 0.60 m.
+
+**An observation that needs no switch at all.** C2a.5's free-space solves, the
+ordinary free-space path on both engines with no soil, no switch and no card,
+already show the disagreement at refine 8: ΔR/R = −8.84 % at L = 0.15 m and
+−2.65 % at L = 0.60 m, at 25.6 MHz. **The rod's disagreement survives with no
+medium at all.** That moves the question from the medium to the rod and its
+feed, which is 2(b) and 2(c).
+
+### Replacements for the withdrawn rungs, registered before they run
+
+Neither uses the momwire switch or the NEC-5 card. Where a withdrawn reading
+has already been seen, the prediction says so rather than posing as blind.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2a.1′ | deep burial d = 18 m, soil A, both engines' buried paths: ΔR/R = −3.89 % ± 0.05 pp at L = 0.15 m (withdrawn reading seen: −3.8923 %) and −1.20 % ± 0.05 pp at L = 0.60 m (P2a.2's 18 m row, −1.1999 %) | pending |
+| P2a.3′ | lossless whole space through scaled free space (f·√13, Z ÷ √13), both engines' free-space paths, refine 8 → 16 Richardson: −8.23 % ± 0.15 pp at L = 0.15 m and −2.50 % ± 0.15 pp at L = 0.60 m (not blind; withdrawn readings seen) | pending |
+| P2a.3″ | **blind**: the same spelling at L = 2.40 m gives about twice its lossy fraction, −0.55 % ± 0.10 pp, on the 2.1× ratio the two shorter rods show | pending |
