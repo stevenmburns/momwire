@@ -218,3 +218,30 @@ has already been seen, the prediction says so rather than posing as blind.
 | P2a.1′ | deep burial d = 18 m, soil A, both engines' buried paths: ΔR/R = −3.89 % ± 0.05 pp at L = 0.15 m (withdrawn reading seen: −3.8923 %) and −1.20 % ± 0.05 pp at L = 0.60 m (P2a.2's 18 m row, −1.1999 %) | pending |
 | P2a.3′ | lossless whole space through scaled free space (f·√13, Z ÷ √13), both engines' free-space paths, refine 8 → 16 Richardson: −8.23 % ± 0.15 pp at L = 0.15 m and −2.50 % ± 0.15 pp at L = 0.60 m (not blind; withdrawn readings seen) | pending |
 | P2a.3″ | **blind**: the same spelling at L = 2.40 m gives about twice its lossy fraction, −0.55 % ± 0.10 pp, on the 2.1× ratio the two shorter rods show | pending |
+
+### The replacement rungs — on x13-static, and identical on 52a9489f
+
+`step2a_replacements.py`, `x13/p2a1.json`, `x13/p2a3.json` (the local build's
+twins under `local-52a9489f/` print the same rows to every digit).
+
+| id | measured | verdict |
+|---|---|---|
+| P2a.1′ | deep burial 18 m, soil A: **−3.8923 %** at L = 0.15 m, **−1.1999 %** at L = 0.60 m | **HIT** |
+| P2a.3′ | lossless medium as scaled free space, Richardson 8 → 16: **−8.2365 %** at L = 0.15 m, **−2.4960 %** at L = 0.60 m | **HIT** |
+| P2a.3″ | blind, L = 2.40 m: **−0.5825 %** against −0.55 ± 0.10 | **HIT** |
+
+| L (m) | segs 8 / 16 | momwire R8 / R16 (÷√13) | NEC-5 R16 (÷√13) | dR8 | dR16 | ΔR/R lossless | ΔR/R soil A | ratio |
+|---|---|---|---|---|---|---|---|---|
+| 0.15 | 22 / 36 | 0.00857195 / 0.00859509 | 0.00786204 | −0.00075817 | −0.00073305 | −8.2365 % | −3.8933 % | 2.12 |
+| 0.60 | 74 / 136 | 0.133104 / 0.133189 | 0.129767 | −0.0035209 | −0.0034226 | −2.4960 % | −1.2032 % | 2.07 |
+| 2.40 | 270 / 524 | 2.31557 / 2.31598 | 2.30206 | −0.014341 | −0.013915 | −0.5825 % | −0.2736 % | 2.13 |
+
+The withdrawn whole-space readings are reproduced by the switch-free spellings
+to within 0.005 pp (−8.2312 against −8.2365, −2.4966 against −2.4960), which
+is consistent with C2a.5's R agreement and says nothing more than that.
+
+**Step 2(a) verdict, on the rungs that stand:** the disagreement is not the
+interface (P2a.2, P2a.1′) and it does not need the soil at all — a lossless
+homogeneous medium, equivalently free space at f·√13, carries it, converged
+under the same Richardson as the buried rows (P2a.3′, P2a.3″). Its size in
+free space is about twice its size in soil A, at all three lengths.
