@@ -194,7 +194,9 @@ def grounded_junctions(polylines, ground_z, groups):
     return frozenset(grounded)
 
 
-def crossing_junctions(media, groups, grounded, polylines, ground_z, radii):
+def crossing_junctions(
+    media, groups, grounded, polylines, ground_z, radii, *, two_radius=False
+):
     """Indices of junctions that CROSS the interface — grounded junctions
     joining an ABOVE wire to a BELOW wire — after checking the deck against
     the crossing serve's scope (momwire#524 phase 2).
@@ -210,7 +212,9 @@ def crossing_junctions(media, groups, grounded, polylines, ground_z, radii):
       corner between above tents, a pair class no adjudicator has measured;
     * ONE wire radius across the deck — the radius rule ρ_eff = √(ρ² + a²) is
       the corner's regularization and a per-pair radius has no pinned
-      convention;
+      convention — unless the caller passes `two_radius=True` (BSpline, U5):
+      then every above wire at one radius and every below wire at another is
+      served (`crossing_side_radii`), and a spread WITHIN a side is refused;
     * OTHER junctions only wholly BELOW and off the plane — the buried hub
       (one rise + N radials joined at depth, the screen's other spelling).
       Its by-parts end terms cancel through the hub's own KCL row (probe35:
@@ -278,13 +282,41 @@ def crossing_junctions(media, groups, grounded, polylines, ground_z, radii):
             )
     radii = np.asarray(radii, dtype=float)
     if float(radii.max()) - float(radii.min()) > 0.0:
-        raise NotImplementedError(
-            "crossing serve with per-wire radii: the radius rule "
-            "rho_eff = sqrt(rho^2 + a^2) regularizes the corner with "
-            "ONE wire radius, and a mixed-radius convention is not "
-            "pinned (momwire#524 phase 2)"
-        )
+        if not two_radius:
+            raise NotImplementedError(
+                "crossing serve with per-wire radii: the radius rule "
+                "rho_eff = sqrt(rho^2 + a^2) regularizes the corner with "
+                "ONE wire radius, and a mixed-radius convention is not "
+                "pinned (momwire#524 phase 2)"
+            )
+        crossing_side_radii(media, radii)
     return tuple(crossing)
+
+
+def crossing_side_radii(media, radii):
+    """`(a_above, a_below)` for a TWO-RADIUS crossing deck: every above wire
+    at one radius, every below wire at another (antennaknobs plan U5).
+
+    That is the class the two-radius rule was measured on
+    (`_crossing_fill.cross_complete_blocks_two_radius`): line tests at their
+    observer's radius, the node's point tests at the buried radius. A spread
+    WITHIN one side, a fan of buried members of different radii included, has
+    no measured node radius, so it is refused by name.
+    """
+    radii = np.asarray(radii, dtype=float)
+    out = []
+    for side in (_medium_spec.ABOVE, _medium_spec.BELOW):
+        r = radii[[w for w, m in enumerate(media) if m == side]]
+        if float(r.max()) - float(r.min()) > 0.0:
+            raise NotImplementedError(
+                f"crossing serve with per-wire radii that differ within the "
+                f"{side} wires: the two-radius rule serves one radius per side "
+                "of the interface (the node's point tests at the buried "
+                "radius, antennaknobs plan U5); a spread within one side has "
+                "no measured node radius"
+            )
+        out.append(float(r[0]))
+    return tuple(out)
 
 
 def crossing_node_members(
@@ -1021,10 +1053,25 @@ def compute_Z_operator_buried(
         ctx = f.crossing_context(geom, supp_seg, polys)
         ax_a = _crossing_fill.axis_data(ctx, a_idx)
         ax_b = _crossing_fill.axis_data(ctx, b_idx)
-        t_ab = _crossing_fill.cross_complete_block_split(ctx, a_idx, b_idx, ax_a, ax_b)
-        Z -= t_ab
-        Z -= t_ab.T
-        Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
+        if ctx.a_below is not None:
+            # A TWO-RADIUS node (antennaknobs plan U5): the two cross blocks
+            # are no longer transposes — above rows test lines at the above
+            # radius, below rows at the buried one, and the node's point tests
+            # share one radius — and continuity is closed by the crossing
+            # junction's KCL row rather than left to emerge.
+            t_above, t_below = _crossing_fill.cross_complete_blocks_two_radius(
+                ctx, a_idx, b_idx, ax_a, ax_b
+            )
+            Z -= t_above
+            Z -= t_below.T
+            Z += _crossing_fill.self_completions_two_radius(ctx, ax_b, ax_a)
+        else:
+            t_ab = _crossing_fill.cross_complete_block_split(
+                ctx, a_idx, b_idx, ax_a, ax_b
+            )
+            Z -= t_ab
+            Z -= t_ab.T
+            Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
     elif a_idx.size:
         grid_t = _sommerfeld_transmitted.get_grid_below_above(
             eps_t,

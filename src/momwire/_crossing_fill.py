@@ -33,8 +33,9 @@ scope allows, which is what keeps the single V(a) evaluation honest.
 Scope guards this module inherits from the derivation:
 
   * one wire radius across the deck — the radius rule ρ_eff = √(ρ² + a²)
-    is the corner's regularization and a per-pair radius has no pinned
-    convention yet.
+    is the corner's regularization — or, for a caller that opts in
+    (BSpline, antennaknobs plan U5), one radius per side of the interface:
+    see `cross_complete_blocks_two_radius`.
 
 TILTED SEGMENTS ARE SERVED (momwire#936). They were refused until
 2026-09-07 on the reading that "the W by-parts move uses t̂⊥·∇⊥ = d/dl,
@@ -273,6 +274,12 @@ class CrossingContext(NamedTuple):
     any `BasisSampler` (momwire#980). `a_wire` is the deck's ONE wire
     radius — the scope guard in the module docstring — and `ground_z` the
     interface height.
+
+    `a_above` / `a_below` are set only on a TWO-RADIUS node (every above wire
+    at `a_above`, every below wire at `a_below`, the two different;
+    antennaknobs plan U5), and `a_wire` is then their minimum, the node
+    grading's radius. `None` on every one-radius deck, which keeps the shipped
+    spelling.
     """
 
     basis: BasisSampler
@@ -283,6 +290,8 @@ class CrossingContext(NamedTuple):
     omega: float
     mu: float
     eps: float
+    a_above: float | None = None
+    a_below: float | None = None
 
 
 # WHAT IS GATED, and why it is not the node-adjacent segment.
@@ -1085,11 +1094,31 @@ def _rank1_add_cols(t_ab, nz, a, b, scale, buf):
     t_ab[:, nz] += out
 
 
-def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
+def _ends_and_corner(
+    ctx,
+    A,
+    B,
+    eps_t,
+    k_p,
+    c1,
+    gz,
+    memo=None,
+    *,
+    corner=True,
+    test_ends=True,
+    source_ends=True,
+):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
     (and the corner must never see coarse axes or a low-rank pass; its
-    V(a) rides `six_point` at `_CORNER_RTOL`, outside any memo)."""
+    V(a) rides `six_point` at `_CORNER_RTOL`, outside any memo).
+
+    `test_ends` / `source_ends` select the two end loops — the above axis's
+    ends (BT, TW: point tests at the node) and the below axis's (SQ, SW: the
+    node's by-parts ends seen from the above line). The corner reads both
+    axes' ends either way. Both default on, the one-radius spelling; a
+    two-radius node evaluates the loops at different radii
+    (`cross_complete_blocks_two_radius`)."""
     t_ab = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
     _txA, _tyA, tzA = A["t"].T
 
@@ -1112,7 +1141,7 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
 
     # The by-parts boundary terms — test-side Φ (BT), source-side W and Φ
     # (SW, SQ) — each an end against the other axis's line, radius folded.
-    for pt, sign, fv in A["ends"]:
+    for pt, sign, fv in A["ends"] if test_ends else ():
         rho_e = np.hypot(pt[0] - B["nodes"][:, 0], pt[1] - B["nodes"][:, 1])
         te = _tables(
             ctx,
@@ -1137,7 +1166,7 @@ def _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=None, *, corner=True):
         _rank1_add(
             t_ab, nz, fv[nz], _real_matvec_c(B["F"], wB_tz * te["W"]), -c1 * sign, buf
         )
-    for pt, sign, fv in B["ends"]:
+    for pt, sign, fv in B["ends"] if source_ends else ():
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
         te = _tables(
             ctx,
@@ -1543,6 +1572,54 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
     return t_ab
 
 
+def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B):
+    """The cross pair at a TWO-RADIUS crossing node: `(t_above, t_below)`,
+    composed by the caller as `Z -= t_above; Z -= t_below.T`.
+
+    The rule (antennaknobs plan U5; its derivation and measurements are in
+    the momwire scratch record `scratch/u5-mixed-radius/`): every evaluation
+    takes the radius of its observation point, and the crossing node is ONE
+    observation point.
+
+    * Line tests keep their observer wire's radius. The above rows' main
+      sandwich and their source-end terms (the below node's by-parts ends seen
+      from the above line) are at `ctx.a_above`; the below rows' at
+      `ctx.a_below`.
+    * Every point test AT the node — the test-side end terms and the corner,
+      in both families' node rows — is at ONE radius, `ctx.a_below`. Point
+      tests on two surfaces (the observer-side reading) leave the thin-wire
+      potential's jump across the node uncounted: an EMF ∝ ln(a_above/a_below)
+      that makes the buried member respond as if it had the above wire's
+      radius, measured 10–97 Ω from NEC-5 on a two-radius rod ladder.
+
+    The below rows therefore take every term at `a_below` — the one-radius
+    block at that radius, transposed by the caller. Continuity through the
+    node is closed by the crossing junction's KCL row
+    (`BSplineSolver._kcl_row_junctions`): at two radii the split fill's own
+    continuity does not converge under refinement.
+    """
+    ctx_above = ctx._replace(a_wire=float(ctx.a_above))
+    ctx_below = ctx._replace(a_wire=float(ctx.a_below))
+    t_below = cross_complete_block_split(ctx_below, a_idx, b_idx, A, B)
+
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
+    memo = {}  # keyed on the folded rho_eff, so one memo per radius stays exact
+    if _FORCE_DENSE:
+        t_above = _main_sandwich(ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo)
+    else:
+        _refuse_path_tested(A, B)
+        t_above = _main_split(ctx_above, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo)
+    t_above += _ends_and_corner(
+        ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo, corner=False, test_ends=False
+    )
+    t_above += _ends_and_corner(
+        ctx_below, A, B, eps_t, k_p, c1, gz, memo={}, corner=True, source_ends=False
+    )
+    return t_above, t_below
+
+
 def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
     """The split fill's main sandwich over (above A × below B) — everything
     `cross_complete_block_split` does except the ends and the corner.
@@ -1862,6 +1939,43 @@ def self_completions(ctx, ax_b, ax_a):
             # is confined to `live` on one side or both (momwire#914). The
             # three writes are disjoint in the sense that matters — each adds
             # its own term, exactly as the dense sum did.
+            total[live, :] += beta * row_term
+            total[:, live] += beta * col_term
+            total[np.ix_(live, live)] += beta * corner
+    return total
+
+
+def self_completions_two_radius(ctx, ax_b, ax_a):
+    """`self_completions` at a TWO-RADIUS crossing node.
+
+    Each family's column terms — its line observers against its node's
+    by-parts point charge — keep the family's own radius. Its row terms and
+    corner are point tests AT the node, so they take the node's one radius,
+    `ctx.a_below` (`cross_complete_blocks_two_radius`). For the below family
+    that is its own radius, so it is `self_completions`' spelling at
+    `a_below`; only the above family splits.
+    """
+    _eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    a_above, a_below = float(ctx.a_above), float(ctx.a_below)
+    omega, eps0 = ctx.omega, ctx.eps
+    total = np.zeros((ax_b["n_basis"],) * 2, dtype=np.complex128)
+    for ax, k, wgt, eps, a_line in (
+        (ax_b, k_m, a_m, eps_m, a_below),
+        (ax_a, k_p, c2, eps0, a_above),
+    ):
+        beta_dir = 1.0 / (1j * omega * eps * 4 * np.pi)
+        beta_img = wgt / (1j * omega * eps * 4 * np.pi)
+        for beta, mirror in ((beta_dir, False), (-beta_img, True)):
+            live, row_term, col_term, corner = _bnd_and_corner(
+                ax, k, a_below, gz, mirror=mirror
+            )
+            if live.size == 0:
+                continue
+            if a_line != a_below:
+                _live, _row, col_term, _corner = _bnd_and_corner(
+                    ax, k, a_line, gz, mirror=mirror
+                )
             total[live, :] += beta * row_term
             total[:, live] += beta * col_term
             total[np.ix_(live, live)] += beta * corner

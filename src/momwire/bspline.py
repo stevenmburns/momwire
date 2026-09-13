@@ -1763,7 +1763,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """Indices of junctions that CROSS the interface, after the crossing
         serve's scope check — `_below_interface.crossing_junctions` over the
         declared groups (momwire#524 phase 2; the scope and the #698 exemption
-        audit are documented there, shared with razor since #980)."""
+        audit are documented there, shared with razor since #980). BSpline
+        opts into the two-radius node (antennaknobs plan U5)."""
         return _below_interface.crossing_junctions(
             self._wire_media(),
             self.junctions,
@@ -1771,7 +1772,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.wires_polylines,
             self.ground_z,
             self._radius_per_wire,
+            two_radius=True,
         )
+
+    def _two_radius_crossing(self):
+        """`(a_above, a_below)` for a served TWO-RADIUS crossing deck, else
+        `None` (antennaknobs plan U5).
+
+        `None` without asking anything else when every wire has one radius, so
+        the shipped one-radius decks never reach the crossing scope from here;
+        `None` too when the deck has no crossing junction. A spread within one
+        side raises (`_below_interface.crossing_side_radii`)."""
+        radii = np.asarray(self._radius_per_wire, dtype=float)
+        if float(radii.max()) - float(radii.min()) <= 0.0:
+            return None
+        if self.ground_z is None or not self.junctions:
+            return None
+        media = self._wire_media()
+        if _medium_spec.BELOW not in media or not self._crossing_junctions():
+            return None
+        return _below_interface.crossing_side_radii(media, radii)
 
     @property
     def n_qp_pair(self):
@@ -1923,6 +1943,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         geometry columns, the buried medium, and the four scalars. The
         fill never sees the solver; any formulation with a
         piecewise-polynomial basis can build the same record."""
+        two = self._two_radius_crossing()
         return _crossing_fill.CrossingContext(
             basis=_crossing_fill.BasisPolynomials(supp_seg, polys, self.degree),
             geom=_crossing_fill.AxisGeometry(
@@ -1934,10 +1955,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ),
             medium=self._buried_medium(),
             ground_z=float(self.ground_z),
-            a_wire=float(self._radius_per_wire[0]),
+            a_wire=float(self._radius_per_wire[0]) if two is None else min(two),
             omega=self.omega,
             mu=self.mu,
             eps=self.eps,
+            a_above=None if two is None else two[0],
+            a_below=None if two is None else two[1],
         )
 
     def _grounded_junctions(self):
@@ -1948,12 +1971,29 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.wires_polylines, self.ground_z, self.junctions
         )
 
+    def _kcl_row_junctions(self):
+        """The junctions that carry a KCL row, in index order: every
+        non-grounded junction, plus the crossing junctions of a TWO-RADIUS
+        crossing deck (antennaknobs plan U5), whose continuity the two-radius
+        fill closes with the multiplier — at two radii the split fill's own
+        continuity does not converge. One helper, so `_build_basis_polynomials`
+        and `_split_kcl_ports` cannot count the rows differently."""
+        grounded = self._grounded_junctions()
+        closed = (
+            set(self._crossing_junctions())
+            if self._two_radius_crossing() is not None
+            else set()
+        )
+        return [
+            j for j in range(len(self.junctions)) if j not in grounded or j in closed
+        ]
+
     def _split_kcl_ports(self, kcl_A):
         """Split the assembled KCL matrix into (constraint rows, port rows,
         port voltages) per `self.junction_ports` (issue #172).
 
-        `_build_basis_polynomials` emits one KCL row per non-grounded
-        junction, in junction-index order; a junction port's row moves from
+        `_build_basis_polynomials` emits one KCL row per
+        `_kcl_row_junctions` entry, in junction-index order; a junction port's row moves from
         the constraint set to the port set. Returns
         ``(kcl_con, port_A, port_V)`` where ``port_A`` rows follow
         `self.junction_ports` order and ``port_V`` is the matching complex
@@ -1967,13 +2007,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 np.zeros(0, dtype=np.complex128),
             )
         grounded = self._grounded_junctions()
-        row_of = {}
-        row = 0
-        for j in range(len(self.junctions)):
-            if j not in grounded:
-                row_of[j] = row
-                row += 1
-        assert row == kcl_A.shape[0], (row, kcl_A.shape)
+        row_of = {j: row for row, j in enumerate(self._kcl_row_junctions())}
+        assert len(row_of) == kcl_A.shape[0], (len(row_of), kcl_A.shape)
         port_rows = []
         for j_idx, _v in self.junction_ports:
             if j_idx in grounded:
@@ -2036,6 +2071,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # Endpoint conditions depend on the ground plane (ground ends /
             # grounded junctions, #151); geometry alone no longer keys them.
             self.ground_z,
+            # A two-radius crossing junction keeps its KCL row (U5), and the
+            # radii are not part of the geometry key.
+            self._two_radius_crossing() is not None,
         )
         cached_entry = _BASIS_POLY_CACHE.get(basis_key)
         if cached_entry is not None:
@@ -2192,9 +2230,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_basis_total = supp_seg.shape[0]
 
         # Grounded junctions keep their directional bases but lose the KCL
-        # closure row — current may leave through the ground image (#151).
-        grounded = self._grounded_junctions()
-        kcl_rows = [j for j in range(len(self.junctions)) if j not in grounded]
+        # closure row — current may leave through the ground image (#151) —
+        # except a two-radius crossing junction's (`_kcl_row_junctions`).
+        kcl_rows = self._kcl_row_junctions()
         kcl_A = np.zeros((len(kcl_rows), n_basis_total), dtype=np.float64)
         for row, j_idx in enumerate(kcl_rows):
             for m_g, sign in junction_dirs[j_idx]:
