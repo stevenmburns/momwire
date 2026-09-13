@@ -1,0 +1,62 @@
+{
+ "momwire": "/home/smburns/stevenmburns/momwire-wt-u4src/src/momwire/__init__.py",
+ "radials": 4,
+ "f_hz": 28000000.0,
+ "soil": [
+  80.0,
+  0.001
+ ],
+ "depth_m": 0.02,
+ "lam_m": 1.1970455783911333,
+ "mast_m": 2.675,
+ "radial_m": 2.849057443901942,
+ "tip_span_lambda_m": 4.760148644851375,
+ "bar": 0.01,
+ "z_shipped_r1": "(57.41547890358228+22.79246184261019j)",
+ "z_extended_r1": "(57.41449932075779+22.792640883586404j)",
+ "z_extended_r3": "(57.49867810014092+22.972238379633172j)",
+ "delta_ohm": 0.000995810313866534,
+ "ladder_step_ohm": 0.19834648341904715,
+ "delta_over_step": 0.005020559460903993,
+ "delta_over_abs_z": 1.6120424180373804e-05,
+ "guards": {
+  "plan_past_cap": true,
+  "shipped_grid_at_cap": true,
+  "extended_grid_past_cap": true,
+  "delta_not_bit_zero": true
+ },
+ "shipped": {
+  "plan_r1_wl": [
+   4.7518067926567
+  ],
+  "grid_r1_wl": [
+   4.0
+  ],
+  "seconds": [
+   14.0
+  ]
+ },
+ "extended": {
+  "plan_r1_wl": [
+   4.7518067926567
+  ],
+  "grid_r1_wl": [
+   4.76837158203125
+  ],
+  "seconds": [
+   14.6
+  ]
+ },
+ "extended_r3": {
+  "plan_r1_wl": [
+   4.75744621742033
+  ],
+  "grid_r1_wl": [
+   4.76837158203125
+  ],
+  "seconds": [
+   5.6
+  ]
+ },
+ "verdict": "HIT"
+}
