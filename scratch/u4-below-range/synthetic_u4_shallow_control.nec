@@ -1,0 +1,17 @@
+CM U4 synthetic Z-gate deck (synthetic_u4_shallow_control): one crossing node, a 0.15 m rise to a
+CM buried hub, four 38 m radials at 0.02 m depth; soil A, 3.5 MHz.
+CM Built so R1 max = 4.76 lambda_m (past the 4 lambda_m cap) with every
+CM below/below pair at theta >= 0.05 deg (U4, momwire#1053).
+CE
+GW 1 11 0 0 0 0 0 21.4 0.001
+GW 2 1 0 0 0 0 0 -0.02 0.001
+GW 3 19 0 0 -0.02 38 0 -0.02 0.001
+GW 4 19 0 0 -0.02 -38 0 -0.02 0.001
+GW 5 19 0 0 -0.02 0 38 -0.02 0.001
+GW 6 19 0 0 -0.02 0 -38 -0.02 0.001
+GE -1
+GN 2 0 0 0 13 0.005
+EX 0 1 1 0 1 0
+FR 0 1 0 0 3.5 0
+XQ 0
+EN
