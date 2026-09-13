@@ -553,3 +553,71 @@ while both engines' R move together means the disagreement is converged at the
 source as well, and the remaining axis is the radius, 2(c). Whichever
 engine's R moves more with F is reported per engine either way; that is what
 would name a side.
+
+### P2b.2 measured — MISSED the bar, immaterial to the published number
+
+`step2b_brv.py`, `x13/p2b_brv.json`. Default `buried_radial_vertical`, soil A,
+7.1 MHz. Matched meshes and the knot feed asserted.
+
+| nominal_nsegs | NEC-5 | momwire stock (segs) | momwire port-matched (segs) | ΔR stock | ΔR matched | momwire R move |
+|---|---|---|---|---|---|---|
+| 21 (shipped) | 77.805+44.468j (249) | 78.13206041+46.337677j (248) | 78.13240369+46.33949558j (249) | −0.3271 Ω | −0.3274 Ω | 4.39e-6 |
+| 42 (2×) | 77.937+45.203j (475) | 78.14246367+46.38634674j (474) | 78.14280709+46.38816538j (475) | −0.2055 Ω | −0.2058 Ω | 4.39e-6 |
+
+| id | verdict |
+|---|---|
+| P2b.2 | **MISSED** — the move is 4.4e-6 relative, not < 1e-6 |
+
+The miss is my bar, not the claim. Matching the port moves momwire's R by
+0.34 mΩ, and ΔR against NEC-5 from −0.3271 to −0.3274 Ω at the shipped mesh
+and from −0.2055 to −0.2058 Ω at 2×. **v0.76.0's "0.3 Ω at the shipped mesh,
+0.2 Ω at 2×" stands on the port-parity axis.** This is the third bar in this
+record set from an estimate that assumed more agreement than the code delivers
+(C2a.2, C2a.5 and now this one): the rod's 2e-12 did not transfer to a deck
+with a crossing junction and a 50 mm fed segment.
+
+### P2b.3 measured — split, with a confound in the ladder
+
+`step2b_source_refine.py`, `x13/p2b_source_refine.json`. F = 1 reproduced
+#1027's deck sha (asserted) and its fractions.
+
+| L (m) | F | segs 8 / 16 | momwire R∞ | NEC-5 R∞ | ΔR/R |
+|---|---|---|---|---|---|
+| 0.15 | 1 | 22 / 36 | 1669.05 | 1604.0 | −3.8933 % |
+| 0.15 | 2 | 40 / 70 | 1620.01 | 1575.3 | −2.7571 % |
+| 0.15 | 4 | 32 / 46 | 1578.86 | 1546.6 | −2.0414 % |
+| 0.60 | 1 | 74 / 136 | 550.536 | 543.91 | −1.2032 % |
+| 0.60 | 2 | 140 / 266 | 545.078 | 540.21 | −0.8928 % |
+| 0.60 | 4 | 84 / 146 | 540.355 | 537.13 | −0.5966 % |
+
+| id | verdict |
+|---|---|
+| P2b.3 | **SPLIT** — −2.0414 % at L = 0.15 m misses "< 2.0 %" by 0.04 pp; −0.5966 % at 0.60 m meets "< 0.60 %" by 0.003 pp. The registered direction held: the fraction falls as the source region refines |
+
+**The ladder is confounded, and that limits what F can claim.** F = 4 has
+FEWER segments than F = 2 at both lengths (32/46 against 40/70; 84/146
+against 140/266). `graded_wire` places panel boundaries at h_node · 4ᵏ, so
+dividing h_node by F moves where the last graded panel ends and how much of the
+wire `rest_h` meshes. The middle of the rod was re-meshed non-monotonically
+along with the source. F is not a clean source-region axis. A clean version
+subdivides every segment by F with the panel boundaries held.
+
+**What survives the confound, as observations:**
+
+- Both engines' R fall as the source region refines, and **momwire's falls
+  faster**: at L = 0.15 m momwire steps −49.0 then −41.2 Ω, NEC-5 −28.7 then
+  −28.7 Ω; at 0.60 m momwire −5.46 then −4.72, NEC-5 −3.70 then −3.08. The
+  fixed source region carried more error in momwire's R, and the gap closes
+  from above.
+- NEC-5's two equal steps at L = 0.15 m are what an ln(h) term looks like,
+  constant per halving. momwire's are shrinking. Neither is a settled rate on a
+  confounded three-point ladder.
+
+**A mesh fact bearing on 2(c).** momwire's own documentation of its
+`extended_kernel` option says the reduced thin-wire kernel (momwire's default)
+departs from NEC's extended kernel by a fraction of a percent at Δ/a > 10 and
+by several percent below Δ/a ≈ 3. At a = 0.5 mm this rod's feed segments are
+Δ/a = 10, its refine-16 far segments are 1.56 mm, Δ/a = 3.1, and P2b.3's F = 4
+source segments are Δ/a = 2.5. The #1027 Richardson extrapolates from
+Δ/a = 6.25 to 3.1 in the far mesh, into the regime where the kernel choice is
+documented to matter. That is a candidate, not a finding.

@@ -1,0 +1,34 @@
+{
+ "meta": {
+  "nec5_exe": "/home/smburns/nec5-timing/nec5cl-x13-static",
+  "nec5_sha256": "7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3"
+ },
+ "rows": [
+  {
+   "nominal_nsegs": 21,
+   "nec5": "(77.805+44.468j)",
+   "nec5_segs": 249,
+   "momwire_stock": "(78.1320604078555+46.337676999899195j)",
+   "momwire_stock_segs": 248,
+   "momwire_stock_feed_on_knot": false,
+   "momwire_matched": "(78.13240369336225+46.33949557612759j)",
+   "momwire_matched_segs": 249,
+   "R_move_rel": 4.393657417358167e-06,
+   "dR_stock": -0.32706040785549817,
+   "dR_matched": -0.3274036933622426
+  },
+  {
+   "nominal_nsegs": 42,
+   "nec5": "(77.937+45.203j)",
+   "nec5_segs": 475,
+   "momwire_stock": "(78.14246367051115+46.386346744073386j)",
+   "momwire_stock_segs": 474,
+   "momwire_stock_feed_on_knot": false,
+   "momwire_matched": "(78.14280708735035+46.388165380855675j)",
+   "momwire_matched_segs": 475,
+   "R_move_rel": 4.394753160694988e-06,
+   "dR_stock": -0.20546367051115055,
+   "dR_matched": -0.20580708735035103
+  }
+ ]
+}
