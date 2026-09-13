@@ -148,11 +148,22 @@ For each crossing node, with a_X the radius of member X:
 
 ## 6. Still open before (b)
 
-- **Check 2**: emergent continuity (KCL deficit at the node) and the AGARD
-  slope on a mixed-radius crossing rod, harness-side, under observer-side,
-  source-side and harmonic-mean spellings. Expected before running it:
-  observer and source keep the deficit at the equal-radius level, ~10⁻⁷; the
-  harmonic mean does not.
+- **Check 2, registered before the run** (`check2_continuity.py`). A
+  momwire-native crossing rod: below arm 2 m, above arm 10 m, fed at 4.33 m,
+  soil A, 7 MHz, probe18's g2 grading at refine 1 and 2 (uniform, so the source
+  region refines with the rest), per-wire radii [a_B, a_A] with a_A = 1 mm and
+  a_A / a_B = 2 and 4. Node segments are 12.5 / 6.25 mm, so Δ/a ≥ 25. The
+  spellings are harness-side, as the script's docstring states.
+
+  | id | prediction | verdict |
+  |---|---|---|
+  | C2.0 | control: at a_A = a_B all five spellings (observer, source, harmonic, single_A, single_B) reproduce the unpatched solver's Z bit for bit; asserted, and the run stops otherwise | pending |
+  | P2.1 | observer and source: the node's KCL deficit \|I(0⁺) − I(0⁻)\| / \|I(0⁺)\| stays below 1e-5 at both ratios and both refines (the equal-radius crossing rod reads ~1e-7) | pending |
+  | P2.2 | harmonic mean: the deficit exceeds 1e-3 at both ratios, from the per-row O(1/a) identity error of §4 | pending |
+  | P2.3 | observer and source slope ratios I′(0⁺)/I′(0⁻) agree with each other within 1 % at every rung. No prediction against 1/ε̃ at mixed radii: the AGARD slope condition is a single-radius statement | pending |
+
+  Readings, not verdicts: `single_A` and `single_B`, the whole fill at one
+  radius.
 - Whether N below members of differing radii need anything beyond per-member
   self completions (the fan).
 EOF
