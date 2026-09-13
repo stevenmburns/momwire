@@ -1,0 +1,65 @@
+{
+ "meta": {
+  "nec5_exe": "/home/smburns/nec5-timing/nec5cl-x13-static",
+  "nec5_sha256": "7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3"
+ },
+ "mode": "segment",
+ "result": [
+  {
+   "L": 0.15,
+   "rows": [
+    {
+     "refine": 8,
+     "momwire": "(1742.9361747134647-1787.9170367094496j)",
+     "nec5": "(1611-1652.7j)",
+     "dR": -131.93617471346465,
+     "momwire_segs": 21,
+     "nec5_segs": 22,
+     "feed_on_knot": false,
+     "feed_arclength": 0.07499999999999996
+    },
+    {
+     "refine": 16,
+     "momwire": "(1740.9662543837885-1785.891045299193j)",
+     "nec5": "(1607.5-1649.1j)",
+     "dR": -133.4662543837885,
+     "momwire_segs": 35,
+     "nec5_segs": 36,
+     "feed_on_knot": false,
+     "feed_arclength": 0.07499999999999996
+    }
+   ],
+   "dR_inf": -134.99633405411237,
+   "R16": 1740.9662543837885,
+   "frac_pct": -7.754104004841499
+  },
+  {
+   "L": 0.6,
+   "rows": [
+    {
+     "refine": 8,
+     "momwire": "(558.199106296012-563.5248385168517j)",
+     "nec5": "(544.47-549.97j)",
+     "dR": -13.729106296011992,
+     "momwire_segs": 73,
+     "nec5_segs": 74,
+     "feed_on_knot": false,
+     "feed_arclength": 0.30000000000000004
+    },
+    {
+     "refine": 16,
+     "momwire": "(558.0540250542666-563.3725277383505j)",
+     "nec5": "(544.19-549.68j)",
+     "dR": -13.864025054266563,
+     "momwire_segs": 135,
+     "nec5_segs": 136,
+     "feed_on_knot": false,
+     "feed_arclength": 0.30000000000000004
+    }
+   ],
+   "dR_inf": -13.998943812521134,
+   "R16": 558.0540250542666,
+   "frac_pct": -2.5085284191185324
+  }
+ ]
+}

@@ -488,3 +488,68 @@ difference between the solvers at an identical source.
 Read alongside, not a verdict: momwire's `feed_model="segment"` over its
 native 10 mm cell at L = 0.15 and 0.60 m, to size how far the source spelling
 alone moves momwire's R.
+
+### P2b.1 measured — MISSED: with the same port on both engines, nothing moves
+
+`step2b_port.py matched`, `x13/p2b_matched.json`. momwire has 22/36, 74/136
+and 270/524 segments, equal to NEC-5's deck at every rung, and its feed on a
+knot at every rung. Both asserted.
+
+| L (m) | momwire R16, odd (stock) | momwire R16, even (port matched) | ΔR/R stock | ΔR/R matched |
+|---|---|---|---|---|
+| 0.15 | 1670.866289520905 | 1670.866289517344 | −3.8933 % | −3.8933 % |
+| 0.60 | 550.6771064522183 | 550.6771064466826 | −1.2032 % | −1.2032 % |
+| 2.40 | 176.80417679232534 | 176.80417678533047 | −0.2736 % | −0.2736 % |
+
+| id | verdict |
+|---|---|
+| P2b.1 | **MISSED** — \|ΔR/R\| unchanged to four decimals at every length. The registered competing outcome holds: at an identical mesh and an identical knot source, the disagreement remains |
+
+**The patch is plumbed, so this is not a silent no-op.** A change that moves
+nothing bit for bit would be unplumbed, and this moved. At L = 0.15 m,
+refine 8, the solver's own `n_per_edge_per_wire` goes from `[6, 2, 2, 1, 2, 2, 6]`
+to `[6, 2, 2, 2, 2, 2, 6]`, its unknowns from 21 to 22, R by 3.6e-9 Ω
+(2e-12 relative) and X by 1.4e-6 Ω. Inserting a knot at momwire's delta gap
+leaves its answer where it was. **The parity coercion is not the cause of the
+−1.20 %.** It is a real difference in how the two decks reach the engines, and
+it is immaterial here.
+
+**Reading: momwire's segment gap.** `feed_model="segment"` over its native
+10 mm cell (`x13/p2b_segment.json`): R16 = 1740.97 Ω at L = 0.15 m (+4.2 % on
+the point gap) and 558.054 Ω at 0.60 m (+1.3 %), taking ΔR/R to −7.75 % and
+−2.51 %. The source spelling moves momwire's R by the same order as the
+disagreement, in the direction away from NEC-5.
+
+### P2b.2 — the published number: `buried_radial_vertical`'s port split (registered before the run)
+
+The default BRV deck has the same split. Its fed rise (0 → 0.05 m) reaches
+momwire as one 50 mm segment with the gap mid-segment (248 segments) and NEC-5
+as two 25 mm segments with EX at the knot (249). v0.76.0's census rows
+("0.3 Ω at the shipped mesh, 0.2 Ω at 2×") compare those two ports. Rung:
+default deck at the shipped `nominal_nsegs` = 21 and at 42; momwire stock and
+momwire with the parity patched to even, the meshes asserted equal to NEC-5's
+and the feed asserted on a knot; R reported both ways against NEC-5.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2b.2 | momwire's R moves by less than 1e-6 relative when the port is matched, at both meshes — so the census comparison stands as written as far as port parity goes. The rod moved 2e-12; this deck adds a crossing junction and a 50 mm fed segment, hence a looser bar | pending |
+
+### P2b.3 — refine the source region, ports matched (registered before the run)
+
+The feed wire at 2F segments (knot source kept at its centre) and both graded
+neighbours' first panel at h_node = 12.5 mm / F, so the feed segments and
+their neighbours halve with each doubling of F. F = 1, 2, 4; far mesh refine
+8 → 16 Richardson as before; L = 0.15 and 0.60 m; soil A, d = 0.2 m. momwire
+with the parity patched to even; segment counts and the knot asserted equal to
+NEC-5's at every rung. F = 1 must reproduce the stock deck's sha and −3.893 /
+−1.203 % before any F > 1 row is read.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2b.3 | **blind**: \|ΔR/R\| falls as the source region refines, below 2.0 % at L = 0.15 m and below 0.60 % at L = 0.60 m by F = 4 | pending |
+
+Competing outcome, registered with it: the fraction holding near −3.9 / −1.2 %
+while both engines' R move together means the disagreement is converged at the
+source as well, and the remaining axis is the radius, 2(c). Whichever
+engine's R moves more with F is reported per engine either way; that is what
+would name a side.
