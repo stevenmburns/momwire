@@ -66,7 +66,10 @@ import numpy as np
 import pytest
 
 from momwire import _bspline_kernels, _crossing_fill, _medium_spec, _near_interface
+from momwire import SinusoidalGalerkinSolver
+from momwire import razor as _razor
 from momwire.bspline import DEFAULT_N_QP_PAIR, BSplineSolver
+from momwire.razor import RazorSolver
 
 from test_buried_serve_553 import SOIL_A, WL7, contact_deck
 
@@ -335,6 +338,48 @@ def test_g524_2_above_side_other_junction_refused_by_name():
     s = BSplineSolver(**build)
     with pytest.raises(NotImplementedError, match="OTHER junction"):
         s._crossing_junctions()
+
+
+def two_node_deck(**override):
+    """Two copies of `crossing_deck`'s rod 12 m apart, each over its own
+    crossing junction (antennaknobs#1464). Before the scope check named it,
+    the second node passed the serve plan and died on the bare assert in
+    `_crossing_fill._ends_and_corner`."""
+    one = crossing_deck()
+    shift = np.array([12.0, 0.0, 0.0])
+    build = dict(one)
+    build["wires"] = one["wires"] + [w + shift for w in one["wires"]]
+    build["n_per_edge_per_wire"] = one["n_per_edge_per_wire"] + [
+        list(e) for e in one["n_per_edge_per_wire"]
+    ]
+    build["junctions"] = [[(0, "end"), (1, "start")], [(2, "end"), (3, "start")]]
+    build.update(override)
+    return build
+
+
+_SECOND_NODE = "the crossing serve completes ONE crossing node per deck"
+
+
+def test_g524_2_a_second_crossing_node_is_refused_by_name():
+    s = BSplineSolver(**two_node_deck())
+    with pytest.raises(NotImplementedError, match=_SECOND_NODE) as exc:
+        s._crossing_junctions()
+    assert "2 crossing junctions, at (0, 0), (12, 0)" in str(exc.value)
+
+
+def test_g524_2_a_second_crossing_node_refuses_before_the_fill():
+    """The #1464 regression: the solve stops at the scope check with the
+    sentence instead of reaching the crossing completion's assert."""
+    with pytest.raises(NotImplementedError, match=_SECOND_NODE):
+        BSplineSolver(**two_node_deck()).compute_impedance()
+
+
+def test_g524_2_the_other_trunks_share_the_second_node_refusal(monkeypatch):
+    with pytest.raises(NotImplementedError, match=_SECOND_NODE):
+        SinusoidalGalerkinSolver(**two_node_deck())._crossing_junction_indices()
+    monkeypatch.setattr(_razor, "_SERVE_CROSSING", True)
+    with pytest.raises(NotImplementedError, match=_SECOND_NODE):
+        RazorSolver(**two_node_deck(), n_qp_path=8)._crossing_junctions()
 
 
 # The #674 study's per-arm node grading (probe18's geometric walk, at
