@@ -679,3 +679,24 @@ only the tests named in T3–T7 would be edited.
   - The pause and resume times are logged in `screen_extension.pauses`.
   - The prototype's verdict metrics are fields, not timings. Only the
     per-point `seconds` of points in flight during a pause are inflated.
+
+**Incident: this PR's own pause killed the screen extension's first run
+(13:23:36Z).**
+- **What happened.** SIGSTOP to the run's systemd scope made the wrapping task
+  shell report the job Stopped (exit 147). The background task then ended, and
+  its process tree was torn down. The prototype workers were terminated rather
+  than paused: the scope no longer exists, and `resource_tracker` reports
+  leaked semaphores.
+- **What was lost.** The run had printed only its G-c guard, which hit
+  (1.972–1.984), and no extension row. The first row, EXT-very-poor-1.8-0.02,
+  had run about 33 min without finishing. Its log is kept as
+  `screen_extension_killed.log`, with `screen_extension_killed.pauses`.
+- **Budget, re-fixed before any row reports.** No extension result exists, so
+  this is still possible. The restart runs as a transient systemd service,
+  not as a child of a task shell, and nothing pauses it. Its wall-clock budget
+  is **4 h from the restart's own start**; rows unfinished by then are
+  recorded as not run.
+- **The pause-extension rule above is withdrawn.** Nothing pauses the restart,
+  so there is no pause to extend for.
+- **The fast lane's third run** proceeds without the screen, on an unloaded
+  box.
