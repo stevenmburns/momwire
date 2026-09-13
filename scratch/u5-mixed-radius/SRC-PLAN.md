@@ -118,3 +118,24 @@ anything else. If V2 misses, the equal-radius path was touched, which is a stop.
 - (c)'s corpus decks, blocked on U3's GE −1 scope.
 - Razor and SG two-radius serving.
 - A fan whose buried members differ in radius.
+
+## 8. Checks measured before the PR [2026-09-13]
+
+The src branch `u5-two-radius-crossing` is at `adc009c`, local and not yet
+pushed.
+
+| id | verdict |
+|---|---|
+| V1 | **HIT**. Check 3′'s rows: worst 2.9e-13 over 4 rows (`v1_check2.*`). Step (b′)'s mixed rungs, through antennaknobs' engine: worst 1.8e-12 over 27 rows (`v1_b.*`). Both runs asserted that momwire was imported from the src worktree |
+| V2 | **HIT**. On the catalog `buried_radial_vertical` at 7.1 / 6.8 / 7.4 MHz, soil A, and check 2's rod at equal radii (r = 1 and 2), main and the src branch agree bit for bit (`repr`). The determinism control also held: main reproduced itself exactly. The crossing fill ran 3 times on the catalog decks and 5 in all, so the comparison is not vacuous. The catalog design at 7.1 MHz reads 78.13206040784942+46.33767699982075j on both (`v2_main.*`, `v2_main_repeat.*`, `v2_src.*`) |
+| V3 | lanes running |
+| V4 | see V3 |
+
+**T3's measured values** (refine 1): R₀ = 186.6216 Ω. Halving the rise radius
+adds +7.861 Ω; halving the top radius adds +0.492 Ω, 0.063 of the rise's
+response. The rise's response at ×¼ over its response at ×½ is 1.988. Every
+bar holds with margin.
+
+**Runtime.** The two test files (7 new tests plus the edited `test_g524_2`
+pair, 44 tests in all) pass in 3.3 s serially. T3 takes 0.82 s, so the tests
+are unmarked and run in the PR lane.

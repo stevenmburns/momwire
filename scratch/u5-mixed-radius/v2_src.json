@@ -1,0 +1,22 @@
+{
+ "meta": {
+  "mode": "v2",
+  "expect": "src",
+  "momwire_file": "/home/smburns/stevenmburns/momwire-wt-u5src/src/momwire/__init__.py"
+ },
+ "result": {
+  "brv_7.1": [
+   "(78.13206040784942+46.33767699982075j)"
+  ],
+  "brv_6.8": [
+   "(71.01695302338501+9.216175966545695j)"
+  ],
+  "brv_7.4": [
+   "(85.87330150873778+83.45286758464721j)"
+  ],
+  "brv_crossing_calls": 3,
+  "rod_equal_r1": "(169.77723712649032-82.27633481639751j)",
+  "rod_equal_r2": "(169.45676504753166-82.35232704192198j)",
+  "crossing_calls_total": 5
+ }
+}
