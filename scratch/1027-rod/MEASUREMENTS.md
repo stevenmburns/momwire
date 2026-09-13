@@ -54,3 +54,41 @@ L = 2.40 m. Through `2·dR16 − dR8` that is up to ±3 × 10⁻⁵ of R, about
 ±0.01 percentage points on the fraction at every length, but ±3 % of the
 fraction's own size at L = 2.40 m. Rungs whose fraction falls much below
 0.1 % need that floor stated beside them.
+
+## Step 2(a) — take the interface and the loss out
+
+**What each engine runs.** Neither engine's front end, as antennaknobs drives
+it, has a whole-space spelling, so each gets one built for this unit:
+
+- **NEC-5**: its infinite-medium card (verified against our licensed
+  materials), added to `NEC5Engine.deck(ground="free")`'s free-space deck.
+  Segment sizes are unchanged, and are already tiny against λ_m ≈ 10.7 m.
+- **momwire**: the wholly buried fill with its two interface terms removed —
+  the ±=− image weight `a_m` set to zero and the below/below Sommerfeld
+  remainder returning zeros — leaving the direct term at k_m, ε_m.
+- **Deep burial** on both engines as the second comparand, to d = 18 m.
+  momwire refuses 20 m (below/below pair separation 41.2 m, past its 4 λ_m
+  table), and e^{−2αd} at 18 m is 1.8 × 10⁻⁴ (α = 0.2387 Np/m at soil A).
+
+Controls, registered before the run. If one fails, the rung it guards is
+withdrawn rather than read.
+
+| id | control | verdict |
+|---|---|---|
+| C2a.1 | momwire whole-space: Z identical (≤ 1e-9 relative) at d = 0.2 and d = 18 m — only relative geometry can remain | pending |
+| C2a.2 | momwire whole-space moves Z against the full fill at d = 0.2 m by ≥ 1e-2 relative (the knob is plumbed) and matches it at d = 18 m to ≤ 1e-3 | pending |
+| C2a.3 | NEC-5 infinite-medium card with (ε_r, σ) = (1, 0) prints the same Z as the free-space deck | pending |
+| C2a.4 | NEC-5 infinite-medium Z identical at d = 0.2 and d = 18 m, and NEC-5 deep burial at 18 m within 1e-3 relative of it | pending |
+
+Predictions, registered before the run:
+
+| id | prediction | verdict |
+|---|---|---|
+| P2a.1 | **whole space, both engines, soil A**: ΔR/R = −3.89 % at L = 0.15 m and −1.20 % at L = 0.60 m, each within ±0.05 pp — the interface is not in the path | pending |
+| P2a.2 | **deep burial, both engines, L = 0.60 m**, d = 0.2 / 1 / 3 / 10 / 18 m: ΔR/R within ±0.03 pp of −1.203 % at every depth | pending |
+| P2a.3 | **whole space, σ → lossless**, ε_r = 13, σ = 5 / 1 / 0.1 / 0 mS/m, L = 0.15 and 0.60 m: ΔR/R unchanged within ±0.05 pp at every σ, while R falls by more than 10× at L = 0.60 m | pending |
+
+The competing outcomes for P2a.3, written down so the result cannot be
+re-fitted: |ΔR/R| falling toward zero as σ → 0 makes the missing term
+loss-borne; |ΔR/R| growing as R falls makes it an absolute term that does not
+scale with R.
