@@ -110,3 +110,27 @@ How the outcomes will be read, fixed now:
   field-level and the verdict is Z.
 - **PS2 misses** → the remainder past the cap is not the algebraic lateral-wave
   tail. Report its measured form before choosing a branch.
+
+## Amendment before the main run: G-a was vacuous [2026-09-13]
+
+**G-a passed at exactly 0 in 0.0 s, with `rel` = 0 at every point
+(`screen_guard.log`).** That was not a measurement. At ε̃ = 1 the prototype
+short-circuits `k_s == k_o` (`buried_proto.py`, `integrals_R`), because
+D₁ = D₂ ≡ 0 there and a relative tail test on noise never goes quiet (phase-0
+RESULTS §5, trap 7). So G-a never exercised the far-range integrator, and
+it is withdrawn as a guard.
+
+**G-c replaces it: small-contrast linearity at range.** The remainder is
+first order in (ε̃ − 1). At 7 MHz, depths (0.15, 0.15) m, R1 = 4 and 8 λ₀,
+HED at φ = 0 and VED, the bar is |E_rem(ε_r = 1.02)| / |E_rem(ε_r = 1.01)|
+∈ [1.9, 2.1], with σ = 0. A miss stops the run.
+
+**G-c is informed.** Before this amendment an exploratory run measured
+three of its four points at 1.9811, 1.9842 and 1.9724, with `rel` 3e-8 to
+6e-8. Those points are outside every predicted case, so no prediction was
+touched.
+
+**Cost.** 75–154 s per point at ρ = 171–343 m and a depth sum of 0.3 m. The
+screen's cases are lossy soils with λ_m several times shorter, so ρ is
+shorter, but the shallow SPEC depths slow the tail. The run uses parallel
+workers.

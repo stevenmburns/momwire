@@ -110,13 +110,18 @@ def lam_m(soil, f, proto_dir):
 
 
 def guard_jobs(proto_dir):
+    """G-c: small-contrast linearity at range. The remainder is first order in
+    (eps~ - 1), so eps_r 1.02 against 1.01 (sigma = 0) doubles it. That makes
+    the far-range integrator do real work, unlike eps~ = 1 exactly, which the
+    prototype short-circuits (`k_s == k_o`)."""
     jobs = []
     lam0 = 299792458.0 / 7e6
+    h = 0.15 + 0.15
     for r1 in (4.0, 8.0):
-        for kind, phi in KINDS:
-            h = 0.15 + 0.15
+        for kind, phi in (("HED", 0.0), ("VED", 0.0)):
             rho = math.sqrt((r1 * lam0) ** 2 - h * h)
-            jobs.append((proto_dir, (1.0, 0.0), 7e6, 0.15, 0.15, rho, kind, phi))
+            for er in (1.01, 1.02):
+                jobs.append((proto_dir, (er, 0.0), 7e6, 0.15, 0.15, rho, kind, phi))
     return jobs
 
 
@@ -137,19 +142,19 @@ def main():
 
     with ProcessPoolExecutor(max_workers=args.workers) as ex:
         guard = list(ex.map(_point, guard_jobs(args.proto)))
-        worst_g = max(g["rem"] / g["direct"] for g in guard)
-        print(
-            f"G-a (eps~=1 at 4 and 8 lambda_0): worst |E_rem|/|E_dir| {worst_g:.2e}",
-            flush=True,
-        )
-        for g in guard:
+        ratios = [
+            (guard[k + 1]["rem"] / guard[k]["rem"], guard[k])
+            for k in range(0, len(guard), 2)
+        ]
+        for ratio, g in ratios:
             print(
-                f"   {g['kind']} phi={g['phi']:g} rho={g['rho']:.1f} rem/dir {g['rem'] / g['direct']:.2e} rel {g['rel']:.1e} {g['seconds']:.1f}s",
+                f"G-c {g['kind']} phi={g['phi']:g} rho={g['rho']:.1f}: rem(1.02)/rem(1.01) "
+                f"{ratio:.4f}  rel {g['rel']:.1e}  {g['seconds']:.0f}s",
                 flush=True,
             )
-        if worst_g > 1e-9:
+        if not all(1.9 <= r <= 2.1 for r, _g in ratios):
             raise SystemExit(
-                "G-a missed: the far-range remainder does not collapse at eps~ = 1; stop"
+                "G-c missed: the far-range remainder is not linear in contrast; stop"
             )
         if args.guard_only:
             return
