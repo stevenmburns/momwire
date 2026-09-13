@@ -1,0 +1,9 @@
+start 2026-09-13T12:47:38Z
+{'proto': '/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py', 'proto_sha256': 'a6475b976d5ebc7ec789f9aff105f25917bc5556c0f86b531483a0c811ede094', 'integrator': {'n': 16, 'rtol': 1e-11, 'depth': 14, 'max_panels': 6000, 'detour': 2.0}}
+G-c HED phi=0 rho=171.3: rem(1.02)/rem(1.01) 1.9811  rel 2.9e-08  151s
+G-c VED phi=0 rho=171.3: rem(1.02)/rem(1.01) 1.9842  rel 2.9e-08  103s
+G-c HED phi=0 rho=342.6: rem(1.02)/rem(1.01) 1.9724  rel 5.7e-08  185s
+G-c VED phi=0 rho=342.6: rem(1.02)/rem(1.01) 1.9768  rel 5.7e-08  168s
+end 2026-09-13T13:23:36Z exit 147
+/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/multiprocessing/resource_tracker.py:396: UserWarning: resource_tracker: There appear to be 5 leaked semaphore objects to clean up at shutdown: {'/mp-lvu0_joo', '/mp-f576533g', '/mp-i_r8zszb', '/mp-zn_holn0', '/mp-u789uf26'}
+  warnings.warn(
