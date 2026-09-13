@@ -2384,6 +2384,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         writes its own K >= 3 refusal, since what is ambiguous there differs
         (which branch pair a source drives, which branch pair a load is in).
         """
+        (_arc, basis, k_ends), _target = self._knot_pick(geom, w, arc)
+        return int(basis), int(k_ends)
+
+    def _knot_pick(self, geom, w, arc, *, tap=True):
+        """The :meth:`_feed_knots` entry ``(arc, basis, K)`` a site on wire `w`
+        snaps to, and the arclength it asked for (None resolved to the
+        midpoint). The one snap the feeds, the lumped loads and the placement
+        reports all share."""
         arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
         target = arc if arc is not None else arc_at_knot[-1] / 2.0
         knots = self._feed_knots(geom, w)
@@ -2395,9 +2403,29 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             family=type(self).__name__,
             what="site",
             wire=w,
+            tap=tap,
         )
-        _a, basis, k_ends = knots[pick]
-        return int(basis), int(k_ends)
+        return knots[pick], float(target)
+
+    def _knot_placement(self, geom, w, arc):
+        (placed, _basis, _k_ends), target = self._knot_pick(geom, w, arc, tap=False)
+        return _feed_snap.FeedPlacement(int(w), target, float(placed))
+
+    def feed_placements(self):
+        """Where each entry of ``feeds`` lands: the nearest basis-carrying
+        knot (:meth:`_snap_to_knot`), as one :class:`~momwire.FeedPlacement`
+        per feed, in order (momwire#1059). A request midway between two knots
+        reports the half-cell move the smaller-arclength rule made."""
+        geom = self._build_geometry()
+        return tuple(self._knot_placement(geom, w, arc) for w, arc, _v in self.feeds)
+
+    def load_placements(self):
+        """Where each entry of ``lumped_loads`` lands, through the same snap
+        as the feeds, so a load and a source naming one site report one knot."""
+        geom = self._build_geometry()
+        return tuple(
+            self._knot_placement(geom, w, arc) for w, arc, _z in self.lumped_loads
+        )
 
     # ------------------------------------------------------------------
     # kernel moments

@@ -900,6 +900,26 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         return False
 
+    def feed_placements(self):
+        """Where each entry of ``feeds`` lands, as one
+        :class:`~momwire.FeedPlacement` per feed, in order (momwire#1059).
+
+        A segment gap is its segment, so the centre of the segment the snap
+        chose is reported; a request between two centres reports the half-cell
+        move the smaller-arclength rule made. `SinusoidalGalerkinSolver` under
+        ``feed_model="point"`` reports the point it actually drives instead.
+        """
+        exact = self._feed_placed_at_request()
+        return tuple(
+            _feed_snap.FeedPlacement(w, requested, clamped if exact else centre)
+            for w, requested, clamped, centre in self._build_geometry()["feed_sites"]
+        )
+
+    def _feed_placed_at_request(self):
+        """False: point-matched testing drives a whole segment (the point gap
+        is refused here, momwire#212), so a feed sits at its segment's centre."""
+        return False
+
     def _build_geometry(self):
         """Discretize wires into segments and build the N^-/N^+ neighbor
         tables for every segment, with arc-flip σ signs.
@@ -1081,6 +1101,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # branch and the whole point-matched family ignore it.
         feed_segs = []
         feed_xi = []
+        # (wire, requested, clamped, centre) per feed, for `feed_placements`:
+        # the request as named (None resolved to the midpoint), the arclength
+        # the point gap uses, and the centre of the segment the snap chose.
+        feed_sites = []
         for w_f, arc_req, _v in self.feeds:
             first = wire_first_seg[w_f]
             last = wire_last_seg[w_f]
@@ -1098,6 +1122,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
             feed_segs.append(first + pick)
             feed_xi.append(float(feed_arc - feed_arc_centers[pick]))
+            feed_sites.append(
+                (
+                    int(w_f),
+                    float(arc_req) if arc_req is not None else 0.5 * total_arc,
+                    float(feed_arc),
+                    float(feed_arc_centers[pick]),
+                )
+            )
         # None with feeds=[] — legal only under junction-port drive (#172).
         feed_seg = feed_segs[0] if feed_segs else None
 
@@ -1204,6 +1236,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "feed_seg": feed_seg,
             "feed_segs": feed_segs,
             "feed_xi": feed_xi,
+            "feed_sites": feed_sites,
             "ground_minus": ground_minus,
             "crossing_minus": crossing_minus,
             "crossing_plus": crossing_plus,

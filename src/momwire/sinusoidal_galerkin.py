@@ -4825,6 +4825,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # Galerkin-tested source vector + solve
     # ------------------------------------------------------------------
 
+    def _feed_placed_at_request(self):
+        """Under ``feed_model="point"`` the gap sits where it was named, with
+        the snap's remainder carried in ``feed_xi`` (momwire#648); under
+        ``"segment"`` it is the snapped segment, as in the parent."""
+        return self.feed_model == "point"
+
     def _drive_columns(self, geom, seg_view, k):
         """Unit-voltage Galerkin excitation column per port, (N+P, n_ports),
         ordered [gap feeds…, junction ports…, node ports…].

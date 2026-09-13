@@ -31,6 +31,8 @@ antennaknobs, which is the consumer of this module.
 
 from __future__ import annotations
 
+import math
+import numbers
 from dataclasses import dataclass, field, replace
 from typing import Optional, Protocol, Union
 
@@ -58,14 +60,23 @@ class Cable:
 
 @dataclass(frozen=True)
 class PortOnWire:
-    """Real port ON a named wire of the geometry: `name` matches the label
-    a `build_wires()` tuple carries as its 5th element, and the port is a
-    delta gap at that wire's MIDDLE segment (momwire: the arclength
-    midpoint; PyNEC: segment (n_seg+1)//2 — identical placement for odd
-    segment counts, which named port wires should therefore use). A port
-    must interrupt a current path, so it lives in a wire's interior, never
-    at an endpoint — to put a feed "at" some point of a structure, author
-    a short named wire there.
+    """Real port ON a wire of the geometry: a delta gap on the wire whose
+    `build_wires()` tuple carries that label as its 5th element. By default
+    the port's own `name` is the wire's label and the gap sits at the wire's
+    MIDDLE (momwire: the arclength midpoint; PyNEC: segment (n_seg+1)//2 —
+    identical placement for odd segment counts, which named port wires should
+    therefore use). A port must interrupt a current path, so it lives in a
+    wire's interior, never at an endpoint.
+
+    ``wire`` and ``at`` put it elsewhere (momwire#1059). ``wire`` names the
+    geometry wire when that differs from the port's name, which is how one
+    wire carries several ports: a NEC deck's feed and its `LD` loads, say.
+    ``at`` is a position along that wire as an arclength FRACTION from its
+    authored ``p0``, strictly inside (0, 1); None is the middle. A fraction
+    survives a length knob and a remesh. Turning it into a site a given mesh
+    can carry is the caller's job (antennaknobs chooses segment counts per
+    solver), and every solver reports where each feed actually landed
+    (``feed_placements()``), so a feed never moves silently.
 
     This is the only port type that touches geometry (contrast
     `PortVirtual`, a pure circuit node): it becomes one row/column of the
@@ -91,6 +102,36 @@ class PortOnWire:
 
     name: str
     distributed: bool = False
+    wire: Optional[str] = None
+    at: Optional[float] = None
+
+    def __post_init__(self):
+        if self.wire is not None and not (isinstance(self.wire, str) and self.wire):
+            raise ValueError(
+                f"PortOnWire wire must be a non-empty wire name, got {self.wire!r}"
+            )
+        if self.at is None:
+            return
+        if (
+            isinstance(self.at, bool)
+            or not isinstance(self.at, numbers.Real)
+            or not math.isfinite(self.at)
+            or not 0.0 < self.at < 1.0
+        ):
+            raise ValueError(
+                "PortOnWire at is an arclength fraction strictly between 0 and 1, "
+                f"got {self.at!r}"
+            )
+        if self.distributed:
+            raise ValueError(
+                "PortOnWire(distributed=True) spans its whole wire, so it takes no `at`"
+            )
+        object.__setattr__(self, "at", float(self.at))
+
+    @property
+    def wire_name(self) -> str:
+        """The geometry wire this port sits on: ``wire``, else the port's name."""
+        return self.name if self.wire is None else self.wire
 
 
 @dataclass(frozen=True)

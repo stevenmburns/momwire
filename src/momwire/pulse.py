@@ -734,7 +734,13 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         on a knot — the opposite snap from the tent-basis solvers, and the
         simplest spelling consistent with the house feed conventions.
         """
-        idx = []
+        return [index for index, _placement in self._feed_sites(geom)]
+
+    def _feed_sites(self, geom, *, tap=True):
+        """``[(global basis index, FeedPlacement), ...]``, one per feed: the
+        centroid each feed snaps to and where that puts it, from the one snap
+        the fill and :meth:`feed_placements` share."""
+        sites = []
         for w, arc, _v in self.feeds:
             arc_at_knot = geom["per_wire"][w]["arc_at_knot"]
             target = arc if arc is not None else arc_at_knot[-1] / 2.0
@@ -745,9 +751,25 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 total_arc=float(arc_at_knot[-1]),
                 family=type(self).__name__,
                 wire=w,
+                tap=tap,
             )
-            idx.append(int(geom["seg_offsets"][w] + pick))
-        return idx
+            sites.append(
+                (
+                    int(geom["seg_offsets"][w] + pick),
+                    _feed_snap.FeedPlacement(
+                        int(w), float(target), float(centres[pick])
+                    ),
+                )
+            )
+        return sites
+
+    def feed_placements(self):
+        """Where each entry of ``feeds`` lands: the nearest segment centroid,
+        as one :class:`~momwire.FeedPlacement` per feed, in order
+        (momwire#1059). A request between two centroids reports the
+        half-cell move the smaller-arclength rule made."""
+        geom = self._build_geometry()
+        return tuple(p for _index, p in self._feed_sites(geom, tap=False))
 
     # ------------------------------------------------------------------
     # kernel moments
