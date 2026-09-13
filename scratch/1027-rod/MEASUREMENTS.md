@@ -788,3 +788,72 @@ Same harness as P2b.4. a = 0.1 mm extended to F = 8 (feed 0.625 mm, far
 | P2b.5a | **not blind** — the geometric continuation of P2b.4's own steps: a = 0.1 mm, F = 8 gives −0.86 ± 0.25 pp at L = 0.15 m and −0.26 ± 0.10 pp at L = 0.60 m | pending |
 | P2b.5b | **blind**: at a = 0.05 mm \|ΔR/R\| is below a = 0.1 mm's at every F on both lengths | pending |
 | P2b.5c | **blind**: at a = 0.05 mm, F = 8, \|ΔR/R\| < 0.5 % at L = 0.15 m and < 0.15 % at L = 0.60 m | pending |
+
+### P2b.5 measured
+
+`step2b_uniform_more.py`, `x13/p2b_uniform_more.json`. Same assertions as P2b.4.
+
+| a (mm) | L (m) | F | segs | momwire R | NEC-5 R | ΔR/R |
+|---|---|---|---|---|---|---|
+| 0.10 | 0.15 | 8 | 182 | 2273.25 | 2254.1 | **−0.8425 %** |
+| 0.10 | 0.60 | 8 | 598 | 713.340 | 711.45 | **−0.2649 %** |
+| 0.05 | 0.15 | 1 / 2 / 4 / 8 | 22 / 46 / 92 / 182 | 2663.88 / 2616.83 / 2589.55 / 2571.96 | 2592.9 / 2575.3 / 2563.8 / 2555.0 | **−2.6647 / −1.5869 / −0.9942 / −0.6596 %** |
+| 0.05 | 0.60 | 1 / 2 / 4 / 8 | 74 / 150 / 300 / 598 | 795.398 / 791.165 / 788.659 / 787.024 | 789.71 / 787.50 / 786.30 / 785.45 | **−0.7151 / −0.4632 / −0.2991 / −0.2000 %** |
+
+| id | verdict |
+|---|---|
+| P2b.5a | **HIT** — −0.8425 % against −0.86 ± 0.25; −0.2649 % against −0.26 ± 0.10 (not blind, as registered) |
+| P2b.5b | **HIT** — a = 0.05 mm is below a = 0.1 mm at all eight (F, L) pairs |
+| P2b.5c | **MISSED** — −0.6596 % (bar 0.5) and −0.2000 % (bar 0.15) at F = 8 |
+
+**Convergence, as observations.** The fraction converges more regularly than
+either engine's R. Its successive changes shrink by 0.55, 0.55 per halving at
+L = 0.15 m (both radii) and by 0.60–0.65 at 0.60 m. Each R does not settle as
+cleanly: at a = 0.1 mm, L = 0.15 m, momwire steps −46.2, −28.3, −19.9 Ω
+(ratios 0.61, 0.70) and NEC-5 −20.0, −14.3, −12.4 Ω (0.72, 0.87). So the
+individual limits are not pinned, and NEC-5's source convergence is the slower
+one. A geometric continuation of the fraction's own steps gives:
+
+| L (m) | a = 0.5 mm | a = 0.1 mm | a = 0.05 mm |
+|---|---|---|---|
+| 0.15 | (three F only) | −0.45 % | −0.24 % |
+| 0.60 | (three F only) | −0.12 % | −0.05 % |
+
+## Provisional verdict (pending P2b.6)
+
+**#1027's −1.20 % is not a converged disagreement between the two engines.**
+Along two axes — the source-region mesh (F) and the wire radius against the
+segment length (a/Δ) — both engines' R move toward each other on every ladder
+measured (P2b.4, P2b.5, P2c.2), at different rates: momwire's R moves faster
+under source refinement, and both converge faster at smaller a. The fraction
+falls monotonically in F and in a, and its continuation tends toward zero as a
+shrinks. #1027's constant −1.20 % is that rate difference, read at a source
+region frozen at 5 mm segments on a 0.5 mm wire. That geometry is fixed in
+metres, which is why the fraction was invariant in σ, depth and frequency and
+moved only with L.
+
+Excluded on the way, each by measurement: the interface (P2a.2, P2a.1′), the
+soil and its loss (P2a.3′), the per-engine feed parity (P2b.1, 2e-12), the
+reduced-against-extended kernel (P2c.1′, ≤ 0.22 pp), and each engine's reading
+of R from its own currents (P2f.1/2 within 0.75 %; P2f.4a to 3e-5). No defect
+in either engine is shown. The two axes a user must refine to see the engines
+agree are the fed segment with its neighbours, and a/Δ.
+
+Not shown, and not claimed: that the two limits coincide exactly. The
+continuation is geometric on four points per series.
+
+**Follow-up, not a U7 rung (raised on review).** momwire's R moves 40–50 Ω per
+source halving on the 0.15 m rod. Whether the app's default feed mesh for the
+catalog's wholly buried fed elements sits inside or outside that sensitive
+region is a separate antennaknobs question, to be filed after this verdict if
+the answer is "inside".
+
+### P2b.6 — one more halving at the smallest radius (registered before the run)
+
+a = 0.05 mm, F = 16 (feed 0.3125 mm, far 0.195 mm, Δ/a ≥ 3.9), L = 0.15 and
+0.60 m, same harness and assertions.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2b.6a | **not blind** — the continuation of P2b.5's own steps: −0.48 ± 0.10 % at L = 0.15 m, −0.14 ± 0.05 % at 0.60 m | pending |
+| P2b.6b | **blind**: the change from F = 8 to F = 16 is smaller than from F = 4 to F = 8 at both lengths | pending |

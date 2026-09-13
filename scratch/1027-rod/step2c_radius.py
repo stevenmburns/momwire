@@ -56,7 +56,9 @@ class RadiusRod(SourceRefinedRod):
 def build(medium, L, refine, f, a):
     b = RadiusRod()
     b.nominal_nsegs = 42
-    b.design_eps_r, b.design_sigma = (13.0, 0.005) if medium == "soilA" else (EPS_R, 0.0)
+    b.design_eps_r, b.design_sigma = (
+        (13.0, 0.005) if medium == "soilA" else (EPS_R, 0.0)
+    )
     b.rod_len, b.rod_depth, b.refine, b.source_f, b.radius_m = L, 0.20, refine, f, a
     if medium == "free":
         b.freq = float(b.freq) * math.sqrt(EPS_R)
@@ -70,7 +72,9 @@ def check_radius(b, g, a):
     mw = eng._wire_radius
     mw_set = {float(mw)} if not hasattr(mw, "__len__") else {float(x) for x in mw}
     if radii != {a} or mw_set != {a}:
-        raise RuntimeError(f"radius not carried: NEC-5 {radii}, momwire {mw_set}, asked {a}")
+        raise RuntimeError(
+            f"radius not carried: NEC-5 {radii}, momwire {mw_set}, asked {a}"
+        )
     return eng, deck
 
 
@@ -88,7 +92,9 @@ def row(medium, L, refine, f, a):
         zm = complex(eng.impedance()[0]) / scale
         zn = s2.nec5_z(deck) / scale
     segs = sum(int(ln.split()[2]) for ln in deck.splitlines() if ln.startswith("GW "))
-    return dict(refine=refine, segs=segs, momwire=str(zm), nec5=str(zn), dR=zn.real - zm.real)
+    return dict(
+        refine=refine, segs=segs, momwire=str(zm), nec5=str(zn), dR=zn.real - zm.real
+    )
 
 
 def main():
