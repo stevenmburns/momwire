@@ -692,3 +692,99 @@ row is read. Segment counts and the knot source are asserted equal on both
 engines at every rung. Competing outcome for P2b.4b: fractions at a = 0.1 mm
 much smaller than at 0.5 mm put the disagreement in the strained-thin-wire
 regime after all, and 2(c)'s radius axis carries it.
+
+### P2c.1′ measured — split; the kernel is not the carrier either way
+
+`step2c_kernel.py free`, `x13/p2c_kernel_free.json`. Scaled free space,
+Richardson 8 → 16.
+
+| L (m) | momwire R∞ reduced | extended | Δ | NEC-5 R∞ | ΔR/R reduced | extended | R/R_tri reduced / extended / NEC-5 |
+|---|---|---|---|---|---|---|---|
+| 0.15 | 0.00861823 | 0.00859848 | −0.229 % | 0.0079103 | −8.2365 % | −8.0186 % | 0.95953 / 0.95733 / 0.88071 |
+| 0.60 | 0.133274 | 0.133203 | −0.053 % | 0.12995 | −2.4960 % | −2.4434 % | 0.92740 / 0.92690 / 0.90427 |
+
+| id | verdict |
+|---|---|
+| C2c.1 | **MET** — the switch moved R on all four rungs |
+| P2c.1′ | **SPLIT** — L = 0.60 m hits (0.053 %, 0.053 pp, both < 0.1); L = 0.15 m misses both bars (0.229 %, 0.218 pp) |
+
+The miss is in the size of a small number. At its largest the extended kernel
+moves the fraction by 0.22 pp of an 8.24 % disagreement. **The reduced/extended
+kernel choice does not carry the disagreement.**
+
+### P2b.4 measured — the clean source ladder at two radii
+
+`step2b_uniform.py`, `x13/p2b_uniform.json`. Every segment ÷F, panel
+boundaries held, ports matched, soil A. F = 1 at a = 0.5 mm reproduced #1027's
+refine-8 deck sha, and the radius, segment counts and knot source were asserted
+on both engines at every rung. The far mesh refines with F, so there is no
+separate far Richardson here: each row is one mesh.
+
+| a (mm) | L (m) | F | segs | momwire R | NEC-5 R | ΔR/R |
+|---|---|---|---|---|---|---|
+| 0.5 | 0.15 | 1 / 2 / 4 | 22 / 46 / 92 | 1672.68 / 1621.59 / 1579.08 | 1611.0 / 1578.2 / 1546.8 | **−3.6875 / −2.6757 / −2.0440 %** |
+| 0.5 | 0.60 | 1 / 2 / 4 | 74 / 150 / 300 | 550.818 / 545.211 / 540.356 | 544.47 / 540.26 / 536.48 | **−1.1525 / −0.9081 / −0.7173 %** |
+| 0.1 | 0.15 | 1 / 2 / 4 | 22 / 46 / 92 | 2367.69 / 2321.47 / 2293.19 | 2300.8 / 2280.8 / 2266.5 | **−2.8250 / −1.7517 / −1.1640 %** |
+| 0.1 | 0.60 | 1 / 2 / 4 | 74 / 150 / 300 | 722.351 / 718.003 / 715.284 | 716.70 / 714.22 / 712.69 | **−0.7823 / −0.5269 / −0.3627 %** |
+
+| id | verdict |
+|---|---|
+| P2b.4a | **HIT** — \|ΔR/R\| falls monotonically with F in all four columns |
+| P2b.4b | **MISSED** — at F = 4 the radii differ by 0.88 pp at L = 0.15 m (bar 0.5) and 0.35 pp at 0.60 m (bar 0.2). The registered competing outcome holds: the smaller radius carries a smaller fraction at every F, so the strained-thin-wire regime carries part of the disagreement |
+| P2b.4c | **HIT** — at a = 0.5 mm momwire's steps are −51.1 / −42.5 Ω (L = 0.15 m) and −5.61 / −4.86 Ω (0.60 m) against NEC-5's −32.8 / −31.4 and −4.21 / −3.78 |
+
+Step ratios, each engine's second step over its first (observations):
+
+| a (mm) | L (m) | momwire | NEC-5 |
+|---|---|---|---|
+| 0.5 | 0.15 | 0.83 | 0.96 |
+| 0.5 | 0.60 | 0.87 | 0.90 |
+| 0.1 | 0.15 | 0.61 | 0.72 |
+| 0.1 | 0.60 | 0.63 | 0.62 |
+
+Both engines converge faster at the smaller radius, and at a = 0.5 mm NEC-5's
+steps barely shrink. Compared across radii only as fractions, never as R: R
+itself changes with a.
+
+### P2c.2 measured — MISSED as registered: monotone in a, but it plateaus with the source frozen
+
+`step2c_radius.py soilA`, `x13/p2c_radius_soilA.json`. #1027's deck at F = 1,
+far Richardson 8 → 16, radius asserted on both engines.
+
+| L (m) | a = 0.5 | 0.15 | 0.05 | 0.015 mm |
+|---|---|---|---|---|
+| 0.15 (Ω = 11.4 → 18.4) | −3.8933 % | −3.1479 % | −2.8271 % | −2.6220 % |
+| 0.60 (Ω = 14.2 → 21.2) | −1.2032 % | −0.8832 % | −0.7536 % | −0.6743 % |
+
+| id | verdict |
+|---|---|
+| P2c.2 | **MISSED** — the monotone half holds; the thresholds (< 1.0 %, < 0.3 % at a = 0.015 mm) do not: −2.62 % and −0.67 % |
+
+With the source region frozen at #1027's 5 mm, shrinking the radius removes
+roughly a third of the fraction at L = 0.15 m and roughly half at 0.60 m, then
+flattens. P2b.4 shows the rest falling under source refinement.
+
+### Where step 2 points, as an observation not yet a verdict
+
+The −1.20 % behaves like two approximation errors that the two engines carry in
+different amounts, not like a converged physical difference. One is the source
+region's discretization: it falls with F, faster in momwire's R. The other is
+the thin-wire regime at small Δ/a: it falls as a shrinks. Both are geometric,
+fixed in metres against a fixed radius, which is consistent with #1027's
+fraction being invariant in σ, depth and frequency and moving only with L.
+
+A geometric continuation of each engine's own P2b.4 steps at a = 0.1 mm puts
+the converged fraction near −0.8 % at L = 0.15 m and −0.07 % at 0.60 m. Three
+points per series and two ratios; indicative only. P2b.5 tests it.
+
+### P2b.5 — carry the clean ladder further (registered before the run)
+
+Same harness as P2b.4. a = 0.1 mm extended to F = 8 (feed 0.625 mm, far
+0.39 mm, Δ/a ≥ 3.9); and a new radius, a = 0.05 mm, at F = 1 / 2 / 4 / 8
+(Δ/a ≥ 7.8 everywhere). L = 0.15 and 0.60 m.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2b.5a | **not blind** — the geometric continuation of P2b.4's own steps: a = 0.1 mm, F = 8 gives −0.86 ± 0.25 pp at L = 0.15 m and −0.26 ± 0.10 pp at L = 0.60 m | pending |
+| P2b.5b | **blind**: at a = 0.05 mm \|ΔR/R\| is below a = 0.1 mm's at every F on both lengths | pending |
+| P2b.5c | **blind**: at a = 0.05 mm, F = 8, \|ΔR/R\| < 0.5 % at L = 0.15 m and < 0.15 % at L = 0.60 m | pending |
