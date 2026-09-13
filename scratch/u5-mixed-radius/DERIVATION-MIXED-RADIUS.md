@@ -13,7 +13,7 @@ Nothing in `src/momwire` is touched. Status marks as in the phase-2 records:
 check in this directory, **[open]** = awaiting one. NEC-5 appears only as
 conclusions verified against our licensed materials.
 
-## 0. The result so far in one paragraph (updated after check 2)
+## 0. The result so far in one paragraph (updated after check 2; SUPERSEDED by step (b), see the note that follows)
 
 Every place the crossing fill uses a radius reads one scalar,
 `CrossingContext.a_wire` = `_radius_per_wire[0]`: the cross tables' pair
@@ -30,6 +30,14 @@ rule is the shipped spelling. **Check 2 pins it at the row level** (§4′): obs
 the only rule under which continuity still emerges at a two-radius node
 (KCL 3e-8); source-side and the harmonic mean break it, and the naive
 one-radius spelling is off by ≈ 8 Ω.
+
+**Note after step (b) and its diagnosis (MEASUREMENTS.md).** Against NEC-5,
+observer-side is wrong. Its R responds to the radius above the node the way the
+physics responds to the rise's radius, through a shift ∝ −ln(a_A/a_B). The
+plumbing is sound (D0, D1 and D2i hit), so the rule itself is at fault. Check
+2's uniqueness holds on check 2's rod only, because continuity does not
+discriminate the rules on step (b)'s rod. The "≈ 8 Ω" was measured against
+observer-side, not against a reference. The derivation is reopened in §8.
 
 ## 1. Where the one radius enters [derived from src, 1dbd384 ≡ 42112b9 in src/]
 
@@ -170,7 +178,7 @@ For each crossing node, with a_X the radius of member X:
 - Whether N below members of differing radii need anything beyond per-member
   self completions (the fan).
 EOF
-## §4′ — check 2 measured, and the correction it forces [pinned]
+## §4′ — check 2 measured, and the correction it forces [pinned on check 2's rod only; the rule is refuted against NEC-5 by step (b)]
 
 `check2_continuity.py`, `check2.log`, `check2.json`. Crossing rod, a_A = 1 mm,
 node KCL deficit \|I(0⁺) − I(0⁻)\| / \|I(0⁺)\| and slope ratio against 1/ε̃:
@@ -228,6 +236,8 @@ the row level on a momwire-native two-radius crossing rod. It goes to (b), the
 two-engine ladder, with the source region refined as its own axis and currents
 read beside Z.
 
+**Status after (b): refuted against NEC-5.** See the §0 note and §8.
+
 ## §7 — the gate for the eventual src PR [registered 2026-09-13, before any src change]
 
 The momwire PR that lifts the refusal and implements §5 is gated on all three:
@@ -244,3 +254,38 @@ The momwire PR that lifts the refusal and implements §5 is gated on all three:
    assert the KCL deficit at a two-radius crossing node (observer-side reads
    ~3e-8, source-side ~0.6–0.9) and the slope ratio against 1/ε̃ (observer-side
    within ~5e-4), so that a future transpose regression fails a test.
+
+## §8 — reopened after step (b) [2026-09-13; timeboxed]
+
+**What is established.** The buried same-medium family carries mixed radii
+correctly: D1 matches NEC-5 to 1.2 %, D2i to 0.3 %, and D0 confirms the per-row
+radii reach the kernels. A uniform radius through the whole crossing fill hardly
+moves Z (4–13 mΩ), and on step (b)'s rod it tracks NEC-5. Observer-side's mixing
+moves Z by −k·ln(a_A/a_B), where k is the physics' own coefficient for the
+rise's radius. In effect, the rise's radius term is replaced by the above wire's.
+
+**The question.** Each completion term in §1's list exists to complete a
+same-medium block that was filled with a thin-wire kernel at that block's
+per-row radius. So:
+
+- which radius does each term need so that it completes its own block rather
+  than a neighbouring one?
+- which term, under observer-side, removes a ln a_B part and restores a ln a_A
+  part, or the reverse?
+
+The candidates are the cross tables' ρ_eff = √(ρ² + a²), the self completions'
+closed-form G at √(‖Δr‖² + a²), and the corner V(a). The node grading depends
+on the radius only through the quadrature, not through the integrand. §3's
+static cancellation fixes only the O(1/a) content. An O(ln a) mismatch passes
+check 1 by construction, and item 1 of the diagnosis is O(ln a).
+
+**Rules for this unit.**
+
+- Derive first; register an identity check before measuring any spelling.
+- Adopt nothing because it tracks NEC-5. `single_B` doing so is an observation.
+- A derived rule must still explain why a uniform fill radius hardly moves Z on
+  both rods.
+
+**Timebox.** If the source of the ln(a_A/a_B) term is not identified within
+about two working days of 2026-09-13, stop and write up what is known instead.
+Step (c) stays parked until then.

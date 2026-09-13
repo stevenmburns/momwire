@@ -1,0 +1,5 @@
+{'mode': 'd1', 'nec5_exe': '/home/smburns/nec5-timing/nec5cl-x13-static', 'nec5_sha256': '7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3'}
+d1 a=0.2500 mm  R_inf momwire 624.9761  NEC-5 618.8100  response momwire +0.000  NEC-5 +0.000  ratio nan
+d1 a=0.1250 mm  R_inf momwire 658.7388  NEC-5 652.9800  response momwire +33.763  NEC-5 +34.170  ratio 0.988
+d1 a=0.0625 mm  R_inf momwire 693.0735  NEC-5 686.7100  response momwire +68.097  NEC-5 +67.900  ratio 1.003
+saved scratch/u5-mixed-radius/diag_d1.json
