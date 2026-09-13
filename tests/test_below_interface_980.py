@@ -93,9 +93,11 @@ def test_g980c_2_both_trunks_route_through_the_shared_scope_check(monkeypatch):
     seen = []
     real = BI.crossing_junctions
 
-    def spy(media, groups, grounded, polylines, ground_z, radii):
-        seen.append((tuple(media), len(list(groups)), set(grounded)))
-        return real(media, groups, grounded, polylines, ground_z, radii)
+    def spy(media, groups, grounded, polylines, ground_z, radii, **kw):
+        seen.append(
+            (tuple(media), len(list(groups)), set(grounded), kw.get("two_radius"))
+        )
+        return real(media, groups, grounded, polylines, ground_z, radii, **kw)
 
     monkeypatch.setattr(BI, "crossing_junctions", spy)
     build = crossing_deck(1)
@@ -111,6 +113,10 @@ def test_g980c_2_both_trunks_route_through_the_shared_scope_check(monkeypatch):
     assert len(seen) == 2, seen
     assert seen[0][0] == seen[1][0], "media labels differ between trunks"
     assert seen[0][2] == seen[1][2], "grounded sets differ between trunks"
+    # antennaknobs plan U5: only BSpline opts into the two-radius node; razor's
+    # crossing fill was not measured under the rule and keeps the refusal.
+    assert seen[0][3] is True, seen
+    assert seen[1][3] is None, seen
 
 
 def test_g980c_2b_the_scope_refusals_are_the_shared_functions(monkeypatch):
