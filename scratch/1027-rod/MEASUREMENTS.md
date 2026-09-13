@@ -652,3 +652,43 @@ live where the thin-wire approximation is strained. P2c.2 moving but P2c.1 not
 would point at the basis (linear against degree 2) rather than the kernel.
 Scaled free space (lossless, R against R_tri) runs beside both as a reading,
 not a verdict.
+
+### The kernel each engine actually ran — resolved on the solver, not read from a docstring
+
+- **momwire: the reduced kernel, in every #1027 row and every run in this
+  record.** `BSplineSolver.__init__` defaults `extended_kernel=False` at
+  1dbd384, and the solved solver reports `extended_kernel = False` on the
+  buried rod (soil A) and on the scaled free-space rod alike.
+- **NEC-5: its own surface-current thin-wire kernel** (above; verified against
+  our licensed materials). It is neither momwire's reduced nor its extended
+  kernel.
+
+### P2c.1 withdrawn — momwire refuses the extended kernel below ground
+
+`MomwireEngine(extended_kernel=True)` on the buried rod raises
+`NotImplementedError: extended_kernel=True + a wire below the ground plane is
+not served`: the extended kernel's grouping has not been measured across two
+media (momwire#553). That is a refusal by name, not a result, so **P2c.1 as
+registered cannot run** and is withdrawn. C2c.1 on soil A is withdrawn with it.
+
+**An incidental reading from the check that found the refusal. Seen before any
+replacement is registered, so not blind.** Scaled free space, L = 0.60 m,
+refine 8: reduced 0.4799148503−3926.092613j, extended 0.4798426862−3927.345592j.
+The switch reached the solver (`extended_kernel = True` resolved), and it
+moves R by −1.5e-4 relative and X by +3.2e-4. The free-space disagreement it
+would have to explain is 2.5 % of R.
+
+### Registered before the runs
+
+| id | prediction | verdict |
+|---|---|---|
+| P2c.1′ | scaled free space, momwire reduced against extended kernel, refine 8 → 16, L = 0.15 and 0.60 m: the extended kernel moves momwire's R∞ by < 0.1 % and \|ΔR/R\| by < 0.1 pp at both lengths. **Not blind at 0.60 m, refine 8** (−1.5e-4 seen); blind at 0.15 m and in the Richardson values. C2c.1 (not bit-identical) is read from the same run | pending |
+| P2b.4a | **the clean source ladder**: every segment ÷F with the graded panel boundaries held (`per_panel` = 2F, feed wire 2F segments, `rest_h` = 3.125 mm / F), ports matched, soil A, d = 0.2 m, F = 1 / 2 / 4, at a = 0.5 mm and a = 0.1 mm. **Blind**: \|ΔR/R\| falls monotonically with F at both radii and both lengths | pending |
+| P2b.4b | **blind — the Δ/a separation**: at F = 4 the fraction at a = 0.5 mm (far and source Δ/a falling to 1.6 and 2.5) and at a = 0.1 mm (Δ/a ≥ 7.8 everywhere) agree within 0.5 pp at L = 0.15 m and within 0.2 pp at L = 0.60 m — the Δ/a < 3 regime does not carry the disagreement | pending |
+| P2b.4c | **not blind** (P2b.3 showed it on a confounded ladder): at a = 0.5 mm momwire's R moves more per step than NEC-5's | pending |
+
+F = 1 at a = 0.5 mm must reproduce #1027's refine-8 deck sha before any other
+row is read. Segment counts and the knot source are asserted equal on both
+engines at every rung. Competing outcome for P2b.4b: fractions at a = 0.1 mm
+much smaller than at 0.5 mm put the disagreement in the strained-thin-wire
+regime after all, and 2(c)'s radius axis carries it.
