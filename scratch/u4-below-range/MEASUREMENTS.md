@@ -594,3 +594,42 @@ are recorded as not run.
    serve plan and die with an AssertionError at `_crossing_fill.py:1218`.
 
 This PR removes none of the three.
+
+### The src PR guards, measured [`src_guards.py`, `src_guards.log`; 2026-09-13]
+
+Each guard ran in its own process, with one momwire tree first on PYTHONPATH
+and antennaknobs' venv interpreter throughout.
+
+| guard | result |
+|---|---|
+| G-B, C++ projection | **HIT.** `fan_rise_deck()` (soil A, inside the cap) reads 148.62141279270838−29.791702667735215j on main and on the branch, bit-identical. "Main" here is the branch's src tree with origin/main's four edited `.py` files restored, so both runs share one set of compiled accelerators and differ only in the Python this PR edits |
+| G-B, numpy projection | **HIT.** 148.6214127927059−29.79170266773472j on both, bit-identical (89 s and 85 s) |
+| G-N | **HIT.** Native `extended` at r = 1 reads 69.62293392355062+40.698548293367374j, against antennaknobs' 69.62293392355063+40.69854829336737j: \|Δ\| = 1.6e-14 Ω, bar 1e-6. The captured kwargs are the measured deck, and the feed amplitude (1 here, 0j at antennaknobs' construction) does not move Z beyond roundoff |
+| G-X | **HIT.** Branch `shipped` at r = 1 reads 69.62292450000115+40.69857828142006j, against `z_gate.py`'s `zeroed` 69.62292450000115+40.698578281420055j: \|Δ\| = 7.1e-15 Ω, bar 1e-9. A grid tabulated only to 4 λ_m and zeroing past it reproduces the zeroed-on-an-extended-grid answer, so D1's claim that a grid tabulated further interpolates identically inside 4 λ_m holds |
+
+**PB is a HIT.**
+
+**A harness defect in T1/T2, caught by T1's own guard before δ was read.**
+- **The symptom.** The first run failed the extended-grid guard on both
+  trunks. Under a cap patched to 5, the `extended` spelling's grid read
+  4.0 λ_m, and its Z was bit-identical to `shipped`.
+- **The cause.** `get_grid_below` keys its cache on the 1.25ⁿ R1 bucket, not
+  on the cap. 4.0 and 4.75 λ_m both round up to 4.768, so the cache handed
+  the extended solve the shipped grid.
+- **The fix.** The test now evicts the shipped grids before the extended
+  spelling, and drops the extended grids at teardown. The fixture docstring
+  said no shipped plan could ask for that bucket; that was wrong, and it is
+  corrected.
+- **The record's numbers are unaffected.** `z_gate.py delta` ran both
+  spellings on the extended cap, since its `zeroed` spelling zeroes on an
+  extended grid, and every ladder rung ran in its own process. G-X above
+  also reproduces the zeroed number from a fresh process at the shipped cap.
+
+T4 (`test_gu5_6_a_buried_structure_past_the_below_cap_is_served`) and the
+re-pointed `test_g1135_4` both PASS, at 19 s and 30 s of call time.
+
+**Amendment: the screen extension's wall-clock budget, fixed before any
+extension row reported.** The registration said unfinished rows are recorded
+as not run, but named no budget. Only the G-c guard has printed so far, and it
+hit: rem(1.02)/rem(1.01) = 1.972–1.984. The budget is **4 h from the run's
+start at 12:47:38Z**. Rows unfinished at 16:47Z are recorded as not run.

@@ -1,0 +1,14 @@
+start 2026-09-13T13:05:12Z
+## PYTHONPATH=/tmp/claude-1000/-home-smburns-stevenmburns-antennaknobs/4bc1762f-3e83-4075-a0aa-39db96d1bb1e/scratchpad/gb_main/src gb
+{"momwire": "/tmp/claude-1000/-home-smburns-stevenmburns-antennaknobs/4bc1762f-3e83-4075-a0aa-39db96d1bb1e/scratchpad/gb_main/src/momwire/__init__.py", "mode": "gb", "numpy": false, "refine": 1, "cap": 4.0, "solver": "bspline", "z": "(148.62141279270838-29.791702667735215j)", "seconds": 2.9}
+## PYTHONPATH=/home/smburns/stevenmburns/momwire-wt-u4src/src gb
+{"momwire": "/home/smburns/stevenmburns/momwire-wt-u4src/src/momwire/__init__.py", "mode": "gb", "numpy": false, "refine": 1, "cap": 4.0, "solver": "bspline", "z": "(148.62141279270838-29.791702667735215j)", "seconds": 2.6}
+## PYTHONPATH=/home/smburns/stevenmburns/momwire-wt-u4src/src native --refine 1 --cap 4
+{"momwire": "/home/smburns/stevenmburns/momwire-wt-u4src/src/momwire/__init__.py", "mode": "native", "numpy": false, "refine": 1, "cap": 4.0, "solver": "bspline", "z": "(69.62292450000115+40.69857828142006j)", "seconds": 12.1}
+## PYTHONPATH=/home/smburns/stevenmburns/momwire-wt-u4src/src native --refine 1 --cap 5
+{"momwire": "/home/smburns/stevenmburns/momwire-wt-u4src/src/momwire/__init__.py", "mode": "native", "numpy": false, "refine": 1, "cap": 5.0, "solver": "bspline", "z": "(69.62293392355062+40.698548293367374j)", "seconds": 12.0}
+## PYTHONPATH=/tmp/claude-1000/-home-smburns-stevenmburns-antennaknobs/4bc1762f-3e83-4075-a0aa-39db96d1bb1e/scratchpad/gb_main/src gb --numpy
+{"momwire": "/tmp/claude-1000/-home-smburns-stevenmburns-antennaknobs/4bc1762f-3e83-4075-a0aa-39db96d1bb1e/scratchpad/gb_main/src/momwire/__init__.py", "mode": "gb", "numpy": true, "refine": 1, "cap": 4.0, "solver": "bspline", "z": "(148.6214127927059-29.79170266773472j)", "seconds": 89.4}
+## PYTHONPATH=/home/smburns/stevenmburns/momwire-wt-u4src/src gb --numpy
+{"momwire": "/home/smburns/stevenmburns/momwire-wt-u4src/src/momwire/__init__.py", "mode": "gb", "numpy": true, "refine": 1, "cap": 4.0, "solver": "bspline", "z": "(148.6214127927059-29.79170266773472j)", "seconds": 85.1}
+end 2026-09-13T13:08:41Z
