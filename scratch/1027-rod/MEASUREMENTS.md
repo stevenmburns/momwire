@@ -303,3 +303,62 @@ at 25.599414 MHz, refine 16, L = 0.15 / 0.60 / 2.40 m.
 Bar: a 1° midpoint rule on a sin³θ integrand is good to ~1e-5, and NEC-5
 prints six figures, so 1e-3 is about 20× the numerical floor on both sides. If
 both pass, power balance names no side; if one fails, it names that one.
+
+### P2f.1 / P2f.2 measured — both MISSED the 1e-3 bar, at a size that still decides something
+
+`step2f_power_balance.py` on x13-static, `x13/p2f_power_balance.json`.
+
+| L (m) | momwire P_rad / P_in | NEC-5 average power gain | NEC-5 averaging solid angle |
+|---|---|---|---|
+| 0.15 | 0.992521 | 0.994712 | 1.4869π |
+| 0.60 | 1.001870 | 0.994762 | 1.4869π |
+| 2.40 | 0.999196 | 0.994780 | 1.4869π |
+
+| id | verdict |
+|---|---|
+| P2f.1 | **MISSED** at 0.15 m (−7.5e-3) and 0.60 m (+1.9e-3); met at 2.40 m |
+| P2f.2 | **MISSED** at all three (−5.2e-3) |
+
+**The NEC-5 miss is at least partly my instrument.** The averaging ran over
+1.4869π steradians, not the 2π hemisphere the RP spelling (90 θ × 4 φ,
+cell-centred) was meant to cover: NEC-5 averages over the region its sample
+points span, so four φ samples cover 270° and the θ samples 0.5–89.5°. A
+reading that is the same to 7e-5 at three different lengths is what a fixed
+weighting error looks like, not an engine error. I have not pinned NEC-5's
+weighting, so 0.9947 is not interpretable at the 1e-3 level.
+
+**The momwire miss has a plausible instrument cause I have not tested.** Its
+far field is built from segment-midpoint dipoles, and the midpoint current is
+the mean of the two knot currents. That is exact for a linear current but not
+across the slope reversal at the feed, which matters most on the shortest rod.
+It is non-monotone in L and could also be the solve.
+
+**What the miss sizes, which the bar did not need to get right.** Each engine's
+R_in is consistent with its own radiated power to within 0.75 % at every
+length. The disagreement being adjudicated is 8.2 % at 0.15 m and 2.5 % at
+0.60 m. If either engine's R_in were that far out of line with the currents it
+solved for, its average gain would be off by the same 8 % or 2.5 %. Neither
+is. So power balance names no side, and it moves the question: **the two
+engines agree about how to read R from a current and disagree about the
+current.**
+
+### P2f.4 — where along the rod the currents differ (registered before the run)
+
+Free space at 25.599414 MHz, refine 16, L = 0.15 and 0.60 m, one deck mesh for
+both engines. NEC-5's printed segment-centre currents; momwire's spline current
+evaluated at the same arc positions. Everything is normalised to each engine's
+own feed current. m = Σ I·Δ / I_feed, the current moment a short dipole's far
+field depends on.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2f.4a | self-consistency: R_NEC-5 / R_momwire = \|m_NEC-5 / m_momwire\|² to within 2e-2 at L = 0.15 m (moment-only far field, kL = 0.08) | pending |
+| P2f.4b | **blind localisation**: more than half of m_momwire − m_NEC-5 comes from within 15 mm of the feed gap, not from along the rod or from its ends | pending |
+
+The competing outcomes for P2f.4b, written down first: difference concentrated
+at the rod's ends points to the end treatment or radius (2(c)); difference
+spread evenly along the rod points to the kernel; difference at the feed points
+to the feed spelling (2(b)). #1027's fraction tracks roughly −0.6 to −0.8 × the
+10 mm feed wire's share of L, and AK `scratch/g1b-bs1-bs2/RESULTS.md` found an
+electrically short dipole's Z moving several percent with the fed segment's
+length in any medium. That is why the prediction points at the feed.
