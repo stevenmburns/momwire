@@ -1,0 +1,25 @@
+== make test
+   31.50s  tests/test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113] <-- OVER HARD CEILING
+   24.31s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[monopole-vgood] <-- OVER HARD CEILING
+   23.68s  tests/test_extended_kernel_galerkin.py::test_gs2_the_sommerfeld_ground_does_not_move_the_cross_basis_mismatch[fat contact-bspline] <-- OVER HARD CEILING
+   23.33s  tests/test_extended_kernel_galerkin.py::test_gs2_lifted_fat_wire_shift_is_within_the_cross_basis_bar[somm sea-bspline] <-- OVER HARD CEILING
+   23.20s  tests/test_extended_kernel_bspline.py::test_g16b_finite_ground_does_not_move_the_pec_mismatch[mono_contact-sommerfeld sea] <-- OVER HARD CEILING
+   20.79s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[bent-sommerfeld sea] <-- OVER HARD CEILING
+FAILING: 6 test(s) over the 20s HARD ceiling. This is not advisory.
+FAILED tests/test_below_interface_980.py::test_g980c_2_both_trunks_route_through_the_shared_scope_check
+= 1 failed, 5109 passed, 17 skipped, 4 xfailed, 51 warnings in 291.19s (0:04:51) =
+== make slow
+=========== 338 passed, 7 skipped, 35 warnings in 734.43s (0:12:14) ============
+== make crossgate
+============ 36 passed, 1 skipped, 5 warnings in 409.38s (0:06:49) =============
+== make test (rerun after e88d4d6)
+   30.41s  tests/test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113] <-- OVER HARD CEILING
+   23.44s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[horizontal-sommerfeld sea] <-- OVER HARD CEILING
+   23.28s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[mono_contact-sommerfeld sea] <-- OVER HARD CEILING
+   23.27s  tests/test_extended_kernel_bspline.py::test_g18_reduced_sommerfeld_remainder_is_negligible[bent-sea] <-- OVER HARD CEILING
+   23.21s  tests/test_extended_kernel_bspline.py::test_g16b_finite_ground_does_not_move_the_pec_mismatch[bent-sommerfeld sea] <-- OVER HARD CEILING
+   23.12s  tests/test_extended_kernel_bspline.py::test_g16b_finite_ground_does_not_move_the_pec_mismatch[mono_lifted-sommerfeld sea] <-- OVER HARD CEILING
+   22.95s  tests/test_extended_kernel_bspline.py::test_g16b_finite_ground_does_not_move_the_pec_mismatch[mono_contact-sommerfeld sea] <-- OVER HARD CEILING
+   22.04s  tests/test_extended_kernel_bspline.py::test_g17_hmatrix_agrees_with_the_dense_path_over_finite_ground[sommerfeld sea-32-False] <-- OVER HARD CEILING
+FAILING: 8 test(s) over the 20s HARD ceiling. This is not advisory.
+===== 5110 passed, 17 skipped, 4 xfailed, 53 warnings in 277.48s (0:04:37) =====
