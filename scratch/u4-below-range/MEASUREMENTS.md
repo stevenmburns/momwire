@@ -728,3 +728,39 @@ ceiling trips on origin/main as well.**
   change.
 - **The edited-tests clause stays a MISS** (`test_g910_2b`).
 - **Still to run:** `make slow` (running, `-n 4`) and `make crossgate`.
+
+## After #1053: PT3's slow lane, and the rebase [2026-09-13]
+
+#1053 merged as fe5e1ad; this record continues on the follow-up branch.
+
+**PT3, the slow lane.** Run on the pre-rebase head e9153d0 with `-n 4`:
+339 passed, 7 skipped, 1 failed.
+- **The one failure predates this change.** It is
+  `test_seam_crossing_667.py::test_portal_ge_minus_one_still_wants_the_interpolated_card`.
+  Run alone, it fails the same way on three trees, 6 s each:
+  - b284b17, the src PR's base;
+  - main 90b0887, which carries #1054 and #1055;
+  - the branch.
+- **Why it fails.** The test assumes the NEC-2 portal refuses GE -1 on the
+  split deck and asks for GE 1. U3 (momwire#1052, 553d671) made that deck a
+  served case, and main's CI test-slow lane has been red on this test alone
+  ever since.
+- **Who fixes it.** Its owner is fixing it in a separate PR; it is not touched
+  here.
+- **Verdict:** PT3's slow clause is a HIT, apart from that pre-existing
+  failure.
+
+**The rebase.** #1054 and #1055 merged while these lanes ran.
+- **Trial first.** Both src commits cherry-pick cleanly onto #1055's head,
+  0aae806, which already contains #1054. On that tree the buried, below,
+  crossing and refusal fast suites, including #1055's
+  `test_buried_serve_refusal_1464.py`, gave 231 passed, 4 xfailed, 0 failed.
+- **Then in place.** The branch was rebased onto main 90b0887, giving 240be28
+  and 11dfb0a. The rebase was clean, no C++ was recompiled, and both ruff gates
+  pass on all 544 files.
+- `make crossgate` runs on that rebased head.
+
+**The screen restart** runs from `run_screen_extension.sh` as the transient
+service `u4-screen-extension`. It started at 13:34:34Z, and its budget ends at
+17:34:34Z. The killed run's pause log now also holds the resume line its trap
+wrote after the log was renamed.
