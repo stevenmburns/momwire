@@ -781,6 +781,151 @@ class BuriedFills(NamedTuple):
     apply_loading: Callable
 
 
+class BuriedPlan(NamedTuple):
+    """What `plan_buried` hands the fill: the media, the pair-class index
+    sets, the quadrature nodes at each order the fill queries, the crossing
+    labels and the serve plan."""
+
+    below: object
+    a_idx: object
+    b_idx: object
+    eps_t: object
+    eps_m: object
+    k_p: object
+    k_m: object
+    c2: object
+    a_m: object
+    obs_a: object
+    t_a: object
+    W_a: object
+    obs_b: object
+    t_b: object
+    W_b: object
+    crossing_j: object
+    crossing_plan: object
+    obs_ax: object
+    t_ax: object
+    W_ax: object
+    obs_bx: object
+    t_bx: object
+    W_bx: object
+    plan: object
+
+
+def plan_buried(
+    geom,
+    *,
+    nodes,
+    below_segments,
+    buried_medium,
+    refuse_out_of_scope_fn,
+    crossing_junctions_fn,
+    serve_plan_fn,
+):
+    """Everything the buried fill decides before it fills a grid, in the
+    order it decides it: the solver's out-of-scope configurations, the
+    crossing labels and their scope check, the cross block's Gauss order,
+    and the serve plan over the union of every node rule the fill will query.
+
+    One body with two callers. `compute_Z_operator_buried` runs it and then
+    fills. `BSplineSolver.buried_serve_refusal` runs it and stops, so a
+    caller that wants to refuse before paying for a fill (antennaknobs#1135,
+    #1464) gets the fill's own verdict on the fill's own quadrature nodes.
+    A second copy of this sequence would be a verdict that can part from
+    the fill's; `below_reach_refusal` over polyline vertices is the
+    conservative approximation it replaces for callers that have a solver.
+    """
+    below = below_segments(geom)
+    b_idx = np.nonzero(below)[0]
+    a_idx = np.nonzero(~below)[0]
+    eps_t, eps_m, k_p, k_m, c2, a_m = buried_medium()
+
+    refuse_out_of_scope_fn(geom)
+    obs_a, t_a, W_a = nodes(geom, a_idx)
+    obs_b, t_b, W_b = nodes(geom, b_idx)
+    # Asked ONCE, and asked UNCONDITIONALLY (momwire#700). It used to sit
+    # inside `bool(a_idx.size and ...)` at the plan site and behind the
+    # same guard again below, so on a WHOLLY-below deck — no above
+    # segment — Python short-circuited both calls and momwire#698's
+    # exemption audit never ran at all. `_crossing_junctions` is a
+    # VALIDATION as much as a label (it is where a grounded junction that
+    # cannot cross gives its exemption back), and a validation behind a
+    # short-circuit is a validation that does not run. Razor asks it
+    # unconditionally in `_refuse_buried_geometry`, which is why the two
+    # trunks answered differently on the same deck.
+    crossing_j = crossing_junctions_fn()
+    crossing_plan = bool(a_idx.size and crossing_j)
+
+    # --- the cross block's own Gauss order (momwire#1004) ----------------
+    # PER PAIR CLASS, not per fill: the raised order is for the transmitted
+    # blocks, whose two media can come closer than a segment. The two
+    # same-medium remainders above have no such pair — the closest above/above
+    # distance is a mesh spacing, not a clearance — so raising them would
+    # multiply the most expensive blocks in the fill by up to 16 for nothing.
+    # A crossing deck skips the transmitted grid entirely (`_crossing_fill`'s
+    # designed direct evaluation), so it skips this too.
+    #
+    # The nodes carry the order; nothing downstream is told it. Both
+    # `f.field_galerkin_block` calls below read it back off the arrays' own
+    # shapes, which is what makes "the order the nodes were built at" and "the
+    # order the table is reshaped by" one fact instead of two that can part.
+    q_factor = 1
+    if a_idx.size and not crossing_plan:
+        q_factor = near_q_factor(
+            *cross_pair_separation(geom["seg_l"], geom["seg_r"], a_idx, b_idx)
+        )
+    if q_factor > 1:
+        obs_ax, t_ax, W_ax = nodes(geom, a_idx, q_factor=q_factor)
+        obs_bx, t_bx, W_bx = nodes(geom, b_idx, q_factor=q_factor)
+        # `serve_plan` sizes every extent on "the union of EVERY rule the
+        # caller will query with" — its own D2 contract, and this is the
+        # second trunk to have two rules. A ladder built on the base nodes
+        # alone is one the raised-order fill then queries outside of, and the
+        # grid refuses rather than clamps.
+        plan_a = np.vstack([obs_a, obs_ax])
+        plan_b = np.vstack([obs_b, obs_bx])
+    else:
+        obs_ax, t_ax, W_ax = obs_a, t_a, W_a
+        obs_bx, t_bx, W_bx = obs_b, t_b, W_b
+        plan_a, plan_b = obs_a, obs_b
+
+    plan = serve_plan_fn(
+        geom,
+        a_idx,
+        plan_a,
+        plan_b,
+        k_p,
+        k_m,
+        crossing=crossing_plan,
+    )
+    return BuriedPlan(
+        below,
+        a_idx,
+        b_idx,
+        eps_t,
+        eps_m,
+        k_p,
+        k_m,
+        c2,
+        a_m,
+        obs_a,
+        t_a,
+        W_a,
+        obs_b,
+        t_b,
+        W_b,
+        crossing_j,
+        crossing_plan,
+        obs_ax,
+        t_ax,
+        W_ax,
+        obs_bx,
+        t_bx,
+        W_bx,
+        plan,
+    )
+
+
 def compute_Z_operator_buried(
     geom,
     supp_seg,
@@ -866,70 +1011,41 @@ def compute_Z_operator_buried(
         pinned before the move -- with `self.X` replaced by the data or the
         callable it stands for and nothing else changed.
     """
-    below = below_segments(geom)
-    b_idx = np.nonzero(below)[0]
-    a_idx = np.nonzero(~below)[0]
-    eps_t, eps_m, k_p, k_m, c2, a_m = buried_medium()
-    gz = ground_z
-
-    refuse_out_of_scope_fn(geom)
-    obs_a, t_a, W_a = f.nodes(geom, a_idx)
-    obs_b, t_b, W_b = f.nodes(geom, b_idx)
-    # Asked ONCE, and asked UNCONDITIONALLY (momwire#700). It used to sit
-    # inside `bool(a_idx.size and ...)` at the plan site and behind the
-    # same guard again below, so on a WHOLLY-below deck — no above
-    # segment — Python short-circuited both calls and momwire#698's
-    # exemption audit never ran at all. `_crossing_junctions` is a
-    # VALIDATION as much as a label (it is where a grounded junction that
-    # cannot cross gives its exemption back), and a validation behind a
-    # short-circuit is a validation that does not run. Razor asks it
-    # unconditionally in `_refuse_buried_geometry`, which is why the two
-    # trunks answered differently on the same deck.
-    crossing_j = crossing_junctions_fn()
-    crossing_plan = bool(a_idx.size and crossing_j)
-
-    # --- the cross block's own Gauss order (momwire#1004) ----------------
-    # PER PAIR CLASS, not per fill: the raised order is for the transmitted
-    # blocks, whose two media can come closer than a segment. The two
-    # same-medium remainders above have no such pair — the closest above/above
-    # distance is a mesh spacing, not a clearance — so raising them would
-    # multiply the most expensive blocks in the fill by up to 16 for nothing.
-    # A crossing deck skips the transmitted grid entirely (`_crossing_fill`'s
-    # designed direct evaluation), so it skips this too.
-    #
-    # The nodes carry the order; nothing downstream is told it. Both
-    # `f.field_galerkin_block` calls below read it back off the arrays' own
-    # shapes, which is what makes "the order the nodes were built at" and "the
-    # order the table is reshaped by" one fact instead of two that can part.
-    q_factor = 1
-    if a_idx.size and not crossing_plan:
-        q_factor = near_q_factor(
-            *cross_pair_separation(geom["seg_l"], geom["seg_r"], a_idx, b_idx)
-        )
-    if q_factor > 1:
-        obs_ax, t_ax, W_ax = f.nodes(geom, a_idx, q_factor=q_factor)
-        obs_bx, t_bx, W_bx = f.nodes(geom, b_idx, q_factor=q_factor)
-        # `serve_plan` sizes every extent on "the union of EVERY rule the
-        # caller will query with" — its own D2 contract, and this is the
-        # second trunk to have two rules. A ladder built on the base nodes
-        # alone is one the raised-order fill then queries outside of, and the
-        # grid refuses rather than clamps.
-        plan_a = np.vstack([obs_a, obs_ax])
-        plan_b = np.vstack([obs_b, obs_bx])
-    else:
-        obs_ax, t_ax, W_ax = obs_a, t_a, W_a
-        obs_bx, t_bx, W_bx = obs_b, t_b, W_b
-        plan_a, plan_b = obs_a, obs_b
-
-    plan = serve_plan_fn(
-        geom,
+    (
+        below,
         a_idx,
-        plan_a,
-        plan_b,
+        b_idx,
+        eps_t,
+        eps_m,
         k_p,
         k_m,
-        crossing=crossing_plan,
+        c2,
+        a_m,
+        obs_a,
+        t_a,
+        W_a,
+        obs_b,
+        t_b,
+        W_b,
+        crossing_j,
+        crossing_plan,
+        obs_ax,
+        t_ax,
+        W_ax,
+        obs_bx,
+        t_bx,
+        W_bx,
+        plan,
+    ) = plan_buried(
+        geom,
+        nodes=f.nodes,
+        below_segments=below_segments,
+        buried_medium=buried_medium,
+        refuse_out_of_scope_fn=refuse_out_of_scope_fn,
+        crossing_junctions_fn=crossing_junctions_fn,
+        serve_plan_fn=serve_plan_fn,
     )
+    gz = ground_z
 
     # --- the two direct blocks and the two image blocks, each in its
     #     own medium. Chunked whenever the windowed assemblers' complex-
