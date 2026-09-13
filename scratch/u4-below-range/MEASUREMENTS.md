@@ -873,3 +873,33 @@ A HIT on that deck alone would therefore say nothing about the broadside miss.
 - **Either misses.** The PR does not open as a uniform zeroing. The numbers go
   to Steve with the scoping options: refuse past the cap at low-loss soils, or
   extend the table there.
+
+### The fresh-water Z gates, measured [`z_fw28_r4.json`, `z_fw28_r16.json`; 15:05Z]
+
+**Setup.** Both decks ran at fresh water and 28 MHz, with λ_m = 1.19705 m, a
+2.675 m mast, and 2.849 m radials whose tips sit 4.760 λ_m apart.
+- The plan's R1 at r = 1 is 4.752 λ_m.
+- The shipped grid is tabulated to 4.0 λ_m, the extended grid to 4.768 λ_m.
+- Every guard is true on both decks.
+
+| deck | Z shipped, r = 1 | Z extended, r = 1 | Z extended, r = 3 | δ | step | δ/step | δ/\|Z\| | verdict |
+|---|---|---|---|---|---|---|---|---|
+| Z-FW-4 | 57.41547890358228+22.79246184261019j | 57.41449932075779+22.792640883586404j | 57.49867810014092+22.972238379633172j | 9.96e-4 Ω | 0.1983 Ω | 5.0e-3 | 1.6e-5 | **HIT** |
+| Z-FW-16 | 47.492792333775576+28.248154261363418j | 47.493187601496125+28.248083593649312j | 47.608866532261345+28.470213520587937j | 4.02e-4 Ω | 0.2504 Ω | 1.6e-3 | 7.3e-6 | **HIT** |
+
+**PZ-FW4 HIT. PZ-FW16 HIT.**
+
+- **The finding to carry is how thin the margin is at this soil.**
+  - At soil A and 3.5 MHz, the zeroing moved Z by 2.1e-4 of the ladder step,
+    48× under the bar.
+  - Here, on the 4-radial deck, it moves Z by 5.0e-3 of the step, only 2× under
+    the bar. In absolute terms that is 1.0e-3 Ω, 32× the soil-A δ.
+  - The 16-radial deck adds the most oblique past-cap pairs a fan produces, and
+    it reads lower (1.6e-3 of its step), not higher.
+- **Reading, as registered: the zeroing stays uniform.** Three things get
+  written at the constant and in the PR:
+  - the field-level miss: 7.2e-4, broadside, at near-lossless water and 28 MHz;
+  - these two Z measurements, including the 2× margin;
+  - the one unmeasured geometry: parallel buried wires more than 4 λ_m apart,
+    side by side.
+- **Steve decides** whether that caveat is acceptable, on the PR.
