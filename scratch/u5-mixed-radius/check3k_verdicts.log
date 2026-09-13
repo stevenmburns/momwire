@@ -1,0 +1,27 @@
+== C3'.0 (VC_keep = split at equal radii, <= 1e-4 rel)
+check2 rod 3.70e-13; b control 5.30e-08 -> HIT
+== P3'.2 (|Z(node_X) - Z(VC_keep(node_Y))| <= 0.1 Ohm) and P3'.4
+check2 ratio 2 r1  worst 0.0028 | gauge keep 2.785 mOhm split 2.781 mOhm | VC_keep(node_B) 177.591-86.3479j obs split 169.606-83.1016j VC_keep(obs) 169.607-83.1026j
+check2 ratio 2 r2  worst 0.0028 | gauge keep 2.780 mOhm split 2.774 mOhm | VC_keep(node_B) 177.24-86.4594j obs split 169.284-83.1924j VC_keep(obs) 169.283-83.1922j
+check2 ratio 4 r1  worst 0.0042 | gauge keep 4.152 mOhm split 4.125 mOhm | VC_keep(node_B) 185.287-90.5238j obs split 169.469-83.7803j VC_keep(obs) 169.471-83.7818j
+check2 ratio 4 r2  worst 0.0041 | gauge keep 4.144 mOhm split 4.084 mOhm | VC_keep(node_B) 184.905-90.6678j obs split 169.146-83.8802j VC_keep(obs) 169.148-83.8815j
+b ratio2           worst 0.0023 | gauge keep 0.473 mOhm split 2.278 mOhm | VC_keep(node_B) 460.593-396.976j obs split 425.46-362.687j VC_keep(obs) 426.554-362.644j
+b ratio4           worst 0.0071 | gauge keep 0.708 mOhm split 7.053 mOhm | VC_keep(node_B) 495.984-433.322j obs split 425.923-364.4j VC_keep(obs) 427.959-364.316j
+b ratio05          worst 0.0005 | gauge keep 0.474 mOhm split 0.461 mOhm | VC_keep(node_B) 425.261-360.446j obs split 460.936-394.558j VC_keep(obs) 459.405-394.558j
+P3'.2 HIT; P3'.4 MISSED
+== P3'.3 (the jump is the shift, merged form)
+check2 r1: -7.9835 / -15.8159 -> 1.9811
+check2 r2: -7.9570 / -15.7570 -> 1.9803
+b: ratio2 -34.038 ratio4 -68.026 ratio05 34.144 -> -1.0031
+P3'.3 HIT
+== P3'.6 (slope)
+ratio 2 r1: VC_keep(node_B) 6.608e-01 ratio (0.0645739738265814+0.06396783350771858j) | VC_keep(obs) 2.427e-04
+ratio 2 r2: VC_keep(node_B) 1.251e+00 ratio (0.08702602699545942+0.08720179705307349j) | VC_keep(obs) 4.989e-04
+ratio 4 r1: VC_keep(node_B) 1.324e+00 ratio (0.09021363267279794+0.08967442104612527j) | VC_keep(obs) 3.156e-04
+ratio 4 r2: VC_keep(node_B) 2.521e+00 ratio (0.1351432709269703+0.1373301315402011j) | VC_keep(obs) 5.492e-04
+P3'.6 derived part HIT; informed part HIT
+== P3'.7 (b rod vs NEC-5, <= 0.5 Ohm)
+ratio2: dZ(VC_keep(node_B)) 0.1774-1.4343j minus control 0.3076-1.4907j -> 0.142
+ratio4: dZ(VC_keep(node_B)) 0.0559-1.3882j minus control 0.3076-1.4907j -> 0.272
+ratio05: dZ(VC_keep(node_B)) 0.3792-1.4740j minus control 0.3076-1.4907j -> 0.073
+P3'.7 HIT
