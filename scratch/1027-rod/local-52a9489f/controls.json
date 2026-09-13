@@ -1,0 +1,31 @@
+{
+ "meta": {
+  "momwire": "1dbd384",
+  "antennaknobs": "0124079e6",
+  "nec5_exe": "/home/smburns/antennas/NEC5-downloads/nec5-linux/nec5cl",
+  "nec5_sha256": "52a9489fb51a31d1fc2e25165799ce3e30950bc79db4f836cbc05d8f08ab138c"
+ },
+ "mode": "controls",
+ "result": {
+  "C2a.1": {
+   "momwire_ws_d02_vs_d18": 6.254280149179495e-15,
+   "knob_calls": {
+    "remainder": 2,
+    "medium": 2
+   }
+  },
+  "C2a.2": {
+   "momwire_full_vs_ws_d02": 0.002904819667052254,
+   "momwire_full_vs_ws_d18": 1.558108816387038e-10
+  },
+  "C2a.3": {
+   "nec5_um_1_0": "(0.035755-14117j)",
+   "nec5_free": "(0.035755-14117j)",
+   "rel": 0.0
+  },
+  "C2a.4": {
+   "nec5_um_d02_vs_d18": 0.0,
+   "nec5_buried_d18_vs_um": 0.0
+  }
+ }
+}
