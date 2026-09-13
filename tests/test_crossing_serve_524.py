@@ -509,10 +509,19 @@ def test_g524_2_buried_hub_other_junction_is_served():
     assert s._grounded_junction_ends() == frozenset([(4, "end"), (5, "end")])
 
 
-def test_g524_2_mixed_radii_refused_by_name():
-    build = crossing_deck(wire_radius=[0.001, 0.002])
-    s = BSplineSolver(**build)
-    with pytest.raises(NotImplementedError, match="radius rule"):
+def test_g524_2_two_radius_node_is_served():
+    """One radius above the interface and another below: served since
+    antennaknobs plan U5 (`tests/test_crossing_two_radius_u5.py` pins the
+    physics). This test used to pin the one-radius refusal it replaces."""
+    s = BSplineSolver(**crossing_deck(wire_radius=[0.001, 0.002]))
+    assert s._crossing_junctions() == (0,)
+    assert s._two_radius_crossing() == (0.002, 0.001)
+
+
+def test_g524_2_radius_spread_within_a_side_refused_by_name():
+    radii = [0.001, 0.001, 0.001, 0.0005, 0.001, 0.002]
+    s = BSplineSolver(**hub_deck(wire_radius=radii))
+    with pytest.raises(NotImplementedError, match="differ within the below wires"):
         s._crossing_junctions()
 
 
