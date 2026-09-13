@@ -1,0 +1,12 @@
+{'config': 'ratio4', 'a_top': 0.00025, 'a_rise': 6.25e-05, 'momwire_file': '/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/__init__.py', 'nec5_exe': '/home/smburns/nec5-timing/nec5cl-x13-static', 'nec5_sha256': '7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3'}
+NEC-5 spot L=0.3 r=4 reproduces the banked (495.65-434.07j)
+L=0.30 r=1 segs=51  NEC-5 496.63-436.18j  node_B 496.386-433.367j dZ 0.2445-2.813j kcl 4.75e-05  VC_keep 496.386-433.366j dZ 0.2444-2.814j  |split-keep| 1.47e-04
+L=0.30 r=2 segs=102  NEC-5 496.04-434.71j  node_B 495.984-433.322j dZ 0.05588-1.388j kcl 1.02e-05  VC_keep 495.984-433.322j dZ 0.0559-1.388j  |split-keep| 3.20e-05
+L=0.30 r=4 segs=204  NEC-5 495.65-434.07j  node_B 495.617-433.298j dZ 0.03274-0.772j kcl 2.37e-05  VC_keep 495.617-433.298j dZ 0.03278-0.7719j  |split-keep| 4.67e-05
+L=0.60 r=1 segs=63  NEC-5 291.29-210.45j  node_B 291.477-208.63j dZ -0.1873-1.82j kcl 2.48e-05  VC_keep 291.477-208.63j dZ -0.1874-1.82j  |split-keep| 4.45e-05
+L=0.60 r=2 segs=126  NEC-5 291.3-209.46j  node_B 291.367-208.614j dZ -0.06723-0.8462j kcl 4.51e-06  VC_keep 291.367-208.614j dZ -0.06723-0.8462j  |split-keep| 7.27e-06
+L=0.60 r=4 segs=252  NEC-5 291.24-209.06j  node_B 291.267-208.611j dZ -0.02652-0.4493j kcl 1.15e-05  VC_keep 291.267-208.611j dZ -0.02651-0.4493j  |split-keep| 1.12e-05
+L=1.20 r=1 segs=65  NEC-5 181.26-73.945j  node_B 181.532-72.1016j dZ -0.2716-1.843j kcl 1.26e-05  VC_keep 181.532-72.1016j dZ -0.2716-1.843j  |split-keep| 1.34e-05
+L=1.20 r=2 segs=130  NEC-5 181.42-72.844j  node_B 181.513-72.0861j dZ -0.09274-0.7579j kcl 1.68e-06  VC_keep 181.513-72.0861j dZ -0.09274-0.7579j  |split-keep| 1.33e-06
+L=1.20 r=4 segs=260  NEC-5 181.46-72.455j  node_B 181.494-72.0819j dZ -0.03382-0.3731j kcl 5.17e-06  VC_keep 181.494-72.0819j dZ -0.03382-0.3731j  |split-keep| 2.31e-06
+saved scratch/u5-mixed-radius/bq_ratio4.json

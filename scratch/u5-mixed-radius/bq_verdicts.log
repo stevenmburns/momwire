@@ -1,0 +1,49 @@
+== Pq.1 (node_B)
+ratio2   L=0.30 dZinf 0.0314-0.1766j control 0.0882-0.2245j |diff| 0.074 band 0.642 inside | r=4 alone 0.107
+ratio2   L=0.60 dZinf 0.0214-0.0569j control 0.0439-0.0716j |diff| 0.027 band 0.500 inside | r=4 alone 0.033
+ratio2   L=1.20 dZinf 0.0273+0.0072j control 0.0310-0.0002j |diff| 0.008 band 0.500 inside | r=4 alone 0.005
+ratio4   L=0.30 dZinf 0.0096-0.1557j control 0.0882-0.2245j |diff| 0.105 band 0.642 inside | r=4 alone 0.186
+ratio4   L=0.60 dZinf 0.0142-0.0524j control 0.0439-0.0716j |diff| 0.035 band 0.500 inside | r=4 alone 0.052
+ratio4   L=1.20 dZinf 0.0251+0.0116j control 0.0310-0.0002j |diff| 0.013 band 0.500 inside | r=4 alone 0.009
+ratio05  L=0.30 dZinf 0.1121-0.1963j control 0.0882-0.2245j |diff| 0.037 band 0.642 inside | r=4 alone 0.053
+ratio05  L=0.60 dZinf 0.0511-0.0597j control 0.0439-0.0716j |diff| 0.014 band 0.500 inside | r=4 alone 0.024
+ratio05  L=1.20 dZinf 0.0243+0.0157j control 0.0310-0.0002j |diff| 0.017 band 0.500 inside | r=4 alone 0.015
+Pq.1 HIT
+== Pq.1k (VC_keep(node_B))
+ratio2   L=0.30 dZinf 0.0314-0.1765j control 0.0882-0.2245j |diff| 0.074 band 0.642 inside | r=4 alone 0.107
+ratio2   L=0.60 dZinf 0.0214-0.0569j control 0.0439-0.0716j |diff| 0.027 band 0.500 inside | r=4 alone 0.033
+ratio2   L=1.20 dZinf 0.0273+0.0072j control 0.0310-0.0002j |diff| 0.008 band 0.500 inside | r=4 alone 0.005
+ratio4   L=0.30 dZinf 0.0097-0.1556j control 0.0882-0.2245j |diff| 0.104 band 0.642 inside | r=4 alone 0.186
+ratio4   L=0.60 dZinf 0.0142-0.0524j control 0.0439-0.0716j |diff| 0.035 band 0.500 inside | r=4 alone 0.052
+ratio4   L=1.20 dZinf 0.0251+0.0116j control 0.0310-0.0002j |diff| 0.013 band 0.500 inside | r=4 alone 0.009
+ratio05  L=0.30 dZinf 0.1121-0.1963j control 0.0882-0.2245j |diff| 0.037 band 0.642 inside | r=4 alone 0.053
+ratio05  L=0.60 dZinf 0.0511-0.0597j control 0.0439-0.0716j |diff| 0.014 band 0.500 inside | r=4 alone 0.024
+ratio05  L=1.20 dZinf 0.0243+0.0157j control 0.0310-0.0002j |diff| 0.017 band 0.500 inside | r=4 alone 0.015
+Pq.1k HIT
+== Pq.2 (|node_B - VC_keep| <= 0.1 Ohm, every rung)
+worst 0.0003 -> HIT
+== Pq.3 (node_B KCL <= 1e-5 at r = 4 and falling from r = 1)
+control  L=0.30 kcl r1 7.20e-05 r2 2.61e-05 r4 3.19e-06 ok
+control  L=0.60 kcl r1 3.99e-05 r2 1.45e-05 r4 1.79e-06 ok
+control  L=1.20 kcl r1 2.24e-05 r2 8.14e-06 r4 1.02e-06 ok
+ratio2   L=0.30 kcl r1 6.20e-05 r2 2.01e-06 r4 2.09e-05 NO
+ratio2   L=0.60 kcl r1 3.30e-05 r2 1.15e-06 r4 1.02e-05 NO
+ratio2   L=1.20 kcl r1 1.74e-05 r2 1.35e-06 r4 4.51e-06 ok
+ratio4   L=0.30 kcl r1 4.75e-05 r2 1.02e-05 r4 2.37e-05 NO
+ratio4   L=0.60 kcl r1 2.48e-05 r2 4.51e-06 r4 1.15e-05 NO
+ratio4   L=1.20 kcl r1 1.26e-05 r2 1.68e-06 r4 5.17e-06 ok
+ratio05  L=0.30 kcl r1 3.50e-05 r2 4.61e-05 r4 3.59e-05 NO
+ratio05  L=0.60 kcl r1 2.10e-05 r2 2.39e-05 r4 1.78e-05 NO
+ratio05  L=1.20 kcl r1 1.31e-05 r2 1.20e-05 r4 8.19e-06 ok
+Pq.3 MISSED
+== Pq.4 (momwire step ratio within +-0.15 of the control's)
+ratio2   L=0.30 ratio 0.842 control 0.792 ok
+ratio4   L=0.30 ratio 0.910 control 0.792 ok
+ratio05  L=0.30 ratio 0.734 control 0.792 ok
+ratio2   L=0.60 ratio 0.837 control 0.787 ok
+ratio4   L=0.60 ratio 0.906 control 0.787 ok
+ratio05  L=0.60 ratio 0.732 control 0.787 ok
+ratio2   L=1.20 ratio 0.722 control 0.685 ok
+ratio4   L=1.20 ratio 0.795 control 0.685 ok
+ratio05  L=1.20 ratio 0.676 control 0.685 ok
+Pq.4 HIT
