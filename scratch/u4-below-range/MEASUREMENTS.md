@@ -390,7 +390,7 @@ which the wrapper reads.
 | G-S3 | **HIT.** The `zeroed` wrapper was reached and zeroed pairs at every rung: r = 1 and 3 together, 5 calls over 2,134,440 pairs with 26,608 zeroed; r = 9, 33 calls over 17,288,964 pairs with 214,736 zeroed (the `delta` run's per-rung counts: 2,692 / 23,916 / 214,736) |
 | PZ-S2 | **HIT, with one caveat.** `shipped` refused on RANGE (R1 = 76.0006 m, 4.76 λ_m, past 63.86 m). The ladder stops at its first rung's refusal, so r = 3 and 9 were not attempted through a solve; G-S1's cap-4 preflight verdict gives the same range refusal there |
 | PZ-S1 | **HIT, by more than three orders of magnitude.** The bar b is the `extended` ladder's last step, \|Z_ext(9) − Z_ext(3)\| = \|0.0611 + 0.0421j\| = **0.0742 Ω**. At full precision (`z_gate.py delta`, the same engine call the ladder makes), \|Z(zeroed) − Z(extended)\| = **3.14e-5 / 3.08e-5 / 3.11e-5 Ω** at r = 1 / 3 / 9. That is δ/b ≈ 4e-4, and about 4e-7 of \|Z\|. It holds constant under refinement, so it is the converged beyond-cap remainder's contribution and not mesh noise |
-| PZ-S3 | **HIT (informational).** `extended` momwire ran 69.6229+40.6985j, 69.7544+40.7702j and 69.8155+40.8123j at r = 1 / 3 / 9, giving a Richardson estimate of 69.8766+40.8544j. NEC-5 x13-static ran 69.3290+36.5550j, 69.6560+39.2460j and 69.7690+40.2250j, giving 69.8255+40.7145j. The two estimates differ by 0.149 Ω, 0.18 % of \|Z\|, inside the 5 % bar. (NEC-5's own r = 3→9 step, 0.99 Ω, is 13× momwire's.) |
+| PZ-S3 | **HIT (informational).** `extended` momwire ran 69.6229+40.6985j, 69.7544+40.7702j and 69.8155+40.8123j at r = 1 / 3 / 9, giving a Richardson estimate of 69.8460+40.8334j. NEC-5 x13-static ran 69.3290+36.5550j, 69.6560+39.2460j and 69.7690+40.2250j, giving 69.8255+40.7145j. The two estimates differ by 0.0205 + 0.1189j, so \|Δ\| = 0.121 Ω, 0.15 % of \|Z\|, inside the 5 % bar (corrected, see below). (NEC-5's own r = 3→9 step, 0.99 Ω, is 13× momwire's.) |
 
 **Reading, as registered: PZ-S1 hits, so the branch is to serve beyond the cap
 with the remainder zeroed.**
@@ -411,3 +411,17 @@ with the remainder zeroed.**
   0.05°. The LPDA stays refused until that separate unit lands.
 - **Still to decide.** Whether the src PR is worth doing now, given that no corpus
   deck is unblocked by it alone, is the plan owner's call.
+
+**Correction to PZ-S3 [2026-09-13; caught by the peer].** The momwire
+Richardson estimate first recorded, 69.8766+40.8544j with \|Δ\| = 0.149 Ω
+(0.18 %), came from **2·Z9 − Z3**. That is the first-order estimator for a ×2
+ladder, reused from step (b′)'s r = 1, 2, 4 ladder and applied by hand to this
+×3 ladder (r = 3 → 9). For a refinement ratio q, the first-order estimate is
+Z_hi + (Z_hi − Z_lo)/(q − 1), antennaknobs' `ladder_estimate`, which for q = 3
+is **Z9 + (Z9 − Z3)/2** = 69.8460+40.8334j. The NEC-5 figure,
+69.8255+40.7145j, was already that form, printed by the ladder, so the first
+comparison mixed two estimators. With both consistent, \|Δ\| = 0.121 Ω
+(0.149 %), recomputed from the full-precision Z in `syn_delta.json`. **PZ-S3
+stays a HIT, closer than first recorded.** PZ-S1 and PZ-S2 use only the last
+ladder step and are unaffected. Estimates in this record come from
+`ladder_estimate`'s form from now on, never a hand-written ×2 formula.
