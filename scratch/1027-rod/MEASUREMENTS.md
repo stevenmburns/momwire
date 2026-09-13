@@ -448,3 +448,43 @@ meshes that differ by one segment (135 against 136) and as two different
 source definitions: a gap at a knot against a gap inside a degree-2 segment.
 **The #1027 comparison is between two port spellings, not only two solvers.**
 Whether that is the whole −1.20 % is the next measurement, not this entry.
+
+### What each engine can spell at the source
+
+- **NEC-5**: a voltage source sits at a segment end, a knot. There is no
+  segment-wide applied-field spelling (verified against our licensed
+  materials). `NEC5Engine` puts it at the centre knot of an even-count feed
+  wire.
+- **momwire** (`BSplineSolver`): `feed_model="point"`, a delta gap at any
+  arclength, knot or not, is the default. `feed_model="segment"` is NEC-2's
+  uniform V/Δ over the mesh cell containing the feed. Its own docstring notes
+  the point gap's O(1/N) error term in Z from the current's log singularity at
+  the source, which no basis degree removes.
+- **antennaknobs** hands degree-2 momwire an ODD feed-segment count
+  (`_parity_for_solver`: 2 → 1 here, feed mid-segment) and NEC-5 an EVEN one
+  (feed at the centre knot).
+
+So the only port both engines can share is a delta gap at a knot. momwire
+reaches it with the parity rule patched to "even" in the harness — the feed
+wire becomes 2 × 5 mm and the arclength-centre feed lands on the knot — with
+no `src/` change and no change to NEC-5's deck.
+
+### P2b.1 — the same port on both engines (registered before the run)
+
+Soil A, d = 0.2 m, refine 8 → 16 Richardson, L = 0.15 / 0.60 / 2.40 m. momwire
+with the feed parity patched to even, so it has the same 136-segment mesh and
+the same knot source as NEC-5's unchanged deck. The harness asserts that
+momwire's feed lands on a knot and that its segment count equals NEC-5's before
+it reads anything.
+
+| id | prediction | verdict |
+|---|---|---|
+| P2b.1 | with the port matched, \|ΔR/R\| falls below half its #1027 value at every length: < 1.95 % at 0.15 m, < 0.60 % at 0.60 m, < 0.14 % at 2.40 m | pending |
+
+Competing outcome, registered with it: \|ΔR/R\| substantially unchanged means
+the port mismatch is not the cause, and the disagreement is a converged
+difference between the solvers at an identical source.
+
+Read alongside, not a verdict: momwire's `feed_model="segment"` over its
+native 10 mm cell at L = 0.15 and 0.60 m, to size how far the source spelling
+alone moves momwire's R.
