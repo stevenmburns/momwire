@@ -37,7 +37,9 @@ physics responds to the rise's radius, through a shift ∝ −ln(a_A/a_B). The
 plumbing is sound (D0, D1 and D2i hit), so the rule itself is at fault. Check
 2's uniqueness holds on check 2's rod only, because continuity does not
 discriminate the rules on step (b)'s rod. The "≈ 8 Ω" was measured against
-observer-side, not against a reference. The derivation is reopened in §8.
+observer-side, not against a reference. The derivation is reopened in §8, and §8.8 identifies the term: observer-side
+evaluates the node's point tests on two surfaces, so the thin-wire potential's
+jump across the node goes uncounted.
 
 ## 1. Where the one radius enters [derived from src, 1dbd384 ≡ 42112b9 in src/]
 
@@ -531,3 +533,61 @@ How the outcomes will be read, fixed now:
   the multiplier, not only one a_n.
 - **P3′.3 misses** → the shift is not the jump in the merged form, and §8.1 is
   wrong.
+
+### §8.8 Check 3′ measured [`check3k_check2.*`, `check3k_b.*`, `check3k_verdicts.*`]
+
+| id | verdict |
+|---|---|
+| C3′.0 | **HIT**. VC_keep reproduces the split at equal radii to 3.7e-13 relative on check 2's rod and 5.3e-8 on step (b)'s control |
+| P3′.2 | **HIT**. The worst \|Z(node_X) − Z(VC_keep(node_Y))\| is 2.8 / 2.8 / 4.2 / 4.1 mΩ on check 2's rod and 2.3 / 7.1 / 0.5 mΩ on step (b)'s |
+| P3′.3 | **HIT**. On check 2's rod, Re[Z(VC_keep(obs)) − Z(VC_keep(node_B))] at ratios 2 / 4 is −7.984 / −15.816 Ω at r = 1 (1.981) and −7.957 / −15.757 Ω at r = 2 (1.980). On step (b)'s rod it is −34.04 / −68.03 / +34.14 Ω at ratios 2 / 4 / 0.5, so ratio 0.5 over ratio 2 is −1.003 |
+| P3′.4 | **MISSED**. The merged form's gauge is below the split's on step (b)'s rod at ratios 2 and 4 (0.47 against 2.28 mΩ, and 0.71 against 7.05 mΩ). It is not below on check 2's rod (2.785 / 2.781, 2.780 / 2.774, 4.152 / 4.125 and 4.144 / 4.084 mΩ), nor at ratio 0.5 (0.474 against 0.461 mΩ) |
+| P3′.6 | **HIT**. VC_keep(`node_B`)'s slope is 0.66 / 1.25 / 1.32 / 2.52 relative off 1/ε̃. VC_keep(`obs`)'s is 2.4e-4 to 5.5e-4 off |
+| P3′.7 | **HIT**. \|ΔZ(VC_keep(node_B)) − ΔZ(control)\| is 0.14 / 0.27 / 0.07 Ω |
+
+**Reading, as registered: P3′.2 and P3′.3 hit, so the ln(a_A/a_B) term is
+identified.**
+
+Observer-side evaluates the crossing node's point tests on two surfaces: a_A in
+the above node row and a_B in the below one. The merged row then drops the field
+of the thin-wire potential's jump across the node, and that jump is the whole
+shift:
+
+- **Scaling.** It scales with ln(a_A/a_B): 1 : 1.98 on check 2's rod and
+  1 : 2.00 : −1.00 on step (b)'s.
+- **Weight.** It carries the rise's own weight.
+- **Gauge.** It becomes gauge-free, to ≤ 7 mΩ, once both rows evaluate one
+  potential.
+- **Against NEC-5.** On step (b)'s rod it lands within the equal-radius band of
+  NEC-5 (0.07–0.27 Ω).
+
+The timebox's question is answered on 2026-09-13, inside the timebox.
+
+**What P3′.4's miss says.** The mΩ-level gauge lives mainly in the merged row's
+finite parts, not in the corner's stiffness. The exception is step (b)'s rod at
+ratios 2 and 4, where the source sits 25 mm from the node and the split's gauge
+is 5–10× the merged one.
+
+**A correction to §8.6.** "The deficit is larger with the larger a_n" was read
+off ratios 2 and 4 only, and ratio 0.5 reverses it. Across both rods, the split
+KCL deficit is small when a_n is the BURIED member's radius (`node_B`: 2.0e-6 to
+4.6e-5) and large when a_n is the above member's (`node_A`: 4.1e-4 to 2.3e-3),
+whichever of the two is larger. §8.4(3)'s stiffness argument does not explain
+that, and it is withdrawn as the reason.
+
+**Still open for the src design (§7).**
+
+- **The slope target.** With one node potential, the slope beside the node is
+  0.66–2.5 relative off 1/ε̃ and grows from r = 1 to r = 2. Observer-side's
+  slope sits at the one-radius value, but for the wrong reason. At a radius
+  step this mesh does not give a converged slope. §7's "tests pin the slope"
+  needs a derived target, or a converged readout, before the slope can be a
+  gate.
+- **Split or multiplier.** The split with one a_n and the merged dof agree to
+  ≤ 7 mΩ, so Z does not need the multiplier. The split's cost is its KCL
+  deficit, which stays at ≤ 4.6e-5 with a_n = the buried member's radius. With
+  several buried members of different radii at one node, the choice is open.
+  §7's KCL gate decides between a_n and the multiplier.
+- **The ladder.** Step (b)'s Richardson ladder and the (c) corpus decks have
+  not been run under a one-potential spelling. P3′.7 is a single rung (r = 2,
+  L = 0.30 m).
