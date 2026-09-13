@@ -208,18 +208,36 @@ def test_g980c_5_the_routing_is_a_function_of_data_and_callables():
     assert "self" not in called, called
 
     fills = set(BI.BuriedFills._fields)
+    # A member counts as used whether the routing calls it or hands it on:
+    # `nodes` goes to `plan_buried`, the pre-fill sequence the fill shares
+    # with `BSplineSolver.buried_serve_refusal` (antennaknobs#1464).
     used = {
-        n.func.attr
+        n.attr
         for n in ast.walk(fn)
-        if isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Attribute)
-        and isinstance(n.func.value, ast.Name)
-        and n.func.value.id == "f"
+        if isinstance(n, ast.Attribute)
+        and isinstance(n.value, ast.Name)
+        and n.value.id == "f"
     }
     assert used <= fills, f"reached a non-bundle name through `f`: {used - fills}"
     # ...and the bundle carries nothing the routing does not use, so it cannot
     # quietly become a grab-bag of solver state.
     assert fills - used == set(), f"unused BuriedFills members: {fills - used}"
+
+    # `plan_buried` is part of the routing, so it holds to the same seam.
+    plan = next(
+        n
+        for n in ast.walk(ast.parse(inspect.getsource(BI)))
+        if isinstance(n, ast.FunctionDef) and n.name == "plan_buried"
+    )
+    plan_args = {a.arg for a in plan.args.args} | {a.arg for a in plan.args.kwonlyargs}
+    assert "self" not in plan_args and "solver" not in plan_args, plan_args
+    assert "self" not in {
+        n.func.value.id
+        for n in ast.walk(plan)
+        if isinstance(n, ast.Call)
+        and isinstance(n.func, ast.Attribute)
+        and isinstance(n.func.value, ast.Name)
+    }
 
 
 def test_g980c_6_bspline_still_owns_the_moment_shaped_fills():

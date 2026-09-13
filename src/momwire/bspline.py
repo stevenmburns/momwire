@@ -5445,6 +5445,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             pair_extents=_pair_extents_below,
         )
 
+    def buried_serve_refusal(self):
+        """The sentence this deck's buried fill would refuse with, or None.
+
+        A PRE-FLIGHT that is exact rather than conservative: it runs
+        `_below_interface.plan_buried`, the same sequence the fill runs, on
+        this solver's own geometry and quadrature nodes, and stops before any
+        grid is filled. It covers the out-of-scope solver configurations, the
+        crossing scope, and every serve-plan extent (below/below and
+        cross-medium), and returns the refusal's message verbatim.
+
+        `below_reach_refusal(points, ...)` stays for callers that hold only
+        polylines. Over vertices it can over-refuse, and a crossing node's
+        vertex sits exactly in the plane, so two of them at different nodes
+        pair at theta = 0 (antennaknobs#1464). The fill's nodes are strictly
+        interior and never do.
+
+        None when the deck has no ground or no buried wire, or when the fill
+        would reach its grids.
+        """
+        if self.ground_z is None or not self._has_buried_wires():
+            return None
+        try:
+            _below_interface.plan_buried(
+                self._build_geometry(),
+                nodes=self._buried_nodes,
+                below_segments=self._below_segments,
+                buried_medium=self._buried_medium,
+                refuse_out_of_scope_fn=self._refuse_buried_out_of_scope,
+                crossing_junctions_fn=self._crossing_junctions,
+                serve_plan_fn=self._buried_serve_plan,
+            )
+        except (ValueError, NotImplementedError) as exc:
+            return str(exc)
+        return None
+
     def _compute_Z_operator_buried(self, geom, supp_seg, polys):
         """The mixed-medium dense Z. The ROUTING moved to `_below_interface`
         (momwire#980 step C part 2); this hands it the solver's own fills.
