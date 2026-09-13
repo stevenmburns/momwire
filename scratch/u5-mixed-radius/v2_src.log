@@ -1,0 +1,7 @@
+{'mode': 'v2', 'expect': 'src', 'momwire_file': '/home/smburns/stevenmburns/momwire-wt-u5src/src/momwire/__init__.py'}
+brv 7.1 MHz: ['(78.13206040784942+46.33767699982075j)']
+brv 6.8 MHz: ['(71.01695302338501+9.216175966545695j)']
+brv 7.4 MHz: ['(85.87330150873778+83.45286758464721j)']
+rod equal radii r=1: (169.77723712649032-82.27633481639751j)
+rod equal radii r=2: (169.45676504753166-82.35232704192198j)
+saved scratch/u5-mixed-radius/v2_src.json

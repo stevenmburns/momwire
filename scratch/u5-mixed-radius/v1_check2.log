@@ -1,0 +1,7 @@
+{'mode': 'v1c2', 'expect': 'src', 'momwire_file': '/home/smburns/stevenmburns/momwire-wt-u5src/src/momwire/__init__.py'}
+check2 a_A=0.001 a_B=0.0005 r=1: src 177.5909171-86.3478699j harness 177.5909171-86.3478699j rel 9.05e-15
+check2 a_A=0.001 a_B=0.0005 r=2: src 177.2403425-86.45938881j harness 177.2403425-86.45938881j rel 0.00e+00
+check2 a_A=0.001 a_B=0.00025 r=1: src 185.2873016-90.523816j harness 185.2873016-90.523816j rel 2.85e-13
+check2 a_A=0.001 a_B=0.00025 r=2: src 184.9050362-90.66782262j harness 184.9050362-90.66782262j rel 4.32e-14
+v1c2: worst rel 2.85e-13 -> HIT
+saved scratch/u5-mixed-radius/v1_check2.json
