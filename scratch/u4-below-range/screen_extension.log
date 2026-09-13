@@ -1,0 +1,32 @@
+start 2026-09-13T13:34:34Z (restart; budget 4 h from here)
+{'proto': '/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py', 'proto_sha256': 'a6475b976d5ebc7ec789f9aff105f25917bc5556c0f86b531483a0c811ede094', 'integrator': {'n': 16, 'rtol': 1e-11, 'depth': 14, 'max_panels': 6000, 'detour': 2.0}}
+G-c HED phi=0 rho=171.3: rem(1.02)/rem(1.01) 1.9811  rel 2.9e-08  288s
+G-c VED phi=0 rho=171.3: rem(1.02)/rem(1.01) 1.9842  rel 2.9e-08  327s
+G-c HED phi=0 rho=342.6: rem(1.02)/rem(1.01) 1.9724  rel 5.7e-08  450s
+G-c VED phi=0 rho=342.6: rem(1.02)/rem(1.01) 1.9768  rel 5.7e-08  361s
+EXT-very-poor-1.8-0.02 HED phi=   0  lam_m= 49.838  M1=8.339e+05  M2@4,5,6,8=1.81e-05,1.37e-05,1.09e-05,7.39e-06  M3=-1.296  worst rel 6.9e-08
+EXT-very-poor-1.8-0.02 HED phi=  90  lam_m= 49.838  M1=2.012e+04  M2@4,5,6,8=1.11e-05,6.76e-06,4.44e-06,2.42e-06  M3=-2.199  worst rel 6.9e-08
+EXT-very-poor-1.8-0.02 VED phi=   0  lam_m= 49.838  M1=2.176e+04  M2@4,5,6,8=1.26e-04,9.39e-05,7.37e-05,4.96e-05  M3=-1.340  worst rel 6.9e-08
+EXT-very-poor-1.8-0.15 HED phi=   0  lam_m= 49.838  M1=8.192e+05  M2@4,5,6,8=1.83e-05,1.39e-05,1.10e-05,7.46e-06  M3=-1.296  worst rel 2.8e-07
+EXT-very-poor-1.8-0.15 HED phi=  90  lam_m= 49.838  M1=1.977e+04  M2@4,5,6,8=1.11e-05,6.73e-06,4.46e-06,2.31e-06  M3=-2.262  worst rel 2.8e-07
+EXT-very-poor-1.8-0.15 VED phi=   0  lam_m= 49.838  M1=2.138e+04  M2@4,5,6,8=4.78e-05,3.57e-05,2.80e-05,1.89e-05  M3=-1.341  worst rel 2.8e-07
+EXT-fresh-water-1.8-0.02 HED phi=   0  lam_m= 18.549  M1=1.677e+00  M2@4,5,6,8=3.96e-06,3.06e-06,2.33e-06,1.41e-06  M3=-1.489  worst rel 1.4e-08
+EXT-fresh-water-1.8-0.02 HED phi=  90  lam_m= 18.549  M1=1.989e+00  M2@4,5,6,8=1.23e-04,6.43e-05,3.51e-05,1.23e-05  M3=-3.313  worst rel 1.4e-08
+EXT-fresh-water-1.8-0.02 VED phi=   0  lam_m= 18.549  M1=2.905e-02  M2@4,5,6,8=2.03e-05,1.19e-05,7.53e-06,4.04e-06  M3=-2.329  worst rel 1.4e-08
+EXT-fresh-water-1.8-0.15 HED phi=   0  lam_m= 18.549  M1=1.727e+00  M2@4,5,6,8=4.85e-06,3.68e-06,2.77e-06,1.66e-06  M3=-1.549  worst rel 1.1e-08
+EXT-fresh-water-1.8-0.15 HED phi=  90  lam_m= 18.549  M1=1.982e+00  M2@4,5,6,8=1.36e-04,7.12e-05,3.90e-05,1.38e-05  M3=-3.296  worst rel 1.1e-08
+EXT-fresh-water-1.8-0.15 VED phi=   0  lam_m= 18.549  M1=2.902e-02  M2@4,5,6,8=3.39e-06,1.98e-06,1.25e-06,6.71e-07  M3=-2.336  worst rel 1.1e-08
+EXT-salt-water-1.8-0.02 HED phi=   0  lam_m=  0.745  M1=1.559e+06  M2@4,5,6,8=6.91e-07,3.52e-07,2.03e-07,8.48e-08  M3=-3.027  worst rel 1.1e-07
+EXT-salt-water-1.8-0.02 HED phi=  90  lam_m=  0.745  M1=2.514e+05  M2@4,5,6,8=2.35e-06,1.20e-06,7.00e-07,2.98e-07  M3=-2.975  worst rel 1.1e-07
+EXT-salt-water-1.8-0.02 VED phi=   0  lam_m=  0.745  M1=6.329e+01  M2@4,5,6,8=5.79e-10,3.72e-10,2.59e-10,1.47e-10  M3=-1.975  worst rel 1.1e-07
+EXT-salt-water-1.8-0.15 HED phi=   0  lam_m=  0.745  M1=3.060e+05  M2@4,5,6,8=1.51e-07,7.67e-08,4.40e-08,1.83e-08  M3=-3.047  worst rel 8.0e-08
+EXT-salt-water-1.8-0.15 HED phi=  90  lam_m=  0.745  M1=4.976e+04  M2@4,5,6,8=6.10e-07,3.11e-07,1.80e-07,7.63e-08  M3=-2.999  worst rel 8.0e-08
+EXT-salt-water-1.8-0.15 VED phi=   0  lam_m=  0.745  M1=1.242e+01  M2@4,5,6,8=1.52e-10,9.73e-11,6.76e-11,3.84e-11  M3=-1.990  worst rel 8.0e-08
+EXT-fresh-water-28-0.02 HED phi=   0  lam_m=  1.197  M1=1.110e+00  M2@4,5,6,8=1.83e-05,1.33e-05,9.81e-06,4.40e-06  M3=-2.058  worst rel 6.2e-11
+EXT-fresh-water-28-0.02 HED phi=  90  lam_m=  1.197  M1=1.972e+00  M2@4,5,6,8=7.21e-04,5.61e-04,4.55e-04,3.26e-04  M3=-1.144  worst rel 6.2e-11
+EXT-fresh-water-28-0.02 VED phi=   0  lam_m=  1.197  M1=2.528e-02  M2@4,5,6,8=9.94e-06,7.69e-06,6.18e-06,4.35e-06  M3=-1.191  worst rel 6.2e-11
+EXT-salt-water-28-0.02 HED phi=   0  lam_m=  0.189  M1=5.765e+05  M2@4,5,6,8=3.28e-07,1.62e-07,9.20e-08,4.09e-08  M3=-3.005  worst rel 7.6e-08
+EXT-salt-water-28-0.02 HED phi=  90  lam_m=  0.189  M1=1.093e+05  M2@4,5,6,8=1.54e-06,8.20e-07,4.98e-07,2.33e-07  M3=-2.718  worst rel 7.6e-08
+EXT-salt-water-28-0.02 VED phi=   0  lam_m=  0.189  M1=4.276e+02  M2@4,5,6,8=6.00e-09,4.01e-09,2.92e-09,1.83e-09  M3=-1.713  worst rel 7.6e-08
+saved scratch/u4-below-range/screen_extension.json
+end 2026-09-13T14:59:46Z exit 0
