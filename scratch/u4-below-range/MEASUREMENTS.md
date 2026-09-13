@@ -792,3 +792,84 @@ change moves. It was run again alone on main 90b0887 and compared row by row:
   momwire#838 (ε_r 5 read 31.53 and 29.72 then; best ε_r 5 within 0.6 Ω).
   Main now reads ε_r 5 at 32.72 and 30.91, with best ε_r 15 at 1.66 Ω. The
   gate still passes against its 2.5 Ω bar.
+
+## PX1, measured: one row misses [`screen_extension.json`, `screen_extension.log`]
+
+The restart ran from 13:34:34Z to 14:59:46Z, and every one of the 8 rows
+finished inside the budget. The G-c guard hit (1.972–1.984).
+
+M2 at 4 λ_m, per row and dipole kind:
+
+| row | HED φ = 0 | HED φ = 90° | VED |
+|---|---|---|---|
+| very-poor, 1.8 MHz, 0.02 m | 1.81e-5 | 1.11e-5 | 1.26e-4 |
+| very-poor, 1.8 MHz, 0.15 m | 1.83e-5 | 1.11e-5 | 4.78e-5 |
+| fresh water, 1.8 MHz, 0.02 m | 3.96e-6 | 1.23e-4 | 2.03e-5 |
+| fresh water, 1.8 MHz, 0.15 m | 4.85e-6 | 1.36e-4 | 3.39e-6 |
+| salt water, 1.8 MHz, 0.02 m | 6.91e-7 | 2.35e-6 | 5.79e-10 |
+| salt water, 1.8 MHz, 0.15 m | 1.51e-7 | 6.10e-7 | 1.52e-10 |
+| fresh water, 28 MHz, 0.02 m | 1.83e-5 | **7.21e-4** | 9.94e-6 |
+| salt water, 28 MHz, 0.02 m | 3.28e-7 | 1.54e-6 | 6.00e-9 |
+
+**PX1 MISSES, on one row.**
+- **Where.** Fresh water (80, 0.001) at 28 MHz and 0.02 m depth, HED broadside
+  (φ = 90°).
+- **How far.** 7.21e-4 of the self-scale field at 4 λ_m, which is 3.6× the
+  2e-4 bar. It decays only as R^−1.14, and still reads 3.26e-4 at 8 λ_m.
+- **The rest.** Every other row and kind is ≤ 1.36e-4. The colinear HED on the
+  same row is 1.83e-5.
+- **Why this row.** It is the nearly lossless end: σ/(ωε₀ε_r) = 8.0e-3 there,
+  against 0.125 for the same water at 1.8 MHz.
+
+**The registered reading rule applies: the src PR does not open.**
+
+### Amendment before the follow-up Z gate [registered before any run]
+
+**The registered follow-up cannot fail on this miss.** That follow-up is the
+synthetic deck, rescaled to 4.76 λ_m at this soil and frequency. In a radial
+fan:
+- A pair is past the cap only when its two radials are at least
+  α = 2·asin(4/4.76) = 114° apart, measured tip to tip.
+- For such a pair, the angle between the source radial and the separation to
+  the far point is at most 90° − α/2 ≈ 33°.
+- At α = 180°, which gives the 4-radial deck's only past-cap pairs, that angle
+  is 0°. The pair is colinear, and this row reads 1.83e-5 there.
+
+A HIT on that deck alone would therefore say nothing about the broadside miss.
+
+**So two decks run** (`z_gate_fw28.py`), both at fresh water, 28 MHz and
+0.02 m depth:
+- **Scaling.** The mast scales with the free-space wavelength, to 2.675 m. The
+  radials scale with the in-medium wavelength, to 38 m × λ_m/15.966 m, about
+  2.85 m. Segment counts are the record's.
+- **Z-FW-4.** The registered rescaled deck, with 4 radials. Its past-cap pairs
+  are colinear.
+- **Z-FW-16.** 16 radials, which adds past-cap pairs at α = 135° and 157.5°.
+  Their source-to-separation angles reach 22.5°, the most oblique a fan
+  produces past the cap at this span.
+- **Not measured.** Neither deck has a broadside (φ ≈ 90°) pair past the cap,
+  and no fan can. A deck of parallel buried wires more than 4 λ_m apart side
+  by side can. That geometry is not measured here.
+
+**Spellings, guards and bar are T1's.**
+- Spellings: shipped (cap 4) against extended (cap 5) at r = 1, plus extended
+  at r = 3 for the step.
+- Guards, read before δ: the plan reaches past 4 λ_m, the shipped grid stops at
+  the cap, the extended grid goes past it, and δ is not bit-zero.
+- Bar: δ ≤ 1e-2 × |Z_ext(3) − Z_ext(1)|. bspline decides.
+- A deck that refuses for any other reason is recorded, and does not count as
+  a HIT.
+
+| id | prediction | result |
+|---|---|---|
+| PZ-FW4 | **informed** (colinear pairs read 1.83e-5 on this row): HIT | |
+| PZ-FW16 | **blind**: HIT | |
+
+**Reading rules, fixed now.**
+- **Both hit.** The zeroing stays uniform. The field-level miss, both Z
+  measurements, and the unmeasured parallel-wire broadside geometry are written
+  at the constant and in the PR. Whether that caveat is acceptable is Steve's
+  call on the PR, which stays unmerged anyway.
+- **Either misses.** The PR does not open as a uniform zeroing. The numbers go
+  to Steve with the scoping options: refuse past the cap at low-loss soils, or
+  extend the table there.
