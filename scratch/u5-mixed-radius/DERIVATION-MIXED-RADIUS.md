@@ -617,3 +617,114 @@ that, and it is withdrawn as the reason.
 - **The ladder.** Step (b)'s Richardson ladder and the (c) corpus decks have
   not been run under a one-potential spelling. P3′.7 is a single rung (r = 2,
   L = 0.30 m).
+
+## §9 — the slope target at a two-radius crossing node [2026-09-13]
+
+### §9.1 Where the one-radius condition comes from [derived]
+
+Take quasi-static half-space kernels, with image coefficient
+K = (ε̃ − 1)/(ε̃ + 1) and transmission 2/(ε̃ + 1). Let q_A and q_B be the outer
+line charges just above and just below the node, varying on a scale ℓ.
+
+On the above wire at height z, with a_A ≪ z ≪ ℓ:
+
+    4πε₀ Φ_A(z) ≈ q_A ln(4zℓ/a_A²) − K q_A ln(ℓ/z) + (2/(ε̃+1)) q_B ln(ℓ/z)
+
+- **The z-derivative.** It carries (1/z)·(2/(ε̃+1))·(ε̃ q_A − q_B).
+- **Nothing else balances it.** A 1/z tangential field on the wire has no other
+  counterpart, because the vector-potential part is bounded.
+- **The condition.** Hence q_B = ε̃ q_A, which is I′(0⁺)/I′(0⁻) = 1/ε̃. The
+  below side gives the same condition.
+
+**The radius enters only through ln(4zℓ/a²), and the z-derivative of that term,
+1/z, does not depend on a. The outer condition is independent of the radius.**
+
+### §9.2 Why the node slope is not the target [derived]
+
+At the node itself, one potential requires Φ_A(0⁺) = Φ_B(0⁻). With the outer
+charges, 4πε₀ Φ_X(0) ≈ (2/(ε̃+1))(q_A + q_B)·ln(2ℓ/a_X) on both sides, so
+the two values differ by the jump J ∝ (q_A + q_B)·ln(a_B/a_A) of §8.1. With
+a_A ≠ a_B the outer solution therefore cannot hold all the way to the node.
+
+- **A charge layer cancels J.** A layer of extra line density δq over a length
+  h raises the node potential by about δq·ln(h/a)/(2πε), so δq ≈ 2πε·J/ln(h/a).
+- **What the layer does under refinement.** It is confined to a length of
+  about h, and its total charge (about h·δq) vanishes as h shrinks. Its density
+  falls only as 1/ln(h/a), and it GROWS as h approaches a.
+- **What the node slope reads.** The discrete node slope reads the layer, so at
+  mixed radii it moves away from 1/ε̃ as the mesh refines. Check 3′ saw exactly
+  that: 0.66 → 1.25 at ratio 2 and 1.32 → 2.52 at ratio 4, from r = 1 to 2.
+- **Equal radii.** J = 0 and there is no layer.
+
+### §9.3 The target [derived]
+
+Read the charge ratio outside the layer, at a fixed physical distance d with
+h ≪ d ≪ ℓ, as the mesh refines. Two readouts:
+
+- the pointwise ratio R_p(d) = I′(+d)/I′(−d);
+- the secant ratio R_s(d) = [(I(+d) − I(0⁺))/d] / [(I(0⁻) − I(−d))/d].
+
+Both converge in r, because the layer shrinks with h. Both tend to 1/ε̃ as
+d → 0 (§9.1), with corrections of order d/ℓ and |k_m|·d. Those corrections
+depend on the radii only through the logarithms that shape the charge
+distribution, O(ln(a_A/a_B)/Λ · d/ℓ). **The gate therefore compares the
+mixed-radius R(d)·ε̃ with the equal-radius control's at the same d, and never
+reads the node slope.**
+
+### §9.4 The transpose guard [derived]
+
+- **Only the line-test radius is left to transpose.** Under one node potential
+  that is the only transposable content. Check 3's VC rows put its effect on Z
+  at 0.5–0.8 mΩ; that is an observation, and VC's construction error does not
+  depend on the radius.
+- **Z and the node deficit cannot see a transpose.** Transposing the whole
+  bordered system leaves Z unchanged, and with an exact KCL row the node
+  deficit is unchanged too.
+- **The currents at d move only by the line-rule content.** A transposed fill is
+  therefore not a physics regression that needs a current guard.
+- **The regression that matters is two-surface point tests.** Z sees it through
+  the radius response of §8.2: thinning the buried member must raise R more
+  than thinning the above member by the same factor, and the two-surface rule
+  reverses that. The guard is a Z test with a derived inequality and no golden
+  literal.
+
+### §9.5 Check 4, registered before the run
+
+`check4_slope.py`.
+
+- **Deck.** Check 2's rod (2 m below, 10 m above, fed at 4.33 m, soil A with
+  Sommerfeld ground, 7 MHz, probe18's g2 grading), with step (b)'s radii, so
+  that r = 8 keeps Δ/a ≥ 6.25 at the node.
+- **Configurations** (a_A, a_B) in mm: control (0.25, 0.25), ratio 2
+  (0.25, 0.125), ratio 4 (0.25, 0.0625), ratio 0.5 (0.125, 0.25).
+- **Refinement.** r = 1, 2, 4, 8, with the node segment at 12.5 mm / r.
+- **Spellings.** `obs` and `node_B` (check 3's harness), VC_keep(`node_B`), and
+  VC_keep(`node_B`) solved with the transposed matrix Zᵀ.
+- **Distances.** d = 0.2, 0.1, 0.05 and 0.025 m.
+- **Asserted at every rung:**
+  - the control reproduces the unpatched Z to ≤ 1e-9;
+  - VC_keep's KCL deficit and the transposed solve's are ≤ 1e-9;
+  - the transposed Z equals VC_keep's to ≤ 1e-9 relative;
+  - the solver degree is ≥ 2, so the slope is continuous.
+
+| id | test | prediction | verdict |
+|---|---|---|---|
+| P4.1 | the node slope is a layer quantity | **derived**, informed at r = 1 → 2 by check 3′: VC_keep(node_B)'s \|R_node·ε̃ − 1\| rises from r = 1 to r = 8 at ratios 2, 4 and 0.5, while the control's stays ≤ 1e-3 at every r |  |
+| P4.2 | converged outside the layer | **derived, blind**: at d = 0.1 m, VC_keep(node_B)'s R_p and R_s both converge, \|X(8) − X(4)\| < \|X(4) − X(2)\|, at every ratio. At r = 8 each lies within 5 % of the control's: \|X_mix·ε̃ − X_ctl·ε̃\| ≤ 0.05·\|X_ctl·ε̃\| |  |
+| P4.3 | the one-radius condition is the outer limit | **derived, blind**: at r = 8, \|R_p(d)·ε̃ − 1\| decreases as d shrinks through 0.2, 0.1, 0.05 and 0.025 m, for the control and for VC_keep(node_B) at every ratio |  |
+| P4.4 | a transposed fill is immaterial | **derived, blind**: at every rung, the transposed solve's R_p(0.1 m) and R_s(0.1 m) are within 1e-3 relative of VC_keep's |  |
+| P4.5 | the Z guard | **derived, blind**: at r = 2 under VC_keep(node_B), Re[Z(ratio 2) − Z(control)] > Re[Z(ratio 0.5) − Z(control)], and the inequality reverses under `obs`'s split |  |
+
+How the outcomes will be read, fixed now:
+
+- **P4.2 and P4.3 hit** → the slope target is the one-radius condition read at a
+  fixed physical distance outside the node layer, against the equal-radius
+  control. §7's slope test pins R(d = 0.1 m) there, and never the node slope.
+- **P4.1 hits** → the node slope is confirmed as unfit to gate at mixed radii.
+- **P4.4 and P4.5 hit** → §7 item 3's transpose guard is replaced by P4.5's Z
+  inequality, with no current guard for transposes.
+- **P4.2 converges but misses the 5 % bar** → the outer ratio depends on the
+  radii beyond §9.3's estimate. Derive the log-weighted correction before any
+  slope test is written.
+- **P4.3 misses** → §9.1's outer limit is not what the discretisation reaches
+  on this deck, and the slope stays out of §7.
