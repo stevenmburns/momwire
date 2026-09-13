@@ -431,3 +431,20 @@ the momwire feed placement is checked below before anything is read from it.
 This matches AK `scratch/g1b-bs1-bs2/RESULTS.md`, whose addendum found an
 electrically short dipole's Z moving several percent with the fed segment's
 length in any medium, approaching a finite limit about as gap^0.5.
+
+### A second fact, from the translation and not a prediction: the two engines are not driven at the same port
+
+Checked on the L = 0.60 m rod at refine 16 (peer review asked for it before any
+current is read):
+
+| | feed wire (10 mm) | source |
+|---|---|---|
+| NEC-5 deck | **2 segments** of 5.00 mm | `EX 0 5 1 2`: the **knot** between them, z = −0.500 m |
+| momwire (`MomwireEngine._polylines` / `_feeds`) | **1 segment** of 10.00 mm (edges `[61, 2, 2, 2, 1, 2, 2, 2, 61]`) | delta gap at arclength 0.300 m: the **middle of that segment**, where there is no knot |
+
+momwire's knots near the feed are −0.51125, −0.50500, −0.49500, −0.48875 m, so
+nothing sits at −0.500. The same builder deck reaches the two engines as two
+meshes that differ by one segment (135 against 136) and as two different
+source definitions: a gap at a knot against a gap inside a degree-2 segment.
+**The #1027 comparison is between two port spellings, not only two solvers.**
+Whether that is the whole −1.20 % is the next measurement, not this entry.
