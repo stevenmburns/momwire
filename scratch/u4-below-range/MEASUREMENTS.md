@@ -700,3 +700,31 @@ only the tests named in T3–T7 would be edited.
   so there is no pause to extend for.
 - **The fast lane's third run** proceeds without the screen, on an unloaded
   box.
+
+**PT3, the fast lane: every test passes on the final code, and the 20 s
+ceiling trips on origin/main as well.**
+
+| run | conditions | result | 20 s breaches |
+|---|---|---|---|
+| origin/main (b284b17 src and tests, `momwire-wt-u4`) | box idle | 5112 passed, 0 failed | 4 |
+| branch, third run | box idle (the screen was already dead) | 5113 passed, 0 failed | 10 |
+| branch, second run | screen at nice 15 | 5113 passed, 0 failed | 5 |
+| branch, first run | screen, plus two of this PR's own jobs | 5112 passed, 1 failed (`test_g910_2b`, fixed in e9153d0) | 5 |
+
+- **Pass counts.** The extra pass on the branch is the new past-cap zero gate.
+- **The breaching tests are ones this change cannot reach.** None of them
+  has a wire below the plane, and every code path this PR edits runs only for
+  a buried deck.
+  - The sea-water extended-kernel rows, at 20–24 s. Which rows breach, and how
+    many, changes from run to run; the same rows breach on main.
+  - The GN 0 point-field envelope `[0113]`, at 30–33 s on all four runs,
+    main included.
+  - The NEC-5 contact lane, which builds contact decks.
+  - The advisory cache's repeat solve, whose radial sits 1.05 mm ABOVE the
+    plane.
+- **Verdict on PT3's fast-lane clause.** The tests HIT. The ceiling trips on
+  this 4-core / 8-thread box under `-n auto` on origin/main too, which is the
+  same observation b284b17's U5 record made, so it is not evidence about the
+  change.
+- **The edited-tests clause stays a MISS** (`test_g910_2b`).
+- **Still to run:** `make slow` (running, `-n 4`) and `make crossgate`.
