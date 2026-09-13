@@ -429,3 +429,105 @@ How the outcomes will be read, fixed now:
   one-potential form. The missing piece is elsewhere in the node rows.
 - **P3.1 misses** → the point terms do not cancel in the merged row, and §8.1 is
   wrong.
+
+### §8.6 Check 3 measured [`check3_check2.*`, `check3_b.*`]
+
+| id | verdict |
+|---|---|
+| C3.0a | **HIT**. At equal radii on check 2's rod, all four piecewise spellings reproduce the unpatched Z to 3.2e-14 relative. On step (b)'s rod, `obs` reproduces the banked observer Z at every configuration to ≤ 5.1e-14 |
+| C3.0b | **MISSED**. At equal radii VC is 14.5 % off the split on check 2's rod (197.04 − 79.51j against 169.78 − 82.28j), and 3.2 % off on step (b)'s control (442.12 − 355.43j against 425.07 − 360.57j) |
+| C3.0c | **HIT**. VC built from `obs`, `node_A` and `node_B` agrees to ≤ 8.4e-13 |
+| P3.1–P3.7 | **not read**: the registered reading stops at C3.0b's miss |
+
+**Why VC missed [cited from src, then derived].** §8.4(5) assumed every block
+of the fill is mixed-potential, so that removing the explicit point tests
+removes all the point content of the node rows. That is not how the fill is
+built.
+
+- **The fill mixes two forms.** `compute_Z_operator_buried`'s docstring says
+  momwire fills direct and image in mixed-potential form but the Sommerfeld
+  remainders in field form, and that the two forms differ by the by-parts
+  boundary term [f·Φ] at each end of a basis's support.
+- **So the remainders carry hidden point tests.** The node tents are value-1
+  there, so each same-medium remainder block implicitly contains a point test
+  of the remainder potential at the node.
+- **VC removed only half.** The split's merged row cancels the implicit terms
+  along with the explicit ones. VC removed only the explicit ones, so its
+  merged row keeps the remainder's point content, which does not depend on the
+  radius.
+- **The measurements fit.** VC's level is off, but its radius response on step
+  (b)'s rod is +35.51 / +70.90 / +0.19 Ω against NEC-5's +35.39 / +70.66 /
+  +0.26 Ω.
+
+§8.4(5)'s "no radius choice at the node" is withdrawn as spelled: a multiplier
+twin with the point tests removed would also need the remainders' point
+content.
+
+**The VC-independent rows, as observations.** They are not verdicts, because the
+reading stopped at C3.0b.
+
+- **a_n behaves as a gauge.** |Z(node_A) − Z(node_B)| is 2.8 / 2.8 / 4.1 /
+  4.1 mΩ on check 2's rod (ratio 2 at r 1 and 2, then ratio 4 at r 1 and 2),
+  and 2.3 / 7.1 / 0.5 mΩ on step (b)'s rod (ratios 2 / 4 / 0.5).
+- **Observer-side's offset scales with ln(a_A/a_B).** On check 2's rod,
+  Re[Z(obs) − Z(node_B)] is −7.985 / −7.956 Ω at ratio 2 and −15.818 /
+  −15.759 Ω at ratio 4: a ratio of 1.981 at both refines. On step (b)'s rod it
+  is −35.13 / −70.06 / +35.68 Ω at ratios 2 / 4 / 0.5 (1 : 1.994 : −1.015).
+- **The node spellings track NEC-5.** On step (b)'s rod (r = 2, L = 0.30 m),
+  |ΔZ(node_B) − ΔZ(control)| is 0.14 / 0.27 / 0.07 Ω, and `node_A` gives the
+  same.
+- **Continuity follows the corner stiffness.**
+  - `node_B`'s KCL deficit is 1.6e-5 to 2.8e-5 on check 2's rod and 2.0e-6 to
+    4.6e-5 on step (b)'s.
+  - `node_A`'s is 5.2e-4 to 1.7e-3 and 4.1e-4 to 2.3e-3 respectively.
+  - It is larger with the larger a_n, as §8.4(3)'s stiffness argument says.
+- **The split node spellings' slopes are erratic.** `node_A` reads 11.8
+  relative off 1/ε̃ at ratio 2, r = 2. With continuity held only by the
+  stiffness, the slope beside the node is not a clean readout.
+
+So the identification of the ln(a_A/a_B) term rests, for now, on rows the
+registered reading said not to read. Check 3′ re-registers the VC-dependent
+predictions against a reference that needs no remainder point content.
+
+### §8.7 Check 3′, registered before the run
+
+**VC_keep**: the crossing junction's KCL multiplier row is added with every
+point term KEPT and nothing removed.
+
+- **It is the merged dof.** The node's two tents share one coefficient, the two
+  node rows are summed, and the multiplier absorbs their difference.
+- **Its merged row is the split's.** It carries whatever point content the
+  spelling puts there, explicit and implicit alike: a single-valued node
+  potential under `node_X`, the jump J under `obs`.
+- **Continuity is exact** without the corner's stiffness.
+- **Phase 2 measured it at one radius.** It is momwire#524 phase 2's "split ≡
+  merged".
+
+Everything below was written after check 3's rows above were seen. "Derived"
+marks the predictions that follow from §8 on their own.
+
+| id | test | prediction | verdict |
+|---|---|---|---|
+| C3′.0 | equal radii, both rods | **derived**: VC_keep ≡ split, \|ΔZ\|/\|Z\| ≤ 1e-4. A miss means the multiplier row is mis-built; nothing else is read |  |
+| P3′.2 | one node potential, every mixed row on both rods | **derived**: \|Z(node_X) − Z(VC_keep(node_Y))\| ≤ 0.1 Ω for X, Y ∈ {A, B} |  |
+| P3′.3 | the jump is the shift | **derived**, scaling informed by §8.6: Re[Z(VC_keep(obs)) − Z(VC_keep(node_B))] at ratio 4 over ratio 2 lies in [1.85, 2.15] at both refines on check 2's rod; on step (b)'s rod, ratio 0.5 over ratio 2 lies in [−1.15, −0.85] |  |
+| P3′.4 | the merged form's gauge | **derived, direction only**: \|Z(VC_keep(node_A)) − Z(VC_keep(node_B))\| is below the split's \|Z(node_A) − Z(node_B)\| on every mixed row, because the merged form does not rest on the corner's stiffness |  |
+| P3′.6 | slope | **derived, direction only**: VC_keep(node_B)'s slope ratio differs from 1/ε̃ by more than 0.05 relative at ratios 2 and 4 on check 2's rod. **Informed** by `obs`'s split rows: VC_keep(obs) stays within 1e-3 of 1/ε̃ there |  |
+| P3′.7 | step (b)'s rod against NEC-5 | **informed** by `node_B`'s rows: \|ΔZ(VC_keep(node_B)) − ΔZ(control)\| ≤ 0.5 Ω at ratios 2, 4 and 0.5 |  |
+
+VC_keep's KCL deficit is asserted ≤ 1e-9. That is a harness check, not a
+prediction.
+
+How the outcomes will be read, fixed now:
+
+- **C3′.0 misses** → the multiplier row is mis-built (its sign or its tents).
+  Fix that before reading anything else.
+- **P3′.2 and P3′.3 hit** → the ln(a_A/a_B) term is identified: observer-side
+  evaluates the node's point tests on two surfaces. The timebox's question is
+  answered, and U5 moves to the src design under §7, with the slope gate
+  re-derived.
+- **P3′.2 misses, P3′.3 hits** → the jump is the shift, but the split and merged
+  one-potential forms disagree by more than 0.1 Ω. The src rule must then carry
+  the multiplier, not only one a_n.
+- **P3′.3 misses** → the shift is not the jump in the merged form, and §8.1 is
+  wrong.

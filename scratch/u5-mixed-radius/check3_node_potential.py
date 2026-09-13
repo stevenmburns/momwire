@@ -178,14 +178,18 @@ def uninstall():
     BSplineSolver._solve_with_kcl = _orig_solve
 
 
-def vc_solve(s):
-    """The V-constrained reference from the captured run."""
+def vc_solve(s, remove=True):
+    """A V-constrained reference from the captured run: the crossing
+    junction's KCL row added, with the node point tests removed (VC) or kept
+    (VC_keep, the merged dof)."""
     Z = CAP["Z"]
     removal = CAP["pt_a"] + CAP["pt_b"].T - CAP["self_pt"]
     na, nb = CAP["na"], CAP["nb"]
     rows = set(np.flatnonzero(np.any(removal != 0, axis=1)).tolist())
     if not rows <= CAP["live"] or not {na, nb} <= rows:
         raise RuntimeError(f"node point tests on rows {rows}; live {CAP['live']}")
+    if not remove:
+        removal = np.zeros_like(Z)
     u = np.zeros((1, Z.shape[0]))
     u[0, na], u[0, nb] = 1.0, -1.0
     kcl = np.vstack([CAP["kcl"].reshape(-1, Z.shape[0]), u])
@@ -204,6 +208,10 @@ def finish(spelling, s, z, coeffs, readout, **meta):
     z_vc, c_vc = vc_solve(s)
     rec = dict(spelling=spelling, **meta, z=str(z), **readout(s, coeffs))
     rec["vc"] = dict(z=str(z_vc), **readout(s, c_vc))
+    z_keep, c_keep = vc_solve(s, remove=False)
+    rec["vc_keep"] = dict(z=str(z_keep), **readout(s, c_keep))
+    if rec["vc_keep"]["kcl_rel"] > 1e-9:
+        raise RuntimeError(f"VC_keep KCL {rec['vc_keep']['kcl_rel']}: row mis-built")
     return rec
 
 
@@ -253,11 +261,12 @@ def run_b_rod(a_top, a_rise, spelling, L=0.30, r=2):
 
 
 def show(rec):
-    vc = rec["vc"]
+    vc, keep = rec["vc"], rec["vc_keep"]
     return (
         f"{rec['spelling']:8s} z={complex(rec['z']):.8g} kcl={rec['kcl_rel']:.2e} "
         f"slope-vs-AGARD={rec['slope_vs_agard']:.3e} | VC z={complex(vc['z']):.8g} "
-        f"kcl={vc['kcl_rel']:.2e} slope-vs-AGARD={vc['slope_vs_agard']:.3e}"
+        f"| VC_keep z={complex(keep['z']):.8g} kcl={keep['kcl_rel']:.2e} "
+        f"slope-vs-AGARD={keep['slope_vs_agard']:.3e}"
     )
 
 
@@ -271,6 +280,9 @@ def check2_rod():
             rec = run_check2_rod(1e-3, 1e-3, sp, 1)
             rec["rel_to_unpatched"] = abs(complex(rec["z"]) - z0) / abs(z0)
             rec["vc_rel_to_split"] = abs(complex(rec["vc"]["z"]) - z0) / abs(z0)
+            rec["vc_keep_rel_to_split"] = abs(complex(rec["vc_keep"]["z"]) - z0) / abs(
+                z0
+            )
             out.append(rec)
             print(
                 f"equal radii {show(rec)}  rel {rec['rel_to_unpatched']:.1e}  "
