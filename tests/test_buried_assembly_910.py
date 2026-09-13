@@ -156,15 +156,11 @@ def test_g910_2_the_chunked_form_is_reachable_at_all(monkeypatch):
 
 @pytest.mark.filterwarnings("ignore:crossing node")
 def test_g910_2b_the_refusals_still_fire():
-    # Past the r1 cap: a radial far longer than the below-cap allows.
-    long = hub_deck()
-    long["wires"] = [
-        np.array([(200.0 * dx, 200.0 * dy, -0.15), (0.0, 0.0, -0.15)])
-        for dx, dy in ((1, 0), (0, 1), (-1, 0), (0, -1))
-    ] + long["wires"][4:]
-    with pytest.raises(ValueError, match="R1"):
-        BSplineSolver(**long).compute_impedance()
-    # Grazing: a buried radial a hair under the plane.
+    # Past the R1 cap is no longer a refusal (momwire#1053 serves the
+    # below/below remainder there as zero; `test_below_past_cap_zero_1053`
+    # holds the bound), so the grazing floor is the one below/below refusal
+    # left to fire through this assembly. Grazing: a buried radial a hair
+    # under the plane.
     shallow = hub_deck(depth=1e-4)
     with pytest.raises(ValueError, match="grazing|floor|theta|angle"):
         BSplineSolver(**shallow).compute_impedance()
