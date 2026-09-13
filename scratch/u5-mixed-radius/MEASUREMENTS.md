@@ -145,3 +145,23 @@ above-observer rows of the crossing fill, so either those rows carry the rise's
 node physics in a way the derivation missed, or something upstream (radius
 plumbing, which member the harness labels "above") is not what it appears.
 Diagnosis comes before any change to the rule; it is registered next.
+
+## Diagnosis of step (b) — registered before the run
+
+`diag_radius.py`. No rule is changed by this diagnosis, and `single_B` is not
+adopted by fit (check 2 measured continuity breaking under it). Each test below
+separates one candidate cause.
+
+| id | test | prediction | verdict |
+|---|---|---|---|
+| D0 | **resolved settings**, on step (b)'s ratio-2 deck, L = 0.30 m, r = 1, observer-side: record `_radius_per_wire` with each wire's z-range; the per-row radii every call to `_build_J_blocks_subset` / `_accumulate_Z_subset_chunked` receives, with its segments' z-range; and the z-range of the `a_idx` segments the crossing fill is handed | **blind**: wire 0 is the rise at a_rise (0.125 mm), wire 1 the fed wire and radiator at a_top (0.25 mm); every same-medium call's per-row radii equal the owning wire's radius; every `a_idx` segment has z ≥ 0, so the harness's "above" block is the above block | pending |
+| D1 | **no crossing** (raised on review): a wholly buried two-wire rod, #1027's geometry (L = 0.60 m, top at −0.20 m, soil A, centre feed), with the lower half's radius a_low = 0.25 / 0.125 / 0.0625 mm and the fed wire and upper half at 0.25 mm; ports matched; both engines, refine 8 → 16 Richardson | **blind**: momwire's R response to the lower half's radius (R∞(a_low) − R∞(0.25 mm)) is within 15 % of NEC-5's at both reduced radii | pending |
+| D2i | **step below the node**: step (b)'s crossing rod at L = 0.30 m with the rise split at z = −0.10 m; the lower 0.20 m at a_s = 0.25 / 0.125 / 0.0625 mm, everything from −0.10 m up at 0.25 mm, so the crossing node has one radius and the shipped fill needs no rule; the scope check handed uniform radii; ports matched; r = 2 → 4 Richardson | **blind**: momwire's R response to a_s is within 15 % of NEC-5's at both reduced radii | pending |
+| D2ii | **step above the node, in the air**: the rise and the fed wire at a_s = 0.25 / 0.125 mm, the radiator from 0.05 m up at 0.25 mm; the node again has one radius (a_s) | **blind**: momwire's R response to a_s is within 15 % of NEC-5's | pending |
+
+How the outcomes will be read, fixed now:
+
+- **D0 fails** → a harness or plumbing error, and step (b)'s observer rows were not what the record says. Re-run (b) once fixed, before anything else.
+- **D1 fails** → the buried same-medium family does not carry mixed radii correctly on its own. The corner rule is not implicated, and step (b) cannot test it until that is fixed.
+- **D1 passes, D2i fails** → a radius change near a crossing is mishandled even where the node has one radius, so the problem is outside the corner rule but inside the crossing serve.
+- **D0, D1 and D2 all pass** → the plumbing is sound, and **the observer-side corner rule itself is wrong for the rise's node physics**. Back to (a).
