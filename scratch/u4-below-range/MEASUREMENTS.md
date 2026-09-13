@@ -179,3 +179,11 @@ nothing.
    Rung r = 1 (2,690 segments) is mandatory. r = 3 runs only if rung 1's
    momwire wall time and memory make it feasible under the 24 GB cap; that
    decision is recorded, not assumed.
+
+## The Z gate: guards measured
+
+| id | verdict |
+|---|---|
+| G-Z1 | **HIT, non-vacuous on the second run.** First run (`gz1_band.*`), θ 0.1°–2°: worst 1.4e-8. A second run over the steep band (`gz1_band_steep.*`, θ 30°–90°) gave 1.8e-7, but on inspection **every θ sample was a lattice node**: 2.5° steps against the far annulus's steep Δθ = 60°/72 = 0.833°. About half the R1 samples were nodes too, so that check measured almost nothing along θ. The sampling now uses fractional offsets, (k + 0.37) in R1 and (k + 0.61) in θ, and was re-run (`gz1_offnode_*`): grazing band worst **1.16e-8** (at 4.03 λ_m, 1.97°); steep band worst **7.5e-6** (at 4.01 λ_m, 38.7°). Off-node, the steep band is 40× its on-node figure, so the check discriminates. Both bands are far under 2e-4 over R1 ∈ (4, 4.7] λ_m at the LPDA's soil and frequency |
+| G-Z2 | **HIT.** Catalog `buried_radial_vertical`, soil A: `extended` Z = `shipped` Z = 78.1320604078555+46.337676999899195j, bit for bit. Its below grid is in range (r1_max 15.49 m = 1.56 λ_m) and unchanged by the cap patch (`gz23_identity.*`) |
+| G-Z3 | **HIT.** `zeroed` Z is the same, bit for bit. The wrapper was reached (4 calls, 1,774,224 pairs) and zeroed none |
