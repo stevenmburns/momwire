@@ -294,3 +294,66 @@ stands as the reference any future serve will be read against.
   grazing floor.
 - **The next step is the plan owner's decision.** The options are a synthetic
   deck, the grazing-floor unit first, or deferral.
+
+## The Z gate on a synthetic deck (Steve's option (a); registered before any run)
+
+The LPDA cannot carry the Z gate, so this deck is built to. `synthetic_u4.nec`:
+
+- **Above:** a 21.4 m quarter-wave mast (`GW 1`, 11 segments, base-fed `EX 0 1 1`).
+- **Below:** ONE crossing node at the origin, a 0.15 m rise (`GW 2`) to a buried
+  hub, and four radials of 38 m at 0.15 m depth (`GW 3`–`6`, 19 segments each).
+- **Ground and flags:** `GE -1`, `GN 2` soil A (13, 0.005), 3.5 MHz, λ_m =
+  15.966 m. Every radius is 1 mm, so the U5 two-radius rule is not engaged.
+- **Range and grazing, by construction:**
+  - tip to tip across the screen, R1 = hypot(76, 0.30) = 76.0 m = **4.76 λ_m**:
+    past the 4 λ_m cap (63.86 m), inside an extended cap of 5 (79.8 m);
+  - the shallowest below/below pair is a rise node near z = 0 against a radial
+    tip, a depth sum ≥ 0.15 m over ≤ 38 m, so θ ≥ 0.23°;
+  - tip-to-tip pairs sit at θ = 0.23° too;
+  - with one crossing node there are no rise-to-rise pairs at separation, so
+    the whole screen is above the 0.05° floor at any refinement.
+- **Negative control:** `synthetic_u4_shallow_control.nec` is the same deck at
+  0.02 m depth. Its tip-to-tip θ is 0.030° and its rise-to-tip θ ≈ 0.030°, both
+  under the floor, so a θ guard must fire on it.
+
+**A quirk noted for the record** (the peer is filing it). antennaknobs'
+construction preflight (`engines.momwire._below_reach_refusal`) measures polyline
+VERTICES, so the z = 0 vertices of two DIFFERENT crossing nodes form a pair with
+a depth sum of 0 at nonzero separation, which it reads as θ = 0. On the LPDA, 8
+crossing nodes made it refuse at θ = 0°. momwire's node-level plan read 0.0239°
+for the same deck and refused too, so there it was conservative rather than
+wrong. On a deck whose nodes all clear the floor it would over-refuse. The
+synthetic deck has one crossing node and does not trip it.
+
+### Guards (all asserted BEFORE any Z is read; a miss stops the gate)
+
+| id | check | bar |
+|---|---|---|
+| G-S0 | **the θ guard can fire.** `extents` mode on the shallow control | θ_min < 0.05° is reported, and the run refuses |
+| G-S1 | **vertex extents at every rung** (r = 1, 3, 9): `_pair_extents_below` over the refined deck's buried vertices; momwire's `below_reach_refusal` at cap 4 and at cap 5 | 4 < R1/λ_m < 5 and θ_min ≥ 0.05°; cap 4 → the range refusal; cap 5 → served (None) |
+| G-S2 | **node extents inside every `extended` and `zeroed` solve.** A wrapper on `serve_plan`'s `pair_extents` records the quadrature-node (R1, θ) and raises before the fill if either bound fails | the same bounds, with at least one recorded call per rung |
+| G-S3 | **zeroing plumbing at every rung** | `proj_calls` > 0 and `zeroed_pairs` > 0 |
+| G-S4 | **the extended band's accuracy to this deck's R1.** G-Z1 re-run off-node to `r1_max` = 4.8 λ_m, in the grazing band (0.1°–2°) and the steep band (30°–90°) | ≤ 2e-4 in both |
+
+### Predictions
+
+| id | prediction | verdict |
+|---|---|---|
+| PZ-S1 | **the U4 verdict**, informed by the screen (beyond-cap M2 ≤ 1.04e-4 everywhere, with a ~1/R tail on radial pairs; the beyond-cap pairs here are only the outer ~6 m of opposite radials): at every rung, \|Z(zeroed) − Z(extended)\| ≤ b, where b is the extended table's own last ladder step \|Z_ext(9) − Z_ext(3)\|, or \|Z_ext(3) − Z_ext(1)\| if r = 9 does not run |  |
+| PZ-S2 | **blind**: `shipped` refuses at every rung, and on RANGE (the past-the-cap sentence), not on grazing |  |
+| PZ-S3 | **informational, blind**: the extended ladder's Richardson estimate lies within 5 % of NEC-5's Richardson estimate on the same rungs. The crossing node is ungraded, which is worth ohms by #674's measure, and NEC-5 is the reference engine, not the truth; a miss does not choose U4's branch |  |
+
+**Ladder:** `antennaknobs ladder --refine 1 3 9` for `extended`, `zeroed` and
+NEC-5 (x13-static). r = 9 runs only if `extended` at r = 3 finishes in under 30
+min; the decision is recorded either way.
+
+How the outcomes will be read, fixed now:
+
+- **Any guard misses** → stop. There is no Z reading.
+- **PZ-S1 hits** → **serve beyond the cap with the remainder zeroed.** The src PR:
+  - replaces the range refusal with the documented bound (field M2 at 4 λ_m
+    ≤ 1.04e-4 on the screen, and the Z-level δ measured here against b);
+  - fixes the stale cap comment;
+  - pins zeroed against extended on this deck in a test.
+- **PZ-S1 misses** → **extend the table past 4 λ_m.** The far annulus's lattice
+  continues, and G-S4's accuracy check becomes the src test.

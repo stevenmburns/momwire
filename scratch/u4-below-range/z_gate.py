@@ -39,7 +39,7 @@ from pathlib import Path
 import numpy as np
 
 import momwire
-from momwire import _ground_refl
+from momwire import _below_interface, _ground_refl
 from momwire import _sommerfeld_below as below
 from momwire._sommerfeld import _SURF_KEYS
 
@@ -87,6 +87,41 @@ def apply(spelling, cap):
         below.remainder_field_proj_below = proj
     elif spelling == "extended":
         below.remainder_field_proj_below = _orig_proj
+
+
+EXTENTS = {"bounds": None, "calls": []}
+_orig_serve_plan = _below_interface.serve_plan
+
+
+def assert_extents(r1_lo, r1_hi, th_min_deg):
+    """Wrap `serve_plan`'s `pair_extents` so every solve records the
+    quadrature-node (R1, theta) of its below/below plan and RAISES before the
+    fill if either leaves the bounds (G-S2). Nothing is read from a solve
+    whose extents were not asserted."""
+    EXTENTS["bounds"] = (r1_lo, r1_hi, th_min_deg)
+
+    def serve_plan(*a, pair_extents, **k):
+        k_m = a[7] if len(a) > 7 else k["k_m"]
+        lam_m = 2.0 * math.pi / abs(k_m)
+
+        def checked(x, y, d_b):
+            r1, th = pair_extents(x, y, d_b)
+            rec = dict(r1_lambda=float(r1 / lam_m), theta_deg=float(math.degrees(th)))
+            EXTENTS["calls"].append(rec)
+            if not (r1_lo < rec["r1_lambda"] < r1_hi) or rec["theta_deg"] < th_min_deg:
+                raise AssertionError(
+                    f"G-S2: node extents {rec} outside R1 in ({r1_lo}, {r1_hi}) "
+                    f"lambda_m, theta >= {th_min_deg} deg; no Z is read"
+                )
+            return r1, th
+
+        return _orig_serve_plan(*a, pair_extents=checked, **k)
+
+    _below_interface.serve_plan = serve_plan
+
+
+def release_extents():
+    _below_interface.serve_plan = _orig_serve_plan
 
 
 def restore():
@@ -177,11 +212,62 @@ def mode_identity(args):
     return out
 
 
+def mode_extents(args):
+    """G-S0/G-S1: vertex extents at every rung, and momwire's own preflight
+    verdict at the shipped cap and at the extended cap. No solve, no Z."""
+    from antennaknobs.file_designs import builder_from_file
+    from momwire.bspline import _pair_extents_below, below_reach_refusal
+
+    om = 2.0 * math.pi * args.freq_mhz * 1e6
+    eps_t = _ground_refl.eps_tilde((args.eps_r, args.sigma), om, EPS0)
+    lam_m = below.lambda_medium(eps_t, om / C0)
+    rungs = []
+    for r in args.refine:
+        deck = builder_from_file(str(args.deck), refine=r).file_deck_parsed
+        pts = np.array([p for w in deck.wires for p in (w.p1, w.p2)], dtype=float)
+        pts = np.unique(pts, axis=0)
+        bur = pts[pts[:, 2] <= 0.0]
+        r1, th = _pair_extents_below(bur[:, 0], bur[:, 1], -bur[:, 2])
+        verdicts = {}
+        for cap in (CAP0, args.cap):
+            below._SOMM_BELOW_R1_CAP_LAMBDA_M = float(cap)
+            try:
+                v = below_reach_refusal(
+                    pts, 0.0, (args.eps_r, args.sigma), om / (2 * math.pi)
+                )
+            finally:
+                below._SOMM_BELOW_R1_CAP_LAMBDA_M = CAP0
+            verdicts[str(cap)] = None if v is None else v[:120]
+        rec = dict(
+            refine=r,
+            segs=sum(w.n_seg for w in deck.wires),
+            r1_lambda=float(r1 / lam_m),
+            theta_min_deg=float(math.degrees(th)),
+            verdicts=verdicts,
+        )
+        ok = (4.0 < rec["r1_lambda"] < args.cap) and rec["theta_min_deg"] >= 0.05
+        rec["within_bounds"] = ok
+        rungs.append(rec)
+        print(json.dumps(rec), flush=True)
+    out = dict(
+        mode="extents",
+        deck=str(args.deck),
+        lam_m=lam_m,
+        rungs=rungs,
+        all_within=all(x["within_bounds"] for x in rungs),
+    )
+    print(json.dumps(dict(all_within=out["all_within"])), flush=True)
+    return out
+
+
 def mode_ladder(args):
     from antennaknobs import cli as entry
 
     STATS.update(proj_calls=0, pairs=0, zeroed_pairs=0, grids=[])
     apply(args.spelling, args.cap)
+    EXTENTS["calls"] = []
+    if args.assert_extents:
+        assert_extents(4.0, float(args.cap), 0.05)
     argv = ["antennaknobs", "ladder", "--builder", "@" + str(args.deck)]
     argv += ["--refine", *[str(r) for r in args.refine]]
     argv += ["--engines", args.engine]
@@ -199,6 +285,7 @@ def mode_ladder(args):
         error = f"{type(e).__name__}: {e}"
     finally:
         restore()
+        release_extents()
     text = buf.getvalue()
     out = dict(
         mode="ladder",
@@ -210,6 +297,7 @@ def mode_ladder(args):
         stdout=text,
         error=error,
         stats=dict(STATS, grids=list(STATS["grids"])),
+        extents=dict(bounds=EXTENTS["bounds"], calls=list(EXTENTS["calls"])),
         seconds=time.time() - t0,
     )
     print(text, flush=True)
@@ -222,7 +310,8 @@ def mode_ladder(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=("band", "identity", "ladder"))
+    ap.add_argument("mode", choices=("band", "identity", "ladder", "extents"))
+    ap.add_argument("--assert-extents", action="store_true")
     ap.add_argument("--cap", type=float, default=5.0)
     ap.add_argument("--out", type=Path, default=None)
     ap.add_argument("--freq-mhz", type=float, default=3.5)
@@ -238,9 +327,12 @@ def main():
     args = ap.parse_args()
     meta = dict(momwire_file=momwire.__file__, cap0=CAP0)
     print(meta, flush=True)
-    result = {"band": mode_band, "identity": mode_identity, "ladder": mode_ladder}[
-        args.mode
-    ](args)
+    result = {
+        "band": mode_band,
+        "identity": mode_identity,
+        "ladder": mode_ladder,
+        "extents": mode_extents,
+    }[args.mode](args)
     if args.out is not None:
         args.out.write_text(json.dumps(dict(meta=meta, result=result), indent=1))
         print(f"saved {args.out}")
