@@ -1,0 +1,34 @@
+{'momwire_file': '/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/__init__.py', 'configs': {'control': (0.00025, 0.00025), 'ratio2': (0.00025, 0.000125), 'ratio4': (0.00025, 6.25e-05), 'ratio05': (0.000125, 0.00025)}, 'ds': (0.2, 0.1, 0.05, 0.025)}
+control  r=1 obs    z=186.62158-102.22989j kcl=2.67e-08 |node-1|=4.383e-05
+control  r=1 node_B z=186.62158-102.22989j kcl=2.67e-08 |node-1|=4.383e-05 | VC_keep z=186.62158-102.22989j |node-1|=4.383e-05 |p0.1-1|=2.102e-01 |s0.1-1|=1.057e-01 | transposed p0.1 rel 2.2e-13
+control  r=2 obs    z=186.28012-102.32139j kcl=2.47e-08 |node-1|=7.146e-05
+control  r=2 node_B z=186.28012-102.32139j kcl=2.47e-08 |node-1|=7.146e-05 | VC_keep z=186.28012-102.32139j |node-1|=7.145e-05 |p0.1-1|=2.092e-01 |s0.1-1|=1.057e-01 | transposed p0.1 rel 2.3e-12
+control  r=4 obs    z=186.08912-102.36119j kcl=2.57e-08 |node-1|=6.066e-05
+control  r=4 node_B z=186.08912-102.36119j kcl=2.57e-08 |node-1|=6.066e-05 | VC_keep z=186.08912-102.36119j |node-1|=6.066e-05 |p0.1-1|=2.091e-01 |s0.1-1|=1.057e-01 | transposed p0.1 rel 8.0e-13
+control  r=8 obs    z=185.98017-102.37688j kcl=4.30e-08 |node-1|=1.218e-04
+control  r=8 node_B z=185.98017-102.37688j kcl=4.30e-08 |node-1|=1.218e-04 | VC_keep z=185.98017-102.37688j |node-1|=1.218e-04 |p0.1-1|=2.090e-01 |s0.1-1|=1.057e-01 | transposed p0.1 rel 1.4e-12
+ratio2   r=1 obs    z=186.48817-102.90938j kcl=2.96e-08 |node-1|=4.244e-05
+ratio2   r=1 node_B z=194.48246-106.17147j kcl=2.58e-06 |node-1|=3.053e-01 | VC_keep z=194.48246-106.17147j |node-1|=3.057e-01 |p0.1-1|=2.266e-01 |s0.1-1|=1.611e-01 | transposed p0.1 rel 3.3e-06
+ratio2   r=2 obs    z=186.14796-103.00929j kcl=1.11e-08 |node-1|=4.016e-05
+ratio2   r=2 node_B z=194.11447-106.28877j kcl=3.06e-06 |node-1|=4.249e-01 | VC_keep z=194.11447-106.28877j |node-1|=4.262e-01 |p0.1-1|=2.264e-01 |s0.1-1|=1.619e-01 | transposed p0.1 rel 9.1e-09
+ratio2   r=4 obs    z=185.95636-103.05499j kcl=1.28e-08 |node-1|=6.014e-05
+ratio2   r=4 node_B z=193.90853-106.34439j kcl=3.99e-06 |node-1|=6.589e-01 | VC_keep z=193.90853-106.34439j |node-1|=6.642e-01 |p0.1-1|=2.266e-01 |s0.1-1|=1.627e-01 | transposed p0.1 rel 2.2e-08
+ratio2   r=8 obs    z=185.84745-103.07548j kcl=1.25e-08 |node-1|=1.480e-04
+ratio2   r=8 node_B z=193.79095-106.3702j kcl=6.22e-06 |node-1|=1.221e+00 | VC_keep z=193.79095-106.3702j |node-1|=1.251e+00 |p0.1-1|=2.267e-01 |s0.1-1|=1.638e-01 | transposed p0.1 rel 2.4e-08
+ratio4   r=1 obs    z=186.38002-103.48658j kcl=1.44e-08 |node-1|=2.183e-05
+ratio4   r=1 node_B z=202.24601-110.20564j kcl=2.99e-06 |node-1|=6.106e-01 | VC_keep z=202.24601-110.20564j |node-1|=6.115e-01 |p0.1-1|=2.799e-01 |s0.1-1|=2.715e-01 | transposed p0.1 rel 4.5e-06
+ratio4   r=2 obs    z=186.03723-103.59126j kcl=1.36e-08 |node-1|=2.976e-05
+ratio4   r=2 node_B z=201.84977-110.34778j kcl=3.54e-06 |node-1|=8.499e-01 | VC_keep z=201.84977-110.34778j |node-1|=8.531e-01 |p0.1-1|=2.814e-01 |s0.1-1|=2.732e-01 | transposed p0.1 rel 1.3e-08
+ratio4   r=4 obs    z=185.84737-103.64189j kcl=5.43e-09 |node-1|=9.628e-05
+ratio4   r=4 node_B z=201.62798-110.4181j kcl=4.61e-06 |node-1|=1.319e+00 | VC_keep z=201.62798-110.4181j |node-1|=1.331e+00 |p0.1-1|=2.823e-01 |s0.1-1|=2.752e-01 | transposed p0.1 rel 2.9e-08
+ratio4   r=8 obs    z=185.73768-103.66516j kcl=6.24e-09 |node-1|=1.679e-04
+ratio4   r=8 node_B z=201.50134-110.45301j kcl=7.07e-06 |node-1|=2.450e+00 | VC_keep z=201.50134-110.45301j |node-1|=2.521e+00 |p0.1-1|=2.826e-01 |s0.1-1|=2.778e-01 | transposed p0.1 rel 3.0e-08
+ratio05  r=1 obs    z=195.22483-111.44085j kcl=5.83e-08 |node-1|=2.475e-04
+ratio05  r=1 node_B z=187.11396-108.37127j kcl=3.60e-06 |node-1|=2.366e-01 | VC_keep z=187.11396-108.37127j |node-1|=2.362e-01 |p0.1-1|=2.341e-01 |s0.1-1|=1.597e-01 | transposed p0.1 rel 2.9e-06
+ratio05  r=2 obs    z=194.86932-111.52504j kcl=2.20e-08 |node-1|=1.082e-04
+ratio05  r=2 node_B z=186.78604-108.44155j kcl=3.97e-06 |node-1|=3.071e-01 | VC_keep z=186.78604-108.44155j |node-1|=3.059e-01 |p0.1-1|=2.337e-01 |s0.1-1|=1.601e-01 | transposed p0.1 rel 1.8e-08
+ratio05  r=4 obs    z=194.67546-111.56187j kcl=2.80e-08 |node-1|=2.049e-04
+ratio05  r=4 node_B z=186.60478-108.46988j kcl=4.80e-06 |node-1|=4.285e-01 | VC_keep z=186.60478-108.46988j |node-1|=4.244e-01 |p0.1-1|=2.337e-01 |s0.1-1|=1.604e-01 | transposed p0.1 rel 8.3e-09
+ratio05  r=8 obs    z=194.56551-111.57569j kcl=2.15e-09 |node-1|=1.391e-04
+ratio05  r=8 node_B z=186.50287-108.47968j kcl=6.69e-06 |node-1|=6.730e-01 | VC_keep z=186.50287-108.47968j |node-1|=6.562e-01 |p0.1-1|=2.337e-01 |s0.1-1|=1.608e-01 | transposed p0.1 rel 8.6e-09
+saved scratch/u5-mixed-radius/check4.json

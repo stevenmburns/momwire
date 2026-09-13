@@ -728,3 +728,76 @@ How the outcomes will be read, fixed now:
   slope test is written.
 - **P4.3 misses** → §9.1's outer limit is not what the discretisation reaches
   on this deck, and the slope stays out of §7.
+
+### §9.6 Check 4 measured [`check4.*`, `check4_verdicts.*`]
+
+The harness assertions held at every rung:
+
+- the control reproduced the unpatched Z;
+- VC_keep's and the transposed solve's KCL deficits were ≤ 1e-9;
+- the transposed Z matched VC_keep's;
+- the solver degree was ≥ 2.
+
+| id | verdict |
+|---|---|
+| P4.1 | **HIT**. VC_keep(`node_B`)'s \|R_node·ε̃ − 1\| rises steadily with r: 0.31 → 0.43 → 0.66 → 1.25 at ratio 2, 0.61 → 0.85 → 1.33 → 2.52 at ratio 4, and 0.24 → 0.31 → 0.42 → 0.66 at ratio 0.5. The control's stays at 4.4e-5 to 1.2e-4 |
+| P4.2 | **MISSED**. At d = 0.1 m the pointwise ratio converges: its last steps are 2.6e-4, 5.1e-4 and 8.6e-5, each about a third of the step before. At r = 8, though, it lies 10.3 / 20.6 / 9.5 % from the control's. The secant ratio does not converge (its steps grow, 1.08e-3 → 1.50e-3 at ratio 2) and lies 13 / 27 / 12 % off |
+| P4.3 | **MISSED**. The control's \|R_p(d)·ε̃ − 1\| halves with d (0.406, 0.209, 0.106, 0.053): first order in d, onto 1/ε̃. The mixed ratios level off instead: 0.41, 0.23, 0.15, 0.14 at ratio 2; 0.43, 0.28, 0.25, 0.27 at ratio 4, rising again at the smallest d; 0.42, 0.23, 0.15, 0.13 at ratio 0.5 |
+| P4.4 | **MISSED**, on the secant only. The transposed solve moves R_s(0.1 m) by 4.7e-4 to 2.2e-3, growing with r. It moves the pointwise R_p(0.1 m) by ≤ 4.5e-6 at r = 1 and ≤ 3.1e-8 from r = 2 up |
+| P4.5 | **HIT**. At r = 2 under VC_keep(`node_B`), thinning the buried member raises R by 7.83 Ω and thinning the above member raises it by 0.51 Ω. Under `obs` the responses are −0.13 and +8.59 Ω: reversed |
+
+**Reading, as registered:**
+
+- **P4.1 hits** → the node slope is confirmed unfit to gate at mixed radii.
+- **P4.2's pointwise readout converges but misses the 5 % bar** → the outer ratio
+  depends on the radii beyond §9.3's estimate. The log-weighted correction must
+  be derived before any slope test is written.
+- **P4.3 misses** → §9.1's radius-independent outer limit is not what the
+  discretisation reaches on this deck. **The slope stays out of §7.**
+- **P4.4 and P4.5 did not both hit**, so the registered replacement of item 3's
+  transpose guard is not triggered. What the rows show instead:
+  - the pointwise readout at d does not see a transpose (≤ 3e-8);
+  - the secant sees one weakly (≤ 2.2e-3), through the node layer;
+  - Z's radius-response inequality separates the two-surface rule sharply
+    (P4.5).
+
+**Where §9.1 goes wrong [derived after the misses, and not yet checked].**
+
+- **What §9.1 did.** It balanced the 1/z field with CONSTANT outer charges.
+- **The leftover mismatch.** That balance fixes q_B = ε̃ q_A, but it leaves the
+  two sides' potentials at the node at (q_A/4πε₀)·ln(4ℓ²/a_A²) and
+  (q_A/4πε₀)·ln(4ℓ²/a_B²). These differ when a_A ≠ a_B.
+- **What one potential forces.** One conductor potential therefore makes the
+  outer charges themselves vary logarithmically, not only a layer at the node.
+- **The likely condition.** Equal potentials, each side with its own log
+  weight: q_B/q_A ≈ ε̃·Λ_A/Λ_B, with Λ_X = ln(c·d/a_X). Then
+  R(d)·ε̃ ≈ R_ctl(d)·ε̃ · Λ_B/Λ_A. This is the form of a thin-wire junction
+  charge condition, generalised by ε̃.
+
+The rows agree with it. The agreement is post hoc, so it carries less weight
+than a blind check:
+
+- **The ratio.** M = R_p,mix(0.1 m)/R_p,ctl(0.1 m) at r = 8 is 1.102 − 0.011j,
+  1.205 − 0.023j and 0.905 + 0.010j at ratios 2, 4 and 0.5.
+- **ln scaling.** M − 1 grows 1 : 2.00 from ratio 2 to ratio 4 (ln 2 : ln 4).
+- **The sign flip.** M − 1 changes sign at ratio 0.5, where a_A is halved, and
+  its size there is 0.92 of ratio 2's, as a larger Λ_A requires.
+- **The plateau.** P4.3's plateau, and the rise at the smallest d, are what
+  Λ(d) = ln(c·d/a) does as it shrinks with d.
+- **The implied logs.** Λ_A ≈ 6.8 at a_A = 0.25 mm (ratios 2 and 4 agree to
+  0.01) and 7.3 at a_A = 0.125 mm. Their difference is 0.55, against ln 2 =
+  0.69.
+
+**What this means for §7:**
+
+- **KCL.** The multiplier (step (b′)).
+- **The two-surface regression guard.** Recommended: P4.5's Z inequality. It is
+  derived, needs no golden literal, and on check 2's rod separates the rule
+  (rise − top = +7.33 Ω) from the two-surface rule (−8.72 Ω). Since the reading
+  did not trigger this, it is a recommendation for review. No current guard is
+  proposed for transposes: the pointwise readout cannot see one, and the secant
+  sees one only through the layer it does not converge on.
+- **The slope.** It stays out of §7 until the log-weighted condition is derived
+  and checked blind. That would be a check 5 on radius ratios not yet run (8
+  and 0.25) with the d-dependence predicted before the run. The slope of 1/(M − 1)
+  against ln d is 1/ln(a_A/a_B) whatever c is, so it leaves no free parameter.

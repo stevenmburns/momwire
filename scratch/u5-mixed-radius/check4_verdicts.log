@@ -1,0 +1,26 @@
+== P4.1 (node slope: mixed deviation rises r=1 -> 8; control <= 1e-3)
+ratio2   |node*eps-1| r=1,2,4,8: 3.057e-01 4.262e-01 6.642e-01 1.251e+00
+ratio4   |node*eps-1| r=1,2,4,8: 6.115e-01 8.531e-01 1.331e+00 2.521e+00
+ratio05  |node*eps-1| r=1,2,4,8: 2.362e-01 3.059e-01 4.244e-01 6.562e-01
+control  |node*eps-1| r=1,2,4,8: 4.383e-05 7.145e-05 6.066e-05 1.218e-04
+P4.1 HIT
+== P4.2 (d = 0.1 m: converging, and within 5 % of the control at r = 8)
+p0.1 ratio2   steps 8.539e-04 -> 2.645e-04 conv; r=8 1.06764+0.21639j control 0.96637+0.20632j rel 1.030e-01
+p0.1 ratio4   steps 1.508e-03 -> 5.100e-04 conv; r=8 1.16902+0.22647j control 0.96637+0.20632j rel 2.061e-01
+p0.1 ratio05  steps 3.243e-04 -> 8.602e-05 conv; r=8 0.87291+0.19615j control 0.96637+0.20632j rel 9.514e-02
+s0.1 ratio2   steps 1.079e-03 -> 1.503e-03 NOT conv; r=8 1.11984+0.11171j control 0.98809+0.10505j rel 1.328e-01
+s0.1 ratio4   steps 2.090e-03 -> 2.915e-03 NOT conv; r=8 1.25142+0.11816j control 0.98809+0.10505j rel 2.653e-01
+s0.1 ratio05  steps 4.473e-04 -> 5.335e-04 NOT conv; r=8 0.87300+0.09865j control 0.98809+0.10505j rel 1.160e-01
+P4.2 MISSED
+== P4.3 (r = 8: |R_p(d)*eps - 1| falls as d shrinks)
+control  d=0.2,0.1,0.05,0.025: 4.056e-01 2.090e-01 1.058e-01 5.322e-02
+ratio2   d=0.2,0.1,0.05,0.025: 4.095e-01 2.267e-01 1.518e-01 1.393e-01
+ratio4   d=0.2,0.1,0.05,0.025: 4.322e-01 2.826e-01 2.484e-01 2.663e-01
+ratio05  d=0.2,0.1,0.05,0.025: 4.179e-01 2.337e-01 1.530e-01 1.316e-01
+P4.3 MISSED
+== P4.4 (transposed solve's d = 0.1 m readouts within 1e-3 relative)
+worst 2.162e-03 -> MISSED
+== P4.5 (r = 2: rise thinning raises R more than top thinning; obs reverses)
+VC_keep(node_B): rise +7.834 top +0.506
+obs split:       rise -0.132 top +8.589
+P4.5 HIT
