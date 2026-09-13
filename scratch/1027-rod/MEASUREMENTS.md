@@ -621,3 +621,34 @@ by several percent below Δ/a ≈ 3. At a = 0.5 mm this rod's feed segments are
 source segments are Δ/a = 2.5. The #1027 Richardson extrapolates from
 Δ/a = 6.25 to 3.1 in the far mesh, into the regime where the kernel choice is
 documented to matter. That is a candidate, not a finding.
+
+## Step 2(c) — the thin-wire kernel and the radius
+
+**What NEC-5's wire kernel is (verified against our licensed materials).** It is
+not NEC-2's reduced kernel. It treats a segment's axial current as spread over
+the wire's surface, and it stays stable down to small Δ/a. NEC-5 also expands
+wire current in linear (triangular) basis functions; momwire's default here is
+degree-2 B-splines with the reduced kernel. momwire's `extended_kernel=True`
+(NEC's O(a²) tube expansion) is its closer spelling to a surface-distributed
+current, and antennaknobs exposes it as an engine option, harness-side, no
+`src/` change.
+
+### Registered before the runs
+
+Control, guarding P2c.1 as C2a.1–C2a.5 guarded step 2(a):
+
+| id | control | verdict |
+|---|---|---|
+| C2c.1 | momwire's R differs between reduced and extended kernels at every rung, in soil A and in scaled free space — not bit-identical (a switch that moves nothing is unplumbed and withdraws the rung) | pending |
+
+| id | prediction | verdict |
+|---|---|---|
+| P2c.1 | **blind**: momwire with `extended_kernel=True` against NEC-5's unchanged deck, soil A, d = 0.2 m, refine 8 → 16, stock feed: \|ΔR/R\| below half its #1027 value at L = 0.15 and 0.60 m (< 1.95 %, < 0.60 %) | pending |
+| P2c.2 | **blind**: the radius at fixed L, reduced kernel, soil A, refine 8 → 16, a = 0.5 / 0.15 / 0.05 / 0.015 mm: \|ΔR/R\| falls monotonically as a shrinks (Δ/a rising), to below 1.0 % at L = 0.15 m and below 0.3 % at L = 0.60 m at a = 0.015 mm | pending |
+
+Competing outcomes, registered with them. P2c.1 unchanged means the kernel is
+not the mechanism at these Δ/a. P2c.2 flat in a means the disagreement does not
+live where the thin-wire approximation is strained. P2c.2 moving but P2c.1 not
+would point at the basis (linear against degree 2) rather than the kernel.
+Scaled free space (lossless, R against R_tri) runs beside both as a reading,
+not a verdict.
