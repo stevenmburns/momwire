@@ -165,3 +165,79 @@ How the outcomes will be read, fixed now:
 - **D1 fails** → the buried same-medium family does not carry mixed radii correctly on its own. The corner rule is not implicated, and step (b) cannot test it until that is fixed.
 - **D1 passes, D2i fails** → a radius change near a crossing is mishandled even where the node has one radius, so the problem is outside the corner rule but inside the crossing serve.
 - **D0, D1 and D2 all pass** → the plumbing is sound, and **the observer-side corner rule itself is wrong for the rise's node physics**. Back to (a).
+
+## Diagnosis measured
+
+`diag_radius.py` produced `diag_d0.json`, `diag_d1.json` and `diag_d2below.json`,
+each with its log. `diag_d2above.log` holds D2ii's refusal. The NEC-5 binary is
+the one step (b) used (sha256 7ebf343d…).
+
+| id | verdict |
+|---|---|
+| D0 | **HIT**. `_radius_per_wire`: wire 0 is the rise, z ∈ [−0.30, 0], at 0.125 mm; wire 1 is the fed wire and radiator, z ∈ [0, 10.556], at 0.25 mm. The same-medium fill ran as four chunked calls, with no `_build_J_blocks_subset` call on this deck: direct and image for the 10 below segments (midpoints z ∈ [−0.2875, −0.0031]) at 0.125 mm, and for the 41 above segments (z ∈ [0.0125, 10.430]) at 0.25 mm. `a_idx` z ∈ [0.0125, 10.430] and `b_idx` z ∈ [−0.2875, −0.0031]. The crossing fill ran once, and Z = 428.8675 − 362.6035j, matching step (b)'s ratio-2, L = 0.30, r = 1 row |
+| D1 | **HIT**: ratios 0.988 and 1.003 (table below) |
+| D2i | **HIT**: ratios 1.003 and 1.002 (table below) |
+| D2ii | **NOT RUN**. momwire refuses the deck. The radius step at z = 0.05 m is an above-side junction, and the serve refuses a crossing deck with an above-side or in-plane OTHER junction ("… only the below axis's completions (the crossing node and the buried hub) are measured (momwire#524 phase 2)"). This is not a verdict. Running it would need a second scope patch into a region nothing has measured, so the run was not forced |
+
+| test | a (mm) | momwire R∞ | NEC-5 R∞ | momwire response | NEC-5 response | ratio |
+|---|---|---|---|---|---|---|
+| D1 (no crossing) | 0.25 | 624.976 | 618.81 | — | — | — |
+| D1 | 0.125 | 658.739 | 652.98 | +33.763 | +34.170 | 0.988 |
+| D1 | 0.0625 | 693.074 | 686.71 | +68.097 | +67.900 | 1.003 |
+| D2i (step below a one-radius node) | 0.25 | 424.472 | 424.58 | — | — | — |
+| D2i | 0.125 | 448.178 | 448.22 | +23.707 | +23.640 | 1.003 |
+| D2i | 0.0625 | 469.944 | 469.97 | +45.472 | +45.390 | 1.002 |
+
+**Reading, as registered.** The reading needs D0, D1 and D2 to pass. D0, D1 and
+D2i passed, and D2ii could not run. The reading is applied with that gap
+stated: **the plumbing is sound, and the observer-side corner rule itself is
+wrong for the node physics. U5 returns to (a).** momwire carries mixed radii
+correctly in the buried same-medium family and near a crossing whose node has
+one radius. The one case not measured is a radius step in the air at a
+one-radius node, so an air-side fault is not excluded by measurement. Item 1
+below points at the node instead.
+
+### Observations for the re-derivation (not verdicts)
+
+1. **Under observer-side, momwire's radius response is NEC-5's with the two
+   radii exchanged.** All at r = 4, for L = 0.30 / 0.60 / 1.20 m:
+
+   | engine | a_top, a_rise (mm) | R response (Ω) |
+   |---|---|---|
+   | momwire | 0.125, 0.25 | +34.72 / +17.62 / +8.97 |
+   | NEC-5 | 0.25, 0.125 | +35.40 / +17.84 / +9.02 |
+   | momwire | 0.25, 0.125 | +1.07 / +0.25 / −0.06 |
+   | NEC-5 | 0.125, 0.25 | +0.28 / −0.02 / −0.14 |
+
+   Put another way, the shift that observer-side adds over the physics
+   (momwire's response minus NEC-5's) is:
+
+   | ratio | shift at L = 0.30 / 0.60 / 1.20 m (Ω) |
+   |---|---|
+   | 2 | −34.3 / −17.6 / −9.1 |
+   | 4 | −68.7 / −35.2 / −18.1 |
+   | 0.5 | +34.4 / +17.6 / +9.1 |
+
+   That is proportional to ln(a_A/a_B) (1 : 2 : −1) and falls with L as the
+   physics does. It carries the full weight of the rise's own radius term, with
+   the sign that cancels it. A complete ln a term is being exchanged between
+   the two families somewhere in the fill.
+2. **The one-radius spelling at a_B tracks NEC-5 on this rod.** `single_B` was
+   run at r = 2 only. There it sits within 0.28 Ω of the control's residual at
+   every ratio and length (Pb.4's table).
+3. **A uniform fill radius hardly matters on either rod. The mixing is what
+   moves Z.** On check 2's rod, `single_A` and `single_B` differ by 4 mΩ in R at
+   ratio 2 and 13 mΩ at ratio 4, while observer-side sits 8 and 16 Ω below
+   both. On step (b)'s rod NEC-5 says that move is wrong. Check 2's "the naive
+   fix is wrong by ≈ 8 Ω" was measured against observer-side, not against a
+   reference, and is withdrawn as a claim about correctness.
+4. **Continuity does not discriminate the rules across decks.** On check 2's
+   rod (feed 4.33 m from the node), observer-side's KCL deficit is 3e-8 to
+   7e-8 and `single_B`'s is 1.4e-5 to 2.3e-5. On step (b)'s rod (feed 25 mm
+   above the node, r = 2, L = 0.30 m), `single_B` reads 1.4e-6 against
+   observer-side's 1.5e-5 at ratio 2, but 4.5e-5 against 2.1e-5 at ratio 0.5.
+   Check 2's "observer-side is unique" is a statement about check 2's rod.
+
+None of this makes a uniform spelling the rule. That would be a fit, and item 4
+says continuity cannot settle it by itself. The next unit of (a) is
+DERIVATION-MIXED-RADIUS.md §8.

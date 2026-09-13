@@ -1,0 +1,65 @@
+{'mode': 'd2above', 'nec5_exe': '/home/smburns/nec5-timing/nec5cl-x13-static', 'nec5_sha256': '7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3'}
+Traceback (most recent call last):
+  File "/home/smburns/stevenmburns/momwire-wt-u5/scratch/u5-mixed-radius/diag_radius.py", line 363, in <module>
+    main()
+    ~~~~^^
+  File "/home/smburns/stevenmburns/momwire-wt-u5/scratch/u5-mixed-radius/diag_radius.py", line 356, in main
+    result = d2("above")
+  File "/home/smburns/stevenmburns/momwire-wt-u5/scratch/u5-mixed-radius/diag_radius.py", line 330, in d2
+    runs[a] = ladder(make, (2, 4), a_node_of=a_node)
+              ~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/momwire-wt-u5/scratch/u5-mixed-radius/diag_radius.py", line 261, in ladder
+    zm, zn, n5 = both(b, None if a_node_of is None else a_node_of)
+                 ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/momwire-wt-u5/scratch/u5-mixed-radius/diag_radius.py", line 253, in both
+    zm = complex(eng.impedance()[0])
+                 ~~~~~~~~~~~~~^^
+  File "/home/smburns/stevenmburns/antennaknobs/src/antennaknobs/engines/momwire.py", line 632, in wrapper
+    return fn(self, *args, **kwargs)
+  File "/home/smburns/stevenmburns/antennaknobs/src/antennaknobs/engines/momwire.py", line 1641, in impedance
+    return self._impedance_at(self._wavelength_for(self.builder.freq))
+           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/antennaknobs/src/antennaknobs/engines/momwire.py", line 1654, in _impedance_at
+    _sim, _coeffs, z = self._solved_excited(wavelength)
+                       ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/antennaknobs/src/antennaknobs/engines/momwire.py", line 1570, in _solved_excited
+    z, coeffs = sim.compute_impedance()
+                ~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/bspline.py", line 5693, in compute_impedance
+    Z = self._compute_Z_operator(
+        geom, supp_seg, polys, same_edge_prep=same_edge_prep
+    )
+  File "/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/bspline.py", line 5477, in _compute_Z_operator
+    return self._compute_Z_operator_buried(geom, supp_seg, polys)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/bspline.py", line 5421, in _compute_Z_operator_buried
+    return _below_interface.compute_Z_operator_buried(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        geom,
+        ^^^^^
+    ...<27 lines>...
+        chunked=self._buried_chunked_serves,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/_below_interface.py", line 835, in compute_Z_operator_buried
+    crossing_j = crossing_junctions_fn()
+  File "/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/bspline.py", line 1767, in _crossing_junctions
+    return _below_interface.crossing_junctions(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self._wire_media(),
+        ^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+        self._radius_per_wire,
+        ^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/smburns/stevenmburns/momwire-wt-u5/scratch/u5-mixed-radius/check2_continuity.py", line 105, in scope
+    return _orig_scope(
+        media, groups, grounded, polylines, ground_z, np.full_like(radii, radii.max())
+    )
+  File "/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/_below_interface.py", line 271, in crossing_junctions
+    raise NotImplementedError(
+    ...<6 lines>...
+    )
+NotImplementedError: a deck with a crossing junction and an above-side or in-plane OTHER junction is not served: the complete crossing spelling completes every value-1 end on its axes, and only the below axis's completions (the crossing node and the buried hub) are measured (momwire#524 phase 2)
