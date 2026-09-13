@@ -92,3 +92,32 @@ The competing outcomes for P2a.3, written down so the result cannot be
 re-fitted: |ΔR/R| falling toward zero as σ → 0 makes the missing term
 loss-borne; |ΔR/R| growing as R falls makes it an absolute term that does not
 scale with R.
+
+### Controls, smoke run on the local build (52a9489f), before any prediction
+
+`step2a_medium.py controls`, L = 0.60 m, refine 8. Kept at
+`local-52a9489f/controls.json`. The NEC-5 controls re-run on the reference
+binary when it lands; the momwire ones cannot depend on it.
+
+| id | measured | against the registered bar |
+|---|---|---|
+| C2a.1 | momwire whole-space Z at d = 0.2 vs 18 m: **6.3 × 10⁻¹⁵** relative; the switch was entered on both solves | **MET** |
+| C2a.2 | full vs whole-space at d = 0.2 m: **2.9 × 10⁻³**; at d = 18 m: **1.6 × 10⁻¹⁰** | **MISSED** at 0.2 m (bar ≥ 1 × 10⁻²); met at 18 m |
+| C2a.3 | NEC-5 infinite-medium card at (1, 0): 0.035755−14117j; free-space deck: 0.035755−14117j | **MET** — identical |
+| C2a.4 | NEC-5 infinite medium at d = 0.2 vs 18 m: identical; NEC-5 buried at 18 m vs infinite medium: identical printed Z | **MET** |
+
+**C2a.2 missed its registered bar, and the miss stays on the record.** The
+bar was my estimate of how much the interface contributes to Z at 0.2 m depth,
+not a test of the switch, and it was 3.4× too high. What the control exists
+for, showing that the switch reaches the assembly, holds by twelve orders over
+C2a.1's floor, and the 18 m half passes. Amended **before any prediction is
+run**:
+
+| id | control | verdict |
+|---|---|---|
+| C2a.2′ | the switch moves momwire's Z at d = 0.2 m by more than 10⁶ × C2a.1's floor, and matches the full fill at 18 m to ≤ 1e-3 | **MET** — 2.9e-3 vs 6.3e-15; 1.6e-10 |
+
+The miss also sizes the interface. At d = 0.2 m it is worth |ΔZ| ≈ 2.3 Ω of
+momwire's 550−552j, which is a third of the 6.6 Ω disagreement in R alone. An
+interface-only mechanism would need NEC-5 to get that term wrong by about 3×.
+That is an observation, not a verdict: P2a.1 is the test.
