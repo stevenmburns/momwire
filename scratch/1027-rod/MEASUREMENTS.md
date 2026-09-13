@@ -857,3 +857,97 @@ a = 0.05 mm, F = 16 (feed 0.3125 mm, far 0.195 mm, Δ/a ≥ 3.9), L = 0.15 and
 |---|---|---|
 | P2b.6a | **not blind** — the continuation of P2b.5's own steps: −0.48 ± 0.10 % at L = 0.15 m, −0.14 ± 0.05 % at 0.60 m | pending |
 | P2b.6b | **blind**: the change from F = 8 to F = 16 is smaller than from F = 4 to F = 8 at both lengths | pending |
+
+### P2b.6 measured — the last rung
+
+`step2b_uniform_f16.py`, `x13/p2b_uniform_f16.json`. Same assertions.
+
+| a (mm) | L (m) | F | segs | momwire R | NEC-5 R | ΔR/R | change from F = 8 | change F = 4 → 8 |
+|---|---|---|---|---|---|---|---|---|
+| 0.05 | 0.15 | 16 | 364 | 2559.39 | 2547.2 | **−0.4764 %** | 0.1832 pp | 0.3346 pp |
+| 0.05 | 0.60 | 16 | 1196 | 785.847 | 784.71 | **−0.1447 %** | 0.0553 pp | 0.0991 pp |
+
+| id | verdict |
+|---|---|
+| P2b.6a | **HIT** — −0.4764 % against −0.48 ± 0.10; −0.1447 % against −0.14 ± 0.05 (not blind, as registered) |
+| P2b.6b | **HIT** — the F = 8 → 16 change is smaller than F = 4 → 8 at both lengths; step ratio 0.547 and 0.558 |
+
+With a fourth ratio in hand, the continuation at a = 0.05 mm is −0.26 % at
+L = 0.15 m and −0.07 % at 0.60 m. At a = 0.1 mm it was −0.45 % and −0.12 %.
+Halving the radius roughly halves the residual.
+
+## Verdict
+
+**The wholly buried rod's −1.20 % of R (#1027) is not a converged disagreement
+between momwire and NEC-5, and no defect in either engine is shown.** Both
+engines converge toward the same R along two axes, at different rates:
+
+1. **The source region.** #1027's `refine` never refined the fed segment or its
+   graded neighbours (5.00 mm and 6.25 mm at refine 1, 8 and 16). Dividing every
+   segment by F with the panel boundaries held and the ports matched takes the
+   fraction, at a = 0.05 mm, from −2.66 % to −0.48 % at L = 0.15 m (F = 1 → 16)
+   and from −0.72 % to −0.14 % at 0.60 m. momwire's R moves faster than
+   NEC-5's under this refinement.
+2. **The thin-wire regime, a against Δ.** At every source mesh a smaller radius
+   gives a smaller fraction (P2b.4b, P2b.5b, P2c.2). The continuation of the
+   fraction's own steps falls from −0.45 % to −0.26 % at L = 0.15 m, and from
+   −0.12 % to −0.07 % at 0.60 m, as a halves from 0.1 to 0.05 mm.
+
+#1027's constant fraction is that rate difference, read at a frozen 5 mm source
+on a 0.5 mm wire. Because that geometry is fixed in metres, the fraction was
+invariant in σ, depth and frequency and moved only with L. The two axes a user
+has to refine to see the engines agree are **the fed segment with its
+neighbours** and **a/Δ**.
+
+**Excluded, each by measurement:**
+
+- the interface: deep burial to 18 m holds the fraction to 0.004 pp (P2a.2, P2a.1′);
+- the soil and its loss: the fraction survives a lossless medium, i.e. scaled
+  free space, converged (P2a.3′, P2a.3″);
+- the per-engine feed-segment parity: 2e-12 on the rod (P2b.1); 4.4e-6 on the
+  default `buried_radial_vertical`, where v0.76.0's 0.3 / 0.2 Ω stands (P2b.2);
+- the reduced against the extended thin-wire kernel: ≤ 0.22 pp (P2c.1′); every
+  momwire row ran the reduced kernel, resolved on the solver;
+- each engine's reading of R from its own currents: power balance within 0.75 %
+  (P2f.1/2), and R_NEC-5 / R_momwire = \|moment ratio\|² to 3e-5 (P2f.4a).
+
+**Not claimed:** that the two limits coincide exactly. The continuation is
+geometric, on four or five points per series.
+
+## Scoreboard
+
+| step | prediction | verdict |
+|---|---|---|
+| 1 | P1.1 anchors reproduce | **HIT** |
+| 1 | P1.2 crossing fill never entered | **HIT** |
+| 1 | P1.3 momwire R bit-identical to #1027 | **HIT** |
+| 2(a) | P2a.1 whole space, both engines | withdrawn (C2a.5) |
+| 2(a) | P2a.2 deep burial flat to 18 m | **HIT** |
+| 2(a) | P2a.3 σ → lossless, whole space | withdrawn (C2a.5) |
+| 2(a) | P2a.1′ deep burial, both lengths | **HIT** (not blind at 0.60 m) |
+| 2(a) | P2a.3′ lossless via scaled free space | **HIT** (not blind) |
+| 2(a) | P2a.3″ blind L = 2.40 m | **HIT** |
+| 2(f) | P2f.1 momwire power balance ± 1e-3 | **MISSED** |
+| 2(f) | P2f.2 NEC-5 power balance ± 1e-3 | **MISSED** (instrument) |
+| 2(f) | P2f.4a R ratio = moment ratio² | **HIT** |
+| 2(f) | P2f.4b Δm concentrated at the feed | **MISSED** (metric could not see a step) |
+| 2(b) | P2b.1 matched port halves the fraction | **MISSED** — parity excluded |
+| 2(b) | P2b.2 BRV move < 1e-6 | **MISSED** (4.4e-6; claim stands) |
+| 2(b) | P2b.3 source refine (confounded ladder) | **SPLIT** |
+| 2(b) | P2b.4a monotone in F | **HIT** |
+| 2(b) | P2b.4b radii agree at F = 4 | **MISSED** — radius matters |
+| 2(b) | P2b.4c momwire moves more | **HIT** (not blind) |
+| 2(b) | P2b.5a a = 0.1 mm, F = 8 | **HIT** (not blind) |
+| 2(b) | P2b.5b a = 0.05 below 0.1 at every F | **HIT** |
+| 2(b) | P2b.5c < 0.5 / 0.15 % at F = 8 | **MISSED** |
+| 2(b) | P2b.6a a = 0.05 mm, F = 16 | **HIT** (not blind) |
+| 2(b) | P2b.6b steps keep shrinking | **HIT** |
+| 2(c) | P2c.1 extended kernel, buried | withdrawn (momwire refuses) |
+| 2(c) | P2c.1′ extended kernel, free space | **SPLIT** |
+| 2(c) | P2c.2 radius ladder thresholds | **MISSED** (monotone half held) |
+
+**14 hits, 8 misses, 2 splits, 3 withdrawn** among the predictions. Of the
+controls, C2a.2 and momwire's half of C2a.5 missed. Four of the misses were
+bars I set from an estimate rather than a measurement (C2a.2, C2a.5, P2b.2,
+P2f.1/2), all in the same direction: I assumed more agreement than the code
+delivers.
