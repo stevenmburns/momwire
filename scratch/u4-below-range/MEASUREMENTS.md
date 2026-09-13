@@ -370,3 +370,44 @@ How the outcomes will be read, fixed now:
 The G-S2 wrapper matches momwire's call: `BSplineSolver._buried_serve_plan`
 passes `k_m` positionally (argument 8) and `pair_extents` as a keyword, both of
 which the wrapper reads.
+
+### The synthetic deck, measured [`syn_*`]
+
+**Every rung ran with its guards asserted before any Z was read:**
+
+- **Node extents (G-S2),** recorded inside every solve:
+  - R1 = 4.752 λ_m (r = 1), 4.757 (r = 3), 4.759 (r = 9);
+  - θ = 0.2266°, 0.2263°, 0.2262°;
+  - all inside (4, 5) λ_m and above 0.05°.
+- **Extended grids** were built to r1_max = 4.768 λ_m.
+- **r = 9 was run under the registered rule.** `extended` at r = 1 and 3 together
+  took 14 s, under the 30 min threshold. At r = 9 each spelling took 18 s and
+  about 350 MB.
+
+| id | verdict |
+|---|---|
+| G-S2 | **HIT** at every rung (above) |
+| G-S3 | **HIT.** The `zeroed` wrapper was reached and zeroed pairs at every rung: r = 1 and 3 together, 5 calls over 2,134,440 pairs with 26,608 zeroed; r = 9, 33 calls over 17,288,964 pairs with 214,736 zeroed (the `delta` run's per-rung counts: 2,692 / 23,916 / 214,736) |
+| PZ-S2 | **HIT, with one caveat.** `shipped` refused on RANGE (R1 = 76.0006 m, 4.76 λ_m, past 63.86 m). The ladder stops at its first rung's refusal, so r = 3 and 9 were not attempted through a solve; G-S1's cap-4 preflight verdict gives the same range refusal there |
+| PZ-S1 | **HIT, by more than three orders of magnitude.** The bar b is the `extended` ladder's last step, \|Z_ext(9) − Z_ext(3)\| = \|0.0611 + 0.0421j\| = **0.0742 Ω**. At full precision (`z_gate.py delta`, the same engine call the ladder makes), \|Z(zeroed) − Z(extended)\| = **3.14e-5 / 3.08e-5 / 3.11e-5 Ω** at r = 1 / 3 / 9. That is δ/b ≈ 4e-4, and about 4e-7 of \|Z\|. It holds constant under refinement, so it is the converged beyond-cap remainder's contribution and not mesh noise |
+| PZ-S3 | **HIT (informational).** `extended` momwire ran 69.6229+40.6985j, 69.7544+40.7702j and 69.8155+40.8123j at r = 1 / 3 / 9, giving a Richardson estimate of 69.8766+40.8544j. NEC-5 x13-static ran 69.3290+36.5550j, 69.6560+39.2460j and 69.7690+40.2250j, giving 69.8255+40.7145j. The two estimates differ by 0.149 Ω, 0.18 % of \|Z\|, inside the 5 % bar. (NEC-5's own r = 3→9 step, 0.99 Ω, is 13× momwire's.) |
+
+**Reading, as registered: PZ-S1 hits, so the branch is to serve beyond the cap
+with the remainder zeroed.**
+
+- **Why that is safe.** Across a screen 4.76 λ_m wide, the summed 1/R tail of
+  every beyond-cap pair moves Z by 3.1e-5 Ω, while the table's own ladder moves
+  it by 0.074 Ω.
+- **What the eventual src PR contains:**
+  - it replaces `BURIED_PAST_CAP_REFUSAL` with a served zeroing of the
+    below/below remainder past the tabulated range;
+  - the bound is documented where the refusal stood: a field-level M2 at 4 λ_m
+    ≤ 1.04e-4 over the SPEC and LPDA cases, and a Z-level δ = 3.1e-5 Ω
+    against a ladder step of 0.074 Ω on this deck;
+  - it fixes the stale "2, not 4" cap comment;
+  - a test pins zeroed against extended on this deck, as a bound rather than a
+    literal.
+- **What does not change.** The grazing floor still refuses every pair below
+  0.05°. The LPDA stays refused until that separate unit lands.
+- **Still to decide.** Whether the src PR is worth doing now, given that no corpus
+  deck is unblocked by it alone, is the plan owner's call.

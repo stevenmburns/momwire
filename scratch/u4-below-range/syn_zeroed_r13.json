@@ -1,0 +1,54 @@
+{
+ "meta": {
+  "momwire_file": "/home/smburns/stevenmburns/momwire-wt-u4/src/momwire/__init__.py",
+  "cap0": 4.0
+ },
+ "result": {
+  "mode": "ladder",
+  "spelling": "zeroed",
+  "engine": "momwire",
+  "cap": 5.0,
+  "deck": "scratch/u4-below-range/synthetic_u4.nec",
+  "refine": [
+   1,
+   3
+  ],
+  "stdout": "\nscratch/u4-below-range/synthetic_u4.nec  engine momwire\n    r   segs   fed seg (mm)                  Z (ohm)                   step  |step| ratio\n    1     88        1945.45     69.6229    +40.6986j                                     \n    3    264        648.485     69.7544    +40.7702j     +0.1315   +0.0717j              \n  Richardson (first order in h, last two rungs, indicative): 69.8201+40.8061j\n",
+  "error": null,
+  "stats": {
+   "proj_calls": 5,
+   "pairs": 2134440,
+   "zeroed_pairs": 26608,
+   "grids": [
+    {
+     "r1_max": 76.13128651433998,
+     "lam_m": 15.96588797761211,
+     "r1_cap": 79.82943988806055
+    },
+    {
+     "r1_max": 76.13128651433998,
+     "lam_m": 15.96588797761211,
+     "r1_cap": 79.82943988806055
+    }
+   ]
+  },
+  "extents": {
+   "bounds": [
+    4.0,
+    5.0,
+    0.05
+   ],
+   "calls": [
+    {
+     "r1_lambda": 4.7517264490297055,
+     "theta_deg": 0.22656901172103178
+    },
+    {
+     "r1_lambda": 4.7573659690303645,
+     "theta_deg": 0.22630042882669552
+    }
+   ]
+  },
+  "seconds": 11.618860483169556
+ }
+}
