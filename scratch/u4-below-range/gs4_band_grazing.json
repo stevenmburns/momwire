@@ -1,0 +1,28 @@
+{
+ "meta": {
+  "momwire_file": "/home/smburns/stevenmburns/momwire-wt-u4/src/momwire/__init__.py",
+  "cap0": 4.0
+ },
+ "result": {
+  "mode": "band",
+  "lam_m": 15.965887973309902,
+  "grid_r1_max_lambda": 4.8,
+  "r1_lambda": [
+   4.010571428571429,
+   4.782000000000001
+  ],
+  "theta_deg": [
+   0.1,
+   2.0
+  ],
+  "points": 700,
+  "worst_rel": 9.767204860305677e-09,
+  "worst_at": {
+   "r1_lambda": 4.067714285714286,
+   "theta_deg": 1.9703600000000001
+  },
+  "bar": 0.0002,
+  "verdict": "HIT",
+  "seconds": 8.105525016784668
+ }
+}
