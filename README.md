@@ -149,6 +149,9 @@ Solvers — see [Solvers](#solvers) above for what distinguishes them:
 Results and control:
 
 - `PortSolution` — a solved port network's currents, voltages and Z.
+- `FeedPlacement` — where a solver put a feed (or a Razor lumped load): the
+  arclength asked for, the one used, and the offset between them. Returned
+  by every solver's `feed_placements()` (momwire#1059).
 - `Capabilities` — what a solver class declares it spans.
 - `CancelToken`, `SolveAborted` — cooperative cancellation for a long solve.
 - `LatticeFFTUnavailable` — raised when a lattice deck cannot take the FFT path.

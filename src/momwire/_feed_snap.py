@@ -54,12 +54,35 @@ import atexit
 import json
 import os
 import warnings
+from typing import NamedTuple
 
 import numpy as np
 
 
 class AmbiguousSite(UserWarning):
     """A named arclength that falls between two of a family's grid points."""
+
+
+class FeedPlacement(NamedTuple):
+    """Where one named site landed (momwire#1059).
+
+    ``requested`` is the arclength asked for, in metres from the wire's first
+    anchor, with a None request reported as the midpoint it resolves to.
+    ``placed`` is where the solve puts the site. A family that excites the
+    arclength it was given reports the two equal; a grid-locked one reports
+    the grid point `snap` chose, ties included, so a half-cell move is stated
+    instead of silent. Returned by every solver's ``feed_placements()`` and by
+    ``RazorSolver.load_placements()``.
+    """
+
+    wire: int
+    requested: float
+    placed: float
+
+    @property
+    def offset(self) -> float:
+        """``placed - requested``, in metres along the wire."""
+        return self.placed - self.requested
 
 
 # Fraction of the wire's arclength within which the two candidate distances
@@ -79,7 +102,7 @@ AMBIGUITY_TOL_FRAC = 1e-11
 _TAP = "MOMWIRE_623_TALLY"
 
 
-def snap(grid, target, *, total_arc, family, what="feed", wire=None):
+def snap(grid, target, *, total_arc, family, what="feed", wire=None, tap=True):
     """``(pick, margin)`` — the nearest grid point, and by how much it won.
 
     `grid` is the family's own site arclengths along one wire; `margin` is the
@@ -87,6 +110,10 @@ def snap(grid, target, *, total_arc, family, what="feed", wire=None):
     grid holds one point. Away from a tie the pick is `argmin`; inside the
     `AMBIGUITY_TOL_FRAC` bar it is the smaller arclength, stated rather than
     left to the rounding in the grid (#623, and #672 for why it can be).
+
+    ``tap=False`` keeps a call out of the `MOMWIRE_623_TALLY` diagnostic:
+    ``feed_placements()`` re-asks a question the solve already asked, and a
+    second record per site would double-count the tally.
     """
     arcs = np.asarray(grid, dtype=float)
     if arcs.size == 0:
@@ -107,7 +134,7 @@ def snap(grid, target, *, total_arc, family, what="feed", wire=None):
     # (9, 10) with a bend authored as one wire and (9, 0) as two, so this
     # rule would have named different sites in two spellings of one antenna.
     pick = min(near, next_) if margin <= AMBIGUITY_TOL_FRAC * total_arc else near
-    if os.environ.get(_TAP):
+    if tap and os.environ.get(_TAP):
         _record(family, what, wire, target, margin, total_arc, arcs.size)
         if margin <= AMBIGUITY_TOL_FRAC * total_arc:
             where = "" if wire is None else f" on wire {wire}"

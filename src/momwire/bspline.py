@@ -78,6 +78,7 @@ from ._quadrature import leggauss
 from . import _below_interface
 from . import _bspline_kernels
 from . import _crossing_fill
+from . import _feed_snap
 from . import _ground_mirror
 from . import _ground_refl
 from . import _ground_spec
@@ -459,6 +460,15 @@ def _xfem_projection_coeffs(d):
         coeffs[k + 1] += alpha[k]
         coeffs[k + 2] -= alpha[k]
     return coeffs
+
+
+def _feed_cell(arc_at_knot, s_f):
+    """Index of the mesh cell a segment gap at arclength `s_f` spans. A feed
+    exactly on a knot takes the cell to its right, and one at the wire's far
+    end is clipped to the last cell. Shared by the source vector and
+    `BSplineSolver.feed_placements`, so the report is the fill's own choice."""
+    seg_idx = int(np.searchsorted(arc_at_knot, s_f, side="right")) - 1
+    return max(0, min(seg_idx, len(arc_at_knot) - 2))
 
 
 @dataclass(frozen=True)
@@ -4145,8 +4155,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # (a feed exactly on a knot takes the cell to its right, and a
             # feed at the wire end is clipped to the last cell).
             arc_at_knot = arc
-            seg_idx = int(np.searchsorted(arc_at_knot, s_f, side="right")) - 1
-            seg_idx = max(0, min(seg_idx, len(arc_at_knot) - 2))
+            seg_idx = _feed_cell(arc_at_knot, s_f)
             s_lo = float(arc_at_knot[seg_idx])
             s_hi = float(arc_at_knot[seg_idx + 1])
             h_cell = s_hi - s_lo
@@ -5657,6 +5666,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             cols[m_global, p] = +1.0 if end_i == "start" else -1.0
             volts[p] = v_i
         return cols, volts
+
+    def feed_placements(self):
+        """Where each entry of ``feeds`` lands, as one
+        :class:`~momwire.FeedPlacement` per feed, in order (momwire#1059).
+
+        A point gap and a smoothed source sit at the arclength named, so the
+        two agree. ``feed_model="segment"`` spreads the gap over the mesh cell
+        holding that arclength (:func:`_feed_cell`), whose centre is reported.
+        """
+        geom = self._build_geometry()
+        placements = []
+        for w_i, arc_i, _v in self.feeds:
+            arc_at_knot = geom["per_wire"][w_i]["arc_at_knot"]
+            s_f = float(arc_i) if arc_i is not None else float(arc_at_knot[-1]) / 2.0
+            placed = s_f
+            if self.feed_model == "segment":
+                cell = _feed_cell(arc_at_knot, s_f)
+                placed = 0.5 * (float(arc_at_knot[cell]) + float(arc_at_knot[cell + 1]))
+            placements.append(_feed_snap.FeedPlacement(int(w_i), s_f, placed))
+        return tuple(placements)
 
     def _gap_source_vectors(self, geom, wire_knots, wire_basis_global, n_basis_total):
         """One unit Galerkin source vector per configured gap feed, in feed
