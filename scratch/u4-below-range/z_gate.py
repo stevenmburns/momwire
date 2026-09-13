@@ -260,6 +260,49 @@ def mode_extents(args):
     return out
 
 
+def mode_delta(args):
+    """Full-precision Z under `extended` and `zeroed` at each rung, through
+    the same engine call `antennaknobs ladder` makes (the deck's own ground,
+    `make_engine_factory`), with G-S2's node extents asserted inside every
+    solve and the zeroing stats recorded. The ladder prints four decimals;
+    this documents the Z-level bound."""
+    from antennaknobs.cli import file_ground_default, make_engine_factory
+    from antennaknobs.cli import _GROUND_UNSET
+    from antennaknobs.file_designs import builder_from_file
+
+    rungs = []
+    for r in args.refine:
+        builder_cls = builder_from_file(str(args.deck), refine=r)
+        zs = {}
+        for spelling in ("extended", "zeroed"):
+            STATS.update(proj_calls=0, pairs=0, zeroed_pairs=0, grids=[])
+            EXTENTS["calls"] = []
+            apply(spelling, args.cap)
+            assert_extents(4.0, float(args.cap), 0.05)
+            try:
+                eng = make_engine_factory(
+                    args.engine, file_ground_default(_GROUND_UNSET, builder_cls)
+                )
+                z = complex(eng(builder_cls()).impedance()[0])
+            finally:
+                restore()
+                release_extents()
+            zs[spelling] = dict(
+                z=repr(z),
+                stats=dict(STATS, grids=list(STATS["grids"])),
+                extents=list(EXTENTS["calls"]),
+            )
+        d = complex(zs["zeroed"]["z"]) - complex(zs["extended"]["z"])
+        rec = dict(refine=r, zs=zs, delta=repr(d), abs_delta=abs(d))
+        rungs.append(rec)
+        print(
+            f"r={r}: extended {zs['extended']['z']}  zeroed {zs['zeroed']['z']}  "
+            f"|delta| {abs(d):.3e}  zeroed pairs {zs['zeroed']['stats']['zeroed_pairs']}",
+            flush=True,
+        )
+    return dict(mode="delta", deck=str(args.deck), rungs=rungs)
+
+
 def mode_ladder(args):
     from antennaknobs import cli as entry
 
@@ -310,7 +353,7 @@ def mode_ladder(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("mode", choices=("band", "identity", "ladder", "extents"))
+    ap.add_argument("mode", choices=("band", "identity", "ladder", "extents", "delta"))
     ap.add_argument("--assert-extents", action="store_true")
     ap.add_argument("--cap", type=float, default=5.0)
     ap.add_argument("--out", type=Path, default=None)
@@ -332,6 +375,7 @@ def main():
         "identity": mode_identity,
         "ladder": mode_ladder,
         "extents": mode_extents,
+        "delta": mode_delta,
     }[args.mode](args)
     if args.out is not None:
         args.out.write_text(json.dumps(dict(meta=meta, result=result), indent=1))

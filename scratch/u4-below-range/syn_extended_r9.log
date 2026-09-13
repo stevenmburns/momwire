@@ -1,0 +1,67 @@
+{'momwire_file': '/home/smburns/stevenmburns/momwire-wt-u4/src/momwire/__init__.py', 'cap0': 4.0}
+
+scratch/u4-below-range/synthetic_u4.nec  engine momwire
+    r   segs   fed seg (mm)                  Z (ohm)                   step  |step| ratio
+    9    792        216.162     69.8155    +40.8123j                                     
+
+{
+ "mode": "ladder",
+ "spelling": "extended",
+ "engine": "momwire",
+ "cap": 5.0,
+ "deck": "scratch/u4-below-range/synthetic_u4.nec",
+ "refine": [
+  9
+ ],
+ "error": null,
+ "stats": {
+  "proj_calls": 0,
+  "pairs": 0,
+  "zeroed_pairs": 0,
+  "grids": [
+   {
+    "r1_max": 76.13128651433998,
+    "lam_m": 15.96588797761211,
+    "r1_cap": 79.82943988806055
+   }
+  ]
+ },
+ "extents": {
+  "bounds": [
+   4.0,
+   5.0,
+   0.05
+  ],
+  "calls": [
+   {
+    "r1_lambda": 4.759245809053778,
+    "theta_deg": 0.22621104264423622
+   }
+  ]
+ },
+ "seconds": 17.386722564697266
+}
+saved scratch/u4-below-range/syn_extended_r9.json
+	Command being timed: "/home/smburns/stevenmburns/antennaknobs/.venv/bin/python scratch/u4-below-range/z_gate.py ladder --spelling extended --engine momwire --refine 9 --assert-extents --deck scratch/u4-below-range/synthetic_u4.nec --out scratch/u4-below-range/syn_extended_r9.json"
+	User time (seconds): 112.38
+	System time (seconds): 0.44
+	Percent of CPU this job got: 627%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:17.97
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 356288
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 6
+	Minor (reclaiming a frame) page faults: 89278
+	Voluntary context switches: 557
+	Involuntary context switches: 3893
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 24
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
