@@ -1,0 +1,26 @@
+equal radii  observer  z=169.7772371-82.27633482j bit-identical=True  kcl_rel=6.39e-08 cross_calls=1
+equal radii  source    z=169.7772371-82.27633482j bit-identical=True  kcl_rel=6.39e-08 cross_calls=1
+equal radii  harmonic  z=169.7772371-82.27633482j bit-identical=True  kcl_rel=6.39e-08 cross_calls=1
+equal radii  single_A  z=169.7772371-82.27633482j bit-identical=True  kcl_rel=6.39e-08 cross_calls=1
+equal radii  single_B  z=169.7772371-82.27633482j bit-identical=True  kcl_rel=6.39e-08 cross_calls=1
+a_A/a_B=2 refine=1 observer  z=169.6059-83.101598j  kcl_rel=6.77e-08  slope-vs-AGARD=2.331e-04  cross_calls=1
+a_A/a_B=2 refine=1 source    z=169.6059-83.101598j  kcl_rel=6.28e-01  slope-vs-AGARD=5.582e-01  cross_calls=1
+a_A/a_B=2 refine=1 harmonic  z=-129.39048-1090.5711j  kcl_rel=3.28e-01  slope-vs-AGARD=2.371e+00  cross_calls=1
+a_A/a_B=2 refine=1 single_A  z=177.58671-86.352186j  kcl_rel=4.18e-04  slope-vs-AGARD=6.522e-01  cross_calls=1
+a_A/a_B=2 refine=1 single_B  z=177.59086-86.34742j  kcl_rel=1.35e-05  slope-vs-AGARD=5.493e-01  cross_calls=1
+a_A/a_B=2 refine=2 observer  z=169.28432-83.192415j  kcl_rel=4.44e-08  slope-vs-AGARD=4.777e-04  cross_calls=1
+a_A/a_B=2 refine=2 source    z=169.28432-83.192415j  kcl_rel=7.01e-01  slope-vs-AGARD=8.745e-01  cross_calls=1
+a_A/a_B=2 refine=2 harmonic  z=-114.12849-1069.6781j  kcl_rel=3.78e-01  slope-vs-AGARD=1.853e+00  cross_calls=1
+a_A/a_B=2 refine=2 single_A  z=177.23537-86.463829j  kcl_rel=5.16e-04  slope-vs-AGARD=1.238e+00  cross_calls=1
+a_A/a_B=2 refine=2 single_B  z=177.24031-86.458925j  kcl_rel=1.84e-05  slope-vs-AGARD=8.688e-01  cross_calls=1
+a_A/a_B=4 refine=1 observer  z=169.46947-83.780319j  kcl_rel=2.92e-08  slope-vs-AGARD=2.584e-04  cross_calls=1
+a_A/a_B=4 refine=1 source    z=169.46947-83.780319j  kcl_rel=8.45e-01  slope-vs-AGARD=1.171e+00  cross_calls=1
+a_A/a_B=4 refine=1 harmonic  z=-0.81951986-1001.3979j  kcl_rel=4.50e-01  slope-vs-AGARD=7.893e+00  cross_calls=1
+a_A/a_B=4 refine=1 single_A  z=185.27398-90.531308j  kcl_rel=7.50e-04  slope-vs-AGARD=1.301e+00  cross_calls=1
+a_A/a_B=4 refine=1 single_B  z=185.2873-90.523089j  kcl_rel=1.63e-05  slope-vs-AGARD=1.153e+00  cross_calls=1
+a_A/a_B=4 refine=2 observer  z=169.14634-83.88023j  kcl_rel=2.85e-08  slope-vs-AGARD=4.916e-04  cross_calls=1
+a_A/a_B=4 refine=2 source    z=169.14634-83.88023j  kcl_rel=8.91e-01  slope-vs-AGARD=1.926e+00  cross_calls=1
+a_A/a_B=4 refine=2 harmonic  z=0.68848293-988.15584j  kcl_rel=4.94e-01  slope-vs-AGARD=6.327e+00  cross_calls=1
+a_A/a_B=4 refine=2 single_A  z=184.89023-90.67539j  kcl_rel=8.53e-04  slope-vs-AGARD=2.446e+00  cross_calls=1
+a_A/a_B=4 refine=2 single_B  z=184.9051-90.667054j  kcl_rel=2.26e-05  slope-vs-AGARD=1.919e+00  cross_calls=1
+saved scratch/u5-mixed-radius/check2.json
