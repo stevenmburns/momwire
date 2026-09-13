@@ -1,0 +1,11 @@
+{'config': 'ratio2', 'a_top': 0.00025, 'a_rise': 0.000125, 'nec5_exe': '/home/smburns/nec5-timing/nec5cl-x13-static', 'nec5_sha256': '7ebf343d7d01283b83fae8192cd9c6ca434b5befb232065fc12b4d729f06a9f3'}
+L=0.30 r=1 segs=51  NEC-5 461.35-399.9j  momwire 428.868-362.603j  dZ 32.48-37.3j  kcl 4.30e-05  slope-vs-AGARD 7.08e-01
+L=0.30 r=2 segs=102  NEC-5 460.77-398.41j  momwire 425.46-362.687j  dZ 35.31-35.72j  kcl 1.53e-05  slope-vs-AGARD 2.92e-01  | naive single_B 460.594-396.976j dZ 0.176-1.434j kcl 1.38e-06
+L=0.30 r=4 segs=204  NEC-5 460.37-397.74j  momwire 425.842-362.62j  dZ 34.53-35.12j  kcl 1.78e-06  slope-vs-AGARD 4.11e-02
+L=0.60 r=1 segs=63  NEC-5 273.49-193.23j  momwire 257.319-175.014j  dZ 16.17-18.22j  kcl 2.38e-05  slope-vs-AGARD 7.99e-01
+L=0.60 r=2 segs=126  NEC-5 273.49-192.23j  momwire 255.54-175.251j  dZ 17.95-16.98j  kcl 8.48e-06  slope-vs-AGARD 3.29e-01  | naive single_B 273.53-191.373j dZ -0.03992-0.8568j kcl 1.22e-06
+L=0.60 r=4 segs=252  NEC-5 273.43-191.82j  momwire 255.825-175.186j  dZ 17.61-16.63j  kcl 9.89e-07  slope-vs-AGARD 4.64e-02
+L=1.20 r=1 segs=65  NEC-5 172.25-67.216j  momwire 164.119-59.1139j  dZ 8.131-8.102j  kcl 1.33e-05  slope-vs-AGARD 9.88e-01
+L=1.20 r=2 segs=130  NEC-5 172.41-66.129j  momwire 163.224-59.4723j  dZ 9.186-6.657j  kcl 4.74e-06  slope-vs-AGARD 4.06e-01  | naive single_B 172.497-65.3739j dZ -0.08736-0.7551j kcl 1.46e-06
+L=1.20 r=4 segs=260  NEC-5 172.45-65.74j  momwire 163.399-59.3828j  dZ 9.051-6.357j  kcl 5.58e-07  slope-vs-AGARD 5.73e-02
+saved scratch/u5-mixed-radius/b_ratio2.json
