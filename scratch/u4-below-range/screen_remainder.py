@@ -160,6 +160,7 @@ def main():
             return
 
         rows = []
+        skipped = []
         for c in cases():
             lm = lam_m(c["soil"], c["f"], args.proto)
             delta = c["delta"] if c["delta"] is not None else lm / 26.0
@@ -171,7 +172,16 @@ def main():
                 )
                 labels.append((kind, phi, "self"))
                 for r1 in R1_LAMBDA:
-                    rho = math.sqrt(max((r1 * lm) ** 2 - h * h, 0.0))
+                    # An image distance no longer than the depth sum has no
+                    # horizontal separation left: rho would clamp to 0 and put
+                    # the observer on the source. Skipped and recorded; the
+                    # metrics read R1 >= 4 lambda_m only.
+                    if r1 * lm <= h * (1.0 + 1e-9):
+                        skipped.append(
+                            dict(case=c["name"], kind=kind, phi=phi, r1_lambda=r1)
+                        )
+                        continue
+                    rho = math.sqrt((r1 * lm) ** 2 - h * h)
                     jobs.append(
                         (
                             args.proto,
@@ -207,9 +217,18 @@ def main():
                     f"M3={m3:+.3f}  worst rel {worst_rel:.1e}",
                     flush=True,
                 )
+            if args.out is not None:  # after every case, so a crash loses nothing
+                args.out.write_text(
+                    json.dumps(
+                        dict(meta=meta, guard=guard, rows=rows, skipped=skipped),
+                        indent=1,
+                    )
+                )
     if args.out is not None:
         args.out.write_text(
-            json.dumps(dict(meta=meta, guard=guard, rows=rows), indent=1)
+            json.dumps(
+                dict(meta=meta, guard=guard, rows=rows, skipped=skipped), indent=1
+            )
         )
         print(f"saved {args.out}")
 

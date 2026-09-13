@@ -1,0 +1,81 @@
+{'proto': '/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py', 'proto_sha256': 'a6475b976d5ebc7ec789f9aff105f25917bc5556c0f86b531483a0c811ede094', 'integrator': {'n': 16, 'rtol': 1e-11, 'depth': 14, 'max_panels': 6000, 'detour': 2.0}}
+G-c HED phi=0 rho=171.3: rem(1.02)/rem(1.01) 1.9811  rel 2.9e-08  172s
+G-c VED phi=0 rho=171.3: rem(1.02)/rem(1.01) 1.9842  rel 2.9e-08  161s
+G-c HED phi=0 rho=342.6: rem(1.02)/rem(1.01) 1.9724  rel 5.7e-08  298s
+G-c VED phi=0 rho=342.6: rem(1.02)/rem(1.01) 1.9768  rel 5.7e-08  271s
+LPDA-shallow       HED phi=   0  lam_m= 15.966  M1=3.555e+05  M2@4,5,6,8=9.85e-06,7.76e-06,6.36e-06,4.61e-06  M3=-1.096  worst rel 6.5e-08
+LPDA-shallow       HED phi=  90  lam_m= 15.966  M1=1.354e+04  M2@4,5,6,8=8.68e-06,5.40e-06,3.66e-06,1.98e-06  M3=-2.131  worst rel 6.5e-08
+LPDA-shallow       VED phi=   0  lam_m= 15.966  M1=5.821e+03  M2@4,5,6,8=5.68e-06,4.39e-06,3.55e-06,2.54e-06  M3=-1.162  worst rel 6.5e-08
+LPDA-deep          HED phi=   0  lam_m= 15.966  M1=2.838e+05  M2@4,5,6,8=1.23e-05,9.71e-06,7.96e-06,5.77e-06  M3=-1.097  worst rel 6.3e-08
+LPDA-deep          HED phi=  90  lam_m= 15.966  M1=1.084e+04  M2@4,5,6,8=1.11e-05,6.87e-06,4.66e-06,2.52e-06  M3=-2.134  worst rel 6.3e-08
+LPDA-deep          VED phi=   0  lam_m= 15.966  M1=4.649e+03  M2@4,5,6,8=4.60e-06,3.55e-06,2.87e-06,2.05e-06  M3=-1.164  worst rel 6.3e-08
+LPDA-cross         HED phi=   0  lam_m= 15.966  M1=3.162e+05  M2@4,5,6,8=2.81e-05,2.21e-05,1.81e-05,1.31e-05  M3=-1.096  worst rel 6.4e-08
+LPDA-cross         HED phi=  90  lam_m= 15.966  M1=1.213e+04  M2@4,5,6,8=2.11e-05,1.31e-05,8.88e-06,4.81e-06  M3=-2.132  worst rel 6.4e-08
+LPDA-cross         VED phi=   0  lam_m= 15.966  M1=5.208e+03  M2@4,5,6,8=1.57e-05,1.21e-05,9.78e-06,6.99e-06  M3=-1.163  worst rel 6.4e-08
+SPEC-A-7-0.02      HED phi=   0  lam_m= 10.019  M1=1.348e+04  M2@4,5,6,8=1.14e-05,8.78e-06,7.05e-06,4.94e-06  M3=-1.208  worst rel 1.3e-08
+SPEC-A-7-0.02      HED phi=  90  lam_m= 10.019  M1=4.465e+02  M2@4,5,6,8=9.66e-06,5.94e-06,4.00e-06,2.13e-06  M3=-2.177  worst rel 1.3e-08
+SPEC-A-7-0.02      VED phi=   0  lam_m= 10.019  M1=2.770e+02  M2@4,5,6,8=3.56e-05,2.70e-05,2.14e-05,1.48e-05  M3=-1.263  worst rel 1.3e-08
+SPEC-A-7-0.15      HED phi=   0  lam_m= 10.019  M1=1.265e+04  M2@4,5,6,8=1.63e-05,1.25e-05,1.01e-05,7.05e-06  M3=-1.208  worst rel 1.6e-08
+SPEC-A-7-0.15      HED phi=  90  lam_m= 10.019  M1=4.199e+02  M2@4,5,6,8=1.19e-05,7.30e-06,4.91e-06,2.62e-06  M3=-2.180  worst rel 1.6e-08
+SPEC-A-7-0.15      VED phi=   0  lam_m= 10.019  M1=2.601e+02  M2@4,5,6,8=8.45e-06,6.40e-06,5.09e-06,3.52e-06  M3=-1.264  worst rel 1.6e-08
+SPEC-A-21-0.02     HED phi=   0  lam_m=  3.859  M1=5.468e+01  M2@4,5,6,8=1.31e-05,1.00e-05,7.88e-06,5.33e-06  M3=-1.294  worst rel 4.2e-09
+SPEC-A-21-0.02     HED phi=  90  lam_m=  3.859  M1=3.488e+00  M2@4,5,6,8=2.10e-05,9.10e-06,3.69e-06,2.59e-06  M3=-3.023  worst rel 4.2e-09
+SPEC-A-21-0.02     VED phi=   0  lam_m=  3.859  M1=1.326e+00  M2@4,5,6,8=1.98e-05,1.49e-05,1.14e-05,7.68e-06  M3=-1.364  worst rel 4.2e-09
+SPEC-A-21-0.15     HED phi=   0  lam_m=  3.859  M1=5.112e+01  M2@4,5,6,8=2.13e-05,1.63e-05,1.28e-05,8.67e-06  M3=-1.296  worst rel 9.4e-09
+SPEC-A-21-0.15     HED phi=  90  lam_m=  3.859  M1=3.568e+00  M2@4,5,6,8=3.58e-05,1.29e-05,5.51e-06,4.02e-06  M3=-3.155  worst rel 9.4e-09
+SPEC-A-21-0.15     VED phi=   0  lam_m=  3.859  M1=1.258e+00  M2@4,5,6,8=1.21e-05,8.94e-06,6.86e-06,4.61e-06  M3=-1.387  worst rel 9.4e-09
+SPEC-B-7-0.02      HED phi=   0  lam_m=  4.801  M1=1.315e+06  M2@4,5,6,8=3.34e-06,2.70e-06,2.26e-06,1.70e-06  M3=-0.977  worst rel 2.0e-08
+SPEC-B-7-0.02      HED phi=  90  lam_m=  4.801  M1=8.532e+04  M2@4,5,6,8=5.35e-06,3.33e-06,2.27e-06,1.25e-06  M3=-2.098  worst rel 2.0e-08
+SPEC-B-7-0.02      VED phi=   0  lam_m=  4.801  M1=1.364e+04  M2@4,5,6,8=2.69e-06,2.09e-06,1.71e-06,1.25e-06  M3=-1.108  worst rel 2.0e-08
+SPEC-B-7-0.15      HED phi=   0  lam_m=  4.801  M1=1.065e+06  M2@4,5,6,8=5.15e-06,4.16e-06,3.48e-06,2.61e-06  M3=-0.978  worst rel 1.9e-08
+SPEC-B-7-0.15      HED phi=  90  lam_m=  4.801  M1=6.920e+04  M2@4,5,6,8=7.31e-06,4.55e-06,3.10e-06,1.71e-06  M3=-2.099  worst rel 1.9e-08
+SPEC-B-7-0.15      VED phi=   0  lam_m=  4.801  M1=1.105e+04  M2@4,5,6,8=1.13e-06,8.77e-07,7.16e-07,5.23e-07  M3=-1.109  worst rel 1.9e-08
+SPEC-B-21-0.02     HED phi=   0  lam_m=  2.502  M1=3.721e+04  M2@4,5,6,8=8.24e-06,6.49e-06,5.32e-06,3.85e-06  M3=-1.098  worst rel 1.1e-08
+SPEC-B-21-0.02     HED phi=  90  lam_m=  2.502  M1=1.556e+03  M2@4,5,6,8=8.23e-06,5.12e-06,3.48e-06,1.89e-06  M3=-2.125  worst rel 1.1e-08
+SPEC-B-21-0.02     VED phi=   0  lam_m=  2.502  M1=5.770e+02  M2@4,5,6,8=5.33e-06,4.11e-06,3.32e-06,2.37e-06  M3=-1.172  worst rel 1.1e-08
+/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py:470: RuntimeWarning: invalid value encountered in divide
+  Rh = d / R
+/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py:470: RuntimeWarning: invalid value encountered in divide
+  Rh = d / R
+concurrent.futures.process._RemoteTraceback: 
+"""
+Traceback (most recent call last):
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py", line 254, in _process_worker
+    r = call_item.fn(*call_item.args, **call_item.kwargs)
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py", line 203, in _process_chunk
+    return [fn(*args) for args in chunk]
+            ~~^^^^^^^
+  File "/home/smburns/stevenmburns/momwire-wt-u4/scratch/u4-below-range/screen_remainder.py", line 93, in _point
+    tot, rel, _q, parts = bp.field_in_medium(hs, obs, -ds, kind, parts=True)
+                          ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py", line 581, in field_in_medium
+    e_dir = fs_field(C1, km, p_hat, d)
+  File "/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py", line 471, in fs_field
+    a = 1.0 / (k * R)
+        ~~~~^~~~~~~~~
+ZeroDivisionError: division by zero
+"""
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/smburns/stevenmburns/momwire-wt-u4/scratch/u4-below-range/screen_remainder.py", line 218, in <module>
+    main()
+    ~~~~^^
+  File "/home/smburns/stevenmburns/momwire-wt-u4/scratch/u4-below-range/screen_remainder.py", line 188, in main
+    res = list(ex.map(_point, jobs))
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/process.py", line 617, in _chain_from_iterable_of_lists
+    for element in iterable:
+                   ^^^^^^^^
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 639, in result_iterator
+    yield _result_or_cancel(fs.pop())
+          ~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 311, in _result_or_cancel
+    return fut.result(timeout)
+           ~~~~~~~~~~^^^^^^^^^
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 443, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "/home/smburns/.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/concurrent/futures/_base.py", line 395, in __get_result
+    raise self._exception
+ZeroDivisionError: division by zero
