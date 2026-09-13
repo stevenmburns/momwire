@@ -13,7 +13,7 @@ Nothing in `src/momwire` is touched. Status marks as in the phase-2 records:
 check in this directory, **[open]** = awaiting one. NEC-5 appears only as
 conclusions verified against our licensed materials.
 
-## 0. The result so far in one paragraph
+## 0. The result so far in one paragraph (updated after check 2)
 
 Every place the crossing fill uses a radius reads one scalar,
 `CrossingContext.a_wire` = `_radius_per_wire[0]`: the cross tables' pair
@@ -26,7 +26,10 @@ four corner contributions then keep their O(1/a) static parts cancelling
 exactly [pinned, check 1], and each block's by-parts identity keeps one radius
 throughout [derived]. The price is that the two cross blocks stop being
 transposes of each other: t_ba = t_ab(a_B)ᵀ, not t_ab(a_A)ᵀ. At equal radii the
-rule is the shipped spelling.
+rule is the shipped spelling. **Check 2 pins it at the row level** (§4′): observer-side is
+the only rule under which continuity still emerges at a two-radius node
+(KCL 3e-8); source-side and the harmonic mean break it, and the naive
+one-radius spelling is off by ≈ 8 Ω.
 
 ## 1. Where the one radius enters [derived from src, 1dbd384 ≡ 42112b9 in src/]
 
@@ -104,7 +107,7 @@ finite dynamic residue as at equal radii). A constant a·|S| is O(1/a) residue.
 **Pinned:** observer, source and harmonic keep the corner bounded at every
 ratio; the other four do not.
 
-## 4. Narrowing to observer-side [derived; open for measurement]
+## 4. Narrowing to observer-side [derived — partly WRONG, corrected by check 2 in §4′]
 
 The corner alone leaves three rules. Two arguments separate them.
 
@@ -157,13 +160,70 @@ For each crossing node, with a_X the radius of member X:
 
   | id | prediction | verdict |
   |---|---|---|
-  | C2.0 | control: at a_A = a_B all five spellings (observer, source, harmonic, single_A, single_B) reproduce the unpatched solver's Z bit for bit; asserted, and the run stops otherwise | pending |
-  | P2.1 | observer and source: the node's KCL deficit \|I(0⁺) − I(0⁻)\| / \|I(0⁺)\| stays below 1e-5 at both ratios and both refines (the equal-radius crossing rod reads ~1e-7) | pending |
-  | P2.2 | harmonic mean: the deficit exceeds 1e-3 at both ratios, from the per-row O(1/a) identity error of §4 | pending |
-  | P2.3 | observer and source slope ratios I′(0⁺)/I′(0⁻) agree with each other within 1 % at every rung. No prediction against 1/ε̃ at mixed radii: the AGARD slope condition is a single-radius statement | pending |
+  | C2.0 | control: at a_A = a_B all five spellings (observer, source, harmonic, single_A, single_B) reproduce the unpatched solver's Z bit for bit; asserted, and the run stops otherwise | **MET** — all five 169.7772371 − 82.27633482j, KCL 6.39e-8 |
+  | P2.1 | observer and source: the node's KCL deficit \|I(0⁺) − I(0⁻)\| / \|I(0⁺)\| stays below 1e-5 at both ratios and both refines (the equal-radius crossing rod reads ~1e-7) | **MISSED** — observer 6.8e-8 / 4.4e-8 / 2.9e-8 / 2.9e-8 (hit); source 0.63 / 0.70 / 0.85 / 0.89 (miss) |
+  | P2.2 | harmonic mean: the deficit exceeds 1e-3 at both ratios, from the per-row O(1/a) identity error of §4 | **HIT** — 0.33 / 0.38 / 0.45 / 0.49, and Z collapses (−129 − 1091j at ratio 2) |
+  | P2.3 | observer and source slope ratios I′(0⁺)/I′(0⁻) agree with each other within 1 % at every rung. No prediction against 1/ε̃ at mixed radii: the AGARD slope condition is a single-radius statement | **MISSED** — observer is within 2.3e-4 … 4.9e-4 of 1/ε̃; source is 56 % … 193 % off |
 
   Readings, not verdicts: `single_A` and `single_B`, the whole fill at one
   radius.
 - Whether N below members of differing radii need anything beyond per-member
   self completions (the fan).
 EOF
+## §4′ — check 2 measured, and the correction it forces [pinned]
+
+`check2_continuity.py`, `check2.log`, `check2.json`. Crossing rod, a_A = 1 mm,
+node KCL deficit \|I(0⁺) − I(0⁻)\| / \|I(0⁺)\| and slope ratio against 1/ε̃:
+
+| a_A / a_B | refine | spelling | Z | KCL deficit | slope vs 1/ε̃ |
+|---|---|---|---|---|---|
+| 1 | 1 | all five | 169.7772371 − 82.27633482j (bit-identical to unpatched) | 6.39e-8 | — |
+| 2 | 1 | observer | 169.6059 − 83.1016j | 6.77e-8 | 2.3e-4 |
+| 2 | 1 | source | 169.6059 − 83.1016j | 0.628 | 0.558 |
+| 2 | 1 | harmonic | −129.39 − 1090.57j | 0.328 | 2.37 |
+| 2 | 1 | single_A | 177.5867 − 86.3522j | 4.18e-4 | 0.652 |
+| 2 | 1 | single_B | 177.5909 − 86.3474j | 1.35e-5 | 0.549 |
+| 2 | 2 | observer | 169.2843 − 83.1924j | 4.44e-8 | 4.8e-4 |
+| 2 | 2 | source | 169.2843 − 83.1924j | 0.701 | 0.875 |
+| 2 | 2 | harmonic | −114.13 − 1069.68j | 0.378 | 1.85 |
+| 4 | 1 | observer | 169.4695 − 83.7803j | 2.92e-8 | 2.6e-4 |
+| 4 | 1 | source | 169.4695 − 83.7803j | 0.845 | 1.17 |
+| 4 | 1 | harmonic | −0.82 − 1001.40j | 0.450 | 7.89 |
+| 4 | 1 | single_A | 185.2740 − 90.5313j | 7.50e-4 | 1.30 |
+| 4 | 1 | single_B | 185.2873 − 90.5231j | 1.63e-5 | 1.15 |
+| 4 | 2 | observer | 169.1463 − 83.8802j | 2.85e-8 | 4.9e-4 |
+| 4 | 2 | source | 169.1463 − 83.8802j | 0.891 | 1.93 |
+| 4 | 2 | harmonic | 0.69 − 988.16j | 0.494 | 6.33 |
+
+(The refine-2 single_A / single_B rows are in the log.)
+
+**The correction.** §4 claimed that any rule keeping ONE radius through each
+BLOCK keeps continuity emerging, and so kept source-side as a candidate. Check 2
+refutes that. The constraint is per ROW, across blocks. Each node row also holds
+its member's self completion, whose corner sits at the member's own radius, so
+the static O(1/a) content of row na is w(1/a_A − 1/a_x1) and of row nb
+w(1/a_B − 1/a_x2). Both vanish only when a_x1 = a_A and a_x2 = a_B:
+**observer-side is the unique rule for which every node row cancels its own
+corner singularity.** Source-side cancels only in check 1's summed form, like
+the harmonic mean, and its currents break continuity by 63–89 %. Check 1 was
+necessary but not sufficient. Check 2 is the row-level test, and observer-side
+alone passes it, with continuity at 3e-8 and the AGARD slope within 5e-4 of
+1/ε̃ at radius ratios 2 and 4.
+
+**Z alone cannot tell observer-side from source-side.** Their Z agree to every
+printed digit, because the source-side matrix is the observer-side matrix
+transposed: its cross blocks are exchanged transposes and its self blocks are
+symmetric. A driving-point impedance vᵀZ⁻¹v is the same scalar for Z and Zᵀ.
+The currents differ, and only they discriminate. **Step (b) must therefore read
+node continuity and the slope, not only Z against NEC-5**: an engine
+comparison of Z cannot see a transposed rule.
+
+**The naive fix is wrong by about 8 Ω.** Removing the refusal and reading one
+radius (`single_A`, `single_B`) gives Z ≈ 177.6 Ω against observer-side's 169.6
+at ratio 2 (≈ 185.3 against 169.5 at ratio 4), and breaks continuity by 1e-5 to
+1e-3.
+
+**Status of the candidate rule:** observer-side, as spelled in §5, now pinned at
+the row level on a momwire-native two-radius crossing rod. It goes to (b), the
+two-engine ladder, with the source region refined as its own axis and currents
+read beside Z.
