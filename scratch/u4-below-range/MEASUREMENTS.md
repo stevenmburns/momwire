@@ -264,3 +264,33 @@ ladder` at r = 1: **53.0711 − 3.5390j** (2690 segments, fed segment 152.4 mm,
 424 s; `lpda_nec5_r1.*`). That agrees with the census's published NEC-5 value
 (53.0700 − 3.5386j) to about 1 mΩ. With no momwire answer on this deck, it
 stands as the reference any future serve will be read against.
+
+## The screen, measured [`screen.json`, `screen_rerun.log`]
+
+- **The first full run crashed** in SPEC-B-21-0.15 (`screen.log`). There the
+  smallest image distance was shorter than the depth sum, so ρ clamped to 0
+  and put the observer on the source. `tee` masked the exit code, and no
+  JSON was saved.
+- **The harness now skips such points** (3 skipped: SPEC-B-21-0.15 at
+  R1 = 0.1 λ_m, one per kind) and saves after every case (`5163c80`). The
+  metrics read R1 ≥ 4 λ_m only, so no metric or prediction moved.
+- **The rerun** completed with 492 rows over 15 cases.
+
+| id | verdict |
+|---|---|
+| G-c | **HIT**: 1.9811 / 1.9842 / 1.9724 / 1.9768 |
+| G-b | **HIT**: the worst prototype quadrature estimate over every point is 6.5e-8 |
+| PS1 | **MISSED**. M1 > 10 fails in 8 of 45 case-kind rows, all at 21 MHz on soils A and C, for HED φ = 90° and VED: M1 = 0.46–3.57. At 21 MHz those soils attenuate the direct term far less per in-medium wavelength, so at 4 λ_m it is still comparable with the remainder. The practical reading is unchanged: M1 ≥ 0.46 everywhere, nowhere near a floor, so the literal remainder-against-direct criterion can never choose zeroing, and it is retired in favour of M2 and the Z gate |
+| PS2 | **MISSED, and the reading rule asks for the measured form.** Over 4 → 8 λ_m, \|E_rem\| falls as **R^(−0.98 … −1.63)** for colinear HED (φ = 0) and VED, and as **R^(−2.01 … −3.98)** for side-by-side HED (φ = 90°). The colinear and vertical pairs, the ones along a radial, decay about as 1/R, not as the ρ⁻² I derived for the lateral wave. So the beyond-cap remainder is a slow tail on exactly the pairs a radial screen is made of |
+| PS3 | **MISSED, in the direction that favours zeroing.** M2 at 4 λ_m on the LPDA, HED φ = 0, is 9.8e-6 (shallow), 1.2e-5 (deep) and 2.8e-5 (cross): 7–20× under the 2e-4 floor. Across all 45 case-kind rows the largest M2 at 4 λ_m is 1.04e-4, still under the floor |
+
+**Reading, as registered:**
+
+- **The screen passes everywhere.** Its field floor would put zeroing up as the
+  candidate for the Z gate.
+- **The slow 1/R tail is exactly what the Z gate exists to test.** It decides
+  whether the summed beyond-cap pairs on a large screen stay small in Z.
+- **The Z gate cannot run on any corpus deck:** the LPDA is also below the
+  grazing floor.
+- **The next step is the plan owner's decision.** The options are a synthetic
+  deck, the grazing-floor unit first, or deferral.
