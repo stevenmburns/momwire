@@ -2183,6 +2183,40 @@ def test_ge_sign_refusal_fires_only_at_the_divergent_combination():
     assert parse(_vertical(-1, gn="")) is not None
 
 
+CROSSING_ROD = (
+    "CE x\nGW 1 21 0 0 0 0 0 2.5 .001\nGW 2 5 0 0 0 0 0 -.5 .001\nGE {ge}\n"
+    "GN 2 0 0 0 13. .005\nEX 0 1 1 0 1.\nFR 0 1 0 0 30.\nXQ\nNX\n"
+)
+
+
+def test_ge_minus_one_serves_a_crossing_junction():
+    """antennaknobs plan U3: at a node where one wire continues above the
+    plane and another below, GE -1 is the buried-wire flag NEC-4/NEC-5 decks
+    carry, not a free contact end. The current continues into the buried
+    member, so the #489 refusal does not apply, and the deck parses to the
+    same model as its GE 1 twin, apart from the flag itself."""
+    minus = parse(CROSSING_ROD.format(ge=-1))
+    plus = parse(CROSSING_ROD.format(ge=1))
+    assert minus.ground_plane_interpolates is False
+    assert plus.ground_plane_interpolates is True
+    assert minus.wires == plus.wires
+    assert minus.feeds == plus.feeds
+    assert minus.ground == plus.ground
+
+
+def test_ge_minus_one_still_refuses_an_end_that_only_goes_below():
+    """The exemption needs members on BOTH sides. A buried wire that merely
+    ends in the plane has no above member, so the node is a free contact end
+    under GE -1 and still refuses by name."""
+    buried_only = (
+        "CE b\nGW 1 5 0 0 0 0 0 -.5 .001\nGE -1\nGN 2 0 0 0 13. .005\n"
+        "EX 0 1 3 0 1.\nFR 0 1 0 0 30.\nXQ\nNX\n"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse(buried_only)
+    assert "GE -1" in str(exc.value) and "wire 1" in str(exc.value)
+
+
 def test_cliff_with_no_second_medium_refuses_by_name():
     """momwire#490: a cliff request over a ground with an all-zero second
     medium is a state the oracle cannot answer (its whole pattern table is

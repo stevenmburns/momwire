@@ -170,6 +170,27 @@ def _directive(text: str, keyword: str) -> int | None:
     return None
 
 
+def _crossing_junction_at(wires, point, tol: float) -> bool:
+    """True when the in-plane wire end at ``point`` is a crossing junction.
+
+    That means at least one wire with an end there continues ABOVE the plane,
+    and at least one continues BELOW it (antennaknobs plan U3). Ends coincide
+    within the larger of the two wires' own contact tolerances, the same
+    ``_SMIN``-scaled rule the GE -1 contact test uses.
+    """
+    above = below = False
+    for w in wires:
+        tol_w = max(tol, _SMIN * (w.length / w.n_seg))
+        for end, other in ((w.p1, w.p2), (w.p2, w.p1)):
+            if all(abs(float(end[k]) - float(point[k])) <= tol_w for k in range(3)):
+                z = float(other[2])
+                if z > tol_w:
+                    above = True
+                elif z < -tol_w:
+                    below = True
+    return above and below
+
+
 @dataclass
 class _PendingGroup:
     """One execute card's state, captured before the deck's feed union set is
@@ -1057,6 +1078,14 @@ class _Nec2Parser:
         # GE -1 with every wire clear of the plane serves as before (the sign
         # then moves printout connection columns only), as does GE -1 in free
         # space, where no image exists to disagree about.
+        #
+        # A CROSSING JUNCTION is not a contact end (antennaknobs plan U3). In
+        # NEC-4/NEC-5 decks GE -1 is also the flag for buried and
+        # interface-crossing wires, which are joined above and below at z = 0.
+        # There the current continues into the buried member, so nothing ends
+        # on the plane, and the crossing serve is the model regardless of the
+        # sign. Only a FREE end in the plane refuses: an in-plane node with no
+        # wire continuing both above and below.
         if structure.ground_plane_flag and not structure.ground_plane_interpolates:
             grounded = any(
                 g is not None and g.environment.ground is not None for g in groups
@@ -1065,7 +1094,9 @@ class _Nec2Parser:
                 for w in structure.wires:
                     tol = _SMIN * (w.length / w.n_seg)
                     for p in (w.p1, w.p2):
-                        if abs(float(p[2])) <= tol:
+                        if abs(float(p[2])) <= tol and not _crossing_junction_at(
+                            structure.wires, p, tol
+                        ):
                             raise DeckError(
                                 f"GE -1 declares the ground plane without the "
                                 f"ground-contact current expansion, and wire "
