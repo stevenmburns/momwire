@@ -1,0 +1,8 @@
+{'proto': '/home/smburns/stevenmburns/antennaknobs/scratch/524-phase0/proto/buried_proto.py', 'proto_sha256': 'a6475b976d5ebc7ec789f9aff105f25917bc5556c0f86b531483a0c811ede094', 'integrator': {'n': 16, 'rtol': 1e-11, 'depth': 14, 'max_panels': 6000, 'detour': 2.0}}
+G-a (eps~=1 at 4 and 8 lambda_0): worst |E_rem|/|E_dir| 0.00e+00
+   HED phi=0 rho=171.3 rem/dir 0.00e+00 rel 0.0e+00 0.0s
+   HED phi=90 rho=171.3 rem/dir 0.00e+00 rel 0.0e+00 0.0s
+   VED phi=0 rho=171.3 rem/dir 0.00e+00 rel 0.0e+00 0.0s
+   HED phi=0 rho=342.6 rem/dir 0.00e+00 rel 0.0e+00 0.0s
+   HED phi=90 rho=342.6 rem/dir 0.00e+00 rel 0.0e+00 0.0s
+   VED phi=0 rho=342.6 rem/dir 0.00e+00 rel 0.0e+00 0.0s
