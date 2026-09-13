@@ -1,0 +1,112 @@
+# U4 — the below/below range: the prototype screen (registered before the run)
+
+Plan unit U4 (antennaknobs `docs/plan-buried-scope-closure.md`). momwire tabulates
+the below/below remainder to `_SOMM_BELOW_R1_CAP_LAMBDA_M` = 4 in-medium
+wavelengths and refuses past it (`_below_interface.BURIED_PAST_CAP_REFUSAL`).
+The plan asks whether to serve beyond the cap with the remainder set to zero,
+or to extend the table.
+
+Registered 2026-09-13, before any run.
+
+## Base, and what is already known
+
+- **Base.** The branch `scratch/u4-below-range` starts at momwire `origin/main` =
+  `b284b17`. That tip contains #1052 (merge commit `553d671`, 05:15Z), #1049
+  (`b284b17`, 05:22Z) and #1050 (`b8232e5`). Each was checked with `git
+  merge-base --is-ancestor` against the merge-commit OIDs GitHub reports.
+- **The cap is 4, not 2.** Commit `006bf28` (#838 part 2, 2026-09-02) raised it
+  from 2 λ_m to 4 λ_m with a finer θ lattice in the far annulus (worst error
+  3.6e-5 against the 2e-4 gate). The comment above the constant still argues
+  "2, not 4". It is stale, and gets fixed in any src PR this unit produces.
+- **The remainder is not a small tail below the interface.** momwire's refusal
+  text records it growing relative to direct plus image with range (12× and
+  168× at working range, momwire#553 U2). The phase-0 RESULTS.md measured
+  |E_rem|/|E_direct| from 0.10 at ρ = 1 m to 2.3 at ρ = 10 m, soil A.
+  - The direct term carries e^{−Im(k_m)R}: about 9.5 nepers at 4 λ_m in soil A
+    at 7 MHz.
+  - The lateral-wave part of the remainder decays only algebraically along the
+    interface.
+  - So the plan's literal criterion, remainder against the pair's direct term,
+    will pick extension every time. It is reported, but it is not the screen.
+- **Only one corpus deck is really out of range.** The census lists three
+  range decks, but two are phantoms: both copies of `2lsloper.nec` are an
+  above-ground 80 m sloper whose tab fields (`-68 ft`) the tokenizers split,
+  confirmed on antennaknobs and in the corpus translation. The one real range
+  deck is the Cebik LPDA with buried radials
+  (`lpma3r5-4-6el86ft75o-buriedradials.nec`, sha256 `f653f79da804fc55…`).
+  It has 920 horizontal buried wires at 8 depths, 0.152–0.686 m; the median
+  segment is 0.61 m; the screen reaches 50.6 m from the origin; and
+  R1 = 74.7 m = 4.68 λ_m at 3.5 MHz, soil (13, 0.005), λ_m = 15.97 m.
+
+## The screen and the verdict
+
+The screen is on the #524 phase-0 prototype (antennaknobs
+`scratch/524-phase0/proto/buried_proto.py`, regime 2: direct + A_m·image +
+remainder, verified against empymod in phase 0). It needs neither a corpus
+translation nor a momwire change.
+
+**The screen is not the verdict.** The verdict is what zeroing does to Z, on
+the LPDA: zero-beyond-cap against an extended table, both harness-side, through
+`antennaknobs ladder`, with NEC-5 x13-static as the outside reference. A field
+floor can pass while the summed contribution of many beyond-cap pairs on a
+large screen still moves Z. The Z gate is registered separately, before its
+runs.
+
+### Geometry and cases
+
+Source dipole at depth d_s (z′ = −d_s) and observer at depth d_o. The
+horizontal separation ρ is set from R1 = √(ρ² + (d_s + d_o)²), momwire's
+image-distance coordinate. Kinds: HED observed at φ = 0 (colinear pairs, as
+along a radial), HED at φ = 90° (side-by-side pairs), and VED.
+
+| case | soil (ε_r, σ) | f (MHz) | (d_s, d_o) m | Δ (m) |
+|---|---|---|---|---|
+| LPDA-shallow | (13, 0.005) | 3.5 | (0.1524, 0.1524) | 0.6096 |
+| LPDA-deep | (13, 0.005) | 3.5 | (0.6858, 0.6858) | 0.6096 |
+| LPDA-cross | (13, 0.005) | 3.5 | (0.1524, 0.6858) | 0.6096 |
+| SPEC A / B / C × 7, 21 MHz | SPEC.md soils | 7, 21 | (0.02, 0.02) and (0.15, 0.15) | λ_m / 26 |
+
+Δ is the pair's self scale: the LPDA's median buried segment, or the same
+electrical density, λ_m/26, for the SPEC cases. R1 ∈ {0.1, 0.25, 0.5, 1, 2, 3,
+4, 5, 6, 8} λ_m, plus the self-scale point ρ = Δ.
+
+### Metrics
+
+- **M1, the plan's literal ratio:** |E_rem| / |E_direct| at R1 = 4 λ_m. Norms are
+  of the Cartesian field vector.
+- **M2, the absolute screen:** |E_rem(R1)| / |E_total(ρ = Δ)| at R1 = 4, 5, 6 and
+  8 λ_m, same depths and kind. Zeroing the remainder past the cap errs by
+  |E_rem| itself. The screen compares that error with the fill's own tolerance,
+  2e-4 (the below grid's gate), applied to a self-scale field.
+- **M3, the decay:** the log-log slope of |E_rem| between R1 = 4 and 8 λ_m.
+
+### Guards (a miss stops the run as a harness or integration error)
+
+- **G-a, the ε̃ = 1 collapse at range:** at ε_r = 1, σ = 0, |E_rem| ≤ 1e-9·|E_direct|
+  at R1 = 4 and 8 λ_0, for every kind. The phase-0 G2 collapse, carried out to
+  the far range this unit reads.
+- **G-b, quadrature self-convergence:** the prototype's own `rel` estimate is
+  ≤ 1e-6 at every point. The worst is reported.
+- **`HalfSpace.assert_decay()` holds** for every soil.
+
+### Predictions
+
+| id | prediction | verdict |
+|---|---|---|
+| PS1 | **informed** (momwire#553 U2's refusal record; phase-0 RESULTS §2): M1 > 10 in every case and kind |  |
+| PS2 | **derived** (the lateral wave decays as ρ⁻² along the interface once the direct term is attenuated away): M3 ∈ [−2.5, −1.5] in every case and kind |  |
+| PS3 | **blind, low confidence**: in both LPDA cases, M2 at R1 = 4 λ_m exceeds 2e-4 for HED at φ = 0, so the screen fails at the cap. The estimate is quasi-static: E_direct(Δ) ∝ 1/(ε_m Δ³) and E_lateral(ρ) ∝ 1/(ε₀ ρ²) × k_p²/k_m², giving M2 ~ Δ³/ρ² ≈ 2.4e-4 at Δ = 0.61 m and ρ = 64 m, within a decade of the threshold either way |  |
+
+How the outcomes will be read, fixed now:
+
+- **A guard misses** → the far-range integrals are not trustworthy on this
+  prototype. Stop, and report which guard and where.
+- **PS1 hits** → the plan's literal criterion cannot choose zeroing on any deck,
+  and is retired in favour of M2 and the Z gate.
+- **M2 ≤ 2e-4 at 4 λ_m in both LPDA cases** → zeroing is the candidate to take to
+  the Z gate.
+- **M2 > 2e-4** → extension is the candidate. The Z gate still compares
+  zero-beyond-cap with the extended table on the LPDA, because the screen is
+  field-level and the verdict is Z.
+- **PS2 misses** → the remainder past the cap is not the algebraic lateral-wave
+  tail. Report its measured form before choosing a branch.
