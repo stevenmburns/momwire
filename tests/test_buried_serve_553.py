@@ -610,7 +610,8 @@ def test_gu5_5_the_buried_wire_moves_the_answer(record_property):
 
 
 # ======================================================================
-# G-U5-6 — the serve domain refuses by name, never clamps
+# G-U5-6 — the serve domain refuses by name, never clamps (and past the
+# below/below R1 cap serves the remainder as zero, momwire#1053)
 # ======================================================================
 
 
@@ -631,7 +632,12 @@ def _past_the_below_cap_m():
 
 
 @pytest.mark.slow
-def test_gu5_6_a_buried_structure_past_the_below_cap_refuses():
+def test_gu5_6_a_buried_structure_past_the_below_cap_is_served():
+    """momwire#1053 turned this refusal into an answer: past the below/below
+    R1 cap the remainder is served as ZERO. The bound that licenses the zero
+    is written at `_SOMM_BELOW_R1_CAP_LAMBDA_M` and held on a deck by
+    `test_below_past_cap_zero_1053`; this row keeps the plain half, that the
+    deck which used to refuse now solves."""
     s = BSplineSolver(
         wires=[_mono(), _radial(length=_past_the_below_cap_m())],
         n_per_edge_per_wire=[[15], [20]],
@@ -642,17 +648,13 @@ def test_gu5_6_a_buried_structure_past_the_below_cap_refuses():
         ground_eps=SOIL_A,
         ground_model="sommerfeld",
     )
-    with pytest.raises(ValueError) as exc:
-        s.compute_impedance()
-    msg = str(exc.value)
-    assert "below/below pair separation" in msg
-    assert "in-medium wavelengths" in msg
-    assert "no honest clamp" in msg
+    z, _ = s.compute_impedance()
+    assert np.isfinite(z)
 
-    # ...and the deck this test used to use is now INSIDE the domain, so the
-    # gate says which side of the cap each length sits on rather than only
-    # exhibiting one. 40 m is 3.99 lambda_m at soil A: past the old 2, inside
-    # the current 4 (momwire#838 part 2).
+    # ...and the deck this test used to use sits INSIDE the tabulation, so the
+    # gate still says which side of the cap each length is on. 40 m is 3.99
+    # lambda_m at soil A: past the old 2, inside the current 4 (momwire#838
+    # part 2).
     served = BSplineSolver(
         wires=[_mono(), _radial(length=40.0)],
         n_per_edge_per_wire=[[15], [20]],

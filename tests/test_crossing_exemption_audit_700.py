@@ -84,9 +84,9 @@ import sys
 import numpy as np
 import pytest
 
-from momwire import _medium_spec, _sommerfeld_below
+from momwire import _below_interface, _medium_spec, _sommerfeld_below
 from momwire import razor as _razor
-from momwire.bspline import BSplineSolver
+from momwire.bspline import BSplineSolver, _pair_extents_below
 from momwire.razor import RazorSolver
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -463,8 +463,12 @@ def test_on_the_fan_it_is_the_r1_cap_that_soil_moves():
     effect is here: eps_r 30 / sigma 0.03 used to be the refusing soil and
     now SERVES at 2.12 lambda_m. The mechanism is unchanged and so is this
     test's point -- it just takes a wetter soil to demonstrate it, so the
-    refusing case is sea water. Margin at soil A went 2.0x -> 4.0x with the
-    cap.
+    case past the cap is sea water. Margin at soil A went 2.0x -> 4.0x with
+    the cap.
+
+    Past the cap is no longer a refusal (momwire#1053: the remainder is
+    served as zero out there), so the sea-water end of this gate asks the
+    serve plan, over the solver's own nodes, and never pays for the fill.
     """
     cap_wl = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M
     r1, _th, lam_a, _rho = _below_extents(BSplineSolver(**fan_rise_deck()))
@@ -484,5 +488,19 @@ def test_on_the_fan_it_is_the_r1_cap_that_soil_moves():
     r1_w, th_w, lam_w, _rho = _below_extents(s)
     assert th_w == pytest.approx(_th, abs=1e-9), "soil must not move the angle"
     assert r1_w / lam_w > cap_wl, (r1_w / lam_w, cap_wl)
-    with pytest.raises(ValueError, match="reach"):
-        s.compute_impedance()
+    geom = s._build_geometry()
+    obs_b, _t, _w = s._buried_nodes(geom, np.nonzero(s._below_segments(geom))[0])
+    _eps_t, _eps_m, k_p, k_m, _c2, _a_m = s._buried_medium()
+    plan = _below_interface.serve_plan(
+        s.ground_z,
+        None,
+        None,
+        np.zeros(0, dtype=int),
+        None,
+        obs_b,
+        k_p,
+        k_m,
+        crossing=True,
+        pair_extents=_pair_extents_below,
+    )
+    assert plan["r1_below"] / lam_w > cap_wl, (plan, cap_wl)

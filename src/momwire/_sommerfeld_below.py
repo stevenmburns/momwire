@@ -149,28 +149,32 @@ _MAX_TAIL_PANELS = 8000
 # λ_m = 2π/|k_m|. See `SommerfeldGridBelow` for why this is a product-regime
 # number and not the ±=+ family's 15λ.
 #
-# 2, not 4, and the reason is a MEASUREMENT rather than a preference. The
-# grid → direct probe over the full served rectangle (R₁ ∈ [0, cap] × θ ∈
-# [1°, 90°], boundaries included, all six SPEC cells) puts a clean cliff at
-# exactly 2 λ_m — worst per R₁ band, over every cell and every θ band:
+# What the cap MEANS is how far the tabulation is gated accurate; nothing
+# physical stops at it. It was 2 λ_m until momwire#838 part 2, because the
+# far annulus [2, 4) λ_m read 2.4e-3 on the old Δθ = 2.5° lattice, 12x the
+# rest of the domain. Part 2 measured that as the θ axis alone and densified
+# it (the `_SOMM_BELOW_R_BREAK_LAMBDA_M` comment below: 3.6e-5 worst against
+# the 2e-4 bar), which is what 4 buys.
 #
-#   R₁ ∈ [0.0, 0.2) λ_m    5.8e-5
-#   R₁ ∈ [0.2, 1.0) λ_m    2.0e-4
-#   R₁ ∈ [1.0, 2.0) λ_m    1.6e-4
-#   R₁ ∈ [2.0, 4.0) λ_m    2.4e-3      ← 12x the rest
+# PAST the cap the fill SERVES the remainder as zero (momwire#1053); it used
+# to refuse the deck by name. What licenses the zero is measured against a
+# different denominator from the one that motivated the refusal, and both
+# stand: against direct + image the remainder GROWS with range (12x, 168x at
+# working range, #553 U2), and at 4 λ_m it is still 0.46-3.57x the direct
+# term alone. What it is small against is the self-scale field that sets
+# every row of Z:
 #
-# The far annulus is 3-12x worse than everything inside it and would have
-# had to carry a pin 12x looser than the domain deserves. Densifying it
-# instead costs ~34 % more nodes for the steep band alone (Δθ 2.5° → 1.25°)
-# and ~75 % with the grazing band too, on a fill that is already ~85 s of
-# numpy — so the honest trade is the smaller domain, gated at 2e-4, with a
-# refusal by name past it rather than a loose pin over it. Densifying the
-# far annulus is a recorded follow-up for whoever needs the bigger domain,
-# and it wants the C++ twin first.
+#   field  |E_rem(4 λ_m)| / |E_tot(Δ)| ≤ 1.04e-4 over the SPEC and LPDA
+#          cases, falling ~1/R on colinear and vertical pairs and R⁻²…R⁻⁴
+#          side by side;
+#   Z      zeroing every pair past 4 λ_m on a screen 4.76 λ_m across moves Z
+#          by 3.1e-5 Ω against the table's own 0.074 Ω ladder step: 4e-7 of
+#          |Z|, and constant under refinement.
 #
-# What 2 λ_m buys at the SPEC soils: 20 m (A/7 MHz), 9.6 m (B/7), 36 m
-# (C/7), 7.7 / 5.0 / 12.7 m at 21 MHz. Buried radial screens live inside
-# that at HF; anything larger refuses and says so.
+# A POINT query past the cap still refuses (`SommerfeldGridBelow.eval`,
+# `remainder_field_below`): a lone observer has no self term for the
+# remainder to be small against. The grazing floor still reads every pair,
+# zeroed ones included.
 _SOMM_BELOW_R1_CAP_LAMBDA_M = 4.0
 
 # The inner/far break, in λ_m. Everything below it is the lattice the grid
@@ -1427,12 +1431,18 @@ class SommerfeldGridBelow(SommerfeldGrid):
         """Interpolate the four below surfaces; REFUSES past `r1_max`.
 
         The parent clamps an over-range R₁ to `r1_max` because out there
-        its remainder is a negligible tail. This family's remainder is not
-        negligible anywhere the product cares about — it grows relative to
-        the direct term with range — so a clamp would return a confident
-        wrong number. θ is range-checked for the same reason: the parent's
-        silent clip to [0, π/2] would absorb a wrong-side geometry into a
-        plausible-looking answer instead of naming it.
+        its remainder is a negligible tail. This family's remainder is no
+        tail against the direct term — it grows relative to direct + image
+        with range — so at a POINT a clamp would return a confident wrong
+        number. The Z fill is a different question, answered in
+        `remainder_field_proj_below`: pairs past the CAP are served as zero
+        there, where the remainder is small against the self-scale terms that
+        set Z (see `_SOMM_BELOW_R1_CAP_LAMBDA_M`). Nothing reaches this
+        refusal from that path unless a grid was sized short of the cap, which
+        is a bug to name, not a range to serve. θ is range-checked for the
+        same reason as the point clamp: the parent's silent clip to [0, π/2]
+        would absorb a wrong-side geometry into a plausible-looking answer
+        instead of naming it.
         """
         R1 = np.asarray(R1, dtype=float)
         theta = np.asarray(theta, dtype=float)
@@ -1650,9 +1660,9 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
 
     Below the interface it is not, and the arithmetic inverts with it. The
     surfaces carry e^{+j(k_p ρ + k_m h)} with k_m = k_p√ε̃, so a relative
-    Im shift δ moves the phase by ~½·δ·|k_m|R₁, which at the 2 λ_m cap is
-    ~½·δ·4π ≈ 6·δ — GROWING with R₁ instead of being damped by 0.1. At the
-    ladder's 0.4 % worst offset that is a ~2e-2 phase error, and because
+    Im shift δ moves the phase by ~½·δ·|k_m|R₁, which at the 4 λ_m cap is
+    ~½·δ·8π ≈ 13·δ — GROWING with R₁ instead of being damped by 0.1. At the
+    ladder's 0.4 % worst offset that is a ~5e-2 phase error, and because
     the remainder carries the whole field out there (measured: 12×, 168×
     direct+image at working range) it lands on the composed answer at the
     same size. Measured at (B/7 MHz, R₁ = 1.31 λ_m, θ = 2.18°): grid built
@@ -1691,6 +1701,25 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
 # ---------------------------------------------------------------------------
 
 
+def _zero_past_cap(out, obs, src, d_obs, d_src, r1_cap):
+    """Zero `out`'s entries whose pair lies past `r1_cap`, in place.
+
+    The C++ kernel does not hand back a per-pair R₁, so the mask is rebuilt
+    here with the numpy body's own arithmetic (hypot, then the root), which
+    keeps the two paths classifying every pair identically. Row chunks keep
+    the temporaries a fraction of `out` rather than several copies of it.
+    """
+    step = max(1, (1 << 20) // max(1, src.shape[0]))
+    for i0 in range(0, obs.shape[0], step):
+        i1 = min(i0 + step, obs.shape[0])
+        rho = np.hypot(
+            obs[i0:i1, 0][:, None] - src[:, 0][None, :],
+            obs[i0:i1, 1][:, None] - src[:, 1][None, :],
+        )
+        hh = d_obs[i0:i1, None] + d_src[None, :]
+        out[i0:i1][np.sqrt(rho * rho + hh * hh) > r1_cap] = 0.0
+
+
 def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid):
     """Projected below/below remainder table t_m · F(r_m, r_n) · t_n.
 
@@ -1712,6 +1741,17 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     not. `remainder_field_proj` would have clamped θ into range and
     returned a number; the near-interface case (a wire crossing the
     interface, contact) is momwire#524 phase 3, not something to absorb.
+
+    PAST THE CAP (momwire#1053) a pair's entry is exactly ZERO. The grid is
+    tabulated to `grid.r1_cap` and no further, every pair with R₁ beyond it
+    is zeroed, and every other pair is the same number from the same
+    arithmetic as before (an empty mask touches nothing). The key is the cap
+    and NOT `grid.r1_max`: a grid sized short of the cap and then queried
+    past its own tabulation is a sizing bug, and `SommerfeldGridBelow.eval`
+    still names it. The grazing floor still reads every pair, zeroed ones
+    included. What licenses the zero is measured and written at
+    `_SOMM_BELOW_R1_CAP_LAMBDA_M`; it is a statement about Z, which is why
+    `remainder_field_below` (a field at a point) does not share it.
 
     C++ TWIN (momwire#568 unit 2). This used to read "numpy only: the C++
     `remainder_field_proj_batch` takes a `double k` and cannot carry a complex
@@ -1784,10 +1824,16 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
         # geometries are served. Two points; the interpolation it also does is
         # discarded and costs microseconds.
         if obs.shape[0] and src.shape[0]:
-            grid.eval(np.array([mx_r1, mx_r1]), np.array([mn_th, mx_th]))
-            grid._ensure_for(mx_r1, mn_th, mx_th)
+            # Clamped to the cap, not to r1_max: past the cap is served (as
+            # zero, below), while a grid sized short of the cap still refuses.
+            q_r1 = min(mx_r1, grid.r1_cap)
+            grid.eval(np.array([q_r1, q_r1]), np.array([mn_th, mx_th]))
+            grid._ensure_for(q_r1, mn_th, mx_th)
             if tuple(r["filled"] for r in grid._regions) != filled_before:
                 out, mx_r1, mn_th, mx_th = _run()
+            if mx_r1 > grid.r1_cap:
+                # The kernel interpolated these at r1_max; the served value is 0.
+                _zero_past_cap(out, obs, src, d_obs, d_src, grid.r1_cap)
         return out
 
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])
@@ -1801,7 +1847,14 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     rho = np.hypot(dx, dy)
     hh = d_obs[:, None] + d_src[None, :]
     r1 = np.sqrt(rho * rho + hh * hh)
-    surf = grid.eval(r1, np.arctan2(hh, rho))
+    # A duck-typed surface source has no cap: it serves every R1 itself.
+    r1_cap = getattr(grid, "r1_cap", None)
+    past = None
+    if r1_cap is not None and r1.size and float(np.max(r1)) > r1_cap:
+        past = r1 > r1_cap
+        surf = grid.eval(np.minimum(r1, r1_cap), np.arctan2(hh, rho))
+    else:
+        surf = grid.eval(r1, np.arctan2(hh, rho))
     g = divide_out_below(k_p, k_m, rho, hh)
 
     tiny = 1e-12 * grid.r1_max
@@ -1817,11 +1870,14 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     )
     e_phi = g * th_src[None, :] * sphi * surf["IphiH"]
     e_z = g * (tz_src[None, :] * surf["IzV"] - th_src[None, :] * cphi * surf["IrhoV"])
-    return (
+    out = (
         t_obs[:, 0][:, None] * (dhx * e_rho - dhy * e_phi)
         + t_obs[:, 1][:, None] * (dhy * e_rho + dhx * e_phi)
         + t_obs[:, 2][:, None] * e_z
     )
+    if past is not None:
+        out[past] = 0.0
+    return out
 
 
 def remainder_field_below(obs, src, src_moment, ground_z, k_p, k_m, grid):

@@ -554,7 +554,6 @@ SINGULAR_ENRICHMENT_NEVER = (
 _BURIED_ENRICHMENT_REFUSAL = _below_interface.BURIED_ENRICHMENT_REFUSAL
 _BURIED_EXTENDED_KERNEL_REFUSAL = _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
 _BURIED_DENSE_BUDGET_REFUSAL = _below_interface.BURIED_DENSE_BUDGET_REFUSAL
-_BURIED_PAST_CAP_REFUSAL = _below_interface.BURIED_PAST_CAP_REFUSAL
 _BURIED_GRAZING_REFUSAL = _below_interface.BURIED_GRAZING_REFUSAL
 _BURIED_CROSS_RANGE_REFUSAL = _below_interface.BURIED_CROSS_RANGE_REFUSAL
 _BURIED_DEPTH_REFUSAL = _below_interface.BURIED_DEPTH_REFUSAL
@@ -567,16 +566,21 @@ def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
     A PRE-FLIGHT for callers that want to know before paying for a fill:
     antennaknobs#1135 wants a knob combination to fail at construction rather
     than 20 s into a solve, and the app's knob panel wants to grey it rather
-    than offer it. `_buried_serve_plan` raises these same two sentences from
-    inside the fill; this returns them instead, formatted from the same
-    templates and the same constants, so there is exactly one copy of both.
+    than offer it. `_buried_serve_plan` raises this same sentence from inside
+    the fill; this returns it instead, formatted from the same template and
+    the same constant, so there is exactly one copy of it.
+
+    ONE bound since momwire#1053: the grazing floor. The below/below R1 cap
+    used to be the other, and past it the fill now SERVES the remainder as
+    zero instead of refusing (the bound that licenses the zero is written at
+    `_SOMM_BELOW_R1_CAP_LAMBDA_M`). The floor is an angle, so the verdict no
+    longer reads the medium: `ground_eps` and `freq_hz` stay in the signature
+    so no caller breaks, and are unread.
 
     `points` is (n, 3) in metres; `ground_eps` is the `(eps_r, sigma)` pair a
-    solver takes, and `freq_hz` the solve frequency. Those two rather than a
-    derived `eps_tilde`/`k` on purpose: a caller that had to build the medium
-    itself would be carrying a third copy of the conversion, which is the
-    thing this function exists to avoid. Only rows at or below `ground_z` are
-    read — an above-ground wire has no below/below pair to bound.
+    solver takes, and `freq_hz` the solve frequency. Only rows at or below
+    `ground_z` are read — an above-ground wire has no below/below pair to
+    bound.
 
     ON WHAT THE CALLER SHOULD PASS. The fill measures its extents on the
     QUADRATURE NODES, which are strictly interior to their segments; a caller
@@ -599,23 +603,7 @@ def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
     if not np.any(keep):
         return None
     x, y, d_b = pts[keep, 0], pts[keep, 1], d_b[keep]
-    omega = 2.0 * math.pi * float(freq_hz)
-    k2 = omega / 299792458.0
-    eps_t = _ground_refl.eps_tilde(
-        (float(ground_eps[0]), float(ground_eps[1])), omega, 8.8541878128e-12
-    )
-    k_m = _sommerfeld_below.k_medium(eps_t, k2)
-    lam_m = 2.0 * np.pi / abs(k_m)
-    r1_max, th_min = _pair_extents_below(x, y, d_b)
-    cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
-    if r1_max > cap:
-        return _BURIED_PAST_CAP_REFUSAL.format(
-            r1=r1_max,
-            wl=r1_max / lam_m,
-            cap=cap,
-            capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
-            lam_m=lam_m,
-        )
+    _r1_max, th_min = _pair_extents_below(x, y, d_b)
     if th_min < math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG):
         return _BURIED_GRAZING_REFUSAL.format(
             th=math.degrees(th_min),

@@ -3,15 +3,18 @@
 antennaknobs#1135 wants a knob combination to fail at construction rather than
 20 s into a solve. The pre-flight is only worth anything if its verdict is the
 FILL's verdict, so that is what these gates measure -- both refuse or both
-serve, on decks swept across the two bounds, with no false refusals.
+serve, on decks swept across the bound, with no false refusals.
 
-The two bounds it reproduces are `_buried_serve_plan`'s own:
+The bound it reproduces is `_buried_serve_plan`'s own:
 
-  * R1_max <= `_SOMM_BELOW_R1_CAP_LAMBDA_M` in-medium wavelengths;
   * theta_min >= `_SOMM_BELOW_TH_MIN_DEG` (0.05 deg since momwire#935).
 
-One copy of each constant and each sentence: the helper formats the same
-templates the fill raises, which is what these gates hold together.
+There were two until momwire#1053, which serves the below/below remainder as
+zero past `_SOMM_BELOW_R1_CAP_LAMBDA_M` instead of refusing; the pre-flight
+follows the fill.
+
+One copy of the constant and the sentence: the helper formats the same
+template the fill raises, which is what these gates hold together.
 """
 
 import math
@@ -51,9 +54,11 @@ def test_g1135_1_nothing_below_is_not_a_refusal():
     assert _verdict([(0.0, 0.0, 1.0), (5.0, 0.0, 2.0)], "A") is None
 
 
-def test_g1135_2_the_two_bounds_fire_by_name():
+def test_g1135_2_the_grazing_bound_fires_by_name_and_range_does_not():
+    # momwire#1053: 60 m apart is ~6 lambda_m at soil A, past the R1 cap, and
+    # SERVED -- the remainder out there is zero, not a refusal.
     far = _verdict([(30.0, 0.0, -0.15), (-30.0, 0.0, -0.15)], "A")
-    assert far is not None and "pair separation" in far
+    assert far is None, far
     graze = _verdict([(5.0, 0.0, -5e-4), (-5.0, 0.0, -5e-4)], "A")
     assert graze is not None and "pair elevation" in graze
     # the sentences are the FILL's, so the floor they quote is the live one
@@ -70,7 +75,7 @@ def test_g1135_3_the_floor_it_quotes_follows_the_constant(monkeypatch):
 
 @pytest.mark.slow
 def test_g1135_4_the_preflight_agrees_with_the_fill():
-    """The gate that matters: sweep the R1 bound and compare verdicts.
+    """The gate that matters: sweep the bound and compare verdicts.
 
     Each deck is built for real and SOLVED far enough to reach
     `_buried_serve_plan`, which is where the fill raises. One test rather
@@ -79,13 +84,21 @@ def test_g1135_4_the_preflight_agrees_with_the_fill():
     every individual row of a one-sided sweep. The mix assertion at the end
     is what makes this a comparison.
 
+    The swept bound is the grazing floor, by DEPTH, since momwire#1053: past
+    the R1 cap the fill now serves, so the R1 sweep this gate used to run
+    came out served on both sides -- exactly the one-sided sweep the mix
+    assertion exists to catch. Soil cannot move an angle, so one soil
+    carries it; the depths sit at least 1.9x either side of the floor at
+    both lengths, clear of the vertex-versus-node margin the pre-flight is
+    allowed.
+
     `slow` because it solves: five rows of the parametrised version breached
     the 20 s ceiling, and solving is the point.
     """
     served = refused = 0
-    for soil in sorted(SOILS):
-        for radial in (3.0, 6.0, 9.0, 12.0, 18.0, 24.0):
-            for depth in (0.15, 0.5):
+    for soil in ("A",):
+        for radial in (3.0, 6.0):
+            for depth in (0.001, 0.01):
                 build = fan_rise_deck(depth=depth)
                 build["wires"] = [
                     np.array(

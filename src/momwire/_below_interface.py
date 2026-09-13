@@ -82,18 +82,6 @@ BURIED_DENSE_BUDGET_REFUSAL = (
     "fill refuses rather than silently truncating the medium. Rebuild the "
     "accelerators, raise swept_mem_mb, or mesh the deck coarser"
 )
-BURIED_PAST_CAP_REFUSAL = (
-    "this deck's buried wires reach a below/below pair separation of "
-    "R1 = {r1:.6g} m ({wl:.3g} in-medium wavelengths), past the {cap:.6g} m "
-    "({capwl:g} in-medium wavelengths, lambda_m = {lam_m:.4g} m) the "
-    "below/below remainder is tabulated to. There is no honest clamp out "
-    "there: unlike the reflected-wave remainder above the interface, the "
-    "below/below remainder GROWS relative to the direct term with range "
-    "(measured 12x and 168x direct+image at working range, momwire#553 U2), "
-    "so freezing the surface amplitude would return a confident wrong "
-    "number. Shrink the buried structure, or densify the far annulus of the "
-    "below/below grid (a recorded follow-up, and it wants the C++ twin first)"
-)
 BURIED_GRAZING_REFUSAL = (
     "this deck's buried wires reach a below/below pair elevation of "
     "theta = {th:.4g} deg, below the {floor:g} deg grazing floor the "
@@ -635,12 +623,17 @@ def serve_plan(
     projection is zero, and the nodes are strictly interior, so the node set
     is both the honest domain and a smaller one.
 
-    Nothing here clamps. Both buried families' `eval` already refuse rather
-    than freeze an amplitude — their remainder is not a negligible tail and
-    the transmitted surface is the whole field — so a geometry past a cap
-    has no answer to give, and the refusal is raised HERE, before an
-    80-second grid fill, with the deck's own numbers and the limit in the
-    same sentence.
+    Nothing here clamps. Both buried families' `eval` refuse rather than
+    freeze an amplitude — the transmitted surface is the whole field, and the
+    below/below remainder is no tail against the direct term — so a geometry
+    past the transmitted range or depth, or under either grazing floor, has
+    no answer to give, and the refusal is raised HERE, before an 80-second
+    grid fill, with the deck's own numbers and the limit in the same sentence.
+
+    The below/below R1 cap is the one range that is not refused, and it is
+    not a clamp either (momwire#1053): past `_SOMM_BELOW_R1_CAP_LAMBDA_M` the
+    projection serves the remainder as ZERO, and `get_grid_below` tabulates
+    to the cap and no further.
 
     `crossing=True` skips the cross-medium section entirely: a crossing
     deck's cross pair is `_crossing_fill`'s designed DIRECT evaluation — no
@@ -672,17 +665,13 @@ def serve_plan(
     # --- below/below: R1 = |two depths added|, theta = atan2(h, rho) ---
     d_b = gz - obs_b[:, 2]
     r1_max, th_min = pair_extents(obs_b[:, 0], obs_b[:, 1], d_b)
-    cap = _sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
-    if r1_max > cap:
-        raise ValueError(
-            BURIED_PAST_CAP_REFUSAL.format(
-                r1=r1_max,
-                wl=r1_max / lam_m,
-                cap=cap,
-                capwl=_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M,
-                lam_m=lam_m,
-            )
-        )
+    # No range refusal here since momwire#1053. Past the below/below cap
+    # (`_SOMM_BELOW_R1_CAP_LAMBDA_M`) the projection serves the remainder as
+    # zero: at 4 lambda_m it is <= 1.04e-4 of the self-scale field that sets
+    # each row of Z, and zeroing every pair past the cap on a screen
+    # 4.76 lambda_m across moved Z by 3.1e-5 ohm against its own 0.074 ohm
+    # ladder step. The measurements are written out at that constant. The
+    # grazing floor below still reads EVERY pair, zeroed ones included.
     floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
     if th_min < floor:
         raise ValueError(
