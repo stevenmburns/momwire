@@ -842,11 +842,111 @@ both trees serve, and depth 0.02 alone reads 0.181°.
 | `dipole935` | **2.9 ± 0.3. NOT blind:** G1 already timed this deck at 9.8 → 28.0 s. | 1.00 ± 0.05 |
 | `brv_corner` | **[1.5, 3.5], blind.** The low band fills in three R1 zones out to 3.19 λ_m, but its share of the cold solve is unmeasured. | 1.00 ± 0.05 |
 
-### (d): Amendment 3, before any (d) run
+## Amendment 3 (2026-09-14): (d) on the LPDA, registered before any (d) run
 
-Amendment 3 will name:
-- the NEC-5 binary;
-- the U2 ladder rungs;
-- the LPDA's fill-time and peak-memory measurement, which runs first;
-- the quantities gated. The LPDA has one feed and 8 nodes, so the gates are
-  its change from the single-node answer and its NEC-5 agreement class.
+### Steve's answers (relayed by Laptop-builder)
+
+- **The comparison is (i).**
+  - Feed Z through the refine ladder, on the full LPDA and on a one-node
+    spelling of it, in momwire and in NEC-5.
+  - Each engine's CHANGE is gated, not absolute Z.
+  - Fill time and peak memory come first.
+- **(ii), element ports,** runs only if (i)'s change comes out below the
+  ladder's own resolution.
+- **A refused rung** is recorded by name, and the rungs that serve are used.
+- **AK#1464's preflight** is stubbed in the probe only, and named here.
+
+### Named stub
+
+`momwire.bspline.below_reach_refusal = lambda *a, **k: None` is set before
+antennaknobs is imported, in `d0_lpda_decks.py` and `d2_lpda_solve.py`.
+- **What it stands in for.** antennaknobs' vertex preflight, which pairs z = 0
+  vertices on different crossing nodes at θ = 0 and would refuse the deck
+  outright.
+- **What still judges the deck.** momwire's own scope and serve plan, which run
+  unstubbed.
+- **The real fix,** where the preflight reads the fill's own nodes, is the
+  named antennaknobs follow-up after momwire lands.
+
+### The decks, written by `d0_lpda_decks.py`
+
+- **Full.** The corpus deck as translated: 976 GW, 8 crossing nodes, one EX on
+  GW 48, 7 crossed 75 Ω TL cards, 3.5 MHz, GN 2 over soil A, GE −1.
+- **One-node** (`lpda_one_node.nec`).
+  - **What stays.** The fed element's screen, GW 861–976: its rise and 24
+    radials. Screens are told apart by tag block, because a radial runs 24 m
+    and crosses the neighbouring nodes' x.
+  - **What goes.** The other 812 below wires (GW 49–860) are removed, together
+    with their LD cards.
+  - **What is lifted.** The other seven elements' node-adjacent wires (GW 6,
+    12, …, 42) now end at z = +0.0762 instead of 0, so no element ends on the
+    plane.
+  - **What is unchanged.** The TL network, the EX and every element.
+  - **Size.** 164 GW, 417 segments, 1 crossing node.
+- **Far × 3** (`lpda_full_far3.nec`, `lpda_one_node_far3.nec`).
+  - **What is multiplied.** Every GW count × 3, except each element's
+    node-adjacent wire (GW 6 … 48, which also carries the TL network and the EX
+    on segment 1) and each screen's rise (GW 49, 165, …, 861).
+  - **Why those two are kept.** They set the shallowest below quadrature nodes.
+
+### Rung preflight (geometry only, `d0_lpda_decks.json`)
+
+| deck | rung | segments | crossing nodes | θ_min | serve plan |
+|---|---|---|---|---|---|
+| full | refine 1 | 2690 | 8 | 0.0239° | served |
+| full | refine 3 | 8070 | 8 | 0.0080° | **REFUSED: grazing floor** |
+| full | refine 9 | 24210 | 8 | 0.0027° | **REFUSED: grazing floor** |
+| full | far × 3 | 8014 | 8 | 0.0239° | served |
+| one-node | refine 1 / 3 / 9 | 417 / 1251 / 3753 | 1 | 0.360° / 0.359° / 0.359° | served |
+| one-node | far × 3 | 1233 | 1 | 0.359° | served |
+
+**U2's `--refine` ladder serves momwire one rung on the full deck, and
+refine 3 and refine 9 are refused by name.** So by the rung rule, (d)'s ladder
+is **{refine 1, far × 3}**, on both decks and both engines. Both engines read
+the same bytes, and the full and one-node decks are refined the same way.
+
+### Order, alone on the box, after G5 and the fill-cost timing
+
+Tooling is `d2_lpda_solve.py`: one fresh process per (deck, rung, engine),
+recording feed Z, wall time and max RSS.
+
+1. **Cost first.**
+   - **The runs.** momwire and NEC-5, each on the one-node deck at refine 1
+     and on the full deck at refine 1.
+   - **The rule for momwire's full far × 3** (8014 segments). Project its cost
+     from the full refine-1 run: peak RSS × (8014/2690)², and time ×
+     (8014/2690)³ as the upper bound.
+   - **Run it only if** the projected peak is ≤ 20 GB (under the 24 GB cap)
+     and the projected time is ≤ 6 h.
+   - **Otherwise** report the projection. (d) then has no momwire ladder on
+     the full deck, and that is reported rather than served another way.
+2. **The remaining rungs.** NEC-5 on both far-× 3 decks, and momwire's
+   one-node far × 3.
+3. **momwire's full far × 3,** if rule 1 allows it.
+
+### What is gated
+
+- **Per engine e and rung r:**
+  - the change Δ_e(r) = Z_full,e(r) − Z_one,e(r);
+  - the resolution s_e = \|Z_full,e(far × 3) − Z_full,e(refine 1)\|, the full
+    deck's own ladder step.
+- **(i)'s gate:** \|Δ_momwire(far × 3) − Δ_nec5(far × 3)\| ≤
+  0.1·\|Δ_nec5(far × 3)\| + s_momwire + s_nec5.
+- **(ii)'s trigger, fixed now:** run the element-port comparison only if
+  \|Δ_e(far × 3)\| ≤ 2·s_e for either engine, that is, if the change is not
+  resolved by its own ladder.
+
+| id | prediction (blind) |
+|---|---|
+| **PDd1** | momwire's full refine-1 solve fits under 24 GB (predicted peak ≤ 4 GB) and takes ≤ 30 min. Its far-× 3 projection passes rule 1. |
+| **PDd2** | \|Δ_nec5(far × 3)\| is in [2, 60] Ω. Removing seven of eight radial screens should move this LPDA's feed Z by several ohms or more. |
+| **PDd3** | (i)'s gate HITS. |
+| **PDd4** | (ii) is not triggered: \|Δ\| > 2·s on both engines. |
+
+### Not predicted, and reported whatever it reads
+
+- **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
+  The census had momwire refused on this deck, so there is no prior.
+- **The phased arrays.** They stay refused by name, and are not U9's to serve.
+  Their three walls are recorded above: grazing past the table, U5's
+  within-side spread on both sides, and NT-fed ports.
