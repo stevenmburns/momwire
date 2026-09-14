@@ -1,0 +1,40 @@
+== --d 3 --rung r1 --engine nec5 start 2026-09-14T18:43:20Z
+== --d 3 --rung r1 --engine nec5 rc=0 end 2026-09-14T18:43:21Z
+== --d 3 --rung far3 --engine nec5 start 2026-09-14T18:43:21Z
+== --d 3 --rung far3 --engine nec5 rc=0 end 2026-09-14T18:43:22Z
+== --d 3 --rung all3 --engine nec5 start 2026-09-14T18:43:22Z
+== --d 3 --rung all3 --engine nec5 rc=0 end 2026-09-14T18:43:23Z
+== --d 5 --rung r1 --engine nec5 start 2026-09-14T18:43:23Z
+== --d 5 --rung r1 --engine nec5 rc=0 end 2026-09-14T18:43:24Z
+== --d 5 --rung far3 --engine nec5 start 2026-09-14T18:43:24Z
+== --d 5 --rung far3 --engine nec5 rc=0 end 2026-09-14T18:43:25Z
+== --d 5 --rung all3 --engine nec5 start 2026-09-14T18:43:25Z
+== --d 5 --rung all3 --engine nec5 rc=0 end 2026-09-14T18:43:26Z
+== --d 8 --rung r1 --engine nec5 start 2026-09-14T18:43:26Z
+== --d 8 --rung r1 --engine nec5 rc=0 end 2026-09-14T18:43:27Z
+== --d 8 --rung far3 --engine nec5 start 2026-09-14T18:43:27Z
+== --d 8 --rung far3 --engine nec5 rc=0 end 2026-09-14T18:43:28Z
+== --d 8 --rung all3 --engine nec5 start 2026-09-14T18:43:28Z
+== --d 8 --rung all3 --engine nec5 rc=0 end 2026-09-14T18:43:29Z
+== --d 11 --rung r1 --engine nec5 start 2026-09-14T18:43:29Z
+== --d 11 --rung r1 --engine nec5 rc=0 end 2026-09-14T18:43:30Z
+== --d 11 --rung far3 --engine nec5 start 2026-09-14T18:43:30Z
+== --d 11 --rung far3 --engine nec5 rc=0 end 2026-09-14T18:43:32Z
+== --d 11 --rung all3 --engine nec5 start 2026-09-14T18:43:32Z
+== --d 11 --rung all3 --engine nec5 rc=0 end 2026-09-14T18:43:33Z
+== --d 3 --rung r1 --engine momwire start 2026-09-14T18:44:23Z
+== --d 3 --rung r1 --engine momwire rc=0 end 2026-09-14T18:44:51Z
+== --d 3 --rung far3 --engine momwire start 2026-09-14T18:44:51Z
+== --d 3 --rung far3 --engine momwire rc=0 end 2026-09-14T18:45:20Z
+== --d 5 --rung r1 --engine momwire start 2026-09-14T18:45:20Z
+== --d 5 --rung r1 --engine momwire rc=0 end 2026-09-14T18:45:50Z
+== --d 5 --rung far3 --engine momwire start 2026-09-14T18:45:50Z
+== --d 5 --rung far3 --engine momwire rc=0 end 2026-09-14T18:46:19Z
+== --d 8 --rung r1 --engine momwire start 2026-09-14T18:46:19Z
+== --d 8 --rung r1 --engine momwire rc=0 end 2026-09-14T18:46:50Z
+== --d 8 --rung far3 --engine momwire start 2026-09-14T18:46:50Z
+== --d 8 --rung far3 --engine momwire rc=0 end 2026-09-14T18:47:22Z
+== --d 11 --rung r1 --engine momwire start 2026-09-14T18:47:22Z
+== --d 11 --rung r1 --engine momwire rc=0 end 2026-09-14T18:47:54Z
+== --d 11 --rung far3 --engine momwire start 2026-09-14T18:47:54Z
+== --d 11 --rung far3 --engine momwire rc=0 end 2026-09-14T18:48:27Z
