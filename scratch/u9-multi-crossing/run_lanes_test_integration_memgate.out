@@ -1,0 +1,14 @@
+src=3331ef1 branch=u9-multi-crossing-src
+dirty=0
+momwire /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/__init__.py
+== test start 2026-09-14T17:48:45Z
+== test rc=2 end 2026-09-14T17:54:55Z
+   21.70s  tests/test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113] <-- OVER HARD CEILING
+===== 5180 passed, 9 skipped, 4 xfailed, 51 warnings in 370.09s (0:06:10) ======
+== integration start 2026-09-14T17:54:55Z
+== integration rc=0 end 2026-09-14T17:57:11Z
+=========== 2373 passed, 2 xfailed, 9 warnings in 135.14s (0:02:15) ============
+== memgate start 2026-09-14T17:57:11Z
+== memgate rc=0 end 2026-09-14T17:59:04Z
+=============== 47 passed, 7953 deselected in 112.21s (0:01:52) ================
+== done 2026-09-14T17:59:04Z

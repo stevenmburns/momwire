@@ -842,6 +842,45 @@ geometry pin. It is not re-registered.
 The default, integration and memgate lanes started on src 3331ef1 at
 17:48:45Z (`run_lanes.sh`, `u9-lanes.service`).
 
+### The rest of the whole-tree sweep [2026-09-14]
+
+Src 3331ef1, a clean tree. Records: `run_lanes_test_integration_memgate.out`
+and `lanes_<lane>.log`.
+
+**Default lane (`make test`): 5180 passed, 9 skipped, 4 xfailed, 0 failed.**
+- **Why `make` exited 2.** Only the time guardrail tripped:
+  `test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113]`
+  ran 21.7 s against the 20 s hard ceiling.
+- **Why that is not U9.** It is the box-level breach already on record: the
+  same test reads 30–33 s on main on this box (momwire#1034), and it builds no
+  below/below grid.
+- **The U9-touched tests over the 5 s soft ceiling** are advisory only:
+  - #838's seam and band-edge routing, 9.4 s and 9.2 s;
+  - #935's low-band deferral, 8.4 s;
+  - #838's both-dispatches cap refusal at 0.0125°, 7.3 s (PT2 measured the
+    numpy half at 6.6 s).
+- **The floor test's split holds.** Its PR-lane point is not over the ceiling.
+
+**Integration lane: 2373 passed, 2 xfailed, 0 failed.**
+
+**Memgate lane: 47 passed, 0 failed** (17:57:11–17:59:04Z).
+
+**The whole-tree sweep is complete, and every momwire pytest lane has run on
+the branch:**
+
+| lane | result |
+|---|---|
+| slow | 346 passed, 1 failed; that one is gu5_6, a MISS re-pinned at 3331ef1 |
+| crossgate | 38 passed |
+| default | 5180 passed; the only hard-ceiling breach is the box-level [0113] |
+| integration | 2373 passed |
+| memgate | 47 passed |
+
+- **One re-run note.** The slow and crossgate lanes ran on 4d8241b, before the
+  test-only re-pin; gu5_6 was re-run on its own after it.
+- **No other failure** appears anywhere, so the fill-cost timing, which started
+  at 17:59:06Z, can be read.
+
 ## Amendment 5 (2026-09-14): fill-cost timing, registered before any timing run
 
 **Steve's instruction (relayed by Laptop-builder).**
@@ -904,6 +943,45 @@ both trees serve, and depth 0.02 alone reads 0.181°.
 | `buried_dipole`, `brv_default`, `ebc_default`, `brv48` | **1.00 ± 0.05.** The low band is never filled, and nothing else on their path changed. | 1.00 ± 0.05 |
 | `dipole935` | **2.9 ± 0.3. NOT blind:** G1 already timed this deck at 9.8 → 28.0 s. | 1.00 ± 0.05 |
 | `brv_corner` | **[1.5, 3.5], blind.** The low band fills in three R1 zones out to 3.19 λ_m, but its share of the cold solve is unmeasured. | 1.00 ± 0.05 |
+
+### Amendment 5 results [2026-09-14]: every prediction HITS
+
+- **The run.** `u9-t2.service`, 17:59:06–18:09:09Z, alone on the box after the
+  whole-tree sweep. It made 36 runs (6 decks × 2 trees × 3 repeats), all exit 0.
+- **The trees.**
+  - **main:** the u9 tree, whose src is 1ca8725; its HEAD was records 2edf06e.
+  - **branch:** src 3331ef1.
+- **Records.** `t2_fill_cost.jsonl` and `.table.json`, `t2_fill_cost.log`,
+  `run_t2.out`.
+- **How the trees are told apart.** `t2_table.py` classifies each row by the
+  momwire import path. Its first spelling keyed on the commit, and would have
+  tagged every row "branch", because the main tree's HEAD is a records commit.
+
+| deck | main cold | branch cold | **cold ratio** | predicted | warm ratio | low band filled | max RSS MB (main / branch) | Z, branch against main |
+|---|---|---|---|---|---|---|---|---|
+| buried_dipole | 0.54 s | 0.55 s | **1.00×** | 1.00 ± 0.05 HIT | 1.00× | no | 105 / 106 | bitwise equal |
+| brv_default | 1.79 s | 1.78 s | **1.00×** | 1.00 ± 0.05 HIT | 1.01× | no | 157 / 157 | bitwise equal |
+| ebc_default | 1.79 s | 1.77 s | **0.99×** | 1.00 ± 0.05 HIT | 1.02× | no | 128 / 128 | bitwise equal |
+| brv48 | 17.88 s | 17.94 s | **1.00×** | 1.00 ± 0.05 HIT | 1.00× | no | 666 / 681 | bitwise equal |
+| dipole935 | 9.81 s | 28.08 s | **2.86×** | 2.9 ± 0.3 HIT (not blind) | 1.02× | yes | 99 / 100 | 1.1e-17 |
+| brv_corner | 21.65 s | 48.91 s | **2.26×** | [1.5, 3.5] HIT (blind) | 1.01× | yes | 242 / 245 | 8.5e-16 |
+
+- **Medians over 3 repeats.** The first-to-last repeat drift of the cold time
+  is 0.94–1.00 on every deck and tree.
+- **Consistency.** Every repeat reproduced its tree's Z exactly.
+
+**Reading.**
+- **Who pays.** The cold-solve cost lands only on decks that fill the low band:
+  2.3–2.9× cold, with warm unchanged and memory unchanged.
+- **Catalog exposure is nil.** No shipped catalog design fills it at defaults,
+  or anywhere inside the app's knob box, and the #983 48-radial screen does not
+  either; all of those read 1.00×.
+- **The decks that pay** are off-knob geometry (imported decks and API users)
+  with pairs under 0.1°.
+- **The decision is Steve's:** whether a fifth band, so that only decks under
+  0.05° pay, becomes a merge requirement. The table went to Laptop-builder with
+  a lean, for Steve to overrule: not a merge requirement, filed as the named
+  follow-up next to route 1.
 
 ## Amendment 3 (2026-09-14): (d) on the LPDA, registered before any (d) run
 

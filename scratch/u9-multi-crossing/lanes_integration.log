@@ -1,0 +1,57 @@
+/home/smburns/stevenmburns/antennaknobs/.venv/bin/python -m pytest tests/ -m "integration and not slow and not memgate"
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/smburns/stevenmburns/momwire-wt-u9src
+configfile: pyproject.toml
+plugins: anyio-4.14.1, xdist-3.8.0
+created: 4/4 workers
+4 workers [2375 items]
+
+........................................................................ [  3%]
+........................................................................ [  6%]
+........................................................................ [  9%]
+........................................................................ [ 12%]
+........................................................................ [ 15%]
+.......................................................................x [ 18%]
+x....................................................................... [ 21%]
+........................................................................ [ 24%]
+........................................................................ [ 27%]
+........................................................................ [ 30%]
+........................................................................ [ 33%]
+........................................................................ [ 36%]
+........................................................................ [ 39%]
+........................................................................ [ 42%]
+........................................................................ [ 45%]
+........................................................................ [ 48%]
+........................................................................ [ 51%]
+........................................................................ [ 54%]
+........................................................................ [ 57%]
+........................................................................ [ 60%]
+........................................................................ [ 63%]
+........................................................................ [ 66%]
+........................................................................ [ 69%]
+........................................................................ [ 72%]
+........................................................................ [ 75%]
+........................................................................ [ 78%]
+........................................................................ [ 81%]
+........................................................................ [ 84%]
+........................................................................ [ 87%]
+........................................................................ [ 90%]
+........................................................................ [ 93%]
+........................................................................ [ 97%]
+.......................................................................  [100%]
+=============================== warnings summary ===============================
+tests/test_portal.py::test_the_accelerators_answer_the_hard_fixture_classes[dipole_sommerfeld_ground-arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_answer_the_hard_fixture_classes[dipole_pec_ground-arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_answer_the_hard_fixture_classes[dipole_load_ld0-arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_answer_the_hard_fixture_classes[split_dipole_qq-arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_answer_the_hard_fixture_classes[dipole_load_ld4-arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_answer_the_hard_fixture_classes[dipole_rp_pattern-arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_agree_with_the_default_basis_and_the_oracle[arrayblock]@portal
+tests/test_portal.py::test_the_accelerators_stamp_the_banner[arrayblock-+ab]@portal
+tests/test_portal_roster.py::test_every_rostered_basis_answers_a_deck_end_to_end[arrayblock]
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (1 element, 1 distinct shape) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========== 2373 passed, 2 xfailed, 9 warnings in 135.14s (0:02:15) ============
