@@ -235,13 +235,21 @@ class NetworkReducer:
         Anything with real loss is skipped, because loss is what regularises
         it, and that is also the remedy the message recommends.
 
-        Issue #746 narrowed this to one caller and one branch. The k·λ/2 half
-        of the walk is gone: a line between two live nodes is stamped as its
-        chain matrix now, finite at every length. The odd-λ/4 half survives
-        because the EXCITED path keeps the ideal generator, which still cannot
-        drive the dead short an open stub puts across the feed — so when this
-        text appears it is a far-field / power-budget solve talking, and the
-        impedance of that same design is a perfectly good Z = 0.
+        Issue #746 narrowed this to one caller. A line between two live nodes
+        is stamped as its chain matrix now, finite at every length, so neither
+        pole can come from such a line. Two readings of a HANGING line survive:
+
+        * odd λ/4: the EXCITED path keeps the ideal generator, which still
+          cannot drive the dead short an open stub puts across the feed — so
+          when this text appears it is a far-field / power-budget solve
+          talking, and the impedance of that same design is a perfectly good
+          Z = 0;
+        * k·λ/2 (momwire#584): an open-terminated lossless line at a whole
+          number of half-wavelengths is itself an open, so the node at its near
+          end floats unless something else pins it. No chain matrix can pin a
+          node that only this line reaches. This is antennaknobs'
+          `doublet_balanced_tuner` at 16.0387 MHz, whose common-mode return
+          runs through a line open-terminated at the floating gap.
         """
         f_mhz = C_LIGHT / wavelength / 1e6
         open_nodes = self._open_ended_nodes()
@@ -279,6 +287,17 @@ class NetworkReducer:
                     f"the port it hangs on (z0 = {z0:g} Ω), which no IDEAL "
                     "source can drive — the impedance of this same design is "
                     "a perfectly ordinary Z = 0"
+                )
+            # Whole half-waves: an open-terminated line there is itself an
+            # open, and the node it hangs from floats (momwire#584).
+            elif n_half >= 0.98 and min(n_half % 1.0, 1.0 - n_half % 1.0) < 0.02:
+                name = f"{path[:-1]}: " if path else ""
+                suspects.append(
+                    f"  {name}open-ended line {'→'.join(str(e) for e in ends)} "
+                    f"is {n_half / 2:.4f} λ at {f_mhz:.4f} MHz — a whole number "
+                    "of half-wavelengths, where an open-terminated lossless line "
+                    "is itself an open, so the node at its near end floats "
+                    f"unless something else pins it (z0 = {z0:g} Ω)"
                 )
         if not suspects:
             return (
