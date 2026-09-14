@@ -212,7 +212,7 @@ warns and falls back to the slower pure-Python path. On Linux the system
 ## Test
 
 ```bash
-pip install -e ".[test]"   # core + test deps (pytest, matplotlib, scikit-rf)
+pip install -e ".[test]"   # core + test deps, and what `make build` needs (pybind11, setuptools, wheel)
 pytest tests/
 ```
 

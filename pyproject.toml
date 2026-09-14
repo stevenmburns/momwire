@@ -62,6 +62,12 @@ test = [
     # structural claim needs real parsing where test_release_notes' literal
     # one-line claim can grep). Pure-python, tiny.
     "pyyaml",
+    # `make build` runs setup.py in THIS venv, so the [build-system] requires
+    # have to be installed here too, not only in pip's isolated build env
+    # (momwire#1051; tests/test_build_requires_1051.py keeps the lists together).
+    "setuptools>=61.0",
+    "wheel",
+    "pybind11",
 ]
 # Optional third-party MoM solvers used by the comparator scripts in
 # scripts/. (PyNEC is installed separately from the python-necpp fork's
