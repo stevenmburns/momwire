@@ -1587,6 +1587,46 @@ The bar was 1e-3, and the prediction was that it would pass at ≤ 1e-4:
   They wait for Steve's decision on Amendment 8b, and the `same` step is not
   launched.
 
+### HOLD on Amendment 8b, a diagnosis of D3, and an exposure audit [2026-09-14, about 19:20Z]
+
+Laptop-builder's hold, pending Steve. Nothing further runs.
+
+**Amendment 8b is WITHDRAWN.** momwire#1041, checked and open, shows that NEC-5
+drives an EX card with zero voltage fields at 1 V (the Moxon deck prints
+V = 1.0). So "0 V on the idle port" would excite that port.
+
+**D3's failure, diagnosed as a HYPOTHESIS.** It is a feed-position mismatch,
+not a biased Y.
+- **The rule it rests on.** antennaknobs#1476 (checked, closed) records the
+  conclusion from our licensed materials: NEC-5 reads `EX … I4 = 0` as end 2 of
+  a positive segment, a knot, where NEC-2 reads it as the segment centre.
+  antennaknobs' importer takes the NEC-5 reading only for a declared deck:
+  `CM NEC-5`, `NOFILE` on the GN card, or an explicit end field.
+- **What the a8 decks did.** They carry `EX 0 6 8 0` and declare none of those.
+  - **Native NEC-5** put the source at the **4.5 m knot** at r1 (1/12 m off at
+    × 3).
+  - **momwire, through the importer,** fed the **4.25 m centre**.
+  - **So** D3 compared NEC-5's current at the centre with a Z_in printed at the
+    knot. The gap scaling (2.6 % → 0.9 % under × 3) fits.
+- **The confirmation, not yet run:** NEC-5 prints identical Z_in for `… 8 0` and
+  `… 8 2` on one deck. It is part of the proposed 8c and is not registered.
+
+**Exposure audit: which banked NEC-5 numbers carry this offset.** The rule for
+it: antennaknobs' own NEC-5 writer, `NEC5Engine.deck()` and `_source_address`,
+always spells an explicit end field from antennaknobs' model. So anything run
+through antennaknobs' route feeds both engines at one point by construction.
+
+| record | NEC-5 path | offset? |
+|---|---|---|
+| (b) the ε̃ = 1 collapse | none (momwire against momwire) | no |
+| (c) the soil-A ladder | none (momwire only) | no |
+| **Finding 1,** LPDA refine 1 (52.09 − 3.18j against 53.07 − 3.54j) | antennaknobs' route for both engines, from one model. The deck reads `nec5_dialect = False`, so both feed the centre of GW 48's segment, 0.0762 m above the node (momwire's feed at arclength 22.9362 on the 23.0124 m element). | **no: one feed point** |
+| D2 PD2a: native full deck 52.995 − 3.585j, against the route | native NEC-5 on the raw deck, `EX 0,48,1,0`, source at the z = 0 knot | **yes, 7.6 cm.** PD2a's 0.088 Ω is confounded by feed position as well as by binary and TL realization. |
+| C6a and the D2 correction: native one-node 0.151 + 30.607j, against momwire's old spelling 0.157 + 30.58j | native on the knot, against momwire through the importer on the centre | **yes, 7.6 cm.** "Agreed to 0.03 Ω" compared different feed points. That the low R is real is still likely, since both read ≈ 0.15 Ω, but that agreement is not evidence for it. |
+| Amendment 8's NEC-5 rows | native, hand-written `EX … 0` | **yes:** 0.25 m at r1, 1/12 m at × 3. None is read. |
+| The census's catalog NEC-5 column (`popa_worker.run_nec5`) | `NEC5Engine.deck()` | no |
+| The census's corpus rows | momwire refused every row, so no cross-engine number was banked | none banked |
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
