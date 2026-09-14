@@ -408,6 +408,79 @@ def test_g524_2_the_other_trunks_share_the_two_node_scope(monkeypatch):
         RazorSolver(**two_node_deck(0.5), n_qp_path=8)._crossing_junctions()
 
 
+def test_g524_2_a_two_node_deck_meets_the_grazing_floor_by_name():
+    """Two crossing nodes put their rises' below/below pairs at
+    theta = atan(2 h_node / d): 0.0242 deg at 8 m, which the 0.016667 deg floor
+    serves, and 0.0161 deg at 12 m, which it refuses by name. The plan's own
+    verdict, before any grid is filled (antennaknobs plan U9)."""
+    assert BSplineSolver(**two_node_deck(8.0)).buried_serve_refusal() is None
+    why = BSplineSolver(**two_node_deck(12.0)).buried_serve_refusal()
+    assert why is not None and "grazing floor" in why, why
+
+
+@pytest.mark.slow
+@pytest.mark.crossgate
+@pytest.mark.parametrize("spelling", ["A", "B"])
+def test_g524_8_two_node_eps1_collapse(spelling, record_property):
+    """antennaknobs plan U9 (b), banked on the production path: two
+    `crossing_deck(1)` pairs 8 m apart at eps~ = 1 against the free-space
+    two-wire truth, on the full 2x2 Z. Spelling B reverses both wires of the
+    second pair, which flips the sigma sigma' of every cross-node end pair.
+    The (b) probe (momwire scratch/u9-multi-crossing) read 2.0e-4 ohm at 1 m and
+    12 m; dropping the cross-node corner missed Z12 by 4.70 ohm and an
+    orientation-blind one missed spelling B by 9.39 ohm. At 8 m the rises'
+    shallowest pair is 0.0242 deg, which the grazing floor serves."""
+    g = _GRADES[1]
+    below = np.array([(0.0, 0.0, z) for z in g["below"][0] + [0.0]])
+    above = np.array([(0.0, 0.0, z) for z in [0.0] + g["above"][0]])
+    nb, na = list(g["below"][1]), list(g["above"][1])
+    shift = np.array([8.0, 0.0, 0.0])
+    feed, top = 4.3333333333, 10.0
+    line = np.vstack([below, above[1:]])
+    if spelling == "A":
+        rod2, mono2, nb2, na2 = below + shift, above + shift, nb, na
+        j2, f2 = [(2, "end"), (3, "start")], feed
+        truth2, n2, tf2 = line + shift, nb + na, 2.0 + feed
+    else:
+        rod2, mono2 = below[::-1] + shift, above[::-1] + shift
+        nb2, na2 = nb[::-1], na[::-1]
+        j2, f2 = [(2, "start"), (3, "end")], top - feed
+        truth2, n2, tf2 = line[::-1] + shift, (nb + na)[::-1], top - feed
+    common = dict(wavelength=WL7, wire_radius=A_WIRE, n_qp_pair=_COLLAPSE_N_QP)
+    y = (
+        BSplineSolver(
+            wires=[below, above, rod2, mono2],
+            n_per_edge_per_wire=[nb, na, nb2, na2],
+            junctions=[[(0, "end"), (1, "start")], j2],
+            feeds=[(1, feed, 1 + 0j), (3, f2, 1 + 0j)],
+            ground_z=0.0,
+            ground_eps=(1.0, 0.0),
+            ground_model="sommerfeld",
+            **common,
+        )
+        .compute_port_solution()
+        .y
+    )
+    y_truth = (
+        BSplineSolver(
+            wires=[line, truth2],
+            n_per_edge_per_wire=[nb + na, n2],
+            feeds=[(0, 2.0 + feed, 1 + 0j), (1, tf2, 1 + 0j)],
+            **common,
+        )
+        .compute_port_solution()
+        .y
+    )
+    z = np.linalg.inv(np.asarray(y, dtype=complex))
+    z_truth = np.linalg.inv(np.asarray(y_truth, dtype=complex))
+    worst = float(np.abs(z - z_truth).max())
+    record_property("worst_abs_dz", f"{worst:.3e}")
+    assert worst <= 0.05, (
+        f"spelling {spelling}: the two-node eps~ = 1 Z matrix is {worst:.4f} ohm "
+        f"from the free-space two-wire truth\n{z}\n{z_truth}"
+    )
+
+
 # The #674 study's per-arm node grading (probe18's geometric walk, at
 # the K = 5 node): vertices approach (0,0,0) on the rises from below and
 # the monopole from above, MATCHED across the interface, far mesh at
