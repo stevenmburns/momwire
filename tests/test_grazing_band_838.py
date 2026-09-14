@@ -741,17 +741,29 @@ def test_both_dispatches_refuse_at_the_cap():
     assert msgs[0] == msgs[1], msgs
 
 
+def _floor_is_served(cases):
+    for soil, f, r1l in cases:
+        got = _direct_at(soil, f, below._SOMM_BELOW_TH_MIN_DEG, r1l)
+        assert all(np.isfinite(got[k]).all() for k in _SURF_KEYS), (soil, f, r1l)
+
+
 def test_the_floor_itself_is_untouched_by_the_refusal():
     """Nothing the family serves may move. The refusal fires only after the
     value is computed and never modifies it, so this is structural -- but the
-    floor is 97 % of the budget on the worst SPEC soil, which is close enough
-    that it is worth asserting rather than reasoning about."""
-    for soil in SOILS:
-        for f in FREQS:
-            for r1l in (0.05, 1.0, 2.0):
-                got = _direct_at(soil, f, below._SOMM_BELOW_TH_MIN_DEG, r1l)
-                assert all(np.isfinite(got[k]).all() for k in _SURF_KEYS), (
-                    soil,
-                    f,
-                    r1l,
-                )
+    floor sits at 93 % of the budget on the worst SPEC soil, which is close
+    enough that it is worth asserting rather than reasoning about.
+
+    The PR lane asks at that worst point (C / 21 MHz, R1 = 0.05 lambda_m:
+    22,239 of 24,000 panels). A point at antennaknobs plan U9's floor costs ~3x
+    one at #935's, so the full 18-point sweep ran 24.1 s against the 20 s hard
+    ceiling and moved to the slow lane, below."""
+    _floor_is_served([("C", 21e6, 0.05)])
+
+
+@pytest.mark.slow
+def test_the_floor_is_served_on_every_spec_soil():
+    """The sweep behind the PR-lane point above: every SPEC soil, both
+    frequencies, R1 in {0.05, 1, 2} lambda_m, at the floor."""
+    _floor_is_served(
+        [(soil, f, r1l) for soil in SOILS for f in FREQS for r1l in (0.05, 1.0, 2.0)]
+    )
