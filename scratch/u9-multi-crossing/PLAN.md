@@ -1237,6 +1237,17 @@ momwire's one-node Z is not run until both checks are read as passing.
   quarter-wave.
 - **So a hit here says less than Amendment 3's (i) would.**
 
+> **Later note [2026-09-14, after Amendment 8c]: the "loose bar" premise failed on Z12.**
+> Recorded here, at Laptop-builder's request, so the argument above is not
+> repeated; the registered text above is not rewritten.
+> - **What 8c measured.** On the two-node soil-A decks, PE8f missed: momwire's
+>   far-× 3 step on Z12 (0.33–0.62 Ω) was LARGER than NEC-5's (0.15–0.29 Ω) at
+>   every d. On Z11 the premise held (NEC-5's step 3.7 Ω, momwire's 0.8 Ω).
+> - **So NEC-5's step is not safely the looser bar.** On the same decks it was
+>   looser for one impedance and tighter for the other. Using it as the
+>   resolution for momwire needs the step measured on the quantity gated.
+> - **(i-1) itself was never read** (C6b stopped (d)), so no reading changes.
+
 **Runs, only after C6a and C6b pass** (tooling `d2_table.py --one-sha
 a5aac021…`, which reads only rows written on the re-spelled deck):
 1. `run_d2.sh mw_one_r1`;
