@@ -560,6 +560,31 @@ the 5 m rung, with the predictions in the PR-gates table.
   - **What it changes.** Main's first G1 run solved every deck and its Z
     values stand. It was re-run so that the field is right.
 
+### GT3: the branch's named-file run, and one re-measure it needs
+
+**The run.** The default lane of the test files that name the floor, the
+budget, the low band or the second node (plus the U5 and SG crossing files), on
+`u9-multi-crossing-src` with the corner, the scope and L2 in place:
+**357 passed, 7 failed.**
+- **Where the failures are.** All seven are in the three files that pin
+  refusals under the old floor or budget. There are no failures outside the
+  named files, so GT3's stop rule is not triggered.
+- **What each one is.** Every failure is a refusal at an angle the change now
+  serves:
+  - five in `test_grazing_band_838`, at 0.023° and 0.03° (they now converge
+    under 24,000);
+  - `test_below_fills_568`'s grazing row, an 8 mm pair at 0.0457°;
+  - `test_grazing_band_lo_935`'s 1 mm dipole at 0.0194°, which GT3 predicted.
+
+**The re-measure.** #838's served/refused ladder on its own deck (soil A,
+7 MHz, R1 = λ_m) is re-measured before it is re-pinned, as that test's comment
+requires. Tooling is `t_cap_ladder_24000.py`.
+
+| id | prediction (blind) |
+|---|---|
+| **PT1** | Served: every rung from 0.12° down to 0.016667°. Refused by name: 0.0125° and 0.01°. At 0.015° the law gives 24,446 against a budget of 24,000, and this deck reads about 0.95 of the law at 0.05° (6959 against 7330), so either outcome is possible and neither is predicted. |
+| **PT2** | The numpy dispatch refuses at 0.0125° within 20 s, the fast lane's hard ceiling. |
+
 ### (d): Amendment 3, before any (d) run
 
 Amendment 3 will name:
