@@ -656,6 +656,22 @@ registered at 8c0cdf9):
   node, with 110 MB peak RSS. Every rung reads the low band. A served two-node
   solve therefore belongs in the slow lane, not the PR lane.
 
+### G2 and G3 results [2026-09-14]
+
+**The run.** On src 96dd5be with probe 262cdce, spelling A at 5 m, soil A.
+- **A record was lost the first time.** The first run went through
+  `systemd-run --unit`, which expands `${g}` itself before bash runs. Both
+  gates wrote `_d5.json`, and G3's run overwrote G2's.
+- **Recovery.** The surviving file was checked to be G3 (`mode: g3`) and renamed
+  `g3_d5.json`. G2 was re-run under `--scope` as `g2_d5.json`.
+- **What that says about G2.** It is cheap (1.4 s), and nothing about it
+  depends on run order.
+
+| id | result |
+|---|---|
+| **G2** | **HIT.** Split against dense-direct on the 64 × 64 cross block: 1.3e-18 block-relative, against the 1e-7 prediction and the 1e-6 gate. **But this deck cannot see an ACA defect:** at `_FAR_Q == _NEAR_Q` the far blocks share the dense sampling, and no block here passes the ACA cost guard. `test_g688_5`'s dense-mesh deck is the gate that exercises ACA. |
+| **G3** | **HIT.** SG against `BSplineSolver(degree=1)` on the 2 × 2 Z: Z11 2.88e-3 and Z12 8.42e-3 relative, against the 1e-2 gate. Z12's margin is 1.19×. SG takes 28.9 s against bspline's 0.2 s. |
+
 ## Amendment 4 (2026-09-14, before PC5 is re-run)
 
 - **PC5's mesh step becomes the FAR mesh × 3:** every edge count × 3 except
