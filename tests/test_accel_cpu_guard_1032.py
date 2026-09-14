@@ -179,6 +179,47 @@ def test_a_pure_python_install_stays_silent(monkeypatch):
     assert [w for w in caught if issubclass(w.category, RuntimeWarning)] == []
 
 
+def _only_avx2_and_sse2_built(monkeypatch):
+    monkeypatch.setattr(_accel, "_cpu_supports_extension", lambda: True)
+    monkeypatch.setattr(_accel, "_import_variant", lambda *a: None)
+    monkeypatch.setattr(
+        _accel,
+        "_extension_built",
+        lambda suffix=None: suffix in (None, "_avx2", "_sse2"),
+    )
+
+
+def test_a_forced_variant_that_is_not_installed_says_so(monkeypatch):
+    """momwire#1038: `MOMWIRE_FORCE_VARIANT=legacy` on an install carrying only
+    the avx2 and sse2 builds used to return the pure-Python answer in silence.
+    A caller then had to guess the cause, and antennaknobs' selftest guessed
+    'OpenMP runtime missing?'. The variant asked for is not there: say so, and
+    name what is."""
+    monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "legacy")
+    monkeypatch.delenv("MOMWIRE_REQUIRE_ACCEL", raising=False)
+    _only_avx2_and_sse2_built(monkeypatch)
+
+    with pytest.warns(RuntimeWarning) as record:
+        mod, loaded, variant = _accel._load()
+
+    assert (mod, loaded, variant) == (None, False, None)
+    messages = [str(w.message) for w in record]
+    assert any(
+        "variant 'legacy' is not in this install (present: avx2, sse2)" in m
+        for m in messages
+    ), messages
+    assert not any("OpenMP" in m for m in messages), messages
+
+
+def test_require_accel_names_the_missing_forced_variant(monkeypatch):
+    monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "legacy")
+    monkeypatch.setenv("MOMWIRE_REQUIRE_ACCEL", "1")
+    _only_avx2_and_sse2_built(monkeypatch)
+
+    with pytest.raises(RuntimeError, match=r"variant 'legacy' is not in this install"):
+        _accel._load()
+
+
 # ---------------------------------------------------------------------------
 # The two extensions must come from the SAME variant
 # ---------------------------------------------------------------------------
