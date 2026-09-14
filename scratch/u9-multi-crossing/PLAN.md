@@ -1938,3 +1938,108 @@ Each step runs as `run_e8c.sh <step>`, alone on the box, under
 - **Every 8c check has now passed:** K1, K2, K3, K4 (both halves), C8b, C8c and
   C8d. By the registered order, `e6_table.py` reads Z next. These records are
   committed before it runs.
+
+### Amendment 8c results [2026-09-14]: the gate HITS 16 of 16, and the guard sees the corner at every d; PE8a, PE8b and PE8d hit; PE8c, PE8e and PE8f MISS
+
+- **The reading.** `e6_table.py`, run after the check records were committed
+  (e2ce290), and recorded in `e6_table.json`.
+- **Definitions.** Δ = momwire − NEC-5. The bar is s_momwire + s_NEC-5 +
+  0.02·\|Z_NEC-5\|, and "rel" is \|Δ\|/\|Z_NEC-5\|.
+
+**Z12, the cross-node coupling (Ω).**
+
+| d | r1: \|ΔZ12\| / bar (rel) | far × 3: \|ΔZ12\| / bar (rel) | corner effect at r1 / (2 × bar) |
+|---|---|---|---|
+| 3 m | 1.20 / 2.29 (1.7 %) | 0.46 / 2.30 (0.66 %) | 21.9 / 4.59 |
+| 5 m | 0.91 / 1.90 (1.6 %) | 0.36 / 1.90 (0.61 %) | 12.9 / 3.79 |
+| 8 m | 0.68 / 1.49 (1.5 %) | 0.27 / 1.49 (0.59 %) | 7.82 / 2.98 |
+| 11 m | 0.54 / 1.22 (1.5 %) | 0.21 / 1.22 (0.58 %) | 5.53 / 2.44 |
+
+**Z11, the driving point (Ω).**
+
+| d | r1: \|ΔZ11\| / bar (rel) | far × 3: \|ΔZ11\| / bar (rel) |
+|---|---|---|
+| 3 m | 6.42 / 8.45 (3.3 %) | 2.17 / 8.43 (1.1 %) |
+| 5 m | 6.37 / 8.45 (3.2 %) | 2.15 / 8.43 (1.1 %) |
+| 8 m | 6.32 / 8.44 (3.2 %) | 2.13 / 8.42 (1.1 %) |
+| 11 m | 6.29 / 8.42 (3.2 %) | 2.11 / 8.40 (1.1 %) |
+
+**Each engine's far-× 3 step (Ω).**
+
+| d | momwire Z11 / Z12 | NEC-5 Z11 / Z12 |
+|---|---|---|
+| 3 m | 0.82 / 0.62 | 3.68 / 0.29 |
+| 5 m | 0.82 / 0.51 | 3.69 / 0.23 |
+| 8 m | 0.79 / 0.41 | 3.71 / 0.18 |
+| 11 m | 0.77 / 0.33 | 3.72 / 0.15 |
+
+**For scale, at far × 3 and d = 3 m:**
+
+| | momwire | NEC-5 |
+|---|---|---|
+| Z11 | 175.23 − 87.81j | 174.65 − 89.90j |
+| Z12 | 69.24 − 9.30j | 68.91 − 9.62j |
+
+- **The gate: HIT on all 16 readings.** It holds on Z12 and on Z11, at r1 and
+  at far × 3, at every d.
+  - **How much the step allowances carry.** Every far × 3 reading, and every r1
+    Z12 reading, is inside the 2 % term alone, without either engine's step.
+  - **The exception is r1 Z11** (3.2–3.3 %). Its hit relies on NEC-5's own r1 →
+    far × 3 step on Z11 (3.7 Ω), which is what the gate's step term allows for.
+  - **Both differences shrink under the far-× 3 step:** Z12's by about 2.5×,
+    Z11's by about 3×.
+- **The guard: the corner is seen at every d.**
+  - **The corner's own effect** on momwire's Z12 at r1 is 21.9, 12.9, 7.8 and
+    5.5 Ω.
+  - **Against the requirement of twice the bar,** that is 4.8×, 3.4×, 2.6× and
+    2.3× over, so no hit is vacuous.
+
+**Predictions.**
+
+| id | what it reads | verdict |
+|---|---|---|
+| PE8a | far × 3 \|ΔZ12\| is 0.21–0.46 Ω, inside [0.05, 1.5], and at most 0.66 % of \|Z12\|, under the 2 % bound | **HIT** |
+| PE8b | far × 3 \|ΔZ11\| is 2.11–2.17 Ω, inside [0.3, 4] | **HIT** |
+| PE8c | At far × 3, Im ΔZ11 is +2.03 to +2.09, so momwire's X is higher, as predicted. But Re ΔZ11 is +0.57 to +0.59, so **momwire's R is higher, not lower**. The low-confidence Re ΔZ12 < 0 misses too (+0.21 to +0.33). | **MISS** |
+| PE8d | the gate hits 16 of 16 | **HIT** |
+| PE8e | The effect decreases with d, and the guard passes at every d. But it is 21.9 Ω at 3 m and 12.9 Ω at 5 m, **above the band's 10 Ω**. | **MISS** |
+| PE8f | NEC-5's far-× 3 step on Z12 (0.15–0.29 Ω) is **smaller** than momwire's (0.33–0.62 Ω) at every d. On Z11 the relation does hold (3.7 against 0.8 Ω), but PE8f named Z12. | **MISS** |
+
+**The misses, reported as misses.** None of them is re-registered.
+- **PE8c.** Its sign came from the LPDA (finding 1) and from momwire#1027. On
+  these decks R differs the other way, by 0.3 % of R.
+- **PE8e.** Its band underestimated the corner at close separation.
+- **PE8f.** Its premise was momwire#845: NEC-5-class convergence is first-order
+  in the far mesh. That shows on Z11 but not on Z12.
+
+**Not predicted, reported as read.**
+- **What the corner buys.**
+  - **Z12.** At r1, momwire's corner-omitted Z12 sits 21.1, 12.2, 7.2 and 5.0 Ω
+    from NEC-5. With the cross-node corner it sits 1.20, 0.91, 0.68 and 0.54 Ω
+    away.
+  - **Z11.** The corner moves momwire's Z11 by 1.5 Ω at 3 m, falling to 0.17 Ω
+    at 11 m.
+- **NEC-5's node axis.** At every d, all × 3 differs from far × 3 by at most
+  0.004 Ω, on Z11 and on Z12. Refining the node-adjacent edges does not move
+  NEC-5 here.
+- **Port symmetry on the symmetric decks.**
+  - At far × 3, \|Z22 − Z11\| is at most 1.8e-9 Ω on momwire and 4e-14 Ω on
+    NEC-5.
+  - \|Z12 − Z21\| is at most 2e-13 Ω on both.
+- **C8d's symmetry argument now has its magnitude.** The corner's effect is
+  5.5–21.9 Ω, and the `same` rows stayed reciprocal to 1e-15. So no unpatched
+  corner filled the other triangle.
+
+**Reading.**
+- **The result.** On two-node soil-A decks at 3–11 m, momwire's full 2 × 2 Z,
+  with #1065's cross-node corner, agrees with NEC-5 within the registered gate,
+  at both rungs.
+  - Both engines are fed at one knot, through antennaknobs' reading.
+  - NEC-5's Y is taken from its own printed source currents.
+- **The gate can see the corner.** Leaving the cross-node corner out moves Z12
+  by 5.5–21.9 Ω, more than twice the bar at every d. With the corner in,
+  momwire is within 1.2 Ω of NEC-5 at r1 and within 0.46 Ω at far × 3.
+- **Amendment 8's stop is resolved.**
+  - K1 and K2 confirm D3's feed-position diagnosis on these decks.
+  - With one knot for both engines, every pre-Z check passes.
+- **Three predictions missed:** PE8c, PE8e and PE8f, recorded above.
