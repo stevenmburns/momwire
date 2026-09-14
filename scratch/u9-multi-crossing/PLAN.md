@@ -1528,6 +1528,50 @@ to 3331ef1; NEC-5 is `nec5-linux/nec5cl`.
   cross-engine reading. The momwire step, which C8a's pass allows in the
   registered order, runs meanwhile.
 
+### D3 result [2026-09-14]: FAIL, so Amendment 8 STOPS before any cross-engine Z is read
+
+**The first evaluation was wrong, and it is recorded here.** It matched NEC-5's
+input-parameters rows by (tag, per-tag segment).
+- **What broke it.** The printout numbers segments across the whole deck: tag 6
+  is absolute segment 19 at r1, where the EX card says segment 8. So no row
+  matched.
+- **What it printed.** The code did not count a missing row as a failure, and
+  printed "D3 worst 0.00e+00 PASS" having compared nothing. That was not a pass,
+  and it is not recorded as one.
+
+**The correct evaluation** matches the one EX row per run by tag, checks that
+its absolute segment equals the tag's offset plus the EX segment, and counts a
+missing row as a failure.
+- **Addressing.** All 24 runs pass the address check. The port segment is right.
+- **D3 itself fails on all 24 runs.** \|1/Y_kk − Z_in,k\| / \|Z_in,k\| reads:
+
+| d | r1 | far × 3 | all × 3 |
+|---|---|---|---|
+| 3 m | 2.56e-2 | 8.58e-3 | 8.58e-3 |
+| 5 m | 2.63e-2 | 8.83e-3 | 8.83e-3 |
+| 8 m | 2.68e-2 | 9.05e-3 | 9.04e-3 |
+| 11 m | 2.69e-2 | 9.10e-3 | 9.10e-3 |
+
+The bar was 1e-3, and the prediction was that it would pass at ≤ 1e-4:
+**MISS**.
+
+**Reading.**
+- **What it means.** The segment-centre current in NEC-5's wire-currents table
+  is not the source current NEC-5 uses for its printed driving-point Z.
+- **Why that is likely.** The gap shrinks roughly as the segment length does:
+  2.6 % at r1 against 0.9 % at × 3. That fits a centre-value-against-source-value
+  difference, but it is a hypothesis, not measured.
+- **The consequence.** Amendment 8's NEC-5 Y, assembled from segment-centre
+  currents, is biased by 1–3 %. That is as large as the gate's 2 % allowance.
+- **By the registered rule, a failure is a stop and a report.** No
+  cross-engine Z is read.
+  - **The momwire step** was already running and finishes; its rows are kept,
+    unread.
+  - **The `same` step** is not launched.
+- **Reported to Laptop-builder with a proposed Amendment 8b:** a 0 V EX on the
+  idle port, so NEC-5 prints both port currents in its own source convention,
+  with a check that the 0 V source does not perturb the solution.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
