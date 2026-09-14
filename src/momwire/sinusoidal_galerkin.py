@@ -3836,9 +3836,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """Junctions that CROSS the interface (momwire#980 D3), by index.
 
         Answered through `_below_interface`, so this trunk's scope check and
-        its refusals are bspline's — one wire radius, the buried hub, no
-        second crossing node — rather than a second reading of the same
-        rules. Empty whenever the deck has no lower medium, which keeps every
+        its refusals are bspline's — one wire radius, the buried hub, crossing
+        nodes at least `MIN_CROSSING_NODE_SEPARATION_M` apart — rather than a
+        second reading of the same rules. Empty whenever the deck has no lower medium, which keeps every
         shipped path on the base's empty answer.
         """
         if self.ground_z is None or not self._lower_medium() or not self.junctions:

@@ -143,7 +143,25 @@ _DETOUR_COARSE = 1.2
 # The old budget could not EVALUATE below the old floor at all, which is why
 # #935's study had to lift it to measure anything down there — attempting a
 # reference at 0.0575 deg refuses by name, quoting this constant.
-_MAX_TAIL_PANELS = 8000
+#
+# RAISED 8000 -> 24000 by antennaknobs plan U9 (route 2), by the same rule.
+# The floor moved to 0.016667 deg; the worst there over the SPEC matrix plus
+# soil A at 3.5 MHz (the cebik LPDA's medium) is 22,239 panels, and the budget
+# is that worst x 1.05, rounded up to the next thousand. Measured at a 48,000
+# screen budget (`scratch/u9-multi-crossing/s_panels.json`), every row
+# converged:
+#
+#     theta      law ~6.4/tan   worst measured          verdict
+#     0.0400        9167          9462                   converges
+#     0.0250       14668         14971                   converges
+#     0.0200       18335         18614                   converges
+#     0.016667     22002         22239 / 24000  92.7 %   the NEW floor
+#     0.0125       29335         29446                   past this budget
+#
+# A larger budget cannot move a node that converges under the old one
+# (`_tail_below` stops on convergence), so every node at or above 0.05 deg
+# keeps its value.
+_MAX_TAIL_PANELS = 24000
 
 # Cap on the R₁ a below/below grid will tabulate, in IN-MEDIUM wavelengths
 # λ_m = 2π/|k_m|. See `SommerfeldGridBelow` for why this is a product-regime
@@ -377,6 +395,18 @@ _SOMM_BELOW_TH_BAND_HI_DEG = 1.0
 #
 # 0.05/3 divides [0.05, 0.1] exactly, which `test_the_low_band_divides_the_
 # interval_exactly` asserts — the seam is the whole hazard here as it was there.
+#
+# antennaknobs plan U9 (route 2) extended this band DOWN rather than adding a
+# fifth band below it. The floor moved two cells lower, so the band is now
+# [0.016667, 0.1] deg at the same dtheta, and its shipped nodes 0.05 ... 0.1 stay
+# nodes. Nothing above 0.1 deg moves, and the C++ projection needs no change:
+# it reads each region's th0 and dtheta, and routes on the 0.1 and 1 deg edges,
+# which did not move. Real-grid interpolation over the new cells, at cell
+# midpoints and thirds, worst over soils A/B/C x 7/21 MHz, soil A at 3.5 MHz,
+# R1/lam_m in {0.2, 1, 1.9, 3, 3.9} and the four surfaces, reads 3.9e-9 against
+# the 4.7e-4 bar (`scratch/u9-multi-crossing/s_interp_L2.json`). Halving dtheta
+# read 5.0e-9, and a 0.011 deg floor at 0.05/9 read 5.1e-9: that is the
+# comparison's own level, not the lattice's.
 _SOMM_BELOW_DTH_BAND_LO_DEG = 0.05 / 3.0
 _SOMM_BELOW_TH_BAND_LO_HI_DEG = 0.1
 
@@ -428,7 +458,15 @@ _SOMM_BELOW_TH_BAND_LO_HI_DEG = 0.1
 # not because a truncation error was judged tolerable: at the new floor there
 # is no truncation at all. What had to move was `_MAX_TAIL_PANELS`, not the
 # lattice — see there. 0.023° stays refused, and would want ~16000 panels.
-_SOMM_BELOW_TH_MIN_DEG = 0.05
+#
+# antennaknobs plan U9 (route 2) moved it again, to 0.05 − 2·(0.05/3) =
+# 0.016667°, by the same rule: the lowest candidate node that converges on
+# every SPEC soil, and on soil A at 3.5 MHz, under the budget (22,239 of 24,000
+# panels). It is spelled from the band's dθ so that the band still ends exactly
+# on its 0.1° seam. What asked for it is a deck with several crossing nodes:
+# their rises' pairs sit at θ = atan(2·h_node/d), which is 0.0239° on the cebik
+# LPDA's eight nodes. 0.0125° stays refused.
+_SOMM_BELOW_TH_MIN_DEG = 0.05 - 2.0 * _SOMM_BELOW_DTH_BAND_LO_DEG
 
 _GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
 _GXC, _GWC = np.polynomial.legendre.leggauss(_GAUSS_N_COARSE)
@@ -880,7 +918,8 @@ def _refuse_if_capped(conv, panels, rho, h, where=None):
 
     Nothing the below family serves reaches here: the grazing floor is
     `_SOMM_BELOW_TH_MIN_DEG`, and at that floor the worst node over the SPEC
-    soils uses 3868 of 4000 panels (momwire#838). This fires for a query
+    soils uses 22,239 of 24,000 panels (antennaknobs plan U9; 3868 of 4000 at
+    momwire#838's floor). This fires for a query
     BELOW the floor, or for a soil whose panel demand is worse than any
     measured — which is the case that used to return a confident number.
     """
@@ -894,9 +933,10 @@ def _refuse_if_capped(conv, panels, rho, h, where=None):
         f"{panels} panels, the whole of _MAX_TAIL_PANELS = {_MAX_TAIL_PANELS}. "
         f"The panel count grows as ~6.4/tan(theta), so this is a grazing "
         f"limit: the tabulated floor is {_SOMM_BELOW_TH_MIN_DEG} deg, where "
-        f"the worst SPEC soil uses ~95 % of the budget. Past the cap the "
-        f"contour falls back to a Wynn extrapolation whose error grows from "
-        f"~3e-9 just under the floor to ~2e-6 an octave below it, so there "
+        f"the worst SPEC soil uses ~93 % of the budget. Past the cap the "
+        f"contour falls back to a Wynn extrapolation whose error grows with "
+        f"the distance under the floor (momwire#935 measured ~3e-9 to ~2e-6 "
+        f"an octave under its own floor), so there "
         f"is no honest value to return — raise the pair's depth sum relative "
         f"to its horizontal separation, or refuse the geometry"
         + (f" [at {where!r}]" if where is not None else "")
@@ -1529,7 +1569,8 @@ class SommerfeldGridBelow(SommerfeldGrid):
             self._fill_region(idx)
 
     def _ensure_band_lo(self):
-        """The LOW band — [0.05 deg, 0.1 deg] — in every R₁ zone (#935)."""
+        """The LOW band — [floor, 0.1 deg] — in every R₁ zone (#935; extended
+        down to the 0.016667 deg floor by antennaknobs plan U9)."""
         for idx in self._band_lo_idx:
             self._fill_region(idx)
 
