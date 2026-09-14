@@ -1,0 +1,14 @@
+/home/smburns/stevenmburns/antennaknobs/.venv/bin/python -m pytest tests/ -m memgate -n0
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/smburns/stevenmburns/momwire-wt-u9src
+configfile: pyproject.toml
+plugins: anyio-4.14.1, xdist-3.8.0
+collected 8000 items / 7953 deselected / 47 selected
+
+tests/test_extended_kernel_galerkin.py ..................                [ 38%]
+tests/test_momwire.py ........................                           [ 89%]
+tests/test_sinusoidal_galerkin.py ....                                   [ 97%]
+tests/test_sommerfeld_ground.py .                                        [100%]
+
+=============== 47 passed, 7953 deselected in 112.21s (0:01:52) ================

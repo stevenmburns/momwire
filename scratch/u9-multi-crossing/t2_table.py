@@ -2,7 +2,7 @@
 median cold and warm times over the repeats, the branch/main ratios, max RSS,
 whether the low band filled, and the first-vs-last repeat drift per tree.
 
-  python t2_table.py t2_fill_cost.jsonl [--main-commit 1ca8725]
+  python t2_table.py t2_fill_cost.jsonl [--branch-marker momwire-wt-u9src]
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ from pathlib import Path
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("jsonl", type=Path)
-    ap.add_argument("--main-commit", default="1ca8725")
+    ap.add_argument("--branch-marker", default="momwire-wt-u9src")
     args = ap.parse_args()
     rows = [
         json.loads(line) for line in args.jsonl.read_text().splitlines() if line.strip()
@@ -25,7 +25,7 @@ def main():
     by = defaultdict(list)
     errors = []
     for r in rows:
-        tree = "main" if r["commit"].startswith(args.main_commit) else "branch"
+        tree = "branch" if args.branch_marker in r["momwire"] else "main"
         if "error" in r:
             errors.append((r["deck"], tree, r["rep"], r["error"]))
             continue
