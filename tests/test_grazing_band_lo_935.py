@@ -379,7 +379,8 @@ def test_every_low_band_node_converges_under_the_panel_cap():
     failure past it is SILENT -- the contour extrapolates and returns. So
     every node of the new band is asserted converged, on every SPEC soil, plus
     the headroom as an early warning. Measured worst 7610/8000 = 95.1 % at
-    (C, 21 MHz, R1 = 0.05 lambda_m).
+    (C, 21 MHz, R1 = 0.05 lambda_m) at #935's floor; 22239/24000 = 92.7 % at
+    the same point on antennaknobs plan U9's 0.016667 deg floor.
     """
     for soil in SOILS:
         for f in FREQS:
@@ -494,12 +495,13 @@ def _shape_z(depth_m, n):
     return complex(z)
 
 
-@pytest.mark.parametrize("depth_mm", [0.5, 1.0])
+@pytest.mark.parametrize("depth_mm", [0.5, 0.8])
 def test_the_floor_still_refuses_what_it_cannot_reach(depth_mm):
     """Half the shape check is what #935 does NOT buy.
 
-    A 5.9114 m dipole at 0.5 mm sees theta = 0.0097 deg and at 1 mm 0.0194
-    deg, both far under even the new floor. They must still refuse BY NAME --
+    A 5.9114 m dipole at 0.5 mm sees theta = 0.0097 deg and at 0.8 mm 0.0155
+    deg, both under the floor antennaknobs plan U9 moved to 0.016667 deg (the
+    1 mm case, 0.0194 deg, is served since then). They must still refuse BY NAME --
     a floor that quietly started serving everything would pass a one-sided
     gate just as well as a correct one.
 

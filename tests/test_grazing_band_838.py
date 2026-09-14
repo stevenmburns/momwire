@@ -56,7 +56,9 @@ BAND_BAR = 1.8e-5
 # lambda_m) both times:
 #
 #   at the 0.1 deg floor / 4000 budget   3868 = 96.7 %   (before #935)
-#   at the 0.05 deg floor / 8000 budget  7610 = 95.1 %   (now)
+#   at the 0.05 deg floor / 8000 budget  7610 = 95.1 %   (momwire#935)
+#   at the 0.016667 deg / 24000 budget  22239 = 92.7 %   (now; antennaknobs
+#                                                          plan U9)
 #
 # An early reading of 3542 (90%) was one deck only -- soil A at 7 MHz -- and
 # understated it. #935 moved BOTH the floor and the budget and the ratio
@@ -423,15 +425,16 @@ def test_ble_geometries_are_served():
     """What momwire#838 is for: BLE 1937's radial tips stop refusing.
 
     45 ft radials 6 in deep is theta = 0.64 deg at the tip, 135 ft is
-    0.21 deg -- both refused at the old 1 deg floor. The Validation Manual
-    screen's 0.023 deg is still refused, deliberately (see momwire#841).
+    0.21 deg -- both refused at the old 1 deg floor. 0.023 deg is served
+    since antennaknobs plan U9 moved the floor to 0.016667 deg; 0.0125 deg,
+    under it, is refused.
     """
     g, eps_t, k2, om, lam_m = _grid("A", 7e6)
     r1 = np.array([0.5 * lam_m])
     for th_deg in (0.64, 0.21, 0.1):
         g.eval(r1, np.radians([th_deg]))
     with pytest.raises(ValueError, match="grazing floor"):
-        g.eval(r1, np.radians([0.023]))
+        g.eval(r1, np.radians([0.0125]))
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +646,20 @@ def test_the_far_zone_interpolates_to_the_bar():
 # `test_the_floor_itself_is_untouched_by_the_refusal` is the gate that holds
 # the floor to every soil, and it is the one to read if these two disagree
 # again.
-_TAIL_CAP_SERVED = (0.12, 0.10, 0.09, 0.08, 0.06, 0.05)
-_TAIL_CAP_REFUSED = (0.04, 0.03, 0.023)
+#
+# RE-MEASURED at `_MAX_TAIL_PANELS = 24000` (antennaknobs plan U9 raised it from
+# 8000 and moved the floor to 0.016667 deg), on the same deck, by
+# `scratch/u9-multi-crossing/t_cap_ladder_24000.py` in momwire's records:
+#
+#   0.040   8649    0.023  14828    0.016667  20291    0.0125  CAPPED
+#   0.030  11447    0.020  16990    0.015     22483    0.010   CAPPED
+#
+# The old refused rungs 0.04, 0.03 and 0.023 are served now. 0.015 converges on
+# this deck although it is under the floor, which answers to the worst SPEC
+# soil again (22,239 at 0.016667 on C / 21 MHz). 0.0125 is the first rung that
+# is capped here, and the rung the refusal tests below ask at.
+_TAIL_CAP_SERVED = (0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04, 0.03, 0.023, 0.02)
+_TAIL_CAP_REFUSED = (0.0125, 0.01)
 
 
 def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
@@ -661,7 +676,7 @@ def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
 
 
 def test_the_tail_cap_refuses_by_name_below_the_floor():
-    """The measured ladder, pinned: converged at 0.05-0.12 deg, capped below.
+    """The measured ladder, pinned: converged at 0.02-0.12 deg, capped below.
 
     Both halves matter: a change that made the contour cheaper would move the
     served rungs down and this gate would say so -- which is exactly what
@@ -679,10 +694,10 @@ def test_the_tail_cap_refuses_by_name_below_the_floor():
 def test_the_cap_refusal_names_the_query_and_the_way_out():
     """A refusal that does not say which knob to move is a crash with prose."""
     with pytest.raises(ValueError) as exc:
-        _direct_at("A", 7e6, 0.03)
+        _direct_at("A", 7e6, 0.0125)
     msg = str(exc.value)
     for want in (
-        "theta = 0.03",  # the angle asked for
+        "theta = 0.0125",  # the angle asked for
         "R1 = ",  # and the separation
         "_MAX_TAIL_PANELS",  # the budget it hit, by name
         f"{below._MAX_TAIL_PANELS}",  # and its value
@@ -699,7 +714,7 @@ def test_the_health_counter_still_bumps_before_the_refusal():
     off a refused point, which only works if `note` runs first."""
     h = below.Health()
     with pytest.raises(ValueError):
-        _direct_at("A", 7e6, 0.03, health=h)
+        _direct_at("A", 7e6, 0.0125, health=h)
     d = h.as_dict()
     assert d["nonconvergent"] == 1, d
     assert d["max_tail_panels"] == below._MAX_TAIL_PANELS, d
@@ -718,7 +733,7 @@ def test_both_dispatches_refuse_at_the_cap():
             ctx.__enter__()
         try:
             with pytest.raises(ValueError) as exc:
-                _direct_at("A", 7e6, 0.03)
+                _direct_at("A", 7e6, 0.0125)
             msgs.append(str(exc.value))
         finally:
             if ctx:

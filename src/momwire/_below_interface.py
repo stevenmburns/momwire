@@ -182,6 +182,27 @@ def grounded_junctions(polylines, ground_z, groups):
     return frozenset(grounded)
 
 
+# The closest two crossing nodes the crossing serve completes, in metres: the
+# smallest separation its two-node ε̃ = 1 collapse was gated at (antennaknobs
+# plan U9 (b), PB4 — the Z matrix within 2.0e-4 Ω of the free-space two-wire
+# truth at 1 m, as at 12 m). Closer nodes are refused by name.
+MIN_CROSSING_NODE_SEPARATION_M = 1.0
+
+
+def _closest_crossing_nodes(crossing, groups, polylines):
+    """`(separation, i, j, points)` for the closest pair of crossing nodes."""
+    pts = []
+    for j_idx in crossing:
+        w, end = groups[j_idx][0]
+        pl = np.asarray(polylines[w], dtype=float)
+        pts.append(pl[-1] if end == "end" else pl[0])
+    pts = np.asarray(pts)
+    iu, ju = np.triu_indices(len(pts), 1)
+    sep = np.hypot(pts[iu, 0] - pts[ju, 0], pts[iu, 1] - pts[ju, 1])
+    k = int(np.argmin(sep))
+    return float(sep[k]), int(iu[k]), int(ju[k]), pts
+
+
 def crossing_junctions(
     media, groups, grounded, polylines, ground_z, radii, *, two_radius=False
 ):
@@ -194,12 +215,16 @@ def crossing_junctions(
     the per-wire radius. The scope is what the phase-2 adjudication
     validated, refused by name past it:
 
-    * exactly ONE crossing junction per deck. The corner's single V(a)
-      evaluation and the by-parts end terms were adjudicated at one node, and
-      end pairs standing at two DIFFERENT nodes are a pair class no
-      adjudicator has measured. A two-vertical deck used to pass the serve
-      plan and die on `_crossing_fill._ends_and_corner`'s assert
-      (antennaknobs#1464);
+    * any number of crossing junctions, at least
+      `MIN_CROSSING_NODE_SEPARATION_M` apart (antennaknobs plan U9). The
+      by-parts end terms were always evaluated at every end-to-node distance;
+      the corner is a point-charge pair term, and each end pair now reads V at
+      its own separation √(ρ² + a²), so a second node is a second V rather
+      than a new term. Closer nodes are refused by name, and so is a
+      TWO-RADIUS deck with more than one node: the two were measured alone.
+      Before this a second node was refused outright (momwire#1054), and
+      before THAT a two-vertical deck passed the serve plan and died on the
+      corner's assert (antennaknobs#1464);
     * exactly ONE above member per crossing junction, N ≥ 1 below members —
       the node fan (a monopole over a buried radial screen risen to the node,
       momwire#524 fan widening). Multiple above members share the interface
@@ -253,20 +278,17 @@ def crossing_junctions(
     if not crossing:
         return ()
     if len(crossing) > 1:
-        nodes = []
-        for j_idx in crossing:
-            w, end = groups[j_idx][0]
-            pl = np.asarray(polylines[w], dtype=float)
-            pt = pl[-1] if end == "end" else pl[0]
-            nodes.append(f"({pt[0]:.6g}, {pt[1]:.6g})")
-        raise NotImplementedError(
-            f"a deck with {len(crossing)} crossing junctions, at "
-            f"{', '.join(nodes)}: "
-            "the crossing serve completes ONE crossing node per deck "
-            "(momwire#524 phase 2); its interface corner V(a) is a same-node "
-            "term, and end pairs standing at two different nodes have no "
-            "measured completion"
-        )
+        sep, i, j, pts = _closest_crossing_nodes(crossing, groups, polylines)
+        if sep < MIN_CROSSING_NODE_SEPARATION_M:
+            raise NotImplementedError(
+                f"crossing junctions {crossing[i]} and {crossing[j]}, at "
+                f"({pts[i][0]:.6g}, {pts[i][1]:.6g}) and "
+                f"({pts[j][0]:.6g}, {pts[j][1]:.6g}), stand {sep:.6g} m apart: "
+                "the crossing serve completes several crossing nodes per deck "
+                f"from {MIN_CROSSING_NODE_SEPARATION_M:g} m apart, the closest "
+                "separation its two-node collapse was gated at (antennaknobs "
+                "plan U9), and closer crossing nodes have no measured completion"
+            )
     for j_idx in crossing:
         n_above = sum(1 for w, _e in groups[j_idx] if media[w] == _medium_spec.ABOVE)
         if n_above != 1:
@@ -299,6 +321,13 @@ def crossing_junctions(
                 "pinned (momwire#524 phase 2)"
             )
         crossing_side_radii(media, radii)
+        if len(crossing) > 1:
+            raise NotImplementedError(
+                f"a TWO-RADIUS crossing deck with {len(crossing)} crossing "
+                "junctions: the two-radius node (antennaknobs plan U5) and more "
+                "than one crossing node (plan U9) were each measured alone, and "
+                "a two-radius deck with several nodes has no measured completion"
+            )
     return tuple(crossing)
 
 

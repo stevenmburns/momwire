@@ -664,8 +664,10 @@ def test_g5689_the_refusals_survive_the_dispatch(proj_grid, what, match):
         # floor from 1 deg to 0.1 deg, at which point the old 5 cm-deep pair
         # (0.57 deg) became a SERVED geometry and this stopped testing a
         # refusal at all. Asserted against the constant rather than a literal
-        # so the next move of the floor fails here loudly.
-        depth = 0.008
+        # so the next move of the floor fails here loudly -- which it did:
+        # antennaknobs plan U9 lowered the floor to 0.016667 deg, the 8 mm pair
+        # (0.046 deg) became served, and the pair is now 2 mm deep (0.011 deg).
+        depth = 0.002
         obs = np.array([[0.5 * grid.r1_max, 0.0, -depth]])
         src = np.array([[0.0, 0.0, -depth]])
         assert (

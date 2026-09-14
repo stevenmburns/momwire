@@ -27,8 +27,12 @@ and never re-picked per medium (the high-σ ladder pinned its
 medium-independence). With the fan widening the below axis carries N
 node tents: the corner loop emits one σ-carried term per
 (above-tent × below-tent) pair, and the self completion's corner emits
-the below×below tent pairs at R = a — all at the ONE crossing node the
-scope allows, which is what keeps the single V(a) evaluation honest.
+the below×below tent pairs at R = a. With more than one crossing node
+(antennaknobs plan U9) the same loops meet end pairs standing at two
+different nodes, and each pair reads V at its own separation,
+√(ρ² + a²): the corner is a point-charge pair term, so a second node is a
+second V, not a new term. A pair at one node reads V(a) through exactly
+the call a one-node deck makes.
 
 Scope guards this module inherits from the derivation:
 
@@ -1094,6 +1098,35 @@ def _rank1_add_cols(t_ab, nz, a, b, scale, buf):
     t_ab[:, nz] += out
 
 
+# Two in-plane ends closer than this share a crossing node: the tolerance the
+# one-node fill asserted. Real crossing nodes stand metres apart
+# (`_below_interface.MIN_CROSSING_NODE_SEPARATION_M`).
+_SAME_NODE_RHO = 1e-9
+
+
+def _corner_v(cache, eps_t, k_p, a_wire, rho):
+    """The corner's V at the regularized end separation, once per distinct ρ.
+
+    A pair at one node (ρ < `_SAME_NODE_RHO`) reads V(a) through the call the
+    one-node fill made, so a single-node deck keeps its bytes. A pair across
+    two nodes reads V(√(ρ² + a²)) — the transmitted partner of the
+    point-charge pairs the self completions already carry at √(‖Δr‖² + a²).
+    Measured on the two-node ε̃ = 1 collapse (antennaknobs plan U9 (b), momwire
+    scratch/u9-multi-crossing): with it the Z matrix matches the free-space
+    two-wire truth to 2.0e-4 Ω at 12 m and at 1 m; without it Z12 is 4.70 Ω
+    off, and an orientation-blind sign 9.39 Ω.
+    """
+    key = 0.0 if rho < _SAME_NODE_RHO else rho
+    v = cache.get(key)
+    if v is None:
+        r_eff = a_wire if key == 0.0 else float(np.hypot(rho, a_wire))
+        v = complex(
+            _near_interface.six_point(eps_t, k_p, r_eff, 0.0, 0.0, rtol=_CORNER_RTOL)[1]
+        )
+        cache[key] = v
+    return v
+
+
 def _ends_and_corner(
     ctx,
     A,
@@ -1205,23 +1238,17 @@ def _ends_and_corner(
         # razor's own kernel has none; without it, 5e-5 (quadrature).
         return t_ab
     a_wire = float(ctx.a_wire)
-    v_corner = None
+    v_at = {}
     for pt_a, sig_a, fv_a in A["ends"]:
         if abs(pt_a[2] - gz) > 1e-12:
             continue
         for pt_b, sig_b, fv_b in B["ends"]:
             if abs(pt_b[2] - gz) > 1e-12:
                 continue
-            # One V(a) serves every pair only because every in-plane
-            # value-1 end stands at the ONE crossing node the scope
-            # allows — assert that, don't assume it.
-            assert np.hypot(pt_a[0] - pt_b[0], pt_a[1] - pt_b[1]) < 1e-9
-            if v_corner is None:
-                v_corner = complex(
-                    _near_interface.six_point(
-                        eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL
-                    )[1]
-                )
+            # Every in-plane end pair, at one node or across two
+            # (antennaknobs plan U9): V at the pair's own separation.
+            rho = float(np.hypot(pt_a[0] - pt_b[0], pt_a[1] - pt_b[1]))
+            v_corner = _corner_v(v_at, eps_t, k_p, a_wire, rho)
             nza, nzb = np.flatnonzero(fv_a), np.flatnonzero(fv_b)
             t_ab[np.ix_(nza, nzb)] += (-sig_a * sig_b * c1 * v_corner) * np.outer(
                 fv_a[nza], fv_b[nzb]
@@ -1355,20 +1382,15 @@ def _ends_and_corner_reversed(
     # The corner is symmetric in the two ends' one-hots (−σσ′·c1·V(a)), so
     # it is the forward's transposed and needs no orientation of its own.
     a_wire = float(ctx.a_wire)
-    v_corner = None
+    v_at = {}
     for pt_p, sig_p, fv_p in P["ends"]:
         if abs(pt_p[2] - gz) > 1e-12:
             continue
         for pt_q, sig_q, fv_q in Q["ends"]:
             if abs(pt_q[2] - gz) > 1e-12:
                 continue
-            assert np.hypot(pt_p[0] - pt_q[0], pt_p[1] - pt_q[1]) < 1e-9
-            if v_corner is None:
-                v_corner = complex(
-                    _near_interface.six_point(
-                        eps_t, k_p, a_wire, 0.0, 0.0, rtol=_CORNER_RTOL
-                    )[1]
-                )
+            rho = float(np.hypot(pt_p[0] - pt_q[0], pt_p[1] - pt_q[1]))
+            v_corner = _corner_v(v_at, eps_t, k_p, a_wire, rho)
             t_ba += (-sig_p * sig_q * c1 * v_corner) * np.outer(fv_p, fv_q)
     return t_ba
 
