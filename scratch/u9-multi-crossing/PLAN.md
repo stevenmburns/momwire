@@ -1504,6 +1504,30 @@ to 3331ef1; NEC-5 is `nec5-linux/nec5cl`.
 3. `same`: momwire `same` at r1, at each d. Then **C8d is read, and then C8c**.
 4. Only then does `e2_table.py` read Z.
 
+### C8a result [2026-09-14]: PASS, but it cannot fail on these decks, so D3 is added before any Z is read
+
+- **The run.** `u9-e-nec5.service`, 18:43:20–18:43:33Z: 12 NEC-5 rows (r1, far
+  × 3 and all × 3, at each d), all exit 0, 0.7–1.1 s each.
+- **The result.** \|Y12 − Y21\|/\|Y12\| is **exactly 0.000e+00 on every row**,
+  so C8a passes.
+- **Why that is vacuous.** The two pairs are identical and mirror-symmetric
+  about the midplane. Y12 = Y21 therefore holds by geometry, and prints
+  identically. C8a cannot fail on these decks, and it does not show that the
+  port currents are extracted correctly.
+- **D3, a diagnostic registered here, before any cross-engine Z is read.** On
+  every NEC-5 row and each one-port run k:
+  \|1/Y_kk − Z_in,k\| / \|Z_in,k\| ≤ 1e-3.
+  - **Where the two numbers come from.** Z_in,k is the driving-point impedance
+    NEC-5 prints for that run. Y_kk comes from the extracted segment-centre
+    currents.
+  - **Why it can fail.** It fails if the wrong segment, the wrong tag or the
+    wrong sign is read.
+  - **Prediction:** it passes, at ≤ 1e-4 (the printout's precision).
+  - **If it fails,** that is a stop and a report, like C8a.
+- **What it does not change.** It compares NEC-5 with itself, so it is not a
+  cross-engine reading. The momwire step, which C8a's pass allows in the
+  registered order, runs meanwhile.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
