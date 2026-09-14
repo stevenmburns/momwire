@@ -1314,10 +1314,11 @@ def _deeper_than_ladder_message(zp_top, lam_m):
         "transmitted integral returns and the single e^(-j k_m |z'|) divide-"
         "out no longer flattens it — momwire#524 phase 0 measured >33 nodes "
         "over the deep range at every soil, and a spherical-phase divide is "
-        "no better. Extending the ladder is honest work and it costs about "
-        f"{_LADDER_PER_QUARTER:g} extra rungs per additional quarter lambda_m "
-        f"plus {_LADDER_PER_DECADE:g} per decade of log span, each rung a "
-        "full (R, theta) fill; extrapolating past it is not"
+        "no better. The cap is permanent (momwire#666): extending the ladder "
+        f"would cost about {_LADDER_PER_QUARTER:g} extra rungs per additional "
+        f"quarter lambda_m plus {_LADDER_PER_DECADE:g} per decade of log span, "
+        "each rung a full (R, theta) fill, and extrapolating past it is not "
+        "honest"
     )
 
 
