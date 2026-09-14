@@ -1,0 +1,195 @@
+{
+ "mode": "interp",
+ "momwire": "/home/smburns/stevenmburns/momwire-wt-u9/src/momwire/__init__.py",
+ "lattice": "L2p",
+ "floor_deg": 0.01666666666666667,
+ "dth_lo_deg": 0.008333333333333333,
+ "budget": 48000,
+ "bar": 0.00047,
+ "worst_rel": 5.048524021684973e-09,
+ "worst_at": [
+  "LPDA",
+  3.9,
+  "IphiH",
+  0.01941666666666667
+ ],
+ "within_bar": true,
+ "media": [
+  {
+   "medium": "A/7MHz",
+   "soil": [
+    13.0,
+    0.005
+   ],
+   "f_hz": 7000000.0,
+   "lam_m": 10.019247196864843,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1210,
+   "cells_queried": 6,
+   "worst_rel": 1.2551176233914327e-09,
+   "worst_at": [
+    3.9,
+    "IphiH",
+    0.037500000000000006
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.92,
+   "lo_fill_s": 62.74
+  },
+  {
+   "medium": "A/21MHz",
+   "soil": [
+    13.0,
+    0.005
+   ],
+   "f_hz": 21000000.0,
+   "lam_m": 3.858845202799656,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1199,
+   "cells_queried": 6,
+   "worst_rel": 4.1800928092914953e-10,
+   "worst_at": [
+    0.2,
+    "IrhoH",
+    0.01941666666666667
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.92,
+   "lo_fill_s": 75.55
+  },
+  {
+   "medium": "B/7MHz",
+   "soil": [
+    20.0,
+    0.03
+   ],
+   "f_hz": 7000000.0,
+   "lam_m": 4.800576375953843,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1199,
+   "cells_queried": 6,
+   "worst_rel": 1.0322034776185708e-09,
+   "worst_at": [
+    3.9,
+    "IphiH",
+    0.029166666666666674
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.94,
+   "lo_fill_s": 72.81
+  },
+  {
+   "medium": "B/21MHz",
+   "soil": [
+    20.0,
+    0.03
+   ],
+   "f_hz": 21000000.0,
+   "lam_m": 2.5022849357616885,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1199,
+   "cells_queried": 6,
+   "worst_rel": 6.887895141051323e-10,
+   "worst_at": [
+    3.9,
+    "IphiH",
+    0.037500000000000006
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.94,
+   "lo_fill_s": 74.55
+  },
+  {
+   "medium": "C/7MHz",
+   "soil": [
+    5.0,
+    0.001
+   ],
+   "f_hz": 7000000.0,
+   "lam_m": 18.064320304079192,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1199,
+   "cells_queried": 6,
+   "worst_rel": 2.3054452103633036e-09,
+   "worst_at": [
+    3.9,
+    "IphiH",
+    0.020833333333333336
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.86,
+   "lo_fill_s": 51.52
+  },
+  {
+   "medium": "C/21MHz",
+   "soil": [
+    5.0,
+    0.001
+   ],
+   "f_hz": 21000000.0,
+   "lam_m": 6.338408501322713,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1210,
+   "cells_queried": 6,
+   "worst_rel": 4.5439898134591504e-10,
+   "worst_at": [
+    0.2,
+    "IrhoH",
+    0.01941666666666667
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.93,
+   "lo_fill_s": 74.56
+  },
+  {
+   "medium": "A/F7",
+   "soil": [
+    13.0,
+    0.005
+   ],
+   "f_hz": 7000000.0,
+   "lam_m": 10.019247196864843,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1210,
+   "cells_queried": 6,
+   "worst_rel": 1.2551176233914327e-09,
+   "worst_at": [
+    3.9,
+    "IphiH",
+    0.037500000000000006
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.92,
+   "lo_fill_s": 62.78
+  },
+  {
+   "medium": "LPDA",
+   "soil": [
+    13.0,
+    0.005
+   ],
+   "f_hz": 3500000.0,
+   "lam_m": 15.965887973309902,
+   "th0_deg": 0.01666666666666667,
+   "n_th_lo": 11,
+   "n_lo_nodes_all_zones": 1199,
+   "cells_queried": 6,
+   "worst_rel": 5.048524021684973e-09,
+   "worst_at": [
+    3.9,
+    "IphiH",
+    0.01941666666666667
+   ],
+   "ref_nonconvergent": 0,
+   "build_s": 0.89,
+   "lo_fill_s": 52.83
+  }
+ ]
+}
