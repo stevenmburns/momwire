@@ -671,11 +671,16 @@ def test_gu5_6_a_buried_structure_past_the_below_cap_is_served():
 
 @pytest.mark.slow
 def test_gu5_6_a_grazing_buried_pair_refuses_with_the_lateral_wave():
-    """Depth 1 mm over a 5 m radial is theta = 0.023 deg — under the 1 deg
-    floor the below/below surfaces are tabulated from."""
+    """Depth 1 mm over a 10 m radial is theta = atan(0.002 / 10) = 0.0115 deg,
+    under the 0.016667 deg floor the below/below surfaces are tabulated from.
+
+    The radial was 5 m (0.0229 deg) until antennaknobs plan U9 lowered the
+    floor under that angle. It was lengthened rather than raised: the depth
+    stays at the 1 mm wire radius, so the wire is still wholly below the
+    plane."""
     s = BSplineSolver(
-        wires=[_mono(), _radial(length=5.0, depth=0.001)],
-        n_per_edge_per_wire=[[15], [10]],
+        wires=[_mono(), _radial(length=10.0, depth=0.001)],
+        n_per_edge_per_wire=[[15], [20]],
         feeds=[(0, 5.0, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
