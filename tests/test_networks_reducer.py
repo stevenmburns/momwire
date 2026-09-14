@@ -65,6 +65,47 @@ def reducer(net, n_real):
     return NetworkReducer(net, port_to_idx, len(real) + len(virt))
 
 
+def _open_line(length_in_wavelengths, *, k1=0.0, freq_mhz=14.0):
+    """A driven feed with a lossless line hanging open off it: the line's far
+    end is a private virtual node nothing else touches, which is how an open
+    stub (or an accidentally unterminated line) is spelled."""
+    wl = C_LIGHT / (freq_mhz * 1e6)
+    net = Network(
+        ports={"feed": PortOnWire("feed"), "tip": PortVirtual("tip")},
+        branches=[
+            TL("feed", "tip", z0=450.0, length=length_in_wavelengths * wl, k1=k1)
+        ],
+        sources=[Driven(port="feed")],
+    )
+    return reducer(net, 1), wl
+
+
+def test_the_singularity_report_names_an_open_line_at_a_half_wave():
+    """momwire#584: an open-terminated lossless line at k·λ/2 IS an open, so the
+    node at its near end floats unless something else pins it. That is
+    `doublet_balanced_tuner`'s remaining poisoned sample in antennaknobs
+    (16.0387 MHz, where the common-mode return runs through a line
+    open-terminated at the floating gap). The report used to fall through to
+    "No lossless line sits on a pole" there. It now names the line, its
+    length and the frequency."""
+    red, wl = _open_line(1.0)
+    msg = red._singularity_report(wl)
+    assert "open-ended line feed→tip" in msg, msg
+    assert "whole number of half-wavelengths" in msg, msg
+    assert "14.0000 MHz" in msg, msg
+    assert "floats" in msg, msg
+
+
+def test_the_half_wave_branch_leaves_the_quarter_wave_and_lossy_readings_alone():
+    red, wl = _open_line(0.25)
+    quarter = red._singularity_report(wl)
+    assert "odd multiple of λ/4" in quarter, quarter
+    assert "half-wavelengths" not in quarter, quarter
+
+    red, wl = _open_line(1.0, k1=0.1)
+    assert red._singularity_report(wl).startswith("No lossless line sits on a pole")
+
+
 def nodal_reference(y_full, driven):
     """Independent oracle: bare nodal reduction written straight from the
     boundary-condition definitions — driven nodes pinned at their EMF, every
