@@ -1,0 +1,49 @@
+{
+ "momwire": "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/__init__.py",
+ "scale": 1.000001,
+ "base": {
+  "seconds": 30.35,
+  "low_band_dth_deg": [
+   0.016666666666666666
+  ],
+  "spy": {
+   "calls": 1,
+   "pairs": 7056,
+   "lo": 6,
+   "mid": 244,
+   "lo_min_deg": 0.024182572467966592
+  }
+ },
+ "low": {
+  "seconds": 30.94,
+  "low_band_dth_deg": [
+   0.016666666666666666
+  ],
+  "spy": {
+   "calls": 1,
+   "pairs": 7056,
+   "lo": 6,
+   "mid": 244,
+   "lo_min_deg": 0.024182572467966592
+  },
+  "bit_equal": false,
+  "max_abs_dz": 1.8090953881929316e-12,
+  "max_rel": 4.105930952543086e-14
+ },
+ "mid": {
+  "seconds": 43.89,
+  "low_band_dth_deg": [
+   0.016666666666666666
+  ],
+  "spy": {
+   "calls": 1,
+   "pairs": 7056,
+   "lo": 6,
+   "mid": 244,
+   "lo_min_deg": 0.024182572467966592
+  },
+  "bit_equal": false,
+  "max_abs_dz": 1.8037129282123953e-10,
+  "max_rel": 4.0937148973924605e-12
+ }
+}
