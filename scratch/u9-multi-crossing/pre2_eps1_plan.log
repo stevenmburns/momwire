@@ -1,0 +1,4 @@
+/home/smburns/stevenmburns/momwire-wt-u9/src/momwire/__init__.py
+eps=(1.0, 0.0) d=12.0: REFUSED ValueError: this deck's buried wires reach a below/below pair elevation of theta = 0.01612 deg, below the 0.05 deg grazing floor the below/below surfaces are tabulated from
+eps=(1.0, 0.0) d=200.0: REFUSED ValueError: this deck's buried wires reach a below/below pair elevation of theta = 0.0009673 deg, below the 0.05 deg grazing floor the below/below surfaces are tabulated fr
+eps=None d=12.0: REFUSED ValueError: this deck's buried wires reach a below/below pair elevation of theta = 0.01612 deg, below the 0.05 deg grazing floor the below/below surfaces are tabulated from
