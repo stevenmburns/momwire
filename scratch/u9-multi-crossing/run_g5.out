@@ -1,0 +1,11 @@
+src=4d8241b branch=u9-multi-crossing-src
+dirty=0
+momwire /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/__init__.py
+== slow start 2026-09-14T17:16:21Z
+== slow rc=2 end 2026-09-14T17:42:00Z
+FAILED tests/test_buried_serve_553.py::test_gu5_6_a_grazing_buried_pair_refuses_with_the_lateral_wave
+=========== 1 failed, 346 passed, 37 warnings in 1538.20s (0:25:38) ============
+== crossgate start 2026-09-14T17:42:00Z
+== crossgate rc=0 end 2026-09-14T17:48:29Z
+================== 38 passed, 7 warnings in 388.70s (0:06:28) ==================
+== done 2026-09-14T17:48:29Z

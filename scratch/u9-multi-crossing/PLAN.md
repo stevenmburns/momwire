@@ -829,6 +829,19 @@ geometry pin. It is not re-registered.
     `run_lanes.sh` runs the default, integration and memgate lanes alone on
     the box. The timing is read only after all five are in.
 
+### G5, crossgate [2026-09-14]: HIT
+
+- **The run.** `u9-g5.service` on src 4d8241b, 17:42:00–17:48:29Z.
+- **The result.** **38 passed, 0 failed** (`g5_crossgate.log`, `run_g5.out`).
+- **G5 as registered** ("pass, apart from failures that reproduce on
+  origin/main"):
+  - **Slow lane: MISS.** It had one failure that does not reproduce on main,
+    gu5_6, now re-pinned at 3331ef1.
+  - **Crossgate: HIT.**
+
+The default, integration and memgate lanes started on src 3331ef1 at
+17:48:45Z (`run_lanes.sh`, `u9-lanes.service`).
+
 ## Amendment 5 (2026-09-14): fill-cost timing, registered before any timing run
 
 **Steve's instruction (relayed by Laptop-builder).**
