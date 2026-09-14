@@ -1084,6 +1084,46 @@ recording feed Z, wall time and max RSS.
 | **PDd3** | (i)'s gate HITS. |
 | **PDd4** | (ii) is not triggered: \|Δ\| > 2·s on both engines. |
 
+### (d) cost step results [2026-09-14]
+
+- **The run.** `u9-d2-cost.service` on src 3331ef1, with NEC-5 at
+  `nec5-linux/nec5cl`, 18:09:53–18:16:47Z.
+- **Records.** `d2_lpda_solve.jsonl`, `.log`, `run_d2.out`.
+
+| deck | rung | engine | Z | time | peak RSS |
+|---|---|---|---|---|---|
+| one-node | refine 1 | momwire | 0.1572 + 30.5772j | 17.7 s | 514 MB |
+| full | refine 1 | momwire | **52.0879 − 3.1846j** | 170.3 s | **3904 MB** |
+| one-node | refine 1 | NEC-5 | **REFUSED by antennaknobs' NEC-5 route:** "the multiport Y is not reciprocal: ports 'feed' and 'tl5b' disagree by 5.343e-02 relative, over the 0.01 this route allows" | 8.2 s | — |
+| full | refine 1 | NEC-5 | **53.0711 − 3.5390j** | 215.5 s | 136 MB (child) |
+
+**Readings, as registered.**
+- **PDd1, the first half, HITS.** momwire's full refine-1 solve fits under
+  24 GB (3.9 GB, against a predicted ≤ 4 GB) and takes ≤ 30 min (170 s).
+- **PDd1, the projection half, MISSES. Rule 1 FAILS.**
+  - **The projection.** For the full far-× 3 rung the factor is 8014/2690 =
+    2.979. The projected peak is 3904 MB × 8.876 = **34.7 GB**, over 20 GB. The
+    projected time is 170 s × 26.4 = 1.25 h, which would pass.
+  - **So** momwire's full far × 3 is not run. **(d) has no momwire ladder on the
+    full deck**, and by the rule that is reported, not served another way.
+- **Absolute Z, not gated, reported as registered.**
+  - **At refine 1** on the full deck, momwire and NEC-5 differ by
+    \|−0.983 + 0.354j\| = **1.05 Ω, 2.0 % of \|Z\|**.
+  - **This is the first served momwire answer on the 8-node LPDA.** The census
+    had it refused.
+  - **NEC-5's refine-1 value** matches the census's own capture of this deck
+    (53.0700 − 3.5386j).
+- **The one-node spelling is not measurable as registered.**
+  - **NEC-5.** antennaknobs' NEC-5 route refuses the deck on its own
+    reciprocity check. The full deck passed the same check.
+  - **momwire.** Its one-node feed Z has R = 0.157 Ω, which is implausible for
+    this feed; it is unexplained, and no conclusion is drawn from it.
+  - **What it means for the gate.** (i)'s change cannot be formed at refine 1
+    on either engine.
+- **This is reported to Laptop-builder before anything else changes.** A
+    diagnostic that tells a deck problem from a route refusal is registered
+    below, before it runs.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
