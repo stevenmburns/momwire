@@ -299,7 +299,20 @@ def _load():
     # Nothing in the chain imported. Two very different reasons, and the user
     # needs to be told which.
     tried = ", ".join(label for label, _ in chain)
-    if verdict is False and not any(_extension_built(s) for _, s in chain):
+    variants = (_AVX2, _SSE2, _LEGACY)
+    forced_suffix = dict(variants).get(os.environ.get(_FORCE_VARIANT_ENV))
+    present = [label for label, suffix in variants if _extension_built(suffix)]
+    if forced_suffix is not None and not _extension_built(forced_suffix) and present:
+        # The test-only override named a build this install does not carry
+        # (momwire#1038). Said plainly: without it, a caller guesses, and the
+        # usual guess (a missing OpenMP runtime) sends the debugging elsewhere.
+        forced = os.environ[_FORCE_VARIANT_ENV]
+        reason = (
+            f"momwire: {_FORCE_VARIANT_ENV}={forced!r}, but variant {forced!r} is "
+            f"not in this install (present: {', '.join(present)}); falling back to "
+            "the slower pure-Python path. Unset it, or name a present variant."
+        )
+    elif verdict is False and not any(_extension_built(s) for _, s in chain):
         # The CPU cannot run what IS built (an AVX2-only wheel predating the
         # double build) — the case that used to be a silent process death.
         reason = _no_avx2_message()
