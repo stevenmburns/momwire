@@ -738,6 +738,19 @@ in `tests/test_crossing_serve_524.py`:
 |---|---|
 | **PB6** | Both spellings pass, and the worst entry is ≤ 1e-3 Ω. The point estimate is 2.0e-4 Ω, what the (b) probe read at 1 m and at 12 m. |
 
+**PB6 result [2026-09-14]: HIT.** On src 4d8241b the worst entry is 2.024e-4 Ω
+for spelling A and for spelling B, as the probe read. Each solve takes about
+0.3 s at ε̃ = 1.
+
+The same commit carries two further changes:
+- **`test_g524_2_a_two_node_deck_meets_the_grazing_floor_by_name`,** a PR-lane
+  check with no fill. The serve plan serves the pair at 8 m and refuses it by
+  name at 12 m.
+- **The floor test's split.** `test_the_floor_itself_is_untouched_by_the_refusal`
+  had run 24.1 s against the 20 s ceiling. Its worst SPEC point stays in the PR
+  lane (4.2 s call), and the 18-point sweep moves to the slow lane as
+  `test_the_floor_is_served_on_every_spec_soil`.
+
 ### (d): Amendment 3, before any (d) run
 
 Amendment 3 will name:
