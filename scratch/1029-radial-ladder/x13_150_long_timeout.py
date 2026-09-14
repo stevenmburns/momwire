@@ -32,5 +32,15 @@ cold = time.perf_counter() - t
 t = time.perf_counter()
 z2 = eng.impedance()[0]
 warm = time.perf_counter() - t
-print(json.dumps({"radials": b.n_radials, "cold_s": cold, "warm_s": warm,
-                  "z": [z.real, z.imag], "z2": [z2.real, z2.imag], "timeout_s": 900.0}))
+print(
+    json.dumps(
+        {
+            "radials": b.n_radials,
+            "cold_s": cold,
+            "warm_s": warm,
+            "z": [z.real, z.imag],
+            "z2": [z2.real, z2.imag],
+            "timeout_s": 900.0,
+        }
+    )
+)
