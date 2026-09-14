@@ -1,0 +1,19 @@
+two_node_d3_r1 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0645 refusal False
+two_node_d3_r1 a0 dialect False feeds [[1, 4.25], [3, 4.25]] z [4.25, 4.25] ports 2 th_min 0.0645 refusal False
+two_node_d3_far3 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0645 refusal False
+two_node_d3_far3 a0 dialect False feeds [[1, 4.416666666666666], [3, 4.416666666666666]] z [4.416667, 4.416667] ports 2 th_min 0.0645 refusal False
+two_node_d5_r1 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0387 refusal False
+two_node_d5_r1 a0 dialect False feeds [[1, 4.25], [3, 4.25]] z [4.25, 4.25] ports 2 th_min 0.0387 refusal False
+two_node_d5_far3 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0387 refusal False
+two_node_d5_far3 a0 dialect False feeds [[1, 4.416666666666666], [3, 4.416666666666666]] z [4.416667, 4.416667] ports 2 th_min 0.0387 refusal False
+two_node_d8_r1 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0242 refusal False
+two_node_d8_r1 a0 dialect False feeds [[1, 4.25], [3, 4.25]] z [4.25, 4.25] ports 2 th_min 0.0242 refusal False
+two_node_d8_far3 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0242 refusal False
+two_node_d8_far3 a0 dialect False feeds [[1, 4.416666666666666], [3, 4.416666666666666]] z [4.416667, 4.416667] ports 2 th_min 0.0242 refusal False
+two_node_d11_r1 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0176 refusal False
+two_node_d11_r1 a0 dialect False feeds [[1, 4.25], [3, 4.25]] z [4.25, 4.25] ports 2 th_min 0.0176 refusal False
+two_node_d11_far3 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0176 refusal False
+two_node_d11_far3 a0 dialect False feeds [[1, 4.416666666666666], [3, 4.416666666666666]] z [4.416667, 4.416667] ports 2 th_min 0.0176 refusal False
+ctrl_d3_r1 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0645 refusal False
+ctrl_d3_far3 a dialect True feeds [[1, 4.5], [3, 4.5]] z [4.5, 4.5] ports 2 th_min 0.0645 refusal False
+check 1: PASS (0 failures)

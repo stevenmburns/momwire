@@ -1,0 +1,30 @@
+== check1 start 2026-09-14T19:48:40Z
+== check1 rc=0 end 2026-09-14T19:48:41Z
+== --stem two_node_d3_r1 --engine nec5 start 2026-09-14T19:49:20Z
+== --stem two_node_d3_r1 --engine nec5 rc=0 end 2026-09-14T19:49:21Z
+== --stem two_node_d3_far3 --engine nec5 start 2026-09-14T19:49:21Z
+== --stem two_node_d3_far3 --engine nec5 rc=0 end 2026-09-14T19:49:22Z
+== --stem two_node_d3_all3 --engine nec5 start 2026-09-14T19:49:22Z
+== --stem two_node_d3_all3 --engine nec5 rc=0 end 2026-09-14T19:49:24Z
+== --stem two_node_d5_r1 --engine nec5 start 2026-09-14T19:49:24Z
+== --stem two_node_d5_r1 --engine nec5 rc=0 end 2026-09-14T19:49:25Z
+== --stem two_node_d5_far3 --engine nec5 start 2026-09-14T19:49:25Z
+== --stem two_node_d5_far3 --engine nec5 rc=0 end 2026-09-14T19:49:26Z
+== --stem two_node_d5_all3 --engine nec5 start 2026-09-14T19:49:26Z
+== --stem two_node_d5_all3 --engine nec5 rc=0 end 2026-09-14T19:49:27Z
+== --stem two_node_d8_r1 --engine nec5 start 2026-09-14T19:49:27Z
+== --stem two_node_d8_r1 --engine nec5 rc=0 end 2026-09-14T19:49:28Z
+== --stem two_node_d8_far3 --engine nec5 start 2026-09-14T19:49:28Z
+== --stem two_node_d8_far3 --engine nec5 rc=0 end 2026-09-14T19:49:30Z
+== --stem two_node_d8_all3 --engine nec5 start 2026-09-14T19:49:30Z
+== --stem two_node_d8_all3 --engine nec5 rc=0 end 2026-09-14T19:49:32Z
+== --stem two_node_d11_r1 --engine nec5 start 2026-09-14T19:49:32Z
+== --stem two_node_d11_r1 --engine nec5 rc=0 end 2026-09-14T19:49:33Z
+== --stem two_node_d11_far3 --engine nec5 start 2026-09-14T19:49:33Z
+== --stem two_node_d11_far3 --engine nec5 rc=0 end 2026-09-14T19:49:34Z
+== --stem two_node_d11_all3 --engine nec5 start 2026-09-14T19:49:34Z
+== --stem two_node_d11_all3 --engine nec5 rc=0 end 2026-09-14T19:49:36Z
+== --stem ctrl_d3_r1 --engine nec5 start 2026-09-14T19:49:36Z
+== --stem ctrl_d3_r1 --engine nec5 rc=0 end 2026-09-14T19:49:37Z
+== --stem ctrl_d3_far3 --engine nec5 start 2026-09-14T19:49:37Z
+== --stem ctrl_d3_far3 --engine nec5 rc=0 end 2026-09-14T19:49:38Z

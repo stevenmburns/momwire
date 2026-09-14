@@ -10,7 +10,8 @@ knot feeds; `e3_knot_decks.solver_kwargs`), then
 `BSplineSolver(**kw).compute_port_solution().y`. Y does not depend on the card
 voltages. `--corner same` returns a zero corner potential for every cross-node
 pair (`_crossing_fill._corner_v` at rho >= `_SAME_NODE_RHO`). Every corner loop
-calls it, forward and reversed alike. The patch counts the pairs it zeroed.
+calls it, forward and reversed alike. The patch counts the calls, and the pairs
+it zeroed, per calling loop.
 
 NEC-5: native runs of `<stem>_a.nec` and `<stem>_b.nec`. Each run drives both
 ports, at card voltages (1, 0.5) and (0.5, 1). A port's current is the source
@@ -27,6 +28,7 @@ only, so no Z is seen before the checks are read.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import re
 import resource
@@ -105,13 +107,16 @@ def momwire_y(stem, corner, info):
             point_at(kw["wires"][int(f[0])], float(f[1])).tolist() for f in feeds
         ],
     )
-    zeroed = [0]
+    by_loop = {}
     if corner == "same":
         real_corner_v = _crossing_fill._corner_v
 
         def same_node_only(cache, eps_t, k_p, a_wire, rho):
+            loop = inspect.currentframe().f_back.f_code.co_name
+            n = by_loop.setdefault(loop, dict(calls=0, zeroed=0))
+            n["calls"] += 1
             if rho >= _crossing_fill._SAME_NODE_RHO:
-                zeroed[0] += 1
+                n["zeroed"] += 1
                 return 0j
             return real_corner_v(cache, eps_t, k_p, a_wire, rho)
 
@@ -119,7 +124,8 @@ def momwire_y(stem, corner, info):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         y = np.asarray(BSplineSolver(**kw).compute_port_solution().y, dtype=complex)
-    info["cross_node_pairs_dropped"] = zeroed[0]
+    info["corner_calls_by_loop"] = by_loop
+    info["cross_node_pairs_dropped"] = sum(n["zeroed"] for n in by_loop.values())
     return y
 
 

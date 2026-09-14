@@ -1,0 +1,14 @@
+nec5 two_node_d3_r1 cross 0.81 s ok
+nec5 two_node_d3_far3 cross 0.97 s ok
+nec5 two_node_d3_all3 cross 1.03 s ok
+nec5 two_node_d5_r1 cross 0.8 s ok
+nec5 two_node_d5_far3 cross 0.98 s ok
+nec5 two_node_d5_all3 cross 1.03 s ok
+nec5 two_node_d8_r1 cross 1.18 s ok
+nec5 two_node_d8_far3 cross 1.36 s ok
+nec5 two_node_d8_all3 cross 1.4 s ok
+nec5 two_node_d11_r1 cross 1.19 s ok
+nec5 two_node_d11_far3 cross 1.37 s ok
+nec5 two_node_d11_all3 cross 1.41 s ok
+nec5 ctrl_d3_r1 cross 0.66 s ok
+nec5 ctrl_d3_far3 cross 0.76 s ok

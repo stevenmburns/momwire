@@ -1810,3 +1810,76 @@ Each step runs as `run_e8c.sh <step>`, alone on the box, under
    - the guard;
    - PE8a–f;
    - the absolute agreement, which is not predicted.
+
+### K1 result [2026-09-14]: PASS
+
+- **The run.** `u9-8c-check1.service`, 19:48:40–19:48:41Z. Geometry only, no
+  fill and no Z. Records: `e3_check1.json`, `e3_check1.log`.
+- **All 10 momwire decks pass every K1 bar.** On each `a` deck:
+  - the importer reads the NEC-5 dialect;
+  - momwire gets 2 plain gap feeds, at arclength 4.5 m on wires 1 and 3 (the
+    two monopoles), at (0, 0, 4.5) and (d, 0, 4.5), in that order;
+  - there are no junction or node ports, and the port count is 2;
+  - the deck is served, with 2 crossing junctions.
+- **θ_min** is 0.0645°, 0.0387°, 0.0242° and 0.0176° at 3, 5, 8 and 11 m, on
+  both rungs, as in Amendment 8's preflight. The control reads 0.0645°, as the
+  d = 3 m deck does.
+- **The twin comparison.** On the 8 symmetric decks, every kwarg except the
+  feeds equals the `a0` twin's.
+- **The twins, recorded as predicted.** They read `nec5_dialect = False`, with
+  feeds at segment centres: arclength 4.25 m at r1 and 4.41667 m at far × 3.
+  This measures the importer's side of D3's diagnosis.
+- **Why it is not vacuous.** The twin's bytes differ from the `a` deck's only in
+  the end field. The two readings differ exactly where the bars look (the
+  dialect and the feed arclength) and nowhere else, so K1 could have failed
+  either way.
+
+### K2, K3 and K4's NEC-5 half [2026-09-14]: PASS
+
+- **The run.** `u9-8c-nec5.service`, 19:49:20–19:49:38Z: 14 rows (the 12 symmetric (d, rung) and
+  the 2 control), 40 NEC-5 runs, all exit 0, 0.7–1.4 s per row.
+- **The reading.** `e5_checks.py nec5`, recorded in `e5_checks_nec5.json`.
+- **K2: PASS, 12 of 12.** On every symmetric (d, rung), runs `a` (I4 = 2) and
+  `a0` (I4 = 0) print identical input-parameters rows, every token.
+  - **What it confirms, on these decks:** NEC-5 reads `EX … I4 = 0` as the same
+    knot as `… 2`, AK#1476's conclusion.
+  - **Prediction** (passes on all 12): hit.
+- **K3: PASS, all 80 rows.**
+  - Every EX card has exactly one row.
+  - **The printed absolute segment is the card's own on every row**, so the
+    "or the next" allowance was never used.
+  - The sub column prints 1 on every row; this is recorded, not interpreted.
+  - **Printed V equals the card's exactly** (worst relative error 0.0).
+  - **The worst \|V/I − Z\|/\|Z\| is 4.7e-5,** against the 1e-3 bar.
+  - **Predictions** (the card's own segment; ≤ 3e-4): hit.
+- **K4, NEC-5 half: PASS.**
+
+  | control | reciprocity \|Y12 − Y21\|/\|Y12\| | asymmetry \|Y11 − Y22\|/\|Y12\| |
+  |---|---|---|
+  | r1 | 4.2e-5 | 1.64 |
+  | far × 3 | 3.6e-5 | 1.63 |
+
+  - **Reciprocity:** bar 1e-2, prediction ≤ 1e-3: hit.
+  - **Asymmetry:** bar ≥ 0.1, prediction ≥ 0.3: hit.
+
+### C8d tightened before any momwire row (Laptop-builder's review)
+
+- **The `_corner_v` patch is approved.** Laptop-builder checked it on momwire
+  main:
+  - `_corner_v` has exactly two call sites, `_ends_and_corner` and
+    `_ends_and_corner_reversed`;
+  - nothing else evaluates the corner: not `sinusoidal_galerkin.py`, and not
+    the C++;
+  - the module global is resolved at call time, so the patch reaches both loops.
+- **The detail they asked for.** `e4_knot_solve.py --corner same` now records,
+  per calling loop, the `_corner_v` calls and the pairs zeroed
+  (`corner_calls_by_loop`), as well as the total.
+- **C8d's bar, tightened here before the `same` step runs.** Both must hold:
+  - the total zeroed is > 0, as registered;
+  - no loop that reaches `_corner_v` zeroes 0 pairs. Otherwise one loop's zeroes
+    could carry the total while the other did nothing.
+- **Prediction:** passes, with both loops present and zeroing pairs. The
+  reversed block reproduces the forward block's transpose exactly (a pinned
+  momwire test), so it holds the same end pairs.
+- **The `cross` path is unchanged.** The momwire step launches after this
+  commit.

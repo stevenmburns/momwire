@@ -1,0 +1,834 @@
+{
+ "check1": "PASS",
+ "failures": [],
+ "rows": [
+  {
+   "stem": "two_node_d3_r1",
+   "excitation": "a",
+   "sha256": "a1c934b891b45da692a75f9dca4fc8d41df13c9241f551592efb317f4f2642f0",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     2
+    ],
+    [
+     11,
+     8,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     3.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.06448683651383778,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d3_r1",
+   "excitation": "a0",
+   "sha256": "5823d7916cbd1cae720d7f121ade64a618697923ded7184c423dc8f69fdbb932",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     0
+    ],
+    [
+     11,
+     8,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.25
+    ],
+    [
+     3,
+     4.25
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.25
+    ],
+    [
+     3.0,
+     0.0,
+     4.25
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.06448683651383778,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d3_far3",
+   "excitation": "a",
+   "sha256": "2f485105a1b6e114ac31c3abca704d7b1250d8b7eb8fe9dec4473a3e1bb362e8",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     2
+    ],
+    [
+     11,
+     24,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     3.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.06448683651383778,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d3_far3",
+   "excitation": "a0",
+   "sha256": "0c63836987d775f2449866e8638546dccce11f718e424b8844e8269eb25bc7b9",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     0
+    ],
+    [
+     11,
+     24,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.416666666666666
+    ],
+    [
+     3,
+     4.416666666666666
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.416666666666666
+    ],
+    [
+     3.0,
+     0.0,
+     4.416666666666666
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.06448683651383778,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d5_r1",
+   "excitation": "a",
+   "sha256": "1666b308c84ba3de744d48c5da3eeaf71eaf3093485383960cb8cfa70f3c9f97",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     2
+    ],
+    [
+     11,
+     8,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     5.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.038692112364602405,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d5_r1",
+   "excitation": "a0",
+   "sha256": "3c724adaeea0e3a68ad2f167ecfe3582dcf3c0712405a91adb25751ffe532143",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     0
+    ],
+    [
+     11,
+     8,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.25
+    ],
+    [
+     3,
+     4.25
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.25
+    ],
+    [
+     5.0,
+     0.0,
+     4.25
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.038692112364602405,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d5_far3",
+   "excitation": "a",
+   "sha256": "7c24c81359c07ce05c4417665d6175c00320e9a69abdbefd1ee1475232865bc0",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     2
+    ],
+    [
+     11,
+     24,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     5.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.038692112364602405,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d5_far3",
+   "excitation": "a0",
+   "sha256": "518a0afaf14f76894861cd10627c584db7b381261e6f32ef693a4382f2c768c6",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     0
+    ],
+    [
+     11,
+     24,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.416666666666666
+    ],
+    [
+     3,
+     4.416666666666666
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.416666666666666
+    ],
+    [
+     5.0,
+     0.0,
+     4.416666666666666
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.038692112364602405,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d8_r1",
+   "excitation": "a",
+   "sha256": "a92fc8ae3c3c776c4e26a91b7299432ae34bed25bdf21fd481364427f5af882d",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     2
+    ],
+    [
+     11,
+     8,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     8.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.024182572467966592,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d8_r1",
+   "excitation": "a0",
+   "sha256": "5cd172b16a4855bb132145e8171a9dc3bfe9c995be2650f2bb928350e5a5582d",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     0
+    ],
+    [
+     11,
+     8,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.25
+    ],
+    [
+     3,
+     4.25
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.25
+    ],
+    [
+     8.0,
+     0.0,
+     4.25
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.024182572467966592,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d8_far3",
+   "excitation": "a",
+   "sha256": "3e7ac4e6520ac83a15719dda5280da836d8e733f383e92693933e9f11e44c5c8",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     2
+    ],
+    [
+     11,
+     24,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     8.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.024182572467966592,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d8_far3",
+   "excitation": "a0",
+   "sha256": "8e7ddc7ed9f4a6e570b665e8167d777c56f5b7deb7a6aac65bb7d214352d4181",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     0
+    ],
+    [
+     11,
+     24,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.416666666666666
+    ],
+    [
+     3,
+     4.416666666666666
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.416666666666666
+    ],
+    [
+     8.0,
+     0.0,
+     4.416666666666666
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.024182572467966592,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d11_r1",
+   "excitation": "a",
+   "sha256": "265f1e981ad64bf500297b8da592bbfdf52f4c8182ba14c6112b2e7f0e813f1e",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     2
+    ],
+    [
+     11,
+     8,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     11.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.017587325923206134,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d11_r1",
+   "excitation": "a0",
+   "sha256": "83230ea480ef3c42b9da32ab79b5bf88ae8f7d39aeb2b61b9a8a17f6b29a6798",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     0
+    ],
+    [
+     11,
+     8,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.25
+    ],
+    [
+     3,
+     4.25
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.25
+    ],
+    [
+     11.0,
+     0.0,
+     4.25
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.017587325923206134,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d11_far3",
+   "excitation": "a",
+   "sha256": "780d0508b8155cfb77ca90dfc51ed59209bb657951ad471e478623ed108ff901",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     2
+    ],
+    [
+     11,
+     24,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     11.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.017587325923206134,
+   "refusal": null
+  },
+  {
+   "stem": "two_node_d11_far3",
+   "excitation": "a0",
+   "sha256": "8191a19eedf64ba722530dd33f00ce7f46e05eec0723a3ae4df772a5b52d9b32",
+   "nec5_dialect": false,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     0
+    ],
+    [
+     11,
+     24,
+     0
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.416666666666666
+    ],
+    [
+     3,
+     4.416666666666666
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.416666666666666
+    ],
+    [
+     11.0,
+     0.0,
+     4.416666666666666
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.017587325923206134,
+   "refusal": null
+  },
+  {
+   "stem": "ctrl_d3_r1",
+   "excitation": "a",
+   "sha256": "c89f9c0b485d91b9448225bde552f7a5b4fe5758356dee039fb9c3ded3d84756",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     8,
+     2
+    ],
+    [
+     11,
+     8,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     3.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.06448683651383778,
+   "refusal": null
+  },
+  {
+   "stem": "ctrl_d3_far3",
+   "excitation": "a",
+   "sha256": "0a7f47fadcc277006bf2c0d2a6cc7917293106fcde6482ee45e3cb91732afb28",
+   "nec5_dialect": true,
+   "parsed_feeds": [
+    [
+     5,
+     24,
+     2
+    ],
+    [
+     11,
+     24,
+     2
+    ]
+   ],
+   "feeds": [
+    [
+     1,
+     4.5
+    ],
+    [
+     3,
+     4.5
+    ]
+   ],
+   "feed_points": [
+    [
+     0.0,
+     0.0,
+     4.5
+    ],
+    [
+     3.0,
+     0.0,
+     4.5
+    ]
+   ],
+   "junction_ports": null,
+   "node_gaps": null,
+   "port_count": 2,
+   "crossing_junctions": 2,
+   "th_min_deg": 0.06448683651383778,
+   "refusal": null
+  }
+ ]
+}
