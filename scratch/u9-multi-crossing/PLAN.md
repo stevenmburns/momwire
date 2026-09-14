@@ -1883,3 +1883,58 @@ Each step runs as `run_e8c.sh <step>`, alone on the box, under
   momwire test), so it holds the same end pairs.
 - **The `cross` path is unchanged.** The momwire step launches after this
   commit.
+
+### C8b and K4's momwire half [2026-09-14]: PASS
+
+- **The run.** `u9-8c-mw.service`, 19:52:30Z–19:57:31Z: 10 momwire `cross`
+  rows (8 symmetric, 2 control), all exit 0, 28.4–32.5 s each.
+- **The reading.** `e5_checks.py momwire`, recorded in `e5_checks_momwire.json`.
+- **C8b: PASS.** The worst reciprocity over the 10 rows is 1.08e-14, against
+  the 1e-9 bar.
+  - **Prediction** (≤ 1e-12): hit.
+  - **On the 8 symmetric rows** it says little more than that the fill kept its
+    symmetry (Amendment 8's caveat). On the control it is K4.
+- **K4, momwire half: PASS.**
+
+  | control | reciprocity | asymmetry |
+  |---|---|---|
+  | r1 | 3.0e-15 | 1.63 |
+  | far × 3 | 1.1e-14 | 1.63 |
+
+  - **Reciprocity:** bar 1e-9, prediction ≤ 1e-12: hit.
+  - **Asymmetry:** bar ≥ 0.1, prediction ≥ 0.3: hit.
+- **K4 is complete: both halves pass.** On a deck where a port swap would show,
+  both engines' extracted Y is reciprocal: NEC-5 to 4e-5, momwire to rounding.
+
+### C8b, C8d and C8c on the `same` step [2026-09-14]: PASS, with one prediction MISS
+
+- **The run.** `u9-8c-same.service`, 19:58:10–20:00:11Z: 4 momwire `same` rows
+  at r1, all exit 0, 28.5–32.1 s each.
+- **The reading.** `e5_checks.py same`, recorded in `e5_checks_same.json`.
+- **C8b on the `same` rows: PASS.** The worst reciprocity is 1.05e-15, against
+  1e-9.
+- **C8d: PASS by its bar.**
+  - On every row the patch reached `_corner_v` 4 times.
+  - It zeroed 2 of those: the two cross-node pairs.
+  - It passed the other 2, the same-node pairs, through.
+  - No loop that reached `_corner_v` zeroed 0 pairs.
+- **The C8d prediction MISSES in part.** It said both loops would be present
+  and zeroing pairs. Only `_ends_and_corner`, the forward loop, reached
+  `_corner_v`. `_ends_and_corner_reversed` never did on these fills.
+  - **What this shows.** These fills evaluate the crossing corner in one forward
+    loop, which holds all four in-plane end pairs. The reversed loop is not
+    called on this path.
+  - **What it means for the re-spell.** Amendment 8's forward-only patch would
+    also have caught every corner pair on these fills. The `_corner_v` patch
+    matches it here; it is not load-bearing on this path. It stays, because it
+    covers both loops on any path.
+  - **Why no unpatched corner hides in the other triangle.** Laptop-builder
+    found no other corner evaluation, and the `same` rows stay reciprocal to
+    1e-15. So whatever fills the other triangle carries the zeroed corner too.
+    That argument has force only if the corner's own effect is not tiny, and
+    e6's guard measures that effect.
+- **C8c: PASS.** sign(Re Z12) agrees between the engines at r1, at every d.
+  Prediction: hit.
+- **Every 8c check has now passed:** K1, K2, K3, K4 (both halves), C8b, C8c and
+  C8d. By the registered order, `e6_table.py` reads Z next. These records are
+  committed before it runs.

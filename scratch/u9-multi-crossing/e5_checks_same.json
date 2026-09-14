@@ -1,0 +1,85 @@
+{
+ "step": "same",
+ "verdict": "PASS",
+ "failures": [],
+ "records": {
+  "c8b_same": [
+   {
+    "stem": "two_node_d3_r1",
+    "reciprocity": 5.764114171091094e-16
+   },
+   {
+    "stem": "two_node_d5_r1",
+    "reciprocity": 1.0458822306119399e-15
+   },
+   {
+    "stem": "two_node_d8_r1",
+    "reciprocity": 5.520850462524697e-16
+   },
+   {
+    "stem": "two_node_d11_r1",
+    "reciprocity": 6.302224401407229e-16
+   }
+  ],
+  "c8d": [
+   {
+    "stem": "two_node_d3_r1",
+    "dropped": 2,
+    "by_loop": {
+     "_ends_and_corner": {
+      "calls": 4,
+      "zeroed": 2
+     }
+    }
+   },
+   {
+    "stem": "two_node_d5_r1",
+    "dropped": 2,
+    "by_loop": {
+     "_ends_and_corner": {
+      "calls": 4,
+      "zeroed": 2
+     }
+    }
+   },
+   {
+    "stem": "two_node_d8_r1",
+    "dropped": 2,
+    "by_loop": {
+     "_ends_and_corner": {
+      "calls": 4,
+      "zeroed": 2
+     }
+    }
+   },
+   {
+    "stem": "two_node_d11_r1",
+    "dropped": 2,
+    "by_loop": {
+     "_ends_and_corner": {
+      "calls": 4,
+      "zeroed": 2
+     }
+    }
+   }
+  ],
+  "c8c": [
+   {
+    "d": 3,
+    "sign_re_z12_agrees": true
+   },
+   {
+    "d": 5,
+    "sign_re_z12_agrees": true
+   },
+   {
+    "d": 8,
+    "sign_re_z12_agrees": true
+   },
+   {
+    "d": 11,
+    "sign_re_z12_agrees": true
+   }
+  ]
+ }
+}

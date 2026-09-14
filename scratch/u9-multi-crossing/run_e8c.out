@@ -28,3 +28,31 @@
 == --stem ctrl_d3_r1 --engine nec5 rc=0 end 2026-09-14T19:49:37Z
 == --stem ctrl_d3_far3 --engine nec5 start 2026-09-14T19:49:37Z
 == --stem ctrl_d3_far3 --engine nec5 rc=0 end 2026-09-14T19:49:38Z
+== --stem two_node_d3_r1 --engine momwire start 2026-09-14T19:52:30Z
+== --stem two_node_d3_r1 --engine momwire rc=0 end 2026-09-14T19:52:58Z
+== --stem two_node_d3_far3 --engine momwire start 2026-09-14T19:52:58Z
+== --stem two_node_d3_far3 --engine momwire rc=0 end 2026-09-14T19:53:27Z
+== --stem two_node_d5_r1 --engine momwire start 2026-09-14T19:53:27Z
+== --stem two_node_d5_r1 --engine momwire rc=0 end 2026-09-14T19:53:56Z
+== --stem two_node_d5_far3 --engine momwire start 2026-09-14T19:53:56Z
+== --stem two_node_d5_far3 --engine momwire rc=0 end 2026-09-14T19:54:26Z
+== --stem two_node_d8_r1 --engine momwire start 2026-09-14T19:54:26Z
+== --stem two_node_d8_r1 --engine momwire rc=0 end 2026-09-14T19:54:57Z
+== --stem two_node_d8_far3 --engine momwire start 2026-09-14T19:54:57Z
+== --stem two_node_d8_far3 --engine momwire rc=0 end 2026-09-14T19:55:28Z
+== --stem two_node_d11_r1 --engine momwire start 2026-09-14T19:55:28Z
+== --stem two_node_d11_r1 --engine momwire rc=0 end 2026-09-14T19:56:00Z
+== --stem two_node_d11_far3 --engine momwire start 2026-09-14T19:56:00Z
+== --stem two_node_d11_far3 --engine momwire rc=0 end 2026-09-14T19:56:33Z
+== --stem ctrl_d3_r1 --engine momwire start 2026-09-14T19:56:33Z
+== --stem ctrl_d3_r1 --engine momwire rc=0 end 2026-09-14T19:57:02Z
+== --stem ctrl_d3_far3 --engine momwire start 2026-09-14T19:57:02Z
+== --stem ctrl_d3_far3 --engine momwire rc=0 end 2026-09-14T19:57:31Z
+== --stem two_node_d3_r1 --engine momwire --corner same start 2026-09-14T19:58:10Z
+== --stem two_node_d3_r1 --engine momwire --corner same rc=0 end 2026-09-14T19:58:39Z
+== --stem two_node_d5_r1 --engine momwire --corner same start 2026-09-14T19:58:39Z
+== --stem two_node_d5_r1 --engine momwire --corner same rc=0 end 2026-09-14T19:59:08Z
+== --stem two_node_d8_r1 --engine momwire --corner same start 2026-09-14T19:59:08Z
+== --stem two_node_d8_r1 --engine momwire --corner same rc=0 end 2026-09-14T19:59:39Z
+== --stem two_node_d11_r1 --engine momwire --corner same start 2026-09-14T19:59:39Z
+== --stem two_node_d11_r1 --engine momwire --corner same rc=0 end 2026-09-14T20:00:11Z

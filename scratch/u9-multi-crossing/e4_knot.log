@@ -12,3 +12,17 @@ nec5 two_node_d11_far3 cross 1.37 s ok
 nec5 two_node_d11_all3 cross 1.41 s ok
 nec5 ctrl_d3_r1 cross 0.66 s ok
 nec5 ctrl_d3_far3 cross 0.76 s ok
+momwire two_node_d3_r1 cross 28.38 s ok
+momwire two_node_d3_far3 cross 28.76 s ok
+momwire two_node_d5_r1 cross 28.96 s ok
+momwire two_node_d5_far3 cross 29.34 s ok
+momwire two_node_d8_r1 cross 30.77 s ok
+momwire two_node_d8_far3 cross 31.19 s ok
+momwire two_node_d11_r1 cross 32.06 s ok
+momwire two_node_d11_far3 cross 32.53 s ok
+momwire ctrl_d3_r1 cross 28.66 s ok
+momwire ctrl_d3_far3 cross 29.02 s ok
+momwire two_node_d3_r1 same 28.48 s ok
+momwire two_node_d5_r1 same 28.95 s ok
+momwire two_node_d8_r1 same 30.69 s ok
+momwire two_node_d11_r1 same 32.12 s ok

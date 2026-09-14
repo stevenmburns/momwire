@@ -1,0 +1,61 @@
+{
+ "step": "momwire",
+ "verdict": "PASS",
+ "failures": [],
+ "records": {
+  "c8b": [
+   {
+    "stem": "two_node_d3_r1",
+    "reciprocity": 6.562405945704392e-16
+   },
+   {
+    "stem": "two_node_d3_far3",
+    "reciprocity": 2.2717199113269415e-15
+   },
+   {
+    "stem": "two_node_d5_r1",
+    "reciprocity": 9.533293619140021e-16
+   },
+   {
+    "stem": "two_node_d5_far3",
+    "reciprocity": 3.041552974971686e-15
+   },
+   {
+    "stem": "two_node_d8_r1",
+    "reciprocity": 1.068322789441556e-15
+   },
+   {
+    "stem": "two_node_d8_far3",
+    "reciprocity": 7.318139952550608e-16
+   },
+   {
+    "stem": "two_node_d11_r1",
+    "reciprocity": 4.007292404288784e-16
+   },
+   {
+    "stem": "two_node_d11_far3",
+    "reciprocity": 2.0779927972613924e-15
+   },
+   {
+    "stem": "ctrl_d3_r1",
+    "reciprocity": 3.0000813677974473e-15
+   },
+   {
+    "stem": "ctrl_d3_far3",
+    "reciprocity": 1.0831425163080496e-14
+   }
+  ],
+  "check4_momwire": [
+   {
+    "stem": "ctrl_d3_r1",
+    "reciprocity": 3.0000813677974473e-15,
+    "asymmetry": 1.6287906278163975
+   },
+   {
+    "stem": "ctrl_d3_far3",
+    "reciprocity": 1.0831425163080496e-14,
+    "asymmetry": 1.6279562948528519
+   }
+  ]
+ }
+}
