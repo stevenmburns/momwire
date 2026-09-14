@@ -624,9 +624,12 @@ def _pair_extents_below(x, y, d_b, rows=256):
     chunks, the squared distance is accumulated in place, and the angle is
     ONE atan at the end: on the closed quadrant hh, rho >= 0 the map
     atan2(hh, rho) is monotone in hh / rho, so the minimum angle is the
-    minimum ratio. rho = 0 only where a node meets itself, where hh > 0 and
-    the ratio is +inf — never the minimum, so the divide is ignored. Same
-    two numbers to 1e-12 as the all-pairs form (gated).
+    minimum ratio. rho = 0 only where a node meets itself or a coincident one.
+    Below the plane hh > 0 there and the ratio is +inf, never the minimum; a
+    node ON the interface (a vertical's base, momwire#1036) makes it 0/0, and
+    that pair has no angle at all. Either way the pair is dropped, as the C++
+    twin drops it, never the whole chunk. Same two numbers to 1e-12 as the
+    all-pairs form over the pairs that have an angle (gated).
     """
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
@@ -649,8 +652,12 @@ def _pair_extents_below(x, y, d_b, rows=256):
         hh = d_b[i0:i1, None] + d_b[None, :]
         r1sq_max = max(r1sq_max, float(np.max(rho2 + hh * hh)))
         np.sqrt(rho2, out=rho2)
-        with np.errstate(divide="ignore"):
-            ratio_min = min(ratio_min, float(np.min(hh / rho2)))
+        # rho = 0 pairs are dropped before the minimum (see the docstring): an
+        # interface node's 0/0 must not reach `np.min`, which would carry the
+        # NaN to the chunk and let the outer `min` discard every real pair in it.
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.where(rho2 > 0.0, hh / rho2, np.inf)
+        ratio_min = min(ratio_min, float(np.min(ratio)))
     return float(np.sqrt(r1sq_max)), float(np.arctan(ratio_min))
 
 

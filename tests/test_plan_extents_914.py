@@ -176,3 +176,41 @@ def test_g914_1c_no_divide_warning_escapes_either_path(monkeypatch):
     _numpy_only(monkeypatch)
     with np.errstate(divide="raise"):
         _pair_extents_below(x, y, d_b)
+
+
+def _well_defined_pairs(x, y, d_b):
+    """The all-pairs numbers over the pairs whose angle is defined: a pair at
+    rho = 0 AND hh = 0 (a node ON the interface meeting itself, or a coincident
+    one) has none, and the C++ twin drops exactly those."""
+    rho = np.hypot(x[:, None] - x[None, :], y[:, None] - y[None, :])
+    hh = d_b[:, None] + d_b[None, :]
+    defined = ~((rho == 0.0) & (hh == 0.0))
+    r1 = float(np.max(np.hypot(rho, hh)))
+    return r1, float(np.min(np.arctan2(hh[defined], rho[defined])))
+
+
+def test_1036_a_node_on_the_interface_drops_its_own_pair_not_the_chunk(monkeypatch):
+    """momwire#1036: a vertical's base node sits at zero depth, so its pair
+    with itself (and with a coincident plane-level node) is 0/0. The numpy
+    fallback only ignored `divide`, so it warned "invalid value encountered in
+    divide" on the buried radial vertical. Worse, `np.min` carried the NaN to
+    the chunk and the outer `min` then discarded the WHOLE chunk, real pairs
+    included: at one chunk the shallowest angle read pi/2."""
+    x, y, d_b = _cloud(40, seed=1036)
+    x = np.concatenate([x, [3.0, 3.0]])
+    y = np.concatenate([y, [4.0, 4.0]])
+    d_b = np.concatenate([d_b, [0.0, 0.0]])
+    r1_ref, th_ref = _well_defined_pairs(x, y, d_b)
+    assert th_ref < np.pi / 4  # the real pairs carry the answer
+
+    if _bs._HAVE_PLAN_EXTENTS_ACCEL:
+        r1_cpp, th_cpp = _acc.pair_extents_below(x, y, d_b)
+        assert abs(r1_cpp - r1_ref) <= 1e-12 * r1_ref
+        assert abs(th_cpp - th_ref) <= 1e-12 * th_ref
+
+    _numpy_only(monkeypatch)
+    for rows in (1, 7, 4096):
+        with np.errstate(divide="raise", invalid="raise"):
+            r1, th = _pair_extents_below(x, y, d_b, rows=rows)
+        assert abs(r1 - r1_ref) <= 1e-12 * r1_ref, (rows, r1, r1_ref)
+        assert abs(th - th_ref) <= 1e-12 * th_ref, (rows, th, th_ref)

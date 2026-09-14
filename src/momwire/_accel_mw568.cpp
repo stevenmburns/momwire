@@ -1315,26 +1315,20 @@ static py::tuple transmitted_field_proj_batch(
 // duplicated node). There hh > 0 for any buried cloud and the ratio is +inf,
 // never the minimum — the divide is deliberate and its inf is harmless.
 //
-// If hh is ALSO zero — a node exactly ON the interface — the quotient is
-// 0/0 = NaN, and the two paths then DISAGREE. That is measured, and it is out
-// of contract rather than a defect in either:
+// If hh is ALSO zero — a node exactly ON the interface, such as a vertical's
+// base node — the quotient is 0/0 = NaN. That pair has no angle, and this twin
+// drops it (a NaN compare is false) and returns the minimum over the
+// well-defined pairs.
 //
-//   * the reference's `np.min` propagates the NaN to the CHUNK result, and the
-//     outer Python `min(ratio_min, nan)` then evaluates `nan < inf` as False
-//     and keeps inf — so the whole chunk is discarded, real pairs included,
-//     and a two-node cloud returns atan(inf) = pi/2;
-//   * this twin drops only the offending PAIR (a NaN compare is false), and
-//     returns the minimum over the well-defined ones.
-//
-// Neither answer is meaningful, because hh == 0 means a node at zero depth and
-// `_pair_extents_below` is documented for a buried cloud ("rho = 0 only where
-// a node meets itself, where hh > 0"). The grazing refusal upstream rejects
-// such a deck before this is reached. It is written down because an earlier
-// draft of this twin added NaN propagation "to match numpy" on the assumption
-// that numpy propagated — it does not, and the assumption was the only thing
-// making the physical cases disagree. The gate below covers d_b > 0, which is
-// the whole contract; this paragraph is here so the next reader does not
-// rediscover it from a confusing diff.
+// The numpy reference used to disagree here: its `np.min` carried the NaN to
+// the CHUNK result, and the outer Python `min(ratio_min, nan)` kept inf, so
+// the whole chunk was discarded, real pairs included. It also warned, which
+// is how a user found it on the buried radial vertical (momwire#1036). It now
+// masks rho = 0 pairs before the minimum, so the two paths agree on the pair
+// rule too; `test_1036_a_node_on_the_interface_drops_its_own_pair_not_the_chunk`
+// gates both. An earlier draft of this twin added NaN propagation "to match
+// numpy" on the assumption that numpy propagated — it did not, and that
+// assumption was the only thing making the physical cases disagree.
 
 static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
                                                         py::array::forcecast> x,
