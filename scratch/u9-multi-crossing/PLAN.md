@@ -335,3 +335,46 @@ To Laptop-builder:
     k_m == k_p.
 - **Tooling.** `b_collapse.py` and `run_b.sh`. The runner stops if the guards
   miss, so no (b) Z is written behind a failed guard.
+
+## (b) Results [2026-09-14]
+
+- **Amendment 1 and the tooling** landed at fcf4dca, before the run.
+- **The run** was `u9-b-collapse.service` on fcf4dca, 15:50:24–15:50:32Z. The
+  records are the `b_*.json` files, the `b_*.log` files and `run_b.out`.
+- **Why it took 8 s.** The two-node ε̃ = 1 fill is about 0.2 s per solve, and
+  the truth about 0.1 s.
+
+### Guards
+
+Every guard was read before any Z, and all of them hold.
+
+| guard | result |
+|---|---|
+| G-b0 | The real projection on the single-node deck returns 1 call, of the shape P2 returns, with max \|value\| exactly 0.0. |
+| G-b1 | The single-node Z, 17.557770975310156 − 758.501352375456j, is `array_equal` under P3 alone and under P1 + P2 + P3. P3 was called, and 0 cross-node pairs were seen on the single-node deck. |
+| G-b2 | k²·V against e^{−jkR}/R is 1.1e-16 at 1 m and 4.9e-16 at 12 m. |
+| G-b3 | Every run makes 1 call with 2 cross-node pairs. |
+| P2 | At 12 m the clamp engaged, over an unclamped θ_min of 0.01612°, and the projection was called once with k_m == k_p. At 1 m θ_min is 0.1935°, so the clamp was not needed. |
+
+### Predictions
+
+| id | result |
+|---|---|
+| **PB1** | **HIT.** `cross` at 12 m, spellings A and B. Worst entry 2.024e-4 Ω (Z11 and Z22), 247× under the 0.05 Ω bar. Z12 is within 1.73e-6 Ω. A: Z11 = 17.5125 − 758.4989j against the truth's 17.5125 − 758.4987j, and Z12 = 8.1876 − 9.0050j on both. B reads the same with Z12's sign flipped, which is the reversed port polarity on both sides. |
+| **PB2** | **MISS of the band, low.** `same` at 12 m: \|Z12 − Z12_truth\| = 4.6963 Ω on both spellings, against the registered [5, 100] Ω. The estimate assumed an O(1) node current under the port drive. 4.70 Ω is consistent with about 0.37 of the port current at the node, but that ratio is not measured. The omission still misses the truth by 94× the bar, and by 2.7e6× the `cross` residual on Z12. So the gate sees the corner, and the vacuity rule ("PB1 hits, PB2 does not miss") is not triggered. |
+| **PB3** | **Half HIT.** Spelling A's `blind` Z is bitwise equal to `cross`, as predicted. Spelling B's band **misses low**: \|ΔZ12\| = 9.386 Ω against [10, 200] Ω. The structural half holds: 9.386 / 4.696 = 1.999, twice the omission, as the sign flip says it must be. So orientation is visible. |
+| **PB4** | **HIT.** `cross` at 1 m, A and B: worst entry 2.031e-4 Ω. |
+| **PB5** | **HIT.** \|Z12 − Z21\| / \|Z12\| ≤ 1.3e-15 on every patched solve and every truth. |
+
+### Reading, as registered
+
+- **PB1 holds on both spellings, and the gate is not vacuous.**
+- **PB2's and PB3's magnitude bands both missed low, by the same 6 %.** Both
+  misses come from the same node-current estimate, and they are reported as
+  misses.
+- **My GO rule was written as "PB1 and PB2 both hold".** Read literally, PB2's
+  number did not hold. Read as intended, it held: PB2 exists to show the term
+  matters, and the term moves Z12 by 4.70 Ω. I read this as **GO** and say so
+  in the report, so Laptop-builder and Steve can read it the other way.
+- **PB4 hits,** so the narrowed refusal's minimum node separation is 1 m, the
+  smallest separation gated.
