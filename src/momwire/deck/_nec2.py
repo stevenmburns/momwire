@@ -382,7 +382,15 @@ class _Nec2Parser:
             self._sources = []
             self._sources_stale = False
         tag, seg = card.i(1), card.i(2)
-        self._sources.append((tag, seg, complex(card.f(4), card.f(5))))
+        voltage = complex(card.f(4), card.f(5))
+        if voltage == 0:
+            # NEC drives a voltage source written with zero volts at 1 V
+            # (momwire#1041). Measured on a dipole: `EX 0 1 6 0 0. 0.` and
+            # `EX 0 1 6 1 0` print V = 1.0 and the 1 V impedance on nec2c 1.3.1
+            # and on the ae6ty oracle alike. Taken literally, the port is not
+            # driven and its impedance reads 0/0 (momwire#962).
+            voltage = 1 + 0j
+        self._sources.append((tag, seg, voltage))
 
     # -- EK (spec ``#ek--extended-thin-wire-kernel``) -----------------------
 

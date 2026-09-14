@@ -477,6 +477,16 @@ def test_both_source_kinds_and_their_complex_drive():
     assert voltage.kind == 0
 
 
+def test_a_zero_voltage_source_is_driven_at_one_volt():
+    """momwire#1041: NEC-5 (x13) drives an `EX 0` whose voltage fields are zero
+    at 1 V. The Moxon deck's `EX 0 1 18 2 0 0` prints V = 1.0 and Z =
+    54.832 + 3.001j, identical to an explicit `1 0`. The current source's zero
+    was not measured, so `EX 4` keeps its fields as written."""
+    text = DIPOLE.replace("EX 4,1,6,0,1.414214,0.", "EX 0,1,6,0,0.,0.")
+    (source,) = parse_nec5(text).sources
+    assert (source.kind, source.drive) == (0, 1 + 0j)
+
+
 def test_a_phased_array_is_several_ex_cards():
     """The 40 m four-square: 0 / -90 / -90 / -180, no network at all."""
     parsed = deck("0031")

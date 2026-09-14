@@ -756,11 +756,18 @@ class _Nec5Parser:
                 f"serves EX 4 (elementary current source) and EX 0 (voltage source) "
                 f"— the two EZNEC's source-type setting picks between"
             )
+        drive = _complex(card, 4)
+        if kind == 0 and drive == 0:
+            # NEC-5 (x13) drives a zero-volt voltage source at 1 V: the Moxon
+            # deck's `EX 0 1 18 2 0 0` prints V = 1.0 and the 1 V impedance
+            # (momwire#1041). A zero current source (EX 4) was not measured,
+            # so its fields stay as written.
+            drive = 1 + 0j
         self.sources.append(
             Nec5Source(
                 kind=kind,
                 at=self._address(card, 1),
-                drive=_complex(card, 4),
+                drive=drive,
                 option=card.i(3),
             )
         )

@@ -125,6 +125,36 @@ def test_a_centre_snapping_basis_refuses_a_fed_deck_by_name(basis):
     assert "names a segment CENTRE" in message
 
 
+ZERO_VOLT_DIPOLE = DIPOLE.replace("EX 0 1 5 0 1. 0.", "EX 0 1 5 0 0. 0.")
+
+
+@pytest.mark.parametrize(
+    "ex",
+    ["EX 0 1 5 0 0. 0.", "EX 0 1 5 1 0", "EX 0 1 5 0"],
+    ids=["explicit-zero", "moxon-five-fields", "voltage-absent"],
+)
+def test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does(ex):
+    """momwire#1041: NEC drives an `EX 0` whose voltage fields are zero at 1 V.
+    Measured 2026-09-14 on a dipole, `EX 0 1 6 0 0. 0.` and `EX 0 1 6 1 0` print
+    V = 1.0 and the same impedance as `1. 0.` on both nec2c 1.3.1 and SimNEC's
+    ae6ty build, which is the portal's byte oracle. NEC-5 (x13) does the same.
+    The reader took the zero literally, so the port was not driven."""
+    text = DIPOLE.replace("EX 0 1 5 0 1. 0.", ex)
+    assert build_solver(parse(text)).ports.voltages == ((1 + 0j,),)
+
+
+def test_a_zero_voltage_deck_solves_to_the_one_volt_impedance():
+    """momwire#1041, end to end through this reader: a zero-volt deck used to
+    reach the solver undriven, and its impedance read 0/0 (nan+nanj here; the
+    same shape momwire#962 found as z = [inf, 0] on four corpus decks, reached
+    there through antennaknobs' importer rather than this reader)."""
+    z_zero, _ = build_solver(parse(ZERO_VOLT_DIPOLE)).solver.compute_impedance()
+    z_one, _ = build_solver(parse(DIPOLE)).solver.compute_impedance()
+    z_zero, z_one = np.ravel(z_zero), np.ravel(z_one)
+    assert np.all(np.isfinite(z_zero)), z_zero
+    np.testing.assert_array_equal(z_zero, z_one)
+
+
 def test_the_default_basis_is_the_degree_2_bspline():
     built = build_solver(parse(DIPOLE))
     assert built.basis == "bspline"
