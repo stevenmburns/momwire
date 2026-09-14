@@ -625,6 +625,51 @@ registered at 8c0cdf9):
   - **#935's refused dipole depths:** 0.5 and 0.8 mm (0.0097° and 0.0155°).
   - **#838's BLE grid refusal:** at 0.0125°.
 
+### (c) results [2026-09-14]
+
+- **The run.** `u9-c-ladder.service` on src 96dd5be. The ladder ran
+  17:05:06–17:07:05Z; PC5 ran 17:07:05–17:08:18Z and exited 1.
+- **Records.** `c_ladder.json`, `c_ladder.log`, `c_pc5.log`, `run_c.out`.
+- **Single-node print.** Z = 169.7756 − 82.2800j (0.95 s).
+
+| d | θ_min | Z11 | Z12 | \|Z11 − Z_single\| | \|Z12\| | \|Z12 − Z21\|/\|Z12\| | solve |
+|---|---|---|---|---|---|---|---|
+| 3 m | 0.0645° | 169.5766 − 83.2830j | 67.0946 − 8.1693j | 1.0225 | 67.590 | 2.2e-16 | 27.5 s |
+| 5 m | 0.0387° | 169.2952 − 82.8829j | 53.2161 − 17.8160j | 0.7709 | 56.119 | 1.5e-15 | 28.1 s |
+| 8 m | 0.0242° | 169.2964 − 82.3938j | 34.8399 − 26.9724j | 0.4925 | 44.061 | 4.6e-16 | 30.3 s |
+| 11 m | 0.0176° | 169.4824 − 82.1325j | 18.8171 − 30.5152j | 0.3283 | 35.851 | 8.9e-16 | 31.4 s |
+
+| id | result |
+|---|---|
+| **PC1** | **HIT.** Every rung is served. |
+| **PC2** | **HIT.** \|Z11 − Z_single\| is non-increasing, and 0.328 Ω at 11 m, ≤ 1 Ω. Z22 agrees with Z11 to 1e-11. |
+| **PC3** | **The decreasing half HITS:** 67.59 → 56.12 → 44.06 → 35.85 Ω. **The widest-rung band MISSES:** 35.85 Ω against [3, 30] Ω. |
+| **PC4** | **HIT.** ≤ 1.5e-15. |
+| **PC5** | **NOT READ.** The registered mesh step, every edge count × 3, is itself refused by the grazing floor. Refining the node-adjacent edges puts the rises' shallowest nodes 0.56 mm deep, θ = 0.0081° at 8 m. The L2 and L2p Z were computed, but the refusal came before anything was recorded. |
+
+**Findings.**
+- **Refining the node pushes a served deck back under the floor.** A served
+  two-node deck sits at the table's edge on the node-mesh axis: refining the
+  node-adjacent segments lowers h_node, and θ_min falls under the floor again.
+  This is reported, not decided here.
+- **Cost.** A two-node solve takes 27.5–31.4 s against 0.95 s for the single
+  node, with 110 MB peak RSS. Every rung reads the low band. A served two-node
+  solve therefore belongs in the slow lane, not the PR lane.
+
+## Amendment 4 (2026-09-14, before PC5 is re-run)
+
+- **PC5's mesh step becomes the FAR mesh × 3:** every edge count × 3 except
+  each wire's node-adjacent edge.
+  - **Why that edge is kept.** It sets h_node, so keeping it leaves θ_min
+    unchanged.
+  - **Why this axis.** It is the far-mesh axis `crossing_deck`'s own comment
+    names, where degree 2 moves 0.36 Ω at × 3.
+- **The record adds** the far-×3 deck's preflight, with a guard that it is
+  served.
+- **Otherwise unchanged.** PC5's prediction and metric stand: max over the
+  entries of \|Z_L2p − Z_L2\| ≤ 1e-2 × max over the entries of
+  \|Z_far×3 − Z_L2\|.
+
 ### Banking (b) on the production path (registered before the test runs)
 
 **The test.** `test_g524_8_two_node_eps1_collapse`, marked slow and crossgate,
