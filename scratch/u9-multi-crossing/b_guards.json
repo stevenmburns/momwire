@@ -1,0 +1,38 @@
+{
+ "mode": "guards",
+ "momwire": "/home/smburns/stevenmburns/momwire-wt-u9/src/momwire/__init__.py",
+ "G_b0": {
+  "calls": 1,
+  "shapes_match": true,
+  "max_abs": 0.0,
+  "ok": true
+ },
+ "G_b1": {
+  "z_unpatched": [
+   [
+    17.557770975310156,
+    -758.501352375456
+   ]
+  ],
+  "p3_equal": true,
+  "p123_equal": true,
+  "p3_called": 1,
+  "cross_pairs_on_one_node": 0,
+  "seconds": 0.1,
+  "ok": true
+ },
+ "G_b2": {
+  "rows": [
+   {
+    "d": 1.0,
+    "rel": 1.1102235797365301e-16
+   },
+   {
+    "d": 12.0,
+    "rel": 4.873060268373702e-16
+   }
+  ],
+  "ok": true
+ },
+ "ok": true
+}
