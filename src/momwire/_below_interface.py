@@ -112,9 +112,10 @@ BURIED_DEPTH_REFUSAL = (
     "integral returns and the single e^(-j k_m |z'|) divide-out the whole "
     "ladder architecture rests on no longer flattens it (momwire#524 phase 0 "
     "measured >33 nodes over the deep range at every soil, and a spherical-"
-    "phase divide is no better). Bury the wire shallower, or extend the "
-    "ladder — about 8 extra rungs per additional quarter lambda_m, each rung "
-    "a full (R, theta) fill"
+    "phase divide is no better). Bury the wire shallower: this cap is "
+    "permanent (momwire#666), because extending the ladder would cost about "
+    "8 extra rungs per additional quarter lambda_m, each rung a full "
+    "(R, theta) fill"
 )
 BURIED_CROSS_GRAZING_REFUSAL = (
     "this deck's cross-medium pairs reach an observer elevation of "

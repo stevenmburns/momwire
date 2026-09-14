@@ -501,8 +501,8 @@ _ENRICHMENT_WIRE_LOADING_REFUSAL = (
     "loading overlap term"
 )
 _ENRICHMENT_EXTENDED_KERNEL_REFUSAL = (
-    "extended_kernel=True + use_singular_enrichment=True not "
-    "supported yet — the enrichment DOFs bypass the moment "
+    "extended_kernel=True + use_singular_enrichment=True is refused, "
+    "permanently (momwire#271) — the enrichment DOFs bypass the moment "
     "kernels entirely (they carry their own Φ_sing "
     "quadrature), they exist only at K >= 3 junctions where "
     "NEC's own gating turns EK off, and the O(a²) tube "

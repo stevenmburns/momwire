@@ -738,6 +738,8 @@ def test_gu3_6_a_source_deeper_than_the_ladder_refuses_with_the_cost():
     msg = str(ex.value)
     assert "two-ray" in msg and "extra rungs per additional quarter" in msg
     assert "momwire#524 phase 0" in msg
+    # momwire#666 decided the cap is permanent; the cost stays as the reason.
+    assert "permanent (momwire#666)" in msg
 
 
 def test_gu3_6_the_regimes_do_not_collide_in_the_grid_cache():

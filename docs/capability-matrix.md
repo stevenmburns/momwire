@@ -158,7 +158,7 @@ renders in host dialogs.
 
 - `BSplineSolver` `extended_kernel+singular_enrichment`, `HMatrixSolver` `extended_kernel+singular_enrichment`, `ArrayBlockSolver` `extended_kernel+singular_enrichment`
 
-  > extended_kernel=True + use_singular_enrichment=True not supported yet — the enrichment DOFs bypass the moment kernels entirely (they carry their own Φ_sing quadrature), they exist only at K >= 3 junctions where NEC's own gating turns EK off, and the O(a²) tube expansion was never derived for the s^(-1/2) shapes (stevenmburns/momwire#249 follow-up C)
+  > extended_kernel=True + use_singular_enrichment=True is refused, permanently (momwire#271) — the enrichment DOFs bypass the moment kernels entirely (they carry their own Φ_sing quadrature), they exist only at K >= 3 junctions where NEC's own gating turns EK off, and the O(a²) tube expansion was never derived for the s^(-1/2) shapes (stevenmburns/momwire#249 follow-up C)
 
 - `BSplineSolver` `per_wire_radius+singular_enrichment`, `HMatrixSolver` `per_wire_radius+singular_enrichment`, `ArrayBlockSolver` `per_wire_radius+singular_enrichment`
 
