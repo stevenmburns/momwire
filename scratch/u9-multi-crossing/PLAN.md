@@ -549,6 +549,16 @@ the 5 m rung, with the predictions in the PR-gates table.
   - `c_ladder.py` for (c) and PC5.
 - **PC5's metric,** fixed here before the run: the max over the four Z entries
   of \|Z_L2p − Z_L2\|, against the max over the four of \|Z_mesh×3 − Z_L2\|.
+- **Tooling defect, found before any branch run and fixed.**
+  - **What was wrong.** `g1_single_node.py` recorded `low_band_filled` from
+    `SommerfeldGridBelow._band_lo_filled`, which is true only when all three R1
+    zones' low-band regions are filled. So a deck that never reaches the far
+    zone read False even where its low band was filled; #935's 3 mm dipole, at
+    0.0582°, read False on main.
+  - **The same flaw** was in `c_ladder.py`'s PC5 low-band guards.
+  - **The fix.** Both now ask whether ANY low-band region is filled.
+  - **What it changes.** Main's first G1 run solved every deck and its Z
+    values stand. It was re-run so that the field is right.
 
 ### (d): Amendment 3, before any (d) run
 

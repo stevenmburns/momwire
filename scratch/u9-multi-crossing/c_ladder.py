@@ -88,7 +88,7 @@ def zmat(build):
             )
         )
         for g in grids
-        if g._band_lo_filled
+        if any(g._regions[i]["filled"] for i in g._band_lo_idx)
     ]
     return np.linalg.inv(np.atleast_2d(y)), round(dt, 2), lo
 
