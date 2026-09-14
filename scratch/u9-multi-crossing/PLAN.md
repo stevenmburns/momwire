@@ -779,6 +779,31 @@ The same commit carries two further changes:
   lane (4.2 s call), and the 18-point sweep moves to the slow lane as
   `test_the_floor_is_served_on_every_spec_soil`.
 
+### G5, the slow lane [2026-09-14]: one MISS, and a STOP by GT3's rule
+
+- **The run.** `u9-g5.service` on src 4d8241b, a clean tree, 17:16:21–17:42:00Z.
+- **The result.** **346 passed, 1 failed** (`g5_slow.log`).
+- **The failure.** `tests/test_buried_serve_553.py::test_gu5_6_a_grazing_buried_pair_refuses_with_the_lateral_wave`
+  expects a grazing-floor refusal and got a served solve. The same test passes
+  on main (the u9 tree, whose src is main): 1 passed in 0.63 s.
+- **Cause.**
+  - **Geometry.** The test's pair is a 5 m radial 1 mm deep, θ =
+    atan(0.002/5) = 0.0229°. That was under the 0.05° floor, and is above
+    L2's 0.016667°.
+  - **Why the search missed it.** The file pins the angle through geometry and
+    never names `_SOMM_BELOW_TH_MIN_DEG`, `_MAX_TAIL_PANELS` or the low band.
+    GT3's search for re-pin sites was by those names, so it did not find this
+    test.
+- **By GT3's rule this is a MISS and a STOP.** A failing test outside the files
+  that name the floor, the budget, the low band or the second node.
+  - **What stops.** No src edit, re-pin included, until this has been reported
+    and acknowledged.
+  - **What continues.** Crossgate, which was already running, and the
+    fill-cost timing. Neither touches this test, and a test-only re-pin would
+    not change any timed code path.
+  - **The re-pin that will be proposed.** Depth 0.5 mm, θ = 0.0115°, under L2's
+    floor. The docstring's "1 deg floor" is stale and gets corrected with it.
+
 ## Amendment 5 (2026-09-14): fill-cost timing, registered before any timing run
 
 **Steve's instruction (relayed by Laptop-builder).**
