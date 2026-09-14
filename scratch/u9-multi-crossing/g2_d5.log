@@ -1,0 +1,1 @@
+{"mode": "g2", "momwire": "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/__init__.py", "d": 5.0, "block_shape": [64, 64], "block_rel": 1.3109878749826722e-18, "gate": 1e-06, "prediction": 1e-07, "seconds": {"dense": 1.06, "split": 0.35}}
