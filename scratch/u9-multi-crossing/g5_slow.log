@@ -1,0 +1,139 @@
+/home/smburns/stevenmburns/antennaknobs/.venv/bin/python -m pytest tests/ -m "slow and not memgate and not crossgate"
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/smburns/stevenmburns/momwire-wt-u9src
+configfile: pyproject.toml
+plugins: anyio-4.14.1, xdist-3.8.0
+created: 4/4 workers
+4 workers [347 items]
+
+........................................................................ [ 20%]
+.........................F.............................................. [ 41%]
+........................................................................ [ 62%]
+........................................................................ [ 82%]
+...........................................................              [100%]
+=================================== FAILURES ===================================
+________ test_gu5_6_a_grazing_buried_pair_refuses_with_the_lateral_wave ________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python
+
+    @pytest.mark.slow
+    def test_gu5_6_a_grazing_buried_pair_refuses_with_the_lateral_wave():
+        """Depth 1 mm over a 5 m radial is theta = 0.023 deg — under the 1 deg
+        floor the below/below surfaces are tabulated from."""
+        s = BSplineSolver(
+            wires=[_mono(), _radial(length=5.0, depth=0.001)],
+            n_per_edge_per_wire=[[15], [10]],
+            feeds=[(0, 5.0, 1 + 0j)],
+            wavelength=WL7,
+            wire_radius=0.001,
+            ground_z=0.0,
+            ground_eps=SOIL_A,
+            ground_model="sommerfeld",
+        )
+>       with pytest.raises(ValueError) as exc:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_buried_serve_553.py:686: Failed
+=============================== warnings summary ===============================
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_sommerfeld_ground.py::test_the_near_image_fix_reaches_the_sommerfeld_route_too
+tests/test_sommerfeld_ground.py::test_the_sommerfeld_remainder_order_is_keyed_on_the_fast_route
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (1 element, 1 distinct shape) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (2 elements, 2 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (6 elements, 6 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (5 elements, 5 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_eznec_basis_choice.py::test_each_basis_accepts_exactly_the_decks_the_table_names[arrayblock]@eznec_corpus
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (3 elements, 3 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_buried_quadrature_default_760.py::test_the_resolved_default_lands_inside_a_stated_bar
+tests/test_buried_quadrature_default_760.py::test_the_shipped_default_would_not_have
+tests/test_buried_quadrature_default_760.py::test_the_error_shrinks_monotonically_with_order
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_buried_quadrature_default_760.py:100: CoarseCrossingNode: crossing node: wire 0's end is the below member, and the finest mesh within 150 mm of the node is 50.0 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    ).compute_impedance()[0]
+
+tests/test_extended_kernel_bspline.py::test_d_family_matches_brute_force_quadrature_full_sweep
+  /home/smburns/stevenmburns/antennaknobs/.venv/lib/python3.14/site-packages/scipy/integrate/_quadpack_py.py:1286: IntegrationWarning: The occurrence of roundoff error is detected, which prevents 
+    the requested tolerance from being achieved.  The error may be 
+    underestimated.
+    quad_r = quad(f, low, high, args=args, full_output=self.full_output,
+
+tests/test_crossing_serve_524.py::test_g524_4_soil_a_crossing_anchor
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_crossing_serve_524.py:781: CoarseCrossingNode: crossing node: wire 0's end is the below member, and the finest mesh within 150 mm of the node is 50.0 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    ).compute_impedance()
+
+tests/test_near_interface_columns_accel_899.py::test_g899c_10_a_served_crossing_deck_solves_the_same_both_machines
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_near_interface_columns_accel_899.py:374: CoarseCrossingNode: crossing node: wire 4's end is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z_in, _ = BSplineSolver(**build).compute_impedance()
+
+tests/test_below_reach_preflight_1135.py::test_g1135_4_the_preflight_agrees_with_the_fill
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_below_reach_preflight_1135.py:116: CoarseCrossingNode: crossing node: wire 4's end is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    BSplineSolver(**build).compute_impedance()
+
+tests/test_below_reach_preflight_1135.py::test_g1135_4_the_preflight_agrees_with_the_fill
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/bspline.py:4226: LinAlgWarning: An ill-conditioned matrix detected: slice 0 has rcond = 7.554324142095545e-18.
+    return scipy.linalg.solve(Z, v, overwrite_a=overwrite)
+
+tests/test_near_interface_columns_895.py::test_g895_9_a_served_crossing_deck_solves_the_same_both_routes
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_near_interface_columns_895.py:318: CoarseCrossingNode: crossing node: wire 4's end is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z_in, _ = BSplineSolver(**build).compute_impedance()
+
+tests/test_seam_crossing_667.py::test_portal_splits_one_wire_at_the_plane_and_matches_the_split_spelling
+tests/test_seam_crossing_667.py::test_portal_serves_the_split_spelling_under_ge_minus_one_too
+tests/test_seam_crossing_667.py::test_portal_serves_the_split_spelling_and_matches_the_native_api
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_seam_crossing_667.py:71: CoarseCrossingNode: crossing node: wire 3's start is the above member, and the finest mesh within 150 mm of the node is 459.0 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    code = portal_main([], io.StringIO(deck), out, io.StringIO())
+
+tests/test_seam_crossing_667.py::test_portal_serves_the_split_spelling_and_matches_the_native_api
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_seam_crossing_667.py:106: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 459.0 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z, _ = s.compute_impedance()
+
+tests/test_sg_mixed_980_d2.py::test_the_connected_screen_now_solves_and_lands_where_bspline_does
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_sg_mixed_980_d2.py:289: CoarseCrossingNode: crossing node: wire 4's start is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    zb = complex(_connected_screen(cls=BSplineSolver, degree=1).compute_impedance()[0])
+
+tests/test_sg_mixed_980_d2.py::test_the_grazing_screen_serves_because_a_crossing_deck_builds_no_grid
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_sg_mixed_980_d2.py:317: CoarseCrossingNode: crossing node: wire 4's start is the above member, and the finest mesh within 150 mm of the node is 667.5 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, from L_min = 40.0 mm at the node (wire 4 leaves the node on a 5.0 % slope, so the stand-off floor forbids anything shorter: a vertex closer than that to the node sits below h = 2.00 mm, that wire's floor, and the fill is REFUSED by name; momwire#865/#926) growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. Note this is coarser than the ~6 mm this advisory asks for on a level arm, so on this slope the node cannot be graded to the bar at all: raising n_qp_pair is the lever that is left. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    _connected_screen(cls=BSplineSolver, degree=1, **deck).compute_impedance()[0]
+
+tests/test_somm_aca_stagnation_973.py::test_g984_the_catalog_verdicts_are_what_the_threshold_promises[loops.skyloop_lmatch-True]
+tests/test_somm_aca_stagnation_973.py::test_g984_the_catalog_verdicts_are_what_the_threshold_promises[wire.rhombic-False]
+  /home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/hmatrix.py:2409: RuntimeWarning: invalid value encountered in divide
+    z_per = all_voltages / currents
+
+tests/test_tilted_crossing_936.py::test_g936_5_the_op_deck_lands_in_the_contact_class_of_nec5
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_tilted_crossing_936.py:233: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 917.2 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z, _ = BSplineSolver(**_op_deck(45.0)).compute_impedance()
+
+tests/test_tilted_crossing_936.py::test_g936_6_the_lean_drift_is_a_residual_not_a_step
+  /home/smburns/stevenmburns/momwire-wt-u9src/tests/test_tilted_crossing_936.py:259: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 917.2 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    complex(BSplineSolver(**_op_deck(a)).compute_impedance()[0])
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_buried_serve_553.py::test_gu5_6_a_grazing_buried_pair_refuses_with_the_lateral_wave
+=========== 1 failed, 346 passed, 37 warnings in 1538.20s (0:25:38) ============
+make: *** [Makefile:110: slow] Error 1
