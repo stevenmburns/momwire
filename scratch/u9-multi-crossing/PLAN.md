@@ -1124,6 +1124,30 @@ recording feed Z, wall time and max RSS.
     diagnostic that tells a deck problem from a route refusal is registered
     below, before it runs.
 
+**D2, a diagnostic registered before it runs** (`d3_nec5_native.py`).
+- **What it asks.** Is the one-node refusal a property of the deck, or of
+  antennaknobs' multiport route?
+- **How.** NEC-5 runs natively on each deck file as written (its own TL and EX
+  cards, a single run), through antennaknobs' `run_deck`. The feed Z is read off
+  the printout with `NEC5Engine._parse_input_parameters`. Output only, per the
+  courtesy rule.
+- **Which decks.** The full deck, which is the control, and `lpda_one_node.nec`.
+- **Not a gate value.** Using a native-route number in (i) would itself need an
+  amendment.
+
+| id | prediction |
+|---|---|
+| **PD2a** | The native full deck reproduces the census capture, 53.0700 − 3.5386j, to 1e-3 Ω. That also agrees with the route's 53.0711 − 3.5390j to about 1e-3. |
+| **PD2b** | The native one-node deck prints a parseable feed Z; the route's reciprocity check is the only thing that refused it. Its value is not predicted. |
+
+**Reading D2.**
+- **If PD2b hits and R is also near 0.16 Ω,** the one-node spelling itself is
+  the anomaly, not momwire.
+- **If R is far from momwire's 0.157 Ω,** momwire's one-node answer is the
+  suspect.
+
+Either way, it is reported before (d) changes.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
