@@ -1,0 +1,964 @@
+{
+ "decks": [
+  {
+   "stem": "two_node_d3_r1",
+   "excitation": "a",
+   "d": 3.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_r1_a.nec",
+   "sha256": "a1c934b891b45da692a75f9dca4fc8d41df13c9241f551592efb317f4f2642f0",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d3_r1",
+   "excitation": "b",
+   "d": 3.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_r1_b.nec",
+   "sha256": "78acc899993102bb4f6c4280a41a617860258e25dcdc422d87b0fafaed6a7ab1",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d3_r1",
+   "excitation": "a0",
+   "d": 3.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_r1_a0.nec",
+   "sha256": "5823d7916cbd1cae720d7f121ade64a618697923ded7184c423dc8f69fdbb932",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d3_far3",
+   "excitation": "a",
+   "d": 3.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_far3_a.nec",
+   "sha256": "2f485105a1b6e114ac31c3abca704d7b1250d8b7eb8fe9dec4473a3e1bb362e8",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d3_far3",
+   "excitation": "b",
+   "d": 3.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_far3_b.nec",
+   "sha256": "830da19860690a46f453b5087aae7450ca926dee914baa54574defbf4a34c2e1",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d3_far3",
+   "excitation": "a0",
+   "d": 3.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_far3_a0.nec",
+   "sha256": "0c63836987d775f2449866e8638546dccce11f718e424b8844e8269eb25bc7b9",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d3_all3",
+   "excitation": "a",
+   "d": 3.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_all3_a.nec",
+   "sha256": "d17da0f6815465e3a021b2e616fff21bfd17415b98ed7d5b093eac4fd264a643",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d3_all3",
+   "excitation": "b",
+   "d": 3.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_all3_b.nec",
+   "sha256": "f48ccf3523badde782f513c884e5f3f211511999d27309dd97cad2f40548553d",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d3_all3",
+   "excitation": "a0",
+   "d": 3.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d3_all3_a0.nec",
+   "sha256": "5931a85b964f814ea92edd287b7adf59d501baa5247ce2877188877fe32cdc76",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d5_r1",
+   "excitation": "a",
+   "d": 5.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_r1_a.nec",
+   "sha256": "1666b308c84ba3de744d48c5da3eeaf71eaf3093485383960cb8cfa70f3c9f97",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d5_r1",
+   "excitation": "b",
+   "d": 5.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_r1_b.nec",
+   "sha256": "0be3f627718383779fb61f3cc3d3dc53b153b95ea582b8011413a12dca4f11b9",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d5_r1",
+   "excitation": "a0",
+   "d": 5.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_r1_a0.nec",
+   "sha256": "3c724adaeea0e3a68ad2f167ecfe3582dcf3c0712405a91adb25751ffe532143",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d5_far3",
+   "excitation": "a",
+   "d": 5.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_far3_a.nec",
+   "sha256": "7c24c81359c07ce05c4417665d6175c00320e9a69abdbefd1ee1475232865bc0",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d5_far3",
+   "excitation": "b",
+   "d": 5.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_far3_b.nec",
+   "sha256": "9f6ffdd81c7469da4c4fd3210b54ccc4222747c79cf7fdd8f6fb8de2338159fa",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d5_far3",
+   "excitation": "a0",
+   "d": 5.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_far3_a0.nec",
+   "sha256": "518a0afaf14f76894861cd10627c584db7b381261e6f32ef693a4382f2c768c6",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d5_all3",
+   "excitation": "a",
+   "d": 5.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_all3_a.nec",
+   "sha256": "b7323cd8066408ce258b14ac4f9fd5f79f0dea8cd237875d929d8e68d4bac62a",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d5_all3",
+   "excitation": "b",
+   "d": 5.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_all3_b.nec",
+   "sha256": "5c56b6868c8c0879a8ec616c0c0bed58bcea79d754cfff0e77da1f3e5ddfafa8",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d5_all3",
+   "excitation": "a0",
+   "d": 5.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d5_all3_a0.nec",
+   "sha256": "352c1cf05b87451bab8ded2d87ae7b3f6a41183d9b12fcc082f3b017fd832a12",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d8_r1",
+   "excitation": "a",
+   "d": 8.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_r1_a.nec",
+   "sha256": "a92fc8ae3c3c776c4e26a91b7299432ae34bed25bdf21fd481364427f5af882d",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d8_r1",
+   "excitation": "b",
+   "d": 8.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_r1_b.nec",
+   "sha256": "4af4c76946363f11dd1fdfde4c7e3ba95aaff22ba4cc679513627b727f381389",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d8_r1",
+   "excitation": "a0",
+   "d": 8.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_r1_a0.nec",
+   "sha256": "5cd172b16a4855bb132145e8171a9dc3bfe9c995be2650f2bb928350e5a5582d",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d8_far3",
+   "excitation": "a",
+   "d": 8.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_far3_a.nec",
+   "sha256": "3e7ac4e6520ac83a15719dda5280da836d8e733f383e92693933e9f11e44c5c8",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d8_far3",
+   "excitation": "b",
+   "d": 8.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_far3_b.nec",
+   "sha256": "72b8946705b29a42bbe21074e391269c58ef73002621b91dbd7904a0618f83b7",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d8_far3",
+   "excitation": "a0",
+   "d": 8.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_far3_a0.nec",
+   "sha256": "8e7ddc7ed9f4a6e570b665e8167d777c56f5b7deb7a6aac65bb7d214352d4181",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d8_all3",
+   "excitation": "a",
+   "d": 8.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_all3_a.nec",
+   "sha256": "f6b80f66ebdacb13f22bc9d660c14df34df69685841c956ce2017d7ec1e19bf0",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d8_all3",
+   "excitation": "b",
+   "d": 8.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_all3_b.nec",
+   "sha256": "6019d31d12599ab5d9059be3093533bc4026609c0f76a852a4bcf52e8d2b7454",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d8_all3",
+   "excitation": "a0",
+   "d": 8.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d8_all3_a0.nec",
+   "sha256": "146784c6aeb3535f5e7cb6b2614d708b1b5613521b15a96b9316aa370617fa68",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d11_r1",
+   "excitation": "a",
+   "d": 11.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_r1_a.nec",
+   "sha256": "265f1e981ad64bf500297b8da592bbfdf52f4c8182ba14c6112b2e7f0e813f1e",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d11_r1",
+   "excitation": "b",
+   "d": 11.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_r1_b.nec",
+   "sha256": "dbbf0f647a210723a05db85dbc9a76f894feb414826c2b05e0045af0bc79a58a",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d11_r1",
+   "excitation": "a0",
+   "d": 11.0,
+   "rung": "r1",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_r1_a0.nec",
+   "sha256": "83230ea480ef3c42b9da32ab79b5bf88ae8f7d39aeb2b61b9a8a17f6b29a6798",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d11_far3",
+   "excitation": "a",
+   "d": 11.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_far3_a.nec",
+   "sha256": "780d0508b8155cfb77ca90dfc51ed59209bb657951ad471e478623ed108ff901",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d11_far3",
+   "excitation": "b",
+   "d": 11.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_far3_b.nec",
+   "sha256": "10b7c0f40b2020fb9b6c7b6ee88200af18baf5e6b5311b37c3a8998e2bfb5820",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d11_far3",
+   "excitation": "a0",
+   "d": 11.0,
+   "rung": "far3",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_far3_a0.nec",
+   "sha256": "8191a19eedf64ba722530dd33f00ce7f46e05eec0723a3ae4df772a5b52d9b32",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "two_node_d11_all3",
+   "excitation": "a",
+   "d": 11.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_all3_a.nec",
+   "sha256": "5d4865d638feca4ad81ccccae914be9e3bbd1a0a34db9111c57c83de001519fd",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d11_all3",
+   "excitation": "b",
+   "d": 11.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_all3_b.nec",
+   "sha256": "fece6a5ee9c25893732a28d39d976ac961a090ded7d77b78b73fca7c2501cd4e",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "two_node_d11_all3",
+   "excitation": "a0",
+   "d": 11.0,
+   "rung": "all3",
+   "control": false,
+   "path": "a8c_decks/two_node_d11_all3_a0.nec",
+   "sha256": "14ce90bf5290c86e031abc454bde067be1d6e6234a072c9f8fbc5d5e1012ee5b",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 0
+  },
+  {
+   "stem": "ctrl_d3_r1",
+   "excitation": "a",
+   "d": 3.0,
+   "rung": "r1",
+   "control": true,
+   "path": "a8c_decks/ctrl_d3_r1_a.nec",
+   "sha256": "c89f9c0b485d91b9448225bde552f7a5b4fe5758356dee039fb9c3ded3d84756",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "ctrl_d3_r1",
+   "excitation": "b",
+   "d": 3.0,
+   "rung": "r1",
+   "control": true,
+   "path": "a8c_decks/ctrl_d3_r1_b.nec",
+   "sha256": "0cbf538b236dfb3f447360d5d89939e943463ce4299f01a02126bb8c3ee01b3b",
+   "ports": [
+    [
+     6,
+     8
+    ],
+    [
+     12,
+     8
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  },
+  {
+   "stem": "ctrl_d3_far3",
+   "excitation": "a",
+   "d": 3.0,
+   "rung": "far3",
+   "control": true,
+   "path": "a8c_decks/ctrl_d3_far3_a.nec",
+   "sha256": "0a7f47fadcc277006bf2c0d2a6cc7917293106fcde6482ee45e3cb91732afb28",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    1.0,
+    0.5
+   ],
+   "end": 2
+  },
+  {
+   "stem": "ctrl_d3_far3",
+   "excitation": "b",
+   "d": 3.0,
+   "rung": "far3",
+   "control": true,
+   "path": "a8c_decks/ctrl_d3_far3_b.nec",
+   "sha256": "e1015705f02778a92f0d3c4b299a21378a7439e11d54c98db4d8b53d086f12c5",
+   "ports": [
+    [
+     6,
+     24
+    ],
+    [
+     12,
+     24
+    ]
+   ],
+   "volts": [
+    0.5,
+    1.0
+   ],
+   "end": 2
+  }
+ ]
+}
