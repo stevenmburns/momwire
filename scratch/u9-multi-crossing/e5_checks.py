@@ -195,12 +195,23 @@ def same_step(rows, fails, rec):
             continue
         r = recip(ys(row))
         dropped = row["cross_node_pairs_dropped"]
+        loops = row.get("corner_calls_by_loop")
         rec["c8b_same"].append(dict(stem=stem, reciprocity=r))
-        rec["c8d"].append(dict(stem=stem, dropped=dropped))
+        rec["c8d"].append(dict(stem=stem, dropped=dropped, by_loop=loops))
         if r > RECIP_MW:
             fails.append(f"C8b {stem} same: momwire reciprocity {r:.3e}")
         if dropped <= 0:
             fails.append(f"C8d {stem}: the corner patch dropped {dropped} pairs")
+        if not loops:
+            fails.append(f"C8d {stem}: no per-loop corner count")
+        # A loop that reaches the corner but zeroes nothing fails, even when
+        # the other loop's zeroes make the total pass (Laptop-builder review).
+        for loop, n in (loops or {}).items():
+            if n["calls"] > 0 and n["zeroed"] == 0:
+                fails.append(
+                    f"C8d {stem}: {loop} reached the corner {n['calls']} times"
+                    " and zeroed no pair"
+                )
     if not fails:  # C8c is read only after C8d passes
         for d in SEPARATIONS:
             stem = f"two_node_d{d}_r1"
