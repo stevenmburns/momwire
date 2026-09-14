@@ -1309,6 +1309,30 @@ a5aac021…`, which reads only rows written on the re-spelled deck):
 | **PS7b** | Z is within 1.0 Ω of momwire's full refine-1 value, 52.0879 − 3.1846j. |
 | **PS7c** | Wall time is ≤ 6 h on Skylake. |
 
+**Skylake's own projection, beside PS7a (which is unchanged), 2026-09-14.** The
+`full`/`r1` deck the Haswell projection scaled from is not on this box — the
+harness reads it from `~/antennas/nec-wild/...`, which Skylake does not have — so
+the cheap measurement is the pair of **one-node** decks, which are in this
+checkout and hash-controlled: 424 segments → **543 MB / 10.6 s**, 1,240 segments →
+**1,615 MB / 64.6 s**, momwire `6549550`, both under the same 44 G scope.
+
+- Fitted in segments: RSS **N^1.02**, wall **N^1.68**.
+- Extrapolated to 8,014 segments: **10.5 GB** and **25 min**. Removing a 100 MB
+  interpreter floor first gives N^1.15 and 12.6 GB.
+- Pure N² from the same point would give **65.9 GB** and 45 min.
+
+So the three projections in play span **10.5 GB (fitted here), 34.7 GB (PS7a's) and
+65.9 GB (N² here)**, and the last one is above the stop.
+
+**Which to believe, stated before the run.** A fitted exponent understated the
+same quantity on this box two days ago: the buried radial-screen ladder fitted
+RSS at N^1.04 over its lower rungs, projected 3.9 GB at its top rung, and measured
+**8.6 GB** — a 2.2× understatement, because the exponent steepens at the top of a
+range. Applying that same factor to 10.5 GB gives **≈ 23 GB**, which is inside
+PS7a's [20, 40] GB band. That is Skylake's expectation: **the run fits, PS7a hits,
+and the 44 G stop is not reached** — with the caveat that if the growth is truly
+quadratic the cgroup will kill it, and that outcome is REFUSED-BY-MEMORY by name.
+
 - **What counts as a hit.** The run completes under the stop, with a finite Z
   and no error row, and PS7b holds.
 - **When it lands:**
