@@ -686,6 +686,45 @@ registered at 8c0cdf9):
   entries of \|Z_L2p − Z_L2\| ≤ 1e-2 × max over the entries of
   \|Z_far×3 − Z_L2\|.
 
+### PC5 re-run under Amendment 4 [2026-09-14]: a guard missed, so it is not read
+
+- **The run.** `u9-c-pc5.service` on src 96dd5be with records 3902752,
+  17:10:36–17:12:20Z. Records: `c_pc5.json`, `c_pc5.log`, `run_c_pc5.out`.
+- **Guards.**
+  - **The far-×3 deck is served,** with θ_min = 0.0242°, unchanged.
+  - **The low band was read on all three solves.**
+  - **L2p's Δθ was applied:** the grid read 0.008333°.
+  - **`lattice_delta_not_bit_zero` MISSED.** Z under L2p is bitwise equal to
+    Z under L2.
+- **So PC5 is not read.**
+  - **What was measured anyway.** The far-mesh step is 0.318 Ω on Z11 and
+    0.173 Ω on Z12.
+  - **Timing.** The L2p solve took 42.4 s against 30.5 s for L2.
+- **Why not read.** A lattice change that moves nothing bitwise is either
+  unplumbed or unreachable from Z on this deck. D1, below, asks which, before
+  anything is concluded.
+
+**D1, a diagnostic registered before it runs** (`d1_low_band_reach.py`). It
+solves the 8 m deck three times:
+- with the tables as filled;
+- with the low band's values × (1 + 1e-6);
+- with the mid band's values × (1 + 1e-6), the control that the scaling
+  reaches Z at all.
+
+A spy counts the projection's pairs by band.
+
+| id | prediction |
+|---|---|
+| **PD1a** | The mid-band control moves Z; it is not bitwise equal. |
+| **PD1b** | The low-band scaling also moves Z, with a non-zero low-band pair count. |
+
+**Reading D1.**
+- **If PD1b misses,** the low band does not reach this deck's Z. Then PC5 is
+  structurally unable to fail here, which is also what L2's fill cost buys
+  this deck. That is reported.
+- **If PD1b hits,** L2 and L2p interpolate these pairs bitwise alike. PC5 is
+  then re-read as ratio 0 against the far-mesh step, with that cause stated.
+
 ### Banking (b) on the production path (registered before the test runs)
 
 **The test.** `test_g524_8_two_node_eps1_collapse`, marked slow and crossgate,
