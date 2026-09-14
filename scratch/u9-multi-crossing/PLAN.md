@@ -1383,6 +1383,127 @@ a5aac021…`, which reads only rows written on the re-spelled deck):
   differences in the off-diagonal pair.
 - **Reported to Laptop-builder for Steve's decision.**
 
+### The end of (d) [Steve, 2026-09-14 about 18:50Z, relayed by Laptop-builder]
+
+**(d) stops here. The C6b stop is its end.**
+- **Why.** The full-versus-one-node change moves the feed by about 63 Ω, and
+  that change is mostly the seven ungrounded elements, not the cross-node
+  corner. So (d) could not isolate the corner, which is what it was meant to
+  check in real soil.
+- **Neither option (A) nor option (B) is taken.**
+
+**What (d) leaves standing:**
+- **Finding 1.** momwire serves the 8-node LPDA at refine 1: 52.0879 − 3.1846j,
+  against NEC-5's route 53.0711 − 3.5390j, **2.0 % of \|Z\|**.
+- **The D2 correction.** The one-node deck's feed really is about
+  0.15 + 30.6j.
+- **PI1a–PI1e are recorded as UNREAD.** Their runs were never made. PI1b and
+  PI1e had already lost their blindness to C6a's printout.
+- **Amendment 7,** Skylake's full-deck far × 3 rung, still stands, for finding
+  1's resolution.
+
+**The real-soil check of the cross-node corner moves to Amendment 8,** on
+the two-node decks. It is registered before any run.
+
+## Amendment 8 (2026-09-14): a direct soil check of the cross-node term on two-node decks, registered before any run
+
+### Steve's decision (relayed by Laptop-builder)
+
+- **What replaces (d).** (d) is replaced by a comparison of momwire's and
+  NEC-5's full 2 × 2 Z matrices on (c)'s two-node soil-A decks, at 3, 5, 8 and
+  11 m. 12 m is left out because the floor refuses it. Z12 carries the
+  cross-node coupling.
+- **NEC-5's side.** Native runs, one excited port per run, with Y assembled
+  from them. A reciprocity check with its own bar comes before any Z is read.
+- **The resolution.** Each engine's own mesh step.
+
+### The decks (`e0_two_node_decks.py`, `e0_two_node_decks.json`)
+
+- **Files.** `a8_decks/two_node_d{3,5,8,11}_{r1,far3,node2,all3}_{both,p1,p2}.nec`,
+  48 of them. Each file's sha256 is in `e0_two_node_decks.json`.
+- **Geometry.** (c)'s deck, `crossing_deck(1)` twice at separation d, spelled as
+  cards so that both engines read the same bytes.
+  - **The below wire** is a single rod 2 m down to each node, the same topology
+    NEC-5 already solves on the LPDA (a single rise to each node), without
+    radials.
+  - **Everything else:** a 10 m monopole above, 1 mm radius, GE −1, GN 2 over
+    soil A (13, 0.005), 7.0 MHz.
+- **Ports.** Each monopole's segment centred at z = 4.25 m: tag 6 and tag 12,
+  segment 8 at r1, and segment 23 at far × 3 and all × 3.
+  - **Why 4.25 m.** The feed then sits on a segment centre at every rung.
+  - **Consequence.** It is not (c)'s 4.3333 m, so these Z values are not
+    (c)'s. Amendment 8 compares engines on identical bytes, not against (c).
+- **The rungs:**
+  - **r1:** (c)'s mesh;
+  - **far × 3:** every edge × 3 except each wire's node-adjacent edge;
+  - **node2:** node grading level 2;
+  - **all × 3:** every edge × 3, NEC-5 only, recorded as node-axis
+    information.
+- **Excitations:** `both` (momwire's 2-port input), `p1` and `p2` (NEC-5's
+  one-port runs).
+
+### Geometry preflight (no Z), on the kwargs antennaknobs' momwire engine builds
+
+| d | r1 θ_min | far × 3 θ_min | node2 |
+|---|---|---|---|
+| 3 m | 0.0645° served | 0.0645° served | **REFUSED: floor, 0.0161°** |
+| 5 m | 0.0387° served | 0.0387° served | **REFUSED: floor, 0.0097°** |
+| 8 m | 0.0242° served | 0.0242° served | **REFUSED: floor, 0.0060°** |
+| 11 m | 0.0176° served | 0.0176° served | **REFUSED: floor, 0.0044°** |
+
+- **What each served deck carries:** 2 crossing junctions and 2 feeds.
+- **Consequence.** momwire's node rung is refused by name at every separation,
+  so **momwire's resolution is its far-× 3 step.**
+
+### Checks, all read before any Z is read; a failure is a stop and a report
+
+| id | check | bar | prediction |
+|---|---|---|---|
+| **C8a** | NEC-5 reciprocity \|Y12 − Y21\|/\|Y12\| on every NEC-5 row (r1, far × 3, all × 3; each d) | ≤ 1e-2 | passes, ≤ 1e-3 |
+| **C8b** | momwire reciprocity on every momwire row | ≤ 1e-9 | passes, ≤ 1e-12 |
+| **C8c** | Port polarity: sign(Re Z12) agrees between the engines at r1, at every d. A disagreement is a convention mismatch, not physics. | agree | passes |
+| **C8d** | Every corner-omitted (`same`) momwire row dropped more than 0 cross-node pairs, so the patch engaged | > 0 | passes |
+
+### Resolution, gate and non-vacuity guard
+
+- **Each engine's step.** s_q,e = \|Z_q,e(far × 3) − Z_q,e(r1)\|, for q ∈ {Z12,
+  Z11}, per engine e and separation d.
+- **The gate,** per d, per rung r ∈ {r1, far × 3}, per q:
+  \|Z_q,momwire(r) − Z_q,NEC-5(r)\| ≤ s_q,momwire + s_q,NEC-5 + 0.02·\|Z_q,NEC-5(r)\|.
+  - **Where the 2 % comes from:** finding 1's 2.0 % on the LPDA, and momwire#1027's
+    −1.20 % of R on buried rods.
+- **The non-vacuity guard,** per d.
+  - **What it measures.** The corner's own effect on momwire's Z12 at r1:
+    \|Z12(cross) − Z12(same)\|.
+  - **What it requires.** That effect must exceed **twice** the Z12 gate bar at r1.
+  - **If it does not,** that separation cannot see the corner, and a hit there
+    is reported as vacuous.
+
+### Predictions (blind)
+
+The difference is Δ = momwire − NEC-5.
+
+| id | prediction |
+|---|---|
+| **PE8a** | \|ΔZ12\| at far × 3 is in [0.05, 1.5] Ω, and ≤ 2 % of \|Z12_NEC-5\|, at every d. |
+| **PE8b** | \|ΔZ11\| at far × 3 is in [0.3, 4] Ω at every d. |
+| **PE8c** | **Sign.** Re ΔZ11 < 0 and Im ΔZ11 > 0 at every d: momwire's R is lower and its X higher, as on the LPDA (52.09 against 53.07, and −3.18 against −3.54) and as in momwire#1027's R. Re ΔZ12 < 0 at every d, **with low confidence**: there is no direct evidence, and it is extrapolated from ΔZ11. |
+| **PE8d** | The gate HITS on Z12 and Z11, at r1 and at far × 3, at every d. |
+| **PE8e** | The corner's effect, \|Z12(cross) − Z12(same)\| at r1, is in [0.2, 10] Ω, decreasing with d, and the guard passes (it sees the corner) at every d. |
+| **PE8f** | NEC-5's far-× 3 step on Z12 is ≥ momwire's at every d (momwire#845). |
+
+### Order and tooling
+
+Steps run with `run_e.sh <step>`, rows are written by `e1_two_node_solve.py`,
+and `e2_table.py` reads them. momwire is main 6549550, whose src is identical
+to 3331ef1; NEC-5 is `nec5-linux/nec5cl`.
+
+1. `nec5`: NEC-5 at r1, far × 3 and all × 3, at each d. Then **C8a is read**.
+2. `momwire`: momwire `cross` at r1 and far × 3, at each d. Then **C8b is
+   read**.
+3. `same`: momwire `same` at r1, at each d. Then **C8d is read, and then C8c**.
+4. Only then does `e2_table.py` read Z.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
