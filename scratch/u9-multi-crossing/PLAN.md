@@ -1307,6 +1307,52 @@ a5aac021…`, which reads only rows written on the re-spelled deck):
     the one-node far-× 3 rungs run here under Amendment 6.
   - **Its JSONL row comes back to momwire#1063.**
 
+### momwire#1065 merged; Amendment 7's src checkout moves to main [2026-09-14]
+
+- **The merge.** Laptop-builder rebase-merged momwire#1065 at 18:29Z. momwire
+  main is now **6549550**, and the remote `u9-multi-crossing-src` branch is
+  deleted.
+- **The check.** `git diff 3331ef1 6549550 -- src tests` is empty (0 lines),
+  and so is the diff of the whole tree outside `scratch/`.
+- **So Amendment 7's src checkout is momwire main at 6549550** (or any later
+  main that does not touch those paths), built with `make build`. It measures
+  the same code as 3331ef1. Nothing else in Amendment 7 changes.
+- **Laptop-builder's review** (issuecomment-5668747990) records two points, to
+  be said plainly in (d)'s report:
+  - **The `six_point` probe is converged but is not an independent soil
+    reference.** The real-soil check of the cross-node corner is still (d)'s.
+  - **`MIN_CROSSING_NODE_SEPARATION_M` = 1 m is gated on one deck.** It needs
+    re-deriving if closer nodes are ever wanted.
+
+### C6a result [2026-09-14]: PASS, and a correction to D2's reading
+
+`d3_nec5_native_a6.json`, after Amendment 6 was registered at d90367c.
+
+| deck | sha256 | native NEC-5 feed Z |
+|---|---|---|
+| `lpda_one_node.nec` (re-spelled) | `a5aac021…` | **0.15108 + 30.607j** at tag 48 (1.0 s) |
+| `lpda_one_node_far3.nec` | `2039a56f…` | 0.15634 + 30.642j (5.0 s) |
+
+- **C6a PASSES.** Both decks print an input-parameters block.
+- **D2's reading was wrong about momwire.** It said the broken port explained
+  both the route's refusal and momwire's "implausible" one-node Z,
+  0.157 + 30.58j.
+  - **What the evidence shows.** NEC-5 on the corrected deck gives 0.151 +
+    30.607j, within 0.03 Ω of momwire's value on the old spelling.
+  - **So that low R is this spelling's real feed impedance**, not a momwire
+    defect.
+  - **The single-segment defect** was NEC-5's, which has no basis function on
+    that free segment. momwire has one there and gave nearly the right answer.
+    The correction stands; D2's recorded text is not rewritten.
+- **Blindness lost, before momwire's re-spelled one-node run.** C6a's printout
+  put a NEC-5 one-node Z on the table first.
+  - **PI1e** (momwire's re-spelled one-node R > 1 Ω) is no longer blind, and
+    now looks likely to MISS.
+  - **PI1b** (\|Δ_NEC-5(r1)\| in [2, 60] Ω) is no longer blind either: with
+    the route's full refine-1 value, the native one-node Z implies about 63 Ω,
+    just above the band.
+  - **Both stand as registered** and will be read as they come.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
