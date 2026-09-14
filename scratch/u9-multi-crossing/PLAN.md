@@ -309,5 +309,29 @@ the second-node refusal is lifted. Each from pre3.
 
 To Laptop-builder:
 1. After (a), with the grazing-floor wall and the options for (c) and (d).
+   Sent 2026-09-14, after 191ef0b.
 2. After (b), with GO or NO-GO.
 3. When the PR is up.
+
+## Amendment 1 (2026-09-14, before any (b) run)
+
+- **G-b2 was mis-stated.** It compared `six_point`'s V with e^{−jkR}/R, but at
+  ε̃ = 1 the identity is k²·V = e^{−jkR}/R
+  (`test_g524_3_eps1_kernel_identity`). The guard therefore compares k²·V,
+  at the same 1e-8 relative bar.
+- **PB2's basis, re-worded; the band is unchanged.** "\|c1\| ≈ 204" and
+  "\|c1·G(12 m)\|" mixed V and G. The estimate is a ratio: the cross-node
+  corner at 12 m is \|c1·V(a)\|·a/d ≈ 2.04e5 × 1e-3 / 12 ≈ 17 Ω. The band
+  [5, 100] Ω stands.
+- **G-b1 is read two ways.** P3 `cross` alone, and P1 + P2 + P3 together, are
+  each compared with the unpatched single-node Z. Both are predicted
+  bit-identical.
+- **G-b3's expected count.** There are two cross-node in-plane end pairs per
+  `_ends_and_corner` call on the two-node deck: each pair's above end against
+  the other pair's below end. They are counted before any mode skips them.
+- **P2 records two non-vacuity facts per run.**
+  - The unclamped θ_min is below the floor, which shows the clamp engaged.
+  - The zeroed projection was called at least once, and always with
+    k_m == k_p.
+- **Tooling.** `b_collapse.py` and `run_b.sh`. The runner stops if the guards
+  miss, so no (b) Z is written behind a failed guard.
