@@ -725,6 +725,34 @@ A spy counts the projection's pairs by band.
 - **If PD1b hits,** L2 and L2p interpolate these pairs bitwise alike. PC5 is
   then re-read as ratio 0 against the far-mesh step, with that cause stated.
 
+**D1 results [2026-09-14]** (`d1_low_band_reach.json`, run on the src branch
+after e761111 registered it). The spy sees one projection call per solve:
+7,056 below/below pairs, 244 in the mid band, and **6 in the low band**, the
+shallowest at 0.0242°.
+
+| id | result |
+|---|---|
+| **PD1a** | **HIT.** Mid band × (1 + 1e-6) moves Z by 1.80e-10 Ω (4.1e-12 relative). |
+| **PD1b** | **HIT.** Low band × (1 + 1e-6) moves Z by 1.81e-12 Ω (4.1e-14 relative). |
+
+**Reading, as registered (PD1b hit).**
+- **The low band does reach this deck's Z,** through 6 pairs.
+- **How much.** Z moves by about 1.8e-6 Ω per unit relative change of those
+  surfaces.
+- **Why L2p read bitwise equal.** S2 puts the interpolation at ≤ 4e-9
+  relative, so the L2 → L2p change should be about 1e-14 Ω, below the solve's
+  resolution.
+- **PC5 is therefore read as registered: ratio 0 against the 0.318 Ω far-mesh
+  step, a HIT.**
+
+**How weak that hit is.**
+- **Almost unable to fail.** To exceed 1e-2 of the step, the low band would
+  have to be wrong by about 3.2e-3 / 1.8e-6 ≈ 1.8e3 relative.
+- **So the low band's accuracy rests elsewhere,** on S2's real-grid 3.9e-9, not
+  on PC5.
+- **Where the low band carries weight.** The LPDA (d): eight nodes 2.9–4.7 m
+  apart over 192 radials.
+
 ### Banking (b) on the production path (registered before the test runs)
 
 **The test.** `test_g524_8_two_node_eps1_collapse`, marked slow and crossgate,
