@@ -1,0 +1,39 @@
+{
+ "nec5_exe": "/home/smburns/antennas/NEC5-downloads/nec5-linux/nec5cl",
+ "runs": {
+  "one": {
+   "path": "/home/smburns/stevenmburns/momwire-wt-u9/scratch/u9-multi-crossing/lpda_one_node.nec",
+   "sha256": "a5aac02165bb4cda958e31eefe617aece5dbcaff8f3235ed87130766987f0f24",
+   "blocks": [
+    [
+     {
+      "tag": 48,
+      "seg": 101,
+      "z": [
+       0.15108,
+       30.607
+      ]
+     }
+    ]
+   ],
+   "seconds": 1.04
+  },
+  "one_far3": {
+   "path": "/home/smburns/stevenmburns/momwire-wt-u9/scratch/u9-multi-crossing/lpda_one_node_far3.nec",
+   "sha256": "2039a56f4476c0757d0cefcc4ead2fc6252582d8ece772ad6ce463e861af172f",
+   "blocks": [
+    [
+     {
+      "tag": 48,
+      "seg": 273,
+      "z": [
+       0.15634,
+       30.642
+      ]
+     }
+    ]
+   ],
+   "seconds": 5.03
+  }
+ }
+}
