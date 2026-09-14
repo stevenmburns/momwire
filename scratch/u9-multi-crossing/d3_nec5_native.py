@@ -9,6 +9,7 @@ parser.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import time
 from pathlib import Path
@@ -21,18 +22,24 @@ DECKS = {
     / "antennas/nec-wild/community/cebik-w4rnl/models/LPDAs/nec"
     / "lpma3r5-4-6el86ft75o-buriedradials.nec",
     "one": HERE / "lpda_one_node.nec",
+    "one_far3": HERE / "lpda_one_node_far3.nec",
+    "full_far3": HERE / "lpda_full_far3.nec",
 }
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nec5-exe", required=True)
+    ap.add_argument(
+        "--decks", nargs="+", default=["full", "one"], choices=sorted(DECKS)
+    )
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     rec = dict(nec5_exe=args.nec5_exe, runs={})
-    for name, path in DECKS.items():
+    for name in args.decks:
+        path = DECKS[name]
         t0 = time.perf_counter()
-        row = dict(path=str(path))
+        row = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
         try:
             text = run_deck(args.nec5_exe, path.read_text(), timeout=3600)
             blocks = NEC5Engine._parse_input_parameters(text)

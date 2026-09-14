@@ -9,7 +9,9 @@ The one-node spelling (Amendment 3):
   49, 165, 281, 397, 513, 629, 745, 861);
 - the other seven elements lose their rise and radials, and their node-adjacent
   wire (GW 6, 12, ..., 42; z 0.1524 -> 0) is shortened to end at z = 0.0762, so
-  no element ends on the plane (a GE -1 free end there is refused);
+  no element ends on the plane (a GE -1 free end there is refused), AND is split
+  into TWO segments (Amendment 6): with one segment its free end left the TL
+  port on segment 1 with no basis function, and native NEC-5 stopped on it;
 - every other card (the elements, the TL network, the EX) is unchanged.
 
 Each rung is built through antennaknobs' `builder_from_file(path, refine=r)`, the
@@ -47,6 +49,7 @@ ONE = HERE / "lpda_one_node.nec"
 FED_SCREEN_FIRST_TAG = 861
 FED_NODE_WIRE_TAG = 48
 LIFT_Z = 0.0762
+LIFT_SEGMENTS = 2  # Amendment 6
 RUNGS = (1, 3, 9)
 
 
@@ -93,6 +96,7 @@ def write_one_node():
                 continue
             if not below and z2 == 0.0 and tag != FED_NODE_WIRE_TAG:
                 f[8] = f"{LIFT_Z}"
+                f[2] = str(LIFT_SEGMENTS)
                 line = ",".join(f)
                 lifted += 1
         out.append(line)

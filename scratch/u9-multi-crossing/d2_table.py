@@ -18,6 +18,11 @@ FAR3_FULL_SEGS = 8014
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("jsonl", type=Path)
+    ap.add_argument(
+        "--one-sha",
+        default=None,
+        help="Amendment 6: read only one-node rows written on this deck hash",
+    )
     args = ap.parse_args()
     rows = [
         json.loads(line) for line in args.jsonl.read_text().splitlines() if line.strip()
@@ -25,6 +30,8 @@ def main():
     z, cost = {}, {}
     for r in rows:
         key = (r["engine"], r["deck"], r["rung"])
+        if args.one_sha and r["deck"] == "one" and r.get("deck_sha256") != args.one_sha:
+            continue
         if "error" in r:
             print("ERROR", key, r["error"][:200])
             continue
@@ -80,6 +87,35 @@ def main():
         rhs = 0.1 * abs(dn) + rec["momwire"]["step"] + rec["nec5"]["step"]
         rec["gate_i"] = dict(lhs=lhs, rhs=rhs, hit=lhs <= rhs)
         print("gate (i):", rec["gate_i"])
+    # Amendment 6 (i-1), the WEAKER gate: refine-1 changes, with NEC-5's own
+    # full-deck r1 -> far x 3 step as the resolution for BOTH engines.
+    if all(
+        k in z
+        for k in (
+            ("momwire", "full", "r1"),
+            ("momwire", "one", "r1"),
+            ("nec5", "full", "r1"),
+            ("nec5", "one", "r1"),
+            ("nec5", "full", "far3"),
+        )
+    ):
+        s_n = abs(z[("nec5", "full", "far3")] - z[("nec5", "full", "r1")])
+        dm = z[("momwire", "full", "r1")] - z[("momwire", "one", "r1")]
+        dn = z[("nec5", "full", "r1")] - z[("nec5", "one", "r1")]
+        lhs = abs(dm - dn)
+        rhs = 0.1 * abs(dn) + 2.0 * s_n
+        rec["gate_i1"] = dict(
+            s_nec5=s_n,
+            delta_momwire_r1=[dm.real, dm.imag],
+            delta_nec5_r1=[dn.real, dn.imag],
+            abs_delta_momwire_r1=abs(dm),
+            abs_delta_nec5_r1=abs(dn),
+            lhs=lhs,
+            rhs=rhs,
+            hit=lhs <= rhs,
+            ii_trigger=abs(dm) <= 2 * s_n or abs(dn) <= 2 * s_n,
+        )
+        print("gate (i-1):", rec["gate_i1"])
     args.jsonl.with_suffix(".table.json").write_text(json.dumps(rec, indent=1))
 
 

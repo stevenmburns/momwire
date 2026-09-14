@@ -1179,6 +1179,134 @@ c397efc).
   leaves (i) without a momwire ladder on the full deck. The re-spelling does not
   change that.
 
+## Amendment 6 (2026-09-14): the one-node re-spelling and gate (i-1), registered before any run
+
+### Steve's decisions (relayed by Laptop-builder, about 18:30Z)
+
+- **(a) Yes to the re-spelling.** A failure in either pre-Z check is a stop
+  and a report, not a re-spell on the fly.
+- **(b) Gate (i-1) now, labelled the weaker gate.**
+- **The full-deck momwire far × 3 rung goes to Skylake** as Amendment 7.
+- **(i-2), a memory-bounded far × 3, is not scheduled.**
+- **momwire#1065 merges on its own gates** and does not wait for (d).
+
+### The re-spelled decks, from `d0_lpda_decks.py` at this commit
+
+- **The change.** Each of the seven lifted wires, GW 6, 12, …, 42, is now
+  **two segments** over 0.1524 → 0.0762 m. Segment 1, which carries the TL, ends
+  on a segment junction again. Everything else matches Amendment 3's
+  spelling.
+- **`lpda_one_node.nec`:** 164 GW, 424 segments, sha256
+  `a5aac02165bb4cda958e31eefe617aece5dbcaff8f3235ed87130766987f0f24`.
+- **`lpda_one_node_far3.nec`:** 1240 segments, sha256
+  `2039a56f4476c0757d0cefcc4ead2fc6252582d8ece772ad6ce463e861af172f`.
+- **Unchanged decks.** The full deck, and `lpda_full_far3.nec` (sha256
+  `f366a08d…c074496`).
+- **Geometry preflight** (`d0_lpda_decks_a6.json`, no Z). The one-node deck has
+  1 crossing node at θ_min 0.360°, and is served at refine 1, 3 and 9 and at far
+  × 3. The full deck's rungs are as in Amendment 3.
+
+### Pre-Z checks, in this order (a failure is a stop and a report)
+
+| id | check | prediction |
+|---|---|---|
+| **C6a** | Native NEC-5 prints an input-parameters block for `lpda_one_node.nec` and for `lpda_one_node_far3.nec` (`d3_nec5_native.py --decks one one_far3`). | passes |
+| **C6b** | The route's reciprocity check: `run_d2.sh route_check_one`, NEC-5 on the one-node deck at refine 1 through antennaknobs' multiport route, completes with no NEC5Error. | passes |
+
+momwire's one-node Z is not run until both checks are read as passing.
+
+### (i-1): THE WEAKER GATE
+
+**The quantities.**
+- **The change.** Δ_e(r1) = Z_full,e(r1) − Z_one,e(r1), for e ∈ {momwire,
+  NEC-5}, both through antennaknobs' route.
+- **Reused rows.** The full-deck refine-1 rows come from the cost step: same
+  deck bytes, same src 3331ef1, same NEC-5 binary.
+- **The resolution.** s = \|Z_full,NEC-5(far × 3) − Z_full,NEC-5(r1)\|, **NEC-5's
+  own step, used as the resolution for BOTH engines.**
+
+**The gate and the trigger.**
+- **Gate (i-1):** \|Δ_momwire(r1) − Δ_NEC-5(r1)\| ≤ 0.1·\|Δ_NEC-5(r1)\| + 2·s.
+- **(ii)'s trigger:** \|Δ_e(r1)\| ≤ 2·s for either engine.
+
+**Why it is weaker.**
+- **momwire's own ladder step is not in it.**
+- **s is probably a loose bar for momwire.** NEC-5's formulation converges
+  first-order in the far mesh. momwire#845 (checked) measures the NEC-5-class
+  razor-2p needing 7–8× bspline's segments for equal tolerance on a
+  quarter-wave.
+- **So a hit here says less than Amendment 3's (i) would.**
+
+**Runs, only after C6a and C6b pass** (tooling `d2_table.py --one-sha
+a5aac021…`, which reads only rows written on the re-spelled deck):
+1. `run_d2.sh mw_one_r1`;
+2. `run_d2.sh rest`: NEC-5 one-node far × 3, NEC-5 full far × 3, and momwire
+   one-node far × 3. The one-node far-× 3 rungs are recorded for Amendment 7's
+   later reading.
+
+| id | prediction (blind) |
+|---|---|
+| **PI1a** | s is in [0.05, 3] Ω. |
+| **PI1b** | \|Δ_NEC-5(r1)\| is in [2, 60] Ω. |
+| **PI1c** | Gate (i-1) HITS. |
+| **PI1d** | (ii) is not triggered. |
+| **PI1e** | momwire's re-spelled one-node Z at refine 1 has R > 1 Ω, so the defective spelling's 0.157 Ω does not recur. |
+
+**Not predicted:** absolute momwire–NEC-5 agreement on the one-node deck.
+
+## Amendment 7 (2026-09-14): the full-deck momwire far × 3 rung, for Skylake
+
+- **What it is.** The rung Amendment 3 registered, which rule 1 kept off this
+  box (34.7 GB projected). **No new code.** Laptop-builder briefs Skylake; this
+  session does not message Skylake.
+- **Checkouts on Skylake.**
+  - **momwire records:** branch `u9-multi-crossing` at the commit that carries
+    this amendment, for the scripts and the deck.
+  - **momwire src:** branch `u9-multi-crossing-src` at **3331ef1** (momwire#1065's
+    head), built with `make build`.
+  - **antennaknobs:** main at fdab21e20 or later, for its `builder_from_file` and
+    `make_engine_factory` only; NEC-5 is not used.
+- **The deck.** `scratch/u9-multi-crossing/lpda_full_far3.nec`, 8014 segments,
+  sha256 `f366a08d269a8209827bc4dd7e51cafae51c288bfe11c85772d871985c074496`.
+  Check the hash before running.
+- **The command,** from the records checkout's root, with `<SRC>`, `<AK>` and
+  `<python>` substituted:
+
+  ```
+  sha256sum scratch/u9-multi-crossing/lpda_full_far3.nec
+  systemd-run --user --scope -p MemoryMax=44G \
+    env PYTHONPATH=<SRC>/src:<AK>/src <python> \
+    scratch/u9-multi-crossing/d2_lpda_solve.py --deck full --rung far3 \
+    --engine momwire --out scratch/u9-multi-crossing/d2_lpda_skylake.jsonl
+  ```
+
+- **The harness.** `d2_lpda_solve.py` runs one process and records:
+  - the feed Z, through antennaknobs' U2 path;
+  - wall time and max RSS;
+  - the deck's sha256 and the momwire commit.
+
+  It carries the AK#1464 stub named in Amendment 3.
+- **The hard memory stop.** `MemoryMax=44G` on the scope, or Skylake's per-job
+  ceiling if that is lower. The cgroup kills the process past it.
+  - **If the ceiling is below 38 GB** (the projection plus 10 %), the run is not
+    started, and the ceiling is reported.
+  - **A memory kill** is recorded by name as REFUSED-BY-MEMORY, not as a Z miss.
+
+| id | prediction |
+|---|---|
+| **PS7a** | Peak RSS is in [20, 40] GB. The projection is 3.9 GB × (8014/2690)² = 34.7 GB. |
+| **PS7b** | Z is within 1.0 Ω of momwire's full refine-1 value, 52.0879 − 3.1846j. |
+| **PS7c** | Wall time is ≤ 6 h on Skylake. |
+
+- **What counts as a hit.** The run completes under the stop, with a finite Z
+  and no error row, and PS7b holds.
+- **When it lands:**
+  - **momwire gets its own step:** s_momwire = \|Z_mw,full(far × 3) −
+    Z_mw,full(r1)\|.
+  - **Amendment 3's original gate (i) is read as registered, at far × 3,** using
+    the one-node far-× 3 rungs run here under Amendment 6.
+  - **Its JSONL row comes back to momwire#1063.**
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
