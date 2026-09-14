@@ -1,0 +1,61 @@
+Traceback (most recent call last):
+  File "/home/smburns/stevenmburns/momwire-wt-u9/scratch/u9-multi-crossing/c_ladder.py", line 191, in <module>
+    main()
+    ~~~~^^
+  File "/home/smburns/stevenmburns/momwire-wt-u9/scratch/u9-multi-crossing/c_ladder.py", line 185, in main
+    rec = ladder(args.d) if args.what == "ladder" else pc5(args.d[0], args.finer)
+                                                       ~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/momwire-wt-u9/scratch/u9-multi-crossing/c_ladder.py", line 153, in pc5
+    z_mesh, t_mesh, lo_mesh = zmat(deck(d, scale=3))
+                              ~~~~^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/momwire-wt-u9/scratch/u9-multi-crossing/c_ladder.py", line 77, in zmat
+    y = np.asarray(BSplineSolver(**build).compute_port_solution().y, dtype=complex)
+                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/bspline.py", line 5947, in compute_port_solution
+    Z = self._compute_Z_operator(
+        geom, supp_seg, polys, same_edge_prep=same_edge_prep
+    )
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/bspline.py", line 5547, in _compute_Z_operator
+    return self._compute_Z_operator_buried(geom, supp_seg, polys)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/bspline.py", line 5491, in _compute_Z_operator_buried
+    return _below_interface.compute_Z_operator_buried(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        geom,
+        ^^^^^
+    ...<27 lines>...
+        chunked=self._buried_chunked_serves,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/_below_interface.py", line 1058, in compute_Z_operator_buried
+    ) = plan_buried(
+        ~~~~~~~~~~~^
+        geom,
+        ^^^^^
+    ...<5 lines>...
+        serve_plan_fn=serve_plan_fn,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/_below_interface.py", line 911, in plan_buried
+    plan = serve_plan_fn(
+        geom,
+    ...<5 lines>...
+        crossing=crossing_plan,
+    )
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/bspline.py", line 5432, in _buried_serve_plan
+    return _below_interface.serve_plan(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self.ground_z,
+        ^^^^^^^^^^^^^^
+    ...<8 lines>...
+        pair_extents=_pair_extents_below,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/_below_interface.py", line 707, in serve_plan
+    raise ValueError(
+    ...<5 lines>...
+    )
+ValueError: this deck's buried wires reach a below/below pair elevation of theta = 0.008061 deg, below the 0.0166667 deg grazing floor the below/below surfaces are tabulated from (the pair's two depths add to 0.001126 m, and theta = atan2(depth sum, horizontal separation)). Below the floor the surfaces carry the lateral wave's LOGARITHMIC structure — measured drift 1.1 to 3.3 of scale between 2 and 0.05 deg — which no uniform lattice resolves, and theta = 0 has no node at all because h = 0 leaves the tail without its exponential decay. Bury the wires deeper, shorten them, or wait for the log-spaced grazing band (momwire#553 U2's recorded follow-up)

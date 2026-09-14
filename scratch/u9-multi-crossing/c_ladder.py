@@ -7,8 +7,9 @@ production path, soil A, bspline, after the source change.
 The deck is spelling A: two `crossing_deck(1)` pairs `d` m apart, a feed on
 each monopole, Z = inv(Y). The single-node print is `crossing_deck(1)` with its
 one feed. PC5 compares the branch's lattice with the next finer candidate, and
-with the rung's own mesh step (every edge count x 3). Its metric is the max
-over the four Z entries on both sides.
+with the rung's own FAR-mesh step (every edge count x 3 except each wire's
+node-adjacent edge; Amendment 4). Its metric is the max over the four Z
+entries on both sides.
 """
 
 from __future__ import annotations
@@ -42,13 +43,21 @@ FINER = {
 FINER_BUDGET = 48000
 
 
-def deck(d, scale=1):
+def deck(d, far_scale=1):
+    """Spelling A. `far_scale` multiplies every edge count EXCEPT each wire's
+    node-adjacent edge (Amendment 4): that edge sets the rises' shallowest
+    quadrature node, so keeping it keeps theta_min, which scaling it x3 pushed
+    under the floor (0.0081 deg at 8 m)."""
     b = two_node_deck(d)
     b["feeds"] = [(1, FEED, 1 + 0j), (3, FEED, 1 + 0j)]
-    if scale != 1:
-        b["n_per_edge_per_wire"] = [
-            [n * scale for n in e] for e in b["n_per_edge_per_wire"]
-        ]
+    if far_scale != 1:
+        npe = []
+        for pl, e in zip(b["wires"], b["n_per_edge_per_wire"]):
+            node_edge = len(e) - 1 if abs(float(pl[-1][2])) < 1e-12 else 0
+            npe.append(
+                [n if i == node_edge else n * far_scale for i, n in enumerate(e)]
+            )
+        b["n_per_edge_per_wire"] = npe
     return b
 
 
@@ -150,7 +159,8 @@ def pc5(d, finer):
             below._SOMM_BELOW_DTH_BAND_LO_DEG,
             below._MAX_TAIL_PANELS,
         ) = saved
-    z_mesh, t_mesh, lo_mesh = zmat(deck(d, scale=3))
+    rec["far_x3_preflight"] = preflight(deck(d, far_scale=3))
+    z_mesh, t_mesh, lo_mesh = zmat(deck(d, far_scale=3))
     d_lat = np.abs(z_fine - z_ship)
     d_mesh = np.abs(z_mesh - z_ship)
     rec.update(
