@@ -113,6 +113,18 @@ def served_deck(mult=1, clearance=1.0, depth=0.15, eps=SOIL_A, free=False, **kw)
     )
 
 
+def test_1061_the_preflight_returns_the_contact_sentence_instead_of_raising():
+    """momwire#1061: `buried_serve_refusal()` is documented to RETURN the
+    sentence the buried fill would refuse with, or None. Its first line asked
+    `_has_buried_wires()` outside the try, and that labels the wires, which
+    raises for a ground-CONTACT end beside a buried wire. So for exactly the
+    deck class it exists to pre-flight (antennaknobs#1464's detached buried
+    radial vertical) the method raised instead of answering."""
+    why = BSplineSolver(**contact_deck()).buried_serve_refusal()
+    assert why is not None
+    assert "stands an END in the ground plane (ground CONTACT)" in why, why
+
+
 def buried_dipole(n=11, length=1.0, depth=0.15, vertical=True, eps=SOIL_A, free=False):
     """The phase-0 buried dipoles: fully below the interface, centre fed."""
     if vertical:
