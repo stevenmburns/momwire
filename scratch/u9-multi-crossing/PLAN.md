@@ -779,6 +779,69 @@ The same commit carries two further changes:
   lane (4.2 s call), and the 18-point sweep moves to the slow lane as
   `test_the_floor_is_served_on_every_spec_soil`.
 
+## Amendment 5 (2026-09-14): fill-cost timing, registered before any timing run
+
+**Steve's instruction (relayed by Laptop-builder).**
+- Time main 1ca8725 against the src branch on the same box, warm and cold.
+- The decks:
+  - the shipped buried designs that reach the low band;
+  - #935's 3 mm dipole;
+  - one 48-radial screen from the #983 harness.
+- Report the table. Steve decides whether a fifth band, so that only decks under
+  0.05° pay, becomes a merge requirement.
+- The src PR is not opened until this is in.
+
+**Step 0, geometry only** (`f0_timing_preflight.py`, `f1_knob_sweep.py`), on
+the kwargs antennaknobs' momwire engine builds at soil A. antennaknobs'
+`below_reach_refusal` is stubbed, for construction only.
+
+**At defaults, no shipped catalog design reaches the low band:**
+
+| deck | θ_min |
+|---|---|
+| `specialty.buried_dipole` | 2.909° |
+| `verticals.buried_radial_vertical` (default and bundle) | 1.358° |
+| `verticals.elevated_buried_counterpoise` | 1.358° |
+| the 48-radial screen (`buried_radial_vertical`, `n_radials = 48`) | 1.358° |
+
+- **The `detached` variant** is refused (contact plus buried).
+- **#935's 3 mm dipole** reaches the low band, at 0.0583°.
+
+**Within the app's knob ranges, nothing reaches it either.** Depth bottoms out at
+0.05 m, radial_factor tops out at 1.5, and length_factor at 1.2. The corner that
+minimizes θ, depth 0.05 with radial 1.5 and length 1.2, reads 0.1508°.
+
+**Off the knobs:** depth 0.02 with radial_factor 1.5 reads **0.0724°**, which
+both trees serve, and depth 0.02 alone reads 0.181°.
+
+**The deck list** (`t2_fill_cost.py`, run by `run_t2.sh`):
+
+| deck | why it is on the list |
+|---|---|
+| `buried_dipole`, `brv_default`, `ebc_default` | the shipped buried designs at defaults |
+| `brv48` | the #983 harness's 48-radial screen |
+| `dipole935` | the one deck Steve named that reaches the low band |
+| `brv_corner` | depth 0.02, radial_factor 1.5: the smallest catalog-built change that reaches the low band on both trees, standing in for imported and API decks |
+
+**Protocol.**
+- **One fresh process per (tree, deck, repeat).**
+  - *Cold* is the first solve in that process.
+  - *Warm* is a second solve with the engine's result cache cleared, reusing
+    the grids.
+  - The catalog decks go through the #983 harness's `MomwireEngine`
+    BSplineSolver(degree=2) spelling.
+- **Order.** The two trees alternate within every deck, the order flips each
+  repeat, and there are 3 repeats.
+- **Reported:** per-tree medians, the branch/main ratio, max RSS, and whether
+  the low band was filled.
+- **The box.** It runs alone: after G5, with nothing else running.
+
+| deck | cold ratio (branch/main) | warm ratio |
+|---|---|---|
+| `buried_dipole`, `brv_default`, `ebc_default`, `brv48` | **1.00 ± 0.05.** The low band is never filled, and nothing else on their path changed. | 1.00 ± 0.05 |
+| `dipole935` | **2.9 ± 0.3. NOT blind:** G1 already timed this deck at 9.8 → 28.0 s. | 1.00 ± 0.05 |
+| `brv_corner` | **[1.5, 3.5], blind.** The low band fills in three R1 zones out to 3.19 λ_m, but its share of the cold solve is unmeasured. | 1.00 ± 0.05 |
+
 ### (d): Amendment 3, before any (d) run
 
 Amendment 3 will name:
