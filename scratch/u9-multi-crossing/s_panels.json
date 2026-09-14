@@ -1,0 +1,91 @@
+{
+ "mode": "panels",
+ "momwire": "/home/smburns/stevenmburns/momwire-wt-u9/src/momwire/__init__.py",
+ "budget": 48000,
+ "rows": [
+  {
+   "theta_deg": 0.04,
+   "law": 9167.323232745493,
+   "worst": 9462,
+   "worst_over_law": 1.032144254083016,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  },
+  {
+   "theta_deg": 0.03333333333333334,
+   "law": 11000.788425388753,
+   "worst": 11306,
+   "worst_over_law": 1.0277445181935185,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  },
+  {
+   "theta_deg": 0.025,
+   "law": 14667.718624506797,
+   "worst": 14971,
+   "worst_over_law": 1.0206767925713056,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  },
+  {
+   "theta_deg": 0.02,
+   "law": 18334.648699512523,
+   "worst": 18614,
+   "worst_over_law": 1.015236250503938,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  },
+  {
+   "theta_deg": 0.01666666666666667,
+   "law": 22001.57871246209,
+   "worst": 22239,
+   "worst_over_law": 1.010791102340462,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  },
+  {
+   "theta_deg": 0.0125,
+   "law": 29335.438645277012,
+   "worst": 29446,
+   "worst_over_law": 1.0037688665937432,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  },
+  {
+   "theta_deg": 0.011111111111111113,
+   "law": 33002.36858582773,
+   "worst": 33032,
+   "worst_over_law": 1.0008978571975888,
+   "where": [
+    "C/21MHz",
+    0.05
+   ],
+   "nonconvergent": 0,
+   "errors": []
+  }
+ ]
+}

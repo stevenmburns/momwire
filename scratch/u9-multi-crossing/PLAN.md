@@ -521,6 +521,35 @@ which is asserted.
 G2 (split against dense) and G3 (SG against bspline at 1e-2) run at soil A on
 the 5 m rung, with the predictions in the PR-gates table.
 
+### Screen results [2026-09-14]
+
+- **The run.** `u9-s-screen.service` on 9012369, 16:01:14–16:45:19Z.
+- **Records.** `s_panels.json`, `s_interp_L2.json`, `s_interp_L2p.json`,
+  `s_interp_L3.json`, their logs, and `run_s.out`.
+- **Search note.** The word "errors" in `s_panels.log` is the JSON key, which
+  is an empty list on every row.
+
+| id | result |
+|---|---|
+| **PS1** | **HIT.** Across 0.04 … 0.011111°, worst over law is 1.0321, 1.0277, 1.0207, 1.0152, 1.0108, 1.0038, 1.0009. Every worst case is at C/21 MHz, R1 = 0.05 λ_m. There are no non-convergent points and no errors, over 8 media × 6 R1 values under 48,000. At 0.016667° the worst is 22,239, inside [22,002, 23,322]; at 0.011111° it is 33,032, inside [33,002, 34,982]. |
+| **PS2** | **L2's bar and its estimate: HIT.** The worst is 3.94e-9 (the LPDA medium, R1 = 3.0 λ_m, `IphiH`, at 0.02217°), 1.2e5× under the 4.7e-4 bar and inside the [1e-9, 1e-5] estimate. Every reference converged. **The ordering half: MISS.** L2p reads 5.05e-9, above L2, and L3 reads 5.12e-9, above L2p. Each lattice is queried at its own cell midpoints and thirds, and all three land at the same few-1e-9 level. I read that as the comparison's own floor rather than the lattice, but that reading is not measured. |
+| **PS3** | **HIT.** L2's low-band fill takes 34.7–47.0 s per medium, against the ≤ 120 s prediction. L3 takes 95.3–143.5 s, 2.8–3.1× L2, against ≤ 5×. L2p, not predicted, takes 51.5–75.6 s. |
+
+### Decision, by the rule fixed in Amendment 2
+
+- **L2 qualifies,** so L2 is chosen:
+  - its floor, 0.016667°, is ≤ 0.0239°;
+  - S1 converges at 0.016667° on every medium;
+  - its S2 worst, 3.94e-9, is ≤ 4.7e-4.
+- **Budget:** 22,239 × 1.05 = 23,351, rounded up to **24,000**. The worst case
+  uses 92.7 % of it, leaving 7.3 % headroom, against 4.9 % at the old floor.
+- **Ladder:** **3 / 5 / 8 / 11 m.** PC5's finer candidate is **L2p**.
+- **Tooling committed before the runs it serves:**
+  - `g1_single_node.py` for G1 and GT2;
+  - `c_ladder.py` for (c) and PC5.
+- **PC5's metric,** fixed here before the run: the max over the four Z entries
+  of \|Z_L2p − Z_L2\|, against the max over the four of \|Z_mesh×3 − Z_L2\|.
+
 ### (d): Amendment 3, before any (d) run
 
 Amendment 3 will name:
