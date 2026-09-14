@@ -1353,6 +1353,36 @@ a5aac021…`, which reads only rows written on the re-spelled deck):
     just above the band.
   - **Both stand as registered** and will be read as they come.
 
+### C6b result [2026-09-14]: FAIL, and (d) STOPS by Steve's rule
+
+- **The run.** `u9-d2-c6b.service`, `run_d2.sh route_check_one`, 18:31:12–18:31:21Z,
+  on the re-spelled deck (sha256 `a5aac021…`).
+- **The error.** antennaknobs' NEC-5 route raises: "the multiport Y is not
+  reciprocal: ports 'feed' and 'tl5b' disagree by **2.291e-02** relative, over
+  the 0.01 this route allows".
+  - **Compared with the old spelling.** It read 5.343e-02 there, so the
+    re-spelling halved it but did not clear it.
+  - **Where the check sits.** It is the route's own off-diagonal port-current
+    check, raised before any Z.
+- **By Steve's rule a C6 failure is a stop and a report,** not a re-spell on the
+  fly. So:
+  - momwire's re-spelled one-node run (`mw_one_r1`) is **not run**;
+  - the `rest` step is **not run**;
+  - gate (i-1) is **not read**;
+  - PI1a–PI1e stay unread;
+  - Amendment 7, Skylake's full-deck rung, is unaffected. Its own reading still
+    needs a working one-node far-× 3 NEC-5 side.
+- **What is measured and stands:**
+  - **momwire serves the 8-node LPDA at refine 1,** at 2.0 % of \|Z\| from
+    NEC-5 through the route;
+  - **native NEC-5 solves the re-spelled one-node deck:** 0.151 + 30.607j at
+    refine 1, 0.156 + 30.642j at far × 3.
+- **A hypothesis, not measured.** The one-node deck's feed is close to a
+  reactive short (R ≈ 0.15 Ω). The route builds Y from separate per-port runs,
+  so a port current that small in one direction amplifies relative
+  differences in the off-diagonal pair.
+- **Reported to Laptop-builder for Steve's decision.**
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
