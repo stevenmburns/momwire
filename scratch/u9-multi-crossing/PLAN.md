@@ -1634,3 +1634,179 @@ through antennaknobs' route feeds both engines at one point by construction.
 - **The phased arrays.** They stay refused by name, and are not U9's to serve.
   Their three walls are recorded above: grazing past the table, U5's
   within-side spread on both sides, and NT-fed ports.
+
+## Amendment 8c (2026-09-14): one knot feed for both engines, and NEC-5's Y from its own source currents, registered before any run
+
+### Steve's decision (relayed by Laptop-builder)
+
+- **Register 8c.**
+- **The decks.** They carry explicit EX end fields and are read by
+  antennaknobs, so momwire and NEC-5 are fed at ONE knot, the same physical
+  point on every rung.
+- **NEC-5's 2 × 2 Y.** It comes from two runs, each driving both ports at
+  independent nonzero voltages. No 0 V card, and no segment-centre current read.
+- **The checks.** They are registered with their bars, and all come before any
+  Z. A failure is a stop and a report.
+
+### What 8c supersedes, and what it keeps
+
+- **Superseded for every reading:**
+  - Amendment 8's decks (`a8_decks/`);
+  - its NEC-5 extraction (segment-centre currents from one-port runs);
+  - its tooling (`e0`–`e2`, `run_e.sh`).
+- **The rows of `e1_two_node.jsonl` stay unread.**
+  - Its NEC-5 rows are confounded by feed position.
+  - Its momwire rows fed arclength 4.25 m, and no 8c row does.
+- **Kept unchanged:**
+  - the geometry, the separations (3, 5, 8, 11 m) and the rungs (r1 and
+    far × 3 on both engines, all × 3 on NEC-5 only);
+  - the gate and the non-vacuity guard;
+  - C8b, C8c and C8d;
+  - PE8a–f (see below).
+- **The binaries:**
+  - **momwire:** `src/` identical to main 6549550 (`git diff --quiet`). It is
+    checked out at c6ae0f6, the #1068 head, which changes tests only; #1068 has
+    since merged as 0821a94.
+  - **antennaknobs:** `antennaknobs-wt-pin055` at efa6cda1d, `src/` clean.
+  - **NEC-5:** `nec5-linux/nec5cl`.
+
+### Disclosed: what was looked at before this registration
+
+- **One geometry-only capture, in the scratchpad.** It had no fill and no Z.
+  - **The deck:** the d = 3 m r1 deck, re-spelled `EX 0 6 8 2` / `EX 0 12 8 2`.
+  - **What it read:**
+    - `nec5_dialect = True`;
+    - parsed feeds (tag 6, seg 8, end 2) and (tag 12, seg 8, end 2);
+    - momwire kwargs with two plain gap feeds, at arclength 4.5 m on each
+      monopole (the z = 4.5 m knot);
+    - no junction or node ports, and a port count of 2.
+  - It informed the choice of knot below. K1 re-does it on every deck.
+  - Laptop-builder was told before this commit.
+- **Code read, not run:**
+  - **antennaknobs' importer declares a deck NEC-5 only on:**
+    - a comment that is exactly `NEC-5` or `NEC5`;
+    - `NOFILE` on GN;
+    - or an explicit EX end field.
+
+    8c's CM cards say neither.
+  - **momwire's two corner loops** (`_ends_and_corner` and
+    `_ends_and_corner_reversed`) both take the corner potential from
+    `_crossing_fill._corner_v`.
+
+### The decks (`e3_knot_decks.py --write`, `e3_knot_decks.json`)
+
+- **Files.** 40 decks in `a8c_decks/`; each file's sha256 is in
+  `e3_knot_decks.json`.
+- **Geometry.** Amendment 8's. `--write` asserts that every symmetric deck's
+  GW, GE, GN, FR, XQ and EN cards are byte-identical to Amendment 8's `both`
+  deck at the same (d, rung).
+  - **So Amendment 8's geometry preflight carries over:** θ_min, served at r1
+    and far × 3, and node2 refused.
+- **The feed is the knot at z = 4.5 m** on each monopole's long edge
+  (0.5 → 10 m):
+  - **r1:** `EX 0 6 8 2` / `EX 0 12 8 2` (segment 8 of 19, 0.5 m each);
+  - **far × 3 and all × 3:** `EX 0 6 24 2` / `EX 0 12 24 2` (segment 24 of 57,
+    1/6 m each).
+  - **Why 4.5 m.** It is a knot at r1 and at × 3 alike. It is also the point
+    native NEC-5 already fed on Amendment 8's r1 decks.
+- **Excitations,** per symmetric (d, rung), on ports (tag 6, tag 12):
+  - `a`: V = (1, 0.5);
+  - `b`: V = (0.5, 1);
+  - `a0`: `a` with I4 = 0 on both cards. It is K2's twin, and K1's record of
+    the undeclared reading.
+- **The control, `ctrl_d3_{r1,far3}_{a,b}`** (K4):
+  - **The change.** d = 3 m, with node 2's monopole 11 m: long edge 0.5 → 11 m,
+    21 segments at r1 and 63 at far × 3. Node 1 is unchanged.
+  - **The feed.** The same knot, segment 8 / 24 end 2, on both monopoles.
+  - **Why it can fail.** The deck is not mirror-symmetric, so Y11 ≠ Y22, and a
+    port mislabel shows as Y12 ≠ Y21.
+  - **What it shares.** Its below geometry, and so its θ_min, are the
+    symmetric d = 3 m deck's.
+  - **Its Z is not gated.**
+
+### The extraction (`e4_knot_solve.py`)
+
+- **momwire.**
+  - **The input.** The kwargs antennaknobs' momwire engine builds from
+    `<stem>_a.nec` (AK#1464's vertex preflight stubbed for construction, as in
+    Amendment 3).
+  - **The solve.** `BSplineSolver(**kw).compute_port_solution().y`.
+  - **Port order** is feed order: port 1 on tag 6 (x = 0), port 2 on tag 12
+    (x = d). K1 bars this.
+- **NEC-5,** runs `a` and `b`.
+  - **The currents.** In each run, a port's current I is the source current
+    NEC-5 prints on that port's input-parameters row, matched by tag.
+  - **The voltages** come from the cards.
+  - **The formula.** Y = [I_a I_b][V_a V_b]⁻¹, with [V_a V_b] = [[1, 0.5],
+    [0.5, 1]] (determinant 0.75, condition number 3).
+  - **What it does not use.** No 0 V card, and no wire-currents table.
+  - **The rows.** Every input-parameters row is kept with its printed tokens.
+- **Z and Δ.** Z = Y⁻¹ on both engines, and Δ = momwire − NEC-5. Z11 is
+  port 1's.
+- **The `same` mode is re-spelled.**
+  - **Why.** Amendment 8's patch replaced `_ends_and_corner`, the forward block
+    only, and its `same` step never ran. That patch would miss any corner pair
+    the reversed block fills.
+  - **8c's patch** makes `_crossing_fill._corner_v` return 0 for ρ ≥
+    `_SAME_NODE_RHO` (1e-9 m). Both corner loops call it, so it covers whichever
+    block the fill uses. It counts the pairs it zeroes.
+  - **Same-node pairs** are untouched.
+- **What stdout shows.** `e4_knot_solve.py` prints only a status line, so no Z
+  is seen before its step's checks are read.
+
+### Checks, read in the order below; a failure is a stop and a report
+
+A missing, duplicated or errored row fails its check (the D3 lesson).
+
+| id | check | bar | prediction |
+|---|---|---|---|
+| **K1** (Steve's check 1) | On every momwire deck (the symmetric r1 and far × 3 decks at each d, and the control at r1 and far × 3), geometry only (`e3_knot_decks.py --check1`):<br>• the importer reads the NEC-5 dialect;<br>• momwire's kwargs carry exactly 2 plain gap feeds and no junction or node ports, with a port count of 2;<br>• feed 1 is at (0, 0, 4.5) and feed 2 at (d, 0, 4.5), in that order, within 1e-9 m;<br>• the deck is served (no refusal), with 2 crossing junctions;<br>• on symmetric decks, every other kwarg equals the `a0` twin's, so the dialect moves the feed and nothing else. | all, on all 10 | passes on all 10. The `a0` twins read `nec5_dialect = False`, with feeds at segment centres: z = 4.25 m at r1 and 4.4167 m at far × 3 (recorded, not a bar). |
+| **K2** (check 2) | On every symmetric NEC-5 (d, rung), runs `a` and `a0` print identical input-parameters rows: tag, segment, and every printed token of V, I, Z, Y and P. | identical, on all 12 | passes on all 12 |
+| **K3** (check 3) | On every NEC-5 run (40 runs, 80 rows):<br>• exactly one row per EX card, matched by tag;<br>• its printed absolute segment is the card's segment or the next, the two segments that meet at the knot;<br>• its printed V equals the card's, ≤ 1e-4 relative;<br>• \|V/I − Z\|/\|Z\| ≤ 1e-3, on its printed V, I and Z. | all | passes; the printed segment is the card's own on every row; \|V/I − Z\|/\|Z\| ≤ 3e-4 |
+| **K4** (check 4) | On the control at r1 and at far × 3, per engine:<br>• reciprocity \|Y12 − Y21\|/\|Y12\| is ≤ 1e-2 on NEC-5 and ≤ 1e-9 on momwire;<br>• asymmetry \|Y11 − Y22\|/\|Y12\| is ≥ 0.1 on both. That is ten times NEC-5's reciprocity bar, so a port swap cannot pass. | all | passes. NEC-5 reciprocity ≤ 1e-3; momwire ≤ 1e-12; asymmetry ≥ 0.3 (low confidence) |
+| **C8b** | momwire reciprocity on every momwire row, `cross` and `same` | ≤ 1e-9 | passes, ≤ 1e-12 |
+| **C8c** | sign(Re Z12) agrees between the engines at r1, at every d | agree | passes |
+| **C8d** | every `same` row zeroed more than 0 cross-node pairs | > 0 | passes |
+
+- **C8a is not an 8c check.** On the symmetric decks it cannot fail: Y and
+  [V_a V_b] are both of the form [[α, β], [β, α]], so Y12 = Y21 by construction.
+  `e5_checks.py` records it as information. K4 is the reciprocity check that
+  can fail.
+- **K3 covers D3's question.** Y's currents are now the same printed currents
+  that Z_in is formed from, so D3's question becomes K3's V/I = Z check.
+
+### Gate, guard and predictions: carried over
+
+- **The gate, the steps and the non-vacuity guard** are exactly Amendment 8's,
+  applied to 8c's rows.
+- **PE8a–f carry over and are NOT re-derived.**
+  - **The reason.** The knot move puts both engines' feed at the same new
+    point. Every PE8 band is stated on a cross-engine difference, a mesh step
+    or the corner's effect. None was derived from the feed's absolute position:
+    the bands came from finding 1 on the LPDA and from momwire#1027.
+  - **One reading, fixed now, before any Z:** PE8c is read at far × 3, the rung
+    PE8a and PE8b name.
+  - **PE8f's premise is cleaner under 8c.** Amendment 8's NEC-5 far × 3 step
+    also moved NEC-5's feed, from 4.5 to 4.333 m; 8c's does not. Its band is
+    unchanged.
+
+### Order and tooling
+
+Each step runs as `run_e8c.sh <step>`, alone on the box, under
+`MemoryMax=24G`. Rows go to `e4_knot.jsonl`.
+
+1. **`check1`:** `e3_knot_decks.py --check1` writes `e3_check1.json`. **K1 is
+   read.**
+2. **`nec5`:** NEC-5 runs `a`, `b` and `a0` at r1, far × 3 and all × 3, at
+   each d, plus the control's `a` and `b` at r1 and far × 3 (40 runs).
+   Then `e5_checks.py nec5`: **K2, K3 and K4's NEC-5 half are read.**
+3. **`momwire`:** momwire `cross` at r1 and far × 3, at each d, plus the
+   control at r1 and far × 3 (10 rows). Then `e5_checks.py momwire`: **C8b and
+   K4's momwire half are read.**
+4. **`same`:** momwire `same` at r1, at each d (4 rows). Then
+   `e5_checks.py same`: **C8b and C8d, and then C8c.**
+5. **Only then** does `e6_table.py` read Z:
+   - the gate;
+   - the guard;
+   - PE8a–f;
+   - the absolute agreement, which is not predicted.
