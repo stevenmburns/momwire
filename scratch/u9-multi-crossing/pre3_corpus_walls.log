@@ -1,0 +1,19 @@
+/home/smburns/stevenmburns/momwire-wt-u9/src/momwire/__init__.py
+== Phased-Arrays/nec/1r5-bc3elendfire-burrad.nec
+  segs=1029 below_nodes=5778 crossing_nodes=3 above_members_per_node={1: 3}
+  node xy=[(-96.272, 0.0), (-32.091, 0.0), (32.091, 0.0)]
+  radii by side={'above': {np.float64(0.0762): 3, np.float64(0.019254): 1}, 'below': {np.float64(0.0762): 3, np.float64(0.01): 38}}
+  min below-node depth=6.5084e-03 m  th_min=0.0058 deg (floor 0.05)  r1_max=224.47 m = 21.82 lam_m (lam_m 10.286)
+  refusal on this main: a deck with 3 crossing junctions, at (-96.2725, 0), (-32.0908, 0), (32.0908, 0): the crossing serve completes ONE crossing node per deck (momwire#524 phase 2); its interface corner
+== Phased-Arrays/nec/1r8-4el-endfire-burrad.nec
+  segs=1372 below_nodes=7704 crossing_nodes=4 above_members_per_node={1: 4}
+  node xy=[(-81.91, 0.0), (-27.303, 0.0), (27.303, 0.0), (81.91, 0.0)]
+  radii by side={'above': {np.float64(0.0127): 4, np.float64(0.016382): 1}, 'below': {np.float64(0.0127): 4, np.float64(0.001): 49}}
+  min below-node depth=5.5375e-03 m  th_min=0.0039 deg (floor 0.05)  r1_max=245.59 m = 25.89 lam_m (lam_m 9.485)
+  refusal on this main: a deck with 4 crossing junctions, at (-81.9105, 0), (-27.3035, 0), (27.3035, 0), (81.9105, 0): the crossing serve completes ONE crossing node per deck (momwire#524 phase 2); its in
+== LPDAs/nec/lpma3r5-4-6el86ft75o-buriedradials.nec
+  segs=2690 below_nodes=15576 crossing_nodes=8 above_members_per_node={1: 8}
+  node xy=[(0.0, 0.0), (4.723, 0.0), (9.074, 0.0), (13.084, 0.0), (16.779, 0.0), (20.184, 0.0), (23.322, 0.0), (26.213, 0.0)]
+  radii by side={'above': {np.float64(0.00127): 8}, 'below': {np.float64(0.00127): 192}}
+  min below-node depth=5.1458e-03 m  th_min=0.0239 deg (floor 0.05)  r1_max=74.72 m = 4.68 lam_m (lam_m 15.966)
+  refusal on this main: a deck with 8 crossing junctions, at (0, 0), (4.72261, 0), (9.07433, 0), (13.0843, 0), (16.7794, 0), (20.1842, 0), (23.3217, 0), (26.2128, 0): the crossing serve completes ONE cros

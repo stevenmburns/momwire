@@ -1,0 +1,6 @@
+/home/smburns/stevenmburns/momwire-wt-u9/src/momwire/__init__.py
+d=None nodes_b=42 min_depth=1.688e-03 r1_max=3.966 m (0.40 lam_m) th_min=90.0000 deg lam_m=10.019
+d=5.0 nodes_b=84 min_depth=1.688e-03 r1_max=6.382 m (0.64 lam_m) th_min=0.0387 deg lam_m=10.019
+d=12.0 nodes_b=84 min_depth=1.688e-03 r1_max=12.638 m (1.26 lam_m) th_min=0.0161 deg lam_m=10.019
+d=50.0 nodes_b=84 min_depth=1.688e-03 r1_max=50.157 m (5.01 lam_m) th_min=0.0039 deg lam_m=10.019
+d=200.0 nodes_b=84 min_depth=1.688e-03 r1_max=200.039 m (19.97 lam_m) th_min=0.0010 deg lam_m=10.019
