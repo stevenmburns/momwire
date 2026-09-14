@@ -804,6 +804,31 @@ The same commit carries two further changes:
   - **The re-pin that will be proposed.** Depth 0.5 mm, θ = 0.0115°, under L2's
     floor. The docstring's "1 deg floor" is stale and gets corrected with it.
 
+**Acknowledged by Laptop-builder, with a condition (2026-09-14).** It stays
+recorded as a GT3 miss: the search went by constant names and missed a
+geometry pin. It is not re-registered.
+- **The condition.** The proposed 0.5 mm depth is wrong: with the test's 1 mm
+  radius it would put the wire's surface through z = 0. Depth must stay ≥
+  radius.
+- **What was done instead.** The radial is lengthened from 5 m to 10 m, at the
+  same 1 mm depth, radius and 0.5 m segments. θ = atan(0.002/10) = 0.0115°.
+- **Checked before committing.**
+  - **Old geometry:** main refuses at 0.02307° under 0.05; the branch serves it.
+  - **New geometry:** main refuses at 0.01150° under 0.05, and the branch
+    refuses at 0.01150° under 0.016667.
+  - **The refusal is the right one.** On both trees it contains
+    "grazing floor" and the lateral-wave sentence, not a stand-off or
+    crossing refusal.
+  - **The test passes on both trees:** 0.48 s and 0.43 s.
+- **Where it lives.** The src branch, as its third commit.
+- **The whole-tree sweep before the timing is read** has two halves:
+  - **Text.** A grep for grazing-refusal wording found no other below/below
+    grazing pin outside files that already ran on the branch.
+  - **Behaviour.** All five of momwire's pytest lanes run on the branch, and
+    this second half is the one that decides. After G5's slow and crossgate,
+    `run_lanes.sh` runs the default, integration and memgate lanes alone on
+    the box. The timing is read only after all five are in.
+
 ## Amendment 5 (2026-09-14): fill-cost timing, registered before any timing run
 
 **Steve's instruction (relayed by Laptop-builder).**
