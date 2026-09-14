@@ -5468,9 +5468,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         None when the deck has no ground or no buried wire, or when the fill
         would reach its grids.
         """
-        if self.ground_z is None or not self._has_buried_wires():
+        if self.ground_z is None:
             return None
         try:
+            # Inside the try (momwire#1061): labeling the wires raises by name
+            # for a ground-CONTACT end beside a buried wire, and that sentence
+            # is exactly what this pre-flight exists to return.
+            if not self._has_buried_wires():
+                return None
             _below_interface.plan_buried(
                 self._build_geometry(),
                 nodes=self._buried_nodes,
