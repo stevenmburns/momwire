@@ -1,0 +1,9 @@
+rod_soilA {'z': ['(169.77559689796254-82.280023587193j)'], 'seconds': 0.94, 'low_band_filled': False}
+rod_eps1 {'z': ['(17.557770975310156-758.501352375456j)'], 'seconds': 0.08, 'low_band_filled': False}
+rise_eps1 {'z': ['(24.37003455764024-620.4817998735115j)'], 'seconds': 0.08, 'low_band_filled': False}
+fan_soilA {'z': ['(148.62141279270836-29.791702667735212j)'], 'seconds': 0.73, 'low_band_filled': False}
+hub_soilA {'z': ['(148.63404556745496-30.463037885982974j)'], 'seconds': 0.73, 'low_band_filled': False}
+u5_rod {'z': ['(194.48246246990408-106.17147407027133j)'], 'seconds': 0.73, 'low_band_filled': False}
+sg_direct_fan4 {'z': ['(61.1625273912401-15.489799912576666j)'], 'seconds': 1.18, 'low_band_filled': False}
+sg_buried_hub2 {'z': ['(97.37105829136499+18.643474099539244j)'], 'seconds': 0.99, 'low_band_filled': False}
+dipole_935_3mm_n41 {'z': ['(166.4799065703745+10.800796164552303j)'], 'seconds': 27.97, 'low_band_filled': True}
