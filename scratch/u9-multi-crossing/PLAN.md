@@ -1148,6 +1148,37 @@ recording feed Z, wall time and max RSS.
 
 Either way, it is reported before (d) changes.
 
+**D2 results [2026-09-14]** (`d3_nec5_native.json`, `.log`; registered at
+c397efc).
+
+| id | result |
+|---|---|
+| **PD2a** | **MISS.** The native full deck prints 52.995 − 3.5845j at tag 48 (absolute segment 94), in 26.9 s. That is 0.088 Ω from the census capture's 53.0700 − 3.5386j, against a 1e-3 bar, and 0.088 Ω from the route's 53.0711 − 3.5390j. **Cause, from the records:** the census capture used the static `nec5-timing/nec5cl-x13` build, not `nec5-linux/nec5cl`. The route also reduces the TL network itself, where the native run uses the deck's own TL cards. I assumed one value would reproduce across both builds and both network spellings, and it does not. |
+| **PD2b** | **MISS.** The native one-node deck prints no input-parameters block. The printout ends at the network data with an error: a source specified where there is no basis function, at element 14, node 1. Element 14 is tag 6's only segment, one of the node-adjacent wires the one-node spelling shortened to end at +0.0762 m. |
+
+**Reading.**
+- **The one-node spelling is defective, and the defect is mine**, not the
+  route's and not momwire's.
+  - **In the full deck,** each node-adjacent wire's single segment ends on its
+    crossing junction.
+  - **Shortened to end free above the plane,** that one segment has no basis
+    function at its end, and the TL port on it has nothing to drive.
+  - **So** the route's reciprocity refusal and momwire's implausible one-node
+    Z (0.157 + 30.58j) are both explained by the same broken port.
+- **(d)'s (i) cannot run on this spelling.** It is not re-run until a corrected
+  spelling is registered, below, and reported.
+
+**Proposed re-spelling, for Amendment 6. Not registered, not run.**
+- **Lifted wires.** Each of the seven wires GW 6, 12, …, 42 becomes **two
+  segments** over 0.1524 → 0.0762 m. Segment 1, which carries the TL, then ends
+  on a segment junction and has its basis function again.
+- **Everything else** is unchanged.
+- **Before any Z, it must pass two checks:** the native NEC-5 run prints an
+  input-parameters block, and the route's reciprocity check passes.
+- **Still standing.** Rule 1's failure for momwire's full far × 3 (34.7 GB)
+  leaves (i) without a momwire ladder on the full deck. The re-spelling does not
+  change that.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
