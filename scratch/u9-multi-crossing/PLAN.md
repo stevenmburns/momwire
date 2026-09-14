@@ -378,3 +378,154 @@ Every guard was read before any Z, and all of them hold.
   in the report, so Laptop-builder and Steve can read it the other way.
 - **PB4 hits,** so the narrowed refusal's minimum node separation is 1 m, the
   smallest separation gated.
+
+### Steve's ruling on (b) [2026-09-14, relayed by Laptop-builder]
+
+**GO.** It is recorded exactly as ruled.
+- **The registered rule reads NO-GO literally.** It said "GO when PB1 and PB2
+  both hold", and PB2 did not hold.
+- **PB2 stays a MISS of its band:** 4.696 Ω against [5, 100] Ω.
+- **PB3's spelling B stays a MISS of its band:** 9.386 Ω against [10, 200] Ω.
+- **The cause of both is stated:** the O(1) node-current assumption in the
+  estimate.
+- **The GO is Steve's post-hoc ruling (2026-09-14),** on these grounds:
+  - PB1 is 247× under the bar;
+  - the omission misses the truth by 94× the bar, so the gate demonstrably
+    sees the term;
+  - PB4 and PB5 hit.
+- **PB2's band is not widened or re-registered after the fact.**
+
+## Amendment 2 (2026-09-14): route 2, registered before the screen and before any (c) or (d) Z run
+
+### Steve's decision (relayed by Laptop-builder)
+
+- **Route 2 now.** Extend the below/below table under 0.05°.
+- **Route 1 is deferred.** Serving past-cap pairs at any θ is a named
+  follow-up, not work in this PR. It comes back only once the phased arrays'
+  other walls are addressed, and only behind its own grazing Z gate.
+- **(d) is the LPDA only.**
+- **The phased arrays stay refused by name.** Their walls are recorded in (d)
+  above: grazing past the table, U5's within-side spread on both sides, and
+  NT-fed ports.
+
+### The table change: one family of candidates, none of them needing C++
+
+- **What changes.**
+  - Lower `_SOMM_BELOW_TH_MIN_DEG`, which is the low band's first node, and
+    keep the four bands.
+  - Give the low band a Δθ that divides 0.05/3, so every shipped low-band
+    node (0.05 + k·0.05/3) stays a node.
+  - Raise `_MAX_TAIL_PANELS`.
+- **Why no C++ change is needed.** Read at 1ca872511:
+  - `proj_one_below` routes on the two band edges (0.1° and 1°), which do not
+    move, and reads each region's th0 / dth from the region arrays;
+  - the budget reaches `below_six_integrals_batch` as an argument at call
+    time;
+  - the transmitted family has its own `_MAX_TAIL_PANELS_T`;
+  - `_tail_below` stops on convergence, so a larger budget cannot change a
+    node that converges under 8000.
+
+| lattice | floor | low-band Δθ | covers | 6.4/tan(floor) |
+|---|---|---|---|---|
+| **L2** | 0.016667° (0.05 − 2·0.05/3) | 0.05/3, unchanged | the LPDA (0.0239°); rungs 3/5/8/11 m (0.0645/0.0387/0.0242/0.0176°) | 22,002 |
+| **L2p** | 0.016667° | 0.05/6 | the same | 22,002 |
+| **L3** | 0.011111° (0.05 − 7·0.05/9) | 0.05/9 | also 12 m (0.0161°) | 33,002 |
+
+**What moves in the shipped domain.**
+- **Outside the low band [0.05°, 0.1°]:** nothing. That band is deferred and
+  filled only by decks that reach under 0.1°.
+- **Inside it:**
+  - under L2, the stencil re-centres in [0.05°, 0.0667°), and the rest of the
+    band moves by rounding only;
+  - under L2p and L3, nodes are added across the whole band.
+
+### The screen (S): no Z
+
+Tooling is `s_table_screen.py` and `run_s.sh`, run on the accelerated path,
+which is asserted.
+
+- **S1, panels.**
+  - **What is recorded.** The worst tail-panel count and the non-convergent
+    count, under a 48,000-panel budget.
+  - **Angles.** θ ∈ {0.04, 0.033333, 0.025, 0.02, 0.016667, 0.0125,
+    0.011111}°.
+  - **Media (8).** SPEC soils A/B/C × 7/21 MHz, plus soil A at the rod ladder's
+    `F7`, plus the LPDA's own `GN`/`FR` medium.
+  - **Ranges.** R1/λ_m ∈ {0, 0.02, 0.05, 0.2, 1, 2}.
+- **S2, interpolation on the real grid, per lattice.**
+  - **Queries.** Cell midpoints and thirds of every low-band cell from the
+    floor up to 0.0667°, × R1/λ_m ∈ {0.2, 1.0, 1.9, 3.0, 3.9} (all three
+    zones), × the 8 media, × the four surfaces.
+  - **Reference.** `iv_surfaces_direct_below`, relative to each point's own
+    scale. Every reference must converge.
+- **S3, cost.** The wall time to fill the low band in all three zones, per
+  lattice and medium.
+
+| id | prediction (blind) |
+|---|---|
+| **PS1** | The worst count is within [1.00, 1.06] × the law at every θ, and non-convergent is 0 everywhere under 48,000. That is [22,002, 23,322] at 0.016667° and [33,002, 34,982] at 0.011111°. |
+| **PS2** | L2's worst is ≤ 4.7e-4, with a point estimate in [1e-9, 1e-5]. #935 measured 6.8e-10 along θ with Δθ/θ ≤ 0.33; L2's bottom cell has Δθ/θ = 1, and #935's probe did not cover the far zone. L2p ≤ L2, and L3 ≤ L2p. |
+| **PS3** | L2's low-band fill takes ≤ 120 s per medium on this box. L3 takes ≤ 5 × L2. |
+
+### Decision rule, fixed now
+
+1. **A lattice qualifies** if all three hold:
+   - its floor is ≤ 0.0239°;
+   - S1 converges at its floor;
+   - S2's worst is ≤ 4.7e-4, the low band's own bar (#553 U2 and #935).
+2. **Pick** L2 if it qualifies, else L2p, else L3. Cost comes first, so L3 is
+   not picked merely to keep 12 m. If none qualifies, stop and report: route 2
+   on a nested uniform band fails, and Steve decides.
+3. **The budget** is S1's worst at the chosen floor over the 8 media, × 1.05,
+   rounded up to the next 1,000.
+4. **The ladder.**
+   - L2 or L2p gives 3/5/8/11 m;
+   - L3 gives 3/5/8/12 m;
+   - θ_min is re-read with pre1's function on the branch before (c) runs.
+
+### Gates on the table change (0.55.0 G8 style)
+
+- **GT1, banked accuracy.** S2 at the chosen lattice is the banked number. It
+  also becomes a slow-lane test: #935's real-grid test, extended to the new
+  cells.
+- **GT2, single-node decks unchanged.**
+  - **The G1 decks** are predicted bit-identical, because none of them reads
+    the low band. Each deck's solve also records whether the low band was
+    filled.
+  - **#935's 3 mm dipole** (0.0582°, inside the re-centred cell) is predicted
+    to move by \|ΔZ\|/\|Z\| ≤ 1e-8.
+- **GT3, re-pinned refusals.**
+  - **What gets updated.** The tests that pin 0.05° or 8000 move to the new
+    floor.
+  - **`test_the_floor_still_refuses_what_it_cannot_reach`.** Its 1.0 mm case
+    (0.0194°) becomes served under L2 or L2p; its 0.5 mm case (0.0097°) stays
+    refused.
+  - **Stop rule.** A failing test outside the files that name the floor, the
+    budget, the low band or the second node is a miss, and a stop.
+
+### (c), on the production path at soil A, after the source change
+
+- **The deck.** Spelling A, two `crossing_deck(1)` pairs, at each rung of the
+  chosen ladder; bspline with production defaults; Z = inv(Y).
+- **The single-node print.** `crossing_deck(1)`, with its one feed, at the same
+  settings.
+
+| id | prediction (blind) |
+|---|---|
+| **PC1** | Every rung is served. |
+| **PC2** | \|Z11(d) − Z_single\| is non-increasing over the four rungs, and ≤ 1 Ω at the widest. |
+| **PC3** | \|Z12(d)\| is strictly decreasing over the four rungs, and at the widest rung lies in [3, 30] Ω. |
+| **PC4** | \|Z12 − Z21\| ≤ 1e-9·\|Z12\| at every rung. |
+| **PC5** | At the 8 m rung, Z under the chosen lattice and under the next finer candidate (L2 → L2p, L2p → L3, L3 → Δθ 0.05/18) differ by ≤ 1e-2 of that rung's own mesh ladder step (every edge count × 3). |
+
+G2 (split against dense) and G3 (SG against bspline at 1e-2) run at soil A on
+the 5 m rung, with the predictions in the PR-gates table.
+
+### (d): Amendment 3, before any (d) run
+
+Amendment 3 will name:
+- the NEC-5 binary;
+- the U2 ladder rungs;
+- the LPDA's fill-time and peak-memory measurement, which runs first;
+- the quantities gated. The LPDA has one feed and 8 nodes, so the gates are
+  its change from the single-node answer and its NEC-5 agreement class.
