@@ -15,6 +15,7 @@ serve plan still decide.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import resource
@@ -63,6 +64,7 @@ def main():
         rung=args.rung,
         engine=args.engine,
         path=str(path),
+        deck_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         momwire=str(src),
         momwire_commit=subprocess.run(
             ["git", "-C", str(src), "rev-parse", "--short", "HEAD"],

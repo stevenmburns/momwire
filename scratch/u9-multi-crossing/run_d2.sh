@@ -37,11 +37,20 @@ case "${1:-}" in
         solve full far3 nec5
         solve one far3 momwire
         ;;
+    route_check_one)
+        # Amendment 6: the route's reciprocity check on the re-spelled one-node
+        # deck. Launched only after the native NEC-5 check passed; momwire's
+        # one-node Z is not run until this row is read as passing.
+        solve one r1 nec5
+        ;;
+    mw_one_r1)
+        solve one r1 momwire
+        ;;
     mw_full_far3)
         solve full far3 momwire
         ;;
     *)
-        echo "usage: run_d2.sh cost|rest|mw_full_far3" >&2
+        echo "usage: run_d2.sh cost|rest|route_check_one|mw_one_r1|mw_full_far3" >&2
         exit 2
         ;;
 esac
