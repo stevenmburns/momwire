@@ -100,7 +100,9 @@ def run():
         rec["decks"][name] = dict(
             z=[repr(complex(v)) for v in z],
             seconds=round(dt, 2),
-            low_band_filled=any(g._band_lo_filled for g in _below_grids()),
+            low_band_filled=any(
+                g._regions[i]["filled"] for g in _below_grids() for i in g._band_lo_idx
+            ),
         )
         print(name, rec["decks"][name], flush=True)
     return rec
