@@ -100,6 +100,22 @@ Against the dense `BSplineSolver` at matched mesh:
 
 Fixed-length wire, mesh refined, `aca_tol=1e-5`, `aca_eta=2.0`, degree 1:
 
+> **This is one geometry: a single straight wire in free space** (momwire#977).
+> Compression has its best case here, with 66–98 % of the matrix far. Antenna
+> decks are less favourable. The 2026-09-09 crossover ladder covered 206 cells
+> on catalog classes (a rhombic, an LPDA, a compact loop, a many-wire whip), both
+> grounds and degrees 1 and 2 (antennaknobs
+> `docs/status/2026-09-09-hmatrix-crossover-ladder.md`).
+>
+> - **Wins:** the H-matrix beat dense in **3 of 101** comparable cells, all
+>   `wire.rhombic` at ~8,000 bases on finite ground (0.78–0.98×).
+> - **The LPDA** was still 1.58× slower at 4,896 bases.
+> - **The ground-coupled compact loop** got slower as its mesh was refined,
+>   reaching 16.4×.
+>
+> So read "N ≥ ~500" and "~12×" below as the straight-wire case only. The route
+> stays opt-in (#973).
+
 ```
    N   far%  rank  store%    relZ    Dfill(C)  Hbuild   Dsolve  Hsolve  iters
   250   66%  ~5    49.4%   1.5e-07    0.11s     0.14s    0.027s  0.05s     3
