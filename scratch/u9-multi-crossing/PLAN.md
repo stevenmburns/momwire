@@ -1572,6 +1572,21 @@ The bar was 1e-3, and the prediction was that it would pass at ≤ 1e-4:
   idle port, so NEC-5 prints both port currents in its own source convention,
   with a check that the 0 V source does not perturb the solution.
 
+### C8b result [2026-09-14]: PASS, with the same symmetry caveat; its rows are kept unread
+
+- **The run.** `u9-e-mw.service`, 18:44:23–18:48:27Z: momwire `cross` at r1 and
+  far × 3, at each d, on src 3331ef1 (≡ main 6549550). 8 rows, all exit 0,
+  28–32 s each, 104–130 MB.
+- **The feeds.** They landed on the two monopoles at arclength 4.25 m, as
+  written.
+- **The result.** \|Y12 − Y21\|/\|Y12\| is 8.1e-17 to 2.6e-15, against the 1e-9
+  bar, so C8b passes.
+- **The caveat, as for C8a.** On mirror-symmetric decks reciprocity says little
+  more than that the fill kept its symmetry.
+- **Kept unread.** D3's stop holds, so no Z in these rows is read or compared.
+  They wait for Steve's decision on Amendment 8b, and the `same` step is not
+  launched.
+
 ### Not predicted, and reported whatever it reads
 
 - **Absolute agreement.** How close momwire's absolute feed Z is to NEC-5's.
