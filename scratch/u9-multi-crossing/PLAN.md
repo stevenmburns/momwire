@@ -625,6 +625,19 @@ registered at 8c0cdf9):
   - **#935's refused dipole depths:** 0.5 and 0.8 mm (0.0097° and 0.0155°).
   - **#838's BLE grid refusal:** at 0.0125°.
 
+### Banking (b) on the production path (registered before the test runs)
+
+**The test.** `test_g524_8_two_node_eps1_collapse`, marked slow and crossgate,
+in `tests/test_crossing_serve_524.py`:
+- spellings A and B at d = 8 m, where θ_min is 0.0242°, which L2 serves with
+  no patch;
+- ε̃ = 1, against the free-space two-wire truth;
+- every Z entry within 0.05 Ω, the class bar of g524_5 and g524_6.
+
+| id | prediction (blind) |
+|---|---|
+| **PB6** | Both spellings pass, and the worst entry is ≤ 1e-3 Ω. The point estimate is 2.0e-4 Ω, what the (b) probe read at 1 m and at 12 m. |
+
 ### (d): Amendment 3, before any (d) run
 
 Amendment 3 will name:
