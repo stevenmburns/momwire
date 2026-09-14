@@ -1,0 +1,79 @@
+{
+ "mode": "compare",
+ "a": "g1_main.json",
+ "b": "g1_branch.json",
+ "rows": {
+  "rod_soilA": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "rod_eps1": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "rise_eps1": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "fan_soilA": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "hub_soilA": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "u5_rod": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "sg_direct_fan4": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "sg_buried_hub2": {
+   "bit_identical": true,
+   "rel": 0.0,
+   "low_band_filled": [
+    false,
+    false
+   ]
+  },
+  "dipole_935_3mm_n41": {
+   "bit_identical": false,
+   "rel": 1.0647712483851879e-17,
+   "low_band_filled": [
+    true,
+    true
+   ]
+  }
+ }
+}

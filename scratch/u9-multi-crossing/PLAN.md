@@ -576,6 +576,29 @@ budget, the low band or the second node (plus the U5 and SG crossing files), on
   - `test_below_fills_568`'s grazing row, an 8 mm pair at 0.0457°;
   - `test_grazing_band_lo_935`'s 1 mm dipole at 0.0194°, which GT3 predicted.
 
+**G1 and GT2 [2026-09-14].** The single-node Z was compared bitwise between
+main (`g1_main.json`, run on the u9 tree, whose src is main at 1ca8725) and the
+src branch with the corner, the scope and L2 (`g1_branch.json`). The comparison
+is `g1_compare.json`.
+- **Bit-identical, as predicted (HIT).** Eight decks:
+  - the crossing rod at soil A and at ε̃ = 1;
+  - the rise deck at ε̃ = 1;
+  - the fan and the buried hub at soil A;
+  - U5's two-radius rod;
+  - SG's direct fan (N = 4) and buried hub (N = 2).
+  None of them fills the low band.
+- **#935's 3 mm dipole (HIT).** It reads the low band on both trees and moves by
+  1.1e-17 relative (1 ulp in X), against GT2's ≤ 1e-8.
+- **Not predicted: a cost change.** The dipole's solve took 9.8 s on main and
+  28.0 s on the branch.
+  - **Why.** The low band is filled as one region per zone, so a deck that only
+    reaches 0.058° now also pays for the two new nodes, at 0.0167° and 0.0333°,
+    each costing up to ~22k panels.
+  - **What it costs.** Nothing about the value; every deck that reaches under
+    0.1° pays about 3× the low-band fill time.
+  - **What would avoid it.** A separate fifth band. That is a C++ layout change,
+    and it is reported rather than decided here.
+
 **The re-measure.** #838's served/refused ladder on its own deck (soil A,
 7 MHz, R1 = λ_m) is re-measured before it is re-pinned, as that test's comment
 requires. Tooling is `t_cap_ladder_24000.py`.
@@ -584,6 +607,23 @@ requires. Tooling is `t_cap_ladder_24000.py`.
 |---|---|
 | **PT1** | Served: every rung from 0.12° down to 0.016667°. Refused by name: 0.0125° and 0.01°. At 0.015° the law gives 24,446 against a budget of 24,000, and this deck reads about 0.95 of the law at 0.05° (6959 against 7330), so either outcome is possible and neither is predicted. |
 | **PT2** | The numpy dispatch refuses at 0.0125° within 20 s, the fast lane's hard ceiling. |
+
+**PT results [2026-09-14]** (`t_cap_ladder_24000.json`, run on the src branch,
+registered at 8c0cdf9):
+- **PT1: HIT.**
+  - **Served:** every rung from 0.12° down to 0.016667°. Panels:
+    0.04° → 8649, 0.03° → 11447, 0.023° → 14828, 0.02° → 16990,
+    0.016667° → 20291.
+  - **Refused by name:** 0.0125° and 0.01°, each at 24000 panels.
+  - **0.015°, not predicted:** served, at 22483 panels.
+- **PT2: HIT.** The numpy dispatch refuses at 0.0125° in 6.63 s.
+- **What that re-pins.**
+  - **#838's ladder:** served (0.12 … 0.02), refused (0.0125, 0.01).
+  - **Its three refusal-message tests:** they ask at 0.0125° instead of 0.03°.
+- **The other three re-pins, made from geometry.**
+  - **#568's grazing row:** a 2 mm pair at 0.011°.
+  - **#935's refused dipole depths:** 0.5 and 0.8 mm (0.0097° and 0.0155°).
+  - **#838's BLE grid refusal:** at 0.0125°.
 
 ### (d): Amendment 3, before any (d) run
 

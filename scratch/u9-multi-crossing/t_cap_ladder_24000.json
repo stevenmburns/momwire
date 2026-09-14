@@ -1,0 +1,97 @@
+{
+ "momwire": "/home/smburns/stevenmburns/momwire-wt-u9src/src/momwire/__init__.py",
+ "budget": 24000,
+ "floor_deg": 0.01666666666666667,
+ "ladder": [
+  {
+   "theta_deg": 0.12,
+   "verdict": "SERVED",
+   "panels": 2965,
+   "seconds": 0.06
+  },
+  {
+   "theta_deg": 0.1,
+   "verdict": "SERVED",
+   "panels": 3542,
+   "seconds": 0.07
+  },
+  {
+   "theta_deg": 0.09,
+   "verdict": "SERVED",
+   "panels": 3925,
+   "seconds": 0.07
+  },
+  {
+   "theta_deg": 0.08,
+   "verdict": "SERVED",
+   "panels": 4402,
+   "seconds": 0.08
+  },
+  {
+   "theta_deg": 0.06,
+   "verdict": "SERVED",
+   "panels": 5827,
+   "seconds": 0.11
+  },
+  {
+   "theta_deg": 0.05,
+   "verdict": "SERVED",
+   "panels": 6959,
+   "seconds": 0.13
+  },
+  {
+   "theta_deg": 0.04,
+   "verdict": "SERVED",
+   "panels": 8649,
+   "seconds": 0.16
+  },
+  {
+   "theta_deg": 0.03,
+   "verdict": "SERVED",
+   "panels": 11447,
+   "seconds": 0.22
+  },
+  {
+   "theta_deg": 0.023,
+   "verdict": "SERVED",
+   "panels": 14828,
+   "seconds": 0.28
+  },
+  {
+   "theta_deg": 0.02,
+   "verdict": "SERVED",
+   "panels": 16990,
+   "seconds": 0.31
+  },
+  {
+   "theta_deg": 0.01666666666666667,
+   "verdict": "SERVED",
+   "panels": 20291,
+   "seconds": 0.37
+  },
+  {
+   "theta_deg": 0.015,
+   "verdict": "SERVED",
+   "panels": 22483,
+   "seconds": 0.41
+  },
+  {
+   "theta_deg": 0.0125,
+   "verdict": "REFUSED",
+   "panels": 24000,
+   "seconds": 0.44
+  },
+  {
+   "theta_deg": 0.01,
+   "verdict": "REFUSED",
+   "panels": 24000,
+   "seconds": 0.44
+  }
+ ],
+ "numpy_at_refused": {
+  "theta_deg": 0.0125,
+  "verdict": "REFUSED",
+  "panels": 24000,
+  "seconds": 6.63
+ }
+}
