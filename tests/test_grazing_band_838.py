@@ -720,6 +720,15 @@ def test_the_health_counter_still_bumps_before_the_refusal():
     assert d["max_tail_panels"] == below._MAX_TAIL_PANELS, d
 
 
+# SLOW since momwire main 6549550. The numpy dispatch walks the whole
+# 24,000-panel cap in Python: 6.7 s at any R1 (measured at R1 = 1, 2 and 3
+# lambda_m on a Linux dev box), and 15.15 s on CI's macOS runner, one slow
+# runner from the 20 s hard ceiling. The budget cannot be shrunk for this test
+# alone, because the numpy contour binds `_MAX_TAIL_PANELS` when the module
+# loads. The PR lane still asserts the cap refusal and its prose on the default
+# dispatch (`test_the_tail_cap_refuses_by_name_below_the_floor`,
+# `test_the_cap_refusal_names_the_query_and_the_way_out`).
+@pytest.mark.slow
 def test_both_dispatches_refuse_at_the_cap():
     """One copy of the prose, reached from both routes. The C++ and numpy
     contours both come back through `_six_integrals_below*` carrying `conv`,
@@ -753,11 +762,14 @@ def test_the_floor_itself_is_untouched_by_the_refusal():
     floor sits at 93 % of the budget on the worst SPEC soil, which is close
     enough that it is worth asserting rather than reasoning about.
 
-    The PR lane asks at that worst point (C / 21 MHz, R1 = 0.05 lambda_m:
-    22,239 of 24,000 panels). A point at antennaknobs plan U9's floor costs ~3x
-    one at #935's, so the full 18-point sweep ran 24.1 s against the 20 s hard
-    ceiling and moved to the slow lane, below."""
-    _floor_is_served([("C", 21e6, 0.05)])
+    The PR lane asks at C / 21 MHz, R1 = 2 lambda_m: 21,925 of 24,000 panels
+    (91 %), 0.43 s on a Linux dev box. It asked at the worst point until momwire
+    main 6549550 (C / 21 MHz, R1 = 0.05 lambda_m, 22,239 panels), but at the
+    same angle a small-R1 point costs ~10x a large-R1 one: 4.6 s on that box
+    and 20.67 s on CI's macOS runner, over the 20 s hard ceiling. So the PR lane
+    no longer carries the worst-point headroom; the slow sweep below asks all
+    18 points, the worst included."""
+    _floor_is_served([("C", 21e6, 2.0)])
 
 
 @pytest.mark.slow
