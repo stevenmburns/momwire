@@ -317,3 +317,48 @@ kwargs, and confirm that main and the branch serve it and 0.55.0 refuses it.
   crossing decks.
 - **Unchanged:** the prediction, and procedure steps 3 and 4 (`run_g6b.sh`,
   then `g6_popb_compare.py`). They run after G5, beside Population A.
+
+## G3 result [2026-09-15]: FAIL by its bar, so a STOP; the prediction MISSES
+
+- **The run.** `run_gates.sh g3 avx2` and `g3 sse2`, 01:02:54–01:11:39Z, on the
+  branch. Records: `g3_avx2.json`, `g3_sse2.json`, `g3_compare.json`, and the
+  logs.
+- **The loaded variants** were `_accelerators_avx2` and `_accelerators_sse2`.
+- **The bar was pairwise ≤ 1e-12, and it fails.** C++ avx2 against C++ sse2
+  reads **7.8e-10** at the floor node (θ = 0.016667°, inner zone, soil A at
+  7 MHz). Every pair across the two processes carries that same number.
+- **The prediction (≤ 1e-13) MISSES.**
+- **What the breakdown shows,** from the same records:
+  - **Same-process C++ against numpy agrees at every point:** 5.7e-16 at worst,
+    in both variants, at all 78 points. That includes 0.049999999, 0.05 and
+    0.050000001°, and 0.099999999, 0.1 and 0.100000001°. The five-way selector
+    and the stride of 5 agree between the two dispatches.
+  - **The cross-variant spread follows the node's grazing angle, not the
+    seams.** On soil A at 7 MHz, inner zone, it reads 7.8e-10 at the floor,
+    1.1e-10 at 0.0333°, 1.00e-10 on both sides of 0.05°, 3.9e-11 on both sides
+    of 0.1°, and 1.9e-12 at 0.5°. It is smaller in the near and far zones and
+    on soil C at 21 MHz.
+  - **So the spread is continuous across both seams,** which is the signature
+    of the grid FILL rather than of routing. Each process fills its own grid
+    with its own variant's contour.
+- **Hypothesis, not yet measured.** The bar was mis-specified: it compared two
+  independently filled grids, so it measured the avx2 and sse2 contours'
+  difference at the most grazing nodes (their tolerance is rtol 1e-9), not the
+  dispatch. That spread predates momwire#1064.
+
+## D1, a diagnostic of G3, registered before it runs
+
+- **What.** `g3_dispatch.py`, unchanged, on MAIN 54caf86. There are two
+  processes, `MOMWIRE_FORCE_VARIANT=avx2` and `=sse2`, writing
+  `d1_main_g3_avx2.json` and `d1_main_g3_sse2.json`. `d1_compare.py` reads them
+  beside G3's branch captures.
+- **Why this can tell.** momwire#1064 does not touch the fill's contour. At
+  these points main's single low band reads the same nodes the branch's floor
+  and low bands read, or neighbours at the same angles. So if the spread
+  predates this change, main shows it too.
+- **Predictions:**
+  - main's cross-variant spread is within 2× of the branch's at every point;
+  - main's same-process C++ against numpy is ≤ 1e-15.
+- **What it can and cannot decide.** D1 does not re-open G3's bar and does not
+  pass G3. A hit supports the hypothesis above, and G3's verdict waits for a
+  decision on the gate's spelling.
