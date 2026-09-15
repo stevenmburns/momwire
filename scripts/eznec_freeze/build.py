@@ -202,6 +202,14 @@ def main() -> int:
         # is left out of the bundle.
         "--collect-submodules",
         "momwire",
+        # The printout's line-2 engine stamp reads the installed version
+        # through `importlib.metadata`, which answers from the package's
+        # `.dist-info` — a directory `--collect-submodules` does NOT bring
+        # along.  Without this the frozen engine stamps every printout
+        # `unknown` and the one field a bug report needs most is the one it
+        # cannot carry (`momwire.eznec._printout.engine_stamp`).
+        "--copy-metadata",
+        "momwire",
         # Optional-dependency imports the seam never reaches; excluded so an
         # environment that happens to carry them doesn't fatten the bundle.
         "--exclude-module",
