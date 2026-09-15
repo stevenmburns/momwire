@@ -1,0 +1,151 @@
+{
+ "gate": "G4",
+ "verdict": "PASS",
+ "failures": [],
+ "rows": [
+  {
+   "zone": "inner",
+   "order": "floor_first",
+   "n_r": 23,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334",
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 6,
+     "points": 138
+    }
+   ],
+   "seconds": 24.53,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "inner",
+   "order": "low_first",
+   "n_r": 23,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 92
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 46
+    }
+   ],
+   "seconds": 27.86,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "near",
+   "order": "floor_first",
+   "n_r": 42,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334",
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 6,
+     "points": 252
+    }
+   ],
+   "seconds": 9.91,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "near",
+   "order": "low_first",
+   "n_r": 42,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 168
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 84
+    }
+   ],
+   "seconds": 9.9,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "far",
+   "order": "floor_first",
+   "n_r": 45,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334",
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 6,
+     "points": 270
+    }
+   ],
+   "seconds": 10.58,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "far",
+   "order": "low_first",
+   "n_r": 45,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 180
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 90
+    }
+   ],
+   "seconds": 10.66,
+   "shared_columns_bitwise": true
+  }
+ ]
+}
