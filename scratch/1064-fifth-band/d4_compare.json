@@ -1,0 +1,61 @@
+{
+ "diagnostic": "D4a",
+ "variants": {
+  "avx2": {
+   "accelerators": {
+    "v055": "_accelerators_avx2.cpython-314-x86_64-linux-gnu.so",
+    "main": "_accelerators_avx2.cpython-314-x86_64-linux-gnu.so",
+    "branch": "_accelerators_avx2.cpython-314-x86_64-linux-gnu.so"
+   },
+   "main_vs_v055_batch": {
+    "bit_identical": true,
+    "worst": 0.0
+   },
+   "main_vs_v055_single": {
+    "bit_identical": true,
+    "worst": 0.0
+   },
+   "branch_vs_v055_batch": {
+    "bit_identical": false,
+    "worst": 4.478729714732404e-14
+   },
+   "branch_vs_v055_single": {
+    "bit_identical": false,
+    "worst": 4.478729714732404e-14
+   },
+   "batch_equals_single": {
+    "v055": true,
+    "main": true,
+    "branch": true
+   }
+  },
+  "sse2": {
+   "accelerators": {
+    "v055": "_accelerators_sse2.cpython-314-x86_64-linux-gnu.so",
+    "main": "_accelerators_sse2.cpython-314-x86_64-linux-gnu.so",
+    "branch": "_accelerators_sse2.cpython-314-x86_64-linux-gnu.so"
+   },
+   "main_vs_v055_batch": {
+    "bit_identical": true,
+    "worst": 0.0
+   },
+   "main_vs_v055_single": {
+    "bit_identical": true,
+    "worst": 0.0
+   },
+   "branch_vs_v055_batch": {
+    "bit_identical": true,
+    "worst": 0.0
+   },
+   "branch_vs_v055_single": {
+    "bit_identical": true,
+    "worst": 0.0
+   },
+   "batch_equals_single": {
+    "v055": true,
+    "main": true,
+    "branch": true
+   }
+  }
+ }
+}

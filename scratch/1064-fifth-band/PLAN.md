@@ -554,3 +554,37 @@ relative in the surfaces and 1.9e-14 in the kernel.
   to 0.55.0 on avx2, the compiled contour is not the cause, and the difference
   lies in the grid path, which is examined next.
 - **Scope.** Neither diagnostic re-opens G1a's bar.
+
+## D4 results [2026-09-15]: D4a HITS (the recompiled avx2 contour carries the last bits); D4b MISSES as executed
+
+- **The runs.** 01:43:15–01:43:19Z, after the registration commit aff943d.
+  - The push of aff943d first failed on a DNS error, and was retried and
+    verified before D4 ran.
+  - **Records:** `d4_{v055,main,branch}_{avx2,sse2}.json`, `d4_compare.json`.
+- **D4a: HIT.** These are the direct surfaces at 12 fixed points on soil B at
+  7 MHz, with no grid and unchanged Python.
+
+| variant | main vs 0.55.0 | branch vs 0.55.0 | batch = one-at-a-time, on every tree |
+|---|---|---|---|
+| avx2 | bit-identical | differs, worst 4.5e-14 | yes |
+| sse2 | bit-identical | **bit-identical** | yes |
+
+- **What D4a shows.** On the FMA-free sse2 build the branch reproduces 0.55.0
+  bit for bit. On avx2 only the branch differs, at the scale G1a found.
+  - **The one input that changes:** the `_accel_mw568.cpp` translation unit the
+    branch recompiled, which holds the contour.
+  - **What was ruled out:** the Python, the grid, the query points and the
+    process history. None of them differs between the trees here.
+- **D4b: MISS as executed, and not re-spelled.**
+  - **What it compared.** Main's and the branch's disassembly of
+    `below_six_integrals_batch`: 1,677 lines on avx2 and 1,699 on sse2, with
+    0 lines differing on either.
+  - **Why that does not settle it.** The extraction took the outer function,
+    and `six_below_one` is inlined (no symbol of its own). It did not reach
+    the OpenMP-outlined body (`._omp_fn.0`), where the per-node contour runs.
+  - **So** D4b neither confirms nor contradicts a code-generation difference.
+    D4a's behaviour is the evidence recorded.
+- **The reading for G1a.** Bit-identity to 0.55.0 on avx2 was never reachable
+  for a change that recompiles this translation unit. On sse2 the old domain's
+  values are 0.55.0's bit for bit, at the level D4a samples.
+  - **G1a stays FAIL by its bar,** pending a decision on its spelling.
