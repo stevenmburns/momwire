@@ -36,18 +36,6 @@ Eight gates, derived from the seam's own contract (momwire#497 U1):
    construction — so this counts the daemon's own ``listening pid=`` lines:
    none means the fallback ladder carried the run silently, which is a
    FAILURE of this gate rather than a pass, and two means a double spawn.
-8. **The printout says which engine answered** — line 2 of every printout
-   carries ``momwire <version> <basis> <variant>``, with a real version and
-   the basis the launcher's own filename claims.  The version is the field
-   this gate exists for: it comes from the package metadata, which a
-   PyInstaller bundle carries only because ``build.py`` passes
-   ``--copy-metadata momwire``, and a bundle built without it stamps
-   ``unknown`` while every other gate here stays green.
-
-   It is a gate on what the printout SAYS, never on what the engine DID.
-   The stamp is threaded from the filename, so a copy that ignored its own
-   name would stamp the name it ignored — gate 4 is the only evidence about
-   the solver, and this one can never stand in for it.
 7. **Self-containment of the accelerator** (nt only) — the bundle carries
    ``libomp140.x86_64.dll`` AND the daemon loaded the bundle's own copy of it.
    momwire#737 shipped two phases of bundle without that DLL, so every
@@ -72,6 +60,18 @@ Eight gates, derived from the seam's own contract (momwire#497 U1):
    runtime on purpose (``_accel.py`` documents the shared-runtime reason), so
    self-containment is not the claim there and PyInstaller collects the
    shared libraries itself.
+8. **The printout says which engine answered** — line 2 of every printout
+   carries ``momwire <version> <basis> <variant>``, with a real version and
+   the basis the launcher's own filename claims.  The version is the field
+   this gate exists for: it comes from the package metadata, which a
+   PyInstaller bundle carries only because ``build.py`` passes
+   ``--copy-metadata momwire``, and a bundle built without it stamps
+   ``unknown`` while every other gate here stays green.
+
+   It is a gate on what the printout SAYS, never on what the engine DID.
+   The stamp is threaded from the filename, so a copy that ignored its own
+   name would stamp the name it ignored — gate 4 is the only evidence about
+   the solver, and this one can never stand in for it.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
