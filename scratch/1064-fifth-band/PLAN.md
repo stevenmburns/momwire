@@ -882,3 +882,24 @@ taken before this re-spelling. G1a-sse2 runs after it.
   4. G5, alone on the box.
   5. G1a-sse2.
   6. The CI dispatch, after the push.
+
+## G4, re-run on the joint batch [2026-09-15]: PASS, prediction hit
+
+- **The run.** `g4_fill_counter.py` on 28cb11d, written to
+  `g4b_fill_counter.json`.
+
+| zone | order | calls (θ columns) | seconds | shared columns |
+|---|---|---|---|---|
+| inner | floor first | **6** | 24.53 | bit-identical |
+| inner | low first | 4, 2 | 27.86 | bit-identical |
+| near | floor first | **6** | 9.91 | bit-identical |
+| near | low first | 4, 2 | 9.90 | bit-identical |
+| far | floor first | **6** | 10.58 | bit-identical |
+| far | low first | 4, 2 | 10.66 | bit-identical |
+
+- **Each zone's floor and low bands now fill in ONE call when the floor band
+  fills first.** No θ node is evaluated twice, and the low band's values are
+  the same bits in both orders.
+- **Not a timing gate, but in line with D6.** The inner zone's one call took
+  24.5 s against the split's 27.9 s. The near and far zones read the same
+  either way.
