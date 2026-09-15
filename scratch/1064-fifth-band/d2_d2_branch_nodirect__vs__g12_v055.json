@@ -1,0 +1,38 @@
+{
+ "a": "d2_branch_nodirect.json",
+ "b": "g12_v055.json",
+ "trees": [
+  "branch",
+  "v055"
+ ],
+ "by_band": {
+  "low [0.05, 0.1)": {
+   "points": 378,
+   "surf": 157,
+   "kernel": 137,
+   "max_surf": 6.704321290623371e-14,
+   "max_kernel": 1.6484689344544073e-14
+  },
+  "mid [0.1, 1)": {
+   "points": 546,
+   "surf": 208,
+   "kernel": 179,
+   "max_surf": 6.579808034912347e-14,
+   "max_kernel": 1.8952700303744733e-14
+  },
+  "grazing/steep >= 1": {
+   "points": 294,
+   "surf": 110,
+   "kernel": 100,
+   "max_surf": 5.364686913408814e-14,
+   "max_kernel": 1.5145930602109377e-14
+  }
+ },
+ "media_with_differences": {
+  "B/7MHz": 155,
+  "B/21MHz": 159,
+  "A/3.5MHz": 162
+ },
+ "missing": [],
+ "bit_identical": false
+}

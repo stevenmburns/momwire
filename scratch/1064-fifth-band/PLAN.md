@@ -441,3 +441,35 @@ relative in the surfaces and 1.9e-14 in the kernel.
     agree between C++ and numpy to 5.7e-16 on both variants.
   - **G3 stays FAIL by its registered bar,** and waits for a decision on the
     gate's spelling.
+
+## D2 results [2026-09-15]: D2b HITS; D2a MISSES, so the cause is on the branch's own path
+
+- **The runs.** 01:24:19–01:33Z.
+  - `g12_grid.py` on the branch without `--direct`, written to
+    `d2_branch_nodirect.json`.
+  - `g12_grid.py` on 0.55.0 again, written to `d2_v055_repeat.json`.
+- **The comparisons,** by `d2_compare.py`, written to `d2_*__vs__*.json`.
+  - **How it counts.** The comparator counts every captured row. The old set
+    carries 0.1° and 1.0° twice (once as a band's last node, once as the next
+    band's first), so it reads 1,218 rows where G1a's keyed count read 1,134
+    points.
+
+| comparison | not bit-identical (surface / kernel), low / mid / ≥ 1° | media |
+|---|---|---|
+| **D2b:** 0.55.0 repeat vs 0.55.0 | 0/0, 0/0, 0/0 | none |
+| **D2a:** branch without `--direct` vs branch with `--direct` | 0/0, 0/0, 0/0 | none |
+| **D2a:** branch without `--direct` vs 0.55.0 | 157/137, 208/179, 110/100; max 6.7e-14 / 1.9e-14 | B 7 MHz, B 21 MHz, A 3.5 MHz |
+
+- **D2b hits.** A tree's capture reproduces itself bit for bit across
+  processes.
+- **D2a misses.** The branch without `--direct` is the branch with it, bit for
+  bit, and it differs from 0.55.0 exactly as G1a found. So the `--direct`
+  history is not the cause.
+- **Reading.** The branch's last-bit differences are deterministic, and they
+  come from its own code path, in bands whose code and lattice momwire#1064
+  does not change, on three lossy media.
+- **The leading hypothesis, not measured.** A grid fill's values depend on
+  evaluation HISTORY within the process, for example per-thread contour state.
+  The branch fills the new floor band on the same queries, which changes what
+  was evaluated before each later fill.
+- **G1a stays FAIL by its bar.**
