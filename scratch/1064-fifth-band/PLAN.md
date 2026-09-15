@@ -417,3 +417,27 @@ relative in the surfaces and 1.9e-14 in the kernel.
 - **If D2a still differs,** the cause is on the branch's code path, and that is
   what gets reported.
 - **Scope.** Neither diagnostic re-opens G1a's bar.
+
+## D1 result [2026-09-15]: prediction HIT; G3's cross-variant spread predates momwire#1064
+
+- **The run.** `g3_dispatch.py` on MAIN 54caf86, one process per variant,
+  01:21:47–01:25Z. Records: `d1_main_g3_avx2.json`, `d1_main_g3_sse2.json`,
+  `d1_compare.json`.
+- **Main's cross-variant spread matches the branch's.** Its worst is 7.776e-10,
+  at the same point (the floor node, inner zone, soil A at 7 MHz) and to every
+  printed digit.
+  - **72 of 78 points** agree within ×1.01.
+  - **The six that do not** are all at θ = 0.06°, the one queried angle where
+    the branch's low band and main's single band interpolate from different
+    nodes. The worst of them is ×1.90, on a spread of 1.4e-13 (soil C, 21 MHz,
+    far zone).
+- **Main's same-process C++ against numpy** is 5.7e-16, the same as the
+  branch's.
+- **Both predictions (within 2×, and ≤ 1e-15) hit.**
+- **Reading.** G3's failure measured the avx2 and sse2 builds' fill spread at
+  the most grazing nodes, which main already carries. It did not measure the
+  dispatch this change touches.
+  - **What was tested and holds:** the five-way selector and the stride of 5
+    agree between C++ and numpy to 5.7e-16 on both variants.
+  - **G3 stays FAIL by its registered bar,** and waits for a decision on the
+    gate's spelling.
