@@ -1,0 +1,241 @@
+{
+ "m_per_radial": 54,
+ "p_mast": 32,
+ "rungs": {
+  "48": {
+   "profile_warm_total_s": 13.65,
+   "class_s": {
+    "pairs": 11.406,
+    "solve": 0.352,
+    "threads": 0.974,
+    "uncertain": 0.284,
+    "fixed": 0.634
+   },
+   "class_pct": {
+    "pairs": 83.6,
+    "solve": 2.6,
+    "threads": 7.1,
+    "uncertain": 2.1,
+    "fixed": 4.6
+   },
+   "pair_factor": 0.03277439024390244,
+   "solve_factor": 0.0004448310837770781,
+   "route_overhead_s": 0.007,
+   "sector_warm_low_s_profile": 1.056,
+   "sector_warm_high_s_profile": 2.273,
+   "scale_to_1067": 1.1194,
+   "sector_warm_low_s": 1.18,
+   "sector_warm_high_s": 2.54,
+   "momwire_warm_1067_s": 15.28,
+   "nec5_3b75639_s": 2.82,
+   "speedup_low": 6.0,
+   "speedup_high": 12.92,
+   "vs_3b75639_low": 0.419,
+   "vs_3b75639_high": 0.902,
+   "fixed_terms_ge_50ms": [
+    [
+     "_crossing_fill.py:axis_data",
+     0.056
+    ]
+   ]
+  },
+  "120": {
+   "profile_warm_total_s": 79.051,
+   "class_s": {
+    "pairs": 65.694,
+    "solve": 3.849,
+    "threads": 6.348,
+    "uncertain": 1.222,
+    "fixed": 1.938
+   },
+   "class_pct": {
+    "pairs": 83.1,
+    "solve": 4.9,
+    "threads": 8.0,
+    "uncertain": 1.5,
+    "fixed": 2.5
+   },
+   "pair_factor": 0.013206388206388206,
+   "solve_factor": 7.015881045832931e-05,
+   "route_overhead_s": 0.0178,
+   "sector_warm_low_s_profile": 2.924,
+   "sector_warm_high_s_profile": 10.394,
+   "scale_to_1067": 1.0694,
+   "sector_warm_low_s": 3.13,
+   "sector_warm_high_s": 11.12,
+   "momwire_warm_1067_s": 84.54,
+   "nec5_3b75639_s": 18.67,
+   "speedup_low": 7.61,
+   "speedup_high": 27.04,
+   "vs_3b75639_low": 0.167,
+   "vs_3b75639_high": 0.595,
+   "fixed_terms_ge_50ms": [
+    [
+     "bspline.py:_accumulate",
+     0.105
+    ],
+    [
+     "~:<built-in method numpy.ascontiguousarray>",
+     0.091
+    ],
+    [
+     "_crossing_fill.py:_rank1_add_cols",
+     0.089
+    ],
+    [
+     "~:<built-in method momwire._accelerators_avx2.seg_seg_static_moments_bspline_uniform>",
+     0.088
+    ],
+    [
+     "~:<method 'ravel' of 'numpy.ndarray' objects>",
+     0.087
+    ],
+    [
+     "_methods.py:_clip",
+     0.079
+    ],
+    [
+     "~:<built-in method scipy.sparse._sparsetools.csr_matvecs>",
+     0.077
+    ],
+    [
+     "_crossing_fill.py:axis_data",
+     0.073
+    ],
+    [
+     "numeric.py:full",
+     0.066
+    ],
+    [
+     "_crossing_fill.py:_main_split",
+     0.064
+    ],
+    [
+     "_crossing_fill.py:self_completions",
+     0.062
+    ],
+    [
+     "_aca.py:build_cluster_tree",
+     0.056
+    ],
+    [
+     "_function_base_impl.py:asarray_chkfinite",
+     0.055
+    ]
+   ]
+  },
+  "150": {
+   "profile_warm_total_s": 157.595,
+   "class_s": {
+    "pairs": 131.274,
+    "solve": 7.309,
+    "threads": 13.032,
+    "uncertain": 2.165,
+    "fixed": 3.814
+   },
+   "class_pct": {
+    "pairs": 83.3,
+    "solve": 4.6,
+    "threads": 8.3,
+    "uncertain": 1.4,
+    "fixed": 2.4
+   },
+   "pair_factor": 0.01057550418101328,
+   "solve_factor": 4.481179601278456e-05,
+   "route_overhead_s": 0.0231,
+   "sector_warm_low_s_profile": 5.387,
+   "sector_warm_high_s_profile": 20.423,
+   "scale_to_1067": 1.0281,
+   "sector_warm_low_s": 5.54,
+   "sector_warm_high_s": 21.0,
+   "momwire_warm_1067_s": 162.02,
+   "nec5_3b75639_s": 30.14,
+   "speedup_low": 7.72,
+   "speedup_high": 29.26,
+   "vs_3b75639_low": 0.184,
+   "vs_3b75639_high": 0.697,
+   "fixed_terms_ge_50ms": [
+    [
+     "bspline.py:_buried_serve_plan",
+     0.486
+    ],
+    [
+     "_methods.py:_clip",
+     0.189
+    ],
+    [
+     "_crossing_fill.py:axis_data",
+     0.176
+    ],
+    [
+     "bspline.py:_accumulate",
+     0.154
+    ],
+    [
+     "_crossing_fill.py:_rank1_add_cols",
+     0.149
+    ],
+    [
+     "~:<built-in method numpy.ascontiguousarray>",
+     0.143
+    ],
+    [
+     "~:<method 'ravel' of 'numpy.ndarray' objects>",
+     0.137
+    ],
+    [
+     "~:<built-in method scipy.sparse._sparsetools.csr_matvecs>",
+     0.131
+    ],
+    [
+     "~:<built-in method momwire._accelerators_avx2.seg_seg_static_moments_bspline_uniform>",
+     0.129
+    ],
+    [
+     "_crossing_fill.py:cross_complete_block_split",
+     0.123
+    ],
+    [
+     "_crossing_fill.py:self_completions",
+     0.103
+    ],
+    [
+     "numeric.py:full",
+     0.096
+    ],
+    [
+     "_aca.py:build_cluster_tree",
+     0.09
+    ],
+    [
+     "_function_base_impl.py:asarray_chkfinite",
+     0.089
+    ],
+    [
+     "~:<built-in method numpy.array>",
+     0.083
+    ],
+    [
+     "~:<built-in method numpy.arange>",
+     0.081
+    ],
+    [
+     "getlimits.py:__init__",
+     0.063
+    ],
+    [
+     "~:<method 'nonzero' of 'numpy.ndarray' objects>",
+     0.062
+    ],
+    [
+     "_crossing_fill.py:_main_split",
+     0.061
+    ],
+    [
+     "_arraysetops_impl.py:_unique1d",
+     0.058
+    ]
+   ]
+  }
+ }
+}
