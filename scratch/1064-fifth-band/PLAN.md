@@ -827,3 +827,58 @@ taken before this re-spelling. G1a-sse2 runs after it.
 - **The decision rule.** If D6 misses, nothing is applied and this is reported
   first. So the joint batch is NOT applied. G5's reading on the decks under
   0.05° (1.090× and 1.081× main) stands as a MISS, awaiting a decision.
+
+## The joint batch [2026-09-15]: registered before it is applied and before any timed run
+
+- **Decided upstream of this record:** apply the joint batch, on D6's evidence,
+  with a fresh registration.
+- **It is applied on D6's LOCALISATION, not on D6's registered claim.** Two
+  readings stand as MISSES, and are neither re-read nor overwritten:
+  - **D6's prediction** ("the split is 5–12% slower in both zones");
+  - **G5's first reading** for the decks under 0.05°: `dipole1mm` 1.090× and
+    `twonode11` 1.081× main, cold.
+
+  Every re-run below writes beside those records.
+- **The change,** in `_fill_region`.
+  - **When the floor band fills and the low band is not yet filled,** both
+    bands' columns go in ONE `iv_surfaces_direct_below` call: the floor band's
+    own two and the low band's four. The result is sliced into the two regions.
+  - **When the low band is already filled,** the floor band evaluates its own
+    two columns, as it does now.
+  - **Unchanged:** the lattices, the routing, and the low band's ownership of
+    the shared columns.
+- **Why values should not move.** A node's value does not depend on its batch.
+  D4a showed batch and one-at-a-time evaluation agree bit for bit, on every
+  tree.
+- **Where the recovery is expected: the INNER zone.** D6 put the split's cost
+  there (1.129×, +2.8 s) and found none in the near zone (0.996×).
+- **Predictions:**
+  - **G4** (re-run to `g4b_fill_counter.json`). Each node is evaluated once, in
+    every zone.
+    - **Floor band first:** ONE call carrying all six θ columns.
+    - **Low band first:** the low band's four, then the floor band's two.
+  - **G5** (re-run with `TAG=_joint`, writing `t5_fill_cost_joint.jsonl` and
+    `t5_table_joint.json`).
+    - **The decks under 0.05°:** `dipole1mm` and `twonode11` cold branch/main
+      is 1.00 ± 0.04, inside the G5 bar [0.92, 1.08].
+    - **Everything else** (the [0.05°, 0.1°] decks, the catalog decks, and
+      every warm solve): within the same bars, and within ±0.03 of the first
+      G5 table's ratios.
+  - **G1b,** from the re-run rows.
+    - **As before:** Z is bit-identical, the catalog decks against main and
+      `dipole935` and `brv_corner` against 0.55.0.
+    - **Added:** `dipole1mm`'s and `twonode11`'s Z are bit-identical to the
+      branch's first G5 run. The change moves no value.
+  - **G1a-sse2** (re-run on the branch to `g1a_sse2_branch_joint.json`, compared
+    with `g1a_sse2_v055.json`): bit-identical.
+  - **`make test`** (the branch's src exported, logged to
+    `g7_make_test_joint.log`): green, apart from the box-level
+    `test_field_point[0113]` ceiling breach.
+  - **The `ci.yml` dispatch** on the new head: green.
+- **Order:**
+  1. Apply and commit the change.
+  2. G4.
+  3. `make test`.
+  4. G5, alone on the box.
+  5. G1a-sse2.
+  6. The CI dispatch, after the push.
