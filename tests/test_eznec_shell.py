@@ -8,7 +8,10 @@ own licensed engine's output, kept verbatim.  The expected prefix is always
 SLICED OUT of the fixture at the ``- - - STRUCTURE SPECIFICATION - - -``
 heading, never transcribed into this file: a hand-copied banner would gate
 the transcription, not the engine.  Comparison is after the manifest's
-CRLF-to-LF normalization.
+CRLF-to-LF normalization, and after line 2's engine stamp is masked by
+position on both sides (``test_eznec_printout.mask_engine_stamp``) — the one
+header line this engine writes differently on purpose, gated for content in
+``tests/test_eznec_engine_stamp.py``.
 
 **Protocol gates** run ``python -m momwire.eznec`` as a real process, because
 every obligation in the fault-injection table is about what a PROCESS leaves
@@ -35,6 +38,7 @@ import pytest
 import momwire.eznec as eznec
 from eznec_reproducibility import blank_undefined
 from momwire.eznec._shell import ARGUMENT_ERROR_INPUT, ARGUMENT_ERROR_OUTPUT
+from test_eznec_printout import mask_engine_stamp
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures" / "eznec"
 MANIFEST = json.loads((FIXTURE_DIR / "manifest.json").read_text())
@@ -113,11 +117,14 @@ def run_engine(args, *, cwd=None, stdin=subprocess.DEVNULL, input=None):
 def test_header_matches_the_captured_printout_byte_for_byte(cid):
     """Every capture that shipped a printout gates its own header.
 
-    This is the whole of U1's byte contract: the form-feed line, the build
-    tag, the NEC-5 banner box, the comment box with the deck's ``CM`` cards
-    echoed into it, and the blank lines down to the structure heading.
+    This is the whole of U1's byte contract: the form-feed line, the NEC-5
+    banner box, the comment box with the deck's ``CM`` cards echoed into it,
+    and the blank lines down to the structure heading.  The build-tag line is
+    masked: that one is momwire's stamp now, and it is gated as such.
     """
-    assert eznec.render_header(deck_text(cid)) == header_prefix(cid)
+    assert mask_engine_stamp(eznec.render_header(deck_text(cid))) == mask_engine_stamp(
+        header_prefix(cid)
+    )
 
 
 @pytest.mark.integration
@@ -129,8 +136,10 @@ def test_the_two_named_gates_have_different_comment_blocks():
     deck" is the property that matters, not "matches a captured file".
     """
     assert header_prefix("0043") != header_prefix("0010")
-    assert eznec.render_header(deck_text("0043")) == header_prefix("0043")
-    assert eznec.render_header(deck_text("0010")) == header_prefix("0010")
+    for cid in ("0043", "0010"):
+        assert mask_engine_stamp(
+            eznec.render_header(deck_text(cid))
+        ) == mask_engine_stamp(header_prefix(cid))
 
 
 @pytest.mark.integration
@@ -172,7 +181,9 @@ def test_the_header_stops_before_the_structure_heading():
     header = eznec.render_header(deck_text("0043"))
     assert _STRUCTURE not in header
     assert header.endswith("\n\n\n\n\n\n")
-    assert printout_text("0043").startswith(header)
+    assert mask_engine_stamp(printout_text("0043")).startswith(
+        mask_engine_stamp(header)
+    )
 
 
 @pytest.mark.integration
@@ -253,7 +264,18 @@ def test_a_valid_deck_is_refused_in_the_printout_at_exit_zero(tmp_path):
     assert reason.startswith(
         "NE (near electric field) asks for the field at (0, 0, 0) metres"
     )
-    assert written == eznec.render_refusal(deck_text("0022"), reason)
+    # Line 2's engine stamp masked on both sides, and this one is NOT about
+    # the captures: the child runs with `src/` prepended to PYTHONPATH
+    # (`run_engine`), so `importlib.metadata` can answer it from a stale
+    # in-tree `.egg-info` while the parent reads the installed `.dist-info` —
+    # measured 0.51.0 against 0.55.0 on a box that had bumped the version
+    # without re-running `pip install -e .`.  The version a printout carries
+    # is a property of the INSTALL, so two differently-resolved installs
+    # disagreeing is not a defect in this frame.  Every field of the stamp is
+    # gated in `tests/test_eznec_engine_stamp.py`, per route.
+    assert mask_engine_stamp(written) == mask_engine_stamp(
+        eznec.render_refusal(deck_text("0022"), reason)
+    )
 
 
 @pytest.mark.integration
@@ -297,7 +319,9 @@ def test_paths_resolve_against_the_working_directory(tmp_path):
     written = (
         (tmp_path / "NEC5.OUT").read_bytes().decode("latin-1").replace("\r\n", "\n")
     )
-    assert written.startswith(header_prefix("0010"))
+    assert mask_engine_stamp(written).startswith(
+        mask_engine_stamp(header_prefix("0010"))
+    )
 
 
 @pytest.mark.integration
@@ -313,11 +337,9 @@ def test_a_path_with_spaces_needs_no_quoting_in_argv(tmp_path):
     proc = run_engine([str(deck), str(out)])
 
     assert proc.returncode == 0
-    assert (
-        out.read_bytes()
-        .decode("latin-1")
-        .replace("\r\n", "\n")
-        .startswith(header_prefix("0043"))
+    written = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
+    assert mask_engine_stamp(written).startswith(
+        mask_engine_stamp(header_prefix("0043"))
     )
 
 
@@ -536,7 +558,7 @@ RESIDENCY_SEED = 20260823
 
 
 def _strip_timing(text: str) -> str:
-    """The two normalizations this comparison makes, and nothing else.
+    """The three normalizations this comparison makes, and nothing else.
 
     The timing lines are wall clock and mean nothing to a byte compare. And
     :func:`eznec_reproducibility.blank_undefined` blanks the four printed
@@ -546,14 +568,25 @@ def _strip_timing(text: str) -> str:
     and a wire loss that is the sum of nothing. Each bar sits in a measured
     void; ``tests/test_eznec_reproducibility.py`` holds them there.
 
-    Applied to BOTH sides, so it can only narrow what is asserted. It touches
-    56 lines in 6 of the 80 decks, every one of them carrying an open stub or
-    a dead wire.
+    The third is line 2's engine stamp, masked by position FIRST (dropping
+    lines renumbers everything under them), and it is here for a reason that
+    is about the INSTALL and not about residency: the cold side is a child
+    with ``src/`` prepended to PYTHONPATH (:func:`run_engine`),
+    so ``importlib.metadata`` can answer its version out of a stale in-tree
+    ``.egg-info`` while the warm side reads the installed ``.dist-info`` —
+    0.51.0 against 0.55.0 on a box that bumped the version without re-running
+    ``pip install -e .``. Nothing about a resident process can move any other
+    field: the variant is this build's and the basis is the default on both
+    sides, so what is masked here cannot hide a residency leak.
+
+    Applied to BOTH sides, so it can only narrow what is asserted. The
+    blanking touches 56 lines in 6 of the 80 decks, every one of them
+    carrying an open stub or a dead wire.
     """
     return blank_undefined(
         "\n".join(
             line
-            for line in text.split("\n")
+            for line in mask_engine_stamp(text).split("\n")
             if "FILL=" not in line and not line.startswith(" RUN TIME =")
         )
     )
