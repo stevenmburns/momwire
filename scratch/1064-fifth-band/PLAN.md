@@ -754,3 +754,50 @@ taken before this re-spelling. G1a-sse2 runs after it.
     - the LPDA: a timeout on both trees, "no answer in 300 s", the corpus
       runner's own bound.
   - **No deck was served,** so no Z could move.
+
+## D5 results [2026-09-15]: both predictions HIT; the extra time is the fill, split into more batches
+
+- **The run.** `run_d5.sh`, 03:02:08–03:09:58Z, alone on the box. Records:
+  `d5_nodecost.jsonl`, `d5_profile.jsonl`, `d5.log`, `run_d5.out`.
+- **D5a: HIT.** The per-node cost at the floor band's own nodes is the same on
+  both trees. Medians over 3 processes each, alternating: main 9.662 s and
+  branch 9.687 s, so branch/main is **1.0026** (predicted 1.00 ± 0.03). The
+  recompiled contour is not slower.
+- **D5b: HIT.** Profiling one `dipole1mm` cold solve per tree, twice:
+  - **walls:** main 27.93 and 27.95 s, branch 30.36 and 30.47 s;
+  - **the C++ fill batch** (`below_six_integrals_batch`) takes nearly all of
+    it: main 27.90 and 27.92 s over **8** calls, branch 30.33 and 30.44 s over
+    **10** calls;
+  - **`_fill_region`:** main 9 calls, branch 13 (the floor band's fill calls
+    the low band's first);
+  - **the projection kernel** takes 0.004–0.006 s on both.
+- **Reading.** The branch spends about 2.4 s more in the fill, over two more
+  batches: in each of the two R₁ zones the deck reaches, the floor band's two
+  columns and the low band's four go as separate calls. U9's single band did
+  one call.
+  - **G4 shows the nodes evaluated are the same,** and D5a shows each costs the
+    same. So the extra wall time comes from how the work is BATCHED, not from
+    the work itself.
+- **The mechanism, not measured.** A batch whose remaining nodes are all
+  expensive leaves OpenMP threads idle at its tail, and splitting a zone into
+  two batches makes two such tails. A single mixed batch lets cheap nodes keep
+  those threads busy.
+
+## D6, a diagnostic of G5, registered before it runs
+
+- **What.** `d6_batch.py`, on the branch, alone on the box. Soil A at 7.1 MHz,
+  a grid to the cap.
+  - **The nodes.** For the inner and near zones: the floor band's own two θ
+    columns and the low band's four, over the zone's R₁ rows. These are the
+    same six columns U9's single band evaluates.
+  - **Timed:** those six columns as ONE `iv_surfaces_direct_below` call,
+    against the low band's four followed by the floor band's two as TWO calls.
+    A warm-up first, then 3 repeats of each, alternating which mode goes first.
+- **Prediction:** in both zones, the two-call median exceeds the one-call
+  median by 5–12%, which brackets G5's 8–9% excess.
+- **What a hit would support.** Filling a zone's floor and low bands in one
+  evaluation call when neither is filled yet. That is a change inside
+  `_fill_region` which keeps G4 (each node once). It keeps bit-identity too,
+  because D4a showed batch and one-at-a-time evaluation agree bit for bit.
+  Whether to make that change is a decision.
+- **Scope.** D6 does not re-open G5's bar.
