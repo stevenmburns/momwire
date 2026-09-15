@@ -1,0 +1,169 @@
+{
+ "gate": "G4",
+ "verdict": "PASS",
+ "failures": [],
+ "rows": [
+  {
+   "zone": "inner",
+   "order": "floor_first",
+   "n_r": 23,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 92
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 46
+    }
+   ],
+   "seconds": 24.58,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "inner",
+   "order": "low_first",
+   "n_r": 23,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 92
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 46
+    }
+   ],
+   "seconds": 24.63,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "near",
+   "order": "floor_first",
+   "n_r": 42,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 168
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 84
+    }
+   ],
+   "seconds": 9.15,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "near",
+   "order": "low_first",
+   "n_r": 42,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 168
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 84
+    }
+   ],
+   "seconds": 9.36,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "far",
+   "order": "floor_first",
+   "n_r": 45,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 180
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 90
+    }
+   ],
+   "seconds": 9.83,
+   "shared_columns_bitwise": true
+  },
+  {
+   "zone": "far",
+   "order": "low_first",
+   "n_r": 45,
+   "calls": [
+    {
+     "theta_deg": [
+      "0.05",
+      "0.06666666666666667",
+      "0.08333333333333334",
+      "0.1"
+     ],
+     "n_theta": 4,
+     "points": 180
+    },
+    {
+     "theta_deg": [
+      "0.01666666666666667",
+      "0.03333333333333334"
+     ],
+     "n_theta": 2,
+     "points": 90
+    }
+   ],
+   "seconds": 9.74,
+   "shared_columns_bitwise": true
+  }
+ ]
+}

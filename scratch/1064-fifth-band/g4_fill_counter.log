@@ -1,0 +1,7 @@
+inner/floor_first [2, 4] 24.58 s shared ok
+inner/low_first [2, 4] 24.63 s shared ok
+near/floor_first [2, 4] 9.15 s shared ok
+near/low_first [2, 4] 9.36 s shared ok
+far/floor_first [2, 4] 9.83 s shared ok
+far/low_first [2, 4] 9.74 s shared ok
+G4: PASS (0 failures)

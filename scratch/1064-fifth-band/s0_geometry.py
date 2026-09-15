@@ -47,9 +47,43 @@ def dipole_kwargs(depth_m, n=41):
 
 
 def twonode_kwargs(separation):
-    from test_crossing_serve_524 import two_node_deck
+    """Main's `two_node_deck(separation)`, spelled from `crossing_deck` so that
+    0.55.0 (whose `two_node_deck` takes no separation) builds the same deck."""
+    from test_crossing_serve_524 import crossing_deck
 
-    return two_node_deck(separation)
+    one = crossing_deck()
+    shift = np.array([separation, 0.0, 0.0])
+    build = dict(one)
+    build["wires"] = one["wires"] + [w + shift for w in one["wires"]]
+    build["n_per_edge_per_wire"] = one["n_per_edge_per_wire"] + [
+        list(e) for e in one["n_per_edge_per_wire"]
+    ]
+    build["junctions"] = [[(0, "end"), (1, "start")], [(2, "end"), (3, "start")]]
+    return build
+
+
+def same_as_main_two_node_deck(separation):
+    """True when this tree's `two_node_deck(separation)` is the deck built above
+    (None where that signature does not exist)."""
+    import test_crossing_serve_524 as t524
+
+    try:
+        theirs = t524.two_node_deck(separation)
+    except TypeError:
+        return None
+    ours = twonode_kwargs(separation)
+    if set(theirs) != set(ours):
+        return False
+    for k in ours:
+        a, b = ours[k], theirs[k]
+        if k == "wires":
+            if len(a) != len(b) or not all(
+                np.array_equal(x, y) for x, y in zip(a, b, strict=True)
+            ):
+                return False
+        elif a != b:
+            return False
+    return True
 
 
 DECKS = {
@@ -85,6 +119,8 @@ def main():
             )
             try:
                 rec.update(facts(make()))
+                if name == "twonode11":
+                    rec["same_as_two_node_deck"] = same_as_main_two_node_deck(11.0)
             except Exception as err:  # noqa: BLE001 - a record, not a handler
                 rec["error"] = f"{type(err).__name__}: {err!s:.300}"
             fh.write(json.dumps(rec) + "\n")
