@@ -10,12 +10,13 @@ AK=${AK:-/home/smburns/stevenmburns/antennaknobs-wt-1064ak/src}
 V055=${V055:-/home/smburns/stevenmburns/momwire-wt-1064-v055/src}
 MAIN=${MAIN:-/home/smburns/stevenmburns/momwire-wt-1064-main/src}
 BRANCH=${BRANCH:-/home/smburns/stevenmburns/momwire-wt-1064/src}
-OUT="$HERE/t5_fill_cost.jsonl"
+TAG=${TAG:-}
+OUT="$HERE/t5_fill_cost${TAG}.jsonl"
 REPS=${REPS:-3}
 DECKS=(buried_dipole brv_default ebc_default brv48 dipole935 brv_corner dipole1mm twonode11)
 cd "$HERE" || exit 1
 : >"$OUT"
-echo "start $(date -u +%FT%TZ)" >"$HERE/run_t5.out"
+echo "start $(date -u +%FT%TZ)" >"$HERE/run_t5${TAG}.out"
 for rep in $(seq 1 "$REPS"); do
     case $((rep % 3)) in
         1) order=(v055 main branch) ;;
@@ -34,9 +35,9 @@ for rep in $(seq 1 "$REPS"); do
                 *) src="$BRANCH" ;;
             esac
             PYTHONPATH="$src:$AK" "$PY" t5_fill_cost.py --deck "$deck" --rep "$rep" \
-                --tree "$tree" --out "$OUT" >>"$HERE/t5_fill_cost.log" 2>&1
-            echo "rep=$rep deck=$deck tree=$tree rc=$? $(date -u +%FT%TZ)" >>"$HERE/run_t5.out"
+                --tree "$tree" --out "$OUT" >>"$HERE/t5_fill_cost${TAG}.log" 2>&1
+            echo "rep=$rep deck=$deck tree=$tree rc=$? $(date -u +%FT%TZ)" >>"$HERE/run_t5${TAG}.out"
         done
     done
 done
-echo "done $(date -u +%FT%TZ)" >>"$HERE/run_t5.out"
+echo "done $(date -u +%FT%TZ)" >>"$HERE/run_t5${TAG}.out"

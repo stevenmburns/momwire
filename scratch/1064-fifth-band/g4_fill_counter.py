@@ -5,9 +5,9 @@
 On REAL grids (soil A, 7 MHz, R1 to the cap), per R1 zone and in both fill
 orders, a counter wraps `iv_surfaces_direct_below` and records every call the two
 bands' fills make: the distinct theta nodes, and the number of points. The gate,
-as registered: exactly two calls per (zone, order); the low band's call carries
-its four nodes and the floor band's its two own nodes; no theta node appears in
-both; the floor band's top two columns are the low band's first two, bit for
+as re-registered for the joint batch: floor band first, ONE call carrying all
+six theta columns; low band first, the low band's four and then the floor
+band's two; no theta node appears in two calls; the floor band's top two columns are the low band's first two, bit for
 bit; and the low band's values are the same bits in both orders.
 """
 
@@ -93,9 +93,10 @@ def main():
             )
             rows.append(row)
             where = f"{zname}/{order}"
-            sizes = sorted(c["n_theta"] for c in calls)
-            if sizes != [2, 4]:
-                fails.append(f"{where}: call theta counts {sizes}, expected [2, 4]")
+            sizes = [c["n_theta"] for c in calls]
+            want = [6] if order == "floor_first" else [4, 2]
+            if sizes != want:
+                fails.append(f"{where}: call theta counts {sizes}, expected {want}")
             if len(thetas) != len(set(thetas)):
                 fails.append(f"{where}: a theta node was evaluated in two calls")
             if any(c["points"] != c["n_theta"] * n_r for c in calls):

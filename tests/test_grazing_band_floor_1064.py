@@ -164,9 +164,10 @@ def test_each_shared_node_is_filled_once_and_owned_by_the_low_band(
     """The fill counter, per zone and in both fill orders.
 
     Each of the floor and low bands' distinct theta nodes is evaluated in
-    exactly one call; the floor band's own call carries only its two lower
-    nodes; and the floor band's top two columns hold exactly the low band's
-    values. Cheap: the direct surfaces are replaced by a counter, so nothing
+    exactly one call, and the calls are as few as the order allows: floor
+    band first, ONE call carries both bands' six columns (momwire#1064 G5);
+    low band first, its own call and then the floor band's two. The floor
+    band's top two columns hold exactly the low band's values. Cheap: the direct surfaces are replaced by a counter, so nothing
     here integrates.
     """
     calls = []
@@ -187,14 +188,17 @@ def test_each_shared_node_is_filled_once_and_owned_by_the_low_band(
         g._fill_region(floor_idx)
     g._fill_region(floor_idx)  # and neither refills
 
-    assert len(calls) == 2, f"{len(calls)} evaluation calls, expected 2 (one per band)"
-    by_band = {len(c): c for c in calls}
+    everything = np.concatenate(calls)
+    assert np.array_equal(np.sort(everything), np.unique(everything)), (
+        "a theta node was evaluated twice"
+    )
+    sizes = [len(c) for c in calls]
+    want = [6] if order == "floor_first" else [4, 2]
+    assert sizes == want, f"call theta counts {sizes}, expected {want} ({order})"
     assert np.array_equal(
-        np.sort(np.concatenate(calls)), np.unique(np.concatenate(calls))
-    ), "a theta node was evaluated twice"
-    assert sorted(by_band) == [2, 4], f"call sizes {sorted(by_band)}, expected [2, 4]"
-    assert np.array_equal(by_band[4], np.unique(lo["th_nodes"]))
-    assert np.array_equal(by_band[2], np.unique(floor["th_nodes"][:2]))
+        np.unique(everything),
+        np.unique(np.concatenate([floor["th_nodes"][:2], lo["th_nodes"]])),
+    )
 
     for f, j in below._SOMM_BELOW_BAND_FLOOR_SHARED:
         assert np.array_equal(floor["vals"][:, :, f], lo["vals"][:, :, j]), (

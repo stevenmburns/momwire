@@ -22,10 +22,13 @@ from __future__ import annotations
 
 import json
 import statistics
+import sys
 from collections import defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+# `python t5_table.py _joint` reads the re-timing's rows beside the first G5's.
+TAG = sys.argv[1] if len(sys.argv) > 1 else ""
 CATALOG = ("buried_dipole", "brv_default", "ebc_default", "brv48")
 MID = ("dipole935", "brv_corner")
 SUB = ("dipole1mm", "twonode11")
@@ -46,7 +49,7 @@ PREDICT = {
 def main():
     rows = [
         json.loads(line)
-        for line in (HERE / "t5_fill_cost.jsonl").read_text().splitlines()
+        for line in (HERE / f"t5_fill_cost{TAG}.jsonl").read_text().splitlines()
         if line.strip()
     ]
     fails = [
@@ -157,7 +160,7 @@ def main():
         g1b=g1b,
         predictions=predictions,
     )
-    (HERE / "t5_table.json").write_text(json.dumps(out, indent=1))
+    (HERE / f"t5_table{TAG}.json").write_text(json.dumps(out, indent=1))
     for deck in table:
         cells = "  ".join(
             f"{tree} cold {r['cold_s']:.2f}s warm {r['warm_s']:.3f}s rss {r['maxrss_mb']:.0f}"

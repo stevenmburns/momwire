@@ -427,7 +427,8 @@ _SOMM_BELOW_TH_BAND_LO_HI_DEG = 0.1
 # gave it.
 #
 # The top two nodes are the LOW band's first two, and each is filled once:
-# `_fill_region` fills the low band first and copies those two columns. So a
+# `_fill_region` evaluates the low band first, in the same call as the floor
+# band's own two columns when neither is filled, and copies those two columns. So a
 # deck under 0.05 deg pays U9's six columns, and a deck in [0.05, 0.1] pays
 # 0.55.0's four. The low band OWNS the shared columns, which keeps its values
 # the same bits whichever band a deck reaches first; the copy at 0.066667 deg
@@ -1584,14 +1585,13 @@ class SommerfeldGridBelow(SommerfeldGrid):
         if reg["filled"]:
             return
         th_nodes = reg["th_nodes"]
-        shared, own, lo = (), None, None
+        shared, own, lo, joint = (), None, None, False
         if idx in self._band_floor_idx:
             # momwire#1064: the floor band's top nodes ARE the low band's first
-            # ones. Fill the low band (their owner) and copy them, so each node
-            # is evaluated once and the low band's values are the same bits
-            # whichever band a deck reaches first.
+            # ones. The low band owns them, so each node is evaluated once and
+            # the low band's values are the same bits whichever band a deck
+            # reaches first.
             lo_idx = region_index(idx // _N_BANDS, _BAND_LO)
-            self._fill_region(lo_idx)
             lo = self._regions[lo_idx]
             if not np.array_equal(lo["r_nodes"], reg["r_nodes"]):
                 raise AssertionError("the floor and low bands must share an R1 axis")
@@ -1605,6 +1605,16 @@ class SommerfeldGridBelow(SommerfeldGrid):
             taken = {f for f, _ in shared}
             own = [j for j in range(reg["n_th"]) if j not in taken]
             th_nodes = reg["th_nodes"][own]
+            # With the low band not filled yet, both bands' columns go in ONE
+            # evaluation call (momwire#1064 G5, D6). As two calls, the floor
+            # band's columns -- the most expensive nodes in the grid -- ran as
+            # a batch of their own, and a deck reaching under 0.05 deg paid
+            # about 9 % more wall time for the same nodes. A node's value does
+            # not depend on its batch (batch and one-at-a-time evaluation agree
+            # bit for bit), so the low band's values are unchanged by this.
+            joint = not lo["filled"]
+            if joint:
+                th_nodes = np.concatenate([th_nodes, lo["th_nodes"]])
         rr, tt = np.meshgrid(reg["r_nodes"], th_nodes, indexing="ij")
         surf = iv_surfaces_direct_below(
             self.eps_t,
@@ -1618,10 +1628,14 @@ class SommerfeldGridBelow(SommerfeldGrid):
         )
         vals = np.stack([surf[key] for key in _SURF_KEYS])
         if shared:
+            n_own = len(own)
+            if joint:
+                lo["vals"] = np.ascontiguousarray(vals[:, :, n_own:])
+                lo["filled"] = True
             full = np.empty(
                 (len(_SURF_KEYS), reg["n_r"], reg["n_th"]), dtype=np.complex128
             )
-            full[:, :, own] = vals
+            full[:, :, own] = vals[:, :, :n_own]
             for f, j in shared:
                 full[:, :, f] = lo["vals"][:, :, j]
             vals = full
