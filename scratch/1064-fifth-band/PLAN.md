@@ -903,3 +903,47 @@ taken before this re-spelling. G1a-sse2 runs after it.
 - **Not a timing gate, but in line with D6.** The inner zone's one call took
   24.5 s against the split's 27.9 s. The near and far zones read the same
   either way.
+
+## The joint batch's re-runs [2026-09-15]: make test, G5, G1b and G1a-sse2 PASS; three warm-ratio predictions MISS
+
+- **The runs.** `run_joint.sh`, 03:30:08–04:02:33Z, alone on the box, on src
+  and tests identical to 28cb11d.
+  - **Records:** `run_joint.out`, `g7_make_test_joint.log`,
+    `t5_fill_cost_joint.jsonl`, `t5_fill_cost_joint.log`, `run_t5_joint.out`,
+    `t5_table_joint.json`, `g1a_sse2_branch_joint.json`,
+    `g1a_sse2_branch_joint.log`,
+    `d2_g1a_sse2_branch_joint__vs__g1a_sse2_v055.json`.
+- **`make test`** (momwire imported from the branch's src, as logged): **5,202
+  passed, 0 failed.** The one ceiling breach is again `test_field_point[0113]`
+  (21.82 s). The prediction hits.
+- **G5: PASS on every bar.** Cold medians over 3 repeats:
+
+| deck | 0.55.0 | main | branch | branch/0.55.0 | branch/main |
+|---|---|---|---|---|---|
+| `buried_dipole` | 0.55 s | 0.54 s | 0.54 s | 0.986 | 0.988 |
+| `brv_default` | 1.77 s | 1.76 s | 1.77 s | 0.998 | 1.004 |
+| `ebc_default` | 1.77 s | 1.78 s | 1.76 s | 0.998 | 0.990 |
+| `brv48` | 17.92 s | 17.81 s | 17.99 s | 1.003 | 1.010 |
+| `dipole935` (0.058°) | 9.81 s | 27.94 s | 9.70 s | 0.989 | 0.347 |
+| `brv_corner` (0.072°) | 21.66 s | 48.85 s | 21.49 s | 0.992 | 0.440 |
+| `dipole1mm` (0.019°) | refused | 27.93 s | 27.64 s | — | **0.989** |
+| `twonode11` (0.018°) | refused | 31.53 s | 31.21 s | — | **0.990** |
+
+  - **The decks under 0.05°:** the prediction (1.00 ± 0.04) hits. G5's first
+    reading (1.090 and 1.081) stays a MISS; the joint batch recovered it.
+  - **Warm:** 0.953–1.041, inside the bar.
+  - **The prediction "within ±0.03 of the first table": 22 of 25 ratios hit, 3
+    MISS.** All three misses are warm solves under 0.25 s, and all three stay
+    inside the G5 bar [0.95, 1.05]:
+    - `ebc_default` warm branch/main: 0.986 (first 1.037);
+    - `ebc_default` warm branch/0.55.0: 0.953 (first 1.034);
+    - `twonode11` warm branch/main: 0.984 (first 1.026).
+- **G1b: PASS.** Z is bit-identical as before. The added prediction hits:
+  `dipole1mm`'s and `twonode11`'s branch Z are bit-identical to the first G5
+  run's.
+- **G1a-sse2: PASS.** The branch, re-captured on the joint batch, is
+  bit-identical to the existing 0.55.0 sse2 capture at all 1,218 rows. The
+  prediction hits.
+- **The registered re-runs are complete.** With G4's re-run (above) and the
+  `ci.yml` dispatch on 28cb11d (34924771278, all 9 jobs green), every one has
+  run.
