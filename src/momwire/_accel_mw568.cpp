@@ -357,7 +357,8 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
 // `SommerfeldGridBelow.eval` raise the refusals in its own words; nothing in
 // this file transcribes those messages.
 static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
-                                double th_band_lo_hi, double th_band_hi,
+                                double th_band_floor_hi, double th_band_lo_hi,
+                                double th_band_hi,
                                 double ground_z, double k_p, const cd &k_m,
                                 double ox, double oy, double oz, double tox,
                                 double toy, double toz, double sx, double sy,
@@ -377,32 +378,38 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
     if (theta < th_min) theta = th_min;
     else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;
-    // FOUR theta bands per R1 zone since momwire#935 (three since #838),
-    // ordered (R1 zone) x (theta band) with theta fastest -- the layout
+    // FIVE theta bands per R1 zone since momwire#1064 (four since #935, three
+    // since #838), ordered (R1 zone) x (theta band) with theta fastest -- the layout
     // SommerfeldGridBelow's constructor builds. NOT the parent's 2-band/
     // 3-zone scheme: six regions there means the momwire#159 far zone, which
     // this family does not have (r_near == r1_max).
     //
-    // BOTH band edges are passed in explicitly, and the second one was added
-    // as its own argument rather than derived. Inferring a band count from
+    // EVERY band edge is passed in explicitly (#935 added the second as its
+    // own argument, #1064 the third) rather than derived. Inferring a band count from
     // reg_vals.size() -- or, worse, inferring the edges from the count --
     // would make this a THIRD copy of the layout and the one that silently
     // drifts when a band is next added. The size check at the pybind seam is
     // an assertion about that contract, not the source of it.
     //
-    // STRICT `<` at BOTH edges, matching `SommerfeldGridBelow._interp`: the
-    // COARSER side of each seam owns the shared node, so theta ==
-    // th_band_lo_hi is the mid band's and theta == th_band_hi is the old
-    // grazing band's. The node is the same fill on either side, but
-    // `th0 + dth*n` need not reproduce it to the last bit.
-    const int band = theta < th_band_lo_hi
-                         ? 0
-                         : (theta < th_band_hi ? 1
-                                               : (theta <= G.th_split ? 2 : 3));
+    // STRICT `<` at EVERY edge, matching `SommerfeldGridBelow._interp`: the
+    // side ABOVE each seam owns the edge, so theta == th_band_floor_hi is the
+    // low band's, theta == th_band_lo_hi the mid band's and theta ==
+    // th_band_hi the old grazing band's. At the two older seams that side is
+    // the coarser one and the node is the same fill on either side, but
+    // `th0 + dth*n` need not reproduce it to the last bit. At #1064's seam the
+    // floor band's lattice runs PAST its edge (a 4-point stencil needs four
+    // nodes), and its top two nodes carry the low band's own values.
+    const int band =
+        theta < th_band_floor_hi
+            ? 0
+            : (theta < th_band_lo_hi
+                   ? 1
+                   : (theta < th_band_hi ? 2 : (theta <= G.th_split ? 3 : 4)));
     // THREE R1 zones since momwire#838 part 2: inner, near, and the far
     // annulus above `r_near` (the old cap), which carries a finer theta
-    // lattice of its own. The stride is the BAND count, so it moved with it.
-    const int zone = r1c <= G.r_break ? 0 : (r1c <= G.r_near ? 4 : 8);
+    // lattice of its own. The stride is the BAND count, so it moved with it
+    // (to 5 with momwire#1064).
+    const int zone = r1c <= G.r_break ? 0 : (r1c <= G.r_near ? 5 : 10);
     const int reg = zone + band;
     const double fr = (r1c - G.rr0[reg]) / G.rdr[reg];
     const double ft = (theta - G.rth0[reg]) / G.rdth[reg];
@@ -540,6 +547,7 @@ static py::tuple remainder_field_proj_batch_below(
     py::array_t<double, py::array::c_style | py::array::forcecast> src,
     py::array_t<double, py::array::c_style | py::array::forcecast> t_src,
     double ground_z, double k_p, std::complex<double> k_m, double th_min,
+    double th_band_floor_hi,
     double th_band_lo_hi,
     double th_band_hi,
     double r1_max, double r_break, double th_split, double r_near,
@@ -562,18 +570,18 @@ static py::tuple remainder_field_proj_batch_below(
 
     const py::ssize_t M = ob.shape(0);
     const py::ssize_t S = sb.shape(0);
-    // The below family is TWELVE regions exactly (3 R1 zones x 4 theta
-    // bands) since momwire#935. Any other count here is a stale
+    // The below family is FIFTEEN regions exactly (3 R1 zones x 5 theta
+    // bands) since momwire#1064 (twelve since #935). Any other count here is a stale
     // momwire/_sommerfeld_below.py and would route into unpopulated tables.
     //
     // This comment said "SIX regions exactly (2 R1 zones x 3 theta bands)"
     // while the code below it checked for nine -- #838 part 2 moved the check
     // and left the prose. Worth noting because the two disagreeing is exactly
     // the drift the check exists to catch, one level up.
-    if (reg_vals.size() != 12)
+    if (reg_vals.size() != 15)
         throw std::runtime_error(
-            "the below/below grid is twelve regions (3 R1 zones x 4 theta "
-            "bands) since momwire#935; got a different count, which means a "
+            "the below/below grid is fifteen regions (3 R1 zones x 5 theta "
+            "bands) since momwire#1064; got a different count, which means a "
             "stale _sommerfeld_below.py");
     somm_proj::GridView G = somm_proj::build_grid_view(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
@@ -610,7 +618,8 @@ static py::tuple remainder_field_proj_batch_below(
             for (py::ssize_t nn = 0; nn < S; ++nn) {
                 double r1q, thq;
                 out_m(m, nn) = mw568_below::proj_one_below(
-                    G, th_min, th_band_lo_hi, th_band_hi, ground_z, k_p, km, ox, oy, oz, tox,
+                    G, th_min, th_band_floor_hi, th_band_lo_hi, th_band_hi, ground_z, k_p,
+                    km, ox, oy, oz, tox,
                     toy, toz,
                     sx[nn], sy[nn], sz[nn], ux[nn], uy[nn], thsrc[nn], tzsrc[nn],
                     r1q, thq);
@@ -1768,7 +1777,8 @@ void register_mw568(py::module_ &m) {
           "own words.",
           py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
           py::arg("ground_z"), py::arg("k_p"), py::arg("k_m"), py::arg("th_min"),
-          py::arg("th_band_lo_hi"), py::arg("th_band_hi"),
+          py::arg("th_band_floor_hi"), py::arg("th_band_lo_hi"),
+          py::arg("th_band_hi"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
           py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"));

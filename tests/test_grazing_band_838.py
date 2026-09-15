@@ -588,7 +588,7 @@ def test_the_far_zone_is_deferred_until_something_reaches_it():
     assert g._regions[RI(below._ZONE_FAR, below._BAND_STEEP)]["filled"], (
         "the far steep band was not filled on demand"
     )
-    for b in (below._BAND_LO, below._BAND_MID):
+    for b in (below._BAND_FLOOR, below._BAND_LO, below._BAND_MID):
         assert not g._regions[RI(below._ZONE_FAR, b)]["filled"], (
             "a steep far query filled a far-zone grazing band, which is most "
             "of its panels -- the deferral is per theta band, not per zone"

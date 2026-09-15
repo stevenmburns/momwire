@@ -89,6 +89,10 @@ _FIXTURE_GROUP_FILES = (
     # warms BOTH grazing bands on two decks. Scattered, each worker pays that
     # fill again -- the same shape as the entry above, with a steeper price.
     "test_grazing_band_lo_935.py",
+    # momwire#1064's floor band holds the most expensive nodes in the grid
+    # (22,239 tail panels at the floor), and its module fixture warms the
+    # inner zone's floor band once. Same shape as the entries above.
+    "test_grazing_band_floor_1064.py",
     # momwire#865: the surface-radial anchor's decks are Sommerfeld solves of
     # 5.7 s (N = 4) to 35 s (N = 16), and its assertions share them through a
     # module-level cache. Scattered, each worker re-solved: measured 282 s

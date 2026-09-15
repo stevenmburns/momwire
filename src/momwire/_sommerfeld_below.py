@@ -262,12 +262,13 @@ _SOMM_BELOW_FAR_GRAZE_CELLS = 72
 # Region indices are (R1 zone) x (theta band), theta FASTEST. momwire#935
 # took the band count from three to four, which moved every index that is not
 # in zone 0 band 0 — `_regions[4]` meant "near zone, sub-1 deg band" before it
-# and "near zone, LOW band" after. Names rather than arithmetic at the call
+# and "near zone, LOW band" after -- and momwire#1064 took it to five, which
+# moved them all again. Names rather than arithmetic at the call
 # sites, so that a stale index is a NameError rather than a silently different
 # region: that renumbering is invisible to every assertion that only checks a
 # `filled` flag, which is most of them.
-_N_BANDS = 4
-_BAND_LO, _BAND_MID, _BAND_GRAZE, _BAND_STEEP = 0, 1, 2, 3
+_N_BANDS = 5
+_BAND_FLOOR, _BAND_LO, _BAND_MID, _BAND_GRAZE, _BAND_STEEP = 0, 1, 2, 3, 4
 _ZONE_INNER, _ZONE_NEAR, _ZONE_FAR = 0, 1, 2
 
 
@@ -276,17 +277,19 @@ def region_index(zone, band):
     return zone * _N_BANDS + band
 
 
-# Deferred: BOTH grazing bands in every zone, plus the whole far annulus.
-# The two bands are deferred SEPARATELY rather than as one set — a low-band
+# Deferred: all THREE grazing bands in every zone, plus the whole far annulus.
+# The bands are deferred SEPARATELY rather than as one set — a low-band
 # node costs about twice a mid-band one (`_MAX_TAIL_PANELS`: 7610 panels
 # against 3868 at the two floors), so a deck reaching 0.5 deg must not pay
-# for 0.05 deg.
+# for 0.05 deg; and a floor-band node up to three times a low-band one
+# (22,239 panels at 0.016667 deg), so a deck reaching 0.06 deg must not pay
+# for 0.02 deg (momwire#1064).
 # `_ensure_for` is what keeps that promise; `test_g935_*` measures it.
 _DEFERRED_REGIONS = frozenset(
     [
         region_index(z, b)
         for z in (_ZONE_INNER, _ZONE_NEAR)
-        for b in (_BAND_LO, _BAND_MID)
+        for b in (_BAND_FLOOR, _BAND_LO, _BAND_MID)
     ]
     + [region_index(_ZONE_FAR, b) for b in range(_N_BANDS)]
 )
@@ -396,19 +399,44 @@ _SOMM_BELOW_TH_BAND_HI_DEG = 1.0
 # 0.05/3 divides [0.05, 0.1] exactly, which `test_the_low_band_divides_the_
 # interval_exactly` asserts — the seam is the whole hazard here as it was there.
 #
-# antennaknobs plan U9 (route 2) extended this band DOWN rather than adding a
-# fifth band below it. The floor moved two cells lower, so the band is now
-# [0.016667, 0.1] deg at the same dtheta, and its shipped nodes 0.05 ... 0.1 stay
-# nodes. Nothing above 0.1 deg moves, and the C++ projection needs no change:
-# it reads each region's th0 and dtheta, and routes on the 0.1 and 1 deg edges,
-# which did not move. Real-grid interpolation over the new cells, at cell
-# midpoints and thirds, worst over soils A/B/C x 7/21 MHz, soil A at 3.5 MHz,
-# R1/lam_m in {0.2, 1, 1.9, 3, 3.9} and the four surfaces, reads 3.9e-9 against
-# the 4.7e-4 bar (`scratch/u9-multi-crossing/s_interp_L2.json`). Halving dtheta
-# read 5.0e-9, and a 0.011 deg floor at 0.05/9 read 5.1e-9: that is the
-# comparison's own level, not the lattice's.
+# antennaknobs plan U9 (route 2) first extended this band DOWN, two cells at
+# the same dtheta, to reach a 0.016667 deg floor. Real-grid interpolation over
+# those cells, at cell midpoints and thirds, worst over soils A/B/C x 7/21 MHz,
+# soil A at 3.5 MHz, R1/lam_m in {0.2, 1, 1.9, 3, 3.9} and the four surfaces,
+# read 3.9e-9 against the 4.7e-4 bar (`scratch/u9-multi-crossing/
+# s_interp_L2.json`). Halving dtheta read 5.0e-9, and a 0.011 deg floor at
+# 0.05/9 read 5.1e-9: that is the comparison's own level, not the lattice's.
+#
+# momwire#1064 put this band back to [0.05, 0.1] and moved those cells into a
+# FIFTH band of their own. The band fills as one region per R1 zone, so every
+# deck reaching under 0.1 deg had started paying for the two nodes under
+# 0.05 deg (2.3-2.9x its cold solve). See `_SOMM_BELOW_TH_BAND_FLOOR_HI_DEG`.
 _SOMM_BELOW_DTH_BAND_LO_DEG = 0.05 / 3.0
 _SOMM_BELOW_TH_BAND_LO_HI_DEG = 0.1
+
+# momwire#1064: the FLOOR band, the fifth, routed over [floor, 0.05) deg.
+#
+# Its lattice is U9's own cells: th0 at the floor, the low band's dtheta, and
+# FOUR nodes -- 0.016667, 0.033333, 0.05, 0.066667 deg -- one node PAST its
+# 0.05 deg routing edge. That is forced: a 4-point Lagrange stencil needs four
+# nodes and [floor, 0.05] holds three. A lattice longer than its band is
+# allowed, because nothing reads an edge from a lattice: `_interp` and
+# `proj_one_below` route on the edges passed to them and interpolate on each
+# region's own th0 and dtheta. Every query routed here lands with j0 = 0, so
+# it reads the same four nodes, with the same weights, that U9's single band
+# gave it.
+#
+# The top two nodes are the LOW band's first two, and each is filled once:
+# `_fill_region` fills the low band first and copies those two columns. So a
+# deck under 0.05 deg pays U9's six columns, and a deck in [0.05, 0.1] pays
+# 0.55.0's four. The low band OWNS the shared columns, which keeps its values
+# the same bits whichever band a deck reaches first; the copy at 0.066667 deg
+# is the low band's value at its own spelling of that node, one ulp (in
+# degrees) from `th0 + 3*dtheta` here.
+_SOMM_BELOW_TH_BAND_FLOOR_HI_DEG = 0.05
+_SOMM_BELOW_BAND_FLOOR_NODES = 4
+# (floor-band theta index, low-band theta index) for each shared node.
+_SOMM_BELOW_BAND_FLOOR_SHARED = ((2, 0), (3, 1))
 
 # The grazing floor, in degrees, below which the grid REFUSES.
 #
@@ -462,8 +490,9 @@ _SOMM_BELOW_TH_BAND_LO_HI_DEG = 0.1
 # antennaknobs plan U9 (route 2) moved it again, to 0.05 − 2·(0.05/3) =
 # 0.016667°, by the same rule: the lowest candidate node that converges on
 # every SPEC soil, and on soil A at 3.5 MHz, under the budget (22,239 of 24,000
-# panels). It is spelled from the band's dθ so that the band still ends exactly
-# on its 0.1° seam. What asked for it is a deck with several crossing nodes:
+# panels). It is spelled from the low band's dθ, so that the floor band's
+# nodes (momwire#1064) land on the low band's. What asked for it is a deck
+# with several crossing nodes:
 # their rises' pairs sit at θ = atan(2·h_node/d), which is 0.0239° on the cebik
 # LPDA's eight nodes. 0.0125° stays refused.
 _SOMM_BELOW_TH_MIN_DEG = 0.05 - 2.0 * _SOMM_BELOW_DTH_BAND_LO_DEG
@@ -1366,14 +1395,19 @@ class SommerfeldGridBelow(SommerfeldGrid):
         band_hi = _SOMM_BELOW_TH_BAND_HI_DEG
         dthb = _SOMM_BELOW_DTH_BAND_DEG
         band_lo_hi = _SOMM_BELOW_TH_BAND_LO_HI_DEG
+        band_floor_hi = _SOMM_BELOW_TH_BAND_FLOOR_HI_DEG
         dthb_lo = _SOMM_BELOW_DTH_BAND_LO_DEG
+        # The floor band's lattice runs one node past its routing edge (see
+        # `_SOMM_BELOW_TH_BAND_FLOOR_HI_DEG`), so it is spelled by node count.
+        floor_top = th0 + dthb_lo * (_SOMM_BELOW_BAND_FLOOR_NODES - 1)
         dthg = _SOMM_BELOW_DTH_GRAZE_DEG
         dths = _SOMM_BELOW_DTH_STEEP_DEG
         self.th_band_hi = math.radians(band_hi)
         self.th_band_lo_hi = math.radians(band_lo_hi)
+        self.th_band_floor_hi = math.radians(band_floor_hi)
         self._th_split = math.radians(split)
-        # FOUR θ bands per R₁ zone since momwire#935 (three since #838, two
-        # before it). The paragraph below is #838's argument for why a new
+        # FIVE θ bands per R₁ zone since momwire#1064 (four since #935, three
+        # since #838, two before it). The paragraph below is #838's argument for why a new
         # band is a new REGION rather than a finer Δθ over an existing one;
         # #935 re-ran it unchanged one band lower. The sub-1°
         # band is a SEPARATE region rather than a finer `dthg` over the whole
@@ -1387,7 +1421,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
         dthg_far = (split - band_hi) / _SOMM_BELOW_FAR_GRAZE_CELLS
         dths_far = (90.0 - split) / _SOMM_BELOW_FAR_STEEP_CELLS
         # Region order is (R₁ zone) × (θ band), θ fastest — `region_index`
-        # owns the stride: 0-3 inner, 4-7 near, 8-11 far. `_interp` here and
+        # owns the stride: 0-4 inner, 5-9 near, 10-14 far. `_interp` here and
         # `proj_one_below` in `_accel_mw568.cpp` are two copies of this one
         # layout, which is why the C++ side takes BOTH band edges explicitly
         # rather than inferring a band count from `len(reg_vals)`. #935 added
@@ -1395,15 +1429,18 @@ class SommerfeldGridBelow(SommerfeldGrid):
         # guessed "four bands, so the edges must be ..." would be a third
         # copy of the layout, and the one that drifts.
         layout = [
-            (0.0, self.r_break, dr_in, th0, band_lo_hi, dthb_lo),
+            (0.0, self.r_break, dr_in, th0, floor_top, dthb_lo),
+            (0.0, self.r_break, dr_in, band_floor_hi, band_lo_hi, dthb_lo),
             (0.0, self.r_break, dr_in, band_lo_hi, band_hi, dthb),
             (0.0, self.r_break, dr_in, band_hi, split, dthg),
             (0.0, self.r_break, dr_in, split, 90.0, dths),
-            (self.r_break, self.r_near, dr_out, th0, band_lo_hi, dthb_lo),
+            (self.r_break, self.r_near, dr_out, th0, floor_top, dthb_lo),
+            (self.r_break, self.r_near, dr_out, band_floor_hi, band_lo_hi, dthb_lo),
             (self.r_break, self.r_near, dr_out, band_lo_hi, band_hi, dthb),
             (self.r_break, self.r_near, dr_out, band_hi, split, dthg),
             (self.r_break, self.r_near, dr_out, split, 90.0, dths),
-            (self.r_near, self.r1_max, dr_out, th0, band_lo_hi, dthb_lo),
+            (self.r_near, self.r1_max, dr_out, th0, floor_top, dthb_lo),
+            (self.r_near, self.r1_max, dr_out, band_floor_hi, band_lo_hi, dthb_lo),
             (self.r_near, self.r1_max, dr_out, band_lo_hi, band_hi, dthb),
             (self.r_near, self.r1_max, dr_out, band_hi, split, dthg_far),
             (self.r_near, self.r1_max, dr_out, split, 90.0, dths_far),
@@ -1420,6 +1457,9 @@ class SommerfeldGridBelow(SommerfeldGrid):
         )
         self._band_lo_idx = tuple(
             region_index(z, _BAND_LO) for z in (_ZONE_INNER, _ZONE_NEAR, _ZONE_FAR)
+        )
+        self._band_floor_idx = tuple(
+            region_index(z, _BAND_FLOOR) for z in (_ZONE_INNER, _ZONE_NEAR, _ZONE_FAR)
         )
         self._regions = []
         pad = _SOMM_BELOW_PAD_ROWS
@@ -1543,7 +1583,29 @@ class SommerfeldGridBelow(SommerfeldGrid):
         reg = self._regions[idx]
         if reg["filled"]:
             return
-        rr, tt = np.meshgrid(reg["r_nodes"], reg["th_nodes"], indexing="ij")
+        th_nodes = reg["th_nodes"]
+        shared, own, lo = (), None, None
+        if idx in self._band_floor_idx:
+            # momwire#1064: the floor band's top nodes ARE the low band's first
+            # ones. Fill the low band (their owner) and copy them, so each node
+            # is evaluated once and the low band's values are the same bits
+            # whichever band a deck reaches first.
+            lo_idx = region_index(idx // _N_BANDS, _BAND_LO)
+            self._fill_region(lo_idx)
+            lo = self._regions[lo_idx]
+            if not np.array_equal(lo["r_nodes"], reg["r_nodes"]):
+                raise AssertionError("the floor and low bands must share an R1 axis")
+            shared = _SOMM_BELOW_BAND_FLOOR_SHARED
+            for f, j in shared:
+                if abs(reg["th_nodes"][f] - lo["th_nodes"][j]) > 1e-15:
+                    raise AssertionError(
+                        f"floor-band node {f} is not low-band node {j}: "
+                        f"{reg['th_nodes'][f]!r} vs {lo['th_nodes'][j]!r}"
+                    )
+            taken = {f for f, _ in shared}
+            own = [j for j in range(reg["n_th"]) if j not in taken]
+            th_nodes = reg["th_nodes"][own]
+        rr, tt = np.meshgrid(reg["r_nodes"], th_nodes, indexing="ij")
         surf = iv_surfaces_direct_below(
             self.eps_t,
             self.k2,
@@ -1554,7 +1616,16 @@ class SommerfeldGridBelow(SommerfeldGrid):
             mu=self.mu,
             health=self._health,
         )
-        reg["vals"] = np.stack([surf[key] for key in _SURF_KEYS])
+        vals = np.stack([surf[key] for key in _SURF_KEYS])
+        if shared:
+            full = np.empty(
+                (len(_SURF_KEYS), reg["n_r"], reg["n_th"]), dtype=np.complex128
+            )
+            full[:, :, own] = vals
+            for f, j in shared:
+                full[:, :, f] = lo["vals"][:, :, j]
+            vals = full
+        reg["vals"] = vals
         reg["filled"] = True
 
     def _ensure_band(self):
@@ -1569,9 +1640,15 @@ class SommerfeldGridBelow(SommerfeldGrid):
             self._fill_region(idx)
 
     def _ensure_band_lo(self):
-        """The LOW band — [floor, 0.1 deg] — in every R₁ zone (#935; extended
-        down to the 0.016667 deg floor by antennaknobs plan U9)."""
+        """The LOW band — [0.05, 0.1 deg] — in every R₁ zone (#935)."""
         for idx in self._band_lo_idx:
+            self._fill_region(idx)
+
+    def _ensure_band_floor(self):
+        """The FLOOR band — [floor, 0.05 deg] — in every R₁ zone (#1064). It
+        fills the low band too: the two share their nodes at 0.05 and
+        0.066667 deg, and the low band owns them (`_fill_region`)."""
+        for idx in self._band_floor_idx:
             self._fill_region(idx)
 
     @property
@@ -1582,18 +1659,23 @@ class SommerfeldGridBelow(SommerfeldGrid):
     def _band_lo_filled(self):
         return all(self._regions[i]["filled"] for i in self._band_lo_idx)
 
+    @property
+    def _band_floor_filled(self):
+        return all(self._regions[i]["filled"] for i in self._band_floor_idx)
+
     def _ensure_for(self, mx_r1, mn_th, mx_th):
         """Fill every region a batch bounded by these extremes could touch.
 
-        The C++ kernel takes all twelve tables up front and reports only the
+        The C++ kernel takes all fifteen tables up front and reports only the
         query set's extremes, so this is deliberately CONSERVATIVE: R₁ zones
         from the innermost up to the one holding `mx_r1`, crossed with every
         θ band the interval [mn_th, mx_th] meets. A deck that stays inside
         2 λ_m never materializes the far annulus; one with nothing under 1°
-        never materializes either grazing band; and — momwire#935 — one that
+        never materializes any grazing band; and — momwire#935 — one that
         reaches under 1° but not under 0.1° materializes the mid band only.
         That last exclusion is the point of splitting them: a low-band node
-        is about twice the tail cost of a mid-band one.
+        is about twice the tail cost of a mid-band one. momwire#1064 split
+        the low band again at 0.05°, for the same reason one band lower.
         """
         zones = [_ZONE_INNER]
         if mx_r1 > self.r_break:
@@ -1601,7 +1683,9 @@ class SommerfeldGridBelow(SommerfeldGrid):
         if mx_r1 > self.r_near:
             zones.append(_ZONE_FAR)
         bands = []
-        if mn_th < self.th_band_lo_hi:
+        if mn_th < self.th_band_floor_hi:
+            bands.append(_BAND_FLOOR)
+        if mx_th >= self.th_band_floor_hi and mn_th < self.th_band_lo_hi:
             bands.append(_BAND_LO)
         if mx_th >= self.th_band_lo_hi and mn_th < self.th_band_hi:
             bands.append(_BAND_MID)
@@ -1614,7 +1698,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
                 self._fill_region(region_index(z, b))
 
     def _interp(self, R1, theta):
-        """The parent's bicubic, over THIS family's four-θ-band layout.
+        """The parent's bicubic, over THIS family's five-θ-band layout.
 
         Not `super().eval`: the parent routes on one θ split and reads a
         six-region grid as the momwire#159 far zone, which this layout is
@@ -1636,14 +1720,20 @@ class SommerfeldGridBelow(SommerfeldGrid):
         # evaluation, but `th0 + Δθ·n` need not reproduce it to the last bit,
         # and a query landing on the finer band's copy would differ in low
         # bits. #935's `test_the_old_domain_is_unmoved` covers the new seam
-        # the same way #838's covered the first.
+        # the same way #838's covered the first. momwire#1064's edge at
+        # th_band_floor_hi follows the same rule: 0.05 deg is the LOW band's,
+        # whose node values the floor band's lattice only copies.
         band = np.where(
-            th_f < self.th_band_lo_hi,
-            _BAND_LO,
+            th_f < self.th_band_floor_hi,
+            _BAND_FLOOR,
             np.where(
-                th_f < self.th_band_hi,
-                _BAND_MID,
-                np.where(th_f <= self._th_split, _BAND_GRAZE, _BAND_STEEP),
+                th_f < self.th_band_lo_hi,
+                _BAND_LO,
+                np.where(
+                    th_f < self.th_band_hi,
+                    _BAND_MID,
+                    np.where(th_f <= self._th_split, _BAND_GRAZE, _BAND_STEEP),
+                ),
             ),
         )
         zone = np.where(
@@ -1844,8 +1934,8 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     if _use_below_accel() and getattr(grid, "_regions", None) is not None:
         from ._sommerfeld import grid_cpp_args
 
-        # Both grazing bands and the whole far annulus fill lazily
-        # (momwire#838, #935), and C++ takes every region table up front, so an
+        # All three grazing bands and the whole far annulus fill lazily
+        # (momwire#838, #935, #1064), and C++ takes every region table up front, so an
         # unfilled region goes in as NaN. The ORDER below is what makes that
         # safe: this pass only has to produce the query's EXTREMES, which are
         # geometry and do not read a table; `grid.eval` then raises the domain
@@ -1864,6 +1954,7 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
                 float(k_p),
                 complex(k_m),
                 float(grid.th_min),
+                float(grid.th_band_floor_hi),
                 float(grid.th_band_lo_hi),
                 float(grid.th_band_hi),
                 *grid_cpp_args(grid),

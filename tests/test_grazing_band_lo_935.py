@@ -20,6 +20,10 @@ A third is specific to this one: the new band must be lazy SEPARATELY from the
 mid band. A low-band node is about twice the tail cost of a mid-band node
 (7610 panels against 3868), so a deck that reaches 0.5 deg and not 0.05 must
 not pay for it.
+
+momwire#1064 put this band back to [0.05, 0.1] deg, after antennaknobs plan U9
+had extended it down to 0.016667. The cells under 0.05 deg belong to the floor
+band now, gated in `test_grazing_band_floor_1064.py`.
 """
 
 import contextlib
@@ -154,18 +158,19 @@ def _warm_the_decks():
 
 
 def test_the_low_band_divides_the_interval_exactly():
-    """dtheta must divide [th_min, th_band_lo_hi], or the bands share no node.
+    """dtheta must divide the low band exactly, or the bands share no node.
 
     #838's gate, restated at the new seam. The low band's LAST node and the
     mid band's FIRST have to be the same float, because the mid band's first
     node is what every old-domain query at theta = 0.1 deg reads -- and the
     whole promise of adding a band below is that the old domain does not move.
     """
-    span = below._SOMM_BELOW_TH_BAND_LO_HI_DEG - below._SOMM_BELOW_TH_MIN_DEG
+    lo = below._SOMM_BELOW_TH_BAND_FLOOR_HI_DEG  # the band's start since #1064
+    span = below._SOMM_BELOW_TH_BAND_LO_HI_DEG - lo
     cells = span / below._SOMM_BELOW_DTH_BAND_LO_DEG
     assert abs(cells - round(cells)) < 1e-12, (
         f"_SOMM_BELOW_DTH_BAND_LO_DEG = {below._SOMM_BELOW_DTH_BAND_LO_DEG} "
-        f"does not divide the band [{below._SOMM_BELOW_TH_MIN_DEG}, "
+        f"does not divide the band [{lo}, "
         f"{below._SOMM_BELOW_TH_BAND_LO_HI_DEG}] deg: {cells} cells. The last "
         "node then overshoots th_band_lo_hi, the low band and the mid band "
         "share no node, and every old-domain cell at theta = th_band_lo_hi "
@@ -316,8 +321,11 @@ def test_both_dispatches_agree_on_the_low_band():
     k_m = below.k_medium(eps_t, k2)
     rho = 3.0
     edge = math.degrees(g.th_band_lo_hi)
-    floor = math.degrees(g.th_min)
-    for thd in (floor, 0.06, 0.08, edge - 1e-9, edge, edge + 1e-9, 0.5):
+    # The band's own start since momwire#1064. Under it is the floor band,
+    # which this module does not warm; its dispatches are gated in
+    # `test_grazing_band_floor_1064.py`.
+    start = math.degrees(g.th_band_floor_hi)
+    for thd in (start, 0.06, 0.08, edge - 1e-9, edge, edge + 1e-9, 0.5):
         hh = rho * math.tan(math.radians(thd))
         obs = np.array([[0.0, 0.0, -0.5 * hh]])
         src = np.array([[rho, 0.0, -0.5 * hh]])
@@ -379,8 +387,8 @@ def test_every_low_band_node_converges_under_the_panel_cap():
     failure past it is SILENT -- the contour extrapolates and returns. So
     every node of the new band is asserted converged, on every SPEC soil, plus
     the headroom as an early warning. Measured worst 7610/8000 = 95.1 % at
-    (C, 21 MHz, R1 = 0.05 lambda_m) at #935's floor; 22239/24000 = 92.7 % at
-    the same point on antennaknobs plan U9's 0.016667 deg floor.
+    (C, 21 MHz, R1 = 0.05 lambda_m) at #935's floor. The floor band's nodes
+    under 0.05 deg are gated in `test_grazing_band_floor_1064.py`.
     """
     for soil in SOILS:
         for f in FREQS:
@@ -388,7 +396,7 @@ def test_every_low_band_node_converges_under_the_panel_cap():
             h = below.Health()
             th = np.radians(
                 np.arange(
-                    below._SOMM_BELOW_TH_MIN_DEG,
+                    below._SOMM_BELOW_TH_BAND_FLOOR_HI_DEG,
                     below._SOMM_BELOW_TH_BAND_LO_HI_DEG + 1e-12,
                     below._SOMM_BELOW_DTH_BAND_LO_DEG,
                 )
