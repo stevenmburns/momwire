@@ -362,3 +362,58 @@ kwargs, and confirm that main and the branch serve it and 0.55.0 refuses it.
 - **What it can and cannot decide.** D1 does not re-open G3's bar and does not
   pass G3. A hit supports the hypothesis above, and G3's verdict waits for a
   decision on the gate's spelling.
+
+## G1a, G2a, G2b, G2c results [2026-09-15]: G1a FAILS, so a STOP; G2a, G2b and G2c pass
+
+- **The runs.** `run_gates.sh g12 v055|main|branch`, 01:02:54–01:19:31Z,
+  concurrently with G3's two processes.
+  - **Records:** `g12_*.json`, `g12_*.log`, `g12_compare.json`.
+  - **A reading fix.** The comparator's first read crashed on the θ key strings
+    (`repr(np.float64(...))`). It was fixed at 8c6661a. The captures were not
+    re-run.
+
+**G1a: FAIL.** 446 of 1,134 old-set points are not bit-identical to 0.55.0, in
+the surfaces or the kernel. The differences are last-bit: at most 6.7e-14
+relative in the surfaces and 1.9e-14 in the kernel.
+
+| comparison | low [0.05°, 0.1°) (surface / kernel not bit-identical) | mid [0.1°, 1°) | grazing and steep ≥ 1° |
+|---|---|---|---|
+| branch vs 0.55.0 (378 / 504 / 252 points) | 157 / 137 | 193 / 167 | 95 / 87 |
+| main vs 0.55.0 | 293 / 292 (U9's band, up to 1.5e-9, expected) | 0 / 0 | 0 / 0 |
+| branch vs main | 327 / 322 | 193 / 167 | 95 / 87 |
+
+- **The differences are confined to three media:** soil B at 7 and at 21 MHz,
+  and soil A at 3.5 MHz. There they touch nearly every θ at every R₁. Soils A
+  and C, at 7 and at 21 MHz, are bit-identical at every point.
+- **They reach bands momwire#1064 does not change.** The mid, grazing and steep
+  bands' code and lattices are untouched. Yet the branch's process produced
+  different last bits there than main's and 0.55.0's, which agree with each
+  other bit for bit at θ ≥ 0.1°.
+- **The prediction (passes) MISSES.**
+- **One process difference is known, and its effect is not yet measured.** The
+  branch capture ran with `--direct`, which calls `iv_surfaces_direct_below`
+  after each medium's capture. The main and 0.55.0 captures did not.
+
+**The other three gates pass:**
+- **G2a: PASS.** The max is 6.7e-14 (soil B, 7 MHz, R₁ = 3.9 λ_m, θ =
+  0.049999999°), and 84 of 294 points are bit-identical; the bar is 4.7e-4.
+  The prediction (≤ 1e-14) MISSES, at the same last-bit scale as G1a.
+- **G2b: PASS.** The floor band reads 3.94e-9 against the direct surfaces (soil
+  A, 3.5 MHz, R₁ = 3 λ_m, 0.022167°, IphiH). The prediction (≤ 1e-8) hits.
+- **G2c: PASS.** The low band reads 4.32e-9. The prediction (≤ 1e-8) hits.
+
+## D2, diagnostics of G1a, registered before they run
+
+- **D2a.** `g12_grid.py` on the branch WITHOUT `--direct`, written to
+  `d2_branch_nodirect.json`. `d2_compare.py` compares it with 0.55.0's and
+  main's captures.
+- **D2b.** `g12_grid.py` on 0.55.0 again, written to `d2_v055_repeat.json`,
+  and compared with the first 0.55.0 capture. It asks whether a tree
+  reproduces its own capture bit for bit across processes.
+- **The predictions:**
+  - D2b is bit-identical to the first capture;
+  - D2a is bit-identical to 0.55.0 at θ ≥ 0.05° and to main at θ ≥ 0.1°, so
+    the `--direct` history is the cause.
+- **If D2a still differs,** the cause is on the branch's code path, and that is
+  what gets reported.
+- **Scope.** Neither diagnostic re-opens G1a's bar.
