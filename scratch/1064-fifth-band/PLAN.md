@@ -606,3 +606,26 @@ relative in the surfaces and 1.9e-14 in the kernel.
 - **The fix.** `run_g7.sh` now exports `PYTHONPATH=<branch>/src`, as U9's lane
   runners did, and records the momwire path it imported. `make test` is being
   re-run alone; the slow and crossgate results stand.
+
+## G7 result [2026-09-15]: green for the branch; one pre-existing box-level ceiling breach
+
+- **`make test`, re-run on the branch's src.** 02:18:24–02:24:50Z. `run_g7.out`
+  records the momwire imported: `momwire-wt-1064/src`.
+  - **5,202 passed, 9 skipped, 4 xfailed, 0 failed.**
+  - **Why it exits 2 anyway.** One test goes over the 20 s hard ceiling:
+    `test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113]`,
+    at 21.78 s.
+- **That breach is the box's, not this branch's.**
+  - **U9's lane record** on this box shows the same test at 21.70 s, before
+    momwire#1064.
+  - **Timed alone** (`-n 0`), it takes a 4.97 s call on main 54caf86 and a
+    4.97 s call on the branch: identical.
+  - **So** the 21.8 s is contention under `-n auto` on this box. CI's lanes on
+    the PR are the arbiter.
+- **The touched band tests are all under the ceiling.** The slowest are
+  `test_grazing_band_838`'s edge-routing test at 10.99 s, and the floor band's
+  deferral test at 9.31 s (advisory, over 5 s).
+- **Earlier in G7, and standing:** the slow lane on the touched files, 10
+  passed; the crossgate lane, 38 passed.
+- **Still to come:** the `ci.yml` dispatch on the branch (macOS, slow,
+  crossgate, memgate, integration), with the PR.
