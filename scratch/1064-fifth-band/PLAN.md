@@ -662,3 +662,58 @@ can hold, and a tolerance only where it cannot.
 
 **The order, stated plainly.** G3a, G3b and G1a-avx2 were read from records
 taken before this re-spelling. G1a-sse2 runs after it.
+
+## G5 and G1b results [2026-09-15]: G1b PASSES; G5 FAILS on the two decks under 0.05°, so a STOP
+
+- **The run.** `run_t5.sh`, 02:26:52–02:47:09Z, alone on the box: 66 rows,
+  0 errors.
+  - **Records:** `t5_fill_cost.jsonl`, `t5_fill_cost.log`, `run_t5.out`,
+    `t5_table.json` (from `t5_table.py`).
+
+**Cold, medians over 3 repeats (seconds):**
+
+| deck | 0.55.0 | main | branch | branch/0.55.0 | branch/main | bar | G5 |
+|---|---|---|---|---|---|---|---|
+| `buried_dipole` | 0.55 | 0.54 | 0.54 | 0.984 | 0.986 | [0.95, 1.05] both | hit |
+| `brv_default` | 1.77 | 1.79 | 1.77 | 0.997 | 0.987 | [0.95, 1.05] both | hit |
+| `ebc_default` | 1.80 | 1.78 | 1.77 | 0.986 | 0.998 | [0.95, 1.05] both | hit |
+| `brv48` | 17.97 | 17.79 | 17.85 | 0.994 | 1.003 | [0.95, 1.05] both | hit |
+| `dipole935` (0.0582°) | 9.81 | 27.93 | 9.71 | **0.990** | 0.348 | branch/0.55.0 [0.92, 1.08] | hit |
+| `brv_corner` (0.0724°) | 21.64 | 48.79 | 21.49 | **0.993** | 0.441 | branch/0.55.0 [0.92, 1.08] | hit |
+| `dipole1mm` (0.0194°) | refused | 27.93 | 30.44 | — | **1.090** | branch/main [0.92, 1.08] | **MISS** |
+| `twonode11` (0.0176°) | refused | 31.46 | 34.00 | — | **1.081** | branch/main [0.92, 1.08] | **MISS** |
+
+- **Warm:** every ratio lies in [0.95, 1.05] (0.986–1.037). Max RSS is
+  unchanged.
+- **The predictions.**
+  - **Hits:** every catalog deck, and both [0.05°, 0.1°] decks against 0.55.0.
+    `dipole935` against main reads 0.348 (0.35 ± 0.06) and `brv_corner` 0.441
+    (0.44 ± 0.08).
+  - **MISS:** the two decks under 0.05° (1.00 ± 0.08).
+- **G1b: PASS.** Z is bit-identical on every repeat, cold and warm: the four
+  catalog decks against main, and `dipole935` and `brv_corner` against 0.55.0.
+- **The decks under 0.05° are slower, and it is not run order.** Per repeat:
+  - `dipole1mm` reads 1.088, 1.086 and 1.093, and the third repeat ran the
+    branch first;
+  - `twonode11` reads 1.213, 1.083 and 1.076.
+- **It is not double evaluation either:** G4 shows every node filled once.
+- **The cause is not measured.**
+
+## D5, a diagnostic of G5, registered before it runs
+
+- **D5a** (`d5_nodecost.py`). The cost per grazing node.
+  - **What.** The direct surfaces at the floor band's own nodes: soil A at
+    7.1 MHz, θ ∈ {0.016667, 0.033333}° × R₁/λ_m ∈ {0.02, 0.2, 1, 2}, as one
+    batch, a warm-up, then 5 timed repeats.
+  - **How.** Per tree, 3 processes each, alternating trees.
+  - **What it tests.** Whether the recompiled contour is slower per grazing
+    node.
+- **D5b** (`d5_profile.py`). A cProfile of one `dipole1mm` cold solve per tree,
+  2 processes each, alternating. It records the cumulative time of the fill,
+  the kernel and the top functions, to find where the extra 2.5 s sits.
+- **The predictions:**
+  - **D5a:** branch/main per-node median 1.00 ± 0.03. `dipole935` fills only
+    low-band nodes and shows no slowdown.
+  - **D5b:** the extra time sits in the band fill (`_fill_region`).
+- **When.** After G1a-sse2 and G6, alone on the box.
+- **Scope.** Neither diagnostic re-opens G5's bar.
