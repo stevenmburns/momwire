@@ -801,3 +801,29 @@ taken before this re-spelling. G1a-sse2 runs after it.
   because D4a showed batch and one-at-a-time evaluation agree bit for bit.
   Whether to make that change is a decision.
 - **Scope.** D6 does not re-open G5's bar.
+
+## D6 result [2026-09-15]: prediction MISSES in both zones; the joint batch is NOT applied
+
+- **The run.** `d6_batch.py` on the branch, alone on the box (8 CPUs,
+  `OMP_NUM_THREADS` unset). Record: `d6_batch.json`.
+- **The timings,** medians over 3 repeats, alternating which mode went first:
+
+| zone | R₁ rows | nodes | one call | two calls (4 + 2) | two / one |
+|---|---|---|---|---|---|
+| inner | 23 | 138 | 21.84 s | 24.67 s | **1.129** |
+| near | 41 | 246 | 8.86 s | 8.82 s | **0.996** |
+
+- **The prediction was 5–12% slower in both zones. It MISSES in both.**
+  - **Inner:** the split is 12.9% slower, above the band's top.
+  - **Near:** the split is not slower at all.
+- **What the numbers show.** The batching cost appears where each node is
+  expensive (the inner zone, 23 rows, about 0.16 s per node) and not where the
+  nodes are cheaper and more numerous (the near zone, 41 rows, about 0.036 s
+  per node).
+  - **Size.** The inner zone's extra 2.8 s is about G5's excess on `dipole1mm`
+    (30.44 − 27.93 = 2.5 s).
+  - **So** splitting the fill does cost time. But it is not a uniform 5–12% per
+    zone, as registered.
+- **The decision rule.** If D6 misses, nothing is applied and this is reported
+  first. So the joint batch is NOT applied. G5's reading on the decks under
+  0.05° (1.090× and 1.081× main) stands as a MISS, awaiting a decision.
