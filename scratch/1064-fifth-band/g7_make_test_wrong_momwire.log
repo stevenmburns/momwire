@@ -1,0 +1,3121 @@
+python3 -m pytest tests/ -m "not slow and not memgate and not integration"
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/smburns/stevenmburns/momwire-wt-1064
+configfile: pyproject.toml
+plugins: anyio-4.14.1, xdist-3.8.0
+created: 4/4 workers
+4 workers [4878 items]
+
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  7%]
+........................................................................ [  8%]
+..........EEEEEEEEEEE.........................FF........................ [ 10%]
+........................................................................ [ 11%]
+.........................FF............................................. [ 13%]
+........................................................................ [ 14%]
+......................................................F................. [ 16%]
+......xxxx.............................................................. [ 17%]
+........................................FF.............................. [ 19%]
+........................................................................ [ 20%]
+.................................................F.....F................ [ 22%]
+........................................................................ [ 23%]
+.............................FFFF....................................... [ 25%]
+........................................................................ [ 26%]
+........................................................................ [ 28%]
+........................................................................ [ 29%]
+...................................................F.................... [ 30%]
+........................................................................ [ 32%]
+........................................................................ [ 33%]
+...........F............................................................ [ 35%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+.....................................................F.................. [ 39%]
+........................................................................ [ 41%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 45%]
+........................................................................ [ 47%]
+........................................................................ [ 48%]
+.............................................................s.......... [ 50%]
+........................................................................ [ 51%]
+........................................................................ [ 53%]
+........................................................................ [ 54%]
+........................................................................ [ 56%]
+........................................................................ [ 57%]
+........................................................................ [ 59%]
+........................................................................ [ 60%]
+............................................F........................... [ 61%]
+........................................................................ [ 63%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 67%]
+.........FF............................................................. [ 69%]
+.................................................................F...... [ 70%]
+........................................................................ [ 72%]
+........................................................................ [ 73%]
+........................................................................ [ 75%]
+........................................................................ [ 76%]
+........................................................................ [ 78%]
+........................................................................ [ 79%]
+........................................................................ [ 81%]
+...s.................................................................... [ 82%]
+....................sss................................................. [ 84%]
+........................................................................ [ 85%]
+........................................................................ [ 87%]
+........................................................................ [ 88%]
+........................................................................ [ 90%]
+.......................ss............................................... [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 94%]
+........................................................................ [ 95%]
+...........................F............................................ [ 97%]
+........................................................................ [ 98%]
+......................................................                   [100%]
+==================================== ERRORS ====================================
+___________________ ERROR collecting tests/test_814_prep.py ____________________
+tests/test_814_prep.py:32: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________________ ERROR collecting tests/test_814_prep.py ____________________
+tests/test_814_prep.py:32: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________________ ERROR collecting tests/test_814_prep.py ____________________
+tests/test_814_prep.py:32: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________________ ERROR collecting tests/test_814_prep.py ____________________
+tests/test_814_prep.py:32: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_below_interface_980.py ______________
+tests/test_below_interface_980.py:36: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_below_interface_980.py ______________
+tests/test_below_interface_980.py:36: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_below_interface_980.py ______________
+tests/test_below_interface_980.py:36: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_below_interface_980.py ______________
+tests/test_below_interface_980.py:36: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_below_reach_preflight_1135.py ___________
+tests/test_below_reach_preflight_1135.py:31: in <module>
+    from test_crossing_serve_524 import fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_below_reach_preflight_1135.py ___________
+tests/test_below_reach_preflight_1135.py:31: in <module>
+    from test_crossing_serve_524 import fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_below_reach_preflight_1135.py ___________
+tests/test_below_reach_preflight_1135.py:31: in <module>
+    from test_crossing_serve_524 import fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_below_reach_preflight_1135.py ___________
+tests/test_below_reach_preflight_1135.py:31: in <module>
+    from test_crossing_serve_524 import fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_bspline_pair_g1b.py ________________
+tests/test_bspline_pair_g1b.py:51: in <module>
+    from test_crossing_serve_524 import (
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_bspline_pair_g1b.py ________________
+tests/test_bspline_pair_g1b.py:51: in <module>
+    from test_crossing_serve_524 import (
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_bspline_pair_g1b.py ________________
+tests/test_bspline_pair_g1b.py:51: in <module>
+    from test_crossing_serve_524 import (
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_bspline_pair_g1b.py ________________
+tests/test_bspline_pair_g1b.py:51: in <module>
+    from test_crossing_serve_524 import (
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_bundle_refusal_846.py _______________
+tests/test_bundle_refusal_846.py:32: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_bundle_refusal_846.py _______________
+tests/test_bundle_refusal_846.py:32: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_bundle_refusal_846.py _______________
+tests/test_bundle_refusal_846.py:32: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_bundle_refusal_846.py _______________
+tests/test_bundle_refusal_846.py:32: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_assembly_910.py ______________
+tests/test_buried_assembly_910.py:36: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_assembly_910.py ______________
+tests/test_buried_assembly_910.py:36: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_assembly_910.py ______________
+tests/test_buried_assembly_910.py:36: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_assembly_910.py ______________
+tests/test_buried_assembly_910.py:36: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_chunked_915.py _______________
+tests/test_buried_chunked_915.py:43: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_chunked_915.py _______________
+tests/test_buried_chunked_915.py:43: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_chunked_915.py _______________
+tests/test_buried_chunked_915.py:43: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_buried_chunked_915.py _______________
+tests/test_buried_chunked_915.py:43: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_buried_quadrature_default_760.py _________
+tests/test_buried_quadrature_default_760.py:42: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_buried_quadrature_default_760.py _________
+tests/test_buried_quadrature_default_760.py:42: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_buried_quadrature_default_760.py _________
+tests/test_buried_quadrature_default_760.py:42: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_buried_quadrature_default_760.py _________
+tests/test_buried_quadrature_default_760.py:42: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_buried_serve_refusal_1464.py ___________
+tests/test_buried_serve_refusal_1464.py:14: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_buried_serve_refusal_1464.py ___________
+tests/test_buried_serve_refusal_1464.py:14: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_buried_serve_refusal_1464.py ___________
+tests/test_buried_serve_refusal_1464.py:14: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_buried_serve_refusal_1464.py ___________
+tests/test_buried_serve_refusal_1464.py:14: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_aca_688.py ________________
+tests/test_crossing_aca_688.py:39: in <module>
+    from test_crossing_serve_524 import A_WIRE, crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_aca_688.py ________________
+tests/test_crossing_aca_688.py:39: in <module>
+    from test_crossing_serve_524 import A_WIRE, crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_aca_688.py ________________
+tests/test_crossing_aca_688.py:39: in <module>
+    from test_crossing_serve_524 import A_WIRE, crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_aca_688.py ________________
+tests/test_crossing_aca_688.py:39: in <module>
+    from test_crossing_serve_524 import A_WIRE, crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_crossing_axis_grading_813.py ___________
+tests/test_crossing_axis_grading_813.py:48: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_crossing_axis_grading_813.py ___________
+tests/test_crossing_axis_grading_813.py:48: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_crossing_axis_grading_813.py ___________
+tests/test_crossing_axis_grading_813.py:48: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+___________ ERROR collecting tests/test_crossing_axis_grading_813.py ___________
+tests/test_crossing_axis_grading_813.py:48: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_crossing_basis_sampler_980.py ___________
+tests/test_crossing_basis_sampler_980.py:45: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_crossing_basis_sampler_980.py ___________
+tests/test_crossing_basis_sampler_980.py:45: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_crossing_basis_sampler_980.py ___________
+tests/test_crossing_basis_sampler_980.py:45: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_crossing_basis_sampler_980.py ___________
+tests/test_crossing_basis_sampler_980.py:45: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_crossing_exemption_audit_700.py __________
+tests/test_crossing_exemption_audit_700.py:94: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_crossing_exemption_audit_700.py __________
+tests/test_crossing_exemption_audit_700.py:94: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_crossing_exemption_audit_700.py __________
+tests/test_crossing_exemption_audit_700.py:94: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_________ ERROR collecting tests/test_crossing_exemption_audit_700.py __________
+tests/test_crossing_exemption_audit_700.py:94: in <module>
+    from test_crossing_serve_524 import (  # noqa: E402
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_glue_912.py _______________
+tests/test_crossing_glue_912.py:35: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_glue_912.py _______________
+tests/test_crossing_glue_912.py:35: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_glue_912.py _______________
+tests/test_crossing_glue_912.py:35: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_crossing_glue_912.py _______________
+tests/test_crossing_glue_912.py:35: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_plane_snap_852.py ____________
+tests/test_crossing_plane_snap_852.py:76: in <module>
+    from test_crossing_serve_524 import SOIL_A, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_plane_snap_852.py ____________
+tests/test_crossing_plane_snap_852.py:76: in <module>
+    from test_crossing_serve_524 import SOIL_A, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_plane_snap_852.py ____________
+tests/test_crossing_plane_snap_852.py:76: in <module>
+    from test_crossing_serve_524 import SOIL_A, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_plane_snap_852.py ____________
+tests/test_crossing_plane_snap_852.py:76: in <module>
+    from test_crossing_serve_524 import SOIL_A, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_crossing_serve_524.py _______________
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_crossing_serve_524.py _______________
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_crossing_serve_524.py _______________
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_crossing_serve_524.py _______________
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_two_radius_u5.py _____________
+tests/test_crossing_two_radius_u5.py:31: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_two_radius_u5.py _____________
+tests/test_crossing_two_radius_u5.py:31: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_two_radius_u5.py _____________
+tests/test_crossing_two_radius_u5.py:31: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_crossing_two_radius_u5.py _____________
+tests/test_crossing_two_radius_u5.py:31: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_feed_placements_1059.py ______________
+ImportError while importing test module '/home/smburns/stevenmburns/momwire-wt-1064/tests/test_feed_placements_1059.py'.
+Hint: make sure your test modules/packages have valid Python names.
+Traceback:
+../../.local/share/uv/python/cpython-3.14.4-linux-x86_64-gnu/lib/python3.14/importlib/__init__.py:88: in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_feed_placements_1059.py:22: in <module>
+    from momwire import FeedPlacement, _feed_snap
+E   ImportError: cannot import name 'FeedPlacement' from 'momwire' (/home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/__init__.py)
+______________ ERROR collecting tests/test_field_galerkin_914.py _______________
+tests/test_field_galerkin_914.py:49: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_field_galerkin_914.py _______________
+tests/test_field_galerkin_914.py:49: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_field_galerkin_914.py _______________
+tests/test_field_galerkin_914.py:49: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+______________ ERROR collecting tests/test_field_galerkin_914.py _______________
+tests/test_field_galerkin_914.py:49: in <module>
+    from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_near_interface_columns_895.py ___________
+tests/test_near_interface_columns_895.py:50: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_near_interface_columns_895.py ___________
+tests/test_near_interface_columns_895.py:50: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_near_interface_columns_895.py ___________
+tests/test_near_interface_columns_895.py:50: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__________ ERROR collecting tests/test_near_interface_columns_895.py ___________
+tests/test_near_interface_columns_895.py:50: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______ ERROR collecting tests/test_near_interface_columns_accel_899.py ________
+tests/test_near_interface_columns_accel_899.py:48: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______ ERROR collecting tests/test_near_interface_columns_accel_899.py ________
+tests/test_near_interface_columns_accel_899.py:48: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______ ERROR collecting tests/test_near_interface_columns_accel_899.py ________
+tests/test_near_interface_columns_accel_899.py:48: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______ ERROR collecting tests/test_near_interface_columns_accel_899.py ________
+tests/test_near_interface_columns_accel_899.py:48: in <module>
+    from test_crossing_serve_524 import fan_rise_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_pair_order_ladder_906.py _____________
+tests/test_pair_order_ladder_906.py:67: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_pair_order_ladder_906.py _____________
+tests/test_pair_order_ladder_906.py:67: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_pair_order_ladder_906.py _____________
+tests/test_pair_order_ladder_906.py:67: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_pair_order_ladder_906.py _____________
+tests/test_pair_order_ladder_906.py:67: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_plan_extents_914.py ________________
+tests/test_plan_extents_914.py:43: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_plan_extents_914.py ________________
+tests/test_plan_extents_914.py:43: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_plan_extents_914.py ________________
+tests/test_plan_extents_914.py:43: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_______________ ERROR collecting tests/test_plan_extents_914.py ________________
+tests/test_plan_extents_914.py:43: in <module>
+    from test_crossing_serve_524 import hub_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_axis_813.py ____________
+tests/test_razor_crossing_axis_813.py:66: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_axis_813.py ____________
+tests/test_razor_crossing_axis_813.py:66: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_axis_813.py ____________
+tests/test_razor_crossing_axis_813.py:66: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_axis_813.py ____________
+tests/test_razor_crossing_axis_813.py:66: in <module>
+    from test_crossing_serve_524 import crossing_deck
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_fill_813.py ____________
+tests/test_razor_crossing_fill_813.py:57: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_fill_813.py ____________
+tests/test_razor_crossing_fill_813.py:57: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_fill_813.py ____________
+tests/test_razor_crossing_fill_813.py:57: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+____________ ERROR collecting tests/test_razor_crossing_fill_813.py ____________
+tests/test_razor_crossing_fill_813.py:57: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_t2_at_node_813.py ______________
+tests/test_razor_t2_at_node_813.py:58: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_t2_at_node_813.py ______________
+tests/test_razor_t2_at_node_813.py:58: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_t2_at_node_813.py ______________
+tests/test_razor_t2_at_node_813.py:58: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_t2_at_node_813.py ______________
+tests/test_razor_t2_at_node_813.py:58: in <module>
+    from test_crossing_serve_524 import crossing_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_wire_media_813.py ______________
+tests/test_razor_wire_media_813.py:44: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_wire_media_813.py ______________
+tests/test_razor_wire_media_813.py:44: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_wire_media_813.py ______________
+tests/test_razor_wire_media_813.py:44: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+_____________ ERROR collecting tests/test_razor_wire_media_813.py ______________
+tests/test_razor_wire_media_813.py:44: in <module>
+    from test_crossing_serve_524 import crossing_deck, fan_rise_deck  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+tests/test_crossing_serve_524.py:371: in <module>
+    "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+__ ERROR at setup of test_the_floor_band_lattice_runs_one_node_past_its_edge ___
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+____ ERROR at setup of test_theta_at_the_floor_edge_routes_to_the_low_band _____
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+______ ERROR at setup of test_the_old_domain_never_touches_the_floor_band ______
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_each_shared_node_is_filled_once_and_owned_by_the_low_band[0-floor_first] _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_each_shared_node_is_filled_once_and_owned_by_the_low_band[0-low_first] _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_each_shared_node_is_filled_once_and_owned_by_the_low_band[1-floor_first] _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_each_shared_node_is_filled_once_and_owned_by_the_low_band[1-low_first] _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_each_shared_node_is_filled_once_and_owned_by_the_low_band[2-floor_first] _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_each_shared_node_is_filled_once_and_owned_by_the_low_band[2-low_first] _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+_ ERROR at setup of test_the_floor_band_is_deferred_until_something_reaches_it _
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+______ ERROR at setup of test_both_dispatches_agree_across_the_floor_edge ______
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    @pytest.fixture(scope="module", autouse=True)
+    def _warm_the_inner_floor_band():
+        """Fill the INNER zone's floor band on the shared deck, once.
+    
+        The floor band's nodes are the most expensive in the grid (22,239 tail
+        panels at the floor), and filling it fills the low band's inner zone too.
+        Only the inner zone: the dispatch gate below stays inside it, and the far
+        zones' fill is what made #935's dispatch gate run 84 s when its sweep
+        reached the floor.
+        """
+        g, *_ = _grid("A", 7e6)
+>       g._fill_region(RI(below._ZONE_INNER, below._BAND_FLOOR))
+                                             ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_floor_1064.py:57: AttributeError
+=================================== FAILURES ===================================
+_____________ test_a_forced_variant_that_is_not_installed_says_so ______________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f9bb54e8940>
+
+    def test_a_forced_variant_that_is_not_installed_says_so(monkeypatch):
+        """momwire#1038: `MOMWIRE_FORCE_VARIANT=legacy` on an install carrying only
+        the avx2 and sse2 builds used to return the pure-Python answer in silence.
+        A caller then had to guess the cause, and antennaknobs' selftest guessed
+        'OpenMP runtime missing?'. The variant asked for is not there: say so, and
+        name what is."""
+        monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "legacy")
+        monkeypatch.delenv("MOMWIRE_REQUIRE_ACCEL", raising=False)
+        _only_avx2_and_sse2_built(monkeypatch)
+    
+>       with pytest.warns(RuntimeWarning) as record:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT WARN. No warnings of type (<class 'RuntimeWarning'>,) were emitted.
+E        Emitted warnings: [].
+
+tests/test_accel_cpu_guard_1032.py:202: Failed
+_____________ test_require_accel_names_the_missing_forced_variant ______________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7f9b9e86c4d0>
+
+    def test_require_accel_names_the_missing_forced_variant(monkeypatch):
+        monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "legacy")
+        monkeypatch.setenv("MOMWIRE_REQUIRE_ACCEL", "1")
+        _only_avx2_and_sse2_built(monkeypatch)
+    
+>       with pytest.raises(RuntimeError, match=r"variant 'legacy' is not in this install"):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE RuntimeError
+
+tests/test_accel_cpu_guard_1032.py:219: Failed
+___________ test_the_far_zone_is_deferred_until_something_reaches_it ___________
+[gw1] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_the_far_zone_is_deferred_until_something_reaches_it():
+        """Nothing under 2 lambda_m pays for the far annulus.
+    
+        It is ~4x the panels of the whole rest of the grid, and 68 % of THAT is
+        its own sub-1 deg band (panels go as 6.4/tan theta), which is why it is
+        deferred per theta BAND rather than as a block.
+        """
+        g, eps_t, k2, om, lam_m = _grid("B", 7e6)
+        far_all = [RI(below._ZONE_FAR, b) for b in range(below._N_BANDS)]
+        assert not any(g._regions[i]["filled"] for i in far_all), (
+            "the far annulus was filled at construction"
+        )
+        g.eval(np.array([1.0 * lam_m]), np.array([math.radians(45.0)]))
+        assert not any(g._regions[i]["filled"] for i in far_all), (
+            "an inner-domain query filled the far annulus"
+        )
+        g.eval(np.array([3.0 * lam_m]), np.array([math.radians(45.0)]))
+        assert g._regions[RI(below._ZONE_FAR, below._BAND_STEEP)]["filled"], (
+            "the far steep band was not filled on demand"
+        )
+>       for b in (below._BAND_FLOOR, below._BAND_LO, below._BAND_MID):
+                  ^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_BAND_FLOOR'. Did you mean: '_BAND_LO'?
+
+tests/test_grazing_band_838.py:591: AttributeError
+______________ test_the_tail_cap_refuses_by_name_below_the_floor _______________
+[gw1] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_the_tail_cap_refuses_by_name_below_the_floor():
+        """The measured ladder, pinned: converged at 0.02-0.12 deg, capped below.
+    
+        Both halves matter: a change that made the contour cheaper would move the
+        served rungs down and this gate would say so -- which is exactly what
+        momwire#935 did deliberately, by raising the budget rather than by making
+        the contour cheaper. The pins above were re-measured, not relaxed.
+        """
+        for th_deg in _TAIL_CAP_SERVED:
+>           got = _direct_at("A", 7e6, th_deg)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_grazing_band_838.py:687: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_grazing_band_838.py:667: in _direct_at
+    return below.iv_surfaces_direct_below(
+../antennaknobs/momwire/src/momwire/_sommerfeld_below.py:1211: in iv_surfaces_direct_below
+    six = _six_integrals_below_many(
+../antennaknobs/momwire/src/momwire/_sommerfeld_below.py:1024: in _six_integrals_below_many
+    _refuse_if_capped(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+conv = False, panels = 8000, rho = 10.019244755235158, h = 0.0069947535180671224
+where = (10.019247196864843, 0.0006981317007977319)
+
+    def _refuse_if_capped(conv, panels, rho, h, where=None):
+        """Refuse, by name, a contour that exhausted `_MAX_TAIL_PANELS`.
+    
+        momwire#841. `_tail_below` stops at the panel budget, and when it does it
+        falls back to Wynn's epsilon and returns an EXTRAPOLATED value rather
+        than a raw truncation — which is why the degradation is graceful
+        (measured against the same point with the cap lifted to 40000: 3.8e-09 at
+        theta = 0.08 deg, 2.6e-06 at 0.05, 9.3e-04 at 0.023). Graceful is exactly
+        what made it dangerous: there is no theta at which the answer visibly
+        breaks, and `Health.nonconvergent` was the only signal, read by nobody.
+    
+        Raised HERE and not in `_tail_below`, for two reasons. The C++ and numpy
+        dispatches both come back through this point carrying `conv`, so one copy
+        of the prose serves both — the same bargain `SommerfeldGridBelow.eval`
+        makes for the domain refusals. And `_sommerfeld_transmitted` reuses
+        `_tail_below`/`_run_contour` with a larger budget and DEPENDS on the Wynn
+        fallback for its grazing rows; raising down there would break a family
+        this issue is not about.
+    
+        Nothing the below family serves reaches here: the grazing floor is
+        `_SOMM_BELOW_TH_MIN_DEG`, and at that floor the worst node over the SPEC
+        soils uses 3868 of 4000 panels (momwire#838). This fires for a query
+        BELOW the floor, or for a soil whose panel demand is worse than any
+        measured — which is the case that used to return a confident number.
+        """
+        if conv:
+            return
+        r1 = math.hypot(rho, h)
+        th_deg = math.degrees(math.atan2(h, rho))
+>       raise ValueError(
+            f"the below/below contour exhausted its tail budget at theta = "
+            f"{th_deg:.4g} deg, R1 = {r1:.6g} (rho = {rho:.6g}, h = {h:.6g}): "
+            f"{panels} panels, the whole of _MAX_TAIL_PANELS = {_MAX_TAIL_PANELS}. "
+            f"The panel count grows as ~6.4/tan(theta), so this is a grazing "
+            f"limit: the tabulated floor is {_SOMM_BELOW_TH_MIN_DEG} deg, where "
+            f"the worst SPEC soil uses ~95 % of the budget. Past the cap the "
+            f"contour falls back to a Wynn extrapolation whose error grows from "
+            f"~3e-9 just under the floor to ~2e-6 an octave below it, so there "
+            f"is no honest value to return — raise the pair's depth sum relative "
+            f"to its horizontal separation, or refuse the geometry"
+            + (f" [at {where!r}]" if where is not None else "")
+        )
+E       ValueError: the below/below contour exhausted its tail budget at theta = 0.04 deg, R1 = 10.0192 (rho = 10.0192, h = 0.00699475): 8000 panels, the whole of _MAX_TAIL_PANELS = 8000. The panel count grows as ~6.4/tan(theta), so this is a grazing limit: the tabulated floor is 0.05 deg, where the worst SPEC soil uses ~95 % of the budget. Past the cap the contour falls back to a Wynn extrapolation whose error grows from ~3e-9 just under the floor to ~2e-6 an octave below it, so there is no honest value to return — raise the pair's depth sum relative to its horizontal separation, or refuse the geometry [at (10.019247196864843, 0.0006981317007977319)]
+
+../antennaknobs/momwire/src/momwire/_sommerfeld_below.py:875: ValueError
+___ test_1061_the_preflight_returns_the_contact_sentence_instead_of_raising ____
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_1061_the_preflight_returns_the_contact_sentence_instead_of_raising():
+        """momwire#1061: `buried_serve_refusal()` is documented to RETURN the
+        sentence the buried fill would refuse with, or None. Its first line asked
+        `_has_buried_wires()` outside the try, and that labels the wires, which
+        raises for a ground-CONTACT end beside a buried wire. So for exactly the
+        deck class it exists to pre-flight (antennaknobs#1464's detached buried
+        radial vertical) the method raised instead of answering."""
+>       why = BSplineSolver(**contact_deck()).buried_serve_refusal()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'BSplineSolver' object has no attribute 'buried_serve_refusal'
+
+tests/test_buried_serve_553.py:123: AttributeError
+_____________ test_the_committed_document_matches_the_declarations _____________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_the_committed_document_matches_the_declarations():
+>       assert main(["--check"]) == 0, (
+            "docs/capability-matrix.md has drifted from the rows it is generated "
+            "from — run `python scripts/capability_matrix.py`"
+        )
+E       AssertionError: docs/capability-matrix.md has drifted from the rows it is generated from — run `python scripts/capability_matrix.py`
+E       assert 1 == 0
+E        +  where 1 = main(['--check'])
+
+tests/test_capability_matrix_doc.py:32: AssertionError
+----------------------------- Captured stdout call -----------------------------
+--- capability-matrix.md (committed)
++++ capability-matrix.md (from the rows)
+@@ -158,7 +158,7 @@
+ 
+ - `BSplineSolver` `extended_kernel+singular_enrichment`, `HMatrixSolver` `extended_kernel+singular_enrichment`, `ArrayBlockSolver` `extended_kernel+singular_enrichment`
+ 
+-  > extended_kernel=True + use_singular_enrichment=True is refused, permanently (momwire#271) — the enrichment DOFs bypass the moment kernels entirely (they carry their own Φ_sing quadrature), they exist only at K >= 3 junctions where NEC's own gating turns EK off, and the O(a²) tube expansion was never derived for the s^(-1/2) shapes (stevenmburns/momwire#249 follow-up C)
++  > extended_kernel=True + use_singular_enrichment=True not supported yet — the enrichment DOFs bypass the moment kernels entirely (they carry their own Φ_sing quadrature), they exist only at K >= 3 junctions where NEC's own gating turns EK off, and the O(a²) tube expansion was never derived for the s^(-1/2) shapes (stevenmburns/momwire#249 follow-up C)
+ 
+ - `BSplineSolver` `per_wire_radius+singular_enrichment`, `HMatrixSolver` `per_wire_radius+singular_enrichment`, `ArrayBlockSolver` `per_wire_radius+singular_enrichment`
+ 
+----------------------------- Captured stderr call -----------------------------
+
+capability-matrix.md has drifted from the declarations. Run: python scripts/capability_matrix.py
+_______________________ test_the_script_runs_as_a_script _______________________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_the_script_runs_as_a_script():
+        """`--check` is a CI-shaped invocation, so it is exercised as one: an
+        import-time failure or a broken `__main__` guard would leave the gate
+        above passing while the documented command did not run."""
+        done = subprocess.run(
+            # Absolute: the working directory a lane runs from is not this
+            # file's business, and `pythonpath = ["."]` puts the repo root on
+            # sys.path for the import above but says nothing about cwd.
+            [sys.executable, gen.__file__, "--check"],
+            capture_output=True,
+            text=True,
+        )
+>       assert done.returncode == 0, done.stdout + done.stderr
+E       AssertionError: --- capability-matrix.md (committed)
+E         +++ capability-matrix.md (from the rows)
+E         @@ -158,7 +158,7 @@
+E          
+E          - `BSplineSolver` `extended_kernel+singular_enrichment`, `HMatrixSolver` `extended_kernel+singular_enrichment`, `ArrayBlockSolver` `extended_kernel+singular_enrichment`
+E          
+E         -  > extended_kernel=True + use_singular_enrichment=True is refused, permanently (momwire#271) — the enrichment DOFs bypass the moment kernels entirely (they carry their own Φ_sing quadrature), they exist only at K >= 3 junctions where NEC's own gating turns EK off, and the O(a²) tube expansion was never derived for the s^(-1/2) shapes (stevenmburns/momwire#249 follow-up C)
+E         +  > extended_kernel=True + use_singular_enrichment=True not supported yet — the enrichment DOFs bypass the moment kernels entirely (they carry their own Φ_sing quadrature), they exist only at K >= 3 junctions where NEC's own gating turns EK off, and the O(a²) tube expansion was never derived for the s^(-1/2) shapes (stevenmburns/momwire#249 follow-up C)
+E          
+E          - `BSplineSolver` `per_wire_radius+singular_enrichment`, `HMatrixSolver` `per_wire_radius+singular_enrichment`, `ArrayBlockSolver` `per_wire_radius+singular_enrichment`
+E          
+E         
+E         capability-matrix.md has drifted from the declarations. Run: python scripts/capability_matrix.py
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/smburns/stevenmburns/antennaknobs/.venv/bin/python3', '/home/smburns/stevenmburns/momwir...`\n \n", stderr='\ncapability-matrix.md has drifted from the declarations. Run: python scripts/capability_matrix.py\n').returncode
+
+tests/test_capability_matrix_doc.py:50: AssertionError
+_________ test_g5689_past_the_cap_is_served_as_zero_on_both_dispatches _________
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+proj_grid = (<momwire._sommerfeld_below.SommerfeldGridBelow object at 0x7f9a46d64440>, ((13-12.839359703230246j), 0.14670915153661773, 43982297.1502571, (0.5801186652004606-0.23818309938834586j), 10.019247196864843))
+
+    def test_g5689_past_the_cap_is_served_as_zero_on_both_dispatches(proj_grid):
+        """momwire#1053: a pair past the CAP is served, as exactly zero, on both
+        dispatches, and an in-range pair sharing the call keeps its own bits — the
+        same entry as that pair queried alone. `proj_grid` is tabulated to the
+        cap, which is where the old refusal fired.
+    
+        Both pairs sit at 1.2x the grazing floor, inside the band the fixture has
+        already materialized, so this gate pays for no fill of its own."""
+        grid, (et, kp, om, km, lam_m) = proj_grid
+        assert grid.r1_max == grid.r1_cap
+        th = 1.2 * grid.th_min
+        assert th < grid.th_band_lo_hi, "the pairs must stay in the pre-filled band"
+        hh_near = 0.9 * grid.r1_cap * np.sin(th)
+        hh_far = 1.5 * grid.r1_cap * np.sin(th)
+        src = np.array([[0.0, 0.0, -0.5 * hh_near]])
+        near = np.array([[0.9 * grid.r1_cap * np.cos(th), 0.0, -0.5 * hh_near]])
+        far = np.array([[1.5 * grid.r1_cap * np.cos(th), 0.0, -(hh_far - 0.5 * hh_near)]])
+        t1 = np.array([[1.0, 0.0, 0.0]])
+        for use_numpy in (True, False):
+            with force_numpy() if use_numpy else contextlib.nullcontext():
+                alone = below.remainder_field_proj_below(
+                    near, t1, src, t1, GROUND_Z, kp, km, grid
+                )
+>               both = below.remainder_field_proj_below(
+                    np.vstack([near, far]),
+                    np.vstack([t1, t1]),
+                    src,
+                    t1,
+                    GROUND_Z,
+                    kp,
+                    km,
+                    grid,
+                )
+
+tests/test_below_fills_568.py:721: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../antennaknobs/momwire/src/momwire/_sommerfeld_below.py:1804: in remainder_field_proj_below
+    surf = grid.eval(r1, np.arctan2(hh, rho))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <momwire._sommerfeld_below.SommerfeldGridBelow object at 0x7f9a46d64440>
+R1 = array([[36.06928991],
+       [60.11548318]])
+theta = array([[0.0010472],
+       [0.0010472]])
+
+    def eval(self, R1, theta):
+        """Interpolate the four below surfaces; REFUSES past `r1_max`.
+    
+        The parent clamps an over-range R₁ to `r1_max` because out there
+        its remainder is a negligible tail. This family's remainder is not
+        negligible anywhere the product cares about — it grows relative to
+        the direct term with range — so a clamp would return a confident
+        wrong number. θ is range-checked for the same reason: the parent's
+        silent clip to [0, π/2] would absorb a wrong-side geometry into a
+        plausible-looking answer instead of naming it.
+        """
+        R1 = np.asarray(R1, dtype=float)
+        theta = np.asarray(theta, dtype=float)
+        if R1.size and float(np.min(R1)) < 0.0:
+            raise ValueError("query R1 must be non-negative")
+        if R1.size and float(np.max(R1)) > self.r1_max * (1.0 + 1e-9):
+>           raise ValueError(
+                f"below/below grid tabulated to r1_max = {self.r1_max:.6g} "
+                f"({self.r1_max / self.lam_m:.3g} in-medium wavelengths) but "
+                f"was queried at R1 = {float(np.max(R1)):.6g}: past the "
+                "tabulation the below/below remainder is NOT a negligible "
+                "tail (it grows relative to the direct term with range), so "
+                "there is no honest clamp — size the grid for the geometry "
+                "or refuse the geometry"
+            )
+E           ValueError: below/below grid tabulated to r1_max = 40.077 (4 in-medium wavelengths) but was queried at R1 = 60.1155: past the tabulation the below/below remainder is NOT a negligible tail (it grows relative to the direct term with range), so there is no honest clamp — size the grid for the geometry or refuse the geometry
+
+../antennaknobs/momwire/src/momwire/_sommerfeld_below.py:1442: ValueError
+________________ test_the_low_band_divides_the_interval_exactly ________________
+[gw0] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_the_low_band_divides_the_interval_exactly():
+        """dtheta must divide the low band exactly, or the bands share no node.
+    
+        #838's gate, restated at the new seam. The low band's LAST node and the
+        mid band's FIRST have to be the same float, because the mid band's first
+        node is what every old-domain query at theta = 0.1 deg reads -- and the
+        whole promise of adding a band below is that the old domain does not move.
+        """
+>       lo = below._SOMM_BELOW_TH_BAND_FLOOR_HI_DEG  # the band's start since #1064
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       AttributeError: module 'momwire._sommerfeld_below' has no attribute '_SOMM_BELOW_TH_BAND_FLOOR_HI_DEG'. Did you mean: '_SOMM_BELOW_TH_BAND_LO_HI_DEG'?
+
+tests/test_grazing_band_lo_935.py:168: AttributeError
+___ test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does[explicit-zero] ____
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+ex = 'EX 0 1 5 0 0. 0.'
+
+    @pytest.mark.parametrize(
+        "ex",
+        ["EX 0 1 5 0 0. 0.", "EX 0 1 5 1 0", "EX 0 1 5 0"],
+        ids=["explicit-zero", "moxon-five-fields", "voltage-absent"],
+    )
+    def test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does(ex):
+        """momwire#1041: NEC drives an `EX 0` whose voltage fields are zero at 1 V.
+        Measured 2026-09-14 on a dipole, `EX 0 1 6 0 0. 0.` and `EX 0 1 6 1 0` print
+        V = 1.0 and the same impedance as `1. 0.` on both nec2c 1.3.1 and SimNEC's
+        ae6ty build, which is the portal's byte oracle. NEC-5 (x13) does the same.
+        The reader took the zero literally, so the port was not driven."""
+        text = DIPOLE.replace("EX 0 1 5 0 1. 0.", ex)
+>       assert build_solver(parse(text)).ports.voltages == ((1 + 0j,),)
+E       assert ((0j,),) == (((1+0j),),)
+E         
+E         At index 0 diff: (0j,) != ((1+0j),)
+E         Use -v to get more diff
+
+tests/test_deck_build_solver.py:143: AssertionError
+_ test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does[moxon-five-fields] __
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+ex = 'EX 0 1 5 1 0'
+
+    @pytest.mark.parametrize(
+        "ex",
+        ["EX 0 1 5 0 0. 0.", "EX 0 1 5 1 0", "EX 0 1 5 0"],
+        ids=["explicit-zero", "moxon-five-fields", "voltage-absent"],
+    )
+    def test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does(ex):
+        """momwire#1041: NEC drives an `EX 0` whose voltage fields are zero at 1 V.
+        Measured 2026-09-14 on a dipole, `EX 0 1 6 0 0. 0.` and `EX 0 1 6 1 0` print
+        V = 1.0 and the same impedance as `1. 0.` on both nec2c 1.3.1 and SimNEC's
+        ae6ty build, which is the portal's byte oracle. NEC-5 (x13) does the same.
+        The reader took the zero literally, so the port was not driven."""
+        text = DIPOLE.replace("EX 0 1 5 0 1. 0.", ex)
+>       assert build_solver(parse(text)).ports.voltages == ((1 + 0j,),)
+E       assert ((0j,),) == (((1+0j),),)
+E         
+E         At index 0 diff: (0j,) != ((1+0j),)
+E         Use -v to get more diff
+
+tests/test_deck_build_solver.py:143: AssertionError
+___ test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does[voltage-absent] ___
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+ex = 'EX 0 1 5 0'
+
+    @pytest.mark.parametrize(
+        "ex",
+        ["EX 0 1 5 0 0. 0.", "EX 0 1 5 1 0", "EX 0 1 5 0"],
+        ids=["explicit-zero", "moxon-five-fields", "voltage-absent"],
+    )
+    def test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does(ex):
+        """momwire#1041: NEC drives an `EX 0` whose voltage fields are zero at 1 V.
+        Measured 2026-09-14 on a dipole, `EX 0 1 6 0 0. 0.` and `EX 0 1 6 1 0` print
+        V = 1.0 and the same impedance as `1. 0.` on both nec2c 1.3.1 and SimNEC's
+        ae6ty build, which is the portal's byte oracle. NEC-5 (x13) does the same.
+        The reader took the zero literally, so the port was not driven."""
+        text = DIPOLE.replace("EX 0 1 5 0 1. 0.", ex)
+>       assert build_solver(parse(text)).ports.voltages == ((1 + 0j,),)
+E       assert ((0j,),) == (((1+0j),),)
+E         
+E         At index 0 diff: (0j,) != ((1+0j),)
+E         Use -v to get more diff
+
+tests/test_deck_build_solver.py:143: AssertionError
+__________ test_a_zero_voltage_deck_solves_to_the_one_volt_impedance ___________
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_a_zero_voltage_deck_solves_to_the_one_volt_impedance():
+        """momwire#1041, end to end through this reader: a zero-volt deck used to
+        reach the solver undriven, and its impedance read 0/0 (nan+nanj here; the
+        same shape momwire#962 found as z = [inf, 0] on four corpus decks, reached
+        there through antennaknobs' importer rather than this reader)."""
+        z_zero, _ = build_solver(parse(ZERO_VOLT_DIPOLE)).solver.compute_impedance()
+        z_one, _ = build_solver(parse(DIPOLE)).solver.compute_impedance()
+        z_zero, z_one = np.ravel(z_zero), np.ravel(z_one)
+>       assert np.all(np.isfinite(z_zero)), z_zero
+E       AssertionError: array([nan+nanj])
+E       assert np.False_
+E        +  where np.False_ = <function all at 0x7f9a517d71b0>(array([False]))
+E        +    where <function all at 0x7f9a517d71b0> = np.all
+E        +    and   array([False]) = <ufunc 'isfinite'>(array([nan+nanj]))
+E        +      where <ufunc 'isfinite'> = np.isfinite
+
+tests/test_deck_build_solver.py:154: AssertionError
+_________________ test_ge_minus_one_serves_a_crossing_junction _________________
+[gw1] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_ge_minus_one_serves_a_crossing_junction():
+        """antennaknobs plan U3: at a node where one wire continues above the
+        plane and another below, GE -1 is the buried-wire flag NEC-4/NEC-5 decks
+        carry, not a free contact end. The current continues into the buried
+        member, so the #489 refusal does not apply, and the deck parses to the
+        same model as its GE 1 twin, apart from the flag itself."""
+>       minus = parse(CROSSING_ROD.format(ge=-1))
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_deck_nec2.py:2198: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+../antennaknobs/momwire/src/momwire/deck/__init__.py:139: in parse
+    return front_end(text)
+           ^^^^^^^^^^^^^^^
+../antennaknobs/momwire/src/momwire/deck/_nec2.py:1100: in parse_nec2
+    return parser.model()
+           ^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <momwire.deck._nec2._Nec2Parser object at 0x7f5111597250>
+
+    def model(self) -> DeckModel:
+        if not self._saw_ex:
+            raise DeckError("deck has no EX card — nothing drives the structure")
+        structure = self.structure
+        wires = tuple(
+            DeckWire(
+                vertices=(piece.p1, piece.p2),
+                radius=structure.wires[piece.wire].radius,
+                edge_elements=(piece.n_seg,),
+                material=self._material_for(piece.wire),
+            )
+            for piece in structure.pieces
+        )
+        feeds, groups = self._feeds_and_groups(structure)
+        # momwire#489: GE's SIGN, at the one combination where ignoring it
+        # would serve a silently different answer than the oracle.  A negative
+        # GE declares the plane while asking for NO ground-contact current
+        # expansion, and nec2c's two readings of a grounded quarter-wave
+        # vertical differ wildly (GE 1: 39.8+23.3j; GE -1: 57-4012j).
+        # momwire's contact machinery interpolates unconditionally — the GE 1
+        # treatment — so a GE -1 deck whose wire actually stands in the plane
+        # under a ground refuses by name instead.  The contact test is
+        # nec2c's own (conect): |z| within _SMIN of the end's segment length.
+        # GE -1 with every wire clear of the plane serves as before (the sign
+        # then moves printout connection columns only), as does GE -1 in free
+        # space, where no image exists to disagree about.
+        if structure.ground_plane_flag and not structure.ground_plane_interpolates:
+            grounded = any(
+                g is not None and g.environment.ground is not None for g in groups
+            ) or (not groups and self._ground is not None)
+            if grounded:
+                for w in structure.wires:
+                    tol = _SMIN * (w.length / w.n_seg)
+                    for p in (w.p1, w.p2):
+                        if abs(float(p[2])) <= tol:
+>                           raise DeckError(
+                                f"GE -1 declares the ground plane without the "
+                                f"ground-contact current expansion, and wire "
+                                f"{w.tag}'s end stands in the plane "
+                                f"(z = {float(p[2]):g}); this engine serves "
+                                f"the interpolated (GE 1) contact only — "
+                                f"write GE 1, or lift the wire clear of the "
+                                f"plane"
+                            )
+E                           momwire.deck._cards.DeckError: GE -1 declares the ground plane without the ground-contact current expansion, and wire 1's end stands in the plane (z = 0); this engine serves the interpolated (GE 1) contact only — write GE 1, or lift the wire clear of the plane
+
+../antennaknobs/momwire/src/momwire/deck/_nec2.py:1069: DeckError
+_______________ test_a_zero_voltage_source_is_driven_at_one_volt _______________
+[gw1] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_a_zero_voltage_source_is_driven_at_one_volt():
+        """momwire#1041: NEC-5 (x13) drives an `EX 0` whose voltage fields are zero
+        at 1 V. The Moxon deck's `EX 0 1 18 2 0 0` prints V = 1.0 and Z =
+        54.832 + 3.001j, identical to an explicit `1 0`. The current source's zero
+        was not measured, so `EX 4` keeps its fields as written."""
+        text = DIPOLE.replace("EX 4,1,6,0,1.414214,0.", "EX 0,1,6,0,0.,0.")
+        (source,) = parse_nec5(text).sources
+>       assert (source.kind, source.drive) == (0, 1 + 0j)
+E       assert (0, 0j) == (0, (1+0j))
+E         
+E         At index 1 diff: 0j != (1+0j)
+E         Use -v to get more diff
+
+tests/test_deck_nec5.py:487: AssertionError
+__________________ test_both_dispatches_agree_on_the_low_band __________________
+[gw0] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_both_dispatches_agree_on_the_low_band():
+        """numpy `_interp` and C++ `proj_one_below` carry two copies of the band
+        routing and the stride. #935 changed BOTH -- a 4-way selector and a zone
+        stride of 4 -- so a drift shows up here first.
+    
+        The C++ side takes both band edges as explicit arguments rather than
+        inferring them from `len(reg_vals)`, precisely so that this gate is
+        testing one layout described twice and not two layouts.
+        """
+        # The module fixture already warmed BOTH bands on this deck; filling
+        # again here would add ~50 s for nothing.
+        g, eps_t, k2, om, lam_m = _grid("A", 7e6)
+        k_m = below.k_medium(eps_t, k2)
+        rho = 3.0
+        edge = math.degrees(g.th_band_lo_hi)
+        # The band's own start since momwire#1064. Under it is the floor band,
+        # which this module does not warm; its dispatches are gated in
+        # `test_grazing_band_floor_1064.py`.
+>       start = math.degrees(g.th_band_floor_hi)
+                             ^^^^^^^^^^^^^^^^^^
+E       AttributeError: 'SommerfeldGridBelow' object has no attribute 'th_band_floor_hi'. Did you mean: 'th_band_lo_hi'?
+
+tests/test_grazing_band_lo_935.py:327: AttributeError
+________ test_the_singularity_report_names_an_open_line_at_a_half_wave _________
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_the_singularity_report_names_an_open_line_at_a_half_wave():
+        """momwire#584: an open-terminated lossless line at k·λ/2 IS an open, so the
+        node at its near end floats unless something else pins it. That is
+        `doublet_balanced_tuner`'s remaining poisoned sample in antennaknobs
+        (16.0387 MHz, where the common-mode return runs through a line
+        open-terminated at the floating gap). The report used to fall through to
+        "No lossless line sits on a pole" there. It now names the line, its
+        length and the frequency."""
+        red, wl = _open_line(1.0)
+        msg = red._singularity_report(wl)
+>       assert "open-ended line feed→tip" in msg, msg
+E       AssertionError: No lossless line sits on a pole at this frequency, so the cause is elsewhere in the topology — a node reachable only through open-circuited branches, or two ideal sources in contradiction.
+E       assert 'open-ended line feed→tip' in 'No lossless line sits on a pole at this frequency, so the cause is elsewhere in the topology — a node reachable only through open-circuited branches, or two ideal sources in contradiction.'
+
+tests/test_networks_reducer.py:93: AssertionError
+____________________ test_every_documented_name_is_exported ____________________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_every_documented_name_is_exported():
+        extra = _documented() - set(momwire.__all__)
+>       assert not extra, "in README's `Public names` but not exported:\n  " + "\n  ".join(
+            sorted(extra)
+        )
+E       AssertionError: in README's `Public names` but not exported:
+E           FeedPlacement
+E       assert not {'FeedPlacement'}
+
+tests/test_public_surface_954.py:62: AssertionError
+_________________ test_every_documented_name_actually_resolves _________________
+[gw3] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_every_documented_name_actually_resolves():
+        """`__all__` membership is a claim; this is the claim tested. A name in
+        both lists that does not resolve would pass the two set comparisons."""
+        for name in sorted(_documented()):
+>           assert getattr(momwire, name, None) is not None, name
+E           AssertionError: FeedPlacement
+E           assert None is not None
+E            +  where None = getattr(momwire, 'FeedPlacement', None)
+
+tests/test_public_surface_954.py:71: AssertionError
+_________________ test_a_crossing_deck_names_the_crossing_unit _________________
+[gw2] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+serve_below = None
+
+    def test_a_crossing_deck_names_the_crossing_unit(serve_below):
+        """The deck the previous test used to be about: wires that MEET at the
+        interface, so a crossing junction IS declared and momwire#813 is the unit
+        that will serve it.
+    
+        `crossing_deck(1)` rather than a hand-built pair: the first draft of this
+        test put an above wire's end at z = 0 beside a buried horizontal wire and
+        got `contact+buried` instead, correctly — the two wires have to share the
+        node, not merely both touch the plane.
+        """
+        import sys
+        from pathlib import Path
+    
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+>       from test_crossing_serve_524 import crossing_deck
+
+tests/test_razor_below_plane_812.py:137: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+<frozen importlib._bootstrap>:1371: in _find_and_load
+    ???
+<frozen importlib._bootstrap>:1342: in _find_and_load_unlocked
+    ???
+<frozen importlib._bootstrap>:938: in _load_unlocked
+    ???
+../antennaknobs/.venv/lib/python3.14/site-packages/_pytest/assertion/rewrite.py:188: in exec_module
+    exec(co, module.__dict__)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+    """momwire#524 phase 2 — the crossing serve (G-524).
+    
+    A wholly-below wire whose end stands in the ground plane, junction-joined
+    there to an above wire, is SERVED: the cross pair is filled with the
+    complete designed mixed-potential spelling on graded axes
+    (`_crossing_fill`), the self families get their missing by-parts
+    bnd + corner content, and continuity of current through the node plus the
+    AGARD slope condition emerge from the fill with no constraint row and no
+    merged dof (split ≡ merged ≡ V-constrained, measured to the digit).
+    
+    The serve gate is momwire's OWN evidence, adjudicated 2026-08-26:
+    
+    * mesh stability — Δ(crossing − mono) moves 0.02 Ω between the g1/g2
+      interface-graded meshes (138.7671−102.9889j → 138.7691−102.9893j).
+      Both prints are at the then-default n_qp_pair=4 and each carries
+      ~0.43 Ω of quadrature error (momwire#760); the claim survives because
+      it is about the DIFFERENCE between two meshes at one quadrature, and
+      the error is common to both. `CROSSING_G1` itself is re-banked at
+      converged quadrature below;
+    * the ε̃ = 1 collapse — at ground_eps = 1 the interface vanishes and the
+      crossing deck IS a free-space 12 m wire, reproduced to 0.0124 Ω
+      (0.002 %) through a corner telescoping of magnitude ~204,000;
+    * the high-σ collapse — the crossing answer falls onto the shipped
+      contact-mono column exactly as σ → ∞ (|Δ| 86 → 2.8 across
+      σ = 0.005 → 5 S/m), which is the one limit where the contact fiction
+      is physical.
+    
+    The licensed engine's crossing print (74.761 − 57.730j Ω on the g-class
+    deck) is a DIFFERENT EXPERIMENT, not a miss: its own printed junction
+    currents violate its AGARD condition divergently (I(0⁻) antiphase, ~√n
+    growth, ~2 A KCL deficit into the interface point), so its junction is
+    two contact ends plus a point-electrode sink. It is documented here and
+    NEVER gated against — the house rule about cross-formulation agreement.
+    
+    THE FAN WIDENING (session 8) serves 1 above × N below. The composition
+    past K = 2 carries a node-mesh convergence class (see `test_g524_7`),
+    RESOLVED by the #674 study (scratch/674-study): the slow term is the
+    ABOVE tent's interface-adjacent h (first order — rise-only grading
+    doesn't move it), matched per-arm node grading restores ~2.6-order
+    convergence, and the ε̃ = 1 residual extrapolates to zero (0.0004 Ω,
+    two independent rung pairs). Lossy transmitted kernels amplify the
+    class ~30× — the base-mesh soil-A prints (fan 143.9327−26.2135j; hub
+    spelling 140.9839−43.6025j, a DIFFERENT structure; probe38) stay
+    RECORDS, and so does the study's own graded print: every #674 number
+    was taken at a FIXED n_qp_pair=4, which momwire#760 measures 6.8 Ω
+    from the quadrature limit. `FAN_SOIL_A_N2` is re-banked at converged
+    quadrature — twice: first at q=64, then at momwire#760's closing
+    q=256 limit, 0.0129 Ω further — and is the only one of them that is a
+    gate. The ε̃ = 1
+    collapses run in the merge-to-main `crossgate` lane (multi-minute
+    certification solves, the memgate reasoning) while the PR slow lane
+    keeps `test_g524_4` as the per-PR crossing regression pin. The HUB spelling's collapse is a banked
+    record (0.2194 Ω, probe38) with no gate of its own: its only unique
+    content — the hub-tent by-parts terms — was measured to contribute
+    exactly zero to the digit (probe39), and everything else it would
+    exercise, `test_g524_7` already does.
+    """
+    
+    from __future__ import annotations
+    
+    import math
+    import re
+    import warnings
+    
+    import numpy as np
+    import pytest
+    
+    from momwire import (
+        _below_interface,
+        _bspline_kernels,
+        _crossing_fill,
+        _medium_spec,
+        _near_interface,
+    )
+    from momwire import SinusoidalGalerkinSolver
+    from momwire import razor as _razor
+    from momwire.bspline import DEFAULT_N_QP_PAIR, BSplineSolver
+    from momwire.razor import RazorSolver
+    
+    from test_buried_serve_553 import SOIL_A, WL7, contact_deck
+    
+    A_WIRE = 0.001
+    
+    # Quadrature order for the ε̃ = 1 COLLAPSE adjudicators, pinned on both sides
+    # of every one of them (momwire#760).
+    #
+    # Those tests compare a buried fill at ε̃ = 1 against a free-space truth, and
+    # two of them build the truth by STRIPPING the ground keys off the same build
+    # dict -- so before #760 both sides simply inherited one global default and the
+    # match was automatic. It is not automatic any more: the buried fill resolves
+    # its own, higher default, and stripping `ground_z` flips the truth side back
+    # to the free-space one. Left implicit, three of the four adjudicators fail by
+    # almost exactly the quadrature gap rather than by anything about the
+    # composition (g524_5 missed by 0.0938 ohm, against the 0.0929 ohm this deck
+    # moves between q=8 and converged).
+    #
+    # The collapse is a statement about COMPOSITION -- that the buried machinery
+    # telescopes to the free-space answer when the interface vanishes -- and it is
+    # only meaningful when both sides integrate the same way. Pinned at the
+    # free-space default so the banked envelopes keep the meaning they were
+    # measured with; the VALUE does not matter to the identity, the MATCH does.
+    _COLLAPSE_N_QP = DEFAULT_N_QP_PAIR
+    
+    
+    # The interface-graded meshes the phase-2 probes banked (probe18 GRADES):
+    # vertices walk toward z = 0 so the node segments shrink without the
+    # uniform-mesh blow-up the graded ladder measured.
+    _GRADES = {
+        1: dict(
+            below=([-2.0, -0.5, -0.1], [3, 2, 2]), above=([0.1, 0.5, 10.0], [2, 2, 19])
+        ),
+        2: dict(
+            below=([-2.0, -0.5, -0.1, -0.025], [3, 2, 3, 2]),
+            above=([0.025, 0.1, 0.5, 10.0], [2, 3, 2, 19]),
+        ),
+    }
+    
+    # The soil-A exact-EM crossing answer, converged in the QUADRATURE axis
+    # as well as the mesh axis (momwire#760).
+    #
+    # probe27 (session 5) banked 138.7671 - 102.9889j here, mesh-stable
+    # g1 -> g2, and #692's near-density default reproduced it to 1e-4. Both
+    # were taken at the then-default cross-edge quadrature of 4 — which is
+    # also why they agree so exactly: the bank IS the q=4 print, and the
+    # quadrature axis was never in the 0.05 envelope. Walking it at fixed
+    # mesh: q=4 0.4333 / q=8 0.0929 / q=16 0.0087 / q=32 0.0003 ohm from the
+    # limit, settled to 4 decimals by q=64 (q=64 -> 96 moves 0.0000).
+    #
+    # This deck is the mild member of the class #760 documents. It costs
+    # ~0.4 ohm rather than the fan anchor's 6.8, and it recovers its rate by
+    # q=32 instead of crawling at ~C/q — the crossing node here has no
+    # coincident rises, which is the geometry that destroys the rate.
+    # Its envelope is the NODE axis (g1<->g2) plus quadrature. The FAR mesh is
+    # a third axis this print does not carry: scaling the far mesh moves degree
+    # 2 by 0.36 ohm at x3 and 0.61 at x9 (G1-B, test_bspline_pair_g1b), so the
+    # 0.05 gate below is a regression gate at the g1 far mesh, not a
+    # far-mesh-converged answer.
+    # momwire#956 re-pinned this from 138.9619 − 102.6019j: the crossing fill's ẑẑ
+    # kernel had −∂zW (the test-side W term by parts, counted again as s_w2) where
+    # the exact spelling is k²V + ∂z′W with the TW end term. The +36.9 Ω move is
+    # the corrected spelling's own answer on this deck, not an engine comparison;
+    # the 524 adjudication (probes 29–34) is to be re-run on it.
+    CROSSING_G1 = 169.7754 - 82.2803j
+    
+    # As FAN_SOIL_A_N2_QP, for the same reason and past the same n_qp <= 8
+    # accelerator cap (momwire#762). Costs ~1.4 s on this deck; the shipped
+    # default of 8 lands 0.0929 ohm out, outside the 0.05 gate below.
+    CROSSING_G1_QP = 64
+    # The g2 mesh's q=4 print, kept as the other half of the mesh-movement
+    # record above. Not a gate, and deliberately NOT re-banked: its only job
+    # is the Δ against CROSSING_G1's q=4 print, which is why the pair has to
+    # stay at one quadrature.
+    CROSSING_G2 = 138.7691 - 102.9893j
+    
+    
+    def crossing_deck(level=1, **override):
+        g = _GRADES[level]
+        below_pts = np.array([(0.0, 0.0, z) for z in g["below"][0] + [0.0]])
+        above_pts = np.array([(0.0, 0.0, z) for z in [0.0] + g["above"][0]])
+        build = dict(
+            wires=[below_pts, above_pts],
+            n_per_edge_per_wire=[g["below"][1], g["above"][1]],
+            junctions=[[(0, "end"), (1, "start")]],
+            feeds=[(1, 4.3333333333, 1 + 0j)],
+            wavelength=WL7,
+            wire_radius=A_WIRE,
+            ground_z=0.0,
+            ground_eps=SOIL_A,
+            ground_model="sommerfeld",
+        )
+        build.update(override)
+        return build
+    
+    
+    # ----------------------------------------------------------------------
+    # G-524-1 — the served spelling labels; everything else refuses by name
+    # ----------------------------------------------------------------------
+    
+    
+    def test_g524_1_junction_spelling_is_served():
+        s = BSplineSolver(**crossing_deck())
+        assert s._wire_media() == (_medium_spec.BELOW, _medium_spec.ABOVE)
+        assert s._crossing_junctions() == (0,)
+    
+    
+    def test_g524_1_midspan_crossing_still_refuses_naming_the_spelling():
+        wires = [np.array([(0.0, 0.0, -2.0), (0.0, 0.0, 3.0)])]
+        s = BSplineSolver(
+            wires=wires,
+            n_per_edge_per_wire=[[10]],
+            feeds=[(0, 2.5, 1 + 0j)],
+            wavelength=WL7,
+            wire_radius=A_WIRE,
+            ground_z=0.0,
+            ground_eps=SOIL_A,
+            ground_model="sommerfeld",
+        )
+        with pytest.raises(ValueError) as exc:
+            s._wire_media()
+        msg = str(exc.value)
+        assert "crosses the ground interface mid-span" in msg
+        assert "split the wire AT the interface" in msg
+        assert "declare the junction" in msg
+    
+    
+    def test_g524_1_touching_end_without_a_junction_still_refuses():
+        """The exemption is the JUNCTION's, not the geometry's: a lone below
+        wire with its end in the plane and no partner above it is still the
+        crossing refusal (a bare interface touchdown has no declared
+        continuation). N.B. omitting `junctions` on the two-wire deck does
+        NOT reach this case — coincident wire ends are auto-detected as a
+        junction, and that deck IS the served spelling."""
+        build = crossing_deck()
+        build["wires"] = [build["wires"][0]]
+        build["n_per_edge_per_wire"] = [build["n_per_edge_per_wire"][0]]
+        build.pop("junctions")
+        build["feeds"] = [(0, 1.0, 1 + 0j)]
+        s = BSplineSolver(**build)
+        with pytest.raises(ValueError, match="crosses the ground interface"):
+            s._wire_media()
+    
+    
+    def test_g524_1_detached_buried_screen_is_untouched():
+        """The momwire#553 serve class must not route through the crossing
+        fill: a detached buried wire has no crossing junction."""
+        build = crossing_deck()
+        build["wires"] = [
+            np.array([(0.0, 0.0, -0.5), (5.0, 0.0, -0.5)]),
+            np.array([(0.0, 0.0, 1.0), (0.0, 0.0, 11.0)]),
+        ]
+        build["n_per_edge_per_wire"] = [[5], [10]]
+        build.pop("junctions")
+        s = BSplineSolver(**build)
+        assert s._wire_media() == (_medium_spec.BELOW, _medium_spec.ABOVE)
+        assert s._crossing_junctions() == ()
+    
+    
+    # ----------------------------------------------------------------------
+    # G-524-2 — scope refusals, each by name
+    # ----------------------------------------------------------------------
+    
+    
+    def _radial_dirs(n_radials):
+        """N evenly spaced radial directions (momwire#924).
+    
+        Both fan and hub decks used to slice a fixed 4-tuple,
+        `((1,0),(0,1),(-1,0),(0,-1))[:n_radials]`, while their junction lists were
+        still written for `range(n_radials)`. Above four that built FOUR radials
+        and a junction naming more members than there were radials, so the extra
+        indices silently absorbed the rise and the monopole — and the error that
+        came back was a coincidence complaint naming a distance that was really
+        `depth`, which points away from the cause.
+    
+        At n_radials = 4 these ARE the old directions to floating point: cos/sin of
+        0, pi/2, pi, 3pi/2. Gated by `test_g924_the_four_radial_decks_did_not_move`
+        so that is a measurement rather than an expectation.
+        """
+        if n_radials < 1:
+            raise ValueError(f"a radial screen needs at least one radial, got {n_radials}")
+        return [
+            (
+                math.cos(2.0 * math.pi * i / n_radials),
+                math.sin(2.0 * math.pi * i / n_radials),
+            )
+            for i in range(n_radials)
+        ]
+    
+    
+    def fan_rise_deck(n_radials=4, depth=0.15, **override):
+        """The connected radial screen, rise-spelled (momwire#524 fan
+        widening): `contact_deck`'s monopole junction-joined at the node to
+        N radials that each run at depth and RISE to the surface. The N rise
+        segments are geometrically coincident on (0,0,−depth) → (0,0,0) —
+        legal thin-wire geometry (mutual ≡ self at ρ = 0 under the
+        ρ_eff = √(ρ² + a²) regularization), and the spelling the free-space
+        junction machinery solves identically for the ε̃ = 1 adjudicator.
+        Feed = arclength 4.3333 on the 10 → 0 monopole. NOT the engine's
+        `EX 4,1,7` — that card drives the far NODE at arc 4.6667 (momwire#706);
+        these gates are momwire-internal (both sides of every comparison feed
+        at 4.3333), so the banked prints stand. The old trap also stands: an
+        improvised feed at 10 − 4.333 is silently ~50 Ω wrong."""
+        dirs = _radial_dirs(n_radials)
+        wires = [
+            np.array([(5.0 * dx, 5.0 * dy, -depth), (0.0, 0.0, -depth), (0.0, 0.0, 0.0)])
+            for dx, dy in dirs
+        ]
+        npe = [[10, 2] for _ in dirs]
+        mono_i = len(wires)
+        wires.append(np.array([(0.0, 0.0, 10.0), (0.0, 0.0, 0.0)]))
+        npe.append([15])
+        build = dict(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            junctions=[[(i, "end") for i in range(n_radials)] + [(mono_i, "end")]],
+            feeds=[(mono_i, 4.3333333333, 1 + 0j)],
+            wavelength=WL7,
+            wire_radius=A_WIRE,
+            ground_z=0.0,
+            ground_eps=SOIL_A,
+            ground_model="sommerfeld",
+        )
+        build.update(override)
+        return build
+    
+    
+    def test_g524_2_node_fan_is_served_n4_labeling():
+        """The fan widening's labeling test: one above member, four below
+        members — the crossing junction labels, every member is exempted in
+        `wire_media`, and the scope check passes."""
+        s = BSplineSolver(**fan_rise_deck())
+        media = s._wire_media()
+        assert media == (_medium_spec.BELOW,) * 4 + (_medium_spec.ABOVE,)
+        assert s._crossing_junctions() == (0,)
+        assert s._grounded_junction_ends() == frozenset(
+            [(0, "end"), (1, "end"), (2, "end"), (3, "end"), (4, "end")]
+        )
+    
+    
+    def test_g524_2_two_above_members_refused_by_name():
+        """The widening is 1 above × N below ONLY: a second above member
+        puts an above-tent × above-tent interface corner on the deck, a pair
+        class no adjudicator has measured."""
+        build = crossing_deck()
+        build["wires"] = build["wires"] + [np.array([(0.0, 0.0, 0.0), (3.0, 0.0, 5.0)])]
+        build["n_per_edge_per_wire"] = build["n_per_edge_per_wire"] + [[5]]
+        build["junctions"] = [[(0, "end"), (1, "start"), (2, "start")]]
+        s = BSplineSolver(**build)
+        with pytest.raises(NotImplementedError, match="more than one above member"):
+            s._crossing_junctions()
+    
+    
+    def test_g524_2_above_side_other_junction_refused_by_name():
+        build = crossing_deck()
+        build["wires"] = [
+            build["wires"][0],
+            np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 5.0)]),
+            np.array([(0.0, 0.0, 5.0), (0.0, 0.0, 10.0)]),
+        ]
+        build["n_per_edge_per_wire"] = [build["n_per_edge_per_wire"][0], [12], [11]]
+        build["junctions"] = [
+            [(0, "end"), (1, "start")],
+            [(1, "end"), (2, "start")],
+        ]
+        s = BSplineSolver(**build)
+        with pytest.raises(NotImplementedError, match="OTHER junction"):
+            s._crossing_junctions()
+    
+    
+    def two_node_deck(separation=12.0, **override):
+        """Two copies of `crossing_deck`'s rod `separation` m apart, each over its
+        own crossing junction (antennaknobs#1464). Before momwire#1054 named it,
+        the second node passed the serve plan and died on the bare assert in
+        `_crossing_fill._ends_and_corner`; antennaknobs plan U9 serves it."""
+        one = crossing_deck()
+        shift = np.array([separation, 0.0, 0.0])
+        build = dict(one)
+        build["wires"] = one["wires"] + [w + shift for w in one["wires"]]
+        build["n_per_edge_per_wire"] = one["n_per_edge_per_wire"] + [
+            list(e) for e in one["n_per_edge_per_wire"]
+        ]
+        build["junctions"] = [[(0, "end"), (1, "start")], [(2, "end"), (3, "start")]]
+        build.update(override)
+        return build
+    
+    
+    _CLOSE_NODES = "closer crossing nodes have no measured completion"
+    _TWO_RADIUS_NODES = "a two-radius deck with several nodes has no measured completion"
+    
+    
+    @pytest.mark.parametrize(
+>       "separation", [_below_interface.MIN_CROSSING_NODE_SEPARATION_M, 12.0]
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+E   AttributeError: module 'momwire._below_interface' has no attribute 'MIN_CROSSING_NODE_SEPARATION_M'
+
+tests/test_crossing_serve_524.py:371: AttributeError
+_______ test_gu3_6_a_source_deeper_than_the_ladder_refuses_with_the_cost _______
+[gw1] linux -- Python 3.14.4 /home/smburns/stevenmburns/antennaknobs/.venv/bin/python3
+
+    def test_gu3_6_a_source_deeper_than_the_ladder_refuses_with_the_cost():
+        et, kp, om, km = medium("A/7MHz")
+        lam_m = 2.0 * np.pi / abs(km)
+        with pytest.raises(ValueError) as ex:
+            trans.TransmittedGrid(et, kp, 20.0, 0.1, 0.6 * lam_m, omega=om)
+        msg = str(ex.value)
+        assert "two-ray" in msg and "extra rungs per additional quarter" in msg
+        assert "momwire#524 phase 0" in msg
+        # momwire#666 decided the cap is permanent; the cost stays as the reason.
+>       assert "permanent (momwire#666)" in msg
+E       AssertionError: assert 'permanent (momwire#666)' in 'the transmitted grid was asked for a source depth 6.01155 m, past the tabulated maximum 2.50481 m (0.25 in-medium wav...tional quarter lambda_m plus 18 per decade of log span, each rung a full (R, theta) fill; extrapolating past it is not'
+
+tests/test_sommerfeld_transmitted.py:742: AssertionError
+=============================== warnings summary ===============================
+tests/test_eznec_buried_refusal.py::test_the_split_spelling_is_served@eznec_corpus
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_eznec_buried_refusal.py:127: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    out = render(text)
+
+tests/test_array_block.py: 6 warnings
+tests/test_bspline_degree3_883.py: 1 warning
+tests/test_capabilities.py: 3 warnings
+tests/test_element_currents.py: 3 warnings
+tests/test_extended_kernel_bspline.py: 2 warnings
+tests/test_ground_junction.py: 2 warnings
+tests/test_node_gaps.py: 2 warnings
+tests/test_port_solution.py: 1 warning
+tests/test_refl_coef_ground.py: 1 warning
+tests/test_refusals_are_declared.py: 9 warnings
+tests/test_sommerfeld_ground.py: 2 warnings
+  /home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (1 element, 1 distinct shape) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_array_block.py::test_all_distinct_shapes_fall_back
+  /home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (3 elements, 3 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[0-1]
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[0-0]
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[0-2]
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[1-0]
+tests/test_extended_kernel_bspline.py::test_d_family_matches_brute_force_quadrature[diagonal-0.16666666666666666]
+tests/test_extended_kernel_bspline.py::test_d_family_matches_brute_force_quadrature[neighbour-0.041666666666666664]
+  /home/smburns/stevenmburns/antennaknobs/.venv/lib/python3.14/site-packages/scipy/integrate/_quadpack_py.py:1286: IntegrationWarning: The occurrence of roundoff error is detected, which prevents 
+    the requested tolerance from being achieved.  The error may be 
+    underestimated.
+    quad_r = quad(f, low, high, args=args, full_output=self.full_output,
+
+tests/test_deck_build_solver.py::test_a_zero_voltage_deck_solves_to_the_one_volt_impedance
+tests/test_refusals_name_working_routes.py::test_the_route_a_refusal_names_actually_works[sinusoidal.py::junction_ports]
+  /home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/bspline.py:5718: RuntimeWarning: invalid value encountered in divide
+    z_per = all_voltages / currents
+
+tests/test_junction_ports_iterative.py::test_constructor_accepts_junction_ports[False-ArrayBlockSolver]
+tests/test_junction_ports_iterative.py::test_disabled_port_partition_does_not_match_dense[ArrayBlockSolver]
+tests/test_port_solution.py::test_y_matrix_is_the_port_solutions_y[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_columns_superpose_to_the_configured_excitation[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_port_currents_is_the_y_matrix[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_y_matrix_swept_is_the_stacked_single_k_y[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_impedance_swept_is_the_stacked_single_k_impedance[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_port_solution_swept_is_the_stacked_single_k_solution[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_swept_y_is_the_swept_port_solutions_y[ArrayBlockSolver-junction_ports]
+  /home/smburns/stevenmburns/antennaknobs/momwire/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (2 elements, 2 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_razor_far_mesh_advisory_845.py::test_it_is_advisory_in_FACT_not_just_in_wording
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_razor_far_mesh_advisory_845.py:166: RazorFarMeshClass: razor-2p is first order in the far mesh: its path (razor-blade) testing rule is NEC-5's, which converges more slowly than a Galerkin-tested basis, so a coarse answer is systematically off rather than noisy. Measured over 88 antennaknobs catalog decks at their shipped mesh density, the driving-point impedance is a median 3.3 % from converged, with a tail to 34 % (2.29 ohm median in absolute terms, though the relative figure is the readable one: in ohms the ranking follows |Z| rather than accuracy). The ground barely matters — free-space and Sommerfeld medians agree to 2 %. It is order 1 in the mesh, so DOUBLING the segment count on the razor path roughly HALVES the error; there is no mesh at which it is free. For a converged answer use BSplineSolver (degree 2), which is already converged at these same segment counts. Advisory: nothing is remeshed and nothing is refused — a coarse mesh is a legitimate thing to ask for, and every rung of a convergence ladder but the last is one. See stevenmburns/momwire#845 (antennaknobs scratch/845-mesh-policy, commit 6bafd991d).
+    loud = RazorSolver(**_deck(), nec5_quadrature=True)
+
+tests/test_tilted_crossing_936.py::test_g936_1_a_tilted_crossing_deck_solves
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_tilted_crossing_936.py:58: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z, _ = BSplineSolver(**_crossing_deck(45.0)).compute_impedance()
+
+tests/test_tilted_crossing_936.py::test_g936_3_a_horizontal_above_segment_over_a_crossing_solves
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_tilted_crossing_936.py:134: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 500.0 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z, _ = BSplineSolver(**build).compute_impedance()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+!!!!!!!!!!!!!!!!!!!!!!!!!! test time-budget guardrail !!!!!!!!!!!!!!!!!!!!!!!!!!
+49 unmarked test(s) over the 5s ceiling:
+   21.76s  tests/test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113] <-- OVER HARD CEILING
+   13.53s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[monopole-vgood]
+   13.27s  tests/test_extended_kernel_galerkin.py::test_gs2_lifted_fat_wire_shift_is_within_the_cross_basis_bar[somm sea-point-matched]
+   13.16s  tests/test_extended_kernel_galerkin.py::test_gs1_reduced_sommerfeld_remainder_is_negligible[slanted-sea]
+   13.13s  tests/test_extended_kernel_bspline.py::test_g18_reduced_sommerfeld_remainder_is_negligible[bent-sea]
+   13.01s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[mono_lifted-sommerfeld sea]
+   13.01s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[mono_contact-sommerfeld sea]
+   13.00s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[horizontal-sommerfeld sea]
+   12.99s  tests/test_extended_kernel_bspline.py::test_g17_hmatrix_agrees_with_the_dense_path_over_finite_ground[sommerfeld sea-32-False]
+   12.96s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[bent-sommerfeld sea]
+   12.95s  tests/test_extended_kernel_bspline.py::test_g16b_finite_ground_does_not_move_the_pec_mismatch[bent-sommerfeld sea]
+   12.84s  tests/test_advisory_cache_927.py::test_g927_1_a_repeat_solve_of_one_deck_still_warns
+   12.43s  tests/test_sommerfeld_ground.py::test_a_grazing_wire_converges_under_mesh_refinement
+   11.93s  tests/test_razor_sommerfeld_ground.py::test_a_grazing_wire_is_converged_in_the_remainder_order@test_razor_sommerfeld_ground
+   10.09s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[monopole-sea]
+    9.94s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[invl-sea]
+    9.86s  tests/test_same_edge_window_968.py::test_the_long_wire_stays_inside_its_reassociation_bound[2]
+    9.69s  tests/test_same_edge_chunked_966.py::test_chunked_matches_dense_where_chunking_actually_engages[2]
+    9.26s  tests/test_grazing_band_838.py::test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward@test_grazing_band_838
+    9.12s  tests/test_grazing_band_838.py::test_theta_at_the_band_edge_routes_to_the_old_band@test_grazing_band_838
+    8.72s  tests/test_pynec_backend.py::test_bowtie_sweep_per_feed_agrees
+    8.53s  tests/test_advisory_cache_927.py::test_g927_2_one_advisory_per_solve_not_one_per_call
+    8.39s  tests/test_grazing_band_lo_935.py::test_the_low_band_is_deferred_until_something_reaches_it@test_grazing_band_lo_935
+    8.38s  tests/test_surface_radials_865.py::test_the_advisory_fires_inside_the_band_and_is_silent_above_it@test_surface_radials_865
+    7.92s  tests/test_razor_sommerfeld_ground.py::test_pec_limit_decays_smoothly_to_the_pec_image[lossy-False]@test_razor_sommerfeld_ground
+    7.89s  tests/test_razor_assemble_weighted_744.py::test_both_grounds_and_lanes_agree_with_numpy[160-sommerfeld-gauss-legendre]
+    7.47s  tests/test_grazing_band_838.py::test_both_dispatches_agree_across_the_r_near_seam@test_grazing_band_838
+    7.45s  tests/test_razor_assemble_accel_780.py::test_a_finite_ground_answer_is_unchanged[sommerfeld]
+    7.42s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[invl-vgood]
+    7.25s  tests/test_momwire.py::test_bspline_d2_hentenna_enrichment_convergence_over_pec
+    7.18s  tests/test_somm_rung_blend_902.py::test_g902_4_a_band_sweep_is_one_pair_and_a_second_sweep_is_free
+    6.72s  tests/test_same_edge_chunked_966.py::test_chunked_matches_dense_where_chunking_actually_engages[1]
+    6.69s  tests/test_grazing_band_838.py::test_the_far_zone_is_deferred_until_something_reaches_it@test_grazing_band_838
+    6.62s  tests/test_same_edge_window_968.py::test_the_long_wire_stays_inside_its_reassociation_bound[1]
+    6.56s  tests/test_pynec_backend.py::test_fandipole_two_band_smoke
+    6.38s  tests/test_buried_serve_553.py::test_gu5_7_the_dense_budget_refuses_rather_than_chunking
+    5.79s  tests/test_sommerfeld_engine.py::test_grid_resolves_the_near_interface_boundary_layer
+    5.68s  tests/test_advisory_cache_927.py::test_g927_1_the_second_solve_really_did_hit_the_cache
+    5.68s  tests/test_advisory_cache_927.py::test_g927_4_the_cached_basis_is_unchanged_by_carrying_the_summary
+    5.68s  tests/test_advisory_cache_927.py::test_g927_1_the_advisory_text_survives_the_round_trip
+    5.60s  tests/test_pynec_backend.py::test_bowtie_90deg_phase_per_feed_agrees
+    5.32s  tests/test_sommerfeld_engine.py::test_grid_far_zone_matches_near_keyed_layout
+    5.18s  tests/test_sommerfeld_engine.py::test_grid_r1_max_is_capped
+    5.16s  tests/test_razor_below_plane_812.py::test_razor_and_bspline_converge_together_at_soil[True]
+    5.10s  tests/test_sommerfeld_accel.py::test_remainder_field_proj_accel_matches_python[(81-9000j)]
+    5.05s  tests/test_sommerfeld_ground.py::test_remote_wire_stays_bounded_and_irrelevant
+    5.05s  tests/test_sinusoidal_current_slopes.py::test_the_derivative_does_not_walk_down_the_606_ladder[SinusoidalGalerkinSolver]
+    5.02s  tests/test_same_edge_window_968.py::test_a_default_solve_windows_the_static_and_reg_blocks
+    5.00s  tests/test_same_edge_chunked_966.py::test_a_default_solve_on_a_long_edge_really_windows_the_correction
+
+FAILING: 1 test(s) over the 20s HARD ceiling. This is not advisory.
+Fix: make it faster, or mark it — `slow` (push lane), `integration` (crosses a process/socket/CLI/printout seam), `crossgate`/`memgate` (certification). See the pyproject markers.
+=========================== short test summary info ============================
+FAILED tests/test_accel_cpu_guard_1032.py::test_a_forced_variant_that_is_not_installed_says_so
+FAILED tests/test_accel_cpu_guard_1032.py::test_require_accel_names_the_missing_forced_variant
+FAILED tests/test_grazing_band_838.py::test_the_far_zone_is_deferred_until_something_reaches_it@test_grazing_band_838
+FAILED tests/test_grazing_band_838.py::test_the_tail_cap_refuses_by_name_below_the_floor@test_grazing_band_838
+FAILED tests/test_buried_serve_553.py::test_1061_the_preflight_returns_the_contact_sentence_instead_of_raising
+FAILED tests/test_capability_matrix_doc.py::test_the_committed_document_matches_the_declarations
+FAILED tests/test_capability_matrix_doc.py::test_the_script_runs_as_a_script
+FAILED tests/test_below_fills_568.py::test_g5689_past_the_cap_is_served_as_zero_on_both_dispatches@test_below_fills_568
+FAILED tests/test_grazing_band_lo_935.py::test_the_low_band_divides_the_interval_exactly@test_grazing_band_lo_935
+FAILED tests/test_deck_build_solver.py::test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does[explicit-zero]
+FAILED tests/test_deck_build_solver.py::test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does[moxon-five-fields]
+FAILED tests/test_deck_build_solver.py::test_a_zero_voltage_ex_is_driven_at_one_volt_as_nec_does[voltage-absent]
+FAILED tests/test_deck_build_solver.py::test_a_zero_voltage_deck_solves_to_the_one_volt_impedance
+FAILED tests/test_deck_nec2.py::test_ge_minus_one_serves_a_crossing_junction
+FAILED tests/test_deck_nec5.py::test_a_zero_voltage_source_is_driven_at_one_volt
+FAILED tests/test_grazing_band_lo_935.py::test_both_dispatches_agree_on_the_low_band@test_grazing_band_lo_935
+FAILED tests/test_networks_reducer.py::test_the_singularity_report_names_an_open_line_at_a_half_wave
+FAILED tests/test_public_surface_954.py::test_every_documented_name_is_exported
+FAILED tests/test_public_surface_954.py::test_every_documented_name_actually_resolves
+FAILED tests/test_razor_below_plane_812.py::test_a_crossing_deck_names_the_crossing_unit
+FAILED tests/test_sommerfeld_transmitted.py::test_gu3_6_a_source_deeper_than_the_ladder_refuses_with_the_cost
+ERROR tests/test_814_prep.py - AttributeError: module 'momwire._below_interfa...
+ERROR tests/test_814_prep.py - AttributeError: module 'momwire._below_interfa...
+ERROR tests/test_814_prep.py - AttributeError: module 'momwire._below_interfa...
+ERROR tests/test_814_prep.py - AttributeError: module 'momwire._below_interfa...
+ERROR tests/test_below_interface_980.py - AttributeError: module 'momwire._be...
+ERROR tests/test_below_interface_980.py - AttributeError: module 'momwire._be...
+ERROR tests/test_below_interface_980.py - AttributeError: module 'momwire._be...
+ERROR tests/test_below_interface_980.py - AttributeError: module 'momwire._be...
+ERROR tests/test_below_reach_preflight_1135.py - AttributeError: module 'momw...
+ERROR tests/test_below_reach_preflight_1135.py - AttributeError: module 'momw...
+ERROR tests/test_below_reach_preflight_1135.py - AttributeError: module 'momw...
+ERROR tests/test_below_reach_preflight_1135.py - AttributeError: module 'momw...
+ERROR tests/test_bspline_pair_g1b.py - AttributeError: module 'momwire._below...
+ERROR tests/test_bspline_pair_g1b.py - AttributeError: module 'momwire._below...
+ERROR tests/test_bspline_pair_g1b.py - AttributeError: module 'momwire._below...
+ERROR tests/test_bspline_pair_g1b.py - AttributeError: module 'momwire._below...
+ERROR tests/test_bundle_refusal_846.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_bundle_refusal_846.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_bundle_refusal_846.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_bundle_refusal_846.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_buried_assembly_910.py - AttributeError: module 'momwire._be...
+ERROR tests/test_buried_assembly_910.py - AttributeError: module 'momwire._be...
+ERROR tests/test_buried_assembly_910.py - AttributeError: module 'momwire._be...
+ERROR tests/test_buried_assembly_910.py - AttributeError: module 'momwire._be...
+ERROR tests/test_buried_chunked_915.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_buried_chunked_915.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_buried_chunked_915.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_buried_chunked_915.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_buried_quadrature_default_760.py - AttributeError: module 'm...
+ERROR tests/test_buried_quadrature_default_760.py - AttributeError: module 'm...
+ERROR tests/test_buried_quadrature_default_760.py - AttributeError: module 'm...
+ERROR tests/test_buried_quadrature_default_760.py - AttributeError: module 'm...
+ERROR tests/test_buried_serve_refusal_1464.py - AttributeError: module 'momwi...
+ERROR tests/test_buried_serve_refusal_1464.py - AttributeError: module 'momwi...
+ERROR tests/test_buried_serve_refusal_1464.py - AttributeError: module 'momwi...
+ERROR tests/test_buried_serve_refusal_1464.py - AttributeError: module 'momwi...
+ERROR tests/test_crossing_aca_688.py - AttributeError: module 'momwire._below...
+ERROR tests/test_crossing_aca_688.py - AttributeError: module 'momwire._below...
+ERROR tests/test_crossing_aca_688.py - AttributeError: module 'momwire._below...
+ERROR tests/test_crossing_aca_688.py - AttributeError: module 'momwire._below...
+ERROR tests/test_crossing_axis_grading_813.py - AttributeError: module 'momwi...
+ERROR tests/test_crossing_axis_grading_813.py - AttributeError: module 'momwi...
+ERROR tests/test_crossing_axis_grading_813.py - AttributeError: module 'momwi...
+ERROR tests/test_crossing_axis_grading_813.py - AttributeError: module 'momwi...
+ERROR tests/test_crossing_basis_sampler_980.py - AttributeError: module 'momw...
+ERROR tests/test_crossing_basis_sampler_980.py - AttributeError: module 'momw...
+ERROR tests/test_crossing_basis_sampler_980.py - AttributeError: module 'momw...
+ERROR tests/test_crossing_basis_sampler_980.py - AttributeError: module 'momw...
+ERROR tests/test_crossing_exemption_audit_700.py - AttributeError: module 'mo...
+ERROR tests/test_crossing_exemption_audit_700.py - AttributeError: module 'mo...
+ERROR tests/test_crossing_exemption_audit_700.py - AttributeError: module 'mo...
+ERROR tests/test_crossing_exemption_audit_700.py - AttributeError: module 'mo...
+ERROR tests/test_crossing_glue_912.py - AttributeError: module 'momwire._belo...
+ERROR tests/test_crossing_glue_912.py - AttributeError: module 'momwire._belo...
+ERROR tests/test_crossing_glue_912.py - AttributeError: module 'momwire._belo...
+ERROR tests/test_crossing_glue_912.py - AttributeError: module 'momwire._belo...
+ERROR tests/test_crossing_plane_snap_852.py - AttributeError: module 'momwire...
+ERROR tests/test_crossing_plane_snap_852.py - AttributeError: module 'momwire...
+ERROR tests/test_crossing_plane_snap_852.py - AttributeError: module 'momwire...
+ERROR tests/test_crossing_plane_snap_852.py - AttributeError: module 'momwire...
+ERROR tests/test_crossing_serve_524.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_crossing_serve_524.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_crossing_serve_524.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_crossing_serve_524.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_crossing_two_radius_u5.py - AttributeError: module 'momwire....
+ERROR tests/test_crossing_two_radius_u5.py - AttributeError: module 'momwire....
+ERROR tests/test_crossing_two_radius_u5.py - AttributeError: module 'momwire....
+ERROR tests/test_crossing_two_radius_u5.py - AttributeError: module 'momwire....
+ERROR tests/test_feed_placements_1059.py - ImportError while importing test m...
+ERROR tests/test_field_galerkin_914.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_field_galerkin_914.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_field_galerkin_914.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_field_galerkin_914.py - AttributeError: module 'momwire._bel...
+ERROR tests/test_near_interface_columns_895.py - AttributeError: module 'momw...
+ERROR tests/test_near_interface_columns_895.py - AttributeError: module 'momw...
+ERROR tests/test_near_interface_columns_895.py - AttributeError: module 'momw...
+ERROR tests/test_near_interface_columns_895.py - AttributeError: module 'momw...
+ERROR tests/test_near_interface_columns_accel_899.py - AttributeError: module...
+ERROR tests/test_near_interface_columns_accel_899.py - AttributeError: module...
+ERROR tests/test_near_interface_columns_accel_899.py - AttributeError: module...
+ERROR tests/test_near_interface_columns_accel_899.py - AttributeError: module...
+ERROR tests/test_pair_order_ladder_906.py - AttributeError: module 'momwire._...
+ERROR tests/test_pair_order_ladder_906.py - AttributeError: module 'momwire._...
+ERROR tests/test_pair_order_ladder_906.py - AttributeError: module 'momwire._...
+ERROR tests/test_pair_order_ladder_906.py - AttributeError: module 'momwire._...
+ERROR tests/test_plan_extents_914.py - AttributeError: module 'momwire._below...
+ERROR tests/test_plan_extents_914.py - AttributeError: module 'momwire._below...
+ERROR tests/test_plan_extents_914.py - AttributeError: module 'momwire._below...
+ERROR tests/test_plan_extents_914.py - AttributeError: module 'momwire._below...
+ERROR tests/test_razor_crossing_axis_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_axis_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_axis_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_axis_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_fill_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_fill_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_fill_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_crossing_fill_813.py - AttributeError: module 'momwire...
+ERROR tests/test_razor_t2_at_node_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_t2_at_node_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_t2_at_node_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_t2_at_node_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_wire_media_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_wire_media_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_wire_media_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_razor_wire_media_813.py - AttributeError: module 'momwire._b...
+ERROR tests/test_grazing_band_floor_1064.py::test_the_floor_band_lattice_runs_one_node_past_its_edge@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_theta_at_the_floor_edge_routes_to_the_low_band@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_the_old_domain_never_touches_the_floor_band@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_each_shared_node_is_filled_once_and_owned_by_the_low_band[0-floor_first]@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_each_shared_node_is_filled_once_and_owned_by_the_low_band[0-low_first]@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_each_shared_node_is_filled_once_and_owned_by_the_low_band[1-floor_first]@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_each_shared_node_is_filled_once_and_owned_by_the_low_band[1-low_first]@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_each_shared_node_is_filled_once_and_owned_by_the_low_band[2-floor_first]@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_each_shared_node_is_filled_once_and_owned_by_the_low_band[2-low_first]@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_the_floor_band_is_deferred_until_something_reaches_it@test_grazing_band_floor_1064
+ERROR tests/test_grazing_band_floor_1064.py::test_both_dispatches_agree_across_the_floor_edge@test_grazing_band_floor_1064
+= 21 failed, 4835 passed, 7 skipped, 4 xfailed, 54 warnings, 116 errors in 328.24s (0:05:28) =
+make: *** [Makefile:89: test] Error 1
