@@ -629,3 +629,36 @@ relative in the surfaces and 1.9e-14 in the kernel.
   passed; the crossgate lane, 38 passed.
 - **Still to come:** the `ci.yml` dispatch on the branch (macOS, slow,
   crossgate, memgate, integration), with the PR.
+
+## G3 and G1a re-spelled [2026-09-15]: decided upstream of this record, after D1–D4
+
+**G3.** The registered cross-variant bar is a **MISS**, mis-specified. It asked
+for ≤ 1e-12 between avx2 and sse2 grids that each process filled for itself.
+The re-spelling:
+- **G3a: PASS.** Same-process C++ against numpy is ≤ 1e-12 at every point, on
+  both variants. From G3's records it reads 5.7e-16 at worst.
+- **G3b: PASS.** The branch's cross-variant spread is within 2× of main's at
+  every point, which was D1's registered prediction. From D1 the worst is ×1.90
+  (soil C, 21 MHz, far zone, 0.06°).
+
+**G1a.** The registered bar is a **MISS**. It asked for every value
+bit-identical to 0.55.0 on the default avx2 build.
+- **D2a, D3a, D3b, D3c and D4b stand as misses.**
+- **D4a's hit is the evidence.** The avx2 last bits moved because
+  `_accel_mw568.cpp` was recompiled. That translation unit holds the contour,
+  and no source line of the contour changed.
+
+The re-spelling follows the decision's rule: strict bit-identity wherever it
+can hold, and a tolerance only where it cannot.
+- **G1a-sse2.** G1a's capture (`g12_grid.py`, the old set at θ ≥ 0.05°),
+  forced to sse2, on 0.55.0 and on the branch, is bit-identical at every point.
+  - **Records:** `g1a_sse2_v055.json` and `g1a_sse2_branch.json`, compared by
+    `d2_compare.py`.
+  - **When:** after G5, so the box stays quiet for the timing.
+  - **Prediction:** bit-identical.
+- **G1a-avx2: PASS.** At θ ≥ 0.05° the values are ≤ 1e-12 relative. From
+  G1a's avx2 records it reads 6.7e-14 in the surfaces and 1.9e-14 in the
+  kernel.
+
+**The order, stated plainly.** G3a, G3b and G1a-avx2 were read from records
+taken before this re-spelling. G1a-sse2 runs after it.
