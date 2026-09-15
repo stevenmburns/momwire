@@ -252,3 +252,68 @@ kwargs, and confirm that main and the branch serve it and 0.55.0 refuses it.
 - **Order independence.** The low band's values are the same bits in both fill
   orders.
 - **Prediction** (passes): hit.
+
+## G6 Population B [2026-09-15]: STOP at the addendum's translation check, before any momwire run
+
+- **The run.** `nec5_corpus.py translate`, antennaknobs a9c49416f, on the six
+  decks linked under `~/nec5-timing/popb-1064/raw/`. All six translated.
+- **The check, as pinned:** every translated deck carries GN 0 and the census's
+  segment count. **It fails on all six.**
+
+| deck | census `segs` | translated GW sum | translated GN | raw deck parsed (`parse_nec`, `n_seg`) |
+|---|---|---|---|---|
+| `1-3.nec` | 62 | 63 | 2 | 62 |
+| `3-2.nec` | 62 | 63 | 2 | 62 |
+| `11-4a-nec4.nec` | 532 | 178 | 2 | 532 (its raw GW column sum is 119) |
+| `lpma3r5-4-6el86ft75o-buriedradials.nec` | 2,690 | 2,698 | 2 | 2,690 |
+| `1r5-bc3elendfire-burrad.nec` | 1,029 | 1,035 | 2 | 1,029 |
+| `1r8-4el-endfire-burrad.nec` | 1,372 | 1,380 | 2 | 1,372 |
+
+- **By the pinned rule this is a stop.** No Population B momwire run is made,
+  and nothing is re-pinned here.
+- **Diagnosis: the check was mis-specified,** and in two ways. Neither is a
+  change in the decks.
+  - **GN.** The addendum expected GN 0, from `popb_select.py`'s account of the
+    pre-U1 translator. U1 (antennaknobs#1453) made `translate` pass GN 2
+    through, and today's tool does.
+  - **Segments.** The addendum called `segs` the translated tree's count. It is
+    the raw deck's count through antennaknobs' importer, and all six decks
+    match it exactly. The translated sums are today's translator's own
+    rewrites, and its report notes them ("GW tag N: N -> N segments so the
+    referenced feed/load/port sits on a knot", 20 notes).
+- **What stands.** With `segs` read correctly, the six local decks match the
+  census's members on class, zmin, zmax, crossing nodes, wire count and
+  segment count. The identity the addendum wanted is shown, by a check other
+  than the one pinned.
+- **Reported for a decision,** with a proposed re-pin: identity on the raw
+  parse (as shown above), today's translation as the momwire input, and the
+  rest of the procedure unchanged. Population A, G1–G5 and G7 do not depend on
+  it and continue.
+
+## G6 Population B re-pin [2026-09-15]: approved, and committed before any Population B momwire run
+
+- **Approved upstream of this record, on 2026-09-15.** It can still be
+  overruled.
+- **The pinned translation check is a MISS.** It was mis-specified in two ways.
+  1. It expected GN 0, but U1 (antennaknobs#1453) made `translate` pass GN 2
+     through.
+  2. It read the census's `segs` as translated counts. They are raw-parse
+     counts through `parse_nec`.
+  - **The diagnosis was geometry only.** No momwire run was made on these
+    decks.
+- **Identity, re-pinned.** Each raw deck is read through `parse_nec` and
+  classified by `popb_select.classify`. It matches `popb-members.json` on
+  class, zmin, zmax, crossing nodes, wires and segs, for all six decks, as the
+  table in the stop section shows.
+- **momwire's input, on BOTH arms (main 54caf86 and the branch):** today's
+  translation, `~/nec5-timing/popb-1064/nec5`, made by antennaknobs a9c49416f.
+  - **Provenance.** The translate report is `popb_translate_report.jsonl`, and
+    each deck's sha256 is in `popb_translated_sha256.txt`.
+- **The verdict is main against the branch, on identical inputs.**
+  - **Not a reference:** the census's recorded momwire numbers. They came from
+    a different translation, and nothing is compared against them.
+- **The standing rule holds.** A wholly buried design that moves between main
+  and the branch is a stop. None of these six decks is wholly buried: all are
+  crossing decks.
+- **Unchanged:** the prediction, and procedure steps 3 and 4 (`run_g6b.sh`,
+  then `g6_popb_compare.py`). They run after G5, beside Population A.

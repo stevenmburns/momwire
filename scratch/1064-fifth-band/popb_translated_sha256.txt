@@ -1,0 +1,6 @@
+33994da2d0cfe89ffd3c468bc467fefd7efb4bae0d3d0d6b592ff8a08adeb583  ./cebik-w4rnl/Basic-Intermediate-Tutorial-Models/Tutorial-2/ch-11/11-4a-nec4.nec
+9f37af24ea09372fc1429312de28b54146df7f5fcdb450738840d8ab3ef56921  ./cebik-w4rnl/Basic-Intermediate-Tutorial-Models/Tutorial-2/ch-1/1-3.nec
+b8287c4636a83ad20ef2bd6b1584a105db09db5fee261ca49419bc4457324f82  ./cebik-w4rnl/Basic-Intermediate-Tutorial-Models/Tutorial-2/ch-3/3-2.nec
+ab13bb202635fd3b97693e38e604f19402fbf5647733316e4a8191c13101a69e  ./cebik-w4rnl/models/LPDAs/nec/lpma3r5-4-6el86ft75o-buriedradials.nec
+6e057615caadbbfcd056f4dbec065756c0f9361839ff820076b29a4076d9d477  ./cebik-w4rnl/models/Phased-Arrays/nec/1r5-bc3elendfire-burrad.nec
+cc4fd7e688945d7f63eff304263be557d472ebf176c5691b2900daf2c821a439  ./cebik-w4rnl/models/Phased-Arrays/nec/1r8-4el-endfire-burrad.nec
