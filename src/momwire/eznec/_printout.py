@@ -93,18 +93,118 @@ STUB_REFUSAL = "NEC-5 DIALECT NOT YET SERVED BY THIS ENGINE"
 #
 # Measured from all ten byte-gate printouts in tests/fixtures/eznec/printouts/
 # (capture ids 0010, 0012, 0013, 0014, 0016, 0017, 0019, 0035, 0043, 0044).
-# The skeleton is identical in every one of them; only the echoed comment
-# lines differ, and they differ exactly as their decks do.
+# The skeleton is identical in every one of them; the echoed comment lines
+# differ, and they differ exactly as their decks do.
+#
+# ONE line departs from the captures on purpose, and it is the only one:
+# LINE 2, the licensed engine's build tag, carries THIS engine's stamp
+# instead (:func:`engine_stamp`).  Everything else — the form feed, the
+# blanks, the banner box, the comment box, the header tail — stays
+# byte-identical, and the byte-gates normalize line 2 by POSITION rather than
+# by content (fixture manifest, ``normalizations``).
 
-_PROLOGUE: tuple[str, ...] = (
-    # A bare "1" — a Fortran carriage-control form feed, printed literally by
-    # every capture — then the engine's build tag.
-    "1",
-    " x13",
-    "",
-    "",
-    "",
-)
+# A bare "1" — a Fortran carriage-control form feed, printed literally by
+# every capture.  Line 2 is the stamp; three blanks follow it.
+_FORM_FEED = "1"
+_PROLOGUE_TAIL: tuple[str, ...] = ("", "", "")
+
+# --------------------------------------------------------------------------
+# line 2: which engine answered this printout
+# --------------------------------------------------------------------------
+#
+# In every capture line 2 is the engine's own build tag, which makes it the
+# one line in the header where an ENGINE IDENTITY already lives — so it is
+# where this engine writes its own, and nothing else in the header moves.
+# The two things downstream actually reads are untouched: EZNEC's
+# belongs-to-this-run check reads the comment box's launch stamp, and the
+# table readers key on headings.
+#
+# Three fields, because three things move a printed number: the release, the
+# formulation the launcher name selected, and which compiled kernel loaded.
+# A printout a tester mails back has to answer all three without them having
+# to remember which exe they double-clicked.
+_STAMP_PREFIX = " momwire "
+
+# Under 80 columns in EVERY case, and the basis field is why that needs
+# enforcing rather than asserting: the basis rides on the LAUNCHER FILENAME
+# (`scripts/eznec_freeze/entry.py`), so its length and its characters are the
+# user's.  A long name loses its tail; it never pushes the variant off the
+# line or wraps one printout line into two.
+_STAMP_COLUMNS = 79
+
+# The three fields' stand-ins when there is nothing true to print.  Each is a
+# statement, not a placeholder: "unknown" means this install has no package
+# metadata (a source tree, or a frozen bundle built without
+# `--copy-metadata`), "none" is what `momwire.accelerator_variant` reports
+# when no compiled extension loaded and every solve in this process is the
+# pure-Python one, and "-" is the empty launcher suffix — a name that asked
+# for a basis and named none, which refuses per deck and must not read as a
+# three-field line.
+_STAMP_UNKNOWN_VERSION = "unknown"
+_STAMP_NO_VARIANT = "none"
+_STAMP_UNNAMED_BASIS = "-"
+
+
+def _momwire_version() -> str:
+    """The installed release, or ``unknown`` — never an exception.
+
+    Same shape as the SimNEC portal's probe (:mod:`momwire.portal._portal`,
+    ``PROBE_VERSION``) and for the same reason: a version probe must never be
+    the thing that breaks a printout.  An editable install reports the version
+    recorded at ``pip install -e`` time, so a dev box that skipped the
+    reinstall after a bump stamps the stale number.
+    """
+    try:
+        from importlib.metadata import version
+
+        return version("momwire")
+    except Exception:  # noqa: BLE001 - a version probe must never be the thing that fails
+        # Deliberately every exception, not just PackageNotFoundError: a
+        # broken or half-written dist-info raises from inside the metadata
+        # reader, and the stamp is worth less than the printout.
+        return _STAMP_UNKNOWN_VERSION
+
+
+def _accelerator_variant() -> str:
+    """Which compiled variant this process loaded, by its own label.
+
+    Read off ``momwire.accelerator_variant`` at CALL time rather than bound at
+    import: the package attribute is the one owner of that label, and the
+    stamp has to report the process it is printing from.
+    """
+    from .. import accelerator_variant
+
+    return _STAMP_NO_VARIANT if accelerator_variant is None else accelerator_variant
+
+
+def _stamp_field(text: object) -> str:
+    """One whitespace-free field, or ``""`` when there is nothing to print.
+
+    Whitespace becomes ``_`` rather than being folded out: the basis comes
+    from a filename, and a name with a space in it would otherwise print as
+    one glued word or as an extra field.
+    """
+    return "_".join(str("" if text is None else text).split())
+
+
+def engine_stamp(basis: str) -> str:
+    """Line 2: ``" momwire <version> <basis> <variant>"``.
+
+    ``basis`` is the name that was THREADED to this printout — the launcher
+    filename's suffix, or the seam's default — not a canonicalization of it:
+    ``razor-nec5`` stamps ``razor-nec5`` even though it resolves to the same
+    solver ``razor-2p`` does, because what a bug report needs to say is which
+    exe answered.
+    """
+    version = _stamp_field(_momwire_version()) or _STAMP_UNKNOWN_VERSION
+    variant = _stamp_field(_accelerator_variant()) or _STAMP_NO_VARIANT
+    room = _STAMP_COLUMNS - len(_STAMP_PREFIX) - len(version) - len(variant) - 2
+    name = _stamp_field(basis)[: max(room, 0)] or _STAMP_UNNAMED_BASIS
+    # The clamp is belt and braces for the two fields this function does not
+    # bound (a metadata version is short in practice, and the variant labels
+    # are a closed set), so the column limit holds without trusting either.
+    return f"{_STAMP_PREFIX}{version} {name} {variant}"[:_STAMP_COLUMNS]
+
 
 _BANNER_INDENT = " " * 32
 _BANNER_RULE = "*" * 47
@@ -183,8 +283,30 @@ def _comment_box(deck_text: str) -> list[str]:
     ]
 
 
-def render_header(deck_text: str | None) -> str:
+def _resolved_basis(basis: str | None) -> str:
+    """``basis``, or the seam's own default when a caller named none.
+
+    ``None`` rather than ``_serve.BASIS`` as the default in the signatures
+    below because :mod:`._serve` imports THIS module: the default has exactly
+    one owner and it is that module's ``BASIS``, so it is read from there at
+    call time instead of being copied here.
+    """
+    if basis is not None:
+        return basis
+    from ._serve import BASIS
+
+    return BASIS
+
+
+def render_header(deck_text: str | None, *, basis: str | None = None) -> str:
     """The printout down to (not including) ``- - - STRUCTURE SPECIFICATION - - -``.
+
+    ``basis`` names the formulation this printout's answer came from and
+    reaches line 2's ENGINE stamp (:func:`engine_stamp`) — not to be confused
+    with EZNEC's own launch stamp, which is a ``CM`` card echoed into the
+    comment box below.  ``None`` means the seam's default.  Every call path
+    that HAS a basis passes it, refusals included: a refusal has to say which
+    engine refused as much as an answer has to say which engine answered.
 
     ``deck_text`` of ``None`` is the one case with no comment box to print:
     the input file could not be read at all, so there are no ``CM`` cards to
@@ -198,14 +320,21 @@ def render_header(deck_text: str | None) -> str:
     fixture manifest's ``normalizations`` key), and this engine writes the
     platform-neutral form.
     """
-    lines = [*_PROLOGUE, *_BANNER]
+    lines = [
+        _FORM_FEED,
+        engine_stamp(_resolved_basis(basis)),
+        *_PROLOGUE_TAIL,
+        *_BANNER,
+    ]
     if deck_text is not None:
         lines += _comment_box(deck_text)
     lines += _HEADER_TAIL
     return "\n".join(lines) + "\n"
 
 
-def render_refusal(deck_text: str | None, reason: str) -> str:
+def render_refusal(
+    deck_text: str | None, reason: str, *, basis: str | None = None
+) -> str:
     """A complete printout that refuses: the header, then one ``NEC ERROR`` line.
 
     The order is the contract.  With the echo intact and the results missing,
@@ -214,7 +343,7 @@ def render_refusal(deck_text: str | None, reason: str) -> str:
     arrives as a sentence rather than as an unexplained failure.  Put the same
     line BEFORE the echo and the file is discarded as stale instead.
     """
-    return render_header(deck_text) + "\n" + _ERROR_PREFIX + reason + "\n"
+    return render_header(deck_text, basis=basis) + "\n" + _ERROR_PREFIX + reason + "\n"
 
 
 # ==========================================================================
@@ -1146,12 +1275,16 @@ def _pattern(block: PatternBlock) -> list[str]:
     return lines
 
 
-def render_printout(deck: Nec5Deck, data: RunData) -> str:
+def render_printout(deck: Nec5Deck, data: RunData, *, basis: str | None = None) -> str:
     """A complete NEC-5 printout: U1's header, then everything through ``RUN TIME``.
 
     ``deck`` supplies what the printout ECHOES (its comment block, its
     geometry cards, its post-``GE`` card images); ``data`` supplies every
     number the run produced.  Nothing is computed here.
+
+    ``basis`` reaches line 2's engine stamp and nothing else — it is the name
+    of the formulation that produced ``data``, carried rather than inferred,
+    because this module solves nothing and has no way to ask.
 
     Section order and the blank lines between sections are the captures',
     and the last card echo is the odd one out: ``EN`` is echoed AFTER the
@@ -1207,4 +1340,4 @@ def render_printout(deck: Nec5Deck, data: RunData) -> str:
     if terminator is not None:
         body.append(_card_echo(len(cards), terminator))
     body += ["", f"{_RUN_TIME_LABEL}{data.run_seconds:10.3f}"]
-    return render_header(deck.source_text) + "\n".join(body) + "\n"
+    return render_header(deck.source_text, basis=basis) + "\n".join(body) + "\n"

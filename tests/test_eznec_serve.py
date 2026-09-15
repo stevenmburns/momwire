@@ -52,8 +52,10 @@ closed it; they now carry envelopes like everything else.
 The manifest's normalizations for a served run are applied on the way in and
 nowhere else: CRLF to LF and the ``SOMMPD.NEX`` cache blocks at the reader
 (``test_eznec_printout.printout_text``), the ``FILL=``/``RUN TIME`` timing
-lines dropped here (a timing is a property of the machine), and signed zero
-folded in the pattern TILT column.
+lines dropped here (a timing is a property of the machine), signed zero folded
+in the pattern TILT column, and line 2's engine stamp masked by position on
+both sides (``test_eznec_printout.mask_engine_stamp``) — the one printout line
+this engine writes differently on purpose.
 """
 
 from __future__ import annotations
@@ -85,6 +87,7 @@ from test_eznec_printout import (
     deck_text,
     drop_sommpd_blocks,
     extract,
+    mask_engine_stamp,
     printout_text,
 )
 
@@ -872,11 +875,13 @@ def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
 
     Also applies the manifest's two remaining served-run normalizations: the
     timing lines are dropped outright, and nothing else about them is looked
-    at.  And one of its own, :data:`_NETWORK_LOSS_DUST`, for the single line in
-    this printout whose PRESENCE a solved number decides.
+    at; and line 2's engine stamp, masked by POSITION before the timing lines
+    are dropped, because dropping lines renumbers everything under them.  And
+    one of its own, :data:`_NETWORK_LOSS_DUST`, for the single line in this
+    printout whose PRESENCE a solved number decides.
     """
     port_cells = tuple(k for k in range(9) if k not in drive)
-    lines = text.split("\n")
+    lines = mask_engine_stamp(text).split("\n")
     out: list[str] = []
     kind: str | None = None
     skip = 0
