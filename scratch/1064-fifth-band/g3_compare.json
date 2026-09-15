@@ -1,0 +1,60 @@
+{
+ "gate": "G3",
+ "verdict": "FAIL",
+ "points": 78,
+ "failures": [],
+ "worst": {
+  "cpp_avx2 vs cpp_sse2": [
+   7.776021250853366e-10,
+   [
+    "A/7MHz",
+    "inner",
+    "0.01666666666666667"
+   ]
+  ],
+  "cpp_avx2 vs numpy@sse2": [
+   7.776021746736109e-10,
+   [
+    "A/7MHz",
+    "inner",
+    "0.01666666666666667"
+   ]
+  ],
+  "cpp_sse2 vs numpy@avx2": [
+   7.776021250065925e-10,
+   [
+    "A/7MHz",
+    "inner",
+    "0.01666666666666667"
+   ]
+  ],
+  "cpp_sse2 vs numpy@sse2": [
+   3.807603676448897e-16,
+   [
+    "A/7MHz",
+    "far",
+    "0.049999999"
+   ]
+  ],
+  "numpy@avx2 vs numpy@sse2": [
+   7.776021746736109e-10,
+   [
+    "A/7MHz",
+    "inner",
+    "0.01666666666666667"
+   ]
+  ],
+  "cpp_avx2 vs numpy@avx2": [
+   5.721365103938413e-16,
+   [
+    "A/7MHz",
+    "far",
+    "0.01666666666666667"
+   ]
+  ]
+ },
+ "accelerators": {
+  "avx2": "/home/smburns/stevenmburns/momwire-wt-1064/src/momwire/_accelerators_avx2.cpython-314-x86_64-linux-gnu.so",
+  "sse2": "/home/smburns/stevenmburns/momwire-wt-1064/src/momwire/_accelerators_sse2.cpython-314-x86_64-linux-gnu.so"
+ }
+}

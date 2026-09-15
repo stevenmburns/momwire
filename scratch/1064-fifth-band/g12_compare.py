@@ -71,7 +71,11 @@ def main():
                     )
             pm = mo.get(k)
             if pm is not None:
-                side = "below_0.1" if float(k[1]) < 0.1 else "at_or_above_0.1"
+                # `g12_grid.py` wrote cell points as `repr(np.float64(...))`;
+                # the key strings match across captures, only this parse needs
+                # the number out of them.
+                th = float(str(k[1]).removeprefix("np.float64(").removesuffix(")"))
+                side = "below_0.1" if th < 0.1 else "at_or_above_0.1"
                 s = old_vs_main[side]
                 s["points"] += 1
                 if pb["surf"] != pm["surf"] or pb["kernel"] != pm["kernel"]:
