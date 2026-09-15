@@ -473,3 +473,32 @@ relative in the surfaces and 1.9e-14 in the kernel.
   The branch fills the new floor band on the same queries, which changes what
   was evaluated before each later fill.
 - **G1a stays FAIL by its bar.**
+
+## D3, a further diagnostic of G1a, registered before it runs
+
+- **What the code says.** The below/below contour engine declares no mutable
+  static, no global and no heap allocation, and `below_six_integrals_batch`
+  evaluates each node independently under OpenMP. So per-thread contour state
+  is not what the code shows.
+- **The hypothesis left to test.** The last bits a fill produces on these lossy
+  media depend on the process's allocation or evaluation SEQUENCE, for example
+  an alignment-dependent vectorised path. The branch's extra regions and fills
+  change that sequence without changing any arithmetic.
+- **The runs.** `g12_grid.py` gains `--only` and `--reverse`. They select and
+  reorder the media and change nothing else.
+  - **D3a.** 0.55.0 with the media reversed, written to `d3a_v055_reverse.json`,
+    and compared with `g12_v055.json`.
+  - **D3b.** 0.55.0 with soil B at 7 MHz alone, in a fresh process, written to
+    `d3b_v055_B7.json`, and compared with `g12_v055.json` on that medium.
+  - **D3c.** The branch with soil B at 7 MHz alone, in a fresh process, written
+    to `d3c_branch_B7.json`, and compared with D3b.
+- **The predictions:**
+  - **D3a:** the three lossy media (B at 7 and 21 MHz, A at 3.5 MHz) differ
+    from the first 0.55.0 capture in last bits, and soils A and C at 7 and
+    21 MHz do not. Sequence alone moves the bits.
+  - **D3b:** soil B at 7 MHz differs from the first capture in last bits.
+  - **D3c:** the branch alone on soil B at 7 MHz is bit-identical to D3b.
+- **What a miss would mean.** If D3a and D3b are bit-identical to the first
+  capture, sequence does not move the bits, the hypothesis fails, and the
+  branch's own fill or evaluation path is examined next.
+- **Scope.** Neither diagnostic re-opens G1a's bar.

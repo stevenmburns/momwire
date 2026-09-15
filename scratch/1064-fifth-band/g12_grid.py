@@ -128,7 +128,14 @@ def main():
     ap.add_argument("--tree", required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--direct", action="store_true")
+    # D3: the same captures with the process's history changed and nothing else.
+    ap.add_argument("--only", default=None, help="comma-separated media, e.g. B/7MHz")
+    ap.add_argument("--reverse", action="store_true", help="media in reverse order")
     args = ap.parse_args()
+    media = list(reversed(MEDIA)) if args.reverse else list(MEDIA)
+    if args.only:
+        wanted = set(args.only.split(","))
+        media = [(s, f) for s, f in media if f"{s}/{f / 1e6:g}MHz" in wanted]
     has_floor_band = hasattr(below, "_SOMM_BELOW_TH_BAND_FLOOR_HI_DEG")
     serves_floor = below._SOMM_BELOW_TH_MIN_DEG < 0.05
     rec = dict(
@@ -138,7 +145,7 @@ def main():
         has_floor_band=has_floor_band,
         media={},
     )
-    for soil, f in MEDIA:
+    for soil, f in media:
         t0 = time.perf_counter()
         eps_t, k2, om, lam_m, k_m = medium(soil, f)
         g = below.SommerfeldGridBelow(
