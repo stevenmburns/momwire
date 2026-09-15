@@ -502,3 +502,55 @@ relative in the surfaces and 1.9e-14 in the kernel.
   capture, sequence does not move the bits, the hypothesis fails, and the
   branch's own fill or evaluation path is examined next.
 - **Scope.** Neither diagnostic re-opens G1a's bar.
+
+## D3 results [2026-09-15]: all three predictions MISS; sequence does not move the bits
+
+- **The runs.** 01:36:29–01:40Z. Records: `d3a_v055_reverse.json`,
+  `d3b_v055_B7.json`, `d3c_branch_B7.json`, and the three
+  `d2_d3*__vs__*.json` comparisons.
+
+| comparison | not bit-identical (surface / kernel), low / mid / ≥ 1° |
+|---|---|
+| **D3a:** 0.55.0 reversed vs 0.55.0 | 0/0, 0/0, 0/0 |
+| **D3b:** 0.55.0, soil B at 7 MHz alone, vs 0.55.0 | 0/0, 0/0, 0/0 |
+| **D3c:** branch, soil B at 7 MHz alone, vs D3b | 53/49, 65/62, 37/33; max 6.7e-14 / 1.9e-14 |
+
+- **D3a and D3b MISS.** Reversing the media, or running one medium alone,
+  leaves 0.55.0's values bit-identical. The process's sequence is not the
+  cause.
+- **D3c MISSES.** On a fresh process, alone on one medium, the branch still
+  differs from 0.55.0 at the same last-bit levels. The difference is in the
+  branch's own path.
+
+## D4, a diagnostic of G1a, registered before it runs
+
+- **The hypothesis.** The branch recompiled `_accel_mw568.cpp`, the
+  translation unit that also holds the below/below contour (`six_below_one`,
+  `below_six_integrals_batch`). Main did not change that file after 0.55.0,
+  which fits main matching 0.55.0 bit for bit at θ ≥ 0.1°.
+  - **The mechanism proposed.** Changing `proj_one_below` and the batch kernel
+    in the same translation unit can change the compiler's inlining and
+    floating-point contraction choices for the contour, and so change last
+    bits with no source change to the contour.
+  - **Why it fits D1.** D1 showed the fill is sensitive to exactly that: sse2
+    has no FMA, and it differs from avx2 by up to 1e-10.
+- **D4a.** `d4_direct.py` evaluates `iv_surfaces_direct_below` on soil B at
+  7 MHz, at R₁/λ_m ∈ {0.2, 1, 3} × θ ∈ {0.5, 2, 30, 60}°, with no grid. That
+  Python is unchanged on every tree.
+  - **The captures.** Once per tree (0.55.0, main, branch) and per variant
+    (avx2 and sse2, forced), so six captures, each evaluated as one batch and
+    one point at a time. `d4_compare.py` reads them.
+- **D4b.** The disassembly of `below_six_integrals_batch`, and of
+  `six_below_one` where it is its own symbol, from main's and the branch's
+  `_accelerators_avx2` and `_sse2`, compared on the instruction sequence with
+  addresses stripped.
+- **The predictions:**
+  - **avx2:** main is bit-identical to 0.55.0, and the branch differs from
+    0.55.0 in last bits.
+  - **sse2:** the branch and main are both bit-identical to 0.55.0.
+  - **D4b:** the avx2 instruction sequence differs between main and the
+    branch.
+- **What a miss would mean.** If the branch's direct surfaces are bit-identical
+  to 0.55.0 on avx2, the compiled contour is not the cause, and the difference
+  lies in the grid path, which is examined next.
+- **Scope.** Neither diagnostic re-opens G1a's bar.

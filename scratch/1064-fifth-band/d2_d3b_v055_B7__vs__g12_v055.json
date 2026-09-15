@@ -1,0 +1,34 @@
+{
+ "a": "d3b_v055_B7.json",
+ "b": "g12_v055.json",
+ "trees": [
+  "v055",
+  "v055"
+ ],
+ "by_band": {
+  "low [0.05, 0.1)": {
+   "points": 54,
+   "surf": 0,
+   "kernel": 0,
+   "max_surf": 0.0,
+   "max_kernel": 0.0
+  },
+  "mid [0.1, 1)": {
+   "points": 78,
+   "surf": 0,
+   "kernel": 0,
+   "max_surf": 0.0,
+   "max_kernel": 0.0
+  },
+  "grazing/steep >= 1": {
+   "points": 42,
+   "surf": 0,
+   "kernel": 0,
+   "max_surf": 0.0,
+   "max_kernel": 0.0
+  }
+ },
+ "media_with_differences": {},
+ "missing": [],
+ "bit_identical": true
+}

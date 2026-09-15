@@ -1,0 +1,36 @@
+{
+ "a": "d3c_branch_B7.json",
+ "b": "d3b_v055_B7.json",
+ "trees": [
+  "branch",
+  "v055"
+ ],
+ "by_band": {
+  "low [0.05, 0.1)": {
+   "points": 54,
+   "surf": 53,
+   "kernel": 49,
+   "max_surf": 6.704321290623371e-14,
+   "max_kernel": 1.6484689344544073e-14
+  },
+  "mid [0.1, 1)": {
+   "points": 78,
+   "surf": 65,
+   "kernel": 62,
+   "max_surf": 6.579808034912347e-14,
+   "max_kernel": 1.8952700303744733e-14
+  },
+  "grazing/steep >= 1": {
+   "points": 42,
+   "surf": 37,
+   "kernel": 33,
+   "max_surf": 5.364686913408814e-14,
+   "max_kernel": 1.5145930602109377e-14
+  }
+ },
+ "media_with_differences": {
+  "B/7MHz": 155
+ },
+ "missing": [],
+ "bit_identical": false
+}
