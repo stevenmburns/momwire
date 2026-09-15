@@ -1,0 +1,9 @@
+=== N=120 (18:50:09) ===
+{"radials": 120, "segments": 6512, "cold_s": 79.25208797305822, "warm_s": 79.05030567664653, "z_cold": [42.25265018794022, 26.972054724816946], "z_warm": [42.25265018794022, 26.972054724816946], "gated": false, "cprofile": "/home/smburns/nec5-timing/profile-1029/warm-120.prof", "extents_accel": true, "galerkin_accel": true}
+  	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:39.23
+  	Maximum resident set size (kbytes): 5595324
+=== N=150 (18:52:48) ===
+{"radials": 150, "segments": 8132, "cold_s": 156.69576495699584, "warm_s": 157.59454084467143, "z_cold": [42.095542756652044, 26.69800598068949], "z_warm": [42.095542756652044, 26.69800598068949], "gated": false, "cprofile": "/home/smburns/nec5-timing/profile-1029/warm-150.prof", "extents_accel": true, "galerkin_accel": true}
+  	Elapsed (wall clock) time (h:mm:ss or m:ss): 5:15.48
+  	Maximum resident set size (kbytes): 8624776
+CPROFILEDONE

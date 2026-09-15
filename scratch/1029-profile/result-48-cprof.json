@@ -1,0 +1,1 @@
+{"radials": 48, "segments": 2624, "cold_s": 14.186462421901524, "warm_s": 13.649593701586127, "z_cold": [43.52237598151734, 29.222808807859245], "z_warm": [43.52237598151734, 29.222808807859245], "gated": false, "cprofile": "/home/smburns/nec5-timing/profile-1029/warm-48.prof", "extents_accel": true, "galerkin_accel": true}

@@ -1,0 +1,1 @@
+{"radials": 48, "segments": 2624, "cold_s": 81.91675061360002, "warm_s": 75.23982873745263, "z_cold": [43.52237598151734, 29.222808807859245], "z_warm": [43.52237598151734, 29.222808807859245], "gated": false, "extents_accel": true, "galerkin_accel": true}
