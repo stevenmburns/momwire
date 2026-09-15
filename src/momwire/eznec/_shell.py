@@ -132,12 +132,12 @@ def render(text: str, *, basis: str = _serve.BASIS) -> str:
     try:
         deck = parse_nec5(text)
     except DeckError as exc:
-        return _printout.render_refusal(text, str(exc))
+        return _printout.render_refusal(text, str(exc), basis=basis)
     try:
         data = _serve.serve(deck, basis=basis)
     except _serve.ServeRefusal as exc:
-        return _printout.render_refusal(text, str(exc))
-    return _printout.render_printout(deck, data)
+        return _printout.render_refusal(text, str(exc), basis=basis)
+    return _printout.render_printout(deck, data, basis=basis)
 
 
 def run(
@@ -161,7 +161,9 @@ def run(
 
     text = read_deck(deck)
     if text is None:
-        printout = _printout.render_refusal(None, f"UNABLE TO READ INPUT FILE {deck}")
+        printout = _printout.render_refusal(
+            None, f"UNABLE TO READ INPUT FILE {deck}", basis=basis
+        )
     else:
         printout = render(text, basis=basis)
 
@@ -205,12 +207,16 @@ def main(argv: list[str] | None = None, *, basis: str = _serve.BASIS) -> int:
         # stderr nor the exit code), and a missing file would be read as a
         # broken installation.  So the crash is reported the only way that
         # reaches a human: as a refusal, in the printout, exit 0.
-        _report_internal_error(deck_path, printout_path, exc)
+        _report_internal_error(deck_path, printout_path, exc, basis=basis)
     return 0
 
 
 def _report_internal_error(
-    deck_path: str | Path, printout_path: str | Path, exc: BaseException
+    deck_path: str | Path,
+    printout_path: str | Path,
+    exc: BaseException,
+    *,
+    basis: str = _serve.BASIS,
 ) -> None:
     """Last-ditch printout for a failure the shell did not anticipate.
 
@@ -224,7 +230,10 @@ def _report_internal_error(
     reason = _internal_error_reason(exc)
     try:
         deck_text = read_deck(Path(deck_path))
-        write_printout(Path(printout_path), _printout.render_refusal(deck_text, reason))
+        write_printout(
+            Path(printout_path),
+            _printout.render_refusal(deck_text, reason, basis=basis),
+        )
     except OSError:
         # The output path itself is unwritable; there is no channel left, and
         # a non-zero exit would only be discarded. Stay quiet, stay zero.
@@ -266,7 +275,12 @@ def seam(*, basis: str = _serve.BASIS) -> Seam:
         try:
             return render(body, basis=basis), ""
         except Exception as exc:  # noqa: BLE001 - the seam's last line of defence
-            return _printout.render_refusal(body, _internal_error_reason(exc)), ""
+            return (
+                _printout.render_refusal(
+                    body, _internal_error_reason(exc), basis=basis
+                ),
+                "",
+            )
 
     return Seam(
         name="eznec",
