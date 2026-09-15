@@ -196,6 +196,30 @@ Every deck takes exactly one of two paths:
 As of 2026-08-26, 77 of the 80 EZNEC captures in our corpus serve; the three
 refusals are one named sentence, about one observation point.
 
+### The printout says which engine answered
+
+**Line 2 of every printout — served and refused alike — names the engine.**
+For example:
+
+```
+ momwire 0.55.0 bspline avx2
+```
+
+Three facts after the name: the release, the formulation that answered (the
+basis your launcher's filename selected), and which compiled accelerator
+loaded — `avx2`, `sse2`, `legacy`, or `none` for the pure-Python fallback.
+
+**Quote that line in any bug report.** The release and the formulation are
+what move the numbers underneath it, and nothing else in the file says which
+of each you had. The accelerator moves the speed, which is the first question
+of every slowness report: `none` there means the solve was correct and many
+times slower than it should have been.
+
+Nothing else in the header changes. Line 2 is where the licensed engine prints
+its own build tag, so it is the one line that already carried an engine
+identity; the comment block EZNEC checks the printout against, the banner and
+every table heading are untouched.
+
 ## What serves
 
 - **Geometry**: `GW` wires — straight, junctioned, tapered via stepped
