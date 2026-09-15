@@ -1,0 +1,94 @@
+{
+ "verdicts": {
+  "G1a": "FAIL",
+  "G2a": "PASS",
+  "G2b": "PASS",
+  "G2c": "PASS"
+ },
+ "failures": [],
+ "G1a": {
+  "points": 1134,
+  "not_bitwise": 446,
+  "examples": [
+   [
+    "B/7MHz",
+    0.02,
+    "0.05",
+    4.0149652048424726e-17
+   ],
+   [
+    "B/7MHz",
+    0.02,
+    "0.08333333333333334",
+    3.79632761760926e-16
+   ],
+   [
+    "B/7MHz",
+    0.02,
+    "np.float64(0.058333333333333334)",
+    9.44715857915384e-17
+   ],
+   [
+    "B/7MHz",
+    0.02,
+    "np.float64(0.07500000000000001)",
+    1.8952492363546186e-16
+   ],
+   [
+    "B/7MHz",
+    0.02,
+    "np.float64(0.09166666666666667)",
+    3.8021644540822407e-16
+   ]
+  ]
+ },
+ "G2a": {
+  "points": 294,
+  "bitwise": 84,
+  "max_rel": 6.704321290618714e-14,
+  "where": [
+   "B/7MHz",
+   3.9,
+   "0.049999999"
+  ]
+ },
+ "G2b": {
+  "worst": 3.938608433842928e-09,
+  "where": [
+   "A/3.5MHz",
+   [
+    3.0,
+    0.02216666666666667,
+    "IphiH"
+   ]
+  ]
+ },
+ "G2c": {
+  "worst": 4.3174459538652584e-09,
+  "where": [
+   "A/3.5MHz",
+   [
+    3.9,
+    0.07500000000000001,
+    "IphiH"
+   ]
+  ]
+ },
+ "recorded_branch_vs_main_old_set": {
+  "below_0.1": {
+   "points": 378,
+   "not_bitwise": 333,
+   "max_rel": 1.5143597068391862e-09
+  },
+  "at_or_above_0.1": {
+   "points": 756,
+   "not_bitwise": 288,
+   "max_rel": 6.579808034912347e-14
+  }
+ },
+ "trees": {
+  "v055": "/home/smburns/stevenmburns/momwire-wt-1064-v055/src/momwire",
+  "main": "/home/smburns/stevenmburns/momwire-wt-1064-main/src/momwire",
+  "branch": "/home/smburns/stevenmburns/momwire-wt-1064/src/momwire"
+ }
+}
