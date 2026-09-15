@@ -170,3 +170,85 @@ kwargs, and confirm that main and the branch serve it and 0.55.0 refuses it.
 6. G6.
 7. Push, dispatch `ci.yml`, and open the PR with the gate table. The PR is not
    merged from here.
+
+## Step 0 result [2026-09-15]: as registered
+
+- **The run.** `run_gates.sh s0`, geometry only. Records: `s0_geometry.jsonl`,
+  `s0_geometry.log`.
+
+| deck | θ_min | 0.55.0 | main | branch |
+|---|---|---|---|---|
+| `dipole1mm` | 0.019417° | refused: "…below the 0.05 deg grazing floor…" | served | served |
+| `twonode11` | 0.017587° | refused: "…the crossing serve completes ONE crossing node per deck…" | served | served |
+
+- **A tooling fix, made before the reading counted.**
+  - **What happened.** The first pass built `twonode11` through the tree's own
+    `two_node_deck(11.0)`, and 0.55.0's `two_node_deck` takes no separation. So
+    its 0.55.0 row was a TypeError, not a refusal.
+  - **The fix.** `s0_geometry.py` now spells the deck from `crossing_deck()`,
+    and records that the result equals `two_node_deck(11.0)` on main and on the
+    branch: `same_as_two_node_deck: true` on both.
+- **What it means for G5.** Both added decks sit under 0.05°; main and the
+  branch serve them, and 0.55.0 refuses them. So G5 times them on main and the
+  branch only, as registered.
+
+## G6 addendum [2026-09-15]: Population B's procedure, pinned before G6 runs
+
+- **Why an addendum.** This box has no copy of the census's translated corpus
+  tree (`~/nec5-timing/nec5`).
+  - **So Population B is rebuilt** for its six decks, from the public corpus on
+    this box: `~/antennas/nec-wild/community/cebik-w4rnl/`.
+  - **The census's other two members,** the `2lsloper` pair, were never buried,
+    and its re-render dropped them.
+- **Identity, geometry only (no solve).** Each local raw deck is read through
+  `antennaknobs.nec_import.parse_nec` and classified by the census's own
+  `popb_select.classify`.
+  - **What matches.** All six match their `popb-members.json` row on class,
+    zmin, zmax, crossing nodes and wire count.
+  - **What is checked later, and why.** Two fields differ for known reasons, so
+    they are checked after translation instead:
+    - `gn`: the census read the translated tree, where `translate` rewrites
+      GN 2 to GN 0;
+    - `segs`: the census counted the translated tree's remesh.
+- **The steps:**
+  1. **Link.** The six raw decks are linked under their census paths into
+     `~/nec5-timing/popb-1064/raw/`.
+  2. **Translate.** Run `scripts/nec5_corpus/nec5_corpus.py translate --src
+     raw --out nec5`, from antennaknobs a9c49416f.
+     - **Checked before any momwire run:** every translated deck carries GN 0
+       and the census's segment count (62, 62, 532, 2,690, 1,029, 1,372).
+     - **A mismatch is a stop.**
+  3. **Solve.** Run `scratch/896-census/census_momwire.py --src nec5 --report
+     popb_momwire_<tree>.jsonl` twice.
+     - **PYTHONPATH:** main's src the first time and the branch's the second,
+       with antennaknobs src after it each time.
+  4. **Compare.** `g6_popb_compare.py` reports, per deck, the status and the
+     error sentence on both trees, and the relative Z change for a served deck.
+- **The prediction,** unchanged from the registration:
+  - each deck's outcome is the same on both trees;
+  - a served Z moves only on a deck whose pairs reach under 0.1°, and then by
+    ≤ 4.7e-4 relative.
+
+## G4 result [2026-09-15]: PASS
+
+- **The run.** `run_gates.sh g4`, 01:00:11–01:01:45Z, on real grids (soil A,
+  7 MHz, R₁ to the cap). Records: `g4_fill_counter.json`, `g4_fill_counter.log`.
+
+| zone | order | calls (θ columns) | seconds | shared columns |
+|---|---|---|---|---|
+| inner | floor first | 2, 4 | 24.6 | bit-identical |
+| inner | low first | 2, 4 | 24.6 | bit-identical |
+| near | floor first | 2, 4 | 9.2 | bit-identical |
+| near | low first | 2, 4 | 9.4 | bit-identical |
+| far | floor first | 2, 4 | 9.8 | bit-identical |
+| far | low first | 2, 4 | 9.7 | bit-identical |
+
+- **Evaluations.** In every zone and both orders the fills made exactly two
+  evaluation calls. The low band's call carried its four θ nodes; the floor
+  band's carried its own two. No θ node appears in both, and every call
+  evaluated n_θ × n_R₁ points.
+- **Sharing.** The floor band's top two columns are the low band's first two,
+  bit for bit.
+- **Order independence.** The low band's values are the same bits in both fill
+  orders.
+- **Prediction** (passes): hit.
