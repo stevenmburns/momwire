@@ -1,0 +1,55 @@
+{
+ "gate": "G6 Population B",
+ "bar": 0.00047,
+ "failures": [],
+ "rows": [
+  {
+   "file": "cebik-w4rnl/Basic-Intermediate-Tutorial-Models/Tutorial-2/ch-1/1-3.nec",
+   "status_main": "error",
+   "status_branch": "error",
+   "same_status": true,
+   "same_error": true,
+   "error_main": "crossing serve with per-wire radii that differ within the below wires: the two-radius rule serves one radius per side of the interface (the node's point tests at the buried radius, antennaknobs plan U5); a spread within one side has no measured node radius"
+  },
+  {
+   "file": "cebik-w4rnl/Basic-Intermediate-Tutorial-Models/Tutorial-2/ch-11/11-4a-nec4.nec",
+   "status_main": "error",
+   "status_branch": "error",
+   "same_status": true,
+   "same_error": true,
+   "error_main": "RP asks for the far field of a deck with a wire below the ground plane, and a buried deck's radiation pattern is not served. The pattern of a buried source is the transmitted field's FAR-ZONE asymptotics - a saddle-point evaluation of the same integral, with its own lateral-wave and critical-angle s"
+  },
+  {
+   "file": "cebik-w4rnl/Basic-Intermediate-Tutorial-Models/Tutorial-2/ch-3/3-2.nec",
+   "status_main": "error",
+   "status_branch": "error",
+   "same_status": true,
+   "same_error": true,
+   "error_main": "crossing serve with per-wire radii that differ within the below wires: the two-radius rule serves one radius per side of the interface (the node's point tests at the buried radius, antennaknobs plan U5); a spread within one side has no measured node radius"
+  },
+  {
+   "file": "cebik-w4rnl/models/LPDAs/nec/lpma3r5-4-6el86ft75o-buriedradials.nec",
+   "status_main": "timeout",
+   "status_branch": "timeout",
+   "same_status": true,
+   "same_error": true,
+   "error_main": "no answer in 300 s"
+  },
+  {
+   "file": "cebik-w4rnl/models/Phased-Arrays/nec/1r5-bc3elendfire-burrad.nec",
+   "status_main": "error",
+   "status_branch": "error",
+   "same_status": true,
+   "same_error": true,
+   "error_main": "crossing serve with per-wire radii that differ within the above wires: the two-radius rule serves one radius per side of the interface (the node's point tests at the buried radius, antennaknobs plan U5); a spread within one side has no measured node radius"
+  },
+  {
+   "file": "cebik-w4rnl/models/Phased-Arrays/nec/1r8-4el-endfire-burrad.nec",
+   "status_main": "error",
+   "status_branch": "error",
+   "same_status": true,
+   "same_error": true,
+   "error_main": "crossing serve with per-wire radii that differ within the above wires: the two-radius rule serves one radius per side of the interface (the node's point tests at the buried radius, antennaknobs plan U5); a spread within one side has no measured node radius"
+  }
+ ]
+}
