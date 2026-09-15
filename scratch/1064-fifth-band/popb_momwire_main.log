@@ -1,0 +1,13 @@
+
+6 decks in 395 s: {'error': 5, 'timeout': 1}
+
+advisories, by class:
+      1  SurfaceRadialHeight
+
+refusals and errors, by message:
+      2  crossing serve with per-wire radii that differ within the below wires: the two-r
+      2  crossing serve with per-wire radii that differ within the above wires: the two-r
+      1  RP asks for the far field of a deck with a wire below the ground plane, and a bu
+      1  no answer in N s
+
+report: /home/smburns/stevenmburns/momwire-wt-1064/scratch/1064-fifth-band/popb_momwire_main.jsonl

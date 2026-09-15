@@ -717,3 +717,40 @@ taken before this re-spelling. G1a-sse2 runs after it.
   - **D5b:** the extra time sits in the band fill (`_fill_region`).
 - **When.** After G1a-sse2 and G6, alone on the box.
 - **Scope.** Neither diagnostic re-opens G5's bar.
+
+## G1a-sse2 and G6 results [2026-09-15]: all PASS
+
+- **G1a-sse2: PASS, prediction hit.**
+  - **The runs.** `g12_grid.py` forced to sse2, on 0.55.0 and on the branch,
+    02:47:32–02:57Z. Records: `g1a_sse2_v055.json`, `g1a_sse2_branch.json`,
+    `d2_g1a_sse2_branch__vs__g1a_sse2_v055.json`.
+  - **The result.** On the old set (θ ≥ 0.05°) every surface and kernel value
+    is bit-identical, at all 1,218 rows and in every band, on all seven media.
+  - **With G1a-avx2 (≤ 1e-12, reading 6.7e-14),** the re-spelled G1a passes.
+- **G6 Population A: PASS, prediction hit.**
+  - **The run.** `run_g6a.sh`, 02:47:32–02:55:51Z. Main 54caf86 sits in the
+    census's "mid" column and the branch in its "main" column. antennaknobs is
+    a9c49416f. Records: `popa-rows-1064.csv`, `popa-rows-1064.jsonl`,
+    `popa_run_1064.log`, `run_g6a.out`.
+  - **Every cell is bit-identical,** branch against main, in all 10 (design,
+    variant, rung) cells: `buried_dipole` (wholly buried), both
+    `buried_radial_vertical` crossing variants, and
+    `elevated_buried_counterpoise` (split), at both rungs.
+  - **The detached variant** is refused on both trees, as before.
+  - **No wholly buried design moves.** The provenance import paths confirm
+    each column ran on its intended tree.
+  - **The NEC-5 column** is context only, on `nec5cl-x13-static` (sha256
+    7ebf343d…). It reproduces the census's printed values.
+- **G6 Population B: PASS, prediction hit.**
+  - **The run.** `run_g6b.sh`, 02:47:32–02:59:59Z, over today's translation
+    on both arms. Records: `popb_momwire_{main,branch}.jsonl` and `.log`,
+    `g6_popb_compare.json`, `run_g6b.out`.
+  - **Every deck's outcome and error sentence are identical** on both trees:
+    - `1-3.nec`, `3-2.nec`: refused, U5's radius spread within the below
+      wires;
+    - the two phased arrays: refused, U5's radius spread within the above
+      wires;
+    - `11-4a-nec4.nec`: refused, the buried far field (RP);
+    - the LPDA: a timeout on both trees, "no answer in 300 s", the corpus
+      runner's own bound.
+  - **No deck was served,** so no Z could move.

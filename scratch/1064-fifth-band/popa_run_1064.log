@@ -1,0 +1,14 @@
+Population A: 5 (design, variant) pairs
+
+specialty.buried_dipole                default   default  nn= 21 wholly-buried  ptr  146.7897   45.8227 mid  146.7897   45.8227 main  146.7897   45.8227 nec5  146.3900   44.3820
+specialty.buried_dipole                default   refined  nn= 42 wholly-buried  ptr  146.7791   45.7280 mid  146.7791   45.7280 main  146.7791   45.7280 nec5  146.4800   44.3820
+verticals.buried_radial_vertical       default   default  nn= 21 crossing       ptr   78.1321   46.3377 mid   78.1321   46.3377 main   78.1321   46.3377 nec5   77.8050   44.4680
+verticals.buried_radial_vertical       default   refined  nn= 42 crossing       ptr   78.1425   46.3863 mid   78.1425   46.3863 main   78.1425   46.3863 nec5   77.9370   45.2030
+verticals.buried_radial_vertical       bundle    default  nn= 21 crossing       ptr   78.1344   46.6461 mid   78.1344   46.6461 main   78.1344   46.6461 nec5         —          
+verticals.buried_radial_vertical       bundle    refined  nn= 42 crossing       ptr   78.1447   46.6948 mid   78.1447   46.6948 main   78.1447   46.6948 nec5         —          
+verticals.buried_radial_vertical       detached  default  nn= 21 contact+split  ptr         —           mid         —           main         —           nec5         —          
+verticals.buried_radial_vertical       detached  refined  nn= 42 contact+split  ptr         —           mid         —           main         —           nec5         —          
+verticals.elevated_buried_counterpoise default   default  nn= 21 split          ptr   44.5602-73719.3196 mid   44.5602-73719.3196 main   44.5602-73719.3196 nec5   30.6430-61604.0000
+verticals.elevated_buried_counterpoise default   refined  nn= 42 split          ptr   42.7896-72708.6105 mid   42.7896-72708.6105 main   42.7896-72708.6105 nec5   29.4170-61557.0000
+
+wrote 10 rows -> /home/smburns/stevenmburns/momwire-wt-1064/scratch/1064-fifth-band/popa-rows-1064.csv (raw cells in /home/smburns/stevenmburns/momwire-wt-1064/scratch/1064-fifth-band/popa-rows-1064.jsonl)
