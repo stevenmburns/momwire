@@ -1,0 +1,54 @@
+{
+ "4": {
+  "radial_blocks": {
+   "worst_rel": 2.4294287977114385e-11,
+   "worst_rel_entry_abs": 2.2828034788167605e-05,
+   "worst_abs_diff": 1.5072887603364242e-14,
+   "max_abs": 22226.716499963393,
+   "entries_below_floor": 224,
+   "entries": 48400
+  },
+  "radial_rows_mast_cols": {
+   "worst_rel": 8.162109304752728e-13,
+   "worst_rel_entry_abs": 0.0008233790937161148,
+   "worst_abs_diff": 4.119810118670014e-15,
+   "max_abs": 20618.94483963999,
+   "entries_below_floor": 204,
+   "entries": 7700
+  },
+  "mast_rows_radial_cols": {
+   "worst_rel": 8.162109304752728e-13,
+   "worst_rel_entry_abs": 0.0008233790937161148,
+   "worst_abs_diff": 4.119810118670014e-15,
+   "max_abs": 20618.94483963999,
+   "entries_below_floor": 204,
+   "entries": 7700
+  }
+ },
+ "12": {
+  "radial_blocks": {
+   "worst_rel": 7.646047732639564e-10,
+   "worst_rel_entry_abs": 2.7783828363072348e-05,
+   "worst_abs_diff": 4.793496874009731e-11,
+   "max_abs": 22226.716499963393,
+   "entries_below_floor": 672,
+   "entries": 435600
+  },
+  "radial_rows_mast_cols": {
+   "worst_rel": 1.6502465575574338e-09,
+   "worst_rel_entry_abs": 2.0832590484272318e-05,
+   "worst_abs_diff": 1.2058310082691394e-13,
+   "max_abs": 20618.94483963999,
+   "entries_below_floor": 612,
+   "entries": 23100
+  },
+  "mast_rows_radial_cols": {
+   "worst_rel": 1.6771574269659395e-09,
+   "worst_rel_entry_abs": 2.0832590483746368e-05,
+   "worst_abs_diff": 1.6095400624854923e-13,
+   "max_abs": 20618.94483963999,
+   "entries_below_floor": 612,
+   "entries": 23100
+  }
+ }
+}
