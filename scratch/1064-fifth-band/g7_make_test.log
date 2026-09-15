@@ -1,0 +1,200 @@
+python3 -m pytest tests/ -m "not slow and not memgate and not integration"
+============================= test session starts ==============================
+platform linux -- Python 3.14.4, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/smburns/stevenmburns/momwire-wt-1064
+configfile: pyproject.toml
+plugins: anyio-4.14.1, xdist-3.8.0
+created: 4/4 workers
+4 workers [5215 items]
+
+........................................................................ [  1%]
+........................................................................ [  2%]
+........................................................................ [  4%]
+........................................................................ [  5%]
+........................................................................ [  6%]
+........................................................................ [  8%]
+........................................................................ [  9%]
+........................................................................ [ 11%]
+........................................................................ [ 12%]
+........................................................................ [ 13%]
+........................................................................ [ 15%]
+...............................................................xxxx..... [ 16%]
+........................................................................ [ 17%]
+........................................................................ [ 19%]
+........................................................................ [ 20%]
+........................................................................ [ 22%]
+........................................................................ [ 23%]
+........................................................................ [ 24%]
+........................................................................ [ 26%]
+........................................................................ [ 27%]
+........................................................................ [ 28%]
+........................................................................ [ 30%]
+........................................................................ [ 31%]
+........................................................................ [ 33%]
+........................................................................ [ 34%]
+........................................................................ [ 35%]
+........................................................................ [ 37%]
+........................................................................ [ 38%]
+........................................................................ [ 40%]
+........................................................................ [ 41%]
+........................................................................ [ 42%]
+........................................................................ [ 44%]
+........................................................................ [ 45%]
+........................................................................ [ 46%]
+........................................................s............... [ 48%]
+........................................................................ [ 49%]
+...............................s...........................s............ [ 51%]
+........................................................................ [ 52%]
+........................................................................ [ 53%]
+........................................................................ [ 55%]
+........................................................................ [ 56%]
+........................................................................ [ 57%]
+........................................................................ [ 59%]
+........................................................................ [ 60%]
+........................................................................ [ 62%]
+........................................................................ [ 63%]
+........................................................................ [ 64%]
+........................................................................ [ 66%]
+........................................................................ [ 67%]
+........................................................................ [ 69%]
+........................................................................ [ 70%]
+........................................................................ [ 71%]
+........................................................................ [ 73%]
+........................................................................ [ 74%]
+........................................................................ [ 75%]
+........................................................................ [ 77%]
+........................................................................ [ 78%]
+........................................................................ [ 80%]
+........................................................................ [ 81%]
+....................................................s................... [ 82%]
+.....................................................................sss [ 84%]
+........................................................................ [ 85%]
+........................................................................ [ 86%]
+........................................................................ [ 88%]
+........................................................................ [ 89%]
+...................................................................ss... [ 91%]
+........................................................................ [ 92%]
+........................................................................ [ 93%]
+........................................................................ [ 95%]
+........................................................................ [ 96%]
+........................................................................ [ 98%]
+........................................................................ [ 99%]
+...............................                                          [100%]
+=============================== warnings summary ===============================
+tests/test_eznec_buried_refusal.py::test_the_split_spelling_is_served@eznec_corpus
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_eznec_buried_refusal.py:127: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    out = render(text)
+
+tests/test_array_block.py: 6 warnings
+tests/test_bspline_degree3_883.py: 1 warning
+tests/test_capabilities.py: 3 warnings
+tests/test_element_currents.py: 3 warnings
+tests/test_extended_kernel_bspline.py: 2 warnings
+tests/test_ground_junction.py: 2 warnings
+tests/test_node_gaps.py: 2 warnings
+tests/test_port_solution.py: 1 warning
+tests/test_refl_coef_ground.py: 1 warning
+tests/test_refusals_are_declared.py: 9 warnings
+tests/test_sommerfeld_ground.py: 2 warnings
+  /home/smburns/stevenmburns/momwire-wt-1064/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (1 element, 1 distinct shape) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_array_block.py::test_all_distinct_shapes_fall_back
+  /home/smburns/stevenmburns/momwire-wt-1064/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (3 elements, 3 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[0-0]
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[0-1]
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[0-2]
+tests/test_bspline_degree3_883.py::test_the_generated_moments_match_direct_quadrature[1-0]
+tests/test_extended_kernel_bspline.py::test_d_family_matches_brute_force_quadrature[diagonal-0.16666666666666666]
+tests/test_extended_kernel_bspline.py::test_d_family_matches_brute_force_quadrature[neighbour-0.041666666666666664]
+  /home/smburns/stevenmburns/antennaknobs/.venv/lib/python3.14/site-packages/scipy/integrate/_quadpack_py.py:1286: IntegrationWarning: The occurrence of roundoff error is detected, which prevents 
+    the requested tolerance from being achieved.  The error may be 
+    underestimated.
+    quad_r = quad(f, low, high, args=args, full_output=self.full_output,
+
+tests/test_junction_ports_iterative.py::test_disabled_port_partition_does_not_match_dense[ArrayBlockSolver]
+tests/test_junction_ports_iterative.py::test_constructor_accepts_junction_ports[False-ArrayBlockSolver]
+tests/test_port_solution.py::test_y_matrix_is_the_port_solutions_y[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_port_currents_is_the_y_matrix[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_columns_superpose_to_the_configured_excitation[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_y_matrix_swept_is_the_stacked_single_k_y[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_impedance_swept_is_the_stacked_single_k_impedance[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_port_solution_swept_is_the_stacked_single_k_solution[ArrayBlockSolver-junction_ports]
+tests/test_port_solution.py::test_swept_y_is_the_swept_port_solutions_y[ArrayBlockSolver-junction_ports]
+  /home/smburns/stevenmburns/momwire-wt-1064/src/momwire/array_block.py:1017: ArrayBlockNoRepeats: no repeated translated elements (2 elements, 2 distinct shapes) — ArrayBlockSolver has nothing to block and ran the H-matrix path; the answer is HMatrixSolver's. Use HMatrixSolver directly, or BSplineSolver for the dense route.
+    self._warn_if_no_repeats(cached)
+
+tests/test_razor_far_mesh_advisory_845.py::test_it_is_advisory_in_FACT_not_just_in_wording
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_razor_far_mesh_advisory_845.py:166: RazorFarMeshClass: razor-2p is first order in the far mesh: its path (razor-blade) testing rule is NEC-5's, which converges more slowly than a Galerkin-tested basis, so a coarse answer is systematically off rather than noisy. Measured over 88 antennaknobs catalog decks at their shipped mesh density, the driving-point impedance is a median 3.3 % from converged, with a tail to 34 % (2.29 ohm median in absolute terms, though the relative figure is the readable one: in ohms the ranking follows |Z| rather than accuracy). The ground barely matters — free-space and Sommerfeld medians agree to 2 %. It is order 1 in the mesh, so DOUBLING the segment count on the razor path roughly HALVES the error; there is no mesh at which it is free. For a converged answer use BSplineSolver (degree 2), which is already converged at these same segment counts. Advisory: nothing is remeshed and nothing is refused — a coarse mesh is a legitimate thing to ask for, and every rung of a convergence ladder but the last is one. See stevenmburns/momwire#845 (antennaknobs scratch/845-mesh-policy, commit 6bafd991d).
+    loud = RazorSolver(**_deck(), nec5_quadrature=True)
+
+tests/test_refusals_name_working_routes.py::test_the_route_a_refusal_names_actually_works[sinusoidal.py::junction_ports]
+  /home/smburns/stevenmburns/momwire-wt-1064/src/momwire/bspline.py:5820: RuntimeWarning: invalid value encountered in divide
+    z_per = all_voltages / currents
+
+tests/test_tilted_crossing_936.py::test_g936_1_a_tilted_crossing_deck_solves
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_tilted_crossing_936.py:58: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 666.7 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z, _ = BSplineSolver(**_crossing_deck(45.0)).compute_impedance()
+
+tests/test_tilted_crossing_936.py::test_g936_3_a_horizontal_above_segment_over_a_crossing_solves
+  /home/smburns/stevenmburns/momwire-wt-1064/tests/test_tilted_crossing_936.py:134: CoarseCrossingNode: crossing node: wire 1's start is the above member, and the finest mesh within 150 mm of the node is 500.0 mm, above the 25 mm bar. At the default quadrature order this node is worth ~4.5 ohm on the soil-A fan and a global density sweep will report it as converged while it is not (momwire#674, re-derived in momwire#760). Grade the node: geometric panels toward the shared point, ~6 mm at the node growing to the design's own segment length away from it, spelled as extra VERTICES in the wire's polyline with per-edge counts in n_per_edge_per_wire so the grading cannot change junction topology. grading is not the only lever, and past n_qp_pair ~ 16 it is not the bigger one: most of what grading buys at the default order is quadrature error, not mesh error (#760 — on the soil-A fan, grading moves the answer 4.5 ohm at n_qp_pair=8 but only 0.08 ohm at 64, while doubling the FAR mesh moves it 0.12 ohm at any order). Raising n_qp_pair runs on the accelerated path since #762. Advisory: nothing is remeshed. See stevenmburns/momwire#696.
+    z, _ = BSplineSolver(**build).compute_impedance()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+!!!!!!!!!!!!!!!!!!!!!!!!!! test time-budget guardrail !!!!!!!!!!!!!!!!!!!!!!!!!!
+48 unmarked test(s) over the 5s ceiling:
+   21.78s  tests/test_field_point.py::test_the_composed_point_field_sits_inside_its_measured_envelope[0113] <-- OVER HARD CEILING
+   13.61s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[monopole-vgood]
+   13.30s  tests/test_extended_kernel_bspline.py::test_g18_reduced_sommerfeld_remainder_is_negligible[mono_contact-sea]
+   13.24s  tests/test_extended_kernel_galerkin.py::test_gs1_reduced_sommerfeld_remainder_is_negligible[slanted-sea]
+   12.99s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[mono_contact-sommerfeld sea]
+   12.97s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[horizontal-sommerfeld sea]
+   12.97s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[mono_lifted-sommerfeld sea]
+   12.96s  tests/test_extended_kernel_bspline.py::test_g16b_finite_ground_does_not_move_the_pec_mismatch[bent-sommerfeld sea]
+   12.95s  tests/test_extended_kernel_bspline.py::test_g16_finite_ground_shift_matches_sinusoidal[bent-sommerfeld sea]
+   12.95s  tests/test_extended_kernel_bspline.py::test_g17_hmatrix_agrees_with_the_dense_path_over_finite_ground[sommerfeld sea-32-False]
+   12.45s  tests/test_sommerfeld_ground.py::test_a_grazing_wire_converges_under_mesh_refinement
+   12.01s  tests/test_razor_sommerfeld_ground.py::test_a_grazing_wire_is_converged_in_the_remainder_order@test_razor_sommerfeld_ground
+   11.43s  tests/test_advisory_cache_927.py::test_g927_1_a_repeat_solve_of_one_deck_still_warns
+   10.99s  tests/test_grazing_band_838.py::test_theta_at_the_band_edge_routes_to_the_old_band@test_grazing_band_838
+   10.57s  tests/test_grazing_band_838.py::test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward@test_grazing_band_838
+    9.99s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[monopole-sea]
+    9.94s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[invl-sea]
+    9.80s  tests/test_same_edge_chunked_966.py::test_chunked_matches_dense_where_chunking_actually_engages[2]
+    9.78s  tests/test_same_edge_window_968.py::test_the_long_wire_stays_inside_its_reassociation_bound[2]
+    9.31s  tests/test_grazing_band_floor_1064.py::test_the_floor_band_is_deferred_until_something_reaches_it@test_grazing_band_floor_1064
+    8.56s  tests/test_advisory_cache_927.py::test_g927_2_one_advisory_per_solve_not_one_per_call
+    8.44s  tests/test_grazing_band_lo_935.py::test_the_low_band_is_deferred_until_something_reaches_it@test_grazing_band_lo_935
+    8.41s  tests/test_surface_radials_865.py::test_the_advisory_fires_inside_the_band_and_is_silent_above_it@test_surface_radials_865
+    8.33s  tests/test_grazing_band_838.py::test_both_dispatches_agree_across_the_r_near_seam@test_grazing_band_838
+    8.05s  tests/test_razor_sommerfeld_ground.py::test_pec_limit_decays_smoothly_to_the_pec_image[lossy-False]@test_razor_sommerfeld_ground
+    7.74s  tests/test_pulse_ground.py::test_pec_limit_decays_smoothly_to_the_pec_image
+    7.41s  tests/test_contact_nec5_lane.py::test_contact_lane_decays_on_the_high_eps_grounds[invl-vgood]
+    7.31s  tests/test_momwire.py::test_bspline_d2_hentenna_enrichment_convergence_over_pec
+    7.24s  tests/test_grazing_band_838.py::test_the_far_zone_is_deferred_until_something_reaches_it@test_grazing_band_838
+    7.19s  tests/test_advisory_cache_927.py::test_g927_4_the_cached_basis_is_unchanged_by_carrying_the_summary
+    7.16s  tests/test_somm_rung_blend_902.py::test_g902_4_a_band_sweep_is_one_pair_and_a_second_sweep_is_free
+    6.62s  tests/test_same_edge_window_968.py::test_the_long_wire_stays_inside_its_reassociation_bound[1]
+    6.51s  tests/test_pair_order_ladder_906.py::test_g921_the_gate_is_not_vacuous_a_uniform_buried_deck_does_tier
+    6.51s  tests/test_same_edge_chunked_966.py::test_chunked_matches_dense_where_chunking_actually_engages[1]
+    6.42s  tests/test_pynec_backend.py::test_fandipole_two_band_smoke
+    6.14s  tests/test_pair_order_ladder_906.py::test_g921_one_fill_resolves_one_ladder_on_the_buried_path
+    5.77s  tests/test_sommerfeld_engine.py::test_grid_resolves_the_near_interface_boundary_layer
+    5.73s  tests/test_advisory_cache_927.py::test_g927_1_the_second_solve_really_did_hit_the_cache
+    5.70s  tests/test_advisory_cache_927.py::test_g927_1_the_advisory_text_survives_the_round_trip
+    5.36s  tests/test_razor_assemble_accel_780.py::test_a_finite_ground_answer_is_unchanged[sommerfeld]
+    5.36s  tests/test_pynec_backend.py::test_bowtie_response_shape_matches
+    5.31s  tests/test_sommerfeld_engine.py::test_grid_far_zone_matches_near_keyed_layout
+    5.20s  tests/test_pynec_backend.py::test_bowtie_90deg_phase_per_feed_agrees
+    5.19s  tests/test_sinusoidal_current_slopes.py::test_the_derivative_does_not_walk_down_the_606_ladder[SinusoidalGalerkinSolver]
+    5.18s  tests/test_sommerfeld_engine.py::test_grid_r1_max_is_capped
+    5.11s  tests/test_razor_below_plane_812.py::test_razor_and_bspline_converge_together_at_soil[False]
+    5.10s  tests/test_sommerfeld_accel.py::test_remainder_field_proj_accel_matches_python[(81-9000j)]
+    5.08s  tests/test_sommerfeld_ground.py::test_remote_wire_stays_bounded_and_irrelevant
+
+FAILING: 1 test(s) over the 20s HARD ceiling. This is not advisory.
+Fix: make it faster, or mark it — `slow` (push lane), `integration` (crosses a process/socket/CLI/printout seam), `crossgate`/`memgate` (certification). See the pyproject markers.
+===== 5202 passed, 9 skipped, 4 xfailed, 53 warnings in 385.75s (0:06:25) ======
+make: *** [Makefile:89: test] Error 1

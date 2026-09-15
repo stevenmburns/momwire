@@ -588,3 +588,21 @@ relative in the surfaces and 1.9e-14 in the kernel.
   for a change that recompiles this translation unit. On sse2 the old domain's
   values are 0.55.0's bit for bit, at the level D4a samples.
   - **G1a stays FAIL by its bar,** pending a decision on its spelling.
+
+## G7, first local run [2026-09-15]: slow and crossgate PASS; `make test` tested the WRONG momwire (a tooling defect), so it is re-run
+
+- **The run.** `run_g7.sh`, 01:44:40–02:17:31Z, on the branch at ec987e2.
+- **Slow lane, on the touched test files** (`PYTHONPATH=src`): **10 passed**
+  (1,256.6 s). This includes the floor band's interpolation test and its
+  panel-cap convergence test.
+- **Crossgate lane** (`PYTHONPATH=src`): **38 passed** (385 s).
+- **`make test`: not a reading.**
+  - **What happened.** The runner set `PATH` only, so the venv's editable
+    momwire answered. That is `antennaknobs/momwire/src`, another checkout,
+    which lacks U9's `MIN_CROSSING_NODE_SEPARATION_M` and this branch's floor
+    band. It ended 21 failed, 116 errors and 4,835 passed, every error an
+    AttributeError or a missing floor band. None of it is about this branch.
+  - **Kept as** `g7_make_test_wrong_momwire.log`.
+- **The fix.** `run_g7.sh` now exports `PYTHONPATH=<branch>/src`, as U9's lane
+  runners did, and records the momwire path it imported. `make test` is being
+  re-run alone; the slow and crossgate results stand.
