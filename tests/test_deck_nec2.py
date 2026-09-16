@@ -1098,6 +1098,21 @@ def test_gn_refuses_an_unknown_type():
     assert str(exc.value) == "GN type 3 is not supported by this engine"
 
 
+def test_gn_refuses_a_trailing_token_by_name():
+    """momwire#1084: the shared tokenizer reads a GN card's non-numeric LAST
+    token as a trailer only so NEC-5's Sommerfeld-table filename can
+    tokenize at all (``deck/_cards.py``).  This dialect's own GN has no such
+    field, so a trailer must still refuse here rather than tokenize clean and
+    silently vanish."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "GN 0 0 0 0 13. .005 NOFILE\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "GN carries a trailing token 'NOFILE'; this engine's nec2 dialect "
+        "has no Sommerfeld-table file field on GN (momwire#1084 adds that "
+        "field to the nec5 dialect only)"
+    )
+
+
 @pytest.mark.parametrize("code", [0, 2])
 def test_gn_refuses_a_radial_ground_screen_on_the_reflection_coefficient_types(code):
     """§#gn--ground-parameters: NEC folds a screen into the reflection
