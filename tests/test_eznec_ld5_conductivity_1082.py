@@ -106,6 +106,32 @@ def test_per_wire_form_sets_only_that_wire():
     assert deck.wire_conductivity == {1: SIGMA}
 
 
+def test_whole_structure_wildcard_is_the_same_range_as_the_explicit_form():
+    """NEC's ordinary ``0,0`` "all segments" spelling, measured against
+    antennaknobs' own NEC-5 writer -- which emits exactly this card,
+    ``LD 5 0 0 0 sigma 0.``, mu spelled ``0.`` rather than omitted, for a
+    whole-structure conductivity.  A pre-fix reader refuses this shape with
+    "segments 0 to 0", which is the antennaknobs catalog's own gap this
+    test pins shut."""
+    deck = parse_nec5(_with_card(f"LD 5 0 0 0 {SIGMA:g} 0."))
+    assert deck.wire_conductivity == {1: SIGMA}
+    assert deck.conductivities == (
+        Nec5Conductivity(tag=0, segment_from=1, segment_thru=11, sigma=SIGMA),
+    )
+
+
+def test_per_wire_wildcard_is_the_same_range_as_the_explicit_form():
+    """The nonzero-tag mirror of the whole-structure wildcard, measured
+    against momwire's own nec_portal corpus (import -> re-export), which
+    writes ``LD 5,tag,0,0,sigma,...`` for a single loaded wire."""
+    text = TWO_WIRES.format(ld=f"LD 5,1,0,0,{SIGMA:g},1.")
+    deck = parse_nec5(text)
+    assert deck.wire_conductivity == {1: SIGMA}
+    assert deck.conductivities == (
+        Nec5Conductivity(tag=1, segment_from=1, segment_thru=9, sigma=SIGMA),
+    )
+
+
 def test_tag_zero_spans_every_declared_wire():
     """No capture addresses tag 0 (the issue's own "no precedent" note), so
     this is the dedicated test the whole-structure spelling needs."""
@@ -153,6 +179,30 @@ def test_mu_of_one_passes():
 def test_mu_field_absent_passes_and_defaults_to_one():
     deck = parse_nec5(_with_card(f"LD 5,0,1,11,{SIGMA:g}"))
     assert deck.wire_conductivity == {1: SIGMA}
+
+
+# --------------------------------------------------------------------------
+# sigma validation -- a short, zero or negative card must refuse at the
+# card, not reach `wire_internal_impedance` and crash mid-solve.
+# --------------------------------------------------------------------------
+
+
+def test_a_missing_sigma_field_refuses_as_a_short_card():
+    """``Card.f`` reads a missing field as 0.0, which would otherwise look
+    like a legal (if useless) zero conductivity rather than the short card
+    it is."""
+    with pytest.raises(DeckError, match="needs at least 5"):
+        parse_nec5(_with_card("LD 5,1,1,11"))
+
+
+def test_a_zero_sigma_refuses():
+    with pytest.raises(DeckError, match="must be positive"):
+        parse_nec5(_with_card("LD 5,1,1,11,0.,1."))
+
+
+def test_a_negative_sigma_refuses():
+    with pytest.raises(DeckError, match="must be positive"):
+        parse_nec5(_with_card(f"LD 5,1,1,11,-{SIGMA:g},1."))
 
 
 # --------------------------------------------------------------------------
