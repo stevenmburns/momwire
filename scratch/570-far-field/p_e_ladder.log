@@ -1,0 +1,13 @@
+A/control-HED  raw ['4.0e-01', '1.4e+00', '6.8e-01'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 2.42e+00  (42s)
+A/control-VED  raw ['5.1e-01', '1.6e+00', '9.3e-01'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 2.85e+00  (23s)
+A/buried-HED   raw ['1.3e-02', '1.9e-02', '3.1e-02'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 6.14e-02  (39s)
+A/buried-VED   raw ['1.9e-02', '6.2e-02', '9.1e-02'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 2.38e-01  (21s)
+B/control-HED  raw ['3.7e-01', '1.3e+00', '6.2e-01'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 2.19e+00  (40s)
+B/control-VED  raw ['5.0e-01', '1.5e+00', '9.0e-01'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 2.71e+00  (21s)
+B/buried-HED   raw ['1.2e-02', '1.7e-02', '4.1e-02'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 8.09e-02  (38s)
+B/buried-VED   raw ['2.2e-02', '8.6e-02', '1.2e-01'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 3.17e-01  (20s)
+C/control-HED  raw ['4.4e-01', '1.5e+00', '7.5e-01'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 2.64e+00  (42s)
+C/control-VED  raw ['5.4e-01', '1.7e+00', '1.0e+00'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 3.09e+00  (24s)
+C/buried-HED   raw ['1.6e-02', '2.3e-02', '2.6e-02'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 7.47e-02  (39s)
+C/buried-VED   raw ['2.1e-02', '4.6e-02', '7.1e-02'] (1/kR ['8.0e-03', '4.0e-03', '2.0e-03'])  Richardson 1.82e-01  (20s)
+P-E′ MISS ['A/control-HED', 'A/control-VED', 'A/buried-HED', 'A/buried-VED', 'B/control-HED', 'B/control-VED', 'B/buried-HED', 'B/buried-VED', 'C/control-HED', 'C/control-VED', 'C/buried-HED', 'C/buried-VED']

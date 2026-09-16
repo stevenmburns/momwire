@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Seven gates, derived from the seam's own contract (momwire#497 U1):
+Eight gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -60,12 +60,25 @@ Seven gates, derived from the seam's own contract (momwire#497 U1):
    runtime on purpose (``_accel.py`` documents the shared-runtime reason), so
    self-containment is not the claim there and PyInstaller collects the
    shared libraries itself.
+8. **The printout says which engine answered** — line 2 of every printout
+   carries ``momwire <version> <basis> <variant>``, with a real version and
+   the basis the launcher's own filename claims.  The version is the field
+   this gate exists for: it comes from the package metadata, which a
+   PyInstaller bundle carries only because ``build.py`` passes
+   ``--copy-metadata momwire``, and a bundle built without it stamps
+   ``unknown`` while every other gate here stays green.
+
+   It is a gate on what the printout SAYS, never on what the engine DID.
+   The stamp is threaded from the filename, so a copy that ignored its own
+   name would stamp the name it ignored — gate 4 is the only evidence about
+   the solver, and this one can never stand in for it.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
 CONSISTENT because the banner names whatever actually ran.  Nothing in a
-printout can reveal it, so it has to be caught here, by comparing each exe
-against the module RUN IN THE BASIS THE NAME ASKS FOR.
+printout can reveal it — line 2's stamp included, which names the basis the
+process was TOLD and not the one that solved — so it has to be caught here,
+by comparing each exe against the module RUN IN THE BASIS THE NAME ASKS FOR.
 
 That comparison has two blind spots, and gate 4 closes both rather than
 trusting it alone:
@@ -146,6 +159,14 @@ REFUSE_ID = "0022_vertical-over-real-ground"
 # renders its own default-basis reference below rather than reading gate 1's
 # output file, so moving either list cannot silently disarm the comparison.
 BASIS_DECK = "0010_dipole-in-free-space"
+
+# Gate 8's field reader.  Line 2 positionally, never by searching for the
+# word: a stamp that went missing and a stamp that landed on another line are
+# both failures, and a content search would call the second one a pass.
+STAMP_PREFIX = " momwire "
+STAMP_LINE = 1
+STAMP_FIELDS = 4
+NO_VERSION = "unknown"
 
 # What a printout looks like when it is an ANSWER rather than a refusal.
 # Both directions are needed: the refusal frame is what the seam prints when
@@ -336,9 +357,48 @@ def _openmp_source(bundle: Path, room: Path, marker: str) -> int:
     return 0
 
 
+def _gate_stamp(printout: str, basis: str, name: str) -> int:
+    """Gate 8 — line 2 names this engine: version, basis, accelerator variant.
+
+    ``basis`` is what the launcher's NAME asks for, so this reads the one
+    field of the stamp a reader of a mailed-in ``NEC5.OUT`` cannot check for
+    themselves.  Everything is read positionally off line 2; see the module
+    docstring for why this gate is not evidence about the solver.
+    """
+    lines = printout.splitlines()
+    line = lines[STAMP_LINE] if len(lines) > STAMP_LINE else ""
+    if not line.startswith(STAMP_PREFIX):
+        print(f"FAIL {name}: line 2 is not a momwire stamp ({line!r})")
+        return 1
+    fields = line.split()
+    if len(fields) != STAMP_FIELDS:
+        print(f"FAIL {name}: the stamp is not {STAMP_FIELDS} fields ({line!r})")
+        return 1
+    _, version, stamped, variant = fields
+    if version == NO_VERSION:
+        print(
+            f"FAIL {name}: the stamp carries no version — this bundle was "
+            "built without `--copy-metadata momwire`, so a printout a tester "
+            f"mails back cannot say which release answered it ({line!r})"
+        )
+        return 1
+    if stamped != basis:
+        print(f"FAIL {name}: the stamp names basis {stamped!r}, not {basis!r}")
+        return 1
+    print(f"ok   {name}: stamped momwire {version} {stamped} {variant}")
+    return 0
+
+
 def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
-    """Gates 6, 1, 2 and 4 against one bundle, in one runtime directory."""
+    """Gates 6, 1, 2, 4 and 8 against one bundle, in one runtime directory."""
     failures = 0
+
+    # Gate 8's expected basis for the plain launcher, which selects none.
+    # Imported rather than restated, for the reason gate 7 imports its log
+    # markers: the default has ONE owner, and a second spelling here is how a
+    # gate comes to certify a name nothing uses.  Local because the import
+    # costs a NumPy load the gates that only launch subprocesses never pay.
+    from momwire.eznec._serve import BASIS as DEFAULT_BASIS
 
     # gate 6 — the launcher goes RESIDENT.
     #
@@ -407,6 +467,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
                 f"ok   {stem}: byte-identical, {len(frozen)} bytes, "
                 f"launch {elapsed:.2f} s"
             )
+            failures += _gate_stamp(frozen.decode("latin-1"), DEFAULT_BASIS, stem)
 
     deck = FIXTURES / f"{REFUSE_ID}.nec"
     refuse_out = work / f"{REFUSE_ID}.frozen.out"
@@ -417,6 +478,10 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
         failures += 1
     else:
         print(f"ok   {REFUSE_ID}: refusal reached the printout, launch {elapsed:.2f} s")
+        # A refusal is stamped too, and it is the printout most likely to be
+        # the one mailed back: the deck that got refused is the reason for
+        # writing in.
+        failures += _gate_stamp(text, DEFAULT_BASIS, f"{REFUSE_ID} (refusal)")
 
     # gate 4 — every shipped variant is there, and answers in its own basis
     deck = FIXTURES / f"{BASIS_DECK}.nec"
@@ -498,6 +563,7 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
             )
         else:
             print(f"ok   {variant.name}: answers in {basis!r}, distinct from default")
+        failures += _gate_stamp(printout, basis, variant.name)
 
     return failures
 

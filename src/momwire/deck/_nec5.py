@@ -34,6 +34,7 @@ solves nothing and renders nothing (those are the seam's other units).
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
@@ -51,6 +52,7 @@ __all__ = [
     "Nec5Ground",
     "Nec5Source",
     "Nec5Load",
+    "Nec5Conductivity",
     "Nec5TransmissionLine",
     "Nec5Network",
     "Nec5FarFieldRequest",
@@ -202,18 +204,50 @@ class Nec5Source:
 class Nec5Load:
     """One ``LD 4``: a fixed impedance at a node address.
 
-    ``LD 4`` is 67 of 67 loads in the corpus — EZNEC reduces whatever the
-    user entered to an impedance at the frequency before writing the deck,
-    so no ``LD 0/1/2`` RLC and no ``LD 5`` conductivity has ever been
-    emitted.  The card is ``LD 4,tag,node,0,R,X``; :attr:`node_to` is that
-    fourth field, observed 0 in every capture (loads are single-point, never
-    ranges).  The ``1.E+10`` idiom — pinning a virtual wire's node open — is
-    an ordinary load mechanically.
+    ``LD 4`` is 75 of 75 LUMPED loads in the corpus — EZNEC reduces whatever
+    the user entered to an impedance at the frequency before writing the
+    deck, so no ``LD 0/1/2`` RLC has ever been emitted, and no capture has
+    lossy wire at all (momwire#1082).  The card is ``LD 4,tag,node,0,R,X``;
+    :attr:`node_to` is that fourth field, observed 0 in every capture (loads
+    are single-point, never ranges).  The ``1.E+10`` idiom — pinning a
+    virtual wire's node open — is an ordinary load mechanically.
     """
 
     at: Nec5Node
     impedance: complex
     node_to: int = 0
+
+
+@dataclass(frozen=True)
+class Nec5Conductivity:
+    """One ``LD 5``: wire conductivity — a MATERIAL property, not a lumped
+    element (momwire's nec2 dialect states this in its own ``_ld5``
+    docstring: spec, "a material property").
+
+    Addressed by a SEGMENT RANGE ``(tag, from, thru)``, never through
+    :meth:`_Nec5Parser._address`'s signed node addressing: an address names
+    one endpoint of a connection, and a material spans a run of the
+    structure.  :attr:`tag` ``== 0`` is EZNEC's whole-structure spelling —
+    verified against our licensed materials on a field report's deck,
+    ``LD 5,0,1,402,5.7471E+7,1.`` on a 402-segment single-wire model, read as
+    the entire structure.  A nonzero tag names that wire alone.
+
+    This dialect serves the whole structure (``tag`` 0, the range 1 to the
+    deck's total segment count) and a whole wire (a nonzero ``tag``, the
+    range 1 to that wire's own segment count) and no other range — see
+    :meth:`_Nec5Parser._ld5`.  Each may be spelled EXPLICITLY (the field
+    report's own ``1,402``) or as NEC's ``0,0`` "all segments" wildcard
+    (measured against antennaknobs' own NEC-5 writer, which emits the
+    wildcard rather than the explicit form); :attr:`segment_from` /
+    :attr:`segment_thru` always hold the RESOLVED explicit range, because
+    only that spelling has a licensed printout to say what the loading
+    table prints for it, and the two spellings name the same range.
+    """
+
+    tag: int
+    segment_from: int
+    segment_thru: int
+    sigma: float
 
 
 @dataclass(frozen=True)
@@ -334,6 +368,17 @@ class Nec5Deck:
     ground: Nec5Ground = Nec5FreeSpace()
     sources: tuple[Nec5Source, ...] = ()
     loads: tuple[Nec5Load, ...] = ()
+    # `LD 5` cards, in deck order, exactly as written — see
+    # :class:`Nec5Conductivity`.  Kept separate from `loads` because a
+    # conductivity is not a lumped element and the loading table prints it
+    # with a different row shape (no node, a segment range instead).
+    conductivities: tuple[Nec5Conductivity, ...] = ()
+    # The RESOLVED per-wire conductivity a solver takes: `conductivities`
+    # expanded to `{tag: sigma}` (the whole-structure form fanned out to
+    # every wire declared by the time the `LD 5` card was read).  Derived
+    # rather than parsed, so there is exactly one place — `_ld5` — that
+    # decides what a card's range means.
+    wire_conductivity: Mapping[int, float] = MappingProxyType({})
     transmission_lines: tuple[Nec5TransmissionLine, ...] = ()
     networks: tuple[Nec5Network, ...] = ()
     frequency_mhz: float | None = None
@@ -431,17 +476,18 @@ _REFUSED_BY_NAME = MappingProxyType(
 # The number of fields each card must carry.  EZNEC writes every field of
 # every card it emits, so this dialect does no blank-field defaulting: a
 # short card is a deck this front-end did not come from and refuses rather
-# than zero-fills (the one exception is GD/GN 0's trailing complex mu, which
-# the measured grammar lets default to 1).  GN is absent because its length
-# depends on its first field — bare for -1 and 1, media-carrying for 0 and 2
-# — and is checked in `_gn`.
+# than zero-fills (the two exceptions are GD/GN 0's trailing complex mu and
+# LD 5's trailing real mu, both of which the measured grammar lets default
+# to 1).  GN and LD are absent because their length depends on a field read
+# before this table — GN's on its first field (bare for -1 and 1, media-
+# carrying for 0 and 2, checked in `_gn`), LD's on its TYPE (4 needs R and X,
+# 5 does not need mu) — and are checked in `_ld`.
 _MIN_FIELDS = MappingProxyType(
     {
         "GW": 9,
         "GE": 2,
         "GD": 6,
         "EX": 6,
-        "LD": 6,
         "TL": 10,
         "NT": 10,
         "FR": 5,
@@ -557,6 +603,7 @@ class _Nec5Parser:
         self.ground: Nec5Ground = Nec5FreeSpace()
         self.sources: list[Nec5Source] = []
         self.loads: list[Nec5Load] = []
+        self.conductivities: list[Nec5Conductivity] = []
         self.lines: list[Nec5TransmissionLine] = []
         self.networks: list[Nec5Network] = []
         self.frequency_mhz: float | None = None
@@ -774,16 +821,28 @@ class _Nec5Parser:
 
     def _ld(self, card: Card) -> None:
         kind = card.i(0)
+        if kind == 5:
+            self._ld5(card)
+            return
         if kind != 4:
             raise DeckError(
                 f"LD type {kind} is not part of this engine's nec5 dialect, whose "
-                f"loading is LD 4 (fixed impedance) alone — 67 of 67 loads across "
-                f"the captured corpus, because EZNEC reduces a load to an impedance "
-                f"at the frequency before it writes the deck"
+                f"loading is LD 4 (fixed impedance) or LD 5 (wire conductivity) — "
+                f"75 of 75 LUMPED loads across the captured corpus are LD 4, because "
+                f"EZNEC reduces a load to an impedance at the frequency before it "
+                f"writes the deck, and momwire#1082's field report is the only "
+                f"observed LD 5"
+            )
+        if len(card.values) < 6:
+            raise DeckError(
+                f"LD 4 carries {len(card.values)} fields and needs at least 6 (tag, "
+                f"node, the fourth field, resistance and reactance); EZNEC writes "
+                f"every field of every card it emits, so this dialect does no "
+                f"blank-field defaulting"
             )
         node_to = card.i(3)
         if node_to != 0:
-            # Observed 0 on every one of the 67 captured LD cards, which is
+            # Observed 0 on every one of the 75 captured LD 4 cards, which is
             # what makes this dialect's loads single-point rather than
             # ranges.  A nonzero field has never been seen, so its meaning
             # here is unobserved.
@@ -797,6 +856,111 @@ class _Nec5Parser:
                 at=self._address(card, 1),
                 impedance=_complex(card, 4),
                 node_to=node_to,
+            )
+        )
+
+    def _ld5(self, card: Card) -> None:
+        """``LD 5,tag,from,thru,sigma[,mu]`` — wire conductivity.
+
+        NOT routed through :meth:`_address`: a material spans a RANGE, and
+        ``_address``'s LD 4 branch already requires the fourth field to be a
+        single point (0).  ``tag`` and the range are read directly, mirroring
+        :meth:`momwire.deck._nec2._Nec2Parser._ld5`'s own field layout
+        (``tag, first, last, sigma``) less that dialect's cell-symmetry
+        widening — this one's vocabulary has no ``GX``/``GR`` at all, so
+        there is no cell to widen into.
+
+        Two forms, each with two SPELLINGS: ``tag`` 0 spans the WHOLE
+        STRUCTURE and a nonzero ``tag`` spans that WHOLE WIRE alone, and
+        either range may be written EXPLICITLY (1 to the segment count —
+        momwire#1082's field report, ``LD 5,0,1,402,…`` on a 402-segment
+        single wire, verified against our licensed materials) or as NEC's
+        ordinary ``0,0`` "all segments" WILDCARD — measured against
+        antennaknobs' own NEC-5 writer, which emits ``LD 5 0 0 0 sigma``
+        for a whole-structure conductivity and the nonzero-tag form the
+        same way for a single wire.  Both spellings are resolved to the
+        explicit range before being recorded, since only the explicit form
+        has a licensed printout to say what the table prints for it.
+        Neither form has a PARTIAL-range precedent in any capture or
+        writer, so a range that is not the full explicit range or the
+        wildcard refuses rather than guesses which segments were meant —
+        the same restriction ``_Nec2Parser._ld5`` places on its own ranged
+        form.
+
+        Field 6 (mu, relative permeability) is a bare real here, unlike a
+        ground card's trailing COMPLEX pair — ``wire_internal_impedance``
+        has no permeability parameter (it hard-codes vacuum permeability),
+        so a value other than 1 would be silently modelled as copper; this
+        engine refuses it instead.  Omitted (the field short) or written 0
+        both read as the unstated 1 — antennaknobs' own writer spells it
+        ``0.`` rather than omitting it, so this is a measured spelling and
+        not only an inferred one — the same "absent means default" the LD
+        4 branch above does NOT get (its R/X pair is never optional).
+        """
+        if len(card.values) < 5:
+            raise DeckError(
+                f"LD 5 carries {len(card.values)} fields and needs at least 5 "
+                f"(type, tag, from, thru, sigma); EZNEC writes every field of "
+                f"every card it emits, so this dialect does no blank-field "
+                f"defaulting"
+            )
+        tag, first, last = card.i(1), card.i(2), card.i(3)
+        sigma = card.f(4)
+        if sigma <= 0.0:
+            # `Card.f` reads a missing field as 0.0, which would otherwise
+            # read as a legal-looking zero conductivity rather than the
+            # short card it is; refusing here catches that too, and refuses
+            # a written negative the same way `wire_internal_impedance`
+            # would refuse it far downstream, in the solve rather than at
+            # the card that caused it.
+            raise DeckError(
+                f"LD 5 asks for a conductivity of {sigma:g} S/m; a material's "
+                f"conductivity must be positive (`wire_internal_impedance`, "
+                f"which this value eventually reaches, refuses the same way) "
+                f"and this engine refuses it at the card rather than let an "
+                f"unobserved value reach the solver"
+            )
+        mu = card.f(5) or 1.0
+        if mu != 1.0:
+            raise DeckError(
+                f"LD 5 asks for a relative permeability of {mu:g}; this engine's "
+                f"wire internal-impedance model has no permeability parameter "
+                f"(`wire_internal_impedance` hard-codes vacuum permeability) and "
+                f"refuses a non-unity value rather than silently modelling it as "
+                f"copper"
+            )
+        if tag == 0:
+            total = sum(wire.segment_count for wire in self.wires)
+            if (first, last) == (0, 0):
+                first, last = 1, total
+            elif first != 1 or last != total:
+                raise DeckError(
+                    f"LD 5 addresses tag 0 (whole structure) segments {first} to "
+                    f"{last}; this engine serves EZNEC's own whole-structure "
+                    f"spelling, the full range 1 to {total} (this deck's total "
+                    f"segment count so far), and NEC's ordinary ``0,0`` "
+                    f"wildcard for it — a partial range under tag 0 has no "
+                    f"captured or written precedent and is not supported"
+                )
+        else:
+            wire = self._by_tag.get(tag)
+            if wire is None:
+                raise DeckError(
+                    f"LD 5 names tag {tag}, which no GW card in this deck declares"
+                )
+            if (first, last) == (0, 0):
+                first, last = 1, wire.segment_count
+            elif first != 1 or last != wire.segment_count:
+                raise DeckError(
+                    f"LD 5 addresses tag {tag} segments {first} to {last}; wire "
+                    f"{tag} has {wire.segment_count} segments and this engine's "
+                    f"per-wire conductivity covers whole wires only, the full "
+                    f"range 1 to {wire.segment_count} or the ``0,0`` wildcard "
+                    f"for it"
+                )
+        self.conductivities.append(
+            Nec5Conductivity(
+                tag=tag, segment_from=first, segment_thru=last, sigma=sigma
             )
         )
 
@@ -1007,6 +1171,24 @@ class _Nec5Parser:
 
     # -- the deck ----------------------------------------------------------
 
+    def _resolved_conductivity(self) -> Mapping[int, float]:
+        """``conductivities`` fanned out to ``{tag: sigma}``, one entry per
+        wire — what :func:`~momwire.eznec._serve._solver_for` reads.
+
+        A later ``LD 5`` overwrites an earlier one on the same wire, LAST
+        CARD WINS, the same rule every other last-one-standing state in this
+        parser follows (the ground cards' own comment: "LAST GROUND CARD
+        WINS"); no capture has two, so this is armor rather than a hot path.
+        """
+        resolved: dict[int, float] = {}
+        for card in self.conductivities:
+            if card.tag == 0:
+                for wire in self.wires:
+                    resolved[wire.tag] = card.sigma
+            else:
+                resolved[card.tag] = card.sigma
+        return MappingProxyType(resolved)
+
     def deck(self, source_text: str = "") -> Nec5Deck:
         if self.ge_flag is None:
             raise DeckError(
@@ -1023,6 +1205,8 @@ class _Nec5Parser:
             ground=self.ground,
             sources=tuple(self.sources),
             loads=tuple(self.loads),
+            conductivities=tuple(self.conductivities),
+            wire_conductivity=self._resolved_conductivity(),
             transmission_lines=tuple(self.lines),
             networks=tuple(self.networks),
             frequency_mhz=self.frequency_mhz,

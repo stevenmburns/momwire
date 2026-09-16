@@ -196,6 +196,30 @@ Every deck takes exactly one of two paths:
 As of 2026-08-26, 77 of the 80 EZNEC captures in our corpus serve; the three
 refusals are one named sentence, about one observation point.
 
+### The printout says which engine answered
+
+**Line 2 of every printout — served and refused alike — names the engine.**
+For example:
+
+```
+ momwire 0.55.0 bspline avx2
+```
+
+Three facts after the name: the release, the formulation that answered (the
+basis your launcher's filename selected), and which compiled accelerator
+loaded — `avx2`, `sse2`, `legacy`, or `none` for the pure-Python fallback.
+
+**Quote that line in any bug report.** The release and the formulation are
+what move the numbers underneath it, and nothing else in the file says which
+of each you had. The accelerator moves the speed, which is the first question
+of every slowness report: `none` there means the solve was correct and many
+times slower than it should have been.
+
+Nothing else in the header changes. Line 2 is where the licensed engine prints
+its own build tag, so it is the one line that already carried an engine
+identity; the comment block EZNEC checks the printout against, the banner and
+every table heading are untouched.
+
 ## What serves
 
 - **Geometry**: `GW` wires — straight, junctioned, tapered via stepped
@@ -224,9 +248,17 @@ The refusals are part of the product, and the interesting ones are honest
 capability statements rather than deck errors:
 
 - **Buried wires now serve — with measured edges.** Wires strictly below
-  the interface over the Sommerfeld ground get **impedance, currents and
-  charges**: detached buried radials and screens, buried fed elements, and
-  elevated feeds over buried counterpoises. Validation below ground stands
+  the interface over the Sommerfeld ground get **impedance, currents,
+  charges and the radiation pattern**: detached buried radials and screens,
+  buried fed elements, and
+  elevated feeds over buried counterpoises. A buried element reaches the
+  far zone through the **transmitted** Fresnel factors — the stationary-phase
+  limit of the same below-to-above integrals its currents came out of — so
+  `RP` reads the wave that crosses the interface rather than an image of a
+  source that is not in the air. The soil's absorption shows in the pattern
+  and in the average power gain; the power budget keeps NEC's own definition
+  (input minus conductor loss), so a buried deck's printed efficiency is
+  still about its wires. Validation below ground stands
   on exact identities (the lossless-limit collapse onto free space at
   4×10⁻¹⁵, the deep-burial limit onto the infinite-medium solve), on
   ladder-limit agreement at the half-percent class on the
@@ -247,8 +279,7 @@ capability statements rather than deck errors:
   lossless-limit identity, against 10⁻⁵ with the feed lifted clear; an
   elevated feed over a buried counterpoise serves, and momwire#567 is the
   lift); **`NE`/`NH` on decks with buried wires** (#524 phase 3);
-  **`RP` on decks with buried wires** (the far-zone transmitted
-  asymptotics, momwire#570); buried wires over the perfect ground or `GD`
+  buried wires over the perfect ground or `GD`
   (no lower medium to be in); sources deeper or pairs farther than the
   tabulated domains (the sentence states the limit and its extension
   cost). A wire lying *in* the interface refuses as the degenerate case

@@ -29,6 +29,13 @@ The manifest's other two — the ``FILL=``/``RUN TIME`` timing lines and signed
 zero in the pattern TILT column — are not needed here: both are carried
 through the round trip verbatim.  They exist for the serve gates, where the
 numbers come from a solver and a machine's clock instead of from the file.
+
+The manifest's FIFTH is needed here and is NOT applied at the reader:
+:func:`mask_engine_stamp`, for line 2.  It is the one line this engine prints
+differently on purpose (``momwire.eznec._printout.engine_stamp``), so both
+sides of every byte compare get it masked — masking only the captured side
+would leave the comparison asserting that our stamp equals a placeholder, and
+masking at the reader would hide a stamp that went missing.
 """
 
 from __future__ import annotations
@@ -145,6 +152,30 @@ def printout_text(cid: str) -> str:
     """A captured printout, CRLF- and cache-normalized per the manifest."""
     raw = (FIXTURE_DIR / capture(cid)["printout"]).read_bytes().decode("latin-1")
     return drop_sommpd_blocks(raw.replace("\r\n", "\n"))
+
+
+# Line 2 is the one line this engine does not reproduce: in the captures it is
+# the licensed engine's build tag, and in a momwire printout it is momwire's
+# own version/basis/variant stamp.  Masked BY POSITION — index 1, whatever it
+# says — because a content mask ("drop any line naming momwire") would also
+# swallow a stamp that had leaked into some other line, which is a regression
+# this gate exists to catch.
+_ENGINE_STAMP_INDEX = 1
+_STAMP_MASK = "<engine stamp>"
+
+
+def mask_engine_stamp(text: str) -> str:
+    """``text`` with line 2 replaced by a fixed placeholder, and nothing else.
+
+    Applied to BOTH sides of a capture-against-rendered comparison, so it can
+    only narrow what is asserted; the stamp's own content is gated in
+    ``tests/test_eznec_engine_stamp.py``, including the assertion that a
+    capture's ` x13` line fails it.
+    """
+    lines = text.split("\n")
+    if len(lines) > _ENGINE_STAMP_INDEX:
+        lines[_ENGINE_STAMP_INDEX] = _STAMP_MASK
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------
@@ -468,7 +499,7 @@ def test_every_captured_printout_round_trips_byte_for_byte(cid):
     """
     captured = printout_text(cid)
     rendered = render_printout(parse_nec5(deck_text(cid)), extract(captured))
-    assert rendered == captured
+    assert mask_engine_stamp(rendered) == mask_engine_stamp(captured)
 
 
 @pytest.mark.integration

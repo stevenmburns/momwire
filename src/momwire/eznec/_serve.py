@@ -33,9 +33,13 @@ worse than one that says so.
 momwire#553 lands the BURIED wire, and with it a serve matrix rather than a
 rung: a wire strictly below a ``GN 0`` / ``GN 2`` interface is solved through
 the per-segment medium and the two buried Sommerfeld families, and **such a
-deck's IMPEDANCE, its CURRENTS and its CHARGES are served while every other
-output refuses by name** — its near field is momwire#524 phase 3 and its far
-field the transmitted far-zone asymptotics, neither of which this arc built.
+deck's IMPEDANCE, its CURRENTS, its CHARGES and its PATTERN are all served**.
+The pattern is momwire#570's: :func:`momwire._far_readout.transmitted_moments`
+carries a below-interface element to the far zone through the transmitted
+Fresnel factors instead of through an image, in the one readout both seams
+call, so ``RP 0`` on a buried deck is the same arithmetic as ``RP 0`` on any
+other.  What a buried deck still cannot answer is its NEAR field, which is
+momwire#524 phase 3.
 Three GEOMETRIES around it refuse too, and none of them says "buried wires
 are not served" any more: a wire with points on both sides of the interface
 (served by the native API's crossing basis since momwire#524 phase 2, not
@@ -652,11 +656,14 @@ _REFUSE_NEAR_FIELD_CONTACT = (
 #     decision, not a gate);
 #   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
 #     under either card, so there is nothing to bury the wire in;
-#   * the OUTPUTS a buried deck cannot answer — its near field (phase 3) and
-#     its far field (the transmitted far-zone asymptotics).
+#   * the one OUTPUT a buried deck cannot answer — its NEAR field, which is
+#     momwire#524 phase 3.
 #
-# Impedance, currents and charges serve.  That sentence is the serve matrix
-# and it is repeated in the module docstring.
+# Impedance, currents, charges and the PATTERN serve; momwire#570 moved the
+# last of those from the column on the right to the column on the left, by
+# giving the shared readout the transmitted far-zone factors a below-interface
+# element radiates through.  That sentence is the serve matrix and it is
+# repeated in the module docstring.
 _REFUSE_BURIED_CROSSING = (
     "wire {tag} crosses the ground interface mid-span (z runs {zmin:g} to "
     "{zmax:g} m across z = 0). momwire serves current across the interface "
@@ -730,10 +737,10 @@ _REFUSE_BURIED_NEAR_FIELD = (
     "interface it and the source are on - reconciling the two readouts (a "
     "REMAINDER above, a WHOLE transmitted field across) is momwire#524 phase "
     "3, and the three crossing regimes refuse by name until it lands. This "
-    "deck's IMPEDANCE, its CURRENTS and its CHARGES are all served: drop the "
+    "deck's IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
+    "are all served: drop the "
     "{card} card, or lift the wire above z = 0"
 )
-_REFUSE_BURIED_FAR_FIELD = _medium_spec.buried_far_field_refusal()
 _REFUSE_IN_PLANE_WIRE = (
     "wire {tag} lies in the ground plane (both ends at z = 0) - a horizontal "
     "wire IN a conducting interface is degenerate - raise it above the "
@@ -799,12 +806,15 @@ def refusal(deck: Nec5Deck) -> str | None:
     stopped; after it the same card is served, and what a buried deck can
     still name is either a GEOMETRY around it (a wire crossing the interface,
     a buried wire over a card with no lower medium, a buried wire sharing a
-    deck with a ground contact) or an OUTPUT it cannot answer (its near
-    field, its far field).  That last pair is the first time this seam's
-    refusal grammar has had to say "this deck is served, but not for THAT
-    number", which is why the serve matrix — impedance, currents, charges —
-    is written out in the module docstring rather than left implicit in the
-    order of the branches below.  The geometry rung goes on being checked
+    deck with a ground contact) or an OUTPUT it cannot answer — which was a
+    PAIR, near field and far field, and is now one.  momwire#570 gave the
+    shared far-zone readout the transmitted factors, so ``RP`` came off this
+    list and the ``NE``/``NH`` pair is what is left (momwire#524 phase 3).
+    That single remaining output is still the only place this seam's refusal
+    grammar says "this deck is served, but not for THAT number", which is why
+    the serve matrix — impedance, currents, charges, pattern — is written out
+    in the module docstring rather than left implicit in the order of the
+    branches below.  The geometry rung goes on being checked
     before the request rung, so a deck that is out of scope both ways still
     names the geometry a reader would fix first.
     """
@@ -825,16 +835,14 @@ def refusal(deck: Nec5Deck) -> str | None:
         if isinstance(request, Nec5NearFieldRequest):
             if buried:
                 # THE SERVE MATRIX, in one branch: a buried deck's impedance,
-                # currents and charges serve and every other output refuses
-                # BY NAME. Near fields are momwire#524 phase 3, far fields
-                # the transmitted far-zone follow-up.
+                # currents, charges and pattern serve, and the NEAR field is
+                # the one output left refusing BY NAME (momwire#524 phase 3).
+                # The far field left this branch with momwire#570.
                 return _REFUSE_BURIED_NEAR_FIELD.format(card=_near_field_card(request))
             near = _near_field_refusal(deck, request)
             if near is not None:
                 return near
         if isinstance(request, Nec5FarFieldRequest):
-            if buried:
-                return _REFUSE_BURIED_FAR_FIELD
             if request.range_m != 0.0:
                 return _REFUSE_RP_RANGE
     if not deck.requests:
@@ -1888,6 +1896,22 @@ def _solver_for(
 
     ground = _ground_kwargs(deck, medium)
 
+    # `LD 5` conductivity, one entry per PIECE and NOT per wire: a piece
+    # cut from a wire (`_Piece.tag`, "Two ways to spell one series EMF")
+    # keeps that wire's tag, so this array is already right for the cut
+    # case with no extra bookkeeping.  Solvers take a per-wire array with
+    # NaN for "not this one" and infer the rest (`_wire_loading.py`); no
+    # kwarg at all is what a bare wire was built against, so it is omitted
+    # rather than passed all-NaN.
+    loading: dict[str, np.ndarray] = {}
+    if deck.wire_conductivity:
+        loading["wire_conductivity"] = np.array(
+            [
+                deck.wire_conductivity.get(piece.tag, float("nan"))
+                for piece in mesh.pieces
+            ]
+        )
+
     return solver_class(
         wires=[piece.points for piece in mesh.pieces],
         n_per_edge_per_wire=[[piece.n_elements] for piece in mesh.pieces],
@@ -1896,6 +1920,7 @@ def _solver_for(
         wavelength=wavelength,
         **port_kwargs(solver_class, junctions=mesh.junctions, node_gaps=gaps),
         **ground,  # type: ignore[arg-type]
+        **loading,
         **basis_kwargs,
     )
 
@@ -2605,6 +2630,17 @@ def _pattern(
     grazing incidence: the Fresnel coefficients go to -1 as theta_i goes to
     90, the direct wave and its weighted image cancel term for term, and the
     null falls out of ``_far_moments`` on the row the capture put it.
+
+    Nor does a BURIED wire, since momwire#570.  ``_far_moments`` carries an
+    element below the interface to the far zone through the transmitted
+    Fresnel factors rather than through an image, so this function asks
+    nothing about which side of the plane the current is on and there is no
+    branch here to keep equal with the portal's.  The horizon row goes to
+    -999.99 for the same reason it does above ground: every transmitted
+    factor vanishes with ``cos theta``.  The soil's absorption is in the
+    pattern itself — a deep element's contribution decays with its depth —
+    and NOT in the power budget, which follows NEC's books and reports the
+    input power minus the structure's own loss.
     """
     thetas = request.theta0_deg + request.d_theta_deg * np.arange(request.n_theta)
     phis = request.phi0_deg + request.d_phi_deg * np.arange(request.n_phi)
@@ -3064,6 +3100,18 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             f"from the basis through current_slopes, and this family has "
             f"no such method to read it from"
         )
+    if deck.wire_conductivity:
+        # Asked of the ROW rather than left to the constructor: an
+        # unsupported family either has no `wire_conductivity` parameter at
+        # all (a bare `TypeError`, momwire#1082) or silently ignores it, and
+        # this seam's other basis refusals all arrive as a named
+        # `ServeRefusal` rather than either of those.
+        reason = solver_class.capabilities.refusal("wire_loading")
+        if reason is not None:
+            raise ServeRefusal(
+                f"LD 5 sets a wire conductivity and basis {basis!r} does not "
+                f"serve wire loading: {reason}"
+            )
 
     structure = structure_of(deck)
     mesh = build_mesh(
@@ -3107,11 +3155,18 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         for source in deck.sources
     )
     p_in = float(sum(row.power for row in source_rows))
-    # Every wire is a perfect conductor at this seam (the dialect has no
-    # LD 5 and no IS), so the budget's WIRE LOSS line carries the LD loads'
-    # watts and nothing else — which is where 0012's two 1.E+10 pins print
-    # theirs (5.0797E-54 W) and where 0027's single pin prints 7.1165E-08.
+    # Every wire was a perfect conductor at this seam through momwire#1082
+    # (the dialect had no LD 5 and no IS), so the budget's WIRE LOSS line
+    # used to carry the LD loads' watts and nothing else — which is where
+    # 0012's two 1.E+10 pins print theirs (5.0797E-54 W) and where 0027's
+    # single pin prints 7.1165E-08.  It now adds the metal's OWN dissipation
+    # — `wire_loss_power` integrates ½ Re[Z'(w)]·|I(l)|² along every loaded
+    # wire from the same `coeffs` the current/charge tables read — 0.0 when
+    # `deck.wire_conductivity` is empty, so every captured printout keeps
+    # its identity untouched.
     p_load = 0.5 * float(np.sum(np.real(state.z_load) * np.abs(state.i_port) ** 2))
+    if deck.wire_conductivity:
+        p_load += solver.wire_loss_power(coeffs, omega)[0]
     points = _connection_points(cards)
     connections = tuple(_port_row(structure, mesh, state, index) for index in points)
     # The budget's own arithmetic (module docstring): RADIATED is INPUT plus
@@ -3143,27 +3198,51 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             else ENVIRONMENT_FREE_SPACE
         ),
         ground=medium,
-        loads=tuple(
-            LoadRow(
-                tag=load.at.tag,
-                # The loading table prints the DECODED node and drops the
-                # deck's spelling, which is the opposite of what NETWORK DATA
-                # does with the same address (:func:`_signed_segment`).  0025
-                # settles it: ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
-                # prints ``3    3``, so the rule is the segment a node names,
-                # wire-local — node 0 reading as node 1 exactly as it does in
-                # :func:`_segment_of`, and no sign surviving anywhere.
-                #
-                # #504 U1's four loaded captures could not say this: all eight
-                # of their ``LD`` cards write a positive node.  The nine mixed
-                # and feed-system captures that landed with U3 write ``-1``
-                # twenty-two times and print ``1`` twenty-two times.
-                node_from=max(load.at.node, 1),
-                node_thru=max(load.at.node, 1),
-                resistance=load.impedance.real,
-                reactance=load.impedance.imag or None,
-            )
-            for load in deck.loads
+        loads=(
+            *(
+                LoadRow(
+                    tag=load.at.tag,
+                    # The loading table prints the DECODED node and drops
+                    # the deck's spelling, which is the opposite of what
+                    # NETWORK DATA does with the same address
+                    # (:func:`_signed_segment`).  0025 settles it:
+                    # ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
+                    # prints ``3    3``, so the rule is the segment a node
+                    # names, wire-local — node 0 reading as node 1 exactly
+                    # as it does in :func:`_segment_of`, and no sign
+                    # surviving anywhere.
+                    #
+                    # #504 U1's four loaded captures could not say this:
+                    # all eight of their ``LD`` cards write a positive
+                    # node.  The nine mixed and feed-system captures that
+                    # landed with U3 write ``-1`` twenty-two times and
+                    # print ``1`` twenty-two times.
+                    node_from=max(load.at.node, 1),
+                    node_thru=max(load.at.node, 1),
+                    resistance=load.impedance.real,
+                    reactance=load.impedance.imag or None,
+                )
+                for load in deck.loads
+            ),
+            # ``LD 5`` rows, deck order, after every ``LD 4`` row.  No
+            # capture mixes the two card kinds, so the relative order
+            # between them is unmeasured; this reader keeps the LD 4
+            # ordering the 80-capture corpus already gates and appends the
+            # material rows after it, in the deck's own LD 5 order.  Its
+            # address is the SEGMENT RANGE as written, not a node — see
+            # :class:`~momwire.deck._nec5.Nec5Conductivity` — and ITAG
+            # prints blank for the whole-structure spelling
+            # (:func:`~momwire.eznec._printout._load_row`).
+            *(
+                LoadRow(
+                    tag=card.tag,
+                    node_from=card.segment_from,
+                    node_thru=card.segment_thru,
+                    conductivity=card.sigma,
+                    kind="WIRE",
+                )
+                for card in deck.conductivities
+            ),
         ),
         networks=tuple(card.row for card in cards),
         network_excitation=connections,

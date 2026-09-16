@@ -52,8 +52,10 @@ closed it; they now carry envelopes like everything else.
 The manifest's normalizations for a served run are applied on the way in and
 nowhere else: CRLF to LF and the ``SOMMPD.NEX`` cache blocks at the reader
 (``test_eznec_printout.printout_text``), the ``FILL=``/``RUN TIME`` timing
-lines dropped here (a timing is a property of the machine), and signed zero
-folded in the pattern TILT column.
+lines dropped here (a timing is a property of the machine), signed zero folded
+in the pattern TILT column, and line 2's engine stamp masked by position on
+both sides (``test_eznec_printout.mask_engine_stamp``) — the one printout line
+this engine writes differently on purpose.
 """
 
 from __future__ import annotations
@@ -85,6 +87,7 @@ from test_eznec_printout import (
     deck_text,
     drop_sommpd_blocks,
     extract,
+    mask_engine_stamp,
     printout_text,
 )
 
@@ -872,11 +875,13 @@ def mask(text: str, drive: tuple[int, ...] = (2, 3)) -> str:
 
     Also applies the manifest's two remaining served-run normalizations: the
     timing lines are dropped outright, and nothing else about them is looked
-    at.  And one of its own, :data:`_NETWORK_LOSS_DUST`, for the single line in
-    this printout whose PRESENCE a solved number decides.
+    at; and line 2's engine stamp, masked by POSITION before the timing lines
+    are dropped, because dropping lines renumbers everything under them.  And
+    one of its own, :data:`_NETWORK_LOSS_DUST`, for the single line in this
+    printout whose PRESENCE a solved number decides.
     """
     port_cells = tuple(k for k in range(9) if k not in drive)
-    lines = text.split("\n")
+    lines = mask_engine_stamp(text).split("\n")
     out: list[str] = []
     kind: str | None = None
     skip = 0
@@ -1260,9 +1265,10 @@ def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
 @pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_a_lossless_deck_radiates_everything_it_is_given(cid):
-    """Every wire here is a perfect conductor and this dialect has no
-    conductivity card, so INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads
-    100.00 — which is what all fifteen captures print.
+    """Every wire here is a perfect conductor — none of these captures carry
+    an ``LD 5`` (momwire#1082 added the card, not a capture with one) — so
+    INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads 100.00 — which is
+    what all fifteen captures print.
 
     Including the three over LOSSY GROUND, which is the entry worth reading
     twice: 0047 dumps a good fraction of its input into the earth and still
