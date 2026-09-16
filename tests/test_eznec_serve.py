@@ -1265,9 +1265,10 @@ def test_a_current_source_is_a_readout_transform_and_not_a_second_solve():
 @pytest.mark.integration
 @pytest.mark.parametrize("cid", SERVED_IDS + GRAZING_IDS)
 def test_a_lossless_deck_radiates_everything_it_is_given(cid):
-    """Every wire here is a perfect conductor and this dialect has no
-    conductivity card, so INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads
-    100.00 — which is what all fifteen captures print.
+    """Every wire here is a perfect conductor — none of these captures carry
+    an ``LD 5`` (momwire#1082 added the card, not a capture with one) — so
+    INPUT = RADIATED, WIRE LOSS = 0 and EFFICIENCY reads 100.00 — which is
+    what all fifteen captures print.
 
     Including the three over LOSSY GROUND, which is the entry worth reading
     twice: 0047 dumps a good fraction of its input into the earth and still
