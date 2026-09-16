@@ -546,7 +546,7 @@ class _Nec2Parser:
             # A conductivity is read under the LD mnemonic and lands in the
             # same matrix diagonal, so it is cell-scoped exactly as a lumped
             # load is.
-            self._ld5(tag, first, last, card.f(4))
+            self._ld5(tag, first, last, card.f(4), card.f(5))
             return
 
         pairs = self.structure.ld_segment_range(tag, first, last)
@@ -577,7 +577,7 @@ class _Nec2Parser:
             _, arclength = self.structure.resolve_of(wire, seg)
             self._loads.append((piece_index, arclength, spec))
 
-    def _ld5(self, tag: int, first: int, last: int, sigma: float) -> None:
+    def _ld5(self, tag: int, first: int, last: int, sigma: float, mu: float) -> None:
         """``LD 5`` — whole-structure or per-wire conductivity, not a lumped
         element (spec: "a material property").
 
@@ -590,7 +590,26 @@ class _Nec2Parser:
         — replication maps a whole wire to whole wires and a partial range to
         partial ranges — while leaving the out-of-cell refusal as the first
         thing a copy-addressed card hears.
+
+        ``mu`` (field 6, relative permeability) is read and refused when it
+        is not 1 (momwire#1083): ``_wire_loading.wire_internal_impedance``,
+        which ``sigma`` eventually reaches, hard-codes vacuum permeability
+        and has no parameter for this value, so accepting a non-unity mu here
+        would silently model a steel or ferrite-loaded wire as copper.
+        Omitted or written 0 both read as the unstated 1, the same "absent
+        means default" rule :meth:`~momwire.deck._nec5._Nec5Parser._ld5`
+        applies to its own field 6 — the nec5 dialect already serves this
+        card this way, and #1083 was found scoping #1082's twin request for
+        it while auditing why this dialect did not.
         """
+        if mu != 0.0 and mu != 1.0:
+            raise DeckError(
+                f"LD 5 asks for a relative permeability of {mu:g}; this engine's "
+                f"wire internal-impedance model has no permeability parameter "
+                f"(`wire_internal_impedance` hard-codes vacuum permeability) and "
+                f"refuses a non-unity value rather than silently modelling it as "
+                f"copper"
+            )
         if tag == 0 and first == 0:
             self._global_conductivity = sigma
             return
