@@ -26,6 +26,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from .._wire_loading import DistributedRLC, rlc_impedance
+
 __all__ = [
     "DeckModel",
     "DeckWire",
@@ -65,6 +67,12 @@ class WireMaterial:
     # neither: a jacket with no radius is not a jacket.
     insulation_radius: float | None = None
     insulation_eps_r: float | None = None
+    # NEC's ``LD 2`` / ``LD 3`` per-metre RLC (momwire#1088), the third
+    # per-metre series term beside the two above.  A wire may carry it and
+    # a conductivity at once: they ADD in
+    # :func:`~momwire._wire_loading.series_impedance_per_wire`, so this is
+    # a fourth optional field rather than an alternative to the first.
+    distributed_rlc: DistributedRLC | None = None
 
 
 @dataclass(frozen=True)
@@ -152,24 +160,18 @@ class LoadSpec:
         omega = 2.0 * math.pi * freq_hz
         if self.kind == "fixed":
             return complex(self.r, self.x)
-        # A zero L or C drops out of the branch it is in rather than dividing
-        # by zero: NEC reads an absent element as absent, not as a short.
-        if self.kind == "series":
-            z = complex(self.r, 0.0)
-            if self.l:
-                z += 1j * omega * self.l
-            if self.c:
-                z += 1.0 / (1j * omega * self.c)
-            return z
-        if self.kind == "parallel":
-            y = 0j
-            if self.r:
-                y += 1.0 / self.r
-            if self.l:
-                y += 1.0 / (1j * omega * self.l)
-            if self.c:
-                y += 1j * omega * self.c
-            return 1.0 / y if y != 0 else complex("inf")
+        if self.kind in ("series", "parallel"):
+            # The arithmetic — INCLUDING the zero convention, where an
+            # absent element drops out of its branch rather than shorting a
+            # series one or opening a parallel one — lives in
+            # `_wire_loading.rlc_impedance`, because the per-metre reading
+            # of the same three fields (``LD 2``/``LD 3``, momwire#1088)
+            # needs it too and two copies of a convention this easy to get
+            # subtly different would eventually disagree.  The UNITS are
+            # the caller's: ohms/henries/farads here, per metre there.
+            if self.r == 0.0 and self.l == 0.0 and self.c == 0.0:
+                return complex("inf") if self.kind == "parallel" else 0j
+            return complex(rlc_impedance(self.kind, self.r, self.l, self.c, omega))
         raise ValueError(f"unknown load kind {self.kind!r}")
 
 
