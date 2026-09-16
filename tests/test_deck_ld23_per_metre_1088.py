@@ -67,6 +67,7 @@ import numpy as np
 import pytest
 
 from momwire._wire_loading import DistributedRLC, loading_for
+from momwire.bspline import BSplineSolver
 from momwire.deck import DeckError, build_solver
 from momwire.deck import parse as parse_nec2
 from momwire.deck._nec5 import Nec5DistributedRLC, parse_nec5
@@ -382,8 +383,6 @@ def _two_wire_impedance(ld: str) -> complex:
 def test_nec5_the_card_lands_on_the_named_wire_only():
     deck = parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,2,0,0,1.5,2.E-6,0."))
     structure = _serve.structure_of(deck)
-    from momwire.bspline import BSplineSolver
-
     mesh = _serve.build_mesh(deck, structure, solver_class=BSplineSolver)
     wavelength = _serve.SPEED_OF_LIGHT_MHZ_M / 299.7925
     solver = _serve._solver_for(
