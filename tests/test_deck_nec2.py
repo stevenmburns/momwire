@@ -1774,6 +1774,39 @@ def test_ld5_ranged_form_sets_it_per_wire():
     assert model.wires[1].material is None
 
 
+@pytest.mark.parametrize("ld_tail", ["", " 1", " 0"])
+def test_ld5_mu_omitted_or_unity_all_serve_the_same_conductivity(ld_tail):
+    """momwire#1083: field 6 (relative permeability) is unstated, 1, or 0 —
+    all read as unity, the same "absent means default" rule
+    :meth:`~momwire.deck._nec5._Nec5Parser._ld5` applies to its own field 6.
+    """
+    model = parse(
+        "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\n"
+        "GW 2 4 0. 1. 0. 1. 1. 0. 1.E-3\n"
+        "GE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\n"
+        f"LD 5 0 0 0 5.8e7{ld_tail}\nXQ\nNX\n"
+    )
+    assert [w.material.conductivity for w in model.wires] == [5.8e7, 5.8e7]
+
+
+def test_ld5_refuses_a_non_unity_permeability_by_name():
+    """momwire#1083: ``_wire_loading.wire_internal_impedance`` hard-codes
+    vacuum permeability and has no parameter for this value, so a non-unity
+    mu is refused rather than silently modelled as copper."""
+    with pytest.raises(DeckError) as exc:
+        parse(
+            "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\nGE 0\n"
+            "EX 0 1 3 0 1.\nFR 0 1 0 0 14.\nLD 5 0 0 0 5.8e7 100\nXQ\nNX\n"
+        )
+    assert str(exc.value) == (
+        "LD 5 asks for a relative permeability of 100; this engine's wire "
+        "internal-impedance model has no permeability parameter "
+        "(`wire_internal_impedance` hard-codes vacuum permeability) and "
+        "refuses a non-unity value rather than silently modelling it as "
+        "copper"
+    )
+
+
 def test_ld5_refuses_a_partial_wire_range():
     """§#ld--loading: the range must cover each touched wire in full."""
     with pytest.raises(DeckError) as exc:
