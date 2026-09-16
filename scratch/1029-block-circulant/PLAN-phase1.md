@@ -44,6 +44,35 @@ Registered 2026-09-16, **before any phase-1 measurement**. Phase 0 is complete
   150-radial rung is as memory-bound as dense. Compaction is a separate, later,
   gated step.
 
+### Amendment 1 (2026-09-16, before any `rows` code): three contract details
+
+Read off the fill at cf3aaab, while planning the patch and before writing it.
+
+1. **The crossing block is not restricted, and that is part of the contract.**
+   `_crossing_fill.cross_complete_block_split` returns a matrix the routing uses
+   as `Z -= t_ab; Z -= t_ab.T`, and `self_completions` builds `(n_basis,
+   n_basis)` directly. A row restriction there would also have to drop the
+   columns the transpose reads, so the crossing term stays **full-size and
+   exact on every row**. It is about 2.8 % of warm self time at 150 radials, so
+   the bounded cost is worth the untouched correctness.
+   **S-B must therefore expect rows OUTSIDE the requested set to be non-zero
+   wherever the crossing block writes them**, and compares only the requested
+   rows. "Extra rows filled" is the contract, not a failure.
+2. **Narrowing the field-form observers is a positional gather at the plan's own
+   order.** `field_nodes` returns nodes as `(n_seg·q, 3)` and tangents as
+   `np.repeat(tangents, q)`, with `W[p, i, q]` indexed by segment position. A
+   narrowed call passes the kept positions' `obs[i*q:(i+1)*q]`, the same rows of
+   the tangents, and `W[:, positions, :]` — never a re-derived `q`.
+   `_field_galerkin_block` infers `q` from the arrays' shapes, so the order must
+   stay the one the full plan chose.
+3. **What S-B compares to prove plan invariance.** `plan_buried` derives
+   `q_factor` from `near_q_factor(cross_pair_separation(seg_l, seg_r, a_idx,
+   b_idx))` and the extents from `serve_plan_fn` over the FULL index sets and the
+   full node stacks. S-B asserts equality of `q_factor` and of every plan field —
+   `r1_below`, `r1_above`, `r_cross_max`, `r_cross_min`, `zp_min`, `zp_max` —
+   between `rows=None` and `rows=subset`, in addition to the row-by-row Z
+   comparison.
+
 ## 3. The symmetry rule, as the check will implement it
 
 Every condition is a geometry, material or drive fact known at construction.
