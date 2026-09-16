@@ -392,10 +392,12 @@ from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
 from .. import _field_point, _ground_refl, _ground_spec, _medium_spec
 from ..deck._nec5 import (
+    Nec5Conductivity,
     Nec5Deck,
     Nec5FarFieldRequest,
     Nec5FreeSpace,
     Nec5Ground,
+    Nec5Load,
     Nec5MininecGround,
     Nec5NearFieldRequest,
     Nec5Network,
@@ -3066,6 +3068,45 @@ def _inert_pieces(mesh: _Mesh, ground: dict) -> list[int]:
     ]
 
 
+def _loading_row(card: Nec5Load | Nec5Conductivity) -> LoadRow:
+    """One ``STRUCTURE IMPEDANCE LOADING`` row, from either load-card shape.
+
+    Dispatches on TYPE rather than a shared field: a :class:`Nec5Load`
+    carries a symbolic :class:`~momwire.deck.model.LoadSpec` and a
+    :class:`Nec5Conductivity` carries a segment range with no node in it at
+    all.  No branch needs a frequency: the printed RESISTANCE / INDUCTANCE /
+    CAPACITANCE cells are the LD 0/1 card's own R, L, C (momwire#1085), and
+    LD 4's REAL/IMAGINARY cells are its R, X directly -- an impedance
+    evaluated at a frequency is a SOLVE question this table never answers.
+    """
+    if isinstance(card, Nec5Conductivity):
+        return LoadRow(
+            tag=card.tag,
+            node_from=card.segment_from,
+            node_thru=card.segment_thru,
+            conductivity=card.sigma,
+            kind="WIRE",
+        )
+    spec = card.spec
+    if spec.kind == "fixed":
+        return LoadRow(
+            tag=card.at.tag,
+            node_from=card.printed_location,
+            node_thru=card.printed_location,
+            resistance=spec.r,
+            reactance=spec.x or None,
+        )
+    return LoadRow(
+        tag=card.at.tag,
+        node_from=card.printed_location,
+        node_thru=card.printed_location,
+        resistance=spec.r or None,
+        inductance=spec.l or None,
+        capacitance=spec.c or None,
+        kind="SERIES" if spec.kind == "series" else "PARALLEL",
+    )
+
+
 def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     """Solve one rung-1 deck and return everything its printout reports.
 
@@ -3117,14 +3158,20 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     mesh = build_mesh(
         deck, structure, solver_class=solver_class, crossing=bool(_crossing_nodes(deck))
     )
+    # Read before the loads loop below (nec2's own `_lumped_loads` reads it
+    # the same way): a load's `LoadSpec` is SYMBOLIC on the deck model — `LD`
+    # may precede `FR` in card order — so it is stamped at the frequency
+    # here, in the serve path, not at parse time (momwire#1085).
+    frequency = float(deck.frequency_mhz or 0.0)
+    frequency_hz = frequency * 1e6
+
     by_address = {site.at: site for site in mesh.sites}
     for load in deck.loads:
-        by_address[load.at].load += load.impedance
+        by_address[load.at].load += load.spec.impedance(frequency_hz)
     for source in deck.sources:
         by_address[source.at].driven = True
     _check_one_port_per_drive(deck, by_address)
 
-    frequency = float(deck.frequency_mhz or 0.0)
     wavelength = SPEED_OF_LIGHT_MHZ_M / frequency
     omega = 2.0 * math.pi * frequency * 1e6
 
@@ -3198,52 +3245,12 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             else ENVIRONMENT_FREE_SPACE
         ),
         ground=medium,
-        loads=(
-            *(
-                LoadRow(
-                    tag=load.at.tag,
-                    # The loading table prints the DECODED node and drops
-                    # the deck's spelling, which is the opposite of what
-                    # NETWORK DATA does with the same address
-                    # (:func:`_signed_segment`).  0025 settles it:
-                    # ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
-                    # prints ``3    3``, so the rule is the segment a node
-                    # names, wire-local — node 0 reading as node 1 exactly
-                    # as it does in :func:`_segment_of`, and no sign
-                    # surviving anywhere.
-                    #
-                    # #504 U1's four loaded captures could not say this:
-                    # all eight of their ``LD`` cards write a positive
-                    # node.  The nine mixed and feed-system captures that
-                    # landed with U3 write ``-1`` twenty-two times and
-                    # print ``1`` twenty-two times.
-                    node_from=max(load.at.node, 1),
-                    node_thru=max(load.at.node, 1),
-                    resistance=load.impedance.real,
-                    reactance=load.impedance.imag or None,
-                )
-                for load in deck.loads
-            ),
-            # ``LD 5`` rows, deck order, after every ``LD 4`` row.  No
-            # capture mixes the two card kinds, so the relative order
-            # between them is unmeasured; this reader keeps the LD 4
-            # ordering the 80-capture corpus already gates and appends the
-            # material rows after it, in the deck's own LD 5 order.  Its
-            # address is the SEGMENT RANGE as written, not a node — see
-            # :class:`~momwire.deck._nec5.Nec5Conductivity` — and ITAG
-            # prints blank for the whole-structure spelling
-            # (:func:`~momwire.eznec._printout._load_row`).
-            *(
-                LoadRow(
-                    tag=card.tag,
-                    node_from=card.segment_from,
-                    node_thru=card.segment_thru,
-                    conductivity=card.sigma,
-                    kind="WIRE",
-                )
-                for card in deck.conductivities
-            ),
-        ),
+        # One row per LD card (0/1/4/5 alike), in DECK order -- momwire#1085
+        # probe, verified against our licensed materials: a deck mixing LD
+        # types prints its rows in the order the cards were written, not
+        # grouped by type, so `deck.load_cards` (not `loads` then
+        # `conductivities`) is what this table walks.
+        loads=tuple(_loading_row(card) for card in deck.load_cards),
         networks=tuple(card.row for card in cards),
         network_excitation=connections,
         sources=source_rows,
