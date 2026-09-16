@@ -733,12 +733,49 @@ class _Nec5Parser:
             )
         return mu
 
+    def _sommerfeld_file(self, card: Card) -> None:
+        """Validate ``GN`` 0/2's optional trailing Sommerfeld-table filename.
+
+        NEC-5 writes ``NOFILE`` there to skip writing the table (the licensed
+        binary accepts it — momwire#1084); EZNEC's own ``GN`` cards carry no
+        file token at all.  So a bare card and one naming ``NOFILE`` describe
+        the same ground: the token is validated here and then dropped —
+        never stored on :class:`Nec5SommerfeldGround` — which is what makes
+        the two parse identically.  Any OTHER name refuses, in the ``_mu``
+        refusal's tone: this engine computes its own Sommerfeld solution and
+        never had a table to skip writing under a different name.
+        """
+        trailer = card.trailer
+        if trailer is None or trailer == "NOFILE":
+            return
+        raise DeckError(
+            f"GN names a Sommerfeld-table file {trailer!r}; this engine computes "
+            f"its own Sommerfeld solution and serves only NOFILE, the name NEC-5 "
+            f"takes to skip writing the table"
+        )
+
+    def _refuse_file_trailer(self, card: Card, code: int) -> None:
+        """``GN -1`` / ``GN 1`` carry no media payload and so no file field.
+
+        A trailing token on either is not silently accepted just because the
+        shared tokenizer now parses one for ``GN`` (momwire#1084) — only a
+        finite ground (``GN 0`` / ``GN 2``) has a Sommerfeld table to name.
+        """
+        if card.trailer is not None:
+            raise DeckError(
+                f"GN {code} carries a trailing token {card.trailer!r}; only a "
+                f"finite ground (GN 0 / GN 2) carries the Sommerfeld-table file "
+                f"field"
+            )
+
     def _gn(self, card: Card) -> None:
         code = card.i(0)
         if code == -1:
+            self._refuse_file_trailer(card, code)
             self.ground = Nec5FreeSpace()
             return
         if code == 1:
+            self._refuse_file_trailer(card, code)
             self.ground = Nec5PerfectGround()
             return
         if code in (0, 2):
@@ -752,6 +789,7 @@ class _Nec5Parser:
                     f"needs at least 6 (the media payload's epsilon and sigma sit in "
                     f"fields 5 and 6)"
                 )
+            self._sommerfeld_file(card)
             self.ground = Nec5SommerfeldGround(
                 eps_r=card.f(4),
                 sigma=card.f(5),

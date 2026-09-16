@@ -322,6 +322,17 @@ class _Nec2Parser:
     # ground-medium``) ------------------------------------------------------
 
     def _gn(self, card: Card) -> None:
+        if card.trailer is not None:
+            # The shared tokenizer (momwire#1084) reads a GN card's
+            # non-numeric last token as a trailer only so NEC-5's Sommerfeld-
+            # table filename can tokenize at all; this dialect's own GN has
+            # no such field, so a trailer here is not silently accepted just
+            # because the tokenizer now knows the shape.
+            raise DeckError(
+                f"GN carries a trailing token {card.trailer!r}; this engine's "
+                f"nec2 dialect has no Sommerfeld-table file field on GN "
+                f"(momwire#1084 adds that field to the nec5 dialect only)"
+            )
         code = card.i(0)
         nradl = card.i(1)
         # The radial-screen refusal is oracle-verified as scoped to the two
