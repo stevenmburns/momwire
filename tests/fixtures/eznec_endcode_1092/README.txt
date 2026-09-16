@@ -49,9 +49,12 @@ as node 1, one knot in from the apex. Used by
 tests/test_eznec_ex_endcode_1092.py's cross-engine gate: momwire's own
 `razor-nec5` solve of this export (through `momwire.eznec._serve.serve`)
 against the licensed engine's ANTENNA INPUT PARAMETERS row here, and
-against antennaknobs' native `MomwireEngine` solve of the same design on
-the same basis (import-guarded -- this fixture's .out file needs no live
-antennaknobs install, but that third leg of the gate does).
+against the SAME geometry reconstructed BY HAND from this file's own two
+`GW` cards and solved through momwire's own `node_gaps` port (#305's
+series node gap -- the primitive `PortAtVertex` compiles to) instead of
+an `EX` card. No antennaknobs import at test time either way
+(momwire#988: a test gated behind `importorskip("antennaknobs")` runs in
+no CI lane anywhere).
 
 Citation, same convention as tests/fixtures/eznec/manifest.json and
 tests/fixtures/eznec_ld01_1085/README.txt: both printouts were produced
