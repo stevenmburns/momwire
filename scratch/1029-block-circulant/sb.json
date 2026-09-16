@@ -1,0 +1,190 @@
+{
+ "_meta": {
+  "momwire": "/home/smburns/stevenmburns/momwire-wt-1029/src/momwire",
+  "mode": "sb"
+ },
+ "decks": [
+  {
+   "calls_full": [
+    [
+     "_accumulate_Z_subset_chunked",
+     222,
+     222
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     222,
+     222
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     222,
+     0
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     0
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     0
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     222,
+     0
+    ]
+   ],
+   "calls_rows": [
+    [
+     "_accumulate_Z_subset_chunked",
+     222,
+     60
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     222,
+     60
+    ]
+   ],
+   "narrowed_calls": 2,
+   "removed_from_other_rows": 1245.0157799199683,
+   "other_rows_minus_control": 0.0,
+   "pair_work_on_kept_rows": 123007.50666519096,
+   "S_B_not_vacuous": true,
+   "S_B_other_rows_are_control": true,
+   "radials": 4,
+   "n_basis": 255,
+   "n_rows_requested": 86,
+   "kept_basis_rows": 90,
+   "other_basis_rows": 165,
+   "max_abs_diff_kept": 0.0,
+   "rel_diff_kept": 0.0,
+   "S_B_rows": true,
+   "rows_outside_nonzero": 165,
+   "rows_outside_max_abs": 20981.781633862305,
+   "plan_full": {
+    "r1_below": 12.662920509093315,
+    "r1_above": 21.133257074507043
+   },
+   "plan_rows": {
+    "r1_below": 12.662920509093315,
+    "r1_above": 21.133257074507043
+   },
+   "S_B_plan": true
+  },
+  {
+   "calls_full": [
+    [
+     "_accumulate_Z_subset_chunked",
+     654,
+     654
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     654,
+     654
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     654,
+     0
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     0
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     0
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     654,
+     0
+    ]
+   ],
+   "calls_rows": [
+    [
+     "_accumulate_Z_subset_chunked",
+     654,
+     60
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     26,
+     26
+    ],
+    [
+     "_accumulate_Z_subset_chunked",
+     654,
+     60
+    ]
+   ],
+   "narrowed_calls": 2,
+   "removed_from_other_rows": 1245.0157799199696,
+   "other_rows_minus_control": 0.0,
+   "pair_work_on_kept_rows": 123007.50666519096,
+   "S_B_not_vacuous": true,
+   "S_B_other_rows_are_control": true,
+   "radials": 12,
+   "n_basis": 695,
+   "n_rows_requested": 86,
+   "kept_basis_rows": 90,
+   "other_basis_rows": 605,
+   "max_abs_diff_kept": 0.0,
+   "rel_diff_kept": 0.0,
+   "S_B_rows": true,
+   "rows_outside_nonzero": 605,
+   "rows_outside_max_abs": 20981.781633862305,
+   "plan_full": {
+    "r1_below": 12.662920509093317,
+    "r1_above": 21.133257074507043
+   },
+   "plan_rows": {
+    "r1_below": 12.662920509093317,
+    "r1_above": 21.133257074507043
+   },
+   "S_B_plan": true
+  }
+ ]
+}
