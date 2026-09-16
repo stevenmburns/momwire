@@ -12,9 +12,9 @@ through an EXPLICIT end code (the manual's LDTAGT field, the same
 (segment, end) pair its ``EX`` cards use), not EZNEC's sign-of-LDTAGF
 spelling.
 
-The issue named this "a ranged LD 4"; it is not.  The NEC-5 Users Manual
-states plainly that a discrete load "cannot be defined over a range of
-elements except with multiple LD commands", and the momwire#1085 probe
+The issue named this "a ranged LD 4"; it is not.  The NEC-5 Users Manual's
+LD section defines a discrete load as a single point (a range is one LD
+card per element), and the momwire#1085 probe
 (this file's gate 2) confirms it against our licensed materials: an
 explicit end code addresses exactly the one node the manual's arithmetic
 gives it (end 1 of segment *s* is node *s-1*, end 2 is node *s*), never a
@@ -185,9 +185,9 @@ def test_explicit_end_applies_to_ld_0_and_ld_1_too():
 
 
 def test_an_end_code_outside_zero_one_two_refuses_by_name():
-    """Not a range: the manual states a discrete load "cannot be defined
-    over a range of elements except with multiple LD commands", and this is
-    the refusal that holds that line -- gate 2's negative case."""
+    """Not a range: the manual's LD section defines a discrete load as a
+    single point (a range is one LD card per element), and this is the
+    refusal that holds that line -- gate 2's negative case."""
     with pytest.raises(DeckError, match="LDTAGT"):
         parse_nec5(_with_card("LD 4,1,2,5,10.,20."))
 

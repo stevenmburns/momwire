@@ -229,10 +229,10 @@ class Nec5Load:
     ``LD 4,tag,4,0,R,X``, and ``LD 4,tag,1,1,R,X`` to EZNEC's own
     ``LD 4,tag,-1,0,R,X`` — end 1 of segment *s* is node *s-1*, end 2 is
     node *s*, both routed through :meth:`_Nec5Parser._load_address`).  This
-    is NOT a range: the manual states a discrete load "cannot be defined
-    over a range of elements except with multiple LD commands", and the
-    same probe confirms it — an out-of-{0,1,2} LDTAGT still prints and
-    solves as ONE load, not several.
+    is NOT a range: the manual's LD section defines a discrete load as a
+    single point (a range takes one LD card per element), and the same
+    probe confirms it — an out-of-{0,1,2} LDTAGT still prints and solves
+    as ONE load, not several.
 
     :attr:`printed_location` is what the ``STRUCTURE IMPEDANCE LOADING``
     table's FROM/THRU columns print — ``abs(LDTAGF)``, the RAW field, not
@@ -723,11 +723,11 @@ class _Nec5Parser:
         decoded node and its refusal wording.
 
         ``LDTAGT in (1, 2)`` — antennaknobs' own spelling (momwire#1085).
-        The manual's LD section: "LDTAGT sets the wire segment end...where
-        the load will be located" — the SAME (segment, end) pair
-        antennaknobs' ``_source_address`` writes for an ``EX`` card, not a
-        range (the manual: a discrete load "cannot be defined over a range
-        of elements except with multiple LD commands").  Verified against
+        Per the manual's LD section, LDTAGT selects the END of the segment
+        LDTAGF names — the SAME (segment, end) pair antennaknobs'
+        ``_source_address`` writes for an ``EX`` card, not a range (a
+        discrete load is one point; a range is one card per element).
+        Verified against
         our licensed materials (momwire#1085 probe): on a 9-segment wire,
         ``LD 4,tag,5,1,R,X`` (segment 5, end 1) solves bit-identical to
         ``LD 4,tag,4,0,R,X`` (node 4), and ``LD 4,tag,1,1,R,X`` (segment 1,
@@ -745,20 +745,18 @@ class _Nec5Parser:
             raise DeckError(
                 f"{card.mnemonic} carries {ldtagt} in its LDTAGT field; this "
                 f"dialect serves 0 (EZNEC's own sign-of-LDTAGF spelling) and "
-                f"1 or 2 (antennaknobs' explicit end code, Users Manual: "
-                f'"LDTAGT sets the wire segment end...where the load will '
-                f'be located") -- no other value is observed or documented, '
-                f"and a discrete load is never a range (the same manual: "
-                f'"cannot be defined over a range of elements except with '
-                f'multiple LD commands")'
+                f"1 or 2 (antennaknobs' explicit end code: LDTAGT selects "
+                f"the end of the segment LDTAGF names) -- no other value is "
+                f"observed or documented, and a discrete load is one point, "
+                f"never a range (a range is one LD card per element)"
             )
         tag = card.i(k)
         segment = card.i(k + 1)
         if segment <= 0:
             raise DeckError(
                 f"{card.mnemonic} names segment {segment} with an explicit "
-                f"end code ({ldtagt}); the Users Manual's LDTAGF is a "
-                f"positive element number once LDTAGT selects the end "
+                f"end code ({ldtagt}); LDTAGF is a positive element number "
+                f"once LDTAGT selects the end "
                 f"explicitly, and antennaknobs' own writer never emits "
                 f"anything else"
             )
