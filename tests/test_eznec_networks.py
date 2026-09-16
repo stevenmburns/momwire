@@ -1420,8 +1420,9 @@ def test_the_composition_solves_the_drive_rather_than_asserting_it():
         structure = _serve.structure_of(deck)
         mesh = _serve.build_mesh(deck, structure)
         by_address = {site.at: site for site in mesh.sites}
+        freq_hz = float(deck.frequency_mhz) * 1e6
         for load in deck.loads:
-            by_address[load.at].load += load.impedance
+            by_address[load.at].load += load.spec.impedance(freq_hz)
         for source in deck.sources:
             by_address[source.at].driven = True
         wavelength = _serve.SPEED_OF_LIGHT_MHZ_M / float(deck.frequency_mhz)
