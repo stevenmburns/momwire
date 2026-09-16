@@ -149,6 +149,9 @@ Solvers — see [Solvers](#solvers) above for what distinguishes them:
 Results and control:
 
 - `PortSolution` — a solved port network's currents, voltages and Z.
+- `DistributedRLC` — a wire's per-metre series or parallel RLC (NEC's `LD 2`
+  / `LD 3`), the `distributed_rlc` kwarg every loading family takes beside
+  `wire_conductivity` and the insulation pair.
 - `FeedPlacement` — where a solver put a feed (or a Razor lumped load): the
   arclength asked for, the one used, and the offset between them. Returned
   by every solver's `feed_placements()` (momwire#1059).
