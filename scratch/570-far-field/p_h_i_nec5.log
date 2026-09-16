@@ -1,0 +1,7 @@
+buried_dipole: momwire done in 1s; peak -21.427 dBi; below fraction 1.000
+buried_dipole: NEC-5 done in 1s; Z 146.390+44.382j vs momwire 146.790+45.823j
+buried_dipole: nec5_peak_dbi=-21.460, momwire_peak_dbi=-21.427, delta_at_nec5_peak_db=0.033, max_abs_delta_lit_db=0.036, mean_delta_lit_db=0.031, max_abs_shape_delta_lit_db=0.005, lit_directions=450
+buried_radial_vertical: imaged peak -2.718 dBi, honest peak -2.904 dBi, Δ at imaged peak -0.186 dB
+buried_radial_vertical: momwire done in 1s; peak -2.904 dBi; below fraction 0.895
+buried_radial_vertical: NEC-5 done in 1s; Z 77.805+44.468j vs momwire 78.132+46.338j
+buried_radial_vertical: nec5_peak_dbi=-2.900, momwire_peak_dbi=-2.904, delta_at_nec5_peak_db=-0.005, max_abs_delta_lit_db=0.009, mean_delta_lit_db=-0.003, max_abs_shape_delta_lit_db=0.007, lit_directions=400
