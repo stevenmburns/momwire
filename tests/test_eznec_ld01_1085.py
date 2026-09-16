@@ -107,14 +107,16 @@ def test_ld_0_needs_all_three_rlc_fields():
         parse_nec5(_with_card("LD 0,1,4,0,50.,1.E-6"))
 
 
-def test_ld_2_still_refuses_by_name():
-    with pytest.raises(DeckError, match="momwire#1088"):
-        parse_nec5(_with_card("LD 2,1,1,9,1.,0.,0."))
-
-
-def test_ld_3_still_refuses_by_name():
-    with pytest.raises(DeckError, match="momwire#1088"):
-        parse_nec5(_with_card("LD 3,1,1,9,1.,0.,0."))
+@pytest.mark.parametrize("card", ["LD 2,1,1,9,1.,0.,0.", "LD 3,1,1,9,1.,0.,0."])
+def test_ld_2_and_3_are_served_beside_the_lumped_kinds(card):
+    """momwire#1085 first shipped with LD 2 / LD 3 still refusing by name;
+    momwire#1088 landed beside it and serves both as a per-metre wire
+    loading.  The one thing this file still pins about them is that they
+    are read as a MATERIAL (a range record on the deck), never as a lumped
+    load -- the six gates live in ``test_deck_ld23_per_metre_1088.py``."""
+    deck = parse_nec5(_with_card(card))
+    assert deck.loads == ()
+    assert len(deck.distributed_rlc) == 1
 
 
 # --------------------------------------------------------------------------
