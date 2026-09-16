@@ -232,13 +232,16 @@ class Nec5Conductivity:
     ``LD 5,0,1,402,5.7471E+7,1.`` on a 402-segment single-wire model, read as
     the entire structure.  A nonzero tag names that wire alone.
 
-    This dialect serves the two forms EZNEC's own convention writes and no
-    other: the whole structure (``tag`` 0, the range exactly 1 to the deck's
-    total segment count) and a whole wire (a nonzero ``tag``, the range
-    exactly 1 to that wire's own segment count) — see
-    :meth:`_Nec5Parser._ld5`.  :attr:`segment_from` / :attr:`segment_thru`
-    are the range as written, kept rather than dropped because the loading
-    table prints them back.
+    This dialect serves the whole structure (``tag`` 0, the range 1 to the
+    deck's total segment count) and a whole wire (a nonzero ``tag``, the
+    range 1 to that wire's own segment count) and no other range — see
+    :meth:`_Nec5Parser._ld5`.  Each may be spelled EXPLICITLY (the field
+    report's own ``1,402``) or as NEC's ``0,0`` "all segments" wildcard
+    (measured against antennaknobs' own NEC-5 writer, which emits the
+    wildcard rather than the explicit form); :attr:`segment_from` /
+    :attr:`segment_thru` always hold the RESOLVED explicit range, because
+    only that spelling has a licensed printout to say what the loading
+    table prints for it, and the two spellings name the same range.
     """
 
     tag: int
@@ -867,26 +870,56 @@ class _Nec5Parser:
         widening — this one's vocabulary has no ``GX``/``GR`` at all, so
         there is no cell to widen into.
 
-        Two forms only, both EZNEC's own convention (momwire#1082's field
-        report, verified against our licensed materials): ``tag`` 0 spans
-        the WHOLE STRUCTURE (the range must be exactly 1 to the deck's total
-        segment count, ``LD 5,0,1,402,…`` on a 402-segment single wire) and a
-        nonzero ``tag`` spans that WHOLE WIRE alone (1 to its own segment
-        count).  Neither form has a partial-range precedent in any capture,
-        so a range that is not one of these two refuses rather than guesses
-        which segments were meant — the same restriction
-        ``_Nec2Parser._ld5`` places on its own ranged form.
+        Two forms, each with two SPELLINGS: ``tag`` 0 spans the WHOLE
+        STRUCTURE and a nonzero ``tag`` spans that WHOLE WIRE alone, and
+        either range may be written EXPLICITLY (1 to the segment count —
+        momwire#1082's field report, ``LD 5,0,1,402,…`` on a 402-segment
+        single wire, verified against our licensed materials) or as NEC's
+        ordinary ``0,0`` "all segments" WILDCARD — measured against
+        antennaknobs' own NEC-5 writer, which emits ``LD 5 0 0 0 sigma``
+        for a whole-structure conductivity and the nonzero-tag form the
+        same way for a single wire.  Both spellings are resolved to the
+        explicit range before being recorded, since only the explicit form
+        has a licensed printout to say what the table prints for it.
+        Neither form has a PARTIAL-range precedent in any capture or
+        writer, so a range that is not the full explicit range or the
+        wildcard refuses rather than guesses which segments were meant —
+        the same restriction ``_Nec2Parser._ld5`` places on its own ranged
+        form.
 
         Field 6 (mu, relative permeability) is a bare real here, unlike a
         ground card's trailing COMPLEX pair — ``wire_internal_impedance``
         has no permeability parameter (it hard-codes vacuum permeability),
         so a value other than 1 would be silently modelled as copper; this
         engine refuses it instead.  Omitted (the field short) or written 0
-        both read as the unstated 1, the same "absent means default" the LD
+        both read as the unstated 1 — antennaknobs' own writer spells it
+        ``0.`` rather than omitting it, so this is a measured spelling and
+        not only an inferred one — the same "absent means default" the LD
         4 branch above does NOT get (its R/X pair is never optional).
         """
+        if len(card.values) < 5:
+            raise DeckError(
+                f"LD 5 carries {len(card.values)} fields and needs at least 5 "
+                f"(type, tag, from, thru, sigma); EZNEC writes every field of "
+                f"every card it emits, so this dialect does no blank-field "
+                f"defaulting"
+            )
         tag, first, last = card.i(1), card.i(2), card.i(3)
         sigma = card.f(4)
+        if sigma <= 0.0:
+            # `Card.f` reads a missing field as 0.0, which would otherwise
+            # read as a legal-looking zero conductivity rather than the
+            # short card it is; refusing here catches that too, and refuses
+            # a written negative the same way `wire_internal_impedance`
+            # would refuse it far downstream, in the solve rather than at
+            # the card that caused it.
+            raise DeckError(
+                f"LD 5 asks for a conductivity of {sigma:g} S/m; a material's "
+                f"conductivity must be positive (`wire_internal_impedance`, "
+                f"which this value eventually reaches, refuses the same way) "
+                f"and this engine refuses it at the card rather than let an "
+                f"unobserved value reach the solver"
+            )
         mu = card.f(5) or 1.0
         if mu != 1.0:
             raise DeckError(
@@ -898,13 +931,16 @@ class _Nec5Parser:
             )
         if tag == 0:
             total = sum(wire.segment_count for wire in self.wires)
-            if first != 1 or last != total:
+            if (first, last) == (0, 0):
+                first, last = 1, total
+            elif first != 1 or last != total:
                 raise DeckError(
                     f"LD 5 addresses tag 0 (whole structure) segments {first} to "
                     f"{last}; this engine serves EZNEC's own whole-structure "
-                    f"spelling alone, the full range 1 to {total} (this deck's "
-                    f"total segment count so far) — a partial range under tag 0 "
-                    f"has no captured precedent and is not supported"
+                    f"spelling, the full range 1 to {total} (this deck's total "
+                    f"segment count so far), and NEC's ordinary ``0,0`` "
+                    f"wildcard for it — a partial range under tag 0 has no "
+                    f"captured or written precedent and is not supported"
                 )
         else:
             wire = self._by_tag.get(tag)
@@ -912,12 +948,15 @@ class _Nec5Parser:
                 raise DeckError(
                     f"LD 5 names tag {tag}, which no GW card in this deck declares"
                 )
-            if first != 1 or last != wire.segment_count:
+            if (first, last) == (0, 0):
+                first, last = 1, wire.segment_count
+            elif first != 1 or last != wire.segment_count:
                 raise DeckError(
                     f"LD 5 addresses tag {tag} segments {first} to {last}; wire "
                     f"{tag} has {wire.segment_count} segments and this engine's "
                     f"per-wire conductivity covers whole wires only, the full "
-                    f"range 1 to {wire.segment_count}"
+                    f"range 1 to {wire.segment_count} or the ``0,0`` wildcard "
+                    f"for it"
                 )
         self.conductivities.append(
             Nec5Conductivity(
