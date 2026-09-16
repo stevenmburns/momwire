@@ -21,15 +21,17 @@ Gates, matching the issue:
 2. Every capture in tests/fixtures/eznec/decks/ still decodes its ``EX``
    cards with end code 0 (unaffected) -- the corpus is the record of what
    this fix must NOT move.
-3. The AK gate: a vertex-fed catalog design (dipoles.invvee_apex, AK#898)
-   exported through antennaknobs' NEC5Engine and served through momwire on
-   the ``razor-nec5`` basis (the NEC-5 formulation twin) agrees with the
-   licensed engine's own printout on that export, and with antennaknobs'
-   native momwire solve of the same design on the same basis -- both to
-   the tolerances this file measures and states. Import-guarded: the
-   native-solve leg needs a live antennaknobs install (this repo's own CI
-   never has one -- see momwire's CLAUDE.md, "Two repos, one working
-   tree" -- but the fast loop this issue was built against does).
+3. The AK gate: a vertex-fed catalog design (dipoles.invvee_apex, AK#898),
+   its geometry banked in tests/fixtures/eznec_endcode_1092/invvee_apex.nec
+   (antennaknobs' own ``NEC5Engine`` export -- captured once, not imported
+   at test time: momwire#988 refuses a test gated behind
+   ``importorskip("antennaknobs")``, since no CI lane anywhere installs
+   both repos). Served through momwire on the ``razor-nec5`` basis (the
+   NEC-5 formulation twin), it agrees with the licensed engine's own
+   printout on that export, and with the SAME geometry solved through
+   momwire's own ``node_gaps`` port (#305's series node gap, the primitive
+   ``PortAtVertex`` compiles to) on the same basis -- both to the
+   tolerances this file measures and states.
 4. The printout: the ANTENNA INPUT PARAMETERS table's TAG / SEG. / end-
    digit columns for an explicit-end EX card, byte-compared against our
    licensed materials on a deck of our own
@@ -42,6 +44,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from momwire.deck import DeckError
@@ -266,34 +269,52 @@ def test_served_agrees_with_the_licensed_engine_on_the_export():
 
 
 def test_served_agrees_with_the_native_ak_solve_on_the_same_basis():
-    """Gate 3's other leg: antennaknobs' own `MomwireEngine` solving
-    dipoles.invvee_apex NATIVELY (its `PortAtVertex` network feed, not an
-    EX card at all) on the same `razor-nec5` basis, compared against the
-    served NEC5Engine export. The two feed models are different circuit
-    topologies that are supposed to agree physically (this design's own
-    docstring), not two readings of one deck, so the tolerance here is
-    wider than the byte-level export/native-parser agreement a same-basis
-    round trip usually gets -- measured at 0.05 ohm, an order of magnitude
-    tighter than the ~0.3 ohm the pre-#1092 wrong-node reading was off by.
+    """Gate 3's other leg: the SAME apex geometry solved through momwire's
+    OWN ``node_gaps`` port (#305's series node gap, "the apex feed" --
+    ``test_node_gaps.py``) instead of an ``EX`` card, on the same
+    ``razor-nec5`` basis, compared against the served ``NEC5Engine``
+    export.
 
-    Import-guarded: antennaknobs is not installed on momwire's own CI
-    (momwire's CLAUDE.md, "Two repos, one working tree").
+    This reconstructs antennaknobs' ``dipoles.invvee_apex`` (AK#898) by
+    hand from the geometry already banked in ``invvee_apex.nec`` --
+    ``momwire#1092`` deliberately does NOT import antennaknobs here
+    (momwire#988: a test gated behind ``importorskip("antennaknobs")``
+    runs in no CI lane anywhere, since neither repo's CI installs the
+    other -- momwire's CLAUDE.md, "Two repos, one working tree"). Wire 0
+    is tag 1's ``GW`` (its own ``start`` is node 0, the fed vertex), wire
+    1 is tag 2's, and the two share that point as a junction -- the same
+    "both arms meet at one point" shape ``invvee_apex.py``'s own docstring
+    describes for ``PortAtVertex``.
+
+    The two feed models (a series node gap vs. an ``EX`` card reading the
+    same exported deck) are different circuit topologies that are
+    supposed to agree physically, not two readings of one deck, so the
+    tolerance here is wider than the byte-level export/native-parser
+    agreement a same-basis round trip usually gets -- measured at
+    0.05 ohm, an order of magnitude tighter than the ~0.3 ohm the
+    pre-#1092 wrong-node reading was off by.
     """
-    pytest.importorskip("antennaknobs")
-    from antennaknobs.designs.dipoles.invvee_apex import Builder
-    from antennaknobs.engines.momwire import MomwireEngine
     from momwire.razor import RazorSolver
 
     deck = parse_nec5((FIXTURES / "invvee_apex.nec").read_text())
     served = _serve.serve(deck, basis="razor-nec5")
     z_served = served.sources[0].impedance
 
-    native = complex(
-        MomwireEngine(
-            Builder(),
-            ground=None,
-            solver=RazorSolver,
-            solver_kwargs={"nec5_quadrature": True},
-        ).impedance()[0]
+    wires = deck.wires
+    wavelength = 299.792458 / deck.frequency_mhz
+    solver = RazorSolver(
+        wires=[
+            np.array([wires[0].end1, wires[0].end2]),
+            np.array([wires[1].end1, wires[1].end2]),
+        ],
+        feeds=[],
+        node_gaps=[(0, "start", 1.0 + 0j)],
+        junctions=[[(0, "start"), (1, "end")]],
+        n_per_edge_per_wire=[[wires[0].segment_count], [wires[1].segment_count]],
+        wavelength=wavelength,
+        wire_radius=wires[0].radius,
+        nec5_quadrature=True,
     )
-    assert abs(z_served - native) < 0.05
+    z_native, _ = solver.compute_impedance()
+    z_native = complex(np.atleast_1d(z_native)[0])
+    assert abs(z_served - z_native) < 0.05
