@@ -248,9 +248,17 @@ The refusals are part of the product, and the interesting ones are honest
 capability statements rather than deck errors:
 
 - **Buried wires now serve — with measured edges.** Wires strictly below
-  the interface over the Sommerfeld ground get **impedance, currents and
-  charges**: detached buried radials and screens, buried fed elements, and
-  elevated feeds over buried counterpoises. Validation below ground stands
+  the interface over the Sommerfeld ground get **impedance, currents,
+  charges and the radiation pattern**: detached buried radials and screens,
+  buried fed elements, and
+  elevated feeds over buried counterpoises. A buried element reaches the
+  far zone through the **transmitted** Fresnel factors — the stationary-phase
+  limit of the same below-to-above integrals its currents came out of — so
+  `RP` reads the wave that crosses the interface rather than an image of a
+  source that is not in the air. The soil's absorption shows in the pattern
+  and in the average power gain; the power budget keeps NEC's own definition
+  (input minus conductor loss), so a buried deck's printed efficiency is
+  still about its wires. Validation below ground stands
   on exact identities (the lossless-limit collapse onto free space at
   4×10⁻¹⁵, the deep-burial limit onto the infinite-medium solve), on
   ladder-limit agreement at the half-percent class on the
@@ -271,8 +279,7 @@ capability statements rather than deck errors:
   lossless-limit identity, against 10⁻⁵ with the feed lifted clear; an
   elevated feed over a buried counterpoise serves, and momwire#567 is the
   lift); **`NE`/`NH` on decks with buried wires** (#524 phase 3);
-  **`RP` on decks with buried wires** (the far-zone transmitted
-  asymptotics, momwire#570); buried wires over the perfect ground or `GD`
+  buried wires over the perfect ground or `GD`
   (no lower medium to be in); sources deeper or pairs farther than the
   tabulated domains (the sentence states the limit and its extension
   cost). A wire lying *in* the interface refuses as the degenerate case
