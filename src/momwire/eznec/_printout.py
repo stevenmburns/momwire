@@ -439,11 +439,21 @@ class PortRow:
     under ``ANTENNA INPUT PARAMETERS``), so they share a row type.
 
     :attr:`end_index` is the trailing digit after the ``TAG``/``SEG.`` pair.
-    It tracks the DECK'S SIGN, 9 of 9 rows in the capture study's table
-    ("Signed segment addressing", 2026-08-16): a positive node field prints
-    1, the ``-1`` spelling of node 0 prints 2.  It is not a port number and
-    not an end-one/end-two flag — ``DipTL1`` reports 2 on a card's end one —
-    so it is carried as read rather than derived from anything here.
+    On EZNEC's own sign-of-the-node-field spelling it tracks the DECK'S
+    SIGN, 9 of 9 rows in the capture study's table ("Signed segment
+    addressing", 2026-08-16): a positive node field prints 1, the ``-1``
+    spelling of node 0 prints 2.  It is not a port number and not an
+    end-one/end-two flag — ``DipTL1`` reports 2 on a card's end one — so it
+    is carried as read rather than derived from anything here.
+
+    On antennaknobs' own explicit end code (an ``EX`` card only, momwire#1092
+    — ``TL``/``NT`` have no field to carry it) the SAME digit is still
+    carried as read rather than derived from the node, but the field it is
+    read from is different and the mapping is the INVERSE of the naive
+    guess: measured against our licensed materials, an explicit end 1
+    prints 2 and an explicit end 2 prints 1 —
+    :func:`~momwire.eznec._serve._source_segment_and_end` is where that
+    read happens for this row's producer.
     """
 
     tag: int

@@ -2057,6 +2057,38 @@ def _network_card(
     )
 
 
+def _source_segment_and_end(
+    structure: Structure, source: Nec5Source
+) -> tuple[int, int]:
+    """The ``ANTENNA INPUT PARAMETERS`` ``SEG.`` column and trailing end
+    digit for one ``EX`` card, covering both dialect spellings.
+
+    ``end_code == 0`` (EZNEC's own spelling, all 49 captures) is
+    :func:`_segment_of` on the decoded node plus the sign rule
+    :class:`~momwire.eznec._printout.PortRow` documents, unchanged.
+
+    ``end_code in (1, 2)`` (antennaknobs' explicit end code, momwire#1092)
+    prints DIFFERENTLY even when it names the same node as some signed
+    spelling: measured against our licensed materials on a probe deck of
+    our own (``tests/fixtures/eznec_endcode_1092/``), segment 5 end 2 and
+    segment 6 end 1 both decode to node 5 on a 9-segment wire, but the
+    first prints ``5 1`` and the second ``6 2`` — the SEG. column is
+    ``abs`` of the written middle field (:attr:`Nec5Source.printed_location`,
+    the same rule :class:`~momwire.deck._nec5.Nec5Load` prints its loading
+    row by), carried through the tag's global element offset, and the
+    trailing digit is 2 for an explicit end 1 and 1 for an explicit end 2 —
+    the INVERSE of the digit each end code names, measured on the same
+    probe and not derived from anything else.
+    """
+    if source.end_code in (1, 2):
+        segment = structure.first_element(source.at.tag) + source.printed_location - 1
+        end_index = 2 if source.end_code == 1 else 1
+        return segment, end_index
+    segment = _segment_of(structure, source.at)
+    end_index = 2 if source.at.written == -1 else 1
+    return segment, end_index
+
+
 def _signed_segment(structure: Structure, at: Nec5Node) -> int:
     """The ``NETWORK DATA`` address: the segment, negated for a ``-1`` node.
 
@@ -2485,14 +2517,16 @@ def _source_row(
         voltage = source.drive
     else:
         current = source.drive
+    # SEG. and the trailing end digit: `_source_segment_and_end` covers
+    # EZNEC's own sign-of-the-node-field spelling (9 of 9 capture-study
+    # rows: node 0 written -1 prints 2, a positive node field prints 1 —
+    # 0031 and 0032 print 2 on every one of their six rows, six more of the
+    # same) and antennaknobs' explicit end code alike (momwire#1092).
+    segment, end_index = _source_segment_and_end(structure, source)
     return PortRow(
         tag=source.at.tag,
-        segment=_segment_of(structure, source.at),
-        # The trailing index tracks the DECK's spelling, 9 of 9 rows in the
-        # capture study: node 0 written -1 prints 2, a positive node field
-        # prints 1.  0031 and 0032 print ``2`` on every one of their six rows,
-        # which is six more of the same.
-        end_index=2 if source.at.written == -1 else 1,
+        segment=segment,
+        end_index=end_index,
         voltage=voltage,
         current=current,
         impedance=_ratio(voltage, current),
