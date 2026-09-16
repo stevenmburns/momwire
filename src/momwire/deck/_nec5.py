@@ -192,13 +192,23 @@ class Nec5Source:
     normalization, |I|²/2 = 1) and the phase rides in the complex pair, so a
     phased array is several ``EX`` cards and no network at all.  Multiple
     cards parse here; what a solver does with them is a later unit's
-    business.  :attr:`option` is the fourth field, observed 0 throughout.
+    business.
+
+    :attr:`end_code` is the fourth field: 0 in all 49 captures (EZNEC's own
+    sign-of-the-node-field spelling, unread beyond that), or 1 / 2 —
+    antennaknobs' own explicit end code (momwire#1092), the same
+    (segment, end) pair its ``LD`` cards use (:class:`Nec5Load`).
+    :attr:`printed_location` mirrors :class:`Nec5Load`'s field of the same
+    name: ``abs`` of the written middle field, which is what the excitation
+    table's ``SEG.`` column prints for an explicit-end card — the raw
+    field, not the decoded node.
     """
 
     kind: int
     at: Nec5Node
     drive: complex
-    option: int = 0
+    end_code: int = 0
+    printed_location: int = 0
 
 
 @dataclass(frozen=True)
@@ -700,12 +710,20 @@ class _Nec5Parser:
     # -- addressing --------------------------------------------------------
 
     def _address(self, card: Card, k: int) -> Nec5Node:
-        """Fields ``k``/``k+1`` of ``card`` as a :class:`Nec5Node`.
+        """Fields ``k``/``k+1`` of ``card`` as a :class:`Nec5Node`, EZNEC's
+        own sign-of-the-node-field spelling.
 
-        The one piece of code every connection card shares.  ``EX``, ``LD``,
-        ``TL`` and ``NT`` all take this address (capture study, "Signed node
-        addressing spans four cards"), and all four go through here so the
-        favored wire survives identically on each.
+        Every connection card is built on this address (capture study,
+        "Signed node addressing spans four cards"): ``TL`` and ``NT`` read
+        it directly, twice each, because their field layout has no room
+        left for anything else — the field right after one address's node
+        is the NEXT address's tag (``TL``'s and ``NT``'s own field counts
+        match NEC-2's card exactly: two two-field addresses back to back,
+        then the card's own data), so momwire#1092 could not give either
+        card antennaknobs' explicit-end spelling.  ``EX`` and ``LD`` instead
+        go through :meth:`_end_coded_address`, which reads a third field
+        no ``TL``/``NT`` field position offers and falls back to this
+        method when that field is 0.
         """
         tag = card.i(k)
         written = card.i(k + 1)
@@ -746,54 +764,63 @@ class _Nec5Parser:
             )
         return Nec5Node(tag=tag, node=node)
 
-    def _load_address(self, card: Card, k: int) -> tuple[Nec5Node, int]:
-        """Fields ``k``/``k+1``/``k+2`` of an ``LD`` card (LDTAG, LDTAGF,
-        LDTAGT) as a :class:`Nec5Node` plus the value the loading table
-        prints for it.
+    def _end_coded_address(
+        self, card: Card, k: int, *, field_name: str, range_note: str = ""
+    ) -> tuple[Nec5Node, int]:
+        """Fields ``k``/``k+1``/``k+2`` of a connection card as a
+        :class:`Nec5Node` plus the value a printout echoes for it.
 
-        Two spellings of the same three fields, distinguished by LDTAGT
-        (the manual's name):
+        Shared by ``LD`` (momwire#1085) and ``EX`` (momwire#1092) — the two
+        connection cards whose field layout has a THIRD field free after the
+        address, because each carries exactly one address.  ``TL`` and
+        ``NT`` carry two addresses each and have no such field (see
+        :meth:`_address`'s docstring), so they never call this.
 
-        ``LDTAGT == 0`` — EZNEC's own spelling.  The node rides entirely in
-        the SIGNED LDTAGF field, so this is exactly :meth:`_address` on the
-        same two fields, unchanged: every captured ``LD 4`` keeps its
-        decoded node and its refusal wording.
+        Two spellings of the same three fields, distinguished by the field
+        at ``k+2`` (the manual's name for ``LD``'s copy of it is LDTAGT):
 
-        ``LDTAGT in (1, 2)`` — antennaknobs' own spelling (momwire#1085).
-        Per the manual's LD section, LDTAGT selects the END of the segment
-        LDTAGF names — the SAME (segment, end) pair antennaknobs'
-        ``_source_address`` writes for an ``EX`` card, not a range (a
-        discrete load is one point; a range is one card per element).
-        Verified against
-        our licensed materials (momwire#1085 probe): on a 9-segment wire,
-        ``LD 4,tag,5,1,R,X`` (segment 5, end 1) solves bit-identical to
-        ``LD 4,tag,4,0,R,X`` (node 4), and ``LD 4,tag,1,1,R,X`` (segment 1,
-        end 1) to EZNEC's own ``LD 4,tag,-1,0,R,X`` (node 0) — so end 1 of
-        segment *s* is node *s-1* and end 2 is node *s*.
+        ``k+2 == 0`` — EZNEC's own spelling.  The node rides entirely in the
+        SIGNED field at ``k+1``, so this is exactly :meth:`_address` on the
+        same two fields, unchanged: every captured ``LD 4`` and every
+        captured ``EX`` (all 49 write 0 there) keeps its decoded node and
+        its refusal wording byte for byte.
 
-        The second return value is what the loading table's FROM/THRU
-        columns print: ``abs(LDTAGF)``, not the decoded node — the same
-        probe's rows print ``5  5`` for segment 5 end 1, whose node is 4.
+        ``k+2 in (1, 2)`` — antennaknobs' own spelling.  The field selects
+        the END of the segment the field at ``k+1`` names — the SAME
+        (segment, end) pair antennaknobs' ``_source_address`` writes for
+        every discrete load AND every excitation.  Verified against our
+        licensed materials (momwire#1085 probe, on ``LD``): on a 9-segment
+        wire, ``…,5,1,…`` (segment 5, end 1) solves bit-identical to
+        ``…,4,0,…`` (node 4), and ``…,1,1,…`` (segment 1, end 1) to EZNEC's
+        own ``…,-1,0,…`` (node 0) — so end 1 of segment *s* is node *s-1*
+        and end 2 is node *s*.  ``range_note`` lets a caller add its own
+        card-specific reason this is a single point, never a range.
+
+        The second return value is what a printout's address column prints:
+        ``abs(card.i(k + 1))``, the field as written, not the decoded node
+        — the momwire#1085 probe's loading-table rows print ``5  5`` for
+        segment 5 end 1 (node 4), and the momwire#1092 probe's excitation
+        rows the same way (this module's ``_ex``).
         """
-        ldtagt = card.i(k + 2)
-        if ldtagt == 0:
+        end_code = card.i(k + 2)
+        if end_code == 0:
             return self._address(card, k), abs(card.i(k + 1))
-        if ldtagt not in (1, 2):
+        if end_code not in (1, 2):
             raise DeckError(
-                f"{card.mnemonic} carries {ldtagt} in its LDTAGT field; this "
-                f"dialect serves 0 (EZNEC's own sign-of-LDTAGF spelling) and "
-                f"1 or 2 (antennaknobs' explicit end code: LDTAGT selects "
-                f"the end of the segment LDTAGF names) -- no other value is "
-                f"observed or documented, and a discrete load is one point, "
-                f"never a range (a range is one LD card per element)"
+                f"{card.mnemonic} carries {end_code} in its {field_name} "
+                f"field; this dialect serves 0 (EZNEC's own sign-of-the-"
+                f"node-field spelling) and 1 or 2 (antennaknobs' explicit "
+                f"end code: {field_name} selects the end of the segment "
+                f"the middle field names) -- no other value is observed or "
+                f"documented" + range_note
             )
         tag = card.i(k)
         segment = card.i(k + 1)
         if segment <= 0:
             raise DeckError(
                 f"{card.mnemonic} names segment {segment} with an explicit "
-                f"end code ({ldtagt}); LDTAGF is a positive element number "
-                f"once LDTAGT selects the end "
+                f"end code ({end_code}); the middle field is a positive "
+                f"element number once {field_name} selects the end "
                 f"explicitly, and antennaknobs' own writer never emits "
                 f"anything else"
             )
@@ -808,8 +835,24 @@ class _Nec5Parser:
                 f"{card.mnemonic} addresses segment {segment} of tag {tag}, "
                 f"which has {wire.segment_count} segments"
             )
-        node = segment if ldtagt == 2 else segment - 1
+        node = segment if end_code == 2 else segment - 1
         return Nec5Node(tag=tag, node=node), segment
+
+    def _load_address(self, card: Card, k: int) -> tuple[Nec5Node, int]:
+        """Fields ``k``/``k+1``/``k+2`` of an ``LD`` card (LDTAG, LDTAGF,
+        LDTAGT) — :meth:`_end_coded_address` under the manual's own name
+        for the third field, with the reason this is never a range spelled
+        out for ``LD`` specifically: the manual's LD section defines a
+        discrete load as a single point, and a range is one ``LD`` card per
+        element.
+        """
+        return self._end_coded_address(
+            card,
+            k,
+            field_name="LDTAGT",
+            range_note=", and a discrete load is one point, never a range "
+            "(a range is one LD card per element)",
+        )
 
     # -- geometry ----------------------------------------------------------
 
@@ -999,12 +1042,16 @@ class _Nec5Parser:
             # (momwire#1041). A zero current source (EX 4) was not measured,
             # so its fields stay as written.
             drive = 1 + 0j
+        at, printed_location = self._end_coded_address(
+            card, 1, field_name="EX's own end-code field"
+        )
         self.sources.append(
             Nec5Source(
                 kind=kind,
-                at=self._address(card, 1),
+                at=at,
                 drive=drive,
-                option=card.i(3),
+                end_code=card.i(3),
+                printed_location=printed_location,
             )
         )
 
