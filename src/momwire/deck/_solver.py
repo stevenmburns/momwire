@@ -561,13 +561,15 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
     return sites, feed_ports, load_ports
 
 
-def _wire_loading(materials) -> dict[str, np.ndarray]:
-    """The per-wire conductivity / insulation arrays a solver takes.
+def _wire_loading(materials) -> dict[str, object]:
+    """The per-wire conductivity / insulation / per-metre-RLC a solver takes.
 
     momwire's per-wire convention is one entry per wire with ``NaN`` for "not
     this one", and an array is only passed when SOMETHING in it is finite —
     an all-NaN array and no argument at all describe the same bare wire, and
-    the second is what every solver was built against.
+    the second is what every solver was built against.  ``distributed_rlc``
+    (``LD 2`` / ``LD 3``, momwire#1088) follows the same rule with ``None``
+    in the entry's place, since its entry is an object rather than a float.
     """
     nan = float("nan")
     conductivity = np.array(
@@ -592,12 +594,15 @@ def _wire_loading(materials) -> dict[str, np.ndarray]:
             for m in materials
         ]
     )
-    kwargs: dict[str, np.ndarray] = {}
+    distributed = [m.distributed_rlc if m is not None else None for m in materials]
+    kwargs: dict[str, object] = {}
     if np.isfinite(conductivity).any():
         kwargs["wire_conductivity"] = conductivity
     if np.isfinite(radius).any():
         kwargs["insulation_radius"] = radius
         kwargs["insulation_eps_r"] = eps_r
+    if any(entry is not None for entry in distributed):
+        kwargs["distributed_rlc"] = distributed
     return kwargs
 
 
@@ -877,6 +882,16 @@ def build_solver(
             cards.append("LD 5")
         if "insulation_radius" in loading_kwargs:
             cards.append("IS")
+        if "distributed_rlc" in loading_kwargs:
+            # Named per KIND, not as one entry: `LD 2` and `LD 3` are
+            # different cards and a deck carrying only one of them should
+            # hear its own back (momwire#1088).
+            kinds = {
+                entry.kind
+                for entry in loading_kwargs["distributed_rlc"]
+                if entry is not None
+            }
+            cards += sorted("LD 2" if kind == "series" else "LD 3" for kind in kinds)
         names = " and ".join(cards)
         raise ValueError(
             f"{names} set{'s' if len(cards) == 1 else ''} wire loading on this "

@@ -394,6 +394,7 @@ from .. import _field_point, _ground_refl, _ground_spec, _medium_spec
 from ..deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
+    Nec5DistributedRLC,
     Nec5FarFieldRequest,
     Nec5FreeSpace,
     Nec5Ground,
@@ -1905,7 +1906,7 @@ def _solver_for(
     # NaN for "not this one" and infer the rest (`_wire_loading.py`); no
     # kwarg at all is what a bare wire was built against, so it is omitted
     # rather than passed all-NaN.
-    loading: dict[str, np.ndarray] = {}
+    loading: dict[str, object] = {}
     if deck.wire_conductivity:
         loading["wire_conductivity"] = np.array(
             [
@@ -1913,6 +1914,16 @@ def _solver_for(
                 for piece in mesh.pieces
             ]
         )
+    # `LD 2` / `LD 3` per-metre RLC (momwire#1088), the same per-PIECE fan-out
+    # over the same tags, with None where NaN stands above because the entry
+    # is an object rather than a float.  It rides beside the conductivity
+    # rather than instead of it: the two ADD in `series_impedance_per_wire`,
+    # which is what lets antennaknobs' own a'+L' pair (its #1523) — an `LD 2`
+    # inductance beside an `LD 5` conductivity on one wire — serve as written.
+    if deck.wire_distributed_rlc:
+        loading["distributed_rlc"] = [
+            deck.wire_distributed_rlc.get(piece.tag) for piece in mesh.pieces
+        ]
 
     return solver_class(
         wires=[piece.points for piece in mesh.pieces],
@@ -3087,6 +3098,24 @@ def _loading_row(card: Nec5Load | Nec5Conductivity) -> LoadRow:
             conductivity=card.sigma,
             kind="WIRE",
         )
+    if isinstance(card, Nec5DistributedRLC):
+        # ``LD 2`` / ``LD 3`` (momwire#1088): the header's own RESISTANCE /
+        # INDUCTANCE / CAPACITANCE cells, a field the card wrote as zero
+        # printing BLANK, so the numbers are passed as written (0.0
+        # included) and :func:`_load_row` decides the cell.
+        return LoadRow(
+            tag=card.tag,
+            node_from=card.segment_from,
+            node_thru=card.segment_thru,
+            resistance=card.spec.r,
+            inductance=card.spec.l,
+            capacitance=card.spec.c,
+            kind=(
+                "SERIES (PER METER)"
+                if card.spec.kind == "series"
+                else "PARALLEL (PER METER)"
+            ),
+        )
     spec = card.spec
     if spec.kind == "fixed":
         return LoadRow(
@@ -3141,7 +3170,7 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             f"from the basis through current_slopes, and this family has "
             f"no such method to read it from"
         )
-    if deck.wire_conductivity:
+    if deck.wire_conductivity or deck.wire_distributed_rlc:
         # Asked of the ROW rather than left to the constructor: an
         # unsupported family either has no `wire_conductivity` parameter at
         # all (a bare `TypeError`, momwire#1082) or silently ignores it, and
@@ -3149,8 +3178,18 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         # `ServeRefusal` rather than either of those.
         reason = solver_class.capabilities.refusal("wire_loading")
         if reason is not None:
+            cards = []
+            if deck.wire_conductivity:
+                cards.append("LD 5 sets a wire conductivity")
+            kinds = {card.spec.kind for card in deck.distributed_rlc}
+            cards += sorted(
+                "LD 2 sets a per-unit-length series RLC"
+                if kind == "series"
+                else "LD 3 sets a per-unit-length parallel RLC"
+                for kind in kinds
+            )
             raise ServeRefusal(
-                f"LD 5 sets a wire conductivity and basis {basis!r} does not "
+                f"{' and '.join(cards)} and basis {basis!r} does not "
                 f"serve wire loading: {reason}"
             )
 

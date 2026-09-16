@@ -210,9 +210,9 @@ _CHUNK_ELEMS = 2_000_000
 # `wire_loading` cell in both classes' `capabilities.refusals` — one message,
 # not four copies drifting apart.
 _WIRE_LOADING_REFUSAL = (
-    "{cls} does not serve wire loading: an `LD 5` wire conductivity or an "
-    "`LD 6` insulation is a distributed surface impedance, and this "
-    "formulation has no term for one. Nothing structural is in the way — on "
+    "{cls} does not serve wire loading: an `LD 5` wire conductivity, an "
+    "`LD 6` insulation or an `LD 2`/`LD 3` per-unit-length RLC is a "
+    "distributed series impedance, and this formulation has no term for one. Nothing structural is in the way — on "
     "a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is "
     "unwritten and unmeasured, and an unmeasured term is not a capability. "
     "Use BSplineSolver or SinusoidalSolver for a loaded wire"

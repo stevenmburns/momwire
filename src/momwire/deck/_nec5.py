@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from ._cards import _FUSED_FIELD_START, Card, DeckError, parse_card
-from .model import LoadSpec
+from .model import DistributedRLC, LoadSpec
 
 __all__ = [
     "parse_nec5",
@@ -372,6 +372,37 @@ class Nec5ExecuteRequest:
     flag: int = 0
 
 
+@dataclass(frozen=True)
+class Nec5DistributedRLC:
+    """One ``LD 2`` / ``LD 3``: a per-unit-length series or parallel RLC —
+    a MATERIAL property like :class:`Nec5Conductivity`, not a lumped element
+    (momwire#1088).
+
+    Addressed by the SEGMENT RANGE ``(tag, from, thru)`` that ``LD 5`` uses,
+    for the same reason and with the same two forms and two spellings each:
+    ``tag`` 0 is the whole structure, a nonzero tag is that whole wire, and
+    either may be written as the explicit full range or as NEC's ``0,0``
+    wildcard.  :attr:`segment_from` / :attr:`segment_thru` always hold the
+    RESOLVED explicit range.
+
+    :attr:`spec` is the per-metre impedance itself.  Its CAPACITANCE is
+    always 0: the card's own capacitance field is refused
+    (:meth:`_Nec5Parser._ld23`) because NEC scales that one by the segment
+    length rather than per unit length, so it is not a wire property.
+
+    This is the shape antennaknobs writes.  Its NEC-5 exporter spells a
+    jacketed wire's equivalent-radius pair (its issue #1523) as an
+    ``LD 2,tag,0,0,0.,L',0.`` beside an ``LD 5`` for the conductivity —
+    R and C zero, one per-metre inductance — which is why this card and
+    that one have to compose rather than exclude each other.
+    """
+
+    tag: int
+    segment_from: int
+    segment_thru: int
+    spec: DistributedRLC
+
+
 Nec5Request = Nec5FarFieldRequest | Nec5NearFieldRequest | Nec5ExecuteRequest
 
 
@@ -412,13 +443,18 @@ class Nec5Deck:
     # `conductivities` above are read for the SOLVE (a by-address lookup,
     # the resolved per-wire conductivity map); this tuple is read for the
     # PRINTOUT alone.
-    load_cards: tuple[Nec5Load | Nec5Conductivity, ...] = ()
+    load_cards: tuple[Nec5Load | Nec5Conductivity | Nec5DistributedRLC, ...] = ()
     # The RESOLVED per-wire conductivity a solver takes: `conductivities`
     # expanded to `{tag: sigma}` (the whole-structure form fanned out to
     # every wire declared by the time the `LD 5` card was read).  Derived
     # rather than parsed, so there is exactly one place — `_ld5` — that
     # decides what a card's range means.
     wire_conductivity: Mapping[int, float] = MappingProxyType({})
+    # `LD 2` / `LD 3` cards in deck order, and their per-wire resolution —
+    # `conductivities` / `wire_conductivity`'s twin, for the same reasons
+    # (momwire#1088).
+    distributed_rlc: tuple[Nec5DistributedRLC, ...] = ()
+    wire_distributed_rlc: Mapping[int, DistributedRLC] = MappingProxyType({})
     transmission_lines: tuple[Nec5TransmissionLine, ...] = ()
     networks: tuple[Nec5Network, ...] = ()
     frequency_mhz: float | None = None
@@ -644,7 +680,7 @@ class _Nec5Parser:
         self.sources: list[Nec5Source] = []
         self.loads: list[Nec5Load] = []
         self.conductivities: list[Nec5Conductivity] = []
-        # LD 0/1/4 and LD 5 cards, interleaved in DECK order regardless of
+        # LD 0/1/4, LD 5 and LD 2/3 cards, interleaved in DECK order regardless of
         # type -- what the printout's loading table walks (momwire#1085
         # probe, verified against our licensed materials: a deck mixing
         # `LD 4`, `LD 0`, `LD 5`, `LD 1` in that order prints its four rows
@@ -652,7 +688,8 @@ class _Nec5Parser:
         # `conductivities` above stay separate too -- `wire_conductivity`'s
         # resolution and the by-address load lookup each want one type
         # only -- so this is a THIRD list, not a replacement.
-        self._load_cards: list[Nec5Load | Nec5Conductivity] = []
+        self._load_cards: list[Nec5Load | Nec5Conductivity | Nec5DistributedRLC] = []
+        self.distributed_rlc: list[Nec5DistributedRLC] = []
         self.lines: list[Nec5TransmissionLine] = []
         self.networks: list[Nec5Network] = []
         self.frequency_mhz: float | None = None
@@ -976,14 +1013,16 @@ class _Nec5Parser:
         if kind == 5:
             self._ld5(card)
             return
+        if kind in (2, 3):
+            self._ld23(card)
+            return
         if kind not in (0, 1, 4):
             raise DeckError(
                 f"LD type {kind} is not part of this engine's nec5 dialect, whose "
                 f"loading is LD 0 / LD 1 (series / parallel RLC, evaluated to an "
-                f"impedance at the deck's own frequency — momwire#1085), LD 4 "
-                f"(fixed impedance) or LD 5 (wire conductivity) — LD 2 / LD 3 "
-                f"(distributed RLC per unit length) are momwire#1088, not this "
-                f"issue, and still refuse"
+                f"impedance at the deck's own frequency — momwire#1085), LD 2 / "
+                f"LD 3 (per-unit-length RLC — momwire#1088), LD 4 (fixed "
+                f"impedance) or LD 5 (wire conductivity)"
             )
         minimum = 7 if kind in (0, 1) else 6
         if len(card.values) < minimum:
@@ -1024,6 +1063,128 @@ class _Nec5Parser:
         )
         self.loads.append(load)
         self._load_cards.append(load)
+
+    def _material_range(
+        self, card: str, what: str, tag: int, first: int, last: int
+    ) -> tuple[int, int]:
+        """The RESOLVED explicit segment range of a MATERIAL card.
+
+        Two forms, each with two SPELLINGS: ``tag`` 0 spans the WHOLE
+        STRUCTURE and a nonzero ``tag`` spans that WHOLE WIRE alone, and
+        either range may be written EXPLICITLY (1 to the segment count) or
+        as NEC's ordinary ``0,0`` "all segments" WILDCARD.  Anything else
+        refuses by name: no partial range has a captured or written
+        precedent, and a material is a property of a whole conductor.
+
+        Shared by :meth:`_ld5` and :meth:`_ld23` rather than written twice
+        (momwire#1088).  ``card`` names the caller's card in the refusal and
+        ``what`` names what it sets, so each hears its own message back; the
+        RULE is one.
+        """
+        if tag == 0:
+            total = sum(wire.segment_count for wire in self.wires)
+            if (first, last) == (0, 0):
+                return 1, total
+            if first != 1 or last != total:
+                raise DeckError(
+                    f"{card} addresses tag 0 (whole structure) segments {first} to "
+                    f"{last}; this engine serves EZNEC's own whole-structure "
+                    f"spelling, the full range 1 to {total} (this deck's total "
+                    f"segment count so far), and NEC's ordinary ``0,0`` "
+                    f"wildcard for it — a partial range under tag 0 has no "
+                    f"captured or written precedent and is not supported"
+                )
+            return first, last
+        wire = self._by_tag.get(tag)
+        if wire is None:
+            raise DeckError(
+                f"{card} names tag {tag}, which no GW card in this deck declares"
+            )
+        if (first, last) == (0, 0):
+            return 1, wire.segment_count
+        if first != 1 or last != wire.segment_count:
+            raise DeckError(
+                f"{card} addresses tag {tag} segments {first} to {last}; wire "
+                f"{tag} has {wire.segment_count} segments and this engine's "
+                f"{what} covers whole wires only, the full "
+                f"range 1 to {wire.segment_count} or the ``0,0`` wildcard "
+                f"for it"
+            )
+        return first, last
+
+    def _ld23(self, card: Card) -> None:
+        """``LD 2,tag,from,thru,R,L,C`` / ``LD 3,...`` — a per-unit-length
+        series or parallel RLC (momwire#1088).
+
+        A MATERIAL, not a lumped element: Z'(w) [Ohm/m] joins the conductor's
+        internal impedance and the jacket's inductance in the one per-wire sum
+        :func:`~momwire._wire_loading.series_impedance_per_wire` builds, which
+        is why this card takes :meth:`_material_range` — ``LD 5``'s range rule
+        — rather than :meth:`_address`'s single-point node addressing.  The
+        terms ADD, so an ``LD 2`` and an ``LD 5`` on one wire compose.
+
+        This is what antennaknobs' own NEC-5 writer emits for a jacketed wire
+        (its issue #1523): ``LD 2,tag,0,0,0.,L',0.`` beside an ``LD 5`` for
+        the conductivity — the equivalent-radius pair, a larger radius on the
+        ``GW`` and the inductance that enlarging it would otherwise remove.
+        R and C are ``0.`` there, and that is the shape with a consumer.
+
+        **The CAPACITANCE field refuses**, on both dialects and for the same
+        measured reason — see
+        :meth:`momwire.deck._nec2._Nec2Parser._ld23`, which carries the
+        measurement.  Briefly: NEC scales that field BY the segment length
+        instead of per unit length, so it is a property of the deck's
+        segmentation rather than of the wire, and it cannot cross a seam that
+        four different testing schemes read.
+        """
+        kind = card.i(0)
+        name = f"LD {kind}"
+        if len(card.values) < 7:
+            raise DeckError(
+                f"{name} carries {len(card.values)} fields and needs at least 7 "
+                f"(type, tag, from, thru, R', L', C'); EZNEC writes every field "
+                f"of every card it emits, so this dialect does no blank-field "
+                f"defaulting"
+            )
+        tag, first, last = card.i(1), card.i(2), card.i(3)
+        r, l, c = card.f(4), card.f(5), card.f(6)  # noqa: E741 — NEC's field name
+        if c != 0.0:
+            raise DeckError(
+                f"{name} asks for a capacitance of {c:g} in its per-unit-length "
+                f"RLC, which this engine does not serve: NEC scales that field "
+                f"BY the segment length rather than per unit length (measured on "
+                f"nec2c and against our licensed materials), so the wire's "
+                f"per-metre impedance would carry a 1/(jw C d^2) term that "
+                f"changes when the deck is re-segmented — the resistance and "
+                f"inductance fields ARE per unit length and are served "
+                f"(momwire#1088)"
+            )
+        if r < 0.0 or l < 0.0:
+            raise DeckError(
+                f"{name} asks for a negative per-unit-length "
+                f"{'resistance' if r < 0.0 else 'inductance'} ({r:g}, {l:g}); a "
+                f"passive distributed loading is non-negative and this engine "
+                f"refuses it at the card rather than let an unobserved value "
+                f"reach the solver"
+            )
+        first, last = self._material_range(
+            name, "per-unit-length RLC", tag, first, last
+        )
+        if r == 0.0 and l == 0.0:
+            # A card byte-identical to omitting it, AFTER the range rule so
+            # a zero-valued card is still held to the same addressing —
+            # the opposite order to the nec2 dialect's, whose no-op test
+            # comes first because its cell rule can refuse a card NEC would
+            # have honoured.  There is no cell here.
+            return
+        card_record = Nec5DistributedRLC(
+            tag=tag,
+            segment_from=first,
+            segment_thru=last,
+            spec=DistributedRLC("series" if kind == 2 else "parallel", r=r, l=l),
+        )
+        self.distributed_rlc.append(card_record)
+        self._load_cards.append(card_record)
 
     def _ld5(self, card: Card) -> None:
         """``LD 5,tag,from,thru,sigma[,mu]`` — wire conductivity.
@@ -1095,35 +1256,9 @@ class _Nec5Parser:
                 f"refuses a non-unity value rather than silently modelling it as "
                 f"copper"
             )
-        if tag == 0:
-            total = sum(wire.segment_count for wire in self.wires)
-            if (first, last) == (0, 0):
-                first, last = 1, total
-            elif first != 1 or last != total:
-                raise DeckError(
-                    f"LD 5 addresses tag 0 (whole structure) segments {first} to "
-                    f"{last}; this engine serves EZNEC's own whole-structure "
-                    f"spelling, the full range 1 to {total} (this deck's total "
-                    f"segment count so far), and NEC's ordinary ``0,0`` "
-                    f"wildcard for it — a partial range under tag 0 has no "
-                    f"captured or written precedent and is not supported"
-                )
-        else:
-            wire = self._by_tag.get(tag)
-            if wire is None:
-                raise DeckError(
-                    f"LD 5 names tag {tag}, which no GW card in this deck declares"
-                )
-            if (first, last) == (0, 0):
-                first, last = 1, wire.segment_count
-            elif first != 1 or last != wire.segment_count:
-                raise DeckError(
-                    f"LD 5 addresses tag {tag} segments {first} to {last}; wire "
-                    f"{tag} has {wire.segment_count} segments and this engine's "
-                    f"per-wire conductivity covers whole wires only, the full "
-                    f"range 1 to {wire.segment_count} or the ``0,0`` wildcard "
-                    f"for it"
-                )
+        first, last = self._material_range(
+            "LD 5", "per-wire conductivity", tag, first, last
+        )
         conductivity = Nec5Conductivity(
             tag=tag, segment_from=first, segment_thru=last, sigma=sigma
         )
@@ -1355,6 +1490,19 @@ class _Nec5Parser:
                 resolved[card.tag] = card.sigma
         return MappingProxyType(resolved)
 
+    def _resolved_distributed_rlc(self) -> Mapping[int, DistributedRLC]:
+        """``distributed_rlc`` fanned out to ``{tag: spec}``, one entry per
+        wire — :meth:`_resolved_conductivity`'s twin, same LAST CARD WINS
+        rule (momwire#1088)."""
+        resolved: dict[int, DistributedRLC] = {}
+        for card in self.distributed_rlc:
+            if card.tag == 0:
+                for wire in self.wires:
+                    resolved[wire.tag] = card.spec
+            else:
+                resolved[card.tag] = card.spec
+        return MappingProxyType(resolved)
+
     def deck(self, source_text: str = "") -> Nec5Deck:
         if self.ge_flag is None:
             raise DeckError(
@@ -1374,6 +1522,8 @@ class _Nec5Parser:
             conductivities=tuple(self.conductivities),
             load_cards=tuple(self._load_cards),
             wire_conductivity=self._resolved_conductivity(),
+            distributed_rlc=tuple(self.distributed_rlc),
+            wire_distributed_rlc=self._resolved_distributed_rlc(),
             transmission_lines=tuple(self.lines),
             networks=tuple(self.networks),
             frequency_mhz=self.frequency_mhz,

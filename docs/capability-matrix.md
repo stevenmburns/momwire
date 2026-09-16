@@ -206,7 +206,7 @@ renders in host dialogs.
 
 - `HarringtonSolver` `wire_loading`
 
-  > HarringtonSolver does not serve wire loading: an `LD 5` wire conductivity or an `LD 6` insulation is a distributed surface impedance, and this formulation has no term for one. Nothing structural is in the way — on a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is unwritten and unmeasured, and an unmeasured term is not a capability. Use BSplineSolver or SinusoidalSolver for a loaded wire
+  > HarringtonSolver does not serve wire loading: an `LD 5` wire conductivity, an `LD 6` insulation or an `LD 2`/`LD 3` per-unit-length RLC is a distributed series impedance, and this formulation has no term for one. Nothing structural is in the way — on a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is unwritten and unmeasured, and an unmeasured term is not a capability. Use BSplineSolver or SinusoidalSolver for a loaded wire
 
 - `PulseSolver` `buried`
 
@@ -242,7 +242,7 @@ renders in host dialogs.
 
 - `PulseSolver` `wire_loading`
 
-  > PulseSolver does not serve wire loading: an `LD 5` wire conductivity or an `LD 6` insulation is a distributed surface impedance, and this formulation has no term for one. Nothing structural is in the way — on a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is unwritten and unmeasured, and an unmeasured term is not a capability. Use BSplineSolver or SinusoidalSolver for a loaded wire
+  > PulseSolver does not serve wire loading: an `LD 5` wire conductivity, an `LD 6` insulation or an `LD 2`/`LD 3` per-unit-length RLC is a distributed series impedance, and this formulation has no term for one. Nothing structural is in the way — on a pulse row it would be a diagonal bump, Z_mm += Z_s*h_m — but it is unwritten and unmeasured, and an unmeasured term is not a capability. Use BSplineSolver or SinusoidalSolver for a loaded wire
 
 - `RazorSolver` `bundle`
 

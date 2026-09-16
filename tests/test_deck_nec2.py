@@ -1473,10 +1473,14 @@ def test_zero_valued_loads_are_dropped_as_no_ops():
     assert parse(BODY + "LD 4 1 3 3 0. 0.\nXQ\nNX\n").loads == ()
 
 
-@pytest.mark.parametrize("ldtyp", [2, 3, 6, 7, 8, 99])
+@pytest.mark.parametrize("ldtyp", [6, 7, 8, 99])
 def test_ld_refuses_the_types_this_engine_does_not_support(ldtyp):
-    """§#ld--loading: 2/3 (per-metre) and 6/7 (4nec2 extensions) refuse, and
-    so does any type this engine does not recognise."""
+    """§#ld--loading: 6/7 (4nec2 extensions) refuse, and so does any type
+    this engine does not recognise.
+
+    Types 2 and 3 were in this list until momwire#1088 served them; their
+    own refusal boundaries live in
+    ``tests/test_deck_ld23_per_metre_1088.py``."""
     with pytest.raises(DeckError) as exc:
         parse(BODY + f"LD {ldtyp} 1 3 3 1. 1. 1.\nXQ\nNX\n")
     assert str(exc.value) == f"LD type {ldtyp} is not supported by this engine"
