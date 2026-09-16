@@ -33,9 +33,13 @@ worse than one that says so.
 momwire#553 lands the BURIED wire, and with it a serve matrix rather than a
 rung: a wire strictly below a ``GN 0`` / ``GN 2`` interface is solved through
 the per-segment medium and the two buried Sommerfeld families, and **such a
-deck's IMPEDANCE, its CURRENTS and its CHARGES are served while every other
-output refuses by name** — its near field is momwire#524 phase 3 and its far
-field the transmitted far-zone asymptotics, neither of which this arc built.
+deck's IMPEDANCE, its CURRENTS, its CHARGES and its PATTERN are all served**.
+The pattern is momwire#570's: :func:`momwire._far_readout.transmitted_moments`
+carries a below-interface element to the far zone through the transmitted
+Fresnel factors instead of through an image, in the one readout both seams
+call, so ``RP 0`` on a buried deck is the same arithmetic as ``RP 0`` on any
+other.  What a buried deck still cannot answer is its NEAR field, which is
+momwire#524 phase 3.
 Three GEOMETRIES around it refuse too, and none of them says "buried wires
 are not served" any more: a wire with points on both sides of the interface
 (served by the native API's crossing basis since momwire#524 phase 2, not
@@ -652,11 +656,14 @@ _REFUSE_NEAR_FIELD_CONTACT = (
 #     decision, not a gate);
 #   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
 #     under either card, so there is nothing to bury the wire in;
-#   * the OUTPUTS a buried deck cannot answer — its near field (phase 3) and
-#     its far field (the transmitted far-zone asymptotics).
+#   * the one OUTPUT a buried deck cannot answer — its NEAR field, which is
+#     momwire#524 phase 3.
 #
-# Impedance, currents and charges serve.  That sentence is the serve matrix
-# and it is repeated in the module docstring.
+# Impedance, currents, charges and the PATTERN serve; momwire#570 moved the
+# last of those from the column on the right to the column on the left, by
+# giving the shared readout the transmitted far-zone factors a below-interface
+# element radiates through.  That sentence is the serve matrix and it is
+# repeated in the module docstring.
 _REFUSE_BURIED_CROSSING = (
     "wire {tag} crosses the ground interface mid-span (z runs {zmin:g} to "
     "{zmax:g} m across z = 0). momwire serves current across the interface "
@@ -730,10 +737,10 @@ _REFUSE_BURIED_NEAR_FIELD = (
     "interface it and the source are on - reconciling the two readouts (a "
     "REMAINDER above, a WHOLE transmitted field across) is momwire#524 phase "
     "3, and the three crossing regimes refuse by name until it lands. This "
-    "deck's IMPEDANCE, its CURRENTS and its CHARGES are all served: drop the "
+    "deck's IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
+    "are all served: drop the "
     "{card} card, or lift the wire above z = 0"
 )
-_REFUSE_BURIED_FAR_FIELD = _medium_spec.buried_far_field_refusal()
 _REFUSE_IN_PLANE_WIRE = (
     "wire {tag} lies in the ground plane (both ends at z = 0) - a horizontal "
     "wire IN a conducting interface is degenerate - raise it above the "
@@ -799,12 +806,15 @@ def refusal(deck: Nec5Deck) -> str | None:
     stopped; after it the same card is served, and what a buried deck can
     still name is either a GEOMETRY around it (a wire crossing the interface,
     a buried wire over a card with no lower medium, a buried wire sharing a
-    deck with a ground contact) or an OUTPUT it cannot answer (its near
-    field, its far field).  That last pair is the first time this seam's
-    refusal grammar has had to say "this deck is served, but not for THAT
-    number", which is why the serve matrix — impedance, currents, charges —
-    is written out in the module docstring rather than left implicit in the
-    order of the branches below.  The geometry rung goes on being checked
+    deck with a ground contact) or an OUTPUT it cannot answer — which was a
+    PAIR, near field and far field, and is now one.  momwire#570 gave the
+    shared far-zone readout the transmitted factors, so ``RP`` came off this
+    list and the ``NE``/``NH`` pair is what is left (momwire#524 phase 3).
+    That single remaining output is still the only place this seam's refusal
+    grammar says "this deck is served, but not for THAT number", which is why
+    the serve matrix — impedance, currents, charges, pattern — is written out
+    in the module docstring rather than left implicit in the order of the
+    branches below.  The geometry rung goes on being checked
     before the request rung, so a deck that is out of scope both ways still
     names the geometry a reader would fix first.
     """
@@ -825,16 +835,14 @@ def refusal(deck: Nec5Deck) -> str | None:
         if isinstance(request, Nec5NearFieldRequest):
             if buried:
                 # THE SERVE MATRIX, in one branch: a buried deck's impedance,
-                # currents and charges serve and every other output refuses
-                # BY NAME. Near fields are momwire#524 phase 3, far fields
-                # the transmitted far-zone follow-up.
+                # currents, charges and pattern serve, and the NEAR field is
+                # the one output left refusing BY NAME (momwire#524 phase 3).
+                # The far field left this branch with momwire#570.
                 return _REFUSE_BURIED_NEAR_FIELD.format(card=_near_field_card(request))
             near = _near_field_refusal(deck, request)
             if near is not None:
                 return near
         if isinstance(request, Nec5FarFieldRequest):
-            if buried:
-                return _REFUSE_BURIED_FAR_FIELD
             if request.range_m != 0.0:
                 return _REFUSE_RP_RANGE
     if not deck.requests:
@@ -2605,6 +2613,17 @@ def _pattern(
     grazing incidence: the Fresnel coefficients go to -1 as theta_i goes to
     90, the direct wave and its weighted image cancel term for term, and the
     null falls out of ``_far_moments`` on the row the capture put it.
+
+    Nor does a BURIED wire, since momwire#570.  ``_far_moments`` carries an
+    element below the interface to the far zone through the transmitted
+    Fresnel factors rather than through an image, so this function asks
+    nothing about which side of the plane the current is on and there is no
+    branch here to keep equal with the portal's.  The horizon row goes to
+    -999.99 for the same reason it does above ground: every transmitted
+    factor vanishes with ``cos theta``.  The soil's absorption is in the
+    pattern itself — a deep element's contribution decays with its depth —
+    and NOT in the power budget, which follows NEC's books and reports the
+    input power minus the structure's own loss.
     """
     thetas = request.theta0_deg + request.d_theta_deg * np.arange(request.n_theta)
     phis = request.phi0_deg + request.d_phi_deg * np.arange(request.n_phi)

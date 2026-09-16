@@ -18,10 +18,15 @@ a DIFFERENT missing thing:
 * a buried wire on a deck that ALSO stands a wire end in the plane — the
   combination momwire#553 U5 measured itself out of, with both phase-0
   anchors quoted as the gates phase 2 has to meet;
-* the OUTPUTS a buried deck cannot answer: its near field (phase 3) and its
-  far field (the transmitted far-zone follow-up). Impedance, currents and
-  charges serve — that is the serve matrix, and these two refusals are its
+* the one OUTPUT a buried deck cannot answer: its NEAR field (momwire#524
+  phase 3). Impedance, currents, charges and the radiation PATTERN serve —
+  that is the serve matrix, and this last refusal is all that is left of its
   other half.
+
+The pattern moved sides with momwire#570, which gave the shared far-zone
+readout the transmitted Fresnel factors a below-interface element radiates
+through. Both halves of that move are gated below: the refusal is gone, and
+the table it was standing in front of is there.
 
 Free space stays exempt on all of them: z < 0 is legal geometry with no
 interface under it.
@@ -209,7 +214,8 @@ def test_ground_contact_alone_still_serves():
 
 
 # ----------------------------------------------------------------------
-# the serve matrix: impedance / currents / charges, and nothing else
+# the serve matrix: impedance / currents / charges / pattern, and the one
+# output still outside it
 # ----------------------------------------------------------------------
 
 
@@ -225,10 +231,23 @@ def test_a_buried_decks_near_field_refuses_naming_phase_three():
     assert r is not None
     assert "buried deck's near field is not served" in r
     assert "phase 3" in r
-    assert "IMPEDANCE, its CURRENTS and its CHARGES are all served" in r
+    # The sentence lists what DOES serve, so the reader gets a fork in the
+    # road rather than a dead end — and since momwire#570 the pattern is on
+    # that list.
+    assert (
+        "IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
+        "are all served" in r
+    )
 
 
-def test_a_buried_decks_far_field_refuses_naming_the_far_zone_followup():
+def test_a_buried_decks_far_field_serves():
+    """momwire#570: the far-field refusal is retired, not relaxed.
+
+    Checked at the SEAM's own gate rather than through a render, because a
+    sentence that merely stopped being reached would still be a sentence —
+    ``refusal()`` returning ``None`` is the statement that this deck is in
+    scope for this card.
+    """
     text = deck(
         -0.15,
         "1,-1",
@@ -236,11 +255,48 @@ def test_a_buried_decks_far_field_refuses_naming_the_far_zone_followup():
         requests="PQ 0\nRP 0,19,1,1000,0.,0.,5.,0.\n",
         mono_bottom="1.",
     )
-    r = why(text)
-    assert r is not None
-    assert "radiation pattern is not served" in r
-    assert "FAR-ZONE asymptotics" in r
-    assert "IMPEDANCE, its CURRENTS and its CHARGES are all served" in r
+    assert why(text) is None
+
+
+@pytest.mark.integration
+def test_a_buried_decks_far_field_prints_a_pattern_table(record_property):
+    """And the other half: the table the refusal used to stand in front of.
+
+    The deck is the elevated feed over a buried counterpoise, so most of what
+    the pattern shows is the MONOPOLE — the buried radial is a counterpoise,
+    not the radiator, and its own contribution is a correction rather than
+    the peak. What this gate is for is therefore the table's SHAPE, which is
+    where a bad transmitted factor shows: every row but the horizon carries a
+    real gain, because a sign or root error in ``k_mz`` collapses them all
+    rather than only the grazing one, and an overflowing depth leg would
+    take the peak off any sane scale.
+    """
+    text = deck(
+        -0.15,
+        "1,-1",
+        GN0,
+        requests="PQ 0\nRP 0,19,1,1000,0.,0.,5.,0.\n",
+        mono_bottom="1.",
+    )
+    out = render(text)
+    assert "NEC ERROR" not in out
+    assert "RADIATION PATTERNS" in out
+
+    body = out.split("RADIATION PATTERNS")[1]
+    totals = {}
+    for line in body.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0].replace("-", "").replace(".", "").isdigit():
+            totals[float(parts[0])] = float(parts[4])
+    assert totals, "the table printed a header and no rows"
+    served = [db for th, db in totals.items() if th < 90.0 and db > -900.0]
+    assert len(served) >= 15, (
+        f"only {len(served)} of {len(totals)} rows carry a gain — the "
+        "transmitted factors vanish at the horizon, and only there"
+    )
+    peak = max(served)
+    record_property("eznec_buried_peak_total_db", f"{peak:.2f}")
+    assert -40.0 < peak < 0.0
 
 
 def test_an_above_ground_deck_still_gets_its_near_and_far_fields():
