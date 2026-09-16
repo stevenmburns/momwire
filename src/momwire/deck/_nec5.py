@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 
 from ._cards import _FUSED_FIELD_START, Card, DeckError, parse_card
+from .model import LoadSpec
 
 __all__ = [
     "parse_nec5",
@@ -202,20 +203,51 @@ class Nec5Source:
 
 @dataclass(frozen=True)
 class Nec5Load:
-    """One ``LD 4``: a fixed impedance at a node address.
+    """One ``LD 0``, ``LD 1`` or ``LD 4``: a load at a node address.
 
-    ``LD 4`` is 75 of 75 LUMPED loads in the corpus — EZNEC reduces whatever
-    the user entered to an impedance at the frequency before writing the
-    deck, so no ``LD 0/1/2`` RLC has ever been emitted, and no capture has
-    lossy wire at all (momwire#1082).  The card is ``LD 4,tag,node,0,R,X``;
-    :attr:`node_to` is that fourth field, observed 0 in every capture (loads
-    are single-point, never ranges).  The ``1.E+10`` idiom — pinning a
-    virtual wire's node open — is an ordinary load mechanically.
+    ``LD 4`` (fixed impedance) is 75 of 75 LUMPED loads in the 80-capture
+    corpus — EZNEC reduces whatever the user entered to an impedance at the
+    frequency before writing the deck, so no capture has ever carried
+    ``LD 0`` or ``LD 1`` (series / parallel RLC).  antennaknobs' own NEC-5
+    writer does (momwire#1085): its lumped-load repertoire is R+jX (LD 4)
+    *and* an unevaluated series/parallel RLC (LD 0/1), the SAME two shapes
+    the nec2 dialect's own ``_load_spec`` reads.  :attr:`spec` is that
+    reused :class:`~momwire.deck.model.LoadSpec` — ``"fixed"`` for LD 4,
+    ``"series"``/``"parallel"`` for LD 0/1 — kept SYMBOLIC here because a
+    deck may write ``LD`` before ``FR`` (card order is not evaluation
+    order); a solve stamps :meth:`~momwire.deck.model.LoadSpec.impedance`
+    at the deck's own frequency, in :func:`~momwire.eznec._serve.serve`,
+    the same seam the nec2 dialect's ``_lumped_loads`` does it in.
+
+    :attr:`end_code` is the card's LDTAGT field (the manual's name, LD
+    section): ``0`` is EZNEC's own spelling, where the node rides entirely
+    in the SIGNED ``LDTAGF`` field (:meth:`_Nec5Parser._address`); ``1`` or
+    ``2`` is antennaknobs' own spelling — an EXPLICIT end code, the same
+    (segment, end) pair its ``_source_address`` uses to place an ``EX``
+    card (momwire#1085 probe, verified against our licensed materials:
+    ``LD 4,tag,5,1,R,X`` on a 9-segment wire solves bit-identical to
+    ``LD 4,tag,4,0,R,X``, and ``LD 4,tag,1,1,R,X`` to EZNEC's own
+    ``LD 4,tag,-1,0,R,X`` — end 1 of segment *s* is node *s-1*, end 2 is
+    node *s*, both routed through :meth:`_Nec5Parser._load_address`).  This
+    is NOT a range: the manual states a discrete load "cannot be defined
+    over a range of elements except with multiple LD commands", and the
+    same probe confirms it — an out-of-{0,1,2} LDTAGT still prints and
+    solves as ONE load, not several.
+
+    :attr:`printed_location` is what the ``STRUCTURE IMPEDANCE LOADING``
+    table's FROM/THRU columns print — ``abs(LDTAGF)``, the RAW field, not
+    the decoded node (0025 settles the ``LDTAGT == 0`` case: ``LD 4,1,-1``
+    prints ``1  1``, matching ``abs(-1)``; the momwire#1085 probe settles
+    the explicit-end case as the SAME rule, not the decoded node — segment
+    5 end 1 decodes to node 4 but still prints ``5  5``).  The ``1.E+10``
+    idiom — pinning a virtual wire's node open — is an ordinary load
+    mechanically.
     """
 
     at: Nec5Node
-    impedance: complex
-    node_to: int = 0
+    spec: LoadSpec
+    end_code: int = 0
+    printed_location: int = 0
 
 
 @dataclass(frozen=True)
@@ -373,6 +405,14 @@ class Nec5Deck:
     # conductivity is not a lumped element and the loading table prints it
     # with a different row shape (no node, a segment range instead).
     conductivities: tuple[Nec5Conductivity, ...] = ()
+    # `LD 0/1/4` and `LD 5` cards, interleaved in DECK order — what the
+    # loading table's row order actually follows (momwire#1085 probe,
+    # verified against our licensed materials): a deck's rows print in the
+    # order its LD cards were written, not grouped by type.  `loads` and
+    # `conductivities` above are read for the SOLVE (a by-address lookup,
+    # the resolved per-wire conductivity map); this tuple is read for the
+    # PRINTOUT alone.
+    load_cards: tuple[Nec5Load | Nec5Conductivity, ...] = ()
     # The RESOLVED per-wire conductivity a solver takes: `conductivities`
     # expanded to `{tag: sigma}` (the whole-structure form fanned out to
     # every wire declared by the time the `LD 5` card was read).  Derived
@@ -604,6 +644,15 @@ class _Nec5Parser:
         self.sources: list[Nec5Source] = []
         self.loads: list[Nec5Load] = []
         self.conductivities: list[Nec5Conductivity] = []
+        # LD 0/1/4 and LD 5 cards, interleaved in DECK order regardless of
+        # type -- what the printout's loading table walks (momwire#1085
+        # probe, verified against our licensed materials: a deck mixing
+        # `LD 4`, `LD 0`, `LD 5`, `LD 1` in that order prints its four rows
+        # in that same order, not grouped by type).  `loads` and
+        # `conductivities` above stay separate too -- `wire_conductivity`'s
+        # resolution and the by-address load lookup each want one type
+        # only -- so this is a THIRD list, not a replacement.
+        self._load_cards: list[Nec5Load | Nec5Conductivity] = []
         self.lines: list[Nec5TransmissionLine] = []
         self.networks: list[Nec5Network] = []
         self.frequency_mhz: float | None = None
@@ -659,6 +708,73 @@ class _Nec5Parser:
                 f"{wire.segment_count}; there is no node past the end of a wire"
             )
         return Nec5Node(tag=tag, node=node)
+
+    def _load_address(self, card: Card, k: int) -> tuple[Nec5Node, int]:
+        """Fields ``k``/``k+1``/``k+2`` of an ``LD`` card (LDTAG, LDTAGF,
+        LDTAGT) as a :class:`Nec5Node` plus the value the loading table
+        prints for it.
+
+        Two spellings of the same three fields, distinguished by LDTAGT
+        (the manual's name):
+
+        ``LDTAGT == 0`` — EZNEC's own spelling.  The node rides entirely in
+        the SIGNED LDTAGF field, so this is exactly :meth:`_address` on the
+        same two fields, unchanged: every captured ``LD 4`` keeps its
+        decoded node and its refusal wording.
+
+        ``LDTAGT in (1, 2)`` — antennaknobs' own spelling (momwire#1085).
+        The manual's LD section: "LDTAGT sets the wire segment end...where
+        the load will be located" — the SAME (segment, end) pair
+        antennaknobs' ``_source_address`` writes for an ``EX`` card, not a
+        range (the manual: a discrete load "cannot be defined over a range
+        of elements except with multiple LD commands").  Verified against
+        our licensed materials (momwire#1085 probe): on a 9-segment wire,
+        ``LD 4,tag,5,1,R,X`` (segment 5, end 1) solves bit-identical to
+        ``LD 4,tag,4,0,R,X`` (node 4), and ``LD 4,tag,1,1,R,X`` (segment 1,
+        end 1) to EZNEC's own ``LD 4,tag,-1,0,R,X`` (node 0) — so end 1 of
+        segment *s* is node *s-1* and end 2 is node *s*.
+
+        The second return value is what the loading table's FROM/THRU
+        columns print: ``abs(LDTAGF)``, not the decoded node — the same
+        probe's rows print ``5  5`` for segment 5 end 1, whose node is 4.
+        """
+        ldtagt = card.i(k + 2)
+        if ldtagt == 0:
+            return self._address(card, k), abs(card.i(k + 1))
+        if ldtagt not in (1, 2):
+            raise DeckError(
+                f"{card.mnemonic} carries {ldtagt} in its LDTAGT field; this "
+                f"dialect serves 0 (EZNEC's own sign-of-LDTAGF spelling) and "
+                f"1 or 2 (antennaknobs' explicit end code, Users Manual: "
+                f'"LDTAGT sets the wire segment end...where the load will '
+                f'be located") -- no other value is observed or documented, '
+                f"and a discrete load is never a range (the same manual: "
+                f'"cannot be defined over a range of elements except with '
+                f'multiple LD commands")'
+            )
+        tag = card.i(k)
+        segment = card.i(k + 1)
+        if segment <= 0:
+            raise DeckError(
+                f"{card.mnemonic} names segment {segment} with an explicit "
+                f"end code ({ldtagt}); the Users Manual's LDTAGF is a "
+                f"positive element number once LDTAGT selects the end "
+                f"explicitly, and antennaknobs' own writer never emits "
+                f"anything else"
+            )
+        wire = self._by_tag.get(tag)
+        if wire is None:
+            raise DeckError(
+                f"{card.mnemonic} names tag {tag}, which no GW card in this "
+                f"deck declares"
+            )
+        if segment > wire.segment_count:
+            raise DeckError(
+                f"{card.mnemonic} addresses segment {segment} of tag {tag}, "
+                f"which has {wire.segment_count} segments"
+            )
+        node = segment if ldtagt == 2 else segment - 1
+        return Nec5Node(tag=tag, node=node), segment
 
     # -- geometry ----------------------------------------------------------
 
@@ -862,40 +978,54 @@ class _Nec5Parser:
         if kind == 5:
             self._ld5(card)
             return
-        if kind != 4:
+        if kind not in (0, 1, 4):
             raise DeckError(
                 f"LD type {kind} is not part of this engine's nec5 dialect, whose "
-                f"loading is LD 4 (fixed impedance) or LD 5 (wire conductivity) — "
-                f"75 of 75 LUMPED loads across the captured corpus are LD 4, because "
-                f"EZNEC reduces a load to an impedance at the frequency before it "
-                f"writes the deck, and momwire#1082's field report is the only "
-                f"observed LD 5"
+                f"loading is LD 0 / LD 1 (series / parallel RLC, evaluated to an "
+                f"impedance at the deck's own frequency — momwire#1085), LD 4 "
+                f"(fixed impedance) or LD 5 (wire conductivity) — LD 2 / LD 3 "
+                f"(distributed RLC per unit length) are momwire#1088, not this "
+                f"issue, and still refuse"
             )
-        if len(card.values) < 6:
+        minimum = 7 if kind in (0, 1) else 6
+        if len(card.values) < minimum:
+            noun = (
+                "resistance, inductance and capacitance"
+                if kind in (0, 1)
+                else "resistance and reactance"
+            )
             raise DeckError(
-                f"LD 4 carries {len(card.values)} fields and needs at least 6 (tag, "
-                f"node, the fourth field, resistance and reactance); EZNEC writes "
-                f"every field of every card it emits, so this dialect does no "
-                f"blank-field defaulting"
+                f"LD {kind} carries {len(card.values)} fields and needs at least "
+                f"{minimum} (tag, LDTAGF, LDTAGT, {noun}); EZNEC and antennaknobs "
+                f"alike write every field of every LD card, so this dialect does "
+                f"no blank-field defaulting"
             )
-        node_to = card.i(3)
-        if node_to != 0:
-            # Observed 0 on every one of the 75 captured LD 4 cards, which is
-            # what makes this dialect's loads single-point rather than
-            # ranges.  A nonzero field has never been seen, so its meaning
-            # here is unobserved.
-            raise DeckError(
-                f"LD 4 carries {node_to} in its fourth field, which is 0 on every "
-                f"captured card; this dialect's loads are single-point and the "
-                f"field's meaning at any other value is unobserved"
+        at, printed_location = self._load_address(card, 1)
+        end_code = card.i(3)
+        if kind == 4:
+            spec = LoadSpec("fixed", r=card.f(4), x=card.f(5))
+            is_noop = spec.r == 0.0 and spec.x == 0.0
+        else:
+            spec = LoadSpec(
+                "series" if kind == 0 else "parallel",
+                r=card.f(4),
+                l=card.f(5),
+                c=card.f(6),
             )
-        self.loads.append(
-            Nec5Load(
-                at=self._address(card, 1),
-                impedance=_complex(card, 4),
-                node_to=node_to,
-            )
+            is_noop = spec.r == 0.0 and spec.l == 0.0 and spec.c == 0.0
+        if is_noop:
+            # A zero-valued load is a no-op: it is stamped in SERIES with the
+            # wire, which is already a perfect conductor there, so Z=0 changes
+            # nothing.  The nec2 dialect's own `_load_spec` drops the same
+            # shape for the same reason; unobserved on this dialect (every
+            # captured LD 4 and antennaknobs' own writer carry a nonzero R,
+            # X, L or C), so this is armor, not a hot path.
+            return
+        load = Nec5Load(
+            at=at, spec=spec, end_code=end_code, printed_location=printed_location
         )
+        self.loads.append(load)
+        self._load_cards.append(load)
 
     def _ld5(self, card: Card) -> None:
         """``LD 5,tag,from,thru,sigma[,mu]`` — wire conductivity.
@@ -996,11 +1126,11 @@ class _Nec5Parser:
                     f"range 1 to {wire.segment_count} or the ``0,0`` wildcard "
                     f"for it"
                 )
-        self.conductivities.append(
-            Nec5Conductivity(
-                tag=tag, segment_from=first, segment_thru=last, sigma=sigma
-            )
+        conductivity = Nec5Conductivity(
+            tag=tag, segment_from=first, segment_thru=last, sigma=sigma
         )
+        self.conductivities.append(conductivity)
+        self._load_cards.append(conductivity)
 
     def _tl(self, card: Card) -> None:
         end_a = self._address(card, 0)
@@ -1244,6 +1374,7 @@ class _Nec5Parser:
             sources=tuple(self.sources),
             loads=tuple(self.loads),
             conductivities=tuple(self.conductivities),
+            load_cards=tuple(self._load_cards),
             wire_conductivity=self._resolved_conductivity(),
             transmission_lines=tuple(self.lines),
             networks=tuple(self.networks),
