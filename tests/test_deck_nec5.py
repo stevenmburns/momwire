@@ -416,10 +416,10 @@ def test_gn_nofile_trailer_parses_and_solves_identically_to_a_bare_gn():
 
 
 REFUSALS = [
-    pytest.param(("LD 0,1,1,1,50.,0.",), "LD", id="ld-0"),
-    pytest.param(("LD 1,1,1,1,50.,0.",), "LD", id="ld-1"),
+    pytest.param(("LD 2,1,1,1,50.,0.,0.",), "LD", id="ld-2"),
+    pytest.param(("LD 3,1,1,1,50.,0.,0.",), "LD", id="ld-3"),
     pytest.param(("LD 5,1,1,1,5.8E7,0.",), "LD", id="ld-5"),
-    pytest.param(("LD 4,1,1,2,50.,0.",), "LD", id="ld-4-nonzero-fourth-field"),
+    pytest.param(("LD 4,1,1,3,50.,0.",), "LD", id="ld-4-invalid-end-code"),
     pytest.param(("EX 1,1,6,0,1.,0.",), "EX", id="ex-1"),
     pytest.param(("EX 5,1,6,0,1.,0.",), "EX", id="ex-5"),
     pytest.param(("RP 1,1,361,1000,90.,0.,0.,1.,0.",), "RP", id="rp-mode-1"),
@@ -555,9 +555,11 @@ def test_a_phased_array_is_several_ex_cards():
 
 
 def test_the_pin_idiom_is_an_ordinary_load():
-    pins = [ld for ld in deck("0012").loads if ld.impedance == complex(1e10, 0.0)]
+    pins = [
+        ld for ld in deck("0012").loads if ld.spec.impedance(0.0) == complex(1e10, 0.0)
+    ]
     assert len(pins) == 2
-    assert all(ld.node_to == 0 for ld in pins)
+    assert all(ld.end_code == 0 for ld in pins)
 
 
 def test_a_crossed_line_keeps_the_sign_of_z0():

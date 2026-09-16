@@ -155,10 +155,15 @@ def test_undeclared_tag_refuses():
         parse_nec5(_with_card(f"LD 5,9,1,11,{SIGMA:g},1."))
 
 
-def test_ld_4_still_refuses_a_nonzero_fourth_field():
-    """The LD 4 branch's own refusal survives the LD 5 split unchanged."""
-    with pytest.raises(DeckError, match="single-point"):
-        parse_nec5(_with_card("LD 4,1,1,2,50.,0."))
+def test_ld_4_still_refuses_an_invalid_end_code():
+    """The LD 4 branch's own refusal survives the LD 5 split, reshaped by
+    momwire#1085: the fourth field is an explicit end code (0, 1 or 2, the
+    manual's LDTAGT), not a range, so a value outside that set still
+    refuses -- just with a different reason than before #1085 (there is no
+    longer a "single-point" rule to violate, since 1 and 2 are now read as
+    antennaknobs' own end-code spelling)."""
+    with pytest.raises(DeckError, match="LDTAGT"):
+        parse_nec5(_with_card("LD 4,1,1,3,50.,0."))
 
 
 # --------------------------------------------------------------------------
