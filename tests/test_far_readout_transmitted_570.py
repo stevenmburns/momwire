@@ -415,10 +415,15 @@ _G3_PIN = {
 
 
 @pytest.mark.parametrize("name", sorted(_G3_GROUNDS))
-def test_g3_an_above_ground_pattern_is_bit_identical_to_the_pin(name):
-    """Not "close": EQUAL. The served-vs-stock exactness gates compare
-    printed digits, so a change that moved an above-ground pattern in the
-    16th place would redden them somewhere far from here."""
+def test_g3_an_above_ground_pattern_matches_the_pin_to_the_last_shared_digit(name):
+    """The pin is what the pre-change function returned on the machine that
+    wrote it, and it is held to the last digit two machines can share:
+    1e-14 of the array's scale, not bit equality. Cross-machine bit equality
+    is never pinned here — a different BLAS or CPU moves the 16th place on
+    the same inputs, and this test went red on macOS the day it landed for
+    exactly that. The BIT-identity claim of this gate lives in the next test:
+    with nothing below the plane the transmitted helper is never entered, so
+    the above-ground path is, by construction, the untouched code."""
     m_theta, m_phi = _far_moments(
         _G3_MID,
         _G3_MOMENT,
@@ -429,8 +434,13 @@ def test_g3_an_above_ground_pattern_is_bit_identical_to_the_pin(name):
         0.0,
         7.0e6,
     )
-    assert np.array_equal(m_theta, np.array(_G3_PIN[(name, "theta")]))
-    assert np.array_equal(m_phi, np.array(_G3_PIN[(name, "phi")]))
+    for got, pin in (
+        (m_theta, _G3_PIN[(name, "theta")]),
+        (m_phi, _G3_PIN[(name, "phi")]),
+    ):
+        pin = np.array(pin)
+        scale = max(float(np.max(np.abs(pin))), 1.0)
+        assert np.max(np.abs(got - pin)) <= 1e-14 * scale
 
 
 @pytest.mark.parametrize("name", sorted(_G3_GROUNDS))
