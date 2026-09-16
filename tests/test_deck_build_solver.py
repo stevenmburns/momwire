@@ -496,6 +496,48 @@ def test_a_gn0_deck_that_touches_the_plane_refuses_at_build():
     assert build_solver(parse(somm)) is not None
 
 
+LD5_DIPOLE = DIPOLE.replace(
+    "EX 0 1 5 0 1. 0.\n", "EX 0 1 5 0 1. 0.\nLD 5 0 0 0 5.8e7\n"
+)
+
+
+def test_an_ld5_deck_on_a_basis_without_wire_loading_refuses_by_name():
+    """momwire#1087, the nec2 seam's half of #1086: `build_solver` used to
+    forward `wire_conductivity` to whatever solver `--basis` named with no
+    capability check, so a basis without the kwarg died with a bare
+    `TypeError` instead of a refusal.  `HarringtonSolver` (`pulse`) is the
+    one `NEC2_BASES` entry that declares `wire_loading=False`.
+    """
+    with pytest.raises(ValueError) as excinfo:
+        build_solver(parse(LD5_DIPOLE), basis="pulse")
+    message = str(excinfo.value)
+    assert "LD 5" in message
+    assert "basis 'pulse'" in message
+    from momwire.harrington import HarringtonSolver
+
+    assert message.endswith(HarringtonSolver.capabilities.refusal("wire_loading"))
+
+
+def test_wire_loading_refusal_fires_exactly_for_the_roster_cells_that_lack_it():
+    """Looped over the WHOLE `NEC2_BASES` roster rather than naming `pulse`
+    alone, so a future family added with `wire_loading=False` is refused by
+    this same check on the day it is added, and every family that DOES
+    serve wire loading keeps building an `LD 5` deck without regressing to
+    a raise (momwire#1087)."""
+    model = parse(LD5_DIPOLE)
+    for name, (solver_class, _kwargs) in NEC2_BASES.items():
+        if solver_class.capabilities.wire_loading:
+            built = build_solver(model, basis=name)
+            assert isinstance(built.solver, solver_class)
+        else:
+            with pytest.raises(ValueError) as excinfo:
+                build_solver(model, basis=name)
+            message = str(excinfo.value)
+            assert "LD 5" in message
+            assert f"basis {name!r}" in message
+            assert message.endswith(solver_class.capabilities.refusal("wire_loading"))
+
+
 def test_bare_wire_passes_no_loading_kwargs():
     assert _wire_loading((None, None)) == {}
 

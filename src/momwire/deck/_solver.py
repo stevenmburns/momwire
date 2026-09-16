@@ -864,6 +864,26 @@ def build_solver(
     if extended_kernel:
         kwargs["extended_kernel"] = True
 
+    loading_kwargs = _wire_loading(built_mesh.materials)
+    if loading_kwargs and not solver_class.capabilities.wire_loading:
+        # Asked of the CAPABILITY rather than left to the constructor
+        # (momwire#1087, the nec2 seam's half of #1086): a family with no
+        # `wire_conductivity` parameter at all dies with a bare `TypeError`
+        # from the constructor, and one that happens to catch it its own way
+        # names itself rather than this deck's card. `refusal("wire_loading")`
+        # is asked of the ROW for the same reason `centre_feeds` is above.
+        cards = []
+        if "wire_conductivity" in loading_kwargs:
+            cards.append("LD 5")
+        if "insulation_radius" in loading_kwargs:
+            cards.append("IS")
+        names = " and ".join(cards)
+        raise ValueError(
+            f"{names} set{'s' if len(cards) == 1 else ''} wire loading on this "
+            f"deck and basis {basis!r} does not serve it: "
+            f"{solver_class.capabilities.refusal('wire_loading')}"
+        )
+
     solver = solver_class(
         wires=list(built_mesh.polylines),
         n_per_edge_per_wire=[list(counts) for counts in built_mesh.edge_elements],
@@ -872,7 +892,7 @@ def build_solver(
         wire_radius=wire_radius,
         cancel=cancel,
         **kwargs,
-        **_wire_loading(built_mesh.materials),
+        **loading_kwargs,
         **_ground(environment),
         **basis_kwargs,
     )
