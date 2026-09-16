@@ -192,8 +192,8 @@ sign's oracle, the junction and grounded-end readings, and why the
 resulting L is symmetric while the field matrix is not.
 
 DISTRIBUTED loading (`wire_conductivity`, `insulation_radius`,
-`insulation_eps_r`) is the siblings' API verbatim, over the same
-`_wire_loading` physics. LUMPED loads (`lumped_loads`, a sequence of
+`insulation_eps_r`, `distributed_rlc`) is the siblings' API verbatim, over
+the same `_wire_loading` physics. LUMPED loads (`lumped_loads`, a sequence of
 ``(wire_index, arclength, impedance)``) are razor's own kwarg: the other
 rows serve a lumped load as port algebra over a zero-volt gap a consumer
 stamps afterwards, which this formulation does not take, but a delta in
@@ -1389,6 +1389,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
+        distributed_rlc=None,
         lumped_loads=None,
         ground_z=None,
         ground_eps=None,
@@ -1712,7 +1713,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # resolved lumped sites). What stays razor's is the term —
         # `_loading_stencil` and `_apply_loading`.
         _wire_loading.configure_loading(
-            self, n_w, wire_conductivity, insulation_radius, insulation_eps_r
+            self,
+            n_w,
+            wire_conductivity,
+            insulation_radius,
+            insulation_eps_r,
+            distributed_rlc,
         )
         self.lumped_loads = _wire_loading.normalize_lumped_loads(lumped_loads, n_w)
 

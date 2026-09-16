@@ -860,6 +860,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         quasi-static series inductance μ₀/2π·(1−1/εr)·ln(b/a) per meter —
         the insulated-wire velocity-factor effect (the wire tunes a few
         percent long). Purely reactive; no dissipation modeled.
+    distributed_rlc : NEC's `LD 2` / `LD 3` per-metre RLC (momwire#1088).
+        None (default) = off; one `_wire_loading.DistributedRLC` applies to
+        every wire, or a per-wire sequence whose None entries switch
+        individual wires off. Adds Z'(ω) [Ω/m] — series R'+jωL'+1/jωC' or
+        the parallel combination — to the SAME per-wire sum the two above
+        feed, so a wire may carry all three at once.
     swept_mem_mb : memory budget (MB, default 256) for dense moment tensors
         and for the batched swept path's per-chunk transients — the
         all-pairs J moment tensor plus
@@ -990,6 +996,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
+        distributed_rlc=None,
         nsegs=101,
         ground_z=None,
         ground_eps=None,
@@ -1182,7 +1189,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # enters Z as Σ_w Z'_w(ω)·S_w over same-wire basis overlaps — see
         # `_loading_gram` / `_apply_loading`.
         _wire_loading.configure_loading(
-            self, n_w, wire_conductivity, insulation_radius, insulation_eps_r
+            self,
+            n_w,
+            wire_conductivity,
+            insulation_radius,
+            insulation_eps_r,
+            distributed_rlc,
         )
         # Per-instance cache for the k-independent loading Gram structure
         # (rows, cols, vals, wire_of_nnz) — see `_loading_gram`.

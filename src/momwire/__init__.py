@@ -26,6 +26,7 @@ from .sinusoidal_galerkin import SinusoidalGalerkinSolver
 # distributed wire loading, exported for consumers that mirror the loading
 # into other tools (e.g. antennaknobs' NEC LD-5/LD-2 card emission).
 from ._wire_loading import (
+    DistributedRLC,
     equivalent_radius,
     insulation_inductance,
     wire_internal_impedance,
@@ -93,6 +94,7 @@ __all__ = [
     "accelerated",
     "accelerator_variant",
     "wire_internal_impedance",
+    "DistributedRLC",
     "insulation_inductance",
     "wire_to_element",
     "below_reach_refusal",
