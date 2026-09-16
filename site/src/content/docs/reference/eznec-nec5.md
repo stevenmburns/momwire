@@ -231,9 +231,14 @@ every table heading are untouched.
 - **Excitation**: `EX 0` voltage sources and `EX 4` current sources,
   including phased multi-source drives; sources address nodes the way NEC-5
   does.
-- **Loads and networks**: `LD 4` impedance loads, insulation (`IS`),
-  transmission lines and non-radiating networks (`TL` / `NT`), including
-  the mixed table layouts.
+- **Loads and networks**: `LD 4` impedance loads, `LD 5` wire conductivity,
+  `LD 2` / `LD 3` per-unit-length RLC (*added 2026-09-16, momwire#1088* —
+  the shape antennaknobs' own NEC-5 writer emits for a jacketed wire, an
+  `LD 2` inductance per metre beside an `LD 5`; the cards' capacitance
+  field refuses, see the [nec2 grammar
+  page](/reference/deck-grammar-nec2/#ld--loading) for the measurement),
+  insulation (`IS`), transmission lines and non-radiating networks
+  (`TL` / `NT`), including the mixed table layouts.
 - **Requests**: impedance runs (`PQ` / `XQ`), far-field patterns (`RP`),
   and near fields (`NE` / `NH`) over **all four ground cards** — free space,
   perfect ground, the Sommerfeld finite ground, and the MININEC-type `GD`
@@ -294,7 +299,8 @@ capability statements rather than deck errors:
   step off the contact serves.
 - **Cards outside the emitted dialect** — surface patches, geometry
   generators (arcs, helices, catenaries), incident-wave excitation, load
-  types other than `LD 4`, magnetic grounds — refuse naming the card.
+  types other than `LD 2` / `LD 3` / `LD 4` / `LD 5`, magnetic grounds —
+  refuse naming the card.
   EZNEC never writes these; a hand-written deck that does gets a sentence,
   not a guess.
 

@@ -861,8 +861,8 @@ the whole structure. The same rule serves [`IS`](#is--insulated-sheath).
 | `-1` | nullify every load read so far | — | runs |
 | `0` | series RLC | `R` Ω, `L` H, `C` F | runs |
 | `1` | parallel RLC | `R` Ω, `L` H, `C` F | runs |
-| `2` | series RLC per metre | — | refused |
-| `3` | parallel RLC per metre | — | refused |
+| `2` | series RLC per metre | `R'` Ω/m, `L'` H/m, `C'` refused | runs |
+| `3` | parallel RLC per metre | `R'` Ω/m, `L'` H/m, `C'` refused | runs |
 | `4` | fixed impedance `R + jX` | `R` Ω, `X` Ω | runs |
 | `5` | wire conductivity | `σ` mhos/metre | runs |
 | `6` | 4nec2 LC trap | — | refused |
@@ -884,22 +884,42 @@ sets it per wire, and the range must cover each touched wire **in full** —
 per-wire specs cover whole wires, and a partial range would otherwise silently
 model a lossless wire where the deck asked for a lossy one.
 
-**Types 2 and 3** are per-metre distributed loading, and **6 and 7** are 4nec2
-extensions NEC-2 itself rejects. All four are refused rather than echoed and
-dropped.
+**Types 2 and 3** are distributed loading per unit length, and they are
+material properties too — Z'(ω) [Ω/m] joins type 5's conductivity and `IS`'s
+jacket in one per-wire series impedance, so a wire may carry all three at
+once and the terms add. They take type 5's range rule: whole structure
+(`I2 = 0`, `I3 = 0`) or whole wire, never a partial range. Type 2 reads
+`Z' = R' + jωL' + 1/jωC'`, type 3 the parallel combination
+`Y' = 1/R' + jωC' + 1/jωL'`, with a zero element dropping out of its branch
+the way NEC reads an absent element as absent.
+
+**The capacitance field of types 2 and 3 is refused** (*added 2026-09-16,
+momwire#1088*). Measured on nec2c and on NEC-5, NEC multiplies that field
+**by** the segment length rather than dividing: `LD 2` with `C'` alone
+reproduces `LD 0` with a lumped `C' × d`, exactly, so the card's contribution
+to the wire's per-metre impedance is `1/(jωC'd²)` and grows without bound as
+the mesh refines. That is a property of the deck's segmentation, not of the
+wire, and momwire's wire loading is read by four different testing schemes —
+so the field refuses by name instead of being laundered through one of them.
+`R'` and `L'` are genuinely per unit length on both engines and are served.
+
+**Types 6 and 7** are 4nec2 extensions NEC-2 itself rejects, and are refused
+rather than echoed and dropped.
 
 ```text
 LD type <t> is not supported by this engine
 LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads
 LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only
+LD 2 per-unit-length loading on a partial-wire segment range is not supported by this engine — a distributed RLC is a wire property and covers whole wires only
+LD 2 asks for a capacitance of <c> in its per-unit-length RLC, which this engine does not serve: …
 LD on a segment that already carries a load is not supported by this engine — a second load on one segment is not merged
 ```
 
 While a [`GX`/`GR` symmetric cell](#the-symmetric-cell) is live, an `LD` is
 read against the **cell** rather than against the segments it names: see
-[the cell rule](#the-cell-rule), which governs the whole card, types 0, 1, 4
-and 5 alike, and which the 8-segment limit and the doubled-load refusal above
-both interact with.
+[the cell rule](#the-cell-rule), which governs the whole card, types 0, 1, 2,
+3, 4 and 5 alike, and which the 8-segment limit and the doubled-load refusal
+above both interact with.
 
 ## IS — insulated sheath
 
