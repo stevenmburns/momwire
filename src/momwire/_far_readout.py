@@ -1,6 +1,7 @@
 """The far-zone readout — one owner.
 
 Current moments to E(THETA)/E(PHI), the PEC/Fresnel ground image, the
+transmitted far-zone factors of a source BELOW the interface, the
 linear/circular cliff split, the mixed-potential near field, the
 axial-ratio/tilt/sense polarisation ellipse and the gain-dB floor: two seams
 need this arithmetic — the NEC-2 portal's ``RP``/``NE``/``NH`` tables and the
@@ -14,8 +15,12 @@ payoff: the physics moves to a home neither seam is privileged over, and
 re-exports the same names, so ``from momwire.portal._portal import
 _far_moments``-style call sites are unaffected.
 
-Every derivation comment below is unmoved from its old home in
-``portal/_portal.py`` — only the module boundary is new.
+Every derivation comment below was unmoved from its old home in
+``portal/_portal.py`` when the boundary was drawn; the transmitted family
+(:func:`transmitted_factors`, :func:`transmitted_moments`) is the first
+physics written HERE rather than moved here, and it is the reason the
+boundary was worth drawing — a buried deck's pattern lands on both seams at
+once because there is only one readout to land it in (momwire#570).
 """
 
 from __future__ import annotations
@@ -24,6 +29,8 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+
+from ._sommerfeld_below import k_medium
 
 # Free-space impedance and permittivity. This module is ``EPS0``'s one
 # owner too: the portal's ANTENNA ENVIRONMENT block also needs it (the
@@ -103,6 +110,21 @@ def _image_moments(mid, moment, ground_z):
     return mid_img, moment * np.array([-1.0, -1.0, 1.0])
 
 
+def _eps_complex(eps_r, sigma, freq_hz):
+    """``ε̃ = ε_r - jσ/(ωε₀)``, the lower medium's relative permittivity.
+
+    One spelling, because two readers need the same medium: the image
+    coefficients weight a reflection OFF the interface with it and
+    :func:`transmitted_factors` crosses one with it, and a medium that differs
+    between the two would put a discontinuity at ``d = 0`` where the physics
+    has none. ``momwire._sommerfeld_below.k_medium(eps_t, k_p)`` takes this
+    value and is the fill's own owner of ``k_m``, so the readout does not
+    spell that root either.
+    """
+    omega = 2.0 * math.pi * freq_hz
+    return eps_r - 1j * sigma / (omega * EPS0)
+
+
 def _image_coeffs(eps_r, sigma, freq_hz, rx, ry, rz):
     """``(rho_h, rho_v)`` — the IMAGE-CURRENT multipliers for one medium.
 
@@ -125,11 +147,191 @@ def _image_coeffs(eps_r, sigma, freq_hz, rx, ry, rz):
     infinity and its whole pattern table prints ``nan`` — so nothing here
     tries to rescue a deck that asks for a cliff into vacuum.
     """
-    omega = 2.0 * math.pi * freq_hz
-    eps_c = eps_r - 1j * sigma / (omega * EPS0)
+    eps_c = _eps_complex(eps_r, sigma, freq_hz)
     q = np.sqrt(eps_c - rx * rx - ry * ry)
     with np.errstate(invalid="ignore", divide="ignore"):
         return (rz - q) / (rz + q), (eps_c * rz - q) / (eps_c * rz + q)
+
+
+def _k_mz(theta, k_p, k_m):
+    """The lower medium's VERTICAL wavenumber at the saddle, on the decaying
+    root: ``k_mz = sqrt(k_m² - k_p² sin²θ)`` with ``Im k_mz <= 0``.
+
+    The root choice is the radiation condition read downwards. ``e^{+jωt}``
+    makes a wave travelling towards ``-z`` in the lower medium go as
+    ``e^{+j k_mz z}``, so a lossy medium must have ``Im k_mz <= 0`` for it to
+    DECAY into the ground rather than grow out of it; ``k_medium`` puts
+    ``k_m`` on the same branch for the same reason. Beyond the critical angle
+    ``k_mz`` is essentially imaginary and the transmitted wave is evanescent
+    in depth, which is the whole reason a deep element contributes almost
+    nothing to the pattern.
+    """
+    k_mz = np.sqrt(np.asarray(k_m * k_m - (k_p * np.sin(theta)) ** 2, dtype=complex))
+    return np.where(k_mz.imag > 0.0, -k_mz, k_mz)
+
+
+def transmitted_factors(theta, k_p, k_m):
+    """``(T_e, T_h, T_v)`` — the far-zone factors of a source BELOW the plane.
+
+    The pattern of a buried current is the coefficient of ``e^{-jk_p R}/R``
+    in the TRANSMITTED field, which is the stationary-phase value of the
+    below→above Sommerfeld family (:mod:`momwire._sommerfeld_transmitted`'s
+    ``V_T``, ``U_T`` and their five derivatives) at the saddle
+    ``λ_s = k_p sinθ``. There the six surfaces collapse onto three angular
+    factors on a unit moment ``m``:
+
+        M_θ = T_h·(m_x cosφ + m_y sinφ) + T_v·m_z,   M_φ = T_e·(-m_x sinφ + m_y cosφ)
+
+    Reciprocity is the second derivation and the one this function is written
+    in, because it is the better-conditioned spelling of the same numbers: a
+    plane wave arriving from ``(θ, φ)`` is transmitted into the ground with
+    the Fresnel coefficients, and the moment is that transmitted wave read at
+    the source. With ``k_pz = k_p cosθ`` and ``k_mz`` from :func:`_k_mz`,
+
+        t_s = 2k_pz/(k_pz + k_mz),  t_p = 2 k_pz k_p k_m/(k_m² k_pz + k_p² k_mz)
+        T_e = t_s,  T_h = t_p·cosθ_t,  T_v = -t_p·sinθ_t
+
+    on Snell's ``sinθ_t = (k_p/k_m) sinθ``, ``cosθ_t = k_mz/k_m``.
+
+    **Never form ``γ_p`` from ``λ_s - k_p``.** The saddle spelling writes the
+    upper medium's vertical wavenumber as ``sqrt(λ_s² - k_p²)``, i.e. from
+    ``k_p(sinθ - 1)``, which cancels eight digits at grazing: measured, the
+    two spellings agree to 7.6e-16 below 85° and part company at 4.5e-9 by
+    89.99°, on all three factors and every medium tried. ``k_p cosθ`` has no
+    such cancellation, so the Fresnel spelling is the one that is written
+    down and the saddle one is the derivation.
+
+    Two limits worth keeping in mind, both gated:
+
+    * **ε̃ = 1** gives ``(1, cosθ, -sinθ)`` exactly, which are the direct
+      free-space moment's own projections on ``θ̂`` and ``φ̂`` — so a
+      "buried" element under a medium that is not there radiates as if the
+      interface were not there either.
+    * **θ = 90°** kills every factor, because ``k_pz`` does. The finite-ground
+      image pattern vanishes on the same row, and NEC prints -999.99 for it.
+
+    What is NOT in these factors: the lateral wave and the critical-angle
+    structure. Both are ``O(1/R²)`` at an observer in air and so carry no
+    weight in the ``1/R`` coefficient a pattern IS. The near field of the same
+    deck is a different readout and a different question.
+    """
+    theta = np.asarray(theta, dtype=float)
+    sin_t = np.sin(theta)
+    k_pz = k_p * np.cos(theta) + 0j
+    k_mz = _k_mz(theta, k_p, k_m)
+    t_s = 2.0 * k_pz / (k_pz + k_mz)
+    t_p = 2.0 * k_pz * k_p * k_m / (k_m * k_m * k_pz + k_p * k_p * k_mz)
+    return t_s, t_p * (k_mz / k_m), -t_p * ((k_p / k_m) * sin_t)
+
+
+def transmitted_moments(mid, moment, k_p, k_m, theta, phi, ground_z):
+    """Complex ``(M_theta, M_phi)`` on the ``theta`` x ``phi`` grids, summed
+    over the elements of ``mid``/``moment`` that lie BELOW ``z = ground_z``.
+
+    Each element carries :func:`transmitted_factors` weighted by two phases,
+    and they are referenced to different things on purpose:
+
+    * the LATERAL leg ``exp(+j k_p sinθ (x cosφ + y sinφ))`` is the upper
+      medium's transverse wavenumber — the saddle fixes ``λ_s = k_p sinθ`` on
+      both sides of the interface, which is Snell's law — and it is
+      referenced to the origin, exactly as the direct term's own lateral part
+      is, so an element's ``x``/``y`` enter unshifted;
+    * the DEPTH leg ``exp(-j k_mz d)``, ``d = ground_z - z > 0``, is the
+      in-medium climb to the interface. It decays as well as turns, because
+      ``Im k_mz <= 0``. Spelling it ``exp(+j k_mz d)`` turns the soil into a
+      gain medium and the deeper element into the louder one; the sign is
+      gated adversarially rather than left to reading.
+
+    The interface itself is the vertical reference, so an element sitting in
+    the plane must radiate with the direct term's own phase there: the factor
+    ``exp(+j k_p cosθ·ground_z)`` carries that reference back to the origin.
+    It is 1 for the NEC dialects, both of which put the interface at
+    ``z = 0``, and it is what makes the ε̃ = 1 collapse exact at any plane
+    height rather than up to a constant phase.
+
+    No image term appears here and none is missing. A buried source's field in
+    air IS the transmitted wave; the reflection that an above-ground element's
+    image stands for has already been paid for inside ``t_s``/``t_p``.
+    """
+    theta = np.asarray(theta, dtype=float)
+    phi = np.asarray(phi, dtype=float)
+    mid = np.asarray(mid, dtype=float)
+    moment = np.asarray(moment)
+
+    t_e, t_h, t_v = (f[:, None, None] for f in transmitted_factors(theta, k_p, k_m))
+    sin_t, cos_t = np.sin(theta), np.cos(theta)
+    cos_p, sin_p = np.cos(phi), np.sin(phi)
+
+    # (n_theta, n_phi, n_element): the lateral leg, then the depth leg (which
+    # does not depend on phi), then the plane's own phase reference.
+    lateral = np.multiply.outer(
+        np.multiply.outer(sin_t, cos_p), mid[:, 0]
+    ) + np.multiply.outer(np.multiply.outer(sin_t, sin_p), mid[:, 1])
+    depth = np.multiply.outer(_k_mz(theta, k_p, k_m), ground_z - mid[:, 2])
+    carrier = np.exp(
+        1j * k_p * lateral
+        - 1j * depth[:, None, :]
+        + 1j * k_p * (cos_t * ground_z)[:, None, None]
+    )
+
+    # The horizontal moment resolved on the plane of incidence and across it.
+    m_par = np.multiply.outer(cos_p, moment[:, 0]) + np.multiply.outer(
+        sin_p, moment[:, 1]
+    )
+    m_perp = -np.multiply.outer(sin_p, moment[:, 0]) + np.multiply.outer(
+        cos_p, moment[:, 1]
+    )
+    m_theta = np.sum(carrier * (t_h * m_par + t_v * moment[:, 2]), axis=-1)
+    m_phi = np.sum(carrier * t_e * m_perp, axis=-1)
+    return m_theta, m_phi
+
+
+# An element is BELOW the interface when it is below it by more than this.
+# The bar is a hair rather than zero so an element the mesh put exactly in the
+# plane — a ground contact's last midpoint, a radial hub — stays on the
+# above-ground path, where the image term is what represents it.
+_BELOW_TOL = 1e-9
+
+_NO_LOWER_MEDIUM = {
+    "pec": (
+        "the field inside a perfect conductor is identically zero, so there is "
+        "nothing below the plane to radiate"
+    ),
+    "refl": (
+        "a reflection-coefficient ground is a plane-wave boundary condition on "
+        "the UPPER half-space alone and never solves the field inside the "
+        "ground at all"
+    ),
+}
+
+
+def _below_elements(mid, ground, ground_z):
+    """The mask of elements in the LOWER medium, or ``None`` when there are
+    none — the flag that keeps an all-above deck on the untouched path.
+
+    A ground with no lower medium raises here rather than imaging the element.
+    Every fill refuses such a deck already, each with its own sentence, so
+    nothing reaches this function by a route a user can take; what this guard
+    is for is the route a CALLER can take. Imaging a below element under a PEC
+    or reflection-coefficient ground does not fail loudly — it prints a
+    plausible pattern for a source that cannot exist there, which is the
+    failure mode this whole unit replaced.
+    """
+    if ground is None or ground.kind == "free":
+        return None
+    below = np.asarray(mid)[:, 2] < ground_z - _BELOW_TOL
+    if not below.any():
+        return None
+    why = _NO_LOWER_MEDIUM.get(ground.kind)
+    if why is not None:
+        raise ValueError(
+            f"the far field was asked for with {int(below.sum())} current "
+            f"element(s) below z = {ground_z:g} over a {ground.kind} ground, "
+            f"which has no lower medium to radiate from: {why}. A source below "
+            "the interface is served over a sommerfeld ground, where the half "
+            "space below it is a real medium with a wavenumber of its own"
+        )
+    return below
 
 
 def _cliff_medium_2(mid, theta, phi, ground_z, mode, edge_distance):
@@ -242,7 +444,30 @@ def _far_moments(mid, moment, k, theta, phi, ground, ground_z, freq_hz, cliff=No
     term — a cliff with no ground image is not a cliff, which is why NEC still
     prints the FAR FIELD GROUND PARAMETERS block for an ``RP 2`` in free space
     and still moves no number.
+
+    **Two media, two paths, one sum** (momwire#570). Elements ABOVE the plane
+    radiate direct + image, the image weighted by :func:`_image_coeffs`;
+    elements BELOW it radiate through :func:`transmitted_moments`, and the
+    total is the sum of the two. The split is per ELEMENT rather than per
+    deck, because a deck can have both — an elevated feed over a buried
+    counterpoise is the common one — and the image the above elements cast is
+    built from the above elements ALONE. A buried element has no image: it is
+    not a source in air seen through a mirror, it is a source in the ground
+    seen through the interface.
+
+    Under a cliff mode the transmitted term takes the FIRST medium and the
+    cliff acts on the above-ground image only. That is not an approximation
+    being smuggled in: ``RP 2``/``RP 3`` are NEC's geometric-optics model of a
+    SPECULAR POINT landing on one half-plane or the other, a construction that
+    exists only for a ray that reflects. A buried element's ray does not
+    reflect, it crosses — under the medium it is actually in, which is medium
+    one, the only one the deck's wires are buried in.
     """
+    below = _below_elements(mid, ground, ground_z)
+    if below is None:
+        mid_a, moment_a = mid, moment
+    else:
+        mid_a, moment_a = mid[~below], moment[~below]
     sin_t, cos_t = np.sin(theta), np.cos(theta)
     cos_p, sin_p = np.cos(phi), np.sin(phi)
     rx = sin_t[:, None] * cos_p[None, :]
@@ -271,14 +496,14 @@ def _far_moments(mid, moment, k, theta, phi, ground, ground_z, freq_hz, cliff=No
     h_hat = phi_hat
     v_hat = np.stack([-cos_p_g * cos_t_g, -sin_p_g * cos_t_g, sin_t_g], axis=-1)
 
-    m_direct = moments_of(mid, moment)
+    m_direct = moments_of(mid_a, moment_a)
     if ground is None or ground.kind == "free":
         total = m_direct
     elif cliff is not None:
         mode, second = cliff
         total = m_direct + _cliff_image_moments(
-            mid,
-            moment,
+            mid_a,
+            moment_a,
             k,
             theta,
             phi,
@@ -290,7 +515,7 @@ def _far_moments(mid, moment, k, theta, phi, ground, ground_z, freq_hz, cliff=No
             second,
         )
     else:
-        mid_img, moment_img = _image_moments(mid, moment, ground_z)
+        mid_img, moment_img = _image_moments(mid_a, moment_a, ground_z)
         m_img = moments_of(mid_img, moment_img)
         if ground.kind == "pec":
             total = m_direct + m_img
@@ -304,7 +529,16 @@ def _far_moments(mid, moment, k, theta, phi, ground, ground_z, freq_hz, cliff=No
                 ..., None
             ] * h_hat
             total = m_direct + m_refl
-    return np.sum(total * theta_hat, axis=-1), np.sum(total * phi_hat, axis=-1)
+    m_theta = np.sum(total * theta_hat, axis=-1)
+    m_phi = np.sum(total * phi_hat, axis=-1)
+    if below is not None:
+        k_m = k_medium(_eps_complex(ground.eps_r, ground.sigma, freq_hz), k)
+        t_theta, t_phi = transmitted_moments(
+            mid[below], moment[below], k, k_m, theta, phi, ground_z
+        )
+        m_theta = m_theta + t_theta
+        m_phi = m_phi + t_phi
+    return m_theta, m_phi
 
 
 def _element_fields(points, elements, k, radius, magnetic):
