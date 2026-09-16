@@ -361,31 +361,44 @@ def render_refusal(
 class LoadRow:
     """One row of the ``STRUCTURE IMPEDANCE LOADING`` table.
 
-    Captured in 0012/0014/0016/0017 (W7EL's ``Network Connection Test``,
-    whose two ``LD 4,4,n,0,1.E+10,0.`` cards pin a virtual wire's nodes
-    open).  Those four printouts are the only loaded captures, and the
-    dialect serves ``LD 4`` alone, so the fixed-impedance shape is the only
-    row this table can carry: the RESISTANCE / INDUCTANCE / CAPACITANCE /
-    CONDUCTIVITY columns have never been anything but blank and are not
-    modelled here at all.
+    Two shapes, distinguished by which of :attr:`resistance` /
+    :attr:`conductivity` is set — never both, and a row sets exactly one.
 
-    :attr:`reactance` is optional because the captured rows leave the
-    IMAGINARY column BLANK where the card wrote ``0.``  Whether the engine
-    blanks a zero or never prints that column for ``LD 4`` is unobserved, so
-    the cell is carried as present-or-absent rather than guessed at.
+    The FIXED-IMPEDANCE shape (``LD 4``) is captured in 0012/0014/0016/0017
+    (W7EL's ``Network Connection Test``, whose two ``LD 4,4,n,0,1.E+10,0.``
+    cards pin a virtual wire's nodes open).  Those four printouts are the
+    only loaded captures in the 80-deck corpus, so the INDUCTANCE /
+    CAPACITANCE columns have never been anything but blank and are not
+    modelled here at all.  :attr:`reactance` is optional because the
+    captured rows leave the IMAGINARY column BLANK where the card wrote
+    ``0.``  Whether the engine blanks a zero or never prints that column for
+    ``LD 4`` is unobserved, so the cell is carried as present-or-absent
+    rather than guessed at.
 
-    :attr:`node_from` and :attr:`node_thru` are the DECODED node, and the
-    contrast with :class:`NetworkRow` is the point: the same ``-1`` address
-    that prints as a negative segment there prints as ``1`` here (0025's
-    ``LD 4,1,-1`` against its ``TL 5,3,1,-1``, in one printout).  The loading
-    table carries no sign at all.
+    :attr:`node_from` and :attr:`node_thru` are the DECODED node for this
+    shape, and the contrast with :class:`NetworkRow` is the point: the same
+    ``-1`` address that prints as a negative segment there prints as ``1``
+    here (0025's ``LD 4,1,-1`` against its ``TL 5,3,1,-1``, in one
+    printout).  The loading table carries no sign at all.
+
+    The WIRE shape (``LD 5``, momwire#1082) has no capture to measure
+    against — the corpus's CONDUCTIVITY column had never carried a value
+    before this issue — so it is built from the NEC standard's own column
+    layout (present in every capture's header row) and verified against our
+    licensed materials rather than against a printout in this tree.
+    :attr:`node_from` / :attr:`node_thru` are the SEGMENT RANGE as the ``LD``
+    card wrote it, not a decoded node (:class:`~momwire.deck._nec5.
+    Nec5Conductivity`); :attr:`tag` is 0 for the whole-structure spelling,
+    which :func:`_load_row` prints as a BLANK ITAG rather than the digit 0 —
+    the licensed engine's own row for the field report's deck.
     """
 
     tag: int
     node_from: int
     node_thru: int
-    resistance: float
+    resistance: float | None = None
     reactance: float | None = None
+    conductivity: float | None = None
     kind: str = "FIXED IMPEDANCE"
 
 
@@ -1016,7 +1029,36 @@ def _load_row(row: LoadRow) -> str:
     REAL's, and its right edge is put two columns past its own header the way
     REAL's sits two columns past ``REAL``.  The first printout that carries a
     reactive load is the line that corrects it.
+
+    ITAG (:attr:`LoadRow.tag`) prints BLANK rather than ``0`` for the
+    whole-structure spelling — the one case this dialect ever reads a card
+    addressing tag 0 — which never happens on the ``LD 4`` shape, whose tag
+    is always a real declared wire.
+
+    The WIRE (material-property) shape (momwire#1082) is a DIFFERENT write
+    statement, not the same canvas with two cells substituted: verified
+    against our licensed materials on a synthesized deck (no capture carries
+    one), the conductivity cell ends TWO columns past its own header —
+    ``MHOS/METER`` ends at 97, so 99 — which sits well short of where the
+    fixed-impedance canvas puts its IMAGINARY cell, and the TYPE text
+    (``WIRE``) starts at column 104 rather than 102 and is NOT blank-padded
+    to 16: the measured row ends two columns past ``WIRE`` itself, at 110,
+    not at 118.
     """
+    if row.conductivity is not None:
+        canvas = [" "] * 110
+
+        def place_wire(text: str, end: int) -> None:
+            canvas[end - len(text) : end] = list(text)
+
+        if row.tag != 0:
+            place_wire(f"{row.tag:d}", 8)
+        place_wire(f"{row.node_from:d}", 13)
+        place_wire(f"{row.node_thru:d}", 18)
+        place_wire(_e(row.conductivity, 11, 4), 99)
+        place_wire(row.kind, 108)
+        return "".join(canvas)
+
     canvas = [" "] * 118
 
     def place(text: str, end: int) -> None:
