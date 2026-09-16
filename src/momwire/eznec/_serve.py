@@ -1896,6 +1896,22 @@ def _solver_for(
 
     ground = _ground_kwargs(deck, medium)
 
+    # `LD 5` conductivity, one entry per PIECE and NOT per wire: a piece
+    # cut from a wire (`_Piece.tag`, "Two ways to spell one series EMF")
+    # keeps that wire's tag, so this array is already right for the cut
+    # case with no extra bookkeeping.  Solvers take a per-wire array with
+    # NaN for "not this one" and infer the rest (`_wire_loading.py`); no
+    # kwarg at all is what a bare wire was built against, so it is omitted
+    # rather than passed all-NaN.
+    loading: dict[str, np.ndarray] = {}
+    if deck.wire_conductivity:
+        loading["wire_conductivity"] = np.array(
+            [
+                deck.wire_conductivity.get(piece.tag, float("nan"))
+                for piece in mesh.pieces
+            ]
+        )
+
     return solver_class(
         wires=[piece.points for piece in mesh.pieces],
         n_per_edge_per_wire=[[piece.n_elements] for piece in mesh.pieces],
@@ -1904,6 +1920,7 @@ def _solver_for(
         wavelength=wavelength,
         **port_kwargs(solver_class, junctions=mesh.junctions, node_gaps=gaps),
         **ground,  # type: ignore[arg-type]
+        **loading,
         **basis_kwargs,
     )
 
@@ -3083,6 +3100,18 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             f"from the basis through current_slopes, and this family has "
             f"no such method to read it from"
         )
+    if deck.wire_conductivity:
+        # Asked of the ROW rather than left to the constructor: an
+        # unsupported family either has no `wire_conductivity` parameter at
+        # all (a bare `TypeError`, momwire#1082) or silently ignores it, and
+        # this seam's other basis refusals all arrive as a named
+        # `ServeRefusal` rather than either of those.
+        reason = solver_class.capabilities.refusal("wire_loading")
+        if reason is not None:
+            raise ServeRefusal(
+                f"LD 5 sets a wire conductivity and basis {basis!r} does not "
+                f"serve wire loading: {reason}"
+            )
 
     structure = structure_of(deck)
     mesh = build_mesh(
@@ -3126,11 +3155,18 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         for source in deck.sources
     )
     p_in = float(sum(row.power for row in source_rows))
-    # Every wire is a perfect conductor at this seam (the dialect has no
-    # LD 5 and no IS), so the budget's WIRE LOSS line carries the LD loads'
-    # watts and nothing else — which is where 0012's two 1.E+10 pins print
-    # theirs (5.0797E-54 W) and where 0027's single pin prints 7.1165E-08.
+    # Every wire was a perfect conductor at this seam through momwire#1082
+    # (the dialect had no LD 5 and no IS), so the budget's WIRE LOSS line
+    # used to carry the LD loads' watts and nothing else — which is where
+    # 0012's two 1.E+10 pins print theirs (5.0797E-54 W) and where 0027's
+    # single pin prints 7.1165E-08.  It now adds the metal's OWN dissipation
+    # — `wire_loss_power` integrates ½ Re[Z'(w)]·|I(l)|² along every loaded
+    # wire from the same `coeffs` the current/charge tables read — 0.0 when
+    # `deck.wire_conductivity` is empty, so every captured printout keeps
+    # its identity untouched.
     p_load = 0.5 * float(np.sum(np.real(state.z_load) * np.abs(state.i_port) ** 2))
+    if deck.wire_conductivity:
+        p_load += solver.wire_loss_power(coeffs, omega)[0]
     points = _connection_points(cards)
     connections = tuple(_port_row(structure, mesh, state, index) for index in points)
     # The budget's own arithmetic (module docstring): RADIATED is INPUT plus
@@ -3162,27 +3198,51 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             else ENVIRONMENT_FREE_SPACE
         ),
         ground=medium,
-        loads=tuple(
-            LoadRow(
-                tag=load.at.tag,
-                # The loading table prints the DECODED node and drops the
-                # deck's spelling, which is the opposite of what NETWORK DATA
-                # does with the same address (:func:`_signed_segment`).  0025
-                # settles it: ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
-                # prints ``3    3``, so the rule is the segment a node names,
-                # wire-local — node 0 reading as node 1 exactly as it does in
-                # :func:`_segment_of`, and no sign surviving anywhere.
-                #
-                # #504 U1's four loaded captures could not say this: all eight
-                # of their ``LD`` cards write a positive node.  The nine mixed
-                # and feed-system captures that landed with U3 write ``-1``
-                # twenty-two times and print ``1`` twenty-two times.
-                node_from=max(load.at.node, 1),
-                node_thru=max(load.at.node, 1),
-                resistance=load.impedance.real,
-                reactance=load.impedance.imag or None,
-            )
-            for load in deck.loads
+        loads=(
+            *(
+                LoadRow(
+                    tag=load.at.tag,
+                    # The loading table prints the DECODED node and drops
+                    # the deck's spelling, which is the opposite of what
+                    # NETWORK DATA does with the same address
+                    # (:func:`_signed_segment`).  0025 settles it:
+                    # ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
+                    # prints ``3    3``, so the rule is the segment a node
+                    # names, wire-local — node 0 reading as node 1 exactly
+                    # as it does in :func:`_segment_of`, and no sign
+                    # surviving anywhere.
+                    #
+                    # #504 U1's four loaded captures could not say this:
+                    # all eight of their ``LD`` cards write a positive
+                    # node.  The nine mixed and feed-system captures that
+                    # landed with U3 write ``-1`` twenty-two times and
+                    # print ``1`` twenty-two times.
+                    node_from=max(load.at.node, 1),
+                    node_thru=max(load.at.node, 1),
+                    resistance=load.impedance.real,
+                    reactance=load.impedance.imag or None,
+                )
+                for load in deck.loads
+            ),
+            # ``LD 5`` rows, deck order, after every ``LD 4`` row.  No
+            # capture mixes the two card kinds, so the relative order
+            # between them is unmeasured; this reader keeps the LD 4
+            # ordering the 80-capture corpus already gates and appends the
+            # material rows after it, in the deck's own LD 5 order.  Its
+            # address is the SEGMENT RANGE as written, not a node — see
+            # :class:`~momwire.deck._nec5.Nec5Conductivity` — and ITAG
+            # prints blank for the whole-structure spelling
+            # (:func:`~momwire.eznec._printout._load_row`).
+            *(
+                LoadRow(
+                    tag=card.tag,
+                    node_from=card.segment_from,
+                    node_thru=card.segment_thru,
+                    conductivity=card.sigma,
+                    kind="WIRE",
+                )
+                for card in deck.conductivities
+            ),
         ),
         networks=tuple(card.row for card in cards),
         network_excitation=connections,
