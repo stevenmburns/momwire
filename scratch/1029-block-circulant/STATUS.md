@@ -25,6 +25,22 @@ a925d37 would change nothing this work reads.
 to momwire 0.56.0 (that same a925d37). "momwire ahead of the pointer" now means
 ahead of 0.56.0, not 0.55.0.
 
+**Baseline moved again, later the same day.** momwire origin/main is now
+**a6a67f93a** — U8's far field (momwire#1078) and LD 5 in the nec5 seam (#1086).
+227491d is still an ancestor of it. What moved under `src/` since this branch's
+base: `_far_readout.py` (+252), `deck/_nec5.py` (+216), `eznec/_printout.py`,
+`eznec/_serve.py`, `eznec/_shell.py`, `portal/_portal.py`, and `_medium_spec.py`
+(−37). **The files this phase-1 design reads — `bspline.py`,
+`_below_interface.py`, `_crossing_fill.py` — are unchanged.**
+
+**On resuming:** rebase on a6a67f93a and rebuild (`make build`), then re-check two
+things before trusting the notes above, because both moved underneath them:
+
+- `_medium_spec.py`'s delta, against the media labelling the buried fill's pair
+  classes use;
+- the far-field path note at the end of this file, since U8 rewrote
+  `_far_readout.py`.
+
 ## Phase 0, for context (complete, measured)
 
 At 4 and 12 radials on `verticals.buried_radial_vertical`, soil 13/0.005, bs2
