@@ -73,6 +73,49 @@ Read off the fill at cf3aaab, while planning the patch and before writing it.
    between `rows=None` and `rows=subset`, in addition to the row-by-row Z
    comparison.
 
+### Amendment 2 (2026-09-16, after S-A and S-B, before G3): what the crossing family costs
+
+**S-B as actually gated.** The registered wording ("the restricted fill equals the
+corresponding rows of the full fill") passes trivially if the restriction never
+narrows anything, so the gate asserts four things together, and all four hold at
+4 and 12 radials:
+
+1. the requested rows equal the full fill entry by entry — measured 0.0;
+2. the non-requested rows equal a `rows=[]` control **exactly** — measured 0.0,
+   i.e. they carry only the crossing block and the self completions, which
+   Amendment 1 registers as filled in full;
+3. the fills really narrowed — the call log shows the below-class direct and
+   image fills at 60 observers against 222 sources (654 at 12 radials), with
+   1245.0 of content removed from the non-requested rows and 123007.5 of
+   pair-class work on the requested ones;
+4. `q_factor` and every plan field are equal between `rows=None` and the subset.
+
+**The consequence for G3, registered before the ladder runs.** The crossing block
+and the self completions do **not** shrink with the restriction — by contract,
+since the routing reads their transpose. The cost model in §7 of `PLAN.md`
+classified that family as pair-scaling, which was wrong. Re-reading the fea1ad0
+profile at 150 radials, the terms that stay full-cost are about **8.7 s**:
+
+| term | s at 150 radials |
+|---|---:|
+| `_sandwich_dense` | 4.38 |
+| `_row_weights` | 2.23 |
+| `_real_matvec_c` | 0.73 |
+| `_g_of_r` | 0.54 |
+| `axis_data` | 0.18 |
+| `_rank1_add_cols` | 0.15 |
+| `_bnd_and_corner` | 0.23 |
+| `cross_complete_block_split` | 0.12 |
+| `self_completions` | 0.10 |
+| `_main_split` | 0.06 |
+
+So the predicted sector-route band at 150 radials moves from **5.54 – 21.0 s** to
+about **14 – 30 s**, against G3b's bar of 30.14 s. **G3b is therefore marginal at
+the high bound rather than comfortable**, and the prediction stays "hit" with that
+stated. If the bar is missed, this family is where to look first — and compaction
+(the deferred step from Amendment 1's item 1) does nothing for it either, because
+the cost is the transpose's columns and not the rows.
+
 ## 3. The symmetry rule, as the check will implement it
 
 Every condition is a geometry, material or drive fact known at construction.

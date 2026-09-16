@@ -5153,7 +5153,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     )
         return Q
 
-    def _build_J_blocks_subset(self, geom, k, seg_idx, mirror_sources=False):
+    def _build_J_blocks_subset(
+        self, geom, k, seg_idx, mirror_sources=False, *, obs_idx=None
+    ):
         """`_build_J_blocks` / `_build_J_image_blocks` over a SUBSET of
         segments, scattered back into a full `(d+1, d+1, N, N)` tensor whose
         other entries stay zero.
@@ -5168,10 +5170,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire, `_medium_spec`), so each wire's same-edge overwrite lands on a
         contiguous local slice and the analytic static + regularized split is
         applied exactly where `_build_J_blocks` applies it.
+
+        `obs_idx` (momwire#1029) restricts the OBSERVER axis: None is every
+        segment of `seg_idx`, i.e. today's tensor byte for byte; a subset
+        computes only those rows and leaves the rest of the tensor zero, which
+        the assemblers carry through as zero Z rows. Sources stay `seg_idx`,
+        and the same-edge overwrite applies where an edge is on both axes.
         """
         d = self.degree
         n_total = geom["n_segs_total"]
-        if seg_idx.size == 0:
+        if seg_idx.size == 0 or (obs_idx is not None and len(obs_idx) == 0):
             # A FULLY buried deck has no above segments at all (the phase-0
             # buried dipoles are exactly this), and an empty subset is a legal
             # answer rather than a degenerate one: the class contributes
@@ -5179,15 +5187,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return np.zeros((d + 1, d + 1, n_total, n_total), dtype=np.complex128)
         seg_l = geom["seg_l"]
         seg_r = geom["seg_r"]
-        a_row = self._seg_radius(geom)[seg_idx]
+        obs_sel = seg_idx if obs_idx is None else np.asarray(obs_idx, dtype=np.int64)
+        a_row = self._seg_radius(geom)[obs_sel]
         src_l = seg_l[seg_idx]
         src_r = seg_r[seg_idx]
         if mirror_sources:
             src_l = self._image_positions(src_l)
             src_r = self._image_positions(src_r)
         block = _seg_seg_full_moments_offedge(
-            seg_l[seg_idx],
-            seg_r[seg_idx],
+            seg_l[obs_sel],
+            seg_r[obs_sel],
             src_l,
             src_r,
             a_row,
@@ -5203,9 +5212,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             per_wire = geom["per_wire"]
             seg_off = geom["seg_offsets"]
             local_of = np.full(n_total, -1, dtype=np.int64)
-            local_of[seg_idx] = np.arange(len(seg_idx))
+            local_of[obs_sel] = np.arange(len(obs_sel))
+            src_of = np.full(n_total, -1, dtype=np.int64)
+            src_of[seg_idx] = np.arange(len(seg_idx))
             for w in range(len(per_wire)):
-                if local_of[seg_off[w]] < 0:
+                if local_of[seg_off[w]] < 0 and src_of[seg_off[w]] < 0:
                     continue
                 pw = per_wire[w]
                 ed_off = pw["edge_offsets"]
@@ -5214,15 +5225,20 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 a_w = float(self._radius_per_wire[w])
                 for i_e in range(len(ed_off) - 1):
                     lo = int(local_of[base + ed_off[i_e]])
+                    s_lo = int(src_of[base + ed_off[i_e]])
+                    if lo < 0 or s_lo < 0:
+                        continue  # not on both axes under a row restriction
                     hi = lo + (ed_off[i_e + 1] - ed_off[i_e])
+                    s_hi = s_lo + (ed_off[i_e + 1] - ed_off[i_e])
                     sl = slice(lo, hi)
+                    ssl = slice(s_lo, s_hi)
                     A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
                     A_reg = _seg_seg_reg_moments(
                         ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
                     )
-                    block[:, :, sl, sl] = A_st + A_reg
+                    block[:, :, sl, ssl] = A_st + A_reg
         J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=np.complex128)
-        J[:, :, seg_idx[:, None], seg_idx[None, :]] = block
+        J[:, :, obs_sel[:, None], seg_idx[None, :]] = block
         return J
 
     def _refuse_buried_out_of_scope(self, geom):
@@ -5265,6 +5281,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         eps,
         scale,
         weight=None,
+        obs_idx=None,
     ):
         """`_build_J_blocks_subset` + its assembly, accumulated into `Z`
         window by window and never holding a (d+1, d+1, N, N) tensor
@@ -5383,10 +5400,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
 
         runs = _contiguous_runs(seg_idx)
+        # momwire#1029: the OBSERVER axis may be narrowed; sources stay
+        # `seg_idx`, and `chunk` is sized off the source axis as before.
+        obs_runs = runs if obs_idx is None else _contiguous_runs(obs_idx)
         n_sub = int(seg_idx.size)
         row_bytes = (d + 1) ** 2 * n_sub * 16
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
-        for r0, r1 in runs:
+        for r0, r1 in obs_runs:
             for i0 in range(r0, r1, chunk):
                 self._checkpoint()  # per observer chunk of the buried subset fill
                 i1 = min(i0 + chunk, r1)
@@ -5413,8 +5433,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         seg_off = geom["seg_offsets"]
         on_subset = np.zeros(int(geom["n_segs_total"]), dtype=bool)
         on_subset[seg_idx] = True
+        on_obs = on_subset
+        if obs_idx is not None:
+            on_obs = np.zeros_like(on_subset)
+            on_obs[np.asarray(obs_idx, dtype=np.int64)] = True
         for w in range(len(per_wire)):
-            if not on_subset[seg_off[w]]:
+            # the same-edge correction is a DIAGONAL block, so it is written
+            # only where the wire is on both axes (momwire#1029).
+            if not (on_subset[seg_off[w]] and on_obs[seg_off[w]]):
                 continue
             pw = per_wire[w]
             ed_off = pw["edge_offsets"]

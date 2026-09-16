@@ -965,9 +965,21 @@ def compute_Z_operator_buried(
     mu,
     cancel_flag,
     chunked,
+    rows=None,
 ):
     """The mixed-medium dense Z: per-segment media, three pair classes,
     one matrix (momwire#553 U5).
+
+    `rows` (momwire#1029) restricts the OBSERVER axis of the fill. None is
+    exactly today's path, byte for byte. A subset — an array of global segment
+    indices — computes only those rows of Z and leaves the others zero, EXCEPT
+    the crossing block, which is written in full: the routing uses it as
+    `Z -= t; Z -= t.T`, and restricting its rows would drop columns the
+    transpose reads. The PLAN is never restricted — every grid extent and
+    quadrature order is computed from the full index sets — so a restricted
+    fill and a full one agree row by row on the requested rows. A caller that
+    restricts rows owns the consequences downstream: the result is not a
+    solvable operator on its own.
 
     A deck with buried wires is filled pair class by pair class, and the
     classes are not variants of each other:
@@ -1066,6 +1078,23 @@ def compute_Z_operator_buried(
         serve_plan_fn=serve_plan_fn,
     )
     gz = ground_z
+    # momwire#1029: the observer restriction, per pair class. Resolved AFTER
+    # `plan_buried`, so nothing the plan decides can see it.
+    if rows is None:
+        obs_a_idx, obs_b_idx = a_idx, b_idx
+    else:
+        rows = np.asarray(rows, dtype=np.int64)
+        obs_a_idx = np.intersect1d(a_idx, rows, assume_unique=True)
+        obs_b_idx = np.intersect1d(b_idx, rows, assume_unique=True)
+
+    def _narrow(idx, keep, obs, t_obs, W):
+        """The node rows of `keep` within `idx`, at the plan's own order."""
+        if rows is None or len(keep) == len(idx):
+            return obs, t_obs, W
+        pos = np.searchsorted(idx, keep)
+        q = len(obs) // max(len(idx), 1)
+        take = (pos[:, None] * q + np.arange(q)[None, :]).ravel()
+        return obs[take], t_obs[take], W[:, pos, :]
 
     # --- the two direct blocks and the two image blocks, each in its
     #     own medium. Chunked whenever the windowed assemblers' complex-
@@ -1078,7 +1107,7 @@ def compute_Z_operator_buried(
     if not chunked:
         f.checkpoint()
         Z = f.assemble_Z(
-            f.build_J_blocks_subset(geom, k_m, b_idx),
+            f.build_J_blocks_subset(geom, k_m, b_idx, obs_idx=obs_b_idx),
             supp_seg,
             polys,
             geom,
@@ -1088,11 +1117,16 @@ def compute_Z_operator_buried(
         if a_idx.size:
             f.checkpoint()
             Z += f.assemble_Z(
-                f.build_J_blocks_subset(geom, k_p, a_idx), supp_seg, polys, geom
+                f.build_J_blocks_subset(geom, k_p, a_idx, obs_idx=obs_a_idx),
+                supp_seg,
+                polys,
+                geom,
             )
             f.checkpoint()
             Z -= f.image_Z_weighted(
-                f.build_J_blocks_subset(geom, k_p, a_idx, mirror_sources=True),
+                f.build_J_blocks_subset(
+                    geom, k_p, a_idx, mirror_sources=True, obs_idx=obs_a_idx
+                ),
                 supp_seg,
                 polys,
                 c2 * td_img.astype(np.complex128),
@@ -1100,7 +1134,9 @@ def compute_Z_operator_buried(
             )
         f.checkpoint()
         Z -= f.image_Z_weighted(
-            f.build_J_blocks_subset(geom, k_m, b_idx, mirror_sources=True),
+            f.build_J_blocks_subset(
+                geom, k_m, b_idx, mirror_sources=True, obs_idx=obs_b_idx
+            ),
             supp_seg,
             polys,
             a_m * td_img.astype(np.complex128),
@@ -1121,6 +1157,7 @@ def compute_Z_operator_buried(
             mirror_sources=False,
             eps=eps_m,
             scale=1.0,
+            obs_idx=obs_b_idx,
         )
         if a_idx.size:
             f.accumulate_Z_subset_chunked(
@@ -1133,6 +1170,7 @@ def compute_Z_operator_buried(
                 mirror_sources=False,
                 eps=eps,
                 scale=1.0,
+                obs_idx=obs_a_idx,
             )
             f.accumulate_Z_subset_chunked(
                 Z,
@@ -1145,6 +1183,7 @@ def compute_Z_operator_buried(
                 eps=eps,
                 scale=-1.0,
                 weight=complex(c2),
+                obs_idx=obs_a_idx,
             )
         f.accumulate_Z_subset_chunked(
             Z,
@@ -1157,6 +1196,7 @@ def compute_Z_operator_buried(
             eps=eps_m,
             scale=-1.0,
             weight=complex(a_m),
+            obs_idx=obs_b_idx,
         )
 
     # --- the three field-form blocks -----------------------------------
@@ -1168,8 +1208,9 @@ def compute_Z_operator_buried(
                 o, to, s, ts, gz, k_p, grid_above, cancel_flag=cancel_flag
             )
 
+        o_a, ot_a, oW_a = _narrow(a_idx, obs_a_idx, obs_a, t_a, W_a)
         Z -= f.field_galerkin_block(
-            supp_seg, polys, proj_aa, a_idx, a_idx, obs_a, t_a, W_a, obs_a, t_a, W_a
+            supp_seg, polys, proj_aa, obs_a_idx, a_idx, o_a, ot_a, oW_a, obs_a, t_a, W_a
         )
 
     grid_below = _sommerfeld_below.get_grid_below(
@@ -1181,8 +1222,9 @@ def compute_Z_operator_buried(
             o, to, s, ts, gz, k_p, k_m, grid_below
         )
 
+    o_b, ot_b, oW_b = _narrow(b_idx, obs_b_idx, obs_b, t_b, W_b)
     Z -= f.field_galerkin_block(
-        supp_seg, polys, proj_bb, b_idx, b_idx, obs_b, t_b, W_b, obs_b, t_b, W_b
+        supp_seg, polys, proj_bb, obs_b_idx, b_idx, o_b, ot_b, oW_b, obs_b, t_b, W_b
     )
 
     crossing = crossing_j if a_idx.size else ()
@@ -1251,15 +1293,17 @@ def compute_Z_operator_buried(
                 o, to, s, ts, gz, k_p, k_m, grid_t
             )
 
+        o_ax, ot_ax, oW_ax = _narrow(a_idx, obs_a_idx, obs_ax, t_ax, W_ax)
+        o_bx, ot_bx, oW_bx = _narrow(b_idx, obs_b_idx, obs_bx, t_bx, W_bx)
         Z -= f.field_galerkin_block(
             supp_seg,
             polys,
             proj_ab,
-            a_idx,
+            obs_a_idx,
             b_idx,
-            obs_ax,
-            t_ax,
-            W_ax,
+            o_ax,
+            ot_ax,
+            oW_ax,
             obs_bx,
             t_bx,
             W_bx,
@@ -1268,11 +1312,11 @@ def compute_Z_operator_buried(
             supp_seg,
             polys,
             proj_ba,
-            b_idx,
+            obs_b_idx,
             a_idx,
-            obs_bx,
-            t_bx,
-            W_bx,
+            o_bx,
+            ot_bx,
+            oW_bx,
             obs_ax,
             t_ax,
             W_ax,
