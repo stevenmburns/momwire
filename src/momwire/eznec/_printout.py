@@ -404,6 +404,17 @@ class LoadRow:
     the whole-structure spelling, which :func:`_load_row` prints as a BLANK
     ITAG rather than the digit 0 — the licensed engine's own row for the
     field report's deck.
+
+    The PER-METRE shape (``LD 2`` / ``LD 3``, momwire#1088) is the fourth,
+    ``kind="SERIES (PER METER)"`` / ``"PARALLEL (PER METER)"``: the same
+    RESISTANCE / INDUCTANCE / CAPACITANCE cells the SERIES/PARALLEL shape
+    fills, on a wider canvas.  Like the WIRE shape it addresses a
+    SEGMENT RANGE and blanks a tag-0 ITAG; unlike either of the others, a
+    ZERO FIELD PRINTS BLANK rather than as ``0.0000E+00`` — measured against
+    our licensed materials, an ``LD 2`` with only an inductance prints its
+    RESISTANCE and CAPACITANCE cells empty.  That is why all three of
+    :attr:`resistance` / :attr:`inductance` / :attr:`capacitance` are
+    optional here: absent is a cell the engine did not write.
     """
 
     tag: int
@@ -414,6 +425,8 @@ class LoadRow:
     inductance: float | None = None
     capacitance: float | None = None
     conductivity: float | None = None
+    inductance: float | None = None
+    capacitance: float | None = None
     kind: str = "FIXED IMPEDANCE"
 
 
@@ -1071,9 +1084,26 @@ def _load_row(row: LoadRow) -> str:
     reproduce both measured rows byte for byte, including the WIRE row's own
     ``place_wire(row.kind, 108)`` as the width-4 case of the same rule
     (``"WIRE".center(8)`` ending at 110 places the word at 104:108).
+
+    The PER-METRE shape (``LD 2`` / ``LD 3``, momwire#1088) is a third write
+    statement again, measured the same way on
+    ``tests/fixtures/eznec_ld23_1088/``.  Its three value cells are the
+    header's own first three — RESISTANCE, INDUCTANCE, CAPACITANCE — each an
+    E11.4 in a 13-wide field, ending in columns 34, 47 and 60; a cell whose
+    field the card wrote as zero is BLANK, not a printed zero.  The TYPE text
+    sits in a 20-column field ending at 122, which reproduces both observed
+    spellings exactly: ``PARALLEL (PER METER)`` fills it, and
+    ``SERIES (PER METER)`` lands one column in with one blank left over at
+    the end.
     """
-    if row.kind in ("SERIES", "PARALLEL"):
-        canvas = [" "] * 110
+    if row.kind in (
+        "SERIES",
+        "PARALLEL",
+        "SERIES (PER METER)",
+        "PARALLEL (PER METER)",
+    ):
+        per_metre = row.kind.endswith("(PER METER)")
+        canvas = [" "] * (122 if per_metre else 110)
 
         def place_rlc(text: str, end: int) -> None:
             canvas[end - len(text) : end] = list(text)
@@ -1082,13 +1112,19 @@ def _load_row(row: LoadRow) -> str:
             place_rlc(f"{row.tag:d}", 8)
         place_rlc(f"{row.node_from:d}", 13)
         place_rlc(f"{row.node_thru:d}", 18)
-        if row.resistance is not None:
-            place_rlc(_e(row.resistance, 11, 4), 34)
-        if row.inductance is not None:
-            place_rlc(_e(row.inductance, 11, 4), 47)
-        if row.capacitance is not None:
-            place_rlc(_e(row.capacitance, 11, 4), 60)
-        place_rlc(row.kind.center(8), 110)
+        # A zero field prints BLANK on both shapes (momwire#1085 passes None
+        # for it, momwire#1088 passes the written 0.0; either lands here).
+        for value, end in (
+            (row.resistance, 34),
+            (row.inductance, 47),
+            (row.capacitance, 60),
+        ):
+            if value:
+                place_rlc(_e(value, 11, 4), end)
+        if per_metre:
+            place_rlc(row.kind.center(20), 122)
+        else:
+            place_rlc(row.kind.center(8), 110)
         return "".join(canvas)
 
     if row.conductivity is not None:
