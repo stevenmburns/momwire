@@ -97,6 +97,27 @@ def test_mnemonic_and_field_errors_are_verbatim():
     )
 
 
+def test_the_gn_trailer_hole_is_the_last_token_only():
+    """momwire#1084 widened the tokenizer by exactly one hole: a ``GN``
+    card's LAST non-numeric token becomes :attr:`Card.trailer`.  A
+    non-numeric token anywhere ELSE on a GN card, and the last token of any
+    other card, still refuse with the verbatim field error above — the
+    tokenizer did not learn to skip names, only to hand one token to the
+    dialect."""
+    with pytest.raises(DeckError) as exc:
+        parse_card("GN 0 0 0 0 NOFILE 13. .005")
+    assert str(exc.value) == (
+        "NON-NUMERICAL CHARACTER IN FIELD: 'NOFILE' on 'GN 0 0 0 0 NOFILE 13. .005'"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse_card("GD 0 0 0 0 13. .005 NOFILE")
+    assert str(exc.value) == (
+        "NON-NUMERICAL CHARACTER IN FIELD: 'NOFILE' on 'GD 0 0 0 0 13. .005 NOFILE'"
+    )
+    assert parse_card("GN 0 0 0 0 13. .005 NOFILE").trailer == "NOFILE"
+    assert parse_card("GN 0 0 0 0 13. .005").trailer is None
+
+
 def test_an_integer_field_written_as_a_real_reads_as_an_integer():
     """§#field-numbering: fields are read positionally and converted on
     demand, so ``1.`` reads as ``1``."""
