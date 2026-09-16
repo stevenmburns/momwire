@@ -214,10 +214,6 @@ from ..deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 # ever a third-party consumer again.
 from ..deck._nec2_geometry import _SMIN, build_geometry
 
-# ``_medium_spec`` owns the ABOVE/BELOW question and both dialect front
-# ends read their buried refusals from it, so neither seam can drift from
-# the other's sentence.
-from .. import _medium_spec
 from ..serve import Seam, run_session
 
 # The far-zone readout used to live in this module. momwire#719 U1 moved it
@@ -1744,9 +1740,9 @@ class GroupResult:
     — where issue #719's design converges the two seams' solve products.
     ``solver`` is a deliberate temporary reach-through some consumers still
     need for a walk (:meth:`DeckSolver.current_elements`,
-    :func:`_has_buried_wires`, :func:`_network_lines`, :func:`_pattern_lines`,
+    :func:`_network_lines`, :func:`_pattern_lines`,
     :func:`_near_field_lines`); U3 removes the reach-through from
-    :func:`_run_block`'s own row building only — those four still take
+    :func:`_run_block`'s own row building only — those still take
     ``solver`` directly, and splitting them is deliberately NOT this unit.
     """
 
@@ -2943,21 +2939,6 @@ def _environment_lines(ground: Ground, freq_mhz: float) -> list[str]:
     return lines
 
 
-def _has_buried_wires(solver) -> bool:
-    """Whether the fill that answered put any wire in the LOWER medium.
-
-    Asked of the solver rather than recomputed here: ``momwire._medium_spec``
-    owns the ABOVE/BELOW question and the solver has already cached its
-    answer.  A family with no buried concept refuses a below-interface deck
-    at FILL time — the sinusoidal pair and the two accelerated entries do,
-    each with its own sentence — so no such solver can reach a report
-    card with a buried wire, and the absence of the method means "no" rather
-    than "unknown".
-    """
-    probe = getattr(solver, "_has_buried_wires", None)
-    return probe is not None and bool(probe())
-
-
 def _pattern_lines(
     card: Card, solver: DeckSolver, result: GroupResult, freq_mhz: float
 ) -> list[str]:
@@ -2974,24 +2955,20 @@ def _pattern_lines(
       far-field amplitude itself instead of the field at a range — the same
       numbers scaled by ``RFLD/lambda``. The GAIN columns never depended on
       the range and do not move.
-    """
-    # The far field of an in-medium current is not this path's to compute.
-    # ``_far_moments`` sums ``exp(+jk r̂·r_n)`` in the UPPER medium's
-    # wavenumber and adds a Fresnel-reflected image: the right answer for a
-    # source above the interface, and no answer at all for one below it,
-    # because nothing in that sum crosses the boundary.  It does not fail
-    # loudly on a buried deck either — it prints a PLAUSIBLE pattern, which
-    # is the whole reason this is a refusal rather than a clamp on the
-    # -999.99 rows that first drew attention to it.
-    #
-    # The sentence is ``_medium_spec``'s and not this module's, because the
-    # obstruction is the physics's: momwire#553 tabulated the transmitted
-    # family over a near-zone range only, so there is no far-zone limit for
-    # EITHER seam to take.  The NEC-5 seam has refused this since #553 and
-    # reads the same string; momwire#570 tracks the real answer.
-    if _has_buried_wires(result.solver):
-        raise PortalError(_medium_spec.buried_far_field_refusal())
 
+    A deck with wires BELOW the interface prints this table like any other
+    (momwire#570). ``_far_moments`` serves those elements through the
+    transmitted far-zone factors rather than through an image, so nothing
+    here has to know which side of the plane the current is on.
+
+    **Where the soil's absorption shows.** Not in the POWER BUDGET: this
+    portal follows NEC's own books, where radiated power is the input minus
+    the structure's own loss, so a buried deck's EFFICIENCY is still about
+    its conductors. The energy the ground takes shows up in the pattern
+    itself — every buried element's contribution carries the transmitted
+    wave's decaying depth leg — and, integrated, in the AVERAGE POWER GAIN
+    line below, which for a buried deck comes out well under 1.
+    """
     mode = card.i(0)
     n_theta, n_phi = max(card.i(1), 1), max(card.i(2), 1)
     theta0, phi0, d_theta, d_phi = card.f(4), card.f(5), card.f(6), card.f(7)
