@@ -83,8 +83,9 @@ def _claims() -> list[tuple[str, str]]:
         ("src/momwire/eznec/_serve.py", f"over all {CORPUS} capture decks"),
         # the deck front end
         ("tests/test_deck_nec5.py", f"Parsing all {CORPUS} decks"),
-        # user-visible refusal text
-        ("src/momwire/eznec/_serve.py", f"none of the {CORPUS} captured decks"),
+        # No user-visible refusal text quotes the corpus count any more:
+        # momwire#1105 served the one sentence that did (several EX 0 through
+        # a network), removing it rather than restating it.
         # the printout's request-card shape
         ("src/momwire/eznec/_printout.py", f"across the {CORPUS} captures"),
         # the design note
