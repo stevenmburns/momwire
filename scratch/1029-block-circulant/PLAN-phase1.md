@@ -202,6 +202,126 @@ still far below anything physical.
 **G3's ladder** runs 12 / 24 / 48 / 96 / 150 radials, warm seconds and peak RSS,
 beside dense and beside #1067's NEC-5 columns, under the 24 GB cap.
 
+### Amendment 3 (2026-09-17, after G1 ran): what G1c's bar can measure
+
+**Registered:** G1c, "the far field, through `element_currents` →
+`_far_moments` on one fixed grid | max relative difference on \|m_θ\| and
+\|m_φ\| ≤ 1e-8 over the grid | hit".
+
+**Measured** on the 19 × 12 upper-hemisphere grid, the route against the dense
+solve on the same deck (`g1.jsonl`):
+
+| radials | max \|m_θ\| | max \|m_φ\| dense | max \|m_φ\| route | \|m_φ\|/\|m_θ\| | Δ\|m_θ\| / pattern | Δ\|m_φ\| / pattern | Δ\|m_φ\| / \|m_φ\| itself |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 4 | 0.08548 | 1.126e-5 | 1.126e-5 | 1.3e-4 | 8.7e-14 | 6.3e-15 | **4.8e-11** |
+| 12 | 0.11854 | 2.07e-15 | 3.88e-18 | 1.7e-14 | 4.5e-13 | 1.7e-14 | **0.99924** |
+| 48 | 0.14478 | 2.31e-15 | 7.37e-18 | 1.6e-14 | 3.4e-13 | 1.6e-14 | **0.99887** |
+
+**The two readings, and which one is a measurement.** Read as "each component
+against its OWN largest entry", G1c **hits at 4 radials (4.8e-11) and misses
+at 12 and 48**. Read as "over the grid", i.e. both components against the
+pattern's own scale, it hits everywhere by four orders. The miss is REPORTED
+here rather than re-read silently, and this is why the second reading is the
+one that measures anything:
+
+- \|m_φ\| is not small by accident. An N-fold screen's far field carries the
+  azimuthal harmonics 0, ±N, ±2N… and the φ component is the ±N one. It comes
+  from the DISCRETE radial positions, not from the currents — which are
+  identical on every radial on both routes. At N = 4 that harmonic is a real
+  quantity, 1.3e-4 of the pattern, and the route reproduces it to 4.8e-11. At
+  N = 12 and 48 it is 1.7e-14 of the pattern: the roundoff floor.
+- So at 12 and 48 the own-scale ratio divides roundoff by roundoff. It reads
+  0.999 because the ROUTE's \|m_φ\| is three orders *smaller* than dense's
+  (3.9e-18 against 2.1e-15) — the route makes every sector's current exactly
+  equal by construction, where the dense solve leaves N independent roundoff
+  paths that do not cancel. The route's pattern is the cleaner of the two, and
+  a bar that calls that a failure is measuring its own floor.
+
+**Amended:** G1c grades Δ\|m_θ\| and Δ\|m_φ\| against max \|m_θ\| over the
+grid — one scale, the pattern's — and `g1.jsonl` records both readings and the
+magnitudes behind them at every rung, so the choice is auditable rather than
+asserted. Under the amended reading G1c is a hit at 4, 12 and 48 radials.
+
+### Amendment 4 (2026-09-17, while writing the check): refusal 5 has no deck
+
+§3's sixth condition and its sentence 5 are about a ground that is not
+invariant under rotation about the axis — "terrain, two media, a tilted
+axis". **`BSplineSolver` cannot express one.** Its whole ground surface is
+`ground_z` + `ground_eps` + `ground_model ∈ {refl-coef, sommerfeld}`, and a
+horizontal half-space is axisymmetric about any vertical line; the tilted-axis
+case is condition 1's, with its own sentence. The far-field cliff (`RP 2`/`RP
+3`, momwire#570) is a READOUT choice, not a ground the fill sees, and it
+arrives long after construction.
+
+So sentence 5 is reachable only through a seam, and the check has one on
+purpose: `BSplineSolver._rotational_ground_kind()` is the single place the
+ground's name is decided, the whitelist
+(`_rotational_symmetry.AXISYMMETRIC_GROUNDS`) is what it is checked against,
+and a family that grows a terrain ground refuses the route by answering with a
+name the whitelist does not carry. G2's fifth deck is a one-line subclass that
+answers `"terrain"`, and it **does** raise at construction like the other
+five. A companion test asserts the other half — that every ground this family
+CAN express returns a qualifying name — so the whitelist cannot quietly start
+refusing served grounds.
+
+Recorded because the registration read as though six decks existed; five do,
+and the sixth is a solver rather than a deck.
+
+### Amendment 5 (2026-09-17, after G3 ran): G3a misses on this box, and G3b has no box
+
+The ladder as measured, on the laptop (xps13, 4c/8t), `OMP_NUM_THREADS=4`,
+each rung in its own process under `prlimit --as=8G` (`g3.jsonl`):
+
+| radials | unknowns | dense warm s | route warm s | speedup | dense fill / solve | route fill / solve | dense RSS MB | route RSS MB | RSS ratio | ΔZ_in |
+|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|
+| 12 | 695 | 1.552 | 0.702 | 2.21× | 1.531 / 0.021 | 0.700 / 0.0014 | 261.6 | 256.9 | 0.982 | 4.8e-13 |
+| 24 | 1355 | 4.744 | 1.357 | 3.50× | 4.605 / 0.139 | 1.355 / 0.0022 | 482.0 | 474.9 | 0.985 | 6.2e-13 |
+| 48 | 2675 | 18.566 | **3.327** | 5.58× | 18.006 / 0.560 | 3.323 / 0.0043 | 1051.2 | 1047.6 | 0.997 | 9.1e-13 |
+| 96 | 5315 | 77.112 | 10.776 | 7.16× | 73.696 / 3.416 | 10.765 / 0.0115 | 3597.1 | 3564.7 | 0.991 | 1.9e-12 |
+| 150 | 8285 | — | — | — | — | — | — | — | — | — |
+
+**G3c: HIT.** Peak RSS is the dense RSS at every rung — 0.982, 0.985, 0.997,
+0.991 of it, all inside the registered 5 %. Registered, not discovered, and
+now measured.
+
+**G3a: MISS.** 3.327 s at 48 radials against a 3.0 s bar. Reported, not
+re-read. The context, which is not a rescue: the bar came from #1067's
+Skylake column, and this box is **1.215× slower** on the same deck (dense
+18.566 s here against #1067's momwire warm 15.28 s). Divided by that factor
+the route reads 2.74 s, inside the bar and inside the cost model's own
+1.18–2.54 s prediction at its high end. **The bar is missed on the box it ran
+on**, and whether it is missed on #1067's box is unmeasured.
+
+**G3b: NOT MEASURABLE HERE.** The 150-radial rung raises on **both** modes,
+at the same line:
+
+    _crossing_fill._row_weights  <- _sandwich_dense <- _main_split
+                                 <- cross_complete_block_split
+    ArrayMemoryError: Unable to allocate 124. MiB, shape (2035, 7992) float64
+
+at about 5.3 GB of RSS, under the 8 GB address-space cap this box is held to.
+Two attempts: the registered cold-then-warm pair (the cold pass completed in
+about 195 s dense, the warm one raised), and a single-pass escape added for
+it (raised in that one pass). No third attempt. The registered ladder ran
+under a **24 GB** cap in phase 0, which is what it needs.
+
+**That failure is Amendment 2's finding, sharpened.** The crossing block is
+filled in FULL by contract — the routing reads its transpose — so `rows=`
+narrows nothing there, and the route hits the wall at the identical
+allocation. The crossing family is not only the part of the time that does
+not shrink; it is the memory FLOOR, and it is the same reason G3c reads 0.99.
+Compaction does not move it either, for the reason Amendment 2 gives.
+
+**What is therefore unmeasured:** whether the route's warm 150-radial second
+is under 30.14 s. The route's fill is linear in N once the sector is fixed
+(one sector's rows against N sources), and 10.776 s at 96 extrapolates to
+about **16.8 s at 150** — inside Amendment 2's registered 14–30 s band. That
+is an EXTRAPOLATION from four measured rungs, not a measurement, and G3b
+stays open until a box with the registered cap runs it.
+
+**What IS measured about the speedup claim:** "≥ 5× faster than dense" holds
+from 48 radials up (5.58× and 7.16×), and the ratio is still climbing.
+
 ## Order
 
 1. Commit this registration; push.

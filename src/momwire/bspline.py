@@ -84,8 +84,8 @@ from . import _ground_refl
 from . import _ground_spec
 from . import _medium_spec
 from . import _potential_ground
-from . import _rotational_symmetry
 from . import _quadrature
+from . import _rotational_symmetry
 from . import _sommerfeld
 from . import _sommerfeld_below
 from . import _wire_loading
