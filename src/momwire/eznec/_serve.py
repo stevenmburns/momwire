@@ -629,13 +629,6 @@ _REFUSE_PROBE_AT_NETWORK_POINT = (
     "to the load's own node, or drop it and read the load current out of the "
     "CURRENTS table"
 )
-_REFUSE_MULTI_EX_VOLTAGE_NETWORK = (
-    "this deck carries {count} EX 0 cards and a TL/NT network; a multi-VOLTAGE "
-    "drive is not served through a network at this seam - "
-    "none of the 80 captured decks writes one, so nothing says what the engine "
-    "does with the pair, and the network-free shape it does serve "
-    "(momwire#1099) is a different solve"
-)
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
     "second generator in series across the same gap - no captured deck writes "
@@ -1185,18 +1178,21 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
     which the corpus now prints four more times (0116/0117's four-square with a
     ``TL``, 0120/0121's cardioid over an ``NT`` and two ``TL``s).  A THIRD
     shape is in scope since momwire#1110: those same cards beside EZNEC's
-    1e-10 V load probes, which is the only mixed drive anything has printed a
-    trustworthy row for.  The refusals below are the ways a deck can leave all
-    three, and each is worth naming separately rather than folding into one
-    "unsupported drive" line, because each would be fixed by a different
-    capture.
+    1e-10 V load probes, the only mixed drive anything has printed a
+    trustworthy row for.  A FOURTH is in scope since momwire#1105: several
+    ``EX 0`` cards THROUGH a network, gated on 0120 rewritten from its
+    captured ``EX 4`` pair to ``EX 0`` at the same two nodes
+    (tests/fixtures/eznec_multi_voltage_network_1105/, 2026-09-17).  The
+    refusals below are the ways a deck can leave all four, and each is worth
+    naming separately rather than folding into one "unsupported drive" line,
+    because each would be fixed by a different capture.
 
     A GENUINE mixed drive would need the engine's rule for a generator voltage
     and a set current in one matrix; a multi-``EX 0`` would need its rule for
     several set voltages; and two cards at one address would need it to say
     which of two set currents wins.  All three were 0 of 53.
 
-    Two have LEFT since, and both left the way a refusal should: not because
+    Three have LEFT since, and each left the way a refusal should: not because
     the answer became obvious but because printouts arrived to check it
     against.  The phased drive through a network went first — its sentence used
     to say that "a constrained drive composed with the network reducer is
@@ -1204,7 +1200,13 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
     drive followed it (momwire#1110), and only part way: what is served is the
     one mixed shape EZNEC itself writes, an ``EX 4`` beside the 1e-10 V load
     probes it puts at lumped loads, and :func:`_load_probe_refusal` is the line
-    between that shape and the two that are not it.
+    between that shape and the two that are not it.  The multi-``EX 0``
+    drive through a network went last (momwire#1105, 2026-09-17): EZNEC writes
+    a voltage-driven deck as its current-driven twin with the ``EX`` type field
+    alone changed (captures 0186/0187 vs 0188/0189 proved that conversion is
+    the type field alone, payload untouched), so 0120's own two ``EX 4`` cards
+    rewritten to ``EX 0`` is EZNEC's own shape and the licensed engine's
+    printout for it is the oracle the refusal needed.
 
     A FOURTH way out lands two cards on one port through two different
     addresses, and only the mesh can see it — :func:`_check_one_port_per_drive`
@@ -1221,15 +1223,19 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
         mixed = _load_probe_refusal(deck)
         if mixed is not None:
             return mixed
-    elif voltages and (deck.transmission_lines or deck.networks):
-        return _REFUSE_MULTI_EX_VOLTAGE_NETWORK.format(count=voltages)
-    # Both shapes above fall through to here when they are SERVED, and both
-    # are EZNEC's load probe: the 1e-10 V source it writes beside every lumped
+    # Both shapes above fall through to here when they are SERVED.  An
+    # all-EX-0 deck (`voltages == len(kinds)`) falls through unconditionally,
+    # network or none: momwire#1105 served the last of the three (2026-09-17,
+    # tests/fixtures/eznec_multi_voltage_network_1105/), so the sentence that
+    # used to sit here - "a multi-VOLTAGE drive is not served through a
+    # network" - is gone rather than moved.  What is SERVED, either way, is
+    # EZNEC's load probe: the 1e-10 V source it writes beside every lumped
     # load to read that load's current back from its ANTENNA INPUT PARAMETERS
     # row.  Several EX 0 with no network since momwire#1099
     # (tests/fixtures/eznec_probe_ex_1099/), the probes beside an EX 4 since
-    # momwire#1110 (tests/fixtures/eznec_load_probes_1110/) - one row per card
-    # either way, and the drive row unmoved by the probe.
+    # momwire#1110 (tests/fixtures/eznec_load_probes_1110/), and several EX 0
+    # THROUGH a network since momwire#1105 - one row per card either way, and
+    # the drive row unmoved by the probe.
     seen: set[Nec5Node] = set()
     for source in deck.sources:
         if source.at in seen:
@@ -2504,15 +2510,18 @@ def _multi_drive_state(
 
     which degenerates to the line above when the V-set is empty (every
     captured multi-``EX`` deck, #504 U4 and momwire#511), and to "there is
-    nothing to invert" when the I-set is (momwire#1099's several set voltages:
-    the driven sites take their volts and ``I = Y_eff·V`` answers).  The MIXED
-    row between those two is momwire#1110's, and the deck that writes it is
-    EZNEC's own: an ``EX 4`` drive beside the 1e-10 V probes EZNEC puts at
-    lumped loads to read their currents back.  ``_drive_refusal`` is what says
-    which mixed decks arrive here — the probes have to be probes, and off the
-    network — so the V-set below is always negligible against the I-set, which
-    is why the same partition that would be a genuine mixed-source solve is
-    here a solve whose printout cannot be told from the unprobed deck's.
+    nothing to invert" when the I-set is: the driven sites take their volts
+    and either ``I = Y_eff·V`` answers directly (momwire#1099, network-free)
+    or one reducer solve at those volts does (momwire#1105, THROUGH a
+    network) — no map is measured either way, because there is nothing left
+    to solve for.  The MIXED row between those two is momwire#1110's, and the
+    deck that writes it is EZNEC's own: an ``EX 4`` drive beside the 1e-10 V
+    probes EZNEC puts at lumped loads to read their currents back.
+    ``_drive_refusal`` is what says which mixed decks arrive here — the
+    probes have to be probes, and off the network — so the V-set below is
+    always negligible against the I-set, which is why the same partition that
+    would be a genuine mixed-source solve is here a solve whose printout
+    cannot be told from the unprobed deck's.
 
     ``I_spec`` is in the DECK's convention, which is where every number in this
     module lives (module docstring, "Two conventions"): the current an ``EX 4``
@@ -2578,27 +2587,26 @@ def _multi_drive_state(
     v_sites = [index for index in driven if kind_of[index] == 0]
     i_rows = [row_of[index] for index in i_sites]
     v_rows = [row_of[index] for index in v_sites]
-    # `_drive_refusal` keeps an all-EX-0 deck off a TL/NT network
-    # (momwire#1105), so an empty I-set and a network never meet here.
-    assert i_sites or not cards
-
-    if not cards:
-        # The map is `Y_eff` itself on the driven sites: with no network the
-        # source current IS the port current, so nothing has to be measured.
-        m = y_eff[np.ix_(driven, driven)]
-    else:
-        m = np.zeros((len(driven), len(driven)), dtype=np.complex128)
-        for column, index in enumerate(driven):
-            probe = np.zeros(n, dtype=np.complex128)
-            probe[index] = 1.0
-            _v, _i, i_probe = _reduced_state(
-                cards, n, probe, tuple(driven), y_eff, wavelength
-            )
-            m[:, column] = i_probe[driven]
 
     volts = np.zeros(n, dtype=np.complex128)
     volts[v_sites] = spec[v_rows]
     if i_sites:
+        # There is an I-block to invert, so the map from applied volts to
+        # source currents has to exist first.  Network-free, it IS `Y_eff` on
+        # the driven sites, nothing to measure; with a network (momwire#511,
+        # momwire#1110) it is measured a column at a time through the SAME
+        # reduced system the final solve below uses.
+        if not cards:
+            m = y_eff[np.ix_(driven, driven)]
+        else:
+            m = np.zeros((len(driven), len(driven)), dtype=np.complex128)
+            for column, index in enumerate(driven):
+                probe = np.zeros(n, dtype=np.complex128)
+                probe[index] = 1.0
+                _v, _i, i_probe = _reduced_state(
+                    cards, n, probe, tuple(driven), y_eff, wavelength
+                )
+                m[:, column] = i_probe[driven]
         # `I_spec`, less the current the V-set's own volts already deliver to
         # the I-set rows.  With no V-set the subtraction is SKIPPED rather
         # than written as a zero: every captured multi-EX deck comes down this
@@ -2608,6 +2616,10 @@ def _multi_drive_state(
         if v_sites:
             rhs = rhs - m[np.ix_(i_rows, v_rows)] @ spec[v_rows]
         volts[i_sites] = np.linalg.solve(m[np.ix_(i_rows, i_rows)], rhs)
+    # With no I-set (momwire#1099, momwire#1105) `volts` above IS the answer -
+    # there is no map to measure and nothing to invert, network or none: the
+    # applied voltages are the deck's own set quantity, not a current a map
+    # has to be inverted to reach.
 
     if not cards:
         v_applied = volts
@@ -2617,11 +2629,24 @@ def _multi_drive_state(
         v_applied, i_port, i_source = _reduced_state(
             cards, n, volts, tuple(driven), y_eff, wavelength
         )
-    # The I-set's currents are restored rather than read back (the U1 rule);
-    # the V-set's are NOT, because a probe's current is the answer it was
-    # written to read - and through a network it is the reducer's termination
-    # branch, antenna plus network, which `_reduced_state` already put here.
-    i_source[i_sites] = spec[i_rows]
+    if i_sites:
+        # The I-set's currents are restored rather than read back (the U1
+        # rule); the V-set's are NOT, because a probe's current is the answer
+        # it was written to read - and through a network it is the reducer's
+        # termination branch, antenna plus network, which `_reduced_state`
+        # already put here.
+        i_source[i_sites] = spec[i_rows]
+    elif cards:
+        # momwire#1105: an all-voltage drive through a network has no I-set to
+        # restore (the line above), but the reducer solve is where `v_applied`
+        # picks up whatever round-off a network reduction adds, and
+        # `_source_row` only overrides an EX 0's PRINTED voltage with its own
+        # card, not the state this function returns - so a driven site that is
+        # ALSO a network connection point would otherwise print that round-off
+        # in `_port_row`'s STRUCTURE EXCITATION DATA table.  The applied volts
+        # are the set quantity here (same U1 rule, on the other card), so they
+        # are restored byte-exact rather than read back.
+        v_applied[v_sites] = spec[v_rows]
     return _PortState(
         v_applied=v_applied,
         v_gap=v_applied - z_load * i_port,
