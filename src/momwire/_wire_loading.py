@@ -71,6 +71,8 @@ and `RazorSolver._loading_stencil` / `_apply_loading` (the testing-path
 integral).
 """
 
+from dataclasses import dataclass
+
 import numpy as np
 from scipy.special import ive
 
@@ -159,6 +161,137 @@ def equivalent_radius(radius, ins_radius, eps_r):
     )
 
 
+def rlc_impedance(kind, r, l, c, omega):  # noqa: E741 — NEC's own field name
+    """The impedance of an R/L/C triple at ``omega`` — NEC's own arithmetic.
+
+    ``kind`` is ``"series"`` (R + jwL + 1/jwC) or ``"parallel"`` (their
+    parallel combination).  UNITS ARE THE CALLER'S: the same three numbers
+    spell a LUMPED impedance in ohms/henries/farads (``LD 0``/``LD 1``, via
+    :meth:`momwire.deck.model.LoadSpec.impedance`) and a PER-METRE one in
+    ohms/m, henries/m and farads·m (``LD 2``/``LD 3``, via
+    :class:`DistributedRLC`).  One evaluator for both, because the zero
+    convention below is the part that is easy to get subtly different and a
+    second copy of it would eventually disagree with this one (momwire#1088).
+
+    **A zero element drops out of the branch it is in** rather than dividing
+    by zero: NEC reads an absent element as ABSENT, not as a short (series)
+    or an open (parallel).  So a series triple with ``c == 0`` is R + jwL,
+    and a parallel triple with ``l == 0`` is R ‖ (1/jwC).
+
+    ``omega`` may be a scalar or an array; the result broadcasts.
+    """
+    if kind == "series":
+        z = np.asarray(r, dtype=np.complex128) + 0j * np.asarray(omega, dtype=float)
+        if l:
+            z = z + 1j * omega * l
+        if c:
+            z = z + 1.0 / (1j * omega * c)
+        return z
+    if kind == "parallel":
+        y = np.zeros(np.shape(omega), dtype=np.complex128)
+        if r:
+            y = y + 1.0 / r
+        if l:
+            y = y + 1.0 / (1j * omega * l)
+        if c:
+            y = y + 1j * omega * c
+        with np.errstate(divide="ignore", invalid="ignore"):
+            return 1.0 / y
+    raise ValueError(f"unknown RLC kind {kind!r}")
+
+
+@dataclass(frozen=True)
+class DistributedRLC:
+    """A wire's DISTRIBUTED series impedance, spelled as an R/L/C triple
+    per unit length (momwire#1088).
+
+    Z'(w) [Ohm/m] is :func:`rlc_impedance` read in per-metre units, and it
+    enters :func:`series_impedance_per_wire` beside the conductor's own
+    internal impedance and the jacket's inductance — the three are added,
+    because all three are the same kind of object: a per-metre series term
+    the fill integrates along the wire.
+
+    :attr:`kind` is ``"series"`` (NEC's ``LD 2``: Z' = R' + jwL' + 1/jwC')
+    or ``"parallel"`` (``LD 3``: Y' = 1/R' + jwC' + 1/jwL', Z' = 1/Y').
+    :attr:`r` is Ohm/m, :attr:`l` H/m; :attr:`c` is the per-metre
+    capacitance IN THE SERIES-CHAIN SENSE, farad-metres, so that 1/(jwC')
+    is Ohm/m like the rest of the triple.
+
+    THAT LAST UNIT IS NOT WHAT NEC'S ``LD 2``/``LD 3`` CAPACITANCE FIELD
+    MEANS, which is why both dialect readers refuse a nonzero one rather
+    than converting it — see :meth:`momwire.deck._nec2._Nec2Parser._ld23`.
+    The seam serves the general triple because a per-metre series
+    capacitance is a well-defined distributed quantity; it is NEC's CARD
+    that is not.
+    """
+
+    kind: str
+    r: float = 0.0
+    l: float = 0.0  # noqa: E741 — NEC's own field name for the inductance
+    c: float = 0.0
+
+    def __post_init__(self):
+        if self.kind not in ("series", "parallel"):
+            raise ValueError(
+                f"distributed_rlc kind must be 'series' or 'parallel', "
+                f"got {self.kind!r}"
+            )
+        if self.r < 0.0 or self.l < 0.0 or self.c < 0.0:
+            raise ValueError(
+                f"distributed_rlc R'/L'/C' must be >= 0, got "
+                f"({self.r}, {self.l}, {self.c})"
+            )
+        if self.kind == "parallel" and self.r == 0.0 and self.l == 0.0:
+            # 1/R' and 1/jwL' are the only two branches that can carry the
+            # DC/low-frequency admittance; with both absent the parallel
+            # combination is a pure capacitor and 1/Y' is finite, but with
+            # all three absent Y' is 0 and Z' is infinite.  Caught here
+            # rather than at the divide.
+            if self.c == 0.0:
+                raise ValueError(
+                    "distributed_rlc 'parallel' with R' = L' = C' = 0 is an "
+                    "open circuit (Y' = 0), not a load"
+                )
+
+    def impedance_per_metre(self, omega):
+        """Z'(omega) [Ohm/m]; ``omega`` scalar or array."""
+        return rlc_impedance(self.kind, self.r, self.l, self.c, omega)
+
+
+def normalize_distributed_rlc(value, n_wires):
+    """None | one spec (every wire) | length-n_wires sequence of None-or-spec.
+
+    Returns None (off everywhere) or a length-``n_wires`` tuple whose entries
+    are :class:`DistributedRLC` or None.  The scalar-or-sequence shape is
+    :func:`normalize_per_wire`'s, and ``None`` in a sequence is what ``NaN``
+    is there: this wire carries no distributed RLC.
+    """
+    if value is None:
+        return None
+    if isinstance(value, DistributedRLC):
+        return tuple([value] * n_wires)
+    entries = list(value)
+    if len(entries) != n_wires:
+        raise ValueError(
+            f"distributed_rlc: expected one spec or a length-{n_wires} "
+            f"sequence (one entry per wire), got {len(entries)} entries"
+        )
+    out = []
+    for i, entry in enumerate(entries):
+        if entry is None:
+            out.append(None)
+            continue
+        if not isinstance(entry, DistributedRLC):
+            raise ValueError(
+                f"distributed_rlc[{i}]: expected a DistributedRLC or None, "
+                f"got {entry!r}"
+            )
+        out.append(entry)
+    if all(entry is None for entry in out):
+        return None
+    return tuple(out)
+
+
 def normalize_per_wire(value, n_wires, name):
     """None | scalar | length-n_wires sequence → None | (n_wires,) float array.
 
@@ -179,7 +312,12 @@ def normalize_per_wire(value, n_wires, name):
 
 
 def series_impedance_per_wire(
-    omega, wire_radius, conductivity, insulation_radius, insulation_eps_r
+    omega,
+    wire_radius,
+    conductivity,
+    insulation_radius,
+    insulation_eps_r,
+    distributed_rlc=None,
 ):
     """Per-wire distributed series impedance Z'(ω) [Ω/m].
 
@@ -191,14 +329,27 @@ def series_impedance_per_wire(
     same message, no positivity check). `conductivity` /
     `insulation_radius` / `insulation_eps_r` are the normalized (n_wires,)
     arrays (or None) from `normalize_per_wire`; NaN entries switch the
-    effect off for that wire. `omega` may be scalar or (n_k,); the result
-    is (n_wires,) or (n_wires, n_k) complex.
+    effect off for that wire. `distributed_rlc` is the normalized
+    (n_wires,) tuple (or None) from `normalize_distributed_rlc`, whose
+    None entries are the same "not this wire" — an `LD 2` / `LD 3`
+    per-metre RLC (momwire#1088), EVALUATED HERE rather than folded in
+    upstream because Z'(w) is frequency-dependent and a swept fill changes
+    omega under it. `omega` may be scalar or (n_k,); the result is
+    (n_wires,) or (n_wires, n_k) complex.
+
+    The three terms ADD. They are three different per-metre series
+    impedances on one conductor — the metal's own, the jacket's, and
+    whatever the deck loaded the wire with — and nothing about them
+    interacts, which is what lets `LD 2` and `LD 5` on the same wire
+    compose rather than one overwriting the other.
     """
     omega = np.asarray(omega, dtype=float)
     n_w = (
         conductivity.shape[0]
         if conductivity is not None
         else insulation_radius.shape[0]
+        if insulation_radius is not None
+        else len(distributed_rlc)
     )
     radius, _uniform = _wire_spec.normalize_wire_radius(wire_radius, n_w)
     out = np.zeros((n_w,) + omega.shape, dtype=np.complex128)
@@ -210,6 +361,8 @@ def series_impedance_per_wire(
                 radius[w], insulation_radius[w], insulation_eps_r[w]
             )
             out[w] += 1j * omega * L
+        if distributed_rlc is not None and distributed_rlc[w] is not None:
+            out[w] += distributed_rlc[w].impedance_per_metre(omega)
     return out
 
 
@@ -219,13 +372,20 @@ def series_impedance_per_wire(
 
 
 def configure_loading(
-    solver, n_wires, wire_conductivity, insulation_radius, insulation_eps_r
+    solver,
+    n_wires,
+    wire_conductivity,
+    insulation_radius,
+    insulation_eps_r,
+    distributed_rlc=None,
 ):
-    """Normalise and validate the three house loading kwargs onto `solver`.
+    """Normalise and validate the house loading kwargs onto `solver`.
 
     Sets `wire_conductivity`, `insulation_radius`, `insulation_eps_r` — each
     None (off) or a normalized (n_wires,) float array with NaN switching a
-    wire off — and the `_loading_active` predicate every fill branches on.
+    wire off — plus `distributed_rlc` (None, or a length-n_wires tuple of
+    `DistributedRLC`-or-None, momwire#1088), and the `_loading_active`
+    predicate every fill branches on.
     Reads `solver._radius_per_wire`, so the constructor must have normalized
     the radius first.
 
@@ -243,6 +403,7 @@ def configure_loading(
     solver.insulation_eps_r = normalize_per_wire(
         insulation_eps_r, n_wires, "insulation_eps_r"
     )
+    solver.distributed_rlc = normalize_distributed_rlc(distributed_rlc, n_wires)
     if (solver.insulation_radius is None) != (solver.insulation_eps_r is None):
         raise ValueError(
             "insulation_radius and insulation_eps_r must be given together"
@@ -267,8 +428,10 @@ def configure_loading(
                     f"wire_conductivity[{w}] must be > 0 S/m, "
                     f"got {solver.wire_conductivity[w]}"
                 )
-    solver._loading_active = solver.wire_conductivity is not None or (
-        solver.insulation_radius is not None
+    solver._loading_active = (
+        solver.wire_conductivity is not None
+        or solver.insulation_radius is not None
+        or solver.distributed_rlc is not None
     )
 
     # THE OTHER HALF OF THE COATED-WIRE PAIR (momwire#865).
@@ -382,6 +545,7 @@ def loading_for(solver, omega, geom=None):
             solver.wire_conductivity,
             solver.insulation_radius,
             solver.insulation_eps_r,
+            solver.distributed_rlc,
         )
     z_seg = None
     if z_wire is not None and geom is not None:

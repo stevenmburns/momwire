@@ -361,36 +361,60 @@ def render_refusal(
 class LoadRow:
     """One row of the ``STRUCTURE IMPEDANCE LOADING`` table.
 
-    Two shapes, distinguished by which of :attr:`resistance` /
-    :attr:`conductivity` is set — never both, and a row sets exactly one.
+    Three shapes, distinguished by :attr:`kind` (never more than one of
+    :attr:`reactance` / :attr:`inductance`+:attr:`capacitance` /
+    :attr:`conductivity` is set on any row):
 
-    The FIXED-IMPEDANCE shape (``LD 4``) is captured in 0012/0014/0016/0017
-    (W7EL's ``Network Connection Test``, whose two ``LD 4,4,n,0,1.E+10,0.``
-    cards pin a virtual wire's nodes open).  Those four printouts are the
-    only loaded captures in the 80-deck corpus, so the INDUCTANCE /
-    CAPACITANCE columns have never been anything but blank and are not
-    modelled here at all.  :attr:`reactance` is optional because the
-    captured rows leave the IMAGINARY column BLANK where the card wrote
-    ``0.``  Whether the engine blanks a zero or never prints that column for
-    ``LD 4`` is unobserved, so the cell is carried as present-or-absent
-    rather than guessed at.
+    The FIXED-IMPEDANCE shape (``LD 4``, ``kind="FIXED IMPEDANCE"``) is
+    captured in 0012/0014/0016/0017 (W7EL's ``Network Connection Test``,
+    whose two ``LD 4,4,n,0,1.E+10,0.`` cards pin a virtual wire's nodes
+    open).  :attr:`reactance` is optional because the captured rows leave
+    the IMAGINARY column BLANK where the card wrote ``0.``
 
-    :attr:`node_from` and :attr:`node_thru` are the DECODED node for this
-    shape, and the contrast with :class:`NetworkRow` is the point: the same
-    ``-1`` address that prints as a negative segment there prints as ``1``
-    here (0025's ``LD 4,1,-1`` against its ``TL 5,3,1,-1``, in one
-    printout).  The loading table carries no sign at all.
+    The SERIES/PARALLEL shape (``LD 0``/``LD 1``, momwire#1085 — EZNEC never
+    emits either, so no capture carries one) fills the RESISTANCE /
+    INDUCTANCE / CAPACITANCE columns instead of IMPEDANCE (OHMS), and blanks
+    whichever of the three the card wrote as ``0.`` — verified against our
+    licensed materials (``tests/fixtures/eznec_ld01_1085/``): a zero
+    component prints blank, not ``0.0000E+00``, the same convention
+    :attr:`reactance` already follows.  :attr:`resistance`,
+    :attr:`inductance` and :attr:`capacitance` are the card's own R, L, C —
+    never an impedance evaluated at a frequency, which is a solve-time
+    question this printout does not answer.
 
-    The WIRE shape (``LD 5``, momwire#1082) has no capture to measure
-    against — the corpus's CONDUCTIVITY column had never carried a value
-    before this issue — so it is built from the NEC standard's own column
-    layout (present in every capture's header row) and verified against our
-    licensed materials rather than against a printout in this tree.
-    :attr:`node_from` / :attr:`node_thru` are the SEGMENT RANGE as the ``LD``
-    card wrote it, not a decoded node (:class:`~momwire.deck._nec5.
-    Nec5Conductivity`); :attr:`tag` is 0 for the whole-structure spelling,
-    which :func:`_load_row` prints as a BLANK ITAG rather than the digit 0 —
-    the licensed engine's own row for the field report's deck.
+    :attr:`node_from` and :attr:`node_thru` are ``abs(LDTAGF)`` — the deck's
+    own written field, NOT the decoded node.  0025's ``LD 4,1,-1`` printing
+    ``1  1`` was read as "the decoded node" until momwire#1085's probe told
+    two spellings of the same node apart: ``LD 4,tag,5,1,...`` (segment 5,
+    end 1 — antennaknobs' own explicit-end spelling) decodes to node 4 but
+    still prints ``5  5``, matching ``abs(5)`` and not the node.  The two
+    readings only ever agreed before because the corpus's one negative
+    spelling is always ``-1``, where ``abs(-1) == max(decoded_node, 1) == 1``
+    either way.  The contrast with :class:`NetworkRow` still stands — the
+    loading table carries no sign at all, where ``NETWORK DATA`` does.
+
+    The WIRE shape (``LD 5``, momwire#1082, ``kind="WIRE"``) has no capture
+    to measure against — the corpus's CONDUCTIVITY column had never carried
+    a value before that issue — so it is built from the NEC standard's own
+    column layout (present in every capture's header row) and verified
+    against our licensed materials rather than against a printout in this
+    tree.  :attr:`node_from` / :attr:`node_thru` are the SEGMENT RANGE as
+    the ``LD`` card wrote it, not a node at all
+    (:class:`~momwire.deck._nec5.Nec5Conductivity`); :attr:`tag` is 0 for
+    the whole-structure spelling, which :func:`_load_row` prints as a BLANK
+    ITAG rather than the digit 0 — the licensed engine's own row for the
+    field report's deck.
+
+    The PER-METRE shape (``LD 2`` / ``LD 3``, momwire#1088) is the fourth,
+    ``kind="SERIES (PER METER)"`` / ``"PARALLEL (PER METER)"``: the same
+    RESISTANCE / INDUCTANCE / CAPACITANCE cells the SERIES/PARALLEL shape
+    fills, on a wider canvas.  Like the WIRE shape it addresses a
+    SEGMENT RANGE and blanks a tag-0 ITAG; unlike either of the others, a
+    ZERO FIELD PRINTS BLANK rather than as ``0.0000E+00`` — measured against
+    our licensed materials, an ``LD 2`` with only an inductance prints its
+    RESISTANCE and CAPACITANCE cells empty.  That is why all three of
+    :attr:`resistance` / :attr:`inductance` / :attr:`capacitance` are
+    optional here: absent is a cell the engine did not write.
     """
 
     tag: int
@@ -398,7 +422,11 @@ class LoadRow:
     node_thru: int
     resistance: float | None = None
     reactance: float | None = None
+    inductance: float | None = None
+    capacitance: float | None = None
     conductivity: float | None = None
+    inductance: float | None = None
+    capacitance: float | None = None
     kind: str = "FIXED IMPEDANCE"
 
 
@@ -411,11 +439,21 @@ class PortRow:
     under ``ANTENNA INPUT PARAMETERS``), so they share a row type.
 
     :attr:`end_index` is the trailing digit after the ``TAG``/``SEG.`` pair.
-    It tracks the DECK'S SIGN, 9 of 9 rows in the capture study's table
-    ("Signed segment addressing", 2026-08-16): a positive node field prints
-    1, the ``-1`` spelling of node 0 prints 2.  It is not a port number and
-    not an end-one/end-two flag — ``DipTL1`` reports 2 on a card's end one —
-    so it is carried as read rather than derived from anything here.
+    On EZNEC's own sign-of-the-node-field spelling it tracks the DECK'S
+    SIGN, 9 of 9 rows in the capture study's table ("Signed segment
+    addressing", 2026-08-16): a positive node field prints 1, the ``-1``
+    spelling of node 0 prints 2.  It is not a port number and not an
+    end-one/end-two flag — ``DipTL1`` reports 2 on a card's end one — so it
+    is carried as read rather than derived from anything here.
+
+    On antennaknobs' own explicit end code (an ``EX`` card only, momwire#1092
+    — ``TL``/``NT`` have no field to carry it) the SAME digit is still
+    carried as read rather than derived from the node, but the field it is
+    read from is different and the mapping is the INVERSE of the naive
+    guess: measured against our licensed materials, an explicit end 1
+    prints 2 and an explicit end 2 prints 1 —
+    :func:`~momwire.eznec._serve._source_segment_and_end` is where that
+    read happens for this row's producer.
     """
 
     tag: int
@@ -1025,10 +1063,12 @@ def _load_row(row: LoadRow) -> str:
     starts in column 102 and is blank-padded to 16 (``FIXED IMPEDANCE `` —
     the trailing blank is real).
 
-    The IMAGINARY cell is INFERRED and no capture fills it: its width is
-    REAL's, and its right edge is put two columns past its own header the way
-    REAL's sits two columns past ``REAL``.  The first printout that carries a
-    reactive load is the line that corrects it.
+    The IMAGINARY cell's right edge was INFERRED (two columns past its own
+    header) until momwire#1085's probe carried the first NONZERO ``LD 4``
+    reactance ever run through our licensed materials
+    (``tests/fixtures/eznec_ld01_1085/synthetic_ld01.out``) and corrected it:
+    the cell ends at column 86, not 88 — two columns past where REAL's OWN
+    cell ends (73), not two past ``IMAGINARY``'s header word.
 
     ITAG (:attr:`LoadRow.tag`) prints BLANK rather than ``0`` for the
     whole-structure spelling — the one case this dialect ever reads a card
@@ -1044,7 +1084,59 @@ def _load_row(row: LoadRow) -> str:
     (``WIRE``) starts at column 104 rather than 102 and is NOT blank-padded
     to 16: the measured row ends two columns past ``WIRE`` itself, at 110,
     not at 118.
+
+    The SERIES/PARALLEL shape (momwire#1085) shares the WIRE row's 110-wide
+    canvas (no IMPEDANCE (OHMS) cells), verified against our licensed
+    materials on a synthesized deck (``tests/fixtures/eznec_ld01_1085/``):
+    RESISTANCE / INDUCTANCE / CAPACITANCE are E11.4 cells ending at columns
+    34/47/60, and the TYPE text is its keyword CENTRED in an 8-column field
+    ending at 110 — ``"SERIES".center(8)`` and ``"PARALLEL".center(8)``
+    reproduce both measured rows byte for byte, including the WIRE row's own
+    ``place_wire(row.kind, 108)`` as the width-4 case of the same rule
+    (``"WIRE".center(8)`` ending at 110 places the word at 104:108).
+
+    The PER-METRE shape (``LD 2`` / ``LD 3``, momwire#1088) is a third write
+    statement again, measured the same way on
+    ``tests/fixtures/eznec_ld23_1088/``.  Its three value cells are the
+    header's own first three — RESISTANCE, INDUCTANCE, CAPACITANCE — each an
+    E11.4 in a 13-wide field, ending in columns 34, 47 and 60; a cell whose
+    field the card wrote as zero is BLANK, not a printed zero.  The TYPE text
+    sits in a 20-column field ending at 122, which reproduces both observed
+    spellings exactly: ``PARALLEL (PER METER)`` fills it, and
+    ``SERIES (PER METER)`` lands one column in with one blank left over at
+    the end.
     """
+    if row.kind in (
+        "SERIES",
+        "PARALLEL",
+        "SERIES (PER METER)",
+        "PARALLEL (PER METER)",
+    ):
+        per_metre = row.kind.endswith("(PER METER)")
+        canvas = [" "] * (122 if per_metre else 110)
+
+        def place_rlc(text: str, end: int) -> None:
+            canvas[end - len(text) : end] = list(text)
+
+        if row.tag != 0:
+            place_rlc(f"{row.tag:d}", 8)
+        place_rlc(f"{row.node_from:d}", 13)
+        place_rlc(f"{row.node_thru:d}", 18)
+        # A zero field prints BLANK on both shapes (momwire#1085 passes None
+        # for it, momwire#1088 passes the written 0.0; either lands here).
+        for value, end in (
+            (row.resistance, 34),
+            (row.inductance, 47),
+            (row.capacitance, 60),
+        ):
+            if value:
+                place_rlc(_e(value, 11, 4), end)
+        if per_metre:
+            place_rlc(row.kind.center(20), 122)
+        else:
+            place_rlc(row.kind.center(8), 110)
+        return "".join(canvas)
+
     if row.conductivity is not None:
         canvas = [" "] * 110
 
@@ -1069,7 +1161,7 @@ def _load_row(row: LoadRow) -> str:
     place(f"{row.node_thru:d}", 18)
     place(_e(row.resistance, 11, 4), 73)
     if row.reactance is not None:
-        place(_e(row.reactance, 11, 4), 88)
+        place(_e(row.reactance, 11, 4), 86)
     place(row.kind.ljust(16), 118)
     return "".join(canvas)
 

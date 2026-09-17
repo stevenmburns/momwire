@@ -24,6 +24,7 @@ from ._nec2_geometry import _SMIN, Nec2Structure, build_geometry
 from .model import (
     DeckModel,
     DeckWire,
+    DistributedRLC,
     Environment,
     ExecuteGroup,
     FarFieldRequest,
@@ -295,6 +296,11 @@ class _Nec2Parser:
         self._global_conductivity: float | None = None
         self._wire_conductivity: dict[int, float] = {}
         self._wire_insulation: dict[int, tuple[float, float]] = {}
+        # `LD 2` / `LD 3` per-metre RLC (momwire#1088), scoped exactly as
+        # type 5's conductivity is: whole structure or whole wire, cleared
+        # by `LD -1` because it is read under the LD mnemonic.
+        self._global_distributed: DistributedRLC | None = None
+        self._wire_distributed: dict[int, DistributedRLC] = {}
 
     # -- geometry ----------------------------------------------------------
 
@@ -322,6 +328,17 @@ class _Nec2Parser:
     # ground-medium``) ------------------------------------------------------
 
     def _gn(self, card: Card) -> None:
+        if card.trailer is not None:
+            # The shared tokenizer (momwire#1084) reads a GN card's
+            # non-numeric last token as a trailer only so NEC-5's Sommerfeld-
+            # table filename can tokenize at all; this dialect's own GN has
+            # no such field, so a trailer here is not silently accepted just
+            # because the tokenizer now knows the shape.
+            raise DeckError(
+                f"GN carries a trailing token {card.trailer!r}; this engine's "
+                f"nec2 dialect has no Sommerfeld-table file field on GN "
+                f"(momwire#1084 adds that field to the nec5 dialect only)"
+            )
         code = card.i(0)
         nradl = card.i(1)
         # The radial-screen refusal is oracle-verified as scoped to the two
@@ -523,19 +540,29 @@ class _Nec2Parser:
             self._load_spec_at = {}
             self._global_conductivity = None
             self._wire_conductivity = {}
+            self._global_distributed = None
+            self._wire_distributed = {}
             return
-        if ldtyp not in (0, 1, 4, 5):
-            # 2/3 (per-metre RLC) and 6/7 (4nec2 extensions) refuse by name,
-            # same as any type this engine does not recognise.
+        if ldtyp not in (0, 1, 2, 3, 4, 5):
+            # 6/7 (4nec2 extensions) refuse by name, same as any type this
+            # engine does not recognise.
             raise DeckError(f"LD type {ldtyp} is not supported by this engine")
 
         tag, first, last = card.i(1), card.i(2), card.i(3)
+
+        if ldtyp in (2, 3):
+            # Per-metre RLC (momwire#1088): a MATERIAL property like type
+            # 5's conductivity rather than a lumped element, so it takes
+            # that card's range rule and never reaches the per-segment
+            # expansion or the double-load dedup below.
+            self._ld23(ldtyp, tag, first, last, card)
+            return
 
         if ldtyp == 5:
             # A conductivity is read under the LD mnemonic and lands in the
             # same matrix diagonal, so it is cell-scoped exactly as a lumped
             # load is.
-            self._ld5(tag, first, last, card.f(4))
+            self._ld5(tag, first, last, card.f(4), card.f(5))
             return
 
         pairs = self.structure.ld_segment_range(tag, first, last)
@@ -566,7 +593,89 @@ class _Nec2Parser:
             _, arclength = self.structure.resolve_of(wire, seg)
             self._loads.append((piece_index, arclength, spec))
 
-    def _ld5(self, tag: int, first: int, last: int, sigma: float) -> None:
+    def _ld23(self, ldtyp: int, tag: int, first: int, last: int, card: Card) -> None:
+        """``LD 2`` / ``LD 3`` — a DISTRIBUTED series or parallel RLC per unit
+        length (momwire#1088).
+
+        Read as a wire MATERIAL, not as a lumped element: Z'(w) [Ohm/m] joins
+        the conductor's own internal impedance and the jacket's inductance in
+        :func:`~momwire._wire_loading.series_impedance_per_wire`, which is
+        why this card takes :meth:`_ld5`'s range rule (whole structure or
+        whole wire) and not the segment expansion types 0/1/4 go through.
+        The three terms ADD, so an ``LD 2`` and an ``LD 5`` on one wire
+        compose.
+
+        The whole-structure spelling is ``tag`` 0 with ``first`` 0, exactly as
+        for ``LD 5``; a nonzero tag names one whole wire, through
+        :meth:`_cell_rule` so a GX/GR cell address widens the way every other
+        LD card's does.
+
+        **The CAPACITANCE field refuses.**  Measured 2026-09-16 on nec2c and
+        on our licensed NEC-5 materials, on a 1 m wire at 30 MHz at 4, 8 and
+        16 segments: the resistance and inductance fields are genuinely per
+        unit length — a segment of length d gets R'd and jw L' d, and the
+        answer converges as the mesh refines — but the capacitance field is
+        scaled BY the segment length rather than divided by it.  ``LD 2``
+        with C' alone reproduces ``LD 0`` with a LUMPED C = C'*d on the same
+        range, to every printed digit on nec2c; so the card's contribution to
+        the wire's per-metre impedance is 1/(jw C' d^2), which is a property
+        of the DECK'S SEGMENTATION rather than of the wire.
+
+        That number cannot be folded into this seam honestly.  ``z_wire`` is
+        formulation-independent on purpose — four different testing schemes
+        integrate it, and only a point-matched one would reproduce NEC's
+        chain-of-lumped-capacitors from a per-metre value — so a capacitance
+        laundered through it would come out as a basis artifact rather than
+        as the deck's physics.  Refusing costs nothing observed: the two
+        ``LD 2`` cards antennaknobs emits (the jacket's equivalent-radius
+        pair, its issue #1523) write ``0.`` in this field, and no deck in
+        either repo's corpus carries a nonzero one.
+        """
+        r, l, c = card.f(4), card.f(5), card.f(6)  # noqa: E741 — NEC's field name
+        if c != 0.0:
+            raise DeckError(
+                f"LD {ldtyp} asks for a capacitance of {c:g} in its per-unit-"
+                f"length RLC, which this engine does not serve: NEC scales that "
+                f"field BY the segment length rather than per unit length (an "
+                f"LD {ldtyp} with C alone reproduces a LUMPED C x segment-length "
+                f"on nec2c and on our licensed NEC-5 materials), so the wire's "
+                f"per-metre impedance would carry a 1/(jw C d^2) term that "
+                f"changes when the deck is re-segmented — the resistance and "
+                f"inductance fields ARE per unit length and are served "
+                f"(momwire#1088)"
+            )
+        if r < 0.0 or l < 0.0:
+            raise DeckError(
+                f"LD {ldtyp} asks for a negative per-unit-length "
+                f"{'resistance' if r < 0.0 else 'inductance'} "
+                f"({r:g}, {l:g}); a passive distributed loading is "
+                f"non-negative and this engine refuses it at the card"
+            )
+        if r == 0.0 and l == 0.0:
+            # The same no-op rule `_load_spec` applies to a zero-valued
+            # lumped card: a deck byte-identical to omitting the card is
+            # not refused for a range rule it never trips.
+            return
+        spec = DistributedRLC("series" if ldtyp == 2 else "parallel", r=r, l=l)
+        if tag == 0 and first == 0:
+            self._global_distributed = spec
+            return
+        pairs = self._cell_rule(self.structure.ld_segment_range(tag, first, last))
+        by_wire: dict[int, set[int]] = {}
+        for wire, seg in pairs:
+            by_wire.setdefault(wire, set()).add(seg)
+        for wire, segs in by_wire.items():
+            if segs != set(range(1, self.structure.wires[wire].n_seg + 1)):
+                raise DeckError(
+                    f"LD {ldtyp} per-unit-length loading on a partial-wire "
+                    f"segment range is not supported by this engine — a "
+                    f"distributed RLC is a wire property and covers whole "
+                    f"wires only"
+                )
+        for wire in by_wire:
+            self._wire_distributed[wire] = spec
+
+    def _ld5(self, tag: int, first: int, last: int, sigma: float, mu: float) -> None:
         """``LD 5`` — whole-structure or per-wire conductivity, not a lumped
         element (spec: "a material property").
 
@@ -579,7 +688,26 @@ class _Nec2Parser:
         — replication maps a whole wire to whole wires and a partial range to
         partial ranges — while leaving the out-of-cell refusal as the first
         thing a copy-addressed card hears.
+
+        ``mu`` (field 6, relative permeability) is read and refused when it
+        is not 1 (momwire#1083): ``_wire_loading.wire_internal_impedance``,
+        which ``sigma`` eventually reaches, hard-codes vacuum permeability
+        and has no parameter for this value, so accepting a non-unity mu here
+        would silently model a steel or ferrite-loaded wire as copper.
+        Omitted or written 0 both read as the unstated 1, the same "absent
+        means default" rule :meth:`~momwire.deck._nec5._Nec5Parser._ld5`
+        applies to its own field 6 — the nec5 dialect already serves this
+        card this way, and #1083 was found scoping #1082's twin request for
+        it while auditing why this dialect did not.
         """
+        if mu != 0.0 and mu != 1.0:
+            raise DeckError(
+                f"LD 5 asks for a relative permeability of {mu:g}; this engine's "
+                f"wire internal-impedance model has no permeability parameter "
+                f"(`wire_internal_impedance` hard-codes vacuum permeability) and "
+                f"refuses a non-unity value rather than silently modelling it as "
+                f"copper"
+            )
         if tag == 0 and first == 0:
             self._global_conductivity = sigma
             return
@@ -994,7 +1122,8 @@ class _Nec2Parser:
     def _material_for(self, wire: int) -> WireMaterial | None:
         conductivity = self._wire_conductivity.get(wire, self._global_conductivity)
         insulation = self._wire_insulation.get(wire)
-        if conductivity is None and insulation is None:
+        distributed = self._wire_distributed.get(wire, self._global_distributed)
+        if conductivity is None and insulation is None and distributed is None:
             return None
         if insulation is not None:
             radius, eps_r = insulation
@@ -1002,8 +1131,9 @@ class _Nec2Parser:
                 conductivity=conductivity,
                 insulation_radius=radius,
                 insulation_eps_r=eps_r,
+                distributed_rlc=distributed,
             )
-        return WireMaterial(conductivity=conductivity)
+        return WireMaterial(conductivity=conductivity, distributed_rlc=distributed)
 
     def _feeds_and_groups(
         self, structure: Nec2Structure

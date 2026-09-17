@@ -642,3 +642,103 @@ def test_lumped_load_normalisation_is_shared():
     with pytest.raises(ValueError, match="expected"):
         _wire_loading.normalize_lumped_loads([(0, 1.0)], 1)
     assert _wire_loading.normalize_lumped_loads(None, 1) == []
+
+
+# ----------------------------------------------------------------------
+# The per-metre RLC spec (momwire#1088): NEC's `LD 2` / `LD 3` at the seam
+# ----------------------------------------------------------------------
+
+RLC = _wire_loading.DistributedRLC
+
+
+def _z_prime(spec, omega):
+    """Z' for one wire through the real seam, not through the spec's own
+    method — so a term added to `series_impedance_per_wire` and never
+    reached by `loading_for` cannot pass."""
+    return _wire_loading.series_impedance_per_wire(
+        omega, A_28, None, None, None, (spec,)
+    )[0]
+
+
+@pytest.mark.parametrize("freq", [1.8e6, 148.5e6])
+def test_series_per_metre_matches_the_closed_form(freq):
+    """Z' = R' + jwL' + 1/(jwC'), at TWO frequencies — a spec folded in at
+    construction time rather than evaluated at omega passes one and fails
+    the other."""
+    omega = 2 * np.pi * freq
+    spec = RLC("series", r=1.5, l=2.0e-6, c=1.0e-9)
+    expected = 1.5 + 1j * omega * 2.0e-6 + 1.0 / (1j * omega * 1.0e-9)
+    assert _z_prime(spec, omega) == pytest.approx(expected, rel=1e-12)
+
+
+@pytest.mark.parametrize("freq", [1.8e6, 148.5e6])
+def test_parallel_per_metre_matches_the_closed_form(freq):
+    omega = 2 * np.pi * freq
+    spec = RLC("parallel", r=300.0, l=1.0e-6, c=5.0e-12)
+    y = 1.0 / 300.0 + 1.0 / (1j * omega * 1.0e-6) + 1j * omega * 5.0e-12
+    assert _z_prime(spec, omega) == pytest.approx(1.0 / y, rel=1e-12)
+
+
+def test_a_zero_element_drops_out_of_the_branch_it_is_in():
+    """NEC reads an absent element as ABSENT — not a short in a series
+    branch, not an open in a parallel one.  A naive evaluator divides by
+    zero here instead."""
+    omega = 2 * np.pi * 14.1e6
+    assert _z_prime(RLC("series", r=1.5, l=2.0e-6), omega) == pytest.approx(
+        1.5 + 1j * omega * 2.0e-6, rel=1e-12
+    )
+    assert _z_prime(RLC("parallel", r=300.0, l=1.0e-6), omega) == pytest.approx(
+        1.0 / (1.0 / 300.0 + 1.0 / (1j * omega * 1.0e-6)), rel=1e-12
+    )
+
+
+def test_a_wire_switched_off_contributes_nothing():
+    """None in a per-wire sequence is what NaN is for the float arrays."""
+    omega = 2 * np.pi * 14.1e6
+    spec = RLC("series", r=1.5, l=2.0e-6)
+    z = _wire_loading.series_impedance_per_wire(
+        omega, A_28, None, None, None, (spec, None)
+    )
+    assert z[0] == pytest.approx(1.5 + 1j * omega * 2.0e-6, rel=1e-12)
+    assert z[1] == 0j
+
+
+def test_the_three_per_metre_terms_add():
+    """`LD 2` and `LD 5` on one wire COMPOSE — nothing about the metal, the
+    jacket and the deck's own loading interacts, so the seam adds them."""
+    omega = 2 * np.pi * 14.1e6
+    spec = RLC("series", r=1.5, l=2.0e-6)
+    both = _wire_loading.series_impedance_per_wire(
+        omega, A_28, np.array([SIGMA_CU]), None, None, (spec,)
+    )[0]
+    metal = _wire_loading.series_impedance_per_wire(
+        omega, A_28, np.array([SIGMA_CU]), None, None, None
+    )[0]
+    assert both == pytest.approx(metal + 1.5 + 1j * omega * 2.0e-6, rel=1e-12)
+
+
+def test_the_spec_reaches_a_solve_through_loading_for():
+    solver = _solver(distributed_rlc=RLC("series", r=1.5))
+    assert solver._loading_active
+    spec = _wire_loading.loading_for(solver, 2 * np.pi * 14.1e6)
+    assert spec.z_wire[0] == pytest.approx(1.5 + 0j, rel=1e-12)
+
+
+def test_distributed_rlc_validation_errors():
+    with pytest.raises(ValueError, match="'series' or 'parallel'"):
+        RLC("shunt", r=1.0)
+    with pytest.raises(ValueError, match=">= 0"):
+        RLC("series", r=-1.0)
+    with pytest.raises(ValueError, match="open circuit"):
+        RLC("parallel")
+    with pytest.raises(ValueError, match="length-1 sequence"):
+        _solver(distributed_rlc=[RLC("series", r=1.0), None])
+    with pytest.raises(ValueError, match="DistributedRLC or None"):
+        _solver(distributed_rlc=[1.0])
+
+
+def test_an_all_none_sequence_is_off_rather_than_active():
+    """The same rule `_wire_loading`'s float arrays follow: nothing finite
+    and no kwarg at all describe the same bare wire."""
+    assert _wire_loading.normalize_distributed_rlc([None], 1) is None
+    assert not _solver(distributed_rlc=[None])._loading_active

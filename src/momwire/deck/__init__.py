@@ -53,6 +53,7 @@ from ._solver import (
 from .model import (
     DeckModel,
     DeckWire,
+    DistributedRLC,
     Environment,
     ExecuteGroup,
     FarFieldRequest,
@@ -75,6 +76,7 @@ __all__ = [
     "DeckModel",
     "DeckWire",
     "WireMaterial",
+    "DistributedRLC",
     "LoadSpec",
     "SecondMedium",
     "Environment",

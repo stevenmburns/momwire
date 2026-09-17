@@ -392,10 +392,13 @@ from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
 from .. import _field_point, _ground_refl, _ground_spec, _medium_spec
 from ..deck._nec5 import (
+    Nec5Conductivity,
     Nec5Deck,
+    Nec5DistributedRLC,
     Nec5FarFieldRequest,
     Nec5FreeSpace,
     Nec5Ground,
+    Nec5Load,
     Nec5MininecGround,
     Nec5NearFieldRequest,
     Nec5Network,
@@ -603,10 +606,12 @@ _REFUSE_MIXED_DRIVE_KINDS = (
     "sixteen captured multi-EX decks write, and a mixed drive has no printed "
     "row anywhere to be gated against"
 )
-_REFUSE_MULTI_EX_VOLTAGE = (
-    "this deck carries {count} EX 0 cards; a multi-VOLTAGE drive is not served "
-    "at this seam - none of the 80 captured decks writes one, so nothing says "
-    "what the engine prints for it"
+_REFUSE_MULTI_EX_VOLTAGE_NETWORK = (
+    "this deck carries {count} EX 0 cards and a TL/NT network; a multi-VOLTAGE "
+    "drive is not served through a network at this seam - "
+    "none of the 80 captured decks writes one, so nothing says what the engine "
+    "does with the pair, and the network-free shape it does serve "
+    "(momwire#1099) is a different solve"
 )
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
@@ -1093,11 +1098,21 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
         return None
     voltages = kinds.count(0)
     if voltages and voltages != len(kinds):
+        # Measured 2026-09-17 on our licensed NEC-5 (momwire#1099): a 1e-10 V
+        # probe beside an EX 4 that reaches the structure through an NT
+        # printed the probe row alone and NO current anywhere - the engine's
+        # own answer to the mixed shape is degenerate, so it stays refused
+        # rather than reproduced.
         return _REFUSE_MIXED_DRIVE_KINDS.format(
             count=len(kinds), voltages=voltages, currents=len(kinds) - voltages
         )
-    if voltages:
-        return _REFUSE_MULTI_EX_VOLTAGE.format(count=voltages)
+    if voltages and (deck.transmission_lines or deck.networks):
+        return _REFUSE_MULTI_EX_VOLTAGE_NETWORK.format(count=voltages)
+    # Several EX 0 with no network is SERVED since momwire#1099: EZNEC Pro/4+
+    # writes a 1e-10 V source beside every lumped load to read the load
+    # current back from its ANTENNA INPUT PARAMETERS row, and the fixture at
+    # tests/fixtures/eznec_probe_ex_1099/ is the engine's printout for that
+    # shape - one row per card, the drive row unmoved by the probe.
     seen: set[Nec5Node] = set()
     for source in deck.sources:
         if source.at in seen:
@@ -1903,7 +1918,7 @@ def _solver_for(
     # NaN for "not this one" and infer the rest (`_wire_loading.py`); no
     # kwarg at all is what a bare wire was built against, so it is omitted
     # rather than passed all-NaN.
-    loading: dict[str, np.ndarray] = {}
+    loading: dict[str, object] = {}
     if deck.wire_conductivity:
         loading["wire_conductivity"] = np.array(
             [
@@ -1911,6 +1926,16 @@ def _solver_for(
                 for piece in mesh.pieces
             ]
         )
+    # `LD 2` / `LD 3` per-metre RLC (momwire#1088), the same per-PIECE fan-out
+    # over the same tags, with None where NaN stands above because the entry
+    # is an object rather than a float.  It rides beside the conductivity
+    # rather than instead of it: the two ADD in `series_impedance_per_wire`,
+    # which is what lets antennaknobs' own a'+L' pair (its #1523) — an `LD 2`
+    # inductance beside an `LD 5` conductivity on one wire — serve as written.
+    if deck.wire_distributed_rlc:
+        loading["distributed_rlc"] = [
+            deck.wire_distributed_rlc.get(piece.tag) for piece in mesh.pieces
+        ]
 
     return solver_class(
         wires=[piece.points for piece in mesh.pieces],
@@ -2042,6 +2067,38 @@ def _network_card(
             y22=net.y22,
         ),
     )
+
+
+def _source_segment_and_end(
+    structure: Structure, source: Nec5Source
+) -> tuple[int, int]:
+    """The ``ANTENNA INPUT PARAMETERS`` ``SEG.`` column and trailing end
+    digit for one ``EX`` card, covering both dialect spellings.
+
+    ``end_code == 0`` (EZNEC's own spelling, all 49 captures) is
+    :func:`_segment_of` on the decoded node plus the sign rule
+    :class:`~momwire.eznec._printout.PortRow` documents, unchanged.
+
+    ``end_code in (1, 2)`` (antennaknobs' explicit end code, momwire#1092)
+    prints DIFFERENTLY even when it names the same node as some signed
+    spelling: measured against our licensed materials on a probe deck of
+    our own (``tests/fixtures/eznec_endcode_1092/``), segment 5 end 2 and
+    segment 6 end 1 both decode to node 5 on a 9-segment wire, but the
+    first prints ``5 1`` and the second ``6 2`` — the SEG. column is
+    ``abs`` of the written middle field (:attr:`Nec5Source.printed_location`,
+    the same rule :class:`~momwire.deck._nec5.Nec5Load` prints its loading
+    row by), carried through the tag's global element offset, and the
+    trailing digit is 2 for an explicit end 1 and 1 for an explicit end 2 —
+    the INVERSE of the digit each end code names, measured on the same
+    probe and not derived from anything else.
+    """
+    if source.end_code in (1, 2):
+        segment = structure.first_element(source.at.tag) + source.printed_location - 1
+        end_index = 2 if source.end_code == 1 else 1
+        return segment, end_index
+    segment = _segment_of(structure, source.at)
+    end_index = 2 if source.at.written == -1 else 1
+    return segment, end_index
 
 
 def _signed_segment(structure: Structure, at: Nec5Node) -> int:
@@ -2368,6 +2425,27 @@ def _multi_drive_state(
     for source in deck.sources:
         spec[row_of[site_of[source.at]]] = source.drive
 
+    if all(source.kind == 0 for source in deck.sources):
+        # Several VOLTAGES at once (momwire#1099): the set quantity is the
+        # applied voltage itself, so there is nothing to invert - the driven
+        # sites take their volts and the whole loaded structure answers with
+        # `I = Y_eff · V`, every undriven site still shorted.  EZNEC's load
+        # probes are this shape: a 1e-10 V source in series with the load,
+        # which moves the drive row by nothing the printout can show (the
+        # fixture's two printouts agree to every digit).  `_drive_refusal`
+        # keeps the network case out, so `cards` is empty here.
+        assert not cards
+        v_applied = np.zeros(n, dtype=np.complex128)
+        v_applied[driven] = spec
+        i_port = y_eff @ v_applied
+        return _PortState(
+            v_applied=v_applied,
+            v_gap=v_applied - z_load * i_port,
+            i_port=i_port,
+            i_source=i_port.copy(),
+            z_load=z_load,
+        )
+
     if not cards:
         v_applied = np.zeros(n, dtype=np.complex128)
         v_applied[driven] = np.linalg.solve(y_eff[np.ix_(driven, driven)], spec)
@@ -2472,14 +2550,16 @@ def _source_row(
         voltage = source.drive
     else:
         current = source.drive
+    # SEG. and the trailing end digit: `_source_segment_and_end` covers
+    # EZNEC's own sign-of-the-node-field spelling (9 of 9 capture-study
+    # rows: node 0 written -1 prints 2, a positive node field prints 1 —
+    # 0031 and 0032 print 2 on every one of their six rows, six more of the
+    # same) and antennaknobs' explicit end code alike (momwire#1092).
+    segment, end_index = _source_segment_and_end(structure, source)
     return PortRow(
         tag=source.at.tag,
-        segment=_segment_of(structure, source.at),
-        # The trailing index tracks the DECK's spelling, 9 of 9 rows in the
-        # capture study: node 0 written -1 prints 2, a positive node field
-        # prints 1.  0031 and 0032 print ``2`` on every one of their six rows,
-        # which is six more of the same.
-        end_index=2 if source.at.written == -1 else 1,
+        segment=segment,
+        end_index=end_index,
         voltage=voltage,
         current=current,
         impedance=_ratio(voltage, current),
@@ -3066,6 +3146,63 @@ def _inert_pieces(mesh: _Mesh, ground: dict) -> list[int]:
     ]
 
 
+def _loading_row(card: Nec5Load | Nec5Conductivity) -> LoadRow:
+    """One ``STRUCTURE IMPEDANCE LOADING`` row, from either load-card shape.
+
+    Dispatches on TYPE rather than a shared field: a :class:`Nec5Load`
+    carries a symbolic :class:`~momwire.deck.model.LoadSpec` and a
+    :class:`Nec5Conductivity` carries a segment range with no node in it at
+    all.  No branch needs a frequency: the printed RESISTANCE / INDUCTANCE /
+    CAPACITANCE cells are the LD 0/1 card's own R, L, C (momwire#1085), and
+    LD 4's REAL/IMAGINARY cells are its R, X directly -- an impedance
+    evaluated at a frequency is a SOLVE question this table never answers.
+    """
+    if isinstance(card, Nec5Conductivity):
+        return LoadRow(
+            tag=card.tag,
+            node_from=card.segment_from,
+            node_thru=card.segment_thru,
+            conductivity=card.sigma,
+            kind="WIRE",
+        )
+    if isinstance(card, Nec5DistributedRLC):
+        # ``LD 2`` / ``LD 3`` (momwire#1088): the header's own RESISTANCE /
+        # INDUCTANCE / CAPACITANCE cells, a field the card wrote as zero
+        # printing BLANK, so the numbers are passed as written (0.0
+        # included) and :func:`_load_row` decides the cell.
+        return LoadRow(
+            tag=card.tag,
+            node_from=card.segment_from,
+            node_thru=card.segment_thru,
+            resistance=card.spec.r,
+            inductance=card.spec.l,
+            capacitance=card.spec.c,
+            kind=(
+                "SERIES (PER METER)"
+                if card.spec.kind == "series"
+                else "PARALLEL (PER METER)"
+            ),
+        )
+    spec = card.spec
+    if spec.kind == "fixed":
+        return LoadRow(
+            tag=card.at.tag,
+            node_from=card.printed_location,
+            node_thru=card.printed_location,
+            resistance=spec.r,
+            reactance=spec.x or None,
+        )
+    return LoadRow(
+        tag=card.at.tag,
+        node_from=card.printed_location,
+        node_thru=card.printed_location,
+        resistance=spec.r or None,
+        inductance=spec.l or None,
+        capacitance=spec.c or None,
+        kind="SERIES" if spec.kind == "series" else "PARALLEL",
+    )
+
+
 def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     """Solve one rung-1 deck and return everything its printout reports.
 
@@ -3100,7 +3237,7 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             f"from the basis through current_slopes, and this family has "
             f"no such method to read it from"
         )
-    if deck.wire_conductivity:
+    if deck.wire_conductivity or deck.wire_distributed_rlc:
         # Asked of the ROW rather than left to the constructor: an
         # unsupported family either has no `wire_conductivity` parameter at
         # all (a bare `TypeError`, momwire#1082) or silently ignores it, and
@@ -3108,8 +3245,18 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         # `ServeRefusal` rather than either of those.
         reason = solver_class.capabilities.refusal("wire_loading")
         if reason is not None:
+            cards = []
+            if deck.wire_conductivity:
+                cards.append("LD 5 sets a wire conductivity")
+            kinds = {card.spec.kind for card in deck.distributed_rlc}
+            cards += sorted(
+                "LD 2 sets a per-unit-length series RLC"
+                if kind == "series"
+                else "LD 3 sets a per-unit-length parallel RLC"
+                for kind in kinds
+            )
             raise ServeRefusal(
-                f"LD 5 sets a wire conductivity and basis {basis!r} does not "
+                f"{' and '.join(cards)} and basis {basis!r} does not "
                 f"serve wire loading: {reason}"
             )
 
@@ -3117,14 +3264,20 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     mesh = build_mesh(
         deck, structure, solver_class=solver_class, crossing=bool(_crossing_nodes(deck))
     )
+    # Read before the loads loop below (nec2's own `_lumped_loads` reads it
+    # the same way): a load's `LoadSpec` is SYMBOLIC on the deck model — `LD`
+    # may precede `FR` in card order — so it is stamped at the frequency
+    # here, in the serve path, not at parse time (momwire#1085).
+    frequency = float(deck.frequency_mhz or 0.0)
+    frequency_hz = frequency * 1e6
+
     by_address = {site.at: site for site in mesh.sites}
     for load in deck.loads:
-        by_address[load.at].load += load.impedance
+        by_address[load.at].load += load.spec.impedance(frequency_hz)
     for source in deck.sources:
         by_address[source.at].driven = True
     _check_one_port_per_drive(deck, by_address)
 
-    frequency = float(deck.frequency_mhz or 0.0)
     wavelength = SPEED_OF_LIGHT_MHZ_M / frequency
     omega = 2.0 * math.pi * frequency * 1e6
 
@@ -3198,52 +3351,12 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             else ENVIRONMENT_FREE_SPACE
         ),
         ground=medium,
-        loads=(
-            *(
-                LoadRow(
-                    tag=load.at.tag,
-                    # The loading table prints the DECODED node and drops
-                    # the deck's spelling, which is the opposite of what
-                    # NETWORK DATA does with the same address
-                    # (:func:`_signed_segment`).  0025 settles it:
-                    # ``LD 4,1,-1`` prints ``1    1`` and ``LD 4,5,3``
-                    # prints ``3    3``, so the rule is the segment a node
-                    # names, wire-local — node 0 reading as node 1 exactly
-                    # as it does in :func:`_segment_of`, and no sign
-                    # surviving anywhere.
-                    #
-                    # #504 U1's four loaded captures could not say this:
-                    # all eight of their ``LD`` cards write a positive
-                    # node.  The nine mixed and feed-system captures that
-                    # landed with U3 write ``-1`` twenty-two times and
-                    # print ``1`` twenty-two times.
-                    node_from=max(load.at.node, 1),
-                    node_thru=max(load.at.node, 1),
-                    resistance=load.impedance.real,
-                    reactance=load.impedance.imag or None,
-                )
-                for load in deck.loads
-            ),
-            # ``LD 5`` rows, deck order, after every ``LD 4`` row.  No
-            # capture mixes the two card kinds, so the relative order
-            # between them is unmeasured; this reader keeps the LD 4
-            # ordering the 80-capture corpus already gates and appends the
-            # material rows after it, in the deck's own LD 5 order.  Its
-            # address is the SEGMENT RANGE as written, not a node — see
-            # :class:`~momwire.deck._nec5.Nec5Conductivity` — and ITAG
-            # prints blank for the whole-structure spelling
-            # (:func:`~momwire.eznec._printout._load_row`).
-            *(
-                LoadRow(
-                    tag=card.tag,
-                    node_from=card.segment_from,
-                    node_thru=card.segment_thru,
-                    conductivity=card.sigma,
-                    kind="WIRE",
-                )
-                for card in deck.conductivities
-            ),
-        ),
+        # One row per LD card (0/1/4/5 alike), in DECK order -- momwire#1085
+        # probe, verified against our licensed materials: a deck mixing LD
+        # types prints its rows in the order the cards were written, not
+        # grouped by type, so `deck.load_cards` (not `loads` then
+        # `conductivities`) is what this table walks.
+        loads=tuple(_loading_row(card) for card in deck.load_cards),
         networks=tuple(card.row for card in cards),
         network_excitation=connections,
         sources=source_rows,

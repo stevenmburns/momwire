@@ -39,6 +39,7 @@ from momwire.deck._nec5 import (
     Nec5SommerfeldGround,
     parse_nec5,
 )
+from momwire.eznec import _serve
 
 DECKS = Path(__file__).parent / "fixtures" / "eznec" / "decks"
 CORPUS = sorted(DECKS.glob("*.nec"))
@@ -273,6 +274,15 @@ def test_minus_one_is_the_only_negative_in_the_whole_corpus():
             id="gn-2-is-gn-0",
         ),
         pytest.param(
+            # momwire#1084: NEC-5's own file-skip spelling, the token
+            # antennaknobs' NEC-5 writer emits, parses to the SAME ground as
+            # the bare card above — the trailer is validated and dropped,
+            # never stored.
+            ("GN 0,0,0,0,13.,.005,1.,0.,NOFILE",),
+            Nec5SommerfeldGround(13.0, 0.005, 1 + 0j, spelling=0),
+            id="gn-0-nofile",
+        ),
+        pytest.param(
             ("GD 0,0,0,0,13.,.005,1.,0.",),
             Nec5MininecGround(0, 13.0, 0.005, 1 + 0j),
             id="gd-mininec",
@@ -365,14 +375,51 @@ def test_free_space_and_perfect_ground_ride_the_ge_flag():
     assert (perfect.ge_flag, perfect.ge_second) == (1, -1)
 
 
+def test_gn_nofile_trailer_parses_and_solves_identically_to_a_bare_gn():
+    """momwire#1084: antennaknobs' NEC-5 writer (``engines/nec5.py``, ~line
+    1058) puts mu at fields 6,7 as ``1.0 0.0`` and ``NOFILE`` at field 8 —
+    the exact card it emits for a finite-ground export. Verified against our
+    licensed materials, NEC-5 accepts ``NOFILE`` there to skip writing the
+    Sommerfeld table.
+
+    Deck 0021 (``vertical-over-real-ground``) is an existing finite-ground
+    capture; the two forms below differ only in that trailer, so both
+    :attr:`~momwire.deck._nec5.Nec5Deck.ground` and a same-process
+    :func:`~momwire.eznec._serve.serve` solve must agree — a SAME-PARSE
+    identity, not a cross-machine pin.
+    """
+    (path,) = DECKS.glob("0021_*.nec")
+    text = path.read_text()
+    assert "GN 0,0,0,0,13.,.005,1.,0.\n" in text
+    with_nofile = text.replace(
+        "GN 0,0,0,0,13.,.005,1.,0.\n",
+        # The AK-shaped spelling from the issue report, field-for-field:
+        # space-separated, scientific notation, trailing NOFILE token.
+        "GN 0 0 0 0 1.300000E+01 5.000000E-03 1.000000E+00 0.000000E+00 NOFILE\n",
+    )
+    assert with_nofile != text
+
+    bare = parse_nec5(text)
+    trailed = parse_nec5(with_nofile)
+    assert (
+        bare.ground
+        == trailed.ground
+        == Nec5SommerfeldGround(13.0, 0.005, 1 + 0j, spelling=0)
+    )
+
+    z_bare = _serve.serve(bare).sources[0].impedance
+    z_trailed = _serve.serve(trailed).sources[0].impedance
+    assert z_bare == z_trailed
+
+
 # -- gate 4: refusals name their card --------------------------------------
 
 
 REFUSALS = [
-    pytest.param(("LD 0,1,1,1,50.,0.",), "LD", id="ld-0"),
-    pytest.param(("LD 1,1,1,1,50.,0.",), "LD", id="ld-1"),
+    pytest.param(("LD 2,1,1,1,50.,0.,0.",), "LD", id="ld-2"),
+    pytest.param(("LD 3,1,1,1,50.,0.,0.",), "LD", id="ld-3"),
     pytest.param(("LD 5,1,1,1,5.8E7,0.",), "LD", id="ld-5"),
-    pytest.param(("LD 4,1,1,2,50.,0.",), "LD", id="ld-4-nonzero-fourth-field"),
+    pytest.param(("LD 4,1,1,3,50.,0.",), "LD", id="ld-4-invalid-end-code"),
     pytest.param(("EX 1,1,6,0,1.,0.",), "EX", id="ex-1"),
     pytest.param(("EX 5,1,6,0,1.,0.",), "EX", id="ex-5"),
     pytest.param(("RP 1,1,361,1000,90.,0.,0.,1.,0.",), "RP", id="rp-mode-1"),
@@ -391,6 +438,14 @@ REFUSALS = [
     pytest.param(("GN 0,0,0,0,13.,.005,2.,0.",), "GN", id="gn-0-mu-2"),
     pytest.param(("GN 3,0,0,0,13.,.005,1.,0.",), "GN", id="gn-type-3"),
     pytest.param(("GN 0,0,0,0",), "GN", id="gn-0-short"),
+    # momwire#1084: a trailer naming anything but NOFILE refuses by name,
+    # and a trailer on a ground with no media payload refuses too — only
+    # GN 0 / GN 2 carry a Sommerfeld-table file field.
+    pytest.param(
+        ("GN 0,0,0,0,13.,.005,1.,0.,SOMMFILE.DAT",), "GN", id="gn-0-wrong-file"
+    ),
+    pytest.param(("GN -1,NOFILE",), "GN", id="gn-free-space-with-trailer"),
+    pytest.param(("GN 1,NOFILE",), "GN", id="gn-perfect-with-trailer"),
     pytest.param(("GE 1",), "GE", id="ge-one-field"),
     pytest.param(("NE 1,1,1,1,0.,0.,0.,0.,0.,0.",), "NE", id="ne-spherical"),
     pytest.param(("TL 1,1,1,6,0.,1.,0.,0.,0.,0.",), "TL", id="tl-zero-z0"),
@@ -500,9 +555,11 @@ def test_a_phased_array_is_several_ex_cards():
 
 
 def test_the_pin_idiom_is_an_ordinary_load():
-    pins = [ld for ld in deck("0012").loads if ld.impedance == complex(1e10, 0.0)]
+    pins = [
+        ld for ld in deck("0012").loads if ld.spec.impedance(0.0) == complex(1e10, 0.0)
+    ]
     assert len(pins) == 2
-    assert all(ld.node_to == 0 for ld in pins)
+    assert all(ld.end_code == 0 for ld in pins)
 
 
 def test_a_crossed_line_keeps_the_sign_of_z0():

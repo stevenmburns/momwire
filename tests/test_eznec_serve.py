@@ -2551,19 +2551,26 @@ def test_a_drive_that_mixes_the_two_ex_kinds_refuses_by_name():
 
 @pytest.mark.integration
 def test_a_multi_voltage_drive_refuses_by_name():
-    """Two ``EX 0`` cards.
+    """Two ``EX 0`` cards THROUGH A NETWORK.
 
-    The other half of the same hole and a different sentence, because it is a
-    different missing capture: a multi-voltage drive is coherent physics —
-    voltages pinned, currents solved — and this seam simply has no printed row
-    anywhere to say what NEC-5 does with the pair.  The corpus's two ``EX 0``
-    decks (0033, 0034) each write exactly one.
+    A multi-voltage drive is coherent physics — voltages pinned, currents
+    solved — and since momwire#1099 the network-free shape is served (EZNEC's
+    1e-10 V load probes are exactly that, and the engine's own printout for it
+    is banked in tests/fixtures/eznec_probe_ex_1099/).  Through a TL/NT the
+    seam still has no printed row to say what NEC-5 does with the pair.
     """
-    text = deck_text("0032").replace("EX 4,1,-1", "EX 0,1,-1")
-    text = text.replace("EX 4,2,-1", "EX 0,2,-1")
+    text = deck_text("0120").replace("EX 4,3,1,0", "EX 0,3,1,0")
+    text = text.replace("EX 4,2,-1,0", "EX 0,2,-1,0")
     reason = _refused(text)
-    assert reason.startswith("this deck carries 2 EX 0 cards")
-    assert "multi-VOLTAGE drive is not served" in reason
+    assert reason.startswith("this deck carries 2 EX 0 cards and a TL/NT network")
+    assert "multi-VOLTAGE drive is not served through a network" in reason
+    # The network-free shape SERVES since momwire#1099 (EZNEC's load probes):
+    # 0032's two EX 4 rewritten as two EX 0 come back as two rows.
+    bare = deck_text("0032").replace("EX 4,1,-1", "EX 0,1,-1")
+    bare = bare.replace("EX 4,2,-1", "EX 0,2,-1")
+    printout = render(bare)
+    assert " ***** NEC ERROR - " not in printout
+    assert printout.count("  1.4142E+00  0.0000E+00") >= 1
 
 
 @pytest.mark.integration

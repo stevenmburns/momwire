@@ -500,6 +500,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
+        distributed_rlc=None,
         swept_mem_mb=256,
         cancel=None,
     ):
@@ -677,7 +678,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # use the closed-form ∫|I|² overlaps (a physical integral is basis-
         # scheme-independent).
         _wire_loading.configure_loading(
-            self, n_w, wire_conductivity, insulation_radius, insulation_eps_r
+            self,
+            n_w,
+            wire_conductivity,
+            insulation_radius,
+            insulation_eps_r,
+            distributed_rlc,
         )
 
         if n_per_edge_per_wire is None:

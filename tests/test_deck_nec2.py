@@ -97,6 +97,27 @@ def test_mnemonic_and_field_errors_are_verbatim():
     )
 
 
+def test_the_gn_trailer_hole_is_the_last_token_only():
+    """momwire#1084 widened the tokenizer by exactly one hole: a ``GN``
+    card's LAST non-numeric token becomes :attr:`Card.trailer`.  A
+    non-numeric token anywhere ELSE on a GN card, and the last token of any
+    other card, still refuse with the verbatim field error above — the
+    tokenizer did not learn to skip names, only to hand one token to the
+    dialect."""
+    with pytest.raises(DeckError) as exc:
+        parse_card("GN 0 0 0 0 NOFILE 13. .005")
+    assert str(exc.value) == (
+        "NON-NUMERICAL CHARACTER IN FIELD: 'NOFILE' on 'GN 0 0 0 0 NOFILE 13. .005'"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse_card("GD 0 0 0 0 13. .005 NOFILE")
+    assert str(exc.value) == (
+        "NON-NUMERICAL CHARACTER IN FIELD: 'NOFILE' on 'GD 0 0 0 0 13. .005 NOFILE'"
+    )
+    assert parse_card("GN 0 0 0 0 13. .005 NOFILE").trailer == "NOFILE"
+    assert parse_card("GN 0 0 0 0 13. .005").trailer is None
+
+
 def test_an_integer_field_written_as_a_real_reads_as_an_integer():
     """§#field-numbering: fields are read positionally and converted on
     demand, so ``1.`` reads as ``1``."""
@@ -1098,6 +1119,21 @@ def test_gn_refuses_an_unknown_type():
     assert str(exc.value) == "GN type 3 is not supported by this engine"
 
 
+def test_gn_refuses_a_trailing_token_by_name():
+    """momwire#1084: the shared tokenizer reads a GN card's non-numeric LAST
+    token as a trailer only so NEC-5's Sommerfeld-table filename can
+    tokenize at all (``deck/_cards.py``).  This dialect's own GN has no such
+    field, so a trailer must still refuse here rather than tokenize clean and
+    silently vanish."""
+    with pytest.raises(DeckError) as exc:
+        parse(BODY + "GN 0 0 0 0 13. .005 NOFILE\nXQ\nNX\n")
+    assert str(exc.value) == (
+        "GN carries a trailing token 'NOFILE'; this engine's nec2 dialect "
+        "has no Sommerfeld-table file field on GN (momwire#1084 adds that "
+        "field to the nec5 dialect only)"
+    )
+
+
 @pytest.mark.parametrize("code", [0, 2])
 def test_gn_refuses_a_radial_ground_screen_on_the_reflection_coefficient_types(code):
     """§#gn--ground-parameters: NEC folds a screen into the reflection
@@ -1437,10 +1473,14 @@ def test_zero_valued_loads_are_dropped_as_no_ops():
     assert parse(BODY + "LD 4 1 3 3 0. 0.\nXQ\nNX\n").loads == ()
 
 
-@pytest.mark.parametrize("ldtyp", [2, 3, 6, 7, 8, 99])
+@pytest.mark.parametrize("ldtyp", [6, 7, 8, 99])
 def test_ld_refuses_the_types_this_engine_does_not_support(ldtyp):
-    """§#ld--loading: 2/3 (per-metre) and 6/7 (4nec2 extensions) refuse, and
-    so does any type this engine does not recognise."""
+    """§#ld--loading: 6/7 (4nec2 extensions) refuse, and so does any type
+    this engine does not recognise.
+
+    Types 2 and 3 were in this list until momwire#1088 served them; their
+    own refusal boundaries live in
+    ``tests/test_deck_ld23_per_metre_1088.py``."""
     with pytest.raises(DeckError) as exc:
         parse(BODY + f"LD {ldtyp} 1 3 3 1. 1. 1.\nXQ\nNX\n")
     assert str(exc.value) == f"LD type {ldtyp} is not supported by this engine"
@@ -1757,6 +1797,39 @@ def test_ld5_ranged_form_sets_it_per_wire():
     )
     assert model.wires[0].material.conductivity == 5.8e7
     assert model.wires[1].material is None
+
+
+@pytest.mark.parametrize("ld_tail", ["", " 1", " 0"])
+def test_ld5_mu_omitted_or_unity_all_serve_the_same_conductivity(ld_tail):
+    """momwire#1083: field 6 (relative permeability) is unstated, 1, or 0 —
+    all read as unity, the same "absent means default" rule
+    :meth:`~momwire.deck._nec5._Nec5Parser._ld5` applies to its own field 6.
+    """
+    model = parse(
+        "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\n"
+        "GW 2 4 0. 1. 0. 1. 1. 0. 1.E-3\n"
+        "GE 0\nEX 0 1 3 0 1.\nFR 0 1 0 0 14.\n"
+        f"LD 5 0 0 0 5.8e7{ld_tail}\nXQ\nNX\n"
+    )
+    assert [w.material.conductivity for w in model.wires] == [5.8e7, 5.8e7]
+
+
+def test_ld5_refuses_a_non_unity_permeability_by_name():
+    """momwire#1083: ``_wire_loading.wire_internal_impedance`` hard-codes
+    vacuum permeability and has no parameter for this value, so a non-unity
+    mu is refused rather than silently modelled as copper."""
+    with pytest.raises(DeckError) as exc:
+        parse(
+            "GW 1 4 0. 0. 0. 1. 0. 0. 1.E-3\nGE 0\n"
+            "EX 0 1 3 0 1.\nFR 0 1 0 0 14.\nLD 5 0 0 0 5.8e7 100\nXQ\nNX\n"
+        )
+    assert str(exc.value) == (
+        "LD 5 asks for a relative permeability of 100; this engine's wire "
+        "internal-impedance model has no permeability parameter "
+        "(`wire_internal_impedance` hard-codes vacuum permeability) and "
+        "refuses a non-unity value rather than silently modelling it as "
+        "copper"
+    )
 
 
 def test_ld5_refuses_a_partial_wire_range():
