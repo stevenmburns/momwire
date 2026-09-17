@@ -1111,6 +1111,27 @@ class _Nec5Parser:
         self.loads.append(load)
         self._load_cards.append(load)
 
+    def _wire_boundaries(self) -> tuple[list[int], list[int]]:
+        """Each declared wire's first and last ABSOLUTE segment number, in
+        declaration order — the numbering NEC's tag-0 cards address."""
+        starts, ends, at = [], [], 1
+        for wire in self.wires:
+            starts.append(at)
+            at += wire.segment_count
+            ends.append(at - 1)
+        return starts, ends
+
+    def _wires_in_absolute_range(self, first: int, last: int) -> list[int]:
+        """The tags whose whole segment span lies inside absolute ``first``
+        to ``last`` — what a tag-0 material card resolved by
+        :meth:`_material_range` actually covers (momwire#1096)."""
+        starts, ends = self._wire_boundaries()
+        return [
+            wire.tag
+            for wire, a, b in zip(self.wires, starts, ends)
+            if first <= a and b <= last
+        ]
+
     def _material_range(
         self, card: str, what: str, tag: int, first: int, last: int
     ) -> tuple[int, int]:
@@ -1132,16 +1153,25 @@ class _Nec5Parser:
             total = sum(wire.segment_count for wire in self.wires)
             if (first, last) == (0, 0):
                 return 1, total
-            if first != 1 or last != total:
-                raise DeckError(
-                    f"{card} addresses tag 0 (whole structure) segments {first} to "
-                    f"{last}; this engine serves EZNEC's own whole-structure "
-                    f"spelling, the full range 1 to {total} (this deck's total "
-                    f"segment count so far), and NEC's ordinary ``0,0`` "
-                    f"wildcard for it — a partial range under tag 0 has no "
-                    f"captured or written precedent and is not supported"
-                )
-            return first, last
+            # An ABSOLUTE segment span, accepted when it is aligned to wire
+            # boundaries: EZNEC's whole-structure spelling stops before its
+            # virtual wires (momwire#1096's field report writes 1..271 on a
+            # 273-segment deck whose wire 4 is the two-segment virtual anchor),
+            # so "whole structure" means every CONDUCTOR, not every wire. A
+            # span that splits a wire still refuses: a material is a property
+            # of a whole conductor.
+            starts, ends = self._wire_boundaries()
+            if first in starts and last in ends and first <= last:
+                return first, last
+            raise DeckError(
+                f"{card} addresses tag 0 (whole structure) segments {first} to "
+                f"{last}, which does not start and end on wire boundaries (this "
+                f"deck's wires span {', '.join(f'{a}-{b}' for a, b in zip(starts, ends))}); "
+                f"this engine serves the full range 1 to {total}, NEC's ordinary "
+                f"``0,0`` wildcard, or a run of whole wires (EZNEC's own spelling "
+                f"stops before its virtual wires, momwire#1096) — a span that "
+                f"splits a wire has no captured or written precedent"
+            )
         wire = self._by_tag.get(tag)
         if wire is None:
             raise DeckError(
@@ -1531,8 +1561,12 @@ class _Nec5Parser:
         resolved: dict[int, float] = {}
         for card in self.conductivities:
             if card.tag == 0:
-                for wire in self.wires:
-                    resolved[wire.tag] = card.sigma
+                # The wires inside the written span (momwire#1096): EZNEC's
+                # whole-structure card stops before its virtual wires.
+                for tag in self._wires_in_absolute_range(
+                    card.segment_from, card.segment_thru
+                ):
+                    resolved[tag] = card.sigma
             else:
                 resolved[card.tag] = card.sigma
         return MappingProxyType(resolved)
@@ -1544,8 +1578,10 @@ class _Nec5Parser:
         resolved: dict[int, DistributedRLC] = {}
         for card in self.distributed_rlc:
             if card.tag == 0:
-                for wire in self.wires:
-                    resolved[wire.tag] = card.spec
+                for tag in self._wires_in_absolute_range(
+                    card.segment_from, card.segment_thru
+                ):
+                    resolved[tag] = card.spec
             else:
                 resolved[card.tag] = card.spec
         return MappingProxyType(resolved)

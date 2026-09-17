@@ -260,7 +260,7 @@ def test_nec5_per_wire_form_sets_only_that_wire():
 def test_nec5_partial_range_refuses_by_name():
     with pytest.raises(DeckError, match="covers whole wires only"):
         parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,1,1,5,1.5,0.,0."))
-    with pytest.raises(DeckError, match="whole-structure"):
+    with pytest.raises(DeckError, match="wire boundaries"):
         parse_nec5(NEC5_TWO_WIRES.format(ld="LD 2,0,1,10,1.5,0.,0."))
 
 
