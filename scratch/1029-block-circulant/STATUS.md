@@ -14,10 +14,10 @@ Three registered predictions moved, and all three are written down in
 - **G1c's bar** is not a measurement under one reading of it (Amendment 3);
 - **refusal 5 has no deck** — this solver cannot express a non-axisymmetric
   ground, so its G2 case is a seam (Amendment 4);
-- **G3a MISSES** at 3.327 s against a 3.0 s bar, and **G3b could not be run at
-  all**: the 150-radial rung raises on both modes under the 8 GB cap this box
-  is held to, at the crossing block Amendment 1 registered as un-restrictable
-  (Amendment 5).
+- **G3a and G3b** read as a MISS and as unmeasurable ON THE LAPTOP (Amendment
+  5), and both are **HITS re-measured on the Skylake box** that #1067's bars
+  came from (Amendment 6): 2.627 s at 48 radials against 3.0 s, and 18.148 s
+  at 150 against 30.14 s at **7.21× faster than dense**.
 
 ## The branch
 
@@ -84,10 +84,10 @@ and no route code runs (G4).
 | **S-A** | **PASS, bit-identical, RE-BASELINED on momwire 0.58.0** — see amendment B |
 | **S-B** | **PASS on four assertions together** (`sb.json`): the requested rows equal the full fill (0.0); the non-requested rows equal a `rows=[]` control exactly (0.0); the fills really narrowed (below-class 222 -> 60 observers at 4 radials, 654 -> 60 at 12, removing 1245.0 from the non-requested rows against 123007.5 of pair-class work on the requested ones); `q_factor` and every plan field equal |
 | **S-C** | **PASS, both halves.** Static: only `bspline.py` calls `compute_Z_operator_buried` and nothing passes `rows=`. Numeric (`sc.json` against `sc_pre.json`): three SG decks covering every buried pair class, bit-identical |
-| **S-D** | **PASS** — 5473 passed, 5 skipped, 4 xfailed in 429 s on the final tree |
-| **G1** | **PASS at 4 / 12 / 48 radials** (`g1.jsonl`), with Amendment 3 on G1c's bar |
+| **S-D** | **PASS on the laptop** — 5473 passed, 5 skipped, 4 xfailed in 450 s. On the Skylake box: 5469 passed, 8 skipped, 4 xfailed, **1 failed in 236 s** — `test_same_edge_window_968`, a PRE-EXISTING toolchain pin unrelated to this branch; see the box section below |
+| **G1** | **PASS at 4 / 12 / 48 radials on BOTH boxes** (`g1_xps13.jsonl`, `g1_skylake.jsonl`), with Amendment 3 on G1c's bar |
 | **G2** | **PASS** — the six registered sentences, one deck each, each at construction (`g2.json`, and `tests/test_rotational_symmetry_1029.py` is the gate) |
-| **G3** | **G3c HIT** (RSS 0.982–0.997 of dense), **G3a MISS** (3.327 s against 3.0 s at 48 radials), **G3b NOT MEASURABLE** on this box (`g3.jsonl`). The ladder is below |
+| **G3** | **ALL THREE HIT on the Skylake box** — G3a 2.627 s ≤ 3.0 s, G3b 18.148 s ≤ 30.14 s at 7.21×, G3c 0.978–0.998 of dense (`g3_skylake.jsonl`). On the laptop G3a missed and G3b could not run at all (`g3_xps13.jsonl`, Amendment 5). Both ladders are below |
 | **G4** | **PASS** — the default path is bit-identical to merged main (`g4_default_path.json` against `sa_pre_0580.json`), and the lane is green |
 
 ## G1 — the route against the dense solve
@@ -154,8 +154,29 @@ followed by the timed WARM one, with the fill and the solve timed apart.
 | 96 | 5315 | 77.112 | 10.776 | 7.16x | 73.696 / 3.416 | 10.765 / 0.0115 | 3597.1 | 3564.7 | 0.991 |
 | 150 | 8285 | REFUSED | REFUSED | — | — | — | — | — | — |
 
+**And the same ladder on the Skylake box** — #1067's own, 40 GB cap, OMP 8
+(`g3_skylake.jsonl`). This is the one to read against the bars:
+
+| radials | dense warm s | route warm s | speedup | dense fill / solve | route fill / solve | dense RSS MB | route RSS MB | RSS ratio |
+|---:|---:|---:|---:|---|---|---:|---:|---:|
+| 12 | 1.260 | 0.676 | 1.86x | 1.190 / 0.070 | 0.674 / 0.0016 | 263.0 | 259.0 | 0.985 |
+| 24 | 3.171 | 1.083 | 2.93x | 3.070 / 0.101 | 1.081 / 0.0027 | 487.1 | 476.4 | 0.978 |
+| 48 | 10.983 | **2.627** | 4.18x | 10.630 / 0.353 | 2.623 / 0.0046 | 1064.6 | 1043.6 | 0.980 |
+| 96 | 48.282 | 8.187 | 5.90x | 46.093 / 2.189 | 8.181 / 0.0063 | 3581.9 | 3575.1 | 0.998 |
+| 150 | 130.933 | **18.148** | **7.21x** | 123.078 / 7.856 | 18.136 / 0.0117 | 8424.0 | 8394.3 | 0.996 |
+
+**G3a HIT** (2.627 s ≤ 3.0 s), **G3b HIT on both halves** (18.148 s ≤ 30.14 s,
+7.21x ≥ 5x), **G3c HIT** (0.978–0.998). 18.148 s lands inside Amendment 2's
+registered 14–30 s band. Z_in agrees between the routes at 6.4e-13 / 5.0e-13 /
+4.1e-13 / 1.1e-12 / 6.6e-13.
+
+**Why the laptop could not do the 150 rung, confirmed:** dense peak RSS there
+is **8424 MB**, above the laptop's whole 8 GB address-space cap. The route's
+8394 MB is 0.996 of it — the crossing family is the memory floor and the route
+cannot lower it, exactly as Amendments 1, 2 and 5 said.
+
 Z_in agrees between the two routes at 4.8e-13 / 6.2e-13 / 9.1e-13 / 1.9e-12
-across the four measured rungs.
+across the four rungs the laptop measured.
 
 - **G3c HIT.** Peak RSS is the dense RSS everywhere — 0.982 to 0.997 of it,
   inside the registered 5 %. Registered rather than discovered, and now
@@ -181,6 +202,55 @@ across the four measured rungs.
 - **The solve is gone.** Dense spends 3.42 s in the solve at 96 radials; the
   route spends 0.0115 s, because the harmonic-0 block is (m + p) = 90 whatever
   N is. Everything the route still pays is fill.
+
+## Which box ran what, and the one red test
+
+Execution moved to the Skylake box mid-build; the worktree, the editing and
+every commit stayed on the laptop. `box.py` reads the machine out of the
+process — hostname, CPU, cap, thread policy, python, numpy, BLAS and which
+accelerator variant resolved — and every G1/G3 record carries it, because a
+ladder row that does not say which box it came from cannot be compared with
+#1067's bars.
+
+| gate | laptop (xps13, i7-8550U, 8 GB cap, OMP 4) | Skylake (smburns-Z170-WS, i7-6700K @ 4.0 GHz, 40 GB cap, OMP 8) |
+|---|---|---|
+| S-0, S-A, S-B, S-C | ran, PASS | not re-run (bit-identity is per-toolchain; see below) |
+| G2, G4 bit-identity | ran, PASS | not re-run |
+| **default lane** | 5473 passed / 5 skipped / 4 xfailed, 450 s | 5469 / 8 / 4 **+ 1 failed**, 236 s |
+| **G1 (4/12/48 + census)** | PASS | **PASS** |
+| **G3 ladder (12…150)** | 150 rung REFUSED by the 8 GB cap | **complete, all bars hit** |
+
+**The one red test is not this branch.**
+`test_same_edge_window_968::test_the_square_entry_points_are_bit_identical_to_the_pre_change_build`
+fails on the Skylake box and passes (by skipping) on the laptop. Chain of
+evidence:
+
+- this branch changes **four Python files and zero C++** — no `.cpp`, no
+  header, no `setup.py`, nothing in `extern/` — so the accelerator built on
+  the box is bit-for-bit what origin/main would produce there;
+- the test compares banked `.npz` oracles against pure `_acc.*` accelerator
+  entry points, and the failing key is `stat/3/1`, a closed-form static
+  moment;
+- measured: **all 6 static keys differ, worst 6.227e-15 relative** — the
+  "5.3e-15 codegen drift" the test's own docstring says it exists to catch;
+- the test guards itself with `_fingerprint()` = OS, machine, python, numpy.
+  The bank reads `['Linux', 'x86_64', '3.14.5', '2.5.2']` and this box reads
+  **exactly the same four values**, so the guard did not skip — **but the
+  fingerprint does not include the COMPILER**, which is the one thing the
+  docstring names as what moves these bits.
+
+So a new Linux/x86_64 box with the same python and numpy but a different GCC
+fails a test designed to skip in precisely that situation. That is a
+momwire#968 issue, not a #1029 one; the follow-up is to put the compiler
+(`platform.python_compiler()`, or the `CC`/`CXX` version) into `_fingerprint`.
+
+**One other box lesson, measured:** the default lane took **910 s with 14
+tests over the 20 s hard ceiling** when `OMP_NUM_THREADS=8` was exported, and
+**236 s with none** when it was not. That is the trap `pyproject.toml`'s
+`filterwarnings` comment documents — momwire is imported while pytest parses
+the filters, before `conftest` can set `OMP_NUM_THREADS=1` per xdist worker,
+so an exported width becomes a full OpenMP pool per worker. Export a thread
+width for the single-process G1/G3 runs; never for the xdist lane.
 
 ## What is left
 

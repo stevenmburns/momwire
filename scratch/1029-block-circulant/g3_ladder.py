@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import subprocess
 import sys
 import time
@@ -43,7 +45,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from feasibility import GROUND, _head
+import box as box_info  # noqa: E402 — after the sys.path insert above
+from feasibility import GROUND
 
 
 def peak_rss_mb():
@@ -135,6 +138,7 @@ def one(n_radials, route, passes=2):
         t_cold_s=None if t_cold is None else round(t_cold, 3),
         peak_rss_mb=peak_rss_mb(),
         chunked=bool(s._buried_chunked_serves),
+        hostname=platform.node(),
     )
     if route:
         smap = s._rotational_map
@@ -163,9 +167,16 @@ def main():
     meta = {
         "_meta": True,
         "gate": "G3",
-        "momwire_head": _head(Path(momwire.__file__).parent),
-        "antennaknobs_head": _head(Path(antennaknobs.__file__).parent),
-        "box": "laptop (xps13), OMP_NUM_THREADS=4, prlimit --as=8G",
+        # The heads come from the environment because the box runs a worktree
+        # rsync'd WITHOUT .git; the laptop that syncs it knows them and says so.
+        "momwire_head": os.environ.get("MW1029_MOMWIRE_HEAD")
+        or box_info.git_head(Path(momwire.__file__).parent),
+        "antennaknobs_head": os.environ.get("MW1029_AK_HEAD")
+        or box_info.git_head(Path(antennaknobs.__file__).parent),
+        "momwire_path": str(Path(momwire.__file__).parent),
+        "box": box_info.provenance(),
+        "accel": box_info.accel_variant(),
+        "passes": args.passes,
     }
     out = open(args.out, "w") if args.out else None  # noqa: SIM115
     if out:

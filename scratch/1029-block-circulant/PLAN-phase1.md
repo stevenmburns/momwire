@@ -322,6 +322,49 @@ stays open until a box with the registered cap runs it.
 **What IS measured about the speedup claim:** "≥ 5× faster than dense" holds
 from 48 radials up (5.58× and 7.16×), and the ratio is still climbing.
 
+### Amendment 6 (2026-09-17, on the Skylake box): G3a and G3b are HITS, measured
+
+Amendment 5 recorded G3a as a MISS and G3b as unmeasurable — both on the
+laptop, and both explicitly because of the box. Steve reached a **46 GB
+Skylake** for this build, and it is #1067's own box, which is where the 3.0 s
+and 30.14 s bars came from. Re-measured there, under a 40 GB cap, one process
+per rung (`g3_skylake.jsonl`; the laptop's rows are kept beside it as
+`g3_xps13.jsonl`, and every row now carries its own hostname, CPU, cap,
+thread policy, numpy, BLAS and accelerator variant).
+
+**smburns-Z170-WS, i7-6700K @ 4.00 GHz, 8 threads, 46.9 GB, `prlimit --as=40G`,
+AVX2 accelerator built there with `MOMWIRE_REQUIRE_ACCEL=1`:**
+
+| radials | unknowns | dense warm s | route warm s | speedup | dense fill / solve | route fill / solve | dense RSS MB | route RSS MB | RSS ratio | ΔZ_in |
+|---:|---:|---:|---:|---:|---|---|---:|---:|---:|---:|
+| 12 | 695 | 1.260 | 0.676 | 1.86× | 1.190 / 0.070 | 0.674 / 0.0016 | 263.0 | 259.0 | 0.985 | 6.4e-13 |
+| 24 | 1355 | 3.171 | 1.083 | 2.93× | 3.070 / 0.101 | 1.081 / 0.0027 | 487.1 | 476.4 | 0.978 | 5.0e-13 |
+| 48 | 2675 | 10.983 | **2.627** | 4.18× | 10.630 / 0.353 | 2.623 / 0.0046 | 1064.6 | 1043.6 | 0.980 | 4.1e-13 |
+| 96 | 5315 | 48.282 | 8.187 | 5.90× | 46.093 / 2.189 | 8.181 / 0.0063 | 3581.9 | 3575.1 | 0.998 | 1.1e-12 |
+| 150 | 8285 | 130.933 | **18.148** | **7.21×** | 123.078 / 7.856 | 18.136 / 0.0117 | 8424.0 | 8394.3 | 0.996 | 6.6e-13 |
+
+- **G3a: HIT.** 2.627 s at 48 radials against the 3.0 s bar, on the box the
+  bar was set on. Amendment 5's 3.327 s stands as the laptop's number and as
+  the reason a bar must name its box; it is not the verdict.
+- **G3b: HIT, both halves.** 18.148 s at 150 radials against 30.14 s, and
+  **7.21× faster than dense** against the ≥ 5× half. It also lands inside
+  **Amendment 2's registered 14–30 s band**, which is the prediction this
+  ladder was built to test — and close to the 16.8 s the laptop's four rungs
+  extrapolated to.
+- **G3c: HIT everywhere**, 0.978–0.998 of dense, inside the registered 5 %.
+
+**Amendment 5's diagnosis is confirmed rather than overturned.** Dense peak RSS
+at 150 radials is **8424 MB** — above the laptop's whole 8 GB address-space
+cap — which is exactly why both modes raised there, in the crossing block, at
+about 5.3 GB with the arena already committed. The route's 8394 MB is 0.996 of
+it, so the crossing family really is the memory floor and the route really
+cannot lower it. What the laptop could not do was measure; what it measured
+was true.
+
+**The speedup keeps climbing with N** — 1.86, 2.93, 4.18, 5.90, 7.21 — and the
+solve is gone at every rung (7.856 s dense against 0.0117 s at 150, because
+K₀ is 90 × 90 whatever N is). Everything the route still pays is fill.
+
 ## Order
 
 1. Commit this registration; push.

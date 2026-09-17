@@ -133,11 +133,13 @@ amendments. The headline, so this file is not a dead end:
   agrees to 4.5e-13 of the pattern's scale.
 - **G2**: the six registered refusals fire by name, at construction, one deck
   each — and `tests/test_rotational_symmetry_1029.py` pins every sentence.
-- **G3**: 2.21x / 3.50x / 5.58x / 7.16x at 12 / 24 / 48 / 96 radials, with peak
-  RSS 0.982-0.997 of dense (phase 1 buys time, not memory — registered). The
-  150-radial rung raises under this box's 8 GB cap, on BOTH modes, in the
-  crossing block that `rows=` cannot narrow.
+- **G3**, on the **Skylake box #1067's bars came from** (i7-6700K, 40 GB cap):
+  1.86x / 2.93x / 4.18x / 5.90x / **7.21x** at 12 / 24 / 48 / 96 / 150 radials.
+  **G3a 2.627 s ≤ 3.0 s. G3b 18.148 s ≤ 30.14 s at 7.21x ≥ 5x. G3c 0.978-0.998
+  of dense** — phase 1 buys time, not memory, as registered. On the 16 GB
+  laptop the 150 rung raises under an 8 GB cap on BOTH modes, in the crossing
+  block `rows=` cannot narrow: dense peak RSS there is 8424 MB.
 - **What phase 0 said it did not show**, item by item: the speed is measured;
-  the far field is measured; 48 radials and above is measured to 96; the check
-  and its refusals are code with a gate. **razor-2p and sinusoidal are still
-  out of scope.**
+  the far field is measured; 48 radials and above is measured all the way to
+  150; the check and its refusals are code with a gate. **razor-2p and
+  sinusoidal are still out of scope.**

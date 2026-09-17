@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import sys
 import time
 import warnings
@@ -39,8 +40,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import box as box_info  # noqa: E402 — after the sys.path insert above
 from context_entry_eps import per_entry
-from feasibility import GROUND, _head
+from feasibility import GROUND
 
 # One fixed grid, the upper hemisphere a ground-mounted vertical is reported
 # on. 19 x 12 is enough that a route-only defect anywhere in the readout
@@ -185,8 +187,12 @@ def main():
     meta = {
         "_meta": True,
         "gate": "G1",
-        "momwire_head": _head(Path(momwire.__file__).parent),
-        "antennaknobs_head": _head(Path(antennaknobs.__file__).parent),
+        "momwire_head": os.environ.get("MW1029_MOMWIRE_HEAD")
+        or box_info.git_head(Path(momwire.__file__).parent),
+        "antennaknobs_head": os.environ.get("MW1029_AK_HEAD")
+        or box_info.git_head(Path(antennaknobs.__file__).parent),
+        "box": box_info.provenance(),
+        "accel": box_info.accel_variant(),
         "theta_points": len(THETA),
         "phi_points": len(PHI),
     }
