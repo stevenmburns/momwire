@@ -1,0 +1,50 @@
+{
+ "_meta": {
+  "gate": "S-C",
+  "momwire": "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/10726adc-f9d1-493d-8934-20598e907554/scratchpad/mw-1029/src/momwire"
+ },
+ "decks": [
+  {
+   "deck": "d1_vertical",
+   "n_unknowns": 21,
+   "sha_operator": "b145d5faa4dd8595c008a95ff2a442fe",
+   "sha_coeffs": "582f71de7b02317e2222f1a29b8f2d80",
+   "z_in_hex": [
+    "0x1.4d35575152dbbp+8",
+    "-0x1.41acbd46f7aa0p+8"
+   ],
+   "z_in": [
+    333.2083636119166,
+    -321.67476314112173
+   ]
+  },
+  {
+   "deck": "d1_horizontal",
+   "n_unknowns": 21,
+   "sha_operator": "16c4779d8b0e70a89edeee50df33b882",
+   "sha_coeffs": "3a85cf28784cf315cfe963b195ef5bb5",
+   "z_in_hex": [
+    "0x1.58862262b3527p+8",
+    "-0x1.4e0494f22be1ap+8"
+   ],
+   "z_in": [
+    344.523962181835,
+    -334.0178977353222
+   ]
+  },
+  {
+   "deck": "d2_mixed",
+   "n_unknowns": 18,
+   "sha_operator": "58be90da1d023223042f59c6285259f3",
+   "sha_coeffs": "1499d11175639c5dd5df243d84cb4031",
+   "z_in_hex": [
+    "0x1.b9b6943c08ae2p+1",
+    "-0x1.14bad66378541p+13"
+   ],
+   "z_in": [
+    3.45088437014907,
+    -8855.35468191153
+   ]
+  }
+ ]
+}

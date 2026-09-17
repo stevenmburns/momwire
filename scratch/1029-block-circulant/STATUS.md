@@ -6,6 +6,37 @@ stopping point, which is in history at 9b1e051 and e3bb8aa.
 **The `rows=` parameter has landed and is gated by S-0, S-A, S-B and — as of
 2026-09-17 — S-D.** No route code exists; no G gate has run.
 
+## 2026-09-17 amendment B: momwire main 0.58.0 merged, and the baseline moved
+
+`git merge origin/main` at **37e8257c0 (v0.58.0)** into the branch, merge commit
+**91da54f**. No conflict: main's src work is deck/eznec/`_wire_loading` and
+`bspline.py`'s new `distributed_rlc` kwarg, none of it in the two hunks this
+branch owns. No C++ moved, so the linked `.so` files stay valid.
+
+- **The default lane on the merged tree: 5453 passed, 5 skipped, 4 xfailed in
+  431 s.** Green.
+- **S-A RE-BASELINED and PASS, bit-identical** against a fresh worktree at
+  37e8257c0 (`sa_pre_0580.json` / `sa_post_0580.json`; the dumps differ only in
+  tree path and timing):
+
+  | radials | sha_Z | sha_coeffs | Z_in hex |
+  |---:|---|---|---|
+  | 4 | `4a15d55c1f99aa128cc96d61fc147c05` | `df90967dd3a20c961b4777a768f560cf` | `0x1.38873ad7f3509p+6`, `0x1.72b38fffb6bc8p+5` |
+  | 12 | `a28d9ef602d7e21dab8f05223507439d` | `5aabe80610819e7fa04de7ac3ad748ec` | `0x1.a4d80e230d17bp+5`, `0x1.329805532abc0p+5` |
+
+- **The baseline hashes are NOT the ones the 9d51d53 record carries**
+  (`fbba2249…` / `a818422f…`), and e3bb8aa's warning is why this was re-measured
+  rather than re-read. **The mover is antennaknobs, not momwire.** Dumping at
+  momwire a6a67f93a — the branch's own base — against today's antennaknobs
+  (e4efc2bc2) reproduces the NEW hash `4a15d55c…` exactly, so nothing between
+  a6a67f93a and 37e8257c0 touches these bits; the deck does. The size is
+  roundoff: Z_in moved 78.13206040784942 → 78.13206040785384, 5.7e-14 relative.
+- **S-C's numeric half: PASS, bit-identical** (`s_c_gate.py`, `sc.json` against
+  `sc_pre.json`) on three sinusoidal-Galerkin decks covering every buried pair
+  class — D1 fully-buried vertical and horizontal dipoles, and a D2 mixed deck.
+  The operator's bytes, the coefficients' bytes and Z_in's hex all agree. SG's
+  own fixtures are the decks, so this half needs no antennaknobs.
+
 ## 2026-09-17 amendment: S-D is GREEN, the red was this box
 
 Re-run on the laptop from a FRESH worktree at 0d90313 with the current
