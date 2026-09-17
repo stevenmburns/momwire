@@ -17,14 +17,16 @@ Gates, against our licensed NEC-5's printout for a deck of our own
 3. the probe row restores its written 1e-10 V, carries the current through
    the loaded node (within the basis tolerance of the oracle's), and prints
    Z = V/I and P = 0.5 Re(V I*) of its own numbers;
-4. the refusals that stay: a probe at a TL/NT connection point beside an EX 4
+4. the refusal that stays: a probe at a TL/NT connection point beside an EX 4
    (momwire#1110 serves the mixed drive only OFF the network - at a connection
    point NEC-5 applies the card as a port-voltage constraint and its answer
-   moves by ohms), and several EX 0 through a TL/NT network (no printout).
+   moves by ohms).
 
 The mixed EX 4 + EX 0 drive itself is no longer refused: momwire#1110 serves
 it wherever every EX 0 is one of these probes, and gates it on five EZNEC
-captures in tests/test_eznec_load_probes_1110.py.
+captures in tests/test_eznec_load_probes_1110.py.  Several EX 0 THROUGH a
+TL/NT network is no longer refused either: momwire#1105 serves it, gated on a
+licensed NEC-5 printout in tests/test_eznec_multi_voltage_network_1105.py.
 """
 
 from __future__ import annotations
@@ -147,14 +149,29 @@ def test_a_probe_at_a_network_connection_point_still_refuses_by_name():
     assert "port-voltage constraint" in reason
 
 
-def test_several_voltages_through_a_network_still_refuse_by_name():
+def test_several_voltages_through_a_network_are_served_now():
+    """The refusal that used to live here, inverted (momwire#1105, 2026-09-17).
+
+    Neither ``EX 0`` node is on the added ``TL`` here (the drive is at 1,11,
+    the probe at 1,5, the line hangs off 1,3), so this is the plain
+    all-voltage-through-a-network shape, not the network-connection-point one
+    :func:`test_a_probe_at_a_network_connection_point_still_refuses_by_name`
+    covers.  The dedicated fixture test
+    (tests/test_eznec_multi_voltage_network_1105.py) is where that shape is
+    gated against a licensed NEC-5 printout; this is the synthetic deck the
+    refusal used to be pinned on, now asserting it serves instead.
+    """
     with_line = PROBE.replace(
         "EX 0,1,5,0,1.E-10,0.\n",
         "EX 0,1,5,0,1.E-10,0.\nTL 1,3,1,19,50.,0.,0.,0.,0.,0.\n",
     )
-    reason = _refusal(with_line)
-    assert reason.startswith("this deck carries 2 EX 0 cards and a TL/NT network")
-    assert "multi-VOLTAGE drive is not served through a network" in reason
+    printout = render(with_line)
+    assert " ***** NEC ERROR - " not in printout, printout
+    rows = _rows(printout.splitlines())
+    assert len(rows) == 2
+    # Both EX 0 cards restore their own written volts byte-exact.
+    assert rows[0][12:36] == "  1.4142E+00  0.0000E+00"
+    assert rows[1][12:36] == "  1.0000E-10  0.0000E+00"
 
 
 @pytest.mark.parametrize("deck", [PROBE, NOPROBE])

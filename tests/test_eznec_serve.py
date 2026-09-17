@@ -2559,22 +2559,36 @@ def test_a_drive_that_mixes_the_two_ex_kinds_refuses_by_name():
 
 
 @pytest.mark.integration
-def test_a_multi_voltage_drive_refuses_by_name():
-    """Two ``EX 0`` cards THROUGH A NETWORK.
+def test_a_multi_voltage_drive_through_a_network_is_served_now():
+    """Two ``EX 0`` cards THROUGH A NETWORK — the refusal that used to live
+    here, inverted (momwire#1105, 2026-09-17).
 
     A multi-voltage drive is coherent physics — voltages pinned, currents
-    solved — and since momwire#1099 the network-free shape is served (EZNEC's
-    1e-10 V load probes are exactly that, and the engine's own printout for it
-    is banked in tests/fixtures/eznec_probe_ex_1099/).  Through a TL/NT the
-    seam still has no printed row to say what NEC-5 does with the pair.
+    solved — and since momwire#1099 the network-free shape has been served
+    (EZNEC's 1e-10 V load probes are exactly that, and the engine's own
+    printout for it is banked in tests/fixtures/eznec_probe_ex_1099/).  Through
+    a TL/NT the seam had no printed row to say what NEC-5 does with the pair
+    until 0120's own two ``EX 4`` cards, rewritten to ``EX 0`` at the same two
+    nodes, brought one back
+    (tests/fixtures/eznec_multi_voltage_network_1105/, the byte gate).
     """
     text = deck_text("0120").replace("EX 4,3,1,0", "EX 0,3,1,0")
     text = text.replace("EX 4,2,-1,0", "EX 0,2,-1,0")
-    reason = _refused(text)
-    assert reason.startswith("this deck carries 2 EX 0 cards and a TL/NT network")
-    assert "multi-VOLTAGE drive is not served through a network" in reason
-    # The network-free shape SERVES since momwire#1099 (EZNEC's load probes):
-    # 0032's two EX 4 rewritten as two EX 0 come back as two rows.
+    printout = render(text)
+    assert " ***** NEC ERROR - " not in printout, printout
+    rows = extract(printout).sources
+    # Both are EX 0: the VOLTAGE is the set quantity, restored byte-exact
+    # (printed to the row's own four decimal places).
+    assert [row.voltage for row in rows] == [
+        complex(1.4142, 0.0),
+        complex(0.0, -1.4142),
+    ]
+    # The network is load-bearing: an all-voltage drive that reached the
+    # structure through it is a DIFFERENT solve from the same volts applied
+    # bare, not a rescaling of one - see the dedicated fixture test for the
+    # oracle-checked numbers.
+    # The network-free shape still SERVES since momwire#1099 (EZNEC's load
+    # probes): 0032's two EX 4 rewritten as two EX 0 come back as two rows.
     bare = deck_text("0032").replace("EX 4,1,-1", "EX 0,1,-1")
     bare = bare.replace("EX 4,2,-1", "EX 0,2,-1")
     printout = render(bare)
