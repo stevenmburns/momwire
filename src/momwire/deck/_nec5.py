@@ -519,7 +519,7 @@ _REFUSED_BY_NAME = MappingProxyType(
         # is not an EZNEC deck.  Ignoring them would mangle the geometry
         # silently, which is the one outcome worse than a refusal.
         "GM": "GM (geometry move) is not part of this engine's nec5 dialect, whose "
-        "geometry is GW alone — EZNEC resolves its transforms before writing a deck",
+        "geometry is GW alone - EZNEC resolves its transforms before writing a deck",
         "GX": "GX (symmetry reflection) is not part of this engine's nec5 dialect, "
         "whose geometry is GW alone",
         "GR": "GR (cylindrical symmetry) is not part of this engine's nec5 dialect, "
@@ -548,7 +548,7 @@ _REFUSED_BY_NAME = MappingProxyType(
         "dialect",
         # Cards the nec2 dialect serves and this one does not.
         "EK": "EK (extended thin-wire kernel) is not part of this engine's nec5 "
-        "dialect — EZNEC emits no kernel card",
+        "dialect - EZNEC emits no kernel card",
         "IS": "IS (insulated sheath) is not part of this engine's nec5 dialect",
         "PT": "PT (element-current print control) is not part of this engine's nec5 "
         "dialect; PQ is the only print-control card EZNEC emits",
@@ -1033,7 +1033,7 @@ class _Nec5Parser:
             raise DeckError(
                 f"EX type {kind} is not part of this engine's nec5 dialect, which "
                 f"serves EX 4 (elementary current source) and EX 0 (voltage source) "
-                f"— the two EZNEC's source-type setting picks between"
+                f"- the two EZNEC's source-type setting picks between"
             )
         drive = _complex(card, 4)
         if kind == 0 and drive == 0:
@@ -1067,8 +1067,8 @@ class _Nec5Parser:
             raise DeckError(
                 f"LD type {kind} is not part of this engine's nec5 dialect, whose "
                 f"loading is LD 0 / LD 1 (series / parallel RLC, evaluated to an "
-                f"impedance at the deck's own frequency — momwire#1085), LD 2 / "
-                f"LD 3 (per-unit-length RLC — momwire#1088), LD 4 (fixed "
+                f"impedance at the deck's own frequency - momwire#1085), LD 2 / "
+                f"LD 3 (per-unit-length RLC - momwire#1088), LD 4 (fixed "
                 f"impedance) or LD 5 (wire conductivity)"
             )
         minimum = 7 if kind in (0, 1) else 6
@@ -1169,7 +1169,7 @@ class _Nec5Parser:
                 f"deck's wires span {', '.join(f'{a}-{b}' for a, b in zip(starts, ends))}); "
                 f"this engine serves the full range 1 to {total}, NEC's ordinary "
                 f"``0,0`` wildcard, or a run of whole wires (EZNEC's own spelling "
-                f"stops before its virtual wires, momwire#1096) — a span that "
+                f"stops before its virtual wires, momwire#1096) - a span that "
                 f"splits a wire has no captured or written precedent"
             )
         wire = self._by_tag.get(tag)
@@ -1232,7 +1232,7 @@ class _Nec5Parser:
                 f"BY the segment length rather than per unit length (measured on "
                 f"nec2c and against our licensed materials), so the wire's "
                 f"per-metre impedance would carry a 1/(jw C d^2) term that "
-                f"changes when the deck is re-segmented — the resistance and "
+                f"changes when the deck is re-segmented - the resistance and "
                 f"inductance fields ARE per unit length and are served "
                 f"(momwire#1088)"
             )
@@ -1349,7 +1349,7 @@ class _Nec5Parser:
         if z0 == 0.0:
             raise DeckError(
                 "TL with a zero characteristic impedance is not a transmission line; "
-                "Z0 must be nonzero, and its SIGN — not its magnitude — is what "
+                "Z0 must be nonzero, and its SIGN - not its magnitude - is what "
                 "selects a crossed line"
             )
         self.lines.append(
