@@ -3,9 +3,26 @@
 Written 2026-09-17 on Steve's wind-down instruction. Supersedes the 2026-09-16
 stopping point, which is in history at 9b1e051 and e3bb8aa.
 
-**The `rows=` parameter has landed and is gated by S-0, S-A and S-B. `make test`
-is RED, the cause is not established, and this patch is NOT cleared of it.** No
-route code exists; no G gate has run.
+**The `rows=` parameter has landed and is gated by S-0, S-A, S-B and — as of
+2026-09-17 — S-D.** No route code exists; no G gate has run.
+
+## 2026-09-17 amendment: S-D is GREEN, the red was this box
+
+Re-run on the laptop from a FRESH worktree at 0d90313 with the current
+accelerators linked in (the branch changes no C++, so main's `.so` files are
+the right ones):
+
+- `python -c "import momwire._below_interface"` — imports; the constant
+  `MIN_CROSSING_NODE_SEPARATION_M` reads as 1.0.
+- `make test`'s default lane (`pytest tests/`, xdist, `not slow and not memgate
+  and not integration`): **5255 passed, 5 skipped, 4 xfailed in 423 s**. The
+  files the red run named first (`test_crossing_serve_524`,
+  `test_plan_extents_914`) pass.
+
+So the 119 import-time `AttributeError`s were diagnostic 4 below — a stale
+`.so` / `egg-info` in this box's shared build lineage — not the patch. The
+S-D row in the gate table reads PASS from here on; the "What is left" list
+starts at its step 2.
 
 ## The branch
 
@@ -47,7 +64,7 @@ surface is what §1 registered, and nothing else:
 | **S-A** | **PASS, bit-identical** against a pre-change build at dcdd8a7. `sha_Z` fbba2249… and a818422f…, `sha_coeffs` 87520f4e… and c82a075d…, Z_in equal to the hex at 4 and 12 radials. The dumps differ only in tree path and timing |
 | **S-B** | **PASS on four assertions together** (the registered wording alone would pass vacuously): requested rows equal the full fill (0.0); non-requested rows equal a `rows=[]` control exactly (0.0), carrying only the crossing block and self completions; the fills really narrowed — below-class 222→60 observers at 4 radials, 654→60 at 12, removing 1245.0 from the non-requested rows against 123007.5 of pair-class work on the requested ones; `q_factor` and every plan field equal |
 | **S-C** | **half done.** Static half satisfied: only `bspline.py` calls `compute_Z_operator_buried`, nothing anywhere passes `rows=`, and sinusoidal-Galerkin uses `_below_interface` helpers (`field_nodes`, `serve_plan`, `crossing_junctions`) rather than the patched routing. The numeric bit-identity half is **not run** |
-| **S-D** | **RED — see below. Not attributed** |
+| **S-D** | **PASS** (2026-09-17, fresh worktree on the laptop: 5255 passed) — the earlier RED was this box's stale build, see the amendment above |
 | **G1–G4** | **not run.** The route does not exist |
 
 ## S-D: what is actually known
@@ -101,8 +118,7 @@ measurements and are unaffected by whatever S-D turns out to be.
 
 ## What is left, in order
 
-1. Settle S-D with diagnostics 1–4 above; fix whatever it is before building on
-   9d51d53.
+1. ~~Settle S-D~~ — done 2026-09-17, green; nothing to fix on 9d51d53.
 2. S-C's numeric half: an SG buried deck, bit-identical against dcdd8a7.
 3. The route: opt-in `rotational_symmetry=True`, the symmetry check with the six
    by-name refusals (ports and lumped loads included), the sector fill, the
