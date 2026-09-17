@@ -1,115 +1,115 @@
 # momwire#1029 phase 1: where this branch stands
 
-Written 2026-09-16 at Steve's request to bring the work to a stopping point.
+Written 2026-09-17 on Steve's wind-down instruction. Supersedes the 2026-09-16
+stopping point, which is in history at 9b1e051 and e3bb8aa.
 
-**Phase 1 has no code.** The scope question was raised and answered, option A was
-approved, and the design below is read off the source. Nothing is implemented,
-and **no gate has been run**. Phase 0 is complete and unaffected.
+**The `rows=` parameter has landed and is gated by S-0, S-A and S-B. `make test`
+is RED, the cause is not established, and this patch is NOT cleared of it.** No
+route code exists; no G gate has run.
 
 ## The branch
 
-- `feat/1029-rotational-symmetry`, based on momwire 227491d.
-- **97e0c13** — phase 0's registration, before any feasibility measurement.
-- **8d42ea7** — phase 0's records and `README.md`.
-- This commit adds only this file.
-- The antennaknobs submodule pointer has **not** been moved by me.
+`feat/1029-rotational-symmetry`, based on momwire 227491d, with main a6a67f93a
+merged in at cf3aaab.
 
-**The base is current.** momwire origin/main is a925d37, which is the v0.56.0
-tag commit, and 227491d is an ancestor of it. The only `src/` change between the
-two is the eznec printout work (`eznec/_printout.py`, `eznec/_shell.py`); nothing
-in the buried, crossing or bspline fill code. So phase 0 measured on a base that
-already carries U9's several crossing nodes and #1074, and a rebase onto
-a925d37 would change nothing this work reads.
+| commit | what |
+|---|---|
+| 97e0c13 | phase 0's registration |
+| 8d42ea7 | phase 0's records |
+| 9b1e051, e3bb8aa | the earlier stopping point and the baseline notes |
+| cf3aaab | merge of momwire main a6a67f93a; accelerators rebuilt |
+| c38790b | **phase 1's registration**, before any measurement |
+| d85ee24 | **gate S-0 passes** |
+| dcdd8a7 | Amendment 1, the three `rows=` contract details |
+| 9d51d53 | **the `rows=` patch, with S-A and S-B records and Amendment 2** |
 
-**One baseline note for the records:** antennaknobs v0.79.0 moved the pin triple
-to momwire 0.56.0 (that same a925d37). "momwire ahead of the pointer" now means
-ahead of 0.56.0, not 0.55.0.
+The antennaknobs submodule pointer has not been moved.
 
-**Baseline moved again, later the same day.** momwire origin/main is now
-**a6a67f93a** — U8's far field (momwire#1078) and LD 5 in the nec5 seam (#1086).
-227491d is still an ancestor of it. What moved under `src/` since this branch's
-base: `_far_readout.py` (+252), `deck/_nec5.py` (+216), `eznec/_printout.py`,
-`eznec/_serve.py`, `eznec/_shell.py`, `portal/_portal.py`, and `_medium_spec.py`
-(−37). **The files this phase-1 design reads — `bspline.py`,
-`_below_interface.py`, `_crossing_fill.py` — are unchanged.**
+## What landed
 
-**On resuming:** rebase on a6a67f93a and rebuild (`make build`), then re-check two
-things before trusting the notes above, because both moved underneath them:
+`rows=None` is exactly today's path; a subset computes only those rows of Z. The
+surface is what §1 registered, and nothing else:
 
-- `_medium_spec.py`'s delta, against the media labelling the buried fill's pair
-  classes use;
-- the far-field path note at the end of this file, since U8 rewrote
-  `_far_readout.py`.
-
-## Phase 0, for context (complete, measured)
-
-At 4 and 12 radials on `verticals.buried_radial_vertical`, soil 13/0.005, bs2
-degree 2: the radial blocks are block-circulant to 6.8e-19 and 2.2e-15; the mast
-couplings to 2e-19 and 8e-18; a per-harmonic solve reproduces the dense one to
-2.2e-13 and 5.3e-13 on Z_in and on the currents; an on-axis feed puts exactly zero
-into harmonics h ≠ 0. Graded entry by entry, the worst non-invariance is 1.7e-9 on
-entries of about 2e-5 Ω. The cost model predicts 1.18–2.54 s at 48 radials,
-3.13–11.12 s at 120 and 5.54–21.0 s at 150, against #1067's momwire warm column
-of 15.28 / 84.54 / 162.02 s and 3b75639's 2.82 / 18.67 / 30.14 s.
-
-## The approved scope (option A), and the design as read
-
-`rows=None` on the shared buried entry, meaning exactly today's path.
-
-**Where a row restriction has to go** (file:line at 227491d):
-
-| what | where | state |
-|---|---|---|
-| the shared routing, which has no observer restriction today | `_below_interface.compute_Z_operator_buried` — `_below_interface.py:949` | needs the new optional `rows=None` |
-| the field-form blocks, including the below-remainder projection (56 % of warm self time at 150 radials) | `_field_galerkin_block(..., obs_idx, src_idx, obs, t_obs, ...)` — `bspline.py:5023`, with nodes from `_buried_nodes(geom, seg_idx, *, q_factor=1)` — `bspline.py:5003` | **already observer-parameterised**; the routing passes a narrowed `obs_idx` |
-| the mixed-potential direct and image blocks | `_build_J_blocks_subset(geom, k, seg_idx, mirror_sources=False)` — `bspline.py:5144`; `_accumulate_Z_subset_chunked(Z, geom, k, seg_idx, supp_seg, polys, *, mirror_sources, eps, scale, weight=None)` — `bspline.py:5243` | one optional observer subset each, bspline-side |
-| the assembly itself | `_assemble_Z` — `bspline.py:3348`; `_image_Z_weighted` — `bspline.py:2654` | **no change**: zero observer rows in the moment tensor give zero Z rows |
-
-**So the answer to "did it stay inside one optional argument?"** — by design, one
-optional argument on the shared entry plus one on each of two bspline-side fills,
-and no change to the assemblers or to `BuriedFills`' shape beyond those two
-callback signatures. That is not a three-layer thread. **It is a reading of the
-code, not an implemented result.**
-
-**A constraint the implementation must respect:** `rows` may change only which
-observer rows are computed. It must not reach `plan_buried`'s decisions — the
-Sommerfeld grids, the quadrature orders, `pair_extents`, `near_q_factor` — which
-stay computed from the full observer sets. Otherwise S-B (the restricted fill
-equals the corresponding rows of the full fill) fails by construction rather than
-by a bug.
+- one optional argument on `_below_interface.compute_Z_operator_buried`;
+- one optional observer subset on each of `bspline._build_J_blocks_subset` and
+  `bspline._accumulate_Z_subset_chunked`;
+- **no change** to `_assemble_Z` or `_image_Z_weighted` (zero observer rows in the
+  moment tensor give zero Z rows), and none to `_field_galerkin_block`, which
+  already took `obs_idx`;
+- the plan is resolved before `rows` is read, so grids and quadrature orders stay
+  computed from the full observer sets.
 
 ## Gate table
 
-| gate | what it checks | result |
-|---|---|---|
-| **S-A** | `rows=None` is bit-identical on non-symmetric buried decks (the default `buried_radial_vertical` convention, a multi-node crossing deck) | **not run** — the parameter does not exist |
-| **S-B** | the restricted fill equals the corresponding rows of the full fill, entry by entry | **not run** |
-| **S-C** | sinusoidal-Galerkin's buried path is bit-identical and never passes `rows` | **not run** |
-| **S-D** | `make test` green plus momwire CI | **not run** |
-| **G1** | Z, currents and far field against dense at 4 / 12 / 48 radials, plus the entry-by-entry check at 48 | **not run.** The nearest existing evidence is phase 0's solve-level agreement at 4 and 12 (2.2e-13 and 5.3e-13), which went through a dense fill and a permutation, not through a route, and covered no far field and no 48-radial cell |
-| **G2** | six refusals by name: a radial 1 % longer; a radial off its sector angle; an off-axis feed; mixed materials between radials; a non-axisymmetric ground; a tilted axis | **not run**, and the sentences are not drafted |
-| **G3** | the cost ladder at 12 / 24 / 48 / 96 / 150 radials with RSS, beside dense and #1067's NEC-5 columns | **not run.** The registered bars stand: ≤ 30.14 s at 150, ≥ 5× over dense, ≤ 3.0 s at 48 |
-| **G4** | bit-identity on non-symmetric decks and on the default path | **not run** |
+| gate | result |
+|---|---|
+| **S-0** | **PASS** at 4 / 12 / 48 radials. No shared dofs (255 / 695 / 2675 = N×55 + 35); the sector map is a bijection on the dof set; every dof matches its image's kind, local index, end position and junction; the 35 axial dofs are fixed points; the KCL row is invariant with max change exactly 0.0; geometry rotates onto itself by 3.9e-16 / 4.4e-15 / 6.4e-15 m against a 1.06e-8 m tolerance |
+| **S-A** | **PASS, bit-identical** against a pre-change build at dcdd8a7. `sha_Z` fbba2249… and a818422f…, `sha_coeffs` 87520f4e… and c82a075d…, Z_in equal to the hex at 4 and 12 radials. The dumps differ only in tree path and timing |
+| **S-B** | **PASS on four assertions together** (the registered wording alone would pass vacuously): requested rows equal the full fill (0.0); non-requested rows equal a `rows=[]` control exactly (0.0), carrying only the crossing block and self completions; the fills really narrowed — below-class 222→60 observers at 4 radials, 654→60 at 12, removing 1245.0 from the non-requested rows against 123007.5 of pair-class work on the requested ones; `q_factor` and every plan field equal |
+| **S-C** | **half done.** Static half satisfied: only `bspline.py` calls `compute_Z_operator_buried`, nothing anywhere passes `rows=`, and sinusoidal-Galerkin uses `_below_interface` helpers (`field_nodes`, `serve_plan`, `crossing_junctions`) rather than the patched routing. The numeric bit-identity half is **not run** |
+| **S-D** | **RED — see below. Not attributed** |
+| **G1–G4** | **not run.** The route does not exist |
+
+## S-D: what is actually known
+
+- `make test` on the patched tree: **23 failed, 4833 passed, 7 skipped, 4 xfailed,
+  119 errors**, in 320 s.
+- Every error is an import-time `AttributeError: module 'momwire._below_interface'
+  has no attribute …`. The first touch is
+  `tests/test_crossing_serve_524.py:371` reading
+  `_below_interface.MIN_CROSSING_NODE_SEPARATION_M`.
+- **That constant EXISTS**, at `_below_interface.py:190`. So this is a module that
+  fails to initialise and then reports as missing whatever attribute a test
+  touches first — not a genuinely absent name. The 119 errors are one failure
+  cascading.
+- The same symptom appears on the **pre-change** worktree at dcdd8a7. **That is
+  not conclusive and does not clear this patch**: both worktrees share one venv
+  and one build lineage, and a stale `.so` or a stale `src/momwire.egg-info`
+  would produce exactly this symptom in both.
+- Ignoring the first five failing files does not help: the breakage reaches
+  `test_plan_extents_914`, `test_pair_order_ladder_906`,
+  `test_near_interface_columns_accel_899`, `test_razor_crossing_axis_813` and
+  more, which is the shape of one module-level failure, not of five unrelated
+  files.
+
+### The diagnostics that would settle it, none of them run
+
+1. `python -c "import momwire._below_interface"` under each tree, for the **real**
+   traceback rather than pytest's second-order `AttributeError`.
+2. Print `momwire.__file__` as the test run resolves it — `make test` may be
+   importing the installed editable package rather than this worktree's `src`.
+3. A pristine worktree at momwire main a6a67f93a with its own build: the only
+   control that does not share this patch's lineage.
+4. Check for a stale `src/momwire.egg-info` (the known trap in this repo) and
+   rebuild.
+
+**Until 1–4 are done, treat S-D as red and this patch as unproven against the
+suite.** S-A's bit-identity and S-B's four assertions stand on their own
+measurements and are unaffected by whatever S-D turns out to be.
+
+## Registered amendments carried forward
+
+- **Amendment 1** (dcdd8a7): the crossing block is filled in full by contract,
+  because the routing uses it as `Z -= t; Z -= t.T`; narrowing the field-form
+  observers is a positional gather at the plan's own order; S-B compares
+  `q_factor` and every plan field.
+- **Amendment 2** (9d51d53): the crossing family does **not** shrink under the
+  restriction, so the predicted band at 150 radials moves from 5.54–21.0 s to
+  about **14–30 s** against G3b's 30.14 s bar. **G3b is marginal at the high
+  bound**, and that family is where to look first if the bar is missed.
+  Compaction would not help it: the cost is the transpose's columns.
 
 ## What is left, in order
 
-1. **Register phase 1** before any measurement: the route's placement, the `rows`
-   contract (what None means, what a restriction means, and that a caller
-   restricting rows owns the consequences downstream), the six G2 refusal
-   sentences, the far-field path, and predictions with bars for G1 and G3.
-2. **Implement**, smallest surface first: the `rows=` parameter and its S-A to S-D
-   gates, run **before** the sector route is wired up; then the opt-in
-   `rotational_symmetry=True`, the symmetry check with by-name refusals, the
-   sector fill and the harmonic-0 solve.
-3. **Gate** in order: S-A to S-D, then G1, G2, G3, G4 plus `make test`.
-4. **PR to momwire** when the gates are green. Steve merges.
+1. Settle S-D with diagnostics 1–4 above; fix whatever it is before building on
+   9d51d53.
+2. S-C's numeric half: an SG buried deck, bit-identical against dcdd8a7.
+3. The route: opt-in `rotational_symmetry=True`, the symmetry check with the six
+   by-name refusals (ports and lumped loads included), the sector fill, the
+   harmonic-0 solve.
+4. G1 (4/12/48, Z, currents, far field, plus the entry-by-entry check at 48), G2's
+   six refusals, G3's ladder with RSS, G4 bit-identity plus `make test`.
+5. PR to momwire. Steve merges. No issue comments.
 
-## Notes carried forward
-
-- **The far field needs no second path.** antennaknobs' `far_field` takes only
-  `coeffs`, through `currents_at_knots`, so reassembled harmonic coefficients feed
-  it directly — which is what G1 asks for.
-- **An on-axis feed needs only the harmonic-0 block** K₀ (90 × 90 on this deck),
-  whatever N is. Phase 0 measured harmonics h ≠ 0 at exactly zero.
-- **`elt_whip` is not ladderable** (4392 segments, a mesh that barely responds), so
-  it will not appear in any convergence claim here.
+**Afterwards, not started:** momwire#570 phase 3's contract derivation, registered
+in `scratch/570-far-field/PLAN.md` on a branch, no issue comment.
