@@ -141,7 +141,9 @@ def test_tag_zero_spans_every_declared_wire():
 
 
 def test_tag_zero_partial_range_refuses():
-    with pytest.raises(DeckError, match="whole-structure"):
+    """A span that splits a wire (momwire#1096 relaxed the rule to runs of
+    WHOLE wires, EZNEC's own spelling before a virtual wire)."""
+    with pytest.raises(DeckError, match="wire boundaries"):
         parse_nec5(_with_card(f"LD 5,0,1,10,{SIGMA:g},1."))
 
 
