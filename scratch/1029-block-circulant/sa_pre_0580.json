@@ -1,0 +1,54 @@
+{
+ "_meta": {
+  "momwire": "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/10726adc-f9d1-493d-8934-20598e907554/scratchpad/mw-base-0580/src/momwire",
+  "mode": "dump"
+ },
+ "decks": [
+  {
+   "radials": 4,
+   "n_basis": 255,
+   "sha_Z": "4a15d55c1f99aa128cc96d61fc147c05",
+   "sha_coeffs": "df90967dd3a20c961b4777a768f560cf",
+   "z_in_hex": [
+    "0x1.38873ad7f3509p+6",
+    "0x1.72b38fffb6bc8p+5"
+   ],
+   "z_in": [
+    78.13206040785384,
+    46.33767699982087
+   ],
+   "z_engine": [
+    78.13206040785384,
+    46.33767699982087
+   ],
+   "plan": {
+    "r1_below": 12.662920509093315,
+    "r1_above": 21.133257074507043
+   },
+   "secs": 1.398
+  },
+  {
+   "radials": 12,
+   "n_basis": 695,
+   "sha_Z": "a28d9ef602d7e21dab8f05223507439d",
+   "sha_coeffs": "5aabe80610819e7fa04de7ac3ad748ec",
+   "z_in_hex": [
+    "0x1.a4d80e230d17bp+5",
+    "0x1.329805532abc0p+5"
+   ],
+   "z_in": [
+    52.60549571403222,
+    38.32422890638509
+   ],
+   "z_engine": [
+    52.60549571403222,
+    38.32422890638509
+   ],
+   "plan": {
+    "r1_below": 12.662920509093317,
+    "r1_above": 21.133257074507043
+   },
+   "secs": 1.499
+  }
+ ]
+}
