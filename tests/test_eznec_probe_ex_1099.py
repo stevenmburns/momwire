@@ -17,9 +17,14 @@ Gates, against our licensed NEC-5's printout for a deck of our own
 3. the probe row restores its written 1e-10 V, carries the current through
    the loaded node (within the basis tolerance of the oracle's), and prints
    Z = V/I and P = 0.5 Re(V I*) of its own numbers;
-4. the refusals that stay: a mixed EX 4 + EX 0 drive (the engine's own answer
-   to that shape is degenerate - measured, see `_drive_refusal`), and several
-   EX 0 through a TL/NT network (no printout).
+4. the refusals that stay: a probe at a TL/NT connection point beside an EX 4
+   (momwire#1110 serves the mixed drive only OFF the network - at a connection
+   point NEC-5 applies the card as a port-voltage constraint and its answer
+   moves by ohms), and several EX 0 through a TL/NT network (no printout).
+
+The mixed EX 4 + EX 0 drive itself is no longer refused: momwire#1110 serves
+it wherever every EX 0 is one of these probes, and gates it on five EZNEC
+captures in tests/test_eznec_load_probes_1110.py.
 """
 
 from __future__ import annotations
@@ -122,11 +127,24 @@ def test_the_loading_table_is_unmoved_by_the_probe():
     assert loading(render(PROBE).splitlines()) == loading(render(NOPROBE).splitlines())
 
 
-def test_a_mixed_drive_still_refuses_by_name():
+def test_a_probe_at_a_network_connection_point_still_refuses_by_name():
+    """This deck's own shape with the drive turned into an EX 4 is SERVED
+    since momwire#1110; hang a TL off the probe's node and it is not.
+
+    Kept here, where the mixed-drive refusal used to be, because this is the
+    line that moved rather than a line that vanished: what a probe beside an
+    EX 4 needs is to be OFF the network.
+    """
     mixed = PROBE.replace("EX 0,1,11,0,1.414214,0.", "EX 4,1,11,0,1.414214,0.")
-    reason = _refusal(mixed)
-    assert "1 voltage" in reason or "voltage" in reason
-    assert "EX" in reason
+    assert "NEC ERROR" not in render(mixed)
+    at_port = mixed.replace(
+        "EX 0,1,5,0,1.E-10,0.\n",
+        "EX 0,1,5,0,1.E-10,0.\nTL 1,5,1,19,50.,0.,0.,0.,0.,0.\n",
+    )
+    reason = _refusal(at_port)
+    assert reason.startswith("the EX 0 at 1,5 is one of EZNEC's 1e-10 V load probes")
+    assert "the TL card between 1,5 and 1,19" in reason
+    assert "port-voltage constraint" in reason
 
 
 def test_several_voltages_through_a_network_still_refuse_by_name():

@@ -747,9 +747,11 @@ def drive_cells(cid: str) -> tuple[int, ...]:
     say which of its own numbers was a boundary condition.
 
     ONE answer for the whole table, which is a claim and not a convenience: a
-    deck whose cards disagreed about their kind refuses by name
-    (``_REFUSE_MIXED_DRIVE_KINDS``), so every row a served table carries was
-    fixed in the same two cells.  The corpus's six multi-``EX`` captures write
+    deck whose cards disagree about their kind refuses by name
+    (``_REFUSE_MIXED_DRIVE_KINDS``) unless every ``EX 0`` on it is one of
+    EZNEC's 1e-10 V load probes (momwire#1110), and no capture in THIS corpus
+    writes one - so every row a served table here carries was fixed in the same
+    two cells.  The corpus's six multi-``EX`` captures write
     ``EX 4`` four times (0031, 0116, 0117) and twice (0032, 0120, 0121), and the
     set is asserted rather than sampled.
     """
@@ -2534,14 +2536,21 @@ def _refused(text: str) -> str:
 
 @pytest.mark.integration
 def test_a_drive_that_mixes_the_two_ex_kinds_refuses_by_name():
-    """One ``EX 0`` and one ``EX 4`` on the same deck.
+    """One ``EX 0`` and one ``EX 4`` on the same deck, and the ``EX 0`` is a
+    GENERATOR.
 
-    A voltage source and a current source in one matrix is a mixed boundary
+    A generator voltage and a set current in one matrix is a mixed boundary
     condition, the engine has a rule for it and no captured printout shows the
     rule, so this seam does not invent one.  Zero of the forty-nine captures
     write it — 47 are all-``EX 4`` and 2 are single ``EX 0`` — and the refusal
     counts both kinds in its sentence so the reader can see which card is the
-    odd one.
+    odd one, then names the offending card and why it is not a probe.
+
+    What IS served since momwire#1110 is the other mixed deck: an ``EX 4``
+    beside EZNEC's 1e-10 V load probes, gated on five of the engine's printouts
+    in tests/test_eznec_load_probes_1110.py.  The two are told apart by the
+    volts, the ``LD`` under the node and the network, not by the card kinds —
+    which is why this probe rewrites a drive rather than shrinking one.
     """
     text = deck_text("0032").replace("EX 4,2,-1", "EX 0,2,-1")
     reason = _refused(text)
