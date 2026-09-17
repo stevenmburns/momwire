@@ -115,3 +115,29 @@ against every sector.
 - **48 radials and above,** or any size-dependent fill path.
 - **razor-2p and sinusoidal.**
 - **The symmetry check** of `PLAN.md` §1 as code, and its refusal (G2).
+
+---
+
+# Phase 1: the route — results
+
+Phase 0 above shows the premise. Phase 1 built the route on it; **`STATUS.md`
+is the current truth** and `PLAN-phase1.md` carries the registration and five
+amendments. The headline, so this file is not a dead end:
+
+- **`rotational_symmetry=True` on `BSplineSolver`.** One fill of sector 0's
+  rows plus the axial rows against every source, one (m + p) harmonic-0 solve
+  whatever N is, coefficients back in the dense ordering. Default off, and off
+  is bit-identical to merged main.
+- **G1**: Z_in and the currents agree with the dense solve to 2e-13 / 5e-13 /
+  9e-13 at 4 / 12 / 48 radials, against 1e-9 and 1e-8 bars. The far field
+  agrees to 4.5e-13 of the pattern's scale.
+- **G2**: the six registered refusals fire by name, at construction, one deck
+  each — and `tests/test_rotational_symmetry_1029.py` pins every sentence.
+- **G3**: 2.21x / 3.50x / 5.58x / 7.16x at 12 / 24 / 48 / 96 radials, with peak
+  RSS 0.982-0.997 of dense (phase 1 buys time, not memory — registered). The
+  150-radial rung raises under this box's 8 GB cap, on BOTH modes, in the
+  crossing block that `rows=` cannot narrow.
+- **What phase 0 said it did not show**, item by item: the speed is measured;
+  the far field is measured; 48 radials and above is measured to 96; the check
+  and its refusals are code with a gate. **razor-2p and sinusoidal are still
+  out of scope.**

@@ -1,0 +1,11 @@
+{
+ "1_sector_length": "rotational symmetry: sector 2's wire is +1.00 % longer than sector 0's (6.397 m against 6.334 m). Every sector must map onto the next under rotation by 2*pi/N. Drop rotational_symmetry=True to solve this deck densely.",
+ "2_sector_azimuth": "rotational symmetry: sector 3 sits at 272.500 deg, where 4 sectors require 270.000 deg (tolerance 1e-09 x 10.6 m). Every sector must map onto the next under rotation by 2*pi/N. Drop rotational_symmetry=True to solve this deck densely.",
+ "3_off_axis_port": "rotational symmetry: port 'feed 0' sits at (3.000, 0.000, -0.150), off the symmetry axis (0.000, 0.000). An off-axis drive excites every harmonic, and this route serves the axis-symmetric drive only. Drop rotational_symmetry=True to solve this deck densely.",
+ "4_sector_radius": "rotational symmetry: sector 1's conductor radius is 0.800 mm against sector 0's 1.000 mm. Every sector must carry the same radius, conductivity and jacket. Drop rotational_symmetry=True to solve this deck densely.",
+ "5_ground_not_axisymmetric": "rotational symmetry: the ground model 'terrain' is not invariant under rotation about the axis. Free space, PEC, a reflection-coefficient ground and a Sommerfeld half-space qualify. Drop rotational_symmetry=True to solve this deck densely.",
+ "6_axis_not_parallel_to_z": "rotational symmetry: the axial group's wires are not parallel to z (wire 5 runs 0.217 deg off). The symmetry axis must be normal to the interface. Drop rotational_symmetry=True to solve this deck densely.",
+ "scope_one_radial": "rotational symmetry: the deck has 1 wire(s) off the axis, and the route needs N >= 2 sectors. A single arm is not a screen. Drop rotational_symmetry=True to solve this deck densely.",
+ "scope_enrichment": "rotational symmetry: singular enrichment adds a block that is not sector-structured, and the route has no decomposition for it. Disable singular enrichment, or drop rotational_symmetry=True to solve this deck densely.",
+ "runtime_drive_not_invariant": "rotational symmetry: the right-hand side differs between sector 0 and sector 1 by 1.000e+00 of its largest entry, so the drive is not rotation-invariant and needs every harmonic. This route serves the axis-symmetric drive only. Drop rotational_symmetry=True to solve this deck densely."
+}
