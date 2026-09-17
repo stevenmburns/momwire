@@ -404,7 +404,13 @@ def main() -> int:
         "\n"
         f"{signing_note}\n"
         "\n"
-        'FIRST RUN: Windows will show "Windows protected your PC", and you\n'
+        "BEFORE EXTRACTING: right-click the downloaded zip, Properties, tick\n"
+        '"Unblock", OK - then extract.  That clears the mark-of-the-web on every\n'
+        "file inside at once, so the SmartScreen screen below never appears,\n"
+        "and the files keep their original dates instead of the download's.\n"
+        "(Thanks to Dan AC6LA for the tip.)\n"
+        "\n"
+        'FIRST RUN (if you extracted first): Windows will show "Windows protected your PC", and you\n'
         'have to click "More info" and then "Run anyway".  Nothing is wrong\n'
         "with the download.  That screen is SmartScreen saying this file has no\n"
         'REPUTATION yet — click "More info" and it names the publisher, because\n'
