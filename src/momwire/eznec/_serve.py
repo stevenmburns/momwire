@@ -606,10 +606,12 @@ _REFUSE_MIXED_DRIVE_KINDS = (
     "sixteen captured multi-EX decks write, and a mixed drive has no printed "
     "row anywhere to be gated against"
 )
-_REFUSE_MULTI_EX_VOLTAGE = (
-    "this deck carries {count} EX 0 cards; a multi-VOLTAGE drive is not served "
-    "at this seam - none of the 80 captured decks writes one, so nothing says "
-    "what the engine prints for it"
+_REFUSE_MULTI_EX_VOLTAGE_NETWORK = (
+    "this deck carries {count} EX 0 cards and a TL/NT network; a multi-VOLTAGE "
+    "drive is not served through a network at this seam - "
+    "none of the 80 captured decks writes one, so nothing says what the engine "
+    "does with the pair, and the network-free shape it does serve "
+    "(momwire#1099) is a different solve"
 )
 _REFUSE_DUPLICATE_EX = (
     "two EX cards address {at}; one node is one port, so the second card is a "
@@ -1096,11 +1098,21 @@ def _drive_refusal(deck: Nec5Deck) -> str | None:
         return None
     voltages = kinds.count(0)
     if voltages and voltages != len(kinds):
+        # Measured 2026-09-17 on our licensed NEC-5 (momwire#1099): a 1e-10 V
+        # probe beside an EX 4 that reaches the structure through an NT
+        # printed the probe row alone and NO current anywhere - the engine's
+        # own answer to the mixed shape is degenerate, so it stays refused
+        # rather than reproduced.
         return _REFUSE_MIXED_DRIVE_KINDS.format(
             count=len(kinds), voltages=voltages, currents=len(kinds) - voltages
         )
-    if voltages:
-        return _REFUSE_MULTI_EX_VOLTAGE.format(count=voltages)
+    if voltages and (deck.transmission_lines or deck.networks):
+        return _REFUSE_MULTI_EX_VOLTAGE_NETWORK.format(count=voltages)
+    # Several EX 0 with no network is SERVED since momwire#1099: EZNEC Pro/4+
+    # writes a 1e-10 V source beside every lumped load to read the load
+    # current back from its ANTENNA INPUT PARAMETERS row, and the fixture at
+    # tests/fixtures/eznec_probe_ex_1099/ is the engine's printout for that
+    # shape - one row per card, the drive row unmoved by the probe.
     seen: set[Nec5Node] = set()
     for source in deck.sources:
         if source.at in seen:
@@ -2412,6 +2424,27 @@ def _multi_drive_state(
     spec = np.zeros(len(driven), dtype=np.complex128)
     for source in deck.sources:
         spec[row_of[site_of[source.at]]] = source.drive
+
+    if all(source.kind == 0 for source in deck.sources):
+        # Several VOLTAGES at once (momwire#1099): the set quantity is the
+        # applied voltage itself, so there is nothing to invert - the driven
+        # sites take their volts and the whole loaded structure answers with
+        # `I = Y_eff · V`, every undriven site still shorted.  EZNEC's load
+        # probes are this shape: a 1e-10 V source in series with the load,
+        # which moves the drive row by nothing the printout can show (the
+        # fixture's two printouts agree to every digit).  `_drive_refusal`
+        # keeps the network case out, so `cards` is empty here.
+        assert not cards
+        v_applied = np.zeros(n, dtype=np.complex128)
+        v_applied[driven] = spec
+        i_port = y_eff @ v_applied
+        return _PortState(
+            v_applied=v_applied,
+            v_gap=v_applied - z_load * i_port,
+            i_port=i_port,
+            i_source=i_port.copy(),
+            z_load=z_load,
+        )
 
     if not cards:
         v_applied = np.zeros(n, dtype=np.complex128)
