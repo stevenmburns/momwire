@@ -84,6 +84,7 @@ from . import _ground_refl
 from . import _ground_spec
 from . import _medium_spec
 from . import _potential_ground
+from . import _rotational_symmetry
 from . import _quadrature
 from . import _sommerfeld
 from . import _sommerfeld_below
@@ -237,6 +238,17 @@ _SAME_EDGE_DROP_R = True
 _SAME_EDGE_WINDOW_BLOCKS = True
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
+
+# How far a right-hand side may differ between sectors before the sector
+# route (momwire#1029) refuses it as a drive that needs every harmonic.
+# Relative to the vector's largest entry. The two right-hand sides this route
+# ever sees are EXACTLY invariant, not approximately: the gap source vector is
+# zero on every sector (phase 0's F2 measured 0), and the hub's KCL row
+# carries the same sign on each sector's directional basis (S-0 measured the
+# permuted row's largest change at exactly 0.0). The bar is loose against that
+# so a port column built by a different route is judged by roundoff rather
+# than by bit equality, and it is still 4 orders under anything physical.
+_ROTATIONAL_DRIVE_TOL = 1e-12
 
 
 # Constant Vandermonde inverses for uniform sample points [0, 1/d, ..., 1].
@@ -880,6 +892,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         small shared host). Speed saturates by ~256 (chunk ≈ 8-16 on
         production shapes); below ~64 the batching win starts eroding
         (chunk=1 costs ~+75% on the worst shapes).
+    rotational_symmetry : the sector (block-circulant) route, opt-in
+        (momwire#1029). False (default) changes nothing — no attribute the
+        dense path reads moves, and no line of route code runs. True asks for
+        a deck that is N copies of one sector about a vertical axis with the
+        drive on that axis: `compute_impedance` then fills ONE sector's rows
+        against every source and solves the (m + p) harmonic-0 block whatever
+        N is. A deck that is not that shape is REFUSED AT CONSTRUCTION,
+        naming the first condition of the rule it breaks
+        (`_rotational_symmetry`), because no fill could rescue it. Buried
+        decks (`ground_z` with a wire below it) on this basis only, and every
+        entry point but `compute_impedance` refuses rather than quietly
+        answering densely.
     """
 
     # momwire#927. Class-level so they exist before any solve and on a deck
@@ -1010,6 +1034,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tikhonov_lambda=1e-3,
         auto_tap_ratio_threshold=0.3,
         swept_mem_mb=256,
+        rotational_symmetry=False,
         cancel=None,
     ):
         self._cancel = cancel
@@ -1412,6 +1437,56 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._cached_wire_media: tuple | None = None
         # SommerfeldGrid lives in the module-level cache in
         # `_sommerfeld.get_grid` so it survives across solver instances.
+
+        # momwire#1029: the opt-in sector (block-circulant) route. LAST in
+        # __init__ because the check reads the normalized junctions, ports and
+        # loading above it, and it refuses AT CONSTRUCTION — a deck that is not
+        # N copies of one sector can never take the route, so failing here
+        # names the geometry while the caller still has it in hand, rather than
+        # at the end of a fill. `None` is the whole of the default path: no
+        # attribute the dense route reads changes, and no new code runs.
+        self._rotational_map = None
+        # How far the N axis-against-sector copies of Z disagree on the last
+        # solve, relative to their largest entry — PLAN-phase1 §4's free check
+        # on the sector assignment, read back by the gates. None until a
+        # sector solve has run.
+        self._rotational_copy_spread = None
+        self.rotational_symmetry = bool(rotational_symmetry)
+        if self.rotational_symmetry:
+            self._rotational_map = self._rotational_check()
+
+    def _rotational_ground_kind(self):
+        """The ground's name for the rotational-symmetry rule (momwire#1029
+        §3.6). Every ground THIS family can express is invariant under
+        rotation about a vertical axis, so every answer here is in
+        `_rotational_symmetry.AXISYMMETRIC_GROUNDS` — the seam exists because
+        the condition is about the ground and not about this solver, and a
+        family that grows a terrain or two-media ground refuses the route by
+        overriding this with a name the whitelist does not carry."""
+        if self.ground_z is None:
+            return "free"
+        if self.ground_eps is None:
+            return "pec"
+        return self.ground_model
+
+    def _rotational_check(self):
+        """The §3 rule plus the two scope conditions that are about THIS
+        route rather than about the deck's symmetry."""
+        if self.use_singular_enrichment:
+            raise _rotational_symmetry.RotationalSymmetryRefused(
+                "rotational symmetry: singular enrichment adds a block that is "
+                "not sector-structured, and the route has no decomposition for "
+                "it. Disable singular enrichment, or drop "
+                "rotational_symmetry=True to solve this deck densely."
+            )
+        if self.ground_z is None or not self._has_buried_wires():
+            raise _rotational_symmetry.RotationalSymmetryRefused(
+                "rotational symmetry: the route fills one sector through the "
+                "BURIED mixed-medium path (momwire#553 U5), and this deck has "
+                "no wire below the interface. Drop rotational_symmetry=True to "
+                "solve this deck densely."
+            )
+        return _rotational_symmetry.sector_map(self)
 
     # ------------------------------------------------------------------
     # Geometry build
@@ -5527,9 +5602,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return str(exc)
         return None
 
-    def _compute_Z_operator_buried(self, geom, supp_seg, polys):
+    def _compute_Z_operator_buried(self, geom, supp_seg, polys, rows=None):
         """The mixed-medium dense Z. The ROUTING moved to `_below_interface`
         (momwire#980 step C part 2); this hands it the solver's own fills.
+
+        `rows` (momwire#1029) is the routing's observer restriction, passed
+        straight through: None is today's path byte for byte, and a subset of
+        global segment indices computes only those rows of a full-size Z. The
+        contract and what it does NOT restrict are in
+        `_below_interface.compute_Z_operator_buried`.
 
         The three pair classes and their signs are one body there, so the
         sinusoidal-Galerkin serve adopts the routing instead of copying it —
@@ -5568,6 +5649,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             mu=self.mu,
             cancel_flag=self._cancel_flag,
             chunked=self._buried_chunked_serves,
+            rows=rows,
         )
 
     def _dense_tensor_fits_budget(self, n_segs):
@@ -5824,7 +5906,181 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         return v, port_vectors, vpf_T, all_voltages, kcl_con
 
+    # ------------------------------------------------------------------
+    # The sector (block-circulant) route — momwire#1029, opt-in
+    # ------------------------------------------------------------------
+
+    def _rotational_dof_groups(self, wire_basis_global, n_basis_total):
+        """`(sectors, axial)`: one global-index array per sector image, and
+        the axial group's.
+
+        `sectors[s][i]` and `sectors[t][i]` are the SAME basis, of the same
+        wire of the same orbit, under the rotation — gate S-0 pins that
+        bijection dof by dof (kind, local index, end position and junction all
+        match at equal position), and it is what lets row `i` of sector 0
+        stand for its N images. `s` is only a label: the route sums a row over
+        a source dof's whole orbit, so relabelling the sectors cannot change
+        anything it computes.
+        """
+        smap = self._rotational_map
+        sectors = []
+        for s in range(smap.n_sectors):
+            idx = []
+            for w in smap.sectors[s]:
+                kept, l2g = wire_basis_global[w]
+                idx.extend(int(l2g[i]) for i in range(len(kept)))
+            sectors.append(np.asarray(idx, dtype=np.int64))
+        on_sector = np.zeros(n_basis_total, dtype=bool)
+        for idx in sectors:
+            on_sector[idx] = True
+        return sectors, np.nonzero(~on_sector)[0].astype(np.int64)
+
+    def _rotational_rows(self, geom):
+        """The observer segments one sector's fill needs: sector 0's wires and
+        every axial wire. No basis straddles two wires (S-0's S0a), so a
+        whole-wire segment set is exactly a whole-dof row set."""
+        smap = self._rotational_map
+        seg_off = geom["seg_offsets"]
+        per_wire = geom["per_wire"]
+        runs = [
+            np.arange(seg_off[w], seg_off[w] + per_wire[w]["n_total"])
+            for w in (*smap.sectors[0], *smap.axial)
+        ]
+        return np.sort(np.concatenate(runs))
+
+    def _rotational_K0(self, Z, sectors, axial):
+        """The harmonic-0 block and its consistency reading.
+
+        An on-axis drive is rotation-invariant, so the solution is too and
+        only harmonic 0 is ever excited (`PLAN.md` §2, measured at F4). In the
+        DFT over sectors the radial-radial part is block-diagonal with
+        Lambda_h = sum_d C_d exp(+2 pi j h d / N), and harmonic 0 is the only
+        block that couples to the axis:
+
+            K_0 = [[Lambda_0, sqrt(N) B], [sqrt(N) C, Z_MM]]
+
+        with c_hat_0 = sqrt(N) c_sector. Lambda_0 = sum_d C_d is the ROW SUM
+        of sector 0's rows over every sector's columns, so it needs no
+        labelling; B is sector 0's axial columns. The axis-against-sector
+        block is the SUM of the N copies scaled by 1/sqrt(N) — using the sum
+        rather than one copy averages their roundoff, and their spread is a
+        free check on the sector assignment (they are not bit-identical:
+        rotated copies round differently).
+        """
+        n = len(sectors)
+        m = int(sectors[0].size)
+        p = int(axial.size)
+        s0 = sectors[0]
+        sq = math.sqrt(n)
+        K0 = np.empty((m + p, m + p), dtype=np.complex128)
+        lam0 = Z[np.ix_(s0, sectors[0])].copy()
+        for t in range(1, n):
+            lam0 += Z[np.ix_(s0, sectors[t])]
+        K0[:m, :m] = lam0
+        K0[:m, m:] = sq * Z[np.ix_(s0, axial)]
+        c_0 = Z[np.ix_(axial, sectors[0])]
+        c_sum = c_0.copy()
+        worst = 0.0
+        scale = float(np.max(np.abs(c_0))) if c_0.size else 1.0
+        for t in range(1, n):
+            c_t = Z[np.ix_(axial, sectors[t])]
+            worst = max(worst, float(np.max(np.abs(c_t - c_0))))
+            c_sum += c_t
+        K0[m:, :m] = c_sum / sq
+        K0[m:, m:] = Z[np.ix_(axial, axial)]
+        self._rotational_copy_spread = worst / max(scale, 1e-300)
+        return K0, m, p
+
+    def _rotational_solve(self, Z, v, kcl_A, sectors, axial):
+        """The constrained solve through K_0 — `_solve_with_kcl`'s Schur step
+        with the sector inverse in place of the dense one.
+
+        The Schur algebra only ever applies Z^-1 to `v` and to the constraint
+        rows, and BOTH are rotation-invariant for an on-axis drive: the gap
+        source vector is supported on the feed's own axial wire, and the hub's
+        KCL row carries the same +1 on every sector's directional basis. That
+        is asserted rather than assumed — a right-hand side with content in
+        another harmonic would need the other N-1 blocks, which this route
+        does not build.
+        """
+        n = len(sectors)
+        sq = math.sqrt(n)
+        K0, m, _p = self._rotational_K0(Z, sectors, axial)
+        lu = scipy.linalg.lu_factor(K0, overwrite_a=True)
+
+        def z_inv(rhs):
+            rhs = np.asarray(rhs, dtype=np.complex128).reshape(rhs.shape[0], -1)
+            r0 = rhs[sectors[0]]
+            scale = max(float(np.max(np.abs(rhs))), 1e-300)
+            for t in range(1, n):
+                spread = float(np.max(np.abs(rhs[sectors[t]] - r0))) / scale
+                if spread > _ROTATIONAL_DRIVE_TOL:
+                    raise _rotational_symmetry.RotationalSymmetryRefused(
+                        f"rotational symmetry: the right-hand side differs "
+                        f"between sector 0 and sector {t} by {spread:.3e} of "
+                        f"its largest entry, so the drive is not "
+                        f"rotation-invariant and needs every harmonic. This "
+                        f"route serves the axis-symmetric drive only. Drop "
+                        f"rotational_symmetry=True to solve this deck densely."
+                    )
+            top = np.vstack([sq * r0, rhs[axial]])
+            sol = scipy.linalg.lu_solve(lu, top)
+            out = np.empty((rhs.shape[0], rhs.shape[1]), dtype=np.complex128)
+            per_sector = sol[:m] / sq
+            for t in range(n):
+                out[sectors[t]] = per_sector
+            out[axial] = sol[m:]
+            return out
+
+        w = z_inv(v[:, None])[:, 0]
+        if kcl_A.shape[0] == 0:
+            return w
+        X = z_inv(kcl_A.T.astype(np.complex128))
+        lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
+        return w - X @ lam
+
+    def _compute_impedance_rotational(self):
+        """`compute_impedance` on the sector route (momwire#1029).
+
+        One fill of sector 0's rows plus the axial rows against EVERY source,
+        one (m + p) solve whatever N is, and the coefficients reassembled in
+        the dense ordering — so `element_currents` and the far readout need no
+        new code, and the caller cannot tell which route produced the vector.
+        """
+        geom = self._build_geometry()
+        supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
+            self._build_basis_polynomials(geom)
+        )
+        n_basis_total = supp_seg.shape[0]
+        sectors, axial = self._rotational_dof_groups(wire_basis_global, n_basis_total)
+        self._checkpoint()  # after geometry/basis, before the one-sector fill
+        Z = self._compute_Z_operator_buried(
+            geom, supp_seg, polys, rows=self._rotational_rows(geom)
+        )
+        v, port_vectors, _vpf_T, all_voltages, kcl_con = self._feed_drive_and_readout(
+            geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+        )
+        self._checkpoint()  # before the harmonic-0 solve
+        coeffs = self._rotational_solve(Z, v, kcl_con, sectors, axial)
+        del Z
+        return self._per_feed_z(coeffs, port_vectors, all_voltages), coeffs
+
+    def _per_feed_z(self, coeffs_full, port_vectors, all_voltages):
+        """Drive-point impedance per port (gap feeds, then junction ports,
+        then node gaps). `coeffs_full` may include the enrichment block; every
+        port vector is zero on that block by convention (gap feeds are not on
+        enriched segments; singular enrichment bases vanish AT junctions), so
+        the inner product naturally restricts to the polynomial block."""
+        currents = np.array(
+            [u_i @ coeffs_full[: u_i.shape[0]] for u_i in port_vectors],
+            dtype=np.complex128,
+        )
+        z_per = all_voltages / currents
+        return z_per[0] if len(port_vectors) == 1 else z_per
+
     def compute_impedance(self, same_edge_prep=None):
+        if self._rotational_map is not None:
+            return self._compute_impedance_rotational()
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
             self._build_basis_polynomials(geom)
@@ -5842,21 +6098,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         v, port_vectors, _vpf_T, all_voltages, kcl_con = self._feed_drive_and_readout(
             geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
         )
-        n_ports_total = len(port_vectors)
 
         def _per_feed_z(coeffs_full):
-            """Drive-point impedance per port (gap feeds, then junction
-            ports). coeffs_full may include the enrichment block; every port
-            vector is zero on that block by convention (gap feeds are not on
-            enriched segments; singular enrichment bases vanish AT junctions),
-            so the inner product naturally restricts to the polynomial block.
-            """
-            currents = np.array(
-                [u_i @ coeffs_full[: u_i.shape[0]] for u_i in port_vectors],
-                dtype=np.complex128,
-            )
-            z_per = all_voltages / currents
-            return z_per[0] if n_ports_total == 1 else z_per
+            # `_per_feed_z` is a method (momwire#1029) so the sector route
+            # reads the ports exactly as this one does; the closure keeps the
+            # three call sites below unchanged.
+            return self._per_feed_z(coeffs_full, port_vectors, all_voltages)
 
         # Clear any leftover per-junction selection from a prior solve
         # (variant="auto" repopulates this below; everything else leaves
@@ -5924,6 +6171,21 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         coeffs = self._solve_with_kcl(Z, v, kcl_con, overwrite=True)
         return _per_feed_z(coeffs), coeffs
 
+    def _rotational_route_serves_one_drive(self, entry):
+        """Every entry point but `compute_impedance` stays dense under
+        `rotational_symmetry=True`, and says so rather than answering (the
+        sector route decomposes ONE axis-symmetric drive, momwire#1029 phase
+        1 scope). Silently handing back the dense answer would make the flag
+        look served where it is not, which is the failure mode
+        `require_lattice_fft` exists to prevent on the array solver."""
+        if self._rotational_map is not None:
+            raise _rotational_symmetry.RotationalSymmetryRefused(
+                f"rotational symmetry: {entry} is not on the sector route — "
+                f"phase 1 decomposes the single axis-symmetric drive of "
+                f"compute_impedance only. Use compute_impedance, or drop "
+                f"rotational_symmetry=True to solve this deck densely."
+            )
+
     def compute_y_matrix(self) -> np.ndarray:
         """Short-circuit admittance matrix [Y_sc] at the configured feeds.
 
@@ -5956,6 +6218,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         This is the `y` field of `compute_port_solution()` and nothing else —
         see there for the per-port solution columns this throws away (#232).
         """
+        self._rotational_route_serves_one_drive("compute_y_matrix")
         return self.compute_port_solution().y
 
     def compute_port_solution(self, same_edge_prep=None) -> PortSolution:
@@ -5988,6 +6251,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         it just spares the per-k rebuild when `_port_solutions_swept` drives
         this method frequency by frequency.
         """
+        self._rotational_route_serves_one_drive("compute_port_solution")
         geom = self._build_geometry()
         supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
             self._build_basis_polynomials(geom)
@@ -6419,6 +6683,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         solve, and it keeps the swept answer bit-comparable with the per-k
         `compute_impedance` it mirrors.
         """
+        self._rotational_route_serves_one_drive("compute_impedance_swept")
         _refuse_complex_k(k_array, "BSplineSolver.compute_impedance_swept")
         k_array = np.asarray(k_array, dtype=float)
         n_total = len(self.feeds) + len(self.junction_ports)
