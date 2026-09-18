@@ -79,7 +79,10 @@ def test_g980b_1_polynomials_delegate_to_the_byte(record_property):
         u = np.concatenate([rng.uniform(0.0, ctx.geom.h[g], 3) for g in seg_idx])
         F, Fd, rows = ctx.basis.samples(runs, u)
         F0, Fd0, rows0 = cf._basis_samples(ctx.basis.supp_seg, ctx.basis.polys, runs, u)
-        assert np.array_equal(F, F0) and np.array_equal(Fd, Fd0)
+        # CSR on both sides since momwire#1109 — the delegation claim is
+        # unchanged, so compare the dense readings entry for entry.
+        assert np.array_equal(F.toarray(), F0.toarray())
+        assert np.array_equal(Fd.toarray(), Fd0.toarray())
         assert rows.keys() == rows0.keys()
         assert all(np.array_equal(rows[g], rows0[g]) for g in rows)
         live = np.any(ctx.basis.polys != 0.0, axis=2)
@@ -189,12 +192,15 @@ def test_g980b_3_axis_data_consumes_the_sinusoidal_sampler(deck):
     ctx = _sg_context(s, geom, sampler, ground_z=-50.0)
     ax = cf.axis_data(ctx, np.arange(n))
     assert ax["n_basis"] == n
-    assert ax["F"].shape == (n, ax["nodes"].shape[0])
+    assert ax["F_csr"].shape == (n, ax["nodes"].shape[0])
     # recover each node's arc from its segment start, and check the samples
     u = np.linalg.norm(ax["nodes"] - geom["seg_l"][ax["segof"]], axis=1)
     F0, Fd0 = _direct(s, seg_view, n, ax["segof"], u - 0.5 * geom["seg_h"][ax["segof"]])
-    np.testing.assert_allclose(ax["F"], F0, rtol=0.0, atol=1e-13 * np.abs(F0).max())
-    np.testing.assert_allclose(ax["Fd"], Fd0, rtol=0.0, atol=1e-13 * np.abs(Fd0).max())
+    # This sampler returns DENSE and `axis_data` converts it (momwire#1109):
+    # the conversion is what is under test here as much as the samples are.
+    axF, axFd = ax["F_csr"].toarray(), ax["Fd_csr"].toarray()
+    np.testing.assert_allclose(axF, F0, rtol=0.0, atol=1e-13 * np.abs(F0).max())
+    np.testing.assert_allclose(axFd, Fd0, rtol=0.0, atol=1e-13 * np.abs(Fd0).max())
     starts, jbasis = seg_view["starts"], seg_view["jbasis"]
     assert set(ax["seg_rows"]) == set(range(n))
     for g in range(n):

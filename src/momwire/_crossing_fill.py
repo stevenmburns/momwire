@@ -182,6 +182,15 @@ class BasisSampler(Protocol):
         `seg_runs` is `_segment_runs`' `{segment: (start, count)}` and
         `u_phys[start:start+count]` the local arc `u ∈ [0, h]` from `seg_l`
         of that segment's nodes, in node order.
+
+        SPARSE OR DENSE (momwire#1029 phase 2 / #1109). A basis with local
+        support has at most `degree + 1` nonzeros per NODE, so `axis_data`
+        carries F/Fd as `scipy.sparse.csr_array` under the keys `F_csr` /
+        `Fd_csr`, and a sampler may return that directly —
+        `BasisPolynomials` does, built from the segment structure and never
+        materialised dense, because the dense pair is 4.13 GB of the 8.55 GB
+        peak on the 150-radial screen. A sampler that returns dense arrays
+        is converted here and pays only its own dense allocation.
     `end_values(gseg, u)`
         `(n_basis,)`: every basis's value at arc `u` of segment `gseg`, zero
         off support. `axis_data` calls it at `u = 0` of a wire's first
@@ -713,7 +722,9 @@ def axis_data(
     # sampling whenever their density knobs agree — which they do today
     # (`_FAR_Q == _NEAR_Q == 4`, `_FAR_GROWTH == _NEAR_GROWTH == 4.0` since
     # #692) — so the caller can hand the dense axis in and skip rebuilding a
-    # second copy of F/Fd. On the 48-radial screen that copy is 445 MB.
+    # second copy of F/Fd. On the 48-radial screen that copy is 445 MB dense
+    # and ~1 MB as the CSR it is since momwire#1109; the share still earns its
+    # lines as the sampling it skips.
     #
     # Guarded on the SAMPLING, not on the flag: the node count and positions
     # are what make the two identical, and they are exactly what a future
@@ -721,12 +732,15 @@ def axis_data(
     # through to a real build with no edit here.
     if (
         share_from is not None
-        and share_from["F"].shape == (n_basis, u_phys.shape[0])
+        and share_from["F_csr"].shape == (n_basis, u_phys.shape[0])
         and np.array_equal(share_from["nodes"], nodes)
     ):
-        F, Fd, seg_rows = share_from["F"], share_from["Fd"], share_from["seg_rows"]
+        F = share_from["F_csr"]
+        Fd = share_from["Fd_csr"]
+        seg_rows = share_from["seg_rows"]
     else:
         F, Fd, seg_rows = basis.samples(seg_runs, u_phys)
+        F, Fd = _as_csr(F), _as_csr(Fd)
 
     # Signed wire-end table: (point, sign, per-basis value there). σ = −1
     # at a wire's first segment's u = 0 end, +1 at its last segment's
@@ -749,8 +763,13 @@ def axis_data(
         nodes=nodes,
         t=t_node,
         w=w_node,
-        F=F,
-        Fd=Fd,
+        # `F_csr` / `Fd_csr`, not `F` / `Fd`: the rename is the point
+        # (momwire#1109). Every consumer of the samples had to become an
+        # explicit edit when they went sparse, and a key that kept its name
+        # would have let one through — `ax["F"] * w` is an elementwise fold on
+        # an array and a matmul on a `csr_matrix`, with no error either way.
+        F_csr=F,
+        Fd_csr=Fd,
         ends=ends,
         n_basis=n_basis,
         segof=segof,
@@ -772,48 +791,77 @@ def _segment_runs(segof):
 
 def _basis_samples(supp_seg, polys, seg_runs, u_phys):
     """F / Fd — every basis polynomial and its derivative sampled at the
-    axis nodes of its support segments — and `seg_rows`, the basis rows
-    with a LIVE wing on each segment (momwire#912).
+    axis nodes of its support segments, as CSR — and `seg_rows`, the basis
+    rows with a LIVE wing on each segment (momwire#912).
 
     The same terms in the same order as the per-row loop this replaces:
-    `F[m, sel] += c·u^p` for p ascending, one live wing at a time, which the
-    `np.add.at` per p reproduces because no basis row carries the same
+    `F[m, sel] += c·u^p` for p ascending, one live wing at a time, and the
+    running sum below reproduces it because no basis row carries the same
     segment in two live wings (asserted). supp_seg rows are zero-padded,
     and a slot is live only if its polynomial is nonzero (the padding
     trap), so the mask is on the POLYNOMIAL, never on the segment id.
+
+    SPARSE, and built from the STRUCTURE (momwire#1029 phase 2 / #1109), the
+    way `_fdw_sparse` (momwire#914) already builds `Fd·w`: the (row, node)
+    pairs are the live wings' own rectangles, so there is nothing to scan and
+    no dense array to scan it out of. The dense pair was `(n_basis, n_nodes)`
+    float64 with at most `degree + 1` nonzeros per COLUMN — 4.13 GB live on
+    the 150-radial screen for ~93 k numbers, and the floor under that fill's
+    8.55 GB peak. `csr_array`, not `csr_matrix`: the matrix class reads `*`
+    as matmul, and the weight folds downstream are elementwise.
+
+    Explicit zeros are KEPT (a live wing whose polynomial samples to 0 at a
+    node stays stored), which is what makes `_support_rows`' pattern reading
+    an exact superset of the live rows and keeps a NaN-poisoned row in.
     """
-    n_basis, n_wings, n_p = polys.shape
+    n_basis, _n_wings, n_p = polys.shape
     n_nodes = u_phys.shape[0]
-    F = np.zeros((n_basis, n_nodes))
-    Fd = np.zeros((n_basis, n_nodes))
     live = np.any(polys != 0.0, axis=2)
     m_idx, a_idx = np.nonzero(live)
     segs = supp_seg[m_idx, a_idx]
     on = np.array([int(g) in seg_runs for g in segs], dtype=bool)
     m_idx, a_idx, segs = m_idx[on], a_idx[on], segs[on]
     seg_rows: dict[int, np.ndarray] = {}
-    if m_idx.size:
-        pairs = np.stack([m_idx, segs], axis=1)
-        if np.unique(pairs, axis=0).shape[0] != pairs.shape[0]:
-            raise AssertionError("a basis row carries one segment in two live wings")
-        start = np.array([seg_runs[int(g)][0] for g in segs], dtype=np.int64)
-        cnt = np.array([seg_runs[int(g)][1] for g in segs], dtype=np.int64)
-        row = np.repeat(m_idx, cnt)
-        node = np.repeat(start - (np.cumsum(cnt) - cnt), cnt) + np.arange(
-            int(cnt.sum())
-        )
-        u = u_phys[node]
-        coef = polys[m_idx, a_idx]  # (L, n_p)
-        for p in range(n_p):
-            c = np.repeat(coef[:, p], cnt)
-            np.add.at(F, (row, node), c * u**p)
-            if p >= 1:
-                np.add.at(Fd, (row, node), (p * c) * u ** (p - 1))
-        order = np.argsort(segs, kind="stable")
-        keys, groups = _group_sorted(segs[order], m_idx[order])
-        for g, rows in zip(keys, groups):
-            seg_rows[int(g)] = np.sort(rows)
+    if not m_idx.size:
+        empty = _sp.csr_array((n_basis, n_nodes), dtype=float)
+        return empty, empty.copy(), seg_rows
+    pairs = np.stack([m_idx, segs], axis=1)
+    if np.unique(pairs, axis=0).shape[0] != pairs.shape[0]:
+        raise AssertionError("a basis row carries one segment in two live wings")
+    start = np.array([seg_runs[int(g)][0] for g in segs], dtype=np.int64)
+    cnt = np.array([seg_runs[int(g)][1] for g in segs], dtype=np.int64)
+    row = np.repeat(m_idx, cnt)
+    node = np.repeat(start - (np.cumsum(cnt) - cnt), cnt) + np.arange(int(cnt.sum()))
+    u = u_phys[node]
+    coef = polys[m_idx, a_idx]  # (L, n_p)
+    fv = np.zeros(row.size, dtype=float)
+    fdv = np.zeros(row.size, dtype=float)
+    for p in range(n_p):
+        c = np.repeat(coef[:, p], cnt)
+        fv += c * u**p
+        if p >= 1:
+            fdv += (p * c) * u ** (p - 1)
+    shape = (n_basis, n_nodes)
+    F = _sp.csr_array((fv, (row, node)), shape=shape)
+    Fd = _sp.csr_array((fdv, (row, node)), shape=shape)
+    order = np.argsort(segs, kind="stable")
+    keys, groups = _group_sorted(segs[order], m_idx[order])
+    for g, rows in zip(keys, groups):
+        seg_rows[int(g)] = np.sort(rows)
     return F, Fd, seg_rows
+
+
+def _as_csr(M):
+    """The axis's F/Fd in the one spelling every consumer below reads."""
+    return M if _sp.issparse(M) else _sp.csr_array(np.asarray(M))
+
+
+def _scale_cols(M, v):
+    """`M * v[None, :]` for a CSR `M` — the column weighting folded into the
+    stored values, entry for entry, with no fill-in and no dense broadcast."""
+    out = M.copy()
+    out.data = out.data * v[out.indices]
+    return out
 
 
 def _group_sorted(keys, values):
@@ -868,16 +916,19 @@ def path_test_axis(n_basis, rows):
     at the plane by the caller, one record per half with the node as the
     shared endpoint: the trunk's tables take an observer on one side only.
     """
-    nodes, tl, wl, F, segof, ends = [], [], [], [], [], []
+    nodes, tl, wl, f_rows, f_cols, segof, ends = [], [], [], [], [], [], []
+    off = 0
     for m, pts, t, w, seg, c_before, c_after in rows:
         pts = np.asarray(pts, dtype=float)
         q = pts.shape[0]
         nodes.append(pts)
         tl.append(np.asarray(t, dtype=float))
         wl.append(np.asarray(w, dtype=float))
-        f = np.zeros((n_basis, q))
-        f[m] = 1.0
-        F.append(f)
+        # The pulse as its own nonzeros (momwire#1109): row m carries 1 on its
+        # own q points and nothing anywhere else, which is the whole of F.
+        f_rows.append(np.full(q, int(m), dtype=np.int64))
+        f_cols.append(np.arange(off, off + q, dtype=np.int64))
+        off += q
         segof.append(np.asarray(seg, dtype=np.int64))
         e = np.zeros(n_basis)
         e[m] = 1.0
@@ -894,8 +945,17 @@ def path_test_axis(n_basis, rows):
         nodes=np.concatenate(nodes) if nodes else np.zeros((0, 3)),
         t=np.concatenate(tl) if tl else np.zeros((0, 3)),
         w=np.concatenate(wl) if wl else np.zeros(0),
-        F=np.concatenate(F, axis=1) if F else np.zeros((n_basis, 0)),
-        Fd=np.zeros((n_basis, n_pts)),
+        F_csr=_sp.csr_array(
+            (
+                np.ones(n_pts),
+                (
+                    np.concatenate(f_rows) if f_rows else np.zeros(0, dtype=np.int64),
+                    np.concatenate(f_cols) if f_cols else np.zeros(0, dtype=np.int64),
+                ),
+            ),
+            shape=(n_basis, n_pts),
+        ),
+        Fd_csr=_sp.csr_array((n_basis, n_pts), dtype=float),
         ends=ends,
         n_basis=n_basis,
         segof=np.concatenate(segof) if segof else np.zeros(0, dtype=np.int64),
@@ -980,8 +1040,16 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     wA, wB = A["w"], B["w"]
     txA, tyA, tzA = A["t"].T
     txB, tyB, tzB = B["t"].T
-    FA_w, FB_w = A["F"] * wA, B["F"] * wB
-    FdA_w, FdB_w = A["Fd"] * wA, B["Fd"] * wB
+    # DENSIFIED HERE, deliberately (momwire#1109). This is the whole-axis
+    # product — every row against every node — so the six GEMMs below want
+    # dense operands, and the decks that reach it (razor, and the
+    # MOMWIRE_CROSSING_FORCE_DENSE bisect switch) are the small ones. The
+    # split entry point never comes through here, so keeping today's bytes on
+    # this path costs the screen nothing.
+    FA, FB = A["F_csr"].toarray(), B["F_csr"].toarray()
+    FdA, FdB = A["Fd_csr"].toarray(), B["Fd_csr"].toarray()
+    FA_w, FB_w = FA * wA, FB * wB
+    FdA_w, FdB_w = FdA * wA, FdB * wB
 
     s_u = (FA_w * txA) @ U @ (FB_w * txB).T + (FA_w * tyA) @ U @ (FB_w * tyB).T
     # momwire#956 — the exact spelling of the transmitted dyad tested along a
@@ -1033,6 +1101,11 @@ def _real_matvec_c(M, v):
 
     Invisible in the source it replaces, which reads as a matrix-vector
     product and is one; only the dtypes give it away.
+
+    `M` is the axis's CSR since momwire#1109 and the argument is unchanged:
+    scipy upcasts a real CSR against a complex vector the same way numpy
+    upcasts a real array, and the copy it makes is of the stored values
+    rather than of the dense block, which is smaller but still pointless.
     """
     return (M @ v.real) + 1j * (M @ v.imag)
 
@@ -1156,11 +1229,13 @@ def _ends_and_corner(
     _txA, _tyA, tzA = A["t"].T
 
     # THE NODE WEIGHTS FOLD INTO THE SHORT VECTOR, NOT THE TALL MATRIX
-    # (momwire#919). `(B["Fd"] * B["w"]) @ te["V"]` is `B["Fd"] @ (B["w"] *
-    # te["V"])`: the same contraction over the nodes, but the weighting is
-    # applied to a length-n_nodes vector instead of an (n_basis, n_nodes)
-    # matrix. On the 48-radial screen that product was 222.6 MB, live for the
-    # whole routine and second only to the rank-1 updates below.
+    # (momwire#919). `(Fd_B * w_B) @ te["V"]` is `Fd_B @ (w_B * te["V"])`: the
+    # same contraction over the nodes, but the weighting is applied to a
+    # length-n_nodes vector instead of an (n_basis, n_nodes) matrix. On the
+    # 48-radial screen that product was 222.6 MB, live for the whole routine
+    # and second only to the rank-1 updates below. Since momwire#1109 the
+    # matrix is a CSR and a folded copy would be cheap, and the fold still
+    # stands: it is one vector multiply either way.
     #
     # NOT bit-identical to the old spelling: (Fd*w)·V and Fd·(w*V) round
     # differently. Gated at 1e-12 relative.
@@ -1192,12 +1267,17 @@ def _ends_and_corner(
         # added an exact 0.
         nz = np.flatnonzero(fv)
         _rank1_add(
-            t_ab, nz, fv[nz], _real_matvec_c(B["Fd"], wB * te["V"]), c1 * sign, buf
+            t_ab, nz, fv[nz], _real_matvec_c(B["Fd_csr"], wB * te["V"]), c1 * sign, buf
         )
         # TW (momwire#956): the test-side W end, −σ f_m(E)·∫ f_n t̂z′ W(E,·),
         # left by testing −∇W along the wire — SW's partner on the other axis.
         _rank1_add(
-            t_ab, nz, fv[nz], _real_matvec_c(B["F"], wB_tz * te["W"]), -c1 * sign, buf
+            t_ab,
+            nz,
+            fv[nz],
+            _real_matvec_c(B["F_csr"], wB_tz * te["W"]),
+            -c1 * sign,
+            buf,
         )
     for pt, sign, fv in B["ends"] if source_ends else ():
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
@@ -1213,10 +1293,15 @@ def _ends_and_corner(
         )
         nz = np.flatnonzero(fv)
         _rank1_add_cols(
-            t_ab, nz, _real_matvec_c(A["F"], wA_tz * te["W"]), fv[nz], -c1 * sign, bufT
+            t_ab,
+            nz,
+            _real_matvec_c(A["F_csr"], wA_tz * te["W"]),
+            fv[nz],
+            -c1 * sign,
+            bufT,
         )
         _rank1_add_cols(
-            t_ab, nz, _real_matvec_c(A["Fd"], wA * te["V"]), fv[nz], c1 * sign, bufT
+            t_ab, nz, _real_matvec_c(A["Fd_csr"], wA * te["V"]), fv[nz], c1 * sign, bufT
         )
 
     # The designed corner: node tents against each other through V at
@@ -1333,7 +1418,7 @@ def _ends_and_corner_reversed(
         )
         nz = np.flatnonzero(fv)
         _rank1_add(
-            t_ba, nz, fv[nz], _real_matvec_c(Q["Fd"], wQ * te["V"]), c1 * sign, buf
+            t_ba, nz, fv[nz], _real_matvec_c(Q["Fd_csr"], wQ * te["V"]), c1 * sign, buf
         )
         if True:  # SW — under either `sw_end` reading since momwire#956
             # SW paired with s_w1 by the by-parts that produced it: on the
@@ -1342,7 +1427,7 @@ def _ends_and_corner_reversed(
                 t_ba,
                 nz,
                 fv[nz],
-                _real_matvec_c(Q["F"], wQ_tz * te["W"]),
+                _real_matvec_c(Q["F_csr"], wQ_tz * te["W"]),
                 -c1 * sign,
                 buf,
             )
@@ -1368,13 +1453,18 @@ def _ends_and_corner_reversed(
         _rank1_add_cols(
             t_ba,
             nzq,
-            _real_matvec_c(P["F"], wP_tz * te["W"]),
+            _real_matvec_c(P["F_csr"], wP_tz * te["W"]),
             fv[nzq],
             -c1 * sign,
             bufT,
         )
         _rank1_add_cols(
-            t_ba, nzq, _real_matvec_c(P["Fd"], wP * te["V"]), fv[nzq], c1 * sign, bufT
+            t_ba,
+            nzq,
+            _real_matvec_c(P["Fd_csr"], wP * te["V"]),
+            fv[nzq],
+            c1 * sign,
+            bufT,
         )
 
     if not corner:
@@ -1433,12 +1523,25 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
 def _row_weights(ax, ii, rows=None):
     """The four per-basis row-weight matrices of one axis, restricted to
     the point subset `ii` — and, when `rows` is given, to those basis rows
-    as well: (F·w·t̂x, F·w·t̂y, F·w·t̂z, F′·w)."""
+    as well: (F·w·t̂x, F·w·t̂y, F·w·t̂z, F′·w), each a CSR sub-block.
+
+    CSR since momwire#1109, entry for entry what the dense gather produced:
+    `w` and `t̂` vary by POINT, so every fold here is a column scaling and the
+    pattern never changes. The dense form was the allocation the issue named —
+    a `(2035, 7992)` float64, 124 MiB per call and 292 calls per fill on the
+    150-radial screen, carrying ≤ 3 nonzeros per column. Measured on the
+    48-radial screen: 62.7 MB largest and 750 MB of churn, against 0.1 MB and
+    12 MB here.
+    """
     tx, ty, tz = ax["t"][ii].T
-    sel = (slice(None), ii) if rows is None else np.ix_(rows, ii)
-    Fw = ax["F"][sel] * ax["w"][ii]
-    Fdw = ax["Fd"][sel] * ax["w"][ii]
-    return Fw * tx, Fw * ty, Fw * tz, Fdw
+    w = ax["w"][ii]
+    F = ax["F_csr"]
+    Fd = ax["Fd_csr"]
+    if rows is not None:
+        F, Fd = F[rows], Fd[rows]
+    Fw = _scale_cols(F[:, ii], w)
+    Fdw = _scale_cols(Fd[:, ii], w)
+    return _scale_cols(Fw, tx), _scale_cols(Fw, ty), _scale_cols(Fw, tz), Fdw
 
 
 def _support_rows(ax, ii):
@@ -1449,13 +1552,18 @@ def _support_rows(ax, ii):
     zero. `w` and `t̂` vary by POINT, not by row, so `F` and `Fd` are the only
     row-varying factors and their union is an exact superset of the live rows
     — never a guess. NaN compares unequal to zero, so a poisoned row stays in
-    and still propagates rather than being silently dropped.
+    and still propagates rather than being silently dropped — and the CSR
+    fallback below reads the STORED PATTERN, which keeps that true for free
+    (`_basis_samples` stores a live wing's entries whatever they sample to,
+    so a NaN and an exact zero are both in the pattern; the extra rows an
+    exact zero brings in are still an exact restriction, momwire#912's
+    argument).
     """
     seg_rows = ax.get("seg_rows")
     if seg_rows is None:
-        return np.flatnonzero(
-            np.any(ax["F"][:, ii] != 0, axis=1) | np.any(ax["Fd"][:, ii] != 0, axis=1)
-        )
+        F = ax["F_csr"][:, ii]
+        Fd = ax["Fd_csr"][:, ii]
+        return np.flatnonzero((np.diff(F.indptr) > 0) | (np.diff(Fd.indptr) > 0))
     # momwire#912: the same superset from the axis's own segment→rows map —
     # a row is live over `ii` only through a live wing on one of the block's
     # segments, and every such row is in the map. Restricting to extra rows
@@ -1498,7 +1606,15 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None):
     It earns the indirection: on the 60-radial BLE deck the live rows are 5-7
     of 695, so the naive form spends ~99% of its flops multiplying zeros
     (5.13e10 mults across the fill against 6.4e7 restricted), and the routine
-    was 63% of that deck family's wall at 113 radials."""
+    was 63% of that deck family's wall at 113 radials.
+
+    SPARSE @ DENSE @ SPARSE.T since momwire#1109: the weights carry ≤ degree+1
+    nonzeros per point, so the two outer products cost
+    O(nnz(P)·|iB| + nnz(Q)·|rA|) instead of O(|rA|·|iA|·|iB| + |rA|·|iB|·|rB|),
+    and nothing of the (n_basis, n_nodes) samples is ever materialised. The
+    term order is the reference fill's, unchanged; the summation order WITHIN
+    a term is not, which is the reassociation the docstring above already
+    declines to pin."""
     rA = _support_rows(A, iA)
     rB = _support_rows(B, iB)
     P1, P2, P3, P4 = _row_weights(A, iA, rA)
@@ -1524,7 +1640,7 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None):
         # bits. The products and their order are untouched.
         out[np.ix_(rA, rB)] += block
         return out
-    full = np.zeros((A["F"].shape[0], B["F"].shape[0]), dtype=block.dtype)
+    full = np.zeros((A["n_basis"], B["n_basis"]), dtype=block.dtype)
     full[np.ix_(rA, rB)] = block
     return full
 
@@ -1778,14 +1894,23 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
                 n,
                 tol=_ACA_TOL,
             )
-        P1, P2, P3, P4 = _row_weights(Ac, iA)
-        Q1, Q2, Q3, Q4 = _row_weights(Bc, iB)
+        # RESTRICTED ON BOTH SIDES AND SCATTERED (momwire#1109) — the same
+        # exact restriction #688's G6 licensed for `_sandwich_dense`, which
+        # this branch never took: it built the weights at full basis height,
+        # four `(n_basis, |iA|)` and four `(n_basis, |iB|)` dense matrices per
+        # far block, 528 MB each on the 150-radial screen for a product whose
+        # live rows are single digits. The rows outside the support give an
+        # identically-zero block, so adding them was adding exact zeros.
+        rA = _support_rows(Ac, iA)
+        rB = _support_rows(Bc, iB)
+        P1, P2, P3, P4 = _row_weights(Ac, iA, rA)
+        Q1, Q2, Q3, Q4 = _row_weights(Bc, iB, rB)
 
         def _lr(P, kk, Q, Kf=Kf):
             Uf, Vf = Kf[kk]
             return (P @ Uf) @ (Vf @ Q.T)
 
-        t_main += (
+        t_main[np.ix_(rA, rB)] += (
             _lr(P1, "U", Q1)
             + _lr(P2, "U", Q2)
             + k2sq * _lr(P3, "V", Q3)
@@ -1840,29 +1965,17 @@ def _fdw_sparse(ax):
     `csr_matrix`: the dense scan is the cost. On that axis the end-to-node
     product is 71.4 ms dense, 28.5 ms via a CSR scanned out of the dense
     array, and 4.2 ms via this one, all three including construction.
+
+    Since momwire#1109 that structure is `Fd_csr`'s own — `axis_data` builds
+    the samples at exactly this pattern — so the loop that rebuilt it here
+    from `seg_runs` / `seg_rows` is a column scaling, and the branch for an
+    axis with no tables (a path-test axis) falls out with it: its Fd is an
+    empty CSR and scaling it is the same answer the dense product gave.
     """
     cached = ax.get("_fdw_csr")
     if cached is not None:
         return cached
-    Fd, w = ax["Fd"], ax["w"]
-    runs, seg_rows = ax.get("seg_runs"), ax.get("seg_rows")
-    rows_i, cols_i = [], []
-    if runs is not None and seg_rows is not None:
-        for g, rc in runs.items():
-            rows = seg_rows.get(int(g))
-            if rows is None or rows.size == 0:
-                continue
-            cols = np.arange(rc[0], rc[0] + rc[1])
-            rows_i.append(np.repeat(rows, cols.size))
-            cols_i.append(np.tile(cols, rows.size))
-    if rows_i:
-        ri = np.concatenate(rows_i)
-        ci = np.concatenate(cols_i)
-        out = _sp.csr_matrix((Fd[ri, ci] * w[ci], (ri, ci)), shape=Fd.shape)
-    else:
-        # No tables (an axis built before #912, or one with no live wings):
-        # the dense product is the reference and stays available.
-        out = _sp.csr_matrix(Fd * w)
+    out = _scale_cols(ax["Fd_csr"], ax["w"])
     ax["_fdw_csr"] = out
     return out
 

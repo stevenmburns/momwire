@@ -129,8 +129,10 @@ def test_g912_1_basis_samples_and_ends_equal_the_loop_forms(solved):
         runs = cf._segment_runs(ax["segof"])
         F, Fd, _rows = cf._basis_samples(ctx.basis.supp_seg, ctx.basis.polys, runs, u)
         F_ref, Fd_ref = _loop_F_Fd(ctx, ax["segof"], u)
-        assert np.array_equal(F, F_ref), f"F differs (coarse={coarse})"
-        assert np.array_equal(Fd, Fd_ref), f"Fd differs (coarse={coarse})"
+        # CSR since momwire#1109; the claim is the same one — every sample
+        # equals the per-row loop's, to the bit — read through `.toarray()`.
+        assert np.array_equal(F.toarray(), F_ref), f"F differs (coarse={coarse})"
+        assert np.array_equal(Fd.toarray(), Fd_ref), f"Fd differs (coarse={coarse})"
         ends_ref = _loop_ends(ctx, seg_idx)
         assert len(ax["ends"]) == len(ends_ref)
         for (pt, sg, fv), (pt_r, sg_r, fv_r) in zip(ax["ends"], ends_ref):
@@ -147,8 +149,8 @@ def test_g912_2_support_rows_from_the_map_cover_the_scan(solved):
             ii = np.sort(rng.choice(n, size=min(n, 17), replace=False))
             got = cf._support_rows(ax, ii)
             scan = np.flatnonzero(
-                np.any(ax["F"][:, ii] != 0, axis=1)
-                | np.any(ax["Fd"][:, ii] != 0, axis=1)
+                np.any(ax["F_csr"].toarray()[:, ii] != 0, axis=1)
+                | np.any(ax["Fd_csr"].toarray()[:, ii] != 0, axis=1)
             )
             assert set(scan) <= set(got), "the map dropped a live row"
             assert np.array_equal(got, scan), "the map is not the scan on this deck"

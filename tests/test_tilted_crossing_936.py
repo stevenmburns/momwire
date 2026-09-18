@@ -165,14 +165,18 @@ def test_g936_4_the_assembled_W_terms_match_direct_quadrature_when_tilted():
     W = CF._tables(ctx, eps_t, k_p, rho, z, zp, CF._CROSS_RTOL)["W"]
 
     tzA = A["t"].T[2]
-    shipped = (A["F"] * A["w"] * tzA) @ W @ (B["Fd"] * B["w"]).T
+    # `.toarray()` since momwire#1109 (the axis carries the samples as a CSR);
+    # the claim under test is the assembled W term against the element-by-
+    # element quadrature, which is unchanged.
+    AF, BFd = A["F_csr"].toarray(), B["Fd_csr"].toarray()
+    shipped = (AF * A["w"] * tzA) @ W @ (BFd * B["w"]).T
 
     # the same contraction, built element by element -- no matrix algebra
     direct = np.zeros_like(shipped)
     for i in range(A["n_basis"]):
         for j in range(B["n_basis"]):
             direct[i, j] = np.sum(
-                (A["F"][i] * A["w"] * tzA)[:, None] * W * (B["Fd"][j] * B["w"])[None, :]
+                (AF[i] * A["w"] * tzA)[:, None] * W * (BFd[j] * B["w"])[None, :]
             )
     rel = np.max(np.abs(shipped - direct)) / max(np.max(np.abs(direct)), 1e-300)
     assert rel < 1e-12, f"assembled W term vs direct quadrature: {rel:.3e}"

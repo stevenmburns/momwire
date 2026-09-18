@@ -394,16 +394,20 @@ def test_the_below_axis_is_sampled_at_k_m():
         b_idx = np.nonzero(np.asarray(below))[0]
 
         # The ABOVE axis is bit-identical: k_p was always right there.
+        # `.toarray()` since momwire#1109 put the samples in a CSR; the two
+        # axes carry the same pattern, so the dense readings compare directly.
         fa = _crossing_fill.axis_data(ctx_fixed, a_idx)
         sa = _crossing_fill.axis_data(ctx_shared, a_idx)
-        assert np.array_equal(fa["F"], sa["F"])
-        assert np.array_equal(fa["Fd"], sa["Fd"])
+        assert np.array_equal(fa["F_csr"].toarray(), sa["F_csr"].toarray())
+        assert np.array_equal(fa["Fd_csr"].toarray(), sa["Fd_csr"].toarray())
 
         # The BELOW axis moves, by far more than any quadrature noise.
         fb = _crossing_fill.axis_data(ctx_fixed, b_idx)
         sb = _crossing_fill.axis_data(ctx_shared, b_idx)
-        rel_f = np.abs(fb["F"] - sb["F"]).max() / np.abs(sb["F"]).max()
-        rel_fd = np.abs(fb["Fd"] - sb["Fd"]).max() / np.abs(sb["Fd"]).max()
+        fbF, sbF = fb["F_csr"].toarray(), sb["F_csr"].toarray()
+        fbFd, sbFd = fb["Fd_csr"].toarray(), sb["Fd_csr"].toarray()
+        rel_f = np.abs(fbF - sbF).max() / np.abs(sbF).max()
+        rel_fd = np.abs(fbFd - sbFd).max() / np.abs(sbFd).max()
     assert rel_f > 1.0, rel_f
     assert rel_fd > 1.0, rel_fd
 
