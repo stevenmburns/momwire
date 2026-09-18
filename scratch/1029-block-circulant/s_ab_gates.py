@@ -76,8 +76,29 @@ def _capture_plan(momwire_below):
     return seen, (lambda: setattr(momwire_below, "plan_buried", original))
 
 
+def _out_ok_kw(_below_interface, _bspline):
+    """momwire#1115 part 3's `out=` lever, as a kwarg this harness can carry
+    across BOTH sides of an A/B.
+
+    This harness builds its OWN `BuriedFills` rather than going through
+    `BSplineSolver._compute_Z_operator_buried`, so the production wiring does
+    not reach it: without this the gate runs the transient path and reports
+    bit-identical whatever the lever does -- green, and measuring nothing.
+    Passed only when the field EXISTS, because the pre side of an A/B is a
+    momwire that predates it and would raise on the keyword.
+    """
+    if "field_galerkin_out_ok" not in _below_interface.BuriedFills._fields:
+        return {}
+    return {
+        "field_galerkin_out_ok": getattr(
+            _bspline, "_HAVE_FIELD_GALERKIN_STRIDED", False
+        )
+    }
+
+
 def fill(solver, rows=None):
     from momwire import _below_interface
+    from momwire import bspline as _bspline
 
     geom, supp_seg, polys, kcl_A, wire_knots, wbg = _parts(solver)
     seen, restore = _capture_plan(_below_interface)
@@ -97,6 +118,13 @@ def fill(solver, rows=None):
                 image_Z_weighted=solver._image_Z_weighted,
                 image_tangent_dot=solver._image_tangent_dot,
                 field_galerkin_block=solver._field_galerkin_block,
+                # This harness builds its OWN fills rather than going through
+                # `BSplineSolver._compute_Z_operator_buried`, so the production
+                # wiring of momwire#1115 part 3's `out=` lever does not reach
+                # it. Without this line the gate runs the transient path and
+                # reports bit-identical whatever the lever does -- green, and
+                # measuring nothing.
+                **_out_ok_kw(_below_interface, _bspline),
                 apply_loading=solver._apply_loading,
             ),
             below_segments=solver._below_segments,
