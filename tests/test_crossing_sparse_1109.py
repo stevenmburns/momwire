@@ -19,6 +19,8 @@ import numpy as np
 import pytest
 import scipy.sparse as sp
 
+from momwire import _aca
+from momwire import _below_interface as bi
 from momwire import _crossing_fill as cf
 from momwire.bspline import BSplineSolver
 
@@ -133,3 +135,153 @@ def test_p2a_5_support_rows_pattern_fallback_covers_the_scan(axes):
         )
         assert set(scan) <= set(got)
         assert set(got) <= set(cf._support_rows(ax_b, ii))
+
+
+# ---------------------------------------------------------------------------
+# Unit B — `rows=` reaches the crossing family
+#
+# Phase 1 filled the crossing block whole under a `rows=` restriction and
+# registered that as the contract (PLAN-phase1.md Amendment 1), because the
+# routing reads its transpose. Phase 2 asks for BOTH slices out of one
+# evaluation, so the contract becomes "rows outside the request are exactly
+# zero" and the crossing family stops being the one term of the route's cost
+# that scales with N.
+# ---------------------------------------------------------------------------
+
+
+def _whole_wire_segments(solver, geom, wires):
+    off = geom["seg_offsets"]
+    per = geom["per_wire"]
+    return np.sort(
+        np.concatenate([np.arange(off[w], off[w] + per[w]["n_total"]) for w in wires])
+    )
+
+
+@pytest.fixture(scope="module")
+def routed():
+    """The crossing deck, its basis, and a whole-wire observer restriction."""
+    s = BSplineSolver(**crossing_deck(1))
+    geom = s._build_geometry()
+    supp_seg, polys, *_ = s._build_basis_polynomials(geom)
+    seg_rows = _whole_wire_segments(s, geom, [0])  # the BELOW wire
+    return s, geom, supp_seg, polys, seg_rows
+
+
+@pytest.mark.parametrize("aca_guard", [None, 0.0], ids=["shipped", "aca-forced"])
+def test_p2b_1_the_pair_is_the_full_blocks_two_slices(
+    axes, routed, monkeypatch, aca_guard
+):
+    ctx, a_idx, b_idx, ax_a, ax_b = axes
+    _s, _geom, supp_seg, polys, seg_rows = routed
+    if aca_guard is not None:
+        # the low-rank branch as well as the direct one: both halves read the
+        # same (Uf, Vf) there, and the slices must still be exact
+        monkeypatch.setattr(cf, "_ACA_COST_GUARD", aca_guard)
+    R = bi._crossing_basis_rows(supp_seg, polys, seg_rows)
+    assert R.size and R.size < supp_seg.shape[0]
+    full = cf.cross_complete_block_split(ctx, a_idx, b_idx, ax_a, ax_b)
+    t_r, t_c = cf.cross_complete_block_split(ctx, a_idx, b_idx, ax_a, ax_b, rows=R)
+    assert t_r.shape == (R.size, full.shape[1])
+    assert t_c.shape == (full.shape[0], R.size)
+    # The same products, gathered rather than recomputed: bit for bit.
+    assert np.array_equal(t_r, full[R, :])
+    assert np.array_equal(t_c, full[:, R])
+
+
+@pytest.mark.parametrize("aca_guard", [None, 0.0], ids=["shipped", "aca-forced"])
+def test_p2b_2_the_restriction_costs_no_extra_kernel_work(
+    axes, routed, monkeypatch, aca_guard
+):
+    """One evaluation of the kernel tables and one ACA factorisation per
+    block serve BOTH halves — the property that makes the transpose free, and
+    the reason the crossing family stops scaling with N on the route.
+
+    Driven at the shipped `_ACA_COST_GUARD` (every far block direct on this
+    small deck) and with the guard forced to 0 so the low-rank branch runs;
+    the guard is a TEST monkeypatch, never a moved constant."""
+    ctx, a_idx, b_idx, ax_a, ax_b = axes
+    _s, _geom, supp_seg, polys, seg_rows = routed
+    R = bi._crossing_basis_rows(supp_seg, polys, seg_rows)
+    if aca_guard is not None:
+        monkeypatch.setattr(cf, "_ACA_COST_GUARD", aca_guard)
+    tally = {"tables": 0, "aca": 0}
+    for mod, name, key in ((cf, "_tables", "tables"), (_aca, "aca_partial", "aca")):
+        orig = getattr(mod, name)
+
+        def spy(*a, _orig=orig, _key=key, **kw):
+            tally[_key] += 1
+            return _orig(*a, **kw)
+
+        monkeypatch.setattr(mod, name, spy)
+
+    cf.cross_complete_block_split(ctx, a_idx, b_idx, ax_a, ax_b)
+    full = dict(tally)
+    tally.update(tables=0, aca=0)
+    cf.cross_complete_block_split(ctx, a_idx, b_idx, ax_a, ax_b, rows=R)
+    assert full["tables"] > 0
+    if aca_guard == 0.0:
+        assert full["aca"] > 0, "the ACA branch did not run"
+    assert tally == full, (tally, full)
+
+
+def test_p2b_3_self_completions_answer_their_requested_rows(axes, routed):
+    ctx, _a, _b, ax_a, ax_b = axes
+    _s, _geom, supp_seg, polys, seg_rows = routed
+    R = bi._crossing_basis_rows(supp_seg, polys, seg_rows)
+    full = cf.self_completions(ctx, ax_b, ax_a)
+    got = cf.self_completions(ctx, ax_b, ax_a, rows=R)
+    assert got.shape == (R.size, full.shape[1])
+    assert np.array_equal(got, full[R, :])
+
+
+def test_p2b_4_rows_outside_the_request_are_exactly_zero(routed):
+    """P2-8's item 2, at the routing. Phase 1 left the crossing block's rows
+    non-zero here and registered it; nothing is exempt now."""
+    s, geom, supp_seg, polys, seg_rows = routed
+    Z_full = s._compute_Z_operator_buried(geom, supp_seg, polys)
+    Z_rows = s._compute_Z_operator_buried(geom, supp_seg, polys, rows=seg_rows)
+    R = bi._crossing_basis_rows(supp_seg, polys, seg_rows)
+    other = np.setdiff1d(np.arange(supp_seg.shape[0]), R)
+    assert np.all(Z_rows[other] == 0.0)
+    rel = np.max(np.abs(Z_rows[R] - Z_full[R])) / np.max(np.abs(Z_full[R]))
+    assert rel <= 1e-12, rel
+    # and it is not vacuous: the restriction really left work out
+    assert np.max(np.abs(Z_full[other])) > 0.0
+
+
+def test_p2b_5_a_split_basis_is_refused_by_name(routed):
+    _s, _geom, supp_seg, polys, _seg_rows = routed
+    live = np.any(polys != 0.0, axis=2)
+    # a segment set that covers one live wing of some basis and not the rest
+    m = int(np.flatnonzero(live.sum(axis=1) > 1)[0])
+    half = np.array([int(supp_seg[m, np.flatnonzero(live[m])[0]])], dtype=np.int64)
+    with pytest.raises(ValueError) as exc:
+        bi._crossing_basis_rows(supp_seg, polys, half)
+    msg = str(exc.value)
+    assert "live support segments" in msg and "whole wires" in msg
+
+
+def test_p2b_6_two_radius_answers_the_half_of_each_block_the_routing_reads():
+    a = 0.25e-3
+    s = BSplineSolver(**crossing_deck(2, wire_radius=[a / 2, a]))
+    geom = s._build_geometry()
+    supp_seg, polys, *_ = s._build_basis_polynomials(geom)
+    ctx = s._crossing_context(geom, supp_seg, polys)
+    assert ctx.a_below is not None
+    below = np.asarray(s._below_segments(geom))
+    a_idx, b_idx = np.flatnonzero(~below), np.flatnonzero(below)
+    ax_a = cf.axis_data(ctx, a_idx)
+    ax_b = cf.axis_data(ctx, b_idx)
+    seg_rows = _whole_wire_segments(s, geom, [0])
+    R = bi._crossing_basis_rows(supp_seg, polys, seg_rows)
+    f_above, f_below = cf.cross_complete_blocks_two_radius(
+        ctx, a_idx, b_idx, ax_a, ax_b
+    )
+    r_above, r_below = cf.cross_complete_blocks_two_radius(
+        ctx, a_idx, b_idx, ax_a, ax_b, rows=R
+    )
+    assert np.array_equal(r_above, f_above[R, :])
+    assert np.array_equal(r_below, f_below[:, R])
+    fs = cf.self_completions_two_radius(ctx, ax_b, ax_a)
+    rs = cf.self_completions_two_radius(ctx, ax_b, ax_a, rows=R)
+    assert np.array_equal(rs, fs[R, :])
