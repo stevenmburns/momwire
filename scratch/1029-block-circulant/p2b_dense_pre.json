@@ -1,0 +1,48 @@
+{
+ "free-dipole-batched": {
+  "batched": true,
+  "shape": [
+   3
+  ],
+  "dtype": "complex128",
+  "sha": "65770f33cf62cf70b70c106e5873475f",
+  "z_hex": [
+   [
+    "0x1.32062cdc1219ap+3",
+    "-0x1.1d555769901e7p+10"
+   ],
+   [
+    "0x1.8105c465cbe1cp+3",
+    "-0x1.e8e4bd6a278c1p+9"
+   ],
+   [
+    "0x1.dbd78ffecc125p+3",
+    "-0x1.a33070430de9ep+9"
+   ]
+  ],
+  "seconds": 0.005
+ },
+ "screen4-flag-off-per-k": {
+  "batched": false,
+  "shape": [
+   3
+  ],
+  "dtype": "complex128",
+  "sha": "af8506c25ee76651a0621ac6007ecc47",
+  "z_hex": [
+   [
+    "0x1.ea1be03773c13p+5",
+    "-0x1.2feef43e81d95p+5"
+   ],
+   [
+    "0x1.2cb50393bb7d1p+6",
+    "0x1.6edb47cb4ac90p+5"
+   ],
+   [
+    "0x1.6c8ee0c014eb8p+6",
+    "0x1.f9abbef2fe993p+6"
+   ]
+  ],
+  "seconds": 3.203
+ }
+}

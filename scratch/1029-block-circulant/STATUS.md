@@ -107,6 +107,138 @@ name otherwise.
 6. The unburied deck and the general drive (phase 3), as `PLAN-phase2.md` §1
    lists them.
 
+## Phase 2b (2026-09-18): roster + swept
+
+Built on `feat/1029-sector-route-swept-and-roster` off momwire main 3d2ef17
+(which carries phases 1 and 2), for antennaknobs' side of "enable the new
+radial screen accelerator in AK, but not advertise it yet". Two things stood
+in the way and both are gone: the roster did not name the route, so nothing
+downstream could discover it, and a sweep — which is what a panel actually
+drives — refused.
+
+| commit | unit |
+|---|---|
+| `dbe37c1` | the roster declares the sector route |
+| `2e6a279` | the swept entry serves it |
+| `32727ee` | every refusal lands before a fill |
+| (this commit) | the records and this section |
+
+### What changed
+
+**The roster.** `BSplineSolver.capabilities.axes["solve_strategy"]` is
+`("dense", "sector")`, dense first on the row's default-first convention and
+gated against the CONSTRUCTOR rather than the literal.
+`_capabilities.AXIS_VALUES` admits the value with its meaning;
+`docs/capability-matrix.md` is GENERATED (`scripts/capability_matrix.py`,
+`--check` is the gate) and was regenerated — one cell moved, `dense` ->
+`dense / sector`. `HMatrixSolver` and `ArrayBlockSolver` REPLACE the cell
+rather than extending it, so neither gains the value, and both still
+validate. `test_hmatrix_differs_from_bspline_in_the_buried_cell_and_the_solve_axis`
+pinned the parent's cell as a literal and moved with it; no other capability
+cell moved.
+
+**The swept entry.** `compute_impedance_swept` is the second entry point the
+route serves, as a LOOP over k — the route's fill is
+`_compute_Z_operator_buried` under `rows=`, which has no k axis to batch
+over. Nothing is given up: `_swept_batched_available` needs
+`ground_eps is None`, and a deck with no lower medium is one the route
+refuses at construction, so the DENSE sweep is a loop on this deck too. The
+route branch sits ahead of the batched dispatch, which makes "the route never
+batches" structural rather than incidental, and it fills the `z_out` that
+method already allocates — so the shape and dtype a caller reads are the
+dense path's own, through the same `z_out[i] = z` line, with `_k_restored`
+putting the frequency triple back. BOTH shapes: two gap feeds on the mast —
+the only place a route deck can put a second port, since an off-axis one is
+refused by name — give `(n_k, 2)` on either path, agreeing to **6.47e-14**.
+
+`compute_y_matrix`, `compute_port_solution`, `compute_y_matrix_swept` and
+`compute_port_solution_swept` still refuse. The two swept PORT entries
+reached a refusal before only through `compute_port_solution`'s, which named
+a method the user had not called; `_port_solutions_swept` now carries the
+guard and the sentence takes several names.
+
+**Every refusal before a fill.** The six §3 refusals and the two scope ones
+are frozen at construction; the entry-point ones are the first line of their
+method. The DRIVE guard was the exception — it lived inside the Schur step,
+so the route reached it only after filling, and on a sweep after the first of
+n_k fills. `_feed_drive_and_readout` never reads Z and the fill never reads
+the drive, so `check_drive` now runs between them, judging exactly the two
+objects the solve will apply Z^-1 to. `solve`'s own call stays, for callers
+that reach the solve directly.
+
+### Gate table
+
+| gate | bar | measured | |
+|---|---|---|---|
+| **P2B-1** the roster | `("dense", "sector")`, dense = the constructor default; the subclasses unchanged; the generated matrix regenerated | row and vocabulary as declared; `axes_for` reports `{dense, sector}`; hmatrix `("aca",)`, arrayblock `("element-block",)`; one cell moved in `docs/capability-matrix.md` | HIT |
+| **P2B-2a** swept = per-frequency `compute_impedance` | bit-for-bit, or 1e-12 relative | **BIT-IDENTICAL, 3/3 frequencies on both decks** (rel exactly 0.0) — and also against a solver CONSTRUCTED at each wavelength rather than `_set_k`, which is what a consumer that does not sweep does | HIT |
+| **P2B-2b** swept route = swept dense, per frequency | G1a, 1e-9 relative | 4 radials **2.45e-14 / 6.08e-14 / 2.43e-14**; 12 radials **9.14e-14 / 7.97e-14 / 4.82e-14** | HIT, five orders inside |
+| **P2B-2c** the other entry points still refuse | by name | four entries, each naming itself and the two the route serves | HIT |
+| **P2B-3** the default swept path is byte-identical | sha equal | free-space dipole (the BATCHED path) `65770f33cf62cf70b70c106e5873475f`; the 4-radial screen with the flag OFF (the per-k path) `af8506c25ee76651a0621ac6007ecc47` — both unchanged. The non-swept default path too: `sha_Z` **58124baf… / af44d749…**, P2-7's own post values | HIT |
+| **P2B-4** a wrong design refuses before any fill | no fill | spy on `_compute_Z_operator_buried`: **zero calls** on the geometry refusals, the four entry-point ones and the drive guard, on the single solve AND on the sweep. Timed for scale: geometry **0.95 ms** (at construction), drive-on-sweep **0.30 ms**, entry point **0.01 ms**, against a 3-point sweep of **3.08 s** cold / **0.226 s** warm | HIT |
+| **P2B-5** lint; the route suite; the capability suites; the default lane | green | ruff 0.16.5 check + format clean; `test_rotational_symmetry_1029.py` **37 passed**; the six capability/coupling files **254 passed**; default lane **5554 passed / 5 skipped / 4 xfailed** (427.6 s, laptop, exit 0) | HIT |
+
+### The consumer's own contract
+
+The gates above are momwire asking itself. This is antennaknobs asking:
+`MomwireEngine.impedance_sweep` on the real
+`verticals.buried_radial_vertical` design, 3 frequencies spanning +-10 % of
+7.1 MHz, with and without the flag, after an untimed cold pass so neither
+engine is the one paying for the Sommerfeld grids
+(`p2b_swept.py --ak`, `p2b_ak_sweep.json`):
+
+| radials | shape / dtype | dense s | route s | speedup | worst relative |
+|---:|---|---:|---:|---:|---:|
+| 4 | (3, 1) complex128, both | 1.454 | **1.120** | 1.30x | 4.59e-13 |
+| 12 | (3, 1) complex128, both | 5.463 | **2.594** | 2.11x | 5.24e-13 |
+
+AK reads nothing off the solver after the call — `impedance_sweep` takes the
+return value, reshapes a 1-D answer to `(n_k, 1)` and stops — so the shape,
+the dtype and the values ARE the whole contract, and they are the dense
+path's.
+
+### Costs and findings
+
+* **A Sommerfeld grid is built per wavenumber**, cached per process: 4.1-5.0 s
+  per NEW k on the test deck at one thread, 0.12-0.15 s once cached. A
+  3-frequency gate scattered across xdist workers rebuilt them per worker and
+  three tests read 12.5-15.4 s of pure duplication — 15.36 s is within a slow
+  runner's 1.55x spread of the 20 s HARD ceiling. The gates now read one
+  module-scoped sweep per deck (the cost moves to setup, which the guardrail
+  does not charge) and `tests/test_rotational_symmetry_1029.py` joins
+  `_FIXTURE_GROUP_FILES`, on `test_surface_radials_865.py`'s precedent and for
+  its reason. No test in the file is over the 5 s soft ceiling now; three were
+  before this unit.
+* **The dense sweep builds `_same_edge_prep` for a buried deck and no fill
+  reads it.** `_compute_Z_operator` returns on its buried branch before
+  `same_edge_prep` is touched, so `compute_impedance_swept`'s hoist and its
+  per-chunk reg-moment batching are pure cost there. The route skips it (that
+  is why it is not in `_rotational_symmetry.compute_impedance_swept`); the
+  dense path was left exactly as it was, because this section's P2B-3 is the
+  promise that it did not move. Worth its own issue.
+* **`HMatrixSolver` and `ArrayBlockSolver` accept `rotational_symmetry=True`
+  and build a sector map that is then dead.** They inherit `__init__` and
+  `_rotational_check`, so the flag constructs on a class whose row does not
+  declare "sector". MEASURED, because the plausible reading is wrong:
+  `_hmatrix_unsupported()` reads **False** on a buried deck, so nothing falls
+  through to the dense base and neither class ever runs the route — both
+  entry points refuse from `HMatrixSolver.build_hmatrix` with the buried
+  refusal, which is the right answer and the one `buried=False` predicts.
+  What is off is the ORDER: the user is told about the ground, not about the
+  flag they ticked, and the sector map was built for nothing. A one-line
+  guard in the subclass would say so. Small, and worth its own issue.
+* **No `COUPLINGS` row was added.** Nothing gates one: `_couplings` is the
+  inventory of refused combinations of DECLARED axis values, and the route's
+  refusals are deck-SHAPE facts — is this deck N copies of one sector — which
+  that module's own rule classes as condition tokens rather than axes
+  ("crossing", "finite_ground", "mixed_radii" are the precedent). The one
+  genuinely axis-shaped pair is `solve_strategy=sector` x
+  `wire_position=above`, the mirror of the two `aca`/`element-block` x
+  `buried` rows already there. It is worth adding, and it needs the
+  buried-only refusal hoisted to a module constant and an `applies_to` that
+  answers the H-matrix finding above first, so it is a follow-up rather than
+  a line.
+
 ---
 
 # Phase 1 (2026-09-17), kept as written
