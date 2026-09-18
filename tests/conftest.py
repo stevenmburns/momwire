@@ -99,6 +99,14 @@ _FIXTURE_GROUP_FILES = (
     # ungrouped against ~80 s of actual distinct work, with single tests
     # reading 281 s purely from duplication. Same shape as the entries above.
     "test_surface_radials_865.py",
+    # momwire#1029 phase 2b: the sector route's swept gate sweeps three
+    # wavenumbers of a buried Sommerfeld deck, and a Sommerfeld grid is built
+    # per k. Measured on this file's own deck, one thread: 4.1-5.0 s per NEW
+    # k, 0.12-0.15 s once cached. Scattered, each worker rebuilt the grids it
+    # needed and three tests read 12.5-15.4 s of pure duplication; grouped,
+    # the module fixture builds each grid once and every call phase is
+    # milliseconds. Same shape as `test_surface_radials_865.py` above.
+    "test_rotational_symmetry_1029.py",
 )
 
 
