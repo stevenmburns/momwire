@@ -186,3 +186,16 @@ prediction band (1.3–2.0 GB) was written without it and should read
 2.3–3.0 GB; the BAR (2.5 GB) stands. P2-2's band moves the same way; its bar
 stands. The rest of unit C landed as registered: the ends and the self
 completions accumulate their support in place, bit-identically.
+
+## Amendment 2 (2026-09-18, momwire#1115 parts 1 and 2)
+
+Reason 1 above is no longer true of the code: the binding takes its target as
+a bare `py::array` and REFUSES one it cannot accumulate into (not
+C-contiguous, not complex128, not writeable), and it takes a `scale` applied
+to each contribution, so a caller can accumulate `Z -= Q` in one pass.
+`test_p2c_5` pins the refusal instead of the silent copy.
+
+Reason 2 stands unchanged, and is now the whole of what blocks
+`_field_galerkin_block(out=Z, scale=-1)`: the reassociation across chunks
+needs the 1e-12 gate `p2_default_path.py` provides and a 150-radial memory
+measurement on the fleet. Follow-up 1 in STATUS.md is that remainder.
