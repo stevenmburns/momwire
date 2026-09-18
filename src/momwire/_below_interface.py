@@ -1311,7 +1311,7 @@ def compute_Z_operator_buried(
             if cross_rows is None:
                 Z -= t_above
                 Z -= t_below.T
-                Z += _crossing_fill.self_completions_two_radius(ctx, ax_b, ax_a)
+                _crossing_fill.self_completions_two_radius(ctx, ax_b, ax_a, out=Z)
             else:
                 # `t_above` is already its row slice and `t_below` its column
                 # slice: the two blocks are not transposes at two radii, so
@@ -1328,7 +1328,7 @@ def compute_Z_operator_buried(
             if cross_rows is None:
                 Z -= t_ab
                 Z -= t_ab.T
-                Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
+                _crossing_fill.self_completions(ctx, ax_b, ax_a, out=Z)
             else:
                 t_r, t_c = t_ab
                 Z[cross_rows, :] -= t_r
