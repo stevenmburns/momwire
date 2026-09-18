@@ -946,6 +946,41 @@ def plan_buried(
     )
 
 
+def _crossing_basis_rows(supp_seg, polys, rows):
+    """The BASIS rows whose whole live support lies inside the segment set
+    `rows` — the crossing family's restriction (momwire#1029 phase 2).
+
+    ALL-OR-NOTHING, asserted rather than assumed. The crossing block is
+    basis-shaped on both axes, so a partially-covered basis has no honest row
+    to write: half its support would be filled and half left out, and the
+    answer would be neither the full row nor zero. It cannot happen for the
+    callers that exist — no basis straddles two wires (momwire#1029 S-0's S0a)
+    and the sector route restricts by whole wires — so a violation is a new
+    caller, and it gets a refusal by name rather than a silent half-row.
+
+    The mask is on the POLYNOMIAL, never on the segment id: `supp_seg` rows are
+    zero-padded, so an unlive slot naming segment 0 would otherwise read as a
+    support segment (the padding trap `_crossing_fill._basis_samples` guards).
+    """
+    supp_seg = np.asarray(supp_seg)
+    live = np.any(np.asarray(polys) != 0.0, axis=2)
+    inside = np.isin(supp_seg, rows) & live
+    n_in = inside.sum(axis=1)
+    n_live = live.sum(axis=1)
+    bad = np.flatnonzero((n_in != 0) & (n_in != n_live))
+    if bad.size:
+        m = int(bad[0])
+        raise ValueError(
+            f"rows= restricts the crossing block by BASIS row, and basis {m} "
+            f"has {int(n_in[m])} of its {int(n_live[m])} live support segments "
+            f"inside the requested segment set. A partly-covered basis has no "
+            f"honest crossing row: the block is basis-shaped on both axes, so "
+            f"half a support would fill half a row. Restrict by whole wires "
+            f"(momwire#1029 phase 2; {int(bad.size)} basis rows are split)"
+        )
+    return np.flatnonzero((n_live > 0) & (n_in == n_live)).astype(np.int64)
+
+
 def compute_Z_operator_buried(
     geom,
     supp_seg,
@@ -972,14 +1007,23 @@ def compute_Z_operator_buried(
 
     `rows` (momwire#1029) restricts the OBSERVER axis of the fill. None is
     exactly today's path, byte for byte. A subset — an array of global segment
-    indices — computes only those rows of Z and leaves the others zero, EXCEPT
-    the crossing block, which is written in full: the routing uses it as
-    `Z -= t; Z -= t.T`, and restricting its rows would drop columns the
-    transpose reads. The PLAN is never restricted — every grid extent and
-    quadrature order is computed from the full index sets — so a restricted
-    fill and a full one agree row by row on the requested rows. A caller that
-    restricts rows owns the consequences downstream: the result is not a
-    solvable operator on its own.
+    indices — computes only those rows of Z and leaves EVERY OTHER ROW EXACTLY
+    ZERO. The PLAN is never restricted — every grid extent and quadrature order
+    is computed from the full index sets — so a restricted fill and a full one
+    agree row by row on the requested rows. A caller that restricts rows owns
+    the consequences downstream: the result is not a solvable operator on its
+    own.
+
+    **The crossing family is restricted too, since phase 2 (momwire#1109).**
+    Phase 1 filled it whole and said so, because the routing reads its
+    transpose (`Z -= t; Z -= t.T`) and a row restriction would drop the columns
+    that transpose needs. Phase 2 asks the fill for BOTH slices — `t[R, :]` and
+    `t[:, R]` — out of one evaluation of the kernel tables, so the transpose
+    costs a different gather rather than a second fill. `R` is the BASIS rows
+    whose whole support lies inside `rows`, which is exactly the basis rows of
+    those segments: no basis straddles two wires (momwire#1029 S-0's S0a) and
+    the callers restrict by whole wires, so the map is all-or-nothing and this
+    routine refuses by name if it is ever not.
 
     A deck with buried wires is filled pair class by pair class, and the
     classes are not variants of each other:
@@ -1252,6 +1296,9 @@ def compute_Z_operator_buried(
         ctx = f.crossing_context(geom, supp_seg, polys)
         ax_a = _crossing_fill.axis_data(ctx, a_idx)
         ax_b = _crossing_fill.axis_data(ctx, b_idx)
+        cross_rows = (
+            None if rows is None else _crossing_basis_rows(supp_seg, polys, rows)
+        )
         if ctx.a_below is not None:
             # A TWO-RADIUS node (antennaknobs plan U5): the two cross blocks
             # are no longer transposes — above rows test lines at the above
@@ -1259,18 +1306,36 @@ def compute_Z_operator_buried(
             # share one radius — and continuity is closed by the crossing
             # junction's KCL row rather than left to emerge.
             t_above, t_below = _crossing_fill.cross_complete_blocks_two_radius(
-                ctx, a_idx, b_idx, ax_a, ax_b
+                ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
             )
-            Z -= t_above
-            Z -= t_below.T
-            Z += _crossing_fill.self_completions_two_radius(ctx, ax_b, ax_a)
+            if cross_rows is None:
+                Z -= t_above
+                Z -= t_below.T
+                Z += _crossing_fill.self_completions_two_radius(ctx, ax_b, ax_a)
+            else:
+                # `t_above` is already its row slice and `t_below` its column
+                # slice: the two blocks are not transposes at two radii, so
+                # each is asked for the one half the composition below reads.
+                Z[cross_rows, :] -= t_above
+                Z[cross_rows, :] -= t_below.T
+                Z[cross_rows, :] += _crossing_fill.self_completions_two_radius(
+                    ctx, ax_b, ax_a, rows=cross_rows
+                )
         else:
             t_ab = _crossing_fill.cross_complete_block_split(
-                ctx, a_idx, b_idx, ax_a, ax_b
+                ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
             )
-            Z -= t_ab
-            Z -= t_ab.T
-            Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
+            if cross_rows is None:
+                Z -= t_ab
+                Z -= t_ab.T
+                Z += _crossing_fill.self_completions(ctx, ax_b, ax_a)
+            else:
+                t_r, t_c = t_ab
+                Z[cross_rows, :] -= t_r
+                Z[cross_rows, :] -= t_c.T
+                Z[cross_rows, :] += _crossing_fill.self_completions(
+                    ctx, ax_b, ax_a, rows=cross_rows
+                )
     elif a_idx.size:
         grid_t = _sommerfeld_transmitted.get_grid_below_above(
             eps_t,

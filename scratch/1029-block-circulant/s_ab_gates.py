@@ -10,12 +10,15 @@ deck, a sha256 of the assembled Z's bytes, of the solved coefficients' bytes, an
 Z_in's exact hex. Bytes, not tolerances: rows=None must take today's path.
 
 S-B — a restricted fill equals the corresponding rows of the full fill, and the
-PLAN is untouched. Per PLAN-phase1.md Amendment 1:
+PLAN is untouched. Item 2 is REWRITTEN for phase 2 (momwire#1109, gate P2-8):
 
   * the requested rows agree to the assembled tolerance;
-  * rows OUTSIDE the request may be non-zero only where the crossing block
-    writes them (it is filled in full by contract), so they are reported, not
-    failed;
+  * rows OUTSIDE the request are EXACTLY ZERO. Phase 1's contract exempted the
+    crossing block — it was filled in full because the routing reads its
+    transpose — and item 2 compared the non-requested rows against a `rows=[]`
+    control, which was that content. Phase 2 asks the crossing family for
+    `t[R, :]` and `t[:, R]` out of one evaluation, so there is no exempt term
+    left and the control is now the zero matrix, asserted as such;
   * `q_factor` and every `plan_buried` field — r1_below, r1_above, r_cross_max,
     r_cross_min, zp_min, zp_max — are equal between rows=None and rows=subset.
 
@@ -180,8 +183,9 @@ def sb(n_radials):
     Z_full, seen_full, _ = fill(solver)
     tag["which"] = "rows"
     Z_rows, seen_rows, _ = fill(solver, rows=rows)
-    # the control: every pair-class fill writes nothing, so what survives is
-    # exactly the crossing block and the self completions (Amendment 1).
+    # The control, and since momwire#1109 a claim rather than a reference: with
+    # no rows requested NOTHING is filled, crossing family included, so the
+    # whole matrix must be exactly zero.
     tag["which"] = "full"
     Z_empty, _se, _ = fill(solver, rows=np.array([], dtype=np.int64))
 
@@ -202,9 +206,7 @@ def sb(n_radials):
     removed = (
         float(np.max(np.abs(Z_rows[other] - Z_full[other]))) if other.size else 0.0
     )
-    only_crossing = (
-        float(np.max(np.abs(Z_rows[other] - Z_empty[other]))) if other.size else 0.0
-    )
+    empty_max = float(np.max(np.abs(Z_empty))) if Z_empty.size else 0.0
     pair_work_kept = (
         float(np.max(np.abs(Z_rows[kept] - Z_empty[kept]))) if kept.size else 0.0
     )
@@ -214,10 +216,12 @@ def sb(n_radials):
         "calls_rows": calls["rows"],
         "narrowed_calls": len(narrowed),
         "removed_from_other_rows": removed,
-        "other_rows_minus_control": only_crossing,
+        "empty_fill_max_abs": empty_max,
         "pair_work_on_kept_rows": pair_work_kept,
         "S_B_not_vacuous": bool(removed > 0.0 and len(narrowed) > 0),
-        "S_B_other_rows_are_control": bool(only_crossing == 0.0),
+        # P2-8: the non-requested rows are ZERO, and a `rows=[]` fill is the
+        # zero matrix. Both are exact, not toleranced.
+        "S_B_other_rows_are_zero": bool(out_max == 0.0 and empty_max == 0.0),
         "radials": n_radials,
         "n_basis": int(supp_seg.shape[0]),
         "n_rows_requested": int(rows.size),
@@ -264,7 +268,7 @@ def main():
             r["S_B_rows"]
             and r["S_B_plan"]
             and r["S_B_not_vacuous"]
-            and r["S_B_other_rows_are_control"]
+            and r["S_B_other_rows_are_zero"]
             for r in recs["decks"]
         )
         print("S-B:", "PASS" if ok else "FAIL")

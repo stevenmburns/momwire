@@ -856,6 +856,25 @@ def _as_csr(M):
     return M if _sp.issparse(M) else _sp.csr_array(np.asarray(M))
 
 
+def _in_rows(rows, idx):
+    """`(sel, pos)` — the positions WITHIN `idx` of its entries that are in
+    the sorted `rows`, and where those entries sit in `rows`.
+
+    The whole of the row restriction's bookkeeping (momwire#1029 phase 2):
+    `idx[sel]` is what survives and `out[pos]` is where it goes, so a
+    restricted block is a gather on one factor and a scatter on the other and
+    never a second evaluation of anything.
+    """
+    idx = np.asarray(idx, dtype=np.int64)
+    if rows.size == 0 or idx.size == 0:
+        e = np.zeros(0, dtype=np.int64)
+        return e, e
+    p = np.searchsorted(rows, idx)
+    hit = (p < rows.size) & (rows[np.minimum(p, rows.size - 1)] == idx)
+    sel = np.flatnonzero(hit)
+    return sel, p[sel]
+
+
 def _scale_cols(M, v):
     """`M * v[None, :]` for a CSR `M` — the column weighting folded into the
     stored values, entry for entry, with no fill-in and no dense broadcast."""
@@ -1213,6 +1232,7 @@ def _ends_and_corner(
     corner=True,
     test_ends=True,
     source_ends=True,
+    rows=None,
 ):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
@@ -1224,8 +1244,58 @@ def _ends_and_corner(
     node's by-parts ends seen from the above line). The corner reads both
     axes' ends either way. Both default on, the one-radius spelling; a
     two-radius node evaluates the loops at different radii
-    (`cross_complete_blocks_two_radius`)."""
-    t_ab = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+    (`cross_complete_blocks_two_radius`).
+
+    `rows` (momwire#1029 phase 2) is a sorted array of global BASIS rows; the
+    answer is then the pair `(t[rows, :], t[:, rows])`, from ONE pass over the
+    ends and ONE evaluation of each end's kernel table. Both halves read the
+    same length-n vectors the unrestricted spelling builds — an end term is
+    rank 1, so a restriction is an index into its two factors and never a
+    second contraction."""
+    nA, nB = A["n_basis"], B["n_basis"]
+    if rows is None:
+        t_ab = np.zeros((nA, nB), dtype=np.complex128)
+        t_r = t_c = None
+    else:
+        t_ab = None
+        t_r = np.zeros((rows.size, nB), dtype=np.complex128)
+        t_c = np.zeros((nA, rows.size), dtype=np.complex128)
+
+    def add_rows(nz, fv_nz, vec, scale, buf):
+        """`t[nz, :] += scale * outer(fv_nz, vec)`, into whichever blocks
+        this call is answering with."""
+        if rows is None:
+            _rank1_add(t_ab, nz, fv_nz, vec, scale, buf)
+            return
+        sel, pos = _in_rows(rows, nz)
+        if sel.size:
+            _rank1_add(t_r, pos, fv_nz[sel], vec, scale, buf)
+        _rank1_add(t_c, nz, fv_nz, vec[rows], scale, buf)
+
+    def add_cols(nz, vec, fv_nz, scale, buf):
+        """`t[:, nz] += scale * outer(vec, fv_nz)`."""
+        if rows is None:
+            _rank1_add_cols(t_ab, nz, vec, fv_nz, scale, buf)
+            return
+        _rank1_add_cols(t_r, nz, vec[rows], fv_nz, scale, buf)
+        sel, pos = _in_rows(rows, nz)
+        if sel.size:
+            _rank1_add_cols(t_c, pos, vec, fv_nz[sel], scale, buf)
+
+    def add_corner(nza, nzb, fva, fvb, scale):
+        if rows is None:
+            t_ab[np.ix_(nza, nzb)] += scale * np.outer(fva, fvb)
+            return
+        sel, pos = _in_rows(rows, nza)
+        if sel.size:
+            t_r[np.ix_(pos, nzb)] += scale * np.outer(fva[sel], fvb)
+        selb, posb = _in_rows(rows, nzb)
+        if selb.size:
+            t_c[np.ix_(nza, posb)] += scale * np.outer(fva, fvb[selb])
+
+    def answer():
+        return t_ab if rows is None else (t_r, t_c)
+
     _txA, _tyA, tzA = A["t"].T
 
     # THE NODE WEIGHTS FOLD INTO THE SHORT VECTOR, NOT THE TALL MATRIX
@@ -1266,18 +1336,11 @@ def _ends_and_corner(
         # The same products where fv != 0; where it is 0 the full outer
         # added an exact 0.
         nz = np.flatnonzero(fv)
-        _rank1_add(
-            t_ab, nz, fv[nz], _real_matvec_c(B["Fd_csr"], wB * te["V"]), c1 * sign, buf
-        )
+        add_rows(nz, fv[nz], _real_matvec_c(B["Fd_csr"], wB * te["V"]), c1 * sign, buf)
         # TW (momwire#956): the test-side W end, −σ f_m(E)·∫ f_n t̂z′ W(E,·),
         # left by testing −∇W along the wire — SW's partner on the other axis.
-        _rank1_add(
-            t_ab,
-            nz,
-            fv[nz],
-            _real_matvec_c(B["F_csr"], wB_tz * te["W"]),
-            -c1 * sign,
-            buf,
+        add_rows(
+            nz, fv[nz], _real_matvec_c(B["F_csr"], wB_tz * te["W"]), -c1 * sign, buf
         )
     for pt, sign, fv in B["ends"] if source_ends else ():
         rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
@@ -1292,17 +1355,10 @@ def _ends_and_corner(
             memo=memo,
         )
         nz = np.flatnonzero(fv)
-        _rank1_add_cols(
-            t_ab,
-            nz,
-            _real_matvec_c(A["F_csr"], wA_tz * te["W"]),
-            fv[nz],
-            -c1 * sign,
-            bufT,
+        add_cols(
+            nz, _real_matvec_c(A["F_csr"], wA_tz * te["W"]), fv[nz], -c1 * sign, bufT
         )
-        _rank1_add_cols(
-            t_ab, nz, _real_matvec_c(A["Fd_csr"], wA * te["V"]), fv[nz], c1 * sign, bufT
-        )
+        add_cols(nz, _real_matvec_c(A["Fd_csr"], wA * te["V"]), fv[nz], c1 * sign, bufT)
 
     # The designed corner: node tents against each other through V at
     # R = a exactly. The sign is STRUCTURAL and orientation-carried:
@@ -1321,7 +1377,7 @@ def _ends_and_corner(
         # is a Galerkin by-parts term it never had. Measured on momwire#651's
         # probe: with the corner the razor node row is off by 1.9e5 where
         # razor's own kernel has none; without it, 5e-5 (quadrature).
-        return t_ab
+        return answer()
     a_wire = float(ctx.a_wire)
     v_at = {}
     for pt_a, sig_a, fv_a in A["ends"]:
@@ -1335,10 +1391,8 @@ def _ends_and_corner(
             rho = float(np.hypot(pt_a[0] - pt_b[0], pt_a[1] - pt_b[1]))
             v_corner = _corner_v(v_at, eps_t, k_p, a_wire, rho)
             nza, nzb = np.flatnonzero(fv_a), np.flatnonzero(fv_b)
-            t_ab[np.ix_(nza, nzb)] += (-sig_a * sig_b * c1 * v_corner) * np.outer(
-                fv_a[nza], fv_b[nzb]
-            )
-    return t_ab
+            add_corner(nza, nzb, fv_a[nza], fv_b[nzb], -sig_a * sig_b * c1 * v_corner)
+    return answer()
 
 
 # The SW end term's placement in the REVERSED block (momwire#813 step 1) —
@@ -1590,7 +1644,7 @@ def _nodes_of(ax, segs):
     return np.sort(np.concatenate(parts))
 
 
-def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None):
+def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
     restricted to (iA, iB) — the same term order as the reference fill.
 
@@ -1614,19 +1668,49 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None):
     and nothing of the (n_basis, n_nodes) samples is ever materialised. The
     term order is the reference fill's, unchanged; the summation order WITHIN
     a term is not, which is the reassociation the docstring above already
-    declines to pin."""
+    declines to pin.
+
+    `rows` (momwire#1029 phase 2) is a sorted array of global BASIS rows, and
+    `out` / `out_cols` are then the `(|rows|, n)` and `(n, |rows|)` blocks the
+    route composes Z from. BOTH HALVES READ THE SAME `K` — the kernel tables
+    arrive already evaluated, and the six left products `P_i @ K_x` are formed
+    once and then row-gathered for the row half and column-restricted on the
+    `Q` side for the column half. That is what makes the pair cost one
+    evaluation: the transpose the routing reads is a different slice of the
+    same product, not a second fill."""
     rA = _support_rows(A, iA)
     rB = _support_rows(B, iB)
     P1, P2, P3, P4 = _row_weights(A, iA, rA)
     Q1, Q2, Q3, Q4 = _row_weights(B, iB, rB)
-    block = (
-        P1 @ K["U"] @ Q1.T
-        + P2 @ K["U"] @ Q2.T
-        + P3 @ (k2sq * K["V"] + K["dzpW"]) @ Q3.T
-        + P3 @ K["W"] @ Q4.T
-        + P4 @ K["W"] @ Q3.T
-        - P4 @ K["V"] @ Q4.T
+    L = (
+        P1 @ K["U"],
+        P2 @ K["U"],
+        P3 @ (k2sq * K["V"] + K["dzpW"]),
+        P3 @ K["W"],
+        P4 @ K["W"],
+        P4 @ K["V"],
     )
+    Qs = (Q1, Q2, Q3, Q4, Q3, Q4)
+
+    def _combine(Ls, Qz):
+        return (
+            Ls[0] @ Qz[0].T
+            + Ls[1] @ Qz[1].T
+            + Ls[2] @ Qz[2].T
+            + Ls[3] @ Qz[3].T
+            + Ls[4] @ Qz[4].T
+            - Ls[5] @ Qz[5].T
+        )
+
+    if rows is not None:
+        sel, pos = _in_rows(rows, rA)
+        if sel.size:
+            out[np.ix_(pos, rB)] += _combine([x[sel] for x in L], Qs)
+        selc, posc = _in_rows(rows, rB)
+        if selc.size:
+            out_cols[np.ix_(rA, posc)] += _combine(L, [q[selc] for q in Qs])
+        return out
+    block = _combine(L, Qs)
     if out is not None:
         # ACCUMULATE IN PLACE (momwire#914). The caller used to write
         # `t_main += _sandwich_dense(...)`, and this function answered with a
@@ -1680,7 +1764,7 @@ def _refuse_path_tested(*axes):
             )
 
 
-def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
+def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=None):
     """`cross_complete_block` through the #688 admissibility split.
 
     The (above segments × below segments) product is partitioned by the
@@ -1696,21 +1780,38 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True):
 
     The by-parts end terms and the corner (−σσ′·c1·V(a)) ride the dense
     axes direct, always — they are linear in axis size and the corner
-    routes through neither coarse axes nor the low-rank pass."""
+    routes through neither coarse axes nor the low-rank pass.
+
+    `rows` (momwire#1029 phase 2) is a sorted array of global BASIS rows, and
+    the answer is then the PAIR `(t[rows, :], t[:, rows])` — what the buried
+    routing needs to write `Z[rows] -= t; Z[rows] -= t.T` without the other
+    rows. One evaluation of the kernel tables and one ACA factorisation per
+    block serve both halves; `rows=None` is the full block and today's path."""
     if _FORCE_DENSE:
-        return cross_complete_block(ctx, A, B, corner=corner)
+        t = cross_complete_block(ctx, A, B, corner=corner)
+        # The bisect switch answers in the restricted shape too, by slicing:
+        # it exists to compare the split against the dense fill, so it must
+        # stay drivable from every caller the split has.
+        return t if rows is None else (t[rows], t[:, rows])
     _refuse_path_tested(A, B)
 
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
     memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
-    t_ab = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo)
-    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner)
-    return t_ab
+    main = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows)
+    ends = _ends_and_corner(
+        ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, rows=rows
+    )
+    if rows is None:
+        main += ends
+        return main
+    main[0][:] += ends[0]
+    main[1][:] += ends[1]
+    return main
 
 
-def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B):
+def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     """The cross pair at a TWO-RADIUS crossing node: `(t_above, t_below)`,
     composed by the caller as `Z -= t_above; Z -= t_below.T`.
 
@@ -1735,10 +1836,21 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B):
     node is closed by the crossing junction's KCL row
     (`BSplineSolver._kcl_row_junctions`): at two radii the split fill's own
     continuity does not converge under refinement.
+
+    `rows` (momwire#1029 phase 2) answers `(t_above[rows, :], t_below[:, rows])`
+    — ONE half of each block, because the caller reads `t_above` by row and
+    `t_below` by column, and the two are no longer transposes of each other.
+    The below block still costs both halves: `cross_complete_block_split`
+    answers with the pair and this discards the row half, which is the price of
+    one entry point rather than two. A two-radius deck CAN be rotationally
+    symmetric — a mast at one radius over a screen at another is the obvious
+    one — so the route is not refused here.
     """
     ctx_above = ctx._replace(a_wire=float(ctx.a_above))
     ctx_below = ctx._replace(a_wire=float(ctx.a_below))
-    t_below = cross_complete_block_split(ctx_below, a_idx, b_idx, A, B)
+    t_below = cross_complete_block_split(ctx_below, a_idx, b_idx, A, B, rows=rows)
+    if rows is not None:
+        t_below = t_below[1]
 
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
@@ -1746,31 +1858,61 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B):
     memo = {}  # keyed on the folded rho_eff, so one memo per radius stays exact
     if _FORCE_DENSE:
         t_above = _main_sandwich(ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo)
+        if rows is not None:
+            t_above = t_above[rows]
     else:
         _refuse_path_tested(A, B)
-        t_above = _main_split(ctx_above, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo)
-    t_above += _ends_and_corner(
-        ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo, corner=False, test_ends=False
-    )
-    t_above += _ends_and_corner(
-        ctx_below, A, B, eps_t, k_p, c1, gz, memo={}, corner=True, source_ends=False
-    )
+        t_above = _main_split(
+            ctx_above, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows
+        )
+        if rows is not None:
+            t_above = t_above[0]
+    for ctx_e, memo_e, corner_e, kw in (
+        (ctx_above, memo, False, {"test_ends": False}),
+        (ctx_below, {}, True, {"source_ends": False}),
+    ):
+        ends = _ends_and_corner(
+            ctx_e,
+            A,
+            B,
+            eps_t,
+            k_p,
+            c1,
+            gz,
+            memo=memo_e,
+            corner=corner_e,
+            rows=rows,
+            **kw,
+        )
+        t_above += ends if rows is None else ends[0]
     return t_above, t_below
 
 
-def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
+def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
     """The split fill's main sandwich over (above A × below B) — everything
     `cross_complete_block_split` does except the ends and the corner.
 
     Split out for the same reason as `_main_sandwich` (momwire#813): the
-    reversed block's main part is this product transposed."""
+    reversed block's main part is this product transposed.
+
+    `rows` (momwire#1029 phase 2) answers with `(t[rows, :], t[:, rows])`
+    instead of the full block. The BLOCK PARTITION and every kernel evaluation
+    are untouched by it — the same cluster trees, the same one batched
+    `_tables` call, the same one ACA factorisation per kernel per far block —
+    because the restriction lives entirely on the weight side."""
     k2sq = k_p * k_p
 
     tree_a, seg_a = _axis_segment_tree(ctx.geom, a_idx, _CLUSTER_LEAF_SEGS)
     tree_b, seg_b = _axis_segment_tree(ctx.geom, b_idx, _CLUSTER_LEAF_SEGS)
     far, near = _aca.build_block_tree(tree_a, tree_b, _ADM_ETA)
 
-    t_main = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+    nA, nB = A["n_basis"], B["n_basis"]
+    if rows is None:
+        t_main = np.zeros((nA, nB), dtype=np.complex128)
+        t_cols = None
+    else:
+        t_main = np.zeros((rows.size, nB), dtype=np.complex128)
+        t_cols = np.zeros((nA, rows.size), dtype=np.complex128)
 
     if far:
         # Share the dense axes' sampled F/Fd (momwire#919) — see `axis_data`.
@@ -1840,7 +1982,9 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
             nel = shp[0] * shp[1]
             K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
             off += nel
-            _sandwich_dense(AX, BX, iA, iB, K, k2sq, out=t_main)
+            _sandwich_dense(
+                AX, BX, iA, iB, K, k2sq, out=t_main, rows=rows, out_cols=t_cols
+            )
 
     # ---- large far blocks: coarse axes, low-rank ACA per kernel. The
     # row/column samples ride the SAME memo — identical matrices in
@@ -1853,10 +1997,13 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
             pa[:, 1][:, None] - pb[:, 1][None, :],
         )
         m, n = iA.size, iB.size
-        rows, cols = {}, {}
+        # `row_s` / `col_s`, not `rows` / `cols`: `rows` is this function's
+        # basis-row restriction since momwire#1029 phase 2, and a sample cache
+        # that shadowed it would silently restrict nothing.
+        row_s, col_s = {}, {}
 
-        def _row6(i, rho=rho, zA=zA, zB=zB, rows=rows, n=n):
-            if i not in rows:
+        def _row6(i, rho=rho, zA=zA, zB=zB, row_s=row_s, n=n):
+            if i not in row_s:
                 te = _tables(
                     ctx,
                     eps_t,
@@ -1867,11 +2014,11 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
                     _CROSS_RTOL,
                     memo=memo,
                 )
-                rows[i] = np.stack([te[kk] for kk in _CROSS_KEYS])
-            return rows[i]
+                row_s[i] = np.stack([te[kk] for kk in _CROSS_KEYS])
+            return row_s[i]
 
-        def _col6(j, rho=rho, zA=zA, zB=zB, cols=cols, m=m):
-            if j not in cols:
+        def _col6(j, rho=rho, zA=zA, zB=zB, col_s=col_s, m=m):
+            if j not in col_s:
                 te = _tables(
                     ctx,
                     eps_t,
@@ -1882,8 +2029,8 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
                     _CROSS_RTOL,
                     memo=memo,
                 )
-                cols[j] = np.stack([te[kk] for kk in _CROSS_KEYS])
-            return cols[j]
+                col_s[j] = np.stack([te[kk] for kk in _CROSS_KEYS])
+            return col_s[j]
 
         Kf = {}
         for ki, kk in enumerate(_CROSS_KEYS):
@@ -1903,24 +2050,52 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo):
         # identically-zero block, so adding them was adding exact zeros.
         rA = _support_rows(Ac, iA)
         rB = _support_rows(Bc, iB)
-        P1, P2, P3, P4 = _row_weights(Ac, iA, rA)
-        Q1, Q2, Q3, Q4 = _row_weights(Bc, iB, rB)
+        Pw = _row_weights(Ac, iA, rA)
+        Qw = _row_weights(Bc, iB, rB)
+        # ONE factorisation per kernel serves BOTH halves of a `rows=` answer
+        # (momwire#1029 phase 2): `P @ Uf` and `Vf @ Q.T` are cached, and a
+        # restriction is a gather on one of them. Nothing above this line
+        # depends on `rows`, which is the property the spy gate asserts.
+        PU, VQ = {}, {}
 
-        def _lr(P, kk, Q, Kf=Kf):
+        def _lr(pi, kk, qi, rsel=None, csel=None, Kf=Kf, Pw=Pw, Qw=Qw, PU=PU, VQ=VQ):
             Uf, Vf = Kf[kk]
-            return (P @ Uf) @ (Vf @ Q.T)
+            if (pi, kk) not in PU:
+                PU[(pi, kk)] = Pw[pi] @ Uf
+            if (kk, qi) not in VQ:
+                VQ[(kk, qi)] = Vf @ Qw[qi].T
+            left = PU[(pi, kk)]
+            right = VQ[(kk, qi)]
+            if rsel is not None:
+                left = left[rsel]
+            if csel is not None:
+                right = right[:, csel]
+            return left @ right
 
-        t_main[np.ix_(rA, rB)] += (
-            _lr(P1, "U", Q1)
-            + _lr(P2, "U", Q2)
-            + k2sq * _lr(P3, "V", Q3)
-            + _lr(P3, "dzpW", Q3)
-            + _lr(P3, "W", Q4)
-            + _lr(P4, "W", Q3)
-            - _lr(P4, "V", Q4)
-        )
+        def _terms(rsel=None, csel=None, _lr=_lr, k2sq=k2sq):
+            return (
+                _lr(0, "U", 0, rsel, csel)
+                + _lr(1, "U", 1, rsel, csel)
+                + k2sq * _lr(2, "V", 2, rsel, csel)
+                + _lr(2, "dzpW", 2, rsel, csel)
+                + _lr(2, "W", 3, rsel, csel)
+                + _lr(3, "W", 2, rsel, csel)
+                - _lr(3, "V", 3, rsel, csel)
+            )
 
-    return c1 * t_main
+        if rows is None:
+            t_main[np.ix_(rA, rB)] += _terms()
+        else:
+            sel, pos = _in_rows(rows, rA)
+            if sel.size:
+                t_main[np.ix_(pos, rB)] += _terms(rsel=sel)
+            selc, posc = _in_rows(rows, rB)
+            if selc.size:
+                t_cols[np.ix_(rA, posc)] += _terms(csel=selc)
+
+    if rows is None:
+        return c1 * t_main
+    return c1 * t_main, c1 * t_cols
 
 
 def cross_complete_block_reversed_split(
@@ -2051,16 +2226,44 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     return live, row_term, col_term, corner
 
 
-def self_completions(ctx, ax_b, ax_a):
+def _scatter_completion(total, rows, live, beta, row_term, col_term, corner):
+    """The three scattered writes of one self-completion family, in the
+    derivation's own order (row term, column term, corner).
+
+    With `rows` given the destination is the `(|rows|, n)` block the route
+    composes Z from, and the ORDER PER ENTRY is the unrestricted one: a
+    requested row sees its row term, then its column term, then its corner,
+    which is why the restricted answer equals the full fill's rows to the bit.
+    """
+    if rows is None:
+        total[live, :] += beta * row_term
+        total[:, live] += beta * col_term
+        total[np.ix_(live, live)] += beta * corner
+        return
+    sel, pos = _in_rows(rows, live)
+    if sel.size:
+        total[pos, :] += beta * row_term[sel]
+    total[:, live] += beta * col_term[rows]
+    if sel.size:
+        total[np.ix_(pos, live)] += beta * corner[sel]
+
+
+def self_completions(ctx, ax_b, ax_a, *, rows=None):
     """The self families' missing bnd + corner content, both media, on
     graded axes. Returned as the ADDITIVE Z correction (the fill's
     `Z -= image` convention already folded in: β_dir·(bnd+cor)(G_dir)
-    − β_img·(bnd+cor)(G_img) per family)."""
+    − β_img·(bnd+cor)(G_img) per family).
+
+    `rows` (momwire#1029 phase 2) answers with `total[rows, :]` alone. There is
+    no column half here, and that is not an omission: the routing ADDS this
+    term without transposing it, so the columns outside the request are never
+    read."""
     _eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
     gz = float(ctx.ground_z)
     a_wire = float(ctx.a_wire)
     omega, eps0 = ctx.omega, ctx.eps
-    total = np.zeros((ax_b["n_basis"],) * 2, dtype=np.complex128)
+    n = ax_b["n_basis"]
+    total = np.zeros((n if rows is None else rows.size, n), dtype=np.complex128)
     for ax, k, wgt, eps in ((ax_b, k_m, a_m, eps_m), (ax_a, k_p, c2, eps0)):
         beta_dir = 1.0 / (1j * omega * eps * 4 * np.pi)
         beta_img = wgt / (1j * omega * eps * 4 * np.pi)
@@ -2074,13 +2277,11 @@ def self_completions(ctx, ax_b, ax_a):
             # is confined to `live` on one side or both (momwire#914). The
             # three writes are disjoint in the sense that matters — each adds
             # its own term, exactly as the dense sum did.
-            total[live, :] += beta * row_term
-            total[:, live] += beta * col_term
-            total[np.ix_(live, live)] += beta * corner
+            _scatter_completion(total, rows, live, beta, row_term, col_term, corner)
     return total
 
 
-def self_completions_two_radius(ctx, ax_b, ax_a):
+def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None):
     """`self_completions` at a TWO-RADIUS crossing node.
 
     Each family's column terms — its line observers against its node's
@@ -2094,7 +2295,8 @@ def self_completions_two_radius(ctx, ax_b, ax_a):
     gz = float(ctx.ground_z)
     a_above, a_below = float(ctx.a_above), float(ctx.a_below)
     omega, eps0 = ctx.omega, ctx.eps
-    total = np.zeros((ax_b["n_basis"],) * 2, dtype=np.complex128)
+    n = ax_b["n_basis"]
+    total = np.zeros((n if rows is None else rows.size, n), dtype=np.complex128)
     for ax, k, wgt, eps, a_line in (
         (ax_b, k_m, a_m, eps_m, a_below),
         (ax_a, k_p, c2, eps0, a_above),
@@ -2111,7 +2313,5 @@ def self_completions_two_radius(ctx, ax_b, ax_a):
                 _live, _row, col_term, _corner = _bnd_and_corner(
                     ax, k, a_line, gz, mirror=mirror
                 )
-            total[live, :] += beta * row_term
-            total[:, live] += beta * col_term
-            total[np.ix_(live, live)] += beta * corner
+            _scatter_completion(total, rows, live, beta, row_term, col_term, corner)
     return total
