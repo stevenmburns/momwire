@@ -77,12 +77,12 @@ SERVED = (
     "0194",
     "0195",
     "0196",
-    # Dan AC6LA's "first blood" deck (QRZ 1003328 #100, 2026-09-17): EZNEC's
-    # Cardioid sample with 18 ohm loads placed off the source positions, so
-    # EZNEC writes two EX 4 and two probes. His attachment was the EX 0 twin
-    # written eight minutes earlier, so this is the reconstruction the refusal
-    # sentence describes (README); NEC-5's printout for it is the oracle.
-    "M_cardioid_two_ex4_two_probes",
+    # Capture 0202 (2026-09-18): the deck Dan AC6LA's "first blood" post (QRZ
+    # 1003328 #100) describes, written by EZNEC itself - Cardioid.ez with an
+    # 18 ohm load at segment 2 of each 6-segment vertical, both sources type I,
+    # so two EX 4 and two probes. It replaces the hand reconstruction that
+    # stood here for a day (README); NEC-5's printout for it is the oracle.
+    "0202",
 )
 # EZNEC writes exactly this card per lumped load, and the CM line above it says
 # so in words.  Stripping them is how the "the probe moves nothing" gate gets
@@ -99,7 +99,7 @@ def oracle(name: str) -> list[str]:
 
 
 def tolerance(name: str) -> float:
-    # The cardioid is EZNEC's six-segment sample mesh, the same
+    # 0202, the cardioid, is EZNEC's six-segment sample mesh, the same
     # under-converged class as the eleven-segment dipoles: NEC-5 and bspline
     # sit 12-15 % apart on its drive rows and 1 % on its probe rows.
     return FOLDED_TOLERANCE if name == "0192" else DIPOLE_TOLERANCE
