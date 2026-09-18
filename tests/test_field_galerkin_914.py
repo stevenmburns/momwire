@@ -29,6 +29,10 @@ Gates:
             and leave every "numpy" gate quietly running C++.
 - G-914-2e  the kernel refuses a malformed call rather than reading past an
             array under a released GIL.
+- G-1115    the accumulation TARGET, and `scale` (momwire#1115). A target the
+            kernel cannot accumulate into is refused rather than answered with
+            a copy, and `scale` multiplies each contribution — pinned across
+            more than one chunk, where scaling the target instead would show.
 
 The assembly is exercised across MORE THAN ONE chunk on the 12-radial deck
 (asserted, not assumed): `i0` only matters at a chunk boundary, so a
@@ -291,3 +295,218 @@ def test_g914_2e_a_segment_id_outside_pos_o_raises():
     args["supp_seg"][0, 0] = 999
     with pytest.raises(ValueError):
         _acc.assemble_field_galerkin(**args)
+
+
+# --- G-1115: the accumulation target, and `scale` --------------------------
+
+
+requires_target_1115 = pytest.mark.skipif(
+    not (
+        _bs._HAVE_FIELD_GALERKIN_ACCEL
+        and getattr(_acc, "field_galerkin_target_1115", False)
+    ),
+    reason="built before momwire#1115's accumulation-target contract",
+)
+
+
+def _chunked_spec(n_basis=16, n_obs=500, ns=64, q=6, P=3, A=3, seed=1115):
+    """One assembly big enough that the observer loop must SPLIT it.
+
+    `chunk = (1 << 19) // (n_src * q**2)` is 227 here and `n_obs` is 500, so
+    the kernel is entered three times on one `Q` — which is the only shape in
+    which `scale` can be got wrong. A scale applied to the TARGET rather than
+    to each contribution is exactly `scale * Q` on a single-chunk call and
+    wrong from the second chunk on, so a single-chunk gate cannot see it.
+
+    The wings are scattered over the whole observer axis rather than clustered,
+    so basis rows accumulate on both sides of every boundary.
+    """
+    rng = np.random.default_rng(seed)
+    n_seg = n_obs
+    return dict(
+        proj_full=(
+            rng.normal(size=(n_obs * q, ns * q))
+            + 1j * rng.normal(size=(n_obs * q, ns * q))
+        ),
+        W_obs_full=rng.normal(size=(P, n_obs, q)),
+        W_src=rng.normal(size=(P, ns, q)),
+        supp_seg=rng.integers(0, n_seg, size=(n_basis, A)).astype(np.int64),
+        polys=rng.normal(size=(n_basis, A, P)),
+        pos_o=np.arange(n_seg, dtype=np.int64),
+        pos_s=(np.arange(n_seg, dtype=np.int64) % ns),
+        n_basis=n_basis,
+        n_obs=n_obs,
+        ns=ns,
+        q=q,
+    )
+
+
+def _run_chunks(spec, *, fused=True, **kw):
+    """`spec` assembled the way `_field_galerkin_block` assembles it: one
+    accelerator call per observer chunk, all of them into the same `Q`.
+    Returns that `Q` and the number of chunks it took."""
+    q, ns, n_obs = spec["q"], spec["ns"], spec["n_obs"]
+    chunk = max(1, (1 << 19) // max(ns * q * q, 1))
+    Q = np.zeros((spec["n_basis"], spec["n_basis"]), dtype=np.complex128)
+    n_chunks = 0
+    for i0 in range(0, n_obs, chunk):
+        i1 = min(i0 + chunk, n_obs)
+        _acc.assemble_field_galerkin(
+            spec["proj_full"][i0 * q : i1 * q],
+            np.ascontiguousarray(spec["W_obs_full"][:, i0:i1]),
+            spec["W_src"],
+            spec["supp_seg"],
+            spec["polys"],
+            spec["pos_o"],
+            spec["pos_s"],
+            i0,
+            Q,
+            fused,
+            **kw,
+        )
+        n_chunks += 1
+    return Q, n_chunks
+
+
+@pytest.fixture(scope="module")
+def chunked():
+    return _chunked_spec()
+
+
+@requires_target_1115
+@pytest.mark.parametrize(
+    "why,target",
+    [
+        # The buried Z is column-major by momwire#136, so this is the target
+        # the lever in the issue would actually hand over.
+        ("column-major", lambda n: np.zeros((n, n), dtype=np.complex128, order="F")),
+        ("strided view", lambda n: np.zeros((n, 2 * n), dtype=np.complex128)[:, ::2]),
+        ("column block", lambda n: np.zeros((n, n + 3), dtype=np.complex128)[:, :n]),
+    ],
+)
+def test_g1115_a_non_c_contiguous_target_is_refused(why, target):
+    """The defect this contract exists to stop was not a wrong answer but a
+    CLEAN return: `py::array_t<..., c_style>` does not require a C-contiguous
+    argument, it manufactures one, so pybind11 handed the kernel a copy and
+    every accumulation went into it. Refusal is the only outcome a caller can
+    tell apart from success."""
+    args = _good_args()
+    Q = target(args["Q"].shape[0])
+    args["Q"] = Q
+    with pytest.raises(ValueError, match="C-contiguous"):
+        _acc.assemble_field_galerkin(**args)
+    assert np.count_nonzero(Q) == 0, why
+
+
+@requires_target_1115
+@pytest.mark.parametrize(
+    "why,target,match",
+    [
+        ("float64", lambda n: np.zeros((n, n)), "complex128"),
+        (
+            "read-only",
+            lambda n: np.broadcast_to(np.zeros((n, n), dtype=np.complex128), (n, n)),
+            "writeable",
+        ),
+    ],
+)
+def test_g1115_a_target_that_cannot_be_written_through_is_refused(why, target, match):
+    """The same argument as the contiguity refusal: a dtype conversion is a
+    copy too, and a read-only target cannot be an accumulator at all."""
+    args = _good_args()
+    args["Q"] = target(args["Q"].shape[0])
+    with pytest.raises(ValueError, match=match):
+        _acc.assemble_field_galerkin(**args)
+
+
+@requires_target_1115
+def test_g1115_a_c_contiguous_target_still_writes():
+    """The refusals above are worthless if the accepted case stopped writing."""
+    args = _good_args()
+    _acc.assemble_field_galerkin(**args)
+    assert np.count_nonzero(args["Q"])
+
+
+@requires_target_1115
+@pytest.mark.parametrize("fused", [True, False])
+def test_g1115_the_default_scale_is_the_unscaled_assembly(fused):
+    """`scale=1.0` has to be bit-identical to the assembly before #1115 gave
+    it one, which is why it multiplies the contribution and not any factor
+    inside the contraction."""
+    a, b = _good_args(), _good_args()
+    a["fused"] = b["fused"] = fused
+    b["scale"] = 1.0
+    _acc.assemble_field_galerkin(**a)
+    _acc.assemble_field_galerkin(**b)
+    assert np.array_equal(a["Q"], b["Q"])
+
+
+@requires_target_1115
+@pytest.mark.parametrize("fused", [True, False])
+def test_g1115_scale_minus_one_negates_the_assembly_exactly(fused):
+    """The lever this argument exists for is `Z -= Q`, so `scale=-1` has to be
+    the exact negation and not merely a close one: IEEE addition is
+    sign-symmetric, and the kernel's summation order does not depend on the
+    sign of what it sums."""
+    one, neg = _good_args(), _good_args()
+    one["fused"] = neg["fused"] = fused
+    one["scale"], neg["scale"] = 1.0, -1.0
+    _acc.assemble_field_galerkin(**one)
+    _acc.assemble_field_galerkin(**neg)
+    assert np.array_equal(neg["Q"], -one["Q"])
+
+
+@requires_target_1115
+@pytest.mark.parametrize("fused", [True, False])
+def test_g1115_scale_multiplies_each_contribution_across_chunks(chunked, fused):
+    """THE gate on where `scale` lands. Applied to `Q` once per call instead
+    of to each contribution, it would re-scale every chunk already in the
+    target: with three chunks the first would come out `scale**3` too large.
+    A power-of-two scale makes the comparison exact — scaling by one commutes
+    with rounding — so this is an equality, not a tolerance."""
+    ref, n_chunks = _run_chunks(chunked, fused=fused, scale=1.0)
+    assert n_chunks > 1, f"{n_chunks} chunk(s): this gate needs more than one"
+    for s in (-2.0, 0.25, -1.0):
+        got, _ = _run_chunks(chunked, fused=fused, scale=s)
+        assert np.array_equal(got, s * ref), (s, fused)
+
+
+@requires_target_1115
+@pytest.mark.parametrize("fused", [True, False])
+def test_g1115_a_scale_that_is_not_a_power_of_two_is_still_a_scale(chunked, fused):
+    """0.1 rounds, so `scale * (a + b)` and `scale * a + scale * b` part in the
+    last bits; pinning it at the module's 1e-13 register says the factor is
+    applied once per contribution without claiming an exactness that is not
+    there."""
+    ref, _ = _run_chunks(chunked, fused=fused, scale=1.0)
+    got, _ = _run_chunks(chunked, fused=fused, scale=0.1)
+    assert _rel(got, 0.1 * ref) <= 1e-13
+
+
+@requires_target_1115
+def test_g1115_both_routes_honour_scale_identically(chunked):
+    """`fused=False` is the independent second derivation of these indices
+    (G-914-2b). It is also an independent second place for `scale` to land,
+    and the two are gated against each other here for the same reason."""
+    for s in (1.0, -1.0, 0.1):
+        a, _ = _run_chunks(chunked, fused=True, scale=s)
+        b, _ = _run_chunks(chunked, fused=False, scale=s)
+        assert _rel(a, b) <= 1e-13, s
+
+
+@requires_accel
+def test_g1115_the_contract_flag_and_the_contract_agree():
+    """The flag is what a caller passing a column-major `out=` would gate on,
+    so a .so that carries it must actually refuse one — and one that does not
+    carry it must be assumed to be the old silent-copy binding."""
+    flagged = getattr(_acc, "field_galerkin_target_1115", False)
+    args = _good_args()
+    n = args["Q"].shape[0]
+    args["Q"] = np.zeros((n, n), dtype=np.complex128, order="F")
+    try:
+        _acc.assemble_field_galerkin(**args)
+    except ValueError:
+        refused = True
+    else:
+        refused = False
+    assert refused is bool(flagged)

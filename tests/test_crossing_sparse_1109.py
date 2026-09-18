@@ -297,7 +297,8 @@ def test_p2b_6_two_radius_answers_the_half_of_each_block_the_routing_reads():
 # `_field_galerkin_block`'s `Q` (1.05 GB). The first two are the ends' and the
 # node's shapes, each confined to a handful of basis rows and columns, so they
 # scatter into the caller's block instead — bit-identically, which is what
-# these tests pin. The third is blocked; see the tripwire at the bottom.
+# these tests pin. The third is still blocked, but on the reassociation alone
+# now that momwire#1115 has fixed the binding; see the two at the bottom.
 # ---------------------------------------------------------------------------
 
 
@@ -372,27 +373,33 @@ def test_p2c_4_self_completions_build_no_full_size_block(axes, monkeypatch):
     assert np.count_nonzero(dest), "the completions wrote nothing"
 
 
-def test_p2c_5_the_field_galerkin_accelerator_drops_a_column_major_target():
-    """THE TRIPWIRE, and the reason `_field_galerkin_block` does NOT take an
-    `out=Z` (momwire#1029 phase 2 unit C).
+def test_p2c_5_the_field_galerkin_accelerator_refuses_a_column_major_target():
+    """The other reason `_field_galerkin_block` does NOT take an `out=Z`
+    (momwire#1029 phase 2 unit C), now that the first one is gone.
 
-    `_acc.assemble_field_galerkin` declares `Q` as `py::array_t<..., c_style>`
-    WITHOUT `forcecast`, so pybind11 answers a column-major array by handing
-    the C++ a C-contiguous COPY: the call returns cleanly and every
-    accumulation is lost. The buried Z is column-major by momwire#136 —
-    `scipy.linalg.solve(overwrite_a=True)` can only factor in place on one —
-    so passing it as the accumulation target would silently zero the
-    remainder and the transmitted blocks.
+    It WAS that `_acc.assemble_field_galerkin` declared `Q` as
+    `py::array_t<..., c_style>` without `forcecast`: pybind11 answered a
+    column-major array by handing the C++ a C-contiguous COPY, so the call
+    returned cleanly and every accumulation was lost. The buried Z is
+    column-major by momwire#136 — `scipy.linalg.solve(overwrite_a=True)` can
+    only factor in place on one — so `out=Z` would have silently zeroed the
+    remainder and both transmitted blocks. momwire#1115 made that call a
+    REFUSAL, which is what this now pins: a target the kernel cannot
+    accumulate into has to be something the caller can tell apart from
+    success.
 
-    Pinned here rather than fixed, because the fix is a C++ signature change
-    and this arc changes no C++. Whoever takes that lever: the second half of
-    the problem is that the observer loop chunks, and a basis row whose
-    support straddles a chunk boundary accumulates across chunks, so moving
-    the accumulation into Z reassociates and is not bit-identical either.
+    What still stands is the second half: the observer loop chunks, and a
+    basis row whose support straddles a chunk boundary accumulates across
+    chunks, so `Z − (c₁ + c₂)` becomes `(Z − c₁) − c₂`. At 150 radials
+    `chunk` is 1 and every row straddles. The lever is therefore a
+    reassociation and lands under a 1e-12 gate, not the bit gate unit C was
+    registered under — which is why it is still not taken here.
     """
     acc = pytest.importorskip("momwire._accelerators")
     if not bspline._HAVE_FIELD_GALERKIN_ACCEL:
         pytest.skip("no field-galerkin accelerator in this build")
+    if not getattr(acc, "field_galerkin_target_1115", False):
+        pytest.skip("built before momwire#1115's accumulation-target contract")
     from test_field_galerkin_914 import _good_args
 
     args = _good_args()
@@ -403,10 +410,10 @@ def test_p2c_5_the_field_galerkin_accelerator_drops_a_column_major_target():
 
     args_f = _good_args()
     args_f["Q"] = np.zeros((n, n), dtype=np.complex128, order="F")
-    acc.assemble_field_galerkin(**args_f)
+    with pytest.raises(ValueError, match="C-contiguous"):
+        acc.assemble_field_galerkin(**args_f)
     assert np.count_nonzero(args_f["Q"]) == 0, (
-        "the column-major call now writes through — the binding was fixed, so "
-        "`_field_galerkin_block` can take an out= after all"
+        "the column-major call wrote through the refusal"
     )
 
 
