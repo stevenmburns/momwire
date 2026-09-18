@@ -799,6 +799,9 @@ class BuriedFills(NamedTuple):
     image_tangent_dot: Callable
     field_galerkin_block: Callable
     apply_loading: Callable
+    # Whether `field_galerkin_block` may be handed `out=`/`scale=` against a
+    # column-major target (momwire#1115 part 3). False keeps the transient.
+    field_galerkin_out_ok: bool = False
 
 
 class BuriedPlan(NamedTuple):
@@ -979,6 +982,21 @@ def _crossing_basis_rows(supp_seg, polys, rows):
             f"(momwire#1029 phase 2; {int(bad.size)} basis rows are split)"
         )
     return np.flatnonzero((n_live > 0) & (n_in == n_live)).astype(np.int64)
+
+
+def _sub_field_galerkin(Z, f, *args):
+    """The block, subtracted from Z without the (n, n) transient when the
+    kernel can accumulate into a strided target (momwire#1115 part 3).
+
+    The two spellings are NOT bit-identical: the block's observer loop chunks,
+    so a basis row straddling a chunk boundary reassociates into Z. They agree
+    to the 1e-12 the buried gates carry, which is the tolerance this lever was
+    registered under.
+    """
+    if f.field_galerkin_out_ok:
+        f.field_galerkin_block(*args, out=Z, scale=-1.0)
+    else:
+        np.subtract(Z, f.field_galerkin_block(*args), out=Z)
 
 
 def compute_Z_operator_buried(
@@ -1253,8 +1271,20 @@ def compute_Z_operator_buried(
             )
 
         o_a, ot_a, oW_a = _narrow(a_idx, obs_a_idx, obs_a, t_a, W_a)
-        Z -= f.field_galerkin_block(
-            supp_seg, polys, proj_aa, obs_a_idx, a_idx, o_a, ot_a, oW_a, obs_a, t_a, W_a
+        _sub_field_galerkin(
+            Z,
+            f,
+            supp_seg,
+            polys,
+            proj_aa,
+            obs_a_idx,
+            a_idx,
+            o_a,
+            ot_a,
+            oW_a,
+            obs_a,
+            t_a,
+            W_a,
         )
 
     grid_below = _sommerfeld_below.get_grid_below(
@@ -1267,8 +1297,20 @@ def compute_Z_operator_buried(
         )
 
     o_b, ot_b, oW_b = _narrow(b_idx, obs_b_idx, obs_b, t_b, W_b)
-    Z -= f.field_galerkin_block(
-        supp_seg, polys, proj_bb, obs_b_idx, b_idx, o_b, ot_b, oW_b, obs_b, t_b, W_b
+    _sub_field_galerkin(
+        Z,
+        f,
+        supp_seg,
+        polys,
+        proj_bb,
+        obs_b_idx,
+        b_idx,
+        o_b,
+        ot_b,
+        oW_b,
+        obs_b,
+        t_b,
+        W_b,
     )
 
     crossing = crossing_j if a_idx.size else ()
@@ -1360,7 +1402,9 @@ def compute_Z_operator_buried(
 
         o_ax, ot_ax, oW_ax = _narrow(a_idx, obs_a_idx, obs_ax, t_ax, W_ax)
         o_bx, ot_bx, oW_bx = _narrow(b_idx, obs_b_idx, obs_bx, t_bx, W_bx)
-        Z -= f.field_galerkin_block(
+        _sub_field_galerkin(
+            Z,
+            f,
             supp_seg,
             polys,
             proj_ab,
@@ -1373,7 +1417,9 @@ def compute_Z_operator_buried(
             t_bx,
             W_bx,
         )
-        Z -= f.field_galerkin_block(
+        _sub_field_galerkin(
+            Z,
+            f,
             supp_seg,
             polys,
             proj_ba,
