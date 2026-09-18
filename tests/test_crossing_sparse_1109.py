@@ -22,6 +22,7 @@ import scipy.sparse as sp
 from momwire import _aca
 from momwire import _below_interface as bi
 from momwire import _crossing_fill as cf
+from momwire import bspline
 from momwire.bspline import BSplineSolver
 
 from test_crossing_serve_524 import crossing_deck
@@ -285,3 +286,133 @@ def test_p2b_6_two_radius_answers_the_half_of_each_block_the_routing_reads():
     fs = cf.self_completions_two_radius(ctx, ax_b, ax_a)
     rs = cf.self_completions_two_radius(ctx, ax_b, ax_a, rows=R)
     assert np.array_equal(rs, fs[R, :])
+
+
+# ---------------------------------------------------------------------------
+# Unit C — the full-size transients go
+#
+# The crossing family used to build three (n, n) blocks beyond Z and the main
+# sandwich: `_ends_and_corner`'s own block (1.06 GB at 150 radials),
+# `self_completions`' `total` (1.99 GB with its temporaries), and
+# `_field_galerkin_block`'s `Q` (1.05 GB). The first two are the ends' and the
+# node's shapes, each confined to a handful of basis rows and columns, so they
+# scatter into the caller's block instead — bit-identically, which is what
+# these tests pin. The third is blocked; see the tripwire at the bottom.
+# ---------------------------------------------------------------------------
+
+
+def _ends_args(ctx, A, B):
+    from momwire._sommerfeld_transmitted import _c1_moment
+
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    return (ctx, A, B, eps_t, k_p, _c1_moment(ctx.omega, ctx.mu), float(ctx.ground_z))
+
+
+def test_p2c_1_ends_accumulate_in_place_bit_identically(axes):
+    ctx, _a, _b, ax_a, ax_b = axes
+    args = _ends_args(ctx, ax_a, ax_b)
+    n = ax_a["n_basis"]
+    rng = np.random.default_rng(1109)
+    base = (rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))) * 1e3
+    returned = base + cf._ends_and_corner(*args, memo={})
+    in_place = base.copy()
+    cf._ends_and_corner(*args, memo={}, out=in_place)
+    assert np.array_equal(in_place, returned)
+
+
+def test_p2c_2_ends_build_no_full_size_block_when_given_one(axes, monkeypatch):
+    ctx, _a, _b, ax_a, ax_b = axes
+    args = _ends_args(ctx, ax_a, ax_b)
+    n = ax_a["n_basis"]
+    dest = np.zeros((n, n), dtype=np.complex128)
+    seen = []
+    orig = np.zeros
+
+    def spy(shape, *a, **kw):
+        out = orig(shape, *a, **kw)
+        if out.ndim == 2 and out.shape == (n, n):
+            seen.append(out.shape)
+        return out
+
+    monkeypatch.setattr(np, "zeros", spy)
+    cf._ends_and_corner(*args, memo={}, out=dest)
+    assert seen == [], seen
+    assert np.count_nonzero(dest), "the ends wrote nothing"
+
+
+def test_p2c_3_self_completions_accumulate_into_z_bit_identically(axes):
+    ctx, _a, _b, ax_a, ax_b = axes
+    n = ax_b["n_basis"]
+    rng = np.random.default_rng(914)
+    base = (rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))) * 1e3
+    returned = base + cf.self_completions(ctx, ax_b, ax_a)
+    # Fortran order on purpose: the buried Z is column-major (momwire#136), so
+    # the accumulation has to be correct on a non-C-contiguous destination.
+    in_place = np.asfortranarray(base)
+    cf.self_completions(ctx, ax_b, ax_a, out=in_place)
+    assert np.array_equal(in_place, returned)
+
+
+def test_p2c_4_self_completions_build_no_full_size_block(axes, monkeypatch):
+    ctx, _a, _b, ax_a, ax_b = axes
+    n = ax_b["n_basis"]
+    dest = np.zeros((n, n), dtype=np.complex128)
+    seen = []
+    orig = np.zeros
+
+    def spy(shape, *a, **kw):
+        out = orig(shape, *a, **kw)
+        if out.ndim == 2 and out.shape == (n, n):
+            seen.append(out.shape)
+        return out
+
+    monkeypatch.setattr(np, "zeros", spy)
+    cf.self_completions(ctx, ax_b, ax_a, out=dest)
+    assert seen == [], seen
+    assert np.count_nonzero(dest), "the completions wrote nothing"
+
+
+def test_p2c_5_the_field_galerkin_accelerator_drops_a_column_major_target():
+    """THE TRIPWIRE, and the reason `_field_galerkin_block` does NOT take an
+    `out=Z` (momwire#1029 phase 2 unit C).
+
+    `_acc.assemble_field_galerkin` declares `Q` as `py::array_t<..., c_style>`
+    WITHOUT `forcecast`, so pybind11 answers a column-major array by handing
+    the C++ a C-contiguous COPY: the call returns cleanly and every
+    accumulation is lost. The buried Z is column-major by momwire#136 —
+    `scipy.linalg.solve(overwrite_a=True)` can only factor in place on one —
+    so passing it as the accumulation target would silently zero the
+    remainder and the transmitted blocks.
+
+    Pinned here rather than fixed, because the fix is a C++ signature change
+    and this arc changes no C++. Whoever takes that lever: the second half of
+    the problem is that the observer loop chunks, and a basis row whose
+    support straddles a chunk boundary accumulates across chunks, so moving
+    the accumulation into Z reassociates and is not bit-identical either.
+    """
+    acc = pytest.importorskip("momwire._accelerators")
+    if not bspline._HAVE_FIELD_GALERKIN_ACCEL:
+        pytest.skip("no field-galerkin accelerator in this build")
+    from test_field_galerkin_914 import _good_args
+
+    args = _good_args()
+    n = args["Q"].shape[0]
+    args["Q"] = np.zeros((n, n), dtype=np.complex128)
+    acc.assemble_field_galerkin(**args)
+    assert np.count_nonzero(args["Q"]), "the C-contiguous call wrote nothing"
+
+    args_f = _good_args()
+    args_f["Q"] = np.zeros((n, n), dtype=np.complex128, order="F")
+    acc.assemble_field_galerkin(**args_f)
+    assert np.count_nonzero(args_f["Q"]) == 0, (
+        "the column-major call now writes through — the binding was fixed, so "
+        "`_field_galerkin_block` can take an out= after all"
+    )
+
+
+def test_p2c_6_the_buried_z_is_column_major(routed):
+    """The other half of the tripwire: the matrix that would BE that target."""
+    s, geom, supp_seg, polys, _rows = routed
+    Z = s._compute_Z_operator_buried(geom, supp_seg, polys)
+    assert s._buried_chunked_serves
+    assert Z.flags["F_CONTIGUOUS"] and not Z.flags["C_CONTIGUOUS"]

@@ -1104,7 +1104,7 @@ def cross_complete_block(ctx, A, B, *, corner=True):
     # whose crossing serve calls straight in here.
     memo = {}
     t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
-    t_ab += _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner)
+    _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=t_ab)
     return t_ab
 
 
@@ -1196,6 +1196,29 @@ def _rank1_add_cols(t_ab, nz, a, b, scale, buf):
 _SAME_NODE_RHO = 1e-9
 
 
+def _end_live_rows(ax):
+    """The basis rows an axis's END TABLE can touch — the support of every
+    by-parts end term the axis contributes (momwire#1029 phase 2 unit C).
+
+    A wire end touches only the basis functions whose support reaches it, so
+    the end shape is confined to these rows on one side and these columns on
+    the other, exactly as `_bnd_and_corner` (momwire#914) already reads its
+    own ends. Measured 317 of 1278 on the N = 113 BLE below-axis, and a far
+    smaller fraction on a screen whose radials carry many segments each.
+    """
+    ends = ax["ends"]
+    if not ends:
+        return np.zeros(0, dtype=np.int64)
+    return np.unique(np.concatenate([np.flatnonzero(e[2]) for e in ends]))
+
+
+def _positions(n, idx):
+    """`pos[i]` = where global index `i` sits in `idx` (-1 off it)."""
+    pos = np.full(n, -1, dtype=np.int64)
+    pos[idx] = np.arange(idx.size)
+    return pos
+
+
 def _corner_v(cache, eps_t, k_p, a_wire, rho):
     """The corner's V at the regularized end separation, once per distinct ρ.
 
@@ -1233,6 +1256,7 @@ def _ends_and_corner(
     test_ends=True,
     source_ends=True,
     rows=None,
+    out=None,
 ):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
@@ -1251,21 +1275,42 @@ def _ends_and_corner(
     ends and ONE evaluation of each end's kernel table. Both halves read the
     same length-n vectors the unrestricted spelling builds — an end term is
     rank 1, so a restriction is an index into its two factors and never a
-    second contraction."""
+    second contraction.
+
+    `out` (unit C) is the block to ACCUMULATE into — `_main_split`'s, so the
+    ends never allocate a second full-size array. Bit-identical to
+    `out += _ends_and_corner(...)`: see `answer()` below for why the support
+    scatter preserves each entry's summation order. Without it the answer is a
+    fresh block, which is what a direct caller still gets."""
     nA, nB = A["n_basis"], B["n_basis"]
     if rows is None:
-        t_ab = np.zeros((nA, nB), dtype=np.complex128)
+        # THE SHAPE'S OWN SUPPORT, never an (n, n) transient (momwire#1029
+        # phase 2 unit C, the momwire#914 pattern). `E_r` carries every term
+        # on the rows A's ends touch — the row terms over all columns, and,
+        # where they meet, the column terms and the corner as well — and `E_c`
+        # the column terms on the rows A's ends do NOT touch. So each entry
+        # accumulates in one place, in the order the loops below write it, and
+        # the scatter at the end adds what the full block would have added:
+        # BIT-IDENTICAL to `dest += <a full-size ends block>`, which is what
+        # this replaces. Its 1.06 GB at 150 radials was the third-largest term
+        # of the fill's peak.
+        dest = out if out is not None else np.zeros((nA, nB), dtype=np.complex128)
+        LA, LB = _end_live_rows(A), _end_live_rows(B)
+        posLA, posLB = _positions(nA, LA), _positions(nB, LB)
+        E_r = np.zeros((LA.size, nB), dtype=np.complex128)
+        E_c = np.zeros((nA, LB.size), dtype=np.complex128)
         t_r = t_c = None
     else:
-        t_ab = None
+        dest = None
         t_r = np.zeros((rows.size, nB), dtype=np.complex128)
         t_c = np.zeros((nA, rows.size), dtype=np.complex128)
 
     def add_rows(nz, fv_nz, vec, scale, buf):
         """`t[nz, :] += scale * outer(fv_nz, vec)`, into whichever blocks
-        this call is answering with."""
+        this call is answering with. `nz` is an A end's live rows, so it is
+        inside `LA` by construction."""
         if rows is None:
-            _rank1_add(t_ab, nz, fv_nz, vec, scale, buf)
+            _rank1_add(E_r, posLA[nz], fv_nz, vec, scale, buf)
             return
         sel, pos = _in_rows(rows, nz)
         if sel.size:
@@ -1273,9 +1318,10 @@ def _ends_and_corner(
         _rank1_add(t_c, nz, fv_nz, vec[rows], scale, buf)
 
     def add_cols(nz, vec, fv_nz, scale, buf):
-        """`t[:, nz] += scale * outer(vec, fv_nz)`."""
+        """`t[:, nz] += scale * outer(vec, fv_nz)`; `nz` is inside `LB`."""
         if rows is None:
-            _rank1_add_cols(t_ab, nz, vec, fv_nz, scale, buf)
+            _rank1_add_cols(E_r, nz, vec[LA], fv_nz, scale, buf)
+            _rank1_add_cols(E_c, posLB[nz], vec, fv_nz, scale, buf)
             return
         _rank1_add_cols(t_r, nz, vec[rows], fv_nz, scale, buf)
         sel, pos = _in_rows(rows, nz)
@@ -1284,7 +1330,7 @@ def _ends_and_corner(
 
     def add_corner(nza, nzb, fva, fvb, scale):
         if rows is None:
-            t_ab[np.ix_(nza, nzb)] += scale * np.outer(fva, fvb)
+            E_r[np.ix_(posLA[nza], nzb)] += scale * np.outer(fva, fvb)
             return
         sel, pos = _in_rows(rows, nza)
         if sel.size:
@@ -1294,7 +1340,18 @@ def _ends_and_corner(
             t_c[np.ix_(nza, posb)] += scale * np.outer(fva, fvb[selb])
 
     def answer():
-        return t_ab if rows is None else (t_r, t_c)
+        if rows is not None:
+            return (t_r, t_c)
+        # `E_r` already carries the LA rows' column terms and corner, so those
+        # rows of `E_c` are dropped rather than added twice. Rows first, then
+        # columns: an entry in LA x LB then sees its whole term and an exact
+        # zero, which is the order the full block's single `+=` had.
+        if LA.size:
+            E_c[LA, :] = 0.0
+            dest[LA, :] += E_r
+        if LB.size:
+            dest[:, LB] += E_c
+        return dest
 
     _txA, _tyA, tzA = A["t"].T
 
@@ -1800,12 +1857,14 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
     c1 = _c1_moment(ctx.omega, ctx.mu)
     memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
     main = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows)
+    if rows is None:
+        _ends_and_corner(
+            ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=main
+        )
+        return main
     ends = _ends_and_corner(
         ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, rows=rows
     )
-    if rows is None:
-        main += ends
-        return main
     main[0][:] += ends[0]
     main[1][:] += ends[1]
     return main
@@ -1871,6 +1930,21 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
         (ctx_above, memo, False, {"test_ends": False}),
         (ctx_below, {}, True, {"source_ends": False}),
     ):
+        if rows is None:
+            _ends_and_corner(
+                ctx_e,
+                A,
+                B,
+                eps_t,
+                k_p,
+                c1,
+                gz,
+                memo=memo_e,
+                corner=corner_e,
+                out=t_above,
+                **kw,
+            )
+            continue
         ends = _ends_and_corner(
             ctx_e,
             A,
@@ -1884,7 +1958,7 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
             rows=rows,
             **kw,
         )
-        t_above += ends if rows is None else ends[0]
+        t_above += ends[0]
     return t_above, t_below
 
 
@@ -2226,29 +2300,62 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     return live, row_term, col_term, corner
 
 
-def _scatter_completion(total, rows, live, beta, row_term, col_term, corner):
-    """The three scattered writes of one self-completion family, in the
-    derivation's own order (row term, column term, corner).
+class _CompletionScatter:
+    """Where `self_completions`' three shapes per family are written.
 
-    With `rows` given the destination is the `(|rows|, n)` block the route
-    composes Z from, and the ORDER PER ENTRY is the unrestricted one: a
-    requested row sees its row term, then its column term, then its corner,
-    which is why the restricted answer equals the full fill's rows to the bit.
+    Three destinations, one order. Each entry sees its row term, then its
+    column term, then its corner — the derivation's own order, and the order
+    the full `(n, n)` accumulator had — whichever destination it lands in:
+
+    * `rows` given (the sector route): the `(|rows|, n)` block, and the
+      columns outside the request are never read because the routing ADDS
+      this term without transposing it;
+    * otherwise: the shape's own support (momwire#1029 phase 2 unit C).
+      `E_r` carries every term on the rows the axes' ENDS touch, `E_c` the
+      column terms on the rows they do not, and the scatter at the end adds
+      what a full-size `total` would have added. That array was 1.1 GB at 150
+      radials, with its own `total[live, :] +=` temporaries on top — 1.99 GB
+      at this phase's peak.
     """
-    if rows is None:
-        total[live, :] += beta * row_term
-        total[:, live] += beta * col_term
-        total[np.ix_(live, live)] += beta * corner
-        return
-    sel, pos = _in_rows(rows, live)
-    if sel.size:
-        total[pos, :] += beta * row_term[sel]
-    total[:, live] += beta * col_term[rows]
-    if sel.size:
-        total[np.ix_(pos, live)] += beta * corner[sel]
+
+    __slots__ = ("dest", "rows", "L", "posL", "E_r", "E_c")
+
+    def __init__(self, dest, n, rows, live_union):
+        self.dest, self.rows = dest, rows
+        if rows is not None:
+            self.L = self.posL = self.E_r = self.E_c = None
+            return
+        self.L = live_union
+        self.posL = _positions(n, live_union)
+        self.E_r = np.zeros((live_union.size, n), dtype=np.complex128)
+        self.E_c = np.zeros((n, live_union.size), dtype=np.complex128)
+
+    def add(self, live, beta, row_term, col_term, corner):
+        if self.rows is not None:
+            sel, pos = _in_rows(self.rows, live)
+            if sel.size:
+                self.dest[pos, :] += beta * row_term[sel]
+            self.dest[:, live] += beta * col_term[self.rows]
+            if sel.size:
+                self.dest[np.ix_(pos, live)] += beta * corner[sel]
+            return
+        pl = self.posL[live]
+        self.E_r[pl, :] += beta * row_term
+        self.E_r[:, live] += beta * col_term[self.L]
+        self.E_c[:, pl] += beta * col_term
+        self.E_r[np.ix_(pl, live)] += beta * corner
+
+    def flush(self):
+        if self.rows is None and self.L.size:
+            # `E_r` already holds the L rows' column terms, so drop them from
+            # `E_c` rather than add them twice; rows first, then columns.
+            self.E_c[self.L, :] = 0.0
+            self.dest[self.L, :] += self.E_r
+            self.dest[:, self.L] += self.E_c
+        return self.dest
 
 
-def self_completions(ctx, ax_b, ax_a, *, rows=None):
+def self_completions(ctx, ax_b, ax_a, *, rows=None, out=None):
     """The self families' missing bnd + corner content, both media, on
     graded axes. Returned as the ADDITIVE Z correction (the fill's
     `Z -= image` convention already folded in: β_dir·(bnd+cor)(G_dir)
@@ -2257,13 +2364,23 @@ def self_completions(ctx, ax_b, ax_a, *, rows=None):
     `rows` (momwire#1029 phase 2) answers with `total[rows, :]` alone. There is
     no column half here, and that is not an omission: the routing ADDS this
     term without transposing it, so the columns outside the request are never
-    read."""
+    read. `out` (unit C) is the matrix to accumulate into — Z itself — so the
+    unrestricted answer needs no full-size array of its own either."""
     _eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
     gz = float(ctx.ground_z)
     a_wire = float(ctx.a_wire)
     omega, eps0 = ctx.omega, ctx.eps
     n = ax_b["n_basis"]
-    total = np.zeros((n if rows is None else rows.size, n), dtype=np.complex128)
+    if rows is not None:
+        dest = np.zeros((rows.size, n), dtype=np.complex128)
+    else:
+        dest = out if out is not None else np.zeros((n, n), dtype=np.complex128)
+    acc = _CompletionScatter(
+        dest,
+        n,
+        rows,
+        np.union1d(_end_live_rows(ax_b), _end_live_rows(ax_a)),
+    )
     for ax, k, wgt, eps in ((ax_b, k_m, a_m, eps_m), (ax_a, k_p, c2, eps0)):
         beta_dir = 1.0 / (1j * omega * eps * 4 * np.pi)
         beta_img = wgt / (1j * omega * eps * 4 * np.pi)
@@ -2277,11 +2394,11 @@ def self_completions(ctx, ax_b, ax_a, *, rows=None):
             # is confined to `live` on one side or both (momwire#914). The
             # three writes are disjoint in the sense that matters — each adds
             # its own term, exactly as the dense sum did.
-            _scatter_completion(total, rows, live, beta, row_term, col_term, corner)
-    return total
+            acc.add(live, beta, row_term, col_term, corner)
+    return acc.flush()
 
 
-def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None):
+def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None, out=None):
     """`self_completions` at a TWO-RADIUS crossing node.
 
     Each family's column terms — its line observers against its node's
@@ -2296,7 +2413,16 @@ def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None):
     a_above, a_below = float(ctx.a_above), float(ctx.a_below)
     omega, eps0 = ctx.omega, ctx.eps
     n = ax_b["n_basis"]
-    total = np.zeros((n if rows is None else rows.size, n), dtype=np.complex128)
+    if rows is not None:
+        dest = np.zeros((rows.size, n), dtype=np.complex128)
+    else:
+        dest = out if out is not None else np.zeros((n, n), dtype=np.complex128)
+    acc = _CompletionScatter(
+        dest,
+        n,
+        rows,
+        np.union1d(_end_live_rows(ax_b), _end_live_rows(ax_a)),
+    )
     for ax, k, wgt, eps, a_line in (
         (ax_b, k_m, a_m, eps_m, a_below),
         (ax_a, k_p, c2, eps0, a_above),
@@ -2313,5 +2439,5 @@ def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None):
                 _live, _row, col_term, _corner = _bnd_and_corner(
                     ax, k, a_line, gz, mirror=mirror
                 )
-            _scatter_completion(total, rows, live, beta, row_term, col_term, corner)
-    return total
+            acc.add(live, beta, row_term, col_term, corner)
+    return acc.flush()
