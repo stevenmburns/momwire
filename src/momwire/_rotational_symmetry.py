@@ -721,3 +721,36 @@ def compute_impedance(solver):
     coeffs = solve(solver, Z, v, kcl_con, sectors, axial)
     del Z
     return solver._per_feed_z(coeffs, port_vectors, all_voltages), coeffs
+
+
+def compute_impedance_swept(solver, k_array, z_out):
+    """`compute_impedance_swept` on the sector route (momwire#1029 phase 2b).
+
+    A LOOP, and that is the honest shape rather than a shortcut: the route's
+    fill is `_compute_Z_operator_buried` under `rows=`, which has no k axis
+    to batch over, so the sweep is one sector fill and one (m + p) solve per
+    frequency. Nothing is given up by looping — the dense sweep is a loop on
+    this deck too, for its own reason (`_swept_batched_available` needs
+    `ground_eps is None`, and a deck with no lower medium is one the route
+    refuses at construction), so the route sweeps whatever the dense path
+    would have swept.
+
+    THE CONTRACT IS THE DENSE PATH'S, not a second spelling of it: `z_out` is
+    the caller's own allocation — (n_k,) for one port, (n_k, n_ports)
+    otherwise, complex128 — and this fills it through the same `z_out[i] = z`
+    line. So does the frequency triple: `_k_restored` puts k, omega and
+    wavelength back the way the dense sweep does, including on a refusal part
+    way through.
+
+    No `same_edge_prep`. `_compute_Z_operator` ignores the hoist on its
+    buried branch, so building it would be work no fill can read — measured
+    as pure cost on the dense sweep of a buried deck too, which is a separate
+    finding and not this route's to fix.
+    """
+    with solver._k_restored():
+        for i, kk in enumerate(k_array):
+            solver._checkpoint()  # top of each frequency iteration
+            solver._set_k(kk)
+            z, _ = compute_impedance(solver)
+            z_out[i] = z
+    return z_out

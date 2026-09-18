@@ -5930,6 +5930,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     def _compute_impedance_rotational(self):
         return _rotational_symmetry.compute_impedance(self)
 
+    def _compute_impedance_swept_rotational(self, k_array, z_out):
+        return _rotational_symmetry.compute_impedance_swept(self, k_array, z_out)
+
     def _per_feed_z(self, coeffs_full, port_vectors, all_voltages):
         """Drive-point impedance per port (gap feeds, then junction ports,
         then node gaps). `coeffs_full` may include the enrichment block; every
@@ -6036,19 +6039,28 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         coeffs = self._solve_with_kcl(Z, v, kcl_con, overwrite=True)
         return _per_feed_z(coeffs), coeffs
 
-    def _rotational_route_serves_one_drive(self, entry):
-        """Every entry point but `compute_impedance` stays dense under
+    def _rotational_route_serves_one_drive(self, *entries):
+        """Every entry point but the two impedance ones stays dense under
         `rotational_symmetry=True`, and says so rather than answering (the
-        sector route decomposes ONE axis-symmetric drive, momwire#1029 phase
-        1 scope). Silently handing back the dense answer would make the flag
-        look served where it is not, which is the failure mode
-        `require_lattice_fft` exists to prevent on the array solver."""
+        sector route decomposes ONE axis-symmetric drive, momwire#1029).
+        Silently handing back the dense answer would make the flag look
+        served where it is not, which is the failure mode
+        `require_lattice_fft` exists to prevent on the array solver.
+
+        Several `entries` for a guard that stands in front of more than one
+        public name — `_port_solutions_swept` is the generator behind both
+        swept port entries, and naming only one of them told a user about a
+        method they had not called.
+        """
         if self._rotational_map is not None:
+            named = " and ".join(entries)
+            verb = "is" if len(entries) == 1 else "are"
             raise _rotational_symmetry.RotationalSymmetryRefused(
-                f"rotational symmetry: {entry} is not on the sector route — "
-                f"phase 1 decomposes the single axis-symmetric drive of "
-                f"compute_impedance only. Use compute_impedance, or drop "
-                f"rotational_symmetry=True to solve this deck densely."
+                f"rotational symmetry: {named} {verb} not on the sector "
+                f"route — it decomposes the single axis-symmetric drive of "
+                f"compute_impedance and compute_impedance_swept only. Use "
+                f"one of those, or drop rotational_symmetry=True to solve "
+                f"this deck densely."
             )
 
     def compute_y_matrix(self) -> np.ndarray:
@@ -6237,6 +6249,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
           `swept_mem_mb` dispatch instead of always materialising the full
           (d+1, d+1, N, N) moment tensor (issue #238).
         """
+        self._rotational_route_serves_one_drive(
+            "compute_y_matrix_swept", "compute_port_solution_swept"
+        )
         _refuse_complex_k(k_array, "BSplineSolver._port_solutions_swept")
         k_array = np.asarray(k_array, dtype=float)
         if self.use_singular_enrichment:
@@ -6547,8 +6562,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the port columns: at one RHS instead of n_ports it is the cheaper
         solve, and it keeps the swept answer bit-comparable with the per-k
         `compute_impedance` it mirrors.
+
+        Under `rotational_symmetry=True` this is the SECOND entry point the
+        sector route serves (momwire#1029 phase 2b), on the same single
+        axis-symmetric drive — a per-k loop through the route's own
+        `compute_impedance`, filling the `z_out` allocated below, so the
+        contract a caller reads is this method's own whichever route filled
+        it.
         """
-        self._rotational_route_serves_one_drive("compute_impedance_swept")
         _refuse_complex_k(k_array, "BSplineSolver.compute_impedance_swept")
         k_array = np.asarray(k_array, dtype=float)
         n_total = len(self.feeds) + len(self.junction_ports)
@@ -6556,6 +6577,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             z_out = np.zeros(k_array.shape[0], dtype=np.complex128)
         else:
             z_out = np.zeros((k_array.shape[0], n_total), dtype=np.complex128)
+
+        # The route, ahead of the batched dispatch rather than beside it:
+        # `_swept_batched_available` is False on every deck the route serves
+        # (a lower medium means `ground_eps is not None`), so ordering it
+        # here makes "the route never batches" structural instead of
+        # incidental.
+        if self._rotational_map is not None:
+            return self._compute_impedance_swept_rotational(k_array, z_out)
 
         # Fully batched fast path: build the whole sweep's
         # J / Z / solve in batched calls instead of looping compute_impedance

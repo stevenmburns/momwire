@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import math
 import warnings
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -103,6 +104,26 @@ def refusal(**kw):
     with pytest.raises(RotationalSymmetryRefused) as exc:
         solver(**kw)
     return str(exc.value)
+
+
+def _count_fills(s):
+    """Spy on the one heavy call the route makes.
+
+    Every operator fill on this deck goes through
+    `_compute_Z_operator_buried` — it is the buried path's only entry, and
+    the route calls it directly with `rows=`. Shadowing the bound method on
+    the INSTANCE leaves the class alone, so the spy cannot leak into another
+    test. Returns the list it appends to, so an assertion reads `== []`.
+    """
+    seen = []
+    inner = s._compute_Z_operator_buried
+
+    def spy(*a, **kw):
+        seen.append(1)
+        return inner(*a, **kw)
+
+    s._compute_Z_operator_buried = spy
+    return seen
 
 
 # ----------------------------------------------------------------------
@@ -286,77 +307,123 @@ def test_singular_enrichment_is_out_of_scope():
 
 
 @pytest.mark.parametrize(
-    "entry", ["compute_y_matrix", "compute_port_solution", "compute_impedance_swept"]
+    "entry",
+    [
+        "compute_y_matrix",
+        "compute_port_solution",
+        "compute_y_matrix_swept",
+        "compute_port_solution_swept",
+    ],
 )
 def test_every_other_entry_point_refuses_rather_than_answering_densely(entry):
+    """`compute_impedance_swept` LEFT this list at phase 2b because it is
+    served now, and nothing else did. The two swept PORT entries joined it:
+    they were reached before through `compute_port_solution`'s own refusal,
+    which named the wrong entry point — a user who called
+    `compute_y_matrix_swept` was told about a method they had not called.
+    """
     s = solver(4)
-    args = ([np.array([s.k])],) if entry == "compute_impedance_swept" else ()
+    args = ([np.array([s.k])],) if entry.endswith("_swept") else ()
     with pytest.raises(RotationalSymmetryRefused) as exc:
         getattr(s, entry)(*(a for a in args))
     assert entry in str(exc.value)
-    assert "compute_impedance only" in str(exc.value)
+    assert "compute_impedance and compute_impedance_swept only" in str(exc.value)
 
 
-def test_a_drive_that_is_not_rotation_invariant_is_refused():
-    """The route builds harmonic 0 and nothing else, so a right-hand side
-    with content anywhere else has no block to go through. The two the route
-    actually sees are exactly invariant; this drives the guard directly."""
+# ----------------------------------------------------------------------
+# The swept entry on the route (momwire#1029 phase 2b)
+# ----------------------------------------------------------------------
+
+
+SPAN = (0.9, 1.0, 1.1)
+
+
+@pytest.fixture(scope="module", params=[4, 12], ids=["4-radials", "12-radials"])
+def swept(request):
+    """Every number the four gates below read, measured ONCE per deck.
+
+    IN SETUP, DELIBERATELY. A Sommerfeld grid is built per wavenumber and
+    costs 4.1-5.0 s per NEW k on this deck at one thread (measured, cold
+    worker) against 0.12-0.15 s once it is cached, so a sweep recomputed per
+    assertion would pay 13 s three times over for the same three numbers.
+    `tests/conftest.py` groups this file onto one xdist worker for the same
+    reason it groups `test_surface_radials_865.py`.
+
+    The frequencies span +-10 % of the deck's design frequency, which is
+    where a user's sweep actually sits.
+    """
+    n = request.param
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = solver(n)
+        d = solver(n, rotational_symmetry=False)
+        ks = s.k * np.array(SPAN)
+        before = (s.k, s.omega, s.wavelength)
+        z_route = s.compute_impedance_swept(ks)
+        after = (s.k, s.omega, s.wavelength)
+        z_dense = d.compute_impedance_swept(ks)
+        per_k = []
+        for kk in ks:
+            s._set_k(float(kk))
+            per_k.append(complex(np.atleast_1d(s.compute_impedance()[0])[0]))
+        s._set_k(float(before[0]))
+    return SimpleNamespace(
+        n=n,
+        ks=ks,
+        route=z_route,
+        dense=z_dense,
+        per_k=per_k,
+        before=before,
+        after=after,
+    )
+
+
+def test_the_swept_entry_returns_the_dense_contract(swept):
+    """Shape and dtype are the dense path's, cell for cell — the route fills
+    the SAME allocation `compute_impedance_swept` makes for the dense sweep,
+    so there is no second spelling of the contract to drift."""
+    assert isinstance(swept.route, np.ndarray)
+    assert swept.route.shape == swept.dense.shape == (3,)
+    assert swept.route.dtype == swept.dense.dtype == np.complex128
+
+
+def test_the_swept_answer_is_the_per_frequency_answer_bit_for_bit(swept):
+    """BIT-identical, not close.
+
+    The route's fill is `_compute_Z_operator_buried` under `rows=`, which has
+    no k axis to batch over, so the sweep rebinds the frequency triple and
+    calls the route's own `compute_impedance` — the same call the caller
+    would make itself. Nothing reassociates, so anything short of bit
+    equality would mean the loop had grown a difference it has no reason to
+    have. (The DENSE sweep cannot promise this on a deck its batched path
+    serves: there the k axis really is reassociated.)
+    """
+    for i, z in enumerate(swept.per_k):
+        assert swept.route[i].real.hex() == z.real.hex(), i
+        assert swept.route[i].imag.hex() == z.imag.hex(), i
+
+
+def test_the_swept_answer_matches_the_dense_sweep(swept):
+    """Phase 1's G1a bar, per frequency: the route is the same answer."""
+    for i in range(3):
+        rel = abs(swept.route[i] - swept.dense[i]) / abs(swept.dense[i])
+        assert rel <= 1e-9, (i, rel)
+
+
+def test_the_swept_entry_puts_the_frequency_triple_back(swept):
+    """The route sweeps by rebinding k, so it owes the caller what
+    `_k_restored` gives the dense sweep."""
+    assert swept.after == swept.before
+
+
+def test_an_empty_sweep_answers_with_the_empty_array_and_no_fill():
+    """The degenerate shape the dense path already serves, and the cheapest
+    proof that the loop is a loop: no k, no fill."""
     s = solver(4)
-    geom = s._build_geometry()
-    supp_seg, polys, kcl_A, _knots, wbg = s._build_basis_polynomials(geom)
-    n_b = supp_seg.shape[0]
-    sectors, axial = s._rotational_dof_groups(wbg, n_b)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        Z = s._compute_Z_operator_buried(
-            geom, supp_seg, polys, rows=s._rotational_rows(geom)
-        )
-    v = np.zeros(n_b, dtype=np.complex128)
-    v[sectors[1][0]] = 1.0  # one sector driven, the others not
-    with pytest.raises(RotationalSymmetryRefused) as exc:
-        s._rotational_solve(Z, v, kcl_A[:0], sectors, axial)
-    assert "the drive is not rotation-invariant" in str(exc.value)
-
-
-# ----------------------------------------------------------------------
-# G1 at 4 radials, and G4's code half
-# ----------------------------------------------------------------------
-
-
-def test_the_flag_off_runs_no_route_code():
-    s = solver(4, rotational_symmetry=False)
-    assert s.rotational_symmetry is False
-    assert s._rotational_map is None
-    # and the other entry points are untouched
-    s._rotational_route_serves_one_drive("compute_y_matrix")
-
-
-def test_g1_the_route_matches_the_dense_solve_at_four_radials():
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        z_d, c_d = solver(4, rotational_symmetry=False).compute_impedance()
-        route = solver(4)
-        z_r, c_r = route.compute_impedance()
-    z_d = complex(np.atleast_1d(z_d)[0])
-    z_r = complex(np.atleast_1d(z_r)[0])
-    assert abs(z_r - z_d) / abs(z_d) <= 1e-9
-    assert np.max(np.abs(c_r - c_d)) / np.max(np.abs(c_d)) <= 1e-8
-    # the N axis-against-sector copies agree, which is the free check on the
-    # sector assignment PLAN-phase1 §4 registers (never bit-identical)
-    assert route._rotational_copy_spread <= 1e-12
-
-
-def test_g1_the_route_still_matches_with_more_sectors():
-    """Six sectors, so N does not divide into the four-fold case's answer by
-    accident and the DFT's bookkeeping is exercised at another N."""
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        z_d, c_d = solver(6, rotational_symmetry=False).compute_impedance()
-        z_r, c_r = solver(6).compute_impedance()
-    z_d = complex(np.atleast_1d(z_d)[0])
-    z_r = complex(np.atleast_1d(z_r)[0])
-    assert abs(z_r - z_d) / abs(z_d) <= 1e-9
-    assert np.max(np.abs(c_r - c_d)) / np.max(np.abs(c_d)) <= 1e-8
+    fills = _count_fills(s)
+    z = s.compute_impedance_swept(np.zeros(0))
+    assert z.shape == (0,) and z.dtype == np.complex128
+    assert fills == []
 
 
 # ----------------------------------------------------------------------
