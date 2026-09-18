@@ -1478,11 +1478,11 @@ static void assemble_field_galerkin(
         throw std::invalid_argument(
             "Q must be a complex128 array: it is accumulated into in place, "
             "so no dtype conversion can be made on the caller's behalf");
-    if (!(Q.flags() & py::array::c_style))
-        throw std::invalid_argument(
-            "Q must be C-contiguous: it is accumulated into in place, and a "
-            "column-major or strided target would take the accumulation "
-            "through a copy and lose it");
+    // Contiguity is NOT required: the two scatters below address Q through
+    // its own strides, so a column-major or otherwise strided target is
+    // accumulated into where it lies instead of being refused. What is still
+    // refused is a target whose strides are not whole elements -- numpy can
+    // express that, and the arithmetic below cannot address it.
     if (!Q.writeable())
         throw std::invalid_argument(
             "Q must be writeable: it is accumulated into in place");
@@ -1529,6 +1529,17 @@ static void assemble_field_galerkin(
     const std::int64_t *ss = supp_seg.data();
     const std::int64_t *po = pos_o.data();
     const std::int64_t *ps = pos_s.data();
+    if (Q.strides(0) % static_cast<py::ssize_t>(sizeof(cd)) != 0 ||
+        Q.strides(1) % static_cast<py::ssize_t>(sizeof(cd)) != 0)
+        throw std::invalid_argument(
+            "Q's strides must be whole complex128 elements: it is accumulated "
+            "into in place at computed addresses");
+    // Element (not byte) strides. A C-contiguous Q gives sr = nb, sc = 1 --
+    // the literal shape the two scatters carried before momwire#1115's
+    // strided target, so that case keeps its exact addresses and stays bit
+    // identical.
+    const py::ssize_t sr = Q.strides(0) / static_cast<py::ssize_t>(sizeof(cd));
+    const py::ssize_t sc = Q.strides(1) / static_cast<py::ssize_t>(sizeof(cd));
     cd *Qp = static_cast<cd *>(Q.mutable_data());
 
     // The Python indexes pos_o/pos_s with supp_seg directly, so an id outside
@@ -1642,7 +1653,7 @@ static void assemble_field_galerkin(
                         // move the rounding, and scale = 1.0 has to reproduce
                         // the unscaled numbers bit for bit.
                         for (py::ssize_t k = 0; k < nk; ++k)
-                            Qp[mb[k] * nb + n] += scale * s[k];
+                            Qp[mb[k] * sr + n * sc] += scale * s[k];
                     }
                 }
             }
@@ -1691,7 +1702,7 @@ static void assemble_field_galerkin(
                         // The same per-contribution scaling as the fused
                         // route's stage 2. The two routes are gated against
                         // each other, so they cannot part on where it lands.
-                        Qp[m * nb + n] += scale * s;
+                        Qp[m * sr + n * sc] += scale * s;
                     }
                 }
         }
@@ -1739,6 +1750,11 @@ void register_mw568(py::module_ &m) {
     // the strength of `field_galerkin_914` alone loses every write rather
     // than falling back. Anything passing `out=`/`scale` gates on THIS.
     m.attr("field_galerkin_target_1115") = true;
+    // momwire#1115 part 3: the accumulation target may now be STRIDED, which
+    // `field_galerkin_target_1115` alone does not promise -- that flag's
+    // contract refuses a column-major Q. A caller handing over the buried Z
+    // (column-major by momwire#136) gates on THIS one.
+    m.attr("field_galerkin_strided_1115") = true;
 
     m.def("pair_extents_below", &pair_extents_below,
           "(r1_max, th_min) over every below/below node pair -- the C++ twin "
@@ -1763,10 +1779,11 @@ void register_mw568(py::module_ &m) {
           "multiplies each contribution as it lands, so a caller holding an "
           "assembled matrix can accumulate Z -= Q in one pass instead of "
           "allocating an (n, n) transient; at its default of 1.0 the numbers "
-          "are bit-identical to the unscaled assembly. Q must be a writeable, "
-          "C-contiguous complex128 array and is REFUSED otherwise: it is "
-          "accumulated into in place, and a column-major target used to be "
-          "answered with a silent copy that lost every write (momwire#1115).",
+          "are bit-identical to the unscaled assembly. Q must be a writeable "
+          "complex128 array whose strides are whole elements; it is addressed "
+          "through those strides, so a column-major target is accumulated "
+          "into where it lies rather than through the silent copy that used "
+          "to lose every write (momwire#1115).",
           py::arg("proj"), py::arg("W_obs"), py::arg("W_src"),
           py::arg("supp_seg"), py::arg("polys"), py::arg("pos_o"),
           py::arg("pos_s"), py::arg("i0"), py::arg("Q"),
