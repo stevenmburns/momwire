@@ -420,6 +420,29 @@ def test_the_swept_entry_puts_the_frequency_triple_back(swept):
     assert swept.after == swept.before
 
 
+def test_two_axial_feeds_take_the_other_half_of_the_contract():
+    """`compute_impedance_swept` returns (n_k,) at one port and
+    (n_k, n_ports) at more, and the route fills whichever the caller's own
+    allocation is — the branch the single-feed gates above never reach.
+
+    Two gap feeds on the MAST, which is the only place a route deck can put
+    a second one: an off-axis port is refused by name (G2-3), so every port
+    the route ever sees is axial and the drive stays rotation-invariant.
+    """
+    feeds = [(5, 2 * MAST / 8, 1 + 0j), (5, 5 * MAST / 8, 1 + 0j)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = solver(4, feeds=feeds)
+        ks = s.k * np.array(SPAN)
+        z_r = s.compute_impedance_swept(ks)
+        z_d = solver(4, rotational_symmetry=False, feeds=feeds).compute_impedance_swept(
+            ks
+        )
+    assert z_r.shape == z_d.shape == (3, 2)
+    assert z_r.dtype == z_d.dtype == np.complex128
+    assert np.max(np.abs(z_r - z_d) / np.abs(z_d)) <= 1e-9
+
+
 def test_an_empty_sweep_answers_with_the_empty_array_and_no_fill():
     """The degenerate shape the dense path already serves, and the cheapest
     proof that the loop is a loop: no k, no fill."""

@@ -1,0 +1,130 @@
+[
+ {
+  "radials": 4,
+  "shape": [
+   3
+  ],
+  "dtype": "complex128",
+  "sha_route_swept": "84f4fcf47892cfba16fb5f10ad3c4575",
+  "seconds_route": 0.226,
+  "seconds_dense": 0.224,
+  "k": [
+   0.13400158238060728,
+   0.14889064708956365,
+   0.16377971179852002
+  ],
+  "z_swept_hex": [
+   [
+    "0x1.ea1be03773b34p+5",
+    "-0x1.2feef43e81e02p+5"
+   ],
+   [
+    "0x1.2cb50393bb777p+6",
+    "0x1.6edb47cb4a9b4p+5"
+   ],
+   [
+    "0x1.6c8ee0c014e43p+6",
+    "0x1.f9abbef2fe8a3p+6"
+   ]
+  ],
+  "z_per_k_hex": [
+   [
+    "0x1.ea1be03773b34p+5",
+    "-0x1.2feef43e81e02p+5"
+   ],
+   [
+    "0x1.2cb50393bb777p+6",
+    "0x1.6edb47cb4a9b4p+5"
+   ],
+   [
+    "0x1.6c8ee0c014e43p+6",
+    "0x1.f9abbef2fe8a3p+6"
+   ]
+  ],
+  "bit_identical_per_k": [
+   true,
+   true,
+   true
+  ],
+  "rel_per_k": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rel_per_k_fresh_solver": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rel_dense_swept": [
+   2.4465622212163116e-14,
+   6.08240577206441e-14,
+   2.4346519810942145e-14
+  ],
+  "copy_spread": 5.828961037531147e-19
+ },
+ {
+  "radials": 12,
+  "shape": [
+   3
+  ],
+  "dtype": "complex128",
+  "sha_route_swept": "a94da7929b3ee4e287cbe0890cf2fb85",
+  "seconds_route": 0.375,
+  "seconds_dense": 0.448,
+  "k": [
+   0.13400158238060728,
+   0.14889064708956365,
+   0.16377971179852002
+  ],
+  "z_swept_hex": [
+   [
+    "0x1.45d5c722e243ep+5",
+    "-0x1.84cec53c7d3dfp+5"
+   ],
+   [
+    "0x1.9af0c81d976a3p+5",
+    "0x1.2ad88288a1a4fp+5"
+   ],
+   [
+    "0x1.042ff4f0be846p+6",
+    "0x1.e483bbe92effap+6"
+   ]
+  ],
+  "z_per_k_hex": [
+   [
+    "0x1.45d5c722e243ep+5",
+    "-0x1.84cec53c7d3dfp+5"
+   ],
+   [
+    "0x1.9af0c81d976a3p+5",
+    "0x1.2ad88288a1a4fp+5"
+   ],
+   [
+    "0x1.042ff4f0be846p+6",
+    "0x1.e483bbe92effap+6"
+   ]
+  ],
+  "bit_identical_per_k": [
+   true,
+   true,
+   true
+  ],
+  "rel_per_k": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rel_per_k_fresh_solver": [
+   0.0,
+   0.0,
+   0.0
+  ],
+  "rel_dense_swept": [
+   9.142382052382647e-14,
+   7.970134804019433e-14,
+   4.818445216527289e-14
+  ],
+  "copy_spread": 5.71762001437094e-18
+ }
+]
