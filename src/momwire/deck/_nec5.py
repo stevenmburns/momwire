@@ -562,16 +562,17 @@ _REFUSED_BY_NAME = MappingProxyType(
 # The number of fields each card must carry.  EZNEC writes every field of
 # every card it emits, so this dialect does no blank-field defaulting: a
 # short card is a deck this front-end did not come from and refuses rather
-# than zero-fills (the two exceptions are GD/GN 0's trailing complex mu and
-# LD 5's trailing real mu, both of which the measured grammar lets default
-# to 1).  GN and LD are absent because their length depends on a field read
-# before this table — GN's on its first field (bare for -1 and 1, media-
-# carrying for 0 and 2, checked in `_gn`), LD's on its TYPE (4 needs R and X,
-# 5 does not need mu) — and are checked in `_ld`.
+# than zero-fills (the exceptions are GD/GN 0's trailing complex mu and LD
+# 5's trailing real mu, both of which the measured grammar lets default to
+# 1; and GE's second field, momwire#1116 — see `_ge`).  GN and LD are absent
+# because their length depends on a field read before this table — GN's on
+# its first field (bare for -1 and 1, media-carrying for 0 and 2, checked in
+# `_gn`), LD's on its TYPE (4 needs R and X, 5 does not need mu) — and are
+# checked in `_ld`.
 _MIN_FIELDS = MappingProxyType(
     {
         "GW": 9,
-        "GE": 2,
+        "GE": 1,
         "GD": 6,
         "EX": 6,
         "TL": 10,
@@ -885,12 +886,20 @@ class _Nec5Parser:
         self._by_tag[tag] = wire
 
     def _ge(self, card: Card) -> None:
-        """``GE <ground-flag>,<second>``.
+        """``GE <ground-flag>[,<segment-check-flag>]``.
 
-        NEC-2's ``GE`` takes one field; this dialect's takes two, and the
-        second is ``-1`` in all 49 captures (capture study, "``GE`` takes a
-        second parameter").  Its meaning is unobserved, so it is recorded and
-        not interpreted.
+        NEC-2's ``GE`` takes one field; this dialect's normally carries a
+        second, and it is ``-1`` in every EZNEC capture (capture study,
+        "``GE`` takes a second parameter") — NEC-5's own flag for whether it
+        runs its geometry segment check (illegal intersections, thin-wire
+        violations), which EZNEC always asks it to skip.  Its value has no
+        bearing on the solve, so it is recorded and not interpreted.
+
+        A one-field ``GE`` also parses (momwire#1116): two of Mike WA7ARK's
+        AutoEZ-side files carry a bare ``GE 0`` rather than EZNEC's own
+        ``GE 0,-1``, NEC-5 accepts it and takes its own default for the
+        missing flag, and ``card.i(1)`` already reads a missing field as 0 —
+        the same default, so no separate "absent" sentinel is needed.
         """
         self.ge_flag = card.i(0)
         self.ge_second = card.i(1)
