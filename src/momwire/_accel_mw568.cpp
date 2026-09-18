@@ -1458,9 +1458,34 @@ static void assemble_field_galerkin(
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> pos_o,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> pos_s,
     py::ssize_t i0,
-    py::array_t<std::complex<double>, py::array::c_style> Q,
-    bool fused) {
+    py::array Q,
+    bool fused,
+    double scale) {
     typedef std::complex<double> cd;
+
+    // Q is the ACCUMULATION TARGET, which is why it arrives as a bare
+    // py::array checked here and not as py::array_t<cd, c_style> like every
+    // input above it. That template flag does not REQUIRE a C-contiguous
+    // argument, it MANUFACTURES one: pybind11 answers a column-major or
+    // strided array with a C-contiguous copy, so every `+=` below lands in a
+    // temporary and the call returns cleanly having written nothing
+    // (momwire#1115; the buried Z is column-major by momwire#136, so the
+    // target this is meant to take is exactly the shape that was lost).
+    // `forcecast` is not the fix -- it copies unconditionally. py::array's
+    // caster converts nothing at all, which is what lets these three be
+    // refusals rather than repairs.
+    if (!py::isinstance<py::array_t<cd>>(Q))
+        throw std::invalid_argument(
+            "Q must be a complex128 array: it is accumulated into in place, "
+            "so no dtype conversion can be made on the caller's behalf");
+    if (!(Q.flags() & py::array::c_style))
+        throw std::invalid_argument(
+            "Q must be C-contiguous: it is accumulated into in place, and a "
+            "column-major or strided target would take the accumulation "
+            "through a copy and lose it");
+    if (!Q.writeable())
+        throw std::invalid_argument(
+            "Q must be writeable: it is accumulated into in place");
 
     if (W_obs.ndim() != 3 || W_src.ndim() != 3)
         throw std::invalid_argument("W_obs and W_src must be 3-D (P, n, q)");
@@ -1609,7 +1634,15 @@ static void assemble_field_galerkin(
                                 s[k] += t;
                             }
                         }
-                        for (py::ssize_t k = 0; k < nk; ++k) Qp[mb[k] * nb + n] += s[k];
+                        // `scale` multiplies each CONTRIBUTION as it lands,
+                        // never Q and never a factor. Never Q: this is one
+                        // chunk of an observer loop, and scaling the target
+                        // would re-scale every chunk already in it. Never a
+                        // factor (g, h or the projected table): that would
+                        // move the rounding, and scale = 1.0 has to reproduce
+                        // the unscaled numbers bit for bit.
+                        for (py::ssize_t k = 0; k < nk; ++k)
+                            Qp[mb[k] * nb + n] += scale * s[k];
                     }
                 }
             }
@@ -1655,7 +1688,10 @@ static void assemble_field_galerkin(
                                          Jc[((p * P + Pp) * nc + ic) * ns + js];
                             }
                         }
-                        Qp[m * nb + n] += s;
+                        // The same per-contribution scaling as the fused
+                        // route's stage 2. The two routes are gated against
+                        // each other, so they cannot part on where it lands.
+                        Qp[m * nb + n] += scale * s;
                     }
                 }
         }
@@ -1695,6 +1731,14 @@ void register_mw568(py::module_ &m) {
     // `pair_extents_below` and every #568 symbol, and would otherwise claim
     // this contract too.
     m.attr("field_galerkin_914") = true;
+    // momwire#1115: `assemble_field_galerkin` refuses a target it cannot
+    // accumulate into, and takes a `scale`. Its OWN flag, and the one case
+    // where a missing flag is not merely a missed optimisation: a .so built
+    // before this exports `assemble_field_galerkin` and answers a
+    // column-major Q with a silent copy, so a caller that hands one over on
+    // the strength of `field_galerkin_914` alone loses every write rather
+    // than falling back. Anything passing `out=`/`scale` gates on THIS.
+    m.attr("field_galerkin_target_1115") = true;
 
     m.def("pair_extents_below", &pair_extents_below,
           "(r1_max, th_min) over every below/below node pair -- the C++ twin "
@@ -1715,11 +1759,18 @@ void register_mw568(py::module_ &m) {
           "transcription instead -- an independent second route to the same "
           "numbers, kept because the choice between them was measured. "
           "Threads the source axis in both stages, never the row-wings: a "
-          "basis row owns its whole Q row across every wing.",
+          "basis row owns its whole Q row across every wing. `scale` "
+          "multiplies each contribution as it lands, so a caller holding an "
+          "assembled matrix can accumulate Z -= Q in one pass instead of "
+          "allocating an (n, n) transient; at its default of 1.0 the numbers "
+          "are bit-identical to the unscaled assembly. Q must be a writeable, "
+          "C-contiguous complex128 array and is REFUSED otherwise: it is "
+          "accumulated into in place, and a column-major target used to be "
+          "answered with a silent copy that lost every write (momwire#1115).",
           py::arg("proj"), py::arg("W_obs"), py::arg("W_src"),
           py::arg("supp_seg"), py::arg("polys"), py::arg("pos_o"),
           py::arg("pos_s"), py::arg("i0"), py::arg("Q"),
-          py::arg("fused") = true);
+          py::arg("fused") = true, py::arg("scale") = 1.0);
     m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
           "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
           "_sommerfeld._bessel_j0_j1x, with the same |x| < 1e-6 series switch. "
