@@ -46,6 +46,7 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+import scipy.linalg
 
 # 1e-9 of the deck's largest extent. The registered tolerance (§3.1): the
 # structure probe measures rotated radials landing 3.9e-16 m (4 radials) to
@@ -525,3 +526,198 @@ def sector_map(solver, tol_rel=TOL_REL) -> SectorMap:
         tol=tol,
         extent=extent,
     )
+
+
+# ---------------------------------------------------------------------------
+# The route itself — momwire#1029 phase 2 unit D
+#
+# Moved here from `BSplineSolver` verbatim, `self` renamed to `solver` and
+# nothing else changed; the four methods stay on the solver as one-line
+# delegations, so every phase-1 test and every scratch harness keeps its call.
+#
+# It belongs beside the CHECK, not inside a 6,900-line solver, for the reason
+# the check does: none of it is basis-shaped. `dof_groups` reads the sector
+# map and the solver's own wire->basis table, `observer_rows` reads the
+# geometry, and `harmonic_zero_block` and `solve` are linear algebra on the
+# assembled Z. What is solver-shaped — the fills, the drive, the readout — is
+# reached through the solver that is handed in, which is also what keeps this
+# module free of an import back into `bspline`.
+#
+# Phase 2 grows exactly this code: phase 3's general drive builds the other
+# N-1 harmonic blocks beside `harmonic_zero_block`, and an off-axis port
+# picks the sectors apart in `dof_groups`. That is the reason to give it a
+# module now rather than after.
+# ---------------------------------------------------------------------------
+
+
+# The bar on "the drive is rotation-invariant", checked per right-hand side:
+# a vector with content in another harmonic would need the N-1 blocks this
+# route does not build, so it is refused as a drive that needs every harmonic.
+# Relative to the vector's largest entry. The two right-hand sides this route
+# ever sees are EXACTLY invariant, not approximately: the gap source vector is
+# zero on every sector (phase 0's F2 measured 0), and the hub's KCL row
+# carries the same sign on each sector's directional basis (S-0 measured the
+# permuted row's largest change at exactly 0.0). The bar is loose against that
+# so a port column built by a different route is judged by roundoff rather
+# than by bit equality, and it is still 4 orders under anything physical.
+DRIVE_TOL = 1e-12
+
+
+def dof_groups(solver, wire_basis_global, n_basis_total):
+    """`(sectors, axial)`: one global-index array per sector image, and
+    the axial group's.
+
+    `sectors[s][i]` and `sectors[t][i]` are the SAME basis, of the same
+    wire of the same orbit, under the rotation — gate S-0 pins that
+    bijection dof by dof (kind, local index, end position and junction all
+    match at equal position), and it is what lets row `i` of sector 0
+    stand for its N images. `s` is only a label: the route sums a row over
+    a source dof's whole orbit, so relabelling the sectors cannot change
+    anything it computes.
+    """
+    smap = solver._rotational_map
+    sectors = []
+    for s in range(smap.n_sectors):
+        idx = []
+        for w in smap.sectors[s]:
+            kept, l2g = wire_basis_global[w]
+            idx.extend(int(l2g[i]) for i in range(len(kept)))
+        sectors.append(np.asarray(idx, dtype=np.int64))
+    on_sector = np.zeros(n_basis_total, dtype=bool)
+    for idx in sectors:
+        on_sector[idx] = True
+    return sectors, np.nonzero(~on_sector)[0].astype(np.int64)
+
+
+def observer_rows(solver, geom):
+    """The observer segments one sector's fill needs: sector 0's wires and
+    every axial wire. No basis straddles two wires (S-0's S0a), so a
+    whole-wire segment set is exactly a whole-dof row set."""
+    smap = solver._rotational_map
+    seg_off = geom["seg_offsets"]
+    per_wire = geom["per_wire"]
+    runs = [
+        np.arange(seg_off[w], seg_off[w] + per_wire[w]["n_total"])
+        for w in (*smap.sectors[0], *smap.axial)
+    ]
+    return np.sort(np.concatenate(runs))
+
+
+def harmonic_zero_block(solver, Z, sectors, axial):
+    """The harmonic-0 block and its consistency reading.
+
+    An on-axis drive is rotation-invariant, so the solution is too and
+    only harmonic 0 is ever excited (`PLAN.md` §2, measured at F4). In the
+    DFT over sectors the radial-radial part is block-diagonal with
+    Lambda_h = sum_d C_d exp(+2 pi j h d / N), and harmonic 0 is the only
+    block that couples to the axis:
+
+        K_0 = [[Lambda_0, sqrt(N) B], [sqrt(N) C, Z_MM]]
+
+    with c_hat_0 = sqrt(N) c_sector. Lambda_0 = sum_d C_d is the ROW SUM
+    of sector 0's rows over every sector's columns, so it needs no
+    labelling; B is sector 0's axial columns. The axis-against-sector
+    block is the SUM of the N copies scaled by 1/sqrt(N) — using the sum
+    rather than one copy averages their roundoff, and their spread is a
+    free check on the sector assignment (they are not bit-identical:
+    rotated copies round differently).
+    """
+    n = len(sectors)
+    m = int(sectors[0].size)
+    p = int(axial.size)
+    s0 = sectors[0]
+    sq = math.sqrt(n)
+    K0 = np.empty((m + p, m + p), dtype=np.complex128)
+    lam0 = Z[np.ix_(s0, sectors[0])].copy()
+    for t in range(1, n):
+        lam0 += Z[np.ix_(s0, sectors[t])]
+    K0[:m, :m] = lam0
+    K0[:m, m:] = sq * Z[np.ix_(s0, axial)]
+    c_0 = Z[np.ix_(axial, sectors[0])]
+    c_sum = c_0.copy()
+    worst = 0.0
+    scale = float(np.max(np.abs(c_0))) if c_0.size else 1.0
+    for t in range(1, n):
+        c_t = Z[np.ix_(axial, sectors[t])]
+        worst = max(worst, float(np.max(np.abs(c_t - c_0))))
+        c_sum += c_t
+    K0[m:, :m] = c_sum / sq
+    K0[m:, m:] = Z[np.ix_(axial, axial)]
+    solver._rotational_copy_spread = worst / max(scale, 1e-300)
+    return K0, m, p
+
+
+def solve(solver, Z, v, kcl_A, sectors, axial):
+    """The constrained solve through K_0 — `_solve_with_kcl`'s Schur step
+    with the sector inverse in place of the dense one.
+
+    The Schur algebra only ever applies Z^-1 to `v` and to the constraint
+    rows, and BOTH are rotation-invariant for an on-axis drive: the gap
+    source vector is supported on the feed's own axial wire, and the hub's
+    KCL row carries the same +1 on every sector's directional basis. That
+    is asserted rather than assumed — a right-hand side with content in
+    another harmonic would need the other N-1 blocks, which this route
+    does not build.
+    """
+    n = len(sectors)
+    sq = math.sqrt(n)
+    K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial)
+    lu = scipy.linalg.lu_factor(K0, overwrite_a=True)
+
+    def z_inv(rhs):
+        rhs = np.asarray(rhs, dtype=np.complex128).reshape(rhs.shape[0], -1)
+        r0 = rhs[sectors[0]]
+        scale = max(float(np.max(np.abs(rhs))), 1e-300)
+        for t in range(1, n):
+            spread = float(np.max(np.abs(rhs[sectors[t]] - r0))) / scale
+            if spread > DRIVE_TOL:
+                raise RotationalSymmetryRefused(
+                    f"rotational symmetry: the right-hand side differs "
+                    f"between sector 0 and sector {t} by {spread:.3e} of "
+                    f"its largest entry, so the drive is not "
+                    f"rotation-invariant and needs every harmonic. This "
+                    f"route serves the axis-symmetric drive only. Drop "
+                    f"rotational_symmetry=True to solve this deck densely."
+                )
+        top = np.vstack([sq * r0, rhs[axial]])
+        sol = scipy.linalg.lu_solve(lu, top)
+        out = np.empty((rhs.shape[0], rhs.shape[1]), dtype=np.complex128)
+        per_sector = sol[:m] / sq
+        for t in range(n):
+            out[sectors[t]] = per_sector
+        out[axial] = sol[m:]
+        return out
+
+    w = z_inv(v[:, None])[:, 0]
+    if kcl_A.shape[0] == 0:
+        return w
+    X = z_inv(kcl_A.T.astype(np.complex128))
+    lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
+    return w - X @ lam
+
+
+def compute_impedance(solver):
+    """`compute_impedance` on the sector route (momwire#1029).
+
+    One fill of sector 0's rows plus the axial rows against EVERY source,
+    one (m + p) solve whatever N is, and the coefficients reassembled in
+    the dense ordering — so `element_currents` and the far readout need no
+    new code, and the caller cannot tell which route produced the vector.
+    """
+    geom = solver._build_geometry()
+    supp_seg, polys, kcl_A, wire_knots, wire_basis_global = (
+        solver._build_basis_polynomials(geom)
+    )
+    n_basis_total = supp_seg.shape[0]
+    sectors, axial = dof_groups(solver, wire_basis_global, n_basis_total)
+    solver._checkpoint()  # after geometry/basis, before the one-sector fill
+    Z = solver._compute_Z_operator_buried(
+        geom, supp_seg, polys, rows=observer_rows(solver, geom)
+    )
+    v, port_vectors, _vpf_T, all_voltages, kcl_con = solver._feed_drive_and_readout(
+        geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+    )
+    solver._checkpoint()  # before the harmonic-0 solve
+    coeffs = solve(solver, Z, v, kcl_con, sectors, axial)
+    del Z
+    return solver._per_feed_z(coeffs, port_vectors, all_voltages), coeffs
