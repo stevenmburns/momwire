@@ -56,6 +56,23 @@ stay untouched (tests/test_eznec_reproducibility.py).
                  byte the host reads, never reproduce a wrong answer).
                  Hand-edited from 0120, not an EZNEC session.
 
+  M_cardioid_two_ex4_two_probes.nec/.out
+                 Dan AC6LA's "first blood" deck (QRZ 1003328 post #100,
+                 2026-09-17): EZNEC Pro/4+'s Cardioid sample, two 6-segment
+                 verticals over GN 1, current sources EX 4 at the bases and an
+                 18 ohm LD 4 at segment 2 of each with its probe. Dan attached
+                 the EX 0 twin written eight minutes earlier, so this is the
+                 EX 4 deck the refusal sentence he quoted describes,
+                 reconstructed by changing the two type fields alone (the
+                 conversion momwire#1105 measured on 0186-0189). Hand-edited,
+                 not an EZNEC session; its NEC-5 printout is the oracle.
+                 momwire 0.58.0 refused it with Dan's sentence; 0.59.0 serves
+                 it. Drive rows NEC-5 32.786 - 24.844j / 64.140 + 10.899j
+                 against bspline 33.663 - 18.699j / 66.418 + 18.087j, 15 % and
+                 12 % of |Z| - EZNEC's six-segment mesh, the dipole class -
+                 and the probe rows 1.2005 - 0.0550j / -0.0986 - 1.2509j A
+                 against 1.2088 - 0.0599j / -0.1085 - 1.2639j, within 1.3 %.
+
 What the served oracles show: one ANTENNA INPUT PARAMETERS row per EX card in
 deck order; the EX 4's set current and the probe's 1e-10 V both printed as
 written; the probe row carrying the current through the loaded node, with

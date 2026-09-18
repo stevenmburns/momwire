@@ -77,6 +77,12 @@ SERVED = (
     "0194",
     "0195",
     "0196",
+    # Dan AC6LA's "first blood" deck (QRZ 1003328 #100, 2026-09-17): EZNEC's
+    # Cardioid sample with 18 ohm loads placed off the source positions, so
+    # EZNEC writes two EX 4 and two probes. His attachment was the EX 0 twin
+    # written eight minutes earlier, so this is the reconstruction the refusal
+    # sentence describes (README); NEC-5's printout for it is the oracle.
+    "M_cardioid_two_ex4_two_probes",
 )
 # EZNEC writes exactly this card per lumped load, and the CM line above it says
 # so in words.  Stripping them is how the "the probe moves nothing" gate gets
@@ -93,6 +99,9 @@ def oracle(name: str) -> list[str]:
 
 
 def tolerance(name: str) -> float:
+    # The cardioid is EZNEC's six-segment sample mesh, the same
+    # under-converged class as the eleven-segment dipoles: NEC-5 and bspline
+    # sit 12-15 % apart on its drive rows and 1 % on its probe rows.
     return FOLDED_TOLERANCE if name == "0192" else DIPOLE_TOLERANCE
 
 
@@ -136,6 +145,18 @@ def _loading(lines: list[str]) -> list[str]:
     return out
 
 
+def _n_drives(name: str) -> int:
+    """How many EX 4 cards the deck writes: its ANTENNA INPUT PARAMETERS
+    rows are those drives first, in deck order, then one row per probe. One
+    on every deck here but the cardioid, which drives two verticals."""
+    return deck(name).count("\nEX 4,")
+
+
+def _split(rows: list[str], name: str) -> tuple[list[str], list[str]]:
+    n = _n_drives(name)
+    return rows[:n], rows[n:]
+
+
 def _refusal(text: str) -> str:
     printout = render(text)
     assert " ***** NEC ERROR - " in printout, "this deck was SERVED"
@@ -154,28 +175,39 @@ def test_each_probed_deck_is_served_one_row_per_card_in_deck_order(name):
 
 @pytest.mark.parametrize("name", SERVED)
 def test_both_boundary_conditions_are_restored_byte_equal(name):
-    rows = _rows(render(deck(name)).splitlines())
-    theirs = _rows(oracle(name))
-    # the EX 4's set current: the CURRENT columns of the drive row
-    assert rows[0][36:60] == theirs[0][36:60] == "  1.4142E+00  0.0000E+00"
-    # the probe's written 1e-10 V: the VOLTAGE columns of the probe row
-    assert rows[1][12:36] == theirs[1][12:36] == "  1.0000E-10  0.0000E+00"
+    drives, probes = _split(_rows(render(deck(name)).splitlines()), name)
+    their_drives, their_probes = _split(_rows(oracle(name)), name)
+    assert drives and probes
+    # each EX 4's set current: the CURRENT columns of its drive row, the
+    # deck's own amplitude and phase (1.4142 at 0 deg on the single-drive
+    # decks; 1.4142 at 0 and at -90 deg on the cardioid)
+    for ours, theirs in zip(drives, their_drives, strict=True):
+        assert ours[36:60] == theirs[36:60]
+        assert "1.4142E+00" in ours[36:60]
+    # each probe's written 1e-10 V: the VOLTAGE columns of its row
+    for ours, theirs in zip(probes, their_probes, strict=True):
+        assert ours[12:36] == theirs[12:36] == "  1.0000E-10  0.0000E+00"
 
 
 @pytest.mark.parametrize("name", SERVED)
 def test_the_drive_row_is_byte_identical_to_the_probe_stripped_deck(name):
-    with_probe = _rows(render(deck(name)).splitlines())
+    with_probe, _ = _split(_rows(render(deck(name)).splitlines()), name)
     without = _rows(render(without_probes(deck(name))).splitlines())
-    assert len(without) == 1
-    assert with_probe[0] == without[0]
+    assert len(without) == _n_drives(name)
+    assert with_probe == without
 
 
 @pytest.mark.parametrize("name", SERVED)
 def test_the_drive_row_impedance_agrees_with_the_oracle(name):
-    ours = _cells(_rows(render(deck(name)).splitlines())[0])
-    theirs = _cells(_rows(oracle(name))[0])
-    z_ours, z_theirs = complex(ours[4], ours[5]), complex(theirs[4], theirs[5])
-    assert abs(z_ours - z_theirs) <= tolerance(name) * abs(z_theirs), (z_ours, z_theirs)
+    drives, _ = _split(_rows(render(deck(name)).splitlines()), name)
+    their_drives, _ = _split(_rows(oracle(name)), name)
+    for row, their_row in zip(drives, their_drives, strict=True):
+        ours, theirs = _cells(row), _cells(their_row)
+        z_ours, z_theirs = complex(ours[4], ours[5]), complex(theirs[4], theirs[5])
+        assert abs(z_ours - z_theirs) <= tolerance(name) * abs(z_theirs), (
+            z_ours,
+            z_theirs,
+        )
 
 
 def test_the_loadless_control_is_what_the_dipole_tolerance_is_measured_from():
@@ -194,17 +226,19 @@ def test_the_loadless_control_is_what_the_dipole_tolerance_is_measured_from():
 
 @pytest.mark.parametrize("name", SERVED)
 def test_the_probe_row_carries_the_load_current_and_its_own_arithmetic(name):
-    rows = _rows(render(deck(name)).splitlines())
-    ours, theirs = _cells(rows[1]), _cells(_rows(oracle(name))[1])
-    i_ours, i_theirs = complex(ours[2], ours[3]), complex(theirs[2], theirs[3])
+    _, probes = _split(_rows(render(deck(name)).splitlines()), name)
+    _, their_probes = _split(_rows(oracle(name)), name)
     limit = FOLDED_TOLERANCE if name == "0192" else DIPOLE_CURRENT_TOLERANCE
-    assert abs(i_ours - i_theirs) <= limit * abs(i_theirs), (i_ours, i_theirs)
-    # Z = V/I, Y = I/V, P = 0.5 Re(V I*), all of the row's own numbers
-    v = complex(ours[0], ours[1])
-    z, y, p = complex(ours[4], ours[5]), complex(ours[6], ours[7]), ours[8]
-    assert abs(z - v / i_ours) <= 1e-3 * abs(z)
-    assert abs(y - i_ours / v) <= 1e-3 * abs(y)
-    assert abs(p - 0.5 * (v * i_ours.conjugate()).real) <= 1e-3 * abs(p)
+    for row, their_row in zip(probes, their_probes, strict=True):
+        ours, theirs = _cells(row), _cells(their_row)
+        i_ours, i_theirs = complex(ours[2], ours[3]), complex(theirs[2], theirs[3])
+        assert abs(i_ours - i_theirs) <= limit * abs(i_theirs), (i_ours, i_theirs)
+        # Z = V/I, Y = I/V, P = 0.5 Re(V I*), all of the row's own numbers
+        v = complex(ours[0], ours[1])
+        z, y, p = complex(ours[4], ours[5]), complex(ours[6], ours[7]), ours[8]
+        assert abs(z - v / i_ours) <= 1e-3 * abs(z)
+        assert abs(y - i_ours / v) <= 1e-3 * abs(y)
+        assert abs(p - 0.5 * (v * i_ours.conjugate()).real) <= 1e-3 * abs(p)
 
 
 @pytest.mark.parametrize("name", SERVED)
