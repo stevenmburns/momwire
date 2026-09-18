@@ -159,3 +159,30 @@ adding any further lever.
    laptop.
 4. STATUS.md rewritten for phase 2; PR to momwire. Steve merges. Nothing on
    the issue until then.
+
+## Amendment 1 (2026-09-18, after the build, before the Skylake ladder was read): unit C landed half
+
+`_field_galerkin_block` did NOT get `out=Z, scale=-1`. Two reasons, both
+measured by the builder and both pinned by tests (`test_crossing_sparse_1109.py`,
+`test_p2c_5` and `test_p2c_6`):
+
+1. `_acc.assemble_field_galerkin` declares its target `py::array_t<...,
+   c_style>` without `forcecast`, so a column-major array is handed to the C++
+   as a C-contiguous COPY and every accumulation is lost — the call returns
+   cleanly and writes nothing (12 nonzeros into a C-ordered target, 0 into an
+   F-ordered one, same call). The buried Z is column-major by momwire#136's
+   decision, so `out=Z` would have silently zeroed the below/below remainder
+   and both transmitted blocks. That is a latent hazard for any caller of the
+   binding today and is filed as its own follow-up.
+2. Even on a C-contiguous target the observer loop chunks, and a basis row
+   whose support straddles a chunk boundary accumulates across chunks —
+   `Z − (c₁ + c₂)` becomes `(Z − c₁) − c₂`. At 150 radials `chunk` is 1, so
+   every row straddles; a fix is a reassociation and needs the 1e-12 gate, not
+   the bit gate unit C was registered under.
+
+**Consequence, registered before reading the ladder:** ONE `(n, n)` transient
+stays on BOTH paths, the field block's `Q` (1.05 GB at 150 radials). P2-1's
+prediction band (1.3–2.0 GB) was written without it and should read
+2.3–3.0 GB; the BAR (2.5 GB) stands. P2-2's band moves the same way; its bar
+stands. The rest of unit C landed as registered: the ends and the self
+completions accumulate their support in place, bit-identically.

@@ -1,3 +1,116 @@
+# momwire#1029 phase 2 / #1109: where this branch stands
+
+Rewritten 2026-09-18 on the day the gates ran. Phase 1's status is kept below
+under its own heading, unedited; `PLAN-phase2.md` is the registration and
+carries Amendment 1 (unit C landed half, and why).
+
+**Everything registered is built and gated, and every bar is hit.** Four units
+on `fix/1109-crossing-columns`, off momwire main 5bfc731 (rebased onto the
+0.59.0 bump before the PR):
+
+| commit | unit |
+|---|---|
+| `ca59663` | the registration, the attribution probe and its three records |
+| `83417ab` | **A** — the crossing axis carries its basis samples as a CSR |
+| `d2a4262` | **B** — `rows=` reaches the crossing family; the contract hardens |
+| `f233aaa` | **C** — the ends' and completions' full-size transients go (the field block's stays: Amendment 1) |
+| `c32a534` | **D** — the route's algebra moves beside its check |
+| `8d3ef0b` | the laptop records: P2-6, P2-7, P2-8 and the probe |
+| (this commit) | the Skylake and laptop ladder records, and this rewrite |
+
+## What the memory was, and what it is
+
+Attributed phase by phase on the Skylake box at 150 radials (`p2mem_150_*`),
+the 8.55 GB peak was: `axis_data`'s DENSE basis samples 4.13 GB, `_main_split`
+2.60 GB (t_main + the far-direct blocks' dense row weights, 528 MB × 4),
+`self_completions` 1.99 GB, the ends' own block 1.06 GB, each field block
+1.05 GB, Z 1.1 GB. The `_row_weights` line momwire#1109 named was the straw,
+not the floor. After phase 2 the crossing family builds no `(n, n)` array on
+either path; what is left at the peak is Z, `t_main`, the field block's `Q`
+(Amendment 1) and the batched designed-tables window.
+
+## Gate table
+
+| gate | bar | measured | |
+|---|---|---|---|
+| **P2-1** route peak RSS @150, Skylake | ≤ 2.5 GB (from 8394 MB) | **2311.5 MB** | HIT (band 1.3–2.0 missed high; Amendment 1 explains the 1.05 GB) |
+| **P2-2** dense peak RSS @150, Skylake | ≤ 4.0 GB (from 8424 MB) | **3366.4 MB** | HIT |
+| **P2-3** route warm s @150 / @48, Skylake | ≤ 18.15 / ≤ 2.63 | **6.998 / 1.661** | HIT, 2.6× / 1.6× under phase 1 |
+| **P2-4** dense warm s @150, Skylake | ≤ 131 | **116.2** | HIT |
+| **P2-5** the 150 rung on the LAPTOP under `prlimit --as=8G` | runs (phase 1: REFUSED both modes) | **route 9.53 s / 2308 MB; dense 208.8 s / 3390 MB** | HIT |
+| **P2-6** route = dense, `g1_route.py` 4 / 12 / 48, Skylake | G1a ≤ 1e-9, G1b ≤ 1e-8, G1c ≤ 1e-8 | 4.2e-13 / 4.4e-13 / 2.4e-13; 6.8e-13 / 6.7e-13 / 3.9e-13; 6.1e-13 / 6.1e-13 / 2.0e-13 | HIT (laptop rows in `p2_g1_xps13.jsonl` agree) |
+| **P2-7** default path vs main, 4 and 12 radials | ≤ 1e-12 on Z, coefficients, Z_in | Z **7.8e-18**; coefficients 3.0e-14 / 5.9e-14; Z_in 3.0e-14 / 5.9e-14 | HIT; the sha moved ONCE, at unit A (`4a15d55c…`→`58124baf…`, `a28d9ef6…`→`af44d749…`); B, C and D each bit-identical to the unit before |
+| **P2-8** the `rows=` contract, `s_ab_gates.py --sb` | non-requested rows exactly 0; requested rows ≤ 1e-12; plan equal | requested rows **0.0** from the full fill; non-requested **0.0**; `rows=[]` fill **0.0**; plan and `q_factor` equal | HIT |
+| **P2-9** lint; default lane; the crossing suites; `make crossgate` on Skylake | green | ruff check + format clean; default lane **5521 passed / 5 skipped / 4 xfailed** (383 s, laptop); 17 crossing/route files green after every unit; crossgate **38 passed** (274 s, Skylake) | HIT |
+
+Pinned constants byte-identical to `ca59663`: `_NEAR_Q`, `_FAR_Q`, `_ADM_ETA`,
+`_CLUSTER_LEAF_SEGS`, `_ACA_COST_GUARD`, `_ACA_TOL`, `_CROSS_RTOL`,
+`_CORNER_RTOL`, `_FAR_GROWTH`, `_NEAR_GROWTH`, `_PLANE_TOL`.
+
+## The ladder, phase 2 against phase 1, on the same box
+
+**smburns-Z170-WS, i7-6700K, 8 threads, 40 GB cap, OMP 8, AVX2 accelerator**
+(`p2_g3_skylake.jsonl` against `g3_skylake.jsonl`), warm seconds and peak RSS:
+
+| radials | dense s ph1 → ph2 | route s ph1 → ph2 | speedup ph1 → ph2 | dense MB ph1 → ph2 | route MB ph1 → ph2 | ΔZ_in |
+|---:|---|---|---|---|---|---:|
+| 12 | 1.260 → 1.248 | 0.676 → **0.610** | 1.86× → 2.05× | 263 → 236 | 259 → 224 | 6.8e-13 |
+| 24 | 3.171 → 3.004 | 1.083 → **0.915** | 2.93× → 3.28× | 487 → 454 | 476 → 346 | 5.1e-13 |
+| 48 | 10.983 → 9.941 | 2.627 → **1.661** | 4.18× → 5.98× | 1065 → 641 | 1044 → 626 | 6.1e-13 |
+| 96 | 48.282 → 42.512 | 8.187 → **3.636** | 5.90× → 11.69× | 3582 → 1550 | 3575 → 1231 | 8.5e-13 |
+| 150 | 130.933 → **116.179** | 18.148 → **6.998** | 7.21× → **16.60×** | 8424 → **3366** | 8394 → **2312** | 5.9e-13 |
+
+Fill / solve at 150: dense 108.579 / 7.600 s, route 6.982 / 0.0157 s. The
+route's fill is now linear in N from 12 to 150 (0.61 → 7.0 s over 12.5× the
+unknowns) and the crossing family no longer scales it: what remains is the
+narrowed pair fills and the designed tables.
+
+**And on the laptop (xps13, i7-8550U, 8 GB address-space cap, OMP 4),
+`p2_g3_xps13_150.jsonl`:** the rung phase 1 could not run at all: dense
+208.8 s / 3390 MB, route 9.53 s / 2308 MB, 21.9×, ΔZ_in 2.7e-12. **A 150-radial
+buried screen solves on a 16 GB laptop in ten seconds.**
+
+## What the route is now
+
+Unchanged in what it computes (P2-6, identical digits to phase 1 at 4 and 12
+radials); changed in where and how. The algebra lives in
+`_rotational_symmetry.{dof_groups, observer_rows, harmonic_zero_block, solve,
+compute_impedance}` beside the check, with `BSplineSolver`'s five methods as
+one-line delegations (unit D). The buried fill under `rows=` now leaves every
+row outside the request EXACTLY zero: the crossing family answers
+`(t[R, :], t[:, R])` from one evaluation of the kernel tables and one ACA
+factorisation per far block (a spy gate asserts the call counts are equal
+with and without `rows=`), and the routing composes
+`Z[R] -= t_r; Z[R] -= t_c.T; Z[R] += s_r`. `R` is derived from the segment
+request through the polynomial mask, all-or-nothing per basis, refused by
+name otherwise.
+
+## Follow-ups (filed or to file; none in this PR)
+
+1. **The field-block accumulation** (Amendment 1): a `scale` argument on
+   `assemble_field_galerkin`, a strided or refused target instead of the
+   silent C-contiguous copy, and then `_field_galerkin_block(out=Z)` under the
+   1e-12 gate. Removes the last `(n, n)` transient beyond Z on the route
+   (≈ 1.05 GB at 150) and one of two on the dense path.
+2. **The compact Z** for the route, `(|R|, n)`: the four narrowed fills and the
+   chunked accumulator write into a full Z by observer index. With 1 above,
+   the route's floor would be the tables window.
+3. **The batched designed-tables window** in `_main_split` (≈ 4 × the largest
+   `_tables` output) is the route's next peak term; chunk the direct batch
+   over blocks.
+4. `_ends_and_corner_reversed` (razor / SG only) still allocates its own
+   `(n, n)`; the same `out=` treatment if razor is ever run at scale.
+5. Six historical scratch probes (`813-reversed-block/probe{1,3,4,5}*`,
+   `813-node-derivations/probe1_sw_by_parts.py`, `936-study/probe10_fd_correction.py`)
+   read the removed `ax["F"]` keys. Left as the record of their own commits;
+   they need `.toarray()` to re-run.
+6. The unburied deck and the general drive (phase 3), as `PLAN-phase2.md` §1
+   lists them.
+
+---
+
+# Phase 1 (2026-09-17), kept as written
+
 # momwire#1029 phase 1: where this branch stands
 
 Rewritten 2026-09-17 on the day the route landed. It supersedes the earlier
