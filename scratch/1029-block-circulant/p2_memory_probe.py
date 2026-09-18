@@ -25,6 +25,7 @@ import warnings
 from pathlib import Path
 
 import numpy as np
+import scipy.sparse as _sp
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from feasibility import GROUND  # noqa: E402
@@ -41,16 +42,31 @@ def _status():
     return out
 
 
-def _nbytes(x):
+def _bytes_of(x):
+    """Bytes an array or a scipy sparse matrix holds (momwire#1109 put the
+    axis samples and the row weights in CSR, and a CSR's cost is its three
+    buffers, not its shape)."""
     if isinstance(x, np.ndarray):
-        return {"shape": list(x.shape), "mb": round(x.nbytes / 2**20, 1)}
+        return int(x.nbytes)
+    if _sp.issparse(x):
+        return int(x.data.nbytes + x.indices.nbytes + x.indptr.nbytes)
+    return 0
+
+
+def _nbytes(x):
+    if isinstance(x, np.ndarray) or _sp.issparse(x):
+        return {
+            "shape": list(x.shape),
+            "mb": round(_bytes_of(x) / 2**20, 3),
+            "nnz": int(x.nnz) if _sp.issparse(x) else None,
+        }
     if isinstance(x, tuple):
-        return [_nbytes(e) for e in x if isinstance(e, np.ndarray)]
+        return [_nbytes(e) for e in x if isinstance(e, np.ndarray) or _sp.issparse(e)]
     if isinstance(x, dict):
         big = {
             k: _nbytes(v)
             for k, v in x.items()
-            if isinstance(v, np.ndarray) and v.nbytes >= 2**20
+            if (isinstance(v, np.ndarray) or _sp.issparse(v)) and _bytes_of(v) >= 2**16
         }
         return big or None
     return None
@@ -104,7 +120,7 @@ def counted(name, fn, size_of):
 
 
 def _rw_size(out):
-    mb = sum(x.nbytes for x in out) / 2**20
+    mb = sum(_bytes_of(x) for x in out) / 2**20
     return mb, list(out[0].shape)
 
 

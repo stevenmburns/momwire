@@ -113,20 +113,23 @@ def test_a_tent_basis_samples_to_the_analytic_tents():
     u = ax["nodes"][:, 2] - ctx.geom.seg_l[ax["segof"], 2]  # local arc per node
     on0, on1 = ax["segof"] == 0, ax["segof"] == 1
     assert on0.any() and on1.any()
+    # The samples are a CSR since momwire#1109; the tents this test is about
+    # are the same numbers, read dense.
+    F, Fd = ax["F_csr"].toarray(), ax["Fd_csr"].toarray()
     # basis 0: the knot tent, rising on seg 0 and falling on seg 1
-    assert np.allclose(ax["F"][0, on0], u[on0] / h)
-    assert np.allclose(ax["F"][0, on1], 1.0 - u[on1] / h)
-    assert np.allclose(ax["Fd"][0, on0], 1.0 / h)
-    assert np.allclose(ax["Fd"][0, on1], -1.0 / h)
+    assert np.allclose(F[0, on0], u[on0] / h)
+    assert np.allclose(F[0, on1], 1.0 - u[on1] / h)
+    assert np.allclose(Fd[0, on0], 1.0 / h)
+    assert np.allclose(Fd[0, on1], -1.0 / h)
     # basis 1: the in-plane end tent, falling on seg 0 and absent on seg 1
-    assert np.allclose(ax["F"][1, on0], 1.0 - u[on0] / h)
-    assert np.all(ax["F"][1, on1] == 0.0) and np.all(ax["Fd"][1, on1] == 0.0)
+    assert np.allclose(F[1, on0], 1.0 - u[on0] / h)
+    assert np.all(F[1, on1] == 0.0) and np.all(Fd[1, on1] == 0.0)
     # the in-plane segment is graded toward the plane; the other is plain
     # Gauss at the fill's density
     assert on0.sum() > on1.sum() == CF._NEAR_Q
     # weights integrate the tents exactly (linear on each segment)
-    assert np.isclose((ax["F"][0] * ax["w"]).sum(), h)  # ∫ tent = h
-    assert np.isclose((ax["F"][1] * ax["w"]).sum(), h / 2)
+    assert np.isclose((F[0] * ax["w"]).sum(), h)  # ∫ tent = h
+    assert np.isclose((F[1] * ax["w"]).sum(), h / 2)
 
 
 def test_the_in_plane_end_lands_in_the_ends_table_with_the_derivations_sign():

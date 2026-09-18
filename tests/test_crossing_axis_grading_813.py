@@ -90,8 +90,12 @@ def test_the_defaults_are_the_constants(fs, coarse):
         panel_order=len(gx),
         q=CF._FAR_Q if coarse else CF._NEAR_Q,
     )
-    for key in ("nodes", "t", "w", "F", "Fd", "segof"):
+    for key in ("nodes", "t", "w", "segof"):
         assert np.array_equal(np.asarray(plain[key]), np.asarray(spelt[key])), key
+    # The samples are CSR since momwire#1109; bit-for-bit is read through
+    # `.toarray()`, which also pins the two axes' PATTERNS equal.
+    for key in ("F_csr", "Fd_csr"):
+        assert np.array_equal(plain[key].toarray(), spelt[key].toarray()), key
     assert len(plain["ends"]) == len(spelt["ends"])
 
 
