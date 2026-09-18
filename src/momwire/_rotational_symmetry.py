@@ -563,6 +563,49 @@ def sector_map(solver, tol_rel=TOL_REL) -> SectorMap:
 DRIVE_TOL = 1e-12
 
 
+def refuse_if_not_invariant(rhs, sectors):
+    """Refuse a right-hand side that is not the same on every sector.
+
+    `rhs` is (n_basis, n_columns); every column is judged together, against
+    the whole array's largest entry, which is how the Schur step applies
+    them. A vector with content in another harmonic would need the N-1
+    blocks this route does not build, so it is refused rather than solved
+    through the one block that exists.
+    """
+    r0 = rhs[sectors[0]]
+    scale = max(float(np.max(np.abs(rhs))), 1e-300)
+    for t in range(1, len(sectors)):
+        spread = float(np.max(np.abs(rhs[sectors[t]] - r0))) / scale
+        if spread > DRIVE_TOL:
+            raise RotationalSymmetryRefused(
+                f"rotational symmetry: the right-hand side differs "
+                f"between sector 0 and sector {t} by {spread:.3e} of "
+                f"its largest entry, so the drive is not "
+                f"rotation-invariant and needs every harmonic. This "
+                f"route serves the axis-symmetric drive only. Drop "
+                f"rotational_symmetry=True to solve this deck densely."
+            )
+
+
+def check_drive(v, kcl_A, sectors):
+    """The drive guard, BEFORE the fill (momwire#1029 phase 2b).
+
+    Every other refusal on this route is frozen at construction, so a ticked
+    box on the wrong design costs nothing. This one is about the right-hand
+    side rather than the deck, and it used to sit inside the Schur step —
+    after a fill on `compute_impedance`, and after k fills on a sweep.
+
+    It does not have to. `_feed_drive_and_readout` never reads Z and the
+    fill never reads the drive, so the two commute; checking here judges
+    EXACTLY the two objects `solve` will apply Z^-1 to (the source vector,
+    and the constraint rows), and there is nothing else the solve could
+    reach that this does not.
+    """
+    refuse_if_not_invariant(np.asarray(v, dtype=np.complex128)[:, None], sectors)
+    if kcl_A.shape[0]:
+        refuse_if_not_invariant(kcl_A.T.astype(np.complex128), sectors)
+
+
 def dof_groups(solver, wire_basis_global, n_basis_total):
     """`(sectors, axial)`: one global-index array per sector image, and
     the axial group's.
@@ -666,19 +709,13 @@ def solve(solver, Z, v, kcl_A, sectors, axial):
 
     def z_inv(rhs):
         rhs = np.asarray(rhs, dtype=np.complex128).reshape(rhs.shape[0], -1)
+        # Kept here as well as in `check_drive` (momwire#1029 phase 2b), and
+        # not as belt and braces: this is the guard for every caller that
+        # reaches the solve directly — `BSplineSolver._rotational_solve` and
+        # the scratch harnesses that drive it — where no `compute_impedance`
+        # has run the early one.
+        refuse_if_not_invariant(rhs, sectors)
         r0 = rhs[sectors[0]]
-        scale = max(float(np.max(np.abs(rhs))), 1e-300)
-        for t in range(1, n):
-            spread = float(np.max(np.abs(rhs[sectors[t]] - r0))) / scale
-            if spread > DRIVE_TOL:
-                raise RotationalSymmetryRefused(
-                    f"rotational symmetry: the right-hand side differs "
-                    f"between sector 0 and sector {t} by {spread:.3e} of "
-                    f"its largest entry, so the drive is not "
-                    f"rotation-invariant and needs every harmonic. This "
-                    f"route serves the axis-symmetric drive only. Drop "
-                    f"rotational_symmetry=True to solve this deck densely."
-                )
         top = np.vstack([sq * r0, rhs[axial]])
         sol = scipy.linalg.lu_solve(lu, top)
         out = np.empty((rhs.shape[0], rhs.shape[1]), dtype=np.complex128)
@@ -710,12 +747,17 @@ def compute_impedance(solver):
     )
     n_basis_total = supp_seg.shape[0]
     sectors, axial = dof_groups(solver, wire_basis_global, n_basis_total)
-    solver._checkpoint()  # after geometry/basis, before the one-sector fill
-    Z = solver._compute_Z_operator_buried(
-        geom, supp_seg, polys, rows=observer_rows(solver, geom)
-    )
+    # The drive is built BEFORE the fill so its refusal lands before one
+    # (momwire#1029 phase 2b). Neither reads the other, and the fill is the
+    # expensive half, so this is the order that makes every refusal on the
+    # route cost milliseconds — on a sweep as much as on one solve.
     v, port_vectors, _vpf_T, all_voltages, kcl_con = solver._feed_drive_and_readout(
         geom, wire_knots, wire_basis_global, n_basis_total, kcl_A
+    )
+    check_drive(v, kcl_con, sectors)
+    solver._checkpoint()  # after geometry/basis/drive, before the one-sector fill
+    Z = solver._compute_Z_operator_buried(
+        geom, supp_seg, polys, rows=observer_rows(solver, geom)
     )
     solver._checkpoint()  # before the harmonic-0 solve
     coeffs = solve(solver, Z, v, kcl_con, sectors, axial)

@@ -79,7 +79,11 @@ def screen(n_radials=4, radial=RADIAL, azimuths=None, tilt=0.0):
     return wires
 
 
-def solver(n_radials=4, *, rotational_symmetry=True, wires=None, **kw):
+def solver(n_radials=4, *, rotational_symmetry=True, wires=None, cls=None, **kw):
+    """The deck, as a built solver. `cls` builds a SUBCLASS of
+    `BSplineSolver` from the same deck — the seam the phase-2b guards need,
+    since no deck can express a drive the route refuses."""
+    cls = BSplineSolver if cls is None else cls
     wires = screen(n_radials) if wires is None else wires
     n_w = len(wires)
     npe = [[6]] * (n_w - 2) + [[3], [8]]
@@ -96,7 +100,7 @@ def solver(n_radials=4, *, rotational_symmetry=True, wires=None, **kw):
     kwargs.update(kw)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        return BSplineSolver(**kwargs)
+        return cls(**kwargs)
 
 
 def refusal(**kw):
@@ -424,6 +428,101 @@ def test_an_empty_sweep_answers_with_the_empty_array_and_no_fill():
     z = s.compute_impedance_swept(np.zeros(0))
     assert z.shape == (0,) and z.dtype == np.complex128
     assert fills == []
+
+
+# ----------------------------------------------------------------------
+# Every refusal lands before a fill (momwire#1029 phase 2b)
+#
+# A ticked box on the wrong design must cost milliseconds, not a solve —
+# and on a SWEEP, not n_k solves. The six geometry refusals and the two
+# scope ones are frozen at construction and so are before a fill by
+# construction; the entry-point ones are the first line of their method.
+# The drive guard is the one that was not: it lives inside the Schur step,
+# which the route reached only after filling.
+# ----------------------------------------------------------------------
+
+
+class _SkewedDrive(BSplineSolver):
+    """A route solver whose right-hand side is NOT rotation-invariant.
+
+    No deck can express this — the two drives the route ever sees are
+    exactly invariant (phase 0's F2, gate S-0) — so the guard is reachable
+    only by building the vector the guard is about.
+    """
+
+    def _feed_drive_and_readout(self, geom, wire_knots, wbg, n_basis_total, kcl_A):
+        out = super()._feed_drive_and_readout(
+            geom, wire_knots, wbg, n_basis_total, kcl_A
+        )
+        sectors, _axial = self._rotational_dof_groups(wbg, n_basis_total)
+        v = out[0].copy()
+        v[sectors[1][0]] += 1.0
+        return (v, *out[1:])
+
+
+def test_a_drive_that_is_not_rotation_invariant_is_refused_before_any_fill():
+    """The guard moved AHEAD of the fill (momwire#1029 phase 2b).
+
+    `_feed_drive_and_readout` does not read Z and the fill does not read the
+    drive, so the two are free to swap — and swapped, a wrong drive is
+    refused for the price of a basis build instead of a solve.
+    """
+    s = solver(4, cls=_SkewedDrive)
+    fills = _count_fills(s)
+    with pytest.raises(RotationalSymmetryRefused) as exc:
+        s.compute_impedance()
+    assert "the drive is not rotation-invariant" in str(exc.value)
+    assert fills == []
+
+
+def test_a_bad_drive_costs_one_sweep_nothing_rather_than_n_k_fills():
+    """The same guard on the swept entry, which is where it matters: a loop
+    that refused on the k-th iteration would have filled k-1 times first."""
+    s = solver(4, cls=_SkewedDrive)
+    fills = _count_fills(s)
+    with pytest.raises(RotationalSymmetryRefused):
+        s.compute_impedance_swept(s.k * np.array(SPAN))
+    assert fills == []
+
+
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "compute_y_matrix",
+        "compute_port_solution",
+        "compute_y_matrix_swept",
+        "compute_port_solution_swept",
+    ],
+)
+def test_the_entry_point_refusals_cost_no_fill(entry):
+    """`compute_y_matrix_swept` is the one worth naming: its refusal comes
+    out of a GENERATOR, so it fires on the first `next()` rather than on the
+    call — early enough, but only because nothing fills before that."""
+    s = solver(4)
+    fills = _count_fills(s)
+    args = ([s.k * np.array(SPAN)],) if entry.endswith("_swept") else ()
+    with pytest.raises(RotationalSymmetryRefused):
+        getattr(s, entry)(*args)
+    assert fills == []
+
+
+def test_the_geometry_refusals_cost_no_fill(monkeypatch):
+    """The six §3 refusals are frozen at construction, so no fill could
+    rescue a deck that fails one — asserted rather than assumed, by making
+    the fill itself a failure for the duration."""
+    calls = []
+
+    def _no(self, *a, **kw):
+        calls.append(1)
+        raise AssertionError("filled while refusing")
+
+    monkeypatch.setattr(BSplineSolver, "_compute_Z_operator_buried", _no)
+    assert "sector 2's wire is +1.00 % longer" in refusal(
+        wires=screen(4, radial=[RADIAL, RADIAL, RADIAL * 1.01, RADIAL])
+    )
+    assert "not parallel to z" in refusal(wires=screen(4, tilt=0.04))
+    assert "the route needs N >= 2 sectors" in refusal(wires=screen(1))
+    assert calls == []
 
 
 # ----------------------------------------------------------------------
