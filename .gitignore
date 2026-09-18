@@ -17,3 +17,13 @@ smoke-out/
 docs/nec2_theory_manual.pdf
 docs/nec2_theory_manual.txt
 .coverage
+
+# Study block dumps. A .npz under scratch/ is a matrix re-dumped so a probe
+# can resume in seconds instead of re-solving — an intermediate, not an
+# answer, and the answer is the JSON receipt committed beside it
+# (scratch/1029-block-circulant/p2_default_path.py dumps a pre and a post,
+# then --compare writes p2_default_path.json, which IS the tracked result).
+# 25 MB in scratch/1029-block-circulant alone. antennaknobs has carried this
+# same rule since scratch/524-phase2; scoped to scratch/ so the one tracked
+# fixture, tests/data/same_edge_oracle_968.npz, is untouched.
+scratch/**/*.npz
