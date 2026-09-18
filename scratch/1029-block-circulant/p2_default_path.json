@@ -1,0 +1,47 @@
+{
+ "gate": "P2-7",
+ "bar": 1e-12,
+ "pass": true,
+ "decks": [
+  {
+   "radials": 4,
+   "n_basis": 255,
+   "sha_Z_pre": "4a15d55c1f99aa128cc96d61fc147c05",
+   "sha_Z_post": "58124baf3536a666c2c6bbe328ba605f",
+   "Z_bit_identical": false,
+   "coeffs_bit_identical": false,
+   "rel_dZ_max": 7.842324690321483e-18,
+   "rel_dc_max": 3.030433686408829e-14,
+   "rel_dzin": 2.978803173216275e-14,
+   "z_in_pre": [
+    78.13206040785384,
+    46.33767699982087
+   ],
+   "z_in_post": [
+    78.13206040785123,
+    46.337676999820175
+   ],
+   "P2_7": true
+  },
+  {
+   "radials": 12,
+   "n_basis": 695,
+   "sha_Z_pre": "a28d9ef602d7e21dab8f05223507439d",
+   "sha_Z_post": "af44d7492d3803153dafe4e7125d5b36",
+   "Z_bit_identical": false,
+   "coeffs_bit_identical": false,
+   "rel_dZ_max": 7.842324690321483e-18,
+   "rel_dc_max": 5.862234556716204e-14,
+   "rel_dzin": 5.875396166668657e-14,
+   "z_in_pre": [
+    52.60549571403222,
+    38.32422890638509
+   ],
+   "z_in_post": [
+    52.60549571403326,
+    38.32422890638877
+   ],
+   "P2_7": true
+  }
+ ]
+}

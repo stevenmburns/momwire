@@ -1,6 +1,6 @@
 {
  "_meta": {
-  "momwire": "/home/smburns/stevenmburns/momwire-wt-1029/src/momwire",
+  "momwire": "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/f5bf32ac-5d2a-4f21-b5a7-4892c15b82ab/scratchpad/mw-1109/src/momwire",
   "mode": "sb"
  },
  "decks": [
@@ -70,11 +70,11 @@
     ]
    ],
    "narrowed_calls": 2,
-   "removed_from_other_rows": 1245.0157799199683,
-   "other_rows_minus_control": 0.0,
+   "removed_from_other_rows": 22226.716499963393,
+   "empty_fill_max_abs": 0.0,
    "pair_work_on_kept_rows": 123007.50666519096,
    "S_B_not_vacuous": true,
-   "S_B_other_rows_are_control": true,
+   "S_B_other_rows_are_zero": true,
    "radials": 4,
    "n_basis": 255,
    "n_rows_requested": 86,
@@ -83,8 +83,8 @@
    "max_abs_diff_kept": 0.0,
    "rel_diff_kept": 0.0,
    "S_B_rows": true,
-   "rows_outside_nonzero": 165,
-   "rows_outside_max_abs": 20981.781633862305,
+   "rows_outside_nonzero": 0,
+   "rows_outside_max_abs": 0.0,
    "plan_full": {
     "r1_below": 12.662920509093315,
     "r1_above": 21.133257074507043
@@ -161,11 +161,11 @@
     ]
    ],
    "narrowed_calls": 2,
-   "removed_from_other_rows": 1245.0157799199696,
-   "other_rows_minus_control": 0.0,
+   "removed_from_other_rows": 22226.716499963393,
+   "empty_fill_max_abs": 0.0,
    "pair_work_on_kept_rows": 123007.50666519096,
    "S_B_not_vacuous": true,
-   "S_B_other_rows_are_control": true,
+   "S_B_other_rows_are_zero": true,
    "radials": 12,
    "n_basis": 695,
    "n_rows_requested": 86,
@@ -174,8 +174,8 @@
    "max_abs_diff_kept": 0.0,
    "rel_diff_kept": 0.0,
    "S_B_rows": true,
-   "rows_outside_nonzero": 605,
-   "rows_outside_max_abs": 20981.781633862305,
+   "rows_outside_nonzero": 0,
+   "rows_outside_max_abs": 0.0,
    "plan_full": {
     "r1_below": 12.662920509093317,
     "r1_above": 21.133257074507043
