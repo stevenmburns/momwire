@@ -937,7 +937,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "charge_support": ("spline",),
             "kernel": ("reduced", "extended"),
             "quadrature": ("converged",),
-            "solve_strategy": ("dense",),
+            # BOTH, default first. "sector" is the opt-in
+            # `rotational_symmetry=True` route (momwire#1029): a
+            # rotationally symmetric screen fills one sector and solves the
+            # harmonic-0 block, and no name on the roster says so — a
+            # consumer offering the flag reads it here or nowhere.
+            #
+            # The subclasses REPLACE this cell rather than extending it, so
+            # neither inherits "sector"; both declare `buried=False` and the
+            # route fills through the buried path, which is the same fact
+            # said twice.
+            "solve_strategy": ("dense", "sector"),
             # BOTH, default first. This row said ("segment-gap",) while the
             # constructor has always defaulted to feed_model="point" and
             # accepted either — so a consumer reading the row described a

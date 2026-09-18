@@ -18,6 +18,14 @@ What is gated:
 * **G4's half that is about code** — the flag off runs no route code, and
   every entry point but `compute_impedance` refuses rather than quietly
   handing back the dense answer.
+
+Phase 2b adds two more:
+
+* **the ROSTER** — `solve_strategy` carries "sector" beside "dense", dense
+  first, and the accelerated subclasses do not gain it;
+* **the SWEPT entry** — `compute_impedance_swept` serves the route instead of
+  refusing, returning the dense path's own contract, and every refusal still
+  lands before a fill.
 """
 
 from __future__ import annotations
@@ -28,7 +36,8 @@ import warnings
 import numpy as np
 import pytest
 
-from momwire import BSplineSolver
+from momwire import ArrayBlockSolver, BSplineSolver, HMatrixSolver, axes_for
+from momwire._capabilities import AXIS_VALUES
 from momwire._rotational_symmetry import RotationalSymmetryRefused
 
 WL = 42.2  # 40 m, the design's own band
@@ -348,3 +357,49 @@ def test_g1_the_route_still_matches_with_more_sectors():
     z_r = complex(np.atleast_1d(z_r)[0])
     assert abs(z_r - z_d) / abs(z_d) <= 1e-9
     assert np.max(np.abs(c_r - c_d)) / np.max(np.abs(c_d)) <= 1e-8
+
+
+# ----------------------------------------------------------------------
+# The roster (momwire#1029 phase 2b). The route is opt-in through a
+# constructor kwarg, so nothing downstream can discover it by name: a
+# consumer offering the flag has to read it off the capability row, which
+# is what these gate.
+# ----------------------------------------------------------------------
+
+
+def test_the_row_declares_the_sector_route_dense_first():
+    """`solve_strategy` gains "sector" beside "dense", in that order.
+
+    DEFAULT FIRST is the row's convention (`tests/test_feed_model_row.py`):
+    the first declared value must be what the constructor picks when nothing
+    is passed, so a consumer reading the row for "what does this solver do by
+    default" gets the right answer. Measured against the constructor rather
+    than asserted about the literal.
+    """
+    assert BSplineSolver.capabilities.axes["solve_strategy"] == ("dense", "sector")
+    assert solver(4, rotational_symmetry=False)._rotational_map is None
+    assert solver(4)._rotational_map is not None
+
+
+def test_the_sector_value_is_in_the_vocabulary_and_reaches_axes_for():
+    """`AXIS_VALUES` is the written-down spelling and `axes_for` is the one
+    place a consumer reads a row's axes from — a value declared on the row
+    but missing from either is a value nothing downstream can render."""
+    assert "sector" in AXIS_VALUES["solve_strategy"]
+    assert axes_for(BSplineSolver.capabilities)["solve_strategy"] == frozenset(
+        {"dense", "sector"}
+    )
+
+
+def test_the_accelerated_rows_do_not_gain_the_sector_route():
+    """Both subclasses REPLACE the cell rather than extending it, and both
+    declare `buried=False` — the route fills through the buried mixed-medium
+    path, which is exactly what their own row refuses. A row that inherited
+    "sector" here would publish a cell neither class reaches."""
+    for cls, want in (
+        (HMatrixSolver, ("aca",)),
+        (ArrayBlockSolver, ("element-block",)),
+    ):
+        assert cls.capabilities.axes["solve_strategy"] == want
+        assert cls.capabilities.buried is False
+        assert cls.capabilities.refusal("buried") is not None

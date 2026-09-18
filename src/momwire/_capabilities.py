@@ -98,7 +98,12 @@ AXIS_VALUES: Mapping[str, tuple[str, ...]] = {
     "charge_support": ("point", "dual-cell", "spline", "basis-implied"),
     "kernel": ("reduced", "extended"),
     "quadrature": ("converged", "nec5"),
-    "solve_strategy": ("dense", "aca", "element-block"),
+    # "sector": the harmonic-0 block-circulant solve of a rotationally
+    # symmetric screen (momwire#1029), opt-in by `rotational_symmetry=True`
+    # rather than by a `solve_strategy=` kwarg — it is a value of this axis
+    # because it is what the solve IS MADE OF, which is the question this
+    # table answers, and not a claim about how it is reached.
+    "solve_strategy": ("dense", "aca", "element-block", "sector"),
     "feed_model": ("segment-gap", "point-gap", "node-port"),
 }
 
