@@ -734,7 +734,11 @@ def test_hmatrix_differs_from_bspline_in_the_buried_cell_and_the_solve_axis():
     c, b = HMatrixSolver.capabilities, BSplineSolver.capabilities
     assert b.buried and not c.buried
     assert c.axes["solve_strategy"] == ("aca",)
-    assert b.axes["solve_strategy"] == ("dense",)
+    # The parent carries TWO values since momwire#1029: the dense solve and
+    # the opt-in sector route. The subclass REPLACES the cell rather than
+    # extending it, which is what keeps "sector" off a row whose `buried`
+    # refusal the route would need.
+    assert b.axes["solve_strategy"] == ("dense", "sector")
     # ...and NOTHING else moves: same basis, same testing, same kernel.
     assert {k: v for k, v in c.axes.items() if k != "solve_strategy"} == {
         k: v for k, v in b.axes.items() if k != "solve_strategy"
