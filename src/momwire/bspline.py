@@ -177,6 +177,15 @@ _HAVE_FIELD_GALERKIN_ACCEL = (
     and getattr(_acc, "field_galerkin_914", False)
     and hasattr(_acc, "assemble_field_galerkin")
 )
+# momwire#1115 part 3. The buried Z is column-major (momwire#136), so
+# accumulating into it directly needs a kernel that addresses its target
+# through ITS OWN strides. `field_galerkin_target_1115` does not promise that
+# -- that contract REFUSES a column-major Q -- so the `out=` lever gates on
+# this flag and nothing weaker.
+_HAVE_FIELD_GALERKIN_STRIDED = _HAVE_FIELD_GALERKIN_ACCEL and getattr(
+    _acc, "field_galerkin_strided_1115", False
+)
+
 # Which of the accelerator's two routes to the same numbers to take. The
 # fused one skips `Jc` entirely and is what production wants: on the
 # 48-radial screen it assembles in 0.70 s against the other's 1.51 s
@@ -5118,6 +5127,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         src,
         t_src,
         W_src,
+        *,
+        out=None,
+        scale=1.0,
     ):
         """`Q[m, n]` — the FIELD-form Galerkin block of a projected pair
         table, over a rectangular (observer segments × source segments)
@@ -5137,7 +5149,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_obs = len(obs_idx)
         n_src = len(src_idx)
         n_basis = polys.shape[0]
-        Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        # `out=` accumulates into the caller's matrix instead of returning a
+        # fresh one, which is the whole point of the lever: at 150 radials the
+        # (n, n) transient this would otherwise allocate is 1.05 GB. `scale`
+        # rides with it, so `out=Z, scale=-1.0` IS `Z -= block` with no
+        # temporary. NOT bit-identical to the two-step form and not meant to
+        # be -- the observer loop below chunks, and a basis row whose support
+        # straddles a chunk boundary reassociates: `Z - (c1 + c2)` becomes
+        # `(Z - c1) - c2`.
+        Q = np.zeros((n_basis, n_basis), dtype=np.complex128) if out is None else out
         if n_obs == 0 or n_src == 0:
             return Q
         # The order is INFERRED from the arrays handed in and never asked of
@@ -5198,6 +5218,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     i0,
                     Q,
                     _FIELD_GALERKIN_FUSED,
+                    scale,
                 )
                 continue
             fq = proj.reshape(i1 - i0, q, n_src, q)
@@ -5218,7 +5239,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     if cols.size == 0:
                         continue
                     J_blk = Jc[:, :, pml[:, None], pn[cols][None, :]]
-                    Q[np.ix_(rows, cols)] += np.einsum(
+                    Q[np.ix_(rows, cols)] += scale * np.einsum(
                         "mp,pPmn,nP->mn",
                         polys[rows, a, :],
                         J_blk,
@@ -5632,6 +5653,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 image_Z_weighted=self._image_Z_weighted,
                 image_tangent_dot=self._image_tangent_dot,
                 field_galerkin_block=self._field_galerkin_block,
+                field_galerkin_out_ok=_HAVE_FIELD_GALERKIN_STRIDED,
                 apply_loading=self._apply_loading,
             ),
             below_segments=self._below_segments,
