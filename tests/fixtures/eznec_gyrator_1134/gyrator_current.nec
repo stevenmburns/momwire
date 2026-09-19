@@ -1,0 +1,15 @@
+CM momwire#1134 gate: the same current, spelled as EZNEC spells it in NEC-2
+CM ! Wire #2 for virtual segments.
+CM ! NT #1 is an EZNEC current source
+CM -Y12*V = -j*1.414214j = 1.414214 A, the native deck's EX 4 exactly.
+CE
+GW 1,10,0.,0.,-2.5,0.,0.,2.5,.001
+GW 2,4,999.98,999.98,999.98,1000.,1000.,1000.,1.0000E-4
+GE 0,-1
+FR 0,1,0,0,30.
+GN -1
+EX 0,2,2,0,0.,1.414214
+NT 2,2,1,5,0.,0.,0.,1.,0.,0.
+PQ 0
+XQ 0
+EN

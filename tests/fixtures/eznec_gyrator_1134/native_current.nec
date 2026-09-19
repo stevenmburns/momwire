@@ -1,0 +1,11 @@
+CM momwire#1134 gate: a native current source at node 5
+CM One 10-segment free-space dipole, EX 4 of 1.414214 A at its centre knot.
+CE
+GW 1,10,0.,0.,-2.5,0.,0.,2.5,.001
+GE 0,-1
+FR 0,1,0,0,30.
+GN -1
+EX 4,1,5,0,1.414214,0.
+PQ 0
+XQ 0
+EN
