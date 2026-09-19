@@ -297,8 +297,8 @@ def test_p2b_6_two_radius_answers_the_half_of_each_block_the_routing_reads():
 # `_field_galerkin_block`'s `Q` (1.05 GB). The first two are the ends' and the
 # node's shapes, each confined to a handful of basis rows and columns, so they
 # scatter into the caller's block instead — bit-identically, which is what
-# these tests pin. The third is still blocked, but on the reassociation alone
-# now that momwire#1115 has fixed the binding; see the two at the bottom.
+# these tests pin. The third is no longer blocked at all: momwire#1115 part 3
+# takes it, under a tolerance gate rather than a bit one; see the two below.
 # ---------------------------------------------------------------------------
 
 
@@ -373,33 +373,37 @@ def test_p2c_4_self_completions_build_no_full_size_block(axes, monkeypatch):
     assert np.count_nonzero(dest), "the completions wrote nothing"
 
 
-def test_p2c_5_the_field_galerkin_accelerator_refuses_a_column_major_target():
-    """The other reason `_field_galerkin_block` does NOT take an `out=Z`
-    (momwire#1029 phase 2 unit C), now that the first one is gone.
+def test_p2c_5_the_field_galerkin_accelerator_takes_a_column_major_target():
+    """Unit C's blocker, now gone, and pinned so it cannot come back.
 
-    It WAS that `_acc.assemble_field_galerkin` declared `Q` as
+    Two things used to stop `_field_galerkin_block` taking an `out=Z`. The
+    first was that `_acc.assemble_field_galerkin` declared `Q` as
     `py::array_t<..., c_style>` without `forcecast`: pybind11 answered a
     column-major array by handing the C++ a C-contiguous COPY, so the call
-    returned cleanly and every accumulation was lost. The buried Z is
-    column-major by momwire#136 — `scipy.linalg.solve(overwrite_a=True)` can
-    only factor in place on one — so `out=Z` would have silently zeroed the
-    remainder and both transmitted blocks. momwire#1115 made that call a
-    REFUSAL, which is what this now pins: a target the kernel cannot
-    accumulate into has to be something the caller can tell apart from
-    success.
+    returned cleanly and every accumulation was lost. momwire#1115 part 1 made
+    that a REFUSAL, and part 3 made it work -- the two scatters address the
+    target through its own strides. The buried Z is column-major by
+    momwire#136 (`scipy.linalg.solve(overwrite_a=True)` factors in place only
+    on one), so that is exactly the shape handed over.
 
-    What still stands is the second half: the observer loop chunks, and a
-    basis row whose support straddles a chunk boundary accumulates across
-    chunks, so `Z − (c₁ + c₂)` becomes `(Z − c₁) − c₂`. At 150 radials
-    `chunk` is 1 and every row straddles. The lever is therefore a
-    reassociation and lands under a 1e-12 gate, not the bit gate unit C was
-    registered under — which is why it is still not taken here.
+    The second reason still stands and is NOT a blocker, only a change of
+    gate: the observer loop chunks, and a basis row whose support straddles a
+    chunk boundary accumulates across chunks, so `Z - (c1 + c2)` becomes
+    `(Z - c1) - c2`. At 150 radials `chunk` is 1 and every row straddles. The
+    lever is therefore a reassociation, and lands under the 1e-12 gate
+    `p2_default_path.py` carries rather than the bit gate unit C was
+    registered under.
+
+    What this pins is the equality that makes the lever safe to take at all:
+    the same numbers whichever way the target is laid out. If a future edit
+    reintroduces a copy, the column-major result stops matching and this
+    fails -- which the old silent-copy binding could not be made to do.
     """
     acc = pytest.importorskip("momwire._accelerators")
     if not bspline._HAVE_FIELD_GALERKIN_ACCEL:
         pytest.skip("no field-galerkin accelerator in this build")
-    if not getattr(acc, "field_galerkin_target_1115", False):
-        pytest.skip("built before momwire#1115's accumulation-target contract")
+    if not getattr(acc, "field_galerkin_strided_1115", False):
+        pytest.skip("built before momwire#1115 part 3's strided target")
     from test_field_galerkin_914 import _good_args
 
     args = _good_args()
@@ -410,10 +414,12 @@ def test_p2c_5_the_field_galerkin_accelerator_refuses_a_column_major_target():
 
     args_f = _good_args()
     args_f["Q"] = np.zeros((n, n), dtype=np.complex128, order="F")
-    with pytest.raises(ValueError, match="C-contiguous"):
-        acc.assemble_field_galerkin(**args_f)
-    assert np.count_nonzero(args_f["Q"]) == 0, (
-        "the column-major call wrote through the refusal"
+    acc.assemble_field_galerkin(**args_f)
+    assert np.count_nonzero(args_f["Q"]), (
+        "the column-major call wrote nothing -- the copy is back"
+    )
+    assert np.array_equal(args_f["Q"], args["Q"]), (
+        "the column-major target got different numbers from the C-contiguous one"
     )
 
 
