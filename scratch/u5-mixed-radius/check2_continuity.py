@@ -100,10 +100,21 @@ _orig_cross = _crossing_fill.cross_complete_block_split
 _orig_bnd = _crossing_fill._bnd_and_corner
 
 
-def scope(media, groups, grounded, polylines, ground_z, radii):
+def scope(media, groups, grounded, polylines, ground_z, radii, *, two_radius=False):
+    # `two_radius` added 2026-09-19 (momwire#1140): production grew the kwarg
+    # after this study ran, and without it the harness dies on a TypeError
+    # before any rung. Forwarded unchanged — the control gate (patched must
+    # reproduce the unpatched solver bit for bit at a_A == a_B) is what says
+    # this adaptation moved no measured quantity.
     radii = np.asarray(radii, dtype=float)
     return _orig_scope(
-        media, groups, grounded, polylines, ground_z, np.full_like(radii, radii.max())
+        media,
+        groups,
+        grounded,
+        polylines,
+        ground_z,
+        np.full_like(radii, radii.max()),
+        two_radius=two_radius,
     )
 
 
@@ -127,12 +138,37 @@ def cross(ctx, a_idx, b_idx, A, B, **kw):
     return t1
 
 
-def self_completions(ctx, ax_b, ax_a):
+def self_completions(ctx, ax_b, ax_a, *, rows=None, out=None):
+    # `rows` / `out` added 2026-09-19 (momwire#1140): production grew the
+    # momwire#1029 phase-2 partial answer and the unit-C accumulate-into-Z
+    # contract after this study ran, and the old three-dense-adds body no
+    # longer satisfies either. Ported from production's own body so the
+    # scatter, the live-row union and the flush are the SAME code path; the
+    # only difference stays what it always was — a per-medium radius from the
+    # rule instead of one `ctx.a_wire`.
+    #
+    # LIMIT OF THE CONTROL GATE: at a_A == a_B the cross block sets
+    # PENDING["fix"] to None, so the control validates this port's scatter but
+    # NOT the fix branch below. That branch is exercised only on a spread rung,
+    # where there is no bit-identical reference to check it against.
     _eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
     gz = float(ctx.ground_z)
     omega, eps0 = ctx.omega, ctx.eps
     r_above, r_below = self_radii(STATE["rule"], STATE["a_A"], STATE["a_B"])
-    total = np.zeros((ax_b["n_basis"],) * 2, dtype=np.complex128)
+    n = ax_b["n_basis"]
+    if rows is not None:
+        dest = np.zeros((rows.size, n), dtype=np.complex128)
+    else:
+        dest = out if out is not None else np.zeros((n, n), dtype=np.complex128)
+    acc = _crossing_fill._CompletionScatter(
+        dest,
+        n,
+        rows,
+        np.union1d(
+            _crossing_fill._end_live_rows(ax_b),
+            _crossing_fill._end_live_rows(ax_a),
+        ),
+    )
     for ax, k, wgt, eps, a in (
         (ax_b, k_m, a_m, eps_m, r_below),
         (ax_a, k_p, c2, eps0, r_above),
@@ -143,11 +179,11 @@ def self_completions(ctx, ax_b, ax_a):
             live, row_term, col_term, corner = _orig_bnd(ax, k, a, gz, mirror=mirror)
             if live.size == 0:
                 continue
-            total[live, :] += beta * row_term
-            total[:, live] += beta * col_term
-            total[np.ix_(live, live)] += beta * corner
-    if PENDING.get("fix") is not None:
-        total += PENDING["fix"]
+            acc.add(live, beta, row_term, col_term, corner)
+    total = acc.flush()
+    fix = PENDING.get("fix")
+    if fix is not None:
+        total += fix[rows, :] if rows is not None else fix
     return total
 
 
