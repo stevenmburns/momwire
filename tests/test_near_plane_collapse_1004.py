@@ -451,9 +451,9 @@ def test_the_cpp_and_numpy_assemblies_agree_at_the_raised_order(gap, factor):
     seen = []
     real = BSplineSolver._field_galerkin_block
 
-    def spy(self, *args):
+    def spy(self, *args, **kw):
         seen.append((self, args))
-        return real(self, *args)
+        return real(self, *args, **kw)
 
     BSplineSolver._field_galerkin_block = spy
     try:

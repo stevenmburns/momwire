@@ -133,9 +133,13 @@ def _capture(build):
     seen = []
     real = BSplineSolver._field_galerkin_block
 
-    def spy(self, *args):
+    def spy(self, *args, **kw):
+        # `**kw` carries momwire#1115 part 3's `out=`/`scale=`. Recorded
+        # separately from `args` because the replays below re-run the block
+        # STANDALONE and want the returning form, not an accumulation into
+        # somebody else's Z.
         seen.append((self, args))
-        return real(self, *args)
+        return real(self, *args, **kw)
 
     BSplineSolver._field_galerkin_block = spy
     try:
@@ -300,6 +304,14 @@ def test_g914_2e_a_segment_id_outside_pos_o_raises():
 # --- G-1115: the accumulation target, and `scale` --------------------------
 
 
+requires_strided_1115 = pytest.mark.skipif(
+    not (
+        _bs._HAVE_FIELD_GALERKIN_ACCEL
+        and getattr(_acc, "field_galerkin_strided_1115", False)
+    ),
+    reason="built before momwire#1115 part 3's strided accumulation target",
+)
+
 requires_target_1115 = pytest.mark.skipif(
     not (
         _bs._HAVE_FIELD_GALERKIN_ACCEL
@@ -373,29 +385,39 @@ def chunked():
     return _chunked_spec()
 
 
-@requires_target_1115
+@requires_strided_1115
 @pytest.mark.parametrize(
     "why,target",
     [
         # The buried Z is column-major by momwire#136, so this is the target
-        # the lever in the issue would actually hand over.
+        # the part 3 lever actually hands over.
         ("column-major", lambda n: np.zeros((n, n), dtype=np.complex128, order="F")),
         ("strided view", lambda n: np.zeros((n, 2 * n), dtype=np.complex128)[:, ::2]),
         ("column block", lambda n: np.zeros((n, n + 3), dtype=np.complex128)[:, :n]),
     ],
 )
-def test_g1115_a_non_c_contiguous_target_is_refused(why, target):
-    """The defect this contract exists to stop was not a wrong answer but a
-    CLEAN return: `py::array_t<..., c_style>` does not require a C-contiguous
-    argument, it manufactures one, so pybind11 handed the kernel a copy and
-    every accumulation went into it. Refusal is the only outcome a caller can
-    tell apart from success."""
+def test_g1115_a_strided_target_is_accumulated_into_where_it_lies(why, target):
+    """Part 3 supersedes part 1's refusal for these three.
+
+    Part 1 REFUSED them, because `py::array_t<..., c_style>` does not require a
+    C-contiguous argument, it manufactures one: pybind11 handed the kernel a
+    copy and every accumulation went into it, and refusal was the only outcome
+    a caller could tell apart from success. Part 3 addresses the target through
+    its own strides instead, so these are now accumulated into where they lie.
+
+    Acceptance alone would be a weak pin -- it cannot tell a correct scatter
+    from a scrambled one -- so this asserts the numbers equal the C-contiguous
+    assembly EXACTLY. Only the addresses differ; the order of operations does
+    not, so this is an equality and not a tolerance."""
+    ref = _good_args()
+    _acc.assemble_field_galerkin(**ref)
+
     args = _good_args()
     Q = target(args["Q"].shape[0])
     args["Q"] = Q
-    with pytest.raises(ValueError, match="C-contiguous"):
-        _acc.assemble_field_galerkin(**args)
-    assert np.count_nonzero(Q) == 0, why
+    _acc.assemble_field_galerkin(**args)
+    assert np.count_nonzero(Q), f"{why}: the strided call wrote nothing"
+    assert np.array_equal(Q, ref["Q"]), why
 
 
 @requires_target_1115
@@ -496,17 +518,32 @@ def test_g1115_both_routes_honour_scale_identically(chunked):
 
 @requires_accel
 def test_g1115_the_contract_flag_and_the_contract_agree():
-    """The flag is what a caller passing a column-major `out=` would gate on,
-    so a .so that carries it must actually refuse one — and one that does not
-    carry it must be assumed to be the old silent-copy binding."""
-    flagged = getattr(_acc, "field_galerkin_target_1115", False)
+    """Each flag must mean what a caller gates on it for, in BOTH directions.
+
+    Three builds exist in the wild and a column-major target tells them apart
+    by itself: before part 1 it is silently copied and the writes are lost;
+    after part 1 it is refused; after part 3 it is accumulated into. A caller
+    handing over the buried Z gates on `field_galerkin_strided_1115`, and a
+    build that carries the flag without the behaviour -- or the behaviour
+    without the flag -- would send it into one of the other two worlds.
+    """
+    target_flag = getattr(_acc, "field_galerkin_target_1115", False)
+    strided_flag = getattr(_acc, "field_galerkin_strided_1115", False)
+    assert not (strided_flag and not target_flag), (
+        "part 3 implies part 1's contract; a build cannot carry only the later flag"
+    )
+
     args = _good_args()
     n = args["Q"].shape[0]
     args["Q"] = np.zeros((n, n), dtype=np.complex128, order="F")
     try:
         _acc.assemble_field_galerkin(**args)
     except ValueError:
-        refused = True
+        outcome = "refused"
     else:
-        refused = False
-    assert refused is bool(flagged)
+        outcome = "written" if np.count_nonzero(args["Q"]) else "silently copied"
+
+    expected = (
+        "written" if strided_flag else ("refused" if target_flag else "silently copied")
+    )
+    assert outcome == expected, (outcome, expected, target_flag, strided_flag)
