@@ -2229,6 +2229,54 @@ def _fdw_sparse(ax):
     return out
 
 
+def _ends_to_nodes(k, a2, obs, src, Fsp, *, budget_mb=48.0):
+    """`(Fsp @ G(obs, src).T).T` — the (E, n) end-to-node kernel rows, without
+    ever building the (E, P) kernel or the (E, P, 3) difference behind it.
+
+    The difference array is what sets this phase's memory, and it is
+    quadratic in the radial count because E (wire ends) and P (nodes) each
+    grow linearly with it: 23.3 MB at 48 radials, 92.2 MB at 96, ~228 MB
+    extrapolated at 150, against 12.2 MB of terms actually kept (momwire#1126).
+    Blocking the NODE axis caps it at `budget_mb` instead, and the full
+    complex (E, P) kernel never exists either, because `Fsp @ Ge.T` is a sum
+    over nodes and so accumulates block by block.
+
+    That accumulation reassociates the sum over P, so this is NOT bit-identical
+    to the one-shot form -- which is the contract `_bnd_and_corner` already
+    declares above ("same sums, different order of summation ... read to scale,
+    never to the bit"; residual 5.7e-14 against the dense form, gated by the
+    crossgate tolerance rather than `array_equal`).
+
+    `budget_mb` buys iterations against footprint: the (E, block, 3) double
+    difference is the term it bounds, so 48 MB is about five blocks at 150
+    radials and one at 48 -- small enough to keep the loop's own cost out of a
+    phase that is 8.3 % of the route's wall clock, large enough that each
+    block is still a vectorised call rather than a Python inner loop.
+    """
+    E = obs.shape[0]
+    P = src.shape[0]
+    n = Fsp.shape[0]
+    per_node = max(E * 3 * 8, 1)  # bytes of the (E, block, 3) difference
+    block = max(1, min(P, int(budget_mb * (1 << 20) // per_node)))
+    if block >= P:
+        # One block is the original expression, so take it unchanged rather
+        # than paying a CSC conversion and an accumulator for nothing. This
+        # is the small-deck path, and it stays bit-identical there.
+        d = src[None, :, :] - obs[:, None, :]
+        Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))
+        return (Fsp @ Ge.T).T
+    # CSC once, not per block: slicing COLUMNS of a CSR rebuilds it every
+    # time, which would trade this function's memory for the loop's time.
+    Fc = Fsp.tocsc()
+    Gt = np.zeros((E, n), dtype=np.complex128)
+    for p0 in range(0, P, block):
+        p1 = min(p0 + block, P)
+        d = src[None, p0:p1, :] - obs[:, None, :]
+        Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))
+        Gt += (Fc[:, p0:p1] @ Ge.T).T
+    return Gt
+
+
 def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     """The same-medium by-parts boundary shape on one axis (β = 1):
     −test-end rows, −source-end columns, +corner — the derivation's
@@ -2284,14 +2332,10 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     pe = _mir(ptE)  # (E, 3) source ends (mirrored)
     a2 = a_wire * a_wire
     Fsp = _fdw_sparse(ax)  # (n, P) CSR of Fd*w
-    # test ends (unmirrored observation) against mirrored source nodes
-    d = src[None, :, :] - ptE[:, None, :]
-    Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, P)
-    Gt = (Fsp @ Ge.T).T  # (E, n)
-    # source ends (mirrored) against unmirrored observation nodes
-    d = pts[None, :, :] - pe[:, None, :]
-    Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (P, E) rows
-    Gs = (Fsp @ Ge.T).T  # (E, n)
+    # test ends (unmirrored observation) against mirrored source nodes, and
+    # source ends (mirrored) against unmirrored observation nodes.
+    Gt = _ends_to_nodes(k, a2, ptE, src, Fsp)  # (E, n)
+    Gs = _ends_to_nodes(k, a2, pe, pts, Fsp)  # (E, n)
     row_term = -(sf.T @ Gt)  # (L, n)
     col_term = -(Gs.T @ sf)  # (n, L)
     d = ptE[:, None, :] - pe[None, :, :]
