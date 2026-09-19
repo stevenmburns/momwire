@@ -303,6 +303,41 @@ def fan_rise_deck(n_radials=4, depth=0.15, **override):
     return build
 
 
+def above_side_deck(level=1, **override):
+    """`crossing_deck` with the above wire CUT at a vertex the grading already
+    put there, into two wires meeting at an ordinary ABOVE-side junction
+    (momwire#1133).
+
+    The SAME antenna at the SAME mesh: the cut lands on an existing vertex, so
+    every segment boundary is where it was and the per-edge counts are simply
+    partitioned. The only difference is that z = 0.5 is a JUNCTION rather than
+    an interior knot — which is exactly what the OTHER-junction refusal used
+    to forbid, and what makes the pair an equivalence rather than a
+    convergence study."""
+    g = _GRADES[level]
+    below_pts = np.array([(0.0, 0.0, z) for z in g["below"][0] + [0.0]])
+    zs, ns = g["above"][0], g["above"][1]
+    cut = len(zs) - 1
+    z_cut = zs[cut - 1]
+    build = dict(
+        wires=[
+            below_pts,
+            np.array([(0.0, 0.0, z) for z in [0.0] + zs[:cut]]),
+            np.array([(0.0, 0.0, z) for z in zs[cut - 1 :]]),
+        ],
+        n_per_edge_per_wire=[g["below"][1], ns[:cut], ns[cut:]],
+        junctions=[[(0, "end"), (1, "start")], [(1, "end"), (2, "start")]],
+        feeds=[(2, 4.3333333333 - z_cut, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+    build.update(override)
+    return build
+
+
 def test_g524_2_node_fan_is_served_n4_labeling():
     """The fan widening's labeling test: one above member, four below
     members — the crossing junction labels, every member is exempted in
@@ -329,21 +364,55 @@ def test_g524_2_two_above_members_refused_by_name():
         s._crossing_junctions()
 
 
-def test_g524_2_above_side_other_junction_refused_by_name():
-    build = crossing_deck()
-    build["wires"] = [
-        build["wires"][0],
+def test_g1133_above_side_other_junction_is_served():
+    """An ordinary above-side junction next to a crossing passes scope
+    (momwire#1133). It used to refuse by name; WA7ARK's bonded ground rod on
+    an EFHW is the report, and that deck has three of these — they are just
+    the antenna's own wire joins, so practically every real model with a rod
+    was outside the envelope."""
+    s = BSplineSolver(**above_side_deck())
+    assert s._wire_media() == (
+        _medium_spec.BELOW,
+        _medium_spec.ABOVE,
+        _medium_spec.ABOVE,
+    )
+    assert s._crossing_junctions() == (0,)
+
+
+def test_g1133_an_in_plane_other_junction_still_refuses_by_name():
+    """The half that is NOT lifted. Unreachable through a solver — a junction
+    standing in the plane strands its contact ends on the earlier
+    contact+buried audit, or trips the mid-span crossing rule first — so it is
+    asked of the scope function directly, which is where the boundary lives.
+    Without this the narrowed predicate has no gate at all on the side it
+    still refuses."""
+    media = (_medium_spec.BELOW, _medium_spec.ABOVE, _medium_spec.ABOVE)
+    groups = [[(0, "end"), (1, "start")], [(1, "end"), (2, "start")]]
+    polylines = [
+        np.array([(0.0, 0.0, -2.0), (0.0, 0.0, 0.0)]),
         np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 5.0)]),
         np.array([(0.0, 0.0, 5.0), (0.0, 0.0, 10.0)]),
     ]
-    build["n_per_edge_per_wire"] = [build["n_per_edge_per_wire"][0], [12], [11]]
-    build["junctions"] = [
-        [(0, "end"), (1, "start")],
-        [(1, "end"), (2, "start")],
-    ]
-    s = BSplineSolver(**build)
+    radii = [A_WIRE] * 3
+    # Off the plane, wholly above: served, the case momwire#1133 measured.
+    assert _below_interface.crossing_junctions(
+        media, groups, frozenset([0]), polylines, 0.0, radii
+    ) == (0,)
+    # The SAME deck with junction 1 declared in-plane: still refused.
     with pytest.raises(NotImplementedError, match="OTHER junction"):
-        s._crossing_junctions()
+        _below_interface.crossing_junctions(
+            media, groups, frozenset([0, 1]), polylines, 0.0, radii
+        )
+
+
+def test_g1133_the_other_trunks_share_the_above_side_scope(monkeypatch):
+    """The scope function is shared, so the lift must reach the trunks that
+    read it — `sinusoidal-galerkin` is one of the three bases the reporting
+    deck's census left as candidates, and all three sat behind this refusal."""
+    sg = SinusoidalGalerkinSolver
+    assert tuple(sg(**above_side_deck())._crossing_junction_indices()) == (0,)
+    monkeypatch.setattr(_razor, "_SERVE_CROSSING", True)
+    assert RazorSolver(**above_side_deck(), n_qp_path=8)._crossing_junctions() == (0,)
 
 
 def two_node_deck(separation=12.0, **override):
@@ -672,6 +741,101 @@ def test_g524_2_radius_spread_within_a_side_refused_by_name():
 # ----------------------------------------------------------------------
 # G-524-3 — the designed kernel's own identity pin (cheap, machine class)
 # ----------------------------------------------------------------------
+
+
+# ----------------------------------------------------------------------
+# G-1133 — the above-side junction: an equivalence, not a new term
+# ----------------------------------------------------------------------
+
+
+def test_g1133_above_side_eps1_collapse(record_property):
+    """The adjudicator, on the pattern g524_5 set: at ε̃ = 1 the interface
+    vanishes and the deck IS a free-space 12 m wire, solved independently by
+    the shipped free-space fill. The truth side knows nothing about junctions
+    or interfaces, so this is not agreement-with-itself — it is the composition
+    telescoping to a known answer with an above-side junction standing in it.
+
+    Same 0.05 Ω class as g524_5, and the same quadrature pinned on both sides
+    (momwire#760): the collapse is a statement about COMPOSITION and only means
+    something when both sides integrate the same way."""
+    g = _GRADES[1]
+    pts = [(0.0, 0.0, z) for z in g["below"][0] + [0.0] + g["above"][0]]
+    z_truth, _ = BSplineSolver(
+        wires=[np.array(pts)],
+        n_per_edge_per_wire=[g["below"][1] + g["above"][1]],
+        feeds=[(0, 2.0 + 4.3333333333, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=A_WIRE,
+        n_qp_pair=_COLLAPSE_N_QP,
+    ).compute_impedance()
+    z, _ = BSplineSolver(
+        **above_side_deck(1, ground_eps=(1.0, 0.0), n_qp_pair=_COLLAPSE_N_QP)
+    ).compute_impedance()
+    record_property("momwire_Z", f"{z:.4f}")
+    record_property("free_space_truth", f"{z_truth:.4f}")
+    assert abs(z - z_truth) <= 0.05, (
+        f"the ε̃ = 1 crossing solve with an above-side junction answers "
+        f"{z:.4f} where the free-space single-wire truth is {z_truth:.4f} — "
+        f"{abs(z - z_truth):.4f} ohm apart; the junction is not telescoping"
+    )
+
+
+@pytest.mark.slow
+def test_g1133_the_two_spellings_are_one_antenna(record_property):
+    """The hub ≡ N-rises gate, one side of the interface over: the crossing
+    deck and the SAME antenna cut at an above-side junction must answer the
+    same over real soil, not just at ε̃ = 1.
+
+    The bar is the measurement, not a wish. At the buried default order the
+    two spellings sit 1.6e-3 Ω apart on 194 Ω (8e-6 relative). 0.05 Ω is the
+    same class the ε̃ = 1 adjudicators are gated at and ~30x the measured gap,
+    so a real term appearing here cannot hide under it — the ladder in
+    `test_g1133_the_residual_is_quadrature` is what says 1.6e-3 is quadrature
+    rather than the floor of something physical."""
+    z_join, _ = BSplineSolver(**above_side_deck()).compute_impedance()
+    z_one, _ = BSplineSolver(**crossing_deck()).compute_impedance()
+    record_property("split_Z", f"{z_join:.6f}")
+    record_property("unsplit_Z", f"{z_one:.6f}")
+    assert abs(z_join - z_one) <= 0.05, (
+        f"the same antenna answers {z_one:.6f} whole and {z_join:.6f} cut at "
+        f"an above-side junction — {abs(z_join - z_one):.4f} ohm apart"
+    )
+
+
+@pytest.mark.slow
+def test_g1133_the_residual_is_quadrature(record_property):
+    """WHY the refusal could be lifted, and the gate that would catch it being
+    wrong. A missing physical term does not care about quadrature order; an
+    integration error does.
+
+    Measured 2026-09-19, the two spellings' gap against `n_qp_pair`:
+
+        4 -> 1.85e-2 ohm,  8 -> 4.74e-3,  16 -> 1.71e-3,
+        32 -> 1.56e-3,    64 -> 1.56e-3
+
+    It falls by an order of magnitude and then STOPS — converged in
+    quadrature, to a floor the mesh then removes in turn (3.3e-7 ohm at the
+    x4 above mesh). That is the signature of an integration error, not of a
+    term nobody wrote down.
+
+    NOTE for whoever revisits this: the scoping comment on momwire#1133
+    argued the same conclusion from a MESH ladder and reported the gap
+    shrinking 1.8e-7 -> 1.2e-8. Re-measured here the mesh ladder is not
+    monotone (5.0e-4 -> 1.6e-3 -> 3.3e-7 over N = 20/40/80 at the buried
+    order), so it is the quadrature axis that carries the argument cleanly,
+    not the mesh axis. Same verdict, different instrument."""
+    gaps = {}
+    for nqp in (4, 32):
+        z_join, _ = BSplineSolver(**above_side_deck(n_qp_pair=nqp)).compute_impedance()
+        z_one, _ = BSplineSolver(**crossing_deck(n_qp_pair=nqp)).compute_impedance()
+        gaps[nqp] = abs(z_join - z_one)
+    record_property("gap_q4", f"{gaps[4]:.3e}")
+    record_property("gap_q32", f"{gaps[32]:.3e}")
+    assert gaps[32] < gaps[4] / 3.0, (
+        f"the above-side gap is {gaps[4]:.3e} ohm at n_qp_pair=4 and "
+        f"{gaps[32]:.3e} at 32 — it is not falling with quadrature order, so "
+        "it is not the integration error this refusal was lifted on"
+    )
 
 
 def test_g524_2_node_graded_fan_plans_without_the_cross_grid():
