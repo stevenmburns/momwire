@@ -65,14 +65,27 @@ class PortOnWire:
     the port's own `name` is the wire's label and the gap sits at the wire's
     MIDDLE (momwire: the arclength midpoint; PyNEC: segment (n_seg+1)//2 —
     identical placement for odd segment counts, which named port wires should
-    therefore use). A port must interrupt a current path, so it lives in a
-    wire's interior, never at an endpoint.
+    therefore use). A port must interrupt a CURRENT PATH, which is why the
+    middle is the default and why an endpoint used to be refused outright —
+    but an endpoint has a current path exactly when the wire END STANDS IN THE
+    GROUND PLANE (momwire#1135). That is the ground-contact feed: the image
+    supplies the other side of the gap, `tests/test_contact_nec5_lane.py`
+    drives its base-fed monopoles at ``feed_arclength=0.0`` and certifies them
+    against NEC-5 over five grounds and five densities, and
+    ``momwire.eznec.serve`` places a deck's contact feed there. A FREE wire
+    end still has nothing to interrupt — the current is zero there — and this
+    type cannot tell the two apart, because ground is not in its vocabulary.
+    So the endpoints are ADMITTED here and the physics is gated where the
+    ground is known; see the refusal note on `at` below.
 
     ``wire`` and ``at`` put it elsewhere (momwire#1059). ``wire`` names the
     geometry wire when that differs from the port's name, which is how one
     wire carries several ports: a NEC deck's feed and its `LD` loads, say.
     ``at`` is a position along that wire as an arclength FRACTION from its
-    authored ``p0``, strictly inside (0, 1); None is the middle. A fraction
+    authored ``p0``, in the CLOSED interval [0, 1]; None is the middle. The
+    endpoints mean the ground-contact feed above, and asking for one at a free
+    end is a physics error this type does not catch — the solver does, once it
+    knows where the ground is. A fraction
     survives a length knob and a remesh. Turning it into a site a given mesh
     can carry is the caller's job (antennaknobs chooses segment counts per
     solver), and every solver reports where each feed actually landed
@@ -116,11 +129,10 @@ class PortOnWire:
             isinstance(self.at, bool)
             or not isinstance(self.at, numbers.Real)
             or not math.isfinite(self.at)
-            or not 0.0 < self.at < 1.0
+            or not 0.0 <= self.at <= 1.0
         ):
             raise ValueError(
-                "PortOnWire at is an arclength fraction strictly between 0 and 1, "
-                f"got {self.at!r}"
+                f"PortOnWire at is an arclength fraction in [0, 1], got {self.at!r}"
             )
         if self.distributed:
             raise ValueError(
