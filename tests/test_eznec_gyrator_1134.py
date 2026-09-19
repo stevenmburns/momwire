@@ -276,6 +276,29 @@ def test_no_committed_capture_carries_a_gyrator():
     assert networks == 17
 
 
+def test_the_card_test_comes_first_and_keeps_the_geometry_sweep_off(monkeypatch):
+    """Ordering, checked rather than described.
+
+    ``_phantom_tags`` is an O(wires^2) sweep and ``_gyrator_drives`` runs on
+    every served deck, so the cheap CARD test has to come first - and it is
+    also the honest order, since the idiom is a card shape. Every deck in the
+    corpus must therefore reach the geometry ZERO times, while the controlled
+    gyrator deck reaches it once.
+    """
+    calls = []
+    real = _serve._phantom_tags
+    monkeypatch.setattr(
+        _serve, "_phantom_tags", lambda d, w: calls.append(d) or real(d, w)
+    )
+    for _cid, deck in corpus_decks():
+        _serve._gyrator_drives(deck, wavelength_of(deck))
+    assert calls == [], f"{len(calls)} corpus decks reached the geometry sweep"
+
+    deck = parse_nec5((FIXTURES / "gyrator_current.nec").read_text())
+    assert _serve._gyrator_drives(deck, wavelength_of(deck))
+    assert len(calls) == 1
+
+
 def test_a_source_behind_a_transformer_or_a_line_is_left_alone():
     """The two shapes that wear the same clothes, from the corpus itself.
 
