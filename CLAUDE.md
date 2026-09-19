@@ -14,6 +14,55 @@ pytest invocation.
 That tripwire gates the lane **commands**. It does not read version strings in
 comments or `echo` lines, which is how the `lint` guard came to advertise a
 ruff version CI had already moved off (fixed in momwire#720).
+### The five certification lanes do not run on a PR — and you can ask for them
+
+`test-macos`, `test-integration`, `test-slow`, `test-crossgate` and
+`test-memgate` all carry the same condition:
+
+```
+(github.event_name == 'workflow_dispatch'
+ || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+&& needs.changes.outputs.code == 'true'
+```
+
+Two consequences, and the second is the one that gets missed:
+
+- A PR touching C++ is merged on the evidence of `test` and `test-pynec`
+  alone. The certification verdict arrives *after* it lands, which is where a
+  surprise would surface — so confirm a fresh run started on main.
+- **`workflow_dispatch` is in that condition on purpose**, so a branch can buy
+  the verdict before merging: `gh workflow run ci.yml -R stevenmburns/momwire
+  --ref <branch>`. `ci.yml` says so itself, at `test-macos` — "the same
+  pre-merge pattern `eznec-dropin.yml` already provides for the Windows lane".
+  A C++ change that would be expensive to revert should ask rather than
+  assume.
+
+The `changes.code` half also means a docs-only push to main skips all five,
+so their absence from a run is not evidence they passed.
+
+## A gate can be green and measure nothing
+
+Worse than a red gate, and this repo has produced the shape twice.
+
+`scratch/1029-block-circulant/s_ab_gates.py`'s `fill()` builds its **own**
+`BuriedFills` rather than going through
+`BSplineSolver._compute_Z_operator_buried`. Anything wired into the solver
+therefore never reaches the A/B built on it: momwire#1115 part 3's `out=`
+lever was invisible to `p2_default_path.py`, which ran the transient path on
+BOTH sides and reported Z bit-identical. The tell was that a lever whose whole
+premise is reassociation cannot be bit-identical — instrumenting the four call
+sites gave `{'out': 0, 'transient': 4}`, and with the harness carrying the
+flag, `{'out': 4, 'transient': 0}` and real numbers (1.85e-13 and 2.31e-13
+against a 1e-12 gate).
+
+So: when a scratch harness is the gate, check which branch actually ran before
+believing an agreement number. A harness that constructs the object under test
+is not exercising the seam that constructs it in production.
+
+The same applies to a phase's memory attribution. `p2_memory_probe.py` reports
+`added_at_peak_mb`, which is tracemalloc's peak *inside* a call — a large
+allocation there is not the same thing as a contribution to the process peak,
+and momwire#1126 exists because the two were read as one.
 
 ## Linting: the contract
 
