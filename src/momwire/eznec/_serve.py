@@ -2773,6 +2773,13 @@ def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
     antennaknobs' ``_remote_wire_tests`` computes.  It also makes the "shares
     no node with the structure" test redundant: a wire 10 lambda clear of
     every other endpoint shares none of them.
+
+    Answering in TAGS rather than in wire indices is safe here only because
+    the dialect refuses a repeated tag at the parse (``_gw``: "this engine's
+    nec5 dialect gives each wire its own tag, because a node address names one
+    wire's segment boundary").  Without that guarantee a tag shared between a
+    parked wire and a real one would put a real node in this set, since
+    :meth:`Structure.index_of` resolves a tag to the FIRST wire carrying it.
     """
     if len(deck.wires) < 2:
         return frozenset()
