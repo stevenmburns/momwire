@@ -235,13 +235,20 @@ def crossing_junctions(
       convention — unless the caller passes `two_radius=True` (BSpline, U5):
       then every above wire at one radius and every below wire at another is
       served (`crossing_side_radii`), and a spread WITHIN a side is refused;
-    * OTHER junctions only wholly BELOW and off the plane — the buried hub
-      (one rise + N radials joined at depth, the screen's other spelling).
-      Its by-parts end terms cancel through the hub's own KCL row (probe35:
-      fan M+hub ≡ M to the digit), and the hub ≡ N-rises gate holds the two
-      spellings of the same screen together. An above-side or in-plane other
-      junction stays refused: only the below axis's completion machinery has
-      that cancellation measured.
+    * OTHER junctions off the plane, with every member on ONE side. Wholly
+      below is the buried hub (one rise + N radials joined at depth, the
+      screen's other spelling): its by-parts end terms cancel through the
+      hub's own KCL row (probe35: fan M+hub ≡ M to the digit), and the
+      hub ≡ N-rises gate holds the two spellings of the same screen
+      together. Wholly ABOVE is the antenna's own wire joins, served since
+      momwire#1133 on the same argument and measured the same way — two
+      spellings of one antenna, a straight above wire over a rod against
+      the same wire cut at a junction, agreeing to 1.6e-3 Ω on 194 at the
+      buried default order. What is left is quadrature, not a missing
+      term: it falls 1.85e-2 → 1.56e-3 Ω over n_qp_pair 4 → 32 and then
+      stops moving. A junction standing IN the plane stays refused — that
+      is where the corner and image terms live, and it has no measured
+      completion.
 
     The exemption audit (momwire#698) runs before the empty-crossing return
     because the escape it closes is exactly the empty case:
@@ -303,15 +310,29 @@ def crossing_junctions(
     for j_idx, jw in enumerate(groups):
         if j_idx in crossing:
             continue
-        if j_idx in grounded or any(media[w] != _medium_spec.BELOW for w, _e in jw):
-            raise NotImplementedError(
-                "a deck with a crossing junction and an above-side or "
-                "in-plane OTHER junction is not served: the complete "
-                "crossing spelling completes every value-1 end on its "
-                "axes, and only the below axis's completions (the "
-                "crossing node and the buried hub) are measured "
-                "(momwire#524 phase 2)"
-            )
+        # An ordinary junction OFF the plane with every member on one side
+        # is served: wholly below is the buried hub (momwire#524 phase 2),
+        # wholly above is the antenna's own wire joins (momwire#1133). Both
+        # rest on the same argument — the by-parts end terms cancel through
+        # the junction's own KCL row — and the above side is measured the
+        # same way the hub was, by holding two spellings of one antenna
+        # together: a straight above wire over a rod against the same wire
+        # cut at a junction. They agree to 1.6e-3 ohm on 194 at the buried
+        # default order, and the gap is QUADRATURE rather than a missing
+        # term — it falls 1.85e-2 -> 1.56e-3 over n_qp_pair 4 -> 32 and then
+        # stops moving (`test_g1133_*`). A junction standing IN the plane
+        # is a different class, still refused below: it sits where the
+        # corner and image terms live.
+        if j_idx not in grounded and len({media[w] for w, _e in jw}) == 1:
+            continue
+        raise NotImplementedError(
+            "a deck with a crossing junction and an in-plane or "
+            "media-mixing OTHER junction is not served: the complete "
+            "crossing spelling completes every value-1 end on its axes, "
+            "and a junction standing in the interface sits where the "
+            "corner and image terms live, which has no measured "
+            "completion (momwire#524 phase 2, momwire#1133)"
+        )
     radii = np.asarray(radii, dtype=float)
     if float(radii.max()) - float(radii.min()) > 0.0:
         if not two_radius:
