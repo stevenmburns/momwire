@@ -7,7 +7,7 @@ an ``NT`` with ``Y11 = Y22 = 0``, ``Y12 = Y21 = jB`` tying it to the segment it
 really drives. This seam solved that circuit correctly and then read the
 driving point off the PHANTOM, where a gyrator's inversion makes it 1/Z.
 
-Five gates:
+Six gates:
 
 1. the controlled pair - one antenna, one drive point, one delivered current,
    spelled natively and through a gyrator in the SAME dialect. Pinned as
@@ -19,7 +19,9 @@ Five gates:
    the two shapes that wear the same clothes (a source behind a TRANSFORMER,
    a source behind a LINE) are left alone;
 5. the constants that separate the phantom from the structure, re-measured on
-   the corpus rather than taken on trust.
+   the corpus rather than taken on trust;
+6. the one guarantee the detector leans on without checking - that a tag
+   names exactly one wire.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ from pathlib import Path
 import pytest
 
 import momwire.eznec._serve as _serve
+from momwire.deck._cards import DeckError
 from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import serve
 from momwire.eznec._serve import (
@@ -423,3 +426,20 @@ def test_the_extent_gate_keeps_a_remote_antenna_out_of_the_circuit():
     deck = parse_nec5(stretched)
     assert not _phantom_tags(deck, wavelength_of(deck))
     assert not _gyrator_drives(deck, wavelength_of(deck))
+
+
+def test_the_phantom_set_is_tags_because_a_tag_names_one_wire():
+    """What lets :func:`_phantom_tags` answer in TAGS rather than wire indices.
+
+    A tag shared between a parked wire and a real one would put a real node in
+    the phantom set, because ``Structure.index_of`` resolves a tag to the
+    FIRST wire carrying it. Nothing in the detector guards against that, and
+    nothing needs to: the dialect refuses a repeated tag at the parse. That
+    guarantee is what this pins, so a later relaxation of it lands here rather
+    than silently in a moved drive row.
+    """
+    text = (FIXTURES / "gyrator_current.nec").read_text()
+    shared = text.replace("GE 0,-1", "GW 2,4,0.,1.,-0.5,0.,1.,0.5,.001\nGE 0,-1")
+    assert shared != text
+    with pytest.raises(DeckError, match="declares tag 2 a second time"):
+        parse_nec5(shared)
