@@ -100,6 +100,35 @@ current is not its structure current.  Two cards on ONE port would be a
 boundary condition written twice; both ways to write that — the same address
 twice, and the two sides of one cut — refuse by name.
 
+A fourth drive, written in a dialect that has no card for it
+------------------------------------------------------------
+Those three are the spellings a card ADDRESS picks between, and there is one
+more that no address can reach.  NEC-2 has no current-source ``EX`` card, so
+EZNEC saving a current-driven model to that dialect spells one as a GYRATOR:
+a wire parked ~100 lambda from the antenna whose segments are used as circuit
+NODES, an ``EX 0`` on one of them, and an ``NT`` with ``Y11 = Y22 = 0`` and
+``Y12 = Y21 = jB`` tying it to the node it really drives.  The deck names the
+construction itself — ``CM ! NT #1-2 are EZNEC current sources``.
+
+Read literally the CIRCUIT is right, and this module solves it as written:
+the phantom wire is in the geometry, its ``EX 0`` is a source and the ``NT``
+is a network card, all three exactly as the deck says.  What is NOT right is
+WHERE the driving point reports.  A gyrator inverts impedance, so a source
+read where it SITS answers the reciprocal of the antenna's: Dan AC6LA's
+Cardioid, one antenna EZNEC wrote to three dialects, read 0.021006 +
+0.011503j at the phantom where the native ``EX 4`` twin reads 36.6235 -
+20.0547j at the real wire.  momwire#1134 moves the ROW and nothing else
+(:func:`_gyrator_drives`, :func:`_gyrator_row`) — the forced current is
+``-Y12·V``, restored from the card rather than read back, and the voltage is
+the real site's own, which :class:`_PortState` already carried because that
+node is a network connection point.
+
+Detection is narrow on purpose: the same parked wire legitimately spells a
+source behind a TRANSFORMER or a transmission LINE, and there the source-side
+impedance is what the operator asked for.  All 17 ``NT`` cards in the
+committed corpus carry a nonzero diagonal, so none of them is a gyrator and
+no captured printout moves.
+
 Two spellings of a series EMF, and the BASIS picks between them
 ---------------------------------------------------------------
 The first of those three is one source with two discretizations, and which
@@ -2703,6 +2732,229 @@ def _port_row(
     )
 
 
+# A gyrator's whole transfer IS its off-diagonal, and that off-diagonal is
+# purely reactive.  Below this susceptance the branch forces nothing, so
+# reading it as a current source would be reading float noise as a drive.
+# EZNEC writes `Y12 = +-j` exactly, and so does 4nec2 building the same
+# construction from the other side (antennaknobs `_GYRATOR_MIN_B`).
+_GYRATOR_MIN_B = 1e-12
+
+# EZNEC's phantom wire, in wavelengths.  Both numbers separate two populations
+# measured over the 80 committed decks (`tests/test_eznec_gyrator_1134.py`
+# re-measures them): 23 of those decks park ONE wire whose nearest
+# endpoint-to-endpoint distance to anything else is 173.01-173.50 lambda and
+# whose own end-to-end extent is 0.0035-0.0087 lambda, and the other 286 wires
+# in the corpus stand 0.0-0.2625 lambda clear.  The clearance line is drawn at
+# 10 lambda because that is inside a gap of nearly three decades - 38x above
+# the widest gap in a real structure, 17x below the closest parked wire - and
+# it is antennaknobs' own measured `_ANCHOR_CLEARANCE_LAMBDA`.
+#
+# The EXTENT line is what stops a genuinely remote ANTENNA - an element in a
+# coupling study, fed through a feedline - being read as a circuit node: the
+# corpus's smallest real wire is 0.0001 lambda, so extent alone separates
+# nothing, and it is extent TOGETHER with a clearance many times it that names
+# the idiom.  The parked wires clear their own extent by ~20,000x.
+_PHANTOM_CLEARANCE_LAMBDA = 10.0
+_PHANTOM_EXTENT_LAMBDA = 0.05
+_PHANTOM_CLEARANCE_EXTENTS = 100.0
+
+
+def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
+    """The tags of wires EZNEC parked ~100 lambda away to use as circuit NODES.
+
+    The deck usually names the construction itself (``CM ! *Wire #3 for
+    virtual segments.``), but a comment is corroboration and not a rule, so
+    this is structural: a wire is the phantom when it is electrically
+    negligible and stands clear of everything else by the thresholds above.
+
+    ``clearance`` is the nearest endpoint-to-endpoint distance to any other
+    wire, which is a LOWER bound on true separation rather than the separation
+    itself - ample at the 173 lambda the idiom parks at, and the same bound
+    antennaknobs' ``_remote_wire_tests`` computes.  It also makes the "shares
+    no node with the structure" test redundant: a wire 10 lambda clear of
+    every other endpoint shares none of them.
+    """
+    if len(deck.wires) < 2:
+        return frozenset()
+    ends = [
+        (np.asarray(wire.end1, dtype=float), np.asarray(wire.end2, dtype=float))
+        for wire in deck.wires
+    ]
+    tags = []
+    for index, (a, b) in enumerate(ends):
+        extent = float(np.linalg.norm(b - a))
+        clearance = min(
+            float(np.linalg.norm(here - there))
+            for other, pair in enumerate(ends)
+            if other != index
+            for here in (a, b)
+            for there in pair
+        )
+        if (
+            extent < _PHANTOM_EXTENT_LAMBDA * wavelength
+            and clearance > _PHANTOM_CLEARANCE_LAMBDA * wavelength
+            and clearance > _PHANTOM_CLEARANCE_EXTENTS * extent
+        ):
+            tags.append(deck.wires[index].tag)
+    return frozenset(tags)
+
+
+@dataclass(frozen=True)
+class _Gyrator:
+    """One ``EX 0`` read as the current source its ``NT`` gyrator makes of it.
+
+    :attr:`at` is the REAL node the forced current lands on; :attr:`current`
+    is that current, ``-Y12 * V``.
+    """
+
+    at: Nec5Node
+    current: complex
+
+
+def _gyrator_drives(deck: Nec5Deck, wavelength: float) -> Mapping[Nec5Node, _Gyrator]:
+    """Every ``EX 0`` this deck writes to spell a CURRENT source, by address.
+
+    NEC-2 has no current-source ``EX`` card, so EZNEC spells one as a
+    GYRATOR: an ``NT`` with ``Y11 = Y22 = 0`` and ``Y12 = Y21 = jB`` tying a
+    phantom node (:func:`_phantom_tags`) carrying an ``EX 0`` to the real node
+    it drives.  Read literally the CIRCUIT is right - that is what this seam
+    already solves, and this function changes none of it - but the READOUT is
+    not: a gyrator inverts impedance, so a driving point reported where the
+    source SITS is the reciprocal of the antenna's.  Measured on Dan AC6LA's
+    Cardioid, the same antenna EZNEC also wrote with a native ``EX 4``:
+    0.021006 + 0.011503j against 36.6235 - 20.0547j (momwire#1134, and
+    antennaknobs#1595, which fixed the same defect on the other seam).
+
+    The forced current is ``I = -Y12 * V``.  The card stamps ``Y`` as a nodal
+    admittance block, so ``(Y·V)_real = Y12·V_phantom`` is the current leaving
+    the real node INTO the branch, and the antenna receives its negative.
+    Scale and sign are EZNEC's own to check: ``Y12 = +j`` with
+    ``V = 1.414214j`` gives ``I = 1.414214``, which is exactly what the
+    NEC-4.2 twin's ``EX 6`` asks for, and on the Cardioid's other port
+    ``V = 1.414214`` gives ``-1.414214j``, again the ``EX 6`` value.  Two
+    ports, two different phases, so a GLOBAL flip cannot be what agrees.
+
+    Detection has to be NARROW, because the same phantom wire legitimately
+    spells a source behind a TRANSFORMER or a transmission LINE, and there the
+    source-side impedance is precisely what the operator asked for.  All of
+    these hold (antennaknobs' ``_collapse_gyrator_drives`` is the same list,
+    condition for condition):
+
+    * **zero diagonal, purely reactive off-diagonal.**  An EZNEC transformer
+      is an all-real ``Y``; a lossy line is lossy, so its 2x2 has a nonzero
+      diagonal.  Neither survives this line, and neither does the whole
+      corpus: all 17 ``NT`` cards across the 10 committed decks that write one
+      carry ``Y11`` from 1.5041E-7 to 10., so no printout can move.
+      ``Y21 = Y12`` needs no test here - :class:`~momwire.deck._nec5.Nec5Network`
+      forces it at the parse (:func:`_network_card`, "``Y21 = Y12`` by
+      construction");
+    * **exactly one end on a phantom wire, the other on real geometry.**  A
+      card between two phantom nodes drives nothing, and a gyrator between two
+      real ports is a COMPONENT of the model rather than a source;
+    * **the real node is not already driven**, and no other gyrator has
+      claimed it.  It becomes the driven one, and a second drive there would
+      be two boundary conditions on one port;
+    * **the phantom node carries exactly one ``EX``, an ``EX 0`` with a
+      nonzero drive** - the voltage the gyrator converts.  A zero EMF is the
+      idiom's datum pin, not a drive.  That last clause is the one condition
+      no DECK can reach here, and it is kept rather than dropped because it
+      is the precedent's: :meth:`~momwire.deck._nec5._Reader._ex` normalises a
+      zero-volt ``EX 0`` to 1 V before a deck exists (momwire#1041, measured
+      on NEC-5's own behaviour), so the datum pin arrives as a 1 V drive and
+      the guard only ever fires on a deck built in code.  0000's and 0027's
+      ``EX 4`` on a phantom node is what the corpus writes instead, and the
+      ``kind`` half of this line is what leaves it alone;
+    * **no other ``TL``/``NT`` card touches that phantom node.**  This is
+      antennaknobs' "every other branch there is a 1-port", in the vocabulary
+      this seam has: its only 1-port is an ``LD``, which is not a branch at
+      all here but a load folded into the site's own ``Y_eff``, so what is
+      left to exclude is a second two-port.
+    """
+    phantom = _phantom_tags(deck, wavelength)
+    if not phantom:
+        return MappingProxyType({})
+    cards: dict[Nec5Node, int] = {}
+    for line in deck.transmission_lines:
+        for at in (line.end_a, line.end_b):
+            cards[at] = cards.get(at, 0) + 1
+    for net in deck.networks:
+        for at in (net.end_a, net.end_b):
+            cards[at] = cards.get(at, 0) + 1
+    driven: dict[Nec5Node, list[Nec5Source]] = {}
+    for source in deck.sources:
+        driven.setdefault(source.at, []).append(source)
+
+    found: dict[Nec5Node, _Gyrator] = {}
+    claimed: set[Nec5Node] = set()
+    for net in deck.networks:
+        if net.y11 or net.y22:
+            continue
+        if net.y12.real or abs(net.y12.imag) < _GYRATOR_MIN_B:
+            continue
+        on_phantom = [at for at in (net.end_a, net.end_b) if at.tag in phantom]
+        if len(on_phantom) != 1:
+            continue
+        (at,) = on_phantom
+        real = net.end_b if at == net.end_a else net.end_a
+        if driven.get(real) or real in claimed:
+            continue
+        held = driven.get(at, ())
+        if len(held) != 1 or cards[at] != 1:
+            continue
+        (source,) = held
+        if source.kind != 0 or not source.drive:
+            continue
+        claimed.add(real)
+        found[at] = _Gyrator(at=real, current=-net.y12 * source.drive)
+    return MappingProxyType(found)
+
+
+def _gyrator_row(
+    structure: Structure,
+    by_address: dict[Nec5Node, _Site],
+    state: _PortState,
+    gyrator: _Gyrator,
+) -> PortRow:
+    """One ``ANTENNA INPUT PARAMETERS`` row for an ``EX 0`` behind a gyrator.
+
+    :func:`_source_row`'s row, moved to the node the card actually drives.
+    Nothing about the SOLVE differs - the phantom wire, its ``EX 0`` and the
+    ``NT`` are all still in it, and :class:`_PortState` already carries the
+    real node's numbers, because that node is a network connection point and
+    the reducer solved it with everything else.  What was wrong was only which
+    site the row read from (momwire#1134).
+
+    The current is the card's ``-Y12·V`` rather than ``state.i_port`` at the
+    real site, and that is the U1 restore rule rather than a second opinion:
+    a gyrator carries a SET voltage to a set current, so the current is a
+    boundary condition and reading it back out of the solve only adds the
+    round-off that decides the sign of a zero.  Measured on the Cardioid, the
+    two agree to 4.9e-17 on one port and 1.9e-17 on the other, and those
+    residues are exactly the ``1.1102E-16`` an ``EX 4`` row restores away.
+
+    The VOLTAGE is read out, because it is the answer: ``v_applied`` at the
+    real site is the voltage across it, load drop included, which is the same
+    quantity :func:`_source_row` prints and what makes ``V/I`` the driving
+    point the native ``EX 4`` / ``EX 6`` twin reports.
+    """
+    site = by_address[gyrator.at]
+    voltage = complex(state.v_applied[site.index])
+    current = gyrator.current
+    return PortRow(
+        tag=gyrator.at.tag,
+        segment=_segment_of(structure, gyrator.at),
+        # The trailing digit tracks the DECK's spelling of the node the row
+        # now names, which is the NT card's own end - the same rule
+        # `_port_row` prints the connection-point table by.
+        end_index=2 if gyrator.at.written == -1 else 1,
+        voltage=voltage,
+        current=current,
+        impedance=_ratio(voltage, current),
+        admittance=_ratio(current, voltage),
+        power=0.5 * (voltage * current.conjugate()).real,
+    )
+
+
 def _source_row(
     structure: Structure, site: _Site, state: _PortState, source: Nec5Source
 ) -> PortRow:
@@ -3484,8 +3736,17 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     # sorted by tag and node).  Every row is the same three spelling rules the
     # single-source row always followed; what is new is that there are several
     # of them and that the budget is their SUM.
+    #
+    # A card EZNEC wrote to spell a CURRENT source reports at the node its
+    # gyrator drives rather than at the phantom it sits on (momwire#1134).
+    # The solve above is untouched by that — `state` already carries the real
+    # node, which is a network connection point like any other — so a deck
+    # with no gyrator on it cannot move a byte.
+    gyrators = _gyrator_drives(deck, wavelength)
     source_rows = tuple(
-        _source_row(structure, by_address[source.at], state, source)
+        _gyrator_row(structure, by_address, state, gyrators[source.at])
+        if source.at in gyrators
+        else _source_row(structure, by_address[source.at], state, source)
         for source in deck.sources
     )
     p_in = float(sum(row.power for row in source_rows))
