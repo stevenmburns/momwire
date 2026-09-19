@@ -1962,6 +1962,114 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     return t_above, t_below
 
 
+def _pair_groups(sizes, *, budget_pairs=1_500_000):
+    """Consecutive `[start, stop)` spans of `sizes` whose pair count stays
+    under `budget_pairs`, so `_direct_group`'s one `_tables` call is bounded by
+    the budget rather than by how many blocks the partition produced.
+
+    A block bigger than the budget is its own group: splitting one block would
+    split a `_sandwich_dense` destination, and block sizes are already bounded
+    by `_ACA_COST_GUARD`.
+
+    1.5e6 is MEASURED, not derived. The 150-radial route (ntot = 3.89e6 pairs):
+
+        budget        peak RSS   _main_split   _main_split s   total s
+        one batch      2217.6       964.5 MB       4.57          28.4
+        4.0e6          2217.6       964.5 MB       4.55          28.4
+        1.5e6          1789.5       429.1 MB       4.97          29.7
+        6.0e5          1855.3       224.3 MB       5.64          31.7
+
+    Two things that table says and arithmetic does not. A budget above ntot is
+    a no-op -- one group, the original call, main's numbers exactly -- so this
+    costs nothing on any deck that already fits. And going FINER than 1.5e6
+    makes the peak WORSE (1855.3 against 1789.5) while costing another 2 s:
+    below ~429 MB this phase stops being the ceiling, so the transient buys
+    nothing, and more groups grow the memo, which is unbounded memory traded
+    for a bounded temporary. The knee is real and it is here.
+    """
+    out, start, run = [], 0, 0
+    for i, n in enumerate(sizes):
+        if run and run + n > budget_pairs:
+            out.append((start, i))
+            start, run = i, 0
+        run += n
+    if start < len(sizes):
+        out.append((start, len(sizes)))
+    return out
+
+
+def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows):
+    """One GROUP of direct blocks: fill the coordinate buffers, evaluate the
+    tables once for the group, and sandwich each block out of the result.
+
+    Lifted out of `_main_split` unchanged (momwire#1126) so it can run per
+    group instead of once over every direct block. `_tables` is where the
+    memory is, measured at 150 radials: one call over 3,891,840 pairs, peaking
+    at 824 MB to return 356 MB, so ~470 MB is its own internals -- and all of
+    it scales with the batch length, which is what makes grouping reach it.
+    `_sandwich_dense` is not the problem: 146 calls, 17.5 MB peak each.
+
+    Grouping costs no re-evaluation. `_tables` documents `memo` as extending
+    the exact-triple dedup ACROSS CALLS (one fill = one memo), so a group keeps
+    every hit the single batch would have had; what it costs is one more
+    vectorised call.
+
+    It is NOT bit-identical, which is worth stating because it looks as if it
+    should be -- each block's own arithmetic is untouched and only the batching
+    boundary moves. The memo is why: a triple first seen in one group is served
+    back from the memo in the next, where one batch lets `radius_tables` dedup
+    it internally, and the two round differently. Measured on
+    `p2_default_path`, single batch against 40k-pair groups: rel_dZ_max
+    6.93e-19 and rel_dz_in 1.4e-15 (4 radials) / 5.4e-15 (12), P2_7 green on
+    both. rel_dZ_max is the SAME at both radial counts, so it is one
+    deterministic rounding difference rather than a drift -- and it sits three
+    orders below `_ends_to_nodes`' own 1.85e-13, inside the same contract the
+    file already declares ("read to scale, never to the bit").
+    """
+    # One buffer per column, filled block by block in place (momwire#914).
+    # What stood here built a (nA, nB) rho, ravelled it, and materialised a
+    # repeat and a tile per block, then concatenated 146 of each — three
+    # full copies of the asked set on top of the per-block temporaries.
+    # The destination slices are views of a contiguous buffer, so the
+    # broadcasts below write the same values with nothing in between.
+    specs = []
+    sizes = [iA.size * iB.size for _AX, _BX, iA, iB in direct]
+    ntot = int(sum(sizes))
+    rho_all = np.empty(ntot, dtype=float)
+    z_all = np.empty(ntot, dtype=float)
+    zp_all = np.empty(ntot, dtype=float)
+    off = 0
+    for (AX, BX, iA, iB), nel in zip(direct, sizes):
+        pa, pb = AX["nodes"][iA], BX["nodes"][iB]
+        shp = (iA.size, iB.size)
+        specs.append((AX, BX, iA, iB, shp))
+        sl = slice(off, off + nel)
+        np.hypot(
+            pa[:, 0][:, None] - pb[:, 0][None, :],
+            pa[:, 1][:, None] - pb[:, 1][None, :],
+            out=rho_all[sl].reshape(shp),
+        )
+        z_all[sl].reshape(shp)[:] = (pa[:, 2] - gz)[:, None]
+        zp_all[sl].reshape(shp)[:] = (pb[:, 2] - gz)[None, :]
+        off += nel
+    tab = _tables(
+        ctx,
+        eps_t,
+        k_p,
+        rho_all,
+        z_all,
+        zp_all,
+        _CROSS_RTOL,
+        memo=memo,
+    )
+    off = 0
+    for AX, BX, iA, iB, shp in specs:
+        nel = shp[0] * shp[1]
+        K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
+        off += nel
+        _sandwich_dense(AX, BX, iA, iB, K, k2sq, out=t_main, rows=rows, out_cols=t_cols)
+
+
 def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
     """The split fill's main sandwich over (above A × below B) — everything
     `cross_complete_block_split` does except the ends and the corner.
@@ -2015,49 +2123,21 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
             direct.append((Ac, Bc, iA, iB))
 
     if direct:
-        # One buffer per column, filled block by block in place (momwire#914).
-        # What stood here built a (nA, nB) rho, ravelled it, and materialised a
-        # repeat and a tile per block, then concatenated 146 of each — three
-        # full copies of the asked set on top of the per-block temporaries.
-        # The destination slices are views of a contiguous buffer, so the
-        # broadcasts below write the same values with nothing in between.
-        specs = []
-        sizes = [iA.size * iB.size for _AX, _BX, iA, iB in direct]
-        ntot = int(sum(sizes))
-        rho_all = np.empty(ntot, dtype=float)
-        z_all = np.empty(ntot, dtype=float)
-        zp_all = np.empty(ntot, dtype=float)
-        off = 0
-        for (AX, BX, iA, iB), nel in zip(direct, sizes):
-            pa, pb = AX["nodes"][iA], BX["nodes"][iB]
-            shp = (iA.size, iB.size)
-            specs.append((AX, BX, iA, iB, shp))
-            sl = slice(off, off + nel)
-            np.hypot(
-                pa[:, 0][:, None] - pb[:, 0][None, :],
-                pa[:, 1][:, None] - pb[:, 1][None, :],
-                out=rho_all[sl].reshape(shp),
-            )
-            z_all[sl].reshape(shp)[:] = (pa[:, 2] - gz)[:, None]
-            zp_all[sl].reshape(shp)[:] = (pb[:, 2] - gz)[None, :]
-            off += nel
-        tab = _tables(
-            ctx,
-            eps_t,
-            k_p,
-            rho_all,
-            z_all,
-            zp_all,
-            _CROSS_RTOL,
-            memo=memo,
-        )
-        off = 0
-        for AX, BX, iA, iB, shp in specs:
-            nel = shp[0] * shp[1]
-            K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
-            off += nel
-            _sandwich_dense(
-                AX, BX, iA, iB, K, k2sq, out=t_main, rows=rows, out_cols=t_cols
+        # Grouped by a budget on PAIRS, not one global batch (momwire#1126).
+        # `_tables` costs ~212 bytes of peak per pair at 150 radials, so the
+        # budget is what bounds this phase, not the deck size.
+        for g0, g1 in _pair_groups([iA.size * iB.size for _A, _B, iA, iB in direct]):
+            _direct_group(
+                ctx,
+                eps_t,
+                k_p,
+                gz,
+                k2sq,
+                memo,
+                direct[g0:g1],
+                t_main,
+                t_cols,
+                rows,
             )
 
     # ---- large far blocks: coarse axes, low-rank ACA per kernel. The
