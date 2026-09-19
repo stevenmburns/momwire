@@ -46,12 +46,28 @@ def test_a_port_names_its_wire_and_a_position_on_it():
     assert p.at == 0.25 and type(p.at) is float
 
 
-@pytest.mark.parametrize(
-    "at", [0, 0.0, 1, 1.0, -0.1, 1.5, math.nan, math.inf, True, "0.5"]
-)
-def test_at_is_a_fraction_strictly_inside_the_wire(at):
-    with pytest.raises(ValueError, match="strictly between 0 and 1"):
+@pytest.mark.parametrize("at", [-0.1, 1.5, math.nan, math.inf, True, "0.5"])
+def test_at_is_a_fraction_on_the_wire(at):
+    with pytest.raises(ValueError, match=r"fraction in \[0, 1\]"):
         PortOnWire("feed", at=at)
+
+
+@pytest.mark.parametrize("at", [0, 0.0, 1, 1.0])
+def test_an_endpoint_is_the_ground_contact_feed(at):
+    """The endpoints were refused outright until momwire#1135, on the rule
+    that a port must interrupt a current path and a wire end has none.
+
+    That holds at a FREE end, where the current is zero. It does not hold at
+    an end standing IN the ground plane: there the current path is the ground
+    contact, the image supplies the other side of the gap, and it is the drive
+    `tests/test_contact_nec5_lane.py` certifies against NEC-5 over five
+    grounds and five densities at `feed_arclength=0.0`.
+
+    This type cannot tell those apart — ground is not in its vocabulary — so
+    it admits the position and the physics is gated where the ground is known.
+    Ints coerce like any other position."""
+    p = PortOnWire("feed", wire="w1", at=at)
+    assert p.at == float(at) and type(p.at) is float
 
 
 @pytest.mark.parametrize("wire", ["", 3])
@@ -70,8 +86,10 @@ def test_a_distributed_port_takes_a_wire_but_no_position():
 def test_a_floating_port_carries_the_position_too():
     p = PortOnWireFloating("bal", wire="w1", at=0.4)
     assert (p.wire_name, p.at) == ("w1", 0.4)
-    with pytest.raises(ValueError, match="strictly between 0 and 1"):
+    with pytest.raises(ValueError, match=r"fraction in \[0, 1\]"):
         PortOnWireFloating("bal", at=2.0)
+    # ... and it takes an endpoint on the same terms as PortOnWire (#1135).
+    assert PortOnWireFloating("bal", wire="w1", at=0.0).at == 0.0
 
 
 def test_one_wire_carries_a_feed_and_a_load():

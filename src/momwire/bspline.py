@@ -733,9 +733,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         collapses on the delta to v_m = Φ_m(s_f). `"segment"` is NEC's
         segment-wide gap, E_app = V/Δ uniform over the mesh cell containing
         s_f, giving v_m = (1/Δ)∫_cell Φ_m ds — the same source
-        `SinusoidalSolver` hard-codes and `SinusoidalGalerkinSolver` defaults
-        to, so it is what makes a feed-matched comparison against those
-        solvers possible from this side (report §19). Mutually exclusive with
+        `SinusoidalSolver` hard-codes, so it is what makes a feed-matched
+        comparison against that solver possible from this side (report §19).
+        It is a CONTROL for isolating the testing axis rather than a
+        compatibility lane: NEC-2's formulation is `sinusoidal` — that basis,
+        that point matching, that gap — so Galerkin-with-a-segment-gap
+        reproduces NEC's reactance WALK, because the walk comes from the
+        source, but not NEC's formulation.
+        `"point"` is the PRODUCTION drive on this solver and on
+        `SinusoidalGalerkinSolver`, whose default it has also been since
+        momwire#654. This sentence used to say `"segment"` was that default,
+        which was true before #654 and has since sent at least one reader
+        reaching for the wrong lever (momwire#1135). The point gap converges
+        to the B-spline answer (momwire#192), is exactly self-dual under the
+        default centre readout, and removed up to 992x of the cross-basis
+        disagreement on the antennaknobs#478 class (momwire#213).
+        Mutually exclusive with
         `feed_smoothing_factor`. Note the readout follows: Z = 1/(vᵀc) is
         always the drive's dual, so `"segment"` reads the gap-AVERAGED
         current, matching `SinusoidalGalerkinSolver(feed_readout=
