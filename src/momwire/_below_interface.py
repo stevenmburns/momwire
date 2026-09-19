@@ -984,21 +984,6 @@ def _crossing_basis_rows(supp_seg, polys, rows):
     return np.flatnonzero((n_live > 0) & (n_in == n_live)).astype(np.int64)
 
 
-def _sub_field_galerkin(Z, f, *args):
-    """The block, subtracted from Z without the (n, n) transient when the
-    kernel can accumulate into a strided target (momwire#1115 part 3).
-
-    The two spellings are NOT bit-identical: the block's observer loop chunks,
-    so a basis row straddling a chunk boundary reassociates into Z. They agree
-    to the 1e-12 the buried gates carry, which is the tolerance this lever was
-    registered under.
-    """
-    if f.field_galerkin_out_ok:
-        f.field_galerkin_block(*args, out=Z, scale=-1.0)
-    else:
-        np.subtract(Z, f.field_galerkin_block(*args), out=Z)
-
-
 def compute_Z_operator_buried(
     geom,
     supp_seg,
@@ -1105,6 +1090,28 @@ def compute_Z_operator_buried(
         pinned before the move -- with `self.X` replaced by the data or the
         callable it stands for and nothing else changed.
     """
+
+    def _sub_field_galerkin(Z, f, *args):
+        """The block, subtracted from Z without the (n, n) transient when the
+        kernel can accumulate into a strided target (momwire#1115 part 3).
+
+        The two spellings are NOT bit-identical: the block's observer loop
+        chunks, so a basis row straddling a chunk boundary reassociates into
+        Z. They agree to the 1e-12 the buried gates carry, which is the
+        tolerance this lever was registered under.
+
+        Nested rather than module level on purpose: `test_g980c_5` walks THIS
+        function's AST to prove the routing reaches the solver only through
+        the bundle, and a helper lifted out of it takes
+        `f.field_galerkin_block` and `f.field_galerkin_out_ok` out of that
+        proof -- the seam would still hold and the test could no longer see
+        it.
+        """
+        if f.field_galerkin_out_ok:
+            f.field_galerkin_block(*args, out=Z, scale=-1.0)
+        else:
+            np.subtract(Z, f.field_galerkin_block(*args), out=Z)
+
     (
         below,
         a_idx,
