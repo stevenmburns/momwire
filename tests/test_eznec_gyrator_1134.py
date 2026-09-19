@@ -235,19 +235,17 @@ def test_the_forced_current_is_restored_from_the_card_not_read_back():
         (card,) = [n for n in deck.networks if source.at in (n.end_a, n.end_b)]
         assert gyrators[source.at].current == -card.y12 * source.drive
 
-    rows = run("Cardioidmodnec2.nec").sources
-    solved = {
-        (row.tag, row.segment): row.current
-        for row in run("Cardioidmodnec2.nec").network_excitation
-    }
-    for row in rows:
-        # Exact, not approximate: the restore is what removes the residue.
-        assert row.current.real in (0.0, 1.414214, -1.414214) or row.current.imag in (
-            0.0,
-            1.414214,
-            -1.414214,
+    data = run("Cardioidmodnec2.nec")
+    solved = {(row.tag, row.segment): row.current for row in data.network_excitation}
+    for row, wanted in zip(data.sources, CARDIOID_EX6, strict=True):
+        # `==`, not approx: the restore is what removes the residue, so an
+        # exact equality here is the whole claim. The solved current carries
+        # that residue and is compared separately, at 1e-15.
+        assert row.current == wanted
+        residue = abs(row.current - solved[(row.tag, row.segment)])
+        assert 0.0 < residue < 1e-15, (
+            f"restored {row.current!r}, solve off by {residue}"
         )
-        assert abs(row.current - solved[(row.tag, row.segment)]) < 1e-15
 
 
 # --------------------------------------------------------------------------
