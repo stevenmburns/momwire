@@ -1903,7 +1903,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         media = self._wire_media()
         if _medium_spec.BELOW not in media or not self._crossing_junctions():
             return None
-        return _below_interface.crossing_side_radii(media, radii)
+        return _below_interface.crossing_side_radii(
+            media,
+            radii,
+            _below_interface.crossing_above_member(
+                self._crossing_junctions(), self.junctions, media
+            ),
+        )
 
     @property
     def n_qp_pair(self):

@@ -342,7 +342,9 @@ def crossing_junctions(
                 "ONE wire radius, and a mixed-radius convention is not "
                 "pinned (momwire#524 phase 2)"
             )
-        crossing_side_radii(media, radii)
+        crossing_side_radii(
+            media, radii, crossing_above_member(crossing, groups, media)
+        )
         if len(crossing) > 1:
             raise NotImplementedError(
                 f"a TWO-RADIUS crossing deck with {len(crossing)} crossing "
@@ -353,19 +355,61 @@ def crossing_junctions(
     return tuple(crossing)
 
 
-def crossing_side_radii(media, radii):
-    """`(a_above, a_below)` for a TWO-RADIUS crossing deck: every above wire
-    at one radius, every below wire at another (antennaknobs plan U5).
+def crossing_above_member(crossing, groups, media):
+    """The single ABOVE wire standing at the deck's crossing node — the owner
+    of `a_above` (momwire#1140), or None when the deck does not have exactly
+    one crossing node.
 
-    That is the class the two-radius rule was measured on
-    (`_crossing_fill.cross_complete_blocks_two_radius`): line tests at their
-    observer's radius, the node's point tests at the buried radius. A spread
-    WITHIN one side, a fan of buried members of different radii included, has
-    no measured node radius, so it is refused by name.
+    Well-defined by two rules that already hold: the scope grants exactly ONE
+    above member per crossing junction, and a two-radius deck with more than
+    one crossing node is refused below. `None` therefore falls back to the
+    whole-side rule, which is the conservative answer for the cases this was
+    not measured on.
+    """
+    if len(crossing) != 1:
+        return None
+    for w, _e in groups[crossing[0]]:
+        if media[w] == _medium_spec.ABOVE:
+            return w
+    return None
+
+
+def crossing_side_radii(media, radii, above_member=None):
+    """`(a_above, a_below)` for a TWO-RADIUS crossing deck (antennaknobs plan
+    U5): line tests at their observer's radius, the node's point tests at the
+    buried radius (`_crossing_fill.cross_complete_blocks_two_radius`).
+
+    `a_above` is the radius of the ABOVE wire STANDING AT THE NODE, which
+    `above_member` names — so a spread among the other above wires is served
+    since momwire#1140. That is a measurement, not a relaxation. The plain
+    oracle ladder cannot decide it (the momwire-vs-engine gap is itself a node
+    convention difference, so it scales with the quantity being measured and
+    caps S/D at 0.68 over 30 geometries). A DIFFERENTIAL against a control
+    deck that shares every card at and below the node can: the node gap
+    cancels for a rule that holds `a_above` across the pair and does not for
+    one that lets it follow the far wire. Headline rung, poor soil, h/a 1.88:
+    the node member's radius answers 0.087 ohm, the far wire's 4.514, against
+    a knob range of 4.597 (S/E 52.7), and `a_above` swept continuously has ONE
+    minimum that does not move when the far radius moves 16x — which rules out
+    every rule in which `a_above` is a function of the far wire, not just that
+    one candidate (`scratch/u5-mixed-radius/d_verdict_ladder.py`).
+
+    `above_member` is None when the deck does not have exactly one crossing
+    node; the whole-side rule then applies, because `a_above` is one deck-level
+    scalar and several nodes could disagree about it. A two-radius deck with
+    several nodes is refused below in any case.
+
+    The BELOW side keeps the whole-side rule and its refusal. `a_below` is the
+    radius the node's POINT tests actually take, and a fan of buried members at
+    different radii all meeting the node was not measured — it is a different
+    question from this one, not the mirror of it.
     """
     radii = np.asarray(radii, dtype=float)
     out = []
     for side in (_medium_spec.ABOVE, _medium_spec.BELOW):
+        if side == _medium_spec.ABOVE and above_member is not None:
+            out.append(float(radii[above_member]))
+            continue
         r = radii[[w for w, m in enumerate(media) if m == side]]
         if float(r.max()) - float(r.min()) > 0.0:
             raise NotImplementedError(
