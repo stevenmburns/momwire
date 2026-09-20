@@ -4247,6 +4247,25 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             s_f = arc_req if arc_req is not None else wire_arc / 2.0
         knots = wire_knots[wi]
         kept, local_to_global = wire_basis_global[wi]
+        # A feed AT a wire end, clipped onto the knot vector's own domain.
+        # The caller's arclength for an end is the polyline's straight-line
+        # length; `arc` is that same length ACCUMULATED over the mesh, and the
+        # two differ in the last ulps — measured 3.6e-15 short on a
+        # 95-segment 19.84542 m wire, which put the request past `knots[-d-1]`
+        # and made `BSpline.design_matrix` raise `Out of bounds` on a feed
+        # that was exactly where it was asked for. `_feed_cell` already clips
+        # the same request for the segment model ("one at the wire's far end
+        # is clipped to the last cell"); this is that clip for the point one.
+        #
+        # Inside a RELATIVE tolerance of the two ends only, so an arclength
+        # that is genuinely off the wire still reaches the raise rather than
+        # being fed silently at an end.
+        s_lo, s_hi = float(knots[d]), float(knots[-d - 1])
+        slack = 1e-9 * max(s_hi - s_lo, 1.0)
+        if s_lo - slack <= s_f < s_lo:
+            s_f = s_lo
+        elif s_hi < s_f <= s_hi + slack:
+            s_f = s_hi
 
         if self.feed_smoothing_factor is None and self.feed_model == "point":
             # Delta-gap (original)
