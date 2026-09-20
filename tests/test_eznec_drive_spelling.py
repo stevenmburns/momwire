@@ -90,15 +90,26 @@ def test_a_node_gap_basis_cuts_the_wire_and_a_delta_gap_basis_does_not():
 @pytest.mark.integration
 @pytest.mark.parametrize("cid", CAPTURE_IDS)
 def test_no_capture_hands_razor_a_piece_the_cut_invented(cid):
-    """One polyline per ``GW``, for every deck in the corpus.
+    """One polyline per ``GW`` that is GEOMETRY, for every deck in the corpus.
 
     The delta-gap spelling cuts nothing, so the mesh's pieces are the deck's
     own wires — which is also what keeps a one-segment piece from being
     manufactured where a card addressed the node next to a wire's end.
+
+    Since momwire#1139 the wires are the deck's own MINUS the phantom, which
+    is one wire in 23 of the 80 decks and no polyline in any of them: EZNEC
+    parks it ~100 lambda out to spell a circuit node, and this gate is about
+    the CUT inventing pieces, not about which wires are structure.  The
+    subtraction is stated with ``_phantom_tags`` rather than with a list of
+    the 23, because a list would be a second copy of the detector.
     """
     deck, mesh = mesh_for(cid, RazorSolver)
-    assert [p.tag for p in mesh.pieces] == [w.tag for w in deck.wires]
-    assert [p.n_elements for p in mesh.pieces] == [w.segment_count for w in deck.wires]
+    phantom = _serve._phantom_tags(
+        deck, _serve.SPEED_OF_LIGHT_MHZ_M / deck.frequency_mhz
+    )
+    wires = [w for w in deck.wires if w.tag not in phantom]
+    assert [p.tag for p in mesh.pieces] == [w.tag for w in wires]
+    assert [p.n_elements for p in mesh.pieces] == [w.segment_count for w in wires]
 
 
 @pytest.mark.integration
