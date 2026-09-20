@@ -838,6 +838,66 @@ def test_g1133_the_residual_is_quadrature(record_property):
     )
 
 
+# ----------------------------------------------------------------------
+# G-1140 — a_above is the NODE MEMBER's radius, not the whole side's
+# ----------------------------------------------------------------------
+
+
+def test_g1140_a_spread_among_the_other_above_wires_is_served():
+    """`a_above` is the radius of the above wire STANDING AT THE NODE, so a
+    different radius further up is ordinary geometry the normal fill already
+    handles (momwire#1140). Measured, not relaxed: the plain oracle ladder
+    caps at S/D 0.68 over 30 geometries because the momwire-vs-engine gap is
+    itself a node-convention difference, but a differential against a control
+    sharing every card at and below the node separates the candidates 52x."""
+    build = above_side_deck(wire_radius=[0.002, 0.001, 0.004])
+    s = BSplineSolver(**build)
+    assert s._wire_media() == (
+        _medium_spec.BELOW,
+        _medium_spec.ABOVE,
+        _medium_spec.ABOVE,
+    )
+    assert s._crossing_junctions() == (0,)
+    # wire 1 is the node's above member; wire 2's 0.004 does not enter.
+    assert s._two_radius_crossing() == (0.001, 0.002)
+
+
+def test_g1140_the_far_wires_radius_does_not_move_a_above():
+    """The sweep's finding as a pin: the optimum did not move when the far
+    radius moved 16x, which rules out every rule where `a_above` is a function
+    of the far wire — a mean, a max, or the far radius itself."""
+    for a_far in (0.0005, 0.002, 0.008):
+        s = BSplineSolver(**above_side_deck(wire_radius=[0.002, 0.001, a_far]))
+        assert s._two_radius_crossing() == (0.001, 0.002), a_far
+
+
+def test_g1140_a_below_spread_is_a_different_question_and_still_refuses():
+    """The half that was NOT measured. `a_below` is the radius the node's
+    POINT tests actually take, and a fan of buried members at different radii
+    all meeting the node is not the mirror of the above case."""
+    radii = [0.001, 0.001, 0.001, 0.0005, 0.001, 0.002]
+    s = BSplineSolver(**hub_deck(wire_radius=radii))
+    with pytest.raises(NotImplementedError, match="differ within the below wires"):
+        s._crossing_junctions()
+
+
+def test_g1140_several_crossing_nodes_keep_the_whole_side_rule():
+    """`a_above` is ONE deck-level scalar, so several crossing nodes could
+    disagree about which member owns it. `crossing_above_member` answers None
+    there and the whole-side rule applies — conservative, and moot in practice
+    because a two-radius deck with several nodes is refused by name anyway."""
+    assert (
+        _below_interface.crossing_above_member(
+            (0, 1), [[(0, "end")], [(1, "end")]], (_medium_spec.ABOVE,) * 2
+        )
+        is None
+    )
+    radii = [2.0 * A_WIRE, A_WIRE, 2.0 * A_WIRE, A_WIRE]
+    s = BSplineSolver(**two_node_deck(wire_radius=radii))
+    with pytest.raises(NotImplementedError, match=_TWO_RADIUS_NODES):
+        s._crossing_junctions()
+
+
 def test_g524_2_node_graded_fan_plans_without_the_cross_grid():
     """A crossing deck never builds the transmitted grid — its cross pair
     is the designed DIRECT evaluation — so the θ-floor cost law must not
