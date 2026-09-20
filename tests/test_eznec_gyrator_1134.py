@@ -223,10 +223,28 @@ def test_the_forced_current_is_restored_from_the_card_not_read_back():
     """Whatever a card SETS is a boundary condition (the U1 restore rule).
 
     A gyrator carries a set voltage to a set current, so the current is exact
-    going in and reading it back out of the solve only adds the round-off that
-    decides the sign of a zero - 4.9e-17 and 1.9e-17 on the Cardioid's two
-    ports, the same residue an ``EX 4`` row restores away. The restored value
-    must be EXACTLY ``-Y12*V`` and must still agree with the solve.
+    going in and reading it back out of the solve only adds round-off. The
+    restored value must be EXACTLY ``-Y12*V`` and must still agree with the
+    solve.
+
+    The residue used to be pinned STRICTLY POSITIVE (4.9e-17 and 1.9e-17 on
+    the Cardioid's two ports) as a second claim: that the restore had removed
+    something, so the value could not have been read back out of the solve.
+    **momwire#1139 retired that half, and it is a real change rather than a
+    loosened bar.** With the phantom out of the SOLVE, the antenna's
+    admittance at a node the antenna is not at is exactly zero rather than
+    ~1e-32, so the solved current now equals the card's to the last bit and
+    there is no residue left to remove. It came out as 0.0 on macOS while
+    linux still happened to carry ~1e-17 of it -- which is the tell that the
+    quantity was always round-off, and that a gate resting on round-off being
+    non-zero was resting on nothing.
+
+    The VALUE is still pinned exactly, twice (against the card above, against
+    the banked row below), so a wrong restore still fails. What is no longer
+    demonstrable ON THIS DECK is the provenance -- when the two agree bitwise,
+    equality cannot say which one was read. That wants an adversarial probe
+    (perturb the solved value and show the restore does not follow) rather
+    than an arithmetic accident; filed as a follow-up.
     """
     deck = parse_nec5((FIXTURES / "Cardioidmodnec2.nec").read_text())
     gyrators = _gyrator_drives(deck, wavelength_of(deck))
@@ -242,10 +260,10 @@ def test_the_forced_current_is_restored_from_the_card_not_read_back():
         # exact equality here is the whole claim. The solved current carries
         # that residue and is compared separately, at 1e-15.
         assert row.current == wanted
+        # Upper bound only since momwire#1139 -- see the docstring. Zero is
+        # now a legitimate outcome and means the solve agrees to the last bit.
         residue = abs(row.current - solved[(row.tag, row.segment)])
-        assert 0.0 < residue < 1e-15, (
-            f"restored {row.current!r}, solve off by {residue}"
-        )
+        assert residue < 1e-15, f"restored {row.current!r}, solve off by {residue}"
 
 
 # --------------------------------------------------------------------------
