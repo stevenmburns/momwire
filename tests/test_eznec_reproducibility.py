@@ -125,7 +125,16 @@ def test_the_wire_table_bar_sits_in_four_empty_decades():
         rel += [mag / peak[head] for head, mag in rows if peak[head] > 0 and mag > 0]
     dust = [r for r in rel if r < R.WIRE_TABLE_DUST]
     real = [r for r in rel if r >= R.WIRE_TABLE_DUST]
-    assert dust, "no deck carries a dead wire any more"
+    # EMPTY since momwire#1139, and that is the finding rather than a
+    # regression: the corpus's entire wire-table dust population WAS the
+    # phantom wire's 173-lambda coupling, and the phantom is no longer solved.
+    # The population it guarded is gone, so the assertion is inverted — this
+    # fires if dust ever comes back. `_void`'s upper edge still pins the bar
+    # below the weakest REAL reading (1.96e-05, five decades clear), which is
+    # the half of the bar that still has a tenant.
+    assert not dust, (
+        f"wire-table dust is back: {len(dust)} rows, max {max(dust, default=0):.3e}"
+    )
     _void(dust, real, R.WIRE_TABLE_DUST, "WIRE_TABLE_DUST")
 
 
@@ -145,7 +154,13 @@ def test_the_wire_loss_bar_sits_in_thirty_one_empty_decades():
             frac.append(abs(loss) / abs(power))
     dust = [x for x in frac if x < R.WIRE_LOSS_DUST]
     real = [x for x in frac if x >= R.WIRE_LOSS_DUST]
-    assert dust, "no deck prints a wire-loss crumb any more"
+    # EMPTY since momwire#1139, same reason as the wire table above: the five
+    # crumbs were the phantom's pin carrying current, and nothing reaches that
+    # node now. Inverted for the same reason, and `_void` still holds the
+    # upper edge.
+    assert not dust, (
+        f"wire-loss dust is back: {len(dust)} decks, max {max(dust, default=0):.3e}"
+    )
     _void(dust, real, R.WIRE_LOSS_DUST, "WIRE_LOSS_DUST")
 
 
@@ -153,9 +168,16 @@ def test_the_wire_loss_bar_sits_in_thirty_one_empty_decades():
 def test_the_boundary_stays_narrow():
     """What it costs, as a number rather than as a promise.
 
-    56 lines in 6 of 80 decks, all of them carrying an open stub or a dead
-    wire. If a rule starts reaching decks outside this set, the bar moved or
-    the physics did, and either wants looking at rather than accepting.
+    218 lines in 23 of 80 decks since momwire#1139 — the physics did move,
+    which is what this test asked to be told about, so it is restated rather
+    than widened. The set is now EXACTLY the decks carrying a phantom wire:
+    with the phantom out of the solve its rows read exact zero, and a row of
+    exact zero has an undefined phase, so blanking it is right. Before #1139
+    it was 56 lines in 6 decks (0012 0014 0016 0017 0018 0028), the subset
+    whose phantom was pinned into an open stub.
+
+    If a rule starts reaching decks outside this set, the bar moved or the
+    physics did, and either wants looking at rather than accepting.
     """
     touched = {
         cid: sum(
@@ -166,8 +188,8 @@ def test_the_boundary_stays_narrow():
         for cid, text in corpus().items()
     }
     hit = {cid: n for cid, n in touched.items() if n}
-    assert set(hit) == {"0012", "0014", "0016", "0017", "0018", "0028"}, sorted(hit)
-    assert sum(hit.values()) == 56, hit
+    assert len(hit) == 23, sorted(hit)
+    assert sum(hit.values()) == 218, hit
 
 
 def test_an_exact_zero_wire_loss_is_an_answer_and_not_a_crumb():
