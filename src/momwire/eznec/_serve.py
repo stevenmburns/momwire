@@ -1423,6 +1423,87 @@ def structure_of(deck: Nec5Deck) -> Structure:
     )
 
 
+# EZNEC's phantom wire, in wavelengths.  Both numbers separate two populations
+# measured over the 80 committed decks (`tests/test_eznec_gyrator_1134.py`
+# re-measures them): 23 of those decks park ONE wire whose nearest
+# endpoint-to-endpoint distance to anything else is 173.01-173.50 lambda and
+# whose own end-to-end extent is 0.0035-0.0087 lambda, and the other 286 wires
+# in the corpus stand 0.0-0.2625 lambda clear.  The clearance line is drawn at
+# 10 lambda because that is inside a gap of nearly three decades - 38x above
+# the widest gap in a real structure, 17x below the closest parked wire - and
+# it is antennaknobs' own measured `_ANCHOR_CLEARANCE_LAMBDA`.
+#
+# The EXTENT line is what stops a genuinely remote ANTENNA - an element in a
+# coupling study, fed through a feedline - being read as a circuit node: the
+# corpus's smallest real wire is 0.0001 lambda, so extent alone separates
+# nothing, and it is extent TOGETHER with a clearance many times it that names
+# the idiom.  The parked wires clear their own extent by ~20,000x.
+_PHANTOM_CLEARANCE_LAMBDA = 10.0
+_PHANTOM_EXTENT_LAMBDA = 0.05
+_PHANTOM_CLEARANCE_EXTENTS = 100.0
+
+# The piece index of a deck element or a site that has no polyline behind it —
+# a phantom wire's (momwire#1139).  Negative so that every consumer that
+# forgets it INDEXES BACKWARDS into a real piece rather than reading a
+# plausible zero, which is the failure a sentinel of 0 would hide.
+_NO_PIECE = -1
+
+
+def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
+    """The tags of wires EZNEC parked ~100 lambda away to use as circuit NODES.
+
+    The deck usually names the construction itself (``CM ! *Wire #3 for
+    virtual segments.``), but a comment is corroboration and not a rule, so
+    this is structural: a wire is the phantom when it is electrically
+    negligible and stands clear of everything else by the thresholds above.
+
+    ``clearance`` is the nearest endpoint-to-endpoint distance to any other
+    wire, which is a LOWER bound on true separation rather than the separation
+    itself - ample at the 173 lambda the idiom parks at, and the same bound
+    antennaknobs' ``_remote_wire_tests`` computes.  It also makes the "shares
+    no node with the structure" test redundant: a wire 10 lambda clear of
+    every other endpoint shares none of them.
+
+    Answering in TAGS rather than in wire indices is safe here only because
+    the dialect refuses a repeated tag at the parse (``_gw``: "this engine's
+    nec5 dialect gives each wire its own tag, because a node address names one
+    wire's segment boundary").  Without that guarantee a tag shared between a
+    parked wire and a real one would put a real node in this set, since
+    :meth:`Structure.index_of` resolves a tag to the FIRST wire carrying it.
+
+    Read on EVERY deck since momwire#1139, from :func:`build_mesh`, because
+    the GEOMETRY question is asked of every deck and not only of one that
+    wrote a gyrator card.  The readout half (:func:`_gyrator_drives`) asks the
+    same question later and takes the same answer.
+    """
+    if len(deck.wires) < 2:
+        return frozenset()
+    # `math.dist` on plain tuples, not `np.linalg.norm` on 3-vectors: this is
+    # O(wires^2) scalar work, where numpy's per-call overhead dominates its
+    # arithmetic.  Measured over the committed corpus, the numpy spelling cost
+    # 58 ms on the 55-wire 0035 and 114 ms across all 80 decks; this one costs
+    # 1.3 ms and 3.0 ms.  3.0 ms for the whole corpus is what makes it
+    # affordable on every deck rather than only behind a candidate card.
+    ends = [(tuple(wire.end1), tuple(wire.end2)) for wire in deck.wires]
+    tags = []
+    for index, (a, b) in enumerate(ends):
+        extent = math.dist(a, b)
+        clearance = min(
+            math.dist(here, there)
+            for other, pair in enumerate(ends)
+            if other != index
+            for here in (a, b)
+            for there in pair
+        )
+        if (
+            extent < _PHANTOM_EXTENT_LAMBDA * wavelength
+            and clearance > _PHANTOM_CLEARANCE_LAMBDA * wavelength
+            and clearance > _PHANTOM_CLEARANCE_EXTENTS * extent
+        ):
+            tags.append(deck.wires[index].tag)
+    return frozenset(tags)
+
+
 # --------------------------------------------------------------------------
 # the mesh: one polyline per GW, cut at every addressed interior node
 # --------------------------------------------------------------------------
@@ -1479,7 +1560,9 @@ class _Site:
     """
 
     at: Nec5Node
-    # "gap" (a ``feeds`` delta gap) or "node" (a ``node_gaps`` series EMF).
+    # "gap" (a ``feeds`` delta gap), "node" (a ``node_gaps`` series EMF), or
+    # "virtual" (a circuit node on a wire that is not geometry, momwire#1139 —
+    # :attr:`piece` is :data:`_NO_PIECE` and :attr:`column` stays negative).
     # Which one a through-current node becomes is the BASIS's choice, not the
     # deck's — see :func:`build_mesh`, "Two ways to spell one series EMF".
     spelling: str
@@ -1505,6 +1588,10 @@ class _Site:
     # the structure, where a second address is the far side of one port.
     contact: bool = False
     index: int = -1
+    # A NEGATIVE column means this site reaches no momwire port at all, which
+    # is the "virtual" spelling and nothing else: :func:`_transform` leaves
+    # its row of ``T`` empty, so the composed ``T^T Y T`` carries a zero row
+    # AND a zero column there and the node is pure circuit.
     column: int = -1
     weight: float = 0.0
     load: complex = 0j
@@ -1516,7 +1603,11 @@ class _Mesh:
     pieces: list[_Piece] = field(default_factory=list)
     junctions: list[list[tuple[int, str]]] = field(default_factory=list)
     sites: list[_Site] = field(default_factory=list)
-    # deck element index (0-based, global) -> (piece, element within piece)
+    # deck element index (0-based, global) -> (piece, element within piece),
+    # with :data:`_NO_PIECE` for an element of a wire that never became a
+    # polyline.  Every deck element has an entry, phantom included, because
+    # the current and charge tables print one row per element and the ENGINE
+    # counts the phantom's (momwire#1139).
     element_of: list[tuple[int, int]] = field(default_factory=list)
     # The solver's ports, in momwire's own order — every gap feed, then every
     # node gap — each named by the site that DECLARED it.  A site that shares
@@ -1608,6 +1699,24 @@ def build_mesh(
     ``RazorSolver`` gained the port for the K >= 3 apex (U4) and still wants
     the delta gap everywhere else, because the cut manufactures one-segment
     polylines — which it now hosts (momwire#608) and still has no use for.
+
+    The wire that is not geometry
+    -----------------------------
+    A ``GW`` :func:`_phantom_tags` names becomes NO polyline (momwire#1139).
+    EZNEC parks it ~100 lambda out to spell a current source or a source
+    behind a transformer, and its segments are circuit NODES; handing it to
+    the solver as a wire is what put its radius in the crossing serve's
+    one-radius-per-side census and its POSITION in the Sommerfeld grid's
+    extent, neither of which is a fact about the antenna.
+
+    This is the LAST seam at which the phantom is still a wire, and the line
+    is drawn here rather than in :func:`structure_of` on purpose: the four
+    STRUCTURE SPECIFICATION counts and the current / charge tables are the
+    ENGINE's, which solves the phantom as real geometry and prints its
+    elements, so a printout that dropped them would stop being the engine's
+    printout.  What the phantom loses is its place in the SOLVE — no
+    unknowns, no radius, no extent — and its addressed nodes come out of
+    :func:`_site_for` as deck ports reaching no momwire port at all.
     """
     mesh = _Mesh()
     # momwire#667: a deck with a crossing junction takes the delta-gap
@@ -1618,6 +1727,16 @@ def build_mesh(
     # two discretisations of one source (see above), and the uncut one is
     # the one this deck can be served with.
     cut = issubclass(solver_class, _CUT_SPELLING) and not crossing
+    # Asked of the DECK rather than taken as an argument: the wavelength the
+    # thresholds are in is the deck's own `FR`, and a caller that had to pass
+    # it is a caller that can forget to.  A deck with no `FR` has already been
+    # refused by name before `serve` reaches here (`_REFUSE_NO_FR`), so the
+    # guard below is for this function's direct callers in the tests.
+    phantom = (
+        _phantom_tags(deck, SPEED_OF_LIGHT_MHZ_M / deck.frequency_mhz)
+        if deck.frequency_mhz
+        else frozenset()
+    )
     addressed = _addressed_nodes(deck)
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
     # (tag, node) -> (piece, metres along it), for an addressed node STRICTLY
@@ -1627,6 +1746,12 @@ def build_mesh(
 
     for wire, points in zip(structure.wires, structure.points, strict=True):
         last = wire.segment_count
+        if wire.tag in phantom:
+            # No piece, so no junction end, no radius, no arclength and no
+            # unknown — but one `element_of` entry per element, because the
+            # printout still has a row for each (see the docstring).
+            mesh.element_of += [(_NO_PIECE, k) for k in range(last)]
+            continue
         addressed_inside = sorted(
             k for k in addressed.get(wire.tag, ()) if 0 < k < last
         )
@@ -1689,6 +1814,7 @@ def build_mesh(
                 tag,
                 node,
                 node_gaps=cut,
+                phantom=phantom,
             )
             site.index = len(mesh.sites)
             mesh.sites.append(site)
@@ -1759,6 +1885,12 @@ def _assign_columns(mesh: _Mesh) -> None:
     }
     declared: dict[int, _Site] = {}
     for site in mesh.sites:
+        if site.spelling == "virtual":
+            # No momwire port, so no column and no weight: the defaults ARE
+            # the answer here (:class:`_Site`, "A NEGATIVE column").  It joins
+            # neither `feeds` nor `gaps`, which is what keeps it out of
+            # `_solver_for`'s two port lists and out of `n_columns`.
+            continue
         junction = None if site.contact else junction_of.get((site.piece, site.end))
         first = declared.get(junction) if junction is not None else None
 
@@ -1814,9 +1946,17 @@ def _transform(mesh: _Mesh) -> np.ndarray:
     sides.  It is a signed selection matrix: one nonzero per site, and one
     column per site rather than per port, because a shared cut has two sites
     on one port.
+
+    A site with a NEGATIVE column contributes nothing — it is a circuit node
+    on a wire that never became geometry, so the antenna's admittance at it is
+    ZERO rather than small (momwire#1139).  Skipping it is not the same as
+    letting the ``-1`` index through: that would write the weight into the
+    LAST port's row and hand the phantom another wire's admittance.
     """
     t = np.zeros((mesh.n_columns, len(mesh.sites)))
     for site in mesh.sites:
+        if site.column < 0:
+            continue
         t[site.column, site.index] = site.weight
     return t
 
@@ -1880,8 +2020,26 @@ def _site_for(
     node: int,
     *,
     node_gaps: bool,
+    phantom: frozenset[int] = frozenset(),
 ) -> _Site:
-    """Which momwire port a ``(favored tag, node)`` address becomes."""
+    """Which momwire port a ``(favored tag, node)`` address becomes.
+
+    A node on a PHANTOM wire becomes none of them (momwire#1139).  It is a
+    circuit node EZNEC spelled as a segment address, so it is a deck port
+    with a load, a drive and its rows in the port tables, and no momwire port
+    underneath: the antenna's admittance at it is zero because the antenna is
+    not there.  Every geometric refusal below is skipped with it, and that is
+    the point rather than a leak — a card landing on a free END of a phantom
+    is the idiom's datum pin, not an address with no current path.
+    """
+    if tag in phantom:
+        return _Site(
+            at=Nec5Node(tag=tag, node=node),
+            spelling="virtual",
+            piece=_NO_PIECE,
+            end="none",
+            sign=0.0,
+        )
     inside = inside_piece.get((tag, node))
     if inside is not None:
         return _interior_site(structure, mesh, inside, tag, node)
@@ -2389,6 +2547,57 @@ def _reduced_state(
     return v_applied, i_port, i_source
 
 
+def _series_loads(mesh: _Mesh, y: np.ndarray, z_load: np.ndarray) -> np.ndarray:
+    """The loads that stand in a port's CURRENT PATH, with ``y`` pinned for the
+    rest.
+
+    On a wire an ``LD`` sits in SERIES inside the port, because the port is a
+    gap in a conductor and the load is in the current's path
+    (:func:`_port_state`, "``V_gap = (1 + Z·Y)^-1 · V_applied``").  A virtual
+    site has no conductor and no gap (momwire#1139), so a series impedance
+    there is in series with an open circuit and composes to nothing —
+    ``Y_eff = Y(1 + ZY)^-1`` is zero when ``Y`` is, and the node vanishes from
+    the system rather than being pinned by its own card.
+
+    What the card means at such a node is the admittance BETWEEN it and the
+    return, which is what EZNEC spells with it: the idiom pins every virtual
+    segment it addresses with ``LD 4 … 1.E+10`` for an open, and the same card
+    at ``0`` would be a short.  All 43 addressed phantom nodes across the 23
+    committed decks that park a wire carry one, and so does WA7ARK's
+    ``LD 4,7,1,0,1.E+10,0.``.
+
+    It is also what NEC's own answer comes to, less the geometry this issue
+    removes: NEC composes the pin in series with the phantom SEGMENT's
+    admittance, and 0026 prints that as ``1.0000E+10 -2.0958E+04`` — the pin,
+    plus the little wire's own reactance.  Reading the pin alone keeps the
+    resistance and drops the reactance, which is the phantom's geometry and
+    is precisely what is meant to leave.
+
+    Without this the five ``NT``-terminated decks (0012, 0014, 0016, 0017,
+    0018) are SINGULAR: their ``NT`` spells a parallel load, with
+    ``Y12 = Y22 = 0``, so the card stamps nothing at all at the virtual end
+    and only the pin can reach it.
+
+    A ZERO load is left alone rather than read as a short, for the same reason
+    ``_port_state``'s composition leaves one alone: ``LD 4 … 0,0`` on a
+    segment is no load, not a bond to the return.
+
+    Only the COMPOSITION's copy loses it.  ``z_load`` is untouched, because
+    the POWER BUDGET charges the card's watts where the engine charges them:
+    NEC dissipates the pin in a wire's segment and prints it on the WIRE LOSS
+    line — 7.5402E-08 W on 0001, 5.0797E-54 W on 0012 — and this seam's
+    budget is gated against that.  The current through the pin is the same
+    either way, so keeping the row is keeping a number, not a fiction.
+    """
+    z_series = z_load.copy()
+    for site in mesh.sites:
+        if site.spelling != "virtual" or not z_load[site.index]:
+            continue
+        y[site.index, site.index] = 1.0 / z_load[site.index]
+        z_series[site.index] = 0j
+    return z_series
+
+
 @dataclass(frozen=True)
 class _PortState:
     """What the solve says at every site, in the DECK's convention.
@@ -2462,13 +2671,18 @@ def _port_state(
     y = t.T @ y_solver @ t
     n = len(mesh.sites)
     z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
+    # Two load vectors from here down, and they differ only at a VIRTUAL site
+    # (:func:`_series_loads`): `z_series` is what stands in a port's current
+    # path and composes with `y`, `z_load` is what the cards declare and what
+    # the budget charges.
+    z_series = _series_loads(mesh, y, z_load)
     if len(deck.sources) > 1:
-        return _multi_drive_state(deck, mesh, cards, y, z_load, wavelength)
+        return _multi_drive_state(deck, mesh, cards, y, z_load, z_series, wavelength)
     (source,) = deck.sources
     (driven,) = [site.index for site in mesh.sites if site.driven]
     probe = np.zeros(n, dtype=np.complex128)
     probe[driven] = 1.0
-    loaded = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
+    loaded = np.eye(n, dtype=np.complex128) + z_series[:, None] * y
 
     if not cards:
         # No network reaches this deck, so the source current IS the port
@@ -2478,13 +2692,13 @@ def _port_state(
         v_gap = np.linalg.solve(loaded, probe)
         i_port = y @ v_gap
         i_source = i_port
-        v_applied = v_gap + z_load * i_port
+        v_applied = v_gap + z_series * i_port
     else:
-        y_eff = y if not np.any(z_load) else np.linalg.solve(loaded.T, y.T).T
+        y_eff = y if not np.any(z_series) else np.linalg.solve(loaded.T, y.T).T
         v_applied, i_port, i_source = _reduced_state(
             cards, n, probe, (driven,), y_eff, wavelength
         )
-        v_gap = v_applied - z_load * i_port
+        v_gap = v_applied - z_series * i_port
 
     scale = (
         source.drive
@@ -2506,6 +2720,7 @@ def _multi_drive_state(
     cards: tuple[_Card, ...],
     y: np.ndarray,
     z_load: np.ndarray,
+    z_series: np.ndarray,
     wavelength: float,
 ) -> _PortState:
     """Several ``EX`` cards at once: the CONSTRAINED drive, partitioned.
@@ -2598,8 +2813,8 @@ def _multi_drive_state(
     """
     n = len(mesh.sites)
     driven = [site.index for site in mesh.sites if site.driven]
-    loaded = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
-    y_eff = y if not np.any(z_load) else np.linalg.solve(loaded.T, y.T).T
+    loaded = np.eye(n, dtype=np.complex128) + z_series[:, None] * y
+    y_eff = y if not np.any(z_series) else np.linalg.solve(loaded.T, y.T).T
 
     site_of = {site.at: site.index for site in mesh.sites}
     row_of = {index: k for k, index in enumerate(driven)}
@@ -2678,7 +2893,7 @@ def _multi_drive_state(
         v_applied[v_sites] = spec[v_rows]
     return _PortState(
         v_applied=v_applied,
-        v_gap=v_applied - z_load * i_port,
+        v_gap=v_applied - z_series * i_port,
         i_port=i_port,
         i_source=i_source,
         z_load=z_load,
@@ -2693,10 +2908,13 @@ def _multi_drive_state(
 def _ratio(numerator: complex, denominator: complex) -> complex:
     """``a / b``, answering an open port with an infinity rather than raising.
 
-    No capture reaches it — the pinned virtual nodes carry ~1e-32 A and print
-    ~1e+25 Ω rather than nothing at all — but a port that a network leaves
-    exactly open is one subtraction away, and a printout is the only channel
-    this engine has.
+    The infinity still reaches no capture.  The ZERO branch does since
+    momwire#1139: 0012, 0014 and 0016 park an ``NT`` whose ``Y12 = Y22 = 0``
+    on a virtual node — a parallel load written as a two-port — so with the
+    phantom out of the solve nothing at all reaches that node, and its row is
+    ``0/0``.  NEC prints ~1e+25 Ω there instead, which is the ratio of two
+    dust readings on a conductor this engine no longer carries; ``0`` is what
+    a node with no voltage and no current has.
     """
     if denominator == 0:
         return complex(math.inf, math.inf) if numerator else 0j
@@ -2738,75 +2956,6 @@ def _port_row(
 # EZNEC writes `Y12 = +-j` exactly, and so does 4nec2 building the same
 # construction from the other side (antennaknobs `_GYRATOR_MIN_B`).
 _GYRATOR_MIN_B = 1e-12
-
-# EZNEC's phantom wire, in wavelengths.  Both numbers separate two populations
-# measured over the 80 committed decks (`tests/test_eznec_gyrator_1134.py`
-# re-measures them): 23 of those decks park ONE wire whose nearest
-# endpoint-to-endpoint distance to anything else is 173.01-173.50 lambda and
-# whose own end-to-end extent is 0.0035-0.0087 lambda, and the other 286 wires
-# in the corpus stand 0.0-0.2625 lambda clear.  The clearance line is drawn at
-# 10 lambda because that is inside a gap of nearly three decades - 38x above
-# the widest gap in a real structure, 17x below the closest parked wire - and
-# it is antennaknobs' own measured `_ANCHOR_CLEARANCE_LAMBDA`.
-#
-# The EXTENT line is what stops a genuinely remote ANTENNA - an element in a
-# coupling study, fed through a feedline - being read as a circuit node: the
-# corpus's smallest real wire is 0.0001 lambda, so extent alone separates
-# nothing, and it is extent TOGETHER with a clearance many times it that names
-# the idiom.  The parked wires clear their own extent by ~20,000x.
-_PHANTOM_CLEARANCE_LAMBDA = 10.0
-_PHANTOM_EXTENT_LAMBDA = 0.05
-_PHANTOM_CLEARANCE_EXTENTS = 100.0
-
-
-def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
-    """The tags of wires EZNEC parked ~100 lambda away to use as circuit NODES.
-
-    The deck usually names the construction itself (``CM ! *Wire #3 for
-    virtual segments.``), but a comment is corroboration and not a rule, so
-    this is structural: a wire is the phantom when it is electrically
-    negligible and stands clear of everything else by the thresholds above.
-
-    ``clearance`` is the nearest endpoint-to-endpoint distance to any other
-    wire, which is a LOWER bound on true separation rather than the separation
-    itself - ample at the 173 lambda the idiom parks at, and the same bound
-    antennaknobs' ``_remote_wire_tests`` computes.  It also makes the "shares
-    no node with the structure" test redundant: a wire 10 lambda clear of
-    every other endpoint shares none of them.
-
-    Answering in TAGS rather than in wire indices is safe here only because
-    the dialect refuses a repeated tag at the parse (``_gw``: "this engine's
-    nec5 dialect gives each wire its own tag, because a node address names one
-    wire's segment boundary").  Without that guarantee a tag shared between a
-    parked wire and a real one would put a real node in this set, since
-    :meth:`Structure.index_of` resolves a tag to the FIRST wire carrying it.
-    """
-    if len(deck.wires) < 2:
-        return frozenset()
-    # `math.dist` on plain tuples, not `np.linalg.norm` on 3-vectors: this is
-    # O(wires^2) scalar work, where numpy's per-call overhead dominates its
-    # arithmetic.  Measured over the committed corpus, the numpy spelling cost
-    # 58 ms on the 55-wire 0035 and 114 ms across all 80 decks; this one costs
-    # 1.3 ms and 3.0 ms.  `_gyrator_drives` also keeps this function off every
-    # deck that writes no candidate card at all.
-    ends = [(tuple(wire.end1), tuple(wire.end2)) for wire in deck.wires]
-    tags = []
-    for index, (a, b) in enumerate(ends):
-        extent = math.dist(a, b)
-        clearance = min(
-            math.dist(here, there)
-            for other, pair in enumerate(ends)
-            if other != index
-            for here in (a, b)
-            for there in pair
-        )
-        if (
-            extent < _PHANTOM_EXTENT_LAMBDA * wavelength
-            and clearance > _PHANTOM_CLEARANCE_LAMBDA * wavelength
-            and clearance > _PHANTOM_CLEARANCE_EXTENTS * extent
-        ):
-            tags.append(deck.wires[index].tag)
-    return frozenset(tags)
 
 
 @dataclass(frozen=True)
@@ -3032,10 +3181,19 @@ def _check_one_port_per_drive(
     a column by :func:`_assign_columns` because that is the rank-1 two-port
     they really are.  One EX card there is a source in the gap; two are one
     boundary condition written twice, with nothing to say which wins.
+
+    A VIRTUAL site is exempt, and by construction rather than by leniency: it
+    reaches no momwire port, so it shares none, and two cards on one phantom
+    node are two cards at one ADDRESS, which :func:`_drive_refusal` already
+    refuses.  Keying on its negative column instead would make every phantom
+    drive in a deck collide with every other — 0120 and 0121 drive a phantom
+    node and a real one, and a second phantom drive is a shape EZNEC can write.
     """
     seen: dict[int, Nec5Node] = {}
     for source in deck.sources:
         site = by_address[source.at]
+        if site.column < 0:
+            continue
         first = seen.get(site.column)
         if first is not None:
             raise ServeRefusal(
@@ -3081,6 +3239,12 @@ def _element_currents_and_charges(
     ``GW``'s end-1 → end-2 direction because :func:`build_mesh` never
     reverses one; so no re-signing is needed and NEC's current convention is
     already this one.
+
+    An element of a PHANTOM wire has no piece to read along, and its row is
+    exactly zero (momwire#1139): the wire is not in the solve, so it carries
+    no current rather than a small one.  The row is still WRITTEN, because the
+    engine's table has one per deck element and this table is gated against
+    it.
     """
     knot_currents = solver.currents_at_knots(coeffs)
     centres_per_piece = []
@@ -3091,6 +3255,10 @@ def _element_currents_and_charges(
 
     currents, charges = [], []
     for piece_index, element in mesh.element_of:
+        if piece_index == _NO_PIECE:
+            currents.append(0j)
+            charges.append(0j)
+            continue
         knots = np.asarray(knot_currents[piece_index])
         currents.append(0.5 * (knots[element] + knots[element + 1]))
         charges.append(-slopes[piece_index][element] / (1j * omega))
