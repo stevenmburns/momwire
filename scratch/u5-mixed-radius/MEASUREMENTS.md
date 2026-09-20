@@ -333,3 +333,109 @@ inside every band.
 - **Pq.3 misses** → the split's continuity does not converge under a_n = a_B, so
   §7's KCL gate chooses the multiplier. VC_keep's KCL is exact by construction
   (asserted ≤ 1e-9 at every rung), and its Z equals the split's to 0.3 mΩ.
+
+---
+
+# U5 (d) — the instrument step (c) needed, and the verdict it gives
+
+Step (c) is a negative result about the INSTRUMENT, not about the physics: the
+two spellings of `a_above` sat 3e-4 to 2e-3 Ω apart against a momwire-vs-engine
+gap of 0.35 Ω. Step (d) searched for a configuration that can tell them apart.
+Full reasoning is in the scripts' docstrings; this is the record of what came
+out.
+
+    d_step_rod.py        the deck, the instrument, the gates
+    d_sd_map.py          the S/D map            -> d_sd_map.log / .json
+    d_verdict_ladder.py  ladder + sweep + invariance
+                                                -> d_verdict_ladder.log / .json
+
+NOT registered in advance — the space was searched adaptively. Read the verdict
+from the invariance test, whose failure mode was stated before it ran, rather
+than from the search that found the deck.
+
+## The geometry search alone does not reach an adjudicating S/D
+
+S is governed by the node-adjacent segment length OVER the node member's
+radius, not by the radius alone. Step (c)'s rod sits at h/a = 150:
+
+| h/a at the node | 150 | 48 | 12 | 3 | 1.88 | 1.25 |
+|---|---|---|---|---|---|---|
+| S (Ω) | 0.0011 | 0.0019 | 0.0012 | 0.0033 | 0.250 | 1.038 |
+
+Radius magnitude buys about another factor linearly, the radius ratio ~3x and
+dry soil ~4x; together S reaches 4.6 Ω. **D does not follow.** It has a floor —
+1.5 Ω on a thin rod, 4–10 Ω on a fat one — that neither lever moves:
+
+| lever | range | effect |
+|---|---|---|
+| `n_qp_pair` | 8 → 32 (the buried default) | 0.139 Ω |
+| `n_qp_pair` | 32 → 128 | **0.0032 Ω** |
+| far mesh | 53 → 304 segments | D stays 4.2–5.0 Ω |
+
+**Raw S/D never reaches 10 anywhere in the map; its best value is 0.68.** The
+floor is a node formulation difference, which is the same size as the thing
+being measured — a property of the comparison, not of the deck.
+
+## The differential instrument, and its one gate
+
+Two decks whose engine cards differ in ONE number, the radiator's radius; every
+card at and below the node is byte-identical (verified by diffing them), so the
+engine's node treatment cannot differ between them:
+
+    E(c) = [Z_mw(c, SPREAD) − Z_eng(SPREAD)] − [Z_mw(CONTROL) − Z_eng(CONTROL)]
+
+The control must take the same crossing path: at EQUAL radii the one-radius and
+two-radius paths disagree by 0.0152 Ω (soil-A rod) and **0.119 Ω** (headline
+rod), the latter larger than the whole residual being measured. Hence
+`a_rise = a_node*(1 − 1e-9)`, gated by `assert_rung`.
+
+## Verdict — the node member's radius, on all 16 rungs
+
+Headline: poor soil (5, .001), a_node = 1e-2, a_rad = a_node/16, h/a = 1.88,
+r_far = 4, 150 segments.
+
+| | Ω |
+|---|---|
+| S | 4.597 |
+| D (raw) | 7.874 → S/D 0.58 |
+| E, `a_above` = the node member | **0.087** |
+| E, `a_above` = the far wire | **4.514** → S/E **52.7** |
+
+`E_far − E_node` is within a few per cent of S on every rung.
+
+## The invariance test — what rules out far-dependent rules generally
+
+`a_above` swept continuously; |E| has one minimum, and it does not move when
+the radiator's radius does:
+
+| a_rad / a_node | 1/32 | 1/16 | 1/4 | 1/2 |
+|---|---|---|---|---|
+| argmin a_above / a_node | 1.166 | 1.166 | 1.166 | 1.020 |
+| \|E\| at a_node (Ω) | 0.075 | 0.053 | 0.036 | 0.023 |
+| \|E\| at a_rad (Ω) | 0.973 | 0.996 | 0.831 | 0.393 |
+
+The radiator's radius moved 16x and the optimum stayed put (1.166 is the grid
+node beside 1.0; the far-mesh ladder puts it at 1.04 by r_far = 8). This rules
+out EVERY rule in which `a_above` is a function of the far wire's radius — a
+mean, a max, the far radius itself — not only the one control step (c) ran.
+
+## What this does not say
+
+- The BELOW half is untouched: `a_below` is the radius the node's point tests
+  actually take, and a fan of buried members at different radii all meeting the
+  node was not measured.
+- The REVERSE spread (far wire fatter than the node member) has no
+  discriminating geometry in this family: the mesh must be sized to the fattest
+  wire, which puts h/a at the node high. At 4x fatter the map reads E_node 3.37
+  against E_far 3.70 — directionally the same answer, at S/E 0.10. At 16x it
+  reads E_node 26.2 against E_far 19.9, **the one row in 30 where the far
+  spelling is nearer**, at S/E 0.24 and a D of 34 Ω. It is recorded rather than
+  dropped; it is not evidence either way at that ratio.
+- Blind regions are in the map on purpose: rich soil (20, .03) reads S/E 0.37,
+  14.2 MHz 3.7, 3.55 MHz 3.0 (the differential floor there is 1.0–1.3 Ω rather
+  than 0.09), and the whole thin-wire corner (a ≤ 2.5e-3) S/E ≤ 2.9. Depth
+  1.0 m, by contrast, is decisive at S/E 32.8.
+- `ctx.a_wire` (= `min(a_above, a_below)`) is effectively unread on a
+  two-radius crossing deck — poisoning it with NaN moves Z by 5.9e-4 Ω — so the
+  two candidate arms differ in `a_above` and in nothing else.
+- No production code is narrowed here. This step is measurement only.

@@ -1,0 +1,67 @@
+{'a_node': 0.01, 'engine_sha256': '2068ae67a7fb1225d6110dca20031412ad7ba2fe6de64919714d5bbd0a505575'}
+== far-mesh ladder, node mesh held at the thin-wire floor ==
+soil=A     panel=1.67 a h/a= 1.25 r_far=1 segs=54   S=   1.057 D=  4.309 S/D=  0.2453 | E_node=  0.1298 E_far=   1.053 S/E=  8.144  -> node
+soil=A     panel=1.67 a h/a= 1.25 r_far=2 segs=89   S=   1.048 D=  3.942 S/D=  0.2659 | E_node= 0.08121 E_far=   1.023 S/E=  12.91  -> node
+soil=A     panel=1.67 a h/a= 1.25 r_far=4 segs=161  S=   1.038 D=  4.243 S/D=  0.2446 | E_node= 0.05296 E_far=  0.9962 S/E=   19.6  -> node
+soil=A     panel=1.67 a h/a= 1.25 r_far=8 segs=304  S=   1.029 D=  4.971 S/D=  0.2069 | E_node= 0.05414 E_far=  0.9866 S/E=     19  -> node
+soil=A     panel=2.5  a h/a= 1.88 r_far=1 segs=51   S=  0.2545 D=  4.321 S/D=  0.0589 | E_node=  0.1174 E_far=  0.3703 S/E=  2.168  -> node
+soil=A     panel=2.5  a h/a= 1.88 r_far=2 segs=84   S=   0.252 D=  3.905 S/D= 0.06451 | E_node= 0.06629 E_far=  0.3127 S/E=  3.801  -> node
+soil=A     panel=2.5  a h/a= 1.88 r_far=4 segs=150  S=  0.2497 D=  4.168 S/D= 0.05992 | E_node= 0.04502 E_far=  0.2733 S/E=  5.547  -> node
+soil=A     panel=2.5  a h/a= 1.88 r_far=8 segs=282  S=  0.2475 D=  4.877 S/D= 0.05075 | E_node= 0.04401 E_far=  0.2584 S/E=  5.625  -> node
+soil=poor  panel=1.67 a h/a= 1.25 r_far=1 segs=54   S=   4.133 D=  9.919 S/D=  0.4167 | E_node= 0.06775 E_far=   4.081 S/E=     61  -> node
+soil=poor  panel=1.67 a h/a= 1.25 r_far=2 segs=89   S=     4.1 D=  9.399 S/D=  0.4362 | E_node= 0.04407 E_far=   4.056 S/E=  93.03  -> node
+soil=poor  panel=1.67 a h/a= 1.25 r_far=4 segs=161  S=   4.061 D=  10.59 S/D=  0.3836 | E_node= 0.05462 E_far=   4.009 S/E=  74.34  -> node
+soil=poor  panel=1.67 a h/a= 1.25 r_far=8 segs=304  S=   4.024 D=  12.87 S/D=  0.3126 | E_node= 0.06687 E_far=   3.959 S/E=  60.19  -> node
+soil=poor  panel=2.5  a h/a= 1.88 r_far=1 segs=51   S=   4.683 D=  7.459 S/D=  0.6279 | E_node= 0.05617 E_far=   4.655 S/E=  83.39  -> node
+soil=poor  panel=2.5  a h/a= 1.88 r_far=2 segs=84   S=   4.637 D=  6.865 S/D=  0.6755 | E_node= 0.08251 E_far=   4.569 S/E=  56.21  -> node
+soil=poor  panel=2.5  a h/a= 1.88 r_far=4 segs=150  S=   4.597 D=  7.874 S/D=  0.5839 | E_node= 0.08719 E_far=   4.514 S/E=  52.73  -> node
+soil=poor  panel=2.5  a h/a= 1.88 r_far=8 segs=282  S=   4.558 D=  10.04 S/D=  0.4539 | E_node= 0.08892 E_far=   4.472 S/E=  51.26  -> node
+== |E| swept over a_above ==
+-- soil=A panel=1.67a, a_rad = a_node/16 --
+   a_above/a_node=  0.0312  |E|=  0.98972
+   a_above/a_node=  0.0409  |E|=  0.99247
+   a_above/a_node=  0.0536  |E|=  0.99508
+   a_above/a_node=  0.0702  |E|=  0.99664
+   a_above/a_node=  0.0919  |E|=  0.99513
+   a_above/a_node=  0.1203  |E|=  0.98638
+   a_above/a_node=  0.1575  |E|=   0.9622
+   a_above/a_node=  0.2062  |E|=  0.90862
+   a_above/a_node=  0.2700  |E|=  0.80821
+   a_above/a_node=  0.3536  |E|=   0.6539
+   a_above/a_node=  0.4629  |E|=  0.46667
+   a_above/a_node=  0.6062  |E|=  0.28593
+   a_above/a_node=  0.7937  |E|=  0.13968
+   a_above/a_node=  1.0393  |E|= 0.044434
+   a_above/a_node=  1.3608  |E|=  0.06858
+   a_above/a_node=  1.7818  |E|=  0.12278
+   a_above/a_node=  2.3331  |E|=   0.1692
+   a_above/a_node=  3.0549  |E|=  0.21261
+   a_above/a_node=  4.0000  |E|=  0.25872
+   argmin at 1.0393 x a_node (|E|=0.044434);  |E| at the node member 0.05296, at the far wire 0.99619
+-- soil=poor panel=2.5a, a_rad = a_node/16 --
+   a_above/a_node=  0.0312  |E|=    5.179
+   a_above/a_node=  0.0409  |E|=   4.9722
+   a_above/a_node=  0.0536  |E|=    4.702
+   a_above/a_node=  0.0702  |E|=   4.3561
+   a_above/a_node=  0.0919  |E|=   3.9268
+   a_above/a_node=  0.1203  |E|=    3.417
+   a_above/a_node=  0.1575  |E|=   2.8435
+   a_above/a_node=  0.2062  |E|=   2.2398
+   a_above/a_node=  0.2700  |E|=   1.6496
+   a_above/a_node=  0.3536  |E|=    1.114
+   a_above/a_node=  0.4629  |E|=  0.66303
+   a_above/a_node=  0.6062  |E|=  0.31321
+   a_above/a_node=  0.7937  |E|= 0.080565
+   a_above/a_node=  1.0393  |E|= 0.099337
+   a_above/a_node=  1.3608  |E|=   0.1436
+   a_above/a_node=  1.7818  |E|=  0.10807
+   a_above/a_node=  2.3331  |E|= 0.023397
+   a_above/a_node=  3.0549  |E|=  0.16292
+   a_above/a_node=  4.0000  |E|=  0.35178
+   argmin at 2.3331 x a_node (|E|=0.023397);  |E| at the node member 0.087193, at the far wire 4.5143
+== does the optimum TRACK the radiator's radius? ==
+a_rad = 0.0312 x a_node   argmin a_above = 1.1657 x a_node  (|E|=0.064338);  |E| at the node member 0.074951, at the far wire 0.97265
+a_rad = 0.0625 x a_node   argmin a_above = 1.1657 x a_node  (|E|=0.040441);  |E| at the node member 0.05296, at the far wire 0.99619
+a_rad = 0.2500 x a_node   argmin a_above = 1.1657 x a_node  (|E|=0.027031);  |E| at the node member 0.0355, at the far wire 0.83149
+a_rad = 0.5000 x a_node   argmin a_above = 1.0198 x a_node  (|E|=0.01606);  |E| at the node member 0.02302, at the far wire 0.39259
+wrote scratch/u5-mixed-radius/d_verdict_ladder.json
