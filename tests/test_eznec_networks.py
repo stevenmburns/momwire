@@ -596,11 +596,25 @@ def test_a_terminated_connection_point_reports_minus_one_over_its_admittance(
     reader knows the sign convention in this seam is NEC's own: the ratio is
     NEGATIVE because the printed current flows INTO the structure while the
     printed voltage is across the network that drove it.
+
+    The five decks' OTHER connection points are the phantom's, and they are
+    selected out BY TAG since momwire#1139.  ``CONNECTION_CUTOFF`` used to do
+    it on the number — those rows read the 1e10 pin in series with the
+    phantom segment's own admittance, so 1e10 Ω was above any real one — and
+    the phantom is no longer in the solve, so the node these decks' ``NT``
+    parks on (``Y12 = Y22 = 0``, a parallel load written as a two-port) is
+    reached by nothing at all and reads 0/0.  A cutoff cannot tell that from a
+    terminated point; the tag can, and it is what the identity was always
+    about.
     """
+    deck = parse_nec5(deck_text(cid))
+    phantom = _serve._phantom_tags(
+        deck, _serve.SPEED_OF_LIGHT_MHZ_M / deck.frequency_mhz
+    )
     rows = [
         row
-        for row in serve(parse_nec5(deck_text(cid))).network_excitation
-        if abs(row.impedance) < CONNECTION_CUTOFF
+        for row in serve(deck).network_excitation
+        if row.tag not in phantom and abs(row.impedance) < CONNECTION_CUTOFF
     ]
     assert [row.impedance.real for row in rows] == pytest.approx(expected, rel=1e-9)
     assert [row.impedance.imag for row in rows] == pytest.approx(
@@ -1437,8 +1451,15 @@ def test_the_composition_solves_the_drive_rather_than_asserting_it():
         t = _serve._transform(mesh)
         y = t.T @ solver.compute_port_solution().y @ t
         z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
-        loaded = np.eye(n, dtype=np.complex128) + z_load[:, None] * y
-        y_eff = np.linalg.solve(loaded.T, y.T).T if np.any(z_load) else y
+        # The seam's own composition, CALLED rather than copied: since
+        # momwire#1139 a virtual site's load stands across the node instead of
+        # in its current path, and a harness that rebuilt `y_eff` out of
+        # `z_load` composes that pin twice — it would be checking a different
+        # circuit from the one the seam solved, and 0120's drive comes back
+        # 9.4e-9 off a 1e-12 bar to say so.
+        z_series = _serve._series_loads(mesh, y, z_load)
+        loaded = np.eye(n, dtype=np.complex128) + z_series[:, None] * y
+        y_eff = np.linalg.solve(loaded.T, y.T).T if np.any(z_series) else y
         driven = tuple(site.index for site in mesh.sites if site.driven)
         _v, _i, i_source = _serve._reduced_state(
             cards, n, state.v_applied, driven, y_eff, wavelength
