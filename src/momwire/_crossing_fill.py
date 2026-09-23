@@ -1457,6 +1457,47 @@ def _corner_v(cache, eps_t, k_p, a_wire, rho):
     return v
 
 
+def _above_end_args(line, gz):
+    """`args(pt)` for `_end_tables`: an ABOVE end point against a BELOW
+    line's quadrature nodes — the end in the `z` slot, the line in `z′`.
+
+    Both sides go through `_on_plane_side` (momwire#852), so an end or a node
+    on the wrong side of the plane is snapped inside `_PLANE_TOL` and refused
+    past it. The forward block's test ends and the reversed block's source
+    ends are this one spelling since momwire#1168 U5; the reversed block used
+    to clamp with a bare `max(..., 0)` — silently, at any distance — and pass
+    the below line's nodes through unchecked."""
+    nodes = line["nodes"]
+
+    def args(pt):
+        rho_e = np.hypot(pt[0] - nodes[:, 0], pt[1] - nodes[:, 1])
+        return (
+            rho_e,
+            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "above", "end point"),
+            _on_plane_side(nodes[:, 2] - gz, "below", "quadrature node"),
+        )
+
+    return args
+
+
+def _below_end_args(line, gz):
+    """`args(pt)` for `_end_tables`: a BELOW end point against an ABOVE line's
+    quadrature nodes — the line in the `z` slot, the end in `z′` (the designed
+    tables accept only z ≥ 0 ≥ z′, whichever role each side plays). The
+    mirror of `_above_end_args`, on the same `_on_plane_side` rule."""
+    nodes = line["nodes"]
+
+    def args(pt):
+        rho_e = np.hypot(nodes[:, 0] - pt[0], nodes[:, 1] - pt[1])
+        return (
+            rho_e,
+            _on_plane_side(nodes[:, 2] - gz, "above", "quadrature node"),
+            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
+        )
+
+    return args
+
+
 def _ends_and_corner(
     ctx,
     A,
@@ -1494,23 +1535,79 @@ def _ends_and_corner(
 
     `out` (unit C) is the block to ACCUMULATE into — `_main_split`'s, so the
     ends never allocate a second full-size array. Bit-identical to
-    `out += _ends_and_corner(...)`: see `answer()` below for why the support
-    scatter preserves each entry's summation order. Without it the answer is a
-    fresh block, which is what a direct caller still gets."""
-    nA, nB = A["n_basis"], B["n_basis"]
+    `out += _ends_and_corner(...)`: see `_ends_and_corner_rc` for why the
+    support scatter preserves each entry's summation order. Without it the
+    answer is a fresh block, which is what a direct caller still gets.
+
+    The forward block's ROW axis is the above one, so its row ends are above
+    ends (`_above_end_args`) and its column ends below ends."""
+    return _ends_and_corner_rc(
+        ctx,
+        A,
+        B,
+        eps_t,
+        k_p,
+        c1,
+        gz,
+        memo,
+        row_args=_above_end_args(B, gz),
+        col_args=_below_end_args(A, gz),
+        corner=corner,
+        row_ends=test_ends,
+        col_ends=source_ends,
+        rows=rows,
+        out=out,
+    )
+
+
+def _ends_and_corner_rc(
+    ctx,
+    R,
+    C,
+    eps_t,
+    k_p,
+    c1,
+    gz,
+    memo,
+    *,
+    row_args,
+    col_args,
+    corner,
+    row_ends=True,
+    col_ends=True,
+    rows=None,
+    out=None,
+):
+    """The end terms and the corner of a cross block whose rows are axis `R`'s
+    basis and whose columns are `C`'s, in either orientation (momwire#1168
+    U5: the forward and reversed blocks were two copies of this that had
+    drifted apart).
+
+    The ROW loop runs `R`'s ends against `C`'s line — the V term through
+    `C`'s `Fd`, then the W term through `C`'s `F` against `C`'s t̂z — and the
+    COLUMN loop `C`'s ends against `R`'s line, W then V. `row_args` /
+    `col_args` build each loop's (ρ, z, z′) and are what carry the
+    orientation: the above side always takes the `z` slot
+    (`_above_end_args`, `_below_end_args`). In the forward block (R above)
+    the row loop is BT + TW and the column loop SW + SQ; in the reversed
+    block (R below) the row loop is SW's by-parts partner plus BT and the
+    column loop TW + SQ — the same four products either way, which is why
+    the reversed block reproduces the forward's transpose (momwire#813,
+    momwire#956)."""
+    nA, nB = R["n_basis"], C["n_basis"]
     if rows is None:
         # THE SHAPE'S OWN SUPPORT, never an (n, n) transient (momwire#1029
         # phase 2 unit C, the momwire#914 pattern). `E_r` carries every term
-        # on the rows A's ends touch — the row terms over all columns, and,
+        # on the rows R's ends touch — the row terms over all columns, and,
         # where they meet, the column terms and the corner as well — and `E_c`
-        # the column terms on the rows A's ends do NOT touch. So each entry
+        # the column terms on the rows R's ends do NOT touch. So each entry
         # accumulates in one place, in the order the loops below write it, and
         # the scatter at the end adds what the full block would have added:
         # BIT-IDENTICAL to `dest += <a full-size ends block>`, which is what
         # this replaces. Its 1.06 GB at 150 radials was the third-largest term
         # of the fill's peak.
         dest = out if out is not None else np.zeros((nA, nB), dtype=np.complex128)
-        LA, LB = _end_live_rows(A), _end_live_rows(B)
+        LA, LB = _end_live_rows(R), _end_live_rows(C)
         posLA, posLB = _positions(nA, LA), _positions(nB, LB)
         E_r = np.zeros((LA.size, nB), dtype=np.complex128)
         E_c = np.zeros((nA, LB.size), dtype=np.complex128)
@@ -1522,7 +1619,7 @@ def _ends_and_corner(
 
     def add_rows(nz, fv_nz, vec, scale, buf):
         """`t[nz, :] += scale * outer(fv_nz, vec)`, into whichever blocks
-        this call is answering with. `nz` is an A end's live rows, so it is
+        this call is answering with. `nz` is an R end's live rows, so it is
         inside `LA` by construction."""
         if rows is None:
             _rank1_add(E_r, posLA[nz], fv_nz, vec, scale, buf)
@@ -1568,10 +1665,10 @@ def _ends_and_corner(
             dest[:, LB] += E_c
         return dest
 
-    _txA, _tyA, tzA = A["t"].T
+    _txR, _tyR, tzR = R["t"].T
 
     # THE NODE WEIGHTS FOLD INTO THE SHORT VECTOR, NOT THE TALL MATRIX
-    # (momwire#919). `(Fd_B * w_B) @ te["V"]` is `Fd_B @ (w_B * te["V"])`: the
+    # (momwire#919). `(Fd_C * w_C) @ te["V"]` is `Fd_C @ (w_C * te["V"])`: the
     # same contraction over the nodes, but the weighting is applied to a
     # length-n_nodes vector instead of an (n_basis, n_nodes) matrix. On the
     # 48-radial screen that product was 222.6 MB, live for the whole routine
@@ -1580,32 +1677,17 @@ def _ends_and_corner(
     # stands: it is one vector multiply either way.
     #
     # NOT bit-identical to the old spelling: (Fd*w)·V and Fd·(w*V) round
-    # differently. Gated at 1e-12 relative.
-    wA = A["w"]
-    wB = B["w"]
-    wA_tz = wA * tzA
-    _txB, _tyB, tzB = B["t"].T
-    wB_tz = wB * tzB
+    # differently. Gated at 1e-12 relative. One spelling for both
+    # orientations since momwire#1168 U5, so the reversed block can no longer
+    # reassociate one side alone (`test_the_main_sandwich_is_the_forward_
+    # transposed` pins the two bit-equal, and once broke in CI on exactly that).
+    wR = R["w"]
+    wC = C["w"]
+    wR_tz = wR * tzR
+    _txC, _tyC, tzC = C["t"].T
+    wC_tz = wC * tzC
     buf = _Rank1Buffer()
     bufT = _Rank1Buffer()
-
-    # The by-parts boundary terms — test-side Φ (BT), source-side W and Φ
-    # (SW, SQ) — each an end against the other axis's line, radius folded.
-    def test_end(pt):
-        rho_e = np.hypot(pt[0] - B["nodes"][:, 0], pt[1] - B["nodes"][:, 1])
-        return (
-            rho_e,
-            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "above", "end point"),
-            _on_plane_side(B["nodes"][:, 2] - gz, "below", "quadrature node"),
-        )
-
-    def source_end(pt):
-        rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
-        return (
-            rho_e,
-            _on_plane_side(A["nodes"][:, 2] - gz, "above", "quadrature node"),
-            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
-        )
 
     # The end loops' tables come a span of ends per call (`_end_tables`); the
     # rank-1 updates below still run one end at a time, in the order they did.
@@ -1613,36 +1695,40 @@ def _ends_and_corner(
         ctx,
         eps_t,
         k_p,
-        A["ends"] if test_ends else [],
-        B["nodes"].shape[0],
+        R["ends"] if row_ends else [],
+        C["nodes"].shape[0],
         memo,
-        test_end,
+        row_args,
     ):
         # momwire#912: `fv` is a value-1 tent's end value — a handful of
         # nonzeros in n_basis — so the rank-1 update lands on those rows only.
         # The same products where fv != 0; where it is 0 the full outer
         # added an exact 0.
         nz = np.flatnonzero(fv)
-        add_rows(nz, fv[nz], _real_matvec_c(B["Fd_csr"], wB * te["V"]), c1 * sign, buf)
-        # TW (momwire#956): the test-side W end, −σ f_m(E)·∫ f_n t̂z′ W(E,·),
-        # left by testing −∇W along the wire — SW's partner on the other axis.
+        add_rows(nz, fv[nz], _real_matvec_c(C["Fd_csr"], wC * te["V"]), c1 * sign, buf)
+        # The W end on the row axis's ends, contracting the column line's t̂z:
+        # TW (momwire#956) in the forward block — the test-side W end,
+        # −σ f_m(E)·∫ f_n t̂z′ W(E,·), left by testing −∇W along the wire,
+        # SW's partner on the other axis — and SW itself in the reversed
+        # block, where it stays paired with `s_w1` by the by-parts that
+        # produced it (momwire#813 derivation (b), 5312ca5).
         add_rows(
-            nz, fv[nz], _real_matvec_c(B["F_csr"], wB_tz * te["W"]), -c1 * sign, buf
+            nz, fv[nz], _real_matvec_c(C["F_csr"], wC_tz * te["W"]), -c1 * sign, buf
         )
     for pt, sign, fv, te in _end_tables(
         ctx,
         eps_t,
         k_p,
-        B["ends"] if source_ends else [],
-        A["nodes"].shape[0],
+        C["ends"] if col_ends else [],
+        R["nodes"].shape[0],
         memo,
-        source_end,
+        col_args,
     ):
         nz = np.flatnonzero(fv)
         add_cols(
-            nz, _real_matvec_c(A["F_csr"], wA_tz * te["W"]), fv[nz], -c1 * sign, bufT
+            nz, _real_matvec_c(R["F_csr"], wR_tz * te["W"]), fv[nz], -c1 * sign, bufT
         )
-        add_cols(nz, _real_matvec_c(A["Fd_csr"], wA * te["V"]), fv[nz], c1 * sign, bufT)
+        add_cols(nz, _real_matvec_c(R["Fd_csr"], wR * te["V"]), fv[nz], c1 * sign, bufT)
 
     # The designed corner: node tents against each other through V at
     # R = a exactly. The sign is STRUCTURAL and orientation-carried:
@@ -1654,7 +1740,9 @@ def _ends_and_corner(
     # truncation-class signature). Never re-pick per MEDIUM. It is the
     # INTERFACE corner, so it applies only to end pairs that BOTH stand
     # in the plane — an end elsewhere (the P3 fan's below-hub junction)
-    # carries its by-parts terms above but no corner.
+    # carries its by-parts terms above but no corner. Symmetric in the two
+    # ends' one-hots, so the reversed block's is the forward's transposed
+    # and needs no orientation of its own.
     if not corner:
         # A path-tested row (momwire#813): its in-plane endpoint is a plain
         # potential evaluation at z = 0⁺ (the BT term above), and the corner
@@ -1664,10 +1752,10 @@ def _ends_and_corner(
         return answer()
     a_wire = float(ctx.a_wire)
     v_at = {}
-    for pt_a, sig_a, fv_a in A["ends"]:
+    for pt_a, sig_a, fv_a in R["ends"]:
         if abs(pt_a[2] - gz) > 1e-12:
             continue
-        for pt_b, sig_b, fv_b in B["ends"]:
+        for pt_b, sig_b, fv_b in C["ends"]:
             if abs(pt_b[2] - gz) > 1e-12:
                 continue
             # Every in-plane end pair, at one node or across two
@@ -1707,7 +1795,19 @@ SW_BY_ROLE = "by_role"
 
 
 def _ends_and_corner_reversed(
-    ctx, P, Q, eps_t, k_p, c1, gz, memo=None, *, corner=True, sw_end=SW_BY_PARTS
+    ctx,
+    P,
+    Q,
+    eps_t,
+    k_p,
+    c1,
+    gz,
+    memo=None,
+    *,
+    corner=True,
+    sw_end=SW_BY_PARTS,
+    rows=None,
+    out=None,
 ):
     """`_ends_and_corner` for the REVERSED block: test axis P is BELOW, source
     axis Q is ABOVE. Returns (P n_basis × Q n_basis).
@@ -1724,94 +1824,33 @@ def _ends_and_corner_reversed(
     transpose in both media under either reading; SW is where they differ and
     `sw_end` says which. The default pairs it with `s_w1` as its by-parts
     partner (momwire#813 derivation (b), measured at 5312ca5), and under that
-    pairing the whole reversed block reproduces `t_ab.T` exactly.
-    """
-    t_ba = np.zeros((P["n_basis"], Q["n_basis"]), dtype=np.complex128)
-    _txP, _tyP, tzP = P["t"].T
-    _txQ, _tyQ, tzQ = Q["t"].T
-    # The same three momwire#919 shapes as the forward twin, and they MUST
-    # move together: `test_the_main_sandwich_is_the_forward_transposed` pins
-    # this block bit-equal to the forward's transpose, so reassociating one
-    # side alone breaks a real invariant. (It did, in CI, which is what this
-    # comment is here to stop happening again.)
-    wP, wQ = P["w"], Q["w"]
-    wP_tz = wP * tzP
-    wQ_tz = wQ * tzQ
-    buf = _Rank1Buffer()
-    bufT = _Rank1Buffer()
+    pairing the whole reversed block reproduces `t_ab.T` exactly. Since
+    momwire#956 the TW term closes the other half, so both readings are the
+    same spelling and `sw_end` selects nothing; it is kept for the API.
 
-    # BT — the test axis's ends. P is below, so its z lands in the z′ slot
-    # (clamped at the plane, the mirror of the forward's `max(..., 0.0)`).
-    def test_end(pt):
-        rho_e = np.hypot(Q["nodes"][:, 0] - pt[0], Q["nodes"][:, 1] - pt[1])
-        return rho_e, Q["nodes"][:, 2] - gz, np.full_like(rho_e, min(pt[2] - gz, 0.0))
-
-    def source_end(pt):
-        rho_e = np.hypot(P["nodes"][:, 0] - pt[0], P["nodes"][:, 1] - pt[1])
-        return rho_e, np.full_like(rho_e, max(pt[2] - gz, 0.0)), P["nodes"][:, 2] - gz
-
-    # A span of ends per `_tables` call, the updates per end (`_end_tables`).
-    for pt, sign, fv, te in _end_tables(
-        ctx, eps_t, k_p, P["ends"], Q["nodes"].shape[0], memo, test_end
-    ):
-        nz = np.flatnonzero(fv)
-        _rank1_add(
-            t_ba, nz, fv[nz], _real_matvec_c(Q["Fd_csr"], wQ * te["V"]), c1 * sign, buf
-        )
-        if True:  # SW — under either `sw_end` reading since momwire#956
-            # SW paired with s_w1 by the by-parts that produced it: on the
-            # BELOW axis's ends, contracting the ABOVE axis's t̂z (5312ca5).
-            _rank1_add(
-                t_ba,
-                nz,
-                fv[nz],
-                _real_matvec_c(Q["F_csr"], wQ_tz * te["W"]),
-                -c1 * sign,
-                buf,
-            )
-
-    # SQ — the source axis's ends (+ SW under the rejected "by_role" reading).
-    for pt, sign, fv, te in _end_tables(
-        ctx, eps_t, k_p, Q["ends"], P["nodes"].shape[0], memo, source_end
-    ):
-        nzq = np.flatnonzero(fv)
-        # TW (momwire#956): the ABOVE ends' W term — the forward block's
-        # test-side end transposed. With it AND the below ends' SW this block
-        # is `t_ab.T` under either `sw_end` reading; the knob selects nothing
-        # any more and is kept for the API (both terms are the spelling).
-        _rank1_add_cols(
-            t_ba,
-            nzq,
-            _real_matvec_c(P["F_csr"], wP_tz * te["W"]),
-            fv[nzq],
-            -c1 * sign,
-            bufT,
-        )
-        _rank1_add_cols(
-            t_ba,
-            nzq,
-            _real_matvec_c(P["Fd_csr"], wP * te["V"]),
-            fv[nzq],
-            c1 * sign,
-            bufT,
-        )
-
-    if not corner:
-        return t_ba
-    # The corner is symmetric in the two ends' one-hots (−σσ′·c1·V(a)), so
-    # it is the forward's transposed and needs no orientation of its own.
-    a_wire = float(ctx.a_wire)
-    v_at = {}
-    for pt_p, sig_p, fv_p in P["ends"]:
-        if abs(pt_p[2] - gz) > 1e-12:
-            continue
-        for pt_q, sig_q, fv_q in Q["ends"]:
-            if abs(pt_q[2] - gz) > 1e-12:
-                continue
-            rho = float(np.hypot(pt_p[0] - pt_q[0], pt_p[1] - pt_q[1]))
-            v_corner = _corner_v(v_at, eps_t, k_p, a_wire, rho)
-            t_ba += (-sig_p * sig_q * c1 * v_corner) * np.outer(fv_p, fv_q)
-    return t_ba
+    Since momwire#1168 U5 this is `_ends_and_corner_rc` with the rows BELOW:
+    the same loops, the same `_on_plane_side` rule on both slots (it used to
+    clamp a wrong-side end silently with a bare `min`/`max`, and now refuses
+    it past `_PLANE_TOL` exactly as the forward block does), the same #1029
+    support scatter instead of a full (n, n) transient with `np.outer`
+    corners, and the same `rows=` / `out=` answers. Bit-identical on every
+    deck that does not put an end or node on the wrong side of the plane."""
+    del sw_end  # both readings are one spelling since momwire#956
+    return _ends_and_corner_rc(
+        ctx,
+        P,
+        Q,
+        eps_t,
+        k_p,
+        c1,
+        gz,
+        memo,
+        row_args=_below_end_args(Q, gz),
+        col_args=_above_end_args(P, gz),
+        corner=corner,
+        rows=rows,
+        out=out,
+    )
 
 
 def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS):
@@ -1840,8 +1879,10 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
     """
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)  # momwire#1017, as above
     t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz, memo=memo).T
-    t_ba += _ends_and_corner_reversed(
-        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
+    # Accumulated in place through the support scatter, bit-identical to
+    # `t_ba += <the full ends block>` (`_ends_and_corner_rc`).
+    _ends_and_corner_reversed(
+        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end, out=t_ba
     )
     return t_ba
 
@@ -2618,8 +2659,8 @@ def cross_complete_block_reversed_split(
 
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     t_ba = _main_split(ctx, q_idx, p_idx, Q, P, eps_t, k_p, c1, gz, memo).T
-    t_ba += _ends_and_corner_reversed(
-        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
+    _ends_and_corner_reversed(
+        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end, out=t_ba
     )
     return t_ba
 
