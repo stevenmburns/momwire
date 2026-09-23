@@ -3885,7 +3885,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             eps=self.eps,
         )
 
-    def _path_test_rows(self, geom, rows, *, halves="both"):
+    def _path_test_rows(self, geom, rows, *, halves="both", paths=None, knot=None):
         """`_crossing_fill.path_test_axis` records for razor's testing paths.
 
         One record per row in `rows` — the path's quadrature points, tangents
@@ -3896,13 +3896,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         centroid(B)) — how a row whose path crosses the plane is chopped at
         it (momwire#813), since the trunk's tables take an observer on one
         side only.
+
+        `paths` and `knot` let a caller that visits many rows on the same
+        `geom` (`_crossing_path_axis`, momwire#1168 U2) hand in the
+        `_testing_paths(geom)` / `_knot_points(geom)` it already computed
+        once, instead of this method recomputing them per row — the whole
+        geometry's worth of work, thrown away and redone for a single
+        row's slice out of it. Left `None` (every direct test caller today),
+        it computes them itself, exactly as before.
         """
-        pts, tans, wts = self._testing_paths(geom)
+        if paths is None:
+            paths = self._testing_paths(geom)
+        pts, tans, wts = paths
         q = pts.shape[1] // 2
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
         wing_seg = geom["wing_seg"]
         cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
-        knot = self._knot_points(geom)
+        if knot is None:
+            knot = self._knot_points(geom)
         out = []
         for m in rows:
             s_a, s_b = int(wing_seg[m, 0]), int(wing_seg[m, 1])
@@ -4201,6 +4212,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if label == side:
                 mine_seg.update(range(int(seg_off[w]), int(seg_off[w + 1])))
         crossing = {m for m, _ in tents}
+        # `_testing_paths`/`_knot_points` are whole-geometry quantities —
+        # every row's slice comes out of the SAME arrays — so this loop
+        # visiting them once per row was recomputing the whole geometry's
+        # paths per row: O(N^2) (momwire#1168 U2, 1,406 calls at
+        # hub_deck(16) x8). Computed once here and handed to every
+        # `_path_test_rows` call below instead.
+        paths = self._testing_paths(geom)
+        knot = self._knot_points(geom)
         recs = []
         for m in range(geom["n_basis_total"]):
             if m in crossing:
@@ -4208,10 +4227,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     0
                 ]
                 recs += self._path_test_rows(
-                    geom, [m], halves="A" if alive == 0 else "B"
+                    geom,
+                    [m],
+                    halves="A" if alive == 0 else "B",
+                    paths=paths,
+                    knot=knot,
                 )
             elif int(geom["wing_seg"][m, 0]) in mine_seg:
-                recs += self._path_test_rows(geom, [m])
+                recs += self._path_test_rows(geom, [m], paths=paths, knot=knot)
         return _crossing_fill.path_test_axis(geom["n_basis_total"], recs)
 
     def _assemble_Z_crossing(self, geom, k, omega, *, detached=False):
