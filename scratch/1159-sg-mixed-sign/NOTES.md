@@ -141,11 +141,12 @@ imported from a detached worktree (`momwire from` printed by each run).
 
 ## Probe outputs and the state they reflect
 
-* `probe1_pre/post`, `probe3_main/branch`, `probe4_*_main`, `probe5_main`,
+* `probe1_pre/post`, `probe3_main`, `probe4_*_main`, `probe5_main`,
   `probe6_main`: main vs the sign + readout fix. ε̃ = 1 and wholly-buried rows
   do not depend on item 2 (k_m = k_p, or no stitched view).
 * `probe2_mixed_signfix_only`: sign fix only (readout and drive at air).
 * `probe2_mixed_readout_fix_only`, `probe4_mixed_readout_fix_only`: readout
   fixed, sign reverted, before item 2.
 * `probe2_mixed`, `probe2_hub`, `probe2_detached`, `probe4_*_branch`,
-  `probe5_branch`, `probe6_branch`, `probe7`, `probe8_*`: the final branch.
+  `probe3_branch`, `probe5_branch`, `probe6_branch`, `probe7`, `probe8_*`: the
+  final branch.
