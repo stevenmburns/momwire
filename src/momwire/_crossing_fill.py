@@ -627,9 +627,23 @@ _CROSS_KEYS = ("U", "V", "W", "dzpW")
 # chunks — which keeps the tables out of the fill's peak (they were 0.7 GB
 # there, the (n, 6) gather plus its transposed copy) while the per-chunk
 # overhead stays a few numpy calls. Chunking never moves a bit
-# (`_chunked_tables`), so the budget is a memory choice only.
+# (`_chunked_tables`), so the budget is a memory choice only. Since #1168 a
+# chunk's six left products are contracted before the next chunk arrives
+# (`_streamed_sandwich`) rather than assembled whole; they are 96·|rA|/nA
+# bytes per pair on top of this (~48 B on a path-tested above axis, where
+# |rA| ≈ nA/2), and the cut never moves a bit either.
 _MAIN_CHUNK_BYTES = 64 * 2**20
 _MAIN_BYTES_PER_PAIR = 128
+
+# TEST-ONLY. False contracts the main sandwich's chunked tables the pre-#1168
+# way — the six whole left products assembled, then one contraction — which
+# is the in-process reference the streamed path (`_streamed_sandwich`) is
+# gated against to the bit.
+_MAIN_STREAMED = True
+# TEST-ONLY negative control for that gate: False contracts every chunk's
+# columns for every row and adds the partial sums, which reassociates the
+# running sum of each row whose pattern straddles a chunk boundary.
+_STREAMED_WHOLE_ROWS = True
 
 # The whole-run dense-direct switch (a timing comparison, a bisect); parity
 # tests drive both paths in-process by calling the two entries directly.
@@ -1899,6 +1913,128 @@ def _left_products(Ps, K, k2sq):
     )
 
 
+def _combine(Ls, Qz):
+    """The five-term contraction of the six left products with the right
+    weights (`Qz` in `_sandwich_dense`'s (Q1, Q2, Q3, Q4, Q3, Q4) order), in
+    the reference term order."""
+    return (
+        Ls[0] @ Qz[0].T
+        + Ls[1] @ Qz[1].T
+        + Ls[2] @ Qz[2].T
+        + Ls[3] @ Qz[3].T
+        + Ls[4] @ Qz[4].T
+        - Ls[5] @ Qz[5].T
+    )
+
+
+def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False):
+    """`_sandwich_dense` over COLUMN CHUNKS of the tables without ever holding
+    the six whole (|rA|, |iB|) left products: `out[rA, rB] += block`, the
+    same bits as contracting the assembled products (momwire#1168).
+
+    Those six products were the fill's process peak once the tables were
+    chunked (#1169): 6 · |rA| · |iB| complex, 169 MB at razor hub_deck(16)
+    x8 and 4x that at x16, alive at once beside the one-call evaluation's
+    results. Here each chunk's left products live only until every basis
+    row of `B` that reads them has been contracted.
+
+    WHY THE BITS DO NOT MOVE. A right factor is sparse, and `L @ Q.T` is
+    computed row by row of `Q` (`csr_matvecs`): output column j is a running
+    sum, from zero, over row j's stored entries in stored order. So a column
+    depends on the left-product columns row j's pattern touches and on
+    nothing else, and it is the same sum whenever those columns are all
+    present, whatever else is. A row is therefore contracted exactly once,
+    at the first chunk that completes its pattern, against its own columns
+    gathered in ascending order (`Q[J][:, cols]` keeps each row's stored
+    entries and their order); the five-term combine is elementwise, so its
+    order per entry is `_combine`'s. The left-product columns themselves are
+    the whole-table ones by `_chunked_tables`' argument.
+
+    What is held between chunks is only the columns some still-pending row
+    needs: a row's pattern is a few nodes of one wire, except at a junction,
+    whose rows reach the first nodes of every wire they join (16 of 642 rows
+    at hub_deck(16) x4 span the whole axis). So the live set is one chunk of
+    left products plus those junction slivers, not the whole axis.
+
+    `fresh` says `out` is a new zero block, so each entry is ASSIGNED, as the
+    whole-block path assigns its block (an accumulate would turn a −0.0 into
+    +0.0); otherwise the block accumulates into `out` like `_sandwich_dense`'s.
+
+    `_STREAMED_WHOLE_ROWS = False` is the TEST-ONLY negative control: every
+    chunk contracts its own columns for every row and the partial sums are
+    added, which reassociates each straddling row's running sum.
+    """
+    Q1, Q2, Q3, Q4 = Qs4
+    Qs = (Q1, Q2, Q3, Q4, Q3, Q4)
+    nq = Q1.shape[0]
+    # Each row's node columns: the union of the four STORED patterns (a stored
+    # zero is still a term of the running sum, so it counts).
+    p1, p2, p3, p4 = (
+        _sp.csr_array((np.ones(q.indices.size), q.indices, q.indptr), shape=q.shape)
+        for q in Qs4
+    )
+    pat = p1 + p2 + p3 + p4
+    pat.sort_indices()
+    counts = np.diff(pat.indptr)
+    last = np.full(nq, -1, dtype=np.int64)
+    has = counts > 0
+    last[has] = pat.indices[pat.indptr[1:][has] - 1]
+    pending = np.ones(nq, dtype=bool)
+    held_cols = np.zeros(0, dtype=np.int64)
+    held = None
+    seen = 0
+    for cols, Kc in K:
+        if cols.start != seen:
+            raise ValueError("the table chunks must arrive in column order")
+        seen = cols.stop
+        Lc = _left_products(Ps, Kc, k2sq)
+        del Kc
+        c_cols = np.arange(cols.start, cols.stop)
+        if not _STREAMED_WHOLE_ROWS:
+            part = _combine(Lc, [q[:, cols] for q in Qs])
+            out[np.ix_(rA, rB)] += part
+            continue
+        J = np.flatnonzero(pending & (last < cols.stop))
+        if J.size:
+            need = np.unique(pat[J].indices)
+            n_old = int(np.searchsorted(need, cols.start))
+            pos_old = np.searchsorted(held_cols, need[:n_old])
+            if not np.array_equal(held_cols[pos_old], need[:n_old]):
+                raise AssertionError("a pending row's column was not held")
+            pos_new = need[n_old:] - cols.start
+            if held is None:
+                Ls = [x[:, pos_new] for x in Lc]
+            else:
+                Ls = [
+                    np.concatenate((h[:, pos_old], x[:, pos_new]), axis=1)
+                    for h, x in zip(held, Lc)
+                ]
+            block = _combine(Ls, [q[J][:, need] for q in Qs])
+            del Ls
+            if fresh:
+                out[np.ix_(rA, rB[J])] = block  # each entry written once
+            else:
+                out[np.ix_(rA, rB[J])] += block
+            del block
+            pending[J] = False
+        # Keep only the columns a still-pending row reads.
+        keep = np.unique(pat[np.flatnonzero(pending)].indices)
+        keep_old = np.isin(held_cols, keep)
+        keep_new = np.isin(c_cols, keep)
+        if held is None:
+            held = [x[:, keep_new] for x in Lc]
+        else:
+            held = [
+                np.concatenate((h[:, keep_old], x[:, keep_new]), axis=1)
+                for h, x in zip(held, Lc)
+            ]
+        held_cols = np.concatenate((held_cols[keep_old], c_cols[keep_new]))
+        del Lc
+    if _STREAMED_WHOLE_ROWS and pending.any():
+        raise ValueError("the table chunks did not cover the below axis")
+    return out
+
+
 def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
     restricted to (iA, iB) — the same term order as the reference fill.
@@ -1937,11 +2073,22 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None
     rB = _support_rows(B, iB)
     Ps = _row_weights(A, iA, rA)
     Q1, Q2, Q3, Q4 = _row_weights(B, iB, rB)
+    if not isinstance(K, dict) and _MAIN_STREAMED:
+        if rows is not None:
+            raise ValueError("the streamed main sandwich serves whole blocks only")
+        fresh = out is None
+        if fresh:
+            out = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+        return _streamed_sandwich(
+            Ps, (Q1, Q2, Q3, Q4), K, k2sq, rA, rB, out, fresh=fresh
+        )
     if isinstance(K, dict):
         L = _left_products(Ps, K, k2sq)
     else:
-        # COLUMN CHUNKS of the tables (`_main_sandwich`, via `_chunked_tables`):
-        # `K` yields `(cols, K_cols)` over positions of `iB`. A sparse @ dense
+        # COLUMN CHUNKS of the tables (`_main_sandwich`, via `_chunked_tables`),
+        # assembled whole: the TEST-ONLY `_MAIN_STREAMED = False` reference the
+        # streamed path above is gated against. `K` yields `(cols, K_cols)`
+        # over positions of `iB`. A sparse @ dense
         # product builds each output column from that column of the dense
         # factor alone, so the assembled left products are the whole-table
         # ones bit for bit, and the contraction over `iB` below is untouched.
@@ -1950,17 +2097,6 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None
             for dst, part in zip(L, _left_products(Ps, Kc, k2sq)):
                 dst[:, cols] = part
     Qs = (Q1, Q2, Q3, Q4, Q3, Q4)
-
-    def _combine(Ls, Qz):
-        return (
-            Ls[0] @ Qz[0].T
-            + Ls[1] @ Qz[1].T
-            + Ls[2] @ Qz[2].T
-            + Ls[3] @ Qz[3].T
-            + Ls[4] @ Qz[4].T
-            - Ls[5] @ Qz[5].T
-        )
-
     if rows is not None:
         sel, pos = _in_rows(rows, rA)
         if sel.size:
