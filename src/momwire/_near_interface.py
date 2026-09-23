@@ -735,7 +735,13 @@ class TripleMemo:
         if self._n_pending > max(
             _MEMO_MERGE_MIN_ROWS, self._main[0].size // _MEMO_MERGE_FRACTION
         ):
-            self._main = self._merged(self._runs())
+            # A merge of ONE non-empty run is that run: it is sorted by hash,
+            # and the stable sort of a sorted array is the identity. That is
+            # the first big insert into a fresh memo (the main sandwich's one
+            # table call, momwire#1168), where copying it set the fill's peak.
+            live = [r for r in self._runs() if r[0].size]
+            self._main = live[0] if len(live) == 1 else self._merged(live)
+            del live
             self._pending = []
             self._n_pending = 0
             self.stats["merges"] += 1
@@ -888,8 +894,15 @@ def designed_tables(
         block[fresh_pos] = vals
         if memo is not None:
             memo.insert(sub, vals)
+        del sub, vals  # copied into `block` (and the memo); not needed below
     if rows.shape[0]:
-        out = np.ascontiguousarray(block[inverse].T).reshape((6,) + rho_b.shape)
+        # The scatter a kernel at a time: the same copies as
+        # `ascontiguousarray(block[inverse].T)`, without its (n, 6) gather
+        # alive beside the (6, n) answer (momwire#1168).
+        out = np.empty((6, inverse.size), dtype=np.complex128)
+        for i in range(6):
+            np.take(block[:, i], inverse, out=out[i])
+        out = out.reshape((6,) + rho_b.shape)
     else:
         out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
     return dict(zip(KEYS, out))

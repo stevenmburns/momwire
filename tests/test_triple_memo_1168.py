@@ -105,6 +105,27 @@ def test_rows_are_found_across_pending_runs_merges_and_compactions(monkeypatch):
     assert len(m) == sum(r.shape[0] for r in inserted)
 
 
+def test_a_merge_of_one_run_keeps_that_run_and_is_the_full_merge(monkeypatch):
+    """The first big insert into a fresh memo merges one non-empty run, and
+    the store keeps that run (no copy) — the arrays `_merged` would have
+    built, to the bit, since the stable sort of a sorted run is the identity.
+    Hash-equal rows are forced so the stable order is what is tested."""
+    monkeypatch.setattr(ni, "_MEMO_MERGE_MIN_ROWS", 4)
+    monkeypatch.setattr(
+        ni, "_row_hash", lambda keys: (keys[:, 0] > 0).astype(np.uint64)
+    )
+    rows = np.random.default_rng(1168).standard_normal((9, 3))
+    m = ni.TripleMemo()
+    m.insert(rows, _vals(rows))
+    assert m.stats["merges"] == 1 and not m._pending
+    ref = ni.TripleMemo._merged((ni.TripleMemo._empty_run(), m._main))
+    for got, want in zip(m._main, ref):
+        assert got.dtype == want.dtype and np.array_equal(got, want)
+    hit, block = m.lookup(rows)
+    assert hit.all() and np.array_equal(block, _vals(rows))
+    assert m.keys() == [tuple(r) for r in rows.tolist()]
+
+
 def test_a_dict_memo_is_refused_by_name():
     with pytest.raises(TypeError, match="_designed_tables_reference"):
         ni.designed_tables(4.0 - 0.5j, 0.9, 0.3, 0.2, -0.1, memo={})
