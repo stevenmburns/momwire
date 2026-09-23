@@ -1,0 +1,12 @@
+N=1 bspline_d2    Z  170.607 +48.738j  eta 0.0723  eta*R  12.342  dR  +0.00  d(eta*R)  +0.00 %
+N=1 razor_fixed   Z  170.363 +47.006j  eta 0.0722  eta*R  12.297  dR  -0.24  d(eta*R)  -0.36 %
+N=1 razor_unfixed Z  173.598 +46.299j  eta 0.0706  eta*R  12.259  dR  +2.99  d(eta*R)  -0.67 %
+N=2 bspline_d2    Z  110.296 +48.883j  eta 0.1114  eta*R  12.288  dR  +0.00  d(eta*R)  +0.00 %
+N=2 razor_fixed   Z  109.990 +47.160j  eta 0.1113  eta*R  12.242  dR  -0.31  d(eta*R)  -0.37 %
+N=2 razor_unfixed Z  114.123 +46.512j  eta 0.1069  eta*R  12.200  dR  +3.83  d(eta*R)  -0.71 %
+N=4 bspline_d2    Z   78.132 +46.338j  eta 0.1580  eta*R  12.341  dR  +0.00  d(eta*R)  +0.00 %
+N=4 razor_fixed   Z   77.811 +44.579j  eta 0.1580  eta*R  12.294  dR  -0.32  d(eta*R)  -0.38 %
+N=4 razor_unfixed Z   83.459 +44.134j  eta 0.1466  eta*R  12.237  dR  +5.33  d(eta*R)  -0.85 %
+N=8 bspline_d2    Z   59.392 +41.772j  eta 0.2068  eta*R  12.283  dR  +0.00  d(eta*R)  +0.00 %
+N=8 razor_fixed   Z   59.075 +39.996j  eta 0.2071  eta*R  12.235  dR  -0.32  d(eta*R)  -0.39 %
+N=8 razor_unfixed Z   66.715 +40.478j  eta 0.1827  eta*R  12.189  dR  +7.32  d(eta*R)  -0.77 %
