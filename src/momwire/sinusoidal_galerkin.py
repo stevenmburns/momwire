@@ -403,6 +403,23 @@ _COINCIDENT_CROSSING_MEMBERS_REFUSAL = (
     "share a path."
 )
 
+# momwire#1162. `compute_impedance` reads Z = V/I per port, which is 0/0 when
+# no port is driven: the solve's RHS is zero, alpha is identically zero, and
+# every port current reads exactly 0. That is what returned Z = NaN on the
+# junction-port deck of #1159's probe 8 -- `junction_ports=[0]` with no feeds.
+# A plain-int junction port means 0 V (the #172 convention every family
+# shares), so that deck drove nothing; the junction-port serve itself was
+# never involved (driven at 1 V it agrees with BSplineSolver to ~1e-5). The
+# drive-independent answer, Y, is served for such a deck, so the refusal
+# names it.
+_NO_DRIVEN_PORT_REFUSAL = (
+    "compute_impedance: no port is driven -- every port voltage is 0, so the "
+    "solve's current is identically zero and Z = V/I is 0/0. A plain-int "
+    "junction_ports entry drives 0 V; give it a voltage, e.g. "
+    "junction_ports=[(j, 1)], or read the drive-independent admittance from "
+    "compute_port_solution().y or compute_y_matrix()"
+)
+
 _HAVE_GALERKIN_FAR_FILL = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill"
 )
@@ -5264,6 +5281,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         model has exactly one port of any kind.
         """
         self._refuse_junction_port_solve()
+        if not np.any(self._port_voltages()):
+            raise ValueError(_NO_DRIVEN_PORT_REFUSAL)
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field fill
         # The medium wraps the WHOLE solve, not the matrix alone: the drive
@@ -5279,7 +5298,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             # Inside the medium too (momwire#1159): an off-centre point gap's
             # readout writes the shapes at `self.k`, which is k_m only here.
             currents = self._port_currents(alpha, geom, seg_view, U)
-        z_per_port = voltages / currents
+        with np.errstate(divide="ignore", invalid="ignore"):
+            z_per_port = voltages / currents
+        bad = np.flatnonzero(~np.isfinite(z_per_port))
+        if bad.size:
+            # The backstop behind the up-front refusal (momwire#1162): a port
+            # whose current reads exactly zero has no V/I. Refuse by name
+            # rather than hand back a NaN or an inf as if it were a Z.
+            raise FloatingPointError(
+                f"compute_impedance: port(s) {bad.tolist()} (ordered [gap "
+                "feeds, junction ports, node ports]) read a current of exactly "
+                "0, so V/I is not a number there. Read the drive-independent "
+                "admittance from compute_port_solution().y instead"
+            )
         Z_drive = z_per_port[0] if self.n_ports == 1 else z_per_port
         return Z_drive, alpha
 
@@ -5381,6 +5412,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         so driving it per k is the same arithmetic in the same order.
         """
         self._refuse_junction_port_solve()
+        # Up front, so an undriven deck refuses even at an empty sweep.
+        if not np.any(self._port_voltages()):
+            raise ValueError(_NO_DRIVEN_PORT_REFUSAL)
         k_array = np.asarray(k_array, dtype=float)
         n_p = self.n_ports
         z_out = np.zeros(
