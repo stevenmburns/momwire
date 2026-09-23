@@ -670,6 +670,48 @@ def _pair_extents_below(x, y, d_b, rows=256):
     return float(np.sqrt(r1sq_max)), float(np.arctan(ratio_min))
 
 
+def _pair_extents_below_rect(obs, src, d_obs, d_src, pairs=1 << 20):
+    """`(th_min, hh_at)` over every (observer, source) pair — the shallowest
+    angle atan2(h_o + h_s, rho) and the depth sum h_o + h_s of the pair that
+    attains it — without an (n_obs, n_src) array larger than `pairs` ever
+    being live. `_pair_extents_below`'s RECTANGULAR twin (momwire#1168 U3):
+    that one asks a cloud against itself, this one asks two different
+    clouds against each other, which is what razor's below remainder
+    evaluates (testing-path points against Gauss nodes,
+    `RazorSolver._below_remainder_th_min`).
+
+    `obs` and `src` are (n, 3) (only x, y are read); `d_obs` / `d_src` the
+    depths below the interface. Observers are walked in row chunks of at
+    most `pairs` pairs.
+
+    Deliberately NOT the square helper's pair rule: every pair is kept and
+    its angle is `np.arctan2(hh, np.hypot(dx, dy))` itself, rho = 0 pairs
+    included (atan2's own value there, pi/2 for a buried pair). The minimum
+    is the FIRST one in row-major order, as a single `np.argmin` over the
+    whole matrix would return, whatever the chunking — so the answer is
+    bit-identical to the one-shot spelling and to razor's earlier
+    hand-chunked one (gated, `tests/test_razor_grazing_shared_1168.py`).
+    """
+    obs = np.asarray(obs, dtype=np.float64)
+    src = np.asarray(src, dtype=np.float64)
+    d_obs = np.asarray(d_obs, dtype=np.float64)
+    d_src = np.asarray(d_src, dtype=np.float64)
+    best, best_hh = np.inf, 0.0
+    step = max(1, int(pairs) // max(1, src.shape[0]))
+    for i0 in range(0, obs.shape[0], step):
+        o = obs[i0 : i0 + step]
+        rho = np.hypot(
+            o[:, 0][:, None] - src[:, 0][None, :],
+            o[:, 1][:, None] - src[:, 1][None, :],
+        )
+        hh = d_obs[i0 : i0 + step][:, None] + d_src[None, :]
+        th = np.arctan2(hh, rho)
+        k = int(np.argmin(th))
+        if th.flat[k] < best:
+            best, best_hh = float(th.flat[k]), float(hh.flat[k])
+    return best, best_hh
+
+
 def _contiguous_runs(idx):
     """`[(start, stop), ...]` — the maximal runs of consecutive integers in
     a sorted index array (a subset that is a union of whole wires is a few
