@@ -1,0 +1,16 @@
+{"gate": "b", "deck": "mixed", "m": 1, "nonrec": 0.01667036972746298, "secs": 0.71}
+{"gate": "b", "deck": "mixed", "m": 2, "nonrec": 0.004090604577703125, "secs": 0.27}
+{"gate": "b", "deck": "mixed", "m": 4, "nonrec": 0.0010001085769650885, "secs": 0.61}
+{"gate": "b", "deck": "mixed", "m": 8, "nonrec": 0.00022824610497834815, "secs": 1.36}
+{"gate": "b", "deck": "mixed", "ratios": [4.075282616738133, 4.090160480491428, 4.381711473499014]}
+{"gate": "b", "deck": "mixed_inv", "m": 1, "nonrec": 0.017177692583001804, "secs": 0.11}
+{"gate": "b", "deck": "mixed_inv", "m": 2, "nonrec": 0.004254192670301595, "secs": 0.31}
+{"gate": "b", "deck": "mixed_inv", "m": 4, "nonrec": 0.0010435706665125476, "secs": 0.76}
+{"gate": "b", "deck": "mixed_inv", "m": 8, "nonrec": 0.00022577754424757803, "secs": 1.59}
+{"gate": "b", "deck": "mixed_inv", "ratios": [4.037826660489267, 4.0765736397310315, 4.622118953372141]}
+{"gate": "b", "deck": "hub_spread", "m": 1, "nonrec": 0.025467441382232406, "secs": 0.83}
+{"gate": "b", "deck": "hub_spread", "m": 2, "nonrec": 0.00789462743336638, "secs": 0.71}
+{"gate": "b", "deck": "hub_spread", "m": 4, "nonrec": 0.002148409624302915, "secs": 1.2}
+{"gate": "b", "deck": "hub_spread", "m": 8, "nonrec": 0.0005524176944469948, "secs": 3.9}
+{"gate": "b", "deck": "hub_spread", "ratios": [3.225920614644221, 3.6746379014792936, 3.889103564022527]}
+b=0
