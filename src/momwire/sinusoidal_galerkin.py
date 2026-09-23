@@ -318,7 +318,11 @@ sweep that produces them is most of the kernel.
 
 Distributed series wire loading is served in the testing scheme's own form
 (momwire#395): the Galerkin overlap Σ_w Z'_w·∫f_i f_j of the three-term
-sinusoidal shapes, closed-form per segment, in `_apply_loading`.
+sinusoidal shapes, closed-form per segment, in `_apply_loading`. On every
+buried route (wholly buried, mixed, crossing) the shapes are written at
+their segment's own k and the loading is read at the solve's REAL ω — k_m·c
+is not a frequency — and a jacketed buried wire adds #1154's charge-side
+term as the derivative overlap zq·∫f_i′ f_j′ (momwire#1156).
 
 ## (k, η) live on the SOLVER, not in the argument list — momwire#980
 
@@ -377,17 +381,6 @@ from .sinusoidal import (
 # rather than filled with a shape of its own, which is the failure mode that
 # produces a plausible wrong number — momwire#1000 is the one that got
 # through.
-# `_apply_loading` is applied at ONE k, and a mixed deck's classes load at
-# k_p and k_m. Refused by name rather than applied at whichever k was in
-# scope, which would be a wrong number on half the deck with no failure.
-_MIXED_WIRE_LOADING_REFUSAL = (
-    "distributed wire loading on a deck with wires BOTH above and below the "
-    "ground plane is not served (momwire#980 D2 serves the unloaded mixed "
-    "deck): the loading operator is applied at a single wavenumber and the "
-    "two media load at k_p and k_m. Solve the loaded wires in one medium, or "
-    "drop the loading"
-)
-
 _COINCIDENT_CROSSING_MEMBERS_REFUSAL = (
     "crossing junction {j} joins members whose node-adjacent edges are "
     "geometrically COINCIDENT (wires {a} and {b} run the same path within one "
@@ -1066,7 +1059,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # the two axes this class's docstring describes — junction_ports and
     # node_gaps are served here (M5b / #305) — plus the three combination
     # refusals __init__'s raises still carry. Wire loading rides the base
-    # class's overlap term (#395) unchanged. `extended_kernel+
+    # class's overlap term (#395), on every buried route too since
+    # momwire#1156 (the mixed deck's loading refusal was never a declared
+    # cell, so no row moves). `extended_kernel+
     # stepped_radius_junction` is momwire#398 D2 (taper-readiness study):
     # unlike the two junction_ports combos above, this one is a measured
     # DIVERGENCE, not an unimplemented feature — see
@@ -4175,8 +4170,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 chunked_serves=True,
                 swept_mem_mb=getattr(self, "swept_mem_mb", None),
             )
-            if getattr(self, "_loading_active", False):
-                raise NotImplementedError(_MIXED_WIRE_LOADING_REFUSAL)
             seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
             if crossing:
                 # The node's own dofs, appended AFTER the stitch: each wing is
@@ -4201,6 +4194,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 # what supplies continuity and the AGARD slope at the C0
                 # node the basis leaves free.
                 G = self._add_crossing_blocks(geom, seg_view, medium, below, G)
+            # Loading on a mixed deck (momwire#1156): each shared-segment
+            # overlap is written at its segment's own k (`k_entry`, which the
+            # wing columns carry too) and read at the REAL ω. It was refused
+            # while the only ω on hand was the fill's one k.
+            self._apply_loading(G, geom, seg_view, None, medium=medium)
             return G, seg_view
 
         seg_view = self._basis_coefs(geom, k)
@@ -4275,7 +4273,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         right = np.repeat(starts[m_of_entry], reps) + ramp
         return left, right, m_of_entry[left]
 
-    def _apply_loading(self, G, geom, seg_view, k):
+    def _apply_loading(self, G, geom, seg_view, k, medium=None):
         """The Galerkin form of NEC's impedance boundary condition, in place;
         no-op when loading is off.
 
@@ -4326,8 +4324,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         if not self._loading_active:
             return G
+        if medium is None:
+            medium = self._active_medium
         starts = seg_view["starts"]
         left, right, m_of_pair = self._shared_segment_pairs(starts)
+        if "k_entry" in seg_view:
+            # A mixed deck's stitched view (momwire#980 D2/D3): every entry
+            # carries the k it was built at, and the two entries of a pair
+            # share a segment, so the pair's shapes are written in that
+            # segment's own medium (momwire#1156).
+            k = np.asarray(seg_view["k_entry"])[left]
 
         sig = seg_view["sigma"].astype(np.complex128)
         P = sig * seg_view["A"]
@@ -4342,13 +4348,124 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             + Q[left] * Q[right] * (0.5 * h - half_sin)
             + R[left] * R[right] * (0.5 * h + half_sin)
         )
+        # The loading is read at the solve's REAL angular frequency. `k` is
+        # the SHAPES' wavenumber — k_m, complex, on a buried segment — and
+        # k_m·c is not a frequency: a bare conductor's surface impedance and
+        # a lumped/distributed RLC are local, medium-independent functions
+        # of ω (momwire#1156; razor's #1149 U3 derivation). `medium.k_p` is
+        # the upper medium's wavenumber, float(self.k) before the swap, so
+        # an above-ground or free-space deck (medium None) reads the same
+        # `k * self.c` it always did, bit for bit.
+        omega = (k if medium is None else medium.k_p) * self.c
         # (n_segs,), zeros where switched off — the shared spec layer
         # (momwire#428); the overlap VALUES above are this rule's own share.
-        z_seg = _wire_loading.loading_for(self, k * self.c, geom).z_seg
-        vals *= z_seg[m_of_pair]
+        spec = _wire_loading.loading_for(self, omega, geom)
+        if spec.zq_seg is not None:
+            # A jacketed BURIED wire's charge-side term (momwire#1154): the
+            # local potential dS'·q, q = −(1/jω)·dI/dl, tested by parts the
+            # way bspline's `_charge_gram` tests it —
+            #
+            #     G[i, j] −= zq_s · ∫_s f_i′(ξ)·f_j′(ξ) dξ,  zq = dS'/(jω)
+            #
+            # — the same global sign as the series term above, because both
+            # are impedances the wire adds to Z = −G. The boundary terms the
+            # by-parts step drops vanish at a free end (every basis is exactly
+            # 0 there, and continuous across every interior segment boundary:
+            # scratch/1156-sg-buried-loading/probe1.out), and at a junction
+            # are dropped as bspline drops them. On the three-term shape
+            # f′ = k·(Q·cos kξ − R·sin kξ), and ∫sin·cos = 0 by parity:
+            #
+            #     D_s[e, f] = k²·[ Q_eQ_f·(h/2 + sin(kh)/2k)
+            #                    + R_eR_f·(h/2 − sin(kh)/2k) ].
+            #
+            # `zq_seg` is None on every deck without a jacketed wire below
+            # the interface, so every other fill is structurally untouched.
+            dvals = (k * k) * (
+                Q[left] * Q[right] * (0.5 * h + half_sin)
+                + R[left] * R[right] * (0.5 * h - half_sin)
+            )
+            vals = vals * spec.z_seg[m_of_pair] + dvals * spec.zq_seg[m_of_pair]
+        else:
+            vals *= spec.z_seg[m_of_pair]
         # Unbuffered: a basis pair recurs once per shared segment.
         np.subtract.at(G, (seg_view["jbasis"][left], seg_view["jbasis"][right]), vals)
         return G
+
+    def wire_loss_power(self, coeffs, omega=None):
+        """Ohmic power in the wire metal — `SinusoidalSolver.wire_loss_power`,
+        read in the basis the solve actually used.
+
+        The inherited readout rebuilds the shapes at k = ω/c and integrates
+        |I|² with the real-k closed form. On a deck with a buried segment
+        neither holds (momwire#1156): the solve's shapes there are written at
+        the complex k_m (`_operating_medium`, or per entry on a mixed deck's
+        stitched view, whose crossing wings are extra columns the plain view
+        does not have). So a deck with any buried segment rebuilds the SAME
+        view the fill built, and integrates
+
+            ∫|P + Q·sin kξ + R·cos kξ|² dξ   over ξ ∈ [−h/2, h/2]
+
+        for complex k with conj(f) = P̄ + Q̄·sin k̄ξ + R̄·cos k̄ξ. The odd
+        products vanish by parity; with I(c) = ∫cos cξ dξ = h·sinc(ch/2π),
+
+            = |P|²h + 2·Re[P·R̄·I(k̄)]
+              + ½|Q|²·[I(k − k̄) − I(k + k̄)] + ½|R|²·[I(k − k̄) + I(k + k̄)],
+
+        which is the inherited closed form term for term at real k
+        (I(0) = h, I(2k) = sin(kh)/k). Every deck with no buried segment
+        takes the inherited path unchanged.
+        """
+        geom = self._build_geometry()
+        below = (
+            self._below_segments(geom)
+            if self._loading_active and self.ground_z is not None
+            else None
+        )
+        if below is None or not below.any():
+            return super().wire_loss_power(coeffs, omega)
+        if omega is None:
+            omega = self.omega
+        omega = float(omega)
+        medium = _crossing_fill.buried_medium(
+            self.ground_eps, omega, self.eps, omega / self.c
+        )
+        if self._is_mixed(geom):
+            seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+            if self._is_crossing(geom):
+                seg_view = self._crossing_wing_view(geom, seg_view, below, medium)
+            k_seg = np.where(below, medium.k_m, medium.k_p).astype(np.complex128)
+        else:
+            seg_view = self._basis_coefs(geom, medium.k_m)
+            k_seg = np.full(int(geom["n_segs"]), medium.k_m, dtype=np.complex128)
+        n_segs = int(geom["n_segs"])
+        h = np.asarray(geom["seg_h"], dtype=np.float64)
+        starts = seg_view["starts"]
+        rows = np.repeat(np.arange(n_segs, dtype=np.int64), np.diff(starts))
+        alpha_e = np.asarray(coeffs)[seg_view["jbasis"]]
+        P = np.zeros(n_segs, dtype=np.complex128)
+        Q = np.zeros(n_segs, dtype=np.complex128)
+        R = np.zeros(n_segs, dtype=np.complex128)
+        np.add.at(P, rows, alpha_e * seg_view["sigma"] * seg_view["A"])
+        np.add.at(Q, rows, alpha_e * seg_view["B"])
+        np.add.at(R, rows, alpha_e * seg_view["sigma"] * seg_view["C"])
+
+        def _icos(c):
+            return h * np.sinc(c * h / (2.0 * np.pi))
+
+        kc = np.conj(k_seg)
+        i_diff = np.real(_icos(k_seg - kc))
+        i_sum = _icos(k_seg + kc)
+        int_abs_i2 = (
+            np.abs(P) ** 2 * h
+            + 2.0 * np.real(P * np.conj(R) * _icos(kc))
+            + 0.5 * np.abs(Q) ** 2 * np.real(i_diff - i_sum)
+            + 0.5 * np.abs(R) ** 2 * np.real(i_diff + i_sum)
+        )
+        per_wire = np.zeros(len(self.wires_polylines), dtype=np.float64)
+        r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
+        wire_of = self._wire_of_seg(geom)
+        np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        return float(per_wire.sum()), per_wire
 
     def _scatter_coef_product(self, ctx, contribs):
         """Σ_shape T[shape] @ M[shape] — the (n_basis, n_basis) matrix a triple

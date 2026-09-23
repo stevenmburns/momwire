@@ -210,12 +210,10 @@ def test_the_transmitted_directions_are_reciprocal():
 # ----------------------------------------------------------------------
 
 
-def test_wire_loading_on_a_mixed_deck_refuses_by_name():
-    """`_apply_loading` is applied at ONE k and the classes load at two."""
-    s = mk([ABOVE, BELOW_NEAR], [[11], [11]])
-    s._loading_active = True
-    with pytest.raises(NotImplementedError, match="single wavenumber"):
-        s.compute_impedance()
+# Wire loading on a mixed deck was refused here ("applied at a single
+# wavenumber") until momwire#1156 wrote each overlap at its segment's own k
+# and read the loading at the real omega; it is served and gated in
+# tests/test_sg_buried_loading_1156.py.
 
 
 def test_the_extended_kernel_on_a_mixed_deck_refuses_by_bsplines_name():

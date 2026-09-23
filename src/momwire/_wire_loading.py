@@ -41,9 +41,10 @@ HF (stevenmburns/momwire#131):
   charge-side coefficient ``zq = ΔS′/(jω)`` on every jacketed segment in
   the lower medium (zero, and structurally absent, everywhere else). A
   formulation tests it as it tests its own scalar-potential term: the
-  Galerkin rows as ``zq · ∫ f_m′ f_n′ dl`` (`BSplineSolver._charge_gram`),
-  razor as the potential ``zq · q`` differenced across the testing path
-  (`RazorSolver._charge_stencil`).
+  Galerkin rows as ``zq · ∫ f_m′ f_n′ dl`` (`BSplineSolver._charge_gram`,
+  and `SinusoidalGalerkinSolver._apply_loading` in closed form on its
+  three-term shapes, momwire#1156), razor as the potential ``zq · q``
+  differenced across the testing path (`RazorSolver._charge_stencil`).
 
 Both enter the MoM as one per-wire series impedance Z'(ω) = Z'_int +
 jωL'_ins, applied through each solver family's own testing scheme: the
@@ -665,7 +666,19 @@ def loading_for(solver, omega, geom=None):
     on the formulations that refuse them) are resolved through
     `solver._lumped_site_index(geom, i, wire, arclength)` — the one step
     that cannot be shared, since a site index is a basis-layer fact.
+
+    `omega` is the solve's REAL angular frequency. A buried fill's complex
+    wavenumber times c is not one — loading is local and medium-independent
+    — and handing one in is refused by name here rather than failing inside
+    a float conversion (momwire#1156).
     """
+    if np.iscomplexobj(omega):
+        raise TypeError(
+            f"loading_for takes the solve's REAL angular frequency, got a "
+            f"complex omega ({omega!r}): wire loading is local and "
+            f"medium-independent, so a buried fill reads it at the real omega, "
+            f"never at its complex wavenumber times c (momwire#1156)"
+        )
     z_wire = None
     if solver._loading_active:
         z_wire = series_impedance_per_wire(
