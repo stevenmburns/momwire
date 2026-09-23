@@ -1,0 +1,24 @@
+{"m": 1, "sep": 12.0, "pre": null, "fill": null, "same": true}
+{"m": 1, "sep": 24.0, "pre": null, "fill": null, "same": true}
+{"m": 1, "sep": 48.0, "pre": null, "fill": null, "same": true}
+{"m": 1, "sep": 64.0, "pre": null, "fill": null, "same": true}
+{"m": 1, "sep": 96.0, "pre": null, "fill": null, "same": true}
+{"m": 1, "sep": 128.0, "pre": null, "fill": "below/below grid tabulated from theta = 0.01667 deg but was queried at", "same": false}
+{"m": 1, "sep": 192.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 1, "sep": 256.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 2, "sep": 12.0, "pre": null, "fill": null, "same": true}
+{"m": 2, "sep": 24.0, "pre": null, "fill": null, "same": true}
+{"m": 2, "sep": 48.0, "pre": null, "fill": null, "same": true}
+{"m": 2, "sep": 64.0, "pre": null, "fill": "below/below grid tabulated from theta = 0.01667 deg but was queried at", "same": false}
+{"m": 2, "sep": 96.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 2, "sep": 128.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 2, "sep": 192.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 2, "sep": 256.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 4, "sep": 12.0, "pre": null, "fill": null, "same": true}
+{"m": 4, "sep": 24.0, "pre": null, "fill": null, "same": true}
+{"m": 4, "sep": 48.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 4, "sep": 64.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 4, "sep": 96.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 4, "sep": 128.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 4, "sep": 192.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}
+{"m": 4, "sep": 256.0, "pre": "this deck's buried wires reach a below/below pair elevation of theta =", "fill": "this deck's buried wires reach a below/below pair elevation of theta =", "same": true}

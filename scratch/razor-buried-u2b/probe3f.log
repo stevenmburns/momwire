@@ -1,0 +1,27 @@
+{"gate": "f", "m": 1, "sep": 1.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 2.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 3.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 4.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 6.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 8.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 10.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 1, "sep": 12.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.01612 deg, below ", "agree": false}
+{"gate": "f", "m": 1, "sep": 16.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.01209 deg, below ", "agree": false}
+{"gate": "f", "m": 2, "sep": 1.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 2, "sep": 2.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 2, "sep": 3.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 2, "sep": 4.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 2, "sep": 6.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.01612 deg, below ", "agree": false}
+{"gate": "f", "m": 2, "sep": 8.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.01209 deg, below ", "agree": false}
+{"gate": "f", "m": 2, "sep": 10.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.009673 deg, below", "agree": false}
+{"gate": "f", "m": 2, "sep": 12.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.008061 deg, below", "agree": false}
+{"gate": "f", "m": 2, "sep": 16.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.006046 deg, below", "agree": false}
+{"gate": "f", "m": 4, "sep": 1.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 4, "sep": 2.0, "razor": null, "bspline": null, "agree": true}
+{"gate": "f", "m": 4, "sep": 3.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.01612 deg, below ", "agree": false}
+{"gate": "f", "m": 4, "sep": 4.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.01209 deg, below ", "agree": false}
+{"gate": "f", "m": 4, "sep": 6.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.008061 deg, below", "agree": false}
+{"gate": "f", "m": 4, "sep": 8.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.006046 deg, below", "agree": false}
+{"gate": "f", "m": 4, "sep": 10.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.004837 deg, below", "agree": false}
+{"gate": "f", "m": 4, "sep": 12.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.00403 deg, below ", "agree": false}
+{"gate": "f", "m": 4, "sep": 16.0, "razor": null, "bspline": "this deck's buried wires reach a below/below pair elevation of theta = 0.003023 deg, below", "agree": false}

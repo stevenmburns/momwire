@@ -1,0 +1,28 @@
+x1  equal   razor  191.3627-113.5263j  ref  191.4900-113.1400j  |d| 0.4067
+x1  rise/2  razor  199.2759-117.7755j  ref  199.4100-117.3900j  |d| 0.4082
+x1  rise/4  razor  207.0777-122.1251j  ref  207.2100-121.7400j  |d| 0.4072
+x1  top/4   razor  192.5674-126.3025j  ref  192.6800-125.9100j  |d| 0.4083
+x1  rise/2  dR razor  +7.9133  ref  +7.9200  diff -0.0067
+x1  rise/4  dR razor +15.7150  ref +15.7200  diff -0.0050
+x1  top/4   dR razor  +1.2047  ref  +1.1900  diff +0.0147
+x2  equal   razor  192.2300-110.2917j  ref  192.2600-110.2200j  |d| 0.0777
+x2  rise/2  razor  200.2116-114.5205j  ref  200.2400-114.4500j  |d| 0.0760
+x2  rise/4  razor  208.0822-118.8502j  ref  208.1200-118.7800j  |d| 0.0797
+x2  top/4   razor  193.3801-122.9771j  ref  193.4100-122.9100j  |d| 0.0734
+x2  rise/2  dR razor  +7.9816  ref  +7.9800  diff +0.0016
+x2  rise/4  dR razor +15.8521  ref +15.8600  diff -0.0079
+x2  top/4   dR razor  +1.1501  ref  +1.1500  diff +0.0001
+x4  equal   razor  192.4262-108.9876j  ref  192.4300-109.0000j  |d| 0.0130
+x4  rise/2  razor  200.4251-113.2220j  ref  200.4300-113.2300j  |d| 0.0094
+x4  rise/4  razor  208.3129-117.5560j  ref  208.3200-117.5700j  |d| 0.0157
+x4  top/4   razor  193.5592-121.6636j  ref  193.5600-121.6800j  |d| 0.0164
+x4  rise/2  dR razor  +7.9989  ref  +8.0000  diff -0.0011
+x4  rise/4  dR razor +15.8867  ref +15.8900  diff -0.0033
+x4  top/4   dR razor  +1.1330  ref  +1.1300  diff +0.0030
+x8  equal   razor  192.4601-108.3823j  ref  192.4600-108.4200j  |d| 0.0377
+x8  rise/2  razor  200.4630-112.6261j  ref  200.4600-112.6600j  |d| 0.0340
+x8  rise/4  razor  208.3547-116.9678j  ref  208.3500-117.0000j  |d| 0.0325
+x8  top/4   razor  193.5886-121.0666j  ref  193.5900-121.1100j  |d| 0.0434
+x8  rise/2  dR razor  +8.0029  ref  +8.0000  diff +0.0029
+x8  rise/4  dR razor +15.8946  ref +15.8900  diff +0.0046
+x8  top/4   dR razor  +1.1284  ref  +1.1300  diff -0.0016
