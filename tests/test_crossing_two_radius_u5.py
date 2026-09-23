@@ -121,14 +121,17 @@ def test_u5_5a_a_radius_spread_within_a_side_is_refused_by_name():
         s._crossing_junctions()
 
 
-def test_u5_5c_razor_still_refuses_a_mixed_radius_crossing(monkeypatch):
-    """Only BSpline opts into the two-radius node: razor's crossing fill was
-    not measured under the rule, so the shared scope check keeps its
-    one-radius refusal for it."""
-    monkeypatch.setattr(_razor, "_SERVE_CROSSING", True)
+def test_u5_5c_razor_serves_a_two_radius_crossing_within_bsplines_scope():
+    """razor opts into the two-radius node too since momwire#1149 U2b (its
+    fill takes every term at the source wire's radius; the gates are in
+    `tests/test_razor_two_radius_1149.py`). The shared scope still refuses
+    for it exactly what it refuses for BSpline, with the same sentence."""
+    assert _razor._SERVE_CROSSING is True
     deck = crossing_deck(2, wire_radius=[A / 2, A])
-    with pytest.raises(NotImplementedError, match="per-wire radii"):
-        RazorSolver(**deck, n_qp_path=8)._crossing_junctions()
+    assert RazorSolver(**deck, n_qp_path=8)._crossing_junctions() == (0,)
+    spread = fan_rise_deck(n_radials=2, wire_radius=[A / 2, A / 4, A])
+    with pytest.raises(NotImplementedError, match="differ within the below wires"):
+        RazorSolver(**spread, n_qp_path=8)
 
 
 def test_u5_6_the_multiplier_reaches_the_y_matrix(two_radius_rod):
