@@ -122,7 +122,9 @@ def test_g688_3_corner_routes_direct_at_corner_rtol(monkeypatch):
     A = cf.axis_data(ctx, a_idx)
     B = cf.axis_data(ctx, b_idx)
 
-    def zero_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=0.0, memo=None):
+    def zero_tables(
+        eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=0.0, memo=None, group_labels=None
+    ):
         shape = np.broadcast(
             np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
         ).shape
