@@ -1282,6 +1282,18 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
         yield sl, {key: v[idx] for key, v in vals.items()}
 
 
+def _block_preamble(ctx):
+    """`(eps_t, k_p, gz, c1, memo)` for one cross-block fill: the medium's
+    above-side ε̃ and k₂, the plane, the moment constant, and a FRESH
+    exact-triple memo (momwire#1017: one fill = one memo, ε̃, k₂ and
+    `_CROSS_RTOL` fixed for its lifetime). Every cross-block entry opens with
+    these five lines, so they are spelled once (momwire#1168 U5)."""
+    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
+    gz = float(ctx.ground_z)
+    c1 = _c1_moment(ctx.omega, ctx.mu)
+    return eps_t, k_p, gz, c1, _near_interface.TripleMemo()
+
+
 def cross_complete_block(ctx, A, B, *, corner=True):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
@@ -1290,14 +1302,11 @@ def cross_complete_block(ctx, A, B, *, corner=True):
     For GALERKIN rows the opposite block is this one's transpose. For
     PATH-tested rows it is not, and `cross_complete_block_reversed` builds
     it — see there for the one term that separates them."""
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
-    gz = float(ctx.ground_z)
-    c1 = _c1_moment(ctx.omega, ctx.mu)
     # One fill = one memo, exactly as `cross_complete_block_split` does it
     # (momwire#1017). This route built none, so momwire#688's cross-call dedup
     # — the whole reason the parameter exists — never fired for `RazorSolver`,
     # whose crossing serve calls straight in here.
-    memo = _near_interface.TripleMemo()
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
     _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=t_ab)
     return t_ab
@@ -1818,10 +1827,7 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
     bit for bit, in both media, under the default `sw_end`. The rejected
     `SW_BY_ROLE` spelling agrees at ε̃ = 1 and is 7.94e-4 away at soil A.
     """
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
-    gz = float(ctx.ground_z)
-    c1 = _c1_moment(ctx.omega, ctx.mu)
-    memo = _near_interface.TripleMemo()  # momwire#1017, as above
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)  # momwire#1017, as above
     t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz, memo=memo).T
     t_ba += _ends_and_corner_reversed(
         ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
@@ -2190,11 +2196,8 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
         return t if rows is None else (t[rows], t[:, rows])
     _refuse_path_tested(A, B)
 
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
-    gz = float(ctx.ground_z)
-    c1 = _c1_moment(ctx.omega, ctx.mu)
     # One fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here).
-    memo = _near_interface.TripleMemo()
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     main = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows)
     if rows is None:
         _ends_and_corner(
@@ -2250,11 +2253,8 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     if rows is not None:
         t_below = t_below[1]
 
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
-    gz = float(ctx.ground_z)
-    c1 = _c1_moment(ctx.omega, ctx.mu)
     # Keyed on the folded rho_eff, so one memo per radius stays exact.
-    memo = _near_interface.TripleMemo()
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     if _FORCE_DENSE:
         t_above = _main_sandwich(ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo)
         if rows is not None:
@@ -2605,10 +2605,7 @@ def cross_complete_block_reversed_split(
         return cross_complete_block_reversed(ctx, P, Q, corner=corner, sw_end=sw_end)
     _refuse_path_tested(P, Q)
 
-    eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
-    gz = float(ctx.ground_z)
-    c1 = _c1_moment(ctx.omega, ctx.mu)
-    memo = _near_interface.TripleMemo()
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     t_ba = _main_split(ctx, q_idx, p_idx, Q, P, eps_t, k_p, c1, gz, memo).T
     t_ba += _ends_and_corner_reversed(
         ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
