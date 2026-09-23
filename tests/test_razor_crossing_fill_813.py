@@ -261,8 +261,13 @@ def test_the_below_block_comes_from_the_below_fill(serve_crossing, monkeypatch):
 
 
 def test_a_crossing_deck_is_refused_by_name_when_the_switch_is_off():
-    with pytest.raises(ValueError, match="momwire#813"):
+    """Off by default until momwire#1149 U2, and with the declared sentence."""
+    assert _razor._SERVE_CROSSING is False
+    with pytest.raises(ValueError, match="momwire#1149 U2") as exc:
         RazorSolver(**_decks("crossing"), n_qp_path=8)
+    assert str(exc.value).endswith(
+        RazorSolver.capabilities.refusals["buried+crossing_junction"]
+    )
 
 
 def test_a_plane_touching_end_that_is_not_a_crossing_member_still_refuses(
@@ -291,5 +296,10 @@ def test_a_plane_touching_end_that_is_not_a_crossing_member_still_refuses(
 def test_loading_on_a_crossing_deck_is_refused(serve_crossing):
     deck = _at_eps1(_decks("crossing"))
     deck["lumped_loads"] = [(1, 1.0, 50 + 0j)]
-    with pytest.raises(NotImplementedError, match="loading on a crossing deck"):
+    with pytest.raises(NotImplementedError, match="loading on a crossing deck") as exc:
         RazorSolver(**deck, n_qp_path=8).compute_impedance()
+    # The declared cell (momwire#1149 U0), raised verbatim: the row says
+    # `wire_loading=True`, so without it the refusal was undeclared.
+    declared = RazorSolver.capabilities.refusal("wire_loading", "crossing_junction")
+    assert declared is _razor._CROSSING_LOADING_REFUSAL
+    assert str(exc.value) == declared

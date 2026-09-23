@@ -457,40 +457,40 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # reason: a .so built before #744 landed exports `razor_assemble_t1` and not
 # its weighted twin, and one symbol must never be read as vouching for the
 # other.
-# momwire#814 (razor buried, unit 3): THE ONE CONSTANT THE FLIP MOVES.
-#
-# SHELVED, by decision (Steve, 2026-09-03; the record is on momwire#813 and
-# #814): razor-2p is the ABOVE-ground twin of licensed NEC-5, and the buried
-# and contact engine is BSplineSolver. We do not want to match NEC-5
-# underground (its interface node is a measured limitation, momwire#838), and
-# razor's first-order path testing (momwire#845) plus its 20-45x crossing-fill
-# cost make accurate underground work on it expensive before its located
-# soil residual (#813 step 4) is touched. Everything below stays built and
-# gated behind this constant; the sentences it declares say "by decision"
-# rather than "not yet". Flip it only with that decision reversed.
-#
-# Three things have to change together for razor to serve buried decks — the
-# wholly-below family (momwire#812), the crossing family (momwire#813) and the
-# declared `buried` capability cell — and while they were three independent
-# `False`s the flip was three edits that could be made separately and land
-# half-done. A deck served by the fill while the row still declares a refusal
-# is the worst of the three states: consumers read the row, so the deck would
-# be refused by the roster and served by the solver at the same time.
-#
-# They are derived from one name instead. `tests/test_814_prep.py` holds the
-# derivation, so flipping this line is the whole flip and nothing else has to
-# be remembered.
-_SERVE_BURIED = False
 
-# momwire#812 (razor buried, unit 1): serve a WHOLLY-below deck through the
-# lower-medium family. Kept as its own NAME because the unit's gates
-# monkeypatch it by name and read it at call time; its VALUE is not its own.
-_SERVE_BELOW_PLANE = _SERVE_BURIED
+# The razor buried serve, STAGED (momwire#1149; decision 2026-09-22).
+#
+# Two constants, because the two halves of razor's buried fill are not in the
+# same state. The shelving of 2026-09-03 (momwire#813/#814) moved them with
+# one name, `_SERVE_BURIED`, so the flip could not land half-done. The
+# 2026-09-22 re-measurement split the verdict. At equal mesh, against the
+# licensed reference, the wholly-below fill (momwire#812) is 0.006-0.035 ohm
+# and the detached deck's cross blocks are 0.003-0.06 ohm, and both have
+# 2-port non-reciprocity that DECAYS under refinement. The crossing node
+# alone converges to a non-reciprocal limit (flat at 3.2e-2) carrying a
+# spurious node resistance (+9.85 ohm against bspline on crossing_deck). So
+# the serve is staged as SinusoidalGalerkinSolver's was (momwire#980 D1/D2
+# before D3): the buried cell is served now, and the crossing class keeps its
+# own declared sentence until momwire#1149 U2 derives the node.
+#
+# The half-done state the single name used to prevent is still prevented,
+# one level down. Each constant owns exactly one declared cell, and
+# `tests/test_814_prep.py` holds each pair together: `_SERVE_BELOW_PLANE` <->
+# `buried`, `_SERVE_CROSSING` <-> `buried+crossing_junction`. A deck served
+# by the fill while the row still declares a refusal, or the reverse, fails
+# there.
 
-# momwire#813 unit 2: serve a deck whose wires span the interface through a
-# crossing junction. Same rule: its own name for the gates, its value from
-# `_SERVE_BURIED`.
-_SERVE_CROSSING = _SERVE_BURIED
+# Every buried deck with NO crossing junction: a WHOLLY-below deck
+# (momwire#812, the lower-medium family) and a DETACHED one, where above and
+# buried wires share the deck but no junction sits in the plane (momwire#1149
+# U1: `_assemble_Z_crossing` with zero crossing tents, i.e. the two same-
+# medium fills plus the trunk's two cross blocks). Gates monkeypatch it by
+# name and it is read at call time.
+_SERVE_BELOW_PLANE = True
+
+# A deck whose wires span the interface through a crossing junction
+# (momwire#813). OFF until momwire#1149 U2: see above.
+_SERVE_CROSSING = False
 
 # The sentence a crossing deck gets while `_SERVE_CROSSING` is off. It is
 # ALSO the refusal razor's capability row declares for the
@@ -527,11 +527,46 @@ _BUNDLE_REFUSAL = (
 
 _CROSSING_NOT_SERVED_REFUSAL = (
     "this deck's wires cross the interface at a junction, and razor does not "
-    "serve buried decks: by decision (2026-09-03, momwire#813/#814) razor-2p "
-    "is the above-ground twin of licensed NEC-5 and BSplineSolver is the "
-    "buried and contact engine (the crossing junction since momwire#524 "
-    "phase 2, measured against Brown-Lewis-Epstein 1937 on momwire#838). "
-    "Solve it with BSplineSolver, or leave the buried part DETACHED"
+    "serve the crossing node yet: its crossing fill converges to a "
+    "non-reciprocal limit carrying a spurious node resistance (+9.85 ohm "
+    "against BSplineSolver on the momwire#524 crossing deck, growing with "
+    "the number of buried members), so that class stays refused until "
+    "momwire#1149 U2 derives the node. Razor serves a wholly-buried deck and "
+    "a DETACHED one (buried wires with no junction in the plane). Solve this "
+    "deck with BSplineSolver or SinusoidalGalerkinSolver"
+)
+
+# momwire#1149 U0: wire loading on a CROSSING deck. The per-medium fills
+# carry their own loading stencils, but the crossing tent's cross terms are
+# not derived (U3), so `_assemble_Z_crossing` refuses before any fill. It is
+# a declared cell rather than a bare raise because the row says
+# `wire_loading=True`: a consumer reading that row would offer loading on the
+# crossing deck, and the solver would refuse it (the momwire#651 shape).
+# A DETACHED deck is not this cell: it has no crossing tent, every basis sits
+# in one medium, and the full-geometry stencil is exact there, as it is on
+# the wholly-below route.
+_CROSSING_LOADING_REFUSAL = (
+    "wire loading on a crossing deck is not served by razor (momwire#1149 "
+    "U3): the per-medium fills carry their own loading stencils, but the "
+    "crossing tent's cross terms are not derived. Load the deck on "
+    "BSplineSolver, or keep the loaded wires on a deck with no junction in "
+    "the plane"
+)
+
+# momwire#1149 U1: a DETACHED deck (above and buried wires, no junction in
+# the plane) with more than one wire radius. The detached route fills each
+# medium on its own sub-geometry, which carries no per-wire radius table
+# (without this refusal the fill dies on a bare KeyError, measured), and the
+# trunk's cross blocks take ONE `a_wire` (`_crossing_context`), so even with
+# the table a second radius would be regularised with the first wire's.
+# Refused by name rather than approximated. A wholly-below deck does not
+# reach it: that route fills on the full geometry.
+_DETACHED_MIXED_RADIUS_REFUSAL = (
+    "razor's detached buried route (above and buried wires with no junction "
+    "in the plane, momwire#1149 U1) takes one wire radius for the whole "
+    "deck: each medium is filled on its own sub-geometry and the cross "
+    "blocks carry a single radius. Give every wire the same radius, or solve "
+    "the deck with BSplineSolver"
 )
 
 # The crossing blocks' axis density (momwire#813). Razor's cross rows are
@@ -555,7 +590,8 @@ _CROSSING_NOT_SERVED_REFUSAL = (
 #
 # So (2.0, 8, 12) is the floor for both decks at 3x the shipped node count,
 # and 16-per-panel buys nothing over 8. The cost is the crossing blocks'
-# only, and only on a deck that HAS a crossing junction.
+# only, and only on a deck that HAS them: a crossing junction, or a detached
+# deck's two cross blocks (momwire#1149 U1).
 _CROSSING_GROWTH = 2.0
 _CROSSING_PANEL_ORDER = 8
 _CROSSING_Q = 12
@@ -752,20 +788,12 @@ _CHOP_EK_REFUSAL = (
 )
 
 _BURIED_FILL_REFUSAL = (
-    "RazorSolver has no "
-    "buried fill: the momwire#553 buried serve (direct + image "
-    "+ Sommerfeld-remainder blocks in the lower medium) is "
-    "written for BSplineSolver's testing side only. A detached "
-    "buried wire is a LEGAL deck - solve it with BSplineSolver, "
-    "which serves buried ground since momwire#553, or raise the "
-    "wire clear of the plane. Razor's own below-plane fill (momwire#812) and "
-    "crossing fill (momwire#813) exist behind `_SERVE_BURIED` and stay OFF "
-    "by decision (2026-09-03, momwire#813/#814): razor-2p is the "
-    "above-ground twin of licensed NEC-5, and underground the engine is "
-    "BSplineSolver and the reference is measurement (momwire#838); the "
-    "arc is momwire#651, CLOSED as the declared refusal below rather than "
-    "as a serve (2026-09-06): razor's buried units momwire#812-#814 are "
-    "closed not-planned, and the second buried solver is SinusoidalSolver"
+    "RazorSolver's buried fill is switched OFF in this build "
+    "(`razor._SERVE_BELOW_PLANE`): the lower-medium family (momwire#812) and "
+    "the detached route (momwire#1149 U1) serve a buried deck with no "
+    "junction in the plane only while it is on. A detached buried wire is a "
+    "LEGAL deck - solve it with BSplineSolver, which serves buried ground "
+    "since momwire#553, or raise the wire clear of the plane"
 )
 
 
@@ -1328,32 +1356,44 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Contact at a wire END is served over PEC (unit 3) and over the
         # Sommerfeld ground (momwire#624); what is refused inside that column
         # is the refl-coef row below, which is a combination and not this
-        # cell. BURIED is momwire#651's first half: razor refuses it, has
-        # always refused it, and now says so — all four sentences the
-        # geometry scan can reach, three of them `_medium_spec`'s shared ones
-        # and reached through combination keys because they are the ground
-        # column and the mid-span crossing rather than this family's own gap.
-        buried=_SERVE_BURIED,
+        # cell. BURIED is served since momwire#1149 U0/U1 for every deck with
+        # no junction in the plane (wholly-below and detached); the crossing
+        # junction keeps its own declared cell until U2. Each cell is owned
+        # by one constant (`tests/test_814_prep.py`).
+        buried=_SERVE_BELOW_PLANE,
         contact=True,
         refusals={
             "contact+refl-coef": _ground_spec.CONTACT_UNDER_REFL_COEF_REFUSAL,
             "centre_feeds": _CENTRE_FEEDS_REFUSAL,
             "junction_ports": _OUT_OF_SCOPE["junction_ports"],
             "singular_enrichment": SINGULAR_ENRICHMENT_NEVER.format(cls="RazorSolver"),
-            # The two cells the flip RETIRES, and only these two. Both say
-            # "not served YET"; the other four below are real refusals that
-            # outlive momwire#814 — a PEC or refl-coef ground has no lower
-            # medium whatever razor can fill, a mid-span crossing is still
-            # momwire's guess where the model must speak, and contact+buried
-            # is momwire#567's measured scope decision for both trunks.
+            # The two cells the staged flip retires, each owned by ONE
+            # constant (momwire#1149): `buried` goes with
+            # `_SERVE_BELOW_PLANE`, `buried+crossing_junction` with
+            # `_SERVE_CROSSING`. Both say "not served YET"; the refusals
+            # further down are real ones that outlive the arc — a PEC or
+            # refl-coef ground has no lower medium whatever razor can fill,
+            # a mid-span crossing is still momwire's guess where the model
+            # must speak, and contact+buried is momwire#567's measured scope
+            # decision for both trunks.
+            **({} if _SERVE_BELOW_PLANE else {"buried": _BURIED_FILL_REFUSAL}),
             **(
                 {}
-                if _SERVE_BURIED
-                else {
-                    "buried": _BURIED_FILL_REFUSAL,
-                    "buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL,
-                }
+                if _SERVE_CROSSING
+                else {"buried+crossing_junction": _CROSSING_NOT_SERVED_REFUSAL}
             ),
+            # The EK refusal below the plane is tree-wide (bspline declares
+            # the same object); razor raised it at construction with no cell
+            # behind it until momwire#1149 U0.
+            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
+            # Loading on a crossing deck (momwire#1149 U3 derives it). Keyed
+            # on the crossing-junction condition, which is the cell a
+            # consumer already asks for that deck.
+            "wire_loading+crossing_junction": _CROSSING_LOADING_REFUSAL,
+            # A detached deck with more than one wire radius (U1's scope).
+            # `detached` is a condition token, like `crossing_junction`: it
+            # names a deck shape, not something a family does.
+            "per_wire_radius+detached": _DETACHED_MIXED_RADIUS_REFUSAL,
             # Not reachable through `refusal()`'s cell algebra: a bare
             # condition token is SERVED unless it pairs into a combination
             # key, and "does this family have a bundle rule" is an axis
@@ -1368,7 +1408,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
             # `buried+crossing_junction` is declared ABOVE, with the other
-            # cell the flip retires. It is its own cell (momwire#850) because
+            # cell the staged flip retires. It is its own cell (momwire#850) because
             # the mid-span probe and a DECLARED crossing junction are two
             # refusals under one geometry word, and a row declares one
             # sentence per cell; antennaknobs' catalog gate names this cell
@@ -1559,13 +1599,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # is cached per geometry object and per mirror flag, exactly as
         # `BSplineSolver._ek_axis_labels` caches it.
         self.extended_kernel = bool(extended_kernel)
-        if getattr(self, "_below_plane", False) and self.extended_kernel:
+        if self.extended_kernel and (
+            self._below_plane or self._detached or self._crossing
+        ):
             # momwire#812: NEC's O(a²) tube expansion was derived in free
-            # space, not in a lossy medium; the below-plane fill declines it.
-            raise ValueError(
-                "razor's below-plane fill does not take the extended kernel: "
-                "NEC's O(a²) tube expansion was derived in free space, not in "
-                "a lossy medium (momwire#812)"
+            # space, not in a lossy medium, and no razor buried route takes
+            # it. The sentence is the tree-wide one bspline declares for the
+            # same cell (momwire#1149 U0 declared it on this row too).
+            raise NotImplementedError(
+                "razor's buried fill does not take the extended kernel: "
+                f"{_below_interface.BURIED_EXTENDED_KERNEL_REFUSAL}"
             )
         self._cached_ek_groups = None
 
@@ -1827,10 +1870,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Routed through the shared `_medium_spec.wire_media` so BOTH trunks
         refuse buried geometry with the SAME sentences (momwire#651): it
         raises the crossing, the no-lower-medium and the contact+buried
-        refusals by their shared names. Whatever it labels BELOW — a wholly
-        buried DETACHED wire over a Sommerfeld ground, which `BSplineSolver`
-        serves — is a legal deck razor cannot fill yet, and that gap gets
-        razor's own sentence here.
+        refusals by their shared names. What is left sets ONE of three
+        routes (momwire#1149): `_crossing` (a junction in the plane, refused
+        by name while `_SERVE_CROSSING` is off), `_detached` (above and
+        buried wires with no junction in the plane) or `_below_plane` (every
+        wire below). All three are False in free space and clear of the
+        plane.
 
         Called from ``__init__`` only: this is validation of the frozen
         geometry-plus-ground state, not part of the `_ground_ends` scan the
@@ -1845,24 +1890,23 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         a below wire and an above wire with the junction declared, which is
         the shape the crossing refusal asks for, was answered with the
         crossing refusal, because without the exemption the below wire's
-        plane-touching anchor reads as a mid-span crossing. It refuses
-        still — the mixed above/below sentence below is razor's own and is
-        the accurate one — but it now refuses for the reason that is true.
+        plane-touching anchor reads as a mid-span crossing. While the
+        crossing serve is off it refuses still, now for the reason that is
+        true.
         """
+        self._below_plane = False
+        self._detached = False
+        self._crossing = False
         gz = self.ground_z
         if gz is None:
             return
         media = self._wire_media()
-        self._below_plane = False
-        self._crossing = False
         if _medium_spec.BELOW in media:
             # The CROSSING deck first, and keyed on the declared junction
             # rather than on the media pair. BELOW + ABOVE is not enough:
             # a DETACHED buried radial under an elevated monopole is also
-            # both, and it is not a crossing deck — it is a buried deck razor
-            # cannot fill, and it must keep `_BURIED_FILL_REFUSAL`'s sentence
-            # naming the trunk that does (momwire#651,
-            # `test_651_razors_own_gap_sentence_names_the_serving_trunk`).
+            # both, and it is not a crossing deck — it has no tent in the
+            # plane, and it takes the detached route below (momwire#1149 U1).
             # `_crossing_junctions` is the question, and past the crossing
             # serve's scope it raises the adjudication's own sentences.
             if self._crossing_junctions():
@@ -1878,17 +1922,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     f"{zmin:.6g} < ground_z = {gz:g}), and "
                     f"{_BURIED_FILL_REFUSAL}"
                 )
-            # momwire#812, unit 1: the lower-medium family serves a deck that
-            # is wholly below the plane. A deck that also has an ABOVE wire
-            # without a crossing junction is a DETACHED pair, and neither
-            # #812's fill nor #813's crossing block covers it.
             if _medium_spec.ABOVE in media:
-                raise ValueError(
-                    "razor serves a wholly-below deck (momwire#812) but not "
-                    "one that also carries an above wire with no junction "
-                    "crossing the interface: solve it with BSplineSolver, "
-                    "which serves a detached buried wire since momwire#553"
-                )
+                # momwire#1149 U1: a DETACHED deck — above and buried wires,
+                # no junction in the plane. `_assemble_Z_crossing` serves it
+                # with ZERO crossing tents: each medium's own fill on its own
+                # sub-geometry plus the trunk's two cross blocks on razor's
+                # path axes, which is exactly the crossing assembly minus the
+                # node. Every piece of that was measured twin-grade and
+                # reciprocity-decaying on its own (scratch/razor-buried-
+                # scoping probes 5 and 10); the node is what U2 is for.
+                if self._uniform_radius is None:
+                    raise ValueError(
+                        "this deck has buried and above-ground wires of more "
+                        f"than one radius, and {_DETACHED_MIXED_RADIUS_REFUSAL}"
+                    )
+                self._detached = True
+                return
+            # momwire#812, unit 1: the lower-medium family serves a deck that
+            # is wholly below the plane.
             self._below_plane = True
 
     def _ground_ends(self):
@@ -3491,6 +3542,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if getattr(self, "_crossing", False):
             return self._assemble_Z_crossing(geom, k, omega)
+        if getattr(self, "_detached", False):
+            # momwire#1149 U1: the crossing assembly with zero crossing
+            # tents. Loading goes on AFTER it, on the full geometry, exactly
+            # as below: with no tent spanning the plane every basis lives in
+            # one medium, so the full-geometry stencil is the sum of the two
+            # per-medium stencils and the plane changes nothing about it.
+            Z = self._assemble_Z_crossing(geom, k, omega, detached=True)
+            if prepared["loading"] is not None:
+                self._apply_loading(
+                    Z,
+                    prepared["loading"],
+                    _wire_loading.loading_for(self, omega, geom),
+                )
+            return Z
         if getattr(self, "_below_plane", False):
             return self._assemble_Z_below_plane(geom, prepared, k, omega)
         Z = self._assemble_Z_source_block(geom, prepared, prepared, k, omega)
@@ -3830,7 +3895,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 recs += self._path_test_rows(geom, [m])
         return _crossing_fill.path_test_axis(geom["n_basis_total"], recs)
 
-    def _assemble_Z_crossing(self, geom, k, omega):
+    def _assemble_Z_crossing(self, geom, k, omega, *, detached=False):
         """The razor-blade matrix of a deck that CROSSES the interface, as
         four masked terms indexed by (row HALF) x (column WING):
 
@@ -3855,17 +3920,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         term STAYS, which is momwire#813 derivation (b) — and the eps~ = 1
         collapse this method is gated on cannot see that choice, because W
         vanishes there. Soil is what reads it.
+
+        `detached=True` is momwire#1149 U1: a deck with above and buried
+        wires and NO junction in the plane, so there are no crossing tents
+        and the four terms are the two same-medium fills plus the two cross
+        blocks, with nothing chopped. The caller applies loading on the full
+        geometry afterwards; a crossing deck's loading is refused here.
         """
-        if self._loading_active or self.lumped_loads:
+        if not detached and (self._loading_active or self.lumped_loads):
             # Before any fill: the stencil is per-medium here and its cross
             # terms are not derived, and `_medium_geometry` does not carry
             # the keys `_loading_stencil` reads anyway.
-            raise NotImplementedError(
-                "wire loading on a crossing deck is not served "
-                "(momwire#813): the loading stencil is per-medium here and "
-                "its cross terms are not derived"
-            )
+            raise NotImplementedError(_CROSSING_LOADING_REFUSAL)
         tents = self._crossing_tents(geom)
+        if detached and tents:
+            # Unreachable by construction: a tent spanning the plane needs a
+            # junction whose point is in it, which `_refuse_buried_geometry`
+            # routes as a crossing. Said loudly, because a detached fill that
+            # silently dropped a node would be a wrong answer.
+            raise RuntimeError(
+                f"detached route reached with {len(tents)} crossing tent(s)"
+            )
         nodes = self._knot_points(geom)[[m for m, _ in tents]]
 
         geom_a, rows_a, chop_a = self._medium_geometry(geom, _medium_spec.ABOVE)

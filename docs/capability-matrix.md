@@ -82,7 +82,7 @@ that serves both — and those are the `a+b` keys in the reasons below.
 | `ArrayBlockSolver`         | yes   | yes         | yes          | yes       | **no**   |
 | `SinusoidalSolver`         | yes   | yes         | yes          | yes       | **no**   |
 | `SinusoidalGalerkinSolver` | yes   | yes         | yes          | yes       | yes      |
-| `RazorSolver`              | yes   | yes         | yes          | yes       | **no**   |
+| `RazorSolver`              | yes   | yes         | yes          | yes       | yes      |
 | `HarringtonSolver`         | yes   | yes         | yes          | **no**    | **no**   |
 | `PulseSolver`              | yes   | yes         | yes          | **no**    | **no**   |
 
@@ -114,13 +114,13 @@ a gap, not a claim of emptiness.
 | `ArrayBlockSolver`         | bspline-1 / bspline-2 / bspline-3 | galerkin       | spline           | extended / reduced | converged        | element-block    | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / contact          |
 | `SinusoidalSolver`         | sinusoidal-3term                  | point-matching | basis-implied    | extended / reduced | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above / contact          |
 | `SinusoidalGalerkinSolver` | sinusoidal-3term                  | galerkin       | basis-implied    | extended / reduced | converged        | dense            | point-gap / segment-gap | free / pec / refl-coef / sommerfeld | above / buried / contact |
-| `RazorSolver`              | tent                              | path           | basis-implied    | extended / reduced | converged / nec5 | dense            | node-port               | free / pec / refl-coef / sommerfeld | above / contact          |
+| `RazorSolver`              | tent                              | path           | basis-implied    | extended / reduced | converged / nec5 | dense            | node-port               | free / pec / refl-coef / sommerfeld | above / buried / contact |
 | `HarringtonSolver`         | pulse                             | point-matching | dual-cell        | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
 | `PulseSolver`              | pulse                             | point-matching | point            | reduced            | converged        | dense            | segment-gap             | free / pec / refl-coef / sommerfeld | above                    |
 
 ## The recorded reasons
 
-44 sentences across 76 declared cells, verbatim. A sentence shared by several rows is printed
+45 sentences across 78 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -136,7 +136,7 @@ renders in host dialogs.
 
   > momwire serves wires wholly at or above the interface, wires strictly below it, and current CROSSING it only through a crossing junction (momwire#524 phase 2): split the wire AT the interface into a below wire whose end stands in the plane and an above wire starting there, and declare the junction between them - that deck is served, with continuity of current and the interface slope condition emerging from the fill itself. A single polyline with points on both sides is not, because which point the wire pierces the plane at would be momwire's guess where it must be the model's statement (a card seam splits a STRAIGHT wire there for you, momwire#667). Alternatively leave the buried part DETACHED (a buried radial screen under a base-fed vertical is served that way, momwire#553), or raise the whole wire clear of the interface
 
-- `BSplineSolver` `buried+extended_kernel`, `HMatrixSolver` `buried+extended_kernel`, `ArrayBlockSolver` `buried+extended_kernel`
+- `BSplineSolver` `buried+extended_kernel`, `HMatrixSolver` `buried+extended_kernel`, `ArrayBlockSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
 
   > extended_kernel=True + a wire below the ground plane is not served: the extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping scored across the whole geometry, and momwire#553 measured neither what that grouping means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor what the mirror labels mean when the image of a buried source lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
 
@@ -250,11 +250,7 @@ renders in host dialogs.
 
 - `RazorSolver` `buried+crossing_junction`
 
-  > this deck's wires cross the interface at a junction, and razor does not serve buried decks: by decision (2026-09-03, momwire#813/#814) razor-2p is the above-ground twin of licensed NEC-5 and BSplineSolver is the buried and contact engine (the crossing junction since momwire#524 phase 2, measured against Brown-Lewis-Epstein 1937 on momwire#838). Solve it with BSplineSolver, or leave the buried part DETACHED
-
-- `RazorSolver` `buried`
-
-  > RazorSolver has no buried fill: the momwire#553 buried serve (direct + image + Sommerfeld-remainder blocks in the lower medium) is written for BSplineSolver's testing side only. A detached buried wire is a LEGAL deck - solve it with BSplineSolver, which serves buried ground since momwire#553, or raise the wire clear of the plane. Razor's own below-plane fill (momwire#812) and crossing fill (momwire#813) exist behind `_SERVE_BURIED` and stay OFF by decision (2026-09-03, momwire#813/#814): razor-2p is the above-ground twin of licensed NEC-5, and underground the engine is BSplineSolver and the reference is measurement (momwire#838); the arc is momwire#651, CLOSED as the declared refusal below rather than as a serve (2026-09-06): razor's buried units momwire#812-#814 are closed not-planned, and the second buried solver is SinusoidalSolver
+  > this deck's wires cross the interface at a junction, and razor does not serve the crossing node yet: its crossing fill converges to a non-reciprocal limit carrying a spurious node resistance (+9.85 ohm against BSplineSolver on the momwire#524 crossing deck, growing with the number of buried members), so that class stays refused until momwire#1149 U2 derives the node. Razor serves a wholly-buried deck and a DETACHED one (buried wires with no junction in the plane). Solve this deck with BSplineSolver or SinusoidalGalerkinSolver
 
 - `RazorSolver` `centre_feeds`
 
@@ -264,9 +260,17 @@ renders in host dialogs.
 
   > junction ports are not supported: a junction basis is already a through-current unknown, so a port that adds one would be a second unknown for one current
 
+- `RazorSolver` `per_wire_radius+detached`
+
+  > razor's detached buried route (above and buried wires with no junction in the plane, momwire#1149 U1) takes one wire radius for the whole deck: each medium is filled on its own sub-geometry and the cross blocks carry a single radius. Give every wire the same radius, or solve the deck with BSplineSolver
+
 - `RazorSolver` `singular_enrichment`
 
   > singular enrichment is not built for RazorSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+
+- `RazorSolver` `wire_loading+crossing_junction`
+
+  > wire loading on a crossing deck is not served by razor (momwire#1149 U3): the per-medium fills carry their own loading stencils, but the crossing tent's cross terms are not derived. Load the deck on BSplineSolver, or keep the loaded wires on a deck with no junction in the plane
 
 - `SinusoidalGalerkinSolver` `extended_kernel+stepped_radius_junction`
 

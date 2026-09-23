@@ -7,10 +7,13 @@ ground contact; it did NOT check `buried`, so a buried deck on a basis without
 a buried fill fell through to the solver's constructor and came back as a bare
 `ValueError` from inside momwire rather than a named refusal in the printout.
 
-momwire#814 will flip razor's `buried` cell. These gates are what make that
-flip land here without a second edit: the seam asks the ROW, so the same code
-refuses today and serves after the flip. Both arms are exercised — the flipped
-one by patching the row itself, because the row is what the seam reads.
+momwire#1149 flips razor's row in two stages. U0/U1 turned the `buried` cell
+True and left `buried+crossing_junction` declared; U4 will retire that one
+too. These gates are what make each stage land here without a second edit:
+the seam asks the ROW, so the same code refuses the crossing deck today,
+serves the plain buried deck today, and will serve both after U4. The fully
+flipped arm is exercised by patching the row itself, because the row is what
+the seam reads.
 """
 
 from __future__ import annotations
@@ -66,7 +69,7 @@ def _above_mesh():
 
 
 def _flipped(caps):
-    """razor's row as momwire#814 will leave it: the cell True and the two
+    """razor's row as momwire#1149 U4 will leave it: the cell True and both
     "not served YET" entries gone. Patched on the ROW because the row is what
     the seam reads — monkeypatching `_SERVE_BURIED` cannot reach a class
     attribute built at import."""
@@ -85,34 +88,26 @@ def _flipped(caps):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "mesh, cells",
-    [
-        (_buried_mesh(), ("buried",)),
-        (_crossing_mesh(), ("buried", "crossing_junction")),
-    ],
-)
-def test_razor_refuses_a_buried_deck_with_the_sentence_its_row_declares(mesh, cells):
-    declared = RazorSolver.capabilities.refusal(*cells)
-    assert declared is not None, "this gate is about the pre-flip row"
+def test_razor_refuses_a_crossing_deck_with_the_sentence_its_row_declares():
+    declared = RazorSolver.capabilities.refusal("buried", "crossing_junction")
+    assert declared is not None, "this gate is about the pre-U4 row"
     with pytest.raises(ServeRefusal) as exc:
-        _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)
+        _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
     assert str(exc.value).endswith(declared)
     assert "runs below a FINITE ground plane" in str(exc.value)
 
 
-def test_the_two_buried_decks_get_DIFFERENT_sentences():
+def test_the_two_buried_decks_get_DIFFERENT_answers():
     """The point of momwire#850's separate cell: a declared crossing junction
-    and a lone buried wire are two refusals under one geometry word, and the
-    seam has to pick the one the deck earns."""
-
-    def _reason(mesh):
-        with pytest.raises(ServeRefusal) as exc:
-            _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)
-        return str(exc.value)
-
-    assert "cross the interface at a junction" in _reason(_crossing_mesh())
-    assert "has no buried fill" in _reason(_buried_mesh())
+    and a lone buried wire are two cells under one geometry word, and the
+    seam has to pick the one the deck earns. Since momwire#1149 U0 they get
+    different ANSWERS on razor's row — the plain cell is served, the crossing
+    cell refused — which is a sharper test of the pick than two sentences."""
+    assert RazorSolver.capabilities.refusal("buried") is None
+    _check_basis_can_host(_buried_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+    with pytest.raises(ServeRefusal) as exc:
+        _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+    assert "cross the interface at a junction" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +159,6 @@ def test_an_in_plane_junction_that_cannot_cross_is_not_the_crossing_cell():
         ],
         junctions=[[(0, "end"), (1, "start")]],
     )
-    with pytest.raises(ServeRefusal) as exc:
-        _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)
-    assert "has no buried fill" in str(exc.value)
-    assert "cross the interface at a junction" not in str(exc.value)
+    # The plain cell is served and the crossing cell is not, so passing here
+    # is the seam asking the RIGHT cell (momwire#1149 U0).
+    _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)

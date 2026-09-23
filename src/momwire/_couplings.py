@@ -147,7 +147,8 @@ COUPLINGS: tuple[Coupling, ...] = (
     ),
     # The extended kernel's eligibility is a coaxial-and-equal-radius grouping
     # scored across the whole geometry, and nobody has measured what that
-    # means for a pair spanning two media.
+    # means for a pair spanning two media. RazorSolver since momwire#1149 U0,
+    # when its buried cell turned True.
     Coupling(
         axis_a="kernel",
         value_a="extended",
@@ -155,7 +156,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         value_b="buried",
         reason=_BURIED_EXTENDED_KERNEL_REFUSAL,
         issue="momwire#553",
-        applies_to=("BSplineSolver",),
+        applies_to=("BSplineSolver", "RazorSolver"),
     ),
     # Not an axis pair: `near_correction` is a constructor keyword. Kept
     # because it is a real refused combination and the inventory is the point.
