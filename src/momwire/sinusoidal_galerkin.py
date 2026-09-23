@@ -3554,9 +3554,22 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     np.ix_(np.nonzero(rows)[0], cols)
                 ]
 
-        # The two transmitted directions, subtracted like every field-form
-        # block, each into the quadrant whose observers are in the OTHER
-        # medium from its sources.
+        # The two transmitted directions, each into the quadrant whose
+        # observers are in the OTHER medium from its sources — ADDED, not
+        # subtracted (momwire#1159). The projected tables `t_m . D . t_n` are
+        # one family with one sign, and on THIS trunk that family enters G
+        # with a plus: the within-class remainder reaches G through
+        # `_fold_ground_block`'s `free - (c2*img - rem)`, i.e. `+rem`, and
+        # the crossing block is `G + t_ab + t_ab.T`. bspline SUBTRACTS its
+        # field blocks (`_sub_field_galerkin`) because its Z carries the
+        # opposite global sign — it subtracts its remainder directly, with no
+        # second minus — and copying its spelling here negated both cross
+        # quadrants: a similarity D*G*D with D = diag(I_above, -I_below),
+        # which leaves every single-port Z exactly invariant and flips Y12,
+        # the unfed medium's current and so the detached far field. At
+        # eps~ = 1 the transmitted table IS the direct field, and the minus
+        # put -1.000008x the free-space block in both cross quadrants
+        # (scratch/1159-sg-mixed-sign/probe1).
         if crossing:
             # A crossing deck's cross pair is `_crossing_fill`'s, added to
             # the assembled G afterwards. No transmitted grid is built for
@@ -3576,7 +3589,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             r_idx = np.nonzero(rows)[0]
             c_idx = np.nonzero(src_keep)[0]
             for dest, r in zip(contribs, reduced):
-                dest[np.ix_(r_idx, c_idx)] -= r[np.ix_(r_idx, c_idx)]
+                dest[np.ix_(r_idx, c_idx)] += r[np.ix_(r_idx, c_idx)]
         return contribs
 
     def _reduce_field_tensor(self, ctx, tensor):
@@ -5071,6 +5084,89 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             dtype=np.complex128,
         )
 
+    def _readout_view(self, geom):
+        """The view a solution is READ through, built the way the solve built
+        it (momwire#1159).
+
+        The inherited readout rebuilds `_basis_coefs(geom, self.k)`, which is
+        the solve's view only on a deck in air. Off that deck it is a
+        different basis read with the solve's coefficients:
+
+        * wholly buried — the solve runs at k_m inside `_operating_medium`,
+          while `self.k` outside it is air's;
+        * mixed — the solve's view is `_stitch_basis_coefs`, each entry at
+          its own medium's k, and on a crossing deck it carries the node
+          wings `_crossing_wing_view` appends, which the air view omits
+          outright (their amplitudes are never read).
+
+        Measured on probe 5's mixed deck in soil A with both ports driven:
+        the buried wire's knot currents came out 96 % away from bspline's and
+        did not move under refinement (0.964 / 0.963 / 0.962 at m = 1/2/4),
+        while the above wire's converged. Every view returned off the air
+        path carries `k_entry`, which `_evaluate_basis_at_points` honours.
+        """
+        if self._is_mixed(geom):
+            below = self._below_segments(geom)
+            medium = self._fill_medium(geom)
+            view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+            if self._is_crossing(geom):
+                view = self._crossing_wing_view(geom, view, below, medium)
+            return view
+        medium = self._fill_medium(geom)
+        if medium is None:
+            return super()._readout_view(geom)
+        view = dict(self._basis_coefs(geom, medium.k_m))
+        view["k_entry"] = np.full(np.asarray(view["A"]).shape[0], medium.k_m)
+        return view
+
+    def _evaluate_basis_at_points(self, seg_view, eval_seg, eval_s, alpha):
+        """The inherited evaluation, with each entry's shapes written at its
+        OWN k when the view carries `k_entry` (a buried or mixed deck's —
+        see `_readout_view`). A view without it takes the inherited body
+        untouched, so every deck in air reads bit for bit as before."""
+        if "k_entry" not in seg_view:
+            return super()._evaluate_basis_at_points(seg_view, eval_seg, eval_s, alpha)
+        n_eval = eval_seg.shape[0]
+        gathered = self._basis_entry_gather(seg_view, eval_seg)
+        if gathered is None:
+            return np.zeros(n_eval, dtype=np.complex128)
+        entry_eval_idx, entry_global = gathered
+        k_e = np.asarray(seg_view["k_entry"])[entry_global]
+        s_e = np.asarray(eval_s)[entry_eval_idx]
+        sig = np.asarray(seg_view["sigma"])[entry_global]
+        f = _basis_value(
+            sig * np.asarray(seg_view["AC"])[entry_global],
+            np.asarray(seg_view["B"])[entry_global],
+            sig * np.asarray(seg_view["C"])[entry_global],
+            k_e,
+            s_e,
+        )
+        out = np.zeros(n_eval, dtype=np.complex128)
+        np.add.at(out, entry_eval_idx, alpha[seg_view["jbasis"][entry_global]] * f)
+        return out
+
+    def _evaluate_basis_slope_at_points(self, seg_view, eval_seg, eval_s, alpha):
+        """The derivative twin of `_evaluate_basis_at_points`' override:
+        f' = k·(B·cos kξ − σC·sin kξ) at each entry's own k."""
+        if "k_entry" not in seg_view:
+            return super()._evaluate_basis_slope_at_points(
+                seg_view, eval_seg, eval_s, alpha
+            )
+        n_eval = eval_seg.shape[0]
+        gathered = self._basis_entry_gather(seg_view, eval_seg)
+        if gathered is None:
+            return np.zeros(n_eval, dtype=np.complex128)
+        entry_eval_idx, entry_global = gathered
+        k_e = np.asarray(seg_view["k_entry"])[entry_global]
+        s_e = np.asarray(eval_s)[entry_eval_idx]
+        sig = np.asarray(seg_view["sigma"])[entry_global]
+        B_e = np.asarray(seg_view["B"])[entry_global]
+        C_e = np.asarray(seg_view["C"])[entry_global]
+        fd = k_e * (B_e * np.cos(k_e * s_e) - sig * C_e * np.sin(k_e * s_e))
+        out = np.zeros(n_eval, dtype=np.complex128)
+        np.add.at(out, entry_eval_idx, alpha[seg_view["jbasis"][entry_global]] * fd)
+        return out
+
     def _port_currents(self, alpha, geom, seg_view, U):
         """Per-port current readout, ordered [gap feeds…, junction ports…,
         node ports…].
@@ -5138,12 +5234,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         with self._operating_medium(geom):
             G, seg_view = self._assemble_Z_ported(geom, self.k)
             U = self._drive_columns(geom, seg_view, self.k)
-        voltages = self._port_voltages()
-        self._checkpoint()  # after assembly, before the dense solve
+            voltages = self._port_voltages()
+            self._checkpoint()  # after assembly, before the dense solve
 
-        alpha = scipy.linalg.solve(G, U @ voltages)
+            alpha = scipy.linalg.solve(G, U @ voltages)
 
-        currents = self._port_currents(alpha, geom, seg_view, U)
+            # Inside the medium too (momwire#1159): an off-centre point gap's
+            # readout writes the shapes at `self.k`, which is k_m only here.
+            currents = self._port_currents(alpha, geom, seg_view, U)
         z_per_port = voltages / currents
         Z_drive = z_per_port[0] if self.n_ports == 1 else z_per_port
         return Z_drive, alpha
@@ -5188,21 +5286,28 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         self._refuse_junction_port_solve()
         geom = self._build_geometry()
-        G, seg_view = self._assemble_Z_ported(geom, self.k)
-        U = self._drive_columns(geom, seg_view, self.k)
-        alphas = scipy.linalg.solve(G, U)
-        Y = np.stack(
-            [
-                self._port_currents(alphas[:, j], geom, seg_view, U)
-                for j in range(self.n_ports)
-            ],
-            axis=1,
-        )
+        # The WHOLE solve inside the medium, as `compute_impedance` does
+        # (momwire#1159): a wholly-buried deck's fill, drive and readout all
+        # run at k_m. Outside it this route filled a buried deck through the
+        # ABOVE ground family, which refuses it by name; `compute_y_matrix`
+        # and both swept loops reach the matrix only through here.
+        with self._operating_medium(geom):
+            G, seg_view = self._assemble_Z_ported(geom, self.k)
+            U = self._drive_columns(geom, seg_view, self.k)
+            alphas = scipy.linalg.solve(G, U)
+            Y = np.stack(
+                [
+                    self._port_currents(alphas[:, j], geom, seg_view, U)
+                    for j in range(self.n_ports)
+                ],
+                axis=1,
+            )
+            basis = _SegmentBasis(geom=geom, seg_view=seg_view, k=self.k)
         return PortSolution(
             y=Y,
             coeffs=alphas,
             port_currents=Y,  # the same object: the readout IS the Y matrix
-            basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=self.k),
+            basis=basis,
         )
 
     def _port_count(self):

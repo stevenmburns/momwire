@@ -4865,6 +4865,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out
 
+    def _readout_view(self, geom):
+        """The `seg_view` the current readouts evaluate a solution through.
+
+        Here, the one the solve was built on at `self.k`. A hook rather than
+        an inline call because `SinusoidalGalerkinSolver` serves buried and
+        mixed decks (momwire#980), whose solve is NOT built at `self.k`: a
+        wholly-buried deck's basis lives at k_m and a mixed deck's is stitched
+        per medium, with node-wing columns on a crossing deck. Reading such a
+        solution through this view evaluates the buried entries with air's
+        coefficients — a wrong current with no failure (momwire#1159).
+        """
+        return self._basis_coefs(geom, self.k)
+
     def currents_at_knots(self, alpha, s_array=None):
         """Per-wire complex current sampled at every mesh knot.
 
@@ -4887,7 +4900,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         alpha = np.asarray(alpha)
         geom = self._build_geometry()
-        seg_view = self._basis_coefs(geom, self.k)
+        seg_view = self._readout_view(geom)
         seg_h = geom["seg_h"]
         n_wires = len(self.wires_polylines)
 
@@ -5082,7 +5095,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         alpha = np.asarray(coeffs)
         geom = self._build_geometry()
-        seg_view = self._basis_coefs(geom, self.k)
+        seg_view = self._readout_view(geom)
         seg_h = geom["seg_h"]
         n_wires = len(self.wires_polylines)
 
