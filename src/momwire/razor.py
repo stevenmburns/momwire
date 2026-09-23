@@ -364,6 +364,7 @@ from . import (
     _wire_loading,
     _wire_spec,
 )
+from . import bspline as _bspline
 from .bspline import SINGULAR_ENRICHMENT_NEVER
 from ._bspline_kernels import (
     _EK,
@@ -3952,8 +3953,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         sentence, and no deck the plan served before is refused now except
         those the grid refused anyway.
         """
-        from .bspline import _BURIED_GRAZING_REFUSAL
-
         gz = float(self.ground_z)
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
         pts = np.concatenate(
@@ -3978,26 +3977,45 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # which is not a crossing member has no crossing block to carry
             # its current, and must keep refusing exactly as it does today.
             # `test_a_plane_touching_end_that_is_not_a_crossing_member_still_
-            # refuses` is what holds that line.
+            # refuses` holds the construction side of that line (its deck is
+            # refused earlier, as a mid-span crossing, and never gets here);
+            # `test_razor_grazing_shared_1168`'s zero-depth decks hold THIS
+            # side: a plane point that survives the skip and is refused here.
             skip = np.asarray(plan_skip, dtype=float).reshape(-1, 3)
             keep = np.ones(pts.shape[0], dtype=bool)
             for node in skip:
                 keep &= np.linalg.norm(pts - node[None, :], axis=1) > _JUNCTION_TOL
             pts = pts[keep]
         d = gz - pts[:, 2]
-        rho = np.hypot(
-            pts[:, 0][:, None] - pts[:, 0][None, :],
-            pts[:, 1][:, None] - pts[:, 1][None, :],
-        )
-        hh = d[:, None] + d[None, :]
-        th_min = float(np.min(np.arctan2(hh, rho)))
+        # `np.min` first: on an empty point set it raises the same ValueError
+        # the all-pairs spelling did, which `buried_serve_refusal` reports.
         depth = 2.0 * float(np.min(d))
+        # The all-pairs minimum of atan2(d + d', rho), through the shared,
+        # chunked (C++-backed) extents bspline and SG ask (momwire#1168 U3):
+        # an (n, n) rho / hh / angle triple was live here before, 1.35 GB of
+        # transient at hub x16.
+        _r1_max, th_min = _bspline._pair_extents_below(pts[:, 0], pts[:, 1], d)
+        # THE ONE PAIR RULE THE SHARED HELPER DOES NOT KEEP. It drops every
+        # rho = 0 pair (a buried node's self-pair has no angle it could be
+        # the minimum of). The all-pairs form read those pairs through
+        # atan2: pi/2 at depth, but atan2(0, 0) = 0 for a kept point exactly
+        # IN the plane and -pi/2 for one above it — the refusal of a
+        # plane-touching (or poking) end that is not a declared crossing
+        # node, per the comment above. Over the rho = 0 pairs the least
+        # value is the deepest-negative self-pair, atan2(2 min d, 0), so
+        # that one term restores the old minimum exactly: bit for bit when
+        # min d <= 0 (both terms are then atan2 of the same two floats, and
+        # every rho > 0 pair is >= it), and untouched when min d > 0 (the
+        # rho = 0 pairs read pi/2 there, never below a rho > 0 pair's
+        # angle). `test_razor_grazing_shared_1168` holds the sentence.
+        if depth <= 0.0:
+            th_min = min(th_min, math.atan2(depth, 0.0))
         th_eval, depth_eval = self._below_remainder_th_min(geom)
         if th_eval < th_min:
             th_min, depth = th_eval, depth_eval
         floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
         if th_min < floor:
-            return _BURIED_GRAZING_REFUSAL.format(
+            return _bspline._BURIED_GRAZING_REFUSAL.format(
                 th=math.degrees(th_min),
                 floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
                 depth=depth,
@@ -4008,8 +4026,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """``(θ_min, d + d′ there)`` over the pairs the below remainder
         evaluates on `geom`: testing-path points × order-`n_qp_sommerfeld`
         Gauss nodes of every segment, exactly as `_assemble_Z_source_block`
-        hands them to `RemainderBelow.field_windows`. Chunked over the
-        observers, since the pair set is the remainder's own size."""
+        hands them to `RemainderBelow.field_windows`. The pair set is the
+        remainder's own size, so it is walked in observer chunks by
+        `bspline._pair_extents_below_rect`, the rectangular twin of the
+        plan's shared extents (momwire#1168 U3: this loop used to be
+        spelled here by hand, at 4 M pairs a chunk; the answer does not
+        depend on the chunking, and is the same bit for bit)."""
         gz = float(self.ground_z)
         obs = self._testing_paths(geom)[0].reshape(-1, 3)
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
@@ -4019,21 +4041,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             seg_p0[:, None, :]
             + (tq[None, :, None] * seg_h[:, None, None]) * seg_t[:, None, :]
         ).reshape(-1, 3)
-        d_s = gz - src[:, 2]
-        best, best_hh = np.inf, 0.0
-        step = max(1, 4_000_000 // max(1, src.shape[0]))
-        for i0 in range(0, obs.shape[0], step):
-            o = obs[i0 : i0 + step]
-            rho = np.hypot(
-                o[:, 0][:, None] - src[:, 0][None, :],
-                o[:, 1][:, None] - src[:, 1][None, :],
-            )
-            hh = (gz - o[:, 2])[:, None] + d_s[None, :]
-            th = np.arctan2(hh, rho)
-            k = int(np.argmin(th))
-            if th.flat[k] < best:
-                best, best_hh = float(th.flat[k]), float(hh.flat[k])
-        return best, best_hh
+        return _bspline._pair_extents_below_rect(
+            obs, src, gz - obs[:, 2], gz - src[:, 2]
+        )
 
     def _assemble_Z_below_plane(self, geom, prepared, k, omega, *, plan_skip=None):
         """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
