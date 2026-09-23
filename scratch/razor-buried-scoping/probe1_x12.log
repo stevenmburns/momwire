@@ -1,0 +1,7 @@
+x1 N=30 bspline_d2    169.7756   -82.2800j     0.72 s
+x1 N=30 bspline_d1    170.1877   -82.6141j     0.05 s
+x1 N=30 razor_2p      183.8769   -90.3087j     0.48 s
+x2 N=56 bspline_d2    169.4548   -82.3566j     0.13 s
+x2 N=56 bspline_d1    169.7582   -82.4827j     0.10 s
+x2 N=56 razor_2p      175.3840   -80.5912j     0.15 s
+wrote /tmp/claude-1000/-home-smburns-antennas-antennaknobs/69130e8c-5288-4ea5-9d4c-46e12c729f9e/scratchpad/razor-buried/probe1_crossing_ladder.json

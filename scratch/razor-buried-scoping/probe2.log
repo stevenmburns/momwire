@@ -1,0 +1,31 @@
+x1  free  razor_2p   Z11    13.906 -862.804j Z22     4.584-3032.757j  nonrec 2.770e-04    0.00 s
+x1  eps1  razor_2p   Z11    13.906 -862.804j Z22     4.584-3032.757j  nonrec 2.770e-04    0.09 s
+x1  soilA razor_2p   Z11   202.198 -211.297j Z22   166.245 -152.838j  nonrec 3.177e-02    0.74 s
+x1  soilA bspline_d2 Z11   205.816 -225.907j Z22   189.394 -171.599j  nonrec 6.983e-16    0.52 s
+x1  diel  razor_2p   Z11    59.461 -294.395j Z22     3.282 -298.223j  nonrec 2.626e-02    0.43 s
+x1  diel  bspline_d2 Z11    57.770 -315.145j Z22     2.002 -334.945j  nonrec 4.584e-16    0.46 s
+x2  free  razor_2p   Z11    13.884 -857.805j Z22     4.540-2983.047j  nonrec 7.204e-05    0.00 s
+x2  eps1  razor_2p   Z11    13.884 -857.805j Z22     4.540-2983.047j  nonrec 7.204e-05    0.16 s
+x2  soilA razor_2p   Z11   202.307 -207.328j Z22   163.394 -149.061j  nonrec 3.224e-02    0.16 s
+x2  soilA bspline_d2 Z11   201.975 -216.305j Z22   175.287 -159.786j  nonrec 1.067e-15    0.13 s
+x2  diel  razor_2p   Z11    59.736 -290.064j Z22     3.223 -291.891j  nonrec 2.640e-02    0.17 s
+x2  diel  bspline_d2 Z11    58.028 -303.027j Z22     1.822 -312.101j  nonrec 6.467e-16    0.14 s
+x4  free  razor_2p   Z11    13.864 -854.729j Z22     4.507-2951.736j  nonrec 1.470e-05    0.00 s
+x4  eps1  razor_2p   Z11    13.864 -854.729j Z22     4.507-2951.736j  nonrec 1.470e-05    0.44 s
+x4  soilA razor_2p   Z11   202.118 -205.294j Z22   161.463 -147.094j  nonrec 3.236e-02    0.47 s
+x4  soilA bspline_d2 Z11   199.865 -211.043j Z22   167.662 -153.502j  nonrec 1.628e-15    0.29 s
+x4  diel  razor_2p   Z11    59.868 -287.731j Z22     3.185 -288.263j  nonrec 2.643e-02    0.78 s
+x4  diel  bspline_d2 Z11    58.181 -296.351j Z22     1.724 -299.791j  nonrec 2.068e-15    0.26 s
+x8  free  razor_2p   Z11    13.848 -852.702j Z22     4.483-2931.276j  nonrec 2.454e-06    0.01 s
+x8  eps1  razor_2p   Z11    13.848 -852.702j Z22     4.483-2931.276j  nonrec 2.454e-06    1.35 s
+x8  soilA razor_2p   Z11   201.909 -204.096j Z22   160.150 -145.886j  nonrec 3.239e-02    1.48 s
+x8  soilA bspline_d2 Z11   198.692 -208.116j Z22   163.442 -150.013j  nonrec 1.306e-15    0.48 s
+x8  diel  razor_2p   Z11    59.942 -286.311j Z22     3.158 -285.949j  nonrec 2.645e-02    1.42 s
+x8  diel  bspline_d2 Z11    58.262 -292.618j Z22     1.671 -292.945j  nonrec 1.744e-15    0.53 s
+x16 free  razor_2p   Z11    13.835 -851.270j Z22     4.465-2917.125j  nonrec 1.851e-07    0.05 s
+x16 eps1  razor_2p   Z11    13.835 -851.270j Z22     4.465-2917.125j  nonrec 1.851e-07    5.78 s
+x16 soilA razor_2p   Z11   201.733 -203.305j Z22   159.216 -145.060j  nonrec 3.241e-02    6.21 s
+x16 soilA bspline_d2 Z11   198.003 -206.390j Z22   160.964 -147.955j  nonrec 4.916e-15    0.87 s
+x16 diel  razor_2p   Z11    59.990 -285.354j Z22     3.139 -284.344j  nonrec 2.646e-02    6.29 s
+x16 diel  bspline_d2 Z11    58.308 -290.412j Z22     1.640 -288.908j  nonrec 9.707e-15    0.92 s
+wrote /tmp/claude-1000/-home-smburns-antennas-antennaknobs/69130e8c-5288-4ea5-9d4c-46e12c729f9e/scratchpad/razor-buried/probe2_reciprocity_1_2_4_8_16.json

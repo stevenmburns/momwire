@@ -1,0 +1,4 @@
+n_rad= 24 x1 N=  257 bspline_d2 Z    97.070  -63.354j cold    1.44 s warm    0.67 s rss 133 MB
+n_rad= 24 x1 N=  257 razor_2p   Z   130.756  -68.315j cold    2.01 s warm    1.06 s rss 192 MB
+n_rad= 48 x1 N=  497 bspline_d2 Z    93.775  -68.244j cold    2.18 s warm    1.38 s rss 168 MB
+n_rad= 48 x1 N=  497 razor_2p   Z   127.298  -72.129j cold    3.32 s warm    2.53 s rss 406 MB

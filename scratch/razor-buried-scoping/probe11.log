@@ -1,0 +1,6 @@
+Builder                      bspline_d2 Z    78.132  +46.338j    1.51 s
+Builder                      razor_2p   Z    83.459  +44.134j    0.92 s
+Builder                      bspline_d2 Z    38.177-68518.122j    0.58 s
+Builder                      razor_2p   REFUSED/ERR after 0.00 s: ValueError: razor serves a wholly-below deck (momwire#812) but not one that also carries an above wire with no junction crossing the interface: solve it with BSplineSolver, which serves a detached buried wire since momwire#553
+Builder                      bspline_d2 Z   146.790  +45.823j    0.56 s
+Builder                      razor_2p   Z   146.382  +44.385j    0.01 s
