@@ -207,6 +207,11 @@ The stencil is pure geometry and rides `_assemble_Z_prepare`; Z_s(ω) is
 not (skin effect and insulation reactance both move with ω) and is built
 per solved wavenumber beside the reflection-coefficient weights.
 
+A jacket on a BURIED wire adds one more term, on the charge side rather
+than the series side (momwire#1154): `_charge_stencil`, scaled per solved ω
+by the shared `LoadingSpec.zq_seg` = ΔS′/(jω). It is absent on every deck
+without a jacketed wire in the lower medium.
+
 Per-wire radius (momwire#147)
 -----------------------------
 `wire_radius` takes a scalar or one radius per wire, the siblings' spelling.
@@ -489,7 +494,8 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # screen, and antennaknobs' power balance holds to 0.4 %
 # (`tests/test_razor_crossing_node_1149.py`, `scratch/razor-buried-u2/`). So
 # the crossing cell is served too. Bare-metal loading on it is served since
-# U3; a buried jacket keeps a declared cell (`_CROSSING_BURIED_JACKET_REFUSAL`).
+# U3, and a jacket on its buried wires since momwire#1154 (the charge-side
+# term `_charge_stencil`, which retired U3's crossing_junction+insulation cell).
 
 # Every buried deck with NO crossing junction: a WHOLLY-below deck
 # (momwire#812, the lower-medium family) and a DETACHED one, where above and
@@ -545,39 +551,15 @@ _CROSSING_NOT_SERVED_REFUSAL = (
     "SinusoidalGalerkinSolver"
 )
 
-# momwire#1149 U3: a JACKETED buried wire on a crossing deck. Bare-metal
-# loading on a crossing deck is served since U3 -- the loading term is a line
-# integral of Z_s times tent times path with no kernel in it, so the
-# full-geometry stencil applied once after the crossing assembly IS the
-# crossing tent's loading (`_assemble_Z_from_prepared`, derivation in
-# `_loading_stencil`). What stays refused is a dielectric jacket on a wire in
-# the soil: `_wire_loading.insulation_inductance` is the thin-sheath term
-# against a FREE-SPACE exterior, L' = mu0/2pi (1 - 1/eps_r) ln(b/a), and its
-# a' kernel radius is the same free-space reading. The same thin-sheath
-# argument in an exterior medium eps~ gives (1 - eps~/eps_r) in place of
-# (1 - 1/eps_r) -- derived for this note, not measured -- and |eps~| exceeds a
-# PVC or PE jacket's eps_r (2-4) in ordinary soil at HF (soil A's conduction
-# term alone is ~13 at 7 MHz), so the term reverses sign: the free-space term
-# is not an approximation of the buried one. A jacket on an ABOVE wire of the
-# same deck is served: that wire's exterior is air. Declared rather than
-# raised bare because the row says `wire_loading=True` (the momwire#651
-# shape).
-#
-# Scoped to the CROSSING deck on purpose, and that scope is the prior refusal
-# narrowed, not a rule: razor's wholly-below and detached routes, and every
-# BSplineSolver buried route, serve a buried jacket with the free-space term
-# today. That is recorded on momwire#1149 as an open question rather than
-# changed here, because refusing it there withdraws decks those routes serve.
-_CROSSING_BURIED_JACKET_REFUSAL = (
-    "a dielectric jacket (insulation_radius / insulation_eps_r) on a BURIED "
-    "wire of a crossing deck is not served by razor (momwire#1149 U3): the "
-    "jacket's series term is the thin-sheath formula against a free-space "
-    "exterior, and in soil the exterior is the soil, whose complex "
-    "permittivity normally exceeds the jacket's and reverses the term's "
-    "sign. Bare-metal loading (wire_conductivity, distributed_rlc, "
-    "lumped_loads) is served on this deck, and so is a jacket on its "
-    "above-ground wires"
-)
+# momwire#1149 U3 refused a JACKETED buried wire on a crossing deck by name
+# (the crossing_junction+insulation cell), because the jacket pair was
+# written against a free-space exterior. momwire#1154 retired it: the pair's
+# series half is exact in any exterior and the missing piece is a local
+# elastance on the buried segments (`_wire_loading.jacket_elastance`),
+# served by `_charge_stencil` on every buried route, the crossing one
+# included — the term is per segment and no segment straddles the plane.
+# Gated reference-free against the in-medium pair on crossing_deck and
+# hub_deck (tests/test_jacket_in_soil_1154.py).
 
 # The crossing blocks' axis density (momwire#813). Razor's cross rows are
 # PATH-tested and one of them ends AT the node, on the below wire's last
@@ -1419,11 +1401,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # the same object); razor raised it at construction with no cell
             # behind it until momwire#1149 U0.
             "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
-            # A jacket on a BURIED wire of a crossing deck (momwire#1149 U3:
-            # bare-metal loading there is served, the free-space sheath term
-            # is not the buried one). Two condition tokens, so the key is
-            # their sorted spelling and neither is read as an axis.
-            "crossing_junction+insulation": _CROSSING_BURIED_JACKET_REFUSAL,
             # Not reachable through `refusal()`'s cell algebra: a bare
             # condition token is SERVED unless it pairs into a combination
             # key, and "does this family have a bundle rule" is an axis
@@ -1919,19 +1896,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             lambda _w: None,
         )
 
-    def _crossing_jacket_refusal(self):
-        """`_CROSSING_BURIED_JACKET_REFUSAL` when this is a CROSSING deck with
-        a finite jacket on a buried wire, else None (momwire#1149 U3). One
-        owner, asked by the fill and by `buried_serve_refusal` alike, so the
-        pre-flight cannot drift from the raise."""
-        if not getattr(self, "_crossing", False) or self.insulation_radius is None:
-            return None
-        media = self._wire_media()
-        jacketed = np.isfinite(self.insulation_radius)
-        if any(j and m == _medium_spec.BELOW for j, m in zip(jacketed, media)):
-            return _CROSSING_BURIED_JACKET_REFUSAL
-        return None
-
     def buried_serve_refusal(self):
         """The sentence this deck's buried fill would refuse with, or None
         (momwire#1149 U2b; `BSplineSolver.buried_serve_refusal`'s twin, for
@@ -1939,11 +1903,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         EXACT, not conservative: it asks the fill's own fill-time questions
         through the same calls the fill makes, on the same geometry, and
-        stops before any grid. On razor those are two:
+        stops before any grid. On razor that is one — the jacket on a
+        buried wire of a crossing deck that momwire#1149 U3 refused here is
+        served since momwire#1154:
 
-        * a jacket on a buried wire of a crossing deck
-          (`_crossing_jacket_refusal`, momwire#1149 U3), raised by
-          `_assemble_Z_crossing` before any fill;
         * the below family's grazing floor
           (`_below_plane_grazing_refusal`), over the full geometry of a
           wholly-buried deck, or over the buried SUB-geometry of a crossing
@@ -1968,9 +1931,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return None
         try:
             geom = self._build_geometry()
-            jacket = self._crossing_jacket_refusal()
-            if jacket is not None:
-                raise NotImplementedError(jacket)
             if self._below_plane:
                 return self._below_plane_grazing_refusal(geom)
             tents = self._crossing_tents(geom)
@@ -3205,9 +3165,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         sub-geometries' stencils identically (so building those is not a
         red control), and a lumped load AT the crossing knot is one
         diagonal entry of the crossing tent, as at any junction. A
-        DIELECTRIC jacket is the exception, and it is refused on a buried
-        wire of a crossing deck (`_CROSSING_BURIED_JACKET_REFUSAL`): its
-        series term is written against a free-space exterior.
+        DIELECTRIC jacket's series term is the same kind of object and goes
+        through here unchanged; on a buried wire the jacket ALSO needs a
+        charge-side term, which is `_charge_stencil`'s (momwire#1154).
 
         **The grounded-end tent takes the real half, and nothing else.**
         Its side-A wing is its own IMAGE (`_junction_wings`), spelled with
@@ -3319,6 +3279,116 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if spec.lumped is not None:
             idx, z_l = spec.lumped
             np.add.at(Z, (idx, idx), z_l)
+        return Z
+
+    def _has_buried_jacket(self):
+        """Whether a finite jacket sits on a wire in the lower medium — the
+        decks `_charge_stencil` exists for (momwire#1154). Asks nothing of
+        the geometry unless a jacket and a finite ground are both present,
+        so every other deck's prepare is what it was."""
+        if self.insulation_radius is None or self.ground_eps is None:
+            return False
+        jacketed = np.isfinite(self.insulation_radius)
+        media = self._wire_media()
+        return any(j and m == _medium_spec.BELOW for j, m in zip(jacketed, media))
+
+    def _charge_stencil(self, geom):
+        """The k-independent half of a buried jacket's CHARGE-side term
+        (momwire#1154, `_wire_loading.jacket_elastance`).
+
+        **The derivation.** On a jacketed wire in the soil the thin-wire
+        kernel at the equivalent radius a′ misses a local elastance ΔS′, so
+        the conductor carries an extra scalar potential Φ_x = ΔS′·q on top
+        of the kernel's, with q = −(1/jω)·dI/dl. Razor tests the scalar
+        potential by differencing it between the testing path's two ends
+        (the module docstring's T2), and Φ_x is local, so row m picks up
+
+            Z_x[m, n] = Φ_x(c_B) − Φ_x(c_A)
+                      = zq_A·Λ_n′(A) − zq_B·Λ_n′(B),     zq = ΔS′/(jω)
+
+        where A and B are the segments holding the path's two centroids
+        (side A first, the flow order) and Λ_n′(s) is tent n's derivative on
+        segment s in the segment's own arc coordinate, signed by its flow —
+        the same `q_a`/`q_b` the kernel's T2 uses. The path's direction
+        drops out: a potential is a scalar, and the tent's charge on a
+        segment does not depend on which way the row traverses it. That is
+        the kernel's own T2 with g/ε replaced by ΔS′·δ, which is why the
+        sign matches it: a positive ΔS′ adds elastance, as a thinner kernel
+        radius would.
+
+        **In the wing idiom** a row's side-j wing names segment s = the
+        centroid's segment with sign +1 (side A) or −1 (side B), a column's
+        wing on s contributes its Λ′; so the entries are every ordered pair
+        of wings sharing a segment — the same pairs `_loading_stencil`
+        builds — with value sign(row wing)·Λ′(column wing).
+
+        **Grounded and crossing tents.** A grounded tent's image wing has
+        σ = 0 and is dropped as in `_loading_stencil`: its row's potential
+        reference is the plane, and no charge lives on the image. A crossing
+        tent's row is the whole path c_A → knot → c_B; the crossing fill
+        chops it at the knot for the KERNEL, but Φ_x(knot) cancels between
+        the two halves, so the full-geometry stencil applied once after the
+        crossing assembly is the crossing row's term — the argument
+        `_loading_stencil` makes for the series term. Each segment lies
+        wholly in one medium, and zq is zero on every ABOVE segment.
+
+        Returns ``(rows, cols, seg, vals)``; `seg` is the segment whose zq
+        scales the entry.
+        """
+        wing_seg, wing_rise = geom["wing_seg"], geom["wing_rise"]
+        wing_sigma = geom["wing_sigma"]
+        n_basis, n_seg = wing_seg.shape[0], geom["n_segs_total"]
+        seg_h = np.asarray(geom["seg_h"], dtype=np.float64)
+
+        ent_basis = np.repeat(np.arange(n_basis, dtype=np.int64), 2)
+        ent_seg = wing_seg.reshape(-1)
+        ent_sigma = wing_sigma.reshape(-1)
+        ent_side = np.tile(np.array([1.0, -1.0]), n_basis)
+        ent_dq = ent_sigma * np.where(wing_rise.reshape(-1), 1.0, -1.0) / seg_h[ent_seg]
+        keep = ent_sigma != 0.0
+        ent_basis, ent_seg = ent_basis[keep], ent_seg[keep]
+        ent_side, ent_dq = ent_side[keep], ent_dq[keep]
+
+        order = np.argsort(ent_seg, kind="stable")
+        ent_basis, ent_seg = ent_basis[order], ent_seg[order]
+        ent_side, ent_dq = ent_side[order], ent_dq[order]
+        starts = np.searchsorted(ent_seg, np.arange(n_seg + 1))
+        counts = np.diff(starts)
+        nnz = int(starts[-1])
+        seg_of_entry = np.repeat(np.arange(n_seg, dtype=np.int64), counts)
+        reps = counts[seg_of_entry]
+        left = np.repeat(np.arange(nnz, dtype=np.int64), reps)
+        ramp = np.arange(int(reps.sum()), dtype=np.int64) - np.repeat(
+            np.cumsum(reps) - reps, reps
+        )
+        right = np.repeat(starts[seg_of_entry], reps) + ramp
+        return {
+            "rows": ent_basis[left],
+            "cols": ent_basis[right],
+            "seg": seg_of_entry[left],
+            "vals": ent_side[left] * ent_dq[right],
+        }
+
+    @staticmethod
+    def _apply_charge(Z, stencil, spec):
+        """`Z += zq_seg ∘ stencil` in place (`_charge_stencil`, momwire#1154).
+
+        Refuses the one inconsistent pairing rather than dropping a term: a
+        spec carrying a buried jacket's zq with no stencil prepared would be
+        a jacketed buried wire served with the free-space pair."""
+        if spec.zq_seg is None:
+            return Z
+        if stencil is None:
+            raise RuntimeError(
+                "a jacketed buried wire's charge term has no prepared stencil "
+                "(momwire#1154): the prepare half and the loading spec disagree "
+                "about which wires are jacketed below the interface"
+            )
+        np.add.at(
+            Z,
+            (stencil["rows"], stencil["cols"]),
+            spec.zq_seg[stencil["seg"]] * stencil["vals"],
+        )
         return Z
 
     def _assemble_Z_prepare(self, geom, *, chop=None, loading=True):
@@ -3609,6 +3679,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if loading and (self._loading_active or self.lumped_loads)
                 else None
             ),
+            # A jacketed BURIED wire's charge-side term (momwire#1154): the
+            # same split — the stencil is geometry, its ΔS′/(jω) is built per
+            # solved ω — and the same `loading` flag, so the crossing
+            # assembly's sub-geometries never carry it. `None` on every deck
+            # without such a wire, which is every deck that existed before.
+            "charge": (
+                self._charge_stencil(geom)
+                if loading and self._has_buried_jacket()
+                else None
+            ),
         }
         if t2_chop is not None:
             # Keyed off `sources` in the block, exactly as `t2_chunks` is, so
@@ -3710,11 +3790,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # crossing tent").
             Z = self._assemble_Z_crossing(geom, k, omega, detached=detached)
             if prepared["loading"] is not None:
-                self._apply_loading(
-                    Z,
-                    prepared["loading"],
-                    _wire_loading.loading_for(self, omega, geom),
-                )
+                spec = _wire_loading.loading_for(self, omega, geom)
+                self._apply_loading(Z, prepared["loading"], spec)
+                self._apply_charge(Z, prepared["charge"], spec)
             return Z
         if getattr(self, "_below_plane", False):
             return self._assemble_Z_below_plane(geom, prepared, k, omega)
@@ -3739,9 +3817,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # per ground: this one line serves free space, both folding grounds
         # and the composing one.
         if prepared["loading"] is not None:
-            self._apply_loading(
-                Z, prepared["loading"], _wire_loading.loading_for(self, omega, geom)
-            )
+            spec = _wire_loading.loading_for(self, omega, geom)
+            self._apply_loading(Z, prepared["loading"], spec)
+            self._apply_charge(Z, prepared["charge"], spec)
         return Z
 
     # ------------------------------------------------------------------
@@ -3999,9 +4077,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         # Loading last and outside the fold, exactly as above.
         if prepared["loading"] is not None:
-            self._apply_loading(
-                Z, prepared["loading"], _wire_loading.loading_for(self, omega, geom)
-            )
+            spec = _wire_loading.loading_for(self, omega, geom)
+            self._apply_loading(Z, prepared["loading"], spec)
+            self._apply_charge(Z, prepared["charge"], spec)
         return Z
 
     # ------------------------------------------------------------------
@@ -4160,13 +4238,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wires and NO junction in the plane, so there are no crossing tents
         and the four terms are the two same-medium fills plus the two cross
         blocks, with nothing chopped. On either deck the caller applies the
-        loading afterwards, once, on the full geometry (momwire#1149 U3);
-        what this method refuses before any fill is a jacket on a buried
-        wire of a crossing deck (`_crossing_jacket_refusal`).
+        loading afterwards, once, on the full geometry (momwire#1149 U3),
+        a buried jacket's charge-side term included (momwire#1154).
         """
-        jacket = None if detached else self._crossing_jacket_refusal()
-        if jacket is not None:
-            raise NotImplementedError(jacket)
         tents = self._crossing_tents(geom)
         if detached and tents:
             # Unreachable by construction: a tent spanning the plane needs a

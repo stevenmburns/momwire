@@ -27,6 +27,24 @@ HF (stevenmburns/momwire#131):
   "insulated wire tunes long" velocity-factor effect. Dielectric loss
   (tan δ) is deliberately out of scope for now.
 
+  It is one half of a PAIR: the kernel sees the jacket through the
+  equivalent radius a′ (`equivalent_radius`, momwire#865), which is where
+  the jacket's effect on the CHARGE lives. Both halves are written against
+  a free-space exterior. In a lossy exterior medium ε̃ (a BURIED wire) the
+  inductance half is still exact — it only undoes a′ back to the metal's a,
+  and no permittivity enters a flux linkage — but a′ is not: the wire
+  misses a local ELASTANCE (momwire#1154)
+
+      ΔS′ = ln(b/a) / (2π ε₀ εr) · (1 − 1/ε̃)      [m/F]
+
+  which `jacket_elastance` returns, and `loading_for` serves as the
+  charge-side coefficient ``zq = ΔS′/(jω)`` on every jacketed segment in
+  the lower medium (zero, and structurally absent, everywhere else). A
+  formulation tests it as it tests its own scalar-potential term: the
+  Galerkin rows as ``zq · ∫ f_m′ f_n′ dl`` (`BSplineSolver._charge_gram`),
+  razor as the potential ``zq · q`` differenced across the testing path
+  (`RazorSolver._charge_stencil`).
+
 Both enter the MoM as one per-wire series impedance Z'(ω) = Z'_int +
 jωL'_ins, applied through each solver family's own testing scheme: the
 Galerkin BSpline family loads Z over same-wire basis overlaps (see
@@ -57,6 +75,10 @@ once rather than four times:
   per wire, per SEGMENT when a geometry is given, and the lumped loads
   resolved to whatever index the formulation names a site by.
 
+  The spec also carries the buried jacket's charge-side coefficient
+  (``zq_wire`` / ``zq_seg``, momwire#1154), ω-dependent twice over: through
+  1/(jω) and through the soil's ε̃(ω).
+
 `loading_for` is on the correct side of every prepare/replay boundary by
 construction: it takes ω as an argument and caches nothing, so a solver
 whose k-independent half builds a stencil (razor) or a Gram (bspline) calls
@@ -76,7 +98,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.special import ive
 
-from . import _wire_spec
+from . import _ground_refl, _medium_spec, _wire_spec
 
 MU0 = 1.25663706127e-6
 
@@ -112,6 +134,45 @@ def insulation_inductance(radius, ins_radius, eps_r):
     return MU0 / (2.0 * np.pi) * (1.0 - 1.0 / eps_r) * np.log(ins_radius / radius)
 
 
+def jacket_elastance(radius, ins_radius, eps_r, eps_ext, eps0):
+    """The local ELASTANCE a jacketed wire in an exterior medium is missing
+    [m/F] (momwire#1154).
+
+        ΔS′ = ln(b/a) / (2π ε₀ εr) · (1 − 1/ε̃)
+
+    ``eps_ext`` is the exterior's relative permittivity ε̃ (complex for a
+    lossy soil; scalar or array, it broadcasts), ``eps0`` the absolute
+    permittivity it is relative to — the solver's own upper medium. Zero at
+    ε̃ = 1, which is the statement that the free-space pair is exact in free
+    space.
+
+    Derivation (scratch/1154-jacket-in-soil/NOTES.md). Per unit length the
+    coated wire's true inductance is set by the metal, μ₀/2π·ln(R/a), and
+    its true elastance by the two dielectric shells in series,
+    [ln(b/a)/εr + ln(R/b)/ε̃]/(2π ε₀). A bare wire of kernel radius a′ in the
+    exterior has μ₀/2π·ln(R/a′) and ln(R/a′)/(2π ε₀ ε̃). With momwire's a′
+    (`equivalent_radius`, the free-space choice) the inductance gap is
+    exactly `insulation_inductance` — so that term is already right in any
+    exterior — and the elastance gap is the expression above, independent of
+    the far radius R. It is a CHARGE term, not a series one: ΔS′ multiplies
+    q = −(1/jω)·dI/dl, so it cannot be folded into L′ (the issue's first
+    reading, (1 − ε̃/εr) in L′, is the right L′ only for the in-medium
+    radius a·(b/a)^(1 − ε̃/εr), which is complex in a lossy soil).
+    """
+    if ins_radius <= radius:
+        raise ValueError(
+            f"insulation_radius ({ins_radius}) must exceed the conductor "
+            f"radius ({radius})"
+        )
+    if eps_r < 1.0:
+        raise ValueError(f"insulation_eps_r must be >= 1, got {eps_r}")
+    return (
+        np.log(ins_radius / radius)
+        / (2.0 * np.pi * eps0 * eps_r)
+        * (1.0 - 1.0 / np.asarray(eps_ext, dtype=np.complex128))
+    )
+
+
 def equivalent_radius(radius, ins_radius, eps_r):
     """Popovic-Nesic EQUIVALENT RADIUS of a dielectric-coated wire [m].
 
@@ -143,6 +204,12 @@ def equivalent_radius(radius, ins_radius, eps_r):
     radius leaves R alone and pulls X down. The surface-radial residual is
     R-low / X-high, so the missing half is the one that fixes the half the
     inductance cannot.
+
+    BOTH HALVES ASSUME A FREE-SPACE EXTERIOR. On a buried wire the pair
+    keeps this radius and `insulation_inductance` (the inductance half stays
+    exact) and adds the charge-side correction `jacket_elastance`
+    (momwire#1154) — keeping a′ real and medium-independent is what lets the
+    kernels, and every above-ground wire, stay untouched.
 
     The RADIUS this returns is for the KERNEL only. Everything about the
     metal -- skin-effect internal impedance, and any refusal that means "the
@@ -510,14 +577,79 @@ class LoadingSpec:
     * ``lumped`` — ``(indices, Z_L)`` for the configured lumped loads, or
       None. The index is whatever the formulation names a site by (razor: a
       basis index at a knot).
+    * ``zq_wire`` / ``zq_seg`` — the buried jacket's CHARGE-side coefficient
+      ``ΔS′/(jω)`` [Ω·m] (`jacket_elastance`, momwire#1154), per wire and
+      gathered per segment, same shapes as ``z_wire`` / ``z_seg``. Nonzero
+      only on jacketed wires in the lower medium, and None — structurally
+      absent, not zero — whenever the deck has no such wire, so every
+      above-ground and free-space fill is untouched. A consumer that serves
+      a buried deck with a jacket must apply it (or refuse): it is not a
+      series term and ``z_wire`` does not contain it.
     """
 
-    __slots__ = ("z_wire", "z_seg", "lumped")
+    __slots__ = ("z_wire", "z_seg", "lumped", "zq_wire", "zq_seg")
 
-    def __init__(self, z_wire, z_seg, lumped):
+    def __init__(self, z_wire, z_seg, lumped, zq_wire=None, zq_seg=None):
         self.z_wire = z_wire
         self.z_seg = z_seg
         self.lumped = lumped
+        self.zq_wire = zq_wire
+        self.zq_seg = zq_seg
+
+
+def _eps_tilde_at(ground_eps, omega, eps0):
+    """`_ground_refl.eps_tilde` at a scalar ω or elementwise over an (n_k,)
+    array — the same call per frequency, so a swept read equals the
+    single-frequency reads bit for bit."""
+    if np.ndim(omega) == 0:
+        return _ground_refl.eps_tilde(ground_eps, float(omega), eps0)
+    return np.array(
+        [_ground_refl.eps_tilde(ground_eps, float(w), eps0) for w in omega],
+        dtype=np.complex128,
+    )
+
+
+def buried_jacket_charge(solver, omega):
+    """``ΔS′_w/(jω)`` per wire — ``(n_wires,)`` or ``(n_wires, n_k)`` — or
+    None when no jacketed wire lies in the lower medium (momwire#1154).
+
+    The exterior of a wire is decided by `solver._wire_media()`, the label
+    every buried fill routes by: a wire is BELOW only when it lies strictly
+    under the interface, so one RESTING on the plane (a jacketed surface
+    radial at h ≥ b) is ABOVE, its exterior is air, and it gets nothing
+    here. ε̃ is the fills' own: `_ground_refl.eps_tilde(ground_eps, ω,
+    solver.eps)` at each solved ω.
+    """
+    if solver.insulation_radius is None:
+        return None
+    jacketed = np.isfinite(solver.insulation_radius)
+    if not jacketed.any() or getattr(solver, "ground_eps", None) is None:
+        return None
+    # A formulation with no `_wire_media` has no buried fill at all (the
+    # point-matched SinusoidalSolver refuses the `buried` cell at
+    # construction), so every wire it solves is above the interface.
+    media_fn = getattr(solver, "_wire_media", None)
+    if media_fn is None:
+        return None
+    media = media_fn()
+    below = [
+        w for w in range(len(media)) if jacketed[w] and media[w] == _medium_spec.BELOW
+    ]
+    if not below:
+        return None
+    omega = np.asarray(omega, dtype=float)
+    eps_t = _eps_tilde_at(solver.ground_eps, omega, solver.eps)
+    out = np.zeros((len(media),) + omega.shape, dtype=np.complex128)
+    a = solver._conductor_radius_per_wire
+    for w in below:
+        out[w] = jacket_elastance(
+            a[w],
+            solver.insulation_radius[w],
+            solver.insulation_eps_r[w],
+            eps_t,
+            solver.eps,
+        ) / (1j * omega)
+    return out
 
 
 def loading_for(solver, omega, geom=None):
@@ -561,4 +693,8 @@ def loading_for(solver, omega, geom=None):
             np.asarray(idx, dtype=np.int64),
             np.asarray([z for _w, _a, z in entries], dtype=np.complex128),
         )
-    return LoadingSpec(z_wire, z_seg, lumped)
+    zq_wire = buried_jacket_charge(solver, omega) if solver._loading_active else None
+    zq_seg = None
+    if zq_wire is not None and geom is not None:
+        zq_seg = zq_wire[solver._wire_of_seg(geom)]
+    return LoadingSpec(z_wire, z_seg, lumped, zq_wire, zq_seg)

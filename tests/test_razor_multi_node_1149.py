@@ -322,10 +322,10 @@ def test_the_endpoint_plan_alone_passed_the_deck_the_grid_refuses(monkeypatch):
         s._assemble_Z(s._build_geometry(), s.k)
 
 
-def test_the_preflight_names_a_buried_jacket_and_serves_bare_loading():
+def test_the_preflight_serves_bare_loading_and_a_buried_jacket():
     """Bare-metal loading on a crossing deck is served since momwire#1149
-    U3, so the pre-flight says None for it; a jacket on the buried wire is
-    what it still names, in the fill's own words."""
+    U3, and a jacket on the buried wire since momwire#1154, so the
+    pre-flight says None for both."""
     assert (
         razor(crossing_deck(1), wire_conductivity=3.5e7).buried_serve_refusal() is None
     )
@@ -335,10 +335,7 @@ def test_the_preflight_names_a_buried_jacket_and_serves_bare_loading():
         insulation_radius=[0.002, np.nan],
         insulation_eps_r=[3.0, np.nan],
     )
-    assert s.buried_serve_refusal() == _razor._CROSSING_BURIED_JACKET_REFUSAL
-    with pytest.raises(NotImplementedError) as exc:
-        s.compute_impedance()
-    assert str(exc.value) == _razor._CROSSING_BURIED_JACKET_REFUSAL
+    assert s.buried_serve_refusal() is None
 
 
 def test_grazing_floor_parity_is_not_claimed():

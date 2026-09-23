@@ -200,7 +200,10 @@ Two spellings, one equation:
   `insulation_eps_r`, the siblings' API verbatim over the same
   `_wire_loading` physics (exact solid-cylinder I₀/I₁ internal impedance,
   King's insulated-antenna jacket inductance, per-wire with `NaN` switching
-  a wire off). `wire_loss_power(coeffs)` reads back the dissipated watts.
+  a wire off). `wire_loss_power(coeffs)` reads back the dissipated watts. A
+  jacket on a BURIED wire also takes a charge-side term, the soil's
+  correction to the kernel's equivalent radius (momwire#1154,
+  `_charge_stencil`).
 - **Lumped** — `lumped_loads=[(wire_index, arclength, impedance), …]`, which
   is razor's own kwarg. The other solvers serve a lumped load as deck-level
   port algebra over a zero-volt `feeds` gap a consumer stamps afterwards,
@@ -939,7 +942,7 @@ decays there as it does at 2 m.
 
 **`buried_serve_refusal()`** is razor's exact pre-flight (bspline's twin, for
 antennaknobs#1464). It asks the fill's own two fill-time questions through the
-same calls — a jacket on a buried wire of a crossing deck, and the below family's grazing floor
+same calls — the below family's grazing floor
 (`_below_plane_grazing_refusal`) on the buried sub-geometry with the declared
 nodes skipped — and returns the fill's sentence or None. Everything else razor
 refuses on a buried deck it refuses at construction. Making it exact moved
@@ -982,13 +985,20 @@ every deck measured), so building those is not a red control. And a lumped
 load at the crossing knot is one diagonal entry of the crossing tent, so it
 equals razor's own 2-port algebra over a port there to rounding.
 
-A dielectric **jacket on a buried wire** of a crossing deck stays refused
-(`crossing_junction+insulation`). The jacket's series term is the thin-sheath
-formula against a free-space exterior, and in soil the exterior is the soil.
-A jacket on an above wire is served. The refusal is scoped to the crossing
-deck: razor's wholly-below and detached routes, like bspline's buried routes,
-serve a buried jacket with the free-space term today, which is an open
-question on momwire#1149 rather than something U3 changed.
+A dielectric **jacket on a buried wire** of a crossing deck was refused by U3
+(`crossing_junction+insulation`), because the jacket pair was written against a
+free-space exterior. momwire#1154 served it on every buried route of both
+trunks. The pair's series half, `L′ = μ₀/2π (1 − 1/εr) ln(b/a)`, is exact in
+any exterior: it only undoes the kernel's equivalent radius back to the metal,
+and no permittivity enters a flux linkage. What the equivalent radius gets
+wrong in soil is the charge, by a local elastance
+`ΔS′ = ln(b/a)/(2π ε₀ εr) · (1 − 1/ε̃)`, zero at ε̃ = 1. Razor serves it as a
+potential `ΔS′·q` differenced across each testing path (`_charge_stencil`),
+applied once on the full geometry like the series term, so the crossing tent
+needs no special case. Against the exact in-medium pair (a lossless soil, where
+it is servable as bare wires) the served jacket agrees to hundredths of an ohm
+on crossing_deck and hub_deck(4); the free-space pair missed it by 12 and 5.5 Ω
+(`tests/test_jacket_in_soil_1154.py`).
 
 Measured 2026-09-22 (`tests/test_razor_crossing_loading_1149.py`,
 `scratch/razor-buried-u3/`), every edge refined, feed on a knot:

@@ -19,10 +19,12 @@ loading of the crossing deck, crossing tent included — and the per-medium
 sub-geometries' stencils sum to it IDENTICALLY, which is why building those
 is not a red control (measured 0.0 on all three decks here).
 
-What stays refused is a dielectric JACKET on a buried wire of a crossing
-deck: the jacket's series term is the thin-sheath formula against a
-free-space exterior (`_CROSSING_BURIED_JACKET_REFUSAL`). A jacket on an above
-wire is served.
+U3 left a dielectric JACKET on a buried wire of a crossing deck refused by
+name, because the jacket pair was written against a free-space exterior.
+momwire#1154 served it (a charge-side term on the buried segments,
+`RazorSolver._charge_stencil`), and its gates live in
+`tests/test_jacket_in_soil_1154.py`. A jacket on an above wire was served
+throughout.
 
 The gates, U1/U2 style — real constructor, counted branches, red controls.
 Measured 2026-09-22 (`scratch/razor-buried-u3/`):
@@ -316,16 +318,18 @@ def _jacket(on):
     return dict(insulation_radius=b, insulation_eps_r=e)
 
 
-def test_a_buried_jacket_on_a_crossing_deck_is_refused_by_the_declared_cell():
-    """Wire 0 of crossing_deck is the buried one. The fill and the pre-flight
-    say the same sentence, and it is the row's."""
+def test_a_buried_jacket_on_a_crossing_deck_is_served():
+    """Wire 0 of crossing_deck is the buried one. U3 refused its jacket by
+    name (the crossing_junction+insulation cell); momwire#1154 served it
+    with the charge-side term, so the cell, the pre-flight sentence and the
+    raise are all gone (tests/test_jacket_in_soil_1154.py gates the
+    number)."""
     s = razor(crossing(**_jacket(0)))
-    declared = RazorSolver.capabilities.refusal("crossing_junction", "insulation")
-    assert declared is _razor._CROSSING_BURIED_JACKET_REFUSAL
-    assert s.buried_serve_refusal() == declared
-    with pytest.raises(NotImplementedError) as exc:
-        s.compute_impedance()
-    assert str(exc.value) == declared
+    assert RazorSolver.capabilities.refusal("crossing_junction", "insulation") is None
+    assert "crossing_junction+insulation" not in RazorSolver.capabilities.refusals
+    assert not hasattr(_razor, "_CROSSING_BURIED_JACKET_REFUSAL")
+    assert s.buried_serve_refusal() is None
+    assert np.isfinite(complex(s.compute_impedance()[0]))
 
 
 def test_an_above_jacket_on_a_crossing_deck_is_served():
@@ -334,10 +338,9 @@ def test_an_above_jacket_on_a_crossing_deck_is_served():
     assert np.isfinite(complex(s.compute_impedance()[0]))
 
 
-def test_the_jacket_refusal_is_the_crossing_decks_only():
-    """Scope, pinned so a change to it is deliberate: razor's detached route
-    serves a buried jacket today (as every bspline buried route does), and
-    U3 does not change that (momwire#1149, open question)."""
+def test_a_buried_jacket_on_a_detached_deck_is_served():
+    """Razor's detached route serves a buried jacket, as every bspline
+    buried route does — with the charge-side term since momwire#1154."""
     from test_razor_detached_1149 import detached
 
     s = razor(detached(**_jacket(0)))
