@@ -684,6 +684,23 @@ def _basis_value(sigAC, B, sigC, k, xi):
     return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
 
 
+def _entry_k(seg_view, s, e, k):
+    """The k entries `s:e` of `seg_view` were built at: their own
+    `k_entry` on a mixed deck's stitched view, else the scalar `k`.
+
+    A mixed deck is solved OUTSIDE `_operating_medium` (two k are live), so
+    the `k` a drive or readout is handed there is air's. Writing a buried
+    entry's shapes at it evaluates a different function from the one the
+    fill tested (momwire#1159) — invisible at a segment centre, where every
+    k-dependent shape vanishes, and live at a knot gap (`feed_xi` = ±h/2),
+    under the segment gap's `sin u − u`, and at a node port's member ends.
+    A single-medium view carries no `k_entry`, so this returns `k` itself
+    and every shipped path keeps its arithmetic bit for bit.
+    """
+    k_entry = seg_view.get("k_entry")
+    return k if k_entry is None else np.asarray(k_entry)[s:e]
+
+
 class SinusoidalBasisSampler:
     """`_crossing_fill.BasisSampler` for the NEC three-term basis (momwire#980
     step B): what the crossing trunk reads of this solver's basis, as data.
@@ -1441,7 +1458,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     sig * seg_view["AC"][s:e],
                     seg_view["B"][s:e],
                     sig * seg_view["C"][s:e],
-                    k,
+                    _entry_k(seg_view, s, e, k),
                     half * sgn,
                 )
                 np.add.at(out[:, p], seg_view["jbasis"][s:e], sgn * val)
@@ -5053,14 +5070,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     sig * seg_view["AC"][s:e],
                     seg_view["B"][s:e],
                     sig * seg_view["C"][s:e],
-                    k,
+                    _entry_k(seg_view, s, e, k),
                     float(geom["feed_xi"][j]),
                 )
             else:
                 hm = float(h[fseg])
+                ke = _entry_k(seg_view, s, e, k)
                 int_f = sig * seg_view["AC"][s:e] * hm + sig * seg_view["C"][s:e] * (
-                    2.0 / k
-                ) * _sin_minus_arg(0.5 * k * hm)
+                    2.0 / ke
+                ) * _sin_minus_arg(0.5 * ke * hm)
                 col = -int_f / hm
             np.add.at(U[:, j], seg_view["jbasis"][s:e], col)
         for p in range(len(self.junction_ports)):
@@ -5118,6 +5136,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         view = dict(self._basis_coefs(geom, medium.k_m))
         view["k_entry"] = np.full(np.asarray(view["A"]).shape[0], medium.k_m)
         return view
+
+    def _feed_segment_current(self, alpha, seg_view, feed_seg, xi=0.0):
+        """The inherited readout, with the shapes written at each entry's own
+        k when the view carries `k_entry` (see `_entry_k`). At a segment
+        centre (`xi == 0`) no k-dependent shape survives, and a view without
+        `k_entry` has nothing to change, so both take the inherited body."""
+        if xi == 0.0 or "k_entry" not in seg_view:
+            return super()._feed_segment_current(alpha, seg_view, feed_seg, xi)
+        s = seg_view["starts"][feed_seg]
+        e = seg_view["starts"][feed_seg + 1]
+        sig = seg_view["sigma"][s:e]
+        f = _basis_value(
+            sig * seg_view["AC"][s:e],
+            seg_view["B"][s:e],
+            sig * seg_view["C"][s:e],
+            _entry_k(seg_view, s, e, None),
+            xi,
+        )
+        return complex((alpha[seg_view["jbasis"][s:e]] * f).sum())
 
     def _evaluate_basis_at_points(self, seg_view, eval_seg, eval_s, alpha):
         """The inherited evaluation, with each entry's shapes written at its
