@@ -937,8 +937,11 @@ A dielectric jacket over a wire.
 `I1` and `F4`–`F6` are ignored.
 
 The jacket is a **lossless dielectric** — a King quasi-static `L'` correction
-on the wire — carried per wire, so the range must cover each touched wire in
-full, exactly as a ranged `LD 5` must. A jacket with `F3 ≤ 0` or `F1 ≤ 1` is
+on the wire, paired with an equivalent kernel radius — carried per wire, so
+the range must cover each touched wire in full, exactly as a ranged `LD 5`
+must. On a wire buried in a Sommerfeld ground the exterior is the soil, and
+the jacket also carries the soil's charge-side correction,
+`ln(b/a)/(2π ε₀ εr) · (1 − 1/ε̃)` per metre of elastance (momwire#1154). A jacket with `F3 ≤ 0` or `F1 ≤ 1` is
 electrically a vacuum and is dropped as a no-op; a jacket whose outer radius
 does not clear the conductor is a deck error and refuses.
 

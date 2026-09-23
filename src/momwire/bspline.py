@@ -1244,6 +1244,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Per-instance cache for the k-independent loading Gram structure
         # (rows, cols, vals, wire_of_nnz) — see `_loading_gram`.
         self._cached_loading_gram = None
+        self._cached_charge_gram = None
 
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
@@ -4075,7 +4076,48 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return cached
         geom = self._build_geometry()
         supp_seg, polys, _kcl_A, _wk, _wbg = self._build_basis_polynomials(geom)
-        n_basis, n_wings, n_poly = polys.shape
+        result = self._overlap_triplets(geom, supp_seg, polys, polys)
+        self._cached_loading_gram = result
+        return result
+
+    def _charge_gram(self):
+        """COO triplets of the DERIVATIVE Gram, tagged per wire (momwire#1154).
+
+        D[m, n] = ∫ Φ_m′(l)·Φ_n′(l) dl over shared segments — the weak form
+        of a LOCAL scalar potential ΔS′·q with q = −(1/jω)·dI/dl, tested the
+        way this formulation tests its kernel's scalar-potential term
+        (by parts, boundary terms dropped at free ends and junctions because
+        the conductor's total potential is continuous). Scaled per wire by
+        `LoadingSpec.zq_wire` = ΔS′/(jω), it is a buried jacket's missing
+        elastance (`_wire_loading.jacket_elastance`).
+
+        The same closed-form moments as `_loading_gram`, on the
+        differentiated per-segment polynomials (exact, since `polys` is).
+        Cached per instance; built only when a deck has a jacketed buried
+        wire.
+
+        `wire_loss_power` does not read it: that readout is the METAL's
+        ohmic loss, and the real part of ΔS′ is the soil's loss seen through
+        the jacket, which the solved impedance carries.
+        """
+        cached = self._cached_charge_gram
+        if cached is not None:
+            return cached
+        geom = self._build_geometry()
+        supp_seg, polys, _kcl_A, _wk, _wbg = self._build_basis_polynomials(geom)
+        n_poly = polys.shape[2]
+        dpolys = polys[:, :, 1:] * np.arange(1, n_poly, dtype=np.float64)
+        result = self._overlap_triplets(geom, supp_seg, polys, dpolys)
+        self._cached_charge_gram = result
+        return result
+
+    @staticmethod
+    def _overlap_triplets(geom, supp_seg, polys, coef):
+        """∫ p_m·p_n over shared segments for the per-(basis, wing)
+        polynomial coefficients `coef` (`polys` itself, or its derivative),
+        with the support read off `polys` — see `_loading_gram`."""
+        n_basis, n_wings, _n = polys.shape
+        n_poly = coef.shape[2]
         h_per_seg = geom["h_per_seg"]
         seg_offsets = np.asarray(geom["seg_offsets"], dtype=np.int64)
 
@@ -4096,7 +4138,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             hs = h_per_seg[s]
             # H[p, q] = ∫₀^h u^p·u^q du = h^(p+q+1)/(p+q+1)
             H = hs**pq_sum / pq_sum
-            C = polys[[m for m, _ in entries], [a for _, a in entries], :]
+            C = coef[[m for m, _ in entries], [a for _, a in entries], :]
             M = C @ H @ C.T
             w = int(np.searchsorted(seg_offsets, s, side="right") - 1)
             n_e = len(entries)
@@ -4108,14 +4150,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     vals.append(M[i, j])
                     wire_ids.append(w)
 
-        result = (
+        return (
             np.asarray(rows, dtype=np.int64),
             np.asarray(cols, dtype=np.int64),
             np.asarray(vals, dtype=np.float64),
             np.asarray(wire_ids, dtype=np.int64),
         )
-        self._cached_loading_gram = result
-        return result
 
     def _apply_loading(self, Z, omega=None):
         """Add the loading term into Z in place; no-op when loading is off.
@@ -4131,14 +4171,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             omega = self.omega
         # (n_w,) or (n_w, n_k) — the shared spec layer (momwire#428); the
         # Gram is keyed by wire, so this row consumes the per-WIRE form.
-        zw = _wire_loading.loading_for(self, omega).z_wire
+        spec = _wire_loading.loading_for(self, omega)
+        self._add_wire_scaled(Z, (rows, cols, vals, wire_ids), spec.z_wire)
+        # A jacketed BURIED wire's charge-side term (momwire#1154), after the
+        # series one. `zq_wire` is None on every deck without one, so every
+        # other fill is structurally what it was.
+        if spec.zq_wire is not None:
+            self._add_wire_scaled(Z, self._charge_gram(), spec.zq_wire)
+        return Z
+
+    @staticmethod
+    def _add_wire_scaled(Z, triplets, zw):
+        """`Z += Σ_w zw[w]·G_w` for wire-tagged COO `triplets`; Z is one
+        (n, n) matrix with zw (n_w,), or a chunk (n_k, n, n) with (n_w, n_k)."""
+        rows, cols, vals, wire_ids = triplets
         if Z.ndim == 2:
             np.add.at(Z, (rows, cols), zw[wire_ids] * vals)
         else:
             data = zw[wire_ids, :].T * vals[None, :]  # (n_k, nnz)
             for ki in range(Z.shape[0]):
                 np.add.at(Z[ki], (rows, cols), data[ki])
-        return Z
 
     def _loading_block(self, I, J, omega=None):
         """Dense loading sub-block L[I][:, J] for restricted evaluators
@@ -4152,10 +4204,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             geom = self._build_geometry()
             supp_seg, _p, _k, _wk, _wbg = self._build_basis_polynomials(geom)
             n = supp_seg.shape[0]
-            zw = _wire_loading.loading_for(self, omega).z_wire
+            spec = _wire_loading.loading_for(self, omega)
+            zw = spec.z_wire
             L = scipy.sparse.coo_matrix(
                 (zw[wire_ids] * vals, (rows, cols)), shape=(n, n)
             ).tocsr()
+            if spec.zq_wire is not None:
+                # The buried jacket's charge-side term (momwire#1154), so the
+                # H-matrix blocks carry what the dense `_apply_loading` does.
+                q_rows, q_cols, q_vals, q_wire = self._charge_gram()
+                L = (
+                    L
+                    + scipy.sparse.coo_matrix(
+                        (spec.zq_wire[q_wire] * q_vals, (q_rows, q_cols)),
+                        shape=(n, n),
+                    ).tocsr()
+                )
             self._loading_csr_cache = (omega, L)
         L = self._loading_csr_cache[1]
         return L[I][:, J].toarray()

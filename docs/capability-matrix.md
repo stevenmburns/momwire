@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-43 sentences across 76 declared cells, verbatim. A sentence shared by several rows is printed
+42 sentences across 75 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -251,10 +251,6 @@ renders in host dialogs.
 - `RazorSolver` `centre_feeds`
 
   > RazorSolver places a gap at the nearest basis-carrying KNOT (`_snap_to_knot`), so a feed named as a segment CENTRE -- which is the grid the nec2 dialect addresses -- lands half a cell from where it was named; build the solver directly with a parity-correct mesh if that is what you want.
-
-- `RazorSolver` `crossing_junction+insulation`
-
-  > a dielectric jacket (insulation_radius / insulation_eps_r) on a BURIED wire of a crossing deck is not served by razor (momwire#1149 U3): the jacket's series term is the thin-sheath formula against a free-space exterior, and in soil the exterior is the soil, whose complex permittivity normally exceeds the jacket's and reverses the term's sign. Bare-metal loading (wire_conductivity, distributed_rlc, lumped_loads) is served on this deck, and so is a jacket on its above-ground wires
 
 - `RazorSolver` `junction_ports`
 
