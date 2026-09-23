@@ -1081,14 +1081,71 @@ def _on_plane_side(zrel, side, what):
     return z
 
 
-def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
+def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None, group_labels=None):
     """Designed tables with the deck's wire radius folded in, z relative
     to the interface. `memo` extends the exact-triple dedup across calls
-    (one fill = one memo; ε̃, k₂, rtol fixed for its lifetime)."""
+    (one fill = one memo; ε̃, k₂, rtol fixed for its lifetime);
+    `group_labels` lets one call stand in for several (`_end_tables`)."""
     a_wire = float(ctx.a_wire)
     return _near_interface.radius_tables(
-        eps_t, k_p, rho, z, zp, a_wire, rtol=rtol, memo=memo
+        eps_t, k_p, rho, z, zp, a_wire, rtol=rtol, memo=memo, group_labels=group_labels
     )
+
+
+# The end loops' kernel tables (momwire#1168 U4) are evaluated for a SPAN of
+# consecutive ends in one `_tables` call, the span holding at most this many
+# (end, node) pairs. One call per end was 2,823 calls at razor hub_deck(16) x8
+# for ~5.4 k fresh triples — nearly all memo hits, so the cost was per-call
+# overhead. The budget bounds memory: a call's traced peak is ~0.3 kB per pair
+# (the stacked inputs and fold, `_unique_rows`' sort arrays, the (n, 6) gather
+# and its transposed copy), and at x8 an unbounded span is one call of 3.8 M
+# pairs peaking at 864 MiB — the audit's 60-110 MB at 500 k pairs is the same
+# rate. 64 k pairs measured 18.3 MiB at its largest call, well under the main
+# sandwich's 64 MiB chunk (`_MAIN_CHUNK_BYTES`), for 121 calls at x8 where the
+# per-call overhead no longer shows. Spans never move a bit (`_end_tables`),
+# so this is a memory choice only.
+_END_BATCH_PAIRS = 1 << 16
+# TEST-ONLY. False drops the per-end column labels and so reproduces the
+# naive batching the #1168 audit measured moving Z; the bit-identity gate's
+# negative control flips it to prove the gate can fail.
+_END_LABELS = True
+
+
+def _end_groups(n_ends, n_nodes, memo):
+    """`[start, stop)` spans of consecutive ends, each at most
+    `_END_BATCH_PAIRS` pairs against an `n_nodes` line (one end at least).
+    Without a memo every span is one end: a call per end dedups nothing
+    across ends, which one call over several cannot reproduce."""
+    per = 1 if memo is None else max(1, _END_BATCH_PAIRS // max(1, n_nodes))
+    return [(g0, min(n_ends, g0 + per)) for g0 in range(0, n_ends, per)]
+
+
+def _end_tables(ctx, eps_t, k_p, ends, n_nodes, memo, args):
+    """Yield `(pt, sign, fv, te)` per end of `ends`, in order, with `te` the V
+    and W tables `_tables(ctx, eps_t, k_p, *args(pt), _CROSS_RTOL, memo=memo)`
+    returns for that end — but served by one call per `_end_groups` span.
+
+    `args(pt)` is the one-end call's (rho, z, zp), broadcast to `n_nodes`.
+    The span's rows are stacked end by end, so the flat asked order is the
+    per-end calls' asked orders concatenated, and each end's rows carry that
+    end's position as its `group_labels` label. `designed_tables` documents
+    why that is the per-end sequence to the bit: the same hits, each fresh
+    row evaluated in the first asking end's column, the same memo contents.
+    A span of one end passes no labels — it IS the per-end call.
+    """
+    for g0, g1 in _end_groups(len(ends), n_nodes, memo):
+        span = ends[g0:g1]
+        cols = [np.broadcast_arrays(*args(pt)) for pt, _sign, _fv in span]
+        rho, z, zp = (np.stack([c[i] for c in cols]) for i in range(3))
+        del cols
+        labels = None
+        if len(span) > 1 and _END_LABELS:
+            labels = np.broadcast_to(np.arange(len(span))[:, None], rho.shape)
+        te = _tables(
+            ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo, group_labels=labels
+        )
+        for i, (pt, sign, fv) in enumerate(span):
+            yield pt, sign, fv, {"V": te["V"][i], "W": te["W"][i]}
 
 
 def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
@@ -1500,18 +1557,33 @@ def _ends_and_corner(
 
     # The by-parts boundary terms — test-side Φ (BT), source-side W and Φ
     # (SW, SQ) — each an end against the other axis's line, radius folded.
-    for pt, sign, fv in A["ends"] if test_ends else ():
+    def test_end(pt):
         rho_e = np.hypot(pt[0] - B["nodes"][:, 0], pt[1] - B["nodes"][:, 1])
-        te = _tables(
-            ctx,
-            eps_t,
-            k_p,
+        return (
             rho_e,
             _on_plane_side(np.full_like(rho_e, pt[2] - gz), "above", "end point"),
             _on_plane_side(B["nodes"][:, 2] - gz, "below", "quadrature node"),
-            _CROSS_RTOL,
-            memo=memo,
         )
+
+    def source_end(pt):
+        rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
+        return (
+            rho_e,
+            _on_plane_side(A["nodes"][:, 2] - gz, "above", "quadrature node"),
+            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
+        )
+
+    # The end loops' tables come a span of ends per call (`_end_tables`); the
+    # rank-1 updates below still run one end at a time, in the order they did.
+    for pt, sign, fv, te in _end_tables(
+        ctx,
+        eps_t,
+        k_p,
+        A["ends"] if test_ends else [],
+        B["nodes"].shape[0],
+        memo,
+        test_end,
+    ):
         # momwire#912: `fv` is a value-1 tent's end value — a handful of
         # nonzeros in n_basis — so the rank-1 update lands on those rows only.
         # The same products where fv != 0; where it is 0 the full outer
@@ -1523,18 +1595,15 @@ def _ends_and_corner(
         add_rows(
             nz, fv[nz], _real_matvec_c(B["F_csr"], wB_tz * te["W"]), -c1 * sign, buf
         )
-    for pt, sign, fv in B["ends"] if source_ends else ():
-        rho_e = np.hypot(A["nodes"][:, 0] - pt[0], A["nodes"][:, 1] - pt[1])
-        te = _tables(
-            ctx,
-            eps_t,
-            k_p,
-            rho_e,
-            _on_plane_side(A["nodes"][:, 2] - gz, "above", "quadrature node"),
-            _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
-            _CROSS_RTOL,
-            memo=memo,
-        )
+    for pt, sign, fv, te in _end_tables(
+        ctx,
+        eps_t,
+        k_p,
+        B["ends"] if source_ends else [],
+        A["nodes"].shape[0],
+        memo,
+        source_end,
+    ):
         nz = np.flatnonzero(fv)
         add_cols(
             nz, _real_matvec_c(A["F_csr"], wA_tz * te["W"]), fv[nz], -c1 * sign, bufT
@@ -1639,18 +1708,18 @@ def _ends_and_corner_reversed(
 
     # BT — the test axis's ends. P is below, so its z lands in the z′ slot
     # (clamped at the plane, the mirror of the forward's `max(..., 0.0)`).
-    for pt, sign, fv in P["ends"]:
+    def test_end(pt):
         rho_e = np.hypot(Q["nodes"][:, 0] - pt[0], Q["nodes"][:, 1] - pt[1])
-        te = _tables(
-            ctx,
-            eps_t,
-            k_p,
-            rho_e,
-            Q["nodes"][:, 2] - gz,
-            np.full_like(rho_e, min(pt[2] - gz, 0.0)),
-            _CROSS_RTOL,
-            memo=memo,
-        )
+        return rho_e, Q["nodes"][:, 2] - gz, np.full_like(rho_e, min(pt[2] - gz, 0.0))
+
+    def source_end(pt):
+        rho_e = np.hypot(P["nodes"][:, 0] - pt[0], P["nodes"][:, 1] - pt[1])
+        return rho_e, np.full_like(rho_e, max(pt[2] - gz, 0.0)), P["nodes"][:, 2] - gz
+
+    # A span of ends per `_tables` call, the updates per end (`_end_tables`).
+    for pt, sign, fv, te in _end_tables(
+        ctx, eps_t, k_p, P["ends"], Q["nodes"].shape[0], memo, test_end
+    ):
         nz = np.flatnonzero(fv)
         _rank1_add(
             t_ba, nz, fv[nz], _real_matvec_c(Q["Fd_csr"], wQ * te["V"]), c1 * sign, buf
@@ -1668,18 +1737,9 @@ def _ends_and_corner_reversed(
             )
 
     # SQ — the source axis's ends (+ SW under the rejected "by_role" reading).
-    for pt, sign, fv in Q["ends"]:
-        rho_e = np.hypot(P["nodes"][:, 0] - pt[0], P["nodes"][:, 1] - pt[1])
-        te = _tables(
-            ctx,
-            eps_t,
-            k_p,
-            rho_e,
-            np.full_like(rho_e, max(pt[2] - gz, 0.0)),
-            P["nodes"][:, 2] - gz,
-            _CROSS_RTOL,
-            memo=memo,
-        )
+    for pt, sign, fv, te in _end_tables(
+        ctx, eps_t, k_p, Q["ends"], P["nodes"].shape[0], memo, source_end
+    ):
         nzq = np.flatnonzero(fv)
         # TW (momwire#956): the ABOVE ends' W term — the forward block's
         # test-side end transposed. With it AND the below ends' SW this block

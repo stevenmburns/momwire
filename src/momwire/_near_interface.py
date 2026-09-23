@@ -767,7 +767,9 @@ class TripleMemo:
         return iter(self.keys())
 
 
-def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
+def designed_tables(
+    eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None, group_labels=None
+):
     """Broadcast wrapper over the designed evaluation. Accepts z′ = 0 and
     z = 0 exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
 
@@ -819,6 +821,32 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     cross-call lookup is `TripleMemo`'s array search (momwire#1168 U1): the
     dict it replaced cost a tuple build and two hash probes per unique row,
     ~57 % of this function's time on razor hub_deck(16) x8.
+
+    `group_labels` (momwire#1168 U4): an integer per asked point, broadcast
+    with `rho`, that lets ONE call stand in for a sequence of calls sharing
+    `memo` — label i marking the points call i would have asked, labels
+    ascending in the asked order. The column routes then group fresh rows by
+    (label, exact ρ) instead of exact ρ, and a unique row takes the label of
+    its FIRST appearance. That reproduces the sequence exactly:
+
+      * hit or fresh — a row first asked by call i is, in the sequence, a hit
+        iff the memo held it before the sequence (the calls before i never
+        asked it); in the batch it is looked up against that same memo;
+      * the column — a fresh row is evaluated by call i, the first to ask it,
+        in call i's column of its ρ; every later call hits the memo. Call i's
+        fresh set is exactly the batch's fresh rows labelled i, in the same
+        first-appearance order, so each column has the same members in the
+        same order and picks the same rule;
+      * the store — the memo receives the same rows with the same values in
+        the same order (first-appearance order runs through call 0's fresh
+        rows, then call 1's, ...).
+
+    Without the labels, fresh rows of two calls that share a ρ merge into one
+    column, whose smaller s_min widens the rule for the other's members: the
+    #1168 audit's naive batching moved 12 of 1.96 M Z entries (4.7e-20 of
+    max|Z|) that way. The point routes evaluate each row on its own and
+    ignore the labels. Without `memo` the sequence dedups nothing across its
+    calls, which one call cannot reproduce, so labels need a memo.
     """
     if memo is not None and not isinstance(memo, TripleMemo):
         raise TypeError(
@@ -829,6 +857,18 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
     )
     rows, inverse = _unique_rows(rho_b, z_b, zp_b)
+    labels = None
+    if group_labels is not None and rows.shape[0]:
+        if memo is None:
+            raise ValueError("group_labels stand for calls sharing a memo; pass one")
+        lab = np.broadcast_to(np.asarray(group_labels), rho_b.shape).ravel()
+        if not np.issubdtype(lab.dtype, np.integer):
+            raise TypeError(f"group_labels must be integers, got {lab.dtype}")
+        # `_unique_rows` numbers rows in first-appearance order, so a row's
+        # first appearance is exactly where the running max of the inverse
+        # steps up (as in `_crossing_fill._chunked_tables`).
+        prev = np.maximum.accumulate(np.concatenate(([-1], inverse[:-1])))
+        labels = lab[np.flatnonzero(inverse > prev)]
     if memo is None:
         block = np.empty((rows.shape[0], 6), dtype=np.complex128)
         fresh_pos = np.arange(rows.shape[0])
@@ -837,7 +877,14 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
         fresh_pos = np.flatnonzero(~hit)  # ascending: first-appearance order
     if fresh_pos.size:
         sub = rows[fresh_pos]
-        vals = _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult)
+        vals = _evaluate_fresh(
+            eps_t,
+            k2,
+            sub,
+            rtol,
+            lam_mult,
+            labels=None if labels is None else labels[fresh_pos],
+        )
         block[fresh_pos] = vals
         if memo is not None:
             memo.insert(sub, vals)
@@ -848,7 +895,7 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     return dict(zip(KEYS, out))
 
 
-def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult):
+def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None):
     """The six values of each (m, 3) row of `sub` (distinct triples, in
     first-appearance order), as (m, 6), row i for sub[i] — through the route
     `designed_tables` documents. Each branch hands its machine the same
@@ -856,6 +903,10 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult):
     is what keeps the two routes' bits equal: on the column route a member's
     value depends on its column's membership (`six_columns`), so the fresh
     set and its grouping are the contract, not the values alone.
+
+    `labels` (one integer per row of `sub`) split the column routes' groups by
+    (label, exact ρ); see `designed_tables`' `group_labels`. The point routes
+    evaluate each row alone and read no labels.
     """
     if _use_column_route() and _use_column_accel():
         # The twin's parallel unit is the COLUMN, so the whole grouping goes
@@ -873,7 +924,7 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult):
         # on this side.
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
-        rho_c, sizes, member_order = _column_blocks(sub)
+        rho_c, sizes, member_order = _column_blocks(sub, labels)
         offsets = np.zeros(sizes.size + 1, dtype=np.intp)
         offsets[1:] = np.cumsum(sizes)
         zs = np.ascontiguousarray(sub[member_order, 1])
@@ -903,7 +954,7 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult):
         triples = [tuple(r) for r in sub.tolist()]
         got = {}
         with _blas_physical_cores():
-            for members in group_columns(triples).values():
+            for members in group_columns(triples, labels).values():
                 vals = six_columns(
                     eps_t,
                     k2,
@@ -1088,7 +1139,7 @@ def _designed_tables_reference(
     return dict(zip(KEYS, out))
 
 
-def group_columns(keys):
+def group_columns(keys, labels=None):
     """Group unique (rho, z, z') triples into the columns `designed_tables`
     evaluates: exact rho. Returns {rho: [triples]}, first-seen order inside
     a group. The ONE grouping production uses; a replay (probe4) calls this
@@ -1113,10 +1164,17 @@ def group_columns(keys):
     complex product, which the same study's E2 block isolated at +44 % on
     the unchanged grouping. `six_columns` now evaluates the exponent per
     distinct z' inside a column, so that product is gone.
+
+    With `labels` (one per key) the groups are (label, rho), keyed so; see
+    `designed_tables`' `group_labels`.
     """
     columns = {}
-    for key in keys:
-        columns.setdefault(key[0], []).append(key)
+    if labels is None:
+        for key in keys:
+            columns.setdefault(key[0], []).append(key)
+        return columns
+    for key, lab in zip(keys, np.asarray(labels).tolist()):
+        columns.setdefault((lab, key[0]), []).append(key)
     return columns
 
 
@@ -1173,7 +1231,7 @@ def _unique_triples(rho_b, z_b, zp_b):
     return [tuple(r) for r in rows.tolist()], inverse
 
 
-def _column_blocks(sub):
+def _column_blocks(sub, labels=None):
     """`group_columns`' partition of `sub` (an (m, 3) float array), as index
     arithmetic: the distinct ρ in first-appearance order, each group's size,
     and the member order within the concatenation.
@@ -1181,19 +1239,33 @@ def _column_blocks(sub):
     Exactly `group_columns`' ordering — groups in first-seen ρ order, members
     in first-seen order inside a group — so the twin is handed the same
     columns in the same order it was handed before, and the rule each column
-    picks is unchanged. Returns (rho_c, sizes, member_order)."""
+    picks is unchanged. Returns (rho_c, sizes, member_order).
+
+    With `labels` (one integer per row) the groups are (label, ρ) in
+    first-seen order — ρ's own equivalence classes (np.unique's) refined by
+    the label, so a label's columns are the ones a call carrying that label's
+    rows alone would get (`designed_tables`' `group_labels`)."""
     rho = np.ascontiguousarray(sub[:, 0])
     uniq, first, inv = np.unique(rho, return_index=True, return_inverse=True)
+    inv = np.asarray(inv).ravel()
+    if labels is not None:
+        _lab, lab_id = np.unique(np.asarray(labels), return_inverse=True)
+        pair = np.asarray(lab_id).ravel().astype(np.int64) * uniq.size + inv
+        _pairs, first, inv = np.unique(pair, return_index=True, return_inverse=True)
+        uniq = rho[first]
+        inv = np.asarray(inv).ravel()
     order = np.argsort(first, kind="stable")
     rank = np.empty_like(order)
     rank[order] = np.arange(order.size)
-    gid = rank[np.asarray(inv).ravel()]
+    gid = rank[inv]
     member_order = np.argsort(gid, kind="stable")  # stable: keeps first-seen
     sizes = np.bincount(gid, minlength=order.size).astype(np.intp)
     return uniq[order], sizes, member_order
 
 
-def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None):
+def radius_tables(
+    eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None, group_labels=None
+):
     """`designed_tables` with the thin-wire offset folded in:
     ρ_eff = hypot(ρ, a) — the same-edge moments' R = √(Δz² + a²)
     convention extended to the cross family (the derivation's radius
@@ -1201,7 +1273,9 @@ def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None):
     the a-scale carries the offset; at R ≫ a it is invisible). `memo`
     keys on the FOLDED ρ_eff (see `designed_tables`)."""
     rho_eff = radius_fold(rho, wire_radius)
-    return designed_tables(eps_t, k2, rho_eff, z, zp, rtol=rtol, memo=memo)
+    return designed_tables(
+        eps_t, k2, rho_eff, z, zp, rtol=rtol, memo=memo, group_labels=group_labels
+    )
 
 
 def radius_fold(rho, wire_radius):

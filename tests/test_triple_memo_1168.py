@@ -24,6 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from momwire import _crossing_fill as cf
 from momwire import _near_interface as ni
 from momwire.bspline import BSplineSolver
 from momwire.razor import RazorSolver
@@ -181,13 +182,26 @@ class _Routes:
 
     def use_reference(self):
         """Serve every `designed_tables` call through the dict reference, one
-        dict per TripleMemo the fill hands in — the pre-#1168 route."""
+        dict per TripleMemo the fill hands in — the pre-#1168 route, the end
+        loops included: one call per end (U4's spans of one), since the dict
+        route has no `group_labels`. The array route keeps the default spans,
+        so the comparison covers U4 as well."""
         array_route = ni.designed_tables
+        budget = cf._END_BATCH_PAIRS
         dicts = {}
 
         def reference(
-            eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=ni._LAM_MULT, memo=None
+            eps_t,
+            k2,
+            rho,
+            z,
+            zp,
+            rtol=1e-10,
+            lam_mult=ni._LAM_MULT,
+            memo=None,
+            group_labels=None,
         ):
+            assert group_labels is None, "a labelled call on the reference route"
             d = None
             if memo is not None:
                 # Keyed on the object (held alive by `self.memos`), so an id
@@ -198,7 +212,13 @@ class _Routes:
             )
 
         self._mp.setattr(ni, "designed_tables", reference)
-        return lambda: self._mp.setattr(ni, "designed_tables", array_route)
+        self._mp.setattr(cf, "_END_BATCH_PAIRS", 1)
+
+        def restore():
+            self._mp.setattr(ni, "designed_tables", array_route)
+            self._mp.setattr(cf, "_END_BATCH_PAIRS", budget)
+
+        return restore
 
 
 CASES = {
