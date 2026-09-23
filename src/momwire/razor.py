@@ -3994,7 +3994,121 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ctx, P, ax_a, corner=False
         )[np.ix_(rows_b, rows_a)]
 
+        if tents:
+            cols = np.array([m for m, _ in tents], dtype=np.int64)
+            Z[:, cols] += self._crossing_node_charges(geom, tents, ctx, A, P, omega)
+
         return Z
+
+    def _crossing_node_charges(self, geom, tents, ctx, A, P, omega):
+        """The node charge the same-medium REMAINDERS carry, taken back out
+        (momwire#1149 U2). Returns the ``(n_basis, len(tents))`` addition to
+        the crossing tents' columns.
+
+        The assembly splits a crossing tent into two HALF tents, one per
+        medium, and a half tent is not charge-conserving: its current is
+        σ at the node and stops there, so it implies a point charge at the
+        node, of proxy ``Q = −σ`` where the live wing rises into the knot
+        and ``+σ`` where it falls away from it — minus the wing's integrated
+        doublet ``q·h`` — in the same current-derivative units T2 carries
+        its line charges in. The two halves' proxies are equal and opposite
+        (``Qa = −Qb``), so the node charge of the WHOLE tent is zero, and
+        every term of the assembly may either carry both or drop both.
+
+        All but one drop it. The direct and image terms of each family spell
+        a half tent's charge as its wing's doublet alone; the trunk's cross
+        blocks do too, on a path axis (``Fd = 0`` empties SQ, and the corner
+        is off). The exception is the family's Sommerfeld remainder: Q is
+        the field of the half tent's CURRENT, integrated through the fields
+        of unit current moments (`Remainder.field_windows`), and such a field
+        includes every charge the current implies — the node's with the
+        rest. So the remainder alone carries ``Q·(Φ_exact − Φ_dir+img)`` for
+        the node charge, where every other term carries nothing, and the two
+        families' pieces do not cancel because they are two different
+        remainders. That is the defect momwire#1149 localised: it needs an
+        end in the plane, is flat in mesh (a unit charge whatever the
+        segment), vanishes at ε̃ = 1 (no remainder), grows with contrast, and
+        radiates nothing (a near-field potential).
+
+        This removes it. Over each row's T2 endpoints ``e`` (razor's
+        signs, the path axes `A` and `P` the cross blocks already read):
+
+            above rows:  −Qa·[fam_a(e) − c1·V(e; z′ = 0)]
+            below rows:  −Qb·[fam_b(e) − c1·V(z = 0; e)]
+
+        ``fam`` is the family's direct+image potential of a unit node proxy
+        (``(1 − C₂)·g_k(R)/jωε₀`` above, ``(1 − A_m)·g_km(R)/jωε_m`` below,
+        the image of an in-plane node being the node, R carrying the wire
+        radius as the reduced kernel does) and ``c1·V`` the same charge's
+        EXACT potential, the transmitted V the cross blocks' BT terms read,
+        which is continuous across the plane — so ``fam − c1·V`` is minus the
+        remainder's own node-charge potential. Read the other way it is the
+        complete convention BSplineSolver fills in (its self completions give
+        each family's direct+image the node charge, its SQ and corner give it
+        to the cross blocks): the two conventions differ by terms that cancel
+        exactly between a family and its cross block, and this is their sum.
+
+        At ε̃ = 1, ``c1·V ≡ g/jωε₀`` and C₂ = A_m = 0, so the term is
+        identically zero and the collapse to free space is untouched.
+        Measured on `crossing_deck(1)`'s two-port (`scratch/razor-buried-u2/`):
+        non-reciprocity 3.2e-2 flat → 6.5e-4, 1.6e-4, 4.0e-5 at soil A.
+        """
+        eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
+        c1 = _sommerfeld_below._c1_moment(omega, self.mu)
+        a = float(ctx.a_wire)
+        gz = float(ctx.ground_z)
+        n = geom["n_basis_total"]
+        cols = np.array([m for m, _ in tents], dtype=np.int64)
+        jb = np.array([j for _, j in tents], dtype=np.int64)
+        ja = 1 - jb
+        wr, wg = geom["wing_rise"], geom["wing_sigma"]
+        # The above half's node proxy, minus its live wing's integrated
+        # doublet: -sigma where the wing rises into the knot, +sigma where
+        # it falls away from it. The below half's is its negative.
+        q_a = -wg[cols, ja] * np.where(wr[cols, ja], 1.0, -1.0)
+        q_b = -wg[cols, jb] * np.where(wr[cols, jb], 1.0, -1.0)
+        if not np.allclose(q_a, -q_b):
+            raise RuntimeError(
+                "crossing tent whose half tents' node charges do not cancel "
+                f"(momwire#1149 U2): {q_a} vs {q_b}"
+            )
+        nodes = self._knot_points(geom)[cols]
+        out = np.zeros((n, cols.size), dtype=np.complex128)
+        memo = {}
+        for ax, above in ((A, True), (P, False)):
+            ends = ax["ends"]
+            if not ends:
+                continue
+            pts = np.array([np.asarray(e[0], dtype=float) for e in ends])
+            sgn = np.array([float(e[1]) for e in ends])
+            row = np.array([int(np.flatnonzero(e[2])[0]) for e in ends])
+            d = pts[:, None, :] - nodes[None, :, :]  # (E, T, 3)
+            rho = np.hypot(d[..., 0], d[..., 1])
+            R = np.sqrt(np.einsum("etk,etk->et", d, d) + a * a)
+            side = "above" if above else "below"
+            zt = _crossing_fill._on_plane_side(pts[:, 2] - gz, side, "T2 endpoint")
+            zt = np.broadcast_to(zt[:, None], rho.shape)
+            zn = np.zeros_like(rho)
+            if above:
+                fam = (1.0 - c2) * np.exp(-1j * k_p * R) / (4.0 * np.pi * R)
+                fam = fam / (1j * omega * self.eps)
+                z_slot, zp_slot, q = zt, zn, q_a
+            else:
+                fam = (1.0 - a_m) * np.exp(-1j * k_m * R) / (4.0 * np.pi * R)
+                fam = fam / (1j * omega * eps_m)
+                z_slot, zp_slot, q = zn, zt, q_b
+            V = _crossing_fill._tables(
+                ctx,
+                eps_t,
+                k_p,
+                rho,
+                z_slot,
+                zp_slot,
+                _crossing_fill._CROSS_RTOL,
+                memo=memo,
+            )["V"]
+            np.add.at(out, row, -sgn[:, None] * q[None, :] * (fam - c1 * V))
+        return out
 
     def _assemble_Z_source_block(
         self, geom, prepared, sources, k, omega, *, ground=None, eps=None
