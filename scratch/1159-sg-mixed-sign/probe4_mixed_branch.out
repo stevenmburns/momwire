@@ -1,0 +1,10 @@
+momwire from /tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1159/src/momwire/__init__.py
+mixed m=1 both: |M_sg - M_bs|/|M_bs| 1.355e-04  max|P_sg - P_bs|/max P_bs 2.727e-04
+mixed m=1 port0: |M_sg - M_bs|/|M_bs| 1.269e-04  max|P_sg - P_bs|/max P_bs 2.531e-04
+mixed m=1 port1: |M_sg - M_bs|/|M_bs| 8.083e-06  max|P_sg - P_bs|/max P_bs 1.160e-05
+mixed m=2 both: |M_sg - M_bs|/|M_bs| 1.893e-05  max|P_sg - P_bs|/max P_bs 3.696e-05
+mixed m=2 port0: |M_sg - M_bs|/|M_bs| 1.772e-05  max|P_sg - P_bs|/max P_bs 3.397e-05
+mixed m=2 port1: |M_sg - M_bs|/|M_bs| 1.365e-06  max|P_sg - P_bs|/max P_bs 2.204e-06
+mixed m=4 both: |M_sg - M_bs|/|M_bs| 3.065e-06  max|P_sg - P_bs|/max P_bs 6.075e-06
+mixed m=4 port0: |M_sg - M_bs|/|M_bs| 2.873e-06  max|P_sg - P_bs|/max P_bs 5.607e-06
+mixed m=4 port1: |M_sg - M_bs|/|M_bs| 2.031e-07  max|P_sg - P_bs|/max P_bs 2.481e-07

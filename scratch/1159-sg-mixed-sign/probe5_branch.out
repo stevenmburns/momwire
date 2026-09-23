@@ -1,0 +1,13 @@
+momwire from /tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1159/src/momwire/__init__.py
+m=1: Z(Y)-Z(imp) rel 4.411e-16; Y12 SG -8.96028e-04+8.68966e-04j bs -8.95858e-04+8.68967e-04j rel 1.366e-04; Y11 rel 3.864e-05
+    wire 0: |I_sg - I_bs|/|I_bs| 1.137e-04
+    wire 1: |I_sg - I_bs|/|I_bs| 1.125e-04
+    far field: |M| gap 7.294e-05  power gap 1.217e-04
+m=2: Z(Y)-Z(imp) rel 2.308e-16; Y12 SG -8.95223e-04+8.70101e-04j bs -8.95193e-04+8.70089e-04j rel 2.581e-05; Y11 rel 9.305e-07
+    wire 0: |I_sg - I_bs|/|I_bs| 1.730e-05
+    wire 1: |I_sg - I_bs|/|I_bs| 1.729e-05
+    far field: |M| gap 1.323e-05  power gap 2.300e-05
+m=4: Z(Y)-Z(imp) rel 7.539e-16; Y12 SG -8.94689e-04+8.70903e-04j bs -8.94685e-04+8.70899e-04j rel 5.059e-06; Y11 rel 8.375e-07
+    wire 0: |I_sg - I_bs|/|I_bs| 2.830e-06
+    wire 1: |I_sg - I_bs|/|I_bs| 2.858e-06
+    far field: |M| gap 2.349e-06  power gap 4.452e-06

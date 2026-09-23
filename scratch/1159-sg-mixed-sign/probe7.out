@@ -1,0 +1,3 @@
+m=1 {'Sinus-BSpli': '1.936e-03', 'Razor-BSpli': '7.403e-02', 'Sinus-Razor': '8.013e-02'}
+m=2 {'Sinus-BSpli': '1.945e-03', 'Razor-BSpli': '3.677e-02', 'Sinus-Razor': '3.971e-02'}
+m=4 {'Sinus-BSpli': '1.867e-03', 'Razor-BSpli': '2.189e-02', 'Sinus-Razor': '2.383e-02'}

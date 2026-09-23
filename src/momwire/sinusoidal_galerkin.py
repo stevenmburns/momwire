@@ -5151,7 +5151,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             sig * seg_view["AC"][s:e],
             seg_view["B"][s:e],
             sig * seg_view["C"][s:e],
-            _entry_k(seg_view, s, e, None),
+            _entry_k(seg_view, s, e, self.k),
             xi,
         )
         return complex((alpha[seg_view["jbasis"][s:e]] * f).sum())
