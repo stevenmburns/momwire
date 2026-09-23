@@ -1,0 +1,17 @@
+below x1  razor_2p   Z11   209.243  +45.255j nonrec 1.537e-04   1.05 s
+below x1  bspline_d2 Z11   215.234  +71.906j nonrec 6.081e-16   1.24 s
+below x2  razor_2p   Z11   207.188  +41.885j nonrec 4.125e-05   1.28 s
+below x2  bspline_d2 Z11   211.842  +56.143j nonrec 1.289e-15   0.03 s
+below x4  razor_2p   Z11   206.205  +39.881j nonrec 9.676e-06   0.04 s
+below x4  bspline_d2 Z11   209.243  +47.818j nonrec 5.542e-16   0.07 s
+below x8  razor_2p   Z11   205.608  +38.568j nonrec 2.234e-06   0.14 s
+below x8  bspline_d2 Z11   207.517  +43.167j nonrec 1.965e-15   0.20 s
+above x1  razor_2p   Z11    24.406 -854.987j nonrec 2.562e-04   0.35 s
+above x1  bspline_d2 Z11    25.146 -886.894j nonrec 1.392e-15   0.01 s
+above x2  razor_2p   Z11    24.388 -849.940j nonrec 6.750e-05   0.01 s
+above x2  bspline_d2 Z11    24.787 -867.680j nonrec 1.636e-15   0.01 s
+above x4  razor_2p   Z11    24.364 -846.839j nonrec 1.396e-05   0.01 s
+above x4  bspline_d2 Z11    24.595 -856.879j nonrec 2.865e-15   0.02 s
+above x8  razor_2p   Z11    24.344 -844.797j nonrec 2.386e-06   0.05 s
+above x8  bspline_d2 Z11    24.481 -850.678j nonrec 3.297e-15   0.08 s
+wrote /tmp/claude-1000/-home-smburns-antennas-antennaknobs/69130e8c-5288-4ea5-9d4c-46e12c729f9e/scratchpad/razor-buried/probe4_graded_family_reciprocity.json

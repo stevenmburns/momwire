@@ -1,0 +1,6 @@
+swept wholly-below max |swept - single| = 9.293e-13 ohm
+swept crossing     max |swept - single| = 4.329e-12 ohm
+far field buried_dipole            bspline_d2 peak -21.427 dBi at theta 0 deg; in-medium moment fraction 1.0
+far field buried_dipole            razor_2p   peak -21.457 dBi at theta 0 deg; in-medium moment fraction 1.0
+far field buried_radial_vertical   bspline_d2 peak  -2.896 dBi at theta 64 deg; in-medium moment fraction 0.37740185917278607
+far field buried_radial_vertical   razor_2p   peak  -3.220 dBi at theta 64 deg; in-medium moment fraction 0.3579779537163577

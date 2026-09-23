@@ -1,0 +1,13 @@
+x1  free  razor_2p   Z11    11.299 -999.524j Z22    0.461-4952.617j Z12   2.093+22.640j nonrec 5.444e-03   0.00 s
+x1  soilA razor_2p   Z11    25.099 -974.927j Z22  194.355 -159.716j Z12  -0.666 +2.508j nonrec 1.692e-02   0.79 s
+x1  soilA bspline_d2 Z11    26.799-1001.434j Z22  225.975 -177.195j Z12  -0.845 +3.021j nonrec 6.637e-16   7.97 s
+x2  free  razor_2p   Z11    11.248 -994.555j Z22    0.448-4854.577j Z12   2.061+22.293j nonrec 1.563e-03   0.00 s
+x2  soilA razor_2p   Z11    24.986 -970.062j Z22  190.702 -155.705j Z12  -0.645 +2.481j nonrec 4.176e-03   0.13 s
+x2  soilA bspline_d2 Z11    25.925 -984.781j Z22  207.205 -165.255j Z12  -0.740 +2.752j nonrec 2.328e-16   8.04 s
+x4  free  razor_2p   Z11    11.209 -991.584j Z22    0.440-4791.485j Z12   2.038+22.030j nonrec 3.997e-04   0.00 s
+x4  soilA razor_2p   Z11    24.898 -967.188j Z22  188.280 -153.657j Z12  -0.633 +2.457j nonrec 1.024e-03   0.39 s
+x4  soilA bspline_d2 Z11    25.441 -975.427j Z22  197.145 -158.872j Z12  -0.686 +2.610j nonrec 7.908e-16   8.48 s
+x8  free  razor_2p   Z11    11.180 -989.648j Z22    0.434-4749.256j Z12   2.023+21.843j nonrec 5.392e-05   0.02 s
+x8  soilA razor_2p   Z11    24.832 -965.326j Z22  186.640 -152.411j Z12  -0.624 +2.439j nonrec 2.255e-04   1.40 s
+x8  soilA bspline_d2 Z11    25.162 -969.980j Z22  191.620 -155.320j Z12  -0.657 +2.531j nonrec 2.407e-15   8.98 s
+wrote /tmp/claude-1000/-home-smburns-antennas-antennaknobs/69130e8c-5288-4ea5-9d4c-46e12c729f9e/scratchpad/razor-buried/probe5_detached_cross_blocks.json

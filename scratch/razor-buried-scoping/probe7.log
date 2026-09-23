@@ -1,0 +1,21 @@
+free_dipole: ref bspline d2 N=961 63.5960-63.7752j (last step 0.0425)
+  N=  15 razor-2p |dZ|  11.5477  bspline-d2 |dZ|   0.7362
+  N=  31 razor-2p |dZ|   4.7175  bspline-d2 |dZ|   0.4547
+  N=  61 razor-2p |dZ|   2.3802  bspline-d2 |dZ|   0.2869
+  N= 121 razor-2p |dZ|   1.3050  bspline-d2 |dZ|   0.1751
+  N= 241 razor-2p |dZ|   0.7467  bspline-d2 |dZ|   0.0981
+  N= 481 razor-2p |dZ|   0.4309  bspline-d2 |dZ|   0.0425
+somm_monopole: ref bspline d2 N=961 52.0887+22.9487j (last step 0.0182)
+  N=   9 razor-2p |dZ|   6.3315  bspline-d2 |dZ|   0.6673
+  N=  15 razor-2p |dZ|   3.5055  bspline-d2 |dZ|   0.4403
+  N=  31 razor-2p |dZ|   1.6768  bspline-d2 |dZ|   0.2461
+  N=  61 razor-2p |dZ|   0.9061  bspline-d2 |dZ|   0.1438
+  N= 121 razor-2p |dZ|   0.5062  bspline-d2 |dZ|   0.0821
+  N= 241 razor-2p |dZ|   0.2870  bspline-d2 |dZ|   0.0436
+wholly buried vertical, even N, feed on the centre knot
+  N=  10 razor 190.8133-156.7889j  bspline 204.0481-164.2871j  |dZ| 15.2113
+  N=  20 razor 188.4244-154.6495j  bspline 195.6968-158.8856j  |dZ| 8.4162
+  N=  40 razor 186.8025-153.3306j  bspline 191.0180-155.8170j  |dZ| 4.8941
+  N=  80 razor 185.6344-152.4261j  bspline 188.2229-153.9652j  |dZ| 3.0115
+  N= 160 razor 184.7064-151.7319j  bspline 186.4274-152.7660j  |dZ| 2.0078
+  N= 320 razor 183.8445-151.1078j  bspline 185.1508-151.9077j  |dZ| 1.5317

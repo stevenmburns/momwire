@@ -1,0 +1,6 @@
+N=1 bspline_d2 Z  170.607 +48.738j  eta 0.0723  eta*R  12.342
+N=1 razor_2p   Z  173.598 +46.299j  eta 0.0706  eta*R  12.259
+N=2 bspline_d2 Z  110.296 +48.883j  eta 0.1114  eta*R  12.288
+N=2 razor_2p   Z  114.123 +46.512j  eta 0.1069  eta*R  12.200
+N=4 bspline_d2 Z   78.132 +46.338j  eta 0.1580  eta*R  12.341
+N=4 razor_2p   Z   83.459 +44.134j  eta 0.1466  eta*R  12.237

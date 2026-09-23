@@ -1,0 +1,26 @@
+below N=   8 razor_2p   Z11   161.785  -99.032j nonrec 3.910e-16   0.44 s
+below N=   8 bspline_d2 Z11   183.917 -106.193j nonrec 5.782e-16   0.45 s
+below N=  16 razor_2p   Z11   159.323  -95.872j nonrec 3.885e-16   0.00 s
+below N=  16 bspline_d2 Z11   170.466  -99.887j nonrec 4.168e-16   0.49 s
+below N=  32 razor_2p   Z11   157.616  -94.445j nonrec 8.685e-16   0.00 s
+below N=  32 bspline_d2 Z11   163.648  -96.723j nonrec 3.438e-16   0.01 s
+below N=  64 razor_2p   Z11   156.446  -93.648j nonrec 8.655e-16   0.01 s
+below N=  64 bspline_d2 Z11   159.899  -94.977j nonrec 5.422e-16   0.03 s
+below N= 128 razor_2p   Z11   155.612  -93.135j nonrec 3.843e-16   0.52 s
+below N= 128 bspline_d2 Z11   157.696  -93.944j nonrec 8.569e-16   0.09 s
+above N=   8 razor_2p   Z11    10.817-3736.473j nonrec 4.044e-16   0.09 s
+above N=   8 bspline_d2 Z11    13.389-4247.417j nonrec 2.644e-16   0.00 s
+above N=  16 razor_2p   Z11    10.479-3668.532j nonrec 1.335e-16   0.00 s
+above N=  16 bspline_d2 Z11    11.821-3927.176j nonrec 2.633e-16   0.00 s
+above N=  32 razor_2p   Z11    10.300-3624.795j nonrec 2.649e-16   0.00 s
+above N=  32 bspline_d2 Z11    11.036-3765.097j nonrec 5.254e-16   0.00 s
+above N=  64 razor_2p   Z11    10.190-3595.717j nonrec 2.639e-16   0.00 s
+above N=  64 bspline_d2 Z11    10.613-3676.041j nonrec 1.838e-15   0.01 s
+above N= 128 razor_2p   Z11    10.114-3575.267j nonrec 1.843e-15   0.02 s
+above N= 128 bspline_d2 Z11    10.369-3623.739j nonrec 3.675e-15   0.03 s
+crossing feed@4.5 x1  N=  30 razor 183.8769-90.3087j bspline 176.2359-86.3781j  dR +7.641 dX -3.931
+crossing feed@4.5 x2  N=  56 razor 184.7502-87.3001j bspline 175.7269-86.5868j  dR +9.023 dX -0.713
+crossing feed@4.5 x4  N= 108 razor 184.9635-86.0146j bspline 175.4375-86.6829j  dR +9.526 dX +0.668
+crossing feed@4.5 x8  N= 212 razor 185.0082-85.3812j bspline 175.2681-86.7229j  dR +9.740 dX +1.342
+crossing feed@4.5 x16 N= 420 razor 185.0099-85.0347j bspline 175.1654-86.7343j  dR +9.845 dX +1.700
+wrote /tmp/claude-1000/-home-smburns-antennas-antennaknobs/69130e8c-5288-4ea5-9d4c-46e12c729f9e/scratchpad/razor-buried/probe3_family_reciprocity.json

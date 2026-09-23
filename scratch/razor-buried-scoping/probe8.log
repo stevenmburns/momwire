@@ -1,0 +1,5 @@
+x1  NEC-5 Z(feed@4.5)  174.1600 -92.3200j   2-port nonrec 3.413e-04
+x2  NEC-5 Z(feed@4.5)  174.8600 -89.5250j   2-port nonrec 1.067e-04
+x4  NEC-5 Z(feed@4.5)  175.0100 -88.2890j   2-port nonrec 4.754e-05
+x8  NEC-5 Z(feed@4.5)  175.0300 -87.6620j   2-port nonrec 3.718e-05
+x16 NEC-5 Z(feed@4.5)  175.0200 -87.3140j   2-port nonrec 3.531e-05
