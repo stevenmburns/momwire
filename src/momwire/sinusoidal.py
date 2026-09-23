@@ -4527,8 +4527,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return np.repeat(np.arange(firsts.shape[0]), lasts - firsts + 1)
 
     def _seg_radius(self, geom):
-        """(n_segs,) per-segment radius — each segment inherits its wire's."""
-        return self._radius_per_wire[self._wire_of_seg(geom)]
+        """(n_segs,) per-segment radius (`_wire_spec.seg_radius`), off this
+        geometry's `wire_first` / `wire_last` (it carries no `seg_offsets`)."""
+        firsts = np.asarray(geom["wire_first"], dtype=np.int64)
+        lasts = np.asarray(geom["wire_last"], dtype=np.int64)
+        return _wire_spec.seg_radius(self._radius_per_wire, lasts - firsts + 1)
 
     def _obs_window_kwargs(self, geom, obs_rows):
         """`obs_*` overrides that restrict `_field_components` to observer

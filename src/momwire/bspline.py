@@ -3187,12 +3187,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return Q_pe, Q_ep, Q_ee
 
     def _seg_radius(self, geom):
-        """(n_segs_total,) per-segment radius — each segment inherits its
-        wire's (stevenmburns/momwire#147). The kernel helpers collapse a
-        uniform array back to the scalar fast path, so passing this
-        everywhere keeps scalar-radius solves bit-identical."""
+        """(n_segs_total,) per-segment radius (`_wire_spec.seg_radius`)."""
         seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
-        return np.repeat(self._radius_per_wire, np.diff(seg_off))
+        return _wire_spec.seg_radius(self._radius_per_wire, np.diff(seg_off))
 
     def _ek_axis_labels(self, geom, mirror):
         """Cached coaxial-and-equal-radius labels for this geometry.
