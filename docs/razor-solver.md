@@ -765,3 +765,31 @@ tree-wide sentence (`buried+extended_kernel`). The serve-plan refusals a
 buried grid can hit (past the R₁ cap, below the θ floor) are asked over
 segment endpoints and centroids before any grid is filled, the same R₁ and θ
 `BSplineSolver._buried_serve_plan` asks over its nodes.
+
+## Detached decks (momwire#1149 U1)
+
+A deck with wires on BOTH sides of the interface and no junction in the
+plane — an elevated vertical over a buried radial screen — is served by the
+crossing assembly with **zero crossing tents**: each medium's fill on its own
+sub-geometry, plus `_crossing_fill`'s two cross blocks on razor's path axes
+(`corner=False`), nothing chopped. Loading goes on once afterwards, on the
+full geometry (with no tent spanning the plane every basis lives in one
+medium). Mixed wire radii on such a deck are refused by name
+(`per_wire_radius+detached`): the sub-geometry fill carries no per-wire table
+and the cross blocks take one radius.
+
+Measured 2026-09-22 (`tests/test_razor_detached_1149.py`,
+`scratch/razor-buried-u1/`), on the graded deck of `crossing_deck(1)` pulled
+0.3 m apart:
+
+| gate | result |
+|---|---|
+| 2-port non-reciprocity, x1 → x8 | 1.69e-2 → 4.18e-3 → 1.02e-3 → 2.26e-4 (≈4x per doubling) |
+| stand-off 0.3 → 0.01 m, dx 0.5 and 0 | decays 3.9–4.1x per doubling at every gap |
+| ε̃ = 1 collapse, per block | cross blocks 7e-14, same-medium 4e-19 |
+| vs bspline (transmitted grid), x1 → x8 | \|dZ12\| 0.543 → 0.098 Ω, ratio 0.53–0.61 per doubling |
+| loading shift vs bspline, x1 → x4 | 0.046 → 0.015 Ω |
+| licensed NEC-5, equal mesh (instrument) | Z11 ≤ 0.10 Ω, Z22 ≤ 0.023, Z12 ≤ 0.003 |
+
+A deck whose wires meet at a junction in the plane is the crossing class,
+and stays refused until momwire#1149 U2 derives the node.

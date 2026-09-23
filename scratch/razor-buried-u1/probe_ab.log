@@ -1,0 +1,12 @@
+(a) x1 nonrec 1.692e-02  0.67 s
+(a) x2 nonrec 4.176e-03  0.29 s
+(a) x4 nonrec 1.024e-03  0.58 s
+(a) x8 nonrec 2.255e-04  1.49 s
+    ratio x1->x2: 4.05
+    ratio x2->x4: 4.08
+    ratio x4->x8: 4.54
+(b) x1 nec5=True eps~=1 vs free: 2.945e-17
+(b) x1 nec5=False eps~=1 vs free: 3.087e-17
+(b) x2 nec5=True eps~=1 vs free: 3.441e-17
+(b) x2 nec5=False eps~=1 vs free: 3.367e-17
+wrote /tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-buried/scratch/razor-buried-u1/probe_u1_gates.json
