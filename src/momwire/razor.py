@@ -1575,8 +1575,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # The buried readings, AFTER the radius normalisation: the crossing
         # arm's scope check (`_crossing_junctions`) reads `_radius_per_wire`,
-        # because ONE wire radius across the deck is part of the crossing
-        # serve's validated scope (momwire#524 phase 2). They still need the
+        # because the radii are part of the crossing serve's validated scope
+        # (one per side of the interface, and one node when there are two;
+        # momwire#524 phase 2, antennaknobs plan U5, momwire#1149 U2b). They still need the
         # ground attributes set above, which bare `__new__` probes of the
         # scan itself never set.
         self._refuse_buried_geometry()
@@ -1838,10 +1839,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """Indices of the DETECTED junctions that cross the interface, after
         the crossing serve's scope check — `_below_interface.crossing_junctions`,
         the same function bspline's declared groups go through (momwire#524
-        phase 2, shared since #980). Reading it does NOT mean razor can fill
-        such a deck: the constructor refuses a mixed above/below deck by name;
-        this is the LABEL the refusal, the scope audit and antennaknobs#1103
-        all need."""
+        phase 2, shared since #980). It is the LABEL the route, the scope
+        audit and antennaknobs#1103 all read.
+
+        Razor opts into the TWO-RADIUS node as bspline does (momwire#1149
+        U2b; bspline since antennaknobs plan U5): every buried wire at one
+        radius and the node's above member at another is served, and the
+        shared scope keeps refusing, with bspline's sentences, a spread among
+        the buried wires and a two-radius deck with several nodes. Razor's
+        fill needs no side table for it: every cross block and the node term
+        take their SOURCE wire's radius (`_assemble_Z_crossing`,
+        `_crossing_node_charges`), the convention its reduced kernel takes
+        everywhere."""
         media = self._wire_media()
         groups = self._find_junctions()
         return _below_interface.crossing_junctions(
@@ -1851,6 +1860,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.wires_polylines,
             self.ground_z,
             self._radius_per_wire,
+            two_radius=True,
         )
 
     def _refuse_buried_geometry(self):
@@ -4078,6 +4088,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         to the cross blocks): the two conventions differ by terms that cancel
         exactly between a family and its cross block, and this is their sum.
 
+        **The radius** (momwire#1149 U2b). What the term removes, the
+        remainder's own node-charge potential, carries no wire radius: the
+        remainders are radius-free (`Remainder.field_windows` reads none).
+        ``fam`` and ``c1·V`` each diverge as 1/R at the node, with the same
+        coefficient (``1 − C₂ = (1 − A_m)/ε̃ = 2/(ε̃ + 1)``), so their
+        difference is finite there and the radius in R only regularises
+        the evaluation of each at the one endpoint that sits AT the node.
+        It is therefore not a choice to fit, and the one this uses is the
+        source rule every other razor term follows: each half tent's charge
+        at its OWN wire's radius — the above rows see the above half's
+        charge at the above wing's radius, the below rows the below half's
+        at the below wing's. Measured on the two-radius rod at x4
+        (`scratch/razor-buried-u2b/`, probe 2c): every node radius at the
+        other side's value moves Z by at most 1.1e-3 ohm, every radius /10
+        or /100 by at most 1.4e-3 ohm (the /10 -> /100 step by 1.3e-4, i.e.
+        the a -> 0 limit is reached at O(a)). On a one-radius deck it is
+        the deck's radius, as before.
+
         At ε̃ = 1, ``c1·V ≡ g/jωε₀`` and C₂ = A_m = 0, so the term is
         identically zero and the collapse to free space is untouched.
         Measured on `crossing_deck(1)`'s two-port (`scratch/razor-buried-u2/`):
@@ -4085,13 +4113,22 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         eps_t, eps_m, k_p, k_m, c2, a_m = ctx.medium
         c1 = _sommerfeld_below._c1_moment(omega, self.mu)
-        a = float(ctx.a_wire)
         gz = float(ctx.ground_z)
         n = geom["n_basis_total"]
         cols = np.array([m for m, _ in tents], dtype=np.int64)
         jb = np.array([j for _, j in tents], dtype=np.int64)
         ja = 1 - jb
         wr, wg = geom["wing_rise"], geom["wing_sigma"]
+        # Each half tent's charge at its OWN wire's radius (momwire#1149
+        # U2b): the source rule, per crossing tent. The above rows see the
+        # above half's charge (its live wing is on an above wire), the below
+        # rows the below half's. See the docstring for why this is a
+        # regulariser of a radius-free quantity rather than a fitted choice.
+        seg_a = self._seg_radius(geom)
+        a_half = {
+            True: seg_a[geom["wing_seg"][cols, ja]],
+            False: seg_a[geom["wing_seg"][cols, jb]],
+        }
         # The above half's node proxy, minus its live wing's integrated
         # doublet: -sigma where the wing rises into the knot, +sigma where
         # it falls away from it. The below half's is its negative.
@@ -4114,7 +4151,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             row = np.array([int(np.flatnonzero(e[2])[0]) for e in ends])
             d = pts[:, None, :] - nodes[None, :, :]  # (E, T, 3)
             rho = np.hypot(d[..., 0], d[..., 1])
-            R = np.sqrt(np.einsum("etk,etk->et", d, d) + a * a)
+            a = a_half[above]
+            R = np.sqrt(np.einsum("etk,etk->et", d, d) + (a * a)[None, :])
             side = "above" if above else "below"
             zt = _crossing_fill._on_plane_side(pts[:, 2] - gz, side, "T2 endpoint")
             zt = np.broadcast_to(zt[:, None], rho.shape)
@@ -4127,16 +4165,21 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 fam = (1.0 - a_m) * np.exp(-1j * k_m * R) / (4.0 * np.pi * R)
                 fam = fam / (1j * omega * eps_m)
                 z_slot, zp_slot, q = zn, zt, q_b
-            V = _crossing_fill._tables(
-                ctx,
-                eps_t,
-                k_p,
-                rho,
-                z_slot,
-                zp_slot,
-                _crossing_fill._CROSS_RTOL,
-                memo=memo,
-            )["V"]
+            V = np.empty(rho.shape, dtype=np.complex128)
+            for r in np.unique(a):
+                # One table call per radius (the tables fold ONE radius into
+                # rho); a one-radius deck is one call, as before.
+                t = np.flatnonzero(a == r)
+                V[:, t] = _crossing_fill._tables(
+                    ctx._replace(a_wire=float(r)),
+                    eps_t,
+                    k_p,
+                    rho[:, t],
+                    z_slot[:, t],
+                    zp_slot[:, t],
+                    _crossing_fill._CROSS_RTOL,
+                    memo=memo,
+                )["V"]
             np.add.at(out, row, -sgn[:, None] * q[None, :] * (fam - c1 * V))
         return out
 

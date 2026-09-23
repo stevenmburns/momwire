@@ -114,10 +114,10 @@ def test_g980c_2_both_trunks_route_through_the_shared_scope_check(monkeypatch):
     assert len(seen) == 2, seen
     assert seen[0][0] == seen[1][0], "media labels differ between trunks"
     assert seen[0][2] == seen[1][2], "grounded sets differ between trunks"
-    # antennaknobs plan U5: only BSpline opts into the two-radius node; razor's
-    # crossing fill was not measured under the rule and keeps the refusal.
+    # Both trunks opt into the two-radius node: BSpline since antennaknobs
+    # plan U5, razor since momwire#1149 U2b (`test_razor_two_radius_1149.py`).
     assert seen[0][3] is True, seen
-    assert seen[1][3] is None, seen
+    assert seen[1][3] is True, seen
 
 
 def test_g980c_2b_the_scope_refusals_are_the_shared_functions(monkeypatch):

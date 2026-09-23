@@ -857,3 +857,41 @@ discretisation error fixed too, and its non-reciprocity floors near 7e-6 for
 that reason alone (probes 3–8 rule out the grids, the quadrature and the
 radius). Loading on a crossing deck stays a declared refusal until U3
 (`wire_loading+crossing_junction`).
+
+### Two-radius crossings (momwire#1149 U2b)
+
+A crossing whose buried wires share one radius and whose node member above
+has another — a ground rod under a mast, bspline's two-radius node since
+antennaknobs plan U5 — is served, and so is momwire#1140's spread among the
+OTHER above wires. Razor passes `two_radius=True` to the shared scope, so it
+refuses exactly what bspline refuses, with bspline's sentences: a spread
+among the buried wires, and a two-radius deck with more than one crossing
+node.
+
+The fill needs no side table: every term takes its SOURCE wire's radius, the
+convention razor's reduced kernel takes everywhere. The forward cross block
+(above rows, buried sources) is filled at the buried radius, the reversed one
+at the above side's (partitioned by radius when the above side carries
+several), and the node term takes each half tent's charge at its own wire's
+radius. That last choice is not a fitted one: the node term removes the
+remainder's node-charge potential, which carries no radius (the remainders
+read none), and `fam` and `c1·V` share their 1/R coefficient at the node, so
+the radius only regularises the one endpoint AT the node. Measured, moving
+every node radius to the other side's value moves Z by ≤ 1.1e-3 Ω, and a → a/100
+by ≤ 1.4e-3 Ω. bspline spells its rule differently (line tests at the
+observer's radius, every point test at the node at the buried one, and a KCL
+multiplier for continuity); razor's source rule gives the node one potential
+as a function of position and its tents carry continuity, so the jump
+bspline's rule exists to avoid does not arise. The soil radius response is
+what holds the two together, and the ε̃ = 1 collapse cannot see it.
+
+Measured 2026-09-22 (`tests/test_razor_two_radius_1149.py`,
+`scratch/razor-buried-u2b/`), on the U5 rod (`crossing_deck(2)`, radii about
+0.25 mm, fed on a knot at every rung):
+
+| gate | result |
+|---|---|
+| ε̃ = 1 collapse, whole matrix, rise/2 and top/4 | 1.8e-12 / 1.7e-12 (observer, min, max, wire-0 rules: 4.3e-2 / 7.3e-2) |
+| 2-port non-reciprocity, x1 → x8 | 4.1–4.25x per doubling (observer rule: flat at 8.3e-2 / 1.4e-1) |
+| R(mixed) − R(equal), razor − bspline, x1 → x8 | rise/2 −0.19 → −0.020, rise/4 −0.39 → −0.039, top/2 +0.10 → +0.021, top/4 +0.19 → +0.038 Ω, halving per doubling, on responses of 8.0 / 15.9 / 0.62 / 1.13 Ω (observer rule: 8–16 Ω off) |
+| driving point vs bspline, x1 → x8 | 6.85 → 0.81 (rise/2), 6.55 → 0.73 (top/4), 7.19 → 1.20 Ω (#1140 deck) |
