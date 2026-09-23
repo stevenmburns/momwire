@@ -295,13 +295,17 @@ def test_a_plane_touching_end_that_is_not_a_crossing_member_still_refuses(
         RazorSolver(**deck, n_qp_path=8).compute_impedance()
 
 
-def test_loading_on_a_crossing_deck_is_refused(serve_crossing):
-    deck = _at_eps1(_decks("crossing"))
-    deck["lumped_loads"] = [(1, 1.0, 50 + 0j)]
-    with pytest.raises(NotImplementedError, match="loading on a crossing deck") as exc:
-        RazorSolver(**deck, n_qp_path=8).compute_impedance()
-    # The declared cell (momwire#1149 U0), raised verbatim: the row says
-    # `wire_loading=True`, so without it the refusal was undeclared.
-    declared = RazorSolver.capabilities.refusal("wire_loading", "crossing_junction")
-    assert declared is _razor._CROSSING_LOADING_REFUSAL
-    assert str(exc.value) == declared
+def test_loading_on_a_crossing_deck_is_the_free_space_term_at_eps1(serve_crossing):
+    """Served since momwire#1149 U3 (it was a declared refusal from U0). At
+    eps~ = 1 the loaded crossing fill moves by exactly what the loaded
+    free-space fill moves by: the loading is the full-geometry stencil on
+    either route, and the plane changes nothing about it."""
+    load = dict(lumped_loads=[(1, 1.0, 50 + 0j)], wire_conductivity=3.5e7)
+    shifts = []
+    for deck in (_at_eps1(_decks("crossing")), _free_space(_decks("crossing"))):
+        s0 = RazorSolver(**deck, n_qp_path=8)
+        sl = RazorSolver(**deck, **load, n_qp_path=8)
+        g = sl._build_geometry()
+        shifts.append(sl._assemble_Z(g, sl.k) - s0._assemble_Z(g, s0.k))
+    assert np.max(np.abs(shifts[0] - shifts[1])) <= 1e-9 * np.max(np.abs(shifts[1]))
+    assert RazorSolver.capabilities.refusal("wire_loading", "crossing_junction") is None
