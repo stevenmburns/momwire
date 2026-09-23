@@ -1078,7 +1078,7 @@ def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None):
 
 
 def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
-    """The M + SW + SQ sandwich over (above axis A × below axis B), dense.
+    """The M + SW + SQ sandwich over (above axis A × below axis B), whole-axis.
 
     Split out of `cross_complete_block` so the REVERSED block (momwire#813)
     can share it: the designed tables accept only z ≥ 0 ≥ z′, so the above
@@ -1086,6 +1086,17 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     sandwich is this same product transposed — measured exact to 3e-16 at
     ε̃ = 1 and at soil A, which is what says no kernel swap is needed here
     (`scratch/813-reversed-block/probe4_localise.py`).
+
+    The contraction is `_sandwich_dense`'s — the split route's near-block
+    product, here over every node of both axes — so the two trunks share ONE
+    spelling of the five terms. This used to densify the four weight matrices
+    to (n_basis, n_nodes) and run six full GEMMs: O(n_basis · n_nodes²) and
+    mostly zeros, since a path-tested axis carries one nonzero per node and an
+    identically-zero `Fd` (two of the six products were all zeros). At razor's
+    hub_deck(16) x8 (N = 1402) that was 15 s of GEMM and a 346 MB complex
+    temporary per product, for 38 s and 2.6 GB of fill. The sparse form
+    visits only the stored weights; see `_sandwich_dense` for why the restricted
+    product is the same entries.
     """
     k2sq = k_p * k_p
     dx = A["nodes"][:, 0][:, None] - B["nodes"][:, 0][None, :]
@@ -1094,23 +1105,6 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     z = np.broadcast_to((A["nodes"][:, 2] - gz)[:, None], rho.shape)
     zp = np.broadcast_to((B["nodes"][:, 2] - gz)[None, :], rho.shape)
     tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
-    U, V, W, dzpW = tables["U"], tables["V"], tables["W"], tables["dzpW"]
-
-    wA, wB = A["w"], B["w"]
-    txA, tyA, tzA = A["t"].T
-    txB, tyB, tzB = B["t"].T
-    # DENSIFIED HERE, deliberately (momwire#1109). This is the whole-axis
-    # product — every row against every node — so the six GEMMs below want
-    # dense operands, and the decks that reach it (razor, and the
-    # MOMWIRE_CROSSING_FORCE_DENSE bisect switch) are the small ones. The
-    # split entry point never comes through here, so keeping today's bytes on
-    # this path costs the screen nothing.
-    FA, FB = A["F_csr"].toarray(), B["F_csr"].toarray()
-    FdA, FdB = A["Fd_csr"].toarray(), B["Fd_csr"].toarray()
-    FA_w, FB_w = FA * wA, FB * wB
-    FdA_w, FdB_w = FdA * wA, FdB * wB
-
-    s_u = (FA_w * txA) @ U @ (FB_w * txB).T + (FA_w * tyA) @ U @ (FB_w * tyB).T
     # momwire#956 — the exact spelling of the transmitted dyad tested along a
     # wire of ANY orientation (antennaknobs scratch/956-derivation):
     #   E^V  = c1 [ k²V ẑ − ∇W + ∇(−∂z′V) ]      E^Hx = c1 [ U x̂ + ∂xW ẑ + ∇(∂xV) ]
@@ -1120,11 +1114,12 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     # by-parts leave. The former k²V − ∂zW was the by-parted form of the
     # test-side W term on a VERTICAL test, so s_w2 counted it twice there
     # (the +2 Ω rise residual of #956) and it was wrong on a leaning member.
-    s_zz = (FA_w * tzA) @ (k2sq * V + dzpW) @ (FB_w * tzB).T
-    s_w1 = (FA_w * tzA) @ W @ FdB_w.T
-    s_w2 = FdA_w @ W @ (FB_w * tzB).T
-    s_phi = -FdA_w @ V @ FdB_w.T
-    return c1 * (s_u + s_zz + s_w1 + s_w2 + s_phi)
+    # `_sandwich_dense` carries those five terms in this order.
+    iA = np.arange(A["nodes"].shape[0])
+    iB = np.arange(B["nodes"].shape[0])
+    t = _sandwich_dense(A, B, iA, iB, tables, k2sq)
+    t *= c1
+    return t
 
 
 def cross_complete_block(ctx, A, B, *, corner=True):
