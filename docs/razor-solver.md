@@ -755,12 +755,13 @@ Measured 2026-09-02 on the phase-0 buried dipole (`tests/test_razor_below_plane_
 | fused vs numpy at complex k, both lanes | 4e-16 / 5e-15 |
 | above-plane decks (#762 protocol) | bit-identical |
 
-**It is behind the public refusal.** `_SERVE_BELOW_PLANE` is off by default
-and razor's `buried` capability cell stays False until unit 3 (momwire#814)
-flips it; a mixed above/below deck is refused by name as unit 2's
-(momwire#813, the crossing block and the node row on razor rows, which the
-test-side probe on momwire#651 designed); the extended kernel is declined
-below the plane. The serve-plan refusals a buried grid can hit (past the R₁
-cap, below the θ floor) are asked over segment endpoints and centroids before
-any grid is filled, the same R₁ and θ `BSplineSolver._buried_serve_plan` asks
-over its nodes.
+**It is served since momwire#1149 U0.** `_SERVE_BELOW_PLANE` is on and owns
+razor's `buried` capability cell (it was off, behind the shelving of
+2026-09-03, until the 2026-09-22 re-measurement). A deck with a crossing
+junction is refused by name until momwire#1149 U2 (`_SERVE_CROSSING`, which
+owns `buried+crossing_junction`); a detached above/below deck takes its own
+route (below). The extended kernel is declined below the plane with the
+tree-wide sentence (`buried+extended_kernel`). The serve-plan refusals a
+buried grid can hit (past the R₁ cap, below the θ floor) are asked over
+segment endpoints and centroids before any grid is filled, the same R₁ and θ
+`BSplineSolver._buried_serve_plan` asks over its nodes.

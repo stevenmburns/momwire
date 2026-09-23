@@ -189,10 +189,13 @@ def test_the_accelerated_assemblies_really_refuse_buried(cls, value):
     assert c.reason in str(exc.value)
 
 
-def test_the_extended_kernel_really_refuses_buried():
-    c = _find_for(BSplineSolver, "kernel", "extended", "wire_position", "buried")
+@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver])
+def test_the_extended_kernel_really_refuses_buried(cls):
+    """RazorSolver joined the row with momwire#1149 U0, when its `buried` cell
+    turned True: before that the combination was unreachable on razor."""
+    c = _find_for(cls, "kernel", "extended", "wire_position", "buried")
     with pytest.raises((NotImplementedError, ValueError)) as exc:
-        BSplineSolver(**_buried_kw(), extended_kernel=True).compute_impedance()
+        cls(**_buried_kw(), extended_kernel=True).compute_impedance()
     assert c.reason in str(exc.value)
 
 

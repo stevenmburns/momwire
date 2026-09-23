@@ -1,19 +1,25 @@
-"""momwire#814 prep — everything that makes the eventual flip one line.
+"""momwire#814 prep, restaged by momwire#1149 — two constants, two cells.
 
-Unit 3 turns razor's `buried` capability cell True. Three things have to move
-together for that to be honest: the wholly-below family (momwire#812), the
-crossing family (momwire#813), and the declared row consumers read. While they
-were three independent `False`s the flip was three edits that could land
-half-done, and one half-done state is worse than either end of it — a deck
-SERVED by the fill while the row still declares a refusal is refused by every
-consumer and answered by the solver at the same time.
+razor's buried fill has two halves: the wholly-below family (momwire#812),
+which since momwire#1149 U1 also carries the DETACHED deck, and the crossing
+family (momwire#813). They used to move together under one name,
+`_SERVE_BURIED`, so the flip could not land half-done. The 2026-09-22
+re-measurement split the verdict — everything but the crossing node is
+twin-grade and reciprocity-decaying, the node is not — so the serve is
+staged as SinusoidalGalerkinSolver's was (momwire#980 D1/D2 before D3):
 
-They are derived from one name now, `_SERVE_BURIED`. This file holds the
-derivation and the promises the flip must keep, so that flipping that one line
-is the whole flip.
+* `_SERVE_BELOW_PLANE` (True since U0) owns the `buried` cell;
+* `_SERVE_CROSSING` (False until U2) owns `buried+crossing_junction`.
 
-**Nothing here flips it.** The gates that need the fill running monkeypatch
-the family flags by name, exactly as momwire#812's and #813's own gates do.
+The half-done state the single name prevented is still the thing to prevent,
+now per pair: a deck SERVED by the fill while the row still declares a
+refusal is refused by every consumer and answered by the solver at the same
+time. So each constant is held equal to exactly one declared cell here, and
+the crossing flag may never be on with the below flag off (the crossing
+assembly fills its below half through the below family).
+
+The gates that need the crossing fill running monkeypatch the family flag by
+name, exactly as momwire#813's own gates do.
 """
 
 from __future__ import annotations
@@ -25,62 +31,105 @@ import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
+from momwire import _below_interface  # noqa: E402
 from momwire import _medium_spec  # noqa: E402
 from momwire import razor as _razor  # noqa: E402
 from momwire.bspline import BSplineSolver  # noqa: E402
 from momwire.razor import RazorSolver  # noqa: E402
 from test_crossing_serve_524 import crossing_deck, hub_deck  # noqa: E402
 
-# The cells that are TRUE refusals and outlive the flip. A PEC or refl-coef
-# ground has no lower medium whatever razor can fill; a mid-span crossing is
-# still momwire's guess where the model must speak; contact+buried is
-# momwire#567's measured scope decision, and it binds both trunks.
-_SURVIVES_THE_FLIP = (
+# The cells that are TRUE refusals and outlive the whole arc. A PEC or
+# refl-coef ground has no lower medium whatever razor can fill; a mid-span
+# crossing is still momwire's guess where the model must speak;
+# contact+buried is momwire#567's measured scope decision, and it binds both
+# trunks; EK below the plane is refused tree-wide.
+_SURVIVES_THE_ARC = (
     "buried+pec",
     "buried+refl-coef",
     "buried+crossing",
     "buried+contact",
+    "buried+extended_kernel",
 )
 
-# The two the flip retires. Both say "not served YET" and nothing else.
-_RETIRED_BY_THE_FLIP = ("buried", "buried+crossing_junction")
+# Which constant owns which "not served YET" cell.
+_OWNED = {
+    "buried": "_SERVE_BELOW_PLANE",
+    "buried+crossing_junction": "_SERVE_CROSSING",
+}
 
 
 # ---------------------------------------------------------------------------
-# (1) the derivation — one constant, three consequences
+# (1) two constants, each owning one cell
 # ---------------------------------------------------------------------------
 
 
-def test_the_two_family_flags_are_the_one_constant():
-    assert _razor._SERVE_BELOW_PLANE is _razor._SERVE_BURIED
-    assert _razor._SERVE_CROSSING is _razor._SERVE_BURIED
+def test_the_single_constant_is_gone_and_the_two_are_their_own():
+    """`_SERVE_BURIED` derived both flags; a leftover copy would be a third
+    name a flip could forget. The staged state is pinned too, so moving
+    either flag is a deliberate edit to this line as well."""
+    assert not hasattr(_razor, "_SERVE_BURIED")
+    assert (_razor._SERVE_BELOW_PLANE, _razor._SERVE_CROSSING) == (True, False)
 
 
-def test_the_declared_cell_is_the_one_constant():
+def test_the_crossing_flag_never_runs_ahead_of_the_below_flag():
+    """`_assemble_Z_crossing` fills its below half through the below family,
+    so a crossing serve without it is not a state the code can be in."""
+    assert _razor._SERVE_BELOW_PLANE or not _razor._SERVE_CROSSING
+
+
+def test_the_declared_buried_cell_is_the_below_constant():
     """The half-done state this exists to prevent: the fill serving a deck the
     row still refuses. Consumers read the row."""
-    assert RazorSolver.capabilities.buried is _razor._SERVE_BURIED
+    assert RazorSolver.capabilities.buried is _razor._SERVE_BELOW_PLANE
 
 
-def test_the_flip_retires_exactly_two_cells():
+@pytest.mark.parametrize("cell", sorted(_OWNED))
+def test_each_not_yet_cell_is_declared_exactly_while_its_constant_is_off(cell):
+    served = getattr(_razor, _OWNED[cell])
+    assert (cell in RazorSolver.capabilities.refusals) is not served, (
+        f"{cell} must be declared exactly while {_OWNED[cell]} is False"
+    )
+
+
+def test_the_surviving_cells_are_declared_on_either_side_of_the_flip():
     refusals = RazorSolver.capabilities.refusals
-    for cell in _SURVIVES_THE_FLIP:
-        assert refusals.get(cell), f"{cell} must be declared on either side of the flip"
-    for cell in _RETIRED_BY_THE_FLIP:
-        assert (cell in refusals) is not _razor._SERVE_BURIED, (
-            f"{cell} is declared exactly while the buried cell is False"
-        )
+    for cell in _SURVIVES_THE_ARC:
+        assert refusals.get(cell), f"{cell} must be declared on either side"
 
 
 def test_the_surviving_cells_are_the_shared_sentences():
-    """They survive because they are not razor's gap: three come from
-    `_medium_spec` and bind both trunks, so a flip that deleted them would be
-    claiming razor serves what momwire refuses everywhere."""
+    """They survive because they are not razor's gap: they come from
+    `_medium_spec` / `_below_interface` and bind both trunks, so a flip that
+    deleted them would be claiming razor serves what momwire refuses
+    everywhere."""
     refusals = RazorSolver.capabilities.refusals
     assert refusals["buried+pec"] == _medium_spec.BURIED_PEC_REFUSAL
     assert refusals["buried+refl-coef"] == _medium_spec.BURIED_REFL_REFUSAL
     assert refusals["buried+crossing"] == _medium_spec.CROSSING_REFUSAL
     assert refusals["buried+contact"] == _medium_spec.CONTACT_WITH_BURIED_REFUSAL
+    assert (
+        refusals["buried+extended_kernel"]
+        is _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
+    )
+    assert (
+        refusals["buried+extended_kernel"]
+        is (BSplineSolver.capabilities.refusals["buried+extended_kernel"])
+    )
+
+
+def test_the_units_own_scope_cells_are_declared():
+    """What momwire#1149 U0/U1 serve around, declared rather than raised bare:
+    loading on a crossing deck (U3 derives it) and mixed radii on a detached
+    deck (U1's scope)."""
+    caps = RazorSolver.capabilities
+    assert (
+        caps.refusal("wire_loading", "crossing_junction")
+        is _razor._CROSSING_LOADING_REFUSAL
+    )
+    assert (
+        caps.refusal("per_wire_radius", "detached")
+        is _razor._DETACHED_MIXED_RADIUS_REFUSAL
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -88,7 +137,7 @@ def test_the_surviving_cells_are_the_shared_sentences():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(_razor._SERVE_BURIED, reason="these are the pre-flip sentences")
+@pytest.mark.skipif(_razor._SERVE_CROSSING, reason="these are the pre-U2 sentences")
 @pytest.mark.parametrize(
     "cell, build",
     [
@@ -106,7 +155,7 @@ def test_a_buried_deck_raises_the_sentence_its_cell_declares(cell, build):
 
 
 # ---------------------------------------------------------------------------
-# (3) the flipped arm, exercised today: razor's labels ARE bspline's
+# (3) the crossing arm, exercised today: razor's labels ARE bspline's
 # ---------------------------------------------------------------------------
 
 

@@ -131,8 +131,8 @@ def test_a_split_crossing_deck_is_not_told_to_split():
     msg = str(exc.value)
     assert "split the wire AT the interface" not in msg
     assert "crosses the ground interface mid-span" not in msg
-    # ... and it names the arc that will serve it.
-    assert "momwire#813" in msg
+    # ... and it names the unit that will serve it.
+    assert "momwire#1149 U2" in msg
 
 
 def test_a_wholly_below_deck_has_no_crossing_junction(monkeypatch):

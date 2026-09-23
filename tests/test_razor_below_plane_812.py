@@ -9,10 +9,12 @@ one ground object (`_potential_ground.BelowMediumGround`, whose `remainder()`
 is `RemainderBelow`) and one assembly method that calls
 `_assemble_Z_source_block` twice with `eps` and the ground swapped.
 
-It lands BEHIND the public refusal: razor's `buried` capability cell stays
-False until unit 3 (momwire#814) flips it, and every test here reaches the
-fill through the module switch `_SERVE_BELOW_PLANE`. Mixed above/below decks
-are unit 2's (momwire#813).
+It landed behind the public refusal and is SERVED since momwire#1149 U0:
+razor's `buried` cell is True and owned by the module switch
+`_SERVE_BELOW_PLANE`, which the tests here still set by name so they do not
+depend on the default. A detached above/below deck is momwire#1149 U1's
+(`test_razor_detached_1149.py`); a crossing deck is momwire#813's and stays
+refused by name until U2.
 
 What this module gates, measured 2026-09-02 on this box:
 
@@ -47,6 +49,7 @@ import numpy as np
 import pytest
 
 from momwire import BSplineSolver, RazorSolver, _potential_ground, _sommerfeld_below
+from momwire import _below_interface
 from momwire import razor as _razor
 
 C0 = 299792458.0
@@ -92,15 +95,21 @@ def _zin(cls, **kw):
 # ----------------------------------------------------------------------
 
 
-def test_the_public_refusal_is_unchanged():
-    """Off by default: the capability cell is still False (unit 3 flips it),
-    and the sentence is the one the matrix carries."""
-    with pytest.raises(ValueError, match="wholly below the ground plane"):
+def test_the_refusal_follows_the_switch(monkeypatch):
+    """Served by default since momwire#1149 U0; with the switch off, the
+    sentence is the one the (then False) cell carries."""
+    assert _razor._SERVE_BELOW_PLANE is True
+    assert RazorSolver(**deck(11))._below_plane
+    monkeypatch.setattr(_razor, "_SERVE_BELOW_PLANE", False)
+    with pytest.raises(ValueError, match="wholly below the ground plane") as exc:
         RazorSolver(**deck(11))
+    assert str(exc.value).endswith(_razor._BURIED_FILL_REFUSAL)
 
 
 def test_a_mixed_deck_with_no_crossing_junction_is_neither_unit(serve_below):
-    """An above wire beside a below one, DETACHED, is refused by name.
+    """An above wire beside a below one, DETACHED, is neither #812's nor
+    #813's: since momwire#1149 U1 it takes its own route (it used to be
+    refused by name, with the history below).
 
     This test used to expect momwire#813's sentence, on the reading that any
     mixed deck is the crossing block's. momwire#813 unit 2 had to separate
@@ -116,8 +125,8 @@ def test_a_mixed_deck_with_no_crossing_junction_is_neither_unit(serve_below):
     kw = deck(11)
     kw["wires"] = [kw["wires"][0], np.array([(0.0, 0.0, 0.5), (0.0, 0.0, 1.5)])]
     kw["n_per_edge_per_wire"] = [[11], [11]]
-    with pytest.raises(ValueError, match="no junction crossing the interface"):
-        RazorSolver(**kw)
+    s = RazorSolver(**kw)
+    assert s._detached and not s._below_plane and not s._crossing
 
 
 def test_a_crossing_deck_names_the_crossing_unit(serve_below):
@@ -137,13 +146,19 @@ def test_a_crossing_deck_names_the_crossing_unit(serve_below):
     from test_crossing_serve_524 import crossing_deck
 
     kw = {k: v for k, v in crossing_deck(1).items() if k != "junctions"}
-    with pytest.raises(ValueError, match="momwire#813"):
+    with pytest.raises(ValueError, match="momwire#1149 U2") as exc:
         RazorSolver(**kw)
+    assert str(exc.value).endswith(_razor._CROSSING_NOT_SERVED_REFUSAL)
 
 
 def test_the_extended_kernel_is_declined_below_the_plane(serve_below):
-    with pytest.raises(ValueError, match="extended kernel"):
+    """With the tree-wide sentence, which razor's row declares as
+    `buried+extended_kernel` since momwire#1149 U0."""
+    with pytest.raises(NotImplementedError, match="extended kernel") as exc:
         RazorSolver(**deck(11), extended_kernel=True)
+    declared = RazorSolver.capabilities.refusal("buried", "extended_kernel")
+    assert declared is _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
+    assert str(exc.value).endswith(declared)
 
 
 # ----------------------------------------------------------------------
