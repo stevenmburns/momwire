@@ -3257,6 +3257,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "vals": vals,
         }
 
+    def _load_in_place(self, Z, prepared, geom, omega):
+        """Add the wire loading and its charge term to `Z` in place, from the
+        prepared stencils, when the deck carries any — the one spelling of the
+        three `_assemble_Z_from_prepared` exits (free space / folding ground,
+        the crossing deck, the all-below deck). Always LAST and outside any
+        fold: the term is the conductor's own, with no image and no weight."""
+        if prepared["loading"] is None:
+            return
+        spec = _wire_loading.loading_for(self, omega, geom)
+        self._apply_loading(Z, prepared["loading"], spec)
+        self._apply_charge(Z, prepared["charge"], spec)
+
     @staticmethod
     def _apply_loading(Z, stencil, spec):
         """`Z += L` in place: the loading term at one ω (`_loading_stencil`).
@@ -3790,10 +3802,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # stencils sum to the whole tent's (`_loading_stencil`, "The
             # crossing tent").
             Z = self._assemble_Z_crossing(geom, k, omega, detached=detached)
-            if prepared["loading"] is not None:
-                spec = _wire_loading.loading_for(self, omega, geom)
-                self._apply_loading(Z, prepared["loading"], spec)
-                self._apply_charge(Z, prepared["charge"], spec)
+            self._load_in_place(Z, prepared, geom, omega)
             return Z
         if getattr(self, "_below_plane", False):
             return self._assemble_Z_below_plane(geom, prepared, k, omega)
@@ -3817,10 +3826,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # per metre of the wire itself. That is also why it needs no branch
         # per ground: this one line serves free space, both folding grounds
         # and the composing one.
-        if prepared["loading"] is not None:
-            spec = _wire_loading.loading_for(self, omega, geom)
-            self._apply_loading(Z, prepared["loading"], spec)
-            self._apply_charge(Z, prepared["charge"], spec)
+        self._load_in_place(Z, prepared, geom, omega)
         return Z
 
     # ------------------------------------------------------------------
@@ -4097,10 +4103,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             geom, prepared, prepared["image"], k_m, omega, ground=ground, eps=eps_m
         )
         # Loading last and outside the fold, exactly as above.
-        if prepared["loading"] is not None:
-            spec = _wire_loading.loading_for(self, omega, geom)
-            self._apply_loading(Z, prepared["loading"], spec)
-            self._apply_charge(Z, prepared["charge"], spec)
+        self._load_in_place(Z, prepared, geom, omega)
         return Z
 
     # ------------------------------------------------------------------
