@@ -1,0 +1,59 @@
+fed=0 m=1 SinusoidalGalerkinSolver   bare 124.642+17.785j (1.1 s)
+fed=0 m=1 BSplineSolver              bare 126.067+22.258j (0.0 s)
+fed=0 m=1 RazorSolver                bare 120.673+12.482j (0.6 s)
+    L'=1u        SG 43.099+80.382j | BSpli 37.783+88.057j gap 9.336 | Razor 44.687+76.300j gap 4.380
+    sigma        SG 0.366+0.172j | BSpli 0.372+0.202j gap 0.031 | Razor 0.353+0.155j gap 0.021
+    jacket       SG -13.428-44.358j | BSpli -13.366-46.558j gap 2.200 | Razor -12.932-42.215j gap 2.201
+    jacket-below SG -13.428-44.350j | BSpli -13.366-46.549j gap 2.200 | Razor -12.931-42.207j gap 2.200
+fed=0 m=2 SinusoidalGalerkinSolver   bare 122.704+15.769j (0.6 s)
+fed=0 m=2 BSplineSolver              bare 123.814+17.916j (0.1 s)
+fed=0 m=2 RazorSolver                bare 121.029+12.854j (1.3 s)
+    L'=1u        SG 46.281+77.104j | BSpli 43.898+81.109j gap 4.660 | Razor 47.783+74.001j gap 3.448
+    sigma        SG 0.362+0.155j | BSpli 0.367+0.170j gap 0.016 | Razor 0.356+0.143j gap 0.014
+    jacket       SG -13.376-42.765j | BSpli -13.502-43.960j gap 1.201 | Razor -13.092-41.485j gap 1.312
+    jacket-below SG -13.375-42.757j | BSpli -13.501-43.952j gap 1.201 | Razor -13.091-41.477j gap 1.311
+fed=0 m=4 SinusoidalGalerkinSolver   bare 121.752+14.436j (1.2 s)
+fed=0 m=4 BSplineSolver              bare 122.476+15.577j (0.1 s)
+fed=0 m=4 RazorSolver                bare 120.929+12.772j (1.6 s)
+    L'=1u        SG 48.110+74.789j | BSpli 46.915+77.029j gap 2.538 | Razor 49.089+72.786j gap 2.229
+    sigma        SG 0.360+0.145j | BSpli 0.363+0.153j gap 0.009 | Razor 0.357+0.137j gap 0.008
+    jacket       SG -13.284-41.882j | BSpli -13.432-42.557j gap 0.691 | Razor -13.082-41.107j gap 0.801
+    jacket-below SG -13.283-41.874j | BSpli -13.431-42.549j gap 0.691 | Razor -13.081-41.099j gap 0.801
+fed=1 m=1 SinusoidalGalerkinSolver   bare 7.728-2227.928j (0.4 s)
+fed=1 m=1 BSplineSolver              bare 7.728-2227.975j (0.0 s)
+fed=1 m=1 RazorSolver                bare 6.731-2100.009j (0.2 s)
+    L'=1u        SG 0.988+83.383j | BSpli 0.988+83.386j gap 0.003 | Razor 0.881+73.193j gap 10.191
+    sigma        SG 0.276+0.266j | BSpli 0.276+0.266j gap 0.000 | Razor 0.242+0.233j gap 0.048
+    jacket       SG -0.223+145.333j | BSpli -0.223+145.336j gap 0.003 | Razor -0.177+136.991j gap 8.342
+    jacket-below SG -0.225-0.857j | BSpli -0.226-0.857j gap 0.000 | Razor -0.167-0.739j gap 0.131
+fed=1 m=2 SinusoidalGalerkinSolver   bare 7.185-2146.976j (0.6 s)
+fed=1 m=2 BSplineSolver              bare 7.185-2146.982j (0.1 s)
+fed=1 m=2 RazorSolver                bare 6.650-2077.817j (1.1 s)
+    L'=1u        SG 0.941+77.670j | BSpli 0.941+77.671j gap 0.000 | Razor 0.883+72.115j gap 5.556
+    sigma        SG 0.257+0.248j | BSpli 0.257+0.248j gap 0.000 | Razor 0.238+0.230j gap 0.026
+    jacket       SG -0.215+141.371j | BSpli -0.215+141.371j gap 0.000 | Razor -0.200+137.427j gap 3.944
+    jacket-below SG -0.210-0.797j | BSpli -0.210-0.797j gap 0.000 | Razor -0.184-0.732j gap 0.070
+fed=1 m=4 SinusoidalGalerkinSolver   bare 6.897-2102.822j (1.2 s)
+fed=1 m=4 BSplineSolver              bare 6.898-2102.823j (0.1 s)
+fed=1 m=4 RazorSolver                bare 6.598-2063.943j (1.9 s)
+    L'=1u        SG 0.915+74.625j | BSpli 0.915+74.625j gap 0.000 | Razor 0.882+71.487j gap 3.139
+    sigma        SG 0.247+0.238j | BSpli 0.247+0.238j gap 0.000 | Razor 0.236+0.228j gap 0.015
+    jacket       SG -0.214+139.752j | BSpli -0.214+139.752j gap 0.000 | Razor -0.211+138.019j gap 1.733
+    jacket-below SG -0.202-0.766j | BSpli -0.202-0.766j gap 0.000 | Razor -0.189-0.729j gap 0.040
+gap series:
+  fed=0 L'=1u        SG-BSpli: 9.336 -> 4.660 -> 2.538
+  fed=0 L'=1u        SG-Razor: 4.380 -> 3.448 -> 2.229
+  fed=0 sigma        SG-BSpli: 0.031 -> 0.016 -> 0.009
+  fed=0 sigma        SG-Razor: 0.021 -> 0.014 -> 0.008
+  fed=0 jacket       SG-BSpli: 2.200 -> 1.201 -> 0.691
+  fed=0 jacket       SG-Razor: 2.201 -> 1.312 -> 0.801
+  fed=0 jacket-below SG-BSpli: 2.200 -> 1.201 -> 0.691
+  fed=0 jacket-below SG-Razor: 2.200 -> 1.311 -> 0.801
+  fed=1 L'=1u        SG-BSpli: 0.003 -> 0.000 -> 0.000
+  fed=1 L'=1u        SG-Razor: 10.191 -> 5.556 -> 3.139
+  fed=1 sigma        SG-BSpli: 0.000 -> 0.000 -> 0.000
+  fed=1 sigma        SG-Razor: 0.048 -> 0.026 -> 0.015
+  fed=1 jacket       SG-BSpli: 0.003 -> 0.000 -> 0.000
+  fed=1 jacket       SG-Razor: 8.342 -> 3.944 -> 1.733
+  fed=1 jacket-below SG-BSpli: 0.000 -> 0.000 -> 0.000
+  fed=1 jacket-below SG-Razor: 0.131 -> 0.070 -> 0.040

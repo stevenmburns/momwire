@@ -1,0 +1,5 @@
+bare          Z 176.218492-86.389258j  one-ulp moves: 5.857e-10 0.000e+00
+sigma         Z 177.771360-85.324497j  one-ulp moves: 3.849e-08 0.000e+00
+jacket        Z 157.406214-92.922629j  one-ulp moves: 4.971e-07 0.000e+00
+sigma+jacket  Z 158.890897-91.849091j  one-ulp moves: 5.161e-07 0.000e+00
+bare at a_eq  Z 170.956657-80.048557j  one-ulp move: 1.590e-10

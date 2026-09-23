@@ -1,0 +1,5 @@
+same instance twice: max|dG| 0.000e+00 (|G| 4.015e+04)
+fresh instance     : max|dG| 0.000e+00
+  worst entry (0,0) of (32, 32)
+bare swept - single : [5.85718611e-10 0.00000000e+00]
+bare single - single: [0. 0.]

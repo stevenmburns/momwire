@@ -1,0 +1,9 @@
+dipole    m=1 SG 9.402281e-06 (inherited 2.778727e-08) | bspline 9.401945e-06 rel 3.58e-05 | razor 9.412833e-06 rel 1.12e-03
+dipole    m=2 SG 9.404845e-06 (inherited 2.807637e-08) | bspline 9.404789e-06 rel 5.98e-06 | razor 9.399401e-06 rel 5.79e-04
+dipole    m=4 SG 9.406087e-06 (inherited 2.815098e-08) | bspline 9.406077e-06 rel 1.07e-06 | razor 9.399789e-06 rel 6.70e-04
+mixed     m=1 SG 9.306290e-06 (inherited 2.690989e-08) | bspline 9.395893e-06 rel 9.54e-03 | razor 9.492773e-06 rel 1.96e-02
+mixed     m=2 SG 9.382813e-06 (inherited 2.822237e-08) | bspline 9.406099e-06 rel 2.48e-03 | razor 9.416866e-06 rel 3.62e-03
+mixed     m=4 SG 9.402999e-06 (inherited 2.856544e-08) | bspline 9.408950e-06 rel 6.32e-04 | razor 9.403494e-06 rel 5.27e-05
+crossing  m=1 SG 1.747425e-05 (inherited 1.508290e-05) | bspline 1.747277e-05 rel 8.45e-05 | razor 1.709121e-05 rel 2.24e-02
+crossing  m=2 SG 1.749034e-05 (inherited 1.512943e-05) | bspline 1.748980e-05 rel 3.10e-05 | razor 1.728621e-05 rel 1.18e-02
+crossing  m=4 SG 1.750084e-05 (inherited 1.515430e-05) | bspline 1.750145e-05 rel 3.48e-05 | razor 1.738616e-05 rel 6.60e-03

@@ -1,0 +1,7 @@
+dipole       port 0 exact 5.984-525.257j  |fix-exact| 0.0061  |dropped-exact| 28.077
+crossing     exact pair not servable on SG: crossing serve with per-wire radii: the radius rule rho_eff = sqrt(rho^2 + a^2) regularize
+hub4         exact pair not servable on SG: crossing serve with per-wire radii: the radius rule rho_eff = sqrt(rho^2 + a^2) regularize
+detached     port 0 exact 19.833-1040.624j  |fix-exact| 0.0004  |dropped-exact| 0.409
+detached     port 1 exact -2.950-1545.203j  |fix-exact| 0.0305  |dropped-exact| 77.456
+detached_hub port 0 exact 19.538-1077.917j  |fix-exact| 0.0001  |dropped-exact| 0.792
+detached_hub port 1 exact 151.409-440.131j  |fix-exact| 0.0216  |dropped-exact| 90.299

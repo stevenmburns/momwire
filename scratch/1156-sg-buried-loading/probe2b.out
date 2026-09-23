@@ -1,0 +1,36 @@
+detached_hub SinusoidalGalerkinSolver   bare 37.425-1039.477j
+    R'=20   shift 72.003-6.283j
+    L'=1u   shift 3.973+159.436j
+    sigma   shift 0.552+0.450j
+    jacket  shift -8.660+78.707j
+    (4.5 s)
+detached_hub BSplineSolver              bare 11.684-1080.529j
+    R'=20   shift 82.758+3.013j
+    L'=1u   shift 2.107+190.821j
+    sigma   shift 0.576+0.642j
+    jacket  shift 10.977+71.025j
+    (3.5 s)
+detached_hub RazorSolver                bare 11.743-1050.979j
+    R'=20   shift 75.572+2.683j
+    L'=1u   shift 1.054+175.896j
+    sigma   shift 0.522+0.586j
+    jacket  shift 9.906+69.384j
+    (1.9 s)
+crossing     SinusoidalGalerkinSolver   bare 176.218-86.389j
+    R'=20   shift 177.724-42.302j
+    L'=1u   shift 109.321+463.088j
+    sigma   shift 1.553+1.065j
+    jacket  shift -18.812-6.533j
+    (1.5 s)
+crossing     BSplineSolver              bare 176.236-86.378j
+    R'=20   shift 177.726-42.307j
+    L'=1u   shift 109.339+463.092j
+    sigma   shift 1.553+1.065j
+    jacket  shift -18.819-6.532j
+    (0.3 s)
+crossing     RazorSolver                bare 174.002-92.773j
+    R'=20   shift 175.048-43.952j
+    L'=1u   shift 113.261+462.936j
+    sigma   shift 1.543+1.041j
+    jacket  shift -18.217-6.097j
+    (1.5 s)

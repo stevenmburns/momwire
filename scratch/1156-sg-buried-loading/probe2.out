@@ -1,0 +1,18 @@
+dipole       SinusoidalGalerkinSolver   bare 124.948+18.999j
+    R'=20   shift 36.236-13.329j
+    L'=1u   shift 43.049+83.530j
+    sigma   shift 0.371+0.178j
+    jacket  shift -13.702-44.704j
+    (0.6 s)
+dipole       BSplineSolver              bare 123.841+18.024j
+    R'=20   shift 35.303-13.511j
+    L'=1u   shift 43.941+81.117j
+    sigma   shift 0.367+0.170j
+    jacket  shift -13.516-43.946j
+    (0.0 s)
+dipole       RazorSolver                bare 121.060+12.953j
+    R'=20   shift 32.403-14.573j
+    L'=1u   shift 47.829+74.004j
+    sigma   shift 0.356+0.143j
+    jacket  shift -13.106-41.469j
+    (0.4 s)

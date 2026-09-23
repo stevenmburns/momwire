@@ -1,0 +1,5 @@
+lam k np.float64(0.14670915153661773) omega np.float64(43982297.15023086) cond(G_on) 1.116e+12 cond(G_off) 1.144e+12
+lam+ k np.float64(0.1467091515366177) omega np.float64(43982297.150230855) cond(G_on) 1.116e+12 cond(G_off) 1.144e+12
+fill move    max 7.276e-12 at (np.int64(31), np.int64(31))  (|G| 3.013e+04)
+loading move max 1.144e-07  (|L| 1.760e+03)
+fill entries moving > 1e-9 |G|: []
