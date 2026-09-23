@@ -358,6 +358,7 @@ from . import (
     _ground_spec,
     _medium_spec,
     _crossing_fill,
+    _near_interface,
     _potential_ground,
     _razor_class,
     _sommerfeld_below,
@@ -4475,7 +4476,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
         nodes = self._knot_points(geom)[cols]
         out = np.zeros((n, cols.size), dtype=np.complex128)
-        memo = {}
+        memo = _near_interface.TripleMemo()
         for ax, above in ((A, True), (P, False)):
             ends = ax["ends"]
             if not ends:

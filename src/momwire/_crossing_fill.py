@@ -1226,7 +1226,7 @@ def cross_complete_block(ctx, A, B, *, corner=True):
     # (momwire#1017). This route built none, so momwire#688's cross-call dedup
     # — the whole reason the parameter exists — never fired for `RazorSolver`,
     # whose crossing serve calls straight in here.
-    memo = {}
+    memo = _near_interface.TripleMemo()
     t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
     _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=t_ab)
     return t_ab
@@ -1747,7 +1747,7 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    memo = {}  # momwire#1017, as above
+    memo = _near_interface.TripleMemo()  # momwire#1017, as above
     t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz, memo=memo).T
     t_ba += _ends_and_corner_reversed(
         ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
@@ -1997,7 +1997,8 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    memo = {}  # one fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here)
+    # One fill = one memo (eps_t, k_p, _CROSS_RTOL fixed here).
+    memo = _near_interface.TripleMemo()
     main = _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=rows)
     if rows is None:
         _ends_and_corner(
@@ -2056,7 +2057,8 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    memo = {}  # keyed on the folded rho_eff, so one memo per radius stays exact
+    # Keyed on the folded rho_eff, so one memo per radius stays exact.
+    memo = _near_interface.TripleMemo()
     if _FORCE_DENSE:
         t_above = _main_sandwich(ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo)
         if rows is not None:
@@ -2070,7 +2072,7 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
             t_above = t_above[0]
     for ctx_e, memo_e, corner_e, kw in (
         (ctx_above, memo, False, {"test_ends": False}),
-        (ctx_below, {}, True, {"source_ends": False}),
+        (ctx_below, _near_interface.TripleMemo(), True, {"source_ends": False}),
     ):
         if rows is None:
             _ends_and_corner(
@@ -2410,7 +2412,7 @@ def cross_complete_block_reversed_split(
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    memo = {}
+    memo = _near_interface.TripleMemo()
     t_ba = _main_split(ctx, q_idx, p_idx, Q, P, eps_t, k_p, c1, gz, memo).T
     t_ba += _ends_and_corner_reversed(
         ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end
