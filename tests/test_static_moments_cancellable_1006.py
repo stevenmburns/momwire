@@ -34,8 +34,6 @@ What this module pins:
 
 from __future__ import annotations
 
-import threading
-
 import numpy as np
 import pytest
 
@@ -44,18 +42,65 @@ from momwire import _bspline_kernels as K
 
 pytestmark = pytest.mark.skipif(K._acc is None, reason="accelerator not built")
 
-BIG_N = 1601  # ~28 ms uncancelled here: long enough to interrupt, short to run
+BIG_N = 1601  # a realistic size for the already-cancelled check
 
 
 def _uniform(N):
     return np.arange(N + 1, dtype=float) * (4.0 / N)
 
 
+PROBE_N = 41
+PROBE_MAX_D = 2
+# The gather polls once per row of every (p, q) moment block.
+PROBE_TOTAL_POLLS = (PROBE_MAX_D + 1) ** 2 * PROBE_N
+
+
+def _probed_gather(tok, probe):
+    """Run the C++ square entry with its poll probe armed (momwire#1158).
+
+    The kernel reads the token's flag as raw memory and never calls back into
+    Python, so a Python token that counts its own reads would count nothing.
+    The probe lives in the kernel instead: `probe[0]` is the poll on which it
+    raises the flag (0 = never), `probe[1]` counts the flag reads the gather
+    made. Called on `_acc` directly, with the arguments `_seg_seg_static_moments`
+    passes, so the `_accel` SolveAborted translation still wraps it.
+    """
+    return K._acc.seg_seg_static_moments_bspline_uniform(
+        4.0 / PROBE_N,
+        5e-4,
+        PROBE_N,
+        PROBE_MAX_D,
+        tok.ptr,
+        poll_probe=probe.ctypes.data,
+    )
+
+
 def test_the_cpp_square_path_aborts_mid_gather():
+    """Deterministic: the flag rises on a known poll, halfway through the
+    gather, and the abort lands on exactly that poll. This replaced a 10 ms
+    `threading.Timer` race that the macOS runner lost (momwire#1158)."""
+    flip_at = PROBE_TOTAL_POLLS // 2
     tok = CancelToken()
-    threading.Timer(0.01, tok.cancel).start()
+    probe = np.array([flip_at, 0], dtype=np.int64)
     with pytest.raises(SolveAborted):
-        K._seg_seg_static_moments(_uniform(BIG_N), 5e-4, 2, cancel=tok)
+        _probed_gather(tok, probe)
+    polls = int(probe[1])
+    assert 1 < polls < PROBE_TOTAL_POLLS
+    assert polls == flip_at, "the abort is seen at the poll that raised it"
+    assert tok.cancelled
+
+
+def test_the_probe_counts_every_row_when_nothing_cancels():
+    """The denominator above: with the probe armed but never firing, the
+    gather reads the flag once per row of every moment block and returns
+    the same answer as the unprobed call."""
+    tok = CancelToken()
+    probe = np.array([0, 0], dtype=np.int64)
+    probed = np.asarray(_probed_gather(tok, probe))
+    assert int(probe[1]) == PROBE_TOTAL_POLLS
+    assert not tok.cancelled
+    plain = np.asarray(K._seg_seg_static_moments(_uniform(PROBE_N), 5e-4, PROBE_MAX_D))
+    assert np.array_equal(probed, plain)
 
 
 def test_the_numpy_dense_path_aborts_too():

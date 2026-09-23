@@ -3815,7 +3815,8 @@ template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
                                             int max_d, double a_ek,
-                                            uintptr_t cancel_flag) {
+                                            uintptr_t cancel_flag,
+                                            uintptr_t poll_probe = 0) {
     if (max_d < 0 || max_d > BSPLINE_MOMENT_MAX_D) {
         throw std::runtime_error("max_d out of range [0, " +
                                  std::to_string(BSPLINE_MOMENT_MAX_D) + "]");
@@ -3831,6 +3832,18 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
     // where the poll belongs; polling only the table build would drain 4% of
     // the wait.
     MW_CANCEL_SETUP(cancel_flag);
+
+    // THE POLL PROBE (momwire#1158) -- a test seam, 0 in production. It is the
+    // address of an int64[2]: probe[0] = k, probe[1] = a counter of the flag
+    // reads this gather makes. On the k-th read the probe writes the cancel
+    // flag itself, just before the poll reads it, so "a flag raised while the
+    // gather is running is seen at the next row" is tested at a known row
+    // instead of by racing a wall-clock timer against the gather (which the
+    // macOS runner lost). The flag is only ever read here as raw memory, never
+    // through Python, so a counting Python token cannot stand in for this.
+    int64_t *probe = reinterpret_cast<int64_t *>(poll_probe);
+    volatile int32_t *probe_flag =
+        reinterpret_cast<volatile int32_t *>(cancel_flag);
 
     // Phase 0: release the GIL for the heavy compute region below.
     py::gil_scoped_release release;
@@ -3875,6 +3888,12 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
         for (size_t q = 0; q < NM; q++) {
             const double *row = &table[(p * NM + q) * n_delta];
             for (size_t i = 0; i < N; i++) {
+                // Counted only while the poll below still reads the flag: once
+                // aborted, MW_CANCEL_POLL skips on its first test.
+                if (probe && !pysim_aborted.load(std::memory_order_relaxed) &&
+                    ++probe[1] == probe[0] && probe_flag) {
+                    *probe_flag = 1;
+                }
                 MW_CANCEL_POLL();
                 for (size_t j = 0; j < N; j++) {
                     size_t di = (size_t)((long long)j - (long long)i + (long long)(N - 1));
@@ -3889,9 +3908,11 @@ seg_seg_static_moments_bspline_uniform_impl(double h, double a, size_t N,
 
 static py::array_t<double>
 seg_seg_static_moments_bspline_uniform(double h, double a, size_t N, int max_d,
-                                       uintptr_t cancel_flag = 0) {
+                                       uintptr_t cancel_flag = 0,
+                                       uintptr_t poll_probe = 0) {
     return seg_seg_static_moments_bspline_uniform_impl<false>(h, a, N, max_d, 0.0,
-                                                              cancel_flag);
+                                                              cancel_flag,
+                                                              poll_probe);
 }
 
 static py::array_t<double>
@@ -4533,7 +4554,9 @@ void register_bspline(py::module_ &m) {
           "Returns J_static of shape (max_d+1, max_d+1, N, N), with the "
           "1/(4π) prefactor folded in.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
-          py::arg("cancel_flag") = 0);
+          py::arg("cancel_flag") = 0,
+          // Test seam (momwire#1158): see the probe comment in the impl.
+          py::arg("poll_probe") = 0);
     m.def("seg_seg_static_moments_bspline_uniform_ek",
           &seg_seg_static_moments_bspline_uniform_ek,
           "Extended-thin-wire-kernel twin of "
