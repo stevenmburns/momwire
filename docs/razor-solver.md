@@ -895,3 +895,55 @@ Measured 2026-09-22 (`tests/test_razor_two_radius_1149.py`,
 | 2-port non-reciprocity, x1 → x8 | 4.1–4.25x per doubling (observer rule: flat at 8.3e-2 / 1.4e-1) |
 | R(mixed) − R(equal), razor − bspline, x1 → x8 | rise/2 −0.19 → −0.020, rise/4 −0.39 → −0.039, top/2 +0.10 → +0.021, top/4 +0.19 → +0.038 Ω, halving per doubling, on responses of 8.0 / 15.9 / 0.62 / 1.13 Ω (observer rule: 8–16 Ω off) |
 | driving point vs bspline, x1 → x8 | 6.85 → 0.81 (rise/2), 6.55 → 0.73 (top/4), 7.19 → 1.20 Ω (#1140 deck) |
+
+### Several crossing nodes, the pre-flight, the advisory (momwire#1149 U2b)
+
+The shared scope serves any number of crossing nodes from
+`MIN_CROSSING_NODE_SEPARATION_M` apart (antennaknobs plan U9), and razor's
+fill never assumed one: every crossing tent is a column of the one node term,
+and the cross-node pairs are the same formula at a larger separation. Those
+pairs are not small beside the own-node ones — the term is the remainder's
+potential, whose 1/R parts cancel at every distance — so a node 2 m away reads
+the same order as the node itself (peak 1.77 vs 2.38 on `two_node_deck`).
+
+Measured 2026-09-22 (`tests/test_razor_multi_node_1149.py`,
+`scratch/razor-buried-u2b/`, probe 3):
+
+| gate | result |
+|---|---|
+| ε̃ = 1 collapse, two nodes 2 m / 8 m apart | 6.8e-13, both lanes |
+| 2-port non-reciprocity, ASYMMETRIC ports (above on rod 1, buried on rod 2), x1 → x4 | 9.4e-4 → 5.9e-5 (4.05 / 3.95); node term zeroed: flat at 4.3e-2 |
+| the same on a hub screen and a three-leg fan 6 m apart | 2.8e-3 → 1.8e-4 (3.87 / 3.90); node term zeroed: flat at 0.34 |
+| Z vs bspline's U9 route, every entry, x1 → x4 | ratios 0.48–0.58 per doubling on both decks |
+
+**The grazing floor is not at parity with bspline's, and is not meant to
+be.** Each fill's floor is a property of the points it evaluates. bspline's
+crossing axes are graded on the a-scale into the plane, so on `two_node_deck`
+its below/below pairs reach the floor at 12 / 6 / 3 m (x1 / x2 / x4); razor's
+remainder pairs (testing-path points × Gauss nodes) stay deeper and reach it
+at 128 / 64 / 48 m. At 12 m razor serves every rung and its reciprocity
+decays there as it does at 2 m.
+
+**`buried_serve_refusal()`** is razor's exact pre-flight (bspline's twin, for
+antennaknobs#1464). It asks the fill's own two fill-time questions through the
+same calls — loading on a crossing deck, and the below family's grazing floor
+(`_below_plane_grazing_refusal`) on the buried sub-geometry with the declared
+nodes skipped — and returns the fill's sentence or None. Everything else razor
+refuses on a buried deck it refuses at construction. Making it exact moved
+the plan itself: it used to ask only segment endpoints and centroids, and a
+path point on a node segment sits shallower than its centroid, so two nodes
+~100 m apart passed the plan and died inside the grid in the grid's words. The
+plan now also asks the pairs the remainder actually evaluates
+(`_below_remainder_th_min`), so the grid can no longer refuse a deck the plan
+served; no deck the plan served before is refused except those the grid
+refused anyway.
+
+**`CoarseCrossingNode`** is raised by razor where bspline raises it (the
+shared 25 mm bar within 150 mm of the node), with razor's own sentences for
+what the node costs and what to do: on a path-tested fill an unresolved node
+is worth a fraction of an ohm (crossing_deck's 50 mm node 0.08 Ω, hub_deck(4)'s
+75 mm rise 0.26 Ω at a far mesh refined 8x around it), below razor's
+first-order far-mesh error, and razor has no n_qp_pair lever.
+
+What stays refused, with bspline's sentences: a spread of radii among the
+buried wires, and a two-radius deck with more than one crossing node.

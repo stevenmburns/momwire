@@ -589,6 +589,29 @@ _CROSSING_GROWTH = 2.0
 _CROSSING_PANEL_ORDER = 8
 _CROSSING_Q = 12
 
+# The coarse-node advisory's two FILL sentences on razor (momwire#1149 U2b;
+# `_crossing_fill.warn_coarse_node` carries bspline's by default). The
+# geometry half of the advisory (the 25 mm bar within 150 mm of the node) is
+# shared, but what an unresolved node costs is not: bspline's ~4.5 ohm is a
+# quadrature constant of its Galerkin corner, and razor has no corner and no
+# n_qp_pair. Measured on razor, far mesh refined with the node edges held
+# coarse against refined with them (`scratch/razor-buried-u2b/`, probe 3a):
+# crossing_deck's 50 mm node is worth 0.045 / 0.069 / 0.082 ohm at x2/x4/x8,
+# hub_deck(4)'s 75 mm node 0.14 / 0.22 / 0.26 ohm, against a razor-bspline
+# gap of 1.0 ohm still falling at x8 (#845's first-order far mesh).
+_RAZOR_NODE_WORTH = (
+    "On razor's path-tested fill an unresolved node is worth a fraction of an "
+    "ohm (0.08 ohm on a 50 mm node, 0.26 ohm on a 75 mm hub rise, measured "
+    "with the far mesh refined 8x around it), smaller than razor's own "
+    "first-order far-mesh error, which a density sweep does see (momwire#845) "
+    "and which keeps moving after the node is graded"
+)
+_RAZOR_NODE_LEVERS = (
+    "Razor has no quadrature knob for the node (its crossing axes are fixed "
+    "at the path-tested floor, `_CROSSING_*`); for a converged answer use "
+    "BSplineSolver with the node graded"
+)
+
 _HAVE_RAZOR_WEIGHTED_ACCEL = _acc is not None and bool(
     getattr(_acc, "razor_weighted_744", False)
 )
@@ -1862,6 +1885,67 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self._radius_per_wire,
             two_radius=True,
         )
+
+    def _crossing_node_members(self):
+        """A `_crossing_fill.NodeArm` per member of every crossing junction,
+        through the shared walk bspline's advisory reads
+        (`_below_interface.crossing_node_members`). Razor has no stand-off
+        floor (momwire#865 is bspline's), so no arm carries one and the
+        advisory's floor clause never binds here."""
+        return _below_interface.crossing_node_members(
+            self._crossing_junctions(),
+            self._wire_media(),
+            [g["ends"] for g in self._find_junctions()],
+            self.wires_polylines,
+            self.n_per_edge_per_wire,
+            lambda _w: None,
+        )
+
+    def buried_serve_refusal(self):
+        """The sentence this deck's buried fill would refuse with, or None
+        (momwire#1149 U2b; `BSplineSolver.buried_serve_refusal`'s twin, for
+        antennaknobs#1464's exact pre-flight).
+
+        EXACT, not conservative: it asks the fill's own fill-time questions
+        through the same calls the fill makes, on the same geometry, and
+        stops before any grid. On razor those are two:
+
+        * wire loading on a crossing deck (`_CROSSING_LOADING_REFUSAL`, until
+          U3), raised by `_assemble_Z_crossing` before any fill;
+        * the below family's grazing floor
+          (`_below_plane_grazing_refusal`), over the full geometry of a
+          wholly-buried deck, or over the buried SUB-geometry of a crossing
+          or detached one with the declared crossing nodes skipped — which
+          is what makes it exact where the vertex helper is not: a crossing
+          node's vertex sits in the plane, and two of them at different
+          nodes pair at theta = 0 (antennaknobs#1464).
+
+        Everything else razor refuses on a buried deck it refuses at
+        CONSTRUCTION (`_refuse_buried_geometry` and the shared crossing
+        scope), so a solver that exists has passed it; a caller that wants
+        those sentences constructs the solver inside its own try. The bundle
+        refusal (momwire#846) is a solve-time refusal of any deck, buried or
+        not, and is not asked here.
+
+        None when the deck has no ground or no buried wire, or when the fill
+        would reach its grids.
+        """
+        if self.ground_z is None or not (
+            self._below_plane or self._detached or self._crossing
+        ):
+            return None
+        try:
+            geom = self._build_geometry()
+            if self._crossing and (self._loading_active or self.lumped_loads):
+                raise NotImplementedError(_CROSSING_LOADING_REFUSAL)
+            if self._below_plane:
+                return self._below_plane_grazing_refusal(geom)
+            tents = self._crossing_tents(geom)
+            nodes = self._knot_points(geom)[[m for m, _ in tents]]
+            geom_b, _rows, _chop = self._medium_geometry(geom, _medium_spec.BELOW)
+            return self._below_plane_grazing_refusal(geom_b, nodes)
+        except (ValueError, NotImplementedError) as exc:
+            return str(exc)
 
     def _refuse_buried_geometry(self):
         """The construction-time buried readings, through `_medium_spec`.
@@ -3696,39 +3780,33 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             out.append((m, pts[m, sl], tans[m, sl], wts[m, sl], seg, before, after))
         return out
 
-    def _assemble_Z_below_plane(self, geom, prepared, k, omega, *, plan_skip=None):
-        """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
-        of the razor buried arc), in the lower-medium family:
+    def _below_plane_grazing_refusal(self, geom, plan_skip=None):
+        """The below family's serve-plan refusal for `geom`, or None: the
+        grazing floor θ = atan2(d + d′, ρ), the same θ
+        `BSplineSolver._buried_serve_plan` asks over its nodes. Frequency-
+        free, so the fill and the pre-flight (`buried_serve_refusal`) ask it
+        with the same call.
 
-            Z = Z_direct(k_m, ε_m) − [ A_m·Z_image(k_m, ε_m) + Q_below ] + L
-
-        It is the composing ground's fold with the medium's numbers in it —
-        the kernel at `k_m = k₂·√ε̃` (the fused moments kernel takes a complex
-        k since momwire#796), Φ under `ε_m = ε₀·ε̃`, the image weighted by
-        `A_m = image_coefficient_below(ε̃)` THROUGH the windows (never applied
-        here: `BelowMediumGround` hands it over as C₂ is handed over), and the
-        below remainder in place of the above one. Nothing else in the fill
-        changes, which is the point: `_assemble_Z_source_block` is called
-        twice exactly as it is over a Sommerfeld ground, with `eps` and the
-        ground object swapped.
-
-        The serve-plan refusal a buried grid can hit
-        (`_BURIED_GRAZING_REFUSAL`) is asked here, before any grid is
-        filled, over segment endpoints and centroids — the same
-        θ = atan2(d + d′, ρ) `BSplineSolver._buried_serve_plan` asks over
-        its nodes. The R₁ cap is not a refusal since momwire#1053: past it
-        `remainder_field_proj_below` serves the remainder as zero.
+        Asked over TWO point sets, refusing if either reaches below the
+        floor. The first is the historical one, segment endpoints and
+        centroids (with the declared crossing nodes skipped, below). The
+        second is the pairs the below remainder ACTUALLY evaluates —
+        `RemainderBelow.field_windows`' observers (the testing-path
+        quadrature points) against its sources (Gauss–Legendre nodes of
+        order `n_qp_sommerfeld` on every segment) — whose grid refuses
+        below the same floor in its own words at fill time. The first set
+        alone is not that: a path point on a node segment sits shallower
+        than the segment's centroid, so on two crossing nodes ~100 m apart
+        the endpoint plan passed and the grid then refused mid-fill
+        (momwire#1149 U2b, `scratch/razor-buried-u2b/` probe 3g), and a
+        pre-flight asking the plan would have said "served". With both,
+        every deck the grid would refuse is refused here first, by this
+        sentence, and no deck the plan served before is refused now except
+        those the grid refused anyway.
         """
         from .bspline import _BURIED_GRAZING_REFUSAL
 
         gz = float(self.ground_z)
-        eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
-        ground = _potential_ground.BelowMediumGround(
-            self, geom, k, omega, eps_tilde=eps_t
-        )
-        k_m, eps_m = ground.k_m, ground.eps_m
-
-        # The plan's refusal, over endpoints + centroids.
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
         pts = np.concatenate(
             [
@@ -3765,15 +3843,83 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         hh = d[:, None] + d[None, :]
         th_min = float(np.min(np.arctan2(hh, rho)))
+        depth = 2.0 * float(np.min(d))
+        th_eval, depth_eval = self._below_remainder_th_min(geom)
+        if th_eval < th_min:
+            th_min, depth = th_eval, depth_eval
         floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
         if th_min < floor:
-            raise ValueError(
-                _BURIED_GRAZING_REFUSAL.format(
-                    th=math.degrees(th_min),
-                    floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
-                    depth=2.0 * float(np.min(d)),
-                )
+            return _BURIED_GRAZING_REFUSAL.format(
+                th=math.degrees(th_min),
+                floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
+                depth=depth,
             )
+        return None
+
+    def _below_remainder_th_min(self, geom):
+        """``(θ_min, d + d′ there)`` over the pairs the below remainder
+        evaluates on `geom`: testing-path points × order-`n_qp_sommerfeld`
+        Gauss nodes of every segment, exactly as `_assemble_Z_source_block`
+        hands them to `RemainderBelow.field_windows`. Chunked over the
+        observers, since the pair set is the remainder's own size."""
+        gz = float(self.ground_z)
+        obs = self._testing_paths(geom)[0].reshape(-1, 3)
+        seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
+        xg, _wg = np.polynomial.legendre.leggauss(self.n_qp_sommerfeld)
+        tq = 0.5 * (xg + 1.0)
+        src = (
+            seg_p0[:, None, :]
+            + (tq[None, :, None] * seg_h[:, None, None]) * seg_t[:, None, :]
+        ).reshape(-1, 3)
+        d_s = gz - src[:, 2]
+        best, best_hh = np.inf, 0.0
+        step = max(1, 4_000_000 // max(1, src.shape[0]))
+        for i0 in range(0, obs.shape[0], step):
+            o = obs[i0 : i0 + step]
+            rho = np.hypot(
+                o[:, 0][:, None] - src[:, 0][None, :],
+                o[:, 1][:, None] - src[:, 1][None, :],
+            )
+            hh = (gz - o[:, 2])[:, None] + d_s[None, :]
+            th = np.arctan2(hh, rho)
+            k = int(np.argmin(th))
+            if th.flat[k] < best:
+                best, best_hh = float(th.flat[k]), float(hh.flat[k])
+        return best, best_hh
+
+    def _assemble_Z_below_plane(self, geom, prepared, k, omega, *, plan_skip=None):
+        """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
+        of the razor buried arc), in the lower-medium family:
+
+            Z = Z_direct(k_m, ε_m) − [ A_m·Z_image(k_m, ε_m) + Q_below ] + L
+
+        It is the composing ground's fold with the medium's numbers in it —
+        the kernel at `k_m = k₂·√ε̃` (the fused moments kernel takes a complex
+        k since momwire#796), Φ under `ε_m = ε₀·ε̃`, the image weighted by
+        `A_m = image_coefficient_below(ε̃)` THROUGH the windows (never applied
+        here: `BelowMediumGround` hands it over as C₂ is handed over), and the
+        below remainder in place of the above one. Nothing else in the fill
+        changes, which is the point: `_assemble_Z_source_block` is called
+        twice exactly as it is over a Sommerfeld ground, with `eps` and the
+        ground object swapped.
+
+        The serve-plan refusal a buried grid can hit
+        (`_BURIED_GRAZING_REFUSAL`) is asked here, before any grid is
+        filled, over segment endpoints and centroids — the same
+        θ = atan2(d + d′, ρ) `BSplineSolver._buried_serve_plan` asks over
+        its nodes. The R₁ cap is not a refusal since momwire#1053: past it
+        `remainder_field_proj_below` serves the remainder as zero.
+        """
+        eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
+        ground = _potential_ground.BelowMediumGround(
+            self, geom, k, omega, eps_tilde=eps_t
+        )
+        k_m, eps_m = ground.k_m, ground.eps_m
+
+        # The plan's refusal, over endpoints + centroids, before any grid.
+        refusal = self._below_plane_grazing_refusal(geom, plan_skip)
+        if refusal is not None:
+            raise ValueError(refusal)
 
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k_m, omega, eps=eps_m
@@ -3961,6 +4107,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 f"detached route reached with {len(tents)} crossing tent(s)"
             )
         nodes = self._knot_points(geom)[[m for m, _ in tents]]
+        if tents:
+            # The node-mesh advisory, as bspline raises it once per fill
+            # where its crossing serve engages (momwire#696), with razor's
+            # own sentences for what the node costs (momwire#1149 U2b).
+            _crossing_fill.warn_coarse_node(
+                self._crossing_node_members(),
+                worth=_RAZOR_NODE_WORTH,
+                levers=_RAZOR_NODE_LEVERS,
+            )
 
         geom_a, rows_a, chop_a = self._medium_geometry(geom, _medium_spec.ABOVE)
         prep_a = self._assemble_Z_prepare(geom_a, chop=chop_a, loading=False)

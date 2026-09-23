@@ -535,7 +535,9 @@ def _collapse(mk, lane=True):
     return out
 
 
-@pytest.mark.parametrize("lane", [True, False])
+@pytest.mark.parametrize(
+    "lane", [True, pytest.param(False, marks=pytest.mark.slow)], ids=["2pt", "gl"]
+)
 @pytest.mark.parametrize("name", list(MIXED_DECKS))
 def test_mixed_radii_collapse_to_razors_free_space_fill(name, lane):
     """eps~ = 1 against razor's own free-space fill of the same mixed-radius
