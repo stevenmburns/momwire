@@ -148,7 +148,7 @@ def test_the_sparse_sandwich_is_the_dense_one_at_rounding(monkeypatch):
         )
         z = np.broadcast_to((A["nodes"][:, 2] - gz)[:, None], rho.shape)
         zp = np.broadcast_to((B["nodes"][:, 2] - gz)[None, :], rho.shape)
-        K = CF._tables(ctx, eps_t, k_p, rho, z, zp, CF._CROSS_RTOL, memo={})
+        K = CF._tables(ctx, eps_t, k_p, rho, z, zp, CF._CROSS_RTOL, memo=None)
         ref = _dense_reference(A, B, K, k_p * k_p, c1)
         bound = _abs_bound(A, B, K, k_p * k_p, c1)
         d = np.abs(out - ref)

@@ -582,6 +582,191 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     return out
 
 
+# The array memo's hash: the three coordinates' IEEE bit patterns folded into
+# one uint64 (odd multipliers, xor, a final xor-shift so the high bits reach
+# the low ones). It only ORDERS the store; equality is always decided on the
+# full row, so a collision costs a comparison and never a wrong value.
+_HASH_M = (
+    np.uint64(0x9E3779B97F4A7C15),
+    np.uint64(0xC2B2AE3D27D4EB4F),
+    np.uint64(0x165667B19E3779F9),
+)
+
+# `TripleMemo`'s merge policy (momwire#1168 U1). Each insert is sorted on its
+# own and appended as a pending run; stored rows are re-sorted only when the
+# pending rows exceed max(_MEMO_MERGE_MIN_ROWS, main / _MEMO_MERGE_FRACTION)
+# (merge into main), or the pending runs exceed _MEMO_MAX_PENDING_RUNS (the
+# runs compacted into one). The fraction makes main grow geometrically between
+# merges, so a fill re-sorts main O(log n) times; the run cap bounds the
+# searchsorted passes a lookup makes. Counted on bspline hub_deck(16) x8
+# (419 inserts, 107k rows): 1 merge + 25 compactions, 0.82 M rows re-sorted.
+# The #1168 audit's prototype re-sorted its pending store on EVERY insert —
+# 417 re-sorts, 12.4 M rows — and ran bspline slower than the dict did.
+_MEMO_MERGE_MIN_ROWS = 1 << 16
+_MEMO_MERGE_FRACTION = 4
+_MEMO_MAX_PENDING_RUNS = 16
+
+
+def _row_hash(keys):
+    """uint64 hash of normalised (n, 3) float rows (see `_HASH_M`)."""
+    b = keys.view(np.uint64)
+    h = b[:, 0] * _HASH_M[0]
+    h ^= b[:, 1]
+    h *= _HASH_M[1]
+    h ^= b[:, 2]
+    h *= _HASH_M[2]
+    h ^= h >> np.uint64(29)
+    return h
+
+
+class TripleMemo:
+    """The caller-owned cross-call memo of `designed_tables` (momwire#688),
+    held as arrays (momwire#1168 U1).
+
+    The contract is the dict's it replaces, `_designed_tables_reference`:
+    the key is the exact (ρ, z, z′) float triple, −0.0 and 0.0 are one key
+    (rows are stored as `row + 0.0`), a NaN row never matches, a hit returns
+    the very floats first evaluated, and a triple is evaluated only when the
+    memo does not hold it. So it decides only HOW a row is found, never which
+    rows are fresh nor their order — and `designed_tables` through it is
+    bit-identical to the dict route.
+
+    One difference, on the failure path only: a call that raises part-way
+    inserts nothing (the dict left None sentinels that made every later ask
+    of those keys raise). The refusals are per member, so the next ask of
+    the same triple refuses again.
+
+    Storage is a sorted main run plus sorted pending runs, each run the
+    parallel arrays (hash, key, value, insertion sequence), sorted by hash;
+    a lookup is one searchsorted per run and a full-row compare, walking
+    forward over equal hashes. See `_MEMO_MERGE_MIN_ROWS` for the merge
+    policy. `stats` counts the work (lookups, hits, collisions: hash-equal
+    compares with a different key; merges and compactions: re-sorts of
+    stored rows).
+
+    Iterating gives the keys as float tuples in insertion order, which
+    `designed_tables` makes first-appearance order — the dict's order.
+    """
+
+    def __init__(self):
+        self._main = self._empty_run()
+        self._pending = []
+        self._n_pending = 0
+        self._seq = 0
+        self.stats = dict.fromkeys(
+            ("lookups", "hits", "collisions", "inserts", "merges", "compactions"),
+            0,
+        )
+
+    @staticmethod
+    def _empty_run():
+        return (
+            np.empty(0, dtype=np.uint64),
+            np.empty((0, 3), dtype=float),
+            np.empty((0, 6), dtype=np.complex128),
+            np.empty(0, dtype=np.int64),
+        )
+
+    def __len__(self):
+        return self._main[0].size + self._n_pending
+
+    def _runs(self):
+        return (self._main, *self._pending)
+
+    def lookup(self, rows):
+        """(hit, block) for (n, 3) float rows: `block[i]` holds the stored
+        value where `hit[i]`, and is uninitialised elsewhere."""
+        n = rows.shape[0]
+        hit = np.zeros(n, dtype=bool)
+        block = np.empty((n, 6), dtype=np.complex128)
+        self.stats["lookups"] += n
+        if n == 0 or len(self) == 0:
+            return hit, block
+        keys = rows + 0.0
+        hq = _row_hash(keys)
+        todo = np.arange(n)
+        for h, k, v, _s in self._runs():
+            if todo.size == 0:
+                break
+            if h.size == 0:
+                continue
+            found = self._find(h, k, hq[todo], keys[todo])
+            ok = found >= 0
+            block[todo[ok]] = v[found[ok]]
+            hit[todo[ok]] = True
+            # A key lives in exactly one run (only misses are inserted), so a
+            # row found here is not looked for again.
+            todo = todo[~ok]
+        self.stats["hits"] += int(np.count_nonzero(hit))
+        return hit, block
+
+    def _find(self, h, k, hq, q):
+        """Index into one run of each query's key, −1 where absent."""
+        found = np.full(hq.size, -1, dtype=np.intp)
+        live = np.arange(hq.size)
+        pos = np.searchsorted(h, hq, side="left")
+        while live.size:
+            p = pos[live]
+            keep = p < h.size
+            live, p = live[keep], p[keep]
+            keep = h[p] == hq[live]
+            live, p = live[keep], p[keep]
+            eq = np.all(k[p] == q[live], axis=1)
+            found[live[eq]] = p[eq]
+            live = live[~eq]
+            self.stats["collisions"] += live.size
+            pos[live] += 1
+        return found
+
+    def insert(self, rows, vals):
+        """Store (m, 3) rows the memo does not hold, with their (m, 6) values,
+        in the order given."""
+        m = rows.shape[0]
+        if m == 0:
+            return
+        keys = rows + 0.0
+        h = _row_hash(keys)
+        o = np.argsort(h, kind="stable")
+        seq = np.arange(self._seq, self._seq + m, dtype=np.int64)
+        self._seq += m
+        self._pending.append((h[o], keys[o], np.asarray(vals)[o], seq[o]))
+        self._n_pending += m
+        self.stats["inserts"] += m
+        if self._n_pending > max(
+            _MEMO_MERGE_MIN_ROWS, self._main[0].size // _MEMO_MERGE_FRACTION
+        ):
+            self._main = self._merged(self._runs())
+            self._pending = []
+            self._n_pending = 0
+            self.stats["merges"] += 1
+        elif len(self._pending) > _MEMO_MAX_PENDING_RUNS:
+            self._pending = [self._merged(self._pending)]
+            self.stats["compactions"] += 1
+
+    @staticmethod
+    def _merged(runs):
+        """One run from sorted runs. The stable sort is timsort on uint64,
+        which merges the presorted runs rather than sorting from scratch."""
+        o = np.argsort(np.concatenate([r[0] for r in runs]), kind="stable")
+        return tuple(np.concatenate([r[f] for r in runs])[o] for f in range(4))
+
+    def keys(self):
+        """The stored keys as float tuples, in insertion order."""
+        runs = self._runs()
+        seq = np.concatenate([r[3] for r in runs])
+        k = np.concatenate([r[1] for r in runs])[np.argsort(seq)]
+        return [tuple(r) for r in k.tolist()]
+
+    def values(self):
+        """The stored (6,) values, in insertion order."""
+        runs = self._runs()
+        seq = np.concatenate([r[3] for r in runs])
+        return list(np.concatenate([r[2] for r in runs])[np.argsort(seq)])
+
+    def __iter__(self):
+        return iter(self.keys())
+
+
 def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
     """Broadcast wrapper over the designed evaluation. Accepts z′ = 0 and
     z = 0 exactly (no clamp); refuses only R = 0. Returns dict over `KEYS`.
@@ -595,17 +780,19 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     Keys are exact float tuples: no rounding, no tolerance, nothing to
     convention-gate.
 
-    `memo` (momwire#688): an optional CALLER-OWNED dict extends the dedup
-    across calls — the crossing fill's admissibility split makes many
+    `memo` (momwire#688): an optional CALLER-OWNED `TripleMemo` extends the
+    dedup across calls — the crossing fill's admissibility split makes many
     designed calls per fill (near batch, far-block samples), and a
     symmetric deck repeats triples ACROSS those calls exactly as it does
     within one. The caller must hold (ε̃, k₂, rtol) fixed for the memo's
-    lifetime — the key is the triple alone, exactly as within a call.
-    Filled entries are (6,) complex arrays; unfilled sentinel is None.
+    lifetime — the key is the triple alone, exactly as within a call. A
+    dict is refused: it is `_designed_tables_reference`'s memo, kept as the
+    in-process reference for the array one (momwire#1168 U1), and a dict
+    passed here would otherwise be the silent slow route.
 
     The memo layer stays HERE whichever route serves: the dedup happens
-    first, and only the unique triples reach one of the four machines. The
-    dispatch, in order:
+    first, and only the unique triples reach one of the four machines
+    (`_evaluate_fresh`). The dispatch, in order:
 
       column route (default), twin built  : `near_interface_six_columns`,
                                             the whole grouping in ONE call;
@@ -622,12 +809,147 @@ def designed_tables(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=
     (exact ρ) and each group evaluated once, which is where the 11–15× comes from: a real crossing
     set puts every point in a column of ≥ 32 mast heights. The grouping was
     by (ρ, z′) until momwire#899; see `group_columns` for why it is not ρ
-    alone. The dedup, the key order and the scatter below are the same on
-    every route — only the arithmetic that fills `memo` differs.
+    alone. The dedup, the fresh set's order and the scatter below are the
+    same on every route — only the arithmetic that fills the fresh rows
+    differs.
 
     The dedup is one `np.unique` over the asked triples (momwire#899): the
     asked set is ~3× the unique set on a crossing fill, and the two Python
-    passes over it that stood here were 10–15 % of the column route.
+    passes over it that stood here were 10–15 % of the column route. The
+    cross-call lookup is `TripleMemo`'s array search (momwire#1168 U1): the
+    dict it replaced cost a tuple build and two hash probes per unique row,
+    ~57 % of this function's time on razor hub_deck(16) x8.
+    """
+    if memo is not None and not isinstance(memo, TripleMemo):
+        raise TypeError(
+            f"designed_tables takes a TripleMemo, got {type(memo).__name__}; "
+            "a dict memo is _designed_tables_reference's"
+        )
+    rho_b, z_b, zp_b = np.broadcast_arrays(
+        np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
+    )
+    rows, inverse = _unique_rows(rho_b, z_b, zp_b)
+    if memo is None:
+        block = np.empty((rows.shape[0], 6), dtype=np.complex128)
+        fresh_pos = np.arange(rows.shape[0])
+    else:
+        hit, block = memo.lookup(rows)
+        fresh_pos = np.flatnonzero(~hit)  # ascending: first-appearance order
+    if fresh_pos.size:
+        sub = rows[fresh_pos]
+        vals = _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult)
+        block[fresh_pos] = vals
+        if memo is not None:
+            memo.insert(sub, vals)
+    if rows.shape[0]:
+        out = np.ascontiguousarray(block[inverse].T).reshape((6,) + rho_b.shape)
+    else:
+        out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
+    return dict(zip(KEYS, out))
+
+
+def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult):
+    """The six values of each (m, 3) row of `sub` (distinct triples, in
+    first-appearance order), as (m, 6), row i for sub[i] — through the route
+    `designed_tables` documents. Each branch hands its machine the same
+    arguments in the same order as `_designed_tables_reference` does, which
+    is what keeps the two routes' bits equal: on the column route a member's
+    value depends on its column's membership (`six_columns`), so the fresh
+    set and its grouping are the contract, not the values alone.
+    """
+    if _use_column_route() and _use_column_accel():
+        # The twin's parallel unit is the COLUMN, so the whole grouping goes
+        # in ONE call: a call per column would hand OpenMP one column at a
+        # time and give back exactly the scaling the numpy route lacks. The
+        # concatenation keeps each group contiguous and `offsets` says where
+        # each starts.
+        #
+        # No BLAS pin here — the twin has no gemm to pin. It gets the
+        # PHYSICAL core count instead, which is #898's finding applied to its
+        # own arithmetic: libmvec exp/sincos saturates a core's FPU, so the
+        # hyperthread siblings contend rather than add (this kernel measured
+        # 40 ms at 4 threads and 46 ms at 8 on a 4c/8t box). The count is
+        # passed IN rather than guessed there: the policy, and `psutil`, live
+        # on this side.
+        k_p = float(k2)
+        k_m = k_medium(complex(eps_t), k_p)
+        rho_c, sizes, member_order = _column_blocks(sub)
+        offsets = np.zeros(sizes.size + 1, dtype=np.intp)
+        offsets[1:] = np.cumsum(sizes)
+        zs = np.ascontiguousarray(sub[member_order, 1])
+        zps = np.ascontiguousarray(sub[member_order, 2])
+        # Refused HERE, in the walk's words with the offending member's
+        # numbers: the twin refuses the same set (before it builds a single
+        # column), but from C++ it cannot spell the values.
+        _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
+        vals = _nia.near_interface_six_columns(
+            k_p,
+            k_m,
+            rho_c,
+            offsets,
+            zs,
+            zps,
+            float(lam_mult),
+            int(_COLUMN_P),
+            float(_DETOUR),
+            _physical_cpu_count(),
+            _GX,
+            _GW,
+        )
+        out = np.empty((sub.shape[0], 6), dtype=np.complex128)
+        out[member_order] = vals
+        return out
+    if _use_column_route():
+        triples = [tuple(r) for r in sub.tolist()]
+        got = {}
+        with _blas_physical_cores():
+            for members in group_columns(triples).values():
+                vals = six_columns(
+                    eps_t,
+                    k2,
+                    members[0][0],
+                    [m[1] for m in members],
+                    [m[2] for m in members],
+                    rtol=rtol,
+                    lam_mult=lam_mult,
+                )
+                got.update(zip(members, vals))
+        return np.stack([got[t] for t in triples])
+    if _use_near_interface_accel():
+        k_p = float(k2)
+        k_m = k_medium(complex(eps_t), k_p)
+        return np.asarray(
+            _nia.near_interface_six_batch(
+                k_p,
+                k_m,
+                np.ascontiguousarray(sub[:, 0]),
+                np.ascontiguousarray(sub[:, 1]),
+                np.ascontiguousarray(sub[:, 2]),
+                float(rtol),
+                float(lam_mult),
+                _ADAPT_DEPTH,
+                _DETOUR,
+                _GX,
+                _GW,
+            )
+        )
+    return np.stack(
+        [
+            six_point(eps_t, k2, r, zz, zzp, rtol=rtol, lam_mult=lam_mult)
+            for r, zz, zzp in sub.tolist()
+        ]
+    )
+
+
+def _designed_tables_reference(
+    eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None
+):
+    """`designed_tables` with the dict memo it had before momwire#1168 U1,
+    kept as the in-process reference the array memo (`TripleMemo`) is gated
+    bit-identical against. `memo` is a dict keyed on the exact float triple;
+    a filled entry is a (6,) complex array and the unfilled sentinel is None,
+    left behind by a call that raised part-way (a later ask of that key then
+    raises in the restack below). No production caller reaches it.
     """
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)

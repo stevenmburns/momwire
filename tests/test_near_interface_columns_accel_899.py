@@ -305,7 +305,7 @@ def test_g899c_8_designed_tables_refuses_before_it_hands_anything_over():
 
 def _routed(mesh, force_numpy):
     eps_t, k2, rho, z, zp = mesh
-    memo = {}
+    memo = ni.TripleMemo()
     was = ni._FORCE_NUMPY
     try:
         ni._FORCE_NUMPY = force_numpy

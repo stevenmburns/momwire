@@ -94,7 +94,7 @@ def test_g688_2_shared_memo_is_bit_identical_and_skips_reevaluation(monkeypatch)
     rho = np.array([0.3, 0.5])
     fresh = _near_interface.designed_tables(4.0 - 0.5j, k, rho, 0.2, -0.15, rtol=1e-8)
     assert len(calls) == 2
-    memo = {}
+    memo = _near_interface.TripleMemo()
     first = _near_interface.designed_tables(
         4.0 - 0.5j, k, rho, 0.2, -0.15, rtol=1e-8, memo=memo
     )

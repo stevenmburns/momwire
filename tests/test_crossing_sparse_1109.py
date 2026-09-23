@@ -315,9 +315,9 @@ def test_p2c_1_ends_accumulate_in_place_bit_identically(axes):
     n = ax_a["n_basis"]
     rng = np.random.default_rng(1109)
     base = (rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))) * 1e3
-    returned = base + cf._ends_and_corner(*args, memo={})
+    returned = base + cf._ends_and_corner(*args, memo=cf._near_interface.TripleMemo())
     in_place = base.copy()
-    cf._ends_and_corner(*args, memo={}, out=in_place)
+    cf._ends_and_corner(*args, memo=cf._near_interface.TripleMemo(), out=in_place)
     assert np.array_equal(in_place, returned)
 
 
@@ -336,7 +336,7 @@ def test_p2c_2_ends_build_no_full_size_block_when_given_one(axes, monkeypatch):
         return out
 
     monkeypatch.setattr(np, "zeros", spy)
-    cf._ends_and_corner(*args, memo={}, out=dest)
+    cf._ends_and_corner(*args, memo=cf._near_interface.TripleMemo(), out=dest)
     assert seen == [], seen
     assert np.count_nonzero(dest), "the ends wrote nothing"
 

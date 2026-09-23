@@ -247,7 +247,7 @@ def test_g895_7_both_sub_seeding_rules_are_load_bearing(monkeypatch):
 def _routed(build_or_mesh, route):
     """`designed_tables` on `route` over one mesh, plus its memo."""
     eps_t, k2, rho, z, zp = build_or_mesh
-    memo = {}
+    memo = ni.TripleMemo()
     was = ni._ROUTE
     try:
         ni._ROUTE = route

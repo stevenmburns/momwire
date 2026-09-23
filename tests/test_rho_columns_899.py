@@ -98,7 +98,7 @@ def test_g899_4_designed_tables_makes_one_column_call_per_distinct_rho(monkeypat
     rho = np.array([0.3, 2.0, 13.6])[None, :, None]
     z = np.array([0.01, 0.5, 2.0, 9.0])[:, None, None]
     zp = np.array([-0.1524, -0.9])[None, None, :]
-    memo_c, memo_p = {}, {}
+    memo_c, memo_p = ni.TripleMemo(), ni.TripleMemo()
     monkeypatch.setattr(ni, "_ROUTE", "column")
     got = ni.designed_tables(SOIL_A, K7, rho, z, zp, memo=memo_c)
     monkeypatch.setattr(ni, "_ROUTE", "point")
@@ -138,7 +138,7 @@ def test_g899_6_the_scatter_and_the_memo_are_the_same_floats():
     ask returns the right shapes without touching anything."""
     rho = np.array([0.3, 0.5, 0.3, 0.5])
     z = np.array([[0.2], [1.0]])
-    memo = {}
+    memo = ni.TripleMemo()
     first = ni.designed_tables(SOIL_A, K7, rho, z, -0.2, memo=memo)
     again = ni.designed_tables(SOIL_A, K7, rho, z, -0.2, memo=memo)
     assert len(memo) == 4
@@ -148,6 +148,7 @@ def test_g899_6_the_scatter_and_the_memo_are_the_same_floats():
         assert np.array_equal(first[key][:, 0], first[key][:, 2])
         for zi, zz in enumerate([0.2, 1.0]):
             for ri, rr in enumerate([0.3, 0.5, 0.3, 0.5]):
-                assert first[key][zi, ri] == memo[(rr, zz, -0.2)][i]
+                hit, row = memo.lookup(np.array([[rr, zz, -0.2]]))
+                assert hit[0] and first[key][zi, ri] == row[0, i]
     empty = ni.designed_tables(SOIL_A, K7, np.empty((0, 3)), 0.2, -0.2)
     assert all(empty[k].shape == (0, 3) for k in ni.KEYS)
