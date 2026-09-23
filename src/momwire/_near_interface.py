@@ -878,5 +878,12 @@ def radius_tables(eps_t, k2, rho, z, zp, wire_radius, rtol=1e-10, memo=None):
     rule: every cross-family evaluation whose pair distance can reach
     the a-scale carries the offset; at R ≫ a it is invisible). `memo`
     keys on the FOLDED ρ_eff (see `designed_tables`)."""
-    rho_eff = np.hypot(np.asarray(rho, float), float(wire_radius))
+    rho_eff = radius_fold(rho, wire_radius)
     return designed_tables(eps_t, k2, rho_eff, z, zp, rtol=rtol, memo=memo)
+
+
+def radius_fold(rho, wire_radius):
+    """`radius_tables`' ρ → ρ_eff = hypot(ρ, a), the one spelling of it: a
+    caller that dedups the folded triples itself (the crossing fill's chunked
+    main sandwich) must fold them exactly as the memo keys them."""
+    return np.hypot(np.asarray(rho, float), float(wire_radius))
