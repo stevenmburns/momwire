@@ -645,9 +645,20 @@ _MAIN_STREAMED = True
 # running sum of each row whose pattern straddles a chunk boundary.
 _STREAMED_WHOLE_ROWS = True
 
-# The whole-run dense-direct switch (a timing comparison, a bisect); parity
-# tests drive both paths in-process by calling the two entries directly.
-_FORCE_DENSE = bool(os.environ.get("MOMWIRE_CROSSING_FORCE_DENSE"))
+# The whole-run switch that routes the split entries
+# (`cross_complete_block_split`, `cross_complete_blocks_two_radius`,
+# `cross_complete_block_reversed_split`) onto the WHOLE-AXIS fill — every node
+# pair direct through `_main_sandwich`, no admissibility partition, no coarse
+# axes, no ACA. For a timing comparison or a bisect; parity tests drive both
+# paths in-process by calling the two entries directly.
+#
+# It was `_FORCE_DENSE` until momwire#1168 U5, from when the whole-axis
+# sandwich densified its weights (six full GEMMs). Since 9cd2d22 it contracts
+# the sparse weights (`_sandwich_dense`), so "dense" named nothing it still
+# does, and the split's near blocks are just as direct. The
+# environment variable keeps its LEGACY name, `MOMWIRE_CROSSING_FORCE_DENSE`,
+# so existing scripts and bisect notes keep working.
+_WHOLE_AXIS_NO_ACA = bool(os.environ.get("MOMWIRE_CROSSING_FORCE_DENSE"))
 
 
 def _graded_u(h, toward_end, a, growth=2.0, gx=_GX8, gw=_GW8):
@@ -2188,9 +2199,9 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
     routing needs to write `Z[rows] -= t; Z[rows] -= t.T` without the other
     rows. One evaluation of the kernel tables and one ACA factorisation per
     block serve both halves; `rows=None` is the full block and today's path."""
-    if _FORCE_DENSE:
+    if _WHOLE_AXIS_NO_ACA:
         t = cross_complete_block(ctx, A, B, corner=corner)
-        # The bisect switch answers in the restricted shape too, by slicing:
+        # The whole-axis switch answers in the restricted shape too, by slicing:
         # it exists to compare the split against the dense fill, so it must
         # stay drivable from every caller the split has.
         return t if rows is None else (t[rows], t[:, rows])
@@ -2255,7 +2266,7 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
 
     # Keyed on the folded rho_eff, so one memo per radius stays exact.
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
-    if _FORCE_DENSE:
+    if _WHOLE_AXIS_NO_ACA:
         t_above = _main_sandwich(ctx_above, A, B, eps_t, k_p, c1, gz, memo=memo)
         if rows is not None:
             t_above = t_above[rows]
@@ -2601,7 +2612,7 @@ def cross_complete_block_reversed_split(
     axis's (source columns) — the same argument order as the axes. The main
     sandwich is the forward split's, transposed; the ends follow the roles.
     """
-    if _FORCE_DENSE:
+    if _WHOLE_AXIS_NO_ACA:
         return cross_complete_block_reversed(ctx, P, Q, corner=corner, sw_end=sw_end)
     _refuse_path_tested(P, Q)
 
