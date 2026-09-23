@@ -652,6 +652,7 @@ def axis_data(
     panel_order=None,
     q=None,
     share_from=None,
+    grade_near_plane=False,
 ):
     """Everything one axis of the crossing blocks needs: quadrature nodes,
     per-node tangents and weights, per-basis value/derivative samples, and
@@ -686,6 +687,24 @@ def axis_data(
     `panel_order` = 8 AND `q` = 8 together that reach 7.7e-11. Sweeping
     either alone reads as "converged" at the other's plateau, which is how
     that residual came to be recorded as a property of the source Gauss.
+
+    **`grade_near_plane`** (momwire#1152, razor's cross blocks only) also
+    grades a segment that does NOT touch the plane but APPROACHES it: its
+    nearer end at distance ``d`` from the plane, its farther end beyond
+    ``2d``. The graded panels then run toward the nearer end with the first
+    panel ``max(d, a)`` wide — the a-scale floor a touching segment's first
+    panel has, lifted to the distance the integrand actually varies on,
+    since an observer across the plane sees the source through ``d + d′``
+    and never closer than ``d``. The ``2d`` test is what keeps it narrow:
+    along a wire that heads away from the plane only the plane-nearest
+    segment can pass it (segment ``k`` of a wire starting ``g`` off the
+    plane passes only if ``k = 0`` and its length exceeds ``g``), and a
+    wire running PARALLEL to the plane never does, since grading toward an
+    end cannot help a near-singular point that can sit anywhere along it.
+    Off by default, so bspline's and SinusoidalGalerkinSolver's axes are
+    unchanged by construction: on a coaxial detached deck with a 0.67 m
+    mast segment 10 mm above the plane, razor's reversed cross block
+    collapsed at eps~ = 1 only to 6e-6 without it.
     """
     basis = ctx.basis
     geom = ctx.geom
@@ -712,8 +731,14 @@ def axis_data(
         tang = geom.tangents[g]
         touch_lo = abs(sl[2] - gz) < tol
         touch_hi = abs(sr[2] - gz) < tol
+        d_lo, d_hi = abs(sl[2] - gz), abs(sr[2] - gz)
         if touch_lo or touch_hi:
             u, w = _graded_u(h, "lo" if touch_lo else "hi", a_wire, growth, gx, gw)
+        elif grade_near_plane and max(d_lo, d_hi) > 2.0 * min(d_lo, d_hi):
+            d = min(d_lo, d_hi)
+            u, w = _graded_u(
+                h, "lo" if d_lo <= d_hi else "hi", max(d, a_wire), growth, gx, gw
+            )
         else:
             u = h * tq
             w = 0.5 * h * wg

@@ -4254,7 +4254,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for r in np.unique(seg_a[seg_of[src]]):
                 ctx_r = ctx._replace(a_wire=float(r))
                 part = seg_of[src][seg_a[seg_of[src]] == r]
-                ax = _crossing_fill.axis_data(ctx_r, part, **axis_kw)
+                ax = _crossing_fill.axis_data(
+                    ctx_r, part, grade_near_plane=True, **axis_kw
+                )
                 Z[np.ix_(rows, cols)] -= block(ctx_r, test_axis, ax, corner=False)[
                     np.ix_(rows, cols)
                 ]
