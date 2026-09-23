@@ -1,0 +1,11 @@
+momwire from /tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1159/src/momwire/__init__.py
+mixed(2): Y rel err per entry
+[[1.997e-08 6.449e-06]
+ [6.449e-06 1.997e-08]]
+    wire 0: |I1 - If|/|If| 2.952e-07  |I1 + If|/|If| 2.000e+00
+    wire 1: |I1 - If|/|If| 2.952e-07  |I1 + If|/|If| 2.000e+00
+crossing: Y rel err per entry
+[[1.385e-06 3.906e-06]
+ [3.906e-06 1.481e-06]]
+    wire 0: |I1 - If|/|If| 1.146e-04  |I1 + If|/|If| 2.000e+00
+    wire 1: |I1 - If|/|If| 1.039e-04  |I1 + If|/|If| 2.000e+00

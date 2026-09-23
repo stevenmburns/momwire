@@ -1,0 +1,9 @@
+mixed m=1: Y12 SG -1.45317e-05-5.00055e-05j bs -1.47640e-05-5.03857e-05j rel 8.485e-03; Y11 rel 3.728e-02
+    wire 0 (below): |I_sg - I_bs|/|I_bs| 9.643e-01  |I_sg + I_bs|/|I_bs| 1.037e+00  max|I_bs| 7.806e-03
+    wire 1 (above): |I_sg - I_bs|/|I_bs| 2.883e-03  |I_sg + I_bs|/|I_bs| 2.001e+00  max|I_bs| 3.987e-04
+mixed m=2: Y12 SG -1.47396e-05-5.03298e-05j bs -1.47981e-05-5.04267e-05j rel 2.154e-03; Y11 rel 1.954e-02
+    wire 0 (below): |I_sg - I_bs|/|I_bs| 9.625e-01  |I_sg + I_bs|/|I_bs| 1.039e+00  max|I_bs| 7.986e-03
+    wire 1 (above): |I_sg - I_bs|/|I_bs| 1.348e-03  |I_sg + I_bs|/|I_bs| 2.000e+00  max|I_bs| 4.155e-04
+mixed m=4: Y12 SG -1.48062e-05-5.04233e-05j bs -1.48209e-05-5.04477e-05j rel 5.408e-04; Y11 rel 1.102e-02
+    wire 0 (below): |I_sg - I_bs|/|I_bs| 9.620e-01  |I_sg + I_bs|/|I_bs| 1.039e+00  max|I_bs| 8.091e-03
+    wire 1 (above): |I_sg - I_bs|/|I_bs| 6.617e-04  |I_sg + I_bs|/|I_bs| 2.000e+00  max|I_bs| 4.253e-04
