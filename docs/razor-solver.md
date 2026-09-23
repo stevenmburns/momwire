@@ -758,9 +758,9 @@ Measured 2026-09-02 on the phase-0 buried dipole (`tests/test_razor_below_plane_
 **It is served since momwire#1149 U0.** `_SERVE_BELOW_PLANE` is on and owns
 razor's `buried` capability cell (it was off, behind the shelving of
 2026-09-03, until the 2026-09-22 re-measurement). A deck with a crossing
-junction is refused by name until momwire#1149 U2 (`_SERVE_CROSSING`, which
-owns `buried+crossing_junction`); a detached above/below deck takes its own
-route (below). The extended kernel is declined below the plane with the
+junction is served since momwire#1149 U2 (`_SERVE_CROSSING`, which owns
+`buried+crossing_junction`; see "Crossing decks" below); a detached
+above/below deck takes its own route (below). The extended kernel is declined below the plane with the
 tree-wide sentence (`buried+extended_kernel`). The serve-plan refusals a
 buried grid can hit (past the R₁ cap, below the θ floor) are asked over
 segment endpoints and centroids before any grid is filled, the same R₁ and θ
@@ -791,5 +791,57 @@ Measured 2026-09-22 (`tests/test_razor_detached_1149.py`,
 | loading shift vs bspline, x1 → x4 | 0.046 → 0.015 Ω |
 | licensed NEC-5, equal mesh (instrument) | Z11 ≤ 0.10 Ω, Z22 ≤ 0.023, Z12 ≤ 0.003 |
 
-A deck whose wires meet at a junction in the plane is the crossing class,
-and stays refused until momwire#1149 U2 derives the node.
+## Crossing decks (momwire#1149 U2)
+
+A deck whose wires meet at a junction IN the plane — a bonded radial screen,
+a ground rod — is the crossing class. `_assemble_Z_crossing` fills it as four
+masked terms (each medium's own fill on its own sub-geometry, and the trunk's
+two cross blocks on razor's path axes, `corner=False`), splitting every tent
+that spans the plane into two half tents, one per medium, with the crossing
+row's path chopped at the knot (T2 evaluated AT the node, momwire#831).
+
+A half tent carries its current up to the node and stops there, so it implies
+a point charge at the node; the two halves' charges are equal and opposite,
+and the whole tent carries none. Every term of the assembly may therefore
+carry both node charges or drop both. The families' direct and image terms
+drop them (they spell a half tent's charge as its wing's doublet), and so do
+the cross blocks on a path axis (`Fd = 0` empties the source-end charge term,
+and the corner is off). The families' Sommerfeld REMAINDER does not: it is the
+field of the half tent's current, integrated through the fields of unit
+current moments, and such a field carries every charge the current implies.
+Left in, the two remainders' shares do not cancel — they are two different
+remainders — and the assembly converged to a non-reciprocal limit carrying a
+spurious node resistance (+9.9 Ω against bspline on `crossing_deck`, +20.7 Ω
+on the four-radial hub deck, growing with the buried members and with the
+soil contrast, and invisible at ε̃ = 1 where there is no remainder).
+
+`_crossing_node_charges` takes it back out. For every crossing tent it adds,
+at each row's T2 endpoints, the node charge's direct+image potential minus
+its exact potential — the transmitted `V` the cross blocks' own end terms
+read, continuous across the plane — which is minus the remainder's share. It
+is identically zero at ε̃ = 1. Read the other way it is the complete
+convention bspline fills in (its self completions give each family's
+direct+image the node charge, its source-end and corner terms give it to the
+cross blocks): the two conventions differ only by terms that cancel exactly
+between a family and its cross block.
+
+Measured 2026-09-22 (`tests/test_razor_crossing_node_1149.py`,
+`scratch/razor-buried-u2/`), every edge refined including the node's:
+
+| gate | result |
+|---|---|
+| 2-port non-reciprocity, `crossing_deck`, soil A, x1 → x16 | 6.45e-4 → 1.56e-4 → 3.67e-5 → 8.65e-6 → 2.06e-6 (was flat at 3.2e-2) |
+| the same, lossless ε_r 13 / 80, lossy ε_r 13 | 3.5–4.3x / 4.0x / 4.0–4.4x per doubling |
+| 30° bent deck; three crossing tents at one node; two nodes | 4.2–4.6x / 4.0x / 4.0x per doubling |
+| driving point vs bspline, `crossing_deck`, x1 → x16 | 6.78 → 3.19 → 1.68 → 0.95 → 0.57 Ω (was +9.9 Ω R, flat) |
+| driving point vs bspline, hub_deck(4), x1 → x8 | 7.47 → 3.96 → 2.23 → 1.30 Ω (was +20.7 Ω R, flat) |
+| catalog buried_radial_vertical vs bspline, x1 → x4 | 1.86 → 0.81 → 0.42 Ω |
+| antennaknobs power balance, N = 1/2/4/8 radials | η ≤ 1, monotone; η·R within 0.36–0.39 % of bspline (was 0.67–0.85 %); R_in −0.24…−0.32 Ω (was +3.0…+7.3) |
+| ε̃ = 1 collapse | unchanged (the term is zero there) |
+| licensed reference, equal mesh (instrument) | 0.012–0.036 Ω at x4…x16; dR ≤ 0.14 Ω for ε_r 1.1 → 80 (was +31.7 at 80) |
+
+A ladder that holds the node-adjacent edges fixed holds the node's own
+discretisation error fixed too, and its non-reciprocity floors near 7e-6 for
+that reason alone (probes 3–8 rule out the grids, the quadrature and the
+radius). Loading on a crossing deck stays a declared refusal until U3
+(`wire_loading+crossing_junction`).

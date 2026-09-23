@@ -1,0 +1,12 @@
+N=1 x1 bs 418.048-93.040j fixed gap -2.219-9.682j unfixed gap 9.155-21.106j
+N=1 x2 bs 416.444-96.317j fixed gap -1.727-5.641j unfixed gap 9.431-16.948j
+N=1 x4 bs 415.506-98.158j fixed gap -1.130-3.281j unfixed gap 9.940-14.568j
+N=2 x1 bs 256.429-30.473j fixed gap -1.593-7.139j unfixed gap 16.519-12.820j
+N=2 x2 bs 256.157-31.596j fixed gap -0.858-4.012j unfixed gap 17.076-9.706j
+N=2 x4 bs 256.002-32.218j fixed gap -0.505-2.312j unfixed gap 17.370-8.032j
+N=4 x1 bs 168.610-36.168j fixed gap -1.706-7.276j unfixed gap 19.370-6.618j
+N=4 x2 bs 168.415-36.469j fixed gap -0.845-3.866j unfixed gap 20.150-3.281j
+N=4 x4 bs 168.302-36.617j fixed gap -0.465-2.177j unfixed gap 20.512-1.639j
+N=8 x1 bs 129.733-53.607j fixed gap -1.535-7.305j unfixed gap 20.496-1.325j
+N=8 x2 bs 129.475-53.607j fixed gap -0.764-3.836j unfixed gap 21.278+2.061j
+N=8 x4 bs 129.327-53.587j fixed gap -0.409-2.141j unfixed gap 21.650+3.709j

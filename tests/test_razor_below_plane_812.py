@@ -129,7 +129,7 @@ def test_a_mixed_deck_with_no_crossing_junction_is_neither_unit(serve_below):
     assert s._detached and not s._below_plane and not s._crossing
 
 
-def test_a_crossing_deck_names_the_crossing_unit(serve_below):
+def test_a_crossing_deck_names_the_crossing_unit(serve_below, monkeypatch):
     """The deck the previous test used to be about: wires that MEET at the
     interface, so a crossing junction IS declared and momwire#813 is the unit
     that will serve it.
@@ -145,6 +145,9 @@ def test_a_crossing_deck_names_the_crossing_unit(serve_below):
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from test_crossing_serve_524 import crossing_deck
 
+    # Served since momwire#1149 U2; the sentence is what the switch, off,
+    # still names.
+    monkeypatch.setattr(_razor, "_SERVE_CROSSING", False)
     kw = {k: v for k, v in crossing_deck(1).items() if k != "junctions"}
     with pytest.raises(ValueError, match="momwire#1149 U2") as exc:
         RazorSolver(**kw)

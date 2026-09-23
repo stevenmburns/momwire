@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-45 sentences across 78 declared cells, verbatim. A sentence shared by several rows is printed
+44 sentences across 77 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -247,10 +247,6 @@ renders in host dialogs.
 - `RazorSolver` `bundle`
 
   > this deck spells a conductor as N geometrically COINCIDENT segments (a bundle). Razor's tent basis puts one column per segment, so N coincident segments are N identical columns and the matrix is singular by construction -- at any mesh, in free space and in soil alike, and whatever the quadrature. Razor has no bundle rule; BSplineSolver does (momwire#524 phase 2's fan widening). Respell the bundle as ONE conductor: a screen whose N radials meet at a buried HUB and rise to the node on a single rise is the same antenna without the coincidence (antennaknobs' `buried_radial_vertical` is spelled that way since antennaknobs#1108; its `bundle` variant is this deck), which BSplineSolver serves. Or solve the bundle with BSplineSolver, remembering that a bundle of N coincident thin wires and one wire of the same radius are two structures, never two meshes of one
-
-- `RazorSolver` `buried+crossing_junction`
-
-  > this deck's wires cross the interface at a junction, and razor does not serve the crossing node yet: its crossing fill converges to a non-reciprocal limit carrying a spurious node resistance (+9.85 ohm against BSplineSolver on the momwire#524 crossing deck, growing with the number of buried members), so that class stays refused until momwire#1149 U2 derives the node. Razor serves a wholly-buried deck and a DETACHED one (buried wires with no junction in the plane). Solve this deck with BSplineSolver or SinusoidalGalerkinSolver
 
 - `RazorSolver` `centre_feeds`
 

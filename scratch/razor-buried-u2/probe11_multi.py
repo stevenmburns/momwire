@@ -6,8 +6,9 @@ crossing tents, and on a deck with TWO nodes.
             the node pairs it with a leg: three crossing tents.
   tripodB   the same deck with a LEG listed first: one crossing tent, two
             below-family tents. Same current space, different rows.
-  twoS      `two_node_deck` at S m (12 m grazes past the floor on both
-            solvers; 2 and 3 m serve to x4), ports at 4.5 and 2.5.
+  twoS      `two_node_deck` at S m, ports at 4.5 and 2.5. bspline's below
+            grazing floor refuses 12 m at x1 and 3 m at x4; 2 m serves
+            to x4.
 
 Every edge refined, soil A. Two ports on knots at every rung (tripod:
 monopole at 4.0 and leg 0 at 1.0; two-node: each rod's above wire at 4.5).
