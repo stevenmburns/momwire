@@ -62,6 +62,16 @@ def normalize_wire_radius(value, n_wires, *, per_wire_refusal=None):
 _JUNCTION_COINCIDENCE_FLOOR = 1e-5
 
 
+def seg_radius(radius_per_wire, segs_per_wire):
+    """`(n_segs,)` per-segment radius: each segment inherits its wire's
+    (stevenmburns/momwire#147). `segs_per_wire` is each wire's segment count
+    in segment order — the solver reads it off its own geometry, which is the
+    only part that differs between them. The kernel helpers collapse a
+    uniform array back to the scalar fast path, so passing this everywhere
+    keeps scalar-radius solves bit-identical."""
+    return np.repeat(radius_per_wire, segs_per_wire)
+
+
 def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
     """Refuse junction groups whose member wire-ends do not coincide.
 

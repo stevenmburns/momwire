@@ -2564,11 +2564,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # kernel moments
 
     def _seg_radius(self, geom):
-        """``(n_segs,)`` per-segment radius — each segment inherits its
-        wire's (stevenmburns/momwire#147), the same spelling and the same
-        `seg_offsets` reading `BSplineSolver._seg_radius` uses."""
+        """``(n_segs,)`` per-segment radius (`_wire_spec.seg_radius`), off
+        the same `seg_offsets` reading `BSplineSolver._seg_radius` uses."""
         seg_off = np.asarray(geom["seg_offsets"], dtype=np.int64)
-        return np.repeat(self._radius_per_wire, np.diff(seg_off))
+        return _wire_spec.seg_radius(self._radius_per_wire, np.diff(seg_off))
 
     def _kernel_radius(self, geom):
         """The `a` the reduced kernel is regularised with, for every source
