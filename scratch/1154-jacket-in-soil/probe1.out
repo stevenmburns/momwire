@@ -1,0 +1,20 @@
+eps~= 4.0 L=1.0 n= 20  exact 0.2136-1911.7839j
+   today-exact -0.0012+141.5771j  issue-exact -0.0013+140.6250j  charge-exact -0.0001-0.8139j   (bare 0.2155-2193.7620j)
+eps~= 4.0 L=1.0 n= 40  exact 0.2019-1855.3676j
+   today-exact -0.0020+141.7922j  issue-exact -0.0021+140.8971j  charge-exact -0.0001-1.2596j   (bare 0.2048-2136.4366j)
+eps~= 4.0 L=1.0 n= 80  exact 0.1941-1816.7972j
+   today-exact -0.0030+144.2643j  issue-exact -0.0031+143.4093j  charge-exact -0.0001-2.3512j   (bare 0.1983-2100.2973j)
+eps~= 4.0 L=5.0 n= 40  exact 5.7008-419.4855j
+   today-exact 0.0217+27.6899j  issue-exact -0.0129+22.5892j  charge-exact -0.0006-0.0345j   (bare 5.6648-474.7394j)
+eps~= 4.0 L=5.0 n= 80  exact 5.5742-414.5525j
+   today-exact 0.0165+27.5845j  issue-exact -0.0190+22.6036j  charge-exact -0.0007-0.0463j   (bare 5.5460-469.5477j)
+eps~= 8.0 L=1.0 n= 20  exact 0.3237-1042.0432j
+   today-exact -0.0036+164.7449j  issue-exact -0.0040+162.5151j  charge-exact -0.0003-0.7027j   (bare 0.3245-1088.9412j)
+eps~= 8.0 L=1.0 n= 40  exact 0.3073-1014.0155j
+   today-exact -0.0059+164.5677j  issue-exact -0.0063+162.4705j  charge-exact -0.0003-1.0117j   (bare 0.3085-1060.6737j)
+eps~= 8.0 L=1.0 n= 80  exact 0.2970-995.9294j
+   today-exact -0.0087+166.6768j  issue-exact -0.0092+164.6727j  charge-exact -0.0002-1.6789j   (bare 0.2987-1042.8466j)
+eps~= 8.0 L=5.0 n= 40  exact 9.4565-169.9212j
+   today-exact 0.2864+33.0746j  issue-exact -0.0078+19.7986j  charge-exact -0.0020-0.0371j   (bare 9.3908-179.3086j)
+eps~= 8.0 L=5.0 n= 80  exact 9.3070-168.4661j
+   today-exact 0.2812+32.8642j  issue-exact -0.0237+19.8141j  charge-exact -0.0023-0.0466j   (bare 9.2426-177.7912j)

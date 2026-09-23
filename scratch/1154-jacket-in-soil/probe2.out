@@ -1,0 +1,32 @@
+BSplineSolver              n=20 bare 123.841+18.024j
+    R' = 20 ohm/m  shift 35.303-13.511j   []
+    L' = 1 uH/m    shift 43.941+81.117j   []
+RazorSolver                n=20 bare 121.060+12.953j
+    R' = 20 ohm/m  shift 32.403-14.573j   ['RazorFarMeshClass: razor-2p is first order in the far mesh: its path (razor-blade) testing rule is ']
+    L' = 1 uH/m    shift 47.829+74.004j   ['RazorFarMeshClass: razor-2p is first order in the far mesh: its path (razor-blade) testing rule is ']
+SinusoidalGalerkinSolver   n=20 bare 124.948+18.999j
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/scratch/1154-jacket-in-soil/probe2_sg_loading.py", line 59, in <module>
+    zl, ml = z(cls, n, **kw)
+             ^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/scratch/1154-jacket-in-soil/probe2_sg_loading.py", line 43, in z
+    val = complex(cls(**deck(n, **kw), **extra).compute_impedance()[0])
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/src/momwire/sinusoidal_galerkin.py", line 5022, in compute_impedance
+    G, seg_view = self._assemble_Z_ported(geom, self.k)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/src/momwire/sinusoidal_galerkin.py", line 1860, in _assemble_Z_ported
+    G, seg_view = self._assemble_Z(geom, k)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/src/momwire/sinusoidal_galerkin.py", line 4242, in _assemble_Z
+    self._apply_loading(G, geom, seg_view, k)
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/src/momwire/sinusoidal_galerkin.py", line 4347, in _apply_loading
+    z_seg = _wire_loading.loading_for(self, k * self.c, geom).z_seg
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/src/momwire/_wire_loading.py", line 539, in loading_for
+    z_wire = series_impedance_per_wire(
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/src/momwire/_wire_loading.py", line 346, in series_impedance_per_wire
+    omega = np.asarray(omega, dtype=float)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: float() argument must be a string or a real number, not 'complex'
