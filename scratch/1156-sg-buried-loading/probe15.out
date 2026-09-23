@@ -1,0 +1,4 @@
+feed wire 3 m=1 bare SG 26.539-1058.201j bs 26.540-1058.219j | L'=1u gap 0.007 | sigma gap 0.000 | jacket gap 0.002
+feed wire 3 m=2 bare SG 25.366-1033.693j bs 25.366-1033.694j | L'=1u gap 0.001 | sigma gap 0.000 | jacket gap 0.000
+feed wire 0 m=1 bare SG 233.716-100.619j bs 227.516-66.890j | L'=1u gap 8.919 | sigma gap 0.044 | jacket gap 11.745
+feed wire 0 m=2 bare SG 212.042-83.501j bs 211.616-69.395j | L'=1u gap 4.618 | sigma gap 0.023 | jacket gap 4.791

@@ -1,0 +1,4 @@
+compute_impedance       (122.5385785748851+15.703289395336949j)
+impedance_swept         (122.53857857489436+15.703289395320093j)
+compute_port_solution ValueError ground_model='sommerfeld' requires every wire at or above ground_z (min height above plane: -0.5)
+compute_y_matrix_swept ValueError ground_model='sommerfeld' requires every wire at or above ground_z (min height above plane: -0.5)

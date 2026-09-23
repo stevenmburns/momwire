@@ -1,0 +1,50 @@
+m=1 SinusoidalGalerkinSolver   bare 124.637+16.961j 64.585-2002.537j (1.2 s)
+m=1 BSplineSolver              bare 126.006+23.117j -83.098-2506.990j (0.0 s)
+m=1 RazorSolver                bare 120.714+13.251j -67.374-2346.961j (0.7 s)
+    L'=1u        port0 SG 43.442+79.826j | BSpli 37.294+88.580j gap 10.697 | Razor 44.393+76.858j gap 3.117
+    L'=1u        port1 SG 55.715-21.823j | BSpli -49.407+242.708j gap 284.653 | Razor -50.303+211.386j gap 256.176
+    sigma        port0 SG 0.366+0.169j | BSpli 0.372+0.205j gap 0.036 | Razor 0.353+0.157j gap 0.017
+    sigma        port1 SG 0.426-0.475j | BSpli 0.183+1.455j gap 1.946 | Razor 0.099+1.259j gap 1.765
+    jacket       port0 SG -13.676-44.307j | BSpli -13.092-46.610j gap 2.376 | Razor -12.706-42.262j gap 2.263
+    jacket       port1 SG -92.751+156.557j | BSpli 149.707+117.765j gap 245.542 | Razor 129.743+120.627j gap 225.376
+    jacket-below port0 SG -13.658-44.248j | BSpli -13.105-46.655j gap 2.469 | Razor -12.723-42.301j gap 2.160
+    jacket-below port1 SG -95.141+26.975j | BSpli 153.679-49.954j gap 260.441 | Razor 133.644-35.844j gap 237.252
+m=2 SinusoidalGalerkinSolver   bare 122.676+14.967j 61.129-1935.694j (0.6 s)
+m=2 BSplineSolver              bare 123.807+18.739j -76.670-2405.233j (0.1 s)
+m=2 RazorSolver                bare 121.075+13.627j -68.879-2318.106j (1.5 s)
+    L'=1u        port0 SG 46.569+76.520j | BSpli 43.533+81.684j gap 5.991 | Razor 47.534+74.587j gap 2.161
+    L'=1u        port1 SG 52.183-20.995j | BSpli -46.318+224.377j gap 264.405 | Razor -45.858+207.204j gap 248.368
+    sigma        port0 SG 0.362+0.153j | BSpli 0.367+0.173j gap 0.021 | Razor 0.356+0.145j gap 0.010
+    sigma        port1 SG 0.398-0.449j | BSpli 0.167+1.341j gap 1.805 | Razor 0.130+1.234j gap 1.704
+    jacket       port0 SG -13.606-42.715j | BSpli -13.258-44.011j gap 1.342 | Razor -12.875-41.530j gap 1.393
+    jacket       port1 SG -87.301+151.880j | BSpli 137.866+116.379j gap 227.948 | Razor 126.607+117.477j gap 216.657
+    jacket-below port0 SG -13.588-42.658j | BSpli -13.273-44.054j gap 1.431 | Razor -12.891-41.570j gap 1.292
+    jacket-below port1 SG -89.551+25.545j | BSpli 141.594-46.057j gap 241.981 | Razor 130.264-39.656j gap 229.282
+m=4 SinusoidalGalerkinSolver   bare 121.707+13.648j 59.102-1899.412j (1.4 s)
+m=4 BSplineSolver              bare 122.497+16.379j -73.312-2350.110j (0.2 s)
+m=4 RazorSolver                bare 120.979+13.546j -69.084-2300.983j (1.8 s)
+    L'=1u        port0 SG 48.359+74.194j | BSpli 46.620+77.623j gap 3.845 | Razor 48.862+73.382j gap 0.955
+    L'=1u        port1 SG 50.230-20.420j | BSpli -44.637+214.723j gap 253.559 | Razor -44.167+204.997j gap 244.385
+    sigma        port0 SG 0.360+0.143j | BSpli 0.363+0.156j gap 0.013 | Razor 0.357+0.140j gap 0.004
+    sigma        port1 SG 0.383-0.434j | BSpli 0.159+1.282j gap 1.730 | Razor 0.140+1.221j gap 1.672
+    jacket       port0 SG -13.505-41.834j | BSpli -13.205-42.606j gap 0.828 | Razor -12.870-41.150j gap 0.933
+    jacket       port1 SG -84.265+149.747j | BSpli 131.651+116.238j gap 218.501 | Razor 125.112+117.174j gap 211.896
+    jacket-below port0 SG -13.486-41.777j | BSpli -13.220-42.648j gap 0.910 | Razor -12.886-41.190j gap 0.840
+    jacket-below port1 SG -86.457+24.728j | BSpli 135.284-44.031j gap 232.157 | Razor 128.718-40.753j gap 224.918
+gap series:
+  L'=1u        port0 SG-BSpli: 10.697 -> 5.991 -> 3.845
+  L'=1u        port0 SG-Razor: 3.117 -> 2.161 -> 0.955
+  L'=1u        port1 SG-BSpli: 284.653 -> 264.405 -> 253.559
+  L'=1u        port1 SG-Razor: 256.176 -> 248.368 -> 244.385
+  sigma        port0 SG-BSpli: 0.036 -> 0.021 -> 0.013
+  sigma        port0 SG-Razor: 0.017 -> 0.010 -> 0.004
+  sigma        port1 SG-BSpli: 1.946 -> 1.805 -> 1.730
+  sigma        port1 SG-Razor: 1.765 -> 1.704 -> 1.672
+  jacket       port0 SG-BSpli: 2.376 -> 1.342 -> 0.828
+  jacket       port0 SG-Razor: 2.263 -> 1.393 -> 0.933
+  jacket       port1 SG-BSpli: 245.542 -> 227.948 -> 218.501
+  jacket       port1 SG-Razor: 225.376 -> 216.657 -> 211.896
+  jacket-below port0 SG-BSpli: 2.469 -> 1.431 -> 0.910
+  jacket-below port0 SG-Razor: 2.160 -> 1.292 -> 0.840
+  jacket-below port1 SG-BSpli: 260.441 -> 241.981 -> 232.157
+  jacket-below port1 SG-Razor: 237.252 -> 229.282 -> 224.918

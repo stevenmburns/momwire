@@ -1,0 +1,25 @@
+crossing m=1 SinusoidalGalerkinSolver   bare 176.218-86.389j (1.6 s)
+crossing m=1 BSplineSolver              bare 176.236-86.378j (0.3 s)
+crossing m=1 RazorSolver                bare 174.002-92.773j (1.5 s)
+    L'=1u   SG 109.321+463.088j | BSpli 109.339+463.092j gap 0.018 | Razor 113.261+462.936j gap 3.942
+    sigma   SG 1.553+1.065j | BSpli 1.553+1.065j gap 0.000 | Razor 1.543+1.041j gap 0.026
+    jacket  SG -18.812-6.533j | BSpli -18.819-6.532j gap 0.007 | Razor -18.217-6.097j gap 0.738
+crossing m=2 SinusoidalGalerkinSolver   bare 175.721-86.588j (1.5 s)
+crossing m=2 BSplineSolver              bare 175.728-86.584j (0.5 s)
+crossing m=2 RazorSolver                bare 174.811-89.635j (1.4 s)
+    L'=1u   SG 113.533+464.572j | BSpli 113.541+464.577j gap 0.009 | Razor 116.516+464.674j gap 2.985
+    sigma   SG 1.555+1.053j | BSpli 1.555+1.053j gap 0.000 | Razor 1.551+1.039j gap 0.014
+    jacket  SG -18.857-6.452j | BSpli -18.862-6.451j gap 0.005 | Razor -18.619-6.231j gap 0.325
+crossing m=4 SinusoidalGalerkinSolver   bare 175.441-86.684j (3.4 s)
+crossing m=4 BSplineSolver              bare 175.439-86.679j (6.3 s)
+crossing m=4 RazorSolver                bare 174.999-88.298j (10.3 s)
+    L'=1u   SG 116.008+465.433j | BSpli 116.006+465.436j gap 0.003 | Razor 117.917+465.541j gap 1.913
+    sigma   SG 1.556+1.046j | BSpli 1.556+1.046j gap 0.000 | Razor 1.554+1.037j gap 0.008
+    jacket  SG -18.897-6.409j | BSpli -18.895-6.410j gap 0.002 | Razor -18.782-6.295j gap 0.162
+gap series:
+  L'=1u   SG-BSpli: 0.018 -> 0.009 -> 0.003
+  L'=1u   SG-Razor: 3.942 -> 2.985 -> 1.913
+  sigma   SG-BSpli: 0.000 -> 0.000 -> 0.000
+  sigma   SG-Razor: 0.026 -> 0.014 -> 0.008
+  jacket  SG-BSpli: 0.007 -> 0.005 -> 0.002
+  jacket  SG-Razor: 0.738 -> 0.325 -> 0.162

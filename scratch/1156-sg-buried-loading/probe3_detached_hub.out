@@ -1,0 +1,25 @@
+detached_hub m=1 SinusoidalGalerkinSolver   bare 37.425-1039.477j (7.6 s)
+detached_hub m=1 BSplineSolver              bare 11.684-1080.529j (4.2 s)
+detached_hub m=1 RazorSolver                bare 11.743-1050.979j (1.7 s)
+    L'=1u   SG 3.973+159.436j | BSpli 2.107+190.821j gap 31.440 | Razor 1.054+175.896j gap 16.717
+    sigma   SG 0.552+0.450j | BSpli 0.576+0.642j gap 0.194 | Razor 0.522+0.586j gap 0.140
+    jacket  SG -8.660+78.707j | BSpli 10.977+71.025j gap 21.086 | Razor 9.906+69.384j gap 20.775
+detached_hub m=2 SinusoidalGalerkinSolver   bare 37.207-1014.271j (5.1 s)
+detached_hub m=2 BSplineSolver              bare 11.093-1055.018j (4.0 s)
+detached_hub m=2 RazorSolver                bare 10.957-1041.771j (1.6 s)
+    L'=1u   SG 4.066+151.626j | BSpli 2.156+182.929j gap 31.361 | Razor 1.776+175.404j gap 23.888
+    sigma   SG 0.527+0.421j | BSpli 0.550+0.613j gap 0.193 | Razor 0.524+0.585j gap 0.163
+    jacket  SG -9.043+77.502j | BSpli 10.511+69.677j gap 21.062 | Razor 9.902+68.905j gap 20.804
+detached_hub m=4 SinusoidalGalerkinSolver   bare 36.892-999.642j (6.8 s)
+detached_hub m=4 BSplineSolver              bare 10.765-1039.982j (4.7 s)
+detached_hub m=4 RazorSolver                bare 10.672-1036.559j (3.6 s)
+    L'=1u   SG 4.125+147.271j | BSpli 2.178+178.327j gap 31.117 | Razor 2.016+174.953j gap 27.761
+    sigma   SG 0.512+0.406j | BSpli 0.535+0.596j gap 0.191 | Razor 0.523+0.583j gap 0.177
+    jacket  SG -9.167+76.917j | BSpli 10.223+69.088j gap 20.910 | Razor 9.910+68.893j gap 20.695
+gap series:
+  L'=1u   SG-BSpli: 31.440 -> 31.361 -> 31.117
+  L'=1u   SG-Razor: 16.717 -> 23.888 -> 27.761
+  sigma   SG-BSpli: 0.194 -> 0.193 -> 0.191
+  sigma   SG-Razor: 0.140 -> 0.163 -> 0.177
+  jacket  SG-BSpli: 21.086 -> 21.062 -> 20.910
+  jacket  SG-Razor: 20.775 -> 20.804 -> 20.695

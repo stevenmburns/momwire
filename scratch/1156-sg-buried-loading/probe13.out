@@ -1,0 +1,4 @@
+dipole    series  max abs err 1.298e-16 of max |term| 1.723e-05: rel 7.531e-12
+dipole    charge  max abs err 9.275e-18 of max |term| 2.704e-04: rel 3.430e-14
+crossing  series  max abs err 5.358e-09 of max |term| 1.000e-02: rel 5.357e-07
+crossing  charge  max abs err 4.133e-11 of max |term| 2.667e+01: rel 1.550e-12
