@@ -41,12 +41,11 @@ The crossing decks cannot carry the exact-pair gate on this trunk: the exact
 pair puts the two media's wires at different radii, and SG's crossing serve
 refuses per-wire radii (`crossing_junctions`, momwire#524 phase 2).
 
-The mixed decks here are fed on ONE wire. SG's mixed-deck transmitted
-coupling has the opposite sign to bspline's and razor's (probe7: at ε̃ = 1
-SG's mixed Y12 is minus its own free-space Y12). A single-port Z is exactly
-invariant under that inversion — it is D·G·D with D = ±1 per medium class,
-and loading is block-diagonal per wire — so these gates cannot see it and do
-not depend on it. See scratch/1156-sg-buried-loading/NOTES.md.
+The mixed decks here are fed on ONE wire. The cross-medium coupling's sign
+and a buried knot gap's drive k are gated in `test_sg_mixed_sign_1159.py`
+(momwire#1159); a single-port Z is invariant under a sign inversion of the
+cross coupling (D·G·D with D = ±1 per medium class, and loading is
+block-diagonal per wire), so these gates never depended on it.
 """
 
 from __future__ import annotations

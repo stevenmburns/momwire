@@ -29,19 +29,20 @@ reverting the rule fails these gates rather than squeaking past them, and
 `test_the_raised_order_is_what_buys_it` pins that directly by pinning the
 factor back to 1 in-process.
 
-THE TWO SIGN CONVENTIONS
-------------------------
-bspline's assembled cross quadrant collapses onto the free-space one with a
-plain difference. **SG's is stored NEGATED** — its mixed stitch carries the
-below class's basis coefficients with the opposite sign, which cancels in the
-below/below quadrant and in the solved impedance (measured: both bases collapse
-to 1.26e-03 and 1.28e-03 at the 5 mm rung, agreeing with each other to 2 %) and
-survives only on the cross quadrants. So `|G_mixed - G_free|` reads a constant
-2.0 on SG and IS the residual on bspline, and the other way round for
-`|G_mixed + G_free|`. Both are asserted at every rung: the residual on the
-family's own convention, and 2.0 on the other one, because a near-2.0 reading
-is what an actual sign error would also produce and "the metric could not
-move" is how three sweeps came to read inert on this issue.
+ONE SIGN, BOTH BASES
+-------------------
+Both bases' assembled cross quadrants collapse onto the free-space one with a
+plain difference, so `|G_mixed - G_free|` IS the residual and
+`|G_mixed + G_free|` reads 2.0. Both are asserted at every rung, because a
+near-2.0 reading on the wrong one is exactly what a sign error produces.
+
+This file used to carry a second convention for SG ("stored NEGATED", with a
+below-basis-sign story to explain it). That was momwire#1159: the transmitted
+block entered SG's G with bspline's minus while SG's field blocks take a plus.
+Negating both cross quadrants is D*G*D with D = diag(I_above, -I_below), which
+leaves the below/below quadrant and every single-port Z untouched — hence the
+two bases' agreeing impedance collapses below — and flips Y12 and the unfed
+medium's current. `tests/test_sg_mixed_sign_1159.py` gates it on the full Y.
 """
 
 from __future__ import annotations
@@ -183,8 +184,7 @@ def collapse(base, gap):
     Gm = G_sg(mk(SinusoidalGalerkinSolver, gap))
     Gf = G_sg(mk(SinusoidalGalerkinSolver, gap, free=True))
     is_a = above_mask_sg(gap, Gm.shape[0])
-    minus, plus = cross_residuals(Gm, Gf, is_a)
-    return plus, minus  # SG stores the cross quadrant negated
+    return cross_residuals(Gm, Gf, is_a)  # the same plain difference (#1159)
 
 
 # ----------------------------------------------------------------------
@@ -200,12 +200,11 @@ def test_the_near_plane_cross_block_collapses(base, gap, record_property):
     record_property(f"collapse_{base}_{gap}", rel)
     record_property(f"other_sign_{base}_{gap}", other)
     assert rel < bar, f"{base} at gap {gap} m: {rel:.4e}, bar {bar:.1e}"
-    # The other sign is the family's convention showing, not a near miss: it
-    # has to read 2 + (this residual), and a genuine sign error would put the
-    # residual HERE and 2.0 above.
+    # The other sign has to read 2 + (this residual); a sign error would put
+    # the residual HERE and 2.0 above (momwire#1159 read exactly that on SG).
     assert abs(other - 2.0) < 10.0 * bar + 1e-9, (
         f"{base} at gap {gap} m: the opposite sign reads {other:.6e}, not ~2 — "
-        "the cross quadrant's sign convention has changed"
+        "the cross quadrant's sign has changed"
     )
 
 
