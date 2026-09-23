@@ -67,7 +67,7 @@ from momwire import _crossing_fill, _wire_loading  # noqa: E402
 from momwire import razor as _razor  # noqa: E402
 from momwire.bspline import BSplineSolver  # noqa: E402
 from momwire.razor import RazorSolver  # noqa: E402
-from test_crossing_serve_524 import crossing_deck  # noqa: E402
+from test_crossing_serve_524 import SOIL_A, crossing_deck, hub_deck  # noqa: E402
 
 C0 = 299792458.0
 
@@ -148,11 +148,13 @@ def test_the_row_serves_it():
     assert RazorSolver.capabilities.refusal("buried") is None
 
 
-def test_mixed_radii_are_refused_by_the_declared_sentence():
-    with pytest.raises(ValueError) as exc:
-        RazorSolver(**detached(wire_radius=[0.001, 0.002]))
-    declared = RazorSolver.capabilities.refusal("per_wire_radius", "detached")
-    assert str(exc.value).endswith(declared)
+def test_mixed_radii_are_served_since_u2b():
+    """U1 refused a detached deck with more than one radius by name
+    (`per_wire_radius+detached`); U2b serves it, and the cell is gone."""
+    assert RazorSolver.capabilities.refusal("per_wire_radius", "detached") is None
+    assert not hasattr(_razor, "_DETACHED_MIXED_RADIUS_REFUSAL")
+    s = RazorSolver(**detached(wire_radius=[0.00025, 0.001]), nec5_quadrature=True)
+    assert s._detached
 
 
 def test_the_extended_kernel_is_refused_by_the_declared_sentence():
@@ -383,3 +385,218 @@ def test_the_catalog_counterpoise_adds_nothing_to_the_razor_bspline_gap():
         assert abs(d_bspline) > 1.0 and d_razor.real < 0 and d_bspline.real < 0
         assert abs(d_razor - d_bspline) < 2.0, (m, d_razor, d_bspline)
         assert abs(d_razor - d_bspline) < 1e-3 * gap, (m, d_razor, d_bspline, gap)
+
+
+# ----------------------------------------------------------------------
+# mixed wire radii (momwire#1149 U2b)
+# ----------------------------------------------------------------------
+#
+# Razor's reduced kernel takes the SOURCE segment's radius everywhere
+# (`_seg_moments_prepare`). The detached route keeps that convention: each
+# medium's sub-geometry carries its own segments' radii (`seg_a`, which
+# `_kernel_radius` reads because a sub-geometry has no `seg_offsets`), and
+# each cross block is filled at its source wire's radius, the source axis
+# partitioned by radius where a side carries several. At eps~ = 1 that is
+# razor's own free-space fill of the same deck, block by block, and any
+# other radius rule is not — which is what makes the collapse a gate here
+# rather than a formality. Measured 2026-09-22 (`scratch/razor-buried-u2b/`,
+# probe 1):
+#
+#   * collapse, source rule: 7e-14 (two radii, either way round) and 2.4e-11
+#     (four radii, three on the buried side); observer / wire-0 / min / max
+#     rules 1.5e-6 .. 1.8e-5 on the block they get wrong;
+#   * 2-port non-reciprocity decays 4.1 / 4.1 / 4.4x (two radii) and
+#     3.2 / 3.7 / 3.9x (four radii) per doubling;
+#   * the gap to bspline shrinks 0.45-0.60x per doubling on every entry of
+#     both decks (one rung of the four-radius Z11 at 0.25x).
+
+A_BELOW, A_ABOVE = 0.00025, 0.001
+HUB_RADII = (0.0005, 0.001, 0.00025, 0.002)  # radial 0, radial 1, rise, mast
+
+
+def detached_hub(m=1, radii=HUB_RADII, gap=0.1, *, ground=True, eps=SOIL_A):
+    """`hub_deck(2)` with its node pulled apart: two radials at 0.15 m depth
+    into a buried hub, a rise from the hub to -gap, and the 10 m mast from
+    +gap. With `HUB_RADII` the buried side carries three radii and the cross
+    blocks' source axis is partitioned three ways. Ports on the mast (4.0)
+    and radial 0 (1.0), so Y12 = Y21 is no symmetry of the deck."""
+    d = hub_deck(n_radials=2)
+    d["wires"][2] = np.array([(0.0, 0.0, -0.15), (0.0, 0.0, -gap)])
+    d["wires"][3] = np.array([(0.0, 0.0, 10.0), (0.0, 0.0, gap)])
+    d.pop("junctions")
+    d["wire_radius"] = list(radii)
+    d["feeds"] = [(3, 4.0, 1 + 0j), (0, 1.0, 1 + 0j)]
+    if ground:
+        d["ground_eps"] = eps
+    else:
+        for k in ("ground_z", "ground_eps", "ground_model"):
+            d.pop(k)
+    d["n_per_edge_per_wire"] = [[n * m for n in e] for e in d["n_per_edge_per_wire"]]
+    return d
+
+
+def _mixed(m=1, **kw):
+    return detached(m, wire_radius=[A_BELOW, A_ABOVE], **kw)
+
+
+def _mixed_inv(m=1, **kw):
+    return detached(m, wire_radius=[A_ABOVE, A_BELOW], **kw)
+
+
+MIXED_DECKS = {"mixed": _mixed, "mixed_inv": _mixed_inv, "hub": detached_hub}
+
+
+def _counted_blocks(monkeypatch):
+    calls = []
+    fwd = _crossing_fill.cross_complete_block
+    rev = _crossing_fill.cross_complete_block_reversed
+
+    def f(ctx, *a, **k):
+        calls.append(("fwd", float(ctx.a_wire)))
+        return fwd(ctx, *a, **k)
+
+    def r(ctx, *a, **k):
+        calls.append(("rev", float(ctx.a_wire)))
+        return rev(ctx, *a, **k)
+
+    monkeypatch.setattr(_crossing_fill, "cross_complete_block", f)
+    monkeypatch.setattr(_crossing_fill, "cross_complete_block_reversed", r)
+    return calls
+
+
+@pytest.mark.parametrize(
+    "name, expect",
+    [
+        ("mixed", [("fwd", A_BELOW), ("rev", A_ABOVE)]),
+        ("mixed_inv", [("fwd", A_ABOVE), ("rev", A_BELOW)]),
+        (
+            "hub",
+            [("fwd", 0.00025), ("fwd", 0.0005), ("fwd", 0.001), ("rev", 0.002)],
+        ),
+    ],
+)
+def test_each_cross_block_is_filled_at_its_source_radius(monkeypatch, name, expect):
+    """Through the REAL constructor: the forward block (above rows, buried
+    sources) at the buried radius or radii, one call per radius, and the
+    reversed block at the above one. Counted, so a route that filled one
+    block at one radius cannot pass."""
+    calls = _counted_blocks(monkeypatch)
+    s = RazorSolver(**MIXED_DECKS[name](), nec5_quadrature=True)
+    assert s._detached
+    geom = s._build_geometry()
+    assert "seg_a" in s._medium_geometry(geom, "below")[0]
+    z, _ = s.compute_impedance()
+    assert np.all(np.isfinite(np.asarray(z)))
+    assert calls == expect
+
+
+def test_a_uniform_deck_takes_no_per_segment_radius():
+    """The fast path is untouched: no `seg_a` on a one-radius deck, so
+    `_kernel_radius` hands the fill the scalar as before."""
+    s = RazorSolver(**detached(), nec5_quadrature=True)
+    geom = s._build_geometry()
+    for side in ("above", "below"):
+        sub = s._medium_geometry(geom, side)[0]
+        assert "seg_a" not in sub
+        assert s._kernel_radius(sub) == s._uniform_radius
+
+
+@pytest.mark.parametrize("name", list(MIXED_DECKS))
+def test_mixed_radii_reciprocity_decays(name):
+    """Measured 4.08 / 4.09 (mixed), 4.04 / 4.08 (inverted), 3.23 / 3.67
+    (four radii)."""
+    mk = MIXED_DECKS[name]
+    _decays([razor2(mk(m))[1] for m in (1, 2, 4)])
+
+
+def _collapse(mk, lane=True):
+    s1 = RazorSolver(**mk(eps=(1.0, 0.0)), nec5_quadrature=lane)
+    sf = RazorSolver(**mk(ground=False), nec5_quadrature=lane)
+    assert s1._detached
+    g1, gf = s1._build_geometry(), sf._build_geometry()
+    Z1, Zf = s1._assemble_Z(g1, s1.k), sf._assemble_Z(gf, sf.k)
+    media = s1._wire_media()
+    off = np.asarray(g1["basis_offsets"])
+    side = {
+        lab: np.concatenate(
+            [np.arange(off[w], off[w + 1]) for w, m in enumerate(media) if m == lab]
+        )
+        for lab in ("above", "below")
+    }
+    out = {}
+    for name, rows, cols in (
+        ("above x below", side["above"], side["below"]),
+        ("below x above", side["below"], side["above"]),
+        ("above x above", side["above"], side["above"]),
+        ("below x below", side["below"], side["below"]),
+    ):
+        b1, bf = Z1[np.ix_(rows, cols)], Zf[np.ix_(rows, cols)]
+        out[name] = float(np.max(np.abs(b1 - bf)) / np.max(np.abs(bf)))
+    return out
+
+
+@pytest.mark.parametrize("lane", [True, False])
+@pytest.mark.parametrize("name", list(MIXED_DECKS))
+def test_mixed_radii_collapse_to_razors_free_space_fill(name, lane):
+    """eps~ = 1 against razor's own free-space fill of the same mixed-radius
+    deck, per block: measured 7e-14 (two radii) and 2.4e-11 (four radii)."""
+    rel = _collapse(MIXED_DECKS[name], lane)
+    for block, bar in (
+        ("above x below", 1e-9),
+        ("below x above", 1e-9),
+        ("above x above", 1e-12),
+        ("below x below", 1e-12),
+    ):
+        assert rel[block] < bar, (block, rel)
+
+
+@pytest.mark.parametrize("name", list(MIXED_DECKS))
+def test_the_collapse_discriminates_the_radius_rule(monkeypatch, name):
+    """The red control for the gate above: the U1 spelling (both blocks at
+    wire 0's radius) and the observer spelling (each block at its ROW
+    side's radius) each fail it by orders of magnitude on the block they get
+    wrong (measured 1.5e-6 .. 1.8e-5). A collapse that could not tell them
+    apart would be measuring nothing."""
+    fwd = _crossing_fill.cross_complete_block
+    rev = _crossing_fill.cross_complete_block_reversed
+    mk = MIXED_DECKS[name]
+    probe = RazorSolver(**mk(), nec5_quadrature=True)
+    media = probe._wire_media()
+    rad = np.asarray(probe._radius_per_wire)
+    a_above_obs = float(rad[media.index("above")])
+    a_below_obs = float(rad[media.index("below")])
+    for rule in ("wire0", "observer"):
+        a_f = float(rad[0]) if rule == "wire0" else a_above_obs
+        a_r = float(rad[0]) if rule == "wire0" else a_below_obs
+        monkeypatch.setattr(
+            _crossing_fill,
+            "cross_complete_block",
+            lambda ctx, *a, _a=a_f, **k: fwd(ctx._replace(a_wire=_a), *a, **k),
+        )
+        monkeypatch.setattr(
+            _crossing_fill,
+            "cross_complete_block_reversed",
+            lambda ctx, *a, _a=a_r, **k: rev(ctx._replace(a_wire=_a), *a, **k),
+        )
+        rel = _collapse(mk)
+        worst = max(rel["above x below"], rel["below x above"])
+        assert worst > 1e-7, (rule, rel)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("name", list(MIXED_DECKS))
+def test_mixed_radii_converge_onto_bspline(name, record_property):
+    """Equal-mesh gap to bspline's transmitted-grid route shrinking per
+    doubling on Z11, Z22 and Z12. Measured ratios 0.45-0.60 (one rung of
+    the four-radius deck's Z11 at 0.25)."""
+    mk = MIXED_DECKS[name]
+    gaps = {"z11": [], "z22": [], "z12": []}
+    for m in (1, 2, 4):
+        Zr, _ = razor2(mk(m))
+        Zb, _ = two_port(BSplineSolver, mk(m))
+        for key, (i, j) in (("z11", (0, 0)), ("z22", (1, 1)), ("z12", (0, 1))):
+            gaps[key].append(abs(Zr[i, j] - Zb[i, j]))
+        record_property(f"x{m}", f"razor Z12 {Zr[0, 1]:.4f} bspline {Zb[0, 1]:.4f}")
+    for key, g in gaps.items():
+        ratios = [b / a for a, b in zip(g, g[1:])]
+        assert all(r < 0.7 for r in ratios), (key, g, ratios)

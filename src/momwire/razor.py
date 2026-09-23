@@ -562,22 +562,6 @@ _CROSSING_LOADING_REFUSAL = (
     "the plane"
 )
 
-# momwire#1149 U1: a DETACHED deck (above and buried wires, no junction in
-# the plane) with more than one wire radius. The detached route fills each
-# medium on its own sub-geometry, which carries no per-wire radius table
-# (without this refusal the fill dies on a bare KeyError, measured), and the
-# trunk's cross blocks take ONE `a_wire` (`_crossing_context`), so even with
-# the table a second radius would be regularised with the first wire's.
-# Refused by name rather than approximated. A wholly-below deck does not
-# reach it: that route fills on the full geometry.
-_DETACHED_MIXED_RADIUS_REFUSAL = (
-    "razor's detached buried route (above and buried wires with no junction "
-    "in the plane, momwire#1149 U1) takes one wire radius for the whole "
-    "deck: each medium is filled on its own sub-geometry and the cross "
-    "blocks carry a single radius. Give every wire the same radius, or solve "
-    "the deck with BSplineSolver"
-)
-
 # The crossing blocks' axis density (momwire#813). Razor's cross rows are
 # PATH-tested and one of them ends AT the node, on the below wire's last
 # segment, whose by-parts integrand ~ 1/sqrt(a^2 + s^2) from s = 0 is carried
@@ -1399,10 +1383,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # on the crossing-junction condition, which is the cell a
             # consumer already asks for that deck.
             "wire_loading+crossing_junction": _CROSSING_LOADING_REFUSAL,
-            # A detached deck with more than one wire radius (U1's scope).
-            # `detached` is a condition token, like `crossing_junction`: it
-            # names a deck shape, not something a family does.
-            "per_wire_radius+detached": _DETACHED_MIXED_RADIUS_REFUSAL,
             # Not reachable through `refusal()`'s cell algebra: a bare
             # condition token is SERVED unless it pairs into a combination
             # key, and "does this family have a bundle rule" is an axis
@@ -1940,11 +1920,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # node. Every piece of that was measured twin-grade and
                 # reciprocity-decaying on its own (scratch/razor-buried-
                 # scoping probes 5 and 10); the node is what U2 is for.
-                if self._uniform_radius is None:
-                    raise ValueError(
-                        "this deck has buried and above-ground wires of more "
-                        f"than one radius, and {_DETACHED_MIXED_RADIUS_REFUSAL}"
-                    )
+                # Any mix of wire radii since momwire#1149 U2b: each medium's
+                # sub-geometry carries its segments' radii and each cross
+                # block takes its source wire's (`_assemble_Z_crossing`).
                 self._detached = True
                 return
             # momwire#812, unit 1: the lower-medium family serves a deck that
@@ -2516,6 +2494,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         if self._uniform_radius is not None:
             return self._uniform_radius
+        if "seg_a" in geom:
+            # A per-medium sub-geometry (`_medium_geometry`, momwire#1149
+            # U2b): it has no `seg_offsets` to repeat the wire table over,
+            # so it carries its segments' radii itself.
+            return geom["seg_a"]
         return self._seg_radius(geom)
 
     def _ek_labels(self, geom, mirror=False):
@@ -3647,7 +3630,13 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ),
             medium=_crossing_fill.buried_medium(eps_spec, omega, self.eps, k),
             ground_z=0.0 if self.ground_z is None else float(self.ground_z),
-            a_wire=float(self._radius_per_wire[0]),
+            # The deck's radius when it has one. On a mixed-radius deck no
+            # razor consumer reads this field as it stands: the cross blocks
+            # replace it per source partition (`_assemble_Z_crossing`) and
+            # the node term per crossing tent (`_crossing_node_charges`), both
+            # by the source rule. The smallest radius is the conservative
+            # default for anything that grades toward the plane on it.
+            a_wire=float(np.min(self._radius_per_wire)),
             omega=omega,
             mu=self.mu,
             eps=self.eps,
@@ -3831,11 +3820,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         spanning both centroids, the trap
         `test_the_sigma_trick_does_not_chop_the_path` pins.
 
-        Seven keys, because seven is all the fill reads: `_kernel_radius`
-        returns the scalar here (the crossing serve refuses per-wire radii),
-        so no `seg_offsets`, no `per_wire`, no junction table. `grounded_bases`
-        is EMPTY on purpose — see the demotion note in `_build_geometry` for
-        why no potential reference may be taken at a medium interface.
+        Seven keys, because seven is all the fill reads — eight on a deck
+        with more than one wire radius: no `seg_offsets`, no `per_wire`, no
+        junction table, so `_kernel_radius` cannot repeat the wire table over
+        this geometry, and a mixed-radius deck hands it `seg_a`, the medium's
+        own segments' radii, instead (momwire#1149 U2b). A uniform deck
+        carries no `seg_a` and keeps the scalar fast path bit for bit.
+        `grounded_bases` is EMPTY on purpose — see the demotion note in
+        `_build_geometry` for why no potential reference may be taken at a
+        medium interface.
         """
         media = self._wire_media()
         seg_off = np.asarray(geom["seg_offsets"])
@@ -3870,20 +3863,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # the surviving wing names the surviving half, in
                 # `_path_test_rows`' vocabulary
                 chop[i] = "A" if sides[0] else "B"
-        return (
-            {
-                "seg_p0": geom["seg_p0"][seg_i],
-                "seg_t": geom["seg_t"][seg_i],
-                "seg_h": geom["seg_h"][seg_i],
-                "wing_seg": g_ws,
-                "wing_rise": g_wr,
-                "wing_sigma": g_wg,
-                "grounded_bases": np.zeros(0, dtype=np.int64),
-                "n_basis_total": n,
-            },
-            np.asarray(rows, dtype=np.int64),
-            chop,
-        )
+        sub = {
+            "seg_p0": geom["seg_p0"][seg_i],
+            "seg_t": geom["seg_t"][seg_i],
+            "seg_h": geom["seg_h"][seg_i],
+            "wing_seg": g_ws,
+            "wing_rise": g_wr,
+            "wing_sigma": g_wg,
+            "grounded_bases": np.zeros(0, dtype=np.int64),
+            "n_basis_total": n,
+        }
+        if self._uniform_radius is None:
+            sub["seg_a"] = self._seg_radius(geom)[seg_i]
+        return sub, np.asarray(rows, dtype=np.int64), chop
 
     def _crossing_path_axis(self, geom, tents, side):
         """The path-test axis of one medium's rows over the FULL geometry:
@@ -3993,19 +3985,44 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
             for side in (_medium_spec.ABOVE, _medium_spec.BELOW)
         }
-        ax_a = _crossing_fill.axis_data(ctx, seg_of[_medium_spec.ABOVE], **axis_kw)
-        ax_b = _crossing_fill.axis_data(ctx, seg_of[_medium_spec.BELOW], **axis_kw)
-
         n = geom["n_basis_total"]
         Z = np.zeros((n, n), dtype=np.complex128)
         Z[np.ix_(rows_a, rows_a)] += Z_a
         Z[np.ix_(rows_b, rows_b)] += Z_b
-        Z[np.ix_(rows_a, rows_b)] -= _crossing_fill.cross_complete_block(
-            ctx, A, ax_b, corner=False
-        )[np.ix_(rows_a, rows_b)]
-        Z[np.ix_(rows_b, rows_a)] -= _crossing_fill.cross_complete_block_reversed(
-            ctx, P, ax_a, corner=False
-        )[np.ix_(rows_b, rows_a)]
+        seg_a = self._seg_radius(geom)
+        for src, rows, cols, block, test_axis in (
+            (
+                _medium_spec.BELOW,
+                rows_a,
+                rows_b,
+                _crossing_fill.cross_complete_block,
+                A,
+            ),
+            (
+                _medium_spec.ABOVE,
+                rows_b,
+                rows_a,
+                _crossing_fill.cross_complete_block_reversed,
+                P,
+            ),
+        ):
+            # Each cross block at its SOURCE wire's radius (momwire#1149
+            # U2b), the convention razor's reduced kernel takes everywhere
+            # (`_seg_moments_prepare`): the source axis is partitioned by
+            # radius and each part filled with its own `a_wire`, so a side
+            # carrying several radii is several calls. A partition is a set
+            # of WHOLE wires, and `axis_data`'s end table is per wire, so a
+            # junction between two radii on one side keeps both wires'
+            # by-parts end terms, each at its own radius — exactly what the
+            # direct form over the two wires leaves. One radius is one call
+            # with the deck's radius, which is the shipped fill bit for bit.
+            for r in np.unique(seg_a[seg_of[src]]):
+                ctx_r = ctx._replace(a_wire=float(r))
+                part = seg_of[src][seg_a[seg_of[src]] == r]
+                ax = _crossing_fill.axis_data(ctx_r, part, **axis_kw)
+                Z[np.ix_(rows, cols)] -= block(ctx_r, test_axis, ax, corner=False)[
+                    np.ix_(rows, cols)
+                ]
 
         if tents:
             cols = np.array([m for m, _ in tents], dtype=np.int64)

@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-44 sentences across 77 declared cells, verbatim. A sentence shared by several rows is printed
+43 sentences across 76 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -255,10 +255,6 @@ renders in host dialogs.
 - `RazorSolver` `junction_ports`
 
   > junction ports are not supported: a junction basis is already a through-current unknown, so a port that adds one would be a second unknown for one current
-
-- `RazorSolver` `per_wire_radius+detached`
-
-  > razor's detached buried route (above and buried wires with no junction in the plane, momwire#1149 U1) takes one wire radius for the whole deck: each medium is filled on its own sub-geometry and the cross blocks carry a single radius. Give every wire the same radius, or solve the deck with BSplineSolver
 
 - `RazorSolver` `singular_enrichment`
 
