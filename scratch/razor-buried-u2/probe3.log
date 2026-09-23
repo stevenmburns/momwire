@@ -1,0 +1,12 @@
+soilA  below x4  nonrec 9.676e-06
+soilA  below x8  nonrec 2.234e-06 ( 4.33x)
+soilA  below x16 nonrec 3.616e-07 ( 6.18x)
+soilA  above x4  nonrec 1.396e-05
+soilA  above x8  nonrec 2.386e-06 ( 5.85x)
+soilA  above x16 nonrec 1.964e-07 (12.15x)
+diel13 below x4  nonrec 3.175e-05
+diel13 below x8  nonrec 7.513e-06 ( 4.23x)
+diel13 below x16 nonrec 9.797e-07 ( 7.67x)
+diel13 above x4  nonrec 1.406e-05
+diel13 above x8  nonrec 2.402e-06 ( 5.85x)
+diel13 above x16 nonrec 1.971e-07 (12.19x)

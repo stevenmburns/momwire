@@ -1,0 +1,5 @@
+gl soilA x4 nonrec 1.594e-04 20.3s
+gl soilA x8 nonrec 4.244e-05 (3.76x) 41.7s
+gl soilA x16 nonrec 7.743e-06 (5.48x) 165.8s
+nec5 soilA x32 nonrec 7.600e-06 31.3s
+nec5 diel13 x32 nonrec 6.895e-06 28.4s

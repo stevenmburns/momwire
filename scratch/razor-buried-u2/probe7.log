@@ -1,0 +1,8 @@
+soilA a x0.25 x4 nonrec 3.530e-05
+soilA a x0.25 x8 nonrec 1.075e-05 (3.28x)
+soilA a x0.25 x16 nonrec 6.167e-06 (1.74x)
+soilA a x0.25 x32 nonrec 5.968e-06 (1.03x)
+soilA a x4 x4 nonrec 4.726e-05
+soilA a x4 x8 nonrec 1.549e-05 (3.05x)
+soilA a x4 x16 nonrec 9.685e-06 (1.60x)
+soilA a x4 x32 nonrec 9.685e-06 (1.00x)
