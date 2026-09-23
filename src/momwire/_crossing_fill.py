@@ -465,13 +465,30 @@ def node_panel_floor(h_floor_m, slope):
     return h_floor_m / slope
 
 
-def warn_coarse_node(arms):
+# What an unresolved node costs, and the lever past grading, per FILL. The
+# default is BSplineSolver's (the text this advisory has always carried);
+# razor passes its own (momwire#1149 U2b), because its path-tested node is a
+# different quantity: no n_qp_pair, and a node worth a fraction of an ohm
+# against its first-order far mesh rather than several ohms of quadrature.
+_BSPLINE_NODE_WORTH = (
+    "At the default quadrature order this node is worth ~4.5 ohm on the "
+    "soil-A fan and a global density sweep will report it as converged while "
+    "it is not (momwire#674, re-derived in momwire#760)"
+)
+
+
+def warn_coarse_node(arms, *, worth=None, levers=None):
     """Warn when a crossing junction's node region is unresolved.
 
     `arms` is an iterable of `NodeArm`. Returns the worst arm by
     `h_resolved` (or None for a deck with no crossing junction), so a
     caller — a test, a diagnostic — can read the number back whether or
     not it crossed the bar.
+
+    `worth` and `levers` are the two sentences that belong to the FILL
+    rather than to the geometry: what the unresolved node costs, and what
+    to do past grading. None keeps BSplineSolver's text byte for byte;
+    `RazorSolver` passes its own (momwire#1149 U2b).
 
     ADVISORY ONLY. It never remeshes and never refuses: the deck is the
     deck (banked prints, adjudication culture), and a coarse node is a
@@ -532,16 +549,14 @@ def warn_coarse_node(arms):
         f"crossing node: wire {worst.wire}'s {worst.end} is the {worst.side} "
         f"member, and the finest mesh within {NODE_REACH * 1000:.0f} mm of "
         f"the node is {worst.h_resolved * 1000:.1f} mm, above the "
-        f"{NODE_H_BAR * 1000:.0f} mm bar{gap}. At the default quadrature "
-        f"order this node is worth ~4.5 ohm on the soil-A fan and a global "
-        f"density sweep will report it as converged while it is not "
-        f"(momwire#674, re-derived in momwire#760). Grade the node: "
+        f"{NODE_H_BAR * 1000:.0f} mm bar{gap}. "
+        f"{_BSPLINE_NODE_WORTH if worth is None else worth}. Grade the node: "
         f"geometric panels toward "
         f"the shared point, {panel} to the design's own "
         f"segment length away from it, spelled as extra VERTICES in the "
         f"wire's polyline with per-edge counts in n_per_edge_per_wire so "
         f"the grading cannot change junction topology.{cannot} "
-        f"{_RAISE_THE_ORDER}. "
+        f"{_RAISE_THE_ORDER if levers is None else levers}. "
         f"Advisory: nothing is remeshed. See stevenmburns/momwire#696.",
         CoarseCrossingNode,
         **_WARN_TARGET,
