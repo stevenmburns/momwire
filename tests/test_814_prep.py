@@ -119,14 +119,17 @@ def test_the_surviving_cells_are_the_shared_sentences():
 
 
 def test_the_units_own_scope_cells_are_declared():
-    """What momwire#1149 U0/U1 serve around, declared rather than raised bare:
-    loading on a crossing deck (U3 derives it). Mixed radii on a detached
-    deck were U1's scope cell until U2b served them, and that cell is gone."""
+    """What momwire#1149 serves around, declared rather than raised bare: a
+    jacket on a buried wire of a crossing deck (U3). Loading on a crossing
+    deck was U0's cell until U3 served bare-metal loading, and mixed radii on
+    a detached deck U1's until U2b served them; both cells are gone."""
     caps = RazorSolver.capabilities
     assert (
-        caps.refusal("wire_loading", "crossing_junction")
-        is _razor._CROSSING_LOADING_REFUSAL
+        caps.refusal("crossing_junction", "insulation")
+        is _razor._CROSSING_BURIED_JACKET_REFUSAL
     )
+    assert caps.refusal("wire_loading", "crossing_junction") is None
+    assert "wire_loading+crossing_junction" not in caps.refusals
     assert caps.refusal("per_wire_radius", "detached") is None
     assert "per_wire_radius+detached" not in caps.refusals
 

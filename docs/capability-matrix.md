@@ -252,6 +252,10 @@ renders in host dialogs.
 
   > RazorSolver places a gap at the nearest basis-carrying KNOT (`_snap_to_knot`), so a feed named as a segment CENTRE -- which is the grid the nec2 dialect addresses -- lands half a cell from where it was named; build the solver directly with a parity-correct mesh if that is what you want.
 
+- `RazorSolver` `crossing_junction+insulation`
+
+  > a dielectric jacket (insulation_radius / insulation_eps_r) on a BURIED wire of a crossing deck is not served by razor (momwire#1149 U3): the jacket's series term is the thin-sheath formula against a free-space exterior, and in soil the exterior is the soil, whose complex permittivity normally exceeds the jacket's and reverses the term's sign. Bare-metal loading (wire_conductivity, distributed_rlc, lumped_loads) is served on this deck, and so is a jacket on its above-ground wires
+
 - `RazorSolver` `junction_ports`
 
   > junction ports are not supported: a junction basis is already a through-current unknown, so a port that adds one would be a second unknown for one current
@@ -259,10 +263,6 @@ renders in host dialogs.
 - `RazorSolver` `singular_enrichment`
 
   > singular enrichment is not built for RazorSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
-
-- `RazorSolver` `wire_loading+crossing_junction`
-
-  > wire loading on a crossing deck is not served by razor (momwire#1149 U3): the per-medium fills carry their own loading stencils, but the crossing tent's cross terms are not derived. Load the deck on BSplineSolver, or keep the loaded wires on a deck with no junction in the plane
 
 - `SinusoidalGalerkinSolver` `extended_kernel+stepped_radius_junction`
 

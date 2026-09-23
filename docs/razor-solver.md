@@ -230,7 +230,9 @@ The stencil is pure geometry and rides the k-independent prepare half;
 is rebuilt per solved wavenumber. The term is applied outside the ground
 fold — `Z = (Z_free − Z_image) + L` — because a surface impedance takes no
 image and no Fresnel weight, which is why one line serves free space and all
-three grounds. Gates: `tests/test_razor_loading.py`, including the NEC-5
+three grounds. The same one application serves every buried route, the
+crossing deck included ("Loading on crossing decks" below). Gates:
+`tests/test_razor_loading.py`, including the NEC-5
 twin lane on `LD` cards (`tests/golden_razor_loading_nec5.py`, captured by
 `scripts/capture_razor_loading_nec5_lane.py`).
 
@@ -855,8 +857,7 @@ Measured 2026-09-22 (`tests/test_razor_crossing_node_1149.py`,
 A ladder that holds the node-adjacent edges fixed holds the node's own
 discretisation error fixed too, and its non-reciprocity floors near 7e-6 for
 that reason alone (probes 3–8 rule out the grids, the quadrature and the
-radius). Loading on a crossing deck stays a declared refusal until U3
-(`wire_loading+crossing_junction`).
+radius). Loading on a crossing deck is served since U3 (below).
 
 ### Two-radius crossings (momwire#1149 U2b)
 
@@ -926,7 +927,7 @@ decays there as it does at 2 m.
 
 **`buried_serve_refusal()`** is razor's exact pre-flight (bspline's twin, for
 antennaknobs#1464). It asks the fill's own two fill-time questions through the
-same calls — loading on a crossing deck, and the below family's grazing floor
+same calls — a jacket on a buried wire of a crossing deck, and the below family's grazing floor
 (`_below_plane_grazing_refusal`) on the buried sub-geometry with the declared
 nodes skipped — and returns the fill's sentence or None. Everything else razor
 refuses on a buried deck it refuses at construction. Making it exact moved
@@ -947,3 +948,50 @@ first-order far-mesh error, and razor has no n_qp_pair lever.
 
 What stays refused, with bspline's sentences: a spread of radii among the
 buried wires, and a two-radius deck with more than one crossing node.
+
+### Loading on crossing decks (momwire#1149 U3)
+
+Bare-metal loading — `wire_conductivity`, `distributed_rlc` and
+`lumped_loads` — is served on a crossing deck, two-radius and multi-node ones
+included, by the one application every other route uses: the full-geometry
+stencil, once, after the crossing assembly.
+
+The crossing tent needed deriving rather than assuming, because the fill
+splits it into two half tents and chops its testing path at the knot. None of
+that reaches the loading term. `L[m, n] = ∫_{P_m} Z_s Λ_n dl` has no kernel,
+so it is a sum of per-segment closed forms; a crossing node is a knot, so no
+segment straddles the plane; and on each half of the crossing row's path the
+current is the whole tent's, since only one half tent is nonzero on each
+segment. So the two half-path terms are the stencil entries of the unsplit
+tent, and nothing medium-dependent enters, because a bare conductor's `Z_s`
+is its internal impedance. Two corollaries follow, and both are gated. The
+per-medium sub-geometries' stencils sum to the full one identically (0.0 on
+every deck measured), so building those is not a red control. And a lumped
+load at the crossing knot is one diagonal entry of the crossing tent, so it
+equals razor's own 2-port algebra over a port there to rounding.
+
+A dielectric **jacket on a buried wire** of a crossing deck stays refused
+(`crossing_junction+insulation`). The jacket's series term is the thin-sheath
+formula against a free-space exterior, and in soil the exterior is the soil.
+A jacket on an above wire is served. The refusal is scoped to the crossing
+deck: razor's wholly-below and detached routes, like bspline's buried routes,
+serve a buried jacket with the free-space term today, which is an open
+question on momwire#1149 rather than something U3 changed.
+
+Measured 2026-09-22 (`tests/test_razor_crossing_loading_1149.py`,
+`scratch/razor-buried-u3/`), every edge refined, feed on a knot:
+
+| gate | result |
+|---|---|
+| loaded − unloaded − full stencil | 3.4e-12 / 2.6e-11 / 4.7e-13 Ω (crossing_deck / rise/2 rod / hub_deck(4)) |
+| loading shift vs bspline, 3.5e7 S/m, x1 → x8 | crossing 0.026 → 0.005 Ω, hub 0.041 → 0.0074, rod 0.108 → 0.019 (0.55–0.59 per doubling) |
+| red control: buried segments' loading dropped | flat at 0.25 / 0.41 / 2.1 Ω |
+| lumped load at the crossing knot vs razor's 2-port algebra | ≤ 3e-13 Ω |
+| the same vs bspline's 2-port algebra, x1 → x8 | 1.46 → 0.26 Ω on an 84 Ω shift |
+| jacket on the above wire vs bspline, x1 → x8 | 0.49 → 0.12 Ω on a 37 Ω shift |
+| loading off, and every non-crossing route | bit-identical to the fill before U3 |
+
+Dropping only the crossing tent's own distributed entries is not a red
+control for the convergence bar. It removes `O(h_node)` of path and converges
+too (0.042 → 0.0068 Ω on crossing_deck), so the gate that catches it is the
+lumped load at the knot, where the tent's share is the whole load.

@@ -1,0 +1,5 @@
+{"m": 1, "razor_shift": [4.416060018908098, 36.69493549347457], "bspline_shift": [4.21556244360616, 37.145735324065704], "gap": 0.4933758860776986, "t": 1.6}
+{"m": 2, "razor_shift": [4.532084773190604, 36.73409740632878], "bspline_shift": [4.402221745958968, 37.008496287754916], "gap": 0.3035772586503802, "t": 1.2}
+{"m": 4, "razor_shift": [4.583459680428916, 36.755171796387145], "bspline_shift": [4.506877551655293, 36.92933155222054], "gap": 0.19025362808484642, "t": 2.7}
+{"m": 8, "razor_shift": [4.60977320669619, 36.76702957842657], "bspline_shift": [4.566585352229936, 36.88290579573422], "gap": 0.12366280164595435, "t": 6.9}
+{"buried_jacket_preflight": "a dielectric jacket (insulation_radius / insulation_eps_r) on a BURIED wire of a crossing deck is not served by razor (momwire#1149 U3): the jacket's series term is the thin-sheath formula against a free-space exterior, and in soil the exterior is the soil, whose complex permittivity normally exceeds the jacket's and reverses the term's sign. Bare-metal loading (wire_conductivity, distributed_rlc, lumped_loads) is served on this deck, and so is a jacket on its above-ground wires"}

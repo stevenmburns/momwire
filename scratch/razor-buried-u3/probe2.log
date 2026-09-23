@@ -1,0 +1,3 @@
+{"deck": "crossing", "tents": [28], "n": 29, "max_L": 0.07560516957114626, "max_Z0": 53423.40149118688, "loaded_minus_unloaded_minus_L": 3.359714581603425e-12, "per_medium_minus_full": 0.0, "crossing_tent_diag": 0.007560516957114628}
+{"deck": "rod_rise2", "tents": [34], "n": 35, "max_L": 0.6395335051780833, "max_Z0": 213697.58930518295, "loaded_minus_unloaded_minus_L": 2.6134788898278672e-11, "per_medium_minus_full": 0.0, "crossing_tent_diag": 0.011864154811213699}
+{"deck": "hub4", "tents": [55], "n": 56, "max_L": 0.10080689276152835, "max_Z0": 7280.021293052051, "loaded_minus_unloaded_minus_L": 4.740399339403379e-13, "per_medium_minus_full": 0.0, "crossing_tent_diag": 0.056073834098600145}

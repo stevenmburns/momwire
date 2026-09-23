@@ -1,0 +1,8 @@
+{"case": "crossing", "bit_identical": true, "max_diff": 0.0}
+{"case": "hub4", "bit_identical": true, "max_diff": 0.0}
+{"case": "rod", "bit_identical": true, "max_diff": 0.0}
+{"case": "detached", "bit_identical": true, "max_diff": 0.0}
+{"case": "detached_loaded", "bit_identical": true, "max_diff": 0.0}
+{"case": "detached_lumped", "bit_identical": true, "max_diff": 0.0}
+{"case": "below_loaded", "bit_identical": true, "max_diff": 0.0}
+{"case": "free_loaded", "bit_identical": true, "max_diff": 0.0}
