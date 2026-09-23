@@ -1173,6 +1173,41 @@ def _end_tables(ctx, eps_t, k_p, ends, n_nodes, memo, args):
             yield pt, sign, fv, {"V": te["V"][i], "W": te["W"][i]}
 
 
+def _direct_coords(specs, gz):
+    """ρ, z and z′ for a list of direct `(A, B, iA, iB)` specs — the node
+    pairs `iA` of above axis A against `iB` of below axis B, both z relative
+    to the plane — shared by `_direct_group` (one group of the split's direct
+    blocks) and `_main_sandwich` (the one-spec case: every node of both axes)
+    since momwire#1168 U5.
+
+    Returns `(rho, zAs, zBs, shapes)`: ONE flat ρ buffer holding each spec's
+    (|iA|, |iB|) grid in C order, spec after spec, and per spec its two z
+    columns and its shape. The z columns stay columns — `_direct_group`
+    broadcasts them into its flat batch, while `_main_sandwich` broadcasts or
+    chunks them without ever materialising the grid.
+
+    A shape unification only: it evaluates nothing and groups nothing. Each
+    caller keeps its own `_tables` call grouping, because bspline's memo
+    carry-over across groups is not bit-identical if regrouped (momwire#1126).
+    """
+    shapes = [(iA.size, iB.size) for _A, _B, iA, iB in specs]
+    rho = np.empty(int(sum(m * n for m, n in shapes)), dtype=float)
+    zAs, zBs = [], []
+    off = 0
+    for (AX, BX, iA, iB), shp in zip(specs, shapes):
+        pa, pb = AX["nodes"][iA], BX["nodes"][iB]
+        sl = slice(off, off + shp[0] * shp[1])
+        np.hypot(
+            pa[:, 0][:, None] - pb[:, 0][None, :],
+            pa[:, 1][:, None] - pb[:, 1][None, :],
+            out=rho[sl].reshape(shp),
+        )
+        zAs.append(pa[:, 2] - gz)
+        zBs.append(pb[:, 2] - gz)
+        off = sl.stop
+    return rho, zAs, zBs, shapes
+
+
 def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     """The M + SW + SQ sandwich over (above axis A × below axis B), whole-axis.
 
@@ -1196,12 +1231,11 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     """
     k2sq = k_p * k_p
     nA, nB = A["nodes"].shape[0], B["nodes"].shape[0]
-    rho = np.hypot(
-        A["nodes"][:, 0][:, None] - B["nodes"][:, 0][None, :],
-        A["nodes"][:, 1][:, None] - B["nodes"][:, 1][None, :],
-    )
-    zA = A["nodes"][:, 2] - gz
-    zB = B["nodes"][:, 2] - gz
+    iA = np.arange(nA)
+    iB = np.arange(nB)
+    # The one-spec case of `_direct_coords` — every node of both axes.
+    rho, (zA,), (zB,), _shapes = _direct_coords([(A, B, iA, iB)], gz)
+    rho = rho.reshape(nA, nB)
     step = max(1, _MAIN_CHUNK_BYTES // (_MAIN_BYTES_PER_PAIR * max(1, nA)))
     if nB <= step:
         z = np.broadcast_to(zA[:, None], rho.shape)
@@ -1220,8 +1254,6 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     # test-side W term on a VERTICAL test, so s_w2 counted it twice there
     # (the +2 Ω rise residual of #956) and it was wrong on a leaning member.
     # `_sandwich_dense` carries those five terms in this order.
-    iA = np.arange(nA)
-    iB = np.arange(nB)
     t = _sandwich_dense(A, B, iA, iB, tables, k2sq)
     t *= c1
     return t
@@ -2418,32 +2450,17 @@ def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows)
     orders below `_ends_to_nodes`' own 1.85e-13, inside the same contract the
     file already declares ("read to scale, never to the bit").
     """
-    # One buffer per column, filled block by block in place (momwire#914).
-    # What stood here built a (nA, nB) rho, ravelled it, and materialised a
-    # repeat and a tile per block, then concatenated 146 of each — three
-    # full copies of the asked set on top of the per-block temporaries.
-    # The destination slices are views of a contiguous buffer, so the
-    # broadcasts below write the same values with nothing in between.
-    specs = []
-    sizes = [iA.size * iB.size for _AX, _BX, iA, iB in direct]
-    ntot = int(sum(sizes))
-    rho_all = np.empty(ntot, dtype=float)
-    z_all = np.empty(ntot, dtype=float)
-    zp_all = np.empty(ntot, dtype=float)
+    # One buffer per column, filled block by block in place (momwire#914):
+    # ρ by `_direct_coords`, z and z′ broadcast from its per-spec columns.
+    rho_all, zAs, zBs, shapes = _direct_coords(direct, gz)
+    z_all = np.empty(rho_all.size, dtype=float)
+    zp_all = np.empty(rho_all.size, dtype=float)
     off = 0
-    for (AX, BX, iA, iB), nel in zip(direct, sizes):
-        pa, pb = AX["nodes"][iA], BX["nodes"][iB]
-        shp = (iA.size, iB.size)
-        specs.append((AX, BX, iA, iB, shp))
-        sl = slice(off, off + nel)
-        np.hypot(
-            pa[:, 0][:, None] - pb[:, 0][None, :],
-            pa[:, 1][:, None] - pb[:, 1][None, :],
-            out=rho_all[sl].reshape(shp),
-        )
-        z_all[sl].reshape(shp)[:] = (pa[:, 2] - gz)[:, None]
-        zp_all[sl].reshape(shp)[:] = (pb[:, 2] - gz)[None, :]
-        off += nel
+    for zA, zB, shp in zip(zAs, zBs, shapes):
+        sl = slice(off, off + shp[0] * shp[1])
+        z_all[sl].reshape(shp)[:] = zA[:, None]
+        zp_all[sl].reshape(shp)[:] = zB[None, :]
+        off = sl.stop
     tab = _tables(
         ctx,
         eps_t,
@@ -2455,7 +2472,7 @@ def _direct_group(ctx, eps_t, k_p, gz, k2sq, memo, direct, t_main, t_cols, rows)
         memo=memo,
     )
     off = 0
-    for AX, BX, iA, iB, shp in specs:
+    for (AX, BX, iA, iB), shp in zip(direct, shapes):
         nel = shp[0] * shp[1]
         K = {kk: tab[kk][off : off + nel].reshape(shp) for kk in _CROSS_KEYS}
         off += nel
