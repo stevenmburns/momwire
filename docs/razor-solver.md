@@ -805,6 +805,18 @@ Measured 2026-09-22 (`tests/test_razor_detached_1149.py`,
 | loading shift vs bspline, x1 → x4 | 0.046 → 0.015 Ω |
 | licensed NEC-5, equal mesh (instrument) | Z11 ≤ 0.10 Ω, Z22 ≤ 0.023, Z12 ≤ 0.003 |
 
+Razor's cross-block axes also grade a segment that APPROACHES the plane
+without touching it (momwire#1152, `axis_data(grade_near_plane=True)`, which
+only razor passes). A segment qualifies when its nearer end is `d` off the
+plane and its farther end more than `2d`. Its panels then grade toward the
+nearer end, with the first panel `max(d, a)`. Along a wire only the
+plane-nearest segment can qualify, and a wire parallel to the plane never
+does. Without it, a coaxial detached deck with a 0.67 m mast segment 10 mm
+above the plane (`detached_hub`) collapsed at ε̃ = 1 only to 6.1e-6 on the
+reversed block. With it the collapse is 2.3e-13, and razor's driving point
+moves by ≤ 1e-10 Ω on every other gated deck
+(`tests/test_razor_near_plane_axis_1152.py`).
+
 ## Crossing decks (momwire#1149 U2)
 
 A deck whose wires meet at a junction IN the plane — a bonded radial screen,

@@ -109,9 +109,49 @@ wire is a dialect question that needs its own probe before it could be read.
 
 | file | what |
 |---|---|
-| `probe1_collapse_1152.py` | #1152: per-block ε̃ = 1 collapse on U1's detached deck and detached_hub |
+| `probe1_collapse_1152.py` (+`probe1_before.log`, `probe1_after.log`) | #1152: per-block ε̃ = 1 collapse on U1's detached deck and detached_hub |
 | `probe2_stencil_identity.py` (+log) | U3 stencil identity, per-medium = full |
 | `probe3_loading_convergence.py` (+log) | U3 shift ladder vs bspline, two controls |
 | `probe4_lumped_at_node.py` (+log) | lumped load at the crossing knot |
 | `probe5_bit_identity.py` (+log) | loading off vs origin/main's razor.py |
 | `probe6_above_jacket.py` (+log) | above jacket served and converging; buried jacket pre-flight |
+| `probe7_1152_movement.py` (+log) | #1152: driving-point movement and timing, flag on vs off |
+
+## 4. momwire#1152: grading segments that approach the plane [M]
+
+**The issue's deck is not the one that fails.** U1's
+`detached(gap=0.01, dx=0)` fits the issue's description ("coaxial dx = 0,
+gap 0.01 m detached deck"), but it collapses at ε̃ = 1 to 1e-15 on main. Its
+plane-end segments are 50 mm, so the gap is a fifth of a segment. The 6.1e-6
+is on U2b's `detached_hub`: a 0.67 m mast segment 10 mm above the plane over
+a buried rise ending 10 mm below it (probe 1, `probe1_before.log` values
+reproduced in U2b's `probe1e.log`). That is the deck gated here.
+
+Change: `axis_data(..., grade_near_plane=False)`. When True, a segment whose
+nearer end is `d` off the plane and whose farther end is past `2d` gets
+`_graded_u` toward the nearer end, with first panel `max(d, a)`: the
+touching rule's a-floor, lifted to the scale the integrand varies on. Razor
+passes True; bspline and SG pass nothing, so their axes are unchanged by
+construction. Test `test_bspline_never_passes_the_flag` records the kwargs.
+The `2d` rule is narrow. Along a wire leaving the plane from `g`, only
+segment 0 can pass, and only when it is longer than `g`. A wire parallel to
+the plane never passes. On detached_hub(0.01) exactly two segments are newly
+graded: the mast's first and the rise's top one.
+
+ε̃ = 1 collapse, reversed block (forward unchanged at ≤ 6e-16), probe 1:
+
+| deck | before | after |
+|---|---|---|
+| detached_hub gap 0.01 | 6.10e-6 | 2.28e-13 |
+| detached_hub gap 0.05 | 9.94e-9 | 2.96e-14 |
+| detached_hub gap 0.10 | 2.37e-11 | 1.16e-14 |
+| U1 detached, all gaps and dx | ≤ 7e-14 | ≤ 7e-14 |
+
+Driving-point movement at soil A, flag on vs forced off (probe 7): crossing
+x1 1.3e-11 Ω, crossing x4 4.0e-11, hub4 0, rise/2 rod 1.0e-10, U1 detached
+0 (gap 0.3 and gap 0.01 dx 0 alike: that deck's matrix moves 2e-12, below an
+ulp of its 1e4 Ω entries), detached_hub gap 0.01 9.1e-8, gap 0.1 2.3e-13. No
+measurable cost.
+
+Invariance: the full normal suite and the slow lane over the touched files
+pass (see the report).
