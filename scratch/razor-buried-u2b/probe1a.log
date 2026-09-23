@@ -1,0 +1,3 @@
+{"gate": "a", "deck": "mixed", "calls": [["fwd", 0.00025], ["rev", 0.001]], "finite": true}
+{"gate": "a", "deck": "mixed_inv", "calls": [["fwd", 0.001], ["rev", 0.00025]], "finite": true}
+{"gate": "a", "deck": "hub_spread", "calls": [["fwd", 0.00025], ["fwd", 0.0005], ["fwd", 0.001], ["rev", 0.002]], "finite": true}
