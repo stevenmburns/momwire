@@ -1,0 +1,8 @@
+(a) exact pair per wire, eps~=4.0 lossless, jacket eps_r=10.0
+  detached_hub m=1 BSplineSolver  exact 22.3621-1107.7714j  fixed-exact -0.0000+0.0002j  old-exact 0.0723-0.7817j
+  detached_hub m=1 RazorSolver    exact 20.4448-1077.6992j  fixed-exact 0.0002-0.0017j  old-exact 0.0638-0.6793j
+  detached_hub m=2 BSplineSolver  exact 21.3898-1082.8106j  fixed-exact -0.0000+0.0003j  old-exact 0.0689-0.7522j
+  detached_hub m=2 RazorSolver    exact 20.4241-1069.6303j  fixed-exact 0.0000-0.0005j  old-exact 0.0643-0.7014j
+  detached_hub m=4 BSplineSolver  exact 20.8327-1068.2483j  fixed-exact -0.0000+0.0004j  old-exact 0.0669-0.7343j
+  detached_hub m=4 RazorSolver    exact 20.3891-1064.9924j  fixed-exact 0.0000-0.0001j  old-exact 0.0645-0.7099j
+exit=0

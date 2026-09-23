@@ -1,0 +1,26 @@
+exit=1
+(a) exact pair per wire, eps~=4.0 lossless, jacket eps_r=10.0
+  crossing     m=1 BSplineSolver  exact 48.1364-382.9552j  fixed-exact -0.0002-0.0020j  old-exact 0.6085+12.0048j
+  crossing     m=1 RazorSolver    exact 46.7576-384.2644j  fixed-exact 0.0014+0.0255j  old-exact 0.6143+11.6119j
+  crossing     m=2 BSplineSolver  exact 47.5774-380.5170j  fixed-exact -0.0002-0.0020j  old-exact 0.6203+11.8771j
+  crossing     m=2 RazorSolver    exact 46.8342-380.9835j  fixed-exact 0.0004+0.0064j  old-exact 0.6230+11.6488j
+  crossing     m=4 BSplineSolver  exact 47.2647-379.1212j  fixed-exact -0.0002-0.0024j  old-exact 0.6269+11.8077j
+  crossing     m=4 RazorSolver    exact 46.8481-379.3257j  fixed-exact 0.0001+0.0016j  old-exact 0.6281+11.6715j
+  hub4         m=1 BSplineSolver  exact 91.1179-22.5286j  fixed-exact 0.0003+0.0031j  old-exact 0.3989+5.4924j
+  hub4         m=1 RazorSolver    exact 90.5276-29.2415j  fixed-exact 0.0011+0.0142j  old-exact 0.4321+5.4265j
+  hub4         m=2 BSplineSolver  exact 91.0481-22.4066j  fixed-exact 0.0003+0.0030j  old-exact 0.4185+5.4920j
+  hub4         m=2 RazorSolver    exact 90.7949-25.7975j  fixed-exact 0.0003+0.0036j  old-exact 0.4372+5.4510j
+  hub4         m=4 BSplineSolver  exact 91.0100-22.3179j  fixed-exact 0.0004+0.0028j  old-exact 0.4296+5.4925j
+  hub4         m=4 RazorSolver    exact 90.8825-24.1962j  fixed-exact 0.0001+0.0011j  old-exact 0.4401+5.4652j
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/scratch/1154-jacket-in-soil/probe4_crossing.py", line 109, in <module>
+    part_a(names, ms)
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/scratch/1154-jacket-in-soil/probe4_crossing.py", line 75, in part_a
+    ze, zf, zo = z(cls, dex), z(cls, dj), z(cls, dj, old=True)
+                 ^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-1154/scratch/1154-jacket-in-soil/probe4_crossing.py", line 46, in z
+    return complex(cls(**d, **extra).compute_impedance()[0])
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: only 0-dimensional arrays can be converted to Python scalars
+
+[exited with code 0]

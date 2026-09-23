@@ -1,0 +1,26 @@
+ok  equal   free/BSplineSolver
+ok  equal   free/BSplineSolver/swept
+ok  equal   pec/BSplineSolver
+ok  equal   refl/BSplineSolver
+ok  equal   free/RazorSolver
+ok  equal   free/RazorSolver/swept
+ok  equal   pec/RazorSolver
+ok  equal   refl/RazorSolver
+ok  equal   free/SinusoidalSolver
+ok  equal   pec/SinusoidalSolver
+ok  equal   refl/SinusoidalSolver
+ok  equal   free/SinusoidalGalerkinSolver
+ok  equal   pec/SinusoidalGalerkinSolver
+ok  equal   refl/SinusoidalGalerkinSolver
+ok  equal   somm-above/BSplineSolver
+ok  equal   somm-above/BSplineSolver/swept
+ok  equal   somm-above/RazorSolver
+ok  equal   somm-above/SinusoidalGalerkinSolver
+ok  equal   surface-h=b/BSplineSolver
+ok  equal   crossing-above-jacket/BSplineSolver
+ok  equal   buried-bare-sigma/BSplineSolver
+ok  equal   crossing-above-jacket/RazorSolver
+ok  equal   buried-bare-sigma/RazorSolver
+ok  differs CONTROL-buried-jacket/BSplineSolver
+ok  differs CONTROL-buried-jacket/RazorSolver
+FAILURES: 0
