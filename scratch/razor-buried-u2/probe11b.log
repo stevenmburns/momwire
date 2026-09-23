@@ -1,0 +1,33 @@
+two2 x1  tents 2 nonrec 6.448e-05  Z11 174.618-93.834j (bs 176.901-87.326j, gap -2.283-6.508j)  Z22 126.335-58.986j (bs 127.401-54.344j)  3.0s
+two2 x2  tents 2 nonrec 1.591e-05 (4.05x)  Z11 175.443-90.725j (bs 176.384-87.607j, gap -0.940-3.119j)  Z22 126.759-56.693j (bs 127.163-54.509j)  0.7s
+two2 x4  tents 2 nonrec 3.966e-06 (4.01x)  Z11 175.636-89.403j (bs 176.089-87.744j, gap -0.453-1.659j)  Z22 126.844-55.737j (bs 127.026-54.588j)  1.8s
+two3 x1  tents 2 nonrec 6.696e-05  Z11 174.262-93.701j (bs 176.542-87.222j, gap -2.280-6.479j)  Z22 126.185-58.793j (bs 127.252-54.174j)  3.0s
+two3 x2  tents 2 nonrec 1.648e-05 (4.06x)  Z11 175.075-90.588j (bs 176.017-87.486j, gap -0.941-3.102j)  Z22 126.599-56.494j (bs 127.005-54.324j)  0.6s
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/scratch/razor-buried-u2/probe11_multi.py", line 93, in <module>
+    Yb = np.asarray(BSplineSolver(**d).compute_y_matrix())
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/bspline.py", line 6159, in compute_y_matrix
+    return self.compute_port_solution().y
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/bspline.py", line 6198, in compute_port_solution
+    Z = self._compute_Z_operator(
+        ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/bspline.py", line 5737, in _compute_Z_operator
+    return self._compute_Z_operator_buried(geom, supp_seg, polys)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/bspline.py", line 5679, in _compute_Z_operator_buried
+    return _below_interface.compute_Z_operator_buried(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/_below_interface.py", line 1205, in compute_Z_operator_buried
+    ) = plan_buried(
+        ^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/_below_interface.py", line 980, in plan_buried
+    plan = serve_plan_fn(
+           ^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/bspline.py", line 5609, in _buried_serve_plan
+    return _below_interface.serve_plan(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/92481da4-ec19-4a0d-8240-7687440a4e78/scratchpad/mw-razor-u2/src/momwire/_below_interface.py", line 773, in serve_plan
+    raise ValueError(
+ValueError: this deck's buried wires reach a below/below pair elevation of theta = 0.01612 deg, below the 0.0166667 deg grazing floor the below/below surfaces are tabulated from (the pair's two depths add to 0.0008441 m, and theta = atan2(depth sum, horizontal separation)). Below the floor the surfaces carry the lateral wave's LOGARITHMIC structure — measured drift 1.1 to 3.3 of scale between 2 and 0.05 deg — which no uniform lattice resolves, and theta = 0 has no node at all because h = 0 leaves the tail without its exponential decay. Bury the wires deeper, shorten them, or wait for the log-spaced grazing band (momwire#553 U2's recorded follow-up)
