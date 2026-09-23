@@ -108,7 +108,7 @@ def test_g980c_2_both_trunks_route_through_the_shared_scope_check(monkeypatch):
     # question at CONSTRUCTION (`_refuse_buried_geometry`), where a crossing
     # deck is refused by name — so the shared function is reached on the way
     # to that refusal, with the same media labels and the same grounded set.
-    with pytest.raises(ValueError, match="razor does not serve buried decks"):
+    with pytest.raises(ValueError, match="razor does not serve the crossing node"):
         RazorSolver(**{k: v for k, v in build.items() if k != "degree"})
     assert len(seen) == 2, seen
     assert seen[0][0] == seen[1][0], "media labels differ between trunks"
