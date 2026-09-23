@@ -19,6 +19,13 @@ but the difference is rounding: at most 3.2 ulp of each entry's summand
 magnitude eps * |c1| sum_i |P_i| |K| |Q_i|^T over razor's gate decks (hub_deck(16)
 x1/x2, crossing_deck(1/2), the two-radius rod and deck_1140, the two-node and
 hub_fan decks, the detached pair), which is the gate below.
+
+The kernel tables it contracts are evaluated in column chunks over the below
+axis under a memory budget (`_MAIN_CHUNK_BYTES`), and THAT is bit-identical
+to the one-call evaluation — pinned below with a budget small enough to cut
+every block into dozens of chunks. A naive per-chunk `_tables` call is not
+(it regroups the column route's fresh triples; 1e-19 to 3e-17 of max|Z| on
+the gate decks), which is why `_chunked_tables` evaluates once.
 """
 
 from __future__ import annotations
@@ -34,11 +41,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from momwire import _crossing_fill as CF  # noqa: E402
 from momwire.razor import RazorSolver  # noqa: E402
 from test_crossing_serve_524 import crossing_deck  # noqa: E402
+from test_razor_detached_1149 import detached  # noqa: E402
 
 
 def _razor_fill(deck):
     d = {k: v for k, v in deck.items() if k != "junctions"}
-    RazorSolver(**d, nec5_quadrature=True).compute_impedance()
+    s = RazorSolver(**d, nec5_quadrature=True)
+    s.compute_impedance()
+    return np.asarray(s.z)
 
 
 def _dense_reference(A, B, K, k2sq, c1):
@@ -146,3 +156,27 @@ def test_the_sparse_sandwich_is_the_dense_one_at_rounding(monkeypatch):
         live = bound > 0
         assert live.any()
         assert (d[live] / (eps * bound[live])).max() <= 8.0
+
+
+def test_chunked_tables_are_the_one_call_bit_for_bit(monkeypatch):
+    """The same Z to the bit whether the main sandwich's tables come from one
+    `_tables` call or from `_chunked_tables` in many column chunks — on the
+    crossing deck (every pair at one ρ, so a chunk boundary cuts its single
+    column) and the detached deck (ρ varies across the grid)."""
+    real, budget = CF._chunked_tables, CF._MAIN_CHUNK_BYTES
+    chunks = []
+
+    def spy(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
+        chunks.append(len(cols))
+        yield from real(ctx, eps_t, k_p, rho, zA, zB, cols, memo)
+
+    monkeypatch.setattr(CF, "_chunked_tables", spy)
+    for deck in (crossing_deck(1), detached()):
+        chunks.clear()
+        whole = _razor_fill(deck)
+        assert chunks == []  # these decks fit the default budget in one call
+        monkeypatch.setattr(CF, "_MAIN_CHUNK_BYTES", 20_000)
+        cut = _razor_fill(deck)
+        monkeypatch.setattr(CF, "_MAIN_CHUNK_BYTES", budget)
+        assert len(chunks) == 2 and min(chunks) > 10, chunks
+        assert np.array_equal(whole, cut)

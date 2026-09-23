@@ -616,6 +616,20 @@ _NEAR_GX, _NEAR_GW = leggauss(4)
 _ACA_COST_GUARD = 48.0
 _GX4, _GW4 = leggauss(4)
 _CROSS_KEYS = ("U", "V", "W", "dzpW")
+# The whole-axis main sandwich's kernel tables are evaluated in column chunks
+# over the BELOW axis's nodes, each chunk sized to this many bytes of live
+# per-pair working set. `_MAIN_BYTES_PER_PAIR` is that working set for one
+# (above node, below node) pair: the dedup pass's lexsort over the folded
+# triples (the (n, 3) float rows twice, four intp arrays and the fold, ~88 B
+# before numpy's sort scratch) and, in the product pass, the four complex
+# tables (64 B) plus the k²V + ∂z′W operand and its temporary (32 B). 64 MiB
+# is ~0.5 M pairs a chunk — hub_deck(16) x8's 3.7 M-pair forward block in 8
+# chunks — which keeps the tables out of the fill's peak (they were 0.7 GB
+# there, the (n, 6) gather plus its transposed copy) while the per-chunk
+# overhead stays a few numpy calls. Chunking never moves a bit
+# (`_chunked_tables`), so the budget is a memory choice only.
+_MAIN_CHUNK_BYTES = 64 * 2**20
+_MAIN_BYTES_PER_PAIR = 128
 
 # The whole-run dense-direct switch (a timing comparison, a bisect); parity
 # tests drive both paths in-process by calling the two entries directly.
@@ -1099,12 +1113,21 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     product is the same entries.
     """
     k2sq = k_p * k_p
-    dx = A["nodes"][:, 0][:, None] - B["nodes"][:, 0][None, :]
-    dy = A["nodes"][:, 1][:, None] - B["nodes"][:, 1][None, :]
-    rho = np.hypot(dx, dy)
-    z = np.broadcast_to((A["nodes"][:, 2] - gz)[:, None], rho.shape)
-    zp = np.broadcast_to((B["nodes"][:, 2] - gz)[None, :], rho.shape)
-    tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
+    nA, nB = A["nodes"].shape[0], B["nodes"].shape[0]
+    rho = np.hypot(
+        A["nodes"][:, 0][:, None] - B["nodes"][:, 0][None, :],
+        A["nodes"][:, 1][:, None] - B["nodes"][:, 1][None, :],
+    )
+    zA = A["nodes"][:, 2] - gz
+    zB = B["nodes"][:, 2] - gz
+    step = max(1, _MAIN_CHUNK_BYTES // (_MAIN_BYTES_PER_PAIR * max(1, nA)))
+    if nB <= step:
+        z = np.broadcast_to(zA[:, None], rho.shape)
+        zp = np.broadcast_to(zB[None, :], rho.shape)
+        tables = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
+    else:
+        cols = [slice(b0, min(nB, b0 + step)) for b0 in range(0, nB, step)]
+        tables = _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo)
     # momwire#956 — the exact spelling of the transmitted dyad tested along a
     # wire of ANY orientation (antennaknobs scratch/956-derivation):
     #   E^V  = c1 [ k²V ẑ − ∇W + ∇(−∂z′V) ]      E^Hx = c1 [ U x̂ + ∂xW ẑ + ∇(∂xV) ]
@@ -1115,11 +1138,77 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     # test-side W term on a VERTICAL test, so s_w2 counted it twice there
     # (the +2 Ω rise residual of #956) and it was wrong on a leaning member.
     # `_sandwich_dense` carries those five terms in this order.
-    iA = np.arange(A["nodes"].shape[0])
-    iB = np.arange(B["nodes"].shape[0])
+    iA = np.arange(nA)
+    iB = np.arange(nB)
     t = _sandwich_dense(A, B, iA, iB, tables, k2sq)
     t *= c1
     return t
+
+
+def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
+    """`_tables` over the (above × below) grid, served as `(cols, K)` column
+    chunks for `_sandwich_dense` — the SAME BITS as one call over the grid.
+
+    Two things could move a bit when the grid is cut, and neither does here:
+
+    * WHICH RULE serves a triple. The column route groups a call's fresh
+      triples by exact ρ, and a member's value depends on its column's
+      smallest z − z′ (`six_columns`: 7.9e-16 between groupings). Calling
+      `_tables` per chunk would split those columns — on a vertical above
+      member every chunk carries every ρ. So the evaluation stays ONE call:
+      pass 1 dedups each chunk's folded triples, merges them into the grid's
+      unique rows in the grid's own first-appearance order (each chunk's
+      first occurrences mapped to their flat grid index), and hands that list
+      to `designed_tables` once. A list of distinct rows dedups to itself, so
+      that call sees the same fresh triples, in the same order and grouping,
+      that the whole-grid call saw, and fills `memo` with the same values.
+    * The contraction. The chunks are COLUMN slices of the below axis, and a
+      sparse @ dense product forms each output column from its own column
+      alone, so `P @ K[:, cols]` is those columns of `P @ K` bit for bit; the
+      contraction over the below nodes (`L @ Q.T`) runs once, on the whole
+      assembled left product, in `_sandwich_dense`.
+
+    Pass 2 then gathers each chunk's tables from the one evaluation by the
+    chunk's own dedup inverse — the scatter `designed_tables` does, for four
+    kernels instead of six and without its (6, n) transposed copy.
+    """
+    fold = _near_interface.radius_fold
+    a_wire = float(ctx.a_wire)
+    nB = rho.shape[1]
+    parts, firsts, inverses = [], [], []
+    for sl in cols:
+        r = fold(rho[:, sl], a_wire)
+        u, inv = _near_interface._unique_rows(
+            r,
+            np.broadcast_to(zA[:, None], r.shape),
+            np.broadcast_to(zB[None, sl], r.shape),
+        )
+        # `_unique_rows` numbers groups in first-appearance order, so a group
+        # first occurs exactly where the running max of the inverse steps up.
+        prev = np.maximum.accumulate(np.concatenate(([-1], inv[:-1])))
+        i, j = np.divmod(np.flatnonzero(inv > prev), r.shape[1])
+        firsts.append(i * nB + sl.start + j)
+        parts.append(u)
+        inverses.append((inv, u.shape[0]))
+        del r
+    order = np.argsort(np.concatenate(firsts), kind="stable")
+    rows = np.concatenate(parts)[order]
+    del parts, firsts
+    uniq, inv_sorted = _near_interface._unique_rows(rows[:, 0], rows[:, 1], rows[:, 2])
+    gid = np.empty_like(inv_sorted)
+    gid[order] = inv_sorted  # chunk-unique row -> grid-unique row
+    del rows, order, inv_sorted
+    vals = _near_interface.designed_tables(
+        eps_t, k_p, uniq[:, 0], uniq[:, 1], uniq[:, 2], rtol=_CROSS_RTOL, memo=memo
+    )
+    vals = {key: vals[key] for key in _CROSS_KEYS}
+    del uniq
+    off = 0
+    nA = rho.shape[0]
+    for sl, (inv, m) in zip(cols, inverses):
+        idx = gid[off : off + m][inv].reshape(nA, sl.stop - sl.start)
+        off += m
+        yield sl, {key: v[idx] for key, v in vals.items()}
 
 
 def cross_complete_block(ctx, A, B, *, corner=True):
@@ -1736,6 +1825,20 @@ def _nodes_of(ax, segs):
     return np.sort(np.concatenate(parts))
 
 
+def _left_products(Ps, K, k2sq):
+    """The six left products `P_i @ K_x` of the main sandwich, in the
+    reference term order (U·x̂, U·ŷ, ẑẑ, the two W cross terms, Φ)."""
+    P1, P2, P3, P4 = Ps
+    return (
+        P1 @ K["U"],
+        P2 @ K["U"],
+        P3 @ (k2sq * K["V"] + K["dzpW"]),
+        P3 @ K["W"],
+        P4 @ K["W"],
+        P4 @ K["V"],
+    )
+
+
 def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
     restricted to (iA, iB) — the same term order as the reference fill.
@@ -1772,16 +1875,20 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None
     same product, not a second fill."""
     rA = _support_rows(A, iA)
     rB = _support_rows(B, iB)
-    P1, P2, P3, P4 = _row_weights(A, iA, rA)
+    Ps = _row_weights(A, iA, rA)
     Q1, Q2, Q3, Q4 = _row_weights(B, iB, rB)
-    L = (
-        P1 @ K["U"],
-        P2 @ K["U"],
-        P3 @ (k2sq * K["V"] + K["dzpW"]),
-        P3 @ K["W"],
-        P4 @ K["W"],
-        P4 @ K["V"],
-    )
+    if isinstance(K, dict):
+        L = _left_products(Ps, K, k2sq)
+    else:
+        # COLUMN CHUNKS of the tables (`_main_sandwich`, via `_chunked_tables`):
+        # `K` yields `(cols, K_cols)` over positions of `iB`. A sparse @ dense
+        # product builds each output column from that column of the dense
+        # factor alone, so the assembled left products are the whole-table
+        # ones bit for bit, and the contraction over `iB` below is untouched.
+        L = tuple(np.empty((rA.size, len(iB)), dtype=np.complex128) for _ in range(6))
+        for cols, Kc in K:
+            for dst, part in zip(L, _left_products(Ps, Kc, k2sq)):
+                dst[:, cols] = part
     Qs = (Q1, Q2, Q3, Q4, Q3, Q4)
 
     def _combine(Ls, Qz):
