@@ -3174,7 +3174,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             np.add.at(Z, (idx, idx), z_l)
         return Z
 
-    def _assemble_Z_prepare(self, geom, *, chop=None):
+    def _assemble_Z_prepare(self, geom, *, chop=None, loading=True):
         """K-independent work for the razor-blade fill: stencils and moments.
 
         Everything `_assemble_Z_from_prepared` needs that does not depend on
@@ -3453,9 +3453,13 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # `_assemble_Z_from_prepared` exactly as the refl-coef weights
             # are. `None` when nothing is loaded, so an unloaded fill is
             # structurally unchanged rather than adding a zero.
+            # `loading=False` is the crossing assembly's per-medium
+            # sub-geometries (momwire#1149 U1): they carry only the seven
+            # keys the fill reads, and the loading goes on once, on the full
+            # geometry, after the four terms are summed.
             "loading": (
                 self._loading_stencil(geom)
-                if (self._loading_active or self.lumped_loads)
+                if loading and (self._loading_active or self.lumped_loads)
                 else None
             ),
         }
@@ -3944,7 +3948,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         nodes = self._knot_points(geom)[[m for m, _ in tents]]
 
         geom_a, rows_a, chop_a = self._medium_geometry(geom, _medium_spec.ABOVE)
-        prep_a = self._assemble_Z_prepare(geom_a, chop=chop_a)
+        prep_a = self._assemble_Z_prepare(geom_a, chop=chop_a, loading=False)
         Z_a = self._assemble_Z_source_block(geom_a, prep_a, prep_a, k, omega)
         if prep_a["image"] is not None:
             ground_a = _potential_ground.potential_ground_for(self, geom_a, k, omega)
@@ -3953,7 +3957,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
 
         geom_b, rows_b, chop_b = self._medium_geometry(geom, _medium_spec.BELOW)
-        prep_b = self._assemble_Z_prepare(geom_b, chop=chop_b)
+        prep_b = self._assemble_Z_prepare(geom_b, chop=chop_b, loading=False)
         Z_b = self._assemble_Z_below_plane(geom_b, prep_b, k, omega, plan_skip=nodes)
 
         ctx = self._crossing_context(geom, k=k, omega=omega)

@@ -1,0 +1,12 @@
+screen           x1 razor 27.78-50190.19j bspline 35.69-55118.53j |d|  4928.35 rel 0.0894
+screen           x2 razor 24.63-47106.39j bspline 29.26-51016.20j |d|  3909.81 rel 0.0766
+screen           x4 razor 22.14-44471.51j bspline 25.34-47012.19j |d|  2540.68 rel 0.0540
+screen           x8 razor 19.85-41823.70j bspline 22.69-44200.70j |d|  2377.00 rel 0.0538
+no screen, soil  x1 razor 29.55-50194.24j bspline 37.91-55123.87j |d|  4929.64 rel 0.0894
+no screen, soil  x2 razor 26.21-47110.08j bspline 31.04-51018.58j |d|  3908.50 rel 0.0766
+no screen, soil  x4 razor 23.54-44474.79j bspline 26.92-47015.28j |d|  2540.49 rel 0.0540
+no screen, soil  x8 razor 21.10-41826.63j bspline 24.11-44203.95j |d|  2377.32 rel 0.0538
+no screen, free  x1 razor 8.88-50277.96j bspline 11.39-55230.91j |d|  4952.95 rel 0.0897
+no screen, free  x2 razor 7.88-47183.83j bspline 9.35-51105.54j |d|  3921.72 rel 0.0767
+no screen, free  x4 razor 7.08-44540.82j bspline 8.10-47090.68j |d|  2549.86 rel 0.0541
+no screen, free  x8 razor 6.35-41885.75j bspline 7.26-44271.47j |d|  2385.72 rel 0.0539
