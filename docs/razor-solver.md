@@ -774,9 +774,21 @@ crossing assembly with **zero crossing tents**: each medium's fill on its own
 sub-geometry, plus `_crossing_fill`'s two cross blocks on razor's path axes
 (`corner=False`), nothing chopped. Loading goes on once afterwards, on the
 full geometry (with no tent spanning the plane every basis lives in one
-medium). Mixed wire radii on such a deck are refused by name
-(`per_wire_radius+detached`): the sub-geometry fill carries no per-wire table
-and the cross blocks take one radius.
+medium).
+
+Mixed wire radii are served since momwire#1149 U2b, by the convention razor's
+reduced kernel takes everywhere: the SOURCE segment's radius. Each medium's
+sub-geometry carries its own segments' radii (`seg_a`, read by
+`_kernel_radius`), and each cross block is filled at its source wire's radius,
+the source axis partitioned by radius where a side carries several (whole
+wires per partition, so a junction between two radii on one side keeps both
+wires' by-parts end terms, each at its own radius). At ε̃ = 1 that is razor's
+own free-space fill of the same deck, block by block, and no other rule is:
+measured 7e-14 (two radii) and 2.4e-11 (four radii, three buried) for the
+source rule, against 1.5e-6 .. 1.8e-5 for the observer, wire-0, min and max
+rules on the block each gets wrong. Non-reciprocity decays 3.2–4.4x per
+doubling and the gap to bspline shrinks 0.45–0.60x per doubling
+(`tests/test_razor_detached_1149.py`, `scratch/razor-buried-u2b/`).
 
 Measured 2026-09-22 (`tests/test_razor_detached_1149.py`,
 `scratch/razor-buried-u1/`), on the graded deck of `crossing_deck(1)` pulled
