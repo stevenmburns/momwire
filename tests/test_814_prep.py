@@ -9,7 +9,7 @@ twin-grade and reciprocity-decaying, the node is not — so the serve is
 staged as SinusoidalGalerkinSolver's was (momwire#980 D1/D2 before D3):
 
 * `_SERVE_BELOW_PLANE` (True since U0) owns the `buried` cell;
-* `_SERVE_CROSSING` (False until U2) owns `buried+crossing_junction`.
+* `_SERVE_CROSSING` (True since U2) owns `buried+crossing_junction`.
 
 The half-done state the single name prevented is still the thing to prevent,
 now per pair: a deck SERVED by the fill while the row still declares a
@@ -65,10 +65,11 @@ _OWNED = {
 
 def test_the_single_constant_is_gone_and_the_two_are_their_own():
     """`_SERVE_BURIED` derived both flags; a leftover copy would be a third
-    name a flip could forget. The staged state is pinned too, so moving
-    either flag is a deliberate edit to this line as well."""
+    name a flip could forget. The state is pinned too, so moving either
+    flag is a deliberate edit to this line as well (momwire#1149 U2 moved the
+    second)."""
     assert not hasattr(_razor, "_SERVE_BURIED")
-    assert (_razor._SERVE_BELOW_PLANE, _razor._SERVE_CROSSING) == (True, False)
+    assert (_razor._SERVE_BELOW_PLANE, _razor._SERVE_CROSSING) == (True, True)
 
 
 def test_the_crossing_flag_never_runs_ahead_of_the_below_flag():
@@ -133,25 +134,31 @@ def test_the_units_own_scope_cells_are_declared():
 
 
 # ---------------------------------------------------------------------------
-# (2) the promise the row makes about what razor RAISES
+# (2) the flip decks, and the sentence the constant still owns
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skipif(_razor._SERVE_CROSSING, reason="these are the pre-U2 sentences")
-@pytest.mark.parametrize(
-    "cell, build",
-    [
-        ("buried+crossing_junction", crossing_deck(1)),
-        ("buried+crossing_junction", hub_deck()),
-    ],
-)
-def test_a_buried_deck_raises_the_sentence_its_cell_declares(cell, build):
-    """antennaknobs' catalog gate holds razor to this from the other side of
-    the seam; this is the same promise, gated where the sentence lives."""
-    declared = RazorSolver.capabilities.refusals[cell]
+@pytest.mark.parametrize("build", [crossing_deck(1), hub_deck()])
+def test_the_flip_decks_are_served_now(build):
+    """The two decks whose sentence this section pinned before U2 construct
+    on the crossing route and answer. What they answer is
+    `tests/test_razor_crossing_node_1149.py`'s to gate."""
+    kw = {k: v for k, v in build.items() if k != "junctions"}
+    s = RazorSolver(**kw, n_qp_path=8)
+    assert s._crossing
+    z = complex(s.compute_impedance()[0])
+    assert z.real > 0
+
+
+def test_switched_off_the_crossing_deck_raises_the_named_sentence(monkeypatch):
+    """The constant still owns its sentence: a build with the crossing serve
+    off refuses by name (the row is built at import, so it is the raise that
+    is checked here, not the row)."""
+    monkeypatch.setattr(_razor, "_SERVE_CROSSING", False)
+    kw = {k: v for k, v in crossing_deck(1).items() if k != "junctions"}
     with pytest.raises(ValueError) as exc:
-        RazorSolver(**build, n_qp_path=8)
-    assert str(exc.value).endswith(declared)
+        RazorSolver(**kw, n_qp_path=8)
+    assert str(exc.value).endswith(_razor._CROSSING_NOT_SERVED_REFUSAL)
 
 
 # ---------------------------------------------------------------------------

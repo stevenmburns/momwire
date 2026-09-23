@@ -7,13 +7,12 @@ ground contact; it did NOT check `buried`, so a buried deck on a basis without
 a buried fill fell through to the solver's constructor and came back as a bare
 `ValueError` from inside momwire rather than a named refusal in the printout.
 
-momwire#1149 flips razor's row in two stages. U0/U1 turned the `buried` cell
-True and left `buried+crossing_junction` declared; U4 will retire that one
-too. These gates are what make each stage land here without a second edit:
-the seam asks the ROW, so the same code refuses the crossing deck today,
-serves the plain buried deck today, and will serve both after U4. The fully
-flipped arm is exercised by patching the row itself, because the row is what
-the seam reads.
+momwire#1149 flipped razor's row in two stages. U0/U1 turned the `buried`
+cell True and left `buried+crossing_junction` declared; U2 retired that one
+too. These gates are what made each stage land here without a second edit:
+the seam asks the ROW, so the same code that refused the crossing deck before
+U2 serves it now. The refusal arm is kept honest by patching the pre-U2
+cell back ONTO the row, because the row is what the seam reads.
 """
 
 from __future__ import annotations
@@ -21,6 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from momwire import razor as _razor
 from momwire.bspline import BSplineSolver
 from momwire.eznec._serve import _Mesh, _Piece, ServeRefusal, _check_basis_can_host
 from momwire.razor import RazorSolver
@@ -88,21 +88,42 @@ def _flipped(caps):
 # ---------------------------------------------------------------------------
 
 
-def test_razor_refuses_a_crossing_deck_with_the_sentence_its_row_declares():
+def _with_the_pre_u2_cell(caps):
+    """razor's row as it stood between U0 and U2: the crossing cell declared
+    with the sentence `_SERVE_CROSSING` still owns."""
+    return caps._replace(
+        refusals={
+            **caps.refusals,
+            "buried+crossing_junction": _razor._CROSSING_NOT_SERVED_REFUSAL,
+        }
+    )
+
+
+def test_razor_serves_a_crossing_deck_since_u2():
+    assert RazorSolver.capabilities.refusal("buried", "crossing_junction") is None
+    _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
+
+
+def test_a_declared_crossing_cell_is_refused_with_the_rows_sentence(monkeypatch):
+    monkeypatch.setattr(
+        RazorSolver, "capabilities", _with_the_pre_u2_cell(RazorSolver.capabilities)
+    )
     declared = RazorSolver.capabilities.refusal("buried", "crossing_junction")
-    assert declared is not None, "this gate is about the pre-U4 row"
     with pytest.raises(ServeRefusal) as exc:
         _check_basis_can_host(_crossing_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
     assert str(exc.value).endswith(declared)
     assert "runs below a FINITE ground plane" in str(exc.value)
 
 
-def test_the_two_buried_decks_get_DIFFERENT_answers():
+def test_the_two_buried_decks_get_DIFFERENT_answers(monkeypatch):
     """The point of momwire#850's separate cell: a declared crossing junction
     and a lone buried wire are two cells under one geometry word, and the
-    seam has to pick the one the deck earns. Since momwire#1149 U0 they get
-    different ANSWERS on razor's row — the plain cell is served, the crossing
-    cell refused — which is a sharper test of the pick than two sentences."""
+    seam has to pick the one the deck earns. On the pre-U2 row they get
+    different ANSWERS — the plain cell served, the crossing cell refused —
+    which is a sharper test of the pick than two sentences."""
+    monkeypatch.setattr(
+        RazorSolver, "capabilities", _with_the_pre_u2_cell(RazorSolver.capabilities)
+    )
     assert RazorSolver.capabilities.refusal("buried") is None
     _check_basis_can_host(_buried_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
     with pytest.raises(ServeRefusal) as exc:
@@ -146,7 +167,7 @@ def test_a_deck_with_nothing_below_is_untouched():
     _check_basis_can_host(_above_mesh(), SOMMERFELD, "razor-2p", RazorSolver)
 
 
-def test_an_in_plane_junction_that_cannot_cross_is_not_the_crossing_cell():
+def test_an_in_plane_junction_that_cannot_cross_is_not_the_crossing_cell(monkeypatch):
     """momwire#848's rule, reached through the seam: a grounded junction whose
     members are all at-or-below the plane cannot span it, so it earns no
     crossing exemption and the deck is the plain `buried` cell. The seam gets
@@ -159,6 +180,9 @@ def test_an_in_plane_junction_that_cannot_cross_is_not_the_crossing_cell():
         ],
         junctions=[[(0, "end"), (1, "start")]],
     )
-    # The plain cell is served and the crossing cell is not, so passing here
-    # is the seam asking the RIGHT cell (momwire#1149 U0).
+    # On the pre-U2 row the plain cell is served and the crossing cell is
+    # not, so passing there is the seam asking the RIGHT cell.
+    monkeypatch.setattr(
+        RazorSolver, "capabilities", _with_the_pre_u2_cell(RazorSolver.capabilities)
+    )
     _check_basis_can_host(mesh, SOMMERFELD, "razor-2p", RazorSolver)

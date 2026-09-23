@@ -479,6 +479,17 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 # `buried`, `_SERVE_CROSSING` <-> `buried+crossing_junction`. A deck served
 # by the fill while the row still declares a refusal, or the reverse, fails
 # there.
+#
+# U2 (2026-09-22) found the node. A crossing tent is filled as two half
+# tents, and the families' Sommerfeld remainders carried the point charge a
+# half tent implies at the node while every other term dropped it
+# (`RazorSolver._crossing_node_charges`). With that charge taken back out the
+# 2-port non-reciprocity decays ~4x per doubling in every medium measured,
+# razor converges onto bspline on crossing_deck, hub_deck and the catalog
+# screen, and antennaknobs' power balance holds to 0.4 %
+# (`tests/test_razor_crossing_node_1149.py`, `scratch/razor-buried-u2/`). So
+# the crossing cell is served too; loading on a crossing deck keeps its own
+# declared cell until U3.
 
 # Every buried deck with NO crossing junction: a WHOLLY-below deck
 # (momwire#812, the lower-medium family) and a DETACHED one, where above and
@@ -489,12 +500,13 @@ _HAVE_RAZOR_CPLX_ACCEL = _acc is not None and bool(
 _SERVE_BELOW_PLANE = True
 
 # A deck whose wires span the interface through a crossing junction
-# (momwire#813). OFF until momwire#1149 U2: see above.
-_SERVE_CROSSING = False
+# (momwire#813). ON since momwire#1149 U2: see above.
+_SERVE_CROSSING = True
 
-# The sentence a crossing deck gets while `_SERVE_CROSSING` is off. It is
-# ALSO the refusal razor's capability row declares for the
-# `buried+crossing_junction` cell below, and it must stay one object: the row promises the sentence a
+# The sentence a crossing deck gets while `_SERVE_CROSSING` is off -- which
+# since U2 only a monkeypatch reaches. It is then ALSO the refusal razor's
+# capability row declares for the `buried+crossing_junction` cell below, and
+# it must stay one object: the row promises the sentence a
 # refusal ends with, and antennaknobs' catalog gate
 # (`test_razor_2p_on_the_buried_decks_follows_its_capability_cell`) holds
 # razor to that promise on the bonded screen. Before antennaknobs#1109 the
@@ -526,14 +538,11 @@ _BUNDLE_REFUSAL = (
 )
 
 _CROSSING_NOT_SERVED_REFUSAL = (
-    "this deck's wires cross the interface at a junction, and razor does not "
-    "serve the crossing node yet: its crossing fill converges to a "
-    "non-reciprocal limit carrying a spurious node resistance (+9.85 ohm "
-    "against BSplineSolver on the momwire#524 crossing deck, growing with "
-    "the number of buried members), so that class stays refused until "
-    "momwire#1149 U2 derives the node. Razor serves a wholly-buried deck and "
-    "a DETACHED one (buried wires with no junction in the plane). Solve this "
-    "deck with BSplineSolver or SinusoidalGalerkinSolver"
+    "this deck's wires cross the interface at a junction, and razor's "
+    "crossing serve (momwire#1149 U2, `_SERVE_CROSSING`) is switched off. "
+    "Razor then serves a wholly-buried deck and a DETACHED one (buried wires "
+    "with no junction in the plane). Solve this deck with BSplineSolver or "
+    "SinusoidalGalerkinSolver"
 )
 
 # momwire#1149 U0: wire loading on a CROSSING deck. The per-medium fills
@@ -1357,9 +1366,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Sommerfeld ground (momwire#624); what is refused inside that column
         # is the refl-coef row below, which is a combination and not this
         # cell. BURIED is served since momwire#1149 U0/U1 for every deck with
-        # no junction in the plane (wholly-below and detached); the crossing
-        # junction keeps its own declared cell until U2. Each cell is owned
-        # by one constant (`tests/test_814_prep.py`).
+        # no junction in the plane (wholly-below and detached), and the
+        # crossing junction since U2. Each cell is owned by one constant
+        # (`tests/test_814_prep.py`).
         buried=_SERVE_BELOW_PLANE,
         contact=True,
         refusals={
@@ -3910,7 +3919,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         Every crossing tent is in all four, so its (jn, jn) entry is the sum
         of its four half-x-wing pieces and every other entry takes exactly
-        one term.
+        one term. The crossing tents' COLUMNS then take one more:
+        `_crossing_node_charges` (momwire#1149 U2), which takes back out the
+        node charge the two same-medium remainders carry for a half tent and
+        nothing else does. Without it the assembly converges to a
+        non-reciprocal limit with a spurious node resistance.
 
         Each same-medium block is filled on its OWN geometry rather than
         sliced out of a whole-deck fill, and that is not tidiness: the below

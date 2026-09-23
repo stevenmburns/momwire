@@ -117,15 +117,18 @@ def test_wire_media_is_computed_once():
     assert rs._wire_media() is rs._wire_media()
 
 
-def test_a_split_crossing_deck_is_not_told_to_split():
+def test_a_split_crossing_deck_is_not_told_to_split(monkeypatch):
     """The refusal a crossing deck gets must not instruct the reader to build
     the deck they already built.
 
     This is momwire#604's class 2 — a refusal naming a workaround is making a
     claim about a code path it does not test — caught in razor's constructor
-    by momwire#813's own reading.
+    by momwire#813's own reading. Since momwire#1149 U2 the split deck is
+    SERVED (the crossing route), so the refusal is the switched-off one.
     """
     rd = {k: v for k, v in crossing_deck(1).items() if k != "junctions"}
+    assert RazorSolver(**rd, nec5_quadrature=True)._crossing
+    monkeypatch.setattr(_razor, "_SERVE_CROSSING", False)
     with pytest.raises(ValueError) as exc:
         RazorSolver(**rd, nec5_quadrature=True)
     msg = str(exc.value)

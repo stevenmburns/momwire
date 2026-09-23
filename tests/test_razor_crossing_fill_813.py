@@ -36,8 +36,9 @@ it is:
     and which refuses the fan at eps_r 30 / sigma 0.03. The gates are in
     `tests/test_crossing_exemption_audit_700.py`.
 
-`_SERVE_CROSSING` is off by default, so every test here turns it on
-explicitly; the roster flip is momwire#814's.
+`_SERVE_CROSSING` is on since momwire#1149 U2. The tests here still turn it
+on explicitly, which is now a no-op kept so each one states the state it
+needs.
 """
 
 from __future__ import annotations
@@ -260,14 +261,15 @@ def test_the_below_block_comes_from_the_below_fill(serve_crossing, monkeypatch):
 # ----------------------------------------------------------- the refusals
 
 
-def test_a_crossing_deck_is_refused_by_name_when_the_switch_is_off():
-    """Off by default until momwire#1149 U2, and with the declared sentence."""
-    assert _razor._SERVE_CROSSING is False
+def test_a_crossing_deck_is_refused_by_name_when_the_switch_is_off(monkeypatch):
+    """On since momwire#1149 U2; switched off, the deck gets the named
+    sentence. (The row is built at import, so with the switch patched off it
+    is the raise that is checked, not the row.)"""
+    assert _razor._SERVE_CROSSING is True
+    monkeypatch.setattr(_razor, "_SERVE_CROSSING", False)
     with pytest.raises(ValueError, match="momwire#1149 U2") as exc:
         RazorSolver(**_decks("crossing"), n_qp_path=8)
-    assert str(exc.value).endswith(
-        RazorSolver.capabilities.refusals["buried+crossing_junction"]
-    )
+    assert str(exc.value).endswith(_razor._CROSSING_NOT_SERVED_REFUSAL)
 
 
 def test_a_plane_touching_end_that_is_not_a_crossing_member_still_refuses(

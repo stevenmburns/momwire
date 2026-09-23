@@ -105,11 +105,12 @@ def test_g980c_2_both_trunks_route_through_the_shared_scope_check(monkeypatch):
     got_bs = bs._crossing_junctions()
     assert seen and got_bs == (0,), (seen, got_bs)
     # razor detects its groups rather than reading `junctions=`, and asks the
-    # question at CONSTRUCTION (`_refuse_buried_geometry`), where a crossing
-    # deck is refused by name — so the shared function is reached on the way
-    # to that refusal, with the same media labels and the same grounded set.
-    with pytest.raises(ValueError, match="razor does not serve the crossing node"):
-        RazorSolver(**{k: v for k, v in build.items() if k != "degree"})
+    # question at CONSTRUCTION (`_refuse_buried_geometry`), which routes the
+    # deck to its crossing fill (served since momwire#1149 U2) — so the shared
+    # function is reached there, with the same media labels and the same
+    # grounded set.
+    rz = RazorSolver(**{k: v for k, v in build.items() if k != "degree"})
+    assert rz._crossing
     assert len(seen) == 2, seen
     assert seen[0][0] == seen[1][0], "media labels differ between trunks"
     assert seen[0][2] == seen[1][2], "grounded sets differ between trunks"
