@@ -1,0 +1,10 @@
+{"gate": "c", "deck": "two 2m", "m": 1, "nonrec": 0.0009415954690381704, "secs": 2.8}
+{"gate": "c", "deck": "two 2m", "m": 2, "nonrec": 0.00023234491137510833, "secs": 0.6}
+{"gate": "c", "deck": "two 2m", "m": 4, "nonrec": 5.885880801889633e-05, "secs": 1.7}
+{"gate": "c", "deck": "two 2m", "ratios": [4.052576247379119, 3.9474960366257354]}
+{"gate": "c", "deck": "two 2m", "control": "node term zeroed", "nonrec": [0.04259878483622026, 0.04177490121225947]}
+{"gate": "c", "deck": "hub/fan 6m", "m": 1, "nonrec": 0.002782740822533019, "secs": 4.0}
+{"gate": "c", "deck": "hub/fan 6m", "m": 2, "nonrec": 0.0007183709806856388, "secs": 1.7}
+{"gate": "c", "deck": "hub/fan 6m", "m": 4, "nonrec": 0.00018431289921297397, "secs": 5.7}
+{"gate": "c", "deck": "hub/fan 6m", "ratios": [3.8736821187808452, 3.8975621551889295]}
+{"gate": "c", "deck": "hub/fan 6m", "control": "node term zeroed", "nonrec": [0.34276279706216506, 0.34351002484845783]}
