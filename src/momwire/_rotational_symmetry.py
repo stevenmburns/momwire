@@ -55,6 +55,11 @@ TOL_REL = 1e-9
 
 _WAY_OUT = "Drop rotational_symmetry=True to solve this deck densely."
 
+# momwire#1132: the route fills a ROW-COMPACT Z (only the rows the harmonic-0
+# block reads). False restores the square `rows=` destination; it exists so the
+# gates can hold the two to the bit, not as a user knob.
+COMPACT_Z = True
+
 # The grounds that are invariant under rotation about a vertical axis. Any
 # ground a solver can name outside this set breaks the route, and a solver
 # family that grows a terrain or two-media ground says so by returning a name
@@ -646,8 +651,13 @@ def observer_rows(solver, geom):
     return np.sort(np.concatenate(runs))
 
 
-def harmonic_zero_block(solver, Z, sectors, axial):
+def harmonic_zero_block(solver, Z, sectors, axial, row_of=None):
     """The harmonic-0 block and its consistency reading.
+
+    `Z` is the square fill, or with `row_of` the ROW-COMPACT one
+    (momwire#1132): basis row m held at row `row_of[m]`. Only sector 0's rows
+    and the axial rows are read either way, so the gathers below are the
+    same numbers from either shape.
 
     An on-axis drive is rotation-invariant, so the solution is too and
     only harmonic 0 is ever excited (`PLAN.md` §2, measured at F4). In the
@@ -670,27 +680,30 @@ def harmonic_zero_block(solver, Z, sectors, axial):
     p = int(axial.size)
     s0 = sectors[0]
     sq = math.sqrt(n)
+    # The rows the gathers read, where they live in `Z`.
+    r_s0 = s0 if row_of is None else row_of[s0]
+    r_ax = axial if row_of is None else row_of[axial]
     K0 = np.empty((m + p, m + p), dtype=np.complex128)
-    lam0 = Z[np.ix_(s0, sectors[0])].copy()
+    lam0 = Z[np.ix_(r_s0, sectors[0])].copy()
     for t in range(1, n):
-        lam0 += Z[np.ix_(s0, sectors[t])]
+        lam0 += Z[np.ix_(r_s0, sectors[t])]
     K0[:m, :m] = lam0
-    K0[:m, m:] = sq * Z[np.ix_(s0, axial)]
-    c_0 = Z[np.ix_(axial, sectors[0])]
+    K0[:m, m:] = sq * Z[np.ix_(r_s0, axial)]
+    c_0 = Z[np.ix_(r_ax, sectors[0])]
     c_sum = c_0.copy()
     worst = 0.0
     scale = float(np.max(np.abs(c_0))) if c_0.size else 1.0
     for t in range(1, n):
-        c_t = Z[np.ix_(axial, sectors[t])]
+        c_t = Z[np.ix_(r_ax, sectors[t])]
         worst = max(worst, float(np.max(np.abs(c_t - c_0))))
         c_sum += c_t
     K0[m:, :m] = c_sum / sq
-    K0[m:, m:] = Z[np.ix_(axial, axial)]
+    K0[m:, m:] = Z[np.ix_(r_ax, axial)]
     solver._rotational_copy_spread = worst / max(scale, 1e-300)
     return K0, m, p
 
 
-def solve(solver, Z, v, kcl_A, sectors, axial):
+def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     """The constrained solve through K_0 — `_solve_with_kcl`'s Schur step
     with the sector inverse in place of the dense one.
 
@@ -701,10 +714,12 @@ def solve(solver, Z, v, kcl_A, sectors, axial):
     is asserted rather than assumed — a right-hand side with content in
     another harmonic would need the other N-1 blocks, which this route
     does not build.
+
+    `row_of` is `harmonic_zero_block`'s: set when `Z` is row-compact.
     """
     n = len(sectors)
     sq = math.sqrt(n)
-    K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial)
+    K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of)
     lu = scipy.linalg.lu_factor(K0, overwrite_a=True)
 
     def z_inv(rhs):
@@ -756,11 +771,27 @@ def compute_impedance(solver):
     )
     check_drive(v, kcl_con, sectors)
     solver._checkpoint()  # after geometry/basis/drive, before the one-sector fill
-    Z = solver._compute_Z_operator_buried(
-        geom, supp_seg, polys, rows=observer_rows(solver, geom)
-    )
+    rows = observer_rows(solver, geom)
+    if not COMPACT_Z:
+        Z = solver._compute_Z_operator_buried(geom, supp_seg, polys, rows=rows)
+        row_of = None
+    else:
+        # momwire#1132: only the rows the solve reads are ever allocated. The
+        # square destination this replaced was fully resident for a 90-row
+        # write (huge pages, column-major), 59 % of the 150-radial peak.
+        Z, held = solver._compute_Z_operator_buried(
+            geom, supp_seg, polys, rows=rows, compact=True
+        )
+        want = np.union1d(sectors[0], axial)
+        if not np.array_equal(held, want):
+            raise AssertionError(
+                "the compact fill holds a different row set than the sector "
+                f"solve reads ({held.size} rows against {want.size})"
+            )
+        row_of = np.full(n_basis_total, -1, dtype=np.int64)
+        row_of[held] = np.arange(held.size, dtype=np.int64)
     solver._checkpoint()  # before the harmonic-0 solve
-    coeffs = solve(solver, Z, v, kcl_con, sectors, axial)
+    coeffs = solve(solver, Z, v, kcl_con, sectors, axial, row_of=row_of)
     del Z
     return solver._per_feed_z(coeffs, port_vectors, all_voltages), coeffs
 
