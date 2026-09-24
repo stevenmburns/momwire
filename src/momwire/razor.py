@@ -685,6 +685,10 @@ PATH_ORDER_KH_SWITCH = 0.018  # sqrt(0.0254 * 0.0127), the corner's own gap
 
 # The column width of `_ix_accumulate`'s slabs, in bytes of the Z[ix] copy.
 _IX_SLAB_BYTES = 8 * 2**20
+# Row windows the crossing assembly's below block folded into Z one at a time
+# (`_assemble_Z_below_plane(into=)`, momwire#1173 design C phase 2): the
+# counter the tests read to know the windowed fold ran.
+_BELOW_FOLD_ROUTES = {"windows": 0}
 
 
 def _ix_accumulate(Z, rows, cols, block, *, sign=1):
@@ -4212,7 +4216,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         obs, src, d_o, d_s = self._below_remainder_pairs(geom)
         return _bspline._pair_extents_below_rect(obs, src, d_o, d_s, r1_cap=r1_cap)
 
-    def _assemble_Z_below_plane(self, geom, prepared, k, omega, *, plan_skip=None):
+    def _assemble_Z_below_plane(
+        self, geom, prepared, k, omega, *, plan_skip=None, into=None
+    ):
         """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
         of the razor buried arc), in the lower-medium family:
 
@@ -4234,7 +4240,33 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         θ = atan2(d + d′, ρ) `BSplineSolver._buried_serve_plan` asks over
         its nodes. The R₁ cap is not a refusal since momwire#1053: past it
         `remainder_field_proj_below` serves the remainder as zero.
-        """
+
+        `into=(Z, rows)` (momwire#1173 design C phase 2) ADDS the block into
+        `Z[np.ix_(rows, rows)]` instead of returning it, so the below block
+        never exists beside the matrix it folds into: the crossing
+        assembly's `Z_b`, 105 MB at razor hub_deck(16) x16 and the fill's
+        process peak. The direct and image sources are walked in lockstep
+        over their common row windows (`_assemble_Z_prepare` builds both
+        from ONE window list), and each window becomes `(D − I)` in a
+        window buffer before `Z[rows_w, rows] += ` it. BIT-IDENTICAL to
+        `_ix_accumulate(Z, rows, rows, <the returned block>)`:
+
+          * the returned block's entry is `D` written, then `−= I` — the
+            image block's `out[lo:hi] -= rows` — and the window buffer's is
+            the same two operands in the same one subtraction (every
+            operation of `_source_block_rows` is elementwise on the row
+            axis, so a window's rows are the whole block's, whatever array
+            holds them);
+          * the fold is then one IEEE add per entry, `Z + (D − I)`, on the
+            same two operands `_ix_accumulate` added (a window of rows is
+            a slab of the same index sets, which have no repeats).
+
+        Walking the two source sets interleaved rather than one after the
+        other changes no operand: each window's rows depend only on the
+        prepared tables and the ground's windows over those rows. The
+        caller's loading is refused here: it is applied to the whole block
+        after the fold (`_load_in_place`), and a crossing deck applies its
+        loading once on the full geometry instead (momwire#1149 U3)."""
         eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
         ground = _potential_ground.BelowMediumGround(
             self, geom, k, omega, eps_tilde=eps_t
@@ -4246,6 +4278,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if refusal is not None:
             raise ValueError(refusal)
 
+        if into is not None:
+            if prepared["loading"] is not None:
+                raise ValueError("into= folds an unloaded block; load the whole Z")
+            Z, rows = into
+            direct = self._source_block_rows(
+                geom, prepared, prepared, k_m, omega, eps=eps_m
+            )
+            image = self._source_block_rows(
+                geom, prepared, prepared["image"], k_m, omega, ground=ground, eps=eps_m
+            )
+            for (lo, hi, d_rows), (lo_i, hi_i, i_rows) in zip(
+                direct, image, strict=True
+            ):
+                if (lo, hi) != (lo_i, hi_i):
+                    raise AssertionError("the image walks other row windows")
+                d_rows -= i_rows
+                del i_rows
+                _BELOW_FOLD_ROUTES["windows"] += 1
+                _ix_accumulate(Z, rows[lo:hi], rows, d_rows)
+                del d_rows
+            return None
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k_m, omega, eps=eps_m
         )
@@ -4465,7 +4518,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         geom_b, rows_b, chop_b = self._medium_geometry(geom, _medium_spec.BELOW)
         prep_b = self._assemble_Z_prepare(geom_b, chop=chop_b, loading=False)
-        Z_b = self._assemble_Z_below_plane(geom_b, prep_b, k, omega, plan_skip=nodes)
+        n = geom["n_basis_total"]
+        # Column-major, so the solve can factor it in place (momwire#1173);
+        # every write below is an elementwise += / -= into index blocks.
+        Z = np.zeros((n, n), dtype=np.complex128, order="F")
+        _ix_accumulate(Z, rows_a, rows_a, Z_a)
+        del Z_a
+        # The below block is folded in a row window at a time (momwire#1173
+        # design C phase 2): it never exists beside Z. After the above block,
+        # as the whole-block fold was, so an entry both blocks write (a
+        # crossing tent's) is `(0 + Z_a) + Z_b` as it was.
+        self._assemble_Z_below_plane(
+            geom_b, prep_b, k, omega, plan_skip=nodes, into=(Z, rows_b)
+        )
 
         ctx = self._crossing_context(geom, k=k, omega=omega)
         axis_kw = dict(
@@ -4487,16 +4552,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
             for side in (_medium_spec.ABOVE, _medium_spec.BELOW)
         }
-        n = geom["n_basis_total"]
-        # Column-major, so the solve can factor it in place (momwire#1173);
-        # every write below is an elementwise += / -= into index blocks.
-        Z = np.zeros((n, n), dtype=np.complex128, order="F")
-        _ix_accumulate(Z, rows_a, rows_a, Z_a)
-        _ix_accumulate(Z, rows_b, rows_b, Z_b)
-        # Folded in, so released before the cross blocks (momwire#1173 design
-        # B): held to the return they were two more same-medium blocks at the
-        # cross fill's peak (Z_b alone 105 MB at hub_deck(16) x16).
-        del Z_a, Z_b
         seg_a = self._seg_radius(geom)
         for src, rows, cols, block, test_axis in (
             (
@@ -4794,7 +4849,37 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the same float64 matrix as `out -= block` on the returned block;
         the composition above is complete within each window before its
         rows leave.
+
+        The body is `_source_block_rows`, which yields the finished rows a
+        window at a time; this is its whole-block and `out=` spelling.
         """
+        T1 = (
+            None
+            if out is not None
+            else np.empty(
+                (prepared["n_basis"], prepared["n_basis"]), np.complex128, order="F"
+            )
+        )
+        for lo, hi, rows_T1 in self._source_block_rows(
+            geom, prepared, sources, k, omega, ground=ground, eps=eps, into=T1
+        ):
+            if out is not None:
+                out[lo:hi] -= rows_T1
+        return T1 if out is None else out
+
+    def _source_block_rows(
+        self, geom, prepared, sources, k, omega, *, ground=None, eps=None, into=None
+    ):
+        """Yield `(lo, hi, rows)`: rows [lo, hi) of one source set's finished
+        block (`_assemble_Z_source_block`, whose docstring is this body's),
+        one `t1_row_chunks` window at a time, in ascending windows.
+
+        `into` is an (n_basis, n_basis) array whose row windows the rows are
+        written in (and yielded as views of); without it each window is a
+        fresh array, so only one window of the block exists at a time.
+        Every operation below is elementwise on the row axis (momwire#1173),
+        so a window's rows are the whole block's rows bit for bit, whatever
+        the layout of the array they are written in."""
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
         q_a, q_b = prepared["q_a"], prepared["q_b"]
@@ -4997,24 +5082,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         c_A = 1j * omega * self.mu
         c_Phi = 1j * omega * eps_here
         # T1's rows are overwritten in place by the finished block's rows.
-        # With `out`, only one window of T1 exists at a time and its finished
-        # rows are subtracted from `out` before the next window is built.
-        # Fortran order (momwire#1173): the returned block is the matrix the
-        # solve factors, and `scipy.linalg.solve(overwrite_a=True)` factors
-        # in place only on a column-major array; a C-order Z is silently
-        # copied first. A row window of a column-major matrix is still one
-        # contiguous run per column, and every write below is elementwise,
-        # so the layout changes no value.
-        T1 = (
-            None
-            if out is not None
-            else np.empty((n_basis, n_basis), np.complex128, order="F")
-        )
+        # Without `into`, only one window of T1 exists at a time, and the
+        # consumer takes its finished rows before the next window is built.
+        # `_assemble_Z_source_block`'s whole block is Fortran order
+        # (momwire#1173): it is the matrix the solve factors, and
+        # `scipy.linalg.solve(overwrite_a=True)` factors in place only on a
+        # column-major array; a C-order Z is silently copied first. A row
+        # window of a column-major matrix is still one contiguous run per
+        # column, and every write below is elementwise, so the layout
+        # changes no value.
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
             rows_T1 = (
-                T1[lo:hi]
-                if out is None
+                into[lo:hi]
+                if into is not None
                 else np.empty((hi - lo, n_basis), dtype=np.complex128)
             )
             M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
@@ -5127,9 +5208,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # `free − (C2·img + Q) ≠ (free − C2·img) − Q` in float64. The
                 # two halves meet HERE and the caller's `Z -=` is untouched.
                 rows_T1 += Q_rows
-            if out is not None:
-                out[lo:hi] -= rows_T1
-        return T1 if out is None else out
+            yield lo, hi, rows_T1
 
     def _assemble_Z(self, geom, k):
         """Fill the razor-blade impedance matrix at one wavenumber.
