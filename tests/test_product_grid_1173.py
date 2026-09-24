@@ -593,13 +593,15 @@ def test_the_support_block_is_the_full_blocks_slice(corner, monkeypatch):
     for name in ("cross_complete_block", "cross_complete_block_reversed"):
         real = getattr(cf, name)
 
-        def spy(ctx, T, S, *, corner_, support=None, _real=real, **kw):
+        def spy(ctx, T, S, *, corner_, support=None, into=None, _real=real, **kw):
+            # `into` (razor's Z, design C phase 2) is kept for the real call:
+            # the compact block here is answered as a block (streamed or not).
             del corner_
             compact = _real(ctx, T, S, corner=corner, support=support, **kw)
             full = _real(ctx, T, S, corner=corner, **kw)
             rows, cols = support
             seen.append(np.array_equal(compact, full[np.ix_(rows, cols)]))
-            return _real(ctx, T, S, corner=False, support=support, **kw)
+            return _real(ctx, T, S, corner=False, support=support, into=into, **kw)
 
         monkeypatch.setattr(
             rz._crossing_fill,

@@ -4601,9 +4601,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
                 # Only the (rows, cols) sub-block is read, so only it is
                 # formed (`support=`, momwire#1173 design B): the full block
-                # was (n, n) and 92 % structural zeros at hub_deck(16).
-                t = block(ctx_r, test_axis, ax, corner=False, support=(rows, cols))
-                _ix_accumulate(Z, rows, cols, t, sign=-1)
+                # was (n, n) and 92 % structural zeros at hub_deck(16). A
+                # streamed block folds each finished column (or row) into Z
+                # itself and answers None (`into=`, design C phase 2): the
+                # same one subtraction per entry, never the whole block.
+                t = block(
+                    ctx_r, test_axis, ax, corner=False, support=(rows, cols), into=Z
+                )
+                if t is not None:
+                    _ix_accumulate(Z, rows, cols, t, sign=-1)
                 del t
 
         if tents:

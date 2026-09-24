@@ -1418,6 +1418,12 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None, ends=
     step = max(1, _MAIN_CHUNK_BYTES // (_MAIN_BYTES_PER_PAIR * max(1, nA)))
     tables = _product_route(ctx, eps_t, k_p, A, B, gz, step, memo, ends=ends)
     if tables is not None:
+        if ends is not None and ends.streaming:
+            # Streamed (`_FusedEnds`): the contracted rows go to the ends'
+            # `sink`, which finishes each unit (`*= c1` included) and folds
+            # it; no block is formed here.
+            _sandwich_dense(A, B, iA, iB, tables, k2sq, support=support, sink=ends.sink)
+            return None
         t = _sandwich_dense(A, B, iA, iB, tables, k2sq, support=support)
         t *= c1
         return t
@@ -1591,12 +1597,13 @@ _ROUTES = dict.fromkeys(
         "tile_held_rows",
         "tile_stores",
         "fused_blocks",
-        "fused_mode_grouped",
-        "fused_mode_line",
+        "fused_mode_stream",
         "fused_mode_post",
+        "stream_units",
+        "stream_finish_calls",
+        "stream_held_units",
         "fused_row_ends",
         "fused_unit_tiles",
-        "fused_chain_holds",
         "fused_col_te",
         "fused_held_rows",
         "fused_declined",
@@ -1604,6 +1611,8 @@ _ROUTES = dict.fromkeys(
         "fused_declined_mixed",
         "fused_declined_groups",
         "fused_declined_hold",
+        "fused_declined_support",
+        "fused_declined_stream",
         "stream_chunks",
         "stream_held_cols",
     ),
@@ -2318,7 +2327,7 @@ def _block_preamble(ctx):
     return eps_t, k_p, gz, c1, _near_interface.ProductMemo()
 
 
-def cross_complete_block(ctx, A, B, *, corner=True, support=None):
+def cross_complete_block(ctx, A, B, *, corner=True, support=None, into=None):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
     subtracting field-block convention (`Z -= t_ab`).
@@ -2331,7 +2340,13 @@ def cross_complete_block(ctx, A, B, *, corner=True, support=None):
     `t_ab[np.ix_(rows, cols)]` instead, never allocating the full block —
     for a caller that reads only that (razor's crossing assembly, where the
     full block is 92 % structural zeros). Bit-identical to that slice: see
-    `_Support`."""
+    `_Support`.
+
+    `into` (momwire#1173 design C phase 2, with `support`) is the matrix the
+    caller folds the block into as `into[np.ix_(rows, cols)] -= t_ab`. When
+    the block streams (`_FusedEnds`) each finished column is folded there
+    as it finishes and None is returned; otherwise the block is returned
+    and the caller folds it."""
     # One fill = one memo, exactly as `cross_complete_block_split` does it
     # (momwire#1017). This route built none, so momwire#688's cross-call dedup
     # — the whole reason the parameter exists — never fired for `RazorSolver`,
@@ -2354,12 +2369,13 @@ def cross_complete_block(ctx, A, B, *, corner=True, support=None):
         col_args=_below_end_args(A, gz),
         corner=corner,
         support=sup,
+        units_on="cols",
+        into=into,
     )
     t_ab = _main_sandwich(
         ctx, A, B, eps_t, k_p, c1, gz, memo=memo, support=sup, ends=ends
     )
-    ends.finish(t_ab)
-    return t_ab
+    return ends.finish(t_ab)
 
 
 class _Support(NamedTuple):
@@ -2839,10 +2855,8 @@ class _EndTerms:
     rank 1, so a restriction is an index into its two factors and never a
     second contraction.
 
-    `row_update` is the row terms' write with the column side already on the
-    units (`units()`: the support's columns, or every column), optionally on
-    a SUBSET `J` of them: the fused route's. `add_rows` is `row_update` of
-    `vec[units]` over every unit, so the two are one write."""
+    The streamed route (`_FusedEnds`) replays these same writes on a few
+    units at a time, into arrays of its own."""
 
     def __init__(self, R, C, *, rows=None, support=None):
         nA, nB = R["n_basis"], C["n_basis"]
@@ -2867,29 +2881,6 @@ class _EndTerms:
             self.t_r = np.zeros((rows.size, nB), dtype=np.complex128)
             self.t_c = np.zeros((nA, rows.size), dtype=np.complex128)
 
-    def units(self):
-        """The C-basis index of each column of `E_r`."""
-        if self.sup is not None:
-            return self.sup.cols
-        return np.arange(self.nB)
-
-    def row_update(self, nz, fv_nz, vec_u, scale, J=None):
-        """`E_r[nz rows, J] += scale * outer(fv_nz, vec_u)`, `vec_u` on the
-        units `J` (every unit when None). Elementwise per entry: the same
-        product `fv[r]·vec[c]`, scaled, then added — `outer` forms each entry
-        from its two factors alone (the factors keep their operand order), so
-        a subset of the columns is those columns' entries of the whole
-        update, bit for bit."""
-        if J is None:
-            _rank1_add(self.E_r, self.posLA[nz], fv_nz, vec_u, scale, self.buf)
-            return
-        if nz.size == 0 or J.size == 0:
-            return
-        out = self.buf.take(nz.size, J.size)
-        np.multiply.outer(fv_nz, vec_u, out=out)
-        out *= scale
-        self.E_r[np.ix_(self.posLA[nz], J)] += out
-
     def add_rows(self, nz, fv_nz, vec, scale):
         """`t[nz, :] += scale * outer(fv_nz, vec)`, into whichever blocks
         this call is answering with. `nz` is an R end's live rows, so it is
@@ -2898,7 +2889,7 @@ class _EndTerms:
         if rows is None:
             if self.sup is not None:
                 vec = vec[self.sup.cols]
-            self.row_update(nz, fv_nz, vec, scale)
+            _rank1_add(self.E_r, self.posLA[nz], fv_nz, vec, scale, self.buf)
             return
         sel, pos = _in_rows(rows, nz)
         if sel.size:
@@ -2981,6 +2972,12 @@ class _EndTerms:
 # for them (~50 MB per block at razor hub_deck(16) x16) never exists. False
 # is the in-process reference (the phase-1 route, store and all).
 _FUSED_ENDS = True
+# The column width of a streamed unit batch's fold into Z (`_FusedEnds._fold`),
+# in bytes of the Z[ix] copy — `razor._IX_SLAB_BYTES`, for the same reason.
+_Z_SLAB_BYTES = 8 * 2**20
+# The streamed route declines when its holds would outweigh the V/W store it
+# replaces — or this many complex entries (8 MiB), when the store is smaller.
+_STREAM_MIN_HOLD = 1 << 19
 
 
 def _csr_rows(M, rows):
@@ -3019,74 +3016,97 @@ def _row_max(M, vals):
 
 
 class _FusedEnds:
-    """A cross block's end loops, run INSIDE its product tile pass when they
-    can be, else afterwards as `_ends_and_corner_rc` (momwire#1173 design C
-    phase 2). `finish(out)` completes the block's ends either way.
+    """A cross block's end loops run INSIDE its product tile pass, and each
+    finished column of the block streamed into Z, when they can be; else the
+    loops run afterwards as `_ends_and_corner_rc` (momwire#1173 design C
+    phase 2). `finish(out)` completes the block either way.
 
     Phase 1 kept every product row's V and W in a row-ordered store because
-    the end loops, which ran after the main sandwich, read them. Here the
-    loops read them from the tile that evaluates them, so nothing is kept
-    beyond the tile but a few rows a later tile still needs (the held store,
-    shared with the sandwich's). The operations are `_ends_and_corner_rc`'s
-    — the same tables, the same matvecs, the same rank-1 writes into the
-    same `_EndTerms` — and what moves is only WHEN each runs. Each entry of
-    the block must still see its writes in the order the loops make them,
-    and that is what the rest of this docstring argues.
+    the end loops, which ran after the main sandwich, read them; and the
+    block (`t`) and its end accumulators (`E_r`, `E_c`) were whole beside Z
+    until razor folded `t` in. Here nothing of the three is whole: the loops
+    read V and W from the tile that evaluates them, and the block is
+    finished — sandwich, `c1`, end terms, scatter, fold into Z — a UNIT at a
+    time as soon as everything that unit reads is in hand. The operations
+    are the unfused route's, operand for operand; what moves is only WHEN
+    each runs and which array holds its result, and the rest of this
+    docstring argues that neither moves a bit.
 
-    WHICH BLOCKS (`attach`). Taken on a one-group product whose slow ends
-    (the ones `_fast_end_desc` does not name as product rows) all MISS the
-    product — checked on the asked floats, as the memo keys them — and whose
-    fast ROW ends are all one shape. A slow end then asks the memo nothing
-    the product answers, so its `_tables` call returns the same floats and
-    inserts the same rows whether the product is complete, in progress or
-    valueless (`ProductMemo.lookup` refuses only a HIT on such a product).
-    Anything else declines, and the tiles keep the phase-1 store.
+    Measured at razor hub_deck(16) x16 (Skylake): peak RSS 497 → 417 MB
+    with the below fold (`razor._assemble_Z_below_plane(into=)`), wall
+    within 4 %.
 
-    THE ROW LOOP. End e writes `E_r[nz_e rows, every unit]` (its V term, then
-    its W term), and an entry's writes come from the ends touching its row,
-    in loop order. The slow row ends' spans run first, before the tiles —
-    the same span calls, the same labels, on a memo holding exactly what it
-    held when the loop ran after the sandwich (the product's misses and
-    nothing else) — and their two matvecs are formed and held on the units.
-    Then, by the fast ends' shape:
+    UNITS. The main sandwich completes the block along its below axis (the
+    product's B side: `_streamed_sandwich` contracts a below basis row when
+    its tables are in), so the unit is a below basis function in the
+    support: a COLUMN of the forward block (`units_on="cols"`, C below) and
+    a ROW of the reversed one (`units_on="rows"`, R below). Every write to
+    the block and its accumulators is elementwise on its entry — an
+    assignment, `*= c1`, a rank-1 `+=` whose `outer` forms each entry from
+    its two factors in their operand order, the answer's scatter — so an
+    entry's value depends only on the writes to THAT entry and their order. A unit's entries are therefore formed from
+    zero, in a fresh array for the units finishing together, by replaying
+    exactly the writes the whole-block route makes to them, in its order —
+    each a restriction of the same `_rank1_add` / `_rank1_add_cols` /
+    `scale * np.outer` call to the finishing units' rows or columns, which
+    `outer` forms entry by entry from the same two factors (numpy's complex
+    multiply is not commutative to the bit under FMA, so the factors keep
+    their order, and they do):
 
-      * GROUPED ("A"): every fast end stands where a grouped node would and
-        asks a row of group g's z-factor against every line node, so the
-        line node n's value is ready at its key's tile, the SAME tile for
-        every such end. A unit's matvec row (C's `Fd` row for V, `F` row
-        for W) reads the nodes it stores; it is complete at the latest of
-        their tiles, for every end at once. At that tile each end's two
-        matvec entries for the completed units are formed — the unit rows
-        of `Fd`/`F` on the nodes they store (`_csr_on_cols`), against
-        `w · V` there: the same stored entries summed in the same order from
-        zero, against the same products (`w · V` is elementwise) — and
-        written for those units, end by end in loop order, V then W. Every
-        entry of `E_r` thus gets its ends' writes in loop order (its unit
-        completes once, and the slow ends' held vectors are sliced for it).
-        Rows a unit reads before its tile (a node whose own key tile is
-        earlier) are HELD, V and W, from their own tile.
-      * LINE ("B"): every fast end stands where a line node would, and asks
-        one key per grouped node — all of its rows in ONE tile. There its
-        whole V and W tables are gathered and its matvecs formed exactly as
-        the loop forms them (whole `Fd`/`F`, whole `w · V`). It is written
-        when every earlier end touching any of its rows has been: per row
-        of `E_r` the ends touching it are applied in loop order (a chain),
-        so every entry sees its writes in loop order. An end ready before
-        its predecessor waits, holding its two unit vectors.
+      sandwich (assigned) · `*= c1` · row-loop terms (end order, V then W)
+      · column-loop terms (end order, W then V) · corner · the scatter
+      (`E_c` zeroed on `LA`, `+= E_r`, `+= E_c`) · `Z −= t`.
 
-    THE COLUMN LOOP runs after the tiles, as the loop did after the row
-    loop: its terms land on `E_r` columns AFTER every row term (an entry's
-    row writes precede its column writes, as in the loop) and on `E_c`. Its
-    fast ends' V and W tables are gathered node by node as the tiles
-    evaluate them (a buffer per end over R's nodes); its slow ends' spans
-    run then, after the row loop's, as they did. The corner and the scatter
-    into the block are `_EndTerms`' own.
+    The one loop whose vectors run over the units (the "vector" loop: the
+    row loop when the units are C's, the column loop when they are R's)
+    writes EVERY unit; the other ("local") loop writes only the units its
+    end touches (`nz`, a handful). Each unit is finished once, when (a) its
+    sandwich column is in (`sink`, or at once for a unit no sandwich row
+    reaches) and (b) every term of both loops that writes it is computable:
+    the static tile `e_tile` below.
 
-    What the loops compute is thus the same floats written to the same
-    entries in the same order; the gates are the bits (`gate_z`, and
-    `test_fused_ends_1173`), with counters that prove the fused route ran,
-    and a TEST-ONLY control (`_PRODUCT_NEG_CONTROL = "fused_order"`: the
-    ends of a tile applied in reverse) that must move Z."""
+    WHERE THE TERMS COME FROM. The slow ends (not product rows by
+    `_fast_end_desc`) must all MISS the product — checked on the asked
+    floats, as the memo keys them — so their `_tables` calls return the
+    same floats and insert the same rows whether the product is complete,
+    in progress or valueless (`ProductMemo.lookup` refuses only a HIT); all
+    of their spans run first, row loop then column loop, which is the
+    memo's order in the unfused route, and each end's two matvecs are held.
+    A fast end's tables are copies of the tile's evaluated floats:
+
+      * a "line" end asks one key per grouped node, all in ONE tile, where
+        its whole tables are gathered and its matvecs formed exactly as the
+        loop forms them (whole `Fd`/`F`, whole `w · V`);
+      * a "grouped" end asks group g's z row against every line node. In
+        the VECTOR loop its line is the unit axis, and a unit's matvec row
+        reads the nodes it stores: it is complete at the latest of their
+        key tiles — the same tile for every such end, since they read the
+        same keys. There each end's matvec entries for the completed units
+        are formed from the unit rows of `Fd`/`F` on the nodes they store
+        (`_csr_on_cols`: the same stored entries summed in the same order
+        from zero, against the same `w · V` products) and held until the
+        units finish; rows a unit reads before its own tile are HELD in the
+        tiles' held store. In the LOCAL loop its line is the other axis and
+        its tables are gathered node by node over the tiles; its matvecs
+        are formed, whole, at the last.
+
+    THE SANDWICH hands each contracted row to `sink` instead of writing it
+    into a support block (`_streamed_sandwich`: the same entries), always
+    through the streamed contraction — one chunk when the tables came whole,
+    which is that routine's own case. The unit's column is kept until it
+    finishes, then assigned into zeros and scaled by `c1`, as the whole block
+    was.
+
+    Declined — the tiles then keep phase 1's store and the loops run after
+    them — on a product of several groups, a slow end that hits the
+    product, a missing support, or holds that would outweigh the store. A
+    block whose ends are all slow (the default lane) takes the "post" mode:
+    no store, and the loops after the tiles as in the unfused route.
+
+    Gates: the bits (`gate_z`, `test_fused_ends_1173`), counters that prove
+    the fused and streamed routes ran, and a TEST-ONLY control
+    (`_PRODUCT_NEG_CONTROL = "fused_order"`: the vector loop replayed last
+    end first) that must move Z."""
 
     def __init__(
         self,
@@ -3103,12 +3123,16 @@ class _FusedEnds:
         col_args,
         corner,
         support,
+        units_on,
+        into=None,
     ):
         self.ctx, self.R, self.C = ctx, R, C
         self.eps_t, self.k_p, self.c1, self.gz, self.memo = eps_t, k_p, c1, gz, memo
         self.row_args, self.col_args = row_args, col_args
         self.corner, self.support = corner, support
+        self.units_on, self.into = units_on, into
         self.attached = False
+        self.streaming = False
 
     # -- deciding ---------------------------------------------------------
 
@@ -3155,156 +3179,263 @@ class _FusedEnds:
         col_cls = self._classify(C["ends"], self.col_args, product, fast, a_wire)
         if col_cls == "hit":
             return self._decline("hit")
-        kinds = {d[0] for d in row_cls if d is not None}
-        if len(kinds) > 1:
-            return self._decline("mixed")
-        n_fast_col = sum(d is not None for d in col_cls)
-        if n_fast_col * R["nodes"].shape[0] > plan.n_rows:
-            # The column loop's gathered tables would outweigh the store.
-            return self._decline("hold")
         self.plan, self.tiles, self.fast = plan, tiles, fast
         self.row_cls, self.col_cls = row_cls, col_cls
-        self.mode = kinds.pop() if kinds else "post"
-        self.T = _EndTerms(R, C, support=self.support)
         self.wR, self.wR_tz = _end_weights(R)
         self.wC, self.wC_tz = _end_weights(C)
-        self.row_ends = R["ends"]
-        self.row_nz = [np.flatnonzero(fv) for _pt, _s, fv in self.row_ends]
-        extra = None
-        if self.mode != "post":
-            self._slow_row_prepass()
-            if self.mode == "grouped":
-                extra = self._prepare_grouped()
-            else:
-                self._prepare_line()
-        self._prepare_cols()
+        if all(d is None for d in row_cls + col_cls):
+            self.mode = "post"
+        else:
+            if self.support is None:
+                return self._decline("support")
+            if not (_MAIN_STREAMED and _STREAMED_WHOLE_ROWS):
+                return self._decline("stream")
+            if not self._prepare_stream():
+                return self._decline("hold")
+            self.mode = "stream"
+            self.streaming = True
+            self._slow_prepass()
+            tiles.extra_late = self._late_rows()
         tiles.listener = self
-        tiles.extra_late = extra
         self.attached = True
         _ROUTES["fused_blocks"] += 1
         _ROUTES["fused_mode_" + self.mode] += 1
         return True
 
-    # -- the row loop -----------------------------------------------------
+    # -- the streamed route: setup ----------------------------------------
 
-    def _slow_row_prepass(self):
-        """The row loop's slow spans, now, in order: their two matvecs, held
-        on the units. The fast ends' yields are skipped (None)."""
-        T, C, units = self.T, self.C, self.T.units()
-        self.slow_vec = {}
-        i = 0
-        for _pt, _sign, _fv, te in _end_tables_product(
-            self.ctx,
-            self.eps_t,
-            self.k_p,
-            self.row_ends,
-            C["nodes"].shape[0],
-            self.memo,
-            self.row_args,
-            classes=self.row_cls,
-            fast_te=lambda _i: None,
-        ):
-            if te is not None:
-                vV = _real_matvec_c(C["Fd_csr"], self.wC * te["V"])
-                vW = _real_matvec_c(C["F_csr"], self.wC_tz * te["W"])
-                if T.sup is not None:
-                    vV, vW = vV[units], vW[units]
-                self.slow_vec[i] = (vV, vW)
-            i += 1
+    def _prepare_stream(self):
+        """Units, the two loops' roles, what each end needs and when; False
+        when the holds would outweigh the store."""
+        R, C, sup, plan, tiles = self.R, self.C, self.support, self.plan, self.tiles
+        fwd = self.units_on == "cols"
+        self.fwd = fwd
+        # The unit axis (below) and the other; the vector loop's vectors run
+        # over the unit axis: the row loop's over C, the column loop's over R.
+        U_ax, O_ax = (C, R) if fwd else (R, C)
+        self.units = sup.cols if fwd else sup.rows
+        self.posU = sup.pos_c if fwd else sup.pos_r
+        self.others = sup.rows if fwd else sup.cols
+        self.posO = sup.pos_r if fwd else sup.pos_c
+        nU = self.units.size
+        self.LA, self.LB = _end_live_rows(R), _end_live_rows(C)
+        self.posLA = _positions(R["n_basis"], self.LA)
+        self.posLB = _positions(C["n_basis"], self.LB)
+        # vector loop: (ends, classes, matrices V/W over the unit axis, their
+        # weights); local loop: the same over the other axis.
+        row = (R["ends"], self.row_cls, C, self.wC, self.wC_tz)
+        col = (C["ends"], self.col_cls, R, self.wR, self.wR_tz)
+        self.vec_loop, self.loc_loop = (row, col) if fwd else (col, row)
+        self.nz_vec = [np.flatnonzero(fv) for _p, _s, fv in self.vec_loop[0]]
+        self.nz_loc = [np.flatnonzero(fv) for _p, _s, fv in self.loc_loop[0]]
+        n_line = plan.kid.shape[1]
+        tile_line = tiles.tile_of_key[plan.kid[0]]
+        self._tile_line = tile_line
+        vcls, lcls = self.vec_loop[1], self.loc_loop[1]
+        # The vector loop's grouped ends: per-unit completion tiles.
+        self.vg = [i for i, d in enumerate(vcls) if d is not None and d[0] == "grouped"]
+        e_tile = np.zeros(nU, dtype=np.int64)
+        self.unit_tile = None
+        if self.vg:
+            if U_ax["nodes"].shape[0] != n_line:
+                raise AssertionError(
+                    "grouped vector ends ask over a line not the units'"
+                )
+            M = self.vec_loop[2]
+            self.MV = _csr_rows(M["Fd_csr"], self.units)
+            self.MW = _csr_rows(M["F_csr"], self.units)
+            self.unit_tile = np.maximum(
+                np.maximum(_row_max(self.MV, tile_line), _row_max(self.MW, tile_line)),
+                0,
+            )
+            np.maximum(e_tile, self.unit_tile, out=e_tile)
+            o = np.argsort(self.unit_tile, kind="stable")
+            b = np.searchsorted(self.unit_tile[o], np.arange(tiles.n_tiles + 1))
+            self._units_of = (o, b)
+            self.vg_tile = np.full(nU, -1, dtype=np.int64)
+            self.vg_col = np.full(nU, -1, dtype=np.int64)
+            self.vg_batches = {}
+        # The vector loop's other ends: whole vectors at one tile (or now).
+        self.vw = {}  # end -> (vV[units], vW[units])
+        self.v_tile = {}
+        for i, d in enumerate(vcls):
+            if d is not None and d[0] == "line":
+                self.v_tile[i] = int(tiles.tile_of_key[d[1][0]])
+        if self.v_tile:
+            np.maximum(e_tile, max(self.v_tile.values()), out=e_tile)
+        # The local loop's ends: a whole vector over the other axis each, at
+        # one tile (line), at the last node's tile (grouped), or now (slow);
+        # held until every unit it writes is finished.
+        self.lw = {}  # end -> its held vectors
+        self.l_tile = {}
+        self.l_te = {}  # grouped: [teV, teW, n filled]
+        self.l_units = {}  # end -> the unit positions it writes
+        self.l_left = {}
+        for i, d in enumerate(lcls):
+            nz = self.nz_loc[i]
+            u = self.posU[nz]
+            u = u[u >= 0]
+            self.l_units[i] = u
+            self.l_left[i] = u.size
+            if d is None:
+                t = -1
+            elif d[0] == "line":
+                t = int(tiles.tile_of_key[d[1][0]])
+            else:
+                if O_ax["nodes"].shape[0] != n_line:
+                    raise AssertionError("grouped local ends ask over a line not O's")
+                t = int(tile_line.max())
+                nO = O_ax["nodes"].shape[0]
+                self.l_te[i] = [
+                    np.empty(nO, dtype=np.complex128),
+                    np.empty(nO, dtype=np.complex128),
+                    0,
+                ]
+            self.l_tile[i] = t
+            if u.size:
+                np.maximum.at(e_tile, u, t)
+        self.e_tile = e_tile
+        # unit -> the local ends writing it (each pair once, ends ascending)
+        pairs_u = [self.l_units[i] for i in range(len(lcls))]
+        pu = np.concatenate(pairs_u) if pairs_u else np.zeros(0, dtype=np.int64)
+        pe = np.repeat(np.arange(len(lcls)), [u.size for u in pairs_u])
+        o = np.lexsort((pe, pu))
+        self._l_by_unit = (
+            pe[o],
+            np.searchsorted(pu[o], np.arange(nU + 1)),
+        )
+        # The sandwich's side: a unit no sandwich row reaches is in hand now;
+        # the others when the streamed sandwich contracts their row, at the
+        # tile that serves the last table column the row reads.
+        rB = _support_rows(U_ax, np.arange(U_ax["nodes"].shape[0]))
+        self.s_ready = np.ones(nU, dtype=bool)
+        pb = self.posU[rB]
+        self.s_ready[pb[pb >= 0]] = False
+        s_tile = np.zeros(nU, dtype=np.int64)
+        node_ready = tiles._node_ready
+        for key in ("F_csr", "Fd_csr"):
+            np.maximum(
+                s_tile,
+                _row_max(_csr_rows(U_ax[key], self.units), node_ready),
+                out=s_tile,
+            )
+        if self._hold_peak(s_tile, lcls) > max(2 * plan.n_rows, _STREAM_MIN_HOLD):
+            return False
+        self.s_cols = {}
+        self.e_ready = np.zeros(nU, dtype=bool)
+        self.done = np.zeros(nU, dtype=bool)
+        self.corner_terms = self._corner_list() if self.corner else []
+        # The fold: into Z, or into a block the caller gets back.
+        self.res = None if self.into is not None else sup.zeros()
+        return True
 
-    def _prepare_grouped(self):
-        """Mode "grouped": each unit's completing tile, and the rows read
-        after their own tile (returned, for the held store)."""
-        plan, tiles, fast, C = self.plan, self.tiles, self.fast, self.C
-        if C["nodes"].shape[0] != plan.kid.shape[1]:
-            raise AssertionError("grouped row ends ask over a line that is not C")
-        units = self.T.units()
-        tile_node = tiles.tile_of_key[plan.kid[0]]
-        self.MV = _csr_rows(C["Fd_csr"], units)
-        self.MW = _csr_rows(C["F_csr"], units)
-        t_unit = np.maximum(
-            np.maximum(_row_max(self.MV, tile_node), _row_max(self.MW, tile_node)), 0
+    def _hold_peak(self, s_tile, lcls):
+        """The most complex entries the streamed route holds at once, from
+        its static schedule (a unit finishes at the later of its `e_tile`
+        and its sandwich tile): the vector loop's whole vectors and grouped
+        pieces, the local loop's vectors and gathered tables, and the
+        sandwich columns waiting for their units."""
+        n_t = self.tiles.n_tiles + 1
+        fin = np.maximum(self.e_tile, s_tile)
+        d = np.zeros(n_t + 1, dtype=np.int64)
+
+        def hold(lo, hi, n):
+            d[max(lo, 0)] += n
+            d[max(hi, 0) + 1] -= n
+
+        vcls = self.vec_loop[1]
+        n_vwhole = sum(c is None or c[0] == "line" for c in vcls)
+        hold(0, n_t - 1, 2 * n_vwhole * self.units.size)
+        if self.vg:
+            np.add.at(d, self.unit_tile, 2 * len(self.vg))
+            np.add.at(d, fin + 1, -2 * len(self.vg))
+        np.add.at(d, s_tile, self.others.size)
+        np.add.at(d, fin + 1, -self.others.size)
+        per_local = 2 * (self.others.size + (self.LA.size if self.fwd else 0))
+        for i, c in enumerate(lcls):
+            u = self.l_units[i]
+            if u.size == 0:
+                continue
+            hold(self.l_tile[i], int(fin[u].max()), per_local)
+            if c is not None and c[0] == "grouped":
+                hold(0, self.l_tile[i], 2 * self._tile_line.size)
+        return int(np.cumsum(d).max())
+
+    def _corner_list(self):
+        """The corner's writes, `(nza, nzb, fva, fvb, scale)` in loop order —
+        `_corner_terms`', collected rather than applied."""
+        seen = []
+
+        class _Collect:
+            def add_corner(self, nza, nzb, fva, fvb, scale):
+                seen.append((nza, nzb, fva, fvb, scale))
+
+        _corner_terms(
+            _Collect(), self.ctx, self.R, self.C, self.eps_t, self.k_p, self.c1, self.gz
         )
-        o = np.argsort(t_unit, kind="stable")
-        self._units_of = (o, np.searchsorted(t_unit[o], np.arange(tiles.n_tiles + 1)))
-        late = np.zeros(tile_node.size, dtype=bool)
-        for M in (self.MV, self.MW):
-            t_entry = np.repeat(t_unit, np.diff(M.indptr))
-            early = tile_node[M.indices] < t_entry
-            late[M.indices[early]] = True
-        self.zl = np.array(
-            [-1 if d is None else d[2] for d in self.row_cls], dtype=np.int64
-        )
-        zls = np.unique(self.zl[self.zl >= 0])
-        late_nodes = np.flatnonzero(late)
-        if zls.size == 0 or late_nodes.size == 0:
+        return seen
+
+    def _late_rows(self):
+        """The rows the vector loop's grouped ends read after their own tile
+        (a unit completing later reads them), for the tiles' held store."""
+        if not self.vg:
             return None
+        late = np.zeros(self._tile_line.size, dtype=bool)
+        for M in (self.MV, self.MW):
+            t_entry = np.repeat(self.unit_tile, np.diff(M.indptr))
+            early = self._tile_line[M.indices] < t_entry
+            late[M.indices[early]] = True
+        vcls = self.vec_loop[1]
+        zls = np.unique(np.array([vcls[i][2] for i in self.vg], dtype=np.int64))
+        late_nodes = np.flatnonzero(late)
+        if late_nodes.size == 0:
+            return None
+        fast = self.fast
         base = fast.off[0] + zls * fast.nk[0]
         return fast.rowflat[
             base[:, None] + fast.kl_rank[0][late_nodes][None, :]
         ].ravel()
 
-    def _prepare_line(self):
-        """Mode "line": each fast end's one tile, and the per-row chains."""
-        tiles = self.tiles
-        n = len(self.row_ends)
-        self.ready_tile = np.full(n, -1, dtype=np.int64)
-        for i, d in enumerate(self.row_cls):
-            if d is not None:
-                self.ready_tile[i] = tiles.tile_of_key[d[1][0]]
-        rpos = [self.T.posLA[nz] for nz in self.row_nz]
-        touch = {}
-        for i, rp in enumerate(rpos):
-            for r in rp.tolist():
-                touch.setdefault(r, []).append(i)
-        self.rpos, self.touch = rpos, touch
-        self.head = dict.fromkeys(touch, 0)
-        self.applied = np.zeros(n, dtype=bool)
-        self.waiting = {}
-        # The slow ends are ready now; apply what the chains allow.
-        for i in range(n):
-            if self.row_cls[i] is None:
-                self._ready(i, self.slow_vec.pop(i))
-        self._run_chains(list(range(n)))
-
-    def _apply_row_end(self, i, vV, vW, J=None):
-        """End i's two writes, V then W — `_row_end_terms`' on the units."""
-        _pt, sign, fv = self.row_ends[i]
-        nz = self.row_nz[i]
-        fv_nz = fv[nz]
-        self.T.row_update(nz, fv_nz, vV, self.c1 * sign, J)
-        self.T.row_update(nz, fv_nz, vW, -self.c1 * sign, J)
-
-    def _ready(self, i, vecs):
-        self.waiting[i] = vecs
-        _ROUTES["fused_chain_holds"] = max(
-            _ROUTES["fused_chain_holds"], len(self.waiting)
+    def _slow_prepass(self):
+        """Every slow span, now, in the unfused route's order (the row loop's,
+        then the column loop's): each slow end's two matvecs, held."""
+        R, C = self.R, self.C
+        loops = (
+            (R["ends"], C, self.row_args, self.row_cls, self.wC, self.wC_tz, "row"),
+            (C["ends"], R, self.col_args, self.col_cls, self.wR, self.wR_tz, "col"),
         )
+        for ends, M, args, cls, w, w_tz, which in loops:
+            i = 0
+            for _pt, _sign, _fv, te in _end_tables_product(
+                self.ctx,
+                self.eps_t,
+                self.k_p,
+                ends,
+                M["nodes"].shape[0],
+                self.memo,
+                args,
+                classes=cls,
+                fast_te=lambda _i: None,
+            ):
+                if te is not None:
+                    vV = _real_matvec_c(M["Fd_csr"], w * te["V"])
+                    vW = _real_matvec_c(M["F_csr"], w_tz * te["W"])
+                    self._have_vectors(which, i, vV, vW)
+                i += 1
 
-    def _run_chains(self, todo):
-        """Apply every waiting end whose rows' chains have reached it (any
-        schedule that respects the chains writes each entry in loop order)."""
-        if _PRODUCT_NEG_CONTROL == "fused_order":
-            # TEST-ONLY: every ready end at once, last first, chains ignored.
-            for i in sorted(self.waiting, reverse=True):
-                vV, vW = self.waiting.pop(i)
-                self._apply_row_end(i, vV, vW)
-                self.applied[i] = True
+    def _have_vectors(self, which, i, vV, vW):
+        """End i of loop `which` has its two whole matvecs: keep the entries
+        the finish reads."""
+        vec_is_row = self.fwd == (which == "row")
+        if vec_is_row:
+            self.vw[i] = (vV[self.units], vW[self.units])
             return
-        todo = list(todo)
-        while todo:
-            i = todo.pop()
-            if self.applied[i] or i not in self.waiting:
-                continue
-            if any(self.touch[r][self.head[r]] != i for r in self.rpos[i].tolist()):
-                continue
-            vV, vW = self.waiting.pop(i)
-            self._apply_row_end(i, vV, vW)
-            self.applied[i] = True
-            for r in self.rpos[i].tolist():
-                self.head[r] += 1
-                if self.head[r] < len(self.touch[r]):
-                    todo.append(self.touch[r][self.head[r]])
+        if self.fwd:  # a column end: E_r reads vec[LA], E_c vec[support rows]
+            self.lw[i] = (vV[self.LA], vW[self.LA], vV[self.others], vW[self.others])
+        else:  # a row end: vec over the support's columns
+            self.lw[i] = (vV[self.others], vW[self.others])
+        if self.l_left[i] == 0:
+            self.lw.pop(i)
 
     # -- the tile pass ----------------------------------------------------
 
@@ -3324,117 +3455,316 @@ class _FusedEnds:
         return V, W
 
     def tile(self, t, loc, tb, held, hpos):
-        """Tile t has been evaluated: run what it completes."""
-        if self.mode == "grouped":
-            self._tile_grouped(t, loc, tb, held, hpos)
-        elif self.mode == "line":
-            self._tile_line(t, loc, tb, held, hpos)
-        self._tile_cols(t, loc, tb, held, hpos)
-
-    def _tile_grouped(self, t, loc, tb, held, hpos):
-        o, b = self._units_of
-        J = o[b[t] : b[t + 1]]
-        if J.size == 0:
+        """Tile t has been evaluated: form what it completes, then finish the
+        units it makes ready."""
+        if not self.streaming:
             return
-        J = np.sort(J)
-        _ROUTES["fused_unit_tiles"] += 1
         fast = self.fast
-        MV, needV = _csr_on_cols(_csr_rows(self.MV, J))
-        MW, needW = _csr_on_cols(_csr_rows(self.MW, J))
-        wV, wW = self.wC[needV], self.wC_tz[needW]
-        kV, kW = fast.kl_rank[0][needV], fast.kl_rank[0][needW]
-        order = range(len(self.row_ends))
+        _vends, vcls, M = self.vec_loop[0], self.vec_loop[1], self.vec_loop[2]
+        _lends, lcls, N = self.loc_loop[0], self.loc_loop[1], self.loc_loop[2]
+        wv, wv_tz = self.vec_loop[3], self.vec_loop[4]
+        wl, wl_tz = self.loc_loop[3], self.loc_loop[4]
+        which_v = "row" if self.fwd else "col"
+        which_l = "col" if self.fwd else "row"
+        # Vector loop, line ends at this tile: whole vectors.
+        for i, ti in self.v_tile.items():
+            if ti == t:
+                V, W = self._vw(_fast_desc_rows(fast, vcls[i]), loc, tb, held, hpos)
+                vV = _real_matvec_c(M["Fd_csr"], wv * V)
+                vW = _real_matvec_c(M["F_csr"], wv_tz * W)
+                self._have_vectors(which_v, i, vV, vW)
+                _ROUTES["fused_row_ends"] += 1
+        # Vector loop, grouped ends: the units completing here.
+        if self.vg:
+            o, b = self._units_of
+            J = np.sort(o[b[t] : b[t + 1]])
+            if J.size:
+                _ROUTES["fused_unit_tiles"] += 1
+                MV, needV = _csr_on_cols(_csr_rows(self.MV, J))
+                MW, needW = _csr_on_cols(_csr_rows(self.MW, J))
+                kV, kW = fast.kl_rank[0][needV], fast.kl_rank[0][needW]
+                xV, xW = wv[needV], wv_tz[needW]
+                VV = np.empty((len(self.vg), J.size), dtype=np.complex128)
+                VW = np.empty((len(self.vg), J.size), dtype=np.complex128)
+                for r, i in enumerate(self.vg):
+                    base = fast.off[0] + vcls[i][2] * fast.nk[0]
+                    V, _W = self._vw(fast.rowflat[base + kV], loc, tb, held, hpos)
+                    _V, W = self._vw(fast.rowflat[base + kW], loc, tb, held, hpos)
+                    VV[r] = _real_matvec_c(MV, xV * V)
+                    VW[r] = _real_matvec_c(MW, xW * W)
+                    _ROUTES["fused_row_ends"] += 1
+                self.vg_batches[t] = [VV, VW, J.size]
+                self.vg_tile[J] = t
+                self.vg_col[J] = np.arange(J.size)
+        # Local loop: line ends at this tile, grouped ends' tables.
+        sel_t = None
+        for i, d in enumerate(lcls):
+            if d is None:
+                continue
+            if d[0] == "line":
+                if self.l_tile[i] != t:
+                    continue
+                V, W = self._vw(_fast_desc_rows(fast, d), loc, tb, held, hpos)
+            else:
+                buf = self.l_te[i]
+                if sel_t is None:
+                    sel_t = np.flatnonzero(self._tile_line == t)
+                if sel_t.size:
+                    rows = _fast_desc_rows(fast, d)[sel_t]
+                    buf[0][sel_t], buf[1][sel_t] = self._vw(rows, loc, tb, held, hpos)
+                    buf[2] += sel_t.size
+                if self.l_tile[i] != t:
+                    continue
+                if buf[2] != buf[0].size:
+                    raise AssertionError("a fused local end's tables are incomplete")
+                V, W = buf[0], buf[1]
+                del self.l_te[i]
+            vV = _real_matvec_c(N["Fd_csr"], wl * V)
+            vW = _real_matvec_c(N["F_csr"], wl_tz * W)
+            self._have_vectors(which_l, i, vV, vW)
+            _ROUTES["fused_col_te"] += 1
+        # Finish the units this tile makes ready.
+        now = self.e_tile == t
+        self.e_ready |= now
+        self._finish_units(np.flatnonzero(now & self.s_ready & ~self.done))
+
+    def sink(self, rA, b_idx, block):
+        """The streamed sandwich's rows `b_idx` of the below axis are
+        contracted: `block` holds their entries on the sandwich's rows `rA`
+        (`_put`'s block, which this keeps per unit instead of writing it
+        into a whole support block: the same entries, assigned)."""
+        rA_pos = self.posO[rA]
+        kr = rA_pos >= 0
+        pu = self.posU[b_idx]
+        n_o = self.others.size
+        for j in np.flatnonzero(pu >= 0).tolist():
+            col = np.zeros(n_o, dtype=np.complex128)
+            col[rA_pos[kr]] = block[kr, j]
+            self.s_cols[int(pu[j])] = col
+        u = pu[pu >= 0]
+        self.s_ready[u] = True
+        _ROUTES["stream_held_units"] = max(
+            _ROUTES["stream_held_units"], len(self.s_cols)
+        )
+        self._finish_units(u[self.e_ready[u] & ~self.done[u]])
+
+    # -- finishing units --------------------------------------------------
+
+    def _finish_units(self, U):
+        """Units U (positions) are complete: form their entries by the
+        whole-block route's writes, in its order, and fold them."""
+        if U.size == 0:
+            return
+        U = np.sort(U)
+        c1 = self.c1
+        fwd = self.fwd
+        nU = U.size
+        n_o = self.others.size
+        # sandwich (assigned into zeros), then `*= c1`
+        S = np.zeros((n_o, nU), dtype=np.complex128)
+        for k, u in enumerate(U.tolist()):
+            col = self.s_cols.pop(u, None)
+            if col is not None:
+                S[:, k] = col
+        S *= c1
+        if fwd:
+            self._finish_cols(U, S)
+        else:
+            self._finish_rows(U, S.T.copy())
+        self.done[U] = True
+        _ROUTES["stream_units"] += nU
+        _ROUTES["stream_finish_calls"] += 1
+
+    def _vector_pieces(self, U):
+        """Per vector-loop end, its two matvec entries at units U."""
+        out = {}
+        for i, (vV, vW) in self.vw.items():
+            out[i] = (vV[U], vW[U])
+        if self.vg:
+            VV = np.empty((len(self.vg), U.size), dtype=np.complex128)
+            VW = np.empty((len(self.vg), U.size), dtype=np.complex128)
+            ts = self.vg_tile[U]
+            if (ts < 0).any():
+                raise AssertionError("a unit finished before its vector entries")
+            for t in np.unique(ts).tolist():
+                m = ts == t
+                bt = self.vg_batches[t]
+                cols = self.vg_col[U[m]]
+                VV[:, m] = bt[0][:, cols]
+                VW[:, m] = bt[1][:, cols]
+                bt[2] -= int(m.sum())
+                if bt[2] == 0:
+                    del self.vg_batches[t]
+            for r, i in enumerate(self.vg):
+                out[i] = (VV[r], VW[r])
+        return out
+
+    def _release_local(self, U):
+        """Drop a local end's vectors once every unit it writes is done."""
+        for i in self._local_pairs(U).tolist():
+            self.l_left[i] -= 1
+            if self.l_left[i] == 0:
+                del self.lw[i]
+
+    def _finish_cols(self, U, t_U):
+        """The forward block's units: C columns of `E_r`, `E_c` and `t`."""
+        sup, c1 = self.support, self.c1
+        LA, posLA = self.LA, self.posLA
+        E_r = np.zeros((LA.size, U.size), dtype=np.complex128)
+        cU = self.units[U]
+        inLB = self.posLB[cU] >= 0
+        E_c = np.zeros((self.others.size, int(inLB.sum())), dtype=np.complex128)
+        kLB = np.full(self.units.size, -1, dtype=np.int64)
+        kLB[U[inLB]] = np.arange(E_c.shape[1])
+        kU = np.full(self.units.size, -1, dtype=np.int64)
+        kU[U] = np.arange(U.size)
+        buf = _Rank1Buffer()
+        # The row loop (vector): every end in order, V then W.
+        pieces = self._vector_pieces(U)
+        order = range(len(self.vec_loop[0]))
         if _PRODUCT_NEG_CONTROL == "fused_order":
             order = reversed(order)  # TEST-ONLY: the ends in the wrong order
         for i in order:
-            if self.row_nz[i].size == 0:
+            nz = self.nz_vec[i]
+            if nz.size == 0:
                 continue
-            if self.row_cls[i] is None:
-                vV, vW = self.slow_vec[i]
-                self._apply_row_end(i, vV[J], vW[J], J)
+            _pt, sign, fv = self.vec_loop[0][i]
+            vV, vW = pieces[i]
+            _rank1_add(E_r, posLA[nz], fv[nz], vV, c1 * sign, buf)
+            _rank1_add(E_r, posLA[nz], fv[nz], vW, -c1 * sign, buf)
+        # The column loop (local): its ends touching U in order, W then V —
+        # `add_cols`' two writes (E_r on the support's columns, E_c on LB's),
+        # on the columns finishing here.
+        for i in self._local_touching(U):
+            nz = self.nz_loc[i]
+            _pt, sign, fv = self.loc_loop[0][i]
+            fv_nz = fv[nz]
+            pc = sup.pos_c[nz]
+            on = pc >= 0
+            ku = np.where(on, kU[pc], -1)
+            kc = np.where(on, kLB[pc], -1)
+            sel, selc = ku >= 0, kc >= 0
+            lvV, lvW, svV, svW = self.lw[i]
+            for lv, sv, s in ((lvW, svW, -c1 * sign), (lvV, svV, c1 * sign)):
+                if sel.any():
+                    _rank1_add_cols(E_r, ku[sel], lv, fv_nz[sel], s, buf)
+                if selc.any():
+                    _rank1_add_cols(E_c, kc[selc], sv, fv_nz[selc], s, buf)
+        for nza, nzb, fva, fvb, scale in self.corner_terms:
+            pc = sup.pos_c[nzb]
+            keep = pc >= 0
+            k = kU[pc[keep]]
+            sel = k >= 0
+            if sel.any():
+                E_r[np.ix_(posLA[nza], k[sel])] += scale * np.outer(fva, fvb[keep][sel])
+        # The scatter: `E_c` zeroed on the support's LA rows, `+= E_r` there,
+        # then `+= E_c` on the LB columns.
+        if LA.size:
+            pr = sup.pos_r[LA]
+            keep = pr >= 0
+            E_c[pr[keep], :] = 0.0
+            t_U[pr[keep], :] += E_r[keep]
+        if E_c.shape[1]:
+            t_U[:, inLB] += E_c
+        self._fold(self.others, self.units[U], t_U, rows_are_units=False, U=U)
+        self._release_local(U)
+
+    def _local_pairs(self, U):
+        """The (end, unit) pairs of the local loop on units U."""
+        o, b = self._l_by_unit
+        return np.concatenate([o[b[u] : b[u + 1]] for u in U.tolist()] or [o[:0]])
+
+    def _local_touching(self, U):
+        """The local loop's ends that write any of units U, in loop order;
+        each must have its vectors in hand (its tile is in `e_tile`)."""
+        out = np.unique(self._local_pairs(U)).tolist()
+        for i in out:
+            if i not in self.lw:
+                raise AssertionError("a unit finished before a local end it reads")
+        return out
+
+    def _finish_rows(self, U, t_U):
+        """The reversed block's units: R rows of `E_r`, `E_c` and `t`."""
+        sup, c1 = self.support, self.c1
+        posLA = self.posLA
+        rU = self.units[U]  # R basis
+        la = posLA[rU] >= 0
+        E_r = np.zeros((int(la.sum()), sup.cols.size), dtype=np.complex128)
+        kLA = np.full(posLA.size, -1, dtype=np.int64)  # R basis -> E_r row
+        kLA[rU[la]] = np.arange(E_r.shape[0])
+        E_c = np.zeros((U.size, self.LB.size), dtype=np.complex128)
+        buf = _Rank1Buffer()
+        # The row loop (local): its ends touching U in order, V then W —
+        # `add_rows`' write, on the rows finishing here.
+        for i in self._local_touching(U):
+            nz = self.nz_loc[i]
+            k = kLA[nz]
+            sel = k >= 0
+            if not sel.any():
                 continue
-            base = fast.off[0] + self.zl[i] * fast.nk[0]
-            V, _W = self._vw(fast.rowflat[base + kV], loc, tb, held, hpos)
-            _V, W = self._vw(fast.rowflat[base + kW], loc, tb, held, hpos)
-            vV = _real_matvec_c(MV, wV * V)
-            vW = _real_matvec_c(MW, wW * W)
-            self._apply_row_end(i, vV, vW, J)
-            _ROUTES["fused_row_ends"] += 1
-
-    def _tile_line(self, t, loc, tb, held, hpos):
-        C, units, sup = self.C, self.T.units(), self.T.sup
-        now = np.flatnonzero(self.ready_tile == t)
-        for i in now.tolist():
-            rows = _fast_desc_rows(self.fast, self.row_cls[i])
-            V, W = self._vw(rows, loc, tb, held, hpos)
-            vV = _real_matvec_c(C["Fd_csr"], self.wC * V)
-            vW = _real_matvec_c(C["F_csr"], self.wC_tz * W)
-            if sup is not None:
-                vV, vW = vV[units], vW[units]
-            _ROUTES["fused_row_ends"] += 1
-            self._ready(i, (vV, vW))
-        self._run_chains(now.tolist())
-
-    # -- the column loop --------------------------------------------------
-
-    def _prepare_cols(self):
-        """A V/W buffer over R's nodes per fast column end, and where each
-        node's value arrives."""
-        plan, tiles, R = self.plan, self.tiles, self.R
-        nR = R["nodes"].shape[0]
-        self.col_te = {}
-        self.col_tile_node = None
-        for j, d in enumerate(self.col_cls):
-            if d is None:
+            _pt, sign, fv = self.loc_loop[0][i]
+            lvV, lvW = self.lw[i]
+            _rank1_add(E_r, k[sel], fv[nz][sel], lvV, c1 * sign, buf)
+            _rank1_add(E_r, k[sel], fv[nz][sel], lvW, -c1 * sign, buf)
+        # The column loop (vector): every end in order, W then V.
+        pieces = self._vector_pieces(U)
+        order = range(len(self.vec_loop[0]))
+        if _PRODUCT_NEG_CONTROL == "fused_order":
+            order = reversed(order)  # TEST-ONLY: the ends in the wrong order
+        rows_la = np.flatnonzero(la)
+        for i in order:
+            nz = self.nz_vec[i]
+            if nz.size == 0:
                 continue
-            if d[0] == "grouped":
-                if nR != plan.kid.shape[1]:
-                    raise AssertionError("grouped column ends ask over R's line")
-                if self.col_tile_node is None:
-                    self.col_tile_node = tiles.tile_of_key[plan.kid[0]]
-                tl = None
+            _pt, sign, fv = self.vec_loop[0][i]
+            fv_nz = fv[nz]
+            vV, vW = pieces[i]
+            pc = sup.pos_c[nz]
+            keep = pc >= 0
+            for v, s in ((vW, -c1 * sign), (vV, c1 * sign)):
+                _rank1_add_cols(E_r, pc[keep], v[rows_la], fv_nz[keep], s, buf)
+                _rank1_add_cols(E_c, self.posLB[nz], v, fv_nz, s, buf)
+        for nza, nzb, fva, fvb, scale in self.corner_terms:
+            pc = sup.pos_c[nzb]
+            keep = pc >= 0
+            k = kLA[nza]
+            sel = k >= 0
+            if sel.any():
+                E_r[np.ix_(k[sel], pc[keep])] += scale * np.outer(fva[sel], fvb[keep])
+        # The scatter: the LA units' `E_c` rows zeroed and `+= E_r`, then
+        # `+= E_c` on the support's LB columns.
+        if rows_la.size:
+            E_c[rows_la, :] = 0.0
+            t_U[rows_la, :] += E_r
+        if self.LB.size:
+            pc = sup.pos_c[self.LB]
+            keep = pc >= 0
+            t_U[:, pc[keep]] += E_c[:, keep]
+        self._fold(self.units[U], self.others, t_U, rows_are_units=True, U=U)
+        self._release_local(U)
+
+    def _fold(self, zr, zc, block, *, rows_are_units, U):
+        """`Z[np.ix_(zr, zc)] −= block` (the caller's fold, one subtraction
+        per entry, column slabs as `razor._ix_accumulate` takes them), or the
+        block's place in the returned support block."""
+        if self.into is None:
+            if rows_are_units:
+                self.res[U, :] = block
             else:
-                tl = int(tiles.tile_of_key[d[1][0]])
-            self.col_te[j] = [
-                np.empty(nR, dtype=np.complex128),
-                np.empty(nR, dtype=np.complex128),
-                tl,
-                0,
-            ]
-        _ROUTES["fused_col_te"] += len(self.col_te)
-
-    def _tile_cols(self, t, loc, tb, held, hpos):
-        sel_t = None
-        for j, buf in self.col_te.items():
-            teV, teW, tl, _n = buf
-            d = self.col_cls[j]
-            if tl is None:
-                if sel_t is None:
-                    sel_t = np.flatnonzero(self.col_tile_node == t)
-                sel = sel_t
-            elif tl == t:
-                sel = slice(None)
-            else:
-                continue
-            rows = _fast_desc_rows(self.fast, d)[sel]
-            if rows.size == 0:
-                continue
-            V, W = self._vw(rows, loc, tb, held, hpos)
-            teV[sel] = V
-            teW[sel] = W
-            buf[3] += rows.size
-
-    def _col_te_of(self, j):
-        teV, teW, _tl, n = self.col_te.pop(j)
-        if n != teV.size:
-            raise AssertionError("a fused column end's tables are incomplete")
-        return {"V": teV, "W": teW}
+                self.res[:, U] = block
+            return
+        Z = self.into
+        w = max(1, _Z_SLAB_BYTES // (16 * max(1, zr.size)))
+        for c0 in range(0, zc.size, w):
+            ix = np.ix_(zr, zc[c0 : c0 + w])
+            Z[ix] -= block[:, c0 : c0 + w]
 
     # -- finishing --------------------------------------------------------
 
     def finish(self, out):
-        """The block's end terms and corner, accumulated into `out` (the
-        main sandwich's block) — through the fused route when attached."""
+        """The block's end terms and corner — accumulated into `out` (the
+        main sandwich's block) and that block returned; or, streamed, every
+        unit already folded, and None (`into`) or the block."""
         if not self.attached:
             return _ends_and_corner_rc(
                 self.ctx,
@@ -3453,27 +3783,31 @@ class _FusedEnds:
             )
         if not self.tiles.product.complete:
             raise AssertionError("the block finished before its tiles did")
-        T, R, C = self.T, self.R, self.C
+        # The tiles and this object name each other; a cycle would keep the
+        # plan and the tiles alive past the block, until a garbage collection
+        # (measured: the forward block's ~45 MB still standing at the
+        # reversed block's peak). Cut it here.
+        self.tiles.listener = None
+        if self.streaming:
+            self._finish_units(np.flatnonzero(~self.done))
+            if not self.done.all() or self.s_cols or self.lw:
+                raise AssertionError("a streamed unit or hold was left over")
+            self.tiles = self.plan = self.fast = None
+            return None if self.into is not None else self.res
+        R, C = self.R, self.C
+        T = _EndTerms(R, C, support=self.support)
         ctx, eps_t, k_p, c1, memo = self.ctx, self.eps_t, self.k_p, self.c1, self.memo
-        if self.mode == "post":
-            for _pt, sign, fv, te in _end_tables_product(
-                ctx,
-                eps_t,
-                k_p,
-                self.row_ends,
-                C["nodes"].shape[0],
-                memo,
-                self.row_args,
-                classes=self.row_cls,
-            ):
-                _row_end_terms(T, C, self.wC, self.wC_tz, c1, sign, fv, te)
-        elif self.mode == "line":
-            if not self.applied.all() or self.waiting:
-                raise AssertionError("a fused row end was never applied")
-        else:
-            o, b = self._units_of
-            if b[-1] != o.size:
-                raise AssertionError("a unit completed after the last tile")
+        for _pt, sign, fv, te in _end_tables_product(
+            ctx,
+            eps_t,
+            k_p,
+            R["ends"],
+            C["nodes"].shape[0],
+            memo,
+            self.row_args,
+            classes=self.row_cls,
+        ):
+            _row_end_terms(T, C, self.wC, self.wC_tz, c1, sign, fv, te)
         for _pt, sign, fv, te in _end_tables_product(
             ctx,
             eps_t,
@@ -3483,17 +3817,11 @@ class _FusedEnds:
             memo,
             self.col_args,
             classes=self.col_cls,
-            fast_te=self._col_te_of,
         ):
             _col_end_terms(T, R, self.wR, self.wR_tz, c1, sign, fv, te)
         if self.corner:
             _corner_terms(T, ctx, R, C, eps_t, k_p, c1, self.gz)
-        # The tiles and this object name each other; a cycle would keep the
-        # plan, the accumulators and the tiles alive past the block, until a
-        # garbage collection (measured: the forward block's ~45 MB still
-        # standing at the reversed block's peak). Cut it here.
-        self.tiles.listener = None
-        self.tiles = self.plan = self.fast = self.T = None
+        self.tiles = self.plan = self.fast = None
         return T.answer(out)
 
 
@@ -3586,7 +3914,7 @@ def _ends_and_corner_reversed(
 
 
 def cross_complete_block_reversed(
-    ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS, support=None
+    ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS, support=None, into=None
 ):
     """The block the other way round: BELOW test rows × ABOVE source columns.
 
@@ -3632,14 +3960,17 @@ def cross_complete_block_reversed(
         col_args=_above_end_args(P, gz),
         corner=corner,
         support=sup,
+        units_on="rows",
+        into=into,
     )
     t_ba = _main_sandwich(
         ctx, Q, P, eps_t, k_p, c1, gz, memo=memo, support=sup_t, ends=ends
-    ).T
+    )
     # Accumulated in place through the support scatter, bit-identical to
-    # `t_ba += <the full ends block>` (`_ends_and_corner_rc`).
-    ends.finish(t_ba)
-    return t_ba
+    # `t_ba += <the full ends block>` (`_ends_and_corner_rc`); streamed, the
+    # sandwich answers None and every row is already folded (`into`, as in
+    # `cross_complete_block`).
+    return ends.finish(None if t_ba is None else t_ba.T)
 
 
 def _row_weights(ax, ii, rows=None):
@@ -3740,7 +4071,9 @@ def _combine(Ls, Qz):
     )
 
 
-def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=None):
+def _streamed_sandwich(
+    Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=None, sink=None
+):
     """`_sandwich_dense` over COLUMN CHUNKS of the tables without ever holding
     the six whole (|rA|, |iB|) left products: `out[rA, rB] += block`, the
     same bits as contracting the assembled products (momwire#1168).
@@ -3786,7 +4119,15 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
     `_STREAMED_WHOLE_ROWS = False` is the TEST-ONLY negative control: every
     chunk contracts its own columns for every row and the partial sums are
     added, which reassociates each straddling row's running sum.
+
+    `sink(rA, rB[J], block)` (momwire#1173 design C phase 2) takes each
+    contracted block in place of `_put` into `out` (then None): the same
+    entries, handed over for the caller to place — `_FusedEnds`, which
+    finishes the block a unit at a time. It needs whole rows and a fresh
+    block (each entry assigned once).
     """
+    if sink is not None and not (fresh and _STREAMED_WHOLE_ROWS):
+        raise ValueError("a sink takes whole rows of a fresh block")
     Q1, Q2, Q3, Q4 = Qs4
     Qs = (Q1, Q2, Q3, Q4, Q3, Q4)
     nq, n_cols = Q1.shape
@@ -3850,7 +4191,10 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
             block = _combine(Ls, [q[J][:, need] for q in Qs])
             del Ls
             # each entry written once when `fresh`
-            _put(out, rA, rB[J], block, support, assign=fresh)
+            if sink is not None:
+                sink(rA, rB[J], block)
+            else:
+                _put(out, rA, rB[J], block, support, assign=fresh)
             del block
             pending[J] = False
             readers -= np.bincount(pat[J].indices, minlength=n_cols)
@@ -3875,7 +4219,18 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
 
 
 def _sandwich_dense(
-    A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None, support=None
+    A,
+    B,
+    iA,
+    iB,
+    K,
+    k2sq,
+    out=None,
+    *,
+    rows=None,
+    out_cols=None,
+    support=None,
+    sink=None,
 ):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
     restricted to (iA, iB) — the same term order as the reference fill.
@@ -3921,6 +4276,15 @@ def _sandwich_dense(
     rB = _support_rows(B, iB)
     Ps = _row_weights(A, iA, rA)
     Q1, Q2, Q3, Q4 = _row_weights(B, iB, rB)
+    if sink is not None:
+        # Streamed to a sink (`_FusedEnds`), even when the tables came whole:
+        # one chunk of every column is `_streamed_sandwich`'s own case, the
+        # same contraction per row (see there), so it is the dict route's
+        # block entry for entry.
+        chunks = [(slice(0, len(iB)), K)] if isinstance(K, dict) else K
+        return _streamed_sandwich(
+            Ps, (Q1, Q2, Q3, Q4), chunks, k2sq, rA, rB, None, fresh=True, sink=sink
+        )
     if not isinstance(K, dict) and _MAIN_STREAMED:
         if rows is not None:
             raise ValueError("the streamed main sandwich serves whole blocks only")
