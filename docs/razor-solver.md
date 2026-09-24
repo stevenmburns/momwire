@@ -113,9 +113,10 @@ RazorSolver(
 
 K wire ends meeting at one point in the plane get K tents, one each: the
 plane is one more branch there, so no through-path is distinguished and
-current may leave into the ground. What is refused: a wire dipping below
-the plane, an edge lying in it, an interior anchor touching down (split the
-wire there instead), and contact under `refl-coef` — which is the whole
+current may leave into the ground. What is refused: a wire that crosses
+the plane mid-span (a crossing junction at z = 0 is served — see "Crossing
+decks" below), an edge lying in it, an interior anchor touching down (split
+the wire there instead), and contact under `refl-coef` — which is the whole
 tree's row, momwire#282 stage 1 having withdrawn it from every solver.
 Contact over the SOMMERFELD ground is served (momwire#624); the fold's
 hard-coded image coefficient 1 was the argument for refusing both finite
@@ -291,7 +292,7 @@ deliberate, not initial-version:
   that was measured; they are what momwire#744 and momwire#806 have since
   moved into the fused weighted assembler.
 
-`RazorSolver` refuses `degree`, `junctions`, `junction_ports` and
+`RazorSolver` refuses `degree`, `junction_ports` and
 `refl-coef` on a deck that touches the plane, at construction with a message
 explaining why, rather than silently mismodelling — a wrong answer here is
 worse than no answer. `node_gaps` is NOT in that list any more (momwire#603

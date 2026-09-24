@@ -41,9 +41,9 @@ call, so ``RP 0`` on a buried deck is the same arithmetic as ``RP 0`` on any
 other.  What a buried deck still cannot answer is its NEAR field, which is
 momwire#524 phase 3.
 Three GEOMETRIES around it refuse too, and none of them says "buried wires
-are not served" any more: a wire with points on both sides of the interface
-(served by the native API's crossing basis since momwire#524 phase 2, not
-yet adopted by this seam); a buried wire over ``GN 1`` or a bare ``GD``,
+are not served" any more: a single wire crossing the interface MID-SPAN (the
+crossing junction - two cards meeting at z = 0 - is served, momwire#667,
+and the sentence names that spelling); a buried wire over ``GN 1`` or a bare ``GD``,
 neither of which has a lower medium to bury it in; and a buried wire on a
 deck that also stands a wire END in the plane — the combination momwire#553
 measured itself out of, whose sentence quotes both banked phase-0 anchors as
@@ -699,11 +699,11 @@ _REFUSE_NEAR_FIELD_CONTACT = (
 # ways, and each of the three names a DIFFERENT missing thing rather than
 # repeating "buried wires are not served":
 #
-#   * a wire that CROSSES the interface (or stands an end in it from below) —
-#     served by the native API's crossing basis since momwire#524 phase 2,
-#     not yet adopted by this seam (the engine's own crossing prints were
-#     adjudicated a different experiment, so adoption is a documentation
-#     decision, not a gate);
+#   * a single wire that crosses the interface MID-SPAN — refused because
+#     where it pierces the plane would be momwire's guess; the crossing
+#     junction spelling (a buried wire ENDING in the plane, sharing that
+#     node with a wire rising from it) is served by this seam since
+#     momwire#667, and the sentence below names it;
 #   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
 #     under either card, so there is nothing to bury the wire in;
 #   * the one OUTPUT a buried deck cannot answer — its NEAR field, which is

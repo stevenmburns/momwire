@@ -255,8 +255,9 @@ capability statements rather than deck errors:
 - **Buried wires now serve — with measured edges.** Wires strictly below
   the interface over the Sommerfeld ground get **impedance, currents,
   charges and the radiation pattern**: detached buried radials and screens,
-  buried fed elements, and
-  elevated feeds over buried counterpoises. A buried element reaches the
+  bonded radial screens and ground rods (the wire that crosses the
+  interface written as two `GW` cards meeting at z = 0), buried fed
+  elements, and elevated feeds over buried counterpoises. A buried element reaches the
   far zone through the **transmitted** Fresnel factors — the stationary-phase
   limit of the same below-to-above integrals its currents came out of — so
   `RP` reads the wave that crosses the interface rather than an image of a
@@ -273,17 +274,18 @@ capability statements rather than deck errors:
   wholly buried fed dipole across depths and to a few percent on a
   bonded-base vertical over buried radials, and both reproduce the shape
   of Brown, Lewis and Epstein's 1937 measured radial-count curve. Two honest notes: a
-  deck's first buried solve builds its below-interface Sommerfeld tables
-  (about a minute or two today — the accelerated fills are momwire#568),
+  deck's first buried solve builds its below-interface Sommerfeld tables,
   and the refusals below are the map of where the capability ends.
 - **What a buried deck still refuses, each by name with its measurement**:
-  a wire **crossing** the interface (the crossing physics is #524 phase 2,
-  and the refusal quotes the three banked reference anchors it must meet);
-  a **ground-contact wire combined with buried wires** (the fill's
-  boundary term is O(1) on a contact basis — measured 2.5 relative at the
-  lossless-limit identity, against 10⁻⁵ with the feed lifted clear; an
-  elevated feed over a buried counterpoise serves, and momwire#567 is the
-  lift); **`NE`/`NH` on decks with buried wires** (#524 phase 3);
+  a single wire crossing the interface **mid-span** (where it pierces the
+  plane would be momwire's guess rather than the model's statement; the
+  sentence names the two-card spelling that serves);
+  a **ground-contact wire combined with buried wires** (the contact
+  model has no conductor for the current spreading in the soil — [the
+  counterpoise chapter](/act-5/counterpoise/) is the measurement behind
+  that; an elevated feed over a buried counterpoise serves, and so does
+  a screen bonded to the vertical at z = 0);
+  **`NE`/`NH` on decks with buried wires** (#524 phase 3);
   buried wires over the perfect ground or `GD`
   (no lower medium to be in); sources deeper or pairs farther than the
   tabulated domains (the sentence states the limit and its extension

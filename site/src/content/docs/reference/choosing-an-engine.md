@@ -1,9 +1,9 @@
 ---
 title: "Choosing an engine: cost, memory, accuracy"
-description: Which of momwire's nine engines to pick — the selection matrix, runtime and memory behaviour, the ground-cost ladder, and where each formulation earns its place.
+description: Which of momwire's eight engines to pick — the selection matrix, runtime and memory behaviour, the ground-cost ladder, and where each formulation earns its place.
 ---
 
-Nine engines over seven solver families answer through one kernel, and
+Eight engines over seven solver families answer through one kernel, and
 every one of them is reachable
 by name — as a `--basis` argument, as its own `momwire-nec2c-<basis>`
 command in [SimNEC's dialog](/reference/portal-usage/) (all but the razor
@@ -33,16 +33,16 @@ vs. array geometry:
 | Single elements, small loops, beams, multiband dipoles | **`bspline`** (degree 2 — the default everywhere), with **`sinusoidal`** as a cross-check | both solve in milliseconds here; d=2 converges at far coarser meshes (below), the other confirms the answer |
 | Large single-wire structures (rhombics, long-wires, big loops) | **`hmatrix`** (ACA) | sub-quadratic scaling — the only engine in the field that wins `rhombic` at high segmentation |
 | Arrays of identical / few-shape elements (loop/bowtie arrays, LPDA) | **`arrayblock`** | element-aware block-low-rank; near-linear scaling, 7–12× faster than the NEC-2 lineage on large arrays |
-| Cross-checking against NEC-5 behaviour | **`razor-nec5`** | the formulation twin — rides the licensed engine's own convergence path (below) |
+| Cross-checking against NEC-5 behaviour | **`razor-2p`** | the formulation twin — rides the licensed engine's own convergence path (below) |
 | Telling basis effects from testing effects | **`sinusoidal-galerkin`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
 | Reading a textbook scheme against the modern ones | **`pulse`** | Harrington's 1967 pulse expansion, point-matched — the oldest thin-wire MoM there is, and the slowest-converging engine here by a wide margin (below) |
-| Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`) — the dense B-spline pair carries the below-interface fill | serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; every other engine refuses buried decks by name, the compressed pair included — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
+| Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`), with **`sinusoidal-galerkin`** and **`razor-2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` and `pulse` refuse buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
 a solve *costs*, not which engine wins it. One exception is capability,
-not cost: wires below the interface are a dense-B-spline capability today,
-and a buried deck's first solve pays a table-build of a minute or two
-(momwire#568 tracks the accelerated fills).
+not cost: wires below the interface are served by `bspline`, `bspline-d1`,
+`sinusoidal-galerkin` and `razor-2p` only, and a buried deck's first solve
+pays a one-time build of its below-interface Sommerfeld tables.
 
 :::caution
 `arrayblock` / `hmatrix` only win at moderate-to-high segment counts on
@@ -114,12 +114,14 @@ than through `--basis` or a portal name.
 On the models where we hold a licensed reference, `razor-2p` rides the
 licensed engine's own convergence path at the 0.01 % level — it converges
 *along* NEC-5's trajectory, not merely to its endpoint. Node gaps
-(momwire#603), the extended kernel and contact over finite grounds
-(momwire#624) are all served now; what the row still refuses — K≥3 junction
-ports, buried wires and the crossing (the buried arc, momwire#812/#813, is
-lifting these), contact under the reflection-coefficient ground, and a feed
-named at a segment *centre*, which is why razor is not a nec2 engine
-(momwire#821) — is documented in
+(momwire#603), the extended kernel, contact over the Sommerfeld ground
+(momwire#624), buried wires and the crossing junction are all served; what
+the row still refuses — a feed at a junction of three or more wire ends, a
+wire crossing the interface mid-span rather than at a junction, ground
+contact combined with buried wires, the extended kernel on a buried deck
+(as `bspline` does), contact under the
+reflection-coefficient ground, and a feed named at a segment *centre*, which
+is why razor is not a nec2 engine (momwire#821) — is documented in
 [`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md)
 and in [the capability
 matrix](https://github.com/stevenmburns/momwire/blob/main/docs/capability-matrix.md),
