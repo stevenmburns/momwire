@@ -683,6 +683,38 @@ PATH_ORDER_FINE = 16
 PATH_ORDER_KH_SWITCH = 0.018  # sqrt(0.0254 * 0.0127), the corner's own gap
 
 
+# The column width of `_ix_accumulate`'s slabs, in bytes of the Z[ix] copy.
+_IX_SLAB_BYTES = 8 * 2**20
+
+
+def _ix_accumulate(Z, rows, cols, block, *, sign=1):
+    """`Z[np.ix_(rows, cols)] += block` (or `-=`), a slab of columns at a
+    time (momwire#1173 design C).
+
+    A fancy-index `+=` gathers ALL of `Z[ix]` into a temporary, adds, and
+    scatters it back: at razor hub_deck(16) x16 the below block's was 105 MB
+    beside Z and the block itself, and it set the fill's process peak. Per
+    slab the temporary is at most `_IX_SLAB_BYTES`.
+
+    BIT-IDENTICAL: each entry still becomes `Z[i, j] + block[r, c]` (or
+    `−`), one IEEE operation on the same two operands; `rows` and `cols` are
+    index sets without repeats (a repeated index would make the whole-block
+    form's result depend on write order, and it has none here), so cutting
+    the columns into slabs changes which temporary holds an entry, never
+    its value."""
+    rows = np.asarray(rows)
+    cols = np.asarray(cols)
+    if np.unique(rows).size != rows.size or np.unique(cols).size != cols.size:
+        raise ValueError("_ix_accumulate takes index sets without repeats")
+    w = max(1, _IX_SLAB_BYTES // (16 * max(1, rows.size)))
+    for c0 in range(0, cols.size, w):
+        ix = np.ix_(rows, cols[c0 : c0 + w])
+        if sign > 0:
+            Z[ix] += block[:, c0 : c0 + w]
+        else:
+            Z[ix] -= block[:, c0 : c0 + w]
+
+
 def derive_n_qp_path(k, wires_polylines, n_per_edge_per_wire):
     """The outer testing-path order for this mesh — momwire#800.
 
@@ -4447,8 +4479,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Column-major, so the solve can factor it in place (momwire#1173);
         # every write below is an elementwise += / -= into index blocks.
         Z = np.zeros((n, n), dtype=np.complex128, order="F")
-        Z[np.ix_(rows_a, rows_a)] += Z_a
-        Z[np.ix_(rows_b, rows_b)] += Z_b
+        _ix_accumulate(Z, rows_a, rows_a, Z_a)
+        _ix_accumulate(Z, rows_b, rows_b, Z_b)
         # Folded in, so released before the cross blocks (momwire#1173 design
         # B): held to the return they were two more same-medium blocks at the
         # cross fill's peak (Z_b alone 105 MB at hub_deck(16) x16).
@@ -4489,9 +4521,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # Only the (rows, cols) sub-block is read, so only it is
                 # formed (`support=`, momwire#1173 design B): the full block
                 # was (n, n) and 92 % structural zeros at hub_deck(16).
-                Z[np.ix_(rows, cols)] -= block(
-                    ctx_r, test_axis, ax, corner=False, support=(rows, cols)
-                )
+                t = block(ctx_r, test_axis, ax, corner=False, support=(rows, cols))
+                _ix_accumulate(Z, rows, cols, t, sign=-1)
+                del t
 
         if tents:
             cols = np.array([m for m, _ in tents], dtype=np.int64)

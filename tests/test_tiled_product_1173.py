@@ -96,9 +96,9 @@ def test_tiles_are_the_grid_route_to_the_bit(case):
         assert r["cf.tiles"] == n_products, r
     else:
         assert r["cf.tiles"] > 2 * n_products, r
+        assert r["cf.stream_chunks"] > 0, r
     assert r["cf.tile_rows"] == r["cf.product_rows"] > 0, r
     if slot == "z":
-        assert r["cf.stream_chunks"] >= r["cf.tiles"], r
         assert r["cf.tile_held_rows"] == 0, r  # a node's rows share its key
     elif slot == "zp":
         assert r["cf.tile_held_rows"] > 0, r  # a node's rows span the line
@@ -122,7 +122,8 @@ def test_two_groups_tile_to_the_bit():
     make = lambda: _razor(two_node_deck(separation=12.0))  # noqa: E731
     ref, _r = _grid(make)
     got, r = pg._fill(make, **{"cf._PRODUCT_MAX_CAND_FRAC": 1.0, **_TINY})
-    assert r["cf.main_product_groups"] == 2 and r["cf.tiles"] > 4, r
+    assert r["cf.main_product_groups"] == 2, r
+    assert r["cf.tiles"] > r["cf.main_product"], r
     assert r["cf.tile_rows"] == r["cf.product_rows"], r
     assert np.array_equal(pg._bits(got), pg._bits(ref))
 

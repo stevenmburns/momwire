@@ -1999,8 +1999,8 @@ class _ProductTiles:
     those rows is evaluated — at the tile that completes it (`ready`) — as
     copies of the very floats the one call returned for them: V and W from
     the row-ordered store, U and dz′W from the current tile or, for a row
-    evaluated in an earlier tile and still needed, from the held buffer
-    (`need`). Nothing is summed. `_streamed_sandwich` then contracts each
+    evaluated in an earlier tile and read later, from the held store
+    (`hpos`, written once when its tile ran). Nothing is summed. `_streamed_sandwich` then contracts each
     basis row once, when its whole pattern is present, against its columns
     in ascending order — its own argument, for column SETS; the left
     product of a column is `P @ K[:, j]`, which a sparse @ dense product
@@ -2009,9 +2009,10 @@ class _ProductTiles:
     On a one-group product grouped ABOVE (the hub decks) a below node's
     rows all share its one key, so it is ready at its key's tile and
     nothing is ever held. Grouped below (WA7ARK) a node's rows span every
-    key of the line, so it is ready only at the last tile and its U and
-    dz′W are held until then: correct, and no larger than design B's
-    block, but not bounded. Bounding that case needs columns cut across
+    key of the line, so it is ready only at the last tile and the U and
+    dz′W of every row it reads early are held until then: correct, and
+    smaller than design B's block (32 B per held row against 96 per row),
+    but not bounded. Bounding that case needs columns cut across
     tiles, which needs the rule witness (and the twin, since the numpy
     column loop's chunking is not member-independent) — not phase 1."""
 
@@ -2051,18 +2052,22 @@ class _ProductTiles:
             may_hold = bool(np.any(tk < gmax[:, None]))
         o = np.argsort(ready, kind="stable")  # ascending node index per tile
         self._ready = (o, np.searchsorted(ready[o], np.arange(self.n_tiles + 1)))
-        # The last tile each row is read at, where that is after its own.
-        self.need = None
+        # The rows some node reads AFTER their own tile: their U and dz′W are
+        # kept, once, in a held store (`hpos` names each one's slot).
+        self.hpos = None
+        self.n_held = 0
         if may_hold:
-            need = np.full(U, -1, dtype=np.int64)
+            late_row = np.zeros(U, dtype=bool)
             for c0 in range(0, plan.nB, step):
                 cols = np.arange(c0, min(plan.nB, c0 + step))
                 t_pair = self.tile_of_key[plan.pair_keys(cols)]
-                r = np.broadcast_to(ready[cols][None, :], t_pair.shape)
-                late = t_pair < r
+                late = t_pair < ready[cols][None, :]
                 if late.any():
-                    np.maximum.at(need, plan.chunk_idx(cols)[late], r[late])
-            self.need = need
+                    late_row[plan.chunk_idx(cols)[late]] = True
+            self.n_held = int(np.count_nonzero(late_row))
+            self.hpos = np.full(U, -1, dtype=_index_dtype(U))
+            self.hpos[late_row] = np.arange(self.n_held)
+            del late_row
         self.store = np.empty((U, 2), dtype=np.complex128)  # V, W in row order
         self.product = _near_interface.ProductSet(
             plan.slot,
@@ -2109,6 +2114,29 @@ class _ProductTiles:
         p2 = np.arange(rows.shape[0] - h) if p2 is None else p2
         return np.concatenate([v1, v2]), np.concatenate([p1, p2 + h])
 
+    def _gather(self, cols, loc, ud, held):
+        """The four tables of below columns `cols`: copies of the evaluated
+        floats, V and W from the store, U and dz′W from this tile's `ud`
+        (by `loc`) or else the held store (by `hpos`)."""
+        idx = self.plan.chunk_idx(cols)
+        li = loc[idx]
+        U_c, D_c = ud[li, 0], ud[li, 1]
+        miss = li < 0
+        if miss.any():
+            hp = None if self.hpos is None else self.hpos[idx[miss]]
+            if hp is None or (hp < 0).any():
+                raise AssertionError("a ready column reads a row not in hand")
+            if _PRODUCT_NEG_CONTROL == "held":
+                hp = (hp + 1) % self.n_held  # TEST-ONLY: a neighbour's values
+            U_c[miss] = held[hp, 0]
+            D_c[miss] = held[hp, 1]
+        return {
+            "U": U_c,
+            "V": self.store[idx, 0],
+            "W": self.store[idx, 1],
+            "dzpW": D_c,
+        }
+
     def chunks(self, step):
         """Yield `(cols, K_cols)`: each tile's newly complete below columns
         (ascending within a tile), at most `step` at a time. Fills the V/W
@@ -2117,9 +2145,9 @@ class _ProductTiles:
         ki = {k: _near_interface.KEYS.index(k) for k in ("U", "V", "W", "dzpW")}
         U = plan.n_rows
         done = np.zeros(U, dtype=bool)
-        loc = np.full(U, -1, dtype=_index_dtype(U))
-        held_ids = np.zeros(0, dtype=np.intp)
-        held = np.zeros((0, 2), dtype=np.complex128)
+        loc = np.full(U, -1, dtype=_index_dtype(U))  # a row's place in this tile
+        held = np.empty((self.n_held, 2), dtype=np.complex128)  # U, dz′W
+        _ROUTES["tile_held_rows"] = max(_ROUTES["tile_held_rows"], self.n_held)
         o_ready, b_ready = self._ready
         for t in range(self.n_tiles):
             ids = self._tile_rows(t)
@@ -2138,39 +2166,21 @@ class _ProductTiles:
             ud[:, 0] = vals[pos, ki["U"]]
             ud[:, 1] = vals[pos, ki["dzpW"]]
             del vals, pos
-            if held_ids.size and _PRODUCT_NEG_CONTROL == "held":
-                held = np.roll(held, 1, axis=0)  # TEST-ONLY: a neighbour's values
-            live_ids = np.concatenate((held_ids, ids)) if held_ids.size else ids
-            live = np.concatenate((held, ud)) if held_ids.size else ud
-            del ud
-            loc[live_ids] = np.arange(live_ids.size)
+            if self.hpos is not None:
+                hp = self.hpos[ids]
+                keep = hp >= 0
+                held[hp[keep]] = ud[keep]
+                del hp, keep
+            loc[ids] = np.arange(ids.size)
             J = o_ready[b_ready[t] : b_ready[t + 1]]
             for i0 in range(0, J.size, step):
                 cols = J[i0 : i0 + step]
-                idx = plan.chunk_idx(cols)
-                li = loc[idx]
-                if (li < 0).any():
-                    raise AssertionError("a ready column reads a row not in hand")
-                K = {
-                    "U": live[li, 0],
-                    "V": self.store[idx, 0],
-                    "W": self.store[idx, 1],
-                    "dzpW": live[li, 1],
-                }
-                del idx, li
-                yield cols, K
-                del K
-            loc[live_ids] = -1
-            if self.need is None:
-                held_ids = np.zeros(0, dtype=np.intp)
-                held = np.zeros((0, 2), dtype=np.complex128)
-            else:
-                keep = self.need[live_ids] > t
-                held_ids, held = live_ids[keep], live[keep]
-                _ROUTES["tile_held_rows"] = max(
-                    _ROUTES["tile_held_rows"], held_ids.size
-                )
-            del live, live_ids
+                # Yielded unbound: the consumer drops the tables once it has
+                # formed their left products, and a name held here across the
+                # yield would keep them alive through the contraction.
+                yield cols, self._gather(cols, loc, ud, held)
+            loc[ids] = -1
+            del ud
         if not done.all():
             raise AssertionError("the tiles left a product row unevaluated")
         self.product.complete = True
