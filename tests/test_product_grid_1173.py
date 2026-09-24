@@ -308,6 +308,7 @@ def _plan_rows(A, B, monkeypatch, **flags):
             mp.setattr(cf, k, v)
         plan = cf._product_plan(_Ctx(), 1.0, 1.0, A, B, 0.0)
         tiles = cf._ProductTiles(plan, 1.0, 1.0, 1 << 20)
+        tiles.keep_values()  # the unfused route's V/W store, which this reads
         list(tiles.chunks(1 << 20))
     return (tiles.product, plan.fast, plan.chunk_idx), seen
 

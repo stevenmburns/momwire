@@ -848,16 +848,38 @@ class ProductSet:
     which poisons any reader that was not supposed to exist rather than
     handing it a plausible zero. `row_vrow=None` is the identity (the value
     block is in row order). `complete` is False while a tiled evaluation is
-    still filling `vals`; a lookup then refuses (`ProductMemo.lookup`)."""
+    still filling `vals`; a lookup that HITS then refuses
+    (`ProductMemo.lookup`).
+
+    `vals=None` with `n_rows` (design C phase 2): the rows' values are not
+    kept at all — the crossing fill's fused end loops read them inside the
+    tiles, and every other reader of this product only ever misses it. The
+    factors still answer `value_rows`, so a miss is decided exactly as with
+    the values in hand, and a hit refuses rather than inventing one."""
 
     def __init__(
-        self, slot, vals, row_vrow, gz, key_r, key_zl, rowtab, zid, kid, kernels=KEYS
+        self,
+        slot,
+        vals,
+        row_vrow,
+        gz,
+        key_r,
+        key_zl,
+        rowtab,
+        zid,
+        kid,
+        kernels=KEYS,
+        n_rows=None,
     ):
         if slot not in ("z", "zp"):
             raise ValueError(f"slot must be 'z' or 'zp', got {slot!r}")
         kernels = tuple(kernels)
-        if vals.shape[1] != len(kernels) or not set(kernels) <= set(KEYS):
+        if not set(kernels) <= set(KEYS):
+            raise ValueError(f"unknown kernels {kernels!r}")
+        if vals is not None and vals.shape[1] != len(kernels):
             raise ValueError(f"vals has {vals.shape[1]} columns for {kernels!r}")
+        if vals is None and (n_rows is None or row_vrow is not None):
+            raise ValueError("a product without values takes n_rows and no row_vrow")
         self.slot = slot
         self.vals = vals
         self.kernels = kernels
@@ -868,7 +890,10 @@ class ProductSet:
         self.rowtab = rowtab
         self.zid = zid
         self.kid = kid
-        self.n_rows = int(vals.shape[0] if row_vrow is None else row_vrow.size)
+        if vals is None:
+            self.n_rows = int(n_rows)
+        else:
+            self.n_rows = int(vals.shape[0] if row_vrow is None else row_vrow.size)
         self.complete = True
         self.fast = None  # the crossing fill's end-loop index, if it built one
         self._gz_ids = _SortedIds(gz)
@@ -925,11 +950,17 @@ class ProductSet:
         out[idx[hit]] = self._code_vrow[c[hit]]
         return out
 
+    def values_of(self, vrows, key):
+        """Kernel `key`'s values of value rows `vrows` (the stored floats)."""
+        if self.vals is None:
+            raise RuntimeError("this product's values were not kept")
+        return self.vals[vrows, self.kernels.index(key)]
+
     def row_keys(self):
         """The stored triples as float tuples in ROW order (the order they
         were evaluated in), each as the array memo would key it
         (`row + 0.0`), for `ProductMemo.keys`. Test-sized; O(rows)."""
-        n = self.vals.shape[0]
+        n = self.n_rows
         z_of, k_of = np.full(n, -1, np.intp), np.full(n, -1, np.intp)
         for tab, zi, kj in zip(self.rowtab, self.zid, self.kid):
             z_of[tab] = np.broadcast_to(zi[:, None], tab.shape)
@@ -951,6 +982,8 @@ class ProductSet:
         """The (n, 6) `KEYS`-ordered values of value rows `vrows`: the
         stored columns copied (the very floats), the others NaN."""
         vrows = np.asarray(vrows)
+        if self.vals is None:
+            raise RuntimeError("this product's values were not kept")
         if self.kernels == KEYS:
             return self.vals[vrows]
         out = np.full((vrows.size, len(KEYS)), np.nan + 1j * np.nan)
@@ -991,10 +1024,6 @@ class ProductMemo(TripleMemo):
     def lookup(self, rows):
         if self.product is None:
             return super().lookup(rows)
-        if not self.product.complete:
-            raise RuntimeError(
-                "the product is still being evaluated; nothing reads it yet"
-            )
         # The array memo first (it counts the lookups and its own hits), then
         # the product for what it missed; a key is in at most one of them.
         if TripleMemo.__len__(self):
@@ -1007,9 +1036,18 @@ class ProductMemo(TripleMemo):
         if todo.size:
             v = self.product.value_rows(rows[todo] + 0.0)
             ok = v >= 0
-            block[todo[ok]] = self.product.value_block(v[ok])
-            hit[todo[ok]] = True
-            self.stats["hits"] += int(np.count_nonzero(ok))
+            # A product still being evaluated, or one whose values were not
+            # kept (design C phase 2), answers only its MISSES: those are
+            # decided by the factors alone, so they are what the finished
+            # product would answer. A hit would need a value not in hand.
+            if ok.any() and not self.product.complete:
+                raise RuntimeError(
+                    "the product is still being evaluated; nothing reads it yet"
+                )
+            if ok.any():
+                block[todo[ok]] = self.product.value_block(v[ok])
+                hit[todo[ok]] = True
+                self.stats["hits"] += int(np.count_nonzero(ok))
         return hit, block
 
     def keys(self):
