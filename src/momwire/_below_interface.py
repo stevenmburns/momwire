@@ -900,6 +900,10 @@ class BuriedFills(NamedTuple):
     # Whether `field_galerkin_block` may be handed `out=`/`scale=` against a
     # column-major target (momwire#1115 part 3). False keeps the transient.
     field_galerkin_out_ok: bool = False
+    # Whether every writer above takes a ROW-COMPACT target through `row_of`
+    # (momwire#1132). False, and a `compact=True` fill falls back to the square
+    # Z and slices it: the same bits, none of the saving.
+    compact_ok: bool = False
 
 
 class BuriedPlan(NamedTuple):
@@ -1102,6 +1106,7 @@ def compute_Z_operator_buried(
     cancel_flag,
     chunked,
     rows=None,
+    compact=False,
 ):
     """The mixed-medium dense Z: per-segment media, three pair classes,
     one matrix (momwire#553 U5).
@@ -1114,6 +1119,21 @@ def compute_Z_operator_buried(
     agree row by row on the requested rows. A caller that restricts rows owns
     the consequences downstream: the result is not a solvable operator on its
     own.
+
+    **`compact=True` (momwire#1132) returns `(Z[R], R)` instead**, R being the
+    basis rows `rows` covers (`_crossing_basis_rows`: whole supports, refused
+    by name if split). A `rows=` fill writes only those rows, yet the square
+    destination it wrote them into was fully RESIDENT: numpy backs a large
+    `np.zeros` with transparent huge pages, and in column-major order one
+    2 MB page spans ~16 columns, so writing 90 rows across every column
+    touched every page -- 1047 MB at 150 radials to hold 11 MB. The compact
+    fill allocates `(len(R), n_basis)` and hands every writer the map
+    `row_of` (basis row -> compact row, -1 off R): the windowed assemblers,
+    the field-form block, the crossing composition and the loading. Each
+    moves only the ADDRESS of its adds, never their arithmetic or order, so
+    `Z[R]` is the `rows=` fill's rows bit for bit. On a solver without the
+    `row_of` kernels (`f.compact_ok` False) or off the chunked route, the
+    square fill runs and is sliced -- the same bits, none of the saving.
 
     **The crossing family is restricted too, since phase 2 (momwire#1109).**
     Phase 1 filled it whole and said so, because the routing reads its
@@ -1205,7 +1225,10 @@ def compute_Z_operator_buried(
         proof -- the seam would still hold and the test could no longer see
         it.
         """
-        if f.field_galerkin_out_ok:
+        if row_of is not None:
+            # momwire#1132: `f.compact_ok` promises the row-compact target.
+            f.field_galerkin_block(*args, out=Z, scale=-1.0, row_of=row_of)
+        elif f.field_galerkin_out_ok:
             f.field_galerkin_block(*args, out=Z, scale=-1.0)
         else:
             np.subtract(Z, f.field_galerkin_block(*args), out=Z)
@@ -1245,6 +1268,20 @@ def compute_Z_operator_buried(
         serve_plan_fn=serve_plan_fn,
     )
     gz = ground_z
+    # momwire#1132: the row-compact target, resolved before any fill so a
+    # split basis is refused before one. `row_of` stays None on the square
+    # path and on the sliced fallback, which is what keeps both byte for byte
+    # today's fill.
+    compact_rows = row_of = None
+    if compact:
+        if rows is None:
+            raise ValueError("compact=True restricts rows: pass rows= as well")
+        compact_rows = _crossing_basis_rows(
+            supp_seg, polys, np.asarray(rows, dtype=np.int64)
+        )
+        if chunked and f.compact_ok:
+            row_of = np.full(supp_seg.shape[0], -1, dtype=np.int64)
+            row_of[compact_rows] = np.arange(compact_rows.size, dtype=np.int64)
     # momwire#1029: the observer restriction, per pair class. Resolved AFTER
     # `plan_buried`, so nothing the plan decides can see it.
     if rows is None:
@@ -1313,7 +1350,12 @@ def compute_Z_operator_buried(
         del td_img
     else:
         n_basis = supp_seg.shape[0]
-        Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        if row_of is None:
+            Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        else:
+            # C order: the (n, n) Z is column-major only for LAPACK's in-place
+            # factor (momwire#136), and nothing factors this one.
+            Z = np.zeros((compact_rows.size, n_basis), dtype=np.complex128)
         f.accumulate_Z_subset_chunked(
             Z,
             geom,
@@ -1325,6 +1367,7 @@ def compute_Z_operator_buried(
             eps=eps_m,
             scale=1.0,
             obs_idx=obs_b_idx,
+            row_of=row_of,
         )
         if a_idx.size:
             f.accumulate_Z_subset_chunked(
@@ -1338,6 +1381,7 @@ def compute_Z_operator_buried(
                 eps=eps,
                 scale=1.0,
                 obs_idx=obs_a_idx,
+                row_of=row_of,
             )
             f.accumulate_Z_subset_chunked(
                 Z,
@@ -1351,6 +1395,7 @@ def compute_Z_operator_buried(
                 scale=-1.0,
                 weight=complex(c2),
                 obs_idx=obs_a_idx,
+                row_of=row_of,
             )
         f.accumulate_Z_subset_chunked(
             Z,
@@ -1364,6 +1409,7 @@ def compute_Z_operator_buried(
             scale=-1.0,
             weight=complex(a_m),
             obs_idx=obs_b_idx,
+            row_of=row_of,
         )
 
     # --- the three field-form blocks -----------------------------------
@@ -1446,6 +1492,9 @@ def compute_Z_operator_buried(
         cross_rows = (
             None if rows is None else _crossing_basis_rows(supp_seg, polys, rows)
         )
+        # Where those rows live in Z: themselves on the square target, their
+        # compact rows on the row-compact one (momwire#1132).
+        z_rows = cross_rows if row_of is None else row_of[cross_rows]
         if ctx.a_below is not None:
             # A TWO-RADIUS node (antennaknobs plan U5): the two cross blocks
             # are no longer transposes — above rows test lines at the above
@@ -1463,9 +1512,9 @@ def compute_Z_operator_buried(
                 # `t_above` is already its row slice and `t_below` its column
                 # slice: the two blocks are not transposes at two radii, so
                 # each is asked for the one half the composition below reads.
-                Z[cross_rows, :] -= t_above
-                Z[cross_rows, :] -= t_below.T
-                Z[cross_rows, :] += _crossing_fill.self_completions_two_radius(
+                Z[z_rows, :] -= t_above
+                Z[z_rows, :] -= t_below.T
+                Z[z_rows, :] += _crossing_fill.self_completions_two_radius(
                     ctx, ax_b, ax_a, rows=cross_rows
                 )
         else:
@@ -1478,9 +1527,9 @@ def compute_Z_operator_buried(
                 _crossing_fill.self_completions(ctx, ax_b, ax_a, out=Z)
             else:
                 t_r, t_c = t_ab
-                Z[cross_rows, :] -= t_r
-                Z[cross_rows, :] -= t_c.T
-                Z[cross_rows, :] += _crossing_fill.self_completions(
+                Z[z_rows, :] -= t_r
+                Z[z_rows, :] -= t_c.T
+                Z[z_rows, :] += _crossing_fill.self_completions(
                     ctx, ax_b, ax_a, rows=cross_rows
                 )
     elif a_idx.size:
@@ -1538,4 +1587,9 @@ def compute_Z_operator_buried(
             W_ax,
         )
 
-    return f.apply_loading(Z)
+    if row_of is not None:
+        return f.apply_loading(Z, row_of=row_of), compact_rows
+    Z = f.apply_loading(Z)
+    if compact:
+        return np.ascontiguousarray(Z[compact_rows]), compact_rows
+    return Z

@@ -185,6 +185,17 @@ _HAVE_FIELD_GALERKIN_ACCEL = (
 _HAVE_FIELD_GALERKIN_STRIDED = _HAVE_FIELD_GALERKIN_ACCEL and getattr(
     _acc, "field_galerkin_strided_1115", False
 )
+# momwire#1132: a ROW-COMPACT target -- (n_rows, n_basis) plus a `row_of` map
+# -- for the sector route, which reads a few rows of Z and used to allocate
+# all n of them. One flag per TU, each set beside the bindings it vouches for;
+# the route takes the compact fill only when BOTH are present and otherwise
+# fills the square Z and slices it (the same bits, none of the saving).
+_HAVE_WINDOWED_ROW_OF = _acc is not None and getattr(
+    _acc, "windowed_row_of_1132", False
+)
+_HAVE_FIELD_GALERKIN_ROW_OF = _HAVE_FIELD_GALERKIN_STRIDED and getattr(
+    _acc, "field_galerkin_row_of_1132", False
+)
 
 # Which of the accelerator's two routes to the same numbers to take. The
 # fused one skips `Jc` entirely and is what production wants: on the
@@ -4264,12 +4275,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             np.asarray(wire_ids, dtype=np.int64),
         )
 
-    def _apply_loading(self, Z, omega=None):
+    def _apply_loading(self, Z, omega=None, row_of=None):
         """Add the loading term into Z in place; no-op when loading is off.
 
         Z is (n_basis, n_basis) with scalar `omega` (default self.omega),
         or a swept chunk (n_k, n_basis, n_basis) with `omega` (n_k,).
         Returns Z for call-site convenience.
+
+        `row_of` (momwire#1132) makes a single Z ROW-COMPACT: (n_rows,
+        n_basis), basis row m held at row `row_of[m]`, -1 for a row it does
+        not hold. See `_add_wire_scaled` for why that stays bit-identical.
         """
         if not self._loading_active:
             return Z
@@ -4279,19 +4294,33 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (n_w,) or (n_w, n_k) — the shared spec layer (momwire#428); the
         # Gram is keyed by wire, so this row consumes the per-WIRE form.
         spec = _wire_loading.loading_for(self, omega)
-        self._add_wire_scaled(Z, (rows, cols, vals, wire_ids), spec.z_wire)
+        self._add_wire_scaled(
+            Z, (rows, cols, vals, wire_ids), spec.z_wire, row_of=row_of
+        )
         # A jacketed BURIED wire's charge-side term (momwire#1154), after the
         # series one. `zq_wire` is None on every deck without one, so every
         # other fill is structurally what it was.
         if spec.zq_wire is not None:
-            self._add_wire_scaled(Z, self._charge_gram(), spec.zq_wire)
+            self._add_wire_scaled(Z, self._charge_gram(), spec.zq_wire, row_of=row_of)
         return Z
 
     @staticmethod
-    def _add_wire_scaled(Z, triplets, zw):
+    def _add_wire_scaled(Z, triplets, zw, row_of=None):
         """`Z += Σ_w zw[w]·G_w` for wire-tagged COO `triplets`; Z is one
-        (n, n) matrix with zw (n_w,), or a chunk (n_k, n, n) with (n_w, n_k)."""
+        (n, n) matrix with zw (n_w,), or a chunk (n_k, n, n) with (n_w, n_k).
+
+        `row_of` (momwire#1132): Z is row-compact, so only the COO entries
+        whose row it holds are kept, and their rows remapped. Each kept entry
+        is the same product added in the same order `np.add.at` would have
+        added it to the square Z, so every held row is that row bit for bit.
+        """
         rows, cols, vals, wire_ids = triplets
+        if row_of is not None:
+            if Z.ndim != 2:
+                raise ValueError("row_of applies to one (n_rows, n) matrix")
+            keep = row_of[rows] >= 0
+            rows, cols = row_of[rows[keep]], cols[keep]
+            vals, wire_ids = vals[keep], wire_ids[keep]
         if Z.ndim == 2:
             np.add.at(Z, (rows, cols), zw[wire_ids] * vals)
         else:
@@ -5339,6 +5368,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         *,
         out=None,
         scale=1.0,
+        row_of=None,
     ):
         """`Q[m, n]` — the FIELD-form Galerkin block of a projected pair
         table, over a rectangular (observer segments × source segments)
@@ -5366,6 +5396,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # be -- the observer loop below chunks, and a basis row whose support
         # straddles a chunk boundary reassociates: `Z - (c1 + c2)` becomes
         # `(Z - c1) - c2`.
+        # `row_of` (momwire#1132) makes `out` ROW-COMPACT: (n_rows, n_basis),
+        # basis row m accumulated at row `row_of[m]`. Only the address of each
+        # add moves, so a held row is the square target's row bit for bit.
+        if row_of is not None and out is None:
+            raise ValueError("row_of names the rows of a caller's `out`")
         Q = np.zeros((n_basis, n_basis), dtype=np.complex128) if out is None else out
         if n_obs == 0 or n_src == 0:
             return Q
@@ -5410,7 +5445,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 src,
                 t_src,
             )
-            if _HAVE_FIELD_GALERKIN_ACCEL:
+            if _HAVE_FIELD_GALERKIN_ACCEL and (
+                row_of is None or _HAVE_FIELD_GALERKIN_ROW_OF
+            ):
                 # momwire#914 unit 2. The C++ twin fuses both moment sums into
                 # a q-vector per wing, so it never materialises `Jc` nor the
                 # per-wing-pair gather below; it accumulates into `Q` in place.
@@ -5428,6 +5465,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     Q,
                     _FIELD_GALERKIN_FUSED,
                     scale,
+                    **({} if row_of is None else {"row_of": row_of}),
                 )
                 continue
             fq = proj.reshape(i1 - i0, q, n_src, q)
@@ -5439,6 +5477,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for a in range(d + 1):
                 pm = pos_o[supp_seg[:, a]]
                 rows = np.nonzero((pm >= i0) & (pm < i1))[0]
+                if row_of is not None:
+                    # A row the compact target does not hold reaches here only
+                    # through a padded slot (an exact zero): drop it, as the
+                    # C++ twin does, rather than let -1 index the last row.
+                    rows = rows[row_of[rows] >= 0]
                 if rows.size == 0:
                     continue
                 pml = pm[rows] - i0
@@ -5448,7 +5491,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     if cols.size == 0:
                         continue
                     J_blk = Jc[:, :, pml[:, None], pn[cols][None, :]]
-                    Q[np.ix_(rows, cols)] += scale * np.einsum(
+                    q_rows = rows if row_of is None else row_of[rows]
+                    Q[np.ix_(q_rows, cols)] += scale * np.einsum(
                         "mp,pPmn,nP->mn",
                         polys[rows, a, :],
                         J_blk,
@@ -5585,6 +5629,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         scale,
         weight=None,
         obs_idx=None,
+        row_of=None,
     ):
         """`_build_J_blocks_subset` + its assembly, accumulated into `Z`
         window by window and never holding a (d+1, d+1, N, N) tensor
@@ -5608,6 +5653,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         block MINUS the off-edge block the sweep added, accumulated as a
         correction window, exactly as the free-space chunked fill does. The
         image block has no fixup on either route.
+
+        `row_of` (momwire#1132): Z is ROW-COMPACT, (n_rows, n_basis), basis
+        row m accumulated at row `row_of[m]`. The assemblers check the map
+        against every row a window writes, and only the address of the `+=`
+        moves, so a held row is the square Z's row bit for bit.
         """
         d = self.degree
         seg_l = geom["seg_l"]
@@ -5651,9 +5701,33 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             mask = ((supp_c >= lo) & (supp_c < hi)).any(axis=1)
             return np.nonzero(mask)[0].astype(np.int64)
 
+        # Passed only when set, so the square fill's call is the shipped one.
+        row_kw = {} if row_of is None else {"row_of": row_of}
+        live_c = None if row_of is None else np.any(polys_c != 0.0, axis=2)
+
+        def _held(m_idx, i0, i1):
+            """`m_idx` less the rows a row-compact Z does not hold. Such a row
+            can only touch an observer window through a PADDED support slot
+            (`supp_seg` is zero-padded, so an unlive slot names segment 0),
+            which adds an exact zero to a row nobody reads; a LIVE touch would
+            be a row the caller's `rows=` split, and is refused by name."""
+            keep = row_of[m_idx] >= 0
+            if keep.all():
+                return m_idx
+            drop = m_idx[~keep]
+            sd = supp_c[drop]
+            if np.any((sd >= i0) & (sd < i1) & live_c[drop]):
+                raise ValueError(
+                    "row_of: a basis with live support in this observer window "
+                    "has no row in the compact Z (momwire#1132)"
+                )
+            return m_idx[keep]
+
         def _accumulate(J_win, i0, i1, j0, j1):
             J_win = np.ascontiguousarray(J_win, dtype=np.complex128)
             m_idx = _bases_touching(i0, i1)
+            if row_of is not None:
+                m_idx = _held(m_idx, i0, i1)
             n_idx = _bases_touching(j0, j1)
             if m_idx.size == 0 or n_idx.size == 0:
                 return
@@ -5676,6 +5750,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     float(self.mu),
                     Z,
                     self._cancel_flag,
+                    **row_kw,
                 )
             else:
                 w_A = np.ascontiguousarray(
@@ -5700,6 +5775,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     complex(scale),
                     Z,
                     self._cancel_flag,
+                    **row_kw,
                 )
 
         runs = _contiguous_runs(seg_idx)
@@ -5830,7 +5906,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return str(exc)
         return None
 
-    def _compute_Z_operator_buried(self, geom, supp_seg, polys, rows=None):
+    def _compute_Z_operator_buried(
+        self, geom, supp_seg, polys, rows=None, compact=False
+    ):
         """The mixed-medium dense Z. The ROUTING moved to `_below_interface`
         (momwire#980 step C part 2); this hands it the solver's own fills.
 
@@ -5838,7 +5916,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         straight through: None is today's path byte for byte, and a subset of
         global segment indices computes only those rows of a full-size Z. The
         contract and what it does NOT restrict are in
-        `_below_interface.compute_Z_operator_buried`.
+        `_below_interface.compute_Z_operator_buried`. `compact=True`
+        (momwire#1132, with `rows=`) returns `(Z[R], R)` without ever
+        allocating the square Z.
 
         The three pair classes and their signs are one body there, so the
         sinusoidal-Galerkin serve adopts the routing instead of copying it —
@@ -5864,6 +5944,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 field_galerkin_block=self._field_galerkin_block,
                 field_galerkin_out_ok=_HAVE_FIELD_GALERKIN_STRIDED,
                 apply_loading=self._apply_loading,
+                compact_ok=_HAVE_WINDOWED_ROW_OF and _HAVE_FIELD_GALERKIN_ROW_OF,
             ),
             below_segments=self._below_segments,
             buried_medium=self._buried_medium,
@@ -5879,6 +5960,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             cancel_flag=self._cancel_flag,
             chunked=self._buried_chunked_serves,
             rows=rows,
+            compact=compact,
         )
 
     def _dense_tensor_fits_budget(self, n_segs):
