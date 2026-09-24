@@ -4382,7 +4382,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for side in (_medium_spec.ABOVE, _medium_spec.BELOW)
         }
         n = geom["n_basis_total"]
-        Z = np.zeros((n, n), dtype=np.complex128)
+        # Column-major, so the solve can factor it in place (momwire#1173);
+        # every write below is an elementwise += / -= into index blocks.
+        Z = np.zeros((n, n), dtype=np.complex128, order="F")
         Z[np.ix_(rows_a, rows_a)] += Z_a
         Z[np.ix_(rows_b, rows_b)] += Z_b
         seg_a = self._seg_radius(geom)
@@ -4884,7 +4886,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # T1's rows are overwritten in place by the finished block's rows.
         # With `out`, only one window of T1 exists at a time and its finished
         # rows are subtracted from `out` before the next window is built.
-        T1 = None if out is not None else np.empty((n_basis, n_basis), np.complex128)
+        # Fortran order (momwire#1173): the returned block is the matrix the
+        # solve factors, and `scipy.linalg.solve(overwrite_a=True)` factors
+        # in place only on a column-major array; a C-order Z is silently
+        # copied first. A row window of a column-major matrix is still one
+        # contiguous run per column, and every write below is elementwise,
+        # so the layout changes no value.
+        T1 = (
+            None
+            if out is not None
+            else np.empty((n_basis, n_basis), np.complex128, order="F")
+        )
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
             rows_T1 = (
@@ -5072,7 +5084,6 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         geom = self._build_geometry()
         self._checkpoint()
         Z = self._assemble_Z(geom, self.k)
-        self.z = Z
 
         self._refuse_coincident_segments(geom)
         cols = self._port_columns(geom)
@@ -5082,7 +5093,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rhs = cols @ self._port_voltages()
 
         self._checkpoint()
-        coeffs = scipy.linalg.solve(Z, rhs)
+        # Z is dead after this solve, so LAPACK factors it in place
+        # (momwire#1173): on the column-major Z the fill returns, that saves
+        # a full n_basis² copy and is the same factorisation of the same
+        # numbers, bit for bit. (Nothing ever read the old `self.z` stash,
+        # which would now hold the factors; it is gone, as in bspline.)
+        coeffs = scipy.linalg.solve(Z, rhs, overwrite_a=True)
         voltages = self._port_voltages()
         port_currents = cols.T @ coeffs
         z_per_port = voltages / port_currents
@@ -5176,13 +5192,13 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # `c·(2·π/λ)` here), so reading `self.omega` would cost this method
         # the branch point's bit-for-bit answer over a 1-ULP omega drift.
         Z = self._assemble_Z_from_prepared(geom, prepared, self.k, self.c * self.k)
-        self.z = Z
 
         self._refuse_coincident_segments(geom)
         cols = self._port_columns(geom)
 
         self._checkpoint()
-        X = scipy.linalg.solve(Z, cols.astype(np.complex128))
+        # In place, as in `compute_impedance`: Z is dead after this solve.
+        X = scipy.linalg.solve(Z, cols.astype(np.complex128), overwrite_a=True)
         Y = cols.T @ X
         return PortSolution(
             y=Y,
@@ -5539,7 +5555,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self._checkpoint()
             k = float(k)
             Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
-            coeffs = scipy.linalg.solve(Z, rhs)
+            coeffs = scipy.linalg.solve(Z, rhs, overwrite_a=True)
             feed_currents[i] = cols.T @ coeffs
 
         z_per_feed = voltages[None, :] / feed_currents
