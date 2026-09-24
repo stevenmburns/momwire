@@ -26,6 +26,16 @@ from momwire import _near_interface as ni
 from test_crossing_serve_524 import crossing_deck
 from test_triple_memo_1168 import CASES, _razor, _solve
 
+
+@pytest.fixture(autouse=True)
+def _grid_route(monkeypatch):
+    """This file's subject is the GRID route (`_chunked_tables` and the
+    lookup path); since momwire#1173 design B a deck whose nodes factorise
+    takes the product route instead, which never calls it.
+    `test_product_grid_1173` gates the product route against this one."""
+    monkeypatch.setattr(cf, "_PRODUCT_TABLES", False)
+
+
 # ----------------------------------------------------------------------
 # Unit rows: the label semantics on designed_tables itself
 # ----------------------------------------------------------------------

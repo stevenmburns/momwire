@@ -1016,6 +1016,15 @@ def path_test_axis(n_basis, rows):
     """
     nodes, tl, wl, f_rows, f_cols, segof, ends = [], [], [], [], [], [], []
     off = 0
+    # Every row's one-hot is a read-only WINDOW of one shared buffer
+    # (momwire#1173 design B): `hot[n_basis - m : 2 n_basis - m]` is 1 at m
+    # and 0 elsewhere, the same float64 values a fresh `zeros(n_basis)` with
+    # a 1 at m holds, so every reader (`flatnonzero`, `fv[nz]`, the corner's
+    # outer products, `_end_live_rows`) sees the same array. A vector per row
+    # was n_rows · n_basis floats (63 MB at hub_deck(16) x16).
+    hot = np.zeros(2 * n_basis + 1)
+    hot[n_basis] = 1.0
+    hot.setflags(write=False)
     for m, pts, t, w, seg, c_before, c_after in rows:
         pts = np.asarray(pts, dtype=float)
         q = pts.shape[0]
@@ -1028,10 +1037,13 @@ def path_test_axis(n_basis, rows):
         f_cols.append(np.arange(off, off + q, dtype=np.int64))
         off += q
         segof.append(np.asarray(seg, dtype=np.int64))
-        e = np.zeros(n_basis)
-        e[m] = 1.0
-        ends.append((np.asarray(c_before, dtype=float), -1.0, e))
-        ends.append((np.asarray(c_after, dtype=float), +1.0, e))
+        e = hot[n_basis - int(m) : 2 * n_basis - int(m)]
+        # The endpoints are COPIED (momwire#1173 design B): a caller's view
+        # of one row of a whole-geometry array (razor's per-call centroids)
+        # would otherwise hold that array for the axis's lifetime — one per
+        # row, N² floats at 189 MB on hub_deck(16) x16. The same three floats.
+        ends.append((np.array(c_before, dtype=float), -1.0, e))
+        ends.append((np.array(c_after, dtype=float), +1.0, e))
     n_pts = sum(x.shape[0] for x in nodes)
     return dict(
         # The split lane rebuilds a COARSE axis with `axis_data`, which can
@@ -1157,7 +1169,29 @@ def _end_tables(ctx, eps_t, k_p, ends, n_nodes, memo, args):
     why that is the per-end sequence to the bit: the same hits, each fresh
     row evaluated in the first asking end's column, the same memo contents.
     A span of one end passes no labels — it IS the per-end call.
+
+    Over a `ProductMemo` holding a main sandwich (momwire#1173 design B) an
+    end whose every asked point is a stored product row is served by a
+    gather from the product's value block (`_fast_end_rows` says which, on
+    the asked floats themselves), and the span's remaining ends go through
+    ONE `_tables` call labelled with their span positions. That is the span
+    call to the bit:
+
+      * a fast end's points are all memo hits in the span call too (the
+        product IS the memo's content for them), each returning the stored
+        floats the gather reads;
+      * a fast end asks no fresh row, so every fresh row's first asker — its
+        label — and its (label, ρ) column are the same in the call without
+        the fast ends, the fresh rows keep their relative first-appearance
+        order, and the memo receives the same rows with the same values in
+        the same order;
+      * labels are compared only for equality (`_column_blocks`), so the
+        span positions label the slow ends' columns exactly as 0..k-1 did.
     """
+    product = getattr(memo, "product", None)
+    if product is not None and _PRODUCT_ENDS and product.fast is not None:
+        yield from _end_tables_product(ctx, eps_t, k_p, ends, n_nodes, memo, args)
+        return
     for g0, g1 in _end_groups(len(ends), n_nodes, memo):
         span = ends[g0:g1]
         cols = [np.broadcast_arrays(*args(pt)) for pt, _sign, _fv in span]
@@ -1171,6 +1205,101 @@ def _end_tables(ctx, eps_t, k_p, ends, n_nodes, memo, args):
         )
         for i, (pt, sign, fv) in enumerate(span):
             yield pt, sign, fv, {"V": te["V"][i], "W": te["W"][i]}
+
+
+def _end_tables_product(ctx, eps_t, k_p, ends, n_nodes, memo, args):
+    """`_end_tables` over a `ProductMemo` holding a product: see there for
+    why the yields are the span call's to the bit."""
+    product = memo.product
+    fast = product.fast
+    vals = product.vals
+    iv, iw = _near_interface.KEYS.index("V"), _near_interface.KEYS.index("W")
+    a_wire = float(ctx.a_wire)
+    for g0, g1 in _end_groups(len(ends), n_nodes, memo):
+        span = ends[g0:g1]
+        got = [None] * len(span)
+        slow, cols = [], []
+        for i, (pt, _sign, _fv) in enumerate(span):
+            c = np.broadcast_arrays(*args(pt))
+            vrow = _fast_end_rows(fast, a_wire, pt, *c)
+            if vrow is not None and _PRODUCT_NEG_CONTROL == "row":
+                vrow = (vrow + 1) % vals.shape[0]  # TEST-ONLY: the wrong row
+            if vrow is None:
+                slow.append(i)
+                cols.append(c)
+            else:
+                got[i] = {"V": vals[vrow, iv], "W": vals[vrow, iw]}
+        _ROUTES["ends_fast"] += len(span) - len(slow)
+        _ROUTES["ends_slow"] += len(slow)
+        if slow:
+            _ROUTES["end_slow_calls"] += 1
+            rho, z, zp = (np.stack([c[j] for c in cols]) for j in range(3))
+            del cols
+            labels = None
+            if len(span) > 1 and _END_LABELS:
+                labels = np.broadcast_to(np.asarray(slow)[:, None], rho.shape)
+            te = _tables(
+                ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo, group_labels=labels
+            )
+            for j, i in enumerate(slow):
+                got[i] = {"V": te["V"][j], "W": te["W"][j]}
+            del te
+        for i, (pt, sign, fv) in enumerate(span):
+            yield pt, sign, fv, got[i]
+            got[i] = None
+
+
+def _fast_end_rows(fast, a_wire, pt, rho, z, zp):
+    """The product value row of every point one end asks, or None when the
+    end is not wholly a set of product rows of the two shapes checked here.
+
+    Checked on the ASKED floats, after `_on_plane_side` (never assumed from
+    geometry). Equality is float `==`, the memo's key equality (−0.0 == 0.0,
+    NaN never), so a point that passes is a memo hit on exactly the row
+    named, and the gather reads the floats the lookup would return. Failing
+    proves nothing either way: that end takes the lookup path.
+
+    * "grouped" — the end stands where a grouped node would: its slot value
+      is one float, held by group g's z factor; the line slot is the line's
+      own z, node by node; and ρ is group g's stored raw line, node by node
+      (g found by the end's (x, y); the compare decides). The memo would key
+      each point on `radius_fold(ρ)` of that very float, which is the line's
+      stored key.
+    * "line" — the end stands where a line node would: its slot value is one
+      float; the grouped slot is the grouped nodes' own z, node by node; ρ is
+      one float within each group; and (radius_fold(ρ_g), that float) is a
+      key of group g, for every g.
+    """
+    gs = fast.grouped_slot
+    gv, lv = (z, zp) if gs == "z" else (zp, z)
+    n_l, n_g = fast.line_z.size, fast.grouped_z.size
+    if gv.size == n_l and fast.raw is not None:
+        g = fast.gdict.get((float(pt[0]), float(pt[1])))
+        if (
+            g is not None
+            and np.all(gv == gv[0])
+            and np.array_equal(lv, fast.line_z)
+            and np.array_equal(rho, fast.raw[g])
+        ):
+            zl = fast.zmap[g].get(float(gv[0]))
+            if zl is not None:
+                _ROUTES["ends_fast_grouped"] += 1
+                return fast.rowflat[fast.off[g] + zl * fast.nk[g] + fast.kl_rank[g]]
+    if lv.size == n_g and np.all(lv == lv[0]) and np.array_equal(gv, fast.grouped_z):
+        rep = rho[fast.gfirst]
+        if np.array_equal(rho, rep[fast.grank]):
+            r = _near_interface.radius_fold(rep, a_wire)
+            l0 = float(lv[0])
+            kg = np.empty(rep.size, dtype=np.intp)
+            for g, rg in enumerate(r.tolist()):
+                k = fast.kmap[g].get((rg, l0))
+                if k is None:
+                    return None
+                kg[g] = k
+            _ROUTES["ends_fast_line"] += 1
+            grk = fast.grank
+            return fast.rowflat[fast.off[grk] + fast.zl_rank * fast.nk[grk] + kg[grk]]
+    return None
 
 
 def _direct_coords(specs, gz):
@@ -1208,7 +1337,7 @@ def _direct_coords(specs, gz):
     return rho, zAs, zBs, shapes
 
 
-def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
+def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None):
     """The M + SW + SQ sandwich over (above axis A × below axis B), whole-axis.
 
     Split out of `cross_complete_block` so the REVERSED block (momwire#813)
@@ -1228,15 +1357,27 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     temporary per product, for 38 s and 2.6 GB of fill. The sparse form
     visits only the stored weights; see `_sandwich_dense` for why the restricted
     product is the same entries.
+
+    The tables come from the PRODUCT route (`_product_route`, momwire#1173
+    design B) when the node geometry factorises and the memo is fresh, and
+    from the grid dedup (`_tables` / `_chunked_tables`) otherwise; the two
+    hand `designed_*` the same rows in the same order and serve the same
+    tables in the same chunks, so the contraction below cannot tell them
+    apart.
     """
     k2sq = k_p * k_p
     nA, nB = A["nodes"].shape[0], B["nodes"].shape[0]
     iA = np.arange(nA)
     iB = np.arange(nB)
+    step = max(1, _MAIN_CHUNK_BYTES // (_MAIN_BYTES_PER_PAIR * max(1, nA)))
+    tables = _product_route(ctx, eps_t, k_p, A, B, gz, step, memo)
+    if tables is not None:
+        t = _sandwich_dense(A, B, iA, iB, tables, k2sq, support=support)
+        t *= c1
+        return t
     # The one-spec case of `_direct_coords` — every node of both axes.
     rho, (zA,), (zB,), _shapes = _direct_coords([(A, B, iA, iB)], gz)
     rho = rho.reshape(nA, nB)
-    step = max(1, _MAIN_CHUNK_BYTES // (_MAIN_BYTES_PER_PAIR * max(1, nA)))
     if nB <= step:
         z = np.broadcast_to(zA[:, None], rho.shape)
         zp = np.broadcast_to(zB[None, :], rho.shape)
@@ -1254,7 +1395,7 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
     # test-side W term on a VERTICAL test, so s_w2 counted it twice there
     # (the +2 Ω rise residual of #956) and it was wrong on a leaning member.
     # `_sandwich_dense` carries those five terms in this order.
-    t = _sandwich_dense(A, B, iA, iB, tables, k2sq)
+    t = _sandwich_dense(A, B, iA, iB, tables, k2sq, support=support)
     t *= c1
     return t
 
@@ -1355,6 +1496,413 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
         yield sl, {key: v[idx] for key, v in vals.items()}
 
 
+# The product route's switches (momwire#1173 design B). `_PRODUCT_TABLES`
+# False sends every main sandwich through the grid dedup and `_PRODUCT_ENDS`
+# False every end through the lookup path: the in-process references the
+# product route is gated against to the bit. `_PRODUCT_NEG_CONTROL` is
+# TEST-ONLY and makes the route WRONG on purpose, so the gate can be shown to
+# fail: "transpose" maps a one-group product's rows back to the grid in the
+# other factor's order (the product order permuted), "split" evaluates the
+# rows as two calls (which changes columns' s_min), "row" serves every fast
+# end one product row off. `_ROUTES` counts which route ran, so a test can
+# prove the new one did.
+_PRODUCT_TABLES = True
+_PRODUCT_ENDS = True
+_PRODUCT_NEG_CONTROL = None
+# A product with several groups pays a merge over its candidate triples; it
+# is taken only when those are at most this fraction of the grid, and when
+# the groups are few enough that their lines are (`_PRODUCT_MAX_GROUP_FRAC`
+# of the grouped side). One group is always taken: its candidates ARE the
+# distinct triples, and every array it builds is O(distinct + nodes).
+_PRODUCT_MAX_CAND_FRAC = 0.25
+_PRODUCT_MAX_GROUP_FRAC = 0.25
+# Groups beyond this build no fast-end structures (their raw lines would be
+# groups x line floats); their ends take the lookup path, which is exact.
+_PRODUCT_FAST_MAX_GROUPS = 64
+_ROUTES = dict.fromkeys(
+    (
+        "main_product",
+        "main_product_z",
+        "main_product_zp",
+        "main_product_groups",
+        "main_generic",
+        "main_generic_memo",
+        "main_generic_nonfinite",
+        "main_generic_groups",
+        "main_generic_candidates",
+        "ends_fast",
+        "ends_fast_grouped",
+        "ends_fast_line",
+        "ends_slow",
+        "end_slow_calls",
+    ),
+    0,
+)
+
+
+def _first_groups(*cols):
+    """The distinct rows of equal-length float columns under `!=` (−0.0 with
+    0.0; NaN each its own) — `_near_interface._unique_tri`'s grouping rule on
+    one or two columns: `(first, rank)`, the index of each group's FIRST
+    occurrence with the groups in first-appearance order, and each element's
+    group number in that order."""
+    n = cols[0].size
+    if n == 0:
+        return np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.intp)
+    idx = np.lexsort(tuple(reversed(cols)))
+    new = np.empty(n, dtype=bool)
+    new[0] = True
+    step = new[1:]
+    step[:] = False
+    for c in cols:
+        sc = c[idx]
+        step |= sc[1:] != sc[:-1]
+        del sc
+    gid = np.cumsum(new) - 1
+    first = idx[new]
+    inv = np.empty(n, dtype=np.intp)
+    inv[idx] = gid
+    order = np.argsort(first, kind="stable")
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size)
+    return first[order], rank[inv]
+
+
+def _first_ints(ids):
+    """`_first_groups` for a non-negative integer array."""
+    if ids.size == 0:
+        return np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.intp)
+    _u, first, inv = np.unique(ids, return_index=True, return_inverse=True)
+    order = np.argsort(first, kind="stable")
+    rank = np.empty_like(order)
+    rank[order] = np.arange(order.size)
+    return first[order], rank[np.asarray(inv).ravel()]
+
+
+class _FastEnds(NamedTuple):
+    """What `_fast_end_rows` reads, beside the `ProductSet`: the grouped
+    side's slot, nodes' z, group and local z rank; the line nodes' z; per
+    group its first node, raw ρ line, (x, y) key, z and key maps, row-table
+    offset / width and the line's local key ranks; and the concatenated
+    row tables. `raw` and the maps are None past `_PRODUCT_FAST_MAX_GROUPS`
+    groups (the product then serves the main sandwich only)."""
+
+    grouped_slot: str
+    grouped_z: np.ndarray
+    grank: np.ndarray
+    zl_rank: np.ndarray
+    line_z: np.ndarray
+    gfirst: np.ndarray
+    raw: np.ndarray | None
+    gdict: dict
+    zmap: list
+    kmap: list
+    off: np.ndarray
+    nk: np.ndarray
+    kl_rank: np.ndarray
+    rowflat: np.ndarray
+
+
+def _product_route(ctx, eps_t, k_p, A, B, gz, step, memo):
+    """The main sandwich's tables by the PRODUCT route (momwire#1173 design
+    B), or None to take the grid dedup — which it counts in `_ROUTES`.
+
+    Taken when the memo is a fresh `ProductMemo` (so, as in the grid route,
+    every row is fresh), every node coordinate is finite, and one side's
+    nodes fall into few exact-(x, y) groups (`_product_plan`). The rows it
+    hands `designed_rows_permuted`, their order and so every column's
+    membership, are `_chunked_tables`' to the float; the tables it serves
+    are the same floats in the same `(cols, K)` chunks (or the same dict
+    when `nB <= step`); and the memo afterwards holds the same rows with the
+    same values. See `_product_plan` for the derivation."""
+    if not _PRODUCT_TABLES or not isinstance(memo, _near_interface.ProductMemo):
+        return None
+    if len(memo):
+        # A second sandwich on one memo (the two-radius node) would see hits;
+        # the grid route handles that, and nothing here is built for it.
+        _ROUTES["main_generic"] += 1
+        _ROUTES["main_generic_memo"] += 1
+        return None
+    plan = _product_plan(ctx, eps_t, k_p, A, B, gz)
+    if isinstance(plan, str):
+        _ROUTES["main_generic"] += 1
+        _ROUTES["main_generic_" + plan] += 1
+        return None
+    product, fast, chunk_idx = plan
+    product.fast = fast
+    memo.set_product(product)
+    _ROUTES["main_product"] += 1
+    _ROUTES["main_product_" + product.slot] += 1
+    _ROUTES["main_product_groups"] = max(
+        _ROUTES["main_product_groups"], len(product.rowtab)
+    )
+    cols_j = [(key, _near_interface.KEYS.index(key)) for key in _CROSS_KEYS]
+    vals = product.vals
+    nB = B["nodes"].shape[0]
+
+    def chunk(sl):
+        idx = chunk_idx(sl)
+        return {key: vals[:, j][idx] for key, j in cols_j}
+
+    if nB <= step:
+        return chunk(slice(0, nB))
+
+    def gen():
+        for b0 in range(0, nB, step):
+            sl = slice(b0, min(nB, b0 + step))
+            yield sl, chunk(sl)
+
+    return gen()
+
+
+def _product_plan(ctx, eps_t, k_p, A, B, gz):
+    """`(ProductSet, _FastEnds, chunk_idx)` for the main sandwich over (above
+    axis A × below axis B), or the reason it declines ("nonfinite", "groups",
+    "candidates").
+
+    THE ARGUMENT. The grid route asks, at node pair (a, b), the triple
+    (ρ_eff, z, z′) = (fold(hypot(x_a − x_b, y_a − y_b)), z_a, z_b), and hands
+    `designed_rows` the distinct triples in the order of their FIRST grid
+    appearance under the flat index a·n_B + b, each as the floats at that
+    appearance. Group one side's nodes by exact (x, y). Within a group every
+    node has the same x and y under `==`, and a difference with an operand
+    equal under `==` has the same magnitude (only a zero's sign can differ,
+    and hypot ignores signs), so ρ from any node of group g to a node l of
+    the other side is ONE float, `line[g, l]`. Group g's triples are then
+    exactly {its distinct z} × {the line's distinct (ρ_eff, z_l)}: every
+    pair occurs, as the node pair (first node of g with that z, first line
+    node with that key). The grid's distinct triples are the union over the
+    groups; a triple two groups share is one triple, first appearing at the
+    smaller of its candidates' flat positions. So:
+
+      * candidates are numbered by (z id, key id) — both exact-`==` classes,
+        and two triples are equal iff both ids are — and deduplicated
+        keeping the smallest flat position;
+      * the survivors, sorted by that position, are the grid's distinct
+        triples in first-appearance order;
+      * each row is written from the node pair at that position: z and z′
+        straight from the nodes, ρ_eff from the line at that pair — the
+        float the grid computed there.
+
+    With ONE group nothing needs sorting: the grouped nodes' first
+    appearances and the line's are both ascending, so the flat positions run
+    in the product's own order — z-major when the grouped side is the above
+    one (a·n_B + b with a from z), key-major when it is the below one. That
+    is also the design-B prototype's order, and `_product_plan` asserts
+    nothing about it: the rows are built either way from positions.
+
+    No float is computed here that the grid route did not compute the same
+    way (the one fold per line node is `radius_fold` of the grid's own ρ);
+    no sum is formed at all. The evaluation then sees the same rows in the
+    same order, so the same columns with the same members (the column rule
+    reads only a column's ρ and its members' s — `designed_tables`), and
+    returns the same six floats per row; `designed_rows_permuted` only
+    defers the copy into row order, which `rowtab` composes back.
+
+    Which side is grouped: the one whose lines are cheaper (groups × other
+    side's nodes), the above side on a tie. A vertical above member is one
+    group (the hub decks); WA7ARK-style decks, whose short buried rod is one
+    group under a sloping antenna, group the below side."""
+    pa, pb = A["nodes"], B["nodes"]
+    nA, nB = pa.shape[0], pb.shape[0]
+    if not (np.all(np.isfinite(pa)) and np.all(np.isfinite(pb)) and np.isfinite(gz)):
+        return "nonfinite"
+    if nA == 0 or nB == 0:
+        return "groups"
+    fa, ga = _first_groups(pa[:, 0], pa[:, 1])
+    fb, gb = _first_groups(pb[:, 0], pb[:, 1])
+    if fa.size * nB <= fb.size * nA:
+        slot, G, L, gfirst, grank = "z", pa, pb, fa, ga
+    else:
+        slot, G, L, gfirst, grank = "zp", pb, pa, fb, gb
+    nG, nL = gfirst.size, L.shape[0]
+    if nG > 1 and nG > _PRODUCT_MAX_GROUP_FRAC * G.shape[0]:
+        return "groups"
+    # z relative to the plane, exactly as `_direct_coords` forms it.
+    zA = pa[:, 2] - gz
+    zB = pb[:, 2] - gz
+    gzv, lzv = (zA, zB) if slot == "z" else (zB, zA)
+    x0, y0 = G[gfirst, 0], G[gfirst, 1]
+    # The grid's operand order is (above − below).
+    if slot == "z":
+        raw = np.hypot(x0[:, None] - L[None, :, 0], y0[:, None] - L[None, :, 1])
+    else:
+        raw = np.hypot(L[None, :, 0] - x0[:, None], L[None, :, 1] - y0[:, None])
+    line = _near_interface.radius_fold(raw, float(ctx.a_wire))
+    zf, zid = _first_groups(gzv)
+    kf, kid = _first_groups(line.ravel(), np.broadcast_to(lzv, line.shape).ravel())
+    kid = kid.reshape(nG, nL)
+    # Per group: members (ascending), local z and key ranks, candidates.
+    members = np.argsort(grank, kind="stable")
+    bounds = np.concatenate(([0], np.cumsum(np.bincount(grank, minlength=nG))))
+    zl_rank = np.empty(G.shape[0], dtype=np.intp)
+    kl_rank = np.empty((nG, nL), dtype=np.intp)
+    zids, kids, zfirst, kfirst, nz, nk = [], [], [], [], [], []
+    for g in range(nG):
+        m_g = members[bounds[g] : bounds[g + 1]]
+        f_z, r_z = _first_ints(zid[m_g])
+        f_k, r_k = _first_ints(kid[g])
+        zl_rank[m_g] = r_z
+        kl_rank[g] = r_k
+        zids.append(zid[m_g[f_z]])
+        kids.append(kid[g, f_k])
+        zfirst.append(m_g[f_z])  # the grouped node where each z first occurs
+        kfirst.append(f_k)  # the line node where each key first occurs
+        nz.append(f_z.size)
+        nk.append(f_k.size)
+    nz, nk = np.asarray(nz, dtype=np.intp), np.asarray(nk, dtype=np.intp)
+    n_cand = int(np.sum(nz * nk))
+    if nG > 1 and n_cand > _PRODUCT_MAX_CAND_FRAC * nA * nB:
+        return "candidates"
+
+    def flat_pos(g):
+        """Flat grid positions a·nB + b of group g's (z, key) candidates."""
+        if slot == "z":
+            return zfirst[g][:, None] * nB + kfirst[g][None, :]
+        return kfirst[g][None, :] * nB + zfirst[g][:, None]
+
+    if nG == 1:
+        # Ascending already (see the docstring): row = the candidate itself,
+        # z-major for the above side, key-major for the below.
+        c = np.arange(n_cand, dtype=np.intp)
+        if _PRODUCT_NEG_CONTROL == "transpose":
+            slot_rows = "zp" if slot == "z" else "z"  # TEST-ONLY: wrong order
+        else:
+            slot_rows = slot
+        cand_row = [
+            c.reshape(nz[0], nk[0]) if slot_rows == "z" else c.reshape(nk[0], nz[0]).T
+        ]
+        kept_pos = (flat_pos(0) if slot == "z" else flat_pos(0).T).ravel()
+        if kept_pos.size > 1 and not bool(np.all(kept_pos[1:] > kept_pos[:-1])):
+            raise AssertionError("one group's candidates are not in grid order")
+    else:
+        n_key = kf.size
+        codes = np.concatenate(
+            [(zids[g][:, None] * n_key + kids[g][None, :]).ravel() for g in range(nG)]
+        )
+        pos = np.concatenate([flat_pos(g).ravel() for g in range(nG)])
+        o = np.lexsort((pos, codes))
+        cs = codes[o]
+        head = np.empty(cs.size, dtype=bool)
+        head[0] = True
+        np.not_equal(cs[1:], cs[:-1], out=head[1:])
+        run = np.cumsum(head) - 1  # the distinct triple of each sorted candidate
+        kept_pos = pos[o][head]  # each triple's first appearance
+        rank = np.empty(kept_pos.size, dtype=np.intp)
+        rank[np.argsort(kept_pos, kind="stable")] = np.arange(kept_pos.size)
+        flat_row = np.empty(cs.size, dtype=np.intp)
+        flat_row[o] = rank[run]
+        kept_pos = np.sort(kept_pos)
+        del codes, pos, o, cs, head, run, rank
+        cand_row, off = [], 0
+        for g in range(nG):
+            cand_row.append(flat_row[off : off + nz[g] * nk[g]].reshape(nz[g], nk[g]))
+            off += nz[g] * nk[g]
+        del flat_row
+    # The rows, from the node pair at each first appearance.
+    a_s, b_s = np.divmod(kept_pos, nB)
+    del kept_pos
+    rows = np.empty((a_s.size, 3), dtype=float)
+    if slot == "z":
+        rows[:, 0] = line[grank[a_s], b_s]
+    else:
+        rows[:, 0] = line[grank[b_s], a_s]
+    rows[:, 1] = zA[a_s]
+    rows[:, 2] = zB[b_s]
+    del a_s, b_s
+    if _PRODUCT_NEG_CONTROL == "split":
+        h = rows.shape[0] // 2
+        v1, p1 = _near_interface.designed_rows_permuted(
+            eps_t, k_p, rows[:h], rtol=_CROSS_RTOL
+        )
+        v2, p2 = _near_interface.designed_rows_permuted(
+            eps_t, k_p, rows[h:], rtol=_CROSS_RTOL
+        )
+        p1 = np.arange(h) if p1 is None else p1
+        p2 = np.arange(rows.shape[0] - h) if p2 is None else p2
+        vals, row_vrow = np.concatenate([v1, v2]), np.concatenate([p1, p2 + h])
+    else:
+        vals, row_vrow = _near_interface.designed_rows_permuted(
+            eps_t, k_p, rows, rtol=_CROSS_RTOL
+        )
+        if row_vrow is None:
+            row_vrow = np.arange(rows.shape[0], dtype=np.intp)
+    del rows
+    rowtab = [row_vrow[cr] for cr in cand_row]
+    del cand_row
+    product = _near_interface.ProductSet(
+        slot,
+        vals,
+        row_vrow,
+        gzv[zf],
+        line.ravel()[kf],
+        np.broadcast_to(lzv, line.shape).ravel()[kf],
+        rowtab,
+        zids,
+        kids,
+    )
+    off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.intp)
+    rowflat = np.concatenate([t.ravel() for t in rowtab])
+    small = nG <= _PRODUCT_FAST_MAX_GROUPS
+    fast = _FastEnds(
+        grouped_slot=slot,
+        grouped_z=gzv,
+        grank=grank,
+        zl_rank=zl_rank,
+        line_z=lzv,
+        gfirst=gfirst,
+        raw=raw if small else None,
+        gdict=(
+            {
+                (float(x), float(y)): g
+                for g, (x, y) in enumerate(zip(x0.tolist(), y0.tolist()))
+            }
+            if small
+            else {}
+        ),
+        zmap=(
+            [
+                {float(gzv[n]): i for i, n in enumerate(zfirst[g].tolist())}
+                for g in range(nG)
+            ]
+            if small
+            else []
+        ),
+        kmap=(
+            [
+                {
+                    (float(line[g, n]), float(lzv[n])): j
+                    for j, n in enumerate(kfirst[g].tolist())
+                }
+                for g in range(nG)
+            ]
+            if small
+            else []
+        ),
+        off=off,
+        nk=nk,
+        kl_rank=kl_rank,
+        rowflat=rowflat,
+    )
+    if not small:
+        fast = None
+
+    def chunk_idx(sl):
+        """(nA, |sl|) value rows of the grid pairs in columns `sl`."""
+        if slot == "z":
+            g = grank
+            base = off[g] + zl_rank * nk[g]
+            return rowflat[
+                base[:, None]
+                + kl_rank[g[:, None], np.arange(sl.start, sl.stop)[None, :]]
+            ]
+        g = grank[sl]
+        base = off[g] + zl_rank[sl] * nk[g]
+        return rowflat[base[None, :] + kl_rank[g[None, :], np.arange(nA)[:, None]]]
+
+    return product, fast, chunk_idx
+
+
 def _index_dtype(n):
     """int32 when every index below `n` fits it, else the platform's intp."""
     return np.int32 if n <= np.iinfo(np.int32).max else np.intp
@@ -1365,29 +1913,94 @@ def _block_preamble(ctx):
     above-side ε̃ and k₂, the plane, the moment constant, and a FRESH
     exact-triple memo (momwire#1017: one fill = one memo, ε̃, k₂ and
     `_CROSS_RTOL` fixed for its lifetime). Every cross-block entry opens with
-    these five lines, so they are spelled once (momwire#1168 U5)."""
+    these five lines, so they are spelled once (momwire#1168 U5).
+
+    The memo is a `ProductMemo` (momwire#1173 design B): a `TripleMemo` until
+    `_product_route` stores a main sandwich's factorised rows in it, and the
+    same hit / fresh decisions and stored floats as one after."""
     eps_t, _eps_m, k_p, _k_m, _c2, _a_m = ctx.medium
     gz = float(ctx.ground_z)
     c1 = _c1_moment(ctx.omega, ctx.mu)
-    return eps_t, k_p, gz, c1, _near_interface.TripleMemo()
+    return eps_t, k_p, gz, c1, _near_interface.ProductMemo()
 
 
-def cross_complete_block(ctx, A, B, *, corner=True):
+def cross_complete_block(ctx, A, B, *, corner=True, support=None):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
     subtracting field-block convention (`Z -= t_ab`).
 
     For GALERKIN rows the opposite block is this one's transpose. For
     PATH-tested rows it is not, and `cross_complete_block_reversed` builds
-    it — see there for the one term that separates them."""
+    it — see there for the one term that separates them.
+
+    `support=(rows, cols)` (momwire#1173 design B) answers
+    `t_ab[np.ix_(rows, cols)]` instead, never allocating the full block —
+    for a caller that reads only that (razor's crossing assembly, where the
+    full block is 92 % structural zeros). Bit-identical to that slice: see
+    `_Support`."""
     # One fill = one memo, exactly as `cross_complete_block_split` does it
     # (momwire#1017). This route built none, so momwire#688's cross-call dedup
     # — the whole reason the parameter exists — never fired for `RazorSolver`,
     # whose crossing serve calls straight in here.
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
-    t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
-    _ends_and_corner(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=t_ab)
+    sup = _Support.of(support, A["n_basis"], B["n_basis"])
+    t_ab = _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, support=sup)
+    _ends_and_corner(
+        ctx, A, B, eps_t, k_p, c1, gz, memo=memo, corner=corner, out=t_ab, support=sup
+    )
     return t_ab
+
+
+class _Support(NamedTuple):
+    """The (rows, cols) sub-block a cross-block caller reads (momwire#1173
+    design B), with each full index's compact position (−1 off it).
+
+    Why a compact answer is the slice of the full one to the bit: every
+    write into the full block is elementwise per entry — an assignment of
+    a computed block, an `+=` of one, a scalar `*=` — and each such write
+    has its compact twin at `(pos_r[i], pos_c[j])` carrying the same value
+    (`_put` gathers the same block entries; the rank-1 updates form their
+    outer products elementwise, so restricting a factor restricts the
+    product and nothing else). An entry therefore sees the same writes in
+    the same order, from the same zero; entries off the support are never
+    formed, and the caller never read them."""
+
+    rows: np.ndarray
+    cols: np.ndarray
+    pos_r: np.ndarray
+    pos_c: np.ndarray
+
+    @classmethod
+    def of(cls, support, n_r, n_c):
+        if support is None:
+            return None
+        rows, cols = (np.asarray(x, dtype=np.int64) for x in support)
+        pos_r, pos_c = _positions(n_r, rows), _positions(n_c, cols)
+        return cls(rows, cols, pos_r, pos_c)
+
+    def transposed(self):
+        return _Support(self.cols, self.rows, self.pos_c, self.pos_r)
+
+    def zeros(self):
+        return np.zeros((self.rows.size, self.cols.size), dtype=np.complex128)
+
+
+def _put(out, r, c, block, support, *, assign):
+    """`out[np.ix_(r, c)] = block` (or `+=`), through `support`'s positions
+    when it is given: the entries of `block` whose row and column the support
+    keeps, into their compact places."""
+    if support is not None:
+        pr, pc = support.pos_r[r], support.pos_c[c]
+        kr, kc = pr >= 0, pc >= 0
+        if not (kr.all() and kc.all()):
+            block = block[np.ix_(kr, kc)]
+            pr, pc = pr[kr], pc[kc]
+        r, c = pr, pc
+    ix = np.ix_(r, c)
+    if assign:
+        out[ix] = block
+    else:
+        out[ix] += block
 
 
 def _real_matvec_c(M, v):
@@ -1580,6 +2193,7 @@ def _ends_and_corner(
     source_ends=True,
     rows=None,
     out=None,
+    support=None,
 ):
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
@@ -1624,6 +2238,7 @@ def _ends_and_corner(
         col_ends=source_ends,
         rows=rows,
         out=out,
+        support=support,
     )
 
 
@@ -1644,6 +2259,7 @@ def _ends_and_corner_rc(
     col_ends=True,
     rows=None,
     out=None,
+    support=None,
 ):
     """The end terms and the corner of a cross block whose rows are axis `R`'s
     basis and whose columns are `C`'s, in either orientation (momwire#1168
@@ -1660,8 +2276,17 @@ def _ends_and_corner_rc(
     block (R below) the row loop is SW's by-parts partner plus BT and the
     column loop TW + SQ — the same four products either way, which is why
     the reversed block reproduces the forward's transpose (momwire#813,
-    momwire#956)."""
+    momwire#956).
+
+    `support` (a `_Support`) answers only its (rows, cols) sub-block, into an
+    `out` of that shape: `E_r` and `E_c` are held on the support's columns
+    and rows alone, and every rank-1 update writes the support's part of
+    what it wrote before — the same elementwise products in the same order
+    per entry (`_Support`)."""
     nA, nB = R["n_basis"], C["n_basis"]
+    sup = support
+    if sup is not None and rows is not None:
+        raise ValueError("support= and rows= are two answers; ask for one")
     if rows is None:
         # THE SHAPE'S OWN SUPPORT, never an (n, n) transient (momwire#1029
         # phase 2 unit C, the momwire#914 pattern). `E_r` carries every term
@@ -1673,11 +2298,16 @@ def _ends_and_corner_rc(
         # BIT-IDENTICAL to `dest += <a full-size ends block>`, which is what
         # this replaces. Its 1.06 GB at 150 radials was the third-largest term
         # of the fill's peak.
-        dest = out if out is not None else np.zeros((nA, nB), dtype=np.complex128)
         LA, LB = _end_live_rows(R), _end_live_rows(C)
         posLA, posLB = _positions(nA, LA), _positions(nB, LB)
-        E_r = np.zeros((LA.size, nB), dtype=np.complex128)
-        E_c = np.zeros((nA, LB.size), dtype=np.complex128)
+        if sup is None:
+            dest = out if out is not None else np.zeros((nA, nB), dtype=np.complex128)
+            E_r = np.zeros((LA.size, nB), dtype=np.complex128)
+            E_c = np.zeros((nA, LB.size), dtype=np.complex128)
+        else:
+            dest = out if out is not None else sup.zeros()
+            E_r = np.zeros((LA.size, sup.cols.size), dtype=np.complex128)
+            E_c = np.zeros((sup.rows.size, LB.size), dtype=np.complex128)
         t_r = t_c = None
     else:
         dest = None
@@ -1689,6 +2319,8 @@ def _ends_and_corner_rc(
         this call is answering with. `nz` is an R end's live rows, so it is
         inside `LA` by construction."""
         if rows is None:
+            if sup is not None:
+                vec = vec[sup.cols]
             _rank1_add(E_r, posLA[nz], fv_nz, vec, scale, buf)
             return
         sel, pos = _in_rows(rows, nz)
@@ -1699,8 +2331,14 @@ def _ends_and_corner_rc(
     def add_cols(nz, vec, fv_nz, scale, buf):
         """`t[:, nz] += scale * outer(vec, fv_nz)`; `nz` is inside `LB`."""
         if rows is None:
-            _rank1_add_cols(E_r, nz, vec[LA], fv_nz, scale, buf)
-            _rank1_add_cols(E_c, posLB[nz], vec, fv_nz, scale, buf)
+            if sup is None:
+                _rank1_add_cols(E_r, nz, vec[LA], fv_nz, scale, buf)
+                _rank1_add_cols(E_c, posLB[nz], vec, fv_nz, scale, buf)
+                return
+            pc = sup.pos_c[nz]
+            keep = pc >= 0
+            _rank1_add_cols(E_r, pc[keep], vec[LA], fv_nz[keep], scale, buf)
+            _rank1_add_cols(E_c, posLB[nz], vec[sup.rows], fv_nz, scale, buf)
             return
         _rank1_add_cols(t_r, nz, vec[rows], fv_nz, scale, buf)
         sel, pos = _in_rows(rows, nz)
@@ -1709,6 +2347,10 @@ def _ends_and_corner_rc(
 
     def add_corner(nza, nzb, fva, fvb, scale):
         if rows is None:
+            if sup is not None:
+                pc = sup.pos_c[nzb]
+                keep = pc >= 0
+                nzb, fvb = pc[keep], fvb[keep]
             E_r[np.ix_(posLA[nza], nzb)] += scale * np.outer(fva, fvb)
             return
         sel, pos = _in_rows(rows, nza)
@@ -1725,11 +2367,22 @@ def _ends_and_corner_rc(
         # rows of `E_c` are dropped rather than added twice. Rows first, then
         # columns: an entry in LA x LB then sees its whole term and an exact
         # zero, which is the order the full block's single `+=` had.
+        if sup is None:
+            if LA.size:
+                E_c[LA, :] = 0.0
+                dest[LA, :] += E_r
+            if LB.size:
+                dest[:, LB] += E_c
+            return dest
         if LA.size:
-            E_c[LA, :] = 0.0
-            dest[LA, :] += E_r
+            pr = sup.pos_r[LA]
+            keep = pr >= 0
+            E_c[pr[keep], :] = 0.0
+            dest[pr[keep], :] += E_r[keep]
         if LB.size:
-            dest[:, LB] += E_c
+            pc = sup.pos_c[LB]
+            keep = pc >= 0
+            dest[:, pc[keep]] += E_c[:, keep]
         return dest
 
     _txR, _tyR, tzR = R["t"].T
@@ -1875,6 +2528,7 @@ def _ends_and_corner_reversed(
     sw_end=SW_BY_PARTS,
     rows=None,
     out=None,
+    support=None,
 ):
     """`_ends_and_corner` for the REVERSED block: test axis P is BELOW, source
     axis Q is ABOVE. Returns (P n_basis × Q n_basis).
@@ -1917,10 +2571,13 @@ def _ends_and_corner_reversed(
         corner=corner,
         rows=rows,
         out=out,
+        support=support,
     )
 
 
-def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS):
+def cross_complete_block_reversed(
+    ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS, support=None
+):
     """The block the other way round: BELOW test rows × ABOVE source columns.
 
     `cross_complete_block` fills (above rows × below columns). bspline gets
@@ -1945,11 +2602,26 @@ def cross_complete_block_reversed(ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS)
     `SW_BY_ROLE` spelling agrees at ε̃ = 1 and is 7.94e-4 away at soil A.
     """
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)  # momwire#1017, as above
-    t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz, memo=memo).T
+    # `support=(rows, cols)` as `cross_complete_block`'s: this block's rows
+    # are P's, so the transposed main sandwich takes the support swapped.
+    sup = _Support.of(support, P["n_basis"], Q["n_basis"])
+    sup_t = None if sup is None else sup.transposed()
+    t_ba = _main_sandwich(ctx, Q, P, eps_t, k_p, c1, gz, memo=memo, support=sup_t).T
     # Accumulated in place through the support scatter, bit-identical to
     # `t_ba += <the full ends block>` (`_ends_and_corner_rc`).
     _ends_and_corner_reversed(
-        ctx, P, Q, eps_t, k_p, c1, gz, memo=memo, corner=corner, sw_end=sw_end, out=t_ba
+        ctx,
+        P,
+        Q,
+        eps_t,
+        k_p,
+        c1,
+        gz,
+        memo=memo,
+        corner=corner,
+        sw_end=sw_end,
+        out=t_ba,
+        support=sup,
     )
     return t_ba
 
@@ -2052,7 +2724,7 @@ def _combine(Ls, Qz):
     )
 
 
-def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False):
+def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=None):
     """`_sandwich_dense` over COLUMN CHUNKS of the tables without ever holding
     the six whole (|rA|, |iB|) left products: `out[rA, rB] += block`, the
     same bits as contracting the assembled products (momwire#1168).
@@ -2117,7 +2789,7 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False):
         c_cols = np.arange(cols.start, cols.stop)
         if not _STREAMED_WHOLE_ROWS:
             part = _combine(Lc, [q[:, cols] for q in Qs])
-            out[np.ix_(rA, rB)] += part
+            _put(out, rA, rB, part, support, assign=False)
             continue
         J = np.flatnonzero(pending & (last < cols.stop))
         if J.size:
@@ -2136,10 +2808,8 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False):
                 ]
             block = _combine(Ls, [q[J][:, need] for q in Qs])
             del Ls
-            if fresh:
-                out[np.ix_(rA, rB[J])] = block  # each entry written once
-            else:
-                out[np.ix_(rA, rB[J])] += block
+            # each entry written once when `fresh`
+            _put(out, rA, rB[J], block, support, assign=fresh)
             del block
             pending[J] = False
         # Keep only the columns a still-pending row reads.
@@ -2160,7 +2830,9 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False):
     return out
 
 
-def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None):
+def _sandwich_dense(
+    A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None, support=None
+):
     """The five-term M+SW+SQ (main) sandwich over dense kernel matrices
     restricted to (iA, iB) — the same term order as the reference fill.
 
@@ -2193,7 +2865,14 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None
     once and then row-gathered for the row half and column-restricted on the
     `Q` side for the column half. That is what makes the pair cost one
     evaluation: the transpose the routing reads is a different slice of the
-    same product, not a second fill."""
+    same product, not a second fill.
+
+    `support` (a `_Support`, whole-block answers only) is the (rows, cols)
+    sub-block as its own array: each entry gets exactly the writes it got in
+    the full block (`_put`), and the full block's other entries are never
+    held."""
+    if support is not None and rows is not None:
+        raise ValueError("support= and rows= are two answers; ask for one")
     rA = _support_rows(A, iA)
     rB = _support_rows(B, iB)
     Ps = _row_weights(A, iA, rA)
@@ -2203,9 +2882,13 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None
             raise ValueError("the streamed main sandwich serves whole blocks only")
         fresh = out is None
         if fresh:
-            out = np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+            out = (
+                np.zeros((A["n_basis"], B["n_basis"]), dtype=np.complex128)
+                if support is None
+                else support.zeros()
+            )
         return _streamed_sandwich(
-            Ps, (Q1, Q2, Q3, Q4), K, k2sq, rA, rB, out, fresh=fresh
+            Ps, (Q1, Q2, Q3, Q4), K, k2sq, rA, rB, out, fresh=fresh, support=support
         )
     if isinstance(K, dict):
         L = _left_products(Ps, K, k2sq)
@@ -2242,8 +2925,12 @@ def _sandwich_dense(A, B, iA, iB, K, k2sq, out=None, *, rows=None, out_cols=None
         # BIT-IDENTICAL, not merely close: the entries this skips were exact
         # zeros in the array being added, and adding an exact zero changes no
         # bits. The products and their order are untouched.
-        out[np.ix_(rA, rB)] += block
+        _put(out, rA, rB, block, support, assign=False)
         return out
+    if support is not None:
+        full = support.zeros()
+        _put(full, rA, rB, block, support, assign=True)
+        return full
     full = np.zeros((A["n_basis"], B["n_basis"]), dtype=block.dtype)
     full[np.ix_(rA, rB)] = block
     return full

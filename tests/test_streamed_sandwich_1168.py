@@ -35,6 +35,15 @@ from test_triple_memo_1168 import _razor
 _TINY = 20_000
 
 
+@pytest.fixture(autouse=True)
+def _grid_route(monkeypatch):
+    """This file's subject is the GRID route (`_chunked_tables` and the
+    lookup path); since momwire#1173 design B a deck whose nodes factorise
+    takes the product route instead, which never calls it.
+    `test_product_grid_1173` gates the product route against this one."""
+    monkeypatch.setattr(cf, "_PRODUCT_TABLES", False)
+
+
 class _Counts:
     """Chunks served, streamed calls and contractions made during a solve."""
 
