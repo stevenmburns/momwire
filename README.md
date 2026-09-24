@@ -12,7 +12,8 @@ top of it. `SinusoidalSolver` and `SinusoidalGalerkinSolver` reproduce NEC2's
 three-term basis (collocation and Galerkin testing respectively) as
 in-codebase NEC comparators. `RazorSolver` is the NEC-5 formulation twin: a
 tent basis with razor-blade (RWG mixed-potential path) testing, transcribed
-from the NEC-5 Users Manual rather than NEC2's, free space only. Because its
+from the NEC-5 Users Manual rather than NEC2's, over every ground, buried
+and crossing decks included. Because its
 testing rule — not its basis, which it shares with `BSplineSolver(degree=1)`
 — is NEC-5's own, it reproduces NEC-5's characteristic slow O(1/N) impedance
 walk without needing the (licensed) NEC-5 binary; see
@@ -143,7 +144,8 @@ Solvers — see [Solvers](#solvers) above for what distinguishes them:
 - `BSplineSolver` — degree-d Galerkin, the default.
 - `HMatrixSolver`, `ArrayBlockSolver` — structural accelerators over it.
 - `SinusoidalSolver`, `SinusoidalGalerkinSolver` — NEC2's three-term basis.
-- `RazorSolver` — the NEC-5 formulation twin, free space only.
+- `RazorSolver` — the NEC-5 formulation twin, over every ground, buried and
+  crossing decks included.
 - `PulseSolver`, `HarringtonSolver` — the textbook pair.
 
 Results and control:

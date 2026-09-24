@@ -1175,10 +1175,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Validity window (momwire#151/#153): 0.1–0.5 λ above the plane, for
         `ground_model="refl-coef"`. Below that the Φ term's approximate
         weighting degrades — use `ground_model="sommerfeld"`, which is exact
-        at every height. NO ground CONTACT is served over either finite
-        ground (momwire#282 — the fold hard-codes image coefficient 1, so a
-        grounded end would take spurious contact charge); a wire end in the
-        plane with `ground_eps` set is refused. NEC-5 is NOT the oracle for
+        at every height. Ground CONTACT (a wire end in the plane) is served
+        over the Sommerfeld ground (momwire#624) and refused under
+        `ground_model="refl-coef"`, which is the whole tree's refusal
+        (momwire#282 stage 1, `_ground_spec`). NEC-5 is NOT the oracle for
         either: its finite ground is Michalski, carrying a limit offset of
         its own, so both are gated by cross-formulation agreement against
         momwire's own B-spline and sinusoidal solvers instead
