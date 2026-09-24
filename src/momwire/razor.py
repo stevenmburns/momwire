@@ -3816,8 +3816,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # wavenumber is exactly one ε̃ per wavenumber. Over PEC it is a
             # handful of scalar stores and the block ignores it.
             ground = _potential_ground.potential_ground_for(self, geom, k, omega)
-            Z -= self._assemble_Z_source_block(
-                geom, prepared, image, k, omega, ground=ground
+            # The image block folds into Z window by window (momwire#1173):
+            # `Z -= block`, without the block ever existing whole.
+            self._assemble_Z_source_block(
+                geom, prepared, image, k, omega, ground=ground, out=Z
             )
         # Loading last, and OUTSIDE the fold: `Z = (Z_free − Z_image) + L`.
         # The loading term is a property of the conductor's surface, not of
@@ -4099,8 +4101,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k_m, omega, eps=eps_m
         )
-        Z -= self._assemble_Z_source_block(
-            geom, prepared, prepared["image"], k_m, omega, ground=ground, eps=eps_m
+        self._assemble_Z_source_block(
+            geom,
+            prepared,
+            prepared["image"],
+            k_m,
+            omega,
+            ground=ground,
+            eps=eps_m,
+            out=Z,
         )
         # Loading last and outside the fold, exactly as above.
         self._load_in_place(Z, prepared, geom, omega)
@@ -4302,8 +4311,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z_a = self._assemble_Z_source_block(geom_a, prep_a, prep_a, k, omega)
         if prep_a["image"] is not None:
             ground_a = _potential_ground.potential_ground_for(self, geom_a, k, omega)
-            Z_a -= self._assemble_Z_source_block(
-                geom_a, prep_a, prep_a["image"], k, omega, ground=ground_a
+            self._assemble_Z_source_block(
+                geom_a, prep_a, prep_a["image"], k, omega, ground=ground_a, out=Z_a
             )
 
         geom_b, rows_b, chop_b = self._medium_geometry(geom, _medium_spec.BELOW)
@@ -4521,7 +4530,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return out
 
     def _assemble_Z_source_block(
-        self, geom, prepared, sources, k, omega, *, ground=None, eps=None
+        self, geom, prepared, sources, k, omega, *, ground=None, eps=None, out=None
     ):
         """One source set's contribution to the razor-blade matrix.
 
@@ -4620,6 +4629,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
           caller's `Z -=` lands both terms; distributing it would be a
           different float64 answer, which is the whole content of the
           `"compose"` mode contract.
+
+        **`out`** (momwire#1173): when given, the finished block is
+        SUBTRACTED from `out` one row window at a time (`out[lo:hi] -=
+        rows`) and `out` is returned, so the image block never exists at
+        full size beside the matrix it folds into. Elementwise, so it is
+        the same float64 matrix as `out -= block` on the returned block;
+        the composition above is complete within each window before its
+        rows leave.
         """
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
@@ -4802,9 +4819,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         c_A = 1j * omega * self.mu
         c_Phi = 1j * omega * eps_here
         # T1's rows are overwritten in place by the finished block's rows.
-        T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
+        # With `out`, only one window of T1 exists at a time and its finished
+        # rows are subtracted from `out` before the next window is built.
+        T1 = None if out is not None else np.empty((n_basis, n_basis), np.complex128)
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
+            rows_T1 = (
+                T1[lo:hi]
+                if out is None
+                else np.empty((hi - lo, n_basis), dtype=np.complex128)
+            )
             M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
             if w_A_fn is None and _use_razor_assemble_accel():
                 # momwire#780: the gather, the falling-wing correction, the
@@ -4818,7 +4842,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # Both lanes come through here. `n_path` is a loop bound in the
                 # kernel, not a branch: 2 under `nec5_quadrature`, 2*n_qp_path
                 # under Gauss-Legendre.
-                T1[lo:hi] = _acc.razor_assemble_t1(
+                rows_T1[...] = _acc.razor_assemble_t1(
                     M0,
                     M1,
                     s_a,
@@ -4851,7 +4875,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # The observer rows are this chunk's path points, sliced out
                 # of the SAME arrays `w_A_fn` closes over, so the kernel and
                 # the closure cannot disagree about which observers these are.
-                T1[lo:hi] = _acc.razor_assemble_t1_weighted(
+                rows_T1[...] = _acc.razor_assemble_t1_weighted(
                     M0,
                     M1,
                     s_a,
@@ -4893,7 +4917,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     wA_b = w_A[:, s_b] * sig_b[None, :]
                     integrand = wA_a * mom_a + wA_b * mom_b
                 integrand *= wts[lo:hi].reshape(-1)[:, None]
-                T1[lo:hi] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+                rows_T1[...] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
             if rem_fn is not None:
                 # The remainder rides the same window, and the same wing
                 # algebra one axis over: the moment axis carries ∫Λ and ∫τΛ of
@@ -4908,14 +4932,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
                 rem_int *= wts[lo:hi].reshape(-1)[:, None]
                 Q_rows = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
-            T1[lo:hi] = c_A * T1[lo:hi] - _t2_rows(lo, hi) / c_Phi
+            rows_T1[...] = c_A * rows_T1 - _t2_rows(lo, hi) / c_Phi
             if rem_fn is not None:
                 # `C2·img + Q`, associated BEFORE the seam's single minus —
                 # the whole content of `mode == "compose"`, since
                 # `free − (C2·img + Q) ≠ (free − C2·img) − Q` in float64. The
                 # two halves meet HERE and the caller's `Z -=` is untouched.
-                T1[lo:hi] += Q_rows
-        return T1
+                rows_T1 += Q_rows
+            if out is not None:
+                out[lo:hi] -= rows_T1
+        return T1 if out is None else out
 
     def _assemble_Z(self, geom, k):
         """Fill the razor-blade impedance matrix at one wavenumber.
