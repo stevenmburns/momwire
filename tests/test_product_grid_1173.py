@@ -291,22 +291,25 @@ class _Ctx:
 
 
 def _plan_rows(A, B, monkeypatch, **flags):
+    """The plan, its product filled by the tiles (`_ProductTiles`, one tile
+    at the shipped budget) through a spy evaluation whose values name their
+    row and kernel, and the rows each evaluation call was handed."""
     seen = []
-    real = ni.designed_rows_permuted
 
     def spy(eps_t, k2, rows, rtol=1e-10, lam_mult=ni._LAM_MULT):
         seen.append(np.array(rows, copy=True))
-        v = np.zeros((rows.shape[0], 6), dtype=np.complex128)
-        v[:, 0] = np.arange(rows.shape[0])  # a value naming its row
-        return v, None
+        base = sum(s.shape[0] for s in seen[:-1])
+        r = base + np.arange(rows.shape[0])
+        return r[:, None] + 1j * np.arange(6)[None, :], None
 
     with monkeypatch.context() as mp:
         mp.setattr(ni, "designed_rows_permuted", spy)
         for k, v in flags.items():
             mp.setattr(cf, k, v)
         plan = cf._product_plan(_Ctx(), 1.0, 1.0, A, B, 0.0)
-    del real
-    return plan, seen
+        tiles = cf._ProductTiles(plan, 1.0, 1.0, 1 << 20)
+        list(tiles.chunks(1 << 20))
+    return (tiles.product, plan.fast, plan.chunk_idx), seen
 
 
 @pytest.mark.parametrize("shape", ["one_group", "below_group", "two_groups"])
@@ -343,7 +346,7 @@ def test_plan_rows_are_the_grid_rows_awkward_values(shape, monkeypatch):
     assert np.array_equal(np.signbit(got), np.signbit(want))
     # Each grid pair's served value row is its triple's row.
     nA, nB = A["nodes"].shape[0], B["nodes"].shape[0]
-    idx = chunk_idx(slice(0, nB))
+    idx = chunk_idx(np.arange(nB))
     rows_of = product.value_rows(want)
     assert np.array_equal(rows_of, np.arange(want.shape[0]))
     rho, (zA,), (zB,), _s = cf._direct_coords(
@@ -386,7 +389,11 @@ def test_product_memo_is_a_triple_memo_holding_the_union(monkeypatch):
     memo = ni.ProductMemo()
     memo.set_product(product)
     ref = ni.TripleMemo()
-    ref.insert(rows, product.vals[product.row_vrow])
+    # The tiled product keeps V and W only (momwire#1173 design C); the other
+    # four kernels read back as NaN, which the reference is given too.
+    ref.insert(rows, product.value_block(product.value_rows_in_order()))
+    assert product.kernels == ("V", "W")
+    assert np.isnan(ref.values()[0][0]) and not np.isnan(ref.values()[0][1])
     extra = np.array([[3.0, 0.5, -0.1], [3.0, 7.0, -0.1]])
     memo.insert(extra, np.full((2, 6), 9 + 1j))
     ref.insert(extra, np.full((2, 6), 9 + 1j))
@@ -394,9 +401,13 @@ def test_product_memo_is_a_triple_memo_holding_the_union(monkeypatch):
     ask[0, 2] = -0.0 if ask[0, 2] == 0 else ask[0, 2]
     h1, b1 = memo.lookup(ask)
     h2, b2 = ref.lookup(ask)
-    assert np.array_equal(h1, h2) and np.array_equal(b1[h1], b2[h2])
+    assert np.array_equal(h1, h2)
+    assert np.array_equal(b1[h1], b2[h2], equal_nan=True)
     assert memo.keys() == ref.keys() and len(memo) == len(ref)
-    assert all(np.array_equal(x, y) for x, y in zip(memo.values(), ref.values()))
+    assert all(
+        np.array_equal(x, y, equal_nan=True)
+        for x, y in zip(memo.values(), ref.values())
+    )
     with pytest.raises(ValueError, match="once"):
         memo.set_product(product)
 
