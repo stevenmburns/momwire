@@ -2859,15 +2859,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             lo = self._remainder_pair_moments(geom, obs, src, base, grid)
             dJ[run] = (hi - lo)[:, 0]
 
-        # Every (basis, wing) resting on each segment, padded with -1.
-        flat = supp_seg.ravel()
-        counts = np.bincount(flat, minlength=n_seg)
-        width = int(counts.max()) if counts.size else 0
-        order = np.argsort(flat, kind="stable")
-        starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
-        ent = np.full((n_seg, width), -1, dtype=np.int64)
-        pos = np.arange(flat.size) - np.repeat(starts, counts)
-        ent[flat[order], pos] = order
+        ent = self._segment_wing_table(supp_seg, polys, n_seg)
+        self._last_pair_wing_width = int(ent.shape[1])
         valid = ent >= 0
         m_of = np.where(valid, ent // d1, 0)
         a_of = np.where(valid, ent % d1, 0)
@@ -3562,6 +3555,31 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if pairs is not None and pairs[0].size:
             self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
         return Q
+
+    @staticmethod
+    def _segment_wing_table(supp_seg, polys, n_seg):
+        """`(n_seg, width)` flat (basis * d1 + wing) indices of every REAL
+        wing resting on each segment, in flat order, padded with -1.
+
+        `supp_seg` pads a basis's unused wing slots with segment 0 and a zero
+        polynomial, so read raw every padded slot lands on segment 0: on a
+        48-radial screen its list was 198 wide where a real segment carries
+        three, and the correction's (pairs, width, width) transient reached
+        7 GiB (the #1189 regression found by momwire#1131). A slot whose
+        polynomial is identically zero contributes exactly zero wherever it
+        rests, so dropping it changes no entry of Q.
+        """
+        flat_all = supp_seg.ravel()
+        real = np.flatnonzero(np.any(polys != 0.0, axis=2).ravel())
+        flat = flat_all[real]
+        counts = np.bincount(flat, minlength=n_seg)
+        width = int(counts.max()) if counts.size else 0
+        order = np.argsort(flat, kind="stable")
+        starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        ent = np.full((n_seg, width), -1, dtype=np.int64)
+        pos = np.arange(flat.size) - np.repeat(starts, counts)
+        ent[flat[order], pos] = real[order]
+        return ent
 
     @staticmethod
     def _remainder_order_census(n_seg, q_fill, pairs):
