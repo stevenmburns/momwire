@@ -131,13 +131,16 @@ def test_the_sparse_sandwich_is_the_dense_one_at_rounding(monkeypatch):
     real_main = CF._main_sandwich
     got = []
 
-    def main(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None):
+    def main(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None, ends=None):
         # The whole block, on a fresh memo of its own (the fill's memo is
         # fresh here too): razor asks only its support sub-block since
-        # momwire#1173 design B, and this compares every entry.
+        # momwire#1173 design B, and this compares every entry. `ends` (the
+        # fused end loops, design C phase 2) rides the real call only.
         whole = real_main(ctx, A, B, eps_t, k_p, c1, gz, memo=type(memo)())
         got.append((ctx, A, B, eps_t, k_p, c1, gz, whole))
-        return real_main(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, support=support)
+        return real_main(
+            ctx, A, B, eps_t, k_p, c1, gz, memo=memo, support=support, ends=ends
+        )
 
     monkeypatch.setattr(CF, "_main_sandwich", main)
     _razor_fill(crossing_deck(1))

@@ -17,6 +17,8 @@ it exists for.
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -110,44 +112,35 @@ def test_without_a_memo_every_span_is_one_end():
 
 
 class _EndCalls:
-    """Counts `_tables` calls made from inside the two end routines, the
+    """Counts `_tables` calls made by the end loops' table routines, the
     labelled ones among them, the ends they served and the spans
-    `_end_groups` planned for them."""
+    `_end_groups` planned for them.
+
+    Counted at the span planner and at the table call itself, not around
+    `_ends_and_corner`: since momwire#1173 design C phase 2 a product block's
+    loops run through `_FusedEnds` (their slow spans before the tiles), which
+    plans and calls through the same two routines."""
+
+    _CALLERS = ("_end_tables", "_end_tables_product")
 
     def __init__(self, monkeypatch):
         self.calls = self.labelled = self.ends = self.spans = 0
-        depth = [0]
-        tables = cf._tables
+        tables, groups = cf._tables, cf._end_groups
 
         def spy(*a, **k):
-            if depth[0]:
+            if sys._getframe(1).f_code.co_name in self._CALLERS:
                 self.calls += 1
                 self.labelled += k.get("group_labels") is not None
             return tables(*a, **k)
 
+        def spy_groups(n_ends, n_nodes, memo):
+            out = groups(n_ends, n_nodes, memo)
+            self.ends += n_ends
+            self.spans += len(out)
+            return out
+
         monkeypatch.setattr(cf, "_tables", spy)
-
-        for name in ("_ends_and_corner", "_ends_and_corner_reversed"):
-            real = getattr(cf, name)
-
-            def wrapped(
-                ctx, A, B, *a, _real=real, _fwd=name == "_ends_and_corner", **k
-            ):
-                loops = []
-                if not _fwd or k.get("test_ends", True):
-                    loops.append((len(A["ends"]), B["nodes"].shape[0]))
-                if not _fwd or k.get("source_ends", True):
-                    loops.append((len(B["ends"]), A["nodes"].shape[0]))
-                for n_ends, n_nodes in loops:
-                    self.ends += n_ends
-                    self.spans += len(cf._end_groups(n_ends, n_nodes, k.get("memo")))
-                depth[0] += 1
-                try:
-                    return _real(ctx, A, B, *a, **k)
-                finally:
-                    depth[0] -= 1
-
-            monkeypatch.setattr(cf, name, wrapped)
+        monkeypatch.setattr(cf, "_end_groups", spy_groups)
 
 
 def _z(make, monkeypatch, *, budget=None, labels=True):
