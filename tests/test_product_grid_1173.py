@@ -21,9 +21,12 @@ chosen to reach a different route:
 
   crossing1, detached         one group on each side: product, slots z and z′
   fan_rise, sloped            one above group, a below line spanning depths
-  detached_hub                three source radii: one product per partition
-  two_node (cap lifted)       TWO above groups: the multi-group merge
+  detached_hub                four radii: one product per source partition
+  two_node (cap lifted)       TWO above groups: the multi-group merge (by
+                              default the candidate cap sends it to the grid)
   lean20                      a leaning mast: every node its own group, grid route
+  leaning mast over one rod   the below side grouped (z′ slot)
+  WA7ARK ground-rod EFHW      the real-world deck: below rod grouped, 3 blocks
   buried_dipole               no crossing fill: the two below-plane bounds only
 
 The negative controls make the route wrong on purpose and require the same
@@ -34,7 +37,8 @@ every fast end served one product row off.
 Measured 2026-09-24 by script against origin/main 9479305, Z to the bit (see
 the PR): razor hub_deck(16) x2 / x4 / x8 (x16 on Skylake), crossing_deck(1),
 the detached pair and hub, lean20, two_node, fan_rise, sloped radials, the
-buried dipole and WA7ARK's ground-rod EFHW, nec5 lane and the default lane.
+buried dipole and WA7ARK's ground-rod EFHW on the nec5 lane, and all of
+them on the default lane up to hub x4.
 """
 
 from __future__ import annotations
@@ -596,3 +600,46 @@ def test_the_support_block_is_the_full_blocks_slice(corner, monkeypatch):
     s._assemble_Z(s._build_geometry(), s.k)
     # One forward call per below radius (three) and one reversed (the mast).
     assert len(seen) == 4 and all(seen), seen
+
+
+def _wa7ark(nec5):
+    """WA7ARK's 40 m EFHW with its jumper to a ground rod, built the way
+    `serve` builds it (`test_eznec_phantom_geometry_1139.built`) as razor:
+    razor-2p on the nec5 lane, the bare RazorSolver on the default one."""
+    import test_eznec_phantom_geometry_1139 as ph
+
+    from momwire.eznec import _serve
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_serve, "BASIS", "razor-2p")
+        if not nec5:
+            mp.setattr(ph, "basis_entry", lambda _b: (RazorSolver, {}))
+        _mesh, s = ph.built(ph.wa7ark_deck())
+    assert isinstance(s, RazorSolver) and s.nec5_quadrature is nec5
+    return s
+
+
+def _bits(Z):
+    return np.ascontiguousarray(Z).view(np.uint64)
+
+
+@pytest.mark.parametrize(
+    "nec5", [True, pytest.param(False, marks=pytest.mark.slow)], ids=["nec5", "default"]
+)
+def test_wa7ark_ground_rod_takes_the_below_grouped_product_to_the_bit(nec5):
+    """The real-world deck: one short rod crossing the plane under a sloping
+    antenna with above-side junctions. The above nodes are all distinct in
+    (x, y) and the rod is one group, so every cross block takes the product
+    grouped on the BELOW side (z′ slot); Z equals the grid route's to the
+    bit (the default lane is 50-85 s here, so it rides the push lane)."""
+    make = lambda: _wa7ark(nec5)  # noqa: E731
+    ref, r_off = _fill(make, **{"cf._PRODUCT_TABLES": False})
+    got, r = _fill(make)
+    assert ref.shape == (207, 207)
+    assert r_off["cf.main_product"] == 0 and r_off["cf.main_generic"] == 0
+    assert r["cf.main_product"] == r["cf.main_product_zp"] == 3, r
+    assert r["cf.main_product_z"] == 0 and r["cf.main_generic"] == 0, r
+    assert r["cf.main_product_groups"] == 1, r
+    if nec5:
+        assert r["cf.ends_fast"] > 400, r
+    assert np.array_equal(_bits(got), _bits(ref))
