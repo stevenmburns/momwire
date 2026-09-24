@@ -497,17 +497,25 @@ class Remainder:
 
     # --- the B-spline-shaped convenience --------------------------------
 
-    def evaluate(self, supp_seg, polys):
+    def evaluate(self, supp_seg, polys, restrict=None):
         """`Q[m, n]` over the whole basis, as `_Z_sommerfeld_remainder`
         returns it — the Galerkin block, i.e. `field_windows`' operation
         with the B-spline fill's own testing rule already applied.
+
+        `restrict` (momwire#1131) is the B-spline fill's observer-row
+        restriction, passed straight through: Q comes back as the
+        `(len(R), n_basis)` rows it names.
 
         Sign convention unchanged: the caller ADDS this to the C₂ image and
         takes one global minus (`C2·img + Q`, then `Z -=`), which is the
         composition `mode == "compose"` names.
         """
+        if restrict is None:
+            return self._solver._Z_sommerfeld_remainder(
+                self._geom, supp_seg, polys, self._eps_tilde
+            )
         return self._solver._Z_sommerfeld_remainder(
-            self._geom, supp_seg, polys, self._eps_tilde
+            self._geom, supp_seg, polys, self._eps_tilde, restrict=restrict
         )
 
 

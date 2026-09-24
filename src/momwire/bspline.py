@@ -851,6 +851,103 @@ def _contiguous_runs(idx):
     return [(int(idx[s0]), int(idx[s1 - 1]) + 1) for s0, s1 in zip(starts, stops)]
 
 
+class _ObserverRows:
+    """The observer restriction of the ABOVE-GROUND fill (momwire#1131) —
+    the twin of the buried fill's `rows=` / `compact=` (momwire#1029,
+    #1132), threaded through the chunked writers instead of the pair
+    classes.
+
+    `seg_rows` is a sorted set of global segment indices made of whole
+    wires; `basis_rows` (R) is the basis rows whose whole live support lies
+    inside it (`_below_interface._crossing_basis_rows`, which refuses a split
+    basis by name). Every writer asks this object three things, and nothing
+    else about the restriction:
+
+    * `windows(i0, i1)` — the parts of an observer chunk `[i0, i1)` that
+      hold requested segments, as contiguous sub-windows. The writers keep
+      the DENSE fill's chunk boundaries and only drop the unrequested
+      segments inside each chunk. A basis's wings in one chunk all lie in
+      one run of whole wires, so they fall in one sub-window, and each
+      `(m, n)` entry receives the same addend, in the same order, as the
+      dense chunk gave it — which is why a requested row is the dense
+      chunked fill's row bit for bit, not merely to roundoff.
+    * `held(m_idx)` — `m_idx` less the rows the fill does not write. A
+      basis outside R can touch a requested window only through a PADDED
+      support slot (`supp_seg` is zero-padded, so an unlive slot names
+      segment 0), which adds an exact zero to a row nobody reads.
+    * `covers(sl)` — whether a same-edge / near-image block's edge is
+      requested. All or nothing: an edge is part of one wire.
+
+    `row_of` is None on the square target (Z stays `(n, n)` with every
+    unrequested row exactly zero) and the compact map (basis row m held at
+    row `row_of[m]`, -1 elsewhere) on the row-compact one. `loading_map` is
+    what `_apply_loading` takes in either case: the compact map, or the
+    identity on R, so the square target's unrequested rows stay zero too.
+    """
+
+    __slots__ = ("basis_rows", "loading_map", "row_of", "runs", "seg_mask", "_held")
+
+    def __init__(self, seg_rows, supp_seg, polys, n_segs, *, compact):
+        seg_rows = np.asarray(seg_rows, dtype=np.int64)
+        if seg_rows.ndim != 1 or np.any(np.diff(seg_rows) <= 0):
+            raise ValueError("rows= must be a sorted 1-D array of distinct segments")
+        if seg_rows.size and (seg_rows[0] < 0 or seg_rows[-1] >= n_segs):
+            raise ValueError(f"rows= holds a segment outside [0, {n_segs})")
+        n_basis = int(supp_seg.shape[0])
+        self.basis_rows = _below_interface._crossing_basis_rows(
+            supp_seg, polys, seg_rows
+        )
+        self.seg_mask = np.zeros(int(n_segs), dtype=bool)
+        self.seg_mask[seg_rows] = True
+        self.runs = _contiguous_runs(seg_rows)
+        self._held = np.zeros(n_basis, dtype=bool)
+        self._held[self.basis_rows] = True
+        loading_map = np.full(n_basis, -1, dtype=np.int64)
+        if compact:
+            loading_map[self.basis_rows] = np.arange(
+                self.basis_rows.size, dtype=np.int64
+            )
+            self.row_of = loading_map
+        else:
+            loading_map[self.basis_rows] = self.basis_rows
+            self.row_of = None
+        self.loading_map = loading_map
+
+    def new_Z(self, n_basis):
+        if self.row_of is None:
+            # Column-major, as `_compute_Z_dense_chunked`'s own square Z is.
+            return np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        # C order: nothing factors a row-compact Z (momwire#1132's reason).
+        return np.zeros((self.basis_rows.size, n_basis), dtype=np.complex128)
+
+    def windows(self, i0, i1):
+        out = []
+        for r0, r1 in self.runs:
+            a0, a1 = max(r0, i0), min(r1, i1)
+            if a0 < a1:
+                out.append((a0, a1))
+        return out
+
+    def held(self, m_idx):
+        return m_idx[self._held[m_idx]]
+
+    def covers(self, sl):
+        inside = self.seg_mask[sl]
+        if inside.all():
+            return True
+        if inside.any():
+            raise ValueError(
+                f"rows= covers part of the edge [{sl.start}, {sl.stop}); the "
+                f"above-ground fill restricts by whole wires (momwire#1131)"
+            )
+        return False
+
+    def kwargs(self):
+        """The assemblers' extra argument: only the compact target passes
+        one, so the square target's calls are the shipped ones."""
+        return {} if self.row_of is None else {"row_of": self.row_of}
+
+
 class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
@@ -1659,21 +1756,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return self.ground_model
 
     def _rotational_check(self):
-        """The §3 rule plus the two scope conditions that are about THIS
-        route rather than about the deck's symmetry."""
+        """The §3 rule plus the scope condition that is about THIS route
+        rather than about the deck's symmetry.
+
+        There used to be a second one: the route filled one sector through
+        the BURIED fill, the only one that could restrict its observer rows,
+        so a deck with no wire below the interface was refused. The
+        above-ground fill learned `rows=` in momwire#1131, so an elevated or
+        surface screen -- over any ground `_rotational_ground_kind` names,
+        free space included -- is served now. What breaks the symmetry is
+        still refused, by `sector_map`, condition by condition."""
         if self.use_singular_enrichment:
             raise _rotational_symmetry.RotationalSymmetryRefused(
                 "rotational symmetry: singular enrichment adds a block that is "
                 "not sector-structured, and the route has no decomposition for "
                 "it. Disable singular enrichment, or drop "
                 "rotational_symmetry=True to solve this deck densely."
-            )
-        if self.ground_z is None or not self._has_buried_wires():
-            raise _rotational_symmetry.RotationalSymmetryRefused(
-                "rotational symmetry: the route fills one sector through the "
-                "BURIED mixed-medium path (momwire#553 U5), and this deck has "
-                "no wire below the interface. Drop rotational_symmetry=True to "
-                "solve this deck densely."
             )
         return _rotational_symmetry.sector_map(self)
 
@@ -2712,7 +2810,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ).reshape(no, q, ns, q)
         return np.einsum("paq,aqbr,Pbr->abpP", W_o, proj, W_s, optimize=True)
 
-    def _remainder_pair_correction(self, Q, geom, supp_seg, polys, grid, pairs):
+    def _remainder_pair_correction(
+        self, Q, geom, supp_seg, polys, grid, pairs, restrict=None
+    ):
         """Raise the listed segment pairs of the base-order Q to their own
         orders, in place (momwire#1189).
 
@@ -2722,8 +2822,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         two segments. Only the listed pairs are ever evaluated at a high
         order — that is the whole saving — and a deck that lists none never
         reaches here, which is what keeps it bit-identical.
+
+        `restrict` (an `_ObserverRows`, momwire#1131): `Q` holds only the
+        basis rows R, `(len(R), n_basis)`. Only the pairs whose OBSERVER
+        segment is requested are evaluated, in the list's own order, and
+        their adds land at each row's position in R -- the same products added
+        to the same entries in the same sequence, so the rows stay bitwise.
         """
         I, J, Qp = pairs
+        row_pos = None
+        if restrict is not None:
+            keep = restrict.seg_mask[I]
+            I, J, Qp = I[keep], J[keep], Qp[keep]
+            row_pos = np.full(supp_seg.shape[0], -1, dtype=np.int64)
+            row_pos[restrict.basis_rows] = np.arange(
+                restrict.basis_rows.size, dtype=np.int64
+            )
         base = int(self.n_qp_sommerfeld)
         d1 = self.degree + 1
         n_seg = geom["seg_l"].shape[0]
@@ -2768,7 +2882,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             rows = np.broadcast_to(m_of[Ic][:, :, None], contrib.shape)
             cols = np.broadcast_to(m_of[Jc][:, None, :], contrib.shape)
             keep = valid[Ic][:, :, None] & valid[Jc][:, None, :]
-            np.add.at(Q, (rows[keep], cols[keep]), contrib[keep])
+            if row_pos is None:
+                np.add.at(Q, (rows[keep], cols[keep]), contrib[keep])
+            else:
+                r = row_pos[rows[keep]]
+                held = r >= 0
+                np.add.at(Q, (r[held], cols[keep][held]), contrib[keep][held])
         return Q
 
     def _near_image_edge_blocks(self, geom):
@@ -3250,7 +3369,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             eps_t, self.k, r1_max, self.omega, self.mu, self._cancel_flag
         )
 
-    def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t):
+    def _Z_sommerfeld_remainder(self, geom, supp_seg, polys, eps_t, restrict=None):
         """Galerkin block Q[m,n] = ∫∫ f_m f_n · t_m·F(r, r')·t_n of the
         smooth Sommerfeld remainder field F (theory manual eqs 143-147:
         the ground field minus its C2-scaled exact-image part). The EFIE
@@ -3269,6 +3388,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (d+1)^2 * N^2 moment tensor is ever live (issue #343): the fused
         kernel bands internally (64 MiB slab), the numpy fallback below
         assembles each chunk into Q as it goes.
+
+        `restrict` (an `_ObserverRows`, momwire#1131) returns only the
+        `(len(R), n_basis)` rows R it names. On the fused kernel that is its
+        own rectangular form with the requested segments as observers: every
+        observer segment's moment slab is computed independently of the
+        others, and the kernel's banding is order-preserving (see its
+        header), so each row is the square block's row bit for bit. The grid
+        extent and the quadrature orders (the base order and momwire#1189's
+        raised-pair list) are sized from the WHOLE mesh either way; the raised
+        pairs are then applied to the requested rows only
+        (`_remainder_pair_correction`). The numpy fallback fills the square
+        block and slices it.
         """
         gz = self.ground_z
         seg_l = geom["seg_l"]
@@ -3322,12 +3453,50 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # rectangular kernel, with the support map == supp_seg (segment set
         # is all segments). The kernel's own moment slab is banded over
         # observer segments (#343), so the full-N call is bounded too.
+        if restrict is not None and not (
+            _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q")
+        ):
+            R = restrict.basis_rows
+            return np.ascontiguousarray(
+                self._Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)[R]
+            )
         if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
             nodes_c = np.ascontiguousarray(nodes, dtype=np.float64)
             tang_c = np.ascontiguousarray(tang, dtype=np.float64)
             W_c = np.ascontiguousarray(W, dtype=np.float64)
             supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
             polys_c = np.ascontiguousarray(polys, dtype=np.float64)
+            if restrict is not None:
+                # The requested segments as the observer set, and R's support
+                # map re-expressed in it. An unlive (zero-padded) slot keeps
+                # a valid local index -- its polynomial is zero, so it adds
+                # an exact zero wherever it lands.
+                obs = np.flatnonzero(restrict.seg_mask)
+                R = restrict.basis_rows
+                live = np.any(polys_c[R] != 0.0, axis=2)
+                loc = np.searchsorted(obs, supp_c[R])
+                loc = np.where(live, loc, 0)
+                Q = _acc.sommerfeld_remainder_bspline_Q(
+                    np.ascontiguousarray(nodes_c[obs]),
+                    np.ascontiguousarray(tang_c[obs]),
+                    np.ascontiguousarray(W_c[:, obs, :]),
+                    nodes_c,
+                    tang_c,
+                    W_c,
+                    np.ascontiguousarray(loc, dtype=np.int64),
+                    np.ascontiguousarray(polys_c[R]),
+                    supp_c,
+                    polys_c,
+                    float(gz),
+                    float(self.k),
+                    *_sommerfeld.grid_cpp_args(grid),
+                    int(self._cancel_flag),
+                )
+                if pairs is not None and pairs[0].size:
+                    self._remainder_pair_correction(
+                        Q, geom, supp_seg, polys, grid, pairs, restrict=restrict
+                    )
+                return Q
             Q = _acc.sommerfeld_remainder_bspline_Q(
                 nodes_c,
                 tang_c,
@@ -3983,7 +4152,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         bytes_per_pair_point = 80
         return n_qp2 * n_segs * bytes_per_pair_point
 
-    def _compute_Z_dense_chunked(self, geom, k, supp_seg, polys, same_edge_prep=None):
+    def _compute_Z_dense_chunked(
+        self, geom, k, supp_seg, polys, same_edge_prep=None, *, restrict=None
+    ):
         """Free-space dense Z without materialising the (d+1, d+1, N, N)
         moment tensor (issue #136).
 
@@ -4004,6 +4175,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         formed inside the assembler from the (N, 3) tangent table, rather
         than from an N×N dot matrix that would sit alongside Z for the
         whole build at half its size (issue #318).
+
+        `restrict` (an `_ObserverRows`, momwire#1131) fills only the observer
+        rows it names, into the target it allocates (square with the other
+        rows zero, or row-compact). None is the shipped fill, call for call.
+        The chunk boundaries are the dense fill's in both cases -- see
+        `_ObserverRows.windows` for why that is what makes the rows bitwise.
         """
         d = self.degree
         a_row = self._seg_radius(geom)
@@ -4018,13 +4195,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Fortran order: scipy.linalg.solve(overwrite_a=True) can only
         # factor in place on a column-major matrix — C order would silently
         # cost a full n_basis-squared copy at solve time (issue #136).
-        Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        if restrict is None:
+            Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+            row_kw = {}
+        else:
+            Z = restrict.new_Z(n_basis)
+            row_kw = restrict.kwargs()
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
         tan_c = np.ascontiguousarray(tangents, dtype=np.float64)
         all_n = np.arange(n_basis, dtype=np.int64)
 
         def _accumulate(J_win, i0, i1, j0, j1, m_idx, n_idx):
+            if restrict is not None:
+                m_idx = restrict.held(m_idx)
+                if m_idx.size == 0:
+                    return
             # Producer contract, not a conversion: every window handed here
             # is already C-contiguous complex128, so the ascontiguousarray
             # this used to wrap it in returned the SAME object on every
@@ -4053,6 +4239,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 float(self.mu),
                 Z,
                 self._cancel_flag,
+                **row_kw,
             )
 
         def _bases_touching(lo, hi):
@@ -4090,20 +4277,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i0 in range(0, n_segs, chunk):
             self._checkpoint()  # per observer chunk of the fill+assemble
             i1 = min(i0 + chunk, n_segs)
-            J_chunk = _seg_seg_full_moments_offedge(
-                seg_l[i0:i1],
-                seg_r[i0:i1],
-                seg_l,
-                seg_r,
-                a_row[i0:i1],
-                k,
-                d,
-                self.n_qp_pair,
-                ek=_ek_slice(ek, rows=slice(i0, i1)),
-                ladder=ladder,
-            )
-            _accumulate(J_chunk, i0, i1, 0, n_segs, _bases_touching(i0, i1), all_n)
-            del J_chunk  # drop this window before the next one is built (#338)
+            # momwire#1131: the requested parts of this chunk, or the chunk.
+            for w0, w1 in [(i0, i1)] if restrict is None else restrict.windows(i0, i1):
+                J_chunk = _seg_seg_full_moments_offedge(
+                    seg_l[w0:w1],
+                    seg_r[w0:w1],
+                    seg_l,
+                    seg_r,
+                    a_row[w0:w1],
+                    k,
+                    d,
+                    self.n_qp_pair,
+                    ek=_ek_slice(ek, rows=slice(w0, w1)),
+                    ladder=ladder,
+                )
+                _accumulate(J_chunk, w0, w1, 0, n_segs, _bases_touching(w0, w1), all_n)
+                del J_chunk  # drop this window before the next one is built (#338)
 
         # Same-edge fixup: the sweep above added the full-kernel block for
         # every pair; each same-edge block must instead be the analytic
@@ -4186,6 +4375,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         else:
             entries = [(sl, A_st, reg, None, None) for sl, A_st, reg in same_edge_prep]
         for sl, A_st, reg, ed_arc_e, a_w in entries:
+            if restrict is not None and not restrict.covers(sl):
+                # An unrequested edge writes only its own wire's rows.
+                continue
             self._checkpoint()  # per same-edge correction block
             A_reg = None
             if reg is not None:
@@ -4262,7 +4454,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         return Z
 
-    def _accumulate_Z_image_chunked(self, Z, geom, k, supp_seg, polys, weights_fn):
+    def _accumulate_Z_image_chunked(
+        self, Z, geom, k, supp_seg, polys, weights_fn, *, restrict=None
+    ):
         """Chunked ground-image accumulation: subtract the weighted image
         sub-assembly from Z without materialising the (d+1, d+1, N, N)
         image tensor OR an intermediate n_basis² matrix (issue #136,
@@ -4286,7 +4480,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (issue #323). Producing them per chunk is what retires the 2× dense-Z
         residency this path used to carry: nothing N² in the weights is ever
         allocated. See `PotentialGround.weight_windows` for the per-mode
-        producers."""
+        producers.
+
+        `restrict` (an `_ObserverRows`, momwire#1131) is
+        `_compute_Z_dense_chunked`'s: `Z` is the target it allocated, and
+        only its rows are written, through the dense fill's own chunks."""
         d = self.degree
         a_row = self._seg_radius(geom)
         seg_l = geom["seg_l"]
@@ -4322,62 +4520,76 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             + self._offedge_fallback_row_bytes(n_segs)
         )
         chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
-        for i0 in range(0, n_segs, chunk):
+        row_kw = {} if restrict is None else restrict.kwargs()
+
+        def _rows(m_idx):
+            return m_idx if restrict is None else restrict.held(m_idx)
+
+        for c0 in range(0, n_segs, chunk):
             self._checkpoint()  # per observer chunk of the image fill
-            i1 = min(i0 + chunk, n_segs)
-            J_chunk = _seg_seg_full_moments_offedge(
-                seg_l[i0:i1],
-                seg_r[i0:i1],
-                seg_l_img,
-                seg_r_img,
-                a_row[i0:i1],
-                k,
-                d,
-                self.n_qp_pair,
-                ek=_ek_slice(ek, rows=slice(i0, i1)),
-            )
-            m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
-            # Same producer contract as `_accumulate` in the free-space
-            # chunked fill (issue #318 audit): the offedge producer emits
-            # C-contiguous complex128 on every path, so the wrapper this
-            # replaced was the same dead no-op. `forcecast` on the
-            # assembler stays the safety net.
-            assert J_chunk.dtype == np.complex128 and J_chunk.flags.c_contiguous, (
-                f"moment window must be C-contiguous complex128, got {J_chunk.dtype}"
-            )
-            # The window producers are gemm/elementwise expressions, so they
-            # emit C-contiguous complex128 of exactly the chunk's shape
-            # already — same producer contract as the moment window above,
-            # asserted rather than re-wrapped.
-            w_A_win, w_Phi_win = weights_fn(i0, i1)
-            assert all(
-                w.shape == (i1 - i0, n_segs)
-                and w.dtype == np.complex128
-                and w.flags.c_contiguous
-                for w in (w_A_win, w_Phi_win)
-            ), f"weight windows must be C-contiguous complex128 ({i1 - i0}, {n_segs})"
-            _acc.assemble_Z_bspline_weighted_windowed(
-                J_chunk,
-                supp_c,
-                polys_c,
-                # The j-window is the full [0, n_segs), so the producers hand
-                # back whole rows.
-                w_A_win,
-                w_Phi_win,
-                np.nonzero(m_mask)[0].astype(np.int64),
-                all_n,
-                int(i0),
-                int(i1),
-                0,
-                int(n_segs),
-                float(self.omega),
-                float(self.eps),
-                float(self.mu),
-                complex(-1.0),
-                Z,
-                self._cancel_flag,
-            )
-            del J_chunk, w_A_win, w_Phi_win  # (#338)
+            c1 = min(c0 + chunk, n_segs)
+            if restrict is None:
+                wins = [(c0, c1)]
+            else:
+                # momwire#1131: the requested parts of this chunk.
+                wins = restrict.windows(c0, c1)
+            for i0, i1 in wins:
+                J_chunk = _seg_seg_full_moments_offedge(
+                    seg_l[i0:i1],
+                    seg_r[i0:i1],
+                    seg_l_img,
+                    seg_r_img,
+                    a_row[i0:i1],
+                    k,
+                    d,
+                    self.n_qp_pair,
+                    ek=_ek_slice(ek, rows=slice(i0, i1)),
+                )
+                m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
+                # Same producer contract as `_accumulate` in the free-space
+                # chunked fill (issue #318 audit): the offedge producer emits
+                # C-contiguous complex128 on every path, so the wrapper this
+                # replaced was the same dead no-op. `forcecast` on the
+                # assembler stays the safety net.
+                assert J_chunk.dtype == np.complex128 and J_chunk.flags.c_contiguous, (
+                    f"moment window must be C-contiguous complex128, got {J_chunk.dtype}"
+                )
+                # The window producers are gemm/elementwise expressions, so they
+                # emit C-contiguous complex128 of exactly the chunk's shape
+                # already — same producer contract as the moment window above,
+                # asserted rather than re-wrapped.
+                w_A_win, w_Phi_win = weights_fn(i0, i1)
+                assert all(
+                    w.shape == (i1 - i0, n_segs)
+                    and w.dtype == np.complex128
+                    and w.flags.c_contiguous
+                    for w in (w_A_win, w_Phi_win)
+                ), (
+                    f"weight windows must be C-contiguous complex128 ({i1 - i0}, {n_segs})"
+                )
+                _acc.assemble_Z_bspline_weighted_windowed(
+                    J_chunk,
+                    supp_c,
+                    polys_c,
+                    # The j-window is the full [0, n_segs), so the producers hand
+                    # back whole rows.
+                    w_A_win,
+                    w_Phi_win,
+                    _rows(np.nonzero(m_mask)[0].astype(np.int64)),
+                    all_n,
+                    int(i0),
+                    int(i1),
+                    0,
+                    int(n_segs),
+                    float(self.omega),
+                    float(self.eps),
+                    float(self.mu),
+                    complex(-1.0),
+                    Z,
+                    self._cancel_flag,
+                    **row_kw,
+                )
+                del J_chunk, w_A_win, w_Phi_win  # (#338)
 
         # Near-image fixup (momwire#631), the image-side twin of the
         # free-space same-edge fixup in `_compute_Z_dense_chunked`: the sweep
@@ -4387,6 +4599,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # DIFFERENCE, so the pairs it does not name keep exactly the
         # arithmetic they had rather than merely the same value.
         for sl, arc, a_eff in self._near_image_edge_blocks(geom):
+            if restrict is not None and not restrict.covers(sl):
+                continue  # writes only its own (unrequested) wire's rows
             self._checkpoint()  # per near-image correction block
             J_edge = _seg_seg_full_moments_offedge(
                 seg_l[sl],
@@ -4413,7 +4627,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # its own columns, so both tables are narrowed to match.
                 np.ascontiguousarray(w_A_win[:, sl], dtype=np.complex128),
                 np.ascontiguousarray(w_Phi_win[:, sl], dtype=np.complex128),
-                e_idx,
+                _rows(e_idx),
                 e_idx,
                 int(sl.start),
                 int(sl.stop),
@@ -4425,6 +4639,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 complex(-1.0),
                 Z,
                 self._cancel_flag,
+                **row_kw,
             )
             del corr, w_A_win, w_Phi_win  # (#338)
 
@@ -6231,9 +6446,19 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         return tensor_bytes <= (self.swept_mem_mb << 20)
 
-    def _compute_Z_operator(self, geom, supp_seg, polys, same_edge_prep=None):
+    def _compute_Z_operator(
+        self, geom, supp_seg, polys, same_edge_prep=None, rows=None, compact=False
+    ):
         """Loaded (free-space or grounded) dense Z for one k — the operator
         construction shared by `compute_impedance` and `compute_y_matrix`.
+
+        `rows` / `compact` restrict the OBSERVER rows (momwire#1131), with
+        the buried fill's contract (`_compute_Z_operator_buried`): `rows` is a
+        sorted array of global segments made of whole wires, and the fill
+        computes only the basis rows R whose support lies inside it --
+        square with every other row exactly zero, or with `compact=True` as
+        `(Z[R], R)`. `rows=None` is the code below, untouched. See
+        `_compute_Z_operator_rows` for the restricted route.
 
         Dispatches to the chunked fill+assemble (issue #136) whenever the
         (d+1, d+1, N, N) moment tensor would blow the `swept_mem_mb`
@@ -6248,7 +6473,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # wavenumbers, two permittivities and three field-form blocks.
             # An all-above deck never reaches it, which is what keeps the
             # shipped path byte-identical.
-            return self._compute_Z_operator_buried(geom, supp_seg, polys)
+            if rows is None and not compact:
+                return self._compute_Z_operator_buried(geom, supp_seg, polys)
+            return self._compute_Z_operator_buried(
+                geom, supp_seg, polys, rows=rows, compact=compact
+            )
+        if rows is not None:
+            return self._compute_Z_operator_rows(
+                geom,
+                supp_seg,
+                polys,
+                rows,
+                compact=compact,
+                same_edge_prep=same_edge_prep,
+            )
+        if compact:
+            raise ValueError("compact=True restricts rows: pass rows= as well")
 
         dense_tensor_fits = self._dense_tensor_fits_budget(geom["n_segs_total"])
 
@@ -6316,6 +6556,92 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Distributed series wire loading (independent of ground: it's a
         # wire property, added once to the final Z).
         return self._apply_loading(Z)
+
+    def _compute_Z_operator_rows(
+        self, geom, supp_seg, polys, rows, *, compact=False, same_edge_prep=None
+    ):
+        """The above-ground Z restricted to observer `rows` (momwire#1131),
+        which is what lets the sector route (momwire#1029) serve an elevated
+        or surface screen and not only a buried one.
+
+        Every writer of the dense route, in the dense route's order, each
+        restricted on its observer axis and nothing else: the free-space
+        sweep and its same-edge fixup (`_compute_Z_dense_chunked`), the
+        image sweep and its near-image fixup (`_accumulate_Z_image_chunked`,
+        whose weight windows are row-local for every ground), the Sommerfeld
+        remainder (`_Z_sommerfeld_remainder`) and the loading. The source
+        axis, the ladder, the grid extent and every quadrature order are the
+        whole mesh's, so a requested row is the DENSE CHUNKED fill's row bit
+        for bit -- the gate this route is held to.
+
+        **Always the chunked route**, including on a deck whose moment tensor
+        fits `swept_mem_mb`, where the dense fill takes the tensor route
+        instead. The restricted tensor is not a thing the tensor assembler
+        can take (it is square in the basis), and the two dense routes are
+        the same numbers to roundoff rather than to the bit: the tensor route
+        OVERWRITES each same-edge block, the chunked one adds a correction
+        onto the sweep's. So on such a deck the rows agree with the dense
+        answer at the chunked-vs-tensor roundoff, which the route's own
+        Z_in / currents gate already covers.
+
+        Where the windowed assemblers cannot serve (no accelerator, a degree
+        or `n_qp_pair` they do not take, no row-compact twin for
+        `compact=True`), the dense Z is filled and sliced: the same numbers,
+        none of the saving.
+        """
+        n_basis = int(supp_seg.shape[0])
+        restrict = _ObserverRows(
+            rows, supp_seg, polys, geom["n_segs_total"], compact=compact
+        )
+        ground = _potential_ground.potential_ground_for(self, geom, self.k, self.omega)
+        serves = (
+            _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+            and self.degree <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and self._accel_serves_n_qp_pair
+            and (ground is None or _HAVE_BSPLINE_W_WINDOWED_ASSEMBLE_ACCEL)
+            and (not compact or _HAVE_WINDOWED_ROW_OF)
+        )
+        R = restrict.basis_rows
+        if not serves:
+            Z_full = self._compute_Z_operator(
+                geom, supp_seg, polys, same_edge_prep=same_edge_prep
+            )
+            if compact:
+                return np.ascontiguousarray(Z_full[R]), R
+            Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+            Z[R] = Z_full[R]
+            return Z
+
+        self._checkpoint()  # after geometry/basis, before the J-block fill
+        Z = self._compute_Z_dense_chunked(
+            geom,
+            self.k,
+            supp_seg,
+            polys,
+            same_edge_prep=same_edge_prep,
+            restrict=restrict,
+        )
+        if ground is not None:
+            self._checkpoint()  # between fills: before the image J-block fill
+            self._accumulate_Z_image_chunked(
+                Z,
+                geom,
+                self.k,
+                supp_seg,
+                polys,
+                ground.weight_windows(),
+                restrict=restrict,
+            )
+            remainder = ground.remainder()
+            if remainder is not None:
+                Q = remainder.evaluate(supp_seg, polys, restrict=restrict)
+                if compact:
+                    Z -= Q
+                else:
+                    Z[R] -= Q
+                del Q
+        self._apply_loading(Z, row_of=restrict.loading_map)
+        return (Z, R) if compact else Z
 
     def _port_count(self):
         """Ports `compute_port_solution` returns: [gap feeds…, junction
@@ -7153,10 +7479,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             z_out = np.zeros((k_array.shape[0], n_total), dtype=np.complex128)
 
         # The route, ahead of the batched dispatch rather than beside it:
-        # `_swept_batched_available` is False on every deck the route serves
-        # (a lower medium means `ground_eps is not None`), so ordering it
-        # here makes "the route never batches" structural instead of
-        # incidental.
+        # Since momwire#1131 the route also serves free-space and PEC
+        # screens, where `_swept_batched_available` can be True; ordering it
+        # here is what keeps "the route never batches" structural rather
+        # than incidental.
         if self._rotational_map is not None:
             return self._compute_impedance_swept_rotational(k_array, z_out)
 
