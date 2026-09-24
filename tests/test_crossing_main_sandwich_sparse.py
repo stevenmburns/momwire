@@ -131,11 +131,13 @@ def test_the_sparse_sandwich_is_the_dense_one_at_rounding(monkeypatch):
     real_main = CF._main_sandwich
     got = []
 
-    def main(ctx, A, B, eps_t, k_p, c1, gz, memo=None):
-        out = real_main(ctx, A, B, eps_t, k_p, c1, gz, memo=memo)
-        # A copy: the caller accumulates the end terms into `out` in place.
-        got.append((ctx, A, B, eps_t, k_p, c1, gz, out.copy()))
-        return out
+    def main(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None):
+        # The whole block, on a fresh memo of its own (the fill's memo is
+        # fresh here too): razor asks only its support sub-block since
+        # momwire#1173 design B, and this compares every entry.
+        whole = real_main(ctx, A, B, eps_t, k_p, c1, gz, memo=type(memo)())
+        got.append((ctx, A, B, eps_t, k_p, c1, gz, whole))
+        return real_main(ctx, A, B, eps_t, k_p, c1, gz, memo=memo, support=support)
 
     monkeypatch.setattr(CF, "_main_sandwich", main)
     _razor_fill(crossing_deck(1))
@@ -165,6 +167,9 @@ def test_chunked_tables_are_the_one_call_bit_for_bit(monkeypatch):
     column) and the detached deck (ρ varies across the grid)."""
     real, budget = CF._chunked_tables, CF._MAIN_CHUNK_BYTES
     chunks = []
+    # The grid route is the subject; these decks' nodes factorise, so they
+    # would take the product route (momwire#1173 design B) and never chunk.
+    monkeypatch.setattr(CF, "_PRODUCT_TABLES", False)
 
     def spy(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
         chunks.append(len(cols))

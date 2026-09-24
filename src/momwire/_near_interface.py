@@ -773,6 +773,219 @@ class TripleMemo:
         return iter(self.keys())
 
 
+class _SortedIds:
+    """Exact-`==` lookup of floats among `values` (distinct under `!=`):
+    `ids(q)` is the index into `values` of each query, -1 where absent.
+    Sorted once; a query is one `searchsorted` and one compare, so -0.0
+    finds 0.0 (they compare equal and sort together) and NaN finds
+    nothing (it never compares equal) — `TripleMemo`'s key equality."""
+
+    def __init__(self, values):
+        values = np.asarray(values, dtype=float)
+        self._order = np.argsort(values, kind="stable")
+        self._sorted = values[self._order]
+
+    def ids(self, q):
+        q = np.asarray(q, dtype=float)
+        out = np.full(q.shape, -1, dtype=np.intp)
+        if self._sorted.size == 0:
+            return out
+        i = np.minimum(np.searchsorted(self._sorted, q), self._sorted.size - 1)
+        ok = self._sorted[i] == q
+        out[ok] = self._order[i[ok]]
+        return out
+
+
+class _SortedCodes:
+    """`_SortedIds` for non-negative int64 codes."""
+
+    def __init__(self, codes):
+        codes = np.asarray(codes, dtype=np.int64)
+        self._order = np.argsort(codes, kind="stable")
+        self._sorted = codes[self._order]
+
+    def ids(self, q):
+        q = np.asarray(q, dtype=np.int64)
+        out = np.full(q.shape, -1, dtype=np.intp)
+        if self._sorted.size == 0:
+            return out
+        i = np.minimum(np.searchsorted(self._sorted, q), self._sorted.size - 1)
+        ok = (self._sorted[i] == q) & (q >= 0)
+        out[ok] = self._order[i[ok]]
+        return out
+
+
+class ProductSet:
+    """The distinct triples of a crossing main sandwich held as FACTORS
+    (momwire#1173 design B), built by `_crossing_fill._product_plan`.
+
+    The grouped side's nodes fall into groups sharing one exact (x, y); within
+    a group, ρ to every node of the other ("line") side is one line of
+    values, so the group's triples are {its distinct z} × {the line's distinct
+    (ρ_eff, z_line)} and the stored set is the union of those products over
+    the groups. `slot` says which table slot the grouped z fills: "z" when
+    the grouped side is the ABOVE axis (the triple is (ρ_eff, z_g, z_line)),
+    "zp" when it is the below one ((ρ_eff, z_line, z_g)).
+
+    Ids are exact-`==` classes (−0.0 with 0.0; no NaN reaches a product, the
+    plan refuses non-finite nodes): `gz` holds one representative float per
+    grouped-z id, `key_r` / `key_zl` one per key id. Group g stores
+    `rowtab[g]`, a (|z of g|, |keys of g|) table of VALUE rows — the index
+    into `vals` holding that triple's six values, with the evaluation's
+    member order (`designed_rows_permuted`) already composed in — plus
+    `zid[g]` / `kid[g]`, its local z and key ids as global ids; `row_vrow[i]`
+    is the value row of evaluated row i (`pos`, or `arange`). A triple held
+    by several groups is ONE row (the plan dedups on (z id, key id)), so
+    every rowtab entry naming it names the same value row.
+
+    `value_rows(rows)` answers the lookup: the value row of each (n, 3)
+    (ρ_eff, z, z′) query, −1 where the set does not hold it."""
+
+    def __init__(self, slot, vals, row_vrow, gz, key_r, key_zl, rowtab, zid, kid):
+        if slot not in ("z", "zp"):
+            raise ValueError(f"slot must be 'z' or 'zp', got {slot!r}")
+        self.slot = slot
+        self.vals = vals
+        self.row_vrow = row_vrow
+        self.gz = gz
+        self.key_r = key_r
+        self.key_zl = key_zl
+        self.rowtab = rowtab
+        self.zid = zid
+        self.kid = kid
+        self.n_rows = int(row_vrow.size)
+        self.fast = None  # the crossing fill's end-loop index, if it built one
+        self._gz_ids = _SortedIds(gz)
+        r_u = np.unique(key_r)  # -0.0 cannot occur in rho_eff >= a > 0
+        zl_u = np.unique(key_zl)
+        self._r_ids = _SortedIds(r_u)
+        self._zl_ids = _SortedIds(zl_u)
+        key_code = self._r_ids.ids(key_r).astype(np.int64) * zl_u.size + (
+            self._zl_ids.ids(key_zl)
+        )
+        self._n_zl = zl_u.size
+        self._key_ids = _SortedCodes(key_code)
+        n_key = key_r.size
+        self._n_key = n_key
+        if (
+            len(rowtab) == 1
+            and np.array_equal(zid[0], np.arange(gz.size))
+            and np.array_equal(kid[0], np.arange(n_key))
+        ):
+            # One group whose local ids are the global ones (the plan numbers
+            # both factors by first appearance over that one group): the row
+            # table is indexed by the global ids directly.
+            self._codes = None
+        else:
+            codes, vrow = [], []
+            for tab, zi, kj in zip(rowtab, zid, kid):
+                codes.append(
+                    (zi[:, None].astype(np.int64) * n_key + kj[None, :]).ravel()
+                )
+                vrow.append(tab.ravel())
+            codes, first = np.unique(np.concatenate(codes), return_index=True)
+            self._codes = _SortedCodes(codes)
+            self._code_vrow = np.concatenate(vrow)[first]
+
+    def value_rows(self, rows):
+        rows = np.asarray(rows, dtype=float)
+        out = np.full(rows.shape[0], -1, dtype=np.intp)
+        if rows.shape[0] == 0:
+            return out
+        gcol, lcol = (1, 2) if self.slot == "z" else (2, 1)
+        zi = self._gz_ids.ids(rows[:, gcol])
+        ri = self._r_ids.ids(rows[:, 0])
+        li = self._zl_ids.ids(rows[:, lcol])
+        ok = (zi >= 0) & (ri >= 0) & (li >= 0)
+        kj = np.full(rows.shape[0], -1, dtype=np.intp)
+        kj[ok] = self._key_ids.ids(ri[ok].astype(np.int64) * self._n_zl + li[ok])
+        ok &= kj >= 0
+        if self._codes is None:
+            out[ok] = self.rowtab[0][zi[ok], kj[ok]]
+            return out
+        c = self._codes.ids(zi[ok].astype(np.int64) * self._n_key + kj[ok])
+        hit = c >= 0
+        idx = np.flatnonzero(ok)
+        out[idx[hit]] = self._code_vrow[c[hit]]
+        return out
+
+    def row_keys(self):
+        """The stored triples as float tuples in ROW order (the order they
+        were evaluated in), each as the array memo would key it
+        (`row + 0.0`), for `ProductMemo.keys`. Test-sized; O(rows)."""
+        n = self.vals.shape[0]
+        z_of, k_of = np.full(n, -1, np.intp), np.full(n, -1, np.intp)
+        for tab, zi, kj in zip(self.rowtab, self.zid, self.kid):
+            z_of[tab] = np.broadcast_to(zi[:, None], tab.shape)
+            k_of[tab] = np.broadcast_to(kj[None, :], tab.shape)
+        z_i, k_j = z_of[self.row_vrow], k_of[self.row_vrow]
+        g = self.gz[z_i] + 0.0
+        r, zl = self.key_r[k_j] + 0.0, self.key_zl[k_j] + 0.0
+        cols = (r, g, zl) if self.slot == "z" else (r, zl, g)
+        return [tuple(t) for t in np.stack(cols, axis=1).tolist()]
+
+
+class ProductMemo(TripleMemo):
+    """A `TripleMemo` whose bulk is a `ProductSet` (momwire#1173 design B).
+
+    The crossing main sandwich's rows go into the product set, held as
+    factors plus the value block; every row inserted afterwards (the end
+    loops' fresh rows) goes into the inherited array memo. The two are
+    disjoint — only a lookup's MISSES are inserted, and a lookup asks the
+    product — so `lookup` decides hit / fresh and returns values exactly as
+    one `TripleMemo` holding their union would: a key is held iff one of
+    them holds it, and a hit returns the very floats evaluated for it. The
+    contract `designed_tables` relies on (which rows are fresh, in which
+    order, with which stored values) is therefore the array memo's.
+
+    Without a product it IS a `TripleMemo`: every method defers to it."""
+
+    def __init__(self):
+        super().__init__()
+        self.product = None
+
+    def set_product(self, product):
+        if self.product is not None or TripleMemo.__len__(self):
+            raise ValueError("a product goes into an empty ProductMemo, once")
+        self.product = product
+        self.stats["inserts"] += product.n_rows
+
+    def __len__(self):
+        n = TripleMemo.__len__(self)
+        return n if self.product is None else n + self.product.n_rows
+
+    def lookup(self, rows):
+        if self.product is None:
+            return super().lookup(rows)
+        # The array memo first (it counts the lookups and its own hits), then
+        # the product for what it missed; a key is in at most one of them.
+        if TripleMemo.__len__(self):
+            hit, block = super().lookup(rows)
+        else:
+            hit = np.zeros(rows.shape[0], dtype=bool)
+            block = np.empty((rows.shape[0], 6), dtype=np.complex128)
+            self.stats["lookups"] += rows.shape[0]
+        todo = np.flatnonzero(~hit)
+        if todo.size:
+            v = self.product.value_rows(rows[todo] + 0.0)
+            ok = v >= 0
+            block[todo[ok]] = self.product.vals[v[ok]]
+            hit[todo[ok]] = True
+            self.stats["hits"] += int(np.count_nonzero(ok))
+        return hit, block
+
+    def keys(self):
+        own = super().keys()
+        return own if self.product is None else self.product.row_keys() + own
+
+    def values(self):
+        own = super().values()
+        if self.product is None:
+            return own
+        p = self.product
+        return list(p.vals[p.row_vrow]) + own
+
+
 def designed_tables(
     eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None, group_labels=None
 ):
@@ -898,11 +1111,14 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
     of `rows` (distinct triples, first-appearance order), memo hits copied
     from the memo, the rest evaluated by `_evaluate_fresh` and inserted."""
     if memo is None:
-        block = np.empty((rows.shape[0], 6), dtype=np.complex128)
-        fresh_pos = np.arange(rows.shape[0])
-    else:
-        hit, block = memo.lookup(rows)
-        fresh_pos = np.flatnonzero(~hit)  # ascending: first-appearance order
+        # Every row is fresh and in order, so the block IS the evaluation's
+        # answer: the copy `block[arange] = vals` into a second (m, 6) array
+        # moved the same floats to the same places (momwire#1173 design B).
+        if rows.shape[0] == 0:
+            return np.empty((0, 6), dtype=np.complex128)
+        return _evaluate_fresh(eps_t, k2, rows, rtol, lam_mult, labels=labels)
+    hit, block = memo.lookup(rows)
+    fresh_pos = np.flatnonzero(~hit)  # ascending: first-appearance order
     if fresh_pos.size:
         sub = rows[fresh_pos]
         vals = _evaluate_fresh(
@@ -914,8 +1130,7 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
             labels=None if labels is None else labels[fresh_pos],
         )
         block[fresh_pos] = vals
-        if memo is not None:
-            memo.insert(sub, vals)
+        memo.insert(sub, vals)
         del sub, vals  # copied into `block` (and the memo); not needed below
     return block
 
@@ -944,7 +1159,26 @@ def designed_rows(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
     return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None)
 
 
-def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None):
+def designed_rows_permuted(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT):
+    """`designed_rows(..., memo=None)` without its final reorder: `(vals,
+    pos)` with row i's six values at `vals[pos[i]]`, or `pos` None when
+    `vals` is already in row order (momwire#1173 design B).
+
+    The column twin answers in its COLUMN-MEMBER order, and `_evaluate_fresh`
+    then copies that (m, 6) block into row order — a second complex array as
+    large as the first, live beside it, at the table evaluation's peak. A
+    caller that reads the block through an index anyway (the crossing fill's
+    product tables and `ProductMemo`) composes `pos` into that index instead:
+    `vals[pos[i]]` is the element `out[i]` was copied from, so every value
+    read is the same float and nothing is recomputed. The other three routes
+    answer in row order and return `pos` None."""
+    rows = np.asarray(rows, dtype=float)
+    if rows.shape[0] == 0:
+        return np.empty((0, 6), dtype=np.complex128), None
+    return _evaluate_fresh(eps_t, k2, rows, rtol, lam_mult, permuted=True)
+
+
+def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False):
     """The six values of each (m, 3) row of `sub` (distinct triples, in
     first-appearance order), as (m, 6), row i for sub[i] — through the route
     `designed_tables` documents. Each branch hands its machine the same
@@ -956,6 +1190,10 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None):
     `labels` (one integer per row of `sub`) split the column routes' groups by
     (label, exact ρ); see `designed_tables`' `group_labels`. The point routes
     evaluate each row alone and read no labels.
+
+    `permuted=True` returns `(vals, pos)` instead (`designed_rows_permuted`):
+    the column twin's block in member order with `pos` its row -> member map,
+    or the row-ordered block and None on every other route.
     """
     if _use_column_route() and _use_column_accel():
         # The twin's parallel unit is the COLUMN, so the whole grouping goes
@@ -996,9 +1234,15 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None):
             _GX,
             _GW,
         )
+        if permuted:
+            pos = np.empty(member_order.size, dtype=np.intp)
+            pos[member_order] = np.arange(member_order.size)
+            return vals, pos
         out = np.empty((sub.shape[0], 6), dtype=np.complex128)
         out[member_order] = vals
         return out
+    if permuted:
+        return _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=labels), None
     if _use_column_route():
         triples = [tuple(r) for r in sub.tolist()]
         got = {}
