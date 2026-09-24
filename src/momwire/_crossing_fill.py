@@ -1209,11 +1209,14 @@ def _end_tables(ctx, eps_t, k_p, ends, n_nodes, memo, args):
 
 def _end_tables_product(ctx, eps_t, k_p, ends, n_nodes, memo, args):
     """`_end_tables` over a `ProductMemo` holding a product: see there for
-    why the yields are the span call's to the bit."""
+    why the yields are the span call's to the bit. The fast ends' V and W
+    are read from the product's value block by `kernels` position: since
+    momwire#1173 design C that block is the tiles' (rows, 2) V/W store in
+    row order, holding copies of the very floats the evaluation returned."""
     product = memo.product
     fast = product.fast
     vals = product.vals
-    iv, iw = _near_interface.KEYS.index("V"), _near_interface.KEYS.index("W")
+    iv, iw = product.kernels.index("V"), product.kernels.index("W")
     a_wire = float(ctx.a_wire)
     for g0, g1 in _end_groups(len(ends), n_nodes, memo):
         span = ends[g0:g1]
@@ -1360,10 +1363,14 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None):
 
     The tables come from the PRODUCT route (`_product_route`, momwire#1173
     design B) when the node geometry factorises and the memo is fresh, and
-    from the grid dedup (`_tables` / `_chunked_tables`) otherwise; the two
-    hand `designed_*` the same rows in the same order and serve the same
-    tables in the same chunks, so the contraction below cannot tell them
-    apart.
+    from the grid dedup (`_tables` / `_chunked_tables`) otherwise. The grid
+    route hands `designed_*` its rows in one call; the product route hands
+    the same rows in tiles of whole exact-ρ columns (design C,
+    `_ProductTiles`), which is the same columns with the same members and
+    so the same values. Both serve each table entry as that value copied,
+    so the contraction below cannot tell them apart; the product route's
+    chunks are column SETS in tile order, which `_streamed_sandwich`
+    contracts row by row exactly as it contracts ranges.
     """
     k2sq = k_p * k_p
     nA, nB = A["nodes"].shape[0], B["nodes"].shape[0]
@@ -1502,10 +1509,13 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
 # product route is gated against to the bit. `_PRODUCT_NEG_CONTROL` is
 # TEST-ONLY and makes the route WRONG on purpose, so the gate can be shown to
 # fail: "transpose" maps a one-group product's rows back to the grid in the
-# other factor's order (the product order permuted), "split" evaluates the
-# rows as two calls (which changes columns' s_min), "row" serves every fast
-# end one product row off. `_ROUTES` counts which route ran, so a test can
-# prove the new one did.
+# other factor's order (the product order permuted), "split" evaluates each
+# tile's rows as two calls (which cuts its columns, so a column's second part
+# is evaluated under the wrong rule witness, s_min — design C's control),
+# "held" serves every held row's U and dz′W from its neighbour in the held
+# buffer (design C's bookkeeping), "row" serves every fast end one product
+# row off. `_ROUTES` counts which route ran, so a test can prove the new one
+# did; since design C also how many tiles and rows ran, and how much was held.
 _PRODUCT_TABLES = True
 _PRODUCT_ENDS = True
 _PRODUCT_NEG_CONTROL = None
@@ -1535,6 +1545,13 @@ _ROUTES = dict.fromkeys(
         "ends_fast_line",
         "ends_slow",
         "end_slow_calls",
+        "product_rows",
+        "tiles",
+        "tile_rows",
+        "tile_max_rows",
+        "tile_held_rows",
+        "stream_chunks",
+        "stream_held_cols",
     ),
     0,
 )
@@ -1609,12 +1626,17 @@ def _product_route(ctx, eps_t, k_p, A, B, gz, step, memo):
 
     Taken when the memo is a fresh `ProductMemo` (so, as in the grid route,
     every row is fresh), every node coordinate is finite, and one side's
-    nodes fall into few exact-(x, y) groups (`_product_plan`). The rows it
-    hands `designed_rows_permuted`, their order and so every column's
-    membership, are `_chunked_tables`' to the float; the tables it serves
-    are the same floats in the same `(cols, K)` chunks (or the same dict
-    when `nB <= step`); and the memo afterwards holds the same rows with the
-    same values. See `_product_plan` for the derivation."""
+    nodes fall into few exact-(x, y) groups (`_product_plan`). The rows are
+    `_chunked_tables`' to the float and the tables served are the same floats
+    per grid pair; the memo afterwards holds the same rows with the same V and
+    W values. See `_product_plan` for the rows and `_ProductTiles` (design C)
+    for why evaluating them in tiles, and serving the tables in the tiles'
+    order, moves no bit.
+
+    With one tile and `nB <= step` the answer is the whole-table dict, as it
+    was; otherwise a generator of `(cols, K_cols)` column sets, which only
+    `_streamed_sandwich` (or the assembled reference in `_sandwich_dense`)
+    consumes."""
     if not _PRODUCT_TABLES or not isinstance(memo, _near_interface.ProductMemo):
         return None
     if len(memo):
@@ -1628,37 +1650,103 @@ def _product_route(ctx, eps_t, k_p, A, B, gz, step, memo):
         _ROUTES["main_generic"] += 1
         _ROUTES["main_generic_" + plan] += 1
         return None
-    product, fast, chunk_idx = plan
-    product.fast = fast
-    memo.set_product(product)
+    tiles = _ProductTiles(plan, eps_t, k_p, step)
+    memo.set_product(tiles.product)
     _ROUTES["main_product"] += 1
-    _ROUTES["main_product_" + product.slot] += 1
+    _ROUTES["main_product_" + plan.slot] += 1
     _ROUTES["main_product_groups"] = max(
-        _ROUTES["main_product_groups"], len(product.rowtab)
+        _ROUTES["main_product_groups"], len(plan.rowtab)
     )
-    cols_j = [(key, _near_interface.KEYS.index(key)) for key in _CROSS_KEYS]
-    vals = product.vals
-    nB = B["nodes"].shape[0]
+    _ROUTES["product_rows"] += plan.n_rows
+    if tiles.n_tiles == 1 and plan.nB <= step:
+        ((_cols, K),) = list(tiles.chunks(plan.nB))
+        return K
+    return tiles.chunks(step)
 
-    def chunk(sl):
-        idx = chunk_idx(sl)
-        return {key: vals[:, j][idx] for key, j in cols_j}
 
-    if nB <= step:
-        return chunk(slice(0, nB))
+class _ProductPlan(NamedTuple):
+    """`_product_plan`'s answer: the product's rows as factors, nothing
+    evaluated (momwire#1173 design C). Row i is the i-th distinct triple in
+    the grid's first-appearance order; `rows(ids)` writes any rows' floats
+    from the node pair at their first appearance, `chunk_idx(cols)` names
+    the row each grid pair (a, cols) asks, and `pair_keys(cols)` its global
+    key id (so its exact-ρ column: a key is one ρ_eff)."""
 
-    def gen():
-        for b0 in range(0, nB, step):
-            sl = slice(b0, min(nB, b0 + step))
-            yield sl, chunk(sl)
+    slot: str
+    nA: int
+    nB: int
+    n_rows: int
+    gz_rep: np.ndarray  # one float per grouped-z id
+    key_r: np.ndarray  # one ρ_eff per global key id
+    key_zl: np.ndarray  # one line z per global key id
+    rowtab: list  # per group, (z of g, keys of g) -> row id
+    zids: list
+    kids: list
+    kid: np.ndarray  # (groups, line nodes) -> global key id
+    grank: np.ndarray
+    zfirst: list
+    kfirst: list
+    nz: np.ndarray
+    nk: np.ndarray
+    kept_pos: np.ndarray | None  # row -> flat grid position (several groups)
+    zA: np.ndarray
+    zB: np.ndarray
+    line: np.ndarray
+    off: np.ndarray
+    zl_rank: np.ndarray
+    kl_rank: np.ndarray
+    rowflat: np.ndarray
+    fast: _FastEnds | None
 
-    return gen()
+    def pairs(self, ids):
+        """(a, b): the node pair at each row's first grid appearance."""
+        if self.kept_pos is not None:
+            return np.divmod(self.kept_pos[ids], self.nB)
+        if self.slot == "z":
+            zi, kj = np.divmod(ids, self.nk[0])
+            return self.zfirst[0][zi], self.kfirst[0][kj]
+        kj, zi = np.divmod(ids, self.nz[0])
+        return self.kfirst[0][kj], self.zfirst[0][zi]
+
+    def rows(self, ids):
+        """The (|ids|, 3) rows (ρ_eff, z, z′), each written from the node
+        pair at its first appearance — the floats the grid computed there."""
+        a_s, b_s = self.pairs(ids)
+        rows = np.empty((a_s.size, 3), dtype=float)
+        if self.slot == "z":
+            rows[:, 0] = self.line[self.grank[a_s], b_s]
+        else:
+            rows[:, 0] = self.line[self.grank[b_s], a_s]
+        rows[:, 1] = self.zA[a_s]
+        rows[:, 2] = self.zB[b_s]
+        return rows
+
+    def chunk_idx(self, cols):
+        """(nA, |cols|) rows of the grid pairs in below columns `cols`."""
+        cols = np.asarray(cols)
+        if self.slot == "z":
+            g = self.grank
+            base = self.off[g] + self.zl_rank * self.nk[g]
+            return self.rowflat[base[:, None] + self.kl_rank[g[:, None], cols[None, :]]]
+        g = self.grank[cols]
+        base = self.off[g] + self.zl_rank[cols] * self.nk[g]
+        return self.rowflat[
+            base[None, :] + self.kl_rank[g[None, :], np.arange(self.nA)[:, None]]
+        ]
+
+    def pair_keys(self, cols):
+        """(nA, |cols|) global key ids of the grid pairs in columns `cols`."""
+        cols = np.asarray(cols)
+        if self.slot == "z":
+            return self.kid[self.grank[:, None], cols[None, :]]
+        return self.kid[self.grank[cols][None, :], np.arange(self.nA)[:, None]]
 
 
 def _product_plan(ctx, eps_t, k_p, A, B, gz):
-    """`(ProductSet, _FastEnds, chunk_idx)` for the main sandwich over (above
-    axis A × below axis B), or the reason it declines ("nonfinite", "groups",
-    "candidates").
+    """The `_ProductPlan` of the main sandwich over (above axis A × below
+    axis B), or the reason it declines ("nonfinite", "groups",
+    "candidates"). Nothing is evaluated here since momwire#1173 design C:
+    `_ProductTiles` evaluates the rows, tile by tile.
 
     THE ARGUMENT. The grid route asks, at node pair (a, b), the triple
     (ρ_eff, z, z′) = (fold(hypot(x_a − x_b, y_a − y_b)), z_a, z_b), and hands
@@ -1682,22 +1770,19 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         triples in first-appearance order;
       * each row is written from the node pair at that position: z and z′
         straight from the nodes, ρ_eff from the line at that pair — the
-        float the grid computed there.
+        float the grid computed there (`_ProductPlan.rows`).
 
     With ONE group nothing needs sorting: the grouped nodes' first
     appearances and the line's are both ascending, so the flat positions run
     in the product's own order — z-major when the grouped side is the above
     one (a·n_B + b with a from z), key-major when it is the below one. That
-    is also the design-B prototype's order, and `_product_plan` asserts
-    nothing about it: the rows are built either way from positions.
+    is also the design-B prototype's order, and it is asserted below; the
+    node pair of a row is then its position's divmod, and no position array
+    is kept.
 
     No float is computed here that the grid route did not compute the same
     way (the one fold per line node is `radius_fold` of the grid's own ρ);
-    no sum is formed at all. The evaluation then sees the same rows in the
-    same order, so the same columns with the same members (the column rule
-    reads only a column's ρ and its members' s — `designed_tables`), and
-    returns the same six floats per row; `designed_rows_permuted` only
-    defers the copy into row order, which `rowtab` composes back.
+    no sum is formed at all.
 
     Which side is grouped: the one whose lines are cheaper (groups × other
     side's nodes), the above side on a tie. A vertical above member is one
@@ -1761,6 +1846,7 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             return zfirst[g][:, None] * nB + kfirst[g][None, :]
         return kfirst[g][None, :] * nB + zfirst[g][:, None]
 
+    kept_pos = None
     if nG == 1:
         # Ascending already (see the docstring): row = the candidate itself,
         # z-major for the above side, key-major for the below.
@@ -1772,9 +1858,11 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         cand_row = [
             c.reshape(nz[0], nk[0]) if slot_rows == "z" else c.reshape(nk[0], nz[0]).T
         ]
-        kept_pos = (flat_pos(0) if slot == "z" else flat_pos(0).T).ravel()
-        if kept_pos.size > 1 and not bool(np.all(kept_pos[1:] > kept_pos[:-1])):
+        pos1 = (flat_pos(0) if slot == "z" else flat_pos(0).T).ravel()
+        if pos1.size > 1 and not bool(np.all(pos1[1:] > pos1[:-1])):
             raise AssertionError("one group's candidates are not in grid order")
+        del pos1
+        n_rows = n_cand
     else:
         n_key = kf.size
         codes = np.concatenate(
@@ -1799,108 +1887,293 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             cand_row.append(flat_row[off : off + nz[g] * nk[g]].reshape(nz[g], nk[g]))
             off += nz[g] * nk[g]
         del flat_row
-    # The rows, from the node pair at each first appearance.
-    a_s, b_s = np.divmod(kept_pos, nB)
-    del kept_pos
-    rows = np.empty((a_s.size, 3), dtype=float)
-    if slot == "z":
-        rows[:, 0] = line[grank[a_s], b_s]
-    else:
-        rows[:, 0] = line[grank[b_s], a_s]
-    rows[:, 1] = zA[a_s]
-    rows[:, 2] = zB[b_s]
-    del a_s, b_s
-    if _PRODUCT_NEG_CONTROL == "split":
-        h = rows.shape[0] // 2
-        v1, p1 = _near_interface.designed_rows_permuted(
-            eps_t, k_p, rows[:h], rtol=_CROSS_RTOL
-        )
-        v2, p2 = _near_interface.designed_rows_permuted(
-            eps_t, k_p, rows[h:], rtol=_CROSS_RTOL
-        )
-        p1 = np.arange(h) if p1 is None else p1
-        p2 = np.arange(rows.shape[0] - h) if p2 is None else p2
-        vals, row_vrow = np.concatenate([v1, v2]), np.concatenate([p1, p2 + h])
-    else:
-        vals, row_vrow = _near_interface.designed_rows_permuted(
-            eps_t, k_p, rows, rtol=_CROSS_RTOL
-        )
-        if row_vrow is None:
-            row_vrow = np.arange(rows.shape[0], dtype=np.intp)
-    del rows
-    rowtab = [row_vrow[cr] for cr in cand_row]
-    del cand_row
-    product = _near_interface.ProductSet(
-        slot,
-        vals,
-        row_vrow,
-        gzv[zf],
-        line.ravel()[kf],
-        np.broadcast_to(lzv, line.shape).ravel()[kf],
-        rowtab,
-        zids,
-        kids,
-    )
+        n_rows = kept_pos.size
+    # The value block is in ROW order (`_ProductTiles`), so a candidate's
+    # value row is its row.
+    rowtab = cand_row
     off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.intp)
     rowflat = np.concatenate([t.ravel() for t in rowtab])
     small = nG <= _PRODUCT_FAST_MAX_GROUPS
-    fast = _FastEnds(
-        grouped_slot=slot,
-        grouped_z=gzv,
-        grank=grank,
-        zl_rank=zl_rank,
-        line_z=lzv,
-        gfirst=gfirst,
-        raw=raw if small else None,
-        gdict=(
-            {
+    fast = None
+    if small:
+        fast = _FastEnds(
+            grouped_slot=slot,
+            grouped_z=gzv,
+            grank=grank,
+            zl_rank=zl_rank,
+            line_z=lzv,
+            gfirst=gfirst,
+            raw=raw,
+            gdict={
                 (float(x), float(y)): g
                 for g, (x, y) in enumerate(zip(x0.tolist(), y0.tolist()))
-            }
-            if small
-            else {}
-        ),
-        zmap=(
-            [
+            },
+            zmap=[
                 {float(gzv[n]): i for i, n in enumerate(zfirst[g].tolist())}
                 for g in range(nG)
-            ]
-            if small
-            else []
-        ),
-        kmap=(
-            [
+            ],
+            kmap=[
                 {
                     (float(line[g, n]), float(lzv[n])): j
                     for j, n in enumerate(kfirst[g].tolist())
                 }
                 for g in range(nG)
-            ]
-            if small
-            else []
-        ),
-        off=off,
+            ],
+            off=off,
+            nk=nk,
+            kl_rank=kl_rank,
+            rowflat=rowflat,
+        )
+    return _ProductPlan(
+        slot=slot,
+        nA=nA,
+        nB=nB,
+        n_rows=int(n_rows),
+        gz_rep=gzv[zf],
+        key_r=line.ravel()[kf],
+        key_zl=np.broadcast_to(lzv, line.shape).ravel()[kf],
+        rowtab=rowtab,
+        zids=zids,
+        kids=kids,
+        kid=kid,
+        grank=grank,
+        zfirst=zfirst,
+        kfirst=kfirst,
+        nz=nz,
         nk=nk,
+        kept_pos=kept_pos,
+        zA=zA,
+        zB=zB,
+        line=line,
+        off=off,
+        zl_rank=zl_rank,
         kl_rank=kl_rank,
         rowflat=rowflat,
+        fast=fast,
     )
-    if not small:
-        fast = None
 
-    def chunk_idx(sl):
-        """(nA, |sl|) value rows of the grid pairs in columns `sl`."""
-        if slot == "z":
-            g = grank
-            base = off[g] + zl_rank * nk[g]
-            return rowflat[
-                base[:, None]
-                + kl_rank[g[:, None], np.arange(sl.start, sl.stop)[None, :]]
-            ]
-        g = grank[sl]
-        base = off[g] + zl_rank[sl] * nk[g]
-        return rowflat[base[None, :] + kl_rank[g[None, :], np.arange(nA)[:, None]]]
 
-    return product, fast, chunk_idx
+# momwire#1173 design C, phase 1: the product's rows are evaluated in TILES
+# of at most about this many rows (plus one column: a column is never cut),
+# each contracted into the main sandwich and dropped, so the (rows, 6) value
+# block is never whole. The end loops still read V and W of every row, which
+# a (rows, 2) store keeps (phase 2 fuses the ends into the tiles). 2^17 is
+# DESIGN-C's measured budget: past about 32 k rows the per-call overhead of
+# the kernel stops showing. TEST-ONLY to shrink.
+_TILE_ROWS = 1 << 17
+
+
+class _ProductTiles:
+    """The product's rows evaluated a TILE at a time, and the main
+    sandwich's table columns served as each becomes complete (momwire#1173
+    design C phase 1). Bit-identical to evaluating every row in ONE
+    `designed_rows_permuted` call and gathering the tables from that block
+    (design B), for three reasons.
+
+    WHOLE COLUMNS. The column route groups one call's rows by exact ρ_eff,
+    and a member's value depends on its column only through the column's
+    `s_min` (`six_columns`; the C++ twin's `s_min_of` feeds a rule built
+    serially per column, and `column_member` reduces each member alone). A
+    row's ρ_eff is its key's (`key_r`), so the exact-ρ classes of the keys
+    ARE the one call's columns, and each tile here is a union of whole
+    classes: every column of the one call is evaluated in exactly one tile,
+    with every one of its members, in the same relative order (a tile's rows
+    are its row ids ascending, and the one call's member order is row order
+    within a column). So each column sees the same ρ, the same members and
+    the same `s_min`, builds the same rule, and returns the same six floats
+    per member, on every route: the twin (columns independent, members
+    independent), the numpy column loop (the same `six_columns` call on the
+    same member list) and the point routes (one row at a time). No rule
+    witness is needed, because no column is ever cut; the price is that a
+    tile can exceed `_TILE_ROWS` by one column. Tiles run in ascending ρ,
+    which is only a locality choice: the order of calls moves no bit.
+
+    EXACTLY ONCE. The tiles partition the key set, every row has one key,
+    and a row shared by several groups is one row under one key: each row
+    is evaluated once (a `done` bitmap refuses a second evaluation and
+    checks the last tile left none out), and no row is recomputed — the
+    counters `tile_rows` and `product_rows` are equal.
+
+    THE SAME TABLES. A below node's table column holds the values of the
+    rows its grid pairs ask (`chunk_idx`). It is served once every one of
+    those rows is evaluated — at the tile that completes it (`ready`) — as
+    copies of the very floats the one call returned for them: V and W from
+    the row-ordered store, U and dz′W from the current tile or, for a row
+    evaluated in an earlier tile and still needed, from the held buffer
+    (`need`). Nothing is summed. `_streamed_sandwich` then contracts each
+    basis row once, when its whole pattern is present, against its columns
+    in ascending order — its own argument, for column SETS; the left
+    product of a column is `P @ K[:, j]`, which a sparse @ dense product
+    forms from that column alone.
+
+    On a one-group product grouped ABOVE (the hub decks) a below node's
+    rows all share its one key, so it is ready at its key's tile and
+    nothing is ever held. Grouped below (WA7ARK) a node's rows span every
+    key of the line, so it is ready only at the last tile and its U and
+    dz′W are held until then: correct, and no larger than design B's
+    block, but not bounded. Bounding that case needs columns cut across
+    tiles, which needs the rule witness (and the twin, since the numpy
+    column loop's chunking is not member-independent) — not phase 1."""
+
+    def __init__(self, plan, eps_t, k_p, step):
+        self.plan = plan
+        self.eps_t = eps_t
+        self.k_p = k_p
+        U = plan.n_rows
+        n_key = plan.key_r.size
+        # The one call's columns: exact-ρ classes of the keys, ascending.
+        _r_u, key_cls = np.unique(plan.key_r, return_inverse=True)
+        key_cls = np.asarray(key_cls).ravel()
+        rows_per_key = np.zeros(n_key, dtype=np.int64)
+        for g, kj in enumerate(plan.kids):
+            rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound
+        cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=_r_u.size)
+        start = np.cumsum(cls_rows) - cls_rows
+        t_of_cls = (start // max(1, int(_TILE_ROWS))).astype(np.int64)
+        _t, t_of_cls = np.unique(t_of_cls, return_inverse=True)
+        self.tile_of_key = np.asarray(t_of_cls).ravel()[key_cls]
+        self.n_tiles = int(_t.size)
+        # Per group, its local keys sorted by tile.
+        self._gkeys = []
+        for kj in plan.kids:
+            tl = self.tile_of_key[kj]
+            o = np.argsort(tl, kind="stable")
+            b = np.searchsorted(tl[o], np.arange(self.n_tiles + 1))
+            self._gkeys.append((o, b))
+        # The tile at which each below node's table column is complete.
+        tk = self.tile_of_key[plan.kid]  # (groups, line nodes)
+        if plan.slot == "z":
+            ready = tk.max(axis=0)
+            may_hold = bool(np.any(tk < ready[None, :]))
+        else:
+            gmax = tk.max(axis=1)
+            ready = gmax[plan.grank]
+            may_hold = bool(np.any(tk < gmax[:, None]))
+        o = np.argsort(ready, kind="stable")  # ascending node index per tile
+        self._ready = (o, np.searchsorted(ready[o], np.arange(self.n_tiles + 1)))
+        # The last tile each row is read at, where that is after its own.
+        self.need = None
+        if may_hold:
+            need = np.full(U, -1, dtype=np.int64)
+            for c0 in range(0, plan.nB, step):
+                cols = np.arange(c0, min(plan.nB, c0 + step))
+                t_pair = self.tile_of_key[plan.pair_keys(cols)]
+                r = np.broadcast_to(ready[cols][None, :], t_pair.shape)
+                late = t_pair < r
+                if late.any():
+                    np.maximum.at(need, plan.chunk_idx(cols)[late], r[late])
+            self.need = need
+        self.store = np.empty((U, 2), dtype=np.complex128)  # V, W in row order
+        self.product = _near_interface.ProductSet(
+            plan.slot,
+            self.store,
+            None,
+            plan.gz_rep,
+            plan.key_r,
+            plan.key_zl,
+            plan.rowtab,
+            plan.zids,
+            plan.kids,
+            kernels=("V", "W"),
+        )
+        self.product.complete = False
+        self.product.fast = plan.fast
+
+    def _tile_rows(self, t):
+        """Tile t's rows, ascending: every row of its keys, over the groups."""
+        parts = [
+            tab[:, o[b[t] : b[t + 1]]].ravel()
+            for tab, (o, b) in zip(self.plan.rowtab, self._gkeys)
+        ]
+        if len(parts) == 1:
+            return np.sort(parts[0])
+        return np.unique(np.concatenate(parts))
+
+    def _evaluate(self, rows):
+        """(vals, pos) of one tile's rows: ONE call, or — the TEST-ONLY
+        "split" control — two, which cuts the tile's columns."""
+        ni = _near_interface
+        if _PRODUCT_NEG_CONTROL != "split":
+            vals, pos = ni.designed_rows_permuted(
+                self.eps_t, self.k_p, rows, rtol=_CROSS_RTOL
+            )
+            return vals, (np.arange(rows.shape[0]) if pos is None else pos)
+        h = rows.shape[0] // 2
+        v1, p1 = ni.designed_rows_permuted(
+            self.eps_t, self.k_p, rows[:h], rtol=_CROSS_RTOL
+        )
+        v2, p2 = ni.designed_rows_permuted(
+            self.eps_t, self.k_p, rows[h:], rtol=_CROSS_RTOL
+        )
+        p1 = np.arange(h) if p1 is None else p1
+        p2 = np.arange(rows.shape[0] - h) if p2 is None else p2
+        return np.concatenate([v1, v2]), np.concatenate([p1, p2 + h])
+
+    def chunks(self, step):
+        """Yield `(cols, K_cols)`: each tile's newly complete below columns
+        (ascending within a tile), at most `step` at a time. Fills the V/W
+        store as it goes; the product is `complete` once this is exhausted."""
+        plan = self.plan
+        ki = {k: _near_interface.KEYS.index(k) for k in ("U", "V", "W", "dzpW")}
+        U = plan.n_rows
+        done = np.zeros(U, dtype=bool)
+        loc = np.full(U, -1, dtype=_index_dtype(U))
+        held_ids = np.zeros(0, dtype=np.intp)
+        held = np.zeros((0, 2), dtype=np.complex128)
+        o_ready, b_ready = self._ready
+        for t in range(self.n_tiles):
+            ids = self._tile_rows(t)
+            if done[ids].any():
+                raise AssertionError("a product row was asked to evaluate twice")
+            done[ids] = True
+            _ROUTES["tiles"] += 1
+            _ROUTES["tile_rows"] += ids.size
+            _ROUTES["tile_max_rows"] = max(_ROUTES["tile_max_rows"], ids.size)
+            rows = plan.rows(ids)
+            vals, pos = self._evaluate(rows)
+            del rows
+            self.store[ids, 0] = vals[pos, ki["V"]]
+            self.store[ids, 1] = vals[pos, ki["W"]]
+            ud = np.empty((ids.size, 2), dtype=np.complex128)
+            ud[:, 0] = vals[pos, ki["U"]]
+            ud[:, 1] = vals[pos, ki["dzpW"]]
+            del vals, pos
+            if held_ids.size and _PRODUCT_NEG_CONTROL == "held":
+                held = np.roll(held, 1, axis=0)  # TEST-ONLY: a neighbour's values
+            live_ids = np.concatenate((held_ids, ids)) if held_ids.size else ids
+            live = np.concatenate((held, ud)) if held_ids.size else ud
+            del ud
+            loc[live_ids] = np.arange(live_ids.size)
+            J = o_ready[b_ready[t] : b_ready[t + 1]]
+            for i0 in range(0, J.size, step):
+                cols = J[i0 : i0 + step]
+                idx = plan.chunk_idx(cols)
+                li = loc[idx]
+                if (li < 0).any():
+                    raise AssertionError("a ready column reads a row not in hand")
+                K = {
+                    "U": live[li, 0],
+                    "V": self.store[idx, 0],
+                    "W": self.store[idx, 1],
+                    "dzpW": live[li, 1],
+                }
+                del idx, li
+                yield cols, K
+                del K
+            loc[live_ids] = -1
+            if self.need is None:
+                held_ids = np.zeros(0, dtype=np.intp)
+                held = np.zeros((0, 2), dtype=np.complex128)
+            else:
+                keep = self.need[live_ids] > t
+                held_ids, held = live_ids[keep], live[keep]
+                _ROUTES["tile_held_rows"] = max(
+                    _ROUTES["tile_held_rows"], held_ids.size
+                )
+            del live, live_ids
+        if not done.all():
+            raise AssertionError("the tiles left a product row unevaluated")
+        self.product.complete = True
 
 
 def _index_dtype(n):
@@ -2753,6 +3026,16 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
     at hub_deck(16) x4 span the whole axis). So the live set is one chunk of
     left products plus those junction slivers, not the whole axis.
 
+    COLUMN SETS (momwire#1173 design C). A chunk's `cols` is a slice or an
+    ascending index array, and the chunks may arrive in any order, each
+    column exactly once: the tiled product route serves a below column when
+    its tile completes it, not in axis order. Nothing above used the order —
+    a row is contracted when its pattern is COMPLETE (a per-row count of
+    columns still to arrive reaches zero), which for in-order ranges is the
+    old test `last < cols.stop` — and its columns are gathered by position
+    from wherever they are held, into ascending order, so the same entries
+    meet the same `Q` row in the same order.
+
     `fresh` says `out` is a new zero block, so each entry is ASSIGNED, as the
     whole-block path assigns its block (an accumulate would turn a −0.0 into
     +0.0); otherwise the block accumulates into `out` like `_sandwich_dense`'s.
@@ -2763,7 +3046,7 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
     """
     Q1, Q2, Q3, Q4 = Qs4
     Qs = (Q1, Q2, Q3, Q4, Q3, Q4)
-    nq = Q1.shape[0]
+    nq, n_cols = Q1.shape
     # Each row's node columns: the union of the four STORED patterns (a stored
     # zero is still a term of the running sum, so it counts).
     p1, p2, p3, p4 = (
@@ -2772,50 +3055,67 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
     )
     pat = p1 + p2 + p3 + p4
     pat.sort_indices()
-    counts = np.diff(pat.indptr)
-    last = np.full(nq, -1, dtype=np.int64)
-    has = counts > 0
-    last[has] = pat.indices[pat.indptr[1:][has] - 1]
+    del p1, p2, p3, p4
+    # Per row, its pattern columns still to arrive; per column, the pending
+    # rows that read it (the pattern holds each column once per row).
+    remaining = np.diff(pat.indptr).astype(np.int64)
+    readers = np.bincount(pat.indices, minlength=n_cols)
+    patT = pat.T.tocsr()
+    arrived = np.zeros(n_cols, dtype=bool)
+    slot = np.full(n_cols, -1, dtype=np.int64)  # a held/new column's position
     pending = np.ones(nq, dtype=bool)
     held_cols = np.zeros(0, dtype=np.int64)
     held = None
-    seen = 0
     for cols, Kc in K:
-        if cols.start != seen:
-            raise ValueError("the table chunks must arrive in column order")
-        seen = cols.stop
+        c_cols = (
+            np.arange(cols.start, cols.stop)
+            if isinstance(cols, slice)
+            else np.asarray(cols, dtype=np.int64)
+        )
+        if c_cols.size > 1 and not bool(np.all(c_cols[1:] > c_cols[:-1])):
+            raise ValueError("a table chunk's columns must be ascending")
+        if arrived[c_cols].any():
+            raise ValueError("a table column arrived twice")
+        arrived[c_cols] = True
+        _ROUTES["stream_chunks"] += 1
         Lc = _left_products(Ps, Kc, k2sq)
         del Kc
-        c_cols = np.arange(cols.start, cols.stop)
         if not _STREAMED_WHOLE_ROWS:
-            part = _combine(Lc, [q[:, cols] for q in Qs])
+            part = _combine(Lc, [q[:, c_cols] for q in Qs])
             _put(out, rA, rB, part, support, assign=False)
             continue
-        J = np.flatnonzero(pending & (last < cols.stop))
+        touched = patT[c_cols]
+        remaining -= np.bincount(touched.indices, minlength=nq)
+        del touched
+        J = np.flatnonzero(pending & (remaining == 0))
+        n_old = held_cols.size
+        slot[held_cols] = np.arange(n_old)
+        slot[c_cols] = n_old + np.arange(c_cols.size)
         if J.size:
             need = np.unique(pat[J].indices)
-            n_old = int(np.searchsorted(need, cols.start))
-            pos_old = np.searchsorted(held_cols, need[:n_old])
-            if not np.array_equal(held_cols[pos_old], need[:n_old]):
+            pos = slot[need]
+            if (pos < 0).any():
                 raise AssertionError("a pending row's column was not held")
-            pos_new = need[n_old:] - cols.start
-            if held is None:
-                Ls = [x[:, pos_new] for x in Lc]
-            else:
-                Ls = [
-                    np.concatenate((h[:, pos_old], x[:, pos_new]), axis=1)
-                    for h, x in zip(held, Lc)
-                ]
+            old = pos < n_old
+            Ls = []
+            for i in range(6):
+                L = np.empty((Lc[i].shape[0], need.size), dtype=np.complex128)
+                if held is not None:
+                    L[:, old] = held[i][:, pos[old]]
+                L[:, ~old] = Lc[i][:, pos[~old] - n_old]
+                Ls.append(L)
             block = _combine(Ls, [q[J][:, need] for q in Qs])
             del Ls
             # each entry written once when `fresh`
             _put(out, rA, rB[J], block, support, assign=fresh)
             del block
             pending[J] = False
+            readers -= np.bincount(pat[J].indices, minlength=n_cols)
+        slot[held_cols] = -1
+        slot[c_cols] = -1
         # Keep only the columns a still-pending row reads.
-        keep = np.unique(pat[np.flatnonzero(pending)].indices)
-        keep_old = np.isin(held_cols, keep)
-        keep_new = np.isin(c_cols, keep)
+        keep_old = readers[held_cols] > 0
+        keep_new = readers[c_cols] > 0
         if held is None:
             held = [x[:, keep_new] for x in Lc]
         else:
@@ -2824,6 +3124,7 @@ def _streamed_sandwich(Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=No
                 for h, x in zip(held, Lc)
             ]
         held_cols = np.concatenate((held_cols[keep_old], c_cols[keep_new]))
+        _ROUTES["stream_held_cols"] = max(_ROUTES["stream_held_cols"], held_cols.size)
         del Lc
     if _STREAMED_WHOLE_ROWS and pending.any():
         raise ValueError("the table chunks did not cover the below axis")
