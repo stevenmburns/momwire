@@ -422,6 +422,23 @@ _CANCELLABLE_KERNELS = (
     # every caller's `except SolveAborted` misses it.
     "seg_seg_static_moments_bspline_uniform",
     "seg_seg_static_moments_bspline_uniform_ek",
+    # AK#1712 found the Sommerfeld remainder block raising the raw
+    # `AcceleratorAborted` through a web cancel, and a census then found eight
+    # more kernels that take `cancel_flag` but were never listed: the
+    # complex-eps and weighted assembler variants, the Galerkin far fill's
+    # complex and EK twins, and the remainder projection. Listed together,
+    # and `tests/test_cancellable_kernel_census.py` now fails for any kernel
+    # whose signature takes `cancel_flag` and is missing here, so the next
+    # one cannot be added with the same hole.
+    "sommerfeld_remainder_bspline_Q",
+    "remainder_field_proj_batch",
+    "assemble_Z_bspline_weighted",
+    "assemble_Z_bspline_cplx_eps",
+    "assemble_Z_bspline_weighted_cplx_eps",
+    "assemble_Z_bspline_windowed_cplx_eps",
+    "assemble_Z_bspline_weighted_windowed_cplx_eps",
+    "sinusoidal_galerkin_far_fill_cplx",
+    "sinusoidal_galerkin_far_fill_ek",
 )
 
 
