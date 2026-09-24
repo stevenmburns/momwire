@@ -4685,47 +4685,50 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 c1 = min(c0 + step, n_cent)
                 _w_A_unused, w_Phi = w_Phi_fn(c0, c1)
                 M0c[c0:c1] *= w_Phi
-        dM0 = M0c[s_b] - M0c[s_a]  # (row, source segment)
+        # momwire#1173: T2 is never formed whole. `_t2_rows` below builds it
+        # one T1 row window at a time, from M0c by elementwise operations on
+        # the row axis, so the window changes no entry's float64 value and
+        # the (n_basis, n_seg) difference and its two (n_basis, n_basis)
+        # gathers never exist at full size.
         grounded = prepared["grounded"]
-        if grounded.size:
-            # A grounded row's testing path starts AT the plane, where the
-            # folded scalar potential is identically zero: a point in the
-            # plane is equidistant from every source and its image, so the
-            # two blocks' contributions there are the same number and the
-            # fold's minus cancels them. Dropping the term in each block is
-            # therefore exact rather than approximate — and it is what makes
-            # the plane this formulation's potential reference, the discrete
-            # form of Φ = 0 on a perfect conductor.
-            #
-            # **Over a FINITE ground the drop is NOT exact, and it stays.**
-            # This block's plane term has been scaled by w_Φ above and the
-            # real block's has not, so the pair of drops discards
-            # (1 − w_Φ)·M0(plane) rather than zero. The study's §4.3 read
-            # that as the defect behind razor's contact refusal and §5.5
-            # named the experiment; momwire#624 ran it, and the term does
-            # not survive its own instrument:
-            #
-            #   * on the STUBBED LADDER — momwire against momwire, no binary,
-            #     a self-consistent contact node must give an h-independent
-            #     answer — coefficient 0 is flattest on every row by an order
-            #     of magnitude, on both soils and BOTH ground models. At 0.4
-            #     the ladder slides 42.18+25.82j → 33.58+16.50j as the stub
-            #     shrinks, converging back onto the coefficient-0 answer: the
-            #     term's contribution evaporates with the contacting element,
-            #     so no SCALE makes it self-consistent;
-            #   * against the binary it is worse at full strength (poor soil
-            #     3.384 → 3.906 Ω at N = 61). One coefficient ≈ 0.4 is the
-            #     argmin at a fixed mesh on every lossy ground, but that is a
-            #     fit at one mesh, not a derivation, and the ladder above is
-            #     the instrument that needs no reference.
-            #
-            # So the reference the plane gives this row is kept as it stands.
-            # What the ladder DOES leave is a residual with a target: the
-            # finite-ground ladders spread 0.21-0.55 Ω where PEC holds 0.002,
-            # so the contact node is internally inconsistent over a finite
-            # ground by about half an ohm. `test_razor_contact_finite_ground`
-            # pins that, and it is the thing to attack next — not this term.
-            dM0[grounded] = M0c[s_b[grounded]]
+        # Grounded rows, applied per row window in `_t2_rows` below:
+        # A grounded row's testing path starts AT the plane, where the
+        # folded scalar potential is identically zero: a point in the
+        # plane is equidistant from every source and its image, so the
+        # two blocks' contributions there are the same number and the
+        # fold's minus cancels them. Dropping the term in each block is
+        # therefore exact rather than approximate — and it is what makes
+        # the plane this formulation's potential reference, the discrete
+        # form of Φ = 0 on a perfect conductor.
+        #
+        # **Over a FINITE ground the drop is NOT exact, and it stays.**
+        # This block's plane term has been scaled by w_Φ above and the
+        # real block's has not, so the pair of drops discards
+        # (1 − w_Φ)·M0(plane) rather than zero. The study's §4.3 read
+        # that as the defect behind razor's contact refusal and §5.5
+        # named the experiment; momwire#624 ran it, and the term does
+        # not survive its own instrument:
+        #
+        #   * on the STUBBED LADDER — momwire against momwire, no binary,
+        #     a self-consistent contact node must give an h-independent
+        #     answer — coefficient 0 is flattest on every row by an order
+        #     of magnitude, on both soils and BOTH ground models. At 0.4
+        #     the ladder slides 42.18+25.82j → 33.58+16.50j as the stub
+        #     shrinks, converging back onto the coefficient-0 answer: the
+        #     term's contribution evaporates with the contacting element,
+        #     so no SCALE makes it self-consistent;
+        #   * against the binary it is worse at full strength (poor soil
+        #     3.384 → 3.906 Ω at N = 61). One coefficient ≈ 0.4 is the
+        #     argmin at a fixed mesh on every lossy ground, but that is a
+        #     fit at one mesh, not a derivation, and the ladder above is
+        #     the instrument that needs no reference.
+        #
+        # So the reference the plane gives this row is kept as it stands.
+        # What the ladder DOES leave is a residual with a target: the
+        # finite-ground ladders spread 0.21-0.55 Ω where PEC holds 0.002,
+        # so the contact node is internally inconsistent over a finite
+        # ground by about half an ohm. `test_razor_contact_finite_ground`
+        # pins that, and it is the thing to attack next — not this term.
         chop = prepared["t2_chop"]
         if chop is not None:
             # momwire#813 unit 2: a chopped row's path ends at the KNOT, so
@@ -4742,12 +4745,25 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             rows, keep_a = chop["rows"], chop["keep_a"]
             # "A": centroid(A) -> knot, the knot is AFTER.
             # "B": knot -> centroid(B), the knot is BEFORE.
-            dM0[rows] = np.where(
-                keep_a[:, None],
-                M0k - M0c[s_a[rows]],
-                M0c[s_b[rows]] - M0k,
-            )
-        T2 = dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
+
+        def _t2_rows(lo, hi):
+            # Rows [lo, hi) of T2 (momwire#1173). Every operation is
+            # elementwise on the row axis, so restricting it to a window
+            # changes no entry's arithmetic.
+            dM0 = M0c[s_b[lo:hi]] - M0c[s_a[lo:hi]]  # (row, source segment)
+            if grounded.size:
+                g = grounded[(grounded >= lo) & (grounded < hi)]
+                dM0[g - lo] = M0c[s_b[g]]
+            if chop is not None:
+                sel = (rows >= lo) & (rows < hi)
+                if sel.any():
+                    r = rows[sel]
+                    dM0[r - lo] = np.where(
+                        keep_a[sel][:, None],
+                        M0k[sel] - M0c[s_a[r]],
+                        M0c[s_b[r]] - M0k[sel],
+                    )
+            return dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 
         tans, wts = prepared["tans"], prepared["wts"]
         n_path = prepared["n_path"]
@@ -4776,8 +4792,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             else None
         )
 
+        # `eps` is the medium's (momwire#812's lower medium hands ε_m); the
+        # default is the free-space ε₀ every other call passes implicitly.
+        eps_here = self.eps if eps is None else eps
+        # The two prefactors, spelled exactly as the whole-matrix expression
+        # `1j * omega * self.mu * T1 - T2 / (1j * omega * eps_here)` evaluated
+        # them (left to right), so each row window's combination is the same
+        # float64 number that expression produced (momwire#1173).
+        c_A = 1j * omega * self.mu
+        c_Phi = 1j * omega * eps_here
+        # T1's rows are overwritten in place by the finished block's rows.
         T1 = np.empty((n_basis, n_basis), dtype=np.complex128)
-        Q = None if rem_fn is None else np.empty_like(T1)
         for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
             self._checkpoint()
             M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
@@ -4882,18 +4907,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     rem_b[:, fall_b] = f_mom[:, s_b[fall_b], 0] - rem_b[:, fall_b]
                 rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
                 rem_int *= wts[lo:hi].reshape(-1)[:, None]
-                Q[lo:hi] = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
-        # `eps` is the medium's (momwire#812's lower medium hands ε_m); the
-        # default is the free-space ε₀ every other call passes implicitly.
-        eps_here = self.eps if eps is None else eps
-        block = 1j * omega * self.mu * T1 - T2 / (1j * omega * eps_here)
-        if Q is None:
-            return block
-        # `C2·img + Q`, associated BEFORE the seam's single minus — the
-        # whole content of `mode == "compose"`, since
-        # `free − (C2·img + Q) ≠ (free − C2·img) − Q` in float64. The two
-        # halves meet HERE and the caller's `Z -=` is untouched.
-        return block + Q
+                Q_rows = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+            T1[lo:hi] = c_A * T1[lo:hi] - _t2_rows(lo, hi) / c_Phi
+            if rem_fn is not None:
+                # `C2·img + Q`, associated BEFORE the seam's single minus —
+                # the whole content of `mode == "compose"`, since
+                # `free − (C2·img + Q) ≠ (free − C2·img) − Q` in float64. The
+                # two halves meet HERE and the caller's `Z -=` is untouched.
+                T1[lo:hi] += Q_rows
+        return T1
 
     def _assemble_Z(self, geom, k):
         """Fill the razor-blade impedance matrix at one wavenumber.
