@@ -146,6 +146,7 @@ merely equivalent.
 
 from __future__ import annotations
 
+import math
 from typing import NamedTuple
 
 import numpy as np
@@ -510,6 +511,78 @@ class Remainder:
         )
 
 
+# The directions `_r1_max_below` bounds the horizontal extent with: the
+# maximum over pairs of |o − e| is at most max_k u_k·(o − e) / cos(π/K) for
+# K unit vectors spaced 2π/K, since every vector lies within π/K of one.
+# K = 64 overstates by 0.12 %, against buckets 25 % wide.
+_R1_DIRECTIONS = 64
+# TEST-ONLY. False takes the exact all-pairs walk every time (the in-process
+# reference); `_R1_ROUTES` counts which answered.
+_R1_BRACKET = True
+_R1_ROUTES = {"bracket": 0, "exact": 0}
+
+
+def _r1_max_exact(obs_p, ends, d_o, d_s, rows=256):
+    """The all-pairs grid radius, max hypot(ρ, d_o + d_s) × 1.001, walked in
+    observer chunks. The same float as the one-shot spelling it replaced:
+    each pair's value is the same expression on the same operands, and a
+    maximum does not depend on how the pairs are grouped (`np.max` over the
+    chunk maxima carries a NaN exactly as the one-shot `np.max` did)."""
+    parts = []
+    for i0 in range(0, obs_p.shape[0], rows):
+        o = obs_p[i0 : i0 + rows]
+        rho = np.hypot(
+            o[:, 0][:, None] - ends[:, 0][None, :],
+            o[:, 1][:, None] - ends[:, 1][None, :],
+        )
+        parts.append(np.max(np.hypot(rho, d_o[i0 : i0 + rows][:, None] + d_s[None, :])))
+    return float(np.max(np.asarray(parts))) * 1.001
+
+
+def _r1_max_below(obs_p, ends, d_o, d_s, eps_t, k_p):
+    """A grid radius that builds the SAME below grid as the all-pairs
+    `_r1_max_exact` (momwire#1173 design B), from O(n · K) work.
+
+    `get_grid_below` reads the radius only through its bucket
+    (`_sommerfeld_below._r1_bucket_below_wl`), so any value in the exact
+    radius's bucket is the same grid. The bracket:
+
+      * lo — the exact expression over a subset of REAL pairs (each
+        direction's extreme observer against its opposite extreme source,
+        plus the deepest of each), × 1.001: a maximum over a subset of the
+        same floats, so lo <= the exact value;
+      * hi — hypot(ρ bound, max|d_o| + max|d_s|) × 1.001, with the ρ bound
+        from `_R1_DIRECTIONS` support values and a relative and absolute
+        slack far above the rounding of any pair's ρ: so hi >= the exact
+        value.
+
+    When `r1_bracket_one_bucket(lo, hi)` holds, every value in between —
+    the exact one included — is one bucket, and `hi` is returned. Otherwise
+    the exact walk answers, chunked, so the (n_obs, n_src) transient the
+    one-shot spelling built is gone on either route."""
+    if not _R1_BRACKET or obs_p.shape[0] == 0 or ends.shape[0] == 0:
+        _R1_ROUTES["exact"] += 1
+        return _r1_max_exact(obs_p, ends, d_o, d_s)
+    th = 2.0 * np.pi * np.arange(_R1_DIRECTIONS) / _R1_DIRECTIONS
+    u = np.stack([np.cos(th), np.sin(th)], axis=1)
+    po, pe = obs_p[:, :2] @ u.T, ends[:, :2] @ u.T  # (n, K) support values
+    i_o = np.argmax(po, axis=0)
+    i_e = np.argmin(pe, axis=0)
+    span = float(np.max(np.max(po, axis=0) - np.min(pe, axis=0)))
+    scale = float(max(np.max(np.abs(obs_p[:, :2])), np.max(np.abs(ends[:, :2])), 1.0))
+    rho_hi = (max(span, 0.0) + 1e-9 * scale) / math.cos(math.pi / _R1_DIRECTIONS)
+    h_hi = float(np.max(np.abs(d_o)) + np.max(np.abs(d_s)))
+    hi = float(np.hypot(rho_hi, h_hi)) * 1.001 * (1.0 + 1e-9)
+    so = np.unique(np.concatenate([i_o, [int(np.argmax(d_o))]]))
+    se = np.unique(np.concatenate([i_e, [int(np.argmax(d_s))]]))
+    lo = _r1_max_exact(obs_p[so], ends[se], d_o[so], d_s[se])
+    if np.isfinite(hi) and _sommerfeld_below.r1_bracket_one_bucket(lo, hi, eps_t, k_p):
+        _R1_ROUTES["bracket"] += 1
+        return hi
+    _R1_ROUTES["exact"] += 1
+    return _r1_max_exact(obs_p, ends, d_o, d_s)
+
+
 class RemainderBelow(Remainder):
     """The below/below remainder (momwire#553's lower-medium family), in the
     `Remainder` contract, for a consumer whose sources AND observers lie
@@ -550,11 +623,7 @@ class RemainderBelow(Remainder):
         ends = np.concatenate([seg_l, seg_r])
         d_o = gz - obs_p[:, 2]
         d_s = gz - ends[:, 2]
-        rho = np.hypot(
-            obs_p[:, 0][:, None] - ends[:, 0][None, :],
-            obs_p[:, 1][:, None] - ends[:, 1][None, :],
-        )
-        r1_max = float(np.max(np.hypot(rho, d_o[:, None] + d_s[None, :]))) * 1.001
+        r1_max = _r1_max_below(obs_p, ends, d_o, d_s, eps_t, k_p)
         grid = _sommerfeld_below.get_grid_below(
             eps_t, k_p, r1_max, self._omega, mu=solver.mu
         )

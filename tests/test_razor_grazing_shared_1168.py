@@ -36,6 +36,14 @@ from momwire.razor import RazorSolver
 from test_crossing_serve_524 import A_WIRE, SOIL_A, WL7, crossing_deck
 
 
+@pytest.fixture(autouse=True)
+def _exact_walk(monkeypatch):
+    """This file's subject is the EXACT all-pairs walk; since momwire#1173
+    design B a deck the bound proves clear of the floor skips it.
+    `test_product_grid_1173` gates the bound against this walk."""
+    monkeypatch.setattr(_razor, "_GRAZING_BOUND", False)
+
+
 def _floor():
     return _sommerfeld_below._SOMM_BELOW_TH_MIN_DEG
 

@@ -1793,6 +1793,45 @@ class SommerfeldGridBelow(SommerfeldGrid):
         )
 
 
+def _lambda_m(eps_t, k2):
+    """The lower medium's wavelength, as `get_grid_below` sizes its grid."""
+    return 2.0 * np.pi / abs(k_medium(complex(eps_t), float(k2)))
+
+
+def _r1_bucket_below_wl(r1_max, lam_m):
+    """The grid radius bucket (wavelengths) `get_grid_below` builds for
+    `r1_max`: the grid, and its cache key, read `r1_max` through this alone."""
+    return _somm_r1_bucket_wl(min(float(r1_max) / lam_m, _SOMM_BELOW_R1_CAP_LAMBDA_M))
+
+
+# The relative widening `r1_bracket_one_bucket` applies to a bracket's ends
+# before comparing their buckets (momwire#1173 design B). `_somm_r1_bucket_wl`
+# is a clean step function of its argument except within ~1e-12 relative of
+# a bucket edge 1.25^n, where its log fuzz and its "bucket < r1" fixup act;
+# widening by 1e-9 means any edge inside the bracket or within that zone of
+# either end puts the two widened ends in different buckets.
+_R1_BRACKET_WIDEN = 1e-9
+
+
+def r1_bracket_one_bucket(lo, hi, eps_t, k2):
+    """True when EVERY `r1_max` in [lo, hi] builds the same `get_grid_below`
+    grid (the same bucket, so the same cache key and the same grid).
+
+    The bucket is `_r1_bucket_below_wl(r)`, non-decreasing in r and constant
+    between edges. Both ends widened by `_R1_BRACKET_WIDEN` and landing in one
+    bucket B means no edge (nor its fuzz zone, ~1e-12 wide) lies in the
+    widened bracket: any point of it is then strictly inside B's step, where
+    the function is exactly B. The floor (0.1 wl) and the cap (4 λ_m) are
+    constant regions, which the same comparison reads correctly."""
+    lam_m = _lambda_m(eps_t, k2)
+    cap = _SOMM_BELOW_R1_CAP_LAMBDA_M
+    x_lo = min(float(lo) / lam_m, cap) * (1.0 - _R1_BRACKET_WIDEN)
+    x_hi = min(float(hi) / lam_m, cap) * (1.0 + _R1_BRACKET_WIDEN)
+    if not (np.isfinite(x_lo) and np.isfinite(x_hi)) or x_lo > x_hi:
+        return False
+    return _somm_r1_bucket_wl(x_lo) == _somm_r1_bucket_wl(x_hi)
+
+
 def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
     """Cached `SommerfeldGridBelow`, sharing `_sommerfeld`'s grid cache.
 
@@ -1840,8 +1879,8 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
     """
     k2 = float(k2)
     eps_t = complex(eps_t)
-    lam_m = 2.0 * np.pi / abs(k_medium(eps_t, k2))
-    r1b_wl = _somm_r1_bucket_wl(min(float(r1_max) / lam_m, _SOMM_BELOW_R1_CAP_LAMBDA_M))
+    lam_m = _lambda_m(eps_t, k2)
+    r1b_wl = _r1_bucket_below_wl(r1_max, lam_m)
     key = ("below", eps_t, k2, r1b_wl, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
     if grid is None:
