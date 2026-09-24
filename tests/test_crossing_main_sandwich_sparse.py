@@ -47,8 +47,8 @@ from test_razor_detached_1149 import detached  # noqa: E402
 def _razor_fill(deck):
     d = {k: v for k, v in deck.items() if k != "junctions"}
     s = RazorSolver(**d, nec5_quadrature=True)
-    s.compute_impedance()
-    return np.asarray(s.z)
+    # Read where it is filled: the solve factors Z in place (momwire#1173).
+    return s._assemble_Z(s._build_geometry(), s.k)
 
 
 def _dense_reference(A, B, K, k2sq, c1):
