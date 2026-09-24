@@ -84,9 +84,14 @@ BURIED_DENSE_BUDGET_REFUSAL = (
 )
 BURIED_GRAZING_REFUSAL = (
     "this deck's buried wires reach a below/below pair elevation of "
-    "theta = {th:.4g} deg, below the {floor:g} deg grazing floor the "
-    "below/below surfaces are tabulated from (the pair's two depths add to "
-    "{depth:.4g} m, and theta = atan2(depth sum, horizontal separation)). "
+    "theta = {th:.4g} deg among the pairs inside the cap, below the "
+    "{floor:g} deg grazing floor the below/below surfaces are tabulated from "
+    "(the pair's two depths add to {depth:.4g} m, and theta = atan2(depth "
+    "sum, horizontal separation)). The floor is asked only of pairs inside "
+    "the cap — image distance R1 within "
+    f"{_sommerfeld_below._SOMM_BELOW_R1_CAP_LAMBDA_M:g} in-medium "
+    "wavelengths, the pairs whose remainder is evaluated; past it the "
+    "remainder is served as zero (momwire#1053, #1187). "
     "Below the floor the surfaces carry the lateral wave's LOGARITHMIC "
     "structure — measured drift 1.1 to 3.3 of scale between 2 and 0.05 deg — "
     "which no uniform lattice resolves, and theta = 0 has no node at all "
@@ -706,6 +711,22 @@ def somm_grid(eps_t, k, r1_max, omega, mu, cancel_flag):
     )
 
 
+# momwire#1187: the plan counts a pair as INSIDE the cap up to this relative
+# slack past it. The fill zeroes by its own exact test (`> grid.r1_cap`,
+# `_sommerfeld_below._zero_past_cap`) on its own arithmetic, so a pair on the
+# cap to the last few ulps could be classified differently by the plan's
+# squared-distance walk. With the slack the plan's capped set CONTAINS the
+# fill's, so the error can only be an over-refusal at 1e-9 of the cap, never
+# a grazing pair reaching the grid unasked.
+_PLAN_CAP_SLACK = 1e-9
+
+
+def plan_r1_cap(r1_cap):
+    """The cap the plan's floor walk is handed: the fill's, widened by
+    `_PLAN_CAP_SLACK` so the plan's capped pair set contains the fill's."""
+    return float(r1_cap) * (1.0 + _PLAN_CAP_SLACK)
+
+
 def serve_plan(
     ground_z, seg_l, seg_r, a_idx, obs_a, obs_b, k_p, k_m, *, crossing, pair_extents
 ):
@@ -738,9 +759,12 @@ def serve_plan(
     geometry the grid can't pay for and the designed evaluator doesn't care
     about).
 
-    `pair_extents(x, y, d_b) -> (r1_max, th_min)` is the caller's — bspline's
-    `_pair_extents_below`, an accelerated kernel with a numpy twin whose own
-    tests monkeypatch it through `bspline`.
+    `pair_extents(x, y, d_b, *, r1_cap, floor) -> (r1_max, th_min)` is the
+    caller's — bspline's `_pair_extents_below`, an accelerated kernel with a
+    numpy twin whose own tests monkeypatch it through `bspline`. `th_min`
+    answers the floor over the pairs inside the cap only (momwire#1187),
+    which is the whole of the grazing floor's reach: a pair past the cap is
+    served as zero.
 
     **`obs_a` / `obs_b` must be the union of EVERY rule the caller will query
     with, not just its field rule** (momwire#980 D2). bspline never meets
@@ -759,16 +783,25 @@ def serve_plan(
 
     # --- below/below: R1 = |two depths added|, theta = atan2(h, rho) ---
     d_b = gz - obs_b[:, 2]
-    r1_max, th_min = pair_extents(obs_b[:, 0], obs_b[:, 1], d_b)
+    floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
+    r1_max, th_min = pair_extents(
+        obs_b[:, 0],
+        obs_b[:, 1],
+        d_b,
+        r1_cap=plan_r1_cap(_sommerfeld_below.below_r1_cap(k_m)),
+        floor=floor,
+    )
     # No range refusal here since momwire#1053. Past the below/below cap
     # (`_SOMM_BELOW_R1_CAP_LAMBDA_M`) the projection serves the remainder as
     # zero. Zeroing every pair past the cap on a screen 4.76 lambda_m across
     # moved Z by at most 5.0e-3 of that deck's own ladder step (fresh water at
     # 28 MHz; 2.1e-4 at soil A and 3.5 MHz). The field-level bound, its one
     # exception, and the geometry left unmeasured are written out at that
-    # constant. The grazing floor below still reads EVERY pair, zeroed ones
-    # included.
-    floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
+    # constant. The grazing floor below reads the pairs INSIDE the cap only
+    # (momwire#1187): a pair served as zero reads no surface, so its angle
+    # cannot reach the answer, and asking the floor of it refused a Beverage's
+    # two ground rods ~246 m (10 lambda_m) apart. `r1_max` still reads every
+    # pair; the grid clamps it to the cap.
     if th_min < floor:
         raise ValueError(
             BURIED_GRAZING_REFUSAL.format(

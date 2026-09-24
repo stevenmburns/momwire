@@ -203,9 +203,21 @@ _MAX_TAIL_PANELS = 24000
 #
 # A POINT query past the cap still refuses (`SommerfeldGridBelow.eval`,
 # `remainder_field_below`): a lone observer has no self term for the
-# remainder to be small against. The grazing floor still reads every pair,
-# zeroed ones included.
+# remainder to be small against. The grazing floor reads the pairs inside the
+# cap only (momwire#1187): a pair served as zero reads no surface, so its
+# angle cannot reach Z, and the fill queries the grid with the capped pairs
+# alone (`remainder_field_proj_below`).
 _SOMM_BELOW_R1_CAP_LAMBDA_M = 4.0
+
+
+def below_r1_cap(k_m):
+    """The R₁ (metres) past which the below/below remainder is served as
+    zero: `_SOMM_BELOW_R1_CAP_LAMBDA_M` in-medium wavelengths, with the same
+    arithmetic `SommerfeldGridBelow` sets `r1_cap` by, so a plan asking this
+    and a grid built at the same k_m agree on the number."""
+    lam_m = 2.0 * np.pi / abs(k_m)
+    return _SOMM_BELOW_R1_CAP_LAMBDA_M * lam_m
+
 
 # The inner/far break, in λ_m. Everything below it is the lattice the grid
 # had before momwire#838 part 2, byte for byte; the far annulus above it is
@@ -1916,6 +1928,41 @@ def _zero_past_cap(out, obs, src, d_obs, d_src, r1_cap):
         out[i0:i1][np.sqrt(rho * rho + hh * hh) > r1_cap] = 0.0
 
 
+# momwire#1187: how often the projection met a pair past the cap under the
+# grazing floor and queried the grid with the capped pairs alone, per branch.
+# Only a deck refused before #1187 reaches either; tests read these to prove
+# which branch ran.
+_PAST_CAP_FLOOR_ROUTES = {"cpp": 0, "numpy": 0}
+
+
+def _capped_extremes(obs, src, d_obs, d_src, r1_cap):
+    """`(min theta, max theta)` over the pairs with R₁ <= `r1_cap`, or None
+    when there is none (momwire#1187). `_zero_past_cap`'s arithmetic and row
+    chunks, so the two classify every pair identically; the angle is the C++
+    kernel's `atan2(hh, rho)`. The interval is then widened by a few ulps
+    (clipped to [0, pi/2]) so a pair on a band seam cannot be read against a
+    band `_ensure_for` left unfilled on a last-bit disagreement between
+    numpy's and the kernel's hypot."""
+    lo, hi = np.inf, -np.inf
+    step = max(1, (1 << 20) // max(1, src.shape[0]))
+    for i0 in range(0, obs.shape[0], step):
+        i1 = min(i0 + step, obs.shape[0])
+        rho = np.hypot(
+            obs[i0:i1, 0][:, None] - src[:, 0][None, :],
+            obs[i0:i1, 1][:, None] - src[:, 1][None, :],
+        )
+        hh = d_obs[i0:i1, None] + d_src[None, :]
+        keep = np.sqrt(rho * rho + hh * hh) <= r1_cap
+        if not np.any(keep):
+            continue
+        th = np.arctan2(hh[keep], rho[keep])
+        lo = min(lo, float(np.min(th)))
+        hi = max(hi, float(np.max(th)))
+    if lo > hi:
+        return None
+    return max(lo * (1.0 - 1e-12), 0.0), min(hi * (1.0 + 1e-12), 0.5 * np.pi)
+
+
 def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid):
     """Projected below/below remainder table t_m · F(r_m, r_n) · t_n.
 
@@ -1944,8 +1991,10 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     arithmetic as before (an empty mask touches nothing). The key is the cap
     and NOT `grid.r1_max`: a grid sized short of the cap and then queried
     past its own tabulation is a sizing bug, and `SommerfeldGridBelow.eval`
-    still names it. The grazing floor still reads every pair, zeroed ones
-    included. What licenses the zero is measured and written at
+    still names it. The grazing floor is asked of the pairs inside the cap
+    only (momwire#1187): when a pair past the cap sits under the floor, the
+    grid is queried with the capped pairs alone, so a zeroed pair neither
+    refuses nor fills a band. What licenses the zero is measured and written at
     `_SOMM_BELOW_R1_CAP_LAMBDA_M`; it is a statement about Z, which is why
     `remainder_field_below` (a field at a point) does not share it.
 
@@ -2014,6 +2063,20 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
             )
 
         out, mx_r1, mn_th, mx_th = _run()
+        if mx_r1 > grid.r1_cap and mn_th < grid.th_min:
+            # momwire#1187: the kernel's extremes read EVERY pair, and here a
+            # pair under the floor may be one past the cap, whose served value
+            # is zero whatever it interpolated (the kernel clamps theta into
+            # the table, so its read is in bounds). Take the extremes over the
+            # capped pairs instead; if one of THEM is under the floor,
+            # `grid.eval` below still refuses it by name. Only a deck that was
+            # refused before #1187 reaches this branch.
+            _PAST_CAP_FLOOR_ROUTES["cpp"] += 1
+            ext = _capped_extremes(obs, src, d_obs, d_src, grid.r1_cap)
+            if ext is None:
+                # Every pair is past the cap: the whole block is served as zero.
+                return np.zeros_like(out)
+            mn_th, mx_th = ext
         # The three domain refusals are NOT transcribed into C++. The kernel
         # reports the query's extremes and they go straight back through
         # `SommerfeldGridBelow.eval`, which raises in its own words — one copy
@@ -2049,7 +2112,23 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
     past = None
     if r1_cap is not None and r1.size and float(np.max(r1)) > r1_cap:
         past = r1 > r1_cap
-        surf = grid.eval(np.minimum(r1, r1_cap), np.arctan2(hh, rho))
+        th_q = np.arctan2(hh, rho)
+        if np.any(th_q[past] < grid.th_min):
+            # momwire#1187: a pair past the cap under the grazing floor. Its
+            # served value is zero, so it must neither refuse nor reach a band
+            # no capped pair reaches: query it at a CAPPED pair's own point
+            # (the first one), whose regions the query touches anyway. A
+            # capped pair under the floor still refuses in `grid.eval`.
+            _PAST_CAP_FLOOR_ROUTES["numpy"] += 1
+            inside = np.flatnonzero(~past.ravel())
+            if inside.size == 0:
+                return np.zeros(r1.shape, dtype=np.complex128)
+            j = int(inside[0])
+            r1_q = np.where(past, r1.flat[j], r1)
+            th_q = np.where(past, th_q.flat[j], th_q)
+            surf = grid.eval(r1_q, th_q)
+        else:
+            surf = grid.eval(np.minimum(r1, r1_cap), th_q)
     else:
         surf = grid.eval(r1, np.arctan2(hh, rho))
     g = divide_out_below(k_p, k_m, rho, hh)
