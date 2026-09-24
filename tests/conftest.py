@@ -107,6 +107,9 @@ _FIXTURE_GROUP_FILES = (
     # the module fixture builds each grid once and every call phase is
     # milliseconds. Same shape as `test_surface_radials_865.py` above.
     "test_rotational_symmetry_1029.py",
+    # momwire#1131: the above-ground route's Sommerfeld cases share one grid
+    # through a module fixture (~6 s to build on the laptop, one thread).
+    "test_route_above_ground_1131.py",
 )
 
 

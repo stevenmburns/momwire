@@ -285,14 +285,20 @@ def test_one_radial_is_not_a_screen():
     assert "the route needs N >= 2 sectors" in msg
 
 
-def test_an_unburied_deck_is_out_of_scope():
+def test_an_unburied_deck_is_served_since_1131():
+    """This deck used to be refused: the route filled one sector through the
+    buried fill, the only one that could restrict its rows. The above-ground
+    fill learned `rows=` in momwire#1131, so the same deck is now read as two
+    sectors about the mast (`test_route_above_ground_1131.py` gates the
+    answer)."""
     above = [
         np.array([(0.0, 0.0, 1.0), (6.0, 0.0, 1.0)]),
         np.array([(0.0, 0.0, 1.0), (-6.0, 0.0, 1.0)]),
         np.array([(0.0, 0.0, 1.0), (0.0, 0.0, 11.0)]),
     ]
-    with pytest.raises(RotationalSymmetryRefused) as exc:
-        BSplineSolver(
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = BSplineSolver(
             wires=above,
             n_per_edge_per_wire=[[6], [6], [8]],
             degree=2,
@@ -302,7 +308,8 @@ def test_an_unburied_deck_is_out_of_scope():
             rotational_symmetry=True,
             **GROUND,
         )
-    assert "has no wire below the interface" in str(exc.value)
+    assert s._rotational_map.n_sectors == 2
+    assert s._rotational_map.axial == (2,)
 
 
 def test_singular_enrichment_is_out_of_scope():
