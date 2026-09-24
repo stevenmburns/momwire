@@ -687,8 +687,13 @@ PATH_ORDER_KH_SWITCH = 0.018  # sqrt(0.0254 * 0.0127), the corner's own gap
 _IX_SLAB_BYTES = 8 * 2**20
 # Row windows the crossing assembly's below block folded into Z one at a time
 # (`_assemble_Z_below_plane(into=)`, momwire#1173 design C phase 2): the
-# counter the tests read to know the windowed fold ran.
+# counter the tests read to know the windowed fold ran. `_BELOW_FOLD_INTO`
+# False is the in-process reference (the whole below block, then one fold);
+# `_BELOW_FOLD_CONTROL = "shift"` is TEST-ONLY and subtracts each window's
+# image rows one row out of step — the lockstep pairing gone wrong.
 _BELOW_FOLD_ROUTES = {"windows": 0}
+_BELOW_FOLD_INTO = True
+_BELOW_FOLD_CONTROL = None
 
 
 def _ix_accumulate(Z, rows, cols, block, *, sign=1):
@@ -4293,6 +4298,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ):
                 if (lo, hi) != (lo_i, hi_i):
                     raise AssertionError("the image walks other row windows")
+                if _BELOW_FOLD_CONTROL == "shift":
+                    i_rows = np.roll(i_rows, 1, axis=0)  # TEST-ONLY: misaligned
                 d_rows -= i_rows
                 del i_rows
                 _BELOW_FOLD_ROUTES["windows"] += 1
@@ -4528,9 +4535,16 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # design C phase 2): it never exists beside Z. After the above block,
         # as the whole-block fold was, so an entry both blocks write (a
         # crossing tent's) is `(0 + Z_a) + Z_b` as it was.
-        self._assemble_Z_below_plane(
-            geom_b, prep_b, k, omega, plan_skip=nodes, into=(Z, rows_b)
-        )
+        if _BELOW_FOLD_INTO:
+            self._assemble_Z_below_plane(
+                geom_b, prep_b, k, omega, plan_skip=nodes, into=(Z, rows_b)
+            )
+        else:
+            Z_b = self._assemble_Z_below_plane(
+                geom_b, prep_b, k, omega, plan_skip=nodes
+            )
+            _ix_accumulate(Z, rows_b, rows_b, Z_b)
+            del Z_b
 
         ctx = self._crossing_context(geom, k=k, omega=omega)
         axis_kw = dict(

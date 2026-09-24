@@ -216,6 +216,10 @@ def test_tiles_are_whole_columns_of_the_one_call(shape, monkeypatch):
 
 
 def test_the_product_refuses_a_lookup_before_its_tiles_finish(monkeypatch):
+    """A HIT on a product still being evaluated refuses; a MISS is answered
+    (the factors decide it, so it is what the finished product would say —
+    design C phase 2's slow end loops run before the tiles on exactly
+    that)."""
     A, B = pg._axes(
         np.zeros((3, 2)), [0.5, 1.0, 1.5], [(1.0, 0.0), (2.0, 0.0)], [-0.1, -0.2]
     )
@@ -223,13 +227,19 @@ def test_the_product_refuses_a_lookup_before_its_tiles_finish(monkeypatch):
         mp.setattr(cf, "_TILE_ROWS", 2)
         plan = cf._product_plan(pg._Ctx(), 1.0, 1.0, A, B, 0.0)
         tiles = cf._ProductTiles(plan, 1.0, 1.0, 1)
+        tiles.keep_values()
         memo = ni.ProductMemo()
         memo.set_product(tiles.product)
+        held_row = plan.rows(np.array([0]))
+        hit, _block = memo.lookup(np.zeros((1, 3)))
+        assert not hit.any()
         gen = tiles.chunks(1)
         next(gen)
         with pytest.raises(RuntimeError, match="still being evaluated"):
-            memo.lookup(np.array([[1.0, 0.5, -0.1]]))
+            memo.lookup(held_row)
         list(gen)
     assert tiles.product.complete
     hit, _block = memo.lookup(np.zeros((1, 3)))
     assert not hit.any()
+    hit, _block = memo.lookup(held_row)
+    assert hit.all()
