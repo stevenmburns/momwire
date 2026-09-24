@@ -239,11 +239,11 @@ def test_chunked_hub16_x2_is_the_one_call_z(monkeypatch):
 
     monkeypatch.setattr(cf, "_chunked_tables", spy)
     s = _razor(d)
-    s.compute_impedance()
-    whole = np.array(s.z, copy=True)
+    # Z read where it is filled: the solve factors it in place.
+    whole = s._assemble_Z(s._build_geometry(), s.k)
     assert served == []
     monkeypatch.setattr(cf, "_MAIN_CHUNK_BYTES", _TINY)
     s = _razor(d)
-    s.compute_impedance()
+    Z = s._assemble_Z(s._build_geometry(), s.k)
     assert len(served) > 1000, len(served)
-    assert np.array_equal(np.asarray(s.z), whole)
+    assert np.array_equal(Z, whole)

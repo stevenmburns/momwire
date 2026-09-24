@@ -72,8 +72,10 @@ def _z(make, monkeypatch, *, budget=_TINY, streamed=True, whole_rows=True):
         mp.setattr(cf, "_STREAMED_WHOLE_ROWS", whole_rows)
         counts = _Counts(mp)
         s = make()
-        s.compute_impedance()
-        return np.asarray(s.z), counts
+        # The matrix `compute_impedance` would factor, read where it is
+        # filled: the solve now factors it in place (momwire#1173), so there
+        # is no stashed Z to read afterwards.
+        return s._assemble_Z(s._build_geometry(), s.k), counts
 
 
 def _hub(x):

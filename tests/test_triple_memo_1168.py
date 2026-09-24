@@ -155,24 +155,34 @@ def _razor(deck):
 
 
 def _solve(make):
-    """(Z, currents) of a fresh solver from `make()`. Razor keeps its Z; the
-    Galerkin trunks' Z is taken off their own assembly entry."""
+    """(Z, currents) of a fresh solver from `make()`. Z is copied off each
+    trunk's own assembly entry (razor's `_assemble_Z`; the Galerkin trunks'
+    operator), because every solve now factors it in place."""
     s = make()
     grabbed = []
-    for name in ("_compute_Z_operator", "_assemble_Z_ported"):
+    names = (
+        ("_assemble_Z",)
+        if isinstance(s, RazorSolver)
+        else ("_compute_Z_operator", "_assemble_Z_ported")
+    )
+    for name in names:
         real = getattr(s, name, None)
         if real is None:
             continue
 
         def spy(*a, _real=real, **kw):
             out = _real(*a, **kw)
-            grabbed.append(out[0] if isinstance(out, tuple) else out)
+            # A copy AT the fill: the solves factor Z in place (bspline, and
+            # razor since momwire#1173), so the object itself is the LU
+            # factors by the time the solve returns.
+            grabbed.append(
+                np.array(out[0] if isinstance(out, tuple) else out, copy=True)
+            )
             return out
 
         setattr(s, name, spy)
     _z, currents = s.compute_impedance()
-    Z = s.z if isinstance(s, RazorSolver) else grabbed[-1]
-    return np.array(Z, copy=True), np.asarray(currents)
+    return grabbed[-1], np.asarray(currents)
 
 
 class _Routes:
