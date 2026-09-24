@@ -772,14 +772,17 @@ def compute_impedance(solver):
     check_drive(v, kcl_con, sectors)
     solver._checkpoint()  # after geometry/basis/drive, before the one-sector fill
     rows = observer_rows(solver, geom)
+    # `_compute_Z_operator` takes `rows=` on both of its fills: the buried one
+    # (momwire#1029) and, since momwire#1131, the above-ground one -- so the
+    # route serves an elevated or surface screen through the same call.
     if not COMPACT_Z:
-        Z = solver._compute_Z_operator_buried(geom, supp_seg, polys, rows=rows)
+        Z = solver._compute_Z_operator(geom, supp_seg, polys, rows=rows)
         row_of = None
     else:
         # momwire#1132: only the rows the solve reads are ever allocated. The
         # square destination this replaced was fully resident for a 90-row
         # write (huge pages, column-major), 59 % of the 150-radial peak.
-        Z, held = solver._compute_Z_operator_buried(
+        Z, held = solver._compute_Z_operator(
             geom, supp_seg, polys, rows=rows, compact=True
         )
         want = np.union1d(sectors[0], axial)
@@ -800,13 +803,13 @@ def compute_impedance_swept(solver, k_array, z_out):
     """`compute_impedance_swept` on the sector route (momwire#1029 phase 2b).
 
     A LOOP, and that is the honest shape rather than a shortcut: the route's
-    fill is `_compute_Z_operator_buried` under `rows=`, which has no k axis
-    to batch over, so the sweep is one sector fill and one (m + p) solve per
-    frequency. Nothing is given up by looping — the dense sweep is a loop on
-    this deck too, for its own reason (`_swept_batched_available` needs
-    `ground_eps is None`, and a deck with no lower medium is one the route
-    refuses at construction), so the route sweeps whatever the dense path
-    would have swept.
+    fill is `_compute_Z_operator` under `rows=`, which has no k axis to
+    batch over, so the sweep is one sector fill and one (m + p) solve per
+    frequency. On a buried deck nothing is given up by looping — the dense
+    sweep is a loop there too (`_swept_batched_available` needs
+    `ground_eps is None`). On a free-space or PEC screen (momwire#1131) the
+    dense sweep CAN batch, and the route still loops: its per-k fill is the
+    (m + p)-row one, which is the saving the route exists for.
 
     THE CONTRACT IS THE DENSE PATH'S, not a second spelling of it: `z_out` is
     the caller's own allocation — (n_k,) for one port, (n_k, n_ports)
@@ -818,7 +821,9 @@ def compute_impedance_swept(solver, k_array, z_out):
     No `same_edge_prep`. `_compute_Z_operator` ignores the hoist on its
     buried branch, so building it would be work no fill can read — measured
     as pure cost on the dense sweep of a buried deck too, which is a separate
-    finding and not this route's to fix.
+    finding and not this route's to fix. The above-ground `rows=` fill
+    (momwire#1131) would read one; it is not built here yet, so an
+    above-ground route sweep rebuilds each same-edge block per k.
     """
     with solver._k_restored():
         for i, kk in enumerate(k_array):
