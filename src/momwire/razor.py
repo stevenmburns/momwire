@@ -1021,6 +1021,24 @@ class _FusedMoments:
             )
         return self._numpy
 
+    def rows(self, r0, r1):
+        """The same fill restricted to observers ``[r0, r1)`` (momwire#1173).
+
+        Every argument that is per OBSERVER is sliced — the points and, under
+        the extended kernel, their eligibility labels — and every per-SOURCE
+        argument is shared. The kernel fills each observer's row from that
+        observer's own arguments and the shared source set, so the rows it
+        returns are the corresponding rows of the full fill, bit for bit.
+        """
+        sub = object.__new__(_FusedMoments)
+        for name in self.__slots__:
+            setattr(sub, name, getattr(self, name))
+        sub.obs = self.obs[r0:r1]
+        if self.group_i.size:
+            sub.group_i = self.group_i[r0:r1]
+        sub._numpy = None
+        return sub
+
     def evaluate(self, solver, k, *, need_m1, n_obs):
         """Both halves of the split, at one wavenumber, in one kernel call.
 
@@ -2894,6 +2912,30 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 M1[lo:hi] = (m1s + np.einsum("psq,sq->ps", rem, tau * wq)) * inv4pi
         return M0, M1
 
+    def _seg_moments_rows(self, chunks, k, r0, r1):
+        """Rows ``[r0, r1)`` of :meth:`_seg_moments_from_prepared`'s M0.
+
+        momwire#1173: a consumer that reads a few observers' rows at a time
+        need not hold the whole ``(n_obs, n_seg)`` plane. Each observer's row
+        is computed from that observer alone, on both lanes, so these are the
+        full plane's rows bit for bit: the fused lane slices its observer
+        arguments (`_FusedMoments.rows`), and the numpy lane replays exactly
+        the prepared chunks that overlap the window, re-based to start at 0,
+        and slices the window out of them. (On the numpy lane a chunk that
+        several windows overlap is replayed once per window; that lane is the
+        no-accelerator fallback, and the trade is time for the plane.)
+        """
+        if isinstance(chunks, _FusedMoments):
+            M0, _ = chunks.rows(r0, r1).evaluate(self, k, need_m1=False, n_obs=r1 - r0)
+            return M0
+        sub = [c for c in chunks if c[0] < r1 and c[1] > r0]
+        base, top = sub[0][0], sub[-1][1]
+        shifted = _PreparedChunks(
+            [(lo - base, hi - base, *rest) for lo, hi, *rest in sub], chunks.seg_h
+        )
+        M0, _ = self._seg_moments_from_prepared(shifted, k, top - base, need_m1=False)
+        return M0[r0 - base : r1 - base]
+
     def _seg_moments(self, obs, geom, k, *, need_m1=True, ek=None):
         """Kernel moments of every segment at every observation point.
 
@@ -4691,22 +4733,29 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     ),
                 )
 
-        M0c, _ = self._seg_moments_from_prepared(
-            sources["t2_chunks"], k, prepared["n_cent"], need_m1=False
-        )
-        if w_Phi_fn is not None:
-            n_cent = prepared["n_cent"]
-            step = max(1, _WEIGHTED_CHUNK_ELEMS // max(1, prepared["n_seg"]))
-            for c0 in range(0, n_cent, step):
-                self._checkpoint()
-                c1 = min(c0 + step, n_cent)
-                _w_A_unused, w_Phi = w_Phi_fn(c0, c1)
-                M0c[c0:c1] *= w_Phi
+        w_step = max(1, _WEIGHTED_CHUNK_ELEMS // max(1, prepared["n_seg"]))
+
+        def _m0c_rows(c0, c1):
+            # Rows [c0, c1) of the (weighted) centroid moments M0c
+            # (momwire#1173): the moment rows from `_seg_moments_rows`, then
+            # w_Phi on the same rows. Both are elementwise on the centroid
+            # axis, so any window gives the whole plane's rows bit for bit,
+            # and the (n_cent, n_seg) plane never exists.
+            M0c = self._seg_moments_rows(sources["t2_chunks"], k, c0, c1)
+            if w_Phi_fn is not None:
+                for a in range(c0, c1, w_step):
+                    self._checkpoint()
+                    b = min(a + w_step, c1)
+                    _w_A_unused, w_Phi = w_Phi_fn(a, b)
+                    M0c[a - c0 : b - c0] *= w_Phi
+            return M0c
+
         # momwire#1173: T2 is never formed whole. `_t2_rows` below builds it
-        # one T1 row window at a time, from M0c by elementwise operations on
-        # the row axis, so the window changes no entry's float64 value and
-        # the (n_basis, n_seg) difference and its two (n_basis, n_basis)
-        # gathers never exist at full size.
+        # one T1 row window at a time, from the centroid rows that window
+        # reads, by elementwise operations on the row axis, so the window
+        # changes no entry's float64 value and neither M0c nor the
+        # (n_basis, n_seg) difference and its two (n_basis, n_basis) gathers
+        # ever exist at full size.
         grounded = prepared["grounded"]
         # Grounded rows, applied per row window in `_t2_rows` below:
         # A grounded row's testing path starts AT the plane, where the
@@ -4767,18 +4816,32 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # Rows [lo, hi) of T2 (momwire#1173). Every operation is
             # elementwise on the row axis, so restricting it to a window
             # changes no entry's arithmetic.
-            dM0 = M0c[s_b[lo:hi]] - M0c[s_a[lo:hi]]  # (row, source segment)
+            # Exactly the centroids this window's rows read (every grounded
+            # and chopped row in it reads its own s_a / s_b too), evaluated
+            # one contiguous run at a time, so a junction row reaching a far
+            # segment costs that segment's row and not the span between.
+            sa, sb = s_a[lo:hi], s_b[lo:hi]
+            need = np.unique(np.concatenate([sa, sb]))
+            cuts = np.flatnonzero(np.diff(need) > 1) + 1
+            M0w = np.concatenate(
+                [_m0c_rows(int(r[0]), int(r[-1]) + 1) for r in np.split(need, cuts)]
+            )
+
+            def at(seg):
+                return M0w[np.searchsorted(need, seg)]
+
+            dM0 = at(sb) - at(sa)  # (row, source segment)
             if grounded.size:
                 g = grounded[(grounded >= lo) & (grounded < hi)]
-                dM0[g - lo] = M0c[s_b[g]]
+                dM0[g - lo] = at(s_b[g])
             if chop is not None:
                 sel = (rows >= lo) & (rows < hi)
                 if sel.any():
                     r = rows[sel]
                     dM0[r - lo] = np.where(
                         keep_a[sel][:, None],
-                        M0k[sel] - M0c[s_a[r]],
-                        M0c[s_b[r]] - M0k[sel],
+                        M0k[sel] - at(s_a[r]),
+                        at(s_b[r]) - M0k[sel],
                     )
             return dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
 

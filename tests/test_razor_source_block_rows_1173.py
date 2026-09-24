@@ -185,3 +185,36 @@ def test_out_is_the_same_fold_as_subtracting_the_returned_block(name):
     )
     assert ret is got
     assert np.array_equal(got, want)
+
+
+def _centroid_chunks(rs, geom, lane):
+    prep = rs._assemble_Z_prepare(geom)
+    chunks = prep["t2_chunks"]
+    if lane == "numpy" and isinstance(chunks, _razor._FusedMoments):
+        chunks = chunks._numpy_lane(rs)
+    return chunks, prep["n_cent"]
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("lane", ["fused", "numpy"])
+@pytest.mark.parametrize("ek", [False, True])
+def test_moment_rows_are_the_full_planes_rows(lane, ek):
+    """`_seg_moments_rows` gives the full M0 plane's rows, bit for bit, for
+    windows inside one prepared chunk and across chunk boundaries, with and
+    without the extended kernel's per-observer labels."""
+    with pytest.MonkeyPatch.context() as mp:
+        # Several numpy chunks on a small deck, so windows straddle them.
+        mp.setattr(_razor, "_CHUNK_ELEMS", 400)
+        rs = RazorSolver(**_vertical(40), extended_kernel=ek, **LANES["nec5"])
+        geom = rs._build_geometry()
+        chunks, n = _centroid_chunks(rs, geom, lane)
+        if lane == "fused" and not isinstance(chunks, _razor._FusedMoments):
+            pytest.skip("the C++ moment fill is not built")
+        if lane == "numpy":
+            assert len(list(chunks)) > 2, "the chunks did not split"
+        full, _ = rs._seg_moments_from_prepared(chunks, rs.k, n, need_m1=False)
+        for r0, r1 in [(0, 1), (0, 7), (5, 23), (n - 3, n), (0, n)]:
+            got = rs._seg_moments_rows(chunks, rs.k, r0, r1)
+            assert np.array_equal(got, full[r0:r1]), (r0, r1)
+        # Negative control: a window one row off is not the same rows.
+        assert not np.array_equal(rs._seg_moments_rows(chunks, rs.k, 6, 24), full[5:23])
