@@ -37,6 +37,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from momwire import _potential_ground
 from momwire import razor as _razor
 from momwire.razor import RazorSolver
 
@@ -158,3 +159,29 @@ def test_a_one_ulp_prefactor_change_is_visible():
     ref = _Z(make(), "nec5")
     got = _Z(make(), "nec5", eps=np.nextafter(rs.eps, np.inf))
     assert not np.array_equal(got, ref)
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize(
+    "name", ["contact / pec", "elevated / refl-coef", "elevated / sommerfeld"]
+)
+def test_out_is_the_same_fold_as_subtracting_the_returned_block(name):
+    """`out=` folds the image block into Z window by window; the matrix is
+    the one `Z -= block` gives on the whole returned block, bit for bit."""
+    make, _ = DECKS[name]
+    rs = RazorSolver(**make(), **LANES["nec5"])
+    geom = rs._build_geometry()
+    prep = rs._assemble_Z_prepare(geom)
+    k, omega = rs.k, rs.omega
+    ground = _potential_ground.potential_ground_for(rs, geom, k, omega)
+    free = rs._assemble_Z_source_block(geom, prep, prep, k, omega)
+    block = rs._assemble_Z_source_block(
+        geom, prep, prep["image"], k, omega, ground=ground
+    )
+    want = free - block
+    got = free.copy()
+    ret = rs._assemble_Z_source_block(
+        geom, prep, prep["image"], k, omega, ground=ground, out=got
+    )
+    assert ret is got
+    assert np.array_equal(got, want)
