@@ -1,0 +1,105 @@
+{
+ "momwire": "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1132-base/src/momwire/__init__.py",
+ "radials": 48,
+ "route": true,
+ "z": [
+  43.522375981530054,
+  29.222808807816385
+ ],
+ "rss_before_mb": 95.1,
+ "sampled_peak_mb": 447.8,
+ "vmhwm_mb": 447.3,
+ "seconds": 4.44,
+ "peak_stack": [
+  "_rotational_symmetry.py:759 compute_impedance",
+  "bspline.py:5782 _compute_Z_operator_buried",
+  "_below_interface.py:1439 compute_Z_operator_buried",
+  "_crossing_fill.py:3318 cross_complete_block_split",
+  "_crossing_fill.py:3572 _main_split",
+  "_crossing_fill.py:3512 _direct_group",
+  "_crossing_fill.py:3190 _sandwich_dense",
+  "_crossing_fill.py:2925 _row_weights"
+ ],
+ "rises": [
+  [
+   122.0,
+   [
+    "_below_interface.py:1284 compute_Z_operator_buried",
+    "bspline.py:5649 _accumulate_Z_subset_chunked",
+    "_bspline_kernels.py:1302 _seg_seg_full_moments_offedge"
+   ]
+  ],
+  [
+   159.6,
+   [
+    "bspline.py:5660 _accumulate_Z_subset_chunked",
+    "bspline.py:5595 _accumulate",
+    "_accel.py:460 wrapper"
+   ]
+  ],
+  [
+   215.6,
+   [
+    "bspline.py:5660 _accumulate_Z_subset_chunked",
+    "bspline.py:5595 _accumulate",
+    "_accel.py:460 wrapper"
+   ]
+  ],
+  [
+   241.4,
+   [
+    "_crossing_fill.py:3544 _main_split",
+    "_crossing_fill.py:838 axis_data",
+    "_crossing_fill.py:238 end_values"
+   ]
+  ],
+  [
+   267.2,
+   [
+    "_crossing_fill.py:1127 _tables",
+    "_near_interface.py:1626 radius_tables",
+    "_near_interface.py:1636 radius_fold"
+   ]
+  ],
+  [
+   298.8,
+   [
+    "_near_interface.py:1627 radius_tables",
+    "_near_interface.py:1112 designed_tables",
+    "_near_interface.py:1529 _unique_rows"
+   ]
+  ],
+  [
+   332.0,
+   [
+    "_near_interface.py:1112 designed_tables",
+    "_near_interface.py:1531 _unique_rows",
+    "_near_interface.py:1554 _unique_tri"
+   ]
+  ],
+  [
+   359.3,
+   [
+    "_crossing_fill.py:1127 _tables",
+    "_near_interface.py:1627 radius_tables",
+    "_near_interface.py:1132 designed_tables"
+   ]
+  ],
+  [
+   391.3,
+   [
+    "_crossing_fill.py:1127 _tables",
+    "_near_interface.py:1627 radius_tables",
+    "_near_interface.py:1132 designed_tables"
+   ]
+  ],
+  [
+   429.3,
+   [
+    "_crossing_fill.py:1127 _tables",
+    "_near_interface.py:1627 radius_tables",
+    "_near_interface.py:1132 designed_tables"
+   ]
+  ]
+ ]
+}
