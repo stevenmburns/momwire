@@ -295,13 +295,26 @@ def test_the_preflight_serves_what_the_fill_serves(deck):
     assert razor(deck).buried_serve_refusal() is None
 
 
+# momwire#1187: the grazing floor is asked only of pairs inside the below/below
+# R1 cap (4 lambda_m), and at soil A and 7 MHz that is 40 m, so every
+# separation below now lies past it and is SERVED. The floor is an angle, so
+# the separations where razor reaches it are geometry and do not move with
+# the medium; over a very dry ground (eps_r 1.5, sigma 1e-4) lambda_m is
+# 34.7 m and the cap 139 m, which puts all three back inside it, where the
+# refusal is still the fill's own sentence. (Lowering the frequency instead
+# widens the cap too, but doubles these tests' cost in the above-ground grid.)
+DRY = (1.5, 1e-4)
+
+
 @pytest.mark.parametrize("m, sep", [(1, 128.0), (2, 64.0), (4, 48.0)])
 def test_the_preflight_refuses_with_the_fills_own_sentence(m, sep):
     """At the first separation razor refuses on each rung — and before
     U2b-3 the first two of these passed the endpoint plan and died inside
     the grid instead, in the grid's words, where a pre-flight asking the plan
     would have said "served" (probe 3g)."""
-    s = razor(two(m, sep))
+    # Past the cap at 7 MHz: served since momwire#1187.
+    assert razor(two(m, sep)).buried_serve_refusal() is None
+    s = razor(two(m, sep, ground_eps=DRY))
     pre = s.buried_serve_refusal()
     assert pre is not None and "grazing floor" in pre
     with pytest.raises(ValueError) as exc:
@@ -314,9 +327,9 @@ def test_the_endpoint_plan_alone_passed_the_deck_the_grid_refuses(monkeypatch):
     removed, the pre-flight says "served" at 64 m x2 and the fill then
     refuses in the GRID's words."""
     monkeypatch.setattr(
-        RazorSolver, "_below_remainder_th_min", lambda self, geom: (np.inf, 0.0)
+        RazorSolver, "_below_remainder_th_min", lambda self, geom, **kw: (np.inf, 0.0)
     )
-    s = razor(two(2, 64.0))
+    s = razor(two(2, 64.0, ground_eps=DRY))
     assert s.buried_serve_refusal() is None
     with pytest.raises(ValueError, match="below/below grid tabulated from theta"):
         s._assemble_Z(s._build_geometry(), s.k)
