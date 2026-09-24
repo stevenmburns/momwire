@@ -1,0 +1,161 @@
+{
+ "momwire": "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/src/momwire/__init__.py",
+ "screen12_free_memNone": {
+  "z": [
+   "0x1.4980499d431b1p+4",
+   "-0x1.3b76fa1532fd5p+3"
+  ],
+  "c": "6d4021fde6819885",
+  "Z": "57f6eae225dddad9"
+ },
+ "screen12_free_mem1": {
+  "z": [
+   "0x1.4980499d432fbp+4",
+   "-0x1.3b76fa1522f34p+3"
+  ],
+  "c": "80bf208838e89bae",
+  "Z": "1d5058cbc7c1ad05"
+ },
+ "screen4_free_elev": {
+  "z": [
+   "0x1.467eea780de1ap+4",
+   "-0x1.49d9cfdf7c9fap+4"
+  ],
+  "c": "f9907e8fc45f0c70",
+  "Z": "6910b14006c1cb21"
+ },
+ "screen12_pec_memNone": {
+  "z": [
+   "0x1.262d37b16d4fbp+5",
+   "0x1.33d0ba965e4bcp+2"
+  ],
+  "c": "f11af56dc2c2ead9",
+  "Z": "16a0c315d7116c89"
+ },
+ "screen12_pec_mem1": {
+  "z": [
+   "0x1.262d37b16d5e8p+5",
+   "0x1.33d0ba9675c0bp+2"
+  ],
+  "c": "b402788a3ba90bfb",
+  "Z": "a7f933f285cbe74f"
+ },
+ "screen4_pec_elev": {
+  "z": [
+   "0x1.1d1ae664051bdp+5",
+   "-0x1.2c9d09577874ap+3"
+  ],
+  "c": "587de284efc81004",
+  "Z": "6f55fa8c950fbffb"
+ },
+ "screen12_refl-coef_memNone": {
+  "z": [
+   "0x1.7112ce8af0dfdp+4",
+   "-0x1.a6c9d8c06067ep+0"
+  ],
+  "c": "b6f72f217d9ac71b",
+  "Z": "0c9a74fd1e95345f"
+ },
+ "screen12_refl-coef_mem1": {
+  "z": [
+   "0x1.7112ce8af10e5p+4",
+   "-0x1.a6c9d8c0028d0p+0"
+  ],
+  "c": "7982a1d5f81414e9",
+  "Z": "af9251d43f91fa3c"
+ },
+ "screen4_refl-coef_elev": {
+  "z": [
+   "0x1.d675c21881ba7p+4",
+   "-0x1.f6ff74886fc40p+3"
+  ],
+  "c": "6f4f723b740c30cd",
+  "Z": "70b1407683fa1c83"
+ },
+ "screen12_sommerfeld_memNone": {
+  "z": [
+   "0x1.ebdba5ad9ead1p+5",
+   "0x1.bc59f7bfdb97cp+3"
+  ],
+  "c": "4d9d1d9090451638",
+  "Z": "bbd80b76d3d5de71"
+ },
+ "screen12_sommerfeld_mem1": {
+  "z": [
+   "0x1.ebdba5ad9ec12p+5",
+   "0x1.bc59f7bfe9896p+3"
+  ],
+  "c": "43e7fb15cd453013",
+  "Z": "e12cf5de0000352f"
+ },
+ "screen4_sommerfeld_elev": {
+  "z": [
+   "0x1.26f189f4621e0p+5",
+   "-0x1.48e49dcc38df0p+3"
+  ],
+  "c": "50cbcab02759067f",
+  "Z": "f49ceb3d5ed19c3f"
+ },
+ "screen4_refl_loaded": {
+  "z": [
+   "0x1.02fb3ef5f7359p+5",
+   "0x1.719f11f845f9dp+4"
+  ],
+  "c": "ea4dcc5993cc958f",
+  "Z": "f1a10e4bad77222f"
+ },
+ "buried4_dense": {
+  "z": [
+   "0x1.2cb50393bb893p+6",
+   "0x1.6edb47cb4ac0cp+5"
+  ],
+  "c": "263336e511e62107",
+  "Z": "78071f5f3ed47838"
+ },
+ "buried4_route": {
+  "z": [
+   "0x1.2cb50393bb77ap+6",
+   "0x1.6edb47cb4a9b3p+5"
+  ],
+  "c": "d75f30e1b56b5d0d"
+ },
+ "buried12_route": {
+  "z": [
+   "0x1.9af0c81d97783p+5",
+   "0x1.2ad88288a199dp+5"
+  ],
+  "c": "3139fad5bdafd6ea"
+ },
+ "dipole_free_memNone": {
+  "z": [
+   "0x1.102c81dce8db7p+6",
+   "-0x1.b2f17bb2864e8p+4"
+  ],
+  "c": "5ebf025405b3de45",
+  "Z": "6568892e8b8fe245"
+ },
+ "dipole_free_mem1": {
+  "z": [
+   "0x1.102c81dce8db7p+6",
+   "-0x1.b2f17bb2864e8p+4"
+  ],
+  "c": "5ebf025405b3de45",
+  "Z": "6568892e8b8fe245"
+ },
+ "dipole_somm_memNone": {
+  "z": [
+   "0x1.cb392a59e5d2dp+5",
+   "-0x1.3163e140052edp+3"
+  ],
+  "c": "2cfda0ad6fff1146",
+  "Z": "b826124bc5abc40d"
+ },
+ "dipole_somm_mem1": {
+  "z": [
+   "0x1.cb392a59e5d2dp+5",
+   "-0x1.3163e140052edp+3"
+  ],
+  "c": "2cfda0ad6fff1146",
+  "Z": "b826124bc5abc40d"
+ }
+}
