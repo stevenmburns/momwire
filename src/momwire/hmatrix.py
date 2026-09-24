@@ -1138,6 +1138,13 @@ class HMatrixSolver(BSplineSolver):
         # the dense rule itself and not a second copy of it — and it is a
         # max-with-base, so a deck with nothing grazing keeps the base order
         # it always had and is bit-identical.
+        #
+        # momwire#1189 moved the DENSE fill to per-pair orders; this sampler
+        # keeps the deck-wide one, which is their maximum. The ACA samples
+        # whole rows and columns through one node table, so a per-pair order
+        # here would be a sparse correction term beside the low-rank one — a
+        # follow-up, not a mechanical port. The two routes agree to 2.6e-7
+        # of |Z| on #631's grazing wire, inside REMAINDER_KEYING_AGREEMENT.
         q = self._remainder_qp(seg_l, seg_r, gz_key)
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)

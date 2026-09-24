@@ -410,6 +410,53 @@ _NEAR_IMAGE_DELTA_OVER_2H = 0.5
 _REMAINDER_QP_CAP = 192
 _REMAINDER_QP_C = 1.0
 
+# momwire#1189: the dense remainder fill keys the order PER SEGMENT PAIR
+# (`_quadrature.remainder_qp_pairs`) rather than deck-wide. Read at call time,
+# so the gate that pins the pre-#1189 fill can switch it off and get today's
+# arithmetic back exactly. False = the deck-wide order of momwire#631.
+_REMAINDER_PER_PAIR = True
+
+# ...and raises the pairs TOUCHING a raised pair with it (see
+# `_remainder_qp_pairs`). A switch only so the gate can show what the one-ring
+# is for; False is not a supported configuration.
+_REMAINDER_PAIR_DILATE = True
+
+
+def _segment_touch_lists(seg_l, seg_r):
+    """CSR lists of the segments sharing an endpoint with each segment,
+    each segment included in its own list."""
+    from scipy.spatial import cKDTree
+
+    n = seg_l.shape[0]
+    ends = np.concatenate([seg_l, seg_r])
+    owner = np.concatenate([np.arange(n), np.arange(n)])
+    lens = np.linalg.norm(seg_r - seg_l, axis=1)
+    tol = 1e-9 * max(float(lens.max()), 1e-300)
+    pairs = cKDTree(ends).query_pairs(tol, output_type="ndarray")
+    a, b = owner[pairs[:, 0]], owner[pairs[:, 1]]
+    keep = a != b
+    a, b = a[keep], b[keep]
+    ii = np.concatenate([np.arange(n), a, b])
+    jj = np.concatenate([np.arange(n), b, a])
+    key = np.unique(ii * n + jj)
+    ii, jj = key // n, key % n
+    ptr = np.concatenate([[0], np.cumsum(np.bincount(ii, minlength=n))])
+    return ptr, jj
+
+
+def _csr_expand(ptr, idx, rows):
+    """For each entry of `rows`, every member of its CSR list: returns
+    `(k, members)` with `k` the position in `rows` each member came from."""
+    counts = np.diff(ptr)[rows]
+    k = np.repeat(np.arange(rows.size), counts)
+    off = np.arange(k.size) - np.repeat(np.cumsum(counts) - counts, counts)
+    return k, idx[ptr[rows][k] + off]
+
+
+# Pairs per chunk when a per-pair correction is scattered into Q, bounding the
+# (pairs, wings, wings) transient whatever the number of elevated pairs.
+_PAIR_SCATTER_CHUNK = 1 << 15
+
 
 def _ek_slice(ek, rows=None, cols=None):
     """Restrict an `_EK` spec's per-segment labels to a block's rows/cols.
@@ -2540,6 +2587,178 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             _REMAINDER_QP_C,
         )
 
+    def _remainder_qp_pairs(self, seg_l, seg_r, gz, cap=None):
+        """The segment pairs whose remainder order is above the base.
+
+        momwire#1189: `_remainder_qp` per pair — the same observers (each
+        segment's own Gauss nodes at the BASE order, for the reasons given
+        there) and the same rule, reduced over one (observer segment, source
+        segment) pair at a time instead of over the deck. So its maximum is
+        `_remainder_qp` exactly.
+
+        Symmetrised: pair (i, j) and pair (j, i) are the same near-image ridge
+        read from either side (the remainder field is reciprocal), and the
+        dense fill's Q is symmetric because both are filled at one order.
+        Each takes the larger of the two readings, which keeps that true.
+
+        Returns `(I, J, Q)` int64 arrays, sorted by `I` then `J`, listing only
+        the pairs above `n_qp_sommerfeld`; empty for a deck with nothing
+        grazing.
+        """
+        cap = _REMAINDER_QP_CAP if cap is None else cap
+        base = int(self.n_qp_sommerfeld)
+        xg, _ = leggauss(base)
+        tq = 0.5 * (xg + 1.0)
+        nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
+        I, J, Q = _quadrature.remainder_qp_pairs(
+            nodes, seg_l, seg_r, gz, base, cap, _REMAINDER_QP_C
+        )
+        if I.size == 0:
+            return I, J, Q
+        n = int(seg_l.shape[0])
+        I, J = np.concatenate([I, J]), np.concatenate([J, I])
+        Q = np.concatenate([Q, Q])
+        if _REMAINDER_PAIR_DILATE:
+            # A pair's ridge does not stop at a segment boundary: the
+            # near-image ridge of pair (i, j) runs on into the pairs whose
+            # segments TOUCH i and j, where it is a corner feature of the
+            # same width that the base-order nodes of neither segment can
+            # see. The deck-wide order resolved those corners by accident;
+            # a per-pair order has to raise them on purpose. Measured on
+            # #631's grazing wire (n = 16, h/lambda = 1.09e-4): the pairs
+            # alone land 6.6e-3 from a q = 192 reference where the deck-wide
+            # order lands 1.5e-3; with this one-ring they land 2.6e-7 from
+            # the deck-wide answer.
+            ptr, idx = _segment_touch_lists(seg_l, seg_r)
+            k1, ii = _csr_expand(ptr, idx, I)
+            k2, jj = _csr_expand(ptr, idx, J[k1])
+            I, J, Q = ii[k2], jj, Q[k1][k2]
+        uk, inv = np.unique(I * n + J, return_inverse=True)
+        qmax = np.zeros(uk.size, dtype=np.int64)
+        np.maximum.at(qmax, inv, Q)
+        return uk // n, uk % n, qmax
+
+    def _remainder_pair_moments(self, geom, i, js, q, grid):
+        """Segment-pair remainder moments `Jf[k, p, P]` for observer segment
+        `i` against source segments `js`, at Gauss order `q` on both sides.
+
+        The same double sum `_Z_sommerfeld_remainder` assembles, stopped
+        before the basis polynomials. The fused kernel only returns
+        basis-assembled blocks, so it is handed unit "pseudo-bases": one per
+        (segment, power), all wings on that segment and a one-hot polynomial
+        on wing 0. Its stage 2 then multiplies each moment by exactly 1 and
+        adds exact zeros, so the returned block IS the moment slab.
+        """
+        seg_l = geom["seg_l"]
+        seg_r = geom["seg_r"]
+        tang = geom["tangents"]
+        h = geom["h_per_seg"]
+        d1 = self.degree + 1
+        segs = np.concatenate([[i], js]).astype(np.int64)
+        xg, wg = leggauss(int(q))
+        tq = 0.5 * (xg + 1.0)
+        sl, sr = seg_l[segs], seg_r[segs]
+        nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
+        u_phys = h[segs][:, None] * tq[None, :]
+        w_node = 0.5 * h[segs][:, None] * wg[None, :]
+        W = w_node[None] * u_phys[None] ** np.arange(d1)[:, None, None]
+        nj = int(js.size)
+        gz = self.ground_z
+        if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
+            eye = np.eye(d1)
+            loc_I = np.zeros((d1, d1), dtype=np.int64)
+            p_I = np.zeros((d1, d1, d1))
+            p_I[:, 0, :] = eye
+            loc_J = np.repeat(np.arange(nj, dtype=np.int64), d1)[:, None]
+            loc_J = np.ascontiguousarray(np.broadcast_to(loc_J, (nj * d1, d1)))
+            p_J = np.zeros((nj * d1, d1, d1))
+            p_J[:, 0, :] = np.tile(eye, (nj, 1))
+            out = _acc.sommerfeld_remainder_bspline_Q(
+                np.ascontiguousarray(nodes[:1]),
+                np.ascontiguousarray(tang[segs[:1]], dtype=np.float64),
+                np.ascontiguousarray(W[:, :1]),
+                np.ascontiguousarray(nodes[1:]),
+                np.ascontiguousarray(tang[segs[1:]], dtype=np.float64),
+                np.ascontiguousarray(W[:, 1:]),
+                loc_I,
+                p_I,
+                loc_J,
+                p_J,
+                float(gz),
+                float(self.k),
+                *_sommerfeld.grid_cpp_args(grid),
+                int(self._cancel_flag),
+            )
+            # out[p, t*d1 + P] -> Jf[t, p, P]
+            return out.reshape(d1, nj, d1).transpose(1, 0, 2)
+        q = int(q)
+        proj = _sommerfeld.remainder_field_proj(
+            nodes[0],
+            np.repeat(tang[segs[:1]], q, axis=0),
+            nodes[1:].reshape(-1, 3),
+            np.repeat(tang[segs[1:]], q, axis=0),
+            gz,
+            self.k,
+            grid,
+        ).reshape(q, nj, q)
+        return np.einsum("pq,qjr,Pjr->jpP", W[:, 0], proj, W[:, 1:], optimize=True)
+
+    def _remainder_pair_correction(self, Q, geom, supp_seg, polys, grid, pairs):
+        """Raise the listed segment pairs of the base-order Q to their own
+        orders, in place (momwire#1189).
+
+        `Q` was filled at `n_qp_sommerfeld` over every pair. For each listed
+        pair the base-order moments are swapped for the pair's own:
+        `Q += P·(Jf_q − Jf_base)·P` over every (basis, wing) resting on the
+        two segments. Only the listed pairs are ever evaluated at a high
+        order — that is the whole saving — and a deck that lists none never
+        reaches here, which is what keeps it bit-identical.
+        """
+        I, J, Qp = pairs
+        base = int(self.n_qp_sommerfeld)
+        d1 = self.degree + 1
+        n_seg = geom["seg_l"].shape[0]
+        dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
+        # One kernel call per (order, observer segment): its source list is a
+        # row of the pair list, so nothing outside the list is evaluated.
+        grp = np.lexsort((I, Qp))
+        key_q, key_i = Qp[grp], I[grp]
+        cuts = np.flatnonzero((np.diff(key_q) != 0) | (np.diff(key_i) != 0)) + 1
+        for run in np.split(grp, cuts):
+            self._checkpoint()
+            i = int(I[run[0]])
+            js = J[run]
+            q = int(Qp[run[0]])
+            hi = self._remainder_pair_moments(geom, i, js, q, grid)
+            lo = self._remainder_pair_moments(geom, i, js, base, grid)
+            dJ[run] = hi - lo
+
+        # Every (basis, wing) resting on each segment, padded with -1.
+        flat = supp_seg.ravel()
+        counts = np.bincount(flat, minlength=n_seg)
+        width = int(counts.max()) if counts.size else 0
+        order = np.argsort(flat, kind="stable")
+        starts = np.concatenate([[0], np.cumsum(counts)[:-1]])
+        ent = np.full((n_seg, width), -1, dtype=np.int64)
+        pos = np.arange(flat.size) - np.repeat(starts, counts)
+        ent[flat[order], pos] = order
+        valid = ent >= 0
+        m_of = np.where(valid, ent // d1, 0)
+        a_of = np.where(valid, ent % d1, 0)
+        pw = polys[m_of, a_of, :] * valid[:, :, None]  # (n_seg, width, d1)
+
+        for c0 in range(0, I.size, _PAIR_SCATTER_CHUNK):
+            c1 = min(c0 + _PAIR_SCATTER_CHUNK, I.size)
+            Ic, Jc = I[c0:c1], J[c0:c1]
+            contrib = np.einsum(
+                "kup,kpP,kvP->kuv", pw[Ic], dJ[c0:c1], pw[Jc], optimize=True
+            )
+            rows = np.broadcast_to(m_of[Ic][:, :, None], contrib.shape)
+            cols = np.broadcast_to(m_of[Jc][:, None, :], contrib.shape)
+            keep = valid[Ic][:, :, None] & valid[Jc][:, None, :]
+            np.add.at(Q, (rows[keep], cols[keep]), contrib[keep])
+        return Q
+
     def _near_image_edge_blocks(self, geom):
         """Edges whose own image is a NEAR, PARALLEL translate of themselves.
 
@@ -3058,7 +3277,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
 
         d = self.degree
-        q = self._remainder_qp(seg_l, seg_r, gz)  # momwire#631
+        # momwire#631 keyed the order on grazing height; momwire#1189 keys it
+        # per segment pair. The whole deck is filled at the base order and
+        # only the listed pairs are raised afterwards, so a deck that lists
+        # none is the base-order fill, bit for bit.
+        if _REMAINDER_PER_PAIR:
+            pairs = self._remainder_qp_pairs(seg_l, seg_r, gz)
+            q = int(self.n_qp_sommerfeld)
+        else:
+            pairs = None
+            q = self._remainder_qp(seg_l, seg_r, gz)
+        self._last_remainder_orders = self._remainder_order_census(n_seg, q, pairs)
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
@@ -3087,7 +3316,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             W_c = np.ascontiguousarray(W, dtype=np.float64)
             supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
             polys_c = np.ascontiguousarray(polys, dtype=np.float64)
-            return _acc.sommerfeld_remainder_bspline_Q(
+            Q = _acc.sommerfeld_remainder_bspline_Q(
                 nodes_c,
                 tang_c,
                 W_c,
@@ -3103,6 +3332,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 *_sommerfeld.grid_cpp_args(grid),
                 int(self._cancel_flag),
             )
+            if pairs is not None and pairs[0].size:
+                self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
+            return Q
 
         n_nodes = n_seg * q
         src = nodes.reshape(n_nodes, 3)
@@ -3146,7 +3378,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     Q[rows] += np.einsum(
                         "mp,pPmn,nP->mn", polys[rows, a, :], J_blk, polys[:, b, :]
                     )
+        if pairs is not None and pairs[0].size:
+            self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
         return Q
+
+    @staticmethod
+    def _remainder_order_census(n_seg, q_fill, pairs):
+        """`{order: segment pairs filled at it}` for the last remainder fill.
+
+        Recorded on `_last_remainder_orders` so a gate can read which orders
+        the fill actually ran rather than infer it from the answer.
+        """
+        total = int(n_seg) * int(n_seg)
+        if pairs is None or pairs[0].size == 0:
+            return {int(q_fill): total}
+        qs, counts = np.unique(pairs[2], return_counts=True)
+        census = {int(a): int(b) for a, b in zip(qs, counts, strict=True)}
+        census[int(q_fill)] = total - int(counts.sum())
+        return census
 
     def _Q_sommerfeld_remainder_enrich(
         self, geom, supp_seg_poly, polys_poly, spec_seg, spec_origin, eps_t
