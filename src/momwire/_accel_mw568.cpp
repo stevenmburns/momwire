@@ -1460,7 +1460,8 @@ static void assemble_field_galerkin(
     py::ssize_t i0,
     py::array Q,
     bool fused,
-    double scale) {
+    double scale,
+    py::object row_of) {
     typedef std::complex<double> cd;
 
     // Q is the ACCUMULATION TARGET, which is why it arrives as a bare
@@ -1513,8 +1514,24 @@ static void assemble_field_galerkin(
         throw std::invalid_argument("supp_seg must be (n_basis, d+1)");
     if (proj.shape(0) != nc * q || proj.shape(1) != nsq)
         throw std::invalid_argument("proj must be (n_chunk*q, n_src*q)");
-    if (Q.shape(0) != nb || Q.shape(1) != nb)
-        throw std::invalid_argument("Q must be (n_basis, n_basis)");
+    // momwire#1132: `row_of` makes Q ROW-COMPACT -- (n_rows, n_basis), basis
+    // row m landing in Q row row_of[m] -- for a caller that reads only a few
+    // rows (the sector route, momwire#1029). None is the square target, the
+    // shipped contract. Only the ADDRESS of each `+=` moves, never its
+    // arithmetic, so a compact row is the square row bit for bit.
+    std::vector<std::int64_t> rof;
+    if (row_of.is_none()) {
+        if (Q.shape(0) != nb || Q.shape(1) != nb)
+            throw std::invalid_argument("Q must be (n_basis, n_basis)");
+    } else {
+        auto ra = row_of.cast<
+            py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>>();
+        if (ra.ndim() != 1 || ra.shape(0) != nb)
+            throw std::invalid_argument("row_of must be 1-D with one entry per basis");
+        if (Q.shape(1) != nb)
+            throw std::invalid_argument("a row-compact Q must be (n_rows, n_basis)");
+        rof.assign(ra.data(), ra.data() + nb);
+    }
     if (pos_s.shape(0) != n_seg)
         throw std::invalid_argument("pos_o and pos_s must have one entry per segment");
     if (q <= 0 || nc <= 0 || ns <= 0 || nb <= 0 || A <= 0 || P <= 0)
@@ -1560,7 +1577,27 @@ static void assemble_field_galerkin(
     for (py::ssize_t a = 0; a < A; ++a)
         for (py::ssize_t m = 0; m < nb; ++m) {
             const std::int64_t io = po[ss[m * A + a]];
-            if (io >= i0 && io < i0 + nc) at[io - i0].emplace_back(m, a);
+            if (io >= i0 && io < i0 + nc) {
+                // A row this chunk writes must have a compact row to land in:
+                // checked here, with the GIL held, not trusted under it. The
+                // one exception is a PADDED wing -- supp_seg is zero-padded,
+                // so an unlive slot names segment 0 and lands in whichever
+                // chunk holds it, contributing an exact zero. On the square
+                // target that zero is added to a row nobody reads; a compact
+                // target has no such row, so the wing is dropped. Dropping it
+                // cannot move a held row: each slot's sum is its own, and a
+                // held row's adds keep their order.
+                if (!rof.empty() && (rof[m] < 0 || rof[m] >= Q.shape(0))) {
+                    bool live = false;
+                    for (py::ssize_t p = 0; p < P; ++p)
+                        if (pl[(m * A + a) * P + p] != 0.0) live = true;
+                    if (!live && rof[m] < 0) continue;
+                    throw std::invalid_argument(
+                        "row_of maps a basis this chunk writes outside the "
+                        "compact Q");
+                }
+                at[io - i0].emplace_back(m, a);
+            }
         }
 
     std::vector<cd> F, T, Jc;
@@ -1573,6 +1610,9 @@ static void assemble_field_galerkin(
         Jc.assign(static_cast<size_t>(P) * P * nc * ns, cd(0.0, 0.0));
     }
     py::ssize_t mb[FG_BATCH];
+    // The Q row each batch slot lands in: mb itself on the square target.
+    py::ssize_t mr[FG_BATCH];
+    const std::int64_t *rp = rof.empty() ? nullptr : rof.data();
 
     {
         py::gil_scoped_release release;
@@ -1605,6 +1645,7 @@ static void assemble_field_galerkin(
                             if (mb[u] == m) dup = true;
                         if (dup) break;
                         mb[nk] = m;
+                        mr[nk] = rp ? static_cast<py::ssize_t>(rp[m]) : m;
                         for (py::ssize_t iq = 0; iq < q; ++iq) {
                             double acc = 0.0;
                             for (py::ssize_t p = 0; p < P; ++p)
@@ -1653,7 +1694,7 @@ static void assemble_field_galerkin(
                         // move the rounding, and scale = 1.0 has to reproduce
                         // the unscaled numbers bit for bit.
                         for (py::ssize_t k = 0; k < nk; ++k)
-                            Qp[mb[k] * sr + n * sc] += scale * s[k];
+                            Qp[mr[k] * sr + n * sc] += scale * s[k];
                     }
                 }
             }
@@ -1686,6 +1727,7 @@ static void assemble_field_galerkin(
             for (py::ssize_t ic = 0; ic < nc; ++ic)
                 for (const auto &ma : at[ic]) {
                     const py::ssize_t m = ma.first, a = ma.second;
+                    const py::ssize_t mrow = rp ? static_cast<py::ssize_t>(rp[m]) : m;
                     #pragma omp parallel for schedule(static)
                     for (py::ssize_t n = 0; n < nb; ++n) {
                         cd s(0.0, 0.0);
@@ -1702,7 +1744,7 @@ static void assemble_field_galerkin(
                         // The same per-contribution scaling as the fused
                         // route's stage 2. The two routes are gated against
                         // each other, so they cannot part on where it lands.
-                        Qp[m * sr + n * sc] += scale * s;
+                        Qp[mrow * sr + n * sc] += scale * s;
                     }
                 }
         }
@@ -1755,6 +1797,11 @@ void register_mw568(py::module_ &m) {
     // contract refuses a column-major Q. A caller handing over the buried Z
     // (column-major by momwire#136) gates on THIS one.
     m.attr("field_galerkin_strided_1115") = true;
+    // momwire#1132: `assemble_field_galerkin` takes `row_of`, a ROW-COMPACT
+    // target. Its own flag: a .so built before this answers `row_of=` with a
+    // TypeError, and the route's compact fill gates on THIS rather than find
+    // out mid-fill.
+    m.attr("field_galerkin_row_of_1132") = true;
 
     m.def("pair_extents_below", &pair_extents_below,
           "(r1_max, th_min) over every below/below node pair -- the C++ twin "
@@ -1787,7 +1834,8 @@ void register_mw568(py::module_ &m) {
           py::arg("proj"), py::arg("W_obs"), py::arg("W_src"),
           py::arg("supp_seg"), py::arg("polys"), py::arg("pos_o"),
           py::arg("pos_s"), py::arg("i0"), py::arg("Q"),
-          py::arg("fused") = true, py::arg("scale") = 1.0);
+          py::arg("fused") = true, py::arg("scale") = 1.0,
+          py::arg("row_of") = py::none());
     m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
           "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
           "_sommerfeld._bessel_j0_j1x, with the same |x| < 1e-6 series switch. "

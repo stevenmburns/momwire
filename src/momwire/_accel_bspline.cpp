@@ -1573,7 +1573,7 @@ assemble_Z_bspline_kernel(
 // are skipped here), so per-chunk work stays proportional to the window.
 // Each (m, n) pair is visited once per call, so the parallel += on
 // z_view(m, n) is contention-free.
-template<int D, bool COMPLEX_EPS>
+template<int D, bool COMPLEX_EPS, bool ROW_MAP = false>
 static void
 assemble_Z_bspline_windowed_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
@@ -1589,7 +1589,12 @@ assemble_Z_bspline_windowed_kernel(
     py::array_t<std::complex<double>> Z,  // any strides: F-order lets the caller's LAPACK solve factor in place
     uintptr_t cancel_flag = 0,
     double c_re = 0.0,
-    double c_im = 0.0
+    double c_im = 0.0,
+    // momwire#1132: with ROW_MAP, Z is ROW-COMPACT -- (n_rows, n_basis) --
+    // and basis row m lands in Z row row_of[m]. The wrapper validates
+    // the map against m_idx before the GIL is released. Without it this
+    // pointer is never read and the instantiation is the shipped one.
+    const int64_t *row_of = nullptr
 ) {
     static constexpr int NM = D + 1;
 
@@ -1624,7 +1629,11 @@ assemble_Z_bspline_windowed_kernel(
         throw std::runtime_error(
             "tangents.shape(0) must cover the window's segment range");
     }
-    if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
+    if (ROW_MAP) {
+        if (Z.shape(1) != (long)n_basis) {
+            throw std::runtime_error("a row-compact Z must be (n_rows, n_basis)");
+        }
+    } else if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
         throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
     }
     auto z_view = Z.mutable_unchecked<2>();
@@ -1700,13 +1709,63 @@ assemble_Z_bspline_windowed_kernel(
                 Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
                 Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
             }
-            z_view(m, n) += std::complex<double>(Zre, Zim);
+            z_view(ROW_MAP ? row_of[m] : m, n) += std::complex<double>(Zre, Zim);
         }
     }
 
     MW_THROW_IF_ABORTED();
 }
 
+
+// momwire#1132: the ROW-COMPACT target of the four windowed assemblers. The
+// sector route (momwire#1029) reads a few rows of Z, so it hands over an
+// (n_rows, n_basis) Z plus `row_of`, one entry per basis: the compact row a
+// basis row lands in, or -1 for a row the fill must never write. Checked
+// HERE, with the GIL held and before any kernel runs, rather than trusted
+// under a released GIL: every m the call will visit must map inside Z, and no
+// two of them to the same row -- the kernels' parallel `+=` is contention-free
+// only because each (m, n) is its own entry. The arithmetic is untouched; only
+// the address of the `+=` moves, so the compact rows are the dense rows bit
+// for bit.
+typedef py::array_t<int64_t, py::array::c_style | py::array::forcecast> RowOf1132;
+
+static RowOf1132
+checked_row_of_1132(
+    const py::object &row_of,
+    const py::array_t<int64_t, py::array::c_style | py::array::forcecast> &m_idx,
+    const py::array_t<int64_t, py::array::c_style | py::array::forcecast> &support_seg,
+    const py::array_t<std::complex<double>> &Z
+) {
+    RowOf1132 ro = row_of.cast<RowOf1132>();
+    const py::ssize_t n_basis = support_seg.shape(0);
+    if (ro.ndim() != 1 || ro.shape(0) != n_basis) {
+        throw std::runtime_error("row_of must be 1-D with one entry per basis");
+    }
+    if (Z.ndim() != 2) {
+        throw std::runtime_error("Z must be 2-D");
+    }
+    const py::ssize_t n_rows = Z.shape(0);
+    auto rv = ro.unchecked<1>();
+    auto mv = m_idx.unchecked<1>();
+    std::vector<char> seen((size_t)n_rows, 0);
+    for (py::ssize_t i = 0; i < m_idx.shape(0); i++) {
+        const int64_t m = mv(i);
+        if (m < 0 || m >= n_basis) {
+            throw std::runtime_error("m_idx holds a basis outside support_seg");
+        }
+        const int64_t r = rv(m);
+        if (r < 0 || r >= n_rows) {
+            throw std::runtime_error(
+                "row_of maps a basis this window writes outside the compact Z "
+                "(a row the caller did not ask for, or a map sized for another Z)");
+        }
+        if (seen[(size_t)r]) {
+            throw std::runtime_error("row_of maps two written bases to one Z row");
+        }
+        seen[(size_t)r] = 1;
+    }
+    return ro;
+}
 
 static void
 assemble_Z_bspline_windowed(
@@ -1721,8 +1780,32 @@ assemble_Z_bspline_windowed(
     double eps_,
     double mu_,
     py::array_t<std::complex<double>> Z,  // any strides: F-order lets the caller's LAPACK solve factor in place
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object row_of = py::none()
 ) {
+    if (!row_of.is_none()) {
+        RowOf1132 ro = checked_row_of_1132(row_of, m_idx, support_seg, Z);
+        const int64_t *rp = ro.data();
+        switch ((int)support_seg.shape(1) - 1) {
+            case 1:
+                assemble_Z_bspline_windowed_kernel<1, false, true>(
+                    J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag, 0.0, 0.0, rp);
+                return;
+            case 2:
+                assemble_Z_bspline_windowed_kernel<2, false, true>(
+                    J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag, 0.0, 0.0, rp);
+                return;
+            case 3:
+                assemble_Z_bspline_windowed_kernel<3, false, true>(
+                    J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, eps_, mu_, Z, cancel_flag, 0.0, 0.0, rp);
+                return;
+            default:
+                throw std::runtime_error("assemble_Z_bspline_windowed: max_d must be 1, 2 or 3");
+        }
+    }
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
             assemble_Z_bspline_windowed_kernel<1, false>(
@@ -1763,7 +1846,7 @@ assemble_Z_bspline_windowed(
 // every weight lookup is window-relative — (sm - i0, sn - j0) — the same
 // shift J_chunk already needs. The caller therefore never has to keep two
 // global complex (N, N) tables alive across the whole fill.
-template<int D, bool COMPLEX_EPS>
+template<int D, bool COMPLEX_EPS, bool ROW_MAP = false>
 static void
 assemble_Z_bspline_weighted_windowed_kernel(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J_chunk,
@@ -1781,7 +1864,12 @@ assemble_Z_bspline_weighted_windowed_kernel(
     py::array_t<std::complex<double>> Z,  // any strides: F-order lets the caller's LAPACK solve factor in place
     uintptr_t cancel_flag = 0,
     double c_re = 0.0,
-    double c_im = 0.0
+    double c_im = 0.0,
+    // momwire#1132: with ROW_MAP, Z is ROW-COMPACT -- (n_rows, n_basis) --
+    // and basis row m lands in Z row row_of[m]. The wrapper validates
+    // the map against m_idx before the GIL is released. Without it this
+    // pointer is never read and the instantiation is the shipped one.
+    const int64_t *row_of = nullptr
 ) {
     static constexpr int NM = D + 1;
 
@@ -1812,7 +1900,11 @@ assemble_Z_bspline_weighted_windowed_kernel(
     if (wPhi_win.shape(0) != i1 - i0 || wPhi_win.shape(1) != j1 - j0) {
         throw std::runtime_error("wPhi_win.shape must be (i1-i0, j1-j0)");
     }
-    if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
+    if (ROW_MAP) {
+        if (Z.shape(1) != (long)n_basis) {
+            throw std::runtime_error("a row-compact Z must be (n_rows, n_basis)");
+        }
+    } else if (Z.shape(0) != (long)n_basis || Z.shape(1) != (long)n_basis) {
         throw std::runtime_error("Z.shape must be (n_basis, n_basis)");
     }
     auto z_view = Z.mutable_unchecked<2>();
@@ -1884,7 +1976,7 @@ assemble_Z_bspline_weighted_windowed_kernel(
                     omega_mu * zA.real() - zPhi.real() * inv_omega_eps);
             }
             std::complex<double> add = scale * Zc;
-            z_view(m, n) += add;
+            z_view(ROW_MAP ? row_of[m] : m, n) += add;
         }
     }
 
@@ -1907,8 +1999,32 @@ assemble_Z_bspline_weighted_windowed(
     double mu_,
     std::complex<double> scale,
     py::array_t<std::complex<double>> Z,  // any strides: F-order lets the caller's LAPACK solve factor in place
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object row_of = py::none()
 ) {
+    if (!row_of.is_none()) {
+        RowOf1132 ro = checked_row_of_1132(row_of, m_idx, support_seg, Z);
+        const int64_t *rp = ro.data();
+        switch ((int)support_seg.shape(1) - 1) {
+            case 1:
+                assemble_Z_bspline_weighted_windowed_kernel<1, false, true>(
+                    J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag, 0.0, 0.0, rp);
+                return;
+            case 2:
+                assemble_Z_bspline_weighted_windowed_kernel<2, false, true>(
+                    J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag, 0.0, 0.0, rp);
+                return;
+            case 3:
+                assemble_Z_bspline_weighted_windowed_kernel<3, false, true>(
+                    J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, eps_, mu_, scale, Z, cancel_flag, 0.0, 0.0, rp);
+                return;
+            default:
+                throw std::runtime_error("assemble_Z_bspline_weighted_windowed: max_d must be 1, 2 or 3");
+        }
+    }
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
             assemble_Z_bspline_weighted_windowed_kernel<1, false>(
@@ -2314,9 +2430,33 @@ assemble_Z_bspline_windowed_cplx_eps(
     std::complex<double> eps_,
     double mu_,
     py::array_t<std::complex<double>> Z,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object row_of = py::none()
 ) {
     const std::complex<double> c = 1.0 / (std::complex<double>(0.0, omega) * eps_);
+    if (!row_of.is_none()) {
+        RowOf1132 ro = checked_row_of_1132(row_of, m_idx, support_seg, Z);
+        const int64_t *rp = ro.data();
+        switch ((int)support_seg.shape(1) - 1) {
+            case 1:
+                assemble_Z_bspline_windowed_kernel<1, true, true>(
+                    J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag(), rp);
+                return;
+            case 2:
+                assemble_Z_bspline_windowed_kernel<2, true, true>(
+                    J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag(), rp);
+                return;
+            case 3:
+                assemble_Z_bspline_windowed_kernel<3, true, true>(
+                    J_chunk, support_seg, polys, tangents, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, 1.0, mu_, Z, cancel_flag, c.real(), c.imag(), rp);
+                return;
+            default:
+                throw std::runtime_error("assemble_Z_bspline_windowed_cplx_eps: max_d must be 1, 2 or 3");
+        }
+    }
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
             assemble_Z_bspline_windowed_kernel<1, true>(
@@ -2354,9 +2494,33 @@ assemble_Z_bspline_weighted_windowed_cplx_eps(
     double mu_,
     std::complex<double> scale,
     py::array_t<std::complex<double>> Z,
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object row_of = py::none()
 ) {
     const std::complex<double> c = 1.0 / (std::complex<double>(0.0, omega) * eps_);
+    if (!row_of.is_none()) {
+        RowOf1132 ro = checked_row_of_1132(row_of, m_idx, support_seg, Z);
+        const int64_t *rp = ro.data();
+        switch ((int)support_seg.shape(1) - 1) {
+            case 1:
+                assemble_Z_bspline_weighted_windowed_kernel<1, true, true>(
+                    J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag, c.real(), c.imag(), rp);
+                return;
+            case 2:
+                assemble_Z_bspline_weighted_windowed_kernel<2, true, true>(
+                    J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag, c.real(), c.imag(), rp);
+                return;
+            case 3:
+                assemble_Z_bspline_weighted_windowed_kernel<3, true, true>(
+                    J_chunk, support_seg, polys, wA_win, wPhi_win, m_idx, n_idx,
+                    i0, i1, j0, j1, omega, 1.0, mu_, scale, Z, cancel_flag, c.real(), c.imag(), rp);
+                return;
+            default:
+                throw std::runtime_error("assemble_Z_bspline_weighted_windowed_cplx_eps: max_d must be 1, 2 or 3");
+        }
+    }
     switch ((int)support_seg.shape(1) - 1) {
         case 1:
             assemble_Z_bspline_weighted_windowed_kernel<1, true>(
@@ -4588,6 +4752,10 @@ void register_bspline(py::module_ &m) {
           "EK call adds.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
           py::arg("a_ek"));
+    // momwire#1132: the four windowed assemblers take `row_of`, a ROW-COMPACT
+    // Z target. Its own flag: a .so built before this answers `row_of=` with a
+    // TypeError, so the sector route's compact fill gates on THIS.
+    m.attr("windowed_row_of_1132") = true;
     m.def("assemble_Z_bspline_weighted_windowed", &assemble_Z_bspline_weighted_windowed,
           "Weighted + scaled windowed accumulator: like "
           "assemble_Z_bspline_windowed but with complex per-pair weights "
@@ -4605,7 +4773,8 @@ void register_bspline(py::module_ &m) {
           py::arg("m_idx"), py::arg("n_idx"),
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps_"), py::arg("mu_"),
-          py::arg("scale"), py::arg("Z"), py::arg("cancel_flag") = 0);
+          py::arg("scale"), py::arg("Z"), py::arg("cancel_flag") = 0,
+          py::arg("row_of") = py::none());
     m.def("assemble_Z_bspline_windowed_cplx_eps", &assemble_Z_bspline_windowed_cplx_eps,
           "In-medium twin of assemble_Z_bspline_windowed (momwire#915): the "
           "same window contract with eps a COMPLEX permittivity.",
@@ -4613,7 +4782,8 @@ void register_bspline(py::module_ &m) {
           py::arg("tangents"), py::arg("m_idx"), py::arg("n_idx"),
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"),
-          py::arg("Z"), py::arg("cancel_flag") = 0);
+          py::arg("Z"), py::arg("cancel_flag") = 0,
+          py::arg("row_of") = py::none());
     m.def("assemble_Z_bspline_weighted_windowed_cplx_eps",
           &assemble_Z_bspline_weighted_windowed_cplx_eps,
           "In-medium twin of assemble_Z_bspline_weighted_windowed "
@@ -4623,7 +4793,8 @@ void register_bspline(py::module_ &m) {
           py::arg("wA_win"), py::arg("wPhi_win"), py::arg("m_idx"), py::arg("n_idx"),
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps"), py::arg("mu"), py::arg("scale"),
-          py::arg("Z"), py::arg("cancel_flag") = 0);
+          py::arg("Z"), py::arg("cancel_flag") = 0,
+          py::arg("row_of") = py::none());
     m.def("assemble_Z_bspline_windowed", &assemble_Z_bspline_windowed,
           "Accumulate one rectangular segment window's contribution into a "
           "caller-provided Z from a chunked moment tensor J_chunk of shape "
@@ -4641,7 +4812,8 @@ void register_bspline(py::module_ &m) {
           py::arg("m_idx"), py::arg("n_idx"),
           py::arg("i0"), py::arg("i1"), py::arg("j0"), py::arg("j1"),
           py::arg("omega"), py::arg("eps_"), py::arg("mu_"),
-          py::arg("Z"), py::arg("cancel_flag") = 0);
+          py::arg("Z"), py::arg("cancel_flag") = 0,
+          py::arg("row_of") = py::none());
     m.def("assemble_Z_bspline", &assemble_Z_bspline,
           "Assemble the (n_basis, n_basis) Z matrix from the polynomial-"
           "moment tensor J, per-basis polynomial coefficients, support-segment "
