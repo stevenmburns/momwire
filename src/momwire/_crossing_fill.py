@@ -1285,10 +1285,32 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
     Pass 2 then gathers each chunk's tables from the one evaluation by the
     chunk's own dedup inverse — the scatter `designed_tables` does, for four
     kernels instead of six and without its (6, n) transposed copy.
+
+    The memory shape (momwire#1173; at razor hub_deck(16) x16 the pass-1 merge
+    was the fill's process peak). Every change below moves integers or copies
+    floats, and none reorders or regroups a sum, so none can move a bit:
+
+    * The index arrays are int32 where they fit (`_index_dtype`): each
+      chunk's stored inverse (one per grid pair, the largest integer array the
+      generator keeps) and the chunk-row -> grid-row map. An index is the same
+      integer in either width, and `v[idx]` copies the same element.
+    * The merge scatters each chunk's rows straight to their sorted place
+      (`dest`, the inverse of the first-appearance sort) and drops the chunk
+      as it goes, instead of concatenating them and then gathering the
+      concatenation by `order`. `rows[dest[p]] = cat[p]` for every p is
+      `rows[k] = cat[order[k]]` for every k, since `dest[order[k]] = k`.
+      Likewise `gid[order] = inv` is `gid = inv[dest]`.
+    * The merged rows go to `_unique_tri`, which dedups them in place of
+      `_unique_rows` re-stacking three column views into a second copy.
+    * The one evaluation is `designed_rows`, not `designed_tables`: the list
+      is distinct already, so the latter's dedup was the identity and its
+      scatter a (6, m) copy of the block (see `designed_rows`). The four
+      kernels are read as columns of that block.
     """
     fold = _near_interface.radius_fold
     a_wire = float(ctx.a_wire)
     nB = rho.shape[1]
+    idx_t = _index_dtype(rho.size)
     parts, firsts, inverses = [], [], []
     for sl in cols:
         r = fold(rho[:, sl], a_wire)
@@ -1303,26 +1325,39 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
         i, j = np.divmod(np.flatnonzero(inv > prev), r.shape[1])
         firsts.append(i * nB + sl.start + j)
         parts.append(u)
-        inverses.append((inv, u.shape[0]))
-        del r
+        inverses.append((inv.astype(idx_t), u.shape[0]))
+        del r, u, inv, prev, i, j
     order = np.argsort(np.concatenate(firsts), kind="stable")
-    rows = np.concatenate(parts)[order]
-    del parts, firsts
-    uniq, inv_sorted = _near_interface._unique_rows(rows[:, 0], rows[:, 1], rows[:, 2])
-    gid = np.empty_like(inv_sorted)
-    gid[order] = inv_sorted  # chunk-unique row -> grid-unique row
-    del rows, order, inv_sorted
-    vals = _near_interface.designed_tables(
-        eps_t, k_p, uniq[:, 0], uniq[:, 1], uniq[:, 2], rtol=_CROSS_RTOL, memo=memo
-    )
-    vals = {key: vals[key] for key in _CROSS_KEYS}
+    del firsts
+    dest = np.empty_like(order)
+    dest[order] = np.arange(order.size)
+    del order
+    rows = np.empty((dest.size, 3), dtype=float)
+    off = 0
+    for p in range(len(parts)):
+        u, parts[p] = parts[p], None
+        rows[dest[off : off + u.shape[0]]] = u
+        off += u.shape[0]
+        del u
+    del parts
+    uniq, inv_sorted = _near_interface._unique_tri(rows)
+    del rows
+    gid = inv_sorted.astype(idx_t)[dest]  # chunk-unique row -> grid-unique row
+    del dest, inv_sorted
+    block = _near_interface.designed_rows(eps_t, k_p, uniq, rtol=_CROSS_RTOL, memo=memo)
     del uniq
+    vals = {key: block[:, _near_interface.KEYS.index(key)] for key in _CROSS_KEYS}
     off = 0
     nA = rho.shape[0]
     for sl, (inv, m) in zip(cols, inverses):
         idx = gid[off : off + m][inv].reshape(nA, sl.stop - sl.start)
         off += m
         yield sl, {key: v[idx] for key, v in vals.items()}
+
+
+def _index_dtype(n):
+    """int32 when every index below `n` fits it, else the platform's intp."""
+    return np.int32 if n <= np.iinfo(np.int32).max else np.intp
 
 
 def _block_preamble(ctx):

@@ -854,11 +854,7 @@ def designed_tables(
     ignore the labels. Without `memo` the sequence dedups nothing across its
     calls, which one call cannot reproduce, so labels need a memo.
     """
-    if memo is not None and not isinstance(memo, TripleMemo):
-        raise TypeError(
-            f"designed_tables takes a TripleMemo, got {type(memo).__name__}; "
-            "a dict memo is _designed_tables_reference's"
-        )
+    _check_memo(memo)
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
     )
@@ -875,6 +871,32 @@ def designed_tables(
         # steps up (as in `_crossing_fill._chunked_tables`).
         prev = np.maximum.accumulate(np.concatenate(([-1], inverse[:-1])))
         labels = lab[np.flatnonzero(inverse > prev)]
+    block = _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels)
+    if rows.shape[0]:
+        # The scatter a kernel at a time: the same copies as
+        # `ascontiguousarray(block[inverse].T)`, without its (n, 6) gather
+        # alive beside the (6, n) answer (momwire#1168).
+        out = np.empty((6, inverse.size), dtype=np.complex128)
+        for i in range(6):
+            np.take(block[:, i], inverse, out=out[i])
+        out = out.reshape((6,) + rho_b.shape)
+    else:
+        out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
+    return dict(zip(KEYS, out))
+
+
+def _check_memo(memo):
+    if memo is not None and not isinstance(memo, TripleMemo):
+        raise TypeError(
+            f"designed_tables takes a TripleMemo, got {type(memo).__name__}; "
+            "a dict memo is _designed_tables_reference's"
+        )
+
+
+def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
+    """`designed_tables` between its dedup and its scatter: the (m, 6) values
+    of `rows` (distinct triples, first-appearance order), memo hits copied
+    from the memo, the rest evaluated by `_evaluate_fresh` and inserted."""
     if memo is None:
         block = np.empty((rows.shape[0], 6), dtype=np.complex128)
         fresh_pos = np.arange(rows.shape[0])
@@ -895,17 +917,31 @@ def designed_tables(
         if memo is not None:
             memo.insert(sub, vals)
         del sub, vals  # copied into `block` (and the memo); not needed below
-    if rows.shape[0]:
-        # The scatter a kernel at a time: the same copies as
-        # `ascontiguousarray(block[inverse].T)`, without its (n, 6) gather
-        # alive beside the (6, n) answer (momwire#1168).
-        out = np.empty((6, inverse.size), dtype=np.complex128)
-        for i in range(6):
-            np.take(block[:, i], inverse, out=out[i])
-        out = out.reshape((6,) + rho_b.shape)
-    else:
-        out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
-    return dict(zip(KEYS, out))
+    return block
+
+
+def designed_rows(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
+    """`designed_tables` over rows that are ALREADY DISTINCT, as the (m, 6)
+    block in `KEYS` column order — row i for `rows[i]` — with no dedup and no
+    scatter (momwire#1173).
+
+    The same bits as `designed_tables(rows[:, 0], rows[:, 1], rows[:, 2])`,
+    column j being that call's `KEYS[j]` table. Its dedup is the identity on
+    such rows: `_unique_rows` makes each row its own group (distinct under
+    `!=`, which is how `_unique_rows` produced them — NaN rows included, as
+    NaN != NaN), numbered in first-appearance order, i.e. in the given order,
+    and it hands back the very floats it was given. So the call sees the same
+    fresh triples in the same order and grouping and fills `memo` the same
+    way; its scatter is then a permutation by `arange`, a copy. What is saved
+    is that copy — a (6, m) complex array beside the (m, 6) block — and the
+    sort arrays of a dedup that finds nothing.
+
+    The caller vouches for distinctness (`_crossing_fill._chunked_tables`
+    passes `_unique_rows`' own output); rows that repeat would be evaluated
+    once each and inserted twice, which the memo does not refuse."""
+    _check_memo(memo)
+    rows = np.asarray(rows, dtype=float)
+    return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None)
 
 
 def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None):
@@ -1210,14 +1246,34 @@ def _unique_rows(rho_b, z_b, zp_b):
     tri = np.ascontiguousarray(
         np.stack([rho_b.ravel(), z_b.ravel(), zp_b.ravel()], axis=1)
     )
+    return _unique_tri(tri)
+
+
+def _unique_tri(tri):
+    """`_unique_rows` of rows the caller already holds as an (n, 3) float
+    array, WITHOUT the stacked copy: the rows returned are gathered from
+    `tri` itself. The crossing fill's chunked main sandwich merges its chunks'
+    rows into one such array (`_crossing_fill._chunked_tables`), where the
+    stack was a second copy of the largest array alive at razor's peak
+    (momwire#1173: 172 MB at hub_deck(16) x16).
+
+    The group boundaries are compared one sorted COLUMN at a time rather than
+    on the sorted (n, 3) copy — a new group starts where any column differs
+    from its predecessor, which is the same boolean as `np.any(... axis=1)`
+    over the rows, so nothing but the transient's size changes (one column
+    instead of three)."""
     n = tri.shape[0]
     if n == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=np.intp)
     idx = np.lexsort((tri[:, 2], tri[:, 1], tri[:, 0]))
-    srt = tri[idx]
     new_group = np.empty(n, dtype=bool)
     new_group[0] = True
-    np.any(srt[1:] != srt[:-1], axis=1, out=new_group[1:])
+    step = new_group[1:]
+    step[:] = False
+    for c in range(3):
+        col = tri[idx, c]
+        step |= col[1:] != col[:-1]
+        del col
     gid = np.cumsum(new_group) - 1
     first = idx[new_group]  # one representative per group, sorted order
     inverse = np.empty(n, dtype=np.intp)

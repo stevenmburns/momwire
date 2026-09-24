@@ -232,11 +232,27 @@ class _Routes:
                 eps_t, k2, rho, z, zp, rtol=rtol, lam_mult=lam_mult, memo=d
             )
 
+        def reference_rows(
+            eps_t, k2, rows, rtol=1e-10, lam_mult=ni._LAM_MULT, memo=None
+        ):
+            # `designed_rows` (momwire#1173, the chunked main sandwich's one
+            # evaluation) is `designed_tables` on distinct rows, so the
+            # reference serves it as that call, stacked in `KEYS` order —
+            # otherwise its rows would fill the TripleMemo, not the dict, and
+            # every later call on the dict route would miss them.
+            t = reference(
+                eps_t, k2, rows[:, 0], rows[:, 1], rows[:, 2], rtol, lam_mult, memo
+            )
+            return np.stack([t[key] for key in ni.KEYS], axis=1)
+
+        rows_route = ni.designed_rows
         self._mp.setattr(ni, "designed_tables", reference)
+        self._mp.setattr(ni, "designed_rows", reference_rows)
         self._mp.setattr(cf, "_END_BATCH_PAIRS", 1)
 
         def restore():
             self._mp.setattr(ni, "designed_tables", array_route)
+            self._mp.setattr(ni, "designed_rows", rows_route)
             self._mp.setattr(cf, "_END_BATCH_PAIRS", budget)
 
         return restore
