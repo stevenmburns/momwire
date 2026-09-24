@@ -1,0 +1,57 @@
+Traceback (most recent call last):
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/scratch/1131-route-above-ground/mem_probe.py", line 65, in <module>
+    main()
+    ~~~~^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/scratch/1131-route-above-ground/mem_probe.py", line 41, in main
+    z, c = s.compute_impedance()
+           ~~~~~~~~~~~~~~~~~~~^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/src/momwire/bspline.py", line 6857, in compute_impedance
+    Z = self._compute_Z_operator(
+        geom, supp_seg, polys, same_edge_prep=same_edge_prep
+    )
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/src/momwire/bspline.py", line 6547, in _compute_Z_operator
+    Z -= remainder.evaluate(supp_seg, polys)
+         ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/src/momwire/_potential_ground.py", line 514, in evaluate
+    return self._solver._Z_sommerfeld_remainder(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        self._geom, supp_seg, polys, self._eps_tilde
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/src/momwire/bspline.py", line 3517, in _Z_sommerfeld_remainder
+    self._remainder_pair_correction(Q, geom, supp_seg, polys, grid, pairs)
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/tmp/claude-1000/-home-smburns-antennas-antennaknobs/60dde97b-fa5a-4891-a09c-d929e7536c23/scratchpad/mw-1131/src/momwire/bspline.py", line 2879, in _remainder_pair_correction
+    contrib = np.einsum(
+        "kup,kpP,kvP->kuv", pw[Ic], dJ[c0:c1], pw[Jc], optimize=True
+    )
+  File "/home/smburns/antennas/antennaknobs/.venv/lib/python3.14/site-packages/numpy/_core/einsumfunc.py", line 1635, in einsum
+    new_view = bmm_einsum(einsum_str, *tmp_operands, **kwargs)
+  File "/home/smburns/antennas/antennaknobs/.venv/lib/python3.14/site-packages/numpy/_core/einsumfunc.py", line 1215, in bmm_einsum
+    ab = matmul(a, b, **kwargs)
+numpy._core._exceptions._ArrayMemoryError: Unable to allocate 7.07 GiB for an array with shape (12105, 198, 198) and data type complex128
+Command exited with non-zero status 1
+	Command being timed: "/home/smburns/antennas/antennaknobs/.venv/bin/python scratch/1131-route-above-ground/mem_probe.py --radials 48 --arm dense --ground sommerfeld --coeffs scratch/1131-route-above-ground/mem/dense_sommerfeld_48.npy"
+	User time (seconds): 55.78
+	System time (seconds): 0.24
+	Percent of CPU this job got: 197%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:28.39
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 546556
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 45155
+	Voluntary context switches: 14
+	Involuntary context switches: 729
+	Swaps: 0
+	File system inputs: 104
+	File system outputs: 8
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
