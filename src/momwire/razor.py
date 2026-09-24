@@ -613,6 +613,16 @@ _RAZOR_NODE_LEVERS = (
     "BSplineSolver with the node graded"
 )
 
+# The below remainder's grazing check by a bound first (momwire#1173 design
+# B, `RazorSolver._below_remainder_clear_of_floor`): K support directions and
+# the margin the proven angle must clear the floor by. `_GRAZING_BOUND` False
+# is TEST-ONLY — every deck takes the exact all-pairs walk, the in-process
+# reference — and `_GRAZING_ROUTES` counts which answered.
+_GRAZING_BOUND = True
+_GRAZING_DIRECTIONS = 64
+_GRAZING_BOUND_MARGIN = 1e-9
+_GRAZING_ROUTES = {"bound": 0, "exact": 0}
+
 _HAVE_RAZOR_WEIGHTED_ACCEL = _acc is not None and bool(
     getattr(_acc, "razor_weighted_744", False)
 )
@@ -4071,10 +4081,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # angle). `test_razor_grazing_shared_1168` holds the sentence.
         if depth <= 0.0:
             th_min = min(th_min, math.atan2(depth, 0.0))
-        th_eval, depth_eval = self._below_remainder_th_min(geom)
-        if th_eval < th_min:
-            th_min, depth = th_eval, depth_eval
         floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
+        # The remainder's own pairs, by a bound first (momwire#1173 design B):
+        # proven clear of the floor they cannot change the answer, so the
+        # all-pairs walk runs only when the bound is inconclusive
+        # (`_below_remainder_clear_of_floor` says why that is exact).
+        if _GRAZING_BOUND and self._below_remainder_clear_of_floor(geom, floor):
+            _GRAZING_ROUTES["bound"] += 1
+        else:
+            _GRAZING_ROUTES["exact"] += 1
+            th_eval, depth_eval = self._below_remainder_th_min(geom)
+            if th_eval < th_min:
+                th_min, depth = th_eval, depth_eval
         if th_min < floor:
             return _bspline._BURIED_GRAZING_REFUSAL.format(
                 th=math.degrees(th_min),
@@ -4082,6 +4100,60 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 depth=depth,
             )
         return None
+
+    def _below_remainder_clear_of_floor(self, geom, floor):
+        """True only when EVERY pair `_below_remainder_th_min` walks provably
+        has atan2(h_o + h_s, ρ) above `floor` by `_GRAZING_BOUND_MARGIN`
+        (momwire#1173 design B), from O(n · K) work instead of O(n_obs ·
+        n_src). False is "not proven", never "refuses": the caller then runs
+        the exact walk, which answers with its own numbers.
+
+        Why skipping the walk on True is EXACT. The walk's result enters the
+        refusal only through `if th_eval < th_min: th_min, depth = ...` and
+        then `th_min < floor`. With th_eval >= floor, either th_min < floor
+        already (the replacement cannot happen, th_eval being larger, so the
+        same sentence with the same numbers is printed) or th_min >= floor
+        (and min(th_min, th_eval) >= floor serves, as the walk would).
+
+        The bound. Per observer o, every source e has ρ(o, e) <= R(o) =
+        max_k (u_k·o − min_e u_k·e) / cos(π/K), K = `_GRAZING_DIRECTIONS`
+        unit vectors 2π/K apart (every horizontal vector lies within π/K of
+        one), and h_s >= min h_s, so the pair's sum h >= h_o + min h_s. For
+        h > 0, atan2(h, ρ) rises in h and falls in ρ, so atan2(h_o + min h_s,
+        R(o)) is below every pair of o. The computed angles round at a few
+        ulps; the slack on R (1e-9 relative, 1e-9 of the coordinate scale
+        absolute) and the 1e-9 rad margin dwarf that. A non-positive sum or
+        a non-finite value anywhere answers False."""
+        obs, src, d_o, d_s = self._below_remainder_pairs(geom)
+        if obs.shape[0] == 0 or src.shape[0] == 0:
+            return False
+        th = 2.0 * np.pi * np.arange(_GRAZING_DIRECTIONS) / _GRAZING_DIRECTIONS
+        u = np.stack([np.cos(th), np.sin(th)], axis=1)
+        m = np.min(src[:, :2] @ u.T, axis=0)  # (K,)
+        reach = np.max(obs[:, :2] @ u.T - m[None, :], axis=1)  # (n_obs,)
+        scale = float(max(np.max(np.abs(obs[:, :2])), np.max(np.abs(src[:, :2])), 1.0))
+        r = (np.maximum(reach, 0.0) + 1e-9 * scale) * (
+            (1.0 + 1e-9) / math.cos(math.pi / _GRAZING_DIRECTIONS)
+        )
+        hh = d_o + float(np.min(d_s))
+        with np.errstate(invalid="ignore"):
+            ok = (hh > 0.0) & (np.arctan2(hh, r) > floor + _GRAZING_BOUND_MARGIN)
+        return bool(np.all(ok))
+
+    def _below_remainder_pairs(self, geom):
+        """``(obs, src, d_obs, d_src)``: the testing-path points and the
+        order-`n_qp_sommerfeld` Gauss nodes of every segment the below
+        remainder evaluates on `geom`, with their depths below the plane."""
+        gz = float(self.ground_z)
+        obs = self._testing_paths(geom)[0].reshape(-1, 3)
+        seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
+        xg, _wg = np.polynomial.legendre.leggauss(self.n_qp_sommerfeld)
+        tq = 0.5 * (xg + 1.0)
+        src = (
+            seg_p0[:, None, :]
+            + (tq[None, :, None] * seg_h[:, None, None]) * seg_t[:, None, :]
+        ).reshape(-1, 3)
+        return obs, src, gz - obs[:, 2], gz - src[:, 2]
 
     def _below_remainder_th_min(self, geom):
         """``(θ_min, d + d′ there)`` over the pairs the below remainder
@@ -4093,18 +4165,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         plan's shared extents (momwire#1168 U3: this loop used to be
         spelled here by hand, at 4 M pairs a chunk; the answer does not
         depend on the chunking, and is the same bit for bit)."""
-        gz = float(self.ground_z)
-        obs = self._testing_paths(geom)[0].reshape(-1, 3)
-        seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
-        xg, _wg = np.polynomial.legendre.leggauss(self.n_qp_sommerfeld)
-        tq = 0.5 * (xg + 1.0)
-        src = (
-            seg_p0[:, None, :]
-            + (tq[None, :, None] * seg_h[:, None, None]) * seg_t[:, None, :]
-        ).reshape(-1, 3)
-        return _bspline._pair_extents_below_rect(
-            obs, src, gz - obs[:, 2], gz - src[:, 2]
-        )
+        obs, src, d_o, d_s = self._below_remainder_pairs(geom)
+        return _bspline._pair_extents_below_rect(obs, src, d_o, d_s)
 
     def _assemble_Z_below_plane(self, geom, prepared, k, omega, *, plan_skip=None):
         """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
@@ -4387,6 +4449,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = np.zeros((n, n), dtype=np.complex128, order="F")
         Z[np.ix_(rows_a, rows_a)] += Z_a
         Z[np.ix_(rows_b, rows_b)] += Z_b
+        # Folded in, so released before the cross blocks (momwire#1173 design
+        # B): held to the return they were two more same-medium blocks at the
+        # cross fill's peak (Z_b alone 105 MB at hub_deck(16) x16).
+        del Z_a, Z_b
         seg_a = self._seg_radius(geom)
         for src, rows, cols, block, test_axis in (
             (
@@ -4420,9 +4486,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ax = _crossing_fill.axis_data(
                     ctx_r, part, grade_near_plane=True, **axis_kw
                 )
-                Z[np.ix_(rows, cols)] -= block(ctx_r, test_axis, ax, corner=False)[
-                    np.ix_(rows, cols)
-                ]
+                # Only the (rows, cols) sub-block is read, so only it is
+                # formed (`support=`, momwire#1173 design B): the full block
+                # was (n, n) and 92 % structural zeros at hub_deck(16).
+                Z[np.ix_(rows, cols)] -= block(
+                    ctx_r, test_axis, ax, corner=False, support=(rows, cols)
+                )
 
         if tents:
             cols = np.array([m for m, _ in tents], dtype=np.int64)
