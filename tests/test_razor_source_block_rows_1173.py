@@ -218,3 +218,35 @@ def test_moment_rows_are_the_full_planes_rows(lane, ek):
             assert np.array_equal(got, full[r0:r1]), (r0, r1)
         # Negative control: a window one row off is not the same rows.
         assert not np.array_equal(rs._seg_moments_rows(chunks, rs.k, 6, 24), full[5:23])
+
+
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("name", ["free space", "elevated / sommerfeld", "crossing"])
+def test_the_solve_factors_z_in_place(name):
+    """The filled Z is column-major and the solve is asked to overwrite it
+    (momwire#1173): that is what lets LAPACK factor without a full copy.
+    The answer is `scipy.linalg.solve` on the same matrix without the flag,
+    bit for bit."""
+    import scipy.linalg
+
+    make, _ = DECKS[name]
+    seen = []
+    inner = scipy.linalg.solve
+
+    def spy(a, b, **kw):
+        seen.append(
+            (
+                a.flags.f_contiguous,
+                kw.get("overwrite_a", False),
+                a.copy(order="F"),
+                b.copy(),
+            )
+        )
+        return inner(a, b, **kw)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_razor.scipy.linalg, "solve", spy)
+        _z, coeffs = RazorSolver(**make(), **LANES["nec5"]).compute_impedance()
+    (f_contig, overwrite, a0, b0) = seen[0]
+    assert f_contig and overwrite
+    assert np.array_equal(coeffs, inner(a0, b0))
