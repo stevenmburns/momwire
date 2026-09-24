@@ -941,6 +941,15 @@ remainder pairs (testing-path points × Gauss nodes) stay deeper and reach it
 at 128 / 64 / 48 m. At 12 m razor serves every rung and its reciprocity
 decays there as it does at 2 m.
 
+Since momwire#1187 both floors are asked of the pairs **inside the cap**
+only — below/below image distance within `_SOMM_BELOW_R1_CAP_LAMBDA_M` = 4
+in-medium wavelengths, 40 m at soil A and 7 MHz. Past it the remainder is
+served as zero (momwire#1053) and reads no surface, so a pair there cannot
+reach the answer. The distances above are therefore refusals only where they
+fall inside the cap: bspline's x1 deck refuses from 12 m to the cap and serves
+past it (60 m measured), and razor's 48–128 m all lie past it. A Beverage's two
+ground rods ~246 m apart (antennaknobs#1707) are the case that asked.
+
 **`buried_serve_refusal()`** is razor's exact pre-flight (bspline's twin, for
 antennaknobs#1464). It asks the fill's own two fill-time questions through the
 same calls — the below family's grazing floor

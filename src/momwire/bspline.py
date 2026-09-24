@@ -582,9 +582,11 @@ def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
     ONE bound since momwire#1053: the grazing floor. The below/below R1 cap
     used to be the other, and past it the fill now SERVES the remainder as
     zero instead of refusing (the bound that licenses the zero is written at
-    `_SOMM_BELOW_R1_CAP_LAMBDA_M`). The floor is an angle, so the verdict no
-    longer reads the medium: `ground_eps` and `freq_hz` stay in the signature
-    so no caller breaks, and are unread.
+    `_SOMM_BELOW_R1_CAP_LAMBDA_M`). Since momwire#1187 the floor is asked of
+    the pairs INSIDE the cap only — a pair whose remainder is served as zero
+    reads no surface, so its angle cannot matter — and the cap is in
+    in-medium wavelengths, so `ground_eps` and `freq_hz` are read again: they
+    set lambda_m.
 
     `points` is (n, 3) in metres; `ground_eps` is the `(eps_r, sigma)` pair a
     solver takes, and `freq_hz` the solve frequency. Only rows at or below
@@ -612,8 +614,17 @@ def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
     if not np.any(keep):
         return None
     x, y, d_b = pts[keep, 0], pts[keep, 1], d_b[keep]
-    _r1_max, th_min = _pair_extents_below(x, y, d_b)
-    if th_min < math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG):
+    # The medium the fill would build, with a solver's own constants.
+    eps0, mu0 = BSplineSolver.eps, BSplineSolver.mu
+    omega = 2.0 * np.pi * float(freq_hz)
+    eps_t = _ground_refl.eps_tilde(ground_eps, omega, eps0)
+    k_p = omega * np.sqrt(eps0 * mu0)
+    r1_cap = _sommerfeld_below.below_r1_cap(_sommerfeld_below.k_medium(eps_t, k_p))
+    floor = math.radians(_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG)
+    _r1_max, th_min = _pair_extents_below(
+        x, y, d_b, r1_cap=_below_interface.plan_r1_cap(r1_cap), floor=floor
+    )
+    if th_min < floor:
         return _BURIED_GRAZING_REFUSAL.format(
             th=math.degrees(th_min),
             floor=_sommerfeld_below._SOMM_BELOW_TH_MIN_DEG,
@@ -622,10 +633,39 @@ def below_reach_refusal(points, ground_z, ground_eps, freq_hz):
     return None
 
 
-def _pair_extents_below(x, y, d_b, rows=256):
+def _pair_extents_below(x, y, d_b, rows=256, *, r1_cap=None, floor=None):
     """`(r1_max, th_min)` over every node pair for the below/below plan —
     the largest image distance hypot(rho, h_i + h_j) and the shallowest
     angle atan2(h_i + h_j, rho) — without an (n, n) array ever being live.
+
+    `r1_cap` (momwire#1187): when given, th_min is the shallowest angle over
+    the pairs INSIDE the cap only (image distance <= r1_cap) — the pairs
+    whose below/below remainder the fill evaluates; past the cap it is served
+    as zero and reads no surface. r1_max still reads every pair. No capped
+    pair at all gives th_min = pi/2 (the minimum over an empty set, +inf
+    ratio). `None` is the pre-#1187 walk exactly, and so is a cap no pair
+    reaches.
+
+    `floor` (radians) is the question the caller asks of th_min, and lets the
+    capped walk run only where it can change the answer. The all-pairs
+    minimum is taken first, on the accelerated walk when there is one; if no
+    pair reaches past the cap, or that minimum is already at or above
+    `floor` (every capped pair is then at least as steep, so `th_min < floor`
+    answers the same), it is returned as it stands — the pre-#1187 value to
+    the bit. Only a deck the all-pairs minimum puts under the floor with a
+    pair past the cap, i.e. one refused before #1187, takes the capped walk,
+    and it takes the numpy one.
+
+    WHY THE C++ TWIN DOES NOT TAKE THE CAP. It did in a draft, and that cost
+    the bit identity of every served buried deck: any edit to
+    `_accel_mw568.cpp` moves GCC's translation-unit-wide inlining budget, and
+    the rebuild changed the code of nine functions, among them the below and
+    transmitted grid-fill integrands (`adaptive_segment<SixBelow>`,
+    `transmitted_integrand_six`). hub_deck(16)'s Z moved at 7e-20 of its
+    largest entry and its admittance at 2e-14 — a change that only removes
+    refusals, moving numbers it does not touch. The capped walk only ever
+    runs on decks that were refused, whose node counts are a rod's, so the
+    numpy form is cheap where it runs.
 
     momwire#910: the all-pairs spelling built six (n, n) arrays over the
     3,924 buried nodes of a 12-radial screen (123 MB each) and spent 0.6 s,
@@ -643,6 +683,15 @@ def _pair_extents_below(x, y, d_b, rows=256):
     x = np.asarray(x, dtype=np.float64)
     y = np.asarray(y, dtype=np.float64)
     d_b = np.asarray(d_b, dtype=np.float64)
+    r1_max, th_min = _pair_extents_below_all(x, y, d_b, rows)
+    if r1_cap is None or r1_max <= r1_cap or (floor is not None and th_min >= floor):
+        return r1_max, th_min
+    return r1_max, _pair_extents_below_numpy(x, y, d_b, rows, r1_cap)[1]
+
+
+def _pair_extents_below_all(x, y, d_b, rows):
+    """`_pair_extents_below` over every pair: the accelerated walk when there
+    is one, else the numpy one."""
     if _HAVE_PLAN_EXTENTS_ACCEL and x.size:
         # momwire#914 unit 1. The C++ twin walks the upper triangle (the pair
         # matrix is exactly symmetric) and minimises hh^2/rho^2, the same
@@ -652,6 +701,12 @@ def _pair_extents_below(x, y, d_b, rows=256):
         # what G-914-1 gates against.
         r1_max, th_min = _acc.pair_extents_below(x, y, d_b)
         return float(r1_max), float(th_min)
+    return _pair_extents_below_numpy(x, y, d_b, rows)
+
+
+def _pair_extents_below_numpy(x, y, d_b, rows, r1_cap=None):
+    """`_pair_extents_below`'s numpy walk, and its only capped one."""
+    cap2 = None if r1_cap is None else float(r1_cap) * float(r1_cap)
     r1sq_max = 0.0
     ratio_min = np.inf
     for i0 in range(0, x.shape[0], rows):
@@ -659,18 +714,24 @@ def _pair_extents_below(x, y, d_b, rows=256):
         rho2 = (x[i0:i1, None] - x[None, :]) ** 2
         rho2 += (y[i0:i1, None] - y[None, :]) ** 2
         hh = d_b[i0:i1, None] + d_b[None, :]
-        r1sq_max = max(r1sq_max, float(np.max(rho2 + hh * hh)))
+        r1sq = rho2 + hh * hh
+        r1sq_max = max(r1sq_max, float(np.max(r1sq)))
         np.sqrt(rho2, out=rho2)
         # rho = 0 pairs are dropped before the minimum (see the docstring): an
         # interface node's 0/0 must not reach `np.min`, which would carry the
         # NaN to the chunk and let the outer `min` discard every real pair in it.
+        keep = rho2 > 0.0
+        if cap2 is not None:
+            # momwire#1187: and every pair past the cap, whose remainder is
+            # served as zero.
+            keep &= r1sq <= cap2
         with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = np.where(rho2 > 0.0, hh / rho2, np.inf)
+            ratio = np.where(keep, hh / rho2, np.inf)
         ratio_min = min(ratio_min, float(np.min(ratio)))
     return float(np.sqrt(r1sq_max)), float(np.arctan(ratio_min))
 
 
-def _pair_extents_below_rect(obs, src, d_obs, d_src, pairs=1 << 20):
+def _pair_extents_below_rect(obs, src, d_obs, d_src, pairs=1 << 20, *, r1_cap=None):
     """`(th_min, hh_at)` over every (observer, source) pair — the shallowest
     angle atan2(h_o + h_s, rho) and the depth sum h_o + h_s of the pair that
     attains it — without an (n_obs, n_src) array larger than `pairs` ever
@@ -691,6 +752,11 @@ def _pair_extents_below_rect(obs, src, d_obs, d_src, pairs=1 << 20):
     whole matrix would return, whatever the chunking — so the answer is
     bit-identical to the one-shot spelling and to razor's earlier
     hand-chunked one (gated, `tests/test_razor_grazing_shared_1168.py`).
+
+    `r1_cap` (momwire#1187): when given, only pairs with image distance
+    hypot(rho, h_o + h_s) <= r1_cap are kept — the pairs whose remainder is
+    evaluated; the rest read +inf and are never the minimum. `(inf, 0.0)`
+    when no pair is kept. `None` is the pre-#1187 walk exactly.
     """
     obs = np.asarray(obs, dtype=np.float64)
     src = np.asarray(src, dtype=np.float64)
@@ -706,6 +772,8 @@ def _pair_extents_below_rect(obs, src, d_obs, d_src, pairs=1 << 20):
         )
         hh = d_obs[i0 : i0 + step][:, None] + d_src[None, :]
         th = np.arctan2(hh, rho)
+        if r1_cap is not None:
+            th[np.sqrt(rho * rho + hh * hh) > r1_cap] = np.inf
         k = int(np.argmin(th))
         if th.flat[k] < best:
             best, best_hh = float(th.flat[k]), float(hh.flat[k])

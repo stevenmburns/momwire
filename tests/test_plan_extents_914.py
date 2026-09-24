@@ -128,9 +128,9 @@ def test_g914_1b_the_cpp_extents_match_on_the_real_deck_nodes(monkeypatch):
     seen = {}
     real = _bs._pair_extents_below
 
-    def capture(x, y, d_b, rows=256):
+    def capture(x, y, d_b, rows=256, **kw):
         seen["args"] = (np.array(x), np.array(y), np.array(d_b))
-        return real(x, y, d_b, rows=rows)
+        return real(x, y, d_b, rows=rows, **kw)
 
     monkeypatch.setattr(_bs, "_pair_extents_below", capture)
     BSplineSolver(**hub_deck(n_radials=4)).compute_impedance()
