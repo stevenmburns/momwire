@@ -1,28 +1,33 @@
-"""The crossing fill with its end loops inside the product's tiles and its
-below block folded into Z a window at a time — momwire#1173 design C phase 2.
+"""The crossing fill with its end loops inside the product's tiles, each
+finished cross-block column streamed into Z, and its below block folded into
+Z a window at a time — momwire#1173 design C phase 2.
 
 Phase 1 kept a (rows, 2) V/W store for the end loops, which ran after the
-main sandwich, and the crossing assembly held the whole below block `Z_b`
-beside Z. `_FusedEnds` runs the loops inside the tile pass (the slow ends'
-spans before it, the column loop after it), so no store is kept; and
-`_assemble_Z_below_plane(into=)` adds each row window of the below block into
-Z as it is finished.
+main sandwich; each cross block and its end accumulators were whole beside
+Z; and the crossing assembly held the whole below block `Z_b` beside Z.
+`_FusedEnds` runs the loops inside the tile pass (the slow ends' spans before
+it) and finishes the block a unit — a below basis function, a column of the
+forward block and a row of the reversed one — at a time, folding each into Z
+as it finishes; and `_assemble_Z_below_plane(into=)` adds each row window of
+the below block into Z as it is finished.
 
 Both are bit-identical by construction (the arguments are `_FusedEnds`' and
 `_assemble_Z_below_plane`'s docstrings), so the gate is the bits: Z of a razor
 fill through its real constructor (`_assemble_Z`), against the phase-1 route
 in the same process (`_FUSED_ENDS = False`, `_BELOW_FOLD_INTO = False`), at
 `np.array_equal` on the uint64 view. The counters say the new routes ran:
-every product block fused (`fused_blocks`), which of the row loop's three
-modes ran ("grouped": per-unit completion across tiles; "line": one tile per
-end, per-row chains; "post": no fast row ends, the loop after the tiles), no
-V/W store was kept (`tile_stores`), rows were held across tiles where a unit
-straddles them (`fused_held_rows`), and the below block went in by windows.
+every product block fused (`fused_blocks`), in which mode ("stream", or
+"post" when every end is slow: the default lane, loops after the tiles), no
+V/W store was kept (`tile_stores`), every unit of every streamed block was
+finished and folded (`stream_units`), in several batches with never more
+than a fraction of them waiting (`stream_finish_calls`,
+`stream_held_units`), rows were held across tiles where a unit straddles
+them (`fused_held_rows`), and the below block went in by windows.
 
 The negative controls make each route wrong on purpose and require the same
-comparison to FAIL: "fused_order" applies a tile's row ends in reverse (and
-ignores the chains), "shift" pairs each below window's direct rows with its
-image rows one row out of step.
+comparison to FAIL: "fused_order" replays a unit's vector-loop ends last
+first, "shift" pairs each below window's direct rows with its image rows one
+row out of step.
 """
 
 from __future__ import annotations
@@ -61,31 +66,15 @@ def _same(a, b):
     return a.shape == b.shape and np.array_equal(pg._bits(a), pg._bits(b))
 
 
-# deck -> (maker, lane flags, the row-loop modes its blocks must take)
+# deck -> (maker, flags, the mode its blocks must take)
 DECKS = {
-    "crossing1": (lambda: _razor(crossing_deck(1)), {}, {"line"}),
-    "crossing1_default": (
-        lambda: _razor_default(crossing_deck(1)),
-        {},
-        {"post"},
-    ),
-    "fan_rise": (lambda: _razor(fan_rise_deck()), {}, {"grouped", "line"}),
-    "fan_rise_tiny": (
-        lambda: _razor(fan_rise_deck()),
-        {"cf._TILE_ROWS": 40},
-        {"grouped", "line"},
-    ),
-    "wa7ark_tiny": (
-        lambda: pg._wa7ark(True),
-        {"cf._TILE_ROWS": 4_000},
-        {"grouped", "line"},
-    ),
-    "detached_hub": (lambda: _razor(detached_hub()), {}, {"grouped", "line"}),
-    "hub16_x2": (
-        lambda: _razor(_hub(2)),
-        {"cf._TILE_ROWS": 2_000},
-        {"grouped", "line"},
-    ),
+    "crossing1": (lambda: _razor(crossing_deck(1)), {}, "stream"),
+    "crossing1_default": (lambda: _razor_default(crossing_deck(1)), {}, "post"),
+    "fan_rise": (lambda: _razor(fan_rise_deck()), {}, "stream"),
+    "fan_rise_tiny": (lambda: _razor(fan_rise_deck()), {"cf._TILE_ROWS": 40}, "stream"),
+    "wa7ark_tiny": (lambda: pg._wa7ark(True), {"cf._TILE_ROWS": 4_000}, "stream"),
+    "detached_hub": (lambda: _razor(detached_hub()), {}, "stream"),
+    "hub16_x2": (lambda: _razor(_hub(2)), {"cf._TILE_ROWS": 2_000}, "stream"),
 }
 _SLOW = {
     "crossing1_default",
@@ -101,7 +90,7 @@ _SLOW = {
     [pytest.param(c, marks=pytest.mark.slow) if c in _SLOW else c for c in DECKS],
 )
 def test_fused_fill_is_the_phase1_route_to_the_bit(case):
-    make, flags, modes = DECKS[case]
+    make, flags, mode = DECKS[case]
     ref, r0 = _fill(make, **{**flags, **_PHASE1})
     got, r = _fill(make, **flags)
     # The reference is phase 1: a store per product, the whole below block.
@@ -111,12 +100,13 @@ def test_fused_fill_is_the_phase1_route_to_the_bit(case):
     n = r["cf.main_product"]
     assert n >= 2 and r["cf.fused_blocks"] == n and r["cf.tile_stores"] == 0, r
     assert r["cf.fused_declined"] == 0, r
-    ran = {m for m in ("grouped", "line", "post") if r[f"cf.fused_mode_{m}"]}
-    assert ran == modes, (ran, r)
-    if modes - {"post"}:
-        assert r["cf.fused_row_ends"] > 0, r
-    if "grouped" in modes:
-        assert r["cf.fused_unit_tiles"] >= 1, r
+    assert r[f"cf.fused_mode_{mode}"] == n, r
+    if mode == "stream":
+        # Every unit finished and folded, straight into Z; the ends read
+        # inside the tiles.
+        assert r["cf.stream_units"] > 0 and r["cf.fused_row_ends"] > 0, r
+    else:
+        assert r["cf.stream_units"] == 0, r
     # ...the same ends took the same fast / slow paths...
     for key in ("ends_fast", "ends_fast_grouped", "ends_fast_line", "ends_slow"):
         assert r[f"cf.{key}"] == r0[f"cf.{key}"], key
@@ -129,10 +119,13 @@ def test_fused_fill_is_the_phase1_route_to_the_bit(case):
 def test_tiny_tiles_hold_the_rows_a_straddling_unit_reads():
     """At 40-row tiles a unit's matvec row spans several tiles, so the rows
     it reads early are held — and Z still does not move."""
-    make, flags, _modes = DECKS["fan_rise_tiny"]
+    make, flags, _mode = DECKS["fan_rise_tiny"]
     ref, _r = _fill(make, **{**flags, **_PHASE1})
     got, r = _fill(make, **flags)
-    assert r["cf.fused_held_rows"] > 0, r
+    assert r["cf.fused_held_rows"] > 0 and r["cf.fused_unit_tiles"] > 2, r
+    # The units finish in many batches, never all waiting at once.
+    assert r["cf.stream_finish_calls"] > 4, r
+    assert 0 < r["cf.stream_held_units"] < r["cf.stream_units"] // 4, r
     assert _same(got, ref)
 
 
@@ -158,11 +151,11 @@ def test_a_slow_end_asking_a_product_row_declines_the_fusion(monkeypatch):
     ],
 )
 def test_negative_controls_move_z(control, case, flag):
-    make, flags, _modes = DECKS[case]
+    make, flags, _mode = DECKS[case]
     ref, _r = _fill(make, **{**flags, **_PHASE1})
     got, r = _fill(make, **{**flags, flag: control})
     if control == "fused_order":
-        assert r["cf.fused_blocks"] >= 2, r
+        assert r["cf.fused_mode_stream"] >= 2, r
     else:
         assert r["rz.below_windows"] > 0, r
     moved = int(np.count_nonzero(pg._bits(got) != pg._bits(ref)))
