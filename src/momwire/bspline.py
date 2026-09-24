@@ -2638,9 +2638,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         np.maximum.at(qmax, inv, Q)
         return uk // n, uk % n, qmax
 
-    def _remainder_pair_moments(self, geom, i, js, q, grid):
-        """Segment-pair remainder moments `Jf[k, p, P]` for observer segment
-        `i` against source segments `js`, at Gauss order `q` on both sides.
+    def _remainder_pair_moments(self, geom, obs_segs, src_segs, q, grid):
+        """Segment-pair remainder moments `Jf[a, b, p, P]` over the rectangle
+        `obs_segs x src_segs`, at Gauss order `q` on both sides.
 
         The same double sum `_Z_sommerfeld_remainder` assembles, stopped
         before the basis polynomials. The fused kernel only returns
@@ -2654,54 +2654,63 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tang = geom["tangents"]
         h = geom["h_per_seg"]
         d1 = self.degree + 1
-        segs = np.concatenate([[i], js]).astype(np.int64)
-        xg, wg = leggauss(int(q))
+        obs_segs = np.asarray(obs_segs, dtype=np.int64)
+        src_segs = np.asarray(src_segs, dtype=np.int64)
+        no, ns = int(obs_segs.size), int(src_segs.size)
+        q = int(q)
+        xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
-        sl, sr = seg_l[segs], seg_r[segs]
-        nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
-        u_phys = h[segs][:, None] * tq[None, :]
-        w_node = 0.5 * h[segs][:, None] * wg[None, :]
-        W = w_node[None] * u_phys[None] ** np.arange(d1)[:, None, None]
-        nj = int(js.size)
+
+        def side(segs):
+            sl, sr = seg_l[segs], seg_r[segs]
+            nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
+            u_phys = h[segs][:, None] * tq[None, :]
+            w_node = 0.5 * h[segs][:, None] * wg[None, :]
+            W = w_node[None] * u_phys[None] ** np.arange(d1)[:, None, None]
+            return nodes, np.ascontiguousarray(tang[segs], dtype=np.float64), W
+
+        nodes_o, tang_o, W_o = side(obs_segs)
+        nodes_s, tang_s, W_s = side(src_segs)
         gz = self.ground_z
         if _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q"):
-            eye = np.eye(d1)
-            loc_I = np.zeros((d1, d1), dtype=np.int64)
-            p_I = np.zeros((d1, d1, d1))
-            p_I[:, 0, :] = eye
-            loc_J = np.repeat(np.arange(nj, dtype=np.int64), d1)[:, None]
-            loc_J = np.ascontiguousarray(np.broadcast_to(loc_J, (nj * d1, d1)))
-            p_J = np.zeros((nj * d1, d1, d1))
-            p_J[:, 0, :] = np.tile(eye, (nj, 1))
+
+            def pseudo(n):
+                loc = np.repeat(np.arange(n, dtype=np.int64), d1)[:, None]
+                loc = np.ascontiguousarray(np.broadcast_to(loc, (n * d1, d1)))
+                poly = np.zeros((n * d1, d1, d1))
+                poly[:, 0, :] = np.tile(np.eye(d1), (n, 1))
+                return loc, poly
+
+            loc_o, p_o = pseudo(no)
+            loc_s, p_s = pseudo(ns)
             out = _acc.sommerfeld_remainder_bspline_Q(
-                np.ascontiguousarray(nodes[:1]),
-                np.ascontiguousarray(tang[segs[:1]], dtype=np.float64),
-                np.ascontiguousarray(W[:, :1]),
-                np.ascontiguousarray(nodes[1:]),
-                np.ascontiguousarray(tang[segs[1:]], dtype=np.float64),
-                np.ascontiguousarray(W[:, 1:]),
-                loc_I,
-                p_I,
-                loc_J,
-                p_J,
+                np.ascontiguousarray(nodes_o),
+                tang_o,
+                np.ascontiguousarray(W_o),
+                np.ascontiguousarray(nodes_s),
+                tang_s,
+                np.ascontiguousarray(W_s),
+                loc_o,
+                p_o,
+                loc_s,
+                p_s,
                 float(gz),
                 float(self.k),
                 *_sommerfeld.grid_cpp_args(grid),
                 int(self._cancel_flag),
             )
-            # out[p, t*d1 + P] -> Jf[t, p, P]
-            return out.reshape(d1, nj, d1).transpose(1, 0, 2)
-        q = int(q)
+            # out[a*d1 + p, b*d1 + P] -> Jf[a, b, p, P]
+            return out.reshape(no, d1, ns, d1).transpose(0, 2, 1, 3)
         proj = _sommerfeld.remainder_field_proj(
-            nodes[0],
-            np.repeat(tang[segs[:1]], q, axis=0),
-            nodes[1:].reshape(-1, 3),
-            np.repeat(tang[segs[1:]], q, axis=0),
+            nodes_o.reshape(-1, 3),
+            np.repeat(tang_o, q, axis=0),
+            nodes_s.reshape(-1, 3),
+            np.repeat(tang_s, q, axis=0),
             gz,
             self.k,
             grid,
-        ).reshape(q, nj, q)
-        return np.einsum("pq,qjr,Pjr->jpP", W[:, 0], proj, W[:, 1:], optimize=True)
+        ).reshape(no, q, ns, q)
+        return np.einsum("paq,aqbr,Pbr->abpP", W_o, proj, W_s, optimize=True)
 
     def _remainder_pair_correction(self, Q, geom, supp_seg, polys, grid, pairs):
         """Raise the listed segment pairs of the base-order Q to their own
@@ -2719,19 +2728,22 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         d1 = self.degree + 1
         n_seg = geom["seg_l"].shape[0]
         dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
-        # One kernel call per (order, observer segment): its source list is a
-        # row of the pair list, so nothing outside the list is evaluated.
-        grp = np.lexsort((I, Qp))
-        key_q, key_i = Qp[grp], I[grp]
-        cuts = np.flatnonzero((np.diff(key_q) != 0) | (np.diff(key_i) != 0)) + 1
+        # One kernel call per (order, source segment), its observers that
+        # column of the pair list, so nothing outside the list is evaluated.
+        # Column-wise rather than row-wise because the kernel threads over
+        # its observer segments; the list is symmetric, so either walk
+        # covers it.
+        grp = np.lexsort((J, Qp))
+        key_q, key_j = Qp[grp], J[grp]
+        cuts = np.flatnonzero((np.diff(key_q) != 0) | (np.diff(key_j) != 0)) + 1
         for run in np.split(grp, cuts):
             self._checkpoint()
-            i = int(I[run[0]])
-            js = J[run]
+            src = J[run[:1]]
+            obs = I[run]
             q = int(Qp[run[0]])
-            hi = self._remainder_pair_moments(geom, i, js, q, grid)
-            lo = self._remainder_pair_moments(geom, i, js, base, grid)
-            dJ[run] = hi - lo
+            hi = self._remainder_pair_moments(geom, obs, src, q, grid)
+            lo = self._remainder_pair_moments(geom, obs, src, base, grid)
+            dJ[run] = (hi - lo)[:, 0]
 
         # Every (basis, wing) resting on each segment, padded with -1.
         flat = supp_seg.ravel()

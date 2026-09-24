@@ -144,9 +144,9 @@ def test_the_fill_runs_the_orders_it_was_given(monkeypatch):
     seen = []
     orig = BSplineSolver._remainder_pair_moments
 
-    def spy(self, geom, i, js, q, grid):
-        seen.append((int(i), tuple(int(j) for j in js), int(q)))
-        return orig(self, geom, i, js, q, grid)
+    def spy(self, geom, obs, src, q, grid):
+        seen.extend((int(i), int(j), int(q)) for i in obs for j in src)
+        return orig(self, geom, obs, src, q, grid)
 
     monkeypatch.setattr(BSplineSolver, "_remainder_pair_moments", spy)
     _z, s = _solve(kw)
@@ -157,11 +157,11 @@ def test_the_fill_runs_the_orders_it_was_given(monkeypatch):
     assert census[base] > 0 and max(census) > base, census
     _, _, (I, J, Q) = _pairs(kw)
     listed = {(int(i), int(j)): int(q) for i, j, q in zip(I, J, Q, strict=True)}
-    high = [(i, j, q) for i, js, q in seen if q != base for j in js]
+    high = [(i, j, q) for i, j, q in seen if q != base]
     assert sorted(high) == sorted((i, j, q) for (i, j), q in listed.items())
     assert max(q for _, _, q in high) <= cap
     # Every listed pair's base-order moments were taken back out, too.
-    low = [(i, j) for i, js, q in seen if q == base for j in js]
+    low = [(i, j) for i, j, q in seen if q == base]
     assert sorted(low) == sorted(listed)
 
 
@@ -218,11 +218,12 @@ def test_pair_moments_match_the_numpy_route(monkeypatch):
     grid = s._somm_grid(
         eps_t, _sommerfeld.max_image_distance(g["seg_l"], g["seg_r"], s.ground_z)
     )
-    js = np.array([3, 4, 5], dtype=np.int64)
-    fused = s._remainder_pair_moments(g, 4, js, 24, grid)
+    obs = np.array([4, 9], dtype=np.int64)
+    src = np.array([3, 4, 5], dtype=np.int64)
+    fused = s._remainder_pair_moments(g, obs, src, 24, grid)
     monkeypatch.setattr(_bs, "_acc", None)
-    ref = s._remainder_pair_moments(g, 4, js, 24, grid)
-    assert fused.shape == ref.shape == (3, s.degree + 1, s.degree + 1)
+    ref = s._remainder_pair_moments(g, obs, src, 24, grid)
+    assert fused.shape == ref.shape == (2, 3, s.degree + 1, s.degree + 1)
     assert np.abs(fused - ref).max() <= 1e-10 * np.abs(ref).max()
 
 
