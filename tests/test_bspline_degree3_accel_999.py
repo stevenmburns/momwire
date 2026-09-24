@@ -48,7 +48,9 @@ pytestmark = pytest.mark.skipif(
     reason="accelerator predates momwire#999",
 )
 
-N_DEGREE_SWITCHES = 20
+# 20 at momwire#999; +4 at momwire#1132, whose row-compact `row_of` arm of
+# each windowed assembler switches on the degree too (and reaches 3).
+N_DEGREE_SWITCHES = 24
 
 
 def _source() -> str:
