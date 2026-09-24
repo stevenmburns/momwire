@@ -242,3 +242,97 @@ def test_the_pair_rule_is_the_scalar_rule_on_arbitrary_points():
         scalar = _quadrature.remainder_qp(obs.reshape(-1, 3), a, b, 0.0, 3, 64, 1.0)
         I, J, Q = _quadrature.remainder_qp_pairs(obs, a, b, 0.0, 3, 64, 1.0)
         assert (int(Q.max()) if Q.size else 3) == scalar
+
+
+# ---------------------------------------------------------------------------
+# The padded-slot regression (found by momwire#1131)
+# ---------------------------------------------------------------------------
+#
+# `supp_seg` pads each basis's unused wing slots with segment 0 and a zero
+# polynomial. The correction's per-segment wing table read those slots as
+# real, so segment 0's list grew with the basis count — 54 wide at 12
+# radials, 198 at 48 where a real segment carries three — and the
+# (pairs, width, width) einsum transient reached 7 GiB on a 48-radial surface
+# screen.
+
+
+def surface_screen_deck(n_radials, n_rad=10):
+    """N6LF's 7.2 MHz vertical over `n_radials` radials at h = 2a (the
+    surface convention), over Sommerfeld soil — momwire#1131's deck."""
+    ft = 0.3048
+    mast, radial, a = 33.5 * ft, 33.0 * ft, 0.51e-3
+    h = 2.0 * a
+    ang = 2.0 * np.pi * np.arange(n_radials) / n_radials
+    wires = [
+        np.array([(radial * np.cos(t), radial * np.sin(t), h), (0.0, 0.0, h)])
+        for t in ang
+    ]
+    npe = [[n_rad] for _ in ang]
+    m = len(wires)
+    wires.append(np.array([(0.0, 0.0, z) for z in (mast + h, 0.5 + h, 0.05 + h, h)]))
+    npe.append([19, 2, 3])
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        junctions=[[(i, "end") for i in range(n_radials)] + [(m, "end")]],
+        feeds=[(m, mast - 0.05, 1 + 0j)],
+        wavelength=C0 / 7.2e6,
+        wire_radius=a,
+        degree=2,
+        ground_z=0.0,
+        ground_eps=(30.0, 0.020),
+        ground_model="sommerfeld",
+    )
+
+
+@pytest.mark.parametrize("n_radials", [12, 48])
+def test_the_wing_table_holds_only_real_wings(n_radials):
+    """The table is as wide as the most wings any segment REALLY carries —
+    degree + 1 on a b-spline mesh, whatever the basis count — while the raw
+    padded map, the regression's spelling, grows with the radials."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        s = BSplineSolver(**surface_screen_deck(n_radials))
+    g = s._build_geometry()
+    supp, polys = s._build_basis_polynomials(g)[:2]
+    n_seg = g["seg_l"].shape[0]
+    ent = BSplineSolver._segment_wing_table(supp, polys, n_seg)
+    assert ent.shape[1] <= s.degree + 1, ent.shape
+    # Negative control: the padded reading is the wide one.
+    assert np.bincount(supp.ravel()).max() > 4 * n_radials
+    # Nothing real was dropped: every wing with a nonzero polynomial is listed
+    # exactly once, on its own segment.
+    listed = np.sort(ent[ent >= 0])
+    real = np.flatnonzero(np.any(polys != 0.0, axis=2).ravel())
+    assert np.array_equal(listed, real)
+    rows = np.nonzero(ent >= 0)[0]
+    assert np.array_equal(supp.ravel()[ent[ent >= 0]], rows)
+
+
+def test_the_pair_correction_stays_small_on_a_surface_screen(monkeypatch):
+    """Memory bound on the correction itself (tracemalloc sees numpy's
+    buffers) on the accelerated route every shipped build takes. Measured
+    0.8 MiB on a 12-radial surface screen (Haswell); the (pairs, width,
+    width) transient alone was 1021 x 54 x 54 x 16 B = 46 MiB before the fix,
+    and 7 GiB at 48 radials."""
+    import tracemalloc
+
+    if _bs._acc is None or not hasattr(_bs._acc, "sommerfeld_remainder_bspline_Q"):
+        pytest.skip("no accelerator: the numpy route's own transients dominate")
+
+    peaks = []
+    orig = BSplineSolver._remainder_pair_correction
+
+    def traced(self, *a, **k):
+        tracemalloc.start()
+        try:
+            return orig(self, *a, **k)
+        finally:
+            peaks.append(tracemalloc.get_traced_memory()[1])
+            tracemalloc.stop()
+
+    monkeypatch.setattr(BSplineSolver, "_remainder_pair_correction", traced)
+    _z, s = _solve(surface_screen_deck(12))
+    assert len(peaks) == 1, "the per-pair correction did not run"
+    assert s._last_pair_wing_width <= s.degree + 1
+    assert peaks[0] < 200 * 2**20, f"correction peaked {peaks[0] / 2**20:.0f} MiB"
