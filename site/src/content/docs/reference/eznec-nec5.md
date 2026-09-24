@@ -279,7 +279,7 @@ capability statements rather than deck errors:
 - **What a buried deck still refuses, each by name with its measurement**:
   a single wire crossing the interface **mid-span** (where it pierces the
   plane would be momwire's guess rather than the model's statement; the
-  sentence names the two-card spelling that serves);
+  refusal message names the two-card spelling that serves);
   a **ground-contact wire combined with buried wires** (the contact
   model has no conductor for the current spreading in the soil — [the
   counterpoise chapter](/act-5/counterpoise/) is the measurement behind
