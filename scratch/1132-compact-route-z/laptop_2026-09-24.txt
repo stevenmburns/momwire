@@ -1,0 +1,47 @@
+# momwire#1132 laptop (xps13) record, 2026-09-24. OMP/OPENBLAS=2, prlimit --as=6G.
+# base = origin/main 3302d54, mine = perf/1132-compact-route-z; both built with make build on this box.
+# cross-build bit gate (compare_1132.py gate_base.npz gate_mine.npz):
+dense12_Z              (695, 695)       bit-identical
+dense12_c              (695,)           bit-identical
+dense12_z              (1,)             bit-identical
+free_mem1_Z            (301, 301)       bit-identical
+free_mem1_c            (301,)           bit-identical
+free_mem1_z            (1,)             bit-identical
+free_mem256_Z          (301, 301)       bit-identical
+free_mem256_c          (301,)           bit-identical
+free_mem256_z          (1,)             bit-identical
+loaded12_R             (90,)            bit-identical
+loaded12_Zrows         (90, 695)        bit-identical
+loaded12_c             (695,)           bit-identical
+loaded12_z             (1,)             bit-identical
+route12_R              (90,)            bit-identical
+route12_Zrows          (90, 695)        bit-identical
+route12_c              (695,)           bit-identical
+route12_z              (1,)             bit-identical
+route48_R              (90,)            bit-identical
+route48_Zrows          (90, 2675)       bit-identical
+route48_c              (2675,)          bit-identical
+route48_z              (1,)             bit-identical
+route4_R               (90,)            bit-identical
+route4_Zrows           (90, 255)        bit-identical
+route4_c               (255,)           bit-identical
+route4_z               (1,)             bit-identical
+served_Z               (25, 25)         bit-identical
+served_c               (25,)            bit-identical
+served_z               (1,)             bit-identical
+somm_mem1_Z            (301, 301)       bit-identical
+somm_mem1_c            (301,)           bit-identical
+somm_mem1_z            (1,)             bit-identical
+somm_mem256_Z          (301, 301)       bit-identical
+somm_mem256_c          (301,)           bit-identical
+somm_mem256_z          (1,)             bit-identical
+only in A: []
+only in B: ['rowsq12_R', 'rowsq12_Zrows', 'rowsq12_c', 'rowsq12_z', 'rowsq48_R', 'rowsq48_Zrows', 'rowsq48_c', 'rowsq48_z', 'rowsq4_R', 'rowsq4_Zrows', 'rowsq4_c', 'rowsq4_z']
+RESULT: ALL BIT-IDENTICAL
+
+# peak RSS, fresh process, route (attr_probe.py under /usr/bin/time -v); load = 1-min loadavg at start
+12 radials base maxrss_kB=188004 vmhwm_MB/z/s: 183.6 [52.605495714017025, 38.324228906352744] 2.97
+12 radials mine maxrss_kB=181116 vmhwm_MB/z/s: 176.9 [52.605495714017025, 38.324228906352744] 2.93
+48 radials base maxrss_kB=458012 vmhwm_MB/z/s: 447.3 [43.522375981530054, 29.222808807816385] 4.44
+48 radials mine maxrss_kB=350060 vmhwm_MB/z/s: 341.9 [43.522375981530054, 29.222808807816385] 4.42
+# loadavg at arm start: 1.42 / 1.47 / 1.47 / 1.51 (base12, mine12, base48, mine48); Steve's desktop session active
