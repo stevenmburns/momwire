@@ -839,13 +839,28 @@ class ProductSet:
     every rowtab entry naming it names the same value row.
 
     `value_rows(rows)` answers the lookup: the value row of each (n, 3)
-    (ρ_eff, z, z′) query, −1 where the set does not hold it."""
+    (ρ_eff, z, z′) query, −1 where the set does not hold it.
 
-    def __init__(self, slot, vals, row_vrow, gz, key_r, key_zl, rowtab, zid, kid):
+    `kernels` (momwire#1173 design C) names the `KEYS` columns `vals` holds,
+    in its column order; the rest were never stored. The crossing fill's
+    tiled route keeps only V and W — the end loops' two tables — so a
+    lookup's block carries NaN in the other four columns (`value_block`),
+    which poisons any reader that was not supposed to exist rather than
+    handing it a plausible zero. `row_vrow=None` is the identity (the value
+    block is in row order). `complete` is False while a tiled evaluation is
+    still filling `vals`; a lookup then refuses (`ProductMemo.lookup`)."""
+
+    def __init__(
+        self, slot, vals, row_vrow, gz, key_r, key_zl, rowtab, zid, kid, kernels=KEYS
+    ):
         if slot not in ("z", "zp"):
             raise ValueError(f"slot must be 'z' or 'zp', got {slot!r}")
+        kernels = tuple(kernels)
+        if vals.shape[1] != len(kernels) or not set(kernels) <= set(KEYS):
+            raise ValueError(f"vals has {vals.shape[1]} columns for {kernels!r}")
         self.slot = slot
         self.vals = vals
+        self.kernels = kernels
         self.row_vrow = row_vrow
         self.gz = gz
         self.key_r = key_r
@@ -853,7 +868,8 @@ class ProductSet:
         self.rowtab = rowtab
         self.zid = zid
         self.kid = kid
-        self.n_rows = int(row_vrow.size)
+        self.n_rows = int(vals.shape[0] if row_vrow is None else row_vrow.size)
+        self.complete = True
         self.fast = None  # the crossing fill's end-loop index, if it built one
         self._gz_ids = _SortedIds(gz)
         r_u = np.unique(key_r)  # -0.0 cannot occur in rho_eff >= a > 0
@@ -918,11 +934,29 @@ class ProductSet:
         for tab, zi, kj in zip(self.rowtab, self.zid, self.kid):
             z_of[tab] = np.broadcast_to(zi[:, None], tab.shape)
             k_of[tab] = np.broadcast_to(kj[None, :], tab.shape)
-        z_i, k_j = z_of[self.row_vrow], k_of[self.row_vrow]
+        vrow = self.value_rows_in_order()
+        z_i, k_j = z_of[vrow], k_of[vrow]
         g = self.gz[z_i] + 0.0
         r, zl = self.key_r[k_j] + 0.0, self.key_zl[k_j] + 0.0
         cols = (r, g, zl) if self.slot == "z" else (r, zl, g)
         return [tuple(t) for t in np.stack(cols, axis=1).tolist()]
+
+    def value_rows_in_order(self):
+        """`row_vrow`, with the identity spelled out."""
+        if self.row_vrow is None:
+            return np.arange(self.n_rows, dtype=np.intp)
+        return self.row_vrow
+
+    def value_block(self, vrows):
+        """The (n, 6) `KEYS`-ordered values of value rows `vrows`: the
+        stored columns copied (the very floats), the others NaN."""
+        vrows = np.asarray(vrows)
+        if self.kernels == KEYS:
+            return self.vals[vrows]
+        out = np.full((vrows.size, len(KEYS)), np.nan + 1j * np.nan)
+        for j, key in enumerate(self.kernels):
+            out[:, KEYS.index(key)] = self.vals[vrows, j]
+        return out
 
 
 class ProductMemo(TripleMemo):
@@ -957,6 +991,10 @@ class ProductMemo(TripleMemo):
     def lookup(self, rows):
         if self.product is None:
             return super().lookup(rows)
+        if not self.product.complete:
+            raise RuntimeError(
+                "the product is still being evaluated; nothing reads it yet"
+            )
         # The array memo first (it counts the lookups and its own hits), then
         # the product for what it missed; a key is in at most one of them.
         if TripleMemo.__len__(self):
@@ -969,7 +1007,7 @@ class ProductMemo(TripleMemo):
         if todo.size:
             v = self.product.value_rows(rows[todo] + 0.0)
             ok = v >= 0
-            block[todo[ok]] = self.product.vals[v[ok]]
+            block[todo[ok]] = self.product.value_block(v[ok])
             hit[todo[ok]] = True
             self.stats["hits"] += int(np.count_nonzero(ok))
         return hit, block
@@ -983,7 +1021,7 @@ class ProductMemo(TripleMemo):
         if self.product is None:
             return own
         p = self.product
-        return list(p.vals[p.row_vrow]) + own
+        return list(p.value_block(p.value_rows_in_order())) + own
 
 
 def designed_tables(
