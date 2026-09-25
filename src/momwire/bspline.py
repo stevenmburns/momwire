@@ -434,19 +434,31 @@ _REMAINDER_GRADED = True
 # ...and, on that route, the LISTING threshold: a pair is integrated on graded
 # panels when `_REMAINDER_GRADED_C · len / R_min` exceeds the base order (the
 # #631 rule at c = 4 instead of 1: len/R_min > 0.75 at the base order of 3,
-# the pairs the c = 4 brute-force reference raises). Once the grazing pairs
+# the pairs the c = 4 brute-force ladder raises). Once the grazing pairs
 # converge, what is left is the pairs never listed, run at the base order.
-# Relative Z_in residue by listing c, against the brute-force c = 8 ladder:
+# Relative Z_in residue by listing c, against the brute-force ladder (no cap,
+# the tolerant guard below; c = 8 on the 12-radial screen, c = 4 on the 48):
 #
 #   deck                        c=1      c=2      c=4      c=8
-#   12-radial surface screen    3.3e-7   3.0e-7   1.6e-8   4.5e-8
-#   48-radial surface screen    1.2e-6   3.1e-7   6.6e-8   1.2e-8
+#   12-radial surface screen    8.9e-7   3.8e-7   5.7e-9   4.2e-8
+#   48-radial surface screen    1.4e-6   3.2e-7   2.2e-7   2.3e-7
 #
-# (the brute-force references themselves: c = 4 vs c = 8 is 5e-8 and 2.0e-7),
-# so c = 1 alone misses the 1e-6 bar on the 48-radial screen. Listing is
+# (on the 48-radial screen the c = 4 brute-force reference itself is ~2e-7
+# from its c = 8 twin), so c = 1 alone misses the 1e-6 bar there. Listing is
 # cheap on this route — a pair that barely qualifies is a few panels — so the
 # threshold is set by that measurement, not by cost.
 _REMAINDER_GRADED_C = 4.0
+
+# ...with the broadside guard widened by this much of a segment, so a foot
+# landing exactly on a segment end (radials and a mast meeting at a hub) is
+# decided the same way in every rotated copy of a symmetric deck (see
+# `_quadrature.remainder_qp_pairs`). With the strict guard the 48-radial
+# screen's list is asymmetric at c = 1 (80 pairs, as shipped) and c = 4 (180);
+# a 4-radial screen's rotational route moved 5e-8 off its dense twin; and the
+# junction pairs the tie drops are not negligible: listing them moves the
+# 12-radial screen 2.3e-3 (the brute-force ladder, listed the same way, agrees
+# with the graded answer to 6e-9).
+_REMAINDER_GRADED_EDGE_TOL = 1e-9
 
 
 def _segment_touch_lists(seg_l, seg_r):
@@ -2746,11 +2758,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cap = _REMAINDER_QP_CAP if cap is None else cap
         if c is None:
             c = _REMAINDER_GRADED_C if _REMAINDER_GRADED else _REMAINDER_QP_C
+        edge_tol = _REMAINDER_GRADED_EDGE_TOL if _REMAINDER_GRADED else 0.0
         base = int(self.n_qp_sommerfeld)
         xg, _ = leggauss(base)
         tq = 0.5 * (xg + 1.0)
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
-        I, J, Q = _quadrature.remainder_qp_pairs(nodes, seg_l, seg_r, gz, base, cap, c)
+        I, J, Q = _quadrature.remainder_qp_pairs(
+            nodes, seg_l, seg_r, gz, base, cap, c, edge_tol=edge_tol
+        )
         if I.size == 0:
             return I, J, Q
         n = int(seg_l.shape[0])

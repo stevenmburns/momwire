@@ -32,28 +32,36 @@ needs_acc = pytest.mark.skipif(
     reason="accelerator without remainder_field_proj_owned",
 )
 
-# Converged Z_in references, from the BRUTE-FORCE ladder (the keyed Gauss rule
-# at c = 4, 8, 16 with no cap: the base tree 998377f's rule, which this tree
-# reproduces bit for bit with `_REMAINDER_GRADED = False`) — independent of the
-# graded rule. The ladder creeps rather than converges below ~1e-7, because a
-# Gauss rule straddling the grid's theta-band seam converges like 1/n (see
-# `_remainder_graded`); its spread is quoted with each value.
+# Converged Z_in references, from the BRUTE-FORCE ladder: the keyed Gauss rule
+# at c = 4, 8, 16 with no cap — independent of the graded rule. The ladder
+# creeps rather than converges below ~1e-7, because a Gauss rule straddling the
+# grid's theta-band seam converges like 1/n (see `_remainder_graded`); its
+# spread is quoted with each value.
 #
-# #631's grazing wire, h/lambda = 1.09e-4, 16 segments, soil (13, 0.005):
+# The screens' ladders list pairs with the graded route's TOLERANT broadside
+# guard (see `test_the_graded_listing_is_as_symmetric_as_the_deck`). With the
+# strict guard of the shipped rule the hub's tie leaves some junction pairs at
+# the base order in some rotated copies and not others, and a ladder built that
+# way converges to a different number: 2.3e-3 away on the 12-radial screen
+# (60.11171518674077 + 15.253388251951405j at c = 8), 6e-7 on the 48-radial —
+# the issue's c = 4 reference is of that kind.
+#
+# #631's grazing wire, h/lambda = 1.09e-4, 16 segments, soil (13, 0.005) (one
+# straight wire: no junction, the two guards agree):
 #   c = 4  : 67.98234826663277 - 249.14358775566026j
 #   c = 8  : 67.98234144432308 - 249.14358797174907j
 #   c = 16 : REF_GRAZE                  (c = 4..16 spread 1.1e-7 of |Z|)
 REF_GRAZE = complex(67.98236850760632, -249.1435846940572)
 # The 12-radial surface screen (N6LF's vertical at h = 2a, momwire#1131):
-#   c = 4  : 60.11171462337616 + 15.253391354048226j
-#   c = 8  : REF_12                     (c = 4..8 spread 5.1e-8 of |Z|)
-REF_12 = complex(60.11171518674077, 15.253388251951405)
+#   c = 4  : 60.11668596818814 + 15.395931463777389j
+#   c = 8  : REF_12                     (c = 4..8 spread 1.0e-7 of |Z|)
+REF_12 = complex(60.11669137863695, 15.395928071490694)
 # The 48-radial surface screen, the deck #1201 was filed on:
-#   c = 4  : 37.87219022578941 + 5.691938854687347j   (the issue's reference)
-#   c = 8  : REF_48                      (c = 4..8 spread 2.0e-7 of |Z|; 4281 s)
-REF_48 = complex(37.87219796016784, 5.691938407098437)
+#   c = 4  : REF_48                     (1197 s; strict-guard c = 4, the issue's
+#            37.87219022578941 + 5.691938854687347j, is 5.9e-7 away)
+REF_48 = complex(37.87216549326275, 5.691954288750884)
 # The keyed rule as shipped in 0.63.0 (c = 1, cap 192) is 1.5e-3 from
-# REF_GRAZE, 3.1e-2 from REF_12 and 1.1e-2 from REF_48; the graded rule lands
+# REF_GRAZE, 3.3e-2 from REF_12 and 1.1e-2 from REF_48; the graded rule lands
 # within 1e-6 of all three.
 GRADED_BAR = 1e-6
 
@@ -253,6 +261,37 @@ def test_every_seam_a_segment_crosses_is_a_breakpoint():
             lo, hi = u[w], u[w + 1]
             assert ((roots >= lo) & (roots <= hi)).any(), (t, lo, hi)
     assert changes > 50, "the sample crossed almost no seams: vacuous"
+
+
+def test_the_graded_listing_is_as_symmetric_as_the_deck():
+    """A 12-radial screen is invariant under turning it one radial, and so
+    must be the list of pairs that go on graded panels. Radials meet at the
+    hub, where an observer's image foot lands EXACTLY on the other segment's
+    end, and the strict broadside guard `0 < t < 1` decides that tie by the
+    last bit of a cosine: the keyed route's own list is asymmetric here (the
+    negative control), the graded route's tolerant guard is not."""
+    s = BSplineSolver(**surface_screen_deck(12))
+    g = s._build_geometry()
+    nr = 12 * 10
+
+    def turned(I, J):
+        rot = lambda i: np.where(i < nr, (i + 10) % nr, i)  # noqa: E731
+        return set(zip(rot(I).tolist(), rot(J).tolist(), strict=True))
+
+    I, J, _ = s._remainder_qp_pairs(g["seg_l"], g["seg_r"], s.ground_z)
+    listed = set(zip(I.tolist(), J.tolist(), strict=True))
+    assert listed == turned(I, J)
+
+    saved = _bs._REMAINDER_GRADED
+    try:
+        _bs._REMAINDER_GRADED = False
+        I0, J0, _ = s._remainder_qp_pairs(
+            g["seg_l"], g["seg_r"], s.ground_z, c=_bs._REMAINDER_GRADED_C
+        )
+    finally:
+        _bs._REMAINDER_GRADED = saved
+    strict = set(zip(I0.tolist(), J0.tolist(), strict=True))
+    assert strict != turned(I0, J0), "the strict guard's tie did not show"
 
 
 # ---------------------------------------------------------------------------

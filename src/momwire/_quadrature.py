@@ -147,7 +147,9 @@ def remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap, c):
     return int(min(max(int(base), need), int(cap)))
 
 
-def remainder_qp_pairs(obs_nodes, src_l, src_r, ground_z, base, cap, c):
+def remainder_qp_pairs(
+    obs_nodes, src_l, src_r, ground_z, base, cap, c, *, edge_tol=0.0
+):
     """`remainder_qp` evaluated per (observer segment, source segment) pair.
 
     momwire#1189. `remainder_qp` returns ONE order for the whole fill, keyed
@@ -169,6 +171,16 @@ def remainder_qp_pairs(obs_nodes, src_l, src_r, ground_z, base, cap, c):
     every pair not listed takes `base`. A deck with nothing grazing returns
     three empty arrays, through the same O(N) short-circuit as the scalar
     rule, and that is what keeps its fill bit-identical.
+
+    `edge_tol` widens the broadside guard to feet within `edge_tol` (in the
+    segment parameter) of either end (momwire#1201). Where two radials
+    CROSS at a hub, an observer's foot on the other radial's line lands on
+    its end exactly, and `0 < t < 1` then decides by the last bit of a
+    cos(pi/2): one rotated copy of a pair counts as broadside and its twin
+    does not. The graded route lists at c = 4, where that pair's ratio
+    straddles the base order, so a symmetric deck would be listed
+    asymmetrically; a tolerance decides every copy alike. 0 is the #631/#1189
+    rule exactly.
     """
     empty = (np.empty(0, np.int64), np.empty(0, np.int64), np.empty(0, np.int64))
     src_l = np.asarray(src_l, dtype=float)
@@ -206,7 +218,10 @@ def remainder_qp_pairs(obs_nodes, src_l, src_r, ground_z, base, cap, c):
         t_raw = ap @ d[j] / dd[j]
         # The same broadside-only guard as `remainder_qp` (see there for why
         # an end-on approach is not the spike this rule resolves).
-        interior = (t_raw > 0.0) & (t_raw < 1.0)
+        if edge_tol:
+            interior = (t_raw > -edge_tol) & (t_raw < 1.0 + edge_tol)
+        else:
+            interior = (t_raw > 0.0) & (t_raw < 1.0)
         if not interior.any():
             continue
         t = np.clip(t_raw, 0.0, 1.0)

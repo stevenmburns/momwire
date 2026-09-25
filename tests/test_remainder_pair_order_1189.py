@@ -99,17 +99,17 @@ def _solve(kw, **flags):
 
 
 def _pairs(kw):
+    """The keyed-order route's pair list: the #631 constant and the strict
+    broadside guard (the graded route, momwire#1201, lists at its own
+    `_REMAINDER_GRADED_C` with a tolerant one)."""
     s = BSplineSolver(**kw)
     g = s._build_geometry()
-    # The #631 constant, which the keyed-order route lists with; the graded
-    # route (momwire#1201) lists at its own `_REMAINDER_GRADED_C`.
-    return (
-        s,
-        g,
-        s._remainder_qp_pairs(
-            g["seg_l"], g["seg_r"], s.ground_z, c=_bs._REMAINDER_QP_C
-        ),
-    )
+    saved = _bs._REMAINDER_GRADED
+    try:
+        _bs._REMAINDER_GRADED = False
+        return s, g, s._remainder_qp_pairs(g["seg_l"], g["seg_r"], s.ground_z)
+    finally:
+        _bs._REMAINDER_GRADED = saved
 
 
 def test_the_deck_wide_order_is_the_maximum_of_the_pair_orders():
