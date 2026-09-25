@@ -13,6 +13,13 @@ Publishing). Every step below was learned the hard way; do them in order.
 1. On `main`, clean tree, up to date with origin (`git fetch && git status`).
 2. Latest main CI green (`gh run list --branch=main --limit 2`) — never tag a
    commit whose CI hasn't finished.
+3. **The pre-tag sweep is clean** (added at 0.63.0, after #1189's 7 GiB
+   transient reached a release candidate with no per-PR gate touching it).
+   Run antennaknobs' `scratch/pretag-sweep/` in its `fast` mode on the
+   Skylake box against the stored previous-release baseline, about 12 min
+   (the harness README has the commands). Every OUTCOME, MEM, TIME or Z flag
+   is attributed to a PR that says so, or fixed, before the tag. The run's
+   results file becomes the next release's baseline.
 
 ## Steps
 
