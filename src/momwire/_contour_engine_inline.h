@@ -51,6 +51,8 @@
 #include <complex>
 #include <limits>
 
+#include "_fma_inline.h"
+
 namespace mw_contour {
 
 typedef std::complex<double> cd;
@@ -115,7 +117,7 @@ static inline bool mw_finite(const cd &z) {
 // |v|^2 without hypot, and a cheap "how big is this" for the rescale test.
 static inline double mw_norm2(double v) { return v * v; }
 static inline double mw_norm2(const cd &v) {
-    return v.real() * v.real() + v.imag() * v.imag();
+    return mw_fma::norm2(v);  // fused (momwire#1194)
 }
 static inline double mw_mag(double v) { return std::fabs(v); }
 static inline double mw_mag(const cd &v) {
@@ -149,14 +151,15 @@ static const double MW_INV[82] = {
 // itself is near a zero of J0. Magnitude tests are on the SQUARED modulus.
 template <class T>
 static inline void mw_bessel_series(const T &z, T &j0, T &j1) {
-    const T w = -0.25 * (z * z);
+    const T w = -0.25 * mw_fma::mul(z, z);  // fused (momwire#1194)
     T t0(1.0), s0(1.0);
     T t1(0.5), s1(0.5);
     double p0 = 1.0, p1 = 0.25;  // squared peaks
     for (int m = 1; m < 80; ++m) {
         const double rm = MW_INV[m];
-        t0 *= w * (rm * rm);
-        t1 *= w * (rm * MW_INV[m + 1]);
+        // The ladder products are fused (momwire#1194): see _fma_inline.h.
+        t0 = mw_fma::mul(t0, w * (rm * rm));
+        t1 = mw_fma::mul(t1, w * (rm * MW_INV[m + 1]));
         s0 += t0;
         s1 += t1;
         const double a0 = mw_norm2(t0), a1 = mw_norm2(t1);
@@ -165,7 +168,7 @@ static inline void mw_bessel_series(const T &z, T &j0, T &j1) {
         if (a0 <= 1e-38 * p0 && a1 <= 1e-38 * p1) break;
     }
     j0 = s0;
-    j1 = s1 * z;  // s1 is J1(z)/z
+    j1 = mw_fma::mul(s1, z);  // s1 is J1(z)/z
 }
 
 // Miller's algorithm: downward recurrence from a starting order well past the
@@ -185,7 +188,7 @@ static inline void mw_bessel_miller(const T &z, double az, T &j0, T &j1) {
     T s(0.0), j0v(0.0), j1v(0.0);
     for (int n = M; n >= 1; --n) {
         if ((n & 1) == 0) s += 2.0 * fn;  // fn carries index n
-        const T fm1 = (static_cast<double>(n) * inv2z) * fn - fp1;
+        const T fm1 = mw_fma::mul_sub(static_cast<double>(n) * inv2z, fn, fp1);
         fp1 = fn;
         fn = fm1;  // fn now carries index n - 1
         if (n == 2) j1v = fn;
@@ -201,8 +204,8 @@ static inline void mw_bessel_miller(const T &z, double az, T &j0, T &j1) {
     }
     s += j0v;
     const T inv_s = T(1.0) / s;
-    j0 = j0v * inv_s;
-    j1 = j1v * inv_s;
+    j0 = mw_fma::mul(j0v, inv_s);
+    j1 = mw_fma::mul(j1v, inv_s);
 }
 
 // Hankel's P/Q asymptotic coefficients for order nu, mu = 4 nu^2
@@ -218,7 +221,7 @@ static inline void mw_bessel_pq(const T &z, double mu, T &P, T &Q) {
     double prev = std::numeric_limits<double>::infinity();
     for (int k = 1; k <= 40; ++k) {
         const double kk = 2.0 * k - 1.0;
-        c *= ((mu - kk * kk) * 0.125 * MW_INV[k]) * iz;
+        c = mw_fma::mul(c, ((mu - kk * kk) * 0.125 * MW_INV[k]) * iz);
         const double m = mw_norm2(c);  // squared: no hypot in the inner loop
         if (!(m < prev)) break;        // the series has started to diverge
         prev = m;
@@ -243,10 +246,10 @@ static inline void mw_bessel_asymptotic(const T &z, T &j0, T &j1) {
     const T pref = std::sqrt(T(1.0) / (MW_PI * z));
     // J0 = sqrt(2/(pi z)) [P0 cos(z - pi/4) - Q0 sin(z - pi/4)] with
     // cos(z - pi/4) = (cos z + sin z)/sqrt2, sin(z - pi/4) = (sin z - cos z)/sqrt2.
-    j0 = pref * ((P0 + Q0) * cz + (P0 - Q0) * sz);
+    j0 = mw_fma::mul(pref, mw_fma::mul_add(P0 + Q0, cz, mw_fma::mul(P0 - Q0, sz)));
     // J1 = sqrt(2/(pi z)) [P1 cos(z - 3pi/4) - Q1 sin(z - 3pi/4)] with
     // cos(z - 3pi/4) = (sin z - cos z)/sqrt2, sin(z - 3pi/4) = -(sin z + cos z)/sqrt2.
-    j1 = pref * ((P1 + Q1) * sz + (Q1 - P1) * cz);
+    j1 = mw_fma::mul(pref, mw_fma::mul_add(P1 + Q1, sz, mw_fma::mul(Q1 - P1, cz)));
 }
 
 // The regime switch, shared by both scalars. `nz` is |z|^2.
@@ -306,9 +309,9 @@ static inline void gauss_segment(const G &g, double z0, double z1,
     for (int c = 0; c < NC; ++c) out[c] = cd(0.0, 0.0);
     cd fv[NC];
     for (int i = 0; i < ng; ++i) {
-        g(mid + half * gx[i], fv);
+        g(mw_fma::fma(half, gx[i], mid), fv);
         const double w = gw[i] * half;
-        for (int c = 0; c < NC; ++c) out[c] += fv[c] * w;
+        for (int c = 0; c < NC; ++c) out[c] = mw_fma::mul_add(fv[c], w, out[c]);
     }
 }
 
@@ -402,7 +405,7 @@ struct HeadWrap {
         const cd lam(t, H * s);
         const cd dl(1.0, H * (MW_PI / a) * c);
         f(lam, out);
-        for (int i = 0; i < NC; ++i) out[i] *= dl;
+        for (int i = 0; i < NC; ++i) out[i] = mw_fma::mul(out[i], dl);
     }
 };
 
