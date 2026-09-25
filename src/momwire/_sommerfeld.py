@@ -1102,6 +1102,71 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=
     )
 
 
+def remainder_field_proj_owned(
+    obs, t_obs, src, t_src, owner, ground_z, k, grid, cancel_flag=0
+):
+    """`remainder_field_proj` at listed pairs rather than over a table.
+
+    momwire#1201: returns `(S,)` complex, entry n being
+    `t_obs[owner[n]] · F(obs[owner[n]], src[n]) · t_src[n]` — each source
+    point paired with ONE observer, which is what a graded rule needs (every
+    observer node carries its own source nodes, so the full `(M, S)` table
+    would be almost entirely waste). Same arithmetic as the table form, entry
+    for entry; C++ (`remainder_field_proj_owned`, OpenMP over sources) when
+    the accelerator is loaded, the numpy body below otherwise.
+    """
+    obs = np.ascontiguousarray(obs, dtype=np.float64)
+    t_obs = np.ascontiguousarray(t_obs, dtype=np.float64)
+    src = np.ascontiguousarray(src, dtype=np.float64)
+    t_src = np.ascontiguousarray(t_src, dtype=np.float64)
+    owner = np.ascontiguousarray(owner, dtype=np.int64)
+    if _acc is not None and hasattr(_acc, "remainder_field_proj_owned"):
+        return _acc.remainder_field_proj_owned(
+            obs,
+            t_obs,
+            src,
+            t_src,
+            owner,
+            float(ground_z),
+            float(k),
+            *grid_cpp_args(grid),
+            int(cancel_flag),
+        )
+
+    o = obs[owner]
+    to = t_obs[owner]
+    th_src = np.hypot(t_src[:, 0], t_src[:, 1])
+    safe_t = th_src > 1e-12
+    ux = np.where(safe_t, t_src[:, 0] / np.where(safe_t, th_src, 1.0), 1.0)
+    uy = np.where(safe_t, t_src[:, 1] / np.where(safe_t, th_src, 1.0), 0.0)
+    tz_src = t_src[:, 2]
+
+    dx = o[:, 0] - src[:, 0]
+    dy = o[:, 1] - src[:, 1]
+    rho = np.hypot(dx, dy)
+    hh = (o[:, 2] - ground_z) + (src[:, 2] - ground_z)
+    r1 = np.sqrt(rho * rho + hh * hh)
+    surf = grid.eval(r1, np.arctan2(hh, rho))
+    g = np.exp(-1j * k * r1) / r1
+
+    tiny = 1e-12 * grid.r1_max
+    safe_r = rho > tiny
+    inv_rho = np.where(safe_r, 1.0 / np.where(safe_r, rho, 1.0), 0.0)
+    dhx = np.where(safe_r, dx * inv_rho, ux)
+    dhy = np.where(safe_r, dy * inv_rho, uy)
+    cphi = ux * dhx + uy * dhy
+    sphi = ux * dhy - uy * dhx
+
+    e_rho = g * (tz_src * surf["IrhoV"] + th_src * cphi * surf["IrhoH"])
+    e_phi = g * th_src * sphi * surf["IphiH"]
+    e_z = g * (tz_src * surf["IzV"] - th_src * cphi * surf["IrhoV"])
+    return (
+        to[:, 0] * (dhx * e_rho - dhy * e_phi)
+        + to[:, 1] * (dhy * e_rho + dhx * e_phi)
+        + to[:, 2] * e_z
+    )
+
+
 # ---------------------------------------------------------------------------
 # Module-level grid caches (shared by every solver that consumes the grid)
 # ---------------------------------------------------------------------------
