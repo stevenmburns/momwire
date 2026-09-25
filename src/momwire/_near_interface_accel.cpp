@@ -71,6 +71,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstring>
 #include <limits>
 #include <stdexcept>
 #include <vector>
@@ -321,6 +322,26 @@ static const double MW_EXP_ZERO = -746.0;
 // nodes are a contiguous run, and a per-node branch would sit inside the
 // vectorized loop instead of in front of it.
 static const int MW_BLOCK = 64;
+
+// Accumulator lanes of `column_member`'s ordered sum (momwire#1193). The
+// lane combine there is written out for exactly four, so changing this is a
+// deliberate one-time move of every near-interface table, not a tuning knob.
+//
+// Under GCC/clang the lanes are a vector TYPE, not an array the vectorizer
+// may or may not map to a register: `a + b` on it is four independent IEEE
+// operations, so the order is fixed by the type and the speed does not
+// depend on the vectorizer's reading of the loop. Measured on Haswell
+// (GCC 11), a `double[4]` with the lane loop left to the vectorizer ran
+// this kernel 11-18 % slower than the `reduction(+)` it replaces; the
+// vector type ran it at parity (-1 % at four threads, +2 % on one). MSVC
+// has no vector extension and gets the array, with the identical per-lane
+// expression.
+static const int MW_LANES = 4;
+#if defined(__GNUC__)
+typedef double mw_lanes __attribute__((vector_size(MW_LANES * sizeof(double))));
+#else
+typedef double mw_lanes[MW_LANES];
+#endif
 
 // `_fixed_gauss`: the shipped Gauss rule on each [e_i, e_{i+1}], each split
 // into 2^p equal panels. numpy's linspace is start + i*(stop - start)/n with
@@ -575,17 +596,49 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
             er[j] = ex * cos(ai[j]);
             ei[j] = ex * sin(ai[j]);
         }
+        // The block's six sums, in an order the SOURCE fixes (momwire#1193,
+        // the #781 rule): node j adds into lane j % MW_LANES of its column,
+        // sequentially within the lane, and the lanes combine pairwise as
+        // written after the loop. No `omp simd reduction(+)`: that clause
+        // licenses reassociation, so the order would be the compiler's
+        // vectorization choice, and an unrelated edit to this TU or a
+        // compiler upgrade could move every table at the ulp level. (MSVC
+        // builds with /fp:fast, which licenses reassociation TU-wide; the
+        // order here is fixed wherever the compiler keeps IEEE semantics.)
+        //
+        // Lanes rather than one serial accumulator per column, for speed:
+        // the serial spelling, even with the six columns interleaved for
+        // independent chains, cost +6 % on this kernel and +3 % on razor's
+        // hub16 x16 fill (Haswell); the lanes cost nothing measurable
+        // (see mw_lanes for why they are a vector type).
+        static_assert(MW_LANES == 4, "the lane combine is written for four");
         for (int c = 0; c < 6; ++c) {
             const double *fr = s.fr.data() + c * K + k0;
             const double *fi = s.fi.data() + c * K + k0;
-            double sr = 0.0, si = 0.0;
-            MW_NI_SIMD(reduction(+ : sr, si))
-            for (int j = 0; j < nb; ++j) {
-                sr += er[j] * fr[j] - ei[j] * fi[j];
-                si += er[j] * fi[j] + ei[j] * fr[j];
+            mw_lanes sr = {0.0, 0.0, 0.0, 0.0}, si = {0.0, 0.0, 0.0, 0.0};
+            int j = 0;
+            for (; j + MW_LANES <= nb; j += MW_LANES) {
+#if defined(__GNUC__)
+                mw_lanes a, b, x, y;  // memcpy: unaligned loads, no aliasing
+                std::memcpy(&a, er + j, sizeof a);
+                std::memcpy(&b, ei + j, sizeof b);
+                std::memcpy(&x, fr + j, sizeof x);
+                std::memcpy(&y, fi + j, sizeof y);
+                sr += a * x - b * y;
+                si += a * y + b * x;
+#else
+                for (int l = 0; l < MW_LANES; ++l) {
+                    sr[l] += er[j + l] * fr[j + l] - ei[j + l] * fi[j + l];
+                    si[l] += er[j + l] * fi[j + l] + ei[j + l] * fr[j + l];
+                }
+#endif
             }
-            accr[c] += sr;
-            acci[c] += si;
+            for (int l = 0; j < nb; ++j, ++l) {
+                sr[l] += er[j] * fr[j] - ei[j] * fi[j];
+                si[l] += er[j] * fi[j] + ei[j] * fr[j];
+            }
+            accr[c] += (sr[0] + sr[1]) + (sr[2] + sr[3]);
+            acci[c] += (si[0] + si[1]) + (si[2] + si[3]);
         }
     }
     for (int c = 0; c < 6; ++c) out[c] = cd(accr[c], acci[c]);
