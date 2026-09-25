@@ -34,6 +34,7 @@ import functools
 import numpy as np
 import pytest
 
+import momwire
 from momwire.sinusoidal import (
     _EKPairs,
     _N_PANEL_EK_DELTA_NEAR,
@@ -1703,9 +1704,11 @@ def test_gc4_the_fold_is_the_allocating_fill_to_the_bit(twin):
     reassociation, and one no tolerance-level gate would ever notice. So all
     three comparisons below are `array_equal`.
 
-    The complex case multiplies with `scale` on the LEFT, as `sinusoidal.py`
-    documents for the Sommerfeld ground's C2 (the reason `scale` exists); the
-    reference below spells that product out in real operations (momwire#1194).
+    The complex case is `np.multiply(scale, value)` and NOT `value * scale`:
+    complex128 multiply evaluates the imaginary part as `x.re*y.im +
+    x.im*y.re`, so the operand order moves the last bit, and the whole reason
+    `scale` exists is the Sommerfeld ground's C2 — which `sinusoidal.py`
+    documents as being on the LEFT.
     """
     from momwire._accel import acc
 
@@ -1740,27 +1743,27 @@ def test_gc4_the_fold_is_the_allocating_fill_to_the_bit(twin):
     for b, r, f in zip(base, ref, folded):
         assert np.array_equal(b - r, f)
 
-    # A complex scale, spelled the C2 way — EXACT on every build.
+    # A complex scale, spelled the C2 way.
     #
-    # The reference is the complex product written out in real operations,
-    # each rounded once: re = a*x - b*y, im = a*y + b*x for scale = a + ib and
-    # value = x + iy. Since momwire#1194 the extension is built with
-    # -ffp-contract=off, so that is literally what the kernel computes, on the
-    # AVX2 build and the baseline alike. `np.multiply(c2, r)` is NOT that: on an
-    # AVX2 machine numpy's own complex loop fuses a product into an FMA, so it
-    # sits ~1e-16 relative away. Before #1194 the AVX2 build happened to match
-    # np.multiply exactly because GCC contracted the kernel's multiply the same
-    # way, and the baseline build needed a 1e-12 bar; comparing against the
-    # unfused spelling makes the claim exact on both. A reassociation or a
-    # twice-applied scale misses it outright.
+    # EXACT on the AVX2 build; a measured bar on the BASELINE one (momwire#1032).
+    # The two structural claims above stay exact on every build and are the ones
+    # that catch the defect this test exists for: `scale=1.0` is a bit-identity,
+    # and the additive fold is `dst − (t1 + t2 + …)` rather than a node-by-node
+    # reassociation. What moves on the baseline build is only how GCC contracts
+    # the complex multiply without -mfma, against numpy's own spelling of it —
+    # measured on the fat-dipole deck, 1571/7686 doubles differ by at most 462
+    # ULP, 8.9e-14 relative. A genuine reassociation or a twice-applied scale
+    # would miss by orders more than that, so the bar still gates the bug.
     c2 = complex(0.3129384756, -0.7182736451)
     scaled = tuple(np.zeros_like(a) for a in ref)
     fill(*args, out=scaled, scale=c2)
+    exact = momwire.accelerator_variant in ("avx2", "legacy", None)
     for r, s in zip(ref, scaled):
-        want = np.empty_like(r)
-        want.real = c2.real * r.real - c2.imag * r.imag
-        want.imag = c2.real * r.imag + c2.imag * r.real
-        assert np.array_equal(want, s)
+        want = np.multiply(c2, r)
+        if exact:
+            assert np.array_equal(want, s)
+        else:
+            np.testing.assert_allclose(s, want, rtol=1e-12, atol=0.0)
 
 
 @pytest.mark.skipif(not _HAVE_ACCEL, reason="C++ accelerator not built")

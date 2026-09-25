@@ -1680,22 +1680,20 @@ assemble_Z_bspline_windowed_kernel(
                             std::complex<double> Jpq =
                                 j_view(p, q, sm - i0, sn - j0);
                             double prod = mp_ap * nq_bq;
-                            // Fused accumulation (momwire#1194, _fma_inline.h):
-                            // without it this window loop measured +12 %.
-                            wA_re = mw_fma::fma(prod, Jpq.real(), wA_re);
-                            wA_im = mw_fma::fma(prod, Jpq.imag(), wA_im);
+                            wA_re += prod * Jpq.real();
+                            wA_im += prod * Jpq.imag();
                             if (p >= 1 && q >= 1) {
                                 std::complex<double> Jpm1qm1 =
                                     j_view(p - 1, q - 1, sm - i0, sn - j0);
                                 double pq = (double)(p * q) * prod;
-                                wPhi_re = mw_fma::fma(pq, Jpm1qm1.real(), wPhi_re);
-                                wPhi_im = mw_fma::fma(pq, Jpm1qm1.imag(), wPhi_im);
+                                wPhi_re += pq * Jpm1qm1.real();
+                                wPhi_im += pq * Jpm1qm1.imag();
                             }
                         }
                     }
 
-                    zA_re = mw_fma::fma(td, wA_re, zA_re);
-                    zA_im = mw_fma::fma(td, wA_im, zA_im);
+                    zA_re += td * wA_re;
+                    zA_im += td * wA_im;
                     zPhi_re += wPhi_re;
                     zPhi_im += wPhi_im;
                 }
@@ -3882,15 +3880,12 @@ static double D_ek_dispatch(int p, int q,
 // one shift the same 30 entries; giving the EK twin its own copy of
 // J_static_dispatch does not help either.
 //
-// That was the mechanism momwire#1194 removed: the GCC/clang builds now pass
-// -ffp-contract=off (setup.py), so an a*b+c rounds twice as written whatever
-// the inliner decides, and a changed inlining decision no longer changes the
-// arithmetic. Cross-COMPILER and cross-machine bit equality is still not
-// promised (libm and libmvec differ between glibc versions, and MSVC builds
-// with /fp:fast), so it is still not one to pin (antennaknobs#253). What IS
-// armored, and stays armored, is the within-build claim the tests actually
-// make: EK-off is the same code path and the same bits as the default, and
-// no EK code is entered to produce it.
+// So absolute cross-build bit stability is not a property this translation
+// unit has, and it is not one to pin (the same argument as antennaknobs#253:
+// never pin cross-machine bit equality — this is the cross-build case of it).
+// What IS armored, and stays armored, is the within-build claim the tests
+// actually make: EK-off is the same code path and the same bits as the
+// default, and no EK code is entered to produce it.
 template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,

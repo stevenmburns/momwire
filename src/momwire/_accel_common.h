@@ -23,10 +23,6 @@
 #include <tuple>
 #include <vector>
 
-// Explicit fused multiply-adds, since the build no longer contracts on its
-// own (momwire#1194).
-#include "_fma_inline.h"
-
 namespace py = pybind11;
 
 // The per-section registration seam. Declared here so every section TU
