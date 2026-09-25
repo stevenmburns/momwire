@@ -311,6 +311,8 @@ _ACCEL_HEADERS = [
     # The explicit fused multiply-adds (momwire#1194), included by
     # `_accel_common.h` (so every TU above) and `_contour_engine_inline.h`.
     "src/momwire/_fma_inline.h",
+    # Design D4's vector bracket, included by `_accel_razor.cpp`.
+    "src/momwire/_accel_razor_cplx.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -328,6 +330,10 @@ _ACCEL_SOURCES = [
     # momwire#1201: its own TU so a new caller of the inline `proj_one`
     # cannot move the codegen of the _accel_somm.cpp kernels (momwire#1194).
     "src/momwire/_accel_somm_pairs.cpp",
+    # Design D4: razor's complex-k bracket. Its own TU because it declares
+    # `exp` as `omp declare simd`, which is TU-wide and, in the razor TU,
+    # changed the codegen of kernels it was not meant for.
+    "src/momwire/_accel_razor_cplx.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
