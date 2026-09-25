@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_stable_inline.h"
+#include "_accel_razor_cplx.h"
 
 // razor section of the accelerator (momwire#742): the razor-blade
 // formulation's segment-moment fill, fused and tiled.
@@ -130,6 +131,19 @@ static inline void razor_statics_ek(double u_r, double rho2, double h,
     *m1 = u_r * mm0 + qd;
 }
 
+// The vector call's contract (`_accel_razor_cplx.h`): a multiple of
+// RAZOR_CPLX_LANES nodes. The tail of a chunk is padded with its last real
+// R, which is finite and positive, so the padded lanes compute a harmless
+// value that nothing reads; every real node therefore takes the vector body.
+static inline void razor_cplx_pad_and_bracket(double *Rb, size_t nq,
+                                              double k_re, double k_im,
+                                              double *nr, double *ni) {
+    const size_t nv = (nq + RAZOR_CPLX_LANES - 1) / RAZOR_CPLX_LANES * RAZOR_CPLX_LANES;
+    for (size_t q = nq; q < nv; q++)
+        Rb[q] = Rb[nq - 1];
+    razor_cplx_brackets(Rb, nv, k_re, k_im, nr, ni);
+}
+
 // Fused segment moments at one wavenumber. Returns (M0, M1); M1 is a (0, 0)
 // array when `need_m1` is false, which is how the caller spells "the scalar
 // potential only needs M0" without a second entry point.
@@ -158,6 +172,14 @@ static inline void razor_statics_ek(double u_r, double rho2, double h,
 //     and in the same multi-step order as `_ek_factor` / `_ek_reg_extra` in
 //     `_bspline_kernels.py`, which are numpy-generic and already correct at
 //     complex k. Verified against them to 0.0 relative before this was written.
+//
+// Both complex-k branches evaluate the bracket exp(-jkR) - 1 for a chunk of
+// nodes in ONE vector call, `razor_cplx_brackets` (Design D4, its own TU),
+// and then reduce node by node in the order they always have. That call is
+// what made the complex loop 4x cheaper: the scalar loop it replaced paid
+// four libm calls per node and never vectorized. It is not bit-identical to
+// that loop (libmvec's last bits and a Taylor expm1), so it is gated on Z;
+// the header of `_accel_razor_cplx.cpp` carries the error budget.
 //
 // `if (COMPLEX_K)` rather than `if constexpr`: the build is -std=gnu++11, and
 // this is the idiom `if (ek_pair)` already uses here. The branch folds at -O3,
@@ -252,6 +274,12 @@ razor_seg_moments_impl(
     std::vector<double> tau(RAZOR_SEG_TILE * n_qp);
     std::vector<double> wq(RAZOR_SEG_TILE * n_qp);
     std::vector<double> twq(RAZOR_SEG_TILE * n_qp);
+    // The complex-k bracket's node buffers (Design D4): R, then Re and Im of
+    // e^{-jkR} - 1, one chunk of nodes at a time. Aligned and padded for the
+    // vector call; unused at real k.
+    alignas(32) double cRb[RAZOR_CPLX_CHUNK];
+    alignas(32) double cNr[RAZOR_CPLX_CHUNK];
+    alignas(32) double cNi[RAZOR_CPLX_CHUNK];
 
 #pragma omp for schedule(static)
     for (size_t tile = 0; tile < n_obs_tiles; tile++) {
@@ -336,7 +364,30 @@ razor_seg_moments_impl(
                     const double *twqq = &twq[js * n_qp];
                     double a0r = 0.0, a0i = 0.0, a1r = 0.0, a1i = 0.0;
 
-                    if (!ek_pair) {
+                    if (!ek_pair && COMPLEX_K) {
+                        // Design D4: the nodes' brackets in one vector call
+                        // per chunk (`_accel_razor_cplx.cpp`), then the SAME
+                        // in-order fused reduction as before, node by node.
+                        // Only the brackets' last bits differ from the
+                        // scalar loop this replaced; the reduction does not.
+                        // R keeps its fused spelling (momwire#1194).
+                        for (size_t q0 = 0; q0 < n_qp; q0 += RAZOR_CPLX_CHUNK) {
+                            const size_t nq = std::min(RAZOR_CPLX_CHUNK, n_qp - q0);
+                            for (size_t q = 0; q < nq; q++) {
+                                const double u = tq[q0 + q] - u_r;
+                                cRb[q] = std::sqrt(mw_fma::fma(u, u, rho2));
+                            }
+                            razor_cplx_pad_and_bracket(cRb, nq, k_re, k_im, cNr, cNi);
+                            for (size_t q = 0; q < nq; q++) {
+                                const double R = cRb[q];
+                                const double rr = cNr[q] / R, ri = cNi[q] / R;
+                                a0r = mw_fma::fma(rr, wqq[q0 + q], a0r);
+                                a0i = mw_fma::fma(ri, wqq[q0 + q], a0i);
+                                a1r = mw_fma::fma(rr, twqq[q0 + q], a1r);
+                                a1i = mw_fma::fma(ri, twqq[q0 + q], a1i);
+                            }
+                        }
+                    } else if (!ek_pair) {
                         // No `omp simd reduction` here, for the same reason as the bspline
                         // kernels (momwire#781): the clause licenses reassociation, so the
                         // reduction tree follows a per-function vectorization choice and
@@ -346,18 +397,13 @@ razor_seg_moments_impl(
                         // expectations (nec5 vs Gauss-Legendre sharing one kernel), and that
                         // is exactly the shape this nondeterminism breaks. Revisit if the
                         // 4.6% is ever worth more than reproducibility.
+                        //
+                        // Real k only: the complex-k branch is above. GCC vectorizes this
+                        // loop (libmvec sin, in-order reduction); a std::fma in the
+                        // reduction stops that, and it ran 1.9x slower when tried.
                         for (size_t q = 0; q < n_qp; q++) {
                             const double u = tq[q] - u_r;
-                            // COMPLEX_K fuses R and the accumulations below
-                            // (momwire#1194, _fma_inline.h): that loop calls
-                            // expm1/exp/cos/sin per node and never vectorizes,
-                            // and unfused it lost ~3 %. The real-k loop does
-                            // NOT: GCC vectorizes it (libmvec sin, in-order
-                            // reduction), a std::fma in the reduction stops
-                            // that, and it ran 1.9x slower when tried.
-                            const double R = COMPLEX_K
-                                                 ? std::sqrt(mw_fma::fma(u, u, rho2))
-                                                 : std::sqrt(u * u + rho2);
+                            const double R = std::sqrt(u * u + rho2);
                             const double kr = k_re * R;
                             // exp(−jkR) − 1, then the complex-by-real divide
                             // numpy performs (Smith's algorithm collapses to
@@ -368,35 +414,72 @@ razor_seg_moments_impl(
                             // spelled `-2 sin²(kr/2)`. It costs nothing — the
                             // loop wanted sin(kr) anyway, so cos+sin becomes
                             // sin(kr/2)+sin(kr).
-                            double nr, ni;
-                            if (COMPLEX_K) {
-                                // exp(k_im*R), k_im <= 0: decaying, so no
-                                // overflow, and underflow to +0 at large R is
-                                // the physical answer. `expm1(a)·cos(y)` is
-                                // the decay half of the bracket; the trig half
-                                // is the real-k form below, unscaled.
-                                stable_expm1_neg_jkR(k_re, k_im, R, &nr, &ni);
-                            } else {
-                                nr = stable_cos_minus_one(kr);
-                                ni = -std::sin(kr);
-                            }
+                            const double nr = stable_cos_minus_one(kr);
+                            const double ni = -std::sin(kr);
                             const double rr = nr / R, ri = ni / R;
-                            if (COMPLEX_K) {
-                                a0r = mw_fma::fma(rr, wqq[q], a0r);
-                                a0i = mw_fma::fma(ri, wqq[q], a0i);
-                                a1r = mw_fma::fma(rr, twqq[q], a1r);
-                                a1i = mw_fma::fma(ri, twqq[q], a1i);
-                            } else {
-                                a0r += rr * wqq[q];
-                                a0i += ri * wqq[q];
-                                a1r += rr * twqq[q];
-                                a1i += ri * twqq[q];
+                            a0r += rr * wqq[q];
+                            a0i += ri * wqq[q];
+                            a1r += rr * twqq[q];
+                            a1i += ri * twqq[q];
+                        }
+                    } else if (COMPLEX_K) {
+                        // NEC Eq 89's coaxial factor and its regularising
+                        // extra at complex k — `_ek_factor` /
+                        // `_ek_reg_extra`, term for term and in their
+                        // multi-step order. kR is complex: jkR = −Im(k)R +
+                        // j·Re(k)R, so C1 picks up a REAL term, and (kR)² an
+                        // imaginary one.
+                        //
+                        // The bracket is the reduced branch's, and takes the
+                        // same vector call (Design D4): the EK remainder IS
+                        // that object with NEC Eq 89's factor on it
+                        // (momwire#799). Everything else here is per node
+                        // and in the pre-D4 order, R unfused as before.
+                        const double ae = saek[js];
+                        const double a2 = ae * ae;
+                        const double a4 = a2 * a2;
+                        for (size_t q0 = 0; q0 < n_qp; q0 += RAZOR_CPLX_CHUNK) {
+                            const size_t nq = std::min(RAZOR_CPLX_CHUNK, n_qp - q0);
+                            for (size_t q = 0; q < nq; q++) {
+                                const double u = tq[q0 + q] - u_r;
+                                cRb[q] = std::sqrt(u * u + rho2);
+                            }
+                            razor_cplx_pad_and_bracket(cRb, nq, k_re, k_im, cNr, cNi);
+                            for (size_t q = 0; q < nq; q++) {
+                                const double R = cRb[q];
+                                const double r2 = R * R;
+                                const double r4 = r2 * r2;
+                                const double kr = k_re * R;
+                                const double t1 = 0.25 * a4 / r4;
+                                const double t2 = 0.5 * a2 / r2;
+                                const double kri = k_im * R;
+                                const double kr2r = kr * kr - kri * kri;
+                                const double kr2i = 2.0 * kr * kri;
+                                // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
+                                const double c1r = 1.0 - kri, c1i = kr;
+                                const double c2r = 3.0 * c1r - kr2r;
+                                const double c2i = 3.0 * c1i - kr2i;
+                                // fac = t1·C2 − t2·C1 + 1
+                                const double facr = t1 * c2r - t2 * c1r + 1.0;
+                                const double faci = t1 * c2i - t2 * c1i;
+                                // extra = t1·(3jkR − (kR)²) − t2·(jkR)
+                                const double exr = t1 * (-3.0 * kri - kr2r) + t2 * kri;
+                                const double exi = t1 * (3.0 * kr - kr2i) - t2 * kr;
+                                const double br = cNr[q], bi = cNi[q];
+                                const double nr = br * facr - bi * faci + exr;
+                                const double ni = br * faci + bi * facr + exi;
+                                const double rr = nr / R, ri = ni / R;
+                                a0r += rr * wqq[q0 + q];
+                                a0i += ri * wqq[q0 + q];
+                                a1r += rr * twqq[q0 + q];
+                                a1i += ri * twqq[q0 + q];
                             }
                         }
                     } else {
                         // NEC Eq 89's coaxial factor and its regularising
                         // extra — `_ek_factor` / `_ek_reg_extra`, term for
-                        // term and in their multi-step order.
+                        // term and in their multi-step order. Real k only;
+                        // the complex-k branch is above.
                         const double ae = saek[js];
                         const double a2 = ae * ae;
                         const double a4 = a2 * a2;
@@ -408,44 +491,18 @@ razor_seg_moments_impl(
                             const double kr = k_re * R;
                             const double t1 = 0.25 * a4 / r4;
                             const double t2 = 0.5 * a2 / r2;
-                            double facr, faci, exr, exi, br, bi;
-                            if (COMPLEX_K) {
-                                // kR is complex: jkR = −Im(k)R + j·Re(k)R, so
-                                // C1 picks up a REAL term, and (kR)² an
-                                // imaginary one. Term for term and in the same
-                                // multi-step order as `_ek_factor` /
-                                // `_ek_reg_extra`, which are the reference.
-                                const double kri = k_im * R;
-                                const double kr2r = kr * kr - kri * kri;
-                                const double kr2i = 2.0 * kr * kri;
-                                // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
-                                const double c1r = 1.0 - kri, c1i = kr;
-                                const double c2r = 3.0 * c1r - kr2r;
-                                const double c2i = 3.0 * c1i - kr2i;
-                                // fac = t1·C2 − t2·C1 + 1
-                                facr = t1 * c2r - t2 * c1r + 1.0;
-                                faci = t1 * c2i - t2 * c1i;
-                                // extra = t1·(3jkR − (kR)²) − t2·(jkR)
-                                exr = t1 * (-3.0 * kri - kr2r) + t2 * kri;
-                                exi = t1 * (3.0 * kr - kr2i) - t2 * kr;
-                                // The reduced branch's bracket, verbatim:
-                                // the EK remainder IS that object with NEC
-                                // Eq 89's factor on it (momwire#799).
-                                stable_expm1_neg_jkR(k_re, k_im, R, &br, &bi);
-                            } else {
-                                const double kr2 = kr * kr;
-                                // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
-                                const double c1r = 1.0, c1i = kr;
-                                const double c2r = 3.0 * c1r - kr2, c2i = 3.0 * c1i;
-                                // fac = t1·C2 − t2·C1 + 1
-                                facr = t1 * c2r - t2 * c1r + 1.0;
-                                faci = t1 * c2i - t2 * c1i;
-                                // extra = t1·(3jkR − (kR)²) − t2·(jkR)
-                                exr = t1 * (-kr2);
-                                exi = t1 * (3.0 * kr) - t2 * kr;
-                                br = stable_cos_minus_one(kr);
-                                bi = -std::sin(kr);
-                            }
+                            const double kr2 = kr * kr;
+                            // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
+                            const double c1r = 1.0, c1i = kr;
+                            const double c2r = 3.0 * c1r - kr2, c2i = 3.0 * c1i;
+                            // fac = t1·C2 − t2·C1 + 1
+                            const double facr = t1 * c2r - t2 * c1r + 1.0;
+                            const double faci = t1 * c2i - t2 * c1i;
+                            // extra = t1·(3jkR − (kR)²) − t2·(jkR)
+                            const double exr = t1 * (-kr2);
+                            const double exi = t1 * (3.0 * kr) - t2 * kr;
+                            const double br = stable_cos_minus_one(kr);
+                            const double bi = -std::sin(kr);
                             const double nr = br * facr - bi * faci + exr;
                             const double ni = br * faci + bi * facr + exi;
                             const double rr = nr / R, ri = ni / R;
@@ -978,6 +1035,31 @@ void register_razor(py::module_ &m) {
           py::arg("a"), py::arg("xg"), py::arg("wg"), py::arg("k"),
           py::arg("need_m1"), py::arg("group_i"), py::arg("group_j"),
           py::arg("a_ek"), py::arg("cancel_flag") = 0);
+
+    // Design D4's vector bracket, exported for its accuracy test alone
+    // (tests/test_razor_cplx_brackets.py): e^{-jkR} - 1 at every R, through
+    // the same padded call the kernel above makes. Not a solver entry point.
+    m.def("razor_cplx_brackets",
+          [](py::array_t<double, py::array::c_style | py::array::forcecast> R,
+             std::complex<double> k) {
+              const size_t n = (size_t)R.size();
+              py::array_t<std::complex<double>> out(n);
+              const double *rp = R.data();
+              std::complex<double> *op = out.mutable_data();
+              alignas(32) double Rb[RAZOR_CPLX_CHUNK];
+              alignas(32) double nr[RAZOR_CPLX_CHUNK];
+              alignas(32) double ni[RAZOR_CPLX_CHUNK];
+              for (size_t q0 = 0; q0 < n; q0 += RAZOR_CPLX_CHUNK) {
+                  const size_t nq = std::min(RAZOR_CPLX_CHUNK, n - q0);
+                  for (size_t q = 0; q < nq; q++) Rb[q] = rp[q0 + q];
+                  razor_cplx_pad_and_bracket(Rb, nq, k.real(), k.imag(), nr, ni);
+                  for (size_t q = 0; q < nq; q++)
+                      op[q0 + q] = std::complex<double>(nr[q], ni[q]);
+              }
+              return out;
+          },
+          "Design D4's vectorised e^{-jkR} - 1 (Im k <= 0), for its tests.",
+          py::arg("R"), py::arg("k"));
 
     // momwire#780. Declared beside the moments kernel it pairs with.
     m.attr("razor_assemble_780") = true;
