@@ -1551,6 +1551,24 @@ class SommerfeldGridBelow(SommerfeldGrid):
         """
         R1 = np.asarray(R1, dtype=float)
         theta = np.asarray(theta, dtype=float)
+        self._refuse_out_of_domain(R1, theta)
+        return self._interp(
+            np.minimum(R1, self.r1_max), np.clip(theta, self.th_min, 0.5 * np.pi)
+        )
+
+    def _refuse_out_of_domain(self, R1, theta):
+        """`eval`'s domain refusals ALONE, reading no table and filling
+        nothing (momwire#1173 Beverage cost map).
+
+        `eval` interpolates too, and `_interp` materializes every deferred
+        region its points reach. A caller that must raise exactly `eval`'s
+        refusals for a query but may not fill that query's regions (the
+        projection's all-pair extremes, whose past-cap pairs are served as
+        zero) asks this instead. `eval` calls it first, so the two cannot
+        disagree about which geometries are refused.
+        """
+        R1 = np.asarray(R1, dtype=float)
+        theta = np.asarray(theta, dtype=float)
         if R1.size and float(np.min(R1)) < 0.0:
             raise ValueError("query R1 must be non-negative")
         if R1.size and float(np.max(R1)) > self.r1_max * (1.0 + 1e-9):
@@ -1582,9 +1600,6 @@ class SommerfeldGridBelow(SommerfeldGrid):
                 "relative to its horizontal separation, or refuse the "
                 "geometry"
             )
-        return self._interp(
-            np.minimum(R1, self.r1_max), np.clip(theta, self.th_min, 0.5 * np.pi)
-        )
 
     def _fill_region(self, idx):
         """Materialize one deferred region, once. Idempotent.
@@ -1935,15 +1950,25 @@ def _zero_past_cap(out, obs, src, d_obs, d_src, r1_cap):
 _PAST_CAP_FLOOR_ROUTES = {"cpp": 0, "numpy": 0}
 
 
-def _capped_extremes(obs, src, d_obs, d_src, r1_cap):
-    """`(min theta, max theta)` over the pairs with R₁ <= `r1_cap`, or None
-    when there is none (momwire#1187). `_zero_past_cap`'s arithmetic and row
-    chunks, so the two classify every pair identically; the angle is the C++
-    kernel's `atan2(hh, rho)`. The interval is then widened by a few ulps
-    (clipped to [0, pi/2]) so a pair on a band seam cannot be read against a
-    band `_ensure_for` left unfilled on a last-bit disagreement between
-    numpy's and the kernel's hypot."""
-    lo, hi = np.inf, -np.inf
+# momwire#1173 (the Beverage cost map): how often the projection sized the
+# lazy grid fill from the SERVED pairs (R1 <= cap) because some pair lay past
+# the cap, per branch; "zero" counts blocks with no served pair at all, and
+# "fallback" the C++ reads a last-bit disagreement sent to an unfilled region
+# (sized again from the kernel's own extremes, as before). Tests read these to
+# prove which branch ran.
+_SERVED_FILL_ROUTES = {"cpp": 0, "numpy": 0, "zero": 0, "fallback": 0}
+
+
+def _served_extremes(obs, src, d_obs, d_src, r1_cap):
+    """`(max R1, min theta, max theta)` over the pairs with R1 <= `r1_cap`,
+    or None when there is none. The pairs past the cap are served as exactly
+    zero (`_zero_past_cap`, the same arithmetic and row chunks, so the two
+    classify every pair identically), so these are the only extremes the
+    grid has to be FILLED for. The interval is widened by a few ulps (theta
+    clipped to [0, pi/2]) so a pair on a band or zone seam cannot be read
+    against a region `_ensure_for` left unfilled on a last-bit disagreement
+    between numpy's and the kernel's hypot."""
+    lo, hi, r1_hi = np.inf, -np.inf, -np.inf
     step = max(1, (1 << 20) // max(1, src.shape[0]))
     for i0 in range(0, obs.shape[0], step):
         i1 = min(i0 + step, obs.shape[0])
@@ -1952,15 +1977,29 @@ def _capped_extremes(obs, src, d_obs, d_src, r1_cap):
             obs[i0:i1, 1][:, None] - src[:, 1][None, :],
         )
         hh = d_obs[i0:i1, None] + d_src[None, :]
-        keep = np.sqrt(rho * rho + hh * hh) <= r1_cap
+        r1 = np.sqrt(rho * rho + hh * hh)
+        keep = r1 <= r1_cap
         if not np.any(keep):
             continue
         th = np.arctan2(hh[keep], rho[keep])
         lo = min(lo, float(np.min(th)))
         hi = max(hi, float(np.max(th)))
+        r1_hi = max(r1_hi, float(np.max(r1[keep])))
     if lo > hi:
         return None
-    return max(lo * (1.0 - 1e-12), 0.0), min(hi * (1.0 + 1e-12), 0.5 * np.pi)
+    return (
+        r1_hi * (1.0 + 1e-12),
+        max(lo * (1.0 - 1e-12), 0.0),
+        min(hi * (1.0 + 1e-12), 0.5 * np.pi),
+    )
+
+
+def _capped_extremes(obs, src, d_obs, d_src, r1_cap):
+    """`(min theta, max theta)` over the pairs with R₁ <= `r1_cap`, or None
+    when there is none (momwire#1187): `_served_extremes`' angles, the
+    kernel's `atan2(hh, rho)` over `_zero_past_cap`'s classification."""
+    ext = _served_extremes(obs, src, d_obs, d_src, r1_cap)
+    return None if ext is None else ext[1:]
 
 
 def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid):
@@ -2087,13 +2126,37 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
             # Clamped to the cap, not to r1_max: past the cap is served (as
             # zero, below), while a grid sized short of the cap still refuses.
             q_r1 = min(mx_r1, grid.r1_cap)
-            grid.eval(np.array([q_r1, q_r1]), np.array([mn_th, mx_th]))
-            grid._ensure_for(q_r1, mn_th, mx_th)
+            grid._refuse_out_of_domain(np.array([q_r1, q_r1]), np.array([mn_th, mx_th]))
+            fill = kernel_fill = (q_r1, mn_th, mx_th)
+            past_cap = mx_r1 > grid.r1_cap
+            if past_cap:
+                # momwire#1173: the refusals above read the same extremes as
+                # before, but the lazy FILL is sized from the served pairs
+                # alone. A pair past the cap is served as zero whatever it
+                # interpolated, so its angle and its clamped R1 must not pay
+                # for bands and zones no served pair reads: on the Beverage
+                # (two rods 10.7 lambda_m apart) they filled the floor, low and
+                # mid bands of all three zones, 36 s, for values discarded.
+                _SERVED_FILL_ROUTES["cpp"] += 1
+                fill = _served_extremes(obs, src, d_obs, d_src, grid.r1_cap)
+                if fill is None:
+                    _SERVED_FILL_ROUTES["zero"] += 1
+                    return np.zeros_like(out)
+            grid._ensure_for(*fill)
             if tuple(r["filled"] for r in grid._regions) != filled_before:
                 out, mx_r1, mn_th, mx_th = _run()
-            if mx_r1 > grid.r1_cap:
+            if past_cap:
                 # The kernel interpolated these at r1_max; the served value is 0.
                 _zero_past_cap(out, obs, src, d_obs, d_src, grid.r1_cap)
+                if not np.all(np.isfinite(out)):
+                    # A served pair whose kernel R1 or theta sits a last bit
+                    # across a seam from numpy's read a region the served
+                    # extremes left unfilled (NaN). Size from the kernel's own
+                    # extremes, as before momwire#1173, and read again.
+                    _SERVED_FILL_ROUTES["fallback"] += 1
+                    grid._ensure_for(*kernel_fill)
+                    out, mx_r1, mn_th, mx_th = _run()
+                    _zero_past_cap(out, obs, src, d_obs, d_src, grid.r1_cap)
         return out
 
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])
@@ -2127,8 +2190,23 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
             r1_q = np.where(past, r1.flat[j], r1)
             th_q = np.where(past, th_q.flat[j], th_q)
             surf = grid.eval(r1_q, th_q)
-        else:
+        elif getattr(grid, "_refuse_out_of_domain", None) is None:
             surf = grid.eval(np.minimum(r1, r1_cap), th_q)
+        else:
+            # momwire#1173: the same refusals as querying every pair at its
+            # capped R1, but a pair past the cap is READ at a served pair's
+            # own point, as #1187's branch above does: `_interp` fills every
+            # region a query reaches, and a zeroed pair must not fill any.
+            _SERVED_FILL_ROUTES["numpy"] += 1
+            grid._refuse_out_of_domain(np.minimum(r1, r1_cap), th_q)
+            inside = np.flatnonzero(~past.ravel())
+            if inside.size == 0:
+                _SERVED_FILL_ROUTES["zero"] += 1
+                return np.zeros(r1.shape, dtype=np.complex128)
+            j = int(inside[0])
+            surf = grid.eval(
+                np.where(past, r1.flat[j], r1), np.where(past, th_q.flat[j], th_q)
+            )
     else:
         surf = grid.eval(r1, np.arctan2(hh, rho))
     g = divide_out_below(k_p, k_m, rho, hh)
