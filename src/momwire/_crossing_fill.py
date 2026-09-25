@@ -1564,13 +1564,20 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
 _PRODUCT_TABLES = True
 _PRODUCT_ENDS = True
 _PRODUCT_NEG_CONTROL = None
-# A product with several groups pays a merge over its candidate triples; it
-# is taken only when those are at most this fraction of the grid, and when
-# the groups are few enough that their lines are (`_PRODUCT_MAX_GROUP_FRAC`
-# of the grouped side). One group is always taken: its candidates ARE the
-# distinct triples, and every array it builds is O(distinct + nodes).
-_PRODUCT_MAX_CAND_FRAC = 0.25
-_PRODUCT_MAX_GROUP_FRAC = 0.25
+# Caps on the multi-group merge, None for none (the default). They used to
+# be 0.25 each: a product was taken only when its candidate triples were at
+# most that fraction of the grid, and its groups that fraction of the
+# grouped side. Neither guarded a cost the grid route does not pay too: the
+# merge's arrays are O(candidates) <= O(grid) and its lines O(groups x line)
+# <= O(grid), the same order as the grid route's own rho grid, and the grid
+# route then adds the chunk dedup and the hashed memo on top. Measured on
+# Skylake, interleaved against the capped route, Z to the bit on every deck
+# (momwire#1173): the inverted-L x8 takes the product in both blocks, peak
+# RSS 767 -> 471 MB, wall 106.9 -> 106.3 s; antennaknobs' Beverage (two rod
+# groups) at nseg 84, 272 -> 212 MB, 13.3 -> 13.0 s. A test may still set a
+# fraction to force the grid route.
+_PRODUCT_MAX_CAND_FRAC = None
+_PRODUCT_MAX_GROUP_FRAC = None
 # Groups beyond this build no fast-end structures (their raw lines would be
 # groups x line floats); their ends take the lookup path, which is exact.
 _PRODUCT_FAST_MAX_GROUPS = 64
@@ -1871,7 +1878,8 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     else:
         slot, G, L, gfirst, grank = "zp", pb, pa, fb, gb
     nG, nL = gfirst.size, L.shape[0]
-    if nG > 1 and nG > _PRODUCT_MAX_GROUP_FRAC * G.shape[0]:
+    cap = _PRODUCT_MAX_GROUP_FRAC
+    if nG > 1 and cap is not None and nG > cap * G.shape[0]:
         return "groups"
     # z relative to the plane, exactly as `_direct_coords` forms it.
     zA = pa[:, 2] - gz
@@ -1907,7 +1915,8 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         nk.append(f_k.size)
     nz, nk = np.asarray(nz, dtype=np.intp), np.asarray(nk, dtype=np.intp)
     n_cand = int(np.sum(nz * nk))
-    if nG > 1 and n_cand > _PRODUCT_MAX_CAND_FRAC * nA * nB:
+    cap = _PRODUCT_MAX_CAND_FRAC
+    if nG > 1 and cap is not None and n_cand > cap * nA * nB:
         return "candidates"
 
     def flat_pos(g):

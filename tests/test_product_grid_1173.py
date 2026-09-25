@@ -22,9 +22,9 @@ chosen to reach a different route:
   crossing1, detached         one group on each side: product, slots z and z′
   fan_rise, sloped            one above group, a below line spanning depths
   detached_hub                four radii: one product per source partition
-  two_node (cap lifted)       TWO above groups: the multi-group merge (by
-                              default the candidate cap sends it to the grid)
-  lean20                      a leaning mast: every node its own group, grid route
+  two_node                    TWO above groups: the multi-group merge (a
+                              candidate cap, set, sends it to the grid)
+  lean20                      a leaning mast: every node its own group, merged
   leaning mast over one rod   the below side grouped (z′ slot)
   WA7ARK ground-rod EFHW      the real-world deck: below rod grouped, 3 blocks
   buried_dipole               no crossing fill: the two below-plane bounds only
@@ -123,7 +123,7 @@ DECKS = {
     "detached_hub": (lambda: _razor(detached_hub()), "product"),
     "fan_rise": (lambda: _razor(fan_rise_deck()), "product"),
     "sloped": (lambda: _razor(sloped_radials_deck()), "product"),
-    "lean20": (lambda: _razor(tilted_deck(20.0, n_mast=6)), "groups"),
+    "lean20": (lambda: _razor(tilted_deck(20.0, n_mast=6)), "product"),
     "buried_dipole": (buried_dipole_razor, None),
 }
 
@@ -202,14 +202,14 @@ def test_the_fill_is_the_grid_route_to_the_bit(case):
 def test_two_groups_take_the_merged_product_to_the_bit():
     """`two_node_deck`'s two masts are two above groups. Its asked triples
     barely repeat (each mast sees its own rod at ρ = a and the other's at
-    12 m), so the candidate cap sends it to the grid route by default; lifted,
-    the multi-group merge runs and must give the same Z."""
+    12 m), so a candidate cap (0.25, the old default) sends it to the grid
+    route; by default the multi-group merge runs and must give the same Z."""
     make = lambda: _razor(two_node_deck(separation=12.0))  # noqa: E731
     ref, _r = _fill(make, off=True)
-    got, r = _fill(make)
+    got, r = _fill(make, **{"cf._PRODUCT_MAX_CAND_FRAC": 0.25})
     assert r["cf.main_generic_candidates"] == 2 and r["cf.main_product"] == 0, r
     assert np.array_equal(got, ref)
-    got, r = _fill(make, **{"cf._PRODUCT_MAX_CAND_FRAC": 1.0})
+    got, r = _fill(make)
     assert r["cf.main_product"] == 2 and r["cf.main_product_groups"] == 2, r
     assert r["cf.ends_fast"] > 0, r
     assert np.array_equal(got, ref)
