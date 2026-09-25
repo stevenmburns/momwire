@@ -1186,7 +1186,7 @@ def test_the_near_image_overwrite_is_inert_off_grazing():
 
 
 @pytest.mark.slow
-def test_the_near_image_fix_reaches_the_sommerfeld_route_too():
+def test_the_near_image_fix_reaches_the_sommerfeld_route_too(monkeypatch):
     """The image half of the Sommerfeld route, isolated from its remainder.
 
     Under `ground_model='sommerfeld'` the fast solvers build the exact image
@@ -1196,7 +1196,16 @@ def test_the_near_image_fix_reaches_the_sommerfeld_route_too():
     for an unrelated reason — see the next test.
 
     Measured at `n_qp_sommerfeld=96`: 1.17 (117 %) before, 7.7e-09 after.
+
+    Both routes must then run the SAME remainder, so the dense one is held on
+    the keyed rule: since momwire#1201 its listed pairs go on graded panels,
+    which the fast solvers' ACA sampler does not, and at this base order the
+    two remainders differ by 2.2e-4 — the fixed order's own error, not the
+    image's.
     """
+    from momwire import bspline as _bs
+
+    monkeypatch.setattr(_bs, "_REMAINDER_GRADED", False)
     kw = _grazing_wire(
         1.09e-4 * _GRAZE_WL,
         ground_eps=(10.0, 0.002),
@@ -1225,7 +1234,7 @@ REMAINDER_KEYING_AGREEMENT = 1e-5
 
 
 @pytest.mark.slow
-def test_the_sommerfeld_remainder_order_is_keyed_on_the_fast_route():
+def test_the_sommerfeld_remainder_order_is_keyed_on_the_fast_route(monkeypatch):
     """momwire#647 Part A — the agreement pin its predecessor asked for.
 
     `HMatrixSolver._somm_nodes` took `self.n_qp_sommerfeld` raw, where
@@ -1241,7 +1250,18 @@ def test_the_sommerfeld_remainder_order_is_keyed_on_the_fast_route():
     dense rule itself rather than a second copy that could drift.
 
     Measured before / after at the default order: 1.27 -> 7.7e-09.
+
+    momwire#1201 took the DENSE route past the keyed order: its listed pairs
+    are integrated on graded panels, which is the converged answer (1.5e-3
+    from the keyed order on the h/lambda = 1.09e-4 wire). The fast solvers'
+    ACA sampler still fills at the keyed order, so this gate — which is about
+    the two routes choosing the same ORDER — compares them with the dense
+    route on that same keyed rule. The fast route's own gap to converged is
+    the follow-up, not a regression: it is the gap it always had.
     """
+    from momwire import bspline as _bs
+
+    monkeypatch.setattr(_bs, "_REMAINDER_GRADED", False)
     for hl in (1.09e-4, 1e-3):
         for ground_eps in ((81.0, 5.0), (10.0, 0.002), (2.5, 1e-05)):
             kw = _grazing_wire(

@@ -14,6 +14,13 @@ on which pairs) as well as the answer.
 The accuracy bar is momwire#647's REMAINDER_KEYING_AGREEMENT (1e-5 of |Z_in|):
 the tightest bar the suite already holds two remainder-order plumbings to, and
 three orders inside #631's own 1e-2 convergence gate.
+
+Since momwire#1201 the listed pairs are integrated on graded panels
+(`_remainder_graded`) rather than at their keyed order, and the keyed order
+only decides which pairs are listed. The gates here are about THIS mechanism
+— which pairs, at which order, through which plumbing — so they run it with
+`_REMAINDER_GRADED = False`, which is the #1189 fill exactly;
+`test_remainder_graded_1201.py` gates the graded route.
 """
 
 import warnings
@@ -94,7 +101,15 @@ def _solve(kw, **flags):
 def _pairs(kw):
     s = BSplineSolver(**kw)
     g = s._build_geometry()
-    return s, g, s._remainder_qp_pairs(g["seg_l"], g["seg_r"], s.ground_z)
+    # The #631 constant, which the keyed-order route lists with; the graded
+    # route (momwire#1201) lists at its own `_REMAINDER_GRADED_C`.
+    return (
+        s,
+        g,
+        s._remainder_qp_pairs(
+            g["seg_l"], g["seg_r"], s.ground_z, c=_bs._REMAINDER_QP_C
+        ),
+    )
 
 
 def test_the_deck_wide_order_is_the_maximum_of_the_pair_orders():
@@ -149,7 +164,7 @@ def test_the_fill_runs_the_orders_it_was_given(monkeypatch):
         return orig(self, geom, obs, src, q, grid)
 
     monkeypatch.setattr(BSplineSolver, "_remainder_pair_moments", spy)
-    _z, s = _solve(kw)
+    _z, s = _solve(kw, _REMAINDER_GRADED=False)
     census = s._last_remainder_orders
     base, cap = s.n_qp_sommerfeld, _bs._REMAINDER_QP_CAP
     n = 16
@@ -172,7 +187,7 @@ def test_the_pair_orders_agree_with_the_deck_wide_order(hl, soil):
     """The accuracy gate, on #631's grazing wire and momwire#647's soils.
     (`test_negative_controls` holds one rung of it on the default lane.)"""
     kw = _somm(hl, soil)
-    z_pair, s = _solve(kw)
+    z_pair, s = _solve(kw, _REMAINDER_GRADED=False)
     z_deck, _ = _solve(kw, _REMAINDER_PER_PAIR=False)
     assert len(s._last_remainder_orders) > 1  # the per-pair route really ran
     rel = abs(z_pair - z_deck) / abs(z_deck)
@@ -186,20 +201,21 @@ def test_negative_controls():
     the corners of the ridge and fails the bar. (3) Capping the near-plane
     pairs at the base order is the pre-#631 answer, far outside it."""
     kw = _somm(1.09e-4)
+    keyed = dict(_REMAINDER_GRADED=False)
     z_deck, s_deck = _solve(kw, _REMAINDER_PER_PAIR=False)
     (q_deck,) = s_deck._last_remainder_orders
-    z_pair, _ = _solve(kw)
+    z_pair, _ = _solve(kw, **keyed)
     rel = abs(z_pair - z_deck) / abs(z_deck)
     assert rel < PAIR_AGREEMENT, f"{rel:.3e}"
-    z_same, s_same = _solve(dict(kw, n_qp_sommerfeld=q_deck))
+    z_same, s_same = _solve(dict(kw, n_qp_sommerfeld=q_deck), **keyed)
     assert s_same._last_remainder_orders == {q_deck: 16 * 16}
     assert z_same == z_deck
 
-    z_bare, _ = _solve(kw, _REMAINDER_PAIR_DILATE=False)
+    z_bare, _ = _solve(kw, _REMAINDER_PAIR_DILATE=False, **keyed)
     bare = abs(z_bare - z_deck) / abs(z_deck)
     assert bare > 100 * PAIR_AGREEMENT, f"one-ring inert? {bare:.3e}"
 
-    z_low, s_low = _solve(kw, _REMAINDER_QP_CAP=3)
+    z_low, s_low = _solve(kw, _REMAINDER_QP_CAP=3, **keyed)
     assert s_low._last_remainder_orders == {3: 16 * 16}
     low = abs(z_low - z_deck) / abs(z_deck)
     assert low > 0.25, f"order-3 answer only {low:.1%} away"
