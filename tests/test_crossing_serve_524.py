@@ -711,6 +711,31 @@ def hub_deck(n_radials=4, depth=0.15, **override):
     return build
 
 
+def invl_deck(n_radials=16, x=1, lean=False, **override):
+    """`hub_deck` with an 8-segment, 5 m horizontal top wire junctioned to the
+    monopole's START (its top) — an inverted-L over buried radials. Radial,
+    monopole and top segment counts scale by `x` (the rise stays at 2, as
+    the bench decks scale the hub). The above side is two members, the mast
+    and a horizontal wire whose nodes each have their own (x, y), so the
+    crossing product cannot be one above group. `lean` moves the mast top
+    (and the top wire with it) to x = 1 m, so no two above nodes share an
+    (x, y) at all."""
+    d = hub_deck(n_radials=n_radials)
+    mono_i = n_radials + 1
+    top = (1.0 if lean else 0.0, 0.0, 10.0)
+    d["wires"][mono_i] = np.array([top, (0.0, 0.0, 0.0)])
+    d["wires"].append(np.array([top, (top[0] + 5.0, 0.0, 10.0)]))
+    npe = d["n_per_edge_per_wire"]
+    d["n_per_edge_per_wire"] = [[n * x for n in e] for e in npe[:n_radials]] + [
+        npe[n_radials],
+        [npe[mono_i][0] * x],
+        [8 * x],
+    ]
+    d["junctions"].append([(mono_i, "start"), (mono_i + 1, "start")])
+    d.update(override)
+    return d
+
+
 def test_g524_2_buried_hub_other_junction_is_served():
     """The below-side interior junction (the buried hub) passes scope:
     the crossing junction is the rise↔monopole node, the hub is an
