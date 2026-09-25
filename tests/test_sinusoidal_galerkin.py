@@ -763,10 +763,24 @@ M3_GEOMETRIES = {
 # The old values were again the ones carrying error: each is the q=4 print to
 # the digit, and q=8 sits 5.5x (vee) and 12x (k2_junction) closer to the q=16
 # reference at fixed mesh. Same story for M4's two movers below.
+#
+# 2026-09-25 (momwire#1194): the eight `*_coll` entries are now measured on the
+# WELL-SCALED fill (#606's cos-1 shape set, forced for these solves by
+# `_m3_z("coll_ws", ...)`), not the literal one the solver takes at these
+# meshes. At N = 321 the decks sit at kΔ ≈ 4.8e-3, above `_WELL_SCALED_KD`,
+# where the literal Φ_c@σA + Φ_co@σC cancels ~3e6-sized tensor entries down to
+# ~50 — the #203 loss, ~17 bits — and cond(Z) ≈ 7e5 carries that into Z_in.
+# The literal-path constants therefore sat 1e-6..1e-5 from the truth and moved
+# with any change of rounding: a translation of the whole geometry moved
+# `k2_junction.rich_sin_coll` by 5e-6, GCC 11 vs 13 by 2e-6, and building
+# without FMA contraction (#1194) by 1.04e-5, against a 1e-5 pin. The
+# well-scaled values are reproducible to ~1e-9 under the same translations and
+# are bit-identical across those builds; the old pins were 5e-9..7e-6 from
+# them. The coarse-mesh gate solves are untouched (literal path, as served).
 M3_REFS = {
     "dipole": dict(
         sin_gal_321=69.639093 - 18.056307j,
-        sin_coll_321=69.631876 - 18.107822j,
+        sin_coll_321=69.631875 - 18.107828j,
         bspline2_321=69.633780 - 18.065315j,
         rich_sin_gal=69.634796 - 18.008036j,
         rich_sin_coll=69.633551 - 18.018862j,
@@ -774,26 +788,26 @@ M3_REFS = {
     ),
     "vee": dict(
         sin_gal_321=97.960292 - 61.297668j,
-        sin_coll_321=97.947410 - 61.346335j,
+        sin_coll_321=97.947401 - 61.346400j,
         bspline2_321=97.945410 - 61.304418j,
         rich_sin_gal=97.934589 - 61.216983j,
-        rich_sin_coll=97.934600 - 61.216284j,
+        rich_sin_coll=97.934498 - 61.217083j,
         rich_bspline2=97.929560 - 61.219593j,
     ),
     "k2_junction": dict(
         sin_gal_321=124.493250 + 0.392167j,
-        sin_coll_321=124.479522 + 0.340718j,
+        sin_coll_321=124.479518 + 0.340675j,
         bspline2_321=124.493334 + 0.373246j,
         rich_sin_gal=124.513021 + 0.444108j,
-        rich_sin_coll=124.513126 + 0.445724j,
+        rich_sin_coll=124.513159 + 0.445885j,
         rich_bspline2=124.513347 + 0.437900j,
     ),
     "k3_star": dict(
         sin_gal_321=13.438927 - 951.615918j,
-        sin_coll_321=13.438415 - 951.658449j,
+        sin_coll_321=13.438416 - 951.658139j,
         bspline2_321=13.416848 - 950.833391j,
         rich_sin_gal=13.379051 - 949.330644j,
-        rich_sin_coll=13.380080 - 949.324632j,
+        rich_sin_coll=13.380092 - 949.323047j,
         rich_bspline2=13.369902 - 949.004252j,
     ),
 }
@@ -861,7 +875,21 @@ def test_the_payoff_schemes_carry_a_matched_feed_model():
 @functools.lru_cache(maxsize=None)
 def _m3_z(scheme, geom_name, n):
     """Driving-point impedance, memoized — the M3 tests walk the same handful
-    of (scheme, geometry, N) solves several times over."""
+    of (scheme, geometry, N) solves several times over.
+
+    ``"coll_ws"`` is the collocation solve on the well-scaled (#606) fill,
+    forced whatever kΔ is: the fine-mesh reference series only (#1194 note on
+    `M3_REFS`). The threshold is read inside the solve, so it is swapped around
+    ``compute_impedance`` and restored before anything else can see it."""
+    if scheme == "coll_ws":
+        import momwire.sinusoidal as _sin
+
+        saved = _sin._WELL_SCALED_KD
+        _sin._WELL_SCALED_KD = float("inf")
+        try:
+            return _SCHEMES["coll"](M3_GEOMETRIES[geom_name](n)).compute_impedance()[0]
+        finally:
+            _sin._WELL_SCALED_KD = saved
     kw = M3_GEOMETRIES[geom_name](n)
     return _SCHEMES[scheme](kw).compute_impedance()[0]
 
@@ -1146,7 +1174,10 @@ def test_m3_reference_constants_are_reproducible():
         return zs[-1] - c / fine[-1]
 
     for name, refs in M3_REFS.items():
-        series = {s: [_m3_z(s, name, n) for n in fine] for s in ("gal", "coll", "bspl")}
+        series = {
+            s: [_m3_z(s if s != "coll" else "coll_ws", name, n) for n in fine]
+            for s in ("gal", "coll", "bspl")
+        }
         got = {
             "sin_gal_321": series["gal"][-1],
             "sin_coll_321": series["coll"][-1],
