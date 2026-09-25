@@ -294,6 +294,9 @@ _ACCEL_SOURCES = [
     "src/momwire/_accel_somm.cpp",
     "src/momwire/_accel_mw568.cpp",
     "src/momwire/_accel_razor.cpp",
+    # momwire#1201: its own TU so a new caller of the inline `proj_one`
+    # cannot move the codegen of the _accel_somm.cpp kernels (momwire#1194).
+    "src/momwire/_accel_somm_pairs.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine

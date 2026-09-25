@@ -439,6 +439,8 @@ _CANCELLABLE_KERNELS = (
     "assemble_Z_bspline_weighted_windowed_cplx_eps",
     "sinusoidal_galerkin_far_fill_cplx",
     "sinusoidal_galerkin_far_fill_ek",
+    # momwire#1201: the remainder at listed pairs, the graded rule's kernel.
+    "remainder_field_proj_owned",
 )
 
 

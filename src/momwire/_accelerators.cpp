@@ -32,5 +32,6 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_somm(m);
     register_mw568(m);
     register_razor(m);
+    register_somm_pairs(m);
 }
 

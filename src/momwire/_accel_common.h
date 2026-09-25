@@ -34,6 +34,7 @@ void register_sinusoidal(py::module_ &m);
 void register_somm(py::module_ &m);
 void register_mw568(py::module_ &m);
 void register_razor(py::module_ &m);
+void register_somm_pairs(py::module_ &m);
 
 // Ubuntu/glibc <cmath> headers don't carry `omp declare simd` markers for the
 // libmvec routines, so GCC's auto-vectorizer can't substitute the vectorized
