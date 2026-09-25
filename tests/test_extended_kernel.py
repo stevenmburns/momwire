@@ -1662,24 +1662,37 @@ def test_ek_refl_kernel_is_never_entered_when_ek_is_off(monkeypatch):
 # branch agree bit for bit on the new one. So these numbers are still the
 # pre-#259 kernel's output — the kernel did not move, the deck did — and the
 # gate keeps doing what it was written to do.
+#
+# RE-ANCHORED AGAIN 2026-09-25 by momwire#1194, which builds with
+# -ffp-contract=off: GCC no longer fuses a*b+c into an FMA on its own, so the
+# same kernel source rounds its multiply-adds separately and 7 of the 12
+# literals moved: the large corners by 1-14 ulp, and the second tensor's two
+# small, cancellation-dominated corners (~1e-4 and ~1e-3) by 2.6e-11 and
+# 1.4e-12 of themselves: 2.8e-15 and 2.0e-15 absolute, under 5e-17 of that
+# tensor's largest corner. The link: the refl kernel's source is untouched by
+# #1194 (no std::fma was written in `_accel_sinusoidal.cpp`), the old
+# literals are what the #1194 base build (b39f895) produced, and these are
+# what the same source produces with only the flag added. Since the pin is
+# now a capture of UNcontracted arithmetic, an unrelated edit elsewhere in
+# the translation unit can no longer move it — which is what #1194 is for.
 _EK_OFF_REFL_PIN = [
     (
         "0x1.ef751dcf79f6bp+7",
-        "0x1.e0a30f96357efp+10",
+        "0x1.e0a30f96357f0p+10",
         "0x1.2298bc3a95de5p-2",
         "0x1.539ef9dd8199ap-1",
     ),
     (
-        "-0x1.e2cefbbfd104ap+2",
-        "-0x1.d74efa4723db1p+5",
-        "-0x1.cd8d6e3471e19p-14",
-        "-0x1.6b9474b566f39p-10",
+        "-0x1.e2cefbbfd1046p+2",
+        "-0x1.d74efa4723db0p+5",
+        "-0x1.cd8d6e34a4ab5p-14",
+        "-0x1.6b9474b564be4p-10",
     ),
     (
         "0x1.eeeda4c3f96afp+7",
         "0x1.e01f716c67d70p+10",
-        "0x1.225c38afeb2e0p-2",
-        "0x1.53582f9cbb9a9p-1",
+        "0x1.225c38afeb2eep-2",
+        "0x1.53582f9cbb9a8p-1",
     ),
 ]
 

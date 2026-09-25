@@ -3880,12 +3880,15 @@ static double D_ek_dispatch(int p, int q,
 // one shift the same 30 entries; giving the EK twin its own copy of
 // J_static_dispatch does not help either.
 //
-// So absolute cross-build bit stability is not a property this translation
-// unit has, and it is not one to pin (the same argument as antennaknobs#253:
-// never pin cross-machine bit equality — this is the cross-build case of it).
-// What IS armored, and stays armored, is the within-build claim the tests
-// actually make: EK-off is the same code path and the same bits as the
-// default, and no EK code is entered to produce it.
+// That was the mechanism momwire#1194 removed: the GCC/clang builds now pass
+// -ffp-contract=off (setup.py), so an a*b+c rounds twice as written whatever
+// the inliner decides, and a changed inlining decision no longer changes the
+// arithmetic. Cross-COMPILER and cross-machine bit equality is still not
+// promised (libm and libmvec differ between glibc versions, and MSVC builds
+// with /fp:fast), so it is still not one to pin (antennaknobs#253). What IS
+// armored, and stays armored, is the within-build claim the tests actually
+// make: EK-off is the same code path and the same bits as the default, and
+// no EK code is entered to produce it.
 template <bool EK>
 static py::array_t<double>
 seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
