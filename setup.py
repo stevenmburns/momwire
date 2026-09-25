@@ -308,6 +308,9 @@ _ACCEL_HEADERS = [
     # now enforces the whole list against the sources' own #includes.
     "src/momwire/_bspline_static_far_inline.h",
     "src/momwire/_stable_inline.h",
+    # The explicit fused multiply-adds (momwire#1194), included by
+    # `_accel_common.h` (so every TU above) and `_contour_engine_inline.h`.
+    "src/momwire/_fma_inline.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -332,6 +335,8 @@ _NEAR_HEADERS = [
     # The shared branch cut (#714) -- this extension carries the third
     # call site, so an edit to it must rebuild this .so too.
     "src/momwire/_branch_cut_inline.h",
+    # The contour engine's fused multiply-adds (momwire#1194).
+    "src/momwire/_fma_inline.h",
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
 
 # Compile the accelerator's translation units concurrently (momwire#687). With

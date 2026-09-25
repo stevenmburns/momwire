@@ -348,7 +348,16 @@ razor_seg_moments_impl(
                         // 4.6% is ever worth more than reproducibility.
                         for (size_t q = 0; q < n_qp; q++) {
                             const double u = tq[q] - u_r;
-                            const double R = std::sqrt(u * u + rho2);
+                            // COMPLEX_K fuses R and the accumulations below
+                            // (momwire#1194, _fma_inline.h): that loop calls
+                            // expm1/exp/cos/sin per node and never vectorizes,
+                            // and unfused it lost ~3 %. The real-k loop does
+                            // NOT: GCC vectorizes it (libmvec sin, in-order
+                            // reduction), a std::fma in the reduction stops
+                            // that, and it ran 1.9x slower when tried.
+                            const double R = COMPLEX_K
+                                                 ? std::sqrt(mw_fma::fma(u, u, rho2))
+                                                 : std::sqrt(u * u + rho2);
                             const double kr = k_re * R;
                             // exp(−jkR) − 1, then the complex-by-real divide
                             // numpy performs (Smith's algorithm collapses to
@@ -372,10 +381,17 @@ razor_seg_moments_impl(
                                 ni = -std::sin(kr);
                             }
                             const double rr = nr / R, ri = ni / R;
-                            a0r += rr * wqq[q];
-                            a0i += ri * wqq[q];
-                            a1r += rr * twqq[q];
-                            a1i += ri * twqq[q];
+                            if (COMPLEX_K) {
+                                a0r = mw_fma::fma(rr, wqq[q], a0r);
+                                a0i = mw_fma::fma(ri, wqq[q], a0i);
+                                a1r = mw_fma::fma(rr, twqq[q], a1r);
+                                a1i = mw_fma::fma(ri, twqq[q], a1i);
+                            } else {
+                                a0r += rr * wqq[q];
+                                a0i += ri * wqq[q];
+                                a1r += rr * twqq[q];
+                                a1i += ri * twqq[q];
+                            }
                         }
                     } else {
                         // NEC Eq 89's coaxial factor and its regularising
