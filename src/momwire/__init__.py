@@ -1,3 +1,25 @@
+# Thread-pool wait policy, set before anything below loads NumPy/SciPy or the
+# accelerator's OpenMP runtime. Each native pool reads these ONCE, when its
+# library loads: OpenBLAS (every bundled copy) OPENBLAS_THREAD_TIMEOUT,
+# libgomp OMP_WAIT_POLICY and GOMP_SPINCOUNT. At their defaults the idle
+# workers busy-spin after every factorization and steal cores from the next
+# fill: +29 % Sommerfeld, +60 % refl-coef, +77 % free space per repeated
+# solve (0.63.0, Skylake, 4 threads, paired runs, 2026-09-24; antennaknobs'
+# scratch/openblas-spin harness, its #1050). Here, first, so every process
+# that imports momwire before NumPy gets them -- the SimNEC portal daemon,
+# the EZNEC drop-in and plain scripts. setdefault keeps a caller's own
+# values; a process that loaded NumPy first is unaffected (antennaknobs,
+# which does, sets the same three at the top of its own package).
+import os as _os
+
+for _k, _v in (
+    ("OMP_WAIT_POLICY", "PASSIVE"),
+    ("GOMP_SPINCOUNT", "0"),
+    ("OPENBLAS_THREAD_TIMEOUT", "1"),
+):
+    _os.environ.setdefault(_k, _v)
+del _os, _k, _v
+
 from ._accel import LOADED as accelerated
 from ._accel import VARIANT as accelerator_variant
 from ._cancel import CancelToken, SolveAborted

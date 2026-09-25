@@ -445,4 +445,7 @@ unfixable = ["F401", "RUF100"]
 # the rule -- shipped code and the gates over it are where a late-binding
 # capture would actually cost something.
 "scripts/**" = ["B023"]
+# The package's imports follow its thread-pool env block on purpose: the block
+# must run before NumPy / the OpenMP runtime load (see the top of the file).
+"src/momwire/__init__.py" = ["E402"]
 "site/figures/**" = ["B023"]
