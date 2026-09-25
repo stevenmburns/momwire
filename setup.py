@@ -186,6 +186,15 @@ if sys.platform == "win32":
     # compile() in its own class dict, so the patch never runs. Without /MP
     # the split would make Windows wheel builds strictly SLOWER than the
     # monolith (one serial preamble parse per TU) — the #710 review's finding.
+    #
+    # /fp:fast is NOT the IEEE contract the GCC/clang branches below now keep
+    # (momwire#1194). It licenses MSVC to contract a*b+c into an FMA and to
+    # REASSOCIATE sums anywhere in the translation unit, so on Windows an edit
+    # to one function can move another function's results at the ulp level,
+    # and the order-fixing work of #781/#1193 holds only where the compiler
+    # chooses to keep it. It stays for now because Windows speed cannot be
+    # measured off Windows; moving to /fp:precise (plus /fp:contract, which
+    # keeps contraction inside a single expression only) is the follow-up.
     extra_compile_args = ["/O2", "/arch:AVX2", "/openmp:llvm", "/fp:fast", "/MP"]
     extra_link_args = []
 elif sys.platform == "darwin":
@@ -204,6 +213,8 @@ elif sys.platform == "darwin":
         "-fopenmp",
         # Same errno rationale as the Linux branch: let the vectorizer run.
         "-fno-math-errno",
+        # No implicit FMA contraction: see the Linux branch (momwire#1194).
+        "-ffp-contract=off",
         "-std=gnu++11",
         f"-I{os.path.join(_libomp, 'include')}",
     ]
@@ -231,6 +242,23 @@ else:
         # We don't care about errno from a deterministic-domain real input,
         # so disable the side effect to let the vectorizer kick in.
         "-fno-math-errno",
+        # No implicit FMA contraction (momwire#1194). In GNU dialect mode GCC
+        # defaults to -ffp-contract=fast: any a*b+c MAY be fused into one FMA,
+        # which rounds once instead of twice, and whether it is depends on
+        # what the optimizer sees after inlining. GCC inlines against
+        # translation-unit-wide budgets, so an edit to ONE function changed the
+        # fused/unfused split in others: #1187's two-line change to
+        # `pair_extents_below` moved hub_deck(16)'s Z by 7e-20 of max|Z|
+        # through the below/transmitted grid-fill integrands it never touched.
+        # With contraction off, every a*b+c rounds twice exactly as written
+        # and a fused op exists only where the source spells one
+        # (`_fma_inline.h`). An edit can still change how GCC inlines other
+        # functions, but no longer what they compute: rerunning #1187's edit
+        # with this flag changed the same functions' code and left every Z
+        # bit-identical. (Not covered: an edit that flips whether a loop is
+        # vectorized onto libmvec, whose sin/cos differ from scalar libm in
+        # the last bits.)
+        "-ffp-contract=off",
         "-g",
         "-fno-omit-frame-pointer",
         "-std=gnu++11",
