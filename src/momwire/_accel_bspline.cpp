@@ -1680,20 +1680,22 @@ assemble_Z_bspline_windowed_kernel(
                             std::complex<double> Jpq =
                                 j_view(p, q, sm - i0, sn - j0);
                             double prod = mp_ap * nq_bq;
-                            wA_re += prod * Jpq.real();
-                            wA_im += prod * Jpq.imag();
+                            // Fused accumulation (momwire#1194, _fma_inline.h):
+                            // without it this window loop measured +12 %.
+                            wA_re = mw_fma::fma(prod, Jpq.real(), wA_re);
+                            wA_im = mw_fma::fma(prod, Jpq.imag(), wA_im);
                             if (p >= 1 && q >= 1) {
                                 std::complex<double> Jpm1qm1 =
                                     j_view(p - 1, q - 1, sm - i0, sn - j0);
                                 double pq = (double)(p * q) * prod;
-                                wPhi_re += pq * Jpm1qm1.real();
-                                wPhi_im += pq * Jpm1qm1.imag();
+                                wPhi_re = mw_fma::fma(pq, Jpm1qm1.real(), wPhi_re);
+                                wPhi_im = mw_fma::fma(pq, Jpm1qm1.imag(), wPhi_im);
                             }
                         }
                     }
 
-                    zA_re += td * wA_re;
-                    zA_im += td * wA_im;
+                    zA_re = mw_fma::fma(td, wA_re, zA_re);
+                    zA_im = mw_fma::fma(td, wA_im, zA_im);
                     zPhi_re += wPhi_re;
                     zPhi_im += wPhi_im;
                 }
