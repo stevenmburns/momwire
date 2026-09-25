@@ -17,8 +17,7 @@
 // Deliberately leaner than `_accel_somm_proj_inline.h` (which #714 first
 // proposed as the home): one of the three call sites is in the SEPARATE
 // `_near_interface_accel` extension, whose include set is kept minimal, so
-// this header takes `<complex>` and `_fma_inline.h` (itself `<cmath>` and
-// `<complex>` only) and nothing else -- no pybind11, no OpenMP
+// this header takes `<complex>` and nothing else -- no pybind11, no OpenMP
 // declarations, no cancellation machinery. Same discipline as
 // `_contour_engine_inline.h`: it must not depend on the includer having
 // defined `_USE_MATH_DEFINES` first (MSVC).
@@ -30,8 +29,6 @@
 
 #include <complex>
 
-#include "_fma_inline.h"
-
 namespace mw_branch {
 
 // The imaginary unit. Named as in the call sites this replaces (`CI` in the
@@ -40,12 +37,8 @@ static const std::complex<double> MW_BRANCH_J(0.0, 1.0);
 
 static inline std::complex<double> gamma_cut(const std::complex<double> &lam,
                                              const std::complex<double> &k) {
-    // The three products are the fused mw_fma::mul (momwire#1194): this runs
-    // twice per node of every Sommerfeld, below and near-interface integrand,
-    // and was the largest unfused remainder in the grid fill once the build
-    // stopped contracting. Same factors, same order, same branch.
-    return mw_fma::mul(std::sqrt(mw_fma::mul(-MW_BRANCH_J, lam - k)),
-                       std::sqrt(mw_fma::mul(MW_BRANCH_J, lam + k)));
+    return std::sqrt(-MW_BRANCH_J * (lam - k)) *
+           std::sqrt(MW_BRANCH_J * (lam + k));
 }
 
 }  // namespace mw_branch

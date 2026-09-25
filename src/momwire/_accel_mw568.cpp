@@ -236,13 +236,10 @@ static inline void d12(const cd &lam, const cd &k1, const cd &k2, cd &d1,
                        cd &d2, cd &g2) {
     const cd g1 = gamma_cut(lam, k1);
     g2 = gamma_cut(lam, k2);
-    // Fused complex products (momwire#1194, _fma_inline.h), as in the
-    // above-ground twin `somm::integrand_six`.
-    const cd k1s = mw_fma::mul(k1, k1);
-    const cd k2s = mw_fma::mul(k2, k2);
-    const cd g2ks = mw_fma::mul(g2, k1s + k2s);
-    d1 = 2.0 / (g1 + g2) - 2.0 * k2s / g2ks;
-    d2 = 2.0 / mw_fma::mul_add(k1s, g2, mw_fma::mul(k2s, g1)) - 2.0 / g2ks;
+    const cd k1s = k1 * k1;
+    const cd k2s = k2 * k2;
+    d1 = 2.0 / (g1 + g2) - 2.0 * k2s / (g2 * (k1s + k2s));
+    d2 = 2.0 / (k1s * g2 + k2s * g1) - 2.0 / (g2 * (k1s + k2s));
 }
 
 // `_integrand_six_below`, term for term and in its order:
@@ -271,28 +268,22 @@ struct SixBelow {
     double h;
     cd k_p;
     cd k_m;
-    // Forced inline (momwire#1194): with its products written as mw_fma::mul
-    // GCC 11 priced this body over its inline limit and called it out of line
-    // from the contour engine, once per quadrature node, which cost the below
-    // grid fill ~5 %; inlined, it is within 1.5 % of the contracted build.
-    MW_FMA_ALWAYS_INLINE void operator()(const cd &lam, cd *out) const {
+    void operator()(const cd &lam, cd *out) const {
         cd d1, d2, g_m;
         d12(lam, k_p, k_m, d1, d2, g_m);
         const cd e = std::exp(-g_m * h);
         const cd x = lam * rho;
         cd b0, b1x;
         mw_contour::bessel_j0_j1x(x, b0, b1x);
-        using mw_fma::mul;  // fused products (momwire#1194)
-        const cd l2 = mul(lam, lam);
-        const cd l3 = mul(l2, lam);
-        const cd common = mul(d2, e);
-        const cd cg = mul(common, g_m);
-        out[0] = mul(mul(common, b1x - b0), l3);
-        out[1] = mul(mul(mul(cg, g_m), b0), lam);
-        out[2] = -mul(mul(cg, mul(b1x, x)), l2);
-        out[3] = -mul(mul(common, b1x), l3);
-        out[4] = mul(mul(common, b0), lam);
-        out[5] = mul(mul(mul(d1, e), b0), lam);
+        const cd l2 = lam * lam;
+        const cd l3 = l2 * lam;
+        const cd common = d2 * e;
+        out[0] = common * (b1x - b0) * l3;
+        out[1] = common * g_m * g_m * b0 * lam;
+        out[2] = -(common * g_m * (b1x * x) * l2);
+        out[3] = -(common * b1x * l3);
+        out[4] = common * b0 * lam;
+        out[5] = d1 * e * b0 * lam;
     }
 };
 

@@ -1,6 +1,5 @@
 #include "_accel_common.h"
 #include "_branch_cut_inline.h"
-#include "_fma_inline.h"
 
 // somm section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 5402-6272, with TWO
@@ -66,20 +65,19 @@ static const double GW[24] = {
 
 // |z|^2 — the convergence-test currency (see above).
 static inline double cnorm(cd z) {
-    return mw_fma::norm2(z);  // fused (momwire#1194)
+    return z.real() * z.real() + z.imag() * z.imag();
 }
 static const double SER_EPS2 = 1e-34;  // (1e-17)^2
 
 // J0 and J1/z ascending series (A&S 9.1.10/9.1.12): safe as z -> 0.
 static void j01_series(cd z, cd &j0, cd &j1x) {
-    const cd q = mw_fma::mul(-0.25 * z, z);  // fused (momwire#1194)
+    const cd q = -0.25 * z * z;
     cd t0(1.0, 0.0), t1(0.5, 0.0);
     j0 = t0;
     j1x = t1;
     for (int k = 1; k <= 60; ++k) {
-        // Fused ladder products (momwire#1194, _fma_inline.h).
-        t0 = mw_fma::mul(t0, q / double(k * k));
-        t1 = mw_fma::mul(t1, q / double(k * (k + 1)));
+        t0 *= q / double(k * k);
+        t1 *= q / double(k * (k + 1));
         j0 += t0;
         j1x += t1;
         if (cnorm(t0) <= SER_EPS2 * cnorm(j0) &&
@@ -100,16 +98,15 @@ static void j01_series(cd z, cd &j0, cd &j1x) {
 //                                            = 2 sum_k (H_k+H_{k+1}) t1_k
 // so the four sums cost two complex multiplies per term, not four.
 static void jy01_series(cd z, cd &j0, cd &j1x, cd &y0, cd &y1) {
-    const cd q = mw_fma::mul(-0.25 * z, z);  // fused (momwire#1194)
+    const cd q = -0.25 * z * z;
     cd t0(1.0, 0.0), t1(0.5, 0.0);
     j0 = t0;
     j1x = t1;
     cd s0(0.0, 0.0), s1 = 2.0 * t1;  // k = 0: H_0 = 0, H_0 + H_1 = 1
     double hk = 0.0, hk1 = 1.0;
     for (int k = 1; k <= 60; ++k) {
-        // Fused ladder products (momwire#1194, _fma_inline.h).
-        t0 = mw_fma::mul(t0, q / double(k * k));
-        t1 = mw_fma::mul(t1, q / double(k * (k + 1)));
+        t0 *= q / double(k * k);
+        t1 *= q / double(k * (k + 1));
         hk += 1.0 / double(k);
         hk1 += 1.0 / double(k + 1);
         j0 += t0;
@@ -125,9 +122,8 @@ static void jy01_series(cd z, cd &j0, cd &j1x, cd &y0, cd &y1) {
             break;
     }
     const cd lg = std::log(0.5 * z) + EULER_GAMMA;
-    y0 = (2.0 / SPI) * mw_fma::mul_add(lg, j0, s0);
-    y1 = (2.0 / SPI) * (mw_fma::mul(lg, mw_fma::mul(j1x, z)) - 1.0 / z) -
-         mw_fma::mul(z / (2.0 * SPI), s1);
+    y0 = (2.0 / SPI) * (lg * j0 + s0);
+    y1 = (2.0 / SPI) * (lg * (j1x * z) - 1.0 / z) - (z / (2.0 * SPI)) * s1;
 }
 
 // The A&S 9.2 asymptotic sums for orders 0 and 1 at once, each with its own
@@ -156,25 +152,25 @@ static void hankel_asym_sums(cd z, bool want_plus, cd &s0m, cd &s1m, cd &s0p,
         const double den = 8.0 * double(k + 1);
         const double sgn = (k & 1) ? 1.0 : -1.0;  // (-1)^{k+1}: term k+1
         if (live0) {
-            t0 = mw_fma::mul(t0, (-odd2 / den) * iz);  // fused (#1194)
+            t0 *= (-odd2 / den) * iz;
             const double a = cnorm(t0);
             if (a >= prev0) {
                 live0 = false;  // divergence onset: stop at the optimum
             } else {
                 s0m += t0;
-                if (want_plus) s0p = mw_fma::mul_add(t0, sgn, s0p);
+                if (want_plus) s0p += sgn * t0;
                 prev0 = a;
                 if (a <= SER_EPS2 * cnorm(s0m)) live0 = false;
             }
         }
         if (live1) {
-            t1 = mw_fma::mul(t1, ((4.0 - odd2) / den) * iz);
+            t1 *= ((4.0 - odd2) / den) * iz;
             const double a = cnorm(t1);
             if (a >= prev1) {
                 live1 = false;
             } else {
                 s1m += t1;
-                if (want_plus) s1p = mw_fma::mul_add(t1, sgn, s1p);
+                if (want_plus) s1p += sgn * t1;
                 prev1 = a;
                 if (a <= SER_EPS2 * cnorm(s1m)) live1 = false;
             }
@@ -197,10 +193,10 @@ static void bessel_j0_j1x(cd x, cd &b0, cd &b1x) {
     cd s0m, s1m, s0p, s1p;
     hankel_asym_sums(x, true, s0m, s1m, s0p, s1p);
     const cd w = std::sqrt(2.0 / (SPI * x));
-    const cd e = std::exp(mw_fma::mul(-CI, x - 0.25 * SPI));
-    const cd p = mw_fma::mul(w, e), pinv = w / e;
-    b0 = 0.5 * mw_fma::mul_add(pinv, s0p, mw_fma::mul(p, s0m));
-    b1x = mw_fma::mul(0.5 * CI, mw_fma::mul(p, s1m) - mw_fma::mul(pinv, s1p)) / x;
+    const cd e = std::exp(-CI * (x - 0.25 * SPI));
+    const cd p = w * e, pinv = w / e;
+    b0 = 0.5 * (pinv * s0p + p * s0m);
+    b1x = (0.5 * CI) * (p * s1m - pinv * s1p) / x;
 }
 
 // (H2_0(x)/2, H2_1(x)/(2x)) — the Hankel-form pair of _integrand_six.
@@ -208,16 +204,15 @@ static void hankel2_half(cd x, cd &b0, cd &b1x) {
     if (cnorm(x) <= BESSEL_SWITCH2) {
         cd j0, j1x, y0, y1;
         jy01_series(x, j0, j1x, y0, y1);
-        b0 = 0.5 * (j0 - mw_fma::mul(CI, y0));
-        b1x = 0.5 * (mw_fma::mul(j1x, x) - mw_fma::mul(CI, y1)) / x;
+        b0 = 0.5 * (j0 - CI * y0);
+        b1x = 0.5 * (j1x * x - CI * y1) / x;
         return;
     }
     cd s0m, s1m, s0p, s1p;
     hankel_asym_sums(x, false, s0m, s1m, s0p, s1p);
-    const cd p = mw_fma::mul(std::sqrt(2.0 / (SPI * x)),
-                             std::exp(mw_fma::mul(-CI, x - 0.25 * SPI)));
-    b0 = mw_fma::mul(0.5 * p, s0m);
-    b1x = mw_fma::mul(mw_fma::mul(0.5 * CI, p), s1m) / x;
+    const cd p = std::sqrt(2.0 / (SPI * x)) * std::exp(-CI * (x - 0.25 * SPI));
+    b0 = 0.5 * p * s0m;
+    b1x = (0.5 * CI) * p * s1m / x;
 }
 
 // ---- the six integrands and quadrature (ports of the Python names) -------
@@ -261,19 +256,10 @@ struct SommCtx {
 static inline void integrand_six(const SommCtx &c, cd lam, cd out[6]) {
     const cd g1 = gamma_cut(lam, c.k1);
     const cd g2 = gamma_cut(lam, c.k2);
-    // Every complex product here is the fused mw_fma::mul (momwire#1194):
-    // this integrand is most of the Sommerfeld grid fill, which lost 10-12 %
-    // on Haswell when the build stopped contracting. Same factors, same
-    // left-to-right order as the operator* spelling it replaces. It takes
-    // ALL of them -- these, the branch cut's and the Bessel ladders' -- to
-    // get back to parity: fusing only the ladders and the accumulation left
-    // the fill 8-12 % behind.
-    using mw_fma::mul;
-    const cd k1s = mul(c.k1, c.k1);
-    const cd k2s = mul(c.k2, c.k2);
-    const cd g2ks = mul(g2, k1s + k2s);
-    const cd d1 = 2.0 / (g1 + g2) - 2.0 * k2s / g2ks;
-    const cd d2 = 2.0 / mw_fma::mul_add(k1s, g2, mul(k2s, g1)) - 2.0 / g2ks;
+    const cd k1s = c.k1 * c.k1;
+    const cd k2s = c.k2 * c.k2;
+    const cd d1 = 2.0 / (g1 + g2) - 2.0 * k2s / (g2 * (k1s + k2s));
+    const cd d2 = 2.0 / (k1s * g2 + k2s * g1) - 2.0 / (g2 * (k1s + k2s));
     const cd e = std::exp(-g2 * c.h);
     const cd x = lam * c.rho;
     cd b0, b1x;
@@ -281,16 +267,15 @@ static inline void integrand_six(const SommCtx &c, cd lam, cd out[6]) {
         bessel_j0_j1x(x, b0, b1x);
     else
         hankel2_half(x, b0, b1x);
-    const cd l2 = mul(lam, lam);
-    const cd l3 = mul(l2, lam);
-    const cd common = mul(d2, e);
-    const cd cg2 = mul(common, g2);
-    out[0] = mul(mul(common, b1x - b0), l3);
-    out[1] = mul(mul(mul(cg2, g2), b0), lam);
-    out[2] = mul(mul(cg2, mul(b1x, x)), l2);
-    out[3] = mul(mul(-common, b1x), l3);
-    out[4] = mul(mul(common, b0), lam);
-    out[5] = mul(mul(mul(d1, e), b0), lam);
+    const cd l2 = lam * lam;
+    const cd l3 = l2 * lam;
+    const cd common = d2 * e;
+    out[0] = common * (b1x - b0) * l3;
+    out[1] = common * g2 * g2 * b0 * lam;
+    out[2] = common * g2 * (b1x * x) * l2;
+    out[3] = -common * b1x * l3;
+    out[4] = common * b0 * lam;
+    out[5] = d1 * e * b0 * lam;
 }
 
 static Six gauss_segment(const SommCtx &c, cd z0, cd z1) {
@@ -299,10 +284,9 @@ static Six gauss_segment(const SommCtx &c, cd z0, cd z1) {
     Six acc;
     cd f[6];
     for (int q = 0; q < 24; ++q) {
-        integrand_six(c, mw_fma::mul_add(half, GX[q], mid), f);
+        integrand_six(c, mid + half * GX[q], f);
         const cd w = GW[q] * half;
-        // Fused accumulation (momwire#1194, _fma_inline.h).
-        for (int i = 0; i < 6; ++i) acc.v[i] = mw_fma::mul_add(f[i], w, acc.v[i]);
+        for (int i = 0; i < 6; ++i) acc.v[i] += f[i] * w;
     }
     return acc;
 }
