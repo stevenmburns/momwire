@@ -12,16 +12,17 @@ group the below side (the z′ slot).
 The gate is the one `test_product_grid_1173` states: Z of the real fill
 with design B's switches on, against the same fill with them off (the grid
 dedup, the lookup path and the two exact walks), at `np.array_equal`, with
-the route counters proving which route ran. By default these small decks
-take the grid route (the candidate cap: two radials repeat too few triples),
-so they are the FALLBACK's gate. Lifting the two caps makes the multi-group
-merge run on the same deck, which is that route's gate; a negative control
-there shows the comparison can fail.
+the route counters proving which route ran. By default these decks take the
+multi-group merge in both cross blocks (the two caps that used to send them
+to the grid route are gone: they guarded no cost the grid route does not
+pay, and lifted the inverted-L x8 peaked at 477 MB instead of 822 MB on
+Skylake, Z to the bit). Setting the old 0.25 caps still sends them to the
+grid route, which is that FALLBACK's gate; a negative control on the merge
+shows the comparison can fail.
 
-Measured 2026-09-25 by script, Z to the bit against the switches-off fill:
-invl_deck(16) x2 / x4 and the leaning variant x2 on both quadratures.
-There invl takes the grouped product in one cross block and the grid route
-in the other; lean takes the grid route in both.
+Measured 2026-09-25 by script, Z to the bit against the switches-off fill
+and against origin/main: invl_deck(16) x2 / x4 / x8 and the leaning variant
+x2 / x4 (bench decks, Skylake).
 """
 
 from __future__ import annotations
@@ -34,7 +35,8 @@ import pytest
 from test_crossing_serve_524 import invl_deck
 from test_product_grid_1173 import _fill, _hub, _razor
 
-_LIFT = {"cf._PRODUCT_MAX_CAND_FRAC": 1.0, "cf._PRODUCT_MAX_GROUP_FRAC": 1.0}
+# The caps as they were before they were dropped: the grid route's gate.
+_CAPPED = {"cf._PRODUCT_MAX_CAND_FRAC": 0.25, "cf._PRODUCT_MAX_GROUP_FRAC": 0.25}
 
 
 def _make(lean):
@@ -70,10 +72,10 @@ def test_hub_x1_takes_the_product_to_the_bit():
 
 @pytest.mark.parametrize("lean", [False, True], ids=["invl", "lean"])
 def test_the_inverted_l_falls_back_to_the_bit(lean):
-    """By default neither cross block takes the product: the reason each
-    declined is counted, and Z is the grid route's to the bit."""
+    """Capped as before, neither cross block takes the product: the reason
+    each declined is counted, and Z is the grid route's to the bit."""
     ref = _reference(lean)
-    got, r = _fill(_make(lean))
+    got, r = _fill(_make(lean), **_CAPPED)
     assert r["cf.main_product"] == 0 and r["cf.ends_fast"] == 0, r
     declined = r["cf.main_generic_groups"] + r["cf.main_generic_candidates"]
     assert declined == r["cf.main_generic"] == 2, r
@@ -86,11 +88,11 @@ def test_the_inverted_l_falls_back_to_the_bit(lean):
 
 @pytest.mark.parametrize("lean", [False, True], ids=["invl", "lean"])
 def test_the_inverted_l_merges_many_groups_to_the_bit(lean):
-    """Caps lifted, both blocks take the product over one group per top-wire
+    """By default both blocks take the product over one group per top-wire
     node (and, leaning, one block groups the below side instead): the
     multi-group merge and its grouped fast ends give the grid route's Z."""
     ref = _reference(lean)
-    got, r = _fill(_make(lean), **_LIFT)
+    got, r = _fill(_make(lean))
     assert r["cf.main_product"] == 2 and r["cf.main_generic"] == 0, r
     assert r["cf.main_product_groups"] > 8, r
     assert r["cf.ends_fast"] > 0, r
@@ -105,6 +107,6 @@ def test_the_inverted_l_merge_can_fail(control):
     rows in two calls ("split": columns lose members, so their rule witness
     s_min moves) or serving every fast end one row off ("row") moves Z."""
     ref = _reference(False)
-    got, r = _fill(_make(False), **_LIFT, **{"cf._PRODUCT_NEG_CONTROL": control})
+    got, r = _fill(_make(False), **{"cf._PRODUCT_NEG_CONTROL": control})
     assert r["cf.main_product"] == 2, r
     assert np.count_nonzero(got != ref) > 0, f"{control}: the gate is blind to it"

@@ -117,11 +117,11 @@ def test_the_shipped_budget_is_one_tile_on_a_small_deck():
 
 @pytest.mark.slow
 def test_two_groups_tile_to_the_bit():
-    """The multi-group merge (two masts, cap lifted): rows shared by the two
-    groups are one row under one key, evaluated once."""
+    """The multi-group merge (two masts, taken by default): rows shared by
+    the two groups are one row under one key, evaluated once."""
     make = lambda: _razor(two_node_deck(separation=12.0))  # noqa: E731
     ref, _r = _grid(make)
-    got, r = pg._fill(make, **{"cf._PRODUCT_MAX_CAND_FRAC": 1.0, **_TINY})
+    got, r = pg._fill(make, **_TINY)
     assert r["cf.main_product_groups"] == 2, r
     assert r["cf.tiles"] > r["cf.main_product"], r
     assert r["cf.tile_rows"] == r["cf.product_rows"], r
