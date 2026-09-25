@@ -85,6 +85,7 @@ from . import _ground_spec
 from . import _medium_spec
 from . import _potential_ground
 from . import _quadrature
+from . import _remainder_graded
 from . import _rotational_symmetry
 from . import _sommerfeld
 from . import _sommerfeld_below
@@ -421,6 +422,32 @@ _REMAINDER_PER_PAIR = True
 # is for; False is not a supported configuration.
 _REMAINDER_PAIR_DILATE = True
 
+# momwire#1201: the listed pairs are integrated on GRADED panels
+# (`_remainder_graded`) instead of one Gauss rule of their keyed order. The
+# keyed order still decides WHICH pairs are listed; it no longer decides how
+# they are integrated, which is what left a 48-radial surface screen 1.1e-2
+# from converged at the cap of 192. Read at call time; False restores the
+# keyed-order Gauss rule of #1189 exactly (the brute-force ladder, and the
+# negative control).
+_REMAINDER_GRADED = True
+
+# ...and, on that route, the LISTING threshold: a pair is integrated on graded
+# panels when `_REMAINDER_GRADED_C · len / R_min` exceeds the base order (the
+# #631 rule at c = 4 instead of 1: len/R_min > 0.75 at the base order of 3,
+# the pairs the c = 4 brute-force reference raises). Once the grazing pairs
+# converge, what is left is the pairs never listed, run at the base order.
+# Relative Z_in residue by listing c, against the brute-force c = 8 ladder:
+#
+#   deck                        c=1      c=2      c=4      c=8
+#   12-radial surface screen    3.3e-7   3.0e-7   1.6e-8   4.5e-8
+#   48-radial surface screen    1.2e-6   3.1e-7   6.6e-8   1.2e-8
+#
+# (the brute-force references themselves: c = 4 vs c = 8 is 5e-8 and 2.0e-7),
+# so c = 1 alone misses the 1e-6 bar on the 48-radial screen. Listing is
+# cheap on this route — a pair that barely qualifies is a few panels — so the
+# threshold is set by that measurement, not by cost.
+_REMAINDER_GRADED_C = 4.0
+
 
 def _segment_touch_lists(seg_l, seg_r):
     """CSR lists of the segments sharing an endpoint with each segment,
@@ -442,6 +469,14 @@ def _segment_touch_lists(seg_l, seg_r):
     ii, jj = key // n, key % n
     ptr = np.concatenate([[0], np.cumsum(np.bincount(ii, minlength=n))])
     return ptr, jj
+
+
+def _pair_max(I, J, Q, n):
+    """The distinct (I, J) pairs, sorted by I then J, each with its largest Q."""
+    uk, inv = np.unique(I * n + J, return_inverse=True)
+    qmax = np.zeros(uk.size, dtype=np.int64)
+    np.maximum.at(qmax, inv, Q)
+    return uk // n, uk % n, qmax
 
 
 def _csr_expand(ptr, idx, rows):
@@ -2685,7 +2720,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             _REMAINDER_QP_C,
         )
 
-    def _remainder_qp_pairs(self, seg_l, seg_r, gz, cap=None):
+    def _remainder_qp_pairs(self, seg_l, seg_r, gz, cap=None, c=None):
         """The segment pairs whose remainder order is above the base.
 
         momwire#1189: `_remainder_qp` per pair — the same observers (each
@@ -2702,15 +2737,20 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Returns `(I, J, Q)` int64 arrays, sorted by `I` then `J`, listing only
         the pairs above `n_qp_sommerfeld`; empty for a deck with nothing
         grazing.
+
+        `c` defaults to the route's own constant: `_REMAINDER_QP_C` when the
+        listed pairs are filled at their keyed order, `_REMAINDER_GRADED_C`
+        when they go on graded panels (momwire#1201), where Q only decides
+        which pairs are listed.
         """
         cap = _REMAINDER_QP_CAP if cap is None else cap
+        if c is None:
+            c = _REMAINDER_GRADED_C if _REMAINDER_GRADED else _REMAINDER_QP_C
         base = int(self.n_qp_sommerfeld)
         xg, _ = leggauss(base)
         tq = 0.5 * (xg + 1.0)
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
-        I, J, Q = _quadrature.remainder_qp_pairs(
-            nodes, seg_l, seg_r, gz, base, cap, _REMAINDER_QP_C
-        )
+        I, J, Q = _quadrature.remainder_qp_pairs(nodes, seg_l, seg_r, gz, base, cap, c)
         if I.size == 0:
             return I, J, Q
         n = int(seg_l.shape[0])
@@ -2727,14 +2767,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # alone land 6.6e-3 from a q = 192 reference where the deck-wide
             # order lands 1.5e-3; with this one-ring they land 2.6e-7 from
             # the deck-wide answer.
+            #
+            # One side at a time, reducing to the distinct pairs in between
+            # (momwire#1201): the product of both touch lists at once is
+            # |touch(i)|·|touch(j)| entries per listed pair, 49 x 49 at a
+            # 48-radial hub, and its unique() was seconds. The set and the
+            # per-pair maximum are the same either way.
             ptr, idx = _segment_touch_lists(seg_l, seg_r)
             k1, ii = _csr_expand(ptr, idx, I)
-            k2, jj = _csr_expand(ptr, idx, J[k1])
-            I, J, Q = ii[k2], jj, Q[k1][k2]
-        uk, inv = np.unique(I * n + J, return_inverse=True)
-        qmax = np.zeros(uk.size, dtype=np.int64)
-        np.maximum.at(qmax, inv, Q)
-        return uk // n, uk % n, qmax
+            I, J, Q = _pair_max(ii, J[k1], Q[k1], n)
+            k2, jj = _csr_expand(ptr, idx, J)
+            I, J, Q = I[k2], jj, Q[k2]
+        return _pair_max(I, J, Q, n)
 
     def _remainder_pair_moments(self, geom, obs_segs, src_segs, q, grid):
         """Segment-pair remainder moments `Jf[a, b, p, P]` over the rectangle
@@ -2810,6 +2854,29 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ).reshape(no, q, ns, q)
         return np.einsum("paq,aqbr,Pbr->abpP", W_o, proj, W_s, optimize=True)
 
+    def _remainder_pair_moments_graded(self, geom, I, J, grid):
+        """`Jf[n, p, P]` for the pairs (I[n], J[n]) on graded panels.
+
+        momwire#1201: the same moments `_remainder_pair_moments` returns at a
+        fixed Gauss order, integrated by `_remainder_graded.pair_moments` —
+        split at the near-image foot and the interpolant's seams, graded
+        toward them — so a pair converges however narrow its spike.
+        """
+        return _remainder_graded.pair_moments(
+            geom["seg_l"],
+            geom["seg_r"],
+            geom["tangents"],
+            geom["h_per_seg"],
+            I,
+            J,
+            self.ground_z,
+            self.k,
+            grid,
+            self.degree + 1,
+            cancel_flag=self._cancel_flag,
+            checkpoint=self._checkpoint,
+        )
+
     def _remainder_pair_correction(
         self, Q, geom, supp_seg, polys, grid, pairs, restrict=None
     ):
@@ -2841,22 +2908,36 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         base = int(self.n_qp_sommerfeld)
         d1 = self.degree + 1
         n_seg = geom["seg_l"].shape[0]
-        dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
-        # One kernel call per (order, source segment), its observers that
-        # column of the pair list, so nothing outside the list is evaluated.
-        # Column-wise rather than row-wise because the kernel threads over
-        # its observer segments; the list is symmetric, so either walk
-        # covers it.
-        grp = np.lexsort((J, Qp))
-        key_q, key_j = Qp[grp], J[grp]
-        cuts = np.flatnonzero((np.diff(key_q) != 0) | (np.diff(key_j) != 0)) + 1
+        graded = _REMAINDER_GRADED
+        if graded:
+            # momwire#1201: the listed pairs on graded panels; only the
+            # base-order moments the dense fill added are taken back out
+            # below, one source column at a time.
+            dJ = self._remainder_pair_moments_graded(geom, I, J, grid)
+            self._last_remainder_graded = int(I.size)
+            grp = np.argsort(J, kind="stable")
+            cuts = np.flatnonzero(np.diff(J[grp]) != 0) + 1
+        else:
+            dJ = np.zeros((I.size, d1, d1), dtype=np.complex128)
+            self._last_remainder_graded = 0
+            # One kernel call per (order, source segment), its observers that
+            # column of the pair list, so nothing outside the list is
+            # evaluated. Column-wise rather than row-wise because the kernel
+            # threads over its observer segments; the list is symmetric, so
+            # either walk covers it.
+            grp = np.lexsort((J, Qp))
+            key_q, key_j = Qp[grp], J[grp]
+            cuts = np.flatnonzero((np.diff(key_q) != 0) | (np.diff(key_j) != 0)) + 1
         for run in np.split(grp, cuts):
             self._checkpoint()
             src = J[run[:1]]
             obs = I[run]
+            lo = self._remainder_pair_moments(geom, obs, src, base, grid)
+            if graded:
+                dJ[run] -= lo[:, 0]
+                continue
             q = int(Qp[run[0]])
             hi = self._remainder_pair_moments(geom, obs, src, q, grid)
-            lo = self._remainder_pair_moments(geom, obs, src, base, grid)
             dJ[run] = (hi - lo)[:, 0]
 
         ent = self._segment_wing_table(supp_seg, polys, n_seg)
@@ -3424,6 +3505,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             pairs = None
             q = self._remainder_qp(seg_l, seg_r, gz)
         self._last_remainder_orders = self._remainder_order_census(n_seg, q, pairs)
+        self._last_remainder_graded = 0
         xg, wg = leggauss(q)
         tq = 0.5 * (xg + 1.0)
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
