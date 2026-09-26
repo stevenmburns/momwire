@@ -1411,12 +1411,21 @@ _SHEET = os.environ.get("MOMWIRE_NEAR_INTERFACE_SHEET", "1") != "0"
 _HAVE_PLANE_SHEET_ACCEL = _nia is not None and bool(
     getattr(_nia, "plane_sheet_1173", False)
 )
-# Chebyshev nodes per panel in u and in tau. Measured against the twin at the
-# asked rows (Design E, invl_deck(16), soil A, 7 MHz, d = 0.15 m): max relative
-# error per kernel 1e-3 / 7e-6 / 2e-7 / 3e-9 / 6e-13 at p = 6 / 8 / 10 / 12 /
-# 16, and |dZ_in| = 4.7e-11 ohm at p = 12 (5.2e-7 at p = 8) on x2 / x4 / x8,
-# against a gate of 5.9-10 milliohm. The soil / frequency / depth ladder of the
-# phase-1 PR is the measurement for other decks (see its tests).
+# Chebyshev nodes per panel in u and in tau. Design E measured the table
+# against the twin at the asked rows (invl_deck(16), soil A, 7 MHz, d = 0.15 m):
+# max relative error per kernel 1e-3 / 7e-6 / 2e-7 / 3e-9 / 6e-13 at p = 6 / 8 /
+# 10 / 12 / 16. With the panel cap below, razor-2p against the switched-off fill
+# (Skylake, momwire#1173 phase 1; gate = min(0.01 ohm, 1 % of |Z(x) - Z(2x)|)):
+#
+#   invl x2 / x4 / x8   |dZ_in| 2.6e-11 / 7.9e-12 / 1.0e-11 ohm  (gate 1e-2 / 9.1e-3 / 5.9e-3)
+#   lean x2 / x4        |dZ_in| 3.3e-11 / 1.4e-11 ohm            max rel dZ_ij 3.1e-9
+#   ladder, invl x2     worst |dZ_in| 7.7e-9 ohm, max rel dZ_ij 1.1e-6
+#                       (eps 5, sigma .001, 28 MHz, d = 5 cm), over eps / sigma
+#                       5 / .001, 13 / .005, 30 / .03 x 1.8 / 7.1 / 28 MHz x
+#                       d = 0.05 / 0.3 m
+#
+# The negative control, Design E's p = 3 table (no cap), reads 4.8e-2 / 4.9e-2 /
+# 4.9e-2 ohm on invl x2 / x4 / x8 and fails every rung.
 _SHEET_P = 12
 _SHEET_PT = 12
 # The smallest number of tau panels per R panel, and the R panels' ratio.
