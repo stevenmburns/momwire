@@ -906,6 +906,11 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
 // `mw_fma` (the build passes -ffp-contract=off), so they round as written.
 // Only scalar hypot is called: no vector libm, so no symbol newer than the
 // Linux wheels' glibc floor (test_glibc_floor.py).
+// The widest table `near_interface_grid_sheet` takes (momwire#1221). Six
+// kernels today; the headroom is for the point-observer keys #1220 stage 2
+// adds.
+#define MW_SHEET_MAX_KEYS 16
+
 namespace mw_sheet {
 
 static inline void bary(double t, double lo, double hi, const double *x,
@@ -951,13 +956,28 @@ static void near_interface_grid_sheet(
     py::array_t<double, py::array::c_style | py::array::forcecast> bw,
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
         vals,
-    py::array_t<std::complex<double>, py::array::c_style> out, int n_threads) {
+    py::array_t<std::complex<double>, py::array::c_style> out, int n_threads,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rpow) {
     if (sub.ndim() != 2 || sub.shape(1) != 3)
         throw std::invalid_argument("sub must be (m, 3)");
     const py::ssize_t m = sub.shape(0);
-    if (out.ndim() != 2 || out.shape(0) != m || out.shape(1) != 6 ||
+    // The table's WIDTH is the caller's (momwire#1221): one column per
+    // kernel, `rpow[k]` the power of R that column was tabulated times. Six
+    // today (`_near_interface.KEYS`); a later stage appends keys without
+    // touching this loop. Each column is interpolated on its own, so the
+    // width moves no bit of any column.
+    if (rpow.ndim() != 1 || rpow.shape(0) < 1 || rpow.shape(0) > MW_SHEET_MAX_KEYS)
+        throw std::invalid_argument("rpow must be 1-D with 1..16 entries");
+    const int nk = static_cast<int>(rpow.shape(0));
+    const int nd = 2 * nk;  // interleaved doubles per node
+    const std::int64_t *rp = rpow.data();
+    for (int k = 0; k < nk; ++k)
+        if (rp[k] < 0 || rp[k] > 4)
+            throw std::invalid_argument("rpow entries must be in 0..4");
+    if (out.ndim() != 2 || out.shape(0) != m || out.shape(1) != nk ||
         !out.writeable())
-        throw std::invalid_argument("out must be a writeable (m, 6) complex array");
+        throw std::invalid_argument(
+            "out must be a writeable (m, len(rpow)) complex array");
     if (idx.ndim() != 1) throw std::invalid_argument("idx must be 1-D");
     if (height ? !(fixed > 0.0) : !(fixed < 0.0))
         throw std::invalid_argument(height ? "a height sheet needs h > 0"
@@ -972,8 +992,8 @@ static void near_interface_grid_sheet(
     const int p = static_cast<int>(x.shape(0));
     if (p < 1 || p > 32 || bw.shape(0) != p)
         throw std::invalid_argument("bad Chebyshev nodes (1..32)");
-    if (vals.ndim() != 2 || vals.shape(1) != 6)
-        throw std::invalid_argument("vals must be (nodes, 6)");
+    if (vals.ndim() != 2 || vals.shape(1) != nk)
+        throw std::invalid_argument("vals must be (nodes, len(rpow))");
     const double *re = rho_edges.data(), *se = s_edges.data();
     for (py::ssize_t j = 0; j < nr; ++j)
         if (!(re[j + 1] > re[j])) throw std::invalid_argument("rho edges must rise");
@@ -991,8 +1011,8 @@ static void near_interface_grid_sheet(
         if (ix[r] < 0 || ix[r] >= m)
             throw std::invalid_argument("idx out of range");
     const double *xp = x.data(), *bwp = bw.data();
-    // (nodes, 6) complex as interleaved doubles: node q's kernel k at
-    // 12 q + 2 k (re) and + 1 (im).
+    // (nodes, nk) complex as interleaved doubles: node q's kernel k at
+    // nd q + 2 k (re) and + 1 (im).
     const double *V = reinterpret_cast<const double *>(vals.data());
     const double *sb = sub.data();
     double *ob = reinterpret_cast<double *>(out.mutable_data());
@@ -1015,7 +1035,7 @@ static void near_interface_grid_sheet(
             const py::ssize_t row = ix[r];
             const double rho = sb[row * 3], z = sb[row * 3 + 1];
             const double zq = sb[row * 3 + 2];
-            double *o = ob + row * 12;
+            double *o = ob + row * nd;
             const bool on =
                 height ? (z == fixed && zq <= 0.0) : (zq == fixed && z >= 0.0);
             const double s = z - zq;
@@ -1023,30 +1043,38 @@ static void near_interface_grid_sheet(
             const py::ssize_t b = a >= 0 ? mw_sheet::cell_of(s, se, ns) : -1;
             if (b < 0) {
                 bad = 1;
-                for (int k = 0; k < 12; ++k) o[k] = 0.0;
+                for (int k = 0; k < nd; ++k) o[k] = 0.0;
                 continue;
             }
             mw_sheet::bary(rho, re[a], re[a + 1], xp, bwp, p, wr);
             mw_sheet::bary(s, se[b], se[b + 1], xp, bwp, p, ws);
-            const double *blk = V + co[a * ns + b] * 12;
-            double acc[12] = {0.0};
+            const double *blk = V + co[a * ns + b] * nd;
+            double acc[2 * MW_SHEET_MAX_KEYS] = {0.0};
             for (int i = 0; i < p; ++i) {
-                double inner[12] = {0.0};
-                const double *Vi = blk + static_cast<std::int64_t>(i) * p * 12;
+                double inner[2 * MW_SHEET_MAX_KEYS] = {0.0};
+                const double *Vi = blk + static_cast<std::int64_t>(i) * p * nd;
                 for (int j = 0; j < p; ++j) {
                     const double w = ws[j];
-                    const double *Vj = Vi + j * 12;
-                    for (int k = 0; k < 12; ++k)
+                    const double *Vj = Vi + j * nd;
+                    for (int k = 0; k < nd; ++k)
                         inner[k] = mw_fma::fma(w, Vj[k], inner[k]);
                 }
                 const double wi = wr[i];
-                for (int k = 0; k < 12; ++k)
+                for (int k = 0; k < nd; ++k)
                     acc[k] = mw_fma::fma(wi, inner[k], acc[k]);
             }
+            // 1/R^pw per column, as a product of 1/R's: pw = 2 is i1 * i1,
+            // the spelling the fixed six-column loop used.
             const double i1 = 1.0 / std::hypot(rho, s);
-            const double i2 = i1 * i1;
-            for (int k = 0; k < 6; ++k) o[k] = acc[k] * i1;    // U, V, W
-            for (int k = 6; k < 12; ++k) o[k] = acc[k] * i2;   // derivatives
+            for (int k = 0; k < nk; ++k) {
+                double f = 1.0;
+                if (rp[k] > 0) {
+                    f = i1;
+                    for (std::int64_t e = 1; e < rp[k]; ++e) f *= i1;
+                }
+                o[2 * k] = acc[2 * k] * f;
+                o[2 * k + 1] = acc[2 * k + 1] * f;
+            }
         }
     }
     if (bad)
@@ -1105,14 +1133,19 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // Design E's sheets, on the strip grid (phase 2): their own flag, for the
     // same reason as the two above.
     m.attr("grid_sheet_1173") = true;
+    // momwire#1221: the sheet takes its width (and each column's R power)
+    // from the caller. A distinct flag, so a stale build is refused by name
+    // rather than handed an argument it does not know.
+    m.attr("grid_sheet_width_1221") = true;
     m.def("near_interface_grid_sheet", &near_interface_grid_sheet,
           py::arg("sub"), py::arg("idx"), py::arg("fixed"), py::arg("height"),
           py::arg("rho_edges"), py::arg("s_edges"), py::arg("cell_off"),
           py::arg("x"), py::arg("bw"), py::arg("vals"), py::arg("out"),
-          py::arg("n_threads"),
+          py::arg("n_threads"), py::arg("rpow"),
           "Interpolate the rows sub[idx] (rho, z, zp) of one sheet -- the plane "
           "z' = fixed < 0, or with height=True the height z = fixed > 0 -- "
-          "from a _near_interface.PlaneSheet strip grid into out[idx] ((m, 6) "
-          "complex, KEYS order). Row-parallel; the answer does not depend on "
-          "the thread count.");
+          "from a _near_interface.PlaneSheet strip grid into out[idx] ((m, "
+          "len(rpow)) complex, KEYS order; column k was tabulated times "
+          "R^rpow[k]). Row-parallel; the answer does not depend on the "
+          "thread count.");
 }
