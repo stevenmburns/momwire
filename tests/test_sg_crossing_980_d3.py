@@ -261,7 +261,9 @@ def test_the_cross_block_sign_is_fixed_by_kcl_not_by_the_answer():
         s = crossing_deck(EPS_ONE)
         geom, below, medium, seg_view = _mixed_view(s)
         ctx = s._stitch_test_context(geom, seg_view, below, medium.k_p, medium.k_m)
-        plan = s._mixed_serve_plan(geom, below, medium, ctx, True)
+        plan = s._mixed_serve_plan(
+            geom, below, medium, True, test_obs=ctx["obs_c"], row_group=ctx["nq"]
+        )
         G0 = s._scatter_coef_product(
             ctx, s._assemble_mixed_contribs(geom, ctx, below, medium, plan, True)
         )
