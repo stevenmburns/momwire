@@ -544,15 +544,21 @@ static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
         const cd l = s.lam[k], wk = s.w[k];
         const cd g_p = gamma_cut(l, k_p);
         const cd g_m = gamma_cut(l, k_m);
+        // Fused complex products (momwire#1214, _fma_inline.h): the rule
+        // build is most of this kernel's time (a column's members share it),
+        // and GCC contracted every one of these products before #1194. Each
+        // `mul` keeps the operands in the order written; the divisions stay
+        // library calls, as they always were.
+        using mw_fma::mul;
         const cd u = 2.0 * l / (g_p + g_m);
-        const cd v = 2.0 * l / (km2 * g_p + kp2 * g_m);
-        const cd wv = (g_p - g_m) * v;
-        const cd f[6] = {u * wk,
-                         v * wk,
-                         wv * wk,
-                         (-g_p * wv) * wk,
-                         (-(g_p * g_m) * v) * wk,
-                         (g_m * wv) * wk};
+        const cd v = 2.0 * l / (mul(km2, g_p) + mul(kp2, g_m));
+        const cd wv = mul(g_p - g_m, v);
+        const cd f[6] = {mul(u, wk),
+                         mul(v, wk),
+                         mul(wv, wk),
+                         mul(mul(-g_p, wv), wk),
+                         mul(mul(-mul(g_p, g_m), v), wk),
+                         mul(mul(g_m, wv), wk)};
         for (int c = 0; c < 6; ++c) {
             s.fr[c * K + k] = f[c].real();
             s.fi[c * K + k] = f[c].imag();
@@ -584,14 +590,19 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
         const int nb =
             static_cast<int>(std::min<size_t>(MW_BLOCK, K - k0));
         double amax = -std::numeric_limits<double>::infinity();
+        // Explicit fused multiply-adds (momwire#1214, _fma_inline.h), here and
+        // in the six sums below: the sites GCC contracted before
+        // -ffp-contract=off (#1194), in the split it chose (the first product
+        // fused, the second rounded). The lane sums themselves stay adds, in
+        // the order the lanes fix.
         for (int j = 0; j < nb; ++j) {
-            ar[j] = gmr[k0 + j] * zp - gpr[k0 + j] * z;
+            ar[j] = mw_fma::fma(gmr[k0 + j], zp, -(gpr[k0 + j] * z));
             amax = std::max(amax, ar[j]);
         }
         if (amax < MW_EXP_ZERO) continue;  // exactly zero, see MW_EXP_ZERO
         MW_NI_SIMD()
         for (int j = 0; j < nb; ++j) {
-            ai[j] = gmi[k0 + j] * zp - gpi[k0 + j] * z;
+            ai[j] = mw_fma::fma(gmi[k0 + j], zp, -(gpi[k0 + j] * z));
             const double ex = exp(ar[j]);
             er[j] = ex * cos(ai[j]);
             ei[j] = ex * sin(ai[j]);
@@ -624,18 +635,28 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
                 std::memcpy(&b, ei + j, sizeof b);
                 std::memcpy(&x, fr + j, sizeof x);
                 std::memcpy(&y, fi + j, sizeof y);
-                sr += a * x - b * y;
-                si += a * y + b * x;
+                // Lane by lane through the scalar mw_fma::fma, which GCC
+                // packs back into one vfmadd per sum under -mfma.
+                const mw_lanes by = b * y, bx = b * x;
+                mw_lanes p, q;
+                for (int l = 0; l < MW_LANES; ++l) {
+                    p[l] = mw_fma::fma(a[l], x[l], -by[l]);
+                    q[l] = mw_fma::fma(a[l], y[l], bx[l]);
+                }
+                sr += p;
+                si += q;
 #else
                 for (int l = 0; l < MW_LANES; ++l) {
-                    sr[l] += er[j + l] * fr[j + l] - ei[j + l] * fi[j + l];
-                    si[l] += er[j + l] * fi[j + l] + ei[j + l] * fr[j + l];
+                    sr[l] += mw_fma::fma(er[j + l], fr[j + l],
+                                         -(ei[j + l] * fi[j + l]));
+                    si[l] += mw_fma::fma(er[j + l], fi[j + l],
+                                         ei[j + l] * fr[j + l]);
                 }
 #endif
             }
             for (int l = 0; j < nb; ++j, ++l) {
-                sr[l] += er[j] * fr[j] - ei[j] * fi[j];
-                si[l] += er[j] * fi[j] + ei[j] * fr[j];
+                sr[l] += mw_fma::fma(er[j], fr[j], -(ei[j] * fi[j]));
+                si[l] += mw_fma::fma(er[j], fi[j], ei[j] * fr[j]);
             }
             accr[c] += (sr[0] + sr[1]) + (sr[2] + sr[3]);
             acci[c] += (si[0] + si[1]) + (si[2] + si[3]);
