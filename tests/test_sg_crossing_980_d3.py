@@ -311,8 +311,8 @@ def test_the_node_block_tracks_the_arbiters(eps_one):
         warnings.simplefilter("ignore")
         s = eps_one["s"]
         geom = eps_one["geom"]
-        with s._operating_medium(geom):
-            G, _sv = s._assemble_Z_ported(geom, s.k)
+        with s._operating_medium(geom) as medium:
+            G, _sv = s._assemble_Z_ported(geom, s.k, s._medium_eta(medium))
         N = int(geom["n_segs"])
         ours = np.array([[G[N, N], G[N, N + 1]], [G[N + 1, N], G[N + 1, N + 1]]])
 

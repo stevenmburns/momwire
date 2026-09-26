@@ -1285,7 +1285,7 @@ def test_sg_junction_port_pair_block_regularization_is_load_bearing():
     s_bad = _port_pair_solver(0.04, 0.01, 20, **kw)
     orig = s_bad._node_charge_pair_block
 
-    def unregularized(geom, k):
+    def unregularized(geom, k, eta=None):
         nodes = np.array(
             [s_bad._junction_node_position(geom, j) for j, _v in s_bad.junction_ports]
         )
@@ -1577,17 +1577,21 @@ class _ImageCorrectionScaled(SinusoidalGalerkinSolver):
         super().__init__(**kw)
         self.image_factor = float(image_factor)
 
-    def _assemble_Z_ported(self, geom, k):
-        G, seg_view = super()._assemble_Z_ported(geom, k)
+    def _assemble_Z_ported(self, geom, k, eta=None):
+        G, seg_view = super()._assemble_Z_ported(geom, k, eta)
         N = geom["n_segs"]
         w = 1.0 - self.image_factor
         D = self._node_charge_columns(
-            geom, seg_view, k, nodes=self._port_node_positions(geom, mirror=True)
+            geom,
+            seg_view,
+            k,
+            nodes=self._port_node_positions(geom, mirror=True),
+            eta=eta,
         )
         G = G.copy()
         G[:, N:] -= w * D
         G[N:, :] -= w * D.T
-        G[N:, N:] += w * self._node_charge_image_pair_block(geom, k)
+        G[N:, N:] += w * self._node_charge_image_pair_block(geom, k, eta=eta)
         return G, seg_view
 
 

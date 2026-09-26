@@ -381,6 +381,7 @@ class FieldGround:
     """
 
     __slots__ = (
+        "_eta",
         "_geom",
         "_k",
         "_omega",
@@ -411,10 +412,15 @@ class FieldGround:
         medium=None,
         r1_below=None,
         remainder_geom=None,
+        eta=None,
     ):
         self._solver = solver
         self._geom = geom
         self._k = k
+        # The wave impedance paired with `k` (momwire#995): the image field
+        # is a fill at this operating point, so it takes both halves of it
+        # from here rather than reading one of them off the solver.
+        self._eta = solver._fill_eta(k, eta)
         self._omega = omega
         self._weighted = weighted
         self._remainders = {}
@@ -526,9 +532,14 @@ class FieldGround:
                 obs_rows=obs_rows,
                 ground=self,
                 cos_shape=cos_shape,
+                eta=self._eta,
             )
         return self._solver._field_tensor_image(
-            self._geom, self._k, obs_rows=obs_rows, cos_shape=cos_shape
+            self._geom,
+            self._k,
+            obs_rows=obs_rows,
+            cos_shape=cos_shape,
+            eta=self._eta,
         )
 
     def remainder(self, cos_shape="cos") -> Remainder | None:
@@ -587,7 +598,7 @@ class FieldGround:
 
 
 def field_ground_for(
-    solver, geom, k, omega, medium=None, r1_below=None, remainder_geom=None
+    solver, geom, k, omega, medium=None, r1_below=None, remainder_geom=None, eta=None
 ) -> FieldGround | None:
     """The factory: `solver`'s ground as one object, or `None` for free
     space.
@@ -641,6 +652,7 @@ def field_ground_for(
             medium=medium,
             r1_below=r1_below,
             remainder_geom=remainder_geom,
+            eta=eta,
         )
     cfg = _ground_spec.ground_config(solver, omega)
     if cfg is None:
@@ -656,4 +668,5 @@ def field_ground_for(
         image_coefficient=cfg.image_coefficient,
         standard_fresnel=cfg.standard_fresnel,
         remainder_geom=remainder_geom,
+        eta=eta,
     )

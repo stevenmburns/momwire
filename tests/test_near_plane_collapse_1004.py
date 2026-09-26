@@ -128,8 +128,8 @@ def G_sg(s):
         geom = s._build_geometry()
         if s._is_mixed(geom):
             return s._assemble_Z(geom, s.k)[0]
-        with s._operating_medium(geom):
-            return s._assemble_Z(geom, s.k)[0]
+        with s._operating_medium(geom) as medium:
+            return s._assemble_Z(geom, s.k, s._medium_eta(medium))[0]
 
 
 def above_mask_bs(s):

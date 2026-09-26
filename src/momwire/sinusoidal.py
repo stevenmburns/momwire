@@ -268,6 +268,19 @@ _KNOT_FEEDS_REFUSAL = (
 )
 
 
+# momwire#995: the fill's operating point is (k, eta), and both are ARGUMENTS.
+# Filling at an in-medium (complex) k while the closed forms read AIR's eta is
+# wrong by |eta_0/eta_m| (4.27x at soil A / 7 MHz) and solves to a plausible
+# number, which is how #980 D2's below quadrant came out 3.4x wrong. So a
+# complex k with no eta is refused rather than defaulted.
+_ETA_REQUIRED = (
+    "a sinusoidal fill at a complex (in-medium) wavenumber must be handed that "
+    "medium's wave impedance as `eta=` (momwire#995): the default is the "
+    "solver's own free-space eta, and filling at k_m with it is wrong by "
+    "|eta_0/eta_m| with no failure"
+)
+
+
 def _complex_k(k):
     """Whether `k` is an in-medium (complex) wavenumber — momwire#980.
 
@@ -865,6 +878,21 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             seen.add(j_idx)
             out.append((j_idx, complex(volt)))
         return out
+
+    def _fill_eta(self, k, eta):
+        """The wave impedance a fill at wavenumber `k` runs with (momwire#995).
+
+        `eta` is the caller's, and every production path passes it alongside
+        `k`. `None` means "the solver's own", which is only ever right at a
+        REAL k — free space, whose eta does not depend on frequency. At a
+        complex k it would be air's eta in a lossy medium, so that is refused
+        (`_ETA_REQUIRED`) rather than answered.
+        """
+        if eta is not None:
+            return eta
+        if _complex_k(k):
+            raise ValueError(_ETA_REQUIRED)
+        return self.eta
 
     def _leggauss_cached(self, n: int) -> tuple[np.ndarray, np.ndarray]:
         cached = self._leggauss_cache.get(n)
@@ -1746,6 +1774,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         src_tangents=None,
         obs_rows=None,
         cos_shape="cos",
+        eta=None,
     ):
         """Tangential-field tensor Φ of shape (3, N, N) where
         Φ[0, m, n] = ŝ_m · E^const_n(at center of m's surface),
@@ -1801,6 +1830,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         through `_field_tensor_image`, so they ride whichever kernel this
         method picks.
         """
+        eta = self._fill_eta(k, eta)
         seg_c = geom["seg_centers"]  # (N, 3) — observer centers
         seg_t = geom["seg_tangents"]  # (N, 3) — observer tangents
         seg_h = geom["seg_h"]  # (N,) full lengths
@@ -1842,7 +1872,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     np.ascontiguousarray(seg_h, dtype=np.float64),
                     float(a),
                     float(k),
-                    float(self.eta),
+                    float(eta),
                     np.ascontiguousarray(gx, dtype=np.float64),
                     np.ascontiguousarray(gw, dtype=np.float64),
                     src_a,
@@ -1886,7 +1916,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     np.ascontiguousarray(seg_h, dtype=np.float64),
                     float(a),
                     float(k),
-                    float(self.eta),
+                    float(eta),
                     np.ascontiguousarray(gx, dtype=np.float64),
                     np.ascontiguousarray(gw, dtype=np.float64),
                     self._cancel_flag,
@@ -1915,6 +1945,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_centers=src_c,
             src_tangents=src_t,
             cos_shape=cos_shape,
+            eta=eta,
             **self._obs_window_kwargs(geom, obs_rows),
         )
         td = cm["td"]
@@ -2246,7 +2277,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return out
 
     def _extended_kernel_fields(
-        self, k, H, z_eval, rho_eval, src_a, ind1, ind2, cos_shape="cos"
+        self, k, H, z_eval, rho_eval, src_a, ind1, ind2, cos_shape="cos", eta=None
     ):
         """NEC's EKSCX (f.3170-3234) — the extended-kernel field tables.
 
@@ -2331,7 +2362,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # CON of f.3181 — NEC's DATA CONX/0., 4.771341189/ is jη/(4πk) with
         # NEC's k = 2π. Identical to `_field_components_bcast`'s `pref_z`.
-        con = 1j * self.eta / (4.0 * np.pi * k)
+        con = 1j * self._fill_eta(k, eta) / (4.0 * np.pi * k)
 
         # f.3213-3222, verbatim. These are algebraically the same brackets the
         # reduced path spells per endpoint; only the G-quantities changed.
@@ -2416,6 +2447,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         obs_tangents=None,
         obs_radius=None,
         cos_shape="cos",
+        eta=None,
     ):
         """Pure-numpy unprojected field tables behind `_field_tensor`'s
         fallback path (Eqs 76-79 of the NEC2 Theory Manual).
@@ -2505,6 +2537,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_hh=h_n[None, :],  # (1, N)
             cos_shape=cos_shape,
             ek=ek,
+            eta=eta,
         )
 
     @staticmethod
@@ -2542,7 +2575,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return z_eval, rho_eval, rho_vec, td, rho_proj_factor
 
     def _field_components_bcast(
-        self, k, obs_c, obs_t, a, src_c, src_t, src_hh, cos_shape="cos", ek=None
+        self,
+        k,
+        obs_c,
+        obs_t,
+        a,
+        src_c,
+        src_t,
+        src_hh,
+        cos_shape="cos",
+        ek=None,
+        eta=None,
     ):
         """Shape-agnostic core of `_field_components` (Eqs 76-79).
 
@@ -2645,7 +2688,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # then known went through `_EKPairs`.)
                 src_a, ind1, ind2 = ek
                 tables = self._extended_kernel_fields(
-                    k, H, z_eval, rho_eval, src_a, ind1, ind2, cos_shape=cos_shape
+                    k,
+                    H,
+                    z_eval,
+                    rho_eval,
+                    src_a,
+                    ind1,
+                    ind2,
+                    cos_shape=cos_shape,
+                    eta=eta,
                 )
                 tables["td"] = td
                 tables["rho_proj_factor"] = rho_proj_factor
@@ -2690,8 +2741,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # (E_z) prefactor. For unit I_0 = 1, factor pulled out:
         #   E_ρ prefactor = -jη/(4πk·ρ_eval)
         #   E_z prefactor = +jη/(4πk)
-        pref_rho = -1j * self.eta / (4.0 * np.pi * k * rho_eval)
-        pref_z = 1j * self.eta / (4.0 * np.pi * k)
+        eta = self._fill_eta(k, eta)
+        pref_rho = -1j * eta / (4.0 * np.pi * k * rho_eval)
+        pref_z = 1j * eta / (4.0 * np.pi * k)
 
         # ---- Constant source (I = 1): Eqs 78, 79 ----
         # E_ρ^f = -I/λ · jη/(2k²) · [(1+jkr_0) ρ G_0 / r_0²]_{z1}^{z2}
@@ -2699,7 +2751,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         #         (pref_rho already has 1/ρ_eval; multiply back by ρ_eval to
         #          recover the form -jη·ρ_eval/(4πk·ρ_eval)= -jη/(4πk))
         # Reorganize for clarity:
-        pref_rho_const = -1j * self.eta / (4.0 * np.pi * k)
+        pref_rho_const = -1j * eta / (4.0 * np.pi * k)
         Erho_const = pref_rho_const * (
             (1.0 + 1j * k * r0_2) * rho_eval * G0_2 / (r0_2 * r0_2)
             - (1.0 + 1j * k * r0_1) * rho_eval * G0_1 / (r0_1 * r0_1)
@@ -2832,6 +2884,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ek_pairs.src_a,
                 cos_shape="cos-1",
                 n_panels=ek_pairs.n_panels,
+                eta=eta,
             )
             for key, base in tables.items():
                 summed = base + delta[key]
@@ -3043,7 +3096,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _folded_ek_delta_fields(
-        self, k, H, z, rho, src_a, cos_shape="cos-1", n_gl=None, n_panels=1
+        self, k, H, z, rho, src_a, cos_shape="cos-1", n_gl=None, n_panels=1, eta=None
     ):
         """The EK-minus-reduced field correction, by direct quadrature
         (momwire#246).
@@ -3234,7 +3287,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # one multiplication at the end carries the collapse. `src_a` is the
         # SOURCE segment's radius, the `a` of NEC Eq 89 (and of
         # `_extended_kernel_fields`' BX).
-        pref = -1j * self.eta / (4.0 * np.pi * k)
+        pref = -1j * self._fill_eta(k, eta) / (4.0 * np.pi * k)
         gain = pref * (src_a * src_a)
 
         kxi = k * xi
@@ -3251,7 +3304,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             out[f"Erho_{name}"] = gain * np.einsum("...q,...q->...", sw, l_r)
         return out
 
-    def _ek_end_bracket_fields(self, k, H, z, rho, src_a, sign, cos_shape="cos-1"):
+    def _ek_end_bracket_fields(
+        self, k, H, z, rho, src_a, sign, cos_shape="cos-1", eta=None
+    ):
         """One END BRACKET of `_folded_ek_delta_fields`' operator, in closed
         form — the boundary term of its integration by parts in ξ
         (momwire#299).
@@ -3325,7 +3380,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # −pref_z·a², the same one multiplication that carries
         # `_folded_ek_delta_fields`' exact collapse at a = 0.
-        pref = -1j * self.eta / (4.0 * np.pi * k)
+        pref = -1j * self._fill_eta(k, eta) / (4.0 * np.pi * k)
         gain = pref * (src_a * src_a) * sign
 
         kxi = k * xi_end
@@ -3363,7 +3418,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         src_t_img = _ground_mirror.mirror_tangents(seg_t)
         return src_c_img, src_t_img
 
-    def _field_tensor_image(self, geom, k, obs_rows=None, cos_shape="cos"):
+    def _field_tensor_image(self, geom, k, obs_rows=None, cos_shape="cos", eta=None):
         """Field tensor for image sources at PEC ground. The image keeps the
         same per-segment half-length and basis shape; only the source center
         is mirrored and the source tangent z-component is flipped.
@@ -3382,6 +3437,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_tangents=src_t_img,
             obs_rows=obs_rows,
             cos_shape=cos_shape,
+            eta=eta,
         )
 
     def _image_refl_prep(self, geom):
@@ -3451,7 +3507,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
     def _field_tensor_image_refl(
-        self, geom, k, obs_rows=None, ground=None, cos_shape="cos"
+        self, geom, k, obs_rows=None, ground=None, cos_shape="cos", eta=None
     ):
         """Fresnel-weighted image field tensor for the `ground_eps` finite
         ground (NEC IPERF=0 reflection-coefficient approximation).
@@ -3499,8 +3555,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (the radial-wire screen) falls to the numpy `project` path below
         without this method being edited for it.
         """
+        eta = self._fill_eta(k, eta)
         if ground is None:
-            ground = _field_ground.field_ground_for(self, geom, k, self.omega)
+            ground = _field_ground.field_ground_for(self, geom, k, self.omega, eta=eta)
         src_c_img, src_t_img = ground.image_sources()
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
@@ -3563,7 +3620,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     np.ascontiguousarray(seg_h, dtype=np.float64),
                     float(a),
                     float(k),
-                    float(self.eta),
+                    float(eta),
                     np.ascontiguousarray(gx, dtype=np.float64),
                     np.ascontiguousarray(gw, dtype=np.float64),
                     src_a,
@@ -3623,7 +3680,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     np.ascontiguousarray(seg_h, dtype=np.float64),
                     float(a),
                     float(k),
-                    float(self.eta),
+                    float(eta),
                     np.ascontiguousarray(gx, dtype=np.float64),
                     np.ascontiguousarray(gw, dtype=np.float64),
                     np.ascontiguousarray(cos_th[rel_rows], dtype=np.float64),
@@ -3653,6 +3710,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             src_centers=src_c_img,
             src_tangents=src_t_img,
             cos_shape=cos_shape,
+            eta=eta,
             **self._obs_window_kwargs(geom, obs_rows),
         )
         # `_image_refl_band` already built the specular tables at this
@@ -3984,7 +4042,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         p_d = px * d[..., 0] + py * d[..., 1]
         return rho_v, rho_h, t_p, px, py, p_d
 
-    def _contact_charge_kernel(self, geom, k, node, obs_c, obs_t, a_obs):
+    def _contact_charge_kernel(self, geom, k, node, obs_c, obs_t, a_obs, eta=None):
         """Per-observer field of the SPURIOUS charge a unit contact current
         leaves at `node`, tangentially projected — the #282 correction's
         whole content, on the REDUCED kernel's end-charge bracket. When the
@@ -4034,7 +4092,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         r0 = np.sqrt(r2 + a2 * a2)
         pref = (
             -1j
-            * self.eta
+            * self._fill_eta(k, eta)
             / (4.0 * np.pi * k)
             * (1.0 + 1j * k * r0)
             * np.exp(-1j * k * r0)
@@ -4059,7 +4117,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         return pref * ((1.0 - rho_v) * t_d + (rho_v + rho_h) * t_p * p_d)
 
-    def _contact_charge_end_gradient(self, geom, k, i, sgn, obs_c, obs_t, a_obs):
+    def _contact_charge_end_gradient(
+        self, geom, k, i, sgn, obs_c, obs_t, a_obs, eta=None
+    ):
         """∇G_ext at the contact end of segment `i`, in the two components
         the fill resolves fields on: `(E_z, E_ρ/ρ_eval, t_src, rho_vec)`.
 
@@ -4130,11 +4190,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         _g1, g1p, _g2, _g2p, g3, _gzp = self._ek_end_gxx(
             k, zz, rh, b, swap if any_swap else False
         )
-        con = 1j * self.eta / (4.0 * np.pi * k)
+        con = 1j * self._fill_eta(k, eta) / (4.0 * np.pi * k)
         return -con * g1p, con * g3 / rho_eval, src_t, rho_vec
 
     def _contact_charge_ek_delta(
-        self, geom, k, i, sgn, node, obs_c, obs_t, a_obs, use_real, use_image
+        self, geom, k, i, sgn, node, obs_c, obs_t, a_obs, use_real, use_image, eta=None
     ):
         """How much `_contact_charge_kernel`'s residual changes when the
         fill's end-charge bracket is EKSCX's rather than the reduced
@@ -4177,7 +4237,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `use_*` branches then carry the same δE and W is the identity.
         """
         ez, erho_hat, src_t, rho_vec = self._contact_charge_end_gradient(
-            geom, k, i, sgn, obs_c, obs_t, a_obs
+            geom, k, i, sgn, obs_c, obs_t, a_obs, eta=eta
         )
         d = obs_c - node
         r2 = np.einsum("...d,...d->...", d, d)
@@ -4186,7 +4246,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         r0 = np.sqrt(r2 + a2 * a2)
         pref = (
             -1j
-            * self.eta
+            * self._fill_eta(k, eta)
             / (4.0 * np.pi * k)
             * (1.0 + 1j * k * r0)
             * np.exp(-1j * k * r0)
@@ -4236,7 +4296,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return None
         return True, True
 
-    def _contact_charge_correction(self, G, geom, k, seg_view):
+    def _contact_charge_correction(self, G, geom, k, seg_view, eta=None):
         """Subtract the #282 residual contact charge from a collocated fill,
         in place. No-op without a finite ground or without a contact, so
         PEC and elevated geometries keep their base arithmetic exactly.
@@ -4256,11 +4316,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         a_obs = self._seg_radius(geom)
         obs_seg = np.arange(geom["n_segs"], dtype=np.int64)
         for i, sgn, node in nodes:
-            R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs)
+            R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs, eta=eta)
             masks = self._contact_ek_masks(geom, i, sgn, obs_seg)
             if masks is not None:
                 R = R + self._contact_charge_ek_delta(
-                    geom, k, i, sgn, node, obs_c, obs_t, a_obs, *masks
+                    geom, k, i, sgn, node, obs_c, obs_t, a_obs, *masks, eta=eta
                 )
             jb, val = self._contact_node_values(geom, k, seg_view, i, sgn)
             G[:, jb] -= sgn * R[:, None] * val[None, :]
@@ -4312,7 +4372,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         blocks = 1 + (self.ground_z is not None) + self._sommerfeld_ground()
         return max(3 * blocks, 3 + 2) * N * 16
 
-    def _assemble_Z(self, geom, k):
+    def _assemble_Z(self, geom, k, eta=None):
         """Point-matched Z, filled in observer-row chunks (momwire#332).
 
         The row band is the natural chunk: every Φ block below is
@@ -4332,6 +4392,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         5x, 8x and 11x Z. Peak is now Z plus one band, bounded by
         `swept_mem_mb`.
         """
+        # The operating point is (k, eta), both arguments (momwire#995).
+        eta = self._fill_eta(k, eta)
         seg_view = self._basis_coefs(geom, k)
         N = geom["n_segs"]
         # Build (N, N) coefficient matrices M_{A,B,C}[n, j] = effective
@@ -4411,7 +4473,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # nodes, their tangents, the k-weighted shapes, the grid handle —
         # which the bands replay instead of rebuilding (momwire#357 item
         # 1). O(N), and it dies with `fg` at the end of this fill.
-        fg = _field_ground.field_ground_for(self, geom, k, self.omega)
+        fg = _field_ground.field_ground_for(self, geom, k, self.omega, eta=eta)
         somm_rem = None if fg is None else fg.remainder(cos_shape=cos_shape)
 
         # Below the dense-M threshold the whole fill is one chunk, budget or
@@ -4441,7 +4503,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             i1 = min(i0 + chunk, N)
             rows = (i0, i1)
             Phi_c, Phi_s, Phi_co = self._field_tensor(
-                geom, k, obs_rows=rows, cos_shape=cos_shape
+                geom, k, obs_rows=rows, cos_shape=cos_shape, eta=eta
             )
             if fg is not None:
                 # Image ground: subtract the sub-assembly built from the
@@ -4515,7 +4577,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             del Phi_s
             G[i0:i1] += Phi_co @ M_C
             del Phi_co
-        self._contact_charge_correction(G, geom, k, seg_view)
+        self._contact_charge_correction(G, geom, k, seg_view, eta=eta)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
 
@@ -4735,7 +4797,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field-tensor fill
-        G, seg_view = self._assemble_Z(geom, self.k)
+        G, seg_view = self._assemble_Z(geom, self.k, self.eta)
         v, voltages = self._feed_drive_vector(geom)
         self._checkpoint()  # after assembly, before the dense LU solve
         # Factor Gᵀ in place: G.T is an F-ordered view of the C-ordered G,
@@ -4795,7 +4857,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         across solves — re-solve and the previous handle is stale.
         """
         geom = self._build_geometry()
-        G, seg_view = self._assemble_Z(geom, self.k)
+        G, seg_view = self._assemble_Z(geom, self.k, self.eta)
         feed_segs = geom["feed_segs"]
         n_ports = len(feed_segs)
         n_segs = geom["n_segs"]
@@ -4863,7 +4925,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for i, kk in enumerate(k_array):
                 self._checkpoint()  # top of each frequency iteration
                 self._set_k(kk)
-                G, seg_view = self._assemble_Z(geom, self.k)
+                G, seg_view = self._assemble_Z(geom, self.k, self.eta)
                 alpha = scipy.linalg.solve(G, v)
                 z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out

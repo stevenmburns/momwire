@@ -324,26 +324,27 @@ their segment's own k and the loading is read at the solve's REAL ω — k_m·c
 is not a frequency — and a jacketed buried wire adds #1154's charge-side
 term as the derivative overlap zq·∫f_i′ f_j′ (momwire#1156).
 
-## (k, η) live on the SOLVER, not in the argument list — momwire#980
+## (k, η) are ARGUMENTS of the fill — momwire#995
 
-`k` is passed down the fill as an argument; **`η` is not** — the closed
-forms read `self.eta`, and so do `_drive_columns` (through `k`) and
-`_lumped_pair_block`. Three separate places take the operating point from
-solver state rather than from an argument, and every one of them has now
-produced a wrong number with no failure during the buried serve:
+Until #995 `k` was passed down the fill as an argument and **`η` was not**:
+the closed forms read `self.eta`, and so did `_lumped_pair_block`. Each place
+that took half the operating point from solver state produced a wrong number
+with no failure during the buried serve (#980):
 
 * D1: setting only the fill's `k` left the DRIVE columns in air;
-* D1: `_lumped_pair_block` reads `self.eta` directly, so the operating
-  point has to wrap the whole solve rather than the matrix;
+* D1: `_lumped_pair_block` read `self.eta` directly, so the operating
+  point had to wrap the whole solve rather than the matrix;
 * D2: filling the buried block at `k_m` with AIR's `eta` is wrong by
   |η₀/η_m| = **4.27×** at soil A / 7 MHz — the below quadrant came out
-  3.4× wrong until `_at_class_eta` was added, and the deck solved and
-  returned a plausible number throughout.
+  3.4× wrong until a scoped mutator set η per class, and the deck solved
+  and returned a plausible number throughout.
 
-A mixed deck is where this stops being containable by a solver-level
-operating point, because two are live at once. Making (k, η) arguments is
-filed as a hardening item against momwire#980; until then, anything that
-fills at a non-default wavenumber must set BOTH and restore them.
+Now every fill, image, near-correction, bracket, contact-charge and
+node-charge block takes `eta` beside `k`; the public entries pass the
+medium's (`_medium_eta`), a mixed deck passes each class its own, and
+`_fill_eta` REFUSES a complex `k` with no `eta` instead of defaulting it to
+air's. `_operating_medium` still scopes `self.k` for the solve (the drive and
+the readout write the basis at it), but no longer touches `self.eta`.
 """
 
 import collections
@@ -1734,7 +1735,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return nodes
         return _ground_mirror.mirror_positions(nodes, self.ground_z)
 
-    def _node_charge_columns(self, geom, seg_view, k, nodes=None):
+    def _node_charge_columns(self, geom, seg_view, k, nodes=None, eta=None):
         """D[i, p] = ∫ f_i(s) ŝ·E_q(s) ds — every basis tested against the
         field of the LUMPED charge port p deposits at its node, (n_basis, P).
 
@@ -1771,7 +1772,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         a = float(self._uniform_radius)
         seg_c, seg_t = geom["seg_centers"], geom["seg_tangents"]
         hh = 0.5 * np.asarray(geom["seg_h"], dtype=float)
-        pref = -1j * self.eta / (4.0 * np.pi * k)
+        pref = -1j * self._fill_eta(k, eta) / (4.0 * np.pi * k)
         starts = seg_view["starts"]
 
         if nodes is None:
@@ -1804,7 +1805,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 )
         return D
 
-    def _node_charge_pair_block(self, geom, k):
+    def _node_charge_pair_block(self, geom, k, eta=None):
         """S[p, q] — the lumped-charge × lumped-charge term, (P, P).
 
         Subtracting `_node_charge_columns` from both the row and the column
@@ -1824,9 +1825,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         agree to 2e-5.
         """
         nodes = self._port_node_positions(geom)
-        return self._lumped_pair_block(nodes, nodes, k)
+        return self._lumped_pair_block(nodes, nodes, k, eta=eta)
 
-    def _node_charge_image_pair_block(self, geom, k):
+    def _node_charge_image_pair_block(self, geom, k, eta=None):
         """S_img[p, q] — the same lumped-lumped term between node p and the
         PEC IMAGE of node q, at the mirrored separation (#191).
 
@@ -1834,17 +1835,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         |node_p − M·node_q| = |M·node_p − node_q|.
         """
         nodes = self._port_node_positions(geom)
-        return self._lumped_pair_block(nodes, self._port_node_positions(geom, True), k)
+        return self._lumped_pair_block(
+            nodes, self._port_node_positions(geom, True), k, eta=eta
+        )
 
-    def _lumped_pair_block(self, nodes_row, nodes_col, k):
+    def _lumped_pair_block(self, nodes_row, nodes_col, k, eta=None):
         """Mixed-potential pairing of unit node charges at two point sets,
         regularized at the wire radius exactly as `_node_charge_columns` is."""
         a = float(self._uniform_radius)
         d = nodes_row[:, None, :] - nodes_col[None, :, :]
         R = np.sqrt((d * d).sum(axis=-1) + a * a)
-        return 1j * self.eta * np.exp(-1j * k * R) / (4.0 * np.pi * k * R)
+        eta = self._fill_eta(k, eta)
+        return 1j * eta * np.exp(-1j * k * R) / (4.0 * np.pi * k * R)
 
-    def _assemble_Z_ported(self, geom, k):
+    def _assemble_Z_ported(self, geom, k, eta=None):
         """`_assemble_Z` with M5b formulation (b) applied — the matrix every
         SOLVE uses when junction ports are present.
 
@@ -1886,15 +1890,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         new constant. Fresnel/Sommerfeld images are not point charges and are
         refused upstream (`_refuse_junction_port_solve`).
         """
-        G, seg_view = self._assemble_Z(geom, k)
+        G, seg_view = self._assemble_Z(geom, k, eta)
         if not self.junction_ports:
             return G, seg_view
         N = geom["n_segs"]
-        D = self._node_charge_columns(geom, seg_view, k)
+        D = self._node_charge_columns(geom, seg_view, k, eta=eta)
         G = G.copy()
         G[:, N:] -= D
         G[N:, :] -= D.T
-        G[N:, N:] += self._node_charge_pair_block(geom, k)
+        G[N:, N:] += self._node_charge_pair_block(geom, k, eta=eta)
         # The #151/#191 node charge is the Galerkin analogue of the point-
         # matched contact-charge read: a TESTING-SCHEME correction that happens
         # to involve the image, deliberately outside the `FieldGround` sketch
@@ -1903,11 +1907,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # Only PEC reaches it — finite grounds are refused upstream.
         if self.ground_z is not None:
             D_img = self._node_charge_columns(
-                geom, seg_view, k, nodes=self._port_node_positions(geom, mirror=True)
+                geom,
+                seg_view,
+                k,
+                nodes=self._port_node_positions(geom, mirror=True),
+                eta=eta,
             )
             G[:, N:] += D_img
             G[N:, :] += D_img.T
-            G[N:, N:] -= self._node_charge_image_pair_block(geom, k)
+            G[N:, N:] -= self._node_charge_image_pair_block(geom, k, eta=eta)
         return G, seg_view
 
     def _basis_coefs(self, geom, k):
@@ -2260,7 +2268,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         cached[1][mirror] = hit
         return hit
 
-    def _ek_bracket_block(self, geom, k, ctx, corr, plan, m0, m1):
+    def _ek_bracket_block(self, geom, k, ctx, corr, plan, m0, m1, eta=None):
         """One source block's share of momwire#299's end-bracket correction
         over the test segments `m0:m1`, ACCUMULATED into `corr` with weight
         `plan.scale` — never applied to the fill's own contributions, which
@@ -2393,6 +2401,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                         a_all[ni][:, None],
                         sign,
                         cos_shape="cos-1",
+                        eta=eta,
                     )
                     cm["td"] = td
                     cm["rho_proj_factor"] = rho_proj
@@ -2473,6 +2482,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         src_t=None,
         mirror=False,
         subtract_into=None,
+        eta=None,
     ):
         """Test-integrate one source block: (contrib_const, sin, cos−1), each
         (nnz, N) — the folded shape set (#203/#205), which is what the field
@@ -2547,7 +2557,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # There is no complex EK twin: the extended kernel's Bessel-polynomial
         # split assumes jkR is purely imaginary, so an EK solve in the medium
         # stays on numpy.
-        in_medium = np.iscomplexobj(k) or np.iscomplexobj(self.eta)
+        eta = self._fill_eta(k, eta)
+        in_medium = np.iscomplexobj(k) or np.iscomplexobj(eta)
         if (
             _HAVE_GALERKIN_FAR_FILL
             and (
@@ -2564,10 +2575,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 self._ek_far_labels(geom, mirror) if self.extended_kernel else None
             )
             if subtract_into is None:
-                contribs = self._far_fill_accel(k, ctx, src_c, src_t, ek=ek_pairs)
+                contribs = self._far_fill_accel(
+                    k, ctx, src_c, src_t, ek=ek_pairs, eta=eta
+                )
                 if self.near_correction:
                     self._apply_near_correction(
-                        geom, k, ctx, contribs, projector, src_c, src_t, mirror
+                        geom, k, ctx, contribs, projector, src_c, src_t, mirror, eta=eta
                     )
                 return contribs
             near_cells = (
@@ -2581,6 +2594,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     src_t,
                     mirror,
                     sub=True,
+                    eta=eta,
                 )
                 if self.near_correction
                 else None
@@ -2593,7 +2607,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 else None
             )
             self._far_fill_accel(
-                k, ctx, src_c, src_t, ek=ek_pairs, out=subtract_into, scale=-1.0
+                k,
+                ctx,
+                src_c,
+                src_t,
+                ek=ek_pairs,
+                out=subtract_into,
+                scale=-1.0,
+                eta=eta,
             )
             if held is not None:
                 for dest, saved in zip(subtract_into, held):
@@ -2622,7 +2643,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             contribs = subtract_into
             near_cells = (
                 self._apply_near_correction(
-                    geom, k, ctx, contribs, projector, src_c, src_t, mirror, sub=True
+                    geom,
+                    k,
+                    ctx,
+                    contribs,
+                    projector,
+                    src_c,
+                    src_t,
+                    mirror,
+                    sub=True,
+                    eta=eta,
                 )
                 if self.near_correction
                 else None
@@ -2640,6 +2670,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_t=src_t[None, :, :],
                 src_hh=ctx["hh"][None, :],
                 cos_shape="cos-1",
+                eta=eta,
                 # Per BLOCK, like everything else in this loop: the mask is
                 # (rows·nq, N) and would otherwise be the one array in the
                 # fill that scales with the whole matrix. Eligibility is a
@@ -2677,11 +2708,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return None
         if self.near_correction:
             self._apply_near_correction(
-                geom, k, ctx, contribs, projector, src_c, src_t, mirror
+                geom, k, ctx, contribs, projector, src_c, src_t, mirror, eta=eta
             )
         return contribs
 
-    def _far_fill_accel(self, k, ctx, src_c, src_t, ek=None, out=None, scale=1.0):
+    def _far_fill_accel(
+        self, k, ctx, src_c, src_t, ek=None, out=None, scale=1.0, eta=None
+    ):
         """C++ far fill for the PLAIN projection: kernel and test reduction
         fused, (contrib_const, sin, cos−1) each (nnz, N) — the same three arrays
         the numpy loop above builds (#194).
@@ -2766,7 +2799,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         gx, gw = self._leggauss_cached(self.n_qp_const)
         # Which entry point this call takes. Decided from the VALUES rather
         # than from the solver's ground, because `k` arrives per block.
-        _cplx_fill = np.iscomplexobj(k) or np.iscomplexobj(self.eta)
+        eta = self._fill_eta(k, eta)
+        _cplx_fill = np.iscomplexobj(k) or np.iscomplexobj(eta)
         if _cplx_fill and not _HAVE_GALERKIN_FAR_FILL_CPLX:
             raise RuntimeError(
                 "complex-k far fill requested from a build without "
@@ -2785,7 +2819,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             # truncate it, which is the silent-truncation class momwire#980
             # step A exists to keep out.
             complex(k) if _cplx_fill else float(k),
-            complex(self.eta) if _cplx_fill else float(self.eta),
+            complex(eta) if _cplx_fill else float(eta),
             np.ascontiguousarray(gx, dtype=np.float64),
             np.ascontiguousarray(gw, dtype=np.float64),
             np.ascontiguousarray(ctx["w_entry"], dtype=np.complex128),
@@ -2886,7 +2920,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         return fg.projector(lambda: self._image_refl_prep(geom))
 
     def _fold_ground_block(
-        self, geom, k, ctx, contribs, fg, obs_mask=None, src_cols=None
+        self, geom, k, ctx, contribs, fg, obs_mask=None, src_cols=None, eta=None
     ):
         """The ground sub-assembly, tested exactly like the free-space block
         and SUBTRACTED from it in place — the same single global minus sign
@@ -2961,11 +2995,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_t_img,
                 mirror=True,
                 subtract_into=contribs,
+                eta=eta,
             )
             return
 
         img = self._tested_contribs(
-            geom, k, ctx, projector, src_c_img, src_t_img, mirror=True
+            geom, k, ctx, projector, src_c_img, src_t_img, mirror=True, eta=eta
         )
         # `coef·img − rem` in place, the coefficient on the LEFT — the
         # point-matched band's spelling (`sinusoidal.py`), and the ground
@@ -3511,26 +3546,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         out[np.ix_(np.arange(3), obs_rows, idx)] = small
         return out
 
-    @contextlib.contextmanager
-    def _at_class_eta(self, medium, is_below):
-        """`self.eta` for one class's block, restored after.
+    def _medium_eta(self, medium):
+        """The wave impedance of the medium a fill runs in: eta_m for a
+        `Medium`, the solver's own (air's) for `None`.
 
-        The fill reads `eta` off the solver — it is not an argument like `k`
-        — so a mixed deck must set it per class as well. Filling the buried
-        block at k_m with AIR's eta is a wrong number with no failure: it is
-        off by |eta_0/eta_m|, measured 4.27x at soil A / 7 MHz, and the
-        below quadrant came out 3.4x wrong until this was added. Same
-        finding as D1's drive-column one, now on the fill itself.
+        One spelling, because it is half of an operating point (momwire#995):
+        every fill takes `(k, eta)` as arguments, and a caller filling a
+        buried block reaches its eta here rather than by mutating the
+        solver's. Filling at k_m with AIR's eta is wrong by |eta_0/eta_m|,
+        measured 4.27x at soil A / 7 MHz — the below quadrant of a mixed deck
+        came out 3.4x wrong that way (#980 D2) — and the fill now refuses a
+        complex k with no eta rather than defaulting it (`_fill_eta`).
         """
-        saved = self.eta
-        try:
-            if is_below:
-                self.eta = np.sqrt(self.mu / medium.eps_m)
-            yield
-        finally:
-            self.eta = saved
+        return self.eta if medium is None else np.sqrt(self.mu / medium.eps_m)
 
-    def _assemble_mixed_contribs(self, geom, ctx, below, medium, plan, crossing=False):
+    def _assemble_mixed_contribs(
+        self, geom, ctx, below, medium, plan, crossing=False, eta=None
+    ):
         """The three pair classes of a mixed deck, into one (nnz, N) triple.
 
         Quadrants, and the masks are the point. A class fill computes every
@@ -3549,6 +3581,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         n_segs = int(geom["n_segs"])
         contribs = tuple(np.zeros((nnz, n_segs), dtype=np.complex128) for _ in range(3))
         entry_below = np.asarray(below)[np.asarray(ctx["m_of_entry"])]
+        # Air's eta, the caller's half of the above class's operating point.
+        eta_p = self._fill_eta(medium.k_p, eta)
 
         for keep, rows, k_cls, med in (
             (~np.asarray(below), ~entry_below, medium.k_p, None),
@@ -3556,8 +3590,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         ):
             if not keep.any() or not rows.any():
                 continue
-            with self._at_class_eta(medium, med is not None):
-                block = self._tested_contribs(geom, k_cls, ctx, _plain_projection)
+            # Each class fills at ITS OWN (k, eta), both as arguments
+            # (momwire#995) — the scoped mutator this replaced guarded solver
+            # state in a hot path, and a block that forgot it got a
+            # plausible number rather than an exception.
+            eta_cls = eta_p if med is None else self._medium_eta(med)
+            block = self._tested_contribs(
+                geom, k_cls, ctx, _plain_projection, eta=eta_cls
+            )
             # The ground images the WHOLE deck — its out-of-class columns are
             # discarded below — but its remainder models ONE medium, so it is
             # prepared over that medium's geometry and replayed at that
@@ -3570,18 +3610,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 medium=med,
                 r1_below=plan.get("r1_below") if med is not None else None,
                 remainder_geom=self._class_geom(geom, keep),
+                eta=eta_cls,
             )
             if fg is not None:
-                with self._at_class_eta(medium, med is not None):
-                    self._fold_ground_block(
-                        geom,
-                        k_cls,
-                        ctx,
-                        block,
-                        fg,
-                        obs_mask=keep,
-                        src_cols=np.nonzero(keep)[0],
-                    )
+                self._fold_ground_block(
+                    geom,
+                    k_cls,
+                    ctx,
+                    block,
+                    fg,
+                    obs_mask=keep,
+                    src_cols=np.nonzero(keep)[0],
+                    eta=eta_cls,
+                )
             cols = np.nonzero(keep)[0]
             for dest, b in zip(contribs, block):
                 dest[np.ix_(np.nonzero(rows)[0], cols)] = b[
@@ -4016,23 +4057,24 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
     @contextlib.contextmanager
     def _operating_medium(self, geom):
-        """Run a solve at the LOWER MEDIUM's operating point, then restore.
+        """Run a solve in the LOWER MEDIUM, then restore.
 
         Yields the `Medium` (or `None` for a deck that is not fully buried,
         in which case nothing is touched and the shipped path is entered
-        unchanged).
+        unchanged). The caller takes the fill's eta from it
+        (`_medium_eta`) and passes it as an argument (momwire#995).
 
-        Scoped rather than permanent, and applied around the WHOLE solve
-        rather than around the matrix alone, because `k` and `eta` are read
-        on both sides of it: `_drive_columns` builds the excitation at `k`
-        and `_lumped_pair_block` reads `self.eta` directly. Setting only the
-        fill's `k` would leave the drive in air and produce a plausible
-        wrong number rather than a failure — the exact shape of error this
-        step is most exposed to.
+        What is still scoped here is `self.k` — the READOUT's wavenumber:
+        the drive columns and the gap-current readout write the basis shapes
+        at `self.k`, and a wholly-buried view carries no per-entry k, so the
+        solve's k has to be k_m on both sides of the matrix. `self.eta` is
+        NOT touched any more: every fill reads eta as an argument, and a fill
+        at a complex k with no eta is refused (`_fill_eta`), so the stale
+        pairing "k_m with air's eta" is an exception rather than a number.
 
         This is the momwire#980 step-A test seam (`s.k = k_m; s.eta = ...`)
-        made a real route: same operating point, but resolved from the deck's
-        own medium labels and guaranteed to be restored.
+        made a real route, resolved from the deck's own medium labels and
+        guaranteed to be restored.
         """
         # A mixed deck has TWO live k, so there is no solver-level operating
         # point: each block is filled at its own k as an argument and the
@@ -4087,17 +4129,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             crossing=False,
             pair_extents=_bspline._pair_extents_below,
         )
-        saved = (self.k, self.eta, self._active_medium, self._active_r1_below)
+        saved = (self.k, self._active_medium, self._active_r1_below)
         try:
             self.k = medium.k_m
-            self.eta = np.sqrt(self.mu / medium.eps_m)
             self._active_medium = medium
             self._active_r1_below = plan["r1_below"]
             yield medium
         finally:
             (
                 self.k,
-                self.eta,
                 self._active_medium,
                 self._active_r1_below,
             ) = saved
@@ -4135,7 +4175,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self.ground_eps, self.omega, self.eps, self.k
         )
 
-    def _assemble_Z(self, geom, k):
+    def _assemble_Z(self, geom, k, eta=None):
         """Galerkin system matrix G (basis i tested against source basis j).
 
         G[i, j] = ∫ f_i(s) · ŝ·E_j(s) ds
@@ -4230,7 +4270,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             # too, not only the field nodes (see `_mixed_serve_plan`).
             plan = self._mixed_serve_plan(geom, below, medium, ctx, crossing)
             contribs = self._assemble_mixed_contribs(
-                geom, ctx, below, medium, plan, crossing
+                geom, ctx, below, medium, plan, crossing, eta=eta
             )
             G = self._scatter_coef_product(ctx, contribs)
             del contribs
@@ -4248,6 +4288,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self._apply_loading(G, geom, seg_view, None, medium=medium)
             return G, seg_view
 
+        # (k, eta) is ONE operating point and both halves are arguments
+        # (momwire#995); a wholly-buried solve hands in k_m with eta_m.
+        eta = self._fill_eta(k, eta)
         seg_view = self._basis_coefs(geom, k)
         ctx = self._test_context(geom, seg_view, k)
 
@@ -4267,11 +4310,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self.omega,
             medium=medium,
             r1_below=self._active_r1_below,
+            eta=eta,
         )
 
-        contribs = self._tested_contribs(geom, k, ctx, _plain_projection)
+        contribs = self._tested_contribs(geom, k, ctx, _plain_projection, eta=eta)
         if fg is not None:
-            self._fold_ground_block(geom, k, ctx, contribs, fg)
+            self._fold_ground_block(geom, k, ctx, contribs, fg, eta=eta)
 
         G = self._scatter_coef_product(ctx, contribs)
         # The fill's triple is dead the moment its product exists, and what
@@ -4282,8 +4326,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # arithmetic — it changes no value — it just stops the peak from
         # counting a triple nobody reads again.
         del contribs
-        self._ek_bracket_correction_tested(G, geom, k, ctx, fg)
-        self._contact_charge_correction_tested(G, geom, k, seg_view, ctx)
+        self._ek_bracket_correction_tested(G, geom, k, ctx, fg, eta=eta)
+        self._contact_charge_correction_tested(G, geom, k, seg_view, ctx, eta=eta)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
 
@@ -4575,7 +4619,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
         return G
 
-    def _ek_bracket_correction_tested(self, G, geom, k, ctx, fg):
+    def _ek_bracket_correction_tested(self, G, geom, k, ctx, fg, eta=None):
         """momwire#299's end-bracket correction, assembled and SYMMETRIZED
         into G: `G −= ½(C + Cᵀ)`.
 
@@ -4691,7 +4735,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 np.zeros((e1 - e0, cols.size), dtype=np.complex128) for _ in range(3)
             )
             for plan in plans:
-                self._ek_bracket_block(geom, k, ctx, corr, plan, m0, m1)
+                self._ek_bracket_block(geom, k, ctx, corr, plan, m0, m1, eta=eta)
             if not any(np.any(c) for c in corr):
                 continue
             rows = i_of_entry[e0:e1]
@@ -4792,7 +4836,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             for t, coef in zip(T, coefs)
         )
 
-    def _contact_charge_correction_tested(self, G, geom, k, seg_view, ctx):
+    def _contact_charge_correction_tested(self, G, geom, k, seg_view, ctx, eta=None):
         """#282's ground-contact charge correction, test-integrated.
 
         Identical physics to the point-matched
@@ -4849,11 +4893,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         w_entry = (wg[None, :] * hh[m_of_entry][:, None]) * fval
         obs_seg = np.repeat(np.arange(N, dtype=np.int64), nq)
         for i, sgn, node in nodes:
-            R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs)
+            R = self._contact_charge_kernel(geom, k, node, obs_c, obs_t, a_obs, eta=eta)
             masks = self._contact_ek_masks(geom, i, sgn, obs_seg)
             if masks is not None:
                 R = R + self._contact_charge_ek_delta(
-                    geom, k, i, sgn, node, obs_c, obs_t, a_obs, *masks
+                    geom, k, i, sgn, node, obs_c, obs_t, a_obs, *masks, eta=eta
                 )
             R_t = self._tested_contrib_rows(
                 w_entry, m_of_entry, nq, R.reshape(N, nq, 1)
@@ -4865,7 +4909,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         return G
 
     def _apply_near_correction(
-        self, geom, k, ctx, contribs, projector, src_c, src_t, mirror=False, sub=False
+        self,
+        geom,
+        k,
+        ctx,
+        contribs,
+        projector,
+        src_c,
+        src_t,
+        mirror=False,
+        sub=False,
+        eta=None,
     ):
         """Recompute the near-pair test integrals on the endpoint-graded rule,
         overwriting the uniform-rule values in `contribs` (M2).
@@ -4944,6 +4998,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_t=src_t[ni][:, None, :],
                 src_hh=hh[ni][:, None],
                 cos_shape="cos-1",
+                eta=eta,
                 # (P, 1) against the (P, G) field tables: one eligibility
                 # decision per PAIR, shared by that pair's graded observers.
                 # These are the pairs whose observers sit on the source
@@ -5287,8 +5342,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self._checkpoint()  # after geometry, before the field fill
         # The medium wraps the WHOLE solve, not the matrix alone: the drive
         # columns are built at `k` too (momwire#980 D1).
-        with self._operating_medium(geom):
-            G, seg_view = self._assemble_Z_ported(geom, self.k)
+        with self._operating_medium(geom) as medium:
+            G, seg_view = self._assemble_Z_ported(
+                geom, self.k, self._medium_eta(medium)
+            )
             U = self._drive_columns(geom, seg_view, self.k)
             voltages = self._port_voltages()
             self._checkpoint()  # after assembly, before the dense solve
@@ -5359,8 +5416,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # run at k_m. Outside it this route filled a buried deck through the
         # ABOVE ground family, which refuses it by name; `compute_y_matrix`
         # and both swept loops reach the matrix only through here.
-        with self._operating_medium(geom):
-            G, seg_view = self._assemble_Z_ported(geom, self.k)
+        with self._operating_medium(geom) as medium:
+            G, seg_view = self._assemble_Z_ported(
+                geom, self.k, self._medium_eta(medium)
+            )
             U = self._drive_columns(geom, seg_view, self.k)
             alphas = scipy.linalg.solve(G, U)
             Y = np.stack(

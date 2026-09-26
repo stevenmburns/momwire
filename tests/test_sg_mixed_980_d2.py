@@ -60,9 +60,9 @@ def G_of(s):
         warnings.simplefilter("ignore")
         geom = s._build_geometry()
         if s._is_mixed(geom):
-            return s._assemble_Z(geom, s.k)[0]
-        with s._operating_medium(geom):
-            return s._assemble_Z(geom, s.k)[0]
+            return s._assemble_Z(geom, s.k, s.eta)[0]
+        with s._operating_medium(geom) as medium:
+            return s._assemble_Z(geom, s.k, s._medium_eta(medium))[0]
 
 
 ABOVE = np.array([(0.0, 0.0, 0.25), (0.0, 0.0, 1.25)])
@@ -115,27 +115,54 @@ def test_far_apart_diagonal_blocks_reproduce_the_single_class_solves():
     assert np.abs(Gm[na:, :na]).max() > 0.0
 
 
-def test_the_buried_block_is_filled_at_the_medium_eta():
+def test_the_buried_block_is_filled_at_the_medium_eta(monkeypatch):
     """The finding that the gate above caught, pinned directly.
 
-    `self.eta` is read OFF THE SOLVER by the fill, so a mixed deck must set
-    it per class. Filling the buried block at k_m with air's eta is wrong by
+    Filling the buried block at k_m with air's eta is wrong by
     |eta_0/eta_m| = 4.27x at soil A / 7 MHz and the deck still solves,
-    returning a plausible number — so this asserts the context manager
-    actually moves eta, and restores it.
+    returning a plausible number. Since momwire#995 each class's eta is an
+    ARGUMENT of its fill, so this watches the fill calls themselves: every
+    one at k_m carries eta_m, every one at k_p carries air's, and the
+    solver's own eta is never moved.
     """
     s = mk([ABOVE, BELOW_FAR], [[9], [9]])
     geom = s._build_geometry()
     medium = s._fill_medium(geom)
     eta_air = s.eta
-    with s._at_class_eta(medium, True):
-        eta_m = s.eta
-    assert s.eta == eta_air
+    eta_m = s._medium_eta(medium)
     assert np.iscomplexobj(eta_m) or eta_m != eta_air
     ratio = abs(eta_air / eta_m)
     assert 4.0 < ratio < 4.6, f"|eta_0/eta_m| = {ratio:.3f}, expected ~4.27"
-    with s._at_class_eta(medium, False):
-        assert s.eta == eta_air  # the above class keeps air
+
+    seen = []
+    real = SinusoidalGalerkinSolver._tested_contribs
+
+    def spy(self, geom, k, ctx, projector, *a, eta=None, **kw):
+        seen.append((k, eta, self.eta))
+        return real(self, geom, k, ctx, projector, *a, eta=eta, **kw)
+
+    monkeypatch.setattr(SinusoidalGalerkinSolver, "_tested_contribs", spy)
+    # The grids are not what this watches, and they are the whole cost: the
+    # ground fold and the transmitted tensor are stubbed (the fill calls
+    # around them are the production ones).
+    monkeypatch.setattr(
+        SinusoidalGalerkinSolver, "_fold_ground_block", lambda *a, **kw: None
+    )
+    n = int(geom["n_segs"])
+    monkeypatch.setattr(
+        SinusoidalGalerkinSolver,
+        "_transmitted_tensor",
+        lambda self, *a, **kw: np.zeros(
+            (3, n * self.n_qp_test, n), dtype=np.complex128
+        ),
+    )
+    G_of(s)
+    at_m = [(e, own) for k, e, own in seen if np.iscomplexobj(k) and k == medium.k_m]
+    at_p = [(e, own) for k, e, own in seen if not np.iscomplexobj(k)]
+    assert at_m and at_p, f"expected fills in both classes, saw {len(seen)} calls"
+    assert all(e == eta_m for e, _own in at_m)
+    assert all(e == eta_air for e, _own in at_p)
+    assert all(own == eta_air for _k, _e, own in seen)  # never mutated
 
 
 # ----------------------------------------------------------------------
