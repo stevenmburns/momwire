@@ -1396,7 +1396,7 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
     return out
 
 
-# --- Plane sheets (momwire#1173 Design E, phase 1) -------------------------
+# --- Sheets (momwire#1173 Design E) ---------------------------------------
 #
 # A buried deck whose above side is not one vertical line (an inverted-L's top
 # wire, a leaning mast) asks one row per (above node, buried node) pair, and
@@ -1408,75 +1408,84 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
 # At one source depth z' = -d the six kernels are analytic in (rho, z) over
 # the whole above half-plane: the only nearby singular point is (0, z'), at
 # least d away. So a PLANE is tabulated once and every row on it is
-# interpolated: u = ln R, tau = theta / arccos(d / R) with R = hypot(rho,
-# z - z') and theta = atan2(rho, z - z'). Every node then has z >= 0 >= z', so
-# the nodes are evaluated by the column twin itself, each a column of one --
-# exactly how the exact route evaluates a singleton row. There is no new
-# kernel and no continuation. The kernels are even in rho, which is why the
-# map stays analytic at R = d.
+# interpolated. A HEIGHT sheet is the mirror (phase 2): one observer height
+# z = h over (rho, z' <= 0), for a horizontal wire over conductors that spread
+# in depth (the Beverage's run over its rods). Either way the table is in
+# (rho, s), s = z - z' >= d the vertical separation, singular only at (0, 0),
+# and every node has z >= 0 >= z', so the nodes are evaluated by the column
+# twin itself. There is no new kernel and no continuation.
 #
-# The table: panels of ratio 2 in R from R = d (fixed edges, so a sheet grown
-# for a longer reach keeps every node it had), each split in u and in tau so
-# no panel spans more than `_SHEET_WAVES` wavelengths (`_sheet_wavelength`),
-# with `_SHEET_P` x `_SHEET_PT` Chebyshev nodes per panel. The stored values
-# are f * R (U, V, W) and f * R^2 (the derivatives); `near_interface_plane_
-# sheet` interpolates them barycentrically and divides the power back out.
+# The table is a tensor grid of cells (phase 2; phase 1's was polar, in ln R
+# and theta, with every node its own column). Each axis is laid in DYADIC
+# strips from the singular point -- rho: [0, d/2], [d/2, d], [d, 2d], ...;
+# s: [d, 2d], [2d, 4d], ... -- so every cell is at least as far from (0, 0) as
+# it is wide in either direction, which bounds its Chebyshev convergence below
+# as the polar panels did (the first rho strip is split because [0, d] at
+# s = d alone read 6.7e-8). A strip is split into equal cells no wider than
+# `_SHEET_WAVES` of the wavelength alive there (`_sheet_wavelength`; on a
+# height sheet's s axis, which runs through the soil, always the soil's), with
+# `_SHEET_P` x `_SHEET_P` Chebyshev nodes a cell. The layout is a function of
+# (k_p, k_m, d) alone, so a sheet grown for a longer reach keeps every node.
+#
+# What the grid buys is the column: a rho node's setup is shared by every s
+# node of its dyadic s strip (one column, of fixed membership whenever it is
+# built, so a node's value never depends on how the sheet grew). A column of
+# one costs ~94 us a node at 4 threads, of twelve ~12 us, of 48 ~5 us (laptop,
+# eps 30 / 28 MHz). The stored values are f * R (U, V, W) and f * R^2 (the
+# derivatives); `near_interface_grid_sheet` interpolates them barycentrically
+# and divides the power back out.
 #
 # This is GATED, not bit-identical: a sheet row's value is the table's, not
 # the twin's at that point. `_SHEET = False` (or MOMWIRE_NEAR_INTERFACE_SHEET=0)
 # is the exact route to the bit, and the reference the gates compare against.
 _SHEET = os.environ.get("MOMWIRE_NEAR_INTERFACE_SHEET", "1") != "0"
 _HAVE_PLANE_SHEET_ACCEL = _nia is not None and bool(
-    getattr(_nia, "height_sheet_1173", False)
+    getattr(_nia, "grid_sheet_1173", False)
 )
-# Chebyshev nodes per panel in u and in tau. Design E measured the table
-# against the twin at the asked rows (invl_deck(16), soil A, 7 MHz, d = 0.15 m):
-# max relative error per kernel 1e-3 / 7e-6 / 2e-7 / 3e-9 / 6e-13 at p = 6 / 8 /
-# 10 / 12 / 16. With the panel cap below, razor-2p against the switched-off fill
-# (Skylake, momwire#1173 phase 1; gate = min(0.01 ohm, 1 % of |Z(x) - Z(2x)|)):
+# Chebyshev nodes per cell in each direction. Sheet against twin at random
+# rows, max error relative to the kernel's 1/R^pw envelope, p = 12 (laptop,
+# the phase-2 prototype; the polar table's in brackets):
 #
-#   invl x2 / x4 / x8   |dZ_in| 2.6e-11 / 7.9e-12 / 1.0e-11 ohm  (gate 1e-2 / 9.1e-3 / 5.9e-3)
-#   lean x2 / x4        |dZ_in| 3.3e-11 / 1.4e-11 ohm            max rel dZ_ij 3.1e-9
-#   ladder, invl x2     worst |dZ_in| 7.7e-9 ohm, max rel dZ_ij 1.1e-6
-#                       (eps 5, sigma .001, 28 MHz, d = 5 cm), over eps / sigma
-#                       5 / .001, 13 / .005, 30 / .03 x 1.8 / 7.1 / 28 MHz x
-#                       d = 0.05 / 0.3 m
+#   soil A, 7.1 MHz, d = 0.15 m, R <= 14 m   1.8e-9, 11.5 k nodes, 0.10 s  (1.4e-9, 4.6 k, 0.39 s)
+#   eps 30, sigma .03, 28 MHz, d = 5 cm      1.8e-9, 97 k nodes, 0.66 s   (5.6e-10, 48 k, 5.3 s)
+#   eps 5, sigma .001, 28 MHz, d = 5 cm      2.4e-9, 28 k nodes, 0.22 s   (1.1e-7, 11 k, 1.0 s)
+#   Beverage height, 1.83 MHz, h = 2.5 m     5.4e-10, 2.4 k nodes          (2.4e-8, 2.9 k)
 #
-# The negative control, Design E's p = 3 table (no cap), reads 4.8e-2 / 4.9e-2 /
-# 4.9e-2 ohm on invl x2 / x4 / x8 and fails every rung.
+# More nodes than the polar table, each far cheaper: the builds are 4-8x faster.
 _SHEET_P = 12
-_SHEET_PT = 12
-# The smallest number of tau panels per R panel, and the R panels' ratio.
-_SHEET_NTAU = 4
-_SHEET_RATIO = 2.0
-# No panel spans more than this many wavelengths in R or in arc length
-# (R * theta_max), the wavelength being the shortest one alive there
-# (`_sheet_wavelength`). Without the cap the design's table (ratio-2 panels,
-# four tau panels) fails at high frequency: sheet against twin at random rows
-# on a plane, max error relative to the kernel's 1/R^pw envelope, p = 12:
-#
-#                                   no cap    1.0 (nodes)      0.5 (nodes)
-#   eps 13, sigma .005, 7.1 MHz     4.9e-8    1.1e-9 (7.6 k)   2.4e-11 (18 k)
-#   eps 5, sigma .001, 28 MHz, 5 cm 2.8e-3    7.1e-8 (11 k)    5.0e-10 (30 k)
-#   eps 30, sigma .03, 28 MHz, 30cm 2.1e-3    9.8e-9 (31 k)    1.7e-10 (109 k)
-#
-# (d = 0.15 m unless given, R <= 15 m). One wavelength is the cheapest cap
-# that holds 1e-7 on all three.
-_SHEET_WAVES = 1.0
-# The soil's wavelength sets a panel's width only while its wave is alive:
-# e^{-Im(k_m) R} below e^{-_SHEET_DEAD} of its size at the panel's inner edge
+# No cell is wider than this many wavelengths. At 1.0 the grid read 1.6e-8 /
+# 5.5e-9 / 2.4e-9 / 1.4e-6 on the four rows above (the Beverage's 160-320 m
+# strip one air wavelength wide); 0.7 matches the polar panels' effective
+# width (they split on R ln 2, 1.39x the strip's).
+_SHEET_WAVES = 0.7
+# The soil's wavelength sets a cell's width only while its wave is alive:
+# e^{-Im(k_m) R} below e^{-_SHEET_DEAD} of its size at the strip's inner edge
 # leaves the air's.
 _SHEET_DEAD = 18.0
-# Which planes a FILL tabulates: the ones whose rows pay for the table. The
+# Which sheets a FILL tabulates: the ones whose rows pay for the table. The
 # exact route pays a column setup per distinct rho (~68 us of wall at 4
-# threads) plus ~1.9 us per member; a sheet pays one setup per node, once, and
-# ~0.2 us per interpolated row (Design E's cost lines: invl_deck(16) x8, 1.44 M
-# columns in 98 s; hub x4, 3,851 columns and 224,840 members in 0.68 s). So a
-# plane qualifies when
+# threads) plus ~1.9 us per member (Design E's cost lines: invl_deck(16) x8,
+# 1.44 M columns in 98 s; hub x4, 3,851 columns and 224,840 members in
+# 0.68 s); a sheet pays its nodes once and ~0.2 us per interpolated row. So a
+# sheet qualifies when
 #
-#     distinct rho + rows * _SHEET_ROW_WORTH >= nodes * _SHEET_BUILD_WEIGHT,
+#     distinct credited rho + rows * _SHEET_ROW_WORTH >= nodes * weight,
 #
-# nodes being what a sheet reaching the plane's farthest row would hold.
+# nodes being what a sheet covering the rows would hold (`_sheet_nodes_to`),
+# and a rho CREDITED only when taking the sheet saves its column (`_plane_
+# pays`: a radial's, not a rod's, whose every depth asks the same rho; never
+# on a height sheet, whose mast-like other heights share its columns). The
+# credit is what keeps the Beverage's rod depths exact: credited like the
+# radials, 58 of them took 165 k nodes at nseg 84 and the warm solve ran
+# 2.5 -> 4.7 s.
+#
+# The weight is a node's cost against a column setup's. Phase 1's polar nodes
+# were each a column of one (weight 1); a strip-grid node shares its setup
+# with its dyadic s strip, ~12 us against ~94 (laptop), and 0.15 is where it
+# measured (laptop, razor-2p, sheets against off): hub_deck(16) x2 1.48 ->
+# 1.39 s and x4 2.65 -> 1.98 s (both take the radials' plane now; phase 1
+# declined them), the Beverage at nseg 21 takes its height sheet (warm 1.92 ->
+# 0.21 s) as at 84 (11.9 -> 1.37 s).
 #
 # It is decided ONCE PER FILL (`SheetPlan`, momwire#1173 Design E phase 2), on
 # the distinct rows the fill knows before it evaluates any (the main sandwich's
@@ -1487,31 +1496,23 @@ _SHEET_DEAD = 18.0
 # a function of the row alone (fixed nodes, `PlaneSheet`), and the rows left
 # exact are the same set in every cut, so with the decision per fill the cut
 # no longer shows. It is never decided on what is cached, so Z does not depend
-# on what the process solved before. The Beverage is why it is a cost rule and
-# not a row count: its rod planes carry ~4.5 k rows each but reach 246 m,
-# ~14 k nodes a sheet, and a 4,096-row threshold took seven of them and cost
-# 7 s. `_SHEET_BUILD_WEIGHT = 0` takes every plane past the pre-filter (the
-# tests' handle).
+# on what the process solved before. `_SHEET_BUILD_WEIGHT = 0` takes every
+# plane past the pre-filter (the tests' handle).
 _SHEET_ROW_WORTH = 1.0 / 40.0
-_SHEET_BUILD_WEIGHT = 1.0
-# A HEIGHT sheet (the mirror form, `PlaneSheet(height=True)`) is credited with
-# its rows' member cost only, rows * _SHEET_ROW_WORTH >= nodes *
-# _SHEET_HEIGHT_WEIGHT: the exact route's columns are per rho across every z,
-# so the rows of one height share their columns with the other heights' (a
-# mast's nodes, each its own height, all ask the same radial rho), and taking
-# one height's rows saves no column. Its own weight, so the tests' handle on
-# the planes (`_SHEET_BUILD_WEIGHT = 0`) does not turn every mast node into a
+_SHEET_BUILD_WEIGHT = 0.15
+# A HEIGHT sheet's weight (the mirror form, `PlaneSheet(height=True)`), its own
+# so the tests' handle on the planes does not turn every mast node into a
 # sheet.
-_SHEET_HEIGHT_WEIGHT = 1.0
-# A pre-filter only, so a small plane never pays for the census: no table is
-# smaller than _SHEET_NTAU * _SHEET_P * _SHEET_PT = 576 nodes.
+_SHEET_HEIGHT_WEIGHT = 0.15
+# A pre-filter only, so a small plane never pays for the census: no plane
+# sheet is smaller than three cells, 432 nodes.
 _SHEET_MIN_ROWS = 512
-# The distance guard. A sheet is never used for a plane shallower than this:
-# its rows' distance from the interface-singular point (rho, z, z') -> 0 is at
-# least d, and the table's first panel starts at R = d. Nothing in the map
-# degrades as d shrinks (the panels are logarithmic), but the plane z' = 0 is
-# the corner itself, and below this depth a plane is left to the twin, which
-# is designed for the corner.
+# The distance guard. A sheet is never used for a plane shallower (or a height
+# lower) than this: its rows' distance from the interface-singular point
+# (rho, z, z') -> 0 is at least d, and the table's s axis starts at s = d.
+# Nothing in the layout degrades as d shrinks (the strips are dyadic), but the
+# plane z' = 0 is the corner itself, and below this distance a sheet is left
+# to the twin, which is designed for the corner.
 _SHEET_MIN_DEPTH = 1e-3
 # Sheets kept, most recent last. A sheet is a few hundred kB.
 _SHEET_CACHE_MAX = 32
@@ -1606,38 +1607,44 @@ def _sheet_take(sub, plan):
 
 def _plane_pays(k_p, k_m, d, parts, depth=None):
     """The cost rule for one sheet at distance d from its singular point, on
-    its census `parts`, each an (R, Zg, S) triple: R the (G, H) folded rho
-    between G (x, y) groups on the side that varies in depth and H groups on
-    the fixed side, Zg the G groups' distinct varying coordinates (a list of
-    arrays), S their largest vertical separation from the sheet's singular
-    point (z - z' at its extreme).
+    its census `parts`, each an (R, Zg, S, credit) quadruple: R the (G, H)
+    folded rho between G (x, y) groups on the side that varies in depth and H
+    groups on the fixed side, Zg the G groups' distinct varying coordinates (a
+    list of arrays), S their largest vertical separation (z - z' at its
+    extreme), and `credit` the H groups whose columns the sheet saves.
 
-    The fill's rows on the sheet are the pairs (R[g, h], z) for z in Zg[g],
-    so the rule's counts are the distinct values of R and the distinct pairs.
-    Bounds decide first and the exact counts are taken only between them, so
-    the decision is always the exact rule's: an upper bound (every group pair
-    its own column and every row distinct) that still fails declines, and a
-    lower bound (the distinct rho of a prefix) that already pays takes.
+    The fill's rows on the sheet are the pairs (R[g, h], z) for z in Zg[g].
+    Every row saves its member cost; a column setup is saved only for a rho
+    no other depth asks. The exact route's columns are per rho across every
+    z', so a plane saves the setup of a rho whose fixed-side group holds only
+    that depth (a radial) and not of one whose group spans depths (a rod: its
+    every depth asks the same rho) -- nor does a height sheet save any, for
+    the same reason on the other side (a mast). So the rule is
 
-    A height sheet (`depth`, its reach) is credited with its rows only
-    (`_SHEET_HEIGHT_WEIGHT`)."""
-    rmax = max(float(np.hypot(r, sg[:, None]).max()) for r, _zg, sg in parts)
-    nodes = _sheet_nodes_to(k_p, k_m, d, rmax, depth)
+        distinct credited rho + distinct rows * _SHEET_ROW_WORTH
+            >= nodes * weight,
+
+    weight `_SHEET_BUILD_WEIGHT` (plane) or `_SHEET_HEIGHT_WEIGHT` (height,
+    `depth` its reach). Bounds decide first and the exact counts are taken
+    only between them, so the decision is always the exact rule's: an upper
+    bound (every credited group pair its own column and every row distinct)
+    that still fails declines, and a lower bound (the distinct credited rho
+    of a prefix) that already pays takes."""
+    rho_max = max(float(r.max()) for r, _zg, _sg, _c in parts)
+    s_max = max(float(sg.max()) for _r, _zg, sg, _c in parts)
+    nodes = _sheet_nodes_to(k_p, k_m, d, rho_max, s_max, depth)
+    need = nodes * (_SHEET_BUILD_WEIGHT if depth is None else _SHEET_HEIGHT_WEIGHT)
     w = _SHEET_ROW_WORTH
-    n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg, _s in parts)
-    if depth is not None:
-        need = nodes * _SHEET_HEIGHT_WEIGHT
-        if n_rows_ub * w < need:
-            return False
-        return _distinct_pairs(parts) * w >= need
-    need = nodes * _SHEET_BUILD_WEIGHT
-    n_rho_ub = sum(r.size for r, _zg, _s in parts)
+    n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg, _s, _c in parts)
+    credited = [r[:, c] for r, _zg, _s, c in parts]
+    n_rho_ub = sum(r.size for r in credited)
     if n_rho_ub + n_rows_ub * w < need:
         return False
-    # A prefix of the rho values: its distinct count bounds both counts below.
+    # A prefix of the credited rho: its distinct count bounds both counts
+    # below (every credited rho is some row's).
     cap = int(max(4096, 4 * need))
-    pre, got = [], 0
-    for r, _zg, _s in parts:
+    pre, got = [np.empty(0)], 0
+    for r in credited:
         take = r.ravel()[: cap - got]
         pre.append(take)
         got += take.size
@@ -1646,7 +1653,9 @@ def _plane_pays(k_p, k_m, d, parts, depth=None):
     lb = np.unique(np.concatenate(pre)).size
     if lb * (1.0 + w) >= need:
         return True
-    n_rho = np.unique(np.concatenate([r.ravel() for r, _zg, _s in parts])).size
+    n_rho = np.unique(
+        np.concatenate([np.empty(0)] + [r.ravel() for r in credited])
+    ).size
     return n_rho + _distinct_pairs(parts) * w >= need
 
 
@@ -1657,7 +1666,7 @@ def _distinct_pairs(parts):
     only a z shared by several groups (a horizontal wire's) pays a union, once
     per distinct set of groups."""
     rows_of, count_of, by_z = [], [], collections.defaultdict(list)
-    for r, zg, _s in parts:
+    for r, zg, _s, _c in parts:
         rs = np.sort(r, axis=1)
         cnt = 1 + np.count_nonzero(rs[:, 1:] != rs[:, :-1], axis=1)
         for g, zs in enumerate(zg):
@@ -1762,8 +1771,8 @@ def _census(sides, height, k_p, k_m, a, skip=()):
     bounds each candidate from counts alone: its rows and distinct rho at
     most (every row distinct, every group pair its own column), and its
     reach at least (the farthest horizontal pair, and the largest vertical
-    separation, each attained by some row), which fixes the fewest main
-    panels a sheet reaching it holds. A candidate whose best case cannot pay
+    separation, each attained by some row), which fixes the fewest cells a
+    sheet reaching it holds. A candidate whose best case cannot pay
     for that is declined there -- a Beverage's rod depths, each its own depth
     with two nodes, are hundreds of such. The survivors take the full census
     (`_plane_pays`), one at a time, so only one candidate's rho matrices are
@@ -1781,6 +1790,15 @@ def _census(sides, height, k_p, k_m, a, skip=()):
         fx = fixed[sel]
         vals, inv, cnt = np.unique(fx[:, 2], return_inverse=True, return_counts=True)
         inv = np.asarray(inv).ravel()
+        # A fixed-side node earns its columns' setups only on a plane, and
+        # only when its (x, y) holds no other depth (`_plane_pays`).
+        if height:
+            lone = np.zeros(fx.shape[0], dtype=bool)
+        else:
+            _fxy, finv = _xy_groups(fx[:, 0], fx[:, 1])
+            pairs = np.unique(np.stack([finv, inv], axis=1), axis=0)
+            lone = (np.bincount(pairs[:, 0], minlength=_fxy.shape[0]) == 1)[finv]
+        n_lone = np.bincount(inv, weights=lone, minlength=vals.size)
         big = cnt * vary.shape[0] >= _SHEET_MIN_ROWS
         if not big.any():
             continue
@@ -1799,36 +1817,42 @@ def _census(sides, height, k_p, k_m, a, skip=()):
         for i in np.flatnonzero(big).tolist():
             v = float(vals[i])
             sep = v - zlo if height else zhi - v
-            got = cand.setdefault(v, [0, 0, 0.0])
+            got = cand.setdefault(v, [0, 0, 0.0, 0.0])
             got[0] += int(cnt[i]) * vary.shape[0]
-            got[1] += int(cnt[i]) * gxy.shape[0]
-            got[2] = max(got[2], float(far[i]), sep)
-        per.append((gxy, zg, glo, ghi, fx, vals, inv, big))
+            got[1] += int(n_lone[i]) * gxy.shape[0]
+            got[2] = max(got[2], float(far[i]))
+            got[3] = max(got[3], sep)
+        per.append((gxy, zg, glo, ghi, fx, vals, inv, big, lone))
     w = _SHEET_ROW_WORTH
     weight = _SHEET_HEIGHT_WEIGHT if height else _SHEET_BUILD_WEIGHT
-    per_panel = _SHEET_P * _SHEET_PT * (1 if height else _SHEET_NTAU)
+    per_cell = _SHEET_P * _SHEET_P
     taken = []
     for v in sorted(cand):
-        n_rows, n_rho, reach = cand[v]
+        n_rows, n_rho, rho_lb, s_lb = cand[v]
         if abs(v) < _SHEET_MIN_DEPTH:
             _SHEET_STATS["guarded_rows"] += n_rows
             continue
         d = abs(v)
-        panels = max(0.0, np.ceil(np.log(max(reach, d) / d) / np.log(_SHEET_RATIO)))
+        # The fewest cells: one per dyadic strip each axis must reach (rho
+        # has two below d; a height sheet's s axis may stop at one).
+        n_r = 2 + max(0.0, np.ceil(np.log2(max(rho_lb, d) / d)))
+        n_s = max(1.0, np.ceil(np.log2(max(s_lb, d) / d)))
         best = n_rows * w + (0 if height else n_rho)
-        if best < panels * per_panel * weight or (
-            not height and best < _sheet_nodes_to(k_p, k_m, d, reach) * weight
+        if best < n_r * (1 if height else n_s) * per_cell * weight or (
+            not height and best < _sheet_nodes_to(k_p, k_m, d, rho_lb, s_lb) * weight
         ):
             # The second test is the layout's own count at the least reach.
             _SHEET_STATS["declined_rows"] += n_rows
             continue
         parts, deep = [], 0.0
-        for gxy, zg, glo, ghi, fx, vals, inv, big in per:
+        for gxy, zg, glo, ghi, fx, vals, inv, big, lone in per:
             i = int(np.searchsorted(vals, v))
             if i >= vals.size or vals[i] != v or not big[i]:
                 continue
-            on = fx[inv == i]
-            hxy, _ = _xy_groups(on[:, 0], on[:, 1])
+            on = inv == i
+            hxy, hinv = _xy_groups(fx[on, 0], fx[on, 1])
+            credit = np.ones(hxy.shape[0], dtype=bool)
+            np.logical_and.at(credit, hinv, lone[on])
             if height:
                 sep = v - glo
                 deep = max(deep, -float(glo.min()))
@@ -1839,7 +1863,7 @@ def _census(sides, height, k_p, k_m, a, skip=()):
                 gxy[:, 1][:, None] - hxy[:, 1][None, :],
             )
             np.hypot(r, a, out=r)  # radius_fold, in place
-            parts.append((r, zg, sep))
+            parts.append((r, zg, sep, credit))
         depth = _height_reach(deep) if height else None
         if not _plane_pays(k_p, k_m, d, parts, depth):
             _SHEET_STATS["declined_rows"] += n_rows
@@ -1869,7 +1893,12 @@ def _sheet_planes(sub, k_p, k_m):
         inv = np.asarray(inv).ravel()
         rr = rho[on]
         parts = [
-            (rr[inv == g][None, :], [zs[g : g + 1]], np.array([zs[g] - v]))
+            (
+                rr[inv == g][None, :],
+                [zs[g : g + 1]],
+                np.array([zs[g] - v]),
+                np.ones(int(np.count_nonzero(inv == g)), dtype=bool),
+            )
             for g in range(zs.size)
         ]
         if not _plane_pays(k_p, k_m, -v, parts):
@@ -1887,49 +1916,55 @@ def _sheet_planes(sub, k_p, k_m):
     return out, take
 
 
-def _sheet_panel(k_p, k_m, d, i, depth=None):
-    """Main panel i of the sheet at distance d: its u edges and how it is
-    split, (u0, u1, n_u, n_t, t0) -- n_u sub-panels in u, each with n_t tau
-    panels over [t0, 1]. A function of its arguments alone, which is what
-    fixes every node.
+def _sheet_strip(k_p, k_m, d, i, axis, depth=None):
+    """Dyadic strip i of a sheet's `axis` ("rho" or "s") at distance d from
+    its singular point: `(lo, hi, n)`, split into n equal cells, or None past
+    a height sheet's s reach (d + `depth`). A function of its arguments alone,
+    which is what fixes every node.
 
-    A plane sheet (`depth` None) spans tau in [0, 1]. A height sheet reaches
-    only z' >= -depth: t0 is the tau of that depth at the panel's inner edge
-    (tau at a fixed depth grows with R, so it holds across the panel), and
-    its tau panels are sized to the SOIL's wavelength wherever R is, because
-    the varying coordinate z' is in the soil and near the interface its wave
-    never dies (the plane sheet's panels past the soil's dead radius are
-    sized to the air's, which a height sheet measured failing at 1e-2)."""
-    lnd, lnr = float(np.log(d)), float(np.log(_SHEET_RATIO))
-    u0 = lnd + i * lnr
-    u1 = lnd + (i + 1) * lnr
-    r_lo, r_hi = float(np.exp(u0)), float(np.exp(u1))
-    wl = _SHEET_WAVES * _sheet_wavelength(k_p, k_m, r_lo)
-    n_u = max(1, int(np.ceil(r_hi * lnr / wl)))
-    arc = r_hi * float(np.arccos(min(1.0, d / r_hi)))
-    if depth is None:
-        return u0, u1, n_u, max(_SHEET_NTAU, int(np.ceil(arc / wl))), 0.0
-    t0 = 0.0
-    if d + depth < r_lo:
-        t0 = float(np.arccos((d + depth) / r_lo) / np.arccos(d / r_lo))
-    wt = min(wl, _SHEET_WAVES * 2.0 * np.pi / abs(k_m))
-    n_t = max(
-        int(np.ceil(_SHEET_NTAU * (1.0 - t0))), int(np.ceil(arc * (1.0 - t0) / wt))
-    )
-    return u0, u1, n_u, n_t, t0
+    rho: [0, d/2], [d/2, d], then [d 2^k, d 2^(k+1)]; the wavelength is the
+    one alive at R >= max(lo, d). s: [d 2^k, d 2^(k+1)], clipped at d + depth
+    on a height sheet, whose s axis runs through the soil near the interface,
+    where its wave never dies, so it takes the soil's wavelength."""
+    if axis == "rho":
+        if i == 0:
+            lo, hi = 0.0, 0.5 * d
+        elif i == 1:
+            lo, hi = 0.5 * d, d
+        else:
+            lo, hi = d * 2.0 ** (i - 2), d * 2.0 ** (i - 1)
+        wl = _sheet_wavelength(k_p, k_m, max(lo, d))
+    else:
+        lo, hi = d * 2.0**i, d * 2.0 ** (i + 1)
+        if depth is None:
+            wl = _sheet_wavelength(k_p, k_m, lo)
+        else:
+            if lo >= d + depth:
+                return None
+            hi = min(hi, d + depth)
+            wl = 2.0 * np.pi / abs(k_m)
+    return lo, hi, max(1, int(np.ceil((hi - lo) / (_SHEET_WAVES * wl))))
 
 
-def _sheet_nodes_to(k_p, k_m, d, rmax, depth=None):
-    """The nodes a sheet at distance d (reaching `depth`, a height sheet)
-    holds once it reaches `rmax`."""
-    u_need = float(np.log(rmax))
-    n, i = 0, 0
+def _sheet_axis(k_p, k_m, d, axis, reach, depth=None):
+    """The strips of `axis` a sheet holds once it reaches `reach`."""
+    out, i = [], 0
     while True:
-        u0, _u1, n_u, n_t, _t0 = _sheet_panel(k_p, k_m, d, i, depth)
-        if u0 >= u_need:
-            return n
-        n += n_u * n_t * _SHEET_P * _SHEET_PT
+        st = _sheet_strip(k_p, k_m, d, i, axis, depth)
+        if st is None:
+            return out
+        out.append(st)
+        if st[1] >= reach:
+            return out
         i += 1
+
+
+def _sheet_nodes_to(k_p, k_m, d, rho_max, s_max, depth=None):
+    """The nodes a sheet at distance d (reaching `depth`, a height sheet)
+    holds once it covers rho <= `rho_max` and s <= `s_max`."""
+    n_r = sum(n for _lo, _hi, n in _sheet_axis(k_p, k_m, d, "rho", rho_max))
+    n_s = sum(n for _lo, _hi, n in _sheet_axis(k_p, k_m, d, "s", s_max, depth))
+    return n_r * n_s * _SHEET_P * _SHEET_P
 
 
 def _sheet_wavelength(k_p, k_m, r_lo):
@@ -1943,29 +1978,28 @@ def _sheet_wavelength(k_p, k_m, r_lo):
 
 class PlaneSheet:
     """The six kernels on one plane z' = zp < 0, tabulated over the above
-    half-plane out to `rmax` (grown on demand by whole R panels).
+    half-plane (rho, s = z - z' >= d) as far as asked (grown on demand by
+    whole dyadic strips, `_sheet_strip`).
 
     With `height=True` it is the mirror sheet (Design E phase 2): ONE
-    observer height z = zp > 0 over the below half-plane (rho, z' <= 0), for
-    a horizontal wire over conductors that spread in depth (the Beverage over
-    its rods). The map is the same with d = h and s = z - z' the vertical
-    separation, so tau = 1 is z' = 0 as it is z = 0 on a plane sheet; `zp`
-    names the FIXED coordinate either way.
+    observer height z = zp > 0 over (rho, z' <= 0), reaching z' >= -`depth`.
+    `zp` names the FIXED coordinate either way, and d = |zp|.
 
-    Panel edges are FIXED: main panel i spans R in [d r^i, d r^(i+1)] and its
-    u / tau split depends on i alone, so growing a sheet appends nodes and
-    never moves one. A row's value therefore does not depend on how far the
-    sheet had been grown, or by whom."""
+    Strip edges are FIXED, and each node is evaluated in the column of its
+    rho and its dyadic s strip, whose members are always that strip's s
+    nodes: growing a sheet appends cells and never moves or re-evaluates one.
+    A row's value therefore does not depend on how far the sheet had been
+    grown, or by whom."""
 
     def __init__(self, k_p, k_m, zp, lam_mult, height=False, depth=None):
         self.height = bool(height)
         if self.height and not (depth is not None and depth > 0.0):
             raise ValueError(f"a height sheet needs a depth reach > 0, got {depth!r}")
-        self.depth = float(depth) if self.height else None
         if self.height and not zp > 0.0:
             raise ValueError(f"a height sheet needs z > 0, got {zp!r}")
         if not self.height and not zp < 0.0:
             raise ValueError(f"a plane sheet needs z' < 0, got {zp!r}")
+        self.depth = float(depth) if self.height else None
         self.k_p, self.k_m, self.zp, self.d = (
             float(k_p),
             complex(k_m),
@@ -1974,72 +2008,78 @@ class PlaneSheet:
         )
         self.lam_mult = float(lam_mult)
         self.x, self.bw = _cheb(_SHEET_P)
-        self.xt, self.bwt = _cheb(_SHEET_PT)
-        self.n_main = 0
-        self.u_edges = [float(np.log(self.d))]
-        self.ntau = []
-        self.voff = []
-        self.t0 = []
+        # Per axis: its dyadic strips, and its cells as (lo, hi, strip).
+        self.strips = {"rho": [], "s": []}
+        self.cells = {"rho": [], "s": []}
+        self._off = {}  # (rho cell, s cell) -> first node
         self._vals = []
         self.n_nodes = 0
         self._flat = None
 
-    @property
-    def u_top(self):
-        return self.u_edges[-1]
+    def _grow(self, axis, reach):
+        """Append `axis`'s strips up to `reach`; returns the new strips'
+        indices."""
+        have = self.strips[axis]
+        want = _sheet_axis(self.k_p, self.k_m, self.d, axis, reach, self.depth)
+        new = list(range(len(have), len(want)))
+        for i in new:
+            lo, hi, n = want[i]
+            have.append(want[i])
+            for q in range(n):
+                a = lo + (hi - lo) * q / n
+                b = hi if q == n - 1 else lo + (hi - lo) * (q + 1) / n
+                self.cells[axis].append((a, b, i))
+        return new
 
-    def cover(self, rmax):
-        """Grow the table by whole main panels until it reaches `rmax`."""
-        u_need = float(np.log(rmax))
-        new_u, new_t = [], []
-        offset = self.n_nodes
-        per = _SHEET_P * _SHEET_PT
-        while self.u_top < u_need:
-            u0, u1, n_u, n_t, t0 = _sheet_panel(
-                self.k_p, self.k_m, self.d, self.n_main, self.depth
-            )
-            for q in range(n_u):
-                a = u0 + (u1 - u0) * q / n_u
-                b = u1 if q == n_u - 1 else u0 + (u1 - u0) * (q + 1) / n_u
-                uu = 0.5 * (a + b) + 0.5 * (b - a) * self.x
-                self.voff.append(offset)
-                self.ntau.append(n_t)
-                self.t0.append(t0)
-                self.u_edges.append(b)
-                for jt in range(n_t):
-                    tt = t0 + (1.0 - t0) * ((jt + 0.5 + 0.5 * self.xt) / n_t)
-                    U, T = np.meshgrid(uu, tt, indexing="ij")
-                    new_u.append(U.ravel())
-                    new_t.append(T.ravel())
-                offset += n_t * per
-            self.n_main += 1
-        if not new_u:
+    def _nodes(self, axis, strip):
+        """The cells of one strip of `axis` and their Chebyshev nodes."""
+        ids = [c for c, (_a, _b, i) in enumerate(self.cells[axis]) if i == strip]
+        pts = [
+            0.5 * (a + b) + 0.5 * (b - a) * self.x
+            for a, b, _i in (self.cells[axis][c] for c in ids)
+        ]
+        return ids, np.concatenate(pts)
+
+    def cover(self, rho_max, s_max):
+        """Grow the table by whole strips until it covers rho <= `rho_max`
+        and s <= `s_max`, evaluating only the new cells."""
+        new_r = self._grow("rho", rho_max)
+        new_s = self._grow("s", s_max)
+        n_r, n_s = len(self.strips["rho"]), len(self.strips["s"])
+        pairs = [
+            (i, j) for i in range(n_r) for j in range(n_s) if i in new_r or j in new_s
+        ]
+        if not pairs:
             return
-        vals = self._evaluate(np.concatenate(new_u), np.concatenate(new_t))
-        self._vals.append(vals)
-        self.n_nodes = offset
-        self._flat = None
-        _SHEET_STATS["nodes_built"] += vals.shape[0]
-
-    def _evaluate(self, u, tau):
-        """The six kernels times R^pw at nodes (u, tau), each through the
-        column twin as a column of one."""
-        R = np.exp(u)
-        th = tau * np.arccos(np.minimum(1.0, self.d / R))
-        rho = R * np.sin(th)
+        p = _SHEET_P
+        rho_c, sizes, svals, place = [], [], [], []
+        s_nodes = {j: self._nodes("s", j) for j in {j for _i, j in pairs}}
+        r_nodes = {i: self._nodes("rho", i) for i in {i for i, _j in pairs}}
+        for i, j in pairs:
+            r_ids, rn = r_nodes[i]
+            s_ids, sn = s_nodes[j]
+            for k, r in enumerate(rn.tolist()):
+                rho_c.append(r)
+                sizes.append(sn.size)
+                svals.append(sn)
+                place.append((r_ids[k // p], k % p, s_ids))
+        rho_c = np.asarray(rho_c)
+        sizes = np.asarray(sizes, dtype=np.intp)
+        offsets = np.zeros(sizes.size + 1, dtype=np.intp)
+        offsets[1:] = np.cumsum(sizes)
+        s_all = np.concatenate(svals)
         if self.height:
-            z = np.full(rho.size, self.zp)
-            zq = np.minimum(self.zp - R * np.cos(th), 0.0)
+            z = np.full(s_all.size, self.zp)
+            zq = np.minimum(self.zp - s_all, 0.0)
         else:
-            z = np.maximum(self.zp + R * np.cos(th), 0.0)
-            zq = np.full(rho.size, self.zp)
-        n = rho.size
+            z = np.maximum(self.zp + s_all, 0.0)
+            zq = np.full(s_all.size, self.zp)
         vals = np.asarray(
             _nia.near_interface_six_columns(
                 self.k_p,
                 self.k_m,
-                np.ascontiguousarray(rho),
-                np.arange(n + 1, dtype=np.intp),
+                rho_c,
+                offsets,
                 np.ascontiguousarray(z),
                 np.ascontiguousarray(zq),
                 self.lam_mult,
@@ -2050,53 +2090,77 @@ class PlaneSheet:
                 _GW,
             )
         )
-        Rn = np.hypot(rho, z - zq)
+        Rn = np.hypot(np.repeat(rho_c, sizes), z - zq)
         vals[:, :3] *= Rn[:, None]
         vals[:, 3:] *= (Rn * Rn)[:, None]
-        return vals
+        # Scatter the columns into (rho cell, s cell) blocks laid out
+        # [rho node][s node][kernel], appended after the existing nodes.
+        blocks = {}
+        for c, (a, k, s_ids) in enumerate(place):
+            col = vals[offsets[c] : offsets[c + 1]].reshape(len(s_ids), p, 6)
+            for q, b in enumerate(s_ids):
+                blk = blocks.get((a, b))
+                if blk is None:
+                    blk = blocks[(a, b)] = np.empty((p, p, 6), dtype=np.complex128)
+                blk[k] = col[q]
+        off = self.n_nodes
+        for key in sorted(blocks):
+            self._off[key] = off
+            self._vals.append(blocks[key].reshape(p * p, 6))
+            off += p * p
+        _SHEET_STATS["nodes_built"] += off - self.n_nodes
+        self.n_nodes = off
+        self._flat = None
 
     def arrays(self):
         if self._flat is None:
+            n_r, n_s = len(self.cells["rho"]), len(self.cells["s"])
+            cell_off = np.empty((n_r, n_s), dtype=np.int64)
+            for (a, b), o in self._off.items():
+                cell_off[a, b] = o
             self._flat = (
-                np.asarray(self.u_edges, dtype=float),
-                np.asarray(self.ntau, dtype=np.int64),
-                np.asarray(self.voff, dtype=np.int64),
-                np.asarray(self.t0, dtype=float),
+                np.asarray(
+                    [c[0] for c in self.cells["rho"]] + [self.cells["rho"][-1][1]],
+                    dtype=float,
+                ),
+                np.asarray(
+                    [c[0] for c in self.cells["s"]] + [self.cells["s"][-1][1]],
+                    dtype=float,
+                ),
+                cell_off,
                 np.ascontiguousarray(np.concatenate(self._vals)),
             )
         return self._flat
 
     def interpolate(self, sub, idx, out):
-        """out[idx] = the six kernels at rows sub[idx], all on this plane."""
-        u_edges, ntau, voff, t0, vals = self.arrays()
-        _nia.near_interface_plane_sheet(
+        """out[idx] = the six kernels at rows sub[idx], all on this sheet."""
+        rho_edges, s_edges, cell_off, vals = self.arrays()
+        _nia.near_interface_grid_sheet(
             sub,
             idx,
             self.zp,
-            u_edges,
-            ntau,
-            voff,
-            t0,
+            self.height,
+            rho_edges,
+            s_edges,
+            cell_off,
             self.x,
             self.bw,
-            self.xt,
-            self.bwt,
             vals,
             out,
             _physical_cpu_count(),
-            self.height,
         )
 
 
-def _plane_sheet(k_p, k_m, zp, lam_mult, rmax, height=False, depth=None):
+def _plane_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=None):
     """The cached sheet of plane `zp` (or of height `zp` reaching `depth`,
-    `height`), grown to reach `rmax`.
+    `height`), grown to cover rho <= `rho_max` and s <= `s_max`.
 
     Keyed on everything a node's value depends on. Sheets are shared across
     calls and solves; that cannot move a bit, because a node's value depends
     only on its key and its fixed position (`PlaneSheet`), never on when or
     how far the sheet was grown."""
     key = (
+        "grid",
         bool(height),
         None if depth is None else float(depth),
         float(k_p),
@@ -2106,9 +2170,6 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rmax, height=False, depth=None):
         int(_COLUMN_P),
         float(_DETOUR),
         _SHEET_P,
-        _SHEET_PT,
-        _SHEET_NTAU,
-        _SHEET_RATIO,
         _SHEET_WAVES,
         _SHEET_DEAD,
     )
@@ -2120,7 +2181,7 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rmax, height=False, depth=None):
         _SHEET_CACHE[key] = sheet
         while len(_SHEET_CACHE) > _SHEET_CACHE_MAX:
             _SHEET_CACHE.popitem(last=False)
-        sheet.cover(rmax)
+        sheet.cover(rho_max, s_max)
         return sheet
 
 
@@ -2147,11 +2208,12 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
         vals = np.unique(fixed[mask])
         for v in vals.tolist():
             idx = np.flatnonzero(mask & (fixed == v))
-            rmax = float(np.hypot(sub[idx, 0], sub[idx, 1] - sub[idx, 2]).max())
+            rho_max = float(sub[idx, 0].max())
+            s_max = float((sub[idx, 1] - sub[idx, 2]).max())
             depth = None
             if height:
                 depth = float(plan.depths[np.searchsorted(plan.heights, v)])
-            sheet = _plane_sheet(k_p, k_m, v, lam_mult, rmax, height, depth)
+            sheet = _plane_sheet(k_p, k_m, v, lam_mult, rho_max, s_max, height, depth)
             sheet.interpolate(sub, idx, out)
         n_sheets += int(vals.size)
         if height:

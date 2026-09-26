@@ -105,11 +105,15 @@ def _envelope_error(sub, got, ref):
     return float((np.abs(got - ref) / env).max())
 
 
+def _reach(sub):
+    """The (rho, s = z - z') a sheet must cover for rows `sub`."""
+    return float(sub[:, 0].max()), float((sub[:, 1] - sub[:, 2]).max())
+
+
 def _sheet_at(sub):
     zp = float(sub[0, 2])
-    R = np.hypot(sub[:, 0], sub[:, 1] - zp)
     sheet = ni.PlaneSheet(K_P, K_M, zp, ni._LAM_MULT)
-    sheet.cover(float(R.max()))
+    sheet.cover(*_reach(sub))
     out = np.empty((sub.shape[0], 6), dtype=np.complex128)
     sheet.interpolate(sub, np.arange(sub.shape[0]), out)
     return sheet, out
@@ -121,38 +125,56 @@ def _sheet_at(sub):
 
 
 def test_the_sheet_is_the_twin_at_its_rows():
-    """Soil A, 7 MHz, the radials' 0.15 m plane: 1.1e-9 measured."""
+    """Soil A, 7 MHz, the radials' 0.15 m plane: 1.6e-9 measured (the strip
+    grid; phase 1's polar table read 1.1e-9)."""
     sub = _plane_rows(-0.15)
     _sheet, got = _sheet_at(sub)
     assert _envelope_error(sub, got, _twin(sub)) < 1e-8
 
 
 def test_a_coarse_table_fails_the_same_check(monkeypatch):
-    """The negative control: a p = 3 table (Design E's, uncapped, reads
-    4.8e-2 Ω on invl x2) must fail the tolerance the production table
+    """The negative control: a p = 3 table (1.9e-2 here; phase 1's polar p = 3
+    read 4.8e-2 Ω on invl x2) must fail the tolerance the production table
     passes."""
     monkeypatch.setattr(ni, "_SHEET_P", 3)
-    monkeypatch.setattr(ni, "_SHEET_PT", 3)
     sub = _plane_rows(-0.15)
     _sheet, got = _sheet_at(sub)
     assert _envelope_error(sub, got, _twin(sub)) > 1e-4
 
 
+def _blocks(sheet):
+    """Each cell's (p * p, 6) block by its (rho cell, s cell), and the edges."""
+    re, se, off, vals = sheet.arrays()
+    n = ni._SHEET_P * ni._SHEET_P
+    cells = {
+        (a, b): vals[off[a, b] : off[a, b] + n]
+        for a in range(off.shape[0])
+        for b in range(off.shape[1])
+    }
+    return re, se, cells
+
+
 def test_a_grown_sheet_keeps_every_node():
-    """Growing a sheet appends panels and never moves a node, so a row's
-    value does not depend on how far the sheet had been grown before."""
+    """Growing a sheet appends cells and never moves or re-evaluates a node,
+    in either direction, so a row's value does not depend on how far the
+    sheet had been grown before, or in what order."""
     sub = _plane_rows(-0.15, n=200, rmax=3.0)
     zp = float(sub[0, 2])
-    rmax = float(np.hypot(sub[:, 0], sub[:, 1] - zp).max())
+    rho_max, s_max = _reach(sub)
     once = ni.PlaneSheet(K_P, K_M, zp, ni._LAM_MULT)
-    once.cover(rmax)
+    once.cover(rho_max, s_max)
     twice = ni.PlaneSheet(K_P, K_M, zp, ni._LAM_MULT)
-    twice.cover(1.0)
+    twice.cover(0.5, 0.5)
     small = twice.n_nodes
-    twice.cover(rmax)
-    assert twice.n_nodes > small
-    for a, b in zip(once.arrays(), twice.arrays(), strict=True):
-        assert np.array_equal(a, b)
+    twice.cover(rho_max, 0.5)
+    twice.cover(rho_max, s_max)
+    assert small < twice.n_nodes == once.n_nodes
+    ra, sa, ca = _blocks(once)
+    rb, sb, cb = _blocks(twice)
+    assert np.array_equal(ra, rb) and np.array_equal(sa, sb)
+    assert ca.keys() == cb.keys()
+    for key, blk in ca.items():
+        assert np.array_equal(blk, cb[key]), key
     idx = np.arange(sub.shape[0])
     got = [np.empty((sub.shape[0], 6), dtype=np.complex128) for _ in range(2)]
     once.interpolate(sub, idx, got[0])
@@ -168,7 +190,7 @@ def test_the_table_refuses_a_row_it_cannot_answer():
     for bad in ([1.0, 1.0, -0.2], [1.0, -1e-3, -0.15], [1e4, 1.0, -0.15]):
         rows = np.ascontiguousarray(np.vstack([sub, bad]))
         out = np.empty((rows.shape[0], 6), dtype=np.complex128)
-        with pytest.raises(ValueError, match="off the plane sheet"):
+        with pytest.raises(ValueError, match="off the sheet"):
             sheet.interpolate(rows, np.arange(rows.shape[0]), out)
 
 
@@ -222,7 +244,7 @@ def test_a_plane_is_tabulated_only_when_its_rows_pay_for_it():
     same plane, reaching as far, is declined when it is one exact-rho column
     (the exact route pays one setup) and taken when every row is its own
     column (the inverted-L's top wire over its radials)."""
-    n_nodes = ni._sheet_nodes_to(K_P, K_M, 0.15, 10.0)
+    n_nodes = ni._sheet_nodes_to(K_P, K_M, 0.15, 10.0, 10.15)
     n = n_nodes + 64
     z = np.linspace(0.0, 10.0, n)
     shared = np.stack([np.full(n, 3.0), z, np.full(n, -0.15)], axis=1)
@@ -285,7 +307,7 @@ def test_the_counters_account_for_every_row(invl_fills):
     _Z, stats = invl_fills
     on, off = stats["on"], stats["off"]
     assert on["sheet_rows"] + on["exact_rows"] == off["exact_rows"]
-    assert on["nodes_built"] >= on["sheets_built"] * ni._SHEET_P * ni._SHEET_PT
+    assert on["nodes_built"] >= on["sheets_built"] * ni._SHEET_P**2
     # Two fills (razor's forward and reversed blocks), each planning once;
     # a plane both take is one sheet, built once and serving both.
     assert on["fills_planned"] == 2 and on["planes_planned"] >= 2
@@ -359,9 +381,10 @@ def test_no_plan_is_the_exact_route(monkeypatch):
 def test_the_census_is_the_rule_on_the_fills_rows(monkeypatch):
     """`sheet_plan`'s grouped census decides as the rule does on the fill's
     rows spelled out (`_sheet_planes`), on a mast (one (x, y) group, many z),
-    a horizontal wire (many groups, one z) and both, and at build weights
-    either side of each plane's score, so both bounds and the exact count
-    are exercised."""
+    a horizontal wire (many groups, one z) and both, over radials (whose
+    every rho is credited: no other depth shares its (x, y)), and at build
+    weights either side of each plane's score, so both bounds and the exact
+    count are exercised."""
     rng = np.random.default_rng(1173)
     mast = np.stack([np.zeros(40), np.zeros(40), np.linspace(0.0, 10.0, 40)], 1)
     wire = np.stack([np.linspace(0.0, 5.0, 60), np.zeros(60), np.full(60, 10.0)], 1)
@@ -373,8 +396,7 @@ def test_the_census_is_the_rule_on_the_fills_rows(monkeypatch):
             for t in (np.linspace(0.05, 9.0, 30),)
         ]
     )
-    rod = np.stack([np.full(12, 3.0), np.zeros(12), np.linspace(-0.05, -1.0, 12)], 1)
-    below = np.concatenate([rad, rod])
+    below = rad
     a_wire = 1e-3
     for above in (mast, wire, np.concatenate([mast, wire])):
         rho = np.hypot(
@@ -414,30 +436,27 @@ def _height_rows(h, n=600, rmax=40.0, dmax=3.0, seed=7):
 
 def _height_sheet_at(sub):
     h = float(sub[0, 1])
-    R = np.hypot(sub[:, 0], sub[:, 1] - sub[:, 2])
     deep = float(-sub[:, 2].min())
     sheet = ni.PlaneSheet(
         K_P, K_M, h, ni._LAM_MULT, height=True, depth=ni._height_reach(deep)
     )
-    sheet.cover(float(R.max()))
+    sheet.cover(*_reach(sub))
     out = np.empty((sub.shape[0], 6), dtype=np.complex128)
     sheet.interpolate(sub, np.arange(sub.shape[0]), out)
     return sheet, out
 
 
 def test_the_height_sheet_is_the_twin_at_its_rows():
-    """A Beverage-like height (2.5 m) over rods to 3 m, reaching 40 m: 4.4e-8
-    measured, on dz'W near the reach (soil A, 7 MHz; the plane sheet's 28 MHz
-    rung reads 7.1e-8 at the same one-wavelength cap). Half a wavelength
-    reads 4.0e-10 at 3.5x the nodes."""
+    """A Beverage-like height (2.5 m) over rods to 3 m, reaching 40 m: 1.8e-9
+    measured (soil A, 7 MHz; the polar layout read 4.4e-8 on dz'W near the
+    reach)."""
     sub = _height_rows(2.5)
     _sheet, got = _height_sheet_at(sub)
-    assert _envelope_error(sub, got, _twin(sub)) < 1e-7
+    assert _envelope_error(sub, got, _twin(sub)) < 1e-8
 
 
 def test_a_coarse_height_sheet_fails_the_same_check(monkeypatch):
     monkeypatch.setattr(ni, "_SHEET_P", 3)
-    monkeypatch.setattr(ni, "_SHEET_PT", 3)
     sub = _height_rows(2.5)
     _sheet, got = _height_sheet_at(sub)
     assert _envelope_error(sub, got, _twin(sub)) > 1e-4
@@ -457,7 +476,7 @@ def test_the_height_sheet_refuses_a_row_it_cannot_answer():
     ):
         rows = np.ascontiguousarray(np.vstack([sub, bad]))
         out = np.empty((rows.shape[0], 6), dtype=np.complex128)
-        with pytest.raises(ValueError, match="off the plane sheet"):
+        with pytest.raises(ValueError, match="off the sheet"):
             sheet.interpolate(rows, np.arange(rows.shape[0]), out)
 
 
@@ -565,3 +584,24 @@ def test_a_height_row_is_the_same_in_every_cut_of_the_fill(beverage_fills, cut):
     Z, stats = beverage_fills
     assert stats[cut]["height_rows"] > 0
     assert np.array_equal(Z[cut], Z["on"])
+
+
+def test_a_rods_depths_earn_no_column_credit(monkeypatch):
+    """A rod's every depth asks the same rho from each above node, so taking
+    one depth saves no column: its plane is scored on its rows alone. The
+    same rows at a radial's lone depths are credited with their rho and
+    taken. (Credited like radials, the Beverage's 58 rod depths took 165 k
+    nodes at nseg 84 and slowed the warm solve 2.5 -> 4.7 s.)"""
+    monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 64)
+    monkeypatch.setattr(ni, "_SHEET_HEIGHT_WEIGHT", 1e9)  # planes only here
+    wire = np.stack([np.linspace(0.0, 30.0, 400), np.zeros(400), np.full(400, 2.5)], 1)
+    depths = np.linspace(-0.3, -1.5, 8)
+    rod = np.stack([np.zeros(8), np.zeros(8), depths], 1)
+    # The same depths, each at its own (x, y): one lone node per plane.
+    lone = np.stack([np.linspace(0.3, 2.4, 8), np.zeros(8), depths], 1)
+    weight = 0.05
+    monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", weight)
+    on_rod = ni.sheet_plan(EPS_T, K_P, [(wire, rod)], 1e-3)
+    on_lone = ni.sheet_plan(EPS_T, K_P, [(wire, lone)], 1e-3)
+    assert on_rod.planes.size == 0
+    assert on_lone.planes.size == depths.size
