@@ -144,8 +144,8 @@ def assembled(s, loading):
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            with s._operating_medium(geom):
-                G, seg_view = s._assemble_Z(geom, s.k)
+            with s._operating_medium(geom) as medium:
+                G, seg_view = s._assemble_Z(geom, s.k, s._medium_eta(medium))
                 k = s.k
     finally:
         s._loading_active = saved

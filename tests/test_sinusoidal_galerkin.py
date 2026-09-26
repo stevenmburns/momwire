@@ -1441,7 +1441,7 @@ def _without_the_282_contact_correction():
     """
     cls = SinusoidalGalerkinSolver
     orig = cls._contact_charge_correction_tested
-    cls._contact_charge_correction_tested = lambda self, G, geom, k, sv, ctx: G
+    cls._contact_charge_correction_tested = lambda self, G, geom, k, sv, ctx, **kw: G
     try:
         yield
     finally:

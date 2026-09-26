@@ -106,10 +106,10 @@ def test_the_ground_block_actually_runs_in_the_collapse():
     prep = SinusoidalGalerkinSolver._somm_remainder_below_prepare
     replay = SinusoidalGalerkinSolver._replay_somm_remainder_below
 
-    def f(self, geom, k, ctx, contribs, fg):
+    def f(self, geom, k, ctx, contribs, fg, **kw):
         seen["fold"] += 1
         seen["coef"].append(complex(fg.image_coefficient))
-        return fold(self, geom, k, ctx, contribs, fg)
+        return fold(self, geom, k, ctx, contribs, fg, **kw)
 
     def p(self, *a, **kw):
         seen["prepare"] += 1
@@ -252,15 +252,35 @@ def test_the_complex_twin_is_the_buried_fill():
 
 
 def test_the_operating_point_is_scoped_and_restores():
+    """`_operating_medium` scopes the solve's k; eta is an ARGUMENT
+    (momwire#995), so the solver's own is never touched and the medium's is
+    read through `_medium_eta`."""
     s = sg_dipole(depth=1.5)
     geom = s._build_geometry()
     k_before, eta_before = s.k, s.eta
     with s._operating_medium(geom) as medium:
         assert np.iscomplexobj(s.k) and s.k.imag <= 0.0
         assert s.k == medium.k_m
-        assert s.eta == np.sqrt(s.mu / medium.eps_m)
+        assert s.eta == eta_before
+        assert s._medium_eta(medium) == np.sqrt(s.mu / medium.eps_m)
         assert medium.a_m == -medium.c2  # measured, not derived (phase 0)
     assert s.k == k_before and s.eta == eta_before
+    assert s._medium_eta(None) == s.eta
+
+
+def test_a_fill_at_k_m_without_its_eta_is_refused():
+    """momwire#995: the half-set operating point — k_m with air's eta — is
+    wrong by |eta_0/eta_m| and used to SOLVE. Now it is an exception, at the
+    matrix and at the one-block entry points alike."""
+    s = sg_dipole(depth=1.5)
+    geom = s._build_geometry()
+    with s._operating_medium(geom) as medium:
+        with pytest.raises(ValueError, match="momwire#995"):
+            s._assemble_Z(geom, s.k)
+        with pytest.raises(ValueError, match="momwire#995"):
+            s._lumped_pair_block(np.zeros((1, 3)), np.ones((1, 3)), medium.k_m)
+        G, _ = s._assemble_Z(geom, s.k, s._medium_eta(medium))
+    assert np.all(np.isfinite(G))
 
 
 # `slow` because serving a mixed deck builds SOMMERFELD GRIDS, whose cost is
