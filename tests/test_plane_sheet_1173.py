@@ -192,7 +192,8 @@ def test_no_sheet_serves_the_corner(monkeypatch):
     assert [v for v, _r in planes] == [-g]
     assert np.all(rows[take, 2] == -g)
     assert ni._SHEET_STATS["guarded_rows"] == 120
-    got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT)
+    plan = ni.SheetPlan([v for v, _r in planes])
+    got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT, plan=plan)
     assert ni._SHEET_STATS["sheet_rows"] == 120
     assert ni._SHEET_STATS["exact_rows"] == 240
     ref = ni._column_twin(K_P, K_M, rows[~take], ni._LAM_MULT)
@@ -247,9 +248,10 @@ def _fill(deck):
 @pytest.fixture(scope="module")
 def invl_fills():
     """The inverted-L over one radial, filled with the sheets off and on (the
-    radials' plane carries ~2.3 k and ~2.9 k rows in its two big calls, so a
-    512-row pre-filter with the cost rule off takes that one plane and no
-    other; at the shipped rule a deck this small builds no table). Returns
+    radials' plane carries a few thousand rows in each of razor's two fills,
+    so a 512-row pre-filter with the cost rule off takes it, and the rise's
+    planes with it; at the shipped rule a deck this small builds no table).
+    Returns
     ({name: Z}, {name: stats})."""
     deck = invl_deck(n_radials=1)
     Z, stats = {}, {}
@@ -284,8 +286,12 @@ def test_the_counters_account_for_every_row(invl_fills):
     on, off = stats["on"], stats["off"]
     assert on["sheet_rows"] + on["exact_rows"] == off["exact_rows"]
     assert on["nodes_built"] >= on["sheets_built"] * ni._SHEET_P * ni._SHEET_PT
-    assert on["sheet_planes"] == 2 and on["sheets_built"] == 1
+    # Two fills (razor's forward and reversed blocks), each planning once;
+    # a plane both take is one sheet, built once and serving both.
+    assert on["fills_planned"] == 2 and on["planes_planned"] >= 2
+    assert 1 <= on["sheets_built"] < on["planes_planned"]
     assert off["sheet_rows"] == off["sheet_planes"] == off["nodes_built"] == 0
+    assert off["fills_planned"] == 0
 
 
 def test_the_switch_off_evaluates_through_the_twin(monkeypatch):
@@ -297,9 +303,91 @@ def test_the_switch_off_evaluates_through_the_twin(monkeypatch):
     monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 16)
     monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
     rows = _plane_rows(-0.15, n=30)
-    got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT)
+    plan = ni.SheetPlan([-0.15])
+    got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT, plan=plan)
     assert np.array_equal(got, ni._column_twin(K_P, K_M, rows, ni._LAM_MULT))
-    vals, pos = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT, permuted=True)
+    vals, pos = ni._evaluate_fresh(
+        EPS_T, K_P, rows, 1e-10, ni._LAM_MULT, permuted=True, plan=plan
+    )
     assert np.array_equal(vals[pos], got)
     assert ni._SHEET_STATS["sheet_rows"] == 0
     assert ni._SHEET_STATS["exact_rows"] == 2 * rows.shape[0]
+
+
+# ----------------------------------------------------------------------
+# the plan is the fill's (Design E phase 2): no call can decide differently
+# ----------------------------------------------------------------------
+
+
+def test_a_plane_row_is_the_same_in_any_cut_of_the_rows(monkeypatch):
+    """Under one plan a row's value does not depend on the call it arrives
+    in: the same rows asked as one call, as two halves, and interleaved with
+    rows of another depth give the same floats, sheet rows and exact rows
+    alike. Phase 1 decided per call, and a half below the pre-filter took the
+    twin for the rows its sibling interpolated."""
+    monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 64)
+    on = _plane_rows(-0.15, n=200)
+    off = _plane_rows(-0.4, n=40, seed=5)
+    rows = np.ascontiguousarray(np.concatenate([on, off]))
+    plan = ni.SheetPlan([-0.15])
+    whole = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT, plan=plan)
+    h = rows.shape[0] // 3
+    parts = [
+        ni._evaluate_fresh(EPS_T, K_P, rows[a:b], 1e-10, ni._LAM_MULT, plan=plan)
+        for a, b in ((0, h), (h, rows.shape[0]))
+    ]
+    assert np.array_equal(np.concatenate(parts)[: on.shape[0]], whole[: on.shape[0]])
+    alone = ni._evaluate_fresh(EPS_T, K_P, on[:50], 1e-10, ni._LAM_MULT, plan=plan)
+    assert np.array_equal(alone, whole[:50])
+    # The exact rows are the twin's on exactly the rows left exact.
+    assert np.array_equal(
+        whole[on.shape[0] :], ni._column_twin(K_P, K_M, off, ni._LAM_MULT)
+    )
+
+
+def test_no_plan_is_the_exact_route(monkeypatch):
+    """A call outside a fill (no memo, so no plan) is the twin to the bit,
+    however many rows of a plane it carries."""
+    monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 16)
+    monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
+    rows = _plane_rows(-0.15, n=300)
+    got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT)
+    assert np.array_equal(got, ni._column_twin(K_P, K_M, rows, ni._LAM_MULT))
+    assert ni._SHEET_STATS["sheet_rows"] == 0
+
+
+def test_the_census_is_the_rule_on_the_fills_rows(monkeypatch):
+    """`sheet_plan`'s grouped census decides as the rule does on the fill's
+    rows spelled out (`_sheet_planes`), on a mast (one (x, y) group, many z),
+    a horizontal wire (many groups, one z) and both, and at build weights
+    either side of each plane's score, so both bounds and the exact count
+    are exercised."""
+    rng = np.random.default_rng(1173)
+    mast = np.stack([np.zeros(40), np.zeros(40), np.linspace(0.0, 10.0, 40)], 1)
+    wire = np.stack([np.linspace(0.0, 5.0, 60), np.zeros(60), np.full(60, 10.0)], 1)
+    ang = rng.uniform(0, 2 * np.pi, 8)
+    rad = np.concatenate(
+        [
+            np.stack([t * np.cos(a), t * np.sin(a), np.full(t.size, -0.15)], 1)
+            for a in ang
+            for t in (np.linspace(0.05, 9.0, 30),)
+        ]
+    )
+    rod = np.stack([np.full(12, 3.0), np.zeros(12), np.linspace(-0.05, -1.0, 12)], 1)
+    below = np.concatenate([rad, rod])
+    a_wire = 1e-3
+    for above in (mast, wire, np.concatenate([mast, wire])):
+        rho = np.hypot(
+            above[:, 0][:, None] - below[:, 0][None, :],
+            above[:, 1][:, None] - below[:, 1][None, :],
+        )
+        z = np.broadcast_to(above[:, 2][:, None], rho.shape)
+        zp = np.broadcast_to(below[:, 2][None, :], rho.shape)
+        rows = np.stack([ni.radius_fold(rho, a_wire), z, zp], -1).reshape(-1, 3)
+        rows = np.unique(rows, axis=0)
+        for weight in (0.02, 0.1, 0.5, 1.0, 5.0):
+            monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", weight)
+            monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 64)
+            want, _ = ni._sheet_planes(rows, K_P, K_M)
+            plan = ni.sheet_plan(EPS_T, K_P, [(above, below)], a_wire)
+            assert plan.planes.tolist() == [v for v, _r in want], (weight, plan)

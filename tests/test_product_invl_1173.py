@@ -38,15 +38,9 @@ from test_crossing_serve_524 import invl_deck
 from test_product_grid_1173 import _fill, _hub, _razor
 
 
-@pytest.fixture(autouse=True)
-def _exact_route(monkeypatch):
-    """This module holds the exact machinery's routes to the bit, so it runs
-    with the plane sheets off (momwire#1173 Design E). A sheet is a GATED
-    layer decided per `_evaluate_fresh` call (a plane qualifies on the rows
-    one call asks), so two partitions of the same rows -- tiles, the grid
-    route's chunks, the dict reference -- can take it differently; its own
-    gates are `test_plane_sheet_1173`."""
-    monkeypatch.setattr(ni, "_SHEET", False)
+# Every gate here runs at the shipped cost rule and with every plane taken
+# (conftest's `sheet_modes`, momwire#1173 Design E phase 2).
+pytestmark = pytest.mark.usefixtures("sheet_modes")
 
 
 # The caps as they were before they were dropped: the grid route's gate.
@@ -61,9 +55,14 @@ def _make(lean):
     return lambda: _razor(deck)
 
 
-@functools.cache
 def _reference(lean):
-    """The switches-off Z, shared by this module's tests (read-only)."""
+    """The switches-off Z, shared by this module's tests (read-only), for the
+    plane-sheet settings in force (`sheet_modes` runs each test under two)."""
+    return _reference_at(lean, ni._SHEET_BUILD_WEIGHT, ni._SHEET_MIN_ROWS)
+
+
+@functools.cache
+def _reference_at(lean, _weight, _min_rows):
     Z, r = _fill(_make(lean), off=True)
     assert r["cf.main_product"] == 0 and r["cf.ends_fast"] == 0, r
     Z.setflags(write=False)

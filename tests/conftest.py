@@ -278,3 +278,33 @@ def pytest_sessionfinish(session, exitstatus):
         # Opt-in strict mode: fail on the SOFT ceiling too, for whenever the
         # 24-test debt is paid down and the tighter standard can be held.
         session.exitstatus = _pytest.ExitCode.TESTS_FAILED
+
+
+# --------------------------------------------------------------------------
+# Plane sheets on the route gates (momwire#1173 Design E phase 2)
+# --------------------------------------------------------------------------
+# The modules that hold two routes of the crossing fill to the bit (tiled vs
+# untiled, product vs grid, the array memo vs the dict reference, the
+# inverted-L's product) run each gate twice through this fixture, with the
+# plane sheets ON both times:
+#
+#   "shipped"  the shipped cost rule. On decks this small it takes no plane,
+#              so this is the exact machinery's gate, as it always was.
+#   "sheets"   every plane of 64 or more rows taken (the cost rule off), so
+#              the same routes are held to the bit with most rows interpolated
+#              from sheets. The plan is the FILL's, decided before any cut of
+#              its rows, which is what makes that possible; phase 1 decided
+#              per call and ran these modules with the sheets off. A test that
+#              ran a fill but served no sheet row fails at teardown, so a
+#              green "sheets" row cannot be a sheet that never ran.
+@_pytest.fixture(params=["shipped", "sheets"])
+def sheet_modes(request, monkeypatch):
+    ni = _pytest.importorskip("momwire._near_interface")
+    if request.param == "sheets":
+        monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
+        monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 64)
+    stats = dict.fromkeys(ni._SHEET_STATS, 0)
+    monkeypatch.setattr(ni, "_SHEET_STATS", stats)
+    yield request.param
+    if request.param == "sheets" and stats["fills_planned"] and ni._use_sheet():
+        assert stats["sheet_rows"] > 0, "a fill ran and no sheet row was served"

@@ -33,15 +33,9 @@ from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 from test_crossing_serve_524 import crossing_deck, hub_deck
 
 
-@pytest.fixture(autouse=True)
-def _exact_route(monkeypatch):
-    """This module holds the exact machinery's routes to the bit, so it runs
-    with the plane sheets off (momwire#1173 Design E). A sheet is a GATED
-    layer decided per `_evaluate_fresh` call (a plane qualifies on the rows
-    one call asks), so two partitions of the same rows -- tiles, the grid
-    route's chunks, the dict reference -- can take it differently; its own
-    gates are `test_plane_sheet_1173`."""
-    monkeypatch.setattr(ni, "_SHEET", False)
+# Every gate here runs at the shipped cost rule and with every plane taken
+# (conftest's `sheet_modes`, momwire#1173 Design E phase 2).
+pytestmark = pytest.mark.usefixtures("sheet_modes")
 
 
 # ----------------------------------------------------------------------
@@ -250,8 +244,18 @@ class _Routes:
                 # Keyed on the object (held alive by `self.memos`), so an id
                 # is never reused inside one solve.
                 d = dicts.setdefault(id(memo), {})
+            # The fill's plane-sheet plan rides on its memo; a dict carries
+            # none, so the reference is handed the same one.
             return ni._designed_tables_reference(
-                eps_t, k2, rho, z, zp, rtol=rtol, lam_mult=lam_mult, memo=d
+                eps_t,
+                k2,
+                rho,
+                z,
+                zp,
+                rtol=rtol,
+                lam_mult=lam_mult,
+                memo=d,
+                plan=getattr(memo, "sheet_plan", None),
             )
 
         def reference_rows(
