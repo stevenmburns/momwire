@@ -290,21 +290,31 @@ def pytest_sessionfinish(session, exitstatus):
 #
 #   "shipped"  the shipped cost rule. On decks this small it takes no plane,
 #              so this is the exact machinery's gate, as it always was.
-#   "sheets"   every plane of 64 or more rows taken (the cost rule off), so
-#              the same routes are held to the bit with most rows interpolated
-#              from sheets. The plan is the FILL's, decided before any cut of
-#              its rows, which is what makes that possible; phase 1 decided
-#              per call and ran these modules with the sheets off. A test that
-#              ran a fill but served no sheet row fails at teardown, so a
-#              green "sheets" row cannot be a sheet that never ran.
+#   "sheets"   the cost rule at a quarter of its build weight (planes of 64
+#              or more rows), so the planes that nearly pay are taken -- the
+#              radials' plane of hub_deck(16) x2 / x4 and of the inverted-L
+#              and its leaning twin, WA7ARK's rod plane -- and the same routes
+#              are held to the bit with most of their rows interpolated from
+#              sheets. The plan is the FILL's, decided before any cut of its
+#              rows, which is what makes that possible; phase 1 decided per
+#              call and ran these modules with the sheets off. Not weight 0:
+#              that takes every rod depth of WA7ARK (152 planes, ~1 M nodes a
+#              fill), minutes a test. The smallest decks (crossing_deck(1),
+#              the detached and fan decks, the sloped radials) plan no sheet
+#              even so and stay exact-route gates; the height sheet's cuts
+#              are gated on a miniature Beverage in `test_plane_sheet_1173`.
+#              A fill that planned a sheet and served no row from it fails
+#              at teardown, so a green "sheets" row cannot be a sheet that
+#              never ran.
 @_pytest.fixture(params=["shipped", "sheets"])
 def sheet_modes(request, monkeypatch):
     ni = _pytest.importorskip("momwire._near_interface")
     if request.param == "sheets":
-        monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
+        monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.25)
         monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 64)
     stats = dict.fromkeys(ni._SHEET_STATS, 0)
     monkeypatch.setattr(ni, "_SHEET_STATS", stats)
     yield request.param
-    if request.param == "sheets" and stats["fills_planned"] and ni._use_sheet():
-        assert stats["sheet_rows"] > 0, "a fill ran and no sheet row was served"
+    planned = stats["planes_planned"] + stats["heights_planned"]
+    if request.param == "sheets" and planned and ni._use_sheet():
+        assert stats["sheet_rows"] > 0, "a fill planned a sheet and served no row"
