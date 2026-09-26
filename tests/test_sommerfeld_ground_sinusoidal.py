@@ -64,13 +64,16 @@ def test_ground_model_validation():
 
 
 def test_wires_below_ground_rejected():
+    """Below the plane is a LEGAL deck under Sommerfeld since momwire#1222 —
+    the buried serve fills it at k_m — and is still refused, by name, under
+    the reflection-coefficient ground, which has no lower medium."""
     kw = dict(GEOMS[("dipole", 0.2)])
     z_top = max(p[2] for wire in kw["wires"] for p in wire)
-    s = SinusoidalSolver(**kw, ground_z=z_top + 1.0, **SOMM)
-    # Rejected at geometry build since #151 (for every ground model, not
-    # just Sommerfeld — a wire below the plane is never valid).
+    s = SinusoidalSolver(**kw, ground_z=z_top + 1.0, ground_eps=SOMM["ground_eps"])
     with pytest.raises(ValueError, match="below the ground plane"):
         s.compute_impedance()
+    served = SinusoidalSolver(**kw, ground_z=z_top + 1.0, **SOMM)
+    assert np.isfinite(complex(np.ravel(served.compute_impedance()[0])[0]))
 
 
 def test_default_model_is_refl_coef():

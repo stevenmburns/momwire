@@ -627,8 +627,8 @@ def buried_jacket_charge(solver, omega):
     if not jacketed.any() or getattr(solver, "ground_eps", None) is None:
         return None
     # A formulation with no `_wire_media` has no buried fill at all (the
-    # point-matched SinusoidalSolver refuses the `buried` cell at
-    # construction), so every wire it solves is above the interface.
+    # pulse family refuses the `buried` cell at construction), so every wire
+    # it solves is above the interface.
     media_fn = getattr(solver, "_wire_media", None)
     if media_fn is None:
         return None
