@@ -348,6 +348,14 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
     }
 }
 
+// acc - x * s for complex acc, x and real s, the product fused into the
+// difference (one fused op per part): `proj_one_below`'s differences, in the
+// split GCC's contraction made there before momwire#1194.
+static inline cd sub_scaled(const cd &acc, const cd &x, double s) {
+    return cd(mw_fma::fma(-x.real(), s, acc.real()),
+              mw_fma::fma(-x.imag(), s, acc.imag()));
+}
+
 // The below/below twin of `somm_proj::proj_one` (see the comment on
 // `remainder_field_proj_batch_below` for why it is a twin and not a widening).
 // Same 4x4 Lagrange stencil, same eqs 143-147 dyad algebra; three things are
@@ -378,7 +386,16 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
     const double dy = oy - sy;
     const double rho = std::hypot(dx, dy);
     const double hh = (ground_z - oz) + (ground_z - sz);
-    const double r1 = std::sqrt(rho * rho + hh * hh);
+    // Explicit fused multiply-adds (momwire#1214, _fma_inline.h). This is the
+    // body of `remainder_field_proj_batch_below`'s per-pair loop, and each
+    // multiply-add GCC contracted here before -ffp-contract=off (#1194) is
+    // written out fused, in the split its contraction made (read from GCC's
+    // widening_mul dump of the pre-#1194 build: in most sums it fused the
+    // SECOND product, and in the complex products which half it fused
+    // follows the operand order it saw), with every sum in its source order.
+    // The above-ground twin `somm_proj::proj_one` is shared with other TUs
+    // and is not touched.
+    const double r1 = std::sqrt(mw_fma::fma(rho, rho, hh * hh));
 
     // --- inline SommerfeldGridBelow.eval(r1, theta) ---
     double theta = std::atan2(hh, rho);
@@ -437,27 +454,45 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
         cd acc(0.0, 0.0);
         for (int i = 0; i < 4; ++i) {
             const cd *row = plane + (py::ssize_t)(i0 + i) * nth + j0;
-            cd rs = row[0] * wt[0] + row[1] * wt[1] + row[2] * wt[2] +
-                    row[3] * wt[3];
-            acc += rs * wr[i];
+            // (((row0 w0 + row1 w1) + row2 w2) + row3 w3), as written, each
+            // later product fused into the running sum. (Before #1194 GCC's
+            // SLP pass packed the first row's re/im halves so that its
+            // imaginary half fused row0 instead; that one split is not
+            // reproduced.)
+            cd rs = mw_fma::mul_add(row[1], wt[1], row[0] * wt[0]);
+            rs = mw_fma::mul_add(row[2], wt[2], rs);
+            rs = mw_fma::mul_add(row[3], wt[3], rs);
+            acc = mw_fma::mul_add(rs, wr[i], acc);
         }
         surf[s] = acc;
     }
     const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
 
     // --- projection (eqs 143-147), over `divide_out_below`'s g ---
-    const cd g = std::exp(-MW_BJ * (cd(k_p * rho, 0.0) + k_m * hh)) / r1;
+    // The exponent cd(k_p rho, 0) + k_m hh per part: the real part fuses
+    // k_m hh; the imaginary part's 0.0 + x is left as written (fusing it
+    // rounds identically), and so is the product with -j, whose "fused"
+    // halves only ever multiply by -0.0.
+    const cd arg(mw_fma::fma(k_m.real(), hh, k_p * rho),
+                 0.0 + k_m.imag() * hh);
+    const cd g = std::exp(-MW_BJ * arg) / r1;
     const bool safe_r = rho > G.tiny;
     const double inv_rho = safe_r ? 1.0 / rho : 0.0;
     const double dhx = safe_r ? dx * inv_rho : sux;
     const double dhy = safe_r ? dy * inv_rho : suy;
-    const double cphi = sux * dhx + suy * dhy;
-    const double sphi = sux * dhy - suy * dhx;
-    const cd e_rho = g * (stzsrc * IrhoV + sthsrc * cphi * IrhoH);
-    const cd e_phi = g * (sthsrc * sphi * IphiH);
-    const cd e_z = g * (stzsrc * IzV - sthsrc * cphi * IrhoV);
-    return tox * (dhx * e_rho - dhy * e_phi) +
-           toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
+    const double cphi = mw_fma::fma(sux, dhx, suy * dhy);
+    const double sphi = mw_fma::fma(sux, dhy, -(suy * dhx));
+    const double sc = sthsrc * cphi;
+    // mw_fma::mul(x, y) fuses x.re y.im into the imaginary part, so the
+    // operand order below is the contraction's, not a typo: g * S fused
+    // S.re g.im in e_rho and e_z and g.re S.im in e_phi.
+    using mw_fma::mul;
+    const cd e_rho = mul(mw_fma::mul_add(IrhoH, sc, stzsrc * IrhoV), g);
+    const cd e_phi = mul(g, sthsrc * sphi * IphiH);
+    const cd e_z = mul(sub_scaled(stzsrc * IzV, IrhoV, sc), g);
+    const cd r = mw_fma::mul_add(mw_fma::mul_add(e_phi, dhx, dhy * e_rho), toy,
+                                 tox * sub_scaled(dhx * e_rho, e_phi, dhy));
+    return mw_fma::mul_add(e_z, toz, r);
 }
 }  // namespace mw568_below
 
