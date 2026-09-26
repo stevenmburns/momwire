@@ -32,8 +32,22 @@ import functools
 import numpy as np
 import pytest
 
+from momwire import _near_interface as ni
+
 from test_crossing_serve_524 import invl_deck
 from test_product_grid_1173 import _fill, _hub, _razor
+
+
+@pytest.fixture(autouse=True)
+def _exact_route(monkeypatch):
+    """This module holds the exact machinery's routes to the bit, so it runs
+    with the plane sheets off (momwire#1173 Design E). A sheet is a GATED
+    layer decided per `_evaluate_fresh` call (a plane qualifies on the rows
+    one call asks), so two partitions of the same rows -- tiles, the grid
+    route's chunks, the dict reference -- can take it differently; its own
+    gates are `test_plane_sheet_1173`."""
+    monkeypatch.setattr(ni, "_SHEET", False)
+
 
 # The caps as they were before they were dropped: the grid route's gate.
 _CAPPED = {"cf._PRODUCT_MAX_CAND_FRAC": 0.25, "cf._PRODUCT_MAX_GROUP_FRAC": 0.25}
