@@ -8,8 +8,9 @@ crossing decks and on both families' above-ground decks). What these tests pin
 is the STRUCTURE the refactor exists for, so a later edit cannot quietly undo
 it:
 
-  * the point-matched lane still refuses a buried deck BY NAME — stage 1
-    (#1222) has not landed, and a hoisted method must not make one reachable;
+  * the point-matched lane refuses a crossing junction BY NAME (it served
+    no buried deck at stage 0; since #1222 it serves wholly-buried and
+    detached ones);
   * each hoisted method is the base's, not re-grown on the subclass;
   * both Sommerfeld remainder families replay through ONE loop, and a solve
     really goes through it (counted, not assumed);
@@ -24,7 +25,7 @@ import numpy as np
 import pytest
 
 from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
-from momwire.sinusoidal import _BURIED_REFUSAL
+from momwire.sinusoidal import _CROSSING_JUNCTION_REFUSAL
 
 C0 = 299792458.0
 WL7 = C0 / 7e6
@@ -61,11 +62,27 @@ def _buried_dipole(cls, n=11, depth=0.5):
     )
 
 
-def test_the_point_matched_lane_still_refuses_a_buried_deck_by_name():
-    assert not SinusoidalSolver.capabilities.buried
-    with pytest.raises(ValueError) as err:
-        _buried_dipole(SinusoidalSolver).compute_impedance()
-    assert _BURIED_REFUSAL.format(cls="SinusoidalSolver") in str(err.value)
+def test_the_point_matched_lane_serves_buried_and_refuses_crossing_by_name():
+    """Stage 0 kept the refusal; stage 1 (#1222) serves wholly-buried and
+    detached decks, and the crossing JUNCTION stays refused by name until
+    stage 2 (`tests/test_sin_buried_below_1222.py` has the gates)."""
+    assert SinusoidalSolver.capabilities.buried
+    assert "buried+crossing_junction" in SinusoidalSolver.capabilities.refusals
+    s = SinusoidalSolver(
+        wires=[
+            np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 2.0)]),
+            np.array([(0.0, 0.0, 0.0), (2.0, 0.0, -0.5)]),
+        ],
+        n_per_edge_per_wire=[[5], [5]],
+        feeds=[(0, 1.0, 1 + 0j)],
+        junctions=[[(0, "start"), (1, "start")]],
+        wavelength=WL7,
+        wire_radius=1e-3,
+        **GROUND,
+    )
+    with pytest.raises(NotImplementedError) as err:
+        s.compute_impedance()
+    assert _CROSSING_JUNCTION_REFUSAL in str(err.value)
 
 
 @pytest.mark.parametrize("name", HOISTED)

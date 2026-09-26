@@ -73,6 +73,11 @@ from ._stable import expm1_neg_j as _expm1_neg_j
 from ._stable import expm1_neg_j_from_half as _expm1_neg_j_from_half
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
+# momwire#1222: the complex-k twin of `sinusoidal_field_tensor`, both shape
+# sets, per-observer radius. What the point-matched buried serve fills with.
+_HAVE_FIELD_TENSOR_CPLX = _acc is not None and hasattr(
+    _acc, "sinusoidal_field_tensor_cplx"
+)
 _HAVE_FIELD_TENSOR_REFL = _acc is not None and hasattr(
     _acc, "sinusoidal_field_tensor_refl"
 )
@@ -222,6 +227,19 @@ _BURIED_REFUSAL = (
     "or a reflection weight above the interface. A wire below the plane is a "
     "LEGAL deck - solve it with BSplineSolver over ground_model='sommerfeld' "
     "- or raise the wire clear of the plane"
+)
+
+# momwire#1222 (#1220 stage 1): the point-matched lane serves wholly-buried
+# and DETACHED decks; a buried wire JOINED to an above one in the plane is the
+# crossing node, which is #1220 stage 2. Named, with the routes that serve it.
+_CROSSING_JUNCTION_REFUSAL = (
+    "SinusoidalSolver serves wires wholly below the interface and DETACHED "
+    "decks (above and buried wires with no junction in the plane), but not yet "
+    "a junction joining the two media: the point-matched crossing node needs "
+    "its own basis condition (I continuous, I'_above = I'_below/eps_tilde), "
+    "which is momwire#1220 stage 2. Solve this deck with "
+    "SinusoidalGalerkinSolver or BSplineSolver, which both serve the crossing "
+    "junction, or leave the buried wires detached"
 )
 
 # No node_gaps kwarg exists on this solver at all (unlike BSplineSolver /
@@ -382,6 +400,54 @@ def _asinh_minus_arg(x):
     return np.where(np.abs(t) < 1.0, -series, -(np.sinh(t) - t))
 
 
+def _basis_value(sigAC, B, sigC, k, xi):
+    """The three-term basis current at local arc ξ, on the well-scaled shape
+    set {1, sin kξ, cos kξ − 1} (stevenmburns/momwire#203):
+
+        f(ξ) = σ(A+C) + B·sin(kξ) − 2σC·sin²(kξ/2)
+
+    — identically the NEC form σA + B·sin(kξ) + σC·cos(kξ), rearranged so that
+    no term is larger than the result. In the literal spelling σA and σC·cos
+    are O(1) and cancel to O((kΔ)²/8), which costs ε·8/(kΔ)² relative — 3e-13
+    at N=41 but 1.2e-10 at N=801 and rising like N², because the basis is
+    normalized to its own segment-centre current A+C. Here σ(A+C) is supplied
+    by `_basis_coefs` and cos kξ − 1 is spelled −2sin²(kξ/2), so both
+    cancellations happen where they are exact and f comes out to full relative
+    precision.
+
+    `AC` is a per-branch CLOSED FORM, not the float sum `A + C`
+    (stevenmburns/momwire#606). It used to be that sum, described here as
+    "correctly rounded to the sum" — true, and not enough: the sum of two
+    rounded values is not the rounded value of the sum, and with A and C each
+    O(1) carrying an absolute ε against an O((kΔ)²) answer the summed spelling
+    is 1 % wrong at kΔ = 2.1e-4 and has no correct digits at all by 1e-5. This
+    function was always the accurate SPELLING; #606 is what made the
+    coefficient it is handed accurate too.
+
+    Every argument broadcasts: callers supply coefficient columns and an arc
+    array in whatever pairing they already hold.
+    """
+    half = np.sin(0.5 * k * xi)
+    return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
+
+
+def _entry_k(seg_view, s, e, k):
+    """The k entries `s:e` of `seg_view` were built at: their own
+    `k_entry` on a mixed deck's stitched view, else the scalar `k`.
+
+    A mixed deck is solved OUTSIDE `_operating_medium` (two k are live), so
+    the `k` a drive or readout is handed there is air's. Writing a buried
+    entry's shapes at it evaluates a different function from the one the
+    fill tested (momwire#1159) — invisible at a segment centre, where every
+    k-dependent shape vanishes, and live at a knot gap (`feed_xi` = ±h/2),
+    under the segment gap's `sin u − u`, and at a node port's member ends.
+    A single-medium view carries no `k_entry`, so this returns `k` itself
+    and every shipped path keeps its arithmetic bit for bit.
+    """
+    k_entry = seg_view.get("k_entry")
+    return k if k_entry is None else np.asarray(k_entry)[s:e]
+
+
 @dataclass(frozen=True)
 class _SegmentBasis:
     """Opaque `PortSolution.basis` payload for the segment-basis families.
@@ -481,11 +547,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         singular_enrichment=False,
         # Contact at a wire END is served (`ground_minus` / `ground_plus`);
         # the refl-coef row inside that column is the combination below.
-        # Buried is refused outright — see `_BURIED_REFUSAL`.
-        buried=False,
+        # Buried is served since momwire#1222 (wholly below and detached);
+        # what a buried deck still refuses has its own combination key, each
+        # with the sentence actually raised.
+        buried=True,
         contact=True,
         refusals={
-            "buried": _BURIED_REFUSAL.format(cls="SinusoidalSolver"),
+            "buried+pec": _medium_spec.BURIED_PEC_REFUSAL,
+            "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
+            "buried+crossing": _medium_spec.CROSSING_REFUSAL,
+            "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
+            "buried+crossing_junction": _CROSSING_JUNCTION_REFUSAL,
+            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
             "knot_feeds": _KNOT_FEEDS_REFUSAL,
@@ -942,15 +1015,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     def _serves_buried(self):
         """Whether THIS solver can fill a deck below the interface.
 
-        False on this family by default — every fill here takes the
-        free-space wavenumber and reaches the ground through an image or a
-        reflection weight above the interface. `SinusoidalGalerkinSolver`
-        overrides it for the fully-buried serve (momwire#980 D1); the
-        geometry refusal below is what that override lifts, and it is a
-        method rather than a flag so a subclass that serves only SOME buried
-        decks can say which.
+        True since momwire#1222 (#1220 stage 1): the point-matched lane fills
+        a wholly-buried deck at k_m and a MIXED (detached) deck per class,
+        and SG has since #980. So `_build_geometry`'s blanket refusal is
+        lifted for the family, and every narrower question is answered by
+        name one level down, where the reason is known: `_medium_spec.
+        wire_media` for a buried wire over a ground with no lower medium, a
+        mid-span crossing and contact-with-buried, and `_wire_media` for a
+        crossing JUNCTION on a family that has no crossing serve.
         """
-        return False
+        return True
 
     def feed_placements(self):
         """Where each entry of ``feeds`` lands, as one
@@ -1677,6 +1751,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if gathered is None:
             return np.zeros(n_eval, dtype=np.complex128)
         entry_eval_idx, entry_global = gathered
+        if "k_entry" in seg_view:
+            # A buried or mixed deck's view (`_readout_view`): each entry's
+            # shapes at its OWN k. A view without it keeps the body below, so
+            # every deck in air reads bit for bit as before.
+            k_e = np.asarray(seg_view["k_entry"])[entry_global]
+            s_e = np.asarray(eval_s)[entry_eval_idx]
+            sig = np.asarray(seg_view["sigma"])[entry_global]
+            f = _basis_value(
+                sig * np.asarray(seg_view["AC"])[entry_global],
+                np.asarray(seg_view["B"])[entry_global],
+                sig * np.asarray(seg_view["C"])[entry_global],
+                k_e,
+                s_e,
+            )
+            out = np.zeros(n_eval, dtype=np.complex128)
+            np.add.at(out, entry_eval_idx, alpha[seg_view["jbasis"][entry_global]] * f)
+            return out
         # Precompute trig at each eval point.
         sin_ks = np.sin(self.k * eval_s)
         # cos(kξ) − 1 = −2sin²(kξ/2), to a relative ε rather than an absolute
@@ -1767,6 +1858,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if gathered is None:
             return np.zeros(n_eval, dtype=np.complex128)
         entry_eval_idx, entry_global = gathered
+        if "k_entry" in seg_view:
+            # f' = k·(B·cos kξ − σC·sin kξ) at each entry's own k.
+            k_e = np.asarray(seg_view["k_entry"])[entry_global]
+            s_e = np.asarray(eval_s)[entry_eval_idx]
+            sig = np.asarray(seg_view["sigma"])[entry_global]
+            B_e = np.asarray(seg_view["B"])[entry_global]
+            C_e = np.asarray(seg_view["C"])[entry_global]
+            fd = k_e * (B_e * np.cos(k_e * s_e) - sig * C_e * np.sin(k_e * s_e))
+            out = np.zeros(n_eval, dtype=np.complex128)
+            np.add.at(out, entry_eval_idx, alpha[seg_view["jbasis"][entry_global]] * fd)
+            return out
         sin_ks = np.sin(self.k * eval_s)
         cos_ks = np.cos(self.k * eval_s)
         jb = seg_view["jbasis"][entry_global]
@@ -1952,6 +2054,38 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ]
             return tuple(
                 np.concatenate([p[i] for p in parts], axis=0) for i in range(3)
+            )
+
+        # An IN-MEDIUM k (momwire#1222): the complex twin, which serves both
+        # shape sets and takes a per-observer radius, so neither the `cos-1`
+        # carve-out nor the radius runs above apply. No extended kernel below
+        # the interface (refused by name upstream), so it has no EK twin.
+        if (
+            _HAVE_FIELD_TENSOR_CPLX
+            and _complex_k(k)
+            and not self.extended_kernel
+            and cos_shape in ("cos", "cos-1")
+        ):
+            gx, gw = self._leggauss_cached(self.n_qp_const)
+            obs_c = np.ascontiguousarray(seg_c[win], dtype=np.float64)
+            a_obs = (
+                np.full(obs_c.shape[0], float(self._uniform_radius))
+                if self._uniform_radius is not None
+                else np.ascontiguousarray(self._seg_radius(geom)[win], dtype=np.float64)
+            )
+            return _acc.sinusoidal_field_tensor_cplx(
+                obs_c,
+                np.ascontiguousarray(seg_t[win], dtype=np.float64),
+                a_obs,
+                np.ascontiguousarray(src_c, dtype=np.float64),
+                np.ascontiguousarray(src_t, dtype=np.float64),
+                np.ascontiguousarray(seg_h, dtype=np.float64),
+                complex(k),
+                complex(eta),
+                gx,
+                gw,
+                cos_shape == "cos-1",
+                self._cancel_flag,
             )
 
         # numpy fallback: unprojected per-shape (E_z, E_ρ) components,
@@ -4144,13 +4278,28 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         cached = self._cached_wire_media
         if cached is None:
+            crossing_ends = self._grounded_junction_ends()
             cached = _medium_spec.wire_media(
                 self.wires_polylines,
                 self.ground_z,
                 lower_medium=self._lower_medium(),
                 pec=self.ground_eps is None,
-                crossing_ends=self._grounded_junction_ends(),
+                crossing_ends=crossing_ends,
             )
+            if not self._serves_crossing():
+                # `wire_media` labels a crossing junction's buried member
+                # BELOW (the exemption is what serves it on SG and bspline);
+                # this lane has no crossing fill yet (#1220 stage 2), so the
+                # deck is refused BY NAME here rather than filled as if the
+                # node were two free ends — a plausible wrong number.
+                hit = sorted(
+                    w for w, _end in crossing_ends if cached[w] == _medium_spec.BELOW
+                )
+                if hit:
+                    raise NotImplementedError(
+                        f"wire {hit[0]} meets the ground interface at a crossing "
+                        f"junction: {_CROSSING_JUNCTION_REFUSAL}"
+                    )
             self._cached_wire_media = cached
         return cached
 
@@ -4985,6 +5134,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         # The operating point is (k, eta), both arguments (momwire#995).
         eta = self._fill_eta(k, eta)
+        if self._is_mixed(geom):
+            # Two media, three pair classes (momwire#1222) — the SG D2 shape
+            # at one observer per segment.
+            return self._assemble_Z_mixed(geom, eta)
         seg_view = self._basis_coefs(geom, k)
         N = geom["n_segs"]
         # Build (N, N) coefficient matrices M_{A,B,C}[n, j] = effective
@@ -5031,7 +5184,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # contract serves `cos-1` too and the switch is purely about kΔ.
         # (#606 shipped with an EK carve-out and a warning; both went away
         # with the limit they described.)
-        kd_min = float(np.min(k * np.asarray(geom["seg_h"], dtype=np.float64)))
+        #
+        # |k|Δ, not k·Δ (momwire#1222): a wholly-buried fill runs at the
+        # complex k_m, where `float(k·Δ)` discards Im or raises. At a real,
+        # positive k the two are the same floats.
+        kd_min = float(np.min(np.abs(k) * np.asarray(geom["seg_h"], dtype=np.float64)))
         cos_shape = "cos-1" if kd_min < _WELL_SCALED_KD else "cos"
         A_eff = sigma_arr * (seg_view["A"] if cos_shape == "cos" else seg_view["AC"])
         B_eff = seg_view["B"]
@@ -5064,7 +5221,20 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # nodes, their tangents, the k-weighted shapes, the grid handle —
         # which the bands replay instead of rebuilding (momwire#357 item
         # 1). O(N), and it dies with `fg` at the end of this fill.
-        fg = _field_ground.field_ground_for(self, geom, k, self.omega, eta=eta)
+        #
+        # A wholly-buried solve (momwire#1222) hands in k_m / eta_m and the
+        # medium `_operating_medium` resolved: the ground is then the buried
+        # row — image at k_m weighted A_m, the below-family remainder — and
+        # the band loop below composes it exactly as it composes Sommerfeld's.
+        fg = _field_ground.field_ground_for(
+            self,
+            geom,
+            k,
+            self.omega,
+            medium=self._active_medium,
+            r1_below=self._active_r1_below,
+            eta=eta,
+        )
         somm_rem = None if fg is None else fg.remainder(cos_shape=cos_shape)
 
         # Below the dense-M threshold the whole fill is one chunk, budget or
@@ -5172,6 +5342,184 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
 
+    def _assemble_Z_mixed(self, geom, eta):
+        """Point-matched Z of a MIXED deck (momwire#1222): wires wholly above
+        and wholly below the interface, none crossing it.
+
+        SG's D2 route at one observer per segment, the midpoint, weight 1:
+
+              rows / cols     above sources        below sources
+              above obs       free+ground @ k_p    transmitted (a<-b)
+              below obs       transmitted (b<-a)   free+ground @ k_m
+
+        Each class's block is filled at its OWN (k, eta) — arguments, never
+        solver state (#995) — over that class's sources and observed at that
+        class's midpoints, and composed `Φ − (coef·Φ_img − S)` exactly as the
+        single-medium band loop composes it (coef C₂ above, A_m below). The
+        two transmitted directions are the hoisted `_transmitted_tensor` at
+        the midpoints, `row_group = 1`, ADDED (momwire#1159: the projected
+        tables are one family with one sign, and on this trunk the remainder
+        enters with a plus too). One shape set for the whole fill — the |k|Δ
+        switch over every segment at its own k — because mixing spellings
+        between blocks is a different operator, not a rounding (#606).
+
+        Not banded: the three Φ tables are whole-matrix, so the transient is
+        ~3 Z plus one class block. #1220 stage 3 owns the memory; the deck
+        sizes this route serves today are small beside it.
+        """
+        below = self._below_segments(geom)
+        medium = self._fill_medium(geom)
+        _below_interface.refuse_out_of_scope(
+            use_singular_enrichment=False,
+            extended_kernel=self.extended_kernel,
+            n=int(geom["n_segs"]),
+            degree=1,
+            dense_fits=True,
+            chunked_serves=True,
+            swept_mem_mb=self.swept_mem_mb,
+        )
+        N = int(geom["n_segs"])
+        seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+        plan = self._mixed_serve_plan(geom, below, medium, False)
+        h = np.asarray(geom["seg_h"], dtype=np.float64)
+        k_abs = np.where(below, abs(medium.k_m), medium.k_p)
+        cos_shape = "cos-1" if float(np.min(k_abs * h)) < _WELL_SCALED_KD else "cos"
+
+        starts = seg_view["starts"]
+        n_idx = np.repeat(np.arange(N, dtype=np.int64), starts[1:] - starts[:-1])
+        j_idx = seg_view["jbasis"]
+        sigma = seg_view["sigma"]
+        A_eff = sigma * (seg_view["A"] if cos_shape == "cos" else seg_view["AC"])
+        coefs = (A_eff, seg_view["B"], sigma * seg_view["C"])
+        if N < _DENSE_ASSEMBLY_THRESHOLD:
+            Ms = []
+            for c in coefs:
+                M = np.zeros((N, N), dtype=np.complex128)
+                M[n_idx, j_idx] = c
+                Ms.append(M)
+        else:
+            Ms = [
+                scipy.sparse.csc_matrix((c, (n_idx, j_idx)), shape=(N, N))
+                for c in coefs
+            ]
+
+        eta_p = self._fill_eta(medium.k_p, eta)
+        Phi = [np.zeros((N, N), dtype=np.complex128) for _ in range(3)]
+        for keep, k_cls, med, eta_cls in (
+            (~below, medium.k_p, None, eta_p),
+            (below, medium.k_m, medium, self._medium_eta(medium)),
+        ):
+            idx = np.nonzero(keep)[0]
+            block = self._class_block(
+                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan
+            )
+            for P, b in zip(Phi, block):
+                P[np.ix_(idx, idx)] = b
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        for src_keep, obs_below in ((below, False), (~below, True)):
+            obs_keep = below if obs_below else ~below
+            T = self._transmitted_tensor(
+                geom,
+                medium,
+                plan,
+                src_keep,
+                obs_keep,
+                obs_below,
+                seg_c,
+                seg_t,
+                row_group=1,
+                cos_shape=cos_shape,
+            )
+            r = np.nonzero(obs_keep)[0]
+            c = np.nonzero(src_keep)[0]
+            for P, t in zip(Phi, T):
+                P[np.ix_(r, c)] += t[np.ix_(r, c)]
+        G = Phi[0] @ Ms[0]
+        G += Phi[1] @ Ms[1]
+        G += Phi[2] @ Ms[2]
+        del Phi
+        self._apply_loading(G, geom, seg_view, None, medium=medium)
+        return G, seg_view
+
+    @staticmethod
+    def _index_runs(idx):
+        """Contiguous runs `(start, stop)` of a sorted index array. A class's
+        segments are whole wires, and wires are segment-contiguous, so a
+        class is a handful of runs — the observer bands its fill walks."""
+        if idx.size == 0:
+            return []
+        cut = np.flatnonzero(np.diff(idx) != 1) + 1
+        firsts = np.concatenate(([0], cut))
+        lasts = np.concatenate((cut, [idx.size]))
+        return [(int(idx[a]), int(idx[b - 1]) + 1) for a, b in zip(firsts, lasts)]
+
+    def _class_block(self, geom, keep, idx, k, medium, eta, cos_shape, plan):
+        """One medium's (3, n, n) block of a mixed deck: its own sources seen
+        at its own midpoints, at its own (k, eta), with its own ground —
+        `Φ − (coef·Φ_img − S)`, the single-medium band loop's composition.
+
+        The sources are restricted by handing `_field_tensor` a geometry whose
+        `seg_h` is the class's (it is read for sources only) and the class's
+        centres/tangents; the observers stay the whole geometry's rows, walked
+        in the class's contiguous runs, so the radius and every observer-side
+        table is the one the whole-deck fill would use.
+        """
+        gz = self.ground_z
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        geom_src = dict(geom)
+        geom_src["seg_h"] = np.asarray(geom["seg_h"])[idx]
+        src_c = np.asarray(seg_c)[idx]
+        src_t = np.asarray(seg_t)[idx]
+        img_c = _ground_mirror.mirror_positions(src_c, gz)
+        img_t = _ground_mirror.mirror_tangents(src_t)
+        cls_geom = self._class_geom(geom, keep)
+        fg = _field_ground.field_ground_for(
+            self,
+            cls_geom,
+            k,
+            self.omega,
+            medium=medium,
+            r1_below=plan.get("r1_below") if medium is not None else None,
+            eta=eta,
+        )
+        if fg is None or fg.mode != "compose":  # pragma: no cover - lower medium
+            raise AssertionError("a mixed deck's ground is Sommerfeld's")
+        rem = fg.remainder(cos_shape=cos_shape)
+        coef = fg.image_coefficient
+        n = idx.size
+        out = [np.empty((n, n), dtype=np.complex128) for _ in range(3)]
+        row = 0
+        for s, e in self._index_runs(idx):
+            band = (s, e)
+            Phi = self._field_tensor(
+                geom_src,
+                k,
+                src_centers=src_c,
+                src_tangents=src_t,
+                obs_rows=band,
+                cos_shape=cos_shape,
+                eta=eta,
+            )
+            img = self._field_tensor(
+                geom_src,
+                k,
+                src_centers=img_c,
+                src_tangents=img_t,
+                obs_rows=band,
+                cos_shape=cos_shape,
+                eta=eta,
+            )
+            S = rem.replay(obs_centers=seg_c[s:e], obs_tangents=seg_t[s:e])
+            for dst, P, Pi, Si in zip(out, Phi, img, S):
+                Pi = np.array(Pi, dtype=np.complex128)
+                np.multiply(coef, Pi, out=Pi)
+                Pi -= Si
+                dst[row : row + e - s] = P - Pi
+            row += e - s
+        return out
+
     @staticmethod
     def _wire_of_seg(geom):
         """(n_segs,) int array mapping segment index → wire index."""
@@ -5229,7 +5577,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         i0, i1 = obs_rows
         return [(max(s, i0), min(e, i1), a) for s, e, a in runs if s < i1 and e > i0]
 
-    def _apply_loading(self, G, geom, seg_view, k):
+    def _apply_loading(self, G, geom, seg_view, k, medium=None):
         """NEC's impedance boundary condition, in place; no-op when loading
         is off. The system point-matches E_scat(n) = −E_app(n) at segment
         centres; a distributed series impedance changes the wire surface
@@ -5237,13 +5585,29 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z'·(current of basis j at segment n's centre) = Z'·σ(A+C) from
         G[n, j] over the basis-support entries. (Contrast the Galerkin
         overlap loading in `BSplineSolver._apply_loading` — same physics,
-        each entering through its own testing scheme.)"""
+        each entering through its own testing scheme.)
+
+        Below the interface (momwire#1222) two things change, both SG's
+        (#1156) in this testing's form:
+
+        * the loading is read at the solve's REAL ω — `medium.k_p·c` — never
+          at k_m·c, which is not a frequency; the centre current σ·AC is the
+          view's own, so a stitched view's buried entries are already at k_m;
+        * a JACKETED buried wire adds #1154's charge-side term. Its local
+          potential dS'·q, q = −(1/jω)·dI/dl, is the field zq·I″ with
+          zq = dS'/(jω); SG tests it by parts as zq·∫f_i′f_j′, whose pointwise
+          form is −zq·f_j″. On the three-term shape f″(0) = −k²·σC, so
+          G[n, j] −= zq·k²·σC at each entry's own k.
+        """
         if not self._loading_active:
             return G
-        omega = k * self.c
+        if medium is None:
+            medium = self._active_medium
+        omega = (k if medium is None else medium.k_p) * self.c
         # (n_segs,) Z_s(ω), zeros where switched off — the shared spec layer
         # (momwire#428); this method's share is the boundary condition below.
-        z_seg = _wire_loading.loading_for(self, omega, geom).z_seg
+        spec = _wire_loading.loading_for(self, omega, geom)
+        z_seg = spec.z_seg
         starts = seg_view["starts"]
         n_segs = geom["n_segs"]
         rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
@@ -5252,6 +5616,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Each (seg, basis) pair is unique in seg_view (see _basis_coefs),
         # so plain fancy-index subtraction is exact.
         G[rows, cols] -= z_seg[rows] * i_center
+        if spec.zq_seg is not None:
+            k_e = np.asarray(seg_view["k_entry"]) if "k_entry" in seg_view else k
+            G[rows, cols] -= (
+                spec.zq_seg[rows] * (k_e * k_e) * seg_view["sigma"] * seg_view["C"]
+            )
         return G
 
     def wire_loss_power(self, coeffs, omega=None):
@@ -5278,8 +5647,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return 0.0, per_wire
         if omega is None:
             omega = self.omega
-        k = omega / self.c
         geom = self._build_geometry()
+        if self.ground_z is not None:
+            below = self._below_segments(geom)
+            if below.any():
+                return self._buried_wire_loss_power(coeffs, float(omega), geom, below)
+        k = omega / self.c
         seg_view = self._basis_coefs(geom, k)
         n_segs = geom["n_segs"]
         h = np.asarray(geom["seg_h"], dtype=np.float64)
@@ -5308,6 +5681,68 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         return float(per_wire.sum()), per_wire
 
+    def _buried_wire_loss_power(self, coeffs, omega, geom, below):
+        """`wire_loss_power` on a deck with a buried segment, read in the
+        basis the solve actually used (momwire#1156; on the base since
+        momwire#1222).
+
+        The air readout rebuilds the shapes at k = ω/c and integrates |I|²
+        with the real-k closed form. Neither holds below the interface: the
+        solve's shapes there are written at the complex k_m (the whole deck
+        inside `_operating_medium`, or per entry on a mixed deck's stitched
+        view). So this rebuilds the SAME view the fill built and integrates
+
+            ∫|P + Q·sin kξ + R·cos kξ|² dξ   over ξ ∈ [−h/2, h/2]
+
+        for complex k with conj(f) = P̄ + Q̄·sin k̄ξ + R̄·cos k̄ξ. The odd
+        products vanish by parity; with I(c) = ∫cos cξ dξ = h·sinc(ch/2π),
+
+            = |P|²h + 2·Re[P·R̄·I(k̄)]
+              + ½|Q|²·[I(k − k̄) − I(k + k̄)] + ½|R|²·[I(k − k̄) + I(k + k̄)],
+
+        which is the air closed form term for term at real k
+        (I(0) = h, I(2k) = sin(kh)/k).
+        """
+        medium = _crossing_fill.buried_medium(
+            self.ground_eps, omega, self.eps, omega / self.c
+        )
+        if self._is_mixed(geom):
+            seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+            seg_view = self._with_crossing_wings(geom, seg_view, below, medium)
+            k_seg = np.where(below, medium.k_m, medium.k_p).astype(np.complex128)
+        else:
+            seg_view = self._basis_coefs(geom, medium.k_m)
+            k_seg = np.full(int(geom["n_segs"]), medium.k_m, dtype=np.complex128)
+        n_segs = int(geom["n_segs"])
+        h = np.asarray(geom["seg_h"], dtype=np.float64)
+        starts = seg_view["starts"]
+        rows = np.repeat(np.arange(n_segs, dtype=np.int64), np.diff(starts))
+        alpha_e = np.asarray(coeffs)[seg_view["jbasis"]]
+        P = np.zeros(n_segs, dtype=np.complex128)
+        Q = np.zeros(n_segs, dtype=np.complex128)
+        R = np.zeros(n_segs, dtype=np.complex128)
+        np.add.at(P, rows, alpha_e * seg_view["sigma"] * seg_view["A"])
+        np.add.at(Q, rows, alpha_e * seg_view["B"])
+        np.add.at(R, rows, alpha_e * seg_view["sigma"] * seg_view["C"])
+
+        def _icos(c):
+            return h * np.sinc(c * h / (2.0 * np.pi))
+
+        kc = np.conj(k_seg)
+        i_diff = np.real(_icos(k_seg - kc))
+        i_sum = _icos(k_seg + kc)
+        int_abs_i2 = (
+            np.abs(P) ** 2 * h
+            + 2.0 * np.real(P * np.conj(R) * _icos(kc))
+            + 0.5 * np.abs(Q) ** 2 * np.real(i_diff - i_sum)
+            + 0.5 * np.abs(R) ** 2 * np.real(i_diff + i_sum)
+        )
+        per_wire = np.zeros(len(self.wires_polylines), dtype=np.float64)
+        r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
+        wire_of = self._wire_of_seg(geom)
+        np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        return float(per_wire.sum()), per_wire
+
     def _feed_segment_current(self, alpha, seg_view, feed_seg, xi=0.0):
         """Current at a point on a feed segment, `xi` metres from its centre.
 
@@ -5331,6 +5766,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         amp = alpha[seg_view["jbasis"][s:e]]
         if xi == 0.0:
             return complex((amp * sig * seg_view["AC"][s:e]).sum())
+        if "k_entry" in seg_view:
+            # A buried or mixed deck's view (`_readout_view`): the shapes at
+            # each entry's own k (see `_entry_k`). At a segment centre no
+            # k-dependent shape survives, which is why only this branch asks.
+            f = _basis_value(
+                sig * seg_view["AC"][s:e],
+                seg_view["B"][s:e],
+                sig * seg_view["C"][s:e],
+                _entry_k(seg_view, s, e, self.k),
+                xi,
+            )
+            return complex((amp * f).sum())
         # cos(kξ) − 1 spelled as −2sin²(kξ/2), the same well-scaled shape set
         # the fill and `_basis_value` use (#203/#606).
         _sin = cmath.sin if _complex_k(self.k) else math.sin  # #980
@@ -5388,7 +5835,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field-tensor fill
-        G, seg_view = self._assemble_Z(geom, self.k, self.eta)
+        # The whole solve inside the medium (momwire#1222): a wholly-buried
+        # deck fills at k_m / eta_m. Air, and a mixed deck (two k live),
+        # enter unchanged.
+        with self._operating_medium(geom) as medium:
+            G, seg_view = self._assemble_Z(geom, self.k, self._medium_eta(medium))
         v, voltages = self._feed_drive_vector(geom)
         self._checkpoint()  # after assembly, before the dense LU solve
         # Factor Gᵀ in place: G.T is an F-ordered view of the C-ordered G,
@@ -5448,7 +5899,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         across solves — re-solve and the previous handle is stale.
         """
         geom = self._build_geometry()
-        G, seg_view = self._assemble_Z(geom, self.k, self.eta)
+        with self._operating_medium(geom) as medium:
+            G, seg_view = self._assemble_Z(geom, self.k, self._medium_eta(medium))
+            k_solve = self.k
         feed_segs = geom["feed_segs"]
         n_ports = len(feed_segs)
         n_segs = geom["n_segs"]
@@ -5469,7 +5922,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             y=Y,
             coeffs=alphas,
             port_currents=Y,  # the same object: the readout IS the Y matrix
-            basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=self.k),
+            basis=_SegmentBasis(geom=geom, seg_view=seg_view, k=k_solve),
         )
 
     def _port_solutions_swept(self, k_array):
@@ -5516,23 +5969,58 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for i, kk in enumerate(k_array):
                 self._checkpoint()  # top of each frequency iteration
                 self._set_k(kk)
-                G, seg_view = self._assemble_Z(geom, self.k, self.eta)
+                with self._operating_medium(geom) as medium:
+                    G, seg_view = self._assemble_Z(
+                        geom, self.k, self._medium_eta(medium)
+                    )
                 alpha = scipy.linalg.solve(G, v)
                 z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out
 
     def _readout_view(self, geom):
-        """The `seg_view` the current readouts evaluate a solution through.
+        """The view a solution is READ through, built the way the solve built
+        it (momwire#1159; on the base since momwire#1222, where the
+        point-matched buried serve reads through it too).
 
-        Here, the one the solve was built on at `self.k`. A hook rather than
-        an inline call because `SinusoidalGalerkinSolver` serves buried and
-        mixed decks (momwire#980), whose solve is NOT built at `self.k`: a
-        wholly-buried deck's basis lives at k_m and a mixed deck's is stitched
-        per medium, with node-wing columns on a crossing deck. Reading such a
-        solution through this view evaluates the buried entries with air's
-        coefficients — a wrong current with no failure (momwire#1159).
+        On a deck in air it is `_basis_coefs(geom, self.k)`. Off that deck the
+        solve's basis is not air's, and reading its coefficients through air's
+        view is a different basis — a wrong current with no failure:
+
+        * wholly buried — the solve runs at k_m inside `_operating_medium`,
+          while `self.k` outside it is air's;
+        * mixed — the solve's view is `_stitch_basis_coefs`, each entry at
+          its own medium's k (plus the node wings on a crossing deck, which
+          `_with_crossing_wings` adds on the family that serves one).
+
+        Measured on SG's mixed deck in soil A with both ports driven, before
+        #1159: the buried wire's knot currents came out 96 % away from
+        bspline's and did not move under refinement. Every view returned off
+        the air path carries `k_entry`, which `_evaluate_basis_at_points`
+        honours.
         """
-        return self._basis_coefs(geom, self.k)
+        if self._is_mixed(geom):
+            below = self._below_segments(geom)
+            medium = self._fill_medium(geom)
+            view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+            return self._with_crossing_wings(geom, view, below, medium)
+        medium = self._fill_medium(geom)
+        if medium is None:
+            return self._basis_coefs(geom, self.k)
+        view = dict(self._basis_coefs(geom, medium.k_m))
+        view["k_entry"] = np.full(np.asarray(view["A"]).shape[0], medium.k_m)
+        return view
+
+    def _with_crossing_wings(self, geom, view, below, medium):
+        """Hook: the crossing node's extra columns on a family that serves a
+        crossing junction. Identity here — the point-matched lane refuses a
+        crossing deck by name until #1220 stage 2."""
+        return view
+
+    def _serves_crossing(self):
+        """Whether this family fills a CROSSING junction (a buried wire
+        joined to an above one in the plane). Not yet on the point-matched
+        lane (#1220 stage 2); `_wire_media` refuses the deck by name."""
+        return False
 
     def currents_at_knots(self, alpha, s_array=None):
         """Per-wire complex current sampled at every mesh knot.

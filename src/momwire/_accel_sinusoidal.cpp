@@ -2361,6 +2361,268 @@ sinusoidal_galerkin_far_fill_cplx(
         folding ? &fold : nullptr);
 }
 
+// ---------------------------------------------------------------------------
+// momwire#1222: the complex-k twin of the point-matched `sinusoidal_field_tensor`.
+//
+// The buried point-matched lane (#1220 stage 1) fills at k_m = k0*sqrt(eps~),
+// Im k_m <= 0, with eta_m. The real kernel takes `double k` and so every
+// complex fill fell to the numpy reference. This is the same tensor — Phi[3,
+// M, N], the tangential field of each source segment's three shapes at each
+// observer — with complex k and eta.
+//
+// Its per-pair arithmetic is `galerkin_far_fill_cplx_impl`'s (step E, gated
+// against numpy at 1e-12), with that body's test reduction removed: one
+// observer is one row. Kept a SEPARATE body, not a shared inline: the real
+// kernels' bytes are frozen armor and a shared helper moves them through
+// inlining (momwire#1193). `folded` selects the third shape exactly as the
+// numpy `cos_shape` does: `false` is the literal cos k(xi) (the real
+// kernel's, spelled complex), `true` the #205 folded cos k(xi) - 1.
+//
+// `obs_radius` is per OBSERVER (the necpp EFLD convention the real kernel
+// serves one constant-radius run at a time), so mixed radii need no runs here.
+// `seg_h` is the source FULL length, as in `sinusoidal_field_tensor`.
+static std::tuple<py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>,
+                  py::array_t<std::complex<double>>>
+sinusoidal_field_tensor_cplx(
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> obs_radius,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_centers,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_tangents,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_h,
+    std::complex<double> k, std::complex<double> eta,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    bool folded,
+    uintptr_t cancel_flag = 0
+) {
+    typedef std::complex<double> C;
+    const C J(0.0, 1.0);
+
+    auto oc = obs_centers.unchecked<2>();
+    auto ot = obs_tangents.unchecked<2>();
+    auto ar = obs_radius.unchecked<1>();
+    auto sc = src_centers.unchecked<2>();
+    auto st = src_tangents.unchecked<2>();
+    auto sh = seg_h.unchecked<1>();
+    auto glt = gl_t.unchecked<1>();
+    auto glw = gl_w.unchecked<1>();
+
+    if (oc.shape(1) != 3 || ot.shape(1) != 3 ||
+        sc.shape(1) != 3 || st.shape(1) != 3) {
+        throw std::runtime_error("center/tangent arrays must have shape (N, 3)");
+    }
+    if (oc.shape(0) != ot.shape(0) || oc.shape(0) != ar.shape(0)) {
+        throw std::runtime_error(
+            "obs_centers, obs_tangents and obs_radius must have matching M");
+    }
+    if (sc.shape(0) != st.shape(0) || sc.shape(0) != sh.shape(0)) {
+        throw std::runtime_error("src arrays must all have matching N");
+    }
+    if (glt.shape(0) != glw.shape(0)) {
+        throw std::runtime_error("gl_t and gl_w must have matching length");
+    }
+    if (k.imag() > 0.0) {
+        throw std::runtime_error(
+            "complex k with Im k > 0: e^{+jwt} requires Im k <= 0 so that "
+            "e^{-jkR} decays");
+    }
+
+    size_t M = oc.shape(0);
+    size_t N = sc.shape(0);
+    size_t n_qp = glt.shape(0);
+
+    py::array_t<std::complex<double>> Phi_const({M, N});
+    py::array_t<std::complex<double>> Phi_sin({M, N});
+    py::array_t<std::complex<double>> Phi_cos({M, N});
+    C *pc = Phi_const.mutable_data();
+    C *ps = Phi_sin.mutable_data();
+    C *pco = Phi_cos.mutable_data();
+
+    py::gil_scoped_release release;
+
+    std::vector<double> H_n(N);
+    std::vector<C> sin_kH(N), cos_kH(N), cos_kH_m1(N), smarg_kH(N);
+    for (size_t n = 0; n < N; n++) {
+        H_n[n] = 0.5 * sh(n);
+        C kH = k * H_n[n];
+        sin_kH[n] = std::sin(kH);
+        cos_kH[n] = std::cos(kH);
+        C hs = std::sin(0.5 * kH);
+        cos_kH_m1[n] = -2.0 * hs * hs;
+        smarg_kH[n] = sin_minus_arg(kH);
+    }
+    std::vector<double> glt_v(n_qp), glw_v(n_qp), gl_step(n_qp);
+    std::vector<char> gl_near2(n_qp);
+    double w_hi = 0.0, w_lo = 0.0;
+    for (size_t q = 0; q < n_qp; q++) {
+        glt_v[q] = glt(q);
+        glw_v[q] = glw(q);
+        gl_near2[q] = glt_v[q] >= 0.0;
+        gl_step[q] = gl_near2[q] ? (1.0 - glt_v[q]) : -(1.0 + glt_v[q]);
+        (gl_near2[q] ? w_hi : w_lo) += glw_v[q];
+    }
+    w_hi -= 1.0;
+    w_lo -= 1.0;
+
+    const C four_pi_k = 4.0 * M_PI * k;
+    const C pref_z = eta / four_pi_k;
+    const C pref_rho_const = -eta / four_pi_k;
+    const C k_sq = k * k;
+
+    MW_CANCEL_SETUP(cancel_flag);
+    #pragma omp parallel for schedule(static)
+    for (size_t m = 0; m < M; m++) {
+        MW_CANCEL_POLL();
+        double cmx = oc(m, 0), cmy = oc(m, 1), cmz = oc(m, 2);
+        double tmx = ot(m, 0), tmy = ot(m, 1), tmz = ot(m, 2);
+        double a_sq = ar(m) * ar(m);
+        for (size_t n = 0; n < N; n++) {
+            double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
+            double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
+            double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
+            double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
+            double rho_vx = rvx - z_eval * tnx;
+            double rho_vy = rvy - z_eval * tny;
+            double rho_vz = rvz - z_eval * tnz;
+            double rho_axis =
+                std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
+            double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
+            double td = tmx*tnx + tmy*tny + tmz*tnz;
+            double rho_proj_factor = (rho_vx*tmx + rho_vy*tmy + rho_vz*tmz)
+                                     / rho_eval;
+            double H = H_n[n];
+            double dz2 = z_eval - H;
+            double dz1 = z_eval + H;
+            double rho2 = rho_eval * rho_eval;
+            double r0_2 = std::sqrt(rho2 + dz2*dz2);
+            double r0_1 = std::sqrt(rho2 + dz1*dz1);
+            double inv_r0_2 = 1.0 / r0_2, inv_r0_1 = 1.0 / r0_1;
+
+            C ph2 = -0.5 * k * r0_2;
+            C ph1 = -0.5 * k * r0_1;
+            C eh2 = cexp_i(ph2), eh1 = cexp_i(ph1);
+            C ef2 = eh2 * eh2, ef1 = eh1 * eh1;   // e^{-jkr}
+
+            C G0_2 = ef2 * inv_r0_2;
+            C G0_1 = ef1 * inv_r0_1;
+            C one_jkr_2 = (1.0 + J * k * r0_2) * (inv_r0_2 * inv_r0_2);
+            C one_jkr_1 = (1.0 + J * k * r0_1) * (inv_r0_1 * inv_r0_1);
+
+            // ---- Const source (Eqs 78, 79) -------------------------------
+            C term_const2 = one_jkr_2 * G0_2;
+            C term_const1 = one_jkr_1 * G0_1;
+            C rho_diff = rho_eval * (term_const2 - term_const1);
+            C Erho_const = J * pref_rho_const * rho_diff;
+
+            double int_inv_r0 = stable_asinh_diff(-dz1, -dz2, rho2, r0_1, r0_2);
+            C int_reg(0.0, 0.0);
+            for (size_t q = 0; q < n_qp; q++) {
+                double z_q = H * glt_v[q];
+                double dz_q = z_eval - z_q;
+                double r0_q = std::sqrt(rho2 + dz_q*dz_q);
+                double inv_r0_q = 1.0 / r0_q;
+                double dz_ref = gl_near2[q] ? dz2 : dz1;
+                double r_ref  = gl_near2[q] ? r0_2 : r0_1;
+                double delta = H * gl_step[q] * (dz_q + dz_ref) / (r0_q + r_ref);
+                C ph_d = -0.5 * k * delta;
+                C ph_q = (gl_near2[q] ? ph2 : ph1) + ph_d;
+                C em1_q = 2.0 * J * std::sin(ph_q) * cexp_i(ph_q);
+                int_reg += em1_q * inv_r0_q * glw_v[q];
+            }
+            int_reg *= H;
+            C int_G0 = int_inv_r0 + int_reg;
+
+            C Ez_boundary = dz2 * term_const2 - dz1 * term_const1;
+            C inside = Ez_boundary + k_sq * int_G0;
+            C Ez_const = -J * pref_z * inside;
+
+            // ---- Sine source (Eqs 76, 77) --------------------------------
+            C sin2 = sin_kH[n], cos2 = cos_kH[n];
+            C sin1 = -sin2, cos1 = cos2;
+            C inner_2 = 1.0 - dz2*dz2 * one_jkr_2;
+            C inner_1 = 1.0 - dz1*dz1 * one_jkr_1;
+            C bsin2 = G0_2 * (k*dz2*cos2 + inner_2*sin2);
+            C bsin1 = G0_1 * (k*dz1*cos1 + inner_1*sin1);
+            C pref_rho = pref_rho_const / rho_eval;
+            C Erho_sin = J * pref_rho * (bsin2 - bsin1);
+            C bszin2 = G0_2 * (k*cos2 - dz2*one_jkr_2*sin2);
+            C bszin1 = G0_1 * (k*cos1 - dz1*one_jkr_1*sin1);
+            C Ez_sin = J * pref_z * (bszin2 - bszin1);
+
+            C Erho_cos, Ez_cos;
+            if (!folded) {
+                // ---- Literal cosine source (the real kernel's, complex) --
+                C bcos2 = G0_2 * (-k*dz2*sin2 + inner_2*cos2);
+                C bcos1 = G0_1 * (-k*dz1*sin1 + inner_1*cos1);
+                Erho_cos = J * pref_rho * (bcos2 - bcos1);
+                C bczin2 = G0_2 * (-k*sin2 - dz2*one_jkr_2*cos2);
+                C bczin1 = G0_1 * (-k*sin1 - dz1*one_jkr_1*cos1);
+                Ez_cos = J * pref_z * (bczin2 - bczin1);
+            } else {
+                // ---- Folded source (I = cos k(xi) - 1), #205 --------------
+                C s_h2 = std::sin(ph2), s_h1 = std::sin(ph1);
+                C phi_ang = 2.0 * k * H * z_eval / (r0_1 + r0_2);
+                C cm1 = cos_kH_m1[n];
+                double X = (dz1 * dz2 >= 0.0)
+                    ? 2.0 * H * (dz1 + dz2) / (dz1 * r0_2 + dz2 * r0_1)
+                    : (dz1 * r0_2 - dz2 * r0_1) / rho2;
+                double t_asx = std::asinh(X);
+                double t_sing =
+                    (std::fabs(X) < 1.0)
+                        ? asinh_minus_arg_from_t(t_asx)
+                              + H * rho2 * X * X / ((r0_1 + r0_2) * r0_1 * r0_2)
+                        : t_asx - H * (inv_r0_1 + inv_r0_2);
+                C g2 = 2.0 * J * s_h2 * eh2 * inv_r0_2;
+                C g1 = 2.0 * J * s_h1 * eh1 * inv_r0_1;
+                C m_reg = w_hi * g2 + w_lo * g1;
+                for (size_t q = 0; q < n_qp; q++) {
+                    double z_q = H * glt_v[q];
+                    double dz_q = z_eval - z_q;
+                    double r0_q = std::sqrt(rho2 + dz_q*dz_q);
+                    double inv_r0_q = 1.0 / r0_q;
+                    bool hi = gl_near2[q];
+                    double dz_ref = hi ? dz2 : dz1;
+                    double r_ref  = hi ? r0_2 : r0_1;
+                    double delta = H * gl_step[q] * (dz_q + dz_ref) / (r0_q + r_ref);
+                    C ph_d = -0.5 * k * delta;
+                    C em1 = 2.0 * J * std::sin(ph_d) * cexp_i(ph_d);
+                    C e_ref = hi ? ef2 : ef1;
+                    C gr = hi ? g2 : g1;
+                    double w = glw_v[q] * inv_r0_q;
+                    m_reg += w * (e_ref * em1 - gr * delta);
+                }
+                C smarg = smarg_kH[n];
+                C d_int = t_sing + H * m_reg - (smarg / k) * (G0_1 + G0_2);
+                C inner_cos = k_sq * d_int - cm1 * Ez_boundary;
+                Ez_cos = J * pref_z * inner_cos;
+                C kH = k * H;
+                C A_ang = kH + phi_ang, B_ang = kH - phi_ang;
+                double d_lin = -8.0 * H * H * H * z_eval * rho2
+                               / ((rho2 + dz1 * dz2 + r0_1 * r0_2)
+                                  * (r0_1 + r0_2) * r0_1 * r0_2);
+                C cph_p = std::cos(phi_ang), sph_p = std::sin(phi_ang);
+                C w_even =
+                    (A_ang * sin_minus_arg(B_ang) - B_ang * sin_minus_arg(A_ang))
+                        / kH
+                    + (d_lin / H) * sin2 * cph_p;
+                C w_odd = sin2 * (-(rho2 * X) / (r0_1 * r0_2)) * sph_p;
+                C W = (ef2 * cexp_i(-phi_ang)) * (w_even + J * w_odd);
+                C b_rho = -k * W + rho2 * cm1 * (term_const2 - term_const1);
+                Erho_cos = J * pref_rho * b_rho;
+            }
+
+            size_t mn = m * N + n;
+            pc[mn]  = td * Ez_const + rho_proj_factor * Erho_const;
+            ps[mn]  = td * Ez_sin   + rho_proj_factor * Erho_sin;
+            pco[mn] = td * Ez_cos   + rho_proj_factor * Erho_cos;
+        }
+    }
+    MW_THROW_IF_ABORTED();
+    return std::make_tuple(Phi_const, Phi_sin, Phi_cos);
+}
+
 // The reduced entry point. Byte-frozen against its pre-#246 build: the
 // instantiation below has WITH_EK false, so not one line of the delta is
 // compiled into it (gate G-C2). momwire#356's `out`/`scale` are additive and
@@ -2606,6 +2868,19 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("cancel_flag") = 0,
           py::arg("out") = py::none(),
           py::arg("scale") = std::complex<double>(1.0, 0.0));
+
+    m.def("sinusoidal_field_tensor_cplx", &sinusoidal_field_tensor_cplx,
+          "Complex-wavenumber twin of sinusoidal_field_tensor (momwire#1222): "
+          "the point-matched (3, M, N) tangential-field tensor at an IN-MEDIUM "
+          "k_m and eta_m, both std::complex, with a per-OBSERVER radius and "
+          "`folded` choosing the third shape (false: cos k(xi); true: "
+          "cos k(xi) - 1, #205). Requires Im k <= 0 and raises otherwise.",
+          py::arg("obs_centers"), py::arg("obs_tangents"),
+          py::arg("obs_radius"),
+          py::arg("src_centers"), py::arg("src_tangents"), py::arg("seg_h"),
+          py::arg("k"), py::arg("eta"),
+          py::arg("gl_t"), py::arg("gl_w"), py::arg("folded"),
+          py::arg("cancel_flag") = 0);
 
     m.def("sinusoidal_galerkin_far_fill_ek", &sinusoidal_galerkin_far_fill_ek,
           "Extended-kernel twin of sinusoidal_galerkin_far_fill "

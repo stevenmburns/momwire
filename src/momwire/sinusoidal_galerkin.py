@@ -362,6 +362,8 @@ from .bspline import SINGULAR_ENRICHMENT_NEVER
 from ._port_solution import PortSolution
 from .sinusoidal import (
     _DENSE_ASSEMBLY_THRESHOLD,
+    _basis_value,
+    _entry_k,
     _EKPairs,
     _EULER_GAMMA,
     _N_PANEL_EK_DELTA_NEAR,
@@ -665,54 +667,6 @@ def _graded_endpoint_rule(eps, n_per_panel, leggauss):
     x = (mid[:, None] + half[:, None] * gx[None, :]).ravel()
     w = (half[:, None] * gw[None, :]).ravel()
     return x, w
-
-
-def _basis_value(sigAC, B, sigC, k, xi):
-    """The three-term basis current at local arc ξ, on the well-scaled shape
-    set {1, sin kξ, cos kξ − 1} (stevenmburns/momwire#203):
-
-        f(ξ) = σ(A+C) + B·sin(kξ) − 2σC·sin²(kξ/2)
-
-    — identically the NEC form σA + B·sin(kξ) + σC·cos(kξ), rearranged so that
-    no term is larger than the result. In the literal spelling σA and σC·cos
-    are O(1) and cancel to O((kΔ)²/8), which costs ε·8/(kΔ)² relative — 3e-13
-    at N=41 but 1.2e-10 at N=801 and rising like N², because the basis is
-    normalized to its own segment-centre current A+C. Here σ(A+C) is supplied
-    by `_basis_coefs` and cos kξ − 1 is spelled −2sin²(kξ/2), so both
-    cancellations happen where they are exact and f comes out to full relative
-    precision.
-
-    `AC` is a per-branch CLOSED FORM, not the float sum `A + C`
-    (stevenmburns/momwire#606). It used to be that sum, described here as
-    "correctly rounded to the sum" — true, and not enough: the sum of two
-    rounded values is not the rounded value of the sum, and with A and C each
-    O(1) carrying an absolute ε against an O((kΔ)²) answer the summed spelling
-    is 1 % wrong at kΔ = 2.1e-4 and has no correct digits at all by 1e-5. This
-    function was always the accurate SPELLING; #606 is what made the
-    coefficient it is handed accurate too.
-
-    Every argument broadcasts: callers supply coefficient columns and an arc
-    array in whatever pairing they already hold.
-    """
-    half = np.sin(0.5 * k * xi)
-    return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
-
-
-def _entry_k(seg_view, s, e, k):
-    """The k entries `s:e` of `seg_view` were built at: their own
-    `k_entry` on a mixed deck's stitched view, else the scalar `k`.
-
-    A mixed deck is solved OUTSIDE `_operating_medium` (two k are live), so
-    the `k` a drive or readout is handed there is air's. Writing a buried
-    entry's shapes at it evaluates a different function from the one the
-    fill tested (momwire#1159) — invisible at a segment centre, where every
-    k-dependent shape vanishes, and live at a knot gap (`feed_xi` = ±h/2),
-    under the segment gap's `sin u − u`, and at a node port's member ends.
-    A single-medium view carries no `k_entry`, so this returns `k` itself
-    and every shipped path keeps its arithmetic bit for bit.
-    """
-    k_entry = seg_view.get("k_entry")
-    return k if k_entry is None else np.asarray(k_entry)[s:e]
 
 
 class SinusoidalBasisSampler:
@@ -3961,82 +3915,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         np.subtract.at(G, (seg_view["jbasis"][left], seg_view["jbasis"][right]), vals)
         return G
 
-    def wire_loss_power(self, coeffs, omega=None):
-        """Ohmic power in the wire metal — `SinusoidalSolver.wire_loss_power`,
-        read in the basis the solve actually used.
-
-        The inherited readout rebuilds the shapes at k = ω/c and integrates
-        |I|² with the real-k closed form. On a deck with a buried segment
-        neither holds (momwire#1156): the solve's shapes there are written at
-        the complex k_m (`_operating_medium`, or per entry on a mixed deck's
-        stitched view, whose crossing wings are extra columns the plain view
-        does not have). So a deck with any buried segment rebuilds the SAME
-        view the fill built, and integrates
-
-            ∫|P + Q·sin kξ + R·cos kξ|² dξ   over ξ ∈ [−h/2, h/2]
-
-        for complex k with conj(f) = P̄ + Q̄·sin k̄ξ + R̄·cos k̄ξ. The odd
-        products vanish by parity; with I(c) = ∫cos cξ dξ = h·sinc(ch/2π),
-
-            = |P|²h + 2·Re[P·R̄·I(k̄)]
-              + ½|Q|²·[I(k − k̄) − I(k + k̄)] + ½|R|²·[I(k − k̄) + I(k + k̄)],
-
-        which is the inherited closed form term for term at real k
-        (I(0) = h, I(2k) = sin(kh)/k). Every deck with no buried segment
-        takes the inherited path unchanged.
-        """
-        geom = self._build_geometry()
-        below = (
-            self._below_segments(geom)
-            if self._loading_active and self.ground_z is not None
-            else None
-        )
-        if below is None or not below.any():
-            return super().wire_loss_power(coeffs, omega)
-        if omega is None:
-            omega = self.omega
-        omega = float(omega)
-        medium = _crossing_fill.buried_medium(
-            self.ground_eps, omega, self.eps, omega / self.c
-        )
-        if self._is_mixed(geom):
-            seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
-            if self._is_crossing(geom):
-                seg_view = self._crossing_wing_view(geom, seg_view, below, medium)
-            k_seg = np.where(below, medium.k_m, medium.k_p).astype(np.complex128)
-        else:
-            seg_view = self._basis_coefs(geom, medium.k_m)
-            k_seg = np.full(int(geom["n_segs"]), medium.k_m, dtype=np.complex128)
-        n_segs = int(geom["n_segs"])
-        h = np.asarray(geom["seg_h"], dtype=np.float64)
-        starts = seg_view["starts"]
-        rows = np.repeat(np.arange(n_segs, dtype=np.int64), np.diff(starts))
-        alpha_e = np.asarray(coeffs)[seg_view["jbasis"]]
-        P = np.zeros(n_segs, dtype=np.complex128)
-        Q = np.zeros(n_segs, dtype=np.complex128)
-        R = np.zeros(n_segs, dtype=np.complex128)
-        np.add.at(P, rows, alpha_e * seg_view["sigma"] * seg_view["A"])
-        np.add.at(Q, rows, alpha_e * seg_view["B"])
-        np.add.at(R, rows, alpha_e * seg_view["sigma"] * seg_view["C"])
-
-        def _icos(c):
-            return h * np.sinc(c * h / (2.0 * np.pi))
-
-        kc = np.conj(k_seg)
-        i_diff = np.real(_icos(k_seg - kc))
-        i_sum = _icos(k_seg + kc)
-        int_abs_i2 = (
-            np.abs(P) ** 2 * h
-            + 2.0 * np.real(P * np.conj(R) * _icos(kc))
-            + 0.5 * np.abs(Q) ** 2 * np.real(i_diff - i_sum)
-            + 0.5 * np.abs(R) ** 2 * np.real(i_diff + i_sum)
-        )
-        per_wire = np.zeros(len(self.wires_polylines), dtype=np.float64)
-        r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
-        wire_of = self._wire_of_seg(geom)
-        np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
-        return float(per_wire.sum()), per_wire
-
     def _scatter_coef_product(self, ctx, contribs):
         """Σ_shape T[shape] @ M[shape] — the (n_basis, n_basis) matrix a triple
         of (nnz, N) tested contributions assembles to.
@@ -4653,107 +4531,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             dtype=np.complex128,
         )
 
-    def _readout_view(self, geom):
-        """The view a solution is READ through, built the way the solve built
-        it (momwire#1159).
-
-        The inherited readout rebuilds `_basis_coefs(geom, self.k)`, which is
-        the solve's view only on a deck in air. Off that deck it is a
-        different basis read with the solve's coefficients:
-
-        * wholly buried — the solve runs at k_m inside `_operating_medium`,
-          while `self.k` outside it is air's;
-        * mixed — the solve's view is `_stitch_basis_coefs`, each entry at
-          its own medium's k, and on a crossing deck it carries the node
-          wings `_crossing_wing_view` appends, which the air view omits
-          outright (their amplitudes are never read).
-
-        Measured on probe 5's mixed deck in soil A with both ports driven:
-        the buried wire's knot currents came out 96 % away from bspline's and
-        did not move under refinement (0.964 / 0.963 / 0.962 at m = 1/2/4),
-        while the above wire's converged. Every view returned off the air
-        path carries `k_entry`, which `_evaluate_basis_at_points` honours.
-        """
-        if self._is_mixed(geom):
-            below = self._below_segments(geom)
-            medium = self._fill_medium(geom)
-            view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
-            if self._is_crossing(geom):
-                view = self._crossing_wing_view(geom, view, below, medium)
-            return view
-        medium = self._fill_medium(geom)
-        if medium is None:
-            return super()._readout_view(geom)
-        view = dict(self._basis_coefs(geom, medium.k_m))
-        view["k_entry"] = np.full(np.asarray(view["A"]).shape[0], medium.k_m)
+    def _with_crossing_wings(self, geom, view, below, medium):
+        """A crossing deck's readout view carries the node wings
+        `_crossing_wing_view` appends — the air view omits them outright, so
+        their amplitudes would never be read (momwire#1159). Every other deck
+        is the base's view."""
+        if self._is_crossing(geom):
+            return self._crossing_wing_view(geom, view, below, medium)
         return view
 
-    def _feed_segment_current(self, alpha, seg_view, feed_seg, xi=0.0):
-        """The inherited readout, with the shapes written at each entry's own
-        k when the view carries `k_entry` (see `_entry_k`). At a segment
-        centre (`xi == 0`) no k-dependent shape survives, and a view without
-        `k_entry` has nothing to change, so both take the inherited body."""
-        if xi == 0.0 or "k_entry" not in seg_view:
-            return super()._feed_segment_current(alpha, seg_view, feed_seg, xi)
-        s = seg_view["starts"][feed_seg]
-        e = seg_view["starts"][feed_seg + 1]
-        sig = seg_view["sigma"][s:e]
-        f = _basis_value(
-            sig * seg_view["AC"][s:e],
-            seg_view["B"][s:e],
-            sig * seg_view["C"][s:e],
-            _entry_k(seg_view, s, e, self.k),
-            xi,
-        )
-        return complex((alpha[seg_view["jbasis"][s:e]] * f).sum())
-
-    def _evaluate_basis_at_points(self, seg_view, eval_seg, eval_s, alpha):
-        """The inherited evaluation, with each entry's shapes written at its
-        OWN k when the view carries `k_entry` (a buried or mixed deck's —
-        see `_readout_view`). A view without it takes the inherited body
-        untouched, so every deck in air reads bit for bit as before."""
-        if "k_entry" not in seg_view:
-            return super()._evaluate_basis_at_points(seg_view, eval_seg, eval_s, alpha)
-        n_eval = eval_seg.shape[0]
-        gathered = self._basis_entry_gather(seg_view, eval_seg)
-        if gathered is None:
-            return np.zeros(n_eval, dtype=np.complex128)
-        entry_eval_idx, entry_global = gathered
-        k_e = np.asarray(seg_view["k_entry"])[entry_global]
-        s_e = np.asarray(eval_s)[entry_eval_idx]
-        sig = np.asarray(seg_view["sigma"])[entry_global]
-        f = _basis_value(
-            sig * np.asarray(seg_view["AC"])[entry_global],
-            np.asarray(seg_view["B"])[entry_global],
-            sig * np.asarray(seg_view["C"])[entry_global],
-            k_e,
-            s_e,
-        )
-        out = np.zeros(n_eval, dtype=np.complex128)
-        np.add.at(out, entry_eval_idx, alpha[seg_view["jbasis"][entry_global]] * f)
-        return out
-
-    def _evaluate_basis_slope_at_points(self, seg_view, eval_seg, eval_s, alpha):
-        """The derivative twin of `_evaluate_basis_at_points`' override:
-        f' = k·(B·cos kξ − σC·sin kξ) at each entry's own k."""
-        if "k_entry" not in seg_view:
-            return super()._evaluate_basis_slope_at_points(
-                seg_view, eval_seg, eval_s, alpha
-            )
-        n_eval = eval_seg.shape[0]
-        gathered = self._basis_entry_gather(seg_view, eval_seg)
-        if gathered is None:
-            return np.zeros(n_eval, dtype=np.complex128)
-        entry_eval_idx, entry_global = gathered
-        k_e = np.asarray(seg_view["k_entry"])[entry_global]
-        s_e = np.asarray(eval_s)[entry_eval_idx]
-        sig = np.asarray(seg_view["sigma"])[entry_global]
-        B_e = np.asarray(seg_view["B"])[entry_global]
-        C_e = np.asarray(seg_view["C"])[entry_global]
-        fd = k_e * (B_e * np.cos(k_e * s_e) - sig * C_e * np.sin(k_e * s_e))
-        out = np.zeros(n_eval, dtype=np.complex128)
-        np.add.at(out, entry_eval_idx, alpha[seg_view["jbasis"][entry_global]] * fd)
-        return out
+    def _serves_crossing(self):
+        """This family's crossing serve (momwire#980 D3)."""
+        return True
 
     def _port_currents(self, alpha, geom, seg_view, U):
         """Per-port current readout, ordered [gap feeds…, junction ports…,
