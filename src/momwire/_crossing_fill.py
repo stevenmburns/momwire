@@ -1379,6 +1379,28 @@ def _direct_coords(specs, gz):
     return rho, zAs, zBs, shapes
 
 
+def _plan_sheets(ctx, eps_t, k_p, gz, memo, specs):
+    """Decide the fill's plane sheets ONCE (momwire#1173 Design E phase 2):
+    `memo.sheet_plan` from the node pairs of `specs` (`(A, B, iA, iB)`, as
+    `_direct_coords` takes them), unless the fill already has a plan.
+
+    Called before the fill's first evaluation -- the main sandwich over the
+    whole axes, or the split route's direct batch -- so every later call of
+    the fill (tiles, chunks, end spans, ACA samples) reads the same plan, and
+    how the fill cuts its rows cannot change which rows a sheet serves. No
+    memo, no plan: a call without a fill runs exact."""
+    if memo is None or memo.sheet_plan is not None:
+        return
+    pairs = []
+    for AX, BX, iA, iB in specs:
+        pa = np.array(AX["nodes"][iA], dtype=float)
+        pb = np.array(BX["nodes"][iB], dtype=float)
+        pa[:, 2] -= gz
+        pb[:, 2] -= gz
+        pairs.append((pa, pb))
+    memo.sheet_plan = _near_interface.sheet_plan(eps_t, k_p, pairs, ctx.a_wire)
+
+
 def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None, ends=None):
     """The M + SW + SQ sandwich over (above axis A × below axis B), whole-axis.
 
@@ -1415,6 +1437,7 @@ def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None, ends=
     nA, nB = A["nodes"].shape[0], B["nodes"].shape[0]
     iA = np.arange(nA)
     iB = np.arange(nB)
+    _plan_sheets(ctx, eps_t, k_p, gz, memo, [(A, B, iA, iB)])
     step = max(1, _MAIN_CHUNK_BYTES // (_MAIN_BYTES_PER_PAIR * max(1, nA)))
     tables = _product_route(ctx, eps_t, k_p, A, B, gz, step, memo, ends=ends)
     if tables is not None:
@@ -1725,7 +1748,7 @@ def _product_route(ctx, eps_t, k_p, A, B, gz, step, memo, ends=None):
         _ROUTES["main_generic"] += 1
         _ROUTES["main_generic_" + plan] += 1
         return None
-    tiles = _ProductTiles(plan, eps_t, k_p, step)
+    tiles = _ProductTiles(plan, eps_t, k_p, step, sheet_plan=memo.sheet_plan)
     memo.set_product(tiles.product)
     if ends is None or not ends.attach(plan, tiles):
         tiles.keep_values()
@@ -2101,10 +2124,13 @@ class _ProductTiles:
     tiles, which needs the rule witness (and the twin, since the numpy
     column loop's chunking is not member-independent) — not phase 1."""
 
-    def __init__(self, plan, eps_t, k_p, step):
+    def __init__(self, plan, eps_t, k_p, step, sheet_plan=None):
         self.plan = plan
         self.eps_t = eps_t
         self.k_p = k_p
+        # The fill's plane-sheet plan (its memo's; the tiles evaluate
+        # through `designed_rows_permuted`, which takes no memo).
+        self.sheet_plan = sheet_plan
         U = plan.n_rows
         n_key = plan.key_r.size
         # The one call's columns: exact-ρ classes of the keys, ascending.
@@ -2219,15 +2245,15 @@ class _ProductTiles:
         ni = _near_interface
         if _PRODUCT_NEG_CONTROL != "split":
             vals, pos = ni.designed_rows_permuted(
-                self.eps_t, self.k_p, rows, rtol=_CROSS_RTOL
+                self.eps_t, self.k_p, rows, rtol=_CROSS_RTOL, sheet_plan=self.sheet_plan
             )
             return vals, (np.arange(rows.shape[0]) if pos is None else pos)
         h = rows.shape[0] // 2
         v1, p1 = ni.designed_rows_permuted(
-            self.eps_t, self.k_p, rows[:h], rtol=_CROSS_RTOL
+            self.eps_t, self.k_p, rows[:h], rtol=_CROSS_RTOL, sheet_plan=self.sheet_plan
         )
         v2, p2 = ni.designed_rows_permuted(
-            self.eps_t, self.k_p, rows[h:], rtol=_CROSS_RTOL
+            self.eps_t, self.k_p, rows[h:], rtol=_CROSS_RTOL, sheet_plan=self.sheet_plan
         )
         p1 = np.arange(h) if p1 is None else p1
         p2 = np.arange(rows.shape[0] - h) if p2 is None else p2
@@ -4670,6 +4696,10 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
         else:
             direct.append((Ac, Bc, iA, iB))
 
+    # The fill's plane sheets, from the rows it knows before it evaluates
+    # any: the direct batch (the ACA samples are not known until they are
+    # asked, and they read the same plan).
+    _plan_sheets(ctx, eps_t, k_p, gz, memo, direct)
     if direct:
         # Grouped by a budget on PAIRS, not one global batch (momwire#1126).
         # `_tables` costs ~212 bytes of peak per pair at 150 radials, so the

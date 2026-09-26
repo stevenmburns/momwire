@@ -659,6 +659,11 @@ class TripleMemo:
             ("lookups", "hits", "collisions", "inserts", "merges", "compactions"),
             0,
         )
+        # The fill's plane-sheet plan (`SheetPlan`, momwire#1173 Design E
+        # phase 2): one memo is one fill, so the plan the fill decided before
+        # its first evaluation rides here and every call through this memo
+        # reads it. None: no plan, every row exact.
+        self.sheet_plan = None
 
     @staticmethod
     def _empty_run():
@@ -1206,6 +1211,7 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
             rtol,
             lam_mult,
             labels=None if labels is None else labels[fresh_pos],
+            plan=memo.sheet_plan,
         )
         block[fresh_pos] = vals
         memo.insert(sub, vals)
@@ -1237,7 +1243,9 @@ def designed_rows(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
     return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None)
 
 
-def designed_rows_permuted(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT):
+def designed_rows_permuted(
+    eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, sheet_plan=None
+):
     """`designed_rows(..., memo=None)` without its final reorder: `(vals,
     pos)` with row i's six values at `vals[pos[i]]`, or `pos` None when
     `vals` is already in row order (momwire#1173 design B).
@@ -1249,14 +1257,21 @@ def designed_rows_permuted(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT):
     product tables and `ProductMemo`) composes `pos` into that index instead:
     `vals[pos[i]]` is the element `out[i]` was copied from, so every value
     read is the same float and nothing is recomputed. The other three routes
-    answer in row order and return `pos` None."""
+    answer in row order and return `pos` None.
+
+    `sheet_plan` is the fill's `SheetPlan` (the caller holds the fill's memo
+    and passes its plan, since this entry takes no memo)."""
     rows = np.asarray(rows, dtype=float)
     if rows.shape[0] == 0:
         return np.empty((0, 6), dtype=np.complex128), None
-    return _evaluate_fresh(eps_t, k2, rows, rtol, lam_mult, permuted=True)
+    return _evaluate_fresh(
+        eps_t, k2, rows, rtol, lam_mult, permuted=True, plan=sheet_plan
+    )
 
 
-def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False):
+def _evaluate_fresh(
+    eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False, plan=None
+):
     """The six values of each (m, 3) row of `sub` (distinct triples, in
     first-appearance order), as (m, 6), row i for sub[i] — through the route
     `designed_tables` documents. Each branch hands its machine the same
@@ -1272,16 +1287,19 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False)
     `permuted=True` returns `(vals, pos)` instead (`designed_rows_permuted`):
     the column twin's block in member order with `pos` its row -> member map,
     or the row-ordered block and None on every other route.
+
+    `plan` is the fill's `SheetPlan` (None: every row exact). A row on one
+    of its planes is interpolated from that plane's sheet whatever call it
+    arrives in, so how a fill cuts its rows into calls cannot move it.
     """
     if _use_column_route() and _use_column_accel():
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
-        if _use_sheet():
-            planes, take = _sheet_planes(sub, k_p, k_m)
-            if planes:
-                return _evaluate_with_sheets(
-                    k_p, k_m, sub, lam_mult, labels, permuted, planes, take
-                )
+        take = _sheet_take(sub, plan)
+        if take is not None:
+            return _evaluate_with_sheets(
+                k_p, k_m, sub, lam_mult, labels, permuted, take
+            )
         _SHEET_STATS["exact_rows"] += sub.shape[0]
         return _column_twin(k_p, k_m, sub, lam_mult, labels, permuted)
     if permuted:
@@ -1449,8 +1467,8 @@ _SHEET_WAVES = 1.0
 # e^{-Im(k_m) R} below e^{-_SHEET_DEAD} of its size at the panel's inner edge
 # leaves the air's.
 _SHEET_DEAD = 18.0
-# Which planes a call tabulates: the ones whose OWN rows pay for the table.
-# The exact route pays a column setup per distinct rho (~68 us of wall at 4
+# Which planes a FILL tabulates: the ones whose rows pay for the table. The
+# exact route pays a column setup per distinct rho (~68 us of wall at 4
 # threads) plus ~1.9 us per member; a sheet pays one setup per node, once, and
 # ~0.2 us per interpolated row (Design E's cost lines: invl_deck(16) x8, 1.44 M
 # columns in 98 s; hub x4, 3,851 columns and 224,840 members in 0.68 s). So a
@@ -1458,16 +1476,25 @@ _SHEET_DEAD = 18.0
 #
 #     distinct rho + rows * _SHEET_ROW_WORTH >= nodes * _SHEET_BUILD_WEIGHT,
 #
-# nodes being what a sheet reaching the plane's farthest row would hold. It is
-# decided per CALL, on the call's rows alone, and never on what is cached, so Z
-# does not depend on what the process solved before. The Beverage is why it is
-# a cost rule and not a row count: its rod planes carry ~4.5 k rows each but
-# reach 246 m, ~14 k nodes a sheet, and a 4,096-row threshold took seven of
-# them and cost 7 s. `_SHEET_BUILD_WEIGHT = 0` takes every plane past the
-# pre-filter (the tests' handle).
+# nodes being what a sheet reaching the plane's farthest row would hold.
+#
+# It is decided ONCE PER FILL (`SheetPlan`, momwire#1173 Design E phase 2), on
+# the distinct rows the fill knows before it evaluates any (the main sandwich's
+# node grid, or the split route's direct batch), and then every call of that
+# fill reads the same plan. Phase 1 decided per `_evaluate_fresh` call, so two
+# cuts of the same rows (tiles, chunks, the dict reference) could take a plane
+# differently and Z moved at ~1e-11 with the tile size. A sheet row's value is
+# a function of the row alone (fixed nodes, `PlaneSheet`), and the rows left
+# exact are the same set in every cut, so with the decision per fill the cut
+# no longer shows. It is never decided on what is cached, so Z does not depend
+# on what the process solved before. The Beverage is why it is a cost rule and
+# not a row count: its rod planes carry ~4.5 k rows each but reach 246 m,
+# ~14 k nodes a sheet, and a 4,096-row threshold took seven of them and cost
+# 7 s. `_SHEET_BUILD_WEIGHT = 0` takes every plane past the pre-filter (the
+# tests' handle).
 _SHEET_ROW_WORTH = 1.0 / 40.0
 _SHEET_BUILD_WEIGHT = 1.0
-# A pre-filter only, so a small call never pays for the census: no table is
+# A pre-filter only, so a small plane never pays for the census: no table is
 # smaller than _SHEET_NTAU * _SHEET_P * _SHEET_PT = 576 nodes.
 _SHEET_MIN_ROWS = 512
 # The distance guard. A sheet is never used for a plane shallower than this:
@@ -1481,10 +1508,12 @@ _SHEET_MIN_DEPTH = 1e-3
 _SHEET_CACHE_MAX = 32
 _SHEET_CACHE = collections.OrderedDict()
 _SHEET_LOCK = threading.Lock()
-# Route proof: rows each path served, planes interpolated, sheets built and
-# their nodes, rows left exact ONLY because of the depth guard, and rows on
-# planes the cost rule left exact (`_SHEET_ROW_WORTH`). Reset by
-# assignment (`dict.fromkeys(_SHEET_STATS, 0)`) or key by key.
+# Route proof: rows each path served, planes interpolated (per call), sheets
+# built and their nodes; and from the fills' plans (`sheet_plan`), the census
+# rows of planes left exact ONLY because of the depth guard and of planes the
+# cost rule left exact (`_SHEET_ROW_WORTH`), the fills planned and the planes
+# they took. Reset by assignment (`dict.fromkeys(_SHEET_STATS, 0)`) or key by
+# key.
 _SHEET_STATS = dict.fromkeys(
     (
         "sheet_rows",
@@ -1494,6 +1523,8 @@ _SHEET_STATS = dict.fromkeys(
         "nodes_built",
         "guarded_rows",
         "declined_rows",
+        "fills_planned",
+        "planes_planned",
     ),
     0,
 )
@@ -1513,44 +1544,206 @@ def _cheb(p):
     return np.ascontiguousarray(x), np.ascontiguousarray(w)
 
 
-def _sheet_planes(sub, k_p, k_m):
-    """The planes of `sub` a sheet serves, as [(z', farthest R)], and the mask
-    of their rows, or ([], None).
+class SheetPlan:
+    """Which planes one crossing FILL serves from plane sheets (momwire#1173
+    Design E phase 2): `planes`, the sorted z' < 0 values taken. Decided once,
+    before the fill evaluates anything (`sheet_plan`), and carried on the
+    fill's memo (`TripleMemo.sheet_plan`), so every call of the fill -- tiles,
+    chunks, end spans, ACA samples -- serves the same rows from a sheet."""
 
-    A row is a candidate when it is on the above side (z >= 0, finite) with a
-    finite rho >= 0 and z' < 0. A plane of at least `_SHEET_MIN_ROWS`
-    candidates is left exact when it is shallower than the depth guard
-    (counted as guarded), and otherwise when its rows do not pay for its table
-    (`_SHEET_ROW_WORTH`; counted as declined). The distinct rho are counted
-    only when the two bounds (every row its own column, or none) disagree."""
-    m = sub.shape[0]
-    if m < _SHEET_MIN_ROWS:
-        return [], None
+    __slots__ = ("planes",)
+
+    def __init__(self, planes=()):
+        self.planes = np.asarray(sorted(float(v) for v in planes), dtype=float)
+
+    def __bool__(self):
+        return bool(self.planes.size)
+
+    def __repr__(self):
+        return f"SheetPlan(planes={self.planes.tolist()})"
+
+
+def _sheet_take(sub, plan):
+    """The mask of `sub`'s rows the plan serves from a sheet, or None: a row
+    on one of its planes, on the above side (z >= 0, finite) with a finite
+    rho >= 0. A function of each row alone."""
+    if plan is None or not plan or not _use_sheet() or sub.shape[0] == 0:
+        return None
     rho, z, zp = sub[:, 0], sub[:, 1], sub[:, 2]
-    above = (z >= 0.0) & (rho >= 0.0) & np.isfinite(z) & np.isfinite(rho)
-    below = above & (zp < 0.0)
-    if np.count_nonzero(below) < _SHEET_MIN_ROWS:
-        return [], None
-    vals, cnt = np.unique(zp[below], return_counts=True)
-    planes, take = [], None
+    take = np.isin(zp, plan.planes)
+    if not take.any():
+        return None
+    take &= (z >= 0.0) & (rho >= 0.0) & np.isfinite(z) & np.isfinite(rho)
+    return take if take.any() else None
+
+
+def _plane_pays(k_p, k_m, v, parts):
+    """The cost rule for plane z' = v on its census `parts`, each an (R, Zg)
+    pair: R the (G, H) folded rho between G above (x, y) groups and H plane
+    (x, y) groups, Zg the G groups' distinct z (a list of arrays).
+
+    The fill's rows on the plane are the pairs (R[g, h], z) for z in Zg[g],
+    so the rule's counts are the distinct values of R and the distinct pairs.
+    Bounds decide first and the exact counts are taken only between them, so
+    the decision is always the exact rule's: an upper bound (every group pair
+    its own column and every row distinct) that still fails declines, and a
+    lower bound (the distinct rho of a prefix) that already pays takes."""
+    zmax = [np.array([z.max() for z in zg]) for _r, zg in parts]
+    rmax = max(
+        float(np.hypot(r, zm[:, None] - v).max()) for (r, _zg), zm in zip(parts, zmax)
+    )
+    need = _sheet_nodes_to(k_p, k_m, -v, rmax) * _SHEET_BUILD_WEIGHT
+    w = _SHEET_ROW_WORTH
+    n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg in parts)
+    n_rho_ub = sum(r.size for r, _zg in parts)
+    if n_rho_ub + n_rows_ub * w < need:
+        return False
+    # A prefix of the rho values: its distinct count bounds both counts below.
+    cap = int(max(4096, 4 * need))
+    pre, got = [], 0
+    for r, _zg in parts:
+        take = r.ravel()[: cap - got]
+        pre.append(take)
+        got += take.size
+        if got >= cap:
+            break
+    lb = np.unique(np.concatenate(pre)).size
+    if lb * (1.0 + w) >= need:
+        return True
+    n_rho = np.unique(np.concatenate([r.ravel() for r, _zg in parts])).size
+    return n_rho + _distinct_pairs(parts) * w >= need
+
+
+def _distinct_pairs(parts):
+    """The number of distinct (rho, z) pairs of a plane census (`_plane_pays`):
+    by z, the size of the union of the distinct rho of the groups holding
+    that z. A z held by one group (a mast's heights) costs its group's count;
+    only a z shared by several groups (a horizontal wire's) pays a union, once
+    per distinct set of groups."""
+    rho_of, by_z = [], collections.defaultdict(list)
+    for r, zg in parts:
+        for g, zs in enumerate(zg):
+            gid = len(rho_of)
+            rho_of.append(np.unique(r[g]))
+            for zv in zs.tolist():
+                by_z[zv + 0.0].append(gid)
+    n, union = 0, {}
+    for gids in by_z.values():
+        if len(gids) == 1:
+            n += rho_of[gids[0]].size
+            continue
+        key = tuple(gids)
+        if key not in union:
+            union[key] = np.unique(np.concatenate([rho_of[g] for g in gids])).size
+        n += union[key]
+    return n
+
+
+def _xy_groups(x, y):
+    """The distinct exact (x, y) of a node set and each node's group."""
+    xy = np.stack([x + 0.0, y + 0.0], axis=1)
+    u, inv = np.unique(xy, axis=0, return_inverse=True)
+    return u, np.asarray(inv).ravel()
+
+
+def sheet_plan(eps_t, k2, specs, wire_radius):
+    """The fill's `SheetPlan` over the node pairs of `specs`: each an (above
+    nodes, below nodes) pair of (n, 3) arrays with z RELATIVE TO THE
+    INTERFACE, whose every (above, below) pair is a row the fill will ask as
+    (radius_fold(rho), z, z'). The census is by exact (x, y) group on each
+    side, so a vertical mast over a screen costs its groups, not its pairs.
+
+    A plane z' = v < 0 is a candidate when its rows (counted before dedup)
+    reach `_SHEET_MIN_ROWS`; a candidate shallower than `_SHEET_MIN_DEPTH` is
+    left exact (guarded), and one whose rows do not pay for its table
+    (`_plane_pays`) is declined. Returns an empty plan when the sheets are
+    off, so the fill runs the exact route and the census is not paid."""
+    if not (_use_sheet() and _use_column_route() and _use_column_accel()):
+        return SheetPlan()
+    k_p = float(k2)
+    k_m = k_medium(complex(eps_t), k_p)
+    a = float(wire_radius)
+    census = collections.defaultdict(list)
+    counts = collections.Counter()
+    for above, below in specs:
+        above = np.asarray(above, dtype=float)
+        below = np.asarray(below, dtype=float)
+        if above.shape[0] == 0 or below.shape[0] == 0:
+            continue
+        ok = np.isfinite(above).all(axis=1) & (above[:, 2] >= 0.0)
+        pa = above[ok]
+        zb = below[:, 2]
+        cand = np.isfinite(below).all(axis=1) & (zb < 0.0)
+        if pa.shape[0] == 0 or not cand.any():
+            continue
+        vals, cnt = np.unique(zb[cand], return_counts=True)
+        big = cnt * pa.shape[0] >= _SHEET_MIN_ROWS
+        if not big.any():
+            continue
+        gxy, ginv = _xy_groups(pa[:, 0], pa[:, 1])
+        order = np.argsort(ginv, kind="stable")
+        cuts = np.searchsorted(ginv[order], np.arange(gxy.shape[0] + 1))
+        zg = [
+            np.unique(pa[order[cuts[g] : cuts[g + 1]], 2]) for g in range(gxy.shape[0])
+        ]
+        for v, n in zip(vals[big].tolist(), cnt[big].tolist()):
+            on = below[cand & (zb == v)]
+            hxy, _ = _xy_groups(on[:, 0], on[:, 1])
+            r = np.hypot(
+                gxy[:, 0][:, None] - hxy[:, 0][None, :],
+                gxy[:, 1][:, None] - hxy[:, 1][None, :],
+            )
+            census[v].append((radius_fold(r, a), zg))
+            counts[v] += n * pa.shape[0]
+    planes = []
+    for v in sorted(census):
+        n = counts[v]
+        if v > -_SHEET_MIN_DEPTH:
+            _SHEET_STATS["guarded_rows"] += n
+            continue
+        if not _plane_pays(k_p, k_m, v, census[v]):
+            _SHEET_STATS["declined_rows"] += n
+            continue
+        planes.append(v)
+    _SHEET_STATS["fills_planned"] += 1
+    _SHEET_STATS["planes_planned"] += len(planes)
+    return SheetPlan(planes)
+
+
+def _sheet_planes(sub, k_p, k_m):
+    """The plan `sheet_plan` would make for explicit rows `sub` (each row a
+    pair of its own), as ([(z', farthest R)], take mask) or ([], None): the
+    unit handle on the rule and the guard."""
+    rho, z, zp = sub[:, 0], sub[:, 1], sub[:, 2]
+    ok = (z >= 0.0) & (rho >= 0.0) & np.isfinite(z) & np.isfinite(rho) & (zp < 0.0)
+    vals, cnt = np.unique(zp[ok], return_counts=True)
+    planes = []
     for v, n in zip(vals.tolist(), cnt.tolist()):
         if n < _SHEET_MIN_ROWS:
             continue
         if v > -_SHEET_MIN_DEPTH:
             _SHEET_STATS["guarded_rows"] += n
             continue
-        on = below & (zp == v)
-        rmax = float(np.hypot(rho[on], z[on] - v).max())
-        need = _sheet_nodes_to(k_p, k_m, -v, rmax) * _SHEET_BUILD_WEIGHT
-        gain = n * _SHEET_ROW_WORTH
-        if gain < need and not (
-            n + gain >= need and np.unique(rho[on]).size + gain >= need
-        ):
+        on = ok & (zp == v)
+        # One census part per distinct z, its rho a (1, H) row, so the
+        # census's pairs are exactly the rows.
+        zs, inv = np.unique(z[on], return_inverse=True)
+        inv = np.asarray(inv).ravel()
+        rr = rho[on]
+        parts = [(rr[inv == g][None, :], [zs[g : g + 1]]) for g in range(zs.size)]
+        if not _plane_pays(k_p, k_m, v, parts):
             _SHEET_STATS["declined_rows"] += n
             continue
-        planes.append((v, rmax))
-        take = on if take is None else take | on
-    return planes, take
+        planes.append(v)
+    if not planes:
+        return [], None
+    plan = SheetPlan(planes)
+    take = _sheet_take(np.ascontiguousarray(sub, dtype=float), plan)
+    out = []
+    for v in plan.planes.tolist():
+        m = take & (zp == v)
+        out.append((v, float(np.hypot(rho[m], z[m] - v).max())))
+    return out, take
 
 
 def _sheet_panel(k_p, k_m, d, i):
@@ -1744,11 +1937,13 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rmax):
         return sheet
 
 
-def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, planes, take):
-    """`_evaluate_fresh` on the column route when `planes` qualify: their rows
-    (`take`) interpolated from the planes' sheets, the rest through the
-    column twin exactly as `_column_twin` would take them alone (their
-    labels, their first-appearance order)."""
+def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take):
+    """`_evaluate_fresh` on the column route when the fill's plan serves some
+    rows (`take`, `_sheet_take`): those interpolated from their planes'
+    sheets, the rest through the column twin exactly as `_column_twin` would
+    take them alone (their labels, their first-appearance order). Each sheet
+    is grown to this call's farthest row on its plane, which moves no node
+    (`PlaneSheet`)."""
     m = sub.shape[0]
     sub = np.ascontiguousarray(sub, dtype=float)
     out = np.empty((m, 6), dtype=np.complex128)
@@ -1757,20 +1952,22 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, planes, tak
         lab = None if labels is None else np.asarray(labels)[rest]
         out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
     zp = sub[:, 2]
-    for v, rmax in planes:
+    planes = np.unique(zp[take])
+    for v in planes.tolist():
         idx = np.flatnonzero(take & (zp == v))
+        rmax = float(np.hypot(sub[idx, 0], sub[idx, 1] - v).max())
         _plane_sheet(k_p, k_m, v, lam_mult, rmax).interpolate(sub, idx, out)
     n_sheet = m - rest.size
     _SHEET_STATS["sheet_rows"] += n_sheet
     _SHEET_STATS["exact_rows"] += rest.size
-    _SHEET_STATS["sheet_planes"] += len(planes)
+    _SHEET_STATS["sheet_planes"] += int(planes.size)
     if permuted:
         return out, None
     return out
 
 
 def _designed_tables_reference(
-    eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None
+    eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT, memo=None, plan=None
 ):
     """`designed_tables` with the dict memo it had before momwire#1168 U1,
     kept as the in-process reference the array memo (`TripleMemo`) is gated
@@ -1778,6 +1975,10 @@ def _designed_tables_reference(
     a filled entry is a (6,) complex array and the unfilled sentinel is None,
     left behind by a call that raised part-way (a later ask of that key then
     raises in the restack below). No production caller reaches it.
+
+    `plan` is the fill's `SheetPlan` (the array route reads it off its
+    `TripleMemo`; a dict carries none): its rows are interpolated from their
+    sheets and the rest take the twin exactly as below.
     """
     rho_b, z_b, zp_b = np.broadcast_arrays(
         np.asarray(rho, float), np.asarray(z, float), np.asarray(zp, float)
@@ -1831,30 +2032,37 @@ def _designed_tables_reference(
             # turned the tuples back into a float array — a round trip through
             # Python objects for data that never stopped being an array.
             sub = rows[fresh_pos]
-            rho_c, sizes, member_order = _column_blocks(sub)
-            offsets = np.zeros(sizes.size + 1, dtype=np.intp)
-            offsets[1:] = np.cumsum(sizes)
-            zs = np.ascontiguousarray(sub[member_order, 1])
-            zps = np.ascontiguousarray(sub[member_order, 2])
-            # Refused HERE, in the walk's words with the offending member's
-            # numbers: the twin refuses the same set (before it builds a
-            # single column), but from C++ it cannot spell the values.
-            _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-            vals = _nia.near_interface_six_columns(
-                k_p,
-                k_m,
-                rho_c,
-                offsets,
-                zs,
-                zps,
-                float(lam_mult),
-                int(_COLUMN_P),
-                float(_DETOUR),
-                _physical_cpu_count(),
-                _GX,
-                _GW,
-            )
-            placed = fresh_pos[member_order]
+            take = _sheet_take(sub, plan)
+            if take is not None:
+                # The plan's rows from their sheets, the rest through the twin
+                # grouped as below (`_evaluate_with_sheets`), in row order.
+                vals = _evaluate_with_sheets(k_p, k_m, sub, lam_mult, None, False, take)
+                placed = fresh_pos
+            else:
+                rho_c, sizes, member_order = _column_blocks(sub)
+                offsets = np.zeros(sizes.size + 1, dtype=np.intp)
+                offsets[1:] = np.cumsum(sizes)
+                zs = np.ascontiguousarray(sub[member_order, 1])
+                zps = np.ascontiguousarray(sub[member_order, 2])
+                # Refused HERE, in the walk's words with the offending member's
+                # numbers: the twin refuses the same set (before it builds a
+                # single column), but from C++ it cannot spell the values.
+                _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
+                vals = _nia.near_interface_six_columns(
+                    k_p,
+                    k_m,
+                    rho_c,
+                    offsets,
+                    zs,
+                    zps,
+                    float(lam_mult),
+                    int(_COLUMN_P),
+                    float(_DETOUR),
+                    _physical_cpu_count(),
+                    _GX,
+                    _GW,
+                )
+                placed = fresh_pos[member_order]
             block[placed] = vals
             n_filled += placed.size
             for j, row in zip(placed, vals):

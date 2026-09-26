@@ -68,15 +68,9 @@ from test_tilted_crossing_936 import _crossing_deck as tilted_deck
 from test_triple_memo_1168 import _hub, _razor
 
 
-@pytest.fixture(autouse=True)
-def _exact_route(monkeypatch):
-    """This module holds the exact machinery's routes to the bit, so it runs
-    with the plane sheets off (momwire#1173 Design E). A sheet is a GATED
-    layer decided per `_evaluate_fresh` call (a plane qualifies on the rows
-    one call asks), so two partitions of the same rows -- tiles, the grid
-    route's chunks, the dict reference -- can take it differently; its own
-    gates are `test_plane_sheet_1173`."""
-    monkeypatch.setattr(ni, "_SHEET", False)
+# Every gate here runs at the shipped cost rule and with every plane taken
+# (conftest's `sheet_modes`, momwire#1173 Design E phase 2).
+pytestmark = pytest.mark.usefixtures("sheet_modes")
 
 
 # ----------------------------------------------------------------------
@@ -308,7 +302,7 @@ def _plan_rows(A, B, monkeypatch, **flags):
     row and kernel, and the rows each evaluation call was handed."""
     seen = []
 
-    def spy(eps_t, k2, rows, rtol=1e-10, lam_mult=ni._LAM_MULT):
+    def spy(eps_t, k2, rows, rtol=1e-10, lam_mult=ni._LAM_MULT, sheet_plan=None):
         seen.append(np.array(rows, copy=True))
         base = sum(s.shape[0] for s in seen[:-1])
         r = base + np.arange(rows.shape[0])
