@@ -58,11 +58,17 @@ def _make(lean):
 def _reference(lean):
     """The switches-off Z, shared by this module's tests (read-only), for the
     plane-sheet settings in force (`sheet_modes` runs each test under two)."""
-    return _reference_at(lean, ni._SHEET_BUILD_WEIGHT, ni._SHEET_MIN_ROWS)
+    return _reference_at(
+        lean,
+        ni._SHEET,
+        ni._SHEET_BUILD_WEIGHT,
+        ni._SHEET_HEIGHT_WEIGHT,
+        ni._SHEET_MIN_ROWS,
+    )
 
 
 @functools.cache
-def _reference_at(lean, _weight, _min_rows):
+def _reference_at(lean, *_sheet_settings):
     Z, r = _fill(_make(lean), off=True)
     assert r["cf.main_product"] == 0 and r["cf.ends_fast"] == 0, r
     Z.setflags(write=False)
