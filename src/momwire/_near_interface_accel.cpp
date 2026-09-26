@@ -895,8 +895,20 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
 // no Vandermonde, no conditioning question.
 //
 // Panel j of the R axis spans u_edges[j] .. u_edges[j + 1] and carries
-// ntau[j] equal tau panels over [0, 1]; its node block starts at voff[j] (in
+// ntau[j] equal tau panels over [t0[j], 1]; its node block starts at voff[j] (in
 // nodes) and is laid out [tau panel][u node a][tau node b][6 kernels].
+//
+// A HEIGHT sheet (Design E phase 2, `height` true) is the mirror case: ONE
+// observer height z = h > 0 and the source depth z' <= 0 varying, as a
+// horizontal wire over vertical rods asks. The kernels are analytic in
+// (rho, z') over the whole below half-plane at fixed h, their only nearby
+// singular point (rho, z') = (0, h) at least h away, so the same map serves
+// with d = h: s = z - z' is still the vertical separation, R = hypot(rho, s),
+// theta = atan2(rho, s), and tau = 1 is z' = 0 as it is z = 0 on a plane
+// sheet. Only the fixed coordinate and the membership check differ -- and a
+// height sheet covers only the depths its rows reach (z' >= -D): each panel's
+// tau starts at t0[j] (0 on a plane sheet, where t0 = 0 leaves every operation
+// exact: tau - 0, x / 1, 0 + 1 * x), and a row below it is refused.
 //
 // Each row is independent and reduces over nothing shared, so the answer does
 // not depend on the thread count. The multiply-adds are spelled through
@@ -931,13 +943,15 @@ static void near_interface_plane_sheet(
     py::array_t<double, py::array::c_style | py::array::forcecast> u_edges,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> ntau,
     py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> voff,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t0,
     py::array_t<double, py::array::c_style | py::array::forcecast> x,
     py::array_t<double, py::array::c_style | py::array::forcecast> bw,
     py::array_t<double, py::array::c_style | py::array::forcecast> xt,
     py::array_t<double, py::array::c_style | py::array::forcecast> bwt,
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
         vals,
-    py::array_t<std::complex<double>, py::array::c_style> out, int n_threads) {
+    py::array_t<std::complex<double>, py::array::c_style> out, int n_threads,
+    bool height) {
     if (sub.ndim() != 2 || sub.shape(1) != 3)
         throw std::invalid_argument("sub must be (m, 3)");
     const py::ssize_t m = sub.shape(0);
@@ -945,11 +959,15 @@ static void near_interface_plane_sheet(
         !out.writeable())
         throw std::invalid_argument("out must be a writeable (m, 6) complex array");
     if (idx.ndim() != 1) throw std::invalid_argument("idx must be 1-D");
-    if (!(zp < 0.0)) throw std::invalid_argument("a plane sheet needs zp < 0");
+    // `zp` is the sheet's FIXED coordinate: the plane's z' (< 0), or with
+    // `height` the observer height h (> 0).
+    if (height ? !(zp > 0.0) : !(zp < 0.0))
+        throw std::invalid_argument(height ? "a height sheet needs h > 0"
+                                           : "a plane sheet needs zp < 0");
     const py::ssize_t n = idx.shape(0);
     const py::ssize_t np_ = ntau.shape(0);
     if (np_ < 1 || u_edges.ndim() != 1 || u_edges.shape(0) != np_ + 1 ||
-        voff.shape(0) != np_)
+        voff.shape(0) != np_ || t0.ndim() != 1 || t0.shape(0) != np_)
         throw std::invalid_argument("u_edges must have len(ntau) + 1 entries");
     const int p = static_cast<int>(x.shape(0));
     const int pt = static_cast<int>(xt.shape(0));
@@ -961,9 +979,11 @@ static void near_interface_plane_sheet(
     const double *ue = u_edges.data();
     const std::int64_t *nt_ = ntau.data();
     const std::int64_t *vo = voff.data();
+    const double *t0p = t0.data();
     const py::ssize_t n_nodes = vals.shape(0);
     for (py::ssize_t j = 0; j < np_; ++j) {
         if (!(ue[j + 1] > ue[j]) || nt_[j] < 1 || vo[j] < 0 ||
+            !(t0p[j] >= 0.0 && t0p[j] < 1.0) ||
             vo[j] + nt_[j] * p * pt > n_nodes)
             throw std::invalid_argument("inconsistent sheet panels");
     }
@@ -978,7 +998,7 @@ static void near_interface_plane_sheet(
     const double *V = reinterpret_cast<const double *>(vals.data());
     const double *sb = sub.data();
     double *ob = reinterpret_cast<double *>(out.mutable_data());
-    const double d = -zp;
+    const double d = height ? zp : -zp;
 
     int nt = 1;
 #ifdef _OPENMP
@@ -1000,12 +1020,15 @@ static void near_interface_plane_sheet(
             double wu[32], wt[32];
             const py::ssize_t row = ix[r];
             const double rho = sb[row * 3], z = sb[row * 3 + 1];
+            const double zq = sb[row * 3 + 2];
             double *o = ob + row * 12;
-            const double s = z - zp;
+            const double s = z - zq;
             const double R = std::hypot(rho, s);
             const double u = std::log(R);
-            if (!(sb[row * 3 + 2] == zp && rho >= 0.0 && z >= 0.0 &&
-                  u >= ue[0] - slack && u <= ue[np_] + slack)) {
+            const bool on =
+                height ? (z == zp && zq <= 0.0) : (zq == zp && z >= 0.0);
+            if (!(on && rho >= 0.0 && u >= ue[0] - slack &&
+                  u <= ue[np_] + slack)) {
                 bad = 1;
                 for (int k = 0; k < 12; ++k) o[k] = 0.0;
                 continue;
@@ -1023,11 +1046,22 @@ static void near_interface_plane_sheet(
             if (j < 0) j = 0;
             if (j > np_ - 1) j = np_ - 1;
             const int ntj = static_cast<int>(nt_[j]);
-            int jt = static_cast<int>(tau * ntj);
+            const double tj = t0p[j];
+            if (tau < tj) {
+                if (tau < tj - slack) {  // deeper than the height sheet reaches
+                    bad = 1;
+                    for (int k = 0; k < 12; ++k) o[k] = 0.0;
+                    continue;
+                }
+                tau = tj;
+            }
+            const double span = 1.0 - tj;
+            int jt = static_cast<int>((tau - tj) / span * ntj);
             if (jt > ntj - 1) jt = ntj - 1;
             mw_sheet::bary(u, ue[j], ue[j + 1], xp, bwp, p, wu);
-            mw_sheet::bary(tau, double(jt) / ntj, double(jt + 1) / ntj, xtp,
-                           bwtp, pt, wt);
+            mw_sheet::bary(tau, tj + span * (double(jt) / ntj),
+                           tj + span * (double(jt + 1) / ntj), xtp, bwtp, pt,
+                           wt);
             const double *blk =
                 V + (vo[j] + static_cast<std::int64_t>(jt) * p * pt) * 12;
             double acc[12] = {0.0};
@@ -1052,8 +1086,9 @@ static void near_interface_plane_sheet(
     }
     if (bad)
         throw std::invalid_argument(
-            "a row lies off the plane sheet (need z' == the plane's, rho >= 0, "
-            "z >= 0 and R inside the table)");
+            "a row lies off the plane sheet (need z' == the plane's and z >= 0, "
+            "or on a height sheet z == its h and z' <= 0; rho >= 0 and R inside "
+            "the table)");
 }
 
 // momwire#1032: the module NAME is a build parameter, so the same sources can
@@ -1103,13 +1138,17 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // The plane sheet's flag (momwire#1173 Design E), its own name for the
     // same reason as the two above.
     m.attr("plane_sheet_1173") = true;
+    // Design E phase 2: the entry takes `height` (the mirror sheet).
+    m.attr("height_sheet_1173") = true;
     m.def("near_interface_plane_sheet", &near_interface_plane_sheet,
           py::arg("sub"), py::arg("idx"), py::arg("zp"), py::arg("u_edges"),
-          py::arg("ntau"), py::arg("voff"), py::arg("x"), py::arg("bw"),
+          py::arg("ntau"), py::arg("voff"), py::arg("t0"), py::arg("x"),
+          py::arg("bw"),
           py::arg("xt"), py::arg("bwt"), py::arg("vals"), py::arg("out"),
-          py::arg("n_threads"),
+          py::arg("n_threads"), py::arg("height") = false,
           "Interpolate the rows sub[idx] (rho, z, zp), all on the plane "
-          "z' = zp, from a _near_interface.PlaneSheet table into out[idx] "
+          "z' = zp (height=True: z = zp > 0 with z' <= 0, a height sheet), "
+          "from a _near_interface.PlaneSheet table into out[idx] "
           "((m, 6) complex, KEYS order). Row-parallel; the answer does not "
           "depend on the thread count.");
 }

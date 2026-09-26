@@ -1298,7 +1298,7 @@ def _evaluate_fresh(
         take = _sheet_take(sub, plan)
         if take is not None:
             return _evaluate_with_sheets(
-                k_p, k_m, sub, lam_mult, labels, permuted, take
+                k_p, k_m, sub, lam_mult, labels, permuted, take, plan
             )
         _SHEET_STATS["exact_rows"] += sub.shape[0]
         return _column_twin(k_p, k_m, sub, lam_mult, labels, permuted)
@@ -1427,7 +1427,7 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
 # is the exact route to the bit, and the reference the gates compare against.
 _SHEET = os.environ.get("MOMWIRE_NEAR_INTERFACE_SHEET", "1") != "0"
 _HAVE_PLANE_SHEET_ACCEL = _nia is not None and bool(
-    getattr(_nia, "plane_sheet_1173", False)
+    getattr(_nia, "height_sheet_1173", False)
 )
 # Chebyshev nodes per panel in u and in tau. Design E measured the table
 # against the twin at the asked rows (invl_deck(16), soil A, 7 MHz, d = 0.15 m):
@@ -1494,6 +1494,15 @@ _SHEET_DEAD = 18.0
 # tests' handle).
 _SHEET_ROW_WORTH = 1.0 / 40.0
 _SHEET_BUILD_WEIGHT = 1.0
+# A HEIGHT sheet (the mirror form, `PlaneSheet(height=True)`) is credited with
+# its rows' member cost only, rows * _SHEET_ROW_WORTH >= nodes *
+# _SHEET_HEIGHT_WEIGHT: the exact route's columns are per rho across every z,
+# so the rows of one height share their columns with the other heights' (a
+# mast's nodes, each its own height, all ask the same radial rho), and taking
+# one height's rows saves no column. Its own weight, so the tests' handle on
+# the planes (`_SHEET_BUILD_WEIGHT = 0`) does not turn every mast node into a
+# sheet.
+_SHEET_HEIGHT_WEIGHT = 1.0
 # A pre-filter only, so a small plane never pays for the census: no table is
 # smaller than _SHEET_NTAU * _SHEET_P * _SHEET_PT = 576 nodes.
 _SHEET_MIN_ROWS = 512
@@ -1525,6 +1534,8 @@ _SHEET_STATS = dict.fromkeys(
         "declined_rows",
         "fills_planned",
         "planes_planned",
+        "heights_planned",
+        "height_rows",
     ),
     0,
 )
@@ -1545,63 +1556,88 @@ def _cheb(p):
 
 
 class SheetPlan:
-    """Which planes one crossing FILL serves from plane sheets (momwire#1173
-    Design E phase 2): `planes`, the sorted z' < 0 values taken. Decided once,
-    before the fill evaluates anything (`sheet_plan`), and carried on the
-    fill's memo (`TripleMemo.sheet_plan`), so every call of the fill -- tiles,
-    chunks, end spans, ACA samples -- serves the same rows from a sheet."""
+    """Which rows one crossing FILL serves from sheets (momwire#1173 Design E
+    phase 2): `planes`, the sorted z' < 0 values taken as plane sheets, and
+    `heights`, the sorted z > 0 values taken as height sheets (the mirror
+    form) for the rows no plane takes, each reaching z' >= -`depths[i]`.
+    Decided once, before the fill
+    evaluates anything (`sheet_plan`), and carried on the fill's memo
+    (`TripleMemo.sheet_plan`), so every call of the fill -- tiles, chunks,
+    end spans, ACA samples -- serves the same rows from a sheet."""
 
-    __slots__ = ("planes",)
+    __slots__ = ("planes", "heights", "depths")
 
-    def __init__(self, planes=()):
+    def __init__(self, planes=(), heights=()):
+        """`heights`: (h, depth) pairs."""
         self.planes = np.asarray(sorted(float(v) for v in planes), dtype=float)
+        hd = sorted((float(h), float(dd)) for h, dd in heights)
+        self.heights = np.asarray([h for h, _dd in hd], dtype=float)
+        self.depths = np.asarray([dd for _h, dd in hd], dtype=float)
 
     def __bool__(self):
-        return bool(self.planes.size)
+        return bool(self.planes.size or self.heights.size)
 
     def __repr__(self):
-        return f"SheetPlan(planes={self.planes.tolist()})"
+        return (
+            f"SheetPlan(planes={self.planes.tolist()}, "
+            f"heights={list(zip(self.heights.tolist(), self.depths.tolist()))})"
+        )
 
 
 def _sheet_take(sub, plan):
-    """The mask of `sub`'s rows the plan serves from a sheet, or None: a row
-    on one of its planes, on the above side (z >= 0, finite) with a finite
-    rho >= 0. A function of each row alone."""
+    """`(take, on_plane)` for `sub` under `plan`, or None when it serves no
+    row: `take` the rows a sheet serves, `on_plane` those on one of its
+    planes (the rest of `take` are on one of its heights). A plane row is on
+    a plane with z >= 0; a height row is at a height with -depth <= z' <= 0
+    (its sheet's reach) and on no plane. Both need a finite rho >= 0. A
+    function of each row alone."""
     if plan is None or not plan or not _use_sheet() or sub.shape[0] == 0:
         return None
     rho, z, zp = sub[:, 0], sub[:, 1], sub[:, 2]
-    take = np.isin(zp, plan.planes)
-    if not take.any():
-        return None
-    take &= (z >= 0.0) & (rho >= 0.0) & np.isfinite(z) & np.isfinite(rho)
-    return take if take.any() else None
+    ok = (rho >= 0.0) & np.isfinite(rho) & np.isfinite(z) & np.isfinite(zp)
+    on_plane = np.isin(zp, plan.planes) & (z >= 0.0) & ok
+    take = on_plane
+    if plan.heights.size:
+        j = np.minimum(np.searchsorted(plan.heights, z), plan.heights.size - 1)
+        at = (plan.heights[j] == z) & (zp <= 0.0) & (zp >= -plan.depths[j]) & ok
+        take = on_plane | at
+    return (take, on_plane) if take.any() else None
 
 
-def _plane_pays(k_p, k_m, v, parts):
-    """The cost rule for plane z' = v on its census `parts`, each an (R, Zg)
-    pair: R the (G, H) folded rho between G above (x, y) groups and H plane
-    (x, y) groups, Zg the G groups' distinct z (a list of arrays).
+def _plane_pays(k_p, k_m, d, parts, depth=None):
+    """The cost rule for one sheet at distance d from its singular point, on
+    its census `parts`, each an (R, Zg, S) triple: R the (G, H) folded rho
+    between G (x, y) groups on the side that varies in depth and H groups on
+    the fixed side, Zg the G groups' distinct varying coordinates (a list of
+    arrays), S their largest vertical separation from the sheet's singular
+    point (z - z' at its extreme).
 
-    The fill's rows on the plane are the pairs (R[g, h], z) for z in Zg[g],
+    The fill's rows on the sheet are the pairs (R[g, h], z) for z in Zg[g],
     so the rule's counts are the distinct values of R and the distinct pairs.
     Bounds decide first and the exact counts are taken only between them, so
     the decision is always the exact rule's: an upper bound (every group pair
     its own column and every row distinct) that still fails declines, and a
-    lower bound (the distinct rho of a prefix) that already pays takes."""
-    zmax = [np.array([z.max() for z in zg]) for _r, zg in parts]
-    rmax = max(
-        float(np.hypot(r, zm[:, None] - v).max()) for (r, _zg), zm in zip(parts, zmax)
-    )
-    need = _sheet_nodes_to(k_p, k_m, -v, rmax) * _SHEET_BUILD_WEIGHT
+    lower bound (the distinct rho of a prefix) that already pays takes.
+
+    A height sheet (`depth`, its reach) is credited with its rows only
+    (`_SHEET_HEIGHT_WEIGHT`)."""
+    rmax = max(float(np.hypot(r, sg[:, None]).max()) for r, _zg, sg in parts)
+    nodes = _sheet_nodes_to(k_p, k_m, d, rmax, depth)
     w = _SHEET_ROW_WORTH
-    n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg in parts)
-    n_rho_ub = sum(r.size for r, _zg in parts)
+    n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg, _s in parts)
+    if depth is not None:
+        need = nodes * _SHEET_HEIGHT_WEIGHT
+        if n_rows_ub * w < need:
+            return False
+        return _distinct_pairs(parts) * w >= need
+    need = nodes * _SHEET_BUILD_WEIGHT
+    n_rho_ub = sum(r.size for r, _zg, _s in parts)
     if n_rho_ub + n_rows_ub * w < need:
         return False
     # A prefix of the rho values: its distinct count bounds both counts below.
     cap = int(max(4096, 4 * need))
     pre, got = [], 0
-    for r, _zg in parts:
+    for r, _zg, _s in parts:
         take = r.ravel()[: cap - got]
         pre.append(take)
         got += take.size
@@ -1610,33 +1646,43 @@ def _plane_pays(k_p, k_m, v, parts):
     lb = np.unique(np.concatenate(pre)).size
     if lb * (1.0 + w) >= need:
         return True
-    n_rho = np.unique(np.concatenate([r.ravel() for r, _zg in parts])).size
+    n_rho = np.unique(np.concatenate([r.ravel() for r, _zg, _s in parts])).size
     return n_rho + _distinct_pairs(parts) * w >= need
 
 
 def _distinct_pairs(parts):
-    """The number of distinct (rho, z) pairs of a plane census (`_plane_pays`):
+    """The number of distinct (rho, z) pairs of a sheet census (`_plane_pays`):
     by z, the size of the union of the distinct rho of the groups holding
     that z. A z held by one group (a mast's heights) costs its group's count;
     only a z shared by several groups (a horizontal wire's) pays a union, once
     per distinct set of groups."""
-    rho_of, by_z = [], collections.defaultdict(list)
-    for r, zg in parts:
+    rows_of, count_of, by_z = [], [], collections.defaultdict(list)
+    for r, zg, _s in parts:
+        rs = np.sort(r, axis=1)
+        cnt = 1 + np.count_nonzero(rs[:, 1:] != rs[:, :-1], axis=1)
         for g, zs in enumerate(zg):
-            gid = len(rho_of)
-            rho_of.append(np.unique(r[g]))
+            gid = len(rows_of)
+            rows_of.append(rs[g])
+            count_of.append(int(cnt[g]))
             for zv in zs.tolist():
                 by_z[zv + 0.0].append(gid)
     n, union = 0, {}
     for gids in by_z.values():
         if len(gids) == 1:
-            n += rho_of[gids[0]].size
+            n += count_of[gids[0]]
             continue
         key = tuple(gids)
         if key not in union:
-            union[key] = np.unique(np.concatenate([rho_of[g] for g in gids])).size
+            union[key] = np.unique(np.concatenate([rows_of[g] for g in gids])).size
         n += union[key]
     return n
+
+
+def _height_reach(deep):
+    """A height sheet's depth reach for rows down to z' = -deep: the next
+    power of two (1/64 m at least), so fills whose rows reach about as deep
+    share one sheet, and the reach is a function of the census alone."""
+    return float(2.0 ** np.ceil(np.log2(max(deep, 2.0**-6))))
 
 
 def _xy_groups(x, y):
@@ -1646,6 +1692,23 @@ def _xy_groups(x, y):
     return u, np.asarray(inv).ravel()
 
 
+def _grouped(nodes, coord):
+    """`nodes` by exact (x, y): the groups' (x, y), per group the distinct
+    values of column `coord` (2 = z), and each group's least and greatest."""
+    gxy, ginv = _xy_groups(nodes[:, 0], nodes[:, 1])
+    col = nodes[:, coord] + 0.0
+    order = np.lexsort((col, ginv))
+    g, c = ginv[order], col[order]
+    first = np.ones(g.size, dtype=bool)
+    first[1:] = (g[1:] != g[:-1]) | (c[1:] != c[:-1])
+    g, c = g[first], c[first]
+    cuts = np.searchsorted(g, np.arange(gxy.shape[0] + 1))
+    vals = np.split(c, cuts[1:-1])
+    lo = c[cuts[:-1]]
+    hi = c[cuts[1:] - 1]
+    return gxy, vals, lo, hi
+
+
 def sheet_plan(eps_t, k2, specs, wire_radius):
     """The fill's `SheetPlan` over the node pairs of `specs`: each an (above
     nodes, below nodes) pair of (n, 3) arrays with z RELATIVE TO THE
@@ -1653,61 +1716,136 @@ def sheet_plan(eps_t, k2, specs, wire_radius):
     (radius_fold(rho), z, z'). The census is by exact (x, y) group on each
     side, so a vertical mast over a screen costs its groups, not its pairs.
 
-    A plane z' = v < 0 is a candidate when its rows (counted before dedup)
-    reach `_SHEET_MIN_ROWS`; a candidate shallower than `_SHEET_MIN_DEPTH` is
-    left exact (guarded), and one whose rows do not pay for its table
-    (`_plane_pays`) is declined. Returns an empty plan when the sheets are
-    off, so the fill runs the exact route and the census is not paid."""
+    Planes first: a depth z' = v < 0 is a candidate when its rows (counted
+    before dedup) reach `_SHEET_MIN_ROWS`; one shallower than
+    `_SHEET_MIN_DEPTH` is left exact (guarded), and one whose rows do not pay
+    for its table (`_plane_pays`) is declined. Then heights, over the rows no
+    plane took: a height z = h > 0 is a candidate on the same count, guarded
+    below `_SHEET_MIN_DEPTH`, and taken on the same rule -- the Beverage's
+    wire, one height over rods whose every node is its own depth, is the
+    case (its rod depths each carry too few rows to pay). Returns an empty
+    plan when the sheets are off, so the fill runs the exact route and the
+    census is not paid."""
     if not (_use_sheet() and _use_column_route() and _use_column_accel()):
         return SheetPlan()
     k_p = float(k2)
     k_m = k_medium(complex(eps_t), k_p)
     a = float(wire_radius)
-    census = collections.defaultdict(list)
-    counts = collections.Counter()
+    sides = []
     for above, below in specs:
         above = np.asarray(above, dtype=float)
         below = np.asarray(below, dtype=float)
-        if above.shape[0] == 0 or below.shape[0] == 0:
+        pa = above[np.isfinite(above).all(axis=1) & (above[:, 2] >= 0.0)]
+        pb = below[np.isfinite(below).all(axis=1) & (below[:, 2] <= 0.0)]
+        if pa.shape[0] and pb.shape[0]:
+            sides.append((pa, pb))
+    planes = _census(sides, False, k_p, k_m, a)
+    heights = _census(sides, True, k_p, k_m, a, skip=planes)
+    _SHEET_STATS["fills_planned"] += 1
+    _SHEET_STATS["planes_planned"] += len(planes)
+    _SHEET_STATS["heights_planned"] += len(heights)
+    return SheetPlan(planes, heights)
+
+
+# The census's cheap pass measures each candidate's farthest horizontal reach in
+# chunks of at most this many (node, group) distances.
+_CENSUS_CHUNK = 1 << 20
+
+
+def _census(sides, height, k_p, k_m, a, skip=()):
+    """The sheets one kind of census takes: planes (`height` False; the
+    above side varies, a depth's below nodes are fixed) or heights (the below
+    side varies, less the depths in `skip`; a height's above nodes are
+    fixed). Returns the taken values (planes) or (h, depth reach) pairs.
+
+    Two passes, so a fill with many candidates pays for few. The cheap pass
+    bounds each candidate from counts alone: its rows and distinct rho at
+    most (every row distinct, every group pair its own column), and its
+    reach at least (the farthest horizontal pair, and the largest vertical
+    separation, each attained by some row), which fixes the fewest main
+    panels a sheet reaching it holds. A candidate whose best case cannot pay
+    for that is declined there -- a Beverage's rod depths, each its own depth
+    with two nodes, are hundreds of such. The survivors take the full census
+    (`_plane_pays`), one at a time, so only one candidate's rho matrices are
+    ever held."""
+    per, cand = [], {}
+    for pa, pb in sides:
+        if height:
+            vary, fixed = pb[~np.isin(pb[:, 2], skip)], pa
+            sel = fixed[:, 2] > 0.0
+        else:
+            vary, fixed = pa, pb
+            sel = fixed[:, 2] < 0.0
+        if vary.shape[0] == 0 or not sel.any():
             continue
-        ok = np.isfinite(above).all(axis=1) & (above[:, 2] >= 0.0)
-        pa = above[ok]
-        zb = below[:, 2]
-        cand = np.isfinite(below).all(axis=1) & (zb < 0.0)
-        if pa.shape[0] == 0 or not cand.any():
-            continue
-        vals, cnt = np.unique(zb[cand], return_counts=True)
-        big = cnt * pa.shape[0] >= _SHEET_MIN_ROWS
+        fx = fixed[sel]
+        vals, inv, cnt = np.unique(fx[:, 2], return_inverse=True, return_counts=True)
+        inv = np.asarray(inv).ravel()
+        big = cnt * vary.shape[0] >= _SHEET_MIN_ROWS
         if not big.any():
             continue
-        gxy, ginv = _xy_groups(pa[:, 0], pa[:, 1])
-        order = np.argsort(ginv, kind="stable")
-        cuts = np.searchsorted(ginv[order], np.arange(gxy.shape[0] + 1))
-        zg = [
-            np.unique(pa[order[cuts[g] : cuts[g + 1]], 2]) for g in range(gxy.shape[0])
-        ]
-        for v, n in zip(vals[big].tolist(), cnt[big].tolist()):
-            on = below[cand & (zb == v)]
+        gxy, zg, glo, ghi = _grouped(vary, 2)
+        zlo, zhi = float(glo.min()), float(ghi.max())
+        keep = np.flatnonzero(big[inv])
+        far = np.zeros(vals.size)
+        step = max(1, _CENSUS_CHUNK // gxy.shape[0])
+        for c0 in range(0, keep.size, step):
+            j = keep[c0 : c0 + step]
+            dj = np.hypot(
+                fx[j, 0][:, None] - gxy[:, 0][None, :],
+                fx[j, 1][:, None] - gxy[:, 1][None, :],
+            ).max(axis=1)
+            np.maximum.at(far, inv[j], dj)
+        for i in np.flatnonzero(big).tolist():
+            v = float(vals[i])
+            sep = v - zlo if height else zhi - v
+            got = cand.setdefault(v, [0, 0, 0.0])
+            got[0] += int(cnt[i]) * vary.shape[0]
+            got[1] += int(cnt[i]) * gxy.shape[0]
+            got[2] = max(got[2], float(far[i]), sep)
+        per.append((gxy, zg, glo, ghi, fx, vals, inv, big))
+    w = _SHEET_ROW_WORTH
+    weight = _SHEET_HEIGHT_WEIGHT if height else _SHEET_BUILD_WEIGHT
+    per_panel = _SHEET_P * _SHEET_PT * (1 if height else _SHEET_NTAU)
+    taken = []
+    for v in sorted(cand):
+        n_rows, n_rho, reach = cand[v]
+        if abs(v) < _SHEET_MIN_DEPTH:
+            _SHEET_STATS["guarded_rows"] += n_rows
+            continue
+        d = abs(v)
+        panels = max(0.0, np.ceil(np.log(max(reach, d) / d) / np.log(_SHEET_RATIO)))
+        best = n_rows * w + (0 if height else n_rho)
+        if best < panels * per_panel * weight or (
+            not height and best < _sheet_nodes_to(k_p, k_m, d, reach) * weight
+        ):
+            # The second test is the layout's own count at the least reach.
+            _SHEET_STATS["declined_rows"] += n_rows
+            continue
+        parts, deep = [], 0.0
+        for gxy, zg, glo, ghi, fx, vals, inv, big in per:
+            i = int(np.searchsorted(vals, v))
+            if i >= vals.size or vals[i] != v or not big[i]:
+                continue
+            on = fx[inv == i]
             hxy, _ = _xy_groups(on[:, 0], on[:, 1])
+            if height:
+                sep = v - glo
+                deep = max(deep, -float(glo.min()))
+            else:
+                sep = ghi - v
             r = np.hypot(
                 gxy[:, 0][:, None] - hxy[:, 0][None, :],
                 gxy[:, 1][:, None] - hxy[:, 1][None, :],
             )
-            census[v].append((radius_fold(r, a), zg))
-            counts[v] += n * pa.shape[0]
-    planes = []
-    for v in sorted(census):
-        n = counts[v]
-        if v > -_SHEET_MIN_DEPTH:
-            _SHEET_STATS["guarded_rows"] += n
+            np.hypot(r, a, out=r)  # radius_fold, in place
+            parts.append((r, zg, sep))
+        depth = _height_reach(deep) if height else None
+        if not _plane_pays(k_p, k_m, d, parts, depth):
+            _SHEET_STATS["declined_rows"] += n_rows
             continue
-        if not _plane_pays(k_p, k_m, v, census[v]):
-            _SHEET_STATS["declined_rows"] += n
-            continue
-        planes.append(v)
-    _SHEET_STATS["fills_planned"] += 1
-    _SHEET_STATS["planes_planned"] += len(planes)
-    return SheetPlan(planes)
+        taken.append((v, depth) if height else v)
+    return taken
 
 
 def _sheet_planes(sub, k_p, k_m):
@@ -1730,15 +1868,18 @@ def _sheet_planes(sub, k_p, k_m):
         zs, inv = np.unique(z[on], return_inverse=True)
         inv = np.asarray(inv).ravel()
         rr = rho[on]
-        parts = [(rr[inv == g][None, :], [zs[g : g + 1]]) for g in range(zs.size)]
-        if not _plane_pays(k_p, k_m, v, parts):
+        parts = [
+            (rr[inv == g][None, :], [zs[g : g + 1]], np.array([zs[g] - v]))
+            for g in range(zs.size)
+        ]
+        if not _plane_pays(k_p, k_m, -v, parts):
             _SHEET_STATS["declined_rows"] += n
             continue
         planes.append(v)
     if not planes:
         return [], None
     plan = SheetPlan(planes)
-    take = _sheet_take(np.ascontiguousarray(sub, dtype=float), plan)
+    take, _on_plane = _sheet_take(np.ascontiguousarray(sub, dtype=float), plan)
     out = []
     for v in plan.planes.tolist():
         m = take & (zp == v)
@@ -1746,10 +1887,19 @@ def _sheet_planes(sub, k_p, k_m):
     return out, take
 
 
-def _sheet_panel(k_p, k_m, d, i):
-    """Main panel i of the sheet at depth d: its u edges and how it is split,
-    (u0, u1, n_u, n_t) -- n_u sub-panels in u, each with n_t tau panels. A
-    function of (k_p, k_m, d, i) alone, which is what fixes every node."""
+def _sheet_panel(k_p, k_m, d, i, depth=None):
+    """Main panel i of the sheet at distance d: its u edges and how it is
+    split, (u0, u1, n_u, n_t, t0) -- n_u sub-panels in u, each with n_t tau
+    panels over [t0, 1]. A function of its arguments alone, which is what
+    fixes every node.
+
+    A plane sheet (`depth` None) spans tau in [0, 1]. A height sheet reaches
+    only z' >= -depth: t0 is the tau of that depth at the panel's inner edge
+    (tau at a fixed depth grows with R, so it holds across the panel), and
+    its tau panels are sized to the SOIL's wavelength wherever R is, because
+    the varying coordinate z' is in the soil and near the interface its wave
+    never dies (the plane sheet's panels past the soil's dead radius are
+    sized to the air's, which a height sheet measured failing at 1e-2)."""
     lnd, lnr = float(np.log(d)), float(np.log(_SHEET_RATIO))
     u0 = lnd + i * lnr
     u1 = lnd + (i + 1) * lnr
@@ -1757,16 +1907,25 @@ def _sheet_panel(k_p, k_m, d, i):
     wl = _SHEET_WAVES * _sheet_wavelength(k_p, k_m, r_lo)
     n_u = max(1, int(np.ceil(r_hi * lnr / wl)))
     arc = r_hi * float(np.arccos(min(1.0, d / r_hi)))
-    n_t = max(_SHEET_NTAU, int(np.ceil(arc / wl)))
-    return u0, u1, n_u, n_t
+    if depth is None:
+        return u0, u1, n_u, max(_SHEET_NTAU, int(np.ceil(arc / wl))), 0.0
+    t0 = 0.0
+    if d + depth < r_lo:
+        t0 = float(np.arccos((d + depth) / r_lo) / np.arccos(d / r_lo))
+    wt = min(wl, _SHEET_WAVES * 2.0 * np.pi / abs(k_m))
+    n_t = max(
+        int(np.ceil(_SHEET_NTAU * (1.0 - t0))), int(np.ceil(arc * (1.0 - t0) / wt))
+    )
+    return u0, u1, n_u, n_t, t0
 
 
-def _sheet_nodes_to(k_p, k_m, d, rmax):
-    """The nodes a sheet at depth d holds once it reaches `rmax`."""
+def _sheet_nodes_to(k_p, k_m, d, rmax, depth=None):
+    """The nodes a sheet at distance d (reaching `depth`, a height sheet)
+    holds once it reaches `rmax`."""
     u_need = float(np.log(rmax))
     n, i = 0, 0
     while True:
-        u0, u1, n_u, n_t = _sheet_panel(k_p, k_m, d, i)
+        u0, _u1, n_u, n_t, _t0 = _sheet_panel(k_p, k_m, d, i, depth)
         if u0 >= u_need:
             return n
         n += n_u * n_t * _SHEET_P * _SHEET_PT
@@ -1786,19 +1945,32 @@ class PlaneSheet:
     """The six kernels on one plane z' = zp < 0, tabulated over the above
     half-plane out to `rmax` (grown on demand by whole R panels).
 
+    With `height=True` it is the mirror sheet (Design E phase 2): ONE
+    observer height z = zp > 0 over the below half-plane (rho, z' <= 0), for
+    a horizontal wire over conductors that spread in depth (the Beverage over
+    its rods). The map is the same with d = h and s = z - z' the vertical
+    separation, so tau = 1 is z' = 0 as it is z = 0 on a plane sheet; `zp`
+    names the FIXED coordinate either way.
+
     Panel edges are FIXED: main panel i spans R in [d r^i, d r^(i+1)] and its
     u / tau split depends on i alone, so growing a sheet appends nodes and
     never moves one. A row's value therefore does not depend on how far the
     sheet had been grown, or by whom."""
 
-    def __init__(self, k_p, k_m, zp, lam_mult):
-        if not zp < 0.0:
+    def __init__(self, k_p, k_m, zp, lam_mult, height=False, depth=None):
+        self.height = bool(height)
+        if self.height and not (depth is not None and depth > 0.0):
+            raise ValueError(f"a height sheet needs a depth reach > 0, got {depth!r}")
+        self.depth = float(depth) if self.height else None
+        if self.height and not zp > 0.0:
+            raise ValueError(f"a height sheet needs z > 0, got {zp!r}")
+        if not self.height and not zp < 0.0:
             raise ValueError(f"a plane sheet needs z' < 0, got {zp!r}")
         self.k_p, self.k_m, self.zp, self.d = (
             float(k_p),
             complex(k_m),
             float(zp),
-            -float(zp),
+            abs(float(zp)),
         )
         self.lam_mult = float(lam_mult)
         self.x, self.bw = _cheb(_SHEET_P)
@@ -1807,6 +1979,7 @@ class PlaneSheet:
         self.u_edges = [float(np.log(self.d))]
         self.ntau = []
         self.voff = []
+        self.t0 = []
         self._vals = []
         self.n_nodes = 0
         self._flat = None
@@ -1822,16 +1995,19 @@ class PlaneSheet:
         offset = self.n_nodes
         per = _SHEET_P * _SHEET_PT
         while self.u_top < u_need:
-            u0, u1, n_u, n_t = _sheet_panel(self.k_p, self.k_m, self.d, self.n_main)
+            u0, u1, n_u, n_t, t0 = _sheet_panel(
+                self.k_p, self.k_m, self.d, self.n_main, self.depth
+            )
             for q in range(n_u):
                 a = u0 + (u1 - u0) * q / n_u
                 b = u1 if q == n_u - 1 else u0 + (u1 - u0) * (q + 1) / n_u
                 uu = 0.5 * (a + b) + 0.5 * (b - a) * self.x
                 self.voff.append(offset)
                 self.ntau.append(n_t)
+                self.t0.append(t0)
                 self.u_edges.append(b)
                 for jt in range(n_t):
-                    tt = (jt + 0.5 + 0.5 * self.xt) / n_t
+                    tt = t0 + (1.0 - t0) * ((jt + 0.5 + 0.5 * self.xt) / n_t)
                     U, T = np.meshgrid(uu, tt, indexing="ij")
                     new_u.append(U.ravel())
                     new_t.append(T.ravel())
@@ -1851,7 +2027,12 @@ class PlaneSheet:
         R = np.exp(u)
         th = tau * np.arccos(np.minimum(1.0, self.d / R))
         rho = R * np.sin(th)
-        z = np.maximum(self.zp + R * np.cos(th), 0.0)
+        if self.height:
+            z = np.full(rho.size, self.zp)
+            zq = np.minimum(self.zp - R * np.cos(th), 0.0)
+        else:
+            z = np.maximum(self.zp + R * np.cos(th), 0.0)
+            zq = np.full(rho.size, self.zp)
         n = rho.size
         vals = np.asarray(
             _nia.near_interface_six_columns(
@@ -1860,7 +2041,7 @@ class PlaneSheet:
                 np.ascontiguousarray(rho),
                 np.arange(n + 1, dtype=np.intp),
                 np.ascontiguousarray(z),
-                np.full(n, self.zp),
+                np.ascontiguousarray(zq),
                 self.lam_mult,
                 int(_COLUMN_P),
                 float(_DETOUR),
@@ -1869,7 +2050,7 @@ class PlaneSheet:
                 _GW,
             )
         )
-        Rn = np.hypot(rho, z - self.zp)
+        Rn = np.hypot(rho, z - zq)
         vals[:, :3] *= Rn[:, None]
         vals[:, 3:] *= (Rn * Rn)[:, None]
         return vals
@@ -1880,13 +2061,14 @@ class PlaneSheet:
                 np.asarray(self.u_edges, dtype=float),
                 np.asarray(self.ntau, dtype=np.int64),
                 np.asarray(self.voff, dtype=np.int64),
+                np.asarray(self.t0, dtype=float),
                 np.ascontiguousarray(np.concatenate(self._vals)),
             )
         return self._flat
 
     def interpolate(self, sub, idx, out):
         """out[idx] = the six kernels at rows sub[idx], all on this plane."""
-        u_edges, ntau, voff, vals = self.arrays()
+        u_edges, ntau, voff, t0, vals = self.arrays()
         _nia.near_interface_plane_sheet(
             sub,
             idx,
@@ -1894,6 +2076,7 @@ class PlaneSheet:
             u_edges,
             ntau,
             voff,
+            t0,
             self.x,
             self.bw,
             self.xt,
@@ -1901,17 +2084,21 @@ class PlaneSheet:
             vals,
             out,
             _physical_cpu_count(),
+            self.height,
         )
 
 
-def _plane_sheet(k_p, k_m, zp, lam_mult, rmax):
-    """The cached sheet of plane `zp`, grown to reach `rmax`.
+def _plane_sheet(k_p, k_m, zp, lam_mult, rmax, height=False, depth=None):
+    """The cached sheet of plane `zp` (or of height `zp` reaching `depth`,
+    `height`), grown to reach `rmax`.
 
     Keyed on everything a node's value depends on. Sheets are shared across
     calls and solves; that cannot move a bit, because a node's value depends
     only on its key and its fixed position (`PlaneSheet`), never on when or
     how far the sheet was grown."""
     key = (
+        bool(height),
+        None if depth is None else float(depth),
         float(k_p),
         complex(k_m),
         float(zp),
@@ -1928,7 +2115,7 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rmax):
     with _SHEET_LOCK:
         sheet = _SHEET_CACHE.pop(key, None)
         if sheet is None:
-            sheet = PlaneSheet(k_p, k_m, zp, lam_mult)
+            sheet = PlaneSheet(k_p, k_m, zp, lam_mult, height=height, depth=depth)
             _SHEET_STATS["sheets_built"] += 1
         _SHEET_CACHE[key] = sheet
         while len(_SHEET_CACHE) > _SHEET_CACHE_MAX:
@@ -1937,13 +2124,14 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rmax):
         return sheet
 
 
-def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take):
+def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan):
     """`_evaluate_fresh` on the column route when the fill's plan serves some
-    rows (`take`, `_sheet_take`): those interpolated from their planes'
-    sheets, the rest through the column twin exactly as `_column_twin` would
-    take them alone (their labels, their first-appearance order). Each sheet
-    is grown to this call's farthest row on its plane, which moves no node
-    (`PlaneSheet`)."""
+    rows (`take` = `_sheet_take`'s (take, on_plane)): those interpolated from
+    their planes' and heights' sheets, the rest through the column twin
+    exactly as `_column_twin` would take them alone (their labels, their
+    first-appearance order). Each sheet is grown to this call's farthest row
+    on it, which moves no node (`PlaneSheet`)."""
+    take, on_plane = take
     m = sub.shape[0]
     sub = np.ascontiguousarray(sub, dtype=float)
     out = np.empty((m, 6), dtype=np.complex128)
@@ -1951,16 +2139,26 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take):
     if rest.size:
         lab = None if labels is None else np.asarray(labels)[rest]
         out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
-    zp = sub[:, 2]
-    planes = np.unique(zp[take])
-    for v in planes.tolist():
-        idx = np.flatnonzero(take & (zp == v))
-        rmax = float(np.hypot(sub[idx, 0], sub[idx, 1] - v).max())
-        _plane_sheet(k_p, k_m, v, lam_mult, rmax).interpolate(sub, idx, out)
-    n_sheet = m - rest.size
-    _SHEET_STATS["sheet_rows"] += n_sheet
+    n_sheets = 0
+    for height, mask, col in ((False, on_plane, 2), (True, take & ~on_plane, 1)):
+        if not mask.any():
+            continue
+        fixed = sub[:, col]
+        vals = np.unique(fixed[mask])
+        for v in vals.tolist():
+            idx = np.flatnonzero(mask & (fixed == v))
+            rmax = float(np.hypot(sub[idx, 0], sub[idx, 1] - sub[idx, 2]).max())
+            depth = None
+            if height:
+                depth = float(plan.depths[np.searchsorted(plan.heights, v)])
+            sheet = _plane_sheet(k_p, k_m, v, lam_mult, rmax, height, depth)
+            sheet.interpolate(sub, idx, out)
+        n_sheets += int(vals.size)
+        if height:
+            _SHEET_STATS["height_rows"] += int(np.count_nonzero(mask))
+    _SHEET_STATS["sheet_rows"] += m - rest.size
     _SHEET_STATS["exact_rows"] += rest.size
-    _SHEET_STATS["sheet_planes"] += int(planes.size)
+    _SHEET_STATS["sheet_planes"] += n_sheets
     if permuted:
         return out, None
     return out
@@ -2036,7 +2234,9 @@ def _designed_tables_reference(
             if take is not None:
                 # The plan's rows from their sheets, the rest through the twin
                 # grouped as below (`_evaluate_with_sheets`), in row order.
-                vals = _evaluate_with_sheets(k_p, k_m, sub, lam_mult, None, False, take)
+                vals = _evaluate_with_sheets(
+                    k_p, k_m, sub, lam_mult, None, False, take, plan
+                )
                 placed = fresh_pos
             else:
                 rho_c, sizes, member_order = _column_blocks(sub)
