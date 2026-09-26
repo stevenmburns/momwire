@@ -1636,7 +1636,7 @@ def _plane_pays(k_p, k_m, d, parts, depth=None):
     need = nodes * (_SHEET_BUILD_WEIGHT if depth is None else _SHEET_HEIGHT_WEIGHT)
     w = _SHEET_ROW_WORTH
     n_rows_ub = sum(r.shape[1] * sum(z.size for z in zg) for r, zg, _s, _c in parts)
-    credited = [r[:, c] for r, _zg, _s, c in parts]
+    credited = [r if c.all() else r[:, c] for r, _zg, _s, c in parts]
     n_rho_ub = sum(r.size for r in credited)
     if n_rho_ub + n_rows_ub * w < need:
         return False
@@ -1756,9 +1756,25 @@ def sheet_plan(eps_t, k2, specs, wire_radius):
     return SheetPlan(planes, heights)
 
 
-# The census's cheap pass measures each candidate's farthest horizontal reach in
-# chunks of at most this many (node, group) distances.
-_CENSUS_CHUNK = 1 << 20
+# The census measures distances in chunks of at most this many (node, group)
+# pairs, so its temporaries stay a few MB whatever the deck (a full-size
+# difference pair beside the rho matrix was ~45 MB at lean x8).
+_CENSUS_CHUNK = 1 << 18
+
+
+def _rho_matrix(gxy, hxy, a):
+    """The folded rho between every group of `gxy` and of `hxy`, (G, H), built
+    in row chunks into one array."""
+    out = np.empty((gxy.shape[0], hxy.shape[0]))
+    step = max(1, _CENSUS_CHUNK // max(1, hxy.shape[0]))
+    for g0 in range(0, gxy.shape[0], step):
+        g1 = min(gxy.shape[0], g0 + step)
+        blk = out[g0:g1]
+        np.subtract(gxy[g0:g1, 0][:, None], hxy[:, 0][None, :], out=blk)
+        dy = gxy[g0:g1, 1][:, None] - hxy[:, 1][None, :]
+        np.hypot(blk, dy, out=blk)
+        np.hypot(blk, a, out=blk)  # radius_fold, in place
+    return out
 
 
 def _census(sides, height, k_p, k_m, a, skip=()):
@@ -1844,7 +1860,7 @@ def _census(sides, height, k_p, k_m, a, skip=()):
             # The second test is the layout's own count at the least reach.
             _SHEET_STATS["declined_rows"] += n_rows
             continue
-        parts, deep = [], 0.0
+        fixed = []
         for gxy, zg, glo, ghi, fx, vals, inv, big, lone in per:
             i = int(np.searchsorted(vals, v))
             if i >= vals.size or vals[i] != v or not big[i]:
@@ -1853,23 +1869,47 @@ def _census(sides, height, k_p, k_m, a, skip=()):
             hxy, hinv = _xy_groups(fx[on, 0], fx[on, 1])
             credit = np.ones(hxy.shape[0], dtype=bool)
             np.logical_and.at(credit, hinv, lone[on])
+            fixed.append((gxy, zg, glo, ghi, hxy, credit))
+        if not height and _prefix_pays(k_p, k_m, d, fixed, rho_lb, s_lb, a):
+            taken.append(v)
+            continue
+        parts, deep = [], 0.0
+        for gxy, zg, glo, ghi, hxy, credit in fixed:
             if height:
                 sep = v - glo
                 deep = max(deep, -float(glo.min()))
             else:
                 sep = ghi - v
-            r = np.hypot(
-                gxy[:, 0][:, None] - hxy[:, 0][None, :],
-                gxy[:, 1][:, None] - hxy[:, 1][None, :],
-            )
-            np.hypot(r, a, out=r)  # radius_fold, in place
-            parts.append((r, zg, sep, credit))
+            parts.append((_rho_matrix(gxy, hxy, a), zg, sep, credit))
         depth = _height_reach(deep) if height else None
         if not _plane_pays(k_p, k_m, d, parts, depth):
             _SHEET_STATS["declined_rows"] += n_rows
             continue
         taken.append((v, depth) if height else v)
     return taken
+
+
+def _prefix_pays(k_p, k_m, d, fixed, rho_far, s_max, a):
+    """A plane's cheap TAKE, before any whole rho matrix is built: the exact
+    reach is already known (the farthest pair, folded, and the largest
+    separation), and the distinct credited rho of a prefix of the matrix
+    bound both of the rule's counts below, as in `_plane_pays`. True only when
+    that already pays; otherwise the full census decides."""
+    nodes = _sheet_nodes_to(k_p, k_m, d, float(np.hypot(rho_far, a)), s_max)
+    need = nodes * _SHEET_BUILD_WEIGHT
+    cap = int(max(4096, 4 * need))
+    pre, got = [np.empty(0)], 0
+    for gxy, _zg, _glo, _ghi, hxy, credit in fixed:
+        h = hxy[credit]
+        if not h.shape[0]:
+            continue
+        rows = min(gxy.shape[0], -(-(cap - got) // h.shape[0]))
+        blk = _rho_matrix(gxy[:rows], h, a).ravel()
+        pre.append(blk)
+        got += blk.size
+        if got >= cap:
+            break
+    return np.unique(np.concatenate(pre)).size * (1.0 + _SHEET_ROW_WORTH) >= need
 
 
 def _sheet_planes(sub, k_p, k_m):
