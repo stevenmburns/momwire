@@ -1594,14 +1594,28 @@ def _sheet_take(sub, plan):
     function of each row alone."""
     if plan is None or not plan or not _use_sheet() or sub.shape[0] == 0:
         return None
+    # Boolean masks only, built in place: a tile call carries ~1 M rows, and
+    # full-length index or float temporaries here sat at the fill's peak.
     rho, z, zp = sub[:, 0], sub[:, 1], sub[:, 2]
-    ok = (rho >= 0.0) & np.isfinite(rho) & np.isfinite(z) & np.isfinite(zp)
-    on_plane = np.isin(zp, plan.planes) & (z >= 0.0) & ok
+    ok = rho >= 0.0
+    ok &= np.isfinite(rho)
+    ok &= np.isfinite(z)
+    ok &= np.isfinite(zp)
+    on_plane = np.isin(zp, plan.planes)
+    on_plane &= z >= 0.0
+    on_plane &= ok
     take = on_plane
     if plan.heights.size:
-        j = np.minimum(np.searchsorted(plan.heights, z), plan.heights.size - 1)
-        at = (plan.heights[j] == z) & (zp <= 0.0) & (zp >= -plan.depths[j]) & ok
-        take = on_plane | at
+        take = on_plane.copy()
+        for h, dep in zip(plan.heights.tolist(), plan.depths.tolist()):
+            at = z == h
+            if not at.any():
+                continue
+            at &= ok
+            at &= zp <= 0.0
+            at &= zp >= -dep
+            at[on_plane] = False
+            take |= at
     return (take, on_plane) if take.any() else None
 
 
@@ -2241,23 +2255,33 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
         lab = None if labels is None else np.asarray(labels)[rest]
         out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
     n_sheets = 0
-    for height, mask, col in ((False, on_plane, 2), (True, take & ~on_plane, 1)):
-        if not mask.any():
-            continue
-        fixed = sub[:, col]
-        vals = np.unique(fixed[mask])
-        for v in vals.tolist():
-            idx = np.flatnonzero(mask & (fixed == v))
-            rho_max = float(sub[idx, 0].max())
-            s_max = float((sub[idx, 1] - sub[idx, 2]).max())
+    # One sheet at a time, by the plan's values: a mask and its rows' index,
+    # and the reach as masked reductions (on a plane z' is the fixed value, so
+    # s = z - z' peaks where z does; on a height, where z' is least).
+    for height, values, col in ((False, plan.planes, 2), (True, plan.heights, 1)):
+        for k, v in enumerate(values.tolist()):
+            sel = sub[:, col] == v
+            if height:
+                sel &= take
+                sel[on_plane] = False
+            else:
+                sel &= on_plane
+            if not sel.any():
+                continue
+            idx = np.flatnonzero(sel)
+            rho_max = float(np.max(sub[:, 0], where=sel, initial=-np.inf))
             depth = None
             if height:
-                depth = float(plan.depths[np.searchsorted(plan.heights, v)])
+                depth = float(plan.depths[k])
+                s_max = v - float(np.min(sub[:, 2], where=sel, initial=np.inf))
+            else:
+                s_max = float(np.max(sub[:, 1], where=sel, initial=-np.inf)) - v
             sheet = _plane_sheet(k_p, k_m, v, lam_mult, rho_max, s_max, height, depth)
             sheet.interpolate(sub, idx, out)
-        n_sheets += int(vals.size)
-        if height:
-            _SHEET_STATS["height_rows"] += int(np.count_nonzero(mask))
+            n_sheets += 1
+            if height:
+                _SHEET_STATS["height_rows"] += idx.size
+            del sel, idx
     _SHEET_STATS["sheet_rows"] += m - rest.size
     _SHEET_STATS["exact_rows"] += rest.size
     _SHEET_STATS["sheet_planes"] += n_sheets
