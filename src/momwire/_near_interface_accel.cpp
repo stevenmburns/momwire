@@ -71,6 +71,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstdint>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -877,6 +878,184 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     return vals;
 }
 
+// ---------------------------------------------------------------------------
+// Plane sheets (momwire#1173 Design E, phase 1).
+//
+// At ONE source depth z' = -d the six kernels are analytic in (rho, z) over the
+// whole above half-plane z >= 0; their only nearby singular point is
+// (rho, z) = (0, z'), at least d away. `_near_interface.PlaneSheet` tabulates a
+// plane once, in u = ln R and tau = theta / arccos(d / R), where
+// R = hypot(rho, z - z') and theta = atan2(rho, z - z'), as panels of
+// Chebyshev (first-kind) nodes, each node evaluated by the column twin above
+// as a column of one. This entry interpolates the rows on that plane.
+//
+// The stored values are f * R^pw with pw = 1 for U, V, W and 2 for the three
+// derivatives, so the table carries the smooth part and the 1/R^pw is put back
+// here, exactly. Interpolation is barycentric (second form) in each direction:
+// no Vandermonde, no conditioning question.
+//
+// Panel j of the R axis spans u_edges[j] .. u_edges[j + 1] and carries
+// ntau[j] equal tau panels over [0, 1]; its node block starts at voff[j] (in
+// nodes) and is laid out [tau panel][u node a][tau node b][6 kernels].
+//
+// Each row is independent and reduces over nothing shared, so the answer does
+// not depend on the thread count. The multiply-adds are spelled through
+// `mw_fma` (the build passes -ffp-contract=off), so they round as written.
+// Only scalar log / acos / atan2 / hypot are called: no vector libm, so no
+// symbol newer than the Linux wheels' glibc floor (test_glibc_floor.py).
+namespace mw_sheet {
+
+static inline void bary(double t, double lo, double hi, const double *x,
+                        const double *bw, int p, double *w) {
+    const double xx = (2.0 * t - (lo + hi)) / (hi - lo);
+    double sum = 0.0;
+    for (int a = 0; a < p; ++a) {
+        const double df = xx - x[a];
+        if (std::fabs(df) < 1e-15) {  // on a node: its value, exactly
+            for (int b = 0; b < p; ++b) w[b] = (a == b) ? 1.0 : 0.0;
+            return;
+        }
+        w[a] = bw[a] / df;
+        sum += w[a];
+    }
+    const double inv = 1.0 / sum;
+    for (int a = 0; a < p; ++a) w[a] *= inv;
+}
+
+}  // namespace mw_sheet
+
+static void near_interface_plane_sheet(
+    py::array_t<double, py::array::c_style | py::array::forcecast> sub,
+    py::array_t<py::ssize_t, py::array::c_style | py::array::forcecast> idx,
+    double zp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> u_edges,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> ntau,
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> voff,
+    py::array_t<double, py::array::c_style | py::array::forcecast> x,
+    py::array_t<double, py::array::c_style | py::array::forcecast> bw,
+    py::array_t<double, py::array::c_style | py::array::forcecast> xt,
+    py::array_t<double, py::array::c_style | py::array::forcecast> bwt,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        vals,
+    py::array_t<std::complex<double>, py::array::c_style> out, int n_threads) {
+    if (sub.ndim() != 2 || sub.shape(1) != 3)
+        throw std::invalid_argument("sub must be (m, 3)");
+    const py::ssize_t m = sub.shape(0);
+    if (out.ndim() != 2 || out.shape(0) != m || out.shape(1) != 6 ||
+        !out.writeable())
+        throw std::invalid_argument("out must be a writeable (m, 6) complex array");
+    if (idx.ndim() != 1) throw std::invalid_argument("idx must be 1-D");
+    if (!(zp < 0.0)) throw std::invalid_argument("a plane sheet needs zp < 0");
+    const py::ssize_t n = idx.shape(0);
+    const py::ssize_t np_ = ntau.shape(0);
+    if (np_ < 1 || u_edges.ndim() != 1 || u_edges.shape(0) != np_ + 1 ||
+        voff.shape(0) != np_)
+        throw std::invalid_argument("u_edges must have len(ntau) + 1 entries");
+    const int p = static_cast<int>(x.shape(0));
+    const int pt = static_cast<int>(xt.shape(0));
+    if (p < 1 || p > 32 || pt < 1 || pt > 32 || bw.shape(0) != p ||
+        bwt.shape(0) != pt)
+        throw std::invalid_argument("bad Chebyshev nodes (1..32 each)");
+    if (vals.ndim() != 2 || vals.shape(1) != 6)
+        throw std::invalid_argument("vals must be (nodes, 6)");
+    const double *ue = u_edges.data();
+    const std::int64_t *nt_ = ntau.data();
+    const std::int64_t *vo = voff.data();
+    const py::ssize_t n_nodes = vals.shape(0);
+    for (py::ssize_t j = 0; j < np_; ++j) {
+        if (!(ue[j + 1] > ue[j]) || nt_[j] < 1 || vo[j] < 0 ||
+            vo[j] + nt_[j] * p * pt > n_nodes)
+            throw std::invalid_argument("inconsistent sheet panels");
+    }
+    const py::ssize_t *ix = idx.data();
+    for (py::ssize_t r = 0; r < n; ++r)
+        if (ix[r] < 0 || ix[r] >= m)
+            throw std::invalid_argument("idx out of range");
+    const double *xp = x.data(), *bwp = bw.data();
+    const double *xtp = xt.data(), *bwtp = bwt.data();
+    // (nodes, 6) complex as interleaved doubles: node q's kernel k at
+    // 12 q + 2 k (re) and + 1 (im).
+    const double *V = reinterpret_cast<const double *>(vals.data());
+    const double *sb = sub.data();
+    double *ob = reinterpret_cast<double *>(out.mutable_data());
+    const double d = -zp;
+
+    int nt = 1;
+#ifdef _OPENMP
+    nt = omp_get_max_threads();
+    if (n_threads > 0) nt = std::min(nt, n_threads);
+    nt = std::max(nt, 1);
+#endif
+    // A row the table cannot answer (off the plane, below the interface,
+    // beyond its R) is flagged in the loop -- a throw cannot cross the omp
+    // boundary -- and refused after.
+    int bad = 0;
+    // Rounding slack on the table's ends, in u: the caller sized the table
+    // from these very floats, through numpy's hypot and log.
+    const double slack = 1e-12;
+    {
+        py::gil_scoped_release release;
+        #pragma omp parallel for schedule(static) num_threads(nt) reduction(|:bad)
+        for (py::ssize_t r = 0; r < n; ++r) {
+            double wu[32], wt[32];
+            const py::ssize_t row = ix[r];
+            const double rho = sb[row * 3], z = sb[row * 3 + 1];
+            double *o = ob + row * 12;
+            const double s = z - zp;
+            const double R = std::hypot(rho, s);
+            const double u = std::log(R);
+            if (!(sb[row * 3 + 2] == zp && rho >= 0.0 && z >= 0.0 &&
+                  u >= ue[0] - slack && u <= ue[np_] + slack)) {
+                bad = 1;
+                for (int k = 0; k < 12; ++k) o[k] = 0.0;
+                continue;
+            }
+            const double c = d / R;
+            const double thm = std::acos(c < 1.0 ? c : 1.0);
+            const double th = std::atan2(rho, s);
+            double tau = thm > 0.0 ? th / thm : 0.0;
+            if (tau > 1.0) tau = 1.0;
+            if (tau < 0.0) tau = 0.0;
+            // The panel: the last edge <= u (the ends clamp into the table).
+            py::ssize_t j = static_cast<py::ssize_t>(
+                                std::upper_bound(ue, ue + np_ + 1, u) - ue) -
+                            1;
+            if (j < 0) j = 0;
+            if (j > np_ - 1) j = np_ - 1;
+            const int ntj = static_cast<int>(nt_[j]);
+            int jt = static_cast<int>(tau * ntj);
+            if (jt > ntj - 1) jt = ntj - 1;
+            mw_sheet::bary(u, ue[j], ue[j + 1], xp, bwp, p, wu);
+            mw_sheet::bary(tau, double(jt) / ntj, double(jt + 1) / ntj, xtp,
+                           bwtp, pt, wt);
+            const double *blk =
+                V + (vo[j] + static_cast<std::int64_t>(jt) * p * pt) * 12;
+            double acc[12] = {0.0};
+            for (int a = 0; a < p; ++a) {
+                double inner[12] = {0.0};
+                const double *Va = blk + static_cast<std::int64_t>(a) * pt * 12;
+                for (int b = 0; b < pt; ++b) {
+                    const double w = wt[b];
+                    const double *Vb = Va + b * 12;
+                    for (int k = 0; k < 12; ++k)
+                        inner[k] = mw_fma::fma(w, Vb[k], inner[k]);
+                }
+                const double wa = wu[a];
+                for (int k = 0; k < 12; ++k)
+                    acc[k] = mw_fma::fma(wa, inner[k], acc[k]);
+            }
+            const double i1 = 1.0 / R;
+            const double i2 = i1 * i1;
+            for (int k = 0; k < 6; ++k) o[k] = acc[k] * i1;    // U, V, W
+            for (int k = 6; k < 12; ++k) o[k] = acc[k] * i2;   // derivatives
+        }
+    }
+    if (bad)
+        throw std::invalid_argument(
+            "a row lies off the plane sheet (need z' == the plane's, rho >= 0, "
+            "z >= 0 and R inside the table)");
+}
+
 // momwire#1032: the module NAME is a build parameter, so the same sources can
 // be compiled twice — once with AVX2/FMA and once at the x86-64 baseline — and
 // loaded by name at import time on a CPU that can run one but not the other.
@@ -921,4 +1100,16 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
           "grouping belongs in ONE call. `n_threads` <= 0 takes OpenMP's own "
           "count and is never raised above it. No rtol: the fixed rule's "
           "resolution is `p` and its extents the e^{-60} dead range.");
+    // The plane sheet's flag (momwire#1173 Design E), its own name for the
+    // same reason as the two above.
+    m.attr("plane_sheet_1173") = true;
+    m.def("near_interface_plane_sheet", &near_interface_plane_sheet,
+          py::arg("sub"), py::arg("idx"), py::arg("zp"), py::arg("u_edges"),
+          py::arg("ntau"), py::arg("voff"), py::arg("x"), py::arg("bw"),
+          py::arg("xt"), py::arg("bwt"), py::arg("vals"), py::arg("out"),
+          py::arg("n_threads"),
+          "Interpolate the rows sub[idx] (rho, z, zp), all on the plane "
+          "z' = zp, from a _near_interface.PlaneSheet table into out[idx] "
+          "((m, 6) complex, KEYS order). Row-parallel; the answer does not "
+          "depend on the thread count.");
 }

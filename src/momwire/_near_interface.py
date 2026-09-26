@@ -63,8 +63,10 @@ Convention gate: e^{+jωt}, ε̃ = ε_r − jσ/ωε₀, asserted at import.
 
 from __future__ import annotations
 
+import collections
 import functools
 import os
+import threading
 
 import numpy as np
 from scipy.special import hankel1, hankel2
@@ -1272,51 +1274,16 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False)
     or the row-ordered block and None on every other route.
     """
     if _use_column_route() and _use_column_accel():
-        # The twin's parallel unit is the COLUMN, so the whole grouping goes
-        # in ONE call: a call per column would hand OpenMP one column at a
-        # time and give back exactly the scaling the numpy route lacks. The
-        # concatenation keeps each group contiguous and `offsets` says where
-        # each starts.
-        #
-        # No BLAS pin here — the twin has no gemm to pin. It gets the
-        # PHYSICAL core count instead, which is #898's finding applied to its
-        # own arithmetic: libmvec exp/sincos saturates a core's FPU, so the
-        # hyperthread siblings contend rather than add (this kernel measured
-        # 40 ms at 4 threads and 46 ms at 8 on a 4c/8t box). The count is
-        # passed IN rather than guessed there: the policy, and `psutil`, live
-        # on this side.
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
-        rho_c, sizes, member_order = _column_blocks(sub, labels)
-        offsets = np.zeros(sizes.size + 1, dtype=np.intp)
-        offsets[1:] = np.cumsum(sizes)
-        zs = np.ascontiguousarray(sub[member_order, 1])
-        zps = np.ascontiguousarray(sub[member_order, 2])
-        # Refused HERE, in the walk's words with the offending member's
-        # numbers: the twin refuses the same set (before it builds a single
-        # column), but from C++ it cannot spell the values.
-        _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-        vals = _nia.near_interface_six_columns(
-            k_p,
-            k_m,
-            rho_c,
-            offsets,
-            zs,
-            zps,
-            float(lam_mult),
-            int(_COLUMN_P),
-            float(_DETOUR),
-            _physical_cpu_count(),
-            _GX,
-            _GW,
-        )
-        if permuted:
-            pos = np.empty(member_order.size, dtype=np.intp)
-            pos[member_order] = np.arange(member_order.size)
-            return vals, pos
-        out = np.empty((sub.shape[0], 6), dtype=np.complex128)
-        out[member_order] = vals
-        return out
+        if _use_sheet():
+            planes, take = _sheet_planes(sub)
+            if planes:
+                return _evaluate_with_sheets(
+                    k_p, k_m, sub, lam_mult, labels, permuted, planes, take
+                )
+        _SHEET_STATS["exact_rows"] += sub.shape[0]
+        return _column_twin(k_p, k_m, sub, lam_mult, labels, permuted)
     if permuted:
         return _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=labels), None
     if _use_column_route():
@@ -1359,6 +1326,390 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False)
             for r, zz, zzp in sub.tolist()
         ]
     )
+
+
+def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
+    """The column twin over every row of `sub`: `_evaluate_fresh`'s exact
+    path, unchanged by the plane sheets (it is their bit-identical
+    reference). Same arguments, return shape and `permuted` contract as
+    `_evaluate_fresh`."""
+    # The twin's parallel unit is the COLUMN, so the whole grouping goes
+    # in ONE call: a call per column would hand OpenMP one column at a
+    # time and give back exactly the scaling the numpy route lacks. The
+    # concatenation keeps each group contiguous and `offsets` says where
+    # each starts.
+    #
+    # No BLAS pin here — the twin has no gemm to pin. It gets the
+    # PHYSICAL core count instead, which is #898's finding applied to its
+    # own arithmetic: libmvec exp/sincos saturates a core's FPU, so the
+    # hyperthread siblings contend rather than add (this kernel measured
+    # 40 ms at 4 threads and 46 ms at 8 on a 4c/8t box). The count is
+    # passed IN rather than guessed there: the policy, and `psutil`, live
+    # on this side.
+    rho_c, sizes, member_order = _column_blocks(sub, labels)
+    offsets = np.zeros(sizes.size + 1, dtype=np.intp)
+    offsets[1:] = np.cumsum(sizes)
+    zs = np.ascontiguousarray(sub[member_order, 1])
+    zps = np.ascontiguousarray(sub[member_order, 2])
+    # Refused HERE, in the walk's words with the offending member's
+    # numbers: the twin refuses the same set (before it builds a single
+    # column), but from C++ it cannot spell the values.
+    _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
+    vals = _nia.near_interface_six_columns(
+        k_p,
+        k_m,
+        rho_c,
+        offsets,
+        zs,
+        zps,
+        float(lam_mult),
+        int(_COLUMN_P),
+        float(_DETOUR),
+        _physical_cpu_count(),
+        _GX,
+        _GW,
+    )
+    if permuted:
+        pos = np.empty(member_order.size, dtype=np.intp)
+        pos[member_order] = np.arange(member_order.size)
+        return vals, pos
+    out = np.empty((sub.shape[0], 6), dtype=np.complex128)
+    out[member_order] = vals
+    return out
+
+
+# --- Plane sheets (momwire#1173 Design E, phase 1) -------------------------
+#
+# A buried deck whose above side is not one vertical line (an inverted-L's top
+# wire, a leaning mast) asks one row per (above node, buried node) pair, and
+# nearly all of them share ONE (z', and often z) but carry their own rho: the
+# column route then pays a whole column setup (Bessel and Hankel functions at
+# ~900 lambda-nodes, 68 us of wall at 4 threads) for a single member. On
+# invl_deck(16) x8 that is 1.43 M columns and 91 % of the fill's wall.
+#
+# At one source depth z' = -d the six kernels are analytic in (rho, z) over
+# the whole above half-plane: the only nearby singular point is (0, z'), at
+# least d away. So a PLANE is tabulated once and every row on it is
+# interpolated: u = ln R, tau = theta / arccos(d / R) with R = hypot(rho,
+# z - z') and theta = atan2(rho, z - z'). Every node then has z >= 0 >= z', so
+# the nodes are evaluated by the column twin itself, each a column of one --
+# exactly how the exact route evaluates a singleton row. There is no new
+# kernel and no continuation. The kernels are even in rho, which is why the
+# map stays analytic at R = d.
+#
+# The table: panels of ratio 2 in R from R = d (fixed edges, so a sheet grown
+# for a longer reach keeps every node it had), each split in u and in tau so
+# no panel spans more than `_SHEET_WAVES` wavelengths (`_sheet_wavelength`),
+# with `_SHEET_P` x `_SHEET_PT` Chebyshev nodes per panel. The stored values
+# are f * R (U, V, W) and f * R^2 (the derivatives); `near_interface_plane_
+# sheet` interpolates them barycentrically and divides the power back out.
+#
+# This is GATED, not bit-identical: a sheet row's value is the table's, not
+# the twin's at that point. `_SHEET = False` (or MOMWIRE_NEAR_INTERFACE_SHEET=0)
+# is the exact route to the bit, and the reference the gates compare against.
+_SHEET = os.environ.get("MOMWIRE_NEAR_INTERFACE_SHEET", "1") != "0"
+_HAVE_PLANE_SHEET_ACCEL = _nia is not None and bool(
+    getattr(_nia, "plane_sheet_1173", False)
+)
+# Chebyshev nodes per panel in u and in tau. Measured against the twin at the
+# asked rows (Design E, invl_deck(16), soil A, 7 MHz, d = 0.15 m): max relative
+# error per kernel 1e-3 / 7e-6 / 2e-7 / 3e-9 / 6e-13 at p = 6 / 8 / 10 / 12 /
+# 16, and |dZ_in| = 4.7e-11 ohm at p = 12 (5.2e-7 at p = 8) on x2 / x4 / x8,
+# against a gate of 5.9-10 milliohm. The soil / frequency / depth ladder of the
+# phase-1 PR is the measurement for other decks (see its tests).
+_SHEET_P = 12
+_SHEET_PT = 12
+# The smallest number of tau panels per R panel, and the R panels' ratio.
+_SHEET_NTAU = 4
+_SHEET_RATIO = 2.0
+# No panel spans more than this many wavelengths in R or in arc length
+# (R * theta_max), the wavelength being the shortest one alive there
+# (`_sheet_wavelength`). Without the cap the design's table (ratio-2 panels,
+# four tau panels) fails at high frequency: sheet against twin at random rows
+# on a plane, max error relative to the kernel's 1/R^pw envelope, p = 12:
+#
+#                                   no cap    1.0 (nodes)      0.5 (nodes)
+#   eps 13, sigma .005, 7.1 MHz     4.9e-8    1.1e-9 (7.6 k)   2.4e-11 (18 k)
+#   eps 5, sigma .001, 28 MHz, 5 cm 2.8e-3    7.1e-8 (11 k)    5.0e-10 (30 k)
+#   eps 30, sigma .03, 28 MHz, 30cm 2.1e-3    9.8e-9 (31 k)    1.7e-10 (109 k)
+#
+# (d = 0.15 m unless given, R <= 15 m). One wavelength is the cheapest cap
+# that holds 1e-7 on all three.
+_SHEET_WAVES = 1.0
+# The soil's wavelength sets a panel's width only while its wave is alive:
+# e^{-Im(k_m) R} below e^{-_SHEET_DEAD} of its size at the panel's inner edge
+# leaves the air's.
+_SHEET_DEAD = 18.0
+# A plane is tabulated when one `_evaluate_fresh` call asks at least this many
+# rows on it (the table is ~4-7 k nodes, each one twin column). Deciding per
+# CALL keeps the choice a function of the call alone, so Z never depends on
+# what the process solved before (see `_plane_sheet`).
+_SHEET_MIN_ROWS = 4096
+# The distance guard. A sheet is never used for a plane shallower than this:
+# its rows' distance from the interface-singular point (rho, z, z') -> 0 is at
+# least d, and the table's first panel starts at R = d. Nothing in the map
+# degrades as d shrinks (the panels are logarithmic), but the plane z' = 0 is
+# the corner itself, and below this depth a plane is left to the twin, which
+# is designed for the corner.
+_SHEET_MIN_DEPTH = 1e-3
+# Sheets kept, most recent last. A sheet is a few hundred kB.
+_SHEET_CACHE_MAX = 32
+_SHEET_CACHE = collections.OrderedDict()
+_SHEET_LOCK = threading.Lock()
+# Route proof: rows each path served, planes interpolated, sheets built and
+# their nodes, and rows left exact ONLY because of the depth guard. Reset by
+# assignment (`dict.fromkeys(_SHEET_STATS, 0)`) or key by key.
+_SHEET_STATS = dict.fromkeys(
+    (
+        "sheet_rows",
+        "exact_rows",
+        "sheet_planes",
+        "sheets_built",
+        "nodes_built",
+        "guarded_rows",
+    ),
+    0,
+)
+
+
+def _use_sheet():
+    """Plane sheets serve when switched on and the C++ entry is built (the
+    column twin, which evaluates their nodes, is already known to be)."""
+    return _SHEET and _HAVE_PLANE_SHEET_ACCEL
+
+
+def _cheb(p):
+    """Chebyshev first-kind nodes, ascending, and their barycentric weights."""
+    k = np.arange(p)
+    x = -np.cos((2 * k + 1) * np.pi / (2 * p))
+    w = (-1.0) ** k * np.sin((2 * k + 1) * np.pi / (2 * p))
+    return np.ascontiguousarray(x), np.ascontiguousarray(w)
+
+
+def _sheet_planes(sub):
+    """The planes of `sub` a sheet serves, and the mask of their rows.
+
+    A row qualifies when it is on the above side (z >= 0, finite) with a
+    finite rho >= 0, and its z' is at or below the depth guard; a plane when
+    at least `_SHEET_MIN_ROWS` of the call's rows qualify on it. Returns
+    ([z' values], mask) or ([], None)."""
+    m = sub.shape[0]
+    if m < _SHEET_MIN_ROWS:
+        return [], None
+    rho, z, zp = sub[:, 0], sub[:, 1], sub[:, 2]
+    above = (z >= 0.0) & (rho >= 0.0) & np.isfinite(z) & np.isfinite(rho)
+    below = above & (zp < 0.0)
+    if np.count_nonzero(below) < _SHEET_MIN_ROWS:
+        return [], None
+    vals, cnt = np.unique(zp[below], return_counts=True)
+    big = cnt >= _SHEET_MIN_ROWS
+    deep = vals <= -_SHEET_MIN_DEPTH
+    _SHEET_STATS["guarded_rows"] += int(cnt[big & ~deep].sum())
+    planes = vals[big & deep]
+    if planes.size == 0:
+        return [], None
+    take = below & np.isin(zp, planes)
+    return [float(v) for v in planes], take
+
+
+def _sheet_wavelength(k_p, k_m, r_lo):
+    """The shortest wavelength alive at R >= r_lo: the soil's while its wave
+    has not decayed by `_SHEET_DEAD` e-folds, else the air's."""
+    k = k_p
+    if abs(k_m.imag) * r_lo < _SHEET_DEAD:
+        k = max(k, abs(k_m))
+    return 2.0 * np.pi / k
+
+
+class PlaneSheet:
+    """The six kernels on one plane z' = zp < 0, tabulated over the above
+    half-plane out to `rmax` (grown on demand by whole R panels).
+
+    Panel edges are FIXED: main panel i spans R in [d r^i, d r^(i+1)] and its
+    u / tau split depends on i alone, so growing a sheet appends nodes and
+    never moves one. A row's value therefore does not depend on how far the
+    sheet had been grown, or by whom."""
+
+    def __init__(self, k_p, k_m, zp, lam_mult):
+        if not zp < 0.0:
+            raise ValueError(f"a plane sheet needs z' < 0, got {zp!r}")
+        self.k_p, self.k_m, self.zp, self.d = (
+            float(k_p),
+            complex(k_m),
+            float(zp),
+            -float(zp),
+        )
+        self.lam_mult = float(lam_mult)
+        self.x, self.bw = _cheb(_SHEET_P)
+        self.xt, self.bwt = _cheb(_SHEET_PT)
+        self._lnd = float(np.log(self.d))
+        self._lnr = float(np.log(_SHEET_RATIO))
+        self.n_main = 0
+        self.u_edges = [self._lnd]
+        self.ntau = []
+        self.voff = []
+        self._vals = []
+        self.n_nodes = 0
+        self._flat = None
+
+    @property
+    def u_top(self):
+        return self.u_edges[-1]
+
+    def cover(self, rmax):
+        """Grow the table by whole main panels until it reaches `rmax`."""
+        u_need = float(np.log(rmax))
+        new_u, new_t = [], []
+        offset = self.n_nodes
+        per = _SHEET_P * _SHEET_PT
+        while self.u_top < u_need:
+            i = self.n_main
+            u0 = self._lnd + i * self._lnr
+            u1 = self._lnd + (i + 1) * self._lnr
+            r_lo, r_hi = float(np.exp(u0)), float(np.exp(u1))
+            wl = _SHEET_WAVES * _sheet_wavelength(self.k_p, self.k_m, r_lo)
+            n_u = max(1, int(np.ceil(r_hi * self._lnr / wl)))
+            arc = r_hi * float(np.arccos(min(1.0, self.d / r_hi)))
+            n_t = max(_SHEET_NTAU, int(np.ceil(arc / wl)))
+            for q in range(n_u):
+                a = u0 + (u1 - u0) * q / n_u
+                b = u1 if q == n_u - 1 else u0 + (u1 - u0) * (q + 1) / n_u
+                uu = 0.5 * (a + b) + 0.5 * (b - a) * self.x
+                self.voff.append(offset)
+                self.ntau.append(n_t)
+                self.u_edges.append(b)
+                for jt in range(n_t):
+                    tt = (jt + 0.5 + 0.5 * self.xt) / n_t
+                    U, T = np.meshgrid(uu, tt, indexing="ij")
+                    new_u.append(U.ravel())
+                    new_t.append(T.ravel())
+                offset += n_t * per
+            self.n_main += 1
+        if not new_u:
+            return
+        vals = self._evaluate(np.concatenate(new_u), np.concatenate(new_t))
+        self._vals.append(vals)
+        self.n_nodes = offset
+        self._flat = None
+        _SHEET_STATS["nodes_built"] += vals.shape[0]
+
+    def _evaluate(self, u, tau):
+        """The six kernels times R^pw at nodes (u, tau), each through the
+        column twin as a column of one."""
+        R = np.exp(u)
+        th = tau * np.arccos(np.minimum(1.0, self.d / R))
+        rho = R * np.sin(th)
+        z = np.maximum(self.zp + R * np.cos(th), 0.0)
+        n = rho.size
+        vals = np.asarray(
+            _nia.near_interface_six_columns(
+                self.k_p,
+                self.k_m,
+                np.ascontiguousarray(rho),
+                np.arange(n + 1, dtype=np.intp),
+                np.ascontiguousarray(z),
+                np.full(n, self.zp),
+                self.lam_mult,
+                int(_COLUMN_P),
+                float(_DETOUR),
+                _physical_cpu_count(),
+                _GX,
+                _GW,
+            )
+        )
+        Rn = np.hypot(rho, z - self.zp)
+        vals[:, :3] *= Rn[:, None]
+        vals[:, 3:] *= (Rn * Rn)[:, None]
+        return vals
+
+    def arrays(self):
+        if self._flat is None:
+            self._flat = (
+                np.asarray(self.u_edges, dtype=float),
+                np.asarray(self.ntau, dtype=np.int64),
+                np.asarray(self.voff, dtype=np.int64),
+                np.ascontiguousarray(np.concatenate(self._vals)),
+            )
+        return self._flat
+
+    def interpolate(self, sub, idx, out):
+        """out[idx] = the six kernels at rows sub[idx], all on this plane."""
+        u_edges, ntau, voff, vals = self.arrays()
+        _nia.near_interface_plane_sheet(
+            sub,
+            idx,
+            self.zp,
+            u_edges,
+            ntau,
+            voff,
+            self.x,
+            self.bw,
+            self.xt,
+            self.bwt,
+            vals,
+            out,
+            _physical_cpu_count(),
+        )
+
+
+def _plane_sheet(k_p, k_m, zp, lam_mult, rmax):
+    """The cached sheet of plane `zp`, grown to reach `rmax`.
+
+    Keyed on everything a node's value depends on. Sheets are shared across
+    calls and solves; that cannot move a bit, because a node's value depends
+    only on its key and its fixed position (`PlaneSheet`), never on when or
+    how far the sheet was grown."""
+    key = (
+        float(k_p),
+        complex(k_m),
+        float(zp),
+        float(lam_mult),
+        int(_COLUMN_P),
+        float(_DETOUR),
+        _SHEET_P,
+        _SHEET_PT,
+        _SHEET_NTAU,
+        _SHEET_RATIO,
+        _SHEET_WAVES,
+        _SHEET_DEAD,
+    )
+    with _SHEET_LOCK:
+        sheet = _SHEET_CACHE.pop(key, None)
+        if sheet is None:
+            sheet = PlaneSheet(k_p, k_m, zp, lam_mult)
+            _SHEET_STATS["sheets_built"] += 1
+        _SHEET_CACHE[key] = sheet
+        while len(_SHEET_CACHE) > _SHEET_CACHE_MAX:
+            _SHEET_CACHE.popitem(last=False)
+        sheet.cover(rmax)
+        return sheet
+
+
+def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, planes, take):
+    """`_evaluate_fresh` on the column route when `planes` qualify: their rows
+    (`take`) interpolated from the planes' sheets, the rest through the
+    column twin exactly as `_column_twin` would take them alone (their
+    labels, their first-appearance order)."""
+    m = sub.shape[0]
+    sub = np.ascontiguousarray(sub, dtype=float)
+    out = np.empty((m, 6), dtype=np.complex128)
+    rest = np.flatnonzero(~take)
+    if rest.size:
+        lab = None if labels is None else np.asarray(labels)[rest]
+        out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
+    zp = sub[:, 2]
+    for v in planes:
+        idx = np.flatnonzero(take & (zp == v))
+        r = np.hypot(sub[idx, 0], sub[idx, 1] - v)
+        sheet = _plane_sheet(k_p, k_m, v, lam_mult, float(r.max()))
+        sheet.interpolate(sub, idx, out)
+    n_sheet = m - rest.size
+    _SHEET_STATS["sheet_rows"] += n_sheet
+    _SHEET_STATS["exact_rows"] += rest.size
+    _SHEET_STATS["sheet_planes"] += len(planes)
+    if permuted:
+        return out, None
+    return out
 
 
 def _designed_tables_reference(
