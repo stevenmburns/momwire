@@ -9,12 +9,12 @@
 // without changing the calls bought nothing (DESIGN-D §2, variant D-split),
 // so the only lever is the calls themselves.
 //
-// This spells the bracket with three functions that glibc 2.28's libmvec
-// vectorises -- exp, sin and cos -- and nothing else:
+// This spells the bracket with three vector calls to two functions glibc
+// 2.28's libmvec has -- exp and sin -- and nothing else:
 //
-//     h = sin(y/2), c = cos(y/2)
+//     h = sin(y/2)
 //     cos(y) - 1 = -2 h^2           (the cancellation-free form, momwire#799)
-//     sin(y)     =  2 h c
+//     sin(y)     =  sin(y)
 //     exp(a)     =  exp(a)          (one vector call, reused below)
 //     expm1(a)   =  Taylor(a)       a >= -0.35
 //               =  exp(a) - 1      a <  -0.35
@@ -36,10 +36,10 @@
 // larger is 1 and the result is at least 0.295 in magnitude, so the literal
 // subtraction costs about two bits (|exp(a)|/|exp(a)-1| <= 2.4).
 //
-// The half-angle forms are the ones `_stable.expm1_neg_jkR` uses for the
-// `- 1` already; sin(y) = 2hc is one extra rounding against a direct sin(y).
-// All of it is a few ulp per node. It is NOT bit-identical to the scalar
-// spelling it replaces (libmvec's exp/sin/cos differ from scalar libm in the
+// The half-angle form is the one `_stable.expm1_neg_jkR` uses for the `- 1`
+// already, and sin(y) is called directly, as there. All of it is a few ulp
+// per node. It is NOT bit-identical to the scalar
+// spelling it replaces (libmvec's exp/sin differ from scalar libm in the
 // last bits anyway), which is why this change is gated on Z rather than
 // proven by array_equal.
 //
@@ -57,6 +57,15 @@
 // one of two finished doubles by their bits), and it compiles to
 // vandpd/vandnpd/vorpd. Measured on GCC 13: the conditional form vectorises
 // only with -fno-trapping-math; this form vectorises at the build's flags.
+//
+// NO cos(y/2)
+// -----------
+// The prototype took sin(y) as 2 sin(y/2) cos(y/2). That vectorises on GCC 13
+// and NOT on GCC 11 (Ubuntu 22.04): there the sincos pass merges sin and cos
+// of one argument into a scalar `sincos` before the vectoriser runs, which
+// has no simd declaration, and the whole loop stays scalar ("no vectype").
+// sin(y/2) and sin(y) have different arguments, so nothing merges -- the
+// real-k loop's pattern -- and the loop vectorises on both.
 //
 // PORTABILITY
 // -----------
@@ -80,9 +89,6 @@ extern "C" double exp(double);
 
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double sin(double);
-
-#pragma omp declare simd notinbranch simdlen(4)
-extern "C" double cos(double);
 #endif
 
 // MSVC's /openmp:llvm rejects `omp simd` (see `_accel_common.h`).
@@ -132,10 +138,9 @@ void razor_cplx_brackets(const double *R, size_t n, double k_re, double k_im,
         const double em = razor_cplx_blend(a >= RAZOR_CPLX_EXPM1_SWITCH, p * a,
                                            ea - 1.0);
         const double h = std::sin(0.5 * y);
-        const double c = std::cos(0.5 * y);
+        const double sy = std::sin(y);
         const double cm1 = -2.0 * h * h;  // cos(y) - 1
         const double cy = 1.0 + cm1;      // cos(y)
-        const double sy = 2.0 * h * c;    // sin(y)
         re[q] = em * cy + cm1;
         im[q] = -(ea * sy);
     }

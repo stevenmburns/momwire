@@ -4,7 +4,7 @@ razor's complex-k moment loop (momwire#796) evaluates e^{-jkR} - 1 at every
 quadrature node. It used to call expm1, exp, sincos and sin(y/2) per node,
 scalar, which made the complex fill 5x the real one per entry. D4 moved the
 bracket into its own translation unit, `_accel_razor_cplx.cpp`, spelled with
-the three functions glibc 2.28's libmvec vectorises (exp, sin, cos) and a
+two functions glibc 2.28's libmvec vectorises (exp; sin of y/2 and of y) and a
 degree-13 Taylor series for expm1 above a = Im(k) R = -0.35.
 
 That is a numerics change, not a refactor: libmvec's last bits are not scalar
