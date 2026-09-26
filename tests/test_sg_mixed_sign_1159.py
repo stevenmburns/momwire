@@ -57,7 +57,7 @@ import pytest
 from momwire import BSplineSolver, SinusoidalGalerkinSolver
 from momwire import sinusoidal_galerkin as _sg
 from momwire._far_readout import Ground, _far_moments
-from momwire.sinusoidal import SinusoidalSolver
+from momwire import sinusoidal as _sin
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -191,16 +191,22 @@ def _negate_transmitted(monkeypatch):
 
 
 def _air_readout(monkeypatch):
-    """The pre-fix readout: the inherited `_basis_coefs(geom, self.k)`."""
+    """The pre-fix readout: `_basis_coefs(geom, self.k)`. Spelled out rather
+    than borrowed from `SinusoidalSolver`, whose readout is the buried-aware
+    one since momwire#1222."""
     monkeypatch.setattr(
-        SinusoidalGalerkinSolver, "_readout_view", SinusoidalSolver._readout_view
+        SinusoidalGalerkinSolver,
+        "_readout_view",
+        lambda self, geom: self._basis_coefs(geom, self.k),
     )
 
 
 def _air_drive(monkeypatch):
     """The pre-fix drive and port readout: every site handed `self.k`, which
     on a mixed deck is k_p."""
+    # Both modules: the drive is SG's, the gap readout the base's (#1222).
     monkeypatch.setattr(_sg, "_entry_k", lambda seg_view, s, e, k: k)
+    monkeypatch.setattr(_sin, "_entry_k", lambda seg_view, s, e, k: k)
 
 
 # ----------------------------------------------------------------------
