@@ -391,3 +391,177 @@ def test_the_census_is_the_rule_on_the_fills_rows(monkeypatch):
             want, _ = ni._sheet_planes(rows, K_P, K_M)
             plan = ni.sheet_plan(EPS_T, K_P, [(above, below)], a_wire)
             assert plan.planes.tolist() == [v for v, _r in want], (weight, plan)
+
+
+# ----------------------------------------------------------------------
+# the height sheet (Design E phase 2): one observer height, z' spread
+# ----------------------------------------------------------------------
+
+
+def _height_rows(h, n=600, rmax=40.0, dmax=3.0, seed=7):
+    """Rows at the observer height z = h over (rho, z' <= 0): a wire's reach
+    along the ground, a rod's depth, and z' -> 0 and rho -> a, where a
+    height sheet is hardest."""
+    rng = np.random.default_rng(seed)
+    rho = np.concatenate(
+        [rng.uniform(0, rmax, n), 10 ** rng.uniform(-3, np.log10(rmax), n)]
+    )
+    zp = -np.concatenate([rng.uniform(0, dmax, n), 10 ** rng.uniform(-6, 0, n)])
+    zp[:5] = 0.0
+    rho = np.hypot(rho, 1e-3)
+    return np.ascontiguousarray(np.stack([rho, np.full_like(zp, h), zp], axis=1))
+
+
+def _height_sheet_at(sub):
+    h = float(sub[0, 1])
+    R = np.hypot(sub[:, 0], sub[:, 1] - sub[:, 2])
+    deep = float(-sub[:, 2].min())
+    sheet = ni.PlaneSheet(
+        K_P, K_M, h, ni._LAM_MULT, height=True, depth=ni._height_reach(deep)
+    )
+    sheet.cover(float(R.max()))
+    out = np.empty((sub.shape[0], 6), dtype=np.complex128)
+    sheet.interpolate(sub, np.arange(sub.shape[0]), out)
+    return sheet, out
+
+
+def test_the_height_sheet_is_the_twin_at_its_rows():
+    """A Beverage-like height (2.5 m) over rods to 3 m, reaching 40 m: 4.4e-8
+    measured, on dz'W near the reach (soil A, 7 MHz; the plane sheet's 28 MHz
+    rung reads 7.1e-8 at the same one-wavelength cap). Half a wavelength
+    reads 4.0e-10 at 3.5x the nodes."""
+    sub = _height_rows(2.5)
+    _sheet, got = _height_sheet_at(sub)
+    assert _envelope_error(sub, got, _twin(sub)) < 1e-7
+
+
+def test_a_coarse_height_sheet_fails_the_same_check(monkeypatch):
+    monkeypatch.setattr(ni, "_SHEET_P", 3)
+    monkeypatch.setattr(ni, "_SHEET_PT", 3)
+    sub = _height_rows(2.5)
+    _sheet, got = _height_sheet_at(sub)
+    assert _envelope_error(sub, got, _twin(sub)) > 1e-4
+
+
+def test_the_height_sheet_refuses_a_row_it_cannot_answer():
+    """Off the height, above the interface, deeper than its reach (4 m for
+    rows to 3 m), or beyond the table."""
+    sub = _height_rows(2.5, n=50, rmax=5.0)
+    sheet, _ = _height_sheet_at(sub)
+    assert sheet.depth == 4.0
+    for bad in (
+        [1.0, 2.4, -0.5],
+        [1.0, 2.5, 1e-3],
+        [1e4, 2.5, -0.5],
+        [20.0, 2.5, -4.5],
+    ):
+        rows = np.ascontiguousarray(np.vstack([sub, bad]))
+        out = np.empty((rows.shape[0], 6), dtype=np.complex128)
+        with pytest.raises(ValueError, match="off the plane sheet"):
+            sheet.interpolate(rows, np.arange(rows.shape[0]), out)
+
+
+def test_a_plan_serves_heights_after_planes(monkeypatch):
+    """A row on a planned plane takes the plane's sheet even at a planned
+    height; a row at a planned height and on no plane takes the height's;
+    the rest are the twin's, grouped as they would be alone."""
+    plane = _plane_rows(-0.15, n=100)
+    plane[:20, 1] = 2.5  # at the height too: the plane still serves them
+    height = _height_rows(2.5, n=100, rmax=12.0)
+    other = _plane_rows(-0.4, n=30, seed=9)
+    rows = np.ascontiguousarray(np.concatenate([plane, height, other]))
+    plan = ni.SheetPlan([-0.15], [(2.5, 4.0)])
+    got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT, plan=plan)
+    n_p, n_h = plane.shape[0], height.shape[0]
+    _s, want_p = _sheet_at(plane)
+    assert np.array_equal(got[:n_p], want_p)
+    _s, want_h = _height_sheet_at(height)
+    assert np.array_equal(got[n_p : n_p + n_h], want_h)
+    assert np.array_equal(
+        got[n_p + n_h :], ni._column_twin(K_P, K_M, other, ni._LAM_MULT)
+    )
+    assert ni._SHEET_STATS["height_rows"] == n_h
+    assert ni._SHEET_STATS["sheet_rows"] == n_p + n_h
+
+
+def _beverage(n_run=24):
+    """A Beverage in miniature: a 30 m run 2.5 m up, a lead down to a 1.5 m
+    rod at each end, fed at the first lead. The run's nodes are one height
+    over rods whose every node is its own depth -- the height sheet's case --
+    and no rod depth carries enough rows for a plane."""
+    wires = [
+        np.array([(0.0, 0.0, -1.5), (0.0, 0.0, 0.0)]),
+        np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 2.5)]),
+        np.array([(0.0, 0.0, 2.5), (30.0, 0.0, 2.5)]),
+        np.array([(30.0, 0.0, 2.5), (30.0, 0.0, 0.0)]),
+        np.array([(30.0, 0.0, 0.0), (30.0, 0.0, -1.5)]),
+    ]
+    return dict(
+        wires=wires,
+        n_per_edge_per_wire=[[6], [5], [n_run], [5], [6]],
+        junctions=[
+            [(0, "end"), (1, "start")],
+            [(1, "end"), (2, "start")],
+            [(2, "end"), (3, "start")],
+            [(3, "end"), (4, "start")],
+        ],
+        feeds=[(1, 1.25, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=1e-3,
+        ground_z=0.0,
+        ground_eps=SOIL_A,
+        ground_model="sommerfeld",
+    )
+
+
+@pytest.fixture(scope="module")
+def beverage_fills():
+    """The miniature Beverage with its height sheet forced (the rule off for
+    heights, the plane pre-filter at its shipped 512) and off; and, forced,
+    through four other cuts of the same fills: the main sandwich in small
+    chunks, the grid route instead of the product, the product in many tiles,
+    and the end loops one end per call. Returns ({name: Z}, {name: stats})."""
+    from momwire import _crossing_fill as cf
+
+    deck = _beverage()
+    cuts = {
+        "off": {"ni._SHEET": False},
+        "on": {},
+        "chunked": {"cf._MAIN_CHUNK_BYTES": 4096},
+        "grid": {"cf._PRODUCT_TABLES": False},
+        "tiles": {"cf._TILE_ROWS": 500},
+        "ends": {"cf._END_BATCH_PAIRS": 1},
+    }
+    Z, stats = {}, {}
+    for name, flags in cuts.items():
+        with pytest.MonkeyPatch.context() as m:
+            m.setattr(ni, "_SHEET_HEIGHT_WEIGHT", 0.0)
+            m.setattr(ni, "_SHEET_CACHE", type(ni._SHEET_CACHE)())
+            m.setattr(ni, "_SHEET_STATS", dict.fromkeys(ni._SHEET_STATS, 0))
+            for key, v in flags.items():
+                mod, attr = key.split(".")
+                m.setattr({"ni": ni, "cf": cf}[mod], attr, v)
+            Z[name] = _fill(deck)
+            stats[name] = dict(ni._SHEET_STATS)
+    return Z, stats
+
+
+def test_the_height_sheet_fill_is_the_exact_fill_at_the_tolerance(beverage_fills):
+    Z, stats = beverage_fills
+    ref, got = Z["off"], Z["on"]
+    assert stats["on"]["height_rows"] > stats["on"]["exact_rows"] > 0
+    assert stats["on"]["heights_planned"] >= 1 and stats["on"]["planes_planned"] == 0
+    assert not np.array_equal(got, ref)
+    big = np.abs(ref) > 1e-6 * np.abs(ref).max()
+    assert (np.abs(got - ref)[big] / np.abs(ref[big])).max() < 1e-6
+    assert np.abs(got - ref).max() < 1e-9 * np.abs(ref).max()
+
+
+@pytest.mark.parametrize("cut", ["chunked", "grid", "tiles", "ends"])
+def test_a_height_row_is_the_same_in_every_cut_of_the_fill(beverage_fills, cut):
+    """The plan is the fill's, so cutting its rows differently -- chunks, the
+    grid route, tiles, one end per call -- serves the same rows from the same sheet
+    and leaves the same rows to the twin: Z to the bit."""
+    Z, stats = beverage_fills
+    assert stats[cut]["height_rows"] > 0
+    assert np.array_equal(Z[cut], Z["on"])
