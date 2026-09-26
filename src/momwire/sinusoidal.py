@@ -36,6 +36,7 @@ Scope (deliberately narrow):
 """
 
 import cmath
+import contextlib
 import math
 from collections import namedtuple
 from dataclasses import dataclass
@@ -46,15 +47,21 @@ import scipy.linalg
 import scipy.sparse
 
 from . import (
+    _below_interface,
+    _crossing_fill,
     _feed_snap,
     _field_ground,
     _ground_mirror,
     _ground_refl,
     _ground_spec,
+    _medium_spec,
     _sommerfeld,
+    _sommerfeld_below,
+    _sommerfeld_transmitted,
     _wire_loading,
     _wire_spec,
 )
+from . import bspline as _bspline
 from .bspline import SINGULAR_ENRICHMENT_NEVER
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
@@ -642,6 +649,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # instead — so what is left resident here is only what
         # `SinusoidalGalerkinSolver` still asks `_image_refl_prep` for.
         self._cached_image_refl_prep: tuple | None = None
+        # Per-instance medium-label memo (momwire#980 D1), the same slot
+        # bspline and razor keep for the same reason: geometry and the three
+        # ground kwargs are frozen after construction, so the labels are
+        # computed once. Deliberately NOT hoisted into `_below_interface` —
+        # the module is functions over data and holds no solver state.
+        self._cached_wire_media: tuple | None = None
+        # The medium the CURRENT solve runs in, set by `_operating_medium`
+        # for the duration of one solve. `None` outside it, which is what
+        # keeps every non-buried path structurally unchanged.
+        self._active_medium = None
+        self._active_r1_below = None
 
         if not wires:
             raise ValueError("wires must be non-empty")
@@ -3915,13 +3933,35 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         boundaries are still derived from `_REMAINDER_CHUNK_ELEMS // n_src`,
         so the floats are the one-shot spelling's floats bit for bit.
         """
-        N = prepared["N"]
-        q = prepared["q"]
         gz = prepared["gz"]
         k = prepared["k"]
         grid = prepared["grid"]
         srcf = prepared["srcf"]
         t_src = prepared["t_src"]
+
+        def proj(obs_c, obs_t):
+            return _sommerfeld.remainder_field_proj(
+                obs_c, obs_t, srcf, t_src, gz, k, grid
+            )
+
+        return self._replay_remainder(
+            prepared, proj, obs_centers, obs_tangents, consume, row_group
+        )
+
+    def _replay_remainder(
+        self, prepared, proj, obs_centers, obs_tangents, consume, row_group
+    ):
+        """The observer loop BOTH remainder families replay through
+        (momwire#1221): the above one (`_replay_sommerfeld_remainder`) and
+        the below one (`_replay_somm_remainder_below`) differ only in the
+        projected-table call, `proj(obs_c, obs_t)`, which each hands in over
+        its own prepared state. Everything else — the observer defaults, the
+        chunk derived from `_REMAINDER_CHUNK_ELEMS // n_src`, the `row_group`
+        alignment, the streaming `consume` outlet and the source reduction —
+        is one body, so the two cannot drift apart.
+        """
+        N = prepared["N"]
+        q = prepared["q"]
         shp_w = prepared["shp_w"]
 
         obs_c = (
@@ -3950,22 +3990,573 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i0 in range(0, M, chunk):
             self._checkpoint()  # per observer chunk of the eval block
             i1 = min(i0 + chunk, M)
-            proj = _sommerfeld.remainder_field_proj(
-                obs_c[i0:i1], obs_t[i0:i1], srcf, t_src, gz, k, grid
-            )
-            fq = proj.reshape(i1 - i0, N, q)
+            table = proj(obs_c[i0:i1], obs_t[i0:i1])
+            fq = table.reshape(i1 - i0, N, q)
             # Per output element this is a sum over the q source nodes and
             # nothing else, so it does not see the chunk it is in: the block
             # a consumer gets is bit-identical to the same rows of the whole
             # S, at any chunk size.
             block = np.einsum("snq,mnq->smn", shp_w, fq)
-            del proj, fq
+            del table, fq
             if consume is None:
                 S[:, i0:i1, :] = block
             else:
                 consume(i0, i1, block)
             del block
         return S
+
+    # ------------------------------------------------------------------
+    # The BELOW-interface Sommerfeld remainder (momwire#980 D1), beside its
+    # above twin since momwire#1221. Same prepare/replay pair, term for term;
+    # only the grid/proj pair and the wavenumbers differ, and the replay is
+    # the shared `_replay_remainder` loop. `SinusoidalGalerkinSolver` was its
+    # only consumer while this family had no buried serve; the point-matched
+    # lane is the second (#1220).
+    # ------------------------------------------------------------------
+
+    def _somm_remainder_below_prepare(self, geom, medium, r1_below, cos_shape="cos-1"):
+        """Observer-INDEPENDENT half of the BELOW remainder (momwire#980
+        D1; beside its above twin since momwire#1221).
+
+        Differences from the above twin, and only these:
+
+        * the grid is `get_grid_below(eps_t, k_p, ...)` — sized on the
+          FREE-SPACE k, which is what that family keys on, while the field
+          is evaluated at both;
+        * the projector is `remainder_field_proj_below(..., k_p, k_m, grid)`,
+          which takes the pair;
+        * the source shapes are built at **k_m**, because they weight a
+          current living in the lower medium, and they are subtracted from a
+          triple the fill built at k_m too.
+
+        `r1_below` comes from `_below_interface.serve_plan`, so the cap and
+        grazing refusals are raised there — before an 80-second grid fill —
+        with the deck's own numbers.
+
+        No submerged-geometry check here: this evaluator's scope is the
+        mirror image of the above one's, and `remainder_field_proj_below`
+        raises on a point ABOVE the plane itself. Re-deriving that guard
+        would be a second scope rule to keep in step with the first.
+        """
+        gz = self.ground_z
+        seg_c = geom["seg_centers"]
+        seg_t = geom["seg_tangents"]
+        h_half = 0.5 * geom["seg_h"]
+        N = geom["n_segs"]
+        k_m = medium.k_m
+
+        q = self.n_qp_sommerfeld
+        gx, gw = self._leggauss_cached(q)
+        zloc = h_half[:, None] * gx[None, :]
+        src = seg_c[:, None, :] + zloc[..., None] * seg_t[:, None, :]
+        w_node = h_half[:, None] * gw[None, :]
+        shp_cos = (
+            np.cos(k_m * zloc)
+            if cos_shape == "cos"
+            else -2.0 * np.sin(0.5 * k_m * zloc) ** 2
+        )
+        shp = np.stack(
+            [np.ones_like(zloc, dtype=np.complex128), np.sin(k_m * zloc), shp_cos]
+        )
+
+        grid = _sommerfeld_below.get_grid_below(
+            medium.eps_t, medium.k_p, r1_below, self.omega, mu=self.mu
+        )
+        n_src = N * q
+        return {
+            "k_p": medium.k_p,
+            "k_m": k_m,
+            "gz": gz,
+            "N": N,
+            "q": q,
+            "n_src": n_src,
+            "grid": grid,
+            "srcf": src.reshape(n_src, 3),
+            "t_src": np.repeat(seg_t, q, axis=0),
+            "shp_w": shp * w_node[None],
+            "seg_c": seg_c,
+            "seg_t": seg_t,
+        }
+
+    def _replay_somm_remainder_below(
+        self, prepared, obs_centers=None, obs_tangents=None, consume=None, row_group=1
+    ):
+        """Observer-DEPENDENT half — the above twin's loop, one call swapped.
+
+        Chunking, streaming and `row_group` alignment are that method's
+        contract verbatim — since momwire#1221 they are literally the same
+        loop (`_replay_remainder`), so a consumer written against one works
+        against the other by construction.
+        """
+        srcf, t_src = prepared["srcf"], prepared["t_src"]
+        gz, k_p, k_m, grid = (
+            prepared["gz"],
+            prepared["k_p"],
+            prepared["k_m"],
+            prepared["grid"],
+        )
+
+        def proj(obs_c, obs_t):
+            return _sommerfeld_below.remainder_field_proj_below(
+                obs_c, obs_t, srcf, t_src, gz, k_p, k_m, grid
+            )
+
+        return self._replay_remainder(
+            prepared, proj, obs_centers, obs_tangents, consume, row_group
+        )
+
+    # ------------------------------------------------------------------
+    # Buried plumbing shared by the whole family (momwire#1221).
+    #
+    # Hoisted from `SinusoidalGalerkinSolver`, where #980 built it, because
+    # none of it depends on the TESTING: the medium labels and the operating
+    # medium, the class split of a mixed deck, the per-segment basis stitch,
+    # the serve plan and the transmitted field tensor are statements about
+    # the basis, the geometry and the ground. The point-matched lane reaches
+    # them for #1220; this base still refuses every buried deck at
+    # `_build_geometry` (`_serves_buried` is False here), so until that lane
+    # lands they are reachable only through the Galerkin subclass.
+    # ------------------------------------------------------------------
+
+    def _lower_medium(self):
+        """Whether this solve's ground has a HALF-SPACE below the interface."""
+        return _below_interface.lower_medium(self.ground_eps, self.ground_model)
+
+    def _grounded_junction_ends(self):
+        """The crossing-junction exemption `_medium_spec.wire_media` keys on.
+
+        D1 has no crossing deck, but `wire_media` still needs the exemption
+        SET to answer at all — an empty one is the honest input here, not a
+        skipped argument.
+        """
+        if self.ground_z is None or not self.junctions:
+            return frozenset()
+        return _below_interface.grounded_junction_ends(
+            self.wires_polylines, self.ground_z, self.junctions
+        )
+
+    def _wire_media(self):
+        """One `_medium_spec` label per wire, cached per instance.
+
+        Raises the crossing / no-lower-medium refusals by name, which is how
+        this trunk answers a buried deck it cannot serve identically to
+        bspline's rather than with a shape of its own.
+        """
+        cached = self._cached_wire_media
+        if cached is None:
+            cached = _medium_spec.wire_media(
+                self.wires_polylines,
+                self.ground_z,
+                lower_medium=self._lower_medium(),
+                pec=self.ground_eps is None,
+                crossing_ends=self._grounded_junction_ends(),
+            )
+            self._cached_wire_media = cached
+        return cached
+
+    def _below_segments(self, geom):
+        """`(n_segs,)` bool: this segment is in the lower medium.
+
+        This trunk's geometry carries `wire_first`/`wire_last` rather than
+        bspline's `seg_offsets`, so the offsets are DERIVED here from the
+        per-wire spans and asserted contiguous — rather than a second
+        segment-labelling rule, which is what `_medium_spec`'s module
+        docstring says there must not be.
+        """
+        first = np.asarray(geom["wire_first"], dtype=np.int64)
+        last = np.asarray(geom["wire_last"], dtype=np.int64)
+        offsets = np.append(first, int(geom["n_segs"]))
+        if not np.array_equal(last + 1, offsets[1:]):
+            raise AssertionError(
+                "wire segment spans are not contiguous; `segment_media` "
+                "broadcasts over offsets and would mislabel"
+            )
+        return _medium_spec.segment_media(self._wire_media(), offsets)
+
+    def _medium_eta(self, medium):
+        """The wave impedance of the medium a fill runs in: eta_m for a
+        `Medium`, the solver's own (air's) for `None`.
+
+        One spelling, because it is half of an operating point (momwire#995):
+        every fill takes `(k, eta)` as arguments, and a caller filling a
+        buried block reaches its eta here rather than by mutating the
+        solver's. Filling at k_m with AIR's eta is wrong by |eta_0/eta_m|,
+        measured 4.27x at soil A / 7 MHz — the below quadrant of a mixed deck
+        came out 3.4x wrong that way (#980 D2) — and the fill now refuses a
+        complex k with no eta rather than defaulting it (`_fill_eta`).
+        """
+        return self.eta if medium is None else np.sqrt(self.mu / medium.eps_m)
+
+    def _fill_medium(self, geom):
+        """The medium this deck's fill runs in, or `None` for free space/air.
+
+        D1's scope decision, and the reason it is ONE object rather than a
+        per-pair dispatch: a deck every segment of which is below the
+        interface has exactly one pair class, so the medium is a property of
+        the SOLVE. A mixed deck has three, and that is D2's dispatch — which
+        is why this returns `None` there rather than guessing, leaving the
+        existing (above-only) path exactly as it was.
+
+        Returns `_crossing_fill.buried_medium`'s `Medium` record
+        `(eps_t, eps_m, k_p, k_m, c2, a_m)`.
+        """
+        if self.ground_z is None:
+            return None
+        # Asked FIRST, and unconditionally: `_below_segments` reaches
+        # `_medium_spec.wire_media`, which is where a buried deck over a
+        # ground with no lower medium (PEC, reflection-coefficient) and a
+        # crossing junction are refused BY NAME. Returning `None` early on
+        # `not self._lower_medium()` would skip those and let a buried deck
+        # be filled as though it were in air — a wrong number, not a refusal.
+        below = self._below_segments(geom)
+        if not below.any():
+            return None
+        if not self._lower_medium():  # pragma: no cover - wire_media raised
+            raise AssertionError("buried deck without a lower medium")
+        # A MIXED deck is served since D2. `_operating_medium` declines it
+        # (two k are live, so there is no one operating point) and
+        # `_assemble_Z` takes the three-class route instead.
+        return _crossing_fill.buried_medium(
+            self.ground_eps, self.omega, self.eps, self.k
+        )
+
+    @contextlib.contextmanager
+    def _operating_medium(self, geom):
+        """Run a solve in the LOWER MEDIUM, then restore.
+
+        Yields the `Medium` (or `None` for a deck that is not fully buried,
+        in which case nothing is touched and the shipped path is entered
+        unchanged). The caller takes the fill's eta from it
+        (`_medium_eta`) and passes it as an argument (momwire#995).
+
+        What is still scoped here is `self.k` — the READOUT's wavenumber:
+        the drive columns and the gap-current readout write the basis shapes
+        at `self.k`, and a wholly-buried view carries no per-entry k, so the
+        solve's k has to be k_m on both sides of the matrix. `self.eta` is
+        NOT touched any more: every fill reads eta as an argument, and a fill
+        at a complex k with no eta is refused (`_fill_eta`), so the stale
+        pairing "k_m with air's eta" is an exception rather than a number.
+
+        This is the momwire#980 step-A test seam (`s.k = k_m; s.eta = ...`)
+        made a real route, resolved from the deck's own medium labels and
+        guaranteed to be restored.
+        """
+        # A mixed deck has TWO live k, so there is no solver-level operating
+        # point: each block is filled at its own k as an argument and the
+        # drive is built per class. Entering here would put one medium's k on
+        # the whole solve — D1's drive-column finding, one level up.
+        if self._is_mixed(geom):
+            yield None
+            return
+        medium = self._fill_medium(geom)
+        if medium is None:
+            yield None
+            return
+        _below_interface.refuse_out_of_scope(
+            use_singular_enrichment=getattr(self, "use_singular_enrichment", False),
+            extended_kernel=self.extended_kernel,
+            n=int(geom["seg_l"].shape[0]),
+            degree=1,
+            dense_fits=True,
+            chunked_serves=True,
+            swept_mem_mb=getattr(self, "swept_mem_mb", None),
+        )
+        # k and eta ONLY. `self.eps` is deliberately not touched: it is the
+        # FREE-SPACE permittivity that `_ground_refl.eps_tilde` folds the
+        # soil against, so moving it would corrupt eps_tilde itself. The
+        # medium reaches the fill entirely through these two — the closed
+        # forms' prefactor is eta/(4*pi*k), and eta_m/k_m = 1/(omega*eps_m)
+        # with eta_m*k_m = omega*mu, which is exactly the mixed potential's
+        # 1/(j*omega*eps_m) on Phi and j*omega*mu on A. Same pair the step-A
+        # seam set, for the same reason.
+        # The below family's grid extent, and the cap / grazing refusals
+        # that go with it — raised HERE, before an 80-second grid fill, with
+        # the deck's own numbers, which is `serve_plan`'s whole contract.
+        # Measured on the quadrature NODES the fill will query, not on
+        # segment endpoints: the nodes are strictly interior, which is both
+        # the honest domain and a smaller one.
+        obs_b, _t_b, _u, _w = _below_interface.field_nodes(
+            geom["seg_l"],
+            geom["seg_r"],
+            geom["seg_tangents"],
+            geom["seg_h"],
+            _below_interface.n_qp_buried_field(self.n_qp_sommerfeld),
+        )
+        plan = _below_interface.serve_plan(
+            self.ground_z,
+            geom["seg_l"],
+            geom["seg_r"],
+            np.empty(0, dtype=np.int64),  # fully buried: no above segments
+            np.empty((0, 3)),
+            obs_b,
+            medium.k_p,
+            medium.k_m,
+            crossing=False,
+            pair_extents=_bspline._pair_extents_below,
+        )
+        saved = (self.k, self._active_medium, self._active_r1_below)
+        try:
+            self.k = medium.k_m
+            self._active_medium = medium
+            self._active_r1_below = plan["r1_below"]
+            yield medium
+        finally:
+            (
+                self.k,
+                self._active_medium,
+                self._active_r1_below,
+            ) = saved
+
+    def _is_mixed(self, geom):
+        """Both media present — the D2 route rather than D1's."""
+        if self.ground_z is None or not self._lower_medium():
+            return False
+        below = self._below_segments(geom)
+        return bool(below.any() and not below.all())
+
+    def _class_geom(self, geom, keep):
+        """A segment-level view of `geom` restricted to one medium.
+
+        Only the REMAINDER needs this: it models one medium and refuses the
+        other's geometry outright. The image map keeps the whole deck, whose
+        out-of-class columns the caller's quadrant mask discards.
+        """
+        idx = np.nonzero(keep)[0]
+        out = dict(geom)
+        for key in ("seg_l", "seg_r", "seg_centers", "seg_tangents", "seg_h"):
+            out[key] = np.asarray(geom[key])[idx]
+        out["n_segs"] = int(idx.size)
+        return out
+
+    def _stitch_basis_coefs(self, geom, below, k_p, k_m):
+        """One `seg_view` whose coefficients follow each segment's medium.
+
+        The CSR *topology* is geometry, not k — measured, and asserted here:
+        `starts`, `jbasis` and `sigma` are identical between two views built
+        at different k, and only `A`/`B`/`C`/`AC` move. So this is not a
+        merge of two structures; it is ONE structure with per-segment
+        coefficient selection.
+
+        Licensed only by D2's scope: no basis's support spans both classes,
+        so every entry for a segment comes from bases in that segment's own
+        medium. A cross-class basis would make this WRONG rather than
+        approximate — D3 must replace it, not extend it.
+        """
+        view_p = self._basis_coefs(geom, k_p)
+        view_m = self._basis_coefs(geom, k_m)
+        for key in ("starts", "jbasis", "sigma"):
+            if not np.array_equal(view_p[key], view_m[key]):
+                raise AssertionError(
+                    f"seg_view['{key}'] depends on k; the D2 basis stitch "
+                    "assumes the CSR topology is geometry alone"
+                )
+        starts = np.asarray(view_p["starts"], dtype=np.int64)
+        nnz = np.asarray(view_p["A"]).shape[0]
+        starts_pad = np.concatenate((starts, [nnz]))
+        entry_below = np.zeros(nnz, dtype=bool)
+        for seg in np.nonzero(below)[0]:
+            entry_below[starts_pad[seg] : starts_pad[seg + 1]] = True
+        out = dict(view_p)
+        for key in ("A", "B", "C", "AC"):
+            a = np.array(view_p[key], copy=True)
+            a[entry_below] = np.asarray(view_m[key])[entry_below]
+            out[key] = a
+        # The k each entry was built at, carried alongside the coefficients so
+        # that anything sampling this view (`SinusoidalBasisSampler`, and so
+        # the whole crossing fill) writes the entry's shape in its own
+        # medium's sin/cos rather than the above medium's.
+        out["k_entry"] = np.where(entry_below, k_m, k_p)
+        return out
+
+    def _mixed_serve_plan(
+        self, geom, below, medium, crossing=False, *, test_obs=None, row_group=1
+    ):
+        """`serve_plan` with a non-empty `a_idx` — every extent and every
+        refusal for the three classes, raised before any grid is filled, on
+        the quadrature NODES the fill will query.
+
+        `test_obs` are the fill's OBSERVERS, `row_group` of them per segment in
+        segment order: the Galerkin test quadrature (`ctx["obs_c"]`, `nq`), or
+        the collocation points. `None` is the segment centres, one each. They
+        join the extents because a transmitted grid is queried at them, not
+        only at the field nodes (below)."""
+        if not isinstance(crossing, (bool, np.bool_)):
+            # The pre-#1221 signature took the Galerkin test context here; a
+            # stale positional call would read that dict as a truthy flag.
+            raise TypeError(f"crossing must be a bool, got {type(crossing).__name__}")
+        seg_l = np.asarray(geom["seg_l"])
+        seg_r = np.asarray(geom["seg_r"])
+        tang = np.asarray(geom["seg_tangents"])
+        h = np.asarray(geom["seg_h"])
+        a_idx = np.nonzero(~below)[0]
+        b_idx = np.nonzero(below)[0]
+        # The order is decided HERE and carried on the plan (momwire#1004), not
+        # recomputed in the fill: the plan sizes every grid extent on the
+        # quadrature nodes the fill will query, so the two reading different
+        # orders is how a fill comes to query outside the ladder it asked for.
+        #
+        # Only where a transmitted grid is actually built. A crossing deck's
+        # cross pair is `_crossing_fill`'s designed direct evaluation, and
+        # `_assemble_mixed_contribs` returns before it ever reads this order —
+        # so on those decks the raised order buys nothing and pays for it by
+        # widening the below/below extent the plan sizes on these same nodes.
+        # D3's crossing fan sits at h/separation = 1.62 and DID move, which is
+        # how the guard was found; `compute_Z_operator_buried` skips the rule
+        # on the same condition, so the two trunks scope it alike.
+        _sep = _h_max = None
+        if not crossing:
+            _sep, _h_max = _below_interface.cross_pair_separation(
+                seg_l, seg_r, a_idx, b_idx
+            )
+        q = _below_interface.n_qp_buried_field(
+            self.n_qp_sommerfeld, separation=_sep, seg_h=_h_max
+        )
+        obs_a = _below_interface.field_nodes(
+            seg_l[a_idx], seg_r[a_idx], tang[a_idx], h[a_idx], q
+        )[0]
+        obs_b = _below_interface.field_nodes(
+            seg_l[b_idx], seg_r[b_idx], tang[b_idx], h[b_idx], q
+        )[0]
+        # THE TEST OBSERVERS COUNT TOO, and this is where SG differs from
+        # bspline: there both axes of a transmitted pair use the same buried
+        # field rule, so the plan's extents and the fill's queries are the
+        # same points. Here the test side is the GALERKIN quadrature at
+        # `n_qp_test` (8), whose outermost node sits closer to a segment end
+        # than the field rule's (6) — measured 0.150945 m against 0.151608 m
+        # on a 21-segment radial, so a plan sized on the field nodes alone
+        # builds a z' ladder the fill then queries outside of. The extents
+        # are therefore the UNION of both rules' points on this class.
+        nq = int(row_group)
+        obs_c_all = np.asarray(
+            geom["seg_centers"] if test_obs is None else test_obs, dtype=float
+        )
+        test_rows = (b_idx[:, None] * nq + np.arange(nq)[None, :]).ravel()
+        obs_b = np.concatenate([obs_b, obs_c_all[test_rows]])
+        obs_a = np.concatenate(
+            [
+                obs_a,
+                obs_c_all[(a_idx[:, None] * nq + np.arange(nq)[None, :]).ravel()],
+            ]
+        )
+        plan = _below_interface.serve_plan(
+            self.ground_z,
+            seg_l,
+            seg_r,
+            a_idx,
+            obs_a,
+            obs_b,
+            medium.k_p,
+            medium.k_m,
+            crossing=crossing,
+            pair_extents=_bspline._pair_extents_below,
+        )
+        plan["q_buried_field"] = q
+        return plan
+
+    def _transmitted_tensor(
+        self,
+        geom,
+        medium,
+        plan,
+        src_keep,
+        obs_keep,
+        obs_below,
+        obs_c_all,
+        obs_t_all,
+        row_group=1,
+        *,
+        cos_shape,
+    ):
+        """The above x below pair class as a (3, M, N) field tensor.
+
+        A field-form sandwich — the test side is the CALLER's (the Galerkin
+        reduction applies `w_entry`; collocation reads the midpoint rows as
+        they are), `shp_w` on the source side, the transmitted projected table
+        between them — at `n_qp_buried_field`, which is at least 6 and NOT
+        this solver's default 3.
+
+        Testing-agnostic since momwire#1221: the observers are arguments
+        (`obs_c_all` / `obs_t_all`, `row_group` per segment in segment order,
+        M = N·row_group) rather than a Galerkin test context, and `cos_shape`
+        names the third SOURCE shape, which has no default because it must be
+        the one every other block of the same fill is written in — mixing
+        spellings is a different operator, not a rounding (#606).
+
+        **No near correction, deliberately.** That device replaces the far
+        kernel's cheap quadrature on close pairs of the SAME closed form; the
+        transmitted kernel is a grid interpolation with no closed form to
+        correct against, and bspline's transmitted blocks take none either.
+        What bounds a close cross pair is this order plus `serve_plan`'s
+        theta-floor refusal, which is a cost law rather than a tolerance —
+        and `test_close_cross_pairs_collapse` is the measurement that keeps
+        that honest.
+
+        Full-width in the source axis: out-of-class sources are ZERO, which
+        is the pair mask.
+        """
+        if cos_shape not in ("cos", "cos-1"):
+            raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
+        # Read off the plan, never recomputed — see `_mixed_serve_plan`.
+        q = plan["q_buried_field"]
+        idx = np.nonzero(src_keep)[0]
+        seg_l = np.asarray(geom["seg_l"])[idx]
+        seg_r = np.asarray(geom["seg_r"])[idx]
+        tang = np.asarray(geom["seg_tangents"])[idx]
+        h = np.asarray(geom["seg_h"])[idx]
+        nodes, t_src, u_phys, w_node = _below_interface.field_nodes(
+            seg_l, seg_r, tang, h, q
+        )
+        k_src = medium.k_p if obs_below else medium.k_m
+        zloc = u_phys - 0.5 * h[:, None]
+        shp = np.stack(
+            [
+                np.ones_like(zloc, dtype=np.complex128),
+                np.sin(k_src * zloc),
+                (
+                    np.cos(k_src * zloc)
+                    if cos_shape == "cos"
+                    else -2.0 * np.sin(0.5 * k_src * zloc) ** 2
+                ),
+            ]
+        )
+        shp_w = shp * w_node[None]
+        grid = _sommerfeld_transmitted.get_grid_below_above(
+            medium.eps_t,
+            medium.k_p,
+            plan["r_cross_max"],
+            plan["zp_min"],
+            plan["zp_max"],
+            self.omega,
+            mu=self.mu,
+            r_min=plan["r_cross_min"],
+        )
+        proj_fn = (
+            _sommerfeld_transmitted.transmitted_field_proj_above_to_below
+            if obs_below
+            else _sommerfeld_transmitted.transmitted_field_proj_below_to_above
+        )
+        # OBSERVERS are restricted too: each direction's evaluator requires
+        # its observers on one side of the plane and refuses the other by
+        # name. Whole test segments, so the caller's `row_group = nq`
+        # reduction still meets complete groups.
+        nq = int(row_group)
+        obs_c_all = np.asarray(obs_c_all)
+        obs_t_all = np.asarray(obs_t_all)
+        seg_keep = np.nonzero(obs_keep)[0]
+        obs_rows = (seg_keep[:, None] * nq + np.arange(nq)[None, :]).ravel()
+        obs_c = obs_c_all[obs_rows]
+        obs_t = obs_t_all[obs_rows]
+        proj = proj_fn(
+            obs_c, obs_t, nodes, t_src, self.ground_z, medium.k_p, medium.k_m, grid
+        )
+        fq = proj.reshape(obs_c.shape[0], idx.size, q)
+        small = np.einsum("snq,mnq->smn", shp_w, fq)
+        # Full width in BOTH axes; every untouched entry stays zero, which is
+        # the pair mask.
+        n_segs = int(geom["n_segs"])
+        out = np.zeros((3, obs_c_all.shape[0], n_segs), dtype=np.complex128)
+        out[np.ix_(np.arange(3), obs_rows, idx)] = small
+        return out
 
     # ------------------------------------------------------------------
     # The ground-contact node charge over a FINITE ground (#282)

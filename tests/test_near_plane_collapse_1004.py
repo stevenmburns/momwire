@@ -380,7 +380,9 @@ def test_a_crossing_deck_does_not_raise_the_order_on_either_trunk():
         seg_view = sg._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
         seg_view = sg._crossing_wing_view(geom, seg_view, below, medium)
         ctx = sg._stitch_test_context(geom, seg_view, below, medium.k_p, medium.k_m)
-        plan = sg._mixed_serve_plan(geom, below, medium, ctx, True)
+        plan = sg._mixed_serve_plan(
+            geom, below, medium, True, test_obs=ctx["obs_c"], row_group=ctx["nq"]
+        )
     assert plan["q_buried_field"] == BI.n_qp_buried_field(sg.n_qp_sommerfeld)
 
     seen = []
