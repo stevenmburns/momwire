@@ -128,8 +128,9 @@ def test_the_sheet_is_the_twin_at_its_rows():
 
 
 def test_a_coarse_table_fails_the_same_check(monkeypatch):
-    """The negative control: Design E's p = 3 table (0.057 Ω on invl) must
-    fail the tolerance the production table passes."""
+    """The negative control: a p = 3 table (Design E's, uncapped, reads
+    4.8e-2 Ω on invl x2) must fail the tolerance the production table
+    passes."""
     monkeypatch.setattr(ni, "_SHEET_P", 3)
     monkeypatch.setattr(ni, "_SHEET_PT", 3)
     sub = _plane_rows(-0.15)
