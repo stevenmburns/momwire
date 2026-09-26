@@ -182,12 +182,13 @@ def test_no_sheet_serves_the_corner(monkeypatch):
     their number; the shallow plane's rows are counted as guarded; a plane
     just deep enough does take one."""
     monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 64)
+    monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
     g = ni._SHEET_MIN_DEPTH
     rows = np.concatenate(
         [_plane_rows(0.0, n=40), _plane_rows(-0.5 * g, n=40), _plane_rows(-g, n=40)]
     )
-    planes, take = ni._sheet_planes(rows)
-    assert planes == [-g]
+    planes, take = ni._sheet_planes(rows, K_P, K_M)
+    assert [v for v, _r in planes] == [-g]
     assert np.all(rows[take, 2] == -g)
     assert ni._SHEET_STATS["guarded_rows"] == 120
     got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT)
@@ -204,6 +205,7 @@ def test_a_plane_under_the_guard_is_left_exact(monkeypatch):
     takes a sheet, they are counted as guarded, and Z is the switched-off
     fill's to the bit."""
     monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 16)
+    monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
     monkeypatch.setattr(ni, "_SHEET_MIN_DEPTH", 0.2)
     deck = hub_deck(n_radials=2)
     got = _fill(deck)
@@ -211,6 +213,24 @@ def test_a_plane_under_the_guard_is_left_exact(monkeypatch):
     assert ni._SHEET_STATS["guarded_rows"] > 1000
     monkeypatch.setattr(ni, "_SHEET", False)
     assert np.array_equal(got, _fill(deck))
+
+
+def test_a_plane_is_tabulated_only_when_its_rows_pay_for_it():
+    """The cost rule, on one call's rows alone: the same number of rows on the
+    same plane, reaching as far, is declined when it is one exact-rho column
+    (the exact route pays one setup) and taken when every row is its own
+    column (the inverted-L's top wire over its radials)."""
+    n_nodes = ni._sheet_nodes_to(K_P, K_M, 0.15, 10.0)
+    n = n_nodes + 64
+    z = np.linspace(0.0, 10.0, n)
+    shared = np.stack([np.full(n, 3.0), z, np.full(n, -0.15)], axis=1)
+    shared[-1, 0] = 10.0  # the farthest row, as in the other call
+    distinct = np.stack([np.linspace(0.01, 10.0, n), z, np.full(n, -0.15)], axis=1)
+    planes, _take = ni._sheet_planes(np.ascontiguousarray(shared), K_P, K_M)
+    assert planes == [] and ni._SHEET_STATS["declined_rows"] == n
+    planes, take = ni._sheet_planes(np.ascontiguousarray(distinct), K_P, K_M)
+    assert [v for v, _r in planes] == [-0.15] and take.all()
+    assert planes[0][1] == pytest.approx(np.hypot(10.0, 10.15))
 
 
 # ----------------------------------------------------------------------
@@ -227,7 +247,8 @@ def _fill(deck):
 def invl_fills():
     """The inverted-L over one radial, filled with the sheets off and on (the
     radials' plane carries ~2.3 k and ~2.9 k rows in its two big calls, so a
-    512-row threshold takes that one plane and no other). Returns
+    512-row pre-filter with the cost rule off takes that one plane and no
+    other; at the shipped rule a deck this small builds no table). Returns
     ({name: Z}, {name: stats})."""
     deck = invl_deck(n_radials=1)
     Z, stats = {}, {}
@@ -235,6 +256,7 @@ def invl_fills():
         with pytest.MonkeyPatch.context() as m:
             m.setattr(ni, "_SHEET", sheet)
             m.setattr(ni, "_SHEET_MIN_ROWS", 512)
+            m.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
             m.setattr(ni, "_SHEET_CACHE", type(ni._SHEET_CACHE)())
             m.setattr(ni, "_SHEET_STATS", dict.fromkeys(ni._SHEET_STATS, 0))
             Z[name] = _fill(deck)
@@ -272,6 +294,7 @@ def test_the_switch_off_evaluates_through_the_twin(monkeypatch):
     on rows a sheet would otherwise take."""
     monkeypatch.setattr(ni, "_SHEET", False)
     monkeypatch.setattr(ni, "_SHEET_MIN_ROWS", 16)
+    monkeypatch.setattr(ni, "_SHEET_BUILD_WEIGHT", 0.0)
     rows = _plane_rows(-0.15, n=30)
     got = ni._evaluate_fresh(EPS_T, K_P, rows, 1e-10, ni._LAM_MULT)
     assert np.array_equal(got, ni._column_twin(K_P, K_M, rows, ni._LAM_MULT))

@@ -1277,7 +1277,7 @@ def _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=None, permuted=False)
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
         if _use_sheet():
-            planes, take = _sheet_planes(sub)
+            planes, take = _sheet_planes(sub, k_p, k_m)
             if planes:
                 return _evaluate_with_sheets(
                     k_p, k_m, sub, lam_mult, labels, permuted, planes, take
@@ -1440,11 +1440,27 @@ _SHEET_WAVES = 1.0
 # e^{-Im(k_m) R} below e^{-_SHEET_DEAD} of its size at the panel's inner edge
 # leaves the air's.
 _SHEET_DEAD = 18.0
-# A plane is tabulated when one `_evaluate_fresh` call asks at least this many
-# rows on it (the table is ~4-7 k nodes, each one twin column). Deciding per
-# CALL keeps the choice a function of the call alone, so Z never depends on
-# what the process solved before (see `_plane_sheet`).
-_SHEET_MIN_ROWS = 4096
+# Which planes a call tabulates: the ones whose OWN rows pay for the table.
+# The exact route pays a column setup per distinct rho (~68 us of wall at 4
+# threads) plus ~1.9 us per member; a sheet pays one setup per node, once, and
+# ~0.2 us per interpolated row (Design E's cost lines: invl_deck(16) x8, 1.44 M
+# columns in 98 s; hub x4, 3,851 columns and 224,840 members in 0.68 s). So a
+# plane qualifies when
+#
+#     distinct rho + rows * _SHEET_ROW_WORTH >= nodes * _SHEET_BUILD_WEIGHT,
+#
+# nodes being what a sheet reaching the plane's farthest row would hold. It is
+# decided per CALL, on the call's rows alone, and never on what is cached, so Z
+# does not depend on what the process solved before. The Beverage is why it is
+# a cost rule and not a row count: its rod planes carry ~4.5 k rows each but
+# reach 246 m, ~14 k nodes a sheet, and a 4,096-row threshold took seven of
+# them and cost 7 s. `_SHEET_BUILD_WEIGHT = 0` takes every plane past the
+# pre-filter (the tests' handle).
+_SHEET_ROW_WORTH = 1.0 / 40.0
+_SHEET_BUILD_WEIGHT = 1.0
+# A pre-filter only, so a small call never pays for the census: no table is
+# smaller than _SHEET_NTAU * _SHEET_P * _SHEET_PT = 576 nodes.
+_SHEET_MIN_ROWS = 512
 # The distance guard. A sheet is never used for a plane shallower than this:
 # its rows' distance from the interface-singular point (rho, z, z') -> 0 is at
 # least d, and the table's first panel starts at R = d. Nothing in the map
@@ -1457,7 +1473,8 @@ _SHEET_CACHE_MAX = 32
 _SHEET_CACHE = collections.OrderedDict()
 _SHEET_LOCK = threading.Lock()
 # Route proof: rows each path served, planes interpolated, sheets built and
-# their nodes, and rows left exact ONLY because of the depth guard. Reset by
+# their nodes, rows left exact ONLY because of the depth guard, and rows on
+# planes the cost rule left exact (`_SHEET_ROW_WORTH`). Reset by
 # assignment (`dict.fromkeys(_SHEET_STATS, 0)`) or key by key.
 _SHEET_STATS = dict.fromkeys(
     (
@@ -1467,6 +1484,7 @@ _SHEET_STATS = dict.fromkeys(
         "sheets_built",
         "nodes_built",
         "guarded_rows",
+        "declined_rows",
     ),
     0,
 )
@@ -1486,13 +1504,16 @@ def _cheb(p):
     return np.ascontiguousarray(x), np.ascontiguousarray(w)
 
 
-def _sheet_planes(sub):
-    """The planes of `sub` a sheet serves, and the mask of their rows.
+def _sheet_planes(sub, k_p, k_m):
+    """The planes of `sub` a sheet serves, as [(z', farthest R)], and the mask
+    of their rows, or ([], None).
 
-    A row qualifies when it is on the above side (z >= 0, finite) with a
-    finite rho >= 0, and its z' is at or below the depth guard; a plane when
-    at least `_SHEET_MIN_ROWS` of the call's rows qualify on it. Returns
-    ([z' values], mask) or ([], None)."""
+    A row is a candidate when it is on the above side (z >= 0, finite) with a
+    finite rho >= 0 and z' < 0. A plane of at least `_SHEET_MIN_ROWS`
+    candidates is left exact when it is shallower than the depth guard
+    (counted as guarded), and otherwise when its rows do not pay for its table
+    (`_SHEET_ROW_WORTH`; counted as declined). The distinct rho are counted
+    only when the two bounds (every row its own column, or none) disagree."""
     m = sub.shape[0]
     if m < _SHEET_MIN_ROWS:
         return [], None
@@ -1502,14 +1523,52 @@ def _sheet_planes(sub):
     if np.count_nonzero(below) < _SHEET_MIN_ROWS:
         return [], None
     vals, cnt = np.unique(zp[below], return_counts=True)
-    big = cnt >= _SHEET_MIN_ROWS
-    deep = vals <= -_SHEET_MIN_DEPTH
-    _SHEET_STATS["guarded_rows"] += int(cnt[big & ~deep].sum())
-    planes = vals[big & deep]
-    if planes.size == 0:
-        return [], None
-    take = below & np.isin(zp, planes)
-    return [float(v) for v in planes], take
+    planes, take = [], None
+    for v, n in zip(vals.tolist(), cnt.tolist()):
+        if n < _SHEET_MIN_ROWS:
+            continue
+        if v > -_SHEET_MIN_DEPTH:
+            _SHEET_STATS["guarded_rows"] += n
+            continue
+        on = below & (zp == v)
+        rmax = float(np.hypot(rho[on], z[on] - v).max())
+        need = _sheet_nodes_to(k_p, k_m, -v, rmax) * _SHEET_BUILD_WEIGHT
+        gain = n * _SHEET_ROW_WORTH
+        if gain < need and not (
+            n + gain >= need and np.unique(rho[on]).size + gain >= need
+        ):
+            _SHEET_STATS["declined_rows"] += n
+            continue
+        planes.append((v, rmax))
+        take = on if take is None else take | on
+    return planes, take
+
+
+def _sheet_panel(k_p, k_m, d, i):
+    """Main panel i of the sheet at depth d: its u edges and how it is split,
+    (u0, u1, n_u, n_t) -- n_u sub-panels in u, each with n_t tau panels. A
+    function of (k_p, k_m, d, i) alone, which is what fixes every node."""
+    lnd, lnr = float(np.log(d)), float(np.log(_SHEET_RATIO))
+    u0 = lnd + i * lnr
+    u1 = lnd + (i + 1) * lnr
+    r_lo, r_hi = float(np.exp(u0)), float(np.exp(u1))
+    wl = _SHEET_WAVES * _sheet_wavelength(k_p, k_m, r_lo)
+    n_u = max(1, int(np.ceil(r_hi * lnr / wl)))
+    arc = r_hi * float(np.arccos(min(1.0, d / r_hi)))
+    n_t = max(_SHEET_NTAU, int(np.ceil(arc / wl)))
+    return u0, u1, n_u, n_t
+
+
+def _sheet_nodes_to(k_p, k_m, d, rmax):
+    """The nodes a sheet at depth d holds once it reaches `rmax`."""
+    u_need = float(np.log(rmax))
+    n, i = 0, 0
+    while True:
+        u0, u1, n_u, n_t = _sheet_panel(k_p, k_m, d, i)
+        if u0 >= u_need:
+            return n
+        n += n_u * n_t * _SHEET_P * _SHEET_PT
+        i += 1
 
 
 def _sheet_wavelength(k_p, k_m, r_lo):
@@ -1542,10 +1601,8 @@ class PlaneSheet:
         self.lam_mult = float(lam_mult)
         self.x, self.bw = _cheb(_SHEET_P)
         self.xt, self.bwt = _cheb(_SHEET_PT)
-        self._lnd = float(np.log(self.d))
-        self._lnr = float(np.log(_SHEET_RATIO))
         self.n_main = 0
-        self.u_edges = [self._lnd]
+        self.u_edges = [float(np.log(self.d))]
         self.ntau = []
         self.voff = []
         self._vals = []
@@ -1563,14 +1620,7 @@ class PlaneSheet:
         offset = self.n_nodes
         per = _SHEET_P * _SHEET_PT
         while self.u_top < u_need:
-            i = self.n_main
-            u0 = self._lnd + i * self._lnr
-            u1 = self._lnd + (i + 1) * self._lnr
-            r_lo, r_hi = float(np.exp(u0)), float(np.exp(u1))
-            wl = _SHEET_WAVES * _sheet_wavelength(self.k_p, self.k_m, r_lo)
-            n_u = max(1, int(np.ceil(r_hi * self._lnr / wl)))
-            arc = r_hi * float(np.arccos(min(1.0, self.d / r_hi)))
-            n_t = max(_SHEET_NTAU, int(np.ceil(arc / wl)))
+            u0, u1, n_u, n_t = _sheet_panel(self.k_p, self.k_m, self.d, self.n_main)
             for q in range(n_u):
                 a = u0 + (u1 - u0) * q / n_u
                 b = u1 if q == n_u - 1 else u0 + (u1 - u0) * (q + 1) / n_u
@@ -1698,11 +1748,9 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, planes, tak
         lab = None if labels is None else np.asarray(labels)[rest]
         out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
     zp = sub[:, 2]
-    for v in planes:
+    for v, rmax in planes:
         idx = np.flatnonzero(take & (zp == v))
-        r = np.hypot(sub[idx, 0], sub[idx, 1] - v)
-        sheet = _plane_sheet(k_p, k_m, v, lam_mult, float(r.max()))
-        sheet.interpolate(sub, idx, out)
+        _plane_sheet(k_p, k_m, v, lam_mult, rmax).interpolate(sub, idx, out)
     n_sheet = m - rest.size
     _SHEET_STATS["sheet_rows"] += n_sheet
     _SHEET_STATS["exact_rows"] += rest.size
