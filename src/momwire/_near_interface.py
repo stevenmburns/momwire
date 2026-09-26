@@ -95,6 +95,18 @@ from ._sommerfeld_transmitted import (
 _nia = _accel.import_companion("_near_interface_accel")
 
 KEYS = ("U", "V", "W", "dzW", "dzpV", "dzpW")
+# The table layer's WIDTH (momwire#1221). Everything that stores or moves the
+# kernels as rows — `TripleMemo`, `ProductMemo`, the scatters, the sheets —
+# sizes itself from `KEYS` rather than from a literal six, so the
+# point-observer surfaces a later stage adds (#1220 stage 2: dρV_T, dzV_T,
+# dρW_T) join by appending here and to the evaluators, with no edit to the
+# memo or the sheet. `KEY_RPOW` is each kernel's power of R, the factor a
+# sheet tabulates it times (the potentials fall as 1/R, their derivatives as
+# 1/R^2); it is per key so a new key states its own.
+N_KEYS = len(KEYS)
+KEY_RPOW = (1, 1, 1, 2, 2, 2)
+if len(KEY_RPOW) != N_KEYS:  # pragma: no cover - a module-level invariant
+    raise AssertionError("KEY_RPOW needs one power per KEYS entry")
 _LAM_MULT = 8.0
 _RAY = np.exp(1j * np.pi / 4.0)
 _MAX_RAY_PANELS = 90
@@ -670,7 +682,7 @@ class TripleMemo:
         return (
             np.empty(0, dtype=np.uint64),
             np.empty((0, 3), dtype=float),
-            np.empty((0, 6), dtype=np.complex128),
+            np.empty((0, N_KEYS), dtype=np.complex128),
             np.empty(0, dtype=np.int64),
         )
 
@@ -685,7 +697,7 @@ class TripleMemo:
         value where `hit[i]`, and is uninitialised elsewhere."""
         n = rows.shape[0]
         hit = np.zeros(n, dtype=bool)
-        block = np.empty((n, 6), dtype=np.complex128)
+        block = np.empty((n, N_KEYS), dtype=np.complex128)
         self.stats["lookups"] += n
         if n == 0 or len(self) == 0:
             return hit, block
@@ -1037,7 +1049,7 @@ class ProductMemo(TripleMemo):
             hit, block = super().lookup(rows)
         else:
             hit = np.zeros(rows.shape[0], dtype=bool)
-            block = np.empty((rows.shape[0], 6), dtype=np.complex128)
+            block = np.empty((rows.shape[0], N_KEYS), dtype=np.complex128)
             self.stats["lookups"] += rows.shape[0]
         todo = np.flatnonzero(~hit)
         if todo.size:
@@ -1172,12 +1184,12 @@ def designed_tables(
         # The scatter a kernel at a time: the same copies as
         # `ascontiguousarray(block[inverse].T)`, without its (n, 6) gather
         # alive beside the (6, n) answer (momwire#1168).
-        out = np.empty((6, inverse.size), dtype=np.complex128)
-        for i in range(6):
+        out = np.empty((N_KEYS, inverse.size), dtype=np.complex128)
+        for i in range(N_KEYS):
             np.take(block[:, i], inverse, out=out[i])
-        out = out.reshape((6,) + rho_b.shape)
+        out = out.reshape((N_KEYS,) + rho_b.shape)
     else:
-        out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
+        out = np.empty((N_KEYS,) + rho_b.shape, dtype=np.complex128)
     return dict(zip(KEYS, out))
 
 
@@ -1198,7 +1210,7 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
         # answer: the copy `block[arange] = vals` into a second (m, 6) array
         # moved the same floats to the same places (momwire#1173 design B).
         if rows.shape[0] == 0:
-            return np.empty((0, 6), dtype=np.complex128)
+            return np.empty((0, N_KEYS), dtype=np.complex128)
         return _evaluate_fresh(eps_t, k2, rows, rtol, lam_mult, labels=labels)
     hit, block = memo.lookup(rows)
     fresh_pos = np.flatnonzero(~hit)  # ascending: first-appearance order
@@ -1263,7 +1275,7 @@ def designed_rows_permuted(
     and passes its plan, since this entry takes no memo)."""
     rows = np.asarray(rows, dtype=float)
     if rows.shape[0] == 0:
-        return np.empty((0, 6), dtype=np.complex128), None
+        return np.empty((0, N_KEYS), dtype=np.complex128), None
     return _evaluate_fresh(
         eps_t, k2, rows, rtol, lam_mult, permuted=True, plan=sheet_plan
     )
@@ -1391,7 +1403,7 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
         pos = np.empty(member_order.size, dtype=np.intp)
         pos[member_order] = np.arange(member_order.size)
         return vals, pos
-    out = np.empty((sub.shape[0], 6), dtype=np.complex128)
+    out = np.empty((sub.shape[0], N_KEYS), dtype=np.complex128)
     out[member_order] = vals
     return out
 
@@ -1440,8 +1452,10 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
 # is the exact route to the bit, and the reference the gates compare against.
 _SHEET = os.environ.get("MOMWIRE_NEAR_INTERFACE_SHEET", "1") != "0"
 _HAVE_PLANE_SHEET_ACCEL = _nia is not None and bool(
-    getattr(_nia, "grid_sheet_1173", False)
+    getattr(_nia, "grid_sheet_width_1221", False)
 )
+# The per-column R powers as the C++ sheet takes them (momwire#1221).
+_KEY_RPOW_ARR = np.asarray(KEY_RPOW, dtype=np.int64)
 # Chebyshev nodes per cell in each direction. Sheet against twin at random
 # rows, max error relative to the kernel's 1/R^pw envelope, p = 12 (laptop,
 # the phase-2 prototype; the polar table's in brackets):
@@ -2145,22 +2159,30 @@ class PlaneSheet:
             )
         )
         Rn = np.hypot(np.repeat(rho_c, sizes), z - zq)
-        vals[:, :3] *= Rn[:, None]
-        vals[:, 3:] *= (Rn * Rn)[:, None]
+        # Each column times its own R^pw (`KEY_RPOW`), spelled as a product
+        # of R's so pw = 2 is `Rn * Rn`, the fixed-width spelling's floats.
+        for pw in sorted(set(KEY_RPOW)):
+            cols = [j for j, q in enumerate(KEY_RPOW) if q == pw]
+            f = np.ones_like(Rn)
+            if pw:
+                f = Rn
+                for _ in range(pw - 1):
+                    f = f * Rn
+            vals[:, cols] *= f[:, None]
         # Scatter the columns into (rho cell, s cell) blocks laid out
         # [rho node][s node][kernel], appended after the existing nodes.
         blocks = {}
         for c, (a, k, s_ids) in enumerate(place):
-            col = vals[offsets[c] : offsets[c + 1]].reshape(len(s_ids), p, 6)
+            col = vals[offsets[c] : offsets[c + 1]].reshape(len(s_ids), p, N_KEYS)
             for q, b in enumerate(s_ids):
                 blk = blocks.get((a, b))
                 if blk is None:
-                    blk = blocks[(a, b)] = np.empty((p, p, 6), dtype=np.complex128)
+                    blk = blocks[(a, b)] = np.empty((p, p, N_KEYS), dtype=np.complex128)
                 blk[k] = col[q]
         off = self.n_nodes
         for key in sorted(blocks):
             self._off[key] = off
-            self._vals.append(blocks[key].reshape(p * p, 6))
+            self._vals.append(blocks[key].reshape(p * p, N_KEYS))
             off += p * p
         _SHEET_STATS["nodes_built"] += off - self.n_nodes
         self.n_nodes = off
@@ -2202,6 +2224,7 @@ class PlaneSheet:
             vals,
             out,
             _physical_cpu_count(),
+            _KEY_RPOW_ARR,
         )
 
 
@@ -2249,7 +2272,7 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
     take, on_plane = take
     m = sub.shape[0]
     sub = np.ascontiguousarray(sub, dtype=float)
-    out = np.empty((m, 6), dtype=np.complex128)
+    out = np.empty((m, N_KEYS), dtype=np.complex128)
     rest = np.flatnonzero(~take)
     if rest.size:
         lab = None if labels is None else np.asarray(labels)[rest]
@@ -2316,7 +2339,7 @@ def _designed_tables_reference(
     # fresh row, so re-reading them out of the memo one key at a time to
     # restack them was pure round trip. Cached rows still come from the dict —
     # they are the only ones this call did not compute.
-    block = np.empty((len(keys), 6), dtype=np.complex128)
+    block = np.empty((len(keys), N_KEYS), dtype=np.complex128)
     unique, fresh_idx, n_filled = [], [], 0
     for i, key in enumerate(keys):
         cached = memo.get(key)
@@ -2444,9 +2467,9 @@ def _designed_tables_reference(
             # the sentinel it raises exactly as it did then rather than
             # scattering an uninitialised row.
             block = np.stack([memo[key] for key in keys])  # (n_unique, 6)
-        out = np.ascontiguousarray(block[inverse].T).reshape((6,) + rho_b.shape)
+        out = np.ascontiguousarray(block[inverse].T).reshape((N_KEYS,) + rho_b.shape)
     else:
-        out = np.empty((6,) + rho_b.shape, dtype=np.complex128)
+        out = np.empty((N_KEYS,) + rho_b.shape, dtype=np.complex128)
     return dict(zip(KEYS, out))
 
 
