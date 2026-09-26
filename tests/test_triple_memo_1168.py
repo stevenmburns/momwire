@@ -32,6 +32,18 @@ from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
 from test_crossing_serve_524 import crossing_deck, hub_deck
 
+
+@pytest.fixture(autouse=True)
+def _exact_route(monkeypatch):
+    """This module holds the exact machinery's routes to the bit, so it runs
+    with the plane sheets off (momwire#1173 Design E). A sheet is a GATED
+    layer decided per `_evaluate_fresh` call (a plane qualifies on the rows
+    one call asks), so two partitions of the same rows -- tiles, the grid
+    route's chunks, the dict reference -- can take it differently; its own
+    gates are `test_plane_sheet_1173`."""
+    monkeypatch.setattr(ni, "_SHEET", False)
+
+
 # ----------------------------------------------------------------------
 # Unit rows
 # ----------------------------------------------------------------------

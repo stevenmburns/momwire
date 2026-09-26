@@ -45,6 +45,18 @@ from test_razor_detached_1149 import detached, detached_hub
 from test_tilted_crossing_936 import _crossing_deck as tilted_deck
 from test_triple_memo_1168 import _hub, _razor
 
+
+@pytest.fixture(autouse=True)
+def _exact_route(monkeypatch):
+    """This module holds the exact machinery's routes to the bit, so it runs
+    with the plane sheets off (momwire#1173 Design E). A sheet is a GATED
+    layer decided per `_evaluate_fresh` call (a plane qualifies on the rows
+    one call asks), so two partitions of the same rows -- tiles, the grid
+    route's chunks, the dict reference -- can take it differently; its own
+    gates are `test_plane_sheet_1173`."""
+    monkeypatch.setattr(ni, "_SHEET", False)
+
+
 _TINY = {"cf._TILE_ROWS": 40}
 # WA7ARK's product is 74 k rows; 40-row tiles would be ~860 kernel calls.
 # 4,000 still cuts it into tens of tiles and still holds rows.
