@@ -175,12 +175,36 @@ def _route_bspline_serves_the_buried_deck_hmatrix_refuses():
     ).compute_impedance()
 
 
+def _crossing_deck(cls):
+    return cls(
+        wires=[
+            np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 3.0]]),
+            np.array([[0.0, 0.0, 0.0], [3.0, 0.0, -0.5]]),
+        ],
+        n_per_edge_per_wire=[[9], [9]],
+        feeds=[(0, 1.5, 1.0 + 0j)],
+        junctions=[[(0, "start"), (1, "start")]],
+        wavelength=WL,
+        wire_radius=1e-3,
+        ground_z=0.0,
+        ground_eps=13.0 - 1.0j,
+        ground_model="sommerfeld",
+    )
+
+
+def _route_galerkin_crossing_junction():
+    """`_CROSSING_JUNCTION_REFUSAL` (momwire#1222) names SG and bspline."""
+    _crossing_deck(SinusoidalGalerkinSolver).compute_impedance()
+    _crossing_deck(BSplineSolver).compute_impedance()
+
+
 ROSTER = {
     "hmatrix.py::buried": _route_bspline_serves_the_buried_deck_hmatrix_refuses,
     "sinusoidal.py::junction_ports": _route_bspline_junction_ports,
     "sinusoidal.py::node_gaps->bspline": _route_bspline_node_gaps,
     "sinusoidal.py::node_gaps->galerkin": _route_galerkin_node_gaps,
     "sinusoidal.py::feed_model=point": _route_galerkin_point_feed,
+    "sinusoidal.py::crossing_junction": _route_galerkin_crossing_junction,
     "pulse.py::ground_contact": _route_bspline_ground_contact,
     "razor.py::midspan_touchdown": _route_razor_split_at_touchdown,
     "sinusoidal_galerkin.py::ek_needs_near": _route_galerkin_ek_with_near_correction,

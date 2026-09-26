@@ -204,20 +204,12 @@ _JUNCTION_PORTS_REFUSAL = (
     "short bridge wire across the gap and gap-feed it"
 )
 
-# The `buried` cell for both classes in this family (momwire#792).
-# `_build_geometry`'s scan raised the geometry line and no reason at all —
-# "wire 0 dips below the ground plane (min z = -1 < ground_z = 0)" — which
-# told a caller what it had drawn and nothing about why it was refused. The
-# sentence is appended there and declared here; the raise's geometry preamble
-# is unchanged.
-#
-# ONE cell and no combination keys, unlike `BSplineSolver`'s and
-# `RazorSolver`'s rows: this family's scan is coarser than
-# `_medium_spec.wire_media`. It asks only "is any point below the plane", so
-# a mid-span CROSSING and a buried wire under a ground with no lower medium
-# both arrive at this same sentence — and the sentence is true of all three,
-# because nothing in this formulation fills below the interface under any
-# ground.
+# `_build_geometry`'s blanket below-the-plane sentence (momwire#792). No
+# class in this family reaches it since momwire#1222 — both serve a buried
+# deck (`_serves_buried`) and refuse what they cannot fill by the narrower
+# names `_medium_spec.wire_media` and `_wire_media` raise — so it is declared
+# on no capability row. It stays for a subclass that switches the serve off,
+# which is what the scan's `_serves_buried()` guard is for.
 _BURIED_REFUSAL = (
     "{cls} has no buried fill. The momwire#553 buried serve - a direct, an "
     "image and a Sommerfeld-remainder block evaluated in the lower medium at "
