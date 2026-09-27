@@ -84,6 +84,18 @@ VARIANT_LABELS = {
     "razor-nec5": "the deprecated spelling of razor-2p",
 }
 
+# SimNEC's NEC-5 slot (momwire#1239).  SimNEC reads the deck SYNTAX off a
+# substring of the engine path, `nec2c` then `nec5`, and `momwire-eznec*`
+# carries neither -- so the same launcher ships again under names that carry
+# `nec5`, and the launcher reads the basis past `nec5-` when `eznec-` is
+# absent.  Two, not the Python family's seven: the default plus razor-2p, the
+# pair the EZNEC names ship, and a copy makes any other.  They key the SAME
+# warm server as their EZNEC twins (the key is the basis, not the name).
+SIMNEC_LAUNCHERS = {
+    "momwire-nec5": "SimNEC's NEC-5 engine, the default (bs2)",
+    "momwire-nec5-razor-2p": "SimNEC's NEC-5 engine, razor-2p",
+}
+
 # LLVM's OpenMP runtime.  Both Windows extensions (`_accelerators` and
 # `_near_interface_accel`) link it, because setup.py builds them with
 # `/openmp:llvm` — not `vcomp140.dll`, which is what a reader expects from MSVC
@@ -338,6 +350,11 @@ def main() -> int:
         shutil.copy2(exe, variant)
         variants.append(variant)
         print(f"variant: {variant.name}")
+    for stem in SIMNEC_LAUNCHERS:
+        variant = exe.with_name(f"{stem}{exe.suffix}")
+        shutil.copy2(exe, variant)
+        variants.append(variant)
+        print(f"variant: {variant.name}")
 
     # Assert what the pre-copy ordering CLAIMS, rather than trusting it: a
     # variant that silently arrived unsigned is precisely the failure that
@@ -393,6 +410,7 @@ def main() -> int:
     # heading rather than folded into the name.
     labels = {NAME: "the default — degree-2 B-spline (bs2)"}
     labels.update({f"{NAME}-{b}": VARIANT_LABELS[b] for b in SHIPPED_VARIANTS})
+    labels.update(SIMNEC_LAUNCHERS)
     labels[ENGINE_NAME] = "the compute engine the launchers run"
     width = max(len(n) for n in labels) + len(exe.suffix)
     table = "\n".join(
@@ -454,6 +472,12 @@ def main() -> int:
         "It runs the same engine and answers identically; it still ships so\n"
         "an EZNEC engine path typed once and forgotten keeps working.  New\n"
         "setups should point at razor-2p.\n"
+        "\n"
+        "SIMNEC.  Point SimNEC's NEC-5 engine setting at momwire-nec5.exe or\n"
+        "momwire-nec5-razor-2p.exe.  SimNEC decides which deck syntax to write\n"
+        "from the engine's NAME, which must contain nec5, so the EZNEC names\n"
+        "above will not do there.  Same engine, same warm start; a path with no\n"
+        "spaces in it is safest.\n"
         "\n"
         "REPRODUCTION IS NOT ACCURACY.  razor-2p agrees with the licensed\n"
         "engine because it runs the same algorithm, not because it is more\n"

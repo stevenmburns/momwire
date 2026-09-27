@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Eight gates, derived from the seam's own contract (momwire#497 U1):
+Nine gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -72,6 +72,11 @@ Eight gates, derived from the seam's own contract (momwire#497 U1):
    The stamp is threaded from the filename, so a copy that ignored its own
    name would stamp the name it ignored — gate 4 is the only evidence about
    the solver, and this one can never stand in for it.
+9. **The SimNEC names** (momwire#1239) — ``build.py``'s ``SIMNEC_LAUNCHERS``
+   are present, answer ``-version`` with exit 0 and ``NEC5momwire.<maj>.<min>``
+   (SimNEC's configure probe), and serve in the basis read past ``nec5-``.
+   SimNEC picks the deck syntax from ``nec5`` in the path, which the
+   ``momwire-eznec`` names do not carry.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -142,6 +147,16 @@ def _shipped_variants() -> tuple[str, ...]:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.SHIPPED_VARIANTS
+
+
+def _simnec_launchers() -> tuple[str, ...]:
+    """``build.py``'s SimNEC names, read for `_shipped_variants`' reason."""
+    spec = importlib.util.spec_from_file_location(
+        "eznec_freeze_build", HERE / "build.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return tuple(module.SIMNEC_LAUNCHERS)
 
 
 # Two serving decks spanning the seam's range — a bare-wire rung-1 model and
@@ -568,6 +583,70 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     return failures
 
 
+def _gate_simnec(exe: Path, work: Path, env: dict[str, str]) -> int:
+    """Gate 9 — the SimNEC names (momwire#1239).
+
+    SimNEC runs ``"<path>" -version`` before it accepts a nec5 engine, then
+    ``<path> <deck> <printout>`` like EZNEC.  So each shipped name must be
+    present, answer the probe with exit 0 and the ``NEC5momwire.<maj>.<min>``
+    line, and serve 0010 byte-identically to the module in the basis its name
+    reads past ``nec5-`` (none for the plain name).
+    """
+    from importlib.metadata import version
+
+    failures = 0
+    major, minor = version("momwire").split(".")[:2]
+    want = f"NEC5momwire.{major}.{minor}"
+    deck = FIXTURES / f"{BASIS_DECK}.nec"
+    for stem in _simnec_launchers():
+        launcher = exe.with_name(f"{stem}{exe.suffix}")
+        if not launcher.is_file():
+            print(f"FAIL {launcher.name}: shipped SimNEC launcher is MISSING")
+            failures += 1
+            continue
+        probe = subprocess.run(
+            [str(launcher), "-version"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+        )
+        first = (probe.stdout.splitlines() or [""])[0]
+        if probe.returncode != 0 or first != want:
+            print(
+                f"FAIL {launcher.name} -version: exit {probe.returncode}, "
+                f"{first!r} (want {want!r})"
+            )
+            failures += 1
+            continue
+        basis = stem.partition("nec5-")[2] or None
+        v_out = work / f"{BASIS_DECK}.{stem}.frozen.out"
+        m_out = work / f"{BASIS_DECK}.{stem}.module.out"
+        run([str(launcher), str(deck), str(v_out)], v_out, env=env)
+        run(
+            [
+                sys.executable,
+                "-c",
+                "import sys;from momwire.eznec._shell import main;"
+                f"sys.exit(main(sys.argv[1:], basis={basis!r}) if {basis!r} "
+                "else main(sys.argv[1:]))",
+                str(deck),
+                str(m_out),
+            ],
+            m_out,
+        )
+        frozen = v_out.read_bytes()
+        if frozen != m_out.read_bytes():
+            print(f"FAIL {launcher.name}: does not answer in basis {basis!r}")
+            failures += 1
+        elif SOLVED not in frozen.decode("latin-1"):
+            print(f"FAIL {launcher.name}: did not serve {BASIS_DECK}")
+            failures += 1
+        else:
+            print(f"ok   {launcher.name}: {want}, answers in {basis or 'the default'}")
+    return failures
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__, file=sys.stderr)
@@ -602,6 +681,7 @@ def main() -> int:
     env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
     try:
         failures = _gates(exe, work, room, env)
+        failures += _gate_simnec(exe, work, env)
     finally:
         stop(room)
 
