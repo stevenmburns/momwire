@@ -440,6 +440,120 @@ def _entry_k(seg_view, s, e, k):
     return k if k_entry is None else np.asarray(k_entry)[s:e]
 
 
+_COINCIDENT_CROSSING_MEMBERS_REFUSAL = (
+    "crossing junction {j} joins members whose node-adjacent edges are "
+    "geometrically COINCIDENT (wires {a} and {b} run the same path within one "
+    "wire radius): this family cannot solve that deck. The thin-wire kernel "
+    "regularizes a pair at zero separation to the wire radius, which is what "
+    "it does for a segment against ITSELF, so coincident members contribute "
+    "near-identical rows and columns and the matrix is ill-conditioned rather "
+    "than wrong in any one entry. Measured in FREE SPACE, no ground and no "
+    "junction at all, on N coincident wires each carrying its own distinct "
+    "arm: max|alpha| runs 2.3 / 41 / 184 for N = 1 / 2 / 4 against "
+    "BSplineSolver's 2.0e-3 / 4.0e-3 / 9.0e-3, and over a Sommerfeld ground "
+    "the same deck reaches 8.4e32. So this is a property of the family, not "
+    "of the crossing serve, and it is refused here because a crossing "
+    "junction is where the spelling that provokes it is natural: writing each "
+    "radial of a buried screen as far-end -> hub -> RISE gives every radial "
+    "the same rise. Respell the screen with ONE rise and the radials joined "
+    "to it at depth (the buried-hub spelling, which this serve covers and "
+    "which agrees with BSplineSolver to 8.4e-03 on a 12-radial screen), or "
+    "run each radial straight from its far end to the node so no two members "
+    "share a path."
+)
+
+
+class SinusoidalBasisSampler:
+    """`_crossing_fill.BasisSampler` for the NEC three-term basis (momwire#980
+    step B): what the crossing trunk reads of this solver's basis, as data.
+
+    Built from `_basis_coefs`' `seg_view` — the CSR-by-segment table of
+    (basis, A, B, C, AC, σ) entries — so it carries exactly the coefficients
+    the fill and the readouts use, in the well-scaled shape set
+    {1, sin kξ, cos kξ − 1} (#203/#606). The trunk's arc coordinate is `u ∈
+    [0, h]` from `seg_l`; the shape set is written in ξ from the segment
+    CENTRE, so ξ = u − h/2 and
+
+        f  = σ·AC + B·sin kξ − 2σC·sin²(kξ/2)
+        f' = k·(B·cos kξ − σC·sin kξ)
+
+    — `_basis_value` and `_evaluate_basis_slope_at_points`' derivative, one
+    entry at a time instead of summed over α. The samples are complex128
+    because the coefficients are stored complex; at a real k their imaginary
+    parts are exactly zero, and every consumer of the axis dict is
+    dtype-agnostic (the #980 spike ran the same trunk at complex k_m).
+
+    Each (segment, basis) pair is one CSR entry, so a segment's rows are
+    unique — asserted, since `_basis_samples` asserts the same for wings.
+    """
+
+    def __init__(self, seg_view, k, seg_h, n_basis):
+        self.k = k
+        self.n_basis = int(n_basis)
+        self._h = np.asarray(seg_h, dtype=float)
+        self._starts = np.asarray(seg_view["starts"], dtype=np.int64)
+        self._jbasis = np.asarray(seg_view["jbasis"], dtype=np.int64)
+        sig = np.asarray(seg_view["sigma"]).astype(np.complex128)
+        self._sigAC = sig * seg_view["AC"]
+        self._B = np.asarray(seg_view["B"], dtype=np.complex128)
+        self._sigC = sig * seg_view["C"]
+        # Per-ENTRY k (momwire#980 D2/D3). A MIXED view's coefficients follow
+        # each segment's medium, and so must the sin/cos the shape set is
+        # written in: an entry built at k_m and evaluated at k_p is a
+        # different function, and `ends`, `F` and `Fd` would then describe
+        # three of them. `axis_data` samples BOTH axes through ONE basis
+        # object, so this cannot be fixed by handing the below axis its own
+        # sampler — the fill re-enters `axis_data` itself for the coarse
+        # axes. Carrying k where the coefficients are carried is the same
+        # move `_stitch_basis_coefs` makes, one level down.
+        #
+        # Absent on a single-medium view, where the scalar k is the whole
+        # truth and every shipped path keeps the identical arithmetic.
+        k_entry = seg_view.get("k_entry")
+        self._k = np.asarray(k) if k_entry is None else np.asarray(k_entry)
+        self._k_per_entry = k_entry is not None
+
+    def _entries(self, seg):
+        s, e = int(self._starts[seg]), int(self._starts[seg + 1])
+        rows = self._jbasis[s:e]
+        if np.unique(rows).shape[0] != rows.shape[0]:
+            raise AssertionError(f"segment {seg} carries a basis in two entries")
+        return slice(s, e), rows
+
+    def _value_and_slope(self, sl, xi):
+        """(value, derivative) of every entry in `sl` at the arcs `xi`
+        (from the segment centre): (n_entries, n_xi) each."""
+        sigAC, B, sigC = self._sigAC[sl, None], self._B[sl, None], self._sigC[sl, None]
+        k = self._k[sl, None] if self._k_per_entry else self._k
+        f = _basis_value(sigAC, B, sigC, k, xi[None, :])
+        fd = k * (B * np.cos(k * xi[None, :]) - sigC * np.sin(k * xi[None, :]))
+        return f, fd
+
+    def samples(self, seg_runs, u_phys):
+        n_nodes = u_phys.shape[0]
+        F = np.zeros((self.n_basis, n_nodes), dtype=np.complex128)
+        Fd = np.zeros((self.n_basis, n_nodes), dtype=np.complex128)
+        seg_rows: dict[int, np.ndarray] = {}
+        for g, (s0, cnt) in seg_runs.items():
+            sl, rows = self._entries(g)
+            if rows.size == 0:
+                continue
+            xi = u_phys[s0 : s0 + cnt] - 0.5 * self._h[g]
+            f, fd = self._value_and_slope(sl, xi)
+            F[rows, s0 : s0 + cnt] = f
+            Fd[rows, s0 : s0 + cnt] = fd
+            seg_rows[int(g)] = np.sort(rows)
+        return F, Fd, seg_rows
+
+    def end_values(self, gseg, u):
+        fv = np.zeros(self.n_basis, dtype=np.complex128)
+        sl, rows = self._entries(gseg)
+        if rows.size:
+            xi = np.array([float(u) - 0.5 * self._h[gseg]])
+            fv[rows] = self._value_and_slope(sl, xi)[0][:, 0]
+        return fv
+
+
 @dataclass(frozen=True)
 class _SegmentBasis:
     """Opaque `PortSolution.basis` payload for the segment-basis families.
@@ -991,18 +1105,165 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # Geometry build
     # ------------------------------------------------------------------
 
-    def _crossing_junction_indices(self):
-        """Indices of junctions that CROSS the interface (momwire#980 D3).
+    def _n_extra_cols(self):
+        """Basis columns beyond the one-per-segment expansion. None on this
+        family; SG adds its junction ports and crossing wings."""
+        return 0
 
-        Empty on this family by default. A crossing junction's members must
-        NOT take the grounded-junction self-image atom: that atom is the
-        contact physics for a wire meeting its OWN image, and at a crossing
-        node the partner is a real wire in the other medium whose interface
-        content the crossing fill's corner already carries. Taking it would
-        price the node twice — the same double-counting an eps-weighted
-        basis condition would have been.
+    def _is_crossing(self, geom):
+        """Does this deck have a junction that CROSSES the interface?
+
+        Asked BEFORE `_is_mixed`, because a crossing deck is mixed too and
+        the two want opposite things from the cross pair: D2 builds a
+        transmitted grid, and a crossing deck must never have one. Measured
+        rather than argued — a crossing deck sent down D2's route is refused
+        by the theta-floor cost law ("observer elevation of 0.07594 deg,
+        below the 0.1445 deg this transmitted grid can pay for"), because
+        its wires touch the plane. `serve_plan(crossing=True)` skips that
+        section for the same reason: the cross pair is `_crossing_fill`'s
+        designed DIRECT evaluation and no grid is ever built for it.
         """
-        return frozenset()
+        return bool(self._crossing_junction_indices())
+
+    def _seg_offsets(self, geom):
+        """bspline's `seg_offsets` from this trunk's `wire_first`/`wire_last`.
+
+        Derived and asserted contiguous rather than kept as a second
+        segment-labelling rule — the same contract `_below_segments` holds.
+        """
+        first = np.asarray(geom["wire_first"], dtype=np.int64)
+        last = np.asarray(geom["wire_last"], dtype=np.int64)
+        offsets = np.append(first, int(geom["n_segs"]))
+        if not np.array_equal(last + 1, offsets[1:]):
+            raise AssertionError("wire segment spans are not contiguous")
+        return offsets
+
+    def _crossing_context(self, geom, seg_view, medium):
+        """What the crossing fill reads off this solver, as data.
+
+        The basis arrives as a `SinusoidalBasisSampler` rather than as
+        polynomials — the fill never sees the solver, and since momwire#980
+        step B any `BasisSampler` serves. The sampler is built at the
+        ABOVE medium's k because `axis_data` samples both axes through one
+        basis object; each wing's own coefficients already carry its medium,
+        because `seg_view` is D2's per-segment stitch and no basis spans the
+        interface once the node is C0.
+        """
+        return _crossing_fill.CrossingContext(
+            basis=SinusoidalBasisSampler(
+                seg_view,
+                medium.k_p,
+                geom["seg_h"],
+                int(geom["n_segs"]) + self._n_extra_cols(),
+            ),
+            geom=_crossing_fill.AxisGeometry(
+                np.asarray(geom["seg_l"]),
+                np.asarray(geom["seg_r"]),
+                np.asarray(geom["seg_h"]),
+                np.asarray(geom["seg_tangents"]),
+                self._seg_offsets(geom),
+            ),
+            medium=medium,
+            ground_z=float(self.ground_z),
+            a_wire=float(self._radius_per_wire[0]),
+            omega=self.omega,
+            mu=self.mu,
+            eps=self.eps,
+        )
+
+    def _crossing_junction_indices(self):
+        """Junctions that CROSS the interface (momwire#980 D3), by index.
+
+        Answered through `_below_interface`, so this trunk's scope check and
+        its refusals are bspline's — one wire radius, the buried hub, crossing
+        nodes at least `MIN_CROSSING_NODE_SEPARATION_M` apart — rather than a
+        second reading of the same rules. Empty whenever the deck has no lower medium, which keeps every
+        shipped path on the base's empty answer.
+
+        A crossing junction's members must NOT take the grounded-junction
+        self-image atom: that atom is the contact physics for a wire meeting
+        its OWN image, and at a crossing node the partner is a real wire in
+        the other medium whose interface content the crossing fill's corner
+        already carries. Taking it would price the node twice.
+        """
+        # momwire#1223 U1: hoisted from SG with the base's answer kept. A
+        # family that does not serve a crossing junction (the point-matched
+        # lane until stage 2 lifts it) takes the empty set, as it always has:
+        # its crossing decks are refused by name in `_wire_media`, and this
+        # method must not reach that refusal, or the ones in
+        # `crossing_junctions`, earlier than it used to.
+        if not self._serves_crossing():
+            return frozenset()
+        if self.ground_z is None or not self._lower_medium() or not self.junctions:
+            return frozenset()
+        crossing = _below_interface.crossing_junctions(
+            self._wire_media(),
+            self.junctions,
+            self._grounded_junctions(),
+            self.wires_polylines,
+            self.ground_z,
+            self._radius_per_wire,
+        )
+        self._refuse_coincident_crossing_members(crossing)
+        return crossing
+
+    def _node_adjacent_edge(self, w, end):
+        """The member's node-adjacent polyline edge, node vertex FIRST."""
+        pl = np.asarray(self.wires_polylines[w], dtype=float)
+        return (pl[0], pl[1]) if end == "start" else (pl[-1], pl[-2])
+
+    def _refuse_coincident_crossing_members(self, crossing):
+        """Refuse a crossing junction whose members run the same path.
+
+        Geometry only, and asked of the POLYLINES rather than the mesh: two
+        members are coincident when both endpoints of their node-adjacent
+        edges agree to within one wire radius, which is the separation below
+        which the thin-wire kernel stops distinguishing them at all.
+
+        `BSplineSolver` serves this spelling, so the refusal lives here rather
+        than in `_below_interface.crossing_junctions`, which both families
+        share.
+        """
+        if not crossing:
+            return
+        a = float(np.max(self._radius_per_wire))
+        for j in crossing:
+            members = list(self.junctions[j])
+            edges = [self._node_adjacent_edge(w, e) for w, e in members]
+            for i in range(len(edges)):
+                for jj in range(i + 1, len(edges)):
+                    (n0, f0), (n1, f1) = edges[i], edges[jj]
+                    if np.linalg.norm(n0 - n1) <= a and np.linalg.norm(f0 - f1) <= a:
+                        raise NotImplementedError(
+                            _COINCIDENT_CROSSING_MEMBERS_REFUSAL.format(
+                                j=j, a=members[i][0], b=members[jj][0]
+                            )
+                        )
+
+    def _grounded_junctions(self):
+        """Junctions whose shared point lies in the plane — their KCL row is
+        dropped, because current may flow into the ground stake."""
+        return _below_interface.grounded_junctions(
+            self.wires_polylines, self.ground_z, self.junctions
+        )
+
+    def _junction_members(self, geom, j_idx):
+        """(segment index, σ) for every wire-end at junction `j_idx`.
+
+        σ is the sign the extension shape below is stamped with: +1 when the
+        junction node is at the member segment's natural end-2 (`seg_r`), −1
+        when it is at end-1 (`seg_l`) — the same L/R rule `_build_geometry`
+        applies to a real N⁻ neighbour. Under the current-shape convention
+        I(s) = σA + B·sin(ks) + σC·cos(ks) that sign is exactly what makes
+        the shape's current flow INTO the node in both orientations.
+        """
+        members = []
+        for w, end in self.junctions[j_idx]:
+            if end == "start":
+                members.append((geom["wire_first"][w], -1))
+            else:
+                members.append((geom["wire_last"][w], +1))
+        return members
 
     def _serves_buried(self):
         """Whether THIS solver can fill a deck below the interface.
