@@ -210,10 +210,9 @@ def test_the_node_is_ordinary_on_this_lane_and_c0_on_sg():
     assert sg["crossing_minus"].any() or sg["crossing_plus"].any()
 
 
-def test_the_real_class_still_refuses_a_crossing_deck_until_stage_2():
-    """U2 is the basis only: the solve is not served yet, and the node is not
-    touched on the real class (its crossing set is still empty)."""
+def test_the_real_class_serves_the_crossing_node():
+    """Stage 2 lifted the refusal (U5): the real class's crossing set is the
+    node, and the node is the ordinary two-k junction."""
     s = _solver("bent", _eps_tilde(13.0, 0.005), cls=SinusoidalSolver)
-    assert s._crossing_junction_indices() == frozenset()
-    with pytest.raises(NotImplementedError, match="crossing junction"):
-        s.compute_impedance()
+    assert set(s._crossing_junction_indices()) == {0}
+    assert np.isfinite(complex(s.compute_impedance()[0]))

@@ -25,7 +25,6 @@ import numpy as np
 import pytest
 
 from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
-from momwire.sinusoidal import _CROSSING_JUNCTION_REFUSAL
 
 C0 = 299792458.0
 WL7 = C0 / 7e6
@@ -62,12 +61,16 @@ def _buried_dipole(cls, n=11, depth=0.5):
     )
 
 
-def test_the_point_matched_lane_serves_buried_and_refuses_crossing_by_name():
+def test_the_point_matched_lane_serves_buried_and_crossing():
     """Stage 0 kept the refusal; stage 1 (#1222) serves wholly-buried and
-    detached decks, and the crossing JUNCTION stays refused by name until
-    stage 2 (`tests/test_sin_buried_below_1222.py` has the gates)."""
+    detached decks, and stage 2 (#1223) the crossing JUNCTION: one two-member
+    node per deck, with the multi-node and hub decks refused by name
+    (`tests/test_sin_crossing_serve_1223.py` has the gates)."""
     assert SinusoidalSolver.capabilities.buried
-    assert "buried+crossing_junction" in SinusoidalSolver.capabilities.refusals
+    refusals = SinusoidalSolver.capabilities.refusals
+    assert "buried+crossing_junction" not in refusals
+    assert "buried+crossing_multi_node" in refusals
+    assert "buried+crossing_hub" in refusals
     s = SinusoidalSolver(
         wires=[
             np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 2.0)]),
@@ -80,9 +83,7 @@ def test_the_point_matched_lane_serves_buried_and_refuses_crossing_by_name():
         wire_radius=1e-3,
         **GROUND,
     )
-    with pytest.raises(NotImplementedError) as err:
-        s.compute_impedance()
-    assert _CROSSING_JUNCTION_REFUSAL in str(err.value)
+    assert np.isfinite(complex(s.compute_impedance()[0]))
 
 
 @pytest.mark.parametrize("name", HOISTED)

@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-42 sentences across 80 declared cells, verbatim. A sentence shared by several rows is printed
+43 sentences across 81 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -276,9 +276,13 @@ renders in host dialogs.
 
   > singular enrichment is not built for SinusoidalGalerkinSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
 
-- `SinusoidalSolver` `buried+crossing_junction`
+- `SinusoidalSolver` `buried+crossing_hub`
 
-  > SinusoidalSolver serves wires wholly below the interface and DETACHED decks (above and buried wires with no junction in the plane), but not yet a junction joining the two media: the point-matched crossing node needs its own basis condition (I continuous, I'_above = I'_below/eps_tilde), which is momwire#1220 stage 2. Solve this deck with SinusoidalGalerkinSolver or BSplineSolver, which both serve the crossing junction, or leave the buried wires detached
+  > SinusoidalSolver serves a crossing node joining exactly two members, one above and one below the interface (momwire#1223 stage 2); a buried hub has not been measured on the point-matched lane yet. Solve it with SinusoidalGalerkinSolver or BSplineSolver, which serve it
+
+- `SinusoidalSolver` `buried+crossing_multi_node`
+
+  > SinusoidalSolver serves one crossing node per deck (momwire#1223 stage 2); a deck with several has not been measured on the point-matched lane yet. Solve it with SinusoidalGalerkinSolver or BSplineSolver, which serve it
 
 - `SinusoidalSolver` `junction_ports`
 
