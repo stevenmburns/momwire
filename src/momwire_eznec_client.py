@@ -173,11 +173,31 @@ def _last_ditch(printout_path: str, reason: str) -> None:
         pass
 
 
+def probe_version() -> str:
+    """The ``-version`` first line, answered without importing momwire.
+
+    EZNEC never asks: it always passes a deck and a printout path. SimNEC does,
+    because a path containing ``nec5`` is its NEC-5 engine class, and its
+    configure step runs ``"<path>" -version`` before accepting the engine. It
+    takes exit 0 (or 24) with any first line, and records a line matching its
+    ``versionNECd`` pattern, ``NEC<digits><non-digit>...``, as the engine's
+    version. ``NEC5momwire.<major>.<minor>`` is the NEC-5 twin of the portal's
+    ``NEC2momwire.<major>.<minor>``, read from the installed distribution's
+    metadata like ``momwire_nec2c_client.probe_version`` so the probe costs no
+    NumPy import and spawns nothing.
+    """
+    major, minor = _mech.dist_version()
+    return f"NEC5momwire.{major}.{minor}"
+
+
 def main(argv: list[str] | None = None) -> int:
     """The process entry point. Returns 0. Always returns 0."""
     args = list(sys.argv[1:] if argv is None else argv)
     prog = sys.argv[0] if argv is None else "momwire-eznec-client"
 
+    if args == ["-version"]:
+        print(probe_version())
+        return 0
     if len(args) < 1:
         print(ARGUMENT_ERROR_INPUT)
         return 0

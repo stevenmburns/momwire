@@ -373,6 +373,35 @@ def test_argument_errors_print_and_write_nothing(capsys, tmp_path):
     assert eznec_client.ARGUMENT_ERROR_INPUT in capsys.readouterr().out
     assert eznec_client.main(["a", "b", "c"]) == 0
     assert eznec_client.ARGUMENT_ERROR_OUTPUT in capsys.readouterr().out
+    # A lone argument that is not the probe is still an argument error.
+    assert eznec_client.main(["deck.ez"]) == 0
+    assert eznec_client.ARGUMENT_ERROR_OUTPUT in capsys.readouterr().out
+
+
+def test_the_version_probe_is_the_nec5_twin_simnec_records(capsys, monkeypatch):
+    """SimNEC's NEC-5 engine class (a path containing ``nec5``) runs
+    ``"<path>" -version`` at configure time. It accepts exit 0 or 24 with any
+    first line, and records one matching its versionNECd pattern
+    ``(NEC\\d+\\D.*)`` (anchored, lookingAt) as the engine version.
+
+    The answer must come from metadata alone: no server is spawned, nothing
+    is connected to, and no printout is written."""
+    import re
+
+    def _no_serving(*_a, **_k):
+        raise AssertionError("the version probe must not reach the server")
+
+    monkeypatch.setattr(eznec_client, "_served_bytes", _no_serving)
+    monkeypatch.setattr(eznec_client, "_one_shot", _no_serving)
+    assert eznec_client.main(["-version"]) == 0
+    first = capsys.readouterr().out.splitlines()[0].strip()
+    major, minor = eznec_client._mech.dist_version()
+    assert first == f"NEC5momwire.{major}.{minor}"
+    assert re.match(r"(NEC\d+\D.*)", first)
+    # None of SimNEC's NEC-2 patterns may claim it: those run a minimum-
+    # version check on the tail, which this spelling must never enter.
+    for pat in (r"nec2c\.ae6ty\.(.*)", r"5b4az\.ae6ty\.(.*)", r"necpp\.nec2c\.(.*)"):
+        assert not re.match(pat, first)
 
 
 @pytest.mark.integration
