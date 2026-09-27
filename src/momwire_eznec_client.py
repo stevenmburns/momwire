@@ -46,6 +46,13 @@ import momwire_serve_client as _mech
 # selects the twin; the ``client`` segment itself selects nothing.
 _FILENAME_MARKER = "eznec-"
 _CLIENT_SEGMENT = "client"
+# momwire#1239: the SimNEC spelling. SimNEC picks its engine CLASS, and so
+# the deck syntax it writes, from a substring of the engine's path: `nec2c`
+# -> NEC-2 decks, `nec5` -> NEC-5 decks. A NEC-5 command therefore has to
+# carry `nec5` in its name, which `momwire-eznec-client-razor-2p` does not.
+# `momwire-nec5[-<basis>]` is the family SimNEC's NEC command setting points
+# at; the basis rides past this marker exactly as it rides past `eznec-`.
+_NEC5_MARKER = "nec5-"
 
 DEFAULT_IDLE_TIMEOUT = 900.0
 
@@ -206,6 +213,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     deck_path, printout_path = args
     basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
+    if basis is None:
+        basis = _mech.filename_basis(prog, _NEC5_MARKER)
 
     try:
         with open(deck_path, "rb") as handle:
