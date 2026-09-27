@@ -124,6 +124,18 @@ typedef int lock_t;
 #define FILENAME_MARKER "eznec-"
 #define CLIENT_SEGMENT "client"
 
+/* momwire#1239: SimNEC picks the deck syntax from a substring of the engine
+ * path (`nec2c`, then `nec5`), so its NEC-5 slot needs a name carrying
+ * `nec5` and not `eznec`: `momwire-nec5[-<basis>]`.  The fallback marker when
+ * `eznec-` is absent, with no consumed segment -- the Python client's
+ * `_NEC5_MARKER` rule, spelt again here for the copy that drifts. */
+#define NEC5_MARKER "nec5-"
+
+/* SimNEC's configure step runs `"<path>" -version` on a nec5 engine, takes
+ * exit 0 with any first line, and records one matching `NEC<digits><non-
+ * digit>...` as the version.  `momwire_eznec_client.probe_version`'s line. */
+#define VERSION_LINE "NEC5momwire." MW_STR(MOMWIRE_VERSION_MAJOR) "." MW_STR(MOMWIRE_VERSION_MINOR)
+
 /* The one spawn target a deployed bundle has: there is no system Python on a
  * user's box, so the daemon is the bundle's own frozen exe (#718 D3).  The
  * `engine` segment is consumed by its own entry the way `client` is here, so
@@ -574,8 +586,17 @@ static int basis_of(const char *argv0, char *out, size_t cap)
 
     marker = strstr(name, FILENAME_MARKER);
     if (marker == NULL) {
-        out[0] = '\0';
-        return 0;
+        /* The nec5 family consumes no segment: everything after the marker
+         * is the basis, as `filename_basis(prog, "nec5-")` reads it. */
+        marker = strstr(name, NEC5_MARKER);
+        if (marker == NULL) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (copy_str(out, cap, marker + strlen(NEC5_MARKER)) != 0) {
+            out[0] = '\0';
+        }
+        return 1;
     }
     suffix = marker + strlen(FILENAME_MARKER);
     if (strcmp(suffix, CLIENT_SEGMENT) == 0) {
@@ -1734,6 +1755,10 @@ int main(int argc, char **argv)
      * so every path below returns 0 -- including the two argument faults,
      * which print what the real engine prints and write no file because
      * there is no output path to write one to. */
+    if (argc == 2 && strcmp(argv[1], "-version") == 0) {
+        printf("%s\n", VERSION_LINE);
+        return 0;
+    }
     if (argc < 2) {
         printf("%s\n", ARGUMENT_ERROR_INPUT);
         return 0;

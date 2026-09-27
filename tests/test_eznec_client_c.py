@@ -62,6 +62,12 @@ ENGINE_NAME = "momwire-eznec-engine"
 # from CLIENT_NAME's "no marker at all", and must key its own daemon.
 EMPTY_NAME = "momwire-eznec-"
 
+# SimNEC's NEC-5 slot (momwire#1239): SimNEC reads the deck syntax off `nec5`
+# in the engine path, so the same launcher ships again under these names and
+# reads the basis past `nec5-` when `eznec-` is absent.
+NEC5_NAME = "momwire-nec5"
+NEC5_TWIN_NAME = "momwire-nec5-razor-2p"
+
 # smoke.py's gate-4 deck: a free-space dipole every basis hosts and on which
 # the two SHIPPED bases disagree — bspline answers 85.073+45.369j where
 # razor-nec5 answers 79.948+29.919j, the licensed engine's own number. A twin
@@ -286,6 +292,25 @@ def test_argument_errors_print_and_write_nothing(client_exe, tmp_path):
         shutil.rmtree(bundle, ignore_errors=True)
 
 
+@pytest.mark.integration
+@pytest.mark.parametrize("name", [NEC5_NAME, NEC5_TWIN_NAME, CLIENT_NAME])
+def test_the_version_probe_answers_without_an_engine(client_exe, name):
+    """SimNEC's configure step: ``"<path>" -version``, exit 0, first line
+    ``NEC5momwire.<major>.<minor>`` — the Python client's line, from the
+    version compiled in, with no daemon spawned and no file written."""
+    bundle = _bundle(client_exe, None, names=(name,))
+    room = _room()
+    try:
+        proc = _run(bundle, name, ["-version"], room)
+        major, minor = mech.dist_version()
+        assert proc.returncode == 0
+        assert proc.stdout.splitlines()[0] == f"NEC5momwire.{major}.{minor}"
+        assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------
 # the resident path
 # --------------------------------------------------------------------------
@@ -368,6 +393,27 @@ def test_a_variant_named_copy_answers_in_the_basis_its_name_claims(
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_a_nec5_named_copy_answers_in_the_basis_past_the_marker(client_exe, tmp_path):
+    """momwire#1239: ``momwire-nec5-razor-2p`` serves razor-2p, not the
+    default — the same anti-coincidence pair as the EZNEC twin's gate."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_TWIN_NAME,))
+    room = _room()
+    deck = _deck(BASIS_DECK)
+    expected = _oracle(deck, tmp_path, basis="razor-2p")
+    assert expected != _oracle(deck, tmp_path), "the gate's deck stopped disagreeing"
+    try:
+        out = tmp_path / "nec5-twin.out"
+        proc = _run(bundle, NEC5_TWIN_NAME, [str(deck), str(out)], room)
+        assert proc.returncode == 0, proc.stderr
+        assert out.read_bytes() == expected
+        assert len(_listening(room)) == 1, _listening(room)
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 def test_each_formulation_gets_its_own_warm_server(client_exe, tmp_path):
     """One warm server per formulation: the basis is part of the key, so the
     twin cannot be answered by whatever is resident for the default. Two
@@ -442,6 +488,10 @@ def test_a_named_empty_basis_never_shares_the_defaults_server(client_exe, tmp_pa
     [
         pytest.param(TWIN_NAME, f"basis={TWIN_BASIS}", id="named"),
         pytest.param(CLIENT_NAME, "default", id="unnamed"),
+        # The nec5 names key the SAME servers as their EZNEC twins: the
+        # element is the basis, never the spelling that selected it.
+        pytest.param(NEC5_TWIN_NAME, "basis=razor-2p", id="nec5-named"),
+        pytest.param(NEC5_NAME, "default", id="nec5-unnamed"),
     ],
 )
 def test_the_key_is_the_d2_digest_and_not_a_private_hash(
