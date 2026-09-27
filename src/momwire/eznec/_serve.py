@@ -410,6 +410,7 @@ the shape ``docs/design/solver-architecture.md`` calls the golden-lane rule.
 
 from __future__ import annotations
 
+import cmath
 import math
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -808,6 +809,63 @@ _REFUSE_RP_RANGE = (
     "form (RFLD > 0, momwire#1230) is served, and what the engine does with a "
     "negative distance has never been observed"
 )
+
+
+# momwire#1237: a MULTI-RUN deck, one ``XQ`` block per run. SimNEC measures an
+# N-port by driving each port in turn at 1 V with the others held at 1e-10 V,
+# one block per port, and every block after the first writes only its new
+# EX cards (and RP / NE / NH) before its XQ. The licensed engine REPLACES the
+# source set at each block (measured: every run's input table carries the
+# block's own sources, never an accumulation) and reuses everything else.
+# Those are the only cards a later block may carry here.
+_RUN_CARDS = frozenset({"EX", "RP", "NE", "NH", "PQ", "XQ"})
+_REFUSE_RUN_CHANGES = (
+    "XQ block {run} carries {card}: a multi-run deck is served when its later "
+    "runs change only their sources and requests (EX, RP, NE, NH), which is "
+    "what SimNEC writes. Every run reuses the first block's structure, ground, "
+    "loads and frequency, so a block that changes one of those is refused "
+    "rather than silently ignored"
+)
+
+
+def split_runs(text: str) -> list[str] | None:
+    """The single-run decks of a multi-run deck, one per ``XQ`` block, or
+    ``None`` when the deck has at most one ``XQ`` (every EZNEC deck), which
+    keeps the one-run path exactly as it was.
+
+    Each run's text is the deck through ``GE``, the first block's cards other
+    than the per-run ones (ground, loads, lines, frequency), then that
+    block's own EX / RP / NE / NH / PQ cards, its ``XQ`` and ``EN``. Raises
+    :class:`ServeRefusal` when a later block changes anything else.
+    """
+    lines = text.splitlines()
+    ge = next((i for i, ln in enumerate(lines) if ln[:2].upper() == "GE"), None)
+    if ge is None:
+        return None
+    blocks: list[list[str]] = [[]]
+    for ln in lines[ge + 1 :]:
+        card = ln[:2].upper()
+        if not ln.strip() or card == "EN":
+            continue
+        blocks[-1].append(ln)
+        if card == "XQ":
+            blocks.append([])
+    blocks = [b for b in blocks if b]
+    if sum(1 for b in blocks if b[-1][:2].upper() == "XQ") <= 1:
+        return None
+    for run, block in enumerate(blocks[1:], start=2):
+        for ln in block:
+            card = ln[:2].upper()
+            if card not in _RUN_CARDS:
+                raise ServeRefusal(_REFUSE_RUN_CHANGES.format(run=run, card=card))
+    common = [ln for ln in blocks[0] if ln[:2].upper() not in _RUN_CARDS]
+    head = lines[: ge + 1]
+    out = []
+    for block in blocks:
+        own = [ln for ln in block if ln[:2].upper() in _RUN_CARDS - {"XQ"}]
+        xq = [ln for ln in block if ln[:2].upper() == "XQ"] or ["XQ 0"]
+        out.append("\n".join([*head, *common, *own, xq[0], "EN"]) + "\n")
+    return out
 
 
 def refusal(deck: Nec5Deck) -> str | None:
@@ -3308,6 +3366,7 @@ def _pattern(
     frequency_mhz: float,
     wavelength: float,
     p_in: float,
+    lower_k: complex | None = None,
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
 
@@ -3362,6 +3421,16 @@ def _pattern(
     norm = ETA0 * k * k / (8.0 * math.pi * p_in) if p_in > 0 else 0.0
     g_v = norm * np.abs(m_theta) ** 2
     g_h = norm * np.abs(m_phi) ** 2
+    # Over ANY ground a direction below the horizon (θ > 90°) is not computed:
+    # the licensed engine prints the row as all zeros, gains at the -999.99
+    # floor and phases 0.00, with or without a range (momwire#1237, captured
+    # over GN 1 and GN 2 at RFLD 0 and 1000). EZNEC's patterns stop at the
+    # horizon, so no EZNEC capture carries such a row. Zeroed before the
+    # average-gain sum, which then integrates what the engine printed.
+    below_horizon = (thetas > 90.0 + 1e-9) if ground.kind != "free" else None
+    if below_horizon is not None and below_horizon.any():
+        g_v = np.where(below_horizon[:, None], 0.0, g_v)
+        g_h = np.where(below_horizon[:, None], 0.0, g_h)
     floor_scale = 1.0 / wavelength
 
     # RFLD > 0 (momwire#1230, SimNEC's RP): the licensed printout divides
@@ -3382,6 +3451,24 @@ def _pattern(
     rows = []
     for j in range(request.n_phi):
         for i in range(request.n_theta):
+            if below_horizon is not None and below_horizon[i]:
+                rows.append(
+                    PatternRow(
+                        theta_deg=float(thetas[i]),
+                        phi_deg=float(phis[j]),
+                        vert_db=_gain_db(0.0),
+                        hor_db=_gain_db(0.0),
+                        total_db=_gain_db(0.0),
+                        axial_ratio=0.0,
+                        tilt_deg=0.0,
+                        sense="",
+                        e_theta_magnitude=0.0,
+                        e_theta_phase_deg=0.0,
+                        e_phi_magnitude=0.0,
+                        e_phi_phase_deg=0.0,
+                    )
+                )
+                continue
             et, ep = complex(e_theta[i, j]), complex(e_phi[i, j])
             # A component that is EXACTLY zero — the vertical's zenith, a
             # linear dipole's co-polar null, where a spherical unit vector
@@ -3435,6 +3522,15 @@ def _pattern(
             )
 
     ranged = {"range_m": range_m, "range_phase_deg": range_phase_deg} if range_m else {}
+    if range_m and lower_k is not None:
+        # Over a finite ground the range form adds the LOWER medium's
+        # exp(-j k_m R)/R (momwire#1237, captured over GN 0, GN 2 and GD; a
+        # PEC ground prints no such line), at k_m = k·sqrt(eps_c).
+        kr = lower_k.real * range_m
+        ranged["lower_range_mag"] = math.exp(lower_k.imag * range_m) / range_m
+        ranged["lower_range_phase_deg"] = math.degrees(
+            math.atan2(-math.sin(kr), math.cos(kr))
+        )
     if request.xnda % 10 == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
         # not and 1001 (0013, 0035) does.
@@ -4069,6 +4165,9 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
                 frequency,
                 wavelength,
                 p_in,
+                lower_k=None
+                if medium is None
+                else (2.0 * math.pi / wavelength) * cmath.sqrt(medium.eps_c),
             )
             for request in deck.requests
             if isinstance(request, Nec5FarFieldRequest)
