@@ -161,6 +161,11 @@ bspline  bspline-d1  hmatrix  arrayblock  razor-2p  razor-nec5
 sinusoidal  sinusoidal-galerkin
 ```
 
+Since 0.66 the bundle also ships `momwire-nec5.exe` and
+`momwire-nec5-razor-2p.exe`: the same launcher under the names
+[SimNEC's NEC-5 engine setting](/reference/portal-usage/#simnecs-nec-5-engine)
+needs, and a copy named `momwire-nec5-<basis>.exe` works the same way.
+
 `sinusoidal` cannot answer this dialect — every deck in it drives a NODE, and
 under point matching the match points are the segment centres, so a delta at a
 node point-samples to nothing in every row and there is no excitation left to
@@ -239,7 +244,16 @@ every table heading are untouched.
   page](/reference/deck-grammar-nec2/#ld--loading) for the measurement),
   insulation (`IS`), transmission lines and non-radiating networks
   (`TL` / `NT`), including the mixed table layouts.
-- **Requests**: impedance runs (`PQ` / `XQ`), far-field patterns (`RP`),
+- **Multi-run decks** (*added in 0.66, momwire#1237*): a deck with several
+  `EX … RP`/`XQ` blocks runs each block in turn, its `EX` cards replacing
+  the source set, and prints the groups the way NEC-5 does. That is the
+  shape SimNEC writes for an N-port measurement (one port at 1 V, the others
+  at a vanishing probe voltage), so its multiport networks and traps work
+  against momwire as they do against the licensed engine. A block that
+  changes the geometry, ground, loads or frequency between runs refuses by
+  name.
+- **Requests**: impedance runs (`PQ` / `XQ`), far-field patterns (`RP`,
+  including the range form SimNEC writes),
   and near fields (`NE` / `NH`) over **all four ground cards** — free space,
   perfect ground, the Sommerfeld finite ground, and the MININEC-type `GD`
   (whose near field the engine solves in the medium, and so does momwire).
