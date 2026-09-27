@@ -804,9 +804,9 @@ _REFUSE_NO_REQUEST = (
     "there is no run to report"
 )
 _REFUSE_RP_RANGE = (
-    "RP 0 with a nonzero range field is not served at this seam: every "
-    "captured RP writes 0 there, and the range form's printout header has "
-    "never been observed"
+    "RP 0 with a negative range field is not served at this seam: the range "
+    "form (RFLD > 0, momwire#1230) is served, and what the engine does with a "
+    "negative distance has never been observed"
 )
 
 
@@ -895,7 +895,7 @@ def refusal(deck: Nec5Deck) -> str | None:
             if near is not None:
                 return near
         if isinstance(request, Nec5FarFieldRequest):
-            if request.range_m != 0.0:
+            if request.range_m < 0.0:
                 return _REFUSE_RP_RANGE
     if not deck.requests:
         return _REFUSE_NO_REQUEST
@@ -3364,6 +3364,21 @@ def _pattern(
     g_h = norm * np.abs(m_phi) ** 2
     floor_scale = 1.0 / wavelength
 
+    # RFLD > 0 (momwire#1230, SimNEC's RP): the licensed printout divides
+    # each E by the range and adds the phase of exp(-jkR) to each E phase in
+    # DEGREES, without re-wrapping the sum (it prints -332.80), so a
+    # component at zero prints the bare shift. k is the engine's own
+    # (wavelength at c = 299.8 MHz*m: the SI c prints -164.24 where the
+    # capture prints -164.02). The gains do not move. RFLD = 0 takes no
+    # arithmetic at all, so every EZNEC capture stays byte for byte.
+    range_m = request.range_m
+    if range_m:
+        range_phase_deg = math.degrees(
+            math.atan2(-math.sin(k * range_m), math.cos(k * range_m))
+        )
+    else:
+        range_phase_deg = None
+
     rows = []
     for j in range(request.n_phi):
         for i in range(request.n_theta):
@@ -3395,6 +3410,13 @@ def _pattern(
             axial, tilt, sense = _polarisation(
                 et, ep, floor_scale, linear_below=_AXIAL_PRINTS_ZERO
             )
+            et_mag, ep_mag = abs(et), abs(ep)
+            et_deg = math.degrees(math.atan2(et.imag, et.real))
+            ep_deg = math.degrees(math.atan2(ep.imag, ep.real))
+            if range_phase_deg is not None:
+                et_mag, ep_mag = et_mag / range_m, ep_mag / range_m
+                et_deg += range_phase_deg
+                ep_deg += range_phase_deg
             rows.append(
                 PatternRow(
                     theta_deg=float(thetas[i]),
@@ -3405,22 +3427,24 @@ def _pattern(
                     axial_ratio=axial,
                     tilt_deg=tilt,
                     sense=sense,
-                    e_theta_magnitude=abs(et),
-                    e_theta_phase_deg=math.degrees(math.atan2(et.imag, et.real)),
-                    e_phi_magnitude=abs(ep),
-                    e_phi_phase_deg=math.degrees(math.atan2(ep.imag, ep.real)),
+                    e_theta_magnitude=et_mag,
+                    e_theta_phase_deg=et_deg,
+                    e_phi_magnitude=ep_mag,
+                    e_phi_phase_deg=ep_deg,
                 )
             )
 
+    ranged = {"range_m": range_m, "range_phase_deg": range_phase_deg} if range_m else {}
     if request.xnda % 10 == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
         # not and 1001 (0013, 0035) does.
-        return PatternBlock(rows=tuple(rows))
+        return PatternBlock(rows=tuple(rows), **ranged)
     average, solid = _average_gain(
         g_v + g_h, thetas, request.d_theta_deg, request.d_phi_deg, request.n_phi
     )
     return PatternBlock(
         rows=tuple(rows),
+        **ranged,
         average_power_gain=average,
         solid_angle_pi=solid / math.pi,
         power_radiated_4pi=average * p_in,

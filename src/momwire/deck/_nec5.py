@@ -564,7 +564,8 @@ _REFUSED_BY_NAME = MappingProxyType(
 # short card is a deck this front-end did not come from and refuses rather
 # than zero-fills (the exceptions are GD/GN 0's trailing complex mu and LD
 # 5's trailing real mu, both of which the measured grammar lets default to
-# 1; and GE's second field, momwire#1116 — see `_ge`).  GN and LD are absent
+# 1; GE's second field, momwire#1116 — see `_ge`; and EX's imaginary drive,
+# momwire#1230 — see `_ex`).  GN and LD are absent
 # because their length depends on a field read before this table — GN's on
 # its first field (bare for -1 and 1, media-carrying for 0 and 2, checked in
 # `_gn`), LD's on its TYPE (4 needs R and X, 5 does not need mu) — and are
@@ -574,7 +575,7 @@ _MIN_FIELDS = MappingProxyType(
         "GW": 9,
         "GE": 1,
         "GD": 6,
-        "EX": 6,
+        "EX": 5,
         "TL": 10,
         "NT": 10,
         "FR": 5,
@@ -1037,6 +1038,16 @@ class _Nec5Parser:
     # -- excitation, loading, networks -------------------------------------
 
     def _ex(self, card: Card) -> None:
+        """``EX <type>,<tag>,<segment>,<end-code>,<Re drive>[,<Im drive>]``.
+
+        EZNEC writes both drive fields. SimNEC's NEC-5 writer leaves the
+        imaginary one off (``EX 0 1 11 0 1.000000e+00``), and the licensed
+        NEC-5 reads the blank as exactly 0: momwire#1230 measured the
+        five-field deck's printout identical to the explicit ``0.0`` deck's,
+        timing lines aside, while ``0.5`` there prints V = 1+j0.5, so the
+        field is live and the default is 0. ``card.f(5)`` already reads a
+        missing field as 0, so ``_complex`` needs no special case.
+        """
         kind = card.i(0)
         if kind not in _EX_KINDS:
             raise DeckError(

@@ -1,0 +1,9 @@
+CM momwire#1230: SimNEC's NEC-5 writer shape - a five-field EX (no
+CM imaginary drive) and a bare one-field GE. 20 m dipole, free space.
+CE
+GW 1 21 -1.000000e+01 0.000000e+00 1.000000e+01 1.000000e+01 0.000000e+00 1.000000e+01 6.454260e-04
+GE 00
+FR 0 1 0 0 7.331794 1
+EX 0 1 11 0 1.000000e+00
+XQ
+EN

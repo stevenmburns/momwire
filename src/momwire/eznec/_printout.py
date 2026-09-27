@@ -602,12 +602,19 @@ class PatternBlock:
     power-radiated line; ``XNDA`` 1000 (0010, 0044) closes with neither.  The
     trailer is carried as three optional numbers rather than as a flag, so
     the renderer never has to know which form asked.
+
+    :attr:`range_m` and :attr:`range_phase_deg` are carried for an ``RP``
+    with a nonzero range field (momwire#1230, SimNEC's writer): the heading
+    then gains the ``RANGE=`` and ``EXP(-JKR)/R=`` lines and the field
+    columns read ``VOLTS/M``. The rows already carry the scaled values.
     """
 
     rows: tuple[PatternRow, ...] = ()
     average_power_gain: float | None = None
     solid_angle_pi: float | None = None
     power_radiated_4pi: float | None = None
+    range_m: float | None = None
+    range_phase_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -898,6 +905,14 @@ _PATTERN_COLUMNS: tuple[str, ...] = (
     " DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.       "
     "        VOLTS     DEGREES       VOLTS     DEGREES",
 )
+# The range form (momwire#1230), captured off the licensed engine with
+# RFLD = 1000: the unit becomes ``VOLTS/M`` one column wider, which eats a
+# space on each side, and the line keeps its length.
+_PATTERN_RANGE_UNITS = (
+    " DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.       "
+    "       VOLTS/M    DEGREES      VOLTS/M    DEGREES"
+)
+_PATTERN_RANGE_INDENT = " " * 54
 _SENSE_WIDTH = 6
 
 _RUN_TIME_LABEL = " RUN TIME ="
@@ -1379,7 +1394,23 @@ def _near_field(block: NearFieldBlock) -> list[str]:
 
 def _pattern(block: PatternBlock) -> list[str]:
     """One ``RP`` answer.  The 3-D trailer prints only when it is carried."""
-    lines = [_PATTERN_HEADING, "", *_PATTERN_COLUMNS]
+    if block.range_m is None:
+        lines = [_PATTERN_HEADING, "", *_PATTERN_COLUMNS]
+    else:
+        lines = [
+            _PATTERN_HEADING,
+            _PATTERN_RANGE_INDENT + "RANGE=" + _e(block.range_m, 13, 6) + " METERS",
+            _PATTERN_RANGE_INDENT
+            + "EXP(-JKR)/R="
+            + _e(1.0 / block.range_m, 12, 5)
+            + " AT PHASE"
+            + f"{block.range_phase_deg:7.2f}"
+            + " DEGREES",
+            "",
+            "",
+            *_PATTERN_COLUMNS[:2],
+            _PATTERN_RANGE_UNITS,
+        ]
     for row in block.rows:
         lines.append(
             f"{row.theta_deg:8.2f}{row.phi_deg:9.2f}"
