@@ -615,6 +615,9 @@ class PatternBlock:
     power_radiated_4pi: float | None = None
     range_m: float | None = None
     range_phase_deg: float | None = None
+    # Over a finite ground the range form's LOWER MEDIUM line (momwire#1237).
+    lower_range_mag: float | None = None
+    lower_range_phase_deg: float | None = None
 
 
 @dataclass(frozen=True)
@@ -931,6 +934,17 @@ def _e(value: float, width: int, digits: int) -> str:
     return f"{value:{width}.{digits}E}"
 
 
+def _e_fortran(value: float, width: int, digits: int) -> str:
+    """A ``1PEw.d`` cell as Fortran writes it for a THREE-digit exponent:
+    the ``E`` is dropped to keep the width (``1.75281-107``, captured on the
+    range form's LOWER MEDIUM line). Two-digit exponents are `_e`'s."""
+    text = f"{value:.{digits}E}"
+    mantissa, exponent = text.split("E")
+    if abs(int(exponent)) >= 100:
+        text = mantissa + exponent
+    return text.rjust(width)
+
+
 def _blank(count: int) -> list[str]:
     return [""] * count
 
@@ -970,7 +984,13 @@ def _card_echo(index: int, card: Card) -> str:
     """
     ints = "".join(f"{card.i(k):{4 if k == 0 else 5}d}" for k in range(4))
     reals = "".join(_e(card.f(4 + k), 13, 5) for k in range(6))
-    return f"{_CARD_ECHO_PREFIX}{index:3d}  {card.mnemonic}{ints}{reals}"
+    line = f"{_CARD_ECHO_PREFIX}{index:3d}  {card.mnemonic}{ints}{reals}"
+    if card.trailer is not None:
+        # A `GN` carrying its Sommerfeld-table file name (momwire#1084)
+        # echoes on a continuation line: the seventh real, then the name as
+        # A40 (captured off SimNEC's `GN 2 .. NOFILE`, momwire#1237).
+        line += "\n" + " " * 43 + _e(card.f(10), 13, 5) + "  " + card.trailer.ljust(40)
+    return line
 
 
 def _structure_specification(deck: Nec5Deck, data: RunData) -> list[str]:
@@ -1407,6 +1427,17 @@ def _pattern(block: PatternBlock) -> list[str]:
             + f"{block.range_phase_deg:7.2f}"
             + " DEGREES",
             "",
+        ]
+        if block.lower_range_mag is not None:
+            lines += [
+                " " * 39
+                + "LOWER MEDIUM - EXP(-JKR)/R="
+                + _e_fortran(block.lower_range_mag, 12, 5)
+                + " AT PHASE"
+                + f"{block.lower_range_phase_deg:7.2f}"
+                + " DEGREES",
+            ]
+        lines += [
             "",
             *_PATTERN_COLUMNS[:2],
             _PATTERN_RANGE_UNITS,
@@ -1438,6 +1469,113 @@ def _pattern(block: PatternBlock) -> list[str]:
             + " WATTS",
         ]
     return lines
+
+
+def _run_sections(data: RunData) -> list[str]:
+    """One run's results, from the network excitation through the patterns:
+    everything a run prints after the solve, each section followed by its
+    captured gap. A single-run printout prints it once; a multi-run deck
+    (momwire#1237) prints it once per ``XQ`` block."""
+    body: list[str] = []
+    if data.network_excitation:
+        body += [_NETWORK_EXCITATION_HEADING, "", *_PORT_COLUMNS]
+        body += [_port_row(row) for row in data.network_excitation]
+        body += _blank(_SECTION_GAP)
+    if data.sources:
+        body += [_ANTENNA_INPUT_HEADING, "", *_PORT_COLUMNS]
+        body += [_port_row(row) for row in data.sources]
+        body += _blank(_SECTION_GAP)
+    if data.currents:
+        body += _currents(data)
+        body += _blank(_SECTION_GAP)
+    if data.charges:
+        body += _charges(data)
+        body += _blank(_SECTION_GAP)
+    if data.power is not None:
+        body += _power_budget(data.power)
+        body += _blank(_SECTION_GAP)
+    for near in data.near_fields:
+        body += _near_field(near)
+        body += _blank(_SECTION_GAP)
+    for block in data.patterns:
+        body += _pattern(block)
+        body += _blank(_PATTERN_GAP)
+    return body
+
+
+def render_multi_printout(
+    deck: Nec5Deck, runs: list[RunData], *, basis: str | None = None
+) -> str:
+    """A multi-run NEC-5 printout (momwire#1237): one ``XQ`` block per run,
+    each block's cards replacing the previous block's sources, as the
+    licensed engine lays it out (captured off it, a SimNEC four-port deck):
+
+      * the structure and run 1's card echoes, then the frequency,
+        environment, loading and timing ONCE — the matrix is the run's and
+        every later block reuses it;
+      * run 1's results;
+      * per later block: one blank, that block's card echoes (numbered on
+        through the deck), ``_SECTION_GAP`` blanks, and its results;
+      * the ``EN`` echo and one ``RUN TIME``.
+
+    `deck` is the WHOLE deck (its text supplies every card echo); `runs` are
+    the per-block answers in block order.
+    """
+    cards = _post_ge_cards(deck.source_text)
+    terminator = cards[-1] if cards and cards[-1].mnemonic == "EN" else None
+    numbered = [(i, c) for i, c in enumerate(cards, start=1) if c is not terminator]
+    # The echo groups follow EXECUTION, not the XQ blocks: an RP runs the
+    # solution on the spot, so a block written `EX .. RP .. XQ` executes at
+    # its RP, and the XQ after it (nothing changed since) runs nothing and is
+    # echoed at the head of the next group, or before EN (captured: the
+    # two-port fixture, lines 205 and 335). A block with no RP executes at
+    # its XQ (the SimNEC Cardioid deck). A run closes at the first RP or XQ
+    # after a change.
+    blocks: list[list[tuple[int, Card]]] = []
+    pending: list[tuple[int, Card]] = []
+    changed = True
+    for item in numbered:
+        pending.append(item)
+        mnemonic = item[1].mnemonic
+        if mnemonic in ("RP", "XQ"):
+            if changed:
+                blocks.append(pending)
+                pending = []
+                changed = False
+        else:
+            changed = True
+    if len(blocks) != len(runs):
+        raise ValueError(f"{len(blocks)} executed runs and {len(runs)} answers")
+    first = runs[0]
+    body: list[str] = []
+    body += _structure_specification(deck, first)
+    body += _blank(_STRUCTURE_GAP)
+    body += [_card_echo(i, c) for i, c in blocks[0]]
+    body += _blank(_STRUCTURE_GAP)
+    body += _frequency(first)
+    body += _blank(_SECTION_GAP)
+    body += _environment(first)
+    body += _blank(_SECTION_GAP)
+    body += _loading(first)
+    body += _blank(_SECTION_GAP)
+    body += _timing(first)
+    body += _blank(_SECTION_GAP)
+    if first.networks:
+        body += _network_data(first)
+        body += _blank(_SECTION_GAP)
+    body += _run_sections(first)
+    for block, data in zip(blocks[1:], runs[1:], strict=True):
+        body.append("")
+        body += [_card_echo(i, c) for i, c in block]
+        body += _blank(_SECTION_GAP)
+        body += _run_sections(data)
+    body.append("")
+    body += [_card_echo(i, c) for i, c in pending]
+    if terminator is not None:
+        body.append(_card_echo(len(cards), terminator))
+    seconds = sum(r.run_seconds for r in runs)
+    body += ["", f"{_RUN_TIME_LABEL}{seconds:10.3f}"]
+    return render_header(deck.source_text, basis=basis) + "\n".join(body) + "\n"
 
 
 def render_printout(deck: Nec5Deck, data: RunData, *, basis: str | None = None) -> str:
@@ -1478,29 +1616,7 @@ def render_printout(deck: Nec5Deck, data: RunData, *, basis: str | None = None) 
     if data.networks:
         body += _network_data(data)
         body += _blank(_SECTION_GAP)
-    if data.network_excitation:
-        body += [_NETWORK_EXCITATION_HEADING, "", *_PORT_COLUMNS]
-        body += [_port_row(row) for row in data.network_excitation]
-        body += _blank(_SECTION_GAP)
-    if data.sources:
-        body += [_ANTENNA_INPUT_HEADING, "", *_PORT_COLUMNS]
-        body += [_port_row(row) for row in data.sources]
-        body += _blank(_SECTION_GAP)
-    if data.currents:
-        body += _currents(data)
-        body += _blank(_SECTION_GAP)
-    if data.charges:
-        body += _charges(data)
-        body += _blank(_SECTION_GAP)
-    if data.power is not None:
-        body += _power_budget(data.power)
-        body += _blank(_SECTION_GAP)
-    for near in data.near_fields:
-        body += _near_field(near)
-        body += _blank(_SECTION_GAP)
-    for block in data.patterns:
-        body += _pattern(block)
-        body += _blank(_PATTERN_GAP)
+    body += _run_sections(data)
     body.append("")
     if terminator is not None:
         body.append(_card_echo(len(cards), terminator))

@@ -134,6 +134,18 @@ def render(text: str, *, basis: str = _serve.BASIS) -> str:
     except DeckError as exc:
         return _printout.render_refusal(text, str(exc), basis=basis)
     try:
+        runs = _serve.split_runs(text)
+    except _serve.ServeRefusal as exc:
+        return _printout.render_refusal(text, str(exc), basis=basis)
+    if runs is not None:
+        # momwire#1237: one XQ block per run, each served as its own
+        # single-run deck and printed in the licensed multi-run layout.
+        try:
+            answers = [_serve.serve(parse_nec5(t), basis=basis) for t in runs]
+        except (DeckError, _serve.ServeRefusal) as exc:
+            return _printout.render_refusal(text, str(exc), basis=basis)
+        return _printout.render_multi_printout(deck, answers, basis=basis)
+    try:
         data = _serve.serve(deck, basis=basis)
     except _serve.ServeRefusal as exc:
         return _printout.render_refusal(text, str(exc), basis=basis)

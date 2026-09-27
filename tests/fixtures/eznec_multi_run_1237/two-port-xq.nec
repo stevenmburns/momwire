@@ -1,0 +1,15 @@
+CM momwire#1237: SimNEC's multi-run shape - a 2-port measured by driving each
+CM port in turn at 1 V with the other at 1e-10 V, one XQ block per port.
+CM Two parallel half-wave dipoles, free space, no RP: each XQ executes.
+CE
+GW 1 21 0.000000e+00 -5.200000e+00 1.000000e+01 0.000000e+00 5.200000e+00 1.000000e+01 1.000000e-03
+GW 2 21 4.282000e+00 -5.200000e+00 1.000000e+01 4.282000e+00 5.200000e+00 1.000000e+01 1.000000e-03
+GE 00
+FR 0 1 0 0 14.0 1
+EX 0 1 11 0 1.000000e+00
+EX 0 2 11 0 1.000000e-10
+XQ
+EX 0 1 11 0 1.000000e-10
+EX 0 2 11 0 1.000000e+00
+XQ
+EN
