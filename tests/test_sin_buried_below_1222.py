@@ -559,7 +559,9 @@ def test_a_buried_sweep_is_the_single_frequency_solves():
         assert rel(a, b) < 1e-12
 
 
-def test_a_crossing_junction_is_refused_by_name():
+def test_a_crossing_junction_is_served_since_stage_2():
+    """Refused by name through stage 1; served since #1223 (stage 2). The
+    stage-2 gates are `tests/test_sin_crossing_serve_1223.py`."""
     d = dict(
         wires=[
             np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 2.0)]),
@@ -572,14 +574,8 @@ def test_a_crossing_junction_is_refused_by_name():
         wire_radius=1e-3,
         **ground(),
     )
-    with pytest.raises(NotImplementedError) as err:
-        SinusoidalSolver(**d).compute_impedance()
-    assert sin_mod._CROSSING_JUNCTION_REFUSAL in str(err.value)
-    assert (
-        SinusoidalSolver.capabilities.refusal("buried", "crossing_junction")
-        == sin_mod._CROSSING_JUNCTION_REFUSAL
-    )
-    # The same deck is served by the family that has the crossing fill.
+    assert SinusoidalSolver.capabilities.refusal("buried", "crossing_junction") is None
+    assert np.isfinite(z_of(SinusoidalSolver, d))
     assert np.isfinite(z_of(SinusoidalGalerkinSolver, d))
 
 

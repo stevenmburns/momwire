@@ -234,6 +234,31 @@ _CROSSING_JUNCTION_REFUSAL = (
     "junction, or leave the buried wires detached"
 )
 
+# #1220 stage 2's scope (momwire#1223, decision 6): the point-matched
+# crossing node serves ONE two-member crossing per deck until the multi-node
+# and hub decks are measured. Named, with the routes that serve them.
+_CROSSING_MULTI_NODE_REFUSAL = (
+    "SinusoidalSolver serves one crossing node per deck (momwire#1223 stage 2); "
+    "a deck with several has not been measured on the point-matched lane yet. "
+    "Solve it with SinusoidalGalerkinSolver or BSplineSolver, which serve it"
+)
+_CROSSING_HUB_REFUSAL = (
+    "SinusoidalSolver serves a crossing node joining exactly two members, one "
+    "above and one below the interface (momwire#1223 stage 2); a buried hub has "
+    "not been measured on the point-matched lane yet. Solve it with "
+    "SinusoidalGalerkinSolver or BSplineSolver, which serve it"
+)
+# The dense point-observer block (stage 2's route by decision 5) holds every
+# (observer, source node) pair's kernels at once; past this many pairs per
+# direction the tiled route (momwire#1224, stage 3) is the one to use.
+_CROSSING_POINT_PAIRS_MAX = 4_000_000
+_CROSSING_POINT_SIZE_REFUSAL = (
+    "the point-matched crossing block is served dense (momwire#1223 stage 2) up "
+    "to {limit:,} observer x source-node pairs per direction, and this deck "
+    "needs {pairs:,}; the tiled route is momwire#1224. Solve it with "
+    "SinusoidalGalerkinSolver or BSplineSolver, or use fewer segments"
+)
+
 # No node_gaps kwarg exists on this solver at all (unlike BSplineSolver /
 # SinusoidalGalerkinSolver) — passing one is a plain TypeError, not a
 # NotImplementedError, so there is no raise to reuse this from.
@@ -694,7 +719,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
-            "buried+crossing_junction": _CROSSING_JUNCTION_REFUSAL,
+            "buried+crossing_multi_node": _CROSSING_MULTI_NODE_REFUSAL,
+            "buried+crossing_hub": _CROSSING_HUB_REFUSAL,
             "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
@@ -1244,12 +1270,28 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self._radius_per_wire,
         )
         self._refuse_coincident_crossing_members(crossing)
+        self._refuse_crossing_scope(crossing)
         return crossing
 
     def _node_adjacent_edge(self, w, end):
         """The member's node-adjacent polyline edge, node vertex FIRST."""
         pl = np.asarray(self.wires_polylines[w], dtype=float)
         return (pl[0], pl[1]) if end == "start" else (pl[-1], pl[-2])
+
+    def _refuse_crossing_scope(self, crossing):
+        """Stage 2's coverage on the point-matched lane (momwire#1223,
+        decision 6): one crossing node per deck, joining exactly two members.
+        SG serves every crossing geometry and overrides this away."""
+        if len(crossing) > 1:
+            raise NotImplementedError(
+                f"{len(crossing)} crossing junctions: {_CROSSING_MULTI_NODE_REFUSAL}"
+            )
+        for j in crossing:
+            if len(self.junctions[j]) != 2:
+                raise NotImplementedError(
+                    f"crossing junction {j} joins {len(self.junctions[j])} members: "
+                    f"{_CROSSING_HUB_REFUSAL}"
+                )
 
     def _refuse_coincident_crossing_members(self, crossing):
         """Refuse a crossing junction whose members run the same path.
@@ -5706,8 +5748,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             swept_mem_mb=self.swept_mem_mb,
         )
         N = int(geom["n_segs"])
-        seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
-        plan = self._mixed_serve_plan(geom, below, medium, False)
+        # A crossing deck (momwire#1223) takes the two-k view, whose node bases
+        # span the interface, and no transmitted grid: its cross rows are the
+        # point-observer blocks below, not a grid-read tensor.
+        crossing = self._is_crossing(geom)
+        seg_view = self._mixed_view(geom, below, medium)
+        plan = self._mixed_serve_plan(geom, below, medium, crossing)
         h = np.asarray(geom["seg_h"], dtype=np.float64)
         k_abs = np.where(below, abs(medium.k_m), medium.k_p)
         cos_shape = "cos-1" if float(np.min(k_abs * h)) < _WELL_SCALED_KD else "cos"
@@ -5744,7 +5790,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 P[np.ix_(idx, idx)] = b
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
-        for src_keep, obs_below in ((below, False), (~below, True)):
+        for src_keep, obs_below in () if crossing else ((below, False), (~below, True)):
             obs_keep = below if obs_below else ~below
             T = self._transmitted_tensor(
                 geom,
@@ -5766,8 +5812,41 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         G += Phi[1] @ Ms[1]
         G += Phi[2] @ Ms[2]
         del Phi
+        if crossing:
+            G += self._crossing_point_rows(geom, seg_view, medium, below)
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view
+
+    def _crossing_point_rows(self, geom, seg_view, medium, below):
+        """The crossing deck's cross rows (momwire#1223): each medium's
+        midpoints observing the other medium's part of every basis, through
+        `_crossing_fill.point_observer_block`. Returned as a full (N, N) to
+        ADD to the class fill, in its convention (measured: ratio 1 to the
+        free-space field tensor at eps~ = 1)."""
+        ctx = self._crossing_context(geom, seg_view, medium)
+        a_idx = np.nonzero(~below)[0]
+        b_idx = np.nonzero(below)[0]
+        ax_a = _crossing_fill.axis_data(ctx, a_idx)
+        ax_b = _crossing_fill.axis_data(ctx, b_idx)
+        for obs, src in ((a_idx, ax_b), (b_idx, ax_a)):
+            pairs = int(obs.size) * int(np.asarray(src["nodes"]).shape[0])
+            if pairs > _CROSSING_POINT_PAIRS_MAX:
+                raise NotImplementedError(
+                    _CROSSING_POINT_SIZE_REFUSAL.format(
+                        limit=_CROSSING_POINT_PAIRS_MAX, pairs=pairs
+                    )
+                )
+        centres = np.asarray(geom["seg_centers"])
+        tangents = np.asarray(geom["seg_tangents"])
+        n = int(geom["n_segs"])
+        out = np.zeros((n, n), dtype=np.complex128)
+        out[a_idx] = _crossing_fill.point_observer_block(
+            ctx, centres[a_idx], tangents[a_idx], ax_b, observers_above=True
+        )
+        out[b_idx] = _crossing_fill.point_observer_block(
+            ctx, centres[b_idx], tangents[b_idx], ax_a, observers_above=False
+        )
+        return out
 
     @staticmethod
     def _index_runs(idx):
@@ -6034,8 +6113,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.ground_eps, omega, self.eps, omega / self.c
         )
         if self._is_mixed(geom):
-            seg_view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
-            seg_view = self._with_crossing_wings(geom, seg_view, below, medium)
+            seg_view = self._mixed_view(geom, below, medium)
             k_seg = np.where(below, medium.k_m, medium.k_p).astype(np.complex128)
         else:
             seg_view = self._basis_coefs(geom, medium.k_m)
@@ -6328,8 +6406,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if self._is_mixed(geom):
             below = self._below_segments(geom)
             medium = self._fill_medium(geom)
-            view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
-            return self._with_crossing_wings(geom, view, below, medium)
+            return self._mixed_view(geom, below, medium)
         medium = self._fill_medium(geom)
         if medium is None:
             return self._basis_coefs(geom, self.k)
@@ -6337,17 +6414,30 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         view["k_entry"] = np.full(np.asarray(view["A"]).shape[0], medium.k_m)
         return view
 
+    def _mixed_view(self, geom, below, medium):
+        """The basis view of a mixed deck, per medium: D2's stitch on a
+        detached deck (no basis spans the interface), and on a crossing deck
+        the two-k view (momwire#1223), whose node bases DO span it and carry
+        the node condition. On the SG family the crossing view is the stitch
+        plus the wings, since its node is C0 (`_crossing_node_in_basis`)."""
+        if self._is_crossing(geom) and self._crossing_node_in_basis():
+            return self._basis_coefs(geom, np.where(below, medium.k_m, medium.k_p))
+        view = self._stitch_basis_coefs(geom, below, medium.k_p, medium.k_m)
+        return self._with_crossing_wings(geom, view, below, medium)
+
     def _with_crossing_wings(self, geom, view, below, medium):
-        """Hook: the crossing node's extra columns on a family that serves a
-        crossing junction. Identity here — the point-matched lane refuses a
-        crossing deck by name until #1220 stage 2."""
+        """Hook: the crossing node's extra columns on a family whose node is
+        C0 with wings (SG). Identity here: the point-matched node carries its
+        condition in the basis and has no extra columns (momwire#1223)."""
         return view
 
     def _serves_crossing(self):
         """Whether this family fills a CROSSING junction (a buried wire
-        joined to an above one in the plane). Not yet on the point-matched
-        lane (#1220 stage 2); `_wire_media` refuses the deck by name."""
-        return False
+        joined to an above one in the plane). The point-matched lane does
+        since momwire#1223 (#1220 stage 2): the node condition in the basis
+        (the two-k recipe) and the cross rows at point observers
+        (`_crossing_fill.point_observer_block`), within `_refuse_crossing_scope`."""
+        return True
 
     def currents_at_knots(self, alpha, s_array=None):
         """Per-wire complex current sampled at every mesh knot.

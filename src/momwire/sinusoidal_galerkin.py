@@ -3225,6 +3225,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         cj = self._crossing_junction_indices()
         return sum(len(self.junctions[j]) for j in sorted(cj))
 
+    def _refuse_crossing_scope(self, crossing):
+        """SG serves every crossing geometry the shared rules admit
+        (momwire#980): the point-matched lane's stage-2 limits are not its."""
+
     def _crossing_node_in_basis(self):
         """SG's crossing node is C0 with no condition in the basis: continuity
         and the slope emerge from the wings, the by-parts ends and the corner
