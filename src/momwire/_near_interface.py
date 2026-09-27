@@ -809,6 +809,31 @@ def point_keys_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p
     return out
 
 
+def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
+    """The point family at every (ρ, z, z′) of an array, with the thin-wire
+    offset folded in exactly as `radius_tables` folds it (ρ_eff = hypot(ρ, a),
+    `radius_fold`). Returns {key: array shaped like `rho`} over POINT_KEYS.
+
+    ∂ρ is in ρ_eff, so the observer gradient's horizontal part is
+    (Δh/ρ_eff)·∂ρ at the pair's own ρ_eff: the chain factor ρ/ρ_eff and the
+    unit vector Δh/ρ together, never a division by a ρ that can be 0.
+
+    Dense and memo-free (stage 2 is the dense point block by decision; the
+    tiled and memoised routes are stage 3): one `point_keys_columns` column
+    per distinct ρ_eff, its members paired with their own z′.
+    """
+    rho_eff = radius_fold(rho, wire_radius)
+    z = np.broadcast_to(np.asarray(z, dtype=float), rho_eff.shape)
+    zp = np.broadcast_to(np.asarray(zp, dtype=float), rho_eff.shape)
+    flat_r, flat_z, flat_zp = rho_eff.ravel(), z.ravel(), zp.ravel()
+    out = np.empty((flat_r.size, N_POINT_KEYS), dtype=np.complex128)
+    uniq, inv = np.unique(flat_r, return_inverse=True)
+    for i, r in enumerate(uniq):
+        sel = np.flatnonzero(inv == i)
+        out[sel] = point_keys_columns(eps_t, k2, r, flat_z[sel], flat_zp[sel], p=p)
+    return {key: out[:, i].reshape(rho_eff.shape) for i, key in enumerate(POINT_KEYS)}
+
+
 # The array memo's hash: the three coordinates' IEEE bit patterns folded into
 # one uint64 (odd multipliers, xor, a final xor-shift so the high bits reach
 # the low ones). It only ORDERS the store; equality is always decided on the
