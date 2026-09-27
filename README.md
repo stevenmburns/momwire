@@ -124,6 +124,10 @@ momwire-nec2c --selftest                          # PASS / FAIL, no checkout nee
 momwire-nec2c --basis sinusoidal < dipole.nec     # or run a deck by hand
 ```
 
+SimNEC's **NEC-5** slot takes the `momwire-nec5[-<basis>]` commands instead
+(`momwire-nec5-razor-2p` is NEC-5's own formulation): SimNEC picks the deck
+syntax from `nec2c` or `nec5` in the engine's path.
+
 Setup, the two filename rules SimNEC enforces, `--basis`, the caching flags
 and what refusals look like:
 **[momwire.dev/reference/portal-usage/](https://momwire.dev/reference/portal-usage/)**.

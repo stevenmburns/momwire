@@ -118,8 +118,9 @@ momwire#821 the portal refuses the name at configure time rather than serve
 that — `momwire-nec2c-razor-nec5` and `momwire-nec2c-razor-2p`, which
 shipped from 0.36.1 to 0.46.0, are gone, and a copy you kept fails the
 version probe with the reason. Razor is served where its grid is the deck's:
-the EZNEC drop-in (`momwire-eznec-razor-2p`), whose dialect writes a source
-at a node.
+the EZNEC drop-in (`momwire-eznec-razor-2p`) and SimNEC's own NEC-5 engine
+(`momwire-nec5-razor-2p`, [below](#simnecs-nec-5-engine)), whose dialect
+writes a source at a node.
 
 **On a tapered or stepped-radius wire, `sinusoidal` and
 `sinusoidal-galerkin` are NEC-2-identified, not NEC-5-accurate.** Both ride
@@ -151,6 +152,38 @@ It always is — and the named commands above exist precisely so that the file
 that is the engine; two entries differing only in name are two engines. Both
 filename rules above apply to every spelling, shipped or hand-made: keep
 `nec2c` in the name, and keep `out` out of the whole path.
+
+## SimNEC's NEC-5 engine
+
+SimNEC also has a NEC-5 engine slot, and momwire fills it too (since 0.66.0).
+SimNEC decides which deck **syntax** to write from the engine's path, not from
+anything the engine says: a path containing `nec2c` gets NEC-2 decks, one
+containing `nec5` gets NEC-5 decks. So the NEC-5 slot takes a different family
+of commands, and the `momwire-nec2c` names above will not work there:
+
+```bash
+momwire-nec5                        # the default — degree-2 B-spline (bs2)
+momwire-nec5-razor-2p               # NEC-5's own formulation (tent basis, razor testing)
+momwire-nec5-bspline-d1             # degree-1 B-spline
+momwire-nec5-sinusoidal-galerkin    # sinusoidal basis, tested variationally
+momwire-nec5-hmatrix                # bs2, hierarchical (ACA) solve
+momwire-nec5-arrayblock             # bs2, element-block/FFT solve
+```
+
+`razor-2p` is the one to pick for agreement with the licensed NEC-5: it runs
+the same algorithm, and in SimNEC it reproduces the licensed engine's
+impedances to about 0.01 Ω on the examples we have run. There is no
+`sinusoidal` or `pulse` command in this family: a NEC-5 deck puts its source
+at a **knot**, and those two bases can only feed a segment centre, so they
+would refuse every deck SimNEC writes.
+
+Setup is the same as for the NEC-2 slot: `which momwire-nec5-razor-2p` and give
+SimNEC that absolute path (one without spaces is safest). Its `-version` probe
+answers `NEC5momwire.<major>.<minor>`. These commands run the same warm engine
+as the EZNEC drop-in, so a run after the first answers in milliseconds, and
+SimNEC's N-port measurement (one run block per port in a single deck) is served
+as NEC-5 serves it. On Windows without Python, the EZNEC drop-in zip ships
+`momwire-nec5.exe` and `momwire-nec5-razor-2p.exe` beside its EZNEC launchers.
 
 ## The version probe
 
