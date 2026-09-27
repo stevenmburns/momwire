@@ -112,6 +112,20 @@ momwire-nec2c-shared = "momwire_nec2c_client:main"
 # `python -m momwire.eznec --serve` daemon; the basis rides on a copy's own
 # filename past the `eznec-` marker, exactly as the frozen twins spell it.
 momwire-eznec-client = "momwire_eznec_client:main"
+# The NEC-5 family (momwire#1239): the same thin client under names carrying
+# `nec5`, which is what SimNEC reads to write NEC-5 decks. The basis rides on
+# the name past `nec5-`; plain `momwire-nec5` is the default basis, and
+# `momwire-nec5-razor-2p` is NEC-5's own formulation twin. No `sinusoidal` or
+# `pulse`: NEC-5 drives its sources at KNOTS, and those two bases feed only
+# at segment centres, so they refuse every NEC-5 deck (measured on SimNEC's
+# own decks; the refusal names the basis).
+momwire-nec5 = "momwire_eznec_client:main"
+momwire-nec5-razor-2p = "momwire_eznec_client:main"
+momwire-nec5-bspline = "momwire_eznec_client:main"
+momwire-nec5-bspline-d1 = "momwire_eznec_client:main"
+momwire-nec5-sinusoidal-galerkin = "momwire_eznec_client:main"
+momwire-nec5-hmatrix = "momwire_eznec_client:main"
+momwire-nec5-arrayblock = "momwire_eznec_client:main"
 # The named engines (momwire#528): every basis as its own command, so a
 # filename-only host dialog (SimNEC's, and Windows generally — no symlinks
 # needed) selects the solver by pointing at the right name. No code behind
