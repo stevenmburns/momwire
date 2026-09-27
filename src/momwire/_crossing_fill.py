@@ -2362,6 +2362,93 @@ def _block_preamble(ctx):
     return eps_t, k_p, gz, c1, _near_interface.ProductMemo()
 
 
+def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
+    """The cross block at POINT observers (momwire#1223 U4): the transmitted
+    field of every basis's part on the source axis `src`, tested as t̂·E at
+    each observer — the point-matched lane's crossing rows, one per observer.
+    Returns (n_obs, src["n_basis"]), c1-scaled like the other cross blocks.
+
+    Nothing is integrated by parts on the observer side; the source side is,
+    exactly as the Galerkin trunk does it, so the source charge and the
+    source-end terms are the Galerkin ones. Derived from momwire#956's dyad
+    (E^V = c1[k²V ẑ − ∇W − ∇(∂z′V)], E^Hx = c1[U x̂ + ∂xW ẑ + ∇(∂xV)]), for
+    an observer tangent a and a source tangent b with source current I(s):
+
+    **Forward** (observers ABOVE, in the z slot; source below): with the
+    Galerkin trunk's own conversion of a_z(b_h·∇_h W) to a charge term,
+
+        c1 Σ_n [ U (a_h·b_h) + a_z(k²V + ∂z′W) b_z + a_z W I′
+                 − (a·∇W) b_z + (a·∇V) I′ ] + c1 Σ_e σ fv [−a_z W − a·∇V]
+
+    **Reversed** (observers BELOW, in the z′ slot; source above), by dyadic
+    reciprocity G(o, s) = G(s, o)ᵀ read off the same kernels:
+
+        c1 Σ_n [ U (a_h·b_h) + a_z k²V b_z − (a_h·Δ̂)∂ρW b_z + a_z W I′
+                 + (a·∇V) I′ ] + c1 Σ_e σ fv [−a_z W − a·∇V]
+
+    with ∇ taken at the OBSERVER (∂z in the forward block, ∂z′ in the
+    reversed; the horizontal part (a_h·Δh)/ρ_eff·∂ρ, Δh = observer − source,
+    at the pair's own ρ_eff), `I′` the source charge weight (`Fd`·w), and the
+    end sum over the source axis's signed ends. No corner and no test ends:
+    both are Galerkin by-parts terms a point test never has (the razor
+    precedent, `corner=False` on path-tested rows).
+
+    Dense over (observers × source nodes) — stage 2's scope by decision;
+    tiles are stage 3.
+    """
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
+    k2sq = k_p * k_p
+    a_wire = float(ctx.a_wire)
+    P = np.asarray(obs_pts, dtype=float)
+    A = np.asarray(obs_t, dtype=float)
+    ax, ay, az = A[:, 0][:, None], A[:, 1][:, None], A[:, 2][:, None]
+
+    def kernels(pts):
+        pts = np.asarray(pts, dtype=float)
+        dx = P[:, None, 0] - pts[None, :, 0]
+        dy = P[:, None, 1] - pts[None, :, 1]
+        rho = np.hypot(dx, dy)
+        z_o = np.broadcast_to((P[:, 2] - gz)[:, None], rho.shape)
+        z_s = np.broadcast_to((pts[:, 2] - gz)[None, :], rho.shape)
+        z, zp = (z_o, z_s) if observers_above else (z_s, z_o)
+        six = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
+        pk = _near_interface.point_radius_tables(eps_t, k_p, rho, z, zp, a_wire)
+        g = (ax * dx + ay * dy) / _near_interface.radius_fold(rho, a_wire)
+        return six, pk, g
+
+    def grad_v(six, pk, g):
+        dz = pk["gzV"] if observers_above else pk["gzpV"]
+        return az * dz + g * pk["gRhoV"]
+
+    six, pk, g = kernels(src["nodes"])
+    U, V, W = six["U"], six["V"], six["W"]
+    a_grad_v = grad_v(six, pk, g)
+    if observers_above:
+        a_grad_w = az * six["dzW"] + g * pk["gRhoW"]
+        k3 = az * (k2sq * V + six["dzpW"]) - a_grad_w
+    else:
+        k3 = az * k2sq * V - g * pk["gRhoW"]
+    k4 = az * W + a_grad_v
+
+    tx, ty, tz = np.asarray(src["t"], dtype=float).T
+    w = np.asarray(src["w"])
+    F, Fd = src["F_csr"], src["Fd_csr"]
+    # Σ_n K[o, n]·weight_n·F[j, n], as F @ (K·weight)ᵀ: the CSR on the left.
+    t = (F @ (ax * U * (w * tx)).T) + (F @ (ay * U * (w * ty)).T)
+    t = t + (F @ (k3 * (w * tz)).T) + (Fd @ (k4 * w).T)
+    t = np.asarray(t).T
+
+    ends = src["ends"]
+    if ends:
+        e_pts = np.array([pt for pt, _sign, _fv in ends])
+        six_e, pk_e, g_e = kernels(e_pts)
+        e_term = -az * six_e["W"] - grad_v(six_e, pk_e, g_e)  # (n_obs, n_ends)
+        for i, (_pt, sign, fv) in enumerate(ends):
+            nz = np.flatnonzero(fv)
+            t[:, nz] += (sign * e_term[:, i])[:, None] * fv[nz][None, :]
+    return c1 * t
+
+
 def cross_complete_block(ctx, A, B, *, corner=True, support=None, into=None):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
