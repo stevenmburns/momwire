@@ -596,6 +596,219 @@ def six_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
     return out
 
 
+# --------------------------------------------------------------------------
+# The point-observer key family (momwire#1223 U3a)
+# --------------------------------------------------------------------------
+#
+# The point-matched crossing node (#1220 stage 2) tests the transmitted field
+# at a POINT, so where the Galerkin trunk moves the gradient off the observer
+# by parts it needs the gradient itself. Four surfaces, a family of their own
+# by decision (#1223: the six shared keys, and every other lane's memo and
+# sheets, do not widen):
+#
+#   gRhoV  ∂ρ V_T    J₀(λρ) → −λ J₁(λρ) = −λ²ρ·(J₁(λρ)/λρ)
+#   gzV    ∂z V_T    −γ₊ Ṽ
+#   gRhoW  ∂ρ W_T    J₀(λρ) → −λ J₁(λρ), on W̃
+#   gzpV   ∂z′ V_T   +γ₋ Ṽ   (NOT `dzpV`, which is the mixed ∂z∂z′V)
+#
+# ∂ρ is the derivative in the ρ the kernel is EVALUATED at; a consumer that
+# evaluates at ρ_eff = √(ρ² + a²) owes the chain factor ρ/ρ_eff itself. The
+# ρ keys are an exact 0 at ρ = 0 (a coaxial pair, where ρ̂ is undefined): the
+# J₁(x)/x spelling carries the ρ explicitly. Same contour, same head/mid/tail
+# decisions and same refusals as `six_point`/`six_columns`; the J₁ rows take
+# J₁ in the head and mid and H₁ in the Hankel halves of the tail.
+POINT_KEYS = ("gRhoV", "gzV", "gRhoW", "gzpV")
+POINT_KEY_RPOW = (2, 2, 2, 2)
+N_POINT_KEYS = len(POINT_KEYS)
+
+
+def _point_core(lam, z, zp, k_p, k_m):
+    """The point family's spectral factors × (2 Ẽ λ), WITHOUT the Bessel
+    factor, split by the Bessel order each one takes: (j0 rows (2, n): gzV,
+    gzpV; j1 rows (2, n): the ρ-derivatives' Ṽ, W̃ times −λ, still owing
+    λρ·(J₁(λρ)/λρ))."""
+    lam = np.asarray(lam, dtype=np.complex128)
+    g_p = _gamma(lam, k_p)
+    g_m = _gamma(lam, k_m)
+    e = 2.0 * np.exp(g_m * zp - g_p * z) * lam
+    v = e / (k_m * k_m * g_p + k_p * k_p * g_m)
+    w = (g_p - g_m) * v
+    return np.stack([-g_p * v, g_m * v]), np.stack([-lam * v, -lam * w])
+
+
+def _point_order(j0_rows, j1_rows):
+    """Stack the two Bessel groups back into POINT_KEYS order."""
+    return np.stack([j1_rows[0], j0_rows[0], j1_rows[1], j0_rows[1]])
+
+
+def point_keys_point(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
+    """The four point-observer integrals at ONE (ρ, z, z′), z ≥ 0 ≥ z′,
+    R > 0: `six_point`'s walk, the J₁ rows riding it. Returns (4,) complex
+    in POINT_KEYS order."""
+    k_p = float(k2)
+    k_m = k_medium(complex(eps_t), k_p)
+    rho, z, zp = float(rho), float(z), float(zp)
+    if not (z >= 0.0 and zp <= 0.0):
+        raise ValueError(f"need z >= 0 >= zp, got {(z, zp)!r}")
+    s = z - zp
+    if rho < 0.0 or s + rho <= 0.0:
+        raise ValueError(f"need R > 0, got rho={rho!r}, s={s!r}")
+
+    # `six_point`'s extents, verbatim.
+    kk = max(k_p, abs(k_m))
+    a_head = 1.1 * kk
+    lam_top = lam_mult * kk
+    if s > 0.0 and _FAR_PAIR_KILL / s < lam_top:
+        lam_kill = _FAR_PAIR_KILL / s
+        a_head = max(2.2 * k_p, min(a_head, lam_kill))
+        lam_top = max(1.5 * a_head, lam_kill)
+
+    def f_core(lam):
+        j0r, j1r = _point_core(lam, z, zp, k_p, k_m)
+        return _point_order(j0r, j1r)
+
+    def f_bessel(lam):
+        j0r, j1r = _point_core(lam, z, zp, k_p, k_m)
+        b0, b1x = _bessel_j0_j1x(lam * rho)
+        return _point_order(j0r * b0, j1r * (lam * rho) * b1x)
+
+    head, _hp = _head(
+        f_bessel,
+        a_head,
+        rho,
+        (k_p, abs(k_m.real)),
+        rtol,
+        _ADAPT_DEPTH,
+        _DETOUR,
+        _GX,
+        _GW,
+    )
+    mid = _adaptive_segment(f_bessel, a_head, lam_top, rtol, _ADAPT_DEPTH, _GX, _GW)
+
+    scale = np.sqrt(2.0) / (s + rho)
+    if rho == 0.0:
+        # J₀(0) = 1 and the ρ rows are an exact 0 there (J₁(0) = 0).
+        def one_zero(lam):
+            n = np.shape(lam)
+            one, zero = np.ones(n), np.zeros(n)
+            return np.stack([zero, one, zero, one])
+
+        tail = _ray_integral(f_core, one_zero, lam_top, _RAY, scale, rtol)
+    else:
+
+        def halves(kind):
+            fn = hankel1 if kind == 1 else hankel2
+
+            def factor(lam):
+                h0 = 0.5 * fn(0, lam * rho)
+                h1 = 0.5 * fn(1, lam * rho)
+                return np.stack([h1, h0, h1, h0])
+
+            return factor
+
+        up = _ray_integral(f_core, halves(1), lam_top, _RAY, scale, rtol)
+        dn = _ray_integral(f_core, halves(2), lam_top, np.conj(_RAY), scale, rtol)
+        tail = up + dn
+    return head + mid + tail
+
+
+def _column_rule_j1(rho, k_p, k_m, s_min, lam_mult=_LAM_MULT, p=None):
+    """`_column_rule`'s nodes with a SECOND weight vector for the J₁ rows:
+    (λ, w₀, w₁), w₀ the J₀/H₀ weights `_column_rule` returns, w₁ the same
+    path and derivative times λρ·(J₁/λρ) in the head and mid and ½H₁ in the
+    Hankel halves. The nodes are `_column_rule`'s own, so a column of the
+    point family and a column of the six share them exactly."""
+    lam, w0 = _column_rule(rho, k_p, k_m, s_min, lam_mult=lam_mult, p=p)
+    # Undo the J₀/H₀ factor node by node and apply the J₁/H₁ one: the
+    # weights are path weight × derivative × Bessel, and only the last
+    # changes. Recomputed rather than divided out, which would fail at a J₀
+    # zero; the path weight and derivative are recovered from the rule's own
+    # pieces, rebuilt below exactly as `_column_rule` builds them.
+    p = _COLUMN_P if p is None else int(p)
+    kk = max(k_p, abs(k_m))
+    a_head = 1.1 * kk
+    lam_top = lam_mult * kk
+    if s_min > 0.0 and _FAR_PAIR_KILL / s_min < lam_top:
+        lam_kill = _FAR_PAIR_KILL / s_min
+        a_head = max(2.2 * k_p, min(a_head, lam_kill))
+        lam_top = max(1.5 * a_head, lam_kill)
+    H = min(0.35 * a_head, _DETOUR / max(rho, 1e-12))
+    H = max(H, 1e-6 * a_head)
+    edges = {0.0, a_head}
+    for i in range(1, 7):
+        edges.add(a_head * i / 7.0)
+    for mk in (k_p, abs(k_m.real)):
+        for w in (0.0, -0.15, 0.15, -0.4, 0.4):
+            v = mk * (1.0 + w)
+            if 0.0 < v < a_head:
+                edges.add(v)
+    t, wt = _fixed_gauss(_sub_seed(sorted(edges), rho), p)
+    lam_h = t + 1j * H * np.sin(np.pi * t / a_head)
+    dl_h = 1.0 + 1j * H * (np.pi / a_head) * np.cos(np.pi * t / a_head)
+    _b0, b1x = _bessel_j0_j1x(lam_h * rho)
+    w1_h = wt * dl_h * (lam_h * rho) * b1x
+    t, wt = _fixed_gauss(_sub_seed([a_head, lam_top], rho), p)
+    lam_m = t.astype(np.complex128)
+    _b0, b1x = _bessel_j0_j1x(lam_m * rho)
+    w1_m = wt * (lam_m * rho) * b1x
+    scale = np.sqrt(2.0) / (s_min + rho)
+    step = min(0.25 * scale, lam_top)
+    t_edges = [0.0]
+    while t_edges[-1] < _FAR_PAIR_KILL * scale:
+        t_edges.append(t_edges[-1] + step)
+        step *= 2.0
+    tt, wtt = _fixed_gauss(t_edges, p)
+    if rho == 0.0:
+        lam_t = lam_top + tt * _RAY
+        w1_t = np.zeros(tt.size, dtype=np.complex128)
+    else:
+        up = lam_top + tt * _RAY
+        dn = lam_top + tt * np.conj(_RAY)
+        lam_t = np.concatenate([up, dn])
+        w1_t = np.concatenate(
+            [
+                wtt * _RAY * 0.5 * hankel1(1, up * rho),
+                wtt * np.conj(_RAY) * 0.5 * hankel2(1, dn * rho),
+            ]
+        )
+    w1 = np.concatenate([w1_h, w1_m, w1_t])
+    # The rebuild must be `_column_rule`'s own path, node for node: a J₁
+    # weight on a different node than its J₀ twin would be a silent error.
+    if not np.array_equal(np.concatenate([lam_h, lam_m, lam_t]), lam):
+        raise AssertionError("the J1 weights no longer follow _column_rule's nodes")
+    return lam, w0, w1
+
+
+def point_keys_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p=None):
+    """The four point-observer integrals for ONE ρ column, `six_columns`'
+    contract and refusals. Returns (len(zs), 4) complex in POINT_KEYS order."""
+    k_p = float(k2)
+    k_m = k_medium(complex(eps_t), k_p)
+    rho = float(rho)
+    zs = np.atleast_1d(np.asarray(zs, dtype=float))
+    zps = np.broadcast_to(np.asarray(zp, dtype=float), zs.shape)
+    s = _refuse_bad_members(rho, zs, zps)
+    lam, w0, w1 = _column_rule_j1(
+        rho, k_p, k_m, float(np.min(s)), lam_mult=lam_mult, p=p
+    )
+    g_p = _gamma(lam, k_p)
+    g_m = _gamma(lam, k_m)
+    v = 2.0 * lam / (k_m * k_m * g_p + k_p * k_p * g_m)
+    wv = (g_p - g_m) * v
+    F = np.stack([-lam * v * w1, -g_p * v * w0, -lam * wv * w1, g_m * v * w0])
+    out = np.empty((zs.size, N_POINT_KEYS), dtype=np.complex128)
+    step = max(1, _COLUMN_Z_CHUNK // lam.size)
+    with np.errstate(under="ignore"):
+        for zp_one in np.unique(zps):
+            rows = np.flatnonzero(zps == zp_one)
+            base = g_m * zp_one
+            for i0 in range(0, rows.size, step):
+                sel = rows[i0 : i0 + step]
+                e = np.exp(base[None, :] - g_p[None, :] * zs[sel, None])
+                out[sel] = e @ F.T
+    return out
+
+
 # The array memo's hash: the three coordinates' IEEE bit patterns folded into
 # one uint64 (odd multipliers, xor, a final xor-shift so the high bits reach
 # the low ones). It only ORDERS the store; equality is always decided on the
