@@ -3225,6 +3225,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         cj = self._crossing_junction_indices()
         return sum(len(self.junctions[j]) for j in sorted(cj))
 
+    def _crossing_node_in_basis(self):
+        """SG's crossing node is C0 with no condition in the basis: continuity
+        and the slope emerge from the wings, the by-parts ends and the corner
+        (momwire#980 D3), so its members stay grounded-junction ends."""
+        return False
+
     def _n_extra_cols(self):
         """Basis columns beyond the one-per-segment expansion: the junction
         ports' (#209) and the crossing nodes' wings (#980 D3)."""

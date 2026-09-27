@@ -423,6 +423,37 @@ def _basis_value(sigAC, B, sigC, k, xi):
     return sigAC + B * np.sin(k * xi) - 2.0 * sigC * (half * half)
 
 
+def _same_k(a, b):
+    """Cache-key equality for a scalar k or a per-segment k array."""
+    if np.ndim(a) != np.ndim(b):
+        return False
+    if np.ndim(a) == 0:
+        return a == b
+    return np.shape(a) == np.shape(b) and bool(np.array_equal(a, b))
+
+
+def _edge_weight(a_const, k, basis, seg):
+    """The neighbour constant of each junction edge under the two-k recipe
+    (momwire#1223): NEC's a_j on an edge within one medium, and
+    ``w = a_i·k_j/k_i`` on an edge that crosses the interface.
+
+    Why that `w`: an extension entry on neighbour j carries slope w·Q·k_j at
+    the node and the basis's own segment i carries a_i·Q·k_i, so the ratio
+    of the two sides' slopes is w·k_j/(a_i·k_i). Setting it to k_j²/k_i²
+    imposes I'_above = I'_below/eps~ (eps~ = k_m²/k_p²), the decided "correct"
+    node condition; the edge's P atom takes the same w, so the self value at
+    the node still equals the inflow and the current is continuous. It is
+    radius-free by decision (the condition is on the current, which carries
+    no radius), and at eps~ = 1 it is the ordinary junction exactly.
+
+    `a_const` and `k` are per segment; `basis`/`seg` index an edge list.
+    """
+    a_i = a_const[basis]
+    k_i = k[basis]
+    k_j = k[seg]
+    return np.where(k_i != k_j, a_i * k_j / k_i, a_const[seg])
+
+
 def _entry_k(seg_view, s, e, k):
     """The k entries `s:e` of `seg_view` were built at: their own
     `k_entry` on a mixed deck's stitched view, else the scalar `k`.
@@ -1110,6 +1141,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         family; SG adds its junction ports and crossing wings."""
         return 0
 
+    def _crossing_node_in_basis(self):
+        """Whether this family imposes the crossing node's condition in the
+        basis (momwire#1223). The point-matched lane does: I continuous and
+        I'_above = I'_below/eps~, through `_basis_coefs`' two-k recipe on
+        ordinary junction edges. SG does not: its node is C0 and the
+        condition emerges from its Galerkin wings and corner."""
+        return True
+
     def _is_crossing(self, geom):
         """Does this deck have a junction that CROSSES the interface?
 
@@ -1405,6 +1444,17 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 pt = pl0[0] if end0 == "start" else pl0[-1]
                 if abs(pt[2] - gz) <= _ground_spec.ground_touch_tol(pl0):
                     grounded_junctions.add(j_i)
+        # A CROSSING junction is grounded too (its node is in the plane), and
+        # the family decides what it becomes (momwire#1223): SG leaves it the
+        # C0 node its wings and corner complete; the point-matched lane
+        # imposes the node condition IN THE BASIS, so there it is an ordinary
+        # junction with neighbour edges, and `_basis_coefs`' two-k recipe
+        # weights the edges that cross the interface. Empty on the base until
+        # stage 2 lifts its crossing refusal (`_serves_crossing`).
+        crossing_j = (
+            self._crossing_junction_indices() if grounded_junctions else frozenset()
+        )
+        edges_at = crossing_j if self._crossing_node_in_basis() else frozenset()
 
         # Junction neighbours: small Python loop (junctions count is O(1)
         # in geometry size — 2-4 junctions on typical antennas, with K=2-6
@@ -1417,7 +1467,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         junc_np_seg: list[int] = []
         junc_np_sigma: list[int] = []
         for j_i, jn in enumerate(self.junctions):
-            if j_i in grounded_junctions:
+            if j_i in grounded_junctions and j_i not in edges_at:
                 continue
             # (segment_idx, which_end_of_segment_is_at_node) for every
             # wire-end at this junction.
@@ -1577,8 +1627,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # is ground-connected INSTEAD of inter-connected (its junction
             # entries were skipped above) — the members couple through
             # their images.
-            crossing_j = self._crossing_junction_indices()
             for j_i in grounded_junctions:
+                if j_i in edges_at:
+                    # The point-matched crossing node: an ordinary junction,
+                    # its members connected by the edges emitted above.
+                    continue
                 # A CROSSING junction (momwire#980 D3) takes the interior
                 # value-1 normalisation with NO P-sum atom: no coupling to a
                 # partner (its junction entries were skipped above, like every
@@ -1695,11 +1748,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         else:
             a = self._seg_radius(geom)
             a_key = self._radius_per_wire.tobytes()
+        # `k` is the solve's scalar wavenumber, or (momwire#1223) one per
+        # SEGMENT for a crossing deck, whose two sides run at k_p and k_m.
+        per_seg_k = np.ndim(k) == 1
+        if per_seg_k:
+            k = np.asarray(k, dtype=np.complex128)
         cached = self._cached_basis
         if (
             cached is not None
             and cached[0] is geom
-            and cached[1] == k
+            and _same_k(cached[1], k)
             and cached[2] == a_key
         ):
             return cached[3]
@@ -1747,9 +1805,18 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Per-basis P_minus[i] = Σ_{j ∈ N⁻(i)} atom[j], via scatter-sum on
         # the flat nm arrays. Same for P_plus[i] over N⁺.
         P_minus_arr = np.zeros(n_segs, dtype=P_minus_atom.dtype)  # cplx at k_m (#980)
-        np.add.at(P_minus_arr, nm_basis, P_minus_atom[nm_seg])
         P_plus_arr = np.zeros(n_segs, dtype=P_minus_atom.dtype)
-        np.add.at(P_plus_arr, np_basis, -P_minus_atom[np_seg])
+        if per_seg_k:
+            # The two-k recipe (momwire#1223): each edge's neighbour constant
+            # is `w`, and the atom is w·tan(k_jΔ_j/2) at the neighbour's own k.
+            w_nm = _edge_weight(a_const, k, nm_basis, nm_seg)
+            w_np = _edge_weight(a_const, k, np_basis, np_seg)
+            tan_half = sin_kd_2 / cos_kd_2
+            np.add.at(P_minus_arr, nm_basis, w_nm * tan_half[nm_seg])
+            np.add.at(P_plus_arr, np_basis, -w_np * tan_half[np_seg])
+        else:
+            np.add.at(P_minus_arr, nm_basis, P_minus_atom[nm_seg])
+            np.add.at(P_plus_arr, np_basis, -P_minus_atom[np_seg])
 
         # Ground junction (#151): an end at the ground plane is connected
         # to its own image — same length, same radius — so the plane side's
@@ -1922,8 +1989,11 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # N⁻ neighbour entries (Eqs 43-45). Basis i contributes at seg j
         # (the j-side neighbour) using Q_minus[i] for the magnitude and the
         # NEIGHBOUR segment's a-constant (a_const[nm_seg], per TBF).
-        a_nm = a_const if np.ndim(a_const) == 0 else a_const[nm_seg]
-        a_np = a_const if np.ndim(a_const) == 0 else a_const[np_seg]
+        if per_seg_k:
+            a_nm, a_np = w_nm, w_np
+        else:
+            a_nm = a_const if np.ndim(a_const) == 0 else a_const[nm_seg]
+            a_np = a_const if np.ndim(a_const) == 0 else a_const[np_seg]
         nm_Q = Q_minus_arr[nm_basis]
         nm_A = a_nm * nm_Q / sin_kd[nm_seg]
         nm_B = a_nm * nm_Q / (2.0 * cos_kd_2[nm_seg])
@@ -1972,6 +2042,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "AC": all_AC[order],
             "sigma": all_sigma[order],
         }
+        if per_seg_k:
+            # Each entry's shape is written at its own segment's k, which is
+            # what `_readout_view`, the evaluators and the sampler read.
+            seg_view["k_entry"] = k[all_seg[order]]
         self._cached_basis = (geom, k, a_key, seg_view)
         return seg_view
 
