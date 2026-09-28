@@ -5944,8 +5944,28 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         coef = fg.image_coefficient
         n = idx.size
         out = [np.empty((n, n), dtype=np.complex128) for _ in range(3)]
+        # Bands of at most `chunk` observer rows, budgeted like the
+        # single-medium fill's (`_fill_row_bytes`, over the class's n
+        # sources). A class's runs are whole wires, so on a buried radial
+        # field one run is nearly the whole class, and walking runs whole
+        # held Φ, the image and the remainder as full (3, n, n) blocks at
+        # once beside `out`: the point-matched BRV's peak (#1224, 1.8 GB
+        # traced at n ≈ 2800 against B-spline's 0.9 GB). Every output
+        # element is its own observer's, so the block is the same at any
+        # band height; small classes keep one band, as the fill does.
+        chunk = (
+            n
+            if n < _DENSE_ASSEMBLY_THRESHOLD
+            else max(1, int(self.swept_mem_mb * 1024 * 1024 // self._fill_row_bytes(n)))
+        )
+        bands = [
+            (b0, min(b0 + chunk, e0))
+            for s0, e0 in self._index_runs(idx)
+            for b0 in range(s0, e0, chunk)
+        ]
         row = 0
-        for s, e in self._index_runs(idx):
+        for s, e in bands:
+            self._checkpoint()  # per observer band of the class block
             band = (s, e)
             Phi = self._field_tensor(
                 geom_src,
