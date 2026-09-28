@@ -894,13 +894,13 @@ def point_designed_rows(eps_t, k2, rows, p=None):
     wrong (`radius_fold`).
 
     Distinct rows are what makes this bit-identical to a whole-grid
-    `point_radius_tables` call: a ρ_eff column's value depends on the
-    column's members through `s = z − z′`'s minimum alone (`_column_rule_
-    j1`, read off `_refuse_bad_members`), and dropping a triple's
-    duplicates never changes the set of distinct s values a column carries,
-    so its minimum is unchanged (measured bit-identical over a real solve's
-    triples, `scratch/1224-stage3/dedup_probe.py`). Returns {key: (m,)
-    array} over POINT_KEYS, row i for `rows[i]`."""
+    `point_radius_tables` call: a ρ_eff column's rule depends on its
+    members through the smallest s = z − z′ alone (`_column_rule_j1`), and
+    dropping a triple's duplicates never changes a column's set of distinct
+    s, so never its minimum. Measured over a real solve's triples (the
+    buried radial vertical, momwire#1224): the deduplicated evaluation,
+    scattered back, equals the dense one bit for bit in every call.
+    Returns {key: (m,) array} over POINT_KEYS, row i for `rows[i]`."""
     rows = np.asarray(rows, dtype=float)
     return _point_radius_tables_folded(
         eps_t, k2, rows[:, 0], rows[:, 1], rows[:, 2], p=p
