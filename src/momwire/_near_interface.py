@@ -139,6 +139,12 @@ _HAVE_NEAR_INTERFACE_ACCEL = _nia is not None and bool(
 _HAVE_NEAR_INTERFACE_COLUMNS_ACCEL = _nia is not None and bool(
     getattr(_nia, "near_interface_columns_899", False)
 )
+# The point-observer column twin (momwire#1224): its own extension (the xsf
+# headers cannot link twice into one module) and its own flag.
+_nipa = _accel.import_companion("_near_interface_point_accel")
+_HAVE_POINT_COLUMNS_ACCEL = _nipa is not None and bool(
+    getattr(_nipa, "point_columns_1224", False)
+)
 
 # The tests' handle on the dispatch — parity gates drive BOTH machines inside
 # one process. `MOMWIRE_NEAR_INTERFACE_FORCE_NUMPY` is the whole-run switch (a
@@ -819,8 +825,9 @@ def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
     unit vector Δh/ρ together, never a division by a ρ that can be 0.
 
     Dense and memo-free (stage 2 is the dense point block by decision; the
-    tiled and memoised routes are stage 3): one `point_keys_columns` column
-    per distinct ρ_eff, its members paired with their own z′.
+    tiled and memoised routes are stage 3): one column per distinct ρ_eff,
+    its members paired with their own z′ -- through the C++ column twin when
+    built (momwire#1224), else `point_keys_columns`, which is its reference.
     """
     rho_eff = radius_fold(rho, wire_radius)
     z = np.broadcast_to(np.asarray(z, dtype=float), rho_eff.shape)
@@ -828,9 +835,36 @@ def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
     flat_r, flat_z, flat_zp = rho_eff.ravel(), z.ravel(), zp.ravel()
     out = np.empty((flat_r.size, N_POINT_KEYS), dtype=np.complex128)
     uniq, inv = np.unique(flat_r, return_inverse=True)
-    for i, r in enumerate(uniq):
-        sel = np.flatnonzero(inv == i)
-        out[sel] = point_keys_columns(eps_t, k2, r, flat_z[sel], flat_zp[sel], p=p)
+    if _HAVE_POINT_COLUMNS_ACCEL and not _FORCE_NUMPY:
+        # momwire#1224: every column in ONE call, the six twin's way -- the
+        # parallel units live inside it.
+        order = np.argsort(inv, kind="stable")
+        sizes = np.bincount(inv, minlength=uniq.size)
+        offsets = np.zeros(uniq.size + 1, dtype=np.intp)
+        offsets[1:] = np.cumsum(sizes)
+        zs = np.ascontiguousarray(flat_z[order])
+        zps = np.ascontiguousarray(flat_zp[order])
+        _refuse_bad_members(np.repeat(uniq, sizes), zs, zps)
+        k_p = float(k2)
+        k_m = k_medium(complex(eps_t), k_p)
+        out[order] = _nipa.near_interface_point_columns(
+            k_p,
+            k_m,
+            np.ascontiguousarray(uniq),
+            offsets,
+            zs,
+            zps,
+            float(_LAM_MULT),
+            int(_COLUMN_P if p is None else p),
+            float(_DETOUR),
+            _physical_cpu_count(),
+            _GX,
+            _GW,
+        )
+    else:
+        for i, r in enumerate(uniq):
+            sel = np.flatnonzero(inv == i)
+            out[sel] = point_keys_columns(eps_t, k2, r, flat_z[sel], flat_zp[sel], p=p)
     return {key: out[:, i].reshape(rho_eff.shape) for i, key in enumerate(POINT_KEYS)}
 
 
