@@ -1654,6 +1654,9 @@ _ROUTES = dict.fromkeys(
         "fused_declined_stream",
         "stream_chunks",
         "stream_held_cols",
+        "point_chunked",
+        "point_chunks",
+        "point_chunk_max_rows",
     ),
     0,
 )
@@ -2371,6 +2374,156 @@ def _block_preamble(ctx):
     return eps_t, k_p, gz, c1, _near_interface.ProductMemo()
 
 
+# The six keys `point_observer_block` reads (momwire#1224 stage 3 unit 3):
+# not `_CROSS_KEYS` (the by-parts blocks' four) -- `dzW` joins them for the
+# forward (observers-above) branch's k3.
+_POINT_SIX_KEYS = ("U", "V", "W", "dzW", "dzpW")
+# `point_observer_block`'s default route (momwire#1173/#1224 design pattern):
+# one dedup + one designed-tables/point-family evaluation over the grid's
+# unique triples, gathered and contracted per OBSERVER-ROW chunk. False
+# takes `_point_observer_block_dense` instead -- the whole-grid reference
+# the chunked route is gated against bit for bit
+# (tests/test_point_rows_chunked_1224.py).
+_POINT_CHUNKED = True
+# TEST-ONLY. Deliberately breaks the chunked route's gather by one observer
+# row, so the bit-identity gate can be shown to fail -- `_PRODUCT_NEG_
+# CONTROL`'s pattern, narrowed to this route.
+_POINT_NEG_CONTROL = False
+# One observer-row chunk's pair budget. Per pair, the dense per-pair working
+# set `point_observer_block` builds is: the five `_POINT_SIX_KEYS` tables
+# (80 B) plus the four POINT_KEYS (64 B), both complex128, plus the real
+# g/dx/dy/rho and the complex a_grad_v/k3/k4 and the two U·w products (~10
+# more arrays, ~150 B) -- ~300 B/pair live at a chunk's peak. 1<<18 pairs is
+# ~75 MiB at that rate, in the same neighbourhood as `_MAIN_CHUNK_BYTES`'s
+# 64 MiB main-sandwich chunk. Chunking never moves a bit
+# (`_chunked_point_tables`), so this is a memory choice only.
+_POINT_CHUNK_PAIRS = 1 << 18
+
+
+def _point_kernels_dense(
+    ctx, eps_t, k_p, memo, a_wire, P, A, pts, gz, *, observers_above
+):
+    """`point_observer_block`'s per-pair kernels over the WHOLE (observers ×
+    `pts`) grid, dense: the six tables (through `_tables`, so memo'd) and
+    the point family (`point_radius_tables`, memo-free -- it dedups only by
+    ρ_eff within the call) plus the tangential chain factor g. Shared by
+    the ends loop, on both routes (an end span is a handful of points
+    against the whole observer axis, never the fill's memory driver so
+    never worth chunking), and by `_point_observer_block_dense`, the
+    reference the chunked main route is gated against."""
+    pts = np.asarray(pts, dtype=float)
+    ax, ay = A[:, 0][:, None], A[:, 1][:, None]
+    dx = P[:, None, 0] - pts[None, :, 0]
+    dy = P[:, None, 1] - pts[None, :, 1]
+    rho = np.hypot(dx, dy)
+    z_o = np.broadcast_to((P[:, 2] - gz)[:, None], rho.shape)
+    z_s = np.broadcast_to((pts[:, 2] - gz)[None, :], rho.shape)
+    z, zp = (z_o, z_s) if observers_above else (z_s, z_o)
+    six = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
+    pk = _near_interface.point_radius_tables(eps_t, k_p, rho, z, zp, a_wire)
+    g = (ax * dx + ay * dy) / _near_interface.radius_fold(rho, a_wire)
+    return six, pk, g
+
+
+def _point_grad_v(az, pk, g, *, observers_above):
+    dz = pk["gzV"] if observers_above else pk["gzpV"]
+    return az * dz + g * pk["gRhoV"]
+
+
+def _chunked_point_tables(ctx, eps_t, k_p, rho, z_o, z_s, observers_above, rows, memo):
+    """`_tables` and the point family (`point_radius_tables`) together over
+    `point_observer_block`'s (observers × source-node) grid, served as
+    `(sl, six, point)` OBSERVER-ROW chunks — `_chunked_tables`'s precedent
+    (momwire#1173) with the axes swapped (momwire#1224 stage 3 unit 3):
+    `point_observer_block` contracts `F @ (...).T`, which forms each
+    OBSERVER's output COLUMN from that observer's own ROW of the dense
+    factor alone (`_chunked_tables`'s argument for `P @ K[:, cols]`,
+    transposed: a row slice of the factor is a column slice of its
+    transpose, and a sparse-dense product's column c depends on column c of
+    the dense side alone). So ROW chunks of this grid are its bit-identical
+    cut, where `_main_sandwich`'s were COLUMN chunks of a below axis.
+
+    Both families key on the SAME folded triple (ρ_eff, z, z′): `radius_
+    tables` folds ρ → ρ_eff = hypot(ρ, a) and `point_radius_tables` folds it
+    the same way (`radius_fold`, one spelling). One dedup pass over the
+    grid's exact triples therefore serves both, exactly as `_chunked_tables`
+    serves the four cross keys: pass 1 dedups each chunk's folded triples
+    and merges them into the grid's unique rows in the grid's OWN first-
+    appearance order; ONE `designed_rows` call and ONE `point_designed_rows`
+    call evaluate that list; pass 2 gathers each chunk's six AND point
+    values from the one evaluation by the chunk's own dedup inverse. See
+    `_chunked_tables` for why none of this moves a bit -- the point family's
+    per-ρ_eff column grouping depends on its members' distinct s = z − z′
+    only through the minimum (`point_designed_rows`), exactly as the six
+    family's does, so deduplication cannot change which rule a column picks
+    there either.
+
+    `z_o`, `z_s` are the observer and source-node axes' own z (1-D, relative
+    to ground), not broadcast to the grid by the caller: `observers_above`
+    says which slot -- z or z′ -- each fills, exactly as `point_observer_
+    block`'s dense kernels decide it."""
+    fold = _near_interface.radius_fold
+    a_wire = float(ctx.a_wire)
+    nA, nB = rho.shape
+    idx_t = _index_dtype(rho.size)
+    parts, firsts, inverses = [], [], []
+    for sl in rows:
+        r = fold(rho[sl, :], a_wire)
+        if observers_above:
+            z = np.broadcast_to(z_o[sl, None], r.shape)
+            zp = np.broadcast_to(z_s[None, :], r.shape)
+        else:
+            z = np.broadcast_to(z_s[None, :], r.shape)
+            zp = np.broadcast_to(z_o[sl, None], r.shape)
+        u, inv = _near_interface._unique_rows(r, z, zp)
+        # `_unique_rows` numbers groups in first-appearance order, so a
+        # group first occurs exactly where the running max of the inverse
+        # steps up (as in `_chunked_tables`).
+        prev = np.maximum.accumulate(np.concatenate(([-1], inv[:-1])))
+        i, j = np.divmod(np.flatnonzero(inv > prev), nB)
+        firsts.append((sl.start + i) * nB + j)
+        parts.append(u)
+        inverses.append((inv.astype(idx_t), u.shape[0]))
+        del r, z, zp, u, inv, prev, i, j
+    order = np.argsort(np.concatenate(firsts), kind="stable")
+    del firsts
+    dest = np.empty_like(order)
+    dest[order] = np.arange(order.size)
+    del order
+    triples = np.empty((dest.size, 3), dtype=float)
+    off = 0
+    for p in range(len(parts)):
+        u, parts[p] = parts[p], None
+        triples[dest[off : off + u.shape[0]]] = u
+        off += u.shape[0]
+        del u
+    del parts
+    uniq, inv_sorted = _near_interface._unique_tri(triples)
+    del triples
+    gid = inv_sorted.astype(idx_t)[dest]  # chunk-unique row -> grid-unique row
+    del dest, inv_sorted
+    six_block = _near_interface.designed_rows(
+        eps_t, k_p, uniq, rtol=_CROSS_RTOL, memo=memo
+    )
+    six_vals = {
+        key: six_block[:, _near_interface.KEYS.index(key)] for key in _POINT_SIX_KEYS
+    }
+    del six_block
+    point_vals = _near_interface.point_designed_rows(eps_t, k_p, uniq)
+    del uniq
+    off = 0
+    for sl, (inv, m) in zip(rows, inverses):
+        idx = gid[off : off + m][inv].reshape(sl.stop - sl.start, nB)
+        off += m
+        if _POINT_NEG_CONTROL:
+            idx = np.roll(idx, 1, axis=0)
+        yield (
+            sl,
+            {key: v[idx] for key, v in six_vals.items()},
+            {key: v[idx] for key, v in point_vals.items()},
+        )
+
+
 def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
     """The cross block at POINT observers (momwire#1223 U4): the transmitted
     field of every basis's part on the source axis `src`, tested as t̂·E at
@@ -2402,9 +2555,27 @@ def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
     both are Galerkin by-parts terms a point test never has (the razor
     precedent, `corner=False` on path-tested rows).
 
-    Dense over (observers × source nodes) — stage 2's scope by decision;
-    tiles are stage 3.
+    `_POINT_CHUNKED` (default True, momwire#1224 stage 3 unit 3): the main
+    block's tables come from `_chunked_point_tables` -- one dedup and one
+    evaluation of the designed tables and the point family over the grid's
+    unique (observers × source nodes) triples, gathered and contracted per
+    OBSERVER-ROW chunk, at most `_POINT_CHUNK_PAIRS` pairs live per chunk.
+    `_POINT_CHUNKED = False` takes `_point_observer_block_dense`, the whole-
+    grid call stage 2 shipped, kept as the bit-identity gate's reference.
+    Either way the ends loop stays dense (`_point_kernels_dense`): a span of
+    a handful of points was never the block's memory driver.
     """
+    if _POINT_CHUNKED:
+        return _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above)
+    return _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above)
+
+
+def _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above):
+    """`point_observer_block`'s stage-2 route: one dense call of `_point_
+    kernels_dense` over the WHOLE (observers × source nodes) grid, no
+    chunking, no gather. Kept for `_POINT_CHUNKED = False` and as the
+    bit-identity gate's reference (tests/test_point_rows_chunked_1224.py);
+    see `point_observer_block` for the physics and the derivation."""
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     k2sq = k_p * k_p
     a_wire = float(ctx.a_wire)
@@ -2412,26 +2583,20 @@ def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
     A = np.asarray(obs_t, dtype=float)
     ax, ay, az = A[:, 0][:, None], A[:, 1][:, None], A[:, 2][:, None]
 
-    def kernels(pts):
-        pts = np.asarray(pts, dtype=float)
-        dx = P[:, None, 0] - pts[None, :, 0]
-        dy = P[:, None, 1] - pts[None, :, 1]
-        rho = np.hypot(dx, dy)
-        z_o = np.broadcast_to((P[:, 2] - gz)[:, None], rho.shape)
-        z_s = np.broadcast_to((pts[:, 2] - gz)[None, :], rho.shape)
-        z, zp = (z_o, z_s) if observers_above else (z_s, z_o)
-        six = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
-        pk = _near_interface.point_radius_tables(eps_t, k_p, rho, z, zp, a_wire)
-        g = (ax * dx + ay * dy) / _near_interface.radius_fold(rho, a_wire)
-        return six, pk, g
-
-    def grad_v(six, pk, g):
-        dz = pk["gzV"] if observers_above else pk["gzpV"]
-        return az * dz + g * pk["gRhoV"]
-
-    six, pk, g = kernels(src["nodes"])
+    six, pk, g = _point_kernels_dense(
+        ctx,
+        eps_t,
+        k_p,
+        memo,
+        a_wire,
+        P,
+        A,
+        src["nodes"],
+        gz,
+        observers_above=observers_above,
+    )
     U, V, W = six["U"], six["V"], six["W"]
-    a_grad_v = grad_v(six, pk, g)
+    a_grad_v = _point_grad_v(az, pk, g, observers_above=observers_above)
     if observers_above:
         a_grad_w = az * six["dzW"] + g * pk["gRhoW"]
         k3 = az * (k2sq * V + six["dzpW"]) - a_grad_w
@@ -2450,8 +2615,101 @@ def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
     ends = src["ends"]
     if ends:
         e_pts = np.array([pt for pt, _sign, _fv in ends])
-        six_e, pk_e, g_e = kernels(e_pts)
-        e_term = -az * six_e["W"] - grad_v(six_e, pk_e, g_e)  # (n_obs, n_ends)
+        six_e, pk_e, g_e = _point_kernels_dense(
+            ctx,
+            eps_t,
+            k_p,
+            memo,
+            a_wire,
+            P,
+            A,
+            e_pts,
+            gz,
+            observers_above=observers_above,
+        )
+        e_term = -az * six_e["W"] - _point_grad_v(
+            az, pk_e, g_e, observers_above=observers_above
+        )  # (n_obs, n_ends)
+        for i, (_pt, sign, fv) in enumerate(ends):
+            nz = np.flatnonzero(fv)
+            t[:, nz] += (sign * e_term[:, i])[:, None] * fv[nz][None, :]
+    return c1 * t
+
+
+def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
+    """`point_observer_block`'s default route (momwire#1224 stage 3 unit 3):
+    the main block through `_chunked_point_tables`, contracted per observer
+    chunk (never the whole (observers × source nodes) grid's tables at
+    once); the ends loop stays `_point_kernels_dense`, exactly as the dense
+    route's, sharing the SAME six-table memo -- so the ends see the same
+    hits/misses either route takes, per `_block_preamble`'s "one fill, one
+    memo"."""
+    eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
+    k2sq = k_p * k_p
+    a_wire = float(ctx.a_wire)
+    P = np.asarray(obs_pts, dtype=float)
+    A = np.asarray(obs_t, dtype=float)
+    ax_full, ay_full, az_full = A[:, 0][:, None], A[:, 1][:, None], A[:, 2][:, None]
+
+    nodes = np.asarray(src["nodes"], dtype=float)
+    nA, nB = P.shape[0], nodes.shape[0]
+    dx = P[:, None, 0] - nodes[None, :, 0]
+    dy = P[:, None, 1] - nodes[None, :, 1]
+    rho = np.hypot(dx, dy)
+    z_o = P[:, 2] - gz
+    z_s = nodes[:, 2] - gz
+
+    tx, ty, tz = np.asarray(src["t"], dtype=float).T
+    w = np.asarray(src["w"])
+    F, Fd = src["F_csr"], src["Fd_csr"]
+
+    step = max(1, _POINT_CHUNK_PAIRS // max(1, nB))
+    row_slices = [slice(r0, min(nA, r0 + step)) for r0 in range(0, nA, step)]
+    t_parts = []
+    n_chunks = 0
+    for sl, six, pk in _chunked_point_tables(
+        ctx, eps_t, k_p, rho, z_o, z_s, observers_above, row_slices, memo
+    ):
+        n_chunks += 1
+        axc, ayc, azc = ax_full[sl], ay_full[sl], az_full[sl]
+        g = (axc * dx[sl] + ayc * dy[sl]) / _near_interface.radius_fold(rho[sl], a_wire)
+        U, V, W = six["U"], six["V"], six["W"]
+        a_grad_v = _point_grad_v(azc, pk, g, observers_above=observers_above)
+        if observers_above:
+            a_grad_w = azc * six["dzW"] + g * pk["gRhoW"]
+            k3 = azc * (k2sq * V + six["dzpW"]) - a_grad_w
+        else:
+            k3 = azc * k2sq * V - g * pk["gRhoW"]
+        k4 = azc * W + a_grad_v
+        tc = (F @ (axc * U * (w * tx)).T) + (F @ (ayc * U * (w * ty)).T)
+        tc = tc + (F @ (k3 * (w * tz)).T) + (Fd @ (k4 * w).T)
+        t_parts.append(np.asarray(tc))
+    _ROUTES["point_chunked"] += 1
+    _ROUTES["point_chunks"] += n_chunks
+    _ROUTES["point_chunk_max_rows"] = max(_ROUTES["point_chunk_max_rows"], step)
+    if t_parts:
+        t = np.concatenate(t_parts, axis=1).T
+    else:
+        t = np.zeros((nA, src["n_basis"]), dtype=np.complex128)
+
+    ends = src["ends"]
+    if ends:
+        e_pts = np.array([pt for pt, _sign, _fv in ends])
+        six_e, pk_e, g_e = _point_kernels_dense(
+            ctx,
+            eps_t,
+            k_p,
+            memo,
+            a_wire,
+            P,
+            A,
+            e_pts,
+            gz,
+            observers_above=observers_above,
+        )
+        e_term = -az_full * six_e["W"] - _point_grad_v(
+            az_full, pk_e, g_e, observers_above=observers_above
+        )  # (n_obs, n_ends)
         for i, (_pt, sign, fv) in enumerate(ends):
             nz = np.flatnonzero(fv)
             t[:, nz] += (sign * e_term[:, i])[:, None] * fv[nz][None, :]
