@@ -248,6 +248,28 @@ _CROSSING_HUB_REFUSAL = (
     "not been measured on the point-matched lane yet. Solve it with "
     "SinusoidalGalerkinSolver or BSplineSolver, which serve it"
 )
+# momwire#1223 option A (Steve, 2026-09-27): the imposed node condition
+# I'_above = I'_below/eps~ is the quasi-static charge match for a crossing
+# NORMAL to the plane. SG, which imposes nothing, converges to that ratio on a
+# rod and to a larger one as the node leans. Measured against B-spline and SG
+# at n = 321 (the two agree to 0.002 %), the point-matched R offset from the
+# rod tracks the SUM of the two members' tilts off the normal, not either one:
+# -0.2 % at 15 deg, -0.6..-0.8 % at 30, -1.4..-1.9 % at 45, -3.2..-3.8 % at
+# 60 (a straight wire tilted 30 deg through the plane among them), and it
+# shrinks only slowly under refinement. So the lane serves a node whose tilts
+# sum to at most this; past it the deck is refused by name and routed to the
+# lanes whose node slope emerges from the solution.
+_CROSSING_TILT_SUM_MAX_DEG = 30.0
+_CROSSING_OBLIQUE_REFUSAL = (
+    "SinusoidalSolver serves a crossing node whose two members' tilts off the "
+    f"interface normal sum to at most {_CROSSING_TILT_SUM_MAX_DEG:g} degrees "
+    "(momwire#1223 stage 2): its imposed node condition, I'_above = "
+    "I'_below/eps_tilde, is the charge match for a wire crossing the plane "
+    "normally, and a node that leans converges to a different slope ratio, "
+    "leaving an impedance error that grows with the lean and does not refine "
+    "away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node "
+    "slope emerges from the solution"
+)
 # The dense point-observer block (stage 2's route by decision 5) holds every
 # (observer, source node) pair's kernels at once; past this many pairs per
 # direction the tiled route (momwire#1224, stage 3) is the one to use.
@@ -721,6 +743,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "buried+crossing_multi_node": _CROSSING_MULTI_NODE_REFUSAL,
             "buried+crossing_hub": _CROSSING_HUB_REFUSAL,
+            "buried+crossing_oblique": _CROSSING_OBLIQUE_REFUSAL,
             "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "junction_ports": _JUNCTION_PORTS_REFUSAL,
             "node_gaps": _NODE_GAPS_REFUSAL,
@@ -1292,6 +1315,31 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     f"crossing junction {j} joins {len(self.junctions[j])} members: "
                     f"{_CROSSING_HUB_REFUSAL}"
                 )
+        self._refuse_oblique_crossing(crossing)
+
+    def _refuse_oblique_crossing(self, crossing):
+        """Option A's scope (momwire#1223): the node's two members' tilts off
+        the interface normal sum to at most `_CROSSING_TILT_SUM_MAX_DEG`. A
+        scope on what the lane SERVES, not on its machinery: the two-k recipe
+        and the point-observer blocks hold their identities at any angle, and
+        their unit gates reach an oblique node by overriding this away."""
+        for j in crossing:
+            tilts = [self._node_edge_tilt_deg(w, end) for w, end in self.junctions[j]]
+            if sum(tilts) > _CROSSING_TILT_SUM_MAX_DEG + 1e-9:
+                each = " + ".join(f"{t:.1f}" for t in tilts)
+                raise NotImplementedError(
+                    f"crossing junction {j}: its members' tilts off the interface "
+                    f"normal sum to {sum(tilts):.1f} degrees ({each}): "
+                    f"{_CROSSING_OBLIQUE_REFUSAL}"
+                )
+
+    def _node_edge_tilt_deg(self, w, end):
+        """Angle between a member's node-adjacent edge and the interface
+        normal (0 for a vertical member, 90 for one lying in the plane)."""
+        node, nxt = self._node_adjacent_edge(w, end)
+        d = np.asarray(nxt, dtype=float) - np.asarray(node, dtype=float)
+        cos = abs(d[2]) / float(np.linalg.norm(d))
+        return float(np.degrees(np.arccos(min(1.0, cos))))
 
     def _refuse_coincident_crossing_members(self, crossing):
         """Refuse a crossing junction whose members run the same path.

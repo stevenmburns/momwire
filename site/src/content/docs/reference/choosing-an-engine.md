@@ -36,14 +36,15 @@ vs. array geometry:
 | Cross-checking against NEC-5 behaviour | **`razor-2p`** | the formulation twin — rides the licensed engine's own convergence path (below) |
 | Telling basis effects from testing effects | **`sinusoidal-galerkin`** | same basis as `sinusoidal`, variational testing — the attribution instrument of [Act V](/act-5/the-fourth-cell/) |
 | Reading a textbook scheme against the modern ones | **`pulse`** | Harrington's 1967 pulse expansion, point-matched — the oldest thin-wire MoM there is, and the slowest-converging engine here by a wide margin (below) |
-| Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`), with **`sinusoidal-galerkin`** and **`razor-2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` serves wholly buried and detached decks (since 0.66) but refuses a wire that crosses the interface, `pulse` refuses buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
+| Buried radials, screens, buried fed elements | **`bspline`** (or `bspline-d1`), with **`sinusoidal-galerkin`** and **`razor-2p`** as independent buried lanes | each carries its own below-interface fill and serves impedance/currents/charges and the radiation pattern over the Sommerfeld ground; `sinusoidal` serves wholly buried and detached decks (since 0.66) and a single near-normal crossing, such as a ground rod (its two members' tilts off vertical summing to 30° or less); it refuses oblique crossings, hubs and several crossings per deck by name, `pulse` refuses buried decks by name, and so does the compressed pair — `hmatrix` and `arrayblock` have no per-segment media (see [the serve matrix](/reference/eznec-nec5/#what-refuses-and-why)) |
 
 The same picks hold with a ground in play — the ground model changes what
 a solve *costs*, not which engine wins it. One exception is capability,
 not cost: wires below the interface are served by `bspline`, `bspline-d1`,
 `sinusoidal-galerkin` and `razor-2p`, and by `sinusoidal` when no wire
-crosses the interface (a bonded screen or a ground rod refuses there by
-name), and a buried deck's first solve
+crosses the interface or one near-normal crossing does (a ground rod; an
+oblique crossing or a bonded screen's hub refuses there by name), and a
+buried deck's first solve
 pays a one-time build of its below-interface Sommerfeld tables.
 
 :::caution

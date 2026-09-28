@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from test_sin_crossing_recipe_1223 import DECKS, WL7, _eps_tilde
+from test_sin_crossing_recipe_1223 import DECKS, LEAN, LEAN_J, WL7, _eps_tilde
 
 from momwire import sinusoidal as sin_mod
 from momwire.sinusoidal import SinusoidalSolver
@@ -28,9 +28,13 @@ from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
 SOIL_A = _eps_tilde(13.0, 0.005)
 
+# The decks this lane serves (option A: near-normal crossings). The bent deck
+# is oblique and refused; test_the_real_class_refuses_an_oblique_node has it.
+SERVE_DECKS = {"rod": DECKS["rod"], "lean": (LEAN, LEAN_J)}
+
 
 def _make(cls, deck, eps, n, ground=True):
-    wires, junctions = DECKS[deck]
+    wires, junctions = SERVE_DECKS[deck]
     g = dict(ground_z=0.0, ground_eps=eps, ground_model="sommerfeld") if ground else {}
     return cls(
         wires=list(wires),
@@ -44,7 +48,7 @@ def _make(cls, deck, eps, n, ground=True):
 
 
 @pytest.mark.parametrize("n", [9, 15])
-@pytest.mark.parametrize("deck", sorted(DECKS))
+@pytest.mark.parametrize("deck", sorted(SERVE_DECKS))
 def test_at_eps_one_the_crossing_deck_is_the_ordinary_junction(deck, n):
     crossing = _make(SinusoidalSolver, deck, (1.0, 0.0), n).compute_port_solution()
     free = _make(SinusoidalSolver, deck, None, n, ground=False).compute_port_solution()
@@ -54,7 +58,7 @@ def test_at_eps_one_the_crossing_deck_is_the_ordinary_junction(deck, n):
     assert np.max(np.abs(a_x - a_f)) <= 1e-6 * np.max(np.abs(a_f))
 
 
-@pytest.mark.parametrize("deck", sorted(DECKS))
+@pytest.mark.parametrize("deck", sorted(SERVE_DECKS))
 def test_the_solved_current_is_continuous_at_the_node(deck):
     """Continuity is imposed in the basis (U2), so it holds in any solution:
     the current flowing into the node on the above wire leaves it on the
@@ -62,7 +66,7 @@ def test_the_solved_current_is_continuous_at_the_node(deck):
     s = _make(SinusoidalSolver, deck, SOIL_A, 9)
     alpha = np.asarray(s.compute_port_solution().coeffs).ravel()
     per_wire = s.currents_at_knots(alpha)
-    (w_a, e_a), (w_b, e_b) = DECKS[deck][1][0]
+    (w_a, e_a), (w_b, e_b) = SERVE_DECKS[deck][1][0]
     i_a = per_wire[w_a][0 if e_a == "start" else -1]
     i_b = per_wire[w_b][0 if e_b == "start" else -1]
     # Along each wire's own direction: a member STARTING at the node carries
@@ -72,7 +76,7 @@ def test_the_solved_current_is_continuous_at_the_node(deck):
     assert abs(out_a + out_b) <= 1e-10 * abs(i_a)
 
 
-@pytest.mark.parametrize("deck", sorted(DECKS))
+@pytest.mark.parametrize("deck", sorted(SERVE_DECKS))
 def test_the_lane_closes_on_sg_under_refinement(deck):
     """Collocation and Galerkin agree in the continuum, not at a fixed mesh:
     the gap shrinks on every rung (measured 1.4 % → 0.9 % → 0.6 % on the bent
@@ -145,7 +149,7 @@ def test_a_buried_hub_is_refused_by_name():
 def test_a_dense_block_past_its_size_is_refused_by_name(monkeypatch):
     monkeypatch.setattr(sin_mod, "_CROSSING_POINT_PAIRS_MAX", 10)
     with pytest.raises(NotImplementedError, match="momwire#1224"):
-        _make(SinusoidalSolver, "bent", SOIL_A, 9).compute_impedance()
+        _make(SinusoidalSolver, "lean", SOIL_A, 9).compute_impedance()
 
 
 def test_sg_keeps_serving_what_this_lane_refuses():

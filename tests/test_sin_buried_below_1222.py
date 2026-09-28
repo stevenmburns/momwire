@@ -565,7 +565,7 @@ def test_a_crossing_junction_is_served_since_stage_2():
     d = dict(
         wires=[
             np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 2.0)]),
-            np.array([(0.0, 0.0, 0.0), (2.0, 0.0, -0.5)]),
+            np.array([(0.0, 0.0, 0.0), (0.5, 0.0, -1.5)]),
         ],
         n_per_edge_per_wire=[[9], [9]],
         feeds=[(0, 1.0, 1 + 0j)],

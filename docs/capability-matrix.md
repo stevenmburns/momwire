@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-43 sentences across 81 declared cells, verbatim. A sentence shared by several rows is printed
+44 sentences across 82 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -283,6 +283,10 @@ renders in host dialogs.
 - `SinusoidalSolver` `buried+crossing_multi_node`
 
   > SinusoidalSolver serves one crossing node per deck (momwire#1223 stage 2); a deck with several has not been measured on the point-matched lane yet. Solve it with SinusoidalGalerkinSolver or BSplineSolver, which serve it
+
+- `SinusoidalSolver` `buried+crossing_oblique`
+
+  > SinusoidalSolver serves a crossing node whose two members' tilts off the interface normal sum to at most 30 degrees (momwire#1223 stage 2): its imposed node condition, I'_above = I'_below/eps_tilde, is the charge match for a wire crossing the plane normally, and a node that leans converges to a different slope ratio, leaving an impedance error that grows with the lean and does not refine away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node slope emerges from the solution
 
 - `SinusoidalSolver` `junction_ports`
 
