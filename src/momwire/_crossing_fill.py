@@ -4638,7 +4638,7 @@ def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     return t_above, t_below
 
 
-def _pair_groups(sizes, *, budget_pairs=1_500_000):
+def _pair_groups(sizes, *, budget_pairs=600_000):
     """Consecutive `[start, stop)` spans of `sizes` whose pair count stays
     under `budget_pairs`, so `_direct_group`'s one `_tables` call is bounded by
     the budget rather than by how many blocks the partition produced.
@@ -4647,7 +4647,23 @@ def _pair_groups(sizes, *, budget_pairs=1_500_000):
     split a `_sandwich_dense` destination, and block sizes are already bounded
     by `_ACA_COST_GUARD`.
 
-    1.5e6 is MEASURED, not derived. The 150-radial route (ntot = 3.89e6 pairs):
+    6e5 is MEASURED, not derived, and it has been measured twice.
+
+    Re-measured in momwire#1029 phase 3 (Skylake, 150-radial route, peak
+    RSS by `ru_maxrss`, no tracer), once `self_completions` stopped being the
+    ceiling (`_bnd_and_corner(rows=)`, and `_ends_to_nodes` counting its whole
+    block):
+
+        budget     peak RSS   cold s
+        1.5e6      464.0 MB    7.73
+        1.0e6      419.5 MB    7.77
+        6.0e5      387.5 MB    7.76
+        3.0e5      389.4 MB    7.73
+
+    so the knee moved to 6e5 and costs nothing in time. The phase-2 table
+    below is kept for the record: it was taken while the completions phase
+    held a higher peak, which is why going finer than 1.5e6 then looked
+    WORSE. The original measurement (ntot = 3.89e6 pairs):
 
         budget        peak RSS   _main_split   _main_split s   total s
         one batch      2217.6       964.5 MB       4.57          28.4
@@ -4971,6 +4987,9 @@ def _fdw_sparse(ax):
     return out
 
 
+_ENDS_TO_NODES_BYTES_PER_PAIR = 112
+
+
 def _ends_to_nodes(k, a2, obs, src, Fsp, *, budget_mb=48.0):
     """`(Fsp @ G(obs, src).T).T` — the (E, n) end-to-node kernel rows, without
     ever building the (E, P) kernel or the (E, P, 3) difference behind it.
@@ -4989,16 +5008,24 @@ def _ends_to_nodes(k, a2, obs, src, Fsp, *, budget_mb=48.0):
     never to the bit"; residual 5.7e-14 against the dense form, gated by the
     crossgate tolerance rather than `array_equal`).
 
-    `budget_mb` buys iterations against footprint: the (E, block, 3) double
-    difference is the term it bounds, so 48 MB is about five blocks at 150
-    radials and one at 48 -- small enough to keep the loop's own cost out of a
-    phase that is 8.3 % of the route's wall clock, large enough that each
-    block is still a vectorised call rather than a Python inner loop.
+    `budget_mb` buys iterations against footprint: it bounds a block's WHOLE
+    working set (`_ENDS_TO_NODES_BYTES_PER_PAIR`), so 48 MB is about twenty
+    blocks at 150 radials and five at 48 -- small enough to keep the loop's own
+    cost out of a phase that is a few percent of the route's wall clock, large
+    enough that each block is still a vectorised call rather than a Python
+    inner loop.
     """
     E = obs.shape[0]
     P = src.shape[0]
     n = Fsp.shape[0]
-    per_node = max(E * 3 * 8, 1)  # bytes of the (E, block, 3) difference
+    # Bytes a block holds per (end, node) pair, ALL of them: the (E, block, 3)
+    # difference (24), the squared distance and R (8 + 8 + 8 of temporaries),
+    # and the complex kernel's -jkR, exp and /R (16 each), plus the transposed
+    # copy the sparse product takes (16). Counting only the difference let the
+    # "48 MB" budget hold ~200 MB at 150 radials (E = 302, P = 32 432 --
+    # measured, momwire#1029 phase 3), the route's whole remaining
+    # `self_completions` transient.
+    per_node = max(E * _ENDS_TO_NODES_BYTES_PER_PAIR, 1)
     block = max(1, min(P, int(budget_mb * (1 << 20) // per_node)))
     if block >= P:
         # One block is the original expression, so take it unchanged rather
@@ -5019,7 +5046,7 @@ def _ends_to_nodes(k, a2, obs, src, Fsp, *, budget_mb=48.0):
     return Gt
 
 
-def _bnd_and_corner(ax, k, a_wire, gz, mirror):
+def _bnd_and_corner(ax, k, a_wire, gz, mirror, rows=None):
     """The same-medium by-parts boundary shape on one axis (β = 1):
     −test-end rows, −source-end columns, +corner — the derivation's
     −,−,+ sign structure. Closed-form kernel G = e^{−jkR}/R at
@@ -5033,6 +5060,12 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     `live × all`, the column term to `all × live`, the corner to
     `live × live`. Measured 317 live of 1278 on the N = 113 BLE below-axis.
     The caller scatters them; nothing here is ever materialised at (n, n).
+
+    `rows` (the sector route, momwire#1029) asks only for what that caller
+    reads: the row term and the corner on the live rows that are also in
+    `rows`, and the column term on `rows`. Returned in that restricted shape,
+    so neither full `(L, n)` nor `(n, L)` term is ever formed -- at 150
+    radials the two were ~415 MB of transient, this phase's whole peak.
 
     Same sums, different order of summation — as the stacked form this
     replaces already said, read to scale, never to the bit. The residual
@@ -5052,7 +5085,8 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     empty = np.zeros(0, dtype=np.int64)
     if not ends:
         z = np.zeros((0, n), dtype=np.complex128)
-        return empty, z, z.T.copy(), np.zeros((0, 0), dtype=np.complex128)
+        col0 = np.zeros((n if rows is None else rows.size, 0), dtype=np.complex128)
+        return empty, z, col0, np.zeros((0, 0), dtype=np.complex128)
     # Every term below is a sum of outer products over the E wire ends, i.e.
     # a rank-E product. Stacked, the three loops are two matmuls:
     #   bnd    = -(FT^T diag(sig) Gt)  -(Gs^T diag(sig) FS)
@@ -5078,11 +5112,18 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror):
     # source ends (mirrored) against unmirrored observation nodes.
     Gt = _ends_to_nodes(k, a2, ptE, src, Fsp)  # (E, n)
     Gs = _ends_to_nodes(k, a2, pe, pts, Fsp)  # (E, n)
-    row_term = -(sf.T @ Gt)  # (L, n)
-    col_term = -(Gs.T @ sf)  # (n, L)
     d = ptE[:, None, :] - pe[None, :, :]
     Gee = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, E)
-    corner = sf.T @ Gee @ sf  # (L, L)
+    if rows is None:
+        row_term = -(sf.T @ Gt)  # (L, n)
+        col_term = -(Gs.T @ sf)  # (n, L)
+        corner = sf.T @ Gee @ sf  # (L, L)
+        return live, row_term, col_term, corner
+    sel, _pos = _in_rows(rows, live)
+    sfs = sf[:, sel]  # (E, S): the live rows the route reads
+    row_term = -(sfs.T @ Gt)  # (S, n)
+    col_term = -(Gs[:, rows].T @ sf)  # (|rows|, L)
+    corner = sfs.T @ Gee @ sf  # (S, L)
     return live, row_term, col_term, corner
 
 
@@ -5118,12 +5159,14 @@ class _CompletionScatter:
 
     def add(self, live, beta, row_term, col_term, corner):
         if self.rows is not None:
+            # `_bnd_and_corner(rows=)` already restricted all three: the row
+            # term and the corner to `sel`, the column term to `rows`.
             sel, pos = _in_rows(self.rows, live)
             if sel.size:
-                self.dest[pos, :] += beta * row_term[sel]
-            self.dest[:, live] += beta * col_term[self.rows]
+                self.dest[pos, :] += beta * row_term
+            self.dest[:, live] += beta * col_term
             if sel.size:
-                self.dest[np.ix_(pos, live)] += beta * corner[sel]
+                self.dest[np.ix_(pos, live)] += beta * corner
             return
         pl = self.posL[live]
         self.E_r[pl, :] += beta * row_term
@@ -5172,7 +5215,7 @@ def self_completions(ctx, ax_b, ax_a, *, rows=None, out=None):
         beta_img = wgt / (1j * omega * eps * 4 * np.pi)
         for beta, mirror in ((beta_dir, False), (-beta_img, True)):
             live, row_term, col_term, corner = _bnd_and_corner(
-                ax, k, a_wire, gz, mirror=mirror
+                ax, k, a_wire, gz, mirror=mirror, rows=rows
             )
             if live.size == 0:
                 continue
@@ -5217,13 +5260,13 @@ def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None, out=None):
         beta_img = wgt / (1j * omega * eps * 4 * np.pi)
         for beta, mirror in ((beta_dir, False), (-beta_img, True)):
             live, row_term, col_term, corner = _bnd_and_corner(
-                ax, k, a_below, gz, mirror=mirror
+                ax, k, a_below, gz, mirror=mirror, rows=rows
             )
             if live.size == 0:
                 continue
             if a_line != a_below:
                 _live, _row, col_term, _corner = _bnd_and_corner(
-                    ax, k, a_line, gz, mirror=mirror
+                    ax, k, a_line, gz, mirror=mirror, rows=rows
                 )
             acc.add(live, beta, row_term, col_term, corner)
     return acc.flush()
