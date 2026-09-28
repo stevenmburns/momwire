@@ -817,27 +817,36 @@ def axis_data(
         F = share_from["F_csr"]
         Fd = share_from["Fd_csr"]
         seg_rows = share_from["seg_rows"]
+        # The end table too (momwire#1029 phase 3): it is a function of the
+        # basis and the geometry only, never of the sampling, and each end's
+        # value row is dense in n -- 19 MB per axis at 150 radials, held for
+        # the whole fill, twice.
+        shared_ends = share_from["ends"]
     else:
         F, Fd, seg_rows = basis.samples(seg_runs, u_phys)
         F, Fd = _as_csr(F), _as_csr(Fd)
+        shared_ends = None
 
     # Signed wire-end table: (point, sign, per-basis value there). σ = −1
     # at a wire's first segment's u = 0 end, +1 at its last segment's
     # u = h end — the by-parts orientation the derivation pinned.
     seg_off = geom.seg_offsets
-    ends = []
-    on_axis = set(int(g) for g in seg_idx)
-    for w in range(len(seg_off) - 1):
-        first, last = seg_off[w], seg_off[w + 1] - 1
-        if first not in on_axis:
-            continue
-        for gseg, sign, u_end in ((first, -1.0, 0.0), (last, +1.0, None)):
-            hh = geom.h[gseg]
-            u = hh if u_end is None else 0.0
-            pt = geom.seg_l[gseg] + (u / hh) * (geom.seg_r[gseg] - geom.seg_l[gseg])
-            fv = basis.end_values(gseg, u)
-            if np.any(fv != 0.0):
-                ends.append((pt, sign, fv))
+    if shared_ends is not None:
+        ends = shared_ends
+    else:
+        ends = []
+        on_axis = set(int(g) for g in seg_idx)
+        for w in range(len(seg_off) - 1):
+            first, last = seg_off[w], seg_off[w + 1] - 1
+            if first not in on_axis:
+                continue
+            for gseg, sign, u_end in ((first, -1.0, 0.0), (last, +1.0, None)):
+                hh = geom.h[gseg]
+                u = hh if u_end is None else 0.0
+                pt = geom.seg_l[gseg] + (u / hh) * (geom.seg_r[gseg] - geom.seg_l[gseg])
+                fv = basis.end_values(gseg, u)
+                if np.any(fv != 0.0):
+                    ends.append((pt, sign, fv))
     return dict(
         nodes=nodes,
         t=t_node,
