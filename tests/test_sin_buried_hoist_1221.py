@@ -71,10 +71,11 @@ def test_the_point_matched_lane_serves_buried_and_crossing():
     assert "buried+crossing_junction" not in refusals
     assert "buried+crossing_multi_node" in refusals
     assert "buried+crossing_hub" in refusals
+    assert "buried+crossing_oblique" in refusals
     s = SinusoidalSolver(
         wires=[
             np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 2.0)]),
-            np.array([(0.0, 0.0, 0.0), (2.0, 0.0, -0.5)]),
+            np.array([(0.0, 0.0, 0.0), (0.5, 0.0, -1.5)]),
         ],
         n_per_edge_per_wire=[[5], [5]],
         feeds=[(0, 1.0, 1 + 0j)],

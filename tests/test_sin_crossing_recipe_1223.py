@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 from momwire import _crossing_fill
+from momwire import sinusoidal as sin_mod
 from momwire.sinusoidal import SinusoidalBasisSampler, SinusoidalSolver
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
@@ -42,6 +43,13 @@ ROD = (
 ROD_J = [[(0, "end"), (1, "start")]]
 
 DECKS = {"bent": (BENT, BENT_J), "rod": (ROD, ROD_J)}
+# A near-normal crossing the lane SERVES (option A): the above wire vertical,
+# the buried one leaning 25 degrees off the normal, both starting at the node.
+LEAN = (
+    [[0.0, 0.0, 0.0], [0.0, 0.0, 2.0]],
+    [[0.0, 0.0, 0.0], [0.6339, 0.0, -1.3595]],
+)
+LEAN_J = [[(0, "start"), (1, "start")]]
 SOILS = [(4.0, 1e-3), (13.0, 0.005), (30.0, 0.05), (80.0, 5.0)]
 
 
@@ -51,6 +59,10 @@ class _Crossing(SinusoidalSolver):
 
     def _serves_crossing(self):
         return True
+
+    def _refuse_oblique_crossing(self, crossing):
+        """The recipe and the blocks hold at any angle; option A's scope is
+        the real class's (test_the_real_class_refuses_an_oblique_node)."""
 
 
 def _eps_tilde(eps_r, sigma):
@@ -213,6 +225,54 @@ def test_the_node_is_ordinary_on_this_lane_and_c0_on_sg():
 def test_the_real_class_serves_the_crossing_node():
     """Stage 2 lifted the refusal (U5): the real class's crossing set is the
     node, and the node is the ordinary two-k junction."""
-    s = _solver("bent", _eps_tilde(13.0, 0.005), cls=SinusoidalSolver)
+    s = _solver("rod", _eps_tilde(13.0, 0.005), cls=SinusoidalSolver)
     assert set(s._crossing_junction_indices()) == {0}
     assert np.isfinite(complex(s.compute_impedance()[0]))
+
+
+def test_the_real_class_refuses_an_oblique_node():
+    """Option A: the bent deck's buried member leaves the node 76 degrees off
+    the normal, past the imposed condition's scope, so the real class refuses
+    it by name and SG serves it."""
+    s = _solver("bent", _eps_tilde(13.0, 0.005), cls=SinusoidalSolver)
+    with pytest.raises(NotImplementedError) as err:
+        s.compute_impedance()
+    assert str(err.value).endswith(sin_mod._CROSSING_OBLIQUE_REFUSAL)
+    assert "sum to 76.0 degrees" in str(err.value)
+    assert (
+        SinusoidalSolver.capabilities.refusal("buried", "crossing_oblique")
+        == sin_mod._CROSSING_OBLIQUE_REFUSAL
+    )
+    sg = _solver("bent", _eps_tilde(13.0, 0.005), cls=SinusoidalGalerkinSolver)
+    assert np.isfinite(complex(sg.compute_impedance()[0]))
+
+
+@pytest.mark.parametrize(
+    ("above", "below", "served"),
+    [
+        # The rule is the SUM of the two tilts: a straight wire tilted 20
+        # degrees through the plane (20 + 20) is refused although each member
+        # alone is within 30, and a node leaning 14 + 14 is served.
+        ([-0.6840, 0.0, 1.8794], [0.5130, 0.0, -1.4095], False),
+        ([-0.4838, 0.0, 1.9406], [0.3629, 0.0, -1.4555], True),
+        ([0.0, 0.0, 2.0], [0.0, 0.0, -1.5], True),
+    ],
+    ids=["straight-tilted-20", "lean-14-14", "rod"],
+)
+def test_the_scope_is_the_sum_of_the_two_tilts(above, below, served):
+    s = SinusoidalSolver(
+        wires=[[[0.0, 0.0, 0.0], above], [[0.0, 0.0, 0.0], below]],
+        n_per_edge_per_wire=[[7], [7]],
+        feeds=[(0, 1.0, 1 + 0j)],
+        wavelength=WL7,
+        wire_radius=0.001,
+        junctions=[[(0, "start"), (1, "start")]],
+        ground_z=0.0,
+        ground_eps=_eps_tilde(13.0, 0.005),
+        ground_model="sommerfeld",
+    )
+    if served:
+        assert np.isfinite(complex(s.compute_impedance()[0]))
+    else:
+        with pytest.raises(NotImplementedError, match="sum to 40.0 degrees"):
+            s.compute_impedance()
