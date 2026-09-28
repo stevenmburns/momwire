@@ -824,12 +824,28 @@ def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
     (Δh/ρ_eff)·∂ρ at the pair's own ρ_eff: the chain factor ρ/ρ_eff and the
     unit vector Δh/ρ together, never a division by a ρ that can be 0.
 
-    Dense and memo-free (stage 2 is the dense point block by decision; the
-    tiled and memoised routes are stage 3): one column per distinct ρ_eff,
-    its members paired with their own z′ -- through the C++ column twin when
+    Dense and memo-free: every element of `rho` is evaluated, grouped only
+    by its own ρ_eff into columns (one column per distinct ρ_eff, its
+    members paired with their own z′), through the C++ column twin when
     built (momwire#1224), else `point_keys_columns`, which is its reference.
-    """
+
+    `_crossing_fill.point_observer_block`'s default route (momwire#1224
+    stage 3 unit 3) does not call this over its whole (observers × source
+    nodes) grid: it dedups the grid's exact (ρ_eff, z, z′) triples itself,
+    per observer-row chunk, and evaluates the merged unique list ONCE
+    through `point_designed_rows` — the fold below, factored out as
+    `_point_radius_tables_folded`, so a repeated triple is priced once."""
     rho_eff = radius_fold(rho, wire_radius)
+    return _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=p)
+
+
+def _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=None):
+    """`point_radius_tables` after its fold — the SAME body, callable
+    directly on an ALREADY-FOLDED ρ_eff. `point_designed_rows` is this
+    fed the three columns of an (m, 3) row block (`designed_rows`'s shape);
+    folding ρ_eff a second time there would be wrong (`radius_fold` is the
+    one spelling of the fold)."""
+    rho_eff = np.asarray(rho_eff, dtype=float)
     z = np.broadcast_to(np.asarray(z, dtype=float), rho_eff.shape)
     zp = np.broadcast_to(np.asarray(zp, dtype=float), rho_eff.shape)
     flat_r, flat_z, flat_zp = rho_eff.ravel(), z.ravel(), zp.ravel()
@@ -866,6 +882,29 @@ def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
             sel = np.flatnonzero(inv == i)
             out[sel] = point_keys_columns(eps_t, k2, r, flat_z[sel], flat_zp[sel], p=p)
     return {key: out[:, i].reshape(rho_eff.shape) for i, key in enumerate(POINT_KEYS)}
+
+
+def point_designed_rows(eps_t, k2, rows, p=None):
+    """`point_radius_tables` over rows that are ALREADY DISTINCT and ALREADY
+    FOLDED (ρ_eff, z, z′), the point family's `designed_rows` twin
+    (momwire#1224 stage 3 unit 3). No dedup beyond `_point_radius_tables_
+    folded`'s own per-ρ_eff column grouping, and no fold: the caller
+    (`_crossing_fill`'s chunked point route) dedups on the same folded ρ_eff
+    `radius_tables` keys its memo on, and folding it again here would be
+    wrong (`radius_fold`).
+
+    Distinct rows are what makes this bit-identical to a whole-grid
+    `point_radius_tables` call: a ρ_eff column's value depends on the
+    column's members through `s = z − z′`'s minimum alone (`_column_rule_
+    j1`, read off `_refuse_bad_members`), and dropping a triple's
+    duplicates never changes the set of distinct s values a column carries,
+    so its minimum is unchanged (measured bit-identical over a real solve's
+    triples, `scratch/1224-stage3/dedup_probe.py`). Returns {key: (m,)
+    array} over POINT_KEYS, row i for `rows[i]`."""
+    rows = np.asarray(rows, dtype=float)
+    return _point_radius_tables_folded(
+        eps_t, k2, rows[:, 0], rows[:, 1], rows[:, 2], p=p
+    )
 
 
 # The array memo's hash: the three coordinates' IEEE bit patterns folded into
