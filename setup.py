@@ -346,6 +346,8 @@ _NEAR_HEADERS = [
     "src/momwire/_branch_cut_inline.h",
     # The contour engine's fused multiply-adds (momwire#1194).
     "src/momwire/_fma_inline.h",
+    # The column machinery both TUs of this extension share (momwire#1224).
+    "src/momwire/_near_interface_columns_inline.h",
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
 
 # Compile the accelerator's translation units concurrently (momwire#687). With
@@ -439,6 +441,19 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
             "_near_interface_accel",
             _suffix,
             ["src/momwire/_near_interface_accel.cpp"],
+            depends=_NEAR_HEADERS,
+            compile_args=_near_args,
+            include_dirs=["extern/xsf/include"],
+        )
+    )
+    # momwire#1224: the point-observer column twin. Its own extension, not a
+    # second TU of the one above: the vendored xsf headers define functions
+    # non-inline, so two TUs including them cannot link into one module.
+    ext_modules.append(
+        _variant(
+            "_near_interface_point_accel",
+            _suffix,
+            ["src/momwire/_near_interface_point_accel.cpp"],
             depends=_NEAR_HEADERS,
             compile_args=_near_args,
             include_dirs=["extern/xsf/include"],
