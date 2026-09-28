@@ -64,7 +64,14 @@ def test_the_twin_is_the_numpy_route(soil, monkeypatch):
         if scale == 0.0:
             assert np.max(np.abs(got[key])) == 0.0, key
             continue
-        assert np.max(np.abs(got[key] - ref[key])) <= 1e-12 * scale, key
+        diff = np.abs(got[key] - ref[key])
+        i = int(np.argmax(diff))
+        rho, z, zp = (a.ravel()[i] for a in _triples())
+        assert diff.max() <= 1e-12 * scale, (
+            f"{key}: max |twin - numpy| = {diff.max():.3e} = {diff.max() / scale:.3e} "
+            f"of max |{key}| ({scale:.3e}); worst at rho={rho:g} z={z:g} zp={zp:g}, "
+            f"numpy {ref[key].ravel()[i]!r} twin {got[key].ravel()[i]!r}"
+        )
 
 
 def test_on_the_axis_the_rho_keys_are_an_exact_zero(monkeypatch):
