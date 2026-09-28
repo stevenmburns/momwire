@@ -5046,6 +5046,31 @@ def _ends_to_nodes(k, a2, obs, src, Fsp, *, budget_mb=48.0):
     return Gt
 
 
+def _ends_to_nodes_contracted(k, a2, obs, src, Fsp, right, *, budget_mb=48.0):
+    """`Fsp @ (G(obs, src).T @ right)` — `_ends_to_nodes`' rows contracted
+    against `right` (E, R) inside the node-block loop, so neither the (E, n)
+    kernel rows nor their `(n, E)` product ever exist. `Fsp` may be a row
+    subset (the sector route's `rows`). The (n, R) answer is all that is
+    kept; R is a handful of live rows on the route (momwire#1029 phase 3).
+
+    Reassociates `_ends_to_nodes` followed by a product with `right`, so it
+    is read to scale, never to the bit, the contract `_bnd_and_corner`
+    already declares.
+    """
+    E = obs.shape[0]
+    P = src.shape[0]
+    per_node = max(E * _ENDS_TO_NODES_BYTES_PER_PAIR, 1)
+    block = max(1, min(P, int(budget_mb * (1 << 20) // per_node)))
+    Fc = Fsp.tocsc()
+    out = np.zeros((Fsp.shape[0], right.shape[1]), dtype=np.complex128)
+    for p0 in range(0, P, block):
+        p1 = min(p0 + block, P)
+        d = src[None, p0:p1, :] - obs[:, None, :]
+        Ge = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, b)
+        out += Fc[:, p0:p1] @ (Ge.T @ right)
+    return out
+
+
 def _bnd_and_corner(ax, k, a_wire, gz, mirror, rows=None):
     """The same-medium by-parts boundary shape on one axis (β = 1):
     −test-end rows, −source-end columns, +corner — the derivation's
@@ -5108,21 +5133,23 @@ def _bnd_and_corner(ax, k, a_wire, gz, mirror, rows=None):
     pe = _mir(ptE)  # (E, 3) source ends (mirrored)
     a2 = a_wire * a_wire
     Fsp = _fdw_sparse(ax)  # (n, P) CSR of Fd*w
-    # test ends (unmirrored observation) against mirrored source nodes, and
-    # source ends (mirrored) against unmirrored observation nodes.
-    Gt = _ends_to_nodes(k, a2, ptE, src, Fsp)  # (E, n)
-    Gs = _ends_to_nodes(k, a2, pe, pts, Fsp)  # (E, n)
     d = ptE[:, None, :] - pe[None, :, :]
     Gee = _g_of_r(k, np.sqrt(a2 + np.einsum("eij,eij->ei", d, d)))  # (E, E)
     if rows is None:
+        # test ends (unmirrored observation) against mirrored source nodes,
+        # and source ends (mirrored) against unmirrored observation nodes.
+        Gt = _ends_to_nodes(k, a2, ptE, src, Fsp)  # (E, n)
+        Gs = _ends_to_nodes(k, a2, pe, pts, Fsp)  # (E, n)
         row_term = -(sf.T @ Gt)  # (L, n)
         col_term = -(Gs.T @ sf)  # (n, L)
         corner = sf.T @ Gee @ sf  # (L, L)
         return live, row_term, col_term, corner
+    # The sector route: the same three terms, contracted inside the node
+    # loop, so the (E, n) kernel rows `Gt` / `Gs` are never formed.
     sel, _pos = _in_rows(rows, live)
     sfs = sf[:, sel]  # (E, S): the live rows the route reads
-    row_term = -(sfs.T @ Gt)  # (S, n)
-    col_term = -(Gs[:, rows].T @ sf)  # (|rows|, L)
+    row_term = -_ends_to_nodes_contracted(k, a2, ptE, src, Fsp, sfs).T  # (S, n)
+    col_term = -_ends_to_nodes_contracted(k, a2, pe, pts, Fsp[rows], sf)  # (|rows|, L)
     corner = sfs.T @ Gee @ sf  # (S, L)
     return live, row_term, col_term, corner
 
