@@ -1657,6 +1657,9 @@ _ROUTES = dict.fromkeys(
         "point_chunked",
         "point_chunks",
         "point_chunk_max_rows",
+        "point_eval_chunked",
+        "point_eval_chunks",
+        "point_eval_chunk_max_rows",
     ),
     0,
 )
@@ -2379,7 +2382,8 @@ def _block_preamble(ctx):
 # forward (observers-above) branch's k3.
 _POINT_SIX_KEYS = ("U", "V", "W", "dzW", "dzpW")
 # `point_observer_block`'s default route (momwire#1173/#1224 design pattern):
-# one dedup + one designed-tables/point-family evaluation over the grid's
+# one dedup + a COLUMN-CHUNKED designed-tables/point-family evaluation
+# (`_POINT_EVAL_CHUNKED`, momwire#1224 stage 3 unit 4) over the grid's
 # unique triples, gathered and contracted per OBSERVER-ROW chunk. False
 # takes `_point_observer_block_dense` instead -- the whole-grid reference
 # the chunked route is gated against bit for bit
@@ -2398,6 +2402,37 @@ _POINT_NEG_CONTROL = False
 # 64 MiB main-sandwich chunk. Chunking never moves a bit
 # (`_chunked_point_tables`), so this is a memory choice only.
 _POINT_CHUNK_PAIRS = 1 << 18
+# `_chunked_point_tables`'s EVALUATION route (momwire#1224 stage 3 unit 4,
+# distinct from `_POINT_CHUNKED` above, which only chunks the gather/
+# contraction): True (default) runs `designed_rows` / `point_designed_rows`
+# in COLUMN-CHUNKED calls over the merged unique triples
+# (`_column_chunked_point_eval`), never splitting a ρ_eff column across two
+# calls. False takes the ONE-SHOT call over the whole unique set that stage
+# 3 unit 3 shipped, kept as the bit-identity gate's reference
+# (tests/test_point_eval_chunked_1224.py).
+_POINT_EVAL_CHUNKED = True
+# TEST-ONLY. Deliberately puts one ρ_eff column's members into two separate
+# evaluation calls instead of one, so the bit-identity gate can be shown to
+# fail -- `_POINT_NEG_CONTROL`'s pattern, narrowed to the evaluation route
+# (`_column_chunked_point_eval`).
+_POINT_EVAL_NEG_CONTROL = False
+# One evaluation chunk's row budget -- never split across a ρ_eff column, so
+# a column bigger than this is its own (over-budget) chunk. Per row, what
+# this chunks is the one-shot evaluation's OWN internal transient, not the
+# output (the output arrays are the same size chunked or not): `designed_
+# rows`' column route (`_near_interface._column_blocks`) holds six intp
+# index arrays (rho/inv/order/rank/gid/member_order, 8 B each on the common
+# `_index_dtype` -- more on huge fills) plus the reordered zs/zps copies
+# (2 x 8 B), and its `out[member_order] = vals` copy holds the fresh block
+# and its scatter target alive together (2 x `N_KEYS` x 16 B complex128 =
+# 192 B); `point_designed_rows` pays the same shape for `POINT_KEYS` (2 x
+# `N_POINT_KEYS` x 16 B = 128 B) plus its own uniq/inv/order/sizes/offsets
+# arrays (~5 x 8 B = 40 B). ~450 B/row altogether -- 1<<17 rows is ~59 MiB
+# at that rate, in the same neighbourhood as `_POINT_CHUNK_PAIRS`'s per-pair
+# budget and `_MAIN_CHUNK_BYTES`. Measured, not derived to the byte: see
+# scratch/1224-stage3 for the BRV memwho.py readout this budget was picked
+# against.
+_POINT_EVAL_CHUNK_ROWS = 1 << 17
 
 
 def _point_kernels_dense(
@@ -2430,6 +2465,138 @@ def _point_grad_v(az, pk, g, *, observers_above):
     return az * dz + g * pk["gRhoV"]
 
 
+def _column_ranges(rho_eff, budget):
+    """Partition `rho_eff`'s row INDICES into chunks that never split a
+    ρ_eff column (`_near_interface.group_columns`'s key: exact float),
+    greedily filling each chunk to at most `budget` rows except that a
+    single column bigger than the budget stands alone as its own
+    (over-budget) chunk (momwire#1224 stage 3 unit 4).
+
+    Returns a list of int index arrays into `rho_eff`, columns and chunks
+    both in ascending ρ_eff order — an artifact of building the partition
+    from a sort, not a requirement: a column's evaluated rule depends only
+    on the SET of its own members (their minimum s = z − z′,
+    `_column_rule`/`_column_rule_j1`), never on which call asked it or what
+    order the calls ran in, so any grouping of whole columns into chunks,
+    in any chunk order, reproduces the same values
+    (`_column_chunked_point_eval`)."""
+    order = np.argsort(rho_eff, kind="stable")
+    sorted_rho = rho_eff[order]
+    n = sorted_rho.size
+    if n == 0:
+        return []
+    new_col = np.empty(n, dtype=bool)
+    new_col[0] = True
+    new_col[1:] = sorted_rho[1:] != sorted_rho[:-1]
+    col_starts = np.flatnonzero(new_col)
+    col_ends = np.concatenate([col_starts[1:], [n]])
+    chunks = []
+    chunk_start = col_starts[0]
+    chunk_rows = 0
+    for c0, c1 in zip(col_starts.tolist(), col_ends.tolist()):
+        size = c1 - c0
+        if chunk_rows and chunk_rows + size > budget:
+            chunks.append(order[chunk_start:c0])
+            chunk_start = c0
+            chunk_rows = 0
+        chunk_rows += size
+    chunks.append(order[chunk_start:n])
+    return chunks
+
+
+def _column_chunked_point_eval(eps_t, k_p, uniq, memo):
+    """`_chunked_point_tables`'s evaluation of its merged unique triples --
+    `designed_rows` and `point_designed_rows` -- run in calls of WHOLE ρ_eff
+    columns (`_column_ranges`, budget `_POINT_EVAL_CHUNK_ROWS`) instead of
+    one call over the whole set (momwire#1224 stage 3 unit 4, `_POINT_EVAL_
+    CHUNKED`). This is the fill's last measured memory transient after
+    stage 3 unit 3: the BRV at nominal 256 asks ~500 k unique triples in
+    one `designed_rows` / `point_designed_rows` pair, and `memwho.py` put
+    the process peak inside that one call.
+
+    Why cutting the CALL cannot move a bit, where cutting the GATHER
+    (`_chunked_tables`, `_chunked_point_tables`) already could not: both
+    `designed_rows`' column route (`_near_interface.group_columns` /
+    `_column_blocks`) and `point_designed_rows`' own grouping (`_point_
+    radius_tables_folded`'s `np.unique` on ρ_eff) group FRESH rows by exact
+    ρ_eff alone, and a column's rule depends only on the SET of its
+    members' z, z′ through the smallest s = z − z′
+    (`_column_rule`/`_column_rule_j1`) -- never their order, and never
+    which call asked them. Routing every ρ_eff value's WHOLE membership
+    into ONE call therefore builds, chunk by chunk, exactly the column a
+    single whole-grid call would have built for it: same members, same
+    s_min, same rule. `memo` (a `TripleMemo`/`ProductMemo`) sees each
+    chunk's rows as its own `lookup` then an `insert` of its own misses;
+    insertion order changes only WHEN a later row is found as a hit, never
+    the floats a hit returns (`TripleMemo.insert` stores each row's
+    evaluated value once, and a lookup after that always returns that same
+    value) -- so the union of chunk calls holds the same rows with the
+    same values a single call would. `point_designed_rows` is memo-free
+    and dedup-free beyond its own per-call ρ_eff grouping, which the SAME
+    column cut preserves for it too, since both families key on the
+    identical folded ρ_eff (`radius_fold`, one spelling, applied once by
+    `_chunked_point_tables` before either is called).
+
+    A column split ACROSS chunks would NOT preserve this: the members
+    landing in a later chunk would group among themselves alone, without
+    the members already evaluated (and, for the six family, memo'd) in an
+    earlier chunk -- a different member set, so possibly a different
+    s_min and a different rule for those members (`_POINT_EVAL_NEG_
+    CONTROL`, and `_chunked_tables`'/`_chunked_point_tables`'s own reason
+    their GATHER never splits a column either).
+
+    Returns `(six_vals, point_vals)`, `{key: (m,) array}` over
+    `_POINT_SIX_KEYS` and `_near_interface.POINT_KEYS` -- exactly the shape
+    a one-shot evaluation returns."""
+    m = uniq.shape[0]
+    six_out = np.empty((m, _near_interface.N_KEYS), dtype=np.complex128)
+    point_out = {
+        key: np.empty(m, dtype=np.complex128) for key in _near_interface.POINT_KEYS
+    }
+    if m == 0:
+        six_vals = {
+            key: six_out[:, _near_interface.KEYS.index(key)] for key in _POINT_SIX_KEYS
+        }
+        return six_vals, point_out
+
+    chunks = _column_ranges(uniq[:, 0], _POINT_EVAL_CHUNK_ROWS)
+    if _POINT_EVAL_NEG_CONTROL:
+        # TEST-ONLY: split the LAST column across two calls on purpose, so
+        # the same ρ_eff is asked of `designed_rows`/`point_designed_rows`
+        # in two separate calls instead of one -- the split this function
+        # otherwise never makes. `last`'s tail is one column's members
+        # (`_column_ranges` never splits a column INTO a chunk, so a
+        # chunk's own rows are ascending ρ_eff and its tail run is exactly
+        # the largest ρ_eff present in it).
+        last = chunks[-1]
+        rho_last = uniq[last, 0]
+        tail_start = int(np.searchsorted(rho_last, rho_last[-1], side="left"))
+        col = last[tail_start:]
+        if col.size >= 2:
+            half = col.size // 2
+            chunks = [*chunks[:-1], last[:tail_start], col[:half], col[half:]]
+    n_chunks = 0
+    max_rows = 0
+    for idx in chunks:
+        n_chunks += 1
+        max_rows = max(max_rows, idx.size)
+        sub = uniq[idx]
+        six_out[idx] = _near_interface.designed_rows(
+            eps_t, k_p, sub, rtol=_CROSS_RTOL, memo=memo
+        )
+        for key, v in _near_interface.point_designed_rows(eps_t, k_p, sub).items():
+            point_out[key][idx] = v
+    _ROUTES["point_eval_chunked"] += 1
+    _ROUTES["point_eval_chunks"] += n_chunks
+    _ROUTES["point_eval_chunk_max_rows"] = max(
+        _ROUTES["point_eval_chunk_max_rows"], max_rows
+    )
+    six_vals = {
+        key: six_out[:, _near_interface.KEYS.index(key)] for key in _POINT_SIX_KEYS
+    }
+    return six_vals, point_out
+
+
 def _chunked_point_tables(ctx, eps_t, k_p, rho, z_o, z_s, observers_above, rows, memo):
     """`_tables` and the point family (`point_radius_tables`) together over
     `point_observer_block`'s (observers × source-node) grid, served as
@@ -2449,14 +2616,19 @@ def _chunked_point_tables(ctx, eps_t, k_p, rho, z_o, z_s, observers_above, rows,
     grid's exact triples therefore serves both, exactly as `_chunked_tables`
     serves the four cross keys: pass 1 dedups each chunk's folded triples
     and merges them into the grid's unique rows in the grid's OWN first-
-    appearance order; ONE `designed_rows` call and ONE `point_designed_rows`
-    call evaluate that list; pass 2 gathers each chunk's six AND point
-    values from the one evaluation by the chunk's own dedup inverse. See
-    `_chunked_tables` for why none of this moves a bit -- the point family's
-    per-ρ_eff column grouping depends on its members' distinct s = z − z′
-    only through the minimum (`point_designed_rows`), exactly as the six
-    family's does, so deduplication cannot change which rule a column picks
-    there either.
+    appearance order; the merged list is then evaluated through `designed_
+    rows` and `point_designed_rows` — one call each over the whole list when
+    `_POINT_EVAL_CHUNKED` is False, or, by default, COLUMN-CHUNKED calls
+    over it (`_column_chunked_point_eval`, momwire#1224 stage 3 unit 4);
+    pass 2 gathers each observer chunk's six AND point values from that
+    evaluation by the chunk's own dedup inverse. See `_chunked_tables` for
+    why the DEDUP cannot move a bit, and `_column_chunked_point_eval` for
+    why cutting the EVALUATION into column-chunked calls cannot either --
+    the point family's per-ρ_eff column grouping depends on its members'
+    distinct s = z − z′ only through the minimum (`point_designed_rows`),
+    exactly as the six family's does, so neither deduplication nor a
+    whole-column cut of the evaluation can change which rule a column
+    picks.
 
     `z_o`, `z_s` are the observer and source-node axes' own z (1-D, relative
     to ground), not broadcast to the grid by the caller: `observers_above`
@@ -2502,14 +2674,18 @@ def _chunked_point_tables(ctx, eps_t, k_p, rho, z_o, z_s, observers_above, rows,
     del triples
     gid = inv_sorted.astype(idx_t)[dest]  # chunk-unique row -> grid-unique row
     del dest, inv_sorted
-    six_block = _near_interface.designed_rows(
-        eps_t, k_p, uniq, rtol=_CROSS_RTOL, memo=memo
-    )
-    six_vals = {
-        key: six_block[:, _near_interface.KEYS.index(key)] for key in _POINT_SIX_KEYS
-    }
-    del six_block
-    point_vals = _near_interface.point_designed_rows(eps_t, k_p, uniq)
+    if _POINT_EVAL_CHUNKED:
+        six_vals, point_vals = _column_chunked_point_eval(eps_t, k_p, uniq, memo)
+    else:
+        six_block = _near_interface.designed_rows(
+            eps_t, k_p, uniq, rtol=_CROSS_RTOL, memo=memo
+        )
+        six_vals = {
+            key: six_block[:, _near_interface.KEYS.index(key)]
+            for key in _POINT_SIX_KEYS
+        }
+        del six_block
+        point_vals = _near_interface.point_designed_rows(eps_t, k_p, uniq)
     del uniq
     off = 0
     for sl, (inv, m) in zip(rows, inverses):
