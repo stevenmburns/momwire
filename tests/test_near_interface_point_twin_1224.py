@@ -3,8 +3,17 @@
 `_near_interface_point_accel.near_interface_point_columns` against its
 reference, the numpy `point_keys_columns` route, through the one caller
 (`point_radius_tables`). The house twin rule: relative, never bit (libmvec,
-Amos and the ordered lane sum differ in the last bits); measured worst 2.1e-15
-over the soils below (Skylake, 2026-09-28), gated at 1e-12.
+Amos and the ordered lane sum differ in the last bits).
+
+The bar is 1e-9 of each key's largest value, set from two platforms' numbers
+rather than copied from the six twin's 1e-12:
+  * Linux/Skylake: worst 2.1e-15, every key, every soil;
+  * macOS arm64 (CI, 2026-09-28): 9.2e-11, on dRhoW over soil A at the
+    near-corner member (rho_eff = the 1 mm wire radius, s = 1.5 mm). dRhoW is
+    the difference-type key (W = (gamma_p - gamma_m) V), and the corner's
+    integral cancels hard, so Apple's libm and numpy's differing in the last
+    bits is amplified ~1e5 there. Every other key and soil met 1e-12 on macOS.
+A real defect (a wrong weight, a sign) is an O(1) error, far above either.
 
 Also the exact zeros the numpy route has: the rho keys on the axis (J1(0) = 0)
 and dRhoW at eps~ = 1 (W~ = 0), and the refusals, which stay the numpy walk's
@@ -34,6 +43,9 @@ SOILS = {
     "highsigma": _ground_refl.eps_tilde((13.0, 5.0), OM7, EPS0),
     "sea": _ground_refl.eps_tilde((80.0, 5.0), OM7, EPS0),
 }
+
+
+_BAR = 1e-9  # see the module docstring: macOS measures 9.2e-11 at the corner
 
 
 def _triples(seed=1224, n=300):
@@ -67,7 +79,7 @@ def test_the_twin_is_the_numpy_route(soil, monkeypatch):
         diff = np.abs(got[key] - ref[key])
         i = int(np.argmax(diff))
         rho, z, zp = (a.ravel()[i] for a in _triples())
-        assert diff.max() <= 1e-12 * scale, (
+        assert diff.max() <= _BAR * scale, (
             f"{key}: max |twin - numpy| = {diff.max():.3e} = {diff.max() / scale:.3e} "
             f"of max |{key}| ({scale:.3e}); worst at rho={rho:g} z={z:g} zp={zp:g}, "
             f"numpy {ref[key].ravel()[i]!r} twin {got[key].ravel()[i]!r}"
