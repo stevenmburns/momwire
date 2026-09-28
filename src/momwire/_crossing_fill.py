@@ -2686,7 +2686,9 @@ def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
         t_parts.append(np.asarray(tc))
     _ROUTES["point_chunked"] += 1
     _ROUTES["point_chunks"] += n_chunks
-    _ROUTES["point_chunk_max_rows"] = max(_ROUTES["point_chunk_max_rows"], step)
+    _ROUTES["point_chunk_max_rows"] = max(
+        _ROUTES["point_chunk_max_rows"], min(step, nA)
+    )
     if t_parts:
         t = np.concatenate(t_parts, axis=1).T
     else:
