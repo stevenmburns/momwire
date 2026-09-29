@@ -49,6 +49,8 @@ struct FarPack {
     bool on = false;
     cd eps, k1, c2, c1k, ap, res_fv, g2k1;
     double k2 = 0.0;
+    // Derived once in set_far: sin/cos(ap), sqrt(cos(ap)), sin/cos(ap/2).
+    cd sap, cap, sqcap, s_hap, c_hap;
 };
 
 struct GridView {
@@ -136,6 +138,11 @@ static inline void set_far(
     G.far.res_fv = f[5];
     G.far.g2k1 = f[6];
     G.far.k2 = f[7].real();
+    G.far.sap = std::sin(G.far.ap);
+    G.far.cap = std::cos(G.far.ap);
+    G.far.sqcap = std::sqrt(G.far.cap);
+    G.far.s_hap = std::sin(0.5 * G.far.ap);
+    G.far.c_hap = std::cos(0.5 * G.far.ap);
 }
 
 // Faddeeva w(z) = e^{-z^2} erfc(-jz). Weideman's rational approximation
@@ -199,40 +206,65 @@ static inline cd pole_bracket(cd s) {
     return -acc + corr;
 }
 
-// The four surfaces at (r1, th) from `_sommerfeld.far_surfaces` (saddle, pole
-// and lateral wave; no edge matching). Mirrors the numpy body term for term;
-// the block comment above `far_surfaces` is the derivation.
-static void far_one(const FarPack &F, double r1, double th, cd out[4]) {
+// `_sommerfeld.far_surfaces` in two halves, so the continuation evaluates the
+// theta-only half once per pair and the range-dependent half at R1 and at
+// the edge. Mirrors the numpy body term for term; the block comment above
+// `far_surfaces` is the derivation.
+struct FarTheta {
+    double c, s, wt;
+    cd fv, n_rz, n_zzv, n_rr, n_u;  // the saddle, bar its 1/R1 term
+    cd pole;  // wt * res_fv * sqrt(cos(ap)/c)
+    cd shalf;  // sin((ap - theta)/2)
+};
+
+static inline FarTheta far_theta(const FarPack &F, double th) {
     const cd j(0.0, 1.0);
     const double k = F.k2, ks = k * k;
-    const cd k1 = F.k1, k1s = k1 * k1, c2 = F.c2;
-    const double c = std::cos(th), s = std::sin(th);
-
+    const cd k1s = F.k1 * F.k1;
+    FarTheta T;
+    T.c = std::cos(th);
+    T.s = std::sin(th);
+    const double c = T.c, s = T.s;
     const cd g2 = j * k * s;
     const cd g1 = std::sqrt(cd(ks * c * c, 0.0) - k1s);
     const cd rtm = (k1s * g2 - ks * g1) / (k1s * g2 + ks * g1);
     const cd rte = (g2 - g1) / (g2 + g1);
-    const cd fv = (rtm - c2) / k1s;
-    cd n_rz = -ks * c * s * fv;
-    cd n_zzv = ks * c * c * fv;
-    cd n_rr = -ks * c * c * fv;
-    cd n_r1 = -j * k / r1 * fv;
-    cd n_u = rte + c2;
-
+    T.fv = (rtm - F.c2) / k1s;
+    T.n_rz = -ks * c * s * T.fv;
+    T.n_zzv = ks * c * c * T.fv;
+    T.n_rr = -ks * c * c * T.fv;
+    T.n_u = rte + F.c2;
     // `_far_taper`: 1 below 50 deg, a raised cosine to 0 at 70.
     const double lo = 50.0 * M_PI / 180.0, hi = 70.0 * M_PI / 180.0;
     double x = (th - lo) / (hi - lo);
     x = x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x);
-    const double wt = 0.5 * (1.0 + std::cos(M_PI * x));
-    if (wt > 0.0) {
+    T.wt = 0.5 * (1.0 + std::cos(M_PI * x));
+    if (T.wt > 0.0) {
+        // sqrt(cos(ap)/c) and sin((ap - th)/2) from per-grid constants and
+        // real functions of th.
+        T.pole = T.wt * F.res_fv * F.sqcap / std::sqrt(c);
+        const double ch = std::cos(0.5 * th), sh = std::sin(0.5 * th);
+        T.shalf = F.s_hap * ch - F.c_hap * sh;
+    }
+    return T;
+}
+
+static inline void far_at(const FarPack &F, const FarTheta &T, double r1,
+                          cd out[4]) {
+    const cd j(0.0, 1.0);
+    const double k = F.k2, ks = k * k;
+    const cd k1 = F.k1, k1s = k1 * k1;
+    const double c = T.c, s = T.s;
+    cd n_rz = T.n_rz, n_zzv = T.n_zzv, n_rr = T.n_rr, n_u = T.n_u;
+    cd n_r1 = -j * k / r1 * T.fv;
+    if (T.wt > 0.0) {
         const double om = k * r1;
-        const cd ap = F.ap;
-        const cd sap = std::sin(ap), cap = std::cos(ap);
-        const cd em = std::polar(1.0, -0.25 * M_PI);
-        const cd sp = std::sqrt(2.0 * om) * em * std::sin(0.5 * (ap - th));
-        const cd inv_a0 = std::sqrt(0.5 * om) * em;
-        const cd amp = wt * F.res_fv * std::sqrt(cap / c) * inv_a0 *
-                       pole_bracket(sp);
+        const cd sap = F.sap, cap = F.cap;
+        const cd em(std::sqrt(0.5), -std::sqrt(0.5));  // e^{-j pi/4}
+        const double r2om = std::sqrt(2.0 * om);
+        const cd sp = r2om * em * T.shalf;
+        const cd inv_a0 = (0.5 * r2om) * em;  // sqrt(om/2) e^{-j pi/4}
+        const cd amp = T.pole * inv_a0 * pole_bracket(sp);
         n_rz += -ks * cap * sap * amp;
         n_zzv += ks * cap * cap * amp;
         n_rr += -ks * cap * cap * amp;
@@ -240,11 +272,11 @@ static void far_one(const FarPack &F, double r1, double th, cd out[4]) {
 
         const cd g2k1 = F.g2k1;
         const double rho = r1 * c, h = r1 * s;
-        if (g2k1.real() * h < 50.0 && rho > 0.0) {
+        if (g2k1.real() * h - k1.imag() * rho < 50.0 && rho > 0.0) {
             const cd rp = rho - j * h * k1 / g2k1;
-            const cd base = -j * wt *
+            const cd base = -j * T.wt *
                             std::exp(-j * k1 * rho - g2k1 * h + j * k * r1) *
-                            r1 / (std::sqrt(rho) * std::pow(rp, 1.5));
+                            r1 / (std::sqrt(rho) * (rp * std::sqrt(rp)));
             const cd dd2 = -2.0 * ks / ((k1s * g2k1) * (k1s * g2k1));
             const cd dd1 = -2.0 / (g2k1 * g2k1);
             n_rr += dd2 * (-k1 * k1s) * base;
@@ -264,9 +296,10 @@ static void far_one(const FarPack &F, double r1, double th, cd out[4]) {
 // `SommerfeldGrid._continue_past_edge` for one query: `surf` holds the
 // table's value at the edge on entry and the continued value on return.
 static void far_continue(const GridView &G, double r1, double theta, cd surf[4]) {
+    const FarTheta T = far_theta(G.far, theta);
     cd a[4], e[4];
-    far_one(G.far, r1, theta, a);
-    far_one(G.far, G.r1_max, theta, e);
+    far_at(G.far, T, r1, a);
+    far_at(G.far, T, G.r1_max, e);
     const double w = G.r1_max / r1;
     for (int q = 0; q < 4; ++q) surf[q] = a[q] + (surf[q] - e[q]) * w;
 }
