@@ -358,7 +358,8 @@ class Nec5FarFieldRequest:
 
 @dataclass(frozen=True)
 class Nec5NearFieldRequest:
-    """``NE`` / ``NH`` — near electric or magnetic field, rectangular.
+    """``NE`` / ``NH`` — near electric or magnetic field, on a rectangular
+    or a spherical grid.
 
     Both cards are EZNEC's (momwire#513): ``NE`` arrived first (one capture
     at the defaults, ``NE 0,1,1,1,0.,0.,0.,0.,0.,0.``), and capture sitting 4
@@ -366,6 +367,23 @@ class Nec5NearFieldRequest:
     button in the Near Field Analysis dialog (capture 0111, antennaknobs
     PR #970), and its field layout is ``NE``'s.  All ten fields are
     recorded; :attr:`magnetic` is which card wrote them.
+
+    :attr:`coordinates` picks how the three counts, starts and steps read
+    (momwire#1257):
+
+    ``0`` rectangular
+        ``(X, Y, Z)`` in metres.
+    ``1`` spherical
+        ``(R, θ, φ)``: the range in metres, then the angle from the ZENITH
+        (+z) in degrees, then the azimuth from +x toward +y in degrees, so
+        the point is ``R·(sinθ cosφ, sinθ sinφ, cosθ)``.  NOT NEC-2's order,
+        which puts φ second and θ third: this one was read off licensed
+        NEC-5 printouts of decks we wrote, whose tables print the Cartesian
+        point each ``(R, θ, φ)`` landed on — ``NE 1,1,1,1,10.,30.,60.,…``
+        prints ``(2.5, 4.3301, 8.6603)``.  An elevation angle is ``90 − θ``.
+
+    Either way the walk is the first coordinate fastest, then the second,
+    then the third, and the printed table stays Cartesian.
     """
 
     coordinates: int
@@ -1446,13 +1464,19 @@ class _Nec5Parser:
         Capture 0111 (momwire#513) pinned ``NH`` as ``NE``'s exact twin: the
         Near Field Analysis dialog's E/H radio button picks the mnemonic and
         nothing else about the card moves.
+
+        The first field is the grid's coordinate system, rectangular (0) or
+        spherical (1) — EZNEC writes ``NE 1`` when its user enters the grid
+        in spherical form, and SimNEC's ``NearField("p", …)`` asks for the
+        same thing (momwire#1257).  Anything else refuses by name.
         """
         coordinates = card.i(0)
-        if coordinates != 0:
+        if coordinates not in (0, 1):
             raise DeckError(
-                f"{card.mnemonic} coordinate system {coordinates} (spherical) is "
-                f"not part of this engine's nec5 dialect; rectangular (0) is the "
-                f"form EZNEC emits"
+                f"{card.mnemonic} coordinate system {coordinates} is not one "
+                f"this engine reads; the grid is rectangular (0: X, Y, Z in "
+                f"metres) or spherical (1: R in metres, then theta from the "
+                f"zenith and phi from +x, in degrees)"
             )
         self.requests.append(
             Nec5NearFieldRequest(

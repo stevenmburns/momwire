@@ -694,6 +694,21 @@ _REFUSE_NEAR_FIELD_CONTACT = (
     "field is served at every point off the contact - move the {card} card's "
     "observation point off wire {tag}'s base"
 )
+# momwire#1257: a near-field point BELOW a finite ground (``GN 0``/``GN 2``/
+# ``GD``). The readout composes the upper half-space's field (direct, image
+# and the reflected-wave remainder); inside the soil the field is the
+# TRANSMITTED one, which that composition is not, so the number it would print
+# there is not the field at that point. A spherical ``NE 1`` grid reaches the
+# soil as soon as theta passes 90 degrees, which is why this arrived with it.
+_REFUSE_NEAR_FIELD_BELOW = (
+    "{card} asks for the field at ({x:g}, {y:g}, {z:g}) metres, which is below "
+    "this deck's finite ground. The field inside the soil is the transmitted "
+    "field, and this engine's near-field readout composes the field ABOVE the "
+    "interface only (the transmitted readout is momwire#524), so it will not "
+    "print a number for a point in the soil. Every point at or above z = 0 is "
+    "served - on a spherical (NE 1) grid, keep theta (from the zenith) "
+    "between -90 and 90 degrees"
+)
 # The buried rung LANDED with momwire#553: a wire strictly below a ``GN 0`` /
 # ``GN 2`` interface is served, through the per-segment medium and the two
 # buried Sommerfeld families.  What is left of the old sentence splits three
@@ -1092,18 +1107,48 @@ def _grid_points(request: Nec5NearFieldRequest) -> np.ndarray:
     :func:`_near_field_refusal` asks whether any of them lands on a ground
     contact.  A refusal that walked its own grid could refuse a point the
     table never prints, or miss one it does.
+
+    ``NE 1`` (momwire#1257) walks ``(R, θ, φ)`` in the same nesting — R
+    fastest, then θ, then φ, measured on the linux oracle at ``NR = 2,
+    Nθ = 3, Nφ = 2`` — and each sample is placed at its Cartesian point,
+    which is all either consumer ever sees: the table prints X, Y, Z for a
+    spherical grid too.  θ is from the zenith and φ from +x (see
+    :class:`~momwire.deck._nec5.Nec5NearFieldRequest`).  An angle on a
+    multiple of 90° places its zero EXACTLY (:func:`_cos_sin_deg`), so a
+    horizon sample sits at z = 0 and prints ``0.0000E+00``; the licensed
+    engine prints ~1e-13 of R there instead.
     """
     n_x, n_y, n_z = request.counts
     start = np.asarray(request.origin, dtype=float)
     step = np.asarray(request.step, dtype=float)
-    return np.array(
-        [
-            start + np.array([ix, iy, iz]) * step
-            for iz in range(n_z)
-            for iy in range(n_y)
-            for ix in range(n_x)
-        ]
-    )
+    samples = [
+        start + np.array([ix, iy, iz]) * step
+        for iz in range(n_z)
+        for iy in range(n_y)
+        for ix in range(n_x)
+    ]
+    if request.coordinates == 0:
+        return np.array(samples)
+    points = []
+    for r, theta, phi in samples:
+        cos_t, sin_t = _cos_sin_deg(float(theta))
+        cos_p, sin_p = _cos_sin_deg(float(phi))
+        points.append((r * sin_t * cos_p, r * sin_t * sin_p, r * cos_t))
+    return np.array(points, dtype=float)
+
+
+def _cos_sin_deg(angle_deg: float) -> tuple[float, float]:
+    """``(cos, sin)`` of an angle in degrees, exact on the four axes.
+
+    ``math.cos(math.radians(90.0))`` is 6.1e-17, not 0, and a spherical
+    grid's horizon row would otherwise sit a hair above or below the ground
+    plane it names.  Off the axes this is the ordinary library trig.
+    """
+    quarter, rest = divmod(angle_deg, 90.0)
+    if rest == 0.0:
+        return ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[int(quarter) % 4]
+    rad = math.radians(angle_deg)
+    return math.cos(rad), math.sin(rad)
 
 
 def _contact_ends(deck: Nec5Deck) -> list[tuple[int, np.ndarray, float]]:
@@ -1149,13 +1194,33 @@ def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | 
     charge EXACTLY — ``C₂ = 1``, ``1 − C₂ = 0`` — and the singularity this
     sentence is about is not there to find.  The corpus decides the scope of
     anything wider.
+
+    One wider cell did arrive with ``NE 1`` (momwire#1257): a POINT BELOW a
+    finite ground, which a spherical grid reaches the moment θ passes 90°.
+    The field in the soil is the transmitted one, and the composition above
+    is the upper half-space's — evaluated below the interface it prints a
+    number of the size of the field in air, where the licensed engine prints
+    one attenuated by hundreds of orders of magnitude.  So that point refuses
+    by name too, checked first because it is the grid's shape rather than
+    one unlucky cell.  A point below a PERFECT ground is not refused: both
+    engines print the same direct-plus-image sum there (measured on a
+    ``GN 1`` spherical grid through the nadir).
     """
     if not isinstance(deck.ground, (Nec5MininecGround, Nec5SommerfeldGround)):
         return None
+    points = _grid_points(request)
+    for point in points:
+        if float(point[2]) < 0.0:
+            return _REFUSE_NEAR_FIELD_BELOW.format(
+                card=_near_field_card(request),
+                x=point[0],
+                y=point[1],
+                z=point[2],
+            )
     contacts = _contact_ends(deck)
     if not contacts:
         return None
-    for point in _grid_points(request):
+    for point in points:
         for tag, contact, tol in contacts:
             if float(np.linalg.norm(point - contact)) <= tol:
                 return _REFUSE_NEAR_FIELD_CONTACT.format(
