@@ -15,9 +15,10 @@ Measured on the licensed printouts (and on single-point probe decks run the same
 - A coordinate that is exactly zero prints as about 2.6e-14 of R (`2.6485E-13` at R = 10 m). momwire places those zeros exactly and prints `0.0000E+00`.
 - Any other first field (2, −1) is not a near-field request at all.
 
-On the ground deck, two kinds of rows are left out of the value gate, and the test says why:
+On the ground deck, one kind of row is left out of the value gate, and the test says why:
 
 - **The licensed engine's high-elevation defect.** At R = 1000 m, θ = 5°, its near field is about 290 times its own far field in that direction, and 290 times its own near field at the zenith one row away. Its far field and momwire's near field show no such jump. A sweep of Dan's test bed (AC6LA, QRZ 1003328 #172) puts it at 1° to 8° from the zenith (9 % at 1°, up to 1100 times at 7°).
-- **momwire's grazing defect.** At R = 1000 m, off the broadside plane, within about 15° of the horizon, momwire's vertically polarised near field is wrong. At the horizon it is about 56 times too large. Its Sommerfeld ground tables stop at 15 wavelengths, and past that the ground remainder is frozen at the table's edge. This is a follow-up; the gate does not pin it.
+
+Until momwire#1258 a second kind was left out too: at R = 1000 m, off the broadside plane, within about 15° of the horizon, momwire's vertically polarised near field was wrong (56 times too large at the horizon), because its Sommerfeld ground tables stop at 15 wavelengths and the ground remainder past them was frozen at the table's edge. #1258 continues the remainder past the edge; those four rows are in the gate now, each within 1 % of the licensed field at its own point. `../somm_far_1258/` holds the denser grazing decks.
 
 `dipole-ne1-ground.out` carries the licensed engine's own ground-table cache chatter (`GMPINO: Unable to open file NOFILE`, `Will compute Sommerfeld-ground tables`), which momwire does not print. The layout test strips those lines and the blank before them.
