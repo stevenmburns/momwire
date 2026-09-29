@@ -244,17 +244,16 @@ _ENVELOPE = {"dipole-ne1-free": 1e-3, "dipole-ne1-ground": 1e-2}
 def _excluded(point: np.ndarray) -> str | None:
     """Why a ground-deck row is left out of the envelope, or ``None``.
 
-    Two kinds, and neither is a tolerance question:
+    One kind, and it is not a tolerance question: the licensed engine's own
+    high-elevation defect. Within a few degrees of the zenith at 1000 m its
+    near field is hundreds of times its own far field (asserted in the test
+    below).
 
-    * the licensed engine's own high-elevation defect: within a few degrees
-      of the zenith at 1000 m its near field is hundreds of times its own far
-      field (asserted in the test below);
-    * momwire's: at 1000 m (past the 15-wavelength reach of its Sommerfeld
-      ground tables) within ~15 degrees of the horizon, off the dipole's
-      broadside plane, where the vertically polarised field is carried by the
-      ground remainder and momwire's is frozen at the table's edge. Measured
-      and reported in momwire#1257; a fix is a follow-up, and until then
-      these rows are not something this gate may pin.
+    There used to be a second: momwire's own near field at 1000 m within
+    ~15 degrees of the horizon, off the broadside plane, where the ground
+    remainder was frozen at the edge of the 15-wavelength Sommerfeld table.
+    momwire#1258 continues the remainder past the edge and those four rows
+    are in the envelope now (``test_the_grazing_rows_are_in_the_envelope``).
     """
     r = float(np.linalg.norm(point))
     if r < 100.0:
@@ -262,8 +261,6 @@ def _excluded(point: np.ndarray) -> str | None:
     elevation = np.degrees(np.arcsin(point[2] / r))
     if 82.0 < elevation < 90.0 - 1e-9:
         return "x13-zenith"
-    if elevation < 16.0 and abs(point[1]) > 1e-6 * r:
-        return "momwire-grazing"
     return None
 
 
@@ -283,6 +280,25 @@ def test_the_values_sit_inside_the_envelope(name):
     assert worst <= _ENVELOPE[name]
     if name == "dipole-ne1-free":
         assert len(kept) == len(rows)
+
+
+def test_the_grazing_rows_are_in_the_envelope():
+    """The four rows #1257 had to leave out (R = 1000 m, off the broadside
+    plane, within 15 degrees of the horizon) are kept now, and each sits
+    within 1 % of the licensed |E| at its own point, not just of the table's
+    scale (momwire#1258; before it, the horizon row was 58x too large)."""
+    _, ours = _near_block(_served("dipole-ne1-ground").splitlines())
+    _, theirs = _near_block(_oracle("dipole-ne1-ground"))
+    grazing = []
+    for a, b in zip(ours, theirs, strict=True):
+        (tp, tf), (_, of) = _row(b), _row(a)
+        r = float(np.linalg.norm(tp))
+        elevation = np.degrees(np.arcsin(tp[2] / r))
+        if r > 100.0 and elevation < 16.0 and abs(tp[1]) > 1e-6 * r:
+            assert _excluded(tp) is None
+            grazing.append(np.linalg.norm(of - tf) / np.linalg.norm(tf))
+    assert len(grazing) == 4
+    assert max(grazing) < 1e-2
 
 
 @pytest.mark.integration
