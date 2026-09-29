@@ -265,12 +265,15 @@ every table heading are untouched.
   the zenith, then φ from +x toward +y, both in degrees, walked R fastest,
   then θ, then φ. That is NEC-5's order, which is not NEC-2's (NEC-2 puts φ
   second); an elevation angle is 90° − θ. The table prints X, Y, Z either
-  way, as the licensed engine's does. One range limit, measured: past about
-  15 wavelengths from the antenna over a finite ground, within roughly 15°
-  of the horizon, the vertically polarised part of the near field is not
-  reliable (at 1000 m it is several tens of times too large right at the
-  horizon); higher up it agrees with momwire's own far field at that range
-  to about 1 %.
+  way, as the licensed engine's does. Far out over a finite ground the near
+  field stays right down to the horizon (*momwire#1258*): past momwire's
+  15-wavelength Sommerfeld table the ground's contribution is continued
+  asymptotically — the reflected wave, the surface wave and the lateral wave
+  through the soil — rather than held at the table's edge. Against the
+  licensed engine at 20, 50 and 1000 wavelengths, within 15° of the horizon
+  and in both polarisations, the difference is under 0.6 % of the field at
+  each point, where holding the edge had made the vertically polarised field
+  at the horizon 58 times too large at 1000 m.
 
 ## What refuses, and why
 
