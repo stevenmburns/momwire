@@ -908,7 +908,8 @@ def far_surfaces(eps_t, k2, R1, theta, omega=None, mu=_MU0):
         g2k1 = fc["g2k1"]
         rho = rl * cl
         h = rl * sl
-        lat = (g2k1.real * h < 50.0) & (rho > 0.0)
+        # |e^{-j k1 rho - gamma2(k1) h}| below e^{-50}: nothing to add.
+        lat = (g2k1.real * h - k1.imag * rho < 50.0) & (rho > 0.0)
         if np.any(lat):
             j2 = np.nonzero(lat)[0]
             rho, h, rr_, w2 = rho[j2], h[j2], rl[j2], wl[j2]
@@ -918,7 +919,7 @@ def far_surfaces(eps_t, k2, R1, theta, omega=None, mu=_MU0):
                 * w2
                 * np.exp(-1j * k1 * rho - g2k1 * h + 1j * k * rr_)
                 * rr_
-                / (np.sqrt(rho) * rp**1.5)
+                / (np.sqrt(rho) * (rp * np.sqrt(rp)))
             )
             dd2 = -2.0 * ks / (k1s * g2k1) ** 2
             dd1 = -2.0 / (g2k1 * g2k1)
