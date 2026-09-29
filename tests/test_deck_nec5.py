@@ -426,7 +426,9 @@ REFUSALS = [
     pytest.param(("RP 4,1,361,1000,90.,0.,0.,1.,0.",), "RP", id="rp-mode-4"),
     pytest.param(("RP 0,1,361,1002,90.,0.,0.,1.,0.",), "RP", id="rp-xnda-1002"),
     pytest.param(("QQ 0",), "QQ", id="unknown-card"),
-    pytest.param(("NH 1,1,1,1,0.,0.,0.,0.,0.,0.",), "NH", id="nh-spherical"),
+    # momwire#1257: NE/NH 1 (spherical) parse now; only a coordinate system
+    # that is neither 0 nor 1 refuses.
+    pytest.param(("NH 2,1,1,1,0.,0.,0.,0.,0.,0.",), "NH", id="nh-coordinates-2"),
     pytest.param(("GX 0,101",), "GX", id="symmetry"),
     pytest.param(("FR 0,3,0,0,14.,0.05",), "FR", id="fr-multipoint"),
     pytest.param(("EX 4,1,-2,0,1.,0.",), "EX", id="node-minus-two"),
@@ -450,7 +452,7 @@ REFUSALS = [
     # tests/test_eznec_one_field_ge_1116.py) and NEC-5 defaults its missing
     # second field to 0; only a ZERO-field GE is still short.
     pytest.param(("GE",), "GE", id="ge-zero-field"),
-    pytest.param(("NE 1,1,1,1,0.,0.,0.,0.,0.,0.",), "NE", id="ne-spherical"),
+    pytest.param(("NE 2,1,1,1,0.,0.,0.,0.,0.,0.",), "NE", id="ne-coordinates-2"),
     pytest.param(("TL 1,1,1,6,0.,1.,0.,0.,0.,0.",), "TL", id="tl-zero-z0"),
     pytest.param(("NT 1,1,1,6,.01,0.,0.,0.",), "NT", id="nt-short"),
     pytest.param(("GW 1,5,0.,0.,0.,0.,1.,0.,.0005",), "GW", id="gw-duplicate-tag"),
@@ -621,7 +623,9 @@ def test_nh_parses_as_ne_s_twin_with_the_magnetic_flag_up():
     """momwire#513: capture sitting 4 falsified "EZNEC never emits NH" —
     capture 0111 wrote one (the Near Field Analysis dialog's E/H radio
     button picks the mnemonic).  Same ten fields, same handler, one flag;
-    the spherical form refuses exactly as NE's does (the REFUSALS table)."""
+    an unknown coordinate system refuses exactly as NE's does (the REFUSALS
+    table), and the spherical form parses on both (momwire#1257,
+    ``tests/test_eznec_ne_spherical_1257.py``)."""
 
     def dipole_with(card: str) -> str:
         lines = DIPOLE.splitlines()

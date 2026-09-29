@@ -260,6 +260,17 @@ every table heading are untouched.
   The finite-ground tables ride a Sommerfeld point evaluator and sit within
   a measured 2–6 % of the licensed engine's captured cells, the same
   envelope class as the feedpoint impedances.
+  The grid can be rectangular (`NE 0`: X, Y, Z in metres) or spherical
+  (`NE 1` / `NH 1`, *added momwire#1257*): R in metres, then θ measured from
+  the zenith, then φ from +x toward +y, both in degrees, walked R fastest,
+  then θ, then φ. That is NEC-5's order, which is not NEC-2's (NEC-2 puts φ
+  second); an elevation angle is 90° − θ. The table prints X, Y, Z either
+  way, as the licensed engine's does. One range limit, measured: past about
+  15 wavelengths from the antenna over a finite ground, within roughly 15°
+  of the horizon, the vertically polarised part of the near field is not
+  reliable (at 1000 m it is several tens of times too large right at the
+  horizon); higher up it agrees with momwire's own far field at that range
+  to about 1 %.
 
 ## What refuses, and why
 
@@ -313,6 +324,12 @@ capability statements rather than deck errors:
   publishing a sampling artifact. The sentence quotes the measured
   divergence and says to move the observation point; the same grid one
   step off the contact serves.
+- **A near-field point below a finite ground** (an `NE`/`NH` point with
+  z < 0 over `GN 0` / `GN 2` / `GD`, which a spherical grid reaches once θ
+  passes 90°) refuses naming the point: the field in the soil is the
+  transmitted field, and momwire's near-field readout composes the field
+  above the interface only. Over the perfect ground such a point serves, as
+  it does in the licensed engine.
 - **Cards outside the emitted dialect** — surface patches, geometry
   generators (arcs, helices, catenaries), incident-wave excitation, load
   types other than `LD 2` / `LD 3` / `LD 4` / `LD 5`, magnetic grounds —

@@ -1,0 +1,10 @@
+CM momwire#1257: NE 1, the near field on a spherical grid (R, theta, phi).
+CM A half-wave dipole along Y, 1 m up, in free space, 299.8 MHz.
+CM R 2 and 10 m; theta 0 (zenith) to 90 (horizon) in 15; phi 0, 45, 90.
+CE
+GW 1 21 0.0 -0.25 1.0 0.0 0.25 1.0 1.0e-3
+GE 0
+FR 0 1 0 0 299.8
+EX 0 1 11 0 1.0 0.0
+NE 1 2 7 3 2.0 0.0 0.0 8.0 15.0 45.0
+EN
