@@ -1410,6 +1410,25 @@ def _plan_sheets(ctx, eps_t, k_p, gz, memo, specs):
     memo.sheet_plan = _near_interface.sheet_plan(eps_t, k_p, pairs, ctx.a_wire)
 
 
+def _plan_point_sheets(ctx, eps_t, k_p, gz, memo, obs_pts, src_nodes, observers_above):
+    """`_plan_sheets` for a point-observer block (momwire#1224 option A): the
+    fill's `SheetPlan` over its (observers × source nodes) pairs, decided
+    ONCE before the block's first evaluation and carried on its memo, so the
+    six keys (`designed_rows` / `_tables` through the memo) and the point
+    family (`point_designed_rows` / `point_radius_tables`, handed
+    `memo.sheet_plan`) read the same plan in every chunk and in the ends
+    loop. The observers sit in the z slot when they are above, in z′ when
+    below -- `sheet_plan` takes (above, below) node pairs."""
+    if memo is None or memo.sheet_plan is not None:
+        return
+    obs = np.array(obs_pts, dtype=float)
+    nodes = np.array(src_nodes, dtype=float)
+    obs[:, 2] -= gz
+    nodes[:, 2] -= gz
+    pair = (obs, nodes) if observers_above else (nodes, obs)
+    memo.sheet_plan = _near_interface.sheet_plan(eps_t, k_p, [pair], ctx.a_wire)
+
+
 def _main_sandwich(ctx, A, B, eps_t, k_p, c1, gz, memo=None, support=None, ends=None):
     """The M + SW + SQ sandwich over (above axis A × below axis B), whole-axis.
 
@@ -2420,7 +2439,9 @@ def _point_kernels_dense(
     z_s = np.broadcast_to((pts[:, 2] - gz)[None, :], rho.shape)
     z, zp = (z_o, z_s) if observers_above else (z_s, z_o)
     six = _tables(ctx, eps_t, k_p, rho, z, zp, _CROSS_RTOL, memo=memo)
-    pk = _near_interface.point_radius_tables(eps_t, k_p, rho, z, zp, a_wire)
+    pk = _near_interface.point_radius_tables(
+        eps_t, k_p, rho, z, zp, a_wire, plan=None if memo is None else memo.sheet_plan
+    )
     g = (ax * dx + ay * dy) / _near_interface.radius_fold(rho, a_wire)
     return six, pk, g
 
@@ -2509,7 +2530,9 @@ def _chunked_point_tables(ctx, eps_t, k_p, rho, z_o, z_s, observers_above, rows,
         key: six_block[:, _near_interface.KEYS.index(key)] for key in _POINT_SIX_KEYS
     }
     del six_block
-    point_vals = _near_interface.point_designed_rows(eps_t, k_p, uniq)
+    point_vals = _near_interface.point_designed_rows(
+        eps_t, k_p, uniq, plan=None if memo is None else memo.sheet_plan
+    )
     del uniq
     off = 0
     for sl, (inv, m) in zip(rows, inverses):
@@ -2564,6 +2587,15 @@ def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
     grid call stage 2 shipped, kept as the bit-identity gate's reference.
     Either way the ends loop stays dense (`_point_kernels_dense`): a span of
     a handful of points was never the block's memory driver.
+
+    Plane sheets (momwire#1224 option A): either route first plans the
+    block's `SheetPlan` over its (observers × source nodes) pairs
+    (`_plan_point_sheets`, the Galerkin fill's `_plan_sheets` rule), so rows
+    on a planned plane or height are interpolated for the six keys (through
+    the memo) and for the point family (`PlaneSheet(family="point")`) alike,
+    and the rest stay on the exact column twins. GATED at ~1e-11 in Z, not
+    bit-identical (tests/test_point_sheet_1224.py);
+    `MOMWIRE_NEAR_INTERFACE_SHEET=0` is the exact route.
     """
     if _POINT_CHUNKED:
         return _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above)
@@ -2577,6 +2609,9 @@ def _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above):
     bit-identity gate's reference (tests/test_point_rows_chunked_1224.py);
     see `point_observer_block` for the physics and the derivation."""
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
+    _plan_point_sheets(
+        ctx, eps_t, k_p, gz, memo, obs_pts, src["nodes"], observers_above
+    )
     k2sq = k_p * k_p
     a_wire = float(ctx.a_wire)
     P = np.asarray(obs_pts, dtype=float)
@@ -2643,8 +2678,12 @@ def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
     once); the ends loop stays `_point_kernels_dense`, exactly as the dense
     route's, sharing the SAME six-table memo -- so the ends see the same
     hits/misses either route takes, per `_block_preamble`'s "one fill, one
-    memo"."""
+    memo". The block's sheet plan is decided first (`_plan_point_sheets`),
+    so both routes serve the same rows from sheets."""
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
+    _plan_point_sheets(
+        ctx, eps_t, k_p, gz, memo, obs_pts, src["nodes"], observers_above
+    )
     k2sq = k_p * k_p
     a_wire = float(ctx.a_wire)
     P = np.asarray(obs_pts, dtype=float)
