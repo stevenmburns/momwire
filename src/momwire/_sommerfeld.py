@@ -42,7 +42,7 @@ import math
 import os
 
 import numpy as np
-from scipy.special import hankel2, jv
+from scipy.special import hankel2, jv, wofz
 
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
@@ -68,6 +68,15 @@ from ._constants import C_LIGHT
 # margin and grids any real HF-over-ground structure exactly while bounding
 # the pathological remote-wire fill to a few seconds. Overridable via the
 # environment for validation/benchmarking.
+#
+# Addendum (momwire#1258): "negligible" and "accurate" held for the IMPEDANCE
+# #157 calibrated on, and for the surfaces at steep angles, but not near
+# grazing: along the horizon the reflected space wave cancels the direct one,
+# the ground wave is what is left, and the frozen amplitude overstated it by a
+# factor growing like R1 (56x at 1000 m in a near-field readout). Past the cap
+# the surfaces are no longer frozen but continued by a matched large-R1
+# asymptotic (`far_surfaces`, whose block comment has the derivation and the
+# measurements). The cap itself, and what it bounds, are unchanged.
 _SOMM_R1_CAP_LAMBDA = float(os.environ.get("MOMWIRE_SOMM_R1_CAP_LAMBDA") or "15.0")
 
 # Radius where the grid switches from the near tabulation (NEC fig-12 spacings,
@@ -667,6 +676,270 @@ def greens_free_space_check(k2, rho, h, form, rtol=1e-9):
 
 
 # ---------------------------------------------------------------------------
+# Past the grid: the large-R1 ground remainder (momwire#1258)
+# ---------------------------------------------------------------------------
+#
+# The grid stops at `r1_max` (at most `_SOMM_R1_CAP_LAMBDA` wavelengths, #157),
+# and until momwire#1258 a query past it read the surfaces FROZEN at the edge.
+# That is harmless at steep angles, where each surface has already settled to
+# its geometric-optics value by 15 lambda, and wrong near grazing, where it
+# has not: along the horizon the reflected space wave cancels the direct one
+# and what is left is the ground wave, which the frozen edge overstates by
+# a factor growing like R1 (56x at 1000 m on the #1257 test bed). Raising the
+# cap does not help -- the fill cost grows like the radius squared, and the
+# Hankel-form contour of `_six_integrals` loses the answer to cancellation
+# past ~20 lambda (its waypoints sit at Im(lambda) = 0.2 k2, and
+# |H0(2)(lambda rho)| grows like e^{0.2 k2 rho}).
+#
+# Past the edge the surfaces are therefore evaluated asymptotically, from the
+# same integrals, by the modified saddle-point method (Felsen & Marcuvitz,
+# "Radiation and Scattering of Waves", 1973, sec. 4.4; Banos, "Dipole
+# Radiation in the Presence of a Conducting Half-Space", 1966, ch. 3). Write
+# the six eqs 148-153 integrands' spectral factors through the plane-wave
+# Fresnel coefficients (e^{+jwt}, gamma = (lambda^2 - k^2)^{1/2}):
+#
+#     D1 * gamma2 = R_TE + C2,        R_TE = (g2 - g1) / (g2 + g1)
+#     D2 * gamma2 = (R_TM - C2) / k1^2,
+#                   R_TM = (k1^2 g2 - k2^2 g1) / (k1^2 g2 + k2^2 g1)
+#
+# and change variable to the complex angle alpha, lambda = k2 cos(alpha),
+# gamma2 = j k2 sin(alpha). The exponent -gamma2 h - j lambda rho becomes
+# -j k2 R1 cos(alpha - theta): one saddle, at alpha = theta. Three pieces,
+# each with its limit stated:
+#
+#  1. The saddle (geometric optics): each integral -> f(theta) e^{-jkR1}/R1,
+#     f the spectral factor times its derivative multiplier (d/drho -> -j
+#     lambda, d/dz -> -gamma2) at the saddle. Exact to O(1/(k2 R1)), and the
+#     Sommerfeld identity makes it exact for a constant f.
+#  2. The pole of R_TM (the Sommerfeld/Zenneck pole, sin(alpha_p) =
+#     -1/sqrt(eps+1)), which approaches the saddle at grazing. Subtracting it
+#     before the saddle-point step and integrating it exactly adds, to each
+#     V-type integral,
+#         f_res * sqrt(cos(alpha_p)/cos(theta)) / alpha'(0)
+#               * [1/s_p + j sqrt(pi) w(s_p)]
+#     where s_p = sqrt(2 k2 R1) e^{-j pi/4} sin((alpha_p - theta)/2) is the
+#     pole's image in the steepest-descent variable, alpha'(0) =
+#     sqrt(2/(k2 R1)) e^{j pi/4}, f_res the spectral factor's residue at the
+#     pole and w the Faddeeva function. This is the uniform (Banos) form of
+#     Norton's surface wave: [..] -> 0 like 1/s_p^3 away from grazing, and at
+#     grazing it carries the 1/R1^2 ground wave. Norton's own closed form
+#     (R_TM + (1 - R_TM) F(w) with w from the observation-angle Delta) was
+#     measured first and is 7 % off the ground wave here at 1000 lambda --
+#     its O(1/eps) approximations -- where this form is 0.2 %.
+#  3. The branch point of gamma1 at lambda = k1, which the deformation to the
+#     steepest-descent path wraps: the lateral wave through the ground,
+#         (dD/dgamma1) * P(k1) * (-j) e^{-j k1 rho - gamma2(k1) h}
+#               / (sqrt(rho) * (rho - j h k1/gamma2(k1))^{3/2}),
+#     from the gamma1-odd part of D1/D2 and the Hankel asymptotic. Dead for a
+#     lossy soil or any appreciable height (e^{-gamma2(k1) h}); on a low-loss
+#     one it is the R1-periodic ripple (period lambda/(sqrt(eps)-1)) that the
+#     table itself shows near grazing.
+#
+# What remains is O(1/(k2 R1)) and smooth: the saddle's second-order term.
+# It is taken from the table itself -- the asymptotic form is MATCHED to the
+# interpolated edge value, and the mismatch is carried forward decaying like
+# the term it stands for:
+#
+#     S(R1, theta) = S_asym(R1, theta)
+#                    + [S_grid(r1_max, theta) - S_asym(r1_max, theta)] r1_max/R1
+#
+# so the remainder is continuous at the edge by construction and tends to the
+# exact geometric-optics limit as R1 -> inf. The pole and lateral terms lean
+# on the Hankel asymptotic (large lambda*rho) and are tapered out between
+# `_FAR_TAPER_DEG` = 50 and 70 degrees, where both are regular 1/R1 pieces
+# (the pole's) or e^{-gamma2(k1) h}-dead (the lateral's), i.e. what the
+# matching carries anyway.
+#
+# Measured against an independent evaluation of the same integrals (the real
+# axis, Bessel form, brute-force Gauss-Legendre: tests/somm_far_oracle_1258.py)
+# over eight grounds, R1 = 16 .. 1000 lambda, theta = 0.05 .. 89 deg: at most
+# 7e-4 of the image-field scale |C1 k2^2|, and 1e-4 on every lossy ground,
+# where the frozen edge was off by up to 0.83 of it. Clean-room: every step
+# above is the public-domain theory manual's integrals and textbook
+# asymptotics; no NEC code was consulted.
+
+_FAR_TAPER_DEG = (50.0, 70.0)
+# |s_p| past which the pole bracket is summed from the asymptotic series of
+# w (it cancels 1/s_p to O(1/s_p^3), which the direct form would lose).
+_FAR_BRACKET_SERIES = 10.0
+
+
+def _pole_bracket(s):
+    """1/s + j sqrt(pi) w(s), w the Faddeeva function (vectorized)."""
+    s = np.asarray(s, dtype=np.complex128)
+    out = np.empty_like(s)
+    big = np.abs(s) > _FAR_BRACKET_SERIES
+    small = ~big
+    if np.any(small):
+        ss = s[small]
+        out[small] = 1.0 / ss + 1j * np.sqrt(np.pi) * wofz(ss)
+    if np.any(big):
+        # w(s) ~ (j/sqrt(pi)) sum_n (2n-1)!!/(2^n s^{2n+1}) for Im s >= 0:
+        # the bracket is minus that sum from n = 1.
+        sb = s[big]
+        inv2 = 1.0 / (sb * sb)
+        term = 0.5 * inv2 / sb
+        acc = term.copy()
+        for n in range(2, 10):
+            term = term * (2 * n - 1) * 0.5 * inv2
+            acc = acc + term
+        # Below the real axis w picks up 2 e^{-s^2} (never reached for a
+        # passive ground, whose pole image sits in the closed upper half).
+        lower = sb.imag < 0.0
+        corr = np.where(lower, 2j * np.sqrt(np.pi) * np.exp(-sb * sb), 0.0)
+        out[big] = -acc + corr
+    return out
+
+
+def _far_taper(theta):
+    lo, hi = np.radians(_FAR_TAPER_DEG[0]), np.radians(_FAR_TAPER_DEG[1])
+    x = np.clip((theta - lo) / (hi - lo), 0.0, 1.0)
+    return 0.5 * (1.0 + np.cos(np.pi * x))
+
+
+def _far_constants(eps_t, k2, omega, mu):
+    """The per-grid constants of `far_surfaces`, or None for free space
+    (whose surfaces are identically zero). `far_cpp_pack` hands the same
+    numbers to the C++ twin, so the two cannot drift apart."""
+    eps = complex(eps_t)
+    if eps == 1.0:
+        return None
+    k = float(k2)
+    ks = k * k
+    k1 = k * np.sqrt(eps)
+    if k1.imag > 0:
+        k1 = np.conj(k1)
+    k1s = k1 * k1
+    # The pole of R_TM, sin(alpha_p) = -1/sqrt(eps+1), and the residue of
+    # f_V = (R_TM - C2)/k1^2 there, in alpha.
+    sap = -1.0 / np.sqrt(eps + 1.0)
+    ap = np.arcsin(sap)
+    cap_ = np.cos(ap)
+    g1p = np.sqrt(ks * cap_ * cap_ - k1s + 0j)
+    dden = k1s * 1j * k * cap_ - ks * ks * cap_ * sap / g1p
+    res_fv = 2.0 * (1j * k * sap) / dden
+    g2k1 = np.sqrt(k1s - ks + 0j)  # gamma2 at the k1 branch point
+    if g2k1.real < 0:
+        g2k1 = -g2k1
+    return {
+        "eps": eps,
+        "k1": complex(k1),
+        "c2": (eps - 1.0) / (eps + 1.0),
+        "c1k": -1j * float(omega) * float(mu) / (4.0 * np.pi),  # C1 * k2^2
+        "ap": complex(ap),
+        "res_fv": complex(res_fv),
+        "g2k1": complex(g2k1),
+        "k2": k,
+    }
+
+
+_FAR_PACK_ORDER = ("eps", "k1", "c2", "c1k", "ap", "res_fv", "g2k1", "k2")
+
+
+def far_cpp_pack(grid):
+    """`_far_constants` for `grid` as the complex array the C++ kernels take
+    after the region tables (`somm_proj::set_far`); empty for free space."""
+    fc = _far_constants(grid.eps_t, grid.k2, grid.omega, grid.mu)
+    if fc is None:
+        return np.zeros(0, dtype=np.complex128)
+    return np.array([fc[key] for key in _FAR_PACK_ORDER], dtype=np.complex128)
+
+
+def far_surfaces(eps_t, k2, R1, theta, omega=None, mu=_MU0):
+    """The four surfaces I_rho^V, I_z^V, I_rho^H, I_phi^H at large R1 from
+    the saddle, pole and lateral-wave asymptotics (the block comment above,
+    momwire#1258) -- WITHOUT the edge matching, which `SommerfeldGrid.eval`
+    applies. Same normalization as `iv_surfaces_direct`: the surfaces
+    multiply g = e^{-jkR1}/R1. R1 and theta broadcast; theta in [0, pi/2].
+    """
+    if omega is None:
+        omega = k2 * _C_LIGHT
+    R1 = np.asarray(R1, dtype=float)
+    theta = np.asarray(theta, dtype=float)
+    R1b, thb = np.broadcast_arrays(R1, theta)
+    shape = R1b.shape
+    r1 = R1b.ravel()
+    th = thb.ravel()
+    keys = _SURF_KEYS
+    fc = _far_constants(eps_t, k2, omega, mu)
+    if fc is None:
+        return {kk: np.zeros(shape, dtype=np.complex128) for kk in keys}
+    k = fc["k2"]
+    ks = k * k
+    k1 = fc["k1"]
+    k1s = k1 * k1
+    c2 = fc["c2"]
+
+    c = np.cos(th)
+    s = np.sin(th)
+    # 1. the saddle (geometric optics), as normalized integrals n_* =
+    # (integral) * R1 e^{jkR1} of eqs 148-153 at the saddle.
+    g2 = 1j * k * s
+    g1 = np.sqrt(ks * c * c - k1s + 0j)
+    rtm = (k1s * g2 - ks * g1) / (k1s * g2 + ks * g1)
+    rte = (g2 - g1) / (g2 + g1)
+    fv = (rtm - c2) / k1s
+    n_rz = -ks * c * s * fv
+    n_zzv = ks * c * c * fv  # (d2/dz2 + k2^2) V
+    n_rr = -ks * c * c * fv
+    n_r1 = -1j * k / r1 * fv
+    n_u = rte + c2
+
+    wt = _far_taper(th)
+    live = wt > 0.0
+    if np.any(live):
+        idx = np.nonzero(live)[0]
+        rl, tl, cl, sl, wl = r1[idx], th[idx], c[idx], s[idx], wt[idx]
+        om = k * rl
+        # 2. the pole of R_TM.
+        ap = fc["ap"]
+        sap = np.sin(ap)
+        cap_ = np.cos(ap)
+        res_fv = fc["res_fv"]
+        sp = np.sqrt(2.0 * om) * np.exp(-0.25j * np.pi) * np.sin(0.5 * (ap - tl))
+        inv_a0 = np.sqrt(0.5 * om) * np.exp(-0.25j * np.pi)  # 1/alpha'(0)
+        amp = wl * res_fv * np.sqrt(cap_ / cl + 0j) * inv_a0 * _pole_bracket(sp)
+        n_rz[idx] += -ks * cap_ * sap * amp
+        n_zzv[idx] += ks * cap_ * cap_ * amp
+        n_rr[idx] += -ks * cap_ * cap_ * amp
+        n_r1[idx] += -1j * k * cap_ / (rl * cl) * amp
+
+        # 3. the lateral wave (gamma1's branch point at k1).
+        g2k1 = fc["g2k1"]
+        rho = rl * cl
+        h = rl * sl
+        lat = (g2k1.real * h < 50.0) & (rho > 0.0)
+        if np.any(lat):
+            j2 = np.nonzero(lat)[0]
+            rho, h, rr_, w2 = rho[j2], h[j2], rl[j2], wl[j2]
+            rp = rho - 1j * h * k1 / g2k1
+            base = (
+                -1j
+                * w2
+                * np.exp(-1j * k1 * rho - g2k1 * h + 1j * k * rr_)
+                * rr_
+                / (np.sqrt(rho) * rp**1.5)
+            )
+            dd2 = -2.0 * ks / (k1s * g2k1) ** 2
+            dd1 = -2.0 / (g2k1 * g2k1)
+            sel = idx[j2]
+            n_rr[sel] += dd2 * (-k1 * k1s) * base
+            n_rz[sel] += dd2 * (1j * g2k1 * k1s) * base
+            n_zzv[sel] += dd2 * (g2k1 * g2k1 * k1 + ks * k1) * base
+            n_r1[sel] += dd2 * (-1j * k1s / rho) * base
+            n_u[sel] += dd1 * k1 * base
+
+    c1 = fc["c1k"] / ks
+    out = {
+        "IrhoV": c1 * k1s * n_rz,
+        "IzV": c1 * k1s * n_zzv,
+        "IrhoH": c1 * ks * (n_rr + n_u),
+        "IphiH": -c1 * ks * (n_r1 + n_u),
+    }
+    return {kk: out[kk].reshape(shape) for kk in keys}
+
+
+# ---------------------------------------------------------------------------
 # Interpolation grid (Phase 2)
 # ---------------------------------------------------------------------------
 
@@ -709,8 +982,9 @@ class SommerfeldGrid:
     `eval(R1, theta)` interpolates all four surfaces with a 4×4 Lagrange
     (bivariate cubic) stencil, vectorized over query batches; measured
     accuracy vs direct evaluation is ~1e−4 (unit-tested at 1e−3, NEC's
-    own bar). Queries must satisfy 0 ≤ R₁ ≤ r1_max (tiny overshoot is
-    clamped) and 0 ≤ θ ≤ π/2.
+    own bar). Queries need R₁ ≥ 0 and 0 ≤ θ ≤ π/2; past r1_max the table is
+    continued by the matched large-R₁ asymptotic (momwire#1258,
+    `far_surfaces`), which is continuous with it at the edge.
     """
 
     def __init__(
@@ -880,11 +1154,16 @@ class SommerfeldGrid:
         r_f = r_b.ravel()
         th_f = np.clip(th_b.ravel(), 0.0, 0.5 * np.pi)
 
-        # A negative R1 is a genuine bug; an R1 past r1_max is now expected —
-        # a far pair beyond the grid cap (issue #157). Clamp it, matching the
-        # C++ proj_one path (g keeps the true distance, surf freezes at r1_max).
+        # A negative R1 is a genuine bug; an R1 past r1_max is expected — a
+        # far pair beyond the grid cap (issue #157). The table is read at the
+        # edge and, since momwire#1258, continued past it by the matched
+        # large-R1 asymptotic (`far_surfaces` and the block comment above
+        # it), exactly as the C++ proj_one path does. Before, the edge value
+        # was served frozen.
         if np.any(r_f < 0.0):
             raise ValueError("query R1 must be non-negative")
+        past = np.nonzero(r_f > self.r1_max)[0]
+        r_true = r_f[past]
         r_f = np.minimum(r_f, self.r1_max)
 
         th_split = np.radians(_SOMM_TH_SPLIT_DEG)
@@ -915,7 +1194,25 @@ class SommerfeldGrid:
             block = reg["vals"][:, ii[:, :, None], jj[:, None, :]]  # (4, n, 4, 4)
             out[:, sel] = np.einsum("snij,ni,nj->sn", block, wr, wt)
 
+        if past.size:
+            out[:, past] = self._continue_past_edge(out[:, past], r_true, th_f[past])
+
         return {key: out[s].reshape(shape) for s, key in enumerate(_SURF_KEYS)}
+
+    def _continue_past_edge(self, edge, r1, theta):
+        """(4, n) surfaces at R1 = `r1` > r1_max from their interpolated
+        `edge` values at r1_max: the asymptotic form plus the edge mismatch
+        carried forward as r1_max/R1 (momwire#1258)."""
+        kw = dict(omega=self.omega, mu=self.mu)
+        far = far_surfaces(self.eps_t, self.k2, r1, theta, **kw)
+        at_edge = far_surfaces(self.eps_t, self.k2, self.r1_max, theta, **kw)
+        w = self.r1_max / r1
+        return np.stack(
+            [
+                far[key] + (edge[s] - at_edge[key]) * w
+                for s, key in enumerate(_SURF_KEYS)
+            ]
+        )
 
     def scaled_to(self, k2, omega, mu):
         """A physical-units copy of this grid rescaled to another
@@ -1009,14 +1306,20 @@ class SommerfeldGrid:
 def grid_cpp_args(grid):
     """Flatten a `SommerfeldGrid` into the positional args the C++ remainder
     kernels take after (ground_z, k): (r1_max, r_break, th_split, r_near,
-    reg_r0, reg_dr, reg_th0, reg_dth, reg_vals). The four (near-only grids)
-    or six (with the #159 far zone) region value tables are made
-    C-contiguous complex128 once; callers that sample the same grid many
-    times (the ACA path) should hoist this out of their loop.
+    reg_r0, reg_dr, reg_th0, reg_dth, reg_vals) and, for the above/above
+    family, `far` — the momwire#1258 continuation past the edge
+    (`far_cpp_pack`). The four (near-only grids) or six (with the #159 far
+    zone) region value tables are made C-contiguous complex128 once; callers
+    that sample the same grid many times (the ACA path) should hoist this out
+    of their loop.
+
+    The below/below grid (`SommerfeldGridBelow`, a subclass) reads its own
+    past-cap rule (#1053: zero) and its kernel takes no `far`, which is why
+    the pack is keyed on the exact type rather than on isinstance.
     """
     regs = grid._regions
     reg_vals = [np.ascontiguousarray(r["vals"], dtype=np.complex128) for r in regs]
-    return (
+    args = (
         float(grid.r1_max),
         float(grid.r_break),
         float(math.radians(_SOMM_TH_SPLIT_DEG)),
@@ -1027,6 +1330,9 @@ def grid_cpp_args(grid):
         np.array([r["dth"] for r in regs], dtype=float),
         reg_vals,
     )
+    if type(grid) is SommerfeldGrid:
+        args += (far_cpp_pack(grid),)
+    return args
 
 
 def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=0):
