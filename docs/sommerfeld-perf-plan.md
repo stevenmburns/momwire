@@ -370,6 +370,18 @@ in (the free-space factor g = e^{−jkR₁}/R₁ keeps the *true* distance, only
 the slowly-varying surface amplitude freezes at the cap); the Python
 `grid.eval` guard now clamps to match instead of raising. No C++ change.
 
+*Addendum (momwire#1258):* the frozen amplitude was not a sound stand-in
+near grazing, where the ground wave is all that is left of the field and the
+frozen edge overstated it by a factor growing like R₁. Past the cap the
+surfaces are now continued by a matched asymptotic — the saddle, the
+Sommerfeld pole (Faddeeva form) and the k₁ lateral wave, derived in the block
+comment above `_sommerfeld.far_surfaces` — in both `grid.eval` and
+`proj_one`. That IS a model of the far surfaces, so the objection below to
+Phase 2's A(θ)+B(θ)/R₁ fit was checked against it: the fit failed on the
+lateral-wave beat, which the continuation carries explicitly as its own term,
+and its error against an independent evaluation falls like 1/R₁
+(`tests/test_somm_far_1258.py`).
+
 Why this is **not** the rejected Phase 2 (cap at ~1 λ + extrapolate):
 
 - Phase 2 tried to *extrapolate* the surfaces past the grid with a smooth
