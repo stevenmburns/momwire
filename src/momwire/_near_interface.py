@@ -102,7 +102,10 @@ KEYS = ("U", "V", "W", "dzW", "dzpV", "dzpW")
 # dρW_T) join by appending here and to the evaluators, with no edit to the
 # memo or the sheet. `KEY_RPOW` is each kernel's power of R, the factor a
 # sheet tabulates it times (the potentials fall as 1/R, their derivatives as
-# 1/R^2); it is per key so a new key states its own.
+# 1/R^2); it is per key so a new key states its own. The point family
+# (`POINT_KEYS`, momwire#1224) was kept out of this tuple -- it has its own
+# twin and memo-free route -- and joins the sheets as a second FAMILY instead
+# (`_SHEET_FAMILIES`), at its own width and R powers on the same grid.
 N_KEYS = len(KEYS)
 KEY_RPOW = (1, 1, 1, 2, 2, 2)
 if len(KEY_RPOW) != N_KEYS:  # pragma: no cover - a module-level invariant
@@ -815,7 +818,7 @@ def point_keys_columns(eps_t, k2, rho, zs, zp, rtol=1e-10, lam_mult=_LAM_MULT, p
     return out
 
 
-def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
+def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None, plan=None):
     """The point family at every (ρ, z, z′) of an array, with the thin-wire
     offset folded in exactly as `radius_tables` folds it (ρ_eff = hypot(ρ, a),
     `radius_fold`). Returns {key: array shaped like `rho`} over POINT_KEYS.
@@ -834,21 +837,67 @@ def point_radius_tables(eps_t, k2, rho, z, zp, wire_radius, p=None):
     nodes) grid: it dedups the grid's exact (ρ_eff, z, z′) triples itself,
     per observer-row chunk, and evaluates the merged unique list ONCE
     through `point_designed_rows` — the fold below, factored out as
-    `_point_radius_tables_folded`, so a repeated triple is priced once."""
+    `_point_radius_tables_folded`, so a repeated triple is priced once.
+
+    `plan` is the fill's `SheetPlan` (momwire#1224 option A; None: every
+    element exact): an element on one of its planes or heights is
+    interpolated from that sheet's point family, the rest evaluated as
+    above among themselves. GATED, not bit-identical, exactly as the six
+    keys' sheets are; `MOMWIRE_NEAR_INTERFACE_SHEET=0` is the exact route."""
     rho_eff = radius_fold(rho, wire_radius)
-    return _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=p)
+    return _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=p, plan=plan)
 
 
-def _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=None):
+def _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=None, plan=None):
     """`point_radius_tables` after its fold — the SAME body, callable
     directly on an ALREADY-FOLDED ρ_eff. `point_designed_rows` is this
     fed the three columns of an (m, 3) row block (`designed_rows`'s shape);
     folding ρ_eff a second time there would be wrong (`radius_fold` is the
-    one spelling of the fold)."""
+    one spelling of the fold).
+
+    With a `plan` that serves some elements (`_sheet_take`, the six keys'
+    rule to the letter: a function of each row alone), those come from the
+    point sheets (`_serve_from_sheets`, family "point") and only the rest
+    reach the column twin, grouped by ρ_eff among themselves -- the six
+    keys' `_evaluate_with_sheets` split. An explicit `p` (a column-rule
+    resolution the sheets were not built at) and a forced numpy route stay
+    exact whatever the plan."""
     rho_eff = np.asarray(rho_eff, dtype=float)
     z = np.broadcast_to(np.asarray(z, dtype=float), rho_eff.shape)
     zp = np.broadcast_to(np.asarray(zp, dtype=float), rho_eff.shape)
     flat_r, flat_z, flat_zp = rho_eff.ravel(), z.ravel(), zp.ravel()
+    take = None
+    if plan is not None and p is None and _use_point_sheet():
+        sub = np.ascontiguousarray(np.stack([flat_r, flat_z, flat_zp], axis=1))
+        take = _sheet_take(sub, plan)
+    if take is None:
+        out = _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p)
+        _SHEET_STATS["point_exact_rows"] += flat_r.size
+    else:
+        out = np.empty((flat_r.size, N_POINT_KEYS), dtype=np.complex128)
+        rest = np.flatnonzero(~take[0])
+        if rest.size:
+            out[rest] = _point_columns_exact(
+                eps_t, k2, flat_r[rest], flat_z[rest], flat_zp[rest], p
+            )
+        k_p = float(k2)
+        k_m = k_medium(complex(eps_t), k_p)
+        _n, n_height = _serve_from_sheets(
+            k_p, k_m, sub, _LAM_MULT, take, plan, out, "point"
+        )
+        del sub
+        _SHEET_STATS["point_sheet_rows"] += flat_r.size - rest.size
+        _SHEET_STATS["point_exact_rows"] += rest.size
+        _SHEET_STATS["point_height_rows"] += n_height
+    return {key: out[:, i].reshape(rho_eff.shape) for i, key in enumerate(POINT_KEYS)}
+
+
+def _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p=None):
+    """The point family at flat (ρ_eff, z, z′) arrays, (n, 4) in POINT_KEYS
+    order: one column per distinct ρ_eff, its members paired with their own
+    z′, through the C++ column twin when built, else `point_keys_columns`.
+    `_point_radius_tables_folded`'s exact route, and the reference its
+    sheets are gated against."""
     out = np.empty((flat_r.size, N_POINT_KEYS), dtype=np.complex128)
     uniq, inv = np.unique(flat_r, return_inverse=True)
     if _HAVE_POINT_COLUMNS_ACCEL and not _FORCE_NUMPY:
@@ -881,10 +930,10 @@ def _point_radius_tables_folded(eps_t, k2, rho_eff, z, zp, p=None):
         for i, r in enumerate(uniq):
             sel = np.flatnonzero(inv == i)
             out[sel] = point_keys_columns(eps_t, k2, r, flat_z[sel], flat_zp[sel], p=p)
-    return {key: out[:, i].reshape(rho_eff.shape) for i, key in enumerate(POINT_KEYS)}
+    return out
 
 
-def point_designed_rows(eps_t, k2, rows, p=None):
+def point_designed_rows(eps_t, k2, rows, p=None, plan=None):
     """`point_radius_tables` over rows that are ALREADY DISTINCT and ALREADY
     FOLDED (ρ_eff, z, z′), the point family's `designed_rows` twin
     (momwire#1224 stage 3 unit 3). No dedup beyond `_point_radius_tables_
@@ -900,10 +949,14 @@ def point_designed_rows(eps_t, k2, rows, p=None):
     s, so never its minimum. Measured over a real solve's triples (the
     buried radial vertical, momwire#1224): the deduplicated evaluation,
     scattered back, equals the dense one bit for bit in every call.
-    Returns {key: (m,) array} over POINT_KEYS, row i for `rows[i]`."""
+    Returns {key: (m,) array} over POINT_KEYS, row i for `rows[i]`.
+
+    `plan`: the fill's `SheetPlan`, as `point_radius_tables` takes it
+    (momwire#1224 option A) -- rows on its planes and heights come from the
+    point sheets, the rest exact among themselves."""
     rows = np.asarray(rows, dtype=float)
     return _point_radius_tables_folded(
-        eps_t, k2, rows[:, 0], rows[:, 1], rows[:, 2], p=p
+        eps_t, k2, rows[:, 0], rows[:, 1], rows[:, 2], p=p, plan=plan
     )
 
 
@@ -1765,8 +1818,6 @@ _SHEET = os.environ.get("MOMWIRE_NEAR_INTERFACE_SHEET", "1") != "0"
 _HAVE_PLANE_SHEET_ACCEL = _nia is not None and bool(
     getattr(_nia, "grid_sheet_width_1221", False)
 )
-# The per-column R powers as the C++ sheet takes them (momwire#1221).
-_KEY_RPOW_ARR = np.asarray(KEY_RPOW, dtype=np.int64)
 # Chebyshev nodes per cell in each direction. Sheet against twin at random
 # rows, max error relative to the kernel's 1/R^pw envelope, p = 12 (laptop,
 # the phase-2 prototype; the polar table's in brackets):
@@ -1862,6 +1913,16 @@ _SHEET_STATS = dict.fromkeys(
         "planes_planned",
         "heights_planned",
         "height_rows",
+        # The point family's (momwire#1224 option A): `point_designed_rows`
+        # rows a sheet served and rows the point column twin evaluated, the
+        # height rows among the former, and the point sheets built and their
+        # nodes. Kept apart from the six keys' counters above, so a gate on
+        # either family cannot be satisfied by the other.
+        "point_sheet_rows",
+        "point_exact_rows",
+        "point_height_rows",
+        "point_sheets_built",
+        "point_nodes_built",
     ),
     0,
 )
@@ -1871,6 +1932,14 @@ def _use_sheet():
     """Plane sheets serve when switched on and the C++ entry is built (the
     column twin, which evaluates their nodes, is already known to be)."""
     return _SHEET and _HAVE_PLANE_SHEET_ACCEL
+
+
+def _use_point_sheet():
+    """The point family's sheets (momwire#1224 option A) serve under the same
+    switch and interpolator as the six keys', when the point column twin --
+    which evaluates their nodes -- is built and not forced off. Read at CALL
+    time, like every switch here."""
+    return _use_sheet() and _HAVE_POINT_COLUMNS_ACCEL and not _FORCE_NUMPY
 
 
 def _cheb(p):
@@ -2355,10 +2424,36 @@ def _sheet_wavelength(k_p, k_m, r_lo):
     return 2.0 * np.pi / k
 
 
+# The kernel families a sheet can tabulate (momwire#1224 option A): per
+# family its width, its per-key R powers, the column twin that evaluates its
+# nodes (by the extension's attribute name: both twins take the same
+# arguments, `near_interface_six_columns`'s contract) and the `_SHEET_STATS`
+# prefix its builds are counted under. The layout, the Chebyshev nodes and the
+# interpolator are the family's to share: `near_interface_grid_sheet` takes
+# any width, so a family is a row of this table and nothing else.
+_SHEET_FAMILIES = {
+    "six": (N_KEYS, KEY_RPOW, "_nia", "near_interface_six_columns", ""),
+    "point": (
+        N_POINT_KEYS,
+        POINT_KEY_RPOW,
+        "_nipa",
+        "near_interface_point_columns",
+        "point_",
+    ),
+}
+
+
 class PlaneSheet:
     """The six kernels on one plane z' = zp < 0, tabulated over the above
     half-plane (rho, s = z - z' >= d) as far as asked (grown on demand by
     whole dyadic strips, `_sheet_strip`).
+
+    `family="point"` tabulates the point-observer family instead (the four
+    `POINT_KEYS`, momwire#1224 option A): the same strips, cells and nodes,
+    each node evaluated by the point column twin
+    (`near_interface_point_columns`) in the same column as its six-key
+    sibling, stored times R^`POINT_KEY_RPOW` and interpolated by the same
+    C++ entry at width four.
 
     With `height=True` it is the mirror sheet (Design E phase 2): ONE
     observer height z = zp > 0 over (rho, z' <= 0), reaching z' >= -`depth`.
@@ -2370,7 +2465,14 @@ class PlaneSheet:
     A row's value therefore does not depend on how far the sheet had been
     grown, or by whom."""
 
-    def __init__(self, k_p, k_m, zp, lam_mult, height=False, depth=None):
+    def __init__(self, k_p, k_m, zp, lam_mult, height=False, depth=None, family="six"):
+        if family not in _SHEET_FAMILIES:
+            raise ValueError(f"no sheet family {family!r}")
+        self.family = family
+        (self.width, self.rpow, self._twin_mod, self._twin_name, self._stat) = (
+            _SHEET_FAMILIES[family]
+        )
+        self._rpow_arr = np.asarray(self.rpow, dtype=np.int64)
         self.height = bool(height)
         if self.height and not (depth is not None and depth > 0.0):
             raise ValueError(f"a height sheet needs a depth reach > 0, got {depth!r}")
@@ -2453,8 +2555,9 @@ class PlaneSheet:
         else:
             z = np.maximum(self.zp + s_all, 0.0)
             zq = np.full(s_all.size, self.zp)
+        twin = getattr(globals()[self._twin_mod], self._twin_name)
         vals = np.asarray(
-            _nia.near_interface_six_columns(
+            twin(
                 self.k_p,
                 self.k_m,
                 rho_c,
@@ -2470,10 +2573,11 @@ class PlaneSheet:
             )
         )
         Rn = np.hypot(np.repeat(rho_c, sizes), z - zq)
-        # Each column times its own R^pw (`KEY_RPOW`), spelled as a product
-        # of R's so pw = 2 is `Rn * Rn`, the fixed-width spelling's floats.
-        for pw in sorted(set(KEY_RPOW)):
-            cols = [j for j, q in enumerate(KEY_RPOW) if q == pw]
+        # Each column times its own R^pw (the family's `KEY_RPOW` /
+        # `POINT_KEY_RPOW`), spelled as a product of R's so pw = 2 is
+        # `Rn * Rn`, the fixed-width spelling's floats.
+        for pw in sorted(set(self.rpow)):
+            cols = [j for j, q in enumerate(self.rpow) if q == pw]
             f = np.ones_like(Rn)
             if pw:
                 f = Rn
@@ -2484,18 +2588,20 @@ class PlaneSheet:
         # [rho node][s node][kernel], appended after the existing nodes.
         blocks = {}
         for c, (a, k, s_ids) in enumerate(place):
-            col = vals[offsets[c] : offsets[c + 1]].reshape(len(s_ids), p, N_KEYS)
+            col = vals[offsets[c] : offsets[c + 1]].reshape(len(s_ids), p, self.width)
             for q, b in enumerate(s_ids):
                 blk = blocks.get((a, b))
                 if blk is None:
-                    blk = blocks[(a, b)] = np.empty((p, p, N_KEYS), dtype=np.complex128)
+                    blk = blocks[(a, b)] = np.empty(
+                        (p, p, self.width), dtype=np.complex128
+                    )
                 blk[k] = col[q]
         off = self.n_nodes
         for key in sorted(blocks):
             self._off[key] = off
-            self._vals.append(blocks[key].reshape(p * p, N_KEYS))
+            self._vals.append(blocks[key].reshape(p * p, self.width))
             off += p * p
-        _SHEET_STATS["nodes_built"] += off - self.n_nodes
+        _SHEET_STATS[self._stat + "nodes_built"] += off - self.n_nodes
         self.n_nodes = off
         self._flat = None
 
@@ -2520,7 +2626,8 @@ class PlaneSheet:
         return self._flat
 
     def interpolate(self, sub, idx, out):
-        """out[idx] = the six kernels at rows sub[idx], all on this sheet."""
+        """out[idx] = the family's kernels at rows sub[idx], all on this
+        sheet (`out` is (m, width))."""
         rho_edges, s_edges, cell_off, vals = self.arrays()
         _nia.near_interface_grid_sheet(
             sub,
@@ -2535,13 +2642,16 @@ class PlaneSheet:
             vals,
             out,
             _physical_cpu_count(),
-            _KEY_RPOW_ARR,
+            self._rpow_arr,
         )
 
 
-def _plane_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=None):
+def _plane_sheet(
+    k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=None, family="six"
+):
     """The cached sheet of plane `zp` (or of height `zp` reaching `depth`,
-    `height`), grown to cover rho <= `rho_max` and s <= `s_max`.
+    `height`), of kernel `family`, grown to cover rho <= `rho_max` and
+    s <= `s_max`.
 
     Keyed on everything a node's value depends on. Sheets are shared across
     calls and solves; that cannot move a bit, because a node's value depends
@@ -2549,6 +2659,7 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=Non
     how far the sheet was grown."""
     key = (
         "grid",
+        family,
         bool(height),
         None if depth is None else float(depth),
         float(k_p),
@@ -2564,8 +2675,10 @@ def _plane_sheet(k_p, k_m, zp, lam_mult, rho_max, s_max, height=False, depth=Non
     with _SHEET_LOCK:
         sheet = _SHEET_CACHE.pop(key, None)
         if sheet is None:
-            sheet = PlaneSheet(k_p, k_m, zp, lam_mult, height=height, depth=depth)
-            _SHEET_STATS["sheets_built"] += 1
+            sheet = PlaneSheet(
+                k_p, k_m, zp, lam_mult, height=height, depth=depth, family=family
+            )
+            _SHEET_STATS[sheet._stat + "sheets_built"] += 1
         _SHEET_CACHE[key] = sheet
         while len(_SHEET_CACHE) > _SHEET_CACHE_MAX:
             _SHEET_CACHE.popitem(last=False)
@@ -2580,15 +2693,36 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
     exactly as `_column_twin` would take them alone (their labels, their
     first-appearance order). Each sheet is grown to this call's farthest row
     on it, which moves no node (`PlaneSheet`)."""
-    take, on_plane = take
     m = sub.shape[0]
     sub = np.ascontiguousarray(sub, dtype=float)
     out = np.empty((m, N_KEYS), dtype=np.complex128)
-    rest = np.flatnonzero(~take)
+    rest = np.flatnonzero(~take[0])
     if rest.size:
         lab = None if labels is None else np.asarray(labels)[rest]
         out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
-    n_sheets = 0
+    n_sheets, n_height = _serve_from_sheets(
+        k_p, k_m, sub, lam_mult, take, plan, out, "six"
+    )
+    _SHEET_STATS["height_rows"] += n_height
+    _SHEET_STATS["sheet_rows"] += m - rest.size
+    _SHEET_STATS["exact_rows"] += rest.size
+    _SHEET_STATS["sheet_planes"] += n_sheets
+    if permuted:
+        return out, None
+    return out
+
+
+def _serve_from_sheets(k_p, k_m, sub, lam_mult, take, plan, out, family):
+    """out[r] = the `family` kernels of every row r of `sub` that `take`
+    (`_sheet_take`'s (take, on_plane)) gives a sheet, interpolated from its
+    plane's or height's sheet; the other rows of `out` are not touched. Each
+    sheet is grown to this call's farthest row on it, which moves no node
+    (`PlaneSheet`). Returns (sheets used, height rows served). Shared by the
+    six keys' `_evaluate_with_sheets` and the point family's
+    `_point_radius_tables_folded` (momwire#1224 option A), so the two
+    families read one plan the same way."""
+    take, on_plane = take
+    n_sheets = n_height = 0
     # One sheet at a time, by the plan's values: a mask and its rows' index,
     # and the reach as masked reductions (on a plane z' is the fixed value, so
     # s = z - z' peaks where z does; on a height, where z' is least).
@@ -2610,18 +2744,15 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
                 s_max = v - float(np.min(sub[:, 2], where=sel, initial=np.inf))
             else:
                 s_max = float(np.max(sub[:, 1], where=sel, initial=-np.inf)) - v
-            sheet = _plane_sheet(k_p, k_m, v, lam_mult, rho_max, s_max, height, depth)
+            sheet = _plane_sheet(
+                k_p, k_m, v, lam_mult, rho_max, s_max, height, depth, family
+            )
             sheet.interpolate(sub, idx, out)
             n_sheets += 1
             if height:
-                _SHEET_STATS["height_rows"] += idx.size
+                n_height += idx.size
             del sel, idx
-    _SHEET_STATS["sheet_rows"] += m - rest.size
-    _SHEET_STATS["exact_rows"] += rest.size
-    _SHEET_STATS["sheet_planes"] += n_sheets
-    if permuted:
-        return out, None
-    return out
+    return n_sheets, n_height
 
 
 def _designed_tables_reference(
