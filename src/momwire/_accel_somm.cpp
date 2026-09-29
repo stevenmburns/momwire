@@ -487,6 +487,8 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
     std::vector<py::array_t<std::complex<double>,
                             py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
     uintptr_t cancel_flag = 0) {
     using somm_proj::cd;
     auto ob = obs.unchecked<2>();
@@ -505,6 +507,7 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
         reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
         reg_vals);
+    somm_proj::set_far(G, far);
 
     py::array_t<std::complex<double>> out({M, S});
     auto out_m = out.mutable_unchecked<2>();
@@ -593,6 +596,8 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
     std::vector<py::array_t<std::complex<double>,
                             py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
     uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0) {
     using somm_proj::cd;
     auto ndI = obs_nodes.unchecked<3>();
@@ -625,6 +630,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
         reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
         reg_vals);
+    somm_proj::set_far(G, far);
 
     py::array_t<std::complex<double>> Q({nI, nJ});
     auto Qm = Q.mutable_unchecked<2>();
@@ -764,12 +770,14 @@ void register_somm(py::module_ &m) {
           "(observer, source) pair; OpenMP over observer rows. Returns (M, S) "
           "complex. The grid is passed flattened (per-region r0/dr/th0/dth "
           "arrays + a list of 3 near — or 5 with the #159 far zone — "
-          "(4,n_r,n_th) value tables).",
+          "(4,n_r,n_th) value tables), then `far`: the momwire#1258 "
+          "continuation past r1_max (`_sommerfeld.far_cpp_pack`; empty "
+          "serves the edge value frozen).",
           py::arg("obs"), py::arg("t_obs"), py::arg("src"), py::arg("t_src"),
           py::arg("ground_z"), py::arg("k"), py::arg("r1_max"),
           py::arg("r_break"), py::arg("th_split"), py::arg("r_near"),
           py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
-          py::arg("reg_dth"), py::arg("reg_vals"),
+          py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0);
     m.def("sommerfeld_remainder_bspline_Q", &sommerfeld_remainder_bspline_Q,
           "Fully-fused b-spline Galerkin Sommerfeld remainder over an obs/src "
@@ -788,7 +796,7 @@ void register_somm(py::module_ &m) {
           py::arg("ground_z"), py::arg("k"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
-          py::arg("reg_dth"), py::arg("reg_vals"),
+          py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0);
 }
 

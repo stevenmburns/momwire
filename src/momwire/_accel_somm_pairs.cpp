@@ -29,6 +29,8 @@ static py::array_t<std::complex<double>> remainder_field_proj_owned(
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
     std::vector<py::array_t<std::complex<double>,
                             py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
     uintptr_t cancel_flag = 0) {
     using somm_proj::cd;
     auto ob = obs.unchecked<2>();
@@ -53,6 +55,7 @@ static py::array_t<std::complex<double>> remainder_field_proj_owned(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
         reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
         reg_vals);
+    somm_proj::set_far(G, far);
 
     py::array_t<std::complex<double>> out(S);
     auto out_m = out.mutable_unchecked<1>();
@@ -104,6 +107,8 @@ static py::array_t<std::complex<double>> remainder_graded_inner(
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
     std::vector<py::array_t<std::complex<double>,
                             py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        far,
     uintptr_t cancel_flag = 0) {
     using somm_proj::cd;
     auto ob = obs.unchecked<2>();
@@ -138,6 +143,7 @@ static py::array_t<std::complex<double>> remainder_graded_inner(
         r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(),
         reg_dr.unchecked<1>(), reg_th0.unchecked<1>(), reg_dth.unchecked<1>(),
         reg_vals);
+    somm_proj::set_far(G, far);
 
     py::array_t<std::complex<double>> out({M, (py::ssize_t)d1});
     auto om = out.mutable_unchecked<2>();
@@ -190,7 +196,7 @@ void register_somm_pairs(py::module_ &m) {
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
           py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"),
-          py::arg("cancel_flag") = 0);
+          py::arg("far"), py::arg("cancel_flag") = 0);
     m.def("remainder_graded_inner", &somm_pairs::remainder_graded_inner,
           "momwire#1201's graded source-side moments: per observer node m, "
           "sum over its source panels [ptr[m], ptr[m+1]) of the Gauss rule "
@@ -203,5 +209,6 @@ void register_somm_pairs(py::module_ &m) {
           py::arg("ground_z"), py::arg("k"), py::arg("r1_max"),
           py::arg("r_break"), py::arg("th_split"), py::arg("r_near"),
           py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
-          py::arg("reg_dth"), py::arg("reg_vals"), py::arg("cancel_flag") = 0);
+          py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
+          py::arg("cancel_flag") = 0);
 }

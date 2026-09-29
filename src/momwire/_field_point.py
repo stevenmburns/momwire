@@ -152,9 +152,10 @@ def _reflected_wave_grid(points, src_mid, eps_t, ground_z, k, omega, mu):
     geometric steps anyway, so the bound almost always keys the same cached
     fill the exact max would.
 
-    The issue #157 15 λ cap and `SommerfeldGrid.eval`'s r1 → r1_max clamp
-    apply unchanged: past the cap the true distance stays in `g` and only the
-    slowly-varying surface amplitude freezes.
+    The issue #157 15 λ cap applies unchanged. Past it `SommerfeldGrid.eval`
+    continues the surfaces by the matched large-R₁ asymptotic
+    (momwire#1258); until then it froze them at the table's edge, which near
+    grazing made the ground wave at 1000 m tens of times too large.
     """
     ex = np.concatenate([np.asarray(points, dtype=float), np.asarray(src_mid)])
     r1_max = _sommerfeld.max_image_distance(ex, ex, ground_z)

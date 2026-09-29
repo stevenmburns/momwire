@@ -441,8 +441,8 @@ class Remainder:
         sized from the SOURCE segment endpoints exactly as
         `_Z_sommerfeld_remainder` sizes it (`max_image_distance`, issue
         #331); observers lying on those segments are covered by convexity,
-        and anything further out is clamped by the grid's own `r1_max`
-        (issue #157) rather than silently extrapolated.
+        and anything further out is served past the grid's own `r1_max`
+        (issue #157) by its matched large-R₁ continuation (momwire#1258).
         """
         if sources is None:
             sources = self.source_segments()

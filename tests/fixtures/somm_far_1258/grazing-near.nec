@@ -1,0 +1,11 @@
+CM momwire#1258: the near field past the 15-wavelength ground table.
+CM A half-wave dipole along Y, 1 m over er 13 / sigma 0.005 (GN 2), 299.8 MHz.
+CM R 20 and 50 m; theta 0 (zenith) to 90 (horizon) in 1 deg; phi 0 and 90.
+CE
+GW 1 21 0.0 -0.25 1.0 0.0 0.25 1.0 1.0e-3
+GE 1
+GN 2 0 0 0 13.0 0.005 0 0 NOFILE
+FR 0 1 0 0 299.8
+EX 0 1 11 0 1.0 0.0
+NE 1 2 91 2 20.0 0.0 0.0 30.0 1.0 90.0
+EN

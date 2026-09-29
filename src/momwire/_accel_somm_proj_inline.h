@@ -41,12 +41,23 @@ static inline void lagrange4(double u, double *w) {
 // is what makes a future band addition say so instead of corrupting the heap.
 static constexpr size_t MAX_REGIONS = 15;
 
+// The large-R1 continuation past the table's edge (momwire#1258): the
+// constants `_sommerfeld.far_cpp_pack` computes once per grid, in its order.
+// `on` false (an empty pack: the below family, or free space) serves the edge
+// value frozen, which is what every grid did before #1258.
+struct FarPack {
+    bool on = false;
+    cd eps, k1, c2, c1k, ap, res_fv, g2k1;
+    double k2 = 0.0;
+};
+
 struct GridView {
     const cd *vptr[MAX_REGIONS];
     py::ssize_t nR[MAX_REGIONS], nTh[MAX_REGIONS];
     double rr0[MAX_REGIONS], rdr[MAX_REGIONS], rth0[MAX_REGIONS],
         rdth[MAX_REGIONS];
     double r1_max, r_break, th_split, r_near, tiny, half_pi;
+    FarPack far;
 };
 
 static GridView build_grid_view(
@@ -101,6 +112,165 @@ static GridView build_grid_view(
     return G;
 }
 
+// Load `_sommerfeld.far_cpp_pack(grid)` into G. Eight complex entries in the
+// order below, or none (the continuation off). Any other length is a stale
+// `_sommerfeld.py` and fails loudly.
+static inline void set_far(
+    GridView &G,
+    const py::array_t<cd, py::array::c_style | py::array::forcecast> &far) {
+    const py::ssize_t n = far.size();
+    if (n == 0) {
+        G.far.on = false;
+        return;
+    }
+    if (n != 8)
+        throw std::runtime_error(
+            "far pack must hold 8 complex constants (momwire#1258) or none");
+    const cd *f = far.data();
+    G.far.on = true;
+    G.far.eps = f[0];
+    G.far.k1 = f[1];
+    G.far.c2 = f[2];
+    G.far.c1k = f[3];
+    G.far.ap = f[4];
+    G.far.res_fv = f[5];
+    G.far.g2k1 = f[6];
+    G.far.k2 = f[7].real();
+}
+
+// Faddeeva w(z) = e^{-z^2} erfc(-jz). Weideman's rational approximation
+// (SIAM J. Numer. Anal. 31, 1497, 1994) with N = 40 terms on the closed upper
+// half-plane -- measured against scipy.special.wofz at 1.7e-15 absolute over
+// |Re z|, Im z <= 12 -- and w(z) = 2e^{-z^2} - w(-z) below it. The coefficients
+// are the paper's FFT, done here as a direct DFT once.
+struct WeidemanCoef {
+    static constexpr int N = 40;
+    double a[N];
+    double L;
+    WeidemanCoef() {
+        const int M = 2 * N, M2 = 2 * M;
+        L = std::sqrt(N / std::sqrt(2.0));
+        // f over k = -M+1 .. M-1, with a leading 0: length M2; fftshift
+        // rotates it by M.
+        std::vector<double> f(M2, 0.0), sh(M2);
+        for (int k = -M + 1; k <= M - 1; ++k) {
+            const double t = L * std::tan(0.5 * k * M_PI / M);
+            f[k + M] = std::exp(-t * t) * (L * L + t * t);
+        }
+        for (int j = 0; j < M2; ++j) sh[j] = f[(j + M) % M2];
+        for (int n = 1; n <= N; ++n) {
+            double re = 0.0;
+            for (int j = 0; j < M2; ++j)
+                re += sh[j] * std::cos(2.0 * M_PI * (double)j * n / M2);
+            a[n - 1] = re / M2;  // p(Z) = sum_n a[n-1] Z^(n-1)
+        }
+    }
+};
+
+static inline cd faddeeva_upper(cd z) {
+    static const WeidemanCoef C;
+    const cd iz(-z.imag(), z.real());
+    const cd lm = C.L - iz;
+    const cd Z = (C.L + iz) / lm;
+    cd p(0.0, 0.0);
+    for (int n = WeidemanCoef::N - 1; n >= 0; --n) p = p * Z + C.a[n];
+    return 2.0 * p / (lm * lm) + (1.0 / std::sqrt(M_PI)) / lm;
+}
+
+static inline cd faddeeva(cd z) {
+    if (z.imag() >= 0.0) return faddeeva_upper(z);
+    return 2.0 * std::exp(-z * z) - faddeeva_upper(-z);
+}
+
+// 1/s + j sqrt(pi) w(s): `_sommerfeld._pole_bracket`, including its switch to
+// the asymptotic series past |s| = 10 (`_FAR_BRACKET_SERIES`).
+static inline cd pole_bracket(cd s) {
+    const cd j(0.0, 1.0);
+    if (std::abs(s) <= 10.0) return 1.0 / s + j * std::sqrt(M_PI) * faddeeva(s);
+    const cd inv2 = 1.0 / (s * s);
+    cd term = 0.5 * inv2 / s;
+    cd acc = term;
+    for (int n = 2; n < 10; ++n) {
+        term = term * (double)(2 * n - 1) * 0.5 * inv2;
+        acc = acc + term;
+    }
+    cd corr(0.0, 0.0);
+    if (s.imag() < 0.0) corr = 2.0 * j * std::sqrt(M_PI) * std::exp(-s * s);
+    return -acc + corr;
+}
+
+// The four surfaces at (r1, th) from `_sommerfeld.far_surfaces` (saddle, pole
+// and lateral wave; no edge matching). Mirrors the numpy body term for term;
+// the block comment above `far_surfaces` is the derivation.
+static void far_one(const FarPack &F, double r1, double th, cd out[4]) {
+    const cd j(0.0, 1.0);
+    const double k = F.k2, ks = k * k;
+    const cd k1 = F.k1, k1s = k1 * k1, c2 = F.c2;
+    const double c = std::cos(th), s = std::sin(th);
+
+    const cd g2 = j * k * s;
+    const cd g1 = std::sqrt(cd(ks * c * c, 0.0) - k1s);
+    const cd rtm = (k1s * g2 - ks * g1) / (k1s * g2 + ks * g1);
+    const cd rte = (g2 - g1) / (g2 + g1);
+    const cd fv = (rtm - c2) / k1s;
+    cd n_rz = -ks * c * s * fv;
+    cd n_zzv = ks * c * c * fv;
+    cd n_rr = -ks * c * c * fv;
+    cd n_r1 = -j * k / r1 * fv;
+    cd n_u = rte + c2;
+
+    // `_far_taper`: 1 below 50 deg, a raised cosine to 0 at 70.
+    const double lo = 50.0 * M_PI / 180.0, hi = 70.0 * M_PI / 180.0;
+    double x = (th - lo) / (hi - lo);
+    x = x < 0.0 ? 0.0 : (x > 1.0 ? 1.0 : x);
+    const double wt = 0.5 * (1.0 + std::cos(M_PI * x));
+    if (wt > 0.0) {
+        const double om = k * r1;
+        const cd ap = F.ap;
+        const cd sap = std::sin(ap), cap = std::cos(ap);
+        const cd em = std::polar(1.0, -0.25 * M_PI);
+        const cd sp = std::sqrt(2.0 * om) * em * std::sin(0.5 * (ap - th));
+        const cd inv_a0 = std::sqrt(0.5 * om) * em;
+        const cd amp = wt * F.res_fv * std::sqrt(cap / c) * inv_a0 *
+                       pole_bracket(sp);
+        n_rz += -ks * cap * sap * amp;
+        n_zzv += ks * cap * cap * amp;
+        n_rr += -ks * cap * cap * amp;
+        n_r1 += -j * k * cap / (r1 * c) * amp;
+
+        const cd g2k1 = F.g2k1;
+        const double rho = r1 * c, h = r1 * s;
+        if (g2k1.real() * h < 50.0 && rho > 0.0) {
+            const cd rp = rho - j * h * k1 / g2k1;
+            const cd base = -j * wt *
+                            std::exp(-j * k1 * rho - g2k1 * h + j * k * r1) *
+                            r1 / (std::sqrt(rho) * std::pow(rp, 1.5));
+            const cd dd2 = -2.0 * ks / ((k1s * g2k1) * (k1s * g2k1));
+            const cd dd1 = -2.0 / (g2k1 * g2k1);
+            n_rr += dd2 * (-k1 * k1s) * base;
+            n_rz += dd2 * (j * g2k1 * k1s) * base;
+            n_zzv += dd2 * (g2k1 * g2k1 * k1 + ks * k1) * base;
+            n_r1 += dd2 * (-j * k1s / rho) * base;
+            n_u += dd1 * k1 * base;
+        }
+    }
+    const cd c1 = F.c1k / ks;
+    out[0] = c1 * k1s * n_rz;
+    out[1] = c1 * k1s * n_zzv;
+    out[2] = c1 * ks * (n_rr + n_u);
+    out[3] = -c1 * ks * (n_r1 + n_u);
+}
+
+// `SommerfeldGrid._continue_past_edge` for one query: `surf` holds the
+// table's value at the edge on entry and the continued value on return.
+static void far_continue(const GridView &G, double r1, double theta, cd surf[4]) {
+    cd a[4], e[4];
+    far_one(G.far, r1, theta, a);
+    far_one(G.far, G.r1_max, theta, e);
+    const double w = G.r1_max / r1;
+    for (int q = 0; q < 4; ++q) surf[q] = a[q] + (surf[q] - e[q]) * w;
+}
+
 // Interpolated + projected smooth-remainder field for ONE (observer, source)
 // pair: t_obs . F(r_obs, r_src) . t_src. `sux/suy/sthsrc/stzsrc` are the
 // source tangent's horizontal-unit / horizontal-magnitude / vertical parts
@@ -121,7 +291,7 @@ static inline cd proj_one(
     // --- inline SommerfeldGrid.eval(r1, theta) ---
     double theta = std::atan2(hh, rho);
     if (theta < 0.0) theta = 0.0; else if (theta > G.half_pi) theta = G.half_pi;
-    const double r1c = r1 > G.r1_max ? G.r1_max : r1;  // interp clamps; g uses r1
+    const double r1c = r1 > G.r1_max ? G.r1_max : r1;  // the edge; see below
     const int reg = (r1c <= G.r_break)
                         ? (theta <= G.th_split ? 0 : 1)
                         : (r1c <= G.r_near ? (theta <= G.th_split ? 2 : 3)
@@ -149,6 +319,9 @@ static inline cd proj_one(
         }
         surf[s] = acc;
     }
+    // Past the edge (momwire#1258): continue from the edge value rather than
+    // serving it frozen. `g` below keeps the true distance either way.
+    if (G.far.on && r1 > G.r1_max) far_continue(G, r1, theta, surf);
     const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
 
     // --- projection (eqs 143-147) ---

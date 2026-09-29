@@ -71,10 +71,12 @@ its remainder dominates. All three invert here too, for the stronger
 reason, and a FOURTH one turned up that U2 never had to price — this one
 inside phase 0's own measurement:
 
-1. **Range caps refuse, never clamp.** `SommerfeldGrid.eval` freezes the
-   surface amplitude past `r1_max` because out there the ±=+ remainder is a
-   negligible 1/R₁ tail. The transmitted surface is the entire field, so a
-   frozen amplitude is a fabrication with no small parameter behind it.
+1. **Range caps refuse, never clamp.** `SommerfeldGrid.eval` froze the
+   surface amplitude past `r1_max` on the premise that out there the ±=+
+   remainder is a negligible 1/R₁ tail (it continues it asymptotically
+   since momwire#1258, which found the premise false near grazing). The
+   transmitted surface is the entire field, so a frozen amplitude is a
+   fabrication with no small parameter behind it.
 2. **Error norms are per-surface relative with a named floor**, never
    pooled against an of-scale maximum: the five surfaces span decades over
    the served rectangle and a pooled norm hides whichever one is small.

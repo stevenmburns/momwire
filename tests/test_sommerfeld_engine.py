@@ -548,19 +548,26 @@ def test_grid_r1_max_is_capped(monkeypatch):
 
 def test_grid_r1_zero_and_bounds(lossy_grid):
     """R1 = 0 queries interpolate onto the analytic-limit row; a query
-    beyond r1_max clamps to r1_max (the far-pair cap, issue #157) rather
-    than raising; a negative R1 still raises; theta is clipped to [0, pi/2]."""
+    beyond r1_max is served (the far-pair cap, issue #157) rather than
+    raising, continued from the edge (momwire#1258); a negative R1 still
+    raises; theta is clipped to [0, pi/2]."""
     th = np.array([0.2, 1.0])
     lim = som._limits_r1_zero(10.0 - 1.26j, K2, th, K2 * som._C_LIGHT, som._MU0)
     out = lossy_grid.eval(np.zeros_like(th), th)
     for kk in som._SURF_KEYS:
         np.testing.assert_allclose(out[kk], lim[kk], rtol=2e-3, atol=0)
-    # Beyond r1_max: clamped, so a far query equals the r1_max edge (the C++
-    # proj_one path clamps identically). Was a ValueError before #157.
+    # Beyond r1_max: served, and continuous at the edge. Was a ValueError
+    # before #157 and the frozen edge value until momwire#1258, which
+    # continues it by the matched asymptotic (tests/test_somm_far_1258.py
+    # holds the continuation against an independent evaluation).
+    edge = lossy_grid.r1_max
+    at_cap = lossy_grid.eval([edge], [0.3])
+    just_past = lossy_grid.eval([edge * (1.0 + 1e-9)], [0.3])
     beyond = lossy_grid.eval([1.5], [0.3])
-    at_cap = lossy_grid.eval([lossy_grid.r1_max], [0.3])
     for kk in som._SURF_KEYS:
-        np.testing.assert_allclose(beyond[kk], at_cap[kk], rtol=1e-12)
+        np.testing.assert_allclose(just_past[kk], at_cap[kk], rtol=1e-8)
+        assert np.isfinite(beyond[kk]).all()
+        assert beyond[kk] != at_cap[kk]
     # A negative R1 is a genuine bug and still raises.
     with pytest.raises(ValueError):
         lossy_grid.eval([-0.1], [0.3])
