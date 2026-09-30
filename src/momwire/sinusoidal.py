@@ -5859,11 +5859,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             (below, medium.k_m, medium, self._medium_eta(medium)),
         ):
             idx = np.nonzero(keep)[0]
-            block = self._class_block(
-                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan
+            self._class_block(
+                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan, into=Phi
             )
-            for P, b in zip(Phi, block):
-                P[np.ix_(idx, idx)] = b
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
         for src_keep, obs_below in () if crossing else ((below, False), (~below, True)):
@@ -5884,21 +5882,35 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             c = np.nonzero(src_keep)[0]
             for P, t in zip(Phi, T):
                 P[np.ix_(r, c)] += t[np.ix_(r, c)]
+        # Each Φ is dropped once its product is in G, so the later products
+        # (each a Φ-sized copy and a Φ-sized result inside scipy) run beside
+        # fewer of them: at invl x32 the three products were the fill's
+        # traced peak once the crossing rows stopped being it (momwire#1267).
+        # The loop names above must not keep one alive.
+        P = t = T = None
         G = Phi[0] @ Ms[0]
+        Phi[0] = None
         G += Phi[1] @ Ms[1]
+        Phi[1] = None
         G += Phi[2] @ Ms[2]
-        del Phi
+        del Phi, P, t, T
         if crossing:
-            G += self._crossing_point_rows(geom, seg_view, medium, below)
+            self._crossing_point_rows(geom, seg_view, medium, below, into=G)
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view
 
-    def _crossing_point_rows(self, geom, seg_view, medium, below):
+    def _crossing_point_rows(self, geom, seg_view, medium, below, into=None):
         """The crossing deck's cross rows (momwire#1223): each medium's
         midpoints observing the other medium's part of every basis, through
         `_crossing_fill.point_observer_block`. Returned as a full (N, N) to
         ADD to the class fill, in its convention (measured: ratio 1 to the
-        free-space field tensor at eps~ = 1)."""
+        free-space field tensor at eps~ = 1).
+
+        `into` (the (N, N) class fill): each direction's rows are added to
+        it in place and `into` is returned. The two directions' rows
+        partition the matrix's (`below` and its complement), so this is the
+        same one addition per element as `into += rows`, without the (N, N)
+        `rows` beside it (momwire#1267)."""
         ctx = self._crossing_context(geom, seg_view, medium)
         a_idx = np.nonzero(~below)[0]
         b_idx = np.nonzero(below)[0]
@@ -5915,14 +5927,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         centres = np.asarray(geom["seg_centers"])
         tangents = np.asarray(geom["seg_tangents"])
         n = int(geom["n_segs"])
-        out = np.zeros((n, n), dtype=np.complex128)
-        out[a_idx] = _crossing_fill.point_observer_block(
-            ctx, centres[a_idx], tangents[a_idx], ax_b, observers_above=True
-        )
-        out[b_idx] = _crossing_fill.point_observer_block(
-            ctx, centres[b_idx], tangents[b_idx], ax_a, observers_above=False
-        )
-        return out
+        if into is None:
+            out = np.zeros((n, n), dtype=np.complex128)
+        for obs, src, above in ((a_idx, ax_b, True), (b_idx, ax_a, False)):
+            rows = _crossing_fill.point_observer_block(
+                ctx, centres[obs], tangents[obs], src, observers_above=above
+            )
+            if into is None:
+                out[obs] = rows
+            else:
+                # By contiguous runs: `into[obs] += rows` would gather the
+                # rows into an (n_obs, N) copy first.
+                r = 0
+                for s0, e0 in self._index_runs(obs):
+                    into[s0:e0] += rows[r : r + e0 - s0]
+                    r += e0 - s0
+            del rows
+        return out if into is None else into
 
     @staticmethod
     def _index_runs(idx):
@@ -5936,10 +5957,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         lasts = np.concatenate((cut, [idx.size]))
         return [(int(idx[a]), int(idx[b - 1]) + 1) for a, b in zip(firsts, lasts)]
 
-    def _class_block(self, geom, keep, idx, k, medium, eta, cos_shape, plan):
+    def _class_block(self, geom, keep, idx, k, medium, eta, cos_shape, plan, into=None):
         """One medium's (3, n, n) block of a mixed deck: its own sources seen
         at its own midpoints, at its own (k, eta), with its own ground —
         `Φ − (coef·Φ_img − S)`, the single-medium band loop's composition.
+
+        `into` (three (N, N) arrays, `_assemble_Z_mixed`'s Φ): each band is
+        written straight to its (rows, idx) entries there and nothing is
+        returned. The (3, n, n) block it replaces was a copy of the same
+        floats held beside Φ (momwire#1267: 1.2 GB at invl x32, n = 5122,
+        and its last loop reference kept it alive through the crossing rows).
 
         The sources are restricted by handing `_field_tensor` a geometry whose
         `seg_h` is the class's (it is read for sources only) and the class's
@@ -5971,7 +5998,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rem = fg.remainder(cos_shape=cos_shape)
         coef = fg.image_coefficient
         n = idx.size
-        out = [np.empty((n, n), dtype=np.complex128) for _ in range(3)]
+        out = into
+        if into is None:
+            out = [np.empty((n, n), dtype=np.complex128) for _ in range(3)]
         # Bands of at most `chunk` observer rows, budgeted like the
         # single-medium fill's (`_fill_row_bytes`, over the class's n
         # sources). A class's runs are whole wires, so on a buried radial
@@ -6018,9 +6047,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 Pi = np.array(Pi, dtype=np.complex128)
                 np.multiply(coef, Pi, out=Pi)
                 Pi -= Si
-                dst[row : row + e - s] = P - Pi
+                if into is None:
+                    dst[row : row + e - s] = P - Pi
+                else:
+                    # A band is a contiguous run of global rows (`_index_runs`),
+                    # so its class rows idx[row : row + e - s] are s..e-1.
+                    dst[s:e, idx] = P - Pi
             row += e - s
-        return out
+        return None if into is not None else out
 
     @staticmethod
     def _wire_of_seg(geom):
