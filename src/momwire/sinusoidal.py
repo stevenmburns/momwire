@@ -633,7 +633,9 @@ class SinusoidalBasisSampler:
         col = np.concatenate(col_parts)
         # SPARSE, built from the structure (momwire#1224 C1), the way
         # `_basis_samples` is (#1109): the dense (n_basis, n_nodes) complex
-        # pair was 918 MiB at hub x16 and the traced peak's owner. Every
+        # pair was 918 MiB at invl x16. It set the traced peak there, but the
+        # point rows sit only ~90 MiB below it, so the peak falls by that
+        # much, and by nothing at x32 (`designed_rows` owns it). Every
         # value is `_value_and_slope`'s own, so the bytes are the dense
         # build's. Two things keep the CSR EQUAL to `csr_array(dense)`:
         # COO -> CSR sums duplicates (none: a segment's rows are unique and
