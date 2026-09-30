@@ -4,8 +4,8 @@
 whole ρ_eff columns (`_near_interface.column_batches`, `_POINT_EVAL_ROWS`)
 instead of one `designed_rows` and one `point_designed_rows` call, and keeps
 in the block's memo only the rows its ends loop can ask (`designed_rows`'
-`keep`). The sinusoidal mixed assembly writes the class blocks and the
-crossing rows straight into its Φ and G. None of it may move a bit.
+`keep`). The sinusoidal mixed assembly adds the crossing rows straight
+into its G. None of it may move a bit.
 
 Gates:
   * on real point grids (the bent crossing deck and the buried inverted-L,
@@ -22,8 +22,10 @@ Gates:
     call's values, and the block's own values do not depend on it;
   * the whole block, chunked at small evaluation budgets, equals the dense
     reference route bit for bit;
-  * `_crossing_point_rows(into=G)` is `G + rows` and the mixed assembly's
-    in-place class blocks are the returned blocks scattered, to the bit.
+  * `_crossing_point_rows(into=G)` is `G + rows`, to the bit. (The mixed
+    assembly's class blocks written in place, the other half of #1267's
+    assembly change, are now fused into Z's rows by observer band; the
+    whole-Φ equality that gated them is `test_mixed_fill_fused_1224.py`.)
 """
 
 from __future__ import annotations
@@ -216,24 +218,3 @@ def test_crossing_rows_into_is_the_sum():
     got = s._crossing_point_rows(geom, view, med, below, into=G)
     assert got is G
     assert _bytes_equal(want, G)
-
-
-def test_class_blocks_in_place_are_the_scattered_blocks(monkeypatch):
-    """The mixed assembly's G with `_class_block(into=Φ)` against the
-    returned-block route scattered as the assembly used to scatter it."""
-    deck = invl_deck(n_radials=8, x=1)
-    s = SinusoidalSolver(**deck)
-    geom = s._build_geometry()
-    G_new, _view = s._assemble_Z_mixed(geom, s._fill_eta(s.k, None))
-
-    orig = SinusoidalSolver._class_block
-
-    def returned(self, geom, keep, idx, *a, into=None):
-        block = orig(self, geom, keep, idx, *a)
-        for P, b in zip(into, block):
-            P[np.ix_(idx, idx)] = b
-
-    monkeypatch.setattr(SinusoidalSolver, "_class_block", returned)
-    s2 = SinusoidalSolver(**deck)
-    G_old, _view = s2._assemble_Z_mixed(s2._build_geometry(), s2._fill_eta(s2.k, None))
-    assert _bytes_equal(G_new, G_old)

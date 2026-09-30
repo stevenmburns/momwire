@@ -379,10 +379,19 @@ def _reduce_phi_rows_in_place(Phi, Ms, band):
     n = out.shape[0]
     for r0 in range(0, n, band):
         r1 = min(r0 + band, n)
-        rows = out[r0:r1]
-        rows[...] = rows @ Ms[0]
-        rows += Phi[1][r0:r1] @ Ms[1]
-        rows += Phi[2][r0:r1] @ Ms[2]
+        _reduce_phi_band([P[r0:r1] for P in Phi], Ms, out[r0:r1])
+    return out
+
+
+def _reduce_phi_band(Phi, Ms, out):
+    """`out[...] = Φ₀@M₀; out += Φ₁@M₁; out += Φ₂@M₂` over one band of
+    observer rows — the one spelling both `_reduce_phi_rows_in_place` and
+    the fused mixed fill (`_assemble_Z_mixed`) reduce with, so the two
+    cannot drift apart. `out` may be `Phi[0]` itself: the first product is
+    a new array before it is written back."""
+    out[...] = Phi[0] @ Ms[0]
+    out += Phi[1] @ Ms[1]
+    out += Phi[2] @ Ms[2]
     return out
 
 
@@ -5127,7 +5136,50 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         that honest.
 
         Full-width in the source axis: out-of-class sources are ZERO, which
-        is the pair mask.
+        is the pair mask. `_transmitted_block` is the same floats before the
+        scatter, for a caller that places them itself.
+        """
+        small, obs_rows, idx = self._transmitted_block(
+            geom,
+            medium,
+            plan,
+            src_keep,
+            obs_keep,
+            obs_below,
+            obs_c_all,
+            obs_t_all,
+            row_group,
+            cos_shape=cos_shape,
+        )
+        # Full width in BOTH axes; every untouched entry stays zero, which is
+        # the pair mask.
+        n_segs = int(geom["n_segs"])
+        out = np.zeros((3, np.asarray(obs_c_all).shape[0], n_segs), dtype=np.complex128)
+        out[np.ix_(np.arange(3), obs_rows, idx)] = small
+        return out
+
+    def _transmitted_block(
+        self,
+        geom,
+        medium,
+        plan,
+        src_keep,
+        obs_keep,
+        obs_below,
+        obs_c_all,
+        obs_t_all,
+        row_group=1,
+        *,
+        cos_shape,
+    ):
+        """`_transmitted_tensor`'s pair class COMPACT: `(block, obs_rows,
+        idx)`, `block` of shape (3, len(obs_rows), len(idx)) — observer rows
+        `obs_rows` (in order) by in-class sources `idx` (in order), the
+        entries the full-width tensor scatters and nothing else.
+
+        The point-matched mixed fill (momwire#1224) reads it this way: it
+        never holds an (N, N) of the class's zeros beside Z, only these
+        n_obs × n_src entries, and places each observer band's rows itself.
         """
         if cos_shape not in ("cos", "cos-1"):
             raise ValueError(f"cos_shape must be 'cos' or 'cos-1', got {cos_shape!r}")
@@ -5186,12 +5238,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
         fq = proj.reshape(obs_c.shape[0], idx.size, q)
         small = np.einsum("snq,mnq->smn", shp_w, fq)
-        # Full width in BOTH axes; every untouched entry stays zero, which is
-        # the pair mask.
-        n_segs = int(geom["n_segs"])
-        out = np.zeros((3, obs_c_all.shape[0], n_segs), dtype=np.complex128)
-        out[np.ix_(np.arange(3), obs_rows, idx)] = small
-        return out
+        return small, obs_rows, idx
 
     # ------------------------------------------------------------------
     # The ground-contact node charge over a FINITE ground (#282)
@@ -5849,9 +5896,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         switch over every segment at its own k — because mixing spellings
         between blocks is a different operator, not a rounding (#606).
 
-        The three Φ tables are whole-matrix, so the fill's resident floor is
-        3 Z; the reduction into Z then runs by observer rows into Φ₀'s own
-        storage (momwire#1224), adding one band, not two more Z.
+        FUSED by observer rows (momwire#1224): each band of Z's rows gets its
+        three Φ rows from both classes' contributions in a band-sized buffer
+        and is reduced into Z at once, so Z is the fill's only (N, N) array
+        — as in `_assemble_Z` and razor's buried fill. The three whole Φ
+        tables this replaces were 3 Z resident beside it (1.65 GB at invl
+        x32). Why it is the same bits is argued at the band loop below.
         """
         below = self._below_segments(geom)
         medium = self._fill_medium(geom)
@@ -5894,20 +5944,20 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ]
 
         eta_p = self._fill_eta(medium.k_p, eta)
-        Phi = [np.zeros((N, N), dtype=np.complex128) for _ in range(3)]
-        for keep, k_cls, med, eta_cls in (
-            (~below, medium.k_p, None, eta_p),
-            (below, medium.k_m, medium, self._medium_eta(medium)),
-        ):
-            idx = np.nonzero(keep)[0]
-            self._class_block(
-                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan, into=Phi
-            )
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
+        # A non-crossing deck's two transmitted pair classes, COMPACT
+        # (`_transmitted_block`): per observer class, its (3, n_obs, n_src)
+        # entries and the source columns they land in — never the (3, N, N)
+        # full-width tensor of the class's zeros. They are computed before the
+        # class bands rather than after the class blocks, as they used to be;
+        # nothing either one reads is state the other writes (the transmitted
+        # grid and the class remainders sit in caches keyed exactly, so a hit
+        # and a miss are the same floats), and the gates below measure it.
+        cross = {}
         for src_keep, obs_below in () if crossing else ((below, False), (~below, True)):
             obs_keep = below if obs_below else ~below
-            T = self._transmitted_tensor(
+            block, _rows, cols = self._transmitted_block(
                 geom,
                 medium,
                 plan,
@@ -5919,32 +5969,100 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 row_group=1,
                 cos_shape=cos_shape,
             )
-            r = np.nonzero(obs_keep)[0]
-            c = np.nonzero(src_keep)[0]
-            for P, t in zip(Phi, T):
-                P[np.ix_(r, c)] += t[np.ix_(r, c)]
-        # The loop names above must not keep a Φ alive past the reduction
-        # (a crossing deck never binds them).
-        P = t = T = None
-        # The reduction, by observer rows and into Φ₀'s own storage
-        # (momwire#1224). Before it, the three whole products were the
-        # fill's traced peak at invl x32 (momwire#1267): each one a Φ-sized
-        # copy plus a Φ-sized result inside scipy, beside the Φ tables and
-        # G. See `_reduce_phi_rows_in_place` for why this is bit-equal.
-        # Below the dense-M threshold the reduction is a BLAS zgemm, whose
-        # blocking follows the operand shape, so it stays one band there —
-        # as the single-medium fill's chunk does, for the same reason.
-        band = (
-            N
-            if N < _DENSE_ASSEMBLY_THRESHOLD
-            else max(1, int(self.swept_mem_mb * 1024 * 1024 // (2 * 16 * N)))
-        )
-        G = _reduce_phi_rows_in_place(Phi, Ms, band)
-        del Phi, P, t, T
+            cross[bool(obs_below)] = (cols, block)
+        block = None
+
+        # THE BAND LOOP (momwire#1224). Why a fused band is the same bits as
+        # the whole-Φ fill it replaces, element by element:
+        #
+        #   * Every Φ element had exactly ONE writer. The class blocks write
+        #     rows × columns of their own class (above/above, below/below),
+        #     and a non-crossing deck's transmitted directions ADD into
+        #     above-rows × below-columns and below-rows × above-columns, onto
+        #     the table's zeros. Those four quadrants partition the matrix, so
+        #     no element saw both classes, nor a class value and a transmitted
+        #     one; each is either the class block's `P − Pi`, or `0 + t`, or
+        #     (a crossing deck's cross quadrants) a bare 0. The band buffer
+        #     starts at zeros and performs that same one operation per
+        #     element — a copy, or a `+=` onto a zero (`0 + (−0.0)` is +0.0
+        #     either way, so even the sign of a zero agrees).
+        #   * The class values are the class's OWN band plan, untouched: the
+        #     Z bands are sub-bands OF each class band (`_class_bands` yields
+        #     a band; its rows are cut into Z bands only after its values
+        #     exist), so no class value is ever computed over a different set
+        #     of observer rows than before. Nothing here relies on the field
+        #     tensors being row-independent.
+        #   * The reduction of a band is `_reduce_phi_band`, whose sparse-M
+        #     bits are independent of the band's row count
+        #     (`_reduce_phi_rows_in_place`'s argument). Below the dense
+        #     threshold the reduction is a zgemm whose blocking follows the
+        #     row count, so there the buffer is the whole table (tiny: N < 60)
+        #     and is reduced once, which is the old fill verbatim.
+        #
+        # A Z band is budgeted like the old reduction's band plus the three Φ
+        # rows it now owns: 3 buffer rows + the product's copy and result
+        # (`_fill_row_bytes`' reduction phase), N sources each. Beside it sits
+        # one class band's `P − Pi` (budgeted by that class's own sizing).
+        whole = N < _DENSE_ASSEMBLY_THRESHOLD
+        zband = self._mixed_band_rows(N)
+        if whole:
+            Phi = [np.zeros((N, N), dtype=np.complex128) for _ in range(3)]
+        else:
+            G = np.zeros((N, N), dtype=np.complex128)
+        for (keep, k_cls, med, eta_cls), obs_below in (
+            ((~below, medium.k_p, None, eta_p), False),
+            ((below, medium.k_m, medium, self._medium_eta(medium)), True),
+        ):
+            idx = np.nonzero(keep)[0]
+            tx = cross.get(obs_below)
+            for s, e, row, D in self._class_bands(
+                geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan
+            ):
+                for z0 in range(s, e, zband):
+                    z1 = min(z0 + zband, e)
+                    if whole:
+                        dst = [P[z0:z1] for P in Phi]
+                    else:
+                        dst = [
+                            np.zeros((z1 - z0, N), dtype=np.complex128)
+                            for _ in range(3)
+                        ]
+                    for P, d in zip(dst, D):
+                        P[:, idx] = d[z0 - s : z1 - s]
+                    if tx is not None:
+                        # The class's observer rows are `idx` in order and a
+                        # band is a run of them starting at class row `row`,
+                        # which is also the compact block's row order.
+                        cols, t_block = tx
+                        a = row + z0 - s
+                        for P, t in zip(dst, t_block):
+                            P[:, cols] += t[a : a + z1 - z0]
+                    if not whole:
+                        _reduce_phi_band(dst, Ms, G[z0:z1])
+                    # Every name on a buffer row or a D array is dropped, the
+                    # loop variables included, before the generator computes
+                    # its next band — else two bands coexist.
+                    dst = P = d = t = None
+                D = None
+        cross = tx = t_block = None
+        if whole:
+            G = _reduce_phi_rows_in_place(Phi, Ms, N)
+            del Phi
         if crossing:
             self._crossing_point_rows(geom, seg_view, medium, below, into=G)
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view
+
+    def _mixed_band_rows(self, N):
+        """Observer rows per Z band of the fused mixed fill (momwire#1224):
+        its three Φ buffer rows plus the reduction's product copy and result
+        (`_fill_row_bytes`' reduction phase), N sources each, out of
+        `swept_mem_mb`. Below the dense threshold the band is the whole
+        matrix — the zgemm reduction's bits follow its row count. One method
+        so a test can force bands that cut a class band finely."""
+        if N < _DENSE_ASSEMBLY_THRESHOLD:
+            return N
+        return max(1, int(self.swept_mem_mb * 1024 * 1024 // ((3 + 2) * 16 * N)))
 
     def _crossing_point_rows(self, geom, seg_view, medium, below, into=None):
         """The crossing deck's cross rows (momwire#1223): each medium's
@@ -6004,16 +6122,31 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         lasts = np.concatenate((cut, [idx.size]))
         return [(int(idx[a]), int(idx[b - 1]) + 1) for a, b in zip(firsts, lasts)]
 
-    def _class_block(self, geom, keep, idx, k, medium, eta, cos_shape, plan, into=None):
-        """One medium's (3, n, n) block of a mixed deck: its own sources seen
-        at its own midpoints, at its own (k, eta), with its own ground —
-        `Φ − (coef·Φ_img − S)`, the single-medium band loop's composition.
+    def _class_block(self, geom, keep, idx, k, medium, eta, cos_shape, plan):
+        """One medium's (3, n, n) block of a mixed deck, whole: its
+        `_class_bands` stacked. The fill no longer holds this (momwire#1224
+        fuses the bands straight into Z's rows); it is the reference those
+        bands are gated against."""
+        n = idx.size
+        out = [np.empty((n, n), dtype=np.complex128) for _ in range(3)]
+        for _s, _e, row, D in self._class_bands(
+            geom, keep, idx, k, medium, eta, cos_shape, plan
+        ):
+            for dst, d in zip(out, D):
+                dst[row : row + d.shape[0]] = d
+        return out
 
-        `into` (three (N, N) arrays, `_assemble_Z_mixed`'s Φ): each band is
-        written straight to its (rows, idx) entries there and nothing is
-        returned. The (3, n, n) block it replaces was a copy of the same
-        floats held beside Φ (momwire#1267: 1.2 GB at invl x32, n = 5122,
-        and its last loop reference kept it alive through the crossing rows).
+    def _class_bands(self, geom, keep, idx, k, medium, eta, cos_shape, plan):
+        """One medium's block of a mixed deck, band by observer band: its own
+        sources seen at its own midpoints, at its own (k, eta), with its own
+        ground — `Φ − (coef·Φ_img − S)`, the single-medium band loop's
+        composition.
+
+        Yields `(s, e, row, D)`: global observer rows s..e−1, which are class
+        rows row..row+e−s−1 (a band never leaves a contiguous run of the
+        class), and `D`, three (e − s, n) arrays over the class's n sources
+        in `idx` order. The consumer places them (`_assemble_Z_mixed`) and
+        must drop `D` before asking for the next band, or two bands coexist.
 
         The sources are restricted by handing `_field_tensor` a geometry whose
         `seg_h` is the class's (it is read for sources only) and the class's
@@ -6045,9 +6178,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rem = fg.remainder(cos_shape=cos_shape)
         coef = fg.image_coefficient
         n = idx.size
-        out = into
-        if into is None:
-            out = [np.empty((n, n), dtype=np.complex128) for _ in range(3)]
         # Bands of at most `chunk` observer rows, budgeted like the
         # single-medium fill's (`_fill_row_bytes`, over the class's n
         # sources). A class's runs are whole wires, so on a buried radial
@@ -6090,18 +6220,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 eta=eta,
             )
             S = rem.replay(obs_centers=seg_c[s:e], obs_tangents=seg_t[s:e])
-            for dst, P, Pi, Si in zip(out, Phi, img, S):
+            D = []
+            for P, Pi, Si in zip(Phi, img, S):
                 Pi = np.array(Pi, dtype=np.complex128)
                 np.multiply(coef, Pi, out=Pi)
                 Pi -= Si
-                if into is None:
-                    dst[row : row + e - s] = P - Pi
-                else:
-                    # A band is a contiguous run of global rows (`_index_runs`),
-                    # so its class rows idx[row : row + e - s] are s..e-1.
-                    dst[s:e, idx] = P - Pi
+                # `P − Pi` into Pi's own (fresh) storage: the same ufunc on
+                # the same operands as the `P - Pi` this block always wrote.
+                np.subtract(P, Pi, out=Pi)
+                D.append(Pi)
+            Phi = img = S = P = Pi = Si = None
+            yield s, e, row, D
+            D = None
             row += e - s
-        return None if into is not None else out
 
     @staticmethod
     def _wire_of_seg(geom):
