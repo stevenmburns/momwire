@@ -138,6 +138,7 @@ def test_g980b_2_sinusoidal_sampler_is_the_solvers_own_evaluator(deck):
     u = np.concatenate([rng.uniform(0.0, geom["seg_h"][g], q) for g in range(n)])
     runs = {g: (q * g, q) for g in range(n)}
     F, Fd, rows = sampler.samples(runs, u)
+    F, Fd = F.toarray(), Fd.toarray()  # CSR since momwire#1224 C1
     eval_seg = np.repeat(np.arange(n, dtype=np.int64), q)
     eval_s = u - 0.5 * geom["seg_h"][eval_seg]  # the evaluators take ξ from the centre
     F0, Fd0 = _direct(s, seg_view, n, eval_seg, eval_s)
@@ -196,8 +197,8 @@ def test_g980b_3_axis_data_consumes_the_sinusoidal_sampler(deck):
     # recover each node's arc from its segment start, and check the samples
     u = np.linalg.norm(ax["nodes"] - geom["seg_l"][ax["segof"]], axis=1)
     F0, Fd0 = _direct(s, seg_view, n, ax["segof"], u - 0.5 * geom["seg_h"][ax["segof"]])
-    # This sampler returns DENSE and `axis_data` converts it (momwire#1109):
-    # the conversion is what is under test here as much as the samples are.
+    # This sampler returns CSR itself since momwire#1224 C1, so `axis_data`
+    # passes it through unchanged.
     axF, axFd = ax["F_csr"].toarray(), ax["Fd_csr"].toarray()
     np.testing.assert_allclose(axF, F0, rtol=0.0, atol=1e-13 * np.abs(F0).max())
     np.testing.assert_allclose(axFd, Fd0, rtol=0.0, atol=1e-13 * np.abs(Fd0).max())
