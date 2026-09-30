@@ -563,6 +563,8 @@ class SinusoidalBasisSampler:
 
     Each (segment, basis) pair is one CSR entry, so a segment's rows are
     unique — asserted, since `_basis_samples` asserts the same for wings.
+    `samples` returns F / Fd as `csr_array` built from that structure, never
+    dense (momwire#1224 C1).
     """
 
     def __init__(self, seg_view, k, seg_h, n_basis):
@@ -609,19 +611,43 @@ class SinusoidalBasisSampler:
 
     def samples(self, seg_runs, u_phys):
         n_nodes = u_phys.shape[0]
-        F = np.zeros((self.n_basis, n_nodes), dtype=np.complex128)
-        Fd = np.zeros((self.n_basis, n_nodes), dtype=np.complex128)
+        shape = (self.n_basis, n_nodes)
         seg_rows: dict[int, np.ndarray] = {}
+        row_parts, col_parts, f_parts, fd_parts = [], [], [], []
         for g, (s0, cnt) in seg_runs.items():
             sl, rows = self._entries(g)
             if rows.size == 0:
                 continue
             xi = u_phys[s0 : s0 + cnt] - 0.5 * self._h[g]
             f, fd = self._value_and_slope(sl, xi)
-            F[rows, s0 : s0 + cnt] = f
-            Fd[rows, s0 : s0 + cnt] = fd
+            # (entry, node) rectangle of this segment, row-major like f / fd.
+            row_parts.append(np.repeat(rows, cnt))
+            col_parts.append(np.tile(np.arange(s0, s0 + cnt), rows.size))
+            f_parts.append(f.ravel())
+            fd_parts.append(fd.ravel())
             seg_rows[int(g)] = np.sort(rows)
-        return F, Fd, seg_rows
+        if not row_parts:
+            empty = scipy.sparse.csr_array(shape, dtype=np.complex128)
+            return empty, empty.copy(), seg_rows
+        row = np.concatenate(row_parts)
+        col = np.concatenate(col_parts)
+        # SPARSE, built from the structure (momwire#1224 C1), the way
+        # `_basis_samples` is (#1109): the dense (n_basis, n_nodes) complex
+        # pair was 918 MiB at hub x16 and the traced peak's owner. Every
+        # value is `_value_and_slope`'s own, so the bytes are the dense
+        # build's. Two things keep the CSR EQUAL to `csr_array(dense)`:
+        # COO -> CSR sums duplicates (none: a segment's rows are unique and
+        # segments own disjoint node runs) and leaves canonical, ascending
+        # column order; and `eliminate_zeros` drops the exact-zero entries
+        # the dense conversion never stored. Unlike `_basis_samples`, which
+        # KEEPS explicit zeros, this sampler drops them to stay
+        # bit-identical to the dense path this replaces.
+        out = []
+        for parts in (f_parts, fd_parts):
+            M = scipy.sparse.csr_array((np.concatenate(parts), (row, col)), shape=shape)
+            M.eliminate_zeros()
+            out.append(M)
+        return out[0], out[1], seg_rows
 
     def end_values(self, gseg, u):
         fv = np.zeros(self.n_basis, dtype=np.complex128)
