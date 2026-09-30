@@ -187,8 +187,8 @@ class BasisSampler(Protocol):
         support has at most `degree + 1` nonzeros per NODE, so `axis_data`
         carries F/Fd as `scipy.sparse.csr_array` under the keys `F_csr` /
         `Fd_csr`, and a sampler may return that directly —
-        `BasisPolynomials` does, built from the segment structure and never
-        materialised dense, because the dense pair is 4.13 GB of the 8.55 GB
+        `BasisPolynomials` and `SinusoidalBasisSampler` do, built from the
+        segment structure and never materialised dense, because the dense pair is 4.13 GB of the 8.55 GB
         peak on the 150-radial screen. A sampler that returns dense arrays
         is converted here and pays only its own dense allocation.
     `end_values(gseg, u)`
