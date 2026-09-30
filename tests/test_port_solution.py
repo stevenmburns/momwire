@@ -391,6 +391,11 @@ def _count(monkeypatch, obj, name):
     return calls
 
 
+SEGMENT_FACTOR = {
+    SinusoidalSolver: "solve",
+    SinusoidalGalerkinSolver: "lu_factor",
+}
+
 FILL_AND_SOLVE = {
     BSplineSolver: ("_compute_Z_operator", "_solve_with_kcl_ports"),
     HMatrixSolver: ("_build_operator", "_solve_hmatrix"),
@@ -413,10 +418,16 @@ def test_one_fill_and_one_factorisation_per_call(monkeypatch, cls, fixture, requ
     solver = cls(**_tight(cls, fixture()))
     fills = _count(monkeypatch, solver, fill_name)
     # The segment families factor through scipy directly, so the solve counter
-    # goes on the module-level entry point they call.
+    # goes on the module-level entry point they call: `solve` for the
+    # point-matched family, `lu_factor` for the Galerkin one, which factors G
+    # in place (`_solve_in_place`, momwire#1224).
     module = type(solver).__module__
     solves = (
-        _count(monkeypatch, __import__(module, fromlist=["x"]).scipy.linalg, "solve")
+        _count(
+            monkeypatch,
+            __import__(module, fromlist=["x"]).scipy.linalg,
+            SEGMENT_FACTOR[cls],
+        )
         if cls in SEGMENT
         else _count(monkeypatch, solver, solve_name)
     )
