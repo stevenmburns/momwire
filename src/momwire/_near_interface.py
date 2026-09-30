@@ -1083,6 +1083,38 @@ class TripleMemo:
         self.stats["hits"] += int(np.count_nonzero(hit))
         return hit, block
 
+    def contains(self, rows):
+        """Bool mask over (n, 3) float rows: which the memo holds -- `lookup`'s
+        `hit` under the same key rule (`row + 0.0`, a NaN row never held),
+        without its value block and without counting in `stats`."""
+        n = rows.shape[0]
+        held = np.zeros(n, dtype=bool)
+        if n == 0 or len(self) == 0:
+            return held
+        keys = rows + 0.0
+        hq = _row_hash(keys)
+        todo = np.arange(n)
+        for h, k, _v, _s in self._runs():
+            if todo.size == 0:
+                break
+            if h.size == 0:
+                continue
+            found = self._find(h, k, hq[todo], keys[todo])
+            ok = found >= 0
+            held[todo[ok]] = True
+            todo = todo[~ok]
+        return held
+
+    @classmethod
+    def key_set(cls, rows):
+        """A memo holding the distinct (m, 3) `rows` as keys only, for
+        `contains` (`designed_rows`' `keep`): its values are NaN and never
+        read."""
+        rows = np.asarray(rows, dtype=float)
+        out = cls()
+        out.insert(rows, np.full((rows.shape[0], N_KEYS), np.nan, dtype=np.complex128))
+        return out
+
     def _find(self, h, k, hq, q):
         """Index into one run of each query's key, −1 where absent."""
         found = np.full(hq.size, -1, dtype=np.intp)
@@ -1565,10 +1597,11 @@ def _check_memo(memo):
         )
 
 
-def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
+def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels, keep=None):
     """`designed_tables` between its dedup and its scatter: the (m, 6) values
     of `rows` (distinct triples, first-appearance order), memo hits copied
-    from the memo, the rest evaluated by `_evaluate_fresh` and inserted."""
+    from the memo, the rest evaluated by `_evaluate_fresh` and inserted --
+    only those `keep` holds when a `keep` is given (`designed_rows`)."""
     if memo is None:
         # Every row is fresh and in order, so the block IS the evaluation's
         # answer: the copy `block[arange] = vals` into a second (m, 6) array
@@ -1590,12 +1623,17 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels):
             plan=memo.sheet_plan,
         )
         block[fresh_pos] = vals
+        if keep is not None:
+            ins = keep.contains(sub)
+            sub, vals = sub[ins], vals[ins]
         memo.insert(sub, vals)
         del sub, vals  # copied into `block` (and the memo); not needed below
     return block
 
 
-def designed_rows(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
+def designed_rows(
+    eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None, keep=None
+):
     """`designed_tables` over rows that are ALREADY DISTINCT, as the (m, 6)
     block in `KEYS` column order — row i for `rows[i]` — with no dedup and no
     scatter (momwire#1173).
@@ -1613,10 +1651,53 @@ def designed_rows(eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None):
 
     The caller vouches for distinctness (`_crossing_fill._chunked_tables`
     passes `_unique_rows`' own output); rows that repeat would be evaluated
-    once each and inserted twice, which the memo does not refuse."""
+    once each and inserted twice, which the memo does not refuse.
+
+    `keep` (a `TripleMemo.key_set`, momwire#1267): of the fresh rows, only
+    those it holds are inserted into `memo`. Which rows are fresh, how they
+    are grouped and what they evaluate to are unchanged -- the lookup comes
+    first -- so the block is the same bits; what changes is only what a
+    LATER call through `memo` can hit. A caller passes it when it knows
+    every triple any later call on `memo` will ask (`_crossing_fill.
+    _chunked_point_tables`: the ends loop's), so those later calls see the
+    same hits, and the memo does not retain ~136 B per row it will never
+    serve."""
     _check_memo(memo)
     rows = np.asarray(rows, dtype=float)
-    return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None)
+    return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None, keep)
+
+
+def column_batches(rho, max_rows):
+    """Cut the rows of a distinct-row list into batches of WHOLE exact-ρ
+    columns (momwire#1267): a list of ascending index arrays that partition
+    `range(rho.size)`, each at most `max_rows` long plus the rest of the
+    one column that crosses its bound (a column longer than `max_rows` is a
+    batch of its own).
+
+    Why whole columns: the column routes (`_column_twin`, `_point_columns_
+    exact`) evaluate a call's rows grouped by exact ρ, and a member's value
+    depends on its column's membership (its smallest s = z − z′ picks the
+    rule, `six_columns`; the #1168 audit's naive batching moved 12 of 1.96 M
+    Z entries that way). A batch that holds every row of each ρ it touches
+    hands each column the same members as one call over all the rows; its
+    indices ascend, so the members keep their relative order and the
+    columns their first-seen order (`_column_blocks`). The equivalence
+    classes are `np.unique`'s on `rho`, the same function both twins group
+    with. A sheet row's value is a function of the row alone
+    (`_evaluate_fresh`), so the cut cannot move those either."""
+    rho = np.asarray(rho, dtype=float)
+    m = rho.size
+    if m == 0:
+        return []
+    _u, inv, counts = np.unique(rho, return_inverse=True, return_counts=True)
+    order = np.argsort(np.asarray(inv).ravel(), kind="stable")
+    del inv
+    starts = np.zeros(counts.size + 1, dtype=np.intp)
+    np.cumsum(counts, out=starts[1:])
+    # Each cut is the first column start at or past a multiple of max_rows.
+    targets = np.arange(max(1, int(max_rows)), m, max(1, int(max_rows)))
+    cuts = np.unique(np.concatenate(([0, m], starts[np.searchsorted(starts, targets)])))
+    return [np.sort(order[a:b]) for a, b in zip(cuts[:-1], cuts[1:])]
 
 
 def designed_rows_permuted(
