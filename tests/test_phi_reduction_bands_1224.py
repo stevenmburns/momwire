@@ -10,14 +10,16 @@ along Φ's observer axis, so a band must be the same bits as the same rows
 of the whole product.
 
 Gates, on the real Φ and M of an inverted-L over 16 buried radials at
-x = 4 (N = 734, `invl_deck`), captured from the solver's own call:
+x = 4 (N = 734, `invl_deck`), built as the pre-fuse fill built them
+(`whole_phi_tables`; the fill itself no longer holds whole Φ tables since
+the fused bands, `test_mixed_fill_fused_1224.py`):
   * the banded result equals the old whole-matrix spelling byte-for-byte
     at band heights that force many bands (1, 7, 100, N − 1) and at one
     that does not (N, and larger);
   * a counting proxy on each M records the row count of every product, so
     the band path is proven to have run with exactly the expected bands —
     the test cannot pass with the reduction silently taken whole;
-  * the solver's own call is on the sparse path and returns Φ₀'s storage.
+  * the Ms are the sparse regime's, and the result is Φ₀'s storage.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ import numpy as np
 import pytest
 import scipy.sparse
 from test_crossing_serve_524 import invl_deck
+from test_mixed_fill_fused_1224 import whole_phi_tables
 
 from momwire import sinusoidal as sn
 
@@ -49,30 +52,10 @@ class _CountingM:
 
 @pytest.fixture(scope="module")
 def captured():
-    """The solver's own `(Φ, Ms, band)` at invl x4, copied on the way in,
-    and what its call returned."""
-    seen = {}
-    orig = sn._reduce_phi_rows_in_place
-
-    def spy(Phi, Ms, band):
-        seen["Phi"] = [P.copy() for P in Phi]
-        seen["Ms"] = list(Ms)
-        seen["band"] = band
-        seen["phi0_id"] = id(Phi[0])
-        out = orig(Phi, Ms, band)
-        seen["out_is_phi0"] = id(out) == seen["phi0_id"]
-        seen["out"] = out.copy()
-        return out
-
-    mp = pytest.MonkeyPatch()
-    mp.setattr(sn, "_reduce_phi_rows_in_place", spy)
-    try:
-        s = sn.SinusoidalSolver(**invl_deck(x=4))
-        s.compute_impedance()
-    finally:
-        mp.undo()
-    assert "Phi" in seen, "the mixed fill never reached the banded reduction"
-    return seen
+    """The fill's real `(Φ, Ms)` at invl x4, as whole tables."""
+    s = sn.SinusoidalSolver(**invl_deck(x=4))
+    Phi, Ms, _rest = whole_phi_tables(s, s._build_geometry())
+    return {"Phi": Phi, "Ms": Ms}
 
 
 def _whole(Phi, Ms):
@@ -83,14 +66,10 @@ def _whole(Phi, Ms):
     return G
 
 
-def test_solver_call_is_sparse_and_in_place(captured):
+def test_the_tables_are_the_sparse_regime(captured):
     N = captured["Phi"][0].shape[0]
     assert N == 734
     assert all(isinstance(M, scipy.sparse.csc_matrix) for M in captured["Ms"])
-    assert captured["out_is_phi0"]
-    # The solver's own result is the whole-matrix answer, bit for bit.
-    ref = _whole(captured["Phi"], captured["Ms"])
-    assert captured["out"].tobytes() == ref.tobytes()
 
 
 @pytest.mark.parametrize("band", [1, 7, 100, 733, 734, 5000])
