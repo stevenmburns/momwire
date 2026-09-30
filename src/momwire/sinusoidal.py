@@ -345,6 +345,47 @@ _ETA_REQUIRED = (
 )
 
 
+def _reduce_phi_rows_in_place(Phi, Ms, band):
+    """`Φ₀@M₀ + Φ₁@M₁ + Φ₂@M₂`, `(x = A; x += B; x += C)`, written into
+    `Phi[0]`'s storage band by band of `band` observer rows; returns that
+    array, which is then Z (momwire#1224).
+
+    Why a band is the same bits as the same rows of the whole product.
+    Above the dense threshold each `Ms[i]` is a `scipy.sparse.csc_matrix`,
+    and `ndarray @ csc` is scipy's `_rmatmul_dispatch`: `(Mᵀ @ Φᵀ)ᵀ`, where
+    `Mᵀ` is CSR over the same arrays and `Φᵀ` is an F-ordered view that
+    `_matmul_multivector` ravels into a C copy (the product's Φ-sized
+    copy), then `csr_matvecs` into a zeroed result (its Φ-sized result).
+    `csr_matvecs` walks Mᵀ's rows and, per stored entry, does
+    `y[i, :] += a · x[j, :]` over the vector axis — which is Φ's OBSERVER
+    axis. So each output element is its own zero plus its column's
+    stored entries in CSR order, one multiply-add each, and nothing on
+    that path depends on how many observer rows ride along. A band is
+    therefore a residency change, not a reassociation — the argument
+    `_assemble_Z` makes for its fill chunks, which is bit-equal at every
+    chunk size in the sparse regime.
+
+    Writing into Φ₀: the band's product has copied its Φ₀ rows before
+    it returns, and no later band reads them, so the rows are free once
+    their own product exists. The whole reduction thus runs beside
+    the three Φ and one band (the copy and the result, 2 rows of N each
+    — the caller's `band` sizing), instead of beside two more Z.
+
+    A DENSE `Ms[i]` (N < `_DENSE_ASSEMBLY_THRESHOLD`) goes to BLAS zgemm,
+    whose k-blocking can follow the row count; the caller passes
+    `band = N` there, which is the whole-matrix call unchanged.
+    """
+    out = Phi[0]
+    n = out.shape[0]
+    for r0 in range(0, n, band):
+        r1 = min(r0 + band, n)
+        rows = out[r0:r1]
+        rows[...] = rows @ Ms[0]
+        rows += Phi[1][r0:r1] @ Ms[1]
+        rows += Phi[2][r0:r1] @ Ms[2]
+    return out
+
+
 def _complex_k(k):
     """Whether `k` is an in-medium (complex) wavenumber — momwire#980.
 
@@ -5808,9 +5849,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         switch over every segment at its own k — because mixing spellings
         between blocks is a different operator, not a rounding (#606).
 
-        Not banded: the three Φ tables are whole-matrix, so the transient is
-        ~3 Z plus one class block. #1220 stage 3 owns the memory; the deck
-        sizes this route serves today are small beside it.
+        The three Φ tables are whole-matrix, so the fill's resident floor is
+        3 Z; the reduction into Z then runs by observer rows into Φ₀'s own
+        storage (momwire#1224), adding one band, not two more Z.
         """
         below = self._below_segments(geom)
         medium = self._fill_medium(geom)
@@ -5882,17 +5923,23 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             c = np.nonzero(src_keep)[0]
             for P, t in zip(Phi, T):
                 P[np.ix_(r, c)] += t[np.ix_(r, c)]
-        # Each Φ is dropped once its product is in G, so the later products
-        # (each a Φ-sized copy and a Φ-sized result inside scipy) run beside
-        # fewer of them: at invl x32 the three products were the fill's
-        # traced peak once the crossing rows stopped being it (momwire#1267).
-        # The loop names above must not keep one alive.
+        # The loop names above must not keep a Φ alive past the reduction
+        # (a crossing deck never binds them).
         P = t = T = None
-        G = Phi[0] @ Ms[0]
-        Phi[0] = None
-        G += Phi[1] @ Ms[1]
-        Phi[1] = None
-        G += Phi[2] @ Ms[2]
+        # The reduction, by observer rows and into Φ₀'s own storage
+        # (momwire#1224). Before it, the three whole products were the
+        # fill's traced peak at invl x32 (momwire#1267): each one a Φ-sized
+        # copy plus a Φ-sized result inside scipy, beside the Φ tables and
+        # G. See `_reduce_phi_rows_in_place` for why this is bit-equal.
+        # Below the dense-M threshold the reduction is a BLAS zgemm, whose
+        # blocking follows the operand shape, so it stays one band there —
+        # as the single-medium fill's chunk does, for the same reason.
+        band = (
+            N
+            if N < _DENSE_ASSEMBLY_THRESHOLD
+            else max(1, int(self.swept_mem_mb * 1024 * 1024 // (2 * 16 * N)))
+        )
+        G = _reduce_phi_rows_in_place(Phi, Ms, band)
         del Phi, P, t, T
         if crossing:
             self._crossing_point_rows(geom, seg_view, medium, below, into=G)
