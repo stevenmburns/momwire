@@ -662,6 +662,34 @@ _ClassView = collections.namedtuple(
 )
 
 
+def _solve_in_place(G, rhs):
+    """Solve G·x = rhs, factoring G IN PLACE — G holds its LU factors after.
+
+    `scipy.linalg.solve(G, ·)` leaves its argument alone, so it hands LAPACK
+    a Fortran-ordered COPY of G: one extra (n_basis, n_basis) array at the
+    solve (momwire#1224). `lu_factor(overwrite_a=True)` factors G's own
+    storage whenever G is F-contiguous, which the fill arranges (the sparse
+    coefficient product comes out F-ordered, and `_add_crossing_blocks` /
+    `_assemble_Z_ported` keep it so); a C-ordered G is still copied, as
+    before, and is still solved correctly.
+
+    The same getrf on the same matrix, then getrs: bit-identical to
+    `scipy.linalg.solve`'s general solve, measured. Two things `solve` did
+    are not repeated. Its reciprocal-condition estimate (gecon) and the
+    ill-conditioning `LinAlgWarning` it drives are dropped, as the
+    point-matched solver's in-place solve already does. An EXACTLY singular
+    G still raises `LinAlgError` rather than returning inf/NaN, which
+    `lu_factor` alone would (it only warns).
+
+    Callers must not read G afterwards; neither SG solve does, and this
+    family stashes no matrix or factors on the solver.
+    """
+    lu_piv = scipy.linalg.lu_factor(G, overwrite_a=True)
+    if not np.all(np.diagonal(lu_piv[0])):
+        raise np.linalg.LinAlgError("singular matrix")
+    return scipy.linalg.lu_solve(lu_piv, rhs)
+
+
 def _graded_endpoint_rule(eps, n_per_panel, leggauss):
     """Composite Gauss rule on [-1, 1] with panels graded toward BOTH ends.
 
@@ -1747,7 +1775,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return G, seg_view
         N = geom["n_segs"]
         D = self._node_charge_columns(geom, seg_view, k, eta=eta)
-        G = G.copy()
+        # `order="K"` keeps the fill's F-ordered G F-ordered, so the solve can
+        # factor it in place (`_solve_in_place`); the default copy is C.
+        G = G.copy(order="K")
         G[:, N:] -= D
         G[N:, :] -= D.T
         G[N:, N:] += self._node_charge_pair_block(geom, k, eta=eta)
@@ -3444,7 +3474,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 f"(crossing block is {t_ab.shape[0]} x {t_ab.shape[1]}, "
                 f"G is {n} x {n})"
             )
-        return G + t_ab + t_ab.T
+        # `(G + t_ab) + t_ab.T`, the same two elementwise sums, with the
+        # result allocated FORTRAN-ordered and the second sum in place: the
+        # solve factors G in place only when LAPACK can take it as it is
+        # (see `_solve_in_place`), and `G + t_ab` of an F-ordered G and a
+        # C-ordered t_ab came out C-ordered.
+        out = np.add(G, t_ab, order="F")
+        np.add(out, t_ab.T, out=out)
+        return out
 
     def _n_crossing_wings(self):
         """How many NODE-WING columns the crossing junctions add: one per
@@ -4639,7 +4676,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             voltages = self._port_voltages()
             self._checkpoint()  # after assembly, before the dense solve
 
-            alpha = scipy.linalg.solve(G, U @ voltages)
+            alpha = _solve_in_place(G, U @ voltages)
 
             # Inside the medium too (momwire#1159): an off-centre point gap's
             # readout writes the shapes at `self.k`, which is k_m only here.
@@ -4710,7 +4747,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 geom, self.k, self._medium_eta(medium)
             )
             U = self._drive_columns(geom, seg_view, self.k)
-            alphas = scipy.linalg.solve(G, U)
+            alphas = _solve_in_place(G, U)
             Y = np.stack(
                 [
                     self._port_currents(alphas[:, j], geom, seg_view, U)
