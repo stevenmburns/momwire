@@ -3092,6 +3092,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 dest[np.ix_(np.nonzero(rows)[0], cols)] = b[
                     np.ix_(np.nonzero(rows)[0], cols)
                 ]
+            # The quadrant is copied, so the class block is dead — and the
+            # loop variable `b` is one of its three arrays. Left bound, `b`
+            # kept an (nnz, N) array of the FIRST class alive through the
+            # second class's fill and fold, which is where the peak is
+            # (3.3 Z of hub16 x4's buried peak, momwire#1224).
+            del block, b
 
         # The two transmitted directions, each into the quadrant whose
         # observers are in the OTHER medium from its sources — ADDED, not
