@@ -12,6 +12,8 @@ quadrant and the transmitted directions) and scattered straight into a
 preallocated, F-ordered G (`_scatter_band`), which accumulates each basis's
 T row across bands in the whole product's order and writes the basis's row
 of G at the band holding its last entry. The whole triple never exists.
+The crossing block `t_ab`, (n_basis, n_basis) too, is asked for its live
+rows only, and before G exists.
 
 The claim is bit-identity, and the gates here are:
 
@@ -23,9 +25,9 @@ The claim is bit-identity, and the gates here are:
     buried (compose: image, remainder), a ground contact, the extended
     kernel with a bend, a junction-port pair, a non-crossing mixed
     deck (transmitted directions), and the crossing hub and inverted-L
-    (class views). Each in several bands, and the cheap decks in
-    bands of one, two and three segments — every boundary, and boundaries
-    that cut a basis's support after one entry and after two;
+    (class views, the crossing rows). Each in several bands, and the cheap
+    decks in bands of one, two and three segments — every boundary, and
+    boundaries that cut a basis's support after one entry and after two;
   * the fallbacks band too: a mixed class filled whole-plane, and the numpy
     far fill (no accelerator), on bands aligned to the numpy loop's blocks;
   * the banded fill ran: spies count the bands scattered (several) and the
