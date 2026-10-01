@@ -1250,20 +1250,30 @@ class KeyIndex:
         # the index a search of the unique array finds for it. Only the codes'
         # internal numbering could differ from the searched one, and `ids`
         # answers global key ids, which do not depend on it.
-        # `r_inverse` is kept for `_crossing_fill._ProductTiles`, which
-        # classes the keys by exact ρ the same way.
+        # The ρ classes are handed once to `_crossing_fill._ProductTiles`,
+        # which classes the keys by exact ρ the same way (`take_r_classes`);
+        # not kept past that, they are two key-length arrays.
         r_u, r_inv = np.unique(key_r, return_inverse=True)
         zl_u, zl_inv = np.unique(key_zl, return_inverse=True)
-        self.r_unique, self.r_inverse = r_u, np.asarray(r_inv).ravel()
+        r_inv = np.asarray(r_inv).ravel()
+        self._key_r = key_r
+        self._r_classes = (r_u, r_inv)
         self._r_ids = _SortedIds(r_u)
         self._zl_ids = _SortedIds(zl_u)
-        key_code = (
-            self.r_inverse.astype(np.int64) * zl_u.size + np.asarray(zl_inv).ravel()
-        )
+        key_code = r_inv.astype(np.int64) * zl_u.size + np.asarray(zl_inv).ravel()
         del zl_inv
         self._n_zl = zl_u.size
         self._key_ids = _SortedCodes(key_code)
         self.n_key = int(np.asarray(key_r).size)
+
+    def take_r_classes(self):
+        """`np.unique(key_r, return_inverse=True)` (the inverse flat), from
+        the construction the first time and formed again after that."""
+        got, self._r_classes = self._r_classes, None
+        if got is None:
+            u, inv = np.unique(self._key_r, return_inverse=True)
+            got = (u, np.asarray(inv).ravel())
+        return got
 
     def ids(self, r, zl):
         ri = self._r_ids.ids(r)
