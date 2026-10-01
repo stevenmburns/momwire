@@ -2278,6 +2278,7 @@ class _ProductTiles:
         self.extra_late = None
         self.hpos = None
         self.n_held = 0
+        self._mark = None  # `_tile_rows`' row mask, made on first use
 
     def keep_values(self):
         """The unfused route: a (rows, 2) V/W store in row order, which the
@@ -2324,7 +2325,20 @@ class _ProductTiles:
         ]
         if len(parts) == 1:
             return np.sort(parts[0])
-        return np.unique(np.concatenate(parts))
+        # The distinct ids ascending, as `np.unique` gave them, by marking
+        # them in a row-length mask (momwire#1224): the ids are row numbers in
+        # [0, n_rows), so the mask's nonzeros ARE the sorted distinct set, and
+        # the tiles share one mask, cleared after each use. np.unique hashed
+        # and sorted them instead -- 1.07 s over razor inverted-L x8's 20
+        # tiles on Haswell, against a mask pass of O(n_rows) per tile.
+        mark = self._mark
+        if mark is None:
+            mark = self._mark = np.zeros(self.plan.n_rows, dtype=bool)
+        for p in parts:
+            mark[p] = True
+        ids = np.flatnonzero(mark)
+        mark[ids] = False
+        return ids
 
     def _evaluate(self, rows):
         """(vals, pos) of one tile's rows: ONE call, or — the TEST-ONLY
