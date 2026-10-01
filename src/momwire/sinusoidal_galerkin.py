@@ -1814,9 +1814,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             return G, seg_view
         N = geom["n_segs"]
         D = self._node_charge_columns(geom, seg_view, k, eta=eta)
-        # `order="K"` keeps the fill's F-ordered G F-ordered, so the solve can
-        # factor it in place (`_solve_in_place`); the default copy is C.
-        G = G.copy(order="K")
+        # In place on the fill's own G (momwire#1224): `_assemble_Z` returns a
+        # fresh matrix nobody else holds, so the copy this used to take was a
+        # second (n_basis, n_basis) array for nothing — the same subtractions
+        # land on the same values either way, and G stays F-ordered for
+        # `_solve_in_place`.
         G[:, N:] -= D
         G[N:, :] -= D.T
         G[N:, N:] += self._node_charge_pair_block(geom, k, eta=eta)
@@ -4800,8 +4802,24 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 np.add.at(dest, rows, c)
         if not any(np.any(t) for t in T):
             return
-        C = self._bracket_coef_product(ctx, T, cols, col_of)
-        G -= 0.5 * (C + C.T)
+        if not self._band_fill_serves(N):
+            C = self._bracket_coef_product(ctx, T, cols, col_of)
+            G -= 0.5 * (C + C.T)
+            return
+        # C is (n_basis, n_basis), the size of the answer, and so is C + Cᵀ
+        # and its half: three matrices beside G (momwire#1224). Taken by row
+        # bands instead — rows i0:i1 of C and the same COLUMNS of C, whose
+        # transpose is those rows of Cᵀ — each cell is the product's own sum
+        # (a row or column slice of the dense factor or of the csc factor
+        # leaves every cell's terms and their order alone), and the update
+        # `G − ½(C + Cᵀ)` is elementwise, so the bands are the same bits.
+        mats = self._bracket_coef_mats(ctx, cols, col_of)
+        step = max(1, self._band_budget_bytes(n_basis) // (16 * 6 * n_basis))
+        for i0 in range(0, n_basis, step):
+            i1 = min(i0 + step, n_basis)
+            c_rows = sum(t[i0:i1] @ M for t, M in zip(T, mats))
+            c_cols = sum(t @ M[:, i0:i1] for t, M in zip(T, mats))
+            G[i0:i1] -= 0.5 * (c_rows + c_cols.T)
 
     def _ek_bracket_plans(self, geom, ctx, blocks):
         """Per-block prep for `_ek_bracket_block` that does NOT depend on the
@@ -4882,9 +4900,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 return M
 
             return sum(t @ _coef_matrix(coef) for t, coef in zip(T, coefs))
-        return sum(
-            t @ scipy.sparse.csc_matrix((coef[sel], mi), shape=(cols.size, n_basis))
-            for t, coef in zip(T, coefs)
+        return sum(t @ M for t, M in zip(T, self._bracket_coef_mats(ctx, cols, col_of)))
+
+    def _bracket_coef_mats(self, ctx, cols, col_of):
+        """`_bracket_coef_product`'s three sparse factors, as (cols.size,
+        n_basis) csc matrices — the one construction both the whole product
+        and the banded update (momwire#1224) multiply by."""
+        N = ctx["N"]
+        n_basis = N + self._n_extra_cols()
+        row = col_of[ctx["m_of_entry"]]
+        sel = row >= 0
+        mi = (row[sel], ctx["i_of_entry"][sel])
+        return tuple(
+            scipy.sparse.csc_matrix((coef[sel], mi), shape=(cols.size, n_basis))
+            for coef in (ctx["sigAC"], ctx["B"], ctx["sigC"])
         )
 
     def _contact_charge_correction_tested(self, G, geom, k, seg_view, ctx, eta=None):
