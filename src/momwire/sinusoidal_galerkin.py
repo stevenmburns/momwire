@@ -588,6 +588,18 @@ def _fill_block(n_segs, nq, n_qp_const):
 # this budget is not binding the buffer still cannot outweigh the answer.
 _EK_BRACKET_BAND_BYTES = 1 << 25
 
+# The fewest test segments an observer band of the fused banded fill holds
+# (momwire#1224, `SinusoidalGalerkinSolver._segment_bands`), whatever the
+# byte budget says. The fused far-fill kernel threads over a band's test
+# segments (`schedule(static)`), so a band of a few segments leaves threads
+# idle on its ragged last chunk, once per band: measured on Haswell (4
+# threads, hub16 buried), x8 in 141 bands of ~10 segments filled 19 % slower
+# in the kernel than in 5 bands, and x16 in 134 bands of ~21 segments 11 %
+# slower end to end than base, 66 bands 4 %, 17 bands 1 %. 64 keeps the
+# ragged chunk under ~5 % of a band at 4 threads; the price is the band's
+# budgeted scratch, ~0.8 Z at N = 2800 and ~0.4 Z at N = 5900 (buried decks).
+_BAND_MIN_SEGMENTS = 64
+
 
 # One source block of momwire#299's end-bracket correction, with everything
 # the band loop would otherwise recompute per (band, block) resolved once:
@@ -636,30 +648,57 @@ _EKFarLabels = collections.namedtuple(
 _SIMD_TAIL_PERIOD = 4
 
 
-# One medium's pair class of a mixed deck, as the fill sees it (momwire#1224):
-# the class's own test entries against its own source segments, instead of
-# the whole plane masked afterwards.
+# A restricted block of the fill, as the fill sees it (momwire#1224): some of
+# the deck's test entries against some of its source segments. Two callers
+# build one. A mixed deck's pair class (`_class_view`) is the class's own test
+# entries against its own sources, instead of the whole plane masked
+# afterwards; an observer BAND of the fused banded fill (`_sub_view`) is the
+# entries of a run of basis rows, against the whole deck's sources or, on a
+# mixed deck, against its class's.
 #
-#   segs     the class's segments, ascending — its test segments AND its
-#            source columns (a class pairs a medium with itself).
-#   entries  the class's support entries in the full context, ascending: the
-#            CSR runs of `segs`, in order.
-#   pad      leading dummy source columns (see `_class_view`); the class's
+#   segs     the block's TEST segments, ascending (for a class, also its
+#            source segments: a class pairs a medium with itself).
+#   entries  the block's support entries in the full context, ascending, and
+#            grouped by segment because the CSR is segment-major.
+#   pad      leading dummy source columns (see `_class_view`); the block's
 #            own columns are block[:, pad:].
 #   src_idx  the fill's source list as full-deck segment indices, `pad`
-#            copies of segs[0] then `segs`.
+#            copies of its first source then the sources themselves.
 #   ctx      the sub-context the fused kernel and the remainder read: the
-#            class's observers, entries and CSR starts, and `hh` taken at
+#            block's observers, entries and CSR starts, and `hh` taken at
 #            `src_idx` (the kernel reads ctx["hh"] as the SOURCE half-lengths).
 #   full_ctx the whole deck's context, which the near correction keeps using
 #            so its per-pair arithmetic reads exactly the arrays it always did.
 #   row_of_entry / col_of_seg
-#            full-deck entry / segment -> row / column of the class block, or
-#            -1 outside the class.
+#            full-deck entry / segment -> row / column of the block, or -1
+#            outside it.
+#   rem_cols the block columns the Sommerfeld remainder's source axis lands
+#            on, in order — None when that axis IS the block's (a whole-deck
+#            remainder on a whole-deck source list).
+#   rem_obs  which of `segs` the remainder replays at (a mask), or None for
+#            all of them: a block whose test side spans both media keeps the
+#            remainder to its own medium's observers.
 _ClassView = collections.namedtuple(
     "_ClassView",
-    "segs entries pad src_idx ctx full_ctx row_of_entry col_of_seg",
+    "segs entries pad src_idx ctx full_ctx row_of_entry col_of_seg rem_cols rem_obs",
+    defaults=(None,),
 )
+
+
+# The whole deck's graded near-pair values for ONE source block, computed once
+# per fill so an observer band only has to place its own cells (momwire#1224).
+# `entry` / `seg` are each cell's full-deck support entry and source segment;
+# `vals` its three folded-shape values, in `_apply_near_correction`'s pair
+# order. O(near cells) — a few per support entry — never (nnz, N).
+_NearCells = collections.namedtuple("_NearCells", "entry seg vals")
+
+
+# The fused banded fill's scatter state for one G (momwire#1224; see
+# `SinusoidalGalerkinSolver._scatter_band`): G itself, the three
+# source-coefficient matrices M[shape], each entry's basis, each basis's last
+# entry, and `carry` — basis -> its three partial T rows, for the bases a band
+# boundary cuts.
+_BandRows = collections.namedtuple("_BandRows", "G Ms i_of_entry last carry")
 
 
 def _solve_in_place(G, rhs):
@@ -2366,6 +2405,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         subtract_into=None,
         eta=None,
         cls=None,
+        near=None,
     ):
         """Test-integrate one source block: (contrib_const, sin, cos−1), each
         (nnz, N) — the folded shape set (#203/#205), which is what the field
@@ -2377,8 +2417,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         block comes back (n_class_entries, pad + n_class_segs) — the class's
         own quadrant and nothing else, where the unrestricted block was the
         whole plane with the quadrant cut out of it afterwards. Every cell is
-        the same float64 sequence it was (see `_class_view`). Served on the
-        fused C++ path only; the caller checks `_class_fill_serves` first.
+        the same float64 sequence it was (see `_class_view`). A view with a
+        restricted source list is served on the fused C++ path only; the
+        caller checks `_class_fill_serves` first. An observer band of the
+        fused banded fill (`_sub_view`) is the same object with the whole
+        deck's sources, and the numpy loop serves that one too: it walks its
+        own test segments and indexes per-pair tables by `m_of_obs`, which a
+        view carries in full-deck coordinates.
+
+        `near` (a `_NearCells`, momwire#1224) is this block's graded near
+        values, computed once per fill over the whole deck by
+        `_near_cells`; the block then only places the cells it holds, by the
+        same assignment (or, folding, the same subtraction) the inline
+        correction performs. Without it the correction is computed here, as
+        it always was.
 
         `subtract_into` is the ground path's residency lever (momwire#332):
         given a triple, this block is SUBTRACTED into it entry by entry and
@@ -2450,16 +2502,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # split assumes jkR is purely imaginary, so an EK solve in the medium
         # stays on numpy.
         eta = self._fill_eta(k, eta)
-        in_medium = np.iscomplexobj(k) or np.iscomplexobj(eta)
-        if (
-            _HAVE_GALERKIN_FAR_FILL
-            and (
-                not in_medium
-                or (_HAVE_GALERKIN_FAR_FILL_CPLX and not self.extended_kernel)
-            )
-            and projector is _plain_projection
-            and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
-        ):
+        if self._fused_fill_serves(k, eta, projector):
             # Guarded at the call site as well as inside, like every other EK
             # entry point here: G-B4's counter gate is that an EK-off solve
             # does not so much as ENTER this code.
@@ -2473,12 +2516,20 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 far_c, far_t = src_c, src_t
             else:
                 far_c, far_t = src_c[cls.src_idx], src_t[cls.src_idx]
+                if ek_pairs is not None:
+                    # The labels at the view's own axes: one per TEST
+                    # segment it holds, one per source it fills against.
+                    ek_pairs = ek_pairs._replace(
+                        src_a=np.asarray(ek_pairs.src_a)[cls.src_idx],
+                        group_obs=np.ascontiguousarray(ek_pairs.group_obs[cls.segs]),
+                        group_src=np.ascontiguousarray(ek_pairs.group_src[cls.src_idx]),
+                    )
             if subtract_into is None:
                 contribs = self._far_fill_accel(
                     k, ctx, far_c, far_t, ek=ek_pairs, eta=eta
                 )
                 if self.near_correction:
-                    self._apply_near_correction(
+                    self._near_correct(
                         geom,
                         k,
                         ctx,
@@ -2489,10 +2540,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                         mirror,
                         eta=eta,
                         cls=cls,
+                        near=near,
                     )
                 return contribs
             near_cells = (
-                self._apply_near_correction(
+                self._near_correct(
                     geom,
                     k,
                     ctx,
@@ -2504,6 +2556,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     sub=True,
                     eta=eta,
                     cls=cls,
+                    near=near,
                 )
                 if self.near_correction
                 else None
@@ -2530,25 +2583,37 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     dest[near_cells] = saved
             return None
 
-        if cls is not None:
+        n_src = src_c.shape[0]
+        if cls is not None and not (
+            cls.pad == 0
+            and cls.src_idx.size == n_src
+            and np.array_equal(cls.src_idx, np.arange(n_src))
+        ):
             # Deliberately not a silent fallback: the numpy loop below indexes
             # sources, projector tables and EK labels in whole-deck
-            # coordinates, so a class block reaching it would be filled over
-            # the wrong columns. `_class_fill_serves` is the caller's check.
+            # coordinates, so a block restricted on its SOURCE side reaching
+            # it would be filled over the wrong columns. `_class_fill_serves`
+            # is the caller's check. A view that keeps the whole deck's
+            # sources (an observer band) is served: its test side is indexed
+            # through `m_of_obs`, which the view carries in full-deck terms.
             raise AssertionError(
-                "a class-restricted block reached the numpy far fill; "
-                "_assemble_mixed_contribs should have taken the whole-plane "
+                "a source-restricted block reached the numpy far fill; "
+                "the mixed fill should have taken the whole-plane "
                 "class fill (momwire#1224)"
             )
         # Blocked over test segments (#194): identical arithmetic per matrix
         # entry, but the kernel's source-quadrature scratch is (rows·nq, N,
-        # n_qp_const) per block instead of (N·nq, N, n_qp_const) once.
+        # n_qp_const) per block instead of (N·nq, N, n_qp_const) once. `N` is
+        # the TEST segment count and `n_src` the source count: the same
+        # number except on an observer band's sub-context.
         starts = ctx["starts"]
         nnz = ctx["w_entry"].shape[0]
         a_obs = ctx["a_obs"]
-        n_idx = np.arange(N)[None, :]
+        n_idx = np.arange(n_src)[None, :]
         if subtract_into is None:
-            contribs = tuple(np.zeros((nnz, N), dtype=np.complex128) for _ in range(3))
+            contribs = tuple(
+                np.zeros((nnz, n_src), dtype=np.complex128) for _ in range(3)
+            )
             near_cells = None
         else:
             # Folding as we fill, the near correction can no longer run LAST:
@@ -2561,7 +2626,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             # arithmetic is unchanged on every other cell and absent on these.
             contribs = subtract_into
             near_cells = (
-                self._apply_near_correction(
+                self._near_correct(
                     geom,
                     k,
                     ctx,
@@ -2572,11 +2637,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     mirror,
                     sub=True,
                     eta=eta,
+                    cls=cls,
+                    near=near,
                 )
                 if self.near_correction
                 else None
             )
-        blk = _fill_block(N, nq, self.n_qp_const)
+        blk = _fill_block(n_src, nq, self.n_qp_const)
         for m0 in range(0, N, blk):
             m1 = min(m0 + blk, N)
             o0, o1 = m0 * nq, m1 * nq
@@ -2614,7 +2681,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 held_n = near_cells[1][held]
             for c_out, P in zip(contribs, Phi):
                 rows = self._tested_contrib_rows(
-                    w, m_loc, nq, P.reshape(m1 - m0, nq, N)
+                    w, m_loc, nq, P.reshape(m1 - m0, nq, n_src)
                 )
                 if subtract_into is None:
                     c_out[e0:e1] = rows
@@ -2626,10 +2693,90 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if subtract_into is not None:
             return None
         if self.near_correction:
-            self._apply_near_correction(
-                geom, k, ctx, contribs, projector, src_c, src_t, mirror, eta=eta
+            self._near_correct(
+                geom,
+                k,
+                ctx,
+                contribs,
+                projector,
+                src_c,
+                src_t,
+                mirror,
+                eta=eta,
+                cls=cls,
+                near=near,
             )
         return contribs
+
+    def _fused_fill_serves(self, k, eta, projector):
+        """Whether `_tested_contribs` fills a block at (k, eta) through
+        `projector` on the fused C++ far fill rather than the numpy loop —
+        its own predicate, named so the banded fill (momwire#1224) can ask
+        it before it cuts its bands."""
+        eta = self._fill_eta(k, eta)
+        in_medium = np.iscomplexobj(k) or np.iscomplexobj(eta)
+        return bool(
+            _HAVE_GALERKIN_FAR_FILL
+            and (
+                not in_medium
+                or (_HAVE_GALERKIN_FAR_FILL_CPLX and not self.extended_kernel)
+            )
+            and projector is _plain_projection
+            and (not self.extended_kernel or _HAVE_GALERKIN_FAR_FILL_EK)
+        )
+
+    def _near_correct(
+        self,
+        geom,
+        k,
+        ctx,
+        contribs,
+        projector,
+        src_c,
+        src_t,
+        mirror=False,
+        sub=False,
+        eta=None,
+        cls=None,
+        near=None,
+    ):
+        """`_apply_near_correction`, or — given `near`, the whole deck's
+        precomputed `_NearCells` for this block (momwire#1224) — the same
+        writes from those values: each cell the block holds is ASSIGNED its
+        graded value (or, `sub`, has it SUBTRACTED), and with `sub` the cells
+        written come back in block coordinates, exactly as the inline
+        correction returns them. A cell's value is the same float64 either
+        way: `_near_cells` runs the inline correction's own loop and keeps
+        what it would have written. Each cell has one near pair (the entry
+        fixes the test segment), so the order the cells are placed in is
+        immaterial."""
+        if near is None:
+            return self._apply_near_correction(
+                geom,
+                k,
+                ctx,
+                contribs,
+                projector,
+                src_c,
+                src_t,
+                mirror,
+                sub=sub,
+                eta=eta,
+                cls=cls,
+            )
+        if cls is None:
+            row, col, sel = near.entry, near.seg, slice(None)
+        else:
+            row = cls.row_of_entry[near.entry]
+            col = cls.col_of_seg[near.seg]
+            sel = (row >= 0) & (col >= 0)
+            row, col = row[sel], col[sel]
+        for contrib, val in zip(contribs, near.vals):
+            if sub:
+                contrib[row, col] -= val[sel]
+            else:
+                contrib[row, col] = val[sel]
+        return (row, col) if sub else None
 
     def _far_fill_accel(
         self, k, ctx, src_c, src_t, ek=None, out=None, scale=1.0, eta=None
@@ -2849,6 +2996,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         src_cols=None,
         eta=None,
         cls=None,
+        near=None,
     ):
         """The ground sub-assembly, tested exactly like the free-space block
         and SUBTRACTED from it in place — the same single global minus sign
@@ -2916,7 +3064,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         mirrored sources only, and the remainder replays at the class's
         observers into the class's own columns — the masked replay below,
         unchanged, on a context that holds nothing else. `obs_mask` /
-        `src_cols` are then derived here rather than passed.
+        `src_cols` are then derived here rather than passed. An observer band
+        of the fused banded fill is the same kind of view (`_sub_view`); on a
+        single-medium deck it keeps the whole source axis, so its remainder is
+        the unmasked replay at the band's observers. `near` is the image
+        block's precomputed `_NearCells` (see `_tested_contribs`).
         """
         src_c_img, src_t_img = fg.image_sources()
         projector = self._image_projector(geom, fg)
@@ -2932,6 +3084,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 subtract_into=contribs,
                 eta=eta,
                 cls=cls,
+                near=near,
             )
             return
 
@@ -2945,11 +3098,22 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             mirror=True,
             eta=eta,
             cls=cls,
+            near=near,
         )
         if cls is not None:
-            n_cls = cls.segs.size
-            obs_mask = np.ones(n_cls, dtype=bool)
-            src_cols = np.arange(cls.pad, cls.pad + n_cls)
+            # A restricted block's remainder: at the block's own observers
+            # (the whole sub-context), onto the columns its source axis
+            # lands on — all of them when the remainder and the block share
+            # the whole deck's source axis (an observer band of a
+            # single-medium deck), which is the unmasked replay.
+            src_cols = cls.rem_cols
+            obs_mask = None
+            if src_cols is not None:
+                obs_mask = (
+                    np.ones(ctx["N"], dtype=bool)
+                    if cls.rem_obs is None
+                    else cls.rem_obs
+                )
         # `coef·img − rem` in place, the coefficient on the LEFT — the
         # point-matched band's spelling (`sinusoidal.py`), and the ground
         # object's own interface contract, for its reason: complex multiply
@@ -3054,8 +3218,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             w = w_entry[e0:e1]
             m_loc = m_of_entry[e0:e1] - m0
             for dest, s in zip(subtract_from, block):
+                # The source axis is the remainder's own (the whole deck's),
+                # which an observer band's sub-context (N = its test
+                # segments) does not share — so read it off the block.
                 rows = self._tested_contrib_rows(
-                    w, m_loc, nq, s.reshape(m1 - m0, nq, N)
+                    w, m_loc, nq, s.reshape(m1 - m0, nq, s.shape[-1])
                 )
                 np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
 
@@ -3207,42 +3374,105 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
           `_fold_ground_block`).
         """
         segs = np.nonzero(keep)[0].astype(np.int64)
-        nq = ctx["nq"]
         starts = np.asarray(ctx["starts"], dtype=np.int64)
         cnt = np.asarray(ctx["counts"])[segs]
         sub_starts = np.concatenate(([0], np.cumsum(cnt))).astype(np.int64)
         entries = np.repeat(starts[segs] - sub_starts[:-1], cnt) + np.arange(
             sub_starts[-1], dtype=np.int64
         )
+        return self._sub_view(
+            ctx, entries, n_segs, src_keep=keep, segs=segs, rem_cols="sources"
+        )
+
+    def _sub_view(
+        self,
+        ctx,
+        entries,
+        n_segs,
+        src_keep=None,
+        segs=None,
+        rem_cols=None,
+        rem_obs=None,
+    ):
+        """The `_ClassView` of any block of the fill: the support `entries`
+        (full-deck, ascending) against the sources `src_keep` selects —
+        every segment of the deck when it is None (momwire#1224).
+
+        `_class_view` is one caller (a mixed deck's pair class); the fused
+        banded fill is the other, with `entries` one observer band's. The
+        per-cell argument is `_class_view`'s, and it does not care which
+        entries a segment carries: the fused kernel reduces each entry's row
+        out of its segment's field alone (`w_entry[e] · Φ_m`, one axpy per
+        entry), so a sub-context that holds SOME of a segment's entries gives
+        those rows the same sums as one that holds all of them. The source
+        side is padded exactly as `_class_view` pads it, and a whole-deck
+        source list needs no pad (N ≡ N).
+
+        `segs` pins the test segments (it must cover every entry's segment;
+        a class keeps its entry-less segments this way), else they are the
+        entries' own. `rem_cols` is the view's `rem_cols`: None, an explicit
+        column array, or "sources" for the block's own source columns (a
+        remainder prepared over exactly the class's geometry); `rem_obs` is
+        the view's `rem_obs`.
+        """
+        entries = np.asarray(entries, dtype=np.int64)
+        nq = ctx["nq"]
+        m_e = np.asarray(ctx["m_of_entry"])[entries]
+        if segs is None:
+            segs = np.unique(m_e)
+        segs = np.asarray(segs, dtype=np.int64)
+        m_local = np.searchsorted(segs, m_e).astype(np.int64)
+        cnt = np.bincount(m_local, minlength=segs.size).astype(np.int64)
+        sub_starts = np.concatenate(([0], np.cumsum(cnt))).astype(np.int64)
         obs = (segs[:, None] * nq + np.arange(nq)[None, :]).ravel()
 
-        period = _SIMD_TAIL_PERIOD
-        target = n_segs % period if keep[n_segs - 1] else 0
-        pad = (target - segs.size) % period
-        src_idx = np.concatenate((np.full(pad, segs[0], dtype=np.int64), segs))
+        if src_keep is None:
+            pad = 0
+            src = np.arange(n_segs, dtype=np.int64)
+            src_idx = src
+        else:
+            src = np.nonzero(src_keep)[0].astype(np.int64)
+            period = _SIMD_TAIL_PERIOD
+            target = n_segs % period if src_keep[n_segs - 1] else 0
+            pad = (target - src.size) % period
+            src_idx = np.concatenate((np.full(pad, src[0], dtype=np.int64), src))
 
         a_obs = ctx["a_obs"]
         sub = {
             "N": int(segs.size),
             "nq": nq,
             # The fused kernel reads `hh` as its SOURCE half-lengths, so it
-            # follows the padded source list, not the class's segments.
+            # follows the padded source list, not the test segments.
             "hh": np.asarray(ctx["hh"])[src_idx],
             "obs_c": np.ascontiguousarray(np.asarray(ctx["obs_c"])[obs]),
             "obs_t": np.ascontiguousarray(np.asarray(ctx["obs_t"])[obs]),
             "a_obs": a_obs[obs] if isinstance(a_obs, np.ndarray) else a_obs,
             "starts": sub_starts,
             "counts": cnt,
-            "m_of_entry": np.repeat(np.arange(segs.size, dtype=np.int64), cnt),
+            "m_of_entry": m_local,
             "w_entry": np.ascontiguousarray(np.asarray(ctx["w_entry"])[entries]),
+            # Each observer's FULL-deck test segment: what a per-pair
+            # projector table and the numpy fill's EK mask index with.
+            "m_of_obs": np.repeat(segs, nq),
         }
         nnz = np.asarray(ctx["w_entry"]).shape[0]
         row_of_entry = np.full(nnz, -1, dtype=np.int64)
         row_of_entry[entries] = np.arange(entries.size, dtype=np.int64)
         col_of_seg = np.full(n_segs, -1, dtype=np.int64)
-        col_of_seg[segs] = pad + np.arange(segs.size, dtype=np.int64)
+        col_of_seg[src] = pad + np.arange(src.size, dtype=np.int64)
+        if isinstance(rem_cols, str):
+            rem_cols = col_of_seg[src]
         return _ClassView(
-            segs, entries, pad, src_idx, sub, ctx, row_of_entry, col_of_seg
+            segs,
+            entries,
+            pad,
+            src_idx,
+            sub,
+            ctx,
+            row_of_entry,
+            col_of_seg,
+            rem_cols,
+            rem_obs,
         )
 
     def _assemble_mixed_contribs(
@@ -3738,11 +3968,18 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 test_obs=ctx["obs_c"],
                 row_group=ctx["nq"],
             )
-            contribs = self._assemble_mixed_contribs(
-                geom, ctx, below, medium, plan, crossing, eta=eta
-            )
-            G = self._scatter_coef_product(ctx, contribs)
-            del contribs
+            if self._band_fill_serves(geom["n_segs"]):
+                # The fill fused with its scatter, one observer band at a
+                # time (momwire#1224): no (nnz, N) triple, G F-ordered.
+                G = self._assemble_mixed_G_banded(
+                    geom, ctx, below, medium, plan, crossing, eta=eta
+                )
+            else:
+                contribs = self._assemble_mixed_contribs(
+                    geom, ctx, below, medium, plan, crossing, eta=eta
+                )
+                G = self._scatter_coef_product(ctx, contribs)
+                del contribs
             if crossing:
                 # The cross pair, as the designed DIRECT evaluation rather
                 # than a transmitted grid: the complete mixed-potential
@@ -3782,19 +4019,25 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             eta=eta,
         )
 
-        contribs = self._tested_contribs(geom, k, ctx, _plain_projection, eta=eta)
-        if fg is not None:
-            self._fold_ground_block(geom, k, ctx, contribs, fg, eta=eta)
+        if self._band_fill_serves(geom["n_segs"]):
+            # The fill fused with its scatter, one observer band at a time
+            # (momwire#1224): G plus one band's scratch, never the (nnz, N)
+            # triple, and G F-ordered for the in-place solve.
+            G = self._assemble_G_banded(geom, k, ctx, fg, eta=eta)
+        else:
+            contribs = self._tested_contribs(geom, k, ctx, _plain_projection, eta=eta)
+            if fg is not None:
+                self._fold_ground_block(geom, k, ctx, contribs, fg, eta=eta)
 
-        G = self._scatter_coef_product(ctx, contribs)
-        # The fill's triple is dead the moment its product exists, and what
-        # runs next used to be measured on top of it (momwire#355): the
-        # end-bracket correction is a second sub-assembly of the same shape,
-        # so holding this one across it doubled the fill's own footprint for
-        # nothing. Dropping the name here is not an optimization of the
-        # arithmetic — it changes no value — it just stops the peak from
-        # counting a triple nobody reads again.
-        del contribs
+            G = self._scatter_coef_product(ctx, contribs)
+            # The fill's triple is dead the moment its product exists, and
+            # what runs next used to be measured on top of it (momwire#355):
+            # the end-bracket correction is a second sub-assembly of the same
+            # shape, so holding this one across it doubled the fill's own
+            # footprint for nothing. Dropping the name here is not an
+            # optimization of the arithmetic — it changes no value — it just
+            # stops the peak from counting a triple nobody reads again.
+            del contribs
         self._ek_bracket_correction_tested(G, geom, k, ctx, fg, eta=eta)
         self._contact_charge_correction_tested(G, geom, k, seg_view, ctx, eta=eta)
         self._apply_loading(G, geom, seg_view, k)
@@ -3949,6 +4192,391 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             vals *= spec.z_seg[m_of_pair]
         # Unbuffered: a basis pair recurs once per shared segment.
         np.subtract.at(G, (seg_view["jbasis"][left], seg_view["jbasis"][right]), vals)
+        return G
+
+    # ------------------------------------------------------------------
+    # The fused banded fill (momwire#1224): G one observer band at a time
+    # ------------------------------------------------------------------
+
+    def _band_fill_serves(self, n_segs):
+        """Whether G is assembled band by band (momwire#1224). Below the
+        dense-assembly threshold the scatter is a zgemm whose blocking
+        follows the row count, so there the fill stays whole (tiny: N < 60)
+        and is the old fill verbatim — the point-matched fused fill's rule
+        (`SinusoidalSolver._mixed_band_rows`). A method so a test can refuse
+        it and recompute the whole-triple fill in-process."""
+        return int(n_segs) >= _DENSE_ASSEMBLY_THRESHOLD
+
+    def _band_budget_bytes(self, n_basis):
+        """Scratch budget for one observer band of the fused fill
+        (momwire#1224): a quarter of G, capped at the solver's
+        `swept_mem_mb` — the budget the point-matched fused fill sizes its
+        bands by.
+
+        Relative to G because what the fill is FOR is to hold G and little
+        else: a fixed budget is a fixed multiple of a small G (256 MB is 2 Z
+        at N = 2800) and a vanishing one of a large G. `_segment_bands` puts
+        a floor in segments under it. A method so a test can force many
+        bands."""
+        z_bytes = 16 * int(n_basis) * int(n_basis)
+        return min(int(self.swept_mem_mb) * 1024 * 1024, z_bytes // 4)
+
+    def _segment_bands(self, ctx, n_basis, n_cols, n_triples, align=None):
+        """The fused fill's observer bands: `(m0, m1, e0, e1)` for runs of
+        TEST segments `m0:m1` and their support entries `e0:e1` — contiguous,
+        since the CSR is segment-major (momwire#1224).
+
+        Every test segment is filled exactly once, in ascending order, which
+        is what lets a basis whose entries straddle two bands still meet them
+        in the whole product's order (`_scatter_band`). Rows per band come
+        from the byte budget (`_band_budget_bytes`) over what one segment
+        holds: its entries' rows of `n_triples` (entries, n_cols) triples —
+        the band's own and, under a Sommerfeld ground, its image (a mixed
+        deck's class block too) — plus its share of the scatter: three T rows
+        and the product's copies and results, ~4 n_basis. Never fewer than
+        `_BAND_MIN_SEGMENTS` a band, though: the fused kernel threads over a
+        band's test segments, so a thin band idles threads.
+
+        `align` (the numpy fill's block, `_fill_block`) rounds the band up to
+        whole blocks of that loop, so a band that takes the numpy far fill
+        walks exactly the blocks the whole fill walked. That loop's per-entry
+        values are NOT independent of its block height on every path: on a
+        complex-k block they move in the last bits across numpy's 256 KB
+        temporary-elision boundary (the #392 mechanism, still live there —
+        measured, mixed(4) with the accelerator hidden: 116 cells move in
+        bands of 3 segments, none in bands holding the whole block)."""
+        N = int(ctx["N"])
+        starts = np.asarray(ctx["starts"], dtype=np.int64)
+        nnz = int(np.asarray(ctx["w_entry"]).shape[0])
+        entries_per_seg = nnz / max(1, N)
+        per_seg = 16 * (
+            3 * n_triples * entries_per_seg * n_cols + 3 * n_cols + 4 * n_basis
+        )
+        step = max(
+            min(_BAND_MIN_SEGMENTS, N),
+            int(self._band_budget_bytes(n_basis) // per_seg),
+        )
+        if align:
+            step = -(-step // int(align)) * int(align)
+        for m0 in range(0, N, step):
+            m1 = min(m0 + step, N)
+            yield m0, m1, int(starts[m0]), nnz if m1 == N else int(starts[m1])
+
+    def _band_rows(self, ctx, G):
+        """The fused fill's scatter state (`_BandRows`) for one G: the three
+        source-coefficient matrices M[shape] of `_scatter_coef_product`'s
+        sparse product — the same csc construction, so the same stored order
+        per column — each basis's LAST support entry, and the carry of T
+        rows a basis has begun but not finished."""
+        N = int(ctx["N"])
+        n_basis = N + self._n_extra_cols()
+        mi = (ctx["m_of_entry"], ctx["i_of_entry"])
+        Ms = tuple(
+            scipy.sparse.csc_matrix((coef, mi), shape=(N, n_basis))
+            for coef in (ctx["sigAC"], ctx["B"], ctx["sigC"])
+        )
+        i_of_entry = np.asarray(ctx["i_of_entry"], dtype=np.int64)
+        last = np.full(n_basis, -1, dtype=np.int64)
+        np.maximum.at(last, i_of_entry, np.arange(i_of_entry.size, dtype=np.int64))
+        return _BandRows(G, Ms, i_of_entry, last, {})
+
+    def _scatter_band(self, rows, e0, e1, band):
+        """Entries `e0:e1`' band triple into G (momwire#1224): the whole
+        `_scatter_coef_product`, a band at a time, to the bit.
+
+        That product is `G[i, j] = Σ_shape Σ_{e′ ∈ col j} coef·T[i, m(e′)]`
+        with `T[i] = R[i] @ contrib`: scipy's csr product starts each row at
+        zero and adds basis i's entries' rows in ascending entry order (the
+        unit weights multiply exactly). So T rows are accumulated here the
+        same way — the basis's carried partial row, or zeros, then
+        `np.add.at` over this band's entries in ascending order, which is
+        unbuffered and walks them in index order — and since every band
+        follows every earlier one, a basis that straddles bands meets its
+        entries in the sequence the whole product did. A basis is finished at
+        the band holding its LAST entry; its rows of the three products
+        `T[rows] @ M[shape]` (each cell's sum is over column j's stored
+        entries whatever the row count) are summed as Python's `sum`,
+        `(0 + P0) + P1 + P2`, as they were, and ASSIGNED into G. Unfinished
+        rows ride the carry, which holds only the bases open across a band
+        boundary — O(N) each, a handful at a time."""
+        i_of = rows.i_of_entry[e0:e1]
+        touched, local = np.unique(i_of, return_inverse=True)
+        n_src = band[0].shape[1]
+        T = [np.zeros((touched.size, n_src), dtype=np.complex128) for _ in range(3)]
+        for r, b in enumerate(touched):
+            got = rows.carry.pop(int(b), None)
+            if got is not None:
+                for t, g in zip(T, got):
+                    t[r] = g
+        for t, c in zip(T, band):
+            np.add.at(t, local, c)
+        done = rows.last[touched] < e1
+        if done.any():
+            fin = np.flatnonzero(done)
+            rows.G[touched[fin]] = sum(t[fin] @ M for t, M in zip(T, rows.Ms))
+        for r in np.flatnonzero(~done):
+            rows.carry[int(touched[r])] = tuple(t[r].copy() for t in T)
+
+    def _assemble_G_banded(self, geom, k, ctx, fg, eta=None):
+        """G of a single-medium deck, one observer band at a time
+        (momwire#1224): per band of test segments the free block, the
+        ground's image block and Sommerfeld remainder with the fold, and then
+        the band's scatter straight into a preallocated, FORTRAN-ordered G
+        (`_scatter_band`). What this holds is G plus one band's triple(s) and
+        the scatter's carried rows: the whole (nnz, N) triple never exists.
+
+        Bit-identical to the whole-triple fill, cell for cell (gated by
+        `tests/test_sg_fused_banded_fill_1224.py`):
+
+        * a band is a `_sub_view` of its segments' entries against the deck's
+          whole source list, so every entry's row is the fused kernel's own
+          per-entry reduction (see `_sub_view`), and the SIMD-tail position of
+          every source phase is unchanged (the source list IS the deck's);
+        * the near correction's values are the whole deck's, computed once
+          (`_near_cells`) and placed per band by the same assignment or
+          subtraction;
+        * the remainder replays at the band's observers — per observer it
+          does not see the observer set (`_replay_remainder`), and the
+          reduction is per entry;
+        * the fold is elementwise, and the scatter is `_scatter_band`.
+
+        G comes out F-ordered, so `_solve_in_place` factors it with no copy.
+        """
+        N = int(ctx["N"])
+        n_basis = N + self._n_extra_cols()
+        near_free = near_img = None
+        if self.near_correction:
+            near_free = self._near_cells(geom, k, ctx, _plain_projection, eta=eta)
+            if fg is not None:
+                src_c_img, src_t_img = fg.image_sources()
+                near_img = self._near_cells(
+                    geom,
+                    k,
+                    ctx,
+                    self._image_projector(geom, fg),
+                    src_c_img,
+                    src_t_img,
+                    mirror=True,
+                    eta=eta,
+                )
+        n_triples = 2 if (fg is not None and fg.mode != "fold") else 1
+        # A block on the numpy far fill bands on that loop's own blocks (see
+        # `_segment_bands`): the refl-coef image's weighted projector, or no
+        # accelerator for this (k, eta).
+        numpy_fill = not self._fused_fill_serves(k, eta, _plain_projection) or (
+            fg is not None
+            and not self._fused_fill_serves(k, eta, self._image_projector(geom, fg))
+        )
+        align = _fill_block(N, ctx["nq"], self.n_qp_const) if numpy_fill else None
+        G = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        rows = self._band_rows(ctx, G)
+        for m0, m1, e0, e1 in self._segment_bands(
+            ctx, n_basis, N, n_triples, align=align
+        ):
+            if e1 == e0:
+                continue
+            self._checkpoint()
+            view = self._sub_view(ctx, np.arange(e0, e1), N, segs=np.arange(m0, m1))
+            band = self._tested_contribs(
+                geom, k, view.ctx, _plain_projection, eta=eta, cls=view, near=near_free
+            )
+            if fg is not None:
+                self._fold_ground_block(
+                    geom, k, view.ctx, band, fg, eta=eta, cls=view, near=near_img
+                )
+            self._scatter_band(rows, e0, e1, band)
+            band = view = None
+        assert not rows.carry, "a basis row was left unfinished (momwire#1224)"
+        return G
+
+    def _assemble_mixed_G_banded(
+        self, geom, ctx, below, medium, plan, crossing=False, eta=None
+    ):
+        """G of a mixed deck, one observer band at a time (momwire#1224):
+        `_assemble_mixed_contribs` and `_scatter_coef_product` fused, so the
+        (nnz, N) triple — per class or whole — never exists, nor does the
+        transmitted directions' field tensor.
+
+        A band (a run of test segments, `_segment_bands`) has a (entries, N)
+        triple of zeros, which receives exactly what those rows of the whole
+        triple received, in the same way:
+
+        * each pair class's quadrant, ASSIGNED: the class's entries in the
+          band against the class's sources (`_sub_view` with the class's
+          padded source list, so each class column keeps its SIMD-tail
+          position — `_class_view`'s rule), its image, its remainder at its
+          band observers into its own columns, its precomputed near cells.
+          Where the fused C++ fill does not serve a class the band fills
+          every entry it holds against the whole source list and the
+          quadrant is cut out of it, which is the whole-plane fallback on the
+          band's rows (on the numpy loop's own blocks, `_segment_bands`);
+        * each transmitted direction, ADDED onto the zeros of the cross
+          quadrant (non-crossing decks): `_transmitted_block` at the band's
+          observers only, reduced per entry. The whole fill reduced a
+          full-width (3, n_obs, N) tensor holding the same floats;
+        * the band is scattered into G (`_scatter_band`).
+
+        Quadrants partition the matrix, so every cell has one writer, and
+        each write is the operation the whole fill performed. The crossing
+        deck's cross pair is added to G afterwards, as before."""
+        n_segs = int(geom["n_segs"])
+        n_basis = n_segs + self._n_extra_cols()
+        nq = ctx["nq"]
+        w_entry = np.asarray(ctx["w_entry"])
+        m_of_entry = np.asarray(ctx["m_of_entry"])
+        seg_below = np.asarray(below)
+        entry_below = seg_below[m_of_entry]
+        eta_p = self._fill_eta(medium.k_p, eta)
+
+        classes = []
+        for keep, rows, k_cls, med in (
+            (~seg_below, ~entry_below, medium.k_p, None),
+            (seg_below, entry_below, medium.k_m, medium),
+        ):
+            if not keep.any() or not rows.any():
+                continue
+            eta_cls = eta_p if med is None else self._medium_eta(med)
+            fg = _field_ground.field_ground_for(
+                self,
+                geom,
+                k_cls,
+                self.omega,
+                medium=med,
+                r1_below=plan.get("r1_below") if med is not None else None,
+                remainder_geom=self._class_geom(geom, keep),
+                eta=eta_cls,
+            )
+            near_free = near_img = None
+            if self.near_correction:
+                near_free = self._near_cells(
+                    geom, k_cls, ctx, _plain_projection, eta=eta_cls, keep=keep
+                )
+                if fg is not None:
+                    src_c_img, src_t_img = fg.image_sources()
+                    near_img = self._near_cells(
+                        geom,
+                        k_cls,
+                        ctx,
+                        self._image_projector(geom, fg),
+                        src_c_img,
+                        src_t_img,
+                        mirror=True,
+                        eta=eta_cls,
+                        keep=keep,
+                    )
+            classes.append(
+                (
+                    keep,
+                    rows,
+                    k_cls,
+                    eta_cls,
+                    fg,
+                    self._class_fill_serves(geom, k_cls, eta_cls, fg),
+                    near_free,
+                    near_img,
+                )
+            )
+        transmitted = []
+        if not crossing:
+            # See `_assemble_mixed_contribs` for the sign: ADDED (momwire#1159).
+            for src_keep, rows, obs_below in (
+                (seg_below, ~entry_below, False),
+                (~seg_below, entry_below, True),
+            ):
+                if src_keep.any() and rows.any():
+                    transmitted.append((src_keep, rows, obs_below))
+
+        # A class the fused fill does not serve is filled the whole-plane way
+        # on the band — every entry of it against every source, the class's
+        # quadrant cut out after — on the numpy loop's own blocks (see
+        # `_segment_bands`), which is the whole fill's fallback row for row.
+        align = None
+        if not all(c[5] for c in classes):
+            align = _fill_block(n_segs, nq, self.n_qp_const)
+        G = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        acc = self._band_rows(ctx, G)
+        for m0, m1, e0, e1 in self._segment_bands(ctx, n_basis, n_segs, 3, align=align):
+            if e1 == e0:
+                continue
+            self._checkpoint()
+            entries = np.arange(e0, e1, dtype=np.int64)
+            band = tuple(
+                np.zeros((e1 - e0, n_segs), dtype=np.complex128) for _ in range(3)
+            )
+            for keep, rows, k_cls, eta_cls, fg, serves, near_free, near_img in classes:
+                ent = entries[rows[e0:e1]]
+                if ent.size == 0:
+                    continue
+                cols = np.nonzero(keep)[0]
+                if serves:
+                    view = self._sub_view(
+                        ctx, ent, n_segs, src_keep=keep, rem_cols="sources"
+                    )
+                    brow = np.arange(ent.size)
+                else:
+                    view = self._sub_view(
+                        ctx,
+                        entries,
+                        n_segs,
+                        segs=np.arange(m0, m1),
+                        rem_cols=cols,
+                        rem_obs=keep[m0:m1],
+                    )
+                    brow = ent - e0
+                block = self._tested_contribs(
+                    geom,
+                    k_cls,
+                    view.ctx,
+                    _plain_projection,
+                    eta=eta_cls,
+                    cls=view,
+                    near=near_free,
+                )
+                if fg is not None:
+                    self._fold_ground_block(
+                        geom,
+                        k_cls,
+                        view.ctx,
+                        block,
+                        fg,
+                        eta=eta_cls,
+                        cls=view,
+                        near=near_img,
+                    )
+                quadrant = np.ix_(ent - e0, cols)
+                own = np.ix_(brow, view.col_of_seg[cols])
+                for dest, b in zip(band, block):
+                    dest[quadrant] = b[own]
+                block = view = b = None
+            for src_keep, rows, obs_below in transmitted:
+                ent = entries[rows[e0:e1]]
+                if ent.size == 0:
+                    continue
+                segs = np.unique(m_of_entry[ent])
+                obs_keep = np.zeros(n_segs, dtype=bool)
+                obs_keep[segs] = True
+                small, _obs_rows, idx = self._transmitted_block(
+                    geom,
+                    medium,
+                    plan,
+                    src_keep,
+                    obs_keep,
+                    obs_below,
+                    ctx["obs_c"],
+                    ctx["obs_t"],
+                    row_group=nq,
+                    cos_shape="cos-1",
+                )
+                m_loc = np.searchsorted(segs, m_of_entry[ent])
+                quadrant = np.ix_(ent - e0, idx)
+                for dest, sb in zip(band, small):
+                    dest[quadrant] += self._tested_contrib_rows(
+                        w_entry[ent], m_loc, nq, sb.reshape(segs.size, nq, idx.size)
+                    )
+                small = sb = None
+            self._scatter_band(acc, e0, e1, band)
+            band = dest = None
+        assert not acc.carry, "a basis row was left unfinished (momwire#1224)"
         return G
 
     def _scatter_coef_product(self, ctx, contribs):
@@ -4301,6 +4929,58 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             G[:, jb] -= sgn * T[:, None] * val[None, :]
         return G
 
+    def _near_cells(
+        self,
+        geom,
+        k,
+        ctx,
+        projector,
+        src_c=None,
+        src_t=None,
+        mirror=False,
+        eta=None,
+        keep=None,
+    ):
+        """One source block's graded near values over the WHOLE deck, as a
+        `_NearCells` (momwire#1224) — empty when it has no near pair.
+
+        The banded fill's hoist of `_apply_near_correction`: that method
+        selects its pairs over the whole deck on every call, and an observer
+        band that called it would pay the whole deck's selection per band.
+        So the values are computed ONCE, by that method's own loop (its
+        `collect` mode — same pairs, same blocks, same einsum per cell), and
+        each band places the cells it holds (`_near_correct`). `keep` is a
+        mixed deck's pair class, filtering the pairs exactly as a class view
+        does."""
+        src_c = geom["seg_centers"] if src_c is None else src_c
+        src_t = geom["seg_tangents"] if src_t is None else src_t
+        got = []
+        self._apply_near_correction(
+            geom,
+            k,
+            ctx,
+            None,
+            projector,
+            src_c,
+            src_t,
+            mirror,
+            eta=eta,
+            keep=keep,
+            collect=got,
+        )
+        if not got:
+            # Empty rather than None: None means "compute it here" to
+            # `_near_correct`, which would re-select over the whole deck.
+            none = np.zeros(0, dtype=np.int64)
+            return _NearCells(
+                none, none, tuple(np.zeros(0, dtype=np.complex128) for _ in range(3))
+            )
+        return _NearCells(
+            np.concatenate([g[0] for g in got]),
+            np.concatenate([g[1] for g in got]),
+            tuple(np.concatenate([g[2][t] for g in got]) for t in range(3)),
+        )
+
     def _apply_near_correction(
         self,
         geom,
@@ -4314,9 +4994,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         sub=False,
         eta=None,
         cls=None,
+        keep=None,
+        collect=None,
     ):
         """Recompute the near-pair test integrals on the endpoint-graded rule,
         overwriting the uniform-rule values in `contribs` (M2).
+
+        `collect` (a list, momwire#1224) writes nothing: each block's cells
+        are appended to it as (entry, source segment, (c, s, co) values) in
+        full-deck coordinates, which is how `_near_cells` precomputes them
+        once for the banded fill. `keep` restricts the pairs to one mixed
+        deck's pair class, by the same test that `cls` applies.
 
         With `cls` (momwire#1224) `contribs` is one pair class's block: the
         pairs are still selected over the WHOLE deck and computed from the
@@ -4358,6 +5046,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             in_cls = (cls.col_of_seg[mm] >= 0) & (cls.col_of_seg[nn] >= 0)
             mm, nn = mm[in_cls], nn[in_cls]
             ctx = cls.full_ctx
+        elif keep is not None:
+            in_cls = keep[mm] & keep[nn]
+            mm, nn = mm[in_cls], nn[in_cls]
         if mm.size == 0:
             return None
 
@@ -4384,7 +5075,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             np.arange(cum[-1]) - np.repeat(cum[:-1], cnt) + np.repeat(starts[mm], cnt)
         )
 
-        contrib_c, contrib_s, contrib_co = contribs
+        if collect is None:
+            contrib_c, contrib_s, contrib_co = contribs
         # Pairs per block from the byte budget rather than a flat 512
         # (momwire#383): under the extended kernel the block holds
         # `_folded_ek_delta_fields`' (P, G, n_d) quadrature, 4.9 MB per pair
@@ -4440,6 +5132,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
             col = ni[lp]
             row = ei
+            if collect is not None:
+                collect.append(
+                    (ei, col, tuple(np.einsum("eg,eg->e", w, Ph[lp]) for Ph in Phi))
+                )
+                continue
             if cls is not None:
                 row, col = cls.row_of_entry[ei], cls.col_of_seg[col]
             for contrib, Ph in zip((contrib_c, contrib_s, contrib_co), Phi):
