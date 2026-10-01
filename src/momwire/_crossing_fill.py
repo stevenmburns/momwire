@@ -1342,6 +1342,16 @@ def _fast_end_desc(fast, a_wire, pt, rho, z, zp):
         rep = rho[fast.gfirst]
         if np.array_equal(rho, rep[fast.grank]):
             r = _near_interface.radius_fold(rep, a_wire)
+            # An end standing ON a line node n asks exactly n's keys: when
+            # (r[g], lv[0]) == (line[g, n], line_z[n]) in every group, group
+            # g's local key is n's own, `kl_rank[g, n]` -- the dict's answer,
+            # since a key is an exact-`==` class. Candidates by the end's
+            # (x, y); the compare decides, and a miss takes the search.
+            l0 = float(lv[0])
+            for n in fast.line_xy.get((float(pt[0]), float(pt[1])), ()):
+                if fast.line_z[n] == l0 and np.array_equal(r, fast.line[:, n]):
+                    _ROUTES["ends_line_on_node"] += 1
+                    return ("line", fast.kl_rank[:, n].copy())
             # Group g's local key of (r[g], lv[0]), every g at once: the
             # global key of the pair, then its place among g's own keys.
             k = fast.keys.ids(r, np.full(r.shape, lv[0]))
@@ -1656,6 +1666,7 @@ _ROUTES = dict.fromkeys(
         "ends_fast",
         "ends_fast_grouped",
         "ends_fast_line",
+        "ends_line_on_node",
         "ends_slow",
         "end_slow_calls",
         "product_rows",
@@ -1735,7 +1746,8 @@ def _first_ints(ids):
 class _FastEnds(NamedTuple):
     """What `_fast_end_rows` reads, beside the `ProductSet`: the grouped
     side's slot, nodes' z, group and local z rank; the line nodes' z; per
-    group its first node, raw ρ line, (x, y) key and z map, row-table
+    group its first node, raw ρ line, folded line, (x, y) key and z map;
+    the line nodes by (x, y); per group its row-table
     offset / width and the line's local key ranks; and the concatenated
     row tables.
 
@@ -1755,6 +1767,8 @@ class _FastEnds(NamedTuple):
     line_z: np.ndarray
     gfirst: np.ndarray
     raw: np.ndarray
+    line: np.ndarray
+    line_xy: dict
     gdict: dict
     zmap: list
     keys: _near_interface.KeyIndex
@@ -1894,6 +1908,15 @@ class _ProductPlan(NamedTuple):
         if self.slot == "z":
             return self.kid[self.grank[:, None], cols[None, :]]
         return self.kid[self.grank[cols][None, :], np.arange(self.nA)[:, None]]
+
+
+def _xy_index(nodes):
+    """{(x, y): [node indices, ascending]} of an (n, 3) node array, keyed on
+    the floats (−0.0 with 0.0, as a dict keys them)."""
+    out = {}
+    for n, xy in enumerate(zip(nodes[:, 0].tolist(), nodes[:, 1].tolist())):
+        out.setdefault(xy, []).append(n)
+    return out
 
 
 def _product_plan(ctx, eps_t, k_p, A, B, gz):
@@ -2064,6 +2087,8 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             line_z=lzv,
             gfirst=gfirst,
             raw=raw,
+            line=line,
+            line_xy=_xy_index(L),
             gdict={
                 (float(x), float(y)): g
                 for g, (x, y) in enumerate(zip(x0.tolist(), y0.tolist()))
