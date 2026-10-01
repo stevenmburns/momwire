@@ -132,10 +132,15 @@ _STAMP_PREFIX = " momwire "
 # line or wraps one printout line into two.
 _STAMP_COLUMNS = 79
 
+# The overlay marker's ceiling (momwire#1277).  One stale release reads
+# "(stale: 0.66.0)"; a folder that has collected so many that the list would
+# crowd the basis out says how many instead.
+_STAMP_MARKER_COLUMNS = 30
+
 # The three fields' stand-ins when there is nothing true to print.  Each is a
-# statement, not a placeholder: "unknown" means this install has no package
-# metadata (a source tree, or a frozen bundle built without
-# `--copy-metadata`), "none" is what `momwire.accelerator_variant` reports
+# statement, not a placeholder: "unknown" means this process has neither a
+# baked build version (a frozen bundle's, momwire#1277) nor package metadata
+# (a source tree with nothing installed), "none" is what `momwire.accelerator_variant` reports
 # when no compiled extension loaded and every solve in this process is the
 # pure-Python one, and "-" is the empty launcher suffix — a name that asked
 # for a basis and named none, which refuses per deck and must not read as a
@@ -146,23 +151,39 @@ _STAMP_UNNAMED_BASIS = "-"
 
 
 def _momwire_version() -> str:
-    """The installed release, or ``unknown`` — never an exception.
+    """The running release, or ``unknown`` — never an exception.
 
-    Same shape as the SimNEC portal's probe (:mod:`momwire.portal._portal`,
-    ``PROBE_VERSION``) and for the same reason: a version probe must never be
-    the thing that breaks a printout.  An editable install reports the version
+    One owner, :func:`momwire_serve_client.momwire_version`, which the SimNEC
+    portal's probe and both thin clients read as well: a frozen bundle's BAKED
+    version first (momwire#1277), the installed metadata only as the fallback
+    for a source or pip install.  An editable install reports the version
     recorded at ``pip install -e`` time, so a dev box that skipped the
     reinstall after a bump stamps the stale number.
     """
-    try:
-        from importlib.metadata import version
+    import momwire_serve_client
 
-        return version("momwire")
-    except Exception:  # noqa: BLE001 - a version probe must never be the thing that fails
-        # Deliberately every exception, not just PackageNotFoundError: a
-        # broken or half-written dist-info raises from inside the metadata
-        # reader, and the stamp is worth less than the printout.
-        return _STAMP_UNKNOWN_VERSION
+    return momwire_serve_client.momwire_version() or _STAMP_UNKNOWN_VERSION
+
+
+def _overlay_marker(version: str) -> str:
+    """``"(stale: 0.66.0)"`` when the bundle carries other releases' metadata.
+
+    A release zip extracted over an older install leaves the older
+    ``momwire-*.dist-info`` behind (momwire#1277).  The engine still runs —
+    the code is whatever was extracted last, and refusing would cost the user
+    a printout over a cosmetic leftover — but the stamp says so, so a mailed-in
+    ``NEC5.OUT`` shows a mixed folder instead of hiding it.  Empty on a clean
+    bundle and everywhere outside one.
+    """
+    import momwire_serve_client
+
+    stale = momwire_serve_client.stale_versions(version)
+    if not stale:
+        return ""
+    marker = f"(stale: {','.join(stale)})"
+    if len(marker) > _STAMP_MARKER_COLUMNS:
+        marker = f"(stale: {len(stale)} versions)"
+    return marker
 
 
 def _accelerator_variant() -> str:
@@ -188,7 +209,12 @@ def _stamp_field(text: object) -> str:
 
 
 def engine_stamp(basis: str) -> str:
-    """Line 2: ``" momwire <version> <basis> <variant>"``.
+    """Line 2: ``" momwire <version> <basis> <variant>[ (stale: <v>,...)]"``.
+
+    The trailing marker appears only in an OVERLAID frozen bundle
+    (:func:`_overlay_marker`).  It rides on line 2 rather than on a line of
+    its own because line 2 is already free text that EZNEC accepts, and every
+    byte gate masks it by position — a new line would renumber the printout.
 
     ``basis`` is the name that was THREADED to this printout — the launcher
     filename's suffix, or the seam's default — not a canonicalization of it:
@@ -198,12 +224,23 @@ def engine_stamp(basis: str) -> str:
     """
     version = _stamp_field(_momwire_version()) or _STAMP_UNKNOWN_VERSION
     variant = _stamp_field(_accelerator_variant()) or _STAMP_NO_VARIANT
-    room = _STAMP_COLUMNS - len(_STAMP_PREFIX) - len(version) - len(variant) - 2
+    marker = _overlay_marker(version)
+    tail = f" {marker}" if marker else ""
+    # The marker's room is reserved BEFORE the basis is cut, so a long
+    # launcher name loses its own tail rather than the overlay warning.
+    room = (
+        _STAMP_COLUMNS
+        - len(_STAMP_PREFIX)
+        - len(version)
+        - len(variant)
+        - len(tail)
+        - 2
+    )
     name = _stamp_field(basis)[: max(room, 0)] or _STAMP_UNNAMED_BASIS
     # The clamp is belt and braces for the two fields this function does not
     # bound (a metadata version is short in practice, and the variant labels
     # are a closed set), so the column limit holds without trusting either.
-    return f"{_STAMP_PREFIX}{version} {name} {variant}"[:_STAMP_COLUMNS]
+    return f"{_STAMP_PREFIX}{version} {name} {variant}{tail}"[:_STAMP_COLUMNS]
 
 
 _BANNER_INDENT = " " * 32

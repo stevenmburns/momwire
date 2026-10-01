@@ -98,21 +98,120 @@ def address_suffix(mode: str | None = None) -> str:
         ) from None
 
 
-def dist_version() -> tuple[str, str]:
-    """``(major, minor)`` of the installed momwire distribution, metadata-only.
+# The module a FROZEN bundle carries its version in (momwire#1277).
+# `scripts/eznec_freeze/build.py` writes it at freeze time, into its own build
+# directory and never into this tree, and hands it to PyInstaller; it is a
+# top-level name because the readers below must stay import-light and may not
+# import the `momwire` package to reach it.
+#
+# Why the metadata alone is not enough: `importlib.metadata` answers from
+# whichever `momwire-*.dist-info` it finds first, and a user who extracts a new
+# release zip OVER an old install keeps the old dist-info beside the new one.
+# Windows lists directories alphabetically, so 0.66.0 answered for 0.68.0 code.
+# The baked constant is a property of the code that was frozen, not of what
+# else happens to sit in the folder.
+BUILD_VERSION_MODULE = "_momwire_build_version"
 
-    ``importlib.metadata`` reads the installed distribution's metadata, so
-    this is the same number the package computes from the same source — and
-    the reason no version probe ever has to spawn anything. An editable
-    install reports the version recorded at ``pip install -e`` time.
+_DIST_INFO_PREFIX = "momwire-"
+_DIST_INFO_SUFFIX = ".dist-info"
+
+
+def _frozen() -> bool:
+    """True inside a PyInstaller bundle, and ONLY there.
+
+    The baked module is read only when this holds, so a source checkout or a
+    pip install can never be answered by a baked file — even one that strayed
+    onto ``sys.path`` — and the metadata stays in charge there.
     """
+    import sys
+
+    return bool(getattr(sys, "frozen", False))
+
+
+def _baked_version() -> str | None:
+    """The version ``build.py`` froze into this bundle, or None."""
+    if not _frozen():
+        return None
+    try:
+        import importlib
+
+        baked = importlib.import_module(BUILD_VERSION_MODULE).VERSION
+    except Exception:  # noqa: BLE001 - a version probe must never be the thing that fails
+        return None
+    return baked if isinstance(baked, str) and baked.strip() else None
+
+
+def momwire_version() -> str | None:
+    """The full momwire version this process is running, or None.
+
+    Resolution order (momwire#1277): the version baked into a frozen bundle
+    FIRST, then the installed distribution's metadata.  The metadata is the
+    whole answer on a source or pip install, where an editable install reports
+    the version recorded at ``pip install -e`` time.  None, never an
+    exception: a version probe must never be the thing that fails.
+    """
+    baked = _baked_version()
+    if baked is not None:
+        return baked
     try:
         from importlib.metadata import version as _pkg_version
 
-        major, minor = _pkg_version("momwire").split(".")[:2]
-    except Exception:  # pragma: no cover - no installed metadata (source tree)  # noqa: BLE001 - a version probe must never be the thing that fails
-        major, minor = "0", "0"
-    return major, minor
+        return _pkg_version("momwire")
+    except Exception:  # noqa: BLE001 - a version probe must never be the thing that fails
+        # Every exception, not just PackageNotFoundError: a broken or
+        # half-written dist-info raises from inside the metadata reader.
+        return None
+
+
+def bundle_dist_versions(base: str | None = None) -> list[str]:
+    """Every ``momwire-<version>.dist-info`` in a frozen bundle's runtime dir.
+
+    ``base`` defaults to the bundle's ``_internal`` (``sys._MEIPASS``); outside
+    a frozen bundle, with no ``base``, the answer is ``[]`` — a site-packages
+    is not this function's to audit.  More than one entry is an OVERLAY: a
+    release extracted over an older one, which leaves the old dist-info behind
+    (momwire#1277).  Sorted, and empty on any filesystem error.
+    """
+    if base is None:
+        if not _frozen():
+            return []
+        import sys
+
+        base = getattr(sys, "_MEIPASS", None) or os.path.dirname(sys.executable)
+    try:
+        names = os.listdir(base)
+    except OSError:
+        return []
+    found = []
+    for name in names:
+        folded = name.casefold()
+        if folded.startswith(_DIST_INFO_PREFIX) and folded.endswith(_DIST_INFO_SUFFIX):
+            found.append(name[len(_DIST_INFO_PREFIX) : -len(_DIST_INFO_SUFFIX)])
+    return sorted(found)
+
+
+def stale_versions(running: str | None, base: str | None = None) -> list[str]:
+    """The bundle's dist-info versions that are NOT the one running.
+
+    Empty on a clean bundle (one dist-info, this version's) and everywhere
+    outside a frozen bundle.  Never refuses anything: an overlaid bundle runs
+    the code that was extracted last, and this only lets it say so.
+    """
+    return [v for v in bundle_dist_versions(base) if v != running]
+
+
+def dist_version() -> tuple[str, str]:
+    """``(major, minor)`` of the running momwire, without importing it.
+
+    :func:`momwire_version`'s answer — the frozen bundle's baked version first,
+    the installed metadata otherwise — which is the reason no version probe
+    ever has to spawn anything.  ``("0", "0")`` when neither answers.
+    """
+    full = momwire_version()
+    parts = full.split(".")[:2] if full else []
+    if len(parts) != 2:
+        return "0", "0"
+    return parts[0], parts[1]
 
 
 def digest(parts: list[str]) -> str:
@@ -524,6 +623,7 @@ def obtain(path: str, server_command: list[str], log_path: str):
 
 
 __all__ = [
+    "BUILD_VERSION_MODULE",
     "RENDEZVOUS_HOST",
     "SPAWN_TIMEOUT",
     "SUN_PATH_MAX",
@@ -531,15 +631,18 @@ __all__ = [
     "TRANSPORT_ENV",
     "UNIX",
     "address_suffix",
+    "bundle_dist_versions",
     "connect",
     "digest",
     "dist_version",
     "filename_basis",
+    "momwire_version",
     "obtain",
     "publish_rendezvous",
     "read_rendezvous",
     "runtime_dir",
     "socket_path",
     "spawn_server",
+    "stale_versions",
     "transport",
 ]

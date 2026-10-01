@@ -189,9 +189,11 @@ def probe_version() -> str:
     takes exit 0 (or 24) with any first line, and records a line matching its
     ``versionNECd`` pattern, ``NEC<digits><non-digit>...``, as the engine's
     version. ``NEC5momwire.<major>.<minor>`` is the NEC-5 twin of the portal's
-    ``NEC2momwire.<major>.<minor>``, read from the installed distribution's
-    metadata like ``momwire_nec2c_client.probe_version`` so the probe costs no
-    NumPy import and spawns nothing.
+    ``NEC2momwire.<major>.<minor>``, read through
+    :func:`momwire_serve_client.dist_version` like
+    ``momwire_nec2c_client.probe_version`` (a frozen bundle's baked version
+    first, momwire#1277), so the probe costs no NumPy import and spawns
+    nothing.
     """
     major, minor = _mech.dist_version()
     return f"NEC5momwire.{major}.{minor}"

@@ -30,10 +30,15 @@ Two things this file is careful NOT to claim:
 from __future__ import annotations
 
 import importlib.metadata
+import importlib.util
 import io
 import socket
+import sys
 import threading
+import types
+from pathlib import Path
 
+import momwire_serve_client as mech
 import pytest
 
 import momwire
@@ -377,3 +382,188 @@ def test_the_seams_own_last_line_of_defence_is_stamped(monkeypatch):
     assert err == ""
     assert "INTERNAL ERROR IN MOMWIRE ENGINE" in text
     assert_stamped(text, basis="razor-2p")
+
+
+# --------------------------------------------------------------------------
+# where the version comes from (momwire#1277)
+# --------------------------------------------------------------------------
+#
+# A tester extracted the 0.68.0 zip over a 0.66.0 install; the old
+# `momwire-0.66.0.dist-info` stayed in `_internal` beside the new one, Windows
+# listed it first, and `importlib.metadata` stamped 0.68.0 code as 0.66.0.  So
+# a frozen bundle now carries its version BAKED at freeze time
+# (`scripts/eznec_freeze/build.py`), the metadata is only the fallback, and an
+# overlaid folder says so on line 2.  `sys.frozen` / `sys._MEIPASS` are what
+# PyInstaller sets; patching them is how these gates stand inside a bundle.
+
+REPO = Path(__file__).resolve().parent.parent
+BUILD_PY = REPO / "scripts" / "eznec_freeze" / "build.py"
+
+
+def _freeze(monkeypatch, bundle: Path, baked: str | None) -> None:
+    """Make this process look like a frozen bundle rooted at ``bundle``."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "_MEIPASS", str(bundle), raising=False)
+    if baked is None:
+        monkeypatch.delitem(sys.modules, mech.BUILD_VERSION_MODULE, raising=False)
+    else:
+        module = types.ModuleType(mech.BUILD_VERSION_MODULE)
+        module.VERSION = baked
+        monkeypatch.setitem(sys.modules, mech.BUILD_VERSION_MODULE, module)
+
+
+def _plant(bundle: Path, *versions: str) -> None:
+    for v in versions:
+        info = bundle / f"momwire-{v}.dist-info"
+        info.mkdir()
+        (info / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: momwire\nVersion: {v}\n", encoding="utf-8"
+        )
+
+
+def test_the_baked_version_wins_over_the_metadata_in_a_frozen_bundle(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _freeze(monkeypatch, tmp_path, baked="9.8.7")
+    assert mech.momwire_version() == "9.8.7"
+    assert engine_stamp("bspline").split()[1] == "9.8.7"
+    assert mech.dist_version() == ("9", "8")
+
+
+def test_the_metadata_is_the_fallback_when_a_bundle_has_nothing_baked(
+    monkeypatch, tmp_path
+):
+    """A bundle frozen before momwire#1277 (or with the bake lost) still stamps
+    a version — the metadata's, which is what every bundle did before."""
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _freeze(monkeypatch, tmp_path, baked=None)
+    assert importlib.util.find_spec(mech.BUILD_VERSION_MODULE) is None
+    assert mech.momwire_version() == "0.66.0"
+    assert engine_stamp("bspline").split()[1] == "0.66.0"
+
+
+@pytest.mark.parametrize("baked", ["", "   ", None])
+def test_an_empty_or_missing_baked_value_is_not_a_version(monkeypatch, tmp_path, baked):
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _freeze(monkeypatch, tmp_path, baked="x")
+    sys.modules[mech.BUILD_VERSION_MODULE].VERSION = baked
+    assert mech.momwire_version() == "0.66.0"
+
+
+def test_a_source_install_never_reads_a_baked_module_even_one_on_the_path(
+    monkeypatch,
+):
+    """The baked constant is consulted ONLY under ``sys.frozen``: a stray
+    generated file reachable from a source checkout or a pip install cannot
+    outvote the metadata there."""
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    module = types.ModuleType(mech.BUILD_VERSION_MODULE)
+    module.VERSION = "9.8.7"
+    monkeypatch.setitem(sys.modules, mech.BUILD_VERSION_MODULE, module)
+    assert mech.momwire_version() == importlib.metadata.version("momwire")
+    assert engine_stamp("bspline").split()[1] == importlib.metadata.version("momwire")
+
+
+def test_a_clean_tree_carries_no_baked_file_and_the_metadata_answers():
+    """The generated module is never committed and never lives in the tree:
+    gitignored, absent from ``src/``, unimportable here — so in this checkout
+    the fallback is in charge, and the stamp is the installed metadata's."""
+    name = f"{mech.BUILD_VERSION_MODULE}.py"
+    assert name in (REPO / ".gitignore").read_text().splitlines()
+    assert not list((REPO / "src").rglob(name))
+    assert not (REPO / name).exists()
+    assert importlib.util.find_spec(mech.BUILD_VERSION_MODULE) is None
+    assert not getattr(sys, "frozen", False)
+    assert mech.momwire_version() == importlib.metadata.version("momwire")
+    assert mech.stale_versions(mech.momwire_version()) == []
+
+
+def test_build_py_bakes_what_the_readers_import(monkeypatch, tmp_path):
+    """``build.py`` restates the module name (it must not import the runtime
+    it freezes), so the two spellings are held equal here, and the file it
+    writes is imported back to prove it carries the version it was given."""
+    spec = importlib.util.spec_from_file_location("eznec_freeze_build_1277", BUILD_PY)
+    build = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(build)
+    assert build.BUILD_VERSION_MODULE == mech.BUILD_VERSION_MODULE
+    monkeypatch.chdir(tmp_path)
+    where = build._bake_version("1.2.3")
+    baked = where / f"{mech.BUILD_VERSION_MODULE}.py"
+    assert baked.resolve().is_relative_to(tmp_path.resolve() / "build")
+    namespace: dict = {}
+    exec(baked.read_text(encoding="utf-8"), namespace)
+    assert namespace["VERSION"] == "1.2.3"
+
+
+def test_a_clean_bundle_stamps_no_overlay_marker(monkeypatch, tmp_path):
+    _plant(tmp_path, "0.68.0")
+    _freeze(monkeypatch, tmp_path, baked="0.68.0")
+    line = engine_stamp("bspline")
+    assert "stale" not in line
+    assert_stamped("1\n" + line + "\n", basis="bspline")
+
+
+def test_an_overlaid_bundle_keeps_its_version_and_says_it_is_mixed(
+    monkeypatch, tmp_path
+):
+    """The field report's exact shape: the stale 0.66.0 dist-info sorts first,
+    so the metadata answers 0.66.0 — and the stamp must not."""
+    _plant(tmp_path, "0.66.0", "0.68.0")
+    _freeze(monkeypatch, tmp_path, baked="0.68.0")
+    assert mech.bundle_dist_versions() == ["0.66.0", "0.68.0"]
+    line = engine_stamp("bspline")
+    assert line == (
+        f" momwire 0.68.0 bspline {momwire.accelerator_variant or 'none'}"
+        " (stale: 0.66.0)"
+    )
+    marker = " (stale: 0.66.0)"
+    assert_stamped("1\n" + line[: -len(marker)] + "\n", basis="bspline")
+
+
+def test_the_overlay_marker_survives_a_long_launcher_name(monkeypatch, tmp_path):
+    """The marker's room is reserved before the basis is cut: the user's
+    filename loses its tail, the warning does not."""
+    _plant(tmp_path, "0.66.0", "0.68.0")
+    _freeze(monkeypatch, tmp_path, baked="0.68.0")
+    line = engine_stamp("x" * 200)
+    assert len(line) < 80, line
+    assert line.endswith(" (stale: 0.66.0)"), line
+
+
+def test_many_stale_releases_are_counted_rather_than_listed(monkeypatch, tmp_path):
+    _plant(tmp_path, "0.60.0", "0.61.0", "0.62.0", "0.63.0", "0.68.0")
+    _freeze(monkeypatch, tmp_path, baked="0.68.0")
+    line = engine_stamp("bspline")
+    assert line.endswith(" (stale: 4 versions)"), line
+    assert len(line) < 80, line
+
+
+def test_overlay_detection_never_audits_a_non_frozen_install(tmp_path):
+    """Outside a bundle there is no ``_internal`` to audit and nothing to say;
+    an explicit ``base`` is still read, which is what the gates above use."""
+    _plant(tmp_path, "0.66.0", "0.68.0")
+    assert not getattr(sys, "frozen", False)
+    assert mech.bundle_dist_versions() == []
+    assert mech.bundle_dist_versions(str(tmp_path)) == ["0.66.0", "0.68.0"]
+    assert mech.stale_versions("0.68.0", str(tmp_path)) == ["0.66.0"]
+
+
+def test_an_unreadable_bundle_dir_detects_nothing_and_never_raises(
+    monkeypatch, tmp_path
+):
+    _freeze(monkeypatch, tmp_path / "does-not-exist", baked="0.68.0")
+    assert mech.bundle_dist_versions() == []
+    assert "stale" not in engine_stamp("bspline")
+
+
+def test_the_clients_version_probes_read_the_baked_version(monkeypatch, tmp_path):
+    """Both thin clients and the stamp have one owner for the number, so the
+    SimNEC ``-version`` lines move with the bake as well."""
+    import momwire_eznec_client
+    import momwire_nec2c_client
+
+    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _freeze(monkeypatch, tmp_path, baked="9.8.7")
+    assert momwire_nec2c_client.probe_version() == "NEC2momwire.9.8"
+    assert momwire_eznec_client.probe_version() == "NEC5momwire.9.8"

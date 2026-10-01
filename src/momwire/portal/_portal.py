@@ -169,6 +169,7 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
+import momwire_serve_client as _mech
 import numpy as np
 
 from .._constants import C_LIGHT as _C_LIGHT
@@ -347,16 +348,14 @@ __all__ = [
 # that can sit still while the engine under it moves. The optics cost was taken
 # deliberately and once: the tail went DOWN at the move (antennaknobs 0.52 →
 # momwire 0.30), and it restarts lower to track the thing that matters.
-# installed-metadata caveat: an editable install reports the version recorded
-# at `pip install -e` time, so a dev box that skipped the reinstall after a bump
-# probes the stale number — cosmetic there, and always correct on a wheel
-# install.
-try:
-    from importlib.metadata import version as _pkg_version
-
-    _MAJ, _MIN = _pkg_version("momwire").split(".")[:2]
-except Exception:  # pragma: no cover - no installed metadata (source tree)  # noqa: BLE001 - a version probe must never be the thing that fails
-    _MAJ, _MIN = "0", "0"
+# The number comes from `momwire_serve_client.dist_version`, the one owner the
+# thin clients and the EZNEC stamp read too: a frozen bundle's BAKED version
+# first, so a release extracted over an older one cannot probe as the older one
+# (momwire#1277), and the installed metadata otherwise.  Installed-metadata
+# caveat: an editable install reports the version recorded at `pip install -e`
+# time, so a dev box that skipped the reinstall after a bump probes the stale
+# number — cosmetic there, and always correct on a wheel install.
+_MAJ, _MIN = _mech.dist_version()
 PROBE_VERSION = f"NEC2momwire.{_MAJ}.{_MIN}"
 
 # The masquerade this build used through v0.46 — versionA's shape, whose tail
