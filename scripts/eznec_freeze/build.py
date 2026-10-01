@@ -463,10 +463,14 @@ def main() -> int:
         f"  {n + exe.suffix:<{width}}  {label}" for n, label in labels.items()
     )
     (bundle / "README.txt").write_text(
-        f"momwire-eznec {version('momwire')} — momwire standing in for the "
+        f"momwire-eznec {release} — momwire standing in for the "
         "NEC-5 console engine EZNEC Pro+ v7 launches.\n"
         "\n"
         f"{signing_note}\n"
+        "\n"
+        "EXTRACT INTO AN EMPTY FOLDER, or delete the previous momwire-eznec\n"
+        "folder first: extracting over an older install leaves its stale files\n"
+        "behind, and the engine would then report a mixed install.\n"
         "\n"
         "BEFORE EXTRACTING: right-click the downloaded zip, Properties, tick\n"
         '"Unblock", OK - then extract.  That clears the mark-of-the-web on every\n'
