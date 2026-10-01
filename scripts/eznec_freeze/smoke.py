@@ -66,7 +66,19 @@ Nine gates, derived from the seam's own contract (momwire#497 U1):
    this gate exists for: it comes from the package metadata, which a
    PyInstaller bundle carries only because ``build.py`` passes
    ``--copy-metadata momwire``, and a bundle built without it stamps
-   ``unknown`` while every other gate here stays green.
+   ``unknown`` while every other gate here stays green.  Since momwire#1277
+   the version is BAKED into the bundle at freeze time and the metadata is
+   only the fallback, so the gate requires the build's own version exactly,
+   and no overlay marker on a clean bundle.
+
+   **The overlay case** (momwire#1277): a release extracted over an older
+   one keeps the older ``momwire-*.dist-info`` in ``_internal``, and the
+   metadata lookup answered from it.  So the gate plants a valid
+   ``momwire-0.0.1.dist-info`` there — it sorts first, which is the field
+   shape — runs the launcher once more in a fresh runtime room, and requires
+   the stamp to STILL say the build's version and to end in
+   ``(stale: 0.0.1)``.  The planted folder is removed afterwards whatever
+   happens.
 
    It is a gate on what the printout SAYS, never on what the engine DID.
    The stamp is threaded from the filename, so a copy that ignored its own
@@ -182,6 +194,13 @@ STAMP_PREFIX = " momwire "
 STAMP_LINE = 1
 STAMP_FIELDS = 4
 NO_VERSION = "unknown"
+
+# The overlay marker the stamp appends in a mixed bundle (momwire#1277), and
+# the stale release the overlay case plants.  Restated rather than imported
+# from `_printout`, for gate 5's reason: a spelling read out of the thing
+# being gated would certify itself.
+STALE_MARKER = "(stale: {})"
+PLANTED_STALE = "0.0.1"
 
 # What a printout looks like when it is an ANSWER rather than a refusal.
 # Both directions are needed: the refusal frame is what the seam prints when
@@ -372,36 +391,109 @@ def _openmp_source(bundle: Path, room: Path, marker: str) -> int:
     return 0
 
 
-def _gate_stamp(printout: str, basis: str, name: str) -> int:
+def _build_version() -> str:
+    """The release this bundle was frozen from: the build environment's own.
+
+    The workflow freezes and smokes in one environment (``pip install .``), so
+    this is the version ``build.py`` baked.  Read from the metadata, never
+    from momwire's resolver, which is part of what gate 8 gates.
+    """
+    from importlib.metadata import version
+
+    return version("momwire")
+
+
+def _gate_stamp(
+    printout: str, basis: str, name: str, *, stale: str | None = None
+) -> int:
     """Gate 8 — line 2 names this engine: version, basis, accelerator variant.
 
     ``basis`` is what the launcher's NAME asks for, so this reads the one
     field of the stamp a reader of a mailed-in ``NEC5.OUT`` cannot check for
     themselves.  Everything is read positionally off line 2; see the module
     docstring for why this gate is not evidence about the solver.
+
+    ``stale`` is the overlay marker the line must END with — ``None`` for a
+    clean bundle, where any trailing text at all is a failure.
     """
     lines = printout.splitlines()
     line = lines[STAMP_LINE] if len(lines) > STAMP_LINE else ""
     if not line.startswith(STAMP_PREFIX):
         print(f"FAIL {name}: line 2 is not a momwire stamp ({line!r})")
         return 1
-    fields = line.split()
+    head = line
+    if stale is not None:
+        marker = " " + STALE_MARKER.format(stale)
+        if not line.endswith(marker):
+            print(
+                f"FAIL {name}: the stamp does not end in {marker.strip()!r} ({line!r})"
+            )
+            return 1
+        head = line[: -len(marker)]
+    fields = head.split()
     if len(fields) != STAMP_FIELDS:
         print(f"FAIL {name}: the stamp is not {STAMP_FIELDS} fields ({line!r})")
         return 1
     _, version, stamped, variant = fields
     if version == NO_VERSION:
         print(
-            f"FAIL {name}: the stamp carries no version — this bundle was "
-            "built without `--copy-metadata momwire`, so a printout a tester "
-            f"mails back cannot say which release answered it ({line!r})"
+            f"FAIL {name}: the stamp carries no version — this bundle has "
+            "neither the baked build version nor `--copy-metadata momwire`, so "
+            "a printout a tester mails back cannot say which release answered "
+            f"it ({line!r})"
+        )
+        return 1
+    want = _build_version()
+    if version != want:
+        print(
+            f"FAIL {name}: the stamp says momwire {version}, but this bundle "
+            f"was frozen from {want} ({line!r})"
         )
         return 1
     if stamped != basis:
         print(f"FAIL {name}: the stamp names basis {stamped!r}, not {basis!r}")
         return 1
-    print(f"ok   {name}: stamped momwire {version} {stamped} {variant}")
+    print(f"ok   {name}: stamped {line.strip()}")
     return 0
+
+
+def _gate_overlay(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
+    """Gate 8's overlay case (momwire#1277), in a room of its own.
+
+    Plants a VALID stale dist-info — one ``importlib.metadata`` would happily
+    answer from, and one that sorts before the real one, which is the shape
+    that stamped 0.66.0 on 0.68.0 code in the field — then requires the stamp
+    to keep the build's version and to say the folder is mixed.  The plant is
+    removed in ``finally``: every other gate needs a clean bundle.
+    """
+    from momwire.eznec._serve import BASIS as DEFAULT_BASIS
+
+    internal = exe.parent / "_internal"
+    if not internal.is_dir():
+        print(f"FAIL overlay: no _internal beside {exe.name} to plant into")
+        return 1
+    planted = internal / f"momwire-{PLANTED_STALE}.dist-info"
+    if planted.exists():
+        print(f"FAIL overlay: {planted.name} already exists in the bundle")
+        return 1
+    try:
+        planted.mkdir()
+        (planted / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: momwire\nVersion: {PLANTED_STALE}\n",
+            encoding="utf-8",
+        )
+        found = sorted(p.name for p in internal.glob("momwire-*.dist-info"))
+        print(f"     overlay: _internal now holds {found}")
+        deck = FIXTURES / f"{SERVE_IDS[0]}.nec"
+        out = work / f"{SERVE_IDS[0]}.overlay.out"
+        run([str(exe), str(deck), str(out)], out, env=env)
+        text = out.read_bytes().decode("latin-1")
+        return _gate_stamp(
+            text, DEFAULT_BASIS, f"{SERVE_IDS[0]} (overlay)", stale=PLANTED_STALE
+        )
+    finally:
+        stop(room)
+        shutil.rmtree(planted, ignore_errors=True)
 
 
 def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
@@ -693,6 +785,14 @@ def main() -> int:
         failures += _gate_self_contained(exe, work, room)
     finally:
         stop(room)
+
+    # Gate 8's overlay case LAST and in a fresh room: it plants a stale
+    # dist-info in the bundle, and a fresh room means a fresh daemon whose
+    # whole life is spent in the overlaid folder.
+    room = Path(tempfile.mkdtemp(prefix="mw-smoke-overlay-"))
+    failures += _gate_overlay(
+        exe, work, room, {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
+    )
 
     if failures:
         print(f"{failures} smoke failure(s)")
