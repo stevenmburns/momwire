@@ -1327,7 +1327,7 @@ def _fast_end_desc(fast, a_wire, pt, rho, z, zp):
     gs = fast.grouped_slot
     gv, lv = (z, zp) if gs == "z" else (zp, z)
     n_l, n_g = fast.line_z.size, fast.grouped_z.size
-    if gv.size == n_l and fast.raw is not None:
+    if gv.size == n_l:
         g = fast.gdict.get((float(pt[0]), float(pt[1])))
         if (
             g is not None
@@ -1342,14 +1342,16 @@ def _fast_end_desc(fast, a_wire, pt, rho, z, zp):
         rep = rho[fast.gfirst]
         if np.array_equal(rho, rep[fast.grank]):
             r = _near_interface.radius_fold(rep, a_wire)
-            l0 = float(lv[0])
-            kg = np.empty(rep.size, dtype=np.intp)
-            for g, rg in enumerate(r.tolist()):
-                k = fast.kmap[g].get((rg, l0))
-                if k is None:
-                    return None
-                kg[g] = k
-            return ("line", kg)
+            # Group g's local key of (r[g], lv[0]), every g at once: the
+            # global key of the pair, then its place among g's own keys.
+            k = fast.keys.ids(r, np.full(r.shape, lv[0]))
+            if np.any(k < 0):
+                return None
+            n_key = fast.keys.n_key
+            j = fast.gkey.ids(np.arange(r.size, dtype=np.int64) * n_key + k)
+            if np.any(j < 0):
+                return None
+            return ("line", fast.gkey_loc[j])
     return None
 
 
@@ -1629,9 +1631,17 @@ _PRODUCT_NEG_CONTROL = None
 # fraction to force the grid route.
 _PRODUCT_MAX_CAND_FRAC = None
 _PRODUCT_MAX_GROUP_FRAC = None
-# Groups beyond this build no fast-end structures (their raw lines would be
-# groups x line floats); their ends take the lookup path, which is exact.
-_PRODUCT_FAST_MAX_GROUPS = 64
+# Groups beyond this build no fast-end structures, and their ends take the
+# lookup path, which is exact; None for no cap (the default). It was 64 while
+# a line end's key was found through one Python dict per group: at razor's
+# inverted-L over 16 radials x8 the reversed block has 769 groups (one per
+# node of the top wire's path axis), so its ~2,960 ends took the lookup path,
+# 11.5 M asked points re-deduplicated and searched against the 1.1 M-row
+# product for ~7 k fresh rows -- 2.7 s of the 4.9 s block on Haswell. The
+# structures are now arrays, O(groups x line) like the plan's own `line`
+# and `kid` (momwire#1224). TEST-ONLY to set: a cap sends the ends back to
+# the lookup path, which is what the bit-identity gate compares against.
+_PRODUCT_FAST_MAX_GROUPS = None
 _ROUTES = dict.fromkeys(
     (
         "main_product",
@@ -1725,10 +1735,18 @@ def _first_ints(ids):
 class _FastEnds(NamedTuple):
     """What `_fast_end_rows` reads, beside the `ProductSet`: the grouped
     side's slot, nodes' z, group and local z rank; the line nodes' z; per
-    group its first node, raw ρ line, (x, y) key, z and key maps, row-table
+    group its first node, raw ρ line, (x, y) key and z map, row-table
     offset / width and the line's local key ranks; and the concatenated
-    row tables. `raw` and the maps are None past `_PRODUCT_FAST_MAX_GROUPS`
-    groups (the product then serves the main sandwich only)."""
+    row tables.
+
+    A line end's key in each group is found by array search rather than a
+    per-group dict (momwire#1224): `keys` (the product's `KeyIndex`) names
+    the global key of a (ρ_eff, z_line) pair, and `gkey` / `gkey_loc` the
+    local key of global key k in group g, from the code g·n_key + k. Both are
+    exact-`==` classes, the dicts' key equality, so they answer what the
+    dicts did; the dicts were ~0.8 M entries per block at razor's inverted-L
+    x8 (769 groups), which is why the structures used to stop at 64
+    groups."""
 
     grouped_slot: str
     grouped_z: np.ndarray
@@ -1736,10 +1754,12 @@ class _FastEnds(NamedTuple):
     zl_rank: np.ndarray
     line_z: np.ndarray
     gfirst: np.ndarray
-    raw: np.ndarray | None
+    raw: np.ndarray
     gdict: dict
     zmap: list
-    kmap: list
+    keys: _near_interface.KeyIndex
+    gkey: _near_interface._SortedCodes
+    gkey_loc: np.ndarray
     off: np.ndarray
     nk: np.ndarray
     kl_rank: np.ndarray
@@ -1812,6 +1832,7 @@ class _ProductPlan(NamedTuple):
     gz_rep: np.ndarray  # one float per grouped-z id
     key_r: np.ndarray  # one ρ_eff per global key id
     key_zl: np.ndarray  # one line z per global key id
+    keys: _near_interface.KeyIndex  # the keys' lookup, shared with the product
     rowtab: list  # per group, (z of g, keys of g) -> row id
     zids: list
     kids: list
@@ -2028,9 +2049,13 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     rowtab = cand_row
     off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.intp)
     rowflat = np.concatenate([t.ravel() for t in rowtab])
-    small = nG <= _PRODUCT_FAST_MAX_GROUPS
+    key_r = line.ravel()[kf]
+    key_zl = np.broadcast_to(lzv, line.shape).ravel()[kf]
+    keys = _near_interface.KeyIndex(key_r, key_zl)
+    cap = _PRODUCT_FAST_MAX_GROUPS
     fast = None
-    if small:
+    if cap is None or nG <= cap:
+        n_key = kf.size
         fast = _FastEnds(
             grouped_slot=slot,
             grouped_z=gzv,
@@ -2047,13 +2072,15 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
                 {float(gzv[n]): i for i, n in enumerate(zfirst[g].tolist())}
                 for g in range(nG)
             ],
-            kmap=[
-                {
-                    (float(line[g, n]), float(lzv[n])): j
-                    for j, n in enumerate(kfirst[g].tolist())
-                }
-                for g in range(nG)
-            ],
+            keys=keys,
+            gkey=_near_interface._SortedCodes(
+                np.concatenate(
+                    [g * np.int64(n_key) + kids[g].astype(np.int64) for g in range(nG)]
+                )
+            ),
+            gkey_loc=np.concatenate(
+                [np.arange(nk[g], dtype=np.intp) for g in range(nG)]
+            ),
             off=off,
             nk=nk,
             kl_rank=kl_rank,
@@ -2065,8 +2092,9 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         nB=nB,
         n_rows=int(n_rows),
         gz_rep=gzv[zf],
-        key_r=line.ravel()[kf],
-        key_zl=np.broadcast_to(lzv, line.shape).ravel()[kf],
+        key_r=key_r,
+        key_zl=key_zl,
+        keys=keys,
         rowtab=rowtab,
         zids=zids,
         kids=kids,
@@ -2215,6 +2243,7 @@ class _ProductTiles:
             plan.kids,
             kernels=("V", "W"),
             n_rows=U,
+            key_index=plan.keys,
         )
         self.product.complete = False
         self.product.fast = plan.fast
