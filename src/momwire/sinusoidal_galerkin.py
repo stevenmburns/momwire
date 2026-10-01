@@ -3655,8 +3655,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             for sb in tensor
         ]
 
-    def _add_crossing_blocks(self, geom, seg_view, medium, below, G):
+    def _add_crossing_blocks(self, geom, seg_view, medium, below, G, rows=None):
         """The crossing junction's blocks, onto the assembled G.
+
+        `rows` is `_crossing_rows`' answer when the caller computed it
+        before the fill (momwire#1224: the crossing fill's own transients —
+        its kernel tables, memo and far-block weights, ~1 Z at hub16 x16 —
+        then never coexist with G); otherwise it is computed here.
 
         NOT bspline's spelling, and the two differences were measured on the
         node block rather than argued. bspline writes `Z -= t_ab; Z -= t_ab.T;
@@ -3686,32 +3691,49 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the corner — which is why the segment bases were left as free ends
         and the node was given its own dofs (`_crossing_wing_view`).
         """
-        ctx_x = self._crossing_context(geom, seg_view, medium)
-        a_idx = np.nonzero(~np.asarray(below))[0]
-        b_idx = np.nonzero(np.asarray(below))[0]
-        ax_a = _crossing_fill.axis_data(ctx_x, a_idx)
-        ax_b = _crossing_fill.axis_data(ctx_x, b_idx)
-        t_ab = _crossing_fill.cross_complete_block_split(
-            ctx_x, a_idx, b_idx, ax_a, ax_b
+        rows, t_rows = (
+            self._crossing_rows(geom, seg_view, medium, below) if rows is None else rows
         )
         n = G.shape[0]
-        if t_ab.shape[0] != n:
+        if t_rows.shape[1] != n:
             # The port columns `_junction_port_view` appends are not part of
             # the crossing fill's basis axis; a crossing deck with junction
             # ports is out of scope rather than silently mis-scattered.
             raise NotImplementedError(
                 "junction ports on a crossing deck are not served "
-                f"(crossing block is {t_ab.shape[0]} x {t_ab.shape[1]}, "
-                f"G is {n} x {n})"
+                f"(crossing block is {t_rows.shape[1]} wide, G is {n} x {n})"
             )
-        # `(G + t_ab) + t_ab.T`, the same two elementwise sums, with the
-        # result allocated FORTRAN-ordered and the second sum in place: the
-        # solve factors G in place only when LAPACK can take it as it is
-        # (see `_solve_in_place`), and `G + t_ab` of an F-ordered G and a
-        # C-ordered t_ab came out C-ordered.
-        out = np.add(G, t_ab, order="F")
-        np.add(out, t_ab.T, out=out)
-        return out
+        # `(G + t_ab) + t_ab.T`, the same two elementwise sums, in place on
+        # G: first t_ab's rows, then its transpose's columns. Outside `rows`
+        # t_ab is zero, so every cell sees its two terms in the order the
+        # whole spelling added them, and G keeps its F order for the
+        # in-place solve.
+        G[rows, :] += t_rows
+        G[:, rows] += t_rows.T
+        return G
+
+    def _crossing_rows(self, geom, seg_view, medium, below):
+        """`(rows, t_ab[rows, :])`: the crossing block's live rows
+        (momwire#1224), for `_add_crossing_blocks`.
+
+        t_ab is (n_basis, n_basis) but lives in the rows of the bases with
+        support ABOVE: the block is (above axis A x below axis B), and A's
+        samples are those bases' only. So it is asked for those rows alone
+        (`rows=`, momwire#1029 phase 2) rather than built whole beside G.
+        """
+        ctx_x = self._crossing_context(geom, seg_view, medium)
+        below = np.asarray(below)
+        a_idx = np.nonzero(~below)[0]
+        b_idx = np.nonzero(below)[0]
+        ax_a = _crossing_fill.axis_data(ctx_x, a_idx)
+        ax_b = _crossing_fill.axis_data(ctx_x, b_idx)
+        starts = np.asarray(seg_view["starts"])
+        seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
+        rows = np.unique(np.asarray(seg_view["jbasis"])[~below[seg_of_entry]])
+        t_rows, _t_cols = _crossing_fill.cross_complete_block_split(
+            ctx_x, a_idx, b_idx, ax_a, ax_b, rows=rows
+        )
+        return rows, t_rows
 
     def _n_crossing_wings(self):
         """How many NODE-WING columns the crossing junctions add: one per
@@ -3968,7 +3990,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 test_obs=ctx["obs_c"],
                 row_group=ctx["nq"],
             )
+            cross_rows = None
             if self._band_fill_serves(geom["n_segs"]):
+                if crossing:
+                    # The cross pair FIRST (momwire#1224): its value does not
+                    # depend on G, and its fill's transients then never sit
+                    # beside G — the banded fill has nothing else that size.
+                    cross_rows = self._crossing_rows(geom, seg_view, medium, below)
                 # The fill fused with its scatter, one observer band at a
                 # time (momwire#1224): no (nnz, N) triple, G F-ordered.
                 G = self._assemble_mixed_G_banded(
@@ -3986,7 +4014,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 # spelling with all by-parts ends and the corner, which is
                 # what supplies continuity and the AGARD slope at the C0
                 # node the basis leaves free.
-                G = self._add_crossing_blocks(geom, seg_view, medium, below, G)
+                G = self._add_crossing_blocks(
+                    geom, seg_view, medium, below, G, rows=cross_rows
+                )
             # Loading on a mixed deck (momwire#1156): each shared-segment
             # overlap is written at its segment's own k (`k_entry`, which the
             # wing columns carry too) and read at the REAL ω. It was refused
