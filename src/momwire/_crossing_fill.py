@@ -1333,7 +1333,7 @@ def _fast_end_desc(fast, a_wire, pt, rho, z, zp):
             g is not None
             and np.all(gv == gv[0])
             and np.array_equal(lv, fast.line_z)
-            and np.array_equal(rho, fast.raw[g])
+            and np.array_equal(rho, _raw_row(fast, g))
         ):
             zl = fast.zmap[g].get(float(gv[0]))
             if zl is not None:
@@ -1358,10 +1358,10 @@ def _fast_end_desc(fast, a_wire, pt, rho, z, zp):
             if np.any(k < 0):
                 return None
             n_key = fast.keys.n_key
-            j = fast.gkey.ids(np.arange(r.size, dtype=np.int64) * n_key + k)
-            if np.any(j < 0):
+            j = fast.gkey.local(np.arange(r.size, dtype=np.int64) * n_key + k)
+            if j is None:
                 return None
-            return ("line", fast.gkey_loc[j])
+            return ("line", j)
     return None
 
 
@@ -1652,6 +1652,10 @@ _PRODUCT_MAX_GROUP_FRAC = None
 # and `kid` (momwire#1224). TEST-ONLY to set: a cap sends the ends back to
 # the lookup path, which is what the bit-identity gate compares against.
 _PRODUCT_FAST_MAX_GROUPS = None
+# Up to this many groups the fast-end structures keep the plan's raw ρ lines
+# (groups x line floats), as they did when 64 was the cap; past it a group's
+# row is formed again when an end asks for it (`_raw_row`).
+_PRODUCT_FAST_RAW_GROUPS = 64
 _ROUTES = dict.fromkeys(
     (
         "main_product",
@@ -1752,12 +1756,19 @@ class _FastEnds(NamedTuple):
 
     A line end's key in each group is found by array search rather than a
     per-group dict (momwire#1224): `keys` (the product's `KeyIndex`) names
-    the global key of a (ρ_eff, z_line) pair, and `gkey` / `gkey_loc` the
+    the global key of a (ρ_eff, z_line) pair, and `gkey` (`_GroupKeys`) the
     local key of global key k in group g, from the code g·n_key + k. Both are
     exact-`==` classes, the dicts' key equality, so they answer what the
     dicts did; the dicts were ~0.8 M entries per block at razor's inverted-L
     x8 (769 groups), which is why the structures used to stop at 64
-    groups."""
+    groups.
+
+    Nothing here is O(groups x line) beyond what the plan holds anyway
+    (`line`, `kl_rank`): `raw` is kept only up to `_PRODUCT_FAST_RAW_GROUPS`
+    groups (as before #1224) and past that each group's row is re-formed
+    when an end asks (`_raw_row`), and `gkey` is built on the first line end
+    that misses its own node, which no gated deck has. Keeping both was
+    +490 MB peak RSS at razor inverted-L x32."""
 
     grouped_slot: str
     grouped_z: np.ndarray
@@ -1765,18 +1776,63 @@ class _FastEnds(NamedTuple):
     zl_rank: np.ndarray
     line_z: np.ndarray
     gfirst: np.ndarray
-    raw: np.ndarray
+    raw: np.ndarray | None
+    gxy: np.ndarray
+    line_nodes: np.ndarray
     line: np.ndarray
     line_xy: dict
     gdict: dict
     zmap: list
     keys: _near_interface.KeyIndex
-    gkey: _near_interface._SortedCodes
-    gkey_loc: np.ndarray
+    gkey: "_GroupKeys"
     off: np.ndarray
     nk: np.ndarray
     kl_rank: np.ndarray
     rowflat: np.ndarray
+
+
+def _raw_row(fast, g):
+    """Group g's raw ρ line, `_product_plan`'s `raw[g]`: the stored row, or
+    -- past `_PRODUCT_FAST_RAW_GROUPS` groups -- that row formed again by the
+    plan's own expression on a (1, line) slice of its operands (the same
+    elementwise subtractions and `np.hypot` on the same floats, the inner
+    loop running over the line exactly as it did)."""
+    if fast.raw is not None:
+        return fast.raw[g]
+    x0, y0 = fast.gxy[g : g + 1, 0], fast.gxy[g : g + 1, 1]
+    L = fast.line_nodes
+    if fast.grouped_slot == "z":
+        return np.hypot(x0[:, None] - L[None, :, 0], y0[:, None] - L[None, :, 1])[0]
+    return np.hypot(L[None, :, 0] - x0[:, None], L[None, :, 1] - y0[:, None])[0]
+
+
+class _GroupKeys:
+    """The local key of global key k in group g, by the code g·n_key + k: a
+    sorted code array over every group's keys, BUILT ON FIRST USE (a line end
+    off its own node, momwire#1224) -- it is O(sum of the groups' key
+    counts), ~13 M codes at razor inverted-L x32, and the on-node route
+    answers every end the gated decks have. `local(codes)` is the local key
+    of each, or None when any is not a key of its group."""
+
+    def __init__(self, kids, n_key):
+        self._kids, self._n_key = kids, int(n_key)
+        self._codes = self._loc = None
+
+    def local(self, codes):
+        if self._codes is None:
+            n_key = np.int64(self._n_key)
+            self._codes = _near_interface._SortedCodes(
+                np.concatenate(
+                    [g * n_key + kj.astype(np.int64) for g, kj in enumerate(self._kids)]
+                )
+            )
+            self._loc = np.concatenate(
+                [np.arange(kj.size, dtype=np.intp) for kj in self._kids]
+            )
+        j = self._codes.ids(codes)
+        if np.any(j < 0):
+            return None
+        return self._loc[j]
 
 
 def _product_route(ctx, eps_t, k_p, A, B, gz, step, memo, ends=None):
@@ -2085,7 +2141,9 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             zl_rank=zl_rank,
             line_z=lzv,
             gfirst=gfirst,
-            raw=raw,
+            raw=raw if nG <= _PRODUCT_FAST_RAW_GROUPS else None,
+            gxy=np.stack([x0, y0], axis=1),
+            line_nodes=L,
             line=line,
             line_xy=_xy_index(L),
             gdict={
@@ -2097,14 +2155,7 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
                 for g in range(nG)
             ],
             keys=keys,
-            gkey=_near_interface._SortedCodes(
-                np.concatenate(
-                    [g * np.int64(n_key) + kids[g].astype(np.int64) for g in range(nG)]
-                )
-            ),
-            gkey_loc=np.concatenate(
-                [np.arange(nk[g], dtype=np.intp) for g in range(nG)]
-            ),
+            gkey=_GroupKeys(kids, n_key),
             off=off,
             nk=nk,
             kl_rank=kl_rank,
@@ -2219,8 +2270,8 @@ class _ProductTiles:
         U = plan.n_rows
         n_key = plan.key_r.size
         # The one call's columns: exact-ρ classes of the keys, ascending.
-        # (the plan's `KeyIndex` holds exactly this `np.unique` already)
-        _r_u, key_cls = plan.keys.r_unique, plan.keys.r_inverse
+        # (the plan's `KeyIndex` formed exactly this `np.unique` already)
+        _r_u, key_cls = plan.keys.take_r_classes()
         rows_per_key = np.zeros(n_key, dtype=np.int64)
         for g, kj in enumerate(plan.kids):
             rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound

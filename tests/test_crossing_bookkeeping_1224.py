@@ -151,5 +151,38 @@ def test_key_index_answers_the_searched_key_ids():
     assert (got[: key_r.size] == np.arange(key_r.size)).all()
     assert (got[key_r.size : 2 * key_r.size] == -1).all()
     # The tiles' exact-rho classes are np.unique's.
-    _u, inv = np.unique(key_r, return_inverse=True)
-    assert np.array_equal(keys.r_inverse, inv.ravel())
+    u, inv = np.unique(key_r, return_inverse=True)
+    for _ in range(2):  # handed over once, formed again after
+        got_u, got_inv = keys.take_r_classes()
+        assert np.array_equal(got_u, u) and np.array_equal(got_inv, inv.ravel())
+
+
+class _Ctx:
+    a_wire = 0.001
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_a_raw_row_formed_again_is_the_plans_row(seed):
+    """Past `_PRODUCT_FAST_RAW_GROUPS` groups the fast ends re-form a group's
+    raw ρ row when an end asks (`_raw_row`); it must be the plan's row to the
+    bit, on both slots (the grouped side above, and below). Red control: the
+    row of the next group is not it."""
+    rng = np.random.default_rng(seed)
+    xy_a = np.round(rng.random((40, 2)) * 7, 3)[rng.integers(0, 40, 60)]
+    xy_b = rng.random((90, 2)) * 5 - 2
+    A = {"nodes": np.column_stack([xy_a, rng.random(60) * 3])}
+    B = {"nodes": np.column_stack([xy_b, -rng.random(90)])}
+    for a, b in ((A, B), (B, A)):
+        aa = {"nodes": a["nodes"].copy()}
+        bb = {"nodes": b["nodes"].copy()}
+        if a is B:  # the repeats on the BELOW side: it is the grouped one
+            aa["nodes"][:, 2] *= -1
+            bb["nodes"][:, 2] *= -1
+        plan = cf._product_plan(_Ctx(), 1.0, 1.0, aa, bb, 0.0)
+        fast = plan.fast
+        assert fast.grouped_slot == ("z" if a is A else "zp")
+        assert fast.raw is not None and fast.raw.shape[0] > 1
+        bare = fast._replace(raw=None)
+        for g in range(fast.raw.shape[0]):
+            assert np.array_equal(cf._raw_row(bare, g), fast.raw[g])
+        assert not np.array_equal(cf._raw_row(bare, 1), fast.raw[0])
