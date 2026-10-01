@@ -11,6 +11,12 @@ dist/
 # A local eznec_freeze build leaves both beside the repo root.
 momwire-eznec-engine.spec
 smoke-out/
+# The frozen bundle's baked version (momwire#1277).  build.py writes it under
+# build/ (already ignored above) and never into src/; this line is the belt in
+# case a stray copy lands anywhere else.  It must never be committed: a source
+# checkout answers its version from the installed metadata, and
+# tests/test_eznec_engine_stamp.py proves a clean tree has no such file.
+_momwire_build_version.py
 
 # Vendored NEC2 theory manual — large binary + extracted plain text,
 # available externally. Don't track any local copies.

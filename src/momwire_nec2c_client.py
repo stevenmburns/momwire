@@ -18,9 +18,10 @@ than a style rule: ``import momwire`` pulls NumPy and SciPy, which is the
 ~680 ms this exists to delete. Stdlib only, and even the stdlib is imported
 inside the functions that need it, so ``-version`` — the probe SimNEC blocks
 on at configure time — costs interpreter start-up and a metadata read.
-``importlib.metadata`` answers the version off the installed distribution's
-metadata WITHOUT importing the package, which is what makes a version probe
-possible from here at all.
+``momwire_serve_client.momwire_version`` answers the version WITHOUT
+importing the package — a frozen bundle's baked constant first (momwire#1277),
+the installed distribution's metadata otherwise — which is what makes a
+version probe possible from here at all.
 
 The stock ``momwire-nec2c`` is untouched and remains the supported default;
 this is the opt-in sibling. The name keeps the ``nec2c`` substring SimNEC's
@@ -113,11 +114,12 @@ _PUMP_CHUNK = 65536
 def probe_version(legacy: bool = False) -> str:
     """The ``-version`` first line, answered without importing momwire.
 
-    ``importlib.metadata`` reads the installed distribution's metadata, so
-    this is the same number ``momwire.portal.PROBE_VERSION`` computes from the
-    same source — and the reason the probe never has to spawn anything. An
-    editable install reports the version recorded at ``pip install -e`` time,
-    exactly as the stock engine does.
+    :func:`momwire_serve_client.dist_version` — a frozen bundle's baked
+    version first, the installed metadata otherwise (momwire#1277) — so this
+    is the same number ``momwire.portal.PROBE_VERSION`` computes from the same
+    owner, and the reason the probe never has to spawn anything. An editable
+    install reports the version recorded at ``pip install -e`` time, exactly
+    as the stock engine does.
     """
     if legacy:
         return _LEGACY_PROBE_VERSION
