@@ -3140,16 +3140,45 @@ def _above_end_args(line, gz):
     to clamp with a bare `max(..., 0)` — silently, at any distance — and pass
     the below line's nodes through unchecked."""
     nodes = line["nodes"]
+    line_z = _LineZ(nodes, gz, "below")
 
     def args(pt):
         rho_e = np.hypot(pt[0] - nodes[:, 0], pt[1] - nodes[:, 1])
         return (
             rho_e,
             _on_plane_side(np.full_like(rho_e, pt[2] - gz), "above", "end point"),
-            _on_plane_side(nodes[:, 2] - gz, "below", "quadrature node"),
+            line_z(),
         )
 
     return args
+
+
+class _LineZ:
+    """The line nodes' plane-side z of an end-args closure, formed by its
+    FIRST call and handed out read-only after that (momwire#1224).
+
+    It is the same `_on_plane_side(nodes[:, 2] - gz, ...)` for every end of
+    the loop -- the expression does not read the end -- so the floats are
+    those each call formed, and a deck that refuses still refuses at the
+    first end, with the same message, and never earlier. Every caller
+    copies or only reads it (`np.stack` of the span, `radius_fold` rows,
+    `_fast_end_desc`'s compares); read-only makes a writer raise rather
+    than poison the later ends. Recomputing it per end was ~40 % of the
+    fused ends' classify pass at razor hub_deck(16) x8 (2,823 ends)."""
+
+    __slots__ = ("_nodes", "_gz", "_side", "_z")
+
+    def __init__(self, nodes, gz, side):
+        self._nodes, self._gz, self._side, self._z = nodes, gz, side, None
+
+    def __call__(self):
+        if self._z is None:
+            z = _on_plane_side(
+                self._nodes[:, 2] - self._gz, self._side, "quadrature node"
+            )
+            z.setflags(write=False)
+            self._z = z
+        return self._z
 
 
 def _below_end_args(line, gz):
@@ -3158,12 +3187,13 @@ def _below_end_args(line, gz):
     tables accept only z ≥ 0 ≥ z′, whichever role each side plays). The
     mirror of `_above_end_args`, on the same `_on_plane_side` rule."""
     nodes = line["nodes"]
+    line_z = _LineZ(nodes, gz, "above")
 
     def args(pt):
         rho_e = np.hypot(nodes[:, 0] - pt[0], nodes[:, 1] - pt[1])
         return (
             rho_e,
-            _on_plane_side(nodes[:, 2] - gz, "above", "quadrature node"),
+            line_z(),
             _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
         )
 
