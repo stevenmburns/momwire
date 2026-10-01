@@ -643,8 +643,11 @@ _EKFarLabels = collections.namedtuple(
 # depends on its own argument alone — measured: restricting the source set
 # changes a column's bits exactly when it moves the tail. 4 is also a
 # multiple of every narrower width a build might vectorize at (2 for SSE2 or
-# NEON), so the rule below holds for those too. The complex twin has no
-# vectorized libm stage and is column-independent whatever the padding.
+# NEON), so the rule below holds for those too. The complex twin's sweep
+# (`sg_cplx_phase_sweep`, momwire#1224) IS vectorized, but pads its own table
+# to the vector width so that no entry takes a scalar tail: it is
+# column-independent whatever the padding, and the padding below is inert
+# for the complex class rather than load-bearing.
 _SIMD_TAIL_PERIOD = 4
 
 

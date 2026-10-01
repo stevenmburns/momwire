@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_stable_inline.h"
+#include "_accel_sinusoidal_cplx.h"
 
 // sinusoidal section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 3349-5401.
@@ -1999,10 +2000,25 @@ static bool galerkin_fold_block(
 // (X and the endpoint ratios are geometry, never k), so it takes the same
 // principal branch it takes in the real fill.
 //
-// The folded third shape's cancellation-free spellings are preserved rather
-// than re-derived: e^{jy} - 1 is carried as 2j·sin(y/2)·e^{jy/2}, which for a
-// real y is bit-for-bit the `-2s^2 + 2jsc` the fill above writes, and for a
-// complex one is the same identity with complex sin/exp.
+// STAGING (momwire#1224). The body below used to evaluate complex `std::exp`
+// and `std::sin` per pair and per source node, scalar, and ran ~6x slower per
+// call than the real fill. It is now staged as the real fill is — A: geometry
+// and a flat table of real distances d, B: one vectorized sweep over the table
+// (`sg_cplx_phase_sweep`, its own TU, `_accel_sinusoidal_cplx.h`), C:
+// assembly — but the table is NOT the real fill's: with k = k_r + j*k_i,
+// e^{-jkd} = e^{k_i d}(cos k_r d - j sin k_r d), so every complex
+// transcendental here is spelled from exp(k_i d), expm1(k_i d), sin(k_r d)
+// and sin(k_r d/2). The cancellation-free spellings survive in that basis:
+// e^{-jkd} - 1 is (expm1(k_i d)·cos - 2 sin^2(k_r d/2)) - j·e^{k_i d}·sin, with
+// cos rebuilt as 1 - 2 sin^2(k_r d/2); a node's e^{-jkr_q} - 1 is the product
+// form e^{-jkr_ref}(e^{-jk delta_q} - 1) + (e^{-jkr_ref} - 1) of the angle
+// addition the real fill makes on its half angles (#799); and sinh comes from
+// expm1, so sin(kd) stays relative as k_i d -> 0. The table is padded to the
+// vector width, so this fill is column-independent and needs no
+// `_SIMD_TAIL_PERIOD` padding from its caller, unlike the real one.
+//
+// `cexp_i` below is the point-matched twin's (momwire#1222), which keeps its
+// scalar spelling.
 static inline std::complex<double> cexp_i(std::complex<double> z) {
     return std::exp(std::complex<double>(0.0, 1.0) * z);
 }
@@ -2096,7 +2112,8 @@ galerkin_far_fill_cplx_impl(
     // keeps doubles; the SPELLING is the same, including cos kH - 1 taken as
     // -2 sin^2(kH/2) rather than as a subtraction (#205).
     std::vector<double> H_n(N);
-    std::vector<C> sin_kH(N), cos_kH(N), cos_kH_m1(N), smarg_kH(N);
+    std::vector<C> sin_kH(N), cos_kH(N), cos_kH_m1(N), smarg_kH_k(N),
+                   inv_kH(N);
     for (size_t n = 0; n < N; n++) {
         H_n[n] = sh(n);
         C kH = k * H_n[n];
@@ -2104,7 +2121,12 @@ galerkin_far_fill_cplx_impl(
         cos_kH[n] = std::cos(kH);
         C hs = std::sin(0.5 * kH);
         cos_kH_m1[n] = -2.0 * hs * hs;
-        smarg_kH[n] = sin_minus_arg(kH);
+        // (sin kH - kH)/k: the per-pair `smarg / k` hoisted, the same
+        // division done once per source instead of once per pair.
+        smarg_kH_k[n] = sin_minus_arg(kH) / k;
+        // 1/(kH), so the pair's `/ kH` is a multiply and not a libgcc
+        // complex division (`__divdc3`) per pair.
+        inv_kH[n] = 1.0 / kH;
     }
     std::vector<double> glt_v(n_qp), glw_v(n_qp), gl_step(n_qp);
     std::vector<char> gl_near2(n_qp);
@@ -2122,6 +2144,7 @@ galerkin_far_fill_cplx_impl(
     const C four_pi_k = 4.0 * M_PI * k;
     const C pref_z = eta / four_pi_k;
     const C pref_rho_const = -eta / four_pi_k;
+    const C k_sq = k * k;
 
     MW_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
@@ -2147,7 +2170,49 @@ galerkin_far_fill_cplx_impl(
             std::fill(bco, bco + nrows * N, C(0.0, 0.0));
         }
 
-        std::vector<C> phi_c(N), phi_s(N), phi_co(N);
+        // The phase table (momwire#1224). Per source segment, S real
+        // DISTANCES d, each standing for the phase k*d; Stage B turns every
+        // one into exp(Im k*d), expm1(Im k*d), sin(Re k*d), sin(Re k*d/2) in
+        // one vector sweep (`_accel_sinusoidal_cplx.h`), and Stage C spells
+        // each complex transcendental the pair needs from those four.
+        //
+        //   IX_R2, IX_R1   r0_2, r0_1: e^{-jkr} and e^{-jkr} - 1
+        //   IX_P           P = (r1 - r2)/2, the E_rho reference angle phi = kP
+        //   IX_HP, IX_HM   H + P, H - P: sin(A), sin(B) for sin_minus_arg
+        //   IX_DQ + q      delta_q, the node's offset from its own endpoint:
+        //                  e^{-jk delta} - 1
+        //
+        // A node's own e^{-jkr_q} - 1 is NOT a table entry: r_q = r_ref +
+        // delta_q, so it is e^{-jkr_ref}(e^{-jk delta} - 1) + (e^{-jkr_ref} - 1),
+        // two values already in the table — the product form of the angle
+        // addition the real fill makes on its half angles (#799).
+        const size_t IX_R2 = 0, IX_R1 = 1, IX_P = 2, IX_HP = 3, IX_HM = 4;
+        const size_t IX_DQ = 5;
+        const size_t S = n_qp + IX_DQ;
+        const size_t P = N * S;
+        // Padded to the vector width so no entry falls to the scalar tail
+        // (the header's contract), with finite distances that nothing reads.
+        const size_t Pv = (P + SG_CPLX_LANES - 1) / SG_CPLX_LANES * SG_CPLX_LANES;
+        // Five Pv-long tables, 32-byte aligned: Pv is a multiple of 8 doubles,
+        // so aligning the base aligns all five.
+        std::vector<double> tab_buf(5 * Pv + 4);
+        double *tab = tab_buf.data();
+        tab += ((32 - (reinterpret_cast<uintptr_t>(tab) & 31)) & 31) / sizeof(double);
+        double *td_d = tab;
+        double *t_ea = td_d + Pv;
+        double *t_em = t_ea + Pv;
+        double *t_s = t_em + Pv;
+        double *t_h = t_s + Pv;
+        for (size_t i = P; i < Pv; i++) td_d[i] = 0.0;
+
+        std::vector<double> rho_eval_a(N), z_a(N), dz1_a(N), dz2_a(N),
+                            r0_1_a(N), r0_2_a(N), td_a(N), rpf_a(N);
+        std::vector<double> r0q_inv_a(N * n_qp);
+        // The projected fields, split re/im so the test reduction below is
+        // the real fill's vectorizable axpy. The complex `+= w * phi` it
+        // replaces evaluates the same two expressions in the same order.
+        std::vector<double> phi_c_re(N), phi_c_im(N), phi_s_re(N),
+                            phi_s_im(N), phi_co_re(N), phi_co_im(N);
 
         for (size_t qt = 0; qt < nq; qt++) {
             size_t o = m * nq + qt;
@@ -2155,8 +2220,9 @@ galerkin_far_fill_cplx_impl(
             double tmx = ot(o, 0), tmy = ot(o, 1), tmz = ot(o, 2);
             double a_sq = ar(o) * ar(o);
 
+            // ---- Stage A: geometry + the distance table ------------------
             for (size_t n = 0; n < N; n++) {
-                // ---- Geometry: real, and identical to the real fill -------
+                // Real, and identical to the real fill.
                 double cnx = sc(n, 0), cny = sc(n, 1), cnz = sc(n, 2);
                 double tnx = st(n, 0), tny = st(n, 1), tnz = st(n, 2);
                 double rvx = cmx - cnx, rvy = cmy - cny, rvz = cmz - cnz;
@@ -2176,15 +2242,100 @@ galerkin_far_fill_cplx_impl(
                 double rho2 = rho_eval * rho_eval;
                 double r0_2 = std::sqrt(rho2 + dz2*dz2);
                 double r0_1 = std::sqrt(rho2 + dz1*dz1);
+
+                rho_eval_a[n] = rho_eval;
+                z_a[n] = z_eval;
+                dz1_a[n] = dz1; dz2_a[n] = dz2;
+                r0_1_a[n] = r0_1; r0_2_a[n] = r0_2;
+                td_a[n] = td; rpf_a[n] = rho_proj_factor;
+
+                size_t base = n * S;
+                // P from r1 - r2 = 4Hz/(r1+r2), exact where the subtraction
+                // would not be (#205); phi = kP.
+                double Pd = 2.0 * H * z_eval / (r0_1 + r0_2);
+                td_d[base + IX_R2] = r0_2;
+                td_d[base + IX_R1] = r0_1;
+                td_d[base + IX_P] = Pd;
+                td_d[base + IX_HP] = H + Pd;
+                td_d[base + IX_HM] = H - Pd;
+                for (size_t q = 0; q < n_qp; q++) {
+                    // delta_q built from the observer-independent difference,
+                    // exact however far away the observer sits (#205).
+                    double z_q = H * glt_v[q];
+                    double dz_q = z_eval - z_q;
+                    double r0_q = std::sqrt(rho2 + dz_q*dz_q);
+                    r0q_inv_a[n * n_qp + q] = 1.0 / r0_q;
+                    double dz_ref = gl_near2[q] ? dz2 : dz1;
+                    double r_ref  = gl_near2[q] ? r0_2 : r0_1;
+                    td_d[base + IX_DQ + q] = H * gl_step[q] * (dz_q + dz_ref)
+                                             / (r0_q + r_ref);
+                }
+            }
+
+            // ---- Stage B: every transcendental, one vector sweep ---------
+            sg_cplx_phase_sweep(td_d, Pv, k.real(), k.imag(),
+                                t_ea, t_em, t_s, t_h);
+
+            // ---- Stage C: assembly + plain tangential projection ---------
+            for (size_t n = 0; n < N; n++) {
+                size_t base = n * S;
+                // e^{-jkd} and e^{-jkd} - 1 at table entry i (the header).
+                auto E_at = [&](size_t i) -> C {
+                    double hh = t_h[i];
+                    double c = 1.0 - 2.0 * hh * hh;
+                    return C(t_ea[i] * c, -(t_ea[i] * t_s[i]));
+                };
+                auto M_at = [&](size_t i) -> C {
+                    double hh = t_h[i];
+                    double h2 = 2.0 * hh * hh;
+                    return C(t_em[i] * (1.0 - h2) - h2, -(t_ea[i] * t_s[i]));
+                };
+                // cosh and sinh of a = Im(k)*d, sinh from expm1 so it is
+                // relative as a -> 0: sinh a = expm1(a)(e^a + 1)/(2e^a).
+                auto cosh_at = [&](size_t i) -> double {
+                    double e = t_ea[i];
+                    return 0.5 * (e + 1.0 / e);
+                };
+                auto sinh_at = [&](size_t i) -> double {
+                    double e = t_ea[i];
+                    return t_em[i] * (e + 1.0) / (2.0 * e);
+                };
+                // sin(kd) = sin(y)cosh(a) + j cos(y)sinh(a).
+                auto sin_at = [&](size_t i) -> C {
+                    double hh = t_h[i];
+                    double c = 1.0 - 2.0 * hh * hh;
+                    return C(t_s[i] * cosh_at(i), c * sinh_at(i));
+                };
+                // sin_minus_arg at u = k*d: `sin_minus_arg`'s own series
+                // below |u| = 0.1, term for term, and the table's sin(kd) - u
+                // above it. The switch compares |u|^2 against 0.01 rather than
+                // calling `std::abs` (a libm `cabs`, twice a pair); either
+                // side of the switch is accurate there, so where the two
+                // comparisons could disagree — within an ulp of |u| = 0.1 —
+                // either answer is right.
+                auto smarg_at = [&](C u, size_t i) -> C {
+                    if (u.real() * u.real() + u.imag() * u.imag() < 0.01) {
+                        C u2 = u * u;
+                        return -(u * u2) / 6.0 *
+                               (1.0 - u2 / 20.0 *
+                                          (1.0 - u2 / 42.0 *
+                                                     (1.0 - u2 / 72.0 *
+                                                                (1.0 - u2 / 110.0))));
+                    }
+                    return sin_at(i) - u;
+                };
+
+                double rho_eval = rho_eval_a[n];
+                double z_eval = z_a[n];
+                double dz1 = dz1_a[n], dz2 = dz2_a[n];
+                double r0_1 = r0_1_a[n], r0_2 = r0_2_a[n];
+                double td = td_a[n], rho_proj_factor = rpf_a[n];
+                double H = H_n[n];
+                double rho2 = rho_eval * rho_eval;
                 double inv_r0_2 = 1.0 / r0_2, inv_r0_1 = 1.0 / r0_1;
 
-                // ---- Phases: complex. Halves, as #205 needs them ----------
-                C ph2 = -0.5 * k * r0_2;
-                C ph1 = -0.5 * k * r0_1;
-                C eh2 = cexp_i(ph2), eh1 = cexp_i(ph1);
-                C s_h2 = std::sin(ph2), s_h1 = std::sin(ph1);
-                C ef2 = eh2 * eh2, ef1 = eh1 * eh1;   // e^{-jkr}
-                C phi_ang = 2.0 * k * H * z_eval / (r0_1 + r0_2);
+                C ef2 = E_at(base + IX_R2), ef1 = E_at(base + IX_R1);  // e^{-jkr}
+                C mf2 = M_at(base + IX_R2), mf1 = M_at(base + IX_R1);  // ... - 1
 
                 C G0_2 = ef2 * inv_r0_2;
                 C G0_1 = ef1 * inv_r0_1;
@@ -2199,31 +2350,47 @@ galerkin_far_fill_cplx_impl(
 
                 double int_inv_r0 = stable_asinh_diff(-dz1, -dz2, rho2,
                                                       r0_1, r0_2);
+
+                // ---- Folded source's geometry (#205) ---------------------
+                // X and t_sing are GEOMETRY — no k anywhere — so `std::asinh`
+                // here sees the same real argument it sees in the real fill.
+                double X = (dz1 * dz2 >= 0.0)
+                    ? 2.0 * H * (dz1 + dz2) / (dz1 * r0_2 + dz2 * r0_1)
+                    : (dz1 * r0_2 - dz2 * r0_1) / rho2;
+                double t_asx = std::asinh(X);
+                double t_sing =
+                    (std::fabs(X) < 1.0)
+                        ? asinh_minus_arg_from_t(t_asx)
+                              + H * rho2 * X * X / ((r0_1 + r0_2) * r0_1 * r0_2)
+                        : t_asx - H * (inv_r0_1 + inv_r0_2);
+
+                C g2 = mf2 * inv_r0_2;   // (e^{-jkr}-1)/r
+                C g1 = mf1 * inv_r0_1;
+
+                // Both node sums in one pass; each accumulates in its own
+                // order, q ascending, as the two loops it replaces did.
+                //   int_reg: sum gw (e^{-jkr_q} - 1)/r_q
+                //   m_reg:   sum gw [g(r_ref + delta) - g(r_ref)] / ... (#205)
                 C int_reg(0.0, 0.0);
-                // Per-node delta phases, kept exact the way the real fill
-                // keeps them: delta_q is built from the observer-independent
-                // difference, and the node's half angle is the SUM of the
-                // reference half angle and the delta half angle (#799).
+                C m_reg = w_hi * g2 + w_lo * g1;
                 for (size_t q = 0; q < n_qp; q++) {
-                    double z_q = H * glt_v[q];
-                    double dz_q = z_eval - z_q;
-                    double r0_q = std::sqrt(rho2 + dz_q*dz_q);
-                    double inv_r0_q = 1.0 / r0_q;
-                    double dz_ref = gl_near2[q] ? dz2 : dz1;
-                    double r_ref  = gl_near2[q] ? r0_2 : r0_1;
-                    double delta = H * gl_step[q] * (dz_q + dz_ref)
-                                   / (r0_q + r_ref);
-                    C ph_d = -0.5 * k * delta;
-                    C ph_q = (gl_near2[q] ? ph2 : ph1) + ph_d;
-                    // e^{jy} - 1 = 2j sin(y/2) e^{jy/2}, y = 2*ph_q.
-                    C em1_q = 2.0 * J * std::sin(ph_q) * cexp_i(ph_q);
+                    bool hi = gl_near2[q];
+                    double inv_r0_q = r0q_inv_a[n * n_qp + q];
+                    double delta = td_d[base + IX_DQ + q];
+                    C e_ref = hi ? ef2 : ef1;
+                    C m_ref = hi ? mf2 : mf1;
+                    C gr = hi ? g2 : g1;
+                    C em1 = M_at(base + IX_DQ + q);   // e^{-jk delta} - 1
+                    C e_em1 = e_ref * em1;
+                    C em1_q = e_em1 + m_ref;          // e^{-jkr_q} - 1
                     int_reg += em1_q * inv_r0_q * glw_v[q];
+                    double w = glw_v[q] * inv_r0_q;
+                    m_reg += w * (e_em1 - gr * delta);
                 }
                 int_reg *= H;
                 C int_G0 = int_inv_r0 + int_reg;
 
                 C Ez_boundary = dz2 * term_const2 - dz1 * term_const1;
-                C k_sq = k * k;
                 C inside = Ez_boundary + k_sq * int_G0;
                 C Ez_const = -J * pref_z * inside;
 
@@ -2242,74 +2409,61 @@ galerkin_far_fill_cplx_impl(
 
                 // ---- Folded source (I = cos k(xi) - 1), #205 -------------
                 C cm1 = cos_kH_m1[n];
-                // X and t_sing are GEOMETRY — no k anywhere — so `std::asinh`
-                // here sees the same real argument it sees in the real fill.
-                double X = (dz1 * dz2 >= 0.0)
-                    ? 2.0 * H * (dz1 + dz2) / (dz1 * r0_2 + dz2 * r0_1)
-                    : (dz1 * r0_2 - dz2 * r0_1) / rho2;
-                double t_asx = std::asinh(X);
-                double t_sing =
-                    (std::fabs(X) < 1.0)
-                        ? asinh_minus_arg_from_t(t_asx)
-                              + H * rho2 * X * X / ((r0_1 + r0_2) * r0_1 * r0_2)
-                        : t_asx - H * (inv_r0_1 + inv_r0_2);
-
-                C g2 = 2.0 * J * s_h2 * eh2 * inv_r0_2;   // (e^{-jkr}-1)/r
-                C g1 = 2.0 * J * s_h1 * eh1 * inv_r0_1;
-                C m_reg = w_hi * g2 + w_lo * g1;
-                for (size_t q = 0; q < n_qp; q++) {
-                    double z_q = H * glt_v[q];
-                    double dz_q = z_eval - z_q;
-                    double r0_q = std::sqrt(rho2 + dz_q*dz_q);
-                    double inv_r0_q = 1.0 / r0_q;
-                    bool hi = gl_near2[q];
-                    double dz_ref = hi ? dz2 : dz1;
-                    double r_ref  = hi ? r0_2 : r0_1;
-                    double delta = H * gl_step[q] * (dz_q + dz_ref)
-                                   / (r0_q + r_ref);
-                    C ph_d = -0.5 * k * delta;
-                    C em1 = 2.0 * J * std::sin(ph_d) * cexp_i(ph_d);
-                    C e_ref = hi ? ef2 : ef1;
-                    C gr = hi ? g2 : g1;
-                    double w = glw_v[q] * inv_r0_q;
-                    m_reg += w * (e_ref * em1 - gr * delta);
-                }
-                C smarg = smarg_kH[n];
-                C d_int = t_sing + H * m_reg - (smarg / k) * (G0_1 + G0_2);
+                C d_int = t_sing + H * m_reg - smarg_kH_k[n] * (G0_1 + G0_2);
                 C inner_cos = k_sq * d_int - cm1 * Ez_boundary;
                 C Ez_cos = J * pref_z * inner_cos;
 
-                C kH = k * H;
-                C A_ang = kH + phi_ang, B_ang = kH - phi_ang;
+                // A = kH + phi = k(H + P), B = kH - phi = k(H - P), each the
+                // phase of its own table entry.
+                C A_ang = k * td_d[base + IX_HP];
+                C B_ang = k * td_d[base + IX_HM];
                 double d_lin = -8.0 * H * H * H * z_eval * rho2
                                / ((rho2 + dz1 * dz2 + r0_1 * r0_2)
                                   * (r0_1 + r0_2) * r0_1 * r0_2);
-                C cph_p = std::cos(phi_ang), sph_p = std::sin(phi_ang);
+                // cos phi, sin phi at phi = kP = y + ja.
+                double hp = t_h[base + IX_P];
+                double cy_p = 1.0 - 2.0 * hp * hp;
+                double sy_p = t_s[base + IX_P];
+                double ch_p = cosh_at(base + IX_P);
+                double sh_p = sinh_at(base + IX_P);
+                C cph_p(cy_p * ch_p, -(sy_p * sh_p));
+                C sph_p(sy_p * ch_p, cy_p * sh_p);
                 C w_even =
-                    (A_ang * sin_minus_arg(B_ang) - B_ang * sin_minus_arg(A_ang))
-                        / kH
+                    (A_ang * smarg_at(B_ang, base + IX_HM)
+                     - B_ang * smarg_at(A_ang, base + IX_HP))
+                        * inv_kH[n]
                     + (d_lin / H) * sin2 * cph_p;
                 C w_odd = sin2 * (-(rho2 * X) / (r0_1 * r0_2)) * sph_p;
                 // e^{-jk(r1+r2)/2} = e^{-jkr2}·e^{-j*phi}
-                C W = (ef2 * cexp_i(-phi_ang)) * (w_even + J * w_odd);
+                C W = (ef2 * E_at(base + IX_P)) * (w_even + J * w_odd);
                 C b_rho = -k * W + rho2 * cm1 * (term_const2 - term_const1);
                 C Erho_cos = J * pref_rho * b_rho;
 
-                phi_c[n]  = td * Ez_const + rho_proj_factor * Erho_const;
-                phi_s[n]  = td * Ez_sin   + rho_proj_factor * Erho_sin;
-                phi_co[n] = td * Ez_cos   + rho_proj_factor * Erho_cos;
+                C pc  = td * Ez_const + rho_proj_factor * Erho_const;
+                C ps  = td * Ez_sin   + rho_proj_factor * Erho_sin;
+                C pco = td * Ez_cos   + rho_proj_factor * Erho_cos;
+                phi_c_re[n] = pc.real();   phi_c_im[n] = pc.imag();
+                phi_s_re[n] = ps.real();   phi_s_im[n] = ps.imag();
+                phi_co_re[n] = pco.real(); phi_co_im[n] = pco.imag();
             }
 
             // ---- Test reduction, same order as `_tested_contrib_rows` ----
+            // `w * phi` spelled re/im, as std::complex's operator* evaluates
+            // it, so the axpy vectorizes (the real fill's loop).
             for (size_t e = e0; e < e1; e++) {
-                C w = w_p[e * nq + qt];
-                C *rc  = bc  + (e - e0) * N;
-                C *rs  = bs  + (e - e0) * N;
-                C *rco = bco + (e - e0) * N;
+                double wr = w_p[e * nq + qt].real();
+                double wi = w_p[e * nq + qt].imag();
+                double *rc  = reinterpret_cast<double *>(bc  + (e - e0) * N);
+                double *rs  = reinterpret_cast<double *>(bs  + (e - e0) * N);
+                double *rco = reinterpret_cast<double *>(bco + (e - e0) * N);
+                MW_OMP_SIMD()
                 for (size_t n = 0; n < N; n++) {
-                    rc[n]  += w * phi_c[n];
-                    rs[n]  += w * phi_s[n];
-                    rco[n] += w * phi_co[n];
+                    rc[2*n]     += wr * phi_c_re[n]  - wi * phi_c_im[n];
+                    rc[2*n + 1] += wr * phi_c_im[n]  + wi * phi_c_re[n];
+                    rs[2*n]     += wr * phi_s_re[n]  - wi * phi_s_im[n];
+                    rs[2*n + 1] += wr * phi_s_im[n]  + wi * phi_s_re[n];
+                    rco[2*n]    += wr * phi_co_re[n] - wi * phi_co_im[n];
+                    rco[2*n + 1]+= wr * phi_co_im[n] + wi * phi_co_re[n];
                 }
             }
         }
@@ -2868,6 +3022,36 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("cancel_flag") = 0,
           py::arg("out") = py::none(),
           py::arg("scale") = std::complex<double>(1.0, 0.0));
+    m.def("sg_cplx_phase_sweep",
+          [](py::array_t<double, py::array::c_style | py::array::forcecast> d,
+             std::complex<double> k, bool pad) {
+              // The far fill's Stage B on its own (momwire#1224), padded and
+              // aligned exactly as the fill calls it, for the tests to pin
+              // against scalar references. Returns (ea, em, s, h).
+              // `pad=false` is the red control: the sweep over exactly n
+              // entries, whose last n mod 4 take the loop's scalar tail.
+              auto dv = d.unchecked<1>();
+              const size_t n = (size_t)dv.shape(0);
+              const size_t nv = (n + SG_CPLX_LANES - 1) / SG_CPLX_LANES
+                                * SG_CPLX_LANES;
+              std::vector<double> buf(5 * nv + 4, 0.0);
+              double *b = buf.data();
+              b += ((32 - (reinterpret_cast<uintptr_t>(b) & 31)) & 31)
+                   / sizeof(double);
+              for (size_t i = 0; i < n; i++) b[i] = dv(i);
+              sg_cplx_phase_sweep(b, pad ? nv : n, k.real(), k.imag(),
+                                  b + nv, b + 2 * nv, b + 3 * nv, b + 4 * nv);
+              py::array_t<double> ea(n), em(n), s(n), h(n);
+              double *outs[4] = {ea.mutable_data(), em.mutable_data(),
+                                 s.mutable_data(), h.mutable_data()};
+              for (int t = 0; t < 4; t++)
+                  std::copy(b + (t + 1) * nv, b + (t + 1) * nv + n, outs[t]);
+              return py::make_tuple(ea, em, s, h);
+          },
+          "The complex-k Galerkin far fill's vector sweep (momwire#1224): "
+          "for distances d and complex k, (exp(a), expm1(a), sin(y), "
+          "sin(y/2)) with a = Im(k)*d, y = Re(k)*d.",
+          py::arg("d"), py::arg("k"), py::arg("pad") = true);
 
     m.def("sinusoidal_field_tensor_cplx", &sinusoidal_field_tensor_cplx,
           "Complex-wavenumber twin of sinusoidal_field_tensor (momwire#1222): "

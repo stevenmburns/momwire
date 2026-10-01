@@ -313,6 +313,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_fma_inline.h",
     # Design D4's vector bracket, included by `_accel_razor.cpp`.
     "src/momwire/_accel_razor_cplx.h",
+    # The complex-k Galerkin far fill's vector sweep (momwire#1224), included
+    # by `_accel_sinusoidal.cpp`.
+    "src/momwire/_accel_sinusoidal_cplx.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -334,6 +337,11 @@ _ACCEL_SOURCES = [
     # `exp` as `omp declare simd`, which is TU-wide and, in the razor TU,
     # changed the codegen of kernels it was not meant for.
     "src/momwire/_accel_razor_cplx.cpp",
+    # momwire#1224: the complex-k Galerkin far fill's transcendental sweep.
+    # Its own TU for the razor bracket's reason: it declares `exp` as
+    # `omp declare simd`, which is TU-wide, and the sinusoidal TU's real
+    # fill is byte-frozen.
+    "src/momwire/_accel_sinusoidal_cplx.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
