@@ -1724,12 +1724,13 @@ def _first_groups(*cols):
         del sc
     gid = np.cumsum(new) - 1
     first = idx[new]
+    del new
+    # `_near_interface._first_appearance`: the groups numbered by their first
+    # index without sorting those indices (momwire#1224).
+    rank, first_sorted = _near_interface._first_appearance(first, n)
     inv = np.empty(n, dtype=np.intp)
-    inv[idx] = gid
-    order = np.argsort(first, kind="stable")
-    rank = np.empty_like(order)
-    rank[order] = np.arange(order.size)
-    return first[order], rank[inv]
+    inv[idx] = rank[gid]
+    return first_sorted, inv
 
 
 def _first_ints(ids):
@@ -1737,10 +1738,8 @@ def _first_ints(ids):
     if ids.size == 0:
         return np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.intp)
     _u, first, inv = np.unique(ids, return_index=True, return_inverse=True)
-    order = np.argsort(first, kind="stable")
-    rank = np.empty_like(order)
-    rank[order] = np.arange(order.size)
-    return first[order], rank[np.asarray(inv).ravel()]
+    rank, first_sorted = _near_interface._first_appearance(first, ids.size)
+    return first_sorted, rank[np.asarray(inv).ravel()]
 
 
 class _FastEnds(NamedTuple):
@@ -2220,8 +2219,8 @@ class _ProductTiles:
         U = plan.n_rows
         n_key = plan.key_r.size
         # The one call's columns: exact-ρ classes of the keys, ascending.
-        _r_u, key_cls = np.unique(plan.key_r, return_inverse=True)
-        key_cls = np.asarray(key_cls).ravel()
+        # (the plan's `KeyIndex` holds exactly this `np.unique` already)
+        _r_u, key_cls = plan.keys.r_unique, plan.keys.r_inverse
         rows_per_key = np.zeros(n_key, dtype=np.int64)
         for g, kj in enumerate(plan.kids):
             rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound

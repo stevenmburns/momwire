@@ -1243,13 +1243,24 @@ class KeyIndex:
     `ProductSet` it describes, so the two share the sorted arrays."""
 
     def __init__(self, key_r, key_zl):
-        r_u = np.unique(key_r)  # -0.0 cannot occur in rho_eff >= a > 0
-        zl_u = np.unique(key_zl)
+        # Each key's two class numbers straight from the sorts (momwire#1224)
+        # rather than searched back afterwards: `np.unique(..., return_
+        # inverse=True)` sorts and merges `==` neighbours (−0.0 with 0.0;
+        # −0.0 cannot occur in rho_eff >= a > 0 anyway), so a key's inverse is
+        # the index a search of the unique array finds for it. Only the codes'
+        # internal numbering could differ from the searched one, and `ids`
+        # answers global key ids, which do not depend on it.
+        # `r_inverse` is kept for `_crossing_fill._ProductTiles`, which
+        # classes the keys by exact ρ the same way.
+        r_u, r_inv = np.unique(key_r, return_inverse=True)
+        zl_u, zl_inv = np.unique(key_zl, return_inverse=True)
+        self.r_unique, self.r_inverse = r_u, np.asarray(r_inv).ravel()
         self._r_ids = _SortedIds(r_u)
         self._zl_ids = _SortedIds(zl_u)
-        key_code = self._r_ids.ids(key_r).astype(np.int64) * zl_u.size + (
-            self._zl_ids.ids(key_zl)
+        key_code = (
+            self.r_inverse.astype(np.int64) * zl_u.size + np.asarray(zl_inv).ravel()
         )
+        del zl_inv
         self._n_zl = zl_u.size
         self._key_ids = _SortedCodes(key_code)
         self.n_key = int(np.asarray(key_r).size)
@@ -3108,12 +3119,28 @@ def _unique_tri(tri):
         del col
     gid = np.cumsum(new_group) - 1
     first = idx[new_group]  # one representative per group, sorted order
+    del new_group
+    rank, first_sorted = _first_appearance(first, n)
     inverse = np.empty(n, dtype=np.intp)
-    inverse[idx] = gid
-    order = np.argsort(first, kind="stable")  # groups, first-appearance order
-    rank = np.empty_like(order)
-    rank[order] = np.arange(order.size)
-    return tri[first[order]], rank[inverse]
+    inverse[idx] = rank[gid]
+    return tri[first_sorted], inverse
+
+
+def _first_appearance(first, n):
+    """`(rank, first_sorted)` of DISTINCT indices `first` into a length-`n`
+    array: `rank[j]` is how many of them are smaller than `first[j]` -- group
+    j's number in first-appearance order -- and `first_sorted` is them
+    ascending. The answer of `order = argsort(first)`, `rank[order] = arange`,
+    `first[order]`, as a mask and a running count (momwire#1224): the indices
+    are distinct and bounded by `n`, so the mask's nonzeros ARE them in order
+    and its prefix count below each is its rank; no sort."""
+    mask = np.zeros(n, dtype=bool)
+    mask[first] = True
+    count = np.cumsum(mask, dtype=np.intp)
+    count -= 1
+    rank = count[first]
+    del count
+    return rank, np.flatnonzero(mask)
 
 
 def _unique_triples(rho_b, z_b, zp_b):
