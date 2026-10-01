@@ -1230,6 +1230,39 @@ class _SortedCodes:
         return out
 
 
+class KeyIndex:
+    """Exact-`==` lookup of a product's line KEYS (ρ_eff, z_line): `ids(r, zl)`
+    is the global key id of each query pair — its index into `key_r` /
+    `key_zl` — and −1 where no key holds it. Two pairs are one key iff both
+    floats compare equal (−0.0 with 0.0, NaN never), the classes
+    `_crossing_fill._product_plan` numbers its keys by.
+
+    Split out of `ProductSet.value_rows` (whose key step it is, unchanged) so
+    the crossing fill's end loops can name a key without a per-group Python
+    map (momwire#1224): the plan builds it once and hands it to the
+    `ProductSet` it describes, so the two share the sorted arrays."""
+
+    def __init__(self, key_r, key_zl):
+        r_u = np.unique(key_r)  # -0.0 cannot occur in rho_eff >= a > 0
+        zl_u = np.unique(key_zl)
+        self._r_ids = _SortedIds(r_u)
+        self._zl_ids = _SortedIds(zl_u)
+        key_code = self._r_ids.ids(key_r).astype(np.int64) * zl_u.size + (
+            self._zl_ids.ids(key_zl)
+        )
+        self._n_zl = zl_u.size
+        self._key_ids = _SortedCodes(key_code)
+        self.n_key = int(np.asarray(key_r).size)
+
+    def ids(self, r, zl):
+        ri = self._r_ids.ids(r)
+        li = self._zl_ids.ids(zl)
+        ok = (ri >= 0) & (li >= 0)
+        kj = np.full(ri.shape, -1, dtype=np.intp)
+        kj[ok] = self._key_ids.ids(ri[ok].astype(np.int64) * self._n_zl + li[ok])
+        return kj
+
+
 class ProductSet:
     """The distinct triples of a crossing main sandwich held as FACTORS
     (momwire#1173 design B), built by `_crossing_fill._product_plan`.
@@ -1285,6 +1318,7 @@ class ProductSet:
         kid,
         kernels=KEYS,
         n_rows=None,
+        key_index=None,
     ):
         if slot not in ("z", "zp"):
             raise ValueError(f"slot must be 'z' or 'zp', got {slot!r}")
@@ -1312,15 +1346,9 @@ class ProductSet:
         self.complete = True
         self.fast = None  # the crossing fill's end-loop index, if it built one
         self._gz_ids = _SortedIds(gz)
-        r_u = np.unique(key_r)  # -0.0 cannot occur in rho_eff >= a > 0
-        zl_u = np.unique(key_zl)
-        self._r_ids = _SortedIds(r_u)
-        self._zl_ids = _SortedIds(zl_u)
-        key_code = self._r_ids.ids(key_r).astype(np.int64) * zl_u.size + (
-            self._zl_ids.ids(key_zl)
-        )
-        self._n_zl = zl_u.size
-        self._key_ids = _SortedCodes(key_code)
+        # `key_index`: the plan's `KeyIndex` over these very keys, shared
+        # rather than rebuilt.
+        self.keys = KeyIndex(key_r, key_zl) if key_index is None else key_index
         n_key = key_r.size
         self._n_key = n_key
         if (
@@ -1350,12 +1378,8 @@ class ProductSet:
             return out
         gcol, lcol = (1, 2) if self.slot == "z" else (2, 1)
         zi = self._gz_ids.ids(rows[:, gcol])
-        ri = self._r_ids.ids(rows[:, 0])
-        li = self._zl_ids.ids(rows[:, lcol])
-        ok = (zi >= 0) & (ri >= 0) & (li >= 0)
-        kj = np.full(rows.shape[0], -1, dtype=np.intp)
-        kj[ok] = self._key_ids.ids(ri[ok].astype(np.int64) * self._n_zl + li[ok])
-        ok &= kj >= 0
+        kj = self.keys.ids(rows[:, 0], rows[:, lcol])
+        ok = (zi >= 0) & (kj >= 0)
         if self._codes is None:
             out[ok] = self.rowtab[0][zi[ok], kj[ok]]
             return out
