@@ -13,15 +13,39 @@ that process.
 1. Download
    [`momwire-eznec-windows.zip`](https://github.com/stevenmburns/momwire/releases/latest/download/momwire-eznec-windows.zip)
    from the latest release.
-2. Unzip it anywhere. **Keep the folder together** — the exe needs the
-   `_internal` runtime beside it, and a lone copied-out `.exe` is the one way
-   a correct download still fails.
-3. Point EZNEC's external-engine path at `momwire-eznec.exe` inside that
+2. Before extracting, right-click the zip, choose Properties, tick
+   **Unblock** and click OK. That clears the download mark on every file
+   inside at once.
+3. Extract it into **a folder of its own**, for example
+   `C:\momwire-eznec\` (the zip already contains a `momwire-eznec` folder).
+   Not into EZNEC's own folders, and not over a previous release.
+   **Keep the folder together**: the exe needs the `_internal` runtime
+   beside it, and a lone copied-out `.exe` is the one way a correct
+   download still fails.
+4. Point EZNEC's external-engine path at `momwire-eznec.exe` inside that
    folder.
 
 That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
 become momwire's.
+
+### Updating to a new release
+
+Delete the `momwire-eznec` folder entirely, then extract the new zip in its
+place. The path stays the same, so EZNEC's setting does not change.
+
+Never extract a new release over an old one. Extracting replaces the files
+that share a name and leaves the rest, so the old release's files stay
+behind in `_internal`. That includes its version record, and it can include
+libraries.
+
+- If Windows says a file is in use while you delete the folder, that is the
+  resident engine described below. Wait fifteen minutes for it to retire, or
+  end `momwire-eznec-engine.exe` in Task Manager.
+- Line 2 of every `NEC5.OUT` names the engine that answered, for example
+  ` momwire 0.69.0 bspline avx2`. If it ends in `(stale: 0.66.0)`, the
+  folder holds files from an older release: delete it and extract the
+  current zip fresh.
 
 ### Launch economics
 
