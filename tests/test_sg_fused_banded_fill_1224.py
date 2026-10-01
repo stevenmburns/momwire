@@ -11,9 +11,10 @@ block, image, remainder, near cells, fold; on a mixed deck each pair class's
 quadrant and the transmitted directions) and scattered straight into a
 preallocated, F-ordered G (`_scatter_band`), which accumulates each basis's
 T row across bands in the whole product's order and writes the basis's row
-of G at the band holding its last entry. The whole triple never exists.
-The crossing block `t_ab`, (n_basis, n_basis) too, is asked for its live
-rows only, and before G exists.
+of G at the band holding its last entry. The whole triple never exists. Two more
+(n_basis, n_basis) arrays went with it: the crossing block `t_ab` is asked
+for its live rows only (and before G exists), and the extended kernel's
+end-bracket `C` is taken by row bands.
 
 The claim is bit-identity, and the gates here are:
 
@@ -23,11 +24,12 @@ The claim is bit-identity, and the gates here are:
     N < 60, still takes). Decks: free space, PEC (the fold), refl-coef (the
     numpy image fill under a band view), Sommerfeld above ground and fully
     buried (compose: image, remainder), a ground contact, the extended
-    kernel with a bend, a junction-port pair, a non-crossing mixed
-    deck (transmitted directions), and the crossing hub and inverted-L
-    (class views, the crossing rows). Each in several bands, and the cheap
-    decks in bands of one, two and three segments — every boundary, and
-    boundaries that cut a basis's support after one entry and after two;
+    kernel with a bend (the bracket fires, in row bands), a junction-port
+    pair, a non-crossing mixed deck (transmitted directions), and the
+    crossing hub and inverted-L (class views, the crossing rows). Each in
+    several bands, and the cheap decks in bands of one, two and three
+    segments — every boundary, and boundaries that cut a basis's support
+    after one entry and after two;
   * the fallbacks band too: a mixed class filled whole-plane, and the numpy
     far fill (no accelerator), on bands aligned to the numpy loop's blocks;
   * the banded fill ran: spies count the bands scattered (several) and the
@@ -134,6 +136,7 @@ _COUNTED = (
     "_assemble_mixed_G_banded",
     "_scatter_band",
     "_scatter_coef_product",
+    "_bracket_coef_mats",
 )
 
 
@@ -229,6 +232,9 @@ def test_banded_fill_is_bit_equal_to_the_whole_triple_fill(name, step, monkeypat
     assert counts["_scatter_band"] >= 3, counts
     assert counts["_scatter_coef_product"] == 0, counts
     assert counts_ref["_scatter_band"] == 0 and counts_ref["_scatter_coef_product"] == 1
+    if name == "ek-ell":
+        # The end bracket fired, and took its row bands.
+        assert counts["_bracket_coef_mats"] >= 1, counts
 
     assert G.shape == G_ref.shape
     assert G.flags.f_contiguous, "the banded G must reach the solve F-ordered"
