@@ -98,6 +98,10 @@ def _assemble(d, monkeypatch, whole):
     with monkeypatch.context() as m:
         m.setattr(SinusoidalGalerkinSolver, "_class_view", spy_view)
         m.setattr(SinusoidalGalerkinSolver, "_assemble_mixed_contribs", spy_fill)
+        # The whole-triple fill, whose triple is what this file compares: the
+        # fused banded fill (momwire#1224) never forms it, and is gated
+        # against this one in `test_sg_fused_banded_fill_1224`.
+        m.setattr(SinusoidalGalerkinSolver, "_band_fill_serves", lambda self, n: False)
         if whole:
             m.setattr(
                 SinusoidalGalerkinSolver,
@@ -257,6 +261,11 @@ def test_the_mixed_fill_peak_falls(monkeypatch):
         return out
 
     monkeypatch.setattr(SinusoidalGalerkinSolver, "_assemble_mixed_contribs", traced)
+    # The whole-triple fill this bound is about (the fused banded fill holds
+    # no triple at all; `test_sg_fused_banded_fill_1224` bounds that one).
+    monkeypatch.setattr(
+        SinusoidalGalerkinSolver, "_band_fill_serves", lambda self, n: False
+    )
     s = SinusoidalGalerkinSolver(**d)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
