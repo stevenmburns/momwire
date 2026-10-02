@@ -74,7 +74,10 @@ def test_negative_zero_is_the_same_key_as_zero():
 
 def test_a_forced_hash_collision_is_resolved_on_the_full_row(monkeypatch):
     """Every row hashes alike, so every probe walks the equal-hash range and
-    the row compare alone decides. A miss is a miss, a hit is its own row."""
+    the row compare alone decides. A miss is a miss, a hit is its own row.
+    The sorted runs' hash (the table store's is in C++, and its agreement
+    with the runs is tests/test_factorize_1224.py's)."""
+    monkeypatch.setattr(ni, "_HASH_MEMO", False)
     monkeypatch.setattr(
         ni, "_row_hash", lambda keys: np.zeros(keys.shape[0], dtype=np.uint64)
     )
@@ -91,7 +94,9 @@ def test_a_forced_hash_collision_is_resolved_on_the_full_row(monkeypatch):
 
 def test_rows_are_found_across_pending_runs_merges_and_compactions(monkeypatch):
     """Small thresholds force every store transition; each inserted row stays
-    findable through all of them, and iteration keeps insertion order."""
+    findable through all of them, and iteration keeps insertion order. The
+    sorted runs' transitions (the table store has none)."""
+    monkeypatch.setattr(ni, "_HASH_MEMO", False)
     monkeypatch.setattr(ni, "_MEMO_MERGE_MIN_ROWS", 12)
     monkeypatch.setattr(ni, "_MEMO_MERGE_FRACTION", 2)
     monkeypatch.setattr(ni, "_MEMO_MAX_PENDING_RUNS", 3)
@@ -115,7 +120,9 @@ def test_a_merge_of_one_run_keeps_that_run_and_is_the_full_merge(monkeypatch):
     """The first big insert into a fresh memo merges one non-empty run, and
     the store keeps that run (no copy) — the arrays `_merged` would have
     built, to the bit, since the stable sort of a sorted run is the identity.
-    Hash-equal rows are forced so the stable order is what is tested."""
+    Hash-equal rows are forced so the stable order is what is tested. The
+    sorted runs' merge (the table store has none)."""
+    monkeypatch.setattr(ni, "_HASH_MEMO", False)
     monkeypatch.setattr(ni, "_MEMO_MERGE_MIN_ROWS", 4)
     monkeypatch.setattr(
         ni, "_row_hash", lambda keys: (keys[:, 0] > 0).astype(np.uint64)
