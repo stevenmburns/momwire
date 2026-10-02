@@ -115,6 +115,19 @@ Three drive spellings, and the address picks between them
   conductor end for a series EMF to sit in, momwire says so at the
   constructor, and no captured deck asks for one.
 
+The first two meet at a CROSSING junction: a node IN the plane that a buried
+wire ENDS on, shared with ONE wire rising from it.  It is a junction and not
+a grounded node (momwire#1282, :func:`_crossing_site`), and a source there is
+the junction's through-current: named through either member, the two
+addresses are one port, as NEC-5's own prints of Dan AC6LA's deck say
+(``1,-1`` and ``6,-1``, 70.787 − j0.696 Ω both).  razor drives it as a delta
+gap on its one tent across the node; the B-spline and sinusoidal-Galerkin
+families as a node gap with the junction's continuity imposed
+(:func:`_crossing_spelling`).  A crossing node where three or more wires meet
+refuses by name, and so does the point-matched sinusoidal family, which
+places no gap on a node at all.  Every OTHER node in the plane where wires
+meet is #151's grounded junction and still refuses.
+
 The address picks the spelling one card at a time, and neither #504 U4 nor
 momwire#511 changes that: a phased deck is several cards each picking its own,
 and 0031's four are four ground-contact feeds because all four verticals stand

@@ -356,6 +356,17 @@ capability statements rather than deck errors:
   tabulated domains (the sentence states the limit and its extension
   cost). A wire lying *in* the interface refuses as the degenerate case
   it is.
+- **A source on the crossing node serves; two narrower cases refuse.** With
+  the vertical ending at z = 0 and a buried wire running down from that node,
+  the source can sit *on* the node (`EX 0,1,-1`), and naming the node through
+  the buried wire instead (`EX 0,6,-1`) gives the same answer. That matches
+  the licensed engine, which prints the same impedance for both. Every knot
+  engine serves it (`bspline`, `bspline-d1`, `razor-2p`,
+  `sinusoidal-galerkin`). It refuses by name, citing #1282, in two cases: a
+  node where three or more wires meet, and the point-matched `sinusoidal`
+  engine, which never places a source on a node. A node in the plane where
+  wires meet with nothing buried is still a grounded junction, and a source
+  there still refuses.
 - **A near-field point on a wire's ground contact** (an `NE`/`NH` grid
   point sitting exactly where a wire stands on a finite ground) refuses
   naming the point: the field there is genuinely singular — a residual
