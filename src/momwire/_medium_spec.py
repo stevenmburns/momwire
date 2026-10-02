@@ -22,9 +22,13 @@ Three labels and nothing else
   contact end above is exempt from the contact-with-buried refusal for the
   same reason.
 * refused — anything else. A wire with points on both sides of the plane
-  crosses it mid-span, and where it pierces would be momwire's guess: the
-  served spelling is the SPLIT one, a below wire ending in the plane joined
-  there to an above wire.
+  crosses it mid-span, and the served spelling is the SPLIT one, a below wire
+  ending in the plane joined there to an above wire. The split is not made
+  here: this layer labels the CALLER's wires, whose indices the feeds,
+  loads, junctions and per-wire results are keyed on, and inserting one
+  would renumber all of them. The deck seams make it, where a card's own
+  addresses survive it (`deck._polylines.split_at_plane`, momwire#667, and
+  the EZNEC seam's `_plane_crossings`, momwire#1281).
 
 There is no per-SEGMENT crossing to worry about after that, which is the point
 of labelling per WIRE: a wire that is wholly on one side has every segment on
@@ -83,10 +87,12 @@ CROSSING_REFUSAL = (
     "stands in the plane and an above wire starting there, and declare the "
     "junction between them - that deck is served, with continuity of "
     "current and the interface slope condition emerging from the fill "
-    "itself. A single polyline with points on both sides is not, because "
-    "which point the wire pierces the plane at would be momwire's guess "
-    "where it must be the model's statement (a card seam splits a STRAIGHT "
-    "wire there for you, momwire#667). Alternatively leave the "
+    "itself. A single polyline with points on both sides is not split for "
+    "you here, because feeds, loads, junctions and per-wire results are "
+    "keyed on its wire index and a split would renumber them; the deck seams "
+    "split a card wire at the plane themselves and keep its addresses (the "
+    "NEC-2 portal since momwire#667, the EZNEC seam since momwire#1281). "
+    "Alternatively leave the "
     "buried part DETACHED (a buried radial screen under a base-fed "
     "vertical is served that way, momwire#553), or raise the whole wire "
     "clear of the interface"
