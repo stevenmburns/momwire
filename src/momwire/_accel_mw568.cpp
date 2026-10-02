@@ -796,6 +796,72 @@ static py::tuple remainder_field_proj_batch_below(
     return py::make_tuple(out, mx_r1, mn_th, mx_th);
 }
 
+// The sinusoidal replay's source-node reduction (momwire#1224):
+//
+//     block[s, i, n] = sum_k shp_w[s, n, k] * proj[i, n*q + k]
+//
+// i.e. `np.einsum("snq,mnq->smn", shp_w, proj.reshape(m, N, q))`, which on
+// the SG buried x8 fill was 0.43 s of single-threaded einsum against the
+// 1.15 s projection kernel feeding it.
+//
+// Spelled as numpy's einsum spells it, so that it is einsum's bits and not
+// merely its value: per k the UNFUSED complex product (re0 re1 - im0 im1,
+// re0 im1 + im0 re1), added to an accumulator that starts at +0.0, k in
+// order (numpy's `sum_of_products` for complex types, measured equal as
+// uint64 on numpy 2.5 x86-64). That is load-bearing, not tidiness: a
+// fused spelling of the same sum agreed with einsum to 1e-16 per entry and
+// still moved SG buried x8 Z by 1.7e-11, because SG subtracts this block
+// from the scaled image and the difference is small. Each entry is its own
+// sum, so it does not depend on which chunk or thread computes it -- the
+// chunk-independence `_replay_remainder` promises its consumers.
+static py::array_t<std::complex<double>> remainder_shape_reduce(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        shp_w,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        proj) {
+    typedef std::complex<double> cd;
+    if (shp_w.ndim() != 3 || proj.ndim() != 2)
+        throw std::invalid_argument("shp_w must be (n_shape, N, q), proj (m, N*q)");
+    const py::ssize_t ns = shp_w.shape(0), N = shp_w.shape(1), q = shp_w.shape(2);
+    const py::ssize_t M = proj.shape(0);
+    if (proj.shape(1) != N * q)
+        throw std::invalid_argument("proj's second axis must be N*q of shp_w");
+    py::array_t<cd> out({ns, M, N});
+    cd *op = out.mutable_data();
+    const cd *wp = shp_w.data();
+    const cd *pp = proj.data();
+    if (q == 0) {
+        std::fill(op, op + ns * M * N, cd(0.0, 0.0));
+        return out;
+    }
+    {
+        py::gil_scoped_release release;
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t i = 0; i < M; ++i) {
+            const cd *row = pp + i * N * q;
+            for (py::ssize_t s = 0; s < ns; ++s) {
+                const cd *w = wp + s * N * q;
+                cd *o = op + (s * M + i) * N;
+                for (py::ssize_t n = 0; n < N; ++n) {
+                    const cd *wn = w + n * q;
+                    const cd *pn = row + n * q;
+                    double are = 0.0, aim = 0.0;
+                    for (py::ssize_t k = 0; k < q; ++k) {
+                        const double r0 = wn[k].real(), i0 = wn[k].imag();
+                        const double r1 = pn[k].real(), i1 = pn[k].imag();
+                        const double re = r0 * r1 - i0 * i1;
+                        const double im = r0 * i1 + i0 * r1;
+                        are = re + are;
+                        aim = im + aim;
+                    }
+                    o[n] = cd(are, aim);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 
 // --------------------------------------------------------------------------
 // momwire#568 unit 3 -- the TRANSMITTED family on the shared contour engine.
@@ -2056,6 +2122,12 @@ void register_mw568(py::module_ &m) {
     // momwire#1224: `blocked=False` reaches the per-pair composition, the
     // reference the blocked loop is gated against as uint64.
     m.attr("below_replay_blocked_1224") = true;
+    m.def("remainder_shape_reduce", &remainder_shape_reduce,
+          "The sinusoidal replay's source-node reduction, block[s, i, n] = "
+          "sum_k shp_w[s, n, k] * proj[i, n*q + k] -- the einsum "
+          "'snq,mnq->smn' in numpy's own unfused, k-ordered arithmetic -- "
+          "OpenMP over observer rows with the GIL released.",
+          py::arg("shp_w"), py::arg("proj"));
     m.def("transmitted_integrand_six", &transmitted_integrand_six,
           "The six transmitted lambda-integrands POINTWISE at complex lam — "
           "the C++ twin of _sommerfeld_transmitted._integrand_six_transmitted, "

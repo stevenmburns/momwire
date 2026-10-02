@@ -151,6 +151,13 @@ _WELL_SCALED_KD = 1.5e-3
 # so a gate has to be able to shrink it. Value unchanged.
 _REMAINDER_CHUNK_ELEMS = 1 << 19
 
+# momwire#1224: the replay's source-node reduction ("snq,mnq->smn") in C++,
+# in einsum's own arithmetic (equal as uint64 where numpy's einsum is the
+# unfused scalar loop, as on x86-64 wheels), threaded over observer rows.
+# False keeps numpy's einsum, the reference it is gated against. Tests flip
+# it; nothing else should.
+_REPLAY_REDUCE_ACCEL = _acc is not None and hasattr(_acc, "remainder_shape_reduce")
+
 # The extended-kernel payload `_field_components_bcast` takes on its GALERKIN
 # path (momwire#246), as distinct from the point-matched path's plain
 # `(src_a, ind1, ind2)` triple:
@@ -4620,13 +4627,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self._checkpoint()  # per observer chunk of the eval block
             i1 = min(i0 + chunk, M)
             table = proj(obs_c[i0:i1], obs_t[i0:i1])
-            fq = table.reshape(i1 - i0, N, q)
             # Per output element this is a sum over the q source nodes and
             # nothing else, so it does not see the chunk it is in: the block
             # a consumer gets is bit-identical to the same rows of the whole
-            # S, at any chunk size.
-            block = np.einsum("snq,mnq->smn", shp_w, fq)
-            del table, fq
+            # S, at any chunk size. True of both spellings below.
+            if _REPLAY_REDUCE_ACCEL:
+                block = _acc.remainder_shape_reduce(shp_w, table)
+            else:
+                block = np.einsum("snq,mnq->smn", shp_w, table.reshape(i1 - i0, N, q))
+            del table
             if consume is None:
                 S[:, i0:i1, :] = block
             else:
