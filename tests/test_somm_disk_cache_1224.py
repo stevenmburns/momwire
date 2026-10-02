@@ -239,7 +239,7 @@ def test_g3_a_file_from_another_version_is_not_served(store, field):
     path, ident = _path()
     wrong = dict(ident)
     wrong[field] = 999 if field == "format" else "something else"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(dc._serialize(g, wrong))
     calls = []
     dc.fetch_or_fill(KEY, _filler(g, calls))
@@ -288,7 +288,7 @@ def test_g3_disabled_by_env_touches_no_disk(store, monkeypatch):
     reason="POSIX permission bits; root ignores them",
 )
 def test_g3_an_unwritable_dir_degrades_with_one_log_line(store, caplog):
-    store.mkdir()
+    store.mkdir(parents=True, exist_ok=True)
     store.chmod(0o500)
     try:
         caplog.set_level(logging.WARNING, logger="momwire.sommerfeld_cache")
@@ -407,7 +407,7 @@ def test_g3_the_file_just_written_survives_a_tiny_budget(store, monkeypatch):
 
 
 def test_g3_stale_temp_files_are_swept(store):
-    store.mkdir()
+    store.mkdir(parents=True, exist_ok=True)
     stale = store / ".orphan.npz.123.abc.tmp"
     fresh = store / ".live.npz.456.def.tmp"
     stale.write_bytes(b"x")
