@@ -1039,8 +1039,11 @@ def _plane_crossings(deck: Nec5Deck) -> dict[int, _PlaneCrossing]:
     neither is any card over free space.
 
     A ``GW`` is straight, so it meets the plane at most once and the point is
-    the deck's own statement — the reason this is a split and not the guess a
-    polyline crossing would be (``_medium_spec.CROSSING_REFUSAL``).
+    the deck's own statement.  The split is made here and not in the solver
+    because only here do the deck's ADDRESSES survive it: the solver keys
+    feeds, loads and results on its caller's wire indices, and refuses a
+    polyline through the plane rather than renumber them
+    (``_medium_spec.CROSSING_REFUSAL``).
     """
     crossings: dict[int, _PlaneCrossing] = {}
     if not _has_interface(deck):
