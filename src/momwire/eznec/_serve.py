@@ -40,14 +40,42 @@ Fresnel factors instead of through an image, in the one readout both seams
 call, so ``RP 0`` on a buried deck is the same arithmetic as ``RP 0`` on any
 other.  What a buried deck still cannot answer is its NEAR field, which is
 momwire#524 phase 3.
-Three GEOMETRIES around it refuse too, and none of them says "buried wires
-are not served" any more: a single wire crossing the interface MID-SPAN (the
-crossing junction - two cards meeting at z = 0 - is served, momwire#667,
-and the sentence names that spelling); a buried wire over ``GN 1`` or a bare ``GD``,
+A wire CROSSING the interface is served two ways: as the crossing junction
+written out (a buried card ending at z = 0 and a card rising from that node,
+momwire#667), and since momwire#1281 as ONE card spanning the plane, which
+:func:`_plane_crossings` splits at the exact point its line meets z = 0 into
+that same junction ("One card through the plane", below).  Two GEOMETRIES
+around it refuse, and neither says "buried wires are not served": a buried
+wire (or the buried part of a crossing one) over ``GN 1`` or a bare ``GD``,
 neither of which has a lower medium to bury it in; and a buried wire on a
 deck that also stands a wire END in the plane — the combination momwire#553
-measured itself out of, whose sentence quotes both banked phase-0 anchors as
-the numbers phase 2 has to meet.
+measured itself out of.
+
+One card through the plane
+--------------------------
+A ``GW`` with ends strictly on both sides of a finite ground is cut where its
+line meets z = 0, which for a straight card is a fact of the deck rather than
+a choice of momwire's.  Every deck node keeps its point, so every address
+(``Nec5Node``, the signed spelling) names what it named before.  Two cases:
+
+* z = 0 falls ON node ``k`` (within ``_ground_spec.ground_touch_tol``, the
+  solver's own "in the plane"): the card becomes two pieces meeting at that
+  node, which is now the crossing node.  Nothing else moves.
+* z = 0 falls INSIDE segment ``s``: that segment becomes two, one in each
+  medium, so ``N`` segments solve as ``N + 1``.  A piece is a uniform run, so
+  each half of the cut segment is a piece of its own, junctioned to the run
+  on its side at the segment's old end node — exactly the four-card deck a
+  user would write by hand, and solved as that deck to the last bit.
+
+NEC-5 keeps the straddling segment WHOLE (measured 2026-10-01, momwire#1281:
+21 segments, z = 0 inside the first, 72.373 + j4.336 against 71.296 + j0.044
+for the deck hand-split at z = 0).  This seam does not copy that: a segment
+with current in both media is not a discretisation of the crossing junction.
+The difference is a discretisation choice and vanishes when a segment
+boundary lands on z = 0.  The printout keeps the deck's numbering — element
+``s`` prints the mean of its two end-node currents and its charge at its old
+centre, read on whichever half holds that centre — and says the wire was
+split, in the STRUCTURE SPECIFICATION block.
 
 Courtesy stance, the arc's throughout: every NEC-5 fact below was measured
 off captured decks and captured printouts under ``tests/fixtures/eznec/``,
@@ -711,35 +739,37 @@ _REFUSE_NEAR_FIELD_BELOW = (
 )
 # The buried rung LANDED with momwire#553: a wire strictly below a ``GN 0`` /
 # ``GN 2`` interface is served, through the per-segment medium and the two
-# buried Sommerfeld families.  What is left of the old sentence splits three
-# ways, and each of the three names a DIFFERENT missing thing rather than
-# repeating "buried wires are not served":
+# buried Sommerfeld families.  What is left of the old sentence names a
+# DIFFERENT missing thing each time rather than repeating "buried wires are
+# not served":
 #
-#   * a single wire that crosses the interface MID-SPAN — refused because
-#     where it pierces the plane would be momwire's guess; the crossing
-#     junction spelling (a buried wire ENDING in the plane, sharing that
-#     node with a wire rising from it) is served by this seam since
-#     momwire#667, and the sentence below names it;
 #   * a buried wire over ``GN 1`` or a bare ``GD`` — no lower medium exists
-#     under either card, so there is nothing to bury the wire in;
+#     under either card, so there is nothing to bury the wire in.  The buried
+#     PART of a card crossing z = 0 is such a wire;
 #   * the one OUTPUT a buried deck cannot answer — its NEAR field, which is
 #     momwire#524 phase 3.
+#
+# A card crossing the interface mid-span used to be a third: refused because
+# where it pierces the plane looked like momwire's guess.  For a straight card
+# it is not a guess, and momwire#1281 splits it there (`_plane_crossings`).
 #
 # Impedance, currents, charges and the PATTERN serve; momwire#570 moved the
 # last of those from the column on the right to the column on the left, by
 # giving the shared readout the transmitted far-zone factors a below-interface
 # element radiates through.  That sentence is the serve matrix and it is
 # repeated in the module docstring.
-_REFUSE_BURIED_CROSSING = (
-    "wire {tag} crosses the ground interface mid-span (z runs {zmin:g} to "
-    "{zmax:g} m across z = 0). momwire serves current across the interface "
-    "only through a crossing junction (momwire#524 phase 2): a wire wholly "
-    "below the plane that ENDS in it, sharing that node with a wire that "
-    "starts there and rises above it - and this seam serves that spelling "
-    "(momwire#667). Write the wire as two GW cards meeting at z = 0, or "
-    "leave the buried part DETACHED from the part above the plane (a buried "
-    "radial screen under a base-fed vertical is served that way), or raise "
-    "the whole wire clear of z = 0"
+# A port AT the node a card is split at (momwire#1281) is a port at a
+# crossing junction, which is momwire#1282's to serve.  It refuses here
+# rather than in `_site_for` because the card's own node DEGREE (two element
+# ends, no image) reads as a ground contact there, which would be a silent
+# wrong feed; the two-card spelling of the same port refuses as a series
+# source at a grounded junction.
+_REFUSE_PORT_AT_SPLIT = (
+    "{tag},{written} addresses node {node} of wire {tag}, which stands in the "
+    "ground plane: this seam splits wire {tag} there into a below and an above "
+    "member (momwire#1281), so the node is a crossing junction, and a source, "
+    "load or network connection AT a crossing junction is not served at this "
+    "seam yet (momwire#1282). Address a node one segment above or below it"
 )
 _REFUSE_BURIED_NO_MEDIUM = (
     "wire {tag} runs below the ground plane (min z = {zmin:g} m) under a "
@@ -975,16 +1005,103 @@ def refusal(deck: Nec5Deck) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class _PlaneCrossing:
+    """Where one ``GW`` meets z = 0 strictly between its two ends (momwire#1281).
+
+    :attr:`point` is where the card's LINE meets the plane, with z written as
+    0.0 rather than as the interpolation's last-ulp residue, so that both
+    halves end exactly in the plane.  :attr:`node` is the deck node standing
+    there when one does — within the card's own
+    ``_ground_spec.ground_touch_tol``, the tolerance the solver reads "in the
+    plane" with — and ``None`` otherwise, in which case :attr:`segment` is the
+    0-based element the plane cuts.  Never both: a node within the tolerance
+    is the crossing, and the segments either side of it stay whole.
+    """
+
+    tag: int
+    point: tuple[float, float, float]
+    node: int | None
+    segment: int | None
+
+
+def _has_interface(deck: Nec5Deck) -> bool:
+    """Whether the deck's ground card puts a plane at z = 0.  Free space is
+    exempt from every geometry rule here: z < 0 is legal geometry with no
+    interface under it."""
+    return deck.ground is not None and not isinstance(deck.ground, Nec5FreeSpace)
+
+
+def _plane_crossings(deck: Nec5Deck) -> dict[int, _PlaneCrossing]:
+    """Every card whose ends lie STRICTLY on opposite sides of the plane, by
+    tag (the dialect refuses a repeated tag at the parse, so a tag names one
+    card).  A card touching the plane at an end is not one of them, and
+    neither is any card over free space.
+
+    A ``GW`` is straight, so it meets the plane at most once and the point is
+    the deck's own statement — the reason this is a split and not the guess a
+    polyline crossing would be (``_medium_spec.CROSSING_REFUSAL``).
+    """
+    crossings: dict[int, _PlaneCrossing] = {}
+    if not _has_interface(deck):
+        return crossings
+    for wire in deck.wires:
+        a = np.asarray(wire.end1, dtype=float)
+        b = np.asarray(wire.end2, dtype=float)
+        tol = _ground_spec.ground_touch_tol(np.array([a, b]))
+        za, zb = float(a[2]), float(b[2])
+        if not ((za < -tol and zb > tol) or (za > tol and zb < -tol)):
+            continue
+        z = [p[2] for p in node_points(wire)]
+        node = next((k for k, zk in enumerate(z) if abs(zk) <= tol), None)
+        if node is not None:
+            x, y = node_points(wire)[node][:2]
+            segment = None
+        else:
+            t = za / (za - zb)
+            x, y = (a + (b - a) * t)[:2]
+            segment = next(
+                k for k in range(wire.segment_count) if (z[k] < 0.0) != (z[k + 1] < 0.0)
+            )
+        crossings[wire.tag] = _PlaneCrossing(
+            tag=wire.tag, point=(float(x), float(y), 0.0), node=node, segment=segment
+        )
+    return crossings
+
+
+def _spans(deck: Nec5Deck) -> list[tuple[int, np.ndarray]]:
+    """``(tag, two-point polyline)`` per straight conductor the SOLVE sees:
+    each card, except that a card crossing the plane is its below half and
+    its above half meeting at the crossing (momwire#1281).
+
+    Every geometry rule below reads these rather than the cards, so a card
+    split at z = 0 is judged exactly as the two cards a user would have
+    written in its place — the spelling momwire#667 already serves.
+    """
+    crossings = _plane_crossings(deck)
+    spans = []
+    for wire in deck.wires:
+        pl = np.array([wire.end1, wire.end2], dtype=float)
+        crossing = crossings.get(wire.tag)
+        if crossing is None:
+            spans.append((wire.tag, pl))
+            continue
+        x = np.asarray(crossing.point, dtype=float)
+        spans.append((wire.tag, np.array([pl[0], x])))
+        spans.append((wire.tag, np.array([x, pl[1]])))
+    return spans
+
+
 def _crossing_nodes(deck: Nec5Deck) -> set[tuple[int, int, int]]:
     """The plane nodes a buried wire ENDS on — the below members of the
-    crossing junctions this seam serves since momwire#667. Pure geometry on
-    the solver's own per-wire tolerance; the serve-time check reads the
+    crossing junctions this seam serves since momwire#667, including the
+    point a card crossing the plane is split at (momwire#1281). Pure geometry
+    on the solver's own per-wire tolerance; the serve-time check reads the
     real junction table and has the last word."""
     nodes: set[tuple[int, int, int]] = set()
-    if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
+    if not _has_interface(deck):
         return nodes
-    for w in deck.wires:
-        pl = np.array([w.end1, w.end2], dtype=float)
+    for _tag, pl in _spans(deck):
         tol = _ground_spec.ground_touch_tol(pl)
         if float(pl[:, 2].min()) < -tol:
             for end in pl:
@@ -997,10 +1114,9 @@ def _has_buried_wire(deck: Nec5Deck) -> bool:
     """Whether any wire lies STRICTLY below the plane, on the solver's own
     per-wire tolerance. Read by the two output refusals, which are about the
     deck rather than about a card."""
-    if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
+    if not _has_interface(deck):
         return False
-    for wire in deck.wires:
-        pl = np.array([wire.end1, wire.end2], dtype=float)
+    for _tag, pl in _spans(deck):
         tol = _ground_spec.ground_touch_tol(pl)
         if float(pl[:, 2].max()) < -tol:
             return True
@@ -1014,57 +1130,53 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
     Since momwire#553 a wire STRICTLY below a ``GN 0`` / ``GN 2`` interface
     is served — the solver labels it with the lower medium and fills its
     pairs through the two buried Sommerfeld families — so what this function
-    refuses is no longer "below the plane". It is three narrower things, and
-    each names what is actually missing rather than restating the geometry:
+    refuses is no longer "below the plane". It is narrower, and each sentence
+    names what is actually missing rather than restating the geometry:
 
-    * a wire with points STRICTLY on both sides of the interface — the
-      solver serves current across the plane only through a crossing
-      junction (momwire#524 phase 2), and this seam serves that spelling
-      since momwire#667: a buried GW whose end stands IN the plane is the
-      junction's below member, not a crossing, and passes here — the
-      tolerance decides, and it is the solver's own;
     * a buried wire under ``GN 1`` or a bare ``GD``, neither of which has a
       lower medium at all — momwire solves both over a PERFECT image, so
       below the plane is a perfect conductor and there is nothing to bury a
       wire in;
-    * an in-plane wire, degenerate over any conducting ground, unchanged.
+    * an in-plane wire, degenerate over any conducting ground, unchanged;
+    * a buried wire on a deck that also stands a wire END in the plane.
 
-    Free space is exempt on all three: z < 0 is legal geometry with no
+    Every rule reads :func:`_spans`, so a card crossing the plane is judged
+    as its two halves: its below half ENDS in the plane, which is the
+    crossing junction's below member (momwire#667) and passes here over a
+    Sommerfeld ground, and is a buried wire with no medium under ``GN 1`` /
+    ``GD``.  Until momwire#1281 such a card refused here by name.
+
+    Free space is exempt on all of them: z < 0 is legal geometry with no
     interface under it. The tolerance is the solver's own
     (`_ground_spec.ground_touch_tol`, 1e-6 of each wire's length) so the seam
     refuses exactly what the solver would refuse — never more, never less,
     and in particular the seam and the solver agree wire for wire about which
     side of the line "an end in the plane" falls on.
     """
-    if deck.ground is None or isinstance(deck.ground, Nec5FreeSpace):
+    if not _has_interface(deck):
         return None
     sommerfeld = isinstance(deck.ground, Nec5SommerfeldGround)
     card = "GD" if isinstance(deck.ground, Nec5MininecGround) else "GN 1"
-    for wire in deck.wires:
-        pl = np.array([wire.end1, wire.end2], dtype=float)
+    spans = _spans(deck)
+    for tag, pl in spans:
         tol = _ground_spec.ground_touch_tol(pl)
         zmin = float(pl[:, 2].min())
-        zmax = float(pl[:, 2].max())
         if zmin < -tol:
-            if zmax > tol:
-                return _REFUSE_BURIED_CROSSING.format(
-                    tag=wire.tag, zmin=zmin, zmax=zmax
-                )
-            # zmax within the tolerance of the plane: a buried wire ENDING
-            # in it — the below member of a crossing junction (momwire#667),
-            # served through `grounded_crossing_exemption` at serve time.
+            # Wholly below, or ENDING in the plane — the below member of a
+            # crossing junction (momwire#667), served through
+            # `grounded_crossing_exemption` at serve time. No span reaches
+            # above as well: `_spans` has already split the one card that did.
             if not sommerfeld:
                 return _REFUSE_BURIED_NO_MEDIUM.format(
-                    tag=wire.tag, zmin=zmin, card=card, why=_WHY_NO_MEDIUM[card]
+                    tag=tag, zmin=zmin, card=card, why=_WHY_NO_MEDIUM[card]
                 )
             continue
         if abs(pl[0, 2]) <= tol and abs(pl[1, 2]) <= tol:
-            return _REFUSE_IN_PLANE_WIRE.format(tag=wire.tag)
+            return _REFUSE_IN_PLANE_WIRE.format(tag=tag)
     buried = [
-        w.tag
-        for w in deck.wires
-        if float(np.array([w.end1, w.end2], dtype=float)[:, 2].max())
-        < -_ground_spec.ground_touch_tol(np.array([w.end1, w.end2], dtype=float))
+        tag
+        for tag, pl in spans
+        if float(pl[:, 2].max()) < -_ground_spec.ground_touch_tol(pl)
     ]
     if buried:
         # A contact end that a buried wire also ENDS on is a crossing
@@ -1073,14 +1185,13 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
         # through `grounded_crossing_exemption` and has the last word.
         crossing_nodes = _crossing_nodes(deck)
         contacts = []
-        for w in deck.wires:
-            pl = np.array([w.end1, w.end2], dtype=float)
+        for tag, pl in spans:
             if float(pl[:, 2].max()) <= _ground_spec.ground_touch_tol(pl):
                 continue  # not an above wire
             for end_index in _ground_spec.contact_ends([pl], 0.0):
                 end = pl[0] if end_index[1] == "start" else pl[1]
                 if _node_key(tuple(end)) not in crossing_nodes:
-                    contacts.append(w.tag)
+                    contacts.append(tag)
                     break
         if contacts:
             return _REFUSE_BURIED_WITH_CONTACT.format(cw=contacts[0], bw=buried[0])
@@ -1656,6 +1767,13 @@ class _Piece:
     last_node: int
     points: np.ndarray
     radius: float
+    # A half of the one segment a card crossing z = 0 is cut inside
+    # (momwire#1281): its `points` run from a deck node to the crossing or
+    # from the crossing to a deck node, so the end at the crossing names no
+    # deck node.  `first_node`/`last_node` are still the cut segment's two
+    # nodes, which keeps `n_elements` at 1.
+    cut_start: bool = False
+    cut_end: bool = False
 
     @property
     def n_elements(self) -> int:
@@ -1721,6 +1839,23 @@ class _Site:
     driven: bool = False
 
 
+@dataclass(frozen=True)
+class _SplitElement:
+    """A deck element cut in two at z = 0, read back in the deck's numbering.
+
+    Its current is the mean of its two END-node currents, which is the rule
+    every other element prints by (:func:`_element_currents_and_charges`), so
+    :attr:`lower` / :attr:`upper` name the pieces holding the element's first
+    and last node.  Its charge density is read AT its old centre, on
+    :attr:`centre_piece`, :attr:`centre_s` metres from that piece's start.
+    """
+
+    lower: int
+    upper: int
+    centre_piece: int
+    centre_s: float
+
+
 @dataclass
 class _Mesh:
     pieces: list[_Piece] = field(default_factory=list)
@@ -1737,6 +1872,10 @@ class _Mesh:
     # a column appears in neither list.
     feeds: list[_Site] = field(default_factory=list)
     gaps: list[_Site] = field(default_factory=list)
+    # deck element index -> its read-back on the two pieces a z = 0 cut made
+    # of it (momwire#1281).  `element_of` still names the piece holding the
+    # element's centre; this is what the current and charge tables read.
+    split_elements: dict[int, _SplitElement] = field(default_factory=dict)
 
     @property
     def n_columns(self) -> int:
@@ -1861,6 +2000,7 @@ def build_mesh(
         else frozenset()
     )
     addressed = _addressed_nodes(deck)
+    crossings = _plane_crossings(deck)
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
     # (tag, node) -> (piece, metres along it), for an addressed node STRICTLY
     # inside a piece.  Only the delta-gap spelling leaves one there; under the
@@ -1879,24 +2019,32 @@ def build_mesh(
             k for k in addressed.get(wire.tag, ()) if 0 < k < last
         )
         bounds = [0, *addressed_inside, last] if cut else [0, last]
-        for a, b in zip(bounds[:-1], bounds[1:], strict=True):
+        lower_half = _NO_PIECE
+        for a, b, start, end, cut_start, cut_end in _wire_runs(
+            points, bounds, crossings.get(wire.tag)
+        ):
             index = len(mesh.pieces)
             mesh.pieces.append(
                 _Piece(
                     tag=wire.tag,
                     first_node=a,
                     last_node=b,
-                    points=np.array([points[a], points[b]], dtype=float),
+                    points=np.array([start, end], dtype=float),
                     radius=wire.radius,
+                    cut_start=cut_start,
+                    cut_end=cut_end,
                 )
             )
             # A node that is both one piece's END and the next piece's START
             # is recorded as the start, because that is the end whose sigma is
             # +1 — see `_Site.sign`.  Writing "start" unconditionally and
             # "end" only where nothing claimed the node yet is what makes the
-            # later piece win at a cut.
-            piece_of_node[(wire.tag, a)] = (index, "start")
-            piece_of_node.setdefault((wire.tag, b), (index, "end"))
+            # later piece win at a cut.  The end at a z = 0 cut is no deck
+            # node, so it claims nothing.
+            if not cut_start:
+                piece_of_node[(wire.tag, a)] = (index, "start")
+            if not cut_end:
+                piece_of_node.setdefault((wire.tag, b), (index, "end"))
             for k in addressed_inside:
                 if a < k < b:
                     inside_piece[(wire.tag, k)] = (
@@ -1904,10 +2052,18 @@ def build_mesh(
                         float(
                             np.linalg.norm(
                                 np.asarray(points[k], dtype=float)
-                                - np.asarray(points[a], dtype=float)
+                                - mesh.pieces[index].points[0]
                             )
                         ),
                     )
+            if cut_end:
+                lower_half = index
+                continue
+            if cut_start:
+                split = _split_element(mesh, points, lower_half, index)
+                mesh.split_elements[len(mesh.element_of)] = split
+                mesh.element_of.append((split.centre_piece, 0))
+                continue
             for element in range(b - a):
                 mesh.element_of.append((index, element))
 
@@ -1927,8 +2083,15 @@ def build_mesh(
             mesh.junctions.append(sorted(ends_at[key], key=_canonical_end))
 
     # -- one site per addressed node ---------------------------------------
+    at_crossing = {(c.tag, c.node) for c in crossings.values() if c.node is not None}
     for tag, nodes in sorted(addressed.items()):
         for node in sorted(nodes):
+            if (tag, node) in at_crossing:
+                raise ServeRefusal(
+                    _REFUSE_PORT_AT_SPLIT.format(
+                        tag=tag, written=Nec5Node(tag, node).written, node=node
+                    )
+                )
             site = _site_for(
                 structure,
                 mesh,
@@ -1943,6 +2106,103 @@ def build_mesh(
             mesh.sites.append(site)
     _assign_columns(mesh)
     return mesh
+
+
+def _wire_runs(points, bounds: list[int], crossing: _PlaneCrossing | None):
+    """One card's pieces as ``(first node, last node, start point, end point,
+    cut_start, cut_end)``, in the card's own end-1 -> end-2 order.
+
+    ``bounds`` are the deck nodes the card is already cut at.  A crossing ON a
+    node adds that node to them and moves its point onto the plane (it was
+    within the solver's tolerance of it).  A crossing INSIDE segment ``j``
+    adds nodes ``j`` and ``j + 1`` and two one-element halves between them,
+    meeting at the crossing — each half is a uniform run of its own because a
+    piece is, so the runs either side end at the cut segment's old nodes and
+    every deck node keeps its point (module docstring, "One card through the
+    plane").
+    """
+    if crossing is None:
+        return [
+            (a, b, points[a], points[b], False, False)
+            for a, b in zip(bounds[:-1], bounds[1:], strict=True)
+        ]
+    x = crossing.point
+    if crossing.node is not None:
+        k = crossing.node
+        cut = sorted({*bounds, k})
+        return [
+            (a, b, x if a == k else points[a], x if b == k else points[b], False, False)
+            for a, b in zip(cut[:-1], cut[1:], strict=True)
+        ]
+    j = crossing.segment
+    below = sorted({n for n in bounds if n <= j} | {j})
+    above = sorted({n for n in bounds if n > j} | {j + 1})
+    return [
+        *(
+            (a, b, points[a], points[b], False, False)
+            for a, b in zip(below[:-1], below[1:], strict=True)
+        ),
+        (j, j + 1, points[j], x, False, True),
+        (j, j + 1, x, points[j + 1], True, False),
+        *(
+            (a, b, points[a], points[b], False, False)
+            for a, b in zip(above[:-1], above[1:], strict=True)
+        ),
+    ]
+
+
+def _split_notes(deck: Nec5Deck) -> tuple[str, ...]:
+    """The printout's one line per card split at z = 0 (momwire#1281), in the
+    deck's own tag and segment numbering, which is the numbering every table
+    under it keeps."""
+
+    def segments(a: int, b: int) -> str:
+        return f"SEGMENT {a}" if a == b else f"SEGMENTS {a}-{b}"
+
+    notes = []
+    crossings = _plane_crossings(deck)
+    for wire in deck.wires:
+        crossing = crossings.get(wire.tag)
+        if crossing is None:
+            continue
+        n = wire.segment_count
+        first, second = ("BELOW", "ABOVE") if wire.end1[2] < 0.0 else ("ABOVE", "BELOW")
+        if crossing.node is not None:
+            k = crossing.node
+            notes.append(
+                f"   WIRE {wire.tag} CROSSES Z = 0 AT NODE {k}: SPLIT THERE INTO "
+                f"{segments(1, k)} {first} AND {segments(k + 1, n)} {second} "
+                f"(momwire#1281)."
+            )
+            continue
+        s = crossing.segment + 1
+        points = node_points(wire)
+        centre_z = 0.5 * (points[s - 1][2] + points[s][2])
+        notes.append(
+            f"   WIRE {wire.tag} CROSSES Z = 0 INSIDE SEGMENT {s}: SPLIT THERE INTO "
+            f"{segments(1, s)} {first} AND {segments(s, n)} {second}, SEGMENT {s} "
+            f"SOLVED AS TWO AND PRINTED AT ITS CENTRE, "
+            f"{'BELOW' if centre_z < 0.0 else 'ABOVE'} (momwire#1281)."
+        )
+    return tuple(notes)
+
+
+def _split_element(mesh: _Mesh, points, lower: int, upper: int) -> _SplitElement:
+    """The read-back of the deck element whose two halves are pieces ``lower``
+    and ``upper``: the half holding the element's old centre is where its
+    charge is read, and on the half it lands in rather than the nearer node,
+    because the centre is where the printout says the row is."""
+    first = mesh.pieces[lower]
+    a = np.asarray(points[first.first_node], dtype=float)
+    b = np.asarray(points[first.last_node], dtype=float)
+    centre = 0.5 * (a + b)
+    s = float(np.linalg.norm(centre - first.points[0]))
+    if s <= first.length:
+        return _SplitElement(lower, upper, lower, s)
+    second = mesh.pieces[upper]
+    return _SplitElement(
+        lower, upper, upper, float(np.linalg.norm(centre - second.points[0]))
+    )
 
 
 def _canonical_end(end: tuple[int, str]) -> tuple[int, int]:
@@ -3374,13 +3634,27 @@ def _element_currents_and_charges(
     for piece in mesh.pieces:
         step = piece.length / piece.n_elements
         centres_per_piece.append((np.arange(piece.n_elements) + 0.5) * step)
+    # A deck element cut at z = 0 (momwire#1281) reads its charge at its OLD
+    # centre, one extra sample appended to the half that holds it; that half
+    # has one element, so its own centre stays at index 0 and is unread.
+    for split in mesh.split_elements.values():
+        centres_per_piece[split.centre_piece] = np.append(
+            centres_per_piece[split.centre_piece], split.centre_s
+        )
     slopes = solver.current_slopes(coeffs, centres_per_piece)
 
     currents, charges = [], []
-    for piece_index, element in mesh.element_of:
+    for index, (piece_index, element) in enumerate(mesh.element_of):
         if piece_index == _NO_PIECE:
             currents.append(0j)
             charges.append(0j)
+            continue
+        split = mesh.split_elements.get(index)
+        if split is not None:
+            first = np.asarray(knot_currents[split.lower])[0]
+            last = np.asarray(knot_currents[split.upper])[-1]
+            currents.append(0.5 * (first + last))
+            charges.append(-slopes[split.centre_piece][-1] / (1j * omega))
             continue
         knots = np.asarray(knot_currents[piece_index])
         currents.append(0.5 * (knots[element] + knots[element + 1]))
@@ -4152,6 +4426,7 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         return math.degrees(math.atan2(value.imag, value.real))
 
     return RunData(
+        split_notes=_split_notes(deck),
         node_count=structure.node_count,
         wire_element_count=structure.wire_element_count,
         patch_element_count=structure.patch_element_count,
