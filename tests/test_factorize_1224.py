@@ -88,6 +88,25 @@ def test_first_ints_is_the_unique_spelling(monkeypatch):
         assert np.array_equal(g, w)
 
 
+def test_row_groups_is_one_grouping_over_the_parts(monkeypatch):
+    """Fed in parts, `RowGroups` numbers and represents the groups as one
+    `_unique_tri` over the concatenation (the sorted spelling)."""
+    tri = _awkward(30_000, 3, 99)
+    groups = _accel.acc.RowGroups()
+    cuts = [0, 1, 7, 7, 5000, 12_345, 30_000]
+    ids = np.concatenate(
+        [
+            groups.add([tri[a:b, 0], tri[a:b, 1], tri[a:b, 2]])
+            for a, b in zip(cuts[:-1], cuts[1:])
+        ]
+    )
+    _sorted_route(monkeypatch)
+    want_u, want_inv = ni._unique_tri(tri)
+    assert np.array_equal(ids, want_inv)
+    assert len(groups) == want_u.shape[0]
+    assert np.array_equal(groups.rows().view(np.uint64), want_u.view(np.uint64))
+
+
 def test_the_kernel_refuses_shapes_it_cannot_group():
     acc = _accel.acc
     with pytest.raises(RuntimeError):
@@ -211,7 +230,7 @@ DECKS = {
 @pytest.mark.parametrize("deck", sorted(DECKS))
 @pytest.mark.parametrize("lane", sorted(LANES))
 def test_the_kernels_move_no_bit_of_z(lane, deck, monkeypatch):
-    calls = {"rows": 0, "ints": 0, "index": 0, "table": 0}
+    calls = {"rows": 0, "ints": 0, "index": 0, "table": 0, "groups": 0}
     acc = _accel.acc
 
     class _Counted:
@@ -236,6 +255,10 @@ def test_the_kernels_move_no_bit_of_z(lane, deck, monkeypatch):
             calls["table"] += 1
             return acc.TripleTable(width)
 
+        def RowGroups(self):
+            calls["groups"] += 1
+            return acc.RowGroups()
+
     build, names = LANES[lane]
     monkeypatch.setattr(ni, "_FACTORIZE", False)
     z_ref, i_ref = _solve(lambda: build(DECKS[deck]()), names)
@@ -245,6 +268,8 @@ def test_the_kernels_move_no_bit_of_z(lane, deck, monkeypatch):
     assert calls["rows"] > 0, calls
     if lane in ("bs2", "sg"):
         assert calls["table"] > 0, calls
+    if lane == "sin":
+        assert calls["groups"] > 0, calls
     if lane == "razor" and deck == "invl":
         assert calls["ints"] > 0 and calls["index"] > 0, calls
     assert np.array_equal(z_new, z_ref)
