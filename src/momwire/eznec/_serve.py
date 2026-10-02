@@ -795,10 +795,12 @@ _REFUSE_CROSSING_FAN = (
 _REFUSE_CROSSING_SOURCE_NO_KNOT = (
     "{at} puts a series source on a crossing junction in the ground plane (a "
     "buried wire ending at z = 0 where a wire rises from it), and basis "
-    "{basis!r} does not serve a source there: the point-matched sinusoidal "
-    "basis places a gap only at a segment centre, never on a node, and a "
-    "source ON the crossing node is the open half of momwire#1282 for this "
-    "family. The knot bases serve it - bspline, bspline-d1, razor-2p and "
+    "{basis!r} does not serve a source there, by design (momwire#1282): the "
+    "point-matched sinusoidal basis places a gap only at a segment centre, "
+    "never on a node, and the only segment-centre spelling of this source is "
+    "a segment straddling the interface, which is not a well-posed feed - "
+    "NEC-4.2, whose sources are segment-centred too, refuses it or solves it "
+    "wrong. The knot bases serve it - bspline, bspline-d1, razor-2p and "
     "sinusoidal-galerkin"
 )
 _REFUSE_BURIED_NO_MEDIUM = (
