@@ -199,7 +199,7 @@ def test_ports_are_feeds_in_order():
 
 
 def test_one_fill_and_one_factorisation_per_call(monkeypatch):
-    """N ports cost one fill and one `scipy.linalg.solve`, not N — the
+    """N ports cost one fill and one factorisation (`lu_factor`), not N — the
     contract SimNEC's daemon (behind the portal) is built on."""
     kw = _two_feed()
     solver = RazorSolver(**kw)
@@ -214,17 +214,17 @@ def test_one_fill_and_one_factorisation_per_call(monkeypatch):
     monkeypatch.setattr(razor_mod.RazorSolver, "_assemble_Z_from_prepared", spy_fill)
 
     solves = []
-    orig_solve = razor_mod.scipy.linalg.solve
+    orig_factor = scipy.linalg.lu_factor
 
-    def spy_solve(*a, **kw2):
+    def spy_factor(*a, **kw2):
         solves.append(1)
-        return orig_solve(*a, **kw2)
+        return orig_factor(*a, **kw2)
 
-    monkeypatch.setattr(razor_mod.scipy.linalg, "solve", spy_solve)
+    monkeypatch.setattr(scipy.linalg, "lu_factor", spy_factor)
 
     solver.compute_port_solution()
     assert len(fills) == 1, f"_assemble_Z_from_prepared ran {len(fills)}x"
-    assert len(solves) == 1, f"scipy.linalg.solve ran {len(solves)}x"
+    assert len(solves) == 1, f"lu_factor ran {len(solves)}x"
 
 
 # ---- basis handle and export -------------------------------------------------
