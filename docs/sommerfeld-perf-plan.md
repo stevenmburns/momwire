@@ -614,6 +614,97 @@ pays is now ~0.13–0.47 s of grid fill (0.44 s on the issue-repro geometry,
 what a disk cache would persist; at 0.14–0.47 s each the case for spending a
 product decision on persisting them is *weaker* than it was at 1.3–3.8 s, but
 it is the only remaining lever on a truly cold process. Noted, not proposed.
+Taken up by momwire#1224 as Phase 9 below, once the buried lanes made the
+cold floor matter again.
+
+## Phase 9 — persisted grids (momwire#1224) — **LANDED**
+
+The in-process caches make a repeat solve free, but every *fresh* process
+paid the fill again — every CLI run, the EZNEC drop-in's first solve, a web
+server's first solve after start, every benchmark against NEC-5. On the
+2026-10-01 lane profile that was 0.68 s of each buried lane's wall (8–27 %),
+against NEC-5's whole 0.84 s run. NEC-5 itself writes its Sommerfeld table
+beside the deck (`SOMMPD.NEX`), so persisting ours is parity.
+
+`momwire._somm_disk_cache` is a level *below* `_NORM_CACHE` /
+`_GRID_CACHE`, which are unchanged: disk is asked only on an in-process miss.
+It persists the above family's normalized masters (`_norm_master`), the
+below/below grid (`get_grid_below`, re-written after each lazy band-region
+fill so the next process starts with every region this one reached) and the
+transmitted grid (`get_grid_below_above`).
+
+**Key.** The exact in-process key, plus a *code fingerprint* — sha256 of the
+fill modules' source and of the loaded accelerator binary, with the numpy,
+scipy and Python versions — plus a *state tag* read at call time: every
+upper-case constant of the three fill modules (several are env-overridable,
+tests monkeypatch them) and the accelerator routing each family will take.
+A hashed fingerprint rather than a hand-bumped version, because the
+submodule pointer runs ahead of the PyPI release under the same version
+string, and a fill constant tuned without a bump would serve a stale table
+silently; the price is one refill after an edit that changes nothing,
+comment-only included. Hashing the 43 MB binary measured 0.09 s on Haswell,
+so its digest is memoized on (path, size, mtime) in a sidecar beside the
+grids. A frozen bundle has no source to hash; there the executable's
+(size, mtime) stands in for it.
+
+**Exactness.** Arrays are written to `.npz` exactly; scalars as `float.hex`,
+numpy scalars with their dtype. A load re-checks the manifest identity and
+every array's dtype, shape and sha256; anything short of that is a miss and
+the refill overwrites the file. `grid_digest` hashes a grid's whole state,
+and `tests/test_somm_disk_cache_1224.py` gates a warm process against a cold
+one through the production solver on it and on the impedance, with `==`.
+
+**Failure modes.** Writes are a unique temp file plus `os.replace`, so
+racing writers (two processes, xdist workers, the EZNEC drop-in and
+antennaknobs on one directory) never expose a partial file; the fills are
+deterministic, so whichever rename lands last is equally right. A corrupt,
+truncated or foreign file is ignored and rebuilt. An unwritable or
+uncreatable directory logs one warning per process and the process runs on
+the in-process caches alone; a read-only directory still serves what it
+holds. Nothing on the disk path raises into a solve.
+
+**Location, switches, eviction.**
+
+| variable | effect |
+|---|---|
+| `MOMWIRE_SOMM_CACHE_DIR` | the directory; default `%LOCALAPPDATA%\momwire\Cache\sommerfeld` (Windows), `~/Library/Caches/momwire/sommerfeld` (macOS), `$XDG_CACHE_HOME/momwire/sommerfeld` or `~/.cache/momwire/sommerfeld` (elsewhere) |
+| `MOMWIRE_SOMM_CACHE` | `0` / `off` / `false` / `no` disables the disk level |
+| `MOMWIRE_SOMM_CACHE_MAX_MB` | size bound, default 512 |
+
+Eviction is least-recently-used by mtime (a hit refreshes it), run after
+every write until the `.npz` total is under the bound; the file just written
+is never evicted by its own write, and orphaned temp files older than an
+hour go on the same pass. Files keyed to an older fingerprint are never read
+again and age out the same way. The grids are small — the buried x8 decks
+write ~0.34 MB across three files — so the bound is generous.
+
+**Tests.** `tests/conftest.py` turns the store off for the whole session and
+points it at a throwaway directory: no test touches a user's cache, and no
+test's monkeypatched fill reaches another test through disk. The store's own
+tests turn it on, each against its own `tmp_path`.
+
+**Measured** (Haswell, 4 threads, base e64dc96 vs the change at 5cef447,
+one solve per fresh process, sequential and load-gated, 3 repeats; median
+[min–max] seconds; "grid" is time inside the three getters):
+
+| lane / deck | base wall | change, store off | change, cold store | change, warm store | grid cold → warm |
+|---|---|---|---|---|---|
+| bs2 buried x8 | 6.41 [6.38–6.41] | 6.37 | 6.49 | **5.27** [5.24–5.31] | 1.23 → 0.01 |
+| razor buried x8 | 5.18 [5.14–5.18] | 5.15 | 5.28 | **4.07** [4.02–4.14] | 1.23 → 0.01 |
+| sin buried x8 | 3.60 [3.60–3.62] | 3.61 | 3.72 | **2.51** [2.50–2.52] | 1.23 → 0.01 |
+| SG buried x8 | 11.79 [11.77–11.88] | 11.78 | 11.83 | **10.60** [10.59–10.65] | 1.23 → 0.01 |
+| bs2 invl x8 | 7.13 [7.11–7.20] | 7.14 | 7.22 | **5.98** [5.98–6.02] | 1.23 → 0.01 |
+| razor invl x8 | 7.75 [7.74–7.84] | 7.74 | 7.82 | **6.57** [6.50–6.59] | 1.23 → 0.01 |
+| sin invl x8 | 4.51 [4.51–4.51] | 4.55 | 4.64 | **3.41** [3.41–3.43] | 1.23 → 0.01 |
+| SG invl x8 | 12.25 [12.25–12.29] | 12.31 | 12.46 | **11.27** [11.23–11.39] | 1.23 → 0.01 |
+
+The base's grid time is 1.13 s on this box (0.68 s was Skylake). A warm
+store removes all of it, 1.19–1.25 s per lane; every impedance is
+bit-identical across base, off, cold and warm. The cold column is ~0.1 s
+over base because each repeat emptied the directory, digest memo included,
+so it re-hashed the binary (0.09 s): that is the very-first-run cost, paid
+once per build. The decks write three files (two rung masters and one
+below grid, 0.34 MB together).
 
 ## Non-goals / notes
 
