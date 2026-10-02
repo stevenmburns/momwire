@@ -447,6 +447,7 @@ from collections.abc import Mapping
 import numpy as np
 
 from ..bspline import BSplineSolver
+from ..razor import RazorSolver
 from ..deck._cards import tokenize
 from .. import _field_point, _ground_refl, _ground_spec, _medium_spec
 from ..deck._nec5 import (
@@ -2446,22 +2447,25 @@ def _crossing_spelling(solver_class: type) -> str:
     The node is one through-current path between the rising wire and the
     buried one, and the source has to drive that path rather than either
     member's end alone — NEC-5 answers ``1,-1`` and ``6,-1`` on Dan AC6LA's
-    deck with the same 70.787 − j0.696 Ω (momwire#1282).  Which port
-    is that path depends on how the basis represents the node:
+    deck with the same 70.787 − j0.696 Ω (momwire#1282).  Which port is that
+    path depends on how the basis represents the node:
 
     * ``RazorSolver`` carries ONE tent across the crossing node, so a delta
       gap on the knot already is the through-current: both spellings answer
       bit for bit alike;
-    * the B-spline family leaves the two members' end bases independent at a
-      crossing node (the crossing fill's own physics closes the current,
-      ``_crossing_fill``), so a gap at one member's end is a source between
-      the node and THAT member only — 0.25 Ω apart between the two spellings,
-      measured.  Its port is the node gap, and the solver keeps the
-      junction's continuity row while one is declared there
-      (``BSplineSolver._kcl_row_junctions``), which is what makes the two
-      spellings one port.
+    * the B-spline and sinusoidal-Galerkin families leave the members' end
+      bases independent at a crossing node (continuity emerges from the
+      crossing fill, ``_crossing_fill``), so a gap at one member's end is a
+      source between the node and THAT member only — 0.25 Ω apart between
+      the two spellings on both, measured.  Their port is the node gap, and
+      each solver imposes the junction's continuity while one is declared
+      there, which is what makes the two spellings one port;
+    * a family with neither (the point-matched sinusoidal one) gets the gap,
+      which :func:`_check_basis_can_host` refuses by name.
     """
-    return "node" if issubclass(solver_class, _CUT_SPELLING) else "gap"
+    if issubclass(solver_class, RazorSolver):
+        return "gap"
+    return "node" if solver_class.capabilities.node_gaps else "gap"
 
 
 def _crossing_site(
