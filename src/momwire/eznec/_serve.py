@@ -797,9 +797,9 @@ _REFUSE_CROSSING_FAN = (
     "source on a crossing node is served where ONE wire rises from it and ONE "
     "buried wire ends on it (momwire#1282); with {count} wires it would sit "
     "between the named wire and the other {others} together, which has no "
-    "measured spelling at a crossing node. Join the buried wires at depth and "
-    "bring ONE wire up to the node (the buried-hub spelling), or put the "
-    "source on the rising wire one segment up"
+    "measured spelling at a crossing node. Bring ONE buried wire up to the "
+    "node (join the others to it at depth, the buried-hub spelling) under ONE "
+    "rising wire, or put the source on the rising wire one segment up"
 )
 # The point-matched sinusoidal family places a gap at a segment centre and
 # never on a node (its `knot_feeds` refusal), and the crossing node is where
@@ -2469,8 +2469,8 @@ def _crossing_spelling(solver_class: type) -> str:
     * the B-spline and sinusoidal-Galerkin families leave the members' end
       bases independent at a crossing node (continuity emerges from the
       crossing fill, ``_crossing_fill``), so a gap at one member's end is a
-      source between the node and THAT member only — 0.25 Ω apart between
-      the two spellings on both, measured.  Their port is the node gap, and
+      source between the node and THAT member only — the two spellings
+      measured 0.25 + 0.54j Ω apart on bspline and 0.25 + 0.46j Ω on SG.  Their port is the node gap, and
       each solver imposes the junction's continuity while one is declared
       there, which is what makes the two spellings one port;
     * a family with neither (the point-matched sinusoidal one) gets the gap,

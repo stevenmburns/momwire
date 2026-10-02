@@ -21,8 +21,9 @@ member is in the soil — and each basis now drives its through-current:
   node gap, served with the junction's continuity imposed while the gap is
   there, which makes the two spellings one port.
 
-The spelling gate below is what fails if that continuity is dropped (0.25
-ohm, nine orders above the bar) or the exemption is (a refusal).
+The spelling gate below is what fails if that continuity is dropped (a
+relative difference of 5.8e-3 to 8.4e-3, measured, six orders above the bar)
+or the exemption is (a refusal).
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ KNOT_BASES = ("razor-nec5", "razor-2p", "bspline", "bspline-d1", "sinusoidal-gal
 
 # Each basis's own answer on the two placements, measured on Haswell at
 # f95a912 (`scratch` probe through `_serve.serve`). Pinned to 1e-3 ohm: four
-# orders under the 0.25 ohm the one-member port was wrong by, and far above
+# orders under the ~0.5 ohm the one-member port was wrong by, and far above
 # the cross-machine BLAS/FMA drift this repo sees (~1e-9 relative).
 PINNED = {
     "razor-nec5": (70.8068660130 - 0.2415288500j, 71.4387098395 + 0.4515876592j),
