@@ -30,7 +30,7 @@ import sys
 from ..serve import run_session
 from ..serve._server import ConnLog, serve_forever, take_value
 from . import _serve
-from ._shell import seam
+from ._shell import _PRINTOUT_ERRORS, seam
 
 # The one-shot shell's file codec, restated for the socket: the printout
 # bytes on the wire ARE the file's bytes (write_printout's contract), and the
@@ -45,7 +45,10 @@ def _connection(conn, number: int, log, solve_lock, *, basis: str) -> None:
     try:
         rx = io.TextIOWrapper(conn.makefile("rb"), encoding=_CODEC, errors="replace")
         tx = io.TextIOWrapper(
-            conn.makefile("wb"), encoding=_CODEC, errors="replace", newline="\r\n"
+            conn.makefile("wb"),
+            encoding=_CODEC,
+            errors=_PRINTOUT_ERRORS,
+            newline="\r\n",
         )
         run_session(
             seam(basis=basis), rx, tx, ConnLog(log, f"[conn {number}] "), solve_lock
