@@ -39,7 +39,9 @@ Three rules, and they are the whole unit
 
 from __future__ import annotations
 
+import codecs
 import sys
+import unicodedata
 from pathlib import Path
 
 from ..deck import DeckError
@@ -72,6 +74,97 @@ ARGUMENT_ERROR_INPUT = "ERROR getting input file from command line"
 # otherwise perfectly readable.
 _CODEC = "latin-1"
 
+# What a printout character OUTSIDE latin-1 becomes on the way out.  The
+# deck's own text arrives through `_CODEC` and so always fits; what does not
+# is momwire's prose — a refusal sentence the solver or a capability row wrote
+# with an em dash, an omega or a minus sign.  momwire#1100 swept the seam's
+# OWN constants clean, and the sinusoidal family's knot-feed refusal (read off
+# its capability row, a module that sweep never saw) still crashed the writer
+# into "INTERNAL ERROR ... UnicodeEncodeError" on Dan AC6LA's working deck
+# (momwire#1282).  A refusal is the one thing the printout exists to carry,
+# so the codec boundary answers it: any text, from any module, reaches the
+# file — transliterated rather than raised over or replaced with "?".
+_TRANSLITERATIONS = {
+    "—": "-",  # em dash; spaced to " - " where the prose left no space
+    "–": "-",
+    "−": "-",
+    "‐": "-",
+    "‑": "-",
+    "‘": "'",
+    "’": "'",
+    "“": '"',
+    "”": '"',
+    "…": "...",
+    "→": "->",
+    "←": "<-",
+    "≤": "<=",
+    "≥": ">=",
+    "≠": "!=",
+    "≈": "~",
+    "≡": "==",
+    "√": "sqrt",
+    "∞": "inf",
+    "Ω": "ohm",
+    "λ": "lambda",
+    "μ": "u",
+    "ε": "eps",
+    "σ": "sigma",
+    "ρ": "rho",
+    "π": "pi",
+    "ω": "omega",
+}
+_PRINTOUT_ERRORS = "momwire-eznec-printout"
+
+
+def _spell(text: str, i: int) -> str:
+    """``text[i]``, a character outside latin-1, spelled inside it."""
+    char = text[i]
+    spelled = _TRANSLITERATIONS.get(char)
+    if spelled is None:
+        spelled = "".join(
+            c
+            for c in unicodedata.normalize("NFKD", char)
+            if ord(c) < 0x100 and not unicodedata.combining(c)
+        )
+        return spelled or "?"
+    if char == "\u2014":
+        # A separator: padded to " - " on whichever side the prose left
+        # unspaced, so "a — b" and "a—b" both print as "a - b".
+        before = text[i - 1] if i > 0 else " "
+        after = text[i + 1] if i + 1 < len(text) else " "
+        spelled = (
+            ("" if before.isspace() else " ")
+            + spelled
+            + ("" if after.isspace() else " ")
+        )
+    return spelled
+
+
+def transliterate(text: str) -> str:
+    """``text`` with every character outside latin-1 spelled inside it.
+
+    The table above first; anything else by its compatibility decomposition
+    (``unicodedata.normalize("NFKD")``) where that lands in latin-1, and
+    ``?`` only when nothing does.
+    """
+    if text.isascii():
+        return text
+    return "".join(
+        char if ord(char) < 0x100 else _spell(text, i) for i, char in enumerate(text)
+    )
+
+
+def _transliterate_error(exc: UnicodeError) -> tuple[str, int]:
+    """The codec error handler both transports encode the printout with: the
+    one-shot shell's file here, the resident server's socket wrapper there."""
+    if not isinstance(exc, UnicodeEncodeError):
+        raise exc
+    text = exc.object
+    return "".join(_spell(text, i) for i in range(exc.start, exc.end)), exc.end
+
+
+codecs.register_error(_PRINTOUT_ERRORS, _transliterate_error)
+
 
 def read_deck(deck_path: Path) -> str | None:
     """The deck's text, or ``None`` when it cannot be read at all.
@@ -100,8 +193,15 @@ def write_printout(printout_path: Path, text: str) -> None:
     writes what the engine writes, and the byte-gates that compare the
     RENDERED STRING keep normalizing per the fixture manifest while the
     shell gate compares the written bytes — the layer this defect hid in.
+
+    And whatever the text holds, it is written: a character outside latin-1
+    is transliterated at the codec (:func:`transliterate`, momwire#1282)
+    rather than raised over, so a refusal never turns into an internal error
+    on its way to the file.
     """
-    with printout_path.open("w", encoding=_CODEC, newline="\r\n") as handle:
+    with printout_path.open(
+        "w", encoding=_CODEC, errors=_PRINTOUT_ERRORS, newline="\r\n"
+    ) as handle:
         handle.write(text)
 
 
