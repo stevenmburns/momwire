@@ -32,13 +32,38 @@ import os
 import pytest as _pytest
 
 
+_SOMM_CACHE_TMP: list = []
+
+
 def pytest_configure(config):
+    # The persistent Sommerfeld grid store (momwire#1224) is OFF for the whole
+    # session, and pointed at a throwaway directory besides, so no test reads
+    # or writes a user's cache. Off rather than merely relocated, because
+    # tests monkeypatch the fill itself (`iv_surfaces_direct_below`,
+    # `_use_below_accel`, `_acc`) and clear the in-process caches expecting a
+    # refill; a shared store would hand one test's patched fill to the next.
+    # The store's own tests turn it on, each against its own tmp_path.
+    # `os.environ`, not a fixture, so subprocesses a test spawns inherit it.
+    import tempfile
+
+    if not _SOMM_CACHE_TMP:
+        _SOMM_CACHE_TMP.append(tempfile.mkdtemp(prefix="momwire-somm-cache-"))
+    os.environ["MOMWIRE_SOMM_CACHE"] = "0"
+    os.environ["MOMWIRE_SOMM_CACHE_DIR"] = _SOMM_CACHE_TMP[0]
+
     # xdist worker detection: only workers carry `workerinput`. The
     # controller and any serial run are left untouched, so the serial
     # lanes keep the threading they were certified with.
     if hasattr(config, "workerinput"):
         os.environ.setdefault("OMP_NUM_THREADS", "1")
         os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+
+def pytest_unconfigure(config):
+    import shutil
+
+    for d in _SOMM_CACHE_TMP:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 # Modules whose tests share portal server state (sockets, cache warmth).
