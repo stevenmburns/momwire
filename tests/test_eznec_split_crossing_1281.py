@@ -415,6 +415,25 @@ def test_over_a_ground_with_no_lower_medium_the_buried_part_still_refuses(ground
     assert f"under a {card} card" in reason
 
 
+@pytest.mark.parametrize("split", [True, False], ids=["one-card", "two-card"])
+def test_a_crossing_decks_near_field_refuses_as_a_buried_decks(split):
+    """The crossing junction's below member is a buried element, so the
+    buried near-field refusal (momwire#524 phase 3) covers both spellings of
+    a crossing deck, not only decks with a wholly-buried wire."""
+    cards = (
+        "GW 1,10,0.,0.,-2.,0.,0.,8.,.001\n"
+        if split
+        else "GW 1,2,0.,0.,-2.,0.,0.,0.,.001\nGW 2,8,0.,0.,0.,0.,0.,8.,.001\n"
+    )
+    text = (
+        f"CE\n{cards}GE -1,-1\nFR 0,1,0,0,14.\nGN 0,0,0,0,13.,.005\n"
+        "EX 0,1,1,0,1.,0.\nNE 0,1,1,1,2.,0.,1.,0.,0.,0.\nXQ 0\nEN\n"
+    )
+    reason = _serve.refusal(parse_nec5(text))
+    assert reason is not None
+    assert "buried deck's near field is not served" in reason
+
+
 def test_sinusoidal_refuses_both_spellings_alike():
     """Unrelated to the split: SinusoidalSolver places no gap at a knot, so
     every node-addressed source on this dialect refuses, split or not."""
