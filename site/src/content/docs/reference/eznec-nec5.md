@@ -308,8 +308,9 @@ capability statements rather than deck errors:
   the interface over the Sommerfeld ground get **impedance, currents,
   charges and the radiation pattern**: detached buried radials and screens,
   bonded radial screens and ground rods (the wire that crosses the
-  interface written as two `GW` cards meeting at z = 0), buried fed
-  elements, and elevated feeds over buried counterpoises. A buried element reaches the
+  interface, written as two `GW` cards meeting at z = 0 or as one card
+  straight through the plane), buried fed elements, and elevated feeds
+  over buried counterpoises. A buried element reaches the
   far zone through the **transmitted** Fresnel factors — the stationary-phase
   limit of the same below-to-above integrals its currents came out of — so
   `RP` reads the wave that crosses the interface rather than an image of a
@@ -328,10 +329,22 @@ capability statements rather than deck errors:
   of Brown, Lewis and Epstein's 1937 measured radial-count curve. Two honest notes: a
   deck's first buried solve builds its below-interface Sommerfeld tables,
   and the refusals below are the map of where the capability ends.
+- **One card through the plane is split there.** A `GW` with one end
+  below a finite ground and the other above it is cut at the exact point
+  its line meets z = 0, into the same crossing junction the two-card
+  spelling writes — and it solves as that hand-written deck to the last
+  bit. Every node keeps its point, so every address still names what it
+  named. When z = 0 falls inside a segment, that segment becomes two, one
+  in each medium, so a wire of N segments solves as N + 1; the licensed
+  engine keeps that segment whole instead (on Dan AC6LA's buried-radial
+  vertical with z = 0 inside the first of 21 segments, 72.373 + j4.336 Ω,
+  against 71.296 + j0.044 Ω for the same deck split by hand). That is a
+  discretisation choice, not a disagreement about the antenna, and it
+  vanishes when a segment boundary lands on z = 0. The printout keeps the
+  deck's numbering and says which wire was split. A source, load or
+  network connection *at* the crossing node itself still refuses
+  (momwire#1282).
 - **What a buried deck still refuses, each by name with its measurement**:
-  a single wire crossing the interface **mid-span** (where it pierces the
-  plane would be momwire's guess rather than the model's statement; the
-  refusal message names the two-card spelling that serves);
   a **ground-contact wire combined with buried wires** (the contact
   model has no conductor for the current spreading in the soil — [the
   counterpoise chapter](/act-5/counterpoise/) is the measurement behind
