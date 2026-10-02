@@ -112,6 +112,20 @@ _HASH_MEMO = True
 _FACTORIZE_MAX_ROWS = 2**31 - 2
 
 
+_HAVE_ROW_GROUPS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "row_groups_1224", False)
+)
+
+
+def _row_groups():
+    """A fresh `RowGroups` (the hash kernel's running first-appearance
+    grouping of (n, 3) rows fed a part at a time), or None when it cannot
+    serve -- the caller then dedups each part and merges."""
+    if not (_FACTORIZE and _HAVE_ROW_GROUPS_ACCEL):
+        return None
+    return _accel.acc.RowGroups()
+
+
 def _factorize(cols, *, ints=False):
     """`(first, inverse)` of the rows of equal-length 1-D columns (1 to 3)
     by the hash kernel -- groups by exact equality in first-appearance

@@ -2897,10 +2897,78 @@ def _chunked_point_tables(
     (the ends loop's key set, `_point_end_keys`) limits what the memo
     RETAINS to the rows a later call in this block can ask
     (`designed_rows`); None keeps them all, as the one call did."""
-    fold = _near_interface.radius_fold
     a_wire = float(ctx.a_wire)
     nA, nB = P.shape[0], nodes.shape[0]
     idx_t = _index_dtype(nA * nB)
+    uniq, chunk_ids = _point_grid_rows(
+        rows, P, nodes, gz, observers_above, a_wire, idx_t
+    )
+    m = uniq.shape[0]
+    plan = None if memo is None else memo.sheet_plan
+    six_vals = {key: np.empty(m, dtype=np.complex128) for key in _POINT_SIX_KEYS}
+    point_vals = {
+        key: np.empty(m, dtype=np.complex128) for key in _near_interface.POINT_KEYS
+    }
+    batches = _near_interface.column_batches(uniq[:, 0], _POINT_EVAL_ROWS)
+    for b, sel in enumerate(batches):
+        batches[b] = None
+        sub = uniq[sel]
+        blk = _near_interface.designed_rows(
+            eps_t, k_p, sub, rtol=_CROSS_RTOL, memo=memo, keep=keep
+        )
+        for key, v in six_vals.items():
+            v[sel] = blk[:, _near_interface.KEYS.index(key)]
+        del blk
+        pv = _near_interface.point_designed_rows(eps_t, k_p, sub, plan=plan)
+        for key, v in point_vals.items():
+            v[sel] = pv[key]
+        _ROUTES["point_eval_batches"] += 1
+        _ROUTES["point_eval_max_rows"] = max(_ROUTES["point_eval_max_rows"], sel.size)
+        del pv, sub, sel
+    del uniq, batches
+    for c, sl in enumerate(rows):
+        idx, chunk_ids[c] = chunk_ids[c], None
+        idx = idx.reshape(sl.stop - sl.start, nB)
+        if _POINT_NEG_CONTROL:
+            idx = np.roll(idx, 1, axis=0)
+        yield (
+            sl,
+            {key: v[idx] for key, v in six_vals.items()},
+            {key: v[idx] for key, v in point_vals.items()},
+        )
+
+
+def _point_grid_rows(rows, P, nodes, gz, observers_above, a_wire, idx_t):
+    """`(uniq, chunk_ids)`: the (observers × nodes) grid's distinct folded
+    triples in the grid's first-appearance order (each as the floats at its
+    first appearance), and per observer-row chunk of `rows` each pair's
+    index into them, flat. `_chunked_point_tables`' pass 1.
+
+    By `RowGroups` when the hash kernel serves (momwire#1224): the chunks
+    are fed in grid order, so its running first-appearance numbering IS the
+    grid's, and the merge below has nothing to do. Otherwise each chunk is
+    deduplicated alone and the chunks' rows merged in the grid's order; the
+    same classes (exact `!=`, NaN alone) numbered the same way, so the same
+    integers and rows either way."""
+    fold = _near_interface.radius_fold
+    nB = nodes.shape[0]
+    groups = _near_interface._row_groups()
+    if groups is not None:
+        chunk_ids = []
+        for sl in rows:
+            _dx, _dy, rho, z, zp = _point_pair_grid(P[sl], nodes, gz, observers_above)
+            r = fold(rho, a_wire)
+            del _dx, _dy, rho
+            ids = groups.add(
+                [
+                    r.ravel(),
+                    np.broadcast_to(z, r.shape).ravel(),
+                    np.broadcast_to(zp, r.shape).ravel(),
+                ]
+            )
+            chunk_ids.append(ids.astype(idx_t, copy=False))
+            del r, z, zp, ids
+        return groups.rows(), chunk_ids
     parts, firsts, inverses = [], [], []
     for sl in rows:
         _dx, _dy, rho, z, zp = _point_pair_grid(P[sl], nodes, gz, observers_above)
@@ -2933,40 +3001,13 @@ def _chunked_point_tables(
     del triples
     gid = inv_sorted.astype(idx_t)[dest]  # chunk-unique row -> grid-unique row
     del dest, inv_sorted
-    m = uniq.shape[0]
-    plan = None if memo is None else memo.sheet_plan
-    six_vals = {key: np.empty(m, dtype=np.complex128) for key in _POINT_SIX_KEYS}
-    point_vals = {
-        key: np.empty(m, dtype=np.complex128) for key in _near_interface.POINT_KEYS
-    }
-    batches = _near_interface.column_batches(uniq[:, 0], _POINT_EVAL_ROWS)
-    for b, sel in enumerate(batches):
-        batches[b] = None
-        sub = uniq[sel]
-        blk = _near_interface.designed_rows(
-            eps_t, k_p, sub, rtol=_CROSS_RTOL, memo=memo, keep=keep
-        )
-        for key, v in six_vals.items():
-            v[sel] = blk[:, _near_interface.KEYS.index(key)]
-        del blk
-        pv = _near_interface.point_designed_rows(eps_t, k_p, sub, plan=plan)
-        for key, v in point_vals.items():
-            v[sel] = pv[key]
-        _ROUTES["point_eval_batches"] += 1
-        _ROUTES["point_eval_max_rows"] = max(_ROUTES["point_eval_max_rows"], sel.size)
-        del pv, sub, sel
-    del uniq, batches
-    off = 0
-    for sl, (inv, m) in zip(rows, inverses):
-        idx = gid[off : off + m][inv].reshape(sl.stop - sl.start, nB)
+    chunk_ids, off = [], 0
+    for c in range(len(inverses)):
+        (inv, m), inverses[c] = inverses[c], None
+        chunk_ids.append(gid[off : off + m][inv])
         off += m
-        if _POINT_NEG_CONTROL:
-            idx = np.roll(idx, 1, axis=0)
-        yield (
-            sl,
-            {key: v[idx] for key, v in six_vals.items()},
-            {key: v[idx] for key, v in point_vals.items()},
-        )
+        del inv
+    return uniq, chunk_ids
 
 
 def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):

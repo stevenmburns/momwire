@@ -463,6 +463,117 @@ class TripleTable {
     std::vector<uint64_t> table_;
 };
 
+// `factorize_rows` over a sequence of calls (momwire#1224): `add(cols)`
+// numbers each row's group in first-appearance order ACROSS every add so
+// far, as one `factorize_rows` over the concatenation would, and `rows()`
+// hands back each group's first row with its original floats (sign of zero
+// and NaN payload kept, as `_unique_tri` returns `tri[first]`). The
+// crossing fill's chunked point tables feed it the grid a chunk at a time.
+class RowGroups {
+  public:
+    RowGroups() {
+        table_.assign(16, 0);
+        mask_ = 15;
+    }
+
+    py::array_t<py::ssize_t> add(
+        std::vector<py::array_t<double, py::array::forcecast>> arrs) {
+        py::ssize_t n = 0;
+        auto cols = columns(arrs, &n);
+        if (cols.size() != 3)
+            throw std::runtime_error("RowGroups.add: three columns");
+        if (static_cast<py::ssize_t>(rows_.size() / 3) + n >=
+            static_cast<py::ssize_t>(std::numeric_limits<int32_t>::max()))
+            throw std::runtime_error("RowGroups: too many groups");
+        py::array_t<py::ssize_t> ids(n);
+        py::ssize_t *out = ids.mutable_data();
+        {
+            py::gil_scoped_release nogil;
+            uint64_t key[3], raw[3];
+            for (py::ssize_t i = 0; i < n; ++i) {
+                bool nan = false;
+                uint64_t h = 0x9e3779b97f4a7c15ULL;
+                for (int k = 0; k < 3; ++k) {
+                    raw[k] = cols[k].at(i);
+                    nan |= is_nan(raw[k]);
+                    key[k] = float_key(raw[k]);
+                    h = mix(h ^ key[k]);
+                }
+                if (nan) {
+                    out[i] = new_group(raw, key, 0, false);
+                    continue;
+                }
+                if (2 * (n_groups() + 1) > table_.size()) rehash();
+                const uint64_t tag = h & 0xffffffff00000000ULL;
+                size_t s = static_cast<size_t>(h) & mask_;
+                for (;;) {
+                    const uint64_t slot = table_[s];
+                    if (slot == 0) {
+                        out[i] = new_group(raw, key, s, true, tag);
+                        break;
+                    }
+                    const uint64_t g = (slot & 0xffffffffULL) - 1;
+                    if ((slot & 0xffffffff00000000ULL) == tag && same(key, g)) {
+                        out[i] = static_cast<py::ssize_t>(g);
+                        break;
+                    }
+                    s = (s + 1) & mask_;
+                }
+            }
+        }
+        return ids;
+    }
+
+    py::array_t<double> rows() const {
+        py::array_t<double> out({n_groups(), static_cast<py::ssize_t>(3)});
+        if (!rows_.empty())
+            std::memcpy(out.mutable_data(), rows_.data(), rows_.size() * 8);
+        return out;
+    }
+
+    py::ssize_t n_groups() const { return static_cast<py::ssize_t>(keys_.size() / 3); }
+
+  private:
+    py::ssize_t new_group(const uint64_t *raw, const uint64_t *key, size_t s,
+                          bool enter, uint64_t tag = 0) {
+        const py::ssize_t g = n_groups();
+        for (int k = 0; k < 3; ++k) {
+            keys_.push_back(key[k]);
+            rows_.push_back(raw[k]);
+        }
+        if (enter) table_[s] = tag | (static_cast<uint64_t>(g) + 1);
+        return g;
+    }
+
+    bool same(const uint64_t *key, uint64_t g) const {
+        const uint64_t *k = &keys_[3 * g];
+        return k[0] == key[0] && k[1] == key[1] && k[2] == key[2];
+    }
+
+    void rehash() {
+        size_t cap = table_.size() * 2;
+        std::vector<uint64_t> fresh(cap, 0);
+        const size_t mask = cap - 1;
+        for (size_t s = 0; s < table_.size(); ++s) {
+            const uint64_t slot = table_[s];
+            if (slot == 0) continue;
+            const uint64_t g = (slot & 0xffffffffULL) - 1;
+            uint64_t h = 0x9e3779b97f4a7c15ULL;
+            for (int k = 0; k < 3; ++k) h = mix(h ^ keys_[3 * g + k]);
+            size_t t = static_cast<size_t>(h) & mask;
+            while (fresh[t] != 0) t = (t + 1) & mask;
+            fresh[t] = slot;
+        }
+        table_.swap(fresh);
+        mask_ = cap - 1;
+    }
+
+    size_t mask_ = 0;
+    std::vector<uint64_t> keys_;  // folded, for the compare
+    std::vector<uint64_t> rows_;  // as given, for `rows()`
+    std::vector<uint64_t> table_;
+};
+
 }  // namespace factorize
 
 void register_factorize(py::module_ &m) {
@@ -489,6 +600,12 @@ void register_factorize(py::module_ &m) {
         .def("keys", &factorize::TripleTable::keys)
         .def("values", &factorize::TripleTable::values)
         .def("__len__", &factorize::TripleTable::size);
+    py::class_<factorize::RowGroups>(m, "RowGroups")
+        .def(py::init<>())
+        .def("add", &factorize::RowGroups::add, py::arg("cols"))
+        .def("rows", &factorize::RowGroups::rows)
+        .def("__len__", &factorize::RowGroups::n_groups);
     // The capability flag, beside the bindings it vouches for (#710).
     m.attr("exact_factorize_1224") = true;
+    m.attr("row_groups_1224") = true;
 }
