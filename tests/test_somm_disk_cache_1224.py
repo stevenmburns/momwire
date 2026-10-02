@@ -110,8 +110,12 @@ _CHILD = textwrap.dedent(
     from test_crossing_serve_524 import hub_deck
 
     z = {{}}
-    z["served"] = complex(served_deck().compute_impedance()[0])
-    z["hub"] = complex(BSplineSolver(**hub_deck(n_radials=4)).compute_impedance()[0])
+    if "served" in {decks!r}:
+        z["served"] = complex(served_deck().compute_impedance()[0])
+    if "hub" in {decks!r}:
+        z["hub"] = complex(
+            BSplineSolver(**hub_deck(n_radials=4)).compute_impedance()[0]
+        )
     grids = {{repr(k): dc.grid_digest(g) for k, g in sm._NORM_CACHE.items()}}
     grids.update({{
         repr(k): dc.grid_digest(g)
@@ -127,12 +131,12 @@ _CHILD = textwrap.dedent(
 )
 
 
-def _child(store_dir, enabled=True):
+def _child(store_dir, decks, enabled=True):
     env = dict(os.environ)
     env[dc.ENV_DIR] = str(store_dir)
     env[dc.ENV_ENABLE] = "1" if enabled else "0"
     out = subprocess.run(
-        [sys.executable, "-c", _CHILD.format(tests=str(TESTS))],
+        [sys.executable, "-c", _CHILD.format(tests=str(TESTS), decks=decks)],
         env=env,
         capture_output=True,
         text=True,
@@ -142,14 +146,31 @@ def _child(store_dir, enabled=True):
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-def test_g1_a_warm_store_is_bit_identical_to_a_cold_fill(tmp_path):
+def _cold_then_warm(tmp_path, decks):
     d = tmp_path / "somm"
-    cold = _child(d)
-    warm = _child(d)
+    return _child(d, decks), _child(d, decks)
 
+
+def test_g1_a_warm_store_is_bit_identical_to_a_cold_fill(tmp_path):
+    """The served deck (elevated monopole over a detached buried radial)
+    reaches all three families in one solve."""
+    cold, warm = _cold_then_warm(tmp_path, ("served",))
     families = {k.split("'")[1] for k in cold["grids"]}  # the regime tag
     assert families == {"above", "below", "below-above"}, families
+    _assert_warm_is_cold(cold, warm)
 
+
+@pytest.mark.integration
+def test_g1_the_crossing_hub_deck_too(tmp_path):
+    """The crossing serve (radials junctioned to the rise at a buried hub),
+    the deck class the momwire#1224 benchmarks time."""
+    cold, warm = _cold_then_warm(tmp_path, ("hub",))
+    families = {k.split("'")[1] for k in cold["grids"]}
+    assert {"above", "below"} <= families, families
+    _assert_warm_is_cold(cold, warm)
+
+
+def _assert_warm_is_cold(cold, warm):
     # The cold process filled every grid and wrote it; the warm one read
     # every grid and filled none -- so the comparison below really is
     # "disk hit vs fresh fill", not two fresh fills.
