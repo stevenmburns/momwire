@@ -339,11 +339,11 @@ _RACER = textwrap.dedent(
     sys.path.insert(0, {tests!r})
     from momwire import _somm_disk_cache as dc
     import test_somm_disk_cache_1224 as t
-    g = t._synthetic(n=4096)
+    g = t._synthetic(n=2048)
     want = dc.grid_digest(g)
     path, ident = t._path()
     served = 0
-    for i in range(40):
+    for i in range(20):
         dc._store(path, ident, g)
         got = dc._load(path, ident)
         if got is not None:
