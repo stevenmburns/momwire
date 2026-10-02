@@ -370,37 +370,55 @@ static inline cd sub_scaled(const cd &acc, const cd &x, double s) {
 //   * theta is clamped into [th_min, pi/2], the below grid's own grazing
 //     floor, not into [0, pi/2].
 //
-// The query's (R1, theta) are handed back so the caller can let
-// `SommerfeldGridBelow.eval` raise the refusals in its own words; nothing in
-// this file transcribes those messages.
-static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
-                                double th_band_floor_hi, double th_band_lo_hi,
-                                double th_band_hi,
-                                double ground_z, double k_p, const cd &k_m,
-                                double ox, double oy, double oz, double tox,
-                                double toy, double toz, double sx, double sy,
-                                double sz, double sux, double suy,
-                                double sthsrc, double stzsrc, double &r1_out,
-                                double &th_out) {
-    const double dx = ox - sx;
-    const double dy = oy - sy;
-    const double rho = std::hypot(dx, dy);
-    const double hh = (ground_z - oz) + (ground_z - sz);
-    // Explicit fused multiply-adds (momwire#1214, _fma_inline.h). This is the
-    // body of `remainder_field_proj_batch_below`'s per-pair loop, and each
-    // multiply-add GCC contracted here before -ffp-contract=off (#1194) is
-    // written out fused, in the split its contraction made (read from GCC's
-    // widening_mul dump of the pre-#1194 build: in most sums it fused the
-    // SECOND product, and in the complex products which half it fused
-    // follows the operand order it saw), with every sum in its source order.
-    // The above-ground twin `somm_proj::proj_one` is shared with other TUs
-    // and is not touched.
-    const double r1 = std::sqrt(mw_fma::fma(rho, rho, hh * hh));
+// One pair is five stages, each its own function below so that the per-pair
+// composition (`proj_one_below`) and the blocked loop of
+// `remainder_field_proj_batch_below` run the SAME expressions: geometry,
+// stencil address and weights, the stencil read, the divide-out, and the
+// projection. momwire#1224 split them out; not one operation moved, and
+// tests/test_below_replay_blocked_1224.py holds the two compositions equal
+// as uint64.
+//
+// Explicit fused multiply-adds throughout (momwire#1214, _fma_inline.h). This
+// was the body of the kernel's per-pair loop, and each multiply-add GCC
+// contracted here before -ffp-contract=off (#1194) is written out fused, in
+// the split its contraction made (read from GCC's widening_mul dump of the
+// pre-#1194 build: in most sums it fused the SECOND product, and in the
+// complex products which half it fused follows the operand order it saw),
+// with every sum in its source order. The above-ground twin
+// `somm_proj::proj_one` is shared with other TUs and is not touched.
 
-    // --- inline SommerfeldGridBelow.eval(r1, theta) ---
-    double theta = std::atan2(hh, rho);
-    r1_out = r1;
-    th_out = theta;
+// Stage 1: the pair's offsets, horizontal distance and depth sum.
+static inline void below_pair_geometry(double ground_z, double ox, double oy,
+                                       double oz, double sx, double sy,
+                                       double sz, double &dx, double &dy,
+                                       double &rho, double &hh) {
+    dx = ox - sx;
+    dy = oy - sy;
+    rho = std::hypot(dx, dy);
+    hh = (ground_z - oz) + (ground_z - sz);
+}
+
+static inline double below_pair_r1(double rho, double hh) {
+    return std::sqrt(mw_fma::fma(rho, rho, hh * hh));
+}
+
+// Where a query reads the tables: the first node of its 4x4 stencil in the
+// region's first surface plane, the plane and row strides, and the two
+// Lagrange weight vectors.
+struct BelowStencil {
+    const cd *base;
+    py::ssize_t nth;
+    py::ssize_t plane;
+    double wr[4];
+    double wt[4];
+};
+
+// Stage 2: inline SommerfeldGridBelow.eval(r1, theta) up to the table read.
+// `theta` is the RAW atan2(hh, rho); the clamp is here.
+static inline void below_stencil(const somm_proj::GridView &G, double th_min,
+                                 double th_band_floor_hi, double th_band_lo_hi,
+                                 double th_band_hi, double r1, double theta,
+                                 BelowStencil &st) {
     if (theta < th_min) theta = th_min;
     else if (theta > G.half_pi) theta = G.half_pi;
     const double r1c = r1 > G.r1_max ? G.r1_max : r1;
@@ -443,39 +461,52 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
     int j0 = (int)std::floor(ft) - 1;
     if (i0 < 0) i0 = 0; else if (i0 > G.nR[reg] - 4) i0 = (int)G.nR[reg] - 4;
     if (j0 < 0) j0 = 0; else if (j0 > G.nTh[reg] - 4) j0 = (int)G.nTh[reg] - 4;
-    double wr[4], wt[4];
-    somm_proj::lagrange4(fr - i0, wr);
-    somm_proj::lagrange4(ft - j0, wt);
-    const cd *V = G.vptr[reg];
-    const py::ssize_t nth = G.nTh[reg], nr = G.nR[reg];
-    cd surf[4];
+    somm_proj::lagrange4(fr - i0, st.wr);
+    somm_proj::lagrange4(ft - j0, st.wt);
+    st.nth = G.nTh[reg];
+    st.plane = G.nR[reg] * G.nTh[reg];
+    st.base = G.vptr[reg] + (py::ssize_t)i0 * st.nth + j0;
+}
+
+// Stage 3: the stencil read, surfaces in the table's order
+// (IrhoV, IzV, IrhoH, IphiH).
+static inline void below_surfaces(const BelowStencil &st, cd *surf) {
     for (int s = 0; s < 4; ++s) {
-        const cd *plane = V + (py::ssize_t)s * nr * nth;
+        const cd *plane = st.base + (py::ssize_t)s * st.plane;
         cd acc(0.0, 0.0);
         for (int i = 0; i < 4; ++i) {
-            const cd *row = plane + (py::ssize_t)(i0 + i) * nth + j0;
+            const cd *row = plane + (py::ssize_t)i * st.nth;
             // (((row0 w0 + row1 w1) + row2 w2) + row3 w3), as written, each
             // later product fused into the running sum. (Before #1194 GCC's
             // SLP pass packed the first row's re/im halves so that its
             // imaginary half fused row0 instead; that one split is not
             // reproduced.)
-            cd rs = mw_fma::mul_add(row[1], wt[1], row[0] * wt[0]);
-            rs = mw_fma::mul_add(row[2], wt[2], rs);
-            rs = mw_fma::mul_add(row[3], wt[3], rs);
-            acc = mw_fma::mul_add(rs, wr[i], acc);
+            cd rs = mw_fma::mul_add(row[1], st.wt[1], row[0] * st.wt[0]);
+            rs = mw_fma::mul_add(row[2], st.wt[2], rs);
+            rs = mw_fma::mul_add(row[3], st.wt[3], rs);
+            acc = mw_fma::mul_add(rs, st.wr[i], acc);
         }
         surf[s] = acc;
     }
-    const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
+}
 
-    // --- projection (eqs 143-147), over `divide_out_below`'s g ---
-    // The exponent cd(k_p rho, 0) + k_m hh per part: the real part fuses
-    // k_m hh; the imaginary part's 0.0 + x is left as written (fusing it
-    // rounds identically), and so is the product with -j, whose "fused"
-    // halves only ever multiply by -0.0.
+// Stage 4: `divide_out_below`'s g. The exponent cd(k_p rho, 0) + k_m hh per
+// part: the real part fuses k_m hh; the imaginary part's 0.0 + x is left as
+// written (fusing it rounds identically), and so is the product with -j,
+// whose "fused" halves only ever multiply by -0.0.
+static inline cd below_divide_out(double k_p, const cd &k_m, double rho,
+                                  double hh, double r1) {
     const cd arg(mw_fma::fma(k_m.real(), hh, k_p * rho),
                  0.0 + k_m.imag() * hh);
-    const cd g = std::exp(-MW_BJ * arg) / r1;
+    return std::exp(-MW_BJ * arg) / r1;
+}
+
+// Stage 5: the projection (eqs 143-147), over g.
+static inline cd below_project(const somm_proj::GridView &G, const cd *surf,
+                               const cd &g, double rho, double dx, double dy,
+                               double tox, double toy, double toz, double sux,
+                               double suy, double sthsrc, double stzsrc) {
+    const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
     const bool safe_r = rho > G.tiny;
     const double inv_rho = safe_r ? 1.0 / rho : 0.0;
     const double dhx = safe_r ? dx * inv_rho : sux;
@@ -494,6 +525,43 @@ static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
                                  tox * sub_scaled(dhx * e_rho, e_phi, dhy));
     return mw_fma::mul_add(e_z, toz, r);
 }
+
+// One pair, the five stages in order. The query's (R1, theta) are handed back
+// so the caller can let `SommerfeldGridBelow.eval` raise the refusals in its
+// own words; nothing in this file transcribes those messages.
+static inline cd proj_one_below(const somm_proj::GridView &G, double th_min,
+                                double th_band_floor_hi, double th_band_lo_hi,
+                                double th_band_hi,
+                                double ground_z, double k_p, const cd &k_m,
+                                double ox, double oy, double oz, double tox,
+                                double toy, double toz, double sx, double sy,
+                                double sz, double sux, double suy,
+                                double sthsrc, double stzsrc, double &r1_out,
+                                double &th_out) {
+    double dx, dy, rho, hh;
+    below_pair_geometry(ground_z, ox, oy, oz, sx, sy, sz, dx, dy, rho, hh);
+    const double r1 = below_pair_r1(rho, hh);
+    const double theta = std::atan2(hh, rho);
+    r1_out = r1;
+    th_out = theta;
+    BelowStencil st;
+    below_stencil(G, th_min, th_band_floor_hi, th_band_lo_hi, th_band_hi, r1,
+                  theta, st);
+    cd surf[4];
+    below_surfaces(st, surf);
+    const cd g = below_divide_out(k_p, k_m, rho, hh, r1);
+    return below_project(G, surf, g, rho, dx, dy, tox, toy, toz, sux, suy,
+                         sthsrc, stzsrc);
+}
+
+// Sources per block of the kernel's blocked loop. Each stage runs over the
+// whole block before the next starts, so a pair's long dependency chain
+// (theta -> region -> divisions -> table address -> loads -> fused sums) is
+// no longer the loop's critical path: the stages' iterations are independent
+// and overlap. Measured on the hub x8 deck's real chunks (i7-4770K, 4
+// threads), 37.5 -> 30.4 ns per pair, flat from 16 to 256 (64 here: ~14 kB
+// of per-thread scratch, inside L1+L2).
+constexpr int BELOW_BLOCK = 64;
 }  // namespace mw568_below
 
 // `_six_integrals_below` over parallel (rho, h) arrays: the (n, 6) table plus
@@ -600,7 +668,8 @@ static py::tuple remainder_field_proj_batch_below(
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
     py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
     std::vector<py::array_t<std::complex<double>,
-                            py::array::c_style | py::array::forcecast>> reg_vals) {
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    bool blocked) {
     using somm_proj::cd;
     auto ob = obs.unchecked<2>();
     auto tob = t_obs.unchecked<2>();
@@ -659,17 +728,58 @@ static py::tuple remainder_field_proj_batch_below(
             const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
             const double tox = tob(m, 0), toy = tob(m, 1), toz = tob(m, 2);
             double rmax = 0.0, tlo = 0.5 * M_PI, thi = 0.0;
-            for (py::ssize_t nn = 0; nn < S; ++nn) {
-                double r1q, thq;
-                out_m(m, nn) = mw568_below::proj_one_below(
-                    G, th_min, th_band_floor_hi, th_band_lo_hi, th_band_hi, ground_z, k_p,
-                    km, ox, oy, oz, tox,
-                    toy, toz,
-                    sx[nn], sy[nn], sz[nn], ux[nn], uy[nn], thsrc[nn], tzsrc[nn],
-                    r1q, thq);
-                if (r1q > rmax) rmax = r1q;
-                if (thq < tlo) tlo = thq;
-                if (thq > thi) thi = thq;
+            if (!blocked) {
+                // The per-pair composition: the reference the blocked loop is
+                // gated against bit for bit.
+                for (py::ssize_t nn = 0; nn < S; ++nn) {
+                    double r1q, thq;
+                    out_m(m, nn) = mw568_below::proj_one_below(
+                        G, th_min, th_band_floor_hi, th_band_lo_hi, th_band_hi,
+                        ground_z, k_p, km, ox, oy, oz, tox, toy, toz, sx[nn],
+                        sy[nn], sz[nn], ux[nn], uy[nn], thsrc[nn], tzsrc[nn],
+                        r1q, thq);
+                    if (r1q > rmax) rmax = r1q;
+                    if (thq < tlo) tlo = thq;
+                    if (thq > thi) thi = thq;
+                }
+            } else {
+                // The same five stages, each over a block of sources
+                // (momwire#1224). Every pair's operations are proj_one_below's,
+                // in its order; only WHEN each runs moves.
+                constexpr int B = mw568_below::BELOW_BLOCK;
+                double dx[B], dy[B], rho[B], hh[B], r1[B], th[B];
+                mw568_below::BelowStencil st[B];
+                cd surf[B][4];
+                cd g[B];
+                for (py::ssize_t n0 = 0; n0 < S; n0 += B) {
+                    const int nb = (int)std::min<py::ssize_t>(B, S - n0);
+                    for (int b = 0; b < nb; ++b)
+                        mw568_below::below_pair_geometry(
+                            ground_z, ox, oy, oz, sx[n0 + b], sy[n0 + b],
+                            sz[n0 + b], dx[b], dy[b], rho[b], hh[b]);
+                    for (int b = 0; b < nb; ++b) {
+                        r1[b] = mw568_below::below_pair_r1(rho[b], hh[b]);
+                        th[b] = std::atan2(hh[b], rho[b]);
+                        if (r1[b] > rmax) rmax = r1[b];
+                        if (th[b] < tlo) tlo = th[b];
+                        if (th[b] > thi) thi = th[b];
+                    }
+                    for (int b = 0; b < nb; ++b)
+                        mw568_below::below_stencil(G, th_min, th_band_floor_hi,
+                                                   th_band_lo_hi, th_band_hi,
+                                                   r1[b], th[b], st[b]);
+                    for (int b = 0; b < nb; ++b)
+                        mw568_below::below_surfaces(st[b], surf[b]);
+                    for (int b = 0; b < nb; ++b)
+                        g[b] = mw568_below::below_divide_out(k_p, km, rho[b],
+                                                             hh[b], r1[b]);
+                    for (int b = 0; b < nb; ++b) {
+                        const py::ssize_t nn = n0 + b;
+                        out_m(m, nn) = mw568_below::below_project(
+                            G, surf[b], g[b], rho[b], dx[b], dy[b], tox, toy,
+                            toz, ux[nn], uy[nn], thsrc[nn], tzsrc[nn]);
+                    }
+                }
             }
             row_r1[m] = rmax;
             row_thlo[m] = tlo;
@@ -1941,7 +2051,11 @@ void register_mw568(py::module_ &m) {
           py::arg("th_band_hi"),
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
-          py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"));
+          py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"),
+          py::arg("blocked") = true);
+    // momwire#1224: `blocked=False` reaches the per-pair composition, the
+    // reference the blocked loop is gated against as uint64.
+    m.attr("below_replay_blocked_1224") = true;
     m.def("transmitted_integrand_six", &transmitted_integrand_six,
           "The six transmitted lambda-integrands POINTWISE at complex lam — "
           "the C++ twin of _sommerfeld_transmitted._integrand_six_transmitted, "
