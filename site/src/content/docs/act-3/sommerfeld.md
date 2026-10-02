@@ -59,6 +59,16 @@ from caching and a fused C++ kernel
 ([`docs/sommerfeld-perf-plan.md`](https://github.com/stevenmburns/momwire/blob/v0.9.0/docs/sommerfeld-perf-plan.md)).
 That is the difference between a solver you *have* and a solver you *use*.
 
+The cache outlives the process, too. A filled grid is also written to disk
+(NEC-5 does the same with its `SOMMPD.NEX` file), so the next command-line
+run, or the next start of the EZNEC drop-in, reads the table back
+bit for bit and skips the fill. It lives in your platform's cache
+directory: `~/.cache/momwire/sommerfeld` on Linux,
+`%LOCALAPPDATA%\momwire\Cache\sommerfeld` on Windows. Set
+`MOMWIRE_SOMM_CACHE_DIR` to move it, `MOMWIRE_SOMM_CACHE=0` to turn it off, or
+`MOMWIRE_SOMM_CACHE_MAX_MB` to change its 512 MB bound. Deleting the
+directory is always safe.
+
 ## Run it yourself
 
 ```python
