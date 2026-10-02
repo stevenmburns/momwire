@@ -2437,7 +2437,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         member's end basis, so without the row the source sits between the
         node and that member alone and the current on the far side is free to
         differ: the two members name two different ports (Dan AC6LA's deck,
-        0.25 Ω apart). With the row the K = 2 constrained space has one
+        0.25 + 0.54j Ω apart). With the row the K = 2 constrained space has one
         through-current dof and the two σ-signed columns are minus each other
         on it, so either member names the same port — the series EMF NEC-5
         puts on the node.
