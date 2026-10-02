@@ -17,9 +17,9 @@
 // fill, most of it moving the gathered tables through memory. Here each
 // table entry is read where it lives, when a product needs it.
 //
-// The matrices must be REAL float64: they are taken without `forcecast`,
-// so a complex basis's samples are refused with a TypeError rather than
-// silently cast (the callers route those to numpy).
+// The matrices (and the end loops' weights) must be REAL float64: they are
+// taken without `forcecast`, so a complex basis's samples are refused with a
+// TypeError rather than silently cast (the callers route those to numpy).
 //
 // THE BITS ARE THE NUMPY ROUTE'S, on builds that do not contract (every
 // non-MSVC build of this TU passes -ffp-contract=off; MSVC gets the pragmas
@@ -231,6 +231,103 @@ static py::tuple left_products_gathered(
     return res;
 }
 
+// The crossing end loops' matvecs, `_real_matvec_c(M, w * X[e])` for every
+// end e at once, with X[e, j] read where it is stored: the tile block (by
+// li, the held store at li < 0 by hp) or the row-ordered V/W store (by
+// sidx). Per term numpy's `w * X` is (w + 0j)(Xr + iXi) = (w*Xr, w*Xi) up to
+// the sign of an exact zero, and `_real_matvec_c` sums a * (w*X) over the
+// row's stored entries from +0 in stored order, real and imaginary parts
+// apart, then `re + 1j*im` -- which, the sums being finite and never -0,
+// is (re, im). This is that loop, contraction off, as above.
+static py::array_t<std::complex<double>> end_matvecs(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> indptr,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> indices,
+    py::array_t<double, py::array::c_style> data,
+    py::ssize_t n_out,
+    py::array_t<double, py::array::c_style> w,
+    py::array_t<int32_t, py::array::c_style | py::array::forcecast> li,
+    py::array_t<int32_t, py::array::c_style | py::array::forcecast> hp,
+    py::array tb, py::array held, int k,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> sidx,
+    py::array store, int store_col, int n_threads) {
+    const py::ssize_t n = w.size();
+    const bool by_store = store_col >= 0;
+    py::ssize_t E = 0;
+    if (by_store) {
+        if (sidx.ndim() != 2 || sidx.shape(1) != n)
+            throw std::runtime_error("end_matvecs: sidx must be (E, n)");
+        E = sidx.shape(0);
+    } else {
+        if (li.ndim() != 2 || li.shape(1) != n)
+            throw std::runtime_error("end_matvecs: li must be (E, n)");
+        E = li.shape(0);
+    }
+    const bool have_hp = hp.size() != 0;
+    if (have_hp && (hp.ndim() != 2 || hp.shape(0) != E || hp.shape(1) != n))
+        throw std::runtime_error("end_matvecs: hp must match li");
+    if (indptr.size() != n_out + 1)
+        throw std::runtime_error("end_matvecs: indptr length");
+    const int64_t *ip = indptr.data();
+    const int64_t *ix = indices.data();
+    const double *dv = data.data();
+    const int64_t nnz = ip[n_out];
+    if (indices.size() < nnz || data.size() < nnz)
+        throw std::runtime_error("end_matvecs: short CSR arrays");
+    for (int64_t jj = 0; jj < nnz; ++jj)
+        if (ix[jj] < 0 || ix[jj] >= n)
+            throw std::runtime_error("end_matvecs: column out of range");
+    const Table T = table_of(tb, "tb"), H = table_of(held, "held"),
+                S = table_of(store, "store");
+    const int32_t *L = by_store ? nullptr : li.data();
+    const int32_t *Hp = have_hp ? hp.data() : nullptr;
+    const int64_t *Si = by_store ? sidx.data() : nullptr;
+    for (py::ssize_t q = 0; q < E * n; ++q) {
+        if (by_store) {
+            if (Si[q] < 0 || Si[q] >= S.rows)
+                throw std::runtime_error("end_matvecs: store row");
+        } else if (L[q] >= 0) {
+            if (L[q] >= T.rows) throw std::runtime_error("end_matvecs: tile row");
+        } else if (!have_hp || Hp[q] < 0 || Hp[q] >= H.rows) {
+            throw std::runtime_error("end_matvecs: an end reads a row not in hand");
+        }
+    }
+    const double *wp = w.data();
+    py::array_t<std::complex<double>> out(std::vector<py::ssize_t>{E, n_out});
+    double *Y = reinterpret_cast<double *>(out.mutable_data());
+    {
+        py::gil_scoped_release nogil;
+        int nt = 1;
+#ifdef _OPENMP
+        nt = omp_get_max_threads();
+        if (n_threads > 0) nt = std::min(nt, n_threads);
+#endif
+#pragma omp parallel for schedule(dynamic, 4) num_threads(nt)
+        for (py::ssize_t e = 0; e < E; ++e) {
+            const py::ssize_t base = e * n;
+            double *y = Y + 2 * e * n_out;
+            for (py::ssize_t i = 0; i < n_out; ++i) {
+                double re = 0.0, im = 0.0;
+                for (int64_t jj = ip[i]; jj < ip[i + 1]; ++jj) {
+                    const int64_t j = ix[jj];
+                    const py::ssize_t q = base + j;
+                    const double *x;
+                    if (by_store)
+                        x = S.at(Si[q], store_col);
+                    else
+                        x = L[q] >= 0 ? T.at(L[q], k) : H.at(Hp[q], k);
+                    const double xr = wp[j] * x[0];
+                    const double xi = wp[j] * x[1];
+                    re += dv[jj] * xr;
+                    im += dv[jj] * xi;
+                }
+                y[2 * i] = re;
+                y[2 * i + 1] = im;
+            }
+        }
+    }
+    return out;
+}
+
 }  // namespace left_gather
 
 void register_left_gather(py::module_ &m) {
@@ -249,5 +346,15 @@ void register_left_gather(py::module_ &m) {
           py::arg("dense") = std::vector<py::array_t<std::complex<double>,
                                                        py::array::c_style |
                                                            py::array::forcecast>>());
+    m.def("end_matvecs", &left_gather::end_matvecs,
+          "`_real_matvec_c(M, w * X[e])` for every end e: M an (n_out, n) "
+          "CSR, X[e, j] = tb[li[e, j], k] (held[hp[e, j], k] where li < 0), "
+          "or store[sidx[e, j], store_col] when store_col >= 0. Returns "
+          "(E, n_out) complex; OpenMP over ends. momwire#1224.",
+          py::arg("indptr"), py::arg("indices"), py::arg("data"),
+          py::arg("n_out"), py::arg("w"), py::arg("li"), py::arg("hp"),
+          py::arg("tb"), py::arg("held"), py::arg("k"), py::arg("sidx"),
+          py::arg("store"), py::arg("store_col"), py::arg("n_threads"));
     m.attr("left_gather_1224") = true;
+    m.attr("end_matvecs_1224") = true;
 }

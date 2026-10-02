@@ -3308,7 +3308,236 @@ def _real_matvec_c(M, v):
     upcasts a real array, and the copy it makes is of the stored values
     rather than of the dense block, which is smaller but still pointless.
     """
+    if (
+        hasattr(M, "indptr")
+        and v.ndim == 1
+        and v.dtype == np.complex128
+        and _end_matvecs_serve(M, None)
+    ):
+        # Through `end_matvecs` whenever it serves (momwire#1224), so every
+        # end vector of every route -- the tiles', the stores', a slow end's
+        # gathered table, the grid route's -- is ONE loop's sum and the
+        # routes agree to the bit by construction on any build. (scipy's own
+        # product is that sum to the bit only where its build does not
+        # contract a*x + acc; arm64 clang's does.) The vector is the store,
+        # read in order, unweighted.
+        n = v.shape[0]
+        return _accel.acc.end_matvecs(
+            M.indptr,
+            M.indices,
+            M.data,
+            M.shape[0],
+            np.ones(n),
+            _EMPTY_I32,
+            _EMPTY_I32,
+            _EMPTY_C,
+            _EMPTY_C,
+            0,
+            np.arange(n, dtype=np.int64)[None, :],
+            v[:, None],
+            0,
+            1,
+        )[0]
+    return _real_matvec_c_numpy(M, v)
+
+
+def _real_matvec_c_numpy(M, v):
+    """`_real_matvec_c` by scipy: the reference the kernel is gated against
+    (to the bit on x86-64, within its summation-order bound elsewhere)."""
     return (M @ v.real) + 1j * (M @ v.imag)
+
+
+# The end loops' matvecs read straight from the product's stores
+# (`end_matvecs`, momwire#1224) when the accelerator carries it. False forms
+# each end's V/W vector and `_real_matvec_c` of it, the reference the kernel
+# is gated against bit for bit (tests/test_end_matvecs_1224.py).
+_END_MATVECS = True
+_HAVE_END_MATVECS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "end_matvecs_1224", False)
+)
+# One `end_matvecs` call's (end, node) pairs: its index arrays and its
+# answer are ~16 B and ~16 B per pair of line and of basis; 1 M pairs keeps
+# a batch at the main sandwich's chunk scale. Batching never moves a bit
+# (each end's vector is its own sum), so this is a memory choice only.
+_END_VEC_PAIRS = 1 << 20
+_EMPTY_I32 = np.zeros((0, 0), dtype=np.int32)
+_EMPTY_I64 = np.zeros((0, 0), dtype=np.int64)
+_EMPTY_C = np.zeros((0, 0), dtype=np.complex128)
+
+
+def _end_matvecs_serve(M, w):
+    """Whether `end_matvecs` can serve this matrix and weighting: its
+    operands are REAL (a complex basis's samples, the sinusoidal sampler's,
+    take the numpy form)."""
+    return (
+        _END_MATVECS
+        and _HAVE_END_MATVECS_ACCEL
+        and M.data.dtype == np.float64
+        and (w is None or np.asarray(w).dtype == np.float64)
+    )
+
+
+def _tile_matvecs(M, w, R, k, loc, tb, held, hpos):
+    """`_real_matvec_c(M, w * X[e])` for each row e of `R` (E product rows
+    of n nodes each), X being the tile's kernel column `k` at those rows as
+    `_FusedEnds._vw` reads it -- the tile block by `loc`, else the held
+    store by `hpos`; (E, M.shape[0]) complex. By `end_matvecs` when it
+    serves, else the per-end numpy spelling, the same floats."""
+    R = np.asarray(R)
+    li = loc[R]
+    miss = li < 0
+    hp = _EMPTY_I32
+    if miss.any():
+        hpm = None if hpos is None else hpos[R[miss]]
+        if hpm is None or (hpm < 0).any():
+            raise AssertionError("a fused end reads a row not in hand")
+        hp = np.full(R.shape, -1, dtype=np.int32)
+        hp[miss] = hpm
+    if (
+        _end_matvecs_serve(M, w)
+        and li.dtype == np.int32
+        and (hp.size == 0 or hpos.dtype == np.int32)
+    ):
+        return _accel.acc.end_matvecs(
+            M.indptr,
+            M.indices,
+            M.data,
+            M.shape[0],
+            w,
+            li,
+            hp,
+            tb,
+            held,
+            k,
+            _EMPTY_I64,
+            _EMPTY_C,
+            -1,
+            _near_interface._physical_cpu_count(),
+        )
+    out = np.empty((R.shape[0], M.shape[0]), dtype=np.complex128)
+    for e in range(R.shape[0]):
+        X = tb[li[e], k]
+        if miss[e].any():
+            X[miss[e]] = held[hp[e][miss[e]], k]
+        out[e] = _real_matvec_c(M, w * X)
+    return out
+
+
+def _store_matvecs(M, w, R, store, col):
+    """`_real_matvec_c(M, w * store[R[e], col])` for each row e of `R`
+    (product value rows), (E, M.shape[0]) complex: `ProductSet.values_of`'s
+    gather and the matvec, by `end_matvecs` when it serves."""
+    R = np.asarray(R, dtype=np.int64)
+    if _end_matvecs_serve(M, w):
+        return _accel.acc.end_matvecs(
+            M.indptr,
+            M.indices,
+            M.data,
+            M.shape[0],
+            w,
+            _EMPTY_I32,
+            _EMPTY_I32,
+            _EMPTY_C,
+            _EMPTY_C,
+            0,
+            R,
+            store,
+            col,
+            _near_interface._physical_cpu_count(),
+        )
+    out = np.empty((R.shape[0], M.shape[0]), dtype=np.complex128)
+    for e in range(R.shape[0]):
+        out[e] = _real_matvec_c(M, w * store[R[e], col])
+    return out
+
+
+# `_end_vectors`' stand-in for a fast end's tables (`fast_te`): its vectors
+# are formed from the store by row, never from a gathered table.
+_FAST_TE = object()
+
+
+def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
+    """Yield `(sign, fv, vV, vW)` per end of `ends`, in order: the two
+    matvecs of the end's V and W tables over `ax`'s nodes, vV =
+    `_real_matvec_c(ax["Fd_csr"], w * V)` and vW = `_real_matvec_c(ax["F_csr"],
+    w_tz * W)`, as `_row_end_terms` / `_col_end_terms` form them.
+
+    The tables are `_end_tables`'. Over a product that keeps its V/W store
+    (the unfused route, momwire#1224) the fast ends' vectors are formed from
+    the store by row in batches (`_store_matvecs`: the floats
+    `_end_tables_product` would have gathered, summed as the matvec sums
+    them), and the slow ends' tables come from the same span calls, in the
+    same order, through `fast_te`."""
+    n_nodes = ax["nodes"].shape[0]
+    Fd, F = ax["Fd_csr"], ax["F_csr"]
+    product = getattr(memo, "product", None)
+    if not (
+        product is not None
+        and _PRODUCT_ENDS
+        and product.fast is not None
+        and product.vals is not None
+        and _PRODUCT_NEG_CONTROL != "row"
+        and _END_MATVECS
+        and _HAVE_END_MATVECS_ACCEL
+    ):
+        for _pt, sign, fv, te in _end_tables(
+            ctx, eps_t, k_p, ends, n_nodes, memo, args
+        ):
+            yield (
+                sign,
+                fv,
+                _real_matvec_c(Fd, w * te["V"]),
+                _real_matvec_c(F, w_tz * te["W"]),
+            )
+        return
+    fast = product.fast
+    classes, on_node = _classify_ends(fast, float(ctx.a_wire), ends, args)
+    _ROUTES["ends_line_on_node"] += int(sum(on_node))
+    per = max(1, _END_VEC_PAIRS // max(1, n_nodes))
+    pending = []
+
+    def flush():
+        R = np.stack([_fast_desc_rows(fast, classes[i]) for i, _s, _f in pending])
+        vVs = _store_matvecs(Fd, w, R, product.vals, 0)
+        vWs = _store_matvecs(F, w_tz, R, product.vals, 1)
+        out = [(s_, f_, vVs[e], vWs[e]) for e, (_i, s_, f_) in enumerate(pending)]
+        pending.clear()
+        return out
+
+    spans = _end_tables_product(
+        ctx,
+        eps_t,
+        k_p,
+        ends,
+        n_nodes,
+        memo,
+        args,
+        classes=classes,
+        fast_te=lambda _i: _FAST_TE,
+    )
+    for i, (_pt, sign, fv, te) in enumerate(spans):
+        if te is _FAST_TE:
+            pending.append((i, sign, fv))
+            if len(pending) >= per:
+                yield from flush()
+            continue
+        if pending:
+            yield from flush()
+        yield (
+            sign,
+            fv,
+            _real_matvec_c(Fd, w * te["V"]),
+            _real_matvec_c(F, w_tz * te["W"]),
+        )
+    if pending:
+        yield from flush()
+
+
+def _vec_batches(items, n):
+    """`items` cut into lists of at most `_END_VEC_PAIRS` (item, node) pairs
+    against a line of `n` nodes, one item at least."""
+    per = max(1, _END_VEC_PAIRS // max(1, int(n)))
+    return [items[i : i + per] for i in range(0, len(items), per)]
 
 
 class _Rank1Buffer:
@@ -3643,26 +3872,21 @@ def _ends_and_corner_rc(
     wC, wC_tz = _end_weights(C)
     # The end loops' tables come a span of ends per call (`_end_tables`); the
     # rank-1 updates below still run one end at a time, in the order they did.
-    for _pt, sign, fv, te in _end_tables(
-        ctx,
-        eps_t,
-        k_p,
-        R["ends"] if row_ends else [],
-        C["nodes"].shape[0],
-        memo,
-        row_args,
+    # Each end's two matvecs come from `_end_vectors` (`_row_end_terms` /
+    # `_col_end_terms`' vectors, the fast ends' read from the product's store
+    # in batches); the rank-1 writes are those functions', end by end.
+    for sign, fv, vV, vW in _end_vectors(
+        ctx, eps_t, k_p, R["ends"] if row_ends else [], C, wC, wC_tz, memo, row_args
     ):
-        _row_end_terms(T, C, wC, wC_tz, c1, sign, fv, te)
-    for _pt, sign, fv, te in _end_tables(
-        ctx,
-        eps_t,
-        k_p,
-        C["ends"] if col_ends else [],
-        R["nodes"].shape[0],
-        memo,
-        col_args,
+        nz = np.flatnonzero(fv)
+        T.add_rows(nz, fv[nz], vV, c1 * sign)
+        T.add_rows(nz, fv[nz], vW, -c1 * sign)
+    for sign, fv, vV, vW in _end_vectors(
+        ctx, eps_t, k_p, C["ends"] if col_ends else [], R, wR, wR_tz, memo, col_args
     ):
-        _col_end_terms(T, R, wR, wR_tz, c1, sign, fv, te)
+        nz = np.flatnonzero(fv)
+        T.add_cols(nz, vW, fv[nz], -c1 * sign)
+        T.add_cols(nz, vV, fv[nz], c1 * sign)
     if corner:
         _corner_terms(T, ctx, R, C, eps_t, k_p, c1, gz)
     return T.answer(out)
@@ -4392,13 +4616,16 @@ class _FusedEnds:
         wl, wl_tz = self.loc_loop[3], self.loc_loop[4]
         which_v = "row" if self.fwd else "col"
         which_l = "col" if self.fwd else "row"
-        # Vector loop, line ends at this tile: whole vectors.
-        for i, ti in self.v_tile.items():
-            if ti == t:
-                V, W = self._vw(_fast_desc_rows(fast, vcls[i]), loc, tb, held, hpos)
-                vV = _real_matvec_c(M["Fd_csr"], wv * V)
-                vW = _real_matvec_c(M["F_csr"], wv_tz * W)
-                self._have_vectors(which_v, i, vV, vW)
+        # Vector loop, line ends at this tile: whole vectors, a batch of ends
+        # per `_tile_matvecs` (each end's vectors are its own sums).
+        here = [i for i, ti in self.v_tile.items() if ti == t]
+        for part in _vec_batches(here, M["nodes"].shape[0]):
+            R = np.stack([_fast_desc_rows(fast, vcls[i]) for i in part])
+            vVs = _tile_matvecs(M["Fd_csr"], wv, R, 1, loc, tb, held, hpos)
+            vWs = _tile_matvecs(M["F_csr"], wv_tz, R, 2, loc, tb, held, hpos)
+            del R
+            for e, i in enumerate(part):
+                self._have_vectors(which_v, i, vVs[e], vWs[e])
                 _ROUTES["fused_row_ends"] += 1
         # Vector loop, grouped ends: the units completing here.
         if self.vg:
@@ -4412,39 +4639,69 @@ class _FusedEnds:
                 xV, xW = wv[needV], wv_tz[needW]
                 VV = np.empty((len(self.vg), J.size), dtype=np.complex128)
                 VW = np.empty((len(self.vg), J.size), dtype=np.complex128)
-                for r, i in enumerate(self.vg):
-                    base = fast.off[0] + vcls[i][2] * fast.nk[0]
-                    V, _W = self._vw(fast.rowflat[base + kV], loc, tb, held, hpos)
-                    _V, W = self._vw(fast.rowflat[base + kW], loc, tb, held, hpos)
-                    VV[r] = _real_matvec_c(MV, xV * V)
-                    VW[r] = _real_matvec_c(MW, xW * W)
-                    _ROUTES["fused_row_ends"] += 1
+                n_need = max(needV.size, needW.size)
+                for part in _vec_batches(list(range(len(self.vg))), n_need):
+                    base = np.array(
+                        [fast.off[0] + vcls[self.vg[r]][2] * fast.nk[0] for r in part]
+                    )
+                    rows = slice(part[0], part[-1] + 1)
+                    VV[rows] = _tile_matvecs(
+                        MV,
+                        xV,
+                        fast.rowflat[base[:, None] + kV[None, :]],
+                        1,
+                        loc,
+                        tb,
+                        held,
+                        hpos,
+                    )
+                    VW[rows] = _tile_matvecs(
+                        MW,
+                        xW,
+                        fast.rowflat[base[:, None] + kW[None, :]],
+                        2,
+                        loc,
+                        tb,
+                        held,
+                        hpos,
+                    )
+                    _ROUTES["fused_row_ends"] += len(part)
                 self.vg_batches[t] = [VV, VW, J.size]
                 self.vg_tile[J] = t
                 self.vg_col[J] = np.arange(J.size)
-        # Local loop: line ends at this tile, grouped ends' tables.
+        # Local loop: line ends at this tile, batched as the vector loop's;
+        # grouped ends gather their tables over the tiles and form theirs at
+        # the last.
+        here = [
+            i
+            for i, d in enumerate(lcls)
+            if d is not None and d[0] == "line" and self.l_tile[i] == t
+        ]
+        for part in _vec_batches(here, N["nodes"].shape[0]):
+            R = np.stack([_fast_desc_rows(fast, lcls[i]) for i in part])
+            vVs = _tile_matvecs(N["Fd_csr"], wl, R, 1, loc, tb, held, hpos)
+            vWs = _tile_matvecs(N["F_csr"], wl_tz, R, 2, loc, tb, held, hpos)
+            del R
+            for e, i in enumerate(part):
+                self._have_vectors(which_l, i, vVs[e], vWs[e])
+                _ROUTES["fused_col_te"] += 1
         sel_t = None
         for i, d in enumerate(lcls):
-            if d is None:
+            if d is None or d[0] == "line":
                 continue
-            if d[0] == "line":
-                if self.l_tile[i] != t:
-                    continue
-                V, W = self._vw(_fast_desc_rows(fast, d), loc, tb, held, hpos)
-            else:
-                buf = self.l_te[i]
-                if sel_t is None:
-                    sel_t = np.flatnonzero(self._tile_line == t)
-                if sel_t.size:
-                    rows = _fast_desc_rows(fast, d)[sel_t]
-                    buf[0][sel_t], buf[1][sel_t] = self._vw(rows, loc, tb, held, hpos)
-                    buf[2] += sel_t.size
-                if self.l_tile[i] != t:
-                    continue
-                if buf[2] != buf[0].size:
-                    raise AssertionError("a fused local end's tables are incomplete")
-                V, W = buf[0], buf[1]
-                del self.l_te[i]
+            buf = self.l_te[i]
+            if sel_t is None:
+                sel_t = np.flatnonzero(self._tile_line == t)
+            if sel_t.size:
+                rows = _fast_desc_rows(fast, d)[sel_t]
+                buf[0][sel_t], buf[1][sel_t] = self._vw(rows, loc, tb, held, hpos)
+                buf[2] += sel_t.size
+            if self.l_tile[i] != t:
+                continue
+            if buf[2] != buf[0].size:
+                raise AssertionError("a fused local end's tables are incomplete")
+            V, W = buf[0], buf[1]
+            del self.l_te[i]
             vV = _real_matvec_c(N["Fd_csr"], wl * V)
             vW = _real_matvec_c(N["F_csr"], wl_tz * W)
             self._have_vectors(which_l, i, vV, vW)
