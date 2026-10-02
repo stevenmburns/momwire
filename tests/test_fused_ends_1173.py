@@ -136,6 +136,9 @@ def test_a_slow_end_asking_a_product_row_declines_the_fusion(monkeypatch):
     make = DECKS["crossing1"][0]
     with monkeypatch.context() as mp:
         mp.setattr(cf, "_fast_end_desc", lambda *a, **k: None)
+        # ...which only the one-end classifier calls; the batched one
+        # (momwire#1224) is gated to agree with it, not routed through it.
+        mp.setattr(cf, "_END_CLASSIFY_BATCHED", False)
         ref, _r = _fill(make, **_PHASE1)
         got, r = _fill(make)
     assert r["cf.fused_declined_hit"] == r["cf.main_product"] >= 2, r
