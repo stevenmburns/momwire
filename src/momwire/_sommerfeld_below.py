@@ -86,6 +86,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from . import _somm_disk_cache
 from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
@@ -1668,6 +1669,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
             vals = full
         reg["vals"] = vals
         reg["filled"] = True
+        _somm_disk_cache.note_mutated(self)
 
     def _ensure_band(self):
         """The MID band — [0.1 deg, 1 deg] — in every R₁ zone.
@@ -1912,9 +1914,24 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
     grid = _GRID_CACHE.get(key)
     if grid is None:
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
-        grid = SommerfeldGridBelow(
-            eps_t, k2, r1b_wl * lam_m, omega=float(omega), mu=float(mu), health=health
-        )
+
+        def fill():
+            return SommerfeldGridBelow(
+                eps_t,
+                k2,
+                r1b_wl * lam_m,
+                omega=float(omega),
+                mu=float(mu),
+                health=health,
+            )
+
+        # The disk level (momwire#1224). A caller asking for `health` wants
+        # the tally of a fill it watched, so it gets a fresh one. `track`:
+        # the band regions fill lazily, and each one re-writes the file.
+        if health is None:
+            grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
+        else:
+            grid = fill()
         _GRID_CACHE[key] = grid
     return grid
 

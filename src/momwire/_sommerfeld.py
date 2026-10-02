@@ -44,6 +44,7 @@ import os
 import numpy as np
 from scipy.special import hankel2, jv, wofz
 
+from . import _somm_disk_cache
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
 from ._constants import C_LIGHT
@@ -1576,14 +1577,19 @@ def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0):
     master = _NORM_CACHE.get(nkey)
     if master is None:
         _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
-        master = SommerfeldGrid(
-            rung,
-            _K2_REF,
-            r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
-            omega=_K2_REF * _C_LIGHT,
-            mu=_MU0,
-            cancel_flag=cancel_flag,
-            lattice_eps=lattice_eps,
+        # The disk level (momwire#1224) sits under this one: a fresh process
+        # reads the master another process filled, bit for bit.
+        master = _somm_disk_cache.fetch_or_fill(
+            nkey,
+            lambda: SommerfeldGrid(
+                rung,
+                _K2_REF,
+                r1b_wl,  # lambda_ref = 1: wavelengths ARE physical units
+                omega=_K2_REF * _C_LIGHT,
+                mu=_MU0,
+                cancel_flag=cancel_flag,
+                lattice_eps=lattice_eps,
+            ),
         )
         _NORM_CACHE[nkey] = master
     return master

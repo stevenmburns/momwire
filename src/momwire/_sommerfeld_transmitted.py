@@ -162,6 +162,7 @@ import os
 
 import numpy as np
 
+from . import _somm_disk_cache
 from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
@@ -1393,18 +1394,28 @@ def get_grid_below_above(
     grid = _GRID_CACHE.get(key)
     if grid is None:
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
-        grid = TransmittedGrid(
-            eps_t,
-            k2,
-            rb_wl * lam_p,
-            zp_min,
-            zp_max,
-            rtol=rtol,
-            omega=float(omega),
-            mu=float(mu),
-            health=health,
-            r_min=r_min_b,
-        )
+
+        def fill():
+            return TransmittedGrid(
+                eps_t,
+                k2,
+                rb_wl * lam_p,
+                zp_min,
+                zp_max,
+                rtol=rtol,
+                omega=float(omega),
+                mu=float(mu),
+                health=health,
+                r_min=r_min_b,
+            )
+
+        # The disk level (momwire#1224); `rtol` sets the bytes but is not in
+        # the in-process key, so it rides along. `health` as in the below
+        # family: a caller watching a fill gets a fresh one.
+        if health is None:
+            grid = _somm_disk_cache.fetch_or_fill(key, fill, extra=(float(rtol),))
+        else:
+            grid = fill()
         _GRID_CACHE[key] = grid
     return grid
 
