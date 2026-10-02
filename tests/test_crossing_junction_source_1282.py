@@ -292,6 +292,9 @@ def test_sinusoidal_refuses_the_junction_source_naming_this_issue(name, tmp_path
     assert len(errors) == 1, errors
     assert "INTERNAL ERROR" not in errors[0]
     assert "momwire#1282" in errors[0]
+    # Refused by design, not pending (Steve, 2026-10-02): a segment-centre
+    # family's only spelling of this source straddles the interface.
+    assert "by design" in errors[0]
     assert "grounded junction" not in errors[0]
 
 

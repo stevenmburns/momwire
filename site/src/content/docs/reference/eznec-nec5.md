@@ -362,9 +362,12 @@ capability statements rather than deck errors:
   the buried wire instead (`EX 0,6,-1`) gives the same answer. That matches
   the licensed engine, which prints the same impedance for both. Every knot
   engine serves it (`bspline`, `bspline-d1`, `razor-2p`,
-  `sinusoidal-galerkin`). It refuses by name, citing #1282, in two cases: a
-  node where three or more wires meet, and the point-matched `sinusoidal`
-  engine, which never places a source on a node. A node in the plane where
+  `sinusoidal-galerkin`). A node where three or more wires meet refuses by
+  name, citing #1282. The point-matched `sinusoidal` engine refuses it by
+  design: it places a source only at a segment centre, and the only
+  segment-centre spelling of this source is a segment straddling the
+  interface, which is not a well-posed feed — NEC-4.2, whose sources are
+  segment-centred too, refuses it or solves it wrong. A node in the plane where
   wires meet with nothing buried is still a grounded junction, and a source
   there still refuses.
 - **A near-field point on a wire's ground contact** (an `NE`/`NH` grid
