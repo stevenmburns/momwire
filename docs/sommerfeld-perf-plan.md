@@ -706,6 +706,103 @@ so it re-hashed the binary (0.09 s): that is the very-first-run cost, paid
 once per build. The decks write three files (two rung masters and one
 below grid, 0.34 MB together).
 
+## Phase 10 — the buried remainder replay (momwire#1224) — **LANDED**
+
+On the 2026-10-01 lane profile the below/below remainder replay
+(`remainder_field_proj_batch_below` and its wrappers) was about a third of
+bs2's buried wall time (1.73 s of 4.81 s at x8 on Skylake), and SG's wrapper
+cost as much again as its kernel.
+
+### Where the time went
+
+The kernel, on hub x8's real chunks (i7-4770K, 4 threads, 37.5 ns per pair;
+the fifteen region tables are 0.24 MB, L2-resident, and the kernel scales
+1:1 to 4 threads, so it is compute-bound), by removing one stage at a time:
+
+| stage | ns / pair |
+|---|---|
+| stencil read, incl. region select and the two Lagrange weight vectors | 12.9 |
+| complex `exp` (the divide-out) | 7.0 |
+| `atan2` | 5.5 |
+| `hypot` | 3.8 |
+| everything else (geometry, projection, store) | 8.4 |
+
+The stencil is not arithmetic-bound: interleaving the four surfaces and
+reading them with AVX2 bought 1.1 ns. It is latency-bound — theta → region →
+two divisions → floor → two more in the weights → table address → loads → a
+fused chain — and one pair's chain outlasts the out-of-order window.
+
+Call granularity was not a cost: bs2 x8 makes 117 kernel calls and the lazy
+fill protocol (extremes first, fill, rerun) reran none of them in the
+common case. SG's wrapper gap (2.19 s inclusive against 1.15 s of kernel)
+was `_reduce_masked`, a per-test-segment loop (4206 calls, 0.59 s), and the
+replay's own `np.einsum("snq,mnq->smn")` (0.43 s, single-threaded).
+
+### What landed
+
+1. **Reciprocity in bs2's square block.** The below/below table is
+   reciprocal (max|P − Pᵀ| / max|P| = 6e-17 on hub x8) and bs2's block has one
+   node set on both axes, so `_field_galerkin_block_symmetric` projects each
+   unordered pair once and assembles the mirror through the transposed
+   (strided, #1115) target. The kernel is asked for 1/2 + chunk/(2n) of the
+   pairs. Not bit-identical: Z_in moves 8e-14 (x4), 1.4e-13 (x8) and 2.9e-13
+   (x16) relative, from reordered adds and the lower triangle taking the upper
+   pair's projection. `_FIELD_GALERKIN_SYMMETRIC = False` is the rectangle,
+   bit-identical to before.
+2. **Blocked stages in the kernel.** `proj_one_below` split into its five
+   stages, unchanged, and the kernel runs each over 64 sources before the
+   next: 37.5 → 30.4 ns per pair, bit-identical (`blocked=False` is the
+   per-pair composition, gated as uint64).
+3. **SG's masked reduction batched** per chunk: bit-identical.
+4. **The replay's einsum in C++** (`remainder_shape_reduce`), spelled as
+   numpy's complex sum-of-products spells it (unfused products, k in order,
+   from +0.0), so it is einsum's bits on x86-64 wheels. A fused spelling
+   agreed with einsum to 1e-16 per entry and still moved SG buried x8 Z by
+   1.7e-11: SG subtracts this block from the scaled image.
+
+Rejected: the AVX2 interleaved stencil (1.3 ns on top of blocking);
+splitting `cexp` into `exp` and `sincos` (bit-identical on glibc, no
+faster); a bitwise (rho, hh) memo (67–70 % of a call's pairs are distinct and
+a cross-row table would be tens of MB); reciprocity for SG, sin and razor
+(their observer points are not their source nodes).
+
+### Measured
+
+Haswell (i7-4770K), 4 threads, `MOMWIRE_SOMM_CACHE=0`, the 10-01 harness
+(`prof_lane.py`, cProfile) per fresh process, base and change interleaved,
+sequential, each run started on a ≥97 %-idle box and its foreign CPU time
+recorded (≤0.51 s in every run). Base 5a760f9 (main, after the crossing-fill
+arc), change 39ef085; median [min–max] of 3, seconds. Wall is the harness's
+own `perf_counter` around the solve; replayK is the kernel's own time,
+replayW the wrapper inclusive. (`analyze2.py`'s "wall", the largest
+cumulative time in the profile, over-reads razor after 5a760f9 — 12.4 s
+against a 4.7 s solve — so it is not used here.)
+
+| lane / deck | base wall | change wall | × | replayK | replayW |
+|---|---|---|---|---|---|
+| bs2 buried x8 | 6.32 [6.31–6.36] | 5.07 [5.05–5.16] | 1.25 | 2.30 → 1.00 | 2.32 → 1.01 |
+| bs2 invl x8 | 7.05 [7.01–7.05] | 5.75 [5.73–5.80] | 1.23 | 2.28 → 0.94 | 2.31 → 0.96 |
+| bs2 buried x16 | 19.02 [18.97–19.21] | 13.58 [13.50–13.61] | 1.40 | 9.46 → 3.95 | 9.56 → 4.03 |
+| SG buried x8 | 11.93 [11.83–11.96] | 10.98 [10.97–10.99] | 1.09 | 1.50 → 1.23 | 2.94 → 2.07 |
+| SG invl x8 | 12.31 [12.26–12.32] | 11.46 [11.43–11.51] | 1.07 | 1.48 → 1.22 | 2.92 → 2.06 |
+| SG buried x16 | 36.59 [36.58–36.82] | 33.77 [33.69–33.78] | 1.08 | 5.97 → 4.91 | 11.06 → 8.21 |
+| razor buried x8 | 4.70 [4.68–4.71] | 4.65 [4.63–4.67] | 1.01 | 0.38 → 0.31 | 0.38 → 0.31 |
+| razor invl x8 | 6.63 [6.63–6.64] | 6.58 [6.55–6.58] | 1.01 | 0.38 → 0.31 | 0.38 → 0.31 |
+| sin buried x8 | 3.55 [3.54–3.56] | 3.48 [3.48–3.48] | 1.02 | 0.19 → 0.16 | 0.28 → 0.20 |
+| sin invl x8 | 4.32 [4.32–4.38] | 4.24 [4.24–4.30] | 1.02 | 0.19 → 0.16 | 0.29 → 0.21 |
+
+razor, sin and SG Z and currents are bit-identical to base at x4 and x8.
+
+### Left
+
+- The kernel is now ~55 % libm (`hypot`, `atan2`, `cexp`: ~16 of 30 ns per
+  pair). Only a vector libm moves that, and it moves the bits; glibc 2.28's
+  libmvec (the manylinux floor) has `exp`/`sin`/`cos` but not `atan2` or
+  `hypot`.
+- SG's `_reduce_masked` is still 0.66 s at x8, now in `_tested_contrib_rows`'
+  numpy gathers rather than call overhead: a C++ twin of that reduction is
+  the next SG lever.
+
 ## Non-goals / notes
 
 - Accuracy is still not traded away: grid rtol stays 1e-6 and the 4-point
