@@ -17,8 +17,8 @@ ONE card from z = -0.0254 to z = 5.15813.
                     segment's two halves and the 20 above), coordinates
                     typed to six digits.
   hs_n204.nec       the 1-inch connector and a 203-segment vertical from
-                    z = 0, fed AT the crossing node (EX 0,1,-1).  momwire
-                    refuses that feed today (momwire#1282).
+                    z = 0, fed AT the crossing node (EX 0,1,-1), which
+                    momwire serves since momwire#1282.
 
 The .out files are our licensed NEC-5 (x13) printouts for these decks exactly
 as written, run 2026-10-01, quoted as numbers only, never as internals.

@@ -772,19 +772,6 @@ _REFUSE_NEAR_FIELD_BELOW = (
 # giving the shared readout the transmitted far-zone factors a below-interface
 # element radiates through.  That sentence is the serve matrix and it is
 # repeated in the module docstring.
-# A port AT the node a card is split at (momwire#1281) is a port at a
-# crossing junction, which is momwire#1282's to serve.  It refuses here
-# rather than in `_site_for` because the card's own node DEGREE (two element
-# ends, no image) reads as a ground contact there, which would be a silent
-# wrong feed; the two-card spelling of the same port refuses as a series
-# source at a grounded junction.
-_REFUSE_PORT_AT_SPLIT = (
-    "{tag},{written} addresses node {node} of wire {tag}, which stands in the "
-    "ground plane: this seam splits wire {tag} there into a below and an above "
-    "member (momwire#1281), so the node is a crossing junction, and a source, "
-    "load or network connection AT a crossing junction is not served at this "
-    "seam yet (momwire#1282). Address a node one segment above or below it"
-)
 # momwire#1282: a series source ON a crossing junction's node is served for
 # the two-member junction (one wire rising, one buried wire ending on it),
 # where the node is one through-current path and the address names it through
@@ -2141,15 +2128,8 @@ def build_mesh(
             mesh.junctions.append(sorted(ends_at[key], key=_canonical_end))
 
     # -- one site per addressed node ---------------------------------------
-    at_crossing = {(c.tag, c.node) for c in crossings.values() if c.node is not None}
     for tag, nodes in sorted(addressed.items()):
         for node in sorted(nodes):
-            if (tag, node) in at_crossing:
-                raise ServeRefusal(
-                    _REFUSE_PORT_AT_SPLIT.format(
-                        tag=tag, written=Nec5Node(tag, node).written, node=node
-                    )
-                )
             site = _site_for(
                 structure,
                 mesh,
@@ -2589,14 +2569,23 @@ def _site_for(
     piece = mesh.pieces[piece_index]
     point = piece.points[0 if which == "start" else 1]
     key = _node_key(point)
+    # A crossing junction is asked of the MESH, before the card-level degree:
+    # where a card is split ON a node (momwire#1281) that node is interior to
+    # the card, so `structure.degree` counts two element ends and no image and
+    # would read it as a lone end in the plane - a ground contact, a silent
+    # wrong feed - and a node within the tolerance of z = 0 has moved onto the
+    # plane, so its key is not even in that table.  Nor does it depend on the
+    # GE card: the soil under a crossing node is the GN card's.
+    if key in crossing_nodes and any(
+        (piece_index, which) in group for group in mesh.junctions
+    ):
+        return _crossing_site(
+            mesh, piece_index, which, tag, node, spelling=crossing_spelling
+        )
     grounded = structure.ground_plane and abs(point[2]) <= _NODE_EPS
     meeting = structure.degree[key] - (1 if grounded else 0)
 
     if meeting >= 2:
-        if grounded and key in crossing_nodes:
-            return _crossing_site(
-                mesh, piece_index, which, tag, node, spelling=crossing_spelling
-            )
         if grounded:
             raise ServeRefusal(
                 f"{tag},{Nec5Node(tag, node).written} addresses a node where "
