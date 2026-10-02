@@ -741,6 +741,10 @@ class RunData:
     wire_element_count: int = 0
     patch_element_count: int = 0
     unknown_count: int = 0
+    # One line per card the serve split at z = 0 (momwire#1281), printed under
+    # the geometry echo.  The engine prints nothing there because it does not
+    # split, so a captured printout reads back with none.
+    split_notes: tuple[str, ...] = ()
     # -- the operating point -----------------------------------------------
     frequency_mhz: float = 0.0
     wavelength_m: float = 0.0
@@ -1049,6 +1053,8 @@ def _structure_specification(deck: Nec5Deck, data: RunData) -> list[str]:
     lines.append("")
     if deck.ge_flag != 0:
         lines += _GROUND_PLANE_NOTE
+    if data.split_notes:
+        lines += [*data.split_notes, ""]
     counts = (
         data.node_count,
         data.wire_element_count,
