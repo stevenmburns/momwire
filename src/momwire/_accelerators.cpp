@@ -34,5 +34,6 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_razor(m);
     register_somm_pairs(m);
     register_factorize(m);
+    register_left_gather(m);
 }
 
