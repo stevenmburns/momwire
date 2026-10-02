@@ -210,6 +210,12 @@ _HAVE_FIELD_GALERKIN_ROW_OF = _HAVE_FIELD_GALERKIN_STRIDED and getattr(
 # available cross-check on the fused one's index arithmetic. Tests flip it;
 # nothing else should.
 _FIELD_GALERKIN_FUSED = True
+# momwire#1224: a block whose observer and source axes are the SAME nodes
+# (the below/below remainder's square fill) projects each unordered pair once
+# and assembles its mirror through the transposed target. False takes the
+# full rectangle, which is the reference the halved route is gated against;
+# tests flip it, nothing else should.
+_FIELD_GALERKIN_SYMMETRIC = True
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
@@ -5999,6 +6005,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         out=None,
         scale=1.0,
         row_of=None,
+        symmetric=False,
     ):
         """`Q[m, n]` — the FIELD-form Galerkin block of a projected pair
         table, over a rectangular (observer segments × source segments)
@@ -6066,6 +6073,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         pos_s[src_idx] = np.arange(n_src)
 
         chunk = max(1, (1 << 19) // max(n_src * q * q, 1))
+        if symmetric:
+            # The caller's claim, checked rather than trusted: a mirror
+            # assembled over two DIFFERENT axes is a wrong block, not a slow one.
+            same = (
+                np.array_equal(obs_idx, src_idx)
+                and (obs is src or np.array_equal(obs, src))
+                and (t_obs is t_src or np.array_equal(t_obs, t_src))
+                and (W_obs is W_src or np.array_equal(W_obs, W_src))
+            )
+            if not same:
+                raise ValueError(
+                    "symmetric=True needs the observer and source axes to be "
+                    "the same nodes, tangents and moment weights"
+                )
+        if (
+            symmetric
+            and _FIELD_GALERKIN_SYMMETRIC
+            and row_of is None
+            and _HAVE_FIELD_GALERKIN_STRIDED
+        ):
+            self._field_galerkin_block_symmetric(
+                supp_seg,
+                polys,
+                proj_fn,
+                obs,
+                t_obs,
+                W_obs,
+                pos_o,
+                n_obs,
+                q,
+                chunk,
+                Q,
+                scale,
+            )
+            return Q
         for i0 in range(0, n_obs, chunk):
             self._checkpoint()
             i1 = min(i0 + chunk, n_obs)
@@ -6129,6 +6171,97 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         polys[cols, b, :],
                     )
         return Q
+
+    def _field_galerkin_block_symmetric(
+        self,
+        supp_seg,
+        polys,
+        proj_fn,
+        nodes,
+        tangents,
+        W,
+        pos,
+        n_axis,
+        q,
+        chunk,
+        Q,
+        scale,
+    ):
+        """`_field_galerkin_block` over ONE axis (observers = sources), each
+        unordered pair projected once (momwire#1224).
+
+        Why it is licensed. The projected table is reciprocal,
+        t_m·F(r_m, r_n)·t_n = t_n·F(r_n, r_m)·t_m: the below/below remainder
+        depends on the pair through rho and the depth SUM, both symmetric, and
+        the dyad is its own transpose. Measured on the hub x8 deck's real
+        chunks: max|P - P^T| / max|P| = 6e-17 (bs2), i.e. rounding. With the
+        two axes' moment weights also identical, the row-wing and column-wing
+        q-vectors the assembler builds (`g` and `h` in
+        `assemble_field_galerkin`) are one function, so the block contributed
+        by observer segment m and source segment n is the transpose of the one
+        contributed by n and m.
+
+        So chunk c (segments [i0, i1)) projects only against sources from i0
+        on, which is every ordered pair (m, n) with n's segment at or past
+        i0 -- the diagonal block in both orders, and the upper rectangle once.
+        That table is assembled twice: as itself into Q, and, with the
+        chunk's own columns masked out, into Q.T, which writes the lower
+        rectangle (n, m) for n past i1. Each ordered segment pair lands
+        exactly once. The kernel projects sum_c c·(n - i0) pairs instead of
+        n², i.e. 1/2 + chunk/(2n) of them.
+
+        Not bit-identical to the rectangle, and not meant to be: a lower
+        entry is the upper pair's projection rather than its own (the two
+        differ at the rounding above), and each Q entry's adds arrive in a
+        different chunk order. The gate is the reference route at 1e-12.
+        """
+        QT = Q.T
+        for i0 in range(0, n_axis, chunk):
+            self._checkpoint()
+            i1 = min(i0 + chunk, n_axis)
+            proj = proj_fn(
+                nodes[i0 * q : i1 * q],
+                tangents[i0 * q : i1 * q],
+                nodes[i0 * q :],
+                tangents[i0 * q :],
+            )
+            W_rows = np.ascontiguousarray(W[:, i0:i1])
+            W_cols = np.ascontiguousarray(W[:, i0:])
+            # Source positions relative to the table's first column; a
+            # segment before i0 (or off this axis) drops out as -1.
+            pos_from_i0 = np.where(pos >= i0, pos - i0, -1)
+            _acc.assemble_field_galerkin(
+                proj,
+                W_rows,
+                W_cols,
+                supp_seg,
+                polys,
+                pos,
+                pos_from_i0,
+                i0,
+                Q,
+                _FIELD_GALERKIN_FUSED,
+                scale,
+            )
+            if i1 < n_axis:
+                # The mirror: the same table with the chunk's own columns
+                # masked (the diagonal block is already in, in both orders),
+                # written through the transposed target.
+                pos_past_i1 = np.where(pos >= i1, pos - i0, -1)
+                _acc.assemble_field_galerkin(
+                    proj,
+                    W_rows,
+                    W_cols,
+                    supp_seg,
+                    polys,
+                    pos,
+                    pos_past_i1,
+                    i0,
+                    QT,
+                    _FIELD_GALERKIN_FUSED,
+                    scale,
+                )
+            del proj
 
     def _build_J_blocks_subset(
         self, geom, k, seg_idx, mirror_sources=False, *, obs_idx=None

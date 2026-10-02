@@ -1209,7 +1209,7 @@ def compute_Z_operator_buried(
         callable it stands for and nothing else changed.
     """
 
-    def _sub_field_galerkin(Z, f, *args):
+    def _sub_field_galerkin(Z, f, *args, symmetric=False):
         """The block, subtracted from Z without the (n, n) transient when the
         kernel can accumulate into a strided target (momwire#1115 part 3).
 
@@ -1225,13 +1225,16 @@ def compute_Z_operator_buried(
         proof -- the seam would still hold and the test could no longer see
         it.
         """
+        # `symmetric` rides only when asked for, so every other block's call
+        # is the one it always was.
+        kw = {"symmetric": True} if symmetric else {}
         if row_of is not None:
             # momwire#1132: `f.compact_ok` promises the row-compact target.
-            f.field_galerkin_block(*args, out=Z, scale=-1.0, row_of=row_of)
+            f.field_galerkin_block(*args, out=Z, scale=-1.0, row_of=row_of, **kw)
         elif f.field_galerkin_out_ok:
-            f.field_galerkin_block(*args, out=Z, scale=-1.0)
+            f.field_galerkin_block(*args, out=Z, scale=-1.0, **kw)
         else:
-            np.subtract(Z, f.field_galerkin_block(*args), out=Z)
+            np.subtract(Z, f.field_galerkin_block(*args, **kw), out=Z)
 
     (
         below,
@@ -1462,6 +1465,11 @@ def compute_Z_operator_buried(
         obs_b,
         t_b,
         W_b,
+        # momwire#1224: unrestricted, the below/below block's two axes are
+        # one node set and its table is reciprocal, so each unordered pair
+        # is projected once (`_field_galerkin_block_symmetric`). An observer
+        # restriction makes the block rectangular, which takes the full one.
+        symmetric=rows is None,
     )
 
     crossing = crossing_j if a_idx.size else ()
