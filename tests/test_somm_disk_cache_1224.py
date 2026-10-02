@@ -376,8 +376,9 @@ def test_g3_racing_writers_never_expose_a_partial_file(store):
         out, err = p.communicate(timeout=300)
         assert p.returncode == 0, err[-3000:]
         assert int(out.strip()) > 0
-    # Nothing left behind but the one file.
-    assert [p.name for p in store.iterdir()] == [_path()[0].name]
+    # Nothing left behind but the one grid (and the binary-digest memo).
+    left = sorted(p.name for p in store.iterdir())
+    assert left == sorted([_path()[0].name, dc._BINARY_SIDECAR]), left
 
 
 def test_g3_eviction_is_least_recently_used(store, monkeypatch):
@@ -438,6 +439,26 @@ def test_g3_an_unpersistable_grid_is_kept_in_memory(store):
     assert dc.fetch_or_fill(KEY, _filler(g, calls)) is g
     assert dc.fetch_or_fill(KEY, _filler(g, calls)) is g
     assert calls == [1, 1] and dc.STATS["writes"] == 0
+
+
+def test_g3_the_binary_digest_memo_follows_the_file(store, tmp_path):
+    import hashlib
+
+    so = tmp_path / "fake.so"
+    so.write_bytes(b"one build")
+    want = hashlib.sha256(b"one build").hexdigest()
+    assert dc._binary_digest(so) == want
+    side = store / dc._BINARY_SIDECAR
+    assert want in side.read_text()
+    # The memo is what a second process reads ...
+    assert dc._binary_digest(so) == want
+    # ... a rebuild (new bytes, new mtime) is a new digest ...
+    so.write_bytes(b"another build!")
+    os.utime(so, ns=(10**18, 10**18))
+    assert dc._binary_digest(so) == hashlib.sha256(b"another build!").hexdigest()
+    # ... and a damaged memo is recomputed, never trusted.
+    side.write_text("{not json")
+    assert dc._binary_digest(so) == hashlib.sha256(b"another build!").hexdigest()
 
 
 def test_g3_platform_default_locations(monkeypatch):

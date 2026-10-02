@@ -195,8 +195,54 @@ def _compute_code_fingerprint():
     so = getattr(acc, "__file__", None) if acc is not None else None
     h.update(repr(so is not None).encode())
     if so is not None:
-        _hash_file(h, so)
+        h.update(_binary_digest(so).encode())
     return h.hexdigest()
+
+
+_BINARY_SIDECAR = ".binary-digests.json"
+_BINARY_SIDECAR_MAX = 16
+
+
+def _binary_digest(path) -> str:
+    """sha256 of the accelerator binary, memoized on (path, size, mtime).
+
+    The binary is ~43 MB and hashing it measured 0.09 s on Haswell -- most of
+    what a warm process would otherwise save on a small grid. A rebuild moves
+    the mtime (make's own staleness rule), so the memo cannot outlive the
+    bytes it describes except by a deliberate same-size, same-mtime edit.
+    The memo lives beside the grids and is written like them (temp file +
+    os.replace); losing it to a race only costs one rehash.
+    """
+    st = os.stat(path)
+    stamp = f"{os.path.realpath(path)}|{st.st_size}|{st.st_mtime_ns}"
+    side = cache_dir() / _BINARY_SIDECAR
+    try:
+        memo = json.loads(side.read_text())
+        if type(memo) is not dict:
+            memo = {}
+    except (OSError, ValueError):
+        memo = {}
+    digest = memo.get(stamp)
+    if type(digest) is str and len(digest) == 64:
+        return digest
+    h = hashlib.sha256()
+    _hash_file(h, path)
+    digest = h.hexdigest()
+    memo.pop(stamp, None)
+    memo[stamp] = digest
+    while len(memo) > _BINARY_SIDECAR_MAX:
+        memo.pop(next(iter(memo)))
+    tmp = side.parent / f"{side.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        side.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(memo))
+        os.replace(tmp, side)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return digest
 
 
 def code_fingerprint():
