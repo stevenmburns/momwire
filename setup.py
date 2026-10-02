@@ -342,6 +342,9 @@ _ACCEL_SOURCES = [
     # `omp declare simd`, which is TU-wide, and the sinusoidal TU's real
     # fill is byte-frozen.
     "src/momwire/_accel_sinusoidal_cplx.cpp",
+    # momwire#1224: exact-equality grouping by hashing (the crossing fill's
+    # dedups). No floating-point arithmetic, and its own TU regardless.
+    "src/momwire/_accel_factorize.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine

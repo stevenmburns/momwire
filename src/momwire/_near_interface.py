@@ -94,6 +94,40 @@ from ._sommerfeld_transmitted import (
 # install exactly as the old `except ImportError` did.
 _nia = _accel.import_companion("_near_interface_accel")
 
+# The hash grouping (momwire#1224, `_accel_factorize.cpp`): the dedups'
+# first-appearance classes in one pass instead of a lexsort. Flagged on its
+# OWN symbol, as `razor_fill_742` is: a .so built before it exports
+# everything else and not this. `_FACTORIZE = False` takes the sorted numpy
+# spelling, the reference the kernel is gated against
+# (tests/test_factorize_1224.py); the answer is integers that depend only
+# on the equality classes, so the two agree exactly, not to a tolerance.
+_HAVE_FACTORIZE_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "exact_factorize_1224", False)
+)
+_FACTORIZE = True
+# `TripleMemo`'s store on the same kernel (its `TripleTable`); False keeps
+# the sorted runs, the reference the table is gated against.
+_HASH_MEMO = True
+# The kernel numbers groups in 32 bits.
+_FACTORIZE_MAX_ROWS = 2**31 - 2
+
+
+def _factorize(cols, *, ints=False):
+    """`(first, inverse)` of the rows of equal-length 1-D columns (1 to 3)
+    by the hash kernel -- groups by exact equality in first-appearance
+    order, `first` ascending -- or None when it cannot serve (no kernel,
+    `_FACTORIZE` off, or too many rows), for the caller's sorted spelling.
+    Float columns group under `!=` (-0.0 with 0.0, a NaN row alone), int
+    columns by value."""
+    if not (_FACTORIZE and _HAVE_FACTORIZE_ACCEL):
+        return None
+    if cols[0].shape[0] > _FACTORIZE_MAX_ROWS:
+        return None
+    if ints:
+        return _accel.acc.factorize_ints(list(cols))
+    return _accel.acc.factorize_rows(list(cols))
+
+
 KEYS = ("U", "V", "W", "dzW", "dzpV", "dzpW")
 # The table layer's WIDTH (momwire#1221). Everything that stores or moves the
 # kernels as rows — `TripleMemo`, `ProductMemo`, the scatters, the sheets —
@@ -1024,9 +1058,19 @@ class TripleMemo:
 
     Iterating gives the keys as float tuples in insertion order, which
     `designed_tables` makes first-appearance order — the dict's order.
+
+    With the hash kernel (`_HASH_MEMO`, momwire#1224) the store is one
+    `TripleTable` instead of the runs: the same keys under the same equality
+    (`row + 0.0`, NaN never found), the first insertion of a key answering
+    for it as the runs' walk does, and the values copied in and out. Only
+    `lookups`, `hits` and `inserts` are counted there; the runs' merge and
+    collision counts have no meaning for it.
     """
 
     def __init__(self):
+        self._table = None
+        if _HASH_MEMO and _FACTORIZE and _HAVE_FACTORIZE_ACCEL:
+            self._table = _accel.acc.TripleTable(N_KEYS)
         self._main = self._empty_run()
         self._pending = []
         self._n_pending = 0
@@ -1051,6 +1095,8 @@ class TripleMemo:
         )
 
     def __len__(self):
+        if self._table is not None:
+            return len(self._table)
         return self._main[0].size + self._n_pending
 
     def _runs(self):
@@ -1060,6 +1106,11 @@ class TripleMemo:
         """(hit, block) for (n, 3) float rows: `block[i]` holds the stored
         value where `hit[i]`, and is uninitialised elsewhere."""
         n = rows.shape[0]
+        if self._table is not None:
+            self.stats["lookups"] += n
+            hit, block = self._table.lookup(rows)
+            self.stats["hits"] += int(np.count_nonzero(hit))
+            return hit, block
         hit = np.zeros(n, dtype=bool)
         block = np.empty((n, N_KEYS), dtype=np.complex128)
         self.stats["lookups"] += n
@@ -1088,6 +1139,8 @@ class TripleMemo:
         `hit` under the same key rule (`row + 0.0`, a NaN row never held),
         without its value block and without counting in `stats`."""
         n = rows.shape[0]
+        if self._table is not None:
+            return self._table.contains(rows)
         held = np.zeros(n, dtype=bool)
         if n == 0 or len(self) == 0:
             return held
@@ -1139,6 +1192,10 @@ class TripleMemo:
         m = rows.shape[0]
         if m == 0:
             return
+        if self._table is not None:
+            self._table.insert(rows, vals)
+            self.stats["inserts"] += m
+            return
         keys = rows + 0.0
         h = _row_hash(keys)
         o = np.argsort(h, kind="stable")
@@ -1173,6 +1230,8 @@ class TripleMemo:
 
     def keys(self):
         """The stored keys as float tuples, in insertion order."""
+        if self._table is not None:
+            return [tuple(r) for r in self._table.keys().tolist()]
         runs = self._runs()
         seq = np.concatenate([r[3] for r in runs])
         k = np.concatenate([r[1] for r in runs])[np.argsort(seq)]
@@ -1180,6 +1239,8 @@ class TripleMemo:
 
     def values(self):
         """The stored (6,) values, in insertion order."""
+        if self._table is not None:
+            return list(self._table.values())
         runs = self._runs()
         seq = np.concatenate([r[3] for r in runs])
         return list(np.concatenate([r[2] for r in runs])[np.argsort(seq)])
@@ -1243,6 +1304,20 @@ class KeyIndex:
     `ProductSet` it describes, so the two share the sorted arrays."""
 
     def __init__(self, key_r, key_zl):
+        self.n_key = int(np.asarray(key_r).size)
+        self._key_r = key_r
+        if _FACTORIZE and _HAVE_FACTORIZE_ACCEL and self.n_key <= _FACTORIZE_MAX_ROWS:
+            # The hash index (momwire#1224, `_accel_factorize.cpp`): the keys
+            # are distinct pairs, so the stored row an exact-`==` query finds
+            # IS its global key id, under the same equality as the searches
+            # below (−0.0 with 0.0, NaN never). The ρ classes are then formed
+            # when `take_r_classes` asks, by the same `np.unique`.
+            self._index = _accel.acc.RowIndex(
+                [np.asarray(key_r, dtype=float), np.asarray(key_zl, dtype=float)]
+            )
+            self._r_classes = None
+            return
+        self._index = None
         # Each key's two class numbers straight from the sorts (momwire#1224)
         # rather than searched back afterwards: `np.unique(..., return_
         # inverse=True)` sorts and merges `==` neighbours (−0.0 with 0.0;
@@ -1256,7 +1331,6 @@ class KeyIndex:
         r_u, r_inv = np.unique(key_r, return_inverse=True)
         zl_u, zl_inv = np.unique(key_zl, return_inverse=True)
         r_inv = np.asarray(r_inv).ravel()
-        self._key_r = key_r
         self._r_classes = (r_u, r_inv)
         self._r_ids = _SortedIds(r_u)
         self._zl_ids = _SortedIds(zl_u)
@@ -1264,7 +1338,6 @@ class KeyIndex:
         del zl_inv
         self._n_zl = zl_u.size
         self._key_ids = _SortedCodes(key_code)
-        self.n_key = int(np.asarray(key_r).size)
 
     def take_r_classes(self):
         """`np.unique(key_r, return_inverse=True)` (the inverse flat), from
@@ -1276,6 +1349,10 @@ class KeyIndex:
         return got
 
     def ids(self, r, zl):
+        if self._index is not None:
+            r, zl = np.broadcast_arrays(np.asarray(r, float), np.asarray(zl, float))
+            kj = self._index.find([r.ravel(), zl.ravel()])
+            return kj.astype(np.intp, copy=False).reshape(r.shape)
         ri = self._r_ids.ids(r)
         li = self._zl_ids.ids(zl)
         ok = (ri >= 0) & (li >= 0)
@@ -3114,10 +3191,18 @@ def _unique_tri(tri):
     on the sorted (n, 3) copy — a new group starts where any column differs
     from its predecessor, which is the same boolean as `np.any(... axis=1)`
     over the rows, so nothing but the transient's size changes (one column
-    instead of three)."""
+    instead of three).
+
+    The hash kernel answers first when it serves (`_factorize`, momwire#1224):
+    the same classes numbered the same way, so the same rows and inverse,
+    without the sort (0.24 s of sin's inverted-L x8 crossing fill)."""
     n = tri.shape[0]
     if n == 0:
         return np.empty((0, 3), dtype=float), np.empty(0, dtype=np.intp)
+    got = _factorize((tri[:, 0], tri[:, 1], tri[:, 2]))
+    if got is not None:
+        first, inverse = got
+        return tri[first], inverse
     idx = np.lexsort((tri[:, 2], tri[:, 1], tri[:, 0]))
     new_group = np.empty(n, dtype=bool)
     new_group[0] = True

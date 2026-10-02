@@ -1713,10 +1713,14 @@ def _first_groups(*cols):
     0.0; NaN each its own) — `_near_interface._unique_tri`'s grouping rule on
     one or two columns: `(first, rank)`, the index of each group's FIRST
     occurrence with the groups in first-appearance order, and each element's
-    group number in that order."""
+    group number in that order. The hash kernel's answer when it serves
+    (`_near_interface._factorize`, momwire#1224), the same integers."""
     n = cols[0].size
     if n == 0:
         return np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.intp)
+    got = _near_interface._factorize(cols)
+    if got is not None:
+        return got
     idx = np.lexsort(tuple(reversed(cols)))
     new = np.empty(n, dtype=bool)
     new[0] = True
@@ -1741,6 +1745,9 @@ def _first_ints(ids):
     """`_first_groups` for a non-negative integer array."""
     if ids.size == 0:
         return np.zeros(0, dtype=np.intp), np.zeros(0, dtype=np.intp)
+    got = _near_interface._factorize((ids,), ints=True)
+    if got is not None:
+        return got
     _u, first, inv = np.unique(ids, return_index=True, return_inverse=True)
     rank, first_sorted = _near_interface._first_appearance(first, ids.size)
     return first_sorted, rank[np.asarray(inv).ravel()]
