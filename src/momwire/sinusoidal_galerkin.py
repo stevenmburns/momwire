@@ -704,6 +704,49 @@ _NearCells = collections.namedtuple("_NearCells", "entry seg vals")
 _BandRows = collections.namedtuple("_BandRows", "G Ms i_of_entry last carry")
 
 
+# Source bytes `_ordered_row_scatter` gathers per fancy-indexed add: its
+# scratch stays a few MB rather than a copy of the band it scatters.
+_ROW_SCATTER_CHUNK_BYTES = 8 << 20
+
+
+def _ordered_row_scatter(dest, idx, src):
+    """`np.add.at(dest, idx, src)` for a 1-D index along dest's first axis,
+    to the bit, without ufunc.at's element-at-a-time loop (momwire#1290:
+    1.28 s of a 6.9 s free-space solve at N = 2816).
+
+    `np.add.at` is unbuffered: `dest[idx[e]] += src[e]` for e ascending, so
+    each destination row receives its entries' rows one addition at a time,
+    in entry order — the order the fused fill's bit-identity rests on
+    (`_scatter_band`). Rank each entry among the entries sharing its
+    destination (a stable sort, so rank r IS the r-th addition that row
+    receives) and add rank 0's rows, then rank 1's, and so on. Within a
+    rank the destinations are distinct, so a buffered fancy-indexed `+=`
+    loses nothing; across ranks every row meets its entries in ascending
+    order. Each addition is an elementwise IEEE add of the same two
+    operands, with no reduction to reassociate, so the sums cannot depend
+    on the platform's SIMD width or library either. The rank count is a
+    basis's support size: 2 on a plain wire, the member count at a
+    junction."""
+    n = idx.shape[0]
+    if n == 0:
+        return
+    order = np.argsort(idx, kind="stable")
+    srt = idx[order]
+    pos = np.arange(n, dtype=np.int64)
+    new = np.empty(n, dtype=bool)
+    new[0] = True
+    np.not_equal(srt[1:], srt[:-1], out=new[1:])
+    rank = np.empty(n, dtype=np.int64)
+    rank[order] = pos - np.maximum.accumulate(np.where(new, pos, 0))
+    by_rank = np.argsort(rank, kind="stable")
+    cuts = np.searchsorted(rank[by_rank], np.arange(int(rank.max()) + 2))
+    chunk = max(1, _ROW_SCATTER_CHUNK_BYTES // max(1, src.itemsize * (src.size // n)))
+    for r0, r1 in zip(cuts[:-1], cuts[1:]):
+        for c0 in range(r0, r1, chunk):
+            sel = by_rank[c0 : min(c0 + chunk, r1)]
+            dest[idx[sel]] += src[sel]
+
+
 def _solve_in_place(G, rhs):
     """Solve G·x = rhs, factoring G IN PLACE — G holds its LU factors after.
 
@@ -4417,9 +4460,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         with `T[i] = R[i] @ contrib`: scipy's csr product starts each row at
         zero and adds basis i's entries' rows in ascending entry order (the
         unit weights multiply exactly). So T rows are accumulated here the
-        same way — the basis's carried partial row, or zeros, then
-        `np.add.at` over this band's entries in ascending order, which is
-        unbuffered and walks them in index order — and since every band
+        same way — the basis's carried partial row, or zeros, then this
+        band's entries added one at a time in ascending order
+        (`_ordered_row_scatter`, `np.add.at`'s order without its per-element
+        loop) — and since every band
         follows every earlier one, a basis that straddles bands meets its
         entries in the sequence the whole product did. A basis is finished at
         the band holding its LAST entry; its rows of the three products
@@ -4438,7 +4482,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 for t, g in zip(T, got):
                     t[r] = g
         for t, c in zip(T, band):
-            np.add.at(t, local, c)
+            _ordered_row_scatter(t, local, c)
         done = rows.last[touched] < e1
         if done.any():
             fin = np.flatnonzero(done)
@@ -4832,8 +4876,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
           and the band buffer dies. Banding over TEST segments (not source
           columns, and not per block) is what keeps it bit-exact: a matrix
           cell's writers are its own test segment's entries, so a cell is
-          finished inside one band and `np.add.at` reaches it in the same
-          ascending-entry order the whole-triple scatter did. Folding per
+          finished inside one band and the scatter (`_ordered_row_scatter`)
+          reaches it in the same ascending-entry order the whole-triple
+          scatter did. Folding per
           BLOCK instead — the other shape momwire#355 floated — would have
           re-associated the free-space and image writes into G, which is not
           the same float64 sum.
@@ -4891,12 +4936,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             rows = i_of_entry[e0:e1]
             for dest, c in zip(T, corr):
                 # The scatter's own accumulation, reached one band early.
-                # `np.add.at` is unbuffered and walks the band in ascending
-                # entry order, which is the order `R @ corr` sums a basis
+                # `_ordered_row_scatter` adds the band's rows one at a time in
+                # ascending entry order, which is the order `R @ corr` sums a basis
                 # row's entries in — and the bands are ascending too, so every
                 # T cell sees exactly the sequence of additions the
                 # whole-triple product performed.
-                np.add.at(dest, rows, c)
+                _ordered_row_scatter(dest, rows, c)
         if not any(np.any(t) for t in T):
             return
         if not self._band_fill_serves(N):
