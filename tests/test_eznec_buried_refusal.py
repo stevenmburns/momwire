@@ -6,13 +6,13 @@ ERROR`` frame; momwire#553 lands the CAPABILITY behind most of that grammar.
 A wire strictly below a ``GN 0`` / ``GN 2`` interface is now served — the
 solver labels it with the lower medium and fills its pairs through the two
 buried Sommerfeld families — so the old single sentence ("buried wires are
-not served") is gone and what replaced it is four narrower ones, each naming
-a DIFFERENT missing thing:
+not served") is gone and what replaced it was four narrower ones, each naming
+a DIFFERENT missing thing (the first has since been retired):
 
-* a wire with points STRICTLY on both sides of the interface — the split
-  spelling (a below wire ending in the plane, an above wire starting there)
-  is SERVED since momwire#667, and one GW spanning the plane refuses with
-  a sentence that says to write it as two;
+* a wire with points STRICTLY on both sides of the interface — no longer a
+  refusal: the split spelling (a below wire ending in the plane, an above
+  wire starting there) is SERVED since momwire#667, and since momwire#1281
+  one GW spanning the plane is split into it by the seam;
 * a buried wire over ``GN 1`` or a bare ``GD`` — neither card has a lower
   medium at all, and the sentence says which;
 * a buried wire on a deck that ALSO stands a wire end in the plane — the
@@ -136,25 +136,18 @@ def test_the_split_spelling_is_served(record_property):
     assert z.real > 0.0 and abs(z) < 1e4
 
 
-def test_a_wire_spanning_the_plane_refuses_naming_the_split_spelling():
-    """One GW with points strictly on both sides still refuses on this seam
-    (the NEC-2 portal splits it; this dialect addresses nodes by tag and
-    knot, and a split would move a knot) — and the sentence now says what
-    to write instead of quoting an adjudication that the transposed ground
-    card had produced."""
+def test_a_wire_spanning_the_plane_is_split_there_and_in_scope():
+    """One GW with points strictly on both sides used to refuse here, asking
+    for two GW cards meeting at z = 0. Since momwire#1281 the seam writes that
+    split itself, at the exact point the card's line meets the plane, so the
+    deck carries no refusal (the solve and its equivalence to the two-card
+    spelling are gated in ``tests/test_eznec_split_crossing_1281.py``)."""
     text = _crossing_probe(
         "GW 1,19,0.,0.,-2.,0.,0.,10.,.001",
         "GW 2,1,5.,0.,10.,6.,0.,10.,.001",
         feed="EX 4,1,10,0,1.,0.",
     )
-    r = why(text)
-    assert r is not None
-    assert "crosses the ground interface mid-span" in r
-    assert "two GW cards meeting at z = 0" in r
-    assert "momwire#667" in r
-    assert "different experiment" not in r
-    assert "74.761" not in r
-    assert "INTERNAL ERROR" not in r
+    assert why(text) is None
 
 
 # ----------------------------------------------------------------------
