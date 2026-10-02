@@ -102,7 +102,7 @@ import numpy as np
 import scipy.sparse as _sp
 from numpy.polynomial.legendre import leggauss
 
-from . import _aca, _ground_refl, _near_interface, _sommerfeld_below
+from . import _accel, _aca, _ground_refl, _near_interface, _sommerfeld_below
 from ._sommerfeld_transmitted import _c1_moment
 
 
@@ -1985,8 +1985,9 @@ def _product_route(ctx, eps_t, k_p, A, B, gz, step, memo, ends=None):
     for why evaluating them in tiles, and serving the tables in the tiles'
     order, moves no bit.
 
-    With one tile and `nB <= step` the answer is the whole-table dict, as it
-    was; otherwise a generator of `(cols, K_cols)` column sets, which only
+    With one tile and `nB <= step` the answer is the whole table (one
+    `_TileTables`, which reads as the dict it was); otherwise a generator of
+    `(cols, K_cols)` column sets, which only
     `_streamed_sandwich` (or the assembled reference in `_sandwich_dense`)
     consumes.
 
@@ -2556,21 +2557,17 @@ class _ProductTiles:
         the unfused route reads V and W from the row-ordered store."""
         idx = self.plan.chunk_idx(cols)
         li = loc[idx]
-        keys = ("U", "dzpW") if self.store is not None else ("U", "V", "W", "dzpW")
-        out = {k: tb[li, j] for j, k in enumerate(keys)}
         miss = li < 0
+        hp = None
         if miss.any():
             hp = None if self.hpos is None else self.hpos[idx[miss]]
             if hp is None or (hp < 0).any():
                 raise AssertionError("a ready column reads a row not in hand")
             if _PRODUCT_NEG_CONTROL == "held":
                 hp = (hp + 1) % self.n_held  # TEST-ONLY: a neighbour's values
-            for j, k in enumerate(keys):
-                out[k][miss] = held[hp, j]
-        if self.store is not None:
-            out["V"] = self.store[idx, 0]
-            out["W"] = self.store[idx, 1]
-        return out
+        else:
+            miss = None
+        return _TileTables(idx, li, miss, hp, tb, held, self.store)
 
     def chunks(self, step):
         """Yield `(cols, K_cols)`: each tile's newly complete below columns
@@ -2634,6 +2631,109 @@ class _ProductTiles:
         if not done.all():
             raise AssertionError("the tiles left a product row unevaluated")
         self.product.complete = True
+
+
+# The main sandwich's left products straight from the tiles' stores
+# (`left_products_gathered`, momwire#1224), when the accelerator carries it.
+# False forms them by numpy from the gathered tables: the reference the
+# kernel is gated against bit for bit (tests/test_left_gather_1224.py).
+_LEFT_GATHER = True
+_HAVE_LEFT_GATHER_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "left_gather_1224", False)
+)
+
+
+class _TileTables:
+    """One chunk's four table columns as `_ProductTiles._gather` serves them,
+    held as the indices that name them (momwire#1224): `K[key]` gathers that
+    kernel's (nA, |cols|) copy exactly as the dict it replaces did -- from the
+    tile block `tb` by `li`, the held store at the misses by `hp`, and V and
+    W from the row-ordered `store` when the tiles keep one -- and
+    `_left_products` hands the same indices to `left_products_gathered`,
+    which reads those floats where they are stored instead of copying them
+    out first. The indices are taken when the chunk is served, and every
+    store they read is written before and never after, so a late read (a
+    caller that lists the chunks first) reads what an early one would."""
+
+    __slots__ = ("idx", "li", "miss", "hp", "tb", "held", "store")
+    _KEYS = ("U", "V", "W", "dzpW")
+
+    def __init__(self, idx, li, miss, hp, tb, held, store):
+        self.idx, self.li, self.miss, self.hp = idx, li, miss, hp
+        self.tb, self.held, self.store = tb, held, store
+
+    def keys(self):
+        return self._KEYS
+
+    def __iter__(self):
+        return iter(self._KEYS)
+
+    def __len__(self):
+        return len(self._KEYS)
+
+    def __contains__(self, key):
+        return key in self._KEYS
+
+    def __getitem__(self, key):
+        if self.store is not None and key in ("V", "W"):
+            return self.store[self.idx, 0 if key == "V" else 1]
+        tb_keys = ("U", "dzpW") if self.store is not None else self._KEYS
+        j = tb_keys.index(key)
+        out = self.tb[self.li, j]
+        if self.miss is not None:
+            out[self.miss] = self.held[self.hp, j]
+        return out
+
+    def as_dict(self):
+        return {key: self[key] for key in self._KEYS}
+
+    def left_products(self, Ps, k2sq):
+        """`_left_products(Ps, self, k2sq)` by the kernel, or None when it
+        cannot serve (no kernel, `_LEFT_GATHER` off, 64-bit tile indices)."""
+        if not (_LEFT_GATHER and _HAVE_LEFT_GATHER_ACCEL):
+            return None
+        if self.li.dtype != np.int32:
+            return None
+        if any(P.data.dtype != np.float64 for P in Ps):
+            # A complex basis's samples (the sinusoidal sampler stores its
+            # coefficients complex): the kernel's matrices are real.
+            return None
+        hp = np.zeros((0, 0), dtype=np.int32)
+        if self.miss is not None:
+            hp = np.full(self.li.shape, -1, dtype=np.int32)
+            hp[self.miss] = self.hp
+        if self.store is None:
+            kU, kV, kW, kdz = 0, 1, 2, 3
+            sidx = np.zeros((0, 0), dtype=np.int64)
+            store = np.zeros((0, 0), dtype=np.complex128)
+        else:
+            kU, kV, kW, kdz = 0, -1, -1, 1
+            sidx, store = self.idx, self.store
+        return _accel.acc.left_products_gathered(
+            [P.indptr for P in Ps],
+            [P.indices for P in Ps],
+            [P.data for P in Ps],
+            Ps[0].shape[0],
+            float(k2sq),
+            self.li,
+            hp,
+            self.tb,
+            self.held,
+            kU,
+            kV,
+            kW,
+            kdz,
+            sidx,
+            store,
+            _near_interface._physical_cpu_count(),
+        )
+
+
+def _whole_tables(K):
+    """Whether `K` is one whole-table answer (a dict of the four kernels, or
+    the product route's `_TileTables` of every column) rather than a
+    sequence of `(cols, K_cols)` chunks."""
+    return isinstance(K, (dict, _TileTables))
 
 
 def _index_dtype(n):
@@ -4872,6 +4972,34 @@ def _nodes_of(ax, segs):
 def _left_products(Ps, K, k2sq):
     """The six left products `P_i @ K_x` of the main sandwich, in the
     reference term order (U·x̂, U·ŷ, ẑẑ, the two W cross terms, Φ)."""
+    if isinstance(K, _TileTables):
+        got = K.left_products(Ps, k2sq)
+        if got is not None:
+            return got
+        K = K.as_dict()
+    if _dense_left_serve(Ps, K):
+        # The whole-table and grid routes' tables through the same loop as
+        # the tiles' (momwire#1224): one sum for every route, so the routes
+        # agree to the bit by construction on any build.
+        return _accel.acc.left_products_gathered(
+            [P.indptr for P in Ps],
+            [P.indices for P in Ps],
+            [P.data for P in Ps],
+            Ps[0].shape[0],
+            float(k2sq),
+            np.zeros((0, 0), dtype=np.int32),
+            np.zeros((0, 0), dtype=np.int32),
+            np.zeros((0, 0), dtype=np.complex128),
+            np.zeros((0, 0), dtype=np.complex128),
+            0,
+            1,
+            2,
+            3,
+            np.zeros((0, 0), dtype=np.int64),
+            np.zeros((0, 0), dtype=np.complex128),
+            _near_interface._physical_cpu_count(),
+            [K["U"], K["V"], K["W"], K["dzpW"]],
+        )
     P1, P2, P3, P4 = Ps
     return (
         P1 @ K["U"],
@@ -4880,6 +5008,24 @@ def _left_products(Ps, K, k2sq):
         P3 @ K["W"],
         P4 @ K["W"],
         P4 @ K["V"],
+    )
+
+
+def _dense_left_serve(Ps, K):
+    """Whether `left_products_gathered` can serve these whole tables: the
+    kernel on, real matrices, complex tables of the matrices' width."""
+    if not (_LEFT_GATHER and _HAVE_LEFT_GATHER_ACCEL):
+        return False
+    if any(P.data.dtype != np.float64 for P in Ps):
+        return False
+    tabs = [K[key] for key in ("U", "V", "W", "dzpW")]
+    return all(
+        isinstance(t, np.ndarray)
+        and t.dtype == np.complex128
+        and t.ndim == 2
+        and t.shape == tabs[0].shape
+        and t.shape[0] == Ps[0].shape[1]
+        for t in tabs
     )
 
 
@@ -5107,11 +5253,11 @@ def _sandwich_dense(
         # one chunk of every column is `_streamed_sandwich`'s own case, the
         # same contraction per row (see there), so it is the dict route's
         # block entry for entry.
-        chunks = [(slice(0, len(iB)), K)] if isinstance(K, dict) else K
+        chunks = [(slice(0, len(iB)), K)] if _whole_tables(K) else K
         return _streamed_sandwich(
             Ps, (Q1, Q2, Q3, Q4), chunks, k2sq, rA, rB, None, fresh=True, sink=sink
         )
-    if not isinstance(K, dict) and _MAIN_STREAMED:
+    if not _whole_tables(K) and _MAIN_STREAMED:
         if rows is not None:
             raise ValueError("the streamed main sandwich serves whole blocks only")
         fresh = out is None
@@ -5124,7 +5270,7 @@ def _sandwich_dense(
         return _streamed_sandwich(
             Ps, (Q1, Q2, Q3, Q4), K, k2sq, rA, rB, out, fresh=fresh, support=support
         )
-    if isinstance(K, dict):
+    if _whole_tables(K):
         L = _left_products(Ps, K, k2sq)
     else:
         # COLUMN CHUNKS of the tables (`_main_sandwich`, via `_chunked_tables`),

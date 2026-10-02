@@ -345,6 +345,10 @@ _ACCEL_SOURCES = [
     # momwire#1224: exact-equality grouping by hashing (the crossing fill's
     # dedups). No floating-point arithmetic, and its own TU regardless.
     "src/momwire/_accel_factorize.cpp",
+    # momwire#1224: the crossing main sandwich's left products read straight
+    # from the product tiles. Its own TU: it does float arithmetic whose
+    # order is the numpy route's, and nothing else may move its codegen.
+    "src/momwire/_accel_left_gather.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
