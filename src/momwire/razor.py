@@ -349,7 +349,6 @@ import os
 import math
 
 import numpy as np
-import scipy.linalg
 
 from . import (
     _below_interface,
@@ -5106,7 +5105,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # consumer takes its finished rows before the next window is built.
         # `_assemble_Z_source_block`'s whole block is Fortran order
         # (momwire#1173): it is the matrix the solve factors, and
-        # `scipy.linalg.solve(overwrite_a=True)` factors in place only on a
+        # `_bspline._lu_solve(overwrite_a=True)` factors in place only on a
         # column-major array; a C-order Z is silently copied first. A row
         # window of a column-major matrix is still one contiguous run per
         # column, and every write below is elementwise, so the layout
@@ -5310,7 +5309,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # a full n_basis² copy and is the same factorisation of the same
         # numbers, bit for bit. (Nothing ever read the old `self.z` stash,
         # which would now hold the factors; it is gone, as in bspline.)
-        coeffs = scipy.linalg.solve(Z, rhs, overwrite_a=True)
+        coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
         voltages = self._port_voltages()
         port_currents = cols.T @ coeffs
         z_per_port = voltages / port_currents
@@ -5374,11 +5373,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         method's `Z` cannot diverge from `compute_impedance` /
         `compute_y_matrix`'s, not even by the 1-ULP omega drift a bare
         `self.omega` read would cost it. Each call factors and
-        solves fresh (`scipy.linalg.solve`, not a stashed LU): no
+        solves fresh (`_bspline._lu_solve`, not a stashed LU): no
         factorisation is reused ACROSS `compute_impedance` /
         `compute_y_matrix` / `compute_port_solution` calls on one instance,
         but WITHIN this call every port shares the one fill and the one
-        `scipy.linalg.solve` over all `n_ports` right-hand-side columns at
+        `_lu_solve` over all `n_ports` right-hand-side columns at
         once — the "one fill, one factorisation" the swept generator below
         relies on.
 
@@ -5410,7 +5409,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         self._checkpoint()
         # In place, as in `compute_impedance`: Z is dead after this solve.
-        X = scipy.linalg.solve(Z, cols.astype(np.complex128), overwrite_a=True)
+        X = _bspline._lu_solve(Z, cols.astype(np.complex128), overwrite_a=True)
         Y = cols.T @ X
         return PortSolution(
             y=Y,
@@ -5767,7 +5766,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self._checkpoint()
             k = float(k)
             Z = self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
-            coeffs = scipy.linalg.solve(Z, rhs, overwrite_a=True)
+            coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
             feed_currents[i] = cols.T @ coeffs
 
         z_per_feed = voltages[None, :] / feed_currents

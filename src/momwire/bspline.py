@@ -378,6 +378,35 @@ _BASIS_POLY_CACHE_MAX = 32
 # with this module — docs/sommerfeld-everywhere-plan.md Phase 1.
 
 
+def _lu_solve(Z, rhs, overwrite_a=False, overwrite_b=False):
+    """Solve Z·x = rhs through `lu_factor` + `lu_solve` (momwire#1290).
+
+    The same getrf on the same matrix, then the same getrs, so the answer is
+    `scipy.linalg.solve`'s to the bit: scipy 1.18's `solve` with no
+    `assume_a` only takes another factorization when Z is EXACTLY symmetric,
+    triangular or banded, and these Z are not (|Z - Zᵀ| is roundoff). What
+    `solve` adds is its reciprocal-condition estimate: a 1-norm of Z (lange)
+    before the factorization and gecon after it. Both are memory-bound
+    O(N²) passes that do not thread, and they were the whole gap to
+    `lu_factor`: measured on Skylake at N = 2816, `solve` 0.390 s,
+    `lu_factor` + `lu_solve` 0.290 s, gecon alone 0.052 s. That estimate
+    only drove an ill-conditioning `LinAlgWarning` that nothing here reads;
+    it is dropped, as SG's `_solve_in_place` and the point-matched solve
+    already do. `check_finite` stays, so a NaN in Z is still a `ValueError`.
+
+    `overwrite_a=True` factors Z's own storage when Z is F-contiguous (the
+    fills arrange it), so Z holds its LU factors afterwards and callers must
+    not read it; a C-ordered Z is copied, as `solve` did. `overwrite_b` lets
+    a locally built F-ordered rhs take the solution. An EXACTLY singular Z
+    still raises `LinAlgError`, as `solve` did, where `lu_factor` alone only
+    warns and the solve would return inf/NaN.
+    """
+    lu_piv = scipy.linalg.lu_factor(Z, overwrite_a=overwrite_a)
+    if not np.all(np.diagonal(lu_piv[0])):
+        raise np.linalg.LinAlgError("singular matrix")
+    return scipy.linalg.lu_solve(lu_piv, rhs, overwrite_b=overwrite_b)
+
+
 def _evict_fifo(cache: dict, limit: int) -> None:
     while len(cache) >= limit:
         cache.pop(next(iter(cache)))
@@ -4352,7 +4381,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
 
-        # Fortran order: scipy.linalg.solve(overwrite_a=True) can only
+        # Fortran order: `_lu_solve(overwrite_a=True)` can only
         # factor in place on a column-major matrix — C order would silently
         # cost a full n_basis-squared copy at solve time (issue #136).
         if restrict is None:
@@ -5198,13 +5227,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         locally-built rhs is always overwritten; the caller's `v` never is.
         """
         if kcl_A.shape[0] == 0:
-            return scipy.linalg.solve(Z, v, overwrite_a=overwrite)
+            return _lu_solve(Z, v, overwrite_a=overwrite)
         n_b = Z.shape[0]
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_b, 1 + n_c), dtype=np.complex128, order="F")
         rhs[:, 0] = v
         rhs[:, 1:] = kcl_A.T
-        sol = scipy.linalg.solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
+        sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         w = sol[:, 0]
         X = sol[:, 1:]
         lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
@@ -5218,13 +5247,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         caller's V is never overwritten.
         """
         if kcl_A.shape[0] == 0:
-            return scipy.linalg.solve(Z, V, overwrite_a=overwrite)
+            return _lu_solve(Z, V, overwrite_a=overwrite)
         n_b, n_p = V.shape
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_b, n_p + n_c), dtype=np.complex128, order="F")
         rhs[:, :n_p] = V
         rhs[:, n_p:] = kcl_A.T
-        sol = scipy.linalg.solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
+        sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         W = sol[:, :n_p]
         X = sol[:, n_p:]
         Lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ W)

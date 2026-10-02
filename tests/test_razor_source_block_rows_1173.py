@@ -223,30 +223,32 @@ def test_moment_rows_are_the_full_planes_rows(lane, ek):
 @pytest.mark.filterwarnings("ignore")
 @pytest.mark.parametrize("name", ["free space", "elevated / sommerfeld", "crossing"])
 def test_the_solve_factors_z_in_place(name):
-    """The filled Z is column-major and the solve is asked to overwrite it
-    (momwire#1173): that is what lets LAPACK factor without a full copy.
-    The answer is `scipy.linalg.solve` on the same matrix without the flag,
-    bit for bit."""
+    """The filled Z is column-major and the factorisation is asked to
+    overwrite it (momwire#1173): that is what lets LAPACK factor without a
+    full copy. The answer is `scipy.linalg.solve` on the same matrix without
+    the flag, bit for bit — `lu_factor` + `lu_solve` is the same getrf and
+    getrs, minus `solve`'s condition estimate (momwire#1290)."""
     import scipy.linalg
 
     make, _ = DECKS[name]
     seen = []
-    inner = scipy.linalg.solve
+    rhs = []
+    factor, back = scipy.linalg.lu_factor, scipy.linalg.lu_solve
 
-    def spy(a, b, **kw):
+    def spy_factor(a, **kw):
         seen.append(
-            (
-                a.flags.f_contiguous,
-                kw.get("overwrite_a", False),
-                a.copy(order="F"),
-                b.copy(),
-            )
+            (a.flags.f_contiguous, kw.get("overwrite_a", False), a.copy(order="F"))
         )
-        return inner(a, b, **kw)
+        return factor(a, **kw)
+
+    def spy_back(lu_piv, b, **kw):
+        rhs.append(np.array(b, copy=True))
+        return back(lu_piv, b, **kw)
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(_razor.scipy.linalg, "solve", spy)
+        mp.setattr(scipy.linalg, "lu_factor", spy_factor)
+        mp.setattr(scipy.linalg, "lu_solve", spy_back)
         _z, coeffs = RazorSolver(**make(), **LANES["nec5"]).compute_impedance()
-    (f_contig, overwrite, a0, b0) = seen[0]
+    (f_contig, overwrite, a0) = seen[0]
     assert f_contig and overwrite
-    assert np.array_equal(coeffs, inner(a0, b0))
+    assert np.array_equal(coeffs, scipy.linalg.solve(a0, rhs[0]))
