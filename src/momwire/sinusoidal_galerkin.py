@@ -732,6 +732,35 @@ def _solve_in_place(G, rhs):
     return scipy.linalg.lu_solve(lu_piv, rhs)
 
 
+def _solve_constrained(G, rhs, C):
+    """Solve G·x = rhs on the subspace C·x = 0 (Galerkin: the constrained
+    trial functions are the test functions too), or `_solve_in_place` when C
+    is None — the unconstrained path, bit for bit.
+
+    Eliminates one unknown per row of C: pivots p from a column-pivoted QR of
+    C, the rest r, and x_p = T·x_r with T = −C_p⁻¹·C_r. The reduced system
+    is PᵀGP with P = [I; T] stacked over (r, p), assembled from G's four
+    blocks in O(n²·m) rather than as a dense product. The transpose and not
+    the adjoint: the bilinear form is the un-conjugated one this family
+    assembles G with.
+    """
+    if C is None:
+        return _solve_in_place(G, rhs)
+    m, n = C.shape
+    _q, _r, perm = scipy.linalg.qr(C, mode="economic", pivoting=True)
+    p, r = np.sort(perm[:m]), np.setdiff1d(np.arange(n), perm[:m])
+    T = -np.linalg.solve(C[:, p], C[:, r])
+    Grp = G[np.ix_(r, p)]
+    Gpr = G[np.ix_(p, r)]
+    Gc = G[np.ix_(r, r)] + T.T @ Gpr + Grp @ T + T.T @ G[np.ix_(p, p)] @ T
+    rhs_c = rhs[r] + T.T @ rhs[p]
+    x_r = _solve_in_place(np.asfortranarray(Gc), rhs_c)
+    x = np.empty((n,) + x_r.shape[1:], dtype=np.result_type(x_r, T))
+    x[r] = x_r
+    x[p] = T @ x_r
+    return x
+
+
 def _graded_endpoint_rule(eps, n_per_panel, leggauss):
     """Composite Gauss rule on [-1, 1] with panels graded toward BOTH ends.
 
@@ -1390,12 +1419,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
           that a node source has an identically zero RHS in the point-matched
           solver, read as a statement about the TESTING rather than the basis.
         """
-        N = geom["n_segs"]
-        n_basis = N + self._n_extra_cols()
-        grounded = geom["grounded_junctions"]
-        out = np.zeros((n_basis, len(self.node_ports)), dtype=np.complex128)
-        starts = seg_view["starts"]
-        seg_h = np.asarray(geom["seg_h"], dtype=float)
+        # A crossing junction is grounded by geometry but is not shorted to
+        # the plane — one member is in the soil — and its node port is served
+        # with the continuity `_crossing_continuity_rows` imposes, which is
+        # what restores the identity above there (momwire#1282).
+        grounded = geom["grounded_junctions"] - self._node_port_crossing_junctions()
+        out = np.zeros(
+            (geom["n_segs"] + self._n_extra_cols(), len(self.node_ports)),
+            dtype=np.complex128,
+        )
         for p, (j_idx, side_a, _v) in enumerate(self.node_ports):
             if j_idx in grounded:
                 raise ValueError(
@@ -1404,23 +1436,72 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     "image (#151), so the members' currents do not close on "
                     "each other and there is no through-current to drive"
                 )
-            members = self._junction_members(geom, j_idx)
-            for mi in side_a:
-                m, sgn = members[mi]
-                half = 0.5 * float(seg_h[m])
-                s, e = starts[m], starts[m + 1]
-                sig = seg_view["sigma"][s:e]
-                # ξ = σ_m·h_m/2; cos is even in ξ so the folded sin² term
-                # needs no sign, and B's sin(kξ) carries it (#203).
-                val = _basis_value(
-                    sig * seg_view["AC"][s:e],
-                    seg_view["B"][s:e],
-                    sig * seg_view["C"][s:e],
-                    _entry_k(seg_view, s, e, k),
-                    half * sgn,
-                )
-                np.add.at(out[:, p], seg_view["jbasis"][s:e], sgn * val)
+            out[:, p] = self._node_inflow(geom, seg_view, k, j_idx, side_a)
         return out
+
+    def _node_inflow(self, geom, seg_view, k, j_idx, member_indices):
+        """(n_basis,) — each basis's current flowing INTO junction `j_idx`'s
+        node along the members named by `member_indices` (see
+        `_node_cut_vectors` for the shape and the sign)."""
+        out = np.zeros(geom["n_segs"] + self._n_extra_cols(), dtype=np.complex128)
+        starts = seg_view["starts"]
+        seg_h = np.asarray(geom["seg_h"], dtype=float)
+        members = self._junction_members(geom, j_idx)
+        for mi in member_indices:
+            m, sgn = members[mi]
+            half = 0.5 * float(seg_h[m])
+            s, e = starts[m], starts[m + 1]
+            sig = seg_view["sigma"][s:e]
+            # ξ = σ_m·h_m/2; cos is even in ξ so the folded sin² term
+            # needs no sign, and B's sin(kξ) carries it (#203).
+            val = _basis_value(
+                sig * seg_view["AC"][s:e],
+                seg_view["B"][s:e],
+                sig * seg_view["C"][s:e],
+                _entry_k(seg_view, s, e, k),
+                half * sgn,
+            )
+            np.add.at(out, seg_view["jbasis"][s:e], sgn * val)
+        return out
+
+    def _node_port_crossing_junctions(self):
+        """Indices of the CROSSING junctions a node port names (momwire#1282).
+
+        Empty without node ports or ground, so no other deck reaches the
+        crossing scope from here."""
+        if not self.node_ports or self.ground_z is None:
+            return frozenset()
+        named = {j for j, _side, _v in self.node_ports}
+        candidates = named & set(self._grounded_junctions())
+        if not candidates:
+            return frozenset()
+        return frozenset(candidates & set(self._crossing_junction_indices()))
+
+    def _crossing_continuity_rows(self, geom, seg_view, k):
+        """(m, n_basis) — the current-continuity row of every crossing
+        junction a node port names, or None when there is none (momwire#1282).
+
+        A crossing node is C0 in this family: each member's end basis is
+        value 1 there and couples to no partner, and continuity through the
+        node emerges from the crossing fill's wings and corner rather than
+        being imposed. That is a statement about a node nothing drives. A
+        node port's drive is one side's through-current, so with the members
+        free the source sits between the node and that side alone and the
+        far side's current is free to differ — Dan AC6LA's deck answered
+        0.25 + 0.46j ohm apart between its two spellings. The row is the net
+        inflow over ALL members, which an ordinary junction satisfies
+        identically (#177); imposing it makes the two sides' cut vectors
+        minus each other on the solution space, so either member names the
+        same port — the series EMF NEC-5 puts on the node."""
+        crossing = sorted(self._node_port_crossing_junctions())
+        if not crossing:
+            return None
+        return np.stack(
+            [
+                self._node_inflow(geom, seg_view, k, j, range(len(self.junctions[j])))
+                for j in crossing
+            ]
+        )
 
     @property
     def n_ports(self):
@@ -5435,7 +5516,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             voltages = self._port_voltages()
             self._checkpoint()  # after assembly, before the dense solve
 
-            alpha = _solve_in_place(G, U @ voltages)
+            alpha = _solve_constrained(
+                G,
+                U @ voltages,
+                self._crossing_continuity_rows(geom, seg_view, self.k),
+            )
 
             # Inside the medium too (momwire#1159): an off-centre point gap's
             # readout writes the shapes at `self.k`, which is k_m only here.
@@ -5506,7 +5591,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 geom, self.k, self._medium_eta(medium)
             )
             U = self._drive_columns(geom, seg_view, self.k)
-            alphas = _solve_in_place(G, U)
+            alphas = _solve_constrained(
+                G, U, self._crossing_continuity_rows(geom, seg_view, self.k)
+            )
             Y = np.stack(
                 [
                     self._port_currents(alphas[:, j], geom, seg_view, U)
