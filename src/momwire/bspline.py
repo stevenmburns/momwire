@@ -2405,20 +2405,56 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     def _kcl_row_junctions(self):
         """The junctions that carry a KCL row, in index order: every
-        non-grounded junction, plus the crossing junctions of a TWO-RADIUS
-        crossing deck (antennaknobs plan U5), whose continuity the two-radius
-        fill closes with the multiplier — at two radii the split fill's own
-        continuity does not converge. One helper, so `_build_basis_polynomials`
-        and `_split_kcl_ports` cannot count the rows differently."""
+        non-grounded junction, plus two kinds of crossing junction —
+
+        * every crossing junction of a TWO-RADIUS crossing deck (antennaknobs
+          plan U5), whose continuity the two-radius fill closes with the
+          multiplier — at two radii the split fill's own continuity does not
+          converge;
+        * a crossing junction a node gap sits on (momwire#1282,
+          `_node_gap_crossing_junctions`).
+
+        One helper, so `_build_basis_polynomials` and `_split_kcl_ports`
+        cannot count the rows differently."""
         grounded = self._grounded_junctions()
         closed = (
             set(self._crossing_junctions())
             if self._two_radius_crossing() is not None
             else set()
         )
+        closed |= self._node_gap_crossing_junctions()
         return [
             j for j in range(len(self.junctions)) if j not in grounded or j in closed
         ]
+
+    def _node_gap_crossing_junctions(self):
+        """Indices of the CROSSING junctions a node gap names (momwire#1282).
+
+        At a crossing node the members' end bases are independent unknowns
+        and the crossing fill's own physics closes the current through the
+        node (`_crossing_fill`, "split ≡ merged ≡ V-constrained"). That is a
+        statement about a node nothing drives. A node gap's column is ONE
+        member's end basis, so without the row the source sits between the
+        node and that member alone and the current on the far side is free to
+        differ: the two members name two different ports (Dan AC6LA's deck,
+        0.25 Ω apart). With the row the K = 2 constrained space has one
+        through-current dof and the two σ-signed columns are minus each other
+        on it, so either member names the same port — the series EMF NEC-5
+        puts on the node.
+
+        Empty without node gaps or ground, so no other deck reaches the
+        crossing scope from here."""
+        if not self.node_gaps or self.ground_z is None or not self.junctions:
+            return frozenset()
+        named = {(w, e) for w, e, _v in self.node_gaps}
+        candidates = {
+            j
+            for j in self._grounded_junctions()
+            if {tuple(m) for m in self.junctions[j]} & named
+        }
+        if not candidates or _medium_spec.BELOW not in self._wire_media():
+            return frozenset()
+        return frozenset(candidates & set(self._crossing_junctions()))
 
     def _split_kcl_ports(self, kcl_A):
         """Split the assembled KCL matrix into (constraint rows, port rows,
@@ -2506,6 +2542,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # A two-radius crossing junction keeps its KCL row (U5), and the
             # radii are not part of the geometry key.
             self._two_radius_crossing() is not None,
+            # So does a crossing junction a node gap sits on (momwire#1282),
+            # and the node gaps are not part of it either.
+            tuple(sorted(self._node_gap_crossing_junctions())),
         )
         cached_entry = _BASIS_POLY_CACHE.get(basis_key)
         if cached_entry is not None:
@@ -6776,7 +6815,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         volts = np.zeros(len(self.node_gaps), dtype=np.complex128)
         if not self.node_gaps:
             return cols, volts
-        grounded = self._grounded_junctions()
+        # A crossing junction is grounded by geometry (its node is in the
+        # plane) but is not shorted to the plane: one member is in the soil
+        # and the node is a through-junction between the two media. Its gap
+        # is a series EMF between those members (momwire#1282), served with
+        # the junction's KCL row kept (`_node_gap_crossing_junctions`).
+        grounded = self._grounded_junctions() - self._node_gap_crossing_junctions()
         end_to_junction = {}
         for j, jw in enumerate(self.junctions):
             for member in jw:
