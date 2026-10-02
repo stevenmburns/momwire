@@ -771,6 +771,35 @@ _REFUSE_PORT_AT_SPLIT = (
     "load or network connection AT a crossing junction is not served at this "
     "seam yet (momwire#1282). Address a node one segment above or below it"
 )
+# momwire#1282: a series source ON a crossing junction's node is served for
+# the two-member junction (one wire rising, one buried wire ending on it),
+# where the node is one through-current path and the address names it through
+# either member.  At K >= 3 the source would sit between the named member and
+# the other K - 1 together - a node port no basis has a measured answer for at
+# a crossing - so it refuses, and names the two spellings that serve.
+_REFUSE_CROSSING_FAN = (
+    "{at} puts a series source on a crossing junction in the ground plane "
+    "where {count} wires meet ({above} above the ground, {below} buried). A "
+    "source on a crossing node is served where ONE wire rises from it and ONE "
+    "buried wire ends on it (momwire#1282); with {count} wires it would sit "
+    "between the named wire and the other {others} together, which has no "
+    "measured spelling at a crossing node. Join the buried wires at depth and "
+    "bring ONE wire up to the node (the buried-hub spelling), or put the "
+    "source on the rising wire one segment up"
+)
+# The point-matched sinusoidal family places a gap at a segment centre and
+# never on a node (its `knot_feeds` refusal), and the crossing node is where
+# its crossing fill joins the two media - a source there is momwire#1282's open
+# half for this family, which needs a design of its own before code.
+_REFUSE_CROSSING_SOURCE_NO_KNOT = (
+    "{at} puts a series source on a crossing junction in the ground plane (a "
+    "buried wire ending at z = 0 where a wire rises from it), and basis "
+    "{basis!r} does not serve a source there: the point-matched sinusoidal "
+    "basis places a gap only at a segment centre, never on a node, and a "
+    "source ON the crossing node is the open half of momwire#1282 for this "
+    "family. The knot bases serve it - bspline, bspline-d1, razor-2p and "
+    "sinusoidal-galerkin"
+)
 _REFUSE_BURIED_NO_MEDIUM = (
     "wire {tag} runs below the ground plane (min z = {zmin:g} m) under a "
     "{card} card, which has no lower medium to put it in: {why}. A buried "
@@ -1838,6 +1867,10 @@ class _Site:
     # branch pair left to name.  The other two gap sites sit on a knot INSIDE
     # the structure, where a second address is the far side of one port.
     contact: bool = False
+    # A node gap or delta gap ON a crossing junction's node in the ground
+    # plane (:func:`_crossing_site`, momwire#1282).  Read only to name that
+    # site in a basis refusal; the port itself is an ordinary junction site.
+    crossing: bool = False
     index: int = -1
     # A NEGATIVE column means this site reaches no momwire port at all, which
     # is the "virtual" spelling and nothing else: :func:`_transform` leaves
@@ -2011,6 +2044,7 @@ def build_mesh(
     )
     addressed = _addressed_nodes(deck)
     crossings = _plane_crossings(deck)
+    crossing_nodes = frozenset(_crossing_nodes(deck))
     piece_of_node: dict[tuple[int, int], tuple[int, str]] = {}
     # (tag, node) -> (piece, metres along it), for an addressed node STRICTLY
     # inside a piece.  Only the delta-gap spelling leaves one there; under the
@@ -2111,6 +2145,8 @@ def build_mesh(
                 node,
                 node_gaps=cut,
                 phantom=phantom,
+                crossing_nodes=crossing_nodes,
+                crossing_spelling=_crossing_spelling(solver_class),
             )
             site.index = len(mesh.sites)
             mesh.sites.append(site)
@@ -2404,6 +2440,92 @@ def _interior_site(
     )
 
 
+def _crossing_spelling(solver_class: type) -> str:
+    """How a series EMF ON a crossing junction's node reaches ``solver_class``.
+
+    The node is one through-current path between the rising wire and the
+    buried one, and the source has to drive that path rather than either
+    member's end alone — NEC-5 answers ``1,-1`` and ``6,-1`` on Dan AC6LA's
+    deck with the same 70.787 − j0.696 Ω (momwire#1282).  Which port
+    is that path depends on how the basis represents the node:
+
+    * ``RazorSolver`` carries ONE tent across the crossing node, so a delta
+      gap on the knot already is the through-current: both spellings answer
+      bit for bit alike;
+    * the B-spline family leaves the two members' end bases independent at a
+      crossing node (the crossing fill's own physics closes the current,
+      ``_crossing_fill``), so a gap at one member's end is a source between
+      the node and THAT member only — 0.25 Ω apart between the two spellings,
+      measured.  Its port is the node gap, and the solver keeps the
+      junction's continuity row while one is declared there
+      (``BSplineSolver._kcl_row_junctions``), which is what makes the two
+      spellings one port.
+    """
+    return "node" if issubclass(solver_class, _CUT_SPELLING) else "gap"
+
+
+def _crossing_site(
+    mesh: _Mesh,
+    piece_index: int,
+    which: str,
+    tag: int,
+    node: int,
+    *,
+    spelling: str,
+) -> _Site:
+    """A series EMF on a crossing junction's node (momwire#1282).
+
+    Served for the junction the crossing serve was built around: ONE wire
+    rising from the node and ONE buried wire ending on it.  The address names
+    the node through either member, and the two addresses are the two sides of
+    one port — :func:`_assign_columns` gives the second the first's column
+    with the weight KCL fixes, exactly as at any other two-wire junction.
+
+    More members are refused by name.  A source at a node of K >= 3 sits
+    between the named wire and the other K - 1 together; razor refuses that
+    node port in the ground plane, and no basis has a measured answer for it
+    at a crossing node.
+    """
+    at = Nec5Node(tag=tag, node=node)
+    members = next(group for group in mesh.junctions if (piece_index, which) in group)
+
+    def _side(member: tuple[int, str]) -> str:
+        points = mesh.pieces[member[0]].points
+        tol = _ground_spec.ground_touch_tol(points)
+        if float(points[:, 2].max()) > tol:
+            return "above"
+        if float(points[:, 2].min()) < -tol:
+            return "below"
+        return "in-plane"
+
+    sides = sorted(_side(m) for m in members)
+    if sides != ["above", "below"]:
+        if "above" in sides and "below" in sides:
+            raise ServeRefusal(
+                _REFUSE_CROSSING_FAN.format(
+                    at=f"{tag},{at.written}",
+                    count=len(members),
+                    others=len(members) - 1,
+                    above=sides.count("above"),
+                    below=sides.count("below"),
+                )
+            )
+        raise ServeRefusal(
+            f"{tag},{at.written} addresses a node where several wires meet IN "
+            f"the ground plane; a series source at a grounded junction is not "
+            f"served at this seam"
+        )
+    return _Site(
+        at=at,
+        spelling=spelling,
+        piece=piece_index,
+        end=which,
+        sign=1.0 if which == "start" else -1.0,
+        arclength=0.0 if which == "start" else mesh.pieces[piece_index].length,
+        crossing=True,
+    )
+
+
 def _site_for(
     structure: Structure,
     mesh: _Mesh,
@@ -2414,8 +2536,15 @@ def _site_for(
     *,
     node_gaps: bool,
     phantom: frozenset[int] = frozenset(),
+    crossing_nodes: frozenset[tuple[int, int, int]] = frozenset(),
+    crossing_spelling: str = "gap",
 ) -> _Site:
     """Which momwire port a ``(favored tag, node)`` address becomes.
+
+    A node in the ground plane that a buried wire ENDS on
+    (``crossing_nodes``, :func:`_crossing_nodes`) is a crossing junction
+    rather than a grounded one, and :func:`_crossing_site` answers it in the
+    spelling ``crossing_spelling`` names (momwire#1282).
 
     A node on a PHANTOM wire becomes none of them (momwire#1139).  It is a
     circuit node EZNEC spelled as a segment address, so it is a deck port
@@ -2447,6 +2576,10 @@ def _site_for(
     meeting = structure.degree[key] - (1 if grounded else 0)
 
     if meeting >= 2:
+        if grounded and key in crossing_nodes:
+            return _crossing_site(
+                mesh, piece_index, which, tag, node, spelling=crossing_spelling
+            )
         if grounded:
             raise ServeRefusal(
                 f"{tag},{Nec5Node(tag, node).written} addresses a node where "
@@ -4137,6 +4270,14 @@ def _check_basis_can_host(
     # be well-formed, plausible, and about a different antenna.  Measured
     # before it was closed: 75 of the 77 servable captures would have moved,
     # every one of them by exactly 0.500 h.
+    if not solver_class.capabilities.knot_feeds:
+        crossing = next((site for site in mesh.feeds if site.crossing), None)
+        if crossing is not None:
+            raise ServeRefusal(
+                _REFUSE_CROSSING_SOURCE_NO_KNOT.format(
+                    at=f"{crossing.at.tag},{crossing.at.written}", basis=basis
+                )
+            )
     if mesh.feeds and not solver_class.capabilities.knot_feeds:
         site = mesh.feeds[0]
         raise ServeRefusal(
