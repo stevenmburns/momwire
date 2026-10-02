@@ -1111,14 +1111,21 @@ def _crossing_nodes(deck: Nec5Deck) -> set[tuple[int, int, int]]:
 
 
 def _has_buried_wire(deck: Nec5Deck) -> bool:
-    """Whether any wire lies STRICTLY below the plane, on the solver's own
-    per-wire tolerance. Read by the two output refusals, which are about the
-    deck rather than about a card."""
+    """Whether any wire reaches STRICTLY below the plane, on the solver's own
+    per-wire tolerance. Read by the near-field refusal, which is about the
+    deck rather than about a card.
+
+    A crossing junction's below member ENDS in the plane and is buried all
+    the same: its elements radiate from inside the lower medium, which is
+    what the near-field readout cannot compose.  Asked as "wholly below" this
+    let a crossing deck through to that readout, the two-card spelling
+    (momwire#667) and, once a single card was split into it, the one-card
+    spelling too (momwire#1281)."""
     if not _has_interface(deck):
         return False
     for _tag, pl in _spans(deck):
         tol = _ground_spec.ground_touch_tol(pl)
-        if float(pl[:, 2].max()) < -tol:
+        if float(pl[:, 2].min()) < -tol:
             return True
     return False
 
