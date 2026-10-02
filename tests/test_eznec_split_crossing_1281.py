@@ -130,8 +130,14 @@ def ex(address: str) -> str:
 
 
 def _mesh(text: str):
+    """The mesh `serve` builds, crossing flag included: a deck with a crossing
+    junction takes the delta-gap spelling and is never cut at an address."""
     deck = parse_nec5(text)
-    return deck, _serve.build_mesh(deck, _serve.structure_of(deck))
+    return deck, _serve.build_mesh(
+        deck,
+        _serve.structure_of(deck),
+        crossing=bool(_serve._crossing_nodes(deck)),
+    )
 
 
 def test_inside_a_segment_the_segment_becomes_two_and_every_node_stays():
@@ -202,7 +208,10 @@ def test_no_interface_no_split(ground):
     )
     deck, mesh = _mesh(text)
     assert _serve._plane_crossings(deck) == {}
-    assert len(mesh.pieces) == 1
+    assert not mesh.split_elements
+    # Cut only at the addressed node (the node-gap spelling), never at z = 0.
+    assert [(p.first_node, p.last_node) for p in mesh.pieces] == [(0, 5), (5, 10)]
+    assert not any(p.cut_start or p.cut_end for p in mesh.pieces)
     assert _serve.refusal(deck) is None
 
 
@@ -226,6 +235,7 @@ def _equivalence(basis: str, n: int, feed: int, ld: str = LD5_ALL) -> None:
     assert auto == written, f"{basis} n={n}: {auto!r} vs {written!r}"
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("basis", FAST)
 @pytest.mark.parametrize(
     "n,feed",
@@ -256,6 +266,7 @@ def test_the_fixture_decks_are_in_scope(name):
     assert _serve.refusal(parse_nec5(fixture(name))) is None
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("basis", FAST)
 @pytest.mark.parametrize("name,n,feed", [("thr_n21", 21, 1), ("dan_through", 21, 2)])
 def test_the_fixture_decks_serve_as_their_hand_split(basis, name, n, feed):
@@ -335,10 +346,13 @@ def test_loads_either_side_and_a_wire_wide_ld5_are_the_hand_split_loads(basis):
 def test_the_tables_keep_deck_numbering(basis):
     """Every element away from the cut prints, bit for bit, what the
     hand-split deck prints for the same element.  The cut element prints one
-    row at its old centre: the mean of its two end-node currents, where the
-    hand-split deck prints two rows each meaning one end node with the
-    crossing — so the two agree to the current's curvature across one
-    segment, and no closer."""
+    row at its old centre: the mean of its two END-node currents.  The
+    hand-split deck prints two rows there, each the mean of one end node and
+    the crossing — whose two sides need not carry the same number, since the
+    crossing junction's continuity emerges from the fill rather than being
+    imposed — so the cut element's two end-node currents are recovered from
+    the rows AWAY from it, walking in from each free end, where the current
+    is zero."""
     auto = _serve.serve(parse_nec5(_ten(ex("1,6"))), basis=basis)
     written = _serve.serve(parse_nec5(_ten_hand(ex(_addr(6)))), basis=basis)
     a = [row.real + 1j * row.imag for row in auto.currents]
@@ -346,7 +360,11 @@ def test_the_tables_keep_deck_numbering(basis):
     assert len(a) == 10 and len(w) == 11
     assert a[0] == w[0]
     assert a[2:] == w[3:]
-    assert a[1] == pytest.approx(0.5 * (w[1] + w[2]), rel=1e-2)
+    i_node1 = 2.0 * w[0]  # the bottom end is free: I(node 0) = 0
+    i_node2 = 0j  # and so is the top one
+    for row in reversed(w[3:]):
+        i_node2 = 2.0 * row - i_node2
+    assert a[1] == pytest.approx(0.5 * (i_node1 + i_node2), rel=1e-9, abs=1e-15)
     qa = [row.magnitude for row in auto.charges]
     qw = [row.magnitude for row in written.charges]
     assert qa[0] == qw[0]
@@ -354,6 +372,19 @@ def test_the_tables_keep_deck_numbering(basis):
     wavelength = auto.wavelength_m
     assert auto.currents[1].center[2] * wavelength == pytest.approx(-0.45)
     assert auto.currents[1].length * wavelength == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("basis", FAST)
+def test_a_split_on_a_node_is_the_two_card_deck_bit_for_bit(basis):
+    """z = 0 ON node 2 of ten 1 m segments: two pieces meeting there, and
+    the two-card deck a user would write solves to the same bits."""
+    tail = "GE -1,-1\nFR 0,1,0,0,14.\nGN 0,0,0,0,13.,.005\n{ex}PQ 0\nXQ 0\nEN\n"
+    auto = "CE\nGW 1,10,0.,0.,-2.,0.,0.,8.,.001\n" + tail.format(ex=ex("1,5"))
+    written = (
+        "CE\nGW 11,2,0.,0.,-2.,0.,0.,0.,.001\nGW 12,8,0.,0.,0.,0.,0.,8.,.001\n"
+        + tail.format(ex=ex("12,3"))
+    )
+    assert serve_z(auto, basis) == serve_z(written, basis)
 
 
 def test_a_port_at_the_crossing_node_refuses_naming_1282():
