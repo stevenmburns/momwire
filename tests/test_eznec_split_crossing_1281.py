@@ -387,13 +387,72 @@ def test_a_split_on_a_node_is_the_two_card_deck_bit_for_bit(basis):
     assert serve_z(auto, basis) == serve_z(written, basis)
 
 
-def test_a_port_at_the_crossing_node_refuses_naming_1282():
-    text = (
-        "CE\nGW 1,10,0.,0.,-2.,0.,0.,8.,.001\nGE -1,-1\nFR 0,1,0,0,14.\n"
-        "GN 0,0,0,0,13.,.005\nEX 0,1,2,0,1.,0.\nPQ 0\nXQ 0\nEN\n"
+# A source AT the node a card is split on (momwire#1282, which lifted the
+# refusal #1281 put here).  The card's own node degree there is two element
+# ends and no image, which `_site_for` would read as a ground contact; the
+# seam asks the mesh instead, where the node is a crossing junction.  So the
+# one-card deck must solve as the two-card deck fed at its junction, through
+# the ABOVE card's end (the piece `piece_of_node` records: the later piece's
+# start) to the bit, and through the BELOW card's end to roundoff, since both
+# addresses name the junction's one through-current.
+_TEN_ON_NODE = "CE\nGW 1,10,0.,0.,-2.,0.,0.,8.,.001\n"
+_TEN_TWO_CARD = "CE\nGW 11,2,0.,0.,-2.,0.,0.,0.,.001\nGW 12,8,0.,0.,0.,0.,0.,8.,.001\n"
+_TEN_TAIL = "GE -1,-1\nFR 0,1,0,0,14.\nGN 0,0,0,0,13.,.005\n{ex}PQ 0\nXQ 0\nEN\n"
+
+
+def _on_node(
+    one_card: str,
+    two_card: str,
+    tail: str,
+    node: int,
+    above: str,
+    below: str,
+    basis: str,
+):
+    auto = _serve.serve(
+        parse_nec5(one_card + tail.format(ex=ex(f"1,{node}"))), basis=basis
     )
-    with pytest.raises(_serve.ServeRefusal, match=r"momwire#1282"):
-        _serve.serve(parse_nec5(text))
+    via_above = _serve.serve(
+        parse_nec5(two_card + tail.format(ex=ex(above))), basis=basis
+    )
+    via_below = _serve.serve(
+        parse_nec5(two_card + tail.format(ex=ex(below))), basis=basis
+    )
+    z = auto.sources[0].impedance
+    assert z == via_above.sources[0].impedance
+    z_below = via_below.sources[0].impedance
+    assert abs(z - z_below) <= 1e-9 * abs(z), (z, z_below)
+    return z
+
+
+@pytest.mark.parametrize("basis", FAST)
+def test_a_source_at_the_split_node_is_the_two_card_junction_source(basis):
+    _on_node(_TEN_ON_NODE, _TEN_TWO_CARD, _TEN_TAIL, 2, "12,-1", "11,2", basis)
+
+
+def _dan_on_node():
+    """Dan's antenna as ONE card through z = 0 with a node ON the plane: 204
+    segments of exactly 25.4 mm from the hub at -25.4 mm, so node 1 is the
+    crossing; and its two-card spelling from the card's own node points."""
+    top = -0.0254 + 204 * 0.0254
+    wire = _serve.Nec5Wire(1, 204, (0.0, 0.0, -0.0254), (0.0, 0.0, top), 1.02616e-3)
+    pts = _serve.node_points(wire)
+    one = f"CE\nGW 1,204,0.,0.,{_z(pts[0][2])},0.,0.,{_z(pts[-1][2])},{RAD}\n"
+    two = (
+        f"CE\nGW 11,1,0.,0.,{_z(pts[0][2])},0.,0.,0.,{RAD}\n"
+        f"GW 12,203,0.,0.,0.,0.,0.,{_z(pts[-1][2])},{RAD}\n"
+    )
+    tail = RADIALS + TAIL.replace("{ld}", LD5_ALL)
+    return one, two, tail
+
+
+@pytest.mark.integration
+@pytest.mark.filterwarnings("ignore")
+@pytest.mark.parametrize("basis", SERVED)
+def test_dans_split_node_source_is_the_two_card_junction_source(basis, record_property):
+    one, two, tail = _dan_on_node()
+    z = _on_node(one, two, tail, 1, "12,-1", "11,1", basis)
+    record_property("z", f"{z:.6f}")
 
 
 # --------------------------------------------------------------------------

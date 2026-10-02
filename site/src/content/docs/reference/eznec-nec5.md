@@ -341,9 +341,9 @@ capability statements rather than deck errors:
   against 71.296 + j0.044 Ω for the same deck split by hand). That is a
   discretisation choice, not a disagreement about the antenna, and it
   vanishes when a segment boundary lands on z = 0. The printout keeps the
-  deck's numbering and says which wire was split. A source, load or
-  network connection *at* the crossing node itself still refuses
-  (momwire#1282).
+  deck's numbering and says which wire was split. When a node lands on
+  z = 0, a source *at* that node is the crossing-node source below, and it
+  answers as the same deck written as two cards fed at their junction.
 - **What a buried deck still refuses, each by name with its measurement**:
   a **ground-contact wire combined with buried wires** (the contact
   model has no conductor for the current spreading in the soil — [the
