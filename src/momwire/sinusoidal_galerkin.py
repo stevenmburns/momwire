@@ -3334,27 +3334,40 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         def _reduce_masked(i0, i1, block):
             # `i0:i1` index the KEPT observers; map back to whole test
             # segments of the full deck and reduce into their own entries.
+            #
+            # One reduction per chunk, not one per kept segment (momwire#1224:
+            # the per-segment loop was ~4200 small calls and ~0.6 s of the SG
+            # buried x8 fill). Each entry's row is still its own nq-term sum
+            # in node order -- `_tested_contrib_rows` never mixes entries --
+            # and the subtraction is elementwise, so batching moves no bits.
             m0, m1 = i0 // nq, i1 // nq
-            for j, m in enumerate(seg_keep[m0:m1]):
-                e0, e1 = starts_pad[m], starts_pad[m + 1]
-                if e1 == e0:
-                    continue
-                w = w_entry[e0:e1]
-                m_loc = np.zeros(e1 - e0, dtype=np.int64)
-                for dest, sblk in zip(subtract_from, block):
-                    rows = self._tested_contrib_rows(
-                        w, m_loc, nq, sblk[j * nq : (j + 1) * nq].reshape(1, nq, -1)
-                    )
-                    if src_cols is None:
-                        np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
-                    else:
-                        # The remainder was prepared over ONE medium's
-                        # geometry, so its source axis is that class's, while
-                        # `dest` is full width. Place it on the class's own
-                        # columns; every other column of this block stays as
-                        # the image left it, which the caller's quadrant mask
-                        # then discards.
-                        dest[np.ix_(np.arange(e0, e1), src_cols)] -= rows
+            segs = seg_keep[m0:m1]
+            e_lo = starts_pad[segs]
+            counts = starts_pad[segs + 1] - e_lo
+            n_ent = int(counts.sum())
+            if n_ent == 0:
+                return
+            # The entries of every kept segment in the chunk, in segment
+            # order, and each one's chunk-local segment index.
+            m_loc = np.repeat(np.arange(segs.size, dtype=np.int64), counts)
+            ent = e_lo[m_loc] + (
+                np.arange(n_ent, dtype=np.int64)
+                - np.repeat(np.cumsum(counts) - counts, counts)
+            )
+            w = w_entry[ent]
+            for dest, sblk in zip(subtract_from, block):
+                rows = self._tested_contrib_rows(
+                    w, m_loc, nq, sblk.reshape(segs.size, nq, -1)
+                )
+                if src_cols is None:
+                    dest[ent] -= rows
+                else:
+                    # The remainder was prepared over ONE medium's geometry,
+                    # so its source axis is that class's, while `dest` is
+                    # full width. Place it on the class's own columns; every
+                    # other column of this block stays as the image left it,
+                    # which the caller's quadrant mask then discards.
+                    dest[np.ix_(ent, src_cols)] -= rows
 
         _ = sub_starts
         fg.remainder("cos-1").replay(
