@@ -684,6 +684,14 @@ static py::tuple merge_rows_by_z(
         std::vector<int64_t> first(static_cast<size_t>(n_cand));
         std::vector<int64_t> tag(static_cast<size_t>(n_key), -1), pos(static_cast<size_t>(n_key), 0);
         for (int64_t zi = 0; zi < n_z; ++zi) {
+            if (cnt[zi + 1] - cnt[zi] == 1) {
+                // One block under this z id: its keys are distinct (a
+                // group's own), so every code is new where it stands.
+                const int64_t b = by_z[cnt[zi]];
+                const int64_t len = O[G[b] + 1] - O[G[b]];
+                for (int64_t j = 0; j < len; ++j) first[S[b] + j] = S[b] + j;
+                continue;
+            }
             for (int64_t i = cnt[zi]; i < cnt[zi + 1]; ++i) {
                 const int64_t b = by_z[i];
                 const int64_t g = G[b];

@@ -354,7 +354,7 @@ static py::array_t<std::complex<double>> end_matvecs(
 // ((((T0 + T1) + T2) + T3) + T4) - T5, real and imaginary parts apart.
 static py::array_t<std::complex<double>> combine_rows(
     std::vector<py::array_t<std::complex<double>, py::array::c_style>> lnew,
-    std::vector<py::array_t<std::complex<double>, py::array::c_style>> lheld,
+    std::vector<py::array> lheld,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> colmap,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> J,
     std::vector<py::array_t<int64_t, py::array::c_style | py::array::forcecast>>
@@ -370,13 +370,17 @@ static py::array_t<std::complex<double>> combine_rows(
     const py::ssize_t rA = lnew[0].shape(0);
     const py::ssize_t n_new = lnew[0].shape(1);
     const py::ssize_t n_held = lheld.empty() ? 0 : lheld[0].shape(1);
+    // The held set is read through its strides (`table_of`): the streamed
+    // route keeps it column-major, a column per held slot.
+    Table H[6];
     for (int i = 0; i < 6; ++i) {
         if (lnew[i].ndim() != 2 || lnew[i].shape(0) != rA || lnew[i].shape(1) != n_new)
             throw std::runtime_error("combine_rows: lnew shapes");
-        if (!lheld.empty() &&
-            (lheld[i].ndim() != 2 || lheld[i].shape(0) != rA ||
-             lheld[i].shape(1) != n_held))
-            throw std::runtime_error("combine_rows: lheld shapes");
+        if (!lheld.empty()) {
+            H[i] = table_of(lheld[i], "lheld");
+            if (H[i].rows != rA || H[i].cols != n_held)
+                throw std::runtime_error("combine_rows: lheld shapes");
+        }
     }
     const py::ssize_t n_cols = colmap.size();
     const int64_t *cm = colmap.data();
@@ -409,12 +413,8 @@ static py::array_t<std::complex<double>> combine_rows(
                         "combine_rows: a row reads a column not in hand");
             }
     }
-    const double *Ln[6], *Lh[6];
-    for (int i = 0; i < 6; ++i) {
-        Ln[i] = reinterpret_cast<const double *>(lnew[i].data());
-        Lh[i] = lheld.empty() ? nullptr
-                              : reinterpret_cast<const double *>(lheld[i].data());
-    }
+    const double *Ln[6];
+    for (int i = 0; i < 6; ++i) Ln[i] = reinterpret_cast<const double *>(lnew[i].data());
     py::array_t<std::complex<double>> out(std::vector<py::ssize_t>{rA, nJ});
     double *Y = reinterpret_cast<double *>(out.mutable_data());
     {
@@ -440,7 +440,7 @@ static py::array_t<std::complex<double>> combine_rows(
                         const double a = M.data[jj];
                         const int64_t c = cm[M.indices[jj]];
                         const double *x = c >= 0 ? Ln[i] + 2 * (r * n_new + c)
-                                                 : Lh[i] + 2 * (r * n_held + (-1 - c));
+                                                 : H[i].at(r, static_cast<int>(-1 - c));
                         sr += a * x[0];
                         si += a * x[1];
                     }

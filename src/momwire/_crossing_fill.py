@@ -5825,6 +5825,17 @@ def _combine(Ls, Qz):
     )
 
 
+def _compact(buf, live, size):
+    """`buf`'s columns `live`, moved to the front of a (rows, size) buffer
+    (`buf` itself when it is that size: the gather copies first)."""
+    if buf.shape[1] == size:
+        buf[:, : live.size] = buf[:, live]
+        return buf
+    out = np.empty((buf.shape[0], size), dtype=buf.dtype)
+    out[:, : live.size] = buf[:, live]
+    return out
+
+
 def _combine_held(Lc, held, colmap, J, q_args):
     """`_combine` of rows `J` of the right weights (`q_args`, `_csr_args`)
     against left-product columns read where they are held: column c at
@@ -5925,11 +5936,12 @@ def _streamed_sandwich(
         # A column no chunk or held set names reads as out of range, which
         # `combine_rows` refuses ("a row reads a column not in hand").
         colmap = np.full(n_cols, _NOT_IN_HAND, dtype=np.int64)
-        # The held columns live in slots of a buffer that grows by doubling
-        # and reuses freed slots, so a chunk copies only the columns it adds
-        # (the concatenation below copies the whole held set every chunk).
+        # The held columns live in a buffer they are appended to and that is
+        # compacted (or grown) only when full, so a chunk copies the columns
+        # it adds (the concatenation below copies the whole held set every
+        # chunk). `held_slot` is each held column's place in it.
         held_slot = np.zeros(0, dtype=np.int64)
-        free = []
+        n_used = 0
     for cols, Kc in K:
         c_cols = (
             np.arange(cols.start, cols.stop)
@@ -5995,25 +6007,30 @@ def _streamed_sandwich(
             keep_old = readers[held_cols] > 0
             if not keep_old.all():
                 colmap[held_cols[~keep_old]] = _NOT_IN_HAND
-                free.extend(held_slot[~keep_old].tolist())
                 held_cols, held_slot = held_cols[keep_old], held_slot[keep_old]
             new = np.flatnonzero(readers[c_cols] > 0)
             if new.size:
-                if len(free) < new.size:
-                    cap = 0 if held is None else held[0].shape[1]
-                    grown = max(2 * cap, cap + new.size - len(free), 64)
-                    fresh_buf = [
-                        np.empty((x.shape[0], grown), dtype=np.complex128) for x in Lc
+                cap = 0 if held is None else held[0].shape[1]
+                if n_used + new.size > cap:
+                    # Full: move the live columns to the front, into a
+                    # buffer twice their need when they would fill half.
+                    n_live = held_slot.size
+                    size = cap
+                    if 2 * (n_live + new.size) > cap:
+                        size = max(2 * (n_live + new.size), 64)
+                    held = [
+                        _compact(b, held_slot, size)
+                        if b is not None
+                        else np.empty((x.shape[0], size), dtype=np.complex128)
+                        for b, x in zip(held or [None] * len(Lc), Lc)
                     ]
-                    if held is not None:
-                        for b, h in zip(fresh_buf, held):
-                            b[:, :cap] = h
-                    held = fresh_buf
-                    free.extend(range(cap, grown))
-                slots = np.array(free[-new.size :], dtype=np.int64)
-                del free[-new.size :]
+                    held_slot = np.arange(n_live, dtype=np.int64)
+                    colmap[held_cols] = -1 - held_slot
+                    n_used = n_live
+                slots = np.arange(n_used, n_used + new.size, dtype=np.int64)
                 for b, x in zip(held, Lc):
-                    b[:, slots] = x[:, new]
+                    b[:, n_used : n_used + new.size] = x[:, new]
+                n_used += new.size
                 colmap[c_cols[new]] = -1 - slots
                 held_cols = np.concatenate((held_cols, c_cols[new]))
                 held_slot = np.concatenate((held_slot, slots))
