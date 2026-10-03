@@ -574,6 +574,155 @@ class RowGroups {
     std::vector<uint64_t> table_;
 };
 
+// Each row's `factorize_ints` of a (groups, line) table of non-negative ids
+// below `n_id` (the crossing plan's global key ids, `_product_plan`), in one
+// pass: per row g, `rank[g, l]` is the local id of kid[g, l] in first-
+// appearance order along the row, `n[g]` the row's distinct count, and
+// `first` / `ids` (concatenated over the rows) each local id's first
+// position and its global id -- what `_first_ints(kid[g])` and
+// `kid[g, first]` answer row by row. A stamp per global id (the row that
+// last saw it) replaces the per-row hash table; the integers are the same.
+static py::tuple group_first_ranks(
+    py::array_t<int32_t, py::array::c_style> kid, int64_t n_id) {
+    if (kid.ndim() != 2) throw std::runtime_error("group_first_ranks: kid must be 2-D");
+    const py::ssize_t nG = kid.shape(0), nL = kid.shape(1);
+    if (n_id < 0 || n_id >= static_cast<int64_t>(std::numeric_limits<int32_t>::max()))
+        throw std::runtime_error("group_first_ranks: n_id out of range");
+    const int32_t *K = kid.data();
+    for (py::ssize_t q = 0; q < nG * nL; ++q)
+        if (K[q] < 0 || K[q] >= n_id)
+            throw std::runtime_error("group_first_ranks: id out of range");
+    py::array_t<int32_t> rank(std::vector<py::ssize_t>{nG, nL});
+    py::array_t<int64_t> n(nG);
+    int32_t *R = rank.mutable_data();
+    int64_t *N = n.mutable_data();
+    std::vector<int64_t> first;
+    std::vector<int32_t> ids;
+    {
+        py::gil_scoped_release nogil;
+        std::vector<int32_t> stamp(static_cast<size_t>(n_id), -1), local(static_cast<size_t>(n_id), 0);
+        for (py::ssize_t g = 0; g < nG; ++g) {
+            const int32_t *row = K + g * nL;
+            int32_t *out = R + g * nL;
+            int32_t next = 0;
+            const int32_t tag = static_cast<int32_t>(g);
+            for (py::ssize_t l = 0; l < nL; ++l) {
+                const int32_t k = row[l];
+                if (stamp[k] != tag) {
+                    stamp[k] = tag;
+                    local[k] = next++;
+                    first.push_back(static_cast<int64_t>(l));
+                    ids.push_back(k);
+                }
+                out[l] = local[k];
+            }
+            N[g] = next;
+        }
+    }
+    py::array_t<int64_t> out_first(static_cast<py::ssize_t>(first.size()));
+    py::array_t<int32_t> out_ids(static_cast<py::ssize_t>(ids.size()));
+    if (!first.empty()) {
+        std::memcpy(out_first.mutable_data(), first.data(), first.size() * sizeof(int64_t));
+        std::memcpy(out_ids.mutable_data(), ids.data(), ids.size() * sizeof(int32_t));
+    }
+    return py::make_tuple(rank, n, out_first, out_ids);
+}
+
+// The multi-group merge's row numbering (`_crossing_fill._merge_groups_z`)
+// without hashing the candidates. The candidates are walked in grid order as
+// BLOCKS: block b is grouped node a_b with z id z[b] against its group's
+// keys `ids[off[g_b] : off[g_b] + n[g_b]]` (ascending line position), and
+// candidate j of block b sits at walk position start[b] + j. A row is a
+// distinct (z id, key) pair numbered by its first walk position -- which is
+// `factorize_ints` of the codes z * n_key + key along the walk.
+//
+// Two candidates can only share a code when they share the z id, so the
+// blocks are taken z id by z id (each z id's blocks in walk order) with one
+// stamp per key: a key's first block under that z id is where its code
+// first appears. The rows are then numbered in walk order. Returns (the
+// row of each candidate in walk order, each row's first block, each row's
+// offset in that block).
+static py::tuple merge_rows_by_z(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> z,      // (blocks,)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> grp,    // (blocks,)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> start,  // (blocks,)
+    py::array_t<int32_t, py::array::c_style> ids,                           // keys, concatenated by group
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> off,    // (groups + 1,)
+    int64_t n_key, int64_t n_z) {
+    const py::ssize_t nb = z.size();
+    if (grp.size() != nb || start.size() != nb)
+        throw std::runtime_error("merge_rows_by_z: one z, group and start per block");
+    const int64_t *Z = z.data(), *G = grp.data(), *S = start.data(), *O = off.data();
+    const py::ssize_t ng = off.size() - 1;
+    const int32_t *K = ids.data();
+    int64_t n_cand = 0;
+    for (py::ssize_t b = 0; b < nb; ++b) {
+        if (Z[b] < 0 || Z[b] >= n_z || G[b] < 0 || G[b] >= ng)
+            throw std::runtime_error("merge_rows_by_z: block z or group out of range");
+        if (S[b] != n_cand)
+            throw std::runtime_error("merge_rows_by_z: blocks must tile the walk");
+        n_cand += O[G[b] + 1] - O[G[b]];
+    }
+    for (py::ssize_t q = 0; q < ids.size(); ++q)
+        if (K[q] < 0 || K[q] >= n_key)
+            throw std::runtime_error("merge_rows_by_z: key out of range");
+    py::array_t<int64_t> row(n_cand);
+    int64_t *R = row.mutable_data();
+    std::vector<int64_t> first_blk, first_j;
+    {
+        py::gil_scoped_release nogil;
+        // Blocks by z id, each z id's in walk order (a counting sort).
+        std::vector<int64_t> cnt(static_cast<size_t>(n_z) + 1, 0);
+        for (py::ssize_t b = 0; b < nb; ++b) cnt[Z[b] + 1]++;
+        for (int64_t i = 0; i < n_z; ++i) cnt[i + 1] += cnt[i];
+        std::vector<int64_t> by_z(static_cast<size_t>(nb));
+        {
+            std::vector<int64_t> at(cnt.begin(), cnt.end() - 1);
+            for (py::ssize_t b = 0; b < nb; ++b) by_z[at[Z[b]]++] = b;
+        }
+        // first[e]: the walk position where candidate e's code first appears.
+        std::vector<int64_t> first(static_cast<size_t>(n_cand));
+        std::vector<int64_t> tag(static_cast<size_t>(n_key), -1), pos(static_cast<size_t>(n_key), 0);
+        for (int64_t zi = 0; zi < n_z; ++zi) {
+            for (int64_t i = cnt[zi]; i < cnt[zi + 1]; ++i) {
+                const int64_t b = by_z[i];
+                const int64_t g = G[b];
+                for (int64_t j = 0; j < O[g + 1] - O[g]; ++j) {
+                    const int32_t k = K[O[g] + j];
+                    const int64_t e = S[b] + j;
+                    if (tag[k] != zi) {
+                        tag[k] = zi;
+                        pos[k] = e;
+                    }
+                    first[e] = pos[k];
+                }
+            }
+        }
+        // Rows numbered by first walk position, in walk order.
+        int64_t next = 0;
+        for (py::ssize_t b = 0; b < nb; ++b) {
+            const int64_t len = O[G[b] + 1] - O[G[b]];
+            for (int64_t j = 0; j < len; ++j) {
+                const int64_t e = S[b] + j;
+                if (first[e] == e) {
+                    R[e] = next++;
+                    first_blk.push_back(b);
+                    first_j.push_back(j);
+                } else {
+                    R[e] = R[first[e]];
+                }
+            }
+        }
+    }
+    py::array_t<int64_t> fb(static_cast<py::ssize_t>(first_blk.size()));
+    py::array_t<int64_t> fj(static_cast<py::ssize_t>(first_j.size()));
+    if (!first_blk.empty()) {
+        std::memcpy(fb.mutable_data(), first_blk.data(), first_blk.size() * sizeof(int64_t));
+        std::memcpy(fj.mutable_data(), first_j.data(), first_j.size() * sizeof(int64_t));
+    }
+    return py::make_tuple(row, fb, fj);
+}
+
 }  // namespace factorize
 
 void register_factorize(py::module_ &m) {
@@ -605,6 +754,20 @@ void register_factorize(py::module_ &m) {
         .def("add", &factorize::RowGroups::add, py::arg("cols"))
         .def("rows", &factorize::RowGroups::rows)
         .def("__len__", &factorize::RowGroups::n_groups);
+    m.def("group_first_ranks", &factorize::group_first_ranks,
+          "Per row of a (groups, line) int32 id table, `factorize_ints` of "
+          "the row in one pass: (rank (groups, line) int32, n (groups,), "
+          "first positions and global ids of each row's local ids, "
+          "concatenated). momwire#1290.",
+          py::arg("kid"), py::arg("n_id"));
+    m.attr("group_first_ranks_1290") = true;
+    m.def("merge_rows_by_z", &factorize::merge_rows_by_z,
+          "The multi-group merge's rows by first walk position, z id by z id "
+          "with a stamp per key: (row per candidate in walk order, each row's "
+          "first block, its offset there). momwire#1290.",
+          py::arg("z"), py::arg("grp"), py::arg("start"), py::arg("ids"),
+          py::arg("off"), py::arg("n_key"), py::arg("n_z"));
+    m.attr("merge_rows_by_z_1290") = true;
     // The capability flag, beside the bindings it vouches for (#710).
     m.attr("exact_factorize_1224") = true;
     m.attr("row_groups_1224") = true;
