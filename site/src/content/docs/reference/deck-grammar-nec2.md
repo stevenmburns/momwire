@@ -27,7 +27,11 @@ pipeline — and nothing NEC-2-specific may leak into the model's vocabulary.
 The model speaks wires, arclengths, feeds, gaps and grounds; tags, segments
 and card mnemonics stop at the parser.
 
-`dialect="nec2"` is the only value this release ships.
+`dialect="nec2"` is this page's dialect. The second value is `"nec4"`: the
+decks EZNEC's External NEC-4.2 slot writes (momwire#1295). It is this dialect
+plus three deltas measured from captures: `EX 6` is a current source, `GE -1`
+may carry a structure below ground, and `GN 3` is the same Sommerfeld ground
+as `GN 2`. Every other card means what this page says.
 
 ### What the dialect describes, and what it excludes
 
@@ -190,6 +194,7 @@ NEC's:
 | `requests` | what each execute group asks for: nothing (a plain solve), a far-field pattern, a near-field grid, and the print controls that shape the readout |
 | `networks` | the deck's [`TL`](#tl--transmission-line) / [`NT`](#nt--two-port-network) cards in card order: which card, both endpoints as `(wire, arclength)`, the six real fields **verbatim**, and the first execute group each is live for |
 | `comments` | the deck's free text, in card order |
+| `current_feeds` | which `feeds` are current sources rather than voltage sources, their complex value then read as amperes. The `nec2` dialect emits none; the `nec4` dialect's `EX 6` is the one writer (momwire#1295) |
 
 The model carries no tags, no segment numbers, no mnemonics and no card
 ordinals. Anything a consumer needs in those terms — a printout that echoes

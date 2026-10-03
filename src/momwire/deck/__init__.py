@@ -23,6 +23,7 @@ from __future__ import annotations
 
 from ._cards import Card, DeckError, parse_card, tokenize
 from ._nec2 import parse_nec2
+from ._nec4 import parse_nec4
 from ._nec5 import (
     Nec5Deck,
     Nec5ExecuteRequest,
@@ -86,6 +87,7 @@ __all__ = [
     "ExecuteGroup",
     "NetworkCard",
     # the nec5 dialect, which parses into its OWN model (see below)
+    "parse_nec4",
     "parse_nec5",
     "Nec5Deck",
     "Nec5Node",
@@ -124,13 +126,17 @@ __all__ = [
 # geometric point are NOT interchangeable), so :func:`parse_nec5` returns its
 # own :class:`Nec5Deck` and is called by name rather than through ``parse``,
 # whose contract is a `DeckModel`.
-_DIALECTS = {"nec2": parse_nec2}
+#
+# ``nec4`` (momwire#1295) is ``nec2`` plus the NEC-4.2 deltas EZNEC's External
+# NEC-4.2 slot writes; it addresses segment centres and parses into
+# `DeckModel` like its parent.
+_DIALECTS = {"nec2": parse_nec2, "nec4": parse_nec4}
 
 
 def parse(text: str, dialect: str = "nec2") -> DeckModel:
     """Parse a deck into a :class:`DeckModel`.
 
-    ``dialect="nec2"`` is the only value this release ships.  Raises
+    ``dialect`` is ``"nec2"`` or ``"nec4"`` (:mod:`._nec4`).  Raises
     :class:`DeckError` with the spec's message for anything the dialect will
     not run.
     """

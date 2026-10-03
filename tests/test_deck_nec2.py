@@ -2351,12 +2351,16 @@ def test_an_unknown_card_is_refused_by_name():
 # ---------------------------------------------------------------------------
 
 
-def test_nec2_is_the_only_dialect_this_release_ships():
+def test_the_dialects_this_release_ships_are_named_by_the_refusal():
     """§#dialects: a second dialect is a second parser, not a second
-    pipeline — and the refusal names the ones that exist."""
+    pipeline — and the refusal names the ones that exist.  ``nec4`` (EZNEC's
+    NEC-4.2 slot, momwire#1295) is the second; ``nec5`` parses into its own
+    model and is not reached through ``parse``."""
     with pytest.raises(DeckError) as exc:
         parse(DIPOLE, dialect="nec5")
-    assert str(exc.value) == "unknown deck dialect 'nec5'; known dialects: 'nec2'"
+    assert str(exc.value) == (
+        "unknown deck dialect 'nec5'; known dialects: 'nec2', 'nec4'"
+    )
 
 
 def test_the_model_speaks_no_nec():
