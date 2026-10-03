@@ -49,10 +49,11 @@ class _Counts:
 
     def __init__(self, mp):
         self.chunks = self.streamed = self.contractions = 0
-        chunked, streamed, combine = (
+        chunked, streamed, combine, combine_held = (
             cf._chunked_tables,
             cf._streamed_sandwich,
             cf._combine,
+            cf._combine_held,
         )
 
         def spy_chunked(*a):
@@ -68,9 +69,16 @@ class _Counts:
             self.contractions += 1
             return combine(*a)
 
+        # The streamed rows' contraction reads the held columns in place
+        # (`_combine_held`, momwire#1290): the same combine, one call.
+        def spy_combine_held(*a):
+            self.contractions += 1
+            return combine_held(*a)
+
         mp.setattr(cf, "_chunked_tables", spy_chunked)
         mp.setattr(cf, "_streamed_sandwich", spy_streamed)
         mp.setattr(cf, "_combine", spy_combine)
+        mp.setattr(cf, "_combine_held", spy_combine_held)
 
 
 def _z(make, monkeypatch, *, budget=_TINY, streamed=True, whole_rows=True):
