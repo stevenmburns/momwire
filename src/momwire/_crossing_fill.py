@@ -2220,6 +2220,18 @@ class _KeyLine:
 # the lexsort spelling it replaced, the in-process reference: the same row
 # ids, by the argument there.
 _PRODUCT_FLAT_MERGE = True
+# A many-group plan ranks every group's line keys in one C++ pass
+# (`group_first_ranks`); False is `_first_ints` per group, the reference.
+_GROUP_RANKS = True
+# ...and numbers the merged rows z id by z id (`merge_rows_by_z`); False
+# hashes every candidate's code (`_first_ints`), the reference.
+_MERGE_BY_Z = True
+_HAVE_MERGE_BY_Z_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "merge_rows_by_z_1290", False)
+)
+_HAVE_GROUP_RANKS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "group_first_ranks_1290", False)
+)
 
 
 def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
@@ -2235,7 +2247,8 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
     the candidates in ascending grid position. Numbering the codes z·n_key +
     key by first appearance on that walk (`_first_ints`) is then numbering
     each distinct triple by its smallest position: the lexsort spelling's
-    row ids, without a sort over the candidates."""
+    row ids, without a sort over the candidates. `merge_rows_by_z` gives the
+    same numbering without hashing the codes at all."""
     nG = len(zids)
     g_of = np.repeat(np.arange(nG), nz)
     zl_of = np.concatenate([np.arange(n) for n in nz.tolist()])
@@ -2245,28 +2258,50 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
     lens = nk[g_s]
     bstart = np.concatenate(([0], np.cumsum(lens)[:-1])).astype(np.int64)
     n_cand = int(lens.sum())
-    codes = np.empty(n_cand, dtype=np.int64)
-    n_key = np.int64(n_key)
-    for i, (g, zl) in enumerate(zip(g_s.tolist(), zl_s.tolist())):
-        b0 = bstart[i]
-        codes[b0 : b0 + lens[i]] = zids[g][zl] * n_key + kids[g]
-    first, inv = _first_ints(codes)
-    del codes
+    koff = np.concatenate(([0], np.cumsum(nk))).astype(np.int64)
     off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.int64)
-    rowflat = np.empty(n_cand, dtype=_index_dtype(first.size))
+    if (
+        _MERGE_BY_Z
+        and _HAVE_MERGE_BY_Z_ACCEL
+        and all(kj.dtype == np.int32 for kj in kids)
+    ):
+        # The same numbering without hashing the codes: two candidates can
+        # share one only under one z id (`merge_rows_by_z`).
+        zcat = np.concatenate(zids).astype(np.int64)
+        zoff = np.concatenate(([0], np.cumsum(nz)[:-1])).astype(np.int64)
+        inv, blk, j_first = _accel.acc.merge_rows_by_z(
+            zcat[zoff[g_s] + zl_s],
+            g_s,
+            bstart,
+            np.concatenate(kids),
+            koff,
+            int(n_key),
+            int(zcat.max()) + 1,
+        )
+        n_rows = int(blk.size)
+    else:
+        codes = np.empty(n_cand, dtype=np.int64)
+        n_key = np.int64(n_key)
+        for i, (g, zl) in enumerate(zip(g_s.tolist(), zl_s.tolist())):
+            b0 = bstart[i]
+            codes[b0 : b0 + lens[i]] = zids[g][zl] * n_key + kids[g]
+        first, inv = _first_ints(codes)
+        del codes
+        n_rows = int(first.size)
+        blk = np.searchsorted(bstart, first, side="right") - 1
+        j_first = first - bstart[blk]
+    rowflat = np.empty(n_cand, dtype=_index_dtype(n_rows))
     for i, (g, zl) in enumerate(zip(g_s.tolist(), zl_s.tolist())):
         d0, b0 = off[g] + zl * nk[g], bstart[i]
         rowflat[d0 : d0 + nk[g]] = inv[b0 : b0 + nk[g]]
     del inv
-    blk = np.searchsorted(bstart, first, side="right") - 1
-    koff = np.concatenate(([0], np.cumsum(nk)[:-1])).astype(np.int64)
-    b = np.concatenate(kfirst)[koff[g_s[blk]] + (first - bstart[blk])]
+    b = np.concatenate(kfirst)[koff[g_s[blk]] + j_first]
     kept_pos = a_s[blk].astype(np.int64) * nB + b
     rowtab = [
         rowflat[off[g] : off[g] + nz[g] * nk[g]].reshape(nz[g], nk[g])
         for g in range(nG)
     ]
-    return int(first.size), kept_pos, rowflat, rowtab
+    return n_rows, kept_pos, rowflat, rowtab
 
 
 def _xy_index(nodes):
@@ -2376,17 +2411,37 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     zl_rank = np.empty(G.shape[0], dtype=np.intp)
     kl_rank = np.empty((nG, nL), dtype=_index_dtype(nL))
     zids, kids, zfirst, kfirst, nz, nk = [], [], [], [], [], []
+    by_rows = (
+        nG > 1
+        and _GROUP_RANKS
+        and _HAVE_GROUP_RANKS_ACCEL
+        and kid.dtype == np.int32
+        and kl_rank.dtype == np.int32
+    )
+    if by_rows:
+        # Every group's `_first_ints(kid[g])` in one pass
+        # (`group_first_ranks`): the same ranks, first positions and ids.
+        kl_rank, nk_g, f_cat, k_cat = _accel.acc.group_first_ranks(kid, int(kf.size))
+        koff = np.concatenate(([0], np.cumsum(nk_g))).astype(np.int64)
     for g in range(nG):
         m_g = members[bounds[g] : bounds[g + 1]]
-        f_z, r_z = _first_ints(zid[m_g])
-        f_k, r_k = _first_ints(kid[g])
+        if m_g.size == 1:
+            f_z = r_z = np.zeros(1, dtype=np.intp)  # `_first_ints` of one id
+        else:
+            f_z, r_z = _first_ints(zid[m_g])
         zl_rank[m_g] = r_z
-        kl_rank[g] = r_k
         zids.append(zid[m_g[f_z]])
-        kids.append(kid[g, f_k])
         zfirst.append(m_g[f_z])  # the grouped node where each z first occurs
-        kfirst.append(f_k)  # the line node where each key first occurs
         nz.append(f_z.size)
+        if by_rows:
+            kids.append(k_cat[koff[g] : koff[g + 1]])
+            kfirst.append(f_cat[koff[g] : koff[g + 1]])
+            nk.append(int(nk_g[g]))
+            continue
+        f_k, r_k = _first_ints(kid[g])
+        kl_rank[g] = r_k
+        kids.append(kid[g, f_k])
+        kfirst.append(f_k)  # the line node where each key first occurs
         nk.append(f_k.size)
     nz, nk = np.asarray(nz, dtype=np.intp), np.asarray(nk, dtype=np.intp)
     n_cand = int(np.sum(nz * nk))
@@ -2530,6 +2585,9 @@ _TILE_ROWS = 1 << 17
 # reference: both evaluate every exact-ρ class whole in one tile, so the
 # tables, and Z, are the same bits either way (`_ProductTiles`).
 _COLUMN_TILES = True
+# TEST-ONLY False: a many-group tile's rows by the per-group gather and mask
+# (`_ProductTiles._tile_rows`), the reference for the one-sort order.
+_TILE_ROW_ORDER = True
 # `_group_spans`' budget: groups x line entries per pass over `plan.kid`.
 _GROUP_SPAN_ELEMS = 1 << 21
 
@@ -2678,13 +2736,27 @@ class _ProductTiles:
             t_of_cls = np.asarray(t_of_cls).ravel()
             self.n_tiles = int(_t.size)
         self.tile_of_key = t_of_cls[key_cls]
-        # Per group, its local keys sorted by tile.
+        # Per group, its local keys sorted by tile -- or, with many groups,
+        # every row in tile order (`_tile_rows`).
         self._gkeys = []
-        for kj in plan.kids:
-            tl = self.tile_of_key[kj]
-            o = np.argsort(tl, kind="stable")
-            b = np.searchsorted(tl[o], np.arange(self.n_tiles + 1))
-            self._gkeys.append((o, b))
+        self._by_tile = None
+        if len(plan.rowtab) > 1 and self.n_tiles < 2**15 and _TILE_ROW_ORDER:
+            t_row = np.empty(U, dtype=np.int16)
+            for tab, kj in zip(plan.rowtab, plan.kids):
+                t_row[tab] = self.tile_of_key[kj][None, :]
+            # A row's tile is its key's, the same in every group holding it.
+            # Stable on 16-bit keys is numpy's radix sort: O(rows).
+            o = np.argsort(t_row, kind="stable")
+            b = np.searchsorted(t_row[o], np.arange(self.n_tiles + 1))
+            del t_row
+            self._by_tile = (o.astype(_index_dtype(U)), b)
+            del o
+        else:
+            for kj in plan.kids:
+                tl = self.tile_of_key[kj]
+                o = np.argsort(tl, kind="stable")
+                b = np.searchsorted(tl[o], np.arange(self.n_tiles + 1))
+                self._gkeys.append((o, b))
         # The tile at which each below node's table column is complete.
         if col_ready is not None:
             # `_column_tiles` names it; checked here against what serving
@@ -2808,6 +2880,11 @@ class _ProductTiles:
 
     def _tile_rows(self, t):
         """Tile t's rows, ascending: every row of its keys, over the groups."""
+        if self._by_tile is not None:
+            # Rows in tile order, ascending within a tile (the sort is
+            # stable): the same ids the gather and mask below find.
+            o, b = self._by_tile
+            return o[b[t] : b[t + 1]]
         parts = [
             tab[:, o[b[t] : b[t + 1]]].ravel()
             for tab, (o, b) in zip(self.plan.rowtab, self._gkeys)
