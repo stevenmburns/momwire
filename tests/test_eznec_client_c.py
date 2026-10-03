@@ -584,3 +584,73 @@ def test_rung_four_writes_a_named_refusal_and_still_exits_zero(client_exe, tmp_p
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# EZNEC's NEC-4.2 slot (momwire#1295)
+
+NEC4_TWIN_NAME = "momwire-nec4-sinusoidal"
+NEC42_DECK = (
+    Path(__file__).resolve().parent / "fixtures" / "eznec_nec42" / "0224_dipole-ex0.nec"
+)
+
+
+def _nec4_oracle(tmp_path: Path) -> bytes:
+    out = tmp_path / "oracle-nec4-sinusoidal.out"
+    _shell.run(NEC42_DECK, out, basis="sinusoidal", dialect="nec4")
+    return out.read_bytes()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_a_nec4_named_copy_answers_the_nec42_slot_on_its_own_server(
+    client_exe, tmp_path
+):
+    """``momwire-nec4-sinusoidal`` reads the deck in the nec4 dialect and
+    solves it point-matched, under a key no NEC-5 name can share: the
+    ``dialect=nec4`` element precedes the basis element in the D2 digest."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC4_TWIN_NAME,))
+    room = _room()
+    expected = _nec4_oracle(tmp_path)
+    assert b"ANTENNA INPUT PARAMETERS" in expected
+    major, minor = mech.dist_version()
+    expected_key = mech.digest(
+        [
+            f"eznec.{major}.{minor}",
+            os.path.realpath(str(bundle / ENGINE_NAME)),
+            repr(900.0),
+            "dialect=nec4",
+            "basis=sinusoidal",
+        ]
+    )
+    suffix = mech.address_suffix(mech.TCP if os.name == "nt" else mech.UNIX)
+    try:
+        out = tmp_path / "nec4.out"
+        proc = _run(bundle, NEC4_TWIN_NAME, [str(NEC42_DECK), str(out)], room)
+        assert proc.returncode == 0, proc.stderr
+        assert out.read_bytes() == expected
+        assert len(_listening(room)) == 1, _listening(room)
+        addresses = sorted(p.name for p in room.glob(f"*{suffix}"))
+        assert addresses == [f"{expected_key}{suffix}"], addresses
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_a_nec4_named_copy_one_shots_in_the_nec42_slot(client_exe, tmp_path):
+    """Rung 3 carries the slot as well as the basis: the engine's one-shot is
+    launched with ``--dialect nec4``, or it would read the deck as NEC-5."""
+    bundle = _bundle(client_exe, _REFUSING_SHIM, names=(NEC4_TWIN_NAME,))
+    room = _room()
+    expected = _nec4_oracle(tmp_path)
+    try:
+        out = tmp_path / "nec4-rung3.out"
+        proc = _run(bundle, NEC4_TWIN_NAME, [str(NEC42_DECK), str(out)], room)
+        assert proc.returncode == 0, proc.stderr
+        assert out.read_bytes() == expected
+        assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
