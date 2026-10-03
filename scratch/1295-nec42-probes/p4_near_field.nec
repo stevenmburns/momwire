@@ -1,0 +1,12 @@
+CM Dipole, near E field
+CM
+CM momwire#1295 phase 2 probe deck (not an EZNEC capture)
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+FR 0,1,0,0,299.7925
+GN -1
+EX 6,1,6,0,1.414214,0.
+PQ 0
+NE 0,1,1,3,1.,0.,0.,0.,0.,.5
+EN
