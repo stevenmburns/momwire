@@ -3862,8 +3862,17 @@ def _pattern(
     wavelength: float,
     p_in: float,
     lower_k: complex | None = None,
+    *,
+    ground_z: float = 0.0,
+    cliff=None,
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
+
+    ``ground_z`` and ``cliff`` are the NEC-4.2 slot's (momwire#1295), which
+    shares this row builder: its decks may put the interface anywhere, and a
+    ``GD`` card reflects the far field off its second medium on every ``RP``
+    (:func:`~momwire._far_readout._far_moments` ``cliff``).  The NEC-5 seam
+    passes neither, so its interface is ``z = 0`` and it has no cliff.
 
     The moments, the E components and the polarisation ellipse are the
     portal's — one owner for the far-field readout — and the two conventions
@@ -3908,8 +3917,9 @@ def _pattern(
         np.radians(thetas),
         np.radians(phis),
         ground,
-        0.0,
+        ground_z,
         frequency_mhz * 1e6,
+        cliff=cliff,
     )
     e_theta = -1j * ETA0 * k / (4.0 * math.pi) * m_theta
     e_phi = -1j * ETA0 * k / (4.0 * math.pi) * m_phi
