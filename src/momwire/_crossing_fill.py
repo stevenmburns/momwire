@@ -5675,6 +5675,21 @@ def _combine(Ls, Qz):
     )
 
 
+def _combine_held(Lc, held, colmap, J, q_args):
+    """`_combine` of rows `J` of the right weights (`q_args`, `_csr_args`)
+    against left-product columns read where they are held: column c at
+    `colmap[c]` of the chunk's `Lc` (>= 0) or at -1 - `colmap[c]` of `held`
+    (`combine_rows`)."""
+    return _accel.acc.combine_rows(
+        [np.ascontiguousarray(x) for x in Lc],
+        [] if held is None else held,
+        colmap,
+        J,
+        *q_args,
+        _near_interface._physical_cpu_count(),
+    )
+
+
 def _streamed_sandwich(
     Ps, Qs4, K, k2sq, rA, rB, out, *, fresh=False, support=None, sink=None
 ):
@@ -5792,14 +5807,7 @@ def _streamed_sandwich(
             # `_combine`, in the same order, through the same loop.
             colmap[held_cols] = -1 - np.arange(n_old)
             colmap[c_cols] = np.arange(c_cols.size)
-            block = _accel.acc.combine_rows(
-                [np.ascontiguousarray(x) for x in Lc],
-                [] if held is None else held,
-                colmap,
-                J,
-                *q_args,
-                _near_interface._physical_cpu_count(),
-            )
+            block = _combine_held(Lc, held, colmap, J, q_args)
             colmap[held_cols] = _NOT_IN_HAND
             colmap[c_cols] = _NOT_IN_HAND
         elif J.size:
