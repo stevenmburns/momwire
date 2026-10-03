@@ -522,9 +522,11 @@ seg_seg_full_moments_bspline_kernel_impl(
         for (size_t j = 0; j < N_j; j++) {
             for (size_t r = 0; r < n_qp; r++) {
                 double t = gt[r];
-                pj_t[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
-                pj_t[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
-                pj_t[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+                // Source points coordinate-major per segment, (j, c, r), so
+                // the R loop below reads each coordinate as a unit-stride run.
+                pj_t[(j*3 + 0)*n_qp + r] = (1.0 - t) * slj(j,0) + t * srj(j,0);
+                pj_t[(j*3 + 1)*n_qp + r] = (1.0 - t) * slj(j,1) + t * srj(j,1);
+                pj_t[(j*3 + 2)*n_qp + r] = (1.0 - t) * slj(j,2) + t * srj(j,2);
             }
         }
     }
@@ -607,16 +609,27 @@ seg_seg_full_moments_bspline_kernel_impl(
                 const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
                                      ? (n_pairs - base) : BSPLINE_QR_TILE;
 
-                // One division per chunk, then a running (q, r) walk: qr is
-                // q*n_qp + r by construction, so the chunk is contiguous.
+                // One division per chunk, then the chunk's contiguous qr
+                // range (qr = q*n_qp + r) as runs of r under one q: each run
+                // is a unit-stride loop the compiler vectorizes, and sqrt is
+                // correctly rounded in a vector lane as in a scalar one, so
+                // R is the per-point walk's to the bit.
                 size_t q = base / n_qp;
                 size_t r = base % n_qp;
-                for (size_t t = 0; t < m; t++) {
-                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
-                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
-                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
-                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-                    if (++r == n_qp) { r = 0; ++q; }
+                for (size_t t = 0; t < m; r = 0, ++q) {
+                    const size_t run = std::min(n_qp - r, m - t);
+                    const double px = pi[q*3 + 0], py = pi[q*3 + 1], pz = pi[q*3 + 2];
+                    const double *xj = pj + r;
+                    const double *yj = pj + n_qp + r;
+                    const double *zj = pj + 2 * n_qp + r;
+                    double *Rt = R + t;
+                    for (size_t u = 0; u < run; u++) {
+                        const double dx = px - xj[u];
+                        const double dy = py - yj[u];
+                        const double dz = pz - zj[u];
+                        Rt[u] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                    }
+                    t += run;
                 }
 
                 // A multi-chunk pair rewrites wuwu per chunk, so only a
