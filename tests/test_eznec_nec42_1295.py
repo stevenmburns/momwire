@@ -424,9 +424,14 @@ _SANITY_REL = 0.05
 
 # 0233 is the 300 MHz dipole driven at 13.9 MHz: R is 0.11 ohm under a
 # 9 kohm reactance, so a 5 % bar on |Z| is all reactance and R is noise; the
-# solve notes call it a poor tolerance comparison.  0239 is NEC-4.2's GN 3
-# evaluation of a buried wire, which antennaknobs measured about an ohm from
-# its own GN 2; momwire's one Sommerfeld evaluation is held to neither.
+# solve notes call it a poor tolerance comparison.  0239, the buried dipole,
+# is not converged at the deck's 11 segments in either code: under refinement
+# (Haswell, 2026-10-03) bspline reads 181.8+131.3j, 221.2+110.4j,
+# 246.4+85.2j, 261.4+61.0j at 11/21/41/81 segments and sinusoidal
+# 148.3+142.7j, 197.8+126.2j, 233.1+100.6j, 254.6+73.9j, the two closing on
+# each other.  NEC-4.2's 149.8+143.2j sits on sinusoidal's 11-segment value,
+# a shared-basis coincidence at an unconverged mesh, not a target to hold
+# bspline to.
 _SANITY_EXEMPT = {"0233", "0239"}
 
 
@@ -445,7 +450,11 @@ def test_the_impedance_against_the_licensed_engine(basis, capsys):
         start = next(
             i for i, ln in enumerate(lines) if "ANTENNA INPUT PARAMETERS" in ln
         )
-        row = next(ln.split() for ln in lines[start + 1 :] if len(ln.split()) == 11)
+        row = next(
+            ln.split()
+            for ln in lines[start + 1 :]
+            if len(ln.split()) == 11 and ln.split()[0].isdigit()
+        )
         rows.append((capture, complex(float(row[6]), float(row[7])), None))
     with capsys.disabled():
         print(f"\n{basis}: capture, NEC-4.2 Z, momwire Z, |dZ|/|Z|")
