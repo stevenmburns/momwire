@@ -487,7 +487,8 @@ class Remainder:
         src = nodes.reshape(n_src * n_qp, 3)
         t_src = np.repeat(src_t, n_qp, axis=0)
 
-        def field_moments(i0, i1):
+        def field_moments(i0, i1, distinct=False):
+            # `distinct` answers `(moments, None)`: every row its own.
             proj = _sommerfeld.remainder_field_proj(
                 obs_p[i0:i1],
                 obs_t[i0:i1],
@@ -498,7 +499,8 @@ class Remainder:
                 grid,
                 cancel_flag=cancel_flag,
             )
-            return np.einsum("ojq,pjq->ojp", proj.reshape(i1 - i0, n_src, n_qp), W)
+            mom = np.einsum("ojq,pjq->ojp", proj.reshape(i1 - i0, n_src, n_qp), W)
+            return (mom, None) if distinct else mom
 
         return field_moments
 
@@ -655,7 +657,9 @@ class RemainderBelow(Remainder):
         src = nodes.reshape(n_src * n_qp, 3)
         t_src = np.repeat(src_t, n_qp, axis=0)
 
-        def field_moments(i0, i1):
+        def field_moments(i0, i1, distinct=False):
+            # `distinct`: answer `(moments of the distinct rows, each row's
+            # place among them or None)` instead of the gathered rows.
             o_p, o_t = obs_p[i0:i1], obs_t[i0:i1]
             first, inv = _distinct_observers(o_p, o_t)
             if first is not None:
@@ -664,6 +668,8 @@ class RemainderBelow(Remainder):
                 o_p, o_t, src, t_src, gz, k_p, k_m, grid
             )
             mom = np.einsum("ojq,pjq->ojp", proj.reshape(o_p.shape[0], n_src, n_qp), W)
+            if distinct:
+                return mom, inv
             return mom if first is None else mom[inv]
 
         return field_moments

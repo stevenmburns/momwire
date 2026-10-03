@@ -205,9 +205,130 @@ static void razor_t2_rows(
     }
 }
 
+// The composing ground's remainder rows (`_source_block_rows`' Q), from the
+// projected field moments `f` of the window's observers:
+//
+//     rem_a = f[o, s_a, 1] / h_a,   rem_a = f[o, s_a, 0] - rem_a  (falling wing)
+//     rem_b = the same on s_b,
+//     Q[r]  = sum over the r-th n_path observers o of (rem_a*sig_a + rem_b*sig_b)*w[o]
+//
+// with `f` row `obs_row[o]` for observer o (the window's distinct observers,
+// `_potential_ground._distinct_observers`), so the gathered (n_obs, n_seg, 2)
+// copy is never formed.
+//
+// THE BITS ARE THE NUMPY ROUTE'S: each operation is numpy's on the same
+// operands, spelled as numpy's complex loops spell it with a real operand
+// promoted to x + 0j. The division is Smith's with a zero imaginary part
+// (rat = 0/h = +0, scl = 1/(h + 0*rat)), so each part is (x + y*rat)*scl;
+// the multiplies by sig and by w are (ar*s - ai*0, ar*0 + ai*s). Every
+// product with the zero is an exact zero, so a build that fuses them into an
+// fma rounds the same numbers, and the terms are written in numpy's order,
+// so the signs of zeros are its too. The path sum is numpy's reduction over
+// a strided axis, sequential from its first element.
+static py::array_t<cd> razor_q_rows(
+    py::array_t<cd, py::array::c_style | py::array::forcecast> f,             // (n_u, n_seg, 2)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> obs_row,  // (n_obs,)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> s_a,      // (n_basis,)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> s_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_b,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> fall_a,
+    py::array_t<bool, py::array::c_style | py::array::forcecast> fall_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> sig_a,
+    py::array_t<double, py::array::c_style | py::array::forcecast> sig_b,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wts,       // (n_obs,)
+    py::ssize_t n_path
+) {
+    if (f.ndim() != 3 || f.shape(2) != 2)
+        throw std::invalid_argument("razor_q_rows: f must be (n_u, n_seg, 2)");
+    const py::ssize_t n_u = f.shape(0), n_seg = f.shape(1);
+    const py::ssize_t n_obs = obs_row.size();
+    const py::ssize_t n_basis = s_a.size();
+    if (n_path < 1 || n_obs % n_path != 0)
+        throw std::invalid_argument("razor_q_rows: n_obs must be whole paths");
+    if (wts.size() != n_obs)
+        throw std::invalid_argument("razor_q_rows: one weight per observer");
+    if (s_b.size() != n_basis || h_a.size() != n_basis || h_b.size() != n_basis ||
+        fall_a.size() != n_basis || fall_b.size() != n_basis ||
+        sig_a.size() != n_basis || sig_b.size() != n_basis)
+        throw std::invalid_argument("razor_q_rows: per-basis arrays disagree on n_basis");
+    const int64_t *orow = obs_row.data();
+    const int64_t *sa = s_a.data(), *sb = s_b.data();
+    for (py::ssize_t o = 0; o < n_obs; o++)
+        if (orow[o] < 0 || orow[o] >= n_u)
+            throw std::invalid_argument("razor_q_rows: observer row out of range");
+    for (py::ssize_t j = 0; j < n_basis; j++)
+        if (sa[j] < 0 || sa[j] >= n_seg || sb[j] < 0 || sb[j] >= n_seg)
+            throw std::invalid_argument("razor_q_rows: wing segment index out of range");
+    const double *F = reinterpret_cast<const double *>(f.data());
+    const double *ha = h_a.data(), *hb = h_b.data();
+    const bool *fa = fall_a.data(), *fb = fall_b.data();
+    const double *ga = sig_a.data(), *gb = sig_b.data(), *w = wts.data();
+    const py::ssize_t n_rows = n_obs / n_path;
+    py::array_t<cd> out(std::vector<py::ssize_t>{n_rows, n_basis});
+    double *Y = reinterpret_cast<double *>(out.mutable_data());
+
+    // One wing's rem: f[., s, 1] / h by Smith's with a zero imaginary part,
+    // and on a falling wing f[., s, 0] minus that.
+    auto wing = [&](const double *frow, int64_t s, double h, bool fall, double *r) {
+        const double *m = frow + 4 * s;  // (n_seg, 2) complex: m[0..1] moment 0, m[2..3] moment 1
+        const double rat = 0.0 / h;
+        const double scl = 1.0 / (h + 0.0 * rat);
+        double xr = (m[2] + m[3] * rat) * scl;
+        double xi = (m[3] - m[2] * rat) * scl;
+        if (fall) {
+            xr = m[0] - xr;
+            xi = m[1] - xi;
+        }
+        r[0] = xr;
+        r[1] = xi;
+    };
+
+    py::gil_scoped_release nogil;
+#pragma omp parallel for schedule(static)
+    for (py::ssize_t r = 0; r < n_rows; r++) {
+        for (py::ssize_t j = 0; j < n_basis; j++) {
+            double accr = 0.0, acci = 0.0;
+            for (py::ssize_t p = 0; p < n_path; p++) {
+                const py::ssize_t o = r * n_path + p;
+                const double *frow = F + 4 * n_seg * orow[o];
+                double ra[2], rb[2];
+                wing(frow, sa[j], ha[j], fa[j], ra);
+                wing(frow, sb[j], hb[j], fb[j], rb);
+                const double s1 = ga[j], s2 = gb[j];
+                // rem_a*sig_a + rem_b*sig_b, each a complex multiply by s + 0j.
+                const double ir = (ra[0] * s1 - ra[1] * 0.0) + (rb[0] * s2 - rb[1] * 0.0);
+                const double ii = (ra[0] * 0.0 + ra[1] * s1) + (rb[0] * 0.0 + rb[1] * s2);
+                // *= w[o], a complex multiply by w + 0j.
+                const double vr = ir * w[o] - ii * 0.0;
+                const double vi = ir * 0.0 + ii * w[o];
+                if (p == 0) {
+                    accr = vr;
+                    acci = vi;
+                } else {
+                    accr = accr + vr;
+                    acci = acci + vi;
+                }
+            }
+            Y[2 * (r * n_basis + j)] = accr;
+            Y[2 * (r * n_basis + j) + 1] = acci;
+        }
+    }
+    return out;
+}
+
 }  // namespace razor_t2
 
 void register_razor_t2(py::module_ &m) {
+    m.def("razor_q_rows", &razor_t2::razor_q_rows,
+          "The composing ground's remainder rows Q of one razor row window: "
+          "rem = f[obs_row[o], s, 1] / h (f[., s, 0] - that on a falling "
+          "wing), Q[r, j] = sum over the row's n_path observers of "
+          "(rem_a*sig_a + rem_b*sig_b)*w[o], in numpy's operation order.",
+          py::arg("f"), py::arg("obs_row"), py::arg("s_a"), py::arg("s_b"),
+          py::arg("h_a"), py::arg("h_b"), py::arg("fall_a"), py::arg("fall_b"),
+          py::arg("sig_a"), py::arg("sig_b"), py::arg("wts"), py::arg("n_path"));
+    m.attr("razor_q_rows_1290") = true;
     m.def("razor_t2_rows", &razor_t2::razor_t2_rows,
           "One razor row window's T2 and its final combination "
           "(momwire#1290). dM0[r] = tab[plus[r]] - tab[minus[r]] over the "

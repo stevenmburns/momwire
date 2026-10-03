@@ -453,6 +453,9 @@ _HAVE_RAZOR_ASSEMBLE_ACCEL = _acc is not None and bool(
 # The fused T2 rows and final combination (momwire#1290), on its OWN symbol:
 # a .so built before it exports every kernel above and not this one.
 _HAVE_RAZOR_T2_ACCEL = _acc is not None and bool(getattr(_acc, "razor_t2_1290", False))
+_HAVE_RAZOR_Q_ACCEL = _acc is not None and bool(
+    getattr(_acc, "razor_q_rows_1290", False)
+)
 
 
 # The in-medium (complex k) twin of the moment fill (momwire#796), on its OWN
@@ -773,6 +776,30 @@ def _use_razor_assemble_accel():
     Gauss-Legendre) and it is a loop bound inside the kernel, not a branch.
     """
     return _HAVE_RAZOR_ASSEMBLE_ACCEL and not _FORCE_NUMPY
+
+
+def _q_rows_numpy(f_mom, s_a, s_b, h_a, h_b, fall_a, fall_b, sig_a, sig_b, w, n_path):
+    """The composing ground's remainder rows of one window, numpy's spelling
+    (the reference `razor_q_rows` is gated against): the moment axis of the
+    projected field `f_mom` (∫Λ, ∫τΛ) takes the wing algebra T1's M0 / M1
+    take, signed by each wing's σ, weighted by the path weights `w` and
+    summed over the path."""
+    n_basis = s_a.size
+    rem_a = f_mom[:, s_a, 1] / h_a[None, :]
+    rem_b = f_mom[:, s_b, 1] / h_b[None, :]
+    if fall_a.size:
+        rem_a[:, fall_a] = f_mom[:, s_a[fall_a], 0] - rem_a[:, fall_a]
+    if fall_b.size:
+        rem_b[:, fall_b] = f_mom[:, s_b[fall_b], 0] - rem_b[:, fall_b]
+    rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
+    rem_int *= w[:, None]
+    return rem_int.reshape(-1, n_path, n_basis).sum(axis=1)
+
+
+def _use_razor_q_accel():
+    """The C++ remainder rows (momwire#1290 `razor_q_rows`), under the same
+    two off-switches as the T2 rows."""
+    return _HAVE_RAZOR_Q_ACCEL and not _FORCE_NUMPY
 
 
 def _use_razor_t2_accel():
@@ -5351,16 +5378,41 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # The remainder rides the same window, and the same wing
                 # algebra one axis over: the moment axis carries ∫Λ and ∫τΛ of
                 # the projected field where `mom_a` / `mom_b` carry M0 and M1.
-                f_mom = rem_fn(lo * n_path, hi * n_path)
-                rem_a = f_mom[:, s_a, 1] / h_a[None, :]
-                rem_b = f_mom[:, s_b, 1] / h_b[None, :]
-                if fall_a.size:
-                    rem_a[:, fall_a] = f_mom[:, s_a[fall_a], 0] - rem_a[:, fall_a]
-                if fall_b.size:
-                    rem_b[:, fall_b] = f_mom[:, s_b[fall_b], 0] - rem_b[:, fall_b]
-                rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
-                rem_int *= wts[lo:hi].reshape(-1)[:, None]
-                Q_rows = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+                if _use_razor_q_accel():
+                    # momwire#1290: the wing algebra below in one pass over
+                    # the window's distinct observers' moments (`razor_q_rows`,
+                    # whose header derives it is numpy's arithmetic), with no
+                    # (n_obs, n_basis) temporaries.
+                    f_u, inv = rem_fn(lo * n_path, hi * n_path, distinct=True)
+                    Q_rows = _acc.razor_q_rows(
+                        f_u,
+                        np.arange(f_u.shape[0]) if inv is None else inv,
+                        s_a,
+                        s_b,
+                        h_a,
+                        h_b,
+                        fall_mask_a,
+                        fall_mask_b,
+                        sig_a,
+                        sig_b,
+                        wts[lo:hi].reshape(-1),
+                        n_path,
+                    )
+                    del f_u, inv
+                else:
+                    Q_rows = _q_rows_numpy(
+                        rem_fn(lo * n_path, hi * n_path),
+                        s_a,
+                        s_b,
+                        h_a,
+                        h_b,
+                        fall_a,
+                        fall_b,
+                        sig_a,
+                        sig_b,
+                        wts[lo:hi].reshape(-1),
+                        n_path,
+                    )
             if t2_accel:
                 # momwire#1290: T2's gathers, the two prefactors and the write
                 # into Z's window in one pass, instead of seven
