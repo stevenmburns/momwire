@@ -20,6 +20,17 @@ Publishing). Every step below was learned the hard way; do them in order.
    (the harness README has the commands). Every OUTCOME, MEM, TIME or Z flag
    is attributed to a PR that says so, or fixed, before the tag. The run's
    results file becomes the next release's baseline.
+4. **The default lane's cost is checked by MEDIAN, and moved before the
+   tag** (added 2026-10-03, when CI wall time stopped gating anything —
+   runners spread ~3x on the same code). Run
+   `python scripts/test_durations.py` (needs `gh`; it pulls the per-test
+   `durations-*` artifacts of the last 25 green main runs of `ci.yml` and
+   `wheels.yml`). Every default-lane test it lists as a slow-lane candidate
+   — median over the 5 s budget for some job/OS — moves to the `slow` lane
+   (or is made faster) in **its own PR**, merged before the bump PR. A
+   single run's long time is not a candidate; a median is. This step is
+   hygiene only: speed regressions are the sweep above's job (and, for
+   Windows, paired runs on the Windows box), never these numbers.
 
 ## Steps
 
