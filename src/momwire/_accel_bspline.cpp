@@ -550,7 +550,24 @@ seg_seg_full_moments_bspline_kernel_impl(
     // exact; and at n_qp <= 8 there is exactly ONE chunk spanning the whole
     // range, so both the arithmetic and its order are unchanged and the
     // output is bit-identical to the untiled kernel.
-    MW_OMP_PARALLEL_FOR_COLLAPSE2
+    //
+    // wuwu (below) is a function of the tier and the two segment LENGTHS
+    // only, and a meshed wire repeats its segment length pair after pair, so
+    // each thread keeps the last single-chunk table with its key and refills
+    // it only when (tier, Li, Lj) changes. A hit reuses doubles produced by
+    // the very expressions a refill would evaluate on bit-equal inputs, so
+    // the moments do not move.
+    #pragma omp parallel
+    {
+    // wuwu[t, pP]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
+    // chunk's pairs, flattened with pP = p*NM + P innermost (stage 2 walks t
+    // outermost). For D=2: NMM*64 = 576 doubles = 4.5KB, fits comfortably
+    // in L1.
+    alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
+    bool w_held = false;
+    size_t w_tier = 0;
+    double w_Li = 0.0, w_Lj = 0.0;
+    MW_OMP_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
             alignas(32) double R[BSPLINE_QR_TILE];
@@ -560,11 +577,6 @@ seg_seg_full_moments_bspline_kernel_impl(
             alignas(32) double sin_phases[BSPLINE_QR_TILE];
             alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
             alignas(32) double decay[BSPLINE_QR_TILE];
-            // wuwu[t, pP]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
-            // chunk's pairs, flattened with pP = p*NM + P innermost (stage 2
-            // walks t outermost). For D=2: NMM*64 = 576 doubles = 4.5KB,
-            // fits comfortably in L1.
-            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
 
             double acc_re[NMM], acc_im[NMM];
             for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
@@ -604,26 +616,41 @@ seg_seg_full_moments_bspline_kernel_impl(
                     const double dy = pi[q*3 + 1] - pj[r*3 + 1];
                     const double dz = pi[q*3 + 2] - pj[r*3 + 2];
                     R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-
-                    const double wi = gw[q] * Li;
-                    const double ui = gt[q] * Li;
-                    const double wj = gw[r] * Lj;
-                    const double uj = gt[r] * Lj;
-                    double ui_pow[NM], uj_pow[NM];
-                    ui_pow[0] = 1.0;
-                    uj_pow[0] = 1.0;
-                    for (int e = 1; e < NM; e++) {
-                        ui_pow[e] = ui_pow[e-1] * ui;
-                        uj_pow[e] = uj_pow[e-1] * uj;
-                    }
-                    const double wij = wi * wj;
-                    for (int pp = 0; pp < NM; pp++) {
-                        for (int PP = 0; PP < NM; PP++) {
-                            wuwu[t * NMM + pp * NM + PP] = wij * ui_pow[pp] * uj_pow[PP];
-                        }
-                    }
-
                     if (++r == n_qp) { r = 0; ++q; }
+                }
+
+                // A multi-chunk pair rewrites wuwu per chunk, so only a
+                // single-chunk table is ever held.
+                const bool one_chunk = n_pairs <= BSPLINE_QR_TILE;
+                if (!(one_chunk && w_held && tier == w_tier && Li == w_Li &&
+                      Lj == w_Lj)) {
+                    q = base / n_qp;
+                    r = base % n_qp;
+                    for (size_t t = 0; t < m; t++) {
+                        const double wi = gw[q] * Li;
+                        const double ui = gt[q] * Li;
+                        const double wj = gw[r] * Lj;
+                        const double uj = gt[r] * Lj;
+                        double ui_pow[NM], uj_pow[NM];
+                        ui_pow[0] = 1.0;
+                        uj_pow[0] = 1.0;
+                        for (int e = 1; e < NM; e++) {
+                            ui_pow[e] = ui_pow[e-1] * ui;
+                            uj_pow[e] = uj_pow[e-1] * uj;
+                        }
+                        const double wij = wi * wj;
+                        for (int pp = 0; pp < NM; pp++) {
+                            for (int PP = 0; PP < NM; PP++) {
+                                wuwu[t * NMM + pp * NM + PP] = wij * ui_pow[pp] * uj_pow[PP];
+                            }
+                        }
+
+                        if (++r == n_qp) { r = 0; ++q; }
+                    }
+                    w_held = one_chunk;
+                    w_tier = tier;
+                    w_Li = Li;
+                    w_Lj = Lj;
                 }
 
                 // Stage 1: phases = -k_re * R, then sincos via libmvec.
@@ -691,6 +718,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                     std::complex<double>(acc_re[pP], acc_im[pP]);
             }
         }
+    }
     }
 
     return J;
