@@ -294,7 +294,7 @@ def run(
     text = read_deck(deck)
     if text is None:
         printout = _printout.render_refusal(
-            None, f"UNABLE TO READ INPUT FILE {deck}", basis=basis
+            None, f"UNABLE TO READ INPUT FILE {deck}", basis=basis, dialect=dialect
         )
     else:
         printout = render(text, basis=basis, dialect=dialect)
@@ -345,7 +345,9 @@ def main(
         # stderr nor the exit code), and a missing file would be read as a
         # broken installation.  So the crash is reported the only way that
         # reaches a human: as a refusal, in the printout, exit 0.
-        _report_internal_error(deck_path, printout_path, exc, basis=basis)
+        _report_internal_error(
+            deck_path, printout_path, exc, basis=basis, dialect=dialect
+        )
     return 0
 
 
@@ -355,6 +357,7 @@ def _report_internal_error(
     exc: BaseException,
     *,
     basis: str = _serve.BASIS,
+    dialect: str = "nec5",
 ) -> None:
     """Last-ditch printout for a failure the shell did not anticipate.
 
@@ -370,7 +373,7 @@ def _report_internal_error(
         deck_text = read_deck(Path(deck_path))
         write_printout(
             Path(printout_path),
-            _printout.render_refusal(deck_text, reason, basis=basis),
+            _printout.render_refusal(deck_text, reason, basis=basis, dialect=dialect),
         )
     except OSError:
         # The output path itself is unwritable; there is no channel left, and
@@ -416,7 +419,7 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
         except Exception as exc:  # noqa: BLE001 - the seam's last line of defence
             return (
                 _printout.render_refusal(
-                    body, _internal_error_reason(exc), basis=basis
+                    body, _internal_error_reason(exc), basis=basis, dialect=dialect
                 ),
                 "",
             )
