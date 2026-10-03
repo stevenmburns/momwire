@@ -152,6 +152,8 @@ jobs:
         # build spec instead of falling back to it.
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         uses: pypa/cibuildwheel@v4.2.1
+        env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
       - name: Build wheels (single-Python canary — main pushes)
         # Post-merge compiler canary (all 3 red runs in 30 days were MSVC),
         # not a release: one Python per OS is enough signal at ~1/5 the
@@ -160,6 +162,7 @@ jobs:
         uses: pypa/cibuildwheel@v4.2.1
         env:
           CIBW_BUILD: "cp312-*"
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
       - name: Assert libomp is NOT vendored into the macOS wheel
         # Regression guard for the `delocate --exclude libomp` above: if a future
         # change drops the exclude, the wheel would bundle a private libomp again
@@ -192,6 +195,22 @@ jobs:
         with:
           name: wheels-${{ matrix.os }}
           path: ./wheelhouse/*.whl
+      # Per-test call durations from cibuildwheel's test-command (tests/
+      # time_budget.py appends one JSONL line per test, per interpreter; each
+      # record names its Python). This is where the Windows numbers come from
+      # -- ci.yml has no Windows lane. Windows and macOS only: on Linux the
+      # test runs inside the manylinux container, which neither sees this env
+      # var nor shares a filesystem with the runner, and ci.yml's `test` job
+      # already covers Linux. Input to scripts/test_durations.py's medians;
+      # CI wall time never gates.
+      - name: Upload per-test durations
+        if: always() && runner.os != 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
 
   smoke_pythons:
     # Which interpreters the smoke matrix covers. Computed rather than written
