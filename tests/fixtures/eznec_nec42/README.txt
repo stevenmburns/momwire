@@ -40,3 +40,18 @@ printouts/<capture or probe>.out
   prints no build tag), and the Sommerfeld-table cache messages in 0231,
   0232, 0239, p7 and p9 are the engine's own file handling, which the gates
   normalise away (tests/test_eznec_nec42_printout_1295.py).
+
+  These printouts are a machine-portable oracle, NOT a byte-portable one.
+  The Windows box's licensed NEC-4.2 (the 2014 LLNL NEC42W64CL.exe), run
+  2026-10-03 on the same 15 unique captured decks, agrees with them on
+  every line count, every heading sequence and every feed-point Z (to
+  0.00e+00). About 33 lines per file still differ:
+    - the timing lines (FILL, the Sommerfeld table time, RUN TIME);
+    - rows at the floating-point floor, where a ~1e-24 charge magnitude
+      carries an arbitrary phase;
+    - rows that differ only in the last printed digit (worst relative
+      difference 5.5e-6 away from the floor).
+  None of these is a defect. The round-trip gate is immune, because the
+  fixture is both sides of that comparison. A gate against a FRESH licensed
+  run on another machine must mask the timing and floor rows and allow a
+  last-digit tolerance; do not "fix" a byte mismatch there.
