@@ -2302,7 +2302,9 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
         rowflat[d0 : d0 + nk[g]] = inv[b0 : b0 + nk[g]]
     del inv
     b = np.concatenate(kfirst)[koff[g_s[blk]] + j_first]
-    kept_pos = a_s[blk].astype(np.int64) * nB + b
+    kept_pos = (a_s[blk].astype(np.int64) * nB + b).astype(
+        _index_dtype(int(a_s.max(initial=0)) * nB + nB), copy=False
+    )
     rowtab = [
         rowflat[off[g] : off[g] + nz[g] * nk[g]].reshape(nz[g], nk[g])
         for g in range(nG)
@@ -2429,6 +2431,10 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         # (`group_first_ranks`): the same ranks, first positions and ids.
         kl_rank, nk_g, f_cat, k_cat = _accel.acc.group_first_ranks(kid, int(kf.size))
         koff = np.concatenate(([0], np.cumsum(nk_g))).astype(np.int64)
+        # Line positions in the line's own index width (the plan's
+        # O(groups x keys) lists).
+        f_line = f_cat.astype(_index_dtype(nL), copy=False)
+        del f_cat
     for g in range(nG):
         m_g = members[bounds[g] : bounds[g + 1]]
         if m_g.size == 1:
@@ -2441,7 +2447,7 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         nz.append(f_z.size)
         if by_rows:
             kids.append(k_cat[koff[g] : koff[g + 1]])
-            kfirst.append(f_cat[koff[g] : koff[g + 1]])
+            kfirst.append(f_line[koff[g] : koff[g + 1]])
             nk.append(int(nk_g[g]))
             continue
         f_k, r_k = _first_ints(kid[g])
@@ -2754,7 +2760,9 @@ class _ProductTiles:
             _t, t_of_cls = np.unique(t_of_cls, return_inverse=True)
             t_of_cls = np.asarray(t_of_cls).ravel()
             self.n_tiles = int(_t.size)
-        self.tile_of_key = t_of_cls[key_cls]
+        self.tile_of_key = t_of_cls[key_cls].astype(
+            np.int16 if self.n_tiles < 2**15 else np.int64, copy=False
+        )
         # Per group, its local keys sorted by tile -- or, with many groups,
         # every row in tile order (`_tile_rows`).
         self._gkeys = []
