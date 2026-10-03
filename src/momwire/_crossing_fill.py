@@ -2634,7 +2634,9 @@ def _column_tiles(plan, key_cls, cls_rows):
     kid = plan.kid
     n_groups, n_line = kid.shape
     anchor = int(np.argmax(plan.nz))
-    a_cls = key_cls[kid[anchor]]
+    # The anchor's ρ along the line: its class order is its ρ order (a class
+    # is one exact ρ), with equal ρ in line order.
+    a_cls = plan.key_r[kid[anchor]]
     order = np.argsort(a_cls, kind="stable")
     pos = np.empty(n_line, dtype=np.int64)
     pos[order] = np.arange(n_line)
@@ -2726,13 +2728,24 @@ class _ProductTiles:
         n_key = plan.key_r.size
         # The one call's columns: exact-ρ classes of the keys, ascending.
         # (the plan's `KeyIndex` formed exactly this `np.unique` already)
-        _r_u, key_cls = plan.keys.take_r_classes()
+        column = plan.slot == "z" and len(plan.rowtab) > 1 and _COLUMN_TILES
+        got = _near_interface._factorize((plan.key_r,)) if column else None
+        if got is not None:
+            # Column tiles read the classes as labels (their walk orders the
+            # line by ρ itself, `_column_tiles`), so they are numbered by one
+            # hash pass instead of sorted: the same partition of the keys.
+            key_cls = np.asarray(got[1]).ravel()
+            n_cls = int(got[0].size)
+        else:
+            _r_u, key_cls = plan.keys.take_r_classes()
+            n_cls = _r_u.size
+        del got
         rows_per_key = np.zeros(n_key, dtype=np.int64)
         for g, kj in enumerate(plan.kids):
             rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound
-        cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=_r_u.size)
+        cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=n_cls)
         col_ready = None
-        if plan.slot == "z" and len(plan.rowtab) > 1 and _COLUMN_TILES:
+        if column:
             t_of_cls, col_ready, self.n_tiles = _column_tiles(plan, key_cls, cls_rows)
             _ROUTES["tile_column_products"] += 1
         else:
@@ -5911,6 +5924,11 @@ def _streamed_sandwich(
         # A column no chunk or held set names reads as out of range, which
         # `combine_rows` refuses ("a row reads a column not in hand").
         colmap = np.full(n_cols, _NOT_IN_HAND, dtype=np.int64)
+        # The held columns live in slots of a buffer that grows by doubling
+        # and reuses freed slots, so a chunk copies only the columns it adds
+        # (the concatenation below copies the whole held set every chunk).
+        held_slot = np.zeros(0, dtype=np.int64)
+        free = []
     for cols, Kc in K:
         c_cols = (
             np.arange(cols.start, cols.stop)
@@ -5934,18 +5952,17 @@ def _streamed_sandwich(
         del touched
         J = np.flatnonzero(pending & (remaining == 0))
         n_old = held_cols.size
-        slot[held_cols] = np.arange(n_old)
-        slot[c_cols] = n_old + np.arange(c_cols.size)
-        if J.size and by_rows:
+        if not by_rows:
+            slot[held_cols] = np.arange(n_old)
+            slot[c_cols] = n_old + np.arange(c_cols.size)
+        if by_rows:
             # `combine_rows` reads each row's columns where they are held
-            # (the chunk's or the held set's), through `colmap`: the same
-            # terms the gathered products and sliced rows below hand
+            # (the chunk's, or the held buffer's slot `colmap` names): the
+            # same terms the gathered products and sliced rows below hand
             # `_combine`, in the same order, through the same loop.
-            colmap[held_cols] = -1 - np.arange(n_old)
             colmap[c_cols] = np.arange(c_cols.size)
-            block = _combine_held(Lc, held, colmap, J, q_args)
-            colmap[held_cols] = _NOT_IN_HAND
-            colmap[c_cols] = _NOT_IN_HAND
+            if J.size:
+                block = _combine_held(Lc, held, colmap, J, q_args)
         elif J.size:
             need = np.unique(pat[J].indices)
             pos = slot[need]
@@ -5970,6 +5987,40 @@ def _streamed_sandwich(
             del block
             pending[J] = False
             readers -= np.bincount(pat[J].indices, minlength=n_cols)
+        if by_rows:
+            # Keep only the columns a still-pending row reads: free the
+            # released ones' slots, then move the chunk's kept ones in.
+            colmap[c_cols] = _NOT_IN_HAND
+            keep_old = readers[held_cols] > 0
+            if not keep_old.all():
+                colmap[held_cols[~keep_old]] = _NOT_IN_HAND
+                free.extend(held_slot[~keep_old].tolist())
+                held_cols, held_slot = held_cols[keep_old], held_slot[keep_old]
+            new = np.flatnonzero(readers[c_cols] > 0)
+            if new.size:
+                if len(free) < new.size:
+                    cap = 0 if held is None else held[0].shape[1]
+                    grown = max(2 * cap, cap + new.size - len(free), 64)
+                    fresh_buf = [
+                        np.empty((x.shape[0], grown), dtype=np.complex128) for x in Lc
+                    ]
+                    if held is not None:
+                        for b, h in zip(fresh_buf, held):
+                            b[:, :cap] = h
+                    held = fresh_buf
+                    free.extend(range(cap, grown))
+                slots = np.array(free[-new.size :], dtype=np.int64)
+                del free[-new.size :]
+                for b, x in zip(held, Lc):
+                    b[:, slots] = x[:, new]
+                colmap[c_cols[new]] = -1 - slots
+                held_cols = np.concatenate((held_cols, c_cols[new]))
+                held_slot = np.concatenate((held_slot, slots))
+            _ROUTES["stream_held_cols"] = max(
+                _ROUTES["stream_held_cols"], held_cols.size
+            )
+            del Lc
+            continue
         slot[held_cols] = -1
         slot[c_cols] = -1
         # Keep only the columns a still-pending row reads.
