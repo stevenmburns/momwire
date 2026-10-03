@@ -1,8 +1,10 @@
 """EZNEC's External NEC-4.2 slot, phase 2: the NEC-4.2 printout.
 
 momwire#1295.  The oracle is the licensed NEC-4.2's own printout of each of
-the seventeen captured decks (``tests/fixtures/eznec_nec42/printouts/``,
-README there for provenance), used as black-box OUTPUT only.
+the seventeen captured decks and of nine probe decks written to show what
+the captures do not (junctions, an FR sweep, RLC loads, NE, two runs, ...):
+``tests/fixtures/eznec_nec42/printouts/``, README there for provenance,
+used as black-box OUTPUT only.
 
 Three kinds of gate, cheapest first:
 
@@ -34,6 +36,8 @@ from momwire.eznec import _nec4, _printout
 from momwire.eznec._nec4_printout import (
     FarFieldGround,
     Nec4Printout,
+    Nec4Run,
+    Preamble,
     SegmentRow,
     SegmentValueRow,
     WireRow,
@@ -43,6 +47,8 @@ from momwire.eznec._printout import (
     GroundMedium,
     LineRow,
     LoadRow,
+    NearFieldBlock,
+    NearFieldRow,
     NetworkRow,
     PatternBlock,
     PatternRow,
@@ -53,12 +59,17 @@ from momwire.eznec._shell import render
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 PRINTOUTS = FIXTURES / "printouts"
+PROBES_DIR = FIXTURES / "probes"
+# The seventeen decks EZNEC wrote, and nine probe decks written to show
+# NEC-4.2's layout of what EZNEC's captures did not (README beside them).
 CAPTURES = tuple(sorted(p.name[:4] for p in FIXTURES.glob("*.nec")))
+PROBES = tuple(sorted(p.name.split("_")[0] for p in PROBES_DIR.glob("*.nec")))
+CASES = CAPTURES + PROBES
 BASIS = "bspline"
 
 
 def deck_text(capture: str) -> str:
-    (path,) = FIXTURES.glob(f"{capture}_*.nec")
+    (path,) = [*FIXTURES.glob(f"{capture}_*.nec"), *PROBES_DIR.glob(f"{capture}_*.nec")]
     return path.read_bytes().decode("latin-1")
 
 
@@ -101,10 +112,13 @@ def _unstamped(text: str) -> list[str]:
 
 
 def test_the_fixtures_pair_each_deck_with_its_printout():
-    """One printout per captured deck, and each echoes its own deck's
-    comment block — the stamp EZNEC checks a printout's age by."""
-    assert sorted(p.name[:4] for p in PRINTOUTS.glob("*.out")) == list(CAPTURES)
-    for capture in CAPTURES:
+    """One printout per deck, and each echoes its own deck's comment block —
+    the stamp EZNEC checks a printout's age by."""
+    assert len(CAPTURES) == 17 and len(PROBES) == 9
+    assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
+        CASES
+    )
+    for capture in CASES:
         box = _printout._comment_box(deck_text(capture))
         lines = licensed(capture).split("\n")
         start = lines.index(box[0])
@@ -113,7 +127,7 @@ def test_the_fixtures_pair_each_deck_with_its_printout():
 
 
 def test_the_cache_blocks_leave_only_their_own_lines():
-    for capture in ("0231", "0232", "0239"):
+    for capture in ("0231", "0232", "0239", "p7", "p9"):
         raw, clean = licensed(capture), reference(capture)
         assert "GNDINO" in raw and "GNDINO" not in clean
         assert "ommerfeld-ground tables" not in clean
@@ -123,6 +137,8 @@ def test_the_cache_blocks_leave_only_their_own_lines():
                 "0231": 6,
                 "0232": 3,
                 "0239": 5,
+                "p7": 6,
+                "p9": 6,
             }[capture]
         )
 
@@ -215,6 +231,21 @@ def _load_rows(lines: list[str]) -> tuple[LoadRow, ...]:
         tag, first, last = (
             int(c) if c.strip() else 0 for c in _cells(line, (8, 13, 18))
         )
+        kind = line[100:].strip()
+        if kind in ("SERIES", "PARALLEL"):
+            r, ind, c = (line[a:b].strip() for a, b in ((23, 34), (36, 47), (49, 60)))
+            rows.append(
+                LoadRow(
+                    tag,
+                    first,
+                    last,
+                    resistance=float(r) if r else None,
+                    inductance=float(ind) if ind else None,
+                    capacitance=float(c) if c else None,
+                    kind=kind,
+                )
+            )
+            continue
         if line.rstrip().endswith("WIRE"):
             rows.append(
                 LoadRow(tag, first, last, conductivity=float(line[88:99]), kind="WIRE")
@@ -311,70 +342,58 @@ def _number_after(line: str, label: str) -> float:
     return float(line.split(label, 1)[1].split()[0])
 
 
-def parse_printout(deck: str, text: str) -> Nec4Printout:
-    """A licensed NEC-4.2 printout read back into the dataclass it would be
-    rendered from: every number by its column, nothing recomputed."""
-    lines = text.split("\n")
-    wires_at = next(i for i, ln in enumerate(lines) if ln.startswith("  NO.        X1"))
-    wires = []
-    for line in _rows_after(lines, wires_at + 1):
-        c = _cells(line, _WIRE_EDGES)
-        wires.append(
-            WireRow(
-                int(c[0]),
-                (float(c[1]), float(c[2]), float(c[3])),
-                (float(c[4]), float(c[5]), float(c[6])),
-                float(c[7]),
-                int(c[8]),
-                int(c[9]),
-                int(c[10]),
-                int(c[11]),
+def _near_fields(lines: list[str]) -> tuple[NearFieldBlock, ...]:
+    blocks = []
+    for at, heading in enumerate(lines):
+        if "- - - NEAR " not in heading:
+            continue
+        rows = []
+        for line in _rows_after(lines, at + 5):
+            c = _cells(line, (14, 26, 38, 53, 62, 76, 85, 99, 108))
+            rows.append(
+                NearFieldRow(
+                    point=(float(c[0]), float(c[1]), float(c[2])),
+                    magnitudes=(float(c[3]), float(c[5]), float(c[7])),
+                    phases_deg=(float(c[4]), float(c[6]), float(c[8])),
+                )
             )
-        )
-    total = next(
-        int(ln.split("=")[1].split()[0]) for ln in lines if "TOTAL SEGMENTS USED=" in ln
-    )
-    junction_at = next(i for i, ln in enumerate(lines) if ln.startswith(" JUNCTION"))
-    assert lines[junction_at + 1] == "  NONE"
-    seg_at = next(i for i, ln in enumerate(lines) if ln.startswith("  NO.       X"))
-    segments = []
-    for line in _rows_after(lines, seg_at + 1):
-        c = _cells(line, _SEGMENT_EDGES)
-        segments.append(
-            SegmentRow(
-                int(c[0]),
-                (float(c[1]), float(c[2]), float(c[3])),
-                float(c[4]),
-                float(c[5]),
-                float(c[6]),
-                float(c[7]),
-                int(c[8]),
-                int(c[10]),
-                int(c[11]),
+        blocks.append(NearFieldBlock(tuple(rows), magnetic="MAGNETIC" in heading))
+    return tuple(blocks)
+
+
+_ECHO = " ***** INPUT LINE"
+
+
+def _parse_run(lines: list[str], echo_through: int | None) -> Nec4Run:
+    """One run's region of a printout: its sections found by heading."""
+    preamble = None
+    if any("- - - - - - FREQUENCY - - - - - -" in ln for ln in lines):
+        frequency = next(ln for ln in lines if "FREQUENCY=" in ln)
+        wavelength = next(ln for ln in lines if "WAVELENGTH=" in ln)
+        env_at = _section(lines, "- - - ANTENNA ENVIRONMENT - - -")
+        environment = lines[env_at + 2].strip()
+        ground = None
+        if environment.startswith("FINITE"):
+            eps = _number_after(lines[env_at + 3], "CONST.=")
+            sigma = _number_after(lines[env_at + 4], "CONDUCTIVITY=")
+            cell = lines[env_at + 5].split("CONSTANT=")[1]
+            ground = GroundMedium(
+                eps, sigma, complex(float(cell[:12]), float(cell[12:24]))
             )
+        fill = next(ln for ln in lines if "FILL=" in ln)
+        preamble = Preamble(
+            frequency_mhz=_number_after(frequency, "FREQUENCY="),
+            wavelength_m=_number_after(wavelength, "WAVELENGTH="),
+            environment=environment,
+            ground=ground,
+            loads=_load_rows(lines),
+            fill_seconds=_number_after(fill, "FILL="),
+            factor_seconds=_number_after(fill, "FACTOR="),
         )
-    ge = next(ln for ln in deck.splitlines() if ln.startswith("GE"))
-    frequency = next(ln for ln in lines if "FREQUENCY=" in ln)
-    wavelength = next(ln for ln in lines if "WAVELENGTH=" in ln)
-    env_at = _section(lines, "- - - ANTENNA ENVIRONMENT - - -")
-    environment = lines[env_at + 2].strip()
-    ground = None
-    if environment.startswith("FINITE"):
-        eps = _number_after(lines[env_at + 3], "CONST.=")
-        sigma = _number_after(lines[env_at + 4], "CONDUCTIVITY=")
-        cell = lines[env_at + 5].split("CONSTANT=")[1]
-        ground = GroundMedium(eps, sigma, complex(float(cell[:12]), float(cell[12:24])))
-    fill = next(ln for ln in lines if "FILL=" in ln)
-    sources = _port_rows(lines, "- - - ANTENNA INPUT PARAMETERS - - -")
-    networks = _networks(lines)
-    excitation = (
-        _port_rows(
-            lines, "- - - STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS - - -"
-        )
-        if networks
-        else ()
+    excitation_heading = (
+        "- - - STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS - - -"
     )
-    currents_at = _section(lines, "- - - CURRENTS AND LOCATION - - -")
+    has_excitation = any(ln.strip() == excitation_heading for ln in lines)
     try:
         charges = _value_rows(
             lines, _section(lines, "- - - CHARGE DENSITIES - - -") + 7
@@ -397,24 +416,17 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
         )
     except StopIteration:
         far = None
-    run_time = next(ln for ln in lines if "RUN TIME =" in ln)
-    return Nec4Printout(
-        wires=tuple(wires),
-        ge_flag=int(ge[2:].split(",")[0]),
-        total_segments=total,
-        junctions=(),
-        segments=tuple(segments),
-        frequency_mhz=_number_after(frequency, "FREQUENCY="),
-        wavelength_m=_number_after(wavelength, "WAVELENGTH="),
-        environment=environment,
-        ground=ground,
-        loads=_load_rows(lines),
-        fill_seconds=_number_after(fill, "FILL="),
-        factor_seconds=_number_after(fill, "FACTOR="),
-        networks=networks,
-        network_excitation=excitation,
-        sources=sources,
-        currents=_value_rows(lines, currents_at + 6),
+    return Nec4Run(
+        echo_through=echo_through,
+        preamble=preamble,
+        networks=_networks(lines),
+        network_excitation=(
+            _port_rows(lines, excitation_heading) if has_excitation else ()
+        ),
+        sources=_port_rows(lines, "- - - ANTENNA INPUT PARAMETERS - - -"),
+        currents=_value_rows(
+            lines, _section(lines, "- - - CURRENTS AND LOCATION - - -") + 6
+        ),
         charges=charges,
         power=PowerBudget(
             budget["INPUT POWER"],
@@ -423,13 +435,104 @@ def parse_printout(deck: str, text: str) -> Nec4Printout:
             budget["EFFICIENCY"],
             budget.get("NETWORK LOSS"),
         ),
+        near_fields=_near_fields(lines),
         far_field_ground=far,
         patterns=_pattern(lines),
+    )
+
+
+def parse_printout(deck: str, text: str) -> Nec4Printout:
+    """A licensed NEC-4.2 printout read back into the dataclass it would be
+    rendered from: every number by its column, nothing recomputed.
+
+    A run's region starts at its card echo or its FREQUENCY heading,
+    whichever comes first after the previous run's input parameters, and
+    holds exactly one ANTENNA INPUT PARAMETERS table.
+    """
+    lines = text.split("\n")
+    wires_at = next(i for i, ln in enumerate(lines) if ln.startswith("  NO.        X1"))
+    wires = []
+    for line in _rows_after(lines, wires_at + 1):
+        c = _cells(line, _WIRE_EDGES)
+        wires.append(
+            WireRow(
+                int(c[0]),
+                (float(c[1]), float(c[2]), float(c[3])),
+                (float(c[4]), float(c[5]), float(c[6])),
+                float(c[7]),
+                int(c[8]),
+                int(c[9]),
+                int(c[10]),
+                int(c[11]),
+            )
+        )
+    total = next(
+        int(ln.split("=")[1].split()[0]) for ln in lines if "TOTAL SEGMENTS USED=" in ln
+    )
+    junction_at = next(i for i, ln in enumerate(lines) if ln.startswith(" JUNCTION"))
+    junctions = tuple(
+        tuple(int(n) for n in line.split()[1:])
+        for line in _rows_after(lines, junction_at + 1)
+        if line != "  NONE"
+    )
+    seg_at = next(i for i, ln in enumerate(lines) if ln.startswith("  NO.       X"))
+    segments = []
+    for line in _rows_after(lines, seg_at + 1):
+        c = _cells(line, _SEGMENT_EDGES)
+        segments.append(
+            SegmentRow(
+                int(c[0]),
+                (float(c[1]), float(c[2]), float(c[3])),
+                float(c[4]),
+                float(c[5]),
+                float(c[6]),
+                float(c[7]),
+                int(c[8]),
+                int(c[10]),
+                int(c[11]),
+            )
+        )
+    ge = next(ln for ln in deck.splitlines() if ln.startswith("GE"))
+
+    def echo_number(line: str) -> int | None:
+        if not line.startswith(_ECHO) or line[22:24] == "EN":
+            return None
+        return int(line[len(_ECHO) : len(_ECHO) + 3])
+
+    inputs = [
+        i
+        for i, ln in enumerate(lines)
+        if ln.strip() == "- - - ANTENNA INPUT PARAMETERS - - -"
+    ]
+    starts = [seg_at]
+    for previous in inputs[:-1]:
+        starts.append(
+            next(
+                i
+                for i in range(previous + 1, len(lines))
+                if echo_number(lines[i]) is not None
+                or "- - - - - - FREQUENCY - - - - - -" in lines[i]
+            )
+        )
+    starts.append(len(lines))
+    runs = []
+    for k in range(len(inputs)):
+        region = lines[starts[k] : starts[k + 1]]
+        echoed = [n for ln in region if (n := echo_number(ln)) is not None]
+        runs.append(_parse_run(region, echoed[-1] if echoed else None))
+    run_time = next(ln for ln in lines if "RUN TIME =" in ln)
+    return Nec4Printout(
+        wires=tuple(wires),
+        ge_flag=int(ge[2:].split(",")[0]),
+        total_segments=total,
+        junctions=junctions,
+        segments=tuple(segments),
+        runs=tuple(runs),
         run_seconds=_number_after(run_time, "RUN TIME ="),
     )
 
 
-@pytest.mark.parametrize("capture", CAPTURES)
+@pytest.mark.parametrize("capture", CASES)
 def test_the_licensed_printout_round_trips_through_the_renderer(capture):
     """The formatter gate: NEC-4.2's own numbers, laid out by this module,
     are NEC-4.2's own bytes."""
@@ -498,13 +601,13 @@ SERVED_BASES = ("bspline", "sinusoidal")
 @pytest.fixture(scope="module", params=SERVED_BASES)
 def served(request) -> dict[str, str]:
     basis = request.param
-    texts = {c: render(deck_text(c), basis=basis, dialect="nec4") for c in CAPTURES}
+    texts = {c: render(deck_text(c), basis=basis, dialect="nec4") for c in CASES}
     texts["basis"] = basis
     return texts
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("capture", CAPTURES)
+@pytest.mark.parametrize("capture", CASES)
 def test_the_served_printout_has_the_licensed_sections_in_order(served, capture):
     ours = served[capture]
     assert "NEC ERROR" not in ours, ours[-400:]
@@ -512,7 +615,7 @@ def test_the_served_printout_has_the_licensed_sections_in_order(served, capture)
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("capture", CAPTURES)
+@pytest.mark.parametrize("capture", CASES)
 def test_the_served_printout_has_the_licensed_columns_line_for_line(served, capture):
     ours, theirs = _unstamped(served[capture]), _unstamped(reference(capture))
     assert len(ours) == len(theirs)
@@ -535,18 +638,16 @@ def read_fields(text: str) -> dict:
     lines = text.split("\n")
 
     def table(heading: str, width: int) -> list[list[float]]:
-        found = [i for i, ln in enumerate(lines) if ln.strip() == heading]
-        if not found:
-            return []
         rows = []
-        started = False
-        for line in lines[found[0] + 1 :]:
-            numbers = [float(n) for n in _NUMBER.findall(line)]
-            if len(numbers) == width:
-                rows.append(numbers)
-                started = True
-            elif started and not line.strip():
-                break
+        for at in (i for i, ln in enumerate(lines) if ln.strip() == heading):
+            started = False
+            for line in lines[at + 1 :]:
+                numbers = [float(n) for n in _NUMBER.findall(line)]
+                if len(numbers) == width:
+                    rows.append(numbers)
+                    started = True
+                elif started and not line.strip():
+                    break
         return rows
 
     return {
@@ -557,6 +658,7 @@ def read_fields(text: str) -> dict:
         "currents": table("- - - CURRENTS AND LOCATION - - -", 10),
         "charges": table("- - - CHARGE DENSITIES - - -", 10),
         "pattern": table("- - - RADIATION PATTERNS - - -", 11),
+        "near": table("- - - NEAR ELECTRIC FIELDS - - -", 9),
         "budget": [
             ln.split("=")[0].strip()
             for ln in lines
@@ -566,7 +668,7 @@ def read_fields(text: str) -> dict:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("capture", CAPTURES)
+@pytest.mark.parametrize("capture", CASES)
 def test_one_reader_finds_the_same_fields_in_both(served, capture):
     ours, theirs = read_fields(served[capture]), read_fields(reference(capture))
     assert ours.keys() == theirs.keys()
@@ -596,8 +698,11 @@ _SANITY_EXEMPT = {"0233", "0239"}
 @pytest.mark.integration
 def test_the_numbers_against_the_licensed_engine(served, capsys):
     report = []
-    for capture in CAPTURES:
+    for capture in CASES:
         ours, theirs = read_fields(served[capture]), read_fields(reference(capture))
+        for run, (a, b) in enumerate(zip(ours["input"], theirs["input"], strict=True)):
+            label = capture if run == 0 else f"{capture}#{run + 1}"
+            report.append((label, complex(*b[6:8]), complex(*a[6:8]), None, None))
         z_ours = complex(*ours["input"][0][6:8])
         z_theirs = complex(*theirs["input"][0][6:8])
         peak = max(abs(complex(*r[6:8])) for r in theirs["currents"])
@@ -613,7 +718,13 @@ def test_the_numbers_against_the_licensed_engine(served, capsys):
             for a, b in zip(ours["pattern"], theirs["pattern"], strict=True)
             if b[4] > -100.0
         ]
-        report.append((capture, z_theirs, z_ours, i_rel, max(gain, default=None)))
+        report[-len(ours["input"])] = (
+            capture,
+            z_theirs,
+            z_ours,
+            i_rel,
+            max(gain, default=None),
+        )
     with capsys.disabled():
         print(
             f"\n{served['basis']}: capture, NEC-4.2 Z, momwire Z, |dZ|/|Z|, "
@@ -622,10 +733,13 @@ def test_the_numbers_against_the_licensed_engine(served, capsys):
         for capture, zt, zo, i_rel, dg in report:
             rel = abs(zo - zt) / abs(zt)
             g = "-" if dg is None else f"{dg:.2f}"
-            print(f"  {capture}  {zt:.4f}  {zo:.4f}  {rel:.4f}  {i_rel:.4f}  {g}")
+            i = "-" if i_rel is None else f"{i_rel:.4f}"
+            print(f"  {capture}  {zt:.4f}  {zo:.4f}  {rel:.4f}  {i}  {g}")
+    # The bar holds the captures, the decks EZNEC writes; the probes are
+    # layout probes and are reported only.
     for capture, zt, zo, _i_rel, _dg in report:
         assert math.isfinite(zo.real) and math.isfinite(zo.imag), capture
-        if capture not in _SANITY_EXEMPT:
+        if capture in CAPTURES and capture not in _SANITY_EXEMPT:
             assert abs(zo - zt) / abs(zt) < _SANITY_REL, (capture, zo, zt)
 
 
@@ -644,14 +758,37 @@ def _edited(capture: str, old: str, new: str) -> str:
     "text, match",
     [
         pytest.param(
-            _edited("0223", "FR 0,1,0,0,299.7925", "FR 0,2,0,0,299.7925,1."),
-            "a run at 2 frequencies",
-            id="two-frequencies",
+            _edited(
+                "0233",
+                "FR 0,1,0,0,13.9\r\nGN -1\r\nEX 0,1,6,0,1.414214,0.\r\nPQ 0\r\nXQ 0",
+                "FR 0,2,0,0,13.9,1.\r\nGN -1\r\nEX 0,1,6,0,1.414214,0.\r\nPQ 0"
+                "\r\nXQ 0\r\nEX 0,1,5,0,1.414214,0.\r\nXQ 0",
+            ),
+            "several execute cards over a frequency sweep",
+            id="sweep-and-two-runs",
         ),
         pytest.param(
-            _edited("0223", "PQ 0", "PQ 0\r\nNE 0,1,1,1,0.,0.,1.,0.,0.,0."),
-            "the NE card",
-            id="near-field",
+            _edited("0233", "XQ 0", "XQ 0\r\nFR 0,1,0,0,14.,0.\r\nXQ 0"),
+            "a later execute card after a card that refills the matrix",
+            id="refill-between-runs",
+        ),
+        pytest.param(
+            _edited(
+                "0231",
+                "RP 0,1,361,1000,75.,0.,0.,1.,0.",
+                "NE 0,1,1,1,1.,0.,1.,0.,0.,0.",
+            ),
+            "NE over a finite ground",
+            id="near-field-finite-ground",
+        ),
+        pytest.param(
+            _edited(
+                "0223",
+                "RP 0,1,361,1000,90.,0.,0.,1.,0.",
+                "NE 1,1,1,1,1.,0.,0.,0.,0.,0.",
+            ),
+            "NE coordinate system 1",
+            id="near-field-spherical",
         ),
         pytest.param(
             _edited("0223", "RP 0,1,361,1000", "RP 0,1,361,0"),

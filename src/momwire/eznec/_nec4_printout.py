@@ -7,9 +7,12 @@ fills the dataclass.
 
 Every heading, column header, field width and blank-line run below was
 MEASURED off real NEC-4.2 printouts, used as black-box OUTPUT only: the
-seventeen captured decks (``tests/fixtures/eznec_nec42/``) run through the
-licensed NEC-4.2 (LLNL-CODE-491368) console build, release 7768648, on
-2026-10-03, and kept beside them under ``printouts/``.  No NEC-4.2 source,
+seventeen captured decks (``tests/fixtures/eznec_nec42/``) and nine probe
+decks written to settle what the captures did not show
+(``tests/fixtures/eznec_nec42/probes/``), run through the licensed NEC-4.2
+(LLNL-CODE-491368) console build, release 7768648, on 2026-10-03, and kept
+beside them under ``printouts/``.  A capture is cited by its number (0234),
+a probe by its name (p1).  No NEC-4.2 source,
 algorithm or internal structure is described or relied on, and none may be.
 
 Most of the layout is the NEC-5 printout's, byte for byte: the comment box,
@@ -34,7 +37,11 @@ there is fixed here.  What is NEC-4.2's own:
 
 Section order is the solve notes' and the printouts': the fixed six-section
 prefix, then (networks), input parameters, currents, charges, power budget,
-(far-field ground), pattern.  An ``XQ`` deck stops after the power budget.
+(near field), (far-field ground), pattern.  An ``XQ`` deck stops after the
+power budget.  A deck with several runs prints the run block once per run
+(:class:`Nec4Run`): an ``FR`` sweep repeats it from FREQUENCY down for every
+frequency (p2), a later execute card echoes its own cards and repeats it
+from the input parameters down (p8).
 """
 
 from __future__ import annotations
@@ -47,6 +54,7 @@ from ._printout import (
     GroundMedium,
     LineRow,
     LoadRow,
+    NearFieldBlock,
     NetworkRow,
     PatternBlock,
     PortRow,
@@ -57,6 +65,8 @@ from ._printout import (
 __all__ = [
     "FarFieldGround",
     "Nec4Printout",
+    "Nec4Run",
+    "Preamble",
     "SegmentRow",
     "SegmentValueRow",
     "WireRow",
@@ -107,7 +117,8 @@ class SegmentValueRow:
     printed as the segment number followed by ``E`` and placed at the end
     point: every captured charge table carries one before the first segment
     of a wire whose start is free and one after the last segment of a wire
-    whose end is free, and none at an end on a ``GE 1`` ground plane (0234).
+    whose end is free, and none at an end on a ``GE 1`` ground plane (0234)
+    or in a junction (p1).
     """
 
     number: int
@@ -138,17 +149,12 @@ class FarFieldGround:
 
 
 @dataclass(frozen=True)
-class Nec4Printout:
-    """Everything a NEC-4.2 printout prints that the deck text does not."""
+class Preamble:
+    """The block a run prints when it fills a matrix: FREQUENCY, ANTENNA
+    ENVIRONMENT, STRUCTURE IMPEDANCE LOADING and MATRIX TIMING.  Every
+    frequency of an ``FR`` sweep prints it (probe p2); a later execute run
+    that refills nothing does not (probe p8)."""
 
-    # -- the structure ------------------------------------------------------
-    wires: tuple[WireRow, ...]
-    ge_flag: int
-    total_segments: int
-    # One tuple of signed segment numbers per multiple-wire junction.
-    junctions: tuple[tuple[int, ...], ...]
-    segments: tuple[SegmentRow, ...]
-    # -- the operating point ------------------------------------------------
     frequency_mhz: float
     wavelength_m: float
     environment: str
@@ -156,15 +162,45 @@ class Nec4Printout:
     loads: tuple[LoadRow, ...]
     fill_seconds: float
     factor_seconds: float
-    # -- the run --------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Nec4Run:
+    """One solved run: one frequency of one execute card.
+
+    ``echo_through`` is the number of the last post-``GE`` card echoed in
+    front of this run, ``None`` when nothing is echoed here (every frequency
+    after a sweep's first, probe p2).  The first run's cards are echoed
+    after the segmentation table; a later execute run's cards, from the card
+    after the previous run's to its own execute card, are echoed hard against
+    the previous results (probe p8).  ``networks`` is the NETWORK DATA table,
+    which is printed with the preamble; ``network_excitation`` is the run's.
+    """
+
+    echo_through: int | None
+    preamble: Preamble | None
     networks: tuple[NetworkRow | LineRow, ...]
     network_excitation: tuple[PortRow, ...]
     sources: tuple[PortRow, ...]
     currents: tuple[SegmentValueRow, ...] | None
     charges: tuple[SegmentValueRow, ...] | None
     power: PowerBudget
+    near_fields: tuple[NearFieldBlock, ...]
     far_field_ground: FarFieldGround | None
     patterns: tuple[PatternBlock, ...]
+
+
+@dataclass(frozen=True)
+class Nec4Printout:
+    """Everything a NEC-4.2 printout prints that the deck text does not."""
+
+    wires: tuple[WireRow, ...]
+    ge_flag: int
+    total_segments: int
+    # One tuple of signed segment numbers per multiple-wire junction.
+    junctions: tuple[tuple[int, ...], ...]
+    segments: tuple[SegmentRow, ...]
+    runs: tuple[Nec4Run, ...]
     run_seconds: float
 
 
@@ -258,10 +294,9 @@ def _wire_row(row: WireRow) -> str:
 
 
 def _junction_row(number: int, members: tuple[int, ...]) -> str:
-    """NOT MEASURED: no captured deck has a junction (every one prints
-    ``NONE``).  The NEC-2 row (I8 junction number, then the signed segment
-    numbers) stands in until a printout shows NEC-4.2's own."""
-    return f"{number:8d}{members[0]:11d}" + "".join(f"{m:5d}" for m in members[1:])
+    """I6 junction number, I10 first member, I5 for the rest (probe p1:
+    ``     1         6   -7  -13``)."""
+    return f"{number:6d}{members[0]:10d}" + "".join(f"{m:5d}" for m in members[1:])
 
 
 def _segment_row(row: SegmentRow) -> str:
@@ -375,7 +410,7 @@ def _segmentation(data: Nec4Printout) -> list[str]:
     ]
 
 
-def _loading(data: Nec4Printout) -> list[str]:
+def _loading(data: Preamble) -> list[str]:
     lines = [_printout._LOADING_HEADING, ""]
     if not data.loads:
         return [*lines, _printout._NOT_LOADED]
@@ -385,7 +420,7 @@ def _loading(data: Nec4Printout) -> list[str]:
     return lines
 
 
-def _network_data(data: Nec4Printout) -> list[str]:
+def _network_data(data: Nec4Run) -> list[str]:
     lines = [_printout._NETWORK_HEADING, ""]
     for index, run in enumerate(_printout._network_runs(data.networks)):
         if index:
@@ -416,6 +451,62 @@ def _far_field_ground(ground: FarFieldGround) -> list[str]:
     ]
 
 
+def _run(run: Nec4Run) -> list[str]:
+    """One run, from its preamble through its last pattern, each section
+    followed by its captured gap."""
+    gap = _printout._blank
+    body: list[str] = []
+    if run.preamble is not None:
+        shared = RunData(
+            frequency_mhz=run.preamble.frequency_mhz,
+            wavelength_m=run.preamble.wavelength_m,
+            environment=run.preamble.environment,
+            ground=run.preamble.ground,
+            fill_seconds=run.preamble.fill_seconds,
+            factor_seconds=run.preamble.factor_seconds,
+        )
+        body += _printout._frequency(shared)
+        body += gap(_SECTION_GAP)
+        body += _printout._environment(shared)
+        body += gap(_SECTION_GAP)
+        body += _loading(run.preamble)
+        body += gap(_SECTION_GAP)
+        body += _printout._timing(shared)
+        body += gap(_SECTION_GAP)
+    if run.networks:
+        body += _network_data(run)
+        body += gap(_SECTION_GAP)
+    if run.network_excitation:
+        body += _port_table(
+            _printout._NETWORK_EXCITATION_HEADING, run.network_excitation
+        )
+        body += gap(_SECTION_GAP)
+    body += _port_table(_printout._ANTENNA_INPUT_HEADING, run.sources)
+    body += gap(_SECTION_GAP)
+    if run.currents is not None:
+        body += [_CURRENTS_HEADING, "", _CURRENTS_NOTE, "", *_CURRENTS_COLUMNS]
+        body += [_value_row(row) for row in run.currents]
+        body += gap(_SECTION_GAP)
+    if run.charges is not None:
+        body += [_CHARGES_HEADING, "", _CHARGES_NOTE, "", "", *_CHARGES_COLUMNS]
+        body += [_value_row(row) for row in run.charges]
+        body += gap(_SECTION_GAP)
+    body += _printout._power_budget(run.power)
+    body += gap(_SECTION_GAP)
+    for near in run.near_fields:
+        body += _printout._near_field(near)
+        body += gap(_SECTION_GAP)
+    # Printed only in front of a pattern: probe p5, GD under an XQ, prints
+    # none.
+    if run.patterns and run.far_field_ground is not None:
+        body += _far_field_ground(run.far_field_ground)
+        body += gap(_SECTION_GAP)
+    for block in run.patterns:
+        body += _printout._pattern(block)
+        body += gap(_PATTERN_GAP)
+    return body
+
+
 def render_nec4_printout(
     deck_text: str, data: Nec4Printout, *, basis: str | None = None
 ) -> str:
@@ -423,67 +514,36 @@ def render_nec4_printout(
 
     ``deck_text`` supplies what the printout ECHOES (the comment box and the
     post-``GE`` card images, ``EN`` last and after the results, exactly as in
-    NEC-5's); ``data`` every number the run produced.  ``basis`` reaches line
+    NEC-5's); ``data`` every number the runs produced.  ``basis`` reaches line
     2's engine stamp and nothing else.
     """
-    shared = RunData(
-        frequency_mhz=data.frequency_mhz,
-        wavelength_m=data.wavelength_m,
-        environment=data.environment,
-        ground=data.ground,
-        fill_seconds=data.fill_seconds,
-        factor_seconds=data.factor_seconds,
-    )
     cards = _printout._post_ge_cards(deck_text)
     terminator = cards[-1] if cards and cards[-1].mnemonic == "EN" else None
+    numbered = [(i, c) for i, c in enumerate(cards, start=1) if c is not terminator]
     gap = _printout._blank
     body: list[str] = []
     body += _structure(data)
     body += gap(_STRUCTURE_GAP)
     body += _segmentation(data)
     body += gap(_STRUCTURE_GAP)
-    body += [
-        _printout._card_echo(index, card)
-        for index, card in enumerate(cards, start=1)
-        if card is not terminator
-    ]
-    body += gap(_STRUCTURE_GAP)
-    body += _printout._frequency(shared)
-    body += gap(_SECTION_GAP)
-    body += _printout._environment(shared)
-    body += gap(_SECTION_GAP)
-    body += _loading(data)
-    body += gap(_SECTION_GAP)
-    body += _printout._timing(shared)
-    body += gap(_SECTION_GAP)
-    if data.networks:
-        body += _network_data(data)
-        body += gap(_SECTION_GAP)
-        body += _port_table(
-            _printout._NETWORK_EXCITATION_HEADING, data.network_excitation
-        )
-        body += gap(_SECTION_GAP)
-    body += _port_table(_printout._ANTENNA_INPUT_HEADING, data.sources)
-    body += gap(_SECTION_GAP)
-    if data.currents is not None:
-        body += [_CURRENTS_HEADING, "", _CURRENTS_NOTE, "", *_CURRENTS_COLUMNS]
-        body += [_value_row(row) for row in data.currents]
-        body += gap(_SECTION_GAP)
-    if data.charges is not None:
-        body += [_CHARGES_HEADING, "", _CHARGES_NOTE, "", "", *_CHARGES_COLUMNS]
-        body += [_value_row(row) for row in data.charges]
-        body += gap(_SECTION_GAP)
-    body += _printout._power_budget(data.power)
-    body += gap(_SECTION_GAP)
-    # Every GD capture asks for a pattern, so the block is printed only in
-    # front of one; whether an XQ deck prints it too is unmeasured.
-    if data.patterns and data.far_field_ground is not None:
-        body += _far_field_ground(data.far_field_ground)
-        body += gap(_SECTION_GAP)
-    for block in data.patterns:
-        body += _printout._pattern(block)
-        body += gap(_PATTERN_GAP)
+    echoed = 0
+    for index, run in enumerate(data.runs):
+        # One blank more than a section's own gap separates two runs, the
+        # same one that stands before the closing EN echo: six blanks
+        # between one frequency's pattern and the next FREQUENCY (p2), four
+        # between a power budget and the next run's card echo (p8).
+        if index:
+            body.append("")
+        if run.echo_through is not None:
+            block = [
+                _printout._card_echo(i, c)
+                for i, c in numbered[echoed : run.echo_through]
+            ]
+            echoed = run.echo_through
+            body += [*block, *gap(_STRUCTURE_GAP if index == 0 else _SECTION_GAP)]
+        body += _run(run)
     body.append("")
+    body += [_printout._card_echo(i, c) for i, c in numbered[echoed:]]
     if terminator is not None:
         body.append(_printout._card_echo(len(cards), terminator))
     body += ["", f"{_printout._RUN_TIME_LABEL}{data.run_seconds:10.3f}"]
