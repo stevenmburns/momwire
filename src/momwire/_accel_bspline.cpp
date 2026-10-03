@@ -559,6 +559,14 @@ seg_seg_full_moments_bspline_kernel_impl(
     // it only when (tier, Li, Lj) changes. A hit reuses doubles produced by
     // the very expressions a refill would evaluate on bit-equal inputs, so
     // the moments do not move.
+    //
+    // MSVC keeps main's parallel structure: one `omp parallel for` spelled as
+    // main spells it, the table on each iteration's stack and refilled per
+    // pair. Holding the table needs a region with a work-sharing loop inside
+    // it, and on the Windows wheel (momwire#1302) that shape coincided with
+    // the bspline tests running slower than main; the hold is a few percent,
+    // not worth a structure that build has not been measured on.
+#if !defined(_MSC_VER)
     #pragma omp parallel
     {
     // wuwu[t, pP]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
@@ -570,8 +578,17 @@ seg_seg_full_moments_bspline_kernel_impl(
     size_t w_tier = 0;
     double w_Li = 0.0, w_Lj = 0.0;
     MW_OMP_FOR_COLLAPSE2
+#else
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
+#endif
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
+#if defined(_MSC_VER)
+            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
+            const bool w_held = false;  // refilled every pair
+            size_t w_tier = 0;
+            double w_Li = 0.0, w_Lj = 0.0;
+#endif
             alignas(32) double R[BSPLINE_QR_TILE];
             alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
             alignas(32) double phases[BSPLINE_QR_TILE];
@@ -660,7 +677,9 @@ seg_seg_full_moments_bspline_kernel_impl(
 
                         if (++r == n_qp) { r = 0; ++q; }
                     }
+#if !defined(_MSC_VER)
                     w_held = one_chunk;
+#endif
                     w_tier = tier;
                     w_Li = Li;
                     w_Lj = Lj;
@@ -732,7 +751,9 @@ seg_seg_full_moments_bspline_kernel_impl(
             }
         }
     }
+#if !defined(_MSC_VER)
     }
+#endif
 
     return J;
 }
