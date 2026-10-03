@@ -214,7 +214,7 @@ def max_image_distance(seg_l, seg_r, ground_z, chunk_rows=None):
     to the single full-matrix `.max()` it replaces.
 
     `chunk_rows` bounds the transient at a few MB regardless of N: for `n`
-    endpoints, one row-chunk of `rows` rows allocates O(1) `(rows, n)`
+    distinct endpoints, one row-chunk of `rows` rows allocates O(1) `(rows, n)`
     float64 arrays (dxe/dye/hze plus their squares, sum, and sqrt) at 8
     bytes each. The default `rows = max(1, 4_000_000 // (16 * n))` caps a
     single `(rows, n)` array at `rows * n * 8 <= 2 MB`, so the handful of
@@ -223,24 +223,36 @@ def max_image_distance(seg_l, seg_r, ground_z, chunk_rows=None):
     particular chunking (e.g. to exercise a partial tail chunk in tests).
     """
     ex = np.concatenate([seg_l, seg_r])
-    n = ex.shape[0]
-    if n == 0:
+    if ex.shape[0] == 0:
         return 0.0
+    # Three exact reductions of the same max (each preserves the winning
+    # value bit for bit, so the grid this sizes does not move):
+    # * a joined wire's segments share endpoints, and a max over a set does
+    #   not see repeats -- so the scan runs over the DISTINCT endpoints
+    #   (about half of 2N on a meshed wire, a quarter of the pairs);
+    # * the pair value is bit-symmetric (dx, dy only change sign before
+    #   squaring; hz is one commutative add), so each row band scans only
+    #   the columns from its own first row on -- every pair with j < i0 was
+    #   met as (j, i) by an earlier band;
+    # * sqrt is correctly rounded and monotone, so the max of the roots is
+    #   the root of the max, taken once.
+    ex = np.unique(ex, axis=0)
+    n = ex.shape[0]
     x = ex[:, 0]
     y = ex[:, 1]
     z = ex[:, 2]
     if chunk_rows is None:
         chunk_rows = max(1, 4_000_000 // (16 * n))
-    r1 = 0.0
+    s2 = 0.0
     for i0 in range(0, n, chunk_rows):
         i1 = min(i0 + chunk_rows, n)
-        dxe = x[i0:i1, None] - x[None, :]
-        dye = y[i0:i1, None] - y[None, :]
-        hze = (z[i0:i1, None] - ground_z) + (z[None, :] - ground_z)
-        chunk_max = float(np.sqrt(dxe * dxe + dye * dye + hze * hze).max())
-        if chunk_max > r1:
-            r1 = chunk_max
-    return r1 * 1.001
+        dxe = x[i0:i1, None] - x[None, i0:]
+        dye = y[i0:i1, None] - y[None, i0:]
+        hze = (z[i0:i1, None] - ground_z) + (z[None, i0:] - ground_z)
+        chunk_max = float((dxe * dxe + dye * dye + hze * hze).max())
+        if chunk_max > s2:
+            s2 = chunk_max
+    return float(np.sqrt(s2)) * 1.001
 
 
 def _gamma(lam, k):
