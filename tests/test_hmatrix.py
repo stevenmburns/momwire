@@ -6,6 +6,8 @@ dense `BSplineSolver` impedance matrix — both the off-edge (far) path and the
 same-edge analytic-overwrite (near) path.
 """
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -560,6 +562,24 @@ def test_ground_eps_compute_impedance_matches_dense(degree):
     assert abs(zh - zd) / abs(zd) < 1e-4
 
 
+# The two evaluators share no code: the numpy side's moments come from
+# `seg_seg_full_moments_bspline`, the accelerator's from the block kernel's own
+# copy of that loop. Where the build evaluates as written (GCC/clang,
+# -ffp-contract=off, momwire#1194) they differ only through the Fresnel
+# weighting, far inside 1e-12. MSVC builds with /fp:fast, free to reassociate
+# each moment's 64-term sum (n_qp_pair = 8 squared) differently in the two
+# kernels -- and since momwire#1302 reshaped the moment kernel's loop it does.
+# Reassociating an n-term sum moves it by at most ~n eps sum|w_t G_t| (Higham
+# 3.1): 64 x 1.1e-16 = 7e-15 of the terms' absolute sum. Measured against
+# max|D| that is 7e-15 x kappa, kappa = (absolute sum) / max|D|, the far
+# block's cancellation in the oscillatory kernel. The Windows wheel's 1.4e-12
+# on #1302 needs kappa ~ 200 under the worst-case bound (more if, as usual,
+# the errors partly cancel), so kappa is not small here; allowing kappa up to
+# ~700 gives 5e-12, ~3.5x over the measurement, and still leaves the gate
+# orders of magnitude under any modelling difference it exists to catch.
+_REFL_EVALUATOR_AGREEMENT = 5e-12 if sys.platform == "win32" else 1e-12
+
+
 def test_ground_eps_numpy_image_evaluators_match_accel():
     """The numpy _zblock_image_refl fallback and the C++ in-kernel weighting
     agree on a far block (guards the two Fresnel implementations against
@@ -586,7 +606,8 @@ def test_ground_eps_numpy_image_evaluators_match_accel():
     _row, _col, dense_accel = sim._offedge_block_evaluators(ctx, I, J, sim.k, refl=True)
     D_accel = dense_accel()
     D_numpy = sim._zblock_image_refl(I, J, k=sim.k)
-    assert np.abs(D_accel - D_numpy).max() / np.abs(D_numpy).max() < 1e-12
+    rel = np.abs(D_accel - D_numpy).max() / np.abs(D_numpy).max()
+    assert rel < _REFL_EVALUATOR_AGREEMENT, rel
 
 
 def test_ground_eps_far_block_rank_growth_vs_pec():
