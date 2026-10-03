@@ -1465,6 +1465,13 @@ def test_bspline_enrichment_auto_two_pass_selects_correctly():
     assert z_y_auto == z_y_raw
 
 
+# Slow lane, not the default one: on GitHub's windows-2025 runners this test
+# varies 7.5-19 s for the SAME code (the v0.70.0 tag re-run on 2026-10-03 at
+# 7.5-12.5 s, against 5-6.7 s when it was tagged), which puts it within reach of
+# the 20 s HARD ceiling (conftest.py) with nothing changed. The ceiling must sit
+# above the worst case times the runner spread; this test cannot, so it leaves
+# the budgeted lane rather than the ceiling moving for everyone.
+@pytest.mark.slow
 def test_bspline_assemble_z_enrich_cpp_matches_numpy():
     """The C++ `assemble_Z_enrich` accelerator must agree with the
     pure-numpy reference across all four enrichment variants. The
@@ -4586,6 +4593,13 @@ def test_bspline_enrichment_pec_far_plane_approaches_free_space():
     assert abs(z_far - z_free) / abs(z_free) < 1e-3
 
 
+# Slow lane, not the default one: on GitHub's windows-2025 runners this test
+# varies 7.5-19 s for the SAME code (the v0.70.0 tag re-run on 2026-10-03 at
+# 7.5-12.5 s, against 5-6.7 s when it was tagged), which puts it within reach of
+# the 20 s HARD ceiling (conftest.py) with nothing changed. The ceiling must sit
+# above the worst case times the runner spread; this test cannot, so it leaves
+# the budgeted lane rather than the ceiling moving for everyone.
+@pytest.mark.slow
 def test_bspline_d2_hentenna_enrichment_convergence_over_pec():
     """Acceptance gate (#167): the enrichment convergence-rate result holds
     over a PEC ground plane. Sweeping the mesh with a fixed ground 0.25 λ
