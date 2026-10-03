@@ -984,6 +984,12 @@ class _PreparedChunks:
         return iter(self.chunks)
 
 
+# A window's T1 and T2 evaluate its wing centroids once between them when
+# the path rule puts T1 there (`RazorSolver._assemble_Z_prepare`). False
+# evaluates them per term, the in-process reference: the same moment rows.
+_CENTROID_SHARE = True
+
+
 class _FusedMoments:
     """The C++ fill's stand-in for a prepared moment chunk list (momwire#742).
 
@@ -1084,6 +1090,18 @@ class _FusedMoments:
                 self.obs, geom, self.a, ek=ek
             )
         return self._numpy
+
+    def take(self, idx):
+        """`rows` for an index array of observers: their rows of the full
+        fill, bit for bit, by the same argument."""
+        sub = object.__new__(_FusedMoments)
+        for name in self.__slots__:
+            setattr(sub, name, getattr(self, name))
+        sub.obs = self.obs[idx]
+        if self.group_i.size:
+            sub.group_i = self.group_i[idx]
+        sub._numpy = None
+        return sub
 
     def rows(self, r0, r1):
         """The same fill restricted to observers ``[r0, r1)`` (momwire#1173).
@@ -3756,7 +3774,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     )
                 )
 
+        # Under NEC-5's path rule every T1 observer is a wing centroid, the
+        # very point (and EK label) T2 observes there, so the block evaluates
+        # each window's centroids once for both terms (`_source_block_rows`).
+        on_cent = (
+            self.nec5_quadrature
+            and n_path == 2
+            and _CENTROID_SHARE
+            and isinstance(t2_chunks, _FusedMoments)
+            and all(isinstance(c[3], _FusedMoments) for c in t1_row_chunks)
+            and (
+                path_lab is None
+                or np.array_equal(
+                    path_lab.reshape(n_basis, 2), src_lab[np.stack([s_a, s_b], 1)]
+                )
+            )
+        )
         prepared = {
+            "t1_on_centroids": on_cent,
             "n_basis": n_basis,
             "n_seg": seg_h.size,
             "s_a": s_a,
@@ -3829,6 +3864,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "td_b": mirror(tan_b).T,
                 "t1_row_chunks": t1_row_chunks_img,
                 "weighted": weighted,
+                "t1_on_centroids": on_cent,
             }
             if t2_chop is not None:
                 prepared["image"]["t2_chop_chunks"] = self._seg_moments_prepare(
@@ -4967,14 +5003,21 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
 
         w_step = max(1, _WEIGHTED_CHUNK_ELEMS // max(1, prepared["n_seg"]))
+        # One slot: the current window's (lo, hi, centroids, their M0 rows)
+        # when its T1 and T2 share the centroid evaluation.
+        shared = [None] if sources.get("t1_on_centroids") else None
 
-        def _m0c_rows(c0, c1):
+        def _m0c_rows(c0, c1, M0c=None):
             # Rows [c0, c1) of the (weighted) centroid moments M0c
-            # (momwire#1173): the moment rows from `_seg_moments_rows`, then
-            # w_Phi on the same rows. Both are elementwise on the centroid
-            # axis, so any window gives the whole plane's rows bit for bit,
-            # and the (n_cent, n_seg) plane never exists.
-            M0c = self._seg_moments_rows(sources["t2_chunks"], k, c0, c1)
+            # (momwire#1173): the moment rows from `_seg_moments_rows` (or
+            # `M0c`, those rows already in hand), then w_Phi on the same rows.
+            # Both are elementwise on the centroid axis, so any window gives
+            # the whole plane's rows bit for bit, and the (n_cent, n_seg)
+            # plane never exists.
+            if M0c is None:
+                M0c = self._seg_moments_rows(sources["t2_chunks"], k, c0, c1)
+            elif w_Phi_fn is not None:
+                M0c = M0c.copy()
             if w_Phi_fn is not None:
                 for a in range(c0, c1, w_step):
                     self._checkpoint()
@@ -5056,7 +5099,21 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sa, sb = s_a[lo:hi], s_b[lo:hi]
             need = np.unique(np.concatenate([sa, sb]))
             cuts = np.flatnonzero(np.diff(need) > 1) + 1
-            parts = [_m0c_rows(int(r[0]), int(r[-1]) + 1) for r in np.split(need, cuts)]
+            held = shared[0] if shared is not None and shared[0][0] == lo else None
+            if held is not None and held[1] == hi:
+                # This window's T1 already evaluated exactly these centroids'
+                # rows (`shared`): the same observers, the same token.
+                M0U = held[3]
+                parts = [
+                    _m0c_rows(int(r[0]), int(r[-1]) + 1, M0U[p0 : p0 + r.size])
+                    for r, p0 in zip(
+                        np.split(need, cuts), np.concatenate(([0], cuts)).tolist()
+                    )
+                ]
+            else:
+                parts = [
+                    _m0c_rows(int(r[0]), int(r[-1]) + 1) for r in np.split(need, cuts)
+                ]
             return need, parts[0] if len(parts) == 1 else np.concatenate(parts)
 
         def _t2_rows(lo, hi):
@@ -5180,7 +5237,28 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if into is not None
                 else np.empty((hi - lo, n_basis), dtype=np.complex128)
             )
-            M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
+            if shared is not None:
+                # Under NEC-5's path rule the window's T1 observers are the
+                # centroids of its wings (`_testing_paths`), each one twice
+                # (once per basis it ends), and T2 reads the same centroids:
+                # each is evaluated once, by the centroid token, and the T1
+                # rows are gathered from it. A moment row is a function of
+                # its observer alone (`_FusedMoments.rows`), and these are the
+                # same floats `cent` gives both prepares.
+                need = np.unique(np.concatenate([s_a[lo:hi], s_b[lo:hi]]))
+                M0U, M1U = (
+                    sources["t2_chunks"]
+                    .take(need)
+                    .evaluate(self, k, need_m1=True, n_obs=need.size)
+                )
+                r = np.searchsorted(
+                    need, np.stack([s_a[lo:hi], s_b[lo:hi]], axis=1).ravel()
+                )
+                M0, M1 = M0U[r], M1U[r]
+                del r, M1U
+                shared[0] = (lo, hi, need, M0U)
+            else:
+                M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
             if w_A_fn is None and _use_razor_assemble_accel():
                 # momwire#780: the gather, the falling-wing correction, the
                 # tangent contraction, the weighting and the path-point sum in
@@ -5308,6 +5386,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 rows_T1[...] = t1
                 rows_T1[...] = c_A * rows_T1 - _t2_rows(lo, hi) / c_Phi
             del t1
+            if shared is not None:
+                shared[0] = None
             if rem_fn is not None:
                 # `C2·img + Q`, associated BEFORE the seam's single minus —
                 # the whole content of `mode == "compose"`, since
