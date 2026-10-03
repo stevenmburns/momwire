@@ -596,11 +596,13 @@ NEC42_DECK = (
 
 
 def _unclocked(printout: bytes) -> bytes:
-    """The phase-1 body is the portal's printout, whose MATRIX TIMING block
-    prints the fill's wall time; two runs of one deck differ there only."""
+    """The NEC-4.2 printout carries this engine's own timings — the fill in
+    MATRIX TIMING and the wall time in RUN TIME — so two runs of one deck
+    differ there only."""
     import re
 
-    return re.sub(rb"FILL: +\d+ msec", b"FILL: - msec", printout)
+    printout = re.sub(rb"FILL= *\d+\.\d+ SEC\.", b"FILL= - SEC.", printout)
+    return re.sub(rb"RUN TIME = *\d+\.\d+", b"RUN TIME = -", printout)
 
 
 def _nec4_oracle(tmp_path: Path) -> bytes:

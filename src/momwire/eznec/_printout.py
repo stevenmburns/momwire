@@ -245,17 +245,35 @@ def engine_stamp(basis: str) -> str:
 
 _BANNER_INDENT = " " * 32
 _BANNER_RULE = "*" * 47
-_BANNER: tuple[str, ...] = (
-    _BANNER_INDENT + _BANNER_RULE,
-    _BANNER_INDENT + "*" + " " * 45 + "*",
-    _BANNER_INDENT + "*  NUMERICAL ELECTROMAGNETICS CODE (NEC-5)    *",
-    _BANNER_INDENT + "*" + " " * 45 + "*",
-    _BANNER_INDENT + _BANNER_RULE,
-    "",
-    "",
-    "",
-    "",
-)
+
+
+def _banner(code: str) -> tuple[str, ...]:
+    """The boxed code name: ``(NEC-5)`` and ``(NEC-4.2)`` both left-aligned
+    in the same 47-column box, which reproduces each capture's own padding
+    (four blanks before the closing ``*`` in NEC-5's, two in NEC-4.2's)."""
+    title = f"*  NUMERICAL ELECTROMAGNETICS CODE ({code})".ljust(46) + "*"
+    return (
+        _BANNER_INDENT + _BANNER_RULE,
+        _BANNER_INDENT + "*" + " " * 45 + "*",
+        _BANNER_INDENT + title,
+        _BANNER_INDENT + "*" + " " * 45 + "*",
+        _BANNER_INDENT + _BANNER_RULE,
+        "",
+        "",
+        "",
+        "",
+    )
+
+
+_BANNER = _banner("NEC-5")
+
+# EZNEC's External NEC-4.2 slot (momwire#1295).  The licensed NEC-4.2 prints
+# NO build tag: its line 2 is blank, and three blanks (not four) separate the
+# form feed from the banner.  This engine's stamp takes that blank line 2, so
+# the two printouts stay line for line, and only the banner's code name
+# differs from the NEC-5 header.
+_NEC4_BANNER = _banner("NEC-4.2")
+_NEC4_PROLOGUE_TAIL: tuple[str, ...] = ("", "")
 
 # The comment box is 80 columns wide and starts four columns left of the text
 # it wraps — and the text OVERRUNS it on the right, to column 103.  That is
@@ -335,7 +353,9 @@ def _resolved_basis(basis: str | None) -> str:
     return BASIS
 
 
-def render_header(deck_text: str | None, *, basis: str | None = None) -> str:
+def render_header(
+    deck_text: str | None, *, basis: str | None = None, dialect: str = "nec5"
+) -> str:
     """The printout down to (not including) ``- - - STRUCTURE SPECIFICATION - - -``.
 
     ``basis`` names the formulation this printout's answer came from and
@@ -352,16 +372,20 @@ def render_header(deck_text: str | None, *, basis: str | None = None) -> str:
     alternative (no file) sends EZNEC down the "check where you installed the
     NEC program" path and blames the user's configuration for a read error.
 
+    ``dialect`` is the EZNEC slot: ``"nec4"`` prints the NEC-4.2 banner and
+    prologue (:data:`_NEC4_BANNER`), anything else the NEC-5 ones.
+
     Line endings are LF.  The captured printouts are the Windows engine's, so
     they arrived CRLF; the byte-gates normalize before comparing (see the
     fixture manifest's ``normalizations`` key), and this engine writes the
     platform-neutral form.
     """
+    nec4 = dialect == "nec4"
     lines = [
         _FORM_FEED,
         engine_stamp(_resolved_basis(basis)),
-        *_PROLOGUE_TAIL,
-        *_BANNER,
+        *(_NEC4_PROLOGUE_TAIL if nec4 else _PROLOGUE_TAIL),
+        *(_NEC4_BANNER if nec4 else _BANNER),
     ]
     if deck_text is not None:
         lines += _comment_box(deck_text)
@@ -370,7 +394,11 @@ def render_header(deck_text: str | None, *, basis: str | None = None) -> str:
 
 
 def render_refusal(
-    deck_text: str | None, reason: str, *, basis: str | None = None
+    deck_text: str | None,
+    reason: str,
+    *,
+    basis: str | None = None,
+    dialect: str = "nec5",
 ) -> str:
     """A complete printout that refuses: the header, then one ``NEC ERROR`` line.
 
@@ -380,7 +408,13 @@ def render_refusal(
     arrives as a sentence rather than as an unexplained failure.  Put the same
     line BEFORE the echo and the file is discarded as stale instead.
     """
-    return render_header(deck_text, basis=basis) + "\n" + _ERROR_PREFIX + reason + "\n"
+    return (
+        render_header(deck_text, basis=basis, dialect=dialect)
+        + "\n"
+        + _ERROR_PREFIX
+        + reason
+        + "\n"
+    )
 
 
 # ==========================================================================
