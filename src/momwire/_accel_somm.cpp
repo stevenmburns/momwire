@@ -2,6 +2,11 @@
 #include "_branch_cut_inline.h"
 #include "_fma_inline.h"
 
+#include <cstring>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
+
 // somm section of the former _accelerators.cpp monolith (momwire#687).
 // Code below is byte-identical to the monolith's lines 5402-6272, with TWO
 // exceptions: somm_proj (monolith 5846-5982) was hoisted verbatim into
@@ -577,6 +582,284 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
 // searchsorted local maps the ACA sampler builds) the summation order across
 // bands is identical to the unbanded loop, and Q is bit-identical.
 static constexpr size_t MAX_JF_SLAB_BYTES = 64u << 20;  // 64 MiB
+
+// ---- The symmetric route (the dense obs == src block) ----------------------
+//
+// Reciprocity makes the remainder dyad symmetric, but Q is NOT symmetric bit
+// for bit -- the projection of (m, n) and of (n, m) round differently -- so
+// this route does not mirror Q. What it shares is narrower and exact: for a
+// node pair the costly half of `proj_one` (grid interpolation, continuation,
+// g: `somm_proj::proj_core`) reads only rho and hh, and both are bit-identical
+// with observer and source swapped. Each unordered node pair therefore pays
+// for one core and two `proj_project`s instead of two whole `proj_one`s, and
+// every Jf entry and every Q entry is then formed by the rectangular kernel's
+// own expressions in its own order. Q is bit-identical to the banded kernel's
+// (`tests/test_remainder_symmetric_q.py` holds the two routes equal).
+//
+// Sharing across (i, j) and (j, i) needs both moment blocks live at once,
+// which the observer bands cannot give (a band's mirror lives in a later
+// band), so this route tiles the BASIS axis instead: a tile pair (A, B),
+// A <= B, fills Jf over (segments under A) x (segments under B) and its mirror
+// together, then finishes Q's (A, B) and (B, A) blocks outright. A Q entry is
+// complete inside one tile pair, so its wing sum can be replayed in the banded
+// kernel's exact order: wings a by (band of loc[m, a], a), each against b in
+// increasing order -- the same order the bands produce whatever the support
+// maps look like. A segment under two tiles (a support's halo) is filled by
+// both: a tile's segment set is ~TILE + d, so ~2 d / TILE of the work is
+// repeated (3 % at d = 2 and the default tile).
+//
+// Scratch is per thread, two (d+1)^2 x |S_A| x |S_B| blocks laid out with
+// the (p, P) moments innermost, so stage 2 reads each wing pair's moments
+// contiguously; the tile is sized so all threads' scratch fits the same
+// `max_jf_bytes` budget the bands honour.
+static constexpr py::ssize_t SYM_TILE_MAX = 128;
+
+namespace somm_sym {
+using somm_proj::cd;
+
+struct Tile {
+    py::ssize_t m0 = 0, m1 = 0;     // basis rows [m0, m1)
+    std::vector<py::ssize_t> segs;  // the rows' support segments, sorted unique
+    std::vector<int32_t> loc;       // (m1 - m0, d1): index of loc[m, a] in segs
+};
+
+// Per-segment data, read by raw pointer (every input is c_style + forcecast).
+struct Side {
+    const double *nodes;  // (ns, q, 3)
+    const double *tang;   // (ns, 3)
+    const double *W;      // (d1, ns, q)
+    py::ssize_t ns, q;
+    std::vector<double> ux, uy, th, tz;  // tangent_decomp per segment
+    double node(py::ssize_t i, py::ssize_t qi, int c) const {
+        return nodes[(i * q + qi) * 3 + c];
+    }
+    double w(int p, py::ssize_t i, py::ssize_t qi) const {
+        return W[(p * ns + i) * q + qi];
+    }
+};
+
+// Jf[p, P] of observer segment i against source segment j from the node-pair
+// block f[qi * q + rj] (observer node qi, source node rj): the rectangular
+// kernel's stage-1 contraction, expression for expression.
+static inline void contract(const Side &S, int d1, py::ssize_t i, py::ssize_t j,
+                            const cd *f, cd *out) {
+    const py::ssize_t q = S.q;
+    for (int p = 0; p < d1; ++p) {
+        for (int P = 0; P < d1; ++P) {
+            cd acc(0.0, 0.0);
+            for (py::ssize_t qi = 0; qi < q; ++qi) {
+                const double wp = S.w(p, i, qi);
+                cd row(0.0, 0.0);
+                for (py::ssize_t rj = 0; rj < q; ++rj)
+                    row += f[qi * q + rj] * S.w(P, j, rj);
+                acc += wp * row;
+            }
+            out[p * d1 + P] = acc;
+        }
+    }
+}
+
+// Both orientations of the segment pair (i, j): fw[qi * q + rj] is observer
+// node (i, qi) against source node (j, rj), bw[rj * q + qi] the reverse. One
+// core per node pair; for i == j the pair (qi, rj) and (rj, qi) is one node
+// pair too, and fw alone is filled (it is its own mirror).
+static inline void node_block(const somm_proj::GridView &G, double ground_z,
+                              double k, const Side &S, py::ssize_t i,
+                              py::ssize_t j, cd *fw, cd *bw) {
+    const py::ssize_t q = S.q;
+    const double *ti = S.tang + i * 3, *tj = S.tang + j * 3;
+    for (py::ssize_t qi = 0; qi < q; ++qi) {
+        const double ox = S.node(i, qi, 0), oy = S.node(i, qi, 1),
+                     oz = S.node(i, qi, 2);
+        const py::ssize_t r0 = (i == j) ? qi : 0;
+        for (py::ssize_t rj = r0; rj < q; ++rj) {
+            const double sx = S.node(j, rj, 0), sy = S.node(j, rj, 1),
+                         sz = S.node(j, rj, 2);
+            const double dx = ox - sx;
+            const double dy = oy - sy;
+            const double rho = std::hypot(dx, dy);
+            const double hh = (oz - ground_z) + (sz - ground_z);
+            cd surf[4], g;
+            somm_proj::proj_core(G, k, rho, hh, surf, g);
+            fw[qi * q + rj] = somm_proj::proj_project(
+                G, dx, dy, rho, surf, g, ti[0], ti[1], ti[2], S.ux[j], S.uy[j],
+                S.th[j], S.tz[j]);
+            if (i == j && rj == qi) continue;
+            // The reverse pair's own differences, as `proj_one` would form
+            // them (exactly -dx, -dy).
+            const double rdx = sx - ox;
+            const double rdy = sy - oy;
+            const cd v = somm_proj::proj_project(
+                G, rdx, rdy, rho, surf, g, tj[0], tj[1], tj[2], S.ux[i],
+                S.uy[i], S.th[i], S.tz[i]);
+            if (i == j)
+                fw[rj * q + qi] = v;
+            else
+                bw[rj * q + qi] = v;
+        }
+    }
+}
+
+// Q[m, n] for m under tile T (row role, its local wing indices xl) and n
+// under tile U, from J laid out [(x * ny + y) * dd + p * d1 + P]. Wings of m
+// in `ord` order, each against b ascending; inner sums as the banded kernel.
+static inline void finish_block(const Tile &T, const Tile &U, py::ssize_t ny,
+                                int d1, const int32_t *ord, const double *pl,
+                                const cd *J, cd *Q, py::ssize_t nb) {
+    const int dd = d1 * d1;
+    for (py::ssize_t m = T.m0; m < T.m1; ++m) {
+        const int32_t *xm = &T.loc[(size_t)(m - T.m0) * d1];
+        const int32_t *om = &ord[(size_t)m * d1];
+        for (py::ssize_t n = U.m0; n < U.m1; ++n) {
+            const int32_t *yn = &U.loc[(size_t)(n - U.m0) * d1];
+            cd qmn(0.0, 0.0);
+            for (int r = 0; r < d1; ++r) {
+                const int a = om[r];
+                const double *pma_row = &pl[((size_t)m * d1 + a) * d1];
+                const cd *jx = &J[(size_t)xm[a] * ny * dd];
+                for (int b = 0; b < d1; ++b) {
+                    const double *pnb = &pl[((size_t)n * d1 + b) * d1];
+                    const cd *jf = jx + (size_t)yn[b] * dd;
+                    cd inner(0.0, 0.0);
+                    for (int p = 0; p < d1; ++p) {
+                        const double pma = pma_row[p];
+                        cd s(0.0, 0.0);
+                        for (int P = 0; P < d1; ++P)
+                            s += jf[p * d1 + P] * pnb[P];
+                        inner += pma * s;
+                    }
+                    qmn += inner;
+                }
+            }
+            Q[(size_t)m * nb + n] = qmn;
+        }
+    }
+}
+}  // namespace somm_sym
+
+// The symmetric route's driver; see the block comment above. `band` is the
+// banded kernel's observer band height, read only for the wing order.
+static void remainder_Q_symmetric(
+    const somm_proj::GridView &G, double ground_z, double k,
+    somm_sym::Side &S, int d1, const int64_t *loc, const double *pl,
+    py::ssize_t nb, py::ssize_t band, size_t budget, std::complex<double> *Q,
+    const volatile int32_t *pysim_cancel, std::atomic<bool> &pysim_aborted) {
+    using somm_proj::cd;
+    using somm_sym::Tile;
+    const py::ssize_t q = S.q;
+    const int dd = d1 * d1;
+
+    // Wing order per basis: (band of loc[m, a], a), stable.
+    std::vector<int32_t> ord((size_t)nb * d1);
+    for (py::ssize_t m = 0; m < nb; ++m) {
+        int32_t *om = &ord[(size_t)m * d1];
+        for (int a = 0; a < d1; ++a) om[a] = a;
+        std::stable_sort(om, om + d1, [&](int32_t x, int32_t y) {
+            return loc[m * d1 + x] / band < loc[m * d1 + y] / band;
+        });
+    }
+
+    int n_threads = 1;
+#ifdef _OPENMP
+    n_threads = omp_get_max_threads();
+#endif
+    // Tile height: all threads' two scratch blocks within the budget, with a
+    // support halo of d1 - 1 segments on either side of the tile's own.
+    py::ssize_t tile = SYM_TILE_MAX;
+    while (tile > 1) {
+        const double side = (double)(tile + 2 * (d1 - 1));
+        const double bytes =
+            (double)n_threads * 2.0 * dd * side * side * sizeof(cd);
+        if (bytes <= (double)budget) break;
+        tile = tile / 2;
+    }
+
+    std::vector<Tile> tiles;
+    py::ssize_t smax = 0;
+    for (py::ssize_t m0 = 0; m0 < nb; m0 += tile) {
+        Tile T;
+        T.m0 = m0;
+        T.m1 = std::min<py::ssize_t>(m0 + tile, nb);
+        for (py::ssize_t m = T.m0; m < T.m1; ++m)
+            for (int a = 0; a < d1; ++a) T.segs.push_back(loc[m * d1 + a]);
+        std::sort(T.segs.begin(), T.segs.end());
+        T.segs.erase(std::unique(T.segs.begin(), T.segs.end()), T.segs.end());
+        T.loc.resize((size_t)(T.m1 - T.m0) * d1);
+        for (py::ssize_t m = T.m0; m < T.m1; ++m)
+            for (int a = 0; a < d1; ++a)
+                T.loc[(size_t)(m - T.m0) * d1 + a] = (int32_t)(
+                    std::lower_bound(T.segs.begin(), T.segs.end(),
+                                     loc[m * d1 + a]) -
+                    T.segs.begin());
+        smax = std::max<py::ssize_t>(smax, (py::ssize_t)T.segs.size());
+        tiles.push_back(std::move(T));
+    }
+    const py::ssize_t n_tiles = (py::ssize_t)tiles.size();
+    std::vector<std::pair<py::ssize_t, py::ssize_t>> pairs;
+    pairs.reserve((size_t)(n_tiles * (n_tiles + 1) / 2));
+    for (py::ssize_t A = 0; A < n_tiles; ++A)
+        for (py::ssize_t B = A; B < n_tiles; ++B) pairs.emplace_back(A, B);
+    const py::ssize_t n_pairs = (py::ssize_t)pairs.size();
+
+    #pragma omp parallel
+    {
+        std::vector<cd> JAB((size_t)dd * smax * smax), JBA(JAB.size());
+        std::vector<cd> fw((size_t)q * q), bw((size_t)q * q);
+        #pragma omp for schedule(dynamic)
+        for (py::ssize_t t = 0; t < n_pairs; ++t) {
+            MW_CANCEL_POLL();
+            const py::ssize_t A = pairs[(size_t)t].first;
+            const py::ssize_t B = pairs[(size_t)t].second;
+            const Tile &TA = tiles[(size_t)A], &TB = tiles[(size_t)B];
+            const py::ssize_t nx = (py::ssize_t)TA.segs.size();
+            const py::ssize_t ny = (py::ssize_t)TB.segs.size();
+            const bool diag = A == B;
+            for (py::ssize_t x = 0; x < nx; ++x) {
+                const py::ssize_t si = TA.segs[(size_t)x];
+                // On the diagonal tile pair the (y, x) entry is the mirror of
+                // (x, y), so only y >= x is walked.
+                for (py::ssize_t y = diag ? x : 0; y < ny; ++y) {
+                    const py::ssize_t sj = TB.segs[(size_t)y];
+                    cd *jxy = &JAB[((size_t)x * ny + y) * dd];
+                    somm_sym::node_block(G, ground_z, k, S, si, sj, fw.data(),
+                                         bw.data());
+                    somm_sym::contract(S, d1, si, sj, fw.data(), jxy);
+                    if (si == sj) {
+                        if (!diag)
+                            std::copy(jxy, jxy + dd,
+                                      &JBA[((size_t)y * nx + x) * dd]);
+                        continue;
+                    }
+                    cd *jyx = diag ? &JAB[((size_t)y * ny + x) * dd]
+                                   : &JBA[((size_t)y * nx + x) * dd];
+                    somm_sym::contract(S, d1, sj, si, bw.data(), jyx);
+                }
+            }
+            somm_sym::finish_block(TA, TB, ny, d1, ord.data(), pl, JAB.data(),
+                                   Q, nb);
+            if (!diag)
+                somm_sym::finish_block(TB, TA, nx, d1, ord.data(), pl,
+                                       JBA.data(), Q, nb);
+        }
+    }
+}
+
+// Calls served by the symmetric route, so a gate can show the route ran
+// rather than infer it from agreement (an untaken route agrees trivially).
+static std::atomic<long long> g_remainder_symmetric_calls{0};
+
+// True when the obs and src halves of the call are the same data -- the
+// dense block's call shape -- so the symmetric route serves it.
+template <typename T>
+static bool same_array(const py::array_t<T, py::array::c_style | py::array::forcecast> &a,
+                       const py::array_t<T, py::array::c_style | py::array::forcecast> &b) {
+    if (a.ndim() != b.ndim()) return false;
+    for (py::ssize_t d = 0; d < a.ndim(); ++d)
+        if (a.shape(d) != b.shape(d)) return false;
+    if (a.data() == b.data()) return true;
+    return std::memcmp(a.data(), b.data(), sizeof(T) * (size_t)a.size()) == 0;
+}
+
 static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_nodes,
     py::array_t<double, py::array::c_style | py::array::forcecast> obs_tang,
@@ -598,7 +881,7 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
                             py::array::c_style | py::array::forcecast>> reg_vals,
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
         far,
-    uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0) {
+    uintptr_t cancel_flag = 0, size_t max_jf_bytes = 0, bool reference = false) {
     using somm_proj::cd;
     auto ndI = obs_nodes.unchecked<3>();
     auto tgI = obs_tang.unchecked<2>();
@@ -632,17 +915,17 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         reg_vals);
     somm_proj::set_far(G, far);
 
+    // The dense block's call shape (obs == src throughout) takes the
+    // symmetric route unless `reference` asks for this banded kernel, which
+    // stays the route of every rectangular call and the oracle the symmetric
+    // one is held to.
+    const bool symmetric =
+        !reference && same_array(obs_nodes, src_nodes) &&
+        same_array(obs_tang, src_tang) && same_array(W_obs, W_src) &&
+        same_array(loc_I, loc_J) && same_array(pI, pJ);
+
     py::array_t<std::complex<double>> Q({nI, nJ});
     auto Qm = Q.mutable_unchecked<2>();
-    std::fill(Q.mutable_data(), Q.mutable_data() + (size_t)nI * nJ, cd(0.0, 0.0));
-
-    py::gil_scoped_release release;
-
-    // Per-src-segment tangent decomposition.
-    std::vector<double> sux(nsJ), suy(nsJ), sth(nsJ), stz(nsJ);
-    for (py::ssize_t j = 0; j < nsJ; ++j)
-        somm_proj::tangent_decomp(tgJ(j, 0), tgJ(j, 1), tgJ(j, 2), sux[j],
-                                  suy[j], sth[j], stz[j]);
 
     // Observer band size: the largest number of obs segments whose Jf slab
     // fits the budget (#343). `band == nsI` reproduces the unbanded kernel.
@@ -655,6 +938,42 @@ static py::array_t<std::complex<double>> sommerfeld_remainder_bspline_Q(
         if ((py::ssize_t)fit < band) band = (py::ssize_t)fit;
     }
     if (band < 1) band = 1;
+
+    if (symmetric) {
+        g_remainder_symmetric_calls.fetch_add(1, std::memory_order_relaxed);
+        somm_sym::Side S;
+        S.nodes = obs_nodes.data();
+        S.tang = obs_tang.data();
+        S.W = W_obs.data();
+        S.ns = nsI;
+        S.q = q;
+        S.ux.resize(nsI);
+        S.uy.resize(nsI);
+        S.th.resize(nsI);
+        S.tz.resize(nsI);
+        for (py::ssize_t j = 0; j < nsI; ++j)
+            somm_proj::tangent_decomp(tgI(j, 0), tgI(j, 1), tgI(j, 2), S.ux[j],
+                                      S.uy[j], S.th[j], S.tz[j]);
+        cd *Qp = Q.mutable_data();
+        const int64_t *locp = loc_I.data();
+        const double *plp = pI.data();
+        py::gil_scoped_release release;
+        MW_CANCEL_SETUP(cancel_flag);
+        remainder_Q_symmetric(G, ground_z, k, S, d1, locp, plp, nI, band,
+                              budget, Qp, pysim_cancel, pysim_aborted);
+        MW_THROW_IF_ABORTED();
+        return Q;
+    }
+
+    std::fill(Q.mutable_data(), Q.mutable_data() + (size_t)nI * nJ, cd(0.0, 0.0));
+
+    py::gil_scoped_release release;
+
+    // Per-src-segment tangent decomposition.
+    std::vector<double> sux(nsJ), suy(nsJ), sth(nsJ), stz(nsJ);
+    for (py::ssize_t j = 0; j < nsJ; ++j)
+        somm_proj::tangent_decomp(tgJ(j, 0), tgJ(j, 1), tgJ(j, 2), sux[j],
+                                  suy[j], sth[j], stz[j]);
 
     // Stage 1 slab: Jf[p,P,i-i0,j] over the (band, nsJ) segment rectangle.
     // Flat index (((p*d1+P)*ib)+(i-i0))*nsJ+j, ib = this band's height.
@@ -789,7 +1108,10 @@ void register_somm(py::module_ &m) {
           "over observer segments so its residency is bounded by "
           "`max_jf_bytes` (0 = the 64 MiB default), never the full "
           "(d+1)^2 * nsI * nsJ tensor (momwire#343); the banding is exact and "
-          "order-preserving, not an approximation.",
+          "order-preserving, not an approximation. A call whose obs and src "
+          "halves are the same data (the dense block) takes the symmetric "
+          "route, one grid interpolation per unordered node pair, bit-identical "
+          "to the banded kernel; `reference=True` forces the banded kernel.",
           py::arg("obs_nodes"), py::arg("obs_tang"), py::arg("W_obs"),
           py::arg("src_nodes"), py::arg("src_tang"), py::arg("W_src"),
           py::arg("loc_I"), py::arg("pI"), py::arg("loc_J"), py::arg("pJ"),
@@ -797,6 +1119,11 @@ void register_somm(py::module_ &m) {
           py::arg("r1_max"), py::arg("r_break"), py::arg("th_split"),
           py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
-          py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0);
+          py::arg("cancel_flag") = 0, py::arg("max_jf_bytes") = 0,
+          py::arg("reference") = false);
+    m.def("remainder_q_symmetric_calls",
+          []() { return g_remainder_symmetric_calls.load(); },
+          "How many sommerfeld_remainder_bspline_Q calls the symmetric route "
+          "has served in this process (a gate's evidence that it ran).");
 }
 
