@@ -1397,21 +1397,58 @@ def _classify_ends(fast, a_wire, ends, args):
     if not _END_CLASSIFY_BATCHED or not isinstance(args, _EndArgs):
         return _classify_ends_one_by_one(fast, a_wire, ends, args)
     n = args.nodes.shape[0]
-    per = max(1, _END_CLASSIFY_PAIRS // max(1, n))
+    by_nodes = _END_CLASSIFY_BY_NODES and _args_on_plan_nodes(fast, args)
+    cols = None
+    if by_nodes:
+        # The line shape reads the groups' first nodes' columns; the grouped
+        # shape reads none.
+        cols = fast.gfirst if n == fast.grouped_z.size else np.zeros(0, np.intp)
+    per = max(1, _END_CLASSIFY_PAIRS // max(1, n if cols is None else cols.size))
     descs, on_node = [], []
     for e0 in range(0, len(ends), per):
         span = ends[e0 : e0 + per]
         pts = np.array([pt for pt, _sign, _fv in span], dtype=float).reshape(-1, 3)
         try:
-            rho, end = args.batch(pts)
+            rho, end = args.batch(pts, cols)
         except ValueError:
             # A refusal: the one-end loop raises it, at the first end that
             # earns it and in its own words.
             return _classify_ends_one_by_one(fast, a_wire, ends, args)
-        d, o = _classify_batch(fast, a_wire, pts, rho, end, args)
+        d, o = _classify_batch(
+            fast, a_wire, pts, rho, end, args, n=n, by_nodes=by_nodes
+        )
         descs += d
         on_node += o
     return descs, on_node
+
+
+# Decide the ρ-row tests of `_classify_batch` from the nodes rather than per
+# end (`_args_on_plan_nodes`); False is the per-end compare, the reference.
+_END_CLASSIFY_BY_NODES = True
+
+
+def _args_on_plan_nodes(fast, args):
+    """Whether the loop's ρ rows are the plan's by construction, so the two
+    per-end ρ compares of `_classify_batch` hold without forming the rows.
+
+    An end's row is `hypot` of its (x, y) minus the loop's nodes' (either
+    operand order, which only negates the differences). The "grouped" test
+    compares it with group g's raw line, `hypot` of the group's (x, y)
+    minus the LINE nodes, for the g whose (x, y) equals the end's under
+    `==` (`gdict`); the "line" test compares each node's entry with its
+    group's first node's. Equal operands under `==` differ at most in the
+    sign of a zero, which a difference carries only as a sign and `hypot`
+    drops, so both tests hold whenever the loop's nodes ARE the plan's
+    nodes on that side, (x, y) under `==`: the line nodes for the grouped
+    shape, and the grouped nodes (each at its group's (x, y)) for the line
+    shape. That is checked here once per loop instead of once per end."""
+    xy = args.nodes[:, :2]
+    n = xy.shape[0]
+    if n == fast.line_z.size and not np.array_equal(xy, fast.line_nodes[:, :2]):
+        return False
+    if n == fast.grouped_z.size and not np.array_equal(xy, fast.gxy[fast.grank]):
+        return False
+    return True
 
 
 def _classify_ends_one_by_one(fast, a_wire, ends, args):
@@ -1426,11 +1463,16 @@ def _classify_ends_one_by_one(fast, a_wire, ends, args):
     return descs, on_node
 
 
-def _classify_batch(fast, a_wire, pts, rho, end, args):
+def _classify_batch(fast, a_wire, pts, rho, end, args, *, n=None, by_nodes=False):
     """`_fast_end_desc` of the ends `pts`, from `_EndArgs.batch`'s `(rho,
     end)`; see `_classify_ends`. The comments name the one-end test each
-    line stands for, with `gv` / `lv` as that function spells them."""
-    E, n = rho.shape
+    line stands for, with `gv` / `lv` as that function spells them.
+
+    `by_nodes` (`_args_on_plan_nodes` held for this loop): `rho` is only
+    the columns of the groups' first nodes, and the two ρ-row tests hold
+    by that check rather than by a compare per end."""
+    E = pts.shape[0]
+    n = rho.shape[1] if n is None else n
     lz = args.line_z()
     # The end's constant fills the grouped slot (gv) or the line slot (lv).
     end_in_gv = (args.end_side == "above") == (fast.grouped_slot == "z")
@@ -1449,10 +1491,11 @@ def _classify_batch(fast, a_wire, pts, rho, end, args):
             g = fast.gdict.get(xy[e])
             if g is None:
                 continue
-            if g not in raw:
-                raw[g] = _raw_row(fast, g)
-            if not np.array_equal(rho[e], raw[g]):
-                continue
+            if not by_nodes:
+                if g not in raw:
+                    raw[g] = _raw_row(fast, g)
+                if not np.array_equal(rho[e], raw[g]):
+                    continue
             gv0 = end[e] if end_in_gv else lz[0]
             zl = fast.zmap[g].get(float(gv0))
             if zl is not None:
@@ -1468,10 +1511,14 @@ def _classify_batch(fast, a_wire, pts, rho, end, args):
             gv_grouped = np.full(E, bool(np.array_equal(lz, fast.grouped_z)))
         idx = np.flatnonzero(todo & lv_flat & gv_grouped)
         if idx.size:
-            rows = rho[idx]
-            rep = rows[:, fast.gfirst]
-            ok = np.all(rows == rep[:, fast.grank], axis=1)  # rho == rep[grank]
-            del rows
+            if by_nodes:
+                rep = rho[idx]
+                ok = np.ones(idx.size, dtype=bool)
+            else:
+                rows = rho[idx]
+                rep = rows[:, fast.gfirst]
+                ok = np.all(rows == rep[:, fast.grank], axis=1)  # rho == rep[grank]
+                del rows
             r_all = _near_interface.radius_fold(rep, a_wire)
             for j, e in enumerate(idx.tolist()):
                 if not ok[j]:
@@ -3939,10 +3986,11 @@ class _EndArgs:
             _on_plane_side(np.full_like(rho_e, pt[2] - gz), "below", "end point"),
         )
 
-    def batch(self, pts):
+    def batch(self, pts, cols=None):
         """`(rho, end)` for the (E, 3) end points `pts`: rho (E, n) and the
-        end slot's value per end, (E,); see the class."""
-        nodes = self.nodes
+        end slot's value per end, (E,); see the class. `cols` restricts rho
+        to those nodes' columns (the same floats, elementwise)."""
+        nodes = self.nodes if cols is None else self.nodes[cols]
         if self.end_side == "above":
             rho = np.hypot(
                 pts[:, 0, None] - nodes[None, :, 0], pts[:, 1, None] - nodes[None, :, 1]
