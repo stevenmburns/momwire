@@ -40,6 +40,37 @@ Two consequences, and the second is the one that gets missed:
 The `changes.code` half also means a docs-only push to main skips all five,
 so their absence from a run is not evidence they passed.
 
+## Test duration and performance: what CI timing can and cannot tell you
+
+**CI wall time never gates.** GitHub's runners spread ~3x on the same code:
+on windows-2025 the v0.70.0 tag's own run timed two enrichment tests at
+5.1-6.7 s, a re-run of that tag on 2026-10-03 at 7.5-12.5 s, and main's
+full-matrix run at up to 19.3 s. A gate whose threshold sits inside its
+instrument's spread fails on noise, so the old 20 s hard ceiling in
+`tests/time_budget.py` now REPORTS like the 5 s one (opt-in fail for a quiet
+local box: `MOMWIRE_ENFORCE_TIME_BUDGET=hard` or `=1`; CI never sets it).
+
+Two concerns, two instruments:
+
+- **Test-cost hygiene** (keep the default lane fast). A long test may land.
+  Every CI pytest step uploads per-test call durations as a `durations-*`
+  artifact (Linux/macOS from `ci.yml`, Windows/macOS from `wheels.yml`'s
+  cibuildwheel test). At release prep, `scripts/test_durations.py` takes the
+  **median** over the last ~25 green main runs per job/OS and flags
+  default-lane tests over the 5 s budget; those move to `slow` in their own PR
+  before the tag (release skill, precondition 4).
+- **Speed regressions** are judged only by paired, interleaved, same-machine
+  base-vs-change runs on a quiet box (Skylake; the Windows box for Windows)
+  and by the pre-tag sweep. Never by a CI job's duration, and never by one
+  test's time in one run.
+
+Dispatching `wheels.yml` on a branch buys **correctness** on Windows (MSVC,
+the real wheel), not timing evidence.
+
+PR #1307 (two enrichment tests marked `slow` for Windows variance against the
+old 20 s gate) was opened before this rule. Its marks stand — the tests are
+legitimately slow on Windows — unless the median data says otherwise.
+
 ## A gate can be green and measure nothing
 
 Worse than a red gate, and this repo has produced the shape twice.
