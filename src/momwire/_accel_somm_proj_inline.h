@@ -304,21 +304,16 @@ static void far_continue(const GridView &G, double r1, double theta, cd surf[4])
     for (int q = 0; q < 4; ++q) surf[q] = a[q] + (surf[q] - e[q]) * w;
 }
 
-// Interpolated + projected smooth-remainder field for ONE (observer, source)
-// pair: t_obs . F(r_obs, r_src) . t_src. `sux/suy/sthsrc/stzsrc` are the
-// source tangent's horizontal-unit / horizontal-magnitude / vertical parts
-// (precomputed once per source point by the caller). Inlines
-// SommerfeldGrid.eval + remainder_field_proj's eqs 143-147 with no
-// intermediates. Bit-for-bit the numpy body.
-static inline cd proj_one(
-    const GridView &G, double ground_z, double k,
-    double ox, double oy, double oz, double tox, double toy, double toz,
-    double sx, double sy, double sz, double sux, double suy, double sthsrc,
-    double stzsrc) {
-    const double dx = ox - sx;
-    const double dy = oy - sy;
-    const double rho = std::hypot(dx, dy);
-    const double hh = (oz - ground_z) + (sz - ground_z);
+// The pair-symmetric half of `proj_one`: everything that depends on the pair
+// only through rho = |horizontal separation| and hh = (z_obs - ground) +
+// (z_src - ground) -- the grid interpolation of the four surfaces, the
+// momwire#1258 continuation and the image-distance phase factor g. Both
+// arguments are bit-identical under swapping observer and source (hypot reads
+// |dx|, |dy|, and dx, dy merely change sign; hh is one commutative add), so
+// one call serves the (m, n) AND (n, m) projections of a node pair
+// (`sommerfeld_remainder_bspline_Q`'s symmetric route).
+static inline void proj_core(const GridView &G, double k, double rho, double hh,
+                             cd surf[4], cd &g) {
     const double r1 = std::sqrt(rho * rho + hh * hh);
 
     // --- inline SommerfeldGrid.eval(r1, theta) ---
@@ -340,7 +335,6 @@ static inline cd proj_one(
     lagrange4(ft - j0, wt);
     const cd *V = G.vptr[reg];
     const py::ssize_t nth = G.nTh[reg], nr = G.nR[reg];
-    cd surf[4];
     for (int s = 0; s < 4; ++s) {
         const cd *plane = V + (py::ssize_t)s * nr * nth;
         cd acc(0.0, 0.0);
@@ -355,10 +349,20 @@ static inline cd proj_one(
     // Past the edge (momwire#1258): continue from the edge value rather than
     // serving it frozen. `g` below keeps the true distance either way.
     if (G.far.on && r1 > G.r1_max) far_continue(G, r1, theta, surf);
+    g = std::polar(1.0 / r1, -k * r1);
+}
+
+// The orientation-dependent half of `proj_one`: the eqs 143-147 azimuth
+// factors and the projection on the observer tangent, from `proj_core`'s
+// surfaces and g. (dx, dy) = observer - source, horizontally; `rho` is
+// hypot(dx, dy) as `proj_core` received it.
+static inline cd proj_project(const GridView &G, double dx, double dy,
+                              double rho, const cd surf[4], cd g, double tox,
+                              double toy, double toz, double sux, double suy,
+                              double sthsrc, double stzsrc) {
     const cd IrhoV = surf[0], IzV = surf[1], IrhoH = surf[2], IphiH = surf[3];
 
     // --- projection (eqs 143-147) ---
-    const cd g = std::polar(1.0 / r1, -k * r1);
     const bool safe_r = rho > G.tiny;
     const double inv_rho = safe_r ? 1.0 / rho : 0.0;
     const double dhx = safe_r ? dx * inv_rho : sux;
@@ -370,6 +374,31 @@ static inline cd proj_one(
     const cd e_z = g * (stzsrc * IzV - sthsrc * cphi * IrhoV);
     return tox * (dhx * e_rho - dhy * e_phi) +
            toy * (dhy * e_rho + dhx * e_phi) + toz * e_z;
+}
+
+// Interpolated + projected smooth-remainder field for ONE (observer, source)
+// pair: t_obs . F(r_obs, r_src) . t_src. `sux/suy/sthsrc/stzsrc` are the
+// source tangent's horizontal-unit / horizontal-magnitude / vertical parts
+// (precomputed once per source point by the caller). Inlines
+// SommerfeldGrid.eval + remainder_field_proj's eqs 143-147 with no
+// intermediates. Bit-for-bit the numpy body.
+//
+// Split into `proj_core` + `proj_project` with every expression kept as
+// written; the builds pass -ffp-contract=off (momwire#1194), so the split
+// moves no bits.
+static inline cd proj_one(
+    const GridView &G, double ground_z, double k,
+    double ox, double oy, double oz, double tox, double toy, double toz,
+    double sx, double sy, double sz, double sux, double suy, double sthsrc,
+    double stzsrc) {
+    const double dx = ox - sx;
+    const double dy = oy - sy;
+    const double rho = std::hypot(dx, dy);
+    const double hh = (oz - ground_z) + (sz - ground_z);
+    cd surf[4], g;
+    proj_core(G, k, rho, hh, surf, g);
+    return proj_project(G, dx, dy, rho, surf, g, tox, toy, toz, sux, suy,
+                        sthsrc, stzsrc);
 }
 
 // Decompose a tangent (tx,ty,tz) into (horizontal unit x,y; horizontal
