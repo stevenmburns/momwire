@@ -1225,7 +1225,7 @@ class PortalDeck:
     structure: object | None = None
 
 
-def parse_deck(body: str) -> PortalDeck:
+def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
     """A deck body's cards, grouped the way the engine executes them.
 
     ``momwire.deck.parse`` reads the deck first and owns every refusal: this
@@ -1243,8 +1243,14 @@ def parse_deck(body: str) -> PortalDeck:
     ``refilled``/``refilled_partial`` shape, and the environment in force at
     its execute card (momwire#370 — a ``GN`` between two execute cards arms,
     so a group's ground is not always the deck's).
+
+    ``dialect`` is the front end that reads the deck: ``"nec2"`` for this
+    portal, ``"nec4"`` for the EZNEC NEC-4.2 slot (momwire#1295), whose cards
+    are NEC-2's with the deltas `momwire.deck._nec4` lists.  The walk below is
+    the same for both — an ``EX 6`` records its set current where an ``EX 0``
+    records its volts, and the model's ``current_feeds`` says which is which.
     """
-    model = parse_dialect(body, dialect="nec2")
+    model = parse_dialect(body, dialect=dialect)
 
     comments: list[str] = []
     geometry: list[Card] = []
@@ -1830,7 +1836,12 @@ class DeckSolver:
     to the physics. That is what lets one port set serve every group.
     """
 
-    def __init__(self, deck: PortalDeck):
+    def __init__(self, deck: PortalDeck, basis: str | None = None):
+        # ``basis`` names the formulation for THIS deck; ``None`` reads the
+        # process's configured engine (`configure_engine`), which is the
+        # portal's own contract.  The EZNEC NEC-4.2 slot passes its basis
+        # explicitly because it shares the process with no portal state.
+        self._basis_name = _active_basis_name if basis is None else basis
         self.portal_deck = deck
         self.model = deck.model
         self.structure = deck.structure
@@ -1906,6 +1917,12 @@ class DeckSolver:
         # whether the budget reads the load's watts back off the solver
         # (momwire#433).
         self._native_loading = isinstance(built.solver, _NATIVE_LOADING)
+        # The solver ports the deck drives as CURRENT sources (the nec4
+        # dialect's ``EX 6``, momwire#1295), through the same feed-to-port
+        # bridge every other port reading uses.
+        self._current_ports = frozenset(
+            self.feed_index[i] for i in getattr(self.model, "current_feeds", ())
+        )
         self._cache[(seed, seed_ek, seed_env.ground)] = self._entry(built)
 
     # -- construction ------------------------------------------------------
@@ -1927,7 +1944,7 @@ class DeckSolver:
         """
         return build_solver(
             self.model,
-            basis=_active_basis_name,
+            basis=self._basis_name,
             group=self._group,
             frequency_mhz=freq_mhz,
             extended_kernel=bool(extended_kernel),
@@ -2202,6 +2219,15 @@ class DeckSolver:
         y = entry["Y"]
         v_source = np.zeros(self.n_ports, dtype=np.complex128)
         driven = self._driven(group)
+        # A current source (momwire#1295) is solved as a 1 V drive of its
+        # port and the answer rescaled below so the SOURCE current comes out
+        # at the set value.  Exact: the response is linear in the drive and
+        # the dialect admits a current source only as a group's sole source,
+        # so nothing else is driven to be scaled with it.
+        set_current: complex | None = None
+        if len(driven) == 1 and driven[0][0] in self._current_ports:
+            port, segment, set_current = driven[0]
+            driven = [(port, segment, 1.0 + 0.0j)]
         for port, _segment, volts in driven:
             v_source[port] = volts
         z_load = self._load_impedances(omega)
@@ -2226,6 +2252,22 @@ class DeckSolver:
                 reducer, y, z_load, entry["wavelength"], driven
             )
             v_gap = v_applied - z_load * i_port
+
+        if set_current is not None:
+            port, segment, _unit = driven[0]
+            if i_source[port] == 0:
+                raise PortalError(
+                    f"the current source on segment {segment} drives a port "
+                    f"that takes no current at 1 V, so no voltage sets its "
+                    f"current to {set_current}"
+                )
+            scale = set_current / i_source[port]
+            v_gap, v_applied = v_gap * scale, v_applied * scale
+            i_port, i_source = i_port * scale, i_source * scale
+            # The set current is the boundary condition, restored exactly for
+            # the reason `_composed` restores a pinned voltage.
+            i_source[port] = set_current
+            driven = [(port, segment, complex(v_applied[port]))]
 
         coeffs = entry["X"] @ (entry["signs"] * v_gap)
         seg_currents = self._segment_currents(entry["solver"], coeffs)
@@ -3532,7 +3574,9 @@ def _run_block(
     return _render_run_block(deck, solver, group, freq_mhz, records, group_index)
 
 
-def render_deck(body: str) -> tuple[list[str], list[str]]:
+def render_deck(
+    body: str, *, dialect: str = "nec2", basis: str | None = None
+) -> tuple[list[str], list[str]]:
     """(stdout lines, stderr lines) for one deck body — no banner, no ``NX``.
 
     The banner belongs to the *process*, not the deck: the oracle prints it
@@ -3543,11 +3587,17 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
     The caller also appends the ``NX`` echo — the sentinel must be emitted
     whether the run succeeded or failed, or SimNEC blocks in ``readLine()``
     forever (grammar doc §2 and §10.1).
+
+    ``dialect`` and ``basis`` are for a caller outside this portal's process
+    contract — the EZNEC NEC-4.2 slot (momwire#1295), which renders its
+    phase-1 printout through this function.  A named ``basis`` builds its own
+    solver and never touches the cross-deck cache, whose key is the
+    configured engine's.
     """
     out: list[str] = ["", "", ""]
     err: list[str] = []
     try:
-        deck = parse_deck(body)
+        deck = parse_deck(body, dialect=dialect)
     except _DECK_REFUSALS as exc:
         _append_error(out, exc)
         return out, err
@@ -3563,7 +3613,7 @@ def render_deck(body: str) -> tuple[list[str], list[str]]:
     out += ["", "", ""]
 
     try:
-        solver = _solver_for(deck)
+        solver = _solver_for(deck) if basis is None else DeckSolver(deck, basis=basis)
     except PortalError as exc:
         _append_error(out, exc)
         return out, err
