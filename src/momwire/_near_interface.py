@@ -1305,6 +1305,12 @@ class _SortedCodes:
         return out
 
 
+# `KeyIndex._index` before its first lookup builds it, and `ProductSet._codes`
+# when lookups go through the groups (`ProductSet._group_lookup`).
+_LAZY_CODES = object()
+_BY_GROUP = object()
+
+
 class KeyIndex:
     """Exact-`==` lookup of a product's line KEYS (ρ_eff, z_line): `ids(r, zl)`
     is the global key id of each query pair — its index into `key_r` /
@@ -1325,10 +1331,11 @@ class KeyIndex:
             # are distinct pairs, so the stored row an exact-`==` query finds
             # IS its global key id, under the same equality as the searches
             # below (−0.0 with 0.0, NaN never). The ρ classes are then formed
-            # when `take_r_classes` asks, by the same `np.unique`.
-            self._index = _accel.acc.RowIndex(
-                [np.asarray(key_r, dtype=float), np.asarray(key_zl, dtype=float)]
-            )
+            # when `take_r_classes` asks, by the same `np.unique`. Built on
+            # the first `ids` (the crossing fill's tiles never ask, and the
+            # table is ~40 B a key beside the plan's own arrays).
+            self._index = _LAZY_CODES
+            self._key_zl = key_zl
             self._r_classes = None
             return
         self._index = None
@@ -1363,6 +1370,14 @@ class KeyIndex:
         return got
 
     def ids(self, r, zl):
+        if self._index is _LAZY_CODES:
+            self._index = _accel.acc.RowIndex(
+                [
+                    np.asarray(self._key_r, dtype=float),
+                    np.asarray(self._key_zl, dtype=float),
+                ]
+            )
+            self._key_zl = None
         if self._index is not None:
             r, zl = np.broadcast_arrays(np.asarray(r, float), np.asarray(zl, float))
             kj = self._index.find([r.ravel(), zl.ravel()])
@@ -1431,6 +1446,7 @@ class ProductSet:
         kernels=KEYS,
         n_rows=None,
         key_index=None,
+        by_group=False,
     ):
         if slot not in ("z", "zp"):
             raise ValueError(f"slot must be 'z' or 'zp', got {slot!r}")
@@ -1472,6 +1488,13 @@ class ProductSet:
             # both factors by first appearance over that one group): the row
             # table is indexed by the global ids directly.
             self._codes = None
+        elif by_group:
+            # Looked up through the groups holding each asked z id
+            # (`_group_lookup`): the merged candidates' code table is
+            # O(candidates), and the lookups that reach a product are a few
+            # slow ends' rows.
+            self._codes = _BY_GROUP
+            self._zmap = None
         else:
             codes, vrow = [], []
             for tab, zi, kj in zip(rowtab, zid, kid):
@@ -1495,10 +1518,47 @@ class ProductSet:
         if self._codes is None:
             out[ok] = self.rowtab[0][zi[ok], kj[ok]]
             return out
+        if self._codes is _BY_GROUP:
+            idx = np.flatnonzero(ok)
+            out[idx] = self._group_lookup(zi[idx], kj[idx])
+            return out
         c = self._codes.ids(zi[ok].astype(np.int64) * self._n_key + kj[ok])
         hit = c >= 0
         idx = np.flatnonzero(ok)
         out[idx[hit]] = self._code_vrow[c[hit]]
+        return out
+
+    def _group_lookup(self, zi, kj):
+        """The value row of each (z id, key id) pair, −1 where no group holds
+        it: for each asked z id, the groups whose z factor holds it, and in
+        each the asked keys among its own (`kid[g]`, searched). A pair two
+        groups hold is ONE row (the plan merged them), so the first group
+        found answers what the code table answered."""
+        if self._zmap is None:
+            zmap = {}
+            for g, zg in enumerate(self.zid):
+                for zl, z in enumerate(zg.tolist()):
+                    zmap.setdefault(z, []).append((g, zl))
+            self._zmap = zmap
+        out = np.full(zi.size, -1, dtype=np.intp)
+        if zi.size == 0:
+            return out
+        o = np.argsort(zi, kind="stable")
+        zs = zi[o]
+        cuts = np.flatnonzero(zs[1:] != zs[:-1]) + 1
+        sorted_keys = {}
+        for sel in np.split(o, cuts):
+            for g, zl in self._zmap.get(int(zi[sel[0]]), ()):
+                todo = sel[out[sel] < 0]
+                if todo.size == 0:
+                    break
+                if g not in sorted_keys:
+                    ko = np.argsort(self.kid[g], kind="stable")
+                    sorted_keys[g] = (ko, self.kid[g][ko])
+                ko, ks = sorted_keys[g]
+                i = np.minimum(np.searchsorted(ks, kj[todo]), ks.size - 1)
+                hit = ks[i] == kj[todo]
+                out[todo[hit]] = self.rowtab[g][zl, ko[i[hit]]]
         return out
 
     def values_of(self, vrows, key):
