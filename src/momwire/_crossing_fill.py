@@ -2899,10 +2899,11 @@ class _ProductTiles:
 
     def _tile_rows(self, t):
         """Tile t's rows, ascending: every row of its keys, over the groups."""
-        if self._by_tile is not None:
+        by_tile = getattr(self, "_by_tile", None)
+        if by_tile is not None:
             # Rows in tile order, ascending within a tile (the sort is
             # stable): the same ids the gather and mask below find.
-            o, b = self._by_tile
+            o, b = by_tile
             return o[b[t] : b[t + 1]]
         parts = [
             tab[:, o[b[t] : b[t + 1]]].ravel()
