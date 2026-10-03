@@ -188,6 +188,20 @@ def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
 
     ``junction_ports`` is the junction indices already carrying a shunt port
     (momwire#172); a family with no such port passes nothing.
+
+    How many gaps one junction takes depends on how many members it has
+    (momwire#1300).  At K = 2 a gap named through either member is the SAME
+    cut — one through-current, the two EMFs in series — so a second gap there
+    is not a second port and is refused; a caller folds the two into one
+    (the EZNEC seam's ``_assign_columns`` does exactly that).  At K >= 3 a gap
+    named through member m sits in m's own branch, and gaps named through
+    DIFFERENT members are different cuts with different currents: licensed
+    NEC-5 serves an object on each named wire at one such node, each in its
+    own wire's branch.  So K >= 3 takes one gap per member, up to all K of
+    them.  With all K gapped the K port currents still sum to zero (KCL at
+    the node), so the K-port admittance has rank K - 1 — adding one EMF to
+    every branch only shifts the node's potential, which is physics rather
+    than a defect for a caller to guard.
     """
     out = []
     if node_gaps is None:
@@ -229,10 +243,12 @@ def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
             )
         if member in seen_members:
             raise ValueError(f"node_gaps[{i}]: wire {wire} {end!r} listed twice")
-        if j_idx in seen_junctions:
+        if j_idx in seen_junctions and len(junctions[j_idx]) == 2:
             raise ValueError(
                 f"node_gaps[{i}]: junction {j_idx} already carries a "
-                "node gap — one series gap per junction"
+                "node gap and joins only two wire ends, so a gap through "
+                "the other member is the far side of the same cut — one "
+                "series gap per two-wire junction (sum the EMFs into one)"
             )
         if j_idx in ported:
             raise ValueError(

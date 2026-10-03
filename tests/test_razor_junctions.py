@@ -433,16 +433,33 @@ def test_a_node_gap_needs_a_through_path_and_says_so():
         )
 
 
-def test_one_series_gap_per_junction_here_too():
-    wires, npe = _star(4)
-    with pytest.raises(ValueError, match="one series gap per junction"):
+def test_one_series_gap_per_two_wire_junction_here_too():
+    """At K = 2 a gap through the other member is the same cut, so a second
+    one is refused; at K >= 3 gaps through different members are different
+    cuts and construct (momwire#1300) — but never the same member twice."""
+    kw = dict(feeds=[], wire_radius=1e-3, wavelength=20.0)
+    wires, npe = _star(2)
+    with pytest.raises(ValueError, match="one series gap per two-wire junction"):
         RazorSolver(
             wires=wires,
             n_per_edge_per_wire=npe,
-            feeds=[],
             node_gaps=[(0, "start", 1.0 + 0j), (1, "start", 1.0 + 0j)],
-            wire_radius=1e-3,
-            wavelength=20.0,
+            **kw,
+        )
+    wires, npe = _star(4)
+    s = RazorSolver(
+        wires=wires,
+        n_per_edge_per_wire=npe,
+        node_gaps=[(0, "start", 1.0 + 0j), (1, "start", 1.0 + 0j)],
+        **kw,
+    )
+    assert [(w, e) for w, e, _v in s.node_gaps] == [(0, "start"), (1, "start")]
+    with pytest.raises(ValueError, match="listed twice"):
+        RazorSolver(
+            wires=wires,
+            n_per_edge_per_wire=npe,
+            node_gaps=[(0, "start", 1.0 + 0j), (0, "start", 0j)],
+            **kw,
         )
 
 
