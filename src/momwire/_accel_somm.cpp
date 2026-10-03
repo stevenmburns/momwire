@@ -640,19 +640,27 @@ struct Side {
 
 // Jf[p, P] of observer segment i against source segment j from the node-pair
 // block f[qi * q + rj] (observer node qi, source node rj): the rectangular
-// kernel's stage-1 contraction, expression for expression.
+// kernel's stage-1 contraction, expression for expression, except that its
+// inner sum over rj -- which does not read p -- is formed once per (P, qi)
+// into `rows` (d1 * q scratch) instead of once per (p, P, qi). The same sums
+// in the same order, so the same bits.
 static inline void contract(const Side &S, int d1, py::ssize_t i, py::ssize_t j,
-                            const cd *f, cd *out) {
+                            const cd *f, cd *rows, cd *out) {
     const py::ssize_t q = S.q;
+    for (int P = 0; P < d1; ++P) {
+        for (py::ssize_t qi = 0; qi < q; ++qi) {
+            cd row(0.0, 0.0);
+            for (py::ssize_t rj = 0; rj < q; ++rj)
+                row += f[qi * q + rj] * S.w(P, j, rj);
+            rows[P * q + qi] = row;
+        }
+    }
     for (int p = 0; p < d1; ++p) {
         for (int P = 0; P < d1; ++P) {
             cd acc(0.0, 0.0);
             for (py::ssize_t qi = 0; qi < q; ++qi) {
                 const double wp = S.w(p, i, qi);
-                cd row(0.0, 0.0);
-                for (py::ssize_t rj = 0; rj < q; ++rj)
-                    row += f[qi * q + rj] * S.w(P, j, rj);
-                acc += wp * row;
+                acc += wp * rows[P * q + qi];
             }
             out[p * d1 + P] = acc;
         }
@@ -804,7 +812,7 @@ static void remainder_Q_symmetric(
     #pragma omp parallel
     {
         std::vector<cd> JAB((size_t)dd * smax * smax), JBA(JAB.size());
-        std::vector<cd> fw((size_t)q * q), bw((size_t)q * q);
+        std::vector<cd> fw((size_t)q * q), bw((size_t)q * q), rows((size_t)d1 * q);
         #pragma omp for schedule(dynamic)
         for (py::ssize_t t = 0; t < n_pairs; ++t) {
             MW_CANCEL_POLL();
@@ -823,7 +831,7 @@ static void remainder_Q_symmetric(
                     cd *jxy = &JAB[((size_t)x * ny + y) * dd];
                     somm_sym::node_block(G, ground_z, k, S, si, sj, fw.data(),
                                          bw.data());
-                    somm_sym::contract(S, d1, si, sj, fw.data(), jxy);
+                    somm_sym::contract(S, d1, si, sj, fw.data(), rows.data(), jxy);
                     if (si == sj) {
                         if (!diag)
                             std::copy(jxy, jxy + dd,
@@ -832,7 +840,7 @@ static void remainder_Q_symmetric(
                     }
                     cd *jyx = diag ? &JAB[((size_t)y * ny + x) * dd]
                                    : &JBA[((size_t)y * nx + x) * dd];
-                    somm_sym::contract(S, d1, sj, si, bw.data(), jyx);
+                    somm_sym::contract(S, d1, sj, si, bw.data(), rows.data(), jyx);
                 }
             }
             somm_sym::finish_block(TA, TB, ny, d1, ord.data(), pl, JAB.data(),
