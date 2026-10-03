@@ -40,7 +40,11 @@ never produce it — it is machinery only the thin client speaks.
 
 import sys
 
-from momwire.deck._solver import basis_from_program_name
+from momwire.deck._solver import (
+    basis_from_program_name,
+    dialect_from_program_name,
+    nec4_basis_from_program_name,
+)
 from momwire.eznec import _serve
 from momwire.eznec._shell import main
 
@@ -52,6 +56,14 @@ MARKER = "eznec-"
 # thin client consumes ``client`` — the plain name selects nothing, a renamed
 # copy still names its basis.
 ENGINE_SEGMENT = "engine"
+
+
+def dialect_for(prog: str) -> str:
+    """The EZNEC slot this program name answers: ``"nec4"`` when the name
+    carries ``nec4`` (momwire#1295), else ``"nec5"``.  The bundle's own
+    engine is named for neither, so a deployed launcher passes ``--dialect``
+    instead, exactly as it passes ``--basis``."""
+    return dialect_from_program_name(prog)
 
 
 def basis_for(prog: str) -> str:
@@ -71,7 +83,12 @@ def basis_for(prog: str) -> str:
     channel EZNEC reads.  Validating here could only turn that into a traceback
     on a stream nobody sees.
     """
-    suffix = basis_from_program_name(prog, MARKER, consumed=ENGINE_SEGMENT)
+    if dialect_for(prog) == "nec4":
+        # A nec4 name reads its basis past `nec4` alone: the NEC-5 markers
+        # cannot coexist with it in a name that means one slot.
+        suffix = nec4_basis_from_program_name(prog)
+    else:
+        suffix = basis_from_program_name(prog, MARKER, consumed=ENGINE_SEGMENT)
     return _serve.BASIS if suffix is None else suffix
 
 
@@ -86,24 +103,32 @@ def run(argv: list[str]) -> int:
     ``--basis`` is believed: that argv came from our own machinery, never
     from EZNEC, and the flag is its explicit spelling of the same choice.
 
-    The one-shot path takes the same machinery flag, LEADING only:
+    The one-shot path takes the same machinery flags, LEADING only:
     ``--basis <name> <deck> <printout>`` is how the native client's fallback
     rung runs a twin through the bundle's single engine exe (momwire#718
-    phase 3 — the per-variant frozen stubs are what that client subsumes).
-    EZNEC's spelling cannot produce it, and after the flag the contract is
-    the untouched two positional paths.
+    phase 3 — the per-variant frozen stubs are what that client subsumes),
+    and ``--dialect nec4`` before or after it is how a NEC-4.2-slot launcher
+    does the same (momwire#1295).  EZNEC's spelling cannot produce either,
+    and after the flags the contract is the untouched two positional paths.
     """
     basis = basis_for(argv[0])
+    dialect = dialect_for(argv[0])
     rest = argv[1:]
     if "--serve" in rest:
         from momwire.eznec._resident import serve_main
 
         if "--basis" not in rest:
             rest = [*rest, "--basis", basis]
+        if dialect != "nec5" and "--dialect" not in rest:
+            rest = [*rest, "--dialect", dialect]
         return serve_main(rest)
-    if len(rest) >= 2 and rest[0] == "--basis":
-        basis, rest = rest[1], rest[2:]
-    return main(rest, basis=basis)
+    while len(rest) >= 2 and rest[0] in ("--basis", "--dialect"):
+        if rest[0] == "--basis":
+            basis = rest[1]
+        else:
+            dialect = rest[1]
+        rest = rest[2:]
+    return main(rest, basis=basis, dialect=dialect)
 
 
 if __name__ == "__main__":

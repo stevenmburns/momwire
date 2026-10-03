@@ -376,10 +376,18 @@ def test_without_serve_the_entry_still_one_shots(monkeypatch):
     entry = _entry_module()
     seen = {}
     monkeypatch.setattr(
-        entry, "main", lambda argv, *, basis: seen.update(argv=argv, basis=basis) or 0
+        entry,
+        "main",
+        lambda argv, *, basis, dialect: (
+            seen.update(argv=argv, basis=basis, dialect=dialect) or 0
+        ),
     )
     assert entry.run(["Momwire-Eznec-Razor-Nec5.exe", "deck.nec", "out.txt"]) == 0
-    assert seen == {"argv": ["deck.nec", "out.txt"], "basis": "razor-nec5"}
+    assert seen == {
+        "argv": ["deck.nec", "out.txt"],
+        "basis": "razor-nec5",
+        "dialect": "nec5",
+    }
 
 
 def test_a_leading_basis_flag_one_shots_a_twin_through_the_engine(monkeypatch):
@@ -390,11 +398,19 @@ def test_a_leading_basis_flag_one_shots_a_twin_through_the_engine(monkeypatch):
     entry = _entry_module()
     seen = {}
     monkeypatch.setattr(
-        entry, "main", lambda argv, *, basis: seen.update(argv=argv, basis=basis) or 0
+        entry,
+        "main",
+        lambda argv, *, basis, dialect: (
+            seen.update(argv=argv, basis=basis, dialect=dialect) or 0
+        ),
     )
     argv = ["momwire-eznec-engine.exe", "--basis", "razor-nec5", "deck.nec", "out.txt"]
     assert entry.run(argv) == 0
-    assert seen == {"argv": ["deck.nec", "out.txt"], "basis": "razor-nec5"}
+    assert seen == {
+        "argv": ["deck.nec", "out.txt"],
+        "basis": "razor-nec5",
+        "dialect": "nec5",
+    }
 
 
 @pytest.mark.integration

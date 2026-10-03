@@ -259,6 +259,30 @@ def filename_basis(prog: str, marker: str, consumed: str | None = None) -> str |
     return suffix
 
 
+# `momwire.deck._solver.NEC4_MARKER`, restated: a client may not import
+# momwire (momwire#1295).
+NEC4_MARKER = "nec4"
+
+
+def filename_nec4(prog: str) -> tuple[bool, str | None]:
+    """``(is_nec4, basis)`` for a command NAME — the stdlib copy of
+    ``_solver.dialect_from_program_name`` and ``nec4_basis_from_program_name``
+    (momwire#1295), whose docstrings are the rule.  ``is_nec4`` is whether the
+    name carries ``nec4`` at all; ``basis`` is ``None`` for a name ending at
+    the marker, the text after ``nec4-`` for one that continues with a dash,
+    and the whole continuation otherwise, so it reaches the refusal by name.
+    """
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if NEC4_MARKER not in name:
+        return False, None
+    rest = name.split(NEC4_MARKER, 1)[1]
+    if rest == "":
+        return True, None
+    return True, rest[1:] if rest.startswith("-") else rest
+
+
 def runtime_dir() -> str:
     """The per-user directory holding sockets, lockfiles and server logs.
 
