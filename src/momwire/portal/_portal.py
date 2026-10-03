@@ -3574,9 +3574,7 @@ def _run_block(
     return _render_run_block(deck, solver, group, freq_mhz, records, group_index)
 
 
-def render_deck(
-    body: str, *, dialect: str = "nec2", basis: str | None = None
-) -> tuple[list[str], list[str]]:
+def render_deck(body: str) -> tuple[list[str], list[str]]:
     """(stdout lines, stderr lines) for one deck body — no banner, no ``NX``.
 
     The banner belongs to the *process*, not the deck: the oracle prints it
@@ -3587,17 +3585,11 @@ def render_deck(
     The caller also appends the ``NX`` echo — the sentinel must be emitted
     whether the run succeeded or failed, or SimNEC blocks in ``readLine()``
     forever (grammar doc §2 and §10.1).
-
-    ``dialect`` and ``basis`` are for a caller outside this portal's process
-    contract — the EZNEC NEC-4.2 slot (momwire#1295), which renders its
-    phase-1 printout through this function.  A named ``basis`` builds its own
-    solver and never touches the cross-deck cache, whose key is the
-    configured engine's.
     """
     out: list[str] = ["", "", ""]
     err: list[str] = []
     try:
-        deck = parse_deck(body, dialect=dialect)
+        deck = parse_deck(body)
     except _DECK_REFUSALS as exc:
         _append_error(out, exc)
         return out, err
@@ -3613,7 +3605,7 @@ def render_deck(
     out += ["", "", ""]
 
     try:
-        solver = _solver_for(deck) if basis is None else DeckSolver(deck, basis=basis)
+        solver = _solver_for(deck)
     except PortalError as exc:
         _append_error(out, exc)
         return out, err
