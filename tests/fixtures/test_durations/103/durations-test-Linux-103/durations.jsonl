@@ -1,0 +1,4 @@
+{"python": "3.12.3", "platform": "linux", "job": "test", "runner_os": "Linux", "run_id": "103", "sha": "0000000", "nodeid": "tests/test_a.py::test_big", "duration": 5.5, "outcome": "passed", "markers": []}
+{"python": "3.12.3", "platform": "linux", "job": "test", "runner_os": "Linux", "run_id": "103", "sha": "0000000", "nodeid": "tests/test_a.py::test_noisy", "duration": 19.0, "outcome": "passed", "markers": []}
+{"python": "3.12.3", "platform": "linux", "job": "test", "runner_os": "Linux", "run_id": "103", "sha": "0000000", "nodeid": "tests/test_a.py::test_slow_marked", "duration": 42.0, "outcome": "passed", "markers": ["slow"]}
+{"python": "3.12.3", "platform": "linux", "job": "test", "runner_os": "Linux", "run_id": "103", "sha": "0000000", "nodeid": "tests/test_a.py::test_fast", "duration": 0.03, "outcome": "passed", "markers": []}
