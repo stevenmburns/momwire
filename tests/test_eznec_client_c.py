@@ -595,10 +595,18 @@ NEC42_DECK = (
 )
 
 
+def _unclocked(printout: bytes) -> bytes:
+    """The phase-1 body is the portal's printout, whose MATRIX TIMING block
+    prints the fill's wall time; two runs of one deck differ there only."""
+    import re
+
+    return re.sub(rb"FILL: +\d+ msec", b"FILL: - msec", printout)
+
+
 def _nec4_oracle(tmp_path: Path) -> bytes:
     out = tmp_path / "oracle-nec4-sinusoidal.out"
     _shell.run(NEC42_DECK, out, basis="sinusoidal", dialect="nec4")
-    return out.read_bytes()
+    return _unclocked(out.read_bytes())
 
 
 @pytest.mark.integration
@@ -628,7 +636,7 @@ def test_a_nec4_named_copy_answers_the_nec42_slot_on_its_own_server(
         out = tmp_path / "nec4.out"
         proc = _run(bundle, NEC4_TWIN_NAME, [str(NEC42_DECK), str(out)], room)
         assert proc.returncode == 0, proc.stderr
-        assert out.read_bytes() == expected
+        assert _unclocked(out.read_bytes()) == expected
         assert len(_listening(room)) == 1, _listening(room)
         addresses = sorted(p.name for p in room.glob(f"*{suffix}"))
         assert addresses == [f"{expected_key}{suffix}"], addresses
@@ -649,7 +657,7 @@ def test_a_nec4_named_copy_one_shots_in_the_nec42_slot(client_exe, tmp_path):
         out = tmp_path / "nec4-rung3.out"
         proc = _run(bundle, NEC4_TWIN_NAME, [str(NEC42_DECK), str(out)], room)
         assert proc.returncode == 0, proc.stderr
-        assert out.read_bytes() == expected
+        assert _unclocked(out.read_bytes()) == expected
         assert _listening(room) == []
     finally:
         _stop(room)
