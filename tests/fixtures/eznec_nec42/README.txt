@@ -1,4 +1,5 @@
-momwire#1295 - the decks EZNEC's External NEC-4.2 slot writes.
+momwire#1295 - the decks EZNEC's External NEC-4.2 slot writes, and the
+licensed NEC-4.2's printout of each.
 
 Seventeen decks captured 2026-10-03 from EZNEC Pro+ v7.0.4 with its engine
 option set to External NEC-4.2 and the engine path pointed at a capture-only
@@ -15,7 +16,13 @@ Every capture recorded the same launch:
 Pairs that are the same deck: 0223/0236 (re-captured), 0225/0226.
 0223/0224 are one antenna under EX 6 (current) and EX 0 (voltage).
 
-No printout is kept here, and none may be: NEC-4.2 is licensed for own use at
-home.  The licensed engine's impedances for these decks were taken as numbers
-only (antennaknobs scratch/eznec-capture/NEC42-SOLVE-NOTES-2026-10-03.md) and
-are quoted, with that provenance, in tests/test_eznec_nec42_1295.py.
+printouts/<capture>.out
+  Licensed NEC-4.2 (LLNL-CODE-491368), nec42cl-serial release 7768648, run
+  2026-10-03 on the build machine, black box: each deck above in, the
+  engine's printout out, byte for byte (LF line endings, as that run wrote
+  them).  Committed as test fixtures with the licensee's permission.  They
+  are OUTPUT only; no NEC-4.2 source, build tree or binary is in this
+  repository, and none may be.  Line 2 is blank in every one (the engine
+  prints no build tag), and the Sommerfeld-table cache messages in 0231,
+  0232 and 0239 are the engine's own file handling, which the gates
+  normalise away (tests/test_eznec_nec42_printout_1295.py).
