@@ -725,8 +725,11 @@ def _ordered_row_scatter(dest, idx, src):
     order. Each addition is an elementwise IEEE add of the same two
     operands, with no reduction to reassociate, so the sums cannot depend
     on the platform's SIMD width or library either. The rank count is a
-    basis's support size: 2 on a plain wire, the member count at a
-    junction."""
+    basis's entry count within the band: 3 on a plain wire's interior (2
+    at a wire end) on the free-space array, more at a junction.
+
+    The fill calls it through `_row_scatter`, which hands it to the
+    accelerator when it can; this is that kernel's reference."""
     n = idx.shape[0]
     if n == 0:
         return
@@ -745,6 +748,48 @@ def _ordered_row_scatter(dest, idx, src):
         for c0 in range(r0, r1, chunk):
             sel = by_rank[c0 : min(c0 + chunk, r1)]
             dest[idx[sel]] += src[sel]
+
+
+# The band scatter in C++ (`ordered_row_scatter`, momwire#1290) when the
+# accelerator carries it. False routes every call through
+# `_ordered_row_scatter`, the reference the kernel is gated against bit for
+# bit (tests/test_sg_row_scatter_accel_1290.py).
+_ROW_SCATTER_ACCEL = True
+_HAVE_ROW_SCATTER_ACCEL = _acc is not None and bool(
+    getattr(_acc, "row_scatter_1290", False)
+)
+
+
+def _row_scatter(dest, idx, src, fresh=None):
+    """`np.add.at(dest, idx, src)` along dest's first axis, to the bit, with
+    the rows where `fresh` is true taken as +0 whatever dest holds there
+    (so the caller may pass `np.empty` rows).
+
+    `_ordered_row_scatter` reaches `np.add.at`'s order in numpy and pays for
+    it in memory traffic: every rank gathers its destination and source
+    rows into temporaries and scatters the sums back, 0.65 s of a 6.2 s
+    free-space solve at N = 2816 (Skylake). The accelerator's
+    `ordered_row_scatter` performs the same adds in the same order — per
+    destination row, its entries ascending, one IEEE add each, from +0 on a
+    fresh row — reading each source row in place, and threads over rows,
+    which are independent. Anything it cannot take (no accelerator, a
+    non-complex or 1-D operand, strided rows) goes to the reference."""
+    if (
+        _ROW_SCATTER_ACCEL
+        and _HAVE_ROW_SCATTER_ACCEL
+        and dest.ndim == 2
+        and src.ndim == 2
+        and dest.dtype == np.complex128
+        and src.dtype == np.complex128
+        and (dest.shape[1] <= 1 or (dest.strides[1] == 16 and src.strides[1] == 16))
+    ):
+        _acc.ordered_row_scatter(
+            dest, idx, src, np.zeros(0, dtype=bool) if fresh is None else fresh
+        )
+        return
+    if fresh is not None:
+        dest[fresh] = 0
+    _ordered_row_scatter(dest, idx, src)
 
 
 def _solve_in_place(G, rhs):
@@ -4462,8 +4507,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         unit weights multiply exactly). So T rows are accumulated here the
         same way — the basis's carried partial row, or zeros, then this
         band's entries added one at a time in ascending order
-        (`_ordered_row_scatter`, `np.add.at`'s order without its per-element
-        loop) — and since every band
+        (`_row_scatter`, `np.add.at`'s order without its per-element loop;
+        a row with no carry starts from +0 in the scatter itself rather than
+        from a zeroed buffer) — and since every band
         follows every earlier one, a basis that straddles bands meets its
         entries in the sequence the whole product did. A basis is finished at
         the band holding its LAST entry; its rows of the three products
@@ -4475,14 +4521,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         i_of = rows.i_of_entry[e0:e1]
         touched, local = np.unique(i_of, return_inverse=True)
         n_src = band[0].shape[1]
-        T = [np.zeros((touched.size, n_src), dtype=np.complex128) for _ in range(3)]
+        T = [np.empty((touched.size, n_src), dtype=np.complex128) for _ in range(3)]
+        fresh = np.ones(touched.size, dtype=bool)
         for r, b in enumerate(touched):
             got = rows.carry.pop(int(b), None)
             if got is not None:
+                fresh[r] = False
                 for t, g in zip(T, got):
                     t[r] = g
         for t, c in zip(T, band):
-            _ordered_row_scatter(t, local, c)
+            _row_scatter(t, local, c, fresh)
         done = rows.last[touched] < e1
         if done.any():
             fin = np.flatnonzero(done)
@@ -4876,7 +4924,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
           and the band buffer dies. Banding over TEST segments (not source
           columns, and not per block) is what keeps it bit-exact: a matrix
           cell's writers are its own test segment's entries, so a cell is
-          finished inside one band and the scatter (`_ordered_row_scatter`)
+          finished inside one band and the scatter (`_row_scatter`)
           reaches it in the same ascending-entry order the whole-triple
           scatter did. Folding per
           BLOCK instead — the other shape momwire#355 floated — would have
@@ -4936,12 +4984,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             rows = i_of_entry[e0:e1]
             for dest, c in zip(T, corr):
                 # The scatter's own accumulation, reached one band early.
-                # `_ordered_row_scatter` adds the band's rows one at a time in
+                # `_row_scatter` adds the band's rows one at a time in
                 # ascending entry order, which is the order `R @ corr` sums a basis
                 # row's entries in — and the bands are ascending too, so every
                 # T cell sees exactly the sequence of additions the
                 # whole-triple product performed.
-                _ordered_row_scatter(dest, rows, c)
+                _row_scatter(dest, rows, c)
         if not any(np.any(t) for t in T):
             return
         if not self._band_fill_serves(N):
