@@ -2661,7 +2661,22 @@ class _ProductTiles:
         loops' (`extra_late`)."""
         plan, U = self.plan, self.plan.n_rows
         late_row = None
-        if self._may_hold:
+        if self._may_hold and plan.slot == "z" and len(plan.rowtab) > 1:
+            # Per group rather than per grid pair: whether row (g, z, key)
+            # is read late does not depend on its z (a column reads every
+            # z of the group at the same key), so it is decided on the
+            # (groups, line) keys and marked over each late key's z column
+            # -- the same set the pair loop below marks, at 1/(group size)
+            # of its gathers.
+            late_row = np.zeros(U, dtype=bool)
+            ready = self._node_ready
+            for g0, g1 in _group_spans(*plan.kid.shape):
+                late = self.tile_of_key[plan.kid[g0:g1]] < ready[None, :]
+                for g in np.flatnonzero(late.any(axis=1)).tolist():
+                    kl = np.unique(plan.kl_rank[g0 + g][late[g]])
+                    late_row[plan.rowtab[g0 + g][:, kl]] = True
+                del late
+        elif self._may_hold:
             late_row = np.zeros(U, dtype=bool)
             ready = self._node_ready
             for c0 in range(0, plan.nB, self._step):
