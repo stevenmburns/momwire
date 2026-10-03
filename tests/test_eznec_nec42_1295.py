@@ -7,17 +7,19 @@ addresses sources at segment centres, so the slot's roster is
 decks EZNEC wrote in the 2026-10-03 capture sitting
 (``tests/fixtures/eznec_nec42/``, README there).
 
-The target impedances below are the licensed NEC-4.2's, taken as NUMBERS ONLY
-from antennaknobs ``scratch/eznec-capture/NEC42-SOLVE-NOTES-2026-10-03.md``
-(black box: the engine solved each captured deck on the Windows box and only
-the figures came back; NEC-4.2 is licensed for own use at home, so no printout
-or excerpt of one is kept anywhere in this repository).
+The target impedances below are the licensed NEC-4.2's, as antennaknobs
+``scratch/eznec-capture/NEC42-SOLVE-NOTES-2026-10-03.md`` quotes them (black
+box: the engine solved each captured deck and the figures came back).  The
+licensee has since permitted its printouts as fixtures, and phase 2 keeps
+them (``tests/fixtures/eznec_nec42/printouts/``); the same impedances are on
+their ANTENNA INPUT PARAMETERS rows.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import math
+import re
 from pathlib import Path
 
 import pytest
@@ -30,7 +32,7 @@ from momwire.deck._solver import (
     nec4_basis_from_program_name,
 )
 from momwire.eznec import _serve
-from momwire.eznec._nec4 import PHASE1_MARK, basis_refusal
+from momwire.eznec._nec4 import basis_refusal
 from momwire.eznec._shell import render
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
@@ -392,11 +394,15 @@ def test_a_basis_the_slot_cannot_serve_refuses_in_the_printout(basis):
 
 
 @pytest.mark.integration
-def test_a_served_printout_is_marked_phase_one():
+def test_a_served_printout_is_the_nec42_layout():
+    """Phase 2: the NEC-4.2 banner and sections, not the portal's NEC-2 body
+    (the layout itself is gated in test_eznec_nec42_printout_1295.py)."""
     text = render(deck_text("0224"), basis="bspline", dialect="nec4")
     assert "NEC ERROR" not in text
-    assert PHASE1_MARK in text
-    assert "ANTENNA INPUT PARAMETERS" in text
+    assert "NUMERICAL ELECTROMAGNETICS CODE (NEC-4.2)" in text
+    assert "- - - SEGMENTATION DATA - - -" in text
+    assert "- - - ANTENNA INPUT PARAMETERS - - -" in text
+    assert "DATA CARD No:" not in text
     assert "Written by EZNEC/Pro+ v. 7.0 in NEC-4.2 format." in text
 
 
@@ -407,7 +413,7 @@ def test_the_nec5_slot_is_the_default_and_unchanged():
     )
     text = next(nec5_deck).read_bytes().decode("latin-1")
     assert render(text) == render(text, dialect="nec5")
-    assert PHASE1_MARK not in render(text)
+    assert "NUMERICAL ELECTROMAGNETICS CODE (NEC-5)" in render(text)
     # A NEC-5 deck is not a NEC-4.2 one: the nec4 slot reads it in its own
     # dialect, which has no node-addressed source.
     assert "NEC ERROR" in render(text, dialect="nec4")
@@ -422,6 +428,8 @@ def test_the_nec5_slot_is_the_default_and_unchanged():
 # see `_SANITY_EXEMPT` for the two that are not.
 _SANITY_REL = 0.05
 
+_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:E[-+]\d+)?")
+
 # 0233 is the 300 MHz dipole driven at 13.9 MHz: R is 0.11 ohm under a
 # 9 kohm reactance, so a 5 % bar on |Z| is all reactance and R is noise; the
 # solve notes call it a poor tolerance comparison.  0239, the buried dipole,
@@ -433,6 +441,25 @@ _SANITY_REL = 0.05
 # a shared-basis coincidence at an unconverged mesh, not a target to hold
 # bspline to.
 _SANITY_EXEMPT = {"0233", "0239"}
+
+
+def test_the_quoted_targets_are_the_licensed_printouts_own_rows():
+    """The notes' figures and the committed printouts are one source: each
+    target is the ANTENNA INPUT PARAMETERS impedance of its capture's
+    printout, to the printed digits."""
+    for capture in CAPTURES:
+        (path,) = (FIXTURES / "printouts").glob(f"{capture}_*.out")
+        lines = path.read_text(encoding="latin-1").splitlines()
+        start = next(
+            i for i, ln in enumerate(lines) if "ANTENNA INPUT PARAMETERS" in ln
+        )
+        row = next(
+            cells
+            for ln in lines[start + 1 :]
+            if len(cells := _NUMBER.findall(ln)) == 11
+        )
+        z = complex(float(row[6]), float(row[7]))
+        assert z == pytest.approx(NEC42_Z[capture], rel=1e-5, abs=1e-4), capture
 
 
 @pytest.mark.integration
@@ -450,10 +477,12 @@ def test_the_impedance_against_the_licensed_engine(basis, capsys):
         start = next(
             i for i, ln in enumerate(lines) if "ANTENNA INPUT PARAMETERS" in ln
         )
+        # By number, not by whitespace: a negative E12.5 cell fills its field
+        # and runs into its neighbour (``9.29044E-03-5.22804E-03``).
         row = next(
-            ln.split()
+            cells
             for ln in lines[start + 1 :]
-            if len(ln.split()) == 11 and ln.split()[0].isdigit()
+            if len(cells := _NUMBER.findall(ln)) == 11
         )
         rows.append((capture, complex(float(row[6]), float(row[7])), None))
     with capsys.disabled():
