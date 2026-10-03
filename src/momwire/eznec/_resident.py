@@ -39,7 +39,9 @@ from ._shell import _PRINTOUT_ERRORS, seam
 _CODEC = "latin-1"
 
 
-def _connection(conn, number: int, log, solve_lock, *, basis: str) -> None:
+def _connection(
+    conn, number: int, log, solve_lock, *, basis: str, dialect: str = "nec5"
+) -> None:
     """One deck over one connection: the eznec seam's half of the server."""
     rx = tx = None
     try:
@@ -51,7 +53,11 @@ def _connection(conn, number: int, log, solve_lock, *, basis: str) -> None:
             newline="\r\n",
         )
         run_session(
-            seam(basis=basis), rx, tx, ConnLog(log, f"[conn {number}] "), solve_lock
+            seam(basis=basis, dialect=dialect),
+            rx,
+            tx,
+            ConnLog(log, f"[conn {number}] "),
+            solve_lock,
         )
     finally:
         for handle in (tx, rx):
@@ -164,15 +170,22 @@ def _configure(log, argv: list[str]) -> None:
 
 
 def serve_main(argv: list[str]) -> int:
-    """``--serve --socket PATH [--basis NAME] [--idle-timeout S] [--log P]``."""
+    """``--serve --socket PATH [--basis NAME] [--dialect nec5|nec4]
+    [--idle-timeout S] [--log P]``.
+
+    ``--dialect`` is per server for the reason ``--basis`` is (module
+    docstring): the client hashes it into the socket's name, so one warm
+    server answers one EZNEC slot (momwire#1295).
+    """
     argv = [a for a in argv if a != "--serve"]
     path, argv = take_value(argv, "--socket")
     log_path, argv = take_value(argv, "--log")
     idle_raw, argv = take_value(argv, "--idle-timeout", "900")
     basis, argv = take_value(argv, "--basis", _serve.BASIS)
+    dialect, argv = take_value(argv, "--dialect", "nec5")
 
     def connection(conn, number, log, solve_lock):
-        _connection(conn, number, log, solve_lock, basis=basis)
+        _connection(conn, number, log, solve_lock, basis=basis, dialect=dialect)
 
     return serve_forever(
         path,
