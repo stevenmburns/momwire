@@ -31,6 +31,17 @@ Publishing). Every step below was learned the hard way; do them in order.
    single run's long time is not a candidate; a median is. This step is
    hygiene only: speed regressions are the sweep above's job (and, for
    Windows, paired runs on the Windows box), never these numbers.
+5. **Record the workflow-efficiency numbers.** Run
+   `python scripts/ci_metrics.py --days <days since the last release>` and
+   compare with the previous release's numbers (put them in the bump PR's
+   body so the next release has them). Baseline, 2026-10-03, 30 days: 257
+   merged PRs; lead time median 0.2 h, p90 2.7 h; CI+wheels runs per PR
+   median 1, p90 3; 4 HARD-ceiling failures of 31 failed runs; default-lane
+   `test` job median 11.8 min. Since the ceiling stopped failing, its count
+   is zero by construction and measures nothing new — the guardrails that
+   matter after the change are the default-lane `test` job time (hygiene;
+   it should not creep while long tests are allowed to land) and the pre-tag
+   sweep's flags (performance).
 
 ## Steps
 
