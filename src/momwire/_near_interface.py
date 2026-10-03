@@ -1305,6 +1305,12 @@ class _SortedCodes:
         return out
 
 
+# A `KeyIndex` answers its first few small lookups by indexing the QUERIES
+# and passing every key through them (`_ids_reverse`), and builds the key
+# table only when a lookup is at least 1/ratio of the keys or the calls run
+# out: a crossing fill's few slow ends then never pay for it.
+_KEY_REVERSE_RATIO = 16
+_KEY_REVERSE_CALLS = 16
 # `KeyIndex._index` before its first lookup builds it, and `ProductSet._codes`
 # when lookups go through the groups (`ProductSet._group_lookup`).
 _LAZY_CODES = object()
@@ -1337,6 +1343,7 @@ class KeyIndex:
             self._index = _LAZY_CODES
             self._key_zl = key_zl
             self._r_classes = None
+            self._reverse_left = _KEY_REVERSE_CALLS
             return
         self._index = None
         # Each key's two class numbers straight from the sorts (momwire#1224)
@@ -1360,6 +1367,29 @@ class KeyIndex:
         self._n_zl = zl_u.size
         self._key_ids = _SortedCodes(key_code)
 
+    def _ids_reverse(self, r, zl):
+        """`ids` for a few queries before the key table exists: the queries
+        are indexed instead, and every key looked up among them -- one pass
+        over the keys against a table the size of the queries. The same
+        equality both ways (-0.0 with 0.0, NaN never), so the same ids."""
+        rr, zz = r.ravel(), zl.ravel()
+        q_index = _accel.acc.RowIndex([rr, zz])
+        hit = q_index.find(
+            [
+                np.asarray(self._key_r, dtype=float),
+                np.asarray(self._key_zl, dtype=float),
+            ]
+        )
+        k = np.flatnonzero(hit >= 0)
+        # The keys are distinct pairs, so a query equals at most one key.
+        key_of = np.full(rr.size, -1, dtype=np.intp)
+        key_of[hit[k]] = k
+        canon = q_index.find([rr, zz])
+        out = np.full(rr.size, -1, dtype=np.intp)
+        ok = canon >= 0
+        out[ok] = key_of[canon[ok]]
+        return out.reshape(r.shape)
+
     def take_r_classes(self):
         """`np.unique(key_r, return_inverse=True)` (the inverse flat), from
         the construction the first time and formed again after that."""
@@ -1371,6 +1401,10 @@ class KeyIndex:
 
     def ids(self, r, zl):
         if self._index is _LAZY_CODES:
+            r_b, zl_b = np.broadcast_arrays(np.asarray(r, float), np.asarray(zl, float))
+            if self._reverse_left > 0 and r_b.size * _KEY_REVERSE_RATIO <= self.n_key:
+                self._reverse_left -= 1
+                return self._ids_reverse(r_b, zl_b)
             self._index = _accel.acc.RowIndex(
                 [
                     np.asarray(self._key_r, dtype=float),
@@ -1546,19 +1580,26 @@ class ProductSet:
         o = np.argsort(zi, kind="stable")
         zs = zi[o]
         cuts = np.flatnonzero(zs[1:] != zs[:-1]) + 1
-        sorted_keys = {}
+        # A group's local key of global key k by a stamp per key (the group
+        # last marked, and the local id there): no per-group sort.
+        # Marking a group writes all its keys, so re-marking whenever the
+        # group changes keeps every stamp == g a key of g, with its local id.
+        stamp = np.full(self._n_key, -1, dtype=np.int64)
+        local = np.zeros(self._n_key, dtype=np.int64)
+        marked = -1
         for sel in np.split(o, cuts):
             for g, zl in self._zmap.get(int(zi[sel[0]]), ()):
                 todo = sel[out[sel] < 0]
                 if todo.size == 0:
                     break
-                if g not in sorted_keys:
-                    ko = np.argsort(self.kid[g], kind="stable")
-                    sorted_keys[g] = (ko, self.kid[g][ko])
-                ko, ks = sorted_keys[g]
-                i = np.minimum(np.searchsorted(ks, kj[todo]), ks.size - 1)
-                hit = ks[i] == kj[todo]
-                out[todo[hit]] = self.rowtab[g][zl, ko[i[hit]]]
+                if marked != g:
+                    kg = self.kid[g]
+                    stamp[kg] = g
+                    local[kg] = np.arange(kg.size)
+                    marked = g
+                q = kj[todo]
+                hit = stamp[q] == g
+                out[todo[hit]] = self.rowtab[g][zl, local[q[hit]]]
         return out
 
     def values_of(self, vrows, key):

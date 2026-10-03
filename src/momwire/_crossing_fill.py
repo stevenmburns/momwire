@@ -1549,10 +1549,16 @@ def _classify_batch(fast, a_wire, pts, rho, end, args, *, n=None, by_nodes=False
             if off_node:
                 rho_g, _end = args.batch(pts[off_node], fast.gfirst)
                 r_all = _near_interface.radius_fold(rho_g, a_wire)
+                lv_all = np.array(
+                    [lz[0] if end_in_gv else end[e] for e in off_node], dtype=float
+                )
+                # Every off-node end's keys in one lookup (the same pairs).
+                k_all = fast.keys.ids(
+                    r_all, np.broadcast_to(lv_all[:, None], r_all.shape)
+                )
                 for j, e in enumerate(off_node):
                     r = r_all[j]
-                    lv0 = lz[0] if end_in_gv else end[e]
-                    k = fast.keys.ids(r, np.full(r.shape, lv0))
+                    k = k_all[j]
                     if np.any(k < 0):
                         continue
                     n_key = fast.keys.n_key

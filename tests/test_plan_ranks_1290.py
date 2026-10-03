@@ -104,3 +104,36 @@ def test_razor_z_does_not_move(switch, monkeypatch):
     assert any(seen), seen
     assert np.array_equal(z_new, z_ref)
     assert np.array_equal(i_new, i_ref)
+
+
+def test_a_few_key_lookups_by_the_queries_are_the_key_table_s():
+    """`KeyIndex`'s reverse lookup (the queries indexed, every key passed
+    through them) answers what the key table answers, signed zeros, misses,
+    repeats and all, and the table is built once the calls run out."""
+    from momwire import _near_interface as ni
+
+    rng = np.random.default_rng(1290)
+    pairs = np.unique(
+        np.stack(
+            [rng.integers(1, 3000, 4000) * 0.01, rng.integers(-3, 1, 4000) * 0.5], 1
+        ),
+        axis=0,
+    )
+    key_r, key_zl = pairs[:, 0].copy(), pairs[:, 1].copy()
+    key_zl[key_zl == 0] = -0.0
+    pick = rng.integers(0, key_r.size, 60)
+    q_r = np.concatenate([key_r[pick], key_r[:5] + 1e-3, key_r[pick[:7]]])
+    q_zl = np.concatenate(
+        [np.where(key_zl[pick] == 0, 0.0, key_zl[pick]), key_zl[:5], key_zl[pick[:7]]]
+    )
+    keys = ni.KeyIndex(key_r, key_zl)
+    if keys._index is not ni._LAZY_CODES:
+        pytest.skip("the hash index is not built")
+    got = keys.ids(q_r, q_zl)
+    assert keys._index is ni._LAZY_CODES, "the reverse path did not serve"
+    full = ni.KeyIndex(key_r, key_zl)
+    full._reverse_left = 0
+    want = full.ids(q_r, q_zl)
+    assert full._index is not ni._LAZY_CODES
+    assert np.array_equal(got, want)
+    assert (got[:60] == pick).all() and (got[60:65] == -1).all()
