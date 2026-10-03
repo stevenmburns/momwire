@@ -1809,6 +1809,7 @@ _ROUTES = dict.fromkeys(
         "tile_max_rows",
         "tile_held_rows",
         "tile_stores",
+        "tile_column_products",
         "fused_blocks",
         "fused_mode_stream",
         "fused_mode_post",
@@ -2338,6 +2339,72 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
 # DESIGN-C's measured budget: past about 32 k rows the per-call overhead of
 # the kernel stops showing. TEST-ONLY to shrink.
 _TILE_ROWS = 1 << 17
+# A many-group product (grouped above) cuts its tiles along the LINE instead
+# of along ρ (`_column_tiles`). False is the ρ-ordered tiling, the in-process
+# reference: both evaluate every exact-ρ class whole in one tile, so the
+# tables, and Z, are the same bits either way (`_ProductTiles`).
+_COLUMN_TILES = True
+# `_group_spans`' budget: groups x line entries per pass over `plan.kid`.
+_GROUP_SPAN_ELEMS = 1 << 21
+
+
+def _group_spans(n_groups, n_line):
+    """[g0, g1) spans of the plan's groups, each about `_GROUP_SPAN_ELEMS`
+    (group, line node) entries: the passes over `kid` that would otherwise
+    form a (groups, line) temporary at once."""
+    per = max(1, _GROUP_SPAN_ELEMS // max(1, n_line))
+    return [(g0, min(n_groups, g0 + per)) for g0 in range(0, n_groups, per)]
+
+
+def _column_tiles(plan, key_cls, cls_rows):
+    """`(tile_of_cls, ready, n_tiles)` for a slot-"z" product of several
+    groups: each exact-ρ class's tile, each line node's ready tile.
+
+    The ρ-ordered tiling serves a line node's column once every group's row
+    for it has run, and with many groups (one per node of a horizontal
+    wire) those rows sit in tiles across the whole ρ range, so nearly every
+    column waits for the last tiles and nearly every row is HELD until then
+    (4.2 M of 4.4 M rows at razor inverted-L x16: a second value block).
+
+    Here the line is walked in a fixed order and each class is put in the
+    tile of the first column that asks any of its keys; the walk is cut
+    into tiles of about `_TILE_ROWS` new rows. A column's classes are then
+    all in its own tile or an earlier one, so it is ready at its own tile,
+    and a row is held only when a column in a later tile asks it too. The
+    walk orders the line by the ρ class of the ANCHOR group's key (the
+    group with most z values, whose rows outnumber the others' per key),
+    so the columns sharing an anchor key are adjacent; a run of them is
+    never cut, so the anchor's rows are never held. With mirror-symmetric
+    lines (radials at ±θ about a top wire's line) the partner columns share
+    the anchor key and with it the rows the mirror makes equal.
+
+    Every class is still whole in one tile, which is the whole of the bit
+    argument (`_ProductTiles`): the tiles' order and membership are a
+    locality choice."""
+    kid = plan.kid
+    n_groups, n_line = kid.shape
+    anchor = int(np.argmax(plan.nz))
+    a_cls = key_cls[kid[anchor]]
+    order = np.argsort(a_cls, kind="stable")
+    pos = np.empty(n_line, dtype=np.int64)
+    pos[order] = np.arange(n_line)
+    first = np.full(cls_rows.size, n_line, dtype=np.int64)
+    for g0, g1 in _group_spans(n_groups, n_line):
+        c = key_cls[kid[g0:g1]]
+        np.minimum.at(first, c.ravel(), np.broadcast_to(pos, c.shape).ravel())
+        del c
+    if np.any(first >= n_line):
+        raise AssertionError("a key class no line node asks")
+    new_at = np.bincount(first, weights=cls_rows, minlength=n_line)
+    start = np.cumsum(new_at) - new_at
+    t_pos = (start // max(1, int(_TILE_ROWS))).astype(np.int64)
+    a_walk = a_cls[order]
+    run = np.cumsum(np.concatenate(([True], a_walk[1:] != a_walk[:-1]))) - 1
+    run_head = np.flatnonzero(np.concatenate(([True], a_walk[1:] != a_walk[:-1])))
+    t_pos = t_pos[run_head][run]
+    _t, t_pos = np.unique(t_pos, return_inverse=True)
+    t_pos = np.asarray(t_pos).ravel()
+    return t_pos[first], t_pos[pos], int(_t.size)
 
 
 class _ProductTiles:
@@ -2414,11 +2481,17 @@ class _ProductTiles:
         for g, kj in enumerate(plan.kids):
             rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound
         cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=_r_u.size)
-        start = np.cumsum(cls_rows) - cls_rows
-        t_of_cls = (start // max(1, int(_TILE_ROWS))).astype(np.int64)
-        _t, t_of_cls = np.unique(t_of_cls, return_inverse=True)
-        self.tile_of_key = np.asarray(t_of_cls).ravel()[key_cls]
-        self.n_tiles = int(_t.size)
+        col_ready = None
+        if plan.slot == "z" and len(plan.rowtab) > 1 and _COLUMN_TILES:
+            t_of_cls, col_ready, self.n_tiles = _column_tiles(plan, key_cls, cls_rows)
+            _ROUTES["tile_column_products"] += 1
+        else:
+            start = np.cumsum(cls_rows) - cls_rows
+            t_of_cls = (start // max(1, int(_TILE_ROWS))).astype(np.int64)
+            _t, t_of_cls = np.unique(t_of_cls, return_inverse=True)
+            t_of_cls = np.asarray(t_of_cls).ravel()
+            self.n_tiles = int(_t.size)
+        self.tile_of_key = t_of_cls[key_cls]
         # Per group, its local keys sorted by tile.
         self._gkeys = []
         for kj in plan.kids:
@@ -2427,11 +2500,22 @@ class _ProductTiles:
             b = np.searchsorted(tl[o], np.arange(self.n_tiles + 1))
             self._gkeys.append((o, b))
         # The tile at which each below node's table column is complete.
-        tk = self.tile_of_key[plan.kid]  # (groups, line nodes)
-        if plan.slot == "z":
+        if col_ready is not None:
+            # `_column_tiles` names it; checked here against what serving
+            # needs, no row of the column in a later tile.
+            ready, may_hold = col_ready, False
+            for g0, g1 in _group_spans(*plan.kid.shape):
+                tk = self.tile_of_key[plan.kid[g0:g1]]
+                if np.any(tk > ready[None, :]):
+                    raise AssertionError("a column is served before its rows")
+                may_hold = may_hold or bool(np.any(tk < ready[None, :]))
+                del tk
+        elif plan.slot == "z":
+            tk = self.tile_of_key[plan.kid]  # (groups, line nodes)
             ready = tk.max(axis=0)
             may_hold = bool(np.any(tk < ready[None, :]))
         else:
+            tk = self.tile_of_key[plan.kid]  # (groups, line nodes)
             gmax = tk.max(axis=1)
             ready = gmax[plan.grank]
             may_hold = bool(np.any(tk < gmax[:, None]))
