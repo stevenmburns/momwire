@@ -89,6 +89,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -147,7 +148,22 @@ jobs:
       - run: pytest tests/ -m "not slow and not memgate and not integration"
         if: needs.changes.outputs.code == 'true'
         env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
+      # Per-test call durations (tests/time_budget.py writes them when
+      # MOMWIRE_DURATIONS_OUT is set). CI wall time never gates -- runners
+      # spread ~3x on the same code -- so one run's numbers decide nothing;
+      # scripts/test_durations.py takes the MEDIAN over many main runs at
+      # release time, and these artifacts are its input. always(): a red
+      # run's timings are still timings (the script reads green runs only).
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
       - name: Upload byte-oracle mismatch dumps (momwire#464)
         if: failure()
         uses: actions/upload-artifact@v7
@@ -205,6 +221,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -233,7 +250,16 @@ jobs:
       - run: pytest tests/ -m "not slow and not memgate"
         if: needs.changes.outputs.code == 'true'
         env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
           MOMWIRE_403_DUMP: ${{ github.workspace }}/464-dumps
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
       - name: Upload byte-oracle mismatch dumps (momwire#464)
         if: failure()
         uses: actions/upload-artifact@v7
@@ -265,6 +291,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -273,6 +300,16 @@ jobs:
       - run: pip install "setuptools>=61.0" wheel pybind11
       - run: pip install -e .[test] --no-build-isolation
       - run: pytest tests/ -m "integration and not slow and not memgate"
+        env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
 
   test-slow:
     needs: changes
@@ -299,6 +336,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -335,7 +373,16 @@ jobs:
       - run: pytest tests/ -m "slow and not memgate and not crossgate"
         if: needs.changes.outputs.code == 'true'
         env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
           MOMWIRE_532_DUMP: ${{ github.workspace }}/677-dumps
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
       # The gate is XFAIL, so a divergence leaves the job GREEN and the
       # artifact silent -- and an artifact nobody is told about only helps
       # someone who already suspected there was something to look at. Say it
@@ -384,6 +431,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -408,6 +456,16 @@ jobs:
       # measure impedances, not memory peaks, and parallelize fine.
       - run: pytest tests/ -m crossgate
         if: needs.changes.outputs.code == 'true'
+        env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
 
   test-memgate:
     needs: changes
@@ -427,6 +485,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -451,6 +510,16 @@ jobs:
       # box with concurrent workers; this lane opts out of addopts' xdist.
       - run: pytest tests/ -m memgate -n0
         if: needs.changes.outputs.code == 'true'
+        env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
 
   test-pynec:
     needs: changes
@@ -466,6 +535,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        id: py
         with:
           python-version: '3.12'
           cache: pip
@@ -502,3 +572,13 @@ jobs:
             --find-links https://github.com/stevenmburns/python-necpp/releases/expanded_assets/v1.7.6
       - run: pytest tests/test_pynec_backend.py -v
         if: needs.changes.outputs.code == 'true'
+        env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
+      - name: Upload per-test durations
+        if: always() && needs.changes.outputs.code == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
