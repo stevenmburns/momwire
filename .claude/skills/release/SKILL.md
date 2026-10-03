@@ -20,6 +20,28 @@ Publishing). Every step below was learned the hard way; do them in order.
    (the harness README has the commands). Every OUTCOME, MEM, TIME or Z flag
    is attributed to a PR that says so, or fixed, before the tag. The run's
    results file becomes the next release's baseline.
+4. **The default lane's cost is checked by MEDIAN, and moved before the
+   tag** (added 2026-10-03, when CI wall time stopped gating anything —
+   runners spread ~3x on the same code). Run
+   `python scripts/test_durations.py` (needs `gh`; it pulls the per-test
+   `durations-*` artifacts of the last 25 green main runs of `ci.yml` and
+   `wheels.yml`). Every default-lane test it lists as a slow-lane candidate
+   — median over the 5 s budget for some job/OS — moves to the `slow` lane
+   (or is made faster) in **its own PR**, merged before the bump PR. A
+   single run's long time is not a candidate; a median is. This step is
+   hygiene only: speed regressions are the sweep above's job (and, for
+   Windows, paired runs on the Windows box), never these numbers.
+5. **Record the workflow-efficiency numbers.** Run
+   `python scripts/ci_metrics.py --days <days since the last release>` and
+   compare with the previous release's numbers (put them in the bump PR's
+   body so the next release has them). Baseline, 2026-10-03, 30 days: 257
+   merged PRs; lead time median 0.2 h, p90 2.7 h; CI+wheels runs per PR
+   median 1, p90 3; 4 HARD-ceiling failures of 31 failed runs; default-lane
+   `test` job median 11.8 min. Since the ceiling stopped failing, its count
+   is zero by construction and measures nothing new — the guardrails that
+   matter after the change are the default-lane `test` job time (hygiene;
+   it should not creep while long tests are allowed to land) and the pre-tag
+   sweep's flags (performance).
 
 ## Steps
 
