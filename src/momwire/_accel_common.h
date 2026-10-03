@@ -117,9 +117,13 @@ constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 // across the grid. GCC (and MSVC's /openmp:llvm) keeps collapse(2).
 #if defined(_MSC_VER)
 #  define MW_OMP_PARALLEL_FOR_COLLAPSE2 _Pragma("omp parallel for schedule(static)")
+#  define MW_OMP_FOR_COLLAPSE2 _Pragma("omp for schedule(static)")
 #else
 #  define MW_OMP_PARALLEL_FOR_COLLAPSE2 \
        _Pragma("omp parallel for collapse(2) schedule(static)")
+// The work-sharing half alone, for a loop inside an `omp parallel` region
+// that keeps per-thread state across its iterations.
+#  define MW_OMP_FOR_COLLAPSE2 _Pragma("omp for collapse(2) schedule(static)")
 #endif
 
 // `omp simd` neutralization for MSVC. MSVC's /openmp:llvm (which we build with,
