@@ -455,6 +455,96 @@ static py::array_t<std::complex<double>> combine_rows(
     return out;
 }
 
+// A product chunk's table indices (`_ProductTiles._gather`), in one pass:
+// for grouped node a and line column c = cols[j] of a slot-"z" product,
+//
+//     row      = rowflat[base[a] + kl_rank[grank[a], c]]   (`chunk_idx`)
+//     li[a, j] = loc[row]                                  (its place in the tile)
+//     hp[a, j] = hpos[row] where li < 0, else -1           (its held slot)
+//     sidx     = row, when the V/W store is read           (`want_sidx`)
+//
+// Integers only: what it replaces is numpy's gathers of the same arrays,
+// and nothing is computed from a float. A row read before its tile with no
+// held slot is refused, as `_gather` refuses it.
+static py::tuple product_chunk_index(
+    py::array_t<int32_t, py::array::c_style> rowflat,
+    py::array_t<int32_t, py::array::c_style> kl_rank,  // (groups, line)
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> grank,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> base,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> cols,
+    py::array_t<int32_t, py::array::c_style> loc,
+    py::array_t<int32_t, py::array::c_style> hpos,  // empty: nothing held
+    bool want_sidx, int n_threads) {
+    if (kl_rank.ndim() != 2)
+        throw std::runtime_error("product_chunk_index: kl_rank must be 2-D");
+    const py::ssize_t nG = kl_rank.shape(0), nL = kl_rank.shape(1);
+    const py::ssize_t nA = grank.size(), nc = cols.size();
+    if (base.size() != nA)
+        throw std::runtime_error("product_chunk_index: one base per grouped node");
+    const py::ssize_t n_flat = rowflat.size(), n_rows = loc.size();
+    const bool have_h = hpos.size() != 0;
+    if (have_h && hpos.size() != n_rows)
+        throw std::runtime_error("product_chunk_index: hpos must match loc");
+    const int64_t *g = grank.data(), *b = base.data(), *cc = cols.data();
+    for (py::ssize_t a = 0; a < nA; ++a)
+        if (g[a] < 0 || g[a] >= nG)
+            throw std::runtime_error("product_chunk_index: group out of range");
+    for (py::ssize_t j = 0; j < nc; ++j)
+        if (cc[j] < 0 || cc[j] >= nL)
+            throw std::runtime_error("product_chunk_index: column out of range");
+    const int32_t *rf = rowflat.data(), *kl = kl_rank.data();
+    const int32_t *lp = loc.data(), *hq = have_h ? hpos.data() : nullptr;
+    py::array_t<int32_t> li(std::vector<py::ssize_t>{nA, nc});
+    py::array_t<int32_t> hp(std::vector<py::ssize_t>{nA, nc});
+    py::array_t<int64_t> sidx(want_sidx ? std::vector<py::ssize_t>{nA, nc}
+                                        : std::vector<py::ssize_t>{0, 0});
+    int32_t *L = li.mutable_data(), *H = hp.mutable_data();
+    int64_t *S = want_sidx ? sidx.mutable_data() : nullptr;
+    int bad = 0, any_miss = 0;
+    {
+        py::gil_scoped_release nogil;
+        int nt = 1;
+#ifdef _OPENMP
+        nt = omp_get_max_threads();
+        if (n_threads > 0) nt = std::min(nt, n_threads);
+#endif
+#pragma omp parallel for schedule(static) num_threads(nt) reduction(|:bad, any_miss)
+        for (py::ssize_t a = 0; a < nA; ++a) {
+            const int32_t *klr = kl + g[a] * nL;
+            for (py::ssize_t j = 0; j < nc; ++j) {
+                const int64_t f = b[a] + klr[cc[j]];
+                if (f < 0 || f >= n_flat) {
+                    bad |= 1;
+                    continue;
+                }
+                const int32_t row = rf[f];
+                if (row < 0 || row >= n_rows) {
+                    bad |= 1;
+                    continue;
+                }
+                const py::ssize_t q = a * nc + j;
+                const int32_t l = lp[row];
+                L[q] = l;
+                if (l >= 0) {
+                    H[q] = -1;
+                } else {
+                    any_miss |= 1;
+                    const int32_t h = have_h ? hq[row] : -1;
+                    if (h < 0) bad |= 2;
+                    H[q] = h;
+                }
+                if (S) S[q] = row;
+            }
+        }
+    }
+    if (bad & 1) throw std::runtime_error("product_chunk_index: index out of range");
+    if (bad & 2)
+        throw std::runtime_error(
+            "product_chunk_index: a ready column reads a row not in hand");
+    return py::make_tuple(li, any_miss ? py::object(hp) : py::object(py::none()),
+                          sidx);
+}
+
 }  // namespace left_gather
 
 void register_left_gather(py::module_ &m) {
@@ -469,6 +559,15 @@ void register_left_gather(py::module_ &m) {
           py::arg("indptrs"), py::arg("indices"), py::arg("data"),
           py::arg("n_threads"));
     m.attr("combine_rows_1290") = true;
+    m.def("product_chunk_index", &left_gather::product_chunk_index,
+          "A slot-z product chunk's table indices in one pass: li = "
+          "loc[row], hp = hpos[row] where li < 0 (None when no row misses), "
+          "and sidx = row when asked, for row = rowflat[base[a] + "
+          "kl_rank[grank[a], cols[j]]]. momwire#1290.",
+          py::arg("rowflat"), py::arg("kl_rank"), py::arg("grank"),
+          py::arg("base"), py::arg("cols"), py::arg("loc"), py::arg("hpos"),
+          py::arg("want_sidx"), py::arg("n_threads"));
+    m.attr("product_chunk_index_1290") = true;
     m.def("left_products_gathered", &left_gather::left_products_gathered,
           "The crossing main sandwich's six left products (P1 U, P2 U, "
           "P3 (k2 V + dz'W), P3 W, P4 W, P4 V) of four (n_out, nA) CSR "

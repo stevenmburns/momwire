@@ -2451,7 +2451,9 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     rowtab = cand_row
     off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.intp)
     if nG == 1 or not (slot == "z" and _PRODUCT_FLAT_MERGE):
-        rowflat = np.concatenate([t.ravel() for t in rowtab])
+        rowflat = np.concatenate([t.ravel() for t in rowtab]).astype(
+            _index_dtype(int(n_rows)), copy=False
+        )
     keys = _near_interface.KeyIndex(key_r, key_zl)
     cap = _PRODUCT_FAST_MAX_GROUPS
     fast = None
@@ -2712,6 +2714,19 @@ class _ProductTiles:
         # unfused route) gives it the V/W store; the fused route
         # (`_FusedEnds`) reads V and W inside the tiles and keeps none.
         self.store = None
+        # `_gather`'s index pass in C++ (`product_chunk_index`): the grouped
+        # nodes' row-table bases, when the plan's tables are 32-bit.
+        self._zbase = None
+        if (
+            plan.slot == "z"
+            and _CHUNK_INDEX_ACCEL
+            and _HAVE_CHUNK_INDEX_ACCEL
+            and plan.rowflat.dtype == np.int32
+            and plan.kl_rank.dtype == np.int32
+            and _index_dtype(U) == np.int32
+        ):
+            g = plan.grank
+            self._zbase = (plan.off[g] + plan.zl_rank * plan.nk[g]).astype(np.int64)
         self.product = _near_interface.ProductSet(
             plan.slot,
             None,
@@ -2839,6 +2854,29 @@ class _ProductTiles:
         floats, from this tile's block `tb` (by `loc`) or else the held store
         (by `hpos`) — U and dz′W always, and V and W too on the fused route;
         the unfused route reads V and W from the row-ordered store."""
+        if self._zbase is not None and _PRODUCT_NEG_CONTROL != "held":
+            hpos = self.hpos
+            li, hp_full, sidx = _accel.acc.product_chunk_index(
+                self.plan.rowflat,
+                self.plan.kl_rank,
+                self.plan.grank,
+                self._zbase,
+                cols,
+                loc,
+                _EMPTY_I32_1D if hpos is None else hpos,
+                self.store is not None,
+                _near_interface._physical_cpu_count(),
+            )
+            return _TileTables(
+                sidx if self.store is not None else None,
+                li,
+                None,
+                None,
+                tb,
+                held,
+                self.store,
+                hp_full=hp_full,
+            )
         idx = self.plan.chunk_idx(cols)
         li = loc[idx]
         miss = li < 0
@@ -2928,6 +2966,13 @@ _LEFT_GATHER = True
 _HAVE_LEFT_GATHER_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "left_gather_1224", False)
 )
+# A chunk's table indices in one C++ pass (`product_chunk_index`); False is
+# `chunk_idx` and numpy's gathers, the reference (the same integers).
+_CHUNK_INDEX_ACCEL = True
+_HAVE_CHUNK_INDEX_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "product_chunk_index_1290", False)
+)
+_EMPTY_I32_1D = np.zeros(0, dtype=np.int32)
 
 
 class _TileTables:
@@ -2942,12 +2987,15 @@ class _TileTables:
     store they read is written before and never after, so a late read (a
     caller that lists the chunks first) reads what an early one would."""
 
-    __slots__ = ("idx", "li", "miss", "hp", "tb", "held", "store")
+    __slots__ = ("idx", "li", "miss", "hp", "tb", "held", "store", "hp_full")
     _KEYS = ("U", "V", "W", "dzpW")
 
-    def __init__(self, idx, li, miss, hp, tb, held, store):
+    def __init__(self, idx, li, miss, hp, tb, held, store, hp_full=None):
+        # `hp_full` (`product_chunk_index`): the held slot of EVERY entry,
+        # -1 where the tile holds it, in place of the misses' `miss` / `hp`.
         self.idx, self.li, self.miss, self.hp = idx, li, miss, hp
         self.tb, self.held, self.store = tb, held, store
+        self.hp_full = hp_full
 
     def keys(self):
         return self._KEYS
@@ -2967,7 +3015,10 @@ class _TileTables:
         tb_keys = ("U", "dzpW") if self.store is not None else self._KEYS
         j = tb_keys.index(key)
         out = self.tb[self.li, j]
-        if self.miss is not None:
+        if self.hp_full is not None:
+            miss = self.li < 0
+            out[miss] = self.held[self.hp_full[miss], j]
+        elif self.miss is not None:
             out[self.miss] = self.held[self.hp, j]
         return out
 
@@ -2986,7 +3037,9 @@ class _TileTables:
             # coefficients complex): the kernel's matrices are real.
             return None
         hp = np.zeros((0, 0), dtype=np.int32)
-        if self.miss is not None:
+        if self.hp_full is not None:
+            hp = self.hp_full
+        elif self.miss is not None:
             hp = np.full(self.li.shape, -1, dtype=np.int32)
             hp[self.miss] = self.hp
         if self.store is None:

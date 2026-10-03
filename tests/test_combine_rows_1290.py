@@ -124,3 +124,52 @@ def test_razor_z_does_not_move(deck, monkeypatch):
     z_new, i_new = _solve(make, ("_assemble_Z",))
     assert calls, "the kernel never ran"
     z_within_rounding(z_new, z_ref, i_new, i_ref)
+
+
+@pytest.mark.skipif(
+    not cf._HAVE_CHUNK_INDEX_ACCEL, reason="the accelerator lacks product_chunk_index"
+)
+@pytest.mark.parametrize("deck", sorted(DECKS))
+def test_the_chunk_index_reads_the_same_floats(deck, monkeypatch):
+    """`product_chunk_index` is integers only -- `chunk_idx` and the loc /
+    hpos gathers in one pass -- so a chunk's tables are the same floats and
+    Z is the same bits, with the pass counted so the gate is not vacuous."""
+
+    def make():
+        return RazorSolver(**DECKS[deck](), nec5_quadrature=True)
+
+    monkeypatch.setattr(cf, "_CHUNK_INDEX_ACCEL", False)
+    z_ref, i_ref = _solve(make, ("_assemble_Z",))
+    monkeypatch.setattr(cf, "_CHUNK_INDEX_ACCEL", True)
+    calls = []
+    real = _accel.acc.product_chunk_index
+    seen = []
+    real_gather = cf._ProductTiles._gather
+
+    def counted(*a, **k):
+        calls.append(1)
+        return real(*a, **k)
+
+    def checked(self, cols, loc, tb, held):
+        got = real_gather(self, cols, loc, tb, held)
+        if self._zbase is not None:
+            idx = self.plan.chunk_idx(cols)
+            li = loc[idx]
+            assert np.array_equal(got.li, li)
+            want_hp = np.full(li.shape, -1)
+            if got.hp_full is not None:
+                want_hp[li < 0] = self.hpos[idx[li < 0]]
+                assert np.array_equal(got.hp_full, want_hp)
+            else:
+                assert not (li < 0).any()
+            if self.store is not None:
+                assert np.array_equal(got.idx, idx)
+            seen.append(cols.size)
+        return got
+
+    monkeypatch.setattr(_accel.acc, "product_chunk_index", counted)
+    monkeypatch.setattr(cf._ProductTiles, "_gather", checked)
+    z_new, i_new = _solve(make, ("_assemble_Z",))
+    assert calls and seen, (len(calls), len(seen))
+    assert np.array_equal(z_new, z_ref)
+    assert np.array_equal(i_new, i_ref)
