@@ -47,11 +47,12 @@ from pathlib import Path
 from ..deck import DeckError
 from ..deck._nec5 import parse_nec5
 from ..serve import Seam
-from . import _printout, _serve
+from . import _nec4, _printout, _serve
 
 __all__ = [
     "ARGUMENT_ERROR_INPUT",
     "ARGUMENT_ERROR_OUTPUT",
+    "DIALECTS",
     "main",
     "run",
     "seam",
@@ -67,6 +68,12 @@ ARGUMENT_ERROR_OUTPUT = "ERROR getting output file from command line"
 # takes; it is spelled symmetrically so a human reading a terminal sees which
 # half of the command line went missing.
 ARGUMENT_ERROR_INPUT = "ERROR getting input file from command line"
+
+# The two EZNEC slots this shell answers (momwire#1295): ``nec5`` is the
+# External NEC-5 slot every release has served, ``nec4`` the External NEC-4.2
+# one (`momwire.eznec._nec4`).  The process protocol is identical for both;
+# the program's NAME picks which deck dialect and printout answer it.
+DIALECTS = ("nec5", "nec4")
 
 # Decks and printouts are handled as bytes wearing a lossless 1-byte codec:
 # whatever a comment card holds has to survive into the echo unchanged, and a
@@ -205,8 +212,13 @@ def write_printout(printout_path: Path, text: str) -> None:
         handle.write(text)
 
 
-def render(text: str, *, basis: str = _serve.BASIS) -> str:
+def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
+
+    ``dialect`` is the EZNEC slot (:data:`DIALECTS`).  ``"nec4"`` hands the
+    whole deck to :func:`momwire.eznec._nec4.render`; everything below this
+    paragraph describes the ``"nec5"`` path, which it leaves untouched.  An
+    unknown dialect is a refusal naming it, like an unknown basis.
 
     ``basis`` picks which momwire formulation answers it (momwire#603 U3) and
     is passed straight to :func:`~momwire.eznec._serve.serve`, whose default
@@ -229,6 +241,13 @@ def render(text: str, *, basis: str = _serve.BASIS) -> str:
     a mesh, and still fails somewhere the seam has no sentence for.  That
     surfaces through :func:`main`'s last line of defence rather than here.
     """
+    if dialect == "nec4":
+        return _nec4.render(text, basis=basis)
+    if dialect != "nec5":
+        known = ", ".join(repr(name) for name in DIALECTS)
+        return _printout.render_refusal(
+            text, f"unknown EZNEC dialect {dialect!r}; known: {known}", basis=basis
+        )
     try:
         deck = parse_nec5(text)
     except DeckError as exc:
@@ -257,6 +276,7 @@ def run(
     printout_path: str | Path,
     *,
     basis: str = _serve.BASIS,
+    dialect: str = "nec5",
 ) -> str:
     """Serve one deck: read it, render a printout, write the printout.
 
@@ -277,13 +297,18 @@ def run(
             None, f"UNABLE TO READ INPUT FILE {deck}", basis=basis
         )
     else:
-        printout = render(text, basis=basis)
+        printout = render(text, basis=basis, dialect=dialect)
 
     write_printout(out, printout)
     return printout
 
 
-def main(argv: list[str] | None = None, *, basis: str = _serve.BASIS) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    basis: str = _serve.BASIS,
+    dialect: str = "nec5",
+) -> int:
     """The process entry point.  Returns 0.  Always returns 0.
 
     ``basis`` is not a command line flag and must not become one: the real
@@ -291,7 +316,8 @@ def main(argv: list[str] | None = None, *, basis: str = _serve.BASIS) -> int:
     exactly those.  It is here so that ONE frozen executable can be built per
     formulation (momwire#593) — the entry script names the basis, the process
     answers every deck in it, and EZNEC's engine-path setting is what
-    chooses.
+    chooses.  ``dialect`` is the same kind of choice and rides the same way
+    (momwire#1295): the launcher's name picks the EZNEC slot.
 
     Argument errors go to stdout and write no printout — that is what the real
     engine does, and it is the one case where writing a file would be wrong:
@@ -313,7 +339,7 @@ def main(argv: list[str] | None = None, *, basis: str = _serve.BASIS) -> int:
 
     deck_path, printout_path = args
     try:
-        run(deck_path, printout_path, basis=basis)
+        run(deck_path, printout_path, basis=basis, dialect=dialect)
     except Exception as exc:  # noqa: BLE001 - the last line of defence
         # A traceback on stderr would be invisible (EZNEC captures neither
         # stderr nor the exit code), and a missing file would be read as a
@@ -359,7 +385,7 @@ def _internal_error_reason(exc: BaseException) -> str:
     return f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
 
 
-def seam(*, basis: str = _serve.BASIS) -> Seam:
+def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
     """This dialect as a :class:`momwire.serve.Seam` (momwire#719 U4).
 
     The eznec contract is the session loop's degenerate case: no greeting, no
@@ -374,7 +400,8 @@ def seam(*, basis: str = _serve.BASIS) -> Seam:
     ``basis`` is the per-engine formulation exactly as :func:`main` takes it
     (momwire#593: one frozen executable per formulation, the filename names
     the basis) — a resident server hosting several engine variants holds one
-    seam per basis.
+    seam per basis.  ``dialect`` is the EZNEC slot, per server like the
+    basis (momwire#1295).
 
     The :class:`~momwire.serve.Seam` invariant — ``answer`` never raises —
     is kept the same way :func:`main` keeps exit 0: anything
@@ -385,7 +412,7 @@ def seam(*, basis: str = _serve.BASIS) -> Seam:
 
     def answer(body: str, terminator: str) -> tuple[str, str]:
         try:
-            return render(body, basis=basis), ""
+            return render(body, basis=basis, dialect=dialect), ""
         except Exception as exc:  # noqa: BLE001 - the seam's last line of defence
             return (
                 _printout.render_refusal(
