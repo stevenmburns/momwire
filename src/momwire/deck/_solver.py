@@ -266,6 +266,51 @@ def basis_from_program_name(
     return suffix
 
 
+# The program-name marker that selects the nec4 dialect (momwire#1295): EZNEC's
+# External NEC-4.2 slot passes two file paths and nothing else, so the
+# executable's NAME is the only signal, as it already is for the basis.
+NEC4_MARKER = "nec4"
+
+
+def _program_stem(prog: str) -> str:
+    """``prog``'s basename, casefolded, a Windows ``.exe`` stripped — the
+    name :func:`basis_from_program_name` reads, for the same reasons."""
+    name = prog.replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    return name[:-4] if name.endswith(".exe") else name
+
+
+def dialect_from_program_name(prog: str) -> str:
+    """``"nec4"`` when the program's name carries :data:`NEC4_MARKER`, else
+    ``"nec5"`` — the EZNEC drop-in's two slots (momwire#1295).
+
+    A substring test, casefolded, so a renamed copy (``My-NEC4-engine.exe``)
+    still answers the slot its name claims; the NEC-5 names
+    (``momwire-eznec*``, ``momwire-nec5*``) can never carry it.
+    """
+    return "nec4" if NEC4_MARKER in _program_stem(prog) else "nec5"
+
+
+def nec4_basis_from_program_name(prog: str) -> str | None:
+    """The basis a nec4 program name selects, or ``None`` for the default.
+
+    ``<anything>nec4`` ends the name: the default.  ``<anything>nec4-<basis>``
+    names ``<basis>``, and ``<anything>nec4-`` names the empty basis, which
+    :func:`basis_from_program_name` already treats as a typo to refuse rather
+    than as the default.  Any other continuation is returned whole as the
+    suffix — ``momwire-nec42`` names the basis ``"2"`` — so it reaches the
+    refusal by name: an unknown suffix never falls back silently (momwire#628).
+    A name without the marker returns ``None``; the caller has already
+    decided the dialect with :func:`dialect_from_program_name`.
+    """
+    name = _program_stem(prog)
+    if NEC4_MARKER not in name:
+        return None
+    rest = name.split(NEC4_MARKER, 1)[1]
+    if rest == "":
+        return None
+    return rest[1:] if rest.startswith("-") else rest
+
+
 def port_kwargs(
     solver_class: type,
     *,

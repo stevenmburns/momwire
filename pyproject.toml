@@ -126,6 +126,20 @@ momwire-nec5-bspline-d1 = "momwire_eznec_client:main"
 momwire-nec5-sinusoidal-galerkin = "momwire_eznec_client:main"
 momwire-nec5-hmatrix = "momwire_eznec_client:main"
 momwire-nec5-arrayblock = "momwire_eznec_client:main"
+# The NEC-4.2 family (momwire#1295): the same thin client under names carrying
+# `nec4`, which select EZNEC's External NEC-4.2 slot and its segment-centre
+# deck dialect. The roster is the centre-feeding bases (`deck.NEC2_BASES`);
+# plain `momwire-nec4` is bspline, and `-sinusoidal` is point matching, the
+# basis family NEC-4.2 itself belongs to. No razor name: razor places gaps at
+# knots only, and a renamed razor copy refuses by name in the printout.
+momwire-nec4 = "momwire_eznec_client:main"
+momwire-nec4-sinusoidal = "momwire_eznec_client:main"
+momwire-nec4-bspline = "momwire_eznec_client:main"
+momwire-nec4-bspline-d1 = "momwire_eznec_client:main"
+momwire-nec4-sinusoidal-galerkin = "momwire_eznec_client:main"
+momwire-nec4-hmatrix = "momwire_eznec_client:main"
+momwire-nec4-arrayblock = "momwire_eznec_client:main"
+momwire-nec4-pulse = "momwire_eznec_client:main"
 # The named engines (momwire#528): every basis as its own command, so a
 # filename-only host dialog (SimNEC's, and Windows generally — no symlinks
 # needed) selects the solver by pointing at the right name. No code behind

@@ -62,8 +62,9 @@ def test_no_name_offers_a_basis_that_refuses_nec5_decks():
 def test_the_basis_rides_on_the_name(prog, basis, monkeypatch, tmp_path):
     seen = {}
 
-    def served(deck_bytes, b, idle):
+    def served(deck_bytes, b, idle, dialect):
         seen["basis"] = b
+        seen["dialect"] = dialect
         return b"ok"
 
     monkeypatch.setattr(eznec_client, "_served_bytes", served)
@@ -72,6 +73,7 @@ def test_the_basis_rides_on_the_name(prog, basis, monkeypatch, tmp_path):
     monkeypatch.setattr("sys.argv", [prog, str(deck), str(out)])
     assert eznec_client.main(None) == 0
     assert seen["basis"] == basis
+    assert seen["dialect"] == "nec5"
 
 
 def test_the_version_probe_answers_under_a_nec5_name(capsys, monkeypatch):

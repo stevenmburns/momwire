@@ -53,6 +53,9 @@ _CLIENT_SEGMENT = "client"
 # `momwire-nec5[-<basis>]` is the family SimNEC's NEC command setting points
 # at; the basis rides past this marker exactly as it rides past `eznec-`.
 _NEC5_MARKER = "nec5-"
+# momwire#1295: a name carrying `nec4` (`momwire-nec4[-<basis>]`) answers
+# EZNEC's External NEC-4.2 slot. It is read FIRST and alone: the dialect is the
+# engine's identity, and the basis then rides past `nec4` only.
 
 DEFAULT_IDLE_TIMEOUT = 900.0
 
@@ -64,7 +67,7 @@ ARGUMENT_ERROR_OUTPUT = "UNABLE TO OPEN SECOND FILE"
 _RECV_CHUNK = 65536
 
 
-def config_key(basis: str | None, idle_timeout: float) -> str:
+def config_key(basis: str | None, idle_timeout: float, dialect: str = "nec5") -> str:
     """One warm server per formulation per install — the identity rule the
     portal's client established (#379): momwire version, interpreter, basis
     and idle policy are the engine; anything resident under a different
@@ -76,20 +79,29 @@ def config_key(basis: str | None, idle_timeout: float) -> str:
     the same element) is wrong. ``"default"`` and ``f"basis={basis}"`` cannot
     collide for any ``basis`` string, because only the second spelling can
     ever start with ``"basis="``.
+
+    momwire#1295: the EZNEC slot is identity too — a NEC-5 server must never
+    answer a NEC-4.2 deck — so a nec4 key carries ``"dialect=nec4"`` ahead of
+    the basis element.  A nec5 key carries nothing new and is the key it was.
     """
     major, minor = _mech.dist_version()
-    return _mech.digest(
-        [
-            f"eznec.{major}.{minor}",
-            os.path.realpath(sys.executable),
-            f"{idle_timeout!r}",
-            "default" if basis is None else f"basis={basis}",
-        ]
-    )
+    elements = [
+        f"eznec.{major}.{minor}",
+        os.path.realpath(sys.executable),
+        f"{idle_timeout!r}",
+    ]
+    if dialect != "nec5":
+        elements.append(f"dialect={dialect}")
+    elements.append("default" if basis is None else f"basis={basis}")
+    return _mech.digest(elements)
 
 
 def _server_command(
-    path: str, basis: str | None, idle_timeout: float, log_path: str
+    path: str,
+    basis: str | None,
+    idle_timeout: float,
+    log_path: str,
+    dialect: str = "nec5",
 ) -> list[str]:
     command = [
         sys.executable,
@@ -108,15 +120,21 @@ def _server_command(
         # NAMED basis, not "no basis" — it must reach ``serve_main``'s own
         # per-deck refusal, not round to the default engine (momwire#733).
         command += ["--basis", basis]
+    if dialect != "nec5":
+        command += ["--dialect", dialect]
     return command
 
 
-def _served_bytes(deck_bytes: bytes, basis: str | None, idle_timeout: float) -> bytes:
+def _served_bytes(
+    deck_bytes: bytes, basis: str | None, idle_timeout: float, dialect: str = "nec5"
+) -> bytes:
     """The printout bytes, answered warm — rungs 1 and 2 of the ladder."""
-    path = _mech.socket_path(config_key(basis, idle_timeout))
+    path = _mech.socket_path(config_key(basis, idle_timeout, dialect))
     log_path = f"{path}.log"
     conn = _mech.obtain(
-        path, _server_command(path, basis, idle_timeout, log_path), log_path
+        path,
+        _server_command(path, basis, idle_timeout, log_path, dialect),
+        log_path,
     )
     try:
         conn.sendall(deck_bytes)
@@ -139,7 +157,9 @@ def _served_bytes(deck_bytes: bytes, basis: str | None, idle_timeout: float) -> 
     return answer
 
 
-def _one_shot(deck_path: str, printout_path: str, basis: str | None) -> None:
+def _one_shot(
+    deck_path: str, printout_path: str, basis: str | None, dialect: str = "nec5"
+) -> None:
     """Rung 3: the stock one-shot, correct at today's speed.
 
     A child process rather than an import because this module's reason to
@@ -149,17 +169,23 @@ def _one_shot(deck_path: str, printout_path: str, basis: str | None) -> None:
     import subprocess
 
     command = [sys.executable, "-m", "momwire.eznec", deck_path, printout_path]
+    kwargs = []
     if basis is not None:
         # The module entry has no basis flag (EZNEC's argv contract); the
         # frozen twin exes select it by NAME (#643), and this client's
         # subprocess spelling is the -c equivalent of that entry. An empty
         # ``basis`` is a NAMED (empty) basis and must travel verbatim to
         # ``_shell.main``'s own refusal, not round to the default (#733).
+        kwargs.append(f"basis={basis!r}")
+    if dialect != "nec5":
+        # The EZNEC slot rides the same way, for the same reason (#1295).
+        kwargs.append(f"dialect={dialect!r}")
+    if kwargs:
         command = [
             sys.executable,
             "-c",
             "import sys; from momwire.eznec._shell import main; "
-            f"sys.exit(main(sys.argv[1:], basis={basis!r}))",
+            f"sys.exit(main(sys.argv[1:], {', '.join(kwargs)}))",
             deck_path,
             printout_path,
         ]
@@ -214,14 +240,17 @@ def main(argv: list[str] | None = None) -> int:
         print(ARGUMENT_ERROR_OUTPUT)
         return 0
     deck_path, printout_path = args
-    basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
-    if basis is None:
-        basis = _mech.filename_basis(prog, _NEC5_MARKER)
+    is_nec4, basis = _mech.filename_nec4(prog)
+    dialect = "nec4" if is_nec4 else "nec5"
+    if not is_nec4:
+        basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
+        if basis is None:
+            basis = _mech.filename_basis(prog, _NEC5_MARKER)
 
     try:
         with open(deck_path, "rb") as handle:
             deck_bytes = handle.read()
-        answer = _served_bytes(deck_bytes, basis, DEFAULT_IDLE_TIMEOUT)
+        answer = _served_bytes(deck_bytes, basis, DEFAULT_IDLE_TIMEOUT, dialect)
         with open(printout_path, "wb") as handle:
             handle.write(answer)
         return 0
@@ -229,7 +258,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     try:
-        _one_shot(deck_path, printout_path, basis)
+        _one_shot(deck_path, printout_path, basis, dialect)
     except Exception as exc:  # noqa: BLE001 - the printout is the only channel EZNEC reads; refuse in it, exit 0
         _last_ditch(
             printout_path,

@@ -131,6 +131,13 @@ typedef int lock_t;
  * `_NEC5_MARKER` rule, spelt again here for the copy that drifts. */
 #define NEC5_MARKER "nec5-"
 
+/* momwire#1295: a name carrying `nec4` (`momwire-nec4[-<basis>]`) answers
+ * EZNEC's External NEC-4.2 slot.  Read FIRST and alone -- the slot is the
+ * engine's identity, and the basis then rides past `nec4` only -- by the rule
+ * `momwire_serve_client.filename_nec4` spells, copied here whole. */
+#define NEC4_MARKER "nec4"
+#define NEC4_KEY_ELEMENT "dialect=nec4"
+
 /* SimNEC's configure step runs `"<path>" -version` on a nec5 engine, takes
  * exit 0 with any first line, and records one matching `NEC<digits><non-
  * digit>...` as the version.  `momwire_eznec_client.probe_version`'s line. */
@@ -554,8 +561,13 @@ static void resolve_path(const char *path, char *out, size_t cap)
  *
  * Returns 1 when the name selected a basis (`out` may then be empty), 0 when
  * it named none.  ASCII lowering is the whole of the casefold here: the
- * names are ours and a Windows rename is the only thing that recases them. */
-static int basis_of(const char *argv0, char *out, size_t cap)
+ * names are ours and a Windows rename is the only thing that recases them.
+ *
+ * `*nec4` is set when the name carries NEC4_MARKER (momwire#1295).  Such a
+ * name reads its basis past the marker alone: nothing after it is the
+ * default, `-<basis>` names one, and any other continuation (`nec42`) is
+ * returned whole so it reaches the engine's refusal by name. */
+static int basis_of(const char *argv0, char *out, size_t cap, int *nec4)
 {
     char name[PATH_CAP];
     const char *base = argv0;
@@ -563,6 +575,7 @@ static int basis_of(const char *argv0, char *out, size_t cap)
     const char *suffix;
     size_t i, len;
 
+    *nec4 = 0;
     /* Both separators on every platform: `filename_basis` normalises
      * backslashes before it splits, so a Windows-shaped argv[0] read on a
      * POSIX box names the same file. */
@@ -582,6 +595,23 @@ static int basis_of(const char *argv0, char *out, size_t cap)
     len = strlen(name);
     if (len >= 4 && strcmp(name + len - 4, ".exe") == 0) {
         name[len - 4] = '\0';
+    }
+
+    marker = strstr(name, NEC4_MARKER);
+    if (marker != NULL) {
+        *nec4 = 1;
+        suffix = marker + strlen(NEC4_MARKER);
+        if (suffix[0] == '\0') {
+            out[0] = '\0';
+            return 0;
+        }
+        if (suffix[0] == '-') {
+            suffix++;
+        }
+        if (copy_str(out, cap, suffix) != 0) {
+            out[0] = '\0';
+        }
+        return 1;
     }
 
     marker = strstr(name, FILENAME_MARKER);
@@ -764,8 +794,12 @@ static int runtime_dir(char *out, size_t cap)
  * `basis` alone) is therefore the thing hashed: `"default"` when the name
  * selected nothing, `"basis=" + basis` when it did (empty suffix included).
  * The two spellings can never collide, for any `basis` string, because only
- * the second one can ever begin with `"basis="`. */
-static void config_key(const char *engine_resolved, int named_basis,
+ * the second one can ever begin with `"basis="`.
+ *
+ * momwire#1295: a NEC-4.2-slot name hashes NEC4_KEY_ELEMENT ahead of the
+ * basis element, so its server is never a NEC-5 one; a NEC-5 name's key is
+ * the key it always was. */
+static void config_key(const char *engine_resolved, int nec4, int named_basis,
                        const char *basis, char out[17])
 {
     static const char nul = '\0';
@@ -782,6 +816,10 @@ static void config_key(const char *engine_resolved, int named_basis,
     sha256_update(&hash, &nul, 1);
     sha256_update(&hash, IDLE_TIMEOUT_REPR, strlen(IDLE_TIMEOUT_REPR));
     sha256_update(&hash, &nul, 1);
+    if (nec4) {
+        sha256_update(&hash, NEC4_KEY_ELEMENT, strlen(NEC4_KEY_ELEMENT));
+        sha256_update(&hash, &nul, 1);
+    }
     if (named_basis) {
         sha256_update(&hash, basis_prefix, strlen(basis_prefix));
         sha256_update(&hash, basis, strlen(basis));
@@ -1428,6 +1466,7 @@ typedef struct {
     char engine_key[PATH_CAP];  /* its resolved path -- a hash input */
     char basis[256];            /* the suffix this name selected */
     int named_basis;            /* whether the name selected one at all */
+    int nec4;                   /* whether the name selects the NEC-4.2 slot */
     char unix_path[PATH_CAP];   /* <runtime>/<key>.sock */
     char tcp_path[PATH_CAP];    /* <runtime>/<key>.port */
     char address[PATH_CAP];     /* the one this client would SPAWN on */
@@ -1487,12 +1526,14 @@ static int plan(setup_t *setup, const char *argv0)
         return -1;
     }
     resolve_path(setup->engine, setup->engine_key, sizeof setup->engine_key);
-    setup->named_basis = basis_of(argv0, setup->basis, sizeof setup->basis);
+    setup->named_basis =
+        basis_of(argv0, setup->basis, sizeof setup->basis, &setup->nec4);
 
     if (runtime_dir(runtime, sizeof runtime) != 0) {
         return -1;
     }
-    config_key(setup->engine_key, setup->named_basis, setup->basis, key);
+    config_key(setup->engine_key, setup->nec4, setup->named_basis, setup->basis,
+               key);
 
     if (snprintf(setup->unix_path, sizeof setup->unix_path, "%s%c%s%s", runtime,
                  DIR_SEP, key, UNIX_SUFFIX) >= (int)sizeof setup->unix_path ||
@@ -1519,7 +1560,7 @@ static int plan(setup_t *setup, const char *argv0)
  * name it is handed, so the pin and the name are set together or not at all. */
 static proc_t spawn_daemon(const setup_t *setup)
 {
-    char *args[12];
+    char *args[14];
     int n = 0;
 
     if (!file_exists(setup->engine)) {
@@ -1547,6 +1588,10 @@ static proc_t spawn_daemon(const setup_t *setup)
          * it wrong must reach the engine's refusal by that name. */
         args[n++] = (char *)"--basis";
         args[n++] = (char *)setup->basis;
+    }
+    if (setup->nec4) {
+        args[n++] = (char *)"--dialect";
+        args[n++] = (char *)"nec4";
     }
     args[n] = NULL;
     return launch(setup->engine, args, setup->log_path, 1);
@@ -1696,7 +1741,7 @@ static int served(const setup_t *setup, const char *deck_path,
 static int one_shot(const setup_t *setup, const char *deck_path,
                     const char *printout_path)
 {
-    char *args[6];
+    char *args[8];
     int n = 0;
     proc_t child;
     int status;
@@ -1709,6 +1754,10 @@ static int one_shot(const setup_t *setup, const char *deck_path,
     if (setup->named_basis) {
         args[n++] = (char *)"--basis";
         args[n++] = (char *)setup->basis;
+    }
+    if (setup->nec4) {
+        args[n++] = (char *)"--dialect";
+        args[n++] = (char *)"nec4";
     }
     args[n++] = (char *)deck_path;
     args[n++] = (char *)printout_path;
