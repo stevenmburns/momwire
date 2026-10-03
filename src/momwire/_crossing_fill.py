@@ -2104,6 +2104,79 @@ class _ProductPlan(NamedTuple):
         return self.kid[self.grank[cols][None, :], np.arange(self.nA)[:, None]]
 
 
+class _KeyLine:
+    """The plan's folded ρ line `line[g, n]`, read through its keys as
+    `key_r[kid[g, n]]` rather than held as a (groups, line) float block: a
+    key is one exact-`==` class of positive floats, so every member is its
+    representative to the bit."""
+
+    __slots__ = ("key_r", "kid")
+
+    def __init__(self, key_r, kid):
+        self.key_r, self.kid = key_r, kid
+
+    @property
+    def shape(self):
+        return self.kid.shape
+
+    def __getitem__(self, idx):
+        return self.key_r[self.kid[idx]]
+
+
+# The multi-group merge of a product grouped ABOVE numbers its rows by one
+# hash pass over the candidates in grid order (`_merge_groups_z`). False is
+# the lexsort spelling it replaced, the in-process reference: the same row
+# ids, by the argument there.
+_PRODUCT_FLAT_MERGE = True
+
+
+def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
+    """`(n_rows, kept_pos, rowflat, rowtab)` of a slot-"z" product of
+    several groups: the rows numbered by first grid appearance, each row's
+    flat grid position, and the candidates' rows in the plan's group-major
+    layout (`rowtab[g]` a view of `rowflat`).
+
+    The candidates of group g are (z id of zfirst[g][i], key of
+    kfirst[g][j]) at grid position zfirst[g][i]·nB + kfirst[g][j]. Every
+    grouped node is in one group, so the zfirst nodes are distinct, and
+    walking them ascending, each with its group's kfirst (ascending), visits
+    the candidates in ascending grid position. Numbering the codes z·n_key +
+    key by first appearance on that walk (`_first_ints`) is then numbering
+    each distinct triple by its smallest position: the lexsort spelling's
+    row ids, without a sort over the candidates."""
+    nG = len(zids)
+    g_of = np.repeat(np.arange(nG), nz)
+    zl_of = np.concatenate([np.arange(n) for n in nz.tolist()])
+    a_of = np.concatenate(zfirst)
+    o = np.argsort(a_of, kind="stable")
+    g_s, zl_s, a_s = g_of[o], zl_of[o], a_of[o]
+    lens = nk[g_s]
+    bstart = np.concatenate(([0], np.cumsum(lens)[:-1])).astype(np.int64)
+    n_cand = int(lens.sum())
+    codes = np.empty(n_cand, dtype=np.int64)
+    n_key = np.int64(n_key)
+    for i, (g, zl) in enumerate(zip(g_s.tolist(), zl_s.tolist())):
+        b0 = bstart[i]
+        codes[b0 : b0 + lens[i]] = zids[g][zl] * n_key + kids[g]
+    first, inv = _first_ints(codes)
+    del codes
+    off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.int64)
+    rowflat = np.empty(n_cand, dtype=_index_dtype(first.size))
+    for i, (g, zl) in enumerate(zip(g_s.tolist(), zl_s.tolist())):
+        d0, b0 = off[g] + zl * nk[g], bstart[i]
+        rowflat[d0 : d0 + nk[g]] = inv[b0 : b0 + nk[g]]
+    del inv
+    blk = np.searchsorted(bstart, first, side="right") - 1
+    koff = np.concatenate(([0], np.cumsum(nk)[:-1])).astype(np.int64)
+    b = np.concatenate(kfirst)[koff[g_s[blk]] + (first - bstart[blk])]
+    kept_pos = a_s[blk].astype(np.int64) * nB + b
+    rowtab = [
+        rowflat[off[g] : off[g] + nz[g] * nk[g]].reshape(nz[g], nk[g])
+        for g in range(nG)
+    ]
+    return int(first.size), kept_pos, rowflat, rowtab
+
+
 def _xy_index(nodes):
     """{(x, y): [node indices, ascending]} of an (n, 3) node array, keyed on
     the floats (−0.0 with 0.0, as a dict keys them)."""
@@ -2185,15 +2258,31 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         raw = np.hypot(x0[:, None] - L[None, :, 0], y0[:, None] - L[None, :, 1])
     else:
         raw = np.hypot(L[None, :, 0] - x0[:, None], L[None, :, 1] - y0[:, None])
-    line = _near_interface.radius_fold(raw, float(ctx.a_wire))
+    keep_raw = nG <= _PRODUCT_FAST_RAW_GROUPS
+    if keep_raw:
+        line = _near_interface.radius_fold(raw, float(ctx.a_wire))
+    else:
+        # `radius_fold` in place: the same ufunc on the same floats, and the
+        # (groups, line) raw block is not kept past it (`_raw_row`).
+        line = np.hypot(raw, float(ctx.a_wire), out=raw)
+        raw = None
     zf, zid = _first_groups(gzv)
     kf, kid = _first_groups(line.ravel(), np.broadcast_to(lzv, line.shape).ravel())
-    kid = kid.reshape(nG, nL)
+    # The (groups, line) index blocks in 32 bits when they fit: they and the
+    # row table are the plan's O(groups x line) part (momwire#1224).
+    kid = kid.reshape(nG, nL).astype(_index_dtype(kf.size), copy=False)
+    key_r = line.ravel()[kf]
+    key_zl = lzv[kf % nL]
+    # Every line value of key k is key_r[k] to the bit (equal under `==` and
+    # positive, as rho_eff >= a > 0), so the plan reads its line through the
+    # keys and the folded block goes here.
+    del line
+    line = _KeyLine(key_r, kid)
     # Per group: members (ascending), local z and key ranks, candidates.
     members = np.argsort(grank, kind="stable")
     bounds = np.concatenate(([0], np.cumsum(np.bincount(grank, minlength=nG))))
     zl_rank = np.empty(G.shape[0], dtype=np.intp)
-    kl_rank = np.empty((nG, nL), dtype=np.intp)
+    kl_rank = np.empty((nG, nL), dtype=_index_dtype(nL))
     zids, kids, zfirst, kfirst, nz, nk = [], [], [], [], [], []
     for g in range(nG):
         m_g = members[bounds[g] : bounds[g + 1]]
@@ -2236,6 +2325,10 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             raise AssertionError("one group's candidates are not in grid order")
         del pos1
         n_rows = n_cand
+    elif slot == "z" and _PRODUCT_FLAT_MERGE:
+        n_rows, kept_pos, rowflat, cand_row = _merge_groups_z(
+            zids, kids, zfirst, kfirst, nz, nk, kf.size, nB
+        )
     else:
         n_key = kf.size
         codes = np.concatenate(
@@ -2265,9 +2358,8 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     # value row is its row.
     rowtab = cand_row
     off = np.concatenate(([0], np.cumsum(nz * nk)[:-1])).astype(np.intp)
-    rowflat = np.concatenate([t.ravel() for t in rowtab])
-    key_r = line.ravel()[kf]
-    key_zl = np.broadcast_to(lzv, line.shape).ravel()[kf]
+    if nG == 1 or not (slot == "z" and _PRODUCT_FLAT_MERGE):
+        rowflat = np.concatenate([t.ravel() for t in rowtab])
     keys = _near_interface.KeyIndex(key_r, key_zl)
     cap = _PRODUCT_FAST_MAX_GROUPS
     fast = None
@@ -2280,7 +2372,7 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             zl_rank=zl_rank,
             line_z=lzv,
             gfirst=gfirst,
-            raw=raw if nG <= _PRODUCT_FAST_RAW_GROUPS else None,
+            raw=raw,
             gxy=np.stack([x0, y0], axis=1),
             line_nodes=L,
             line=line,
@@ -2541,6 +2633,7 @@ class _ProductTiles:
             kernels=("V", "W"),
             n_rows=U,
             key_index=plan.keys,
+            by_group=len(plan.rowtab) > 1,
         )
         self.product.complete = False
         self.product.fast = plan.fast
