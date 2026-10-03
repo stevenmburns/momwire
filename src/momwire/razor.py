@@ -453,6 +453,11 @@ _HAVE_RAZOR_ASSEMBLE_ACCEL = _acc is not None and bool(
 # The fused T2 rows and final combination (momwire#1290), on its OWN symbol:
 # a .so built before it exports every kernel above and not this one.
 _HAVE_RAZOR_T2_ACCEL = _acc is not None and bool(getattr(_acc, "razor_t2_1290", False))
+# The T1 assemblers' `obs_row` (momwire#1290): a window's repeated observers
+# read one moment row each.
+_HAVE_RAZOR_T1_ROWS_ACCEL = _acc is not None and bool(
+    getattr(_acc, "razor_t1_rows_1290", False)
+)
 _HAVE_RAZOR_Q_ACCEL = _acc is not None and bool(
     getattr(_acc, "razor_q_rows_1290", False)
 )
@@ -5268,24 +5273,35 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # Under NEC-5's path rule the window's T1 observers are the
                 # centroids of its wings (`_testing_paths`), each one twice
                 # (once per basis it ends), and T2 reads the same centroids:
-                # each is evaluated once, by the centroid token, and the T1
-                # rows are gathered from it. A moment row is a function of
-                # its observer alone (`_FusedMoments.rows`), and these are the
-                # same floats `cent` gives both prepares.
+                # each is evaluated once, by the centroid token, and T1 reads
+                # its observers' rows through `obs_row` (the assemblers) or a
+                # gather (numpy). A moment row is a function of its observer
+                # alone (`_FusedMoments.rows`), and these are the same floats
+                # `cent` gives both prepares.
                 need = np.unique(np.concatenate([s_a[lo:hi], s_b[lo:hi]]))
-                M0U, M1U = (
+                M0, M1 = (
                     sources["t2_chunks"]
                     .take(need)
                     .evaluate(self, k, need_m1=True, n_obs=need.size)
                 )
-                r = np.searchsorted(
+                obs_row = np.searchsorted(
                     need, np.stack([s_a[lo:hi], s_b[lo:hi]], axis=1).ravel()
                 )
-                M0, M1 = M0U[r], M1U[r]
-                del r, M1U
-                shared[0] = (lo, hi, need, M0U)
+                shared[0] = (lo, hi, need, M0)
             else:
                 M0, M1 = self._seg_moments_from_prepared(static, k, n_obs_chunk)
+                obs_row = None
+            by_rows = obs_row is not None and _HAVE_RAZOR_T1_ROWS_ACCEL
+            if obs_row is not None and not (
+                by_rows
+                and (
+                    (w_A_fn is None and _use_razor_assemble_accel())
+                    or w_rule is not None
+                )
+            ):
+                M0, M1 = M0[obs_row], M1[obs_row]
+                obs_row = None
+            t1_rows = {} if obs_row is None else {"obs_row": obs_row}
             if w_A_fn is None and _use_razor_assemble_accel():
                 # momwire#780: the gather, the falling-wing correction, the
                 # tangent contraction, the weighting and the path-point sum in
@@ -5312,6 +5328,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     td_b,
                     wts[lo:hi].reshape(-1),
                     n_path,
+                    **t1_rows,
                 )
             elif w_rule is not None:
                 # momwire#744, extended to the composing ground by #806: the
@@ -5352,6 +5369,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     w_rule.eps_t,
                     w_rule.ground_z,
                     w_rule.coefficient,
+                    **t1_rows,
                 )
             else:
                 mom_a = M1[:, s_a] / h_a[None, :]

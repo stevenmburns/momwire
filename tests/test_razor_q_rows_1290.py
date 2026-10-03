@@ -147,3 +147,63 @@ def test_the_fill_is_the_numpy_routes(deck, monkeypatch):
     got = _z(deck)
     assert calls, "the kernel never ran"
     assert np.abs(got - ref).max() <= BAR_ROUTE * np.abs(ref).max()
+
+
+@pytest.mark.skipif(
+    not _razor._HAVE_RAZOR_T1_ROWS_ACCEL,
+    reason="accelerator without razor_t1_rows_1290",
+)
+def test_the_t1_assemblers_read_rows_through_the_map():
+    """`obs_row` reads observer o's moments at row obs_row[o]: the T1 of the
+    gathered planes, to the bit (only an index moves), in both
+    assemblers, and a row off the planes is refused."""
+    rng = np.random.default_rng(744)
+    n_u, n_seg, n_basis, n_path, n_rows = 9, 13, 11, 2, 7
+    n_obs = n_rows * n_path
+    cplx = lambda *s: rng.standard_normal(s) + 1j * rng.standard_normal(s)  # noqa: E731
+    M0, M1 = cplx(n_u, n_seg), cplx(n_u, n_seg)
+    row = rng.integers(0, n_u, n_obs)
+    s_a, s_b = rng.integers(0, n_seg, n_basis), rng.integers(0, n_seg, n_basis)
+    h_a, h_b = rng.uniform(0.1, 1, n_basis), rng.uniform(0.1, 1, n_basis)
+    fa, fb = rng.random(n_basis) < 0.4, rng.random(n_basis) < 0.6
+    t_out, td_a, td_b = (
+        rng.standard_normal((n_obs, 3)),
+        rng.standard_normal((3, n_basis)),
+        rng.standard_normal((3, n_basis)),
+    )
+    w = rng.uniform(0, 1, n_obs)
+    plain = (s_a, s_b, h_a, h_b, fa, fb, t_out, td_a, td_b, w, n_path)
+    got = _accel.acc.razor_assemble_t1(M0, M1, *plain, obs_row=row)
+    want = _accel.acc.razor_assemble_t1(M0[row], M1[row], *plain)
+    assert np.array_equal(got, want)
+    sig_a, sig_b = rng.choice([-1.0, 1.0], n_basis), rng.choice([-1.0, 1.0], n_basis)
+    obs_c, src_c = (
+        rng.standard_normal((n_obs, 3)) - [0, 0, 3],
+        rng.standard_normal((n_seg, 3)),
+    )
+    src_t = rng.standard_normal((n_seg, 3))
+    rest = (
+        s_a,
+        s_b,
+        h_a,
+        h_b,
+        fa,
+        fb,
+        sig_a,
+        sig_b,
+        obs_c,
+        t_out,
+        src_c,
+        src_t,
+        w,
+        n_path,
+        0,
+        13 - 0.4j,
+        0.0,
+        1.0 + 0j,
+    )
+    got = _accel.acc.razor_assemble_t1_weighted(M0, M1, *rest, obs_row=row)
+    want = _accel.acc.razor_assemble_t1_weighted(M0[row], M1[row], *rest)
+    assert np.array_equal(got, want)
+    with pytest.raises(RuntimeError, match="obs_row out of range"):
+        _accel.acc.razor_assemble_t1(M0, M1, *plain, obs_row=np.full(n_obs, n_u))
