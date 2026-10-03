@@ -450,6 +450,11 @@ _HAVE_RAZOR_ASSEMBLE_ACCEL = _acc is not None and bool(
 )
 
 
+# The fused T2 rows and final combination (momwire#1290), on its OWN symbol:
+# a .so built before it exports every kernel above and not this one.
+_HAVE_RAZOR_T2_ACCEL = _acc is not None and bool(getattr(_acc, "razor_t2_1290", False))
+
+
 # The in-medium (complex k) twin of the moment fill (momwire#796), on its OWN
 # symbol for the same reason the other two are: a .so built before #796 landed
 # exports `razor_seg_moments` and not `razor_seg_moments_cplx`, and the gate
@@ -768,6 +773,15 @@ def _use_razor_assemble_accel():
     Gauss-Legendre) and it is a loop bound inside the kernel, not a branch.
     """
     return _HAVE_RAZOR_ASSEMBLE_ACCEL and not _FORCE_NUMPY
+
+
+def _use_razor_t2_accel():
+    """The fused C++ T2 rows (momwire#1290), under the same two off-switches.
+
+    Off, `_source_block_rows` takes its numpy spelling, which is the
+    reference the kernel's derivation is checked against.
+    """
+    return _HAVE_RAZOR_T2_ACCEL and not _FORCE_NUMPY
 
 
 def _use_razor_weighted_accel():
@@ -5031,25 +5045,31 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # "A": centroid(A) -> knot, the knot is AFTER.
             # "B": knot -> centroid(B), the knot is BEFORE.
 
-        def _t2_rows(lo, hi):
-            # Rows [lo, hi) of T2 (momwire#1173). Every operation is
-            # elementwise on the row axis, so restricting it to a window
-            # changes no entry's arithmetic.
-            # Exactly the centroids this window's rows read (every grounded
-            # and chopped row in it reads its own s_a / s_b too), evaluated
-            # one contiguous run at a time, so a junction row reaching a far
+        def _m0w(lo, hi):
+            # Exactly the centroids rows [lo, hi) read (every grounded and
+            # chopped row in it reads its own s_a / s_b too), evaluated one
+            # contiguous run at a time, so a junction row reaching a far
             # segment costs that segment's row and not the span between.
+            # Returns them sorted, with their M0c rows. A single run (any
+            # window of a plain wire) is returned as built: concatenating it
+            # would only copy it.
             sa, sb = s_a[lo:hi], s_b[lo:hi]
             need = np.unique(np.concatenate([sa, sb]))
             cuts = np.flatnonzero(np.diff(need) > 1) + 1
-            M0w = np.concatenate(
-                [_m0c_rows(int(r[0]), int(r[-1]) + 1) for r in np.split(need, cuts)]
-            )
+            parts = [_m0c_rows(int(r[0]), int(r[-1]) + 1) for r in np.split(need, cuts)]
+            return need, parts[0] if len(parts) == 1 else np.concatenate(parts)
+
+        def _t2_rows(lo, hi):
+            # Rows [lo, hi) of T2 (momwire#1173). Every operation is
+            # elementwise on the row axis, so restricting it to a window
+            # changes no entry's arithmetic. The numpy spelling, and the
+            # reference `_t2_tables` + `razor_t2_rows` reproduce.
+            need, M0w = _m0w(lo, hi)
 
             def at(seg):
                 return M0w[np.searchsorted(need, seg)]
 
-            dM0 = at(sb) - at(sa)  # (row, source segment)
+            dM0 = at(s_b[lo:hi]) - at(s_a[lo:hi])  # (row, source segment)
             if grounded.size:
                 g = grounded[(grounded >= lo) & (grounded < hi)]
                 dM0[g - lo] = at(s_b[g])
@@ -5063,6 +5083,35 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                         at(s_b[r]) - M0k[sel],
                     )
             return dM0[:, s_a] * q_a[None, :] + dM0[:, s_b] * q_b[None, :]
+
+        def _t2_tables(lo, hi):
+            # `_t2_rows`'s dM0 as row references, for `razor_t2_rows`
+            # (momwire#1290): row r of the window is tab[plus[r]] -
+            # tab[minus[r]] over the stacked table [M0w; M0k], and minus < 0
+            # is a row with nothing subtracted. The same three cases as the
+            # numpy spelling above, in its order -- a grounded row drops the
+            # A centroid, then a chopped row (which may also be grounded)
+            # sets both of its ends.
+            need, M0w = _m0w(lo, hi)
+            n_w = need.size
+            plus = np.searchsorted(need, s_b[lo:hi])
+            minus = np.searchsorted(need, s_a[lo:hi])
+            if grounded.size:
+                g = grounded[(grounded >= lo) & (grounded < hi)]
+                minus[g - lo] = -1
+            if chop is not None:
+                sel = np.flatnonzero((rows >= lo) & (rows < hi))
+                if sel.size:
+                    r = rows[sel]
+                    ka = keep_a[sel]
+                    # "A": knot (M0k) - centroid(A); "B": centroid(B) - knot.
+                    plus[r - lo] = np.where(
+                        ka, n_w + sel, np.searchsorted(need, s_b[r])
+                    )
+                    minus[r - lo] = np.where(
+                        ka, np.searchsorted(need, s_a[r]), n_w + sel
+                    )
+            return M0w, plus, minus
 
         tans, wts = prepared["tans"], prepared["wts"]
         n_path = prepared["n_path"]
@@ -5100,9 +5149,23 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # float64 number that expression produced (momwire#1173).
         c_A = 1j * omega * self.mu
         c_Phi = 1j * omega * eps_here
-        # T1's rows are overwritten in place by the finished block's rows.
-        # Without `into`, only one window of T1 exists at a time, and the
-        # consumer takes its finished rows before the next window is built.
+        # momwire#1290's kernel serves when c_A is purely imaginary (it is
+        # 1j*omega*mu): `c_A * t1` then rounds the same two products whatever
+        # the operand order or the loop numpy picks. It FUSES the division
+        # too when c_Phi is purely imaginary as well -- free space and every
+        # block over a real eps -- and otherwise hands back T2 alone.
+        t2_accel = _use_razor_t2_accel() and complex(c_A).real == 0.0
+        t2_fuse = t2_accel and complex(c_Phi).real == 0.0 and c_Phi != 0
+        M0k_tab = (
+            np.asarray(M0k, dtype=np.complex128)
+            if chop is not None
+            else np.empty((0, prepared["n_seg"]), dtype=np.complex128)
+        )
+        # Each window's T1 rows (`t1`, the window's own C-order array) are
+        # combined with T2 into `rows_T1`, which holds the finished block's
+        # rows. Without `into`, only one window of the block exists at a
+        # time, and the consumer takes its finished rows before the next
+        # window is built.
         # `_assemble_Z_source_block`'s whole block is Fortran order
         # (momwire#1173): it is the matrix the solve factors, and
         # `_bspline._lu_solve(overwrite_a=True)` factors in place only on a
@@ -5130,7 +5193,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # Both lanes come through here. `n_path` is a loop bound in the
                 # kernel, not a branch: 2 under `nec5_quadrature`, 2*n_qp_path
                 # under Gauss-Legendre.
-                rows_T1[...] = _acc.razor_assemble_t1(
+                t1 = _acc.razor_assemble_t1(
                     M0,
                     M1,
                     s_a,
@@ -5163,7 +5226,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # The observer rows are this chunk's path points, sliced out
                 # of the SAME arrays `w_A_fn` closes over, so the kernel and
                 # the closure cannot disagree about which observers these are.
-                rows_T1[...] = _acc.razor_assemble_t1_weighted(
+                t1 = _acc.razor_assemble_t1_weighted(
                     M0,
                     M1,
                     s_a,
@@ -5205,7 +5268,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     wA_b = w_A[:, s_b] * sig_b[None, :]
                     integrand = wA_a * mom_a + wA_b * mom_b
                 integrand *= wts[lo:hi].reshape(-1)[:, None]
-                rows_T1[...] = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
+                t1 = integrand.reshape(hi - lo, n_path, n_basis).sum(axis=1)
             if rem_fn is not None:
                 # The remainder rides the same window, and the same wing
                 # algebra one axis over: the moment axis carries ∫Λ and ∫τΛ of
@@ -5220,7 +5283,31 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 rem_int = rem_a * sig_a[None, :] + rem_b * sig_b[None, :]
                 rem_int *= wts[lo:hi].reshape(-1)[:, None]
                 Q_rows = rem_int.reshape(hi - lo, n_path, n_basis).sum(axis=1)
-            rows_T1[...] = c_A * rows_T1 - _t2_rows(lo, hi) / c_Phi
+            if t2_accel:
+                # momwire#1290: T2's gathers, the two prefactors and the write
+                # into Z's window in one pass, instead of seven
+                # (rows, n_basis) temporaries and a copy into column-major
+                # rows. The kernel's header derives why each entry is the
+                # numpy spelling's: q is real, and with both prefactors purely
+                # imaginary every product the numpy route rounds once is
+                # rounded once here. A lossy medium's c_Phi is not purely
+                # imaginary; its division stays numpy's own, on the kernel's
+                # T2, so that half is the numpy route by construction.
+                M0w, plus, minus = _t2_tables(lo, hi)
+                tabs = (M0w, M0k_tab, plus, minus, s_a, s_b, q_a, q_b)
+                pre = (c_A.imag, c_Phi.imag)
+                if t2_fuse:
+                    _acc.razor_t2_rows(rows_T1, t1, *tabs, *pre)
+                else:
+                    t2 = np.empty((hi - lo, n_basis), dtype=np.complex128)
+                    _acc.razor_t2_rows(t2, None, *tabs, *pre)
+                    rows_T1[...] = c_A * t1 - t2 / c_Phi
+                    del t2
+                del M0w, tabs
+            else:
+                rows_T1[...] = t1
+                rows_T1[...] = c_A * rows_T1 - _t2_rows(lo, hi) / c_Phi
+            del t1
             if rem_fn is not None:
                 # `C2·img + Q`, associated BEFORE the seam's single minus —
                 # the whole content of `mode == "compose"`, since
