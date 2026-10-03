@@ -475,6 +475,8 @@ def render_nec4_printout(
         body += gap(_SECTION_GAP)
     body += _printout._power_budget(data.power)
     body += gap(_SECTION_GAP)
+    # Every GD capture asks for a pattern, so the block is printed only in
+    # front of one; whether an XQ deck prints it too is unmeasured.
     if data.patterns and data.far_field_ground is not None:
         body += _far_field_ground(data.far_field_ground)
         body += gap(_SECTION_GAP)
