@@ -444,6 +444,24 @@ static PairOrderLadder ladder_from_arrays(
     return L;
 }
 
+// The off-edge kernel's reshaped loops (t-outermost moment sums over a t-major
+// wuwu, unit-stride distance runs) are bit-identical to the loops they replaced
+// only where the build evaluates as written: GCC/clang with -ffp-contract=off.
+// MSVC builds with /fp:fast, which licenses it to vectorize the old per-moment
+// sums as reassociated reductions -- and it does, identically in this kernel
+// and in its hand-copied twins (the H-matrix off-edge block kernels), which
+// tests/test_hmatrix.py holds to 1e-12 of each other. The reshaped loop is not
+// a reduction, so under /fp:fast it rounded differently from the unchanged
+// twins (1.4e-12, momwire#1302's Windows wheel). MSVC therefore keeps the old
+// loops, and with them its own pre-reshape bits.
+#if defined(_MSC_VER)
+#define MW_OFFEDGE_RESHAPED 0
+#define MW_WUWU_AT(t, pP) ((pP) * m + (t))
+#else
+#define MW_OFFEDGE_RESHAPED 1
+#define MW_WUWU_AT(t, pP) ((t) * NMM + (pP))
+#endif
+
 template<int D, bool COMPLEX_K>
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_kernel_impl(
@@ -522,11 +540,17 @@ seg_seg_full_moments_bspline_kernel_impl(
         for (size_t j = 0; j < N_j; j++) {
             for (size_t r = 0; r < n_qp; r++) {
                 double t = gt[r];
+#if MW_OFFEDGE_RESHAPED
                 // Source points coordinate-major per segment, (j, c, r), so
                 // the R loop below reads each coordinate as a unit-stride run.
                 pj_t[(j*3 + 0)*n_qp + r] = (1.0 - t) * slj(j,0) + t * srj(j,0);
                 pj_t[(j*3 + 1)*n_qp + r] = (1.0 - t) * slj(j,1) + t * srj(j,1);
                 pj_t[(j*3 + 2)*n_qp + r] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+#else
+                pj_t[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
+                pj_t[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
+                pj_t[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+#endif
             }
         }
     }
@@ -614,6 +638,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                 // is a unit-stride loop the compiler vectorizes, and sqrt is
                 // correctly rounded in a vector lane as in a scalar one, so
                 // R is the per-point walk's to the bit.
+#if MW_OFFEDGE_RESHAPED
                 size_t q = base / n_qp;
                 size_t r = base % n_qp;
                 for (size_t t = 0; t < m; r = 0, ++q) {
@@ -631,10 +656,23 @@ seg_seg_full_moments_bspline_kernel_impl(
                     }
                     t += run;
                 }
+#else
+                size_t q = base / n_qp;
+                size_t r = base % n_qp;
+                for (size_t t = 0; t < m; t++) {
+                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                    if (++r == n_qp) { r = 0; ++q; }
+                }
+#endif
 
                 // A multi-chunk pair rewrites wuwu per chunk, so only a
                 // single-chunk table is ever held.
-                const bool one_chunk = n_pairs <= BSPLINE_QR_TILE;
+                // MSVC refills every pair, as it did before (MW_OFFEDGE_RESHAPED).
+                const bool one_chunk =
+                    MW_OFFEDGE_RESHAPED && n_pairs <= BSPLINE_QR_TILE;
                 if (!(one_chunk && w_held && tier == w_tier && Li == w_Li &&
                       Lj == w_Lj)) {
                     q = base / n_qp;
@@ -654,7 +692,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                         const double wij = wi * wj;
                         for (int pp = 0; pp < NM; pp++) {
                             for (int PP = 0; PP < NM; PP++) {
-                                wuwu[t * NMM + pp * NM + PP] = wij * ui_pow[pp] * uj_pow[PP];
+                                wuwu[MW_WUWU_AT(t, pp * NM + PP)] = wij * ui_pow[pp] * uj_pow[PP];
                             }
                         }
 
@@ -705,6 +743,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                     }
                 }
 
+#if MW_OFFEDGE_RESHAPED
                 // Stage 2: the NMM moment sums, carried in acc_* across
                 // chunks. Each accumulator adds its terms in ascending t, one
                 // rounded multiply and one rounded add per term -- the order
@@ -724,6 +763,21 @@ seg_seg_full_moments_bspline_kernel_impl(
                         acc_im[pP] += w_t[pP] * gi;
                     }
                 }
+#else
+                // MSVC (/fp:fast): the pre-reshape per-pP loop, kept as it
+                // was so that build reduces exactly as it did before and as
+                // its twins in this file still do (see MW_OFFEDGE_RESHAPED).
+                for (int pP = 0; pP < NMM; pP++) {
+                    double sr = acc_re[pP], si = acc_im[pP];
+                    const double *w_row = &wuwu[pP * m];
+                    for (size_t t = 0; t < m; t++) {
+                        sr += w_row[t] * G_re[t];
+                        si += w_row[t] * G_im[t];
+                    }
+                    acc_re[pP] = sr;
+                    acc_im[pP] = si;
+                }
+#endif
             }
 
             for (int pP = 0; pP < NMM; pP++) {
@@ -736,6 +790,8 @@ seg_seg_full_moments_bspline_kernel_impl(
 
     return J;
 }
+
+#undef MW_WUWU_AT
 
 // The single-rule entry the pre-#906 callers use: one tier, the same loop.
 template<int D, bool COMPLEX_K>
