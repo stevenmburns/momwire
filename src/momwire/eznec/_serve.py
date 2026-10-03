@@ -269,12 +269,23 @@ One cut, two addresses
 Which leads to the other half of the same fact.  ``2,3`` and ``3,-1`` name
 the two sides of ONE cut through a two-wire node, so the antenna presents
 ONE port to both of them: their currents are equal and their EMFs add.
-momwire says as much at its constructor — "one series gap per junction" —
-and this module does not ask it for a second one.  It declares the cut once
-and gives the far side the SAME solver column with the opposite sign
-(:func:`_assign_columns`), which is the rank-1 two-port those two addresses
-really are.  At a junction of three or more wires two addresses would be two
-genuinely different cuts, no capture writes one, and it refuses by name.
+momwire says as much at its constructor — one series gap per two-wire
+junction — and this module does not ask it for a second one.  It declares
+the cut once and gives the far side the SAME solver column with the opposite
+sign (:func:`_assign_columns`), which is the rank-1 two-port those two
+addresses really are.
+
+At a junction of three or more wires two addresses are two genuinely
+different cuts, and each gets its own port (momwire#1300).  Licensed NEC-5,
+run as a black box on a half-wave dipole with a stub off its centre, puts an
+object in the branch of the wire its card NAMES: 50 ohm on the stub moves
+the source's impedance by -2.0 - j0.8 ohm, the same 50 ohm on the far dipole
+arm by 45.7 - j31.8, and on the source's own wire by exactly +50.  Which is
+:func:`_site_for`'s attribution already — a node gap between the named
+member and every other — so the second address is simply a second node gap,
+on its own member and with its own sign; razor reproduces NEC-5's
+impedances on those decks to 0.01 ohm with three objects at one node
+(``tests/test_junction_multi_gap_1300.py``).
 
 One finite ground, two ways to spell its loss
 ---------------------------------------------
@@ -669,12 +680,6 @@ _REFUSE_MIXED_ORDER = (
     "card, then every NT card, one sub-table each - and no captured printout "
     "says which sub-table an interleaved deck heads with, or which order its "
     "STRUCTURE EXCITATION DATA connection points print in"
-)
-_REFUSE_TWO_CUTS = (
-    "{first} and {second} address a node where {count} wires meet, which is "
-    "two different cuts through one junction; this seam serves the two sides "
-    "of a SINGLE cut (a node where exactly two wires meet) and no captured "
-    "deck asks for more"
 )
 _REFUSE_ZERO_LENGTH_LINE = (
     "a TL card between {first} and {second} writes no length and the two "
@@ -2272,15 +2277,17 @@ def _assign_columns(mesh: _Mesh) -> None:
 
     One site is one port, except where two addresses name the two sides of
     one cut — ``2,3`` and ``3,-1`` at a two-wire node, which is config C of
-    the W7EL triple.  momwire allows ONE series gap per junction and is right
-    to: at a two-wire node the second gap is not a second cut, it is the far
+    the W7EL triple.  momwire allows ONE series gap per two-wire junction and
+    is right to: there the second gap is not a second cut, it is the far
     side of the first, carrying the same current with the EMFs in series.  So
     the second address shares the first's column and takes the opposite
     weight, and the two-port those two addresses present is the rank-1 one
     the physics has (0017 prints both sides with the same current, 7.7427E-01
     − 4.9839E-01j, and voltages in the 2:1 ratio of their two admittances —
     which is series, and is what makes C 195.34 − j57.458 where A and B are
-    114.47 + j21.096).
+    114.47 + j21.096).  At K >= 3 nothing is shared: each address cuts its
+    own member off the node, so it is its own port with its own sigma — the
+    module docstring's "One cut, two addresses" has NEC-5's numbers for it.
 
     The weight follows from KCL and nothing else.  ``sign`` is momwire's
     sigma: the current from the node into the named wire is the current along
@@ -2317,7 +2324,13 @@ def _assign_columns(mesh: _Mesh) -> None:
             # `_solver_for`'s two port lists and out of `n_columns`.
             continue
         junction = None if site.contact else junction_of.get((site.piece, site.end))
-        first = declared.get(junction) if junction is not None else None
+        # Only a K = 2 node has a far side to share.  At K >= 3 each address
+        # cuts its OWN member off the node — NEC-5 puts an object in the
+        # branch of the wire its card names (momwire#1300) — so a second
+        # address there is a second port and opens its own column below,
+        # weighted by its own sigma exactly as a first address is.
+        shared = junction is not None and len(mesh.junctions[junction]) == 2
+        first = declared.get(junction) if shared else None
 
         # The weight, decided once and in one place.
         if site.spelling == "node":
@@ -2334,20 +2347,12 @@ def _assign_columns(mesh: _Mesh) -> None:
             side_a = mesh.junctions[junction][0] == (site.piece, site.end)
             site.weight = -site.sign if side_a else site.sign
 
-        # The column, likewise: a second address at one junction shares the
-        # first's, and everything else opens its own.
+        # The column, likewise: a second address at a two-wire junction
+        # shares the first's, and everything else opens its own.
         if first is not None:
-            if len(mesh.junctions[junction]) != 2:
-                raise ServeRefusal(
-                    _REFUSE_TWO_CUTS.format(
-                        first=f"{first.at.tag},{first.at.written}",
-                        second=f"{site.at.tag},{site.at.written}",
-                        count=len(mesh.junctions[junction]),
-                    )
-                )
             site.column = first.column
             continue
-        if junction is not None:
+        if shared:
             declared[junction] = site
         ports = mesh.feeds if site.spelling == "gap" else mesh.gaps
         site.column = len(ports)

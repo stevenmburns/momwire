@@ -68,6 +68,7 @@ from momwire.eznec import _printout, _serve, serve
 from momwire.eznec._printout import LineRow, NetworkRow
 from momwire.eznec._shell import render
 from momwire.networks import TL
+from momwire.razor import RazorSolver
 from test_eznec_printout import deck_text, extract, printout_text
 from test_eznec_serve import _NETWORK_LOSS_DUST, drive_cells, mask, served
 
@@ -1040,24 +1041,27 @@ def test_a_deck_that_interleaves_the_two_card_kinds_refuses_by_name():
 
 
 @pytest.mark.integration
-def test_two_addresses_at_a_five_wire_junction_refuse_rather_than_guess():
-    """The two sides of ONE cut are served; two different cuts are not.
+def test_two_addresses_at_a_five_wire_junction_are_two_ports():
+    """The two sides of ONE cut share a port; two different cuts are two.
 
     At a node where exactly two wires meet, ``2,3`` and ``3,-1`` are the two
     ends of a single break and share the solver's port — that is config C, and
-    it is the whole gate.  At 0013's five-wire apex two addresses would
-    separate two DIFFERENT arms from the node, which is two independent series
-    gaps at one junction; momwire declines to build them and no captured deck
-    asks for it, so the seam says which addresses collided and how many wires
-    met there.
+    it is the whole gate.  At 0013's five-wire apex two addresses separate two
+    DIFFERENT arms from the node, each a series gap in its own named wire's
+    branch, which is licensed NEC-5's rule (momwire#1300; its impedances are
+    gated in ``test_junction_multi_gap_1300.py``).  This seam used to refuse
+    the pair by name; it now opens a port for each.
     """
     text = deck_text("0013").replace(
         "PQ 0\n", "NT 1,-1,2,-1,.01,0.,0.,0.,0.,0.\nPQ 0\n"
     )
     printout = render(text)
-    assert "address a node where 5 wires meet" in printout
-    assert "1,-1 and 2,-1" in printout
-    assert "ANTENNA INPUT PARAMETERS" not in printout
+    assert "NEC ERROR" not in printout
+    assert "ANTENNA INPUT PARAMETERS" in printout
+    deck = parse_nec5(text)
+    mesh = _serve.build_mesh(deck, _serve.structure_of(deck), solver_class=RazorSolver)
+    columns = {f"{site.at.tag},{site.at.written}": site.column for site in mesh.sites}
+    assert columns["1,-1"] != columns["2,-1"]
 
 
 # --------------------------------------------------------------------------

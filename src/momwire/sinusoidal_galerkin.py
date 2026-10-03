@@ -355,7 +355,7 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _medium_spec, _wire_loading
+from . import _medium_spec, _wire_loading, _wire_spec
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from .bspline import SINGULAR_ENRICHMENT_NEVER
@@ -1107,7 +1107,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         terminates there. Entries are `(junction_index, side_a)` (voltage 0)
         or `(junction_index, side_a, voltage)`, where `side_a` indexes into
         `junctions[junction_index]` and must be a nonempty PROPER subset —
-        both sides of the gap need a conductor.
+        both sides of the gap need a conductor. A junction of K >= 3 members
+        takes several ports when each cuts ONE member's branch off the node
+        (one member on one side) and no branch is cut twice — NEC-5's object
+        per named wire (momwire#1300); see `_check_shared_junction`.
 
         Ports are ordered [gap feeds…, junction ports…, node ports…]. Drive
         and readout are the same vector, so a node port's Y block is
@@ -1339,6 +1342,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self.node_gaps = []
         node_port_entries = list(node_ports) if node_ports else []
         if node_gaps:
+            # The spec's rules are every family's (`normalize_node_gaps`):
+            # its messages for a repeated member and for a second gap at a
+            # two-wire junction are the ones the other node-gap rows give.
+            _wire_spec.normalize_node_gaps(
+                node_gaps,
+                self.junctions,
+                len(self.wires_polylines),
+                junction_ports=[j for j, _v in self.junction_ports],
+            )
             member_pos = {
                 (w, e): (j, m)
                 for j, jw in enumerate(self.junctions)
@@ -1396,7 +1408,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         if not node_ports:
             return []
         out = []
-        seen = set()
+        # junction -> the member each earlier port there cuts off the node,
+        # or None for a port with several members on both sides.
+        seen = {}
         junction_port_idx = {j for j, _v in self.junction_ports}
         for entry in node_ports:
             if not isinstance(entry, (tuple, list)) or len(entry) not in (2, 3):
@@ -1412,8 +1426,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     f"node_ports: junction index {j_idx} out of range "
                     f"(have {len(self.junctions)} junctions)"
                 )
-            if j_idx in seen:
-                raise ValueError(f"node_ports: junction {j_idx} listed twice")
             if j_idx in junction_port_idx:
                 raise ValueError(
                     f"junction {j_idx} is declared as both a junction_port and "
@@ -1421,7 +1433,6 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     "at the node vs an EMF across the node) and cannot share a "
                     "junction"
                 )
-            seen.add(j_idx)
             members = self.junctions[j_idx]
             if len(members) < 2:
                 raise ValueError(
@@ -1444,8 +1455,57 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     f"subset of junction {j_idx}'s {len(members)} members — "
                     "both sides of the gap need at least one conductor"
                 )
+            self._check_shared_junction(seen, j_idx, side_a, len(members))
             out.append((j_idx, side_a, volts))
         return out
+
+    @staticmethod
+    def _check_shared_junction(seen, j_idx, side_a, n_members):
+        """Admit a second (third, ...) node port at one junction only where it
+        is a different cut (momwire#1300).
+
+        A port with a single member m on one side cuts m's BRANCH off the
+        node: its drive and readout are ±f_m, the current flowing into the
+        node along m alone (`_node_cut_vectors`). Ports cutting different
+        branches are different series EMFs, each in its own wire, and since
+        a node port adds no basis column — it is a column of U and nothing
+        else — several of them are the superposition of single-port solves
+        and exactly as good as one. That is NEC-5's object per named wire at
+        a K >= 3 node. With every branch cut the K columns sum to zero
+        (#177's KCL identity), so the K-port Y has rank K - 1: one EMF added
+        to every branch only moves the node's potential.
+
+        Two shapes stay refused. At K = 2 the two possible cuts are one cut
+        (f_0 = -f_1), so a second port there is the first again. And a cut
+        with several members on BOTH sides (K >= 4) is not one branch; two
+        of those, or one beside a branch cut, are partitions of the node no
+        wire-end address can name and nothing measured says how they meet.
+        """
+        branch = None
+        if len(side_a) == 1:
+            branch = side_a[0]
+        elif len(side_a) == n_members - 1:
+            (branch,) = set(range(n_members)) - set(side_a)
+        if j_idx not in seen:
+            seen[j_idx] = [branch]
+            return
+        if n_members == 2:
+            raise ValueError(
+                f"node_ports: junction {j_idx} listed twice — it joins two "
+                "wire ends, so it has one cut and one port"
+            )
+        if branch is None or None in seen[j_idx]:
+            raise ValueError(
+                f"node_ports: junction {j_idx} listed twice — several ports "
+                "share a junction only when each cuts ONE member's branch "
+                "off the node (one member on one side of it)"
+            )
+        if branch in seen[j_idx]:
+            raise ValueError(
+                f"node_ports: junction {j_idx} listed twice — member {branch}'s "
+                "branch is already cut there"
+            )
+        seen[j_idx].append(branch)
 
     def _reject_junction_ports(self):
         """No-op at CONSTRUCTION: #177's stated blocker was the missing
