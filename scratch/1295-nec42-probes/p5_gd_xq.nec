@@ -1,0 +1,13 @@
+CM Dipole over GN 1 with GD, no pattern
+CM
+CM momwire#1295 phase 2 probe deck (not an EZNEC capture)
+CE
+GW 1,11,0.,-.25,10.,0.,.25,10.,.0005
+GE 1,-1
+FR 0,1,0,0,299.7925
+GN 1,0,0,0,0.,0.
+EX 0,1,6,0,1.414214,0.
+GD 2,0,0,0,13.,.005,0.,0.
+PQ 0
+XQ 0
+EN
