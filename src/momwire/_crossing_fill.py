@@ -1303,6 +1303,26 @@ def _fast_desc_rows(fast, desc):
     return fast.rowflat[fast.off[grk] + fast.zl_rank * fast.nk[grk] + kg[grk]]
 
 
+def _fast_desc_rows_batch(fast, descs):
+    """`np.stack([_fast_desc_rows(fast, d) for d in descs])`, one gather per
+    shape: a run of one shape (every desc of an end loop has the same
+    length) is the same index expression with the ends on a new axis."""
+    if not descs:
+        return np.zeros((0, 0), dtype=np.int64)
+    kinds = {d[0] for d in descs}
+    if len(kinds) > 1:
+        return np.stack([_fast_desc_rows(fast, d) for d in descs])
+    if descs[0][0] == "grouped":
+        g = np.array([d[1] for d in descs], dtype=np.int64)
+        zl = np.array([d[2] for d in descs], dtype=np.int64)
+        base = fast.off[g] + zl * fast.nk[g]
+        return fast.rowflat[base[:, None] + fast.kl_rank[g]]
+    grk = fast.grank
+    base = fast.off[grk] + fast.zl_rank * fast.nk[grk]
+    KG = np.stack([d[1] for d in descs])
+    return fast.rowflat[base[None, :] + KG[:, grk]]
+
+
 def _fast_end_desc(fast, a_wire, pt, rho, z, zp):
     """Which product rows one end asks — `("grouped", g, zl)` or
     `("line", kg)` (`_fast_desc_rows` lists them) — or None when the end is
@@ -1398,12 +1418,11 @@ def _classify_ends(fast, a_wire, ends, args):
         return _classify_ends_one_by_one(fast, a_wire, ends, args)
     n = args.nodes.shape[0]
     by_nodes = _END_CLASSIFY_BY_NODES and _args_on_plan_nodes(fast, args)
-    cols = None
-    if by_nodes:
-        # The line shape reads the groups' first nodes' columns; the grouped
-        # shape reads none.
-        cols = fast.gfirst if n == fast.grouped_z.size else np.zeros(0, np.intp)
-    per = max(1, _END_CLASSIFY_PAIRS // max(1, n if cols is None else cols.size))
+    # By the nodes, no ρ row is formed here: the line shape forms its
+    # groups' first nodes' entries for the ends that need them (an end off
+    # every line node), and the grouped shape needs none.
+    cols = np.zeros(0, np.intp) if by_nodes else None
+    per = max(1, _END_CLASSIFY_PAIRS // max(1, n if cols is None else fast.gfirst.size))
     descs, on_node = [], []
     for e0 in range(0, len(ends), per):
         span = ends[e0 : e0 + per]
@@ -1468,9 +1487,9 @@ def _classify_batch(fast, a_wire, pts, rho, end, args, *, n=None, by_nodes=False
     end)`; see `_classify_ends`. The comments name the one-end test each
     line stands for, with `gv` / `lv` as that function spells them.
 
-    `by_nodes` (`_args_on_plan_nodes` held for this loop): `rho` is only
-    the columns of the groups' first nodes, and the two ρ-row tests hold
-    by that check rather than by a compare per end."""
+    `by_nodes` (`_args_on_plan_nodes` held for this loop): no ρ row is
+    handed in, and the ρ tests hold by that check rather than by a compare
+    per end."""
     E = pts.shape[0]
     n = rho.shape[1] if n is None else n
     lz = args.line_z()
@@ -1510,15 +1529,41 @@ def _classify_batch(fast, a_wire, pts, rho, end, args, *, n=None, by_nodes=False
             lv_flat = end == end
             gv_grouped = np.full(E, bool(np.array_equal(lz, fast.grouped_z)))
         idx = np.flatnonzero(todo & lv_flat & gv_grouped)
-        if idx.size:
-            if by_nodes:
-                rep = rho[idx]
-                ok = np.ones(idx.size, dtype=bool)
-            else:
-                rows = rho[idx]
-                rep = rows[:, fast.gfirst]
-                ok = np.all(rows == rep[:, fast.grank], axis=1)  # rho == rep[grank]
-                del rows
+        if idx.size and by_nodes:
+            # An end at a line node's (x, y) and z asks that node's own keys:
+            # its ρ to each group's (x, y) is the plan's line entry to the bit
+            # (`_args_on_plan_nodes`), so the node is found by the dict and
+            # the z alone. The rest search the keys from their ρ, formed for
+            # them only.
+            off_node = []
+            for e in idx.tolist():
+                lv0 = lz[0] if end_in_gv else end[e]
+                l0 = float(lv0)
+                for nn in fast.line_xy.get(xy[e], ()):
+                    if fast.line_z[nn] == l0:
+                        descs[e] = ("line", fast.kl_rank[:, nn].copy())
+                        on_node[e] = True
+                        break
+                else:
+                    off_node.append(e)
+            if off_node:
+                rho_g, _end = args.batch(pts[off_node], fast.gfirst)
+                r_all = _near_interface.radius_fold(rho_g, a_wire)
+                for j, e in enumerate(off_node):
+                    r = r_all[j]
+                    lv0 = lz[0] if end_in_gv else end[e]
+                    k = fast.keys.ids(r, np.full(r.shape, lv0))
+                    if np.any(k < 0):
+                        continue
+                    n_key = fast.keys.n_key
+                    jj = fast.gkey.local(np.arange(r.size, dtype=np.int64) * n_key + k)
+                    if jj is not None:
+                        descs[e] = ("line", jj)
+        elif idx.size:
+            rows = rho[idx]
+            rep = rows[:, fast.gfirst]
+            ok = np.all(rows == rep[:, fast.grank], axis=1)  # rho == rep[grank]
+            del rows
             r_all = _near_interface.radius_fold(rep, a_wire)
             for j, e in enumerate(idx.tolist()):
                 if not ok[j]:
@@ -2770,14 +2815,14 @@ class _ProductTiles:
         return ids
 
     def _evaluate(self, rows):
-        """(vals, pos) of one tile's rows: ONE call, or — the TEST-ONLY
-        "split" control — two, which cuts the tile's columns."""
+        """(vals, pos) of one tile's rows (`pos` None: `vals` is in row
+        order): ONE call, or — the TEST-ONLY "split" control — two, which
+        cuts the tile's columns."""
         ni = _near_interface
         if _PRODUCT_NEG_CONTROL != "split":
-            vals, pos = ni.designed_rows_permuted(
+            return ni.designed_rows_permuted(
                 self.eps_t, self.k_p, rows, rtol=_CROSS_RTOL, sheet_plan=self.sheet_plan
             )
-            return vals, (np.arange(rows.shape[0]) if pos is None else pos)
         h = rows.shape[0] // 2
         v1, p1 = ni.designed_rows_permuted(
             self.eps_t, self.k_p, rows[:h], rtol=_CROSS_RTOL, sheet_plan=self.sheet_plan
@@ -2841,13 +2886,16 @@ class _ProductTiles:
             rows = plan.rows(ids)
             vals, pos = self._evaluate(rows)
             del rows
+            if pos is not None:
+                vals = vals[pos]
+            del pos
             if self.store is not None:
-                self.store[ids, 0] = vals[pos, ki["V"]]
-                self.store[ids, 1] = vals[pos, ki["W"]]
+                self.store[ids, 0] = vals[:, ki["V"]]
+                self.store[ids, 1] = vals[:, ki["W"]]
             tb = np.empty((ids.size, len(tb_keys)), dtype=np.complex128, order="F")
             for j, k in enumerate(tb_keys):
-                tb[:, j] = vals[pos, ki[k]]
-            del vals, pos
+                tb[:, j] = vals[:, ki[k]]
+            del vals
             if self.hpos is not None:
                 hp = self.hpos[ids]
                 keep = hp >= 0
@@ -3777,7 +3825,7 @@ def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
     pending = []
 
     def flush():
-        R = np.stack([_fast_desc_rows(fast, classes[i]) for i, _s, _f in pending])
+        R = _fast_desc_rows_batch(fast, [classes[i] for i, _s, _f in pending])
         vVs = _store_matvecs(Fd, w, R, product.vals, 0)
         vWs = _store_matvecs(F, w_tz, R, product.vals, 1)
         out = [(s_, f_, vVs[e], vWs[e]) for e, (_i, s_, f_) in enumerate(pending)]
