@@ -1,0 +1,13 @@
+CM Vertical above GN 2 with a separate buried wire
+CM
+CM momwire#1295 phase 2 probe deck (not an EZNEC capture)
+CE
+GW 1,10,0.,0.,.5,0.,0.,10.,.001
+GW 2,10,-5.,1.,-.1,5.,1.,-.1,.001
+GE -1,-1
+FR 0,1,0,0,7.15
+GN 2,0,0,0,13.,.005
+EX 0,1,1,0,1.414214,0.
+PQ 0
+XQ 0
+EN

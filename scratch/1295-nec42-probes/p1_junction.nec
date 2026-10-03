@@ -1,0 +1,14 @@
+CM Three wires at one node
+CM
+CM momwire#1295 phase 2 probe deck (not an EZNEC capture)
+CE
+GW 1,6,0.,-.25,0.,0.,0.,0.,.0005
+GW 2,6,0.,0.,0.,0.,.25,0.,.0005
+GW 3,4,0.,0.,0.,0.,0.,.2,.0005
+GE 0,-1
+FR 0,1,0,0,299.7925
+GN -1
+EX 0,3,1,0,1.414214,0.
+PQ 0
+RP 0,1,361,1000,90.,0.,0.,1.,0.
+EN
