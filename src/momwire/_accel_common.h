@@ -117,7 +117,8 @@ constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 // across the grid. GCC (and MSVC's /openmp:llvm) keeps collapse(2).
 #if defined(_MSC_VER)
 #  define MW_OMP_PARALLEL_FOR_COLLAPSE2 _Pragma("omp parallel for schedule(static)")
-#  define MW_OMP_FOR_COLLAPSE2 _Pragma("omp for schedule(static)")
+// No MW_OMP_FOR_COLLAPSE2 for MSVC: its one user keeps main's structure
+// there (_accel_bspline.cpp's off-edge kernel).
 #else
 #  define MW_OMP_PARALLEL_FOR_COLLAPSE2 \
        _Pragma("omp parallel for collapse(2) schedule(static)")
