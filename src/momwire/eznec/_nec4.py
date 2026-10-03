@@ -15,32 +15,82 @@ capability holds.  A basis outside it (razor-2p, razor-nec5) is refused BY
 NAME in the printout before any deck is read: razor places a gap only on a
 knot, and moving a centre feed half a cell silently is momwire#821's failure.
 
-PHASE 1 PRINTOUT — NOT YET THE NEC-4 LAYOUT.  The body below the header is the
-nec2 portal's printout (:func:`momwire.portal._portal.render_deck`), the NEC-2
-block sequence the solve notes say NEC-4.2 shares in outline (structure,
-segmentation, frequency, environment, loading, then input parameters,
-currents, power budget and pattern).  It is the printout the ``DeckModel``
-pipeline already writes, which is why it was chosen over the NEC-5 layout: that
-writer is fed by the node-addressed NEC-5 deck, which cannot carry a centre
-feed at all.  Phase 2 replaces this body with the layout EZNEC's NEC-4.2 reader
-accepts; until then :data:`PHASE1_MARK` stands at the top of every served
-printout so nobody mistakes it for that one.  The header (comment-box stamp
-and line-2 engine stamp) is the NEC-5 slot's, unchanged, and refusals are its
-``NEC ERROR`` line, the channel EZNEC displays.
+The solve is the portal's :class:`~momwire.portal._portal.DeckSolver`, the
+one that already serves centre-addressed decks; :func:`solve` turns its
+records into a :class:`~momwire.eznec._nec4_printout.Nec4Printout` and
+:mod:`._nec4_printout` lays that out in the licensed NEC-4.2's columns.
+
+What the printout serves is what the captured NEC-4.2 printouts show.  A deck
+shape none of them shows is refused BY NAME rather than printed in an
+invented layout (:func:`_served_shape`): EZNEC finds sections by heading, so
+a guessed heading is a silent misread where a refusal is a sentence on
+screen.
 """
 
 from __future__ import annotations
 
+import math
+import time
+
+import numpy as np
+
 from ..deck import BASES, NEC2_BASES
 from . import _printout
-
-__all__ = ["PHASE1_MARK", "basis_refusal", "render"]
-
-# The line every phase-1 served printout carries directly under the header.
-PHASE1_MARK = (
-    " ***** MOMWIRE NEC-4.2 SLOT, PHASE 1 (momwire#1295): NEC-2 LAYOUT BODY,"
-    " NOT YET THE NEC-4 PRINTOUT"
+from ._nec4_printout import (
+    FarFieldGround,
+    Nec4Printout,
+    SegmentRow,
+    WireRow,
+    render_nec4_printout,
+    value_row,
 )
+from ._printout import (
+    ENVIRONMENT_FREE_SPACE,
+    ENVIRONMENT_PERFECT_GROUND,
+    GroundMedium,
+    LineRow,
+    LoadRow,
+    NetworkRow,
+    PortRow,
+    PowerBudget,
+)
+
+__all__ = ["Nec4Refusal", "basis_refusal", "render", "solve"]
+
+# NEC's metre-megahertz product, which NEC-4.2 prints its WAVELENGTH with:
+# 7.15 MHz prints 4.1930E+01 (299.8/7.15 = 41.9301; the SI c gives 41.9290),
+# the NEC-5 seam's measurement repeated on this engine (0234, 0235).  The
+# wavelength-normalised columns of the current and charge tables use it too.
+_C_MHZ_M = 299.8
+
+# NEC-4.2's COMPLEX DIELECTRIC CONSTANT is eps_r - j*sigma/(omega*eps0) with
+# omega = 2*pi*f at the deck's frequency and eps0 = 8.854E-12: 13 and
+# 0.005 S/m at 299.7925 MHz print 1.30000E+01-2.99799E-01 (0231, 0232, 0239),
+# where NEC-5's 59.96*lambda*sigma would print -2.99808E-01 and the
+# full-precision eps0 -2.99792E-01.  One frequency only: every finite-ground
+# capture is at 299.7925 MHz.
+_EPS0_PRINTED = 8.854e-12
+
+# The cards a captured NEC-4.2 printout shows, after GE.  Everything else the
+# nec4 dialect reads (it inherits nec2's vocabulary) has no measured layout.
+_SERVED_CARDS = frozenset(
+    {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "XQ", "EN"}
+)
+_SERVED_GEOMETRY = frozenset({"GW", "GE"})
+
+# The pattern request forms captured: XNDA 1000 (a cut) and 1001 (the 3-D
+# grid, with its average-gain trailer), RP mode 0, no range.
+_SERVED_XNDA = frozenset({1000, 1001})
+
+# A GD card's leading integer, as the one captured value prints it.
+_GD_KIND = {2: "CIRCLE CLIFF"}
+# The far-field readout's code for that cliff: the circular one, whose edge
+# is a radius about the origin (`_far_readout._cliff_medium_2`).
+_CIRCULAR_CLIFF = 3
+
+
+class Nec4Refusal(Exception):
+    """A deck this slot does not print: the message is the reason."""
 
 
 def basis_refusal(basis: str) -> str | None:
@@ -67,29 +117,535 @@ def basis_refusal(basis: str) -> str | None:
 def render(text: str, *, basis: str) -> str:
     """One NEC-4.2-dialect deck as a printout: the answer, or a named refusal.
 
-    Every refusal the nec2 portal's renderer would print as an ``ERROR:``
-    line — the dialect's, the solver's, a basis that cannot host this deck —
-    comes back here as the NEC-5 slot's ``NEC ERROR`` printout instead, the
-    first such line naming the reason.  One refused run refuses the deck: a
-    partial printout would read as a complete one.
+    A refusal is the NEC-5 slot's convention under the NEC-4.2 banner: the
+    header with its comment box, so EZNEC accepts the file as this run's, and
+    one ``NEC ERROR`` line naming the reason where the results would be.  One
+    refused step refuses the deck: a partial printout would read as a
+    complete one.
     """
-    # Imported on use: the NEC-5 slot's one-shot never pays for the portal.
-    from ..portal._portal import _ERROR_TOKEN, _STRUCTURE_HEADER, render_deck
-
     refused = basis_refusal(basis)
     if refused is not None:
-        return _printout.render_refusal(text, refused, basis=basis)
-    out, _err = render_deck(text, dialect="nec4", basis=basis)
-    for line in out:
-        if line.startswith(_ERROR_TOKEN):
-            return _printout.render_refusal(
-                text, line[len(_ERROR_TOKEN) :], basis=basis
-            )
-    body = out[out.index(_STRUCTURE_HEADER) :]
+        return _printout.render_refusal(text, refused, basis=basis, dialect="nec4")
+    try:
+        data = solve(text, basis=basis)
+    except Nec4Refusal as exc:
+        return _printout.render_refusal(text, str(exc), basis=basis, dialect="nec4")
+    return render_nec4_printout(text, data, basis=basis)
+
+
+def _unmeasured(what: str) -> str:
     return (
-        _printout.render_header(text, basis=basis)
-        + PHASE1_MARK
-        + "\n"
-        + "\n".join(body)
-        + "\n"
+        f"{what} is not served by this engine's NEC-4.2 printout: no captured "
+        f"NEC-4.2 printout shows how it prints"
+    )
+
+
+def _served_shape(deck) -> tuple[int, object]:
+    """``(group index, group)`` of the deck's one run, or :class:`Nec4Refusal`.
+
+    One run at one frequency: every capture writes ``FR 0,1`` and one ``RP``
+    or ``XQ``, and how NEC-4.2 lays out a second run (which sections repeat,
+    per frequency or per execute card) is unmeasured.
+    """
+    for card in deck.geometry:
+        if card.mnemonic not in _SERVED_GEOMETRY:
+            raise Nec4Refusal(_unmeasured(f"the {card.mnemonic} geometry card"))
+    for card in deck.data_cards:
+        if card.mnemonic not in _SERVED_CARDS:
+            raise Nec4Refusal(_unmeasured(f"the {card.mnemonic} card"))
+        if card.mnemonic == "GD" and card.i(0) not in _GD_KIND:
+            raise Nec4Refusal(_unmeasured(f"GD {card.i(0)}"))
+    runs = [(i, g) for i, g in enumerate(deck.groups) if g is not None]
+    if len(runs) != 1:
+        raise Nec4Refusal(_unmeasured(f"a deck with {len(runs)} execute runs"))
+    index, group = runs[0]
+    if len(group.freqs_mhz) != 1:
+        raise Nec4Refusal(_unmeasured(f"a run at {len(group.freqs_mhz)} frequencies"))
+    if group.ground.kind == "refl":
+        raise Nec4Refusal(_unmeasured("the GN 0 reflection-coefficient ground"))
+    if group.pq is not None and group.pq.restricted:
+        raise Nec4Refusal(_unmeasured("a PQ card restricted to a segment range"))
+    report = group.report
+    if report is not None:
+        if report.i(0) != 0:
+            raise Nec4Refusal(_unmeasured(f"RP mode {report.i(0)}"))
+        if report.i(3) not in _SERVED_XNDA:
+            raise Nec4Refusal(_unmeasured(f"RP with XNDA {report.i(3)}"))
+        if report.f(8) != 0.0:
+            raise Nec4Refusal(_unmeasured("RP at a nonzero range"))
+    return index, group
+
+
+def solve(text: str, *, basis: str) -> Nec4Printout:
+    """Solve one deck and return every number its NEC-4.2 printout prints.
+
+    Every refusal on the way — the dialect's, the solver's, a basis that
+    cannot host this deck, a shape no capture prints — is a
+    :class:`Nec4Refusal` carrying its sentence.
+    """
+    # Imported on use: the NEC-5 slot's one-shot never pays for the portal.
+    from ..portal._portal import (
+        _DECK_REFUSALS,
+        DeckSolver,
+        PortalError,
+        _connection_data,
+        _run_records,
+        _segment_end_nodes,
+        parse_deck,
+    )
+
+    started = time.perf_counter()
+    try:
+        deck = parse_deck(text, dialect="nec4")
+    except _DECK_REFUSALS as exc:
+        raise Nec4Refusal(str(exc)) from exc
+    index, group = _served_shape(deck)
+    freq = group.freqs_mhz[0]
+    gd = _far_ground_card(deck)
+    try:
+        solver = DeckSolver(deck, basis=basis)
+        records = _run_records(solver, group, freq, index)
+        result = records.result
+        patterns = (
+            () if group.report is None else (_pattern(group.report, result, freq, gd),)
+        )
+        charges = (
+            _charges(solver, result, deck, freq)
+            if group.pq is not None and group.pq.prints
+            else None
+        )
+    except (
+        PortalError,
+        ValueError,
+        NotImplementedError,
+        np.linalg.LinAlgError,
+    ) as exc:
+        raise Nec4Refusal(str(exc)) from exc
+
+    wavelength = _C_MHZ_M / freq
+    medium = _medium(group.ground, freq)
+    local = _local_wavelength(wavelength, medium, result.ground_z)
+    connections = _connection_data(solver.wires, deck.ground_plane_interpolates)
+    ends, order = _segment_end_nodes(solver.wires)
+    networks, excitation = _networks(solver, result, index)
+    second = group.second_medium
+    return Nec4Printout(
+        wires=_wire_rows(deck),
+        ge_flag=_ge_flag(deck),
+        total_segments=solver.n_segments,
+        junctions=tuple(
+            tuple(sorted(ends[key], key=abs)) for key in order if len(ends[key]) >= 3
+        ),
+        segments=tuple(
+            _segment_row(seg, i_minus, i_plus)
+            for seg, (i_minus, i_plus) in zip(solver.segments, connections, strict=True)
+        ),
+        frequency_mhz=freq,
+        wavelength_m=wavelength,
+        environment=_environment_label(deck, group.ground),
+        ground=medium,
+        loads=tuple(_load_row(card) for card in deck.loads),
+        fill_seconds=result.fill_ms / 1000.0,
+        factor_seconds=0.0,
+        networks=networks,
+        network_excitation=excitation,
+        sources=tuple(
+            PortRow(
+                row.tag,
+                row.segment,
+                0,
+                row.volts,
+                row.current,
+                row.impedance,
+                row.admittance,
+                row.power,
+            )
+            for row in records.aip_rows
+        ),
+        currents=tuple(
+            value_row(
+                seg.number,
+                seg.tag,
+                tuple(seg.centre / local(seg.centre)),
+                float(np.linalg.norm(seg.direction)) / local(seg.centre),
+                complex(result.segment_currents[seg.number - 1]),
+            )
+            for seg in solver.segments
+        ),
+        charges=None if charges is None else _charge_rows(charges, solver, local),
+        power=PowerBudget(
+            input_power=result.p_in,
+            radiated_power=result.p_radiated,
+            wire_loss=result.p_structure,
+            efficiency_percent=result.efficiency,
+            # Printed whenever the deck carries a network: 0234 and 0235 both
+            # print it, 0235's at 1.5987E-14 W, so NEC-4.2 does not gate the
+            # line on the loss's size or sign the way NEC-5 does.
+            network_loss=result.p_network if networks else None,
+        ),
+        far_field_ground=(
+            None
+            if gd is None or second is None
+            else FarFieldGround(
+                _GD_KIND[gd.i(0)],
+                second.edge_distance,
+                second.height,
+                second.eps_r2,
+                second.sigma2,
+            )
+        ),
+        patterns=patterns,
+        run_seconds=time.perf_counter() - started,
+    )
+
+
+# --------------------------------------------------------------------------
+# the structure
+# --------------------------------------------------------------------------
+
+
+def _wire_rows(deck) -> tuple[WireRow, ...]:
+    rows = []
+    first = 1
+    gw = [c for c in deck.geometry if c.mnemonic == "GW"]
+    for number, card in enumerate(gw, start=1):
+        n_seg = card.i(1)
+        rows.append(
+            WireRow(
+                number,
+                (card.f(2), card.f(3), card.f(4)),
+                (card.f(5), card.f(6), card.f(7)),
+                card.f(8),
+                n_seg,
+                first,
+                first + n_seg - 1,
+                card.i(0),
+            )
+        )
+        first += n_seg
+    return tuple(rows)
+
+
+def _ge_flag(deck) -> int:
+    for card in deck.geometry:
+        if card.mnemonic == "GE":
+            return card.i(0)
+    return 0
+
+
+def _segment_row(seg, i_minus: int, i_plus: int) -> SegmentRow:
+    d = seg.direction
+    return SegmentRow(
+        seg.number,
+        tuple(float(c) for c in seg.centre),
+        float(np.linalg.norm(d)),
+        math.degrees(math.atan2(d[2], math.hypot(d[0], d[1]))),
+        math.degrees(math.atan2(d[1], d[0])),
+        seg.radius,
+        i_minus,
+        i_plus,
+        seg.tag,
+    )
+
+
+# --------------------------------------------------------------------------
+# the environment and the loads
+# --------------------------------------------------------------------------
+
+
+def _environment_label(deck, ground) -> str:
+    """The environment line.  A Sommerfeld ground names the ``GN`` type the
+    deck wrote, ``GN2`` or ``GN3`` (0231 and 0232 differ in that word alone),
+    although the nec4 dialect solves both as one half-space."""
+    if ground.kind == "free":
+        return ENVIRONMENT_FREE_SPACE
+    if ground.kind == "pec":
+        return ENVIRONMENT_PERFECT_GROUND
+    written = [c.i(0) for c in deck.data_cards if c.mnemonic == "GN"]
+    return f"FINITE GROUND.  SOMMERFELD SOLUTION GN{written[-1]}"
+
+
+def _medium(ground, freq_mhz: float) -> GroundMedium | None:
+    if ground.kind != "sommerfeld":
+        return None
+    omega = 2.0 * math.pi * freq_mhz * 1e6
+    eps_c = complex(ground.eps_r, -ground.sigma / (omega * _EPS0_PRINTED))
+    return GroundMedium(ground.eps_r, ground.sigma, eps_c)
+
+
+def _local_wavelength(wavelength: float, medium: GroundMedium | None, ground_z):
+    """``point -> the wavelength its row is normalised by``.
+
+    Below a finite ground's interface NEC-4.2 normalises by the MEDIUM's
+    wavelength, 2*pi/|k|, as the table note says: 0239's wire at z = -1 m in
+    13/0.005 soil prints Z = -3.6059 and a 0.04545 m segment 0.16391, the
+    free-space values times |sqrt(eps_c)| = 3.6060 of the printed eps_c.
+    """
+    if medium is None:
+        return lambda _point: wavelength
+    below = wavelength / abs(np.sqrt(medium.eps_c))
+    interface = ground_z or 0.0
+    return lambda point: below if float(point[2]) < interface else wavelength
+
+
+def _load_row(card) -> LoadRow:
+    """One ``LD`` card's row.  An omitted THRU is FROM (``LD 4,1,3,0`` prints
+    ``1 3 3``, 0225); a zero FROM is the whole tag and stays zero."""
+    kind = card.i(0)
+    tag, first, last = card.i(1), card.i(2), card.i(3)
+    if last == 0:
+        last = first
+    if kind == 4:
+        reactance = card.f(5)
+        return LoadRow(
+            tag,
+            first,
+            last,
+            resistance=card.f(4),
+            reactance=reactance if reactance != 0.0 else None,
+        )
+    if kind == 5:
+        return LoadRow(tag, first, last, conductivity=card.f(4), kind="WIRE")
+    names = {
+        0: "SERIES",
+        1: "PARALLEL",
+        2: "SERIES (PER METER)",
+        3: "PARALLEL (PER METER)",
+    }
+    return LoadRow(
+        tag,
+        first,
+        last,
+        resistance=card.f(4) or None,
+        inductance=card.f(5) or None,
+        capacitance=card.f(6) or None,
+        kind=names[kind],
+    )
+
+
+# --------------------------------------------------------------------------
+# networks
+# --------------------------------------------------------------------------
+
+
+def _networks(solver, result, index: int):
+    """``(NETWORK DATA rows, excitation rows)`` for the run.
+
+    The excitation rows are in DISCOVERY order — each card's end A, then its
+    end B, cards in deck order, a segment named twice printed once — with the
+    driven point wherever it is first named: 0234 prints its EX 6 point
+    first, 0235 last, and both are that order.  The portal's nec2c order
+    moves every driven point to the end, which 0234 contradicts.
+    """
+    from ..deck._networks import card_branches, live_cards
+    from ..portal._portal import _PRINTED_DUST_FLOOR2
+
+    rows: list[NetworkRow | LineRow] = []
+    seen: list[int] = []
+    for card, _pair in live_cards(solver.model, solver.plan, index):
+        ends = []
+        for tag, seg in (card.address_a, card.address_b):
+            segment = solver.global_segment(*solver.structure.locate(tag, seg))
+            ends += [solver.segments[segment - 1].tag, segment]
+            if segment not in seen:
+                seen.append(segment)
+        f1, f2, f3, f4, f5, f6 = card.payload
+        if card.kind == "NT":
+            rows.append(
+                NetworkRow(*ends, complex(f1, f2), complex(f3, f4), complex(f5, f6))
+            )
+            continue
+        line = card_branches(card, 0, 1, solver.model.wires)[0]
+        rows.append(
+            LineRow(
+                *ends,
+                z0=line.z0,
+                length_m=line.length,
+                shunt_a=complex(f3, f4),
+                shunt_b=complex(f5, f6),
+                crossed=line.transposed,
+            )
+        )
+    by_segment = {segment: (tag, port) for tag, segment, port in result.network_points}
+    excitation = []
+    for segment in seen:
+        if segment not in by_segment:
+            continue
+        tag, port = by_segment[segment]
+        volts = complex(result.v_applied[port])
+        current = complex(result.i_port[port])
+        # An open point's analytically-zero current prints as zero, not as
+        # the solve's rounding residue (the portal's momwire#403 floor).
+        if current.real**2 + current.imag**2 <= _PRINTED_DUST_FLOOR2:
+            current = 0j
+        excitation.append(
+            PortRow(
+                tag,
+                segment,
+                0,
+                volts,
+                current,
+                volts / current if current != 0 else 0j,
+                current / volts if volts != 0 else 0j,
+                0.5 * (volts * current.conjugate()).real,
+            )
+        )
+    return tuple(rows), tuple(excitation)
+
+
+# --------------------------------------------------------------------------
+# charges
+# --------------------------------------------------------------------------
+
+
+def _charges(solver, result, deck, freq_mhz: float):
+    """``(per-segment charges, {(wire index, at start): end charge})``.
+
+    The end charge is ``q = -(1/jw)*dI/ds`` read AT a free wire end, the
+    centre rows' own formula moved to the end point, for the charge table's
+    ``E`` rows (:class:`~._nec4_printout.SegmentValueRow`).  A wire end is
+    free when its connection column is 0: no other segment and no ``GE 1``
+    plane meets it.  The end is found on momwire's own polylines by
+    position, since chaining may merge or reverse the deck's wires; a charge
+    is a scalar, so a reversed walk does not change it.
+    """
+    from ..portal._portal import _connection_data, _wire_arc_at_knot
+
+    momwire = result.solver
+    omega = 2.0 * math.pi * freq_mhz * 1e6
+    connections = _connection_data(solver.wires, deck.ground_plane_interpolates)
+    polyline_ends = [
+        (
+            np.asarray(polyline[0], float),
+            np.asarray(polyline[-1], float),
+            float(_wire_arc_at_knot(momwire, w_idx)[-1]),
+        )
+        for w_idx, polyline in enumerate(momwire.wires_polylines)
+    ]
+    positions: list[list[float]] = [[] for _ in polyline_ends]
+    slots: dict[tuple[int, bool], tuple[int, int]] = {}
+    first = 0
+    for wi, wire in enumerate(solver.wires):
+        last = first + wire.n_seg - 1
+        for at_start, point, free in (
+            (True, np.asarray(wire.p1, float), connections[first][0] == 0),
+            (False, np.asarray(wire.p2, float), connections[last][1] == 0),
+        ):
+            if not free:
+                continue
+            tol = max(float(np.linalg.norm(point)), 1.0) * 1e-9
+            for w_idx, (start, end, length) in enumerate(polyline_ends):
+                if np.linalg.norm(start - point) <= tol:
+                    s = 0.0
+                elif np.linalg.norm(end - point) <= tol:
+                    s = length
+                else:
+                    continue
+                slots[(wi, at_start)] = (w_idx, len(positions[w_idx]))
+                positions[w_idx].append(s)
+                break
+        first = last + 1
+    slopes = momwire.current_slopes(result.coeffs, positions) if slots else []
+    end_charges = {
+        key: complex(-slopes[w_idx][k] / (1j * omega))
+        for key, (w_idx, k) in slots.items()
+    }
+    return result.segment_charges, end_charges
+
+
+def _charge_rows(charges, solver, local):
+    centre_charges, end_charges = charges
+    rows = []
+    first = 0
+    for wi, wire in enumerate(solver.wires):
+        segs = solver.segments[first : first + wire.n_seg]
+        length = float(np.linalg.norm(segs[0].direction))
+        start_end = (
+            (True, segs[0], wire.p1),
+            (False, segs[-1], wire.p2),
+        )
+        if (wi, True) in end_charges:
+            _at, seg, point = start_end[0]
+            rows.append(
+                value_row(
+                    seg.number,
+                    seg.tag,
+                    tuple(np.asarray(point, float) / local(point)),
+                    length / local(point),
+                    end_charges[(wi, True)],
+                    end=True,
+                )
+            )
+        rows += [
+            value_row(
+                seg.number,
+                seg.tag,
+                tuple(seg.centre / local(seg.centre)),
+                length / local(seg.centre),
+                complex(centre_charges[seg.number - 1]),
+            )
+            for seg in segs
+        ]
+        if (wi, False) in end_charges:
+            _at, seg, point = start_end[1]
+            rows.append(
+                value_row(
+                    seg.number,
+                    seg.tag,
+                    tuple(np.asarray(point, float) / local(point)),
+                    length / local(point),
+                    end_charges[(wi, False)],
+                    end=True,
+                )
+            )
+        first += wire.n_seg
+    return tuple(rows)
+
+
+# --------------------------------------------------------------------------
+# the pattern
+# --------------------------------------------------------------------------
+
+
+def _far_ground_card(deck):
+    gd = [c for c in deck.data_cards if c.mnemonic == "GD"]
+    return gd[-1] if gd else None
+
+
+def _pattern(card, result, freq_mhz: float, gd):
+    """One ``RP 0`` card's answer, through the NEC-5 seam's row builder.
+
+    Under a ``GD`` card the reflected far field takes the card's second
+    medium: 0230 (``GN 1`` + ``GD``) prints 0231's finite-ground pattern
+    (2.05 dB at theta 75, against 0229's perfect-ground 2.60 dB) while its
+    impedance stays 0229's to every digit.  So ``GD`` is a far-field ground
+    on EVERY ``RP`` here, not only on a cliff mode as in NEC-2, and its edge
+    distance of 0 puts every specular point on the second medium.
+    """
+    from ..deck._nec5 import Nec5FarFieldRequest
+    from ._serve import _pattern as pattern_block
+
+    request = Nec5FarFieldRequest(
+        n_theta=max(card.i(1), 1),
+        n_phi=max(card.i(2), 1),
+        xnda=card.i(3),
+        theta0_deg=card.f(4),
+        phi0_deg=card.f(5),
+        d_theta_deg=card.f(6),
+        d_phi_deg=card.f(7),
+    )
+    second = result.second_medium
+    cliff = None
+    if gd is not None and second is not None and result.ground.kind != "free":
+        cliff = (_CIRCULAR_CLIFF, second)
+    return pattern_block(
+        request,
+        result.solver,
+        result.coeffs,
+        result.ground,
+        freq_mhz,
+        result.wavelength,
+        result.p_in,
+        ground_z=result.ground_z or 0.0,
+        cliff=cliff,
     )
