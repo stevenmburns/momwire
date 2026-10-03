@@ -421,6 +421,16 @@ class DeckModel:
     # written against an earlier release keeps meaning what it meant.
     networks: tuple[NetworkCard, ...] = ()
 
+    # Indices into :attr:`feeds` driven as CURRENT sources (the nec4
+    # dialect's ``EX 6``, momwire#1295).  For these ports the feed's complex
+    # amplitude, and each group's :attr:`ExecuteGroup.voltages` entry, is the
+    # set current in AMPERES; a consumer solves the port as a voltage drive and
+    # rescales the whole answer so the source current comes out at that value,
+    # which is exact because the dialect allows a current source only as a
+    # group's sole source.  Empty for every dialect but ``nec4``.  Last in the
+    # field order for the reason :attr:`networks` gives.
+    current_feeds: tuple[int, ...] = ()
+
     @property
     def environment(self) -> Environment:
         """The deck's last environment, as one value.
