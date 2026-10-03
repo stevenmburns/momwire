@@ -560,9 +560,10 @@ seg_seg_full_moments_bspline_kernel_impl(
             alignas(32) double sin_phases[BSPLINE_QR_TILE];
             alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
             alignas(32) double decay[BSPLINE_QR_TILE];
-            // wuwu[pP, t]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
-            // chunk's pairs, flattened with pP = p*NM + P. For D=2:
-            // NMM*64 = 576 doubles = 4.5KB, fits comfortably in L1.
+            // wuwu[t, pP]: precomputed wi[q]*ui[q]^p * wj[r]*uj[r]^P for the
+            // chunk's pairs, flattened with pP = p*NM + P innermost (stage 2
+            // walks t outermost). For D=2: NMM*64 = 576 doubles = 4.5KB,
+            // fits comfortably in L1.
             alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
 
             double acc_re[NMM], acc_im[NMM];
@@ -618,7 +619,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                     const double wij = wi * wj;
                     for (int pp = 0; pp < NM; pp++) {
                         for (int PP = 0; PP < NM; PP++) {
-                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
+                            wuwu[t * NMM + pp * NM + PP] = wij * ui_pow[pp] * uj_pow[PP];
                         }
                     }
 
@@ -664,28 +665,24 @@ seg_seg_full_moments_bspline_kernel_impl(
                     }
                 }
 
-                // Stage 2: NMM moment reductions, each a vectorizable sum over
-                // the chunk, carried in acc_* across chunks.
-                for (int pP = 0; pP < NMM; pP++) {
-                    double sr = acc_re[pP], si = acc_im[pP];
-                    const double *w_row = &wuwu[pP * m];
-                    // No `omp simd reduction` here (momwire#781): the clause LICENSES
-                    // reassociation, so the reduction tree follows whatever
-                    // vectorization factor the compiler picks per FUNCTION -- and the
-                    // reduced and EK kernels differ in register pressure. That made
-                    // their all-ineligible outputs disagree by 1 ulp on arm64 while
-                    // matching on x86-64, breaking the exact-reduction gates that
-                    // momwire#270 U2 relies on. Measured single-threaded (pinned,
-                    // passive wait, min of 5, 3 alternating rounds), the clause is
-                    // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
-                    // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
-                    // no cross-kernel equality gate to protect.
-                    for (size_t t = 0; t < m; t++) {
-                        sr += w_row[t] * G_re[t];
-                        si += w_row[t] * G_im[t];
+                // Stage 2: the NMM moment sums, carried in acc_* across
+                // chunks. Each accumulator adds its terms in ascending t, one
+                // rounded multiply and one rounded add per term -- the order
+                // the per-pP loop this replaced used -- so the moments are
+                // bit-identical to it on every target. Only the nesting moved:
+                // with t outermost the NMM (re, im) chains are independent
+                // within a step, where per pP each was one serial chain of m
+                // dependent adds (latency-bound, ~4 cycles a term). Nothing
+                // here licenses reassociation: no `omp simd reduction`
+                // (momwire#781), and any vectorizing the compiler does is
+                // ACROSS accumulators, which is exact.
+                for (size_t t = 0; t < m; t++) {
+                    const double gr = G_re[t], gi = G_im[t];
+                    const double *w_t = &wuwu[t * NMM];
+                    for (int pP = 0; pP < NMM; pP++) {
+                        acc_re[pP] += w_t[pP] * gr;
+                        acc_im[pP] += w_t[pP] * gi;
                     }
-                    acc_re[pP] = sr;
-                    acc_im[pP] = si;
                 }
             }
 
