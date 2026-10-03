@@ -616,6 +616,29 @@ razor_seg_moments_cplx(
 //
 // Falling wings: `fall_a`/`fall_b` are per-basis flags, not per-pair, so the
 // branch is hoisted out of the observer loop.
+// A T1 assembler's observer -> moment-row map, checked: empty is the
+// identity (and then the moment planes have one row per observer).
+static const int64_t *row_map(const py::array_t<int64_t, py::array::c_style |
+                                                         py::array::forcecast> &obs_row,
+                              size_t n_obs, size_t n_m1, py::ssize_t n_m0,
+                              const char *who) {
+    if (static_cast<size_t>(n_m0) != n_m1)
+        throw std::runtime_error(std::string(who) + ": M0 and M1 disagree on rows");
+    if (obs_row.size() == 0) {
+        if (n_m1 != n_obs)
+            throw std::runtime_error(std::string(who) +
+                                     ": one moment row per observer without obs_row");
+        return nullptr;
+    }
+    if (static_cast<size_t>(obs_row.size()) != n_obs)
+        throw std::runtime_error(std::string(who) + ": obs_row needs one entry per observer");
+    const int64_t *r = obs_row.data();
+    for (size_t o = 0; o < n_obs; o++)
+        if (r[o] < 0 || static_cast<size_t>(r[o]) >= n_m1)
+            throw std::runtime_error(std::string(who) + ": obs_row out of range");
+    return r;
+}
+
 static py::array_t<std::complex<double>>
 razor_assemble_t1(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> M0,
@@ -630,7 +653,8 @@ razor_assemble_t1(
     py::array_t<double, py::array::c_style | py::array::forcecast> td_a,
     py::array_t<double, py::array::c_style | py::array::forcecast> td_b,
     py::array_t<double, py::array::c_style | py::array::forcecast> wts,
-    size_t n_path
+    size_t n_path,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> obs_row
 ) {
     auto m0 = M0.unchecked<2>();
     auto m1 = M1.unchecked<2>();
@@ -645,9 +669,14 @@ razor_assemble_t1(
     auto tb = td_b.unchecked<2>();
     auto w = wts.unchecked<1>();
 
-    const size_t n_obs = static_cast<size_t>(m1.shape(0));
+    // `obs_row` (momwire#1290): observer o reads moment row obs_row[o], so a
+    // window whose observers repeat passes each distinct row once. Empty:
+    // row o itself.
+    const size_t n_obs = static_cast<size_t>(w.shape(0));
     const size_t n_seg = static_cast<size_t>(m1.shape(1));
     const size_t n_basis = static_cast<size_t>(sa.shape(0));
+    const int64_t *orow = row_map(obs_row, n_obs, static_cast<size_t>(m1.shape(0)),
+                                  m0.shape(0), "razor_assemble_t1");
 
     if (n_path == 0 || n_obs % n_path != 0) {
         throw std::runtime_error(
@@ -697,12 +726,13 @@ razor_assemble_t1(
             double acc_re = 0.0, acc_im = 0.0;
             for (size_t p = 0; p < n_path; p++) {
                 const size_t o = r * n_path + p;
+                const size_t q = orow ? static_cast<size_t>(orow[o]) : o;
 
                 // mom_a = M1/h on a rising wing, M0 - M1/h on a falling one.
-                std::complex<double> ma = m1(o, ja) * inv_ha;
-                if (fall_j_a) ma = m0(o, ja) - ma;
-                std::complex<double> mb = m1(o, jb) * inv_hb;
-                if (fall_j_b) mb = m0(o, jb) - mb;
+                std::complex<double> ma = m1(q, ja) * inv_ha;
+                if (fall_j_a) ma = m0(q, ja) - ma;
+                std::complex<double> mb = m1(q, jb) * inv_hb;
+                if (fall_j_b) mb = m0(q, jb) - mb;
 
                 const double dot_a = to(o, 0) * a0 + to(o, 1) * a1 + to(o, 2) * a2;
                 const double dot_b = to(o, 0) * b0 + to(o, 1) * b1 + to(o, 2) * b2;
@@ -869,7 +899,8 @@ razor_assemble_t1_weighted(
     int window_kind,
     std::complex<double> eps_t,
     double ground_z,
-    std::complex<double> coefficient
+    std::complex<double> coefficient,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> obs_row
 ) {
     auto m0 = M0.unchecked<2>();
     auto m1 = M1.unchecked<2>();
@@ -887,9 +918,12 @@ razor_assemble_t1_weighted(
     auto st = src_t.unchecked<2>();
     auto w = wts.unchecked<1>();
 
-    const size_t n_obs = static_cast<size_t>(m1.shape(0));
+    // `obs_row`: as in `razor_assemble_t1`.
+    const size_t n_obs = static_cast<size_t>(w.shape(0));
     const size_t n_seg = static_cast<size_t>(m1.shape(1));
     const size_t n_basis = static_cast<size_t>(sa.shape(0));
+    const int64_t *orow = row_map(obs_row, n_obs, static_cast<size_t>(m1.shape(0)),
+                                  m0.shape(0), "razor_assemble_t1_weighted");
 
     if (window_kind != 0 && window_kind != 1) {
         throw std::runtime_error(
@@ -962,12 +996,13 @@ razor_assemble_t1_weighted(
             std::complex<double> acc(0.0, 0.0);
             for (size_t p = 0; p < n_path; p++) {
                 const size_t o = r * n_path + p;
+                const size_t q = orow ? static_cast<size_t>(orow[o]) : o;
 
                 // mom_a = M1/h on a rising wing, M0 - M1/h on a falling one.
-                std::complex<double> ma = m1(o, ja) * inv_ha;
-                if (fall_j_a) ma = m0(o, ja) - ma;
-                std::complex<double> mb = m1(o, jb) * inv_hb;
-                if (fall_j_b) mb = m0(o, jb) - mb;
+                std::complex<double> ma = m1(q, ja) * inv_ha;
+                if (fall_j_a) ma = m0(q, ja) - ma;
+                std::complex<double> mb = m1(q, jb) * inv_hb;
+                if (fall_j_b) mb = m0(q, jb) - mb;
 
                 const double ox = oc(o, 0), oy = oc(o, 1), oz = oc(o, 2);
                 const double tx = ot(o, 0), ty = ot(o, 1), tz = ot(o, 2);
@@ -1078,7 +1113,8 @@ void register_razor(py::module_ &m) {
           py::arg("M0"), py::arg("M1"), py::arg("s_a"), py::arg("s_b"),
           py::arg("h_a"), py::arg("h_b"), py::arg("fall_a"), py::arg("fall_b"),
           py::arg("t_out"), py::arg("td_a"), py::arg("td_b"), py::arg("wts"),
-          py::arg("n_path"));
+          py::arg("n_path"), py::arg("obs_row") = py::array_t<int64_t>());
+    m.attr("razor_t1_rows_1290") = true;
 
     // momwire#744, on its OWN flag for the same reason every kernel above is:
     // a .so built before this lands exports the unweighted assembler and not
@@ -1109,5 +1145,6 @@ void register_razor(py::module_ &m) {
           py::arg("sig_a"), py::arg("sig_b"), py::arg("obs_c"),
           py::arg("obs_t"), py::arg("src_c"), py::arg("src_t"),
           py::arg("wts"), py::arg("n_path"), py::arg("window_kind"),
-          py::arg("eps_t"), py::arg("ground_z"), py::arg("coefficient"));
+          py::arg("eps_t"), py::arg("ground_z"), py::arg("coefficient"),
+          py::arg("obs_row") = py::array_t<int64_t>());
 }
