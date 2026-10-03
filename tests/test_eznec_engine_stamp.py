@@ -374,7 +374,7 @@ def test_the_seams_own_last_line_of_defence_is_stamped(monkeypatch):
     """The resident transport's twin of the gate above: ``seam().answer`` must
     never raise, and the printout it substitutes carries the stamp."""
 
-    def boom(text, *, basis):
+    def boom(text, *, basis, dialect):
         raise RuntimeError("injected")
 
     monkeypatch.setattr(_shell, "render", boom)

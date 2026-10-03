@@ -56,7 +56,7 @@ def test_the_eznec_seam_answers_exactly_what_the_shell_renders():
 
 
 def test_the_eznec_seam_frames_an_unforeseen_failure_instead_of_raising(monkeypatch):
-    def boom(text, *, basis):
+    def boom(text, *, basis, dialect):
         raise RuntimeError("unforeseen")
 
     monkeypatch.setattr(_shell, "render", boom)
