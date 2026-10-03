@@ -328,9 +328,147 @@ static py::array_t<std::complex<double>> end_matvecs(
     return out;
 }
 
+// The main sandwich's five-term combine (`_crossing_fill._combine`) of the
+// six left products L_i against the right weights, for the basis rows `J`
+// of four CSR matrices Q (U.x, U.y, V/W, W/V: the six terms read Q1, Q2,
+// Q3, Q4, Q3, Q4):
+//
+//   out[r, j] = L0 Q1[J_j]^T + L1 Q2^T + L2 Q3^T + L3 Q4^T + L4 Q3^T
+//               - L5 Q4^T                                   (row r of L)
+//
+// with column c of the products read through `colmap`: L_i[r, colmap[c]]
+// of `lnew` when colmap[c] >= 0, else of `lheld` at -1 - colmap[c] (the
+// streamed sandwich's chunk and its held columns, momwire#1168), so neither
+// the gathered (|rA|, |need|) products nor the sliced Q[J][:, need] are
+// formed.
+//
+// THE BITS ARE THE NUMPY ROUTE'S on builds that do not contract. `L @ S.T`
+// with a real CSR S is scipy's `csr_matvecs` over S's rows: each output
+// (j, r) a running sum from +0 of (a + 0j) * L[r, col] over row j's stored
+// entries in stored order, and column-slicing S keeps each row's entries and
+// their order, so reading the full row through `colmap` reads the same terms
+// in the same order. A term's parts are a*xr - 0*xi and a*xi + 0*xr there
+// and a*xr, a*xi here: equal unless the product is a zero, where only a
+// zero's sign can differ, and a running sum from +0 cannot hold -0, so no
+// partial sum differs. The combine is numpy's elementwise left-to-right
+// ((((T0 + T1) + T2) + T3) + T4) - T5, real and imaginary parts apart.
+static py::array_t<std::complex<double>> combine_rows(
+    std::vector<py::array_t<std::complex<double>, py::array::c_style>> lnew,
+    std::vector<py::array_t<std::complex<double>, py::array::c_style>> lheld,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> colmap,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> J,
+    std::vector<py::array_t<int64_t, py::array::c_style | py::array::forcecast>>
+        indptrs,
+    std::vector<py::array_t<int64_t, py::array::c_style | py::array::forcecast>>
+        indicess,
+    std::vector<py::array_t<double, py::array::c_style>> datas, int n_threads) {
+    if (lnew.size() != 6 || (!lheld.empty() && lheld.size() != 6))
+        throw std::runtime_error("combine_rows: six left products (and six held)");
+    if (indptrs.size() != 4 || indicess.size() != 4 || datas.size() != 4)
+        throw std::runtime_error("combine_rows: four matrices");
+    if (lnew[0].ndim() != 2) throw std::runtime_error("combine_rows: L must be 2-D");
+    const py::ssize_t rA = lnew[0].shape(0);
+    const py::ssize_t n_new = lnew[0].shape(1);
+    const py::ssize_t n_held = lheld.empty() ? 0 : lheld[0].shape(1);
+    for (int i = 0; i < 6; ++i) {
+        if (lnew[i].ndim() != 2 || lnew[i].shape(0) != rA || lnew[i].shape(1) != n_new)
+            throw std::runtime_error("combine_rows: lnew shapes");
+        if (!lheld.empty() &&
+            (lheld[i].ndim() != 2 || lheld[i].shape(0) != rA ||
+             lheld[i].shape(1) != n_held))
+            throw std::runtime_error("combine_rows: lheld shapes");
+    }
+    const py::ssize_t n_cols = colmap.size();
+    const int64_t *cm = colmap.data();
+    Csr Q[4];
+    py::ssize_t n_rows_q = -1;
+    for (int m = 0; m < 4; ++m) {
+        const py::ssize_t nr = indptrs[m].size() - 1;
+        if (nr < 0 || (n_rows_q >= 0 && nr != n_rows_q))
+            throw std::runtime_error("combine_rows: matrices of unequal height");
+        n_rows_q = nr;
+        Q[m] = Csr{indptrs[m].data(), indicess[m].data(), datas[m].data()};
+    }
+    const py::ssize_t nJ = J.size();
+    const int64_t *Jp = J.data();
+    // Every column a row in J stores must be in hand, in `lnew` or `lheld`
+    // (the streamed route's AssertionError when it is not).
+    for (py::ssize_t j = 0; j < nJ; ++j) {
+        if (Jp[j] < 0 || Jp[j] >= n_rows_q)
+            throw std::runtime_error("combine_rows: row out of range");
+        for (int m = 0; m < 4; ++m)
+            for (int64_t jj = Q[m].indptr[Jp[j]]; jj < Q[m].indptr[Jp[j] + 1]; ++jj) {
+                if (jj >= indicess[m].size() || jj >= datas[m].size())
+                    throw std::runtime_error("combine_rows: short CSR arrays");
+                const int64_t c = Q[m].indices[jj];
+                if (c < 0 || c >= n_cols)
+                    throw std::runtime_error("combine_rows: column out of range");
+                const int64_t at = cm[c];
+                if (at >= n_new || (at < 0 && -1 - at >= n_held))
+                    throw std::runtime_error(
+                        "combine_rows: a row reads a column not in hand");
+            }
+    }
+    const double *Ln[6], *Lh[6];
+    for (int i = 0; i < 6; ++i) {
+        Ln[i] = reinterpret_cast<const double *>(lnew[i].data());
+        Lh[i] = lheld.empty() ? nullptr
+                              : reinterpret_cast<const double *>(lheld[i].data());
+    }
+    py::array_t<std::complex<double>> out(std::vector<py::ssize_t>{rA, nJ});
+    double *Y = reinterpret_cast<double *>(out.mutable_data());
+    {
+        py::gil_scoped_release nogil;
+        int nt = 1;
+#ifdef _OPENMP
+        nt = omp_get_max_threads();
+        if (n_threads > 0) nt = std::min(nt, n_threads);
+#endif
+        static const int qsel[6] = {0, 1, 2, 3, 2, 3};
+        // Rows of L are independent: each output row is written by one
+        // thread, its terms in stored order, so the thread count cannot move
+        // a bit.
+#pragma omp parallel for schedule(dynamic, 8) num_threads(nt)
+        for (py::ssize_t r = 0; r < rA; ++r) {
+            double *y = Y + 2 * r * nJ;
+            for (py::ssize_t j = 0; j < nJ; ++j) {
+                double tr[6], ti[6];
+                for (int i = 0; i < 6; ++i) {
+                    const Csr &M = Q[qsel[i]];
+                    double sr = 0.0, si = 0.0;
+                    for (int64_t jj = M.indptr[Jp[j]]; jj < M.indptr[Jp[j] + 1]; ++jj) {
+                        const double a = M.data[jj];
+                        const int64_t c = cm[M.indices[jj]];
+                        const double *x = c >= 0 ? Ln[i] + 2 * (r * n_new + c)
+                                                 : Lh[i] + 2 * (r * n_held + (-1 - c));
+                        sr += a * x[0];
+                        si += a * x[1];
+                    }
+                    tr[i] = sr;
+                    ti[i] = si;
+                }
+                y[2 * j] = ((((tr[0] + tr[1]) + tr[2]) + tr[3]) + tr[4]) - tr[5];
+                y[2 * j + 1] = ((((ti[0] + ti[1]) + ti[2]) + ti[3]) + ti[4]) - ti[5];
+            }
+        }
+    }
+    return out;
+}
+
 }  // namespace left_gather
 
 void register_left_gather(py::module_ &m) {
+    m.def("combine_rows", &left_gather::combine_rows,
+          "The crossing main sandwich's five-term combine of six left "
+          "products against rows J of four CSR matrices (Q1, Q2, Q3, Q4, Q3, "
+          "Q4), product column c read at colmap[c] of lnew (>= 0) or at "
+          "-1 - colmap[c] of lheld. scipy's CSR product order from zero, "
+          "numpy's combine order; OpenMP over L's rows. Returns (rA, |J|) "
+          "complex. momwire#1290.",
+          py::arg("lnew"), py::arg("lheld"), py::arg("colmap"), py::arg("J"),
+          py::arg("indptrs"), py::arg("indices"), py::arg("data"),
+          py::arg("n_threads"));
+    m.attr("combine_rows_1290") = true;
     m.def("left_products_gathered", &left_gather::left_products_gathered,
           "The crossing main sandwich's six left products (P1 U, P2 U, "
           "P3 (k2 V + dz'W), P3 W, P4 W, P4 V) of four (n_out, nA) CSR "

@@ -5567,10 +5567,56 @@ def _dense_left_serve(Ps, K):
     )
 
 
+# The five-term combine by `combine_rows` (`_accel_left_gather.cpp`,
+# momwire#1290) when the accelerator carries it, for EVERY route, so the
+# routes agree to the bit by construction on any build. False is scipy's
+# products and numpy's sum, the reference the kernel is gated against
+# (tests/test_combine_rows_1290.py): the same bits where neither contracts.
+_COMBINE_ACCEL = True
+_HAVE_COMBINE_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "combine_rows_1290", False)
+)
+
+
+_NOT_IN_HAND = np.iinfo(np.int64).max
+
+
+def _combine_serves(Ls, Qz):
+    """Whether `combine_rows` takes these operands: the kernel on, real
+    matrices, complex products."""
+    return (
+        _COMBINE_ACCEL
+        and _HAVE_COMBINE_ACCEL
+        and all(q.data.dtype == np.float64 for q in Qz)
+        and all(L.dtype == np.complex128 and L.ndim == 2 for L in Ls)
+    )
+
+
+def _csr_args(Qs):
+    """The four distinct matrices of a (Q1, Q2, Q3, Q4, Q3, Q4) list as
+    `combine_rows`' (indptrs, indices, data)."""
+    Qs = [_sp.csr_array(q) if not isinstance(q, _sp.csr_array) else q for q in Qs[:4]]
+    return (
+        [np.asarray(q.indptr, dtype=np.int64) for q in Qs],
+        [np.asarray(q.indices, dtype=np.int64) for q in Qs],
+        [np.ascontiguousarray(q.data) for q in Qs],
+    )
+
+
 def _combine(Ls, Qz):
     """The five-term contraction of the six left products with the right
     weights (`Qz` in `_sandwich_dense`'s (Q1, Q2, Q3, Q4, Q3, Q4) order), in
     the reference term order."""
+    if _combine_serves(Ls, Qz):
+        n_rows = Qz[0].shape[0]
+        return _accel.acc.combine_rows(
+            [np.ascontiguousarray(L) for L in Ls],
+            [],
+            np.arange(Qz[0].shape[1], dtype=np.int64),
+            np.arange(n_rows, dtype=np.int64),
+            *_csr_args(Qz),
+            _near_interface._physical_cpu_count(),
+        )
     return (
         Ls[0] @ Qz[0].T
         + Ls[1] @ Qz[1].T
@@ -5660,6 +5706,12 @@ def _streamed_sandwich(
     pending = np.ones(nq, dtype=bool)
     held_cols = np.zeros(0, dtype=np.int64)
     held = None
+    by_rows = _STREAMED_WHOLE_ROWS and _combine_serves([], Qs4)
+    if by_rows:
+        q_args = _csr_args(Qs4)
+        # A column no chunk or held set names reads as out of range, which
+        # `combine_rows` refuses ("a row reads a column not in hand").
+        colmap = np.full(n_cols, _NOT_IN_HAND, dtype=np.int64)
     for cols, Kc in K:
         c_cols = (
             np.arange(cols.start, cols.stop)
@@ -5685,7 +5737,24 @@ def _streamed_sandwich(
         n_old = held_cols.size
         slot[held_cols] = np.arange(n_old)
         slot[c_cols] = n_old + np.arange(c_cols.size)
-        if J.size:
+        if J.size and by_rows:
+            # `combine_rows` reads each row's columns where they are held
+            # (the chunk's or the held set's), through `colmap`: the same
+            # terms the gathered products and sliced rows below hand
+            # `_combine`, in the same order, through the same loop.
+            colmap[held_cols] = -1 - np.arange(n_old)
+            colmap[c_cols] = np.arange(c_cols.size)
+            block = _accel.acc.combine_rows(
+                [np.ascontiguousarray(x) for x in Lc],
+                [] if held is None else held,
+                colmap,
+                J,
+                *q_args,
+                _near_interface._physical_cpu_count(),
+            )
+            colmap[held_cols] = _NOT_IN_HAND
+            colmap[c_cols] = _NOT_IN_HAND
+        elif J.size:
             need = np.unique(pat[J].indices)
             pos = slot[need]
             if (pos < 0).any():
@@ -5700,6 +5769,7 @@ def _streamed_sandwich(
                 Ls.append(L)
             block = _combine(Ls, [q[J][:, need] for q in Qs])
             del Ls
+        if J.size:
             # each entry written once when `fresh`
             if sink is not None:
                 sink(rA, rB[J], block)
