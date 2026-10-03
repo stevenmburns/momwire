@@ -16,9 +16,11 @@ the fused bands, `test_mixed_fill_fused_1224.py`):
   * the banded result equals the old whole-matrix spelling byte-for-byte
     at band heights that force many bands (1, 7, 100, N − 1) and at one
     that does not (N, and larger);
-  * a counting proxy on each M records the row count of every product, so
+  * a spy on `_reduce_phi_band` records the row count of every band, so
     the band path is proven to have run with exactly the expected bands —
-    the test cannot pass with the reduction silently taken whole;
+    the test cannot pass with the reduction silently taken whole (since
+    momwire#1290 each band is further cut into observer tiles there;
+    `test_sin_reduce_tiles_1290.py` gates that cut);
   * the Ms are the sparse regime's, and the result is Φ₀'s storage.
 """
 
@@ -31,23 +33,6 @@ from test_crossing_serve_524 import invl_deck
 from test_mixed_fill_fused_1224 import whole_phi_tables
 
 from momwire import sinusoidal as sn
-
-
-class _CountingM:
-    """An M that records the observer rows of every `Φ_band @ M`.
-
-    `__array_ufunc__ = None` makes numpy defer `ndarray @ self` to
-    `__rmatmul__`, which then runs the exact product the solver runs."""
-
-    __array_ufunc__ = None
-
-    def __init__(self, M):
-        self.M = M
-        self.rows = []
-
-    def __rmatmul__(self, other):
-        self.rows.append(other.shape[0])
-        return other @ self.M
 
 
 @pytest.fixture(scope="module")
@@ -73,18 +58,24 @@ def test_the_tables_are_the_sparse_regime(captured):
 
 
 @pytest.mark.parametrize("band", [1, 7, 100, 733, 734, 5000])
-def test_banded_reduction_is_bit_equal(captured, band):
-    Phi0, Ms0 = captured["Phi"], captured["Ms"]
+def test_banded_reduction_is_bit_equal(captured, band, monkeypatch):
+    Phi0, Ms = captured["Phi"], captured["Ms"]
     N = Phi0[0].shape[0]
-    ref = _whole(Phi0, Ms0)
+    ref = _whole(Phi0, Ms)
 
+    rows = []
+    orig = sn._reduce_phi_band
+
+    def spy(Phi, Ms, out):
+        rows.append(out.shape[0])
+        return orig(Phi, Ms, out)
+
+    monkeypatch.setattr(sn, "_reduce_phi_band", spy)
     Phi = [P.copy() for P in Phi0]
-    Ms = [_CountingM(M) for M in Ms0]
     out = sn._reduce_phi_rows_in_place(Phi, Ms, band)
 
     expected = [min(band, N - r0) for r0 in range(0, N, band)]
-    for M in Ms:
-        assert M.rows == expected
+    assert rows == expected
     assert (len(expected) > 1) == (band < N)
     assert out is Phi[0]
     assert np.array_equal(out, ref)
