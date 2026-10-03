@@ -151,7 +151,14 @@ from typing import NamedTuple
 
 import numpy as np
 
-from . import _ground_mirror, _ground_refl, _ground_spec, _sommerfeld, _sommerfeld_below
+from . import (
+    _ground_mirror,
+    _ground_refl,
+    _ground_spec,
+    _near_interface,
+    _sommerfeld,
+    _sommerfeld_below,
+)
 from ._quadrature import leggauss
 
 
@@ -649,12 +656,44 @@ class RemainderBelow(Remainder):
         t_src = np.repeat(src_t, n_qp, axis=0)
 
         def field_moments(i0, i1):
+            o_p, o_t = obs_p[i0:i1], obs_t[i0:i1]
+            first, inv = _distinct_observers(o_p, o_t)
+            if first is not None:
+                o_p, o_t = o_p[first], o_t[first]
             proj = _sommerfeld_below.remainder_field_proj_below(
-                obs_p[i0:i1], obs_t[i0:i1], src, t_src, gz, k_p, k_m, grid
+                o_p, o_t, src, t_src, gz, k_p, k_m, grid
             )
-            return np.einsum("ojq,pjq->ojp", proj.reshape(i1 - i0, n_src, n_qp), W)
+            mom = np.einsum("ojq,pjq->ojp", proj.reshape(o_p.shape[0], n_src, n_qp), W)
+            return mom if first is None else mom[inv]
 
         return field_moments
+
+
+def _distinct_observers(o_p, o_t):
+    """`(first, inverse)` of the observer rows (point, tangent) equal to the
+    BIT (so -0.0 is not 0.0), or `(None, None)` when every row is distinct
+    or the hash kernel is not built.
+
+    A path-tested fill observes each wing centroid once per basis that ends
+    on it, with the same tangent when the two bases flow the same way
+    (razor under `nec5_quadrature`), so a window asks most points twice. A
+    row's projected remainder is a function of its own point and tangent and
+    the source set, and the distinct rows are exactly the window's points,
+    so the window's extremes (which size the lazily filled grid regions) are
+    unchanged: the gathered rows are the rows the whole window gave."""
+    n = o_p.shape[0]
+    if n < 2:
+        return None, None
+    bp = np.ascontiguousarray(o_p).view(np.int64)
+    bt = np.ascontiguousarray(o_t).view(np.int64)
+    got_p = _near_interface._factorize((bp[:, 0], bp[:, 1], bp[:, 2]), ints=True)
+    got_t = _near_interface._factorize((bt[:, 0], bt[:, 1], bt[:, 2]), ints=True)
+    if got_p is None or got_t is None:
+        return None, None
+    got = _near_interface._factorize((got_p[1], got_t[1]), ints=True)
+    if got is None or got[0].size == n:
+        return None, None
+    return got
 
 
 # The two windows a fused assembler can evaluate pair-by-pair, as tags on
