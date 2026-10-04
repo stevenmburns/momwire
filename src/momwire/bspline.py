@@ -128,11 +128,15 @@ BURIED_N_QP_PAIR = 32
 #   * A deck coarse enough to trip the guard has too few segments for any
 #     pair to reach ratio 16 anyway, which is why the ceiling costs nothing
 #     on the decks measured: real meshes sit at kL 0.016-0.075.
-#   * The PEC-image fills (`_build_J_image_blocks`,
-#     `_accumulate_Z_image_chunked`) are deliberately NOT wired for a ladder.
-#     #906's study binned direct pair geometry, not image geometry, so a
-#     PEC-ground deck gets tiered direct blocks and untiered image ones —
-#     uneven, but both arms stay at the accuracy they already had.
+#   * The above-ground image fills (`_build_J_image_blocks`,
+#     `_accumulate_Z_image_chunked`) were left untiered by #906, whose study
+#     binned direct pair geometry only. momwire#1304 measured image geometry
+#     and wired them to the SAME deck ladder (`_image_fill_ladder`): the
+#     selector reads observer-to-IMAGE-source distance, the per-pair kL guard
+#     is unchanged, and the worst Z movement over a height sweep to 0.005
+#     lambda and the whole AK catalog was 1.4e-11 relative (PEC), with every
+#     served image pair inside G-906-3's 1e-9 per-pair contract. The 8-point
+#     image fill stays reachable as `image_pair_order_ladder=()`.
 #
 # Movement from turning it on, free space, order 8: 3e-12 to 2e-11 absolute
 # on Z (relative 3e-14 to 1e-13), i.e. under the base order's own
@@ -1149,15 +1153,28 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the longest segment passes kL = 0.5 — in free space that is the only
         tier, so the guard disables the ladder for that block entirely.
 
-        Not every fill honours it: the PEC-image blocks are untiered on
-        purpose, and the extended kernel refuses a ladder outright (see
-        `_fill_ladder`, which is what a fill should ask rather than reading
-        this property directly).
+        Not every fill honours it: the extended kernel refuses a ladder
+        outright (see `_fill_ladder`, which is what a fill should ask rather
+        than reading this property directly), and the H-matrix, ArrayBlock
+        and frequency-swept fills have no ladder on either term.
 
         What it buys: on the 654-segment radial screen the two buried pair
         blocks went from 6.3 s to well under a second at the same Z, because
         87 % of the pairs sit 16+ segment lengths apart and the study
         measured order 4 there at 3e-14 relative to order 32.
+    image_pair_order_ladder : the same ladder for the above-ground IMAGE
+        term (PEC, refl-coef, and the Sommerfeld exact-image part; both the
+        chunked sweep with its near-image fixup and the dense image blocks),
+        momwire#1304. None (the default) follows the direct term's resolved
+        ladder, so a deck gets one quadrature rule on both terms. `()` is the
+        REFERENCE: every image pair at `n_qp_pair`, the arithmetic before
+        #1304 bit for bit — what the #1304 gates compare against. An explicit
+        ladder is normalised against `n_qp_pair` as `pair_order_ladder` is.
+        The ratio a pair is binned by is the observer centre to the IMAGE
+        source's centre over the longer segment, and the per-pair kL <= 0.5
+        guard applies unchanged. Buried decks do not take this path at all:
+        their images ride the subset fill, which already uses
+        `pair_order_ladder`.
     extended_kernel : NEC's EK card for this basis family (#249). False —
         the default, and what this solver did before #249 — is the reduced
         ("thin-wire") kernel: the source current is a filament on the wire
@@ -1379,6 +1396,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_qp_pair=None,
         n_qp_pair_same_edge=4,
         pair_order_ladder=None,
+        image_pair_order_ladder=None,
         n_qp_source=16,
         extended_kernel=False,
         wavelength=22,
@@ -1656,6 +1674,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             None
             if pair_order_ladder is None
             else tuple((float(r), int(n)) for r, n in pair_order_ladder)
+        )
+        # momwire#1304: None follows the direct term's ladder; `()` is the
+        # pre-#1304 8-point image fill, kept as the reference.
+        self._image_pair_order_ladder_arg = (
+            None
+            if image_pair_order_ladder is None
+            else tuple((float(r), int(n)) for r, n in image_pair_order_ladder)
         )
 
         # Singular basis enrichment at K≥`enrichment_min_k` junctions.
@@ -2355,6 +2380,42 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if ek is not None:
             return ()
         return _normalize_ladder(self.pair_order_ladder, self.n_qp_pair)
+
+    def _image_fill_ladder(self, k, seg_l, seg_r, ek):
+        """The ladder for an above-ground IMAGE fill (momwire#1304).
+
+        By default the direct term's `_fill_ladder`, so the two terms of one
+        deck run the same rule. An image pair is, to the kernel, just a pair
+        of segments: the observer and a source the fill has already
+        reflected. The selector bins it by the distance to the source it is
+        HANDED (the mirror) over the longer segment, and the per-pair kL
+        guard (#920) reads the two segment lengths, which a mirror does not
+        change — so a given image pair gets exactly the order, and the error,
+        the same geometry would get as a direct pair (measured: per moment
+        index, order 4 vs 8 on a 2-lambda wire's image at kL 0.42 and 0.48
+        matches the parallel direct pair to two digits). What the image term
+        adds is only a different population of geometries, and the #1304
+        study covered it: a height sweep to 0.005 lambda and the AK catalog,
+        worst Z movement 1.4e-11, every served pair inside G-906-3's 1e-9.
+        Grazing heights are harmless: a segment near its own image sits at
+        ratio < 16 and keeps the base order, and a horizontal edge's whole
+        self-image block is replaced by the #631 analytic block anyway.
+
+        ONE ladder per fill, as `_fill_ladder` requires (#921): the chunked
+        sweep and its near-image fixup both ask here, so the fixup subtracts
+        exactly the arithmetic the sweep added.
+
+        Empty under the extended kernel, for `_fill_ladder`'s reason.
+        """
+        if ek is not None:
+            return ()
+        if self._image_pair_order_ladder_arg is None:
+            return self._fill_ladder(k, seg_l, seg_r, ek)
+        base = self.n_qp_pair
+        return _normalize_ladder(
+            tuple((r, n) for r, n in self._image_pair_order_ladder_arg if n < base),
+            base,
+        )
 
     @property
     def _accel_serves_n_qp_pair(self):
@@ -3167,6 +3228,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # source side is the MIRRORED geometry, so eligibility is scored
         # against it (`mirror=True`): a vertical monopole is coaxial with
         # its own image and extends, a horizontal wire is not and does not.
+        ek = self._ek_spec(geom, mirror=True) if self.extended_kernel else None
         J = _seg_seg_full_moments_offedge(
             seg_l,
             seg_r,
@@ -3176,7 +3238,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             k,
             d,
             self.n_qp_pair,
-            ek=self._ek_spec(geom, mirror=True) if self.extended_kernel else None,
+            ek=ek,
+            ladder=self._image_fill_ladder(k, seg_l, seg_r, ek),
         )
         for sl, arc, a_eff in self._near_image_edge_blocks(geom):
             J[:, :, sl, sl] = self._near_image_analytic_block(arc, a_eff, k)
@@ -4683,6 +4746,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_segs = geom["n_segs_total"]
         n_basis = supp_seg.shape[0]
         ek = self._ek_spec(geom, mirror=True) if self.extended_kernel else None
+        # momwire#1304: ONE image ladder for the sweep AND the near-image
+        # fixup below, so the fixup's `analytic - J_edge` removes exactly what
+        # the sweep added for those pairs (#921's invariant, image side).
+        ladder = self._image_fill_ladder(k, seg_l, seg_r, ek)
 
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
@@ -4733,6 +4800,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     d,
                     self.n_qp_pair,
                     ek=_ek_slice(ek, rows=slice(i0, i1)),
+                    ladder=ladder,
                 )
                 m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
                 # Same producer contract as `_accumulate` in the free-space
@@ -4801,6 +4869,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 d,
                 self.n_qp_pair,
                 ek=_ek_slice(ek, rows=sl, cols=sl),
+                ladder=ladder,
             )
             corr = self._near_image_analytic_block(arc, a_eff, k) - J_edge
             del J_edge  # same lifetime discipline as the sweep above (#338)
@@ -7606,6 +7675,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek_img = None
         tangents_mirror = None
         if self.ground_z is not None:
+            # No pair-order ladder on this fill, image term included
+            # (momwire#1304 laddered the per-k image fills only): the swept
+            # batched kernel takes no ladder for its direct term either, so
+            # both terms stay at `n_qp_pair` and on one rule.
             tangents_mirror = _ground_mirror.mirror_tangents(tangents)
             seg_l_img = self._image_positions(seg_l)
             seg_r_img = self._image_positions(seg_r)
