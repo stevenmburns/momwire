@@ -1679,6 +1679,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if not wires:
             raise ValueError("wires must be non-empty")
         self.wires_polylines = [np.asarray(w, dtype=float) for w in wires]
+        _wire_spec.refuse_duplicated_wires(self.wires_polylines)
         # None means infer from the geometry (momwire#590 step 3b). A list
         # overrides it -- most usefully by declaring FEWER junctions than
         # the geometry has, which is how a caller says two coincident ends

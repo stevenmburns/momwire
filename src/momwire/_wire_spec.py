@@ -72,6 +72,46 @@ def seg_radius(radius_per_wire, segs_per_wire):
     return np.repeat(radius_per_wire, segs_per_wire)
 
 
+def refuse_duplicated_wires(wires_polylines):
+    """Refuse a deck that lists the same wire twice (momwire#1042).
+
+    Two wires whose polylines coincide vertex for vertex, in either
+    direction, put the same conductor in the model twice. Every basis a
+    family hangs on one has an identical twin on the other, sign-flipped
+    when the copy runs backwards, so the operator has two equal columns and
+    is singular at any mesh, in any medium and under any quadrature —
+    NEC-5's column-order fill reports `Singular matrix` on
+    qantenna/airplane.nec (GW 116 and GW 117), while row-order fills pivot on
+    rounding residue and answer differently build to build. It is a
+    modelling slip, so it is refused at construction, naming both wires.
+
+    The test is exact rather than tolerant, as razor's bundle check is: the
+    vertices rounded to nanometres. A duplicate is authored, not arrived at
+    by drift, and a tolerant test would start refusing merely CLOSE
+    conductors, which are served. It keys on WHOLE wires: a bundle that
+    shares a segment or two with other wires (a radial screen's coincident
+    rises, momwire#524) is a different geometry, served by BSplineSolver
+    and refused segment by segment on razor.
+    """
+    seen = {}
+    for i, pl in enumerate(wires_polylines):
+        pl = np.asarray(pl, dtype=float)
+        if pl.ndim != 2:
+            continue  # malformed; the caller's own shape check names it
+        verts = tuple(tuple(v) for v in np.round(pl, 9))
+        key = min(verts, verts[::-1])
+        if key in seen:
+            first, first_verts = seen[key]
+            raise ValueError(
+                f"wires {first} and {i} are the same wire listed twice: "
+                "their vertices coincide"
+                + (" in reverse order" if verts != first_verts else "")
+                + ", so the model holds one conductor twice and its matrix "
+                "is singular at any mesh. Delete one of them - momwire#1042"
+            )
+        seen[key] = (i, verts)
+
+
 def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
     """Refuse junction groups whose member wire-ends do not coincide.
 

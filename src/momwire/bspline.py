@@ -1561,6 +1561,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for i, pl in enumerate(self.wires_polylines):
             if pl.ndim != 2 or pl.shape[0] < 2 or pl.shape[1] != 3:
                 raise ValueError(f"wire {i}: polyline must be (M, 3) with M >= 2")
+        _wire_spec.refuse_duplicated_wires(self.wires_polylines)
 
         # momwire#282 stage 1: ground CONTACT under the reflection-
         # coefficient ground is refused, at construction, before any
