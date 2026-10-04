@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Nine gates, derived from the seam's own contract (momwire#497 U1):
+Ten gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -84,11 +84,23 @@ Nine gates, derived from the seam's own contract (momwire#497 U1):
    The stamp is threaded from the filename, so a copy that ignored its own
    name would stamp the name it ignored — gate 4 is the only evidence about
    the solver, and this one can never stand in for it.
-9. **The SimNEC names** (momwire#1239) — ``build.py``'s ``SIMNEC_LAUNCHERS``
-   are present, answer ``-version`` with exit 0 and ``NEC5momwire.<maj>.<min>``
-   (SimNEC's configure probe), and serve in the basis read past ``nec5-``.
-   SimNEC picks the deck syntax from ``nec5`` in the path, which the
-   ``momwire-eznec`` names do not carry.
+9. **The NEC-5 names** (momwire#1239, primary since momwire#1295 phase 4) —
+   ``build.py``'s ``NEC5_LAUNCHERS`` are present, answer ``-version`` with
+   exit 0 and ``NEC5momwire.<maj>.<min>`` (SimNEC's configure probe), and
+   serve in the basis read past ``nec5-``.  One family for both hosts: SimNEC
+   picks the deck syntax from ``nec5`` in the path, which the deprecated
+   ``momwire-eznec`` names do not carry, and EZNEC reads no name at all.
+10. **The NEC-4.2 names** (momwire#1295) — ``build.py``'s ``NEC4_LAUNCHERS``
+   are present and serve a deck EZNEC's External NEC-4.2 slot actually wrote
+   (``tests/fixtures/eznec_nec42/``): byte-identical to the module run in the
+   nec4 dialect and the basis read past ``nec4-``, under the NEC-4.2 banner
+   (never NEC-5's), a SOLVE and not a refusal, stamped with that basis, and
+   with a feed-point impedance within 5 % of the licensed NEC-4.2's own
+   printout of the same deck (the sanity bar
+   ``tests/test_eznec_nec42_1295.py`` holds the module to).  The 5 % is a bar
+   on "this is an answer about this antenna", not on accuracy: the byte
+   identity is the gate on the bundle, the impedance the gate on the deck
+   having reached the right dialect at all.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -120,6 +132,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -131,6 +144,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 FIXTURES = REPO / "tests" / "fixtures" / "eznec" / "decks"
+NEC4_FIXTURES = REPO / "tests" / "fixtures" / "eznec_nec42"
 
 # The one frozen program in the bundle — `build.py`'s ENGINE_NAME and the
 # client's ENGINE_NAME, restated here rather than imported because gate 5 is
@@ -145,12 +159,13 @@ ENGINE_STEM = "momwire-eznec-engine"
 OPENMP_DLL = "libomp140.x86_64.dll"
 
 
-def _shipped_variants() -> tuple[str, ...]:
-    """``build.py``'s list, read from the file whose copy loop makes them.
+def _build_module():
+    """``build.py`` itself, read from the file whose copy loop makes the
+    launchers.
 
     Imported by path because ``scripts/`` is not a package, and imported at
     all rather than restated because a second list is what regresses: the
-    copy loop and the presence gate have to be the same fact, or the gate
+    copy loop and the presence gates have to be the same fact, or the gate
     certifies the shape it was told about instead of the one that shipped.
     """
     spec = importlib.util.spec_from_file_location(
@@ -158,17 +173,22 @@ def _shipped_variants() -> tuple[str, ...]:
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return module.SHIPPED_VARIANTS
+    return module
 
 
-def _simnec_launchers() -> tuple[str, ...]:
-    """``build.py``'s SimNEC names, read for `_shipped_variants`' reason."""
-    spec = importlib.util.spec_from_file_location(
-        "eznec_freeze_build", HERE / "build.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return tuple(module.SIMNEC_LAUNCHERS)
+def _shipped_variants() -> tuple[str, ...]:
+    """``build.py``'s deprecated ``momwire-eznec-<basis>`` copies."""
+    return _build_module().SHIPPED_VARIANTS
+
+
+def _nec5_launchers() -> tuple[str, ...]:
+    """``build.py``'s NEC-5 names (EZNEC's NEC-5 slot and SimNEC's)."""
+    return tuple(_build_module().NEC5_LAUNCHERS)
+
+
+def _nec4_launchers() -> tuple[str, ...]:
+    """``build.py``'s NEC-4.2 names (EZNEC's External NEC-4.2 slot)."""
+    return tuple(_build_module().NEC4_LAUNCHERS)
 
 
 # Two serving decks spanning the seam's range — a bare-wire rung-1 model and
@@ -208,6 +228,40 @@ PLANTED_STALE = "0.0.1"
 # by a truncated file.
 SOLVED = "ANTENNA INPUT PARAMETERS"
 REFUSED = "NEC ERROR"
+
+# Gate 10's deck: a free-space dipole EZNEC's External NEC-4.2 slot wrote
+# (capture 0228), served by every centre-feeding basis, and one on which
+# bspline and point-matched sinusoidal answer differently — so a sinusoidal
+# launcher that served the default would fail the byte comparison.  Its
+# licensed NEC-4.2 printout sits beside it and is the impedance reference.
+NEC4_DECK = "0228_dipole-10m-free"
+NEC4_BANNER = "NUMERICAL ELECTROMAGNETICS CODE (NEC-4.2)"
+NEC5_BANNER = "NUMERICAL ELECTROMAGNETICS CODE (NEC-5)"
+NEC4_SANITY_REL = 0.05
+
+# One cell of the ANTENNA INPUT PARAMETERS row.  By number, not by
+# whitespace: a negative E12.5 cell fills its field and runs into its
+# neighbour (``9.29044E-03-5.22804E-03``).  The same reading
+# `tests/test_eznec_nec42_1295.py` makes, restated for gate 5's reason.
+_NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:E[-+]\d+)?")
+
+
+def feed_impedance(printout: str) -> complex | None:
+    """The first feed row's impedance under ANTENNA INPUT PARAMETERS, or None.
+
+    The row is the first one after the heading carrying exactly the eleven
+    numbers a feed row has (tag, segment, then V, I, Z, Y as re/im pairs and
+    the power); Z is the seventh and eighth.
+    """
+    lines = printout.splitlines()
+    start = next((i for i, ln in enumerate(lines) if SOLVED in ln), None)
+    if start is None:
+        return None
+    for line in lines[start + 1 :]:
+        cells = _NUMBER.findall(line)
+        if len(cells) == 11:
+            return complex(float(cells[6]), float(cells[7]))
+    return None
 
 
 def run(cmd: list[str], out: Path, env: dict[str, str] | None = None) -> float:
@@ -675,14 +729,15 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
     return failures
 
 
-def _gate_simnec(exe: Path, work: Path, env: dict[str, str]) -> int:
-    """Gate 9 — the SimNEC names (momwire#1239).
+def _gate_nec5(exe: Path, work: Path, env: dict[str, str]) -> int:
+    """Gate 9 — the NEC-5 names (momwire#1239; primary since #1295 phase 4).
 
     SimNEC runs ``"<path>" -version`` before it accepts a nec5 engine, then
-    ``<path> <deck> <printout>`` like EZNEC.  So each shipped name must be
-    present, answer the probe with exit 0 and the ``NEC5momwire.<maj>.<min>``
-    line, and serve 0010 byte-identically to the module in the basis its name
-    reads past ``nec5-`` (none for the plain name).
+    ``<path> <deck> <printout>`` like EZNEC, which runs only the latter.  So
+    each shipped name must be present, answer the probe with exit 0 and the
+    ``NEC5momwire.<maj>.<min>`` line, and serve 0010 byte-identically to the
+    module in the basis its name reads past ``nec5-`` (none for the plain
+    name).
     """
     from importlib.metadata import version
 
@@ -690,10 +745,10 @@ def _gate_simnec(exe: Path, work: Path, env: dict[str, str]) -> int:
     major, minor = version("momwire").split(".")[:2]
     want = f"NEC5momwire.{major}.{minor}"
     deck = FIXTURES / f"{BASIS_DECK}.nec"
-    for stem in _simnec_launchers():
+    for stem in _nec5_launchers():
         launcher = exe.with_name(f"{stem}{exe.suffix}")
         if not launcher.is_file():
-            print(f"FAIL {launcher.name}: shipped SimNEC launcher is MISSING")
+            print(f"FAIL {launcher.name}: shipped NEC-5 launcher is MISSING")
             failures += 1
             continue
         probe = subprocess.run(
@@ -739,6 +794,99 @@ def _gate_simnec(exe: Path, work: Path, env: dict[str, str]) -> int:
     return failures
 
 
+def _licensed_nec4_impedance() -> complex:
+    """The licensed NEC-4.2's feed-point Z for gate 10's deck, read out of its
+    committed printout (``tests/fixtures/eznec_nec42/printouts/``)."""
+    (path,) = (NEC4_FIXTURES / "printouts").glob(f"{NEC4_DECK}.out")
+    z = feed_impedance(path.read_text(encoding="latin-1"))
+    if z is None:
+        raise SystemExit(f"no feed row in the licensed printout {path}")
+    return z
+
+
+def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
+    """Gate 10 — the NEC-4.2 names (momwire#1295).
+
+    Each shipped ``momwire-nec4[-<basis>]`` must be present and serve a deck
+    the NEC-4.2 slot wrote, byte-identically to ``_shell.main`` run in the
+    nec4 dialect and the basis its name reads past ``nec4-`` — the default
+    for the plain name.  Byte identity is the gate on the bundle; the banner,
+    the solve, the stamp and the licensed impedance are what make the
+    comparison unable to pass on a wrong dialect or a refusal (both sides of
+    a refusal are byte-equal too, gate 4's blind spot).
+    """
+    from momwire.eznec._serve import BASIS as DEFAULT_BASIS
+
+    failures = 0
+    deck = NEC4_FIXTURES / f"{NEC4_DECK}.nec"
+    licensed = _licensed_nec4_impedance()
+    answers: dict[str, bytes] = {}
+    for stem in _nec4_launchers():
+        launcher = exe.with_name(f"{stem}{exe.suffix}")
+        if not launcher.is_file():
+            print(f"FAIL {launcher.name}: shipped NEC-4.2 launcher is MISSING")
+            failures += 1
+            continue
+        basis = stem.partition("nec4-")[2] or None
+        v_out = work / f"{NEC4_DECK}.{stem}.frozen.out"
+        m_out = work / f"{NEC4_DECK}.{stem}.module.out"
+        run([str(launcher), str(deck), str(v_out)], v_out, env=env)
+        run(
+            [
+                sys.executable,
+                "-c",
+                "import sys;from momwire.eznec._shell import main;"
+                f"sys.exit(main(sys.argv[1:], basis={basis!r}, dialect='nec4') "
+                f"if {basis!r} else main(sys.argv[1:], dialect='nec4'))",
+                str(deck),
+                str(m_out),
+            ],
+            m_out,
+        )
+        frozen = v_out.read_bytes()
+        printout = frozen.decode("latin-1")
+        z = feed_impedance(printout)
+        if frozen != m_out.read_bytes():
+            print(
+                f"FAIL {launcher.name}: does not answer as the nec4 module in {basis!r}"
+            )
+            failures += 1
+        elif NEC4_BANNER not in printout or NEC5_BANNER in printout:
+            print(f"FAIL {launcher.name}: the printout is not under the NEC-4.2 banner")
+            failures += 1
+        elif REFUSED in printout or SOLVED not in printout or z is None:
+            print(f"FAIL {launcher.name}: REFUSED {NEC4_DECK}, it did not serve")
+            failures += 1
+        elif abs(z - licensed) / abs(licensed) >= NEC4_SANITY_REL:
+            print(
+                f"FAIL {launcher.name}: Z = {z:.4f} ohm, not within "
+                f"{NEC4_SANITY_REL:.0%} of licensed NEC-4.2's {licensed:.4f}"
+            )
+            failures += 1
+        else:
+            answers[stem] = frozen
+            print(
+                f"ok   {launcher.name}: NEC-4.2 dialect, answers in "
+                f"{basis or 'the default'}, Z = {z:.4f} ohm "
+                f"(licensed NEC-4.2 {licensed:.4f})"
+            )
+        failures += _gate_stamp(printout, basis or DEFAULT_BASIS, launcher.name)
+
+    # The names must not all be one engine: on this deck bspline and
+    # sinusoidal differ, so two shipped launchers answering byte-identically
+    # means one of them ignored its name — which the per-name comparison
+    # above catches too, but only while the deck keeps them apart.  This
+    # says when it stops doing so, rather than passing on a deck that cannot
+    # tell.
+    if len(answers) > 1 and len(set(answers.values())) < len(answers):
+        print(
+            f"FAIL {NEC4_DECK}: two NEC-4.2 launchers answered byte-identically; "
+            "the deck no longer tells their bases apart"
+        )
+        failures += 1
+    return failures
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(__doc__, file=sys.stderr)
@@ -773,7 +921,8 @@ def main() -> int:
     env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
     try:
         failures = _gates(exe, work, room, env)
-        failures += _gate_simnec(exe, work, env)
+        failures += _gate_nec5(exe, work, env)
+        failures += _gate_nec4(exe, work, env)
     finally:
         stop(room)
 
