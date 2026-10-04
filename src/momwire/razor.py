@@ -2674,6 +2674,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             what="site",
             wire=w,
             tap=tap,
+            mirror=lambda a, b: _feed_snap.mirror_images(self, w, a, b),
         )
         return knots[pick], float(target)
 
