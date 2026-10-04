@@ -239,9 +239,16 @@ def test_g984_the_catalog_verdicts_are_what_the_threshold_promises(
         seen.append(out[0])
         return out
 
+    # The banked cells keep antennaknobs' feeds as captured, and a network-
+    # driven design (the terminated rhombic, the L-matched skyloop) carries
+    # 0 V placeholders there: its drive comes from the network. An undriven
+    # compute_impedance refuses by name (#1164), and the verdict probed here
+    # is the factorisation's, which no drive moves, so drive every feed 1 V.
+    kw = _catalog_cell(design)
+    kw["feeds"] = [(w, at, v if v else 1.0 + 0j) for w, at, v in kw["feeds"]]
     HM._sampled_residual = spy
     try:
-        HMatrixSolver(**_catalog_cell(design)).compute_impedance()
+        HMatrixSolver(**kw).compute_impedance()
     finally:
         HM._sampled_residual = original
 
