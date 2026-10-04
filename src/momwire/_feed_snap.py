@@ -42,10 +42,23 @@ ties, how many are on decks where the choice changes the answer?** That needs
 each tie re-solved from the other side, which this module's tap makes
 possible and which is deliberately not done here.
 
-The warning is a DIAGNOSTIC, not a contract: it fires only under
-`MOMWIRE_623_TALLY`, because a warning that cries on 530 harmless symmetric
-decks is a worse warning than none, and turning it on by default would be
-step 2's decision made quietly rather than measured.
+Under `MOMWIRE_623_TALLY` every tie warns, as a diagnostic.
+
+## Step 2 (momwire#1262): warn on the ties that matter
+
+The harmful tie was then measured: #1224's bench fed a monopole 13/3 m below
+its top, which on every even rung is a segment END, and SinusoidalSolver took
+the centre above, a half-segment move that was most of its gap to NEC-5 there
+(NEC-4.2 fed at the snapped point reproduces sin to 0.2 ohm). What separates
+it from the 530 is the property that hid #623: a SYMMETRIC deck's two
+candidates are mirror images, so the choice moves nothing.
+
+So a tie now warns BY DEFAULT exactly when `mirror_images` cannot find a
+reflection of the whole deck that swaps the two candidates, and stays silent
+when it can. Only a grid-locked site asks — a point gap
+(`SinusoidalGalerkinSolver`'s default) excites the arclength it was given, so
+its tie moves nothing whatever the deck. The landed site is reported by
+`feed_placements()` (#1059) either way.
 """
 
 from __future__ import annotations
@@ -102,7 +115,9 @@ AMBIGUITY_TOL_FRAC = 1e-11
 _TAP = "MOMWIRE_623_TALLY"
 
 
-def snap(grid, target, *, total_arc, family, what="feed", wire=None, tap=True):
+def snap(
+    grid, target, *, total_arc, family, what="feed", wire=None, tap=True, mirror=None
+):
     """``(pick, margin)`` — the nearest grid point, and by how much it won.
 
     `grid` is the family's own site arclengths along one wire; `margin` is the
@@ -114,6 +129,11 @@ def snap(grid, target, *, total_arc, family, what="feed", wire=None, tap=True):
     ``tap=False`` keeps a call out of the `MOMWIRE_623_TALLY` diagnostic:
     ``feed_placements()`` re-asks a question the solve already asked, and a
     second record per site would double-count the tally.
+
+    ``mirror`` is ``(arc_lo, arc_hi) -> bool``, asked only on a tie: whether
+    the two candidates are mirror images under the deck's own symmetry
+    (`mirror_images`). When they are not, the tie warns by default
+    (momwire#1262); a caller that passes none keeps the old silence.
     """
     arcs = np.asarray(grid, dtype=float)
     if arcs.size == 0:
@@ -133,7 +153,23 @@ def snap(grid, target, *, total_arc, family, what="feed", wire=None, tap=True):
     # built in. It was not sayable before #672: the same two knots read as
     # (9, 10) with a bend authored as one wire and (9, 0) as two, so this
     # rule would have named different sites in two spellings of one antenna.
-    pick = min(near, next_) if margin <= AMBIGUITY_TOL_FRAC * total_arc else near
+    tie = margin <= AMBIGUITY_TOL_FRAC * total_arc
+    pick = min(near, next_) if tie else near
+    if tie and tap and mirror is not None and not os.environ.get(_TAP):
+        lo, hi = sorted((near, next_))
+        if not mirror(float(arcs[lo]), float(arcs[hi])):
+            where = "" if wire is None else f" on wire {wire}"
+            warnings.warn(
+                f"{family}: the {what} arclength {target:.12g}{where} falls "
+                f"exactly between two sites this basis can carry, at "
+                f"{arcs[lo]:.12g} and {arcs[hi]:.12g}, and the deck is not "
+                f"symmetric about it, so the choice changes the answer. The "
+                f"smaller-arclength rule took {arcs[pick]:.12g}. Name one of "
+                f"the two sites, or change the wire's segment count by one "
+                f"so the request lands on a site (momwire#1262).",
+                AmbiguousSite,
+                stacklevel=3,
+            )
     if tap and os.environ.get(_TAP):
         _record(family, what, wire, target, margin, total_arc, arcs.size)
         if margin <= AMBIGUITY_TOL_FRAC * total_arc:
@@ -148,6 +184,121 @@ def snap(grid, target, *, total_arc, family, what="feed", wire=None, tap=True):
                 stacklevel=3,
             )
     return pick, margin
+
+
+def _point_at(polyline, arc):
+    """The 3-D point `arc` metres along `polyline` from its first vertex."""
+    pl = np.asarray(polyline, dtype=float)
+    edges = np.diff(pl, axis=0)
+    lengths = np.linalg.norm(edges, axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(lengths)])
+    e = int(np.clip(np.searchsorted(cum, arc, side="right") - 1, 0, len(edges) - 1))
+    t = (arc - cum[e]) / lengths[e] if lengths[e] > 0 else 0.0
+    return pl[e] + t * edges[e]
+
+
+def _per_wire(solver, name, n_wires):
+    """A per-wire loading attribute as a list of comparable keys (None when
+    the solver does not carry it, so every wire agrees)."""
+    value = getattr(solver, name, None)
+    if value is None:
+        return [None] * n_wires
+    return [
+        None if v is None or (isinstance(v, float) and np.isnan(v)) else repr(v)
+        for v in list(value)
+    ]
+
+
+def mirror_images(solver, wire, arc_a, arc_b):
+    """Whether the sites `arc_a` and `arc_b` on `wire` are mirror images under
+    a symmetry of the whole deck (momwire#1262, #623's step 2).
+
+    A reflection that swaps two points is unique: the plane bisecting them.
+    So the question is decidable, and cheaply — reflect the deck through that
+    plane and ask whether it comes back to itself. "The deck" is what the
+    answer depends on: every wire's vertices and segment counts (mapped onto
+    a wire, either direction), its radius and loading, the ground (whose
+    plane a reflection keeps only if the mirror plane is vertical), and every
+    feed and lumped load with its value. Junction ports and node gaps are not
+    compared; a deck that has them is judged on the rest.
+
+    A symmetric deck — a centre-fed dipole on an even mesh, an inverted V at
+    its apex — answers True, which is #623's 530 harmless ties. The harmful
+    case answers False: a monopole fed between two segment centres over
+    ground, with a hub below and a top wire above (#1224's bench decks).
+
+    Only REFLECTIONS are tried. A deck whose sole symmetry swapping the two
+    sites is a rotation reads as asymmetric, so it can warn where it need not;
+    it cannot stay silent where it should warn.
+    """
+    polylines = [np.asarray(p, dtype=float) for p in solver.wires_polylines]
+    p_a = _point_at(polylines[wire], arc_a)
+    p_b = _point_at(polylines[wire], arc_b)
+    d = p_b - p_a
+    norm = float(np.linalg.norm(d))
+    if norm == 0.0:
+        return True
+    n = d / norm
+    mid = 0.5 * (p_a + p_b)
+    every = np.concatenate(polylines)
+    tol = 1e-9 * max(1.0, float(np.max(np.abs(every))))
+
+    if getattr(solver, "ground_z", None) is not None and abs(n[2]) > 1e-12:
+        return False
+
+    def reflect(x):
+        x = np.asarray(x, dtype=float)
+        return x - 2.0 * ((x - mid) @ n)[..., None] * n
+
+    n_w = len(polylines)
+    npe = [tuple(int(c) for c in e) for e in solver.n_per_edge_per_wire]
+    radius = getattr(solver, "_radius_per_wire", None)
+    radius = [None] * n_w if radius is None else [float(r) for r in radius]
+    loading = list(
+        zip(
+            radius,
+            _per_wire(solver, "wire_conductivity", n_w),
+            _per_wire(solver, "insulation_radius", n_w),
+            _per_wire(solver, "insulation_eps_r", n_w),
+            _per_wire(solver, "distributed_rlc", n_w),
+        )
+    )
+
+    for i, pl in enumerate(polylines):
+        image = reflect(pl)
+        found = False
+        for j, other in enumerate(polylines):
+            if other.shape != image.shape or loading[j] != loading[i]:
+                continue
+            if np.all(np.abs(other - image) <= tol) and npe[j] == npe[i]:
+                found = True
+            elif np.all(np.abs(other - image[::-1]) <= tol) and npe[j] == npe[i][::-1]:
+                found = True
+            if found:
+                break
+        if not found:
+            return False
+
+    def sites(entries):
+        out = []
+        for w, arc, value in entries:
+            pl = polylines[w]
+            total = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+            out.append((_point_at(pl, total / 2.0 if arc is None else arc), value))
+        return out
+
+    for entries in (
+        list(getattr(solver, "feeds", None) or []),
+        list(getattr(solver, "lumped_loads", None) or []),
+    ):
+        placed = sites(entries)
+        for point, value in placed:
+            image = reflect(point)
+            if not any(
+                np.all(np.abs(q - image) <= tol) and v == value for q, v in placed
+            ):
+                return False
+    return True
 
 
 # --------------------------------------------------------------------------

@@ -757,6 +757,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 family=type(self).__name__,
                 wire=w,
                 tap=tap,
+                mirror=lambda a, b, w=w: _feed_snap.mirror_images(self, w, a, b),
             )
             sites.append(
                 (

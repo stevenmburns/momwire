@@ -1783,6 +1783,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 total_arc=total_arc,
                 family=type(self).__name__,
                 wire=w_f,
+                # A point gap carries the remainder in `feed_xi` and sits
+                # where it was asked whichever centre won, so only a
+                # grid-locked feed has a tie that moves the port (#1262).
+                mirror=None
+                if self.feed_model == "point"
+                else (lambda a, b, w=w_f: _feed_snap.mirror_images(self, w, a, b)),
             )
             feed_segs.append(first + pick)
             feed_xi.append(float(feed_arc - feed_arc_centers[pick]))
