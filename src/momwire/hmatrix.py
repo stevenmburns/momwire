@@ -1008,7 +1008,11 @@ class HMatrixSolver(BSplineSolver):
         # Observer rows are the REAL test segments — the per-observer
         # radius convention applies to the image block unchanged. EK scores
         # eligibility against the MIRRORED source geometry (`mirror=True`),
-        # the block form of `BSplineSolver._build_J_image_blocks`.
+        # the block form of `BSplineSolver._build_J_image_blocks`. Unlike that
+        # fill it stays at `n_qp_pair` on every pair: momwire#1304 laddered
+        # the dense/chunked image term to match ITS direct term, and the
+        # block fills' direct term carries no ladder either, so leaving both
+        # untiered keeps the two terms of an H-matrix solve on one rule.
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
