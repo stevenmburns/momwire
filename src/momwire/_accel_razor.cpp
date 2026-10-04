@@ -257,6 +257,7 @@ razor_seg_moments_impl(
 
     const double inv4pi = 1.0 / (4.0 * M_PI);
     const size_t n_obs_tiles = (n_obs + RAZOR_OBS_TILE - 1) / RAZOR_OBS_TILE;
+    const size_t n_seg_tiles = (n_seg + RAZOR_SEG_TILE - 1) / RAZOR_SEG_TILE;
 
     MW_CANCEL_SETUP(cancel_flag);
 #pragma omp parallel
@@ -281,13 +282,28 @@ razor_seg_moments_impl(
     alignas(32) double cNr[RAZOR_CPLX_CHUNK];
     alignas(32) double cNi[RAZOR_CPLX_CHUNK];
 
-#pragma omp for schedule(static)
-    for (size_t tile = 0; tile < n_obs_tiles; tile++) {
+    // The work items are (observer tile, segment tile) pairs, segment tiles
+    // fastest, handed out dynamically (momwire#1290). Parallel over observer
+    // tiles alone, a call with few observers had too few items for the
+    // threads: razor's below-plane windows ask 17-34 observers of 2562-5122
+    // segments at buried x16 / invl x32, three to five items for four
+    // threads, and the kernel ran 1.5-2x faster on four threads than on one.
+    // Dynamic, because the last observer tile is ragged (17 = 8 + 8 + 1): a
+    // static split of the items left one thread a quarter of the work.
+    // Measured on those calls: 113 -> 60 ns per pair on four threads, 236
+    // on one. Each entry is still formed by one thread from its own pair's
+    // operands in the same order, and the segment tile's gathers are the
+    // same doubles whichever thread fills them, so where an item runs moves
+    // no bit.
+#pragma omp for schedule(dynamic)
+    for (size_t item = 0; item < n_obs_tiles * n_seg_tiles; item++) {
         MW_CANCEL_POLL();
+        const size_t tile = item / n_seg_tiles;
         const size_t p_lo = tile * RAZOR_OBS_TILE;
         const size_t p_hi = std::min(p_lo + RAZOR_OBS_TILE, n_obs);
 
-        for (size_t s_lo = 0; s_lo < n_seg; s_lo += RAZOR_SEG_TILE) {
+        {
+            const size_t s_lo = (item % n_seg_tiles) * RAZOR_SEG_TILE;
             const size_t s_hi = std::min(s_lo + RAZOR_SEG_TILE, n_seg);
             const size_t ns = s_hi - s_lo;
             for (size_t js = 0; js < ns; js++) {
