@@ -77,6 +77,10 @@
 #include <stdexcept>
 #include <vector>
 
+#if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
+#include <immintrin.h>
+#endif
+
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -367,19 +371,25 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
 
 namespace mw_sheet {
 
+// The node test, the divisions and the normalising products are each a loop
+// of their own (momwire#1290) so that the divisions vectorise: a division is
+// correctly rounded in any lane, so they are the floats the one fused loop
+// gave, and the sum still runs a = 0, 1, ... in order. The fused loop
+// returned on the FIRST node within 1e-15; so does this one.
 static inline void bary(double t, double lo, double hi, const double *x,
                         const double *bw, int p, double *w) {
     const double xx = (2.0 * t - (lo + hi)) / (hi - lo);
-    double sum = 0.0;
-    for (int a = 0; a < p; ++a) {
-        const double df = xx - x[a];
-        if (std::fabs(df) < 1e-15) {  // on a node: its value, exactly
-            for (int b = 0; b < p; ++b) w[b] = (a == b) ? 1.0 : 0.0;
-            return;
-        }
-        w[a] = bw[a] / df;
-        sum += w[a];
+    int on = 0;
+    for (int a = 0; a < p; ++a) on |= std::fabs(xx - x[a]) < 1e-15;
+    if (on) {
+        int a = 0;
+        while (!(std::fabs(xx - x[a]) < 1e-15)) ++a;
+        for (int b = 0; b < p; ++b) w[b] = (a == b) ? 1.0 : 0.0;
+        return;
     }
+    for (int a = 0; a < p; ++a) w[a] = bw[a] / (xx - x[a]);
+    double sum = 0.0;
+    for (int a = 0; a < p; ++a) sum += w[a];
     const double inv = 1.0 / sum;
     for (int a = 0; a < p; ++a) w[a] *= inv;
 }
@@ -396,6 +406,91 @@ static inline py::ssize_t cell_of(double t, const double *e, py::ssize_t n) {
     return j;
 }
 
+// One row's tensor-product sum over its cell's p x p block, into acc[0, nd):
+//
+//     acc[k] = sum_i wr[i] * (sum_j ws[j] * V[i][j][k])
+//
+// each sum in index order, every step one fused multiply-add, the inner sum
+// started at +0.0 and restarted per i. `cell_sum` spells it for any width;
+// `cell_sum_fixed<NV>` is the same arithmetic at a compile-time width of
+// 4 NV doubles, held in registers (momwire#1290): with `nd` a runtime value
+// GCC keeps `inner` in memory and every j step is a store-to-load round
+// trip. It also runs the inner sums of rows i and i + 1 together. They are
+// independent chains, so that changes when each fused op issues, not which
+// ops run or their order within any one sum, and every acc[k] still takes i
+// in order. The two are therefore the same floats entry for entry; the
+// width-generic reference stays reachable (`generic=True`) and is gated
+// against this one as uint64 (tests/test_sheet_fixed_width_1290.py). Only
+// the AVX2 build has the fixed route: the baseline, arm64 and MSVC builds
+// take the generic loop, which is the same floats anyway.
+static inline void cell_sum(const double *blk, const double *wr,
+                            const double *ws, int p, int nd, double *acc) {
+    for (int k = 0; k < nd; ++k) acc[k] = 0.0;
+    for (int i = 0; i < p; ++i) {
+        double inner[2 * MW_SHEET_MAX_KEYS] = {0.0};
+        const double *Vi = blk + static_cast<std::int64_t>(i) * p * nd;
+        for (int j = 0; j < p; ++j) {
+            const double w = ws[j];
+            const double *Vj = Vi + j * nd;
+            for (int k = 0; k < nd; ++k)
+                inner[k] = mw_fma::fma(w, Vj[k], inner[k]);
+        }
+        const double wi = wr[i];
+        for (int k = 0; k < nd; ++k)
+            acc[k] = mw_fma::fma(wi, inner[k], acc[k]);
+    }
+}
+
+#if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
+#define MW_SHEET_FIXED 1
+// ND = 4 NV doubles in NV ymm registers. `_mm256_fmadd_pd` is four
+// independent fused multiply-adds, one per lane, each rounding exactly as
+// `std::fma` does on that lane's operands, so a lane is the scalar chain.
+// Spelled with intrinsics because GCC 11, left to vectorise the plain loops
+// at a fixed width, spilled the inner sums to the stack and gathered across
+// j, which was barely faster than the generic loop.
+template <int NV>
+static inline void cell_sum_fixed(const double *blk, const double *wr,
+                                  const double *ws, int p, double *acc) {
+    constexpr int ND = 4 * NV;
+    const std::int64_t row = static_cast<std::int64_t>(p) * ND;
+    __m256d a[NV];
+    for (int v = 0; v < NV; ++v) a[v] = _mm256_setzero_pd();
+    int i = 0;
+    for (; i + 2 <= p; i += 2) {
+        __m256d x0[NV], x1[NV];
+        for (int v = 0; v < NV; ++v) x0[v] = x1[v] = _mm256_setzero_pd();
+        const double *V0 = blk + i * row;
+        const double *V1 = V0 + row;
+        for (int j = 0; j < p; ++j) {
+            const __m256d w = _mm256_set1_pd(ws[j]);
+            for (int v = 0; v < NV; ++v) {
+                x0[v] = _mm256_fmadd_pd(w, _mm256_loadu_pd(V0 + j * ND + 4 * v), x0[v]);
+                x1[v] = _mm256_fmadd_pd(w, _mm256_loadu_pd(V1 + j * ND + 4 * v), x1[v]);
+            }
+        }
+        const __m256d w0 = _mm256_set1_pd(wr[i]), w1 = _mm256_set1_pd(wr[i + 1]);
+        for (int v = 0; v < NV; ++v) a[v] = _mm256_fmadd_pd(w0, x0[v], a[v]);
+        for (int v = 0; v < NV; ++v) a[v] = _mm256_fmadd_pd(w1, x1[v], a[v]);
+    }
+    for (; i < p; ++i) {
+        __m256d x0[NV];
+        for (int v = 0; v < NV; ++v) x0[v] = _mm256_setzero_pd();
+        const double *V0 = blk + i * row;
+        for (int j = 0; j < p; ++j) {
+            const __m256d w = _mm256_set1_pd(ws[j]);
+            for (int v = 0; v < NV; ++v)
+                x0[v] = _mm256_fmadd_pd(w, _mm256_loadu_pd(V0 + j * ND + 4 * v), x0[v]);
+        }
+        const __m256d w0 = _mm256_set1_pd(wr[i]);
+        for (int v = 0; v < NV; ++v) a[v] = _mm256_fmadd_pd(w0, x0[v], a[v]);
+    }
+    for (int v = 0; v < NV; ++v) _mm256_storeu_pd(acc + 4 * v, a[v]);
+}
+#else
+#define MW_SHEET_FIXED 0
+#endif
+
 }  // namespace mw_sheet
 
 static void near_interface_grid_sheet(
@@ -411,7 +506,10 @@ static void near_interface_grid_sheet(
     py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
         vals,
     py::array_t<std::complex<double>, py::array::c_style> out, int n_threads,
-    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rpow) {
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> rpow,
+    bool generic) {
+    const bool fixed_ok = !generic;
+    (void)fixed_ok;  // read only where the fixed route is built
     if (sub.ndim() != 2 || sub.shape(1) != 3)
         throw std::invalid_argument("sub must be (m, 3)");
     const py::ssize_t m = sub.shape(0);
@@ -503,20 +601,18 @@ static void near_interface_grid_sheet(
             mw_sheet::bary(rho, re[a], re[a + 1], xp, bwp, p, wr);
             mw_sheet::bary(s, se[b], se[b + 1], xp, bwp, p, ws);
             const double *blk = V + co[a * ns + b] * nd;
-            double acc[2 * MW_SHEET_MAX_KEYS] = {0.0};
-            for (int i = 0; i < p; ++i) {
-                double inner[2 * MW_SHEET_MAX_KEYS] = {0.0};
-                const double *Vi = blk + static_cast<std::int64_t>(i) * p * nd;
-                for (int j = 0; j < p; ++j) {
-                    const double w = ws[j];
-                    const double *Vj = Vi + j * nd;
-                    for (int k = 0; k < nd; ++k)
-                        inner[k] = mw_fma::fma(w, Vj[k], inner[k]);
-                }
-                const double wi = wr[i];
-                for (int k = 0; k < nd; ++k)
-                    acc[k] = mw_fma::fma(wi, inner[k], acc[k]);
-            }
+            double acc[2 * MW_SHEET_MAX_KEYS];
+            // The two widths the families have today (`_SHEET_FAMILIES`:
+            // six kernels, four point kernels) at a fixed width; any other
+            // width, and the reference, through the generic loop.
+#if MW_SHEET_FIXED
+            if (fixed_ok && nk == 6)
+                mw_sheet::cell_sum_fixed<3>(blk, wr, ws, p, acc);
+            else if (fixed_ok && nk == 4)
+                mw_sheet::cell_sum_fixed<2>(blk, wr, ws, p, acc);
+            else
+#endif
+                mw_sheet::cell_sum(blk, wr, ws, p, nd, acc);
             // 1/R^pw per column, as a product of 1/R's: pw = 2 is i1 * i1,
             // the spelling the fixed six-column loop used.
             const double i1 = 1.0 / std::hypot(rho, s);
@@ -591,15 +687,20 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // from the caller. A distinct flag, so a stale build is refused by name
     // rather than handed an argument it does not know.
     m.attr("grid_sheet_width_1221") = true;
+    // momwire#1290: whether this build has the fixed-width cell sums (the
+    // AVX2 variant does); either way `generic=True` reaches the width-generic
+    // loop they are gated against.
+    m.attr("grid_sheet_fixed_1290") = bool(MW_SHEET_FIXED);
     m.def("near_interface_grid_sheet", &near_interface_grid_sheet,
           py::arg("sub"), py::arg("idx"), py::arg("fixed"), py::arg("height"),
           py::arg("rho_edges"), py::arg("s_edges"), py::arg("cell_off"),
           py::arg("x"), py::arg("bw"), py::arg("vals"), py::arg("out"),
-          py::arg("n_threads"), py::arg("rpow"),
+          py::arg("n_threads"), py::arg("rpow"), py::arg("generic") = false,
           "Interpolate the rows sub[idx] (rho, z, zp) of one sheet -- the plane "
           "z' = fixed < 0, or with height=True the height z = fixed > 0 -- "
           "from a _near_interface.PlaneSheet strip grid into out[idx] ((m, "
           "len(rpow)) complex, KEYS order; column k was tabulated times "
           "R^rpow[k]). Row-parallel; the answer does not depend on the "
-          "thread count.");
+          "thread count. `generic` (TEST-ONLY) takes the width-generic cell "
+          "sum, the reference the fixed-width ones are gated against.");
 }
