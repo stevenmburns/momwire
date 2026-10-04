@@ -1,4 +1,6 @@
 #include "_accel_common.h"
+
+#include <cstring>
 #include "_stable_inline.h"
 #include "_accel_sinusoidal_cplx.h"
 
@@ -2017,11 +2019,588 @@ static bool galerkin_fold_block(
 // vector width, so this fill is column-independent and needs no
 // `_SIMD_TAIL_PERIOD` padding from its caller, unlike the real one.
 //
+// That body is now the REFERENCE (`reference=True`). Production runs
+// `sg_cplx_rows_staged` (below), the same arithmetic with stages A and C as
+// vector loops over the sources, bit-identical to it.
+//
 // `cexp_i` below is the point-matched twin's (momwire#1222), which keeps its
 // scalar spelling.
 static inline std::complex<double> cexp_i(std::complex<double> z) {
     return std::exp(std::complex<double>(0.0, 1.0) * z);
 }
+
+// ---------------------------------------------------------------------------
+// The complex fill's rows, STAGED FOR THE VECTOR UNIT (momwire#1224).
+//
+// After the sweep above, a profile of buried hub16 x16 (N = 2802, Haswell)
+// put the fill at A 23 %, the sweep 15 %, the assembly 59 % and the test
+// reduction 3 %: ~1100 cycles a pair in an assembly that was scalar complex
+// arithmetic, and ~430 in a geometry stage bound by scalar sqrt and divide.
+// Neither holds a transcendental the sweep does not already own, except two
+// GEOMETRY ones per pair (log1p in `stable_asinh_diff` and asinh(X); the sinh
+// of `asinh_minus_arg_from_t` is never reached, see stage A'). So this body
+// runs, per observer:
+//
+//   A   omp-simd over sources: the geometry, the distance table, 1/r at the
+//       endpoints and, q outermost, each source node's 1/r and offset;
+//   A'  the two geometry transcendentals as scalar libm calls (the
+//       reference's), between vector loops for the arithmetic around them;
+//   B   the sweep (`sg_cplx_phase_sweep`), skipping the H +- P entries when
+//       every lane takes sin_minus_arg's series and so never reads them;
+//   C   auto-vectorised loops over sources, in tiles: endpoint values, then
+//       the node sums (q outermost within a tile, each source still summing
+//       in q-ascending order), then the rest of the assembly, instantiated
+//       by which arms of sin_minus_arg the row's lanes take;
+//   R   the reference body's test reduction, unchanged.
+//
+// Measured on the 82 calls of buried hub16 x16, replayed (same machine,
+// paired): Haswell 14.55 s -> 10.1-10.7 s, Skylake 9.3 s -> 7.5-7.7 s. After
+// it the sweep is the largest stage (~30 %), then the reduction, the node
+// sums and the assembly (~13-15 % each).
+//
+// It is the REFERENCE body's arithmetic, operation for operation, so it is
+// BIT-IDENTICAL to it, not merely close: the build has -ffp-contract=off (no
+// fused multiply-add appears unless spelled), a vector lane performs the
+// same IEEE operation as the scalar unit, and nothing here is reassociated
+// (no `omp simd reduction`; every sum keeps its own order). What vectorising
+// needed was spelling std::complex's operators out (`SgCx` below) because
+// GCC's complex multiply carries a NaN-recovery call (`__muldc3`) that keeps
+// the loop scalar. The spellings are libstdc++'s at -O3, read off GCC 11.4's
+// assembly:
+//
+//   C*C   (ar br - ai bi, ar bi + ai br), the `__muldc3` arm dropped: it runs
+//         only when BOTH parts are NaN, and no finite input reaches it
+//   C*d, d*C, C/d    componentwise (the real operand is never promoted)
+//   C+d, d+C  the real part only;   d-C  (d - re, -im)
+//   J*z   a FULL multiply by (0, 1): (0*zr - zi, zr + 0*zi), so it is
+//         spelled as one (`sgcx_mul(SGCX_J, z)`), never as a swap
+//
+// so the gate is equality of bytes against `reference=True`
+// (tests/test_sg_cplx_far_fill_staged_1224.py). The table is laid out by
+// entry kind (kind * Nv + n) rather than by source, so every stage reads it
+// contiguously; the sweep is elementwise and padded, so the layout does not
+// reach its values.
+//
+// PORTABILITY: nothing here is libmvec, so no platform needs a fallback.
+// MSVC compiles the `omp simd` loops scalar (MW_OMP_SIMD is empty there) and
+// the `GCC ivdep` hint is GCC's alone (MW_SGC_IVDEP); whatever another
+// compiler vectorises, a lane performs the scalar unit's IEEE operation, and
+// clang (macOS, arm64) builds with -ffp-contract=off too. So every toolchain
+// is bit-identical to ITS OWN reference body; across toolchains the bytes
+// differ exactly as the reference's already do (libm, the sweep).
+struct SgCx {
+    double r, i;
+};
+static inline SgCx sgcx_mul(SgCx a, SgCx b) {
+    return SgCx{a.r * b.r - a.i * b.i, a.r * b.i + a.i * b.r};
+}
+static inline SgCx sgcx_scale(SgCx a, double d) { return SgCx{a.r * d, a.i * d}; }
+static inline SgCx sgcx_div(SgCx a, double d) { return SgCx{a.r / d, a.i / d}; }
+static inline SgCx sgcx_add(SgCx a, SgCx b) { return SgCx{a.r + b.r, a.i + b.i}; }
+static inline SgCx sgcx_sub(SgCx a, SgCx b) { return SgCx{a.r - b.r, a.i - b.i}; }
+static inline SgCx sgcx_neg(SgCx a) { return SgCx{-a.r, -a.i}; }
+static inline SgCx sgcx_addd(SgCx a, double d) { return SgCx{a.r + d, a.i}; }
+static inline SgCx sgcx_rsub(double d, SgCx a) { return SgCx{d - a.r, -a.i}; }
+static inline SgCx sgcx_of(std::complex<double> z) { return SgCx{z.real(), z.imag()}; }
+static constexpr SgCx SGCX_J{0.0, 1.0};
+
+// The C loops are left to the AUTO-vectoriser, told only that their rows do
+// not alias, and NOT marked `omp simd`: `omp simd` is lowered before inlining,
+// so every SgCx a helper returns becomes a per-lane "simd array" in memory
+// and GCC 11 then refuses the loop ("more than one data ref in stmt"); after
+// inlining the auto-vectoriser sees plain doubles. No reduction crosses
+// lanes in any of these loops, so the pragma licenses no reassociation.
+#if defined(__GNUC__) && !defined(__clang__)
+#define MW_SGC_IVDEP _Pragma("GCC ivdep")
+#else
+#define MW_SGC_IVDEP
+#endif
+
+// `take_x ? x : y` by bits, so the two-armed sin_minus_arg below if-converts
+// (GCC lowers a `?:` over FP arithmetic to a branch under -ftrapping-math).
+// Both arms are computed in every lane; the one not taken is discarded, and
+// it may be inf or NaN there without consequence.
+static inline double sgcx_pick(bool take_x, double x, double y) {
+    uint64_t bx, by;
+    std::memcpy(&bx, &x, sizeof bx);
+    std::memcpy(&by, &y, sizeof by);
+    const uint64_t m = static_cast<uint64_t>(0) - static_cast<uint64_t>(take_x);
+    const uint64_t r = (bx & m) | (by & ~m);
+    double out;
+    std::memcpy(&out, &r, sizeof out);
+    return out;
+}
+
+// sin_minus_arg at u = k*d from table entry i (the reference body's
+// `smarg_at`): the series below |u|^2 = 0.01 and sin(kd) - u above. With
+// both arms possible, both are formed in every lane and one is picked; a
+// caller that knows every lane takes one arm drops the other (`NEAR`/`FAR`).
+// A function of its arguments alone, not a capturing lambda: a by-reference
+// capture makes the table pointers addressable and the loop stays scalar.
+template <bool NEAR, bool FAR>
+static inline SgCx sgcx_smarg(SgCx u, double t_h, double t_ea, double t_em,
+                              double t_s) {
+    SgCx ser{0.0, 0.0}, far{0.0, 0.0};
+    if (NEAR) {
+        SgCx u2 = sgcx_mul(u, u);
+        ser = sgcx_mul(
+            sgcx_div(sgcx_neg(sgcx_mul(u, u2)), 6.0),
+            sgcx_rsub(1.0, sgcx_mul(sgcx_div(u2, 20.0),
+            sgcx_rsub(1.0, sgcx_mul(sgcx_div(u2, 42.0),
+            sgcx_rsub(1.0, sgcx_mul(sgcx_div(u2, 72.0),
+            sgcx_rsub(1.0, sgcx_div(u2, 110.0)))))))));
+        if (!FAR) return ser;
+    }
+    double c = 1.0 - 2.0 * t_h * t_h;
+    double ch = 0.5 * (t_ea + 1.0 / t_ea);
+    double sh = t_em * (t_ea + 1.0) / (2.0 * t_ea);
+    far = sgcx_sub(SgCx{t_s * ch, c * sh}, u);
+    if (!NEAR) return far;
+    bool near = u.r * u.r + u.i * u.i < 0.01;
+    return SgCx{sgcx_pick(near, ser.r, far.r), sgcx_pick(near, ser.i, far.i)};
+}
+
+// Per-call inputs of the staged rows. Source quantities are SoA copies of the
+// reference body's (same values), so stage A and C load them contiguously.
+struct SgCplxRows {
+    size_t N, nq, n_qp;
+    const double *oc, *ot, *ar;                 // observers, (M*nq, 3) / (M*nq)
+    const double *sx, *sy, *sz, *tx, *ty, *tz;  // source centres, tangents
+    const double *H;
+    const double *sin_r, *sin_i, *cos_r, *cos_i, *cm1_r, *cm1_i;
+    const double *smk_r, *smk_i, *ikh_r, *ikh_i;
+    const double *glt, *glw, *gl_step;
+    const char *gl_near2;
+    double w_hi, w_lo;
+    std::complex<double> k, k_sq, Jk, Jpz, mJpz, Jprc, mk, prc;
+    const std::complex<double> *w;
+};
+
+// Stage A/C's per-source rows (one Nv-long row each).
+enum SgcRow {
+    SGC_RHO, SGC_Z, SGC_DZ1, SGC_DZ2, SGC_R01, SGC_R02, SGC_IR01, SGC_IR02,
+    SGC_TD, SGC_RPF, SGC_RHO2, SGC_IIR0, SGC_XG, SGC_TSING, SGC_L1P, SGC_TASX,
+    SGC_EF2R, SGC_EF2I, SGC_EF1R, SGC_EF1I, SGC_MF2R, SGC_MF2I,
+    SGC_MF1R, SGC_MF1I, SGC_G2R, SGC_G2I, SGC_G1R, SGC_G1I,
+    SGC_IRR, SGC_IRI, SGC_MRR, SGC_MRI,
+    SGC_PCR, SGC_PCI, SGC_PSR, SGC_PSI, SGC_PCOR, SGC_PCOI, SGC_N_ROWS
+};
+#define SGC_UNPACK_ROWS(R)                                                   \
+    double *rho_a = R[SGC_RHO], *z_a = R[SGC_Z];                             \
+    double *dz1_a = R[SGC_DZ1], *dz2_a = R[SGC_DZ2];                         \
+    double *r01_a = R[SGC_R01], *r02_a = R[SGC_R02];                         \
+    double *ir01_a = R[SGC_IR01], *ir02_a = R[SGC_IR02];                     \
+    double *td_a = R[SGC_TD], *rpf_a = R[SGC_RPF], *rho2_a = R[SGC_RHO2];    \
+    double *iir0_a = R[SGC_IIR0], *x_a = R[SGC_XG], *ts_a = R[SGC_TSING];    \
+    double *l1p_a = R[SGC_L1P], *tasx_a = R[SGC_TASX];                       \
+    double *ef2r = R[SGC_EF2R], *ef2i = R[SGC_EF2I];                         \
+    double *ef1r = R[SGC_EF1R], *ef1i = R[SGC_EF1I];                         \
+    double *mf2r = R[SGC_MF2R], *mf2i = R[SGC_MF2I];                         \
+    double *mf1r = R[SGC_MF1R], *mf1i = R[SGC_MF1I];                         \
+    double *g2r = R[SGC_G2R], *g2i = R[SGC_G2I];                             \
+    double *g1r = R[SGC_G1R], *g1i = R[SGC_G1I];                             \
+    double *irr = R[SGC_IRR], *iri = R[SGC_IRI];                             \
+    double *mrr = R[SGC_MRR], *mri = R[SGC_MRI];                             \
+    double *pcr = R[SGC_PCR], *pci = R[SGC_PCI];                             \
+    double *psr = R[SGC_PSR], *psi = R[SGC_PSI];                             \
+    double *pcor = R[SGC_PCOR], *pcoi = R[SGC_PCOI]
+
+// Sources per tile of stage C's node sums (see there).
+static constexpr size_t SGC_TILE = 256;
+
+struct SgcScratch {
+    size_t Nv;
+    const double *td_d, *t_ea, *t_em, *t_s, *t_h;
+    double *const *R;
+};
+
+// Stage C's last loop, by which arms of sin_minus_arg it may need.
+template <bool NEAR, bool FAR>
+static void sg_cplx_assemble(const SgCplxRows &P, const SgcScratch &S) {
+    const size_t N = P.N, Nv = S.Nv;
+    const size_t IX_P = 2, IX_HP = 3 + P.n_qp, IX_HM = IX_HP + 1;
+    const double *td_d = S.td_d, *t_ea = S.t_ea, *t_em = S.t_em;
+    const double *t_s = S.t_s, *t_h = S.t_h;
+    double *const *R = S.R;
+    SGC_UNPACK_ROWS(R);
+    (void)l1p_a; (void)tasx_a;
+    (void)ef1r; (void)ef1i; (void)mf2r; (void)mf2i; (void)mf1r; (void)mf1i;
+    (void)g2r; (void)g2i; (void)g1r; (void)g1i;
+    const double *Hn = P.H;
+    const SgCx k = sgcx_of(P.k), k_sq = sgcx_of(P.k_sq), Jk = sgcx_of(P.Jk);
+    const SgCx Jpz = sgcx_of(P.Jpz), mJpz = sgcx_of(P.mJpz);
+    const SgCx Jprc = sgcx_of(P.Jprc), mk = sgcx_of(P.mk), prc = sgcx_of(P.prc);
+    MW_SGC_IVDEP
+    for (size_t n = 0; n < N; n++) {
+        double rho_eval = rho_a[n], z_eval = z_a[n];
+        double dz1 = dz1_a[n], dz2 = dz2_a[n];
+        double r0_1 = r01_a[n], r0_2 = r02_a[n];
+        double td = td_a[n], rho_proj_factor = rpf_a[n];
+        double H = Hn[n];
+        double rho2 = rho2_a[n];
+        double inv_r0_2 = ir02_a[n], inv_r0_1 = ir01_a[n];
+        SgCx ef2{ef2r[n], ef2i[n]}, ef1{ef1r[n], ef1i[n]};
+
+        SgCx G0_2 = sgcx_scale(ef2, inv_r0_2);
+        SgCx G0_1 = sgcx_scale(ef1, inv_r0_1);
+        SgCx one_jkr_2 = sgcx_scale(sgcx_addd(sgcx_scale(Jk, r0_2), 1.0),
+                                    inv_r0_2 * inv_r0_2);
+        SgCx one_jkr_1 = sgcx_scale(sgcx_addd(sgcx_scale(Jk, r0_1), 1.0),
+                                    inv_r0_1 * inv_r0_1);
+
+        // Const source (Eqs 78, 79).
+        SgCx term_const2 = sgcx_mul(one_jkr_2, G0_2);
+        SgCx term_const1 = sgcx_mul(one_jkr_1, G0_1);
+        SgCx tc_diff = sgcx_sub(term_const2, term_const1);
+        SgCx rho_diff = sgcx_scale(tc_diff, rho_eval);
+        SgCx Erho_const = sgcx_mul(Jprc, rho_diff);
+
+        SgCx int_reg = sgcx_scale(SgCx{irr[n], iri[n]}, H);
+        SgCx int_G0 = sgcx_addd(int_reg, iir0_a[n]);
+        SgCx Ez_boundary = sgcx_sub(sgcx_scale(term_const2, dz2),
+                                    sgcx_scale(term_const1, dz1));
+        SgCx inside = sgcx_add(Ez_boundary, sgcx_mul(k_sq, int_G0));
+        SgCx Ez_const = sgcx_mul(mJpz, inside);
+
+        // Sine source (Eqs 76, 77).
+        SgCx sin2{P.sin_r[n], P.sin_i[n]}, cos2{P.cos_r[n], P.cos_i[n]};
+        SgCx sin1 = sgcx_neg(sin2), cos1 = cos2;
+        SgCx inner_2 = sgcx_rsub(1.0, sgcx_scale(one_jkr_2, dz2 * dz2));
+        SgCx inner_1 = sgcx_rsub(1.0, sgcx_scale(one_jkr_1, dz1 * dz1));
+        SgCx bsin2 = sgcx_mul(G0_2,
+            sgcx_add(sgcx_mul(sgcx_scale(k, dz2), cos2),
+                     sgcx_mul(inner_2, sin2)));
+        SgCx bsin1 = sgcx_mul(G0_1,
+            sgcx_add(sgcx_mul(sgcx_scale(k, dz1), cos1),
+                     sgcx_mul(inner_1, sin1)));
+        SgCx pref_rho = sgcx_div(prc, rho_eval);
+        SgCx J_pref_rho = sgcx_mul(SGCX_J, pref_rho);
+        SgCx Erho_sin = sgcx_mul(J_pref_rho, sgcx_sub(bsin2, bsin1));
+        SgCx bszin2 = sgcx_mul(G0_2,
+            sgcx_sub(sgcx_mul(k, cos2),
+                     sgcx_mul(sgcx_scale(one_jkr_2, dz2), sin2)));
+        SgCx bszin1 = sgcx_mul(G0_1,
+            sgcx_sub(sgcx_mul(k, cos1),
+                     sgcx_mul(sgcx_scale(one_jkr_1, dz1), sin1)));
+        SgCx Ez_sin = sgcx_mul(Jpz, sgcx_sub(bszin2, bszin1));
+
+        // Folded source (I = cos k(xi) - 1), #205.
+        SgCx cm1{P.cm1_r[n], P.cm1_i[n]};
+        SgCx smk{P.smk_r[n], P.smk_i[n]};
+        SgCx m_reg{mrr[n], mri[n]};
+        SgCx d_int = sgcx_sub(sgcx_addd(sgcx_scale(m_reg, H), ts_a[n]),
+                              sgcx_mul(smk, sgcx_add(G0_1, G0_2)));
+        SgCx inner_cos = sgcx_sub(sgcx_mul(k_sq, d_int),
+                                  sgcx_mul(cm1, Ez_boundary));
+        SgCx Ez_cos = sgcx_mul(Jpz, inner_cos);
+
+        const size_t iP = IX_P * Nv + n, iHP = IX_HP * Nv + n,
+                     iHM = IX_HM * Nv + n;
+        SgCx A_ang = sgcx_scale(k, td_d[iHP]);
+        SgCx B_ang = sgcx_scale(k, td_d[iHM]);
+        // sin_minus_arg at u = k*d (the reference's `smarg_at`): the
+        // series below |u|^2 = 0.01 and sin(kd) - u above, both formed,
+        // one picked.
+        SgCx sm_B = sgcx_smarg<NEAR, FAR>(B_ang, t_h[iHM], t_ea[iHM],
+                                          t_em[iHM], t_s[iHM]);
+        SgCx sm_A = sgcx_smarg<NEAR, FAR>(A_ang, t_h[iHP], t_ea[iHP],
+                                          t_em[iHP], t_s[iHP]);
+        double d_lin = -8.0 * H * H * H * z_eval * rho2
+                       / ((rho2 + dz1 * dz2 + r0_1 * r0_2)
+                          * (r0_1 + r0_2) * r0_1 * r0_2);
+        double hp = t_h[iP];
+        double cy_p = 1.0 - 2.0 * hp * hp;
+        double sy_p = t_s[iP];
+        double ep = t_ea[iP];
+        double ch_p = 0.5 * (ep + 1.0 / ep);
+        double sh_p = t_em[iP] * (ep + 1.0) / (2.0 * ep);
+        SgCx cph_p{cy_p * ch_p, -(sy_p * sh_p)};
+        SgCx sph_p{sy_p * ch_p, cy_p * sh_p};
+        SgCx ikh{P.ikh_r[n], P.ikh_i[n]};
+        SgCx w_even = sgcx_add(
+            sgcx_mul(sgcx_sub(sgcx_mul(A_ang, sm_B), sgcx_mul(B_ang, sm_A)),
+                     ikh),
+            sgcx_mul(sgcx_scale(sin2, d_lin / H), cph_p));
+        double X = x_a[n];
+        SgCx w_odd = sgcx_mul(
+            sgcx_scale(sin2, -(rho2 * X) / (r0_1 * r0_2)), sph_p);
+        // e^{-jk(r1+r2)/2} = e^{-jkr2}·e^{-j*phi}
+        SgCx E_P{ep * cy_p, -(ep * sy_p)};
+        SgCx W = sgcx_mul(sgcx_mul(ef2, E_P),
+                          sgcx_add(w_even, sgcx_mul(SGCX_J, w_odd)));
+        SgCx b_rho = sgcx_add(sgcx_mul(mk, W),
+                              sgcx_mul(sgcx_scale(cm1, rho2), tc_diff));
+        SgCx Erho_cos = sgcx_mul(J_pref_rho, b_rho);
+
+        SgCx pc = sgcx_add(sgcx_scale(Ez_const, td),
+                           sgcx_scale(Erho_const, rho_proj_factor));
+        SgCx ps = sgcx_add(sgcx_scale(Ez_sin, td),
+                           sgcx_scale(Erho_sin, rho_proj_factor));
+        SgCx pco = sgcx_add(sgcx_scale(Ez_cos, td),
+                            sgcx_scale(Erho_cos, rho_proj_factor));
+        pcr[n] = pc.r; pci[n] = pc.i;
+        psr[n] = ps.r; psi[n] = ps.i;
+        pcor[n] = pco.r; pcoi[n] = pco.i;
+    }
+}
+
+static void sg_cplx_rows_staged(const SgCplxRows &P, size_t m,
+                                size_t e0, size_t e1,
+                                std::complex<double> *bc,
+                                std::complex<double> *bs,
+                                std::complex<double> *bco) {
+    const size_t N = P.N, nq = P.nq, n_qp = P.n_qp;
+    // Table kinds. NOT the reference's order: H + P and H - P go LAST,
+    // because their four values serve only sin_minus_arg's sin(kd) - u arm,
+    // and a row whose lanes all take the series need not sweep them.
+    const size_t IX_R2 = 0, IX_R1 = 1, IX_P = 2, IX_DQ = 3;
+    const size_t IX_HP = IX_DQ + n_qp, IX_HM = IX_HP + 1;
+    const size_t S = n_qp + 5;
+    // Padded per kind, so S * Nv is a multiple of the sweep's width and no
+    // entry takes its scalar tail (the header's contract).
+    const size_t Nv = (N + SG_CPLX_LANES - 1) / SG_CPLX_LANES * SG_CPLX_LANES;
+    const size_t Pv = S * Nv;
+    std::vector<double> tab_buf(5 * Pv + 4, 0.0);
+    double *tab = tab_buf.data();
+    tab += ((32 - (reinterpret_cast<uintptr_t>(tab) & 31)) & 31) / sizeof(double);
+    double *td_d = tab;
+    const double *t_ea = td_d + Pv;
+    const double *t_em = t_ea + Pv;
+    const double *t_s = t_em + Pv;
+    const double *t_h = t_s + Pv;
+
+    // Per-source scratch, one Nv-long row each.
+    std::vector<double> rows_buf((size_t)SGC_N_ROWS * Nv + n_qp * Nv, 0.0);
+    double *R[SGC_N_ROWS];
+    for (int r = 0; r < SGC_N_ROWS; r++) R[r] = rows_buf.data() + (size_t)r * Nv;
+    double *r0q_inv = rows_buf.data() + (size_t)SGC_N_ROWS * Nv;  // [q * Nv + n]
+
+    SGC_UNPACK_ROWS(R);
+
+    const double *sx = P.sx, *sy = P.sy, *sz = P.sz;
+    const double *tx = P.tx, *ty = P.ty, *tz = P.tz, *Hn = P.H;
+    const double k_re = P.k.real(), k_im = P.k.imag();
+    const SgCx k = sgcx_of(P.k);
+    const double w_hi = P.w_hi, w_lo = P.w_lo;
+
+    for (size_t qt = 0; qt < nq; qt++) {
+        const size_t o = m * nq + qt;
+        const double cmx = P.oc[3 * o], cmy = P.oc[3 * o + 1], cmz = P.oc[3 * o + 2];
+        const double tmx = P.ot[3 * o], tmy = P.ot[3 * o + 1], tmz = P.ot[3 * o + 2];
+        const double a_sq = P.ar[o] * P.ar[o];
+
+        // ---- A: geometry and the endpoint entries ----------------------
+        MW_OMP_SIMD()
+        for (size_t n = 0; n < N; n++) {
+            double rvx = cmx - sx[n], rvy = cmy - sy[n], rvz = cmz - sz[n];
+            double tnx = tx[n], tny = ty[n], tnz = tz[n];
+            double z_eval = rvx * tnx + rvy * tny + rvz * tnz;
+            double rho_vx = rvx - z_eval * tnx;
+            double rho_vy = rvy - z_eval * tny;
+            double rho_vz = rvz - z_eval * tnz;
+            double rho_axis =
+                std::sqrt(rho_vx*rho_vx + rho_vy*rho_vy + rho_vz*rho_vz);
+            double rho_eval = std::sqrt(rho_axis*rho_axis + a_sq);
+            double td = tmx*tnx + tmy*tny + tmz*tnz;
+            double rho_proj_factor = (rho_vx*tmx + rho_vy*tmy + rho_vz*tmz)
+                                     / rho_eval;
+            double H = Hn[n];
+            double dz2 = z_eval - H;
+            double dz1 = z_eval + H;
+            double rho2 = rho_eval * rho_eval;
+            double r0_2 = std::sqrt(rho2 + dz2*dz2);
+            double r0_1 = std::sqrt(rho2 + dz1*dz1);
+            rho_a[n] = rho_eval; z_a[n] = z_eval;
+            dz1_a[n] = dz1; dz2_a[n] = dz2;
+            r01_a[n] = r0_1; r02_a[n] = r0_2;
+            ir01_a[n] = 1.0 / r0_1; ir02_a[n] = 1.0 / r0_2;
+            td_a[n] = td; rpf_a[n] = rho_proj_factor; rho2_a[n] = rho2;
+            double Pd = 2.0 * H * z_eval / (r0_1 + r0_2);
+            td_d[IX_R2 * Nv + n] = r0_2;
+            td_d[IX_R1 * Nv + n] = r0_1;
+            td_d[IX_P * Nv + n] = Pd;
+            td_d[IX_HP * Nv + n] = H + Pd;
+            td_d[IX_HM * Nv + n] = H - Pd;
+        }
+        // ---- A: the source nodes, q outermost --------------------------
+        for (size_t q = 0; q < n_qp; q++) {
+            const double gt = P.glt[q], gs = P.gl_step[q];
+            const bool hi = P.gl_near2[q] != 0;
+            const double *dzr = hi ? dz2_a : dz1_a;
+            const double *rr = hi ? r02_a : r01_a;
+            double *inv_q = r0q_inv + q * Nv;
+            double *dq = td_d + (IX_DQ + q) * Nv;
+            MW_OMP_SIMD()
+            for (size_t n = 0; n < N; n++) {
+                double H = Hn[n];
+                double z_q = H * gt;
+                double dz_q = z_a[n] - z_q;
+                double r0_q = std::sqrt(rho2_a[n] + dz_q*dz_q);
+                inv_q[n] = 1.0 / r0_q;
+                dq[n] = H * gs * (dz_q + dzr[n]) / (r0_q + rr[n]);
+            }
+        }
+        // ---- A': the geometry transcendentals ---------------------------
+        // log1p (`stable_asinh_diff`) and asinh(X) stay scalar libm calls;
+        // the arithmetic around them is `stable_asinh_diff`'s and the
+        // reference's, as vector loops with both arms of each `?:` formed
+        // and one picked. Of `asinh_minus_arg_from_t` only the series runs:
+        // it is called where |X| < 1, so |t| = |asinh X| < asinh 1 < 1.
+        MW_SGC_IVDEP
+        for (size_t n = 0; n < N; n++) {
+            double dz1 = dz1_a[n], dz2 = dz2_a[n];
+            double r0_1 = r01_a[n], r0_2 = r02_a[n];
+            double rho2 = rho2_a[n], H = Hn[n];
+            // stable_asinh_diff(u0 = -dz1, u1 = -dz2, rho2, r0 = r0_1,
+            // r1 = r0_2), up to its log1p.
+            double u0 = -dz1, u1 = -dz2;
+            double p0 = sgcx_pick(u0 >= 0.0, u0 + r0_1,
+                                  rho2 / (r0_1 + std::fabs(u0)));
+            double p1 = sgcx_pick(u1 >= 0.0, u1 + r0_2,
+                                  rho2 / (r0_2 + std::fabs(u1)));
+            double du = u1 - u0;
+            double num = du * (p1 + p0);
+            l1p_a[n] = num / ((r0_2 + r0_1) * p0);
+            x_a[n] = sgcx_pick(dz1 * dz2 >= 0.0,
+                               2.0 * H * (dz1 + dz2) / (dz1 * r0_2 + dz2 * r0_1),
+                               (dz1 * r0_2 - dz2 * r0_1) / rho2);
+        }
+        for (size_t n = 0; n < N; n++) {
+            iir0_a[n] = std::log1p(l1p_a[n]);
+            tasx_a[n] = std::asinh(x_a[n]);
+        }
+        MW_SGC_IVDEP
+        for (size_t n = 0; n < N; n++) {
+            double r0_1 = r01_a[n], r0_2 = r02_a[n];
+            double rho2 = rho2_a[n], H = Hn[n];
+            double X = x_a[n], t = tasx_a[n];
+            double t2 = t * t;
+            double ser = -(t * t2) / 6.0 *
+                         (1.0 + t2 / 20.0 *
+                                    (1.0 + t2 / 42.0 *
+                                               (1.0 + t2 / 72.0 *
+                                                          (1.0 + t2 / 110.0 *
+                                                                     (1.0 + t2 / 156.0)))));
+            double near = ser + H * rho2 * X * X / ((r0_1 + r0_2) * r0_1 * r0_2);
+            double far = t - H * (ir01_a[n] + ir02_a[n]);
+            ts_a[n] = sgcx_pick(std::fabs(X) < 1.0, near, far);
+        }
+
+        // sin_minus_arg's two arms by u = k(H +- P), decided per lane by
+        // the reference's own test. Counted before the sweep so a row whose
+        // lanes all take the series skips the H +- P entries, and the
+        // assembly runs without the arm no lane takes (exact either way:
+        // every lane still computes the arm it keeps, from the same
+        // entries, and an entry's value is its distance's alone).
+        size_t n_near = 0;
+        for (size_t n = 0; n < N; n++) {
+            SgCx uA = sgcx_scale(k, td_d[IX_HP * Nv + n]);
+            SgCx uB = sgcx_scale(k, td_d[IX_HM * Nv + n]);
+            n_near += (size_t)(uA.r * uA.r + uA.i * uA.i < 0.01);
+            n_near += (size_t)(uB.r * uB.r + uB.i * uB.i < 0.01);
+        }
+        const bool all_near = n_near == 2 * N;
+        // ---- B: the sweep ----------------------------------------------
+        sg_cplx_phase_sweep(td_d, all_near ? IX_HP * Nv : Pv, k_re, k_im,
+                            const_cast<double *>(t_ea),
+                            const_cast<double *>(t_em),
+                            const_cast<double *>(t_s),
+                            const_cast<double *>(t_h));
+
+        // ---- C: endpoint values and the node sums, by source tile -------
+        // Tiled so the node sums' accumulators and table rows stay in L1/L2
+        // across the q passes (one pass over all N sources streams ~14 rows
+        // of N doubles per q). Each source's sums still run q ascending, so
+        // the tiling moves no bit.
+        for (size_t nb = 0; nb < N; nb += SGC_TILE) {
+            const size_t ne = std::min(N, nb + SGC_TILE);
+            // Endpoint values.
+            MW_SGC_IVDEP
+            for (size_t n = nb; n < ne; n++) {
+                const size_t i2 = IX_R2 * Nv + n, i1 = IX_R1 * Nv + n;
+                double hh2 = t_h[i2], hh1 = t_h[i1];
+                double c2 = 1.0 - 2.0 * hh2 * hh2, c1 = 1.0 - 2.0 * hh1 * hh1;
+                double h22 = 2.0 * hh2 * hh2, h21 = 2.0 * hh1 * hh1;
+                SgCx ef2{t_ea[i2] * c2, -(t_ea[i2] * t_s[i2])};
+                SgCx ef1{t_ea[i1] * c1, -(t_ea[i1] * t_s[i1])};
+                SgCx mf2{t_em[i2] * (1.0 - h22) - h22, -(t_ea[i2] * t_s[i2])};
+                SgCx mf1{t_em[i1] * (1.0 - h21) - h21, -(t_ea[i1] * t_s[i1])};
+                double inv_r0_2 = ir02_a[n], inv_r0_1 = ir01_a[n];
+                SgCx g2 = sgcx_scale(mf2, inv_r0_2);
+                SgCx g1 = sgcx_scale(mf1, inv_r0_1);
+                ef2r[n] = ef2.r; ef2i[n] = ef2.i; ef1r[n] = ef1.r; ef1i[n] = ef1.i;
+                mf2r[n] = mf2.r; mf2i[n] = mf2.i; mf1r[n] = mf1.r; mf1i[n] = mf1.i;
+                g2r[n] = g2.r; g2i[n] = g2.i; g1r[n] = g1.r; g1i[n] = g1.i;
+                // int_reg starts at C(0, 0); m_reg at w_hi*g2 + w_lo*g1.
+                irr[n] = 0.0; iri[n] = 0.0;
+                SgCx m0 = sgcx_add(sgcx_scale(g2, w_hi), sgcx_scale(g1, w_lo));
+                mrr[n] = m0.r; mri[n] = m0.i;
+            }
+            // The node sums, q outermost, q ascending per source.
+            for (size_t q = 0; q < n_qp; q++) {
+                const bool hi = P.gl_near2[q] != 0;
+                const double gw = P.glw[q];
+                const double *er = hi ? ef2r : ef1r, *ei = hi ? ef2i : ef1i;
+                const double *mr_ = hi ? mf2r : mf1r, *mi_ = hi ? mf2i : mf1i;
+                const double *gr_ = hi ? g2r : g1r, *gi_ = hi ? g2i : g1i;
+                const double *inv_q = r0q_inv + q * Nv;
+                const size_t off = (IX_DQ + q) * Nv;
+                MW_SGC_IVDEP
+                for (size_t n = nb; n < ne; n++) {
+                    const size_t i = off + n;
+                    double hh = t_h[i];
+                    double h2 = 2.0 * hh * hh;
+                    SgCx em1{t_em[i] * (1.0 - h2) - h2, -(t_ea[i] * t_s[i])};
+                    SgCx e_em1 = sgcx_mul(SgCx{er[n], ei[n]}, em1);
+                    SgCx em1_q = sgcx_add(e_em1, SgCx{mr_[n], mi_[n]});
+                    double inv_r0_q = inv_q[n];
+                    SgCx t_int = sgcx_scale(sgcx_scale(em1_q, inv_r0_q), gw);
+                    irr[n] = irr[n] + t_int.r;
+                    iri[n] = iri[n] + t_int.i;
+                    double w = gw * inv_r0_q;
+                    SgCx t_m = sgcx_scale(
+                        sgcx_sub(e_em1, sgcx_scale(SgCx{gr_[n], gi_[n]}, td_d[i])),
+                        w);
+                    mrr[n] = mrr[n] + t_m.r;
+                    mri[n] = mri[n] + t_m.i;
+                }
+            }
+        }
+        // ---- C: the rest of the assembly --------------------------------
+        const SgcScratch sc{Nv, td_d, t_ea, t_em, t_s, t_h, R};
+        if (all_near) {
+            sg_cplx_assemble<true, false>(P, sc);
+        } else if (n_near == 0) {
+            sg_cplx_assemble<false, true>(P, sc);
+        } else {
+            sg_cplx_assemble<true, true>(P, sc);
+        }
+
+        // ---- R: the reference body's test reduction ---------------------
+        for (size_t e = e0; e < e1; e++) {
+            double wr = P.w[e * nq + qt].real();
+            double wi = P.w[e * nq + qt].imag();
+            double *rc  = reinterpret_cast<double *>(bc  + (e - e0) * N);
+            double *rs  = reinterpret_cast<double *>(bs  + (e - e0) * N);
+            double *rco = reinterpret_cast<double *>(bco + (e - e0) * N);
+            MW_OMP_SIMD()
+            for (size_t n = 0; n < N; n++) {
+                rc[2*n]     += wr * pcr[n]  - wi * pci[n];
+                rc[2*n + 1] += wr * pci[n]  + wi * pcr[n];
+                rs[2*n]     += wr * psr[n]  - wi * psi[n];
+                rs[2*n + 1] += wr * psi[n]  + wi * psr[n];
+                rco[2*n]    += wr * pcor[n] - wi * pcoi[n];
+                rco[2*n + 1]+= wr * pcoi[n] + wi * pcor[n];
+            }
+        }
+    }
+}
+
+// How many complex fills took each body, for the test that the staged one is
+// what production runs (tests/test_sg_cplx_far_fill_staged_1224.py): its
+// bytes equal the reference's, so the output cannot tell them apart.
+static std::atomic<unsigned long long> g_sg_cplx_staged_calls{0};
+static std::atomic<unsigned long long> g_sg_cplx_reference_calls{0};
 
 static std::tuple<py::array_t<std::complex<double>>,
                   py::array_t<std::complex<double>>,
@@ -2040,7 +2619,8 @@ galerkin_far_fill_cplx_impl(
                 py::array::c_style | py::array::forcecast> w_entry,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
     uintptr_t cancel_flag,
-    const GalerkinFoldBlock *fold
+    const GalerkinFoldBlock *fold,
+    bool reference
 ) {
     typedef std::complex<double> C;
     const C J(0.0, 1.0);
@@ -2146,6 +2726,57 @@ galerkin_far_fill_cplx_impl(
     const C pref_rho_const = -eta / four_pi_k;
     const C k_sq = k * k;
 
+    // The staged body's inputs (`sg_cplx_rows_staged`): the per-source
+    // quantities above as SoA re/im rows, and the reference body's per-pair
+    // complex constants, each formed by the SAME expression it forms there.
+    std::vector<double> soa;
+    SgCplxRows rows{};
+    if (!reference) {
+        soa.resize(16 * N);
+        double *p = soa.data();
+        double *sx = p, *sy = p + N, *sz = p + 2 * N;
+        double *tx = p + 3 * N, *ty = p + 4 * N, *tz = p + 5 * N;
+        double *sin_r = p + 6 * N, *sin_i = p + 7 * N;
+        double *cos_r = p + 8 * N, *cos_i = p + 9 * N;
+        double *cm1_r = p + 10 * N, *cm1_i = p + 11 * N;
+        double *smk_r = p + 12 * N, *smk_i = p + 13 * N;
+        double *ikh_r = p + 14 * N, *ikh_i = p + 15 * N;
+        for (size_t n = 0; n < N; n++) {
+            sx[n] = sc(n, 0); sy[n] = sc(n, 1); sz[n] = sc(n, 2);
+            tx[n] = st(n, 0); ty[n] = st(n, 1); tz[n] = st(n, 2);
+            sin_r[n] = sin_kH[n].real(); sin_i[n] = sin_kH[n].imag();
+            cos_r[n] = cos_kH[n].real(); cos_i[n] = cos_kH[n].imag();
+            cm1_r[n] = cos_kH_m1[n].real(); cm1_i[n] = cos_kH_m1[n].imag();
+            smk_r[n] = smarg_kH_k[n].real(); smk_i[n] = smarg_kH_k[n].imag();
+            ikh_r[n] = inv_kH[n].real(); ikh_i[n] = inv_kH[n].imag();
+        }
+        rows.N = N; rows.nq = nq; rows.n_qp = n_qp;
+        rows.oc = obs_centers.data(); rows.ot = obs_tangents.data();
+        rows.ar = obs_radius.data();
+        rows.sx = sx; rows.sy = sy; rows.sz = sz;
+        rows.tx = tx; rows.ty = ty; rows.tz = tz;
+        rows.H = H_n.data();
+        rows.sin_r = sin_r; rows.sin_i = sin_i;
+        rows.cos_r = cos_r; rows.cos_i = cos_i;
+        rows.cm1_r = cm1_r; rows.cm1_i = cm1_i;
+        rows.smk_r = smk_r; rows.smk_i = smk_i;
+        rows.ikh_r = ikh_r; rows.ikh_i = ikh_i;
+        rows.glt = glt_v.data(); rows.glw = glw_v.data();
+        rows.gl_step = gl_step.data(); rows.gl_near2 = gl_near2.data();
+        rows.w_hi = w_hi; rows.w_lo = w_lo;
+        rows.k = k; rows.k_sq = k_sq;
+        rows.Jk = J * k;                       // J * k * r: (J*k)*r
+        rows.Jpz = J * pref_z;                 // J * pref_z * (...)
+        rows.mJpz = -J * pref_z;               // -J * pref_z * inside
+        rows.Jprc = J * pref_rho_const;        // J * pref_rho_const * rho_diff
+        rows.mk = -k;                          // -k * W
+        rows.prc = pref_rho_const;
+        rows.w = w_p;
+        g_sg_cplx_staged_calls++;
+    } else {
+        g_sg_cplx_reference_calls++;
+    }
+
     MW_CANCEL_SETUP(cancel_flag);
     #pragma omp parallel for schedule(static)
     for (size_t m = 0; m < M; m++) {
@@ -2169,6 +2800,13 @@ galerkin_far_fill_cplx_impl(
             std::fill(bs, bs + nrows * N, C(0.0, 0.0));
             std::fill(bco, bco + nrows * N, C(0.0, 0.0));
         }
+
+        if (!reference) {
+            sg_cplx_rows_staged(rows, m, e0, e1, bc, bs, bco);
+        } else {
+        // The REFERENCE body (`reference=True`): the per-pair scalar assembly
+        // the staged rows reproduce to the bit. Left at its original
+        // indentation so its lines stay the ones the history describes.
 
         // The phase table (momwire#1224). Per source segment, S real
         // DISTANCES d, each standing for the phase k*d; Stage B turns every
@@ -2467,6 +3105,7 @@ galerkin_far_fill_cplx_impl(
                 }
             }
         }
+        }  // reference body
 
         if (folding) {
             const C *src[3] = {bc, bs, bco};
@@ -2504,7 +3143,8 @@ sinusoidal_galerkin_far_fill_cplx(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> starts,
     uintptr_t cancel_flag = 0,
     py::object out = py::none(),
-    std::complex<double> scale = std::complex<double>(1.0, 0.0)
+    std::complex<double> scale = std::complex<double>(1.0, 0.0),
+    bool reference = false
 ) {
     GalerkinFoldBlock fold;
     bool folding = galerkin_fold_block(
@@ -2512,7 +3152,7 @@ sinusoidal_galerkin_far_fill_cplx(
     return galerkin_far_fill_cplx_impl(
         obs_centers, obs_tangents, obs_radius, src_centers, src_tangents,
         src_hh, k, eta, gl_t, gl_w, w_entry, starts, cancel_flag,
-        folding ? &fold : nullptr);
+        folding ? &fold : nullptr, reference);
 }
 
 // ---------------------------------------------------------------------------
@@ -3012,7 +3652,10 @@ void register_sinusoidal(py::module_ &m) {
           "and the gate that would retire the copy. Requires Im k <= 0 (the "
           "e^{+jwt} convention) and raises otherwise rather than conjugating. "
           "No extended-kernel twin: EK stays real-k, and its Bessel-polynomial "
-          "split assumes jkR is purely imaginary.",
+          "split assumes jkR is purely imaginary. `reference=True` runs the "
+          "per-pair scalar assembly instead of the staged vector one "
+          "(momwire#1224); the two are bit-identical, and the flag exists for "
+          "the test that says so.",
           py::arg("obs_centers"), py::arg("obs_tangents"),
           py::arg("obs_radius"),
           py::arg("src_centers"), py::arg("src_tangents"), py::arg("src_hh"),
@@ -3021,7 +3664,17 @@ void register_sinusoidal(py::module_ &m) {
           py::arg("w_entry"), py::arg("starts"),
           py::arg("cancel_flag") = 0,
           py::arg("out") = py::none(),
-          py::arg("scale") = std::complex<double>(1.0, 0.0));
+          py::arg("scale") = std::complex<double>(1.0, 0.0),
+          py::arg("reference") = false);
+    m.def("sg_cplx_far_fill_calls",
+          []() {
+              return std::make_tuple(g_sg_cplx_staged_calls.load(),
+                                     g_sg_cplx_reference_calls.load());
+          },
+          "(staged, reference): how many sinusoidal_galerkin_far_fill_cplx "
+          "calls each body has served in this process (momwire#1224). The "
+          "bodies' outputs are bit-identical, so this is the only way to "
+          "see which one production took.");
     m.def("sg_cplx_phase_sweep",
           [](py::array_t<double, py::array::c_style | py::array::forcecast> d,
              std::complex<double> k, bool pad) {
