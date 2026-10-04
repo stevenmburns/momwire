@@ -31,7 +31,22 @@
 // No floating-point arithmetic is done at all, so the FMA and inlining
 // hazards of the numeric TUs (momwire#1194) do not apply; its own TU anyway,
 // so nothing here can move another kernel's codegen.
+
+// A read prefetch: a hint only. It never faults and changes no value, so a
+// stale one (a slot since filled, a key vector since moved) costs nothing.
+#if defined(__GNUC__) || defined(__clang__)
+#define MW_PREFETCH(p) __builtin_prefetch(static_cast<const void *>(p))
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))
+#include <xmmintrin.h>
+#define MW_PREFETCH(p) _mm_prefetch(reinterpret_cast<const char *>(p), _MM_HINT_T0)
+#else
+#define MW_PREFETCH(p) ((void)(p))
+#endif
+
 namespace factorize {
+
+// Rows hashed, and their home slots prefetched, ahead of a walk.
+static constexpr py::ssize_t kPrefetchBlock = 32;
 
 // One column: element i of a 1-D array of 8-byte values, any stride.
 struct Col {
@@ -84,49 +99,63 @@ static py::tuple group_rows(const std::vector<Col> &cols, py::ssize_t n,
         std::vector<uint64_t> table(cap, 0);
         const size_t mask = cap - 1;
         const size_t K = cols.size();
-        uint64_t key[3];
-        for (py::ssize_t i = 0; i < n; ++i) {
-            bool nan = false;
-            uint64_t h = 0x9e3779b97f4a7c15ULL;
-            for (size_t k = 0; k < K; ++k) {
-                uint64_t b = cols[k].at(i);
-                if (floats) {
-                    nan |= is_nan(b);
-                    b = float_key(b);
+        uint64_t key[3], hs[kPrefetchBlock];
+        // Hashed a block ahead with each home slot prefetched, then walked
+        // row by row exactly as before: `RowGroups::add`'s argument (a
+        // prefetch reads nothing it could change).
+        for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+            const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
+            for (py::ssize_t i = i0; i < i1; ++i) {
+                uint64_t h = 0x9e3779b97f4a7c15ULL;
+                for (size_t k = 0; k < K; ++k) {
+                    const uint64_t b = cols[k].at(i);
+                    h = mix(h ^ (floats ? float_key(b) : b));
                 }
-                key[k] = b;
-                h = mix(h ^ b);
+                hs[i - i0] = h;
+                MW_PREFETCH(table.data() + (static_cast<size_t>(h) & mask));
             }
-            if (nan) {
-                inv[i] = static_cast<py::ssize_t>(first.size());
-                first.push_back(i);
-                continue;
-            }
-            const uint64_t tag = h & 0xffffffff00000000ULL;
-            size_t s = static_cast<size_t>(h) & mask;
-            for (;;) {
-                const uint64_t slot = table[s];
-                if (slot == 0) {
-                    const uint64_t g = first.size();
-                    table[s] = tag | (g + 1);
-                    inv[i] = static_cast<py::ssize_t>(g);
-                    first.push_back(i);
-                    break;
-                }
-                if ((slot & 0xffffffff00000000ULL) == tag) {
-                    const uint64_t g = (slot & 0xffffffffULL) - 1;
-                    const py::ssize_t f = first[g];
-                    bool eq = true;
-                    for (size_t k = 0; k < K && eq; ++k) {
-                        uint64_t b = cols[k].at(f);
-                        eq = (floats ? float_key(b) : b) == key[k];
+            for (py::ssize_t i = i0; i < i1; ++i) {
+                bool nan = false;
+                for (size_t k = 0; k < K; ++k) {
+                    uint64_t b = cols[k].at(i);
+                    if (floats) {
+                        nan |= is_nan(b);
+                        b = float_key(b);
                     }
-                    if (eq) {
+                    key[k] = b;
+                }
+                const uint64_t h = hs[i - i0];
+                if (nan) {
+                    inv[i] = static_cast<py::ssize_t>(first.size());
+                    first.push_back(i);
+                    continue;
+                }
+                const uint64_t tag = h & 0xffffffff00000000ULL;
+                size_t s = static_cast<size_t>(h) & mask;
+                for (;;) {
+                    const uint64_t slot = table[s];
+                    if (slot == 0) {
+                        const uint64_t g = first.size();
+                        table[s] = tag | (g + 1);
                         inv[i] = static_cast<py::ssize_t>(g);
+                        first.push_back(i);
                         break;
                     }
+                    if ((slot & 0xffffffff00000000ULL) == tag) {
+                        const uint64_t g = (slot & 0xffffffffULL) - 1;
+                        const py::ssize_t f = first[g];
+                        bool eq = true;
+                        for (size_t k = 0; k < K && eq; ++k) {
+                            uint64_t b = cols[k].at(f);
+                            eq = (floats ? float_key(b) : b) == key[k];
+                        }
+                        if (eq) {
+                            inv[i] = static_cast<py::ssize_t>(g);
+                            break;
+                        }
+                    }
+                    s = (s + 1) & mask;
                 }
-                s = (s + 1) & mask;
             }
         }
     }
@@ -489,35 +518,61 @@ class RowGroups {
         py::ssize_t *out = ids.mutable_data();
         {
             py::gil_scoped_release nogil;
-            uint64_t key[3], raw[3];
-            for (py::ssize_t i = 0; i < n; ++i) {
-                bool nan = false;
-                uint64_t h = 0x9e3779b97f4a7c15ULL;
-                for (int k = 0; k < 3; ++k) {
-                    raw[k] = cols[k].at(i);
-                    nan |= is_nan(raw[k]);
-                    key[k] = float_key(raw[k]);
-                    h = mix(h ^ key[k]);
+            uint64_t key[3], raw[3], hs[kPrefetchBlock];
+            for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+                const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
+                // Two prefetch passes over the block, then the rows in order.
+                // Past a few million groups the table and the keys are far
+                // out of cache, and a row probed alone waits on two misses in
+                // turn (its slot, then the group's keys it names): sin's
+                // inverted-L x32 grid, 30 M rows into 10.9 M groups, took
+                // 3.6 s. Issued a block at a time the misses overlap, and with
+                // the rehash below it takes 1.75 s (Skylake, momwire#1224 perf
+                // item 6). The passes only READ (a slot a
+                // later row of the block fills, a mask a rehash replaces or a
+                // key vector a push moves just make a hint useless), and the
+                // third pass is the row-at-a-time walk itself, so the groups
+                // and their numbering are untouched.
+                for (py::ssize_t i = i0; i < i1; ++i) {
+                    uint64_t h = 0x9e3779b97f4a7c15ULL;
+                    for (int k = 0; k < 3; ++k) h = mix(h ^ float_key(cols[k].at(i)));
+                    hs[i - i0] = h;
+                    MW_PREFETCH(table_.data() + (static_cast<size_t>(h) & mask_));
                 }
-                if (nan) {
-                    out[i] = new_group(raw, key, 0, false);
-                    continue;
+                for (py::ssize_t i = i0; i < i1; ++i) {
+                    const uint64_t slot =
+                        table_[static_cast<size_t>(hs[i - i0]) & mask_];
+                    if (slot != 0)
+                        MW_PREFETCH(keys_.data() + 3 * ((slot & 0xffffffffULL) - 1));
                 }
-                if (2 * (n_groups() + 1) > table_.size()) rehash();
-                const uint64_t tag = h & 0xffffffff00000000ULL;
-                size_t s = static_cast<size_t>(h) & mask_;
-                for (;;) {
-                    const uint64_t slot = table_[s];
-                    if (slot == 0) {
-                        out[i] = new_group(raw, key, s, true, tag);
-                        break;
+                for (py::ssize_t i = i0; i < i1; ++i) {
+                    bool nan = false;
+                    for (int k = 0; k < 3; ++k) {
+                        raw[k] = cols[k].at(i);
+                        nan |= is_nan(raw[k]);
+                        key[k] = float_key(raw[k]);
                     }
-                    const uint64_t g = (slot & 0xffffffffULL) - 1;
-                    if ((slot & 0xffffffff00000000ULL) == tag && same(key, g)) {
-                        out[i] = static_cast<py::ssize_t>(g);
-                        break;
+                    const uint64_t h = hs[i - i0];
+                    if (nan) {
+                        out[i] = new_group(raw, key, 0, false);
+                        continue;
                     }
-                    s = (s + 1) & mask_;
+                    if (2 * (n_groups() + 1) > table_.size()) rehash();
+                    const uint64_t tag = h & 0xffffffff00000000ULL;
+                    size_t s = static_cast<size_t>(h) & mask_;
+                    for (;;) {
+                        const uint64_t slot = table_[s];
+                        if (slot == 0) {
+                            out[i] = new_group(raw, key, s, true, tag);
+                            break;
+                        }
+                        const uint64_t g = (slot & 0xffffffffULL) - 1;
+                        if ((slot & 0xffffffff00000000ULL) == tag && same(key, g)) {
+                            out[i] = static_cast<py::ssize_t>(g);
+                            break;
+                        }
+                        s = (s + 1) & mask_;
+                    }
                 }
             }
         }
@@ -550,19 +605,35 @@ class RowGroups {
         return k[0] == key[0] && k[1] == key[1] && k[2] == key[2];
     }
 
+    // Re-enters every group in NUMBER order: the keys are read in order and
+    // only the fresh slot is a miss (prefetched a block ahead, as in `add`),
+    // where walking the old table read each group's keys at random as well. The slots land elsewhere (linear
+    // probing follows entry order), which changes no group or number: a
+    // group's slot only ever holds that group. A row holding a NaN is a group
+    // of its own that was never entered, and is not entered now.
     void rehash() {
         size_t cap = table_.size() * 2;
         std::vector<uint64_t> fresh(cap, 0);
         const size_t mask = cap - 1;
-        for (size_t s = 0; s < table_.size(); ++s) {
-            const uint64_t slot = table_[s];
-            if (slot == 0) continue;
-            const uint64_t g = (slot & 0xffffffffULL) - 1;
-            uint64_t h = 0x9e3779b97f4a7c15ULL;
-            for (int k = 0; k < 3; ++k) h = mix(h ^ keys_[3 * g + k]);
-            size_t t = static_cast<size_t>(h) & mask;
-            while (fresh[t] != 0) t = (t + 1) & mask;
-            fresh[t] = slot;
+        const size_t n_g = keys_.size() / 3;
+        uint64_t hs[kPrefetchBlock];
+        for (size_t g0 = 0; g0 < n_g; g0 += kPrefetchBlock) {
+            const size_t g1 = std::min(n_g, g0 + static_cast<size_t>(kPrefetchBlock));
+            for (size_t g = g0; g < g1; ++g) {
+                const uint64_t *k = &keys_[3 * g];
+                uint64_t h = 0x9e3779b97f4a7c15ULL;
+                for (int c = 0; c < 3; ++c) h = mix(h ^ k[c]);
+                hs[g - g0] = h;
+                MW_PREFETCH(fresh.data() + (static_cast<size_t>(h) & mask));
+            }
+            for (size_t g = g0; g < g1; ++g) {
+                const uint64_t *k = &keys_[3 * g];
+                if (is_nan(k[0]) || is_nan(k[1]) || is_nan(k[2])) continue;
+                const uint64_t h = hs[g - g0];
+                size_t t = static_cast<size_t>(h) & mask;
+                while (fresh[t] != 0) t = (t + 1) & mask;
+                fresh[t] = (h & 0xffffffff00000000ULL) | (static_cast<uint64_t>(g) + 1);
+            }
         }
         table_.swap(fresh);
         mask_ = cap - 1;
