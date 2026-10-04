@@ -348,6 +348,57 @@ def test_the_nec2_dialect_still_refuses_what_nec4_adds():
         parse(deck_text("0232"), dialect="nec2")
 
 
+# momwire#1317: GN 2 naming a Sommerfeld-table file, the way the licensed
+# NEC-4.2 was run on it (spaced fields), against the same card without one.
+# On probe p7, the 7 MHz GN 2 dipole: 0231's 10-wavelength height makes a
+# cold Sommerfeld solve several times dearer for the same question.
+_GN2_WRITTEN = "GN 2,0,0,0,13.,.005"
+_GN2_BARE = "GN 2 0 0 0 13. .005 0 0 0 0"
+
+
+def _gn2(trailer: str | None) -> str:
+    card = _GN2_BARE if trailer is None else f"{_GN2_BARE} {trailer}"
+    (path,) = (FIXTURES / "probes").glob("p7_*.nec")
+    text = path.read_bytes().decode("latin-1")
+    assert _GN2_WRITTEN in text
+    return text.replace(_GN2_WRITTEN, card)
+
+
+@pytest.mark.parametrize("name", ["NOFILE", "SOMEX10.NEC"])
+def test_nec4_reads_gn2_without_its_sommerfeld_table_file(name):
+    """The file is a cache the licensed engine computes when it cannot open
+    it, so the card means what it means without the name."""
+    assert parse_nec4(_gn2(name)) == parse_nec4(_gn2(None))
+    assert parse_nec4(_gn2(name)).ground == ("finite", 13.0, 0.005)
+
+
+@pytest.mark.parametrize("name", ["NOFILE", "SOMEX10.NEC"])
+def test_nec2_still_refuses_a_gn_file_name(name):
+    with pytest.raises(DeckError) as exc:
+        parse(_gn2(name), dialect="nec2")
+    assert str(exc.value) == (
+        f"GN carries a trailing token {name!r}; this engine's nec2 dialect "
+        f"has no Sommerfeld-table file field on GN (momwire#1084 adds that "
+        f"field to the nec5 dialect only)"
+    )
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ("GN 3,0,0,0,13.,.005", "GN 3,0,0,0,13.,.005,0,0,0,0,NOFILE"),
+        ("GN 1", "GN 1,NOFILE"),
+    ],
+    ids=["gn3", "gn1"],
+)
+def test_nec4_refuses_a_file_name_on_any_other_gn_type(old, new):
+    capture = "0232" if old.startswith("GN 3") else "0229"
+    text = deck_text(capture)
+    line = next(ln for ln in text.splitlines() if ln.startswith(old))
+    with pytest.raises(DeckError, match=r"reads a Sommerfeld-table file name on GN 2"):
+        parse_nec4(text.replace(line, new))
+
+
 # --------------------------------------------------------------------------
 # the solve
 
@@ -355,14 +406,26 @@ def test_the_nec2_dialect_still_refuses_what_nec4_adds():
 def _aip_row(capture: str, basis: str):
     """The feed-point row through the portal's DeckSolver — the solve the
     slot's printout is rendered from, without the printout."""
+    return _aip_row_of(deck_text(capture), basis)
+
+
+def _aip_row_of(text: str, basis: str):
     from momwire.portal._portal import DeckSolver, _run_records, parse_deck
 
-    deck = parse_deck(deck_text(capture), dialect="nec4")
+    deck = parse_deck(text, dialect="nec4")
     solver = DeckSolver(deck, basis=basis)
     (group,) = [g for g in deck.groups if g is not None]
     records = _run_records(solver, group, group.freqs_mhz[0], 0)
     (row,) = records.aip_rows
     return row
+
+
+def test_a_gn2_file_name_moves_no_bit_of_the_solve():
+    bare = _aip_row_of(_gn2(None), "bspline")
+    for name in ("NOFILE", "SOMEX10.NEC"):
+        named = _aip_row_of(_gn2(name), "bspline")
+        assert named.impedance == bare.impedance, name
+        assert named.current == bare.current, name
 
 
 def test_ex6_and_ex0_are_two_drives_of_one_problem():
