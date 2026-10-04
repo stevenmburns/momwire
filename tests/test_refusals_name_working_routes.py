@@ -72,7 +72,9 @@ def _route_bspline_junction_ports():
         nsegs=9,
         wavelength=WL,
         wire_radius=1e-3,
-        junction_ports=[0],
+        # Driven: a plain-int port is 0 V, and an all-0-V deck refuses rather
+        # than answering 0/0 (momwire#1164), which this route used to "run".
+        junction_ports=[(0, 1 + 0j)],
         feeds=[],
     ).compute_impedance()
 

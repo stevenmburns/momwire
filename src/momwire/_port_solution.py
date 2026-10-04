@@ -37,6 +37,60 @@ from typing import Any
 import numpy as np
 
 
+# momwire#1164 / #962. Every family reads its driving-point impedance as
+# Z = V/I per port. When no port is driven the solve's RHS is zero, the
+# solution is identically zero, every port current reads exactly 0 and the
+# division is 0/0: NaN, or `inf` beside a 0 on a two-port. Nothing raised, so
+# the deck counted as solved, and one such deck in a census turns every
+# median computed over it into noise (NaN sorts nowhere). #1162 refused it on
+# SinusoidalGalerkinSolver alone; this is that sentence, owned once, for every
+# family. The drive-independent answer, Y, is still served for such a deck,
+# so the refusal names it.
+NO_DRIVEN_PORT_REFUSAL = (
+    "compute_impedance: no port is driven -- every port voltage is 0, so the "
+    "solve's current is identically zero and Z = V/I is 0/0. Give a feed or "
+    "port a non-zero voltage (a plain-int junction_ports entry drives 0 V; "
+    "write junction_ports=[(j, 1)]), or read the drive-independent admittance "
+    "from compute_port_solution().y or compute_y_matrix()"
+)
+
+
+def refuse_undriven(voltages) -> None:
+    """Raise `NO_DRIVEN_PORT_REFUSAL` when every configured port voltage is 0.
+
+    Cheap and solve-free, so a family calls it before its fill wherever its
+    port voltages are known there; `port_impedances` repeats it at the
+    division for the families whose voltages are assembled with the drive.
+    """
+    if not np.any(np.asarray(voltages)):
+        raise ValueError(NO_DRIVEN_PORT_REFUSAL)
+
+
+def port_impedances(voltages, currents):
+    """``voltages / currents`` per port, or a refusal by name — never a NaN.
+
+    `currents` is ``(n_ports,)`` for one solve or ``(n_k, n_ports)`` for a
+    sweep, with `voltages` broadcasting against it. An all-zero drive is
+    `refuse_undriven`'s case. The backstop behind it is a port whose current
+    reads exactly 0 on a DRIVEN deck: V/I is not a number there either, and
+    handing back `inf` as if it were an impedance is the failure this guards.
+    A 0 V port beside a driven one reads 0/I = 0, a number, and passes.
+    """
+    refuse_undriven(voltages)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = np.asarray(voltages) / currents
+    bad = ~np.isfinite(z)
+    if bad.any():
+        ports = np.flatnonzero(bad.reshape(-1, z.shape[-1]).any(axis=0))
+        raise FloatingPointError(
+            f"compute_impedance: port(s) {ports.tolist()} (in the solver's "
+            "port order, gap feeds first) read a current of exactly "
+            "0, so V/I is not a number there. Read the drive-independent "
+            "admittance from compute_port_solution().y instead"
+        )
+    return z
+
+
 @dataclass(frozen=True)
 class PortSolution:
     """Everything one multi-port solve produced, from one fill + factorisation.

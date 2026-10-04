@@ -189,7 +189,12 @@ from . import _feed_snap, _ground_spec, _potential_ground, _wire_spec
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
-from ._port_solution import PortSolution, _SweptPortSolutions
+from ._port_solution import (
+    PortSolution,
+    _SweptPortSolutions,
+    port_impedances,
+    refuse_undriven,
+)
 from ._quadrature import leggauss
 
 # The reduced-kernel segment moment ∫ g dl' has no shared home in momwire —
@@ -950,6 +955,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         solved coefficient vector, which on a pulse basis IS the segment
         current in amperes, in segment order (per wire, arc order).
         """
+        refuse_undriven([v for _, _, v in self.feeds])  # momwire#1164
         geom = self._build_geometry()
         self._checkpoint()
         Z = self._assemble_Z(geom, self.k)
@@ -965,7 +971,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         self._checkpoint()
         coeffs = scipy.linalg.solve(Z, rhs)
-        z_per_feed = voltages / np.array([coeffs[m] for m in idx])
+        z_per_feed = port_impedances(voltages, np.array([coeffs[m] for m in idx]))
         return (z_per_feed[0] if len(self.feeds) == 1 else z_per_feed), coeffs
 
     def compute_y_matrix(self):
