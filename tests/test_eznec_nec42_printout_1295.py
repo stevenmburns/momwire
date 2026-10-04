@@ -84,7 +84,9 @@ def licensed(capture: str) -> str:
 # each block leaves the reference together with the blank line it brings:
 # the GN 2 block sits between the heading and the medium (0231), the GN 3
 # block after the medium (0232, 0239), and a GN 3 run that found tables
-# from the previous run says so above RUN TIME (0239).
+# from the previous run says so above RUN TIME (0239).  The one exception is
+# a GN 2 that NAMES its file, which no capture carries: the block's first line
+# is kept for it (momwire#1317, gated below).
 _CACHE_BLOCKS = (
     re.compile(
         r"\n\n GNDINO: [^\n]*\n WILL COMPUTE SOMMERFELD-GROUND TABLES\n"
@@ -741,6 +743,54 @@ def test_the_numbers_against_the_licensed_engine(served, capsys):
         assert math.isfinite(zo.real) and math.isfinite(zo.imag), capture
         if capture in CAPTURES and capture not in _SANITY_EXEMPT:
             assert abs(zo - zt) / abs(zt) < _SANITY_REL, (capture, zo, zt)
+
+
+# ==========================================================================
+# a GN 2 naming a Sommerfeld-table file (momwire#1317)
+# ==========================================================================
+
+
+def _timeless(text: str) -> list[str]:
+    """Lines with the stamp and the two clock readings blanked."""
+    lines = _unstamped(text)
+    return [
+        "" if ("FILL=" in ln or ln.startswith(_printout._RUN_TIME_LABEL)) else ln
+        for ln in lines
+    ]
+
+
+def test_a_gn2_file_name_prints_that_the_file_was_not_read():
+    """The licensed engine's line, in its captured place (the cache block of
+    p7, this deck's own printout, first line only), and the name echoed on
+    the card's continuation line; every other line is the bare card's
+    printout."""
+    bare_card = "GN 2 0 0 0 13. .005 0 0 0 0"
+    bare = render(
+        _edited("p7", "GN 2,0,0,0,13.,.005", bare_card), basis=BASIS, dialect="nec4"
+    )
+    assert "GNDINO" not in bare
+    for name in ("NOFILE", "SOMEX10.NEC"):
+        named = render(
+            _edited("p7", "GN 2,0,0,0,13.,.005", f"{bare_card} {name}"),
+            basis=BASIS,
+            dialect="nec4",
+        )
+        assert "NEC ERROR" not in named, name
+        gndino = " GNDINO: UNABLE TO OPEN FILE " + name.ljust(40)
+        echo = " " * 43 + "  0.00000E+00  " + name.ljust(40)
+        lines = _timeless(named)
+        env_at = _section(lines, "- - - ANTENNA ENVIRONMENT - - -")
+        assert lines[env_at + 1 : env_at + 6] == [
+            "",
+            "",
+            gndino,
+            "",
+            " " * 40 + "FINITE GROUND.  SOMMERFELD SOLUTION GN2",
+        ], name
+        assert lines.count(gndino) == 1 and lines.count(echo) == 1, name
+        kept = [*lines[: env_at + 2], *lines[env_at + 5 :]]
+        kept.remove(echo)
+        assert kept == _timeless(bare), name
 
 
 # ==========================================================================

@@ -162,6 +162,9 @@ class Preamble:
     loads: tuple[LoadRow, ...]
     fill_seconds: float
     factor_seconds: float
+    # The Sommerfeld-table file a ``GN 2`` card names (momwire#1317), which
+    # this engine never opens; ``None`` when the card names none.
+    ground_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -267,6 +270,10 @@ _CHARGES_COLUMNS: tuple[str, ...] = (
     "CHARGE DENSITY (COULOMBS/METER)",
     _CURRENTS_COLUMNS[1],
 )
+
+# The first line of the licensed engine's Sommerfeld-table cache block (0231,
+# p7), the file name following as A40.
+_GNDINO = " GNDINO: UNABLE TO OPEN FILE "
 
 _FAR_GROUND_HEADING = " " * 31 + "- - - FAR FIELD GROUND PARAMETERS - - -"
 _FAR_GROUND_INDENT = " " * 40
@@ -436,6 +443,26 @@ def _port_table(heading: str, rows: tuple[PortRow, ...]) -> list[str]:
     return [heading, "", *_printout._PORT_COLUMNS, *(_port_row(r) for r in rows)]
 
 
+def _environment(shared: RunData, ground_file: str | None) -> list[str]:
+    """ANTENNA ENVIRONMENT, with one line more when ``GN 2`` names a
+    Sommerfeld-table file (momwire#1317).
+
+    The licensed engine prints a four-line block there on EVERY ``GN 2`` run
+    (0231, p7): a blank, ``GNDINO: UNABLE TO OPEN FILE`` and the name as A40,
+    ``WILL COMPUTE SOMMERFELD-GROUND TABLES``, a blank, the table time and a
+    blank, between the heading's blank and the medium.  The name is its
+    default, ``SOMD.NEC``, when the card names none, and this engine prints
+    none of that block for it (the byte gates strip it from the reference).
+    A NAMED file is the deck's own request, so its first line, the one that
+    says the file was not read, is kept in its captured place; the table
+    lines are not, because this engine keeps no table file and has no table
+    time to report."""
+    lines = _printout._environment(shared)
+    if ground_file is None:
+        return lines
+    return [*lines[:2], "", _GNDINO + ground_file.ljust(40), "", *lines[2:]]
+
+
 def _far_field_ground(ground: FarFieldGround) -> list[str]:
     pad = _FAR_GROUND_INDENT
     return [
@@ -467,7 +494,7 @@ def _run(run: Nec4Run) -> list[str]:
         )
         body += _printout._frequency(shared)
         body += gap(_SECTION_GAP)
-        body += _printout._environment(shared)
+        body += _environment(shared, run.preamble.ground_file)
         body += gap(_SECTION_GAP)
         body += _loading(run.preamble)
         body += gap(_SECTION_GAP)

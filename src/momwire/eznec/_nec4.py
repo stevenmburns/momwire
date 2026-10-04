@@ -355,6 +355,7 @@ def _run(
                 wavelength_m=wavelength,
                 environment=_environment_label(deck, group.ground),
                 ground=medium,
+                ground_file=_ground_file(deck) if medium is not None else None,
                 loads=tuple(_load_row(card) for card in deck.loads),
                 fill_seconds=result.fill_ms / 1000.0,
                 factor_seconds=0.0,
@@ -499,6 +500,14 @@ def _environment_label(deck, ground) -> str:
         return ENVIRONMENT_PERFECT_GROUND
     written = [c.i(0) for c in deck.data_cards if c.mnemonic == "GN"]
     return f"FINITE GROUND.  SOMMERFELD SOLUTION GN{written[-1]}"
+
+
+def _ground_file(deck) -> str | None:
+    """The Sommerfeld-table file name the deck's ``GN 2`` card carries, or
+    ``None``.  The nec4 dialect reads the card without it (momwire#1317); the
+    printout says the file was not read, as the licensed engine does."""
+    written = [c for c in deck.data_cards if c.mnemonic == "GN"]
+    return written[-1].trailer if written else None
 
 
 def _medium(ground, freq_mhz: float) -> GroundMedium | None:
