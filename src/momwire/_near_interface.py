@@ -1834,11 +1834,14 @@ def _check_memo(memo):
         )
 
 
-def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels, keep=None):
+def _designed_block(
+    eps_t, k2, rows, rtol, lam_mult, memo, labels, keep=None, keep_mask=None
+):
     """`designed_tables` between its dedup and its scatter: the (m, 6) values
     of `rows` (distinct triples, first-appearance order), memo hits copied
     from the memo, the rest evaluated by `_evaluate_fresh` and inserted --
-    only those `keep` holds when a `keep` is given (`designed_rows`)."""
+    only those `keep` holds when a `keep` is given, or those `keep_mask`
+    marks (one bool per row of `rows`; `designed_rows`)."""
     if memo is None:
         # Every row is fresh and in order, so the block IS the evaluation's
         # answer: the copy `block[arange] = vals` into a second (m, 6) array
@@ -1860,7 +1863,10 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels, keep=None):
             plan=memo.sheet_plan,
         )
         block[fresh_pos] = vals
-        if keep is not None:
+        if keep_mask is not None:
+            ins = np.asarray(keep_mask, dtype=bool)[fresh_pos]
+            sub, vals = sub[ins], vals[ins]
+        elif keep is not None:
             ins = keep.contains(sub)
             sub, vals = sub[ins], vals[ins]
         memo.insert(sub, vals)
@@ -1869,7 +1875,14 @@ def _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, labels, keep=None):
 
 
 def designed_rows(
-    eps_t, k2, rows, rtol=1e-10, lam_mult=_LAM_MULT, memo=None, keep=None
+    eps_t,
+    k2,
+    rows,
+    rtol=1e-10,
+    lam_mult=_LAM_MULT,
+    memo=None,
+    keep=None,
+    keep_mask=None,
 ):
     """`designed_tables` over rows that are ALREADY DISTINCT, as the (m, 6)
     block in `KEYS` column order — row i for `rows[i]` — with no dedup and no
@@ -1898,10 +1911,16 @@ def designed_rows(
     every triple any later call on `memo` will ask (`_crossing_fill.
     _chunked_point_tables`: the ends loop's), so those later calls see the
     same hits, and the memo does not retain ~136 B per row it will never
-    serve."""
+    serve.
+
+    `keep_mask` (momwire#1224 perf item 5): `keep.contains(rows)` already
+    asked, one bool per row -- the same rows inserted, without the lookup.
+    A caller that needed the answer before evaluating (`_crossing_fill`'s
+    tile schedule, which pins the key rows to its first tile) passes it
+    instead of `keep`."""
     _check_memo(memo)
     rows = np.asarray(rows, dtype=float)
-    return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None, keep)
+    return _designed_block(eps_t, k2, rows, rtol, lam_mult, memo, None, keep, keep_mask)
 
 
 def column_batches(rho, max_rows):

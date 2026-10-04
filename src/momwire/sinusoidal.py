@@ -277,16 +277,19 @@ _CROSSING_OBLIQUE_REFUSAL = (
     "away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node "
     "slope emerges from the solution"
 )
-# The dense point-observer block (stage 2's route by decision 5) holds every
-# (observer, source node) pair's kernels at once; past this many pairs per
-# direction the tiled route (momwire#1224, stage 3) is the one to use.
-_CROSSING_POINT_PAIRS_MAX = 4_000_000
-_CROSSING_POINT_SIZE_REFUSAL = (
-    "the point-matched crossing block is served dense (momwire#1223 stage 2) up "
-    "to {limit:,} observer x source-node pairs per direction, and this deck "
-    "needs {pairs:,}; the tiled route is momwire#1224. Solve it with "
-    "SinusoidalGalerkinSolver or BSplineSolver, or use fewer segments"
-)
+# No pair-count cap on the point-matched crossing block (momwire#1224 perf
+# item 5). Stage 2 refused past 4 M observer x source-node pairs per
+# direction because its route held every pair's kernels at once; the cap
+# outlived that route (invl x32, 15.1 M pairs a direction, solved bit-
+# identically with it lifted). What the block holds now, per direction: one
+# observer chunk's working set (`_POINT_CHUNK_PAIRS`), the values of the
+# unique rows live in the current evaluation tile (`_POINT_TILE_PAIRS`), and
+# per-grid bookkeeping that still scales with the grid -- 4 B of pair id per
+# pair and ~40 B per unique row (the rows themselves and their tile slots).
+# A direction has at most N^2/4 pairs, so that is at most ~1 B + ~10 B per
+# entry of the 16 B-per-entry Z the fill already holds, and the work is
+# O(pairs) like the fill's. A cap would bound nothing Z does not; measured
+# at invl x32 the process peak is 1.3 GB against Z's 0.55 GB.
 
 # No node_gaps kwarg exists on this solver at all (unlike BSplineSolver /
 # SinusoidalGalerkinSolver) — passing one is a plain TypeError, not a
@@ -6132,39 +6135,36 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         it in place and `into` is returned. The two directions' rows
         partition the matrix's (`below` and its complement), so this is the
         same one addition per element as `into += rows`, without the (N, N)
-        `rows` beside it (momwire#1267)."""
+        `rows` beside it (momwire#1267), and since momwire#1224 perf item 5
+        without even a direction's (n_obs, N) rows: each observer chunk is
+        added as `point_observer_block` finishes it (`into_rows`)."""
         ctx = self._crossing_context(geom, seg_view, medium)
         a_idx = np.nonzero(~below)[0]
         b_idx = np.nonzero(below)[0]
         ax_a = _crossing_fill.axis_data(ctx, a_idx)
         ax_b = _crossing_fill.axis_data(ctx, b_idx)
-        for obs, src in ((a_idx, ax_b), (b_idx, ax_a)):
-            pairs = int(obs.size) * int(np.asarray(src["nodes"]).shape[0])
-            if pairs > _CROSSING_POINT_PAIRS_MAX:
-                raise NotImplementedError(
-                    _CROSSING_POINT_SIZE_REFUSAL.format(
-                        limit=_CROSSING_POINT_PAIRS_MAX, pairs=pairs
-                    )
-                )
         centres = np.asarray(geom["seg_centers"])
         tangents = np.asarray(geom["seg_tangents"])
         n = int(geom["n_segs"])
         if into is None:
             out = np.zeros((n, n), dtype=np.complex128)
         for obs, src, above in ((a_idx, ax_b, True), (b_idx, ax_a, False)):
-            rows = _crossing_fill.point_observer_block(
-                ctx, centres[obs], tangents[obs], src, observers_above=above
-            )
             if into is None:
-                out[obs] = rows
+                out[obs] = _crossing_fill.point_observer_block(
+                    ctx, centres[obs], tangents[obs], src, observers_above=above
+                )
             else:
-                # By contiguous runs: `into[obs] += rows` would gather the
-                # rows into an (n_obs, N) copy first.
-                r = 0
-                for s0, e0 in self._index_runs(obs):
-                    into[s0:e0] += rows[r : r + e0 - s0]
-                    r += e0 - s0
-            del rows
+                # Straight into `into`'s rows, chunk by observer chunk, with
+                # no (n_obs, N) block beside it (momwire#1224 perf item 5).
+                _crossing_fill.point_observer_block(
+                    ctx,
+                    centres[obs],
+                    tangents[obs],
+                    src,
+                    observers_above=above,
+                    into=into,
+                    into_rows=obs,
+                )
         return out if into is None else into
 
     @staticmethod
