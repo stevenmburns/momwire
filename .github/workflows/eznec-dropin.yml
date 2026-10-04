@@ -1,8 +1,9 @@
 name: eznec-dropin
 
 # Build the packaged Windows bundle for EZNEC's external-engine slot: the
-# native launchers EZNEC points at (momwire-eznec[-<basis>].exe, one compiled
-# client copied per basis) plus the ONE frozen engine they run
+# native launchers EZNEC and SimNEC point at (momwire-nec5[-<basis>].exe,
+# momwire-nec4[-<basis>].exe and the deprecated momwire-eznec[-<basis>].exe:
+# one compiled client copied per name, build.py's launcher_stems()) plus the ONE frozen engine they run
 # (momwire-eznec-engine.exe — momwire.eznec under PyInstaller, one-dir; the
 # one-file form is disqualified, it self-extracts on every launch and EZNEC
 # launches once per frequency point, sitting-4 measured 17 s vs 1.3 s).
