@@ -8,8 +8,8 @@ pyinstaller are installed::
 Produces ``dist/momwire-eznec/`` containing the launchers EZNEC and SimNEC
 point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec4[-<basis>][.exe]``
 and the deprecated ``momwire-eznec[-<basis>][.exe]`` -- the single frozen
-``momwire-eznec-engine[.exe]`` they run, and that engine's ``_internal`` runtime.  The bundle
-directory must be kept together — a launcher spawns the engine BESIDE it, and
+``momwire-eznec-engine[.exe]`` they run, and that engine's ``_internal``
+runtime.  The bundle directory must be kept together — a launcher spawns the engine BESIDE it, and
 the engine needs its runtime beside it in turn.
 
 Two programs and not one, since momwire#718 phase 3.  The launcher is
