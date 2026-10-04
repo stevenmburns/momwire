@@ -22,12 +22,16 @@ captures show, and nothing else:
   Measured, not inferred from the card: on the captures carrying it the solved
   current comes back pinned at the card's 1.414214 A while the voltage floats,
   and 0223/0224 — one antenna, ``EX 6`` against ``EX 0`` — give the same
-  impedance to every printed digit.  It is served as a voltage drive of the
-  same port rescaled after the solve (:attr:`DeckModel.current_feeds`), which
-  is exact for one source: the response is linear in the drive, so the
-  impedance is the voltage drive's own and only the scale moves.  Two or more
-  sources in one execute group with any of them a current source is a phased
-  drive with mixed boundary conditions; no capture writes one, and it refuses.
+  impedance to every printed digit.  A sole current source is served as a
+  voltage drive of the same port rescaled after the solve
+  (:attr:`DeckModel.current_feeds`): the response is linear in the drive, so
+  the impedance is the voltage drive's own and only the scale moves.  Several
+  sources with any of them a current source — EZNEC's stock Cardioid in this
+  slot writes two ``EX 6`` cards — is a PHASED drive and no scale serves it:
+  the portal solves for the port voltages that deliver every set current
+  while every ``EX 0`` keeps its set voltage (``DeckSolver._phased_drive``, the
+  NEC-5 slot's ``EX 4`` algebra on the portal's port space).  One segment is
+  still one port for the whole deck, so a segment driven both ways refuses.
 * ``GE`` I1 reads -1 / 0 / 1, and -1 is NEC-4's "structure below ground"
   (0239 is a wholly buried wire under ``GE -1,-1``).  The ``nec2`` reading of
   the same sign — a ground plane WITHOUT the contact current expansion — is the
@@ -169,19 +173,6 @@ class _Nec4Parser(_Nec2Parser):
             self._sources = []
             self._sources_stale = False
         self._sources.append((address[0], address[1], amps))
-
-    def _execute(self, card: Card) -> None:
-        if self._armed or not self._executed:
-            kinds = [self._source_kind[(tag, seg)] for tag, seg, _v in self._sources]
-            if _EX_CURRENT in kinds and len(kinds) > 1:
-                raise DeckError(
-                    f"{len(kinds)} sources in one run with an EX 6 current source "
-                    f"among them is not supported by this engine: a current "
-                    f"source is served as its port's voltage drive rescaled, "
-                    f"which is exact for one source only, and no EZNEC NEC-4.2 "
-                    f"capture writes more than one"
-                )
-        super()._execute(card)
 
     def model(self) -> DeckModel:
         model = super().model()

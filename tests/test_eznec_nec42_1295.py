@@ -304,15 +304,6 @@ def _edited(capture: str, old: str, new: str) -> str:
             _edited(
                 "0223",
                 "EX 6,1,6,0,1.414214,0.",
-                "EX 6,1,6,0,1.414214,0.\r\nEX 0,1,2,0,1.,0.",
-            ),
-            r"2 sources in one run with an EX 6 current source",
-            id="current-in-a-phased-drive",
-        ),
-        pytest.param(
-            _edited(
-                "0223",
-                "EX 6,1,6,0,1.414214,0.",
                 "EX 6,1,6,0,1.414214,0.\r\nXQ 0\r\nEX 0,1,6,0,1.,0.",
             ),
             r"a port is either a voltage source or a current source",
@@ -442,6 +433,163 @@ def test_ex6_and_ex0_are_two_drives_of_one_problem():
     assert current.power == pytest.approx(
         0.5 * 1.414214**2 * voltage.impedance.real, rel=1e-12
     )
+
+
+# --------------------------------------------------------------------------
+# the phased current drive (several sources, an EX 6 among them)
+
+# The two phased decks EZNEC's NEC-4.2 slot wrote (fixtures/eznec_nec42/
+# multisource/, README there): the stock Cardioid, two EX 6, and a 40 m
+# four-square, four EX 6 over real ground.  Both were refused before this.
+CARDIOID_NEC4 = (
+    (FIXTURES / "multisource" / "m1_cardioid-2-current-sources.nec")
+    .read_bytes()
+    .decode("latin-1")
+)
+FOURSQUARE_NEC4 = (
+    (FIXTURES / "multisource" / "m2_foursquare-4-current-sources.nec")
+    .read_bytes()
+    .decode("latin-1")
+)
+
+# One current source beside one voltage source.
+MIXED_NEC4 = CARDIOID_NEC4.replace("EX 6,2,1,0,0.,-1.414214", "EX 0,2,1,0,0.,-1.414214")
+
+
+def _phased_records(text: str, basis: str = "bspline"):
+    from momwire.portal._portal import DeckSolver, _run_records, parse_deck
+
+    deck = parse_deck(text, dialect="nec4")
+    solver = DeckSolver(deck, basis=basis)
+    (group,) = [g for g in deck.groups if g is not None]
+    return _run_records(solver, group, group.freqs_mhz[0], 0)
+
+
+def _as_voltage_deck(text: str, rows) -> str:
+    """The same deck with every source an ``EX 0`` at the volts the phased
+    solve applied — written with ``repr`` so the card carries those bits."""
+    lines = [line for line in text.splitlines() if not line.startswith("EX ")]
+    at = lines.index("PQ 0")
+    cards = [
+        f"EX 0,{row.tag},{row.segment - 6 * (row.tag - 1)},0,"
+        f"{row.volts.real!r},{row.volts.imag!r}"
+        for row in rows
+    ]
+    return "\n".join(lines[:at] + cards + lines[at:]) + "\n"
+
+
+def _spec(text: str) -> list[tuple[int, complex]]:
+    """``(EX type, set value)`` per EX card, in card order."""
+    out = []
+    for line in text.splitlines():
+        if line.startswith("EX "):
+            f = line[3:].split(",")
+            out.append((int(f[0]), complex(float(f[4]), float(f[5]))))
+    return out
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(CARDIOID_NEC4, id="cardioid-ex6x2"),
+        pytest.param(FOURSQUARE_NEC4, id="foursquare-ex6x4"),
+        pytest.param(MIXED_NEC4, id="mixed-ex6-ex0"),
+    ],
+)
+def test_a_phased_drive_pins_every_set_quantity(text):
+    """Each EX 6 row carries exactly its card's current and each EX 0 row its
+    card's voltage, while the other quantity floats; Z is V/I per row."""
+    records = _phased_records(text)
+    spec = _spec(text)
+    assert len(records.aip_rows) == len(spec)
+    for row, (kind, value) in zip(records.aip_rows, spec, strict=True):
+        if kind == 6:
+            assert row.current == value
+        else:
+            assert row.volts == value
+        assert row.impedance == pytest.approx(row.volts / row.current, rel=1e-14)
+    # The structure current at an EX 6 gap is the card's (no network here),
+    # which is what the currents table prints at that segment.
+    for row, (kind, value) in zip(records.aip_rows, spec, strict=True):
+        if kind == 6:
+            assert complex(records.result.i_port[_port_of(records, row)]) == value
+
+
+def _port_of(records, row) -> int:
+    (port,) = [p for p, seg, _v in records.result.driven if seg == row.segment]
+    return port
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(CARDIOID_NEC4, id="cardioid-ex6x2"),
+        pytest.param(FOURSQUARE_NEC4, id="foursquare-ex6x4"),
+        pytest.param(MIXED_NEC4, id="mixed-ex6-ex0"),
+    ],
+)
+def test_a_phased_drive_is_the_voltage_drive_at_the_volts_it_found(text):
+    """Superposition consistency, bit-tight: the EX 0 deck at the volts the
+    phased solve applied IS the same solve, so every structure current agrees
+    to the bit and each source's impedance to the solve's round-off."""
+    phased = _phased_records(text)
+    voltage = _phased_records(_as_voltage_deck(text, phased.aip_rows))
+    assert [r.volts for r in voltage.aip_rows] == [r.volts for r in phased.aip_rows]
+    assert (
+        voltage.result.segment_currents.tobytes()
+        == phased.result.segment_currents.tobytes()
+    )
+    for got, want in zip(voltage.aip_rows, phased.aip_rows, strict=True):
+        assert got.current == pytest.approx(want.current, rel=1e-12, abs=1e-15)
+        assert got.impedance == pytest.approx(want.impedance, rel=1e-12)
+
+
+def test_a_phased_drive_differs_from_its_equal_voltage_drive():
+    """The mutual coupling is in the answer: two EX 6 cards are not the two
+    EX 0 cards with the same numbers (the cardioid's sources report two
+    different impedances, and neither is the voltage drive's)."""
+    current = _phased_records(CARDIOID_NEC4).aip_rows
+    volts = _phased_records(CARDIOID_NEC4.replace("EX 6,", "EX 0,")).aip_rows
+    assert current[0].impedance != pytest.approx(current[1].impedance, rel=1e-3)
+    assert current[0].impedance != pytest.approx(volts[0].impedance, rel=1e-3)
+
+
+def test_a_phased_drive_through_a_network_pins_the_source_current():
+    """0234's L-network-fed source plus a second EX 6 off the network: the
+    source current at the network-fed port is antenna PLUS network, set
+    exactly, and the same deck as EX 0 at the solved volts agrees."""
+    text = deck_text("0234").replace(
+        "EX 6,3,1,0,1.414214,0.",
+        "EX 6,3,1,0,1.414214,0.\r\nEX 6,1,15,0,0.,-.5",
+    )
+    records = _phased_records(text)
+    assert [r.current for r in records.aip_rows] == [1.414214 + 0j, -0.5j]
+    edited = text
+    for row, card in zip(
+        records.aip_rows,
+        ("EX 6,3,1,0,1.414214,0.", "EX 6,1,15,0,0.,-.5"),
+        strict=True,
+    ):
+        tag, seg = card.split(",")[1:3]
+        edited = edited.replace(
+            card, f"EX 0,{tag},{seg},0,{row.volts.real!r},{row.volts.imag!r}"
+        )
+    voltage = _phased_records(edited)
+    for got, want in zip(voltage.aip_rows, records.aip_rows, strict=True):
+        assert got.volts == want.volts
+        assert got.current == pytest.approx(want.current, rel=1e-9)
+
+
+@pytest.mark.integration
+def test_a_phased_drive_serves_in_the_nec42_printout():
+    text = render(CARDIOID_NEC4, basis="bspline", dialect="nec4")
+    assert "NEC ERROR" not in text
+    block = text.split("- - - ANTENNA INPUT PARAMETERS - - -", 1)[1]
+    rows = [line for line in block.splitlines()[:8] if re.match(r"\s+\d+\s+\d+ ", line)]
+    assert len(rows) == 2, block[:800]
+    # Each row's CURRENT columns are its card's set current, as printed.
+    assert rows[0][37:60] == "1.41421E+00 0.00000E+00", rows[0]
+    assert rows[1][37:60] == "0.00000E+00-1.41421E+00", rows[1]
 
 
 @pytest.mark.integration

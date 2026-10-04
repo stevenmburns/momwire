@@ -205,6 +205,7 @@ def build_network(
     *,
     group: int,
     voltages,
+    held: tuple[int, ...] = (),
 ) -> tuple[Network, dict[str, int]] | None:
     """The flat network for one execute group, or ``None`` if it has none.
 
@@ -226,6 +227,13 @@ def build_network(
     driven gets its source anyway, and the reducer's termination branch then
     carries the SOURCE current — antenna plus network — which is the number
     the ``ANTENNA INPUT PARAMETERS`` row prints.
+
+    ``held`` names the ports that are sources whatever their voltage in THIS
+    vector (momwire#1295's phased current drive, the portal twin of
+    ``momwire.eznec._serve._reducer_for``'s parameter).  A unit probe puts
+    zero volts on every driven port but one, and a driven endpoint that
+    floated between the probes and the final solve would make them columns of
+    two different circuits.  Empty, the rule above is unchanged.
     """
     cards = live_cards(model, plan, group)
     if not cards:
@@ -248,13 +256,15 @@ def build_network(
     sources = [
         Driven(port_name(k), complex(voltages[k]))
         for k in range(n)
-        if k not in endpoints or voltages[k] != 0
+        if k not in endpoints or k in held or voltages[k] != 0
     ]
     network = Network(ports=ports, branches=branches, sources=sources)
     return network, port_to_idx
 
 
-def build_reducer(model: DeckModel, plan, *, group: int, voltages):
+def build_reducer(
+    model: DeckModel, plan, *, group: int, voltages, held: tuple[int, ...] = ()
+):
     """:class:`~momwire.networks.NetworkReducer` for one group, or ``None``.
 
     Real ports occupy indices ``0..n_ports-1`` in exactly the order the
@@ -262,7 +272,7 @@ def build_reducer(model: DeckModel, plan, *, group: int, voltages):
     contract, and there are no virtual ports: every node of a NEC network is a
     segment of the structure.
     """
-    built = build_network(model, plan, group=group, voltages=voltages)
+    built = build_network(model, plan, group=group, voltages=voltages, held=held)
     if built is None:
         return None
     network, port_to_idx = built
