@@ -1890,6 +1890,17 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.rotational_symmetry = bool(rotational_symmetry)
         if self.rotational_symmetry:
             self._rotational_map = self._rotational_check()
+        # momwire#959 (a stopgap until #1330): segments below the radius AT A
+        # GAP leave the delta-gap model unreliable. Advisory, once per solver.
+        _wire_spec.advise_gap_mesh_floor(
+            type(self).__name__,
+            self.wires_polylines,
+            self.n_per_edge_per_wire,
+            self._radius_per_wire,
+            self.extended_kernel,
+            _wire_spec.solver_gaps(self),
+            gap_model="point",
+        )
 
     def _rotational_ground_kind(self):
         """The ground's name for the rotational-symmetry rule (momwire#1029

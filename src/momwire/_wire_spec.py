@@ -608,3 +608,211 @@ def reads_input_wires(kind):
         return wrapper
 
     return decorate
+
+
+# --------------------------------------------------------------------------
+# The mesh floor at a gap (momwire#959) — a STOPGAP advisory
+# --------------------------------------------------------------------------
+
+
+class GapMeshFloor(UserWarning):
+    """Segments shorter than the wire's radius at a gap (momwire#959).
+
+    A STOPGAP. The thin-wire model this tree solves (a reduced or extended
+    kernel with a delta-gap source) is unreliable where the segments at a gap
+    are shorter than the wire radius: the answer drifts toward 0 ohm as they
+    shrink instead of converging. The fix is an exact kernel with a
+    finite-width feed (momwire#1330); until then this says so. Advisory only:
+    nothing is remeshed or refused.
+
+    Measured on a free-space 600 MHz dipole (L = 0.24 m, a = 3.175 mm, a 2 a
+    mesh elsewhere), relative to the same deck with a 2 a gap segment:
+
+    * The floor is the mesh AT A GAP. A run of 0.2 a segments ten radii long
+      away from every gap moves Z by <= 1e-4, and so does one at a two-wire
+      junction node.
+    * FLOORS, from a uniform ladder against the delta/a ~ 2 mesh: the reduced
+      kernel is 16 % off at delta/a = 0.85 (`GAP_FLOOR_REDUCED`), the
+      extended kernel 9 % off at 0.6 (`GAP_FLOOR_EXTENDED`); both collapse
+      below (reduced ~0 ohm by 0.35, extended by 0.3).
+    * The SPAN in radii is not the variable; the number of sub-floor
+      segments around the gap is, and it depends on the gap model
+      (`GAP_DEPTH`): three 0.1 a segments (a 0.3 a span) collapse bspline's
+      point gap, two 0.6 a ones (1.2 a) move it 2.7 %.
+
+      - A point gap (bspline, Sin-Galerkin, either feed model) survives a
+        short gap segment alone (13 % at 0.1 a, bounded as it shrinks) and a
+        knot between two short ones (12 %), and fails once a sub-floor
+        segment lies BEYOND those on both sides: 0.91 (0.3 a), 0.27 (0.6 a)
+        with three; 1.0 / 0.49 / 0.095 with four at a knot.
+      - Razor's knot gap fails with the two segments that meet at it:
+        1.0 (0.1 a), 0.87 (0.3 a), 0.23 (0.6 a).
+      - A point-matched segment gap fails with its own segment: 0.83
+        (0.1 a), 0.61 (0.3 a), 0.40 (0.6 a). Pulse and Harrington rows are
+        segment gaps too, and are treated so (not separately measured).
+    * LOADS fail like feeds: a 50 ohm port with five 0.2 a segments around it
+      vanishes from the answer (28 % on every family, razor's lumped loads
+      included), so loads, node gaps and ports are gaps here.
+    * JUNCTIONS: a fine span at a two-wire node is harmless (<= 2e-5), and
+      at a T node on the reduced kernel (<= 9e-3); under the EXTENDED kernel
+      the sinusoidal families fail at a T (point-matched 0.52-0.69,
+      Sin-Galerkin 0.27-0.31) while bspline and razor do not (<= 3e-4). So a
+      junction of three or more members counts as a gap there only.
+    """
+
+
+GAP_FLOOR_REDUCED = 0.85
+GAP_FLOOR_EXTENDED = 0.6
+# Sub-floor segments needed BEYOND the gap's own on each side, per gap model.
+GAP_DEPTH = {"point": 1, "knot": 0, "segment": 0}
+
+
+def _segment_lengths(polyline, npe):
+    pl = np.asarray(polyline, dtype=float)
+    lengths = np.linalg.norm(np.diff(pl, axis=0), axis=1)
+    return np.repeat(lengths / np.asarray(npe, dtype=float), np.asarray(npe))
+
+
+def gap_past_floor(polyline, npe, a, where, floor, depth):
+    """``(fires, delta/a, span/a)`` for a gap at `where` on one wire: an
+    arclength from the first vertex (None: the midpoint), or "start"/"end"
+    for a gap at a wire end.
+
+    The gap's own segments are the one containing it, or both meeting at it
+    when it sits on a knot (to the snaps' rounding). It fires when all of
+    them are shorter than ``floor * a`` and the contiguous sub-floor run
+    reaches `depth` more segments beyond them on each side the wire has.
+    """
+    h = _segment_lengths(polyline, npe)
+    knots = np.concatenate([[0.0], np.cumsum(h)])
+    if where == "start":
+        own = [0]
+    elif where == "end":
+        own = [h.size - 1]
+    else:
+        t = knots[-1] / 2.0 if where is None else float(where)
+        k = int(np.clip(np.searchsorted(knots, t, side="right") - 1, 0, h.size - 1))
+        own = [k]
+        tol = 1e-11 * knots[-1]
+        if k > 0 and abs(t - knots[k]) <= tol:
+            own = [k - 1, k]
+        elif k + 1 < h.size and abs(t - knots[k + 1]) <= tol:
+            own = [k, k + 1]
+    short = h < floor * a
+    ratio = float(min(h[i] for i in own) / a)
+    if not all(short[i] for i in own):
+        return False, ratio, 0.0
+    i, j = min(own), max(own) + 1
+    while i > 0 and short[i - 1]:
+        i -= 1
+    while j < h.size and short[j]:
+        j += 1
+    span = float((knots[j] - knots[i]) / a)
+    left = min(own) - i if min(own) > 0 else None  # None: the wire ends here
+    right = j - max(own) - 1 if max(own) < h.size - 1 else None
+    sides = [n for n in (left, right) if n is not None]
+    return all(n >= depth for n in sides), ratio, span
+
+
+def advise_gap_mesh_floor(
+    family,
+    wires_polylines,
+    n_per_edge_per_wire,
+    radius_per_wire,
+    extended_kernel,
+    gaps,
+    *,
+    gap_model,
+):
+    """Warn `GapMeshFloor` once, naming every gap past the floor
+    (`gap_past_floor` with this family's `GAP_DEPTH[gap_model]`).
+
+    `gaps` is ``[(label, [(wire, where), ...])]``: a feed, load, port or
+    junction and the wire position(s) it sits at. Deduped per gap; the worst
+    member speaks for it.
+    """
+    floor = GAP_FLOOR_EXTENDED if extended_kernel else GAP_FLOOR_REDUCED
+    depth = GAP_DEPTH[gap_model]
+    found = []
+    for label, sites in gaps:
+        worst = None
+        for w, where in sites:
+            a = float(radius_per_wire[w])
+            if a <= 0.0:
+                continue
+            fires, ratio, span = gap_past_floor(
+                wires_polylines[w],
+                n_per_edge_per_wire[w],
+                a,
+                where,
+                floor,
+                # A node's members each see it as a wire end, with one side
+                # to reach along. Not separately measured: one sub-floor
+                # segment beyond the end one, as a point gap needs.
+                depth if where not in ("start", "end") else max(depth, 1),
+            )
+            if fires and (worst is None or ratio < worst[0]):
+                worst = (ratio, span)
+        if worst is not None:
+            found.append((label, *worst))
+    if not found:
+        return
+    parts = []
+    for label, ratio, span in found[:6]:
+        part = (
+            f"{label}, where the segments are down to {ratio:.3g} of the "
+            f"radius over {span:.3g} radii"
+        )
+        if not extended_kernel and ratio >= GAP_FLOOR_EXTENDED:
+            part += (
+                f" (extended_kernel=True holds to delta/a ~ "
+                f"{GAP_FLOOR_EXTENDED:g}, which covers this)"
+            )
+        parts.append(part)
+    more = f"; and {len(found) - 6} more" if len(found) > 6 else ""
+    warnings.warn(
+        f"{family}: the impedance is unreliable at "
+        + "; ".join(parts)
+        + more
+        + ". This solver's thin-wire model with a delta-gap source does not "
+        "converge where the segments at a gap are shorter than the wire "
+        "radius: the answer drifts toward 0 ohm as they shrink. The fix is "
+        "an exact kernel with a finite-width feed, momwire#1330. Advisory: "
+        "nothing is remeshed. See stevenmburns/momwire#959.",
+        GapMeshFloor,
+        stacklevel=3,
+    )
+
+
+def solver_gaps(solver, *, junctions_are_gaps=False):
+    """Every gap a constructed solver carries, as `advise_gap_mesh_floor`
+    takes them: feeds, lumped loads, node gaps, junction ports and node
+    ports — and, when `junctions_are_gaps`, every junction of three or more
+    members — each labelled with its wire and position."""
+    gaps = []
+    for i, (w, arc, _v) in enumerate(getattr(solver, "feeds", None) or []):
+        pos = "its midpoint" if arc is None else f"{float(arc):.4g} m"
+        gaps.append((f"source {i} (wire {w} at {pos})", [(int(w), arc)]))
+    for i, (w, arc, _z) in enumerate(getattr(solver, "lumped_loads", None) or []):
+        pos = "its midpoint" if arc is None else f"{float(arc):.4g} m"
+        gaps.append((f"load {i} (wire {w} at {pos})", [(int(w), arc)]))
+    for i, (w, end, _v) in enumerate(getattr(solver, "node_gaps", None) or []):
+        gaps.append((f"node gap {i} (wire {w} {end})", [(int(w), end)]))
+    junctions = getattr(solver, "junctions", None) or []
+    ported = set()
+    for kind, ports in (
+        ("junction port", getattr(solver, "junction_ports", None) or []),
+        ("node port", getattr(solver, "node_ports", None) or []),
+    ):
+        for i, entry in enumerate(ports):
+            j = int(entry[0])
+            if 0 <= j < len(junctions):
+                ported.add(j)
+                members = [(int(w), end) for w, end in junctions[j]]
+                gaps.append((f"{kind} {i} (junction {j})", members))
+    if junctions_are_gaps:
+        for j, group in enumerate(junctions):
+            if j not in ported and len(group) >= 3:
+                members = [(int(w), end) for w, end in group]
+                gaps.append((f"junction {j} ({len(group)} wires)", members))
+    return gaps
