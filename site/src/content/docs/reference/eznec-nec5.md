@@ -107,6 +107,21 @@ belongs to; razor cannot serve there, because NEC-4.2 decks put their sources
 at segment centres and razor places sources at knots, so a
 `momwire-nec4-razor-2p` copy refuses by name.
 
+In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
+- **Current sources** (`EX 6`), including several at once, so a phased array
+  such as a cardioid or a four-square solves with its currents pinned.
+  Current sources can also mix with voltage sources (`EX 0`).
+- **Ground:**
+  - perfect ground (`GN 1`);
+  - a `GD` second medium for the far-field cliff;
+  - the Sommerfeld ground (`GN 2` or `GN 3`);
+  - wires below the surface (`GE -1`).
+- **The Sommerfeld-table file name** that NEC-4.2 may write at the end of a
+  `GN` card. NEC-4.2 uses that file only as a cache, so momwire reads the
+  name and ignores it, and computes the ground from the card's own values.
+
+Each source's impedance agrees with the licensed NEC-4.2 to within about 2 %.
+
 **The `momwire-eznec` names are deprecated.** They are what earlier releases
 said to point EZNEC at, and they still ship and answer exactly as before —
 same engine, same warm server, same printout. An engine path typed once and
