@@ -1026,6 +1026,13 @@ class _PreparedChunks:
 # evaluates them per term, the in-process reference: the same moment rows.
 _CENTROID_SHARE = True
 
+# A lossy medium's T1/T2 combine is spelled as three ufuncs writing in place
+# (momwire#1290). False is the expression it replaced, the in-process
+# reference: the same three operations, so the same floats. TEST-ONLY.
+_COMBINE_IN_PLACE = True
+# Windows that took that combine, for the gate that it ran.
+_COMBINE_COUNT = [0]
+
 
 class _FusedMoments:
     """The C++ fill's stand-in for a prepared moment chunk list (momwire#742).
@@ -5508,7 +5515,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 else:
                     t2 = np.empty((hi - lo, n_basis), dtype=np.complex128)
                     _acc.razor_t2_rows(t2, None, *tabs, *pre)
-                    rows_T1[...] = c_A * t1 - t2 / c_Phi
+                    # `c_A * t1 - t2 / c_Phi`, each ufunc writing into an
+                    # operand it alone owns (momwire#1290): the same three
+                    # elementwise operations on the same operands, so the
+                    # same floats, without the three (rows, n_basis)
+                    # temporaries and the copy into Z's window.
+                    if _COMBINE_IN_PLACE:
+                        np.multiply(c_A, t1, out=t1)
+                        np.divide(t2, c_Phi, out=t2)
+                        np.subtract(t1, t2, out=rows_T1)
+                    else:
+                        rows_T1[...] = c_A * t1 - t2 / c_Phi
+                    _COMBINE_COUNT[0] += 1
                     del t2
                 del M0w, tabs
             else:
