@@ -40,6 +40,7 @@ def test_the_in_place_combine_is_the_expression(deck, monkeypatch):
     got = _z(deck)
     if not _razor._COMBINE_COUNT[0]:
         pytest.skip("this build takes another combine (no razor_t2_rows)")
-    assert np.array_equal(
-        np.asarray(got).view(np.uint64), np.asarray(ref).view(np.uint64)
-    )
+    # Z is column-major (the solve factors it in place), so its bits are
+    # compared through contiguous copies.
+    bits = [np.ascontiguousarray(a).view(np.uint64) for a in (got, ref)]
+    assert np.array_equal(*bits)
