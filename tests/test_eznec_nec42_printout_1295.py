@@ -60,16 +60,24 @@ from momwire.eznec._shell import render
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 PRINTOUTS = FIXTURES / "printouts"
 PROBES_DIR = FIXTURES / "probes"
+MULTI_DIR = FIXTURES / "multisource"
 # The seventeen decks EZNEC wrote, and nine probe decks written to show
 # NEC-4.2's layout of what EZNEC's captures did not (README beside them).
 CAPTURES = tuple(sorted(p.name[:4] for p in FIXTURES.glob("*.nec")))
 PROBES = tuple(sorted(p.name.split("_")[0] for p in PROBES_DIR.glob("*.nec")))
-CASES = CAPTURES + PROBES
+# Two decks EZNEC's NEC-4.2 slot wrote with SEVERAL current sources, the
+# phased drive (README there): the stock Cardioid and a 40 m four-square.
+MULTI = tuple(sorted(p.name.split("_")[0] for p in MULTI_DIR.glob("*.nec")))
+CASES = CAPTURES + PROBES + MULTI
 BASIS = "bspline"
 
 
 def deck_text(capture: str) -> str:
-    (path,) = [*FIXTURES.glob(f"{capture}_*.nec"), *PROBES_DIR.glob(f"{capture}_*.nec")]
+    (path,) = [
+        *FIXTURES.glob(f"{capture}_*.nec"),
+        *PROBES_DIR.glob(f"{capture}_*.nec"),
+        *MULTI_DIR.glob(f"{capture}_*.nec"),
+    ]
     return path.read_bytes().decode("latin-1")
 
 
@@ -116,7 +124,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 9
+    assert len(CAPTURES) == 17 and len(PROBES) == 9 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -743,6 +751,55 @@ def test_the_numbers_against_the_licensed_engine(served, capsys):
         assert math.isfinite(zo.real) and math.isfinite(zo.imag), capture
         if capture in CAPTURES and capture not in _SANITY_EXEMPT:
             assert abs(zo - zt) / abs(zt) < _SANITY_REL, (capture, zo, zt)
+
+
+# The licensed NEC-4.2's own ANTENNA INPUT PARAMETERS rows for the two
+# phased decks, (tag, segment, Z) per source: the targets the README quotes.
+MULTI_Z = {
+    "m1": ((1, 1, 21.0326 - 18.7112j), (2, 7, 51.6136 + 20.8613j)),
+    "m2": (
+        (1, 1, -1.38797 - 20.3048j),
+        (2, 7, 40.9235 - 21.9351j),
+        (3, 13, 40.9235 - 21.9351j),
+        (4, 19, 58.7204 + 53.3152j),
+    ),
+}
+
+
+def test_the_phased_targets_are_the_licensed_printouts_own_rows():
+    for case, rows in MULTI_Z.items():
+        theirs = read_fields(reference(case))["input"]
+        assert [(int(r[0]), int(r[1])) for r in theirs] == [r[:2] for r in rows]
+        for row, (_t, _s, z) in zip(theirs, rows, strict=True):
+            assert complex(*row[6:8]) == z, case
+
+
+@pytest.mark.integration
+def test_a_phased_drive_against_the_licensed_engine(served, capsys):
+    """Every source of both phased decks: the card's current printed as set,
+    and the impedance within the slot's sanity bar of NEC-4.2's.  The
+    four-square's source 1 has a NEGATIVE resistance in NEC-4.2's answer (a
+    driven element absorbing power from its neighbours) and must keep its
+    sign here: nothing clamps it.  Its sources 2 and 3 are mirror images of
+    each other and must print identically."""
+    lines = []
+    for case, rows in MULTI_Z.items():
+        ours = read_fields(served[case])["input"]
+        assert [(int(r[0]), int(r[1])) for r in ours] == [r[:2] for r in rows]
+        theirs = read_fields(reference(case))["input"]
+        for a, b, (_t, seg, z) in zip(ours, theirs, rows, strict=True):
+            # The current columns are the card's set current, as printed.
+            assert a[4:6] == b[4:6], (case, seg)
+            got = complex(*a[6:8])
+            rel = abs(got - z) / abs(z)
+            lines.append(f"  {case} seg {seg:>2}  {z:.4f}  {got:.4f}  {rel:.4f}")
+            assert rel < _SANITY_REL, (case, seg, got, z)
+    with capsys.disabled():
+        print(f"\n{served['basis']}: phased, NEC-4.2 Z, momwire Z, |dZ|/|Z|")
+        print("\n".join(lines))
+    square = read_fields(served["m2"])["input"]
+    assert square[0][6] < 0.0
+    assert square[1][2:] == square[2][2:]
 
 
 # ==========================================================================
