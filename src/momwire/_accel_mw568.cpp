@@ -796,6 +796,61 @@ static py::tuple remainder_field_proj_batch_below(
     return py::make_tuple(out, mx_r1, mn_th, mx_th);
 }
 
+// The projected remainder's arc moments (momwire#1290):
+//
+//     mom[o, j, p] = sum_k proj[o, j*q + k] * W[p, j, k]
+//
+// i.e. `np.einsum("ojq,pjq->ojp", proj.reshape(m, N, q), W)` with W REAL,
+// which `field_windows` spent 0.2 s of buried x16 and 0.8 s of invl x32 on,
+// single-threaded. einsum casts W to complex, so each term is numpy's
+// unfused complex product against (w + 0j): (pr*w - pi*0, pr*0 + pi*w),
+// added k in order to an accumulator that starts at +0.0 -- the arithmetic
+// `remainder_shape_reduce` below derives and measures, with the zero
+// imaginary part spelled out so a signed zero rounds as einsum's does. Each
+// entry is its own sum, so it does not depend on which rows or thread
+// compute it.
+static py::array_t<std::complex<double>> remainder_moment_reduce(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>
+        proj,
+    py::array_t<double, py::array::c_style | py::array::forcecast> W) {
+    typedef std::complex<double> cd;
+    if (W.ndim() != 3 || proj.ndim() != 2)
+        throw std::invalid_argument("W must be (n_moment, N, q), proj (m, N*q)");
+    const py::ssize_t P = W.shape(0), N = W.shape(1), q = W.shape(2);
+    const py::ssize_t M = proj.shape(0);
+    if (proj.shape(1) != N * q)
+        throw std::invalid_argument("proj's second axis must be N*q of W");
+    py::array_t<cd> out({M, N, P});
+    cd *op = out.mutable_data();
+    const double *wp = W.data();
+    const cd *pp = proj.data();
+    {
+        py::gil_scoped_release release;
+        #pragma omp parallel for schedule(static)
+        for (py::ssize_t o = 0; o < M; ++o) {
+            const cd *row = pp + o * N * q;
+            cd *orow = op + o * N * P;
+            for (py::ssize_t j = 0; j < N; ++j) {
+                const cd *pn = row + j * q;
+                for (py::ssize_t m = 0; m < P; ++m) {
+                    const double *wn = wp + (m * N + j) * q;
+                    double are = 0.0, aim = 0.0;
+                    for (py::ssize_t k = 0; k < q; ++k) {
+                        const double pr = pn[k].real(), pi = pn[k].imag();
+                        const double w = wn[k], z = 0.0;
+                        const double re = pr * w - pi * z;
+                        const double im = pr * z + pi * w;
+                        are = re + are;
+                        aim = im + aim;
+                    }
+                    orow[j * P + m] = cd(are, aim);
+                }
+            }
+        }
+    }
+    return out;
+}
+
 // The sinusoidal replay's source-node reduction (momwire#1224):
 //
 //     block[s, i, n] = sum_k shp_w[s, n, k] * proj[i, n*q + k]
@@ -2122,6 +2177,12 @@ void register_mw568(py::module_ &m) {
     // momwire#1224: `blocked=False` reaches the per-pair composition, the
     // reference the blocked loop is gated against as uint64.
     m.attr("below_replay_blocked_1224") = true;
+    m.def("remainder_moment_reduce", &remainder_moment_reduce,
+          "The projected remainder's arc moments, mom[o, j, p] = sum_k "
+          "proj[o, j*q + k] * W[p, j, k] with W real -- the einsum "
+          "'ojq,pjq->ojp' in numpy's own unfused, k-ordered arithmetic "
+          "(momwire#1290) -- OpenMP over observer rows with the GIL released.",
+          py::arg("proj"), py::arg("W"));
     m.def("remainder_shape_reduce", &remainder_shape_reduce,
           "The sinusoidal replay's source-node reduction, block[s, i, n] = "
           "sum_k shp_w[s, n, k] * proj[i, n*q + k] -- the einsum "

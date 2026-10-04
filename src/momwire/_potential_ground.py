@@ -159,7 +159,22 @@ from . import (
     _sommerfeld,
     _sommerfeld_below,
 )
+from ._accel import acc as _acc
 from ._quadrature import leggauss
+
+# The remainder windows' arc-moment reduction in C++ (momwire#1290,
+# `remainder_moment_reduce`): einsum's own arithmetic, threaded. False is
+# the einsum, the in-process reference. TEST-ONLY to clear.
+_MOMENT_REDUCE = True
+
+
+def _arc_moments(proj, W):
+    """`einsum("ojq,pjq->ojp", proj.reshape(m, N, q), W)` for the (m, N*q)
+    projected table and the (n_moment, N, q) real moment weights."""
+    if _MOMENT_REDUCE and _acc is not None and hasattr(_acc, "remainder_moment_reduce"):
+        return _acc.remainder_moment_reduce(proj, W)
+    n_src, n_qp = W.shape[1], W.shape[2]
+    return np.einsum("ojq,pjq->ojp", proj.reshape(proj.shape[0], n_src, n_qp), W)
 
 
 def specular_prep(geom, ground_z):
@@ -499,7 +514,7 @@ class Remainder:
                 grid,
                 cancel_flag=cancel_flag,
             )
-            mom = np.einsum("ojq,pjq->ojp", proj.reshape(i1 - i0, n_src, n_qp), W)
+            mom = _arc_moments(proj, W)
             return (mom, None) if distinct else mom
 
         return field_moments
@@ -667,7 +682,7 @@ class RemainderBelow(Remainder):
             proj = _sommerfeld_below.remainder_field_proj_below(
                 o_p, o_t, src, t_src, gz, k_p, k_m, grid
             )
-            mom = np.einsum("ojq,pjq->ojp", proj.reshape(o_p.shape[0], n_src, n_qp), W)
+            mom = _arc_moments(proj, W)
             if distinct:
                 return mom, inv
             return mom if first is None else mom[inv]
