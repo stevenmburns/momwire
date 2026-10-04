@@ -928,6 +928,47 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         swept_mem_mb=256,
         cancel=None,
     ):
+        # momwire#1042: a wire listed twice is solved once. Dropped here,
+        # before anything reads a wire index, and every wire-indexed argument
+        # remapped; the per-wire readouts re-expand through `_wire_dedup`.
+        (
+            wires,
+            n_per_edge_per_wire,
+            _per_wire,
+            _sites,
+            junctions,
+            self._wire_dedup,
+        ) = _wire_spec.drop_duplicated_wires(
+            type(self).__name__,
+            list(wires) if wires is not None else [],
+            n_per_edge_per_wire,
+            per_wire={
+                "wire_radius": wire_radius,
+                "wire_conductivity": wire_conductivity,
+                "insulation_radius": insulation_radius,
+                "insulation_eps_r": insulation_eps_r,
+                "distributed_rlc": distributed_rlc,
+            },
+            sites={
+                "feeds": feeds,
+                "feed_wire_index": [(feed_wire_index,)] if feeds is None else [],
+            },
+            junctions=junctions,
+            junction_refs=tuple(junction_ports or ()),
+            refuse_reason=(
+                "node_ports or node_gaps are declared"
+                if getattr(self, "_node_drive_declared", False)
+                else None
+            ),
+        )
+        wire_radius = _per_wire["wire_radius"]
+        wire_conductivity = _per_wire["wire_conductivity"]
+        insulation_radius = _per_wire["insulation_radius"]
+        insulation_eps_r = _per_wire["insulation_eps_r"]
+        distributed_rlc = _per_wire["distributed_rlc"]
+        feeds = _sites["feeds"]
+        if feeds is None:
+            feed_wire_index = _sites["feed_wire_index"][0][0]
         if junction_ports:
             self._reject_junction_ports()
         if feed_model not in ("segment", "point"):
@@ -1553,6 +1594,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         return True
 
+    @_wire_spec.reads_input_wires("placements")
     def feed_placements(self):
         """Where each entry of ``feeds`` lands, as one
         :class:`~momwire.FeedPlacement` per feed, in order (momwire#1059).
@@ -6405,6 +6447,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
         return G
 
+    @_wire_spec.reads_input_wires("loss")
     def wire_loss_power(self, coeffs, omega=None):
         """Ohmic power dissipated in the wire metal, from a solve's coeffs.
 
@@ -6818,6 +6861,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (`_crossing_fill.point_observer_block`), within `_refuse_crossing_scope`."""
         return True
 
+    @_wire_spec.reads_input_wires("per_wire")
     def currents_at_knots(self, alpha, s_array=None):
         """Per-wire complex current sampled at every mesh knot.
 
@@ -6983,6 +7027,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         xi = (sv - arc_at_knot[seg_in_wire]) - 0.5 * wire_h[seg_in_wire]
         return first + seg_in_wire, xi
 
+    @_wire_spec.reads_input_wires("per_wire")
     def current_slopes(self, coeffs, s_array=None):
         """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
 

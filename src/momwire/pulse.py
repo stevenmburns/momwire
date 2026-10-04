@@ -519,6 +519,32 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cancel=None,
         **unsupported,
     ):
+        # momwire#1042: a wire listed twice is solved once. Dropped here,
+        # before anything reads a wire index, and every wire-indexed argument
+        # remapped; the per-wire readouts re-expand through `_wire_dedup`.
+        (
+            wires,
+            n_per_edge_per_wire,
+            _per_wire,
+            _sites,
+            _junctions,
+            self._wire_dedup,
+        ) = _wire_spec.drop_duplicated_wires(
+            type(self).__name__,
+            list(wires) if wires is not None else [],
+            n_per_edge_per_wire,
+            per_wire={"wire_radius": wire_radius},
+            sites={
+                "feeds": feeds,
+                "feed_wire_index": [(feed_wire_index,)] if feeds is None else [],
+            },
+            junctions=None,
+            junction_refs=(),
+        )
+        wire_radius = _per_wire["wire_radius"]
+        feeds = _sites["feeds"]
+        if feeds is None:
+            feed_wire_index = _sites["feed_wire_index"][0][0]
         cls = type(self).__name__
         for name in unsupported:
             if name in _OUT_OF_SCOPE:
@@ -769,6 +795,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
         return sites
 
+    @_wire_spec.reads_input_wires("placements")
     def feed_placements(self):
         """Where each entry of ``feeds`` lands: the nearest segment centroid,
         as one :class:`~momwire.FeedPlacement` per feed, in order
@@ -1076,6 +1103,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
     # field readout
 
+    @_wire_spec.reads_input_wires("per_wire")
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh KNOT, for `_ElementCurrents`.
 

@@ -1593,6 +1593,46 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cancel=None,
         **unsupported,
     ):
+        # momwire#1042: a wire listed twice is solved once. Dropped here,
+        # before anything reads a wire index, and every wire-indexed argument
+        # remapped; the per-wire readouts re-expand through `_wire_dedup`.
+        (
+            wires,
+            n_per_edge_per_wire,
+            _per_wire,
+            _sites,
+            junctions,
+            self._wire_dedup,
+        ) = _wire_spec.drop_duplicated_wires(
+            type(self).__name__,
+            list(wires) if wires is not None else [],
+            n_per_edge_per_wire,
+            per_wire={
+                "wire_radius": wire_radius,
+                "wire_conductivity": wire_conductivity,
+                "insulation_radius": insulation_radius,
+                "insulation_eps_r": insulation_eps_r,
+                "distributed_rlc": distributed_rlc,
+            },
+            sites={
+                "feeds": feeds,
+                "feed_wire_index": [(feed_wire_index,)] if feeds is None else [],
+                "lumped_loads": lumped_loads,
+                "node_gaps": node_gaps,
+            },
+            junctions=junctions,
+            junction_refs=(),
+        )
+        wire_radius = _per_wire["wire_radius"]
+        wire_conductivity = _per_wire["wire_conductivity"]
+        insulation_radius = _per_wire["insulation_radius"]
+        insulation_eps_r = _per_wire["insulation_eps_r"]
+        distributed_rlc = _per_wire["distributed_rlc"]
+        feeds = _sites["feeds"]
+        if feeds is None:
+            feed_wire_index = _sites["feed_wire_index"][0][0]
+        lumped_loads = _sites["lumped_loads"]
+        node_gaps = _sites["node_gaps"]
         for name in unsupported:
             if name in _OUT_OF_SCOPE:
                 raise NotImplementedError(f"{name}: {_OUT_OF_SCOPE[name]}")
@@ -2682,6 +2722,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (placed, _basis, _k_ends), target = self._knot_pick(geom, w, arc, tap=False)
         return _feed_snap.FeedPlacement(int(w), target, float(placed))
 
+    @_wire_spec.reads_input_wires("placements")
     def feed_placements(self):
         """Where each entry of ``feeds`` lands: the nearest basis-carrying
         knot (:meth:`_snap_to_knot`), as one :class:`~momwire.FeedPlacement`
@@ -2690,6 +2731,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         geom = self._build_geometry()
         return tuple(self._knot_placement(geom, w, arc) for w, arc, _v in self.feeds)
 
+    @_wire_spec.reads_input_wires("placements")
     def load_placements(self):
         """Where each entry of ``lumped_loads`` lands, through the same snap
         as the feeds, so a load and a source naming one site report one knot."""
@@ -5665,6 +5707,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
     # field readout
 
+    @_wire_spec.reads_input_wires("per_wire")
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh knot (momwire#309 unit 3).
 
@@ -5763,6 +5806,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sampled.append(Ire + 1j * Iim)
         return sampled
 
+    @_wire_spec.reads_input_wires("per_wire")
     def current_slopes(self, coeffs, s_array=None):
         """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
 
@@ -5798,7 +5842,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         coeffs = np.asarray(coeffs)
         per_wire = self._build_geometry()["per_wire"]
-        knot_currents = self.currents_at_knots(coeffs)
+        knot_currents = self.currents_at_knots(coeffs, _solved=True)
 
         out = []
         for w_idx, pw in enumerate(per_wire):
@@ -5823,6 +5867,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
     # swept solve
 
+    @_wire_spec.reads_input_wires("loss")
     def wire_loss_power(self, coeffs, omega=None):
         """Ohmic power dissipated in the wire metal, from a solve's coeffs.
 

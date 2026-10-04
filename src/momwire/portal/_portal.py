@@ -2518,7 +2518,11 @@ class DeckSolver:
         segment back on NEC's convention.
         """
         nearest, dirs = self._element_match(solver)
-        vals = self._element_values(solver, solver.currents_at_knots(coeffs))
+        # Walked over `solver.wires_polylines`, so read in the SOLVED wire
+        # numbering (a wire listed twice is solved once, momwire#1042).
+        vals = self._element_values(
+            solver, solver.currents_at_knots(coeffs, _solved=True)
+        )
         out = np.empty(len(self.segments), dtype=np.complex128)
         for i, seg in enumerate(self.segments):
             j = nearest[i]
@@ -2556,7 +2560,9 @@ class DeckSolver:
         for w_idx in range(len(solver.wires_polylines)):
             arc = _wire_arc_at_knot(solver, w_idx)
             centres.append(0.5 * (arc[:-1] + arc[1:]))
-        slopes = solver.current_slopes(coeffs, centres)
+        slopes = solver.current_slopes(
+            coeffs, centres, _solved=True
+        )  # solved wires, as walked (momwire#1042)
         flat = np.concatenate([np.asarray(s) for s in slopes], axis=0)
         charges = -flat / (1j * omega)
         table = np.asarray([charges[nearest[i]] for i in range(len(self.segments))])

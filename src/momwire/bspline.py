@@ -1427,6 +1427,44 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rotational_symmetry=False,
         cancel=None,
     ):
+        # momwire#1042: a wire listed twice is solved once. Dropped here,
+        # before anything reads a wire index, and every wire-indexed argument
+        # remapped; the per-wire readouts re-expand through `_wire_dedup`.
+        (
+            wires,
+            n_per_edge_per_wire,
+            _per_wire,
+            _sites,
+            junctions,
+            self._wire_dedup,
+        ) = _wire_spec.drop_duplicated_wires(
+            type(self).__name__,
+            list(wires) if wires is not None else [],
+            n_per_edge_per_wire,
+            per_wire={
+                "wire_radius": wire_radius,
+                "wire_conductivity": wire_conductivity,
+                "insulation_radius": insulation_radius,
+                "insulation_eps_r": insulation_eps_r,
+                "distributed_rlc": distributed_rlc,
+            },
+            sites={
+                "feeds": feeds,
+                "feed_wire_index": [(feed_wire_index,)] if feeds is None else [],
+                "node_gaps": node_gaps,
+            },
+            junctions=junctions,
+            junction_refs=tuple(junction_ports or ()),
+        )
+        wire_radius = _per_wire["wire_radius"]
+        wire_conductivity = _per_wire["wire_conductivity"]
+        insulation_radius = _per_wire["insulation_radius"]
+        insulation_eps_r = _per_wire["insulation_eps_r"]
+        distributed_rlc = _per_wire["distributed_rlc"]
+        feeds = _sites["feeds"]
+        if feeds is None:
+            feed_wire_index = _sites["feed_wire_index"][0][0]
+        node_gaps = _sites["node_gaps"]
         self._cancel = cancel
         if degree < 1:
             raise ValueError(f"degree must be >= 1, got {degree}")
@@ -5099,6 +5137,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         L = self._loading_csr_cache[1]
         return L[I][:, J].toarray()
 
+    @_wire_spec.reads_input_wires("loss")
     def wire_loss_power(self, coeffs, omega=None):
         """Ohmic power dissipated in the wire metal, from a solve's coeffs.
 
@@ -5438,7 +5477,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         saved = self.use_singular_enrichment
         self.use_singular_enrichment = False
         try:
-            I_per_wire = self.currents_at_knots(coeffs_poly)
+            I_per_wire = self.currents_at_knots(coeffs_poly, _solved=True)
         finally:
             self.use_singular_enrichment = saved
 
@@ -7080,6 +7119,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             volts[p] = v_i
         return cols, volts
 
+    @_wire_spec.reads_input_wires("placements")
     def feed_placements(self):
         """Where each entry of ``feeds`` lands, as one
         :class:`~momwire.FeedPlacement` per feed, in order (momwire#1059).
@@ -7918,6 +7958,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 z_out[i] = z
         return z_out
 
+    @_wire_spec.reads_input_wires("per_wire")
     def current_slopes(self, coeffs, s_array=None):
         """Per-wire ``dI/ds`` — the solved current's arc-length derivative.
 
@@ -7981,6 +8022,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             out.append(np.asarray(spline.derivative(1)(s_eval), dtype=np.complex128))
         return out
 
+    @_wire_spec.reads_input_wires("per_wire")
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh knot.
 

@@ -703,7 +703,11 @@ def _charges(solver, result, connections, freq_mhz: float):
                 positions[w_idx].append(s)
                 break
         first = last + 1
-    slopes = momwire.current_slopes(result.coeffs, positions) if slots else []
+    slopes = (
+        momwire.current_slopes(result.coeffs, positions, _solved=True)  # #1042
+        if slots
+        else []
+    )
     end_charges = {
         key: complex(-slopes[w_idx][k] / (1j * omega))
         for key, (w_idx, k) in slots.items()

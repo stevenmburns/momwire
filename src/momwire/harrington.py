@@ -270,6 +270,17 @@ class HarringtonSolver(PulseSolver):
         # no junction unknown to constrain at all.
         junctions = kwargs.pop("junctions", None)
         super().__init__(**kwargs)
+        if junctions is not None and self._wire_dedup is not None:
+            # The parent dropped a wire listed twice (momwire#1042) before it
+            # could see this spec, which still counts the copy.
+            r, twin, _rev = self._wire_dedup.removed[0]
+            raise ValueError(
+                f"HarringtonSolver: wires {twin} and {r} are the same wire "
+                "listed twice, and an explicit junctions= spec is not "
+                "remapped on this family, so they cannot be merged into one "
+                f"conductor. Delete wire {r}, or let the junctions be "
+                "inferred - momwire#1042"
+            )
         self._declared_junctions = (
             None if junctions is None else [list(g) for g in junctions]
         )
@@ -409,6 +420,7 @@ class HarringtonSolver(PulseSolver):
     # ------------------------------------------------------------------
     # field readout
 
+    @_wire_spec.reads_input_wires("per_wire")
     def current_slopes(self, coeffs, s_array=None):
         """Per-wire ``dI/ds`` — read off THIS row's charge cells (momwire#611).
 
