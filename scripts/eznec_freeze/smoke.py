@@ -93,7 +93,8 @@ Ten gates, derived from the seam's own contract (momwire#497 U1):
 10. **The NEC-4.2 names** (momwire#1295) — ``build.py``'s ``NEC4_LAUNCHERS``
    are present and serve a deck EZNEC's External NEC-4.2 slot actually wrote
    (``tests/fixtures/eznec_nec42/``): byte-identical to the module run in the
-   nec4 dialect and the basis read past ``nec4-``, under the NEC-4.2 banner
+   nec4 dialect and the basis read past ``nec4-`` (but for the three
+   wall-clock values a NEC-4.2 printout carries, masked), under the NEC-4.2 banner
    (never NEC-5's), a SOLVE and not a refusal, stamped with that basis, and
    with a feed-point impedance within 5 % of the licensed NEC-4.2's own
    printout of the same deck (the sanity bar
@@ -244,6 +245,18 @@ NEC4_SANITY_REL = 0.05
 # neighbour (``9.29044E-03-5.22804E-03``).  The same reading
 # `tests/test_eznec_nec42_1295.py` makes, restated for gate 5's reason.
 _NUMBER = re.compile(r"[-+]?(?:\d+\.?\d*|\.\d+)(?:E[-+]\d+)?")
+
+# The NEC-4.2 printout carries WALL-CLOCK fields, as the licensed engine's
+# does — MATRIX TIMING's FILL and FACTOR, and the closing RUN TIME — where the
+# NEC-5 one prints none (gate 1's byte identity rests on that).  So gate 10
+# compares with those three values masked, and only those: the label, its
+# padding and every other byte still have to match.
+_WALL_CLOCK = re.compile(rb"(FILL=|FACTOR=|RUN TIME =)( *)\d+\.\d+")
+
+
+def mask_wall_clock(printout: bytes) -> bytes:
+    """``printout`` with its timing VALUES replaced, labels kept."""
+    return _WALL_CLOCK.sub(rb"\1\2<t>", printout)
 
 
 def feed_impedance(printout: str) -> complex | None:
@@ -843,10 +856,21 @@ def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
             ],
             m_out,
         )
-        frozen = v_out.read_bytes()
+        frozen = mask_wall_clock(v_out.read_bytes())
+        module = mask_wall_clock(m_out.read_bytes())
         printout = frozen.decode("latin-1")
         z = feed_impedance(printout)
-        if frozen != m_out.read_bytes():
+        if module.count(b"<t>") != 3:
+            # The mask must have found exactly the three fields it exists
+            # for; more or fewer means the layout moved and the comparison
+            # below is no longer the one this gate was written to make.
+            print(
+                f"FAIL {launcher.name}: masked {module.count(b'<t>')} wall-clock "
+                "fields in the module's printout, expected 3 (FILL, FACTOR, "
+                "RUN TIME)"
+            )
+            failures += 1
+        elif frozen != module:
             print(
                 f"FAIL {launcher.name}: does not answer as the nec4 module in {basis!r}"
             )
