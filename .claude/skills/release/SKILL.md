@@ -72,9 +72,12 @@ Publishing). Every step below was learned the hard way; do them in order.
 ## The signed drop-in (momwire#711)
 
 The same tag also triggers `eznec-dropin`, which Authenticode-signs the
-frozen engine, `momwire-eznec.exe`, and one launcher copy per entry of
-`SHIPPED_VARIANTS` in `scripts/eznec_freeze/build.py` (today `-razor-2p`
-and `-razor-nec5`) with Azure Artifact Signing before zipping them. Non-tag builds sign with a throwaway self-signed cert,
+frozen engine and the compiled launcher `momwire-eznec.exe`, then copies
+the launcher once per name in `launcher_stems()` in
+`scripts/eznec_freeze/build.py` (today seven: `momwire-nec5[-razor-2p]`,
+`momwire-nec4[-sinusoidal]`, and the deprecated `momwire-eznec-razor-2p` /
+`-razor-nec5` beside `momwire-eznec` itself) with Azure Artifact Signing
+before zipping them. Non-tag builds sign with a throwaway self-signed cert,
 so a tag is the ONLY time the real certificate is exercised.
 
 **Before tagging**, confirm the credential has not expired — an expired

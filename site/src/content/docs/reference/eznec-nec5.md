@@ -22,8 +22,9 @@ that process.
    **Keep the folder together**: the exe needs the `_internal` runtime
    beside it, and a lone copied-out `.exe` is the one way a correct
    download still fails.
-4. Point EZNEC's external-engine path at `momwire-eznec.exe` inside that
-   folder.
+4. Point EZNEC's external-engine path at `momwire-nec5.exe` inside that
+   folder. (For EZNEC's External NEC-4.2 engine option, point it at
+   `momwire-nec4.exe` instead — see [below](#choosing-the-formulation).)
 
 That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
@@ -78,16 +79,39 @@ the same answer, at one-shot speed, never a broken engine.
 
 ## Choosing the formulation
 
-The bundle carries three launchers and the one engine they run, and the choice
-is the engine PATH you set:
+The bundle carries seven launchers and the one engine they run, and the
+choice is the engine PATH you set. One family per EZNEC engine option:
 
 ```text
-momwire-eznec.exe             the default — degree-2 B-spline (bs2)
-momwire-eznec-razor-2p.exe    the tent basis with razor-blade path testing,
+EZNEC's External NEC-5 slot, and SimNEC's NEC-5 engine:
+momwire-nec5.exe              the default — degree-2 B-spline (bs2)
+momwire-nec5-razor-2p.exe     the tent basis with razor-blade path testing,
                               at NEC-5's two-point rule
-momwire-eznec-razor-nec5.exe  the deprecated spelling of razor-2p
+
+EZNEC's External NEC-4.2 slot:
+momwire-nec4.exe              the default — degree-2 B-spline (bs2)
+momwire-nec4-sinusoidal.exe   the sinusoidal basis, point matched
+
+The old names, deprecated — still shipped, still identical:
+momwire-eznec.exe             = momwire-nec5.exe
+momwire-eznec-razor-2p.exe    = momwire-nec5-razor-2p.exe
+momwire-eznec-razor-nec5.exe  = momwire-nec5-razor-2p.exe
+
 momwire-eznec-engine.exe      the compute engine the launchers run
 ```
+
+The name picks the deck dialect as well as the basis, so a `momwire-nec4`
+name belongs in EZNEC's NEC-4.2 slot and a `momwire-nec5` name in its NEC-5
+slot. In the NEC-4.2 slot, `sinusoidal` is the basis family NEC-4.2 itself
+belongs to; razor cannot serve there, because NEC-4.2 decks put their sources
+at segment centres and razor places sources at knots, so a
+`momwire-nec4-razor-2p` copy refuses by name.
+
+**The `momwire-eznec` names are deprecated.** They are what earlier releases
+said to point EZNEC at, and they still ship and answer exactly as before —
+same engine, same warm server, same printout. An engine path typed once and
+forgotten keeps working. Point new setups at the `momwire-nec5` names, which
+also work in SimNEC.
 
 Point EZNEC at a **launcher**, never at `momwire-eznec-engine.exe` — the
 engine answers correctly either way, but naming it directly gives up the
@@ -99,9 +123,10 @@ with razor-blade path testing at NEC-5's two-point rule — the formulation
 NEC-5 itself uses.
 
 `razor-nec5` is the **deprecated spelling** of the same basis (#785/#794). It
-runs the same engine and answers identically, and it still ships because an
-EZNEC engine path is a string typed once and forgotten; dropping the name
-would break those installs silently. Point new setups at `razor-2p`.
+runs the same engine and answers identically, and `momwire-eznec-razor-nec5.exe`
+still ships because an EZNEC engine path is a string typed once and forgotten;
+dropping the name would break those installs silently. Point new setups at
+`momwire-nec5-razor-2p.exe`.
 
 ### Reproduction is not accuracy
 
@@ -171,26 +196,28 @@ on the deck above — is formulation. A disagreement is information about the
 mesh before it is information about either engine.
 
 **Making another.** The basis rides on the *filename*: everything after
-`eznec-` selects it, a Windows `.exe` stripped first. So a copy you make
-yourself works — copy a **launcher** (a couple of hundred kilobytes, not the
-engine), rename the copy to `momwire-eznec-<basis>.exe` in the same folder,
-and that basis answers. This is the same rule the
-[SimNEC portal's](/reference/portal-usage/) `momwire-nec2c-<basis>` commands
-use, with one owner behind both. The bundle ships three rather than all eight
-because that is what the parity work was about; the other five are a copy
-away:
+`nec5-` (or `nec4-`) selects it, a Windows `.exe` stripped first. So a copy
+you make yourself works — copy a **launcher** (a couple of hundred kilobytes,
+not the engine), rename the copy to `momwire-nec5-<basis>.exe` (or
+`momwire-nec4-<basis>.exe`) in the same folder, and that basis answers in that
+slot. This is the same rule the [SimNEC portal's](/reference/portal-usage/)
+`momwire-nec2c-<basis>` commands use, with one owner behind both. The bundle
+ships two per slot because that is what the parity work was about; the rest
+are a copy away:
 
 ```text
-bspline  bspline-d1  hmatrix  arrayblock  razor-2p  razor-nec5
-sinusoidal  sinusoidal-galerkin
+NEC-5 slot:    bspline  bspline-d1  hmatrix  arrayblock  razor-2p
+               sinusoidal-galerkin
+NEC-4.2 slot:  bspline  bspline-d1  hmatrix  arrayblock  sinusoidal
+               sinusoidal-galerkin  pulse
 ```
 
-Since 0.66 the bundle also ships `momwire-nec5.exe` and
-`momwire-nec5-razor-2p.exe`: the same launcher under the names
+The `momwire-nec5` names are also what
 [SimNEC's NEC-5 engine setting](/reference/portal-usage/#simnecs-nec-5-engine)
-needs, and a copy named `momwire-nec5-<basis>.exe` works the same way.
+needs, since SimNEC reads `nec5` in the path. A deprecated
+`momwire-eznec-<basis>.exe` copy still works in EZNEC, as it always did.
 
-`sinusoidal` cannot answer this dialect — every deck in it drives a NODE, and
+`sinusoidal` cannot answer the NEC-5 dialect — every deck in it drives a NODE, and
 under point matching the match points are the segment centres, so a delta at a
 node point-samples to nothing in every row and there is no excitation left to
 solve. It says so by name in the printout rather than answering about a
@@ -199,7 +226,7 @@ integral collapses the same delta to a well-defined drive, and it serves the
 corpus alongside the B-spline and razor families. A filename matching
 no basis does the same: it refuses, names itself and lists what exists, so a
 typo can never be served as the default. The match is case-insensitive, as
-Windows filenames are, so `Momwire-EZNEC-Razor-Nec5.exe` is the twin too.
+Windows filenames are, so `Momwire-NEC5-Razor-2p.exe` is the twin too.
 
 :::caution[Not a supported configuration]
 No part of EZNEC knows momwire exists, and nothing here has been reviewed or

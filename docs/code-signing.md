@@ -1,7 +1,8 @@
 # Code signing the EZNEC drop-in
 
-How `momwire-eznec.exe` gets an Authenticode signature, how to set the Azure
-side up from nothing, and how to rotate the credential before it strands a
+How the EZNEC drop-in's executables (`momwire-eznec-engine.exe` and the
+launchers, `momwire-nec5.exe` and its siblings) get an Authenticode
+signature, how to set the Azure side up from nothing, and how to rotate the credential before it strands a
 release. Landed in momwire#711 on 2026-08-29.
 
 The *mechanism* is documented in the code it lives in — `scripts/eznec_freeze/sign.py`,
