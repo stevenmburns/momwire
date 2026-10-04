@@ -1229,6 +1229,20 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
         self.junction_ports = self._normalize_junction_ports(junction_ports)
+        # Sin-Galerkin advises at the end of its own constructor, once its
+        # node ports and node gaps exist.
+        if not hasattr(self, "_node_drive_declared"):
+            # momwire#959 (a stopgap until #1330): segments below the radius AT A
+            # GAP leave the delta-gap model unreliable. Advisory, once per solver.
+            _wire_spec.advise_gap_mesh_floor(
+                type(self).__name__,
+                self.wires_polylines,
+                self.n_per_edge_per_wire,
+                self._radius_per_wire,
+                self.extended_kernel,
+                _wire_spec.solver_gaps(self, junctions_are_gaps=self.extended_kernel),
+                gap_model="segment",
+            )
 
     def _reject_junction_ports(self):
         """Refuse `junction_ports=` on the point-matched solver.

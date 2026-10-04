@@ -1992,6 +1992,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         self.z = None
         self._cached_geometry = None
+        # momwire#959 (a stopgap until #1330): segments below the radius AT A
+        # GAP leave the delta-gap model unreliable. Advisory, once per solver.
+        _wire_spec.advise_gap_mesh_floor(
+            type(self).__name__,
+            self.wires_polylines,
+            self.n_per_edge_per_wire,
+            self._radius_per_wire,
+            self.extended_kernel,
+            _wire_spec.solver_gaps(self),
+            gap_model="knot",
+        )
 
     # ------------------------------------------------------------------
     # geometry
