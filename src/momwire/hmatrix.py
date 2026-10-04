@@ -46,7 +46,7 @@ from scipy.linalg import solve_triangular
 from scipy.sparse.linalg import splu
 
 from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
-from ._port_solution import PortSolution
+from ._port_solution import PortSolution, port_impedances, refuse_undriven
 
 from . import _ground_mirror, _ground_refl, _potential_ground, _sommerfeld
 from ._bspline_kernels import (
@@ -2367,6 +2367,7 @@ class HMatrixSolver(BSplineSolver):
         """
         if self._hmatrix_unsupported() or self._prefers_dense_for_fragmentation():
             return super().compute_impedance(same_edge_prep=same_edge_prep)
+        refuse_undriven(self._configured_port_voltages())  # momwire#1164
         ctx = self._context()
         geom = ctx["geom"]
         n = ctx["n_basis"]
@@ -2417,7 +2418,7 @@ class HMatrixSolver(BSplineSolver):
         self._hmatrix = H
 
         currents = np.array([u @ coeffs for u in port_vectors], dtype=np.complex128)
-        z_per = all_voltages / currents
+        z_per = port_impedances(all_voltages, currents)
         z = z_per[0] if z_per.shape[0] == 1 else z_per
         return z, coeffs
 
