@@ -97,7 +97,12 @@ from . import _surface_height
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
-from ._port_solution import PortSolution, _SweptPortSolutions
+from ._port_solution import (
+    PortSolution,
+    _SweptPortSolutions,
+    port_impedances,
+    refuse_undriven,
+)
 
 # Cross-edge quadrature defaults, resolved per deck by `BSplineSolver.n_qp_pair`.
 # Two constants because there are two fills; see that property for the
@@ -7233,10 +7238,21 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             [u_i @ coeffs_full[: u_i.shape[0]] for u_i in port_vectors],
             dtype=np.complex128,
         )
-        z_per = all_voltages / currents
+        z_per = port_impedances(all_voltages, currents)
         return z_per[0] if len(port_vectors) == 1 else z_per
 
+    def _configured_port_voltages(self):
+        """Every port's configured drive, [gap feeds, junction ports, node
+        gaps] — the `all_voltages` of `_feed_drive_and_readout`, read without
+        a geometry so `refuse_undriven` can run ahead of the fill."""
+        return (
+            [v for _, _, v in self.feeds]
+            + [v for _j, v in self.junction_ports]
+            + [v for _w, _e, v in self.node_gaps]
+        )
+
     def compute_impedance(self, same_edge_prep=None):
+        refuse_undriven(self._configured_port_voltages())  # momwire#1164
         if self._rotational_map is not None:
             return self._compute_impedance_rotational()
         geom = self._build_geometry()
@@ -7835,7 +7851,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for c0, ks, Z in self._swept_batched_z_chunks(k_array, geom, supp_seg, polys):
             coeffs = self._solve_with_kcl_batch(Z, v, kcl_con)
             currents = coeffs @ vpf_T  # (chunk, n_total)
-            z_per = all_voltages[None, :] / currents
+            z_per = port_impedances(all_voltages[None, :], currents)
             z_out[c0 : c0 + ks.shape[0]] = z_per[:, 0] if n_total == 1 else z_per
 
         return z_out
@@ -7865,6 +7881,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         it.
         """
         _refuse_complex_k(k_array, "BSplineSolver.compute_impedance_swept")
+        # Up front, so an undriven deck refuses even at an empty sweep.
+        refuse_undriven(self._configured_port_voltages())  # momwire#1164
         k_array = np.asarray(k_array, dtype=float)
         n_total = len(self.feeds) + len(self.junction_ports)
         if n_total == 1:

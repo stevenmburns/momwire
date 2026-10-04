@@ -67,7 +67,12 @@ from ._accel import acc as _acc
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
-from ._port_solution import PortSolution, _SweptPortSolutions
+from ._port_solution import (
+    PortSolution,
+    _SweptPortSolutions,
+    port_impedances,
+    refuse_undriven,
+)
 from ._stable import asinh_diff
 from ._stable import expm1_neg_j as _expm1_neg_j
 from ._stable import expm1_neg_j_from_half as _expm1_neg_j_from_half
@@ -6593,7 +6598,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ],
             dtype=np.complex128,
         )
-        z_per_feed = voltages / feed_currents
+        z_per_feed = port_impedances(voltages, feed_currents)
         return z_per_feed[0] if len(self.feeds) == 1 else z_per_feed
 
     def compute_impedance(self):
@@ -6603,6 +6608,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         built as Σ_i V_i · (-1/h_i) · e_{feed_i} (linear superposition of
         Eq 187 delta-gap sources).
         """
+        refuse_undriven([v for _, _, v in self.feeds])  # momwire#1164
         geom = self._build_geometry()
         self._checkpoint()  # after geometry, before the field-tensor fill
         # The whole solve inside the medium (momwire#1222): a wholly-buried
@@ -6727,6 +6733,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         must not leave `Z_factors` pointing at a frequency the solver has
         already stepped away from.
         """
+        # Up front, so an undriven deck refuses even at an empty sweep.
+        refuse_undriven([v for _, _, v in self.feeds])  # momwire#1164
         k_array = np.asarray(k_array, dtype=float)
         n_feeds = len(self.feeds)
         if n_feeds == 1:

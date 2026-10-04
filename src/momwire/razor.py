@@ -392,7 +392,12 @@ from ._kernel_moments import (
 )
 from ._stable import expm1_neg_jkR as _expm1_neg_jkR
 from ._junction_rule import JUNCTION_TOL, canonical_groups, grouped
-from ._port_solution import PortSolution, _SweptPortSolutions
+from ._port_solution import (
+    PortSolution,
+    _SweptPortSolutions,
+    port_impedances,
+    refuse_undriven,
+)
 from . import _quadrature
 from ._quadrature import leggauss
 
@@ -5529,6 +5534,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         one per wire end there, each the current flowing out of the plane
         into that end.
         """
+        refuse_undriven(self._port_voltages())  # momwire#1164
         geom = self._build_geometry()
         self._checkpoint()
         Z = self._assemble_Z(geom, self.k)
@@ -5549,7 +5555,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
         voltages = self._port_voltages()
         port_currents = cols.T @ coeffs
-        z_per_port = voltages / port_currents
+        z_per_port = port_impedances(voltages, port_currents)
         n_ports = cols.shape[1]
         return (z_per_port[0] if n_ports == 1 else z_per_port), coeffs
 
@@ -5989,6 +5995,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gets its own dense solve.
         """
         k_array = np.asarray(k_array, dtype=np.float64)
+        refuse_undriven(self._port_voltages())  # momwire#1164, before any fill
         geom = self._build_geometry()
         self._refuse_coincident_segments(geom)
         self._checkpoint()
@@ -6006,7 +6013,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             coeffs = _bspline._lu_solve(Z, rhs, overwrite_a=True)
             feed_currents[i] = cols.T @ coeffs
 
-        z_per_feed = voltages[None, :] / feed_currents
+        z_per_feed = port_impedances(voltages[None, :], feed_currents)
         return z_per_feed[:, 0] if len(self.feeds) == 1 else z_per_feed
 
     def _port_solutions_swept(self, k_array):
