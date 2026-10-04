@@ -348,6 +348,7 @@ the readout write the basis at it), but no longer touches `self.eta`.
 """
 
 import collections
+import math
 
 import numpy as np
 import scipy.linalg
@@ -880,6 +881,40 @@ def _graded_endpoint_rule(eps, n_per_panel, leggauss):
 # be the same function or the accelerator would quietly stop serving the
 # grounded fills (momwire#397 unit 3).
 _plain_projection = _field_ground.plain_projection
+
+
+def _loading_integrals(k, h):
+    """``(∫(cos kξ − 1), ∫sin² kξ, ∫(cos kξ − 1)²)`` over ξ ∈ [−h/2, h/2],
+    each to full relative precision (momwire#1283).
+
+    The literal forms — (2/k)sin(kh/2) − h, h/2 − sin(kh)/2k and
+    3h/2 − (4/k)sin(kh/2) + sin(kh)/2k — subtract terms that agree to
+    O((kh)², (kh)², (kh)⁴), so on a short segment they return rounding. With
+    x = kh/2 and S(u) = sin u − u (`_sin_minus_arg`, exact at every u):
+
+        ∫(cos kξ − 1)    = (2/k)·S(x)
+        ∫sin² kξ         = −S(2x)/(2k)
+        ∫(cos kξ − 1)²   = (1/k)·[½·S(2x) − 4·S(x)]
+
+    The last still cancels — both S terms are O(x³) and the answer O(x⁵) —
+    so below |x| = 0.25 it is its own Taylor series, Σ_{m≥2} (−1)^m
+    (4^m − 4)/(2m+1)!·x^(2m+1), whose first omitted term (m = 8) is 3e-16 of
+    the answer there; above it the S form gives up at most 1/(0.15·x²) =
+    2 decades. Complex-safe, for the buried shapes' k_m.
+    """
+    x = 0.5 * np.asarray(k) * np.asarray(h)
+    s1 = _sin_minus_arg(x)
+    s2 = _sin_minus_arg(2.0 * x)
+    i_g = (2.0 / k) * s1
+    i_ss = -s2 / (2.0 * k)
+    x2 = x * x
+    series = 0.0
+    for m in range(7, 1, -1):  # Horner over x², highest order first
+        coef = (-1) ** m * (4.0**m - 4.0) / math.factorial(2 * m + 1)
+        series = series * x2 + coef
+    series = series * x2 * x2 * x
+    i_gg = np.where(np.abs(x) < 0.25, series, 0.5 * s2 - 4.0 * s1) / k
+    return i_g, i_ss, i_gg
 
 
 class SinusoidalGalerkinSolver(SinusoidalSolver):
@@ -4379,6 +4414,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                       + Q_eQ_f·(h/2 − sin(kh)/2k)
                       + R_eR_f·(h/2 + sin(kh)/2k).
 
+        EVALUATED in a cancellation-free spelling of that same integral
+        (momwire#1283). On a short segment A and C grow like 1/(kh)² with
+        opposite signs while A + C stays O(1) — #606's mechanism — so the
+        literal sum above adds four terms of size (1/kh)⁴·h to return one of
+        size h. A crossing node's wing on a 9.46 µm sliver (kh = 2.8e-6) has
+        A = −C = 2.6e11 with A + C = 0.25: the literal L_s read −256 against
+        an exact 1.89e-6, and Dan's through deck answered 460 Ω instead of
+        71. Rewriting the shape as U + Q·sin kξ + R·(cos kξ − 1), U = σ·AC
+        (the closed-form `AC`, never σA + σC), leaves no term larger than
+        the answer:
+
+            L_s[e, f] = U_eU_f·h + (U_eR_f + R_eU_f)·∫(cos kξ − 1)
+                      + Q_eQ_f·∫sin² kξ + R_eR_f·∫(cos kξ − 1)²
+
+        with each integral itself spelled without subtraction
+        (`_loading_integrals`).
+
         That is the bilinear (unconjugated) sibling of the |I|² family
         `SinusoidalSolver.wire_loss_power` integrates for the power readout,
         which this family inherits unchanged — a physical integral does not
@@ -4411,17 +4463,16 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             k = np.asarray(seg_view["k_entry"])[left]
 
         sig = seg_view["sigma"].astype(np.complex128)
-        P = sig * seg_view["A"]
+        U = sig * seg_view["AC"]
         Q = seg_view["B"]
         R = sig * seg_view["C"]
         h = np.asarray(geom["seg_h"], dtype=float)[m_of_pair]
-        w_pr = (2.0 / k) * np.sin(0.5 * k * h)
-        half_sin = np.sin(k * h) / (2.0 * k)
+        i_g, i_ss, i_gg = _loading_integrals(k, h)
         vals = (
-            P[left] * P[right] * h
-            + (P[left] * R[right] + R[left] * P[right]) * w_pr
-            + Q[left] * Q[right] * (0.5 * h - half_sin)
-            + R[left] * R[right] * (0.5 * h + half_sin)
+            U[left] * U[right] * h
+            + (U[left] * R[right] + R[left] * U[right]) * i_g
+            + Q[left] * Q[right] * i_ss
+            + R[left] * R[right] * i_gg
         )
         # The loading is read at the solve's REAL angular frequency. `k` is
         # the SHAPES' wavenumber — k_m, complex, on a buried segment — and
@@ -4455,9 +4506,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             #
             # `zq_seg` is None on every deck without a jacketed wire below
             # the interface, so every other fill is structurally untouched.
+            #
+            # The R·R term's h/2 − sin(kh)/2k is `i_ss`, spelled without the
+            # subtraction for the same reason as the series term (#1283).
             dvals = (k * k) * (
-                Q[left] * Q[right] * (0.5 * h + half_sin)
-                + R[left] * R[right] * (0.5 * h - half_sin)
+                Q[left] * Q[right] * (0.5 * h + np.sin(k * h) / (2.0 * k))
+                + R[left] * R[right] * i_ss
             )
             vals = vals * spec.z_seg[m_of_pair] + dvals * spec.zq_seg[m_of_pair]
         else:
