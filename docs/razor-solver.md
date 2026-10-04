@@ -473,8 +473,9 @@ razor names, and which one follows from where this class puts a gap.
 a NODE, and this class carries its sites on knots, so that dialect's grid is
 this family's own: `tests/test_razor_nec5_corpus.py` measures 77 of 80
 captures served (exactly the set `bspline` serves), 202 feed/load snaps and
-zero ambiguous ones. The EZNEC drop-in ships `momwire-eznec-razor-2p` (and
-the deprecated `-razor-nec5` spelling) as signed launchers (momwire#819);
+zero ambiguous ones. The EZNEC drop-in ships `momwire-nec5-razor-2p` as a
+signed launcher (momwire#1295 phase 4), and still ships the deprecated
+`momwire-eznec-razor-2p` and `-razor-nec5` names it shipped first (momwire#819);
 `tests/test_eznec_client_c.py` runs the twin end to end against the
 licensed engine's own printed number.
 

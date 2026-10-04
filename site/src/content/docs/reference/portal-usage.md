@@ -118,8 +118,8 @@ momwire#821 the portal refuses the name at configure time rather than serve
 that — `momwire-nec2c-razor-nec5` and `momwire-nec2c-razor-2p`, which
 shipped from 0.36.1 to 0.46.0, are gone, and a copy you kept fails the
 version probe with the reason. Razor is served where its grid is the deck's:
-the EZNEC drop-in (`momwire-eznec-razor-2p`) and SimNEC's own NEC-5 engine
-(`momwire-nec5-razor-2p`, [below](#simnecs-nec-5-engine)), whose dialect
+the NEC-5 dialect's `momwire-nec5-razor-2p`, for EZNEC's NEC-5 slot and
+SimNEC's own NEC-5 engine alike ([below](#simnecs-nec-5-engine)), which
 writes a source at a node.
 
 **On a tapered or stepped-radius wire, `sinusoidal` and
@@ -183,7 +183,8 @@ answers `NEC5momwire.<major>.<minor>`. These commands run the same warm engine
 as the EZNEC drop-in, so a run after the first answers in milliseconds, and
 SimNEC's N-port measurement (one run block per port in a single deck) is served
 as NEC-5 serves it. On Windows without Python, the EZNEC drop-in zip ships
-`momwire-nec5.exe` and `momwire-nec5-razor-2p.exe` beside its EZNEC launchers.
+`momwire-nec5.exe` and `momwire-nec5-razor-2p.exe`, the same names it tells
+EZNEC's NEC-5 slot to use.
 
 ## The version probe
 
