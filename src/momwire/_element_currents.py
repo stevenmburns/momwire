@@ -83,9 +83,24 @@ class _ElementCurrents:
                 "column, e.g. compute_port_solution().coeffs[:, j]."
             )
 
+        polylines, per_edge = self.wires_polylines, self.n_per_edge_per_wire
+        dedup = getattr(self, "_wire_dedup", None)
+        if dedup is not None:
+            # A wire listed twice was solved once (momwire#1042): walk the
+            # CALLER's wires, the dropped copy over its twin's knots (reversed
+            # when it runs the other way), so `currents_at_knots` — which
+            # answers in the caller's numbering, the copy at zero current —
+            # lines up wire for wire.
+            polylines = dedup.to_input(
+                list(polylines), lambda r, v, rev: v[::-1] if rev else v
+            )
+            per_edge = dedup.to_input(
+                list(per_edge), lambda r, v, rev: list(v)[::-1] if rev else v
+            )
+
         fine: list[np.ndarray] = []
         arcs: list[np.ndarray] = []
-        for polyline, npe in zip(self.wires_polylines, self.n_per_edge_per_wire):
+        for polyline, npe in zip(polylines, per_edge):
             parts = []
             for i, n_e in enumerate(npe):
                 seg = np.linspace(polyline[i], polyline[i + 1], n_e * subdiv + 1)

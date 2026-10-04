@@ -11,6 +11,10 @@ Nothing here knows a formulation. A function that would have to branch on
 one belongs in the solver.
 """
 
+import functools
+import warnings
+from typing import NamedTuple
+
 import numpy as np
 
 from ._junction_rule import coincident_end_groups
@@ -260,3 +264,347 @@ def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
         seen_junctions.add(j_idx)
         out.append((int(wire), end, complex(volts)))
     return out
+
+
+# --------------------------------------------------------------------------
+# A wire listed twice (momwire#1042)
+# --------------------------------------------------------------------------
+
+
+class DuplicateWire(UserWarning):
+    """A deck lists the same wire twice; it was solved ONCE (momwire#1042).
+
+    Advisory: the answer is the antenna with the conductor present once,
+    which is what NEC-2 returns for such a deck to within its own rounding
+    (qantenna/airplane.nec: 68.5-91.06j as written, 68.457-91.179j with GW
+    117 deleted). Two copies cannot be solved as two: every basis on one has
+    an identical twin on the other, so the operator is singular and the
+    split of the current between them is undefined (NEC-5 reports `Singular
+    matrix`; row-order fills answer from rounding residue)."""
+
+
+class WireDedup(NamedTuple):
+    """How a constructor's INPUT wires map onto the wires it solves.
+
+    ``kept[i]`` is the input index of solved wire ``i``. ``removed`` holds
+    one ``(input index, twin input index, reversed)`` per dropped copy.
+    """
+
+    n_input: int
+    kept: tuple
+    removed: tuple
+
+    def solver_index(self, w):
+        """The solved index of input wire `w` (its twin's, for a copy)."""
+        for r, twin, _rev in self.removed:
+            if w == r:
+                w = twin
+                break
+        return self.kept.index(w)
+
+    def to_input(self, per_solved, fill):
+        """A per-solved-wire list re-expanded to input order; each dropped
+        copy gets ``fill(copy index, twin_value, reversed)``."""
+        out = [None] * self.n_input
+        for i, w in enumerate(self.kept):
+            out[w] = per_solved[i]
+        for r, twin, rev in self.removed:
+            out[r] = fill(r, out[twin], rev)
+        return out
+
+    def to_solved(self, per_input):
+        """A per-input-wire list restricted to the solved wires."""
+        return [per_input[w] for w in self.kept]
+
+
+def _vertex_key(pl):
+    return tuple(tuple(v) for v in np.round(np.asarray(pl, dtype=float), 9))
+
+
+def find_duplicated_wires(wires_polylines):
+    """``[(input index, twin input index, reversed)]`` for every wire whose
+    polyline repeats an earlier one's, vertex for vertex, in either
+    direction.
+
+    EQUAL, not close: every vertex within 1e-12 of the deck's coordinate
+    scale of its twin's, i.e. the same numbers up to the rounding of a
+    transform that produced them (GM copies). A duplicate is authored, not
+    arrived at by drift, and a looser test would start merging merely CLOSE
+    conductors, which are served — or which another rule refuses: wires
+    0.6 nm apart sit in Harrington's near-coincident window and must reach
+    that refusal (`test_a_chained_tolerance_is_refused...`). Candidates are
+    bucketed on nanometre-rounded vertices and then compared at that
+    tolerance; a pair straddling a rounding boundary is not merged, which is
+    the old behaviour. It keys on WHOLE wires, so a bundle that shares a
+    segment or two with other wires (a radial screen's coincident rises,
+    momwire#524) is untouched.
+    """
+    pls = [np.asarray(pl, dtype=float) for pl in wires_polylines]
+    good = [pl for pl in pls if pl.ndim == 2 and pl.size]
+    if not good:
+        return []
+    tol = 1e-12 * max(1.0, max(float(np.max(np.abs(pl))) for pl in good))
+    seen, out = {}, []
+    for i, pl in enumerate(pls):
+        if pl.ndim != 2:
+            continue  # malformed; the caller's own shape check names it
+        verts = _vertex_key(pl)
+        key = min(verts, verts[::-1])
+        if key in seen:
+            first = seen[key]
+            twin = pls[first]
+            if twin.shape == pl.shape and np.max(np.abs(twin - pl)) <= tol:
+                out.append((i, first, False))
+                continue
+            if twin.shape == pl.shape and np.max(np.abs(twin - pl[::-1])) <= tol:
+                out.append((i, first, True))
+                continue
+        else:
+            seen[key] = i
+    return out
+
+
+def _same(a, b):
+    if a is None or b is None:
+        return a is b
+    try:
+        if np.isnan(a) and np.isnan(b):
+            return True
+    except TypeError:
+        pass
+    return a == b
+
+
+def _same_counts(a, b, rev):
+    """Whether two raw `n_per_edge_per_wire` entries mesh one polyline alike
+    (`b` read backwards when its copy runs the other way)."""
+    if a is None or b is None:
+        return a is b
+    la = [int(x) for x in np.atleast_1d(a)]
+    lb = [int(x) for x in np.atleast_1d(b)]
+    return la == (lb[::-1] if rev else lb)
+
+
+def _per_wire_entries(value, n):
+    """`value` as a per-wire list, or None when it is not one (None, a
+    scalar, or one spec meaning every wire)."""
+    if value is None or np.ndim(value) == 0:
+        return None
+    if not isinstance(value, (list, tuple, np.ndarray)):
+        return None
+    entries = list(value)
+    return entries if len(entries) == n else None
+
+
+def drop_duplicated_wires(
+    family,
+    wires,
+    n_per_edge_per_wire,
+    *,
+    per_wire=None,
+    sites=None,
+    junctions=None,
+    junction_refs=(),
+    refuse_reason=None,
+):
+    """Solve a wire listed twice ONCE (momwire#1042), or refuse by name.
+
+    The duplicate is DROPPED before anything is built and every
+    wire-indexed argument is remapped onto the shorter list, so the solve
+    never sees it; the solver re-expands its per-wire READOUTS to the
+    caller's numbering (`WireDedup.to_input`), reporting the dropped copy as
+    carrying no current — the kept twin carries the conductor's whole
+    current, since the split between two coincident copies is exactly the
+    undetermined part.
+
+    Merged only when the two copies are the same conductor in every respect
+    the physics reads. Refused, naming both, when they differ in segment
+    count or in any `per_wire` argument (radius, conductivity, insulation,
+    distributed RLC), when a feed, load or node gap in `sites` sits on the
+    copy, when an explicit junction names the copy's end without its twin's
+    coincident end, when dropping it would empty a junction that a
+    junction-indexed argument (`junction_refs`) may address, or when the
+    family says so (`refuse_reason`).
+
+    `per_wire` maps argument name to value; `sites` maps argument name to a
+    list of tuples whose first entry is a wire index. Returns
+    ``(wires, n_per_edge_per_wire, per_wire, sites, junctions, dedup)`` with
+    ``dedup`` None and everything returned unchanged when there is no copy.
+    """
+    per_wire = dict(per_wire or {})
+    sites = dict(sites or {})
+    dups = find_duplicated_wires(wires)
+    if not dups:
+        return wires, n_per_edge_per_wire, per_wire, sites, junctions, None
+    n = len(wires)
+
+    def refuse(r, twin, why):
+        raise ValueError(
+            f"{family}: wires {twin} and {r} are the same wire listed twice, "
+            f"and {why}, so they cannot be merged into one conductor. Delete "
+            f"wire {r}, or make the two copies identical - momwire#1042"
+        )
+
+    removed = {r: (twin, rev) for r, twin, rev in dups}
+    for r, (twin, rev) in removed.items():
+        if refuse_reason:
+            refuse(r, twin, refuse_reason)
+        if n_per_edge_per_wire is not None and not _same_counts(
+            n_per_edge_per_wire[twin], n_per_edge_per_wire[r], rev
+        ):
+            refuse(r, twin, "their segment counts differ")
+        for name, value in per_wire.items():
+            entries = _per_wire_entries(value, n)
+            if entries is not None and not _same(entries[r], entries[twin]):
+                refuse(r, twin, f"their {name} entries differ")
+        for name, entries in sites.items():
+            for entry in entries or ():
+                # On the twin as much as on the copy: a gap or load on one
+                # of two coincident conductors is bridged by the other.
+                if int(entry[0]) in (r, twin):
+                    refuse(r, twin, f"{name} places a site on wire {int(entry[0])}")
+
+    # Explicit junctions: the copy's end must stand beside its twin's
+    # coincident end, so dropping the member changes no connectivity.
+    if junctions is not None:
+        new_junctions = []
+        for j, group in enumerate(junctions):
+            members = [(int(w), end) for w, end in group]
+            kept_members = []
+            for w, end in members:
+                if w in removed:
+                    twin, rev = removed[w]
+                    twin_end = (
+                        end if not rev else ("end" if end == "start" else "start")
+                    )
+                    if (twin, twin_end) not in members:
+                        refuse(
+                            w,
+                            twin,
+                            f"junction {j} names wire {w}'s {end} "
+                            f"without wire {twin}'s {twin_end}",
+                        )
+                    continue
+                kept_members.append((w, end))
+            if not kept_members:
+                continue
+            if (
+                len(kept_members) < len(members)
+                and len(kept_members) < 2
+                and junction_refs
+            ):
+                w = next(w for w, _e in members if w in removed)
+                refuse(
+                    w,
+                    removed[w][0],
+                    f"junction {j} would be left with "
+                    "one member while junction-indexed ports are declared",
+                )
+            new_junctions.append(kept_members)
+        if len(new_junctions) != len(junctions) and junction_refs:
+            w = next(iter(removed))
+            refuse(
+                w,
+                removed[w][0],
+                "dropping it would renumber the junctions "
+                "that the junction-indexed ports address",
+            )
+        junctions = new_junctions
+    elif junction_refs:
+        # Inferred junctions: a group of only the copy and its twin vanishes
+        # from the reduced geometry, renumbering every later group.
+        reduced = [wires[w] for w in range(n) if w not in removed]
+        if len(coincident_end_groups(reduced)) != len(coincident_end_groups(wires)):
+            w = next(iter(removed))
+            refuse(
+                w,
+                removed[w][0],
+                "dropping it would renumber the junctions "
+                "that the junction-indexed ports address",
+            )
+
+    kept = tuple(i for i in range(n) if i not in removed)
+    new_index = {w: i for i, w in enumerate(kept)}
+    dedup = WireDedup(
+        n, kept, tuple((r, t, v) for r, (t, v) in sorted(removed.items()))
+    )
+
+    wires = [wires[w] for w in kept]
+    if n_per_edge_per_wire is not None:
+        n_per_edge_per_wire = [n_per_edge_per_wire[w] for w in kept]
+    for name, value in per_wire.items():
+        entries = _per_wire_entries(value, n)
+        if entries is not None:
+            per_wire[name] = [entries[w] for w in kept]
+    for name, entries in sites.items():
+        if entries:
+            sites[name] = [(new_index[int(e[0])],) + tuple(e[1:]) for e in entries]
+    if junctions is not None:
+        junctions = [[(new_index[w], end) for w, end in g] for g in junctions]
+
+    # ONE advisory per construction, however many copies: a GM-built wire
+    # grid can repeat hundreds (cebik 6-6-nec4.nec: 1372).
+    pairs = [f"{twin} and {r}" for r, twin, _rev in dedup.removed]
+    named = "; ".join(pairs[:6]) + (
+        f"; and {len(pairs) - 6} more pairs" if len(pairs) > 6 else ""
+    )
+    warnings.warn(
+        f"{family}: {len(pairs)} wire(s) listed twice (their vertices "
+        f"coincide), each solved ONCE as the first of its pair: wires "
+        f"{named}. Two coincident copies have no answer of their own - the "
+        f"split of current between them is undetermined - and the conductor "
+        f"present once is what NEC-2 returns for such a deck. Each later "
+        f"copy's current reads as 0; the first carries it all. Delete the "
+        f"copies to silence this - momwire#1042",
+        DuplicateWire,
+        stacklevel=3,
+    )
+    return wires, n_per_edge_per_wire, per_wire, sites, junctions, dedup
+
+
+def reads_input_wires(kind):
+    """Decorate a per-wire READOUT so it speaks the caller's wire numbering
+    when a duplicate was dropped (momwire#1042); a no-op otherwise.
+
+    ``kind`` is how the readout is shaped:
+
+    * ``"per_wire"`` — ``(coeffs, s_array=None) -> [per-wire array]``
+      (`currents_at_knots`, `current_slopes`). `s_array` arrives in input
+      numbering and is restricted to the solved wires; the result is
+      re-expanded with ZEROS at each dropped copy, sized like its own
+      `s_array` entry, else like its twin's.
+    * ``"loss"`` — ``-> (total, per_wire ndarray)`` (`wire_loss_power`); the
+      copy dissipates 0 W.
+    * ``"placements"`` — ``-> [FeedPlacement]``; each `wire` is mapped back.
+
+    Internal callers that index the result by SOLVED wire pass
+    ``_solved=True``.
+    """
+
+    def decorate(fn):
+        @functools.wraps(fn)
+        def wrapper(self, *args, _solved=False, **kwargs):
+            dedup = getattr(self, "_wire_dedup", None)
+            if dedup is None or _solved:
+                return fn(self, *args, **kwargs)
+            if kind == "placements":
+                return [p._replace(wire=dedup.kept[p.wire]) for p in fn(self)]
+            if kind == "loss":
+                total, per_wire = fn(self, *args, **kwargs)
+                full = dedup.to_input(list(per_wire), lambda r, v, rev: 0.0)
+                return total, np.asarray(full, dtype=np.asarray(per_wire).dtype)
+            args = list(args)
+            s_in = kwargs.pop("s_array", args.pop(1) if len(args) > 1 else None)
+            s_solved = None if s_in is None else dedup.to_solved(list(s_in))
+            out = fn(self, *args, s_array=s_solved, **kwargs)
+
+            def zeros(r, twin_value, _rev):
+                n = len(twin_value) if s_in is None else len(s_in[r])
+                return np.zeros(n, dtype=np.asarray(twin_value).dtype)
+
+            return dedup.to_input(list(out), zeros)
+
+        wrapper.reads_input_wires = kind
+        return wrapper
+
+    return decorate
