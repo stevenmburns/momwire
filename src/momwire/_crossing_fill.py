@@ -1932,6 +1932,10 @@ _ROUTES = dict.fromkeys(
         "point_chunk_max_rows",
         "point_eval_batches",
         "point_eval_max_rows",
+        "point_tiles",
+        "point_tile_rows",
+        "point_tile_pool_max_rows",
+        "point_pin_rows",
     ),
     0,
 )
@@ -3236,6 +3240,42 @@ _POINT_CHUNK_PAIRS = 1 << 18
 # beside `_POINT_CHUNK_PAIRS`' ~75 MiB. Batching never moves a bit
 # (`column_batches`), so this is a memory choice only.
 _POINT_EVAL_ROWS = 1 << 18
+# One evaluation TILE's pair budget in `_chunked_point_tables` (momwire#1224
+# perf item 5). The values of the grid's unique rows were held whole -- the
+# five six-table keys and the four point keys, 144 B per unique row, ~790 MB
+# at invl x32 (5.47 M rows) -- because a ρ_eff column must be evaluated in
+# ONE call (`column_batches`) and a column's members can sit in any observer
+# chunk. Tiles cut that: the observer chunks are grouped into tiles of about
+# this many pairs; a column is evaluated whole at the first tile that reads
+# any of its members and its values are freed after the last such tile, so
+# only the columns live across a tile boundary are held beyond it. Each
+# column still sees one call with all its members in their order, so the
+# cut never moves a bit (`_PointTileSchedule`); this is a memory choice.
+#
+# Sized from the census at invl x32 (15.1 M pairs and ~5.45 M unique rows a
+# direction; Haswell, 2026-10-04). Pool high-water mark in rows (the reversed
+# direction, the larger): 2.03 M at 1<<18, 2.15 M at 1<<20, 2.48 M at 1<<21,
+# 3.66 M at 1<<22 -- the floor is the columns a radial-symmetric grid shares
+# across every tile (a mast node's ρ_eff to each radial position), held from
+# the first tile that reads them to the last, and no budget cuts below it.
+# 1<<20 sits on that floor with 31 tiles where 1<<18 takes 121 for 6 % less;
+# process peak 1.3 GB against the untiled 2.02 GB.
+_POINT_TILE_PAIRS = 1 << 20
+# ...but only a grid past this many pairs is tiled at all; one at or under it
+# is a single tile, the untiled route exactly. The schedule is not free --
+# a hash grouping of the unique ρ_eff, the ends-key lookup and a pass over
+# the pair ids, ~0.12 s per million unique rows (Skylake), only partly repaid
+# by the `column_batches` sorts it replaces -- and below this the pool it
+# saves is small: at invl x16 (3.8 M pairs a direction) an earlier schedule
+# cut ~70 MB for 0.45 s of a 7.3 s solve; at x32 (15.1 M) this one cuts
+# ~650 MB for ~1 %. The number is the old refusal's, so every deck stage 2
+# served is evaluated exactly as before.
+_POINT_TILE_MIN_PAIRS = 4_000_000
+# TEST-ONLY. Evaluates each row at its OWN first tile instead of its whole
+# column's, so a ρ_eff column read in two tiles is split across calls -- the
+# cut the schedule exists to avoid, kept so its gate can be shown to fail
+# (tests/test_point_rows_tiles_1224.py).
+_POINT_TILE_NEG_CONTROL = False
 
 
 def _point_pair_grid(P, pts, gz, observers_above):
@@ -3296,7 +3336,17 @@ def _point_grad_v(az, pk, g, *, observers_above):
 
 
 def _chunked_point_tables(
-    ctx, eps_t, k_p, P, nodes, gz, observers_above, rows, memo, keep=None
+    ctx,
+    eps_t,
+    k_p,
+    P,
+    nodes,
+    gz,
+    observers_above,
+    rows,
+    memo,
+    keep=None,
+    on_ready=None,
 ):
     """`_tables` and the point family (`point_radius_tables`) together over
     `point_observer_block`'s (observers × source-node) grid, served as
@@ -3341,46 +3391,286 @@ def _chunked_point_tables(
     batch's hit / fresh split is the one call's restricted to it. `keep`
     (the ends loop's key set, `_point_end_keys`) limits what the memo
     RETAINS to the rows a later call in this block can ask
-    (`designed_rows`); None keeps them all, as the one call did."""
+    (`designed_rows`); None keeps them all, as the one call did.
+
+    The evaluation is TILED (momwire#1224 perf item 5, `_PointTileSchedule`):
+    a column is evaluated at the first tile that reads it and its values are
+    held only until the last, so the pool holds the rows live across a tile
+    boundary rather than the whole grid's. The columns holding any `keep`
+    row are pinned to the FIRST tile, and `on_ready` (when given) is called
+    once that tile is evaluated, before the first chunk is yielded: by then
+    every main-block row the ends loop can ask is in `memo`, exactly as it is
+    after the untiled evaluation, so the caller can run its ends loop there
+    and finish each chunk's rows as it contracts them."""
     a_wire = float(ctx.a_wire)
     nA, nB = P.shape[0], nodes.shape[0]
     idx_t = _index_dtype(nA * nB)
     uniq, chunk_ids = _point_grid_rows(
         rows, P, nodes, gz, observers_above, a_wire, idx_t
     )
-    m = uniq.shape[0]
     plan = None if memo is None else memo.sheet_plan
-    six_vals = {key: np.empty(m, dtype=np.complex128) for key in _POINT_SIX_KEYS}
-    point_vals = {
-        key: np.empty(m, dtype=np.complex128) for key in _near_interface.POINT_KEYS
+    pin = None if keep is None or not len(keep) else (keep, uniq)
+    sched = _PointTileSchedule(uniq[:, 0], chunk_ids, rows, nB, pin=pin)
+    del pin
+    six_vals = {
+        key: np.empty(sched.pool, dtype=np.complex128) for key in _POINT_SIX_KEYS
     }
-    batches = _near_interface.column_batches(uniq[:, 0], _POINT_EVAL_ROWS)
-    for b, sel in enumerate(batches):
-        batches[b] = None
-        sub = uniq[sel]
-        blk = _near_interface.designed_rows(
-            eps_t, k_p, sub, rtol=_CROSS_RTOL, memo=memo, keep=keep
+    point_vals = {
+        key: np.empty(sched.pool, dtype=np.complex128)
+        for key in _near_interface.POINT_KEYS
+    }
+    _ROUTES["point_tiles"] += sched.n_tiles
+    _ROUTES["point_tile_pool_max_rows"] = max(
+        _ROUTES["point_tile_pool_max_rows"], sched.pool
+    )
+    c0 = 0
+    for t in range(sched.n_tiles):
+        batches = sched.take(t)
+        for b, sel in enumerate(batches):
+            batches[b] = None
+            _ROUTES["point_tile_rows"] += sel.size
+            sub = uniq[sel]
+            dst = sel if sched.slot is None else sched.slot[sel]
+            if sched.is_key is None:
+                blk = _near_interface.designed_rows(
+                    eps_t, k_p, sub, rtol=_CROSS_RTOL, memo=memo, keep=keep
+                )
+            else:
+                blk = _near_interface.designed_rows(
+                    eps_t,
+                    k_p,
+                    sub,
+                    rtol=_CROSS_RTOL,
+                    memo=memo,
+                    keep_mask=sched.is_key[sel],
+                )
+            for key, v in six_vals.items():
+                v[dst] = blk[:, _near_interface.KEYS.index(key)]
+            del blk
+            pv = _near_interface.point_designed_rows(eps_t, k_p, sub, plan=plan)
+            for key, v in point_vals.items():
+                v[dst] = pv[key]
+            _ROUTES["point_eval_batches"] += 1
+            _ROUTES["point_eval_max_rows"] = max(
+                _ROUTES["point_eval_max_rows"], sel.size
+            )
+            del pv, sub, sel, dst
+        del batches
+        if t == sched.n_tiles - 1:
+            # Every row is evaluated: free the unique list before the last
+            # tile's chunks, as the untiled route freed it before its chunk
+            # loop.
+            del uniq
+        if t == 0 and on_ready is not None:
+            on_ready()
+        for c in range(c0, sched.chunk_end[t]):
+            sl = rows[c]
+            idx, chunk_ids[c] = chunk_ids[c], None
+            if sched.slot is not None:
+                idx = sched.slot[idx]
+            idx = idx.reshape(sl.stop - sl.start, nB)
+            if _POINT_NEG_CONTROL:
+                idx = np.roll(idx, 1, axis=0)
+            yield (
+                sl,
+                {key: v[idx] for key, v in six_vals.items()},
+                {key: v[idx] for key, v in point_vals.items()},
+            )
+        c0 = sched.chunk_end[t]
+        sched.release(t)
+
+
+class _PointTileSchedule:
+    """Which unique rows `_chunked_point_tables` evaluates at each tile, in
+    which batches, and where in its value pool each lives (momwire#1224 perf
+    item 5).
+
+    The observer chunks `rows` are grouped into consecutive TILES of about
+    `_POINT_TILE_PAIRS` pairs (a grid of at most `_POINT_TILE_MIN_PAIRS` is
+    one tile). A ρ_eff column (the exact-ρ classes
+    `column_batches` cuts by: equal under `==`, so −0.0 with 0.0, and NaNs
+    together as `np.unique` takes them) is evaluated at the FIRST tile any
+    chunk of which reads one of its members, and its slots are released
+    after the LAST such tile.
+
+    Why that cannot move a bit. A member's value depends on the call it is
+    evaluated in only through its column's membership in that call (the
+    smallest s = z − z′ of the column's fresh, non-sheet members picks the
+    rule: `six_columns`, `_point_columns_exact`; sheet rows and memo hits
+    are functions of the row alone). The untiled route hands every column
+    whole to one `column_batches` batch, members ascending; here every batch
+    is likewise whole columns, members ascending -- the same membership in
+    the same order (`column_batches` documents the order). The memo: a
+    batch's rows are distinct from every other batch's (the unique list is
+    distinct), so no batch of this block can hit what another inserted, on
+    either route, and every hit is the memo state before the block -- which
+    batch order cannot change. Nor can the ends loop, which now runs after
+    the first tile rather than after the last: every main row it can ask is
+    pinned to that tile and so already in the memo, and what it inserts is
+    therefore no main row at all. The gather then reads, per pair, the float
+    its row was evaluated to, wherever the pool holds it.
+
+    `pin` = (key set, unique rows): the columns holding a unique row the
+    ends loop's key set contains are evaluated at tile 0. The lookup is the
+    one the untiled route makes anyway -- `designed_rows`' `keep` asks the
+    key set about every fresh row -- moved here and made once (`is_key`),
+    and the batches hand its answer to `designed_rows` as `keep_mask`
+    instead of asking again.
+
+    `pool` is the largest number of rows live at once (a column is live from
+    its first tile to its last), so the pool is allocated once at its exact
+    high-water mark, and `slot[u]` is row u's position in it. With one tile
+    the schedule is the identity -- every row evaluated at tile 0 into its
+    own position, `slot` None, batches straight from `column_batches` --
+    exactly the untiled route.
+
+    The columns come from ONE hash grouping of the unique ρ_eff
+    (`_near_interface._factorize`), and a tile's batches are cut from each
+    column's running size without the per-batch `np.unique` `column_batches`
+    would pay. Bookkeeping is int32 row ids and int16 tile numbers (the tile
+    sorts are then radix sorts): about 16 B per unique row held across the
+    walk (each row's id in its tile's evaluation order and in its tile's
+    release list, its column, its slot), ~85 MB at invl x32 against the
+    ~790 MB of values the tiles stop holding."""
+
+    def __init__(self, rho, chunk_ids, rows, nB, pin=None):
+        rho = np.asarray(rho, dtype=float)
+        m = int(rho.size)
+        n_chunks = len(rows)
+        step = max(1, max((sl.stop - sl.start for sl in rows), default=1))
+        per = max(1, _POINT_TILE_PAIRS // max(1, step * nB))
+        self.n_tiles = max(1, -(-n_chunks // per))
+        n_pairs = (rows[-1].stop if rows else 0) * nB
+        if n_pairs <= _POINT_TILE_MIN_PAIRS:
+            self.n_tiles, per = 1, max(1, n_chunks)
+        self.chunk_end = [min(n_chunks, (t + 1) * per) for t in range(self.n_tiles)]
+        self.slot = None
+        self.is_key = None
+        if self.n_tiles == 1:
+            self.pool = m
+            self._rho = rho
+            return
+        i32 = np.int32
+        tdt = np.int16 if self.n_tiles < np.iinfo(np.int16).max else i32
+        tile_of_chunk = (np.arange(n_chunks) // per).astype(tdt)
+        # First tile of each row: the rows are numbered in the grid's first-
+        # appearance order and the chunks walk the grid in order, so chunk c
+        # first sees exactly the ids [hi[c - 1], hi[c]), hi the running
+        # (1 + largest id seen).
+        hi = np.maximum.accumulate(
+            np.array([int(ids.max()) + 1 if ids.size else 0 for ids in chunk_ids])
         )
-        for key, v in six_vals.items():
-            v[sel] = blk[:, _near_interface.KEYS.index(key)]
-        del blk
-        pv = _near_interface.point_designed_rows(eps_t, k_p, sub, plan=plan)
-        for key, v in point_vals.items():
-            v[sel] = pv[key]
-        _ROUTES["point_eval_batches"] += 1
-        _ROUTES["point_eval_max_rows"] = max(_ROUTES["point_eval_max_rows"], sel.size)
-        del pv, sub, sel
-    del uniq, batches
-    for c, sl in enumerate(rows):
-        idx, chunk_ids[c] = chunk_ids[c], None
-        idx = idx.reshape(sl.stop - sl.start, nB)
-        if _POINT_NEG_CONTROL:
-            idx = np.roll(idx, 1, axis=0)
-        yield (
-            sl,
-            {key: v[idx] for key, v in six_vals.items()},
-            {key: v[idx] for key, v in point_vals.items()},
-        )
+        first = np.repeat(tile_of_chunk, np.diff(hi, prepend=0))
+        # Last tile of each row: the chunks in order, each overwriting.
+        last = np.zeros(m, dtype=tdt)
+        for cc, ids in enumerate(chunk_ids):
+            last[ids] = tile_of_chunk[cc]
+        # The columns, numbered in first-appearance order (so a column's
+        # number grows with its first member's row id): the hash kernel's
+        # exact-equality classes, which are `np.unique`'s on finite floats
+        # (−0.0 with 0.0). `np.unique` itself where the kernel cannot serve,
+        # or where a NaN would make the two differ (it groups NaNs together,
+        # the kernel leaves each alone) -- the number order then follows ρ,
+        # which is as good: only whole columns matter, not their order.
+        fz = None if np.isnan(rho).any() else _near_interface._factorize([rho])
+        if fz is not None:
+            col = np.asarray(fz[1]).astype(i32, copy=False)
+            n_col = int(np.asarray(fz[0]).size)
+        else:
+            _u, col = np.unique(rho, return_inverse=True)
+            col = np.asarray(col).ravel().astype(i32)
+            n_col = int(_u.size)
+            del _u
+        del fz
+        if pin is not None:
+            self.is_key = pin[0].contains(pin[1])
+            first[self.is_key] = 0
+            _ROUTES["point_pin_rows"] += int(np.count_nonzero(self.is_key))
+        # Widen each row's span to its whole column's.
+        span = np.full(n_col, self.n_tiles, dtype=first.dtype)
+        np.minimum.at(span, col, first)
+        if not _POINT_TILE_NEG_CONTROL:
+            first = span[col]
+        col_tile = span  # each column's evaluation tile
+        span = np.zeros(n_col, dtype=last.dtype)
+        np.maximum.at(span, col, last)
+        if not _POINT_TILE_NEG_CONTROL:
+            last = span[col]
+        del span
+        # Live rows per tile: +1 from a row's evaluation tile to its last.
+        live = np.cumsum(
+            np.bincount(first, minlength=self.n_tiles + 1)
+            - np.bincount(last.astype(i32) + 1, minlength=self.n_tiles + 1)
+        )[: self.n_tiles]
+        self.pool = int(live.max()) if m else 0
+        # Rows by evaluation tile, ids ascending within each (a stable sort
+        # of small ints: numpy's radix sort).
+        self._order, self._eval_bounds = self._by_tile(first)
+        del first
+        self._free, ends = self._by_tile(last)
+        self._free = [self._free[a:b] for a, b in zip(ends[:-1], ends[1:])]
+        del last, ends
+        # Batches of whole columns: each tile's columns in number order
+        # (one more radix sort, over the columns by their tile), cut every
+        # `_POINT_EVAL_ROWS` rows of their running size; a row's batch is
+        # its column's.
+        self._col = col
+        size = np.bincount(col, minlength=n_col)
+        by = np.argsort(col_tile, kind="stable")
+        run = np.cumsum(size[by])
+        cbounds = np.searchsorted(col_tile[by], np.arange(self.n_tiles + 1))
+        base = np.concatenate(([0], run))[cbounds[:-1]]
+        tile_base = np.repeat(base, np.diff(cbounds))
+        batch = np.empty(n_col, dtype=i32)
+        batch[by] = (run - size[by] - tile_base) // max(1, _POINT_EVAL_ROWS)
+        self._col_batch = batch
+        del size, by, run, cbounds, base, tile_base, col_tile
+        self.slot = np.full(m, -1, dtype=i32)
+        self._stack = np.arange(self.pool - 1, -1, -1, dtype=i32)
+        self._top = self.pool
+
+    def _by_tile(self, tile):
+        """`(order, bounds)`: row ids grouped by `tile`, ascending within each
+        group, group t at `order[bounds[t]:bounds[t + 1]]`."""
+        order = np.argsort(tile, kind="stable").astype(np.int32)
+        bounds = np.searchsorted(tile[order], np.arange(self.n_tiles + 1))
+        return order, bounds
+
+    def take(self, t):
+        """Tile t's evaluation batches -- ascending row-id arrays of whole
+        columns, about `_POINT_EVAL_ROWS` rows each -- with slots assigned."""
+        if self.slot is None:
+            rho, self._rho = self._rho, None
+            return _near_interface.column_batches(rho, _POINT_EVAL_ROWS)
+        a, b = int(self._eval_bounds[t]), int(self._eval_bounds[t + 1])
+        ids = self._order[a:b]
+        k = ids.size
+        # Slots ascending with the ids: the rows are numbered in first-
+        # appearance order, so an observer chunk's rows are mostly near one
+        # another, and this keeps them near one another in the pool -- the
+        # gathers' locality. (Bits do not depend on where a value sits.)
+        self.slot[ids] = np.sort(self._stack[self._top - k : self._top])
+        self._top -= k
+        if k == 0:
+            return []
+        bt = self._col_batch[self._col[ids]]
+        n_b = int(bt.max()) + 1
+        bt = bt.astype(np.int16 if n_b < np.iinfo(np.int16).max else np.int32)
+        by = np.argsort(bt, kind="stable")  # ids stay ascending in a batch
+        cuts = np.searchsorted(bt[by], np.arange(n_b + 1))
+        return [
+            ids[by[x:y]].astype(np.intp) for x, y in zip(cuts[:-1], cuts[1:]) if y > x
+        ]
+
+    def release(self, t):
+        """Return the slots of the rows whose last tile is t."""
+        if self.slot is None:
+            return
+        gone, self._free[t] = self._free[t], None
+        k = gone.size
+        self._stack[self._top : self._top + k] = self.slot[gone]
+        self._top += k
+        self.slot[gone] = -1
 
 
 def _point_grid_rows(rows, P, nodes, gz, observers_above, a_wire, idx_t):
@@ -3455,7 +3745,9 @@ def _point_grid_rows(rows, P, nodes, gz, observers_above, a_wire, idx_t):
     return uniq, chunk_ids
 
 
-def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
+def point_observer_block(
+    ctx, obs_pts, obs_t, src, *, observers_above, into=None, into_rows=None
+):
     """The cross block at POINT observers (momwire#1223 U4): the transmitted
     field of every basis's part on the source axis `src`, tested as t̂·E at
     each observer — the point-matched lane's crossing rows, one per observer.
@@ -3504,10 +3796,38 @@ def point_observer_block(ctx, obs_pts, obs_t, src, *, observers_above):
     and the rest stay on the exact column twins. GATED at ~1e-11 in Z, not
     bit-identical (tests/test_point_sheet_1224.py);
     `MOMWIRE_NEAR_INTERFACE_SHEET=0` is the exact route.
+
+    `into` / `into_rows` (momwire#1224 perf item 5): the block is ADDED to
+    `into[into_rows]` (`into_rows` sorted, one per observer) and `into` is
+    returned, with no (n_obs, n_basis) block of its own -- the same one
+    addition per element as `into[into_rows] += block`. The chunked route
+    finishes each observer chunk's rows (ends, c1) as it contracts them; the
+    dense reference builds its block and adds it.
     """
     if _POINT_CHUNKED:
-        return _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above)
-    return _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above)
+        return _point_observer_block_chunked(
+            ctx, obs_pts, obs_t, src, observers_above, into, into_rows
+        )
+    t = _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above)
+    if into is None:
+        return t
+    _add_rows(into, into_rows, 0, t)
+    return into
+
+
+def _add_rows(into, into_rows, r0, block):
+    """`into[into_rows[r0 : r0 + len(block)]] += block`, by contiguous runs
+    of the target rows: the fancy-indexed spelling would gather those rows
+    into a copy first (momwire#1267)."""
+    sel = np.asarray(into_rows[r0 : r0 + block.shape[0]])
+    if sel.size == 0:
+        return
+    cut = np.flatnonzero(np.diff(sel) != 1) + 1
+    r = 0
+    for a, b in zip(np.concatenate(([0], cut)), np.concatenate((cut, [sel.size]))):
+        s0 = int(sel[a])
+        into[s0 : s0 + (b - a)] += block[r : r + (b - a)]
+        r += b - a
 
 
 def _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above):
@@ -3579,7 +3899,9 @@ def _point_observer_block_dense(ctx, obs_pts, obs_t, src, observers_above):
     return c1 * t
 
 
-def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
+def _point_observer_block_chunked(
+    ctx, obs_pts, obs_t, src, observers_above, into=None, into_rows=None
+):
     """`point_observer_block`'s default route (momwire#1224 stage 3 unit 3):
     the main block through `_chunked_point_tables`, contracted per observer
     chunk (never the whole (observers × source nodes) grid's tables at
@@ -3587,7 +3909,17 @@ def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
     route's, sharing the SAME six-table memo -- so the ends see the same
     hits/misses either route takes, per `_block_preamble`'s "one fill, one
     memo". The block's sheet plan is decided first (`_plan_point_sheets`),
-    so both routes serve the same rows from sheets."""
+    so both routes serve the same rows from sheets.
+
+    The ends loop runs once the FIRST evaluation tile is in (`on_ready`):
+    `_chunked_point_tables` pins every main-block row the ends can ask to
+    that tile, so the memo the ends read is the untiled route's (momwire
+    #1224 perf item 5). Each chunk's rows are then finished as they are
+    contracted -- the ends' terms added in end order, then the c1 scale --
+    which is, per element, the sequence the whole block went through
+    (`t[:, nz] += ...` per end, then `t *= c1`): the same operations on the
+    same floats, so the same bits, without the (n_obs, n_basis) block when
+    `into` is given."""
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)
     _plan_point_sheets(
         ctx, eps_t, k_p, gz, memo, obs_pts, src["nodes"], observers_above
@@ -3609,46 +3941,11 @@ def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
     # Only the ends loop reads the memo after the main block, so the main
     # block's rows it retains are the ends' keys alone (momwire#1267).
     keep = _point_end_keys(P, e_pts, gz, a_wire, observers_above)
+    end_terms = []
 
-    step = max(1, _POINT_CHUNK_PAIRS // max(1, nB))
-    row_slices = [slice(r0, min(nA, r0 + step)) for r0 in range(0, nA, step)]
-    # The block transposed, filled a chunk of columns at a time: the chunks'
-    # products concatenated into it, without the list of parts and the
-    # concatenation alive together (momwire#1267). Allocated at the first
-    # chunk, after the evaluation's transients are gone.
-    t = None
-    n_chunks = 0
-    for sl, six, pk in _chunked_point_tables(
-        ctx, eps_t, k_p, P, nodes, gz, observers_above, row_slices, memo, keep
-    ):
-        n_chunks += 1
-        axc, ayc, azc = ax_full[sl], ay_full[sl], az_full[sl]
-        dx, dy, rho, _z, _zp = _point_pair_grid(P[sl], nodes, gz, observers_above)
-        g = (axc * dx + ayc * dy) / _near_interface.radius_fold(rho, a_wire)
-        del dx, dy, rho, _z, _zp
-        U, V, W = six["U"], six["V"], six["W"]
-        a_grad_v = _point_grad_v(azc, pk, g, observers_above=observers_above)
-        if observers_above:
-            a_grad_w = azc * six["dzW"] + g * pk["gRhoW"]
-            k3 = azc * (k2sq * V + six["dzpW"]) - a_grad_w
-        else:
-            k3 = azc * k2sq * V - g * pk["gRhoW"]
-        k4 = azc * W + a_grad_v
-        tc = (F @ (axc * U * (w * tx)).T) + (F @ (ayc * U * (w * ty)).T)
-        tc = tc + (F @ (k3 * (w * tz)).T) + (Fd @ (k4 * w).T)
-        if t is None:
-            t = np.empty((src["n_basis"], nA), dtype=np.complex128).T
-        t.T[:, sl] = tc
-        del tc
-    if t is None:
-        t = np.zeros((nA, src["n_basis"]), dtype=np.complex128)
-    _ROUTES["point_chunked"] += 1
-    _ROUTES["point_chunks"] += n_chunks
-    _ROUTES["point_chunk_max_rows"] = max(
-        _ROUTES["point_chunk_max_rows"], min(step, nA)
-    )
-
-    if ends:
+    def ends_loop():
+        if not ends:
+            return
         six_e, pk_e, g_e = _point_kernels_dense(
             ctx,
             eps_t,
@@ -3666,10 +3963,77 @@ def _point_observer_block_chunked(ctx, obs_pts, obs_t, src, observers_above):
         )  # (n_obs, n_ends)
         for i, (_pt, sign, fv) in enumerate(ends):
             nz = np.flatnonzero(fv)
-            t[:, nz] += (sign * e_term[:, i])[:, None] * fv[nz][None, :]
-    # In place: the same product per element as `c1 * t`, without a second
-    # (n_obs, n_basis) block (momwire#1267).
-    t *= c1
+            end_terms.append((nz, sign * e_term[:, i], fv[nz][None, :]))
+
+    step = max(1, _POINT_CHUNK_PAIRS // max(1, nB))
+    row_slices = [slice(r0, min(nA, r0 + step)) for r0 in range(0, nA, step)]
+    # Without `into`: the block, filled a chunk of rows at a time. Allocated
+    # at the first chunk, after the evaluation's transients are gone.
+    t = None
+    buf = None
+    n_chunks = 0
+    for sl, six, pk in _chunked_point_tables(
+        ctx,
+        eps_t,
+        k_p,
+        P,
+        nodes,
+        gz,
+        observers_above,
+        row_slices,
+        memo,
+        keep,
+        on_ready=ends_loop,
+    ):
+        n_chunks += 1
+        axc, ayc, azc = ax_full[sl], ay_full[sl], az_full[sl]
+        dx, dy, rho, _z, _zp = _point_pair_grid(P[sl], nodes, gz, observers_above)
+        g = (axc * dx + ayc * dy) / _near_interface.radius_fold(rho, a_wire)
+        del dx, dy, rho, _z, _zp
+        U, V, W = six["U"], six["V"], six["W"]
+        a_grad_v = _point_grad_v(azc, pk, g, observers_above=observers_above)
+        if observers_above:
+            a_grad_w = azc * six["dzW"] + g * pk["gRhoW"]
+            k3 = azc * (k2sq * V + six["dzpW"]) - a_grad_w
+        else:
+            k3 = azc * k2sq * V - g * pk["gRhoW"]
+        k4 = azc * W + a_grad_v
+        tc = (F @ (axc * U * (w * tx)).T) + (F @ (ayc * U * (w * ty)).T)
+        tc = tc + (F @ (k3 * (w * tz)).T) + (Fd @ (k4 * w).T)
+        # No `del` of this chunk's temporaries here: they are freed when the
+        # next chunk rebinds them, AFTER its own are allocated, so the heap
+        # top stays in use and glibc never trims it between chunks. Freeing
+        # them first (tried) trimmed and re-faulted ~20 MB a chunk: 3x the
+        # page faults and +3 % wall at buried x16, all allocator, none
+        # arithmetic (with MALLOC_TRIM_THRESHOLD_ pinned the two tie).
+        #
+        # The chunk's rows, (rows, n_basis), copied into the block or into
+        # one chunk buffer reused across chunks, then finished in place:
+        # each end's term in end order, then c1 -- the whole block's
+        # per-element order.
+        if into is not None:
+            if buf is None:
+                buf = np.empty((src["n_basis"], step), dtype=np.complex128).T
+            rc = buf[: sl.stop - sl.start]
+        else:
+            if t is None:
+                t = np.empty((src["n_basis"], nA), dtype=np.complex128).T
+            rc = t[sl]
+        rc[...] = np.asarray(tc).T
+        for nz, se, fvz in end_terms:
+            rc[:, nz] += se[sl][:, None] * fvz
+        rc *= c1
+        if into is not None:
+            _add_rows(into, into_rows, sl.start, rc)
+    _ROUTES["point_chunked"] += 1
+    _ROUTES["point_chunks"] += n_chunks
+    _ROUTES["point_chunk_max_rows"] = max(
+        _ROUTES["point_chunk_max_rows"], min(step, nA)
+    )
+    if into is not None:
+        return into
+    if t is None:
+        t = np.zeros((nA, src["n_basis"]), dtype=np.complex128)
     return t
 
 
