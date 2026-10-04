@@ -471,6 +471,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          # Only what ships. The run also uploads per-test durations
+          # (durations-*, #1308); merged into dist/ they made the PyPI upload
+          # refuse the whole release on an unknown file (v0.71.0).
+          pattern: "{wheels-*,sdist}"
           path: dist
           merge-multiple: true
       - name: Attach wheels + sdist to the GitHub Release
@@ -521,6 +525,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v8
         with:
+          # Only what ships. The run also uploads per-test durations
+          # (durations-*, #1308); merged into dist/ they made the PyPI upload
+          # refuse the whole release on an unknown file (v0.71.0).
+          pattern: "{wheels-*,sdist}"
           path: dist
           merge-multiple: true
       - name: Publish to PyPI
