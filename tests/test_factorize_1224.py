@@ -107,6 +107,40 @@ def test_row_groups_is_one_grouping_over_the_parts(monkeypatch):
     assert np.array_equal(groups.rows().view(np.uint64), want_u.view(np.uint64))
 
 
+@pytest.mark.parametrize("dup", [1, 4])
+def test_row_groups_across_rehashes_and_prefetch_blocks(dup, monkeypatch):
+    """The prefetched walk and the number-order rehash (momwire#1224 perf
+    item 6): parts that start and end mid-block (the kernel hashes 32 rows
+    ahead), a table that doubles many times inside a part, and NaN groups
+    standing in the table's history when it doubles (never entered, so a
+    later copy of the row is a new group still). Against the sorted
+    spelling, exactly."""
+    tri = _awkward(200_000, 3, 1290 + dup, dup=dup)
+    groups = _accel.acc.RowGroups()
+    cuts = [0, 1, 31, 32, 33, 65, 97, 1000, 1031, 77_777, 150_001, 200_000]
+    ids = np.concatenate(
+        [
+            groups.add([tri[a:b, 0], tri[a:b, 1], tri[a:b, 2]])
+            for a, b in zip(cuts[:-1], cuts[1:])
+        ]
+    )
+    _sorted_route(monkeypatch)
+    want_u, want_inv = ni._unique_tri(tri)
+    assert np.array_equal(ids, want_inv)
+    assert np.array_equal(groups.rows().view(np.uint64), want_u.view(np.uint64))
+
+
+@pytest.mark.parametrize("n", [31, 32, 33, 65, 200_000])
+def test_factorize_rows_on_block_edges_is_the_lexsort_spelling(n, monkeypatch):
+    """`factorize_rows`' prefetched walk at lengths around its 32-row block."""
+    tri = _awkward(n, 3, 4242 + n, dup=2)
+    got_u, got_inv = ni._unique_tri(tri)
+    _sorted_route(monkeypatch)
+    want_u, want_inv = ni._unique_tri(tri)
+    assert np.array_equal(got_inv, want_inv)
+    assert np.array_equal(got_u.view(np.uint64), want_u.view(np.uint64))
+
+
 def test_the_kernel_refuses_shapes_it_cannot_group():
     acc = _accel.acc
     with pytest.raises(RuntimeError):
