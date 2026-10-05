@@ -40,11 +40,12 @@ N = 4
 DEPTH = 0.15
 
 # The split fan's Z before #1042 (momwire 3ec54c79, the commit before PR
-# #1328), measured on Skylake. This change reproduces both bit for bit there;
+# #1328), measured on Skylake. This change reproduces it bit for bit there;
 # the gate allows rounding so it holds on every platform's BLAS.
+# SinusoidalSolver is not here: it read 32.75 - 342.05j on Skylake and
+# -158.42 ohm on some CI runners, so it refuses the spelling instead.
 PRE_1042 = {
     BSplineSolver: 32.94864673320206 - 337.2324201391893j,
-    SinusoidalSolver: 32.75416025899061 - 342.05210557941166j,
 }
 
 
@@ -104,9 +105,12 @@ def test_rises_joined_to_their_own_radials_solve_as_written(cls):
     assert complex(z) == pytest.approx(PRE_1042[cls], rel=1e-9, abs=0)
 
 
-def test_the_galerkin_family_refuses_them_by_name():
+@pytest.mark.parametrize(
+    "cls", [SinusoidalSolver, SinusoidalGalerkinSolver], ids=lambda c: c.__name__
+)
+def test_the_sinusoidal_families_refuse_them_by_name(cls):
     with pytest.raises(ValueError) as exc:
-        SinusoidalGalerkinSolver(**fan())
+        cls(**fan())
     msg = str(exc.value)
     assert "wires 4 and 5 coincide" in msg and "joined to different wires" in msg
     assert "cannot solve coincident conductors" in msg and "momwire#1333" in msg
