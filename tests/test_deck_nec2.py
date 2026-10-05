@@ -837,15 +837,18 @@ def test_the_arming_set_is_exactly_the_pages_seven_cards():
 # -- the operator cards, and the partial refill they produce -----------------
 
 
-def test_the_operator_set_is_exactly_the_pages_two_cards():
-    """§#arming: of the five arming cards, ``GN`` and ``EK`` move the
-    OPERATOR; the rest move the drive, the loading table or the frequency
-    list.  A subset of the arming set by construction."""
-    assert _OPERATOR_CARDS == {"GN", "EK"}
+def test_the_operator_set_is_exactly_the_pages_three_cards():
+    """§#arming: of the arming cards, ``GN``, ``EK`` and ``LD`` rebuild the
+    operator as the oracle prints it; the rest move the drive, the network
+    or the frequency list.  ``LD`` joined at momwire#1069, once its loads
+    were scoped per group (probes ``dipole_ld_after_xq``,
+    ``dipole_ld_cleared_between_runs``).  A subset of the arming set by
+    construction."""
+    assert _OPERATOR_CARDS == {"GN", "EK", "LD"}
     assert _OPERATOR_CARDS <= _ARMING_CARDS
 
 
-@pytest.mark.parametrize("card", ["GN 1", "EK"])
+@pytest.mark.parametrize("card", ["GN 1", "EK", "LD 0 1 3 3 50. 0. 0.", "LD -1"])
 def test_an_operator_card_between_execute_cards_refills_partially(card):
     """§#arming: an operator card between two execute cards rebuilds the
     operator without a new frequency list — ``refilled_partial``, not
@@ -858,11 +861,12 @@ def test_an_operator_card_between_execute_cards_refills_partially(card):
     assert model.groups[1].refilled_partial is True
 
 
-@pytest.mark.parametrize("card", ["EX 0 1 2 0 1.", "LD 0 1 3 3 50. 0. 0."])
+@pytest.mark.parametrize("card", ["EX 0 1 2 0 1."])
 def test_an_arming_card_that_is_not_an_operator_card_refills_neither_way(card):
     """§#arming: the run is real — the card armed it — but nothing announces
-    a rebuilt operator, because ``EX`` moves the drive and ``LD`` is stamped
-    outside the fill."""
+    a rebuilt operator, because ``EX`` moves the drive.  ``LD`` was the second
+    case here until momwire#1069 measured that the oracle reprints the
+    loading preamble for it."""
     model = parse(BODY + f"XQ\n{card}\nXQ\nNX\n")
     assert model.groups[1] is not None
     assert model.groups[1].refilled is False

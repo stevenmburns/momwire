@@ -571,9 +571,10 @@ def test_the_support_matrix_covers_the_whole_corpus():
     # decks momwire#456 phase C un-retired and the four it captured, plus the
     # seven momwire#487 captured for the MININEC-type ground idiom and the
     # cliff-at-zero deck U2 added to them, plus the five momwire#652 captured
-    # for the `PQ` charge report. The count is written out so a deck that
+    # for the `PQ` charge report, plus the two momwire#1069 captured for load
+    # scoping per execute group. The count is written out so a deck that
     # quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 65
+    assert len(SUPPORTED) == 67
 
 
 @pytest.mark.integration

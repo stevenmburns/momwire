@@ -70,16 +70,17 @@ _ARMING_CARDS = frozenset({"EX", "FR", "LD", "GN", "EK", "TL", "NT"})
 # reprints the LOADING / ENVIRONMENT / MATRIX TIMING preamble with no
 # FREQUENCY block and the impedance moves with the new half-space; an ``EK``
 # prints the same shape; an ``EX`` prints no preamble at all, because moving
-# the drive does not move the matrix.  ``LD`` is deliberately ABSENT from
-# this set and present in `_ARMING_CARDS`: an ``LD`` between two execute
-# cards makes the LOADING TABLE itself per group, which is a second change
-# with its own fixture, and the flag alone would announce a table that had
-# not moved.
+# the drive does not move the matrix.  ``LD`` prints the same shape as ``GN``
+# and ``EK`` (probes ``ld_after_xq`` / ``ld_cleared_between_runs``,
+# momwire#1069): the LOADING table it reprints is the one in force at that
+# execute card, which is why the loads are scoped per group
+# (`ExecuteGroup.loads`) and why the card joined this set only once they were.
 #
 # The test is the CARD, not the value it carries: NEC rebuilds because a
-# ground or kernel card arrived, so ``EK`` at the kernel already in force
-# refills exactly as a change does.
-_OPERATOR_CARDS = frozenset({"GN", "EK"})
+# ground, kernel or load card arrived, so ``EK`` at the kernel already in
+# force refills exactly as a change does, and so does ``LD -1`` on a deck
+# that carried no load.
+_OPERATOR_CARDS = frozenset({"GN", "EK", "LD"})
 
 # NX ends the deck; EN ends it and additionally ends the run.
 _TERMINATORS = frozenset({"NX", "EN"})
@@ -214,6 +215,10 @@ class _PendingGroup:
     environment: Environment
     refilled: bool
     refilled_partial: bool
+    # Indices into the parser's load log of the loads in force at this
+    # execute card, and the wire materials in force there (momwire#1069).
+    loads: tuple[int, ...] = ()
+    materials: tuple = ()
 
 
 class _Nec2Parser:
@@ -271,12 +276,13 @@ class _Nec2Parser:
         self._extended_kernel = False
 
         # LD / IS (spec ``#ld--loading`` / ``#is--insulated-sheath``).
-        # `_loads` are the per-segment port loads (types 0, 1, 4); `_loaded`
-        # is their (model wire, element) dedup set, so a second load on one
-        # segment refuses rather than merges.  `LD -1` clears both, and also
-        # the LD-family conductivity state (type 5 is read under the LD
-        # mnemonic too) — but never `_wire_insulation`, which is IS's own
-        # card and a wire property, not a load (spec: "and *only* loads").
+        # `_load_log` / `_live` (below) are the per-segment port loads (types
+        # 0, 1, 4); `_loaded` is their (model wire, element) dedup set, so a
+        # second load on one segment refuses rather than merges.  `LD -1`
+        # clears `_live` and `_loaded`, and also the LD-family conductivity
+        # state (type 5 is read under the LD mnemonic too) — but never
+        # `_wire_insulation`, which is IS's own card and a wire property, not
+        # a load (spec: "and *only* loads").
         # TL / NT (spec ``#tl--transmission-line``, ``#nt--two-port-network``).
         # `_networks` is the deck's network cards with their endpoints already
         # resolved; `_network_destroyer` is the mnemonic of the first card of
@@ -285,7 +291,13 @@ class _Nec2Parser:
         self._networks: list[NetworkCard] = []
         self._network_destroyer: str | None = None
 
-        self._loads: list[tuple[int, float, LoadSpec]] = []
+        # `_load_log` is every distinct load the deck has put in force, in
+        # first-appearance order, and `_live` the indices of the ones in force
+        # NOW: each execute card snapshots `_live`, because an `LD` arms and
+        # its loads are the execute card's, not the deck's (momwire#1069).
+        # A load re-stated after an `LD -1` reuses its log entry.
+        self._load_log: list[tuple[int, float, LoadSpec]] = []
+        self._live: list[int] = []
         self._loaded: set[tuple[int, int]] = set()
         # What each loaded element carries, for the cell rule's restatement
         # test (momwire#471). `_loaded` answers "is this taken", which the
@@ -535,7 +547,7 @@ class _Nec2Parser:
             # Nullify every load read so far — and only loads: type 5's
             # conductivity is read under this same mnemonic, so it clears
             # too, but IS's insulation (a different card) never does.
-            self._loads = []
+            self._live = []
             self._loaded = set()
             self._load_spec_at = {}
             self._global_conductivity = None
@@ -591,7 +603,13 @@ class _Nec2Parser:
             self._loaded.add(key)
             self._load_spec_at[key] = spec
             _, arclength = self.structure.resolve_of(wire, seg)
-            self._loads.append((piece_index, arclength, spec))
+            entry = (piece_index, arclength, spec)
+            if entry in self._load_log:
+                index = self._load_log.index(entry)
+            else:
+                index = len(self._load_log)
+                self._load_log.append(entry)
+            self._live.append(index)
 
     def _ld23(self, ldtyp: int, tag: int, first: int, last: int, card: Card) -> None:
         """``LD 2`` / ``LD 3`` — a DISTRIBUTED series or parallel RLC per unit
@@ -1018,6 +1036,8 @@ class _Nec2Parser:
                 ),
                 refilled=refilled,
                 refilled_partial=self._operator_dirty and not refilled,
+                loads=tuple(self._live),
+                materials=self._material_state(),
             )
         )
         self._executed += 1
@@ -1119,10 +1139,24 @@ class _Nec2Parser:
 
     # -- the model ---------------------------------------------------------
 
-    def _material_for(self, wire: int) -> WireMaterial | None:
-        conductivity = self._wire_conductivity.get(wire, self._global_conductivity)
+    def _material_state(self) -> tuple:
+        """The ``LD 5`` / ``LD 2`` / ``LD 3`` wire materials in force now —
+        compared across execute cards, so dicts are frozen into sorted
+        tuples.  ``IS`` is absent: it refuses after an execute card."""
+        return (
+            self._global_conductivity,
+            tuple(sorted(self._wire_conductivity.items())),
+            self._global_distributed,
+            tuple(sorted(self._wire_distributed.items())),
+        )
+
+    def _material_for(self, wire: int, state: tuple) -> WireMaterial | None:
+        global_conductivity, wire_conductivity, global_distributed, wire_distributed = (
+            state
+        )
+        conductivity = dict(wire_conductivity).get(wire, global_conductivity)
         insulation = self._wire_insulation.get(wire)
-        distributed = self._wire_distributed.get(wire, self._global_distributed)
+        distributed = dict(wire_distributed).get(wire, global_distributed)
         if conductivity is None and insulation is None and distributed is None:
             return None
         if insulation is not None:
@@ -1135,8 +1169,44 @@ class _Nec2Parser:
             )
         return WireMaterial(conductivity=conductivity, distributed_rlc=distributed)
 
+    def _loads_and_materials(
+        self,
+    ) -> tuple[tuple[tuple[int, float, LoadSpec], ...], dict[int, int], tuple]:
+        """The model's load union, each log index's place in it, and the wire
+        materials every group solves with (momwire#1069).
+
+        The union is the loads in force at SOME execute card, in log order,
+        so a load cleared by ``LD -1`` before any card ran it never cuts a
+        gap.  A deck with no execute card keeps what is in force at its end.
+
+        The materials enter the FILL rather than the port algebra, and the
+        fill is one per operating point, not per group.  So a deck whose
+        ``LD 5`` / ``LD 2`` / ``LD 3`` state differs between two of its
+        execute cards refuses rather than answer one group with the other's
+        metal.  A material card after the last execute card reaches no run,
+        exactly as in NEC, so the groups' common state is used, not the
+        deck's final one.
+        """
+        ran = [pending for pending in self.groups if pending is not None]
+        if not ran:
+            used = sorted(set(self._live))
+            states = [self._material_state()]
+        else:
+            used = sorted({index for pending in ran for index in pending.loads})
+            states = [pending.materials for pending in ran]
+        if any(state != states[0] for state in states[1:]):
+            raise DeckError(
+                "LD 2 / LD 3 / LD 5 wire loading that changes between execute "
+                "cards is not supported by this engine (momwire#1069): a "
+                "material enters the matrix fill, which is shared by every "
+                "group at one frequency — run each loading as its own deck"
+            )
+        place = {index: k for k, index in enumerate(used)}
+        loads = tuple(self._load_log[index] for index in used)
+        return loads, place, states[0]
+
     def _feeds_and_groups(
-        self, structure: Nec2Structure
+        self, structure: Nec2Structure, place: dict[int, int] | None = None
     ) -> tuple[tuple[tuple[int, float, complex], ...], tuple[ExecuteGroup | None, ...]]:
         """The union feed set and the final :class:`ExecuteGroup` tuple.
 
@@ -1186,6 +1256,9 @@ class _Nec2Parser:
                     refilled=pending.refilled,
                     refilled_partial=pending.refilled_partial,
                     environment=pending.environment,
+                    loads=None
+                    if place is None
+                    else tuple(sorted(place[index] for index in pending.loads)),
                 )
             )
         return feeds, tuple(groups)
@@ -1194,16 +1267,17 @@ class _Nec2Parser:
         if not self._saw_ex:
             raise DeckError("deck has no EX card — nothing drives the structure")
         structure = self.structure
+        loads, place, materials = self._loads_and_materials()
         wires = tuple(
             DeckWire(
                 vertices=(piece.p1, piece.p2),
                 radius=structure.wires[piece.wire].radius,
                 edge_elements=(piece.n_seg,),
-                material=self._material_for(piece.wire),
+                material=self._material_for(piece.wire, materials),
             )
             for piece in structure.pieces
         )
-        feeds, groups = self._feeds_and_groups(structure)
+        feeds, groups = self._feeds_and_groups(structure, place)
         # momwire#489: GE's SIGN, at the one combination where ignoring it
         # would serve a silently different answer than the oracle.  A negative
         # GE declares the plane while asking for NO ground-contact current
@@ -1247,7 +1321,7 @@ class _Nec2Parser:
         return DeckModel(
             wires=wires,
             feeds=feeds,
-            loads=tuple(self._loads),
+            loads=loads,
             ground=self._ground,
             ground_z=0.0,
             second_medium=self._second_medium,

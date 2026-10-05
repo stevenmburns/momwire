@@ -356,7 +356,9 @@ def _run(
                 environment=_environment_label(deck, group.ground),
                 ground=medium,
                 ground_file=_ground_file(deck) if medium is not None else None,
-                loads=tuple(_load_row(card) for card in deck.loads),
+                # The cards in force at THIS execute card (momwire#1069), not
+                # the deck's last: an `LD -1` after it does not unload it.
+                loads=tuple(_load_row(card) for card in group.loads),
                 fill_seconds=result.fill_ms / 1000.0,
                 factor_seconds=0.0,
             )

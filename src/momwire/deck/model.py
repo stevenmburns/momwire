@@ -287,6 +287,16 @@ class ExecuteGroup:
     # public API: a positional construction written against an earlier
     # release keeps meaning what it meant.
     environment: Environment = field(default_factory=Environment)
+    # The loads IN FORCE at this execute card, as indices into
+    # :attr:`DeckModel.loads` (momwire#1069).  An ``LD`` arms (spec
+    # ``#arming``) and ``LD -1`` clears, so a deck may run its first group
+    # bare and its second loaded, and NEC answers each with its own: the
+    # first group's printout says THIS STRUCTURE IS NOT LOADED and its
+    # impedance is the bare antenna's.  ``None`` means every load in the
+    # model, which is what a model built by hand, without per-group scoping,
+    # has always meant; both dialect readers fill it.  Last for the reason
+    # :attr:`environment` gives.
+    loads: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -372,6 +382,10 @@ class DeckModel:
     node_gaps: tuple[tuple[int, int, complex], ...] = ()
 
     # (wire, arclength, spec) — stamped at the same kind of point a feed is.
+    # The UNION over every execute group, the way :attr:`feeds` is: each one
+    # cuts its gap in every group's matrix, and a group stamps only the loads
+    # its :attr:`ExecuteGroup.loads` names (momwire#1069).  A load in force at
+    # no execute card at all is not here.
     loads: tuple[tuple[int, float, LoadSpec], ...] = ()
 
     # The deck's LAST environment (see :attr:`environment`).  A ground card

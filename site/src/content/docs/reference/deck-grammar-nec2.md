@@ -187,7 +187,7 @@ NEC's:
 | `wires` | ordered polylines: vertices in metres, conductor radius, element count per edge, and an optional per-wire material (conductivity, insulation jacket) |
 | `feeds` | `(wire, arclength, volts)` — a delta gap at a point on a wire, complex volts |
 | `node_gaps` | gaps at a wire **knot** rather than mid-segment. The `nec2` dialect emits none; the seam exists because a NEC-5 dialect's edge sources are exactly this |
-| `loads` | `(wire, arclength, impedance)` — series or parallel RLC, or a fixed complex `Z`, stamped at the same kind of point a feed occupies |
+| `loads` | `(wire, arclength, impedance)` — series or parallel RLC, or a fixed complex `Z`, stamped at the same kind of point a feed occupies. The union over every execute group; each group names the ones **in force at its execute card** (momwire#1069, see [Arming](#arming)) |
 | `ground` | `None` (free space), `"pec"`, or `(model, eps_r, sigma)` with `model` one of `"finite-fast"` / `"finite"`; plus the ground plane's `z` and a cliff's second medium. The deck's **last** environment — see below |
 | `environment` | the same three values as one record, per execute group: the ground, its plane and the second medium in force **at that group's execute card** |
 | `frequencies` | the frequency list, in MHz, per execute group |
@@ -253,20 +253,34 @@ The first execute card of a deck always runs.
 
 #### What a re-armed group rebuilds
 
-Two of the seven arming cards move the **operator** — the matrix itself,
-rather than the drive it is solved against. Those are `GN` and `EK`: a ground
-card changes the half-space the fill runs over, a kernel card changes how the
-fill integrates. The other five do not: `EX` moves the drive, `FR` moves the
-frequency list, `LD` is stamped outside the fill, and `TL`/`NT` are composed
-with the solved matrix rather than entering it.
+Three of the seven arming cards move the **operator** as NEC sees it — the
+matrix itself, rather than the drive it is solved against. Those are `GN`,
+`EK` and `LD`: a ground card changes the half-space the fill runs over, a
+kernel card changes how the fill integrates, and a load card changes what NEC
+adds to the matrix diagonal. The other four do not: `EX` moves the drive, `FR`
+moves the frequency list, and `TL`/`NT` are composed with the solved matrix
+rather than entering it.
 
 So a re-armed group reports one of three shapes:
 
 | between two execute cards | the group reports |
 |---|---|
 | a fresh `FR` (with or without anything else) | a whole refill — new frequency list, new operator |
-| `GN` or `EK`, and no fresh `FR` | a **partial** refill: the operator was rebuilt, the frequency list was not |
-| `EX`, `LD`, `TL` or `NT` only | neither — the operator is untouched |
+| `GN`, `EK` or `LD`, and no fresh `FR` | a **partial** refill: the operator was rebuilt, the frequency list was not |
+| `EX`, `TL` or `NT` only | neither — the operator is untouched |
+
+The `LD` row is oracle-verified (*added 2026-10-04, momwire#1069*). A deck that
+runs `XQ`, then `LD`, then `XQ` reprints the LOADING, ENVIRONMENT and MATRIX
+TIMING blocks for the second run with no FREQUENCY block, and its LOADING
+table is the one **in force at that execute card**: the first run prints THIS
+STRUCTURE IS NOT LOADED and answers the bare antenna. So loads are scoped per
+group, like the ground. Each execute card stamps the loads in force when it
+runs, and an `LD -1` between two runs unloads the second one. The union of
+every group's loads cuts the gaps, the way the union of every group's `EX`
+cards does, so no group needs a second fill. Wire loading (`LD 2`, `LD 3`,
+`LD 5`) enters the fill itself, so it cannot be stamped per group: a deck
+whose wire loading changes between two execute cards is refused, and wire
+loading read after the last execute card reaches no run, as in NEC.
 
 The network row is oracle-verified: a deck that writes `FR`, `TL`, `XQ`, `NT`,
 `XQ` prints two `ANTENNA INPUT PARAMETERS` blocks against exactly one each of
@@ -276,8 +290,9 @@ is real and the matrix behind it is the first run's.
 The first execute card of a deck always reports a whole refill.
 
 The test is the **card**, not the value it carries: NEC rebuilds because a
-ground or kernel card arrived, so an `EK` naming the kernel already in force
-refills exactly as a change does.
+ground, kernel or load card arrived, so an `EK` naming the kernel already in
+force refills exactly as a change does, and so does an `LD -1` on a deck that
+carried no load.
 
 ### Frequency groups
 

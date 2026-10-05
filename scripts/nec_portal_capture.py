@@ -493,6 +493,38 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # Load SCOPING, at the answer (momwire#1069), the LD twin of the network
+    # retention deck above. An `LD` arms and is the execute card's, not the
+    # deck's: the first group runs bare and prints THIS STRUCTURE IS NOT
+    # LOADED with the bare impedance, the second runs loaded. An engine that
+    # applied the deck's loads to every group answers the first one wrong.
+    # The LD between the two XQs reprints LOADING / ENVIRONMENT / MATRIX
+    # TIMING with no FREQUENCY block: the GN/EK "operator card" shape.
+    decks["dipole_ld_after_xq"] = (
+        "CE ld armed between two runs\n" + _DIPOLE_GW + "GE 0\n"
+        "EX 0 1 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+        "LD 0 1 3 3 50. 1.e-6 0.\n"
+        "XQ\n"
+    )
+
+    # The same rule read the other way, plus `LD -1`: loaded, cleared, then
+    # loaded on a segment no earlier group touched. Three groups, three
+    # loading tables (series RLC / NOT LOADED / fixed), and a port (segment
+    # 7) that only the third group stamps.
+    decks["dipole_ld_cleared_between_runs"] = (
+        "CE ld cleared between runs\n" + _DIPOLE_GW + "GE 0\n"
+        "LD 0 1 3 3 50. 1.e-6 0.\n"
+        "EX 0 1 5 0 1.\n"
+        "FR 0 1 0 0 30. 0\n"
+        "XQ\n"
+        "LD -1\n"
+        "XQ\n"
+        "LD 4 1 7 7 20. 30.\n"
+        "XQ\n"
+    )
+
     # The manufactured EX 6 form, verbatim. 4nec2 has no NEC-2 card for an
     # ideal CURRENT source, so it builds one: a phantom wire parked at
     # z = <its own tag> metres, an ordinary EX 0 voltage source on it, and a

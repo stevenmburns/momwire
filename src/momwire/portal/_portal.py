@@ -1165,6 +1165,13 @@ class ExecuteGroup:
     # which was correct and O(groups·deck) and grew a second reader of the
     # ``GN``/``GD`` rules alongside the dialect's.
     environment: Environment = field(default_factory=Environment)
+    # The ``LD`` cards in force when this group fired, for the LOADING table
+    # this group's preamble prints (momwire#1069): ``LD`` arms and ``LD -1``
+    # clears, so a deck that runs bare and then loaded prints THIS STRUCTURE
+    # IS NOT LOADED for its first group and the table for its second. Which
+    # loads the solve STAMPS is the model's ``ExecuteGroup.loads``, read off
+    # the dialect rather than re-derived from these cards.
+    loads: tuple[Card, ...] = ()
 
     @property
     def ground(self) -> Ground:
@@ -1321,6 +1328,7 @@ def parse_deck(body: str, dialect: str = "nec2") -> PortalDeck:
                     ek=armed.extended_kernel,
                     refilled_partial=armed.refilled_partial,
                     environment=armed.environment,
+                    loads=tuple(loads),
                 )
             )
             sources_stale = True
@@ -1894,6 +1902,22 @@ class DeckSolver:
         self.load_ports: list[tuple[int, object]] = [
             (port, spec) for port, spec in plan.loaded_ports()
         ]
+        # Per MODEL load, its solver port and spec, and per model group the
+        # loads in force there (momwire#1069): a group stamps its own, so a
+        # deck that runs bare and then loaded answers each run as NEC does.
+        self._model_loads: list[tuple[int | None, object]] = [
+            (port, spec)
+            for port, (_w, _a, spec) in zip(plan.load_ports, self.model.loads)
+        ]
+        self._group_loads: dict[int, tuple[int, ...]] = {
+            index: (
+                tuple(range(len(self.model.loads)))
+                if group.loads is None
+                else group.loads
+            )
+            for index, group in enumerate(self.model.groups)
+            if group is not None
+        }
         # Global NEC segment number → solver port index, for every segment
         # that carries a gap. Lets a readout prefer the Galerkin port current
         # (what Y is built from) over the interpolated midpoint current.
@@ -2024,9 +2048,13 @@ class DeckSolver:
         self._cache[key] = entry
         return entry
 
-    def _load_impedances(self, omega: float) -> np.ndarray:
+    def _load_impedances(
+        self, omega: float, group_index: int | None = None
+    ) -> np.ndarray:
         """The per-port load impedance the PORT ALGEBRA still has to stamp, at
-        one angular frequency.
+        one angular frequency, for the loads in force at execute group
+        ``group_index`` (momwire#1069; ``None`` stamps every load, the
+        deck-level reading this had before loads were scoped).
 
         The plan says which solver port each ``LD`` card landed on and hands
         over its :class:`~momwire.deck.model.LoadSpec`; stamping it is the
@@ -2051,7 +2079,12 @@ class DeckSolver:
         z = np.zeros(self.n_ports, dtype=np.complex128)
         if self._native_loading:
             return z
-        for idx, ld in self.load_ports:
+        live = (
+            range(len(self._model_loads))
+            if group_index is None
+            else self._group_loads.get(group_index, ())
+        )
+        for idx, ld in (self._model_loads[k] for k in live):
             if ld.kind == "fixed":
                 z[idx] += complex(ld.r, ld.x)
             elif ld.kind == "parallel":
@@ -2321,7 +2354,7 @@ class DeckSolver:
             driven = [(port, segment, 1.0 + 0.0j)]
         for port, _segment, volts in driven:
             v_source[port] = volts
-        z_load = self._load_impedances(omega)
+        z_load = self._load_impedances(omega, group_index)
         # Several sources with a current source among them (momwire#1295): a
         # PHASED drive, where no single scale serves and the port voltages
         # have to be solved for.  Its own path, so the single-source and
@@ -2824,6 +2857,10 @@ def _operator_key(deck: PortalDeck) -> tuple:
         # key deliberately excludes (see the ``GD`` paragraph above).
         tuple(g.environment.ground for g in deck.groups if g is not None),
         model.loads,
+        # Which of them each group stamps (momwire#1069): a hit answers out of
+        # the CACHED model, so two decks alike but for where an `LD` sits
+        # relative to an execute card must not share an entry.
+        tuple(g.loads for g in model.groups if g is not None),
         tuple((wire, arclength) for wire, arclength, _volts in model.feeds),
         # The network cards, WHOLE — endpoints, payload and `first_group`.
         # Their endpoints cut gaps, so they move the port set and therefore
@@ -3083,9 +3120,11 @@ def _segmentation_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     return rows
 
 
-def _loading_rows(deck: PortalDeck) -> list[str]:
+def _loading_rows(cards: tuple[Card, ...]) -> list[str]:
+    """The LOADING table's rows for the ``LD`` cards in force at one execute
+    card (:attr:`ExecuteGroup.loads`, momwire#1069)."""
     rows = []
-    for card in deck.loads:
+    for card in cards:
         kind = card.i(0)
         tag, first, last = card.i(1), card.i(2), card.i(3)
         cells = [None] * 6
@@ -3638,7 +3677,7 @@ def _render_run_block(
         ]
     if group.refilled or group.refilled_partial:
         out += [_LOADING_HEADER]
-        rows = _loading_rows(deck)
+        rows = _loading_rows(group.loads)
         if rows:
             out += [*_LOADING_TABLE_HEADER, *rows]
         else:
