@@ -960,8 +960,7 @@ def _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p=None):
         _refuse_bad_members(np.repeat(uniq, sizes), zs, zps)
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
-        out[order] = _columns_sliced(
-            _nipa.near_interface_point_columns,
+        out[order] = _nipa.near_interface_point_columns(
             k_p,
             k_m,
             np.ascontiguousarray(uniq),
@@ -2061,50 +2060,6 @@ def _evaluate_fresh(
     )
 
 
-# A column twin call is one uninterruptible C++ region, and the fills hand it
-# a whole grouping (momwire#898's reason: the parallel units live inside it).
-# On invl_deck(16) x16 one call held an SG fill's thread for seconds. So the grouping
-# goes in WHOLE-COLUMN slices of about `_TWIN_SLICE_COST` each, with a poll
-# between them (momwire#1342). Whole columns because a member's value depends on
-# its column's membership (`column_batches`); the columns are independent of
-# one another, and OpenMP's static split inside a call hands each column the
-# same arithmetic whatever else is in the call, so the slices are bit-identical
-# to the one call (gated: tests/test_cancel_buried_fill_1342.py). A single
-# column longer than the slice is a slice of its own, so that is the
-# resolution floor.
-#
-# Cost in members: a column's setup is ~68 us at 4 threads, a member ~1.9 us
-# (Design E's cost lines, below), so a column weighs `_TWIN_COLUMN_COST`
-# members. 100k such units is ~0.2 s at 4 threads on the laptop.
-_TWIN_COLUMN_COST = 36
-_TWIN_SLICE_COST = 100_000
-
-
-def _columns_sliced(twin, k_p, k_m, rho_c, offsets, zs, zps, *tail):
-    """`twin(k_p, k_m, rho_c, offsets, zs, zps, *tail)` over whole-column
-    slices, polling the ambient token before each. Returns the same (n, w)
-    block. One slice when the grouping is small — then it is the plain call."""
-    n_cols = rho_c.size
-    cum = offsets + _TWIN_COLUMN_COST * np.arange(n_cols + 1, dtype=np.intp)
-    total = int(cum[-1])
-    _cancel.poll()
-    if total <= _TWIN_SLICE_COST:
-        return twin(k_p, k_m, rho_c, offsets, zs, zps, *tail)
-    targets = np.arange(_TWIN_SLICE_COST, total, _TWIN_SLICE_COST)
-    cuts = np.unique(np.concatenate(([0, n_cols], np.searchsorted(cum, targets))))
-    out = None
-    for a, b in zip(cuts[:-1].tolist(), cuts[1:].tolist()):
-        _cancel.poll()
-        lo, hi = int(offsets[a]), int(offsets[b])
-        got = twin(
-            k_p, k_m, rho_c[a:b], offsets[a : b + 1] - lo, zs[lo:hi], zps[lo:hi], *tail
-        )
-        if out is None:
-            out = np.empty((int(offsets[-1]), got.shape[1]), dtype=got.dtype)
-        out[lo:hi] = got
-    return out
-
-
 def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
     """The column twin over every row of `sub`: `_evaluate_fresh`'s exact
     path, unchanged by the plane sheets (it is their bit-identical
@@ -2132,8 +2087,7 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
     # numbers: the twin refuses the same set (before it builds a single
     # column), but from C++ it cannot spell the values.
     _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-    vals = _columns_sliced(
-        _nia.near_interface_six_columns,
+    vals = _nia.near_interface_six_columns(
         k_p,
         k_m,
         rho_c,
@@ -2833,11 +2787,6 @@ _SHEET_FAMILIES = {
 }
 
 
-# Rows a sheet's interpolation entry is handed per call (`PlaneSheet.interpolate`):
-# ~0.2 us a row at 4 threads, so ~0.1 s.
-_INTERP_SLICE = 500_000
-
-
 class PlaneSheet:
     """The six kernels on one plane z' = zp < 0, tabulated over the above
     half-plane (rho, s = z - z' >= d) as far as asked (grown on demand by
@@ -2968,8 +2917,7 @@ class PlaneSheet:
             zq = np.full(s_all.size, self.zp)
         twin = getattr(globals()[self._twin_mod], self._twin_name)
         vals = np.asarray(
-            _columns_sliced(
-                twin,
+            twin(
                 self.k_p,
                 self.k_m,
                 rho_c,
@@ -3041,26 +2989,21 @@ class PlaneSheet:
         """out[idx] = the family's kernels at rows sub[idx], all on this
         sheet (`out` is (m, width))."""
         rho_edges, s_edges, cell_off, vals = self.arrays()
-        # In slices of `_INTERP_SLICE` rows, polling between them (momwire#
-        # 1342): one call in an SG invl_deck(16) x16 fill held the thread 5 s. A
-        # row's value is a function of the row alone, so a slice cannot move it.
-        for i0 in range(0, max(1, idx.size), _INTERP_SLICE):
-            _cancel.poll()
-            _nia.near_interface_grid_sheet(
-                sub,
-                idx[i0 : i0 + _INTERP_SLICE],
-                self.zp,
-                self.height,
-                rho_edges,
-                s_edges,
-                cell_off,
-                self.x,
-                self.bw,
-                vals,
-                out,
-                _physical_cpu_count(),
-                self._rpow_arr,
-            )
+        _nia.near_interface_grid_sheet(
+            sub,
+            idx,
+            self.zp,
+            self.height,
+            rho_edges,
+            s_edges,
+            cell_off,
+            self.x,
+            self.bw,
+            vals,
+            out,
+            _physical_cpu_count(),
+            self._rpow_arr,
+        )
 
 
 def _plane_sheet(
@@ -3256,8 +3199,7 @@ def _designed_tables_reference(
                 # numbers: the twin refuses the same set (before it builds a
                 # single column), but from C++ it cannot spell the values.
                 _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-                vals = _columns_sliced(
-                    _nia.near_interface_six_columns,
+                vals = _nia.near_interface_six_columns(
                     k_p,
                     k_m,
                     rho_c,
