@@ -99,8 +99,8 @@ def _count_column_calls(monkeypatch, on_call=None):
         def __getattr__(self, name):
             return getattr(real, name)
 
-        def near_interface_six_columns(self, *a):
-            out = real.near_interface_six_columns(*a)
+        def near_interface_six_columns(self, *a, **kw):
+            out = real.near_interface_six_columns(*a, **kw)
             calls[0] += 1
             if on_call is not None:
                 on_call()

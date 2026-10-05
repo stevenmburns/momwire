@@ -113,9 +113,10 @@ _KERNELS = {
 @pytest.mark.parametrize("name", list(_KERNELS))
 def test_a_kernel_raises_on_a_tripped_flag_and_an_untripped_one_moves_no_bit(name):
     run = _KERNELS[name]
-    _same(run(0), run(CancelToken().ptr))
+    live, tripped = CancelToken(), _tripped()  # held: a flag is an address
+    _same(run(0), run(live.ptr))
     with pytest.raises(SolveAborted):
-        run(_tripped().ptr)
+        run(tripped.ptr)
 
 
 def test_the_column_twin_raises_on_a_tripped_flag_and_an_untripped_one_moves_no_bit():
@@ -133,11 +134,11 @@ def test_the_column_twin_raises_on_a_tripped_flag_and_an_untripped_one_moves_no_
 
 def test_row_groups_tripped_between_calls_does_no_work_of_the_second():
     g = acc.RowGroups()
-    first = _cols(seed=4)
-    g.add(first, cancel_flag=CancelToken().ptr)
+    live, tripped = CancelToken(), _tripped()  # held: a flag is an address
+    g.add(_cols(seed=4), cancel_flag=live.ptr)
     before = (len(g), g.rows().copy())
     with pytest.raises(SolveAborted):
-        g.add(_cols(seed=5), cancel_flag=_tripped().ptr)
+        g.add(_cols(seed=5), cancel_flag=tripped.ptr)
     assert len(g) == before[0]
     assert np.array_equal(g.rows(), before[1])
 
