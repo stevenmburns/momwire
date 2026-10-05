@@ -1349,6 +1349,11 @@ def grid_cpp_args(grid):
     return args
 
 
+# The accelerated projection's AVX2 lanes (perf item 9): bit-identical to its
+# per-pair loop, which `False` selects (tests/test_somm_proj_lanes_1290.py).
+_PROJ_LANES = True
+
+
 def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=0):
     """Projected smooth-remainder field table t_m · F(r_m, r_n) · t_n.
 
@@ -1383,6 +1388,7 @@ def remainder_field_proj(obs, t_obs, src, t_src, ground_z, k, grid, cancel_flag=
             float(k),
             *grid_cpp_args(grid),
             int(cancel_flag),
+            lanes=_PROJ_LANES,
         )
 
     th_src = np.hypot(t_src[:, 0], t_src[:, 1])
