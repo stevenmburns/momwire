@@ -4821,6 +4821,76 @@ assemble_Z_sinusoidal_windowed(
     MW_THROW_IF_ABORTED();
 }
 
+// Field-form pair moments from a projected field table (momwire#1354): the
+// sinusoidal fill's remainder blocks need `Jf[p, P, i, j] = sum_{q, r}
+// W_obs[p, i, q] . F[i q, j r] . W_src[P, j, r]` with COMPLEX shape weights
+// (the shapes are complex in the medium), which `assemble_field_galerkin`'s
+// real tables cannot carry. This is that double sum alone, (3, 3, n_obs,
+// n_src); the basis assembly is `assemble_Z_sinusoidal_windowed`'s with the
+// tangent dot already inside F.
+static py::array_t<std::complex<double>>
+field_pair_moments_sinusoidal(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> F,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> W_obs,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> W_src
+) {
+    static constexpr int NM = 3;
+    auto Fv = F.unchecked<2>();
+    auto Wo = W_obs.unchecked<3>();
+    auto Ws = W_src.unchecked<3>();
+    if (Wo.shape(0) != NM || Ws.shape(0) != NM) throw std::runtime_error("W must be (3, n, q)");
+    const size_t n_obs = (size_t)Wo.shape(1), n_src = (size_t)Ws.shape(1), q = (size_t)Wo.shape(2);
+    if ((size_t)Ws.shape(2) != q) throw std::runtime_error("W_obs and W_src must share q");
+    if ((size_t)Fv.shape(0) != n_obs * q || (size_t)Fv.shape(1) != n_src * q)
+        throw std::runtime_error("F must be (n_obs q, n_src q)");
+    py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, n_obs, n_src});
+    auto jv = J.mutable_unchecked<4>();
+    // Split tables: explicit (re, im) arithmetic, see the moment kernel.
+    std::vector<double> wo_re(n_obs * q * NM), wo_im(n_obs * q * NM), ws_re(n_src * q * NM), ws_im(n_src * q * NM);
+    for (size_t i = 0; i < n_obs; i++)
+        for (size_t a = 0; a < q; a++)
+            for (int p = 0; p < NM; p++) {
+                wo_re[(i * q + a) * NM + p] = Wo(p, i, a).real();
+                wo_im[(i * q + a) * NM + p] = Wo(p, i, a).imag();
+            }
+    for (size_t j = 0; j < n_src; j++)
+        for (size_t b = 0; b < q; b++)
+            for (int P = 0; P < NM; P++) {
+                ws_re[(j * q + b) * NM + P] = Ws(P, j, b).real();
+                ws_im[(j * q + b) * NM + P] = Ws(P, j, b).imag();
+            }
+    const double *Fd = reinterpret_cast<const double *>(F.data());
+    const size_t ld = 2 * n_src * q;
+    py::gil_scoped_release release;
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t i = 0; i < n_obs; i++) {
+        for (size_t j = 0; j < n_src; j++) {
+            double acc_re[NM * NM], acc_im[NM * NM];
+            for (int x = 0; x < NM * NM; x++) { acc_re[x] = 0.0; acc_im[x] = 0.0; }
+            for (size_t a = 0; a < q; a++) {
+                double g_re[NM] = {0.0, 0.0, 0.0}, g_im[NM] = {0.0, 0.0, 0.0};
+                const double *row = Fd + (i * q + a) * ld + 2 * (j * q);
+                for (size_t b = 0; b < q; b++) {
+                    const double fr = row[2 * b], fi = row[2 * b + 1];
+                    const double *sr = &ws_re[(j * q + b) * NM], *si = &ws_im[(j * q + b) * NM];
+                    for (int P = 0; P < NM; P++) {
+                        g_re[P] += fr * sr[P] - fi * si[P];
+                        g_im[P] += fr * si[P] + fi * sr[P];
+                    }
+                }
+                const double *orr = &wo_re[(i * q + a) * NM], *oi = &wo_im[(i * q + a) * NM];
+                for (int p = 0; p < NM; p++)
+                    for (int P = 0; P < NM; P++) {
+                        acc_re[p * NM + P] += orr[p] * g_re[P] - oi[p] * g_im[P];
+                        acc_im[p * NM + P] += orr[p] * g_im[P] + oi[p] * g_re[P];
+                    }
+            }
+            for (int x = 0; x < NM * NM; x++) jv(x / NM, x % NM, i, j) = std::complex<double>(acc_re[x], acc_im[x]);
+        }
+    }
+    return J;
+}
+
 // Runtime dispatch wrapper for the batched (swept-k) off-edge kernel.
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_swept(
@@ -5981,6 +6051,10 @@ void register_bspline(py::module_ &m) {
           py::arg("c_a"), py::arg("c_phi"),
           py::arg("w_a") = py::none(), py::arg("w_phi") = py::none(),
           py::arg("Z"), py::arg("cancel_flag") = 0);
+    m.def("field_pair_moments_sinusoidal", &field_pair_moments_sinusoidal,
+          "Field-form pair moments sum_{q,r} W_obs[p,i,q] F[iq,jr] W_src[P,j,r] "
+          "with complex shape weights, (3, 3, n_obs, n_src) (momwire#1354).",
+          py::arg("F"), py::arg("W_obs"), py::arg("W_src"));
     m.def("seg_seg_full_moments_bspline_swept",
           &seg_seg_full_moments_bspline_swept,
           "Batched (swept-k) off-edge full-kernel polynomial moments for the "
