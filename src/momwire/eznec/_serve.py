@@ -503,7 +503,7 @@ from ..deck._nec5 import (
 # per-reader, semantics once*).  This module resolves the ADDRESSING, which is
 # the dialect's own, and hands the semantics a record with its fields already
 # in NEC's order.
-from ..deck._networks import flat_network
+from ..deck._networks import flat_network, reduced_ports
 from ..deck._solver import _NATIVE_LOADING, basis_entry, construct_solver
 from ..deck.model import NetworkCard
 from ..networks import NetworkReducer
@@ -3065,23 +3065,7 @@ def _reduced_state(
     transmission lines).
     """
     reducer = _reducer_for(cards, n_sites, voltages, driven)
-    system = reducer.apply_branches(y_eff, wavelength)
-    v, j = system.solve()
-    v_applied = np.asarray(v[:n_sites], dtype=np.complex128).copy()
-    # A pinned port's voltage is a boundary condition, not a result: reading it
-    # back out of the solve only adds round-off to a number that was exact going
-    # in, and it decides the sign of a zero — which is a byte the printout shows
-    # (the portal restores its driven port voltages for the same reason,
-    # momwire#456 phase C).
-    for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
-        v_applied[port] = volts
-    i_port = y_eff @ v_applied
-    i_source = i_port.copy()
-    # At a driven port the reducer's termination branch carries antenna PLUS
-    # network, which is what the source actually delivered.
-    for index in driven:
-        i_source[index] = j[system.terminations[index][0]]
-    return v_applied, i_port, i_source
+    return reduced_ports(reducer, y_eff, wavelength, n_sites, driven)
 
 
 def _series_loads(mesh: _Mesh, y: np.ndarray, z_load: np.ndarray) -> np.ndarray:

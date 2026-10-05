@@ -72,6 +72,8 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
+
 from ..networks import TL, Admittance, Driven, Network, NetworkReducer, PortOnWire
 from .model import DeckModel, DeckWire, NetworkCard
 
@@ -292,3 +294,36 @@ def build_reducer(
         return None
     network, port_to_idx = built
     return NetworkReducer(network, port_to_idx, plan.n_ports)
+
+
+def reduced_ports(reducer, y_eff, wavelength: float, n_ports: int, driven):
+    """``(V_applied, I_structure, I_source)`` at every structure port: one
+    reducer solve over the antenna's (load-folded) admittance ``y_eff``.
+
+    Both front ends read a network deck's ports back this way and kept a copy
+    each until momwire#1336 (the portal's ``DeckSolver._composed``, the NEC-5
+    seam's ``_reduced_state``).  Three vectors, three different numbers:
+
+    * ``V_applied`` is the solve's, with every PINNED port written back from
+      its own boundary condition.  A pinned port's voltage is a BOUNDARY
+      CONDITION, not a result: the termination row says ``v_k = E``, and
+      reading ``E`` back out of the solution only adds the solve's round-off
+      to a number that was exact going in.  It also decides the SIGN OF ZERO,
+      a byte both printouts show — an ``EX`` of ``1+0j`` came back with an
+      imaginary part of ±1e-17 and printed ``0.0000E+00`` or ``-0.0000E+00``
+      by BLAS thread count (momwire#456 phase C).
+    * ``I_structure = y_eff @ V_applied``, the current INTO the structure.
+    * ``I_source`` is that everywhere except at a ``driven`` port, where it is
+      the reducer's TERMINATION-branch current: antenna plus network, which
+      is what the generator actually delivered.
+    """
+    system = reducer.apply_branches(y_eff, wavelength)
+    v, j = system.solve()
+    v_applied = np.asarray(v[:n_ports], dtype=np.complex128).copy()
+    for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
+        v_applied[port] = volts
+    i_port = y_eff @ v_applied
+    i_source = i_port.copy()
+    for port in driven:
+        i_source[port] = j[system.terminations[port][0]]
+    return v_applied, i_port, i_source

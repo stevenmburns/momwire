@@ -189,7 +189,7 @@ from ..deck import parse as parse_dialect
 # semantics live ONCE and the dialect is where a card's meaning is decided
 # (design doc ``networks-move-into-the-engine.md``); the portal supplies the
 # only thing that module cannot know, which is the antenna's admittance.
-from ..deck._networks import build_reducer, card_branches, live_cards
+from ..deck._networks import build_reducer, card_branches, live_cards, reduced_ports
 
 # Which solver families take a deck's ``LD`` lumped load as their OWN
 # construction kwarg instead of as the port-algebra stamp every other family
@@ -2122,30 +2122,12 @@ class DeckSolver:
             ).T
         else:
             y_eff = y
-        system = reducer.apply_branches(y_eff, wavelength)
-        v, j = system.solve()
-        v_applied = np.asarray(v[:n], dtype=np.complex128).copy()
-        # A pinned port's voltage is a BOUNDARY CONDITION, not a result: the
-        # termination row the reducer stamped for it says v_k = E, and reading
-        # E back out of the solution vector only adds the solve's round-off to
-        # a number that was exact going in. Restoring it is not a floor and
-        # loses no information — but it does decide the SIGN OF ZERO, and that
-        # is a byte the printout shows: an EX of 1+0j came back with an
-        # imaginary part of ±1e-17 and printed `0.0000E+00` or `-0.0000E+00`
-        # depending on the BLAS thread count, which reddened the served ==
-        # stock oracle in one run out of six (measured, momwire#456 phase C;
-        # the same defect class as momwire#403's pattern dust and #464's near
-        # field, and the same rule — never print the angle of zero).
-        for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
-            v_applied[port] = volts
-        i_port = y_eff @ v_applied
-        # Everywhere but a driven port the two are the same current; at a
-        # driven one the termination branch carries antenna PLUS network,
-        # which is what the source actually delivered.
-        i_source = i_port.copy()
-        for port, _segment, _volts in driven:
-            i_source[port] = j[system.terminations[port][0]]
-        return v_applied, i_port, i_source
+        # The read-back - pinned ports restored from their boundary
+        # condition, the source current off the termination branch - is the
+        # NEC-5 seam's too (`deck._networks.reduced_ports`, momwire#1336).
+        return reduced_ports(
+            reducer, y_eff, wavelength, n, [port for port, _seg, _v in driven]
+        )
 
     def _phased_drive(self, group_index, y, z_load, wavelength, driven):
         """``(reducer, (V_gap, V_applied, I_port, I_source), driven)`` for a
