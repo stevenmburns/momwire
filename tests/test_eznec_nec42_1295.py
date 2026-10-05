@@ -324,6 +324,15 @@ def _edited(capture: str, old: str, new: str) -> str:
             r"GN 3 with a 4-wire radial ground screen",
             id="gn3-screen",
         ),
+        pytest.param(
+            _edited(
+                "0232",
+                "RP 0,1,361,1000,75.,0.,0.,1.,0.",
+                "NE 2,1,1,1,1.,0.,0.,0.,0.,0.",
+            ),
+            r"NE coordinate system 2 is not one this engine's nec4 dialect reads",
+            id="ne-coordinates",
+        ),
     ],
 )
 def test_what_no_capture_writes_refuses_by_name(text, match):
@@ -337,6 +346,15 @@ def test_the_nec2_dialect_still_refuses_what_nec4_adds():
         parse(deck_text("0223"), dialect="nec2")
     with pytest.raises(DeckError, match="GN type 3 is not supported"):
         parse(deck_text("0232"), dialect="nec2")
+    # NE 1 (momwire#1352): nec2c walks a spherical grid in another order.
+    spherical = deck_text("0231").replace(
+        "RP 0,1,361,1000,75.,0.,0.,1.,0.", "NE 1,1,1,1,1.,0.,0.,0.,0.,0."
+    )
+    assert "NE 1," in spherical
+    with pytest.raises(DeckError, match=r"NE coordinate system 1 \(spherical\)"):
+        parse(spherical, dialect="nec2")
+    (request,) = [r for r in parse(spherical, dialect="nec4").requests if r]
+    assert request.coordinates == 1
 
 
 # momwire#1317: GN 2 naming a Sommerfeld-table file, the way the licensed

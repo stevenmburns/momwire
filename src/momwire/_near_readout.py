@@ -42,13 +42,13 @@ factor the solve reads at each pair; a near field built from it has no
 measurement behind it yet (momwire#550's scope note), so :func:`near_ground`
 reports it as ``refl-coef`` and the seam refuses it by name.
 
-What stays with each seam is everything a host reads: the card's grid
-convention beyond the rectangular walk, the dust floor its printout prints
+What stays with each seam is everything a host reads: the dust floor its printout prints
 under, the row layout and the refusal sentences.  The arithmetic does not.
 """
 
 from __future__ import annotations
 
+import math
 from typing import NamedTuple
 
 import numpy as np
@@ -59,6 +59,8 @@ from ._far_readout import _element_fields, _image_moments
 __all__ = [
     "NEAR_FIELD_SUBDIV",
     "NearGround",
+    "cos_sin_deg",
+    "grid_points",
     "near_field_at",
     "near_ground",
     "near_point_refusal",
@@ -145,6 +147,52 @@ def rectangular_grid(counts, origin, step) -> np.ndarray:
             for ix in range(n_x)
         ]
     )
+
+
+def grid_points(coordinates: int, counts, origin, step) -> np.ndarray:
+    """An ``NE``/``NH`` card's observation points, in METRES, in the order its
+    table prints them.
+
+    ``coordinates`` is the card's first field.  ``0`` is
+    :func:`rectangular_grid`'s walk.  ``1`` is the SPHERICAL grid: the card's
+    counts, origin and step read ``(R, θ, φ)`` — R in metres, θ from the
+    zenith and φ from +x, both in degrees — walked in the same nesting (R
+    fastest, then θ, then φ), and every sample is placed at its Cartesian
+    point.  That is all any consumer sees, because a spherical table prints
+    X, Y, Z too.  Measured on two oracles, never assumed: the NEC-5 seam's
+    linux oracle (momwire#1257, ``NR = 2, Nθ = 3, Nφ = 2``) and the licensed
+    NEC-4.2's printout of probes p11-p15 (momwire#1352, ``2, 4, 3``), which
+    print the same points in the same order.
+
+    An angle on a multiple of 90° places its zero EXACTLY
+    (:func:`cos_sin_deg`), so a horizon sample sits at z = 0 and prints
+    ``0.0000E+00``; both licensed engines print ~1e-14 of R there instead.
+    """
+    samples = rectangular_grid(counts, origin, step)
+    if coordinates == 0:
+        return samples
+    if coordinates != 1:
+        raise ValueError(f"no near-field grid for coordinate system {coordinates}")
+    points = []
+    for r, theta, phi in samples:
+        cos_t, sin_t = cos_sin_deg(float(theta))
+        cos_p, sin_p = cos_sin_deg(float(phi))
+        points.append((r * sin_t * cos_p, r * sin_t * sin_p, r * cos_t))
+    return np.array(points, dtype=float)
+
+
+def cos_sin_deg(angle_deg: float) -> tuple[float, float]:
+    """``(cos, sin)`` of an angle in degrees, exact on the four axes.
+
+    ``math.cos(math.radians(90.0))`` is 6.1e-17, not 0, and a spherical
+    grid's horizon row would otherwise sit a hair above or below the ground
+    plane it names.  Off the axes this is the ordinary library trig.
+    """
+    quarter, rest = divmod(angle_deg, 90.0)
+    if rest == 0.0:
+        return ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[int(quarter) % 4]
+    rad = math.radians(angle_deg)
+    return math.cos(rad), math.sin(rad)
 
 
 def near_field_at(points, elements, k, radius, magnetic, ground: NearGround, omega):

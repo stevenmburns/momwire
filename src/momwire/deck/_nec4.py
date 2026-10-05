@@ -73,6 +73,17 @@ captures show, and nothing else:
   deck that cannot take it falls back to the reduced kernel with an
   advisory rather than refusing.
 
+* ``NE``/``NH`` read coordinate system 1, the SPHERICAL grid, beside the
+  rectangular 0 (momwire#1352): EZNEC writes ``NE 1`` when its user enters a
+  near-field grid in spherical form.  Measured on the licensed binary as a
+  black box (probes p11-p15): the card's three counts, origins and steps are
+  ``(R, θ, φ)`` with R in metres and both angles in degrees, θ from the
+  zenith and φ from +x; R walks fastest, then θ, then φ; and the table prints
+  the Cartesian X, Y, Z of each point under the rectangular grid's own
+  headings.  That is the NEC-5 seam's ``NE 1`` exactly (momwire#1257), so the
+  two slots place their points with one function.  The nec2 dialect keeps
+  refusing it (``_Nec2Parser._near_coordinates``).
+
 Everything else the captures carry is a ``nec2`` card with the ``nec2``
 meaning: ``GW``, ``LD 4`` and ``LD 5``, ``FR 0``, ``GN -1``/``1``/``2`` (``GN 1``
 in both spellings EZNEC writes), ``TL``/``NT`` addressed by ``(tag, segment)``,
@@ -128,6 +139,18 @@ class _Nec4Parser(_Nec2Parser):
                     f"there, and no capture shows what any other value means"
                 )
         super()._geometry(card)
+
+    def _near_coordinates(self, card: Card) -> int:
+        """Rectangular (0) or SPHERICAL (1): the module docstring's ``NE 1``."""
+        coordinates = card.i(0)
+        if coordinates not in (0, 1):
+            raise DeckError(
+                f"{card.mnemonic} coordinate system {coordinates} is not one "
+                f"this engine's nec4 dialect reads; the grid is rectangular (0: "
+                f"X, Y, Z in metres) or spherical (1: R in metres, then theta "
+                f"from the zenith and phi from +x, in degrees)"
+            )
+        return coordinates
 
     def _ek(self, card: Card) -> None:
         """Ignored: NEC-4.2's ``EK`` has no effect (module docstring), so
