@@ -359,6 +359,7 @@ from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
 from . import _medium_spec, _wire_loading, _wire_spec
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
+from ._bspline_kernels import _reg_cplx_pool as _piece_pool
 from .bspline import SINGULAR_ENRICHMENT_NEVER
 from ._port_solution import PortSolution, port_impedances, refuse_undriven
 from .sinusoidal import (
@@ -478,6 +479,10 @@ _HAVE_GALERKIN_FAR_FILL_CPLX = _acc is not None and hasattr(
 # build without the flag's symbol has only the reference body.
 _SG_REAL_STAGED = True
 _HAVE_SG_REAL_STAGED = _acc is not None and hasattr(_acc, "sg_real_far_fill_calls")
+
+# The graded near cells' blocks on the shared pool when collected for the
+# banded fill (perf item 9); `False` runs them in order on this thread.
+_NEAR_THREADS = True
 
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
 # scratch inside the field kernel stays bounded regardless of model size. It
@@ -5477,8 +5482,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # `_folded_ek_delta_fields`' (P, G, n_d) quadrature, 4.9 MB per pair
         # at this rule, and 512 of those was 2.6 GB of fixed working set.
         blk = _near_block(xg.shape[0], self.n_qp_const, self.extended_kernel)
-        for p0 in range(0, mm.size, blk):
-            self._checkpoint()  # per block of near pairs
+        # Pooled (collecting for the banded fill, perf item 9), up to `live`
+        # blocks run at once. Their scratch together has to fit where the
+        # fill has room for it: the near cells are collected before any
+        # observer band exists, so a band's budget (`_band_budget_bytes`) is
+        # free then, and `live` blocks of `_NEAR_WORKSPACE_BYTES` each stay
+        # inside it — the fill's peak does not move. A deck whose band budget
+        # is under two blocks collects serially.
+        live = 1
+        if collect is not None and _NEAR_THREADS:
+            band = self._band_budget_bytes(int(ctx["N"]) + self._n_extra_cols())
+            live = max(
+                1, min(_piece_pool()._max_workers, band // _NEAR_WORKSPACE_BYTES)
+            )
+
+        def block(p0):
             p1 = min(p0 + blk, mm.size)
             mi, ni = mm[p0:p1], nn[p0:p1]
 
@@ -5527,12 +5545,52 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             w = (wg[None, :] * hh[mi][lp][:, None]) * fval  # (E, G)
 
             col = ni[lp]
+            # The block's tables ride along to the caller, which holds them
+            # until the next block exists, as the serial loop's own locals
+            # always lived: freed at the block's end instead, they leave the
+            # top of the heap free, glibc trims it, and the next block
+            # page-faults it back (measured: 5x the minor faults and +30 %
+            # on the near cells of free x32).
+            return ei, col, w, lp, Phi, (xi, obs, cm, xi_e, fval)
+
+        starts_p = range(0, mm.size, blk)
+        if collect is not None:
+            # Collecting, a block's cells are a function of its pairs alone
+            # and nothing is written, so the blocks run on the shared pool
+            # (perf item 9) and are appended in block order. Each block runs
+            # the serial loop's expressions on the same arrays — the same
+            # blocks, so numpy takes the same loop for every product
+            # (`_field_components_bcast`'s momwire#392 note).
+            # `_NEAR_THREADS = False` is the serial loop
+            # (tests/test_sg_near_threads_1290.py).
+            def cells(p0):
+                ei, col, w, lp, Phi, _tables = block(p0)
+                return ei, col, tuple(np.einsum("eg,eg->e", w, Ph[lp]) for Ph in Phi)
+
+            # The cancel poll stays on this thread, once per block before
+            # it is handed out; at most `live` blocks are in flight, and the
+            # cells come back in block order.
+            pending = collections.deque()
+            held = None
+            for p0 in starts_p:
+                self._checkpoint()  # per block of near pairs
+                if live < 2:
+                    held = block(p0)
+                    ei, col, w, lp, Phi, _tables = held
+                    collect.append(
+                        (ei, col, tuple(np.einsum("eg,eg->e", w, Ph[lp]) for Ph in Phi))
+                    )
+                    continue
+                if len(pending) >= live:
+                    collect.append(pending.popleft().result())
+                pending.append(_piece_pool().submit(cells, p0))
+            while pending:
+                collect.append(pending.popleft().result())
+            return None
+        for p0 in starts_p:
+            self._checkpoint()  # per block of near pairs
+            ei, col, w, lp, Phi, _tables = block(p0)
             row = ei
-            if collect is not None:
-                collect.append(
-                    (ei, col, tuple(np.einsum("eg,eg->e", w, Ph[lp]) for Ph in Phi))
-                )
-                continue
             if cls is not None:
                 row, col = cls.row_of_entry[ei], cls.col_of_seg[col]
             for contrib, Ph in zip((contrib_c, contrib_s, contrib_co), Phi):
