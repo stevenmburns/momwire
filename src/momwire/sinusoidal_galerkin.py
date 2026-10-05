@@ -358,7 +358,8 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _medium_spec, _sinusoidal_mp, _sommerfeld, _wire_loading, _wire_spec
+from . import _medium_spec, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
+from . import _wire_loading, _wire_spec
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from ._bspline_kernels import _reg_cplx_pool as _piece_pool
@@ -533,6 +534,12 @@ _PAIR_BLOCK = 512
 # under the extended kernel, 131 ms vs 183 ms reduced. This is the rare
 # budget that costs nothing to honour.
 _NEAR_WORKSPACE_BYTES = 1 << 23
+
+
+# Which fill `SinusoidalGalerkinSolver(fill=None)` takes (momwire#1354):
+# "direct" is the closed-form field fill, "mixed-potential" the pair-moment
+# fill on the B-spline machinery (`_assemble_Z_mp`).
+DEFAULT_FILL = "direct"
 
 
 def _near_block(nq_graded, n_qp_const, extended_kernel):
@@ -1408,7 +1415,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         feed_model="point",
         node_ports=None,
         node_gaps=None,
-        fill="direct",
+        fill=None,
         **kwargs,
     ):
         # Seen by the base's feeds=[] check (its signature never learns the
@@ -1416,6 +1423,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # needs no gap feed, same as junction ports (#172/#305).
         self._node_drive_declared = bool(node_ports or node_gaps)
         super().__init__(**kwargs)
+        fill = DEFAULT_FILL if fill is None else fill
         if fill not in ("direct", "mixed-potential"):
             raise ValueError(
                 f"fill must be 'direct' or 'mixed-potential', got {fill!r}"
@@ -4488,7 +4496,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         approximation, and this fill must not change the model under a
         quadrature change).
         """
-        if self.extended_kernel:
+        if self.extended_kernel or self.junction_ports:
+            # A junction port's column has a net inflow at its node by
+            # design, so the by-parts boundary terms do not telescope for it.
             return False
         if geom["ground_minus"].any() or geom["ground_plus"].any():
             return False
@@ -4592,7 +4602,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         (`_tested_contrib_rows`) and scattered through the source
         coefficients one observer chunk at a time.
         """
-        if not np.iscomplexobj(k) or k.imag == 0:
+        if self._active_medium is None:
             c = np.asarray(geom["seg_centers"], dtype=float)
             t = np.asarray(geom["seg_tangents"], dtype=float)
             h = np.asarray(geom["seg_h"], dtype=float)
@@ -4622,44 +4632,15 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
             return
         ctx = self._test_context(geom, seg_view, k)
-        N, nq = ctx["N"], ctx["nq"]
-        starts, w_entry = ctx["starts"], ctx["w_entry"]
-        m_of_entry, i_of_entry = ctx["m_of_entry"], ctx["i_of_entry"]
-        nnz = w_entry.shape[0]
-        n_basis = G.shape[0]
-        Ms = [
-            scipy.sparse.csc_matrix(
-                (coef, (m_of_entry, i_of_entry)), shape=(N, n_basis)
-            )
-            for coef in (ctx["sigAC"], ctx["B"], ctx["sigC"])
-        ]
-
-        def _consume(i0, i1, block):
-            m0, m1 = i0 // nq, i1 // nq
-            e0 = starts[m0]
-            e1 = nnz if m1 == N else starts[m1]
-            w = w_entry[e0:e1]
-            m_loc = m_of_entry[e0:e1] - m0
-            rows_i = i_of_entry[e0:e1]
-            # Entries of one basis summed by a sparse selector rather than
-            # `np.add.at` on whole rows, which costs a Python-level loop
-            # per row.
-            touched, local = np.unique(rows_i, return_inverse=True)
-            R = scipy.sparse.csr_matrix(
-                (np.ones(local.size), (local, np.arange(local.size))),
-                shape=(touched.size, local.size),
-            )
-            for s_blk, M in zip(block, Ms):
-                rows = self._tested_contrib_rows(
-                    w, m_loc, nq, s_blk.reshape(m1 - m0, nq, s_blk.shape[-1])
-                )
-                G[touched] += np.asarray(R @ np.asarray(rows @ M))
-
-        fg.remainder("cos-1").replay(
-            obs_centers=ctx["obs_c"],
-            obs_tangents=ctx["obs_t"],
-            consume=_consume,
-            row_group=nq,
+        self._mp_remainder_below(
+            G,
+            geom,
+            seg_view,
+            ctx,
+            fg,
+            np.ones(ctx["N"], dtype=bool),
+            self._active_medium,
+            self._active_r1_below,
         )
 
     def _assemble_Z_mp_mixed(self, geom, eta, below, medium, seg_view, ctx, plan):
@@ -4800,7 +4781,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     checkpoint=self._checkpoint,
                 )
             else:
-                self._mp_remainder_masked(G, ctx, fg, keep)
+                self._mp_remainder_below(
+                    G, geom, seg_view, ctx, fg, keep, med, plan["r1_below"]
+                )
         # The crossing pair, as `_add_crossing_blocks` adds it, then the
         # completions off.
         G[rows_x, :] += t_rows
@@ -4817,6 +4800,49 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         del comp
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view
+
+    def _mp_remainder_below(self, G, geom, seg_view, ctx, fg, keep, medium, r1_below):
+        """The below-class remainder onto G through bspline's field-form
+        assembler (`_sinusoidal_mp.remainder_Q_field`), the direct form's
+        masked replay (`_mp_remainder_masked`) when the accelerator is
+        absent. `fg` is the class's ground; `medium` its `BuriedMedium`."""
+        if not _sinusoidal_mp._HAVE_FIELD_MOMENTS:
+            self._mp_remainder_masked(G, ctx, fg, keep)
+            return
+        idx = np.nonzero(np.asarray(keep))[0].astype(np.int64)
+        c = np.asarray(geom["seg_centers"], dtype=float)[idx]
+        t = np.asarray(geom["seg_tangents"], dtype=float)[idx]
+        h = np.asarray(geom["seg_h"], dtype=float)[idx]
+        seg_l, seg_r = _sinusoidal_mp.segment_ends(c, t, h)
+        gz = float(self.ground_z)
+        grid = _sommerfeld_below.get_grid_below(
+            medium.eps_t, medium.k_p, r1_below, self.omega, mu=self.mu
+        )
+        k_p, k_m = medium.k_p, medium.k_m
+
+        def proj(o, to, s_, ts):
+            return _sommerfeld_below.remainder_field_proj_below(
+                o, to, s_, ts, gz, k_p, k_m, grid
+            )
+
+        starts, jbasis, coef, _dcoef = _sinusoidal_mp.basis_csr(seg_view, k_m)
+        _sinusoidal_mp.remainder_Q_field(
+            G,
+            starts,
+            jbasis,
+            coef,
+            seg_l,
+            seg_r,
+            t,
+            h,
+            idx,
+            k_m,
+            self.n_qp_sommerfeld,
+            proj,
+            scale=_sinusoidal_mp.REMAINDER_SIGN,
+            cancel_flag=self._cancel_flag,
+            checkpoint=self._checkpoint,
+        )
 
     def _mp_remainder_masked(self, G, ctx, fg, keep):
         """The below-class remainder onto G: `fg`'s evaluator (prepared over

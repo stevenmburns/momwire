@@ -370,35 +370,60 @@ def near_pair_moments(
         return ii, jj, J
     sl_i, sr_i = segment_ends(c_i, t_i, h_i)
     sl_j, sr_j = segment_ends(c_j, t_j, h_j)
-    for idx in np.nonzero(rest)[0]:
-        i, j = ii[idx], jj[idx]
-        if touching[idx]:
-            eps_i = np.sqrt(a2_row[i]) / h_i[i]
-            eps_j = np.sqrt(a2_row[i]) / h_j[j]
-            ti, wi = graded_endpoint_rule01(eps_i, GRADED_N_PER_PANEL, end_i[idx])
-            tj, wj = graded_endpoint_rule01(eps_j, GRADED_N_PER_PANEL, end_j[idx])
-            J[:, :, idx] = _pair_moment_two_rules(
-                sl_i[i], sr_i[i], sl_j[j], sr_j[j], a2_row[i], k, ti, wi, tj, wj
+    # Touching pairs share a rule whenever their (shared end, a/h) agree, so
+    # they are integrated in batches; the rest take one product rule.
+    t01, w01 = _gl01(NEAR_N_QP)
+    rest_idx = np.nonzero(rest)[0]
+    eps_i = np.sqrt(a2_row[ii[rest_idx]]) / h_i[ii[rest_idx]]
+    eps_j = np.sqrt(a2_row[ii[rest_idx]]) / h_j[jj[rest_idx]]
+    keys = {}
+    for n, idx in enumerate(rest_idx):
+        key = (
+            (
+                int(end_i[idx]),
+                int(end_j[idx]),
+                round(float(eps_i[n]), 12),
+                round(float(eps_j[n]), 12),
             )
+            if touching[idx]
+            else None
+        )
+        keys.setdefault(key, []).append(idx)
+    for key, group in keys.items():
+        group = np.asarray(group)
+        if key is None:
+            ti, wi = tj, wj = t01, w01
         else:
-            t01, w01 = _gl01(NEAR_N_QP)
-            J[:, :, idx] = _pair_moment_two_rules(
-                sl_i[i], sr_i[i], sl_j[j], sr_j[j], a2_row[i], k, t01, w01, t01, w01
-            )
+            ti, wi = graded_endpoint_rule01(key[2], GRADED_N_PER_PANEL, key[0])
+            tj, wj = graded_endpoint_rule01(key[3], GRADED_N_PER_PANEL, key[1])
+        gi, gj = ii[group], jj[group]
+        J[:, :, group] = _pair_moments_two_rules_batch(
+            sl_i[gi], sr_i[gi], sl_j[gj], sr_j[gj], a2_row[gi], k, ti, wi, tj, wj
+        )
     return ii, jj, J
 
 
-def _pair_moment_two_rules(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj):
-    len_i = float(np.linalg.norm(r_i - l_i))
-    len_j = float(np.linalg.norm(r_j - l_j))
-    pos_i = (1 - ti)[:, None] * l_i[None, :] + ti[:, None] * r_i[None, :]
-    pos_j = (1 - tj)[:, None] * l_j[None, :] + tj[:, None] * r_j[None, :]
-    ws_i = (wi * len_i)[None, :] * shape_values(k, (ti - 0.5) * len_i)
-    ws_j = (wj * len_j)[None, :] * shape_values(k, (tj - 0.5) * len_j)
-    diff = pos_i[:, None, :] - pos_j[None, :, :]
-    R = np.sqrt((diff * diff).sum(-1) + a2)
-    G = np.exp(-1j * k * R) / (4 * np.pi * R)
-    return np.einsum("pq,qr,Pr->pP", ws_i, G, ws_j)
+def _pair_moments_two_rules_batch(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj):
+    """Product-rule moments of a batch of pairs sharing the two rules:
+    (3, 3, n_pairs)."""
+    len_i = np.linalg.norm(r_i - l_i, axis=1)
+    len_j = np.linalg.norm(r_j - l_j, axis=1)
+    pos_i = (1 - ti)[None, :, None] * l_i[:, None, :] + ti[None, :, None] * r_i[
+        :, None, :
+    ]
+    pos_j = (1 - tj)[None, :, None] * l_j[:, None, :] + tj[None, :, None] * r_j[
+        :, None, :
+    ]
+    ws_i = (wi[None, :] * len_i[:, None])[None] * shape_values(
+        k, (ti[None, :] - 0.5) * len_i[:, None]
+    )  # (3, n, qi)
+    ws_j = (wj[None, :] * len_j[:, None])[None] * shape_values(
+        k, (tj[None, :] - 0.5) * len_j[:, None]
+    )
+    diff = pos_i[:, :, None, :] - pos_j[:, None, :, :]
+    R = np.sqrt((diff * diff).sum(-1) + np.asarray(a2)[:, None, None])
+    G = np.exp(-1j * k * R) / (4 * np.pi * R)  # (n, qi, qj)
+    return np.einsum("pnq,nqr,Pnr->pPn", ws_i, G, ws_j)
 
 
 # ----------------------------------------------------------------------
@@ -918,3 +943,93 @@ def remainder_Q_above(
     eJ = starts[J][pair] + local % nJ[pair]
     val = np.einsum("ep,epP,eP->e", coef[eI], dJ[pair], coef[eJ])
     np.add.at(G, (jbasis[eI], jbasis[eJ]), scale * val)
+
+
+# ----------------------------------------------------------------------
+# The field-form remainder blocks (below the plane) on `assemble_field_galerkin`
+# ----------------------------------------------------------------------
+
+_HAVE_FIELD_MOMENTS = _acc is not None and hasattr(
+    _acc, "field_pair_moments_sinusoidal"
+)
+
+
+def field_pair_moments(F, W_obs, W_src):
+    """`Jf[p, P, i, j] = sum_{q, r} W_obs[p, i, q] F[i q, j r] W_src[P, j, r]`,
+    the field-form pair moments of a projected table (3, 3, n_obs, n_src);
+    C++ when built, einsum otherwise."""
+    if _HAVE_FIELD_MOMENTS:
+        return _acc.field_pair_moments_sinusoidal(
+            np.ascontiguousarray(F, dtype=np.complex128),
+            np.ascontiguousarray(W_obs, dtype=np.complex128),
+            np.ascontiguousarray(W_src, dtype=np.complex128),
+        )
+    n_obs, q = W_obs.shape[1], W_obs.shape[2]
+    n_src = W_src.shape[1]
+    fq = np.asarray(F).reshape(n_obs, q, n_src, q)
+    return np.einsum("piq,iqjr,Pjr->pPij", W_obs, fq, W_src, optimize=True)
+
+
+def remainder_Q_field(
+    G,
+    starts,
+    jbasis,
+    coef,
+    seg_l,
+    seg_r,
+    tang,
+    h,
+    segs,
+    k,
+    q,
+    proj_fn,
+    *,
+    scale,
+    cancel_flag=0,
+    checkpoint=None,
+):
+    """Accumulate `scale` times the field-form block
+    Q[i, j] = int int f_i f_j t_i . F(r, r') . t_j over the segments `segs`
+    (global ids; `seg_l` .. `h` are the class's own arrays in that order)
+    into G: bspline's below/below remainder route — `proj_fn(obs, t_obs,
+    src, t_src)` its projected field table at `q` Gauss nodes a segment, one
+    observer chunk at a time — with the pair moments taken against the
+    (complex) shape weights and assembled through the fill's own windowed
+    assembler, the tangent dot already inside F."""
+    from . import _below_interface
+
+    segs = np.asarray(segs, dtype=np.int64)
+    nodes, t_nodes, u_phys, w_node = _below_interface.field_nodes(
+        np.asarray(seg_l, float),
+        np.asarray(seg_r, float),
+        np.asarray(tang, float),
+        np.asarray(h, float),
+        int(q),
+    )
+    S = shape_values(k, u_phys - 0.5 * np.asarray(h, float)[:, None])  # (3, n, q)
+    W = np.ascontiguousarray(w_node[None] * S, dtype=np.complex128)
+    unit = np.zeros((segs.size, 3))
+    unit[:, 0] = 1.0  # F carries the tangent projection: td = 1
+    zero_d = np.zeros_like(np.asarray(coef))
+    n_src = segs.size
+    chunk = max(1, (1 << 19) // max(n_src * q * q, 1))
+    for i0 in range(0, segs.size, chunk):
+        if checkpoint is not None:
+            checkpoint()
+        i1 = min(i0 + chunk, segs.size)
+        proj = proj_fn(nodes[i0 * q : i1 * q], t_nodes[i0 * q : i1 * q], nodes, t_nodes)
+        J = field_pair_moments(proj, W[:, i0:i1], W)
+        assemble_window(
+            G,
+            J,
+            segs[i0:i1],
+            segs,
+            starts,
+            jbasis,
+            coef,
+            zero_d,
+            unit[i0:i1],
+            unit,
+            scale,
+            0.0,
+        )
