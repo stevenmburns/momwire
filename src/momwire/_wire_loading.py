@@ -286,11 +286,13 @@ class DistributedRLC:
     is Ohm/m like the rest of the triple.
 
     THAT LAST UNIT IS NOT WHAT NEC'S ``LD 2``/``LD 3`` CAPACITANCE FIELD
-    MEANS, which is why both dialect readers refuse a nonzero one rather
-    than converting it — see :meth:`momwire.deck._nec2._Nec2Parser._ld23`.
-    The seam serves the general triple because a per-metre series
-    capacitance is a well-defined distributed quantity; it is NEC's CARD
-    that is not.
+    MEANS: NEC scales that field BY the segment length, so the ``nec2``
+    dialect converts it with the deck's own segment length, C' * d**2
+    (momwire#1091, :meth:`momwire.deck._nec2._Nec2Parser._ld23`), and the
+    ``nec4`` and ``nec5`` readers, whose engines were not measured on it,
+    refuse a nonzero one.  The seam serves the general triple because a
+    per-metre series capacitance is a well-defined distributed quantity;
+    it is NEC's CARD that is not.
     """
 
     kind: str

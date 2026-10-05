@@ -16,7 +16,7 @@ arclengths and ports and has never heard of a tag.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 
 from ._cards import Card, DeckError, parse_card
@@ -628,53 +628,50 @@ class _Nec2Parser:
         :meth:`_cell_rule` so a GX/GR cell address widens the way every other
         LD card's does.
 
-        **The CAPACITANCE field refuses.**  Measured 2026-09-16 on nec2c and
-        on our licensed NEC-5 materials, on a 1 m wire at 30 MHz at 4, 8 and
-        16 segments: the resistance and inductance fields are genuinely per
-        unit length — a segment of length d gets R'd and jw L' d, and the
-        answer converges as the mesh refines — but the capacitance field is
-        scaled BY the segment length rather than divided by it.  ``LD 2``
-        with C' alone reproduces ``LD 0`` with a LUMPED C = C'*d on the same
-        range, to every printed digit on nec2c; so the card's contribution to
-        the wire's per-metre impedance is 1/(jw C' d^2), which is a property
-        of the DECK'S SEGMENTATION rather than of the wire.
+        **The CAPACITANCE field is folded with the segment length**
+        (momwire#1091).  Measured 2026-09-16 on nec2c and on our licensed
+        NEC-5 materials, on a 1 m wire at 30 MHz at 4, 8 and 16 segments: the
+        resistance and inductance fields are genuinely per unit length — a
+        segment of length d gets R'd and jw L'd, and the answer converges as
+        the mesh refines — but the capacitance field is scaled BY the segment
+        length rather than divided by it.  ``LD 2`` with C' alone reproduces
+        ``LD 0`` with a LUMPED C = C'*d on the same range, to every printed
+        digit on nec2c; so the card's contribution to the wire's per-metre
+        impedance is 1/(jw C' d^2), a property of the DECK'S SEGMENTATION
+        rather than of the wire, and it grows without bound as the deck is
+        re-segmented.  That is NEC's answer, so it is this dialect's:
+        :meth:`_material_for` folds the field into a per-metre series
+        capacitance C'*d^2 [F*m] with each wire's own d, which the seam's
+        ``DistributedRLC.c`` already takes.
 
-        That number cannot be folded into this seam honestly.  ``z_wire`` is
-        formulation-independent on purpose — four different testing schemes
-        integrate it, and only a point-matched one would reproduce NEC's
-        chain-of-lumped-capacitors from a per-metre value — so a capacitance
-        laundered through it would come out as a basis artifact rather than
-        as the deck's physics.  Refusing costs nothing observed: the two
-        ``LD 2`` cards antennaknobs emits (the jacket's equivalent-radius
-        pair, its issue #1523) write ``0.`` in this field, and no deck in
-        either repo's corpus carries a nonzero one.
+        Measured against nec2c 1.3.1 (2026-10-04, a 5 m dipole of 1 mm wire
+        at 30 MHz, 5/9/17/33 segments): with ``LD 2`` C' = 1e-9 the card
+        moves X by -13.8 / -44.8 / -153.7 / -495.9 ohm on nec2c, and the fold
+        lands within 0.07-0.22 ohm of nec2c's whole Z on the point-matched
+        sinusoidal basis and within 0.5-3.3 ohm (0.7 % of the card's own
+        effect at 33 segments) on bspline.  ``LD 3`` R' = 100, C' = 1e-11
+        lands within 0.21 ohm on sinusoidal and 1.8-5.4 ohm on bspline.  The
+        sinusoidal row is NEC-2's own basis and agrees to its bare-deck gap;
+        bspline's extra is its usual basis difference, larger here because a
+        capacitor per segment concentrates the load at the segment scale.
         """
         r, l, c = card.f(4), card.f(5), card.f(6)  # noqa: E741 — NEC's field name
-        if c != 0.0:
-            raise DeckError(
-                f"LD {ldtyp} asks for a capacitance of {c:g} in its per-unit-"
-                f"length RLC, which this engine does not serve: NEC scales that "
-                f"field BY the segment length rather than per unit length (an "
-                f"LD {ldtyp} with C alone reproduces a LUMPED C x segment-length "
-                f"on nec2c and on our licensed NEC-5 materials), so the wire's "
-                f"per-metre impedance would carry a 1/(jw C d^2) term that "
-                f"changes when the deck is re-segmented — the resistance and "
-                f"inductance fields ARE per unit length and are served "
-                f"(momwire#1088)"
+        if r < 0.0 or l < 0.0 or c < 0.0:
+            name = (
+                "resistance" if r < 0.0 else "inductance" if l < 0.0 else "capacitance"
             )
-        if r < 0.0 or l < 0.0:
             raise DeckError(
-                f"LD {ldtyp} asks for a negative per-unit-length "
-                f"{'resistance' if r < 0.0 else 'inductance'} "
-                f"({r:g}, {l:g}); a passive distributed loading is "
+                f"LD {ldtyp} asks for a negative per-unit-length {name} "
+                f"({r:g}, {l:g}, {c:g}); a passive distributed loading is "
                 f"non-negative and this engine refuses it at the card"
             )
-        if r == 0.0 and l == 0.0:
+        if r == 0.0 and l == 0.0 and c == 0.0:
             # The same no-op rule `_load_spec` applies to a zero-valued
             # lumped card: a deck byte-identical to omitting the card is
             # not refused for a range rule it never trips.
             return
-        spec = DistributedRLC("series" if ldtyp == 2 else "parallel", r=r, l=l)
+        # `c` is the card's RAW field here, folded per wire at model time.
+        spec = DistributedRLC("series" if ldtyp == 2 else "parallel", r=r, l=l, c=c)
         if tag == 0 and first == 0:
             self._global_distributed = spec
             return
@@ -1157,6 +1154,14 @@ class _Nec2Parser:
         conductivity = dict(wire_conductivity).get(wire, global_conductivity)
         insulation = self._wire_insulation.get(wire)
         distributed = dict(wire_distributed).get(wire, global_distributed)
+        if distributed is not None and distributed.c:
+            # The card's capacitance field, folded with THIS wire's segment
+            # length (momwire#1091, `_ld23`): C'·d² farad-metres is the
+            # per-metre series capacitance whose integral over one segment
+            # is NEC's lumped C'·d.
+            piece = self.structure.wires[wire]
+            d = piece.length / piece.n_seg
+            distributed = replace(distributed, c=distributed.c * d * d)
         if conductivity is None and insulation is None and distributed is None:
             return None
         if insulation is not None:

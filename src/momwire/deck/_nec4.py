@@ -115,6 +115,20 @@ class _Nec4Parser(_Nec2Parser):
                 )
         super()._geometry(card)
 
+    def _ld(self, card: Card) -> None:
+        if card.i(0) in (2, 3) and card.f(6) != 0.0:
+            # The nec2 reading folds this field with the segment length
+            # (momwire#1091), measured on nec2c.  NEC-4.2 was not measured on
+            # it and no capture carries one, so this dialect keeps the
+            # refusal rather than assume NEC-2's scaling.
+            raise DeckError(
+                f"LD {card.i(0)} asks for a capacitance of {card.f(6):g} in its "
+                f"per-unit-length RLC, which this engine's nec4 dialect does "
+                f"not serve: NEC-2 scales that field by the segment length, and "
+                f"no NEC-4.2 run shows whether NEC-4.2 does the same"
+            )
+        super()._ld(card)
+
     def _gn(self, card: Card) -> None:
         if card.trailer is not None:
             if card.i(0) != 2:

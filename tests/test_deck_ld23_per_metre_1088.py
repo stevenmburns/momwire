@@ -189,13 +189,14 @@ def test_nec2_partial_wire_range_refuses_by_name():
     )
 
 
-def test_nec2_capacitance_field_refuses_by_name():
-    """The measurement in this module's docstring, at the card."""
-    with pytest.raises(DeckError) as exc:
-        parse_nec2(NEC2_TWO_WIRES + "LD 2 1 0 0 0. 0. 1.E-11\nXQ\nNX\n")
-    message = str(exc.value)
-    assert message.startswith("LD 2 asks for a capacitance of 1e-11")
-    assert "segment length" in message and "momwire#1088" in message
+def test_nec2_capacitance_field_is_served_since_1091():
+    """The measurement in this module's docstring, which made this field a
+    refusal here, is what momwire#1091 later served by folding it with the
+    deck's segment length; its gates live in
+    ``tests/test_deck_ld23_capacitance_1091.py``.  The nec4 and nec5 readers
+    still refuse it."""
+    model = parse_nec2(NEC2_TWO_WIRES + "LD 2 1 0 0 0. 0. 1.E-11\nXQ\nNX\n")
+    assert model.wires[0].material.distributed_rlc.c > 0.0
 
 
 def test_nec2_negative_field_refuses_by_name():

@@ -913,15 +913,21 @@ once and the terms add. They take type 5's range rule: whole structure
 `Y' = 1/R' + jωC' + 1/jωL'`, with a zero element dropping out of its branch
 the way NEC reads an absent element as absent.
 
-**The capacitance field of types 2 and 3 is refused** (*added 2026-09-16,
-momwire#1088*). Measured on nec2c and on NEC-5, NEC multiplies that field
-**by** the segment length rather than dividing: `LD 2` with `C'` alone
-reproduces `LD 0` with a lumped `C' × d`, exactly, so the card's contribution
-to the wire's per-metre impedance is `1/(jωC'd²)` and grows without bound as
-the mesh refines. That is a property of the deck's segmentation, not of the
-wire, and momwire's wire loading is read by four different testing schemes —
-so the field refuses by name instead of being laundered through one of them.
-`R'` and `L'` are genuinely per unit length on both engines and are served.
+**The capacitance field of types 2 and 3 is scaled by the segment length**
+(*refused 2026-09-16, momwire#1088; served 2026-10-04, momwire#1091*).
+Measured on nec2c and on NEC-5, NEC multiplies that field **by** the segment
+length rather than dividing: `LD 2` with `C'` alone reproduces `LD 0` with a
+lumped `C' × d`, exactly. So the card's contribution to the wire's per-metre
+impedance is `1/(jωC'd²)`, and it grows without bound as the mesh refines.
+That is a property of the deck's segmentation, not of the wire, but it is
+NEC's answer. This dialect folds the field into a per-metre series
+capacitance `C' × d²`, using each wire's own segment length `d`. Against
+nec2c on a 5 m dipole at 30 MHz (5 to 33 segments), the folded deck lands
+within 0.2 Ω of nec2c on the point-matched sinusoidal basis and within
+0.5 to 5.4 Ω on bspline, where the card itself moves X by 14 to 496 Ω. The
+`nec4` dialect still refuses a nonzero field, because NEC-4.2 has not been
+measured on it. `R'` and `L'` are genuinely per unit length on both engines
+and are served as written.
 
 **Types 6 and 7** are 4nec2 extensions NEC-2 itself rejects, and are refused
 rather than echoed and dropped.
@@ -931,7 +937,6 @@ LD type <t> is not supported by this engine
 LD over <n> segments is not supported by this engine — at most 8 segments expand into per-segment loads
 LD 5 conductivity on a partial-wire segment range is not supported by this engine — per-wire conductivity covers whole wires only
 LD 2 per-unit-length loading on a partial-wire segment range is not supported by this engine — a distributed RLC is a wire property and covers whole wires only
-LD 2 asks for a capacitance of <c> in its per-unit-length RLC, which this engine does not serve: …
 LD on a segment that already carries a load is not supported by this engine — a second load on one segment is not merged
 ```
 
