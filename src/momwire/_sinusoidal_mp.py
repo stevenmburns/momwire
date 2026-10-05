@@ -46,6 +46,7 @@ takes a composite rule graded toward the shared node on both segments.
 from __future__ import annotations
 
 import numpy as np
+import scipy.sparse
 
 from . import _accel
 from ._quadrature import leggauss
@@ -210,9 +211,20 @@ def classify_pairs(c_i, t_i, h_i, c_j, t_j, h_j, *, near_ratio=NEAR_RATIO, tol=1
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
     h_i, h_j = np.asarray(h_i, float), np.asarray(h_j, float)
-    dist = np.linalg.norm(c_i[:, None, :] - c_j[None, :, :], axis=2)
-    ratio = dist / np.maximum(h_i[:, None], h_j[None, :])
-    ii, jj = np.nonzero(ratio < near_ratio)
+    # Candidates within near_ratio x the longest segment of either side by
+    # tree query, then the exact per-pair ratio.
+    from scipy.spatial import cKDTree
+
+    reach = near_ratio * max(float(h_i.max()), float(h_j.max()))
+    hits = cKDTree(c_i).query_ball_tree(cKDTree(c_j), reach)
+    ii = np.repeat(np.arange(c_i.shape[0]), [len(x) for x in hits])
+    jj = np.fromiter((j for x in hits for j in x), dtype=np.int64, count=ii.size)
+    if ii.size:
+        dist = np.linalg.norm(c_i[ii] - c_j[jj], axis=1)
+        keep = dist < near_ratio * np.maximum(h_i[ii], h_j[jj])
+        ii, jj = ii[keep], jj[keep]
+        order = np.lexsort((jj, ii))
+        ii, jj = ii[order], jj[order]
     dot = np.einsum("ij,ij->i", t_i[ii], t_j[jj])
     parallel = np.abs(np.abs(dot) - 1.0) <= tol
     ends_i = np.stack(segment_ends(c_i, t_i, h_i), axis=1)  # (Ni, 2, 3)
@@ -528,6 +540,8 @@ def _assemble_window_numpy(
 # The direct form tests E = -jwA - grad Phi, so its G is MINUS the potential
 # form's jk eta <f, G f> + (eta / jk) <f', G f'>.
 DIRECT_SIGN = -1.0
+# The remainder enters G as `+rem` (`_fold_ground_block`: free - (c2 img - rem)).
+REMAINDER_SIGN = 1.0
 
 # Bytes of pair-moment window held at once: (3, 3, rows, N) complex128.
 WINDOW_BYTES = 256 << 20
@@ -656,3 +670,225 @@ class WindowFill:
             ],
             axis=2,
         )
+
+
+# ----------------------------------------------------------------------
+# The Sommerfeld remainder (above the plane) on the B-spline fused kernel
+# ----------------------------------------------------------------------
+
+# Taylor degree that writes the shape set as polynomials in u on one segment:
+# (k h / 2)^(D+1) / (D+1)! is 3e-18 at k h = 0.5 and 2e-13 at k h = 1.2, below
+# the graded remainder's own 1e-9 (`_remainder_graded`). Only the listed
+# grazing pairs take this route; the base fill evaluates the shapes directly.
+REMAINDER_TAYLOR_DEGREE = 12
+
+
+def remainder_shape_weights(k, h, t01, w01):
+    """`W[p, seg, q] = (h w_q) S_p(xi_q)` for the fused remainder kernel: the
+    Gauss weight on the physical arc times the shape at the node, the shape
+    hook of `BSplineSolver._Z_sommerfeld_remainder`'s `W` (there `u^p`).
+    Real at a real k, which the kernel requires."""
+    h = np.asarray(h, float)
+    xi = (t01[None, :] - 0.5) * h[:, None]  # (N, q)
+    S = shape_values(k, xi)  # (3, N, q)
+    if np.iscomplexobj(S) and np.abs(S.imag).max() != 0.0:
+        raise ValueError("remainder_shape_weights needs a real k")
+    return np.ascontiguousarray((h[:, None] * w01[None, :])[None] * S.real)
+
+
+def basis_wings(starts, jbasis, coef, width=N_SHAPES):
+    """The CSR basis as fixed-width wing tables: `(rows_basis, loc, pl)`,
+    a basis with more than `width` support entries split over several rows
+    (`rows_basis` names each row's basis), unused slots on segment 0 with a
+    zero polynomial — the B-spline `supp_seg` / `polys` convention, which is
+    how the fused remainder kernel can assemble this basis unchanged. The
+    rows' Q folds back onto the bases by `rows_basis`."""
+    starts = np.asarray(starts)
+    jbasis = np.asarray(jbasis)
+    seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
+    order = np.argsort(jbasis, kind="stable")
+    counts = np.bincount(jbasis[order])
+    n_basis = counts.size
+    n_rows_per = np.maximum((counts + width - 1) // width, 1)
+    rows_basis = np.repeat(np.arange(n_basis), n_rows_per)
+    R = rows_basis.size
+    loc = np.zeros((R, width), dtype=np.int64)
+    pl = np.zeros((R, width, N_SHAPES), dtype=np.complex128)
+    row_start = np.concatenate(([0], np.cumsum(n_rows_per)))
+    pos = np.arange(order.size) - np.repeat(np.cumsum(counts) - counts, counts)
+    row = row_start[jbasis[order]] + pos // width
+    slot = pos % width
+    loc[row, slot] = seg_of_entry[order]
+    pl[row, slot] = coef[order]
+    return rows_basis, loc, pl
+
+
+def taylor_shape_coefs(k, h, degree=REMAINDER_TAYLOR_DEGREE):
+    """`tau[p, m]` with `S_p(u - h/2) = sum_m tau[p, m] u^m` on `u in [0, h]`,
+    per segment: (3, degree + 1, n). The Taylor series of sin / cos about
+    the centre, re-expanded in u by the binomial shift."""
+    h = np.asarray(h, float)
+    D = degree
+    m = np.arange(D + 1)
+    # Series in xi: sin k xi = sum_odd (-1)^((m-1)/2) k^m xi^m / m!,
+    # cos k xi - 1 = sum_even>=2 (-1)^(m/2) k^m xi^m / m!.
+    import math
+
+    fact = np.array([math.factorial(i) for i in m], dtype=float)
+    k_pow = k**m / fact
+    s_xi = np.where(m % 2 == 1, np.where((m // 2) % 2 == 0, 1.0, -1.0), 0.0) * k_pow
+    c_xi = (
+        np.where((m % 2 == 0) & (m > 0), np.where((m // 2) % 2 == 0, 1.0, -1.0), 0.0)
+        * k_pow
+    )
+    one = np.zeros(D + 1)
+    one[0] = 1.0
+    # xi^m = (u - h/2)^m = sum_j C(m, j) u^j (-h/2)^(m-j)
+    binom = np.array(
+        [[math.comb(mm, j) if j <= mm else 0 for j in m] for mm in m], dtype=float
+    )
+    shift = (-0.5 * h)[None, None, :] ** np.maximum(m[:, None] - m[None, :], 0)[
+        :, :, None
+    ]
+    T = binom[:, :, None] * shift  # (m, j, n): xi^m -> sum_j T[m, j] u^j
+    out = np.empty((N_SHAPES, D + 1, h.size), dtype=np.result_type(k, 1.0))
+    for p, series in enumerate((one, s_xi, c_xi)):
+        out[p] = np.einsum("m,mjn->jn", series, T)
+    return out
+
+
+def remainder_Q_above(
+    G,
+    starts,
+    jbasis,
+    coef,
+    seg_l,
+    seg_r,
+    tang,
+    h,
+    gz,
+    k,
+    grid,
+    *,
+    base_q,
+    scale,
+    cancel_flag=0,
+    checkpoint=None,
+):
+    """Accumulate `scale` times the field-form remainder block
+    Q[i, j] = int int f_i f_j t_i . F(r, r') . t_j into G, the B-spline fill's
+    route on this basis: every pair at the base order through the fused C++
+    kernel (`sommerfeld_remainder_bspline_Q`, symmetric route), then the
+    grazing pairs `_quadrature.remainder_qp_pairs` lists re-integrated on
+    `_remainder_graded`'s panels — their monomial moments to
+    `REMAINDER_TAYLOR_DEGREE`, contracted with the shapes' Taylor
+    coefficients — minus the base-order moments they replace."""
+    from . import _quadrature, _remainder_graded, _sommerfeld, bspline
+
+    seg_l, seg_r = np.asarray(seg_l, float), np.asarray(seg_r, float)
+    tang, h = np.asarray(tang, float), np.asarray(h, float)
+    n_seg = seg_l.shape[0]
+    q = int(base_q)
+    t01, w01 = _gl01(q)
+    nodes = np.ascontiguousarray(
+        seg_l[:, None, :] + t01[None, :, None] * (seg_r - seg_l)[:, None, :]
+    )
+    W = remainder_shape_weights(k, h, t01, w01)
+    coef = np.asarray(coef)
+    if np.abs(coef.imag).max() != 0.0:
+        raise ValueError("remainder_Q_above needs real basis coefficients (a real k)")
+    rows_basis, loc, pl = basis_wings(starts, jbasis, coef)
+    pl = np.ascontiguousarray(pl.real)
+    tang_c = np.ascontiguousarray(tang)
+    Qr = _acc.sommerfeld_remainder_bspline_Q(
+        nodes,
+        tang_c,
+        W,
+        nodes,
+        tang_c,
+        W,
+        loc,
+        pl,
+        loc,
+        pl,
+        float(gz),
+        float(k),
+        *_sommerfeld.grid_cpp_args(grid),
+        int(cancel_flag),
+    )
+    n_basis = G.shape[0]
+    S = scipy.sparse.csr_matrix(
+        (np.ones(rows_basis.size), (rows_basis, np.arange(rows_basis.size))),
+        shape=(n_basis, rows_basis.size),
+    )
+    G += scale * np.asarray(S @ np.asarray(S @ Qr).T).T
+    del Qr
+
+    # The grazing pairs, on graded panels (momwire#1189 / #1201 as bspline
+    # lists and dilates them).
+    I, J, _Qp = _quadrature.remainder_qp_pairs(
+        nodes,
+        seg_l,
+        seg_r,
+        gz,
+        q,
+        bspline._REMAINDER_QP_CAP,
+        bspline._REMAINDER_GRADED_C,
+        edge_tol=bspline._REMAINDER_GRADED_EDGE_TOL,
+    )
+    if I.size == 0:
+        return
+    I, J = np.concatenate([I, J]), np.concatenate([J, I])
+    Qp = np.concatenate([_Qp, _Qp])
+    ptr, idx = bspline._segment_touch_lists(seg_l, seg_r)
+    k1, ii = bspline._csr_expand(ptr, idx, I)
+    I, J, Qp = bspline._pair_max(ii, J[k1], Qp[k1], n_seg)
+    k2, jj = bspline._csr_expand(ptr, idx, J)
+    I, J, Qp = bspline._pair_max(I[k2], jj, Qp[k2], n_seg)
+    D1 = REMAINDER_TAYLOR_DEGREE + 1
+    dJ_mono = _remainder_graded.pair_moments(
+        seg_l,
+        seg_r,
+        tang,
+        h,
+        I,
+        J,
+        gz,
+        k,
+        grid,
+        D1,
+        cancel_flag=cancel_flag,
+        checkpoint=checkpoint,
+    )  # (n, D1, D1): int int u^m F u'^M
+    tau = taylor_shape_coefs(k, h)  # (3, D1, n_seg)
+    dJ = np.einsum("pmn,nmM,PMn->npP", tau[:, :, I], dJ_mono, tau[:, :, J])
+    # The base-order moments these pairs were filled with.
+    obs = np.repeat(nodes[I], q, axis=1).reshape(-1, 3)  # (n, q, q) -> node pairs
+    src = np.tile(nodes[J], (1, q, 1)).reshape(-1, 3)
+    owner = np.repeat(np.arange(I.size), q * q)
+    F = _sommerfeld.remainder_field_proj_owned(
+        obs,
+        np.repeat(tang[I], q * q, axis=0),
+        src,
+        np.repeat(tang[J], q * q, axis=0),
+        owner,
+        gz,
+        k,
+        grid,
+        cancel_flag,
+    ).reshape(I.size, q, q)
+    lo = np.einsum("pnq,nqr,Pnr->npP", W[:, I, :], F, W[:, J, :])
+    dJ -= lo
+    # Scatter through the CSR entries resting on I and J: every (entry on I,
+    # entry on J) product, one `add.at` over the whole list.
+    starts = np.asarray(starts)
+    jbasis = np.asarray(jbasis)
+    cnt = np.diff(starts)
+    nI, nJ = cnt[I], cnt[J]
+    reps = nI * nJ
+    pair = np.repeat(np.arange(I.size), reps)
+    local = np.arange(pair.size) - np.repeat(np.cumsum(reps) - reps, reps)
+    eI = starts[I][pair] + local // nJ[pair]
+    eJ = starts[J][pair] + local % nJ[pair]
+    val = np.einsum("ep,epP,eP->e", coef[eI], dJ[pair], coef[eJ])
+    np.add.at(G, (jbasis[eI], jbasis[eJ]), scale * val)
