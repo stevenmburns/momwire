@@ -1305,14 +1305,27 @@ A rectangular grid of near-field E samples. `NE` is an **execute** card.
 Samples vary X fastest, then Y, then Z.
 
 Over free space and over perfect ground the near field is computed from the
-element currents and, for `"pec"`, its image. Over a **finite** ground it is
-refused: the near field of a lossy half-space is not an image, and a
-reflection coefficient is a far-field construction.
+element currents and, for `"pec"`, its image. Over the **Sommerfeld** ground
+(`GN 2`) it is `direct + C₂·image + remainder` — the image scaled by
+`C₂ = (ε̃−1)/(ε̃+1)` plus the half-space remainder evaluated at each point —
+the same composition, read off the same kind of solve, that the NEC-5 seam
+answers its finite grounds with (momwire#550, momwire#1336). Over the
+**reflection-coefficient** ground (`GN 0`) it is refused: a reflection
+coefficient is a far-field construction, and no near field has been measured
+against it.
 
 ```text
 NE coordinate system <c> (spherical) is not supported by this engine; rectangular (0) only
-NE over a finite ground is not supported by this engine (the near field of a Sommerfeld half-space is not an image)
+NE over the GN 0 reflection-coefficient ground is not supported by this engine (a reflection coefficient is a far-field construction); GN 2, the Sommerfeld ground, serves the near field
 ```
+
+Over `GN 2` three more cells refuse at solve time, each by name, because each
+needs the geometry: a grid point **below** the ground (the field in the soil is
+the transmitted one, which this composition is not); a grid point **on a wire's
+ground contact** (the field there is singular — the image cancels the contact
+charge only by `2/(1+ε̃)` — and no sampling of it converges); and any grid on a
+deck with a **buried** wire (the point evaluator serves sources above the
+interface only, momwire#524 phase 3).
 
 ## NH — near magnetic field
 
@@ -1490,7 +1503,7 @@ unrecognised NEC card '<XX>'
 | `EX` | `I1 ≠ 0` | `EX type <t> is not a voltage source; this engine drives EX 0 only` |
 | `RP` | `I1 ∉ {0, 2, 3}` | `RP mode <m> is not supported by this engine (modes 0, 2, 3 only)` |
 | `NE` / `NH` | `I1 ≠ 0` | `<M> coordinate system <c> (spherical) is not supported by this engine; rectangular (0) only` |
-| `NE` / `NH` | finite ground | `<M> over a finite ground is not supported by this engine (the near field of a Sommerfeld half-space is not an image)` |
+| `NE` / `NH` | `GN 0` ground | `<M> over the GN 0 reflection-coefficient ground is not supported by this engine (a reflection coefficient is a far-field construction); GN 2, the Sommerfeld ground, serves the near field` |
 | `GN` | `NRADL ≠ 0` on `GN 0` / `GN 2` (the only types that read it) | `GN <type> with a <n>-wire radial ground screen is not supported by this engine` |
 | `GN` | `I1 ∉ {-1, 0, 1, 2}` | `GN type <type> is not supported by this engine` |
 | `LD` | `I1 ∈ {2, 3, 6, 7}` or unknown | `LD type <t> is not supported by this engine` |

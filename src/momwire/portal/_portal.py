@@ -213,6 +213,8 @@ from ..deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 # asks whether ``Nec2Structure`` should be promoted to ``momwire.deck``'s
 # public surface anyway, which only becomes load-bearing if the portal is
 # ever a third-party consumer again.
+from ..deck._nec2 import REFUSE_NEAR_FIELD_REFL_COEF
+
 from ..deck._nec2_geometry import _SMIN, build_geometry
 
 from ..serve import Seam, run_session
@@ -238,6 +240,16 @@ from .._far_readout import (
     _image_moments as _image_moments,
     _phase_deg as _phase_deg,
     _polarisation as _polarisation,
+    average_gain,
+    pattern_fields,
+)
+from .._ground_spec import ground_touch_tol as _ground_touch_tol
+from .._near_readout import (
+    NEAR_FIELD_SUBDIV,
+    near_field_at,
+    near_ground,
+    near_point_refusal,
+    rectangular_grid,
 )
 
 # --basis choices (mirrors the CLI's MOMWIRE_BASES/VARIANTS subset that makes
@@ -672,12 +684,9 @@ _NEAR_H_TABLE_HEADER = (
 )
 _NEAR_FIELD_TIME = "    Near Field Compute Time 0"
 
-# Elements per momwire mesh segment when evaluating a near field. The far-field
-# sum needs one dipole per segment because only the radiation-zone limit
-# matters; a near field a metre from a half-metre segment does not, so each
-# segment is resampled through ``currents_at_knots(coeffs, s_array=...)`` and
-# summed as a finer chain of Hertzian elements.
-_NEAR_FIELD_SUBDIV = 8
+# Elements per momwire mesh segment when evaluating a near field: the one
+# constant every seam's near field resamples at (`momwire._near_readout`).
+_NEAR_FIELD_SUBDIV = NEAR_FIELD_SUBDIV
 
 # Reversed by issue #829 on Ward's explicit sanction (his 2026-08-08 reply):
 # refusals used to hide behind this prefix specifically to AVOID tripping
@@ -3217,28 +3226,22 @@ def _pattern_lines(
     k = 2.0 * math.pi / wavelength
     second = result.second_medium
     mid, moment, _nodes, _delta = solver.current_elements(result)
-    m_theta, m_phi = _far_moments(
+    # E = -j·ηk/(4π)·e^(-jkr)/r·M_perp, through the one pattern path both
+    # seams print (`_far_readout.pattern_fields`, momwire#1336).
+    prop = np.exp(-1j * k * rng) / rng if at_range else complex(1.0)
+    e_theta, e_phi, g_v, g_h = pattern_fields(
         mid,
         moment,
         k,
-        np.radians(thetas),
-        np.radians(phis),
+        thetas,
+        phis,
         result.ground,
         result.ground_z,
         freq_mhz * 1e6,
+        result.p_in,
         cliff=(mode, second) if mode in _CLIFF_KIND and second is not None else None,
+        prop=prop,
     )
-    # E = -j·ηk/(4π)·e^(-jkr)/r·M_perp. The gain that follows is
-    # 4π·U/P_in = ηk²/(8π·P_in)·|M|², the same normaliser the web solve and
-    # MomwireEngine.far_field use — so a pattern read out of this printout and
-    # one read off the workbench are the same number.
-    prop = np.exp(-1j * k * rng) / rng if at_range else complex(1.0)
-    e_theta = -1j * ETA0 * k / (4.0 * math.pi) * prop * m_theta
-    e_phi = -1j * ETA0 * k / (4.0 * math.pi) * prop * m_phi
-    p_in = result.p_in
-    norm = ETA0 * k * k / (8.0 * math.pi * p_in) if p_in > 0 else 0.0
-    g_v = norm * np.abs(m_theta) ** 2
-    g_h = norm * np.abs(m_phi) ** 2
     # The printed field over the amplitude FFLD returns, which is the basis
     # NEC's blank-SENSE threshold is written in.
     floor_scale = 1.0 / (wavelength * abs(prop))
@@ -3322,22 +3325,12 @@ def _far_field_ground_lines(mode: int, second: SecondMedium | None) -> list[str]
 def _average_gain_line(gain, thetas, d_theta, d_phi, n_phi) -> str:
     """``AVERAGE POWER GAIN`` over the sampled solid angle.
 
-    The quadrature is nec2c's, recovered from two fixtures: each theta sample
-    owns the solid-angle band between its half-step neighbours, CLIPPED to the
-    requested theta range, so the bands telescope to exactly
-    ``(cosθ_start - cosθ_end)·Δφ`` and the printed solid angle comes out at a
-    round ``(+4.0000)*PI`` for a full sphere and ``(+2.0000)*PI`` for a
-    hemisphere. Phi contributes ``n_phi - 1`` columns — the last sample of a
-    0..360 sweep is the first one again and must not be counted twice.
+    The quadrature is :func:`~momwire._far_readout.average_gain`'s, which
+    recovered it from two nec2c fixtures and which the NEC-5 seam shares; a
+    full sphere prints a round ``(+4.0000)*PI`` and a hemisphere
+    ``(+2.0000)*PI``.
     """
-    lo = np.radians(np.maximum(thetas - 0.5 * d_theta, thetas[0]))
-    hi = np.radians(np.minimum(thetas + 0.5 * d_theta, thetas[-1]))
-    band = np.cos(lo) - np.cos(hi)
-    columns = max(n_phi - 1, 1)
-    step = math.radians(d_phi) if d_phi else 2.0 * math.pi
-    total = float(np.sum(gain[:, :columns] * band[:, None])) * step
-    solid = float(np.sum(band)) * columns * step
-    average = total / solid if solid else 0.0
+    average, solid = average_gain(gain, thetas, d_theta, d_phi, n_phi)
     return (
         f"  AVERAGE POWER GAIN:{average:12.4E} - SOLID ANGLE USED IN AVERAGING: "
         f"({solid / math.pi:+7.4f})*PI STERADIANS"
@@ -3345,48 +3338,42 @@ def _average_gain_line(gain, thetas, d_theta, d_phi, n_phi) -> str:
 
 
 def _near_field_lines(card: Card, solver: DeckSolver, result: GroupResult) -> list[str]:
-    """The NEAR ELECTRIC / MAGNETIC FIELDS table for one ``NE``/``NH`` grid."""
+    """The NEAR ELECTRIC / MAGNETIC FIELDS table for one ``NE``/``NH`` grid.
+
+    The arithmetic is every seam's (:mod:`momwire._near_readout`,
+    momwire#1336): the element sum, plus the PEC image over a perfect ground,
+    plus ``C₂·image + remainder`` over the Sommerfeld one (``GN 2``,
+    momwire#550) — the same composition the NEC-5 seam answers its finite
+    grounds with, read off the same solve.  ``GN 0``'s reflection-coefficient
+    solve has no near-field spelling with a measurement behind it and
+    refuses by name, as do the two cells over a finite ground that no
+    composition answers (a point in the soil, a point on a wire's ground
+    contact) and a deck with a buried wire, whose sources sit in the regime
+    the point evaluator does not serve yet (momwire#524 phase 3).
+    """
     magnetic = card.mnemonic == "NH"
-    n_x, n_y, n_z = (max(card.i(k), 1) for k in (1, 2, 3))
-    start = np.array([card.f(4), card.f(5), card.f(6)])
-    step = np.array([card.f(7), card.f(8), card.f(9)])
     # NEC varies X fastest, then Y, then Z (dipole_ne_nearfield.out).
-    points = np.array(
-        [
-            start + np.array([ix, iy, iz]) * step
-            for iz in range(n_z)
-            for iy in range(n_y)
-            for ix in range(n_x)
-        ]
+    points = rectangular_grid(
+        tuple(max(card.i(k), 1) for k in (1, 2, 3)),
+        (card.f(4), card.f(5), card.f(6)),
+        (card.f(7), card.f(8), card.f(9)),
     )
-    ground = result.ground
-    if ground.kind in ("refl", "sommerfeld"):
-        raise PortalError(
-            f"{card.mnemonic} over a finite ground is not supported by this "
-            f"engine (the near field of a Sommerfeld half-space is not an image)"
-        )
+    ground = near_ground(result.solver)
+    if ground.kind == "refl-coef":
+        raise PortalError(REFUSE_NEAR_FIELD_REFL_COEF.format(card=card.mnemonic))
+    if ground.kind == "compose":
+        _refuse_finite_ground_near_field(card, solver, points, ground.ground_z)
     k = 2.0 * math.pi / result.wavelength
-    radius = solver._smallest_radius
-    mid, moment, nodes, delta = solver.current_elements(
-        result, subdiv=_NEAR_FIELD_SUBDIV
+    elements = solver.current_elements(result, subdiv=_NEAR_FIELD_SUBDIV)
+    field = near_field_at(
+        points,
+        elements,
+        k,
+        solver._smallest_radius,
+        magnetic,
+        ground,
+        result.solver.omega,
     )
-    field = _element_fields(points, (mid, moment, nodes, delta), k, radius, magnetic)
-    if ground.kind == "pec":
-        # The PEC image mirrors the current moments (horizontal components
-        # flip) and NEGATES the charge, which is the same statement: reversing
-        # a horizontal current reverses dI/ds, and mirroring a vertical one
-        # reverses the arc direction.
-        ground_z = result.ground_z
-        mid_img, moment_img = _image_moments(mid, moment, ground_z)
-        nodes_img = nodes.copy()
-        nodes_img[:, 2] = 2.0 * ground_z - nodes[:, 2]
-        field = field + _element_fields(
-            points,
-            (mid_img, moment_img, nodes_img, -delta),
-            k,
-            radius,
-            magnetic,
-        )
 
     header = _NEAR_H_HEADER if magnetic else _NEAR_E_HEADER
     table = _NEAR_H_TABLE_HEADER if magnetic else _NEAR_E_TABLE_HEADER
@@ -3418,6 +3405,45 @@ def _near_field_lines(card: Card, solver: DeckSolver, result: GroupResult) -> li
         out.append(fmt_near_field_row(point, fx, fy, fz))
     out.append(_NEAR_FIELD_TIME)
     return out
+
+
+def _refuse_finite_ground_near_field(card: Card, solver: DeckSolver, points, ground_z):
+    """Raise for a near-field grid a Sommerfeld composition cannot answer.
+
+    The cells are the NEC-5 seam's, asked through the same geometry
+    (:func:`~momwire._near_readout.near_point_refusal`); the sentences are
+    this door's own.
+    """
+    polylines = [np.array([w.p1, w.p2], dtype=float) for w in solver.wires]
+    for wire, polyline in zip(solver.wires, polylines):
+        tol = _ground_touch_tol(polyline)
+        if float(polyline[:, 2].min()) < ground_z - tol:
+            raise PortalError(
+                f"{card.mnemonic} asks for a field on a deck with a wire below the "
+                f"ground (tag {wire.tag}), and a buried deck's near field is not "
+                f"supported by this engine: the point evaluator serves sources "
+                f"above the interface only (momwire#524 phase 3). The deck's "
+                f"impedance, currents and radiation pattern are served"
+            )
+    verdict = near_point_refusal(points, polylines, ground_z)
+    if verdict is None:
+        return
+    kind, point, wire = verdict
+    where = f"({point[0]:g}, {point[1]:g}, {point[2]:g}) metres"
+    if kind == "below":
+        raise PortalError(
+            f"{card.mnemonic} asks for the field at {where}, which is below the "
+            f"finite ground; the field inside the soil is the transmitted field "
+            f"and this engine composes the field above the interface only. Every "
+            f"point at or above the ground is served"
+        )
+    raise PortalError(
+        f"{card.mnemonic} asks for the field at {where}, which is where wire "
+        f"{solver.wires[wire].tag} stands on the finite ground, and the field AT "
+        f"a wire's ground contact over a finite ground is singular (the image "
+        f"cancels the contact charge only by 2/(1+epsilon)), so no sampling of "
+        f"it converges. Every point off the contact is served"
+    )
 
 
 def _wire_arc_at_knot(solver, w_idx: int) -> np.ndarray:

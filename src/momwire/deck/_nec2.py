@@ -159,6 +159,14 @@ _NETWORK_TRANSPARENT = frozenset({"PT", "PQ", "MP"})
 # bare ground would be a wrong answer rather than a refusal.
 _RP_MODES = frozenset({0, 2, 3})
 
+# `NE`/`NH` over `GN 0` (spec `#ne--near-electric-field`). One sentence for
+# the parser and for the portal's runtime guard on the same cell.
+REFUSE_NEAR_FIELD_REFL_COEF = (
+    "{card} over the GN 0 reflection-coefficient ground is not supported by "
+    "this engine (a reflection coefficient is a far-field construction); "
+    "GN 2, the Sommerfeld ground, serves the near field"
+)
+
 
 def _directive(text: str, keyword: str) -> int | None:
     """``QQ n`` / ``FF n`` out of a comment body."""
@@ -923,16 +931,16 @@ class _Nec2Parser:
                 f"{card.mnemonic} coordinate system {card.i(0)} (spherical) is "
                 f"not supported by this engine; rectangular (0) only"
             )
-        if isinstance(self._ground, tuple):
-            # A finite ground ("finite-fast" or "finite"): the near field of
-            # a lossy half-space is not an image, and a reflection
-            # coefficient is a far-field construction. PEC and free space
-            # are fine — PEC's near field IS an image.
-            raise DeckError(
-                f"{card.mnemonic} over a finite ground is not supported by "
-                f"this engine (the near field of a Sommerfeld half-space is "
-                f"not an image)"
-            )
+        if isinstance(self._ground, tuple) and self._ground[0] == "finite-fast":
+            # GN 0's reflection-coefficient model is a far-field construction
+            # and no near field has been measured against it (momwire#550's
+            # scope note). GN 2 is served since momwire#1336: the near field
+            # over the Sommerfeld ground is the NEC-5 seam's composition,
+            # direct + C2*image + remainder, through `momwire._near_readout`.
+            # The cells a finite-ground composition cannot answer (a point in
+            # the soil, a point on a ground contact, a buried deck) need the
+            # geometry and refuse at the portal.
+            raise DeckError(REFUSE_NEAR_FIELD_REFL_COEF.format(card=card.mnemonic))
         return NearFieldRequest(
             magnetic=card.mnemonic == "NH",
             counts=(max(card.i(1), 1), max(card.i(2), 1), max(card.i(3), 1)),
