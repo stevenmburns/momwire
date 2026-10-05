@@ -153,6 +153,13 @@ def test_the_charge_table_gate_is_asked_of_the_class():
     assert not hasattr(PulseSolver, "current_slopes")
     assert hasattr(HarringtonSolver, "current_slopes")
     assert issubclass(HarringtonSolver, PulseSolver)
+    # Since momwire#1336 the seam asks the capability ROW (the declared
+    # `charge_support`) instead of `hasattr`, so the row and the method must
+    # say the same thing on every class the gate could ever see: a density
+    # at a centre exists exactly when the support is not point charges.
+    for cls in [cls for cls, _kwargs in BASES.values()] + [PulseSolver]:
+        support = set(cls.capabilities.axes.get("charge_support", ()))
+        assert bool(support - {"point"}) == hasattr(cls, "current_slopes"), cls
 
 
 @pytest.mark.integration
@@ -767,3 +774,26 @@ def test_each_basis_accepts_exactly_the_decks_the_table_names(basis):
         expected = ACCEPTS[cid][basis]
         assert expected in reason, f"{basis} refuses {cid} for a new reason: {reason}"
         assert how == ("raised" if (cid, basis) in RAISED else "refused"), cid
+
+
+def test_the_crossing_source_spelling_is_read_off_the_capability_row():
+    """momwire#1336: a series source on a crossing junction's node is a node
+    gap or a delta gap by the family's ROW — ``node_gaps`` and
+    ``junction_ports`` both, the second False exactly where one tent already
+    spans the node (razor's own refusal says so) — and no longer by an
+    ``issubclass(RazorSolver)``.  The table is what the class test answered
+    for every roster entry before the move, so the move is pinned to change
+    nothing."""
+    from momwire.eznec._serve import _crossing_spelling
+
+    assert {name: _crossing_spelling(cls) for name, (cls, _) in BASES.items()} == {
+        "bspline": "node",
+        "bspline-d1": "node",
+        "hmatrix": "node",
+        "arrayblock": "node",
+        "sinusoidal": "gap",
+        "sinusoidal-galerkin": "node",
+        "razor-2p": "gap",
+        "razor-nec5": "gap",
+        "pulse": "gap",
+    }
