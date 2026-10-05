@@ -867,6 +867,20 @@ def _synthetic_decks() -> dict[str, str]:
         "XQ\n"
     )
 
+    # momwire#1079 — which digits of RP's I4 (XNDA = X N D A) the oracle acts
+    # on. The A digit (units) decides the AVERAGE POWER GAIN line; the other
+    # digits are not honoured by the portal and are described in the
+    # deck-grammar page. 1000: no average line; 1005: any non-zero A prints
+    # it (5 reads as 1); 1002: A = 2 prints the average INSTEAD of the rows.
+    for xnda in (1000, 1005, 1002):
+        decks[f"dipole_rp_xnda_{xnda}"] = (
+            f"CE dipole, RP with XNDA {xnda}\n" + _DIPOLE_GW + "GE 0\n"
+            "EX 0 1 5 0 1.\n"
+            "FR 0 1 0 0 30. 0\n"
+            f"RP 0 5 3 {xnda} 0 0 45 45 1000\n"
+            "XQ\n"
+        )
+
     # ------------------------------------------------------------------
     # The MININEC-type ground idiom (momwire#487) — a GD in force under a
     # GN 1, which is how BOTH frontends spell "perfect ground for the

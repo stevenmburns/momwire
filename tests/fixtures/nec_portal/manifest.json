@@ -360,6 +360,27 @@
       "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
     },
     {
+      "name": "dipole_rp_xnda_1000",
+      "returncode": 253,
+      "deck_sha256": "b694f78ea43da7cf186a4697554a7d19321d9e021f0d80019603079cc542b7fb",
+      "out_sha256": "fe4f4c19600e681d0b7f86b265e2e98b1c5fa0b506644a13c081fb269119ccc3",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "dipole_rp_xnda_1002",
+      "returncode": 253,
+      "deck_sha256": "4f7874addbc8e37e16124f5e9dad1c5c620c1169d250a8b363a44fdf578bd0ea",
+      "out_sha256": "6fc16b73fcf9717ddcd1f85c952fc53e56132f373e55bfd99c10b54c0800d3fb",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
+      "name": "dipole_rp_xnda_1005",
+      "returncode": 253,
+      "deck_sha256": "0428f6f66674c8b051e29020a448afcb7de9d2b15f1d8dd2ebafdc82f0be505c",
+      "out_sha256": "e55c44c39b9f85bcc56dd37381e1302e1f8f262a0fab8aa1236032f68c30d328",
+      "stderr": "\nERROR-NEC2C: nec2c: Error reading input file - aborting\n"
+    },
+    {
       "name": "dipole_sommerfeld_ground",
       "returncode": 253,
       "deck_sha256": "f939e1cea5d46196ebfa4918e2fa7b0a5cb12ebea3b3ab3394c54ef3871080b7",

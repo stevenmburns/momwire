@@ -572,9 +572,10 @@ def test_the_support_matrix_covers_the_whole_corpus():
     # seven momwire#487 captured for the MININEC-type ground idiom and the
     # cliff-at-zero deck U2 added to them, plus the five momwire#652 captured
     # for the `PQ` charge report, plus the two momwire#1069 captured for load
-    # scoping per execute group. The count is written out so a deck that
+    # scoping per execute group, plus the three momwire#1079 captured for
+    # RP's XNDA digits. The count is written out so a deck that
     # quietly stops being measured shows up here.
-    assert len(SUPPORTED) == 67
+    assert len(SUPPORTED) == 70
 
 
 @pytest.mark.integration
@@ -844,6 +845,8 @@ PATTERN_FIXTURES = (
     "dipole_rp_pattern",
     "dipole_rp_crossed_quadrature",
     "dipole_rp_gain_only",
+    "dipole_rp_xnda_1000",
+    "dipole_rp_xnda_1005",
     "dipole_rp2_linear_cliff",
     "dipole_rp2_cliff_on_the_gn_card",
     "dipole_rp3_circular_cliff",
@@ -865,6 +868,43 @@ PATTERN_FIXTURES = (
     "mininec_vertical_rp3_ch",
     "mininec_vertical_rp3_cliff_at_zero",
 )
+
+# momwire#1079: RP's I4 (XNDA = X N D A). Measured on the oracle, 1000 prints
+# no average, 1005 prints it (any non-zero A does), 1002 prints it INSTEAD of
+# the rows. The portal honours the A digit and nothing else of XNDA.
+XNDA_FIXTURES = {
+    "dipole_rp_xnda_1000": (False, True),
+    "dipole_rp_xnda_1005": (True, True),
+    "dipole_rp_xnda_1002": (True, False),
+}
+
+
+@pytest.mark.parametrize("name", XNDA_FIXTURES)
+def test_the_xnda_a_digit_decides_the_average_line_and_the_rows(name):
+    want_average, want_rows = XNDA_FIXTURES[name]
+    oracle = (FIXTURE_DIR / f"{name}.out").read_text()
+    ours = our_printout(name)
+    for label, text in (("oracle", oracle), ("ours", ours)):
+        assert ("AVERAGE POWER GAIN" in text) == want_average, (label, name)
+        rows = read_printout(text).pattern
+        assert bool(rows and rows[0]) == want_rows, (label, name)
+    if want_average:
+
+        def avg(text):
+            line = next(ln for ln in text.splitlines() if "AVERAGE POWER GAIN" in ln)
+            return float(line.split(":")[1].split()[0])
+
+        assert abs(avg(ours) - avg(oracle)) <= 0.05 * avg(oracle)
+
+
+def test_the_grammar_page_does_not_call_xnda_ignored():
+    page = (
+        Path(__file__).resolve().parents[1]
+        / "site/src/content/docs/reference/deck-grammar-nec2.md"
+    ).read_text()
+    assert "`I4` (`XNDA`, output-format control) and `F6` (`GNOR`" not in page
+    assert "AVERAGE POWER GAIN" in page.split("`XNDA`", 1)[1][:3000]
+
 
 # The two cliff fixtures that differ by one digit of the RP card, and the
 # azimuth along which a straight edge and a circular one are the same edge.
