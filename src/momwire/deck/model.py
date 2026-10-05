@@ -446,6 +446,16 @@ class DeckModel:
     # field order for the reason :attr:`networks` gives.
     current_feeds: tuple[int, ...] = ()
 
+    # True when the extended kernel in every group is the DIALECT's default
+    # rather than something the deck asked for (momwire#1326): the ``nec4``
+    # dialect, whose engine has one thin-wire model and ignores ``EK``.  A
+    # default the basis or the deck cannot serve falls back to the reduced
+    # kernel with an advisory (`build_solver`), where a request refuses —
+    # the default is ours, not the deck's.  False for ``nec2``, whose ``EK``
+    # card is the deck's own request.  Last for the reason :attr:`networks`
+    # gives.
+    extended_kernel_default: bool = False
+
     @property
     def environment(self) -> Environment:
         """The deck's last environment, as one value.

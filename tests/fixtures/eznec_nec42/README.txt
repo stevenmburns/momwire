@@ -18,7 +18,7 @@ Pairs that are the same deck: 0223/0236 (re-captured), 0225/0226.
 
 probes/<probe>.nec
   Nine decks written for momwire#1295 phase 2 (not EZNEC captures), each to
-  show NEC-4.2's layout of a shape the captures do not carry:
+  show NEC-4.2's layout of a shape the captures do not carry, and one more:
     p1  three wires at one node (junction table, connection columns)
     p2  an FR sweep of three frequencies under one RP
     p3  series and parallel RLC loads (LD 0, LD 1)
@@ -28,6 +28,11 @@ probes/<probe>.nec
     p7  GN 2 at 7.15 MHz (the complex dielectric constant off 299.79 MHz)
     p8  two execute runs in one deck
     p9  wires above and below a GN 2 interface (GE -1)
+    p10 a fat dipole, Delta/a = 1.5, written for momwire#1326 (not a phase 2
+        probe): the deck on which the extended kernel, the nec4 slot's
+        default, lands nearest NEC-4.2.  Its printout was run 2026-10-04 on
+        the laptop by the same black-box ritual (binary invoked, nothing
+        else read), and the deck is committed as NEC-4.2 read it (LF).
 
 printouts/<capture or probe>.out
   Licensed NEC-4.2 (LLNL-CODE-491368), nec42cl-serial release 7768648, run

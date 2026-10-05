@@ -49,6 +49,7 @@ polyline arrays rather than a fresh rounding of the same walk.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from types import MappingProxyType
@@ -57,6 +58,7 @@ from typing import Any
 import numpy as np
 
 from .._constants import C_LIGHT
+from .._ground_spec import ground_touch_tol
 from ..array_block import ArrayBlockSolver
 from ..bspline import BSplineSolver
 from ..harrington import HarringtonSolver
@@ -69,6 +71,8 @@ from ._polylines import Mesh, to_polylines
 from .model import DeckModel, Environment, LoadSpec
 
 __all__ = [
+    "ExtendedKernelDefault",
+    "extended_kernel_default_refusal",
     "BuiltSolver",
     "PortPlan",
     "PortSite",
@@ -194,6 +198,66 @@ NEC2_BASES = MappingProxyType(
 # rather than keeping its own list of which bases load natively — a second
 # list is a second thing to forget when a family is added here.
 _NATIVE_LOADING = (RazorSolver,)
+
+
+class ExtendedKernelDefault(UserWarning):
+    """A dialect's default extended kernel fell back to the reduced kernel
+    (momwire#1326).
+
+    NEC-4 and NEC-5 decks solve with the extended kernel by default, because
+    both engines' thin-wire models behave as EK-on (NEC-5 has no ``EK`` card;
+    NEC-4.2 prints that its ``EK`` card has no effect).  Where the basis or
+    the deck cannot take it — a basis without the kernel, singular
+    enrichment, a wire below the ground plane, a radius step at a junction —
+    the solve uses the reduced kernel and says so with this warning, rather
+    than refusing a deck for a choice the deck never made.
+    """
+
+
+def extended_kernel_default_refusal(
+    solver_class: type,
+    basis_kwargs: Mapping[str, Any],
+    polylines: Sequence[Any],
+    radii: Sequence[float],
+    junctions: Sequence[Sequence[tuple[int, str]]],
+    ground_z: float | None,
+) -> str | None:
+    """Why ``solver_class`` cannot take the extended kernel AS A DEFAULT on
+    this geometry, in the solver's own declared words, or ``None``.
+
+    Asked before construction rather than caught from it, because two of the
+    refusals fire inside the fill (a buried wire) or not at all on some
+    families: the declaration is the one place every family states them
+    (`Capabilities.refusal`).  The same four cases antennaknobs asks of its
+    own engine (antennaknobs#1891): the basis itself, singular enrichment, a
+    wire below the ground plane, and a radius step at a junction.
+    """
+    caps = solver_class.capabilities
+    reason = caps.refusal("extended_kernel")
+    if reason is None and basis_kwargs.get("use_singular_enrichment"):
+        reason = caps.refusal("extended_kernel", "singular_enrichment")
+    if reason is None and ground_z is not None:
+        buried = any(
+            float(np.asarray(pl, dtype=float)[:, 2].min())
+            < ground_z - ground_touch_tol(np.asarray(pl, dtype=float))
+            for pl in polylines
+        )
+        if buried:
+            reason = caps.refusal("buried", "extended_kernel")
+    if reason is None and len(set(radii)) > 1:
+        if any(len({radii[w] for w, _end in members}) > 1 for members in junctions):
+            reason = caps.refusal("extended_kernel", "stepped_radius_junction")
+    return reason
+
+
+def _warn_kernel_fallback(basis: str, reason: str) -> str:
+    message = (
+        f"basis {basis!r}: this deck's dialect solves with the extended kernel "
+        f"by default, which this basis cannot serve here, so it solved with "
+        f"the reduced kernel: {reason} (momwire#1326)"
+    )
+    warnings.warn(message, ExtendedKernelDefault, stacklevel=3)
+    return message
 
 
 def basis_entry(basis: str) -> tuple[type, Mapping[str, Any]]:
@@ -525,6 +589,11 @@ class BuiltSolver:
     wavelength: float
     group: int | None
     extended_kernel: bool
+    # What the build said that is not a refusal (momwire#1326): today the one
+    # entry is the extended-kernel fallback, also raised as an
+    # `ExtendedKernelDefault` warning. Last and defaulted for the reason
+    # `PortPlan.network_ports` gives.
+    advisories: tuple[str, ...] = ()
 
 
 def _first_armed_group(model: DeckModel) -> int | None:
@@ -944,6 +1013,21 @@ def build_solver(
         node_gaps=node_gaps,
         lumped_loads=loads,
     )
+    advisories: list[str] = []
+    if extended_kernel and model.extended_kernel_default:
+        # The dialect's default, not the deck's request (momwire#1326): a
+        # basis or a deck that cannot take it falls back with an advisory.
+        reason = extended_kernel_default_refusal(
+            solver_class,
+            basis_kwargs,
+            built_mesh.polylines,
+            radii,
+            built_mesh.junctions,
+            float(environment.ground_z) if environment.ground is not None else None,
+        )
+        if reason is not None:
+            extended_kernel = False
+            advisories.append(_warn_kernel_fallback(basis, reason))
     if extended_kernel:
         kwargs["extended_kernel"] = True
 
@@ -1009,4 +1093,5 @@ def build_solver(
         wavelength=_C_LIGHT / (frequency_mhz * 1e6),
         group=group,
         extended_kernel=bool(extended_kernel),
+        advisories=tuple(advisories),
     )

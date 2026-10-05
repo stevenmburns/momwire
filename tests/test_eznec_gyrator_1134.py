@@ -149,10 +149,13 @@ def test_the_cardioid_reports_at_its_real_wires_not_at_the_phantom():
     assert [row.segment for row in rows] == [1, 7]
     assert [row.end_index for row in rows] == [1, 1]
     # ... and the numbers are the antenna's, not the reciprocal of them.
-    assert rows[0].impedance.real == pytest.approx(36.62353145, rel=1e-6)
-    assert rows[0].impedance.imag == pytest.approx(-20.05467077, rel=1e-6)
-    assert rows[1].impedance.real == pytest.approx(69.07445964, rel=1e-6)
-    assert rows[1].impedance.imag == pytest.approx(21.15496860, rel=1e-6)
+    # The extended kernel since momwire#1326 (this dialect's default): the
+    # reduced kernel read 36.62353145 - j20.05467077 and 69.07445964 +
+    # j21.15496860.
+    assert rows[0].impedance.real == pytest.approx(36.62352000, rel=1e-6)
+    assert rows[0].impedance.imag == pytest.approx(-20.04869776, rel=1e-6)
+    assert rows[1].impedance.real == pytest.approx(69.07362200, rel=1e-6)
+    assert rows[1].impedance.imag == pytest.approx(21.16060959, rel=1e-6)
 
 
 def test_the_gyrator_row_is_the_connection_point_the_solve_already_carried():
