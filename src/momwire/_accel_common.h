@@ -176,3 +176,13 @@ struct AbortedError : std::exception {
 
 #define MW_THROW_IF_ABORTED()                                               \
     if (pysim_aborted.load(std::memory_order_relaxed)) throw AbortedError {}
+
+// The serial twin: a single-threaded loop has no parallel region to drain,
+// so it throws at the poll itself. One volatile load per poll; place it at a
+// unit of work (a row, a block), not in an innermost loop.
+#define MW_CANCEL_SERIAL_SETUP(flag_addr)                                   \
+    const volatile int32_t *pysim_cancel =                                     \
+        reinterpret_cast<const volatile int32_t *>(flag_addr)
+
+#define MW_CANCEL_SERIAL_POLL()                                             \
+    if (pysim_cancel && *pysim_cancel) throw AbortedError {}

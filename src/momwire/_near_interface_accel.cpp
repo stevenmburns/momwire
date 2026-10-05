@@ -125,6 +125,34 @@ extern "C" double sin(double);
 
 #include "_near_interface_columns_inline.h"
 
+// Cooperative cancellation (momwire#1348 scope), the `_accel_common.h`
+// convention spelled locally: this companion does not include that header,
+// and its exception is its OWN type, registered on this module, so no
+// C++ type has to be matched across two shared objects. `_accel` remaps
+// this module's `AcceleratorAborted` to `momwire.SolveAborted` exactly as it
+// does `_accelerators`'. `cancel_flag` is a CancelToken's raw int32 address
+// (0 = none), read with a volatile load per work item; inside a parallel
+// region the drain pattern (no exception may cross an omp boundary).
+#include <atomic>
+namespace {
+struct NiAborted : std::exception {
+    const char *what() const noexcept override { return "accelerator solve aborted"; }
+};
+}  // namespace
+#define NI_CANCEL_SETUP(flag_addr)                                          \
+    const volatile int32_t *ni_cancel =                                        \
+        reinterpret_cast<const volatile int32_t *>(flag_addr);                 \
+    std::atomic<bool> ni_aborted { false }
+#define NI_CANCEL_POLL()                                                    \
+    if (ni_aborted.load(std::memory_order_relaxed)) continue;                  \
+    if (ni_cancel && *ni_cancel) {                                             \
+        ni_aborted.store(true, std::memory_order_relaxed);                     \
+        continue;                                                              \
+    }
+#define NI_THROW_IF_ABORTED()                                               \
+    if (ni_aborted.load(std::memory_order_relaxed) || (ni_cancel && *ni_cancel)) \
+        throw NiAborted {}
+
 // `six_point` over parallel (rho, z, zp) arrays: the (n, 6) table, OpenMP
 // across points with the GIL released. The wavenumbers arrive DERIVED
 // (k_p real, k_m complex on the Im <= 0 branch) rather than as eps~, so the
@@ -206,7 +234,8 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     py::array_t<double, py::array::c_style | py::array::forcecast> zp,
     double lam_mult, int p, double detour, int n_threads,
     py::array_t<double, py::array::c_style | py::array::forcecast> gx,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gw) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw,
+    uintptr_t cancel_flag = 0) {
     if (rho.ndim() != 1 || offsets.ndim() != 1 || z.ndim() != 1 ||
         zp.ndim() != 1)
         throw std::invalid_argument("rho, offsets, z and zp must be 1-D");
@@ -297,8 +326,13 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
 
     {
         py::gil_scoped_release release;
+        NI_CANCEL_SETUP(cancel_flag);
+        // Polled per column, and per member of a column too big to be one
+        // work item; checked between those columns, whose rules are built
+        // serially.
         #pragma omp parallel for schedule(dynamic) num_threads(nt)
         for (py::ssize_t j = 0; j < n_col; ++j) {
+            NI_CANCEL_POLL();
             const py::ssize_t c = by_column[j];
             const py::ssize_t lo = ob(c), hi = ob(c + 1);
             mw899::Scratch s;
@@ -313,6 +347,7 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             }
         }
         for (py::ssize_t j = 0; j < n_mem; ++j) {
+            NI_THROW_IF_ABORTED();
             const py::ssize_t c = by_member[j];
             const py::ssize_t lo = ob(c), hi = ob(c + 1);
             mw899::Scratch s;
@@ -327,11 +362,13 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             // take, and it makes the cheap members the deep ones.
             #pragma omp parallel for schedule(dynamic, 32) num_threads(nt)
             for (py::ssize_t i = lo; i < hi; ++i) {
+                NI_CANCEL_POLL();
                 mw_contour::cd out[6];
                 mw899::column_member(s, K, zb(i), pb(i), out);
                 for (int q = 0; q < 6; ++q) vb(i, q) = out[q];
             }
         }
+        NI_THROW_IF_ABORTED();
     }
     return vals;
 }
@@ -646,6 +683,7 @@ static void near_interface_grid_sheet(
 #endif
 
 PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
+    py::register_exception<NiAborted>(m, "AcceleratorAborted");
     m.doc() =
         "momwire#680 U2 and #899 item 1: the C++ twins of "
         "_near_interface.six_point and _near_interface.six_columns. "
@@ -670,7 +708,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
           py::arg("k_p"), py::arg("k_m"), py::arg("rho"), py::arg("offsets"),
           py::arg("z"), py::arg("zp"), py::arg("lam_mult"), py::arg("p"),
           py::arg("detour"), py::arg("n_threads"), py::arg("gx"),
-          py::arg("gw"),
+          py::arg("gw"), py::arg("cancel_flag") = 0,
           "six_columns over CONCATENATED columns -> (n, 6) complex. Column c "
           "owns members offsets[c]..offsets[c+1], all at rho[c]; the answer "
           "keeps the members' order. Parallel over columns, and over the "

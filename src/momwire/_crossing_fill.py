@@ -2306,6 +2306,7 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
             koff,
             int(n_key),
             int(zcat.max()) + 1,
+            cancel_flag=_cancel.ptr(),
         )
         n_rows = int(blk.size)
     else:
@@ -2452,7 +2453,9 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     if by_rows:
         # Every group's `_first_ints(kid[g])` in one pass
         # (`group_first_ranks`): the same ranks, first positions and ids.
-        kl_rank, nk_g, f_cat, k_cat = _accel.acc.group_first_ranks(kid, int(kf.size))
+        kl_rank, nk_g, f_cat, k_cat = _accel.acc.group_first_ranks(
+            kid, int(kf.size), cancel_flag=_cancel.ptr()
+        )
         koff = np.concatenate(([0], np.cumsum(nk_g))).astype(np.int64)
         # Line positions in the line's own index width (the plan's
         # O(groups x keys) lists).
@@ -3722,7 +3725,8 @@ def _point_grid_rows(rows, P, nodes, gz, observers_above, a_wire, idx_t):
                     r.ravel(),
                     np.broadcast_to(z, r.shape).ravel(),
                     np.broadcast_to(zp, r.shape).ravel(),
-                ]
+                ],
+                cancel_flag=_cancel.ptr(),
             )
             chunk_ids.append(ids.astype(idx_t, copy=False))
             del r, z, zp, ids

@@ -138,8 +138,8 @@ def _factorize(cols, *, ints=False):
     if cols[0].shape[0] > _FACTORIZE_MAX_ROWS:
         return None
     if ints:
-        return _accel.acc.factorize_ints(list(cols))
-    return _accel.acc.factorize_rows(list(cols))
+        return _accel.acc.factorize_ints(list(cols), cancel_flag=_cancel.ptr())
+    return _accel.acc.factorize_rows(list(cols), cancel_flag=_cancel.ptr())
 
 
 KEYS = ("U", "V", "W", "dzW", "dzpV", "dzpW")
@@ -1378,13 +1378,14 @@ class KeyIndex:
             [
                 np.asarray(self._key_r, dtype=float),
                 np.asarray(self._key_zl, dtype=float),
-            ]
+            ],
+            cancel_flag=_cancel.ptr(),
         )
         k = np.flatnonzero(hit >= 0)
         # The keys are distinct pairs, so a query equals at most one key.
         key_of = np.full(rr.size, -1, dtype=np.intp)
         key_of[hit[k]] = k
-        canon = q_index.find([rr, zz])
+        canon = q_index.find([rr, zz], cancel_flag=_cancel.ptr())
         out = np.full(rr.size, -1, dtype=np.intp)
         ok = canon >= 0
         out[ok] = key_of[canon[ok]]
@@ -1414,7 +1415,7 @@ class KeyIndex:
             self._key_zl = None
         if self._index is not None:
             r, zl = np.broadcast_arrays(np.asarray(r, float), np.asarray(zl, float))
-            kj = self._index.find([r.ravel(), zl.ravel()])
+            kj = self._index.find([r.ravel(), zl.ravel()], cancel_flag=_cancel.ptr())
             return kj.astype(np.intp, copy=False).reshape(r.shape)
         ri = self._r_ids.ids(r)
         li = self._zl_ids.ids(zl)
@@ -2100,6 +2101,7 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
         _physical_cpu_count(),
         _GX,
         _GW,
+        cancel_flag=_cancel.ptr(),
     )
     if permuted:
         pos = np.empty(member_order.size, dtype=np.intp)
@@ -3212,6 +3214,7 @@ def _designed_tables_reference(
                     _physical_cpu_count(),
                     _GX,
                     _GW,
+                    cancel_flag=_cancel.ptr(),
                 )
                 placed = fresh_pos[member_order]
             block[placed] = vals

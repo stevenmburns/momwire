@@ -370,6 +370,7 @@ def import_companion(base_name: str):
     mod = _import_variant(base_name, suffix)
     if mod is not None:
         _alias_historic_name(base_name, mod)
+        _install_cancel_translation(mod)
     return mod
 
 
@@ -448,7 +449,22 @@ _CANCELLABLE_KERNELS = (
     # batches, polled per node.
     "below_six_integrals_batch",
     "transmitted_six_integrals_batch",
+    # The crossing fill's and the near-interface tables' native calls that
+    # run long enough to hold a cancel (measured: tests/
+    # test_cancel_native_crossing_1348.py has the census). The column twin
+    # lives in the `_near_interface_accel` companion, which registers its own
+    # `AcceleratorAborted`; `import_companion` wraps it from this same list.
+    "factorize_rows",
+    "factorize_ints",
+    "group_first_ranks",
+    "merge_rows_by_z",
+    "near_interface_six_columns",
 )
+
+# Methods of the extension's classes that take `cancel_flag`, as (class,
+# method): the census reads module-level kernels only, so these are listed by
+# hand and wrapped on the class.
+_CANCELLABLE_METHODS = (("RowIndex", "find"), ("RowGroups", "add"))
 
 
 def _install_cancel_translation(mod) -> None:
@@ -476,6 +492,11 @@ def _install_cancel_translation(mod) -> None:
         raw = getattr(mod, name, None)
         if raw is not None:
             setattr(mod, name, _wrap(raw))
+    for cls_name, meth in _CANCELLABLE_METHODS:
+        cls = getattr(mod, cls_name, None)
+        raw = getattr(cls, meth, None) if cls is not None else None
+        if raw is not None:
+            setattr(cls, meth, _wrap(raw))
 
 
 if acc is not None:

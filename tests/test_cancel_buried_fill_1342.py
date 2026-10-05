@@ -267,3 +267,24 @@ def test_a_cancel_mid_fill_returns_within_the_bound(engine, deckname, at):
     flag is raised only once the solve is in this issue's phases."""
     latency, files = _cancel_latency(_MAKE[engine], _deck(deckname), at)
     assert latency < BOUND_S, (latency, files)
+
+
+# momwire#1348 scope: the native calls inside these two phases now take the
+# flag too (tests/test_cancel_native_crossing_1348.py), so the bound at x32 is
+# the target the hosted watchdog asked for. Razor invl is the deck whose
+# merge / factorize calls grow fastest with size (0.8 s single calls at x32
+# before the flag reached them).
+BOUND_X32_S = 0.2
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOMWIRE_CANCEL_LATENCY"),
+    reason="wall-clock latency gate: runs by hand (MOMWIRE_CANCEL_LATENCY=1), "
+    "never as a CI gate",
+)
+@pytest.mark.slow
+@pytest.mark.parametrize("at", [2.0, 5.0, 10.0, 20.0])
+def test_a_cancel_mid_fill_at_x32_razor_invl_returns_within_the_target(at):
+    latency, files = _cancel_latency(_MAKE["razor"], invl_deck(n_radials=16, x=32), at)
+    print(f"\nLATENCY razor invl x32 at={at}: {latency:.4f} s {files}")
+    assert latency < BOUND_X32_S, (latency, files)
