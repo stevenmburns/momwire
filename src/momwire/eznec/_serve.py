@@ -474,7 +474,6 @@ from collections.abc import Mapping
 import numpy as np
 
 from ..bspline import BSplineSolver
-from ..razor import RazorSolver
 from ..deck._cards import tokenize
 from .. import _ground_spec, _medium_spec
 from ..deck._nec5 import (
@@ -2443,10 +2442,17 @@ def _crossing_spelling(solver_class: type) -> str:
       there, which is what makes the two spellings one port;
     * a family with neither (the point-matched sinusoidal one) gets the gap,
       which :func:`_check_basis_can_host` refuses by name.
+
+    Asked of the capability ROW, not of the class (momwire#1336): "carries
+    one tent across a junction node" is exactly what a False
+    ``junction_ports`` cell says — razor's own refusal for it reads "a
+    junction basis is already a through-current unknown" — so the node port
+    is the spelling only where a family has BOTH a node port and junction
+    ports, and a future family is answered by its row instead of by an
+    ``issubclass`` nobody remembered to extend.
     """
-    if issubclass(solver_class, RazorSolver):
-        return "gap"
-    return "node" if solver_class.capabilities.node_gaps else "gap"
+    caps = solver_class.capabilities
+    return "node" if caps.node_gaps and caps.junction_ports else "gap"
 
 
 def _crossing_site(
@@ -4376,16 +4382,21 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         solver_class, basis_kwargs = basis_entry(basis)
     except ValueError as exc:
         raise ServeRefusal(str(exc)) from None
-    if not hasattr(solver_class, "current_slopes"):
-        # Asked of the CLASS rather than kept as a list of which families
-        # have one, because the list would be the second thing to update.
-        # The three sinusoidal entries are what this catches today; razor
-        # was here too until momwire#603 U2 gave it one.
+    if not set(solver_class.capabilities.axes.get("charge_support", ())) - {"point"}:
+        # The printout carries a CHARGE DENSITY table, read from the basis at
+        # each element centre through `current_slopes`.  Asked of the ROW's
+        # charge support (momwire#1336) rather than of the method's presence:
+        # a family that leaves its charge as POINT charges at the segment
+        # ends (`PulseSolver`) has no density at a centre to print, and one
+        # whose row says nothing has not been checked against this table.
+        # Every roster entry declares a support with a density today, so
+        # this is a refusal waiting for a family, not one a deck can reach;
+        # `test_eznec_basis_choice.py` holds the row and the method equal.
         raise ServeRefusal(
             f"basis {basis!r} cannot answer this dialect: its printout "
-            f"carries a CHARGE DENSITY table, q = -(1/jw)*dI/ds is read "
-            f"from the basis through current_slopes, and this family has "
-            f"no such method to read it from"
+            f"carries a CHARGE DENSITY table, q = -(1/jw)*dI/ds at each "
+            f"element centre, and this family's charge support has no "
+            f"density there to read"
         )
     if deck.wire_conductivity or deck.wire_distributed_rlc:
         # Asked of the ROW rather than left to the constructor: an
