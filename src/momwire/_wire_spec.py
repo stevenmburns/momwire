@@ -337,7 +337,9 @@ def find_duplicated_wires(wires_polylines):
     tolerance; a pair straddling a rounding boundary is not merged, which is
     the old behaviour. It keys on WHOLE wires, so a bundle that shares a
     segment or two with other wires (a radial screen's coincident rises,
-    momwire#524) is untouched.
+    momwire#524) is untouched. Coinciding is necessary, not sufficient:
+    `drop_duplicated_wires` merges a copy only when it is also joined like
+    its twin (momwire#1333).
     """
     pls = [np.asarray(pl, dtype=float) for pl in wires_polylines]
     good = [pl for pl in pls if pl.ndim == 2 and pl.size]
@@ -396,6 +398,58 @@ def _per_wire_entries(value, n):
     return entries if len(entries) == n else None
 
 
+def _flip(end):
+    return "end" if end == "start" else "start"
+
+
+def _merge_connected_alike(wires, dups, junctions):
+    """Which coincident copies are DUPLICATES (momwire#1333).
+
+    ``dups`` is `find_duplicated_wires`'s list, every copy paired with the
+    first wire on its path. A copy merges into the first earlier wire on
+    that path that is joined exactly as it is: at each end, the same
+    junction as that wire's coincident end, or no junction at both. Returns
+    ``({copy: (kept twin, reversed)}, [(copy, nearest unmerged twin)])``;
+    the second list holds the coincident wires left in place because their
+    connectivity differs.
+
+    Keyed on the junction, not on the set of other wires in it: two
+    coincident ends in one junction reach the same wires by construction,
+    and two in different junctions do not, even when each junction holds
+    nothing but other coincident copies.
+    """
+    if junctions is not None:
+        groups = [[(int(w), end) for w, end in g] for g in junctions]
+    else:
+        groups = coincident_end_groups(wires)
+    node = {}
+    for j, group in enumerate(groups):
+        for member in group:
+            node[member] = j
+
+    def joined(w, rev):
+        # Ends named in the class's FIRST wire's direction.
+        return tuple(node.get((w, _flip(e) if rev else e)) for e in ("start", "end"))
+
+    classes = {}
+    for r, first, rev in dups:
+        classes.setdefault(first, [(first, False)]).append((r, rev))
+    removed, kept_coincident = {}, []
+    for members in classes.values():
+        reps = []
+        for w, rev in members:
+            key = joined(w, rev)
+            match = next(((p, prev) for p, prev, pkey in reps if pkey == key), None)
+            if match is None:
+                if reps:
+                    kept_coincident.append((w, reps[-1][0]))
+                reps.append((w, rev, key))
+            else:
+                p, prev = match
+                removed[w] = (p, rev != prev)
+    return removed, kept_coincident
+
+
 def drop_duplicated_wires(
     family,
     wires,
@@ -406,6 +460,7 @@ def drop_duplicated_wires(
     junctions=None,
     junction_refs=(),
     refuse_reason=None,
+    coincident_refusal=None,
 ):
     """Solve a wire listed twice ONCE (momwire#1042), or refuse by name.
 
@@ -417,14 +472,23 @@ def drop_duplicated_wires(
     current, since the split between two coincident copies is exactly the
     undetermined part.
 
+    A copy is a duplicate only when it is also CONNECTED like its twin
+    (momwire#1333): each of its ends sits in the same junction as the twin's
+    coincident end, or both ends are free. A coincident wire joined to
+    different wires than its twin (rise k to radial k alone, under explicit
+    `junctions`) is a structure the caller wrote, not a repeat: it is left in
+    place and solved as written, as before #1042, and a family that cannot
+    solve coincident wires refuses it by name (`coincident_refusal`, or the
+    family's own refusal later). Inferred junctions group every coincident
+    end, so without `junctions` every copy is connected like its twin.
+
     Merged only when the two copies are the same conductor in every respect
     the physics reads. Refused, naming both, when they differ in segment
     count or in any `per_wire` argument (radius, conductivity, insulation,
     distributed RLC), when a feed, load or node gap in `sites` sits on the
-    copy, when an explicit junction names the copy's end without its twin's
-    coincident end, when dropping it would empty a junction that a
-    junction-indexed argument (`junction_refs`) may address, or when the
-    family says so (`refuse_reason`).
+    copy, when dropping it would empty a junction that a junction-indexed
+    argument (`junction_refs`) may address, or when the family says so
+    (`refuse_reason`).
 
     `per_wire` maps argument name to value; `sites` maps argument name to a
     list of tuples whose first entry is a wire index. Returns
@@ -445,7 +509,17 @@ def drop_duplicated_wires(
             f"wire {r}, or make the two copies identical - momwire#1042"
         )
 
-    removed = {r: (twin, rev) for r, twin, rev in dups}
+    removed, kept_coincident = _merge_connected_alike(wires, dups, junctions)
+    if kept_coincident and coincident_refusal:
+        r, twin = kept_coincident[0]
+        raise ValueError(
+            f"{family}: wires {twin} and {r} coincide, vertex for vertex, but "
+            f"are joined to different wires, so they are two conductors "
+            f"written on one path rather than a wire listed twice, and "
+            f"{coincident_refusal} - momwire#1333"
+        )
+    if not removed:
+        return wires, n_per_edge_per_wire, per_wire, sites, junctions, None
     for r, (twin, rev) in removed.items():
         if refuse_reason:
             refuse(r, twin, refuse_reason)
@@ -464,28 +538,14 @@ def drop_duplicated_wires(
                 if int(entry[0]) in (r, twin):
                     refuse(r, twin, f"{name} places a site on wire {int(entry[0])}")
 
-    # Explicit junctions: the copy's end must stand beside its twin's
-    # coincident end, so dropping the member changes no connectivity.
+    # Explicit junctions: a merged copy's end stands beside its twin's
+    # coincident end (`_merge_connected_alike` merges nothing else), so
+    # dropping the member changes no connectivity.
     if junctions is not None:
         new_junctions = []
         for j, group in enumerate(junctions):
             members = [(int(w), end) for w, end in group]
-            kept_members = []
-            for w, end in members:
-                if w in removed:
-                    twin, rev = removed[w]
-                    twin_end = (
-                        end if not rev else ("end" if end == "start" else "start")
-                    )
-                    if (twin, twin_end) not in members:
-                        refuse(
-                            w,
-                            twin,
-                            f"junction {j} names wire {w}'s {end} "
-                            f"without wire {twin}'s {twin_end}",
-                        )
-                    continue
-                kept_members.append((w, end))
+            kept_members = [(w, end) for w, end in members if w not in removed]
             if not kept_members:
                 continue
             if (

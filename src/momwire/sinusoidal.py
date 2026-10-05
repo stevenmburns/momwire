@@ -829,6 +829,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         (momwire#212, report §17).
     """
 
+    # momwire#1333: coincident wires joined to DIFFERENT wires are kept as
+    # written, not merged. The point-matched family answers them (the split
+    # rise fan reads the rise-in-polyline fan's Z to 2e-6); the Galerkin
+    # subclass does not, and refuses them by this sentence.
+    _KEPT_COINCIDENT_REFUSAL = None
+
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
 
@@ -960,6 +966,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if getattr(self, "_node_drive_declared", False)
                 else None
             ),
+            coincident_refusal=type(self)._KEPT_COINCIDENT_REFUSAL,
         )
         wire_radius = _per_wire["wire_radius"]
         wire_conductivity = _per_wire["wire_conductivity"]

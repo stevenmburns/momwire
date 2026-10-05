@@ -1191,6 +1191,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     Galerkin overlap term of `_apply_loading`, closed-form on the shapes.
     """
 
+    # momwire#1333: two coincident wires left in place because they are
+    # joined to different wires. The Galerkin fill has no answer for them in
+    # free space: on the split rise fan it read 61.89 - 0.88j ohm where
+    # BSplineSolver and SinusoidalSolver read 32.95 - 337.2j and 32.75 -
+    # 342.1j. Over a ground the crossing serve already refuses the spelling
+    # (`_COINCIDENT_CROSSING_MEMBERS_REFUSAL`).
+    _KEPT_COINCIDENT_REFUSAL = (
+        "this family cannot solve coincident conductors: its Galerkin fill "
+        "answers them from rounding (momwire#1333). Solve the deck with "
+        "BSplineSolver or SinusoidalSolver, or join both copies to the same "
+        "wires at each end so they merge as one"
+    )
+
     # momwire#396: differs from `SinusoidalSolver.capabilities` in exactly
     # the two axes this class's docstring describes — junction_ports and
     # node_gaps are served here (M5b / #305) — plus the three combination
