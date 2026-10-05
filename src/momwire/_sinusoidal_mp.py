@@ -580,6 +580,11 @@ DIRECT_SIGN = -1.0
 REMAINDER_SIGN = 1.0
 # bspline's `self_completions` are an additive correction to its Z = -G.
 COMPLETION_SIGN = -1.0
+# `_crossing_fill.axis_data`'s density on the completion axes (None = the
+# module's defaults, bspline's). Swept on the D3 fan deck in `probe_fan_axes`.
+COMPLETION_Q = None
+COMPLETION_PANEL_ORDER = None
+COMPLETION_GROWTH = None
 
 # Bytes of pair-moment window held at once: (3, 3, rows, N) complex128.
 WINDOW_BYTES = 256 << 20
@@ -808,6 +813,42 @@ def taylor_shape_coefs(k, h, degree=REMAINDER_TAYLOR_DEGREE):
     return out
 
 
+def scatter_pair_moments(G, starts, jbasis, coef, I, J, dJ, scale):
+    """`G[i, j] += scale . c_i^T dJ[n] c_j` over every (entry on I[n], entry
+    on J[n]) of the listed segment pairs, one `add.at` for the whole list."""
+    starts = np.asarray(starts)
+    jbasis = np.asarray(jbasis)
+    cnt = np.diff(starts)
+    nI, nJ = cnt[I], cnt[J]
+    reps = nI * nJ
+    pair = np.repeat(np.arange(I.size), reps)
+    local = np.arange(pair.size) - np.repeat(np.cumsum(reps) - reps, reps)
+    eI = starts[I][pair] + local // nJ[pair]
+    eJ = starts[J][pair] + local % nJ[pair]
+    val = np.einsum("ep,epP,eP->e", coef[eI], dJ[pair], coef[eJ])
+    np.add.at(G, (jbasis[eI], jbasis[eJ]), scale * val)
+
+
+def remainder_raised_pairs(nodes, seg_l, seg_r, gz, q, n_seg):
+    """The segment pairs whose field-form remainder order the geometry raises
+    above `q`, as bspline lists them (`_remainder_qp_pairs`: the pair rule,
+    symmetrised, dilated to touching neighbours): `(I, J, Q)`."""
+    from . import _quadrature, bspline
+
+    I, J, Qp = _quadrature.remainder_qp_pairs(
+        nodes, seg_l, seg_r, gz, q, bspline._REMAINDER_QP_CAP, bspline._REMAINDER_QP_C
+    )
+    if I.size == 0:
+        return I, J, Qp
+    I, J = np.concatenate([I, J]), np.concatenate([J, I])
+    Qp = np.concatenate([Qp, Qp])
+    ptr, idx = bspline._segment_touch_lists(seg_l, seg_r)
+    k1, ii = bspline._csr_expand(ptr, idx, I)
+    I, J, Qp = bspline._pair_max(ii, J[k1], Qp[k1], n_seg)
+    k2, jj = bspline._csr_expand(ptr, idx, J)
+    return bspline._pair_max(I[k2], jj, Qp[k2], n_seg)
+
+
 def remainder_Q_above(
     G,
     starts,
@@ -930,19 +971,7 @@ def remainder_Q_above(
     ).reshape(I.size, q, q)
     lo = np.einsum("pnq,nqr,Pnr->npP", W[:, I, :], F, W[:, J, :])
     dJ -= lo
-    # Scatter through the CSR entries resting on I and J: every (entry on I,
-    # entry on J) product, one `add.at` over the whole list.
-    starts = np.asarray(starts)
-    jbasis = np.asarray(jbasis)
-    cnt = np.diff(starts)
-    nI, nJ = cnt[I], cnt[J]
-    reps = nI * nJ
-    pair = np.repeat(np.arange(I.size), reps)
-    local = np.arange(pair.size) - np.repeat(np.cumsum(reps) - reps, reps)
-    eI = starts[I][pair] + local // nJ[pair]
-    eJ = starts[J][pair] + local % nJ[pair]
-    val = np.einsum("ep,epP,eP->e", coef[eI], dJ[pair], coef[eJ])
-    np.add.at(G, (jbasis[eI], jbasis[eJ]), scale * val)
+    scatter_pair_moments(G, starts, jbasis, coef, I, J, dJ, scale)
 
 
 # ----------------------------------------------------------------------
@@ -984,6 +1013,7 @@ def remainder_Q_field(
     q,
     proj_fn,
     *,
+    gz,
     scale,
     cancel_flag=0,
     checkpoint=None,
@@ -1033,3 +1063,44 @@ def remainder_Q_field(
             scale,
             0.0,
         )
+    # The pairs the geometry raises above the base order (a segment near the
+    # plane against another: the kernel's spike sits at the image foot, and q
+    # nodes cannot see it — momwire#1189's rule, which bspline applies above
+    # the plane and this fill applies in the medium too), re-integrated at
+    # their own order minus what the base fill gave them.
+    seg_l, seg_r, tang, h = (np.asarray(x, float) for x in (seg_l, seg_r, tang, h))
+    I, J, Qp = remainder_raised_pairs(
+        nodes.reshape(segs.size, q, 3), seg_l, seg_r, gz, q, np.asarray(starts).size - 1
+    )
+    if I.size == 0:
+        return
+    # Listed pairs index the class list; `I` / `J` are positions in `segs`.
+    loc = np.full(np.asarray(starts).size - 1, -1, dtype=np.int64)
+    loc[segs] = np.arange(segs.size)
+    I_loc, J_loc = loc[I], loc[J]
+    keep = (I_loc >= 0) & (J_loc >= 0)
+    I_loc, J_loc, Qp = I_loc[keep], J_loc[keep], Qp[keep]
+    dJ = np.zeros((I_loc.size, N_SHAPES, N_SHAPES), dtype=np.complex128)
+
+    def _moments(obs_segs, src_segs, qq):
+        nd, tn, up, wn = _below_interface.field_nodes(
+            seg_l[obs_segs], seg_r[obs_segs], tang[obs_segs], h[obs_segs], int(qq)
+        )
+        nd_s, tn_s, up_s, wn_s = _below_interface.field_nodes(
+            seg_l[src_segs], seg_r[src_segs], tang[src_segs], h[src_segs], int(qq)
+        )
+        Wo = wn[None] * shape_values(k, up - 0.5 * h[obs_segs][:, None])
+        Wsrc = wn_s[None] * shape_values(k, up_s - 0.5 * h[src_segs][:, None])
+        F = proj_fn(nd, tn, nd_s, tn_s)
+        return field_pair_moments(F, Wo, Wsrc)  # (3, 3, n_obs, n_src)
+
+    for qq in np.unique(Qp):
+        sel = np.flatnonzero(Qp == qq)
+        uI, iI = np.unique(I_loc[sel], return_inverse=True)
+        uJ, iJ = np.unique(J_loc[sel], return_inverse=True)
+        if checkpoint is not None:
+            checkpoint()
+        hi = _moments(uI, uJ, qq)
+        lo = _moments(uI, uJ, q)
+        dJ[sel] = np.moveaxis((hi - lo)[:, :, iI, iJ], -1, 0)
+    scatter_pair_moments(G, starts, jbasis, coef, segs[I_loc], segs[J_loc], dJ, scale)
