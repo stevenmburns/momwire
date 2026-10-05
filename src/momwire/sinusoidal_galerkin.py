@@ -4380,6 +4380,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 test_obs=ctx["obs_c"],
                 row_group=ctx["nq"],
             )
+            if self.fill == "mixed-potential" and crossing:
+                return self._assemble_Z_mp_mixed(
+                    geom, eta, below, medium, seg_view, ctx, plan
+                )
             cross_rows = None
             if self._band_fill_serves(geom["n_segs"]):
                 if crossing:
@@ -4654,6 +4658,226 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         fg.remainder("cos-1").replay(
             obs_centers=ctx["obs_c"],
             obs_tangents=ctx["obs_t"],
+            consume=_consume,
+            row_group=nq,
+        )
+
+    def _assemble_Z_mp_mixed(self, geom, eta, below, medium, seg_view, ctx, plan):
+        """`_assemble_Z_mp` for a CROSSING deck: the two within-medium
+        classes in mixed-potential form, the crossing pair by `_crossing_fill`
+        exactly as the direct fill adds it, and bspline's `self_completions`
+        taken OFF.
+
+        The completions are the by-parts content a mixed-potential class block
+        drops at a value-1 end: the node's bases do not vanish there, so the
+        test-side boundary term and the source's end charge no longer
+        telescope within the class, and bspline — whose class blocks are the
+        same mixed-potential spelling — adds them back as `self_completions`.
+        The direct fill carries that content in its closed-form fields and
+        `_add_crossing_blocks` documents why it must NOT add them; this fill
+        is on the other side of that line, and takes them with G's sign
+        (G = −Z on this trunk).
+
+        The above class runs the free-space route at k_p with the Sommerfeld
+        composition; the below class at k_m with the medium's image weight
+        and the below remainder through the direct form's evaluator at the
+        class's own test nodes. The pair ladders are bspline's per class
+        (`DEFAULT_*` above, `BURIED_*` in the medium).
+        """
+        from .bspline import (
+            BURIED_N_QP_PAIR,
+            BURIED_PAIR_ORDER_LADDER,
+            DEFAULT_N_QP_PAIR,
+            DEFAULT_PAIR_ORDER_LADDER,
+        )
+
+        N = int(geom["n_segs"])
+        n_basis = N + self._n_extra_cols()
+        c = np.asarray(geom["seg_centers"], dtype=float)
+        t = np.asarray(geom["seg_tangents"], dtype=float)
+        h = np.asarray(geom["seg_h"], dtype=float)
+        a_row = (
+            np.full(N, float(self._uniform_radius))
+            if self._uniform_radius is not None
+            else np.asarray(self._seg_radius(geom), dtype=float)
+        )
+        seg_below = np.asarray(below, dtype=bool)
+        starts, jbasis, coef, dcoef = _sinusoidal_mp.basis_csr(seg_view, medium.k_p)
+        # The crossing pair first (momwire#1224): its transients never sit
+        # beside G.
+        rows_x, t_rows = self._crossing_rows(geom, seg_view, medium, below)
+        G = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        eta_p = self._fill_eta(medium.k_p, eta)
+        for keep, k_cls, med in (
+            (~seg_below, medium.k_p, None),
+            (seg_below, medium.k_m, medium),
+        ):
+            if not keep.any():
+                continue
+            idx = np.nonzero(keep)[0].astype(np.int64)
+            eta_cls = eta_p if med is None else self._medium_eta(med)
+            fg = _field_ground.field_ground_for(
+                self,
+                geom,
+                k_cls,
+                self.omega,
+                medium=med,
+                r1_below=plan.get("r1_below") if med is not None else None,
+                remainder_geom=self._class_geom(geom, keep),
+                eta=eta_cls,
+            )
+            fill = _sinusoidal_mp.WindowFill(
+                G,
+                starts,
+                jbasis,
+                coef,
+                dcoef,
+                k_cls,
+                eta_cls,
+                n_qp=DEFAULT_N_QP_PAIR if med is None else BURIED_N_QP_PAIR,
+                ladder=DEFAULT_PAIR_ORDER_LADDER
+                if med is None
+                else BURIED_PAIR_ORDER_LADDER,
+                checkpoint=self._checkpoint,
+            )
+            fill.accumulate(
+                c[idx],
+                t[idx],
+                h[idx],
+                a_row[idx],
+                c[idx],
+                t[idx],
+                h[idx],
+                scale=_sinusoidal_mp.DIRECT_SIGN,
+                obs_idx=idx,
+                src_idx=idx,
+            )
+            if fg is None:
+                continue
+            src_c, src_t = fg.image_sources()
+            fill.accumulate(
+                c[idx],
+                t[idx],
+                h[idx],
+                a_row[idx],
+                src_c[idx],
+                src_t[idx],
+                h[idx],
+                scale=-_sinusoidal_mp.DIRECT_SIGN * fg.image_coefficient,
+                obs_idx=idx,
+                src_idx=idx,
+            )
+            if fg.mode != "compose":
+                continue
+            if med is None:
+                sub = _sinusoidal_mp.csr_subset(starts, jbasis, coef, dcoef, idx)
+                seg_l, seg_r = _sinusoidal_mp.segment_ends(c[idx], t[idx], h[idx])
+                gz = float(self.ground_z)
+                r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
+                grid = _below_interface.somm_grid(
+                    fg.eps_tilde,
+                    float(k_cls),
+                    r1_max,
+                    self.omega,
+                    self.mu,
+                    self._cancel_flag,
+                )
+                _sinusoidal_mp.remainder_Q_above(
+                    G,
+                    sub[0],
+                    sub[1],
+                    sub[2],
+                    seg_l,
+                    seg_r,
+                    t[idx],
+                    h[idx],
+                    gz,
+                    float(k_cls),
+                    grid,
+                    base_q=self.n_qp_sommerfeld,
+                    scale=_sinusoidal_mp.REMAINDER_SIGN,
+                    cancel_flag=self._cancel_flag,
+                    checkpoint=self._checkpoint,
+                )
+            else:
+                self._mp_remainder_masked(G, ctx, fg, keep)
+        # The crossing pair, as `_add_crossing_blocks` adds it, then the
+        # completions off.
+        G[rows_x, :] += t_rows
+        G[:, rows_x] += t_rows.T
+        del t_rows
+        ctx_x = self._crossing_context(geom, seg_view, medium)
+        a_idx = np.nonzero(~seg_below)[0]
+        b_idx = np.nonzero(seg_below)[0]
+        ax_a = _crossing_fill.axis_data(ctx_x, a_idx)
+        ax_b = _crossing_fill.axis_data(ctx_x, b_idx)
+        comp = np.zeros((n_basis, n_basis), dtype=np.complex128)
+        _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=comp)
+        G += _sinusoidal_mp.COMPLETION_SIGN * comp
+        del comp
+        self._apply_loading(G, geom, seg_view, None, medium=medium)
+        return G, seg_view
+
+    def _mp_remainder_masked(self, G, ctx, fg, keep):
+        """The below-class remainder onto G: `fg`'s evaluator (prepared over
+        the class geometry) replayed at the class's own test nodes, reduced
+        per entry and scattered through the source coefficients onto the
+        class's columns — `_tested_sommerfeld_remainder`'s masked replay
+        with G, not a triple, as the destination."""
+        nq = ctx["nq"]
+        starts = np.asarray(ctx["starts"])
+        w_entry = ctx["w_entry"]
+        m_of_entry, i_of_entry = ctx["m_of_entry"], ctx["i_of_entry"]
+        nnz = w_entry.shape[0]
+        starts_pad = np.concatenate((starts, [nnz]))
+        seg_keep = np.nonzero(keep)[0]
+        n_basis = G.shape[0]
+        obs_rows = (seg_keep[:, None] * nq + np.arange(nq)[None, :]).ravel()
+        # The class's source coefficient matrices: class segments (the
+        # remainder's own source axis) x bases.
+        ent_src = np.concatenate(
+            [np.arange(starts_pad[s], starts_pad[s + 1]) for s in seg_keep]
+        )
+        row_of_src = np.searchsorted(seg_keep, m_of_entry[ent_src])
+        Ms = [
+            scipy.sparse.csc_matrix(
+                (coef[ent_src], (row_of_src, i_of_entry[ent_src])),
+                shape=(seg_keep.size, n_basis),
+            )
+            for coef in (ctx["sigAC"], ctx["B"], ctx["sigC"])
+        ]
+
+        def _consume(i0, i1, block):
+            m0, m1 = i0 // nq, i1 // nq
+            segs = seg_keep[m0:m1]
+            e_lo = starts_pad[segs]
+            counts = starts_pad[segs + 1] - e_lo
+            n_ent = int(counts.sum())
+            if n_ent == 0:
+                return
+            m_loc = np.repeat(np.arange(segs.size, dtype=np.int64), counts)
+            ent = e_lo[m_loc] + (
+                np.arange(n_ent, dtype=np.int64)
+                - np.repeat(np.cumsum(counts) - counts, counts)
+            )
+            w = w_entry[ent]
+            rows_i = i_of_entry[ent]
+            touched, local = np.unique(rows_i, return_inverse=True)
+            R = scipy.sparse.csr_matrix(
+                (np.ones(local.size), (local, np.arange(local.size))),
+                shape=(touched.size, local.size),
+            )
+            for s_blk, M in zip(block, Ms):
+                rows = self._tested_contrib_rows(
+                    w, m_loc, nq, s_blk.reshape(segs.size, nq, -1)
+                )
+                G[touched] += _sinusoidal_mp.REMAINDER_SIGN * np.asarray(
+                    R @ np.asarray(rows @ M)
+                )
+
+        fg.remainder("cos-1").replay(
+            obs_centers=np.asarray(ctx["obs_c"])[obs_rows],
+            obs_tangents=np.asarray(ctx["obs_t"])[obs_rows],
             consume=_consume,
             row_group=nq,
         )

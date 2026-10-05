@@ -229,3 +229,37 @@ def test_extended_kernel_and_contacts_keep_the_direct_fill():
     contact["feeds"] = [(0, 0.5, 1 + 0j)]
     s = SinusoidalGalerkinSolver(**contact, fill="mixed-potential")
     assert not s._mp_serves(s._build_geometry())
+
+
+# ----------------------------------------------------------------------
+# crossing decks: the within-medium classes in mixed form plus completions
+# ----------------------------------------------------------------------
+
+
+def _crossing_cases():
+    from test_crossing_serve_524 import crossing_deck, hub_deck
+
+    return {"crossing1": crossing_deck(1), "hub4": hub_deck(n_radials=4)}
+
+
+@pytest.mark.parametrize("name", ["crossing1", "hub4"])
+def test_crossing_deck_mixed_form_agrees_with_the_direct_form(name):
+    deck = _crossing_cases()[name]
+    G_dir, z_dir = _G_and_Z(deck, "direct")
+    G_mp, z_mp = _G_and_Z(deck, "mixed-potential")
+    rel = np.abs(G_mp - G_dir).max() / np.abs(G_dir).max()
+    assert rel < 5e-5, f"{name}: G differs by {rel:.2e}"
+    assert abs(z_mp - z_dir) / abs(z_dir) < 1e-3, (name, z_mp, z_dir)
+    assert np.abs(G_mp - G_mp.T).max() / np.abs(G_mp).max() < 1e-9
+
+
+def test_crossing_completions_are_load_bearing(monkeypatch):
+    """With bspline's self completions left off, the node's value-1 bases
+    lose their by-parts content and the fill is O(1) wrong — which is the
+    evidence that this route takes them (the direct form must not)."""
+    deck = _crossing_cases()["crossing1"]
+    G_dir, _ = _G_and_Z(deck, "direct")
+    monkeypatch.setattr(mp, "COMPLETION_SIGN", 0.0)
+    G_off, _ = _G_and_Z(deck, "mixed-potential")
+    rel = np.abs(G_off - G_dir).max() / np.abs(G_dir).max()
+    assert rel > 1e-2, rel
