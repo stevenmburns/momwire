@@ -35,6 +35,7 @@ gate does not need two builds to run.
 """
 
 import itertools
+import os
 import platform
 import subprocess
 import sys
@@ -137,13 +138,84 @@ def test_a_window_is_not_secretly_the_transpose():
 # ---------------------------------------------------------------------
 
 
+def _cxx_identity():
+    """The C++ compiler a `make build` here would use, by its own banner.
+
+    momwire#1107: the compiler is part of the bit-identity claim, and
+    `platform.python_compiler()` does NOT carry it — the interpreter's string
+    names whatever built PYTHON (a uv standalone build says Clang whichever
+    g++ compiled the extension). So ask the toolchain the Makefile would pick:
+    `$CXX` (minus a ccache wrapper), else `g++`. Falls back to the
+    interpreter's string only when no compiler can be run.
+    """
+    exe = [w for w in os.environ.get("CXX", "g++").split() if w != "ccache"] or ["g++"]
+    try:
+        out = subprocess.run(
+            [*exe, "--version"], capture_output=True, text=True, timeout=30
+        ).stdout.splitlines()
+        if out:
+            return out[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return platform.python_compiler()
+
+
 def _fingerprint():
     return [
         platform.system(),
         platform.machine(),
         platform.python_version(),
         np.__version__,
+        _cxx_identity(),
     ]
+
+
+def _skip_unless_same_toolchain(banked):
+    if "_fingerprint" not in banked.files:
+        pytest.skip("fixture predates the toolchain fingerprint; re-bank it")
+    want_fp = [str(x) for x in banked["_fingerprint"]]
+    if len(want_fp) < 5:
+        pytest.skip(
+            f"fixture banked on {want_fp} without the compiler (momwire#1107); "
+            "re-bank it"
+        )
+    got_fp = _fingerprint()
+    if got_fp != want_fp:
+        pytest.skip(f"fixture banked on {want_fp}, running on {got_fp}")
+
+
+def _square_entry_point_arrays():
+    """(key, array) for every square entry point the oracle pins."""
+    for N, max_d, n_qp in itertools.product((3, 7, 12), (1, 2), (2, 4)):
+        h, a = 0.37, 5e-4
+        geo = _seg_seg_reg_geometry(np.arange(N + 1) * h, a, max_d, n_qp)
+        R = np.ascontiguousarray(geo["R"], dtype=np.float64)
+        wu = np.ascontiguousarray(geo["wu_pow"], dtype=np.float64)
+        ks = np.ascontiguousarray(np.array([0.31, 0.77, 1.9], dtype=np.float64))
+        yield (
+            f"reg/{N}/{max_d}/{n_qp}",
+            _acc.seg_seg_reg_moments_bspline_swept(R, wu, ks),
+        )
+        yield (
+            f"regek/{N}/{max_d}/{n_qp}",
+            _acc.seg_seg_reg_moments_bspline_swept_ek(R, wu, ks, 1.7e-3),
+        )
+        yield (
+            f"stat/{N}/{max_d}",
+            _acc.seg_seg_static_moments_bspline_uniform(h, a, N, max_d),
+        )
+        yield (
+            f"statek/{N}/{max_d}",
+            _acc.seg_seg_static_moments_bspline_uniform_ek(h, a, N, max_d, 1.7e-3),
+        )
+
+
+def _assert_matches_bank(banked):
+    checked = 0
+    for key, got in _square_entry_point_arrays():
+        assert np.array_equal(got, banked[key]), key
+        checked += 1
+    assert checked == 48, checked
 
 
 @pytest.mark.skipif(not _ORACLE.exists(), reason="oracle fixture not banked")
@@ -172,36 +244,47 @@ def test_the_square_entry_points_are_bit_identical_to_the_pre_change_build():
     there is one copy and nothing to schedule two ways.
     """
     banked = np.load(_ORACLE, allow_pickle=True)
-    if "_fingerprint" not in banked.files:
-        pytest.skip("fixture predates the toolchain fingerprint; re-bank it")
-    got_fp, want_fp = _fingerprint(), list(banked["_fingerprint"])
-    if got_fp != want_fp:
-        pytest.skip(f"fixture banked on {want_fp}, running on {got_fp}")
-    checked = 0
-    for N, max_d, n_qp in itertools.product((3, 7, 12), (1, 2), (2, 4)):
-        h, a = 0.37, 5e-4
-        geo = _seg_seg_reg_geometry(np.arange(N + 1) * h, a, max_d, n_qp)
-        R = np.ascontiguousarray(geo["R"], dtype=np.float64)
-        wu = np.ascontiguousarray(geo["wu_pow"], dtype=np.float64)
-        ks = np.ascontiguousarray(np.array([0.31, 0.77, 1.9], dtype=np.float64))
-        pairs = {
-            f"reg/{N}/{max_d}/{n_qp}": _acc.seg_seg_reg_moments_bspline_swept(
-                R, wu, ks
-            ),
-            f"regek/{N}/{max_d}/{n_qp}": _acc.seg_seg_reg_moments_bspline_swept_ek(
-                R, wu, ks, 1.7e-3
-            ),
-            f"stat/{N}/{max_d}": _acc.seg_seg_static_moments_bspline_uniform(
-                h, a, N, max_d
-            ),
-            f"statek/{N}/{max_d}": _acc.seg_seg_static_moments_bspline_uniform_ek(
-                h, a, N, max_d, 1.7e-3
-            ),
-        }
-        for key, got in pairs.items():
-            assert np.array_equal(got, banked[key]), key
-            checked += 1
-    assert checked == 48, checked
+    _skip_unless_same_toolchain(banked)
+    _assert_matches_bank(banked)
+
+
+def _bank_to(path, fingerprint):
+    out = dict(_square_entry_point_arrays())
+    out["_fingerprint"] = np.array(fingerprint, dtype=object)
+    np.savez_compressed(path, **out)
+    return np.load(path, allow_pickle=True)
+
+
+def test_a_bank_made_here_passes_the_guard_and_the_comparison_1107(tmp_path):
+    """The matching-box arm: same fingerprint, compiler included, runs and holds."""
+    banked = _bank_to(tmp_path / "here.npz", _fingerprint())
+    _skip_unless_same_toolchain(banked)  # must NOT skip
+    _assert_matches_bank(banked)
+
+
+def test_a_different_compiler_skips_naming_both_fingerprints_1107(
+    tmp_path, monkeypatch
+):
+    """Same python, same numpy, different toolchain: SKIP, never fail.
+
+    momwire#1107: the fingerprint omitted the compiler, so a new Linux box
+    with matching python/numpy compared bits against a banked fixture and
+    failed. Here the bank is made on this build and the compiler probe is then
+    monkeypatched to a different toolchain.
+    """
+    banked = _bank_to(tmp_path / "there.npz", _fingerprint())
+    monkeypatch.setattr(sys.modules[__name__], "_cxx_identity", lambda: "clang 99.0")
+    with pytest.raises(pytest.skip.Exception) as exc:
+        _skip_unless_same_toolchain(banked)
+    msg = str(exc.value)
+    assert "clang 99.0" in msg and "banked on" in msg
+    assert banked["_fingerprint"][-1] in msg
+
+
+def test_a_bank_without_the_compiler_skips_rather_than_compares_1107(tmp_path):
+    banked = _bank_to(tmp_path / "old.npz", _fingerprint()[:4])
+    with pytest.raises(pytest.skip.Exception, match="without the compiler"):
+        _skip_unless_same_toolchain(banked)
 
 
 # ---------------------------------------------------------------------

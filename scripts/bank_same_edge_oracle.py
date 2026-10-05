@@ -15,7 +15,9 @@ square answer by 5.3e-15 relative on a handful of entries.
 """
 
 import itertools
+import os
 import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +27,21 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from momwire._accel import acc as _acc  # noqa: E402
 from momwire._bspline_kernels import _seg_seg_reg_geometry  # noqa: E402
+
+
+def _cxx_identity():
+    """Keep in step with `_cxx_identity` in tests/test_same_edge_window_968.py."""
+    exe = [w for w in os.environ.get("CXX", "g++").split() if w != "ccache"] or ["g++"]
+    try:
+        out = subprocess.run(
+            [*exe, "--version"], capture_output=True, text=True, timeout=30
+        ).stdout.splitlines()
+        if out:
+            return out[0].strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return platform.python_compiler()
+
 
 H, A, A_EK = 0.37, 5e-4, 1.7e-3
 KS = np.ascontiguousarray(np.array([0.31, 0.77, 1.9], dtype=np.float64))
@@ -59,6 +76,7 @@ def main(dest):
             platform.machine(),
             platform.python_version(),
             np.__version__,
+            _cxx_identity(),
         ],
         dtype=object,
     )
