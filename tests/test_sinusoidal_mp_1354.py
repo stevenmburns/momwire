@@ -68,6 +68,24 @@ DECKS = {
     "dipole-somm": _dipole(
         z=2.0, ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
     ),
+    # A junction basis wider than the remainder kernel's three wings, over
+    # a Sommerfeld ground: the wing tables split it and fold its rows.
+    "tee-somm": dict(
+        wires=[
+            np.array([(-10.0, 0, 3.0), (0, 0, 3.0)]),
+            np.array([(0, 0, 3.0), (10.0, 0, 3.0)]),
+            np.array([(0, 0, 3.0), (0, 0, 10.0)]),
+            np.array([(0, 0, 3.0), (0, 7.0, 3.0)]),
+        ],
+        n_per_edge_per_wire=[[11], [11], [7], [7]],
+        junctions=[[(0, "end"), (1, "start"), (2, "start"), (3, "start")]],
+        feeds=[(0, 5.0, 1 + 0j)],
+        wavelength=WL,
+        wire_radius=A,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    ),
 }
 
 

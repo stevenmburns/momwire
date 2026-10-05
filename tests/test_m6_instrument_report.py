@@ -37,7 +37,7 @@ import json
 import numpy as np
 import pytest
 
-from momwire import BSplineSolver, SinusoidalGalerkinSolver, SinusoidalSolver
+from momwire import BSplineSolver, SinusoidalSolver
 
 from scripts.m6_residue_cluster import (
     COLUMNS,
@@ -370,9 +370,7 @@ def test_feed_matched_payoff_is_the_pinned_m3_ratio():
                     (
                         SinusoidalSolver
                         if scheme == "coll"
-                        else functools.partial(
-                            SinusoidalGalerkinSolver, feed_model="segment"
-                        )
+                        else functools.partial(_direct_sg, feed_model="segment")
                     )(**factory(n)).compute_impedance()[0]
                 )[0]
             )
@@ -424,9 +422,7 @@ def test_m3_payoff_is_unmoved_by_a_fully_feed_matched_reference_family():
                     (
                         SinusoidalSolver
                         if scheme == "coll"
-                        else functools.partial(
-                            SinusoidalGalerkinSolver, feed_model="segment"
-                        )
+                        else functools.partial(_direct_sg, feed_model="segment")
                     )(**factory(n)).compute_impedance()[0]
                 )[0]
             )

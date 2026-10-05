@@ -73,6 +73,11 @@ import numpy as np
 
 from momwire import BSplineSolver, SinusoidalSolver, SinusoidalGalerkinSolver
 
+# The instrument report's numbers were measured on the Galerkin family's
+# DIRECT-field fill; since momwire#1354 its default is the mixed-potential
+# fill, so this study names the one it reports on.
+_DIRECT = {"fill": "direct"}
+
 SNAPSHOT = Path(__file__).resolve().parent / "m6_residue_cluster_geoms.json"
 
 # antennaknobs#521's no-mutual residue cluster + its helix control, then
@@ -164,9 +169,13 @@ def solve(column: str, kw: dict) -> complex:
     if column == "coll":
         z, _ = SinusoidalSolver(**kw).compute_impedance()
     elif column == "gal":
-        z, _ = SinusoidalGalerkinSolver(**kw, feed_model="segment").compute_impedance()
+        z, _ = SinusoidalGalerkinSolver(
+            **kw, **_DIRECT, feed_model="segment"
+        ).compute_impedance()
     elif column == "ptgap":
-        z, _ = SinusoidalGalerkinSolver(**kw, feed_model="point").compute_impedance()
+        z, _ = SinusoidalGalerkinSolver(
+            **kw, **_DIRECT, feed_model="point"
+        ).compute_impedance()
     elif column == "bs2":
         z, _ = BSplineSolver(**kw, degree=2).compute_impedance()
     else:
@@ -483,11 +492,13 @@ def dipole_feed_mirror(n_list=(161, 321)):
         z = {
             "bs2(point)": _z(BSplineSolver(**kw, degree=2)),
             "bs2(segment)": _z(BSplineSolver(**kw, degree=2, feed_model="segment")),
-            "gal(seg,centre)": _z(SinusoidalGalerkinSolver(**kw)),
+            "gal(seg,centre)": _z(SinusoidalGalerkinSolver(**kw, **_DIRECT)),
             "gal(seg,variational)": _z(
-                SinusoidalGalerkinSolver(**kw, feed_readout="variational")
+                SinusoidalGalerkinSolver(**kw, **_DIRECT, feed_readout="variational")
             ),
-            "gal(point)": _z(SinusoidalGalerkinSolver(**kw, feed_model="point")),
+            "gal(point)": _z(
+                SinusoidalGalerkinSolver(**kw, **_DIRECT, feed_model="point")
+            ),
         }
         print(f"\n  N={n}")
         for name, zz in z.items():
