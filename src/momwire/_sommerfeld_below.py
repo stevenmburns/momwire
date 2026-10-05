@@ -532,6 +532,14 @@ _HAVE_BELOW_FILLS_ACCEL = _acc is not None and bool(
     getattr(_acc, "below_fills_568", False)
 )
 
+# momwire#1290: the AVX2 build runs the replay kernel's blocked stages four
+# pairs to a vector, the same floats as its scalar blocked loop
+# (tests/test_below_lanes_1290.py). False passes `lanes=False`, the
+# reference; tests flip it, nothing else should. The flag's PRESENCE says the
+# binding takes `lanes`; its value, whether this build has the lanes.
+_HAVE_BELOW_LANES = _acc is not None and hasattr(_acc, "below_lanes_1290")
+_BELOW_LANES = True
+
 # The tests' handle on the dispatch — the parity gates have to drive BOTH
 # machines inside one process, and a cross-process env var cannot do that.
 # `MOMWIRE_BELOW_FORCE_NUMPY` is the same switch for a whole run (a timing
@@ -2103,6 +2111,7 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
         filled_before = tuple(r["filled"] for r in grid._regions)
 
         def _run():
+            kw = {} if _BELOW_LANES or not _HAVE_BELOW_LANES else {"lanes": False}
             return _acc.remainder_field_proj_batch_below(
                 obs,
                 t_obs,
@@ -2116,6 +2125,7 @@ def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid)
                 float(grid.th_band_lo_hi),
                 float(grid.th_band_hi),
                 *grid_cpp_args(grid),
+                **kw,
             )
 
         out, mx_r1, mn_th, mx_th = _run()
