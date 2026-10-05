@@ -33,12 +33,12 @@ Which server
 One server per ENGINE, and the engine is what the command line says it is:
 the socket name is a hash of the momwire version, the interpreter path, and
 the engine flags (``--basis``, ``--cache``, ``--cache-stats``,
-``--legacy-probe``, ``--idle-timeout``). Two portal-dialog entries differing
-only in ``--basis`` therefore reach two servers — the same "two entries are
-two engines" rule the flags already carried, now with process identity behind
-it. The winning client spawns the server with those same flags, so no
-preamble protocol is needed and a client and its server cannot disagree about
-what they are.
+``--legacy-probe``, ``--idle-timeout``, ``--save-decks``). Two portal-dialog
+entries differing only in ``--basis`` therefore reach two servers — the same
+"two entries are two engines" rule the flags already carried, now with
+process identity behind it. The winning client spawns the server with those
+same flags, so no preamble protocol is needed and a client and its server
+cannot disagree about what they are.
 
 "What the command line says it is" is made literally true by
 :func:`resolve_engine`, which runs first: a basis chosen by the executable's
@@ -68,7 +68,7 @@ import momwire_serve_client as _mech
 _LEGACY_PROBE_VERSION = "nec2c.ae6ty.9.1"
 
 # Flags that take a value; everything else that survives is a bare flag.
-_VALUE_FLAGS = ("--basis", "--cache-stats", "--idle-timeout")
+_VALUE_FLAGS = ("--basis", "--cache-stats", "--idle-timeout", "--save-decks")
 
 # The basis roster, duplicated rather than imported — importing
 # ``momwire.deck.NEC2_BASES`` would cost the NumPy start-up this module exists
@@ -228,6 +228,21 @@ def resolve_engine(
     ONE opinion the client has about the engine's command line, and it has it
     because it already had to parse ``--basis`` to hash it.
     """
+    # `MOMWIRE_NEC2C_SAVE_DECKS` (momwire#1080) is spelt out for #628's
+    # reason: the server saves decks only if its command line says so, so a
+    # directory chosen by environment must reach the hash and the spawn as the
+    # flag, or two clients choosing differently would share one server.
+    # Made absolute here as well, because the server is a different process
+    # whose working directory is not this client's to promise.
+    env_save = os.environ.get("MOMWIRE_NEC2C_SAVE_DECKS")
+    if env_save and "--save-decks" not in engine:
+        engine = [*engine, "--save-decks", env_save]
+    if "--save-decks" in engine:
+        index = engine.index("--save-decks")
+        if index + 1 < len(engine) and engine[index + 1]:
+            engine = list(engine)
+            engine[index + 1] = os.path.abspath(os.path.expanduser(engine[index + 1]))
+
     if "--basis" in engine:
         index = engine.index("--basis")
         name = engine[index + 1] if index + 1 < len(engine) else ""

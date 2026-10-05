@@ -2708,6 +2708,51 @@ def _write_cache_stats() -> None:
         pass
 
 
+# `--save-decks DIR` (momwire#1080): where every deck this engine receives is
+# written as a standalone `.nec`, or None (the default) for nowhere.  Per
+# invocation like the cache flags, reset by `configure_engine`.
+_save_decks_dir: str | None = None
+_decks_saved = 0
+
+
+def _save_deck(body: str) -> None:
+    """Write one received deck to :data:`_save_decks_dir`, if one was asked for.
+
+    The reason it exists: a SimNEC circuit whose antenna is written in
+    SimNEC's portal language (``NECWire(...)``, ``dcl`` variables) carries no
+    cards in its ``.ssn`` — SimNEC evaluates the script and sends the deck to
+    the engine — so the deck this engine receives is the only place that
+    model exists as cards.  Saved, it loads anywhere a ``.nec`` does.
+
+    The body is written as received, every card and comment in order (the
+    ``CM`` version card included), with ``EN`` in place of the frame's
+    terminator: SimNEC frames decks with ``NX``, which in a FILE means "a
+    second structure follows", and a saved deck is one structure.  The line
+    ending follows the body's own.
+
+    Named ``<local time>-<sequence>.nec``: the sequence is per process and
+    keeps two decks sent within one second apart, and nothing in the deck
+    names its circuit reliably enough to name the file by.
+
+    Failures are swallowed, for the reason :func:`_write_cache_stats` gives:
+    this engine may write nothing to stdout or stderr, so a full disk can cost
+    the saved copy and never the session.  The directory itself was checked
+    when the flag was read.
+    """
+    global _decks_saved
+    if _save_decks_dir is None:
+        return
+    _decks_saved += 1
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    path = os.path.join(_save_decks_dir, f"{stamp}-{_decks_saved:04d}.nec")
+    newline = "\r\n" if body.endswith("\r") else "\n"
+    try:
+        with open(path, "x", encoding="utf-8", newline="") as handle:
+            handle.write(body.rstrip("\r\n") + newline + "EN" + newline)
+    except OSError:
+        pass
+
+
 def _operator_key(deck: PortalDeck) -> tuple:
     """The identity of the linear operator this deck describes.
 
@@ -3795,6 +3840,7 @@ def deck_frame(body: str, terminator: str = "NX") -> tuple[list[str], list[str]]
     EN says will never come.
     """
     global _decks_rendered
+    _save_deck(body)
     out, err = render_deck(body)
     echoed = sum(1 for line in out if line.startswith("  DATA CARD No:"))
     out.append(fmt_data_card(echoed + 1, Card(terminator, (), terminator)))
@@ -4088,8 +4134,11 @@ def configure_engine(
     # the printout banner, and an unknown name from ANY of the three sources
     # fails fast and nonzero at the probe, naming its source.
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
+    global _save_decks_dir, _decks_saved
     _active_basis = _BASES["bspline"]  # per-invocation default, never sticky
     _active_basis_name = "bspline"
+    _save_decks_dir = None
+    _decks_saved = 0
     # The cross-deck cache and its two flags are per invocation for the same
     # reason, and the cache also because entries built under one basis must not
     # outlive it (the key carries the basis, so they could not be served anyway
@@ -4156,6 +4205,38 @@ def configure_engine(
             return [], False, 3
         _cache_stats_path = path
 
+    # --save-decks DIR writes every deck received to DIR (momwire#1080), so a
+    # SimNEC circuit scripted in its portal language can be taken out as
+    # cards. Off unless asked for; MOMWIRE_NEC2C_SAVE_DECKS is the fallback
+    # for hosts that pass environment rather than arguments, and the flag
+    # beats it as --basis beats MOMWIRE_NEC2C_BASIS. A directory that does not
+    # exist fails fast and nonzero at the -version probe, for --cache-stats'
+    # reason: a deck-time failure has no channel to say so.
+    save_dir: str | None = None
+    while "--save-decks" in rest or any(a.startswith("--save-decks=") for a in rest):
+        if "--save-decks" in rest:
+            k = rest.index("--save-decks")
+            save_dir = rest[k + 1] if k + 1 < len(rest) else ""
+            del rest[k : k + 2]
+        else:
+            k = next(i for i, a in enumerate(rest) if a.startswith("--save-decks="))
+            save_dir = rest.pop(k).split("=", 1)[1]
+        if not save_dir or save_dir.startswith("-"):
+            stdout.write("--save-decks needs a directory\n")
+            stdout.flush()
+            return [], False, 3
+    if save_dir is None:
+        save_dir = os.environ.get("MOMWIRE_NEC2C_SAVE_DECKS") or None
+    if save_dir is not None:
+        save_dir = os.path.expanduser(save_dir)
+        if not os.path.isdir(save_dir):
+            stdout.write(
+                f"--save-decks: {save_dir!r} is not a directory; create it first\n"
+            )
+            stdout.flush()
+            return [], False, 3
+        _save_decks_dir = save_dir
+
     # --cache is a bare flag on purpose: it has no parameter to get wrong, and
     # the cap is a constant rather than a knob (see `_CACHE_BYTES_CAP`).
     _cache_serving = "--cache" in rest
@@ -4205,8 +4286,16 @@ def engine_scope():
     it anyway and would only occupy the cap.
     """
     global _active_basis, _active_basis_name, _cache_serving, _cache_stats_path
+    global _save_decks_dir, _decks_saved
 
-    saved = (_active_basis, _active_basis_name, _cache_serving, _cache_stats_path)
+    saved = (
+        _active_basis,
+        _active_basis_name,
+        _cache_serving,
+        _cache_stats_path,
+        _save_decks_dir,
+        _decks_saved,
+    )
     try:
         yield
     finally:
@@ -4215,6 +4304,8 @@ def engine_scope():
             _active_basis_name,
             _cache_serving,
             _cache_stats_path,
+            _save_decks_dir,
+            _decks_saved,
         ) = saved
         _reset_solver_cache()
 
