@@ -551,6 +551,10 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
     at: dict[tuple[int, float], int] = {}
     feed_ports: list[int] = []
     load_ports: list[int] = []
+    # Which loads share a group (momwire#1069).  Two loads at one position
+    # that are never in force together — one before an `LD -1`, one after —
+    # are one gap stamped differently per group, not two loads on a segment.
+    together = [set(live) for live in group_loads(model)]
 
     for index, (wire, arclength, _volts) in enumerate(model.feeds):
         key = (wire, arclength)
@@ -575,10 +579,19 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
             continue
         site = sites[existing]
         if site.load is not None:
-            raise ValueError(
-                f"load {index} shares its position with load {site.load} — "
-                f"one gap cannot carry two loads"
-            )
+            others = [
+                k for k, entry in enumerate(model.loads[:index]) if entry[:2] == key
+            ]
+            if any(index in live and k in live for live in together for k in others):
+                raise ValueError(
+                    f"load {index} shares its position with load {site.load} — "
+                    f"one gap cannot carry two loads"
+                )
+            # The site keeps its first load's spec: `PortSite.load_spec` is
+            # what `loaded_ports` and a natively-loading fill read, and a
+            # per-group consumer reads the spec off `DeckModel.loads` instead.
+            load_ports.append(existing)
+            continue
         load_ports.append(existing)
         sites[existing] = PortSite(
             wire=site.wire,
@@ -604,6 +617,18 @@ def _sites(model: DeckModel) -> tuple[list[PortSite], list[int], list[int]]:
             network=True,
         )
     return sites, feed_ports, load_ports
+
+
+def group_loads(model: DeckModel) -> tuple[tuple[int, ...], ...]:
+    """Per execute group that ran, the indices into ``model.loads`` in force
+    there (momwire#1069); a group whose :attr:`ExecuteGroup.loads` is
+    ``None`` has every load.  A model with no group at all answers one entry,
+    every load, which is what :func:`build_solver` solves it with."""
+    every = tuple(range(len(model.loads)))
+    ran = [group for group in model.groups if group is not None]
+    if not ran:
+        return (every,)
+    return tuple(every if group.loads is None else group.loads for group in ran)
 
 
 def _wire_loading(materials) -> dict[str, object]:
@@ -887,6 +912,14 @@ def build_solver(
     ]
     loads = None
     if issubclass(solver_class, _NATIVE_LOADING):
+        if any(len(live) != len(model.loads) for live in group_loads(model)):
+            # The fill carries every load; per-group scoping (momwire#1069)
+            # is port algebra this family does not do.
+            raise ValueError(
+                f"basis {basis!r} carries a deck's loads inside the fill, so "
+                f"it cannot answer a deck whose loads change between execute "
+                f"cards (momwire#1069)"
+            )
         # A load-only site needs no port of its own here: the fill carries
         # the Z_s bump directly through `lumped_loads`, at the exact knot
         # `_lumped_loads` reads off the mesh, so only genuine EX sites
