@@ -57,6 +57,9 @@ _HAVE_SIN_TIERED = _acc is not None and hasattr(
 _HAVE_SIN_ASSEMBLE = _acc is not None and hasattr(
     _acc, "assemble_Z_sinusoidal_windowed"
 )
+_HAVE_SIN_PARALLEL = _acc is not None and hasattr(
+    _acc, "parallel_pair_moments_sinusoidal"
+)
 
 N_SHAPES = 3
 
@@ -266,6 +269,36 @@ def parallel_pair_moments(
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
     h_i, h_j = np.asarray(h_i, float), np.asarray(h_j, float)
     n = c_i.shape[0]
+    if _HAVE_SIN_PARALLEL:
+        gt, gw = leggauss(n_t)
+        gx, gwx = leggauss(n_xi)
+        return _acc.parallel_pair_moments_sinusoidal(
+            np.ascontiguousarray(c_i),
+            np.ascontiguousarray(t_i),
+            np.ascontiguousarray(h_i),
+            np.ascontiguousarray(c_j),
+            np.ascontiguousarray(t_j),
+            np.ascontiguousarray(h_j),
+            np.ascontiguousarray(np.broadcast_to(np.asarray(a2, float), (n,))),
+            complex(k),
+            np.ascontiguousarray(gt),
+            np.ascontiguousarray(gw),
+            np.ascontiguousarray(gx),
+            np.ascontiguousarray(gwx),
+        )
+    return _parallel_pair_moments_numpy(
+        c_i, t_i, h_i, c_j, t_j, h_j, a2, k, n_t=n_t, n_xi=n_xi
+    )
+
+
+def _parallel_pair_moments_numpy(
+    c_i, t_i, h_i, c_j, t_j, h_j, a2, k, *, n_t=PARALLEL_N_T, n_xi=PARALLEL_N_XI
+):
+    """The numpy reference of `parallel_pair_moments`, in pair batches."""
+    c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
+    t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
+    h_i, h_j = np.asarray(h_i, float), np.asarray(h_j, float)
+    n = c_i.shape[0]
     if n > PARALLEL_CHUNK:
         # Bounded transients: the (3, n, n_t, n_xi) shape tables are 16 KB a
         # pair at the default rule.
@@ -273,7 +306,7 @@ def parallel_pair_moments(
         for p0 in range(0, n, PARALLEL_CHUNK):
             p1 = min(p0 + PARALLEL_CHUNK, n)
             sl = slice(p0, p1)
-            out[:, :, sl] = parallel_pair_moments(
+            out[:, :, sl] = _parallel_pair_moments_numpy(
                 c_i[sl],
                 t_i[sl],
                 h_i[sl],

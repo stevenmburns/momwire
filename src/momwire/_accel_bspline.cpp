@@ -4891,6 +4891,128 @@ field_pair_moments_sinusoidal(
     return J;
 }
 
+// The parallel-pair reduction of the sinusoidal fill (momwire#1354,
+// `_sinusoidal_mp.parallel_pair_moments`): for a pair of PARALLEL segments the
+// kernel depends on the separation delta along the common line alone,
+// J[p, q] = int G(delta) Lambda_pq(delta) d delta, Lambda the shapes'
+// correlation over the overlap. Each of the three pieces of Lambda (its
+// breakpoints are the four corner separations) is integrated in t with
+// delta = rho sinh t, which removes the 1/R exactly, Gauss-Legendre in t on
+// the outside and in xi on the inside. Same arithmetic as the numpy reference,
+// one pair per thread. Complex k serves the medium.
+static py::array_t<std::complex<double>>
+parallel_pair_moments_sinusoidal(
+    py::array_t<double, py::array::c_style | py::array::forcecast> c_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> c_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> t_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> h_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> a2,
+    std::complex<double> k,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gt,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gw,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gx,
+    py::array_t<double, py::array::c_style | py::array::forcecast> gwx
+) {
+    static constexpr int NM = 3;
+    auto ci = c_i.unchecked<2>(); auto ti = t_i.unchecked<2>(); auto hi_ = h_i.unchecked<1>();
+    auto cj = c_j.unchecked<2>(); auto tj = t_j.unchecked<2>(); auto hj_ = h_j.unchecked<1>();
+    auto a2v = a2.unchecked<1>();
+    auto gtv = gt.unchecked<1>(); auto gwv = gw.unchecked<1>();
+    auto gxv = gx.unchecked<1>(); auto gwxv = gwx.unchecked<1>();
+    const size_t n = (size_t)ci.shape(0);
+    if ((size_t)cj.shape(0) != n || (size_t)a2v.shape(0) != n || (size_t)hi_.shape(0) != n ||
+        (size_t)hj_.shape(0) != n || ci.shape(1) != 3 || cj.shape(1) != 3 ||
+        ti.shape(1) != 3 || tj.shape(1) != 3)
+        throw std::runtime_error("parallel_pair_moments_sinusoidal: n pairs of (3,) rows expected");
+    const size_t n_t = (size_t)gtv.shape(0), n_xi = (size_t)gxv.shape(0);
+    if ((size_t)gwv.shape(0) != n_t || (size_t)gwxv.shape(0) != n_xi)
+        throw std::runtime_error("rules must be (nodes, weights) pairs of one length");
+    py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, n});
+    auto jv = J.mutable_unchecked<3>();
+    const double kr = k.real(), kim = k.imag();
+    const bool cplx = kim != 0.0;
+    py::gil_scoped_release release;
+    const double inv_4pi = 1.0 / (4.0 * M_PI);
+    #pragma omp parallel for schedule(dynamic, 64)
+    for (size_t p = 0; p < n; p++) {
+        double dot = 0.0, dpar = 0.0, dd = 0.0;
+        for (int d = 0; d < 3; d++) {
+            dot += ti(p, d) * tj(p, d);
+            const double dc = ci(p, d) - cj(p, d);
+            dpar += dc * tj(p, d);
+            dd += dc * dc;
+        }
+        const double s = dot > 0.0 ? 1.0 : (dot < 0.0 ? -1.0 : 0.0);
+        const double dperp2 = std::max(dd - dpar * dpar, 0.0);
+        const double rho = std::sqrt(dperp2 + a2v(p));
+        const double hI = hi_(p), hJ = hj_(p);
+        double br[4] = {dpar - 0.5 * (hI + hJ), dpar - 0.5 * (hI - hJ),
+                        dpar + 0.5 * (hI - hJ), dpar + 0.5 * (hI + hJ)};
+        std::sort(br, br + 4);
+        double acc_re[NM * NM], acc_im[NM * NM];
+        for (int x = 0; x < NM * NM; x++) { acc_re[x] = 0.0; acc_im[x] = 0.0; }
+        for (int piece = 0; piece < 3; piece++) {
+            const double lo_t = std::asinh(br[piece] / rho), hi_t = std::asinh(br[piece + 1] / rho);
+            const double mid = 0.5 * (hi_t + lo_t), half = 0.5 * (hi_t - lo_t);
+            for (size_t a = 0; a < n_t; a++) {
+                const double t = mid + half * gtv(a);
+                const double w_t = half * gwv(a);
+                const double delta = rho * std::sinh(t), R = rho * std::cosh(t);
+                // G d delta = exp(-jkR) / (4 pi) dt
+                double sc = inv_4pi * w_t;
+                if (cplx) sc *= std::exp(kim * R);
+                const double ph = -kr * R;
+                const double g_re = std::cos(ph) * sc, g_im = std::sin(ph) * sc;
+                const double beta = dpar - delta;
+                double lo, hi;
+                if (s > 0.0) { lo = std::max(-0.5 * hI, -beta - 0.5 * hJ); hi = std::min(0.5 * hI, -beta + 0.5 * hJ); }
+                else { lo = std::max(-0.5 * hI, beta - 0.5 * hJ); hi = std::min(0.5 * hI, beta + 0.5 * hJ); }
+                const double width = std::max(hi - lo, 0.0);
+                const double xm = 0.5 * (hi + lo), xh = 0.5 * width;
+                double lam_re[NM * NM], lam_im[NM * NM];
+                for (int x = 0; x < NM * NM; x++) { lam_re[x] = 0.0; lam_im[x] = 0.0; }
+                for (size_t b = 0; b < n_xi; b++) {
+                    const double xi = xm + xh * gxv(b);
+                    const double w_xi = xh * gwxv(b);
+                    const double xi_src = s * xi + beta;
+                    // shapes {1, sin k xi, -2 sin^2(k xi / 2)} at xi and xi_src
+                    double si_re[NM], si_im[NM], sj_re[NM], sj_im[NM];
+                    auto shapes = [&](double x, double *re, double *im) {
+                        re[0] = 1.0; im[0] = 0.0;
+                        if (cplx) {
+                            const std::complex<double> arg = k * x;
+                            const std::complex<double> sn = std::sin(arg);
+                            const std::complex<double> hf = std::sin(0.5 * arg);
+                            const std::complex<double> c2 = -2.0 * hf * hf;
+                            re[1] = sn.real(); im[1] = sn.imag(); re[2] = c2.real(); im[2] = c2.imag();
+                        } else {
+                            const double arg = kr * x, hf = std::sin(0.5 * arg);
+                            re[1] = std::sin(arg); im[1] = 0.0; re[2] = -2.0 * hf * hf; im[2] = 0.0;
+                        }
+                    };
+                    shapes(xi, si_re, si_im);
+                    shapes(xi_src, sj_re, sj_im);
+                    for (int pp = 0; pp < NM; pp++)
+                        for (int q = 0; q < NM; q++) {
+                            const double pr = si_re[pp] * sj_re[q] - si_im[pp] * sj_im[q];
+                            const double pi_ = si_re[pp] * sj_im[q] + si_im[pp] * sj_re[q];
+                            lam_re[pp * NM + q] += w_xi * pr;
+                            lam_im[pp * NM + q] += w_xi * pi_;
+                        }
+                }
+                for (int x = 0; x < NM * NM; x++) {
+                    acc_re[x] += lam_re[x] * g_re - lam_im[x] * g_im;
+                    acc_im[x] += lam_re[x] * g_im + lam_im[x] * g_re;
+                }
+            }
+        }
+        for (int x = 0; x < NM * NM; x++) jv(x / NM, x % NM, p) = std::complex<double>(acc_re[x], acc_im[x]);
+    }
+    return J;
+}
+
 // Runtime dispatch wrapper for the batched (swept-k) off-edge kernel.
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_swept(
@@ -6055,6 +6177,13 @@ void register_bspline(py::module_ &m) {
           "Field-form pair moments sum_{q,r} W_obs[p,i,q] F[iq,jr] W_src[P,j,r] "
           "with complex shape weights, (3, 3, n_obs, n_src) (momwire#1354).",
           py::arg("F"), py::arg("W_obs"), py::arg("W_src"));
+    m.def("parallel_pair_moments_sinusoidal", &parallel_pair_moments_sinusoidal,
+          "The sinusoidal fill's parallel-pair reduction (momwire#1354): "
+          "(3, 3, n) moments of n parallel segment pairs by the sinh-substituted "
+          "separation integral, a pair per thread.",
+          py::arg("c_i"), py::arg("t_i"), py::arg("h_i"), py::arg("c_j"), py::arg("t_j"),
+          py::arg("h_j"), py::arg("a2"), py::arg("k"), py::arg("gt"), py::arg("gw"),
+          py::arg("gx"), py::arg("gwx"));
     m.def("seg_seg_full_moments_bspline_swept",
           &seg_seg_full_moments_bspline_swept,
           "Batched (swept-k) off-edge full-kernel polynomial moments for the "
