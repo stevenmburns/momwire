@@ -136,48 +136,13 @@ def test_abort_inside_cover_leaves_the_sheet_consistent():
 # --------------------------------------------------------------------------
 
 
-def _small_buried(cls):
-    d = hub_deck(n_radials=4)
-    return cls(**d, cancel=CancelToken())
+_ENGINES = [
+    pytest.param(lambda **kw: RazorSolver(**kw, nec5_quadrature=True), id="razor"),
+    pytest.param(lambda **kw: SinusoidalGalerkinSolver(**kw), id="sg"),
+]
 
 
-def _trip_after_first_column_call(monkeypatch, token):
-    calls = [0]
-    real = _near_interface._nia
-
-    class Tripping:
-        def __getattr__(self, name):
-            return getattr(real, name)
-
-        def near_interface_six_columns(self, *a):
-            out = real.near_interface_six_columns(*a)
-            calls[0] += 1
-            token.cancel()
-            return out
-
-    monkeypatch.setattr(_near_interface, "_nia", Tripping())
-    return calls
-
-
-@pytest.mark.parametrize(
-    "make",
-    [
-        pytest.param(lambda **kw: RazorSolver(**kw, nec5_quadrature=True), id="razor"),
-        pytest.param(lambda **kw: SinusoidalGalerkinSolver(**kw), id="sg"),
-    ],
-)
-def test_a_cancel_inside_the_near_interface_kernel_aborts_the_solve(monkeypatch, make):
-    tok = CancelToken()
-    calls = _trip_after_first_column_call(monkeypatch, tok)
-    s = make(**hub_deck(n_radials=4), cancel=tok)
-    with pytest.raises(SolveAborted):
-        s.compute_impedance()
-    assert calls[0] >= 1, "the column twin was never reached"
-
-
-def test_not_cancelled_the_same_solves_complete(monkeypatch):
-    """The control for the test above: the interception alone, with no trip,
-    changes nothing (the kernel IS reached and the solve finishes)."""
+def _count_column_calls(monkeypatch, on_call=None):
     calls = [0]
     real = _near_interface._nia
 
@@ -186,14 +151,38 @@ def test_not_cancelled_the_same_solves_complete(monkeypatch):
             return getattr(real, name)
 
         def near_interface_six_columns(self, *a):
+            out = real.near_interface_six_columns(*a)
             calls[0] += 1
-            return real.near_interface_six_columns(*a)
+            if on_call is not None:
+                on_call()
+            return out
 
     monkeypatch.setattr(_near_interface, "_nia", Counting())
-    z, _cur = RazorSolver(
-        **hub_deck(n_radials=4), nec5_quadrature=True, cancel=CancelToken()
-    ).compute_impedance()
-    assert calls[0] >= 1
+    return calls
+
+
+@pytest.mark.parametrize("make", _ENGINES)
+def test_a_cancel_inside_the_near_interface_kernel_stops_the_fill(monkeypatch, make):
+    """Tripped from inside the first column-twin call, the solve must raise
+    before the fill's NEXT one. The solvers' own later checkpoints would abort
+    it eventually either way, so only the count says whether the fill's seams
+    work: on the base of this change the fill ran every remaining call."""
+    tok = CancelToken()
+    calls = _count_column_calls(monkeypatch, on_call=tok.cancel)
+    s = make(**hub_deck(n_radials=4), cancel=tok)
+    with pytest.raises(SolveAborted):
+        s.compute_impedance()
+    assert calls[0] == 1
+
+
+@pytest.mark.parametrize("make", _ENGINES)
+def test_not_cancelled_the_fill_makes_several_calls(monkeypatch, make):
+    """The control for the test above: with no trip the same solve makes
+    several column-twin calls (razor 8, SG 3 at this deck), so a count of 1
+    there is the seams stopping it and not a deck that only ever calls once."""
+    calls = _count_column_calls(monkeypatch)
+    z, _cur = make(**hub_deck(n_radials=4), cancel=CancelToken()).compute_impedance()
+    assert calls[0] >= 3
     assert np.isfinite(np.atleast_1d(z)[0])
 
 
