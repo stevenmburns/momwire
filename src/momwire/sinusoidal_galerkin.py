@@ -4792,8 +4792,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         ctx_x = self._crossing_context(geom, seg_view, medium)
         a_idx = np.nonzero(~seg_below)[0]
         b_idx = np.nonzero(seg_below)[0]
-        ax_a = _crossing_fill.axis_data(ctx_x, a_idx)
-        ax_b = _crossing_fill.axis_data(ctx_x, b_idx)
+        density = dict(
+            q=_sinusoidal_mp.COMPLETION_Q,
+            panel_order=_sinusoidal_mp.COMPLETION_PANEL_ORDER,
+            growth=_sinusoidal_mp.COMPLETION_GROWTH,
+        )
+        ax_a = _crossing_fill.axis_data(ctx_x, a_idx, **density)
+        ax_b = _crossing_fill.axis_data(ctx_x, b_idx, **density)
         comp = np.zeros((n_basis, n_basis), dtype=np.complex128)
         _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=comp)
         G += _sinusoidal_mp.COMPLETION_SIGN * comp
@@ -4839,6 +4844,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             k_m,
             self.n_qp_sommerfeld,
             proj,
+            gz=gz,
             scale=_sinusoidal_mp.REMAINDER_SIGN,
             cancel_flag=self._cancel_flag,
             checkpoint=self._checkpoint,
