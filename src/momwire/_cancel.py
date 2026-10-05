@@ -92,7 +92,7 @@ class _Cancelable:
 # twin). A token argument would have to be threaded through ~40 signatures,
 # four memo classes and the razor, bspline, sinusoidal and Galerkin callers.
 # Instead each public fill entry installs its context's token for the duration
-# of the call (`scope`), and the seams below read it (`poll`, `flag`).
+# of the call (`scope`), and the seams below read it (`poll`).
 #
 # Thread-local on purpose. The scope is entered and read on the thread that
 # runs the fill; a pool thread started beneath it sees no token and so polls
@@ -120,10 +120,3 @@ def poll():
     token = getattr(_ambient, "token", None)
     if token is not None and token._flag[0]:
         raise SolveAborted()
-
-
-def flag():
-    """The ambient token's raw flag address for a kernel's `cancel_flag`, or 0
-    (no cancellation) when none is installed."""
-    token = getattr(_ambient, "token", None)
-    return token.ptr if token is not None else 0
