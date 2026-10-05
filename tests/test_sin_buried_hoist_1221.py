@@ -26,6 +26,18 @@ import pytest
 
 from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
+
 C0 = 299792458.0
 WL7 = C0 / 7e6
 SOIL_A = (13.0, 0.005)

@@ -31,7 +31,18 @@ from test_sg_cplx_far_fill_simd_1224 import _hub4
 
 import momwire._accel as _accel
 from momwire import sinusoidal_galerkin as sg
-from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
 
 pytestmark = pytest.mark.skipif(
     not sg._HAVE_GALERKIN_FAR_FILL or not sg._HAVE_SG_REAL_STAGED,
@@ -101,7 +112,7 @@ def _record(make):
     before = _accel.acc.sg_real_far_fill_calls()
     _accel.acc.sinusoidal_galerkin_far_fill = spy
     try:
-        SinusoidalGalerkinSolver(**make()).compute_impedance()
+        _direct_sg(**make()).compute_impedance()
     finally:
         _accel.acc.sinusoidal_galerkin_far_fill = fill
     after = _accel.acc.sg_real_far_fill_calls()
@@ -195,7 +206,7 @@ def _capture(make):
 
     sg._solve_in_place = spy
     try:
-        Z, cur = SinusoidalGalerkinSolver(**make()).compute_impedance()
+        Z, cur = _direct_sg(**make()).compute_impedance()
     finally:
         sg._solve_in_place = solve
     return seen["G"], np.atleast_1d(Z), np.asarray(cur)

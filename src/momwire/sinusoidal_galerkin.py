@@ -4604,7 +4604,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         (`_tested_contrib_rows`) and scattered through the source
         coefficients one observer chunk at a time.
         """
-        if self._active_medium is None:
+        if (
+            self._active_medium is None
+            and _sinusoidal_mp.REMAINDER_ROUTE_ABOVE == "fused"
+        ):
             c = np.asarray(geom["seg_centers"], dtype=float)
             t = np.asarray(geom["seg_tangents"], dtype=float)
             h = np.asarray(geom["seg_h"], dtype=float)
@@ -4634,6 +4637,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             )
             return
         ctx = self._test_context(geom, seg_view, k)
+        if self._active_medium is None:
+            self._mp_remainder_masked(G, ctx, fg, np.ones(ctx["N"], dtype=bool))
+            return
         self._mp_remainder_below(
             G,
             geom,

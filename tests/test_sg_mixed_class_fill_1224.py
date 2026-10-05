@@ -47,6 +47,18 @@ import momwire._accel as _accel
 from momwire import sinusoidal_galerkin as sg
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
+
 C0 = 299792458.0
 WL7 = C0 / 7e6
 SOIL_A = (13.0, 0.005)
@@ -108,7 +120,7 @@ def _assemble(d, monkeypatch, whole):
                 "_class_fill_serves",
                 lambda self, *a: False,
             )
-        s = SinusoidalGalerkinSolver(**d)
+        s = _direct_sg(**d)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             geom = s._build_geometry()
@@ -167,7 +179,7 @@ def test_the_decks_walk_every_padding():
     for name in DECKS:
         if not name.startswith("detached-"):
             continue
-        s = SinusoidalGalerkinSolver(**DECKS[name]())
+        s = _direct_sg(**DECKS[name]())
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             geom = s._build_geometry()
@@ -199,7 +211,7 @@ def test_the_real_kernel_needs_the_padding():
     bits — is asserted only on the build that has libmvec's 4-lane sincos
     (linux, AVX2), since elsewhere the sweep has no vector/tail split to
     expose."""
-    s = SinusoidalGalerkinSolver(**hub_deck(n_radials=16))
+    s = _direct_sg(**hub_deck(n_radials=16))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         geom = s._build_geometry()
@@ -266,7 +278,7 @@ def test_the_mixed_fill_peak_falls(monkeypatch):
     monkeypatch.setattr(
         SinusoidalGalerkinSolver, "_band_fill_serves", lambda self, n: False
     )
-    s = SinusoidalGalerkinSolver(**d)
+    s = _direct_sg(**d)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         geom = s._build_geometry()

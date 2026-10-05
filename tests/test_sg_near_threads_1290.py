@@ -35,6 +35,17 @@ from momwire import sinusoidal_galerkin as sg
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
 
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
+
 def _banded(make, scale):
     """`make()`'s deck with every wire's segment count times `scale`: the
     near cells are collected by the banded fill alone, which takes decks of
@@ -113,7 +124,7 @@ def _solve(make, monkeypatch, perturb=False):
     monkeypatch.setattr(sg, "_solve_in_place", spy_solve)
     monkeypatch.setattr(SinusoidalGalerkinSolver, "_near_cells", spy_near)
     monkeypatch.setattr(sg, "_piece_pool", spy_pool)
-    Z, cur = SinusoidalGalerkinSolver(**make()).compute_impedance()
+    Z, cur = _direct_sg(**make()).compute_impedance()
     return seen["G"], np.atleast_1d(Z), np.asarray(cur), seen["cells"], seen["threaded"]
 
 

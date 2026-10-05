@@ -43,6 +43,18 @@ from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_crossing_serve_524 import hub_deck  # noqa: E402
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
+
 _acc = _sin._acc
 pytestmark = [
     pytest.mark.filterwarnings("ignore:crossing node"),
@@ -113,7 +125,7 @@ def live_chunk():
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            SinusoidalGalerkinSolver(**hub_deck(n_radials=4)).compute_impedance()
+            _direct_sg(**hub_deck(n_radials=4)).compute_impedance()
     finally:
         mp.undo()
     assert seen, "the replay never reached the reduction"

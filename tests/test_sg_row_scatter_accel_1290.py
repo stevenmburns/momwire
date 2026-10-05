@@ -38,6 +38,18 @@ from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 from test_sg_fused_banded_fill_1224 import _bands_every, dipole, ell
 from test_sg_ordered_scatter_1290 import _case
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
+
 pytestmark = pytest.mark.skipif(
     not sg._HAVE_ROW_SCATTER_ACCEL,
     reason="the accelerator does not carry ordered_row_scatter",
@@ -178,8 +190,8 @@ def test_what_the_kernel_cannot_take_goes_to_the_reference(
 
 
 DECKS = {
-    "free-dipole": lambda: SinusoidalGalerkinSolver(**dipole()),
-    "ek-ell": lambda: SinusoidalGalerkinSolver(**ell(extended_kernel=True)),
+    "free-dipole": lambda: _direct_sg(**dipole()),
+    "ek-ell": lambda: _direct_sg(**ell(extended_kernel=True)),
 }
 
 
