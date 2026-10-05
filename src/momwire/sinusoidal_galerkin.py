@@ -472,6 +472,13 @@ _HAVE_GALERKIN_FAR_FILL_CPLX = _acc is not None and hasattr(
     _acc, "sinusoidal_galerkin_far_fill_cplx"
 )
 
+# The reduced real fill's staged body (perf item 9): bit-identical to the
+# per-pair reference body, which `False` selects so the uint64 gate
+# (tests/test_sg_real_far_fill_staged_1290.py) can compare whole solves. A
+# build without the flag's symbol has only the reference body.
+_SG_REAL_STAGED = True
+_HAVE_SG_REAL_STAGED = _acc is not None and hasattr(_acc, "sg_real_far_fill_calls")
+
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
 # scratch inside the field kernel stays bounded regardless of model size. It
 # is still literally the block for `_ek_bracket_correction_tested`, whose
@@ -3193,6 +3200,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 return _acc.sinusoidal_galerkin_far_fill_cplx(
                     *args, self._cancel_flag, **fold
                 )
+            if _HAVE_SG_REAL_STAGED and not _SG_REAL_STAGED:
+                fold["reference"] = True
             return _acc.sinusoidal_galerkin_far_fill(*args, self._cancel_flag, **fold)
         # The EK twin takes the payload at the shapes the kernel indexes: one
         # radius per SOURCE segment, the pair rule's group labels — one per
