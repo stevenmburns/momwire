@@ -1312,6 +1312,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
+            # Raised by `_below_interface.refuse_out_of_scope` at the fill, the
+            # same sentence every buried family declares; undeclared here
+            # until momwire#1326's default-kernel check asked this row first.
+            "buried+extended_kernel": _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL,
             "extended_kernel+stepped_radius_junction": (
                 _EK_STEPPED_RADIUS_JUNCTION_REFUSAL
             ),

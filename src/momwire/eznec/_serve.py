@@ -85,9 +85,12 @@ structure is described or relied on.
 The basis, and why it is the one
 --------------------------------
 ``BSplineSolver`` at the repo's own default configuration — ``degree=2``,
-``feed_model="point"``, no extended kernel, no enrichment — which is what
+``feed_model="point"``, no enrichment — which is what
 ``momwire.deck.build_solver``'s ``"bspline"`` entry constructs and what the
-portal solves every NEC-2 deck with.
+portal solves every NEC-2 deck with, plus the EXTENDED KERNEL (momwire#1326):
+NEC-5's own kernel behaves as EK-on and this dialect has no card to say
+otherwise, so every basis here takes it unless it or the deck cannot, and
+then solves reduced with an ``ExtendedKernelDefault`` advisory.
 
 The family used to be no choice at all, and that claim was wrong.  NEC-5
 addresses NODES and ``node_gaps`` (momwire#305, the apex-feed arc) is the only
@@ -502,7 +505,13 @@ from ..deck._nec5 import (
 # the dialect's own, and hands the semantics a record with its fields already
 # in NEC's order.
 from ..deck._networks import card_branches, port_name
-from ..deck._solver import _NATIVE_LOADING, basis_entry, port_kwargs
+from ..deck._solver import (
+    _NATIVE_LOADING,
+    _warn_kernel_fallback,
+    basis_entry,
+    extended_kernel_default_refusal,
+    port_kwargs,
+)
 from ..deck.model import NetworkCard
 from ..networks import Driven, Network, NetworkReducer, PortOnWire
 
@@ -2709,8 +2718,14 @@ def _solver_for(
     medium: GroundMedium | None,
     solver_class: type = BSplineSolver,
     basis_kwargs: Mapping[str, object] = MappingProxyType({}),
+    extended_kernel: bool = False,
 ):
     """The constructed solver, one port per declared site.
+
+    ``extended_kernel`` is :func:`serve`'s resolution of this dialect's
+    default (momwire#1326): on, unless the basis or the deck cannot take it.
+    Off passes no kwarg at all, so a reduced-kernel solve is the constructor
+    call this seam always made.
 
     A "cut" until momwire#603 U1, which is no longer the word: under the
     delta-gap spelling nothing is cut, and the ports are a ground contact, an
@@ -2795,6 +2810,7 @@ def _solver_for(
         **port_kwargs(solver_class, junctions=mesh.junctions, node_gaps=gaps),
         **ground,  # type: ignore[arg-type]
         **loading,
+        **({"extended_kernel": True} if extended_kernel else {}),
         **basis_kwargs,
     )
 
@@ -4538,8 +4554,30 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     medium = _medium(deck.ground, wavelength)
     _check_basis_can_host(mesh, _ground_kwargs(deck, medium), basis, solver_class)
     cards = _cards(deck, structure, mesh)
+    # The extended kernel by default (momwire#1326): NEC-5's kernel behaves as
+    # EK-on and the dialect has no card for it, so this seam solves EK-on
+    # unless the basis or the deck cannot take it, and then falls back to the
+    # reduced kernel with an `ExtendedKernelDefault` advisory, not a refusal.
+    kernel_refusal = extended_kernel_default_refusal(
+        solver_class,
+        basis_kwargs,
+        [piece.points for piece in mesh.pieces],
+        [piece.radius for piece in mesh.pieces],
+        mesh.junctions,
+        _ground_kwargs(deck, medium).get("ground_z"),
+    )
+    if kernel_refusal is not None:
+        _warn_kernel_fallback(basis, kernel_refusal)
     try:
-        solver = _solver_for(deck, mesh, wavelength, medium, solver_class, basis_kwargs)
+        solver = _solver_for(
+            deck,
+            mesh,
+            wavelength,
+            medium,
+            solver_class,
+            basis_kwargs,
+            extended_kernel=kernel_refusal is None,
+        )
     except NotImplementedError as exc:
         # The crossing serve's scope (momwire#524 phase 2: one above member,
         # no other junction on the above side) is stated by the solver as

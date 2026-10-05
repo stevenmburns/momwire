@@ -78,7 +78,7 @@ _EPS0_PRINTED = 8.854e-12
 # The cards a captured or probed NEC-4.2 printout shows, after GE.  Everything else the
 # nec4 dialect reads (it inherits nec2's vocabulary) has no measured layout.
 _SERVED_CARDS = frozenset(
-    {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "NE", "NH", "XQ", "EN"}
+    {"GN", "GD", "FR", "EX", "LD", "TL", "NT", "PQ", "RP", "NE", "NH", "XQ", "EN", "EK"}
 )
 _SERVED_GEOMETRY = frozenset({"GW", "GE"})
 

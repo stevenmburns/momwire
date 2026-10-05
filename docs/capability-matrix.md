@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-44 sentences across 82 declared cells, verbatim. A sentence shared by several rows is printed
+44 sentences across 83 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -136,7 +136,7 @@ renders in host dialogs.
 
   > momwire serves wires wholly at or above the interface, wires strictly below it, and current CROSSING it only through a crossing junction (momwire#524 phase 2): split the wire AT the interface into a below wire whose end stands in the plane and an above wire starting there, and declare the junction between them - that deck is served, with continuity of current and the interface slope condition emerging from the fill itself. A single polyline with points on both sides is not split for you here, because feeds, loads, junctions and per-wire results are keyed on its wire index and a split would renumber them; the deck seams split a card wire at the plane themselves and keep its addresses (the NEC-2 portal since momwire#667, the EZNEC seam since momwire#1281). Alternatively leave the buried part DETACHED (a buried radial screen under a base-fed vertical is served that way, momwire#553), or raise the whole wire clear of the interface
 
-- `BSplineSolver` `buried+extended_kernel`, `HMatrixSolver` `buried+extended_kernel`, `ArrayBlockSolver` `buried+extended_kernel`, `SinusoidalSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
+- `BSplineSolver` `buried+extended_kernel`, `HMatrixSolver` `buried+extended_kernel`, `ArrayBlockSolver` `buried+extended_kernel`, `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
 
   > extended_kernel=True + a wire below the ground plane is not served: the extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping scored across the whole geometry, and momwire#553 measured neither what that grouping means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor what the mirror labels mean when the image of a buried source lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
 

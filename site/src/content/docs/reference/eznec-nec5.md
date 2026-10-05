@@ -122,6 +122,18 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
 
 Each source's impedance agrees with the licensed NEC-4.2 to within about 2 %.
 
+**Both slots solve with the extended thin-wire kernel** (since momwire#1326).
+NEC-5's own kernel behaves as the extended one, and NEC-4.2 has a single
+thin-wire model with no kernel switch: an `EK` card in a NEC-4.2 deck is read,
+echoed, and ignored, and the printout says so in NEC-4.2's own words, "THE EK
+AND KH COMMANDS HAVE NO EFFECT IN NEC-4". On fat wire this lands closer to both
+engines: on a 28 MHz dipole whose segments are 1.5 radii long it is 4 to 5 Ω
+nearer NEC-4.2. On thin wire it moves the answer by a fraction of an ohm. A few
+decks cannot take the extended kernel: a wire below the ground, or two wires of
+different radii meeting at a junction on `sinusoidal-galerkin`. Those decks
+are solved with the reduced kernel, and the engine logs an
+`ExtendedKernelDefault` advisory instead of refusing.
+
 **The `momwire-eznec` names are deprecated.** They are what earlier releases
 said to point EZNEC at, and they still ship and answer exactly as before —
 same engine, same warm server, same printout. An engine path typed once and

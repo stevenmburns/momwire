@@ -187,6 +187,10 @@ def split_fed(top, bot, z_split, n_above, n_below):
         ground_z=0.0,
         ground_eps=(13.0, 0.005),
         ground_model="sommerfeld",
+        # The seam's own kernel since momwire#1326: this dialect solves with
+        # the extended kernel by default, and the hand twin is gated against
+        # the seam to the last digit, so it takes the same one.
+        extended_kernel=True,
     )
     return complex(np.atleast_1d(solver.compute_impedance()[0])[0])
 

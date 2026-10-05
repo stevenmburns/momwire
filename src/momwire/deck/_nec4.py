@@ -61,6 +61,17 @@ captures show, and nothing else:
   ignored: the solve is the card's without it, and the printout echoes the
   name and says the file was not read.  On any other GN type a trailer still
   refuses, because no run shows what the licensed engine does with one there.
+* ``EK`` is read and IGNORED, and every run solves with the extended kernel
+  (momwire#1326, Steve's decision 2026-10-04).  NEC-4.2 has one thin-wire
+  model and no extended-kernel switch: the binary, given ``EK 0`` as a black
+  box (2026-10-04), echoes the card and prints ``THE EK AND KH COMMANDS HAVE
+  NO EFFECT IN NEC-4``.  Against momwire's two kernels that model behaves
+  as the extended one where it matters (a 28 MHz dipole ladder: at Delta/a
+  1.5-2 the extended kernel lands up to 5 ohm nearer NEC-4.2, and on thin
+  wire it costs 0.5-2 ohm, inside the model gap either way), so it is this
+  dialect's DEFAULT (`DeckModel.extended_kernel_default`), and a basis or a
+  deck that cannot take it falls back to the reduced kernel with an
+  advisory rather than refusing.
 
 Everything else the captures carry is a ``nec2`` card with the ``nec2``
 meaning: ``GW``, ``LD 4`` and ``LD 5``, ``FR 0``, ``GN -1``/``1``/``2`` (``GN 1``
@@ -94,6 +105,9 @@ class _Nec4Parser(_Nec2Parser):
 
     def __init__(self) -> None:
         super().__init__()
+        # The extended kernel by default, and no card turns it off (module
+        # docstring, momwire#1326).
+        self._extended_kernel = True
         # (tag, seg) -> the source kind that card address was driven with.
         # A port's kind is fixed for the deck because the model's feed list is
         # one port set across every execute group.
@@ -114,6 +128,11 @@ class _Nec4Parser(_Nec2Parser):
                     f"there, and no capture shows what any other value means"
                 )
         super()._geometry(card)
+
+    def _ek(self, card: Card) -> None:
+        """Ignored: NEC-4.2's ``EK`` has no effect (module docstring), so
+        the kernel stays the dialect's default whatever the card says.  The
+        printout echoes the card and NEC-4.2's own line about it."""
 
     def _ld(self, card: Card) -> None:
         if card.i(0) in (2, 3) and card.f(6) != 0.0:
@@ -204,7 +223,11 @@ class _Nec4Parser(_Nec2Parser):
             for i, address in enumerate(order)
             if self._source_kind[address] == _EX_CURRENT
         )
-        return replace(model, current_feeds=current) if current else model
+        return replace(
+            model,
+            current_feeds=current if current else model.current_feeds,
+            extended_kernel_default=True,
+        )
 
 
 def parse_nec4(text: str) -> DeckModel:
