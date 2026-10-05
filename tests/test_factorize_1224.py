@@ -273,13 +273,13 @@ def test_the_kernels_move_no_bit_of_z(lane, deck, monkeypatch):
         def __getattr__(self, name):
             return getattr(acc, name)
 
-        def factorize_rows(self, cols):
+        def factorize_rows(self, cols, **kw):
             calls["rows"] += 1
-            return acc.factorize_rows(cols)
+            return acc.factorize_rows(cols, **kw)
 
-        def factorize_ints(self, cols):
+        def factorize_ints(self, cols, **kw):
             calls["ints"] += 1
-            return acc.factorize_ints(cols)
+            return acc.factorize_ints(cols, **kw)
 
         def RowIndex(self, cols):
             calls["index"] += 1

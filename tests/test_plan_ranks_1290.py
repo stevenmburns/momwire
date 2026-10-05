@@ -87,9 +87,9 @@ def test_razor_z_does_not_move(switch, monkeypatch):
         name = "group_first_ranks" if switch == "_GROUP_RANKS" else "merge_rows_by_z"
         real = getattr(_accel.acc, name)
 
-        def counted(*a):
+        def counted(*a, **kw):
             seen.append(1)
-            return real(*a)
+            return real(*a, **kw)
 
         monkeypatch.setattr(_accel.acc, name, counted)
     else:
