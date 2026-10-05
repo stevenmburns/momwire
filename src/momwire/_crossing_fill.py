@@ -781,7 +781,9 @@ def axis_data(
     n_basis = basis.n_basis
 
     nodes_l, t_l, w_l, u_l, segpos = [], [], [], [], []
-    for g in seg_idx:
+    for i_g, g in enumerate(seg_idx):
+        if not i_g & 255:
+            _cancel.poll()
         sl, sr = geom.seg_l[g], geom.seg_r[g]
         h = geom.h[g]
         tang = geom.tangents[g]
@@ -5297,6 +5299,7 @@ class _FusedEnds:
         row = (R["ends"], self.row_cls, C, self.wC, self.wC_tz)
         col = (C["ends"], self.col_cls, R, self.wR, self.wR_tz)
         self.vec_loop, self.loc_loop = (row, col) if fwd else (col, row)
+        _cancel.poll()
         self.nz_vec = [np.flatnonzero(fv) for _p, _s, fv in self.vec_loop[0]]
         self.nz_loc = [np.flatnonzero(fv) for _p, _s, fv in self.loc_loop[0]]
         n_line = plan.kid.shape[1]
@@ -6139,6 +6142,7 @@ def _nodes_of(ax, segs):
     every node (momwire#912)."""
     runs = ax["seg_runs"]
     parts = []
+    _cancel.poll()
     for g in segs:
         rc = runs.get(int(g))
         if rc is not None:
@@ -6636,7 +6640,9 @@ def _axis_segment_tree(geom, seg_idx, leaf):
     idx = np.asarray(seg_idx, dtype=np.int64)
     lo = np.minimum(geom.seg_l[idx], geom.seg_r[idx])
     hi = np.maximum(geom.seg_l[idx], geom.seg_r[idx])
+    _cancel.poll()
     tree = _aca.build_cluster_tree(np.arange(idx.size), lo, hi, leaf)
+    _cancel.poll()
     return tree, idx
 
 
