@@ -1769,6 +1769,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         m_parts, n_parts = [], []
         for i0 in range(0, n_test, chunk_rows):
+            self._checkpoint()  # per test-row chunk of the prefilter
             i1 = min(i0 + chunk_rows, n_test)
             reach_blk = hh[i0:i1, None] + hh[None, :]
             # cdist rather than an explicit (rows, N_src, 3) difference:
@@ -5468,6 +5469,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # at this rule, and 512 of those was 2.6 GB of fixed working set.
         blk = _near_block(xg.shape[0], self.n_qp_const, self.extended_kernel)
         for p0 in range(0, mm.size, blk):
+            self._checkpoint()  # per block of near pairs
             p1 = min(p0 + blk, mm.size)
             mi, ni = mm[p0:p1], nn[p0:p1]
 
