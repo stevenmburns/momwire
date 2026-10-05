@@ -215,6 +215,13 @@ from ..deck._solver import _NATIVE_LOADING, NEC2_BASES, basis_from_program_name
 # ever a third-party consumer again.
 from ..deck._nec2 import REFUSE_NEAR_FIELD_REFL_COEF
 
+# `LD 0`'s series R + jwL + 1/(jwC): the network core's own evaluator, the
+# one the design library and `momwire.networks` already read. The portal kept
+# a copy "COPIED, not imported" from antennaknobs (#846: the portal depends on
+# momwire alone) — but the evaluator is momwire's, and an `LD` card gives R, L
+# and C and nothing else, so it is called with no finite-Q terms and its
+# arithmetic is the copy's to the bit (momwire#1336).
+from ..networks._reduce import _series_rlc_impedance
 from ..deck._nec2_geometry import _SMIN, build_geometry
 
 from ..serve import Seam, run_session
@@ -1565,25 +1572,6 @@ def _union_ports(deck: PortalDeck) -> list[tuple[int, int]]:
             if (tag, seg) not in ports:
                 ports.append((tag, seg))
     return ports
-
-
-def _series_rlc_impedance(r, l, c, omega):
-    """Series R + jwL + 1/(jwC). Any of r/l/c may be None (omitted term).
-
-    COPIED, not imported, from ``antennaknobs.network._series_rlc_impedance``
-    (#846: the portal depends on momwire alone). Twenty-six lines with zero
-    module dependencies, minus the finite-Q terms, which no NEC ``LD`` card can
-    ask for: the card gives R, L and C and nothing else. The original stays
-    where it is and serves the design library; this one serves ``LD 0``.
-    """
-    z = 0.0 + 0.0j
-    if r is not None:
-        z += r
-    if l is not None:
-        z += 1j * omega * l
-    if c is not None:
-        z += 1.0 / (1j * omega * c)
-    return z
 
 
 @dataclass
