@@ -1903,12 +1903,26 @@ static py::tuple transmitted_field_proj_batch(
 // numpy" on the assumption that numpy propagated — it did not, and that
 // assumption was the only thing making the physical cases disagree.
 
+// LANES (perf item 9). In the AVX2 build the row's columns go four to a
+// vector: each lane forms the scalar loop's dx, dy, rho2, hh, r1sq and
+// quotient with the same operations in the same order (separate multiplies
+// and adds, a correctly rounded division), and keeps a running max and min.
+// A max or a min is a selection, not an arithmetic result, so the order the
+// lanes and the scalar tail are combined in moves nothing: the values are
+// non-negative and never -0 (squares and their quotient), and
+// `_mm256_min_pd(q, acc)` returns `acc` when q is NaN, which drops the 0/0
+// pair exactly as the scalar compare does. The division was the loop's cost
+// (one divsd a pair, ~1 s of SG buried x16 and ~4 s of invl x32 on Haswell).
+// `lanes=false` is the scalar loop, the reference the lanes are gated
+// against (tests/test_pair_extents_lanes_1290.py); the baseline, arm64 and
+// MSVC builds have only it.
 static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
                                                         py::array::forcecast> x,
                                     py::array_t<double, py::array::c_style |
                                                         py::array::forcecast> y,
                                     py::array_t<double, py::array::c_style |
-                                                        py::array::forcecast> d_b) {
+                                                        py::array::forcecast> d_b,
+                                    bool lanes) {
     auto xb = x.unchecked<1>();
     auto yb = y.unchecked<1>();
     auto db = d_b.unchecked<1>();
@@ -1935,8 +1949,37 @@ static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
             const double xi = xp[i], yi = yp[i], di = dp[i];
             double r1_row = 0.0;
             double q_row = std::numeric_limits<double>::infinity();
-            // j >= i: the upper triangle, diagonal included.
-            for (py::ssize_t j = i; j < n; ++j) {
+            py::ssize_t j0 = i;
+#if MW568_LANES
+            if (lanes && n - i >= 4) {
+                const __m256d vx = _mm256_set1_pd(xi), vy = _mm256_set1_pd(yi);
+                const __m256d vd = _mm256_set1_pd(di);
+                __m256d vr = _mm256_setzero_pd();
+                __m256d vq = _mm256_set1_pd(std::numeric_limits<double>::infinity());
+                for (; j0 + 4 <= n; j0 += 4) {
+                    const __m256d dx = _mm256_sub_pd(vx, _mm256_loadu_pd(xp + j0));
+                    const __m256d dy = _mm256_sub_pd(vy, _mm256_loadu_pd(yp + j0));
+                    const __m256d rho2 = _mm256_add_pd(_mm256_mul_pd(dx, dx),
+                                                       _mm256_mul_pd(dy, dy));
+                    const __m256d hh = _mm256_add_pd(vd, _mm256_loadu_pd(dp + j0));
+                    const __m256d hh2 = _mm256_mul_pd(hh, hh);
+                    vr = _mm256_max_pd(_mm256_add_pd(rho2, hh2), vr);
+                    vq = _mm256_min_pd(_mm256_div_pd(hh2, rho2), vq);
+                }
+                alignas(32) double lr[4], lq[4];
+                _mm256_store_pd(lr, vr);
+                _mm256_store_pd(lq, vq);
+                for (int l = 0; l < 4; ++l) {
+                    if (lr[l] > r1_row) r1_row = lr[l];
+                    if (lq[l] < q_row) q_row = lq[l];
+                }
+            }
+#else
+            (void)lanes;
+#endif
+            // j >= i: the upper triangle, diagonal included (the lanes'
+            // columns above, the rest here).
+            for (py::ssize_t j = j0; j < n; ++j) {
                 const double dx = xi - xp[j];
                 const double dy = yi - yp[j];
                 const double rho2 = dx * dx + dy * dy;
@@ -2550,8 +2593,9 @@ void register_mw568(py::module_ &m) {
           "and leaves one sqrt and one atan for the whole cloud. Returns "
           "A pair with rho == hh == 0 yields 0/0; it is dropped from the "
           "minimum, which is what the numpy reference's Python-level min does "
-          "with the same NaN.",
-          py::arg("x"), py::arg("y"), py::arg("d_b"));
+          "with the same NaN. `lanes=False` is the scalar loop the AVX2 "
+          "lanes are gated against (perf item 9); the two are bit-identical.",
+          py::arg("x"), py::arg("y"), py::arg("d_b"), py::arg("lanes") = true);
     m.def("assemble_field_galerkin", &assemble_field_galerkin,
           "Accumulate one observer chunk of bspline._field_galerkin_block's "
           "assembly into Q, in place. Fuses the two moment sums into a "
