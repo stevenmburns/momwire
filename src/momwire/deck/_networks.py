@@ -238,24 +238,39 @@ def build_network(
     cards = live_cards(model, plan, group)
     if not cards:
         return None
+    return flat_network(cards, plan.n_ports, voltages, wires=model.wires, held=held)
 
-    n = plan.n_ports
-    port_to_idx = {port_name(k): k for k in range(n)}
+
+def flat_network(
+    cards, n_ports: int, voltages, *, wires=(), held: tuple[int, ...] = ()
+) -> tuple[Network, dict[str, int]]:
+    """``cards`` — ``(card, (port a, port b))`` pairs — as one flat network
+    over ``n_ports`` structure ports, with every non-endpoint port pinned.
+
+    The composition half of :func:`build_network`, and the whole of it for a
+    dialect that resolves its own addressing: the NEC-5 seam lands a card on
+    NODES, not on segment centres, so it cannot use :func:`live_cards`' plan
+    but builds exactly this network (momwire#1336 — it kept a copy of these
+    lines until then).  ``wires`` is what :func:`card_branches`' zero-length
+    rule measures against; a caller that resolved every length already passes
+    none.  The pinning rule is :func:`build_network`'s docstring.
+    """
+    port_to_idx = {port_name(k): k for k in range(n_ports)}
     # Every deck port is a delta gap on the structure, which is what
     # `PortOnWire` names.  There are no `PortVirtual` nodes here and there
     # cannot be: a NEC network's every node is a segment.
-    ports = {port_name(k): PortOnWire(name=port_name(k)) for k in range(n)}
+    ports = {port_name(k): PortOnWire(name=port_name(k)) for k in range(n_ports)}
 
     branches: list[object] = []
     endpoints: set[int] = set()
     for card, (port_a, port_b) in cards:
-        branches += card_branches(card, port_a, port_b, model.wires)
+        branches += card_branches(card, port_a, port_b, wires)
         endpoints.add(port_a)
         endpoints.add(port_b)
 
     sources = [
         Driven(port_name(k), complex(voltages[k]))
-        for k in range(n)
+        for k in range(n_ports)
         if k not in endpoints or k in held or voltages[k] != 0
     ]
     network = Network(ports=ports, branches=branches, sources=sources)

@@ -504,16 +504,10 @@ from ..deck._nec5 import (
 # per-reader, semantics once*).  This module resolves the ADDRESSING, which is
 # the dialect's own, and hands the semantics a record with its fields already
 # in NEC's order.
-from ..deck._networks import card_branches, port_name
-from ..deck._solver import (
-    _NATIVE_LOADING,
-    _warn_kernel_fallback,
-    basis_entry,
-    extended_kernel_default_refusal,
-    port_kwargs,
-)
+from ..deck._networks import flat_network
+from ..deck._solver import _NATIVE_LOADING, basis_entry, construct_solver
 from ..deck.model import NetworkCard
-from ..networks import Driven, Network, NetworkReducer, PortOnWire
+from ..networks import NetworkReducer
 
 # The far-field readout has ONE owner, and since momwire#719 U1 it is a
 # neutral module: element currents to E(THETA)/E(PHI), the gain columns and
@@ -2697,11 +2691,15 @@ def _solver_for(
     solver_class: type = BSplineSolver,
     basis_kwargs: Mapping[str, object] = MappingProxyType({}),
     extended_kernel: bool = False,
+    extended_kernel_default: bool = False,
+    basis_name: str = "",
 ):
     """The constructed solver, one port per declared site.
 
-    ``extended_kernel`` is :func:`serve`'s resolution of this dialect's
-    default (momwire#1326): on, unless the basis or the deck cannot take it.
+    ``extended_kernel`` with ``extended_kernel_default`` is this dialect's
+    default (momwire#1326): on, unless the basis or the deck cannot take it,
+    which :func:`~momwire.deck._solver.construct_solver` resolves — the same
+    resolution the nec2 front end's ``build_solver`` asks it for.
     Off passes no kwarg at all, so a reduced-kernel solve is the constructor
     call this seam always made.
 
@@ -2712,8 +2710,10 @@ def _solver_for(
     Two kwargs carry the deck's ports and momwire orders their rows
     ``[gap feeds…, junction ports…, node gaps…]`` — the order
     :func:`_assign_columns` already wrote down.  WHICH of them the family
-    takes is ``momwire.deck._solver.port_kwargs``' to decide and not this
-    module's (momwire#603 U3): the roster's differences are refusals by the
+    takes, and how the call is spelled, is
+    ``momwire.deck._solver.construct_solver``'s to decide and not this
+    module's (momwire#603 U3, momwire#1336): the nec2 front end constructs
+    through the same function, and the roster's differences are refusals by the
     presence of a keyword rather than by its value, so a seam that spelled
     its own rule here would be a second copy of a list that has to stay
     exactly the first one.  ``basis_kwargs`` is the roster entry's own —
@@ -2741,7 +2741,6 @@ def _solver_for(
     :func:`_far_ground` and reach nothing else.  A ``GD`` routed down the
     branch above it would be ``GN 0``, which is 34 % wrong in R.
     """
-    radii = [piece.radius for piece in mesh.pieces]
     # Arclength 0 is the grounded end of the piece that starts there; the "end"
     # spelling is the mirror case — a wire whose END stands in the plane —
     # which no capture writes, and which is served because leaving it out would
@@ -2779,18 +2778,24 @@ def _solver_for(
             deck.wire_distributed_rlc.get(piece.tag) for piece in mesh.pieces
         ]
 
-    return solver_class(
-        wires=[piece.points for piece in mesh.pieces],
-        n_per_edge_per_wire=[[piece.n_elements] for piece in mesh.pieces],
+    return construct_solver(
+        solver_class,
+        basis_kwargs,
+        polylines=[piece.points for piece in mesh.pieces],
+        edge_elements=[[piece.n_elements] for piece in mesh.pieces],
         feeds=feeds,
-        wire_radius=radii[0] if len(set(radii)) == 1 else radii,
+        radii=[piece.radius for piece in mesh.pieces],
         wavelength=wavelength,
-        **port_kwargs(solver_class, junctions=mesh.junctions, node_gaps=gaps),
-        **ground,  # type: ignore[arg-type]
-        **loading,
-        **({"extended_kernel": True} if extended_kernel else {}),
-        **basis_kwargs,
-    )
+        junctions=mesh.junctions,
+        node_gaps=gaps,
+        loading=loading,
+        ground=ground,
+        extended_kernel=extended_kernel,
+        extended_kernel_default=extended_kernel_default,
+        basis=basis_name,
+        # construct_solver -> _solver_for -> serve -> serve's caller
+        warn_depth=2,
+    )[0]
 
 
 # --------------------------------------------------------------------------
@@ -3012,23 +3017,16 @@ def _reducer_for(
     solve would be two different circuits superposed, which is not superposition
     at all.
     """
-    branches: list[object] = []
-    endpoints: set[int] = set()
-    for entry in cards:
-        # `wires=()` is safe and is the point of resolving the length above:
-        # the zero-length rule is the only thing `card_branches` would reach
-        # for geometry for, and this dialect's rule measures something else.
-        branches += card_branches(entry.card, entry.site_a, entry.site_b, ())
-        endpoints.update((entry.site_a, entry.site_b))
-    held = frozenset(driven)
-    sources = [
-        Driven(port_name(k), complex(voltages[k]))
-        for k in range(n_sites)
-        if k not in endpoints or k in held or voltages[k] != 0
-    ]
-    ports = {port_name(k): PortOnWire(name=port_name(k)) for k in range(n_sites)}
-    network = Network(ports=ports, branches=branches, sources=sources)
-    return NetworkReducer(network, {port_name(k): k for k in range(n_sites)}, n_sites)
+    # `wires=()` is safe and is the point of resolving the length above: the
+    # zero-length rule is the only thing `card_branches` would reach for
+    # geometry for, and this dialect's rule measures something else.
+    network, port_to_idx = flat_network(
+        [(entry.card, (entry.site_a, entry.site_b)) for entry in cards],
+        n_sites,
+        voltages,
+        held=tuple(driven),
+    )
+    return NetworkReducer(network, port_to_idx, n_sites)
 
 
 def _reduced_state(
@@ -4440,16 +4438,6 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     # EK-on and the dialect has no card for it, so this seam solves EK-on
     # unless the basis or the deck cannot take it, and then falls back to the
     # reduced kernel with an `ExtendedKernelDefault` advisory, not a refusal.
-    kernel_refusal = extended_kernel_default_refusal(
-        solver_class,
-        basis_kwargs,
-        [piece.points for piece in mesh.pieces],
-        [piece.radius for piece in mesh.pieces],
-        mesh.junctions,
-        _ground_kwargs(deck, medium).get("ground_z"),
-    )
-    if kernel_refusal is not None:
-        _warn_kernel_fallback(basis, kernel_refusal)
     try:
         solver = _solver_for(
             deck,
@@ -4458,7 +4446,9 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
             medium,
             solver_class,
             basis_kwargs,
-            extended_kernel=kernel_refusal is None,
+            extended_kernel=True,
+            extended_kernel_default=True,
+            basis_name=basis,
         )
     except NotImplementedError as exc:
         # The crossing serve's scope (momwire#524 phase 2: one above member,
