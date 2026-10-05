@@ -261,9 +261,11 @@ RAZOR_2P_FEED = {"average": 677.0 - 97.6j, "poor": 750.9 - 269.8j}
 # NEC-5, R low in both soils, and 0.1 ohm from each other.
 MEASURED = {
     ("bspline", "average"): 675.196 - 98.488j,
-    ("sg", "average"): 675.172 - 98.538j,
+    # momwire#1354: the mixed-potential fill, 2e-6 from bspline's answer on
+    # both soils (the direct fill read 675.172 - 98.538j / 748.853 - 269.494j).
+    ("sg", "average"): 675.193 - 98.496j,
     ("bspline", "poor"): 748.945 - 269.428j,
-    ("sg", "poor"): 748.853 - 269.494j,
+    ("sg", "poor"): 748.943 - 269.435j,
 }
 # The buried class on the validation page: 0.2 % in R on the buried dipole,
 # 0.3 ohm on the ~78 ohm buried-radial vertical, 0.2-2 ohm on the

@@ -53,9 +53,13 @@ PINNED = {
     "razor-2p": (70.8068660130 - 0.2415288500j, 71.4387098395 + 0.4515876592j),
     "bspline": (71.1232015671 + 1.2012528422j, 71.7044595259 + 2.1861961542j),
     "bspline-d1": (71.0012455387 + 0.9516474150j, 71.6041366040 + 1.6922649323j),
+    # momwire#1354: the mixed-potential fill. The direct fill read
+    # 71.2220705882 + 1.2490278872j / 71.7861410477 + 2.2249137096j; the new
+    # fill sits 0.15 ohm closer to NEC-5 on both placements (1.84 / 2.12 ohm
+    # against 1.99 / 2.26) and 0.01 ohm from bspline's own answer.
     "sinusoidal-galerkin": (
-        71.2220705882 + 1.2490278872j,
-        71.7861410477 + 2.2249137096j,
+        71.1117686390 + 1.1134179730j,
+        71.6934518427 + 2.0954101627j,
     ),
 }
 PIN_OHM = 1e-3
