@@ -176,7 +176,8 @@ def test_a_reversed_copy_is_compared_end_for_end():
     p, q = (0.0, 0.0, 0.0), (0.0, 0.0, 1.0)
     wires = [np.array([p, q]), np.array([q, p]), np.array([(1.0, 0.0, 0.0), p])]
     same = [[(2, "end"), (0, "start"), (1, "end")]]
-    *_rest, dedup = drop_duplicated_wires("X", wires, None, junctions=same)
+    with pytest.warns(DuplicateWire):
+        *_rest, dedup = drop_duplicated_wires("X", wires, None, junctions=same)
     assert dedup.removed == ((1, 0, True),)
     *_rest, dedup = drop_duplicated_wires(
         "X", wires, None, junctions=[[(2, "end"), (0, "start")]]
