@@ -4457,6 +4457,17 @@ def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
         yield from flush()
 
 
+def _polled_nonzeros(ends):
+    """`[np.flatnonzero(fv) for _p, _s, fv in ends]`, polling every 256 ends:
+    at x32 the whole list is ~0.15 s."""
+    out = []
+    for i, (_p, _s, fv) in enumerate(ends):
+        if not i & 255:
+            _cancel.poll()
+        out.append(np.flatnonzero(fv))
+    return out
+
+
 def _vec_batches(items, n):
     """`items` cut into lists of at most `_END_VEC_PAIRS` (item, node) pairs
     against a line of `n` nodes, one item at least."""
@@ -5301,9 +5312,8 @@ class _FusedEnds:
         row = (R["ends"], self.row_cls, C, self.wC, self.wC_tz)
         col = (C["ends"], self.col_cls, R, self.wR, self.wR_tz)
         self.vec_loop, self.loc_loop = (row, col) if fwd else (col, row)
-        _cancel.poll()
-        self.nz_vec = [np.flatnonzero(fv) for _p, _s, fv in self.vec_loop[0]]
-        self.nz_loc = [np.flatnonzero(fv) for _p, _s, fv in self.loc_loop[0]]
+        self.nz_vec = _polled_nonzeros(self.vec_loop[0])
+        self.nz_loc = _polled_nonzeros(self.loc_loop[0])
         n_line = plan.kid.shape[1]
         tile_line = tiles.tile_of_key[plan.kid[0]]
         self._tile_line = tile_line
