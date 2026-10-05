@@ -3229,7 +3229,11 @@ def _pattern_lines(
         ]
     out += ["", *_PATTERN_TABLE_HEADER]
     raw2 = floor_scale * floor_scale
-    for j in range(n_phi):
+    # XNDA's A digit (momwire#1079, measured on the oracle: 0, 1, 2, 5, 11,
+    # 101, 1002...): 0 prints no average, any other digit prints the AVERAGE
+    # POWER GAIN line, and 2 prints that line INSTEAD of the rows.
+    rows_printed = card.i(3) % 10 != 2
+    for j in range(n_phi if rows_printed else 0):
         for i in range(n_theta):
             et, ep = complex(e_theta[i, j]), complex(e_phi[i, j])
             # A component under NEC's own field floor is the fill's rounding
@@ -3259,7 +3263,7 @@ def _pattern_lines(
                 )
             )
     out += ["", ""]
-    if card.i(3) % 10:  # XNDA's A digit: 1 asks for the average power gain
+    if card.i(3) % 10:  # XNDA's A digit: any nonzero value asks for the average
         out.append(_average_gain_line(g_v + g_h, thetas, d_theta, d_phi, n_phi))
     out.append(_PATTERN_TIME)
     return out

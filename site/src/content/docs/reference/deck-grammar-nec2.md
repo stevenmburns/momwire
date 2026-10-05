@@ -1262,8 +1262,22 @@ then reports.
 | `F4` | `DPH`, phi increment, degrees |
 | `F5` | `RFLD`, range in metres. `0` selects the gain-only form |
 
-`I4` (`XNDA`, output-format control) and `F6` (`GNOR`, gain normalisation) are
-ignored.
+`F6` (`GNOR`, gain normalisation) is ignored.
+
+`I4` is `XNDA`, four decimal digits `X N D A`. Only the **`A` digit** (units)
+is honoured. Measured against the NEC-2 engine SimNEC ships
+(`5b4az.ae6ty.1.17`), on one dipole deck, every digit varied alone:
+
+| digit | oracle's behaviour | here |
+|---|---|---|
+| `A` (units) | `0` prints no `AVERAGE POWER GAIN` line; any non-zero value (`1`, `2`, `5`, ...) prints it. `2` also leaves the table with no rows, only the average | honoured: the line for any non-zero `A`, no rows for `2` |
+| `D` (tens) | non-zero relabels the gain columns `DIRECTIVE GAINS` instead of `POWER GAINS` (values unchanged on this lossless deck) | not honoured; always `POWER GAINS` |
+| `N` (hundreds) | non-zero appends a `NORMALIZED GAIN` block (major axis, with its normalisation factor) | not honoured; no block |
+| `X` (thousands) | non-zero labels the first two gain columns `VERTC` / `HORIZ`; zero labels them `MAJOR` / `MINOR` | not honoured; always `VERTC` / `HORIZ` |
+
+An earlier version of this page called all of `I4` ignored. That was wrong
+for the `A` digit, which is the one a pattern deck most often sets (`1001`).
+The fixtures `dipole_rp_xnda_1000`, `_1005` and `_1002` pin it.
 
 | mode | asks for | here |
 |---|---|---|
