@@ -657,7 +657,12 @@ class RemainderBelow(Remainder):
         d_s = gz - ends[:, 2]
         r1_max = _r1_max_below(obs_p, ends, d_o, d_s, eps_t, k_p)
         grid = _sommerfeld_below.get_grid_below(
-            eps_t, k_p, r1_max, self._omega, mu=solver.mu
+            eps_t,
+            k_p,
+            r1_max,
+            self._omega,
+            mu=solver.mu,
+            cancel_flag=solver._cancel_flag,
         )
 
         n_src = seg_l.shape[0]
@@ -680,7 +685,7 @@ class RemainderBelow(Remainder):
             if first is not None:
                 o_p, o_t = o_p[first], o_t[first]
             proj = _sommerfeld_below.remainder_field_proj_below(
-                o_p, o_t, src, t_src, gz, k_p, k_m, grid
+                o_p, o_t, src, t_src, gz, k_p, k_m, grid, solver._cancel_flag
             )
             mom = _arc_moments(proj, W)
             if distinct:

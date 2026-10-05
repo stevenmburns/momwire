@@ -120,3 +120,35 @@ def poll():
     token = getattr(_ambient, "token", None)
     if token is not None and token._flag[0]:
         raise SolveAborted()
+
+
+def ptr():
+    """The ambient token's raw flag address for a C++ kernel's `cancel_flag`
+    argument; 0 (no cancellation) when there is none."""
+    token = getattr(_ambient, "token", None)
+    return token.ptr if token is not None else 0
+
+
+class _BorrowedFlag:
+    """A token-shaped view of a flag some solver's `CancelToken` owns, known
+    here only by its raw address (`_Cancelable._cancel_flag`). The grid
+    getters receive that address, the convention their callers already pass
+    to `_sommerfeld.get_grid`; this lets them install it as the ambient token
+    without a second spelling of `poll`. It owns nothing: the solver's token
+    outlives the call that borrows it."""
+
+    def __init__(self, addr):
+        import ctypes
+
+        self.ptr = int(addr)
+        self._flag = np.ctypeslib.as_array((ctypes.c_int32 * 1).from_address(self.ptr))
+
+
+def scope_flag(addr):
+    """`scope` for a raw flag address (0 = none). A zero address installs no
+    token, so the block keeps whatever token is already ambient: a getter
+    called with no flag of its own from inside a fill that has one still
+    polls the fill's."""
+    if not addr:
+        return contextlib.nullcontext()
+    return scope(_BorrowedFlag(addr))

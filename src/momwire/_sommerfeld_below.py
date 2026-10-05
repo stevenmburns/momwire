@@ -86,7 +86,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from . import _somm_disk_cache
+from . import _cancel, _somm_disk_cache
 from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
@@ -582,6 +582,7 @@ def _six_below_accel(k_p, k_m, rho, h, rtol, selfconv):
         _GXC,
         _GWC,
         _MAX_TAIL_PANELS,
+        cancel_flag=_cancel.ptr(),
     )
 
 
@@ -1095,6 +1096,7 @@ def _six_integrals_below_many(
     if not _use_below_accel():
         out = np.empty((n, 6), dtype=np.complex128)
         for i in range(n):
+            _cancel.poll()  # the C++ batch polls per node; so does this loop
             out[i] = _six_integrals_below(
                 eps_t,
                 k2,
@@ -1499,6 +1501,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
             if ridx in _DEFERRED_REGIONS:
                 surf = None  # deferred; see `_fill_region`
             else:
+                _cancel.poll()
                 rr, tt = np.meshgrid(r_nodes, th_nodes, indexing="ij")
                 surf = iv_surfaces_direct_below(
                     self.eps_t,
@@ -1620,6 +1623,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
         reg = self._regions[idx]
         if reg["filled"]:
             return
+        _cancel.poll()
         th_nodes = reg["th_nodes"]
         shared, own, lo, joint = (), None, None, False
         if idx in self._band_floor_idx:
@@ -1869,8 +1873,16 @@ def r1_bracket_one_bucket(lo, hi, eps_t, k2):
     return _somm_r1_bucket_wl(x_lo) == _somm_r1_bucket_wl(x_hi)
 
 
-def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
+def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0):
     """Cached `SommerfeldGridBelow`, sharing `_sommerfeld`'s grid cache.
+
+    `cancel_flag` is the solve's raw flag address (`_Cancelable._cancel_flag`,
+    0 = none), the convention `_sommerfeld.get_grid` takes. It is installed
+    as the ambient token (`_cancel.scope_flag`) for the fill only, and the
+    contour batch polls it per node (momwire#1348). An aborted fill raises
+    out of `fill()` before anything is cached: not in `_GRID_CACHE`, and not
+    on disk (`fetch_or_fill` writes only a returned grid, by atomic rename).
+    The flag is never stored on the grid, which outlives the solve.
 
     The cache is EXTENDED, not forked: `_sommerfeld.get_grid`'s key gained
     a leading regime discriminator in the same change, so an above and a
@@ -1936,10 +1948,11 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None):
         # The disk level (momwire#1224). A caller asking for `health` wants
         # the tally of a fill it watched, so it gets a fresh one. `track`:
         # the band regions fill lazily, and each one re-writes the file.
-        if health is None:
-            grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
-        else:
-            grid = fill()
+        with _cancel.scope_flag(cancel_flag):
+            if health is None:
+                grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
+            else:
+                grid = fill()
         _GRID_CACHE[key] = grid
     return grid
 
@@ -2027,7 +2040,20 @@ def _capped_extremes(obs, src, d_obs, d_src, r1_cap):
     return None if ext is None else ext[1:]
 
 
-def remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid):
+def remainder_field_proj_below(
+    obs, t_obs, src, t_src, ground_z, k_p, k_m, grid, cancel_flag=0
+):
+    """`_remainder_field_proj_below` with the solve's `cancel_flag` ambient,
+    so a band region this query fills lazily polls it (momwire#1348). A region
+    aborted mid-fill stays unfilled: `_fill_region` marks it only after its
+    values exist."""
+    with _cancel.scope_flag(cancel_flag):
+        return _remainder_field_proj_below(
+            obs, t_obs, src, t_src, ground_z, k_p, k_m, grid
+        )
+
+
+def _remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid):
     """Projected below/below remainder table t_m · F(r_m, r_n) · t_n.
 
     The eqs 143–147 azimuth combination, unchanged: the surfaces already

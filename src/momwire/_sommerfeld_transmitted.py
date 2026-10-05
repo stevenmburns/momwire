@@ -162,7 +162,7 @@ import os
 
 import numpy as np
 
-from . import _somm_disk_cache
+from . import _cancel, _somm_disk_cache
 from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
@@ -391,6 +391,7 @@ def _six_transmitted_accel(k_p, k_m, rho, z, zp, swap, rtol, selfconv):
         _GXC,
         _GWC,
         _MAX_TAIL_PANELS_T,
+        cancel_flag=_cancel.ptr(),
     )
 
 
@@ -663,6 +664,7 @@ def _six_integrals_transmitted_many(
     if not _use_transmitted_accel():
         out = np.empty((n, 6), dtype=np.complex128)
         for i in range(n):
+            _cancel.poll()  # the C++ batch polls per node; so does this loop
             out[i] = _six_integrals_transmitted(
                 eps_t,
                 k2,
@@ -1349,8 +1351,13 @@ def get_grid_below_above(
     rtol=1e-9,
     health=None,
     r_min=None,
+    cancel_flag=0,
 ):
     """Cached `TransmittedGrid`, sharing `_sommerfeld`'s grid cache.
+
+    `cancel_flag` as in `_sommerfeld_below.get_grid_below` (momwire#1348):
+    ambient for the fill only, polled per contour node; an aborted fill
+    caches nothing in memory or on disk.
 
     The cache is the shared one with the regime discriminator U2 added, now
     carrying a third value: `("below-above", ...)` cannot collide with
@@ -1412,10 +1419,11 @@ def get_grid_below_above(
         # The disk level (momwire#1224); `rtol` sets the bytes but is not in
         # the in-process key, so it rides along. `health` as in the below
         # family: a caller watching a fill gets a fresh one.
-        if health is None:
-            grid = _somm_disk_cache.fetch_or_fill(key, fill, extra=(float(rtol),))
-        else:
-            grid = fill()
+        with _cancel.scope_flag(cancel_flag):
+            if health is None:
+                grid = _somm_disk_cache.fetch_or_fill(key, fill, extra=(float(rtol),))
+            else:
+                grid = fill()
         _GRID_CACHE[key] = grid
     return grid
 

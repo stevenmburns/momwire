@@ -444,6 +444,10 @@ _CANCELLABLE_KERNELS = (
     # fused source-side moments.
     "remainder_field_proj_owned",
     "remainder_graded_inner",
+    # momwire#1348: the below/below and below->above grid fills' contour
+    # batches, polled per node.
+    "below_six_integrals_batch",
+    "transmitted_six_integrals_batch",
 )
 
 
