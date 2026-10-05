@@ -181,25 +181,36 @@ def _deck(name):
 
 def _cancel_latency(make, deck, at):
     """(seconds from the flag to the raise, the files of the innermost frames
-    the solve was in when the flag went up)."""
+    at the flag). The flag goes up at the first moment at or after `at` seconds
+    that the solve is INSIDE the crossing fill or the near-interface tables,
+    sampled every 2 ms, so every run lands in the phase under test whatever the
+    machine's speed."""
     tok = CancelToken()
     solver = make(**deck, cancel=tok)
     main = threading.get_ident()
     seen = {}
+    done = threading.Event()
 
     def trip():
         time.sleep(at)
-        frames = traceback.extract_stack(sys._current_frames().get(main))
-        seen["files"] = [f.filename.rsplit("/", 1)[-1] for f in frames[-8:]]
-        seen["t"] = time.perf_counter()
-        tok.cancel()
+        while not done.is_set():
+            frames = traceback.extract_stack(sys._current_frames().get(main))
+            files = [f.filename.rsplit("/", 1)[-1] for f in frames]
+            if any(f in _FILL_FILES for f in files):
+                seen["files"] = files[-8:]
+                seen["t"] = time.perf_counter()
+                tok.cancel()
+                return
+            time.sleep(0.002)
 
     threading.Thread(target=trip, daemon=True).start()
     try:
         solver.compute_impedance()
     except SolveAborted:
         return time.perf_counter() - seen["t"], seen["files"]
-    pytest.skip(f"the solve finished before the flag at {at} s")
+    finally:
+        done.set()
+    pytest.skip(f"the solve left the fill before {at} s, or never entered it")
 
 
 @pytest.mark.slow
@@ -207,12 +218,9 @@ def _cancel_latency(make, deck, at):
 @pytest.mark.parametrize("deckname", ["buried", "invl"])
 @pytest.mark.parametrize("engine", ["razor", "sg", "bs2"])
 def test_a_cancel_mid_fill_returns_within_the_bound(engine, deckname, at):
-    """Cancel at `at` seconds into the solve. Asserted when the flag lands in
-    the crossing fill or the near-interface tables, which are this issue's.
-    The below/below Sommerfeld grid fill (`_sommerfeld_below`) takes no token
-    at all and is a separate hole (a cancel at 2 s into razor's buried x16
-    waits out that fill), so a landing there skips rather than fails."""
+    """Cancel inside the crossing fill or the near-interface tables, at or
+    after `at` seconds into an x16 solve. The below/below Sommerfeld grid fill
+    (`_sommerfeld_below`) takes no token at all and is a separate hole, so the
+    flag is raised only once the solve is in this issue's phases."""
     latency, files = _cancel_latency(_MAKE[engine], _deck(deckname), at)
-    if not any(f in _FILL_FILES for f in files):
-        pytest.skip(f"the flag landed outside the buried fill: {files}")
     assert latency < BOUND_S, (latency, files)
