@@ -858,6 +858,11 @@ def _pair_extents_below(x, y, d_b, rows=256, *, r1_cap=None, floor=None):
     return r1_max, _pair_extents_below_numpy(x, y, d_b, rows, r1_cap)[1]
 
 
+# The AVX2 lanes of the accelerated walk (perf item 9): bit-identical to its
+# scalar loop, which `False` selects (tests/test_pair_extents_lanes_1290.py).
+_PAIR_EXTENTS_LANES = True
+
+
 def _pair_extents_below_all(x, y, d_b, rows):
     """`_pair_extents_below` over every pair: the accelerated walk when there
     is one, else the numpy one."""
@@ -868,7 +873,7 @@ def _pair_extents_below_all(x, y, d_b, rows):
         # 2.31 s -> 0.062 s over the 246 M pairs of a 48-radial screen.
         # The numpy form below stays the reference and the fallback, and is
         # what G-914-1 gates against.
-        r1_max, th_min = _acc.pair_extents_below(x, y, d_b)
+        r1_max, th_min = _acc.pair_extents_below(x, y, d_b, lanes=_PAIR_EXTENTS_LANES)
         return float(r1_max), float(th_min)
     return _pair_extents_below_numpy(x, y, d_b, rows)
 
