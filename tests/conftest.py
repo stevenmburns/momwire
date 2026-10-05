@@ -28,11 +28,45 @@ Groups are inert outside xdist: a serial run ignores them entirely.
 """
 
 import os
+import sys
 
 import pytest as _pytest
 
 
 _SOMM_CACHE_TMP: list = []
+
+
+_WIDTH_VARS = ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS")
+
+
+def _pin_worker_threads(environ=None, modules=None):
+    """One OpenMP/BLAS thread per xdist worker, whatever the caller exported.
+
+    momwire#1108: `OMP_NUM_THREADS=8 make test` used to cost 910 s and trip
+    the per-test ceiling 14 times, against 236 s with nothing exported,
+    because this pin was `setdefault` and an exported width survived into
+    every worker (8 workers x 8 threads). Single-process study scripts still
+    want a width exported; only the xdist lane is overridden, and loudly.
+
+    The override works only if it lands BEFORE momwire (and so libgomp) is
+    imported in the worker: the OpenMP pool reads its width when the runtime
+    loads. If momwire is already imported we cannot fix it from here, so
+    fail naming the trap rather than run 4x slow and flag unrelated tests.
+    """
+    environ = os.environ if environ is None else environ
+    modules = sys.modules if modules is None else modules
+    exported = {
+        k: environ[k] for k in _WIDTH_VARS if environ.get(k, "1").strip() != "1"
+    }
+    if exported and any(m == "momwire" or m.startswith("momwire.") for m in modules):
+        raise _pytest.UsageError(
+            f"{exported} is exported and momwire was imported in this xdist "
+            "worker before tests/conftest.py could pin one thread (momwire#1108): "
+            "the OpenMP pool is already full-width. Unset the variable for the "
+            "xdist lane, or run with `-p no:xdist -n0`."
+        )
+    for k in _WIDTH_VARS:
+        environ[k] = "1"
 
 
 def pytest_configure(config):
@@ -63,8 +97,7 @@ def pytest_configure(config):
     # controller and any serial run are left untouched, so the serial
     # lanes keep the threading they were certified with.
     if hasattr(config, "workerinput"):
-        os.environ.setdefault("OMP_NUM_THREADS", "1")
-        os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+        _pin_worker_threads()
 
 
 def pytest_unconfigure(config):
