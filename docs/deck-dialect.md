@@ -57,11 +57,28 @@ NEC-2 is on before the portal changes.
 ## The plural-dialect seam
 
 `parse()` returns a **dialect-neutral** `DeckModel` — wires, arclengths, feeds,
-node gaps, loads, ground, frequencies, requests — and `build_solver(model,
-basis=...)` maps it onto the solver families. A NEC-5 dialect is therefore a
-second parser, not a second pipeline. Nothing NEC-2-specific may enter the
-model's vocabulary; `node_gaps` is already there because it is how NEC-5's
-segment-end sources will land.
+loads, ground, frequencies, requests — and `build_solver(model, basis=...)`
+maps it onto the solver families. The `nec4` dialect (EZNEC's NEC-4.2 slot,
+momwire#1295) is a second parser onto that model and nothing more. Nothing
+NEC-2-specific may enter the model's vocabulary.
+
+The NEC-5 dialect is NOT a `DeckModel` reader, and it is worth saying why
+rather than repeating the older plan that it would be. `parse_nec5` returns its
+own `Nec5Deck`, and `momwire.eznec._serve.build_mesh` meshes it, because what
+its addresses mean has no `DeckModel` spelling: a source names a NODE, and
+where it lands depends on the basis (the cut spelling the byte-gated bspline
+printouts are pinned to, a delta gap on the knot elsewhere, a node port only at
+a K >= 3 apex), on a card crossing z = 0 being split there, and on EZNEC's
+phantom wires, which are circuit nodes rather than geometry. `DeckModel.node_gaps`
+was added for those sources and no dialect writes it.
+
+What the two pipelines share is everything AFTER the mesh (momwire#1336): the
+solver is constructed by `deck._solver.construct_solver` (the second half of
+`build_solver`), a network deck's circuit is `deck._networks.flat_network`, the
+pattern is `_far_readout.pattern_fields` / `average_gain`, and the near field —
+element sum, image, and the finite-ground `direct + C₂·image + remainder`
+composition — is `momwire._near_readout`. What stays in each seam is what a
+host reads: addressing, printout layout, dust floors, refusal sentences.
 
 One addressing contrast between the dialects is worth naming because it cost
 a re-derivation (momwire#706): NEC-2's `EX` excites a SEGMENT and the port
