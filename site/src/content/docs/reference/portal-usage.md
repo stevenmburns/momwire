@@ -268,7 +268,8 @@ structural refusals — is the grammar's, with the exact message text:
   not a wire;
 * [fields refused by value](/reference/deck-grammar-nec2/#fields-refused-by-value)
   — `EX` types other than 0, `RP` modes 1 and 4–6, spherical `NE` / `NH`
-  grids, near fields over finite ground, `GN` radial ground screens, the
+  grids, near fields over the `GN 0` reflection-coefficient ground, `GN`
+  radial ground screens, the
   unsupported `LD` types, the four `IS` cases a lossless whole-wire jacket
   cannot express, and the three `TL` / `NT` cases NEC itself halts on or
   destroys in silence;
