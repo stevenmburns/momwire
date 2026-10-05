@@ -37,6 +37,7 @@ import numpy as np
 import pytest
 
 import momwire_serve_client as mech
+from momwire._near_readout import cos_sin_deg
 from momwire.deck import DeckError, Nec5NearFieldRequest, parse_nec5
 from momwire.eznec import _resident, _serve, _shell
 from momwire.eznec._shell import render
@@ -189,9 +190,9 @@ def test_an_axis_angle_places_an_exact_zero():
     """90 degrees puts the point ON the horizon, z = 0.0 exactly; the licensed
     engine prints ~2.6e-14 of R there (see the coordinate gate below)."""
     for angle, want in ((0.0, (1.0, 0.0)), (90.0, (0.0, 1.0)), (180.0, (-1.0, 0.0))):
-        assert _serve._cos_sin_deg(angle) == want
-    assert _serve._cos_sin_deg(-90.0) == (0.0, -1.0)
-    assert _serve._cos_sin_deg(450.0) == (0.0, 1.0)
+        assert cos_sin_deg(angle) == want
+    assert cos_sin_deg(-90.0) == (0.0, -1.0)
+    assert cos_sin_deg(450.0) == (0.0, 1.0)
 
 
 # -- the printout ---------------------------------------------------------

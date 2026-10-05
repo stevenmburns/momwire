@@ -235,12 +235,20 @@ class FarFieldRequest:
 
 @dataclass(frozen=True)
 class NearFieldRequest:
-    """A rectangular grid of near-field samples, X varying fastest."""
+    """A grid of near-field samples, the first axis varying fastest.
+
+    ``coordinates`` is the card's first field: ``0`` reads ``counts``,
+    ``origin`` and ``step`` as ``(X, Y, Z)`` in metres; ``1`` (the nec4
+    dialect only, momwire#1352) as ``(R, θ, φ)`` — R in metres, θ from the
+    zenith and φ from +x in degrees.  The points either spells are
+    :func:`momwire._near_readout.grid_points`.
+    """
 
     magnetic: bool = False
     counts: tuple[int, int, int] = (1, 1, 1)
     origin: Point = (0.0, 0.0, 0.0)
     step: Point = (0.0, 0.0, 0.0)
+    coordinates: int = 0
 
 
 @dataclass(frozen=True)

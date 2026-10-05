@@ -2,7 +2,8 @@
 
 momwire#1295.  The oracle is the licensed NEC-4.2's own printout of each of
 the seventeen captured decks and of nine probe decks written to show what
-the captures do not (junctions, an FR sweep, RLC loads, NE, two runs, ...):
+the captures do not (junctions, an FR sweep, RLC loads, NE, two runs, ...)
+and five more for the spherical ``NE 1`` grid (momwire#1352):
 ``tests/fixtures/eznec_nec42/printouts/``, README there for provenance,
 used as black-box OUTPUT only.
 
@@ -32,7 +33,7 @@ from pathlib import Path
 
 import pytest
 
-from momwire.eznec import _nec4, _printout
+from momwire.eznec import _nec4, _printout, _shell
 from momwire.eznec._nec4_printout import (
     FarFieldGround,
     Nec4Printout,
@@ -61,7 +62,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures" / "eznec_nec42"
 PRINTOUTS = FIXTURES / "printouts"
 PROBES_DIR = FIXTURES / "probes"
 MULTI_DIR = FIXTURES / "multisource"
-# The seventeen decks EZNEC wrote, and nine probe decks written to show
+# The seventeen decks EZNEC wrote, and fifteen probe decks written to show
 # NEC-4.2's layout of what EZNEC's captures did not (README beside them).
 CAPTURES = tuple(sorted(p.name[:4] for p in FIXTURES.glob("*.nec")))
 PROBES = tuple(sorted(p.name.split("_")[0] for p in PROBES_DIR.glob("*.nec")))
@@ -124,7 +125,7 @@ def _unstamped(text: str) -> list[str]:
 def test_the_fixtures_pair_each_deck_with_its_printout():
     """One printout per deck, and each echoes its own deck's comment block —
     the stamp EZNEC checks a printout's age by."""
-    assert len(CAPTURES) == 17 and len(PROBES) == 10 and MULTI == ("m1", "m2")
+    assert len(CAPTURES) == 17 and len(PROBES) == 15 and MULTI == ("m1", "m2")
     assert sorted(p.name.split("_")[0] for p in PRINTOUTS.glob("*.out")) == sorted(
         CASES
     )
@@ -137,7 +138,7 @@ def test_the_fixtures_pair_each_deck_with_its_printout():
 
 
 def test_the_cache_blocks_leave_only_their_own_lines():
-    for capture in ("0231", "0232", "0239", "p7", "p9"):
+    for capture in ("0231", "0232", "0239", "p7", "p9", "p13", "p14", "p15"):
         raw, clean = licensed(capture), reference(capture)
         assert "GNDINO" in raw and "GNDINO" not in clean
         assert "ommerfeld-ground tables" not in clean
@@ -149,6 +150,9 @@ def test_the_cache_blocks_leave_only_their_own_lines():
                 "0239": 5,
                 "p7": 6,
                 "p9": 6,
+                "p13": 5,
+                "p14": 5,
+                "p15": 6,
             }[capture]
         )
 
@@ -669,6 +673,7 @@ def read_fields(text: str) -> dict:
         "charges": table("- - - CHARGE DENSITIES - - -", 10),
         "pattern": table("- - - RADIATION PATTERNS - - -", 11),
         "near": table("- - - NEAR ELECTRIC FIELDS - - -", 9),
+        "near_h": table("- - - NEAR MAGNETIC FIELDS - - -", 9),
         "budget": [
             ln.split("=")[0].strip()
             for ln in lines
@@ -694,6 +699,14 @@ def test_one_reader_finds_the_same_fields_in_both(served, capture):
             assert [r[:2] for r in ours[key]] == [r[:2] for r in theirs[key]]
         if key == "pattern":
             assert [r[:2] for r in ours[key]] == [r[:2] for r in theirs[key]]
+        # The near-field points are the same points, to the printed digit:
+        # five significant figures, and an axis zero that NEC-4.2 prints as
+        # ~2.6e-14 of R where this engine places it exactly (momwire#1352).
+        if key in ("near", "near_h"):
+            for a, b in zip(ours[key], theirs[key], strict=True):
+                scale = max(abs(x) for x in b[:3])
+                for x, y in zip(a[:3], b[:3], strict=True):
+                    assert abs(x - y) <= 1e-4 * scale, (key, a[:3], b[:3])
 
 
 # --------------------------------------------------------------------------
@@ -751,6 +764,64 @@ def test_the_numbers_against_the_licensed_engine(served, capsys):
         assert math.isfinite(zo.real) and math.isfinite(zo.imag), capture
         if capture in CAPTURES and capture not in _SANITY_EXEMPT:
             assert abs(zo - zt) / abs(zt) < _SANITY_REL, (capture, zo, zt)
+
+
+def _phasors(row: list[float]) -> list[complex]:
+    """A near-field row's three components as phasors (magnitude, degrees)."""
+    return [
+        row[3 + 2 * k]
+        * complex(
+            math.cos(math.radians(row[4 + 2 * k])),
+            math.sin(math.radians(row[4 + 2 * k])),
+        )
+        for k in range(3)
+    ]
+
+
+def _norm(vector: list[complex]) -> float:
+    return math.sqrt(sum(abs(v) ** 2 for v in vector))
+
+
+# The near-field probes, p4 and momwire#1352's five: the free-space,
+# GN 2 and GN 3 tables, rectangular and spherical.
+NEAR_CASES = tuple(
+    c
+    for c in CASES
+    if read_fields(reference(c))["near"] or read_fields(reference(c))["near_h"]
+)
+
+
+@pytest.mark.integration
+def test_the_near_fields_against_the_licensed_engine(served, capsys):
+    """Every near-field table, point by point: the field's magnitude |E|
+    (or |H|) against NEC-4.2's, and the vector difference over the table's
+    peak.  Held to the slot's sanity bar (`_SANITY_REL`) on the magnitude at
+    every point carrying more than a thousandth of the peak; a point on the
+    wire's own axis, where the field is exactly zero in both, carries none.
+    """
+    assert NEAR_CASES == ("p11", "p12", "p13", "p14", "p15", "p4")
+    lines = []
+    for case in NEAR_CASES:
+        ours, theirs = read_fields(served[case]), read_fields(reference(case))
+        key = "near_h" if theirs["near_h"] else "near"
+        rows = list(zip(ours[key], theirs[key], strict=True))
+        assert rows, case
+        peak = max(_norm(_phasors(b)) for _a, b in rows)
+        worst_mag = 0.0
+        worst_vec = 0.0
+        for a, b in rows:
+            fa, fb = _phasors(a), _phasors(b)
+            vec = _norm([x - y for x, y in zip(fa, fb, strict=True)]) / peak
+            worst_vec = max(worst_vec, vec)
+            if _norm(fb) > 1e-3 * peak:
+                worst_mag = max(worst_mag, abs(_norm(fa) - _norm(fb)) / _norm(fb))
+        lines.append(f"  {case:>4} {key:6}  {worst_mag:.4f}  {worst_vec:.4f}")
+        assert worst_mag < _SANITY_REL, (case, worst_mag)
+    with capsys.disabled():
+        print(
+            f"\n{served['basis']}: near field, case, table, max rel d|F|, max |dF|/peak"
+        )
+        print("\n".join(lines))
 
 
 # The licensed NEC-4.2's own ANTENNA INPUT PARAMETERS rows for the two
@@ -880,24 +951,6 @@ def _edited(capture: str, old: str, new: str) -> str:
             id="refill-between-runs",
         ),
         pytest.param(
-            _edited(
-                "0231",
-                "RP 0,1,361,1000,75.,0.,0.,1.,0.",
-                "NE 0,1,1,1,1.,0.,1.,0.,0.,0.",
-            ),
-            "NE over a finite ground",
-            id="near-field-finite-ground",
-        ),
-        pytest.param(
-            _edited(
-                "0223",
-                "RP 0,1,361,1000,90.,0.,0.,1.,0.",
-                "NE 1,1,1,1,1.,0.,0.,0.,0.,0.",
-            ),
-            "NE coordinate system 1",
-            id="near-field-spherical",
-        ),
-        pytest.param(
             _edited("0223", "RP 0,1,361,1000", "RP 0,1,361,0"),
             "RP with XNDA 0",
             id="xnda",
@@ -926,3 +979,57 @@ def test_a_refusal_is_a_nec_error_under_the_nec42_banner():
     # The comment box still echoes, so EZNEC shows the refusal rather than
     # discarding the file as stale.
     assert "Written by EZNEC/Pro+ v. 7.0 in NEC-4.2 format." in text
+
+
+# ==========================================================================
+# the spherical near field over GN 3 (momwire#1352)
+# ==========================================================================
+
+# Dan's shape (AC6LA, QRZ 1003328, 2026-10-05): EZNEC's "NE1 Dipole" written
+# for the NEC-4.2 slot with GN 3 forced.  His deck is his, so the shape is
+# rebuilt here from 0232, the slot's own GN 3 capture, CRLF and all: the
+# pattern card swapped for a spherical grid that walks from the zenith to
+# the horizon on two azimuths.
+DAN_NE1_GN3 = _edited(
+    "0232", "RP 0,1,361,1000,75.,0.,0.,1.,0.", "NE 1,1,5,2,12.,0.,0.,0.,22.5,90."
+)
+_DAN_REFUSAL = (
+    " ***** NEC ERROR - NE coordinate system 1 (spherical) is not supported by "
+    "this engine; rectangular (0) only"
+)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("basis", SERVED_BASES)
+def test_dans_ne1_dipole_over_gn3_serves_through_the_slot(basis, tmp_path):
+    """Through the slot's process entry, the way EZNEC launches
+    ``momwire-nec4.exe``: two paths, a printout written.  Before momwire#1352
+    this printout was the one line Dan reported."""
+    deck, out = tmp_path / "EZ.NEC", tmp_path / "NEC.OUT"
+    deck.write_bytes(DAN_NE1_GN3.encode("latin-1"))
+    assert _shell.main([str(deck), str(out)], basis=basis, dialect="nec4") == 0
+    text = out.read_bytes().decode("latin-1").replace("\r\n", "\n")
+    assert _DAN_REFUSAL not in text
+    assert "NEC ERROR" not in text, text[-600:]
+    assert "FINITE GROUND.  SOMMERFELD SOLUTION GN3" in text
+    near = read_fields(text)["near"]
+    assert len(near) == 10
+    # R = 12 m, theta 0 .. 90 by 22.5 degrees, phi 0 then 90: the zenith
+    # point first, the horizon point ON the ground plane (an exact zero).
+    assert near[0][:3] == [0.0, 0.0, 12.0]
+    assert near[4][:3] == [12.0, 0.0, 0.0]
+    assert near[9][:3] == [0.0, 12.0, 0.0]
+    assert all(math.isfinite(v) for row in near for v in row)
+
+
+@pytest.mark.integration
+def test_a_spherical_grid_into_the_soil_refuses_by_name():
+    """Past theta = 90 a spherical grid is in the soil, where the field is the
+    transmitted one; the composition above the interface is not it, and the
+    point refuses by name, as on the nec2 portal and the NEC-5 slot."""
+    deck = _edited(
+        "p13", "NE 1,2,4,3,2.,0.,0.,1.,30.,45.", "NE 1,1,5,1,2.,0.,0.,0.,30.,0."
+    )
+    text = render(deck, basis=BASIS, dialect="nec4")
+    assert " ***** NEC ERROR - NE asks for the field at (1.73205, 0, -1)" in text
+    assert "below the finite ground" in text

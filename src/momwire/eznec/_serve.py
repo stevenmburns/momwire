@@ -530,10 +530,10 @@ from .._far_readout import (
 # so a deck asks the same question of the same arithmetic on either door.
 from .._near_readout import (
     NEAR_FIELD_SUBDIV as _NEAR_FIELD_SUBDIV,
+    grid_points,
     near_field_at,
     near_ground,
     near_point_refusal,
-    rectangular_grid,
 )
 
 from ._printout import (
@@ -1285,33 +1285,15 @@ def _grid_points(request: Nec5NearFieldRequest) -> np.ndarray:
     which is all either consumer ever sees: the table prints X, Y, Z for a
     spherical grid too.  θ is from the zenith and φ from +x (see
     :class:`~momwire.deck._nec5.Nec5NearFieldRequest`).  An angle on a
-    multiple of 90° places its zero EXACTLY (:func:`_cos_sin_deg`), so a
-    horizon sample sits at z = 0 and prints ``0.0000E+00``; the licensed
-    engine prints ~1e-13 of R there instead.
+    multiple of 90° places its zero EXACTLY, so a horizon sample sits at
+    z = 0 and prints ``0.0000E+00``; the licensed engine prints ~1e-13 of R
+    there instead.  The walk itself is
+    :func:`momwire._near_readout.grid_points`, every seam's since the NEC-4.2
+    slot learned ``NE 1`` too (momwire#1352).
     """
-    samples = rectangular_grid(request.counts, request.origin, request.step)
-    if request.coordinates == 0:
-        return samples
-    points = []
-    for r, theta, phi in samples:
-        cos_t, sin_t = _cos_sin_deg(float(theta))
-        cos_p, sin_p = _cos_sin_deg(float(phi))
-        points.append((r * sin_t * cos_p, r * sin_t * sin_p, r * cos_t))
-    return np.array(points, dtype=float)
-
-
-def _cos_sin_deg(angle_deg: float) -> tuple[float, float]:
-    """``(cos, sin)`` of an angle in degrees, exact on the four axes.
-
-    ``math.cos(math.radians(90.0))`` is 6.1e-17, not 0, and a spherical
-    grid's horizon row would otherwise sit a hair above or below the ground
-    plane it names.  Off the axes this is the ordinary library trig.
-    """
-    quarter, rest = divmod(angle_deg, 90.0)
-    if rest == 0.0:
-        return ((1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0))[int(quarter) % 4]
-    rad = math.radians(angle_deg)
-    return math.cos(rad), math.sin(rad)
+    return grid_points(
+        request.coordinates, request.counts, request.origin, request.step
+    )
 
 
 def _near_field_refusal(deck: Nec5Deck, request: Nec5NearFieldRequest) -> str | None:

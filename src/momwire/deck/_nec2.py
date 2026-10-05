@@ -925,12 +925,25 @@ class _Nec2Parser:
             range_m=card.f(8),
         )
 
-    def _near_field(self, card: Card) -> NearFieldRequest:
+    def _near_coordinates(self, card: Card) -> int:
+        """An ``NE``/``NH`` card's coordinate system, or the refusal.
+
+        Rectangular only in this dialect.  nec2c reads ``I1 = 1`` as a
+        spherical grid, but its table of the same card walks a different
+        point order from the one NEC-4.2 and NEC-5 print (checked on a
+        ``2, 4, 3`` grid, 2026-10-05) and no capture pins its layout, so the
+        nec2 door keeps refusing it.  The nec4 dialect overrides this
+        (momwire#1352).
+        """
         if card.i(0) != 0:
             raise DeckError(
                 f"{card.mnemonic} coordinate system {card.i(0)} (spherical) is "
                 f"not supported by this engine; rectangular (0) only"
             )
+        return 0
+
+    def _near_field(self, card: Card) -> NearFieldRequest:
+        coordinates = self._near_coordinates(card)
         if isinstance(self._ground, tuple) and self._ground[0] == "finite-fast":
             # GN 0's reflection-coefficient model is a far-field construction
             # and no near field has been measured against it (momwire#550's
@@ -943,6 +956,7 @@ class _Nec2Parser:
             raise DeckError(REFUSE_NEAR_FIELD_REFL_COEF.format(card=card.mnemonic))
         return NearFieldRequest(
             magnetic=card.mnemonic == "NH",
+            coordinates=coordinates,
             counts=(max(card.i(1), 1), max(card.i(2), 1), max(card.i(3), 1)),
             origin=(card.f(4), card.f(5), card.f(6)),
             step=(card.f(7), card.f(8), card.f(9)),

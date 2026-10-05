@@ -185,16 +185,12 @@ def _served_shape(deck) -> list[tuple[int, object]]:
         if report is None:
             continue
         if report.mnemonic in ("NE", "NH"):
-            if report.i(0) != 0:
-                raise Nec4Refusal(_unmeasured(f"{report.mnemonic} {report.i(0)}"))
-            if group.ground.kind not in ("free", "pec"):
-                # The shared readout composes a Sommerfeld near field
-                # (momwire#1336), but no captured NEC-4.2 printout shows one,
-                # so this slot has no measured layout or envelope for it.
-                raise Nec4Refusal(
-                    f"{report.mnemonic} over a finite ground is not served by this "
-                    f"engine's NEC-4.2 slot"
-                )
+            # Rectangular and spherical grids, free space, a perfect ground
+            # and the Sommerfeld one (GN 2 and GN 3 alike): probes p4 and
+            # p11-p15 print each, in one layout (momwire#1352).  The dialect
+            # refuses every other coordinate system before this is asked;
+            # the cells a finite ground cannot answer refuse in
+            # :func:`_near_field`, which owns the grid.
             continue
         if report.i(0) != 0:
             raise Nec4Refusal(_unmeasured(f"RP mode {report.i(0)}"))
@@ -821,29 +817,44 @@ def _pattern(card, result, freq_mhz: float, gd):
 
 
 def _near_field(card, result, deck_solver) -> NearFieldBlock:
-    """One ``NE``/``NH`` table over free space or a perfect ground.
+    """One ``NE``/``NH`` table over free space, a perfect ground or the
+    Sommerfeld one.
 
     The table is NEC-5's layout to the byte (p4), and the readout is every
     seam's (:mod:`momwire._near_readout`): the element sum in mixed-potential
     form, plus the PEC image with its horizontal moments flipped and its
-    charge negated.  The grid is the rectangular one, X fastest, then Y,
-    then Z (p4 steps Z alone).
+    charge negated, plus ``C₂·image + remainder`` over a finite ground.  The
+    grid is :func:`~momwire._near_readout.grid_points`': X fastest, then Y,
+    then Z (p4 steps Z alone), or for ``NE 1`` R fastest, then θ, then φ,
+    each point printed at its Cartesian place under the same headings
+    (p11-p15, momwire#1352).
+
+    Over a finite ground the cells no composition answers — a point in the
+    soil, a point on a wire's ground contact, any point of a deck with a
+    buried wire — refuse with the nec2 portal's sentences
+    (``_refuse_finite_ground_near_field``), the same geometry asked the same
+    way.
     """
     from .._near_readout import (
         NEAR_FIELD_SUBDIV,
+        grid_points,
         near_field_at,
         near_ground,
-        rectangular_grid,
     )
+    from ..portal._portal import _refuse_finite_ground_near_field
     from ._serve import near_field_block
 
     magnetic = card.mnemonic == "NH"
-    points = rectangular_grid(
+    points = grid_points(
+        card.i(0),
         tuple(max(card.i(k), 1) for k in (1, 2, 3)),
         (card.f(4), card.f(5), card.f(6)),
         (card.f(7), card.f(8), card.f(9)),
     )
     solver = result.solver
+    ground = near_ground(solver)
+    if ground.kind == "compose":
+        _refuse_finite_ground_near_field(card, deck_solver, points, ground.ground_z)
     k = 2.0 * math.pi / result.wavelength
     elements = solver.element_currents(result.coeffs, subdiv=NEAR_FIELD_SUBDIV)
     field = near_field_at(
@@ -852,7 +863,7 @@ def _near_field(card, result, deck_solver) -> NearFieldBlock:
         k,
         deck_solver._smallest_radius,
         magnetic,
-        near_ground(solver),
+        ground,
         solver.omega,
     )
     return near_field_block(points, field, magnetic)
