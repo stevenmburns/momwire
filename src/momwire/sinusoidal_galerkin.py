@@ -358,7 +358,7 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _medium_spec, _wire_loading, _wire_spec
+from . import _medium_spec, _sinusoidal_mp, _wire_loading, _wire_spec
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from ._bspline_kernels import _reg_cplx_pool as _piece_pool
@@ -1408,6 +1408,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         feed_model="point",
         node_ports=None,
         node_gaps=None,
+        fill="direct",
         **kwargs,
     ):
         # Seen by the base's feeds=[] check (its signature never learns the
@@ -1415,6 +1416,11 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # needs no gap feed, same as junction ports (#172/#305).
         self._node_drive_declared = bool(node_ports or node_gaps)
         super().__init__(**kwargs)
+        if fill not in ("direct", "mixed-potential"):
+            raise ValueError(
+                f"fill must be 'direct' or 'mixed-potential', got {fill!r}"
+            )
+        self.fill = fill
         self.n_qp_test = int(n_qp_test)
         self.n_qp_near = int(n_qp_near)
         self.n_qp_node = int(n_qp_node)
@@ -4408,6 +4414,9 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self._apply_loading(G, geom, seg_view, None, medium=medium)
             return G, seg_view
 
+        if self.fill == "mixed-potential" and self._mp_serves(geom):
+            return self._assemble_Z_mp(geom, k, eta)
+
         # (k, eta) is ONE operating point and both halves are arguments
         # (momwire#995); a wholly-buried solve hands in k_m with eta_m.
         eta = self._fill_eta(k, eta)
@@ -4456,6 +4465,154 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self._contact_charge_correction_tested(G, geom, k, seg_view, ctx, eta=eta)
         self._apply_loading(G, geom, seg_view, k)
         return G, seg_view
+
+    # ------------------------------------------------------------------
+    # The mixed-potential fill on the B-spline pair machinery (momwire#1354)
+    # ------------------------------------------------------------------
+
+    def _mp_serves(self, geom):
+        """Whether `fill="mixed-potential"` fills THIS deck; the rest take
+        the direct-field fill unchanged.
+
+        Served: free space, the PEC image and the Sommerfeld composition, on
+        a single-medium deck with the reduced kernel. Not yet served: the
+        extended kernel (the moment kernels carry no EK factor on this
+        basis), a wire end in the plane (the direct form's #282 contact
+        correction has no mixed-form twin yet), and the reflection-coefficient
+        ground (NEC's dyad on the image FIELD has no exact potential-form
+        spelling — the potential trunk's `(w_A, w_Φ)` is a different
+        approximation, and this fill must not change the model under a
+        quadrature change).
+        """
+        if self.extended_kernel:
+            return False
+        if geom["ground_minus"].any() or geom["ground_plus"].any():
+            return False
+        if self.ground_z is not None and self.ground_eps is not None:
+            if self.ground_model != "sommerfeld":
+                return False
+        return True
+
+    def _assemble_Z_mp(self, geom, k, eta=None):
+        """The Galerkin matrix in mixed-potential form,
+
+            G[i, j] = −Σ_{m,n} [ jkη (t_m·t_n) ⟨f_im, G f_jn⟩ + (η/jk) ⟨f'_im, G f'_jn⟩ ],
+
+        free space minus the image (weighted by the ground's coefficient),
+        plus the Sommerfeld remainder — the same three blocks `_assemble_Z`
+        tests directly, each written as pair moments against the folded
+        shape set (`_sinusoidal_mp`). Block by block the two forms are equal:
+        the integration by parts that takes one to the other leaves boundary
+        terms that telescope over a continuous, KCL-satisfying basis, so what
+        differs is the quadrature and nothing else. The leading minus is the
+        direct form's own: it tests E = −jωA − ∇Φ.
+
+        Pair moments come from the B-spline fill's distance-tiered kernel,
+        its ladder and orders (`DEFAULT_PAIR_ORDER_LADDER`); the near pairs
+        that machinery cannot serve on this basis — a segment against itself
+        and its collinear neighbours, a bend's touching pair — are
+        overwritten by `_sinusoidal_mp.near_pair_moments`. One observer
+        window at a time, so the moment transient is bounded, never N².
+
+        The remainder is the direct form's own `_tested_sommerfeld_remainder`
+        evaluator, streamed through the test-context reduction and scattered
+        straight into G's rows: a smooth kernel the field form already
+        serves at every test node, and whose potential-form twin on this
+        basis is the next stage, not this one.
+        """
+        eta = self._fill_eta(k, eta)
+        seg_view = self._basis_coefs(geom, k)
+        N = int(geom["n_segs"])
+        n_basis = N + self._n_extra_cols()
+        c = np.asarray(geom["seg_centers"], dtype=float)
+        t = np.asarray(geom["seg_tangents"], dtype=float)
+        h = np.asarray(geom["seg_h"], dtype=float)
+        a_row = (
+            np.full(N, float(self._uniform_radius))
+            if self._uniform_radius is not None
+            else np.asarray(self._seg_radius(geom), dtype=float)
+        )
+        starts, jbasis, coef, dcoef = _sinusoidal_mp.basis_csr(seg_view, k)
+        G = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
+        fg = _field_ground.field_ground_for(
+            self,
+            geom,
+            k,
+            self.omega,
+            medium=self._active_medium,
+            r1_below=self._active_r1_below,
+            eta=eta,
+        )
+        from .bspline import DEFAULT_N_QP_PAIR, DEFAULT_PAIR_ORDER_LADDER
+
+        fill = _sinusoidal_mp.WindowFill(
+            G,
+            starts,
+            jbasis,
+            coef,
+            dcoef,
+            k,
+            eta,
+            n_qp=DEFAULT_N_QP_PAIR,
+            ladder=DEFAULT_PAIR_ORDER_LADDER,
+            checkpoint=self._checkpoint,
+        )
+        fill.accumulate(c, t, h, a_row, c, t, h, scale=_sinusoidal_mp.DIRECT_SIGN)
+        if fg is not None:
+            src_c, src_t = fg.image_sources()
+            fill.accumulate(
+                c,
+                t,
+                h,
+                a_row,
+                src_c,
+                src_t,
+                h,
+                scale=-_sinusoidal_mp.DIRECT_SIGN * fg.image_coefficient,
+            )
+            if fg.mode == "compose":
+                self._mp_remainder(G, geom, seg_view, k, fg)
+        self._apply_loading(G, geom, seg_view, k)
+        return G, seg_view
+
+    def _mp_remainder(self, G, geom, seg_view, k, fg):
+        """The Sommerfeld remainder onto G: the direct form's evaluator at
+        the test nodes, reduced per test entry (`_tested_contrib_rows`) and
+        scattered through the source coefficients one observer chunk at a
+        time. Enters with the sign `_fold_ground_block` gives it:
+        `free − (c2·img − rem)` puts `+rem` on G."""
+        ctx = self._test_context(geom, seg_view, k)
+        N, nq = ctx["N"], ctx["nq"]
+        starts, w_entry = ctx["starts"], ctx["w_entry"]
+        m_of_entry, i_of_entry = ctx["m_of_entry"], ctx["i_of_entry"]
+        nnz = w_entry.shape[0]
+        n_basis = G.shape[0]
+        Ms = [
+            scipy.sparse.csc_matrix(
+                (coef, (m_of_entry, i_of_entry)), shape=(N, n_basis)
+            )
+            for coef in (ctx["sigAC"], ctx["B"], ctx["sigC"])
+        ]
+
+        def _consume(i0, i1, block):
+            m0, m1 = i0 // nq, i1 // nq
+            e0 = starts[m0]
+            e1 = nnz if m1 == N else starts[m1]
+            w = w_entry[e0:e1]
+            m_loc = m_of_entry[e0:e1] - m0
+            rows_i = i_of_entry[e0:e1]
+            for s_blk, M in zip(block, Ms):
+                rows = self._tested_contrib_rows(
+                    w, m_loc, nq, s_blk.reshape(m1 - m0, nq, s_blk.shape[-1])
+                )
+                np.add.at(G, rows_i, np.asarray(rows @ M))
+
+        fg.remainder("cos-1").replay(
+            obs_centers=ctx["obs_c"],
+            obs_tangents=ctx["obs_t"],
+            consume=_consume,
+            row_group=nq,
+        )
 
     # ------------------------------------------------------------------
     # Distributed series wire loading, Galerkin form (momwire#131, #395)
