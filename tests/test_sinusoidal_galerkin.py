@@ -1412,9 +1412,7 @@ def test_g4_symmetry_holds_with_the_ground_terms_in(geom_name, ground):
     over = {}
     if geom_name == "m4_monopole" and ground == "somm":
         over["n_qp_sommerfeld"] = 5
-    r = _sym_ratio(
-        _matrix(_m4_solver(SinusoidalGalerkinSolver, geom_name, ground, **over))
-    )
+    r = _sym_ratio(_matrix(_m4_solver(_direct_sg, geom_name, ground, **over)))
     r_free = _sym_ratio(_matrix(_direct_sg(**M4_GEOMETRIES[geom_name](M4_N))))
     assert r < G1_GATE, f"{geom_name}/{ground}: ‖G-Gᵀ‖/‖G‖ = {r:.3e}"
     # The absolute floor is 5e-11, not 1e-11: the Sommerfeld grid is a pure
@@ -1479,11 +1477,7 @@ def test_g4_sommerfeld_symmetry_near_the_plane_is_source_quadrature_limited():
 def _g4_sommerfeld_symmetry_body():
     ratios = [
         _sym_ratio(
-            _matrix(
-                _m4_solver(
-                    SinusoidalGalerkinSolver, "m4_monopole", "somm", n_qp_sommerfeld=q
-                )
-            )
+            _matrix(_m4_solver(_direct_sg, "m4_monopole", "somm", n_qp_sommerfeld=q))
         )
         for q in (3, 5, 7)
     ]
@@ -1529,9 +1523,7 @@ def test_the_282_contact_correction_is_not_self_adjoint():
     formulation of the same removal is ever found, this number should fall
     back to the quadrature floor and this test should be deleted.
     """
-    somm = _sym_ratio(
-        _matrix(_m4_solver(SinusoidalGalerkinSolver, "m4_monopole", "somm"))
-    )
+    somm = _sym_ratio(_matrix(_m4_solver(_direct_sg, "m4_monopole", "somm")))
     assert somm > 1e-4, (
         f"the contact correction no longer breaks self-adjointness ({somm:.2e}) "
         "— if that is a real fix, delete this test and tighten G4's"
@@ -1555,12 +1547,8 @@ def test_the_282_contact_correction_is_not_self_adjoint():
     )
     # PEC contact and the elevated wire keep the floor: the correction is a
     # no-op without a finite ground, and without a contact.
-    pec = _sym_ratio(
-        _matrix(_m4_solver(SinusoidalGalerkinSolver, "m4_monopole", "pec"))
-    )
-    lifted = _sym_ratio(
-        _matrix(_m4_solver(SinusoidalGalerkinSolver, "m4_vertical", "somm"))
-    )
+    pec = _sym_ratio(_matrix(_m4_solver(_direct_sg, "m4_monopole", "pec")))
+    lifted = _sym_ratio(_matrix(_m4_solver(_direct_sg, "m4_vertical", "somm")))
     assert pec < G1_GATE, f"PEC contact lost its symmetry floor: {pec:.2e}"
     assert lifted < G1_GATE, f"the elevated wire lost its symmetry floor: {lifted:.2e}"
 
@@ -1595,15 +1583,9 @@ def test_ground_symmetry_needs_the_near_correction(ground):
     ground-contact monopole, where the image block contributes its own share)."""
     for geom_name in ("m4_dipole", "m4_lshape"):
         r_off = _sym_ratio(
-            _matrix(
-                _m4_solver(
-                    SinusoidalGalerkinSolver, geom_name, ground, near_correction=False
-                )
-            )
+            _matrix(_m4_solver(_direct_sg, geom_name, ground, near_correction=False))
         )
-        r_on = _sym_ratio(
-            _matrix(_m4_solver(SinusoidalGalerkinSolver, geom_name, ground))
-        )
+        r_on = _sym_ratio(_matrix(_m4_solver(_direct_sg, geom_name, ground)))
         assert r_on < G1_GATE < UNIFORM_FLOOR < r_off, (
             f"{geom_name}/{ground}: off={r_off:.2e} on={r_on:.2e}"
         )
@@ -1659,9 +1641,9 @@ def test_g4_ground_impedance_is_quadrature_converged(geom_name, ground):
     doubling BOTH test-quadrature knobs moves Z by well under 0.5%. Measured
     shifts are 1e-9 to 1.7e-7 across the whole (geometry × ground) matrix, so
     none of the ground numbers below are quadrature artifacts."""
-    z1, _ = _m4_solver(SinusoidalGalerkinSolver, geom_name, ground).compute_impedance()
+    z1, _ = _m4_solver(_direct_sg, geom_name, ground).compute_impedance()
     z2, _ = _m4_solver(
-        SinusoidalGalerkinSolver, geom_name, ground, n_qp_test=16, n_qp_near=16
+        _direct_sg, geom_name, ground, n_qp_test=16, n_qp_near=16
     ).compute_impedance()
     shift = abs(z2 - z1) / abs(z1)
     assert shift < 5e-3, f"{geom_name}/{ground}: {shift:.3%} on doubling n_qp"
@@ -1707,8 +1689,8 @@ def test_g4_ground_increment_matches_dense_bspline(name, frac, ground):
     increments differ by 0.17-16%, which measures that modelling difference,
     not this fill. The refl ground is gated against the gn 0 golden below.
     """
-    d_gal = _fixture_z(SinusoidalGalerkinSolver, name, frac, ground) - _fixture_free_z(
-        SinusoidalGalerkinSolver, name, frac
+    d_gal = _fixture_z(_direct_sg, name, frac, ground) - _fixture_free_z(
+        _direct_sg, name, frac
     )
     d_bs = _fixture_z(BSplineSolver, name, frac, ground) - _fixture_free_z(
         BSplineSolver, name, frac
@@ -1738,7 +1720,7 @@ def test_g4_tracks_the_gn_golden_at_the_other_galerkin_scheme_floor(name, frac, 
     gap is already there in free space, at the same size, on the same wires.
     """
     gn = GOLDEN[(name, frac, 10.0, 0.002)][M4_GROUNDS[ground][0]]
-    d_gal = abs(_fixture_z(SinusoidalGalerkinSolver, name, frac, ground) - gn)
+    d_gal = abs(_fixture_z(_direct_sg, name, frac, ground) - gn)
     d_bs = abs(_fixture_z(BSplineSolver, name, frac, ground) - gn)
     assert d_gal < 1.4 * d_bs, (
         f"{name} h={frac} {ground}: |gal-gn| = {d_gal:.4f} against dense "
@@ -1754,7 +1736,7 @@ def test_g4_closer_to_dense_bspline_than_collocation_is(name, frac, ground):
     every grounded case. Measured |gal−bs2| 0.035-1.62 Ω against |coll−bs2|
     1.45-2.52 Ω over the matrix."""
     z_bs = _fixture_z(BSplineSolver, name, frac, ground)
-    d_gal = abs(_fixture_z(SinusoidalGalerkinSolver, name, frac, ground) - z_bs)
+    d_gal = abs(_fixture_z(_direct_sg, name, frac, ground) - z_bs)
     d_coll = abs(_fixture_z(SinusoidalSolver, name, frac, ground) - z_bs)
     assert d_gal < d_coll, (
         f"{name} h={frac} {ground}: galerkin {d_gal:.4f} from dense bspline, "
@@ -1778,11 +1760,11 @@ def test_the_ground_adds_nothing_to_the_sin_bspline_gap(name, ground):
     """
     frac = 0.2
     gap_free = abs(
-        _fixture_free_z(SinusoidalGalerkinSolver, name, frac)
+        _fixture_free_z(_direct_sg, name, frac)
         - _fixture_free_z(BSplineSolver, name, frac)
     )
     gap_gnd = abs(
-        _fixture_z(SinusoidalGalerkinSolver, name, frac, ground)
+        _fixture_z(_direct_sg, name, frac, ground)
         - _fixture_z(BSplineSolver, name, frac, ground)
     )
     assert 0.8 < gap_gnd / gap_free < 1.25, (
@@ -2276,10 +2258,8 @@ def test_the_SEGMENT_gap_readout_is_not_its_drives_dual(n):
         Y = np.asarray(Y)
         return np.linalg.norm(Y - Y.T) / np.linalg.norm(Y)
 
-    a_centre = asym(SinusoidalGalerkinSolver, feed_model="segment")
-    a_var = asym(
-        SinusoidalGalerkinSolver, feed_model="segment", feed_readout="variational"
-    )
+    a_centre = asym(_direct_sg, feed_model="segment")
+    a_var = asym(_direct_sg, feed_model="segment", feed_readout="variational")
     a_coll = asym(SinusoidalSolver)
     assert a_var < 1e-10, f"the dual pairing is not reciprocal: {a_var:.3e}"
     assert 1e-6 < a_centre < 2e-4, a_centre
@@ -2632,7 +2612,7 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
         calls.append(1)
         return real(self, *a, **kw)
 
-    monkeypatch.setattr(SinusoidalGalerkinSolver, "_far_fill_accel", counted)
+    monkeypatch.setattr(_direct_sg, "_far_fill_accel", counted)
     for over, expected in (
         ({}, 1),
         (dict(ground_z=-6.0), 2),
@@ -2810,7 +2790,7 @@ def test_folded_ground_is_bit_equal_to_the_differenced_spelling(
     # arithmetic identity per matrix entry, which needs every branch of the
     # dispatch present and nothing at all from the mesh. Odd, so the feed
     # stays a segment centre and the geometries keep their usual shape.
-    sim = _m4_solver(SinusoidalGalerkinSolver, geom_name, ground, n=11, **over)
+    sim = _m4_solver(_direct_sg, geom_name, ground, n=11, **over)
     geom = sim._build_geometry()
     G_folded, _ = sim._assemble_Z(geom, sim.k)
     G_differenced = _differenced_grounded_G(sim, geom)
