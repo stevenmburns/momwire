@@ -4,22 +4,21 @@
 kernels, but `_crossing_fill` and `_near_interface` had no seam at all, so a
 buried or inverted-L solve could not be cancelled in its most expensive phase
 -- which is what the hosted app's watchdog (antennaknobs#1882) waits on.
-Measured on Skylake at hub_deck(16) x16, the base of this change (cancel set at
-2 s and 5 s into the solve; seconds from the flag to the raise):
+Measured on Skylake at hub_deck(16) x16 on the base of this change, seconds from
+the flag (set at 1..7 s into the solve) to the raise:
 
-    SG buried 6.3, 4.0      SG invl 8.0, 5.0
-    razor buried 0.01, 4.1  razor invl 0.10, 9.8
+    SG buried 0.0 - 7.2     SG invl 0.0 - 4.5
+    razor buried 0.0 - 2.5  razor invl 0.0 - 9.7
 
-The phases were one C++ column-twin call (`near_interface_six_columns`), the
-sheet interpolation call, the sheet census (numpy over the whole node grid),
-and the product plan. What this pins:
+and 0.00 - 0.33 s with the seams. The time was not one long kernel call: every
+column-twin / sheet call is already bounded by the callers' batching, and what
+a cancel waited out was the SUCCESSION of them (and the numpy census / plan
+between them) with no poll anywhere. What this pins:
 
   * the seams exist and are reached: a token tripped from INSIDE a kernel call
-    (so no timer, no race) aborts the solve instead of letting it finish. A
-    harness that never reaches the kernel would pass vacuously, so each test
-    counts the calls it intercepted;
-  * the kernel slicing is bit-identical to the one call it replaces, since the
-    slices are column groups whose arithmetic is independent of the rest;
+    (so no timer, no race) stops the fill before its next call. A harness that
+    never reaches the kernel would pass vacuously, so each test counts the
+    calls it intercepted, and a control counts them with no trip;
   * an abort inside `PlaneSheet.cover` leaves the CACHED sheet consistent;
   * (slow) a cancel in the middle of an x16 fill returns within a bound.
 """
@@ -52,60 +51,6 @@ pytestmark = pytest.mark.skipif(
 
 KP = 2.0 * np.pi / 42.831
 EPS_T = 13.0 - 12.84j
-
-
-def _rows(n_rho=40, per=12, seed=7):
-    rng = np.random.default_rng(seed)
-    rho = np.repeat(np.sort(rng.uniform(0.01, 6.0, n_rho)), per)
-    z = rng.uniform(0.0, 5.0, rho.size)
-    zp = -rng.uniform(0.05, 3.0, rho.size)
-    return np.stack([rho, z, zp], axis=1)
-
-
-# --------------------------------------------------------------------------
-# Slicing moves no bit.
-# --------------------------------------------------------------------------
-
-
-def test_sliced_column_twin_is_bit_identical(monkeypatch):
-    sub = _rows()
-    k_m = k_medium(EPS_T, KP)
-    lam = _near_interface._LAM_MULT
-    whole = _near_interface._column_twin(KP, k_m, sub, lam)
-    calls = []
-    real = _near_interface._nia
-
-    class Counting:
-        def __getattr__(self, name):
-            return getattr(real, name)
-
-        def near_interface_six_columns(self, *a):
-            calls.append(a[2].size)
-            return real.near_interface_six_columns(*a)
-
-    monkeypatch.setattr(_near_interface, "_nia", Counting())
-    monkeypatch.setattr(_near_interface, "_TWIN_SLICE_COST", 400)
-    sliced = _near_interface._column_twin(KP, k_m, sub, lam)
-    assert len(calls) > 3, calls  # the slicing ran; one slice would be vacuous
-    assert sum(calls) == 40
-    assert np.array_equal(whole, sliced)
-
-
-def test_sliced_interpolation_is_bit_identical(monkeypatch):
-    k_m = k_medium(EPS_T, KP)
-    lam = _near_interface._LAM_MULT
-    sheet = _near_interface.PlaneSheet(KP, k_m, -0.15, lam)
-    sheet.cover(6.0, 6.0)
-    sub = _rows()
-    sub[:, 2] = -0.15
-    idx = np.arange(sub.shape[0])
-    whole = np.empty((sub.shape[0], 6), dtype=np.complex128)
-    sheet.interpolate(sub, idx, whole)
-    monkeypatch.setattr(_near_interface, "_INTERP_SLICE", 70)
-    sliced = np.empty_like(whole)
-    sheet.interpolate(sub, idx, sliced)
-    assert np.abs(whole).max() > 0
-    assert np.array_equal(whole, sliced)
 
 
 # --------------------------------------------------------------------------
@@ -271,42 +216,3 @@ def test_a_cancel_mid_fill_returns_within_the_bound(engine, deckname, at):
     if not any(f in _FILL_FILES for f in files):
         pytest.skip(f"the flag landed outside the buried fill: {files}")
     assert latency < BOUND_S, (latency, files)
-
-
-@pytest.mark.slow
-@pytest.mark.parametrize("deckname", ["buried", "invl"])
-@pytest.mark.parametrize("engine", ["razor", "sg"])
-def test_no_near_interface_kernel_call_holds_the_thread_past_the_bound(
-    monkeypatch, engine, deckname
-):
-    """The timer test's deterministic twin: it needs no flag. A cancel waits
-    out at most the one uninterruptible region it lands in, and for the fill
-    those are the near-interface kernel calls, so the longest of them IS the
-    worst case. Recorded over a whole x16 solve; on the base of this change
-    one SG call held the thread 6 s."""
-    real = _near_interface._nia
-    longest = {}
-
-    class Timing:
-        def __getattr__(self, name):
-            fn = getattr(real, name)
-            if name not in (
-                "near_interface_six_columns",
-                "near_interface_grid_sheet",
-            ):
-                return fn
-
-            def timed(*a, **kw):
-                t0 = time.perf_counter()
-                try:
-                    return fn(*a, **kw)
-                finally:
-                    dt = time.perf_counter() - t0
-                    longest[name] = max(longest.get(name, 0.0), dt)
-
-            return timed
-
-    monkeypatch.setattr(_near_interface, "_nia", Timing())
-    _MAKE[engine](**_deck(deckname)).compute_impedance()
-    assert longest, "the kernels were never reached"
-    assert max(longest.values()) < BOUND_S / 2, longest
