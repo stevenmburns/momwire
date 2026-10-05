@@ -1494,9 +1494,13 @@ def test_the_card_semantics_are_the_engine_s_and_not_a_second_copy():
     constructed anywhere in this module.
     """
     source = Path(_serve.__file__).read_text()
-    assert "from ..deck._networks import card_branches" in source
+    # Since momwire#1336 the seam reads the COMPOSITION from there too — the
+    # card branches and the rule that pins every non-endpoint port — so
+    # neither the branch semantics nor the pinning loop is spelled here.
+    assert "from ..deck._networks import flat_network" in source
     assert "transposed" not in source
     assert "def card_branches" not in source
+    assert "Driven(" not in source
     # And the rows it hands the renderer are the two the table has, no more —
     # separately on twenty-one of the captures and both at once on the three
     # mixed ones.
