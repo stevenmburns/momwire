@@ -51,7 +51,9 @@ NEC5 = {
 }
 
 
-def sg_dipole(n=41, length=1.0, depth=0.15, vertical=True, eps=SOIL_A, free=False):
+def sg_dipole(
+    n=41, length=1.0, depth=0.15, vertical=True, eps=SOIL_A, free=False, **kw
+):
     """The phase-0 buried dipole on this trunk — `buried_dipole`'s twin."""
     pts = (
         np.array([(0.0, 0.0, -(depth + length)), (0.0, 0.0, -depth)])
@@ -70,6 +72,7 @@ def sg_dipole(n=41, length=1.0, depth=0.15, vertical=True, eps=SOIL_A, free=Fals
         wavelength=WL7,
         wire_radius=0.001,
         **ground,
+        **kw,
     )
 
 
@@ -123,7 +126,7 @@ def test_the_ground_block_actually_runs_in_the_collapse():
     SinusoidalGalerkinSolver._somm_remainder_below_prepare = p
     SinusoidalGalerkinSolver._replay_somm_remainder_below = r
     try:
-        z_of(sg_dipole(depth=1.5, eps=(1.0, 0.0)))
+        z_of(sg_dipole(depth=1.5, eps=(1.0, 0.0), fill="direct"))
     finally:
         SinusoidalGalerkinSolver._fold_ground_block = fold
         SinusoidalGalerkinSolver._somm_remainder_below_prepare = prep
@@ -137,7 +140,9 @@ def test_the_ground_block_actually_runs_in_the_collapse():
 
 def test_eps_tilde_one_collapses_onto_free_space():
     """k_m -> k_p, A_m -> 0, remainder -> 0, so the buried fill IS free space."""
-    z_free = z_of(sg_dipole(depth=1.5, free=True))
+    # The direct fill: this is its collapse to the bit (the mixed-potential
+    # fill's is `test_sinusoidal_mp_1354.py`'s).
+    z_free = z_of(sg_dipole(depth=1.5, free=True, fill="direct"))
     z_collapsed = z_of(sg_dipole(depth=1.5, eps=(1.0, 0.0)))
     rel = abs(z_collapsed - z_free) / abs(z_free)
     # bspline's own collapse floor on the elevated deck is 5e-5; this trunk
@@ -244,7 +249,7 @@ def test_the_complex_twin_is_the_buried_fill():
 
     SinusoidalGalerkinSolver._far_fill_accel = spy
     try:
-        z_of(sg_dipole(n=161, depth=1.5))
+        z_of(sg_dipole(n=161, depth=1.5, fill="direct"))
     finally:
         SinusoidalGalerkinSolver._far_fill_accel = real
     assert seen["n"] > 0, "the accelerated far fill never ran"

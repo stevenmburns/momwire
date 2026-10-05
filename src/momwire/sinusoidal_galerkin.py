@@ -537,9 +537,11 @@ _NEAR_WORKSPACE_BYTES = 1 << 23
 
 
 # Which fill `SinusoidalGalerkinSolver(fill=None)` takes (momwire#1354):
-# "direct" is the closed-form field fill, "mixed-potential" the pair-moment
-# fill on the B-spline machinery (`_assemble_Z_mp`).
-DEFAULT_FILL = "direct"
+# "mixed-potential" is the pair-moment fill on the B-spline machinery
+# (`_assemble_Z_mp`), "direct" the closed-form field fill it replaced as the
+# default. Decks the mixed-potential fill does not serve (`_mp_serves`, and
+# the non-crossing mixed deck) take the direct fill whatever this says.
+DEFAULT_FILL = "mixed-potential"
 
 
 def _near_block(nq_graded, n_qp_const, extended_kernel):

@@ -63,6 +63,16 @@ from test_sg_mixed_sign_1159 import mixed
 from momwire import sinusoidal_galerkin as sg
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill (its near correction,
+    test quadrature, folded shapes and fused far fill), so every solver here
+    names it; `SinusoidalGalerkinSolver`'s default fill is the mixed-potential
+    one since momwire#1354 and is gated in `test_sinusoidal_mp_1354.py`."""
+    kw.setdefault("fill", "direct")
+    return SinusoidalGalerkinSolver(*args, **kw)
+
+
 C0 = 299792458.0
 WL7 = C0 / 7e6
 SOMM = dict(ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld")
@@ -109,20 +119,20 @@ def monopole(n=61, **kw):
 
 
 DECKS = {
-    "free-dipole": lambda: SinusoidalGalerkinSolver(**dipole()),
-    "pec-dipole": lambda: SinusoidalGalerkinSolver(**dipole(z=3.0, ground_z=0.0)),
-    "refl-dipole": lambda: SinusoidalGalerkinSolver(**dipole(z=3.0, **REFL)),
-    "somm-dipole": lambda: SinusoidalGalerkinSolver(**dipole(z=3.0, **SOMM)),
-    "buried-dipole": lambda: SinusoidalGalerkinSolver(**dipole(z=-0.5, **SOMM)),
-    "contact-monopole": lambda: SinusoidalGalerkinSolver(**monopole(**SOMM)),
-    "ek-ell": lambda: SinusoidalGalerkinSolver(**ell(extended_kernel=True)),
+    "free-dipole": lambda: _direct_sg(**dipole()),
+    "pec-dipole": lambda: _direct_sg(**dipole(z=3.0, ground_z=0.0)),
+    "refl-dipole": lambda: _direct_sg(**dipole(z=3.0, **REFL)),
+    "somm-dipole": lambda: _direct_sg(**dipole(z=3.0, **SOMM)),
+    "buried-dipole": lambda: _direct_sg(**dipole(z=-0.5, **SOMM)),
+    "contact-monopole": lambda: _direct_sg(**monopole(**SOMM)),
+    "ek-ell": lambda: _direct_sg(**ell(extended_kernel=True)),
     "junction-ports": lambda: _port_pair_solver(
         0.02, 0.01, 40, volts=(1 + 0j, 0.3 + 0j), cls=SinusoidalGalerkinSolver
     ),
-    "mixed-detached": lambda: SinusoidalGalerkinSolver(**mixed(4)),
-    "hub16-crossing": lambda: SinusoidalGalerkinSolver(**hub_deck(n_radials=16)),
-    "invl-crossing": lambda: SinusoidalGalerkinSolver(**invl_deck(n_radials=16)),
-    "hub16-detached": lambda: SinusoidalGalerkinSolver(**detached_hub_deck(x=1)),
+    "mixed-detached": lambda: _direct_sg(**mixed(4)),
+    "hub16-crossing": lambda: _direct_sg(**hub_deck(n_radials=16)),
+    "invl-crossing": lambda: _direct_sg(**invl_deck(n_radials=16)),
+    "hub16-detached": lambda: _direct_sg(**detached_hub_deck(x=1)),
 }
 # The hub-sized decks build Sommerfeld grids and run ~5-15 s a pair, over the
 # PR lane's guardrail, so they carry `slow` (push lane).
@@ -395,7 +405,7 @@ def test_the_fill_holds_G_plus_band_scratch(monkeypatch):
                 m.setattr(
                     SinusoidalGalerkinSolver, "_band_fill_serves", lambda self, n: False
                 )
-            s = SinusoidalGalerkinSolver(**d)
+            s = _direct_sg(**d)
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
                 geom = s._build_geometry()
