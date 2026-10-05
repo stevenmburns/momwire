@@ -96,9 +96,7 @@ def dshape_coefs(k, coefs):
     (cos - 1)` has `f' = k [c1 + (-c2) sin + c1 (cos - 1)]`. `coefs` is
     (..., 3); `k` is a scalar or broadcasts over the leading axes."""
     c = np.asarray(coefs)
-    k = np.asarray(k)
-    if k.ndim:
-        k = k[..., None]
+    k = np.asarray(k)  # scalar, or one per leading index of `coefs`
     out = np.empty_like(c, dtype=np.complex128)
     out[..., 0] = k * c[..., 1]
     out[..., 1] = -k * c[..., 2]
@@ -429,6 +427,19 @@ def basis_csr(seg_view, k):
     return starts, jbasis, np.ascontiguousarray(coef), np.ascontiguousarray(dcoef)
 
 
+def csr_subset(starts, jbasis, coef, dcoef, idx):
+    """The CSR tables restricted to the segments `idx` (in that order): the
+    sub-fill's own `(starts, jbasis, coef, dcoef)`, bases unrenumbered."""
+    starts = np.asarray(starts)
+    idx = np.asarray(idx, dtype=np.int64)
+    cnt = np.diff(starts)[idx]
+    sub_starts = np.concatenate(([0], np.cumsum(cnt))).astype(np.int64)
+    ent = np.repeat(starts[idx] - sub_starts[:-1], cnt) + np.arange(
+        sub_starts[-1], dtype=np.int64
+    )
+    return sub_starts, np.asarray(jbasis)[ent], coef[ent], dcoef[ent]
+
+
 def assemble_window(
     Z,
     J,
@@ -542,6 +553,8 @@ def _assemble_window_numpy(
 DIRECT_SIGN = -1.0
 # The remainder enters G as `+rem` (`_fold_ground_block`: free - (c2 img - rem)).
 REMAINDER_SIGN = 1.0
+# bspline's `self_completions` are an additive correction to its Z = -G.
+COMPLETION_SIGN = -1.0
 
 # Bytes of pair-moment window held at once: (3, 3, rows, N) complex128.
 WINDOW_BYTES = 256 << 20
@@ -588,7 +601,11 @@ class WindowFill:
         *,
         scale=1.0,
         weights=None,
+        obs_idx=None,
+        src_idx=None,
     ):
+        """`obs_idx` / `src_idx` are the GLOBAL segment ids of the observer
+        and source lists (a class block of a mixed deck); default identity."""
         obs_c, obs_t = np.asarray(obs_c, float), np.asarray(obs_t, float)
         src_c, src_t = np.asarray(src_c, float), np.asarray(src_t, float)
         obs_h, src_h = np.asarray(obs_h, float), np.asarray(src_h, float)
@@ -597,7 +614,16 @@ class WindowFill:
         sl_o, sr_o = segment_ends(obs_c, obs_t, obs_h)
         sl_s, sr_s = segment_ends(src_c, src_t, src_h)
         rows = max(1, WINDOW_BYTES // (N_SHAPES * N_SHAPES * 16 * max(n_src, 1)))
-        all_cols = np.arange(n_src, dtype=np.int64)
+        obs_idx = (
+            np.arange(n_obs, dtype=np.int64)
+            if obs_idx is None
+            else np.asarray(obs_idx, dtype=np.int64)
+        )
+        all_cols = (
+            np.arange(n_src, dtype=np.int64)
+            if src_idx is None
+            else np.asarray(src_idx, dtype=np.int64)
+        )
         for i0 in range(0, n_obs, rows):
             if self.checkpoint is not None:
                 self.checkpoint()
@@ -621,7 +647,7 @@ class WindowFill:
             assemble_window(
                 self.G,
                 J,
-                np.arange(i0, i1, dtype=np.int64),
+                obs_idx[i0:i1],
                 all_cols,
                 self.starts,
                 self.jbasis,
