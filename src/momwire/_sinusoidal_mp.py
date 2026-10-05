@@ -776,26 +776,53 @@ def remainder_shape_weights(k, h, t01, w01):
     return np.ascontiguousarray((h[:, None] * w01[None, :])[None] * S.real)
 
 
-def basis_wings(starts, jbasis, coef, n_basis):
+def basis_wings(starts, jbasis, coef, n_basis, width=N_SHAPES):
     """The CSR basis as fixed-width wing tables for the fused remainder
-    kernel: `(loc, pl)`, `loc` (n_basis, A) the segment of each wing and `pl`
-    (n_basis, A, 3) its coefficients, A the widest basis's entry count,
-    unused slots on segment 0 with zero coefficients — the B-spline
-    `supp_seg` / `polys` convention, which is how that kernel assembles this
-    basis unchanged (a padded wing adds exact zeros). One row per basis, so
-    the kernel's Q is G's own shape and lands on it in place."""
+    kernel, whose wing count is its shape count: `(rows_basis, loc, pl)`,
+    one row per basis with up to `width` entries and a wider (junction)
+    basis split over ceil(count / width) rows — `rows_basis` names each
+    row's basis, so the kernel's Q folds onto G by summing a basis's rows
+    and columns. Unused slots sit on segment 0 with zero coefficients (the
+    B-spline `supp_seg` / `polys` convention; a padded wing adds exact
+    zeros)."""
     starts = np.asarray(starts)
     jbasis = np.asarray(jbasis)
     seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
     order = np.argsort(jbasis, kind="stable")
     counts = np.bincount(jbasis[order], minlength=n_basis)
-    A = max(int(counts.max()), 1)
-    loc = np.zeros((n_basis, A), dtype=np.int64)
-    pl = np.zeros((n_basis, A, N_SHAPES), dtype=np.complex128)
-    slot = np.arange(order.size) - np.repeat(np.cumsum(counts) - counts, counts)
-    loc[jbasis[order], slot] = seg_of_entry[order]
-    pl[jbasis[order], slot] = coef[order]
-    return loc, pl
+    n_rows_per = np.maximum((counts + width - 1) // width, 1)
+    rows_basis = np.repeat(np.arange(n_basis), n_rows_per)
+    R = rows_basis.size
+    loc = np.zeros((R, width), dtype=np.int64)
+    pl = np.zeros((R, width, N_SHAPES), dtype=np.complex128)
+    row_start = np.concatenate(([0], np.cumsum(n_rows_per)))
+    pos = np.arange(order.size) - np.repeat(np.cumsum(counts) - counts, counts)
+    row = row_start[jbasis[order]] + pos // width
+    slot = pos % width
+    loc[row, slot] = seg_of_entry[order]
+    pl[row, slot] = coef[order]
+    return rows_basis, loc, pl
+
+
+def fold_rows_into(G, Qr, rows_basis, scale):
+    """`G += scale . S Qr S^T` for the 0/1 selector S with `S[rows_basis[r],
+    r] = 1`, without an (n, n) transient: a basis's extra rows and columns
+    are added onto its first row and column in place, and the first
+    rows/columns then land on G one block of rows at a time."""
+    rows_basis = np.asarray(rows_basis)
+    first = np.full(G.shape[0], rows_basis.size, dtype=np.int64)
+    np.minimum.at(first, rows_basis, np.arange(rows_basis.size))
+    extra = np.setdiff1d(np.arange(rows_basis.size), first)
+    if extra.size:
+        tgt = first[rows_basis[extra]]
+        np.add.at(Qr, tgt, Qr[extra])
+        np.add.at(Qr.T, tgt, Qr.T[extra])
+    chunk = max(1, (64 << 20) // (16 * max(G.shape[1], 1)))
+    for r0 in range(0, G.shape[0], chunk):
+        r1 = min(r0 + chunk, G.shape[0])
+        blk = Qr[first[r0:r1]][:, first]
+        blk *= scale
+        G[r0:r1] += blk
 
 
 def taylor_shape_coefs(k, h, degree=REMAINDER_TAYLOR_DEGREE):
@@ -908,7 +935,7 @@ def remainder_Q_above(
     coef = np.asarray(coef)
     if np.abs(coef.imag).max() != 0.0:
         raise ValueError("remainder_Q_above needs real basis coefficients (a real k)")
-    loc, pl = basis_wings(starts, jbasis, coef, G.shape[0])
+    rows_basis, loc, pl = basis_wings(starts, jbasis, coef, G.shape[0])
     pl = np.ascontiguousarray(pl.real)
     tang_c = np.ascontiguousarray(tang)
     Qr = _acc.sommerfeld_remainder_bspline_Q(
@@ -927,10 +954,7 @@ def remainder_Q_above(
         *_sommerfeld.grid_cpp_args(grid),
         int(cancel_flag),
     )
-    if Qr.shape != G.shape:
-        raise AssertionError("the remainder kernel's Q must be G's shape")
-    Qr *= scale
-    G += Qr
+    fold_rows_into(G, Qr, rows_basis, scale)
     del Qr
 
     # The grazing pairs, on graded panels (momwire#1189 / #1201 as bspline
