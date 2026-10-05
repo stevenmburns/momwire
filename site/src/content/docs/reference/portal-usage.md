@@ -222,6 +222,31 @@ a stock `.nec` file's final `EN` card does the same job and then ends the run.
 End of input terminates a deck too, exactly as `EN` does — so a file with
 neither, a deck that stops at `XQ`, solves and exits the same way.
 
+## Saving the decks SimNEC sends
+
+A SimNEC circuit whose antenna is written in SimNEC's own script language
+(`NECWire(...)`, `NECSource(...)`, `dcl` variables) has no cards in its `.ssn`
+file. SimNEC runs the script and sends the resulting deck to the engine. To get
+that model out as a `.nec`, have the engine keep a copy of every deck it
+receives:
+
+```bash
+mkdir -p ~/simnec-decks
+momwire-nec2c --save-decks ~/simnec-decks
+```
+
+Put that command in SimNEC's portal dialog, run the circuit once, and pick up
+the newest file from the directory. Each deck is saved as
+`<date>-<time>-<n>.nec`. The cards come through as SimNEC sent them, with its
+`CM version` comment first, and the file ends in `EN` so it reads as one
+standalone deck. antennaknobs opens it directly, as does any NEC-2 program.
+
+The option is off unless you ask for it. `MOMWIRE_NEC2C_SAVE_DECKS=<dir>` does
+the same for a host that passes environment instead of arguments, and the flag
+wins if both are given. The directory must already exist; if it doesn't, the
+`-version` probe fails at once. Saving never changes the answer, and a deck
+that cannot be written (a full disk, say) is still solved.
+
 ## What refusals look like
 
 A deck this engine cannot model is **reported and stepped over**, never
