@@ -99,22 +99,44 @@ RCOND_SUSPECT = 1e-9
 Z_REF_DEFAULT = 50.0
 
 
-def _tl_gamma_l(length, wavelength, vf, k1, k2):
+def frequency_mhz(wavelength, c_light_mhz_m=None):
+    """The frequency, in MHz, a reducer evaluates a frequency-dependent
+    branch at, from the wavelength it was handed (antennaknobs#1685).
+
+    ``c_light_mhz_m`` is the DESIGN's metre-megahertz product: 299.8 for a
+    deck-derived design, which solves at NEC's own wavelength 299.8/f while
+    NEC still evaluates its lumped loads and line loss at the deck's own f.
+    Converting that wavelength back with the SI c reads f 25 ppm low
+    (14.17464 MHz for a 14.175 MHz deck), so a caller whose wavelength came
+    from another c passes it here. ``None`` is the SI c, and that branch is
+    the expression every caller used before the keyword existed, so a caller
+    that does not pass it stays bit-identical.
+    """
+    if c_light_mhz_m is None:
+        return C_LIGHT / wavelength / 1e6
+    return c_light_mhz_m / wavelength
+
+
+def _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m=None):
     """Complex propagation γ·length = (α + jβ)·length.
 
     β = 2π/(vf·λ); α comes from the cable-table matched-loss model
     k1·√f_MHz + k2·f_MHz in dB per 100 ft (see `network.TL`). Shared by the
     admittance and chain-matrix forms so the two can never disagree about
     what line they describe.
+
+    The PHASE reads the wavelength as given, which is NEC's rule: its line
+    phase uses its own wavelength. Only the loss reads a frequency, at
+    :func:`frequency_mhz` with the design's ``c_light_mhz_m``.
     """
     beta = 2.0 * np.pi / (vf * wavelength)
-    f_mhz = C_LIGHT / wavelength / 1e6
+    f_mhz = frequency_mhz(wavelength, c_light_mhz_m)
     loss_db_per_100ft = k1 * np.sqrt(f_mhz) + k2 * f_mhz
     alpha = loss_db_per_100ft * NEPER_PER_DB * FEET_PER_M / 100.0  # nepers/m
     return (alpha + 1j * beta) * length
 
 
-def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0):
+def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0, *, c_light_mhz_m=None):
     """Ideal-TL chain (ABCD) matrix ``(A, B, C, D)`` — the reducer's stamp
     (issue #746).
 
@@ -131,12 +153,22 @@ def tl_abcd(z0, length, wavelength, vf=1.0, k1=0.0, k2=0.0):
     A crossed ("half-twist") line is NOT a flag here: it is port B's weights
     negated where the pair is stamped, which is what a polarity inversion is.
     """
-    gl = _tl_gamma_l(length, wavelength, vf, k1, k2)
+    gl = _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m)
     sh, ch = np.sinh(gl), np.cosh(gl)
     return ch, z0 * sh, sh / z0, ch
 
 
-def tl_admittance_2x2(z0, length, wavelength, transposed=False, vf=1.0, k1=0.0, k2=0.0):
+def tl_admittance_2x2(
+    z0,
+    length,
+    wavelength,
+    transposed=False,
+    vf=1.0,
+    k1=0.0,
+    k2=0.0,
+    *,
+    c_light_mhz_m=None,
+):
     """Ideal-TL nodal admittance between its two terminals — lossless or
     lossy (issue #297).
 
@@ -164,10 +196,10 @@ def tl_admittance_2x2(z0, length, wavelength, transposed=False, vf=1.0, k1=0.0, 
     ZL-Special). Note it is NOT the same as a negative z0, which would
     (wrongly) negate the diagonal self terms too.
     """
-    gl = _tl_gamma_l(length, wavelength, vf, k1, k2)
+    gl = _tl_gamma_l(length, wavelength, vf, k1, k2, c_light_mhz_m)
     sh, ch = np.sinh(gl), np.cosh(gl)
     if abs(sh) < 1e-12:
-        f_mhz = C_LIGHT / wavelength / 1e6
+        f_mhz = frequency_mhz(wavelength, c_light_mhz_m)
         raise SingularNetworkError(
             f"lossless TL length {length} is ~k·vf·λ/2 at "
             f"f={f_mhz:.4f} MHz (sinh γl ≈ 0); the admittance is singular "
@@ -195,7 +227,7 @@ _COMM_INCIDENCE = np.full((2, 2), 0.25, dtype=np.complex128)
 
 
 def balanced_admittance_4x4(
-    zdiff, length, wavelength, vf=1.0, k1=0.0, k2=0.0, zcomm=None
+    zdiff, length, wavelength, vf=1.0, k1=0.0, k2=0.0, zcomm=None, *, c_light_mhz_m=None
 ):
     """Balanced two-conductor TL nodal admittance (issues #575/#576) — a 4×4
     block over the terminal order ``(a1, a2, b1, b2)`` (port A = (a1, a2),
@@ -234,10 +266,11 @@ def balanced_admittance_4x4(
     conductor 2 at both ends
     (dropping rows/cols a2, b2) collapses the ``zcomm=None`` stamp exactly
     back to that 2×2."""
-    y2 = tl_admittance_2x2(zdiff, length, wavelength, vf=vf, k1=k1, k2=k2)
+    kw = dict(vf=vf, k1=k1, k2=k2, c_light_mhz_m=c_light_mhz_m)
+    y2 = tl_admittance_2x2(zdiff, length, wavelength, **kw)
     y4 = np.kron(y2, _DIFF_INCIDENCE)
     if zcomm is not None:
-        yc = tl_admittance_2x2(zcomm, length, wavelength, vf=vf, k1=k1, k2=k2)
+        yc = tl_admittance_2x2(zcomm, length, wavelength, **kw)
         y4 = y4 + np.kron(yc, _COMM_INCIDENCE)
     return y4
 
