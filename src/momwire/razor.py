@@ -4165,6 +4165,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             knot = self._knot_points(geom)
         out = []
         for m in rows:
+            self._checkpoint()  # a row's paths: the x32 crossing axis is ~0.6 s of them
             s_a, s_b = int(wing_seg[m, 0]), int(wing_seg[m, 1])
             if halves == "both":
                 sl = slice(0, 2 * q)

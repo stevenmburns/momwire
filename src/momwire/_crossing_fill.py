@@ -2412,18 +2412,32 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     zB = pb[:, 2] - gz
     gzv, lzv = (zA, zB) if slot == "z" else (zB, zA)
     x0, y0 = G[gfirst, 0], G[gfirst, 1]
-    # The grid's operand order is (above − below).
-    if slot == "z":
-        raw = np.hypot(x0[:, None] - L[None, :, 0], y0[:, None] - L[None, :, 1])
-    else:
-        raw = np.hypot(L[None, :, 0] - x0[:, None], L[None, :, 1] - y0[:, None])
+    # The grid's operand order is (above − below). Formed a span of groups
+    # at a time with a poll between (momwire#1348): elementwise, so the same
+    # floats as the one-shot expression, and at x32 the block is a quarter of
+    # a second of numpy no cancel could otherwise interrupt.
+    raw = np.empty((nG, nL))
+    spans = _group_spans(nG, nL)
+    for g0, g1 in spans:
+        _cancel.poll()
+        if slot == "z":
+            raw[g0:g1] = np.hypot(
+                x0[g0:g1, None] - L[None, :, 0], y0[g0:g1, None] - L[None, :, 1]
+            )
+        else:
+            raw[g0:g1] = np.hypot(
+                L[None, :, 0] - x0[g0:g1, None], L[None, :, 1] - y0[g0:g1, None]
+            )
     keep_raw = nG <= _PRODUCT_FAST_RAW_GROUPS
     if keep_raw:
         line = _near_interface.radius_fold(raw, float(ctx.a_wire))
     else:
         # `radius_fold` in place: the same ufunc on the same floats, and the
         # (groups, line) raw block is not kept past it (`_raw_row`).
-        line = np.hypot(raw, float(ctx.a_wire), out=raw)
+        line = raw
+        for g0, g1 in spans:
+            _cancel.poll()
+            np.hypot(raw[g0:g1], float(ctx.a_wire), out=raw[g0:g1])
         raw = None
     zf, zid = _first_groups(gzv)
     kf, kid = _first_groups(line.ravel(), np.broadcast_to(lzv, line.shape).ravel())
@@ -2675,6 +2689,7 @@ def _column_tiles(plan, key_cls, cls_rows):
     pos[order] = np.arange(n_line)
     first = np.full(cls_rows.size, n_line, dtype=np.int64)
     for g0, g1 in _group_spans(n_groups, n_line):
+        _cancel.poll()
         c = key_cls[kid[g0:g1]]
         np.minimum.at(first, c.ravel(), np.broadcast_to(pos, c.shape).ravel())
         del c
@@ -2775,6 +2790,8 @@ class _ProductTiles:
         del got
         rows_per_key = np.zeros(n_key, dtype=np.int64)
         for g, kj in enumerate(plan.kids):
+            if not g & 255:
+                _cancel.poll()
             rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound
         cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=n_cls)
         col_ready = None
@@ -2796,7 +2813,9 @@ class _ProductTiles:
         self._by_tile = None
         if len(plan.rowtab) > 1 and self.n_tiles < 2**15 and _TILE_ROW_ORDER:
             t_row = np.empty(U, dtype=np.int16)
-            for tab, kj in zip(plan.rowtab, plan.kids):
+            for g, (tab, kj) in enumerate(zip(plan.rowtab, plan.kids)):
+                if not g & 255:
+                    _cancel.poll()
                 t_row[tab] = self.tile_of_key[kj][None, :]
             # A row's tile is its key's, the same in every group holding it.
             # Stable on 16-bit keys is numpy's radix sort: O(rows).
@@ -2806,7 +2825,9 @@ class _ProductTiles:
             self._by_tile = (o.astype(_index_dtype(U)), b)
             del o
         else:
-            for kj in plan.kids:
+            for g, kj in enumerate(plan.kids):
+                if not g & 255:
+                    _cancel.poll()
                 tl = self.tile_of_key[kj]
                 o = np.argsort(tl, kind="stable")
                 b = np.searchsorted(tl[o], np.arange(self.n_tiles + 1))
@@ -2817,6 +2838,7 @@ class _ProductTiles:
             # needs, no row of the column in a later tile.
             ready, may_hold = col_ready, False
             for g0, g1 in _group_spans(*plan.kid.shape):
+                _cancel.poll()
                 tk = self.tile_of_key[plan.kid[g0:g1]]
                 if np.any(tk > ready[None, :]):
                     raise AssertionError("a column is served before its rows")
@@ -2904,6 +2926,7 @@ class _ProductTiles:
             late_row = np.zeros(U, dtype=bool)
             ready = self._node_ready
             for g0, g1 in _group_spans(*plan.kid.shape):
+                _cancel.poll()
                 late = self.tile_of_key[plan.kid[g0:g1]] < ready[None, :]
                 for g in np.flatnonzero(late.any(axis=1)).tolist():
                     kl = np.unique(plan.kl_rank[g0 + g][late[g]])
@@ -3473,6 +3496,7 @@ def _chunked_point_tables(
             for key, v in six_vals.items():
                 v[dst] = blk[:, _near_interface.KEYS.index(key)]
             del blk
+            _cancel.poll()
             pv = _near_interface.point_designed_rows(eps_t, k_p, sub, plan=plan)
             for key, v in point_vals.items():
                 v[dst] = pv[key]
@@ -3490,6 +3514,7 @@ def _chunked_point_tables(
         if t == 0 and on_ready is not None:
             on_ready()
         for c in range(c0, sched.chunk_end[t]):
+            _cancel.poll()
             sl = rows[c]
             idx, chunk_ids[c] = chunk_ids[c], None
             if sched.slot is not None:
@@ -4013,6 +4038,7 @@ def _point_observer_block_chunked(
         keep,
         on_ready=ends_loop,
     ):
+        _cancel.poll()
         n_chunks += 1
         axc, ayc, azc = ax_full[sl], ay_full[sl], az_full[sl]
         dx, dy, rho, _z, _zp = _point_pair_grid(P[sl], nodes, gz, observers_above)
@@ -4362,6 +4388,7 @@ def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
         for _pt, sign, fv, te in _end_tables(
             ctx, eps_t, k_p, ends, n_nodes, memo, args
         ):
+            _cancel.poll()
             yield (
                 sign,
                 fv,
@@ -4376,6 +4403,7 @@ def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
     pending = []
 
     def flush():
+        _cancel.poll()
         R = _fast_desc_rows_batch(fast, [classes[i] for i, _s, _f in pending])
         vVs = _store_matvecs(Fd, w, R, product.vals, 0)
         vWs = _store_matvecs(F, w_tz, R, product.vals, 1)
@@ -4395,6 +4423,7 @@ def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
         fast_te=lambda _i: _FAST_TE,
     )
     for i, (_pt, sign, fv, te) in enumerate(spans):
+        _cancel.poll()
         if te is _FAST_TE:
             pending.append((i, sign, fv))
             if len(pending) >= per:
