@@ -1507,6 +1507,7 @@ def _classify_batch(fast, a_wire, pts, rho, end, args, *, n=None, by_nodes=False
     `by_nodes` (`_args_on_plan_nodes` held for this loop): no ρ row is
     handed in, and the ρ tests hold by that check rather than by a compare
     per end."""
+    _cancel.poll()
     E = pts.shape[0]
     n = rho.shape[1] if n is None else n
     lz = args.line_z()
@@ -1553,7 +1554,9 @@ def _classify_batch(fast, a_wire, pts, rho, end, args, *, n=None, by_nodes=False
             # the z alone. The rest search the keys from their ρ, formed for
             # them only.
             off_node = []
-            for e in idx.tolist():
+            for i_e, e in enumerate(idx.tolist()):
+                if not i_e & 255:
+                    _cancel.poll()
                 lv0 = lz[0] if end_in_gv else end[e]
                 l0 = float(lv0)
                 for nn in fast.line_xy.get(xy[e], ()):
@@ -2322,10 +2325,14 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
         j_first = first - bstart[blk]
     rowflat = np.empty(n_cand, dtype=_index_dtype(n_rows))
     for i, (g, zl) in enumerate(zip(g_s.tolist(), zl_s.tolist())):
+        if not i & 1023:
+            _cancel.poll()
         d0, b0 = off[g] + zl * nk[g], bstart[i]
         rowflat[d0 : d0 + nk[g]] = inv[b0 : b0 + nk[g]]
     del inv
+    _cancel.poll()
     b = np.concatenate(kfirst)[koff[g_s[blk]] + j_first]
+    _cancel.poll()
     kept_pos = (a_s[blk].astype(np.int64) * nB + b).astype(
         _index_dtype(int(a_s.max(initial=0)) * nB + nB), copy=False
     )
@@ -2820,6 +2827,7 @@ class _ProductTiles:
             # A row's tile is its key's, the same in every group holding it.
             # Stable on 16-bit keys is numpy's radix sort: O(rows).
             o = np.argsort(t_row, kind="stable")
+            _cancel.poll()
             b = np.searchsorted(t_row[o], np.arange(self.n_tiles + 1))
             del t_row
             self._by_tile = (o.astype(_index_dtype(U)), b)
@@ -3633,6 +3641,7 @@ class _PointTileSchedule:
             n_col = int(_u.size)
             del _u
         del fz
+        _cancel.poll()
         if pin is not None:
             self.is_key = pin[0].contains(pin[1])
             first[self.is_key] = 0
@@ -3656,8 +3665,10 @@ class _PointTileSchedule:
         self.pool = int(live.max()) if m else 0
         # Rows by evaluation tile, ids ascending within each (a stable sort
         # of small ints: numpy's radix sort).
+        _cancel.poll()
         self._order, self._eval_bounds = self._by_tile(first)
         del first
+        _cancel.poll()
         self._free, ends = self._by_tile(last)
         self._free = [self._free[a:b] for a, b in zip(ends[:-1], ends[1:])]
         del last, ends
@@ -3666,6 +3677,7 @@ class _PointTileSchedule:
         # `_POINT_EVAL_ROWS` rows of their running size; a row's batch is
         # its column's.
         self._col = col
+        _cancel.poll()
         size = np.bincount(col, minlength=n_col)
         by = np.argsort(col_tile, kind="stable")
         run = np.cumsum(size[by])
