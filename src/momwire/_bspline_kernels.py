@@ -112,7 +112,9 @@ bits between `np.arcsinh` and `std::asinh` (measured ~1e-15 relative, the same
 class the reduced kernels have always had).
 """
 
+import os
 from collections import namedtuple
+from concurrent.futures import ThreadPoolExecutor
 
 from functools import lru_cache
 
@@ -788,6 +790,85 @@ def _ek_reg_kernel(R, a, k):
     return num / (4 * np.pi * R)
 
 
+# momwire#1290: the in-medium (complex-k) same-edge kernel has no C++ twin,
+# and its numpy spelling ran on one core: 0.7 s of bs2 buried x16 and 2.8 s
+# of invl x32 (Haswell), in `expm1_neg_jkR` and the einsum. Both now run in
+# pieces on a thread pool (numpy releases the GIL inside a ufunc or einsum
+# loop), as numpy's own arithmetic on every element:
+#
+# * the kernel table is elementwise, cut at fixed multiples of
+#   `_REG_CPLX_PIECE` elements of the flattened table. A piece is a multiple
+#   of every SIMD width and starts at the same alignment as the whole table,
+#   so each element takes the same lane of the same loop as in one call;
+# * the einsum is cut along its OUTPUT segment axis i into fixed pieces of
+#   `_REG_CPLX_ROWS` segments (never one: an extent-1 axis is one numpy's
+#   iterator may drop). An output entry's sum runs over (q, r) only, in the
+#   order the iterator takes from the operands' strides, which a slice along
+#   i does not change.
+#
+# The pieces are fixed sizes, so the answer does not depend on the thread
+# count. False takes the whole-array calls, the reference the pieces are
+# gated against as uint64 (tests/test_reg_cplx_pieces_1290.py); tests flip
+# it, nothing else should.
+_REG_CPLX_PIECES = True
+_REG_CPLX_PIECE = 1 << 16
+_REG_CPLX_ROWS = 16
+
+
+@lru_cache(maxsize=1)
+def _reg_cplx_pool():
+    """The pieces' pool, built on first use: as many workers as this process
+    may run on, held to OMP_NUM_THREADS where the caller pinned one."""
+    try:
+        n = len(os.sched_getaffinity(0))
+    except AttributeError:
+        n = os.cpu_count() or 1
+    try:
+        n = min(n, int(os.environ.get("OMP_NUM_THREADS", "") or n))
+    except ValueError:
+        pass
+    return ThreadPoolExecutor(max_workers=max(1, n))
+
+
+def _reg_cplx_G(k, R):
+    """`(e^{-jkR} - 1) / (4πR)` over the R table, elementwise."""
+    if not _REG_CPLX_PIECES or R.size <= _REG_CPLX_PIECE or not R.flags.c_contiguous:
+        return _expm1_neg_jkR(k, R) / (4 * np.pi * R)
+    flat = R.reshape(-1)
+    out = np.empty(flat.shape, dtype=np.complex128)
+
+    def piece(lo):
+        r = flat[lo : lo + _REG_CPLX_PIECE]
+        out[lo : lo + _REG_CPLX_PIECE] = _expm1_neg_jkR(k, r) / (4 * np.pi * r)
+
+    list(_reg_cplx_pool().map(piece, range(0, flat.size, _REG_CPLX_PIECE)))
+    return out.reshape(R.shape)
+
+
+def _reg_cplx_einsum(wu_row, G_block, wu_pow):
+    """`einsum("piq,iqjr,Pjr->pPij", ...)`, in pieces along i."""
+    n_row = G_block.shape[0]
+    if not _REG_CPLX_PIECES or n_row < 2 * _REG_CPLX_ROWS:
+        return np.einsum("piq,iqjr,Pjr->pPij", wu_row, G_block, wu_pow)
+    n_d = wu_row.shape[0]
+    out = np.empty((n_d, wu_pow.shape[0], n_row, G_block.shape[2]), dtype=np.complex128)
+    # Piece starts at multiples of _REG_CPLX_ROWS; a last piece of one row
+    # joins the one before it.
+    starts = list(range(0, n_row, _REG_CPLX_ROWS))
+    if n_row - starts[-1] < 2:
+        starts.pop()
+    bounds = list(zip(starts, starts[1:] + [n_row]))
+
+    def piece(b):
+        lo, hi = b
+        out[:, :, lo:hi, :] = np.einsum(
+            "piq,iqjr,Pjr->pPij", wu_row[:, lo:hi], G_block[lo:hi], wu_pow
+        )
+
+    list(_reg_cplx_pool().map(piece, bounds))
+    return out
+
+
 def _seg_seg_reg_moments_from_geometry(geo, k):
     """Per-k smooth-kernel moment block from a `_seg_seg_reg_geometry` dict.
 
@@ -874,9 +955,11 @@ def _seg_seg_reg_moments_from_geometry(geo, k):
     # the a → 0, kR → 0 limit; no quadrature pathology. The remainder is
     # spelled cancellation-free (momwire#799) — the literal subtraction returns
     # its real part to an ABSOLUTE ε, which is 7e-11 relative at kR = 1e-3.
-    G_reg = _expm1_neg_jkR(k, R) / (4 * np.pi * R)
+    G_reg = _reg_cplx_G(k, R) if in_medium else _expm1_neg_jkR(k, R) / (4 * np.pi * R)
     G_block = G_reg.reshape(n_row, n_qp, N, n_qp)
     # J_reg[p, P, i, j] = sum_{q, r} wu_row[p, i, q] G[i, q, j, r] wu_pow[P, j, r]
+    if in_medium:
+        return _reg_cplx_einsum(wu_row if windowed else wu_pow, G_block, wu_pow)
     return np.einsum(
         "piq,iqjr,Pjr->pPij",
         wu_row if windowed else wu_pow,
