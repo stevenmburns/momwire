@@ -622,7 +622,7 @@ def test_gb1_galerkin_shift_tracks_nec2c_where_the_kernel_dominates(radius):
     """
     da, z_off, z_on = LADDER[radius]
     d_nec = z_on - z_off
-    d_gal = _shift(SinusoidalGalerkinSolver, radius)
+    d_gal = _shift(_direct_sg, radius)
     err = abs(d_gal - d_nec) / abs(d_nec)
     assert err < _SHIFT_BAR, f"Δ/a={da}: δZ {d_gal} vs nec2c {d_nec} ({err:.1%})"
 
@@ -639,7 +639,7 @@ def test_gb1_galerkin_and_collocation_shifts_agree(radius):
     measures that difference and shows it is the fill and not an error.
     """
     da = LADDER[radius][0]
-    d_gal = _shift(SinusoidalGalerkinSolver, radius)
+    d_gal = _shift(_direct_sg, radius)
     d_col = _shift(SinusoidalSolver, radius)
     err = abs(d_gal - d_col) / abs(d_col)
     assert err < _SHIFT_BAR, f"Δ/a={da}: galerkin {d_gal} vs collocation {d_col}"
@@ -652,7 +652,7 @@ def test_gb1_shift_has_nec2c_sign_structure(radius):
     survive a magnitude bar on the fat rungs and die here."""
     _, z_off, z_on = LADDER[radius]
     d_nec = z_on - z_off
-    d_gal = _shift(SinusoidalGalerkinSolver, radius)
+    d_gal = _shift(_direct_sg, radius)
     assert np.sign(d_gal.real) == np.sign(d_nec.real), (d_gal, d_nec)
     assert np.sign(d_gal.imag) == np.sign(d_nec.imag), (d_gal, d_nec)
 
@@ -680,7 +680,7 @@ def test_gb1_thin_wire_galerkin_shift_exceeds_the_point_matched_one(radius):
     precision grounds, which is exactly why it is an independent check here.
     It reproduces δZ to eight figures.
     """
-    d_delta = _shift(SinusoidalGalerkinSolver, radius)
+    d_delta = _shift(_direct_sg, radius)
     d_col = _shift(SinusoidalSolver, radius)
     assert abs(d_delta) > 3.0 * abs(d_col)
 
@@ -715,7 +715,7 @@ def test_gb1_thin_wire_galerkin_shift_exceeds_the_point_matched_one(radius):
 
     try:
         SinusoidalSolver._field_components_bcast = ekscx_built
-        d_ekscx = _shift(SinusoidalGalerkinSolver, radius)
+        d_ekscx = _shift(_direct_sg, radius)
     finally:
         SinusoidalSolver._field_components_bcast = original
     assert abs(d_ekscx - d_delta) < 1e-6 * abs(d_delta), (d_ekscx, d_delta)
@@ -861,10 +861,8 @@ def test_gb2_symmetry_survives_the_extended_kernel(radius, bar):
     """On the ladder's own mesh the EK-on fill is as reciprocal as the
     reduced one: 5.8e-13 against 3.5e-13 at Δ/a = 2.4 (1.7×), 4.6e-13
     against 2.1e-13 at Δ/a = 6.1 (2.2×)."""
-    r_red = _sym_ratio(_ladder_deck(SinusoidalGalerkinSolver, radius))
-    r_ext = _sym_ratio(
-        _ladder_deck(SinusoidalGalerkinSolver, radius, extended_kernel=True)
-    )
+    r_red = _sym_ratio(_ladder_deck(_direct_sg, radius))
+    r_ext = _sym_ratio(_ladder_deck(_direct_sg, radius, extended_kernel=True))
     assert r_ext < bar * r_red, f"{r_ext:.2e} vs reduced {r_red:.2e}"
 
 
@@ -948,7 +946,7 @@ def test_gb2_an_asymmetric_mask_breaks_reciprocity_and_refinement_cannot_fix_it(
 # G-B3 — a → 0
 # ---------------------------------------------------------------------------
 def _fill(radius, **kw):
-    sim = _ladder_deck(SinusoidalGalerkinSolver, radius, **kw)
+    sim = _ladder_deck(_direct_sg, radius, **kw)
     geom = sim._build_geometry()
     return sim._assemble_Z(geom, sim.k)[0]
 

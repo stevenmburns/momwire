@@ -143,7 +143,7 @@ def test_eps_tilde_one_collapses_onto_free_space():
     # The direct fill: this is its collapse to the bit (the mixed-potential
     # fill's is `test_sinusoidal_mp_1354.py`'s).
     z_free = z_of(sg_dipole(depth=1.5, free=True, fill="direct"))
-    z_collapsed = z_of(sg_dipole(depth=1.5, eps=(1.0, 0.0)))
+    z_collapsed = z_of(sg_dipole(depth=1.5, eps=(1.0, 0.0), fill="direct"))
     rel = abs(z_collapsed - z_free) / abs(z_free)
     # bspline's own collapse floor on the elevated deck is 5e-5; this trunk
     # measured 7.5e-15, so the gate is set two decades above the measurement

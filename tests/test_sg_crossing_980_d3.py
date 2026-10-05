@@ -49,10 +49,11 @@ _WIRES = [
 _JUNCTIONS = [[(0, "start"), (1, "start")]]
 
 
-def crossing_deck(ground_eps, n=15):
+def crossing_deck(ground_eps, n=15, **kw):
     return SinusoidalGalerkinSolver(
         wires=_WIRES,
         n_per_edge_per_wire=[[n], [n]],
+        **kw,
         feeds=[(0, 1.0, 1 + 0j)],
         wavelength=WL7,
         wire_radius=0.001,
@@ -647,7 +648,7 @@ def test_d3_exercises_the_crossing_trunk_and_the_complex_k_twin():
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             # Soil A, so k_m is complex and the below class needs the twin.
-            crossing_deck(SOIL_A).compute_impedance()
+            crossing_deck(SOIL_A, fill="direct").compute_impedance()
     finally:
         _crossing_fill.cross_complete_block_split = real_trunk
         sgm._acc = real_acc
