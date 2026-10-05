@@ -93,6 +93,7 @@ it hands the fill a `CrossingContext` (below) rather than itself (momwire#801).
 
 from __future__ import annotations
 
+import functools
 import os
 import sys
 import warnings
@@ -102,7 +103,7 @@ import numpy as np
 import scipy.sparse as _sp
 from numpy.polynomial.legendre import leggauss
 
-from . import _accel, _aca, _ground_refl, _near_interface, _sommerfeld_below
+from . import _accel, _aca, _cancel, _ground_refl, _near_interface, _sommerfeld_below
 from ._sommerfeld_transmitted import _c1_moment
 
 
@@ -305,6 +306,10 @@ class CrossingContext(NamedTuple):
     eps: float
     a_above: float | None = None
     a_below: float | None = None
+    # The solver's `CancelToken` (or None), installed as the ambient token by
+    # every public entry below (`_cancelable`) so the fill's seams and the
+    # near-interface tables can poll it without a token argument.
+    cancel: object | None = None
 
 
 # WHAT IS GATED, and why it is not the node-adjacent segment.
@@ -433,6 +438,18 @@ _WARN_TARGET = (
 # "~6 mm" in the message text until momwire#926 needed to COMPARE it with
 # something.
 NODE_TARGET_PANEL = 0.006
+
+
+def _cancelable(fn):
+    """Run a public fill entry with its context's token installed
+    (`_cancel.scope`). Every entry takes the `CrossingContext` first."""
+
+    @functools.wraps(fn)
+    def run(ctx, *args, **kwargs):
+        with _cancel.scope(ctx.cancel):
+            return fn(ctx, *args, **kwargs)
+
+    return run
 
 
 def node_panel_floor(h_floor_m, slope):
@@ -1797,6 +1814,7 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
     idx_t = _index_dtype(rho.size)
     parts, firsts, inverses = [], [], []
     for sl in cols:
+        _cancel.poll()
         r = fold(rho[:, sl], a_wire)
         u, inv = _near_interface._unique_rows(
             r,
@@ -1834,6 +1852,7 @@ def _chunked_tables(ctx, eps_t, k_p, rho, zA, zB, cols, memo):
     off = 0
     nA = rho.shape[0]
     for sl, (inv, m) in zip(cols, inverses):
+        _cancel.poll()
         idx = gid[off : off + m][inv].reshape(nA, sl.stop - sl.start)
         off += m
         yield sl, {key: v[idx] for key, v in vals.items()}
@@ -3023,6 +3042,7 @@ class _ProductTiles:
         held = np.empty((self.n_held, len(tb_keys)), dtype=np.complex128, order="F")
         o_ready, b_ready = self._ready
         for t in range(self.n_tiles):
+            _cancel.poll()
             ids = self._tile_rows(t)
             if done[ids].any():
                 raise AssertionError("a product row was asked to evaluate twice")
@@ -3055,6 +3075,7 @@ class _ProductTiles:
                 self.listener.tile(t, loc, tb, held, self.hpos)
             J = o_ready[b_ready[t] : b_ready[t + 1]]
             for i0 in range(0, J.size, step):
+                _cancel.poll()
                 cols = J[i0 : i0 + step]
                 # Yielded unbound: the consumer drops the tables once it has
                 # formed their left products, and a name held here across the
@@ -3427,6 +3448,7 @@ def _chunked_point_tables(
     for t in range(sched.n_tiles):
         batches = sched.take(t)
         for b, sel in enumerate(batches):
+            _cancel.poll()
             batches[b] = None
             _ROUTES["point_tile_rows"] += sel.size
             sub = uniq[sel]
@@ -3745,6 +3767,7 @@ def _point_grid_rows(rows, P, nodes, gz, observers_above, a_wire, idx_t):
     return uniq, chunk_ids
 
 
+@_cancelable
 def point_observer_block(
     ctx, obs_pts, obs_t, src, *, observers_above, into=None, into_rows=None
 ):
@@ -4037,6 +4060,7 @@ def _point_observer_block_chunked(
     return t
 
 
+@_cancelable
 def cross_complete_block(ctx, A, B, *, corner=True, support=None, into=None):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
@@ -5947,6 +5971,7 @@ def _ends_and_corner_reversed(
     )
 
 
+@_cancelable
 def cross_complete_block_reversed(
     ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS, support=None, into=None
 ):
@@ -6315,6 +6340,7 @@ def _streamed_sandwich(
         held_slot = np.zeros(0, dtype=np.int64)
         n_used = 0
     for cols, Kc in K:
+        _cancel.poll()
         c_cols = (
             np.arange(cols.start, cols.stop)
             if isinstance(cols, slice)
@@ -6592,6 +6618,7 @@ def _refuse_path_tested(*axes):
             )
 
 
+@_cancelable
 def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=None):
     """`cross_complete_block` through the #688 admissibility split.
 
@@ -6639,6 +6666,7 @@ def cross_complete_block_split(ctx, a_idx, b_idx, A, B, *, corner=True, rows=Non
     return main
 
 
+@_cancelable
 def cross_complete_blocks_two_radius(ctx, a_idx, b_idx, A, B, *, rows=None):
     """The cross pair at a TWO-RADIUS crossing node: `(t_above, t_below)`,
     composed by the caller as `Z -= t_above; Z -= t_below.T`.
@@ -6899,6 +6927,7 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
         # `_tables` costs ~212 bytes of peak per pair at 150 radials, so the
         # budget is what bounds this phase, not the deck size.
         for g0, g1 in _pair_groups([iA.size * iB.size for _A, _B, iA, iB in direct]):
+            _cancel.poll()
             _direct_group(
                 ctx,
                 eps_t,
@@ -6916,6 +6945,7 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
     # row/column samples ride the SAME memo — identical matrices in
     # mirrored blocks pick identical pivots, so their samples dedup.
     for iA, iB in far_aca:
+        _cancel.poll()
         pa, pb = Ac["nodes"][iA], Bc["nodes"][iB]
         zA, zB = pa[:, 2] - gz, pb[:, 2] - gz
         rho = np.hypot(
@@ -7024,6 +7054,7 @@ def _main_split(ctx, a_idx, b_idx, A, B, eps_t, k_p, c1, gz, memo, rows=None):
     return c1 * t_main, c1 * t_cols
 
 
+@_cancelable
 def cross_complete_block_reversed_split(
     ctx, p_idx, q_idx, P, Q, *, corner=True, sw_end=SW_BY_PARTS
 ):
@@ -7302,6 +7333,7 @@ class _CompletionScatter:
         return self.dest
 
 
+@_cancelable
 def self_completions(ctx, ax_b, ax_a, *, rows=None, out=None):
     """The self families' missing bnd + corner content, both media, on
     graded axes. Returned as the ADDITIVE Z correction (the fill's
@@ -7345,6 +7377,7 @@ def self_completions(ctx, ax_b, ax_a, *, rows=None, out=None):
     return acc.flush()
 
 
+@_cancelable
 def self_completions_two_radius(ctx, ax_b, ax_a, *, rows=None, out=None):
     """`self_completions` at a TWO-RADIUS crossing node.
 

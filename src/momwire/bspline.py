@@ -2563,6 +2563,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             eps=self.eps,
             a_above=None if two is None else two[0],
             a_below=None if two is None else two[1],
+            cancel=self._cancel,
         )
 
     def _grounded_junctions(self):

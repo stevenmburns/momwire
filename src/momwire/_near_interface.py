@@ -72,7 +72,7 @@ import numpy as np
 from scipy.special import hankel1, hankel2
 from threadpoolctl import ThreadpoolController
 
-from . import _accel
+from . import _accel, _cancel
 from ._sommerfeld_below import _adaptive_segment, _head
 from ._sommerfeld_transmitted import (
     _ADAPT_DEPTH,
@@ -960,7 +960,8 @@ def _point_columns_exact(eps_t, k2, flat_r, flat_z, flat_zp, p=None):
         _refuse_bad_members(np.repeat(uniq, sizes), zs, zps)
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
-        out[order] = _nipa.near_interface_point_columns(
+        out[order] = _columns_sliced(
+            _nipa.near_interface_point_columns,
             k_p,
             k_m,
             np.ascontiguousarray(uniq),
@@ -2005,6 +2006,7 @@ def _evaluate_fresh(
     of its planes is interpolated from that plane's sheet whatever call it
     arrives in, so how a fill cuts its rows into calls cannot move it.
     """
+    _cancel.poll()
     if _use_column_route() and _use_column_accel():
         k_p = float(k2)
         k_m = k_medium(complex(eps_t), k_p)
@@ -2059,6 +2061,50 @@ def _evaluate_fresh(
     )
 
 
+# A column twin call is one uninterruptible C++ region, and the fills hand it
+# a whole grouping (momwire#898's reason: the parallel units live inside it).
+# On invl_deck(16) x16 a single call ran for 8 s of an SG fill. So the grouping
+# goes in WHOLE-COLUMN slices of about `_TWIN_SLICE_COST` each, with a poll
+# between them (momwire#1342). Whole columns because a member's value depends on
+# its column's membership (`column_batches`); the columns are independent of
+# one another, and OpenMP's static split inside a call hands each column the
+# same arithmetic whatever else is in the call, so the slices are bit-identical
+# to the one call (gated: tests/test_cancel_buried_fill_1342.py). A single
+# column longer than the slice is a slice of its own, so that is the
+# resolution floor.
+#
+# Cost in members: a column's setup is ~68 us at 4 threads, a member ~1.9 us
+# (Design E's cost lines, below), so a column weighs `_TWIN_COLUMN_COST`
+# members. 100k such units is ~0.2 s at 4 threads on the laptop.
+_TWIN_COLUMN_COST = 36
+_TWIN_SLICE_COST = 100_000
+
+
+def _columns_sliced(twin, k_p, k_m, rho_c, offsets, zs, zps, *tail):
+    """`twin(k_p, k_m, rho_c, offsets, zs, zps, *tail)` over whole-column
+    slices, polling the ambient token before each. Returns the same (n, w)
+    block. One slice when the grouping is small — then it is the plain call."""
+    n_cols = rho_c.size
+    cum = offsets + _TWIN_COLUMN_COST * np.arange(n_cols + 1, dtype=np.intp)
+    total = int(cum[-1])
+    _cancel.poll()
+    if total <= _TWIN_SLICE_COST:
+        return twin(k_p, k_m, rho_c, offsets, zs, zps, *tail)
+    targets = np.arange(_TWIN_SLICE_COST, total, _TWIN_SLICE_COST)
+    cuts = np.unique(np.concatenate(([0, n_cols], np.searchsorted(cum, targets))))
+    out = None
+    for a, b in zip(cuts[:-1].tolist(), cuts[1:].tolist()):
+        _cancel.poll()
+        lo, hi = int(offsets[a]), int(offsets[b])
+        got = twin(
+            k_p, k_m, rho_c[a:b], offsets[a : b + 1] - lo, zs[lo:hi], zps[lo:hi], *tail
+        )
+        if out is None:
+            out = np.empty((int(offsets[-1]), got.shape[1]), dtype=got.dtype)
+        out[lo:hi] = got
+    return out
+
+
 def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
     """The column twin over every row of `sub`: `_evaluate_fresh`'s exact
     path, unchanged by the plane sheets (it is their bit-identical
@@ -2086,7 +2132,8 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
     # numbers: the twin refuses the same set (before it builds a single
     # column), but from C++ it cannot spell the values.
     _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-    vals = _nia.near_interface_six_columns(
+    vals = _columns_sliced(
+        _nia.near_interface_six_columns,
         k_p,
         k_m,
         rho_c,
@@ -2375,6 +2422,7 @@ def _plane_pays(k_p, k_m, d, parts, depth=None):
     bound (every credited group pair its own column and every row distinct)
     that still fails declines, and a lower bound (the distinct credited rho
     of a prefix) that already pays takes."""
+    _cancel.poll()
     rho_max = max(float(r.max()) for r, _zg, _sg, _c in parts)
     s_max = max(float(sg.max()) for _r, _zg, sg, _c in parts)
     nodes = _sheet_nodes_to(k_p, k_m, d, rho_max, s_max, depth)
@@ -2415,6 +2463,7 @@ def _distinct_pairs(parts):
         rs = np.sort(r, axis=1)
         cnt = 1 + np.count_nonzero(rs[:, 1:] != rs[:, :-1], axis=1)
         for g, zs in enumerate(zg):
+            _cancel.poll()
             gid = len(rows_of)
             rows_of.append(rs[g])
             count_of.append(int(cnt[g]))
@@ -2427,6 +2476,7 @@ def _distinct_pairs(parts):
             continue
         key = tuple(gids)
         if key not in union:
+            _cancel.poll()
             union[key] = np.unique(np.concatenate([rows_of[g] for g in gids])).size
         n += union[key]
     return n
@@ -2540,6 +2590,7 @@ def _census(sides, height, k_p, k_m, a, skip=()):
     ever held."""
     per, cand = [], {}
     for pa, pb in sides:
+        _cancel.poll()
         if height:
             vary, fixed = pb[~np.isin(pb[:, 2], skip)], pa
             sel = fixed[:, 2] > 0.0
@@ -2569,6 +2620,7 @@ def _census(sides, height, k_p, k_m, a, skip=()):
         far = np.zeros(vals.size)
         step = max(1, _CENSUS_CHUNK // gxy.shape[0])
         for c0 in range(0, keep.size, step):
+            _cancel.poll()
             j = keep[c0 : c0 + step]
             dj = np.hypot(
                 fx[j, 0][:, None] - gxy[:, 0][None, :],
@@ -2589,6 +2641,7 @@ def _census(sides, height, k_p, k_m, a, skip=()):
     per_cell = _SHEET_P * _SHEET_P
     taken = []
     for v in sorted(cand):
+        _cancel.poll()
         n_rows, n_rho, rho_lb, s_lb = cand[v]
         if abs(v) < _SHEET_MIN_DEPTH:
             _SHEET_STATS["guarded_rows"] += n_rows
@@ -2780,6 +2833,11 @@ _SHEET_FAMILIES = {
 }
 
 
+# Rows a sheet's interpolation entry is handed per call (`PlaneSheet.interpolate`):
+# ~0.2 us a row at 4 threads, so ~0.1 s.
+_INTERP_SLICE = 500_000
+
+
 class PlaneSheet:
     """The six kernels on one plane z' = zp < 0, tabulated over the above
     half-plane (rho, s = z - z' >= d) as far as asked (grown on demand by
@@ -2861,6 +2919,21 @@ class PlaneSheet:
     def cover(self, rho_max, s_max):
         """Grow the table by whole strips until it covers rho <= `rho_max`
         and s <= `s_max`, evaluating only the new cells."""
+        # `_grow` appends to the strips and cells at once and the node values
+        # land at the end, so an abort between them (momwire#1342) would leave
+        # cells with no nodes in a sheet that outlives the solve in
+        # `_SHEET_CACHE`: the next `cover` finds nothing new to evaluate. Put
+        # the layout back to what has values.
+        have = {a: (len(self.strips[a]), len(self.cells[a])) for a in self.strips}
+        try:
+            self._cover(rho_max, s_max)
+        except BaseException:
+            for a, (n_strips, n_cells) in have.items():
+                del self.strips[a][n_strips:]
+                del self.cells[a][n_cells:]
+            raise
+
+    def _cover(self, rho_max, s_max):
         new_r = self._grow("rho", rho_max)
         new_s = self._grow("s", s_max)
         n_r, n_s = len(self.strips["rho"]), len(self.strips["s"])
@@ -2874,6 +2947,7 @@ class PlaneSheet:
         s_nodes = {j: self._nodes("s", j) for j in {j for _i, j in pairs}}
         r_nodes = {i: self._nodes("rho", i) for i in {i for i, _j in pairs}}
         for i, j in pairs:
+            _cancel.poll()
             r_ids, rn = r_nodes[i]
             s_ids, sn = s_nodes[j]
             for k, r in enumerate(rn.tolist()):
@@ -2894,7 +2968,8 @@ class PlaneSheet:
             zq = np.full(s_all.size, self.zp)
         twin = getattr(globals()[self._twin_mod], self._twin_name)
         vals = np.asarray(
-            twin(
+            _columns_sliced(
+                twin,
                 self.k_p,
                 self.k_m,
                 rho_c,
@@ -2966,21 +3041,26 @@ class PlaneSheet:
         """out[idx] = the family's kernels at rows sub[idx], all on this
         sheet (`out` is (m, width))."""
         rho_edges, s_edges, cell_off, vals = self.arrays()
-        _nia.near_interface_grid_sheet(
-            sub,
-            idx,
-            self.zp,
-            self.height,
-            rho_edges,
-            s_edges,
-            cell_off,
-            self.x,
-            self.bw,
-            vals,
-            out,
-            _physical_cpu_count(),
-            self._rpow_arr,
-        )
+        # In slices of `_INTERP_SLICE` rows, polling between them (momwire#
+        # 1342): one call in an SG invl_deck(16) x16 fill held the thread 5 s. A
+        # row's value is a function of the row alone, so a slice cannot move it.
+        for i0 in range(0, max(1, idx.size), _INTERP_SLICE):
+            _cancel.poll()
+            _nia.near_interface_grid_sheet(
+                sub,
+                idx[i0 : i0 + _INTERP_SLICE],
+                self.zp,
+                self.height,
+                rho_edges,
+                s_edges,
+                cell_off,
+                self.x,
+                self.bw,
+                vals,
+                out,
+                _physical_cpu_count(),
+                self._rpow_arr,
+            )
 
 
 def _plane_sheet(
@@ -3176,7 +3256,8 @@ def _designed_tables_reference(
                 # numbers: the twin refuses the same set (before it builds a
                 # single column), but from C++ it cannot spell the values.
                 _refuse_bad_members(np.repeat(rho_c, sizes), zs, zps)
-                vals = _nia.near_interface_six_columns(
+                vals = _columns_sliced(
+                    _nia.near_interface_six_columns,
                     k_p,
                     k_m,
                     rho_c,
