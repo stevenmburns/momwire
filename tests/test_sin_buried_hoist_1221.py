@@ -125,7 +125,7 @@ def test_both_remainder_families_replay_through_one_loop(monkeypatch):
     monkeypatch.setattr(SinusoidalSolver, "_replay_remainder", spy)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        _buried_dipole(SinusoidalGalerkinSolver).compute_impedance()
+        _buried_dipole(_direct_sg).compute_impedance()
         SinusoidalSolver(
             wires=[np.array([(-2.5, 0.0, 1.0), (2.5, 0.0, 1.0)])],
             n_per_edge_per_wire=[[11]],
@@ -141,7 +141,7 @@ def test_the_transmitted_tensor_names_its_source_shape():
     """No default: the third shape must be the one every other block of the
     same fill is written in (#606), so omitting it is a TypeError and a
     misspelling a ValueError — both before any grid is built."""
-    s = _buried_dipole(SinusoidalGalerkinSolver)
+    s = _buried_dipole(_direct_sg)
     geom = s._build_geometry()
     args = (geom, None, None, None, None, False, None, None)
     with pytest.raises(TypeError):

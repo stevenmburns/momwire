@@ -38,7 +38,7 @@ import numpy as np
 import pytest
 
 import momwire.sinusoidal as _sin
-from momwire import SinusoidalGalerkinSolver, SinusoidalSolver
+from momwire import SinusoidalSolver
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_crossing_serve_524 import hub_deck  # noqa: E402
@@ -149,7 +149,7 @@ def test_g1224_r2_an_entry_does_not_see_its_neighbours(live_chunk):
         assert np.array_equal(_bits(part), _bits(whole[:, lo:hi]))
 
 
-@pytest.mark.parametrize("cls", [SinusoidalGalerkinSolver, SinusoidalSolver])
+@pytest.mark.parametrize("cls", [_direct_sg, SinusoidalSolver])
 def test_g1224_r3_buried_z_through_the_kernel_is_the_einsum_routes(cls, monkeypatch):
     calls = {"n": 0}
     real = _acc.remainder_shape_reduce
