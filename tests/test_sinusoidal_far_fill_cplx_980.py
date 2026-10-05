@@ -35,6 +35,16 @@ from momwire import (
     _sommerfeld_below,
 )
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill (its near correction,
+    test quadrature, folded shapes and fused far fill), so every solver here
+    names it; `SinusoidalGalerkinSolver`'s default fill is the mixed-potential
+    one since momwire#1354 and is gated in `test_sinusoidal_mp_1354.py`."""
+    kw.setdefault("fill", "direct")
+    return SinusoidalGalerkinSolver(*args, **kw)
+
+
 SOIL_A = (13.0, 0.005)
 C0 = 299792458.0
 WL7 = C0 / 7e6
@@ -74,7 +84,7 @@ pytestmark = pytest.mark.skipif(
 
 def _solver(deck):
     wires, npe = deck
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=wires,
         n_per_edge_per_wire=npe,
         feeds=FEEDS,
@@ -216,7 +226,7 @@ def test_extended_kernel_in_the_medium_stays_on_numpy():
     solve in the medium must fall back rather than reach a kernel whose
     algebra does not hold there.
     """
-    s = SinusoidalGalerkinSolver(
+    s = _direct_sg(
         wires=VERTICAL_41[0],
         n_per_edge_per_wire=VERTICAL_41[1],
         feeds=FEEDS,

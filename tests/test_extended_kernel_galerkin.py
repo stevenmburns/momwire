@@ -502,7 +502,7 @@ def test_no_other_path_can_reach_the_delta(monkeypatch):
 # Unit B — the solver wiring
 # ===========================================================================
 #
-# `SinusoidalGalerkinSolver(extended_kernel=True)` now assembles: the
+# `_direct_sg(extended_kernel=True)` now assembles: the
 # free-space block, the PEC image, the reflection-coefficient image and the
 # near-pair correction all carry the delta, on the pairs momwire#249 §4's
 # symmetric rule admits. The gates below are, in order:
@@ -529,6 +529,16 @@ from momwire.sinusoidal_galerkin import (  # noqa: E402
     SinusoidalGalerkinSolver,
     _plain_projection,
 )
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill (its near correction,
+    test quadrature, folded shapes and fused far fill), so every solver here
+    names it; `SinusoidalGalerkinSolver`'s default fill is the mixed-potential
+    one since momwire#1354 and is gated in `test_sinusoidal_mp_1354.py`."""
+    kw.setdefault("fill", "direct")
+    return SinusoidalGalerkinSolver(*args, **kw)
+
 
 NS = 41
 LEN = 5.0
@@ -736,7 +746,7 @@ _GROUND_KW = {
 def _monopole(**kw):
     """A FAT monopole — Δ/a ≈ 1.07 — so the extended kernel is a first-order
     term on every deck below rather than a rounding difference."""
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=[np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.4]])],
         n_per_edge_per_wire=[[15]],
         wavelength=LAM_NEC,
@@ -789,7 +799,7 @@ def test_image_pairs_are_scored_against_the_mirrored_geometry():
     """
 
     def labels(wire, **kw):
-        sim = SinusoidalGalerkinSolver(
+        sim = _direct_sg(
             wires=[wire],
             n_per_edge_per_wire=[[6]],
             wavelength=LAM_NEC,
@@ -1058,10 +1068,8 @@ def test_gb4_ek_off_is_bit_identical_to_the_default(name):
     """Numerical identity is necessary and not sufficient (#233's argument),
     so this is half of the armor and the counter below is the other."""
     kw = dict(_G4_DECKS[name], wavelength=LAM_NEC)
-    z_def, c_def = SinusoidalGalerkinSolver(**kw).compute_impedance()
-    z_off, c_off = SinusoidalGalerkinSolver(
-        **kw, extended_kernel=False
-    ).compute_impedance()
+    z_def, c_def = _direct_sg(**kw).compute_impedance()
+    z_off, c_off = _direct_sg(**kw, extended_kernel=False).compute_impedance()
     # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
     # `==` is structural, not a solve-downstream lottery ticket.
     assert z_def == z_off, f"{name}: {z_def!r} vs {z_off!r}"
@@ -1109,7 +1117,7 @@ def test_gb4b_the_counters_fire_when_ek_is_on(ek_call_counts):
     correction only evaluates a bracket on a geometry with a SPLIT node — the
     monopole reaches `_ek_bracket_block` and returns from it."""
     _monopole(extended_kernel=True, ground_z=0.0).compute_impedance()
-    SinusoidalGalerkinSolver(
+    _direct_sg(
         **dict(_G4_DECKS["vee"], wavelength=LAM_NEC), extended_kernel=True
     ).compute_impedance()
     for attr, n in ek_call_counts.items():
@@ -1119,7 +1127,7 @@ def test_gb4b_the_counters_fire_when_ek_is_on(ek_call_counts):
 @pytest.mark.parametrize("name", list(_G4_DECKS))
 def test_gb4b_ek_off_enters_no_ek_code(ek_call_counts, name):
     kw = dict(_G4_DECKS[name], wavelength=LAM_NEC)
-    SinusoidalGalerkinSolver(**kw).compute_impedance()
+    _direct_sg(**kw).compute_impedance()
     assert ek_call_counts == dict.fromkeys(ek_call_counts, 0)
 
 
@@ -1247,7 +1255,7 @@ def test_the_pair_mask_equals_an_independent_coaxiality_predicate():
     between centers) and equal radii — with both eligible and ineligible
     pairs present in the deck."""
     kw = dict(_G4_DECKS["vee"], wavelength=LAM_NEC, extended_kernel=True)
-    sim = SinusoidalGalerkinSolver(**kw)
+    sim = _direct_sg(**kw)
     geom = sim._build_geometry()
     n = geom["n_segs"]
     idx = np.arange(n)
@@ -1314,7 +1322,7 @@ _GC1_BAR = 1e-13
 
 
 def _gc_solver(name, **over):
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         **dict(_GC_DECKS[name], wavelength=LAM_NEC), extended_kernel=True, **over
     )
 
@@ -1370,7 +1378,7 @@ def test_gc1_the_ek_twin_actually_moves_the_far_fill(name, monkeypatch):
     too — but it would also equal the REDUCED fill, which this refuses."""
     monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", True)
     ext = _far_blocks(name, True, monkeypatch)
-    sim = SinusoidalGalerkinSolver(**dict(_GC_DECKS[name], wavelength=LAM_NEC))
+    sim = _direct_sg(**dict(_GC_DECKS[name], wavelength=LAM_NEC))
     sim.near_correction = False
     geom = sim._build_geometry()
     ctx = sim._test_context(geom, sim._basis_coefs(geom, sim.k), sim.k)
@@ -1601,7 +1609,7 @@ def test_gc2_ek_off_never_reaches_the_twin(name, monkeypatch):
         raising=False,
     )
     kw = dict(_G4_DECKS[name], wavelength=LAM_NEC)
-    SinusoidalGalerkinSolver(**kw).compute_impedance()
+    _direct_sg(**kw).compute_impedance()
     assert calls == []
 
 
@@ -2526,7 +2534,7 @@ def test_gs3_an_asymmetric_mask_breaks_reciprocity_over_sommerfeld_too(monkeypat
 # G-S4 — the armor, extended to the Sommerfeld decks
 # ---------------------------------------------------------------------------
 def _s4_fill(radius, extended_kernel=False):
-    sim = SinusoidalGalerkinSolver(
+    sim = _direct_sg(
         wires=[np.array([[0.0, 0.0, 0.6], [0.0, 0.0, 3.0]])],
         n_per_edge_per_wire=[[15]],
         wavelength=LAM_NEC,
@@ -2572,8 +2580,8 @@ def test_gs4_ek_on_over_sommerfeld_enters_the_ek_code(ek_call_counts):
     EK-off counter gate from passing vacuously on this ground.
     """
     kw = dict(_G4_DECKS["sommerfeld ground"], wavelength=LAM_NEC)
-    z_off, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
-    z_on, _ = SinusoidalGalerkinSolver(**kw, extended_kernel=True).compute_impedance()
+    z_off, _ = _direct_sg(**kw).compute_impedance()
+    z_on, _ = _direct_sg(**kw, extended_kernel=True).compute_impedance()
     for attr, n in ek_call_counts.items():
         # Two entry points a deck can honestly leave alone, both for the same
         # reason: they run only where a node SPLITS (momwire#299) and this
@@ -2762,7 +2770,7 @@ def _gd_shift(name, radius, cls=SinusoidalGalerkinSolver):
 # `tests/test_sinusoidal_galerkin_stepped_ek.py`), so every EK-on
 # parametrization below drops "radius step" — the deck stays in
 # `_gd_decks()` for this file's REDUCED-kernel call sites (`test_gd5`'s own
-# `red = _sym_ratio(SinusoidalGalerkinSolver(**kw))` line, `_gd_decks` itself
+# `red = _sym_ratio(_direct_sg(**kw))` line, `_gd_decks` itself
 # is fine on its own). This is not a retraction of momwire#299's arithmetic:
 # the bracket-correction fix this file gates is still correct in the coarse-
 # mesh regime it shipped in (measured, not assumed — G-D1/G-D5/G-D6 all held
@@ -2839,10 +2847,8 @@ def test_gd1_the_vee_deck_gains_its_ek_on_gate():
     prev = None
     for radius in _GD_A:
         deck = dict(kw, wire_radius=radius)
-        off, _ = SinusoidalGalerkinSolver(**deck).compute_impedance()
-        on, _ = SinusoidalGalerkinSolver(
-            **deck, extended_kernel=True
-        ).compute_impedance()
+        off, _ = _direct_sg(**deck).compute_impedance()
+        on, _ = _direct_sg(**deck, extended_kernel=True).compute_impedance()
         b_off, _ = BSplineSolver(
             **deck, degree=2, feed_model="segment"
         ).compute_impedance()
@@ -2881,7 +2887,7 @@ def test_gd2_the_node_predicate_marks_exactly_the_split_nodes(name, n_bad):
     correctly (2 bad ends) when this test last measured it, same as the
     bend.
     """
-    sim = SinusoidalGalerkinSolver(
+    sim = _direct_sg(
         **dict(_gd_decks(0.02)[name], feed_arclength=1.0, wavelength=_GD_LAM),
         extended_kernel=True,
     )
@@ -2907,9 +2913,7 @@ def test_gd2_the_served_grounds_have_no_split_node(name):
     ground decks' EK-on numbers cannot move under this correction and the vee's
     must. A ground contact is a one-segment node and stays extended, which is
     #292's and #287's arithmetic left alone."""
-    sim = SinusoidalGalerkinSolver(
-        **dict(_G4_DECKS[name], wavelength=LAM_NEC), extended_kernel=True
-    )
+    sim = _direct_sg(**dict(_G4_DECKS[name], wavelength=LAM_NEC), extended_kernel=True)
     _, lo, hi = _bad_ends(sim)
     want = name == "vee"
     assert bool(lo.any() or hi.any()) is want, (name, lo, hi)
@@ -2940,13 +2944,9 @@ def test_gd3_a_deck_without_a_split_node_is_bit_identical(name):
     tolerance, to the bit. That is what says #246's straight-wire, ground and
     Sommerfeld numbers are the ones this arc inherited."""
     kw = dict(_G4_DECKS[name], wavelength=LAM_NEC)
-    z_on, c_on = SinusoidalGalerkinSolver(
-        **kw, extended_kernel=True
-    ).compute_impedance()
+    z_on, c_on = _direct_sg(**kw, extended_kernel=True).compute_impedance()
     with _without_the_299_bracket_correction():
-        z_off, c_off = SinusoidalGalerkinSolver(
-            **kw, extended_kernel=True
-        ).compute_impedance()
+        z_off, c_off = _direct_sg(**kw, extended_kernel=True).compute_impedance()
     # momwire#809: the two sides' fills measured BIT-IDENTICAL, so this
     # `==` is structural, not a solve-downstream lottery ticket.
     assert z_on == z_off, f"{name}: {z_on!r} vs {z_off!r}"
@@ -2967,7 +2967,7 @@ def test_gd3_the_straight_dipole_is_where_it_was():
 # ---------------------------------------------------------------------------
 def _bracket_matrix(radius, name="L"):
     """The free-space block's correction C, before symmetrization."""
-    sim = SinusoidalGalerkinSolver(
+    sim = _direct_sg(
         **dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM),
         extended_kernel=True,
     )
@@ -3044,8 +3044,8 @@ def test_gd5_reciprocity_is_unmoved_by_the_bracket_correction(name, radius):
     `_ek_bracket_correction_tested` halves C with its transpose.
     """
     kw = dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM)
-    red = _sym_ratio(SinusoidalGalerkinSolver(**kw))
-    ext = _sym_ratio(SinusoidalGalerkinSolver(**kw, extended_kernel=True))
+    red = _sym_ratio(_direct_sg(**kw))
+    ext = _sym_ratio(_direct_sg(**kw, extended_kernel=True))
     assert ext < 8.0 * red, f"{name} a={radius}: {ext:.2e} vs reduced {red:.2e}"
     # And in absolute terms: still at the fill's own floor, not merely close
     # to a reduced number that happens to be large.
@@ -3143,7 +3143,7 @@ def _gd8_bend(n, **ground):
     ys = np.linspace(0.0, half, n // 2 + 1)
     xs = np.linspace(0.0, half, n - n // 2 + 1)[1:]
     pts = [[0.0, y, 4.0] for y in ys] + [[x, half, 4.0] for x in xs]
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=[np.array(pts)],
         n_per_edge_per_wire=[[1] * n],
         nsegs=n,
@@ -3160,7 +3160,7 @@ def _gd8_zigzag(n, **ground):
     half = 0.962 * _GD8_WL / 4
     ys = np.linspace(-half, half, n + 1)
     xs = 0.02 * _GD8_WL * (np.arange(n + 1) % 2)
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=[np.column_stack([xs, ys, np.full_like(ys, 4.0)])],
         n_per_edge_per_wire=[[1] * n],
         nsegs=n,
@@ -3224,7 +3224,7 @@ def test_gd8a_narrowing_and_banding_move_the_matrix_by_nothing(
         # Lift the deck off the plane: these are free-space fixtures.
         kw["wires"] = [np.asarray(w) + np.array([0.0, 0.0, 1.0]) for w in kw["wires"]]
         kw.update(_GD8_GROUNDS[ground])
-    sim = SinusoidalGalerkinSolver(**kw, extended_kernel=True)
+    sim = _direct_sg(**kw, extended_kernel=True)
     geom = sim._build_geometry()
     ref, _ = sim._assemble_Z(geom, sim.k)
 
@@ -3234,9 +3234,7 @@ def test_gd8a_narrowing_and_banding_move_the_matrix_by_nothing(
                 continue
             monkeypatch.setattr(_sg, "_EK_BRACKET_BAND_BYTES", 1 if band else 1 << 25)
             with _gd8_every_column() if wide else contextlib.nullcontext():
-                got, _ = SinusoidalGalerkinSolver(
-                    **kw, extended_kernel=True
-                )._assemble_Z(geom, sim.k)
+                got, _ = _direct_sg(**kw, extended_kernel=True)._assemble_Z(geom, sim.k)
             moved = float(np.abs(ref - got).max())
             assert moved <= 1e-13 * float(np.abs(ref).max()), (
                 f"{name}/{ground} wide={wide} band={band}: the bracket moved G "
@@ -3437,7 +3435,7 @@ def _gd9_bend(n, ek, **kw):
     ys = np.linspace(0.0, half, n // 2 + 1)
     xs = np.linspace(0.0, half, n - n // 2 + 1)[1:]
     pts = [[0.0, y, 4.0] for y in ys] + [[x, half, 4.0] for x in xs]
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=[np.array(pts)],
         n_per_edge_per_wire=[[1] * n],
         nsegs=n,
@@ -3463,7 +3461,7 @@ def _gd9_monopole(n, ek, **kw):
     """
     z = np.linspace(0.0, _GD8_WL / 4, n + 1)
     pts = np.column_stack([np.zeros(n + 1), np.zeros(n + 1), z])
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=[pts],
         n_per_edge_per_wire=[[1] * n],
         nsegs=n,

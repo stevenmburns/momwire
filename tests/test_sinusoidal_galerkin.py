@@ -65,6 +65,8 @@ from momwire import (
     SinusoidalSolver,
     _field_ground,
 )
+
+
 from momwire.sinusoidal_galerkin import (
     _basis_value,
     _graded_endpoint_rule,
@@ -208,7 +210,7 @@ def test_g1_galerkin_matrix_is_symmetric(geom_name):
     """G1: the Galerkin system matrix is symmetric to 1e-10 (exact reciprocity)
     at the DEFAULT quadrature. Under M1's uniform rule this same assertion
     needed n_qp_test=128."""
-    r = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**GEOMETRIES[geom_name]())))
+    r = _sym_ratio(_matrix(_direct_sg(**GEOMETRIES[geom_name]())))
     assert r < G1_GATE, f"{geom_name}: ‖G-Gᵀ‖/‖G‖ = {r:.3e} exceeds the G1 gate"
 
 
@@ -218,8 +220,8 @@ def test_near_correction_is_what_buys_the_gate(geom_name):
     G1. At identical `n_qp_test`, disabling the correction (M1 behaviour)
     leaves the matrix visibly asymmetric."""
     mk = GEOMETRIES[geom_name]
-    r_off = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**mk(near_correction=False))))
-    r_on = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**mk())))
+    r_off = _sym_ratio(_matrix(_direct_sg(**mk(near_correction=False))))
+    r_on = _sym_ratio(_matrix(_direct_sg(**mk())))
     assert r_off > UNIFORM_FLOOR, (
         f"{geom_name}: uniform rule unexpectedly symmetric ({r_off:.2e}) — the "
         "M1-vs-M2 contrast this gate rests on has gone away"
@@ -236,9 +238,7 @@ def test_uniform_rule_symmetry_is_quadrature_limited(geom_name):
     of G1, preserved from M1.)"""
     mk = GEOMETRIES[geom_name]
     ratios = [
-        _sym_ratio(
-            _matrix(SinusoidalGalerkinSolver(**mk(n_qp_test=nq, near_correction=False)))
-        )
+        _sym_ratio(_matrix(_direct_sg(**mk(n_qp_test=nq, near_correction=False))))
         for nq in (4, 16, 64)
     ]
     assert ratios[0] > UNIFORM_FLOOR, (
@@ -275,7 +275,7 @@ def test_g2_matches_bspline_at_least_as_well_as_collocation(geom_name):
     vee 0.11%/1.15%, k2_junction 1.15%/1.19%.
     """
     mk = G2_CASES[geom_name][0]
-    z_gk, _ = SinusoidalGalerkinSolver(**mk()).compute_impedance()
+    z_gk, _ = _direct_sg(**mk()).compute_impedance()
     z_co, _ = SinusoidalSolver(**mk()).compute_impedance()
     z_bs, _ = BSplineSolver(**mk(), degree=2).compute_impedance()
     d_gk = abs(z_gk - z_bs) / abs(z_bs)
@@ -298,7 +298,7 @@ def test_g2_tracks_pynec_within_the_collocation_band(geom_name):
     """
     mk, wires, tag, seg = G2_CASES[geom_name]
     z_nec = _pynec_z(wires, tag, seg)
-    z_gk, _ = SinusoidalGalerkinSolver(**mk()).compute_impedance()
+    z_gk, _ = _direct_sg(**mk()).compute_impedance()
     d = abs(z_gk - z_nec) / abs(z_nec)
     assert d < 1.5e-2, (
         f"{geom_name}: galerkin {z_gk:.4f} vs pynec {z_nec:.4f} = {d:.4%}"
@@ -314,8 +314,8 @@ def test_g2_impedance_is_quadrature_converged(geom_name, radius):
     a/h, so this also checks that derivation across two decades (#156's
     fat-radius territory). Measured shifts are ≤1e-8."""
     mk = G2_CASES[geom_name][0]
-    z1, _ = SinusoidalGalerkinSolver(**mk(wire_radius=radius)).compute_impedance()
-    z2, _ = SinusoidalGalerkinSolver(
+    z1, _ = _direct_sg(**mk(wire_radius=radius)).compute_impedance()
+    z2, _ = _direct_sg(
         **mk(wire_radius=radius, n_qp_test=16, n_qp_near=16)
     ).compute_impedance()
     shift = abs(z2 - z1) / abs(z1)
@@ -331,7 +331,7 @@ def test_g2_symmetry_holds_across_the_radius_sweep(geom_name):
     is regularized by a, so it broadens as a grows."""
     mk = G2_CASES[geom_name][0]
     ratios = [
-        _sym_ratio(_matrix(SinusoidalGalerkinSolver(**mk(wire_radius=r))))
+        _sym_ratio(_matrix(_direct_sg(**mk(wire_radius=r))))
         for r in (0.0005, 0.005, 0.05, 0.2)
     ]
     assert all(r < G1_GATE for r in ratios), (
@@ -361,12 +361,10 @@ def test_near_correction_reproduces_brute_force_refinement(geom_name, radius):
     radius there would be invisible on every uniform-radius geometry.
     """
     mk = GEOMETRIES[geom_name]
-    sim = SinusoidalGalerkinSolver(**mk(wire_radius=radius))
+    sim = _direct_sg(**mk(wire_radius=radius))
     G_corrected = _matrix(sim)
     G_brute = _matrix(
-        SinusoidalGalerkinSolver(
-            **mk(wire_radius=radius, near_correction=False, n_qp_test=128)
-        )
+        _direct_sg(**mk(wire_radius=radius, near_correction=False, n_qp_test=128))
     )
     rel = np.linalg.norm(G_corrected - G_brute) / np.linalg.norm(G_brute)
     assert rel < 1e-7, f"{geom_name} a={radius}: correction differs by {rel:.3e}"
@@ -384,10 +382,10 @@ def test_mixed_per_wire_radii_break_reciprocity_by_construction():
     brute-force refinement reproduces it exactly (that equality is what
     `test_near_correction_reproduces_brute_force_refinement` asserts).
     """
-    sim = SinusoidalGalerkinSolver(**_k2_junction(wire_radius=[0.0005, 0.004]))
+    sim = _direct_sg(**_k2_junction(wire_radius=[0.0005, 0.004]))
     assert sim._uniform_radius is None  # the mixed path is genuinely taken
     r_mixed = _sym_ratio(_matrix(sim))
-    r_uniform = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**_k2_junction())))
+    r_uniform = _sym_ratio(_matrix(_direct_sg(**_k2_junction())))
     assert r_uniform < G1_GATE < r_mixed
 
 
@@ -424,7 +422,7 @@ def test_near_pairs_selects_self_and_node_sharing_only():
     exactly the self pair and the two collinear neighbours — the pairs whose
     test integrand carries the width-`a` endpoint spike — and nothing further
     out. The set must also be symmetric, or the corrected matrix could not be."""
-    sim = SinusoidalGalerkinSolver(**_dipole())
+    sim = _direct_sg(**_dipole())
     geom = sim._build_geometry()
     mm, nn = sim._near_pairs(geom)
     n_segs = geom["n_segs"]
@@ -440,7 +438,7 @@ def test_near_pairs_catches_close_approach_without_a_shared_node():
     even though they share no junction, and must be corrected too."""
     y = np.linspace(-2.0, 2.0, 2)
     gap = 0.05  # << the 0.4 m segment length below
-    sim = SinusoidalGalerkinSolver(
+    sim = _direct_sg(
         wires=[
             np.array([[0.0, y[0], 0.0], [0.0, y[1], 0.0]]),
             np.array([[gap, y[0], 0.0], [gap, y[1], 0.0]]),
@@ -507,7 +505,7 @@ def test_near_pairs_chunked_matches_unchunked_reference(geom_name):
     """Default (auto-picked) chunking must select the exact same (m, n)
     pairs, in the exact same order, as the pre-#334 single-shot reference —
     not merely the same set."""
-    sim = SinusoidalGalerkinSolver(**GEOMETRIES[geom_name]())
+    sim = _direct_sg(**GEOMETRIES[geom_name]())
     geom = sim._build_geometry()
     mm, nn = sim._near_pairs(geom)
     want_m, want_n = _near_pairs_unchunked_reference(sim, geom)
@@ -522,7 +520,7 @@ def test_near_pairs_chunked_matches_unchunked_reference_forced_tail(chunk_rows):
     multiple of 1, 3, 7, or 100) — this exercises the tail concatenation,
     not just interior full blocks. `chunk_rows=1` is the extreme case: every
     block is a single row."""
-    sim = SinusoidalGalerkinSolver(**_dipole())
+    sim = _direct_sg(**_dipole())
     geom = sim._build_geometry()
     mm, nn = sim._near_pairs(geom, chunk_rows=chunk_rows)
     want_m, want_n = _near_pairs_unchunked_reference(sim, geom)
@@ -535,7 +533,7 @@ def test_near_pairs_chunked_matches_unchunked_reference_image_block():
     (`src_c`/`src_t` passed explicitly, mirrored geometry) — the branch
     every ground model's near-correction actually goes through — with a
     forced `chunk_rows` well below N so the tail is exercised here too."""
-    sim = SinusoidalGalerkinSolver(**_m4_monopole(M4_N), ground_z=0.0)
+    sim = _direct_sg(**_m4_monopole(M4_N), ground_z=0.0)
     geom = sim._build_geometry()
     img_c, img_t = sim._image_source_centers_tangents(geom)
     mm, nn = sim._near_pairs(geom, src_c=img_c, src_t=img_t, chunk_rows=4)
@@ -573,7 +571,7 @@ def test_near_pairs_prefilter_holds_no_n_squared_transient():
 
     n = 2000
     wire = np.array([[0.0, 0.0, -50.0], [0.0, 0.0, 50.0]])
-    sim = SinusoidalGalerkinSolver(
+    sim = _direct_sg(
         wires=[wire],
         n_per_edge_per_wire=[[n]],
         nsegs=n,
@@ -606,9 +604,7 @@ def test_near_pairs_prefilter_holds_no_n_squared_transient():
 def test_impedance_within_sanity_band_of_bspline(geom_name):
     """A correct fill lands the driving-point impedance in a loose band around
     dense BSplineSolver on every validation geometry."""
-    z_gk, alpha = SinusoidalGalerkinSolver(
-        **GEOMETRIES[geom_name]()
-    ).compute_impedance()
+    z_gk, alpha = _direct_sg(**GEOMETRIES[geom_name]()).compute_impedance()
     z_bs, _ = BSplineSolver(**GEOMETRIES[geom_name](), degree=2).compute_impedance()
     assert np.isfinite(z_gk.real) and np.isfinite(z_gk.imag)
     assert np.isfinite(alpha).all()
@@ -846,7 +842,7 @@ M3_MONOTONE_FROM = {"dipole": 11, "vee": 11, "k2_junction": 21, "k3_star": 11}
 _MATCHED_FEED = {"feed_model": "segment"}
 
 _SCHEMES = {
-    "gal": lambda kw: SinusoidalGalerkinSolver(**kw, **_MATCHED_FEED),
+    "gal": lambda kw: _direct_sg(**kw, **_MATCHED_FEED),
     "coll": lambda kw: SinusoidalSolver(**kw),
     "bspl": lambda kw: BSplineSolver(**kw, degree=2),
 }
@@ -869,7 +865,7 @@ def test_the_payoff_schemes_carry_a_matched_feed_model():
     # matters is that the two values agree, not that one is absent.
     assert coll.feed_model == "segment"
     # And the class default is NOT what supplies it (momwire#654).
-    assert SinusoidalGalerkinSolver(**kw).feed_model == "point"
+    assert _direct_sg(**kw).feed_model == "point"
 
 
 @functools.lru_cache(maxsize=None)
@@ -990,7 +986,7 @@ def test_k2_pre_asymptotic_error_maximum_is_not_quadrature():
         # with everything else held: `_m3_z` builds its side through
         # `_SCHEMES["gal"]`, so a bare construction here would carry the class
         # default instead and measure the feed model (momwire#654).
-        z2 = SinusoidalGalerkinSolver(
+        z2 = _direct_sg(
             **_m3_k2(n, n_qp_test=32, n_qp_near=32), **_MATCHED_FEED
         ).compute_impedance()[0]
         assert abs(z2 - z1) / abs(z1) < 1e-6, (
@@ -1200,10 +1196,8 @@ def test_loading_is_served_in_the_galerkin_form():
     and that the loading is what moved it."""
     dip_hi = np.array([[0.0, -HD, 2.0], [0.0, HD, 2.0]])
     common = dict(wires=[dip_hi], n_per_edge_per_wire=[[41]], nsegs=41)
-    z0, _ = SinusoidalGalerkinSolver(**common).compute_impedance()
-    z1, _ = SinusoidalGalerkinSolver(
-        **common, wire_conductivity=5.8e7
-    ).compute_impedance()
+    z0, _ = _direct_sg(**common).compute_impedance()
+    z1, _ = _direct_sg(**common, wire_conductivity=5.8e7).compute_impedance()
     assert z1.real > z0.real  # a resistive loading can only add loss
 
 
@@ -1271,6 +1265,16 @@ def test_loading_is_served_in_the_galerkin_form():
 
 from fixtures_refl_coef_geoms import GEOMS  # noqa: E402
 from golden_refl_coef_ground import GOLDEN  # noqa: E402
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill (its near correction,
+    test quadrature, folded shapes and fused far fill), so every solver here
+    names it; `SinusoidalGalerkinSolver`'s default fill is the mixed-potential
+    one since momwire#1354 and is gated in `test_sinusoidal_mp_1354.py`."""
+    kw.setdefault("fill", "direct")
+    return SinusoidalGalerkinSolver(*args, **kw)
+
 
 # The three grounds, keyed by the GOLDEN column that references each one.
 M4_GROUNDS = {
@@ -1411,9 +1415,7 @@ def test_g4_symmetry_holds_with_the_ground_terms_in(geom_name, ground):
     r = _sym_ratio(
         _matrix(_m4_solver(SinusoidalGalerkinSolver, geom_name, ground, **over))
     )
-    r_free = _sym_ratio(
-        _matrix(SinusoidalGalerkinSolver(**M4_GEOMETRIES[geom_name](M4_N)))
-    )
+    r_free = _sym_ratio(_matrix(_direct_sg(**M4_GEOMETRIES[geom_name](M4_N))))
     assert r < G1_GATE, f"{geom_name}/{ground}: ‖G-Gᵀ‖/‖G‖ = {r:.3e}"
     # The absolute floor is 5e-11, not 1e-11: the Sommerfeld grid is a pure
     # function of (R1, theta) so pair symmetry is structural, but the ratio
@@ -1573,13 +1575,13 @@ def test_image_block_gets_its_own_near_pair_set():
     exactly that one pair. A wire well clear of the plane has no near image
     pairs at all, so the correction costs nothing there.
     """
-    sim = SinusoidalGalerkinSolver(**_m4_monopole(M4_N), ground_z=0.0)
+    sim = _direct_sg(**_m4_monopole(M4_N), ground_z=0.0)
     geom = sim._build_geometry()
     img_c, img_t = sim._image_source_centers_tangents(geom)
     mm, nn = sim._near_pairs(geom, src_c=img_c, src_t=img_t)
     assert set(zip(mm.tolist(), nn.tolist())) == {(0, 0)}
 
-    high = SinusoidalGalerkinSolver(**_m4_dipole(M4_N), ground_z=0.0)
+    high = _direct_sg(**_m4_dipole(M4_N), ground_z=0.0)
     g2 = high._build_geometry()
     ic, it = high._image_source_centers_tangents(g2)
     assert high._near_pairs(g2, src_c=ic, src_t=it)[0].size == 0
@@ -1623,11 +1625,9 @@ def test_g4_finite_grounds_collapse_to_the_pec_image(geom_name):
     point-matched solver's own collapse on its fixtures is 1.1e-8 / 4.8e-9.
     """
     kw = M4_GEOMETRIES[geom_name](M4_N)
-    z_pec, _ = SinusoidalGalerkinSolver(**kw, ground_z=0.0).compute_impedance()
-    z_refl, _ = SinusoidalGalerkinSolver(
-        **kw, ground_z=0.0, ground_eps=1e16 + 0j
-    ).compute_impedance()
-    z_somm, _ = SinusoidalGalerkinSolver(
+    z_pec, _ = _direct_sg(**kw, ground_z=0.0).compute_impedance()
+    z_refl, _ = _direct_sg(**kw, ground_z=0.0, ground_eps=1e16 + 0j).compute_impedance()
+    z_somm, _ = _direct_sg(
         **kw, ground_z=0.0, ground_eps=1e16 + 0j, ground_model="sommerfeld"
     ).compute_impedance()
     assert abs(z_refl - z_pec) < 1e-5 * abs(z_pec)
@@ -1646,8 +1646,8 @@ def test_g4_sommerfeld_free_space_limit_is_exact(geom_name):
     of a free end), so ε̃ = 1 is not the same problem as no ground at all.
     """
     kw = M4_GEOMETRIES[geom_name](M4_N)
-    z_free, _ = SinusoidalGalerkinSolver(**kw).compute_impedance()
-    z_g, _ = SinusoidalGalerkinSolver(
+    z_free, _ = _direct_sg(**kw).compute_impedance()
+    z_g, _ = _direct_sg(
         **kw, ground_z=0.0, ground_eps=1.0 + 0j, ground_model="sommerfeld"
     ).compute_impedance()
     assert abs(z_g - z_free) < 1e-12 * abs(z_free)
@@ -2184,20 +2184,20 @@ def test_y_matrix_agrees_with_compute_impedance(geom_name, readout):
     impedance readout to roundoff (worst 5.6e-16 measured). Holds under both
     readout conventions — each is internally consistent."""
     kw = GEOMETRIES[geom_name](wavelength=WL, feed_readout=readout)
-    s = SinusoidalGalerkinSolver(**kw)
+    s = _direct_sg(**kw)
     z = np.atleast_1d(s.compute_impedance()[0])
     volts = np.array([v for _, _, v in s.feeds], dtype=np.complex128)
-    i_y = SinusoidalGalerkinSolver(**kw).compute_y_matrix() @ volts
+    i_y = _direct_sg(**kw).compute_y_matrix() @ volts
     np.testing.assert_allclose(volts / z, i_y, rtol=1e-11)
 
 
 def test_multi_feed_y_matrix_agrees_with_compute_impedance():
     """Same, with two gap feeds at different voltages — the case where a
     single-column RHS cannot hide a drive/readout mismatch."""
-    s = SinusoidalGalerkinSolver(**_two_feed_dipole(wavelength=WL))
+    s = _direct_sg(**_two_feed_dipole(wavelength=WL))
     z = np.atleast_1d(s.compute_impedance()[0])
     volts = np.array([v for _, _, v in s.feeds], dtype=np.complex128)
-    Y = SinusoidalGalerkinSolver(**_two_feed_dipole(wavelength=WL)).compute_y_matrix()
+    Y = _direct_sg(**_two_feed_dipole(wavelength=WL)).compute_y_matrix()
     np.testing.assert_allclose(volts / z, Y @ volts, rtol=1e-11)
 
 
@@ -2210,7 +2210,7 @@ def test_the_inherited_y_matrix_was_a_collocation_rhs_on_a_galerkin_matrix():
     the N=41 dipole that gives 0.0489 − 0.0129j against the true 69.687 −
     18.217j: not a subtle inconsistency, a different problem.
     """
-    s = SinusoidalGalerkinSolver(**_dipole(wavelength=WL))
+    s = _direct_sg(**_dipole(wavelength=WL))
     geom = s._build_geometry()
     G, seg_view = s._assemble_Z(geom, s.k)
     fi = geom["feed_segs"][0]
@@ -2228,17 +2228,15 @@ def test_the_inherited_y_matrix_was_a_collocation_rhs_on_a_galerkin_matrix():
 def test_impedance_swept_matches_per_k(readout):
     """The swept path is the per-k path, including the ports ordering and the
     readout convention."""
-    ks = np.array([0.9, 1.0, 1.1]) * SinusoidalGalerkinSolver(**_dipole()).k
-    swept = SinusoidalGalerkinSolver(
+    ks = np.array([0.9, 1.0, 1.1]) * _direct_sg(**_dipole()).k
+    swept = _direct_sg(
         **_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout)
     ).compute_impedance_swept(ks)
-    y_swept = SinusoidalGalerkinSolver(
+    y_swept = _direct_sg(
         **_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout)
     ).compute_y_matrix_swept(ks)
     for i, kk in enumerate(ks):
-        s = SinusoidalGalerkinSolver(
-            **_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout)
-        )
+        s = _direct_sg(**_two_feed_dipole(n=21, wavelength=WL, feed_readout=readout))
         s._set_k(float(kk))
         np.testing.assert_allclose(
             swept[i], np.atleast_1d(s.compute_impedance()[0]), rtol=1e-10
@@ -2293,12 +2291,12 @@ def test_the_SEGMENT_gap_readout_is_not_its_drives_dual(n):
 
 def test_feed_readout_is_validated():
     with pytest.raises(ValueError, match="feed_readout"):
-        SinusoidalGalerkinSolver(**_dipole(feed_readout="galerkin"))
+        _direct_sg(**_dipole(feed_readout="galerkin"))
 
 
 def test_feed_model_is_validated():
     with pytest.raises(ValueError, match="feed_model"):
-        SinusoidalGalerkinSolver(**_dipole(feed_model="delta"))
+        _direct_sg(**_dipole(feed_model="delta"))
 
 
 def test_coll_feed_model_is_validated():
@@ -2324,7 +2322,7 @@ def test_coll_point_feed_model_is_refused_not_defaulted():
     with pytest.raises(NotImplementedError, match="zero-width gap"):
         SinusoidalSolver(**_dipole(feed_model="point"))
     # The sibling's option is unaffected — this is a testing-scheme limit.
-    assert SinusoidalGalerkinSolver(**_dipole(feed_model="point")).feed_model == "point"
+    assert _direct_sg(**_dipole(feed_model="point")).feed_model == "point"
 
 
 @pytest.mark.parametrize("n", [21, 41, 81])
@@ -2347,7 +2345,7 @@ def test_point_gap_feed_y_is_symmetric_in_both_readouts(n, readout):
 
     def asym(**kw):
         Y = np.asarray(
-            SinusoidalGalerkinSolver(
+            _direct_sg(
                 **_two_feed_dipole(n=n, wavelength=WL, feed_readout=readout, **kw)
             ).compute_y_matrix()
         )
@@ -2377,7 +2375,7 @@ def test_point_gap_readouts_coincide(n):
     """
 
     def z(**kw):
-        s = SinusoidalGalerkinSolver(**_two_feed_dipole(n=n, wavelength=WL, **kw))
+        s = _direct_sg(**_two_feed_dipole(n=n, wavelength=WL, **kw))
         return np.atleast_1d(s.compute_impedance()[0])
 
     point = [z(feed_model="point", feed_readout=r) for r in ("centre", "variational")]
@@ -2398,9 +2396,7 @@ def test_point_gap_readouts_coincide(n):
     # has to be asked for the same point the drive was built at. Before #648
     # the gap was snapped onto the centre and the two spellings coincided by
     # construction; now they coincide because both name the same position.
-    s = SinusoidalGalerkinSolver(
-        **_two_feed_dipole(n=n, wavelength=WL, feed_model="point")
-    )
+    s = _direct_sg(**_two_feed_dipole(n=n, wavelength=WL, feed_model="point"))
     geom = s._build_geometry()
     seg_view = s._basis_coefs(geom, s.k)
     U = s._drive_columns(geom, seg_view, s.k)
@@ -2442,7 +2438,7 @@ def test_the_variational_readout_costs_the_m3_payoff_on_k3_star():
         # because the two readouts COINCIDE under the point gap (momwire#654's
         # whole point, `test_point_gap_readouts_coincide`): left bare, this
         # test would compare a readout knob against itself and read 1.000.
-        s = SinusoidalGalerkinSolver(**_m3_k3(n), **_MATCHED_FEED)
+        s = _direct_sg(**_m3_k3(n), **_MATCHED_FEED)
         geom = s._build_geometry()
         G, seg_view = s._assemble_Z(geom, s.k)
         U = s._drive_columns(geom, seg_view, s.k)
@@ -2564,9 +2560,9 @@ def _G_accel_and_numpy(monkeypatch, **kw):
     """(G with the accelerator, G with it switched off) on one geometry."""
     from momwire import sinusoidal_galerkin as _sg
 
-    G_acc = _matrix(SinusoidalGalerkinSolver(**kw))
+    G_acc = _matrix(_direct_sg(**kw))
     monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
-    G_py = _matrix(SinusoidalGalerkinSolver(**kw))
+    G_py = _matrix(_direct_sg(**kw))
     return G_acc, G_py
 
 
@@ -2615,7 +2611,7 @@ def test_accelerated_fill_meets_the_g1_symmetry_gate():
     if not _sg._HAVE_GALERKIN_FAR_FILL:
         pytest.skip("accelerator not built")
     for name, factory in GEOMETRIES.items():
-        G = _matrix(SinusoidalGalerkinSolver(**factory()))
+        G = _matrix(_direct_sg(**factory()))
         assert _sym_ratio(G) < G1_GATE, name
 
 
@@ -2643,7 +2639,7 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
         (dict(ground_z=-6.0, ground_eps=(13.0, 0.005)), 1),
     ):
         calls.clear()
-        _matrix(SinusoidalGalerkinSolver(**_dipole(**over)))
+        _matrix(_direct_sg(**_dipole(**over)))
         assert len(calls) == expected, over
 
 
@@ -2832,7 +2828,7 @@ def _residency_deck(n, **ground_kwargs):
     """
     ys = np.linspace(-HD, HD, n + 1)
     wires = [np.column_stack([np.zeros_like(ys), ys, np.full_like(ys, 4.0)])]
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=wires,
         n_per_edge_per_wire=[[1] * n],
         nsegs=n,
@@ -3012,9 +3008,7 @@ def test_streamed_remainder_is_bit_equal_at_every_chunk(
     from momwire import sinusoidal as _sin
 
     over = {"extended_kernel": True} if extended_kernel else {}
-    sim = SinusoidalGalerkinSolver(
-        **M4_GEOMETRIES[geom_name](11, **over), **_SOMM_GROUND
-    )
+    sim = _direct_sg(**M4_GEOMETRIES[geom_name](11, **over), **_SOMM_GROUND)
     geom = sim._build_geometry()
     G_ref = _differenced_grounded_G(sim, geom)
 
@@ -3149,7 +3143,7 @@ def _G_by_assembly_path(monkeypatch, *, sparse, ported=False, **kw):
     from momwire import sinusoidal_galerkin as _sg
 
     monkeypatch.setattr(_sg, "_DENSE_ASSEMBLY_THRESHOLD", 0 if sparse else 1 << 30)
-    sim = SinusoidalGalerkinSolver(**kw)
+    sim = _direct_sg(**kw)
     geom = sim._build_geometry()
     assemble = sim._assemble_Z_ported if ported else sim._assemble_Z
     return assemble(geom, sim.k)[0]
@@ -3223,7 +3217,7 @@ def test_support_entries_name_distinct_segment_basis_pairs(geom_name, ports):
         if ports is None
         else GEOMETRIES[geom_name](junction_ports=ports)
     )
-    sim = SinusoidalGalerkinSolver(**kw)
+    sim = _direct_sg(**kw)
     geom = sim._build_geometry()
     view = sim._basis_coefs(geom, sim.k)
     n_segs = geom["n_segs"]
@@ -3306,7 +3300,7 @@ def test_sparse_assembly_is_no_less_accurate_than_dense(monkeypatch):
     rather than a slackened gate."""
     kw = _dipole()
     G_dense, G_sparse = _both_assembly_paths(monkeypatch, **kw)
-    G_ref = _longdouble_coefficient_product(SinusoidalGalerkinSolver(**kw))
+    G_ref = _longdouble_coefficient_product(_direct_sg(**kw))
     ref = np.asarray(G_ref, dtype=np.complex128)
     err_dense = _rel_matrix_delta(G_dense, ref)
     err_sparse = _rel_matrix_delta(G_sparse, ref)
@@ -3415,7 +3409,7 @@ def test_folded_basis_evaluation_is_orders_more_accurate():
     """Site 1: the value. `_basis_value` must be the accurate spelling, not
     merely a different one — the coefficients are held fixed and only the
     arithmetic that combines them changes."""
-    sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
+    sim = _direct_sg(**_m3_dipole(_203_N))
     literal, folded = _basis_eval_errors(sim)
     assert folded < 1e-14, folded
     assert literal > 100 * folded, (literal, folded)
@@ -3424,7 +3418,7 @@ def test_folded_basis_evaluation_is_orders_more_accurate():
 def test_folded_basis_evaluation_is_the_one_the_fill_uses():
     """…and the fill actually uses it: `_test_context`'s weights are the folded
     value times the arc weight, exactly."""
-    sim = SinusoidalGalerkinSolver(**_dipole())
+    sim = _direct_sg(**_dipole())
     geom = sim._build_geometry()
     view = sim._basis_coefs(geom, sim.k)
     ctx = sim._test_context(geom, view, sim.k)
@@ -3442,7 +3436,7 @@ def test_folded_coefficient_product_is_orders_closer_to_the_exact_product():
     """Site 2: the product. Both spellings are formed from the SAME float64
     contributions, so the 80-bit product of those contributions is the exact
     answer to the question each is answering."""
-    sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
+    sim = _direct_sg(**_m3_dipole(_203_N))
     ctx, contribs = _tested_pieces(sim)
     ref = np.asarray(
         _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=True),
@@ -3461,7 +3455,7 @@ def test_shipped_assembly_is_the_folded_product(monkeypatch, sparse):
     """Neither assembly tail gets to keep the literal pairing: both land on the
     exact product at a distance the literal spelling cannot reach."""
     kw = _m3_dipole(_203_N)
-    sim = SinusoidalGalerkinSolver(**kw)
+    sim = _direct_sg(**kw)
     ctx, contribs = _tested_pieces(sim)
     ref = np.asarray(
         _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=True),
@@ -3524,7 +3518,7 @@ def test_reciprocity_floor_is_set_by_the_fill_not_the_product():
       contributions arrive on the (cos kξ − 1) shape, so nothing here is left
       to amplify.
     """
-    sim = SinusoidalGalerkinSolver(**_m3_dipole(_203_N))
+    sim = _direct_sg(**_m3_dipole(_203_N))
     ctx, contribs = _tested_pieces(sim)
     exact = _coefficient_product(ctx, contribs, 0, np.clongdouble, folded=True)
     folded = _coefficient_product(ctx, contribs, 0, np.complex128, folded=True)
@@ -3702,7 +3696,7 @@ def _205_sample(n_seg):
     """(ρ, z) pairs spanning the bands the fill actually visits at mesh
     `n_seg` on the M3 dipole: the self pair, the touching neighbours, the
     mid-range where kr ~ 1 and the far end of the wire."""
-    sim = SinusoidalGalerkinSolver(**_m3_dipole(n_seg))
+    sim = _direct_sg(**_m3_dipole(n_seg))
     geom = sim._build_geometry()
     H = 0.5 * float(geom["seg_h"][0])
     a = float(sim._uniform_radius)
@@ -3753,7 +3747,7 @@ def _folded_field_errors(n_seg):
         ez_d, erho_d, ez_c, erho_c = _decimal_cos_minus_one_fields(
             k, rho[i], z[i], H, gx, gw, sim.eta
         )
-        cm = SinusoidalGalerkinSolver(**_m3_dipole(n_seg))._field_components_bcast(
+        cm = _direct_sg(**_m3_dipole(n_seg))._field_components_bcast(
             k,
             obs_c=np.array([[0.0, rho[i], z[i]]]),
             obs_t=np.array([[0.0, 0.0, 1.0]]),
@@ -3839,7 +3833,7 @@ def _G_pre_205(monkeypatch, dtype=np.complex128, ld_kernel=False, **kw):
     from momwire import sinusoidal_galerkin as _sg
 
     monkeypatch.setattr(_sg, "_HAVE_GALERKIN_FAR_FILL", False)
-    sim = SinusoidalGalerkinSolver(**kw)
+    sim = _direct_sg(**kw)
     inner = sim._field_components_bcast
 
     def literal(k, **kwargs):
@@ -3885,7 +3879,7 @@ def test_folded_fill_agrees_with_the_pre_205_fill_and_is_closer_to_exact(
     is not a difference of scheme.
     """
     kw = GEOMETRIES[geom_name]()
-    G_new = _matrix(SinusoidalGalerkinSolver(**kw))
+    G_new = _matrix(_direct_sg(**kw))
     G_old = _G_pre_205(monkeypatch, **kw)
     G_ref = _G_pre_205(monkeypatch, ld_kernel=True, **kw)
     assert _rel_matrix_delta(G_new, G_old) < PRE_205_AGREEMENT
@@ -3915,7 +3909,7 @@ def test_folded_fill_asymmetry_is_now_structural_not_rounding(monkeypatch, geom_
     at their much coarser gate meshes and are not held to it.
     """
     kw = GEOMETRIES[geom_name]()
-    r_new = _sym_ratio(_matrix(SinusoidalGalerkinSolver(**kw)))
+    r_new = _sym_ratio(_matrix(_direct_sg(**kw)))
     if _LD_EXTENDED:  # the structural-not-rounding half needs the reference
         r_ref = _sym_ratio(_G_pre_205(monkeypatch, ld_kernel=True, **kw))
         assert abs(r_new - r_ref) < 0.05 * r_ref, (r_new, r_ref)
