@@ -4801,10 +4801,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         )
         ax_a = _crossing_fill.axis_data(ctx_x, a_idx, **density)
         ax_b = _crossing_fill.axis_data(ctx_x, b_idx, **density)
-        comp = np.zeros((n_basis, n_basis), dtype=np.complex128)
-        _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=comp)
-        G += _sinusoidal_mp.COMPLETION_SIGN * comp
-        del comp
+        # Accumulated INTO G with G's sign and no (n, n) transient: the
+        # completions add to their `out`, so G is negated around the call
+        # (exact) when the sign is −1.
+        if _sinusoidal_mp.COMPLETION_SIGN == -1.0:
+            np.negative(G, out=G)
+            _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=G)
+            np.negative(G, out=G)
+        elif _sinusoidal_mp.COMPLETION_SIGN == 1.0:
+            _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=G)
+        elif _sinusoidal_mp.COMPLETION_SIGN != 0.0:
+            raise AssertionError("COMPLETION_SIGN is a sign")
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view
 

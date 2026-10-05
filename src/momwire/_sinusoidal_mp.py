@@ -46,7 +46,6 @@ takes a composite rule graded toward the shared node on both segments.
 from __future__ import annotations
 
 import numpy as np
-import scipy.sparse
 
 from . import _accel
 from ._quadrature import leggauss
@@ -72,6 +71,8 @@ NEAR_RATIO = 2.0
 # inner (kernel-free) shape correlation. See `parallel_pair_moments`.
 PARALLEL_N_T = 24
 PARALLEL_N_XI = 8
+# Pairs per batch of the parallel-pair reduction (transient ~ 16 KB a pair).
+PARALLEL_CHUNK = 2048
 # Nodes per panel of the graded rule on a touching non-parallel pair, and the
 # product order on a near non-parallel pair that does not touch.
 GRADED_N_PER_PANEL = 8
@@ -265,6 +266,26 @@ def parallel_pair_moments(
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
     h_i, h_j = np.asarray(h_i, float), np.asarray(h_j, float)
     n = c_i.shape[0]
+    if n > PARALLEL_CHUNK:
+        # Bounded transients: the (3, n, n_t, n_xi) shape tables are 16 KB a
+        # pair at the default rule.
+        out = np.empty((N_SHAPES, N_SHAPES, n), dtype=np.complex128)
+        for p0 in range(0, n, PARALLEL_CHUNK):
+            p1 = min(p0 + PARALLEL_CHUNK, n)
+            sl = slice(p0, p1)
+            out[:, :, sl] = parallel_pair_moments(
+                c_i[sl],
+                t_i[sl],
+                h_i[sl],
+                c_j[sl],
+                t_j[sl],
+                h_j[sl],
+                a2 if np.ndim(a2) == 0 else np.asarray(a2)[sl],
+                k,
+                n_t=n_t,
+                n_xi=n_xi,
+            )
+        return out
     s = np.sign(np.einsum("ij,ij->i", t_i, t_j))
     dc = c_i - c_j
     d_par = np.einsum("ij,ij->i", dc, t_j)
@@ -587,7 +608,7 @@ COMPLETION_PANEL_ORDER = None
 COMPLETION_GROWTH = None
 
 # Bytes of pair-moment window held at once: (3, 3, rows, N) complex128.
-WINDOW_BYTES = 256 << 20
+WINDOW_BYTES = 128 << 20
 
 
 class WindowFill:
@@ -752,31 +773,27 @@ def remainder_shape_weights(k, h, t01, w01):
     return np.ascontiguousarray((h[:, None] * w01[None, :])[None] * S.real)
 
 
-def basis_wings(starts, jbasis, coef, width=N_SHAPES):
-    """The CSR basis as fixed-width wing tables: `(rows_basis, loc, pl)`,
-    a basis with more than `width` support entries split over several rows
-    (`rows_basis` names each row's basis), unused slots on segment 0 with a
-    zero polynomial — the B-spline `supp_seg` / `polys` convention, which is
-    how the fused remainder kernel can assemble this basis unchanged. The
-    rows' Q folds back onto the bases by `rows_basis`."""
+def basis_wings(starts, jbasis, coef):
+    """The CSR basis as fixed-width wing tables for the fused remainder
+    kernel: `(loc, pl)`, `loc` (n_basis, A) the segment of each wing and `pl`
+    (n_basis, A, 3) its coefficients, A the widest basis's entry count,
+    unused slots on segment 0 with zero coefficients — the B-spline
+    `supp_seg` / `polys` convention, which is how that kernel assembles this
+    basis unchanged (a padded wing adds exact zeros). One row per basis, so
+    the kernel's Q is G's own shape and lands on it in place."""
     starts = np.asarray(starts)
     jbasis = np.asarray(jbasis)
     seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
     order = np.argsort(jbasis, kind="stable")
     counts = np.bincount(jbasis[order])
     n_basis = counts.size
-    n_rows_per = np.maximum((counts + width - 1) // width, 1)
-    rows_basis = np.repeat(np.arange(n_basis), n_rows_per)
-    R = rows_basis.size
-    loc = np.zeros((R, width), dtype=np.int64)
-    pl = np.zeros((R, width, N_SHAPES), dtype=np.complex128)
-    row_start = np.concatenate(([0], np.cumsum(n_rows_per)))
-    pos = np.arange(order.size) - np.repeat(np.cumsum(counts) - counts, counts)
-    row = row_start[jbasis[order]] + pos // width
-    slot = pos % width
-    loc[row, slot] = seg_of_entry[order]
-    pl[row, slot] = coef[order]
-    return rows_basis, loc, pl
+    A = max(int(counts.max()), 1)
+    loc = np.zeros((n_basis, A), dtype=np.int64)
+    pl = np.zeros((n_basis, A, N_SHAPES), dtype=np.complex128)
+    slot = np.arange(order.size) - np.repeat(np.cumsum(counts) - counts, counts)
+    loc[jbasis[order], slot] = seg_of_entry[order]
+    pl[jbasis[order], slot] = coef[order]
+    return loc, pl
 
 
 def taylor_shape_coefs(k, h, degree=REMAINDER_TAYLOR_DEGREE):
@@ -889,7 +906,7 @@ def remainder_Q_above(
     coef = np.asarray(coef)
     if np.abs(coef.imag).max() != 0.0:
         raise ValueError("remainder_Q_above needs real basis coefficients (a real k)")
-    rows_basis, loc, pl = basis_wings(starts, jbasis, coef)
+    loc, pl = basis_wings(starts, jbasis, coef)
     pl = np.ascontiguousarray(pl.real)
     tang_c = np.ascontiguousarray(tang)
     Qr = _acc.sommerfeld_remainder_bspline_Q(
@@ -908,12 +925,10 @@ def remainder_Q_above(
         *_sommerfeld.grid_cpp_args(grid),
         int(cancel_flag),
     )
-    n_basis = G.shape[0]
-    S = scipy.sparse.csr_matrix(
-        (np.ones(rows_basis.size), (rows_basis, np.arange(rows_basis.size))),
-        shape=(n_basis, rows_basis.size),
-    )
-    G += scale * np.asarray(S @ np.asarray(S @ Qr).T).T
+    if Qr.shape != G.shape:
+        raise AssertionError("the remainder kernel's Q must be G's shape")
+    Qr *= scale
+    G += Qr
     del Qr
 
     # The grazing pairs, on graded panels (momwire#1189 / #1201 as bspline
