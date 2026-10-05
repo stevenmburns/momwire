@@ -1529,14 +1529,20 @@ def compute_Z_operator_buried(
             t_ab = _crossing_fill.cross_complete_block_split(
                 ctx, a_idx, b_idx, ax_a, ax_b, rows=cross_rows
             )
+            # Dense whole-Z passes, a tenth of a second each at x32: polled
+            # between (momwire#1348 scope).
             if cross_rows is None:
                 Z -= t_ab
+                f.checkpoint()
                 Z -= t_ab.T
+                f.checkpoint()
                 _crossing_fill.self_completions(ctx, ax_b, ax_a, out=Z)
             else:
                 t_r, t_c = t_ab
                 Z[z_rows, :] -= t_r
+                f.checkpoint()
                 Z[z_rows, :] -= t_c.T
+                f.checkpoint()
                 Z[z_rows, :] += _crossing_fill.self_completions(
                     ctx, ax_b, ax_a, rows=cross_rows
                 )

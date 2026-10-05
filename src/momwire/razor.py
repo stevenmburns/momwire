@@ -4876,8 +4876,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             pts = np.array([np.asarray(e[0], dtype=float) for e in ends])
             sgn = np.array([float(e[1]) for e in ends])
             row = np.array([int(np.flatnonzero(e[2])[0]) for e in ends])
+            self._checkpoint()
             d = pts[:, None, :] - nodes[None, :, :]  # (E, T, 3)
             rho = np.hypot(d[..., 0], d[..., 1])
+            self._checkpoint()  # (E, T) blocks, ~0.2 s at x32: between them
             a = a_half[above]
             R = np.sqrt(np.einsum("etk,etk->et", d, d) + (a * a)[None, :])
             side = "above" if above else "below"
