@@ -358,7 +358,7 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _medium_spec, _sinusoidal_mp, _wire_loading, _wire_spec
+from . import _medium_spec, _sinusoidal_mp, _sommerfeld, _wire_loading, _wire_spec
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups
 from ._bspline_kernels import _reg_cplx_pool as _piece_pool
@@ -4576,11 +4576,47 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         return G, seg_view
 
     def _mp_remainder(self, G, geom, seg_view, k, fg):
-        """The Sommerfeld remainder onto G: the direct form's evaluator at
-        the test nodes, reduced per test entry (`_tested_contrib_rows`) and
-        scattered through the source coefficients one observer chunk at a
-        time. Enters with the sign `_fold_ground_block` gives it:
-        `free − (c2·img − rem)` puts `+rem` on G."""
+        """The Sommerfeld remainder onto G, with the sign `_fold_ground_block`
+        gives it (`free − (c2·img − rem)` puts `+rem` on G).
+
+        At a real k — the above-ground class — it is the B-spline fill's
+        route, `_sinusoidal_mp.remainder_Q_above`: the fused C++ kernel at
+        `n_qp_sommerfeld` nodes a side with the shapes in place of the
+        monomials, and the grazing pairs on graded panels. In the medium (a
+        complex k, whose shapes the kernel's real tables cannot carry) it is
+        the direct form's evaluator at the test nodes, reduced per entry
+        (`_tested_contrib_rows`) and scattered through the source
+        coefficients one observer chunk at a time.
+        """
+        if not np.iscomplexobj(k) or k.imag == 0:
+            c = np.asarray(geom["seg_centers"], dtype=float)
+            t = np.asarray(geom["seg_tangents"], dtype=float)
+            h = np.asarray(geom["seg_h"], dtype=float)
+            seg_l, seg_r = _sinusoidal_mp.segment_ends(c, t, h)
+            gz = float(self.ground_z)
+            r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
+            grid = _below_interface.somm_grid(
+                fg.eps_tilde, float(k), r1_max, self.omega, self.mu, self._cancel_flag
+            )
+            starts, jbasis, coef, _dcoef = _sinusoidal_mp.basis_csr(seg_view, k)
+            _sinusoidal_mp.remainder_Q_above(
+                G,
+                starts,
+                jbasis,
+                coef,
+                seg_l,
+                seg_r,
+                t,
+                h,
+                gz,
+                float(k),
+                grid,
+                base_q=self.n_qp_sommerfeld,
+                scale=_sinusoidal_mp.REMAINDER_SIGN,
+                cancel_flag=self._cancel_flag,
+                checkpoint=self._checkpoint,
+            )
+            return
         ctx = self._test_context(geom, seg_view, k)
         N, nq = ctx["N"], ctx["nq"]
         starts, w_entry = ctx["starts"], ctx["w_entry"]
@@ -4601,11 +4637,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             w = w_entry[e0:e1]
             m_loc = m_of_entry[e0:e1] - m0
             rows_i = i_of_entry[e0:e1]
+            # Entries of one basis summed by a sparse selector rather than
+            # `np.add.at` on whole rows, which costs a Python-level loop
+            # per row.
+            touched, local = np.unique(rows_i, return_inverse=True)
+            R = scipy.sparse.csr_matrix(
+                (np.ones(local.size), (local, np.arange(local.size))),
+                shape=(touched.size, local.size),
+            )
             for s_blk, M in zip(block, Ms):
                 rows = self._tested_contrib_rows(
                     w, m_loc, nq, s_blk.reshape(m1 - m0, nq, s_blk.shape[-1])
                 )
-                np.add.at(G, rows_i, np.asarray(rows @ M))
+                G[touched] += np.asarray(R @ np.asarray(rows @ M))
 
         fg.remainder("cos-1").replay(
             obs_centers=ctx["obs_c"],

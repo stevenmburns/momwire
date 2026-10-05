@@ -4495,6 +4495,24 @@ seg_seg_full_moments_sinusoidal_kernel(
         return tier;
     };
 
+    // Shape tables split into (re, im) planes so the contraction below is
+    // explicit real arithmetic: std::complex's operator* carries the C99
+    // NaN/Inf fixup (`__muldc3`) under this build's strict FP flags, which
+    // is most of a scalar complex multiply's cost.
+    std::vector<std::vector<double>> wsi_re(n_tiers), wsi_im(n_tiers), wsj_re(n_tiers), wsj_im(n_tiers);
+    for (size_t tier = 0; tier < n_tiers; tier++) {
+        auto split = [](const std::vector<shape_t> &src, std::vector<double> &re, std::vector<double> &im) {
+            re.resize(src.size());
+            im.resize(src.size());
+            for (size_t x = 0; x < src.size(); x++) {
+                if constexpr (COMPLEX_K) { re[x] = src[x].real(); im[x] = src[x].imag(); }
+                else { re[x] = src[x]; im[x] = 0.0; }
+            }
+        };
+        split(ws_i[tier], wsi_re[tier], wsi_im[tier]);
+        split(ws_j[tier], wsj_re[tier], wsj_im[tier]);
+    }
+
     MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N_i; i++) {
         for (size_t j = 0; j < N_j; j++) {
@@ -4502,33 +4520,74 @@ seg_seg_full_moments_sinusoidal_kernel(
             const size_t n_qp = ladder.n_qp(tier);
             const double *pi = &pos_i[tier][i * n_qp * 3];
             const double *pj = &pos_j[tier][j * n_qp * 3];
-            const shape_t *si = &ws_i[tier][i * n_qp * NM];
-            const shape_t *sj = &ws_j[tier][j * n_qp * NM];
-            std::complex<double> acc[NMM];
-            for (int pP = 0; pP < NMM; pP++) acc[pP] = 0.0;
-            for (size_t q = 0; q < n_qp; q++) {
-                const double px = pi[q*3 + 0], py_ = pi[q*3 + 1], pz = pi[q*3 + 2];
-                std::complex<double> gq[NM];
-                for (int P = 0; P < NM; P++) gq[P] = 0.0;
-                for (size_t r = 0; r < n_qp; r++) {
-                    const double dx = px - pj[r*3 + 0];
-                    const double dy = py_ - pj[r*3 + 1];
-                    const double dz = pz - pj[r*3 + 2];
-                    const double R = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-                    double sc = inv_4pi / R;
-                    if (COMPLEX_K) sc *= std::exp(k_im * R);
-                    const double ph = -k_re * R;
-                    const std::complex<double> G(std::cos(ph) * sc, std::sin(ph) * sc);
-                    // Source-side contraction first: three products per
-                    // node pair, then the 3x3 outer product with the test
-                    // shapes once per test node.
-                    for (int P = 0; P < NM; P++) gq[P] += G * sj[r*NM + P];
+            const double *si_re = &wsi_re[tier][i * n_qp * NM];
+            const double *si_im = &wsi_im[tier][i * n_qp * NM];
+            const double *sj_re = &wsj_re[tier][j * n_qp * NM];
+            const double *sj_im = &wsj_im[tier][j * n_qp * NM];
+            double acc_re[NMM], acc_im[NMM];
+            for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
+            const size_t n_pairs = n_qp * n_qp;
+            alignas(32) double R[BSPLINE_QR_TILE];
+            alignas(32) double ph[BSPLINE_QR_TILE];
+            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+                const size_t m = std::min(n_pairs - base, (size_t)BSPLINE_QR_TILE);
+                for (size_t t = 0; t < m; t++) {
+                    const size_t q = (base + t) / n_qp, r = (base + t) % n_qp;
+                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
                 }
-                for (int p = 0; p < NM; p++) {
-                    for (int P = 0; P < NM; P++) acc[p*NM + P] += si[q*NM + p] * gq[P];
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) ph[t] = -k_re * R[t];
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) G_re[t] = std::cos(ph[t]);
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) G_im[t] = std::sin(ph[t]);
+                if constexpr (COMPLEX_K) {
+                    MW_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) ph[t] = std::exp(k_im * R[t]);
+                    MW_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        const double sc = ph[t] * inv_4pi / R[t];
+                        G_re[t] *= sc;
+                        G_im[t] *= sc;
+                    }
+                } else {
+                    MW_OMP_SIMD()
+                    for (size_t t = 0; t < m; t++) {
+                        const double sc = inv_4pi / R[t];
+                        G_re[t] *= sc;
+                        G_im[t] *= sc;
+                    }
+                }
+                // Source-side contraction per test node q: gq[P] = sum_r G sj[r][P];
+                // then the 3x3 outer product with the test shapes once per q.
+                size_t t = 0;
+                while (t < m) {
+                    const size_t q = (base + t) / n_qp;
+                    size_t r = (base + t) % n_qp;
+                    double gq_re[NM] = {0.0, 0.0, 0.0}, gq_im[NM] = {0.0, 0.0, 0.0};
+                    for (; r < n_qp && t < m; r++, t++) {
+                        const double gr = G_re[t], gi = G_im[t];
+                        for (int P = 0; P < NM; P++) {
+                            const double sr = sj_re[r*NM + P], sim = sj_im[r*NM + P];
+                            gq_re[P] += gr * sr - gi * sim;
+                            gq_im[P] += gr * sim + gi * sr;
+                        }
+                    }
+                    for (int p = 0; p < NM; p++) {
+                        const double ar = si_re[q*NM + p], ai = si_im[q*NM + p];
+                        for (int P = 0; P < NM; P++) {
+                            acc_re[p*NM + P] += ar * gq_re[P] - ai * gq_im[P];
+                            acc_im[p*NM + P] += ar * gq_im[P] + ai * gq_re[P];
+                        }
+                    }
                 }
             }
-            for (int pP = 0; pP < NMM; pP++) j_view(pP / NM, pP % NM, i, j) = acc[pP];
+            for (int pP = 0; pP < NMM; pP++)
+                j_view(pP / NM, pP % NM, i, j) = std::complex<double>(acc_re[pP], acc_im[pP]);
         }
     }
     return J;
@@ -4681,46 +4740,81 @@ assemble_Z_sinusoidal_windowed(
         size_t o = col_off[n];
         for (int64_t e = st(s); e < st(s + 1); e++) col_e[o++] = e;
     }
+    // The distinct basis columns this window touches: each group's row is
+    // accumulated in a contiguous buffer and added to Z's (strided, column-
+    // major) row once per touched column, not once per entry.
+    std::vector<int64_t> col_bases;
+    {
+        std::vector<char> seen((size_t)n_basis, 0);
+        for (size_t o = 0; o < col_e.size(); o++) {
+            const int64_t j = jb(col_e[o]);
+            if (!seen[(size_t)j]) { seen[(size_t)j] = 1; col_bases.push_back(j); }
+        }
+        std::sort(col_bases.begin(), col_bases.end());
+    }
     const size_t plane = n_rows * n_cols;
-    const std::complex<double> *Jd = J.data();
+    const double *Jd_d = reinterpret_cast<const double *>(J.data());
 
     MW_CANCEL_SETUP(cancel_flag);
-    #pragma omp parallel for schedule(dynamic, 8)
-    for (size_t g = 0; g < n_grp; g++) {
-        {
+    #pragma omp parallel
+    {
+        std::vector<std::complex<double>> rowbuf((size_t)n_basis, std::complex<double>(0.0, 0.0));
+        #pragma omp for schedule(dynamic, 8)
+        for (size_t g = 0; g < n_grp; g++) {
             MW_CANCEL_POLL();
             const int64_t i = ents[grp[g]].basis;
             for (size_t x = grp[g]; x < grp[g + 1]; x++) {
                 const size_t m = ents[x].m;
                 const int64_t e = ents[x].e;
-                std::complex<double> ce[NM], de[NM];
-                for (int p = 0; p < NM; p++) { ce[p] = c_a * cf(e, p); de[p] = c_phi * dcf(e, p); }
+                // Explicit (re, im) arithmetic throughout: see the moment
+                // kernel above for why std::complex's operator* is avoided.
+                double ce_re[NM], ce_im[NM], de_re[NM], de_im[NM];
+                for (int p = 0; p < NM; p++) {
+                    const std::complex<double> a = c_a * cf(e, p), b = c_phi * dcf(e, p);
+                    ce_re[p] = a.real(); ce_im[p] = a.imag();
+                    de_re[p] = b.real(); de_im[p] = b.imag();
+                }
                 const double tmx = tr(m, 0), tmy = tr(m, 1), tmz = tr(m, 2);
+                const double *Jm = Jd_d + 2 * (m * n_cols);
                 for (size_t n = 0; n < n_cols; n++) {
                     const double td = tmx * tc(n, 0) + tmy * tc(n, 1) + tmz * tc(n, 2);
-                    const std::complex<double> fa = has_wa ? wa[m * n_cols + n] * td
-                                                           : std::complex<double>(td);
-                    const std::complex<double> fp = has_wp ? wp[m * n_cols + n]
-                                                           : std::complex<double>(1.0);
-                    // The nine moments of this pair, gathered once.
-                    std::complex<double> Jmn[NM * NM];
-                    for (int pq = 0; pq < NM * NM; pq++) Jmn[pq] = Jd[(size_t)pq * plane + m * n_cols + n];
-                    // Test-side contraction: ta[q] = fa sum_p ce[p] J[p][q],
-                    // tp[q] = fp sum_p de[p] J[p][q].
-                    std::complex<double> ta[NM], tp[NM];
+                    double fa_re = td, fa_im = 0.0, fp_re = 1.0, fp_im = 0.0;
+                    if (has_wa) { fa_re = wa[m * n_cols + n].real() * td; fa_im = wa[m * n_cols + n].imag() * td; }
+                    if (has_wp) { fp_re = wp[m * n_cols + n].real(); fp_im = wp[m * n_cols + n].imag(); }
+                    // ta[q] = fa sum_p ce[p] J[p][q]; tp[q] = fp sum_p de[p] J[p][q].
+                    double ta_re[NM], ta_im[NM], tp_re[NM], tp_im[NM];
                     for (int q = 0; q < NM; q++) {
-                        std::complex<double> sa = 0.0, sp = 0.0;
-                        for (int p = 0; p < NM; p++) { sa += ce[p] * Jmn[p*NM + q]; sp += de[p] * Jmn[p*NM + q]; }
-                        ta[q] = fa * sa;
-                        tp[q] = fp * sp;
+                        double sa_re = 0.0, sa_im = 0.0, sp_re = 0.0, sp_im = 0.0;
+                        for (int p = 0; p < NM; p++) {
+                            const size_t off = 2 * ((size_t)(p * NM + q) * plane + n);
+                            const double jr = Jm[off], ji = Jm[off + 1];
+                            sa_re += ce_re[p] * jr - ce_im[p] * ji;
+                            sa_im += ce_re[p] * ji + ce_im[p] * jr;
+                            sp_re += de_re[p] * jr - de_im[p] * ji;
+                            sp_im += de_re[p] * ji + de_im[p] * jr;
+                        }
+                        ta_re[q] = fa_re * sa_re - fa_im * sa_im;
+                        ta_im[q] = fa_re * sa_im + fa_im * sa_re;
+                        tp_re[q] = fp_re * sp_re - fp_im * sp_im;
+                        tp_im[q] = fp_re * sp_im + fp_im * sp_re;
                     }
                     for (size_t o = col_off[n]; o < col_off[n + 1]; o++) {
                         const int64_t ep = col_e[o];
-                        std::complex<double> v = 0.0;
-                        for (int q = 0; q < NM; q++) v += ta[q] * cf(ep, q) + tp[q] * dcf(ep, q);
-                        zv(i, jb(ep)) += v;
+                        double v_re = 0.0, v_im = 0.0;
+                        for (int q = 0; q < NM; q++) {
+                            const double cr = cf(ep, q).real(), ci = cf(ep, q).imag();
+                            const double dr = dcf(ep, q).real(), di = dcf(ep, q).imag();
+                            v_re += ta_re[q] * cr - ta_im[q] * ci + tp_re[q] * dr - tp_im[q] * di;
+                            v_im += ta_re[q] * ci + ta_im[q] * cr + tp_re[q] * di + tp_im[q] * dr;
+                        }
+                        rowbuf[(size_t)jb(ep)] += std::complex<double>(v_re, v_im);
                     }
                 }
+            }
+            for (size_t c = 0; c < col_bases.size(); c++) {
+                const int64_t j = col_bases[c];
+                zv(i, j) += rowbuf[(size_t)j];
+                rowbuf[(size_t)j] = std::complex<double>(0.0, 0.0);
             }
         }
     }
