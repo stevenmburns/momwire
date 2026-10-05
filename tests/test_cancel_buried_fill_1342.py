@@ -188,13 +188,16 @@ def test_not_cancelled_the_fill_makes_several_calls(monkeypatch, make):
 
 def test_the_ambient_token_is_restored_after_a_fill():
     tok = CancelToken()
-    with _cancel.scope(tok):
-        assert _cancel.flag() == tok.ptr
-        with _cancel.scope(None):
-            assert _cancel.flag() == 0
-        assert _cancel.flag() == tok.ptr
-    assert _cancel.flag() == 0
+    tok.cancel()
     _cancel.poll()  # no token: a no-op
+    with _cancel.scope(tok):
+        with pytest.raises(SolveAborted):
+            _cancel.poll()
+        with _cancel.scope(None):
+            _cancel.poll()  # the inner scope hides the outer token
+        with pytest.raises(SolveAborted):
+            _cancel.poll()  # and restores it
+    _cancel.poll()
 
 
 # --------------------------------------------------------------------------

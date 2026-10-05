@@ -2063,7 +2063,7 @@ def _evaluate_fresh(
 
 # A column twin call is one uninterruptible C++ region, and the fills hand it
 # a whole grouping (momwire#898's reason: the parallel units live inside it).
-# On invl_deck(16) x16 a single call ran for 8 s of an SG fill. So the grouping
+# On invl_deck(16) x16 one call held an SG fill's thread for seconds. So the grouping
 # goes in WHOLE-COLUMN slices of about `_TWIN_SLICE_COST` each, with a poll
 # between them (momwire#1342). Whole columns because a member's value depends on
 # its column's membership (`column_batches`); the columns are independent of
