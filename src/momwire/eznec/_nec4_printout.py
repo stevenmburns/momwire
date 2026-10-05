@@ -348,19 +348,8 @@ def _port_row(row: PortRow) -> str:
     """I6, I6, then nine E12.5 cells; a negative cell fills its field and
     runs into its neighbour (``1.89388E-02-1.56495E-02``, 0234).  NEC-4.2's
     row has no end digit after the segment, unlike NEC-5's."""
-    cells = (
-        row.voltage.real,
-        row.voltage.imag,
-        row.current.real,
-        row.current.imag,
-        row.impedance.real,
-        row.impedance.imag,
-        row.admittance.real,
-        row.admittance.imag,
-        row.power,
-    )
     return f"{row.tag:6d}{row.segment:6d}" + "".join(
-        _printout._e(value, 12, 5) for value in cells
+        _printout._e(value, 12, 5) for value in _printout.port_cells(row)
     )
 
 

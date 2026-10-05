@@ -1288,9 +1288,11 @@ def _timing(data: RunData) -> list[str]:
     ]
 
 
-def _port_row(row: PortRow) -> str:
-    """A row of either port table: I4, I6, I2, then nine E12.4 cells."""
-    cells = (
+def port_cells(row: PortRow) -> tuple[float, ...]:
+    """The nine numeric cells of a port row, in column order — V, I, Z, Y
+    as real/imaginary pairs, then the power.  Both EZNEC slots print these
+    nine; only the widths and the leading integer columns differ."""
+    return (
         row.voltage.real,
         row.voltage.imag,
         row.current.real,
@@ -1301,8 +1303,12 @@ def _port_row(row: PortRow) -> str:
         row.admittance.imag,
         row.power,
     )
+
+
+def _port_row(row: PortRow) -> str:
+    """A row of either port table: I4, I6, I2, then nine E12.4 cells."""
     return f"{row.tag:4d}{row.segment:6d}{row.end_index:2d}" + "".join(
-        _e(value, 12, 4) for value in cells
+        _e(value, 12, 4) for value in port_cells(row)
     )
 
 
