@@ -156,23 +156,24 @@ def test_a_lumped_load_on_the_copy_is_refused():
         _build(RazorSolver, **_corner(lumped_loads=[(3, None, 50.0)]))
 
 
-def test_an_explicit_junction_is_remapped_or_refused():
+def test_an_explicit_junction_is_remapped_or_kept_as_written():
     """The copy (3) runs B -> C, its twin (2) C -> B, so the copy's START
     stands beside the twin's END. Naming both drops the copy's member; naming
-    the copy alone has no clean merge."""
+    the copy alone joins it to different wires than its twin, so it is not a
+    repeat and stays as written (momwire#1333; #1042 refused it)."""
     groups = [[(0, "end"), (2, "start"), (3, "end"), (5, "start")]]
     *_rest, junctions, dedup = drop_duplicated_wires(
         "X", [np.array(w) for w in WIRES], None, junctions=groups
     )
     assert junctions == [[(0, "end"), (2, "start"), (4, "start")]]
     assert dedup.removed == ((3, 2, True),)
-    with pytest.raises(ValueError, match="names wire 3's end without wire 2's start"):
-        drop_duplicated_wires(
-            "X",
-            [np.array(w) for w in WIRES],
-            None,
-            junctions=[[(0, "end"), (3, "end"), (5, "start")]],
+    alone = [[(0, "end"), (3, "end"), (5, "start")]]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DuplicateWire)
+        wires, *_rest, junctions, dedup = drop_duplicated_wires(
+            "X", [np.array(w) for w in WIRES], None, junctions=alone
         )
+    assert dedup is None and junctions == alone and len(wires) == len(WIRES)
 
 
 def test_many_copies_raise_one_advisory():
