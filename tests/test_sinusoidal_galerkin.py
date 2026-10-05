@@ -2612,7 +2612,7 @@ def test_far_fill_dispatch_is_projector_selective(monkeypatch):
         calls.append(1)
         return real(self, *a, **kw)
 
-    monkeypatch.setattr(_direct_sg, "_far_fill_accel", counted)
+    monkeypatch.setattr(SinusoidalGalerkinSolver, "_far_fill_accel", counted)
     for over, expected in (
         ({}, 1),
         (dict(ground_z=-6.0), 2),
