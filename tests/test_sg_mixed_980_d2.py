@@ -37,7 +37,7 @@ WL7 = C0 / 7e6
 GROUND = dict(ground_z=0.0, ground_eps=SOIL_A, ground_model="sommerfeld")
 
 
-def mk(wires, npe, feeds=None, eps=SOIL_A, free=False):
+def mk(wires, npe, feeds=None, eps=SOIL_A, free=False, **kw):
     ground = {} if free else dict(GROUND, ground_eps=eps)
     return SinusoidalGalerkinSolver(
         wires=wires,
@@ -46,6 +46,7 @@ def mk(wires, npe, feeds=None, eps=SOIL_A, free=False):
         wavelength=WL7,
         wire_radius=0.001,
         **ground,
+        **kw,
     )
 
 
@@ -96,9 +97,12 @@ def test_far_apart_diagonal_blocks_reproduce_the_single_class_solves():
     seam-heavy route this shape exists to avoid — so it is deliberately a
     float-noise gate. Measured 4.5e-22 (above) and 9.7e-17 (below).
     """
-    Gm = G_of(mk([ABOVE, BELOW_FAR], [[9], [9]]))
-    Ga = G_of(mk([ABOVE], [[9]]))
-    Gb = G_of(mk([BELOW_FAR], [[9]]))
+    # The direct fill on all three: a non-crossing mixed deck takes it
+    # whatever the default (momwire#1354), and the gate is its quadrants
+    # against its own single-class fills.
+    Gm = G_of(mk([ABOVE, BELOW_FAR], [[9], [9]], fill="direct"))
+    Ga = G_of(mk([ABOVE], [[9]], fill="direct"))
+    Gb = G_of(mk([BELOW_FAR], [[9]], fill="direct"))
     na, nb = Ga.shape[0], Gb.shape[0]
     assert Gm.shape[0] == na + nb
 
