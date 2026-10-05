@@ -391,9 +391,10 @@ mnemonic changed and their tables agree to 4.4 % worst-cell, INCLUDING the
 1.7342E-02, the same Sommerfeld interpolation dust in both, in a column a PEC
 image makes exactly zero.  So the MININEC-type ground reflects off its medium
 in the far field and SOLVES its near field in it, and the far-field rung's
-``GD``/``GN 1`` identity says nothing about this table.  :func:`_near_medium`
-is that sentence in code: ``GN 0``'s ε̃ comes off its own Sommerfeld solve and
-``GD``'s is folded from the deck's medium, because its solver never saw one.
+``GD``/``GN 1`` identity says nothing about this table.
+:func:`momwire._near_readout.near_ground` is that sentence in code: ``GN 0``'s
+ε̃ comes off its own Sommerfeld solve and ``GD``'s is folded from the deck's
+medium (which :func:`_near_field` hands it), because its solver never saw one.
 The seam reproduces the captures' own cross-agreement with its own numbers —
 1.54 % of table scale between the served 0108 and the served 0110, well inside
 the 4.4 % the two engine tables sit apart at.
@@ -420,9 +421,10 @@ Over a PERFECT ground the same point is ordinary, which is why the refusal is
 finite-ground-only: ``C2 = 1`` there, the image cancels the contact charge
 EXACTLY, and there is no residual to diverge on.
 
-The nec2 half of this tree still refuses ``NE``/``NH`` over its own finite
-grounds by name (``momwire.portal._portal._near_field_lines``, momwire#388) —
-same evaluator, different seam, and a follow-up rather than a disagreement.
+The nec2 half of this tree serves the same composition over its own
+Sommerfeld ground (``GN 2``) since momwire#1336 made it one function
+(:mod:`momwire._near_readout`, momwire#550), with the same two cells refused;
+its reflection-coefficient ``GN 0`` still refuses by name, unmeasured.
 
 The budget's own arithmetic
 ---------------------------
