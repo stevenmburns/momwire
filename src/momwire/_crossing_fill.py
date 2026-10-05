@@ -699,6 +699,7 @@ def _graded_u(h, toward_end, a, growth=2.0, gx=_GX8, gw=_GW8):
     return u, w
 
 
+@_cancelable  # its polls read the ambient token; solvers call it directly
 def axis_data(
     ctx,
     seg_idx,
@@ -1146,6 +1147,7 @@ def _on_plane_side(zrel, side, what):
     return z
 
 
+@_cancelable  # razor's crossing-node charges call it outside any fill entry
 def _tables(ctx, eps_t, k_p, rho, z, zp, rtol, memo=None, group_labels=None):
     """Designed tables with the deck's wire radius folded in, z relative
     to the interface. `memo` extends the exact-triple dedup across calls
