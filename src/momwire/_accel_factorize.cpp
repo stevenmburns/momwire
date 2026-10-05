@@ -85,7 +85,7 @@ static inline uint64_t mix(uint64_t h) {
 // slots as rows. A slot packs the hash's top 32 bits (a cheap reject before
 // the row compare) over the group number plus one (0 = empty).
 static py::tuple group_rows(const std::vector<Col> &cols, py::ssize_t n,
-                            bool floats) {
+                            bool floats, uintptr_t cancel_flag) {
     if (n >= static_cast<py::ssize_t>(std::numeric_limits<int32_t>::max()))
         throw std::runtime_error("factorize: too many rows for 32-bit groups");
     py::array_t<py::ssize_t> inverse(n);
@@ -93,6 +93,7 @@ static py::tuple group_rows(const std::vector<Col> &cols, py::ssize_t n,
     std::vector<int64_t> first;
     {
         py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
         first.reserve(static_cast<size_t>(n / 4 + 16));
         size_t cap = 16;
         while (cap < 2 * static_cast<size_t>(n)) cap <<= 1;
@@ -104,6 +105,7 @@ static py::tuple group_rows(const std::vector<Col> &cols, py::ssize_t n,
         // row by row exactly as before: `RowGroups::add`'s argument (a
         // prefetch reads nothing it could change).
         for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+            MW_CANCEL_SERIAL_POLL();  // per 32-row block
             const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
             for (py::ssize_t i = i0; i < i1; ++i) {
                 uint64_t h = 0x9e3779b97f4a7c15ULL;
@@ -188,17 +190,19 @@ static std::vector<Col> columns(const std::vector<py::array_t<T>> &arrs,
 // of an (n, 3) array) is read in place rather than copied; `forcecast` only
 // converts a column of another dtype.
 static py::tuple factorize_rows(
-    std::vector<py::array_t<double, py::array::forcecast>> arrs) {
+    std::vector<py::array_t<double, py::array::forcecast>> arrs,
+    uintptr_t cancel_flag = 0) {
     py::ssize_t n = 0;
     auto cols = columns(arrs, &n);
-    return group_rows(cols, n, true);
+    return group_rows(cols, n, true, cancel_flag);
 }
 
 static py::tuple factorize_ints(
-    std::vector<py::array_t<int64_t, py::array::forcecast>> arrs) {
+    std::vector<py::array_t<int64_t, py::array::forcecast>> arrs,
+    uintptr_t cancel_flag = 0) {
     py::ssize_t n = 0;
     auto cols = columns(arrs, &n);
-    return group_rows(cols, n, false);
+    return group_rows(cols, n, false, cancel_flag);
 }
 
 // A persistent exact-equality index over the rows of 1-3 float64 columns:
@@ -246,7 +250,8 @@ class RowIndex {
     }
 
     py::array_t<int64_t> find(
-        std::vector<py::array_t<double, py::array::forcecast>> arrs) const {
+        std::vector<py::array_t<double, py::array::forcecast>> arrs,
+        uintptr_t cancel_flag = 0) const {
         py::ssize_t q = 0;
         auto cols = columns(arrs, &q);
         if (cols.size() != K_)
@@ -255,8 +260,10 @@ class RowIndex {
         int64_t *o = out.mutable_data();
         {
             py::gil_scoped_release nogil;
+            MW_CANCEL_SERIAL_SETUP(cancel_flag);
             uint64_t key[3];
             for (py::ssize_t i = 0; i < q; ++i) {
+                MW_CANCEL_SERIAL_POLL();
                 uint64_t h;
                 o[i] = -1;
                 if (row_key(cols, i, key, &h)) continue;
@@ -506,7 +513,8 @@ class RowGroups {
     }
 
     py::array_t<py::ssize_t> add(
-        std::vector<py::array_t<double, py::array::forcecast>> arrs) {
+        std::vector<py::array_t<double, py::array::forcecast>> arrs,
+        uintptr_t cancel_flag = 0) {
         py::ssize_t n = 0;
         auto cols = columns(arrs, &n);
         if (cols.size() != 3)
@@ -519,7 +527,11 @@ class RowGroups {
         {
             py::gil_scoped_release nogil;
             uint64_t key[3], raw[3], hs[kPrefetchBlock];
+            MW_CANCEL_SERIAL_SETUP(cancel_flag);
             for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+                // Between blocks the grouping is whole; an abort leaves the
+                // rows added so far, and the caller discards the object.
+                MW_CANCEL_SERIAL_POLL();
                 const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
                 // Two prefetch passes over the block, then the rows in order.
                 // Past a few million groups the table and the keys are far
@@ -654,7 +666,8 @@ class RowGroups {
 // `kid[g, first]` answer row by row. A stamp per global id (the row that
 // last saw it) replaces the per-row hash table; the integers are the same.
 static py::tuple group_first_ranks(
-    py::array_t<int32_t, py::array::c_style> kid, int64_t n_id) {
+    py::array_t<int32_t, py::array::c_style> kid, int64_t n_id,
+    uintptr_t cancel_flag = 0) {
     if (kid.ndim() != 2) throw std::runtime_error("group_first_ranks: kid must be 2-D");
     const py::ssize_t nG = kid.shape(0), nL = kid.shape(1);
     if (n_id < 0 || n_id >= static_cast<int64_t>(std::numeric_limits<int32_t>::max()))
@@ -671,8 +684,10 @@ static py::tuple group_first_ranks(
     std::vector<int32_t> ids;
     {
         py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
         std::vector<int32_t> stamp(static_cast<size_t>(n_id), -1), local(static_cast<size_t>(n_id), 0);
         for (py::ssize_t g = 0; g < nG; ++g) {
+            MW_CANCEL_SERIAL_POLL();  // per row of nL ids
             const int32_t *row = K + g * nL;
             int32_t *out = R + g * nL;
             int32_t next = 0;
@@ -719,7 +734,7 @@ static py::tuple merge_rows_by_z(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> start,  // (blocks,)
     py::array_t<int32_t, py::array::c_style> ids,                           // keys, concatenated by group
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> off,    // (groups + 1,)
-    int64_t n_key, int64_t n_z) {
+    int64_t n_key, int64_t n_z, uintptr_t cancel_flag = 0) {
     const py::ssize_t nb = z.size();
     if (grp.size() != nb || start.size() != nb)
         throw std::runtime_error("merge_rows_by_z: one z, group and start per block");
@@ -742,6 +757,7 @@ static py::tuple merge_rows_by_z(
     std::vector<int64_t> first_blk, first_j;
     {
         py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
         // Blocks by z id, each z id's in walk order (a counting sort).
         std::vector<int64_t> cnt(static_cast<size_t>(n_z) + 1, 0);
         for (py::ssize_t b = 0; b < nb; ++b) cnt[Z[b] + 1]++;
@@ -755,6 +771,7 @@ static py::tuple merge_rows_by_z(
         std::vector<int64_t> first(static_cast<size_t>(n_cand));
         std::vector<int64_t> tag(static_cast<size_t>(n_key), -1), pos(static_cast<size_t>(n_key), 0);
         for (int64_t zi = 0; zi < n_z; ++zi) {
+            MW_CANCEL_SERIAL_POLL();
             if (cnt[zi + 1] - cnt[zi] == 1) {
                 // One block under this z id: its keys are distinct (a
                 // group's own), so every code is new where it stands.
@@ -764,6 +781,7 @@ static py::tuple merge_rows_by_z(
                 continue;
             }
             for (int64_t i = cnt[zi]; i < cnt[zi + 1]; ++i) {
+                MW_CANCEL_SERIAL_POLL();  // per block
                 const int64_t b = by_z[i];
                 const int64_t g = G[b];
                 for (int64_t j = 0; j < O[g + 1] - O[g]; ++j) {
@@ -780,6 +798,7 @@ static py::tuple merge_rows_by_z(
         // Rows numbered by first walk position, in walk order.
         int64_t next = 0;
         for (py::ssize_t b = 0; b < nb; ++b) {
+            MW_CANCEL_SERIAL_POLL();
             const int64_t len = O[G[b] + 1] - O[G[b]];
             for (int64_t j = 0; j < len; ++j) {
                 const int64_t e = S[b] + j;
@@ -810,14 +829,15 @@ void register_factorize(py::module_ &m) {
           "columns (-0.0 == 0.0, a NaN row its own group), in first-appearance "
           "order: (first, inverse), first[g] the row where group g first "
           "occurs (ascending), inverse[i] row i's group. momwire#1224.",
-          py::arg("cols"));
+          py::arg("cols"), py::arg("cancel_flag") = 0);
     m.def("factorize_ints", &factorize::factorize_ints,
           "`factorize_rows` for 1-3 int64 columns (equal iff the values are).",
-          py::arg("cols"));
+          py::arg("cols"), py::arg("cancel_flag") = 0);
     py::class_<factorize::RowIndex>(m, "RowIndex")
         .def(py::init<std::vector<py::array_t<double, py::array::forcecast>>>(),
              py::arg("cols"))
-        .def("find", &factorize::RowIndex::find, py::arg("cols"))
+        .def("find", &factorize::RowIndex::find, py::arg("cols"),
+             py::arg("cancel_flag") = 0)
         .def("__len__", &factorize::RowIndex::size);
     py::class_<factorize::TripleTable>(m, "TripleTable")
         .def(py::init<py::ssize_t>(), py::arg("width"))
@@ -830,7 +850,8 @@ void register_factorize(py::module_ &m) {
         .def("__len__", &factorize::TripleTable::size);
     py::class_<factorize::RowGroups>(m, "RowGroups")
         .def(py::init<>())
-        .def("add", &factorize::RowGroups::add, py::arg("cols"))
+        .def("add", &factorize::RowGroups::add, py::arg("cols"),
+             py::arg("cancel_flag") = 0)
         .def("rows", &factorize::RowGroups::rows)
         .def("__len__", &factorize::RowGroups::n_groups);
     m.def("group_first_ranks", &factorize::group_first_ranks,
@@ -838,14 +859,14 @@ void register_factorize(py::module_ &m) {
           "the row in one pass: (rank (groups, line) int32, n (groups,), "
           "first positions and global ids of each row's local ids, "
           "concatenated). momwire#1290.",
-          py::arg("kid"), py::arg("n_id"));
+          py::arg("kid"), py::arg("n_id"), py::arg("cancel_flag") = 0);
     m.attr("group_first_ranks_1290") = true;
     m.def("merge_rows_by_z", &factorize::merge_rows_by_z,
           "The multi-group merge's rows by first walk position, z id by z id "
           "with a stamp per key: (row per candidate in walk order, each row's "
           "first block, its offset there). momwire#1290.",
           py::arg("z"), py::arg("grp"), py::arg("start"), py::arg("ids"),
-          py::arg("off"), py::arg("n_key"), py::arg("n_z"));
+          py::arg("off"), py::arg("n_key"), py::arg("n_z"), py::arg("cancel_flag") = 0);
     m.attr("merge_rows_by_z_1290") = true;
     // The capability flag, beside the bindings it vouches for (#710).
     m.attr("exact_factorize_1224") = true;
