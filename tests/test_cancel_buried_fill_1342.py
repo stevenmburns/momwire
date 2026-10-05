@@ -20,11 +20,15 @@ between them) with no poll anywhere. What this pins:
     never reaches the kernel would pass vacuously, so each test counts the
     calls it intercepted, and a control counts them with no trip;
   * an abort inside `PlaneSheet.cover` leaves the CACHED sheet consistent;
-  * (slow) a cancel in the middle of an x16 fill returns within a bound.
+  * SG's own near-correction polls (`_near_pairs`, `_apply_near_correction`),
+    by call count;
+  * (opt-in, MOMWIRE_CANCEL_LATENCY=1) a cancel in the middle of an x16 fill
+    returns within a bound. Wall time never gates CI.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -131,6 +135,40 @@ def test_not_cancelled_the_fill_makes_several_calls(monkeypatch, make):
     assert np.isfinite(np.atleast_1d(z)[0])
 
 
+def _near_correction_polls(trip):
+    """Solve a small buried deck with SG, recording the callers of
+    `_checkpoint` that are SG's near-correction methods; with `trip` the first
+    such poll cancels the token. Returns (callers, aborted)."""
+    tok = CancelToken()
+    s = SinusoidalGalerkinSolver(**hub_deck(n_radials=4), cancel=tok)
+    callers = []
+    real = s._checkpoint
+
+    def spy():
+        who = sys._getframe(1).f_code.co_name
+        if who in ("_near_pairs", "_apply_near_correction"):
+            callers.append(who)
+            if trip and len(callers) == 1:
+                tok.cancel()
+        real()
+
+    s._checkpoint = spy
+    try:
+        s.compute_impedance()
+    except SolveAborted:
+        return callers, True
+    return callers, False
+
+
+def test_sg_near_correction_polls_are_reached_and_stop_the_solve():
+    callers, aborted = _near_correction_polls(trip=False)
+    assert not aborted
+    assert {"_near_pairs", "_apply_near_correction"} <= set(callers), callers
+    callers, aborted = _near_correction_polls(trip=True)
+    assert aborted
+    assert len(callers) == 1, callers  # nothing in the near correction ran on
+
+
 def test_the_ambient_token_is_restored_after_a_fill():
     tok = CancelToken()
     tok.cancel()
@@ -213,6 +251,11 @@ def _cancel_latency(make, deck, at):
     pytest.skip(f"the solve left the fill before {at} s, or never entered it")
 
 
+@pytest.mark.skipif(
+    not os.environ.get("MOMWIRE_CANCEL_LATENCY"),
+    reason="wall-clock latency gate: CI runners spread ~3x on the same code, so "
+    "it runs by hand (MOMWIRE_CANCEL_LATENCY=1), never as a CI gate",
+)
 @pytest.mark.slow
 @pytest.mark.parametrize("at", [2.0, 5.0])
 @pytest.mark.parametrize("deckname", ["buried", "invl"])
