@@ -316,7 +316,7 @@ def _cold_fill_latency(make, deck, at):
     "it runs by hand (MOMWIRE_CANCEL_LATENCY=1), never as a CI gate",
 )
 @pytest.mark.slow
-@pytest.mark.parametrize("at", [1.0, 2.0])
+@pytest.mark.parametrize("at", [0.0, 1.0, 2.0])
 @pytest.mark.parametrize("engine", _ENGINES)
 def test_a_cancel_mid_cold_fill_returns_within_the_bound(cold_memory, engine, at):
     latency, files = _cold_fill_latency(_MAKE[engine], _hub_x16(), at)
