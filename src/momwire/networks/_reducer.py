@@ -49,6 +49,7 @@ from ._reduce import (
     _Group2Element,
     _series_group2,
     _stamp_abcd,
+    frequency_mhz,
     magnetizing_impedance,
     tl_abcd,
 )
@@ -143,8 +144,16 @@ class NetworkReducer:
     :meth:`apply_branches`; virtual ports come after.
     """
 
-    def __init__(self, network, port_to_idx, n_total_ports):
+    def __init__(self, network, port_to_idx, n_total_ports, *, c_light_mhz_m=None):
         self.network = network
+        # The design's metre-megahertz product (antennaknobs#1685): every
+        # frequency-dependent branch — a lumped part's omega, a line's loss, a
+        # Touchstone file's sample frequency — reads its frequency off the
+        # wavelength through this c (`frequency_mhz`). None is the SI c,
+        # bit-identical to the reducer before the keyword. A deck-derived
+        # design passes NEC's 299.8, so its parts sit at the deck's own f
+        # while its lines keep the deck's own wavelength for their phase.
+        self.c_light_mhz_m = c_light_mhz_m
         self.port_to_idx = dict(port_to_idx)
         self.n_total_ports = n_total_ports
 
@@ -251,7 +260,7 @@ class NetworkReducer:
           `doublet_balanced_tuner` at 16.0387 MHz, whose common-mode return
           runs through a line open-terminated at the floating gap.
         """
-        f_mhz = C_LIGHT / wavelength / 1e6
+        f_mhz = frequency_mhz(wavelength, self.c_light_mhz_m)
         open_nodes = self._open_ended_nodes()
         suspects = []
         for br, path in zip(
@@ -388,7 +397,13 @@ class NetworkReducer:
         Ports that are neither driven, loaded, nor touched by a branch keep
         plain KCL with zero injection (the floating I_ext = 0 condition).
         """
-        omega = 2.0 * np.pi * C_LIGHT / wavelength
+        if self.c_light_mhz_m is None:
+            omega = 2.0 * np.pi * C_LIGHT / wavelength
+            f_hz = C_LIGHT / wavelength
+        else:
+            f_hz = frequency_mhz(wavelength, self.c_light_mhz_m) * 1e6
+            omega = 2.0 * np.pi * f_hz
+        line = dict(c_light_mhz_m=self.c_light_mhz_m)
         couplings: list[tuple[int, int, complex]] = []
         n = self.n_nodes
         G = np.zeros((n, n), dtype=np.complex128)
@@ -438,7 +453,15 @@ class NetworkReducer:
                     couplings,
                     [(a, 1.0 + 0j)],
                     [(b, -1.0 + 0j if br.transposed else 1.0 + 0j)],
-                    tl_abcd(br.z0, br.length, wavelength, vf=br.vf, k1=br.k1, k2=br.k2),
+                    tl_abcd(
+                        br.z0,
+                        br.length,
+                        wavelength,
+                        vf=br.vf,
+                        k1=br.k1,
+                        k2=br.k2,
+                        **line,
+                    ),
                 )
                 probes.append(
                     probe(
@@ -457,7 +480,7 @@ class NetworkReducer:
                 a1, a2, b1, b2 = (
                     self.port_to_idx[p] for p in (br.a1, br.a2, br.b1, br.b2)
                 )
-                kw = dict(vf=br.vf, k1=br.k1, k2=br.k2)
+                kw = dict(vf=br.vf, k1=br.k1, k2=br.k2, **line)
                 legs = [
                     _stamp_abcd(
                         elements,
@@ -510,7 +533,7 @@ class NetworkReducer:
                 # (issue #593): y = 1/Z(f) interpolated from the file, stamped
                 # verbatim like a 1-port Admittance / parallel Shunt.
                 k = self.port_to_idx[br.port]
-                yb = br.data.y_at(C_LIGHT / wavelength)
+                yb = br.data.y_at(f_hz)
                 G[k, k] += yb[0, 0]
                 probes.append(
                     probe(
@@ -524,7 +547,7 @@ class NetworkReducer:
                 # (issue #593): [S](f)→[Y](f) interpolated from the file, stamped
                 # like TL's 2×2 — a characterized balun / coax / filter black box.
                 a, b = self.port_to_idx[br.a], self.port_to_idx[br.b]
-                yb = br.data.y_at(C_LIGHT / wavelength)
+                yb = br.data.y_at(f_hz)
                 G[np.ix_([a, b], [a, b])] += yb
                 probes.append(
                     probe(
