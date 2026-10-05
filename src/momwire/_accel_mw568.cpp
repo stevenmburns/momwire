@@ -10,8 +10,9 @@
 #include "_contour_engine_inline.h"
 
 // The AVX2 build's vector lanes (momwire#1290): the below/below replay's
-// stages. GCC/clang AVX2 only; the baseline, arm64 and MSVC builds run the
-// scalar loops the lanes are gated against.
+// stages and the field-form Galerkin assembly's first stage. GCC/clang AVX2
+// only; the baseline, arm64 and MSVC builds run the scalar loops the lanes
+// are gated against.
 #if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
 #include <immintrin.h>
 #define MW568_LANES 1
@@ -2003,11 +2004,87 @@ static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
 
 namespace {
 
+typedef std::complex<double> cd_fg;
 constexpr py::ssize_t FG_BATCH = 4;
 // h is built on the stack per column; q is a quadrature order (6 here), not
 // a mesh dimension, so a fixed bound is honest rather than a limit anyone
 // meets. Checked below.
 constexpr py::ssize_t FG_MAX_Q = 64;
+
+// One accumulation target of the assembly: Q itself, or (momwire#1290) the
+// symmetric route's mirror, Q.T with its own source positions. `cols` are the
+// basis columns stage 2 visits.
+struct FgTarget {
+    cd_fg *Qp;
+    py::ssize_t sr, sc;
+    const std::int64_t *ps;
+    std::vector<std::int64_t> js_of;
+    std::vector<double> hcol;
+    std::vector<py::ssize_t> cols;
+};
+
+// One batch of row-wings sharing an observer index: their basis rows, the Q
+// rows they land in, and (in `fg_g`) their g q-vectors.
+struct FgBatch {
+    py::ssize_t ic, nk;
+    py::ssize_t mb[FG_BATCH], mr[FG_BATCH];
+};
+
+// Stage 2 for one batch into one target: one basis column per thread, so
+// every Q entry a thread writes is its own.
+static void fg_stage2(FgTarget &T, const FgBatch &bt, const cd_fg *F,
+                      py::ssize_t nsq, py::ssize_t q, py::ssize_t A,
+                      double scale) {
+    const py::ssize_t ncol = static_cast<py::ssize_t>(T.cols.size());
+    const py::ssize_t nk = bt.nk;
+    #pragma omp parallel for schedule(static)
+    for (py::ssize_t c = 0; c < ncol; ++c) {
+        const py::ssize_t n = T.cols[c];
+        cd_fg s[FG_BATCH];
+        for (py::ssize_t k = 0; k < nk; ++k) s[k] = cd_fg(0.0, 0.0);
+        for (py::ssize_t b = 0; b < A; ++b) {
+            const std::int64_t js = T.js_of[n * A + b];
+            if (js < 0) continue;
+            const double *h = &T.hcol[(n * A + b) * q];
+            for (py::ssize_t k = 0; k < nk; ++k) {
+                const cd_fg *fp = &F[k * nsq + js * q];
+                cd_fg t(0.0, 0.0);
+                for (py::ssize_t r = 0; r < q; ++r) t += fp[r] * h[r];
+                s[k] += t;
+            }
+        }
+        // `scale` multiplies each CONTRIBUTION as it lands, never Q and
+        // never a factor. Never Q: this is one chunk of an observer loop,
+        // and scaling the target would re-scale every chunk already in it.
+        // Never a factor (g, h or the projected table): that would move the
+        // rounding, and scale = 1.0 has to reproduce the unscaled numbers bit
+        // for bit.
+        for (py::ssize_t k = 0; k < nk; ++k)
+            T.Qp[bt.mr[k] * T.sr + n * T.sc] += scale * s[k];
+    }
+}
+
+#if MW568_LANES
+// Stage 1 for two adjacent (j, r) entries, NK row-wings: each lane is the
+// scalar step `acc += g * v` -- the real product of each part, then the add,
+// q in order from +0.0 -- on its own part.
+template <int NK>
+static inline void fg_stage1_two(const cd_fg *col, py::ssize_t nsq,
+                                 py::ssize_t q, const double *g, cd_fg *F,
+                                 py::ssize_t jr) {
+    __m256d acc[NK];
+    for (int k = 0; k < NK; ++k) acc[k] = _mm256_setzero_pd();
+    for (py::ssize_t iq = 0; iq < q; ++iq) {
+        const __m256d v = _mm256_loadu_pd(
+            reinterpret_cast<const double *>(col + iq * nsq + jr));
+        for (int k = 0; k < NK; ++k)
+            acc[k] = _mm256_add_pd(
+                acc[k], _mm256_mul_pd(_mm256_set1_pd(g[k * q + iq]), v));
+    }
+    for (int k = 0; k < NK; ++k)
+        _mm256_storeu_pd(reinterpret_cast<double *>(F + k * nsq + jr), acc[k]);
+}
+#endif
 
 }  // namespace
 
@@ -2024,7 +2101,10 @@ static void assemble_field_galerkin(
     py::array Q,
     bool fused,
     double scale,
-    py::object row_of) {
+    py::object row_of,
+    py::object mirror_pos_s,
+    py::object mirror_Q,
+    bool lanes) {
     typedef std::complex<double> cd;
 
     // Q is the ACCUMULATION TARGET, which is why it arrives as a bare
@@ -2129,11 +2209,59 @@ static void assemble_field_galerkin(
         if (ss[e] < 0 || ss[e] >= n_seg)
             throw std::invalid_argument("supp_seg holds a segment id outside pos_o");
 
-    // The column wings, once per call: their source index and their h-vector.
-    // js < 0 is a wing belonging to the other medium, which drops out of the
-    // block rather than being clamped into it.
-    std::vector<std::int64_t> js_of(static_cast<size_t>(nb) * A);
-    std::vector<double> hcol(static_cast<size_t>(nb) * A * q);
+    // momwire#1290: the symmetric route's MIRROR in the same call. The route
+    // assembles each projected chunk twice from one table, into Q and,
+    // through other source positions, into Q.T; stage 1 depends on neither,
+    // so it ran twice for the same F. Given `mirror_pos_s` and `mirror_Q`,
+    // F is formed once and stage 2 runs into both targets -- every batch
+    // into Q first, then every batch into the mirror, which is the order of
+    // the two calls this replaces, so each entry takes its adds in the same
+    // order and they are the same floats.
+    const bool has_mirror = !mirror_Q.is_none();
+    if (has_mirror == mirror_pos_s.is_none())
+        throw std::invalid_argument("mirror_pos_s and mirror_Q come together");
+    if (has_mirror && (!row_of.is_none() || !fused))
+        throw std::invalid_argument(
+            "a mirror target is the fused route's, on a square Q");
+    py::array Q2;
+    py::array_t<std::int64_t, py::array::c_style | py::array::forcecast> ps2a;
+    if (has_mirror) {
+        if (!py::isinstance<py::array_t<cd>>(mirror_Q))
+            throw std::invalid_argument("mirror_Q must be a complex128 array");
+        Q2 = mirror_Q.cast<py::array>();
+        if (!Q2.writeable() || Q2.ndim() != 2 || Q2.shape(0) != nb ||
+            Q2.shape(1) != nb)
+            throw std::invalid_argument(
+                "mirror_Q must be a writeable (n_basis, n_basis) array");
+        if (Q2.strides(0) % static_cast<py::ssize_t>(sizeof(cd)) != 0 ||
+            Q2.strides(1) % static_cast<py::ssize_t>(sizeof(cd)) != 0)
+            throw std::invalid_argument(
+                "mirror_Q's strides must be whole complex128 elements");
+        ps2a = mirror_pos_s.cast<
+            py::array_t<std::int64_t, py::array::c_style | py::array::forcecast>>();
+        if (ps2a.ndim() != 1 || ps2a.shape(0) != n_seg)
+            throw std::invalid_argument(
+                "mirror_pos_s must have one entry per segment");
+    }
+
+    // The column wings, once per target: their source index and their
+    // h-vector. js < 0 is a wing belonging to the other medium, which drops
+    // out of the block rather than being clamped into it.
+    std::vector<FgTarget> tg(has_mirror ? 2 : 1);
+    tg[0].Qp = Qp;
+    tg[0].sr = sr;
+    tg[0].sc = sc;
+    tg[0].ps = ps;
+    if (has_mirror) {
+        tg[1].Qp = static_cast<cd *>(Q2.mutable_data());
+        tg[1].sr = Q2.strides(0) / static_cast<py::ssize_t>(sizeof(cd));
+        tg[1].sc = Q2.strides(1) / static_cast<py::ssize_t>(sizeof(cd));
+        tg[1].ps = ps2a.data();
+    }
+    for (auto &t : tg) {
+        t.js_of.assign(static_cast<size_t>(nb) * A, 0);
+        t.hcol.assign(static_cast<size_t>(nb) * A * q, 0.0);
+    }
     // Row-wings whose observer segment is in this chunk, bucketed by local
     // observer index so one pass over `proj` serves every one of them.
     std::vector<std::vector<std::pair<py::ssize_t, py::ssize_t>>> at(nc);
@@ -2164,106 +2292,154 @@ static void assemble_field_galerkin(
         }
 
     std::vector<cd> F, T, Jc;
-    std::vector<double> g;
-    if (fused) {
-        F.assign(static_cast<size_t>(FG_BATCH) * nsq, cd(0.0, 0.0));
-        g.assign(static_cast<size_t>(FG_BATCH) * q, 0.0);
-    } else {
+    if (!fused) {
         T.assign(static_cast<size_t>(P) * nc * nsq, cd(0.0, 0.0));
         Jc.assign(static_cast<size_t>(P) * P * nc * ns, cd(0.0, 0.0));
     }
-    py::ssize_t mb[FG_BATCH];
-    // The Q row each batch slot lands in: mb itself on the square target.
-    py::ssize_t mr[FG_BATCH];
-    const std::int64_t *rp = rof.empty() ? nullptr : rof.data();
+    // The fused route's batches, formed up front (they read only the
+    // inputs): row-wings of one observer index, at most FG_BATCH of them and
+    // never one basis row twice, each with its g q-vectors in `gb`.
+    std::vector<FgBatch> batches;
+    std::vector<double> gb;
+    if (fused) {
+        for (py::ssize_t ic = 0; ic < nc; ++ic) {
+            const auto &bucket = at[ic];
+            py::ssize_t taken = 0;
+            while (taken < static_cast<py::ssize_t>(bucket.size())) {
+                FgBatch bt;
+                bt.ic = ic;
+                py::ssize_t nk = 0;
+                const size_t g0 = gb.size();
+                gb.resize(g0 + static_cast<size_t>(FG_BATCH) * q, 0.0);
+                while (taken < static_cast<py::ssize_t>(bucket.size()) &&
+                       nk < FG_BATCH) {
+                    const py::ssize_t m = bucket[taken].first;
+                    const py::ssize_t a = bucket[taken].second;
+                    bool dup = false;
+                    for (py::ssize_t u = 0; u < nk; ++u)
+                        if (bt.mb[u] == m) dup = true;
+                    if (dup) break;
+                    bt.mb[nk] = m;
+                    bt.mr[nk] = rof.empty() ? m : static_cast<py::ssize_t>(rof[m]);
+                    for (py::ssize_t iq = 0; iq < q; ++iq) {
+                        double acc = 0.0;
+                        for (py::ssize_t p = 0; p < P; ++p)
+                            acc += pl[(m * A + a) * P + p] * wo[(p * nc + ic) * q + iq];
+                        gb[g0 + nk * q + iq] = acc;
+                    }
+                    ++nk;
+                    ++taken;
+                }
+                bt.nk = nk;
+                batches.push_back(bt);
+            }
+        }
+        // One F per batch when a mirror will read it again, else one reused.
+        const size_t n_f = has_mirror ? batches.size() : 1;
+        F.assign(n_f * static_cast<size_t>(FG_BATCH) * nsq, cd(0.0, 0.0));
+    }
+    // momwire#1290: stage 2 visits only the columns with a live wing, when
+    // that is exact. A column whose every wing drops out contributes
+    // `scale * (+0, +0)`, and for a scale whose sign bit is set that is
+    // (-0, -0), which adds to any double as the identity -- so skipping the
+    // add moves no bit, and saves a strided write per dead column (half the
+    // columns, on average, of the symmetric route's chunks). For a positive
+    // scale the add of +0 would turn a -0 entry into +0, so every column is
+    // still visited.
+    const bool skip_dead = lanes && std::signbit(scale);
+#if MW568_LANES
+    const bool use_lanes = lanes;
+#endif
 
     {
         py::gil_scoped_release release;
 
-        #pragma omp parallel for schedule(static)
-        for (py::ssize_t e = 0; e < nb * A; ++e) {
-            const std::int64_t js = ps[ss[e]];
-            js_of[e] = js;
-            if (js < 0) continue;
-            for (py::ssize_t r = 0; r < q; ++r) {
-                double acc = 0.0;
-                for (py::ssize_t p = 0; p < P; ++p)
-                    acc += pl[e * P + p] * ws[(p * ns + js) * q + r];
-                hcol[e * q + r] = acc;
+        for (auto &t : tg) {
+            std::int64_t *js_of = t.js_of.data();
+            double *hcol = t.hcol.data();
+            const std::int64_t *pss = t.ps;
+            #pragma omp parallel for schedule(static)
+            for (py::ssize_t e = 0; e < nb * A; ++e) {
+                const std::int64_t js = pss[ss[e]];
+                js_of[e] = js;
+                if (js < 0) continue;
+                for (py::ssize_t r = 0; r < q; ++r) {
+                    double acc = 0.0;
+                    for (py::ssize_t p = 0; p < P; ++p)
+                        acc += pl[e * P + p] * ws[(p * ns + js) * q + r];
+                    hcol[e * q + r] = acc;
+                }
+            }
+            t.cols.reserve(nb);
+            for (py::ssize_t n = 0; n < nb; ++n) {
+                bool live = !skip_dead;
+                for (py::ssize_t b = 0; b < A && !live; ++b)
+                    live = js_of[n * A + b] >= 0;
+                if (live) t.cols.push_back(n);
             }
         }
 
         if (fused) {
-            for (py::ssize_t ic = 0; ic < nc; ++ic) {
-                const auto &bucket = at[ic];
-                py::ssize_t taken = 0;
-                while (taken < static_cast<py::ssize_t>(bucket.size())) {
-                    py::ssize_t nk = 0;
-                    while (taken < static_cast<py::ssize_t>(bucket.size()) &&
-                           nk < FG_BATCH) {
-                        const py::ssize_t m = bucket[taken].first;
-                        const py::ssize_t a = bucket[taken].second;
-                        bool dup = false;
-                        for (py::ssize_t u = 0; u < nk; ++u)
-                            if (mb[u] == m) dup = true;
-                        if (dup) break;
-                        mb[nk] = m;
-                        mr[nk] = rp ? static_cast<py::ssize_t>(rp[m]) : m;
-                        for (py::ssize_t iq = 0; iq < q; ++iq) {
-                            double acc = 0.0;
-                            for (py::ssize_t p = 0; p < P; ++p)
-                                acc += pl[(m * A + a) * P + p] * wo[(p * nc + ic) * q + iq];
-                            g[nk * q + iq] = acc;
+            const py::ssize_t nbt = static_cast<py::ssize_t>(batches.size());
+            for (py::ssize_t bi = 0; bi < nbt; ++bi) {
+                const FgBatch &bt = batches[bi];
+                const py::ssize_t ic = bt.ic, nk = bt.nk;
+                const double *g = &gb[static_cast<size_t>(bi) * FG_BATCH * q];
+                cd *Fb = &F[(has_mirror ? static_cast<size_t>(bi) : 0) *
+                            FG_BATCH * nsq];
+                const cd *col = pj + ic * q * nsq;
+                // Stage 1: F[k, j, r] = sum_q g[k,q] * proj[ic*q+q, j*q+r]
+#if MW568_LANES
+                if (use_lanes) {
+                    const py::ssize_t npair = nsq / 2;
+                    #pragma omp parallel for schedule(static)
+                    for (py::ssize_t jp = 0; jp < npair; ++jp) {
+                        const py::ssize_t jr = 2 * jp;
+                        switch (nk) {
+                            case 1: fg_stage1_two<1>(col, nsq, q, g, Fb, jr); break;
+                            case 2: fg_stage1_two<2>(col, nsq, q, g, Fb, jr); break;
+                            case 3: fg_stage1_two<3>(col, nsq, q, g, Fb, jr); break;
+                            default: fg_stage1_two<4>(col, nsq, q, g, Fb, jr); break;
                         }
-                        ++nk;
-                        ++taken;
                     }
-
-                    // Stage 1: F[k, j, r] = sum_q g[k,q] * proj[ic*q+q, j*q+r]
+                    if (nsq % 2) {
+                        const py::ssize_t jr = nsq - 1;
+                        cd acc[FG_BATCH];
+                        for (py::ssize_t k = 0; k < nk; ++k) acc[k] = cd(0.0, 0.0);
+                        for (py::ssize_t iq = 0; iq < q; ++iq) {
+                            const cd v = col[iq * nsq + jr];
+                            for (py::ssize_t k = 0; k < nk; ++k)
+                                acc[k] += g[k * q + iq] * v;
+                        }
+                        for (py::ssize_t k = 0; k < nk; ++k) Fb[k * nsq + jr] = acc[k];
+                    }
+                } else
+#endif
+                {
                     #pragma omp parallel for schedule(static)
                     for (py::ssize_t jr = 0; jr < nsq; ++jr) {
                         cd acc[FG_BATCH];
                         for (py::ssize_t k = 0; k < nk; ++k) acc[k] = cd(0.0, 0.0);
                         for (py::ssize_t iq = 0; iq < q; ++iq) {
-                            const cd v = pj[(ic * q + iq) * nsq + jr];
+                            const cd v = col[iq * nsq + jr];
                             for (py::ssize_t k = 0; k < nk; ++k)
                                 acc[k] += g[k * q + iq] * v;
                         }
-                        for (py::ssize_t k = 0; k < nk; ++k) F[k * nsq + jr] = acc[k];
-                    }
-
-                    // Stage 2: one basis column per thread, so every Q entry a
-                    // thread writes is its own.
-                    #pragma omp parallel for schedule(static)
-                    for (py::ssize_t n = 0; n < nb; ++n) {
-                        cd s[FG_BATCH];
-                        for (py::ssize_t k = 0; k < nk; ++k) s[k] = cd(0.0, 0.0);
-                        for (py::ssize_t b = 0; b < A; ++b) {
-                            const std::int64_t js = js_of[n * A + b];
-                            if (js < 0) continue;
-                            const double *h = &hcol[(n * A + b) * q];
-                            for (py::ssize_t k = 0; k < nk; ++k) {
-                                const cd *fp = &F[k * nsq + js * q];
-                                cd t(0.0, 0.0);
-                                for (py::ssize_t r = 0; r < q; ++r) t += fp[r] * h[r];
-                                s[k] += t;
-                            }
-                        }
-                        // `scale` multiplies each CONTRIBUTION as it lands,
-                        // never Q and never a factor. Never Q: this is one
-                        // chunk of an observer loop, and scaling the target
-                        // would re-scale every chunk already in it. Never a
-                        // factor (g, h or the projected table): that would
-                        // move the rounding, and scale = 1.0 has to reproduce
-                        // the unscaled numbers bit for bit.
-                        for (py::ssize_t k = 0; k < nk; ++k)
-                            Qp[mr[k] * sr + n * sc] += scale * s[k];
+                        for (py::ssize_t k = 0; k < nk; ++k) Fb[k * nsq + jr] = acc[k];
                     }
                 }
+                fg_stage2(tg[0], bt, Fb, nsq, q, A, scale);
             }
+            if (has_mirror)
+                for (py::ssize_t bi = 0; bi < nbt; ++bi)
+                    fg_stage2(tg[1], batches[bi],
+                              &F[static_cast<size_t>(bi) * FG_BATCH * nsq], nsq,
+                              q, A, scale);
         } else {
             // The literal transcription, Jc materialised: the alternative the
             // fused route above was measured against.
+            const std::int64_t *js_of = tg[0].js_of.data();
+            const std::int64_t *rp = rof.empty() ? nullptr : rof.data();
             #pragma omp parallel for collapse(2) schedule(static)
             for (py::ssize_t p = 0; p < P; ++p)
                 for (py::ssize_t ic = 0; ic < nc; ++ic) {
@@ -2398,7 +2574,13 @@ void register_mw568(py::module_ &m) {
           py::arg("supp_seg"), py::arg("polys"), py::arg("pos_o"),
           py::arg("pos_s"), py::arg("i0"), py::arg("Q"),
           py::arg("fused") = true, py::arg("scale") = 1.0,
-          py::arg("row_of") = py::none());
+          py::arg("row_of") = py::none(), py::arg("mirror_pos_s") = py::none(),
+          py::arg("mirror_Q") = py::none(), py::arg("lanes") = true);
+    // momwire#1290: `mirror_pos_s`/`mirror_Q` (the symmetric route's two
+    // targets from one stage 1), and `lanes` -- the AVX2 stage 1 and the
+    // dead-column skip; `lanes=False` is the scalar route they are gated
+    // against.
+    m.attr("field_galerkin_mirror_1290") = true;
     m.def("bessel_j0_j1x_complex", &bessel_j0_j1x_complex,
           "(J0(x), J1(x)/x) at COMPLEX x -- the C++ twin of "
           "_sommerfeld._bessel_j0_j1x, with the same |x| < 1e-6 series switch. "

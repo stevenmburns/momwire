@@ -225,6 +225,26 @@ _FIELD_GALERKIN_FUSED = True
 # full rectangle, which is the reference the halved route is gated against;
 # tests flip it, nothing else should.
 _FIELD_GALERKIN_SYMMETRIC = True
+# momwire#1290: the symmetric route's two targets from ONE call, so stage 1
+# (the chunk's table against the row-wings' g vectors) is formed once rather
+# than once per target; and `lanes`, the AVX2 stage 1 and the dead-column
+# skip. Both are the same floats as the two scalar calls they replace
+# (tests/test_field_galerkin_lanes_1290.py). False takes those two calls on
+# the scalar route, the reference; tests flip them, nothing else should.
+_HAVE_FIELD_GALERKIN_MIRROR = _HAVE_FIELD_GALERKIN_STRIDED and getattr(
+    _acc, "field_galerkin_mirror_1290", False
+)
+_FIELD_GALERKIN_MIRROR = True
+_FIELD_GALERKIN_LANES = True
+
+
+def _fg_lanes_kw():
+    """`lanes=False` for the kernel when the reference is asked for."""
+    if _FIELD_GALERKIN_LANES or not _HAVE_FIELD_GALERKIN_MIRROR:
+        return {}
+    return {"lanes": False}
+
+
 _HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
     _acc, "assemble_Z_bspline_swept"
 )
@@ -6291,6 +6311,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     _FIELD_GALERKIN_FUSED,
                     scale,
                     **({} if row_of is None else {"row_of": row_of}),
+                    **_fg_lanes_kw(),
                 )
                 continue
             fq = proj.reshape(i1 - i0, q, n_src, q)
@@ -6359,8 +6380,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         i0 -- the diagonal block in both orders, and the upper rectangle once.
         That table is assembled twice: as itself into Q, and, with the
         chunk's own columns masked out, into Q.T, which writes the lower
-        rectangle (n, m) for n past i1. Each ordered segment pair lands
-        exactly once. The kernel projects sum_c c·(n - i0) pairs instead of
+        rectangle (n, m) for n past i1 -- both from one kernel call since
+        momwire#1290, which contracts the table against the chunk's rows
+        once and accumulates into Q and then Q.T, the order of the two calls
+        it replaced. Each ordered segment pair lands exactly once. The
+        kernel projects sum_c c·(n - i0) pairs instead of
         n², i.e. 1/2 + chunk/(2n) of them.
 
         Not bit-identical to the rectangle, and not meant to be: a lower
@@ -6383,6 +6407,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # Source positions relative to the table's first column; a
             # segment before i0 (or off this axis) drops out as -1.
             pos_from_i0 = np.where(pos >= i0, pos - i0, -1)
+            mirror = {}
+            if (
+                i1 < n_axis
+                and _FIELD_GALERKIN_MIRROR
+                and _FIELD_GALERKIN_FUSED
+                and _HAVE_FIELD_GALERKIN_MIRROR
+            ):
+                # momwire#1290: the mirror below, in the same call.
+                mirror = {
+                    "mirror_pos_s": np.where(pos >= i1, pos - i0, -1),
+                    "mirror_Q": QT,
+                }
             _acc.assemble_field_galerkin(
                 proj,
                 W_rows,
@@ -6395,8 +6431,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 Q,
                 _FIELD_GALERKIN_FUSED,
                 scale,
+                **mirror,
+                **_fg_lanes_kw(),
             )
-            if i1 < n_axis:
+            if i1 < n_axis and not mirror:
                 # The mirror: the same table with the chunk's own columns
                 # masked (the diagonal block is already in, in both orders),
                 # written through the transposed target.
@@ -6413,6 +6451,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     QT,
                     _FIELD_GALERKIN_FUSED,
                     scale,
+                    **_fg_lanes_kw(),
                 )
             del proj
 
