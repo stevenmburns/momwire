@@ -2459,6 +2459,7 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         f_line = f_cat.astype(_index_dtype(nL), copy=False)
         del f_cat
     for g in range(nG):
+        _cancel.poll()
         m_g = members[bounds[g] : bounds[g + 1]]
         if m_g.size == 1:
             f_z = r_z = np.zeros(1, dtype=np.intp)  # `_first_ints` of one id
