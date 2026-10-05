@@ -830,10 +830,16 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """
 
     # momwire#1333: coincident wires joined to DIFFERENT wires are kept as
-    # written, not merged. The point-matched family answers them (the split
-    # rise fan reads the rise-in-polyline fan's Z to 2e-6); the Galerkin
-    # subclass does not, and refuses them by this sentence.
-    _KEPT_COINCIDENT_REFUSAL = None
+    # written, not merged, and this family's answer for them is decided by
+    # rounding: the split rise fan read 32.75 - 342.05j ohm on Skylake and
+    # -158.42 ohm, deterministically, on some CI runners' CPUs. So it refuses
+    # them by this sentence (the Galerkin subclass says the same of its fill).
+    _KEPT_COINCIDENT_REFUSAL = (
+        "this family cannot solve coincident conductors: its answer for them "
+        "depends on the CPU's rounding (momwire#1333). Solve the deck with "
+        "BSplineSolver, or join both copies to the same wires at each end so "
+        "they merge as one"
+    )
 
     eps = 8.8541878188e-12
     mu = 1.25663706127e-6
