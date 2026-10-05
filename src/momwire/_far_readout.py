@@ -689,3 +689,78 @@ def _gain_db(power_gain: float) -> float:
     if power_gain < _GAIN_FLOOR2:
         return _GAIN_FLOOR_DB
     return 10.0 * math.log10(power_gain)
+
+
+def pattern_fields(
+    mid,
+    moment,
+    k,
+    thetas_deg,
+    phis_deg,
+    ground,
+    ground_z,
+    freq_hz,
+    p_in,
+    *,
+    cliff=None,
+    prop=None,
+):
+    """``(e_theta, e_phi, g_v, g_h)`` over a ``(theta, phi)`` grid — the one
+    pattern path both seams print (momwire#1336).
+
+    ``E = -j·ηk/(4π)·M_perp`` (times ``prop`` when the caller reads the
+    field at a range — the nec2 portal's ``EXP(-JKR)/R``), and the gains are
+    ``4π·U/P_in = ηk²/(8π·P_in)·|M|²``, the same normaliser the web solve and
+    ``MomwireEngine.far_field`` use, so a pattern read out of either printout
+    and one read off the workbench are the same number.  ``p_in <= 0`` gives
+    zero gains rather than a division.
+
+    What is NOT here is everything a host reads: the dust floor each printout
+    zeroes under, the below-horizon rows NEC-5 prints as zeros, the range
+    form's phase, the row layout.  Those are each seam's.  The scalar is
+    formed before it meets the moments, left to right, which is the order
+    both seams wrote it in — ``prop`` multiplies the scalar, never the array
+    — so neither seam's bits move by sharing it.
+    """
+    m_theta, m_phi = _far_moments(
+        mid,
+        moment,
+        k,
+        np.radians(thetas_deg),
+        np.radians(phis_deg),
+        ground,
+        ground_z,
+        freq_hz,
+        cliff=cliff,
+    )
+    scale = -1j * ETA0 * k / (4.0 * math.pi)
+    if prop is not None:
+        scale = scale * prop
+    e_theta = scale * m_theta
+    e_phi = scale * m_phi
+    norm = ETA0 * k * k / (8.0 * math.pi * p_in) if p_in > 0 else 0.0
+    g_v = norm * np.abs(m_theta) ** 2
+    g_h = norm * np.abs(m_phi) ** 2
+    return e_theta, e_phi, g_v, g_h
+
+
+def average_gain(gain, thetas, d_theta, d_phi, n_phi) -> tuple[float, float]:
+    """``(average power gain, solid angle)`` over the sampled directions.
+
+    The quadrature is nec2c's, recovered from two fixtures: each theta sample
+    owns the solid-angle band between its half-step neighbours, CLIPPED to the
+    requested theta range, so the bands telescope to exactly
+    ``(cosθ_start - cosθ_end)·Δφ`` and a full sphere comes out at a round
+    ``4π`` (NEC-5 prints the same, 0013 and 0035).  Phi contributes
+    ``n_phi - 1`` columns — the last sample of a 0..360 sweep is the first one
+    again and must not be counted twice.  The solid angle is returned SIGNED;
+    a printout that wants its magnitude takes it.
+    """
+    lo = np.radians(np.maximum(thetas - 0.5 * d_theta, thetas[0]))
+    hi = np.radians(np.minimum(thetas + 0.5 * d_theta, thetas[-1]))
+    band = np.cos(lo) - np.cos(hi)
+    columns = max(n_phi - 1, 1)
+    step = math.radians(d_phi) if d_phi else 2.0 * math.pi
+    total = float(np.sum(gain[:, :columns] * band[:, None])) * step
+    solid = float(np.sum(band)) * columns * step
+    return (total / solid if solid else 0.0), solid
