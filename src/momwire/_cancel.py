@@ -14,6 +14,9 @@ missed read costs at most one extra poll interval. Default ``cancel=None`` makes
 every checkpoint a single ``is not None`` test — zero cost for existing callers.
 """
 
+import contextlib
+import threading
+
 import numpy as np
 
 
@@ -77,3 +80,50 @@ class _Cancelable:
         """
         cancel = self._cancel
         return cancel.ptr if cancel is not None else 0
+
+
+# --------------------------------------------------------------------------
+# Ambient token (momwire#1342).
+#
+# The crossing fill (`_crossing_fill`) and the near-interface tables
+# (`_near_interface`) are free functions: the fill receives its solver's data
+# as a `CrossingContext`, and the tables sit several calls below it with no
+# context at all (`designed_rows`, `sheet_plan`, `PlaneSheet.cover`, the column
+# twin). A token argument would have to be threaded through ~40 signatures,
+# four memo classes and the razor, bspline, sinusoidal and Galerkin callers.
+# Instead each public fill entry installs its context's token for the duration
+# of the call (`scope`), and the seams below read it (`poll`, `flag`).
+#
+# Thread-local on purpose. The scope is entered and read on the thread that
+# runs the fill; a pool thread started beneath it sees no token and so polls
+# nothing, which costs latency and never correctness (the owning thread polls
+# again when it collects the pool's result). A scope restores the PREVIOUS
+# token on exit, so a fill nested inside another (the two-radius node calls
+# two single-radius fills) leaves the outer one installed.
+_ambient = threading.local()
+
+
+@contextlib.contextmanager
+def scope(token):
+    """Make `token` (a `CancelToken` or None) the ambient one for the block."""
+    prev = getattr(_ambient, "token", None)
+    _ambient.token = token
+    try:
+        yield
+    finally:
+        _ambient.token = prev
+
+
+def poll():
+    """Raise :class:`SolveAborted` if the ambient token has been tripped. One
+    attribute read when there is none."""
+    token = getattr(_ambient, "token", None)
+    if token is not None and token._flag[0]:
+        raise SolveAborted()
+
+
+def flag():
+    """The ambient token's raw flag address for a kernel's `cancel_flag`, or 0
+    (no cancellation) when none is installed."""
+    token = getattr(_ambient, "token", None)
+    return token.ptr if token is not None else 0

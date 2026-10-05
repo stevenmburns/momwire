@@ -4131,6 +4131,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             omega=omega,
             mu=self.mu,
             eps=self.eps,
+            cancel=self._cancel,
         )
 
     def _path_test_rows(self, geom, rows, *, halves="both", paths=None, knot=None):

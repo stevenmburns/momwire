@@ -1470,6 +1470,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             omega=self.omega,
             mu=self.mu,
             eps=self.eps,
+            cancel=self._cancel,
         )
 
     def _crossing_junction_indices(self):
