@@ -971,13 +971,15 @@ def remainder_Q_above(
     )  # (n, D1, D1): int int u^m F u'^M
     tau = taylor_shape_coefs(k, h)  # (3, D1, n_seg)
     dJ = np.einsum("pmn,nmM,PMn->npP", tau[:, :, I], dJ_mono, tau[:, :, J])
-    # The base-order moments these pairs were filled with.
-    obs = np.repeat(nodes[I], q, axis=1).reshape(-1, 3)  # (n, q, q) -> node pairs
-    src = np.tile(nodes[J], (1, q, 1)).reshape(-1, 3)
-    owner = np.repeat(np.arange(I.size), q * q)
+    # The base-order moments these pairs were filled with: every observer
+    # node of I[n] against the q source nodes of J[n] (`owner` names each
+    # source entry's observer row, the `_remainder_graded` contract).
+    obs = nodes[I].reshape(-1, 3)  # (n q, 3), row n q + qi
+    src = np.repeat(nodes[J], q, axis=0).reshape(-1, 3)  # (n q q, 3), pair, qi, qj
+    owner = np.repeat(np.arange(I.size * q), q)
     F = _sommerfeld.remainder_field_proj_owned(
         obs,
-        np.repeat(tang[I], q * q, axis=0),
+        np.repeat(tang[I], q, axis=0),
         src,
         np.repeat(tang[J], q * q, axis=0),
         owner,
