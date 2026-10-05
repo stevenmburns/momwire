@@ -348,6 +348,8 @@ the readout write the basis at it), but no longer touches `self.eta`.
 """
 
 import collections
+import concurrent.futures
+import functools
 import math
 
 import numpy as np
@@ -483,6 +485,11 @@ _HAVE_SG_REAL_STAGED = _acc is not None and hasattr(_acc, "sg_real_far_fill_call
 # The graded near cells' blocks on the shared pool when collected for the
 # banded fill (perf item 9); `False` runs them in order on this thread.
 _NEAR_THREADS = True
+
+# The Sommerfeld remainder's per-chunk test fold, overlapped with the next
+# chunk's projection on one worker thread (`_OverlappedFold`); `False` folds
+# inline.
+_REMAINDER_OVERLAP = True
 
 # Pairs are corrected in blocks so the (P, G, n_qp_const) source-quadrature
 # scratch inside the field kernel stays bounded regardless of model size. It
@@ -927,6 +934,62 @@ def _loading_integrals(k, h):
     series = series * x2 * x2 * x
     i_gg = np.where(np.abs(x) < 0.25, series, 0.5 * s2 - 4.0 * s1) / k
     return i_g, i_ss, i_gg
+
+
+@functools.lru_cache(maxsize=1)
+def _fold_worker():
+    """The one thread the remainder folds run on while the next chunk's
+    projection runs (`_OverlappedFold`)."""
+    return concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+
+class _OverlappedFold:
+    """Runs a remainder replay's `consume` calls on `_fold_worker`, one chunk
+    behind the replay loop, so a chunk's numpy fold overlaps the next chunk's
+    C++ projection (perf item 9).
+
+    Exact by construction: each call runs the same expressions on the same
+    arrays it would run inline, so numpy takes the same loop for every product
+    (the momwire#392 elision note), and two chunks' folds touch disjoint
+    destination rows (a chunk is whole test segments, and an entry belongs to
+    one segment), so the order they land in is immaterial. One fold is in
+    flight at a time — the next call waits for it — which bounds the extra
+    residency at one chunk's block. Leaving the context waits for the last
+    fold and re-raises a worker's exception; it also waits when the replay
+    itself raised, so no fold is still writing when the caller sees the
+    error. `_REMAINDER_OVERLAP = False` calls `consume` inline
+    (tests/test_sg_remainder_overlap_1290.py)."""
+
+    def __init__(self):
+        self._pending = None
+
+    def __enter__(self):
+        return self
+
+    def _drain(self):
+        if self._pending is not None:
+            pending, self._pending = self._pending, None
+            pending.result()
+
+    def wrap(self, consume):
+        if not _REMAINDER_OVERLAP:
+            return consume
+
+        def overlapped(i0, i1, block):
+            self._drain()
+            self._pending = _fold_worker().submit(consume, i0, i1, block)
+
+        return overlapped
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self._drain()
+        elif self._pending is not None:
+            # The replay's own error wins; wait for the fold in flight and
+            # drop what it raised.
+            concurrent.futures.wait([self._pending])
+            self._pending = None
+        return False
 
 
 class SinusoidalGalerkinSolver(SinusoidalSolver):
@@ -3533,12 +3596,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 np.subtract(dest[e0:e1], rows, out=dest[e0:e1])
 
         if obs_mask is None:
-            fg.remainder("cos-1").replay(
-                obs_centers=ctx["obs_c"],
-                obs_tangents=ctx["obs_t"],
-                consume=_reduce,
-                row_group=nq,
-            )
+            with _OverlappedFold() as overlap:
+                fg.remainder("cos-1").replay(
+                    obs_centers=ctx["obs_c"],
+                    obs_tangents=ctx["obs_t"],
+                    consume=overlap.wrap(_reduce),
+                    row_group=nq,
+                )
             return
         # A CLASS block (momwire#980 D2): this ground models ONE medium, so
         # its remainder is only defined at that medium's observers — handing
@@ -3590,12 +3654,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                     dest[np.ix_(ent, src_cols)] -= rows
 
         _ = sub_starts
-        fg.remainder("cos-1").replay(
-            obs_centers=np.asarray(ctx["obs_c"])[obs_rows],
-            obs_tangents=np.asarray(ctx["obs_t"])[obs_rows],
-            consume=_reduce_masked,
-            row_group=nq,
-        )
+        with _OverlappedFold() as overlap:
+            fg.remainder("cos-1").replay(
+                obs_centers=np.asarray(ctx["obs_c"])[obs_rows],
+                obs_tangents=np.asarray(ctx["obs_t"])[obs_rows],
+                consume=overlap.wrap(_reduce_masked),
+                row_group=nq,
+            )
 
     # ---------------------------------------------------------------
     # Below-interface plumbing (momwire#980 D1). Thin wrappers over
