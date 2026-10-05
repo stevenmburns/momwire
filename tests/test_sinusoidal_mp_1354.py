@@ -181,6 +181,31 @@ def test_assembler_matches_numpy():
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("k", [K0, K0 * (3.6 - 0.4j)])
+def test_parallel_kernel_matches_numpy(k):
+    if not mp._HAVE_SIN_PARALLEL:
+        pytest.skip("accelerator not built")
+    rng = np.random.default_rng(13)
+    n = 40
+    c_i = rng.uniform(-2, 2, size=(n, 3))
+    t = rng.normal(size=(n, 3))
+    t /= np.linalg.norm(t, axis=1)[:, None]
+    sgn = rng.choice([-1.0, 1.0], size=n)
+    h_i = rng.uniform(0.2, 0.6, size=n)
+    h_j = rng.uniform(0.2, 0.6, size=n)
+    along = rng.uniform(-1.0, 1.0, size=n)
+    perp = rng.normal(size=(n, 3))
+    perp -= np.einsum("ij,ij->i", perp, t)[:, None] * t
+    perp *= (rng.uniform(0.0, 0.3, size=n) / np.linalg.norm(perp, axis=1))[:, None]
+    c_j = c_i + along[:, None] * t + perp
+    a2 = np.full(n, A * A)
+    J_cpp = mp.parallel_pair_moments(c_i, t, h_i, c_j, sgn[:, None] * t, h_j, a2, k)
+    J_np = mp._parallel_pair_moments_numpy(
+        c_i, t, h_i, c_j, sgn[:, None] * t, h_j, a2, k
+    )
+    assert np.abs(J_cpp - J_np).max() / np.abs(J_np).max() < 1e-13
+
+
 def test_parallel_reduction_matches_product_rule_on_a_separated_pair():
     """Two collinear segments one segment length apart: the product rule
     converges there, so the reduction must meet it."""
