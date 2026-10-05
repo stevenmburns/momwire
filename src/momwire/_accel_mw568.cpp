@@ -813,7 +813,7 @@ static py::tuple below_six_integrals_batch(
     bool selfconv, double rtol_coarse, int depth_coarse, double detour_coarse,
     py::array_t<double, py::array::c_style | py::array::forcecast> gxc,
     py::array_t<double, py::array::c_style | py::array::forcecast> gwc,
-    int max_panels) {
+    int max_panels, uintptr_t cancel_flag = 0) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
     const py::ssize_t n = rb.shape(0);
@@ -838,12 +838,17 @@ static py::tuple below_six_integrals_batch(
 
     {
         py::gil_scoped_release release;
+        // momwire#1348: polled per node. A grid fill is one call per region
+        // and a region is up to thousands of nodes, so a poll at the call
+        // boundary alone would hold a cancel for a whole region.
+        MW_CANCEL_SETUP(cancel_flag);
         // `dynamic`: a grazing node (theta ~ 1 deg) costs an order of
         // magnitude more tail panels than a steep one, and a grid fill's
         // nodes arrive sorted by region -- static scheduling would hand one
         // thread the whole grazing band.
         #pragma omp parallel for schedule(dynamic)
         for (py::ssize_t i = 0; i < n; ++i) {
+            MW_CANCEL_POLL();
             mw568_below::SixResult r;
             mw568_below::six_below_one(
                 rb(i), hb(i), k_p, km, rtol_fine, depth, detour, gxp, gwp, ng,
@@ -856,6 +861,7 @@ static py::tuple below_six_integrals_batch(
             ap[i] = r.accel;
             sp[i] = r.selfconv;
         }
+        MW_THROW_IF_ABORTED();
     }
     return py::make_tuple(vals, tail, head, conv, accel, sconv);
 }
@@ -1672,7 +1678,7 @@ static py::tuple transmitted_six_integrals_batch(
     bool selfconv, double rtol_coarse, int depth_coarse, double detour_coarse,
     py::array_t<double, py::array::c_style | py::array::forcecast> gxc,
     py::array_t<double, py::array::c_style | py::array::forcecast> gwc,
-    int max_panels) {
+    int max_panels, uintptr_t cancel_flag = 0) {
     auto rb = rho.unchecked<1>();
     auto zb = z.unchecked<1>();
     auto pb = zp.unchecked<1>();
@@ -1698,6 +1704,10 @@ static py::tuple transmitted_six_integrals_batch(
 
     {
         py::gil_scoped_release release;
+        // momwire#1348: polled per node. A grid fill is one call per region
+        // and a region is up to thousands of nodes, so a poll at the call
+        // boundary alone would hold a cancel for a whole region.
+        MW_CANCEL_SETUP(cancel_flag);
         // `dynamic`, and on this family it matters more than it did on U2's.
         // The tail cost runs as cot(theta_true), so the bottom row of a
         // (ln R, theta) fill costs THOUSANDS of panels per node where the top
@@ -1706,6 +1716,7 @@ static py::tuple transmitted_six_integrals_batch(
         // grazing band and the fill would take as long as its slowest chunk.
         #pragma omp parallel for schedule(dynamic)
         for (py::ssize_t i = 0; i < n; ++i) {
+            MW_CANCEL_POLL();
             mw568_trans::SixResultT r;
             mw568_trans::six_transmitted_one(
                 rb(i), zb(i), pb(i), k_p, km, swap, rtol_fine, depth, detour,
@@ -1718,6 +1729,7 @@ static py::tuple transmitted_six_integrals_batch(
             ap[i] = r.accel;
             sp[i] = r.selfconv;
         }
+        MW_THROW_IF_ABORTED();
     }
     return py::make_tuple(vals, tail, head, conv, accel, sconv);
 }
@@ -2670,7 +2682,7 @@ void register_mw568(py::module_ &m) {
           py::arg("gx"), py::arg("gw"), py::arg("selfconv"),
           py::arg("rtol_coarse"), py::arg("depth_coarse"),
           py::arg("detour_coarse"), py::arg("gxc"), py::arg("gwc"),
-          py::arg("max_panels"));
+          py::arg("max_panels"), py::arg("cancel_flag") = 0);
     m.def("remainder_field_proj_batch_below", &remainder_field_proj_batch_below,
           "Interpolated + projected below/below remainder table — the complex-"
           "wavenumber TWIN of remainder_field_proj_batch (which carries a "
@@ -2736,7 +2748,7 @@ void register_mw568(py::module_ &m) {
           py::arg("detour"), py::arg("gx"), py::arg("gw"), py::arg("selfconv"),
           py::arg("rtol_coarse"), py::arg("depth_coarse"),
           py::arg("detour_coarse"), py::arg("gxc"), py::arg("gwc"),
-          py::arg("max_panels"));
+          py::arg("max_panels"), py::arg("cancel_flag") = 0);
     m.def("transmitted_field_proj_batch", &transmitted_field_proj_batch,
           "Interpolated + projected transmitted pair table — the C++ twin of "
           "_sommerfeld_transmitted's two projection entry points, ONE kernel "

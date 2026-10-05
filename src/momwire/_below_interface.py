@@ -1442,12 +1442,12 @@ def compute_Z_operator_buried(
         )
 
     grid_below = _sommerfeld_below.get_grid_below(
-        eps_t, k_p, plan["r1_below"], omega, mu=mu
+        eps_t, k_p, plan["r1_below"], omega, mu=mu, cancel_flag=cancel_flag
     )
 
     def proj_bb(o, to, s, ts):
         return _sommerfeld_below.remainder_field_proj_below(
-            o, to, s, ts, gz, k_p, k_m, grid_below
+            o, to, s, ts, gz, k_p, k_m, grid_below, cancel_flag
         )
 
     o_b, ot_b, oW_b = _narrow(b_idx, obs_b_idx, obs_b, t_b, W_b)
@@ -1550,6 +1550,7 @@ def compute_Z_operator_buried(
             omega,
             mu=mu,
             r_min=plan["r_cross_min"],
+            cancel_flag=cancel_flag,
         )
 
         def proj_ab(o, to, s, ts):

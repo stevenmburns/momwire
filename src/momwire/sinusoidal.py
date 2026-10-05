@@ -4834,7 +4834,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         )
 
         grid = _sommerfeld_below.get_grid_below(
-            medium.eps_t, medium.k_p, r1_below, self.omega, mu=self.mu
+            medium.eps_t,
+            medium.k_p,
+            r1_below,
+            self.omega,
+            mu=self.mu,
+            cancel_flag=self._cancel_flag,
         )
         n_src = N * q
         return {
@@ -4872,7 +4877,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         def proj(obs_c, obs_t):
             return _sommerfeld_below.remainder_field_proj_below(
-                obs_c, obs_t, srcf, t_src, gz, k_p, k_m, grid
+                obs_c, obs_t, srcf, t_src, gz, k_p, k_m, grid, self._cancel_flag
             )
 
         return self._replay_remainder(
@@ -5361,6 +5366,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.omega,
             mu=self.mu,
             r_min=plan["r_cross_min"],
+            cancel_flag=self._cancel_flag,
         )
         proj_fn = (
             _sommerfeld_transmitted.transmitted_field_proj_above_to_below
