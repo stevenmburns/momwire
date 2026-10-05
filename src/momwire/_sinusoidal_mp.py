@@ -604,6 +604,9 @@ COMPLETION_SIGN = -1.0
 # `_crossing_fill.axis_data`'s density on the completion axes (None = the
 # module's defaults, bspline's). Swept on the D3 fan deck in `probe_fan_axes`.
 COMPLETION_Q = None
+# The above-plane remainder's route: "fused" (bspline's kernel) or "direct" (the
+# direct form's evaluator at the test nodes), the latter a diagnostic.
+REMAINDER_ROUTE_ABOVE = "fused"
 COMPLETION_PANEL_ORDER = None
 COMPLETION_GROWTH = None
 
@@ -773,7 +776,7 @@ def remainder_shape_weights(k, h, t01, w01):
     return np.ascontiguousarray((h[:, None] * w01[None, :])[None] * S.real)
 
 
-def basis_wings(starts, jbasis, coef):
+def basis_wings(starts, jbasis, coef, n_basis):
     """The CSR basis as fixed-width wing tables for the fused remainder
     kernel: `(loc, pl)`, `loc` (n_basis, A) the segment of each wing and `pl`
     (n_basis, A, 3) its coefficients, A the widest basis's entry count,
@@ -785,8 +788,7 @@ def basis_wings(starts, jbasis, coef):
     jbasis = np.asarray(jbasis)
     seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
     order = np.argsort(jbasis, kind="stable")
-    counts = np.bincount(jbasis[order])
-    n_basis = counts.size
+    counts = np.bincount(jbasis[order], minlength=n_basis)
     A = max(int(counts.max()), 1)
     loc = np.zeros((n_basis, A), dtype=np.int64)
     pl = np.zeros((n_basis, A, N_SHAPES), dtype=np.complex128)
@@ -906,7 +908,7 @@ def remainder_Q_above(
     coef = np.asarray(coef)
     if np.abs(coef.imag).max() != 0.0:
         raise ValueError("remainder_Q_above needs real basis coefficients (a real k)")
-    loc, pl = basis_wings(starts, jbasis, coef)
+    loc, pl = basis_wings(starts, jbasis, coef, G.shape[0])
     pl = np.ascontiguousarray(pl.real)
     tang_c = np.ascontiguousarray(tang)
     Qr = _acc.sommerfeld_remainder_bspline_Q(

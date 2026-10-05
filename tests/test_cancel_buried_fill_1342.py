@@ -41,13 +41,24 @@ from momwire import (
     BSplineSolver,
     CancelToken,
     RazorSolver,
-    SinusoidalGalerkinSolver,
     SolveAborted,
     _cancel,
     _near_interface,
 )
 from momwire._near_interface import k_medium
 from test_crossing_serve_524 import hub_deck, invl_deck
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
 
 pytestmark = pytest.mark.skipif(
     _near_interface._nia is None, reason="near-interface accelerator not built"
@@ -87,7 +98,7 @@ def test_abort_inside_cover_leaves_the_sheet_consistent():
 
 _ENGINES = [
     pytest.param(lambda **kw: RazorSolver(**kw, nec5_quadrature=True), id="razor"),
-    pytest.param(lambda **kw: SinusoidalGalerkinSolver(**kw), id="sg"),
+    pytest.param(lambda **kw: _direct_sg(**kw), id="sg"),
 ]
 
 
@@ -140,7 +151,7 @@ def _near_correction_polls(trip):
     `_checkpoint` that are SG's near-correction methods; with `trip` the first
     such poll cancels the token. Returns (callers, aborted)."""
     tok = CancelToken()
-    s = SinusoidalGalerkinSolver(**hub_deck(n_radials=4), cancel=tok)
+    s = _direct_sg(**hub_deck(n_radials=4), cancel=tok)
     callers = []
     real = s._checkpoint
 
@@ -208,7 +219,7 @@ def _hub_x16():
 
 _MAKE = {
     "razor": lambda **kw: RazorSolver(**kw, nec5_quadrature=True),
-    "sg": lambda **kw: SinusoidalGalerkinSolver(**kw),
+    "sg": lambda **kw: _direct_sg(**kw),
     "bs2": lambda **kw: BSplineSolver(**kw),
 }
 

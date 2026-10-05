@@ -52,7 +52,18 @@ from test_sg_mixed_class_fill_1224 import _kernel_columns
 
 import momwire._accel as _accel
 from momwire import sinusoidal_galerkin as sg
-from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
 
 pytestmark = pytest.mark.skipif(
     not sg._HAVE_GALERKIN_FAR_FILL_CPLX
@@ -155,7 +166,7 @@ def _capture(make):
     sg._solve_in_place = spy_solve
     _accel.acc.sinusoidal_galerkin_far_fill_cplx = spy_fill
     try:
-        Z, _ = SinusoidalGalerkinSolver(**make()).compute_impedance()
+        Z, _ = _direct_sg(**make()).compute_impedance()
     finally:
         sg._solve_in_place = solve
         _accel.acc.sinusoidal_galerkin_far_fill_cplx = fill
@@ -259,7 +270,7 @@ def test_the_complex_kernel_needs_no_padding():
     without the deck's last segment, under EVERY padding 0-3. The real
     kernel is bit-equal only under `_class_view`'s rule; the complex one is
     bit-equal under all four, because its sweep pads itself."""
-    s = SinusoidalGalerkinSolver(**hub_deck(n_radials=16))
+    s = _direct_sg(**hub_deck(n_radials=16))
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         geom = s._build_geometry()

@@ -31,6 +31,18 @@ from momwire import sinusoidal as sn
 from momwire import sinusoidal_galerkin as sg
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
+
 # numpy's NPY_MIN_ELIDE_BYTES.
 ELIDE_BYTES = 256 * 1024
 
@@ -75,7 +87,7 @@ def _capture(make, monkeypatch, seen=None):
             return _WRAP(self, counted)
 
         monkeypatch.setattr(sg._OverlappedFold, "wrap", spy_wrap)
-    Z, cur = SinusoidalGalerkinSolver(**make()).compute_impedance()
+    Z, cur = _direct_sg(**make()).compute_impedance()
     return G["G"], np.atleast_1d(Z), np.asarray(cur)
 
 
@@ -111,7 +123,7 @@ def test_a_fold_error_surfaces_from_the_solve(monkeypatch):
         SinusoidalGalerkinSolver, "_tested_contrib_rows", staticmethod(failing)
     )
     with pytest.raises(Boom):
-        SinusoidalGalerkinSolver(**_array_low()).compute_impedance()
+        _direct_sg(**_array_low()).compute_impedance()
 
 
 @pytest.mark.parametrize("name", ["array-low", "buried-dipole", "hub4"])

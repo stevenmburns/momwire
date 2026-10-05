@@ -30,7 +30,18 @@ from test_sg_real_far_fill_staged_1290 import _array
 import momwire._accel as _accel
 from momwire import _sommerfeld
 from momwire import sinusoidal_galerkin as sg
-from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
 
 pytestmark = pytest.mark.skipif(
     _accel.acc is None or not hasattr(_accel.acc, "somm_proj_lanes_built"),
@@ -57,7 +68,7 @@ def _record(make):
     before = _accel.acc.somm_proj_lane_pairs()
     _accel.acc.remainder_field_proj_batch = spy
     try:
-        SinusoidalGalerkinSolver(**make()).compute_impedance()
+        _direct_sg(**make()).compute_impedance()
     finally:
         _accel.acc.remainder_field_proj_batch = fn
     return seen, _accel.acc.somm_proj_lane_pairs() - before
@@ -136,7 +147,7 @@ def test_whole_solve_with_the_lanes_off(name, monkeypatch):
             return solve(G, rhs)
 
         monkeypatch.setattr(sg, "_solve_in_place", spy)
-        Z, cur = SinusoidalGalerkinSolver(**DECKS[name]()).compute_impedance()
+        Z, cur = _direct_sg(**DECKS[name]()).compute_impedance()
         monkeypatch.setattr(sg, "_solve_in_place", solve)
         return seen["G"], np.atleast_1d(Z), np.asarray(cur)
 

@@ -17,11 +17,22 @@ import numpy as np
 import pytest
 
 from momwire import (
-    SinusoidalGalerkinSolver,
     SinusoidalSolver,
     _field_ground,
     _ground_refl,
 )
+
+
+def _direct_sg(*args, **kw):
+    """This module's subject is the DIRECT-field fill's own machinery, so
+    every solver here names it (`SinusoidalGalerkinSolver`'s default fill is
+    the mixed-potential one since momwire#1354, gated in
+    `test_sinusoidal_mp_1354.py`)."""
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver as _cls
+
+    kw.setdefault("fill", "direct")
+    return _cls(*args, **kw)
+
 
 LAM = 20.0
 EPS = (13.0, 0.005)
@@ -58,7 +69,7 @@ def _galerkin(ground, **extra):
     ground through a fold and a projector rather than through image tensors —
     the second consumer of the same object (unit 3)."""
     wires = [[[0.0, -0.24 * LAM, 3.0], [0.0, 0.24 * LAM, 3.0]]]
-    return SinusoidalGalerkinSolver(
+    return _direct_sg(
         wires=wires,
         nsegs=11,
         wavelength=LAM,
