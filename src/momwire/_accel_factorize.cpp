@@ -248,7 +248,12 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
             h = mix(h ^ k[1]);
             return h;
         };
+        // Sized for half the rows (a quarter-full table if every row were
+        // its own key) and grown at half load from there: the crossing
+        // plan's tables hold about one key per three rows, so this skips the
+        // early rehashes without reaching past the size growth ends at.
         size_t cap = 1024;
+        while (cap < static_cast<size_t>(n / 2)) cap <<= 1;
         std::vector<uint64_t> table(cap, 0);
         size_t mask = cap - 1;
         size_t n_entered = 0;
@@ -271,52 +276,61 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
             cap = cap2;
             mask = mask2;
         };
+        // Walked row by row of the table and a block of line nodes at a
+        // time, so a row's z is lz[l] with no division (the flat index is
+        // only ever g * nL + l); the order is the flat order.
         uint64_t hs[kPrefetchBlock];
-        for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
-            MW_CANCEL_SERIAL_POLL();  // per 32-row block
-            const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
-            for (py::ssize_t i = i0; i < i1; ++i) {
-                uint64_t b[2];
-                col_bits(i, b);
-                b[0] = float_key(b[0]);
-                b[1] = float_key(b[1]);
-                hs[i - i0] = hash_of(b);
-                MW_PREFETCH(table.data() + (static_cast<size_t>(hs[i - i0]) & mask));
-            }
-            for (py::ssize_t i = i0; i < i1; ++i) {
-                uint64_t b[2];
-                col_bits(i, b);
-                if (is_nan(b[0]) || is_nan(b[1])) {
-                    out[i] = static_cast<int32_t>(first.size());
-                    first.push_back(i);
-                    continue;
+        for (py::ssize_t g = 0; g < nG; ++g) {
+            const double *Lg = Lp + g * nL;
+            for (py::ssize_t l0 = 0; l0 < nL; l0 += kPrefetchBlock) {
+                MW_CANCEL_SERIAL_POLL();  // per 32-row block
+                const py::ssize_t l1 = std::min(nL, l0 + kPrefetchBlock);
+                for (py::ssize_t l = l0; l < l1; ++l) {
+                    uint64_t b[2];
+                    std::memcpy(&b[0], Lg + l, 8);
+                    std::memcpy(&b[1], Zp + l, 8);
+                    b[0] = float_key(b[0]);
+                    b[1] = float_key(b[1]);
+                    hs[l - l0] = hash_of(b);
+                    MW_PREFETCH(table.data() + (static_cast<size_t>(hs[l - l0]) & mask));
                 }
-                b[0] = float_key(b[0]);
-                b[1] = float_key(b[1]);
-                if (2 * (n_entered + 1) > cap) rehash();
-                const uint64_t h = hs[i - i0];
-                const uint64_t tag = h & 0xffffffff00000000ULL;
-                size_t s = static_cast<size_t>(h) & mask;
-                for (;;) {
-                    const uint64_t slot = table[s];
-                    if (slot == 0) {
-                        const uint64_t g = first.size();
-                        table[s] = tag | (g + 1);
-                        ++n_entered;
-                        out[i] = static_cast<int32_t>(g);
+                for (py::ssize_t l = l0; l < l1; ++l) {
+                    const py::ssize_t i = g * nL + l;
+                    uint64_t b[2];
+                    std::memcpy(&b[0], Lg + l, 8);
+                    std::memcpy(&b[1], Zp + l, 8);
+                    if (is_nan(b[0]) || is_nan(b[1])) {
+                        out[i] = static_cast<int32_t>(first.size());
                         first.push_back(i);
-                        break;
+                        continue;
                     }
-                    if ((slot & 0xffffffff00000000ULL) == tag) {
-                        const uint64_t g = (slot & 0xffffffffULL) - 1;
-                        uint64_t f[2];
-                        col_bits(static_cast<py::ssize_t>(first[g]), f);
-                        if (float_key(f[0]) == b[0] && float_key(f[1]) == b[1]) {
-                            out[i] = static_cast<int32_t>(g);
+                    b[0] = float_key(b[0]);
+                    b[1] = float_key(b[1]);
+                    if (2 * (n_entered + 1) > cap) rehash();
+                    const uint64_t h = hs[l - l0];
+                    const uint64_t tag = h & 0xffffffff00000000ULL;
+                    size_t s = static_cast<size_t>(h) & mask;
+                    for (;;) {
+                        const uint64_t slot = table[s];
+                        if (slot == 0) {
+                            const uint64_t gg = first.size();
+                            table[s] = tag | (gg + 1);
+                            ++n_entered;
+                            out[i] = static_cast<int32_t>(gg);
+                            first.push_back(i);
                             break;
                         }
+                        if ((slot & 0xffffffff00000000ULL) == tag) {
+                            const uint64_t gg = (slot & 0xffffffffULL) - 1;
+                            uint64_t f[2];
+                            col_bits(static_cast<py::ssize_t>(first[gg]), f);
+                            if (float_key(f[0]) == b[0] && float_key(f[1]) == b[1]) {
+                                out[i] = static_cast<int32_t>(gg);
+                                break;
+                            }
+                        }
+                        s = (s + 1) & mask;
                     }
-                    s = (s + 1) & mask;
                 }
             }
         }
