@@ -174,11 +174,44 @@ def test_a_product_of_several_groups_fuses_and_keeps_no_store():
     assert _same(got, ref)
 
 
+def test_recycled_held_slots_are_the_one_slot_per_row_store_to_the_bit():
+    """momwire#1335: a many-group product's held store reuses a slot once
+    its row's last reader has run, so it holds the most rows live at once.
+    The slots only hold copies, so Z is the one-slot-per-row store's
+    (`_RECYCLE_HELD = False`) to the bit, with fewer slots."""
+    make, flags, _mode = DECKS["invl4_tiny"]
+    ref, r0 = _fill(make, **{**flags, "cf._RECYCLE_HELD": False})
+    got, r = _fill(make, **flags)
+    assert r["cf.fused_mode_stream"] == r["cf.main_product"] >= 2, r
+    assert 0 < r["cf.held_slots"] < r0["cf.held_slots"], (r, r0)
+    assert _same(got, ref)
+
+
+def test_held_slots_never_share_a_slot_between_live_rows():
+    """`_held_slots` against brute force: two rows live in one tile never
+    share a slot, and the slot count is the most rows live in any tile."""
+    rng = np.random.default_rng(1335)
+    n_tiles = 30
+    first = rng.integers(0, n_tiles - 1, 4000)
+    last = first + 1 + rng.integers(0, 5, first.size)
+    last = np.minimum(last, n_tiles - 1)
+    slot, n_slots = cf._held_slots(first, last, n_tiles)
+    live_max = 0
+    for t in range(n_tiles):
+        live = (first <= t) & (t <= last)
+        live_max = max(live_max, int(live.sum()))
+        s_t = slot[live]
+        assert np.unique(s_t).size == s_t.size, t
+    assert n_slots == live_max
+    assert slot.min() >= 0 and slot.max() < n_slots
+
+
 @pytest.mark.parametrize(
     "control, case, flag",
     [
         ("fused_order", "fan_rise_tiny", "cf._PRODUCT_NEG_CONTROL"),
         ("group0", "invl4", "cf._PRODUCT_NEG_CONTROL"),
+        ("recycle", "invl4_tiny", "cf._PRODUCT_NEG_CONTROL"),
         ("shift", "crossing1", "rz._BELOW_FOLD_CONTROL"),
     ],
 )
@@ -186,7 +219,7 @@ def test_negative_controls_move_z(control, case, flag):
     make, flags, _mode = DECKS[case]
     ref, _r = _fill(make, **{**flags, **_PHASE1})
     got, r = _fill(make, **{**flags, flag: control})
-    if control in ("fused_order", "group0"):
+    if control in ("fused_order", "group0", "recycle"):
         assert r["cf.fused_mode_stream"] >= 2, r
     else:
         assert r["rz.below_windows"] > 0, r
