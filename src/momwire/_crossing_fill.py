@@ -5501,6 +5501,11 @@ class _FusedEnds:
             self._extra_last = None
         tiles.listener = self
         self.attached = True
+        # Every lookup this block's tiles precede is made (the slow ends',
+        # above, and the classification's): a key table those built is not
+        # read again before `finish`, so it goes now rather than standing
+        # through the tile pass (momwire#1335).
+        product.keys.drop_index()
         _ROUTES["fused_blocks"] += 1
         _ROUTES["fused_mode_" + self.mode] += 1
         return True
