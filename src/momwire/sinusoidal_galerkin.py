@@ -4823,13 +4823,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         seg_l, seg_r = _sinusoidal_mp.segment_ends(c, t, h)
         gz = float(self.ground_z)
         grid = _sommerfeld_below.get_grid_below(
-            medium.eps_t, medium.k_p, r1_below, self.omega, mu=self.mu
+            medium.eps_t,
+            medium.k_p,
+            r1_below,
+            self.omega,
+            mu=self.mu,
+            cancel_flag=self._cancel_flag,
         )
         k_p, k_m = medium.k_p, medium.k_m
+        flag = self._cancel_flag
 
         def proj(o, to, s_, ts):
             return _sommerfeld_below.remainder_field_proj_below(
-                o, to, s_, ts, gz, k_p, k_m, grid
+                o, to, s_, ts, gz, k_p, k_m, grid, flag
             )
 
         starts, jbasis, coef, _dcoef = _sinusoidal_mp.basis_csr(seg_view, k_m)
