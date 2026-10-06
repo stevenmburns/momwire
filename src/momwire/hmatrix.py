@@ -50,7 +50,10 @@ from ._port_solution import PortSolution, port_impedances, refuse_undriven
 
 from . import _ground_mirror, _ground_refl, _potential_ground, _sommerfeld
 from ._bspline_kernels import (
+    _LADDER_PHASE_LIMITED_BELOW,
     _ek_radius,
+    _ladder_arrays,
+    _phase_row_mask,
     _refuse_complex_k,
     _seg_seg_full_moments_offedge,
     _seg_seg_reg_moments,
@@ -115,7 +118,8 @@ _HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block_refl_ek"
 )
 # momwire#1362: the two EK twins on the pair-order ladder. Absent them an EK
-# far block keeps the flat rule.
+# far block keeps the flat rule (the near blocks take the ladder through
+# `_seg_seg_full_moments_offedge` either way).
 _HAVE_OFFEDGE_BLOCK_EK_TIERED_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block_ek_tiered"
 )
@@ -771,6 +775,10 @@ class HMatrixSolver(BSplineSolver):
                 rows=seg_I,
                 cols=seg_J,
             ),
+            # Under EK the deck's pair-order ladder (momwire#1362), the rule
+            # the dense EK fill and this solver's far blocks run; the reduced
+            # block fills keep `n_qp_pair` on every pair.
+            ladder=self._hm_ek_ladder(k, seg_l, seg_r, image=False),
         )
 
         if not same_edge:
@@ -1016,11 +1024,12 @@ class HMatrixSolver(BSplineSolver):
         # Observer rows are the REAL test segments — the per-observer
         # radius convention applies to the image block unchanged. EK scores
         # eligibility against the MIRRORED source geometry (`mirror=True`),
-        # the block form of `BSplineSolver._build_J_image_blocks`. Unlike that
-        # fill it stays at `n_qp_pair` on every pair: momwire#1304 laddered
+        # the block form of `BSplineSolver._build_J_image_blocks`. Without
+        # EK it stays at `n_qp_pair` on every pair: momwire#1304 laddered
         # the dense/chunked image term to match ITS direct term, and the
         # block fills' direct term carries no ladder either, so leaving both
         # untiered keeps the two terms of an H-matrix solve on one rule.
+        # Under EK both terms take the deck's ladders (momwire#1362).
         Jsub = _seg_seg_full_moments_offedge(
             seg_l[seg_I],
             seg_r[seg_I],
@@ -1037,6 +1046,7 @@ class HMatrixSolver(BSplineSolver):
                 rows=seg_I,
                 cols=seg_J,
             ),
+            ladder=self._hm_ek_ladder(k, seg_l, seg_r, image=True),
         )
         self._apply_near_image_analytic(Jsub, seg_I, seg_J, k, ctx["geom"])
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
@@ -1468,6 +1478,7 @@ class HMatrixSolver(BSplineSolver):
                 rows=seg_I,
                 cols=seg_J,
             ),
+            ladder=self._hm_ek_ladder(k, seg_l, seg_r, image=True),
         )
         self._apply_near_image_analytic(Jsub, seg_I, seg_J, k, ctx["geom"])
         supp_I_local = np.vectorize(loc_of_I.__getitem__)(supp_seg[I])
@@ -1761,6 +1772,18 @@ class HMatrixSolver(BSplineSolver):
             n, near_blocks, far_blocks, precond_extra=precond_extra, cancel=self._cancel
         )
 
+    def _hm_ek_ladder(self, k, seg_l, seg_r, image):
+        """The pair-order ladder an H-matrix fill runs: the deck's, under the
+        extended kernel only (momwire#1362), so an EK H-matrix solve puts
+        every pair on the rule the dense EK fill puts it on -- the direct
+        term `_fill_ladder`'s, the image term `_image_fill_ladder`'s. None
+        without EK: the reduced H-matrix fills have never taken a ladder.
+        Both ask the deck, not the EK labels, so none are built here."""
+        if not self.extended_kernel:
+            return None
+        ask = self._image_fill_ladder if image else self._fill_ladder
+        return ask(k, seg_l, seg_r, None) or None
+
     def _gl01(self):
         """Gauss-Legendre nodes/weights mapped to [0, 1] (cached)."""
         cached = getattr(self, "_hm_gl01", None)
@@ -1896,11 +1919,64 @@ class HMatrixSolver(BSplineSolver):
                 np.ascontiguousarray(ek.group_j[seg_ids_J], dtype=np.int64),
             )
 
+        # momwire#1362: the EK twins on the deck's pair-order ladder, the
+        # rule the near blocks (`_hm_ek_ladder`) and the dense EK fill run.
+        # The per-pair phase guard (#920) is answered in the kernel from
+        # one whole-mesh mask per segment, so a pair's order is the pair's
+        # alone and an ACA row and column sampling it cannot disagree
+        # (#921's invariant). Image calls ask the image ladder.
+        ladder = (
+            self._hm_ek_ladder(k, ctx["seg_l"], ctx["seg_r"], image=mirror_J or refl)
+            if use_ek_accel
+            else None
+        )
+        have_tiered = (
+            _HAVE_OFFEDGE_BLOCK_REFL_EK_TIERED_ACCEL
+            if refl
+            else _HAVE_OFFEDGE_BLOCK_EK_TIERED_ACCEL
+        )
+        tier_args = None
+        if ladder and have_tiered:
+            tier_args = _ladder_arrays(self.n_qp_pair, ladder)
+            empty_ok = np.zeros(0, dtype=np.uint8)
+            phase_ok = None
+            if any(n < _LADDER_PHASE_LIMITED_BELOW for _r, n in ladder):
+                ok = _phase_row_mask(k, ctx["seg_l"], ctx["seg_r"])
+                phase_ok = None if ok.all() else ok.astype(np.uint8)
+
+        def _ladder_tail(seg_ids_I, seg_ids_J):
+            # (tier_t, tier_w, tier_n_qp, tier_ratio), then after the EK
+            # labels the two masks and the limited-tier bound.
+            if phase_ok is None:
+                masks = (empty_ok, empty_ok)
+            else:
+                masks = (
+                    np.ascontiguousarray(phase_ok[seg_ids_I]),
+                    np.ascontiguousarray(phase_ok[seg_ids_J]),
+                )
+            return masks + (_LADDER_PHASE_LIMITED_BELOW,)
+
         if refl:
             mirror_J = True
             eps_t = _ground_refl.eps_tilde(self.ground_eps, self.omega, self.eps)
             phi_c0, phi_c1 = _ground_refl.phi_mode_coeffs(self.ground_phi_mode, eps_t)
-            if use_ek_accel:
+            if use_ek_accel and tier_args is not None:
+
+                def _call(seg_ids_I, seg_ids_J, *args):
+                    group_i, group_j = _ek_groups(seg_ids_I, seg_ids_J)
+                    return _acc.bspline_assemble_offedge_block_refl_ek_tiered(
+                        *args[:16],
+                        *tier_args,
+                        group_i,
+                        group_j,
+                        a_ek,
+                        eps_t,
+                        phi_c0,
+                        phi_c1,
+                        *_ladder_tail(seg_ids_I, seg_ids_J),
+                        self._cancel_flag,
+                    )
+            elif use_ek_accel:
 
                 def _call(seg_ids_I, seg_ids_J, *args):
                     group_i, group_j = _ek_groups(seg_ids_I, seg_ids_J)
@@ -1922,7 +1998,20 @@ class HMatrixSolver(BSplineSolver):
                         *args, eps_t, phi_c0, phi_c1, self._cancel_flag
                     )
         else:
-            if use_ek_accel:
+            if use_ek_accel and tier_args is not None:
+
+                def _call(seg_ids_I, seg_ids_J, *args):
+                    group_i, group_j = _ek_groups(seg_ids_I, seg_ids_J)
+                    return _acc.bspline_assemble_offedge_block_ek_tiered(
+                        *args[:16],
+                        *tier_args,
+                        group_i,
+                        group_j,
+                        a_ek,
+                        *_ladder_tail(seg_ids_I, seg_ids_J),
+                        self._cancel_flag,
+                    )
+            elif use_ek_accel:
 
                 def _call(seg_ids_I, seg_ids_J, *args):
                     group_i, group_j = _ek_groups(seg_ids_I, seg_ids_J)

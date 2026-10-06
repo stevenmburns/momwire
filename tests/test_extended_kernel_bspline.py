@@ -2784,6 +2784,10 @@ _U4_BLOCK_KERNELS = (
     "bspline_assemble_offedge_block_ek",
     "bspline_assemble_offedge_block_refl",
     "bspline_assemble_offedge_block_refl_ek",
+    # momwire#1362: an EK far block takes the deck's pair-order ladder, so
+    # by default it reaches the twins' tiered entries.
+    "bspline_assemble_offedge_block_ek_tiered",
+    "bspline_assemble_offedge_block_refl_ek_tiered",
 )
 
 
@@ -2797,8 +2801,16 @@ def test_u4_the_twin_is_what_serves_a_grounded_far_block(monkeypatch):
     _refl_image_solver(
         HMatrixSolver, aca_tol=1e-9, aca_eta=1.0, aca_leaf_size=8
     ).build_hmatrix()
-    assert calls["bspline_assemble_offedge_block_ek"] > 0, "no free-space EK fill"
-    assert calls["bspline_assemble_offedge_block_refl_ek"] > 0, "no refl EK fill"
+    free_ek = (
+        calls["bspline_assemble_offedge_block_ek"]
+        + calls["bspline_assemble_offedge_block_ek_tiered"]
+    )
+    refl_ek = (
+        calls["bspline_assemble_offedge_block_refl_ek"]
+        + calls["bspline_assemble_offedge_block_refl_ek_tiered"]
+    )
+    assert free_ek > 0, "no free-space EK fill"
+    assert refl_ek > 0, "no refl EK fill"
     assert calls["bspline_assemble_offedge_block"] == 0
     assert calls["bspline_assemble_offedge_block_refl"] == 0
 
@@ -3895,11 +3907,12 @@ def _u3_mixed_deck_kw(radius=0.02, ground_z=None):
     return kw
 
 
-def _u3_mixed_block(degree=2, radius=0.02, extended_kernel=True, ground_z=None):
+def _u3_mixed_block(degree=2, radius=0.02, extended_kernel=True, ground_z=None, **kw):
     sim = HMatrixSolver(
         **_u3_mixed_deck_kw(radius, ground_z=ground_z),
         degree=degree,
         extended_kernel=extended_kernel,
+        **kw,
     )
     ctx = sim._context()
     cen = ctx["basis_centroid"]
@@ -4029,14 +4042,22 @@ def test_u3_fused_offedge_block_image_labels_match_the_joint_spec(monkeypatch):
     calls = []
     real = _hm._acc
 
+    # The flat entry takes group_i/group_j right after its 18 positional
+    # geometry args; the tiered one (momwire#1362, the default under EK)
+    # after 16 geometry args and the four ladder arrays -- index 20/21.
+    first = {
+        "bspline_assemble_offedge_block_ek": 18,
+        "bspline_assemble_offedge_block_ek_tiered": 20,
+    }
+
     class _Capture:
         def __getattr__(self, name):
             target = getattr(real, name)
-            if name != "bspline_assemble_offedge_block_ek":
+            if name not in first:
                 return target
 
             def wrapped(*args, **kwargs):
-                calls.append(args)
+                calls.append(args[first[name] : first[name] + 2])
                 return target(*args, **kwargs)
 
             return wrapped
@@ -4047,10 +4068,7 @@ def test_u3_fused_offedge_block_image_labels_match_the_joint_spec(monkeypatch):
     )
     dense_f()
     assert len(calls) == 1, f"expected exactly one fused-twin call, got {len(calls)}"
-    # _call appends (..., group_i, group_j, a_ek, cancel_flag) after the 18
-    # positional geometry args (hmatrix.py's `_offedge_block_evaluators_
-    # uniform`), so group_i/group_j are the 4th/3rd-from-last positionals.
-    group_i, group_j = calls[0][-4], calls[0][-3]
+    group_i, group_j = calls[0]
     group_i = np.asarray(group_i)
     group_j = np.asarray(group_j)
     mask = (group_i[:, None] == group_j[None, :]) & (group_i[:, None] >= 0)
@@ -4085,7 +4103,12 @@ def test_u3_all_ineligible_labels_reduce_to_the_reduced_assembler(monkeypatch, d
     relative on this box, every degree — mirrors unit 2's own
     `test_u2_all_ineligible_labels_reduce_to_the_reduced_kernel`, one level
     up the fusion)."""
-    sim_on, ctx_on, I, J = _u3_mixed_block(degree=degree, extended_kernel=True)
+    # On the flat rule: since momwire#1362 an EK far block takes the deck's
+    # pair-order ladder and the reduced one does not, and this gate is about
+    # the ineligible branch, not the ladder.
+    sim_on, ctx_on, I, J = _u3_mixed_block(
+        degree=degree, extended_kernel=True, pair_order_ladder=()
+    )
 
     def all_ineligible(self, geom, mirror=False):
         labels = np.full(geom["seg_l"].shape[0], -1, dtype=np.int64)
@@ -4225,7 +4248,17 @@ _U3_ACCEL_ENTRY_POINTS = (
     "bspline_assemble_offedge_block",
     "bspline_assemble_offedge_block_refl",
     "bspline_assemble_offedge_block_ek",
+    "bspline_assemble_offedge_block_ek_tiered",
 )
+
+
+def _u3_ek_block_calls(spy):
+    """Calls to the fused EK twin, whichever rule served the block (the
+    deck's ladder by default since momwire#1362)."""
+    return (
+        spy.counts["bspline_assemble_offedge_block_ek"]
+        + spy.counts["bspline_assemble_offedge_block_ek_tiered"]
+    )
 
 
 class _HMAccelSpy:
@@ -4274,7 +4307,7 @@ def test_u3_g15_now_exercises_the_fused_ek_twin(hm_accel_spy):
     aca = HMatrixSolver(**common, aca_tol=1e-7)
     assert len(aca.build_hmatrix().far) > 0  # the ACA fill really ran
     aca.compute_impedance()
-    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] > 0
+    assert _u3_ek_block_calls(hm_accel_spy) > 0, hm_accel_spy.counts
     assert hm_accel_spy.counts["bspline_assemble_offedge_block"] == 0
 
 
@@ -4293,7 +4326,7 @@ def test_u3_ek_on_aca_fill_never_touches_zblock(monkeypatch, hm_accel_spy):
     dense()
     get_row(0)
     get_col(0)
-    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] > 0
+    assert _u3_ek_block_calls(hm_accel_spy) > 0, hm_accel_spy.counts
     assert len(calls) == 0, "the ACA fill fell back to zblock despite the twin"
 
 
@@ -4317,7 +4350,7 @@ def test_u3_dispatch_control_without_the_twin_uses_zblock(monkeypatch, hm_accel_
     dense()
     get_row(0)
     get_col(0)
-    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] == 0
+    assert _u3_ek_block_calls(hm_accel_spy) == 0, hm_accel_spy.counts
     assert len(calls) > 0, "the control never hit zblock — the probe proves nothing"
 
 
@@ -4330,7 +4363,7 @@ def test_u3_ek_off_never_reaches_the_fused_ek_twin(hm_accel_spy):
     a, _b = _hmatrix_pair(aca_eta=1.0)
     assert len(a.build_hmatrix().far) > 0
     a.compute_impedance()
-    assert hm_accel_spy.counts["bspline_assemble_offedge_block_ek"] == 0
+    assert _u3_ek_block_calls(hm_accel_spy) == 0, hm_accel_spy.counts
     assert hm_accel_spy.counts["bspline_assemble_offedge_block"] > 0
 
 
