@@ -859,6 +859,77 @@ def fold_rows_into(G, Qr, rows_basis, scale):
             G[np.ix_(bases[r0:r1], bases)] += blk
 
 
+# Bytes of the fused remainder's Q held at once. Up to this the whole
+# (R, R) block is one symmetric-route call; past it the block is taken in
+# bands of rows against the upper columns (`fold_upper_bands_into`), so the
+# transient is a bounded buffer rather than a second N^2 beside G. The bands
+# go through the kernel's rectangular route, which costs more per pair than
+# the symmetric one (measured on Haswell, above-ground x16, N = 2816: 7.1 s
+# banded at 64 MiB against 5.4 s whole), so the whole block is kept while it
+# fits: 256 MiB is R = 4096 wing rows.
+REMAINDER_Q_BYTES = 256 << 20
+
+
+def fold_upper_bands_into(G, kernel, rows_basis, scale, *, checkpoint=None):
+    """`G += scale . S Q S^T` for a SYMMETRIC Q (the remainder's dyad is
+    reciprocal) computed one band of wing rows at a time against the
+    columns from the band's first row on: `kernel(r0, r1, c0)` returns
+    Q[r0:r1, c0:]. Each band lands on its bases' rows from the band's own
+    bases onward and, transposed, on the columns past them, so every pair
+    is computed once and the transient is one band. Bands start and end on
+    a basis's first wing row, so a wide basis's rows fold within one band.
+    `rows_basis` is sorted (`basis_wings` emits rows basis by basis)."""
+    import scipy.sparse
+
+    rows_basis = np.asarray(rows_basis)
+    R = rows_basis.size
+    bases, first_row = np.unique(rows_basis, return_index=True)
+    pos = np.searchsorted(bases, rows_basis)  # basis position of each row
+    nb = bases.size
+    whole = nb == G.shape[0]
+    folded = R != nb
+    band = max(1, REMAINDER_Q_BYTES // (16 * R))
+    r0 = 0
+    while r0 < R:
+        if checkpoint is not None:
+            checkpoint()
+        r1 = min(r0 + band, R)
+        if r1 < R and first_row[pos[r1]] != r1:
+            # Mid-basis: end at that basis's first row, or past it when the
+            # basis itself starts the band.
+            b = pos[r1]
+            r1 = (
+                int(first_row[b])
+                if first_row[b] > r0
+                else (int(first_row[b + 1]) if b + 1 < nb else R)
+            )
+        Qb = kernel(r0, r1, r0)  # (r1 - r0, R - r0)
+        b0, b1 = int(pos[r0]), int(pos[r1 - 1]) + 1
+        if folded:
+            cols = pos[r0:] - b0
+            Sc = scipy.sparse.csr_matrix(
+                (np.ones(cols.size), (np.arange(cols.size), cols)),
+                shape=(cols.size, nb - b0),
+            )
+            rows = pos[r0:r1] - b0
+            Sr = scipy.sparse.csr_matrix(
+                (np.ones(rows.size), (rows, np.arange(rows.size))),
+                shape=(b1 - b0, rows.size),
+            )
+            Qb = np.asarray(Sr @ np.asarray(Qb @ Sc))
+        Qb *= scale
+        na = b1 - b0
+        if whole:
+            G[b0:b1, b0:] += Qb
+            G[b1:, b0:b1] += Qb[:, na:].T
+        else:
+            ba, bc = bases[b0:b1], bases[b0:]
+            G[np.ix_(ba, bc)] += Qb
+            G[np.ix_(bases[b1:], ba)] += Qb[:, na:].T
+        del Qb
+        r0 = r1
+
+
 def taylor_shape_coefs(k, h, degree=REMAINDER_TAYLOR_DEGREE):
     """`tau[p, m]` with `S_p(u - h/2) = sum_m tau[p, m] u^m` on `u in [0, h]`,
     per segment: (3, degree + 1, n). The Taylor series of sin / cos about
@@ -972,24 +1043,35 @@ def remainder_Q_above(
     rows_basis, loc, pl = basis_wings(starts, jbasis, coef, G.shape[0])
     pl = np.ascontiguousarray(pl.real)
     tang_c = np.ascontiguousarray(tang)
-    Qr = _acc.sommerfeld_remainder_bspline_Q(
-        nodes,
-        tang_c,
-        W,
-        nodes,
-        tang_c,
-        W,
-        loc,
-        pl,
-        loc,
-        pl,
-        float(gz),
-        float(k),
-        *_sommerfeld.grid_cpp_args(grid),
-        int(cancel_flag),
-    )
-    fold_rows_into(G, Qr, rows_basis, scale)
-    del Qr
+    grid_args = _sommerfeld.grid_cpp_args(grid)
+
+    def kernel(r0, r1, c0):
+        """Q over wing rows [r0, r1) against wing columns [c0, R)."""
+        return _acc.sommerfeld_remainder_bspline_Q(
+            nodes,
+            tang_c,
+            W,
+            nodes,
+            tang_c,
+            W,
+            loc[r0:r1],
+            pl[r0:r1],
+            loc[c0:],
+            pl[c0:],
+            float(gz),
+            float(k),
+            *grid_args,
+            int(cancel_flag),
+        )
+
+    R = rows_basis.size
+    if 16 * R * R <= REMAINDER_Q_BYTES:
+        # One call on the dense block's shape: the kernel's symmetric route.
+        Qr = kernel(0, R, 0)
+        fold_rows_into(G, Qr, rows_basis, scale)
+        del Qr
+    else:
+        fold_upper_bands_into(G, kernel, rows_basis, scale, checkpoint=checkpoint)
 
     # The grazing pairs, on graded panels (momwire#1189 / #1201 as bspline
     # lists and dilates them).

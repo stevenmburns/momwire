@@ -307,3 +307,38 @@ def test_crossing_completions_are_load_bearing(monkeypatch):
     G_off, _ = _G_and_Z(deck, "mixed-potential")
     rel = np.abs(G_off - G_dir).max() / np.abs(G_dir).max()
     assert rel > 1e-2, rel
+
+
+# ----------------------------------------------------------------------
+# the fused remainder's Q in bands (no second N^2 beside G)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["tee-somm", "hub4"])
+def test_banded_remainder_Q_agrees_with_the_whole_block(monkeypatch, name):
+    """Past `REMAINDER_Q_BYTES` the remainder's Q is taken in bands of wing
+    rows against the upper columns. With a budget of a few rows a band, on
+    a deck with a basis wider than the kernel's wings (`tee-somm`) and on a
+    crossing deck whose above class is a subset of the bases (`hub4`), G
+    agrees with the one-call symmetric route — and the bands did run."""
+    if not mp._HAVE_REMAINDER_Q:
+        pytest.skip("needs the accelerator's fused remainder kernel")
+    deck = DECKS[name] if name in DECKS else _crossing_cases()[name]
+    G_whole, z_whole = _G_and_Z(deck, "mixed-potential")
+    calls = []
+    real = mp.fold_upper_bands_into
+
+    def spy(G, kernel, rows_basis, scale, **kw):
+        def counted(r0, r1, c0):
+            calls.append((r0, r1, c0))
+            return kernel(r0, r1, c0)
+
+        return real(G, counted, rows_basis, scale, **kw)
+
+    monkeypatch.setattr(mp, "fold_upper_bands_into", spy)
+    monkeypatch.setattr(mp, "REMAINDER_Q_BYTES", 16 * 5 * 4)
+    G_band, z_band = _G_and_Z(deck, "mixed-potential")
+    assert len(calls) > 3, calls
+    rel = np.abs(G_band - G_whole).max() / np.abs(G_whole).max()
+    assert rel < 1e-12, rel
+    assert abs(z_band - z_whole) / abs(z_whole) < 1e-12
