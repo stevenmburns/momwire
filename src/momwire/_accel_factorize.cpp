@@ -257,20 +257,22 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
         std::vector<uint64_t> table(cap, 0);
         size_t mask = cap - 1;
         size_t n_entered = 0;
+        // Each entered group's hash low 32 bits (momwire#1335): a rehash
+        // re-enters the old table's entries from their tag and these, never
+        // re-reading a group's first row (a random read per group). A slot
+        // only ever holds its group, so where it lands moves no number.
+        std::vector<uint32_t> hlo;
         auto rehash = [&]() {
             const size_t cap2 = cap * 2;
             std::vector<uint64_t> fresh(cap2, 0);
             const size_t mask2 = cap2 - 1;
-            for (size_t g = 0; g < first.size(); ++g) {
-                uint64_t b[2];
-                col_bits(static_cast<py::ssize_t>(first[g]), b);
-                if (is_nan(b[0]) || is_nan(b[1])) continue;  // never entered
-                b[0] = float_key(b[0]);
-                b[1] = float_key(b[1]);
-                const uint64_t h = hash_of(b);
-                size_t t = static_cast<size_t>(h) & mask2;
+            for (size_t t0 = 0; t0 < cap; ++t0) {
+                const uint64_t slot = table[t0];
+                if (slot == 0) continue;
+                const uint64_t g = (slot & 0xffffffffULL) - 1;
+                size_t t = static_cast<size_t>(hlo[g]) & mask2;
                 while (fresh[t] != 0) t = (t + 1) & mask2;
-                fresh[t] = (h & 0xffffffff00000000ULL) | (static_cast<uint64_t>(g) + 1);
+                fresh[t] = slot;
             }
             table.swap(fresh);
             cap = cap2;
@@ -302,6 +304,7 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
                     if (is_nan(b[0]) || is_nan(b[1])) {
                         out[i] = static_cast<int32_t>(first.size());
                         first.push_back(i);
+                        hlo.push_back(0);  // never entered
                         continue;
                     }
                     b[0] = float_key(b[0]);
@@ -318,6 +321,7 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
                             ++n_entered;
                             out[i] = static_cast<int32_t>(gg);
                             first.push_back(i);
+                            hlo.push_back(static_cast<uint32_t>(h));
                             break;
                         }
                         if ((slot & 0xffffffff00000000ULL) == tag) {
