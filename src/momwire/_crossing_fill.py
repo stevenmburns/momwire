@@ -2269,6 +2269,13 @@ _MERGE_BY_Z = True
 _HAVE_MERGE_BY_Z_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "merge_rows_by_z_1290", False)
 )
+# The plan's key ids by `factorize_line_keys` (momwire#1335); False is
+# `_first_groups` over the raveled line and its broadcast z, the reference
+# (the same integers, ~1.1 GB more transient at razor's inverted L x32).
+_LINE_KEYS_ACCEL = True
+_HAVE_LINE_KEYS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "factorize_line_keys_1335", False)
+)
 _HAVE_GROUP_RANKS_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "group_first_ranks_1290", False)
 )
@@ -2455,7 +2462,23 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
             np.hypot(raw[g0:g1], float(ctx.a_wire), out=raw[g0:g1])
         raw = None
     zf, zid = _first_groups(gzv)
-    kf, kid = _first_groups(line.ravel(), np.broadcast_to(lzv, line.shape).ravel())
+    if (
+        _LINE_KEYS_ACCEL
+        and _HAVE_LINE_KEYS_ACCEL
+        and _near_interface._FACTORIZE
+        and isinstance(line, np.ndarray)
+        and line.flags.c_contiguous
+        and nG * nL < 2**31 - 1
+    ):
+        # The same (first, ids) as the hash kernel's `_first_groups` below,
+        # without its transients (`factorize_line_keys`, momwire#1335): the
+        # line's z read in place, the ids int32 in the table's own shape,
+        # the table grown with the keys rather than sized by the rows.
+        kf, kid = _accel.acc.factorize_line_keys(
+            line, np.ascontiguousarray(lzv, dtype=float), cancel_flag=_cancel.ptr()
+        )
+    else:
+        kf, kid = _first_groups(line.ravel(), np.broadcast_to(lzv, line.shape).ravel())
     # The (groups, line) index blocks in 32 bits when they fit: they and the
     # row table are the plan's O(groups x line) part (momwire#1224).
     kid = kid.reshape(nG, nL).astype(_index_dtype(kf.size), copy=False)

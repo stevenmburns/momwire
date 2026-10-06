@@ -205,6 +205,128 @@ static py::tuple factorize_ints(
     return group_rows(cols, n, false, cancel_flag);
 }
 
+// `factorize_rows` of the crossing plan's (groups, line) key table
+// (momwire#1335): row i is (line.flat[i], lz[i % nL]) -- the two columns
+// `_crossing_fill._product_plan` handed `factorize_rows` as `line.ravel()` and
+// `broadcast_to(lz, line.shape).ravel()` -- grouped by the same equality
+// (`group_rows`: -0.0 folded, a NaN row its own group, bits otherwise) in
+// first-appearance order, so the groups and their numbers are the same
+// integers. Only the memory differs, which is the whole point: at razor's
+// inverted L x32 that call was 31.5 M rows and a ~1.1 GB transient beside
+// the line itself. Here lz is read in place (no broadcast copy), the ids come
+// back int32 in the table's own (groups, line) shape (no int64 inverse and no
+// narrowing copy after it), and the hash table grows with the GROUPS
+// (rehash at half load, re-entering each group from its first row) instead
+// of being sized at twice the rows up front. Which slot a group occupies
+// never decides its number: numbers are handed out in walk order.
+static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> line,
+                                     py::array_t<double, py::array::c_style> lz,
+                                     uintptr_t cancel_flag = 0) {
+    if (line.ndim() != 2)
+        throw std::runtime_error("factorize_line_keys: line must be 2-D");
+    const py::ssize_t nG = line.shape(0), nL = line.shape(1);
+    if (lz.ndim() != 1 || lz.shape(0) != nL)
+        throw std::runtime_error("factorize_line_keys: one lz per line node");
+    const py::ssize_t n = nG * nL;
+    if (n >= static_cast<py::ssize_t>(std::numeric_limits<int32_t>::max()))
+        throw std::runtime_error("factorize_line_keys: too many rows for 32-bit ids");
+    const double *Lp = line.data();
+    const double *Zp = lz.data();
+    py::array_t<int32_t> kid(std::vector<py::ssize_t>{nG, nL});
+    int32_t *out = kid.mutable_data();
+    std::vector<int64_t> first;
+    if (n > 0) {
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
+        auto col_bits = [&](py::ssize_t i, uint64_t *b) {
+            std::memcpy(&b[0], Lp + i, 8);
+            std::memcpy(&b[1], Zp + (i % nL), 8);
+        };
+        auto hash_of = [](const uint64_t *k) {
+            uint64_t h = 0x9e3779b97f4a7c15ULL;
+            h = mix(h ^ k[0]);
+            h = mix(h ^ k[1]);
+            return h;
+        };
+        size_t cap = 1024;
+        std::vector<uint64_t> table(cap, 0);
+        size_t mask = cap - 1;
+        size_t n_entered = 0;
+        auto rehash = [&]() {
+            const size_t cap2 = cap * 2;
+            std::vector<uint64_t> fresh(cap2, 0);
+            const size_t mask2 = cap2 - 1;
+            for (size_t g = 0; g < first.size(); ++g) {
+                uint64_t b[2];
+                col_bits(static_cast<py::ssize_t>(first[g]), b);
+                if (is_nan(b[0]) || is_nan(b[1])) continue;  // never entered
+                b[0] = float_key(b[0]);
+                b[1] = float_key(b[1]);
+                const uint64_t h = hash_of(b);
+                size_t t = static_cast<size_t>(h) & mask2;
+                while (fresh[t] != 0) t = (t + 1) & mask2;
+                fresh[t] = (h & 0xffffffff00000000ULL) | (static_cast<uint64_t>(g) + 1);
+            }
+            table.swap(fresh);
+            cap = cap2;
+            mask = mask2;
+        };
+        uint64_t hs[kPrefetchBlock];
+        for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+            MW_CANCEL_SERIAL_POLL();  // per 32-row block
+            const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
+            for (py::ssize_t i = i0; i < i1; ++i) {
+                uint64_t b[2];
+                col_bits(i, b);
+                b[0] = float_key(b[0]);
+                b[1] = float_key(b[1]);
+                hs[i - i0] = hash_of(b);
+                MW_PREFETCH(table.data() + (static_cast<size_t>(hs[i - i0]) & mask));
+            }
+            for (py::ssize_t i = i0; i < i1; ++i) {
+                uint64_t b[2];
+                col_bits(i, b);
+                if (is_nan(b[0]) || is_nan(b[1])) {
+                    out[i] = static_cast<int32_t>(first.size());
+                    first.push_back(i);
+                    continue;
+                }
+                b[0] = float_key(b[0]);
+                b[1] = float_key(b[1]);
+                if (2 * (n_entered + 1) > cap) rehash();
+                const uint64_t h = hs[i - i0];
+                const uint64_t tag = h & 0xffffffff00000000ULL;
+                size_t s = static_cast<size_t>(h) & mask;
+                for (;;) {
+                    const uint64_t slot = table[s];
+                    if (slot == 0) {
+                        const uint64_t g = first.size();
+                        table[s] = tag | (g + 1);
+                        ++n_entered;
+                        out[i] = static_cast<int32_t>(g);
+                        first.push_back(i);
+                        break;
+                    }
+                    if ((slot & 0xffffffff00000000ULL) == tag) {
+                        const uint64_t g = (slot & 0xffffffffULL) - 1;
+                        uint64_t f[2];
+                        col_bits(static_cast<py::ssize_t>(first[g]), f);
+                        if (float_key(f[0]) == b[0] && float_key(f[1]) == b[1]) {
+                            out[i] = static_cast<int32_t>(g);
+                            break;
+                        }
+                    }
+                    s = (s + 1) & mask;
+                }
+            }
+        }
+    }
+    py::array_t<int64_t> out_first(static_cast<py::ssize_t>(first.size()));
+    if (!first.empty())
+        std::memcpy(out_first.mutable_data(), first.data(), first.size() * sizeof(int64_t));
+    return py::make_tuple(out_first, kid);
+}
+
 // A persistent exact-equality index over the rows of 1-3 float64 columns:
 // `find(cols)` is, per query row, the index of the FIRST stored row equal to
 // it, or -1 (a NaN row is never stored and never found) -- the lookup of
@@ -868,6 +990,13 @@ void register_factorize(py::module_ &m) {
           py::arg("z"), py::arg("grp"), py::arg("start"), py::arg("ids"),
           py::arg("off"), py::arg("n_key"), py::arg("n_z"), py::arg("cancel_flag") = 0);
     m.attr("merge_rows_by_z_1290") = true;
+    m.def("factorize_line_keys", &factorize::factorize_line_keys,
+          "`factorize_rows` of the rows (line.flat[i], lz[i % nL]) of a "
+          "(groups, line) float64 table and its line's z: (first int64, ids "
+          "int32 (groups, line)), the same integers, lz read in place and the "
+          "table grown with the groups. momwire#1335.",
+          py::arg("line"), py::arg("lz"), py::arg("cancel_flag") = 0);
+    m.attr("factorize_line_keys_1335") = true;
     // The capability flag, beside the bindings it vouches for (#710).
     m.attr("exact_factorize_1224") = true;
     m.attr("row_groups_1224") = true;
