@@ -4721,6 +4721,33 @@ def _rank1_add(t_ab, nz, a, b, scale, buf):
     t_ab[nz] += out
 
 
+# `_FusedEnds._finish_cols` applies its vector loop's rank-1 updates in one
+# `_rank1_adds` (momwire#1335: at razor's inverted L its ~1,500 grouped ends
+# times every finish batch were ~110 k `_rank1_add` calls). False is the
+# per-term loop, the reference.
+_BATCHED_VECTOR_ADDS = True
+
+
+def _rank1_adds(t_ab, terms):
+    """`_rank1_add(t_ab, nz, a, b, scale, ...)` for each `(nz, a, b, scale)`
+    of `terms`, in order, as one pass. Each update's entries are formed as
+    `_rank1_add` forms them -- the row `a[r] * b` (`multiply.outer`'s
+    broadcast of a real factor against a complex row), then `*= scale` -- and
+    `np.add.at` adds them unbuffered in term order, so an entry several terms
+    write sees the same additions in the same order from the same start."""
+    if not terms:
+        return
+    counts = np.fromiter((t[0].size for t in terms), dtype=np.int64, count=len(terms))
+    rows = np.concatenate([t[0] for t in terms])
+    a = np.concatenate([t[1] for t in terms])
+    B = np.repeat(np.stack([t[2] for t in terms]), counts, axis=0)
+    S = np.repeat(np.array([t[3] for t in terms], dtype=np.complex128), counts)
+    C = np.multiply(a[:, None], B)
+    del B
+    C *= S[:, None]
+    np.add.at(t_ab, rows, C)
+
+
 def _rank1_add_cols(t_ab, nz, a, b, scale, buf):
     """`t_ab[:, nz] += scale * outer(a, b)` through one reused buffer."""
     if nz.size == 0:
@@ -5262,6 +5289,10 @@ _STREAM_MIN_HOLD = 1 << 19
 # False is the reference it is gated against to the bit: such a product
 # declines ("groups") and keeps the store, as before.
 _FUSED_MULTI_GROUP = True
+# `_FusedEnds._classify` asks the product about its slow ends' rows this
+# many rows at a time (momwire#1335); False asks end by end, the reference.
+_CLASSIFY_HIT_BATCHED = True
+_CLASSIFY_HIT_ROWS = 1 << 20
 
 
 def _csr_rows(M, rows):
@@ -5439,21 +5470,64 @@ class _FusedEnds:
         """Each end's `_fast_end_desc`, or the string "hit" for a slow end
         that asks a product row (which this route cannot serve). The descs
         come batched (`_classify_ends`); the walk below is the one-end
-        loop's, counting and stopping where it did."""
-        out = []
+        loop's, counting and stopping where it did.
+
+        The slow ends' rows are asked of the product a span of ends at a
+        time (`_CLASSIFY_HIT_ROWS` rows, momwire#1335): `value_rows` answers
+        each row alone, so one call over several ends' rows is their calls'
+        answers, and the walk's count and stop are read off the first end
+        that hits. At razor's inverted L x32 the per-end calls through a
+        many-group product's `_group_lookup` were ~3.8 s."""
         descs, on_node = _classify_ends(fast, a_wire, ends, args)
-        for (pt, _sign, _fv), desc, on in zip(ends, descs, on_node):
-            _ROUTES["ends_line_on_node"] += int(on)
-            if desc is None:
-                c = np.broadcast_arrays(*args(pt))
-                rows = np.empty((c[0].size, 3), dtype=float)
-                rows[:, 0] = _near_interface.radius_fold(c[0], a_wire).ravel()
-                rows[:, 1] = c[1].ravel()
-                rows[:, 2] = c[2].ravel()
-                if (product.value_rows(rows + 0.0) >= 0).any():
-                    return "hit"
-            out.append(desc)
-        return out
+        if not _CLASSIFY_HIT_BATCHED:
+            out = []
+            for (pt, _sign, _fv), desc, on in zip(ends, descs, on_node):
+                _ROUTES["ends_line_on_node"] += int(on)
+                if desc is None:
+                    rows = self._slow_rows(pt, args, a_wire)
+                    if (product.value_rows(rows + 0.0) >= 0).any():
+                        return "hit"
+                out.append(desc)
+            return out
+        first_hit = None
+        span, owners, n_span = [], [], 0
+
+        def ask():
+            rows = np.concatenate(span)
+            hit = product.value_rows(rows + 0.0) >= 0
+            if hit.any():
+                return int(np.concatenate(owners)[int(np.argmax(hit))])
+            return None
+
+        for e, ((pt, _sign, _fv), desc) in enumerate(zip(ends, descs)):
+            if desc is not None:
+                continue
+            rows = self._slow_rows(pt, args, a_wire)
+            span.append(rows)
+            owners.append(np.full(rows.shape[0], e, dtype=np.int64))
+            n_span += rows.shape[0]
+            if n_span >= _CLASSIFY_HIT_ROWS:
+                first_hit = ask()
+                span, owners, n_span = [], [], 0
+                if first_hit is not None:
+                    break
+        if first_hit is None and span:
+            first_hit = ask()
+        stop = len(ends) if first_hit is None else first_hit + 1
+        _ROUTES["ends_line_on_node"] += int(sum(on_node[:stop]))
+        if first_hit is not None:
+            return "hit"
+        return list(descs)
+
+    @staticmethod
+    def _slow_rows(pt, args, a_wire):
+        """The (n, 3) rows a slow end asks, as the memo keys them."""
+        c = np.broadcast_arrays(*args(pt))
+        rows = np.empty((c[0].size, 3), dtype=float)
+        rows[:, 0] = _near_interface.radius_fold(c[0], a_wire).ravel()
+        rows[:, 1] = c[1].ravel()
+        rows[:, 2] = c[2].ravel()
+        return rows
 
     def _decline(self, why):
         _ROUTES["fused_declined"] += 1
@@ -5892,7 +5966,7 @@ class _FusedEnds:
         # per `_tile_matvecs` (each end's vectors are its own sums).
         here = [i for i, ti in self.v_tile.items() if ti == t]
         for part in _vec_batches(here, M["nodes"].shape[0]):
-            R = np.stack([_fast_desc_rows(fast, vcls[i]) for i in part])
+            R = _fast_desc_rows_batch(fast, [vcls[i] for i in part])
             vVs = _tile_matvecs(M["Fd_csr"], wv, R, 1, loc, tb, held, hpos)
             vWs = _tile_matvecs(M["F_csr"], wv_tz, R, 2, loc, tb, held, hpos)
             del R
@@ -5957,7 +6031,7 @@ class _FusedEnds:
             if d is not None and d[0] == "line" and self.l_tile[i] == t
         ]
         for part in _vec_batches(here, N["nodes"].shape[0]):
-            R = np.stack([_fast_desc_rows(fast, lcls[i]) for i in part])
+            R = _fast_desc_rows_batch(fast, [lcls[i] for i in part])
             vVs = _tile_matvecs(N["Fd_csr"], wl, R, 1, loc, tb, held, hpos)
             vWs = _tile_matvecs(N["F_csr"], wl_tz, R, 2, loc, tb, held, hpos)
             del R
@@ -6087,14 +6161,26 @@ class _FusedEnds:
         order = range(len(self.vec_loop[0]))
         if _PRODUCT_NEG_CONTROL == "fused_order":
             order = reversed(order)  # TEST-ONLY: the ends in the wrong order
-        for i in order:
-            nz = self.nz_vec[i]
-            if nz.size == 0:
-                continue
-            _pt, sign, fv = self.vec_loop[0][i]
-            vV, vW = pieces[i]
-            _rank1_add(E_r, posLA[nz], fv[nz], vV, c1 * sign, buf)
-            _rank1_add(E_r, posLA[nz], fv[nz], vW, -c1 * sign, buf)
+        if _BATCHED_VECTOR_ADDS:
+            terms = []
+            for i in order:
+                nz = self.nz_vec[i]
+                if nz.size == 0:
+                    continue
+                _pt, sign, fv = self.vec_loop[0][i]
+                vV, vW = pieces[i]
+                terms.append((posLA[nz], fv[nz], vV, c1 * sign))
+                terms.append((posLA[nz], fv[nz], vW, -c1 * sign))
+            _rank1_adds(E_r, terms)
+        else:
+            for i in order:
+                nz = self.nz_vec[i]
+                if nz.size == 0:
+                    continue
+                _pt, sign, fv = self.vec_loop[0][i]
+                vV, vW = pieces[i]
+                _rank1_add(E_r, posLA[nz], fv[nz], vV, c1 * sign, buf)
+                _rank1_add(E_r, posLA[nz], fv[nz], vW, -c1 * sign, buf)
         # The column loop (local): its ends touching U in order, W then V —
         # `add_cols`' two writes (E_r on the support's columns, E_c on LB's),
         # on the columns finishing here.
