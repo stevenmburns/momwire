@@ -802,8 +802,7 @@ static py::tuple group_first_ranks(
     py::array_t<int64_t> n(nG);
     int32_t *R = rank.mutable_data();
     int64_t *N = n.mutable_data();
-    std::vector<int64_t> first;
-    std::vector<int32_t> ids;
+    int64_t total = 0;
     {
         py::gil_scoped_release nogil;
         MW_CANCEL_SERIAL_SETUP(cancel_flag);
@@ -819,19 +818,40 @@ static py::tuple group_first_ranks(
                 if (stamp[k] != tag) {
                     stamp[k] = tag;
                     local[k] = next++;
-                    first.push_back(static_cast<int64_t>(l));
-                    ids.push_back(k);
                 }
                 out[l] = local[k];
             }
             N[g] = next;
+            total += next;
         }
     }
-    py::array_t<int64_t> out_first(static_cast<py::ssize_t>(first.size()));
-    py::array_t<int32_t> out_ids(static_cast<py::ssize_t>(ids.size()));
-    if (!first.empty()) {
-        std::memcpy(out_first.mutable_data(), first.data(), first.size() * sizeof(int64_t));
-        std::memcpy(out_ids.mutable_data(), ids.data(), ids.size() * sizeof(int32_t));
+    // The first positions and global ids, written straight into arrays of
+    // their exact size (momwire#1335: growing two vectors and copying them
+    // out was ~3x their size at the inverted L x32). Local id j of row g first
+    // occurs at the first l with rank[g, l] == j, which is where the walk's
+    // count of ids seen so far in that row is j.
+    py::array_t<int64_t> out_first(static_cast<py::ssize_t>(total));
+    py::array_t<int32_t> out_ids(static_cast<py::ssize_t>(total));
+    {
+        int64_t *F = out_first.mutable_data();
+        int32_t *I = out_ids.mutable_data();
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
+        int64_t q = 0;
+        for (py::ssize_t g = 0; g < nG; ++g) {
+            MW_CANCEL_SERIAL_POLL();
+            const int32_t *row = K + g * nL;
+            const int32_t *rk = R + g * nL;
+            int32_t next = 0;
+            for (py::ssize_t l = 0; l < nL; ++l) {
+                if (rk[l] == next) {
+                    F[q] = static_cast<int64_t>(l);
+                    I[q] = row[l];
+                    ++q;
+                    ++next;
+                }
+            }
+        }
     }
     return py::make_tuple(rank, n, out_first, out_ids);
 }
@@ -876,7 +896,13 @@ static py::tuple merge_rows_by_z(
             throw std::runtime_error("merge_rows_by_z: key out of range");
     py::array_t<int64_t> row(n_cand);
     int64_t *R = row.mutable_data();
-    std::vector<int64_t> first_blk, first_j;
+    // first[e]: the walk position where candidate e's code first appears.
+    // Kept across the two passes below (momwire#1335: the rows' first block
+    // and offset are written into arrays of their exact size in a second
+    // pass, where growing two vectors and copying them out was ~3x their
+    // size at the inverted L x32).
+    std::vector<int64_t> first(static_cast<size_t>(n_cand));
+    int64_t n_rows = 0;
     {
         py::gil_scoped_release nogil;
         MW_CANCEL_SERIAL_SETUP(cancel_flag);
@@ -889,31 +915,31 @@ static py::tuple merge_rows_by_z(
             std::vector<int64_t> at(cnt.begin(), cnt.end() - 1);
             for (py::ssize_t b = 0; b < nb; ++b) by_z[at[Z[b]]++] = b;
         }
-        // first[e]: the walk position where candidate e's code first appears.
-        std::vector<int64_t> first(static_cast<size_t>(n_cand));
-        std::vector<int64_t> tag(static_cast<size_t>(n_key), -1), pos(static_cast<size_t>(n_key), 0);
-        for (int64_t zi = 0; zi < n_z; ++zi) {
-            MW_CANCEL_SERIAL_POLL();
-            if (cnt[zi + 1] - cnt[zi] == 1) {
-                // One block under this z id: its keys are distinct (a
-                // group's own), so every code is new where it stands.
-                const int64_t b = by_z[cnt[zi]];
-                const int64_t len = O[G[b] + 1] - O[G[b]];
-                for (int64_t j = 0; j < len; ++j) first[S[b] + j] = S[b] + j;
-                continue;
-            }
-            for (int64_t i = cnt[zi]; i < cnt[zi + 1]; ++i) {
-                MW_CANCEL_SERIAL_POLL();  // per block
-                const int64_t b = by_z[i];
-                const int64_t g = G[b];
-                for (int64_t j = 0; j < O[g + 1] - O[g]; ++j) {
-                    const int32_t k = K[O[g] + j];
-                    const int64_t e = S[b] + j;
-                    if (tag[k] != zi) {
-                        tag[k] = zi;
-                        pos[k] = e;
+        {
+            std::vector<int64_t> tag(static_cast<size_t>(n_key), -1), pos(static_cast<size_t>(n_key), 0);
+            for (int64_t zi = 0; zi < n_z; ++zi) {
+                MW_CANCEL_SERIAL_POLL();
+                if (cnt[zi + 1] - cnt[zi] == 1) {
+                    // One block under this z id: its keys are distinct (a
+                    // group's own), so every code is new where it stands.
+                    const int64_t b = by_z[cnt[zi]];
+                    const int64_t len = O[G[b] + 1] - O[G[b]];
+                    for (int64_t j = 0; j < len; ++j) first[S[b] + j] = S[b] + j;
+                    continue;
+                }
+                for (int64_t i = cnt[zi]; i < cnt[zi + 1]; ++i) {
+                    MW_CANCEL_SERIAL_POLL();  // per block
+                    const int64_t b = by_z[i];
+                    const int64_t g = G[b];
+                    for (int64_t j = 0; j < O[g + 1] - O[g]; ++j) {
+                        const int32_t k = K[O[g] + j];
+                        const int64_t e = S[b] + j;
+                        if (tag[k] != zi) {
+                            tag[k] = zi;
+                            pos[k] = e;
+                        }
+                        first[e] = pos[k];
                     }
-                    first[e] = pos[k];
                 }
             }
         }
@@ -924,21 +950,33 @@ static py::tuple merge_rows_by_z(
             const int64_t len = O[G[b] + 1] - O[G[b]];
             for (int64_t j = 0; j < len; ++j) {
                 const int64_t e = S[b] + j;
+                R[e] = first[e] == e ? next++ : R[first[e]];
+            }
+        }
+        n_rows = next;
+    }
+    // Each row's first block and offset there, in row order: the walk meets
+    // the rows' first positions in the order it numbered them.
+    py::array_t<int64_t> fb(static_cast<py::ssize_t>(n_rows));
+    py::array_t<int64_t> fj(static_cast<py::ssize_t>(n_rows));
+    {
+        int64_t *FB = fb.mutable_data();
+        int64_t *FJ = fj.mutable_data();
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
+        int64_t q = 0;
+        for (py::ssize_t b = 0; b < nb; ++b) {
+            MW_CANCEL_SERIAL_POLL();
+            const int64_t len = O[G[b] + 1] - O[G[b]];
+            for (int64_t j = 0; j < len; ++j) {
+                const int64_t e = S[b] + j;
                 if (first[e] == e) {
-                    R[e] = next++;
-                    first_blk.push_back(b);
-                    first_j.push_back(j);
-                } else {
-                    R[e] = R[first[e]];
+                    FB[q] = b;
+                    FJ[q] = j;
+                    ++q;
                 }
             }
         }
-    }
-    py::array_t<int64_t> fb(static_cast<py::ssize_t>(first_blk.size()));
-    py::array_t<int64_t> fj(static_cast<py::ssize_t>(first_j.size()));
-    if (!first_blk.empty()) {
-        std::memcpy(fb.mutable_data(), first_blk.data(), first_blk.size() * sizeof(int64_t));
-        std::memcpy(fj.mutable_data(), first_j.data(), first_j.size() * sizeof(int64_t));
     }
     return py::make_tuple(row, fb, fj);
 }
