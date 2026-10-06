@@ -87,6 +87,12 @@ _KERNELS = {
     "factorize_ints": lambda flag: acc.factorize_ints(
         [c.astype(np.int64) for c in _cols()], cancel_flag=flag
     ),
+    # momwire#1335: factorize_rows of (line.flat, lz[i % nL]), polled the same.
+    "factorize_line_keys": lambda flag: acc.factorize_line_keys(
+        np.random.default_rng(6).integers(0, 40, (50, 100)).astype(float),
+        np.random.default_rng(7).integers(0, 3, 100).astype(float),
+        cancel_flag=flag,
+    ),
     "RowIndex.find": lambda flag: acc.RowIndex(_cols()[:2]).find(
         _cols(seed=2)[:2], cancel_flag=flag
     ),
@@ -160,6 +166,7 @@ _ROUTES = [
     ("razor", "invl", "merge_rows_by_z"),
     ("razor", "invl", "group_first_ranks"),
     ("razor", "invl", "factorize_rows"),
+    ("razor", "invl", "factorize_line_keys"),
     ("razor", "invl", "RowIndex.find"),
     ("razor", "buried", "near_interface_six_columns"),
     ("bs2", "buried", "near_interface_six_columns"),
