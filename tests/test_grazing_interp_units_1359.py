@@ -40,22 +40,37 @@ SWEEPS = list(gf.SWEEPS)
 # The interpolation pin. A stored-node interpolation is a fixed linear
 # combination of sixteen stored values with Lagrange weights of magnitude
 # under ~1.1, so two platforms can differ only by summation order and the
-# weights' own rounding: a few ulp of the node scale, ~1e-15. 1e-12 is a
-# thousand times that, and a thousand times under the smallest bar (3.9e-7).
+# weights' own rounding: a few ulp of the node scale. MEASURED (momwire#1359
+# probe, fixtures written on an AVX non-FMA build): bit-identical on CI's
+# AVX2+FMA Linux runner and on macOS arm64. 1e-12 leaves room for a numpy
+# that reorders the sum, and is still 1e5 under the smallest bar (3.9e-7).
 # What it catches that the bar does not: a stencil change too small to break
-# the bar, e.g. weights shifted by a fraction of a cell.
+# the bar -- weights shifted by 1e-7 of a cell move these values 5e-11 to
+# 1.3e-8 and stay under every bar.
 INTERP_PIN = 1e-12
 
 # The fill tolerance, against the stored node values. Each node is the four
 # surfaces built from six contour integrals, each converged to the fine
-# machine's min(rtol, 1e-11). A different ISA (the fixture is written on an
-# AVX non-FMA build; CI reads it on AVX2+FMA and on macOS arm64) changes the
-# rounding of every panel and can flip an adaptive split near its threshold,
-# so agreement is to the integrator's tolerance, not to the bit. The bar is
-# the grid's own promise, rtol = 1e-9 of the node scale -- 100x the fine
-# machine's tolerance. A wrong integral (a sign, a panel cap, a wrong node)
-# moves a node by 1e-6 or far more.
-FILL_RTOL = gf.RTOL
+# machine's min(rtol, 1e-11); a floor-band node sums ~22,000 tail panels. A
+# different ISA rounds every panel differently, so agreement is to the
+# integrator's accuracy, not to the bit. MEASURED by recomputing EVERY stored
+# node cold (not just the fill sample) against the fixture written on gesher
+# (AVX, non-FMA):
+#
+#                   floor     lo        mid       far
+#   CI AVX2+FMA     5.9e-10   5.1e-11   1.6e-11   5.3e-13
+#   macOS arm64     1.3e-9    8.0e-11   1.3e-11   8.6e-13
+#   numpy path      5.6e-12   6.0e-12   1.0e-12   2.2e-14   (same box, sampled rows)
+#
+# So the grid's own rtol (1e-9) is NOT a safe cross-platform tolerance for the
+# floor band: macOS sits 1.3x over it. 1e-8 is ~8x over the worst measured
+# spread. What it must still catch, and does (red runs on #1359): a sign in a
+# surface (moves a node 2.0 of its scale), a tail that drops its first panel
+# (0.76-4.4), a panel cap the nodes cannot converge under (raises). A change
+# that moves nodes by less -- e.g. stopping the tail one quiet panel early,
+# 2e-10 -- is inside the integrator's own accuracy; it is caught as a CODE
+# change by `test_the_fixture_is_current`, not here.
+FILL_RTOL = 1e-8
 
 
 def _fixture(sweep):
@@ -124,7 +139,7 @@ def test_a_cold_fill_of_a_few_nodes_reproduces_them(sweep):
     Two checks. Every slot holds, bit for bit, the direct evaluation the fill
     made AT THAT SLOT'S NODE (the low band's node, for the floor band's shared
     columns): the right integral in the right place. And every stored node in
-    those rows agrees with the fixture to the grid's rtol: the integrals are
+    those rows agrees with the fixture to FILL_RTOL: the integrals are
     the ones the interpolation gate above was given.
     """
     fx = _fixture(sweep)
