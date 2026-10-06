@@ -632,16 +632,10 @@ def _assemble_window_numpy(
 DIRECT_SIGN = -1.0
 # The remainder enters G as `+rem` (`_fold_ground_block`: free - (c2 img - rem)).
 REMAINDER_SIGN = 1.0
-# bspline's `self_completions` are an additive correction to its Z = -G.
-COMPLETION_SIGN = -1.0
-# `_crossing_fill.axis_data`'s density on the completion axes (None = the
-# module's defaults, bspline's). Swept on the D3 fan deck in `probe_fan_axes`.
-COMPLETION_Q = None
-# The above-plane remainder's route: "fused" (bspline's kernel) or "direct" (the
-# direct form's evaluator at the test nodes), the latter a diagnostic.
-REMAINDER_ROUTE_ABOVE = "fused"
-COMPLETION_PANEL_ORDER = None
-COMPLETION_GROWTH = None
+# The above-plane remainder's fused route needs bspline's C++ kernel; without
+# the accelerator the solver replays the direct form's evaluator at the test
+# nodes instead (`SinusoidalGalerkinSolver._mp_remainder_masked`).
+_HAVE_REMAINDER_Q = _acc is not None and hasattr(_acc, "sommerfeld_remainder_bspline_Q")
 
 # Bytes of pair-moment window held at once: (3, 3, rows, N) complex128.
 WINDOW_BYTES = 128 << 20
@@ -657,8 +651,7 @@ class WindowFill:
     block's sources are the same segments mirrored); `(k, eta)` is the
     block's operating point; `n_qp` and `ladder` the B-spline fill's base
     order and pair-order ladder. `scale` multiplies the block (the image's
-    `-coefficient`); `weights(i0, i1) -> (w_a, w_phi)` supplies optional
-    per-pair tables for the window's rows.
+    `-coefficient`).
     """
 
     def __init__(
@@ -687,7 +680,6 @@ class WindowFill:
         src_h,
         *,
         scale=1.0,
-        weights=None,
         obs_idx=None,
         src_idx=None,
     ):
@@ -728,9 +720,6 @@ class WindowFill:
             )
             if ii.size:
                 J[:, :, ii, jj] = Jn
-            w_a = w_phi = None
-            if weights is not None:
-                w_a, w_phi = weights(i0, i1)
             assemble_window(
                 self.G,
                 J,
@@ -744,8 +733,6 @@ class WindowFill:
                 src_t,
                 self.c_a,
                 self.c_phi,
-                w_a=w_a,
-                w_phi=w_phi,
                 scale=scale,
             )
             del J

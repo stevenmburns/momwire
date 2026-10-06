@@ -23,6 +23,7 @@ import numpy as np
 import pytest
 
 import momwire._sinusoidal_mp as mp
+from momwire import _crossing_fill
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver, _solve_constrained
 
 C0 = 299792458.0
@@ -302,7 +303,7 @@ def test_crossing_completions_are_load_bearing(monkeypatch):
     evidence that this route takes them (the direct form must not)."""
     deck = _crossing_cases()["crossing1"]
     G_dir, _ = _G_and_Z(deck, "direct")
-    monkeypatch.setattr(mp, "COMPLETION_SIGN", 0.0)
+    monkeypatch.setattr(_crossing_fill, "self_completions", lambda *a, **kw: None)
     G_off, _ = _G_and_Z(deck, "mixed-potential")
     rel = np.abs(G_off - G_dir).max() / np.abs(G_dir).max()
     assert rel > 1e-2, rel
