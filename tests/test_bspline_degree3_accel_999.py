@@ -51,8 +51,9 @@ pytestmark = pytest.mark.skipif(
 # 20 at momwire#999; +4 at momwire#1132, whose row-compact `row_of` arm of
 # each windowed assembler switches on the degree too (and reaches 3); +1 at
 # momwire#1362, the extended kernel's tiered off-edge entry; +1 at its
-# follow-up, the swept extended kernel's tiered entry.
-N_DEGREE_SWITCHES = 26
+# follow-up, the swept extended kernel's tiered entry; -1 there too, the
+# H-matrix EK block entries (flat, refl, and both tiered) sharing one switch.
+N_DEGREE_SWITCHES = 25
 
 
 def _source() -> str:
