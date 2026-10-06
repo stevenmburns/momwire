@@ -2346,11 +2346,18 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
         rowflat[d0 : d0 + nk[g]] = inv[b0 : b0 + nk[g]]
     del inv
     _cancel.poll()
-    b = np.concatenate(kfirst)[koff[g_s[blk]] + j_first]
-    _cancel.poll()
-    kept_pos = (a_s[blk].astype(np.int64) * nB + b).astype(
-        _index_dtype(int(a_s.max(initial=0)) * nB + nB), copy=False
-    )
+    # Each row's flat grid position, a span of rows at a time (momwire#1335:
+    # the one-shot spelling formed four row-length int64 temporaries, the
+    # inverted L x32's merge spike); the same integers.
+    kcat = np.concatenate(kfirst)
+    kept_pos = np.empty(blk.size, dtype=_index_dtype(int(a_s.max(initial=0)) * nB + nB))
+    step = 1 << 20
+    for c0 in range(0, blk.size, step):
+        _cancel.poll()
+        bb = blk[c0 : c0 + step]
+        b = kcat[koff[g_s[bb]] + j_first[c0 : c0 + step]]
+        kept_pos[c0 : c0 + step] = a_s[bb].astype(np.int64) * nB + b
+    del kcat
     rowtab = [
         rowflat[off[g] : off[g] + nz[g] * nk[g]].reshape(nz[g], nk[g])
         for g in range(nG)
@@ -2818,6 +2825,38 @@ def _held_slots(n_tiles, tile_rows, last, hpos=None):
     return n_slots
 
 
+# `_stable_tile_order`'s chunk of rows (momwire#1335).
+_TILE_ORDER_CHUNK = 1 << 20
+
+
+def _stable_tile_order(t_row, n_tiles, dtype):
+    """`(o, b)`: `o = np.argsort(t_row, kind="stable")` in `dtype` and `b`
+    the tiles' bounds in it (`searchsorted(t_row[o], arange(n_tiles + 1))`),
+    by a counting sort a chunk of rows at a time (momwire#1335). The rows of
+    a tile land in its slots in ascending order -- chunks in order, each
+    chunk's own stable sort -- which is the stable argsort's answer, without
+    its int64 permutation and the narrowing copy of it (~210 MB at razor's
+    inverted L x32)."""
+    n = t_row.size
+    counts = np.bincount(t_row, minlength=n_tiles).astype(np.int64)
+    b = np.zeros(n_tiles + 1, dtype=np.int64)
+    np.cumsum(counts, out=b[1:])
+    cursor = b[:-1].copy()
+    o = np.empty(n, dtype=dtype)
+    step = max(1, int(_TILE_ORDER_CHUNK))
+    for c0 in range(0, n, step):
+        _cancel.poll()
+        ts = t_row[c0 : c0 + step]
+        oc = np.argsort(ts, kind="stable")
+        tsorted = ts[oc]
+        cnt = np.bincount(ts, minlength=n_tiles).astype(np.int64)
+        gstart = np.cumsum(cnt) - cnt
+        dest = cursor[tsorted] + (np.arange(oc.size, dtype=np.int64) - gstart[tsorted])
+        o[dest] = oc + c0
+        cursor += cnt
+    return o, b
+
+
 class _ProductTiles:
     """The product's rows evaluated a TILE at a time, and the main
     sandwich's table columns served as each becomes complete (momwire#1173
@@ -2929,13 +2968,10 @@ class _ProductTiles:
                     _cancel.poll()
                 t_row[tab] = self.tile_of_key[kj][None, :]
             # A row's tile is its key's, the same in every group holding it.
-            # Stable on 16-bit keys is numpy's radix sort: O(rows).
-            o = np.argsort(t_row, kind="stable")
-            _cancel.poll()
-            b = np.searchsorted(t_row[o], np.arange(self.n_tiles + 1))
+            # The rows in tile order, ascending within a tile: a stable sort
+            # on the tile, by counting (`_stable_tile_order`).
+            self._by_tile = _stable_tile_order(t_row, self.n_tiles, _index_dtype(U))
             del t_row
-            self._by_tile = (o.astype(_index_dtype(U)), b)
-            del o
         else:
             for g, kj in enumerate(plan.kids):
                 if not g & 255:
@@ -5703,9 +5739,16 @@ class _FusedEnds:
             if late_nodes.size == 0:
                 continue
             zls = np.unique(self.vg_zl[self.vg_g == g])
-            base = fast.off[g] + zls * fast.nk[g]
-            r = fast.rowflat[base[:, None] + fast.kl_rank[g][late_nodes][None, :]]
-            _mark_late(self._late_marks(), r, maxT[late_nodes][None, :])
+            kn = fast.kl_rank[g][late_nodes]
+            tn = maxT[late_nodes]
+            # A span of the group's z rows at a time (the mast's ~480 z by
+            # its late nodes is ~10 M rows at x32).
+            per = max(1, (1 << 20) // max(1, late_nodes.size))
+            for z0 in range(0, zls.size, per):
+                base = fast.off[g] + zls[z0 : z0 + per] * fast.nk[g]
+                r = fast.rowflat[base[:, None] + kn[None, :]]
+                _mark_late(self._late_marks(), r, tn[None, :])
+                del r
 
     def _tile_line_of(self, g):
         """Group g's keys' tiles along the line, `tile_of_key[kid[g]]`
