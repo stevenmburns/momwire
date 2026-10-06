@@ -188,22 +188,33 @@ def test_recycled_held_slots_are_the_one_slot_per_row_store_to_the_bit():
 
 
 def test_held_slots_never_share_a_slot_between_live_rows():
-    """`_held_slots` against brute force: two rows live in one tile never
-    share a slot, and the slot count is the most rows live in any tile."""
+    """`_held_slots` against brute force: two rows live in one tile (from
+    their own tile through their last reading tile) never share a slot, and
+    the slot count is the most rows live in any tile. A row read at its own
+    tile or before is refused."""
     rng = np.random.default_rng(1335)
-    n_tiles = 30
-    first = rng.integers(0, n_tiles - 1, 4000)
-    last = first + 1 + rng.integers(0, 5, first.size)
-    last = np.minimum(last, n_tiles - 1)
-    slot, n_slots = cf._held_slots(first, last, n_tiles)
+    n_tiles, n_rows = 30, 6000
+    tile = np.sort(rng.integers(0, n_tiles, n_rows))
+    by_tile = [np.flatnonzero(tile == t) for t in range(n_tiles)]
+    last = np.full(n_rows, -1, dtype=np.int16)
+    late = rng.random(n_rows) < 0.6
+    late &= tile < n_tiles - 1
+    span = 1 + rng.integers(0, 5, n_rows)
+    last[late] = np.minimum(tile[late] + span[late], n_tiles - 1)
+    hpos = np.full(n_rows, -1, dtype=np.int64)
+    n_slots = cf._held_slots(n_tiles, lambda t: by_tile[t], last, hpos)
+    assert np.array_equal(hpos >= 0, last >= 0)
     live_max = 0
     for t in range(n_tiles):
-        live = (first <= t) & (t <= last)
+        live = (last >= 0) & (tile <= t) & (t <= last)
         live_max = max(live_max, int(live.sum()))
-        s_t = slot[live]
+        s_t = hpos[live]
         assert np.unique(s_t).size == s_t.size, t
-    assert n_slots == live_max
-    assert slot.min() >= 0 and slot.max() < n_slots
+    assert n_slots == live_max and hpos.max() < n_slots
+    bad = last.copy()
+    bad[np.flatnonzero(late)[0]] = tile[np.flatnonzero(late)[0]]
+    with pytest.raises(AssertionError, match="not read after its own tile"):
+        cf._held_slots(n_tiles, lambda t: by_tile[t], bad)
 
 
 @pytest.mark.parametrize(
