@@ -454,7 +454,13 @@ static PairOrderLadder ladder_from_arrays(
 #define MW_OFFEDGE_LANES_1290 0
 #endif
 
-template<int D, bool COMPLEX_K>
+// EK (momwire#1362): the extended-kernel twin is this kernel with NEC Eq 89's
+// coaxial factor applied to G on the pairs whose group labels match
+// (`grp_i[i] == grp_j[j] >= 0`), between stage 1 and stage 2; see
+// `seg_seg_full_moments_bspline_kernel_ek` below for the contract. With EK
+// false every EK statement is a constant-false branch, so the reduced
+// instantiations compile to what they did.
+template<int D, bool COMPLEX_K, bool EK = false>
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_kernel_impl(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
@@ -467,10 +473,19 @@ seg_seg_full_moments_bspline_kernel_impl(
     const PairOrderLadder& ladder,
     // momwire#1290: true walks every pair alone even where the lane path is
     // compiled -- the reference that path is gated against to the bit.
-    bool reference = false
+    bool reference = false,
+    // EK only: the per-segment group labels (N_i,) / (N_j,) and the plain
+    // (unsquared) EK radius.
+    const int64_t *grp_i = nullptr,
+    const int64_t *grp_j = nullptr,
+    double a_ek = 0.0
 ) {
+    static_assert(!(EK && COMPLEX_K),
+                  "the extended kernel is served for a real k only");
     static constexpr int NM = D + 1;          // moments per axis
     static constexpr int NMM = NM * NM;       // total moments
+    const double a2_ek = a_ek * a_ek;
+    const double a4_ek = a2_ek * a2_ek;
 
     auto sli = seg_l_i.unchecked<2>();
     auto sri = seg_r_i.unchecked<2>();
@@ -718,6 +733,38 @@ seg_seg_full_moments_bspline_kernel_impl(
                 }
             }
 
+            // EK: eligibility is a property of the (i, j) SEGMENT pair, not
+            // of the quadrature sub-pair (numpy's `mask[:, None, :, None]`
+            // broadcast), so one branch serves every point of the chunk. The
+            // loop is the pre-#1362 EK kernel's, verbatim: `_ek_factor`'s
+            // spelling term by term, T1, T2, C1, C2, fac = T1*C2 - T2*C1 + 1,
+            // then G *= fac (complex).
+            if (EK && grp_i[i] == grp_j[j] && grp_i[i] >= 0) {
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    double Rq = R[t];
+                    double r2 = Rq * Rq;
+                    double r4 = r2 * r2;
+                    double kr = k * Rq;
+                    double kr2 = kr * kr;
+                    double t1 = 0.25 * a4_ek / r4;
+                    double t2 = 0.5 * a2_ek / r2;
+                    double c1r = 1.0;
+                    double c1i = kr;
+                    double c2r = 3.0 * c1r - kr2;
+                    double c2i = 3.0 * c1i;
+                    double facr = t1 * c2r;
+                    double faci = t1 * c2i;
+                    facr = facr - t2 * c1r;
+                    faci = faci - t2 * c1i;
+                    facr = facr + 1.0;
+                    double gre = G_re[t];
+                    double gim = G_im[t];
+                    G_re[t] = gre * facr - gim * faci;
+                    G_im[t] = gre * faci + gim * facr;
+                }
+            }
+
             // Stage 2: the NMM moment sums, carried in acc_* across
             // chunks. Each accumulator adds its terms in ascending t, one
             // rounded multiply and one rounded add per term -- the order
@@ -954,6 +1001,53 @@ seg_seg_full_moments_bspline_kernel_impl(
                         inv_R_4pi[t] = inv_4pi / R[t];
                         G_re[t] = cos_phases[t] * inv_R_4pi[t];
                         G_im[t] = sin_phases[t] * inv_R_4pi[t];
+                    }
+                }
+
+                // EK (momwire#1362): the walk's coaxial factor, per lane.
+                // Eligibility is per PAIR, so the four lanes of a group can
+                // disagree (a group straddling a wire's end); every lane
+                // computes G*fac and an ineligible lane keeps its G by a
+                // blend, which moves no bits. The arithmetic is the walk's
+                // loop operation for operation: its `t2 * c1r` and
+                // `3.0 * c1r` multiply by c1r = 1.0, which is exact, so they
+                // are spelled here as t2 and 3.0.
+                if (EK && grp_i[i] >= 0) {
+                    const int64_t gi = grp_i[i];
+                    const bool e0 = grp_j[j0 + 0] == gi, e1 = grp_j[j0 + 1] == gi;
+                    const bool e2 = grp_j[j0 + 2] == gi, e3 = grp_j[j0 + 3] == gi;
+                    if (e0 || e1 || e2 || e3) {
+                        const __m256d emask = _mm256_castsi256_pd(_mm256_set_epi64x(
+                            e3 ? -1 : 0, e2 ? -1 : 0, e1 ? -1 : 0, e0 ? -1 : 0));
+                        const __m256d v_k = _mm256_set1_pd(k);
+                        const __m256d v_t1n = _mm256_set1_pd(0.25 * a4_ek);
+                        const __m256d v_t2n = _mm256_set1_pd(0.5 * a2_ek);
+                        const __m256d v_one = _mm256_set1_pd(1.0);
+                        const __m256d v_three = _mm256_set1_pd(3.0);
+                        for (size_t t = 0; t < m; t++) {
+                            const __m256d Rq = _mm256_load_pd(R + t * LN);
+                            const __m256d r2 = _mm256_mul_pd(Rq, Rq);
+                            const __m256d r4 = _mm256_mul_pd(r2, r2);
+                            const __m256d kr = _mm256_mul_pd(v_k, Rq);
+                            const __m256d kr2 = _mm256_mul_pd(kr, kr);
+                            const __m256d t1 = _mm256_div_pd(v_t1n, r4);
+                            const __m256d t2 = _mm256_div_pd(v_t2n, r2);
+                            const __m256d c2r = _mm256_sub_pd(v_three, kr2);
+                            const __m256d c2i = _mm256_mul_pd(v_three, kr);
+                            __m256d facr = _mm256_mul_pd(t1, c2r);
+                            __m256d faci = _mm256_mul_pd(t1, c2i);
+                            facr = _mm256_sub_pd(facr, t2);
+                            faci = _mm256_sub_pd(faci, _mm256_mul_pd(t2, kr));
+                            facr = _mm256_add_pd(facr, v_one);
+                            const __m256d gre = _mm256_load_pd(G_re + t * LN);
+                            const __m256d gim = _mm256_load_pd(G_im + t * LN);
+                            const __m256d nre = _mm256_sub_pd(_mm256_mul_pd(gre, facr),
+                                                              _mm256_mul_pd(gim, faci));
+                            const __m256d nim = _mm256_add_pd(_mm256_mul_pd(gre, faci),
+                                                              _mm256_mul_pd(gim, facr));
+                            _mm256_store_pd(G_re + t * LN, _mm256_blendv_pd(gre, nre, emask));
+                            _mm256_store_pd(G_im + t * LN, _mm256_blendv_pd(gim, nim, emask));
+                        }
                     }
                 }
 
@@ -1302,11 +1396,11 @@ seg_seg_full_moments_bspline_swept_kernel(
 // C++ mirrors `_ek_radius(ek, a)` on the Python side rather than assuming
 // it (unit 1's same rationale for `D_ek_dispatch`/`seg_seg_reg_..._ek`).
 //
-// Written as its own function rather than folded into
-// `seg_seg_full_moments_bspline_kernel<D>` via a `template<bool EK>` (the
-// same-edge kernels' choice): the reduced off-edge kernel's entry point and
-// arithmetic stay completely untouched — zero lines of the frozen path
-// change — at the cost of the geometry precompute being written twice.
+// Unit 2 wrote this as its own function so the reduced kernel's lines stayed
+// untouched. momwire#1362 folded it into `seg_seg_full_moments_bspline_
+// kernel_impl` as `EK = true` once the reduced kernel had grown the t-outer
+// stage 2 and the AVX2 lanes the twin lacked (EK on cost bs2 2-3x on free
+// and above decks); the reduced instantiations' Z is gated unchanged.
 template<int D>
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_kernel_ek(
@@ -1320,219 +1414,29 @@ seg_seg_full_moments_bspline_kernel_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
-    double a_ek
+    double a_ek,
+    bool reference = false
 ) {
-    static constexpr int NM = D + 1;
-    static constexpr int NMM = NM * NM;
-
-    auto sli = seg_l_i.unchecked<2>();
-    auto sri = seg_r_i.unchecked<2>();
-    auto slj = seg_l_j.unchecked<2>();
-    auto srj = seg_r_j.unchecked<2>();
-    auto glt = gl_t.unchecked<1>();
-    auto glw = gl_w.unchecked<1>();
-    auto gi_v = group_i.unchecked<1>();
-    auto gj_v = group_j.unchecked<1>();
-
-    if (sli.shape(1) != 3 || sri.shape(1) != 3 ||
-        slj.shape(1) != 3 || srj.shape(1) != 3) {
-        throw std::runtime_error("segment endpoint arrays must have shape (N, 3)");
-    }
-    if (sli.shape(0) != sri.shape(0) || slj.shape(0) != srj.shape(0)) {
-        throw std::runtime_error("seg_l and seg_r must have matching N");
-    }
-    if (glt.shape(0) != glw.shape(0)) {
-        throw std::runtime_error("gl_t and gl_w must have matching length");
-    }
-    size_t n_qp_in = glt.shape(0);
-
-    size_t N_i = sli.shape(0);
-    size_t N_j = slj.shape(0);
-    size_t n_qp = n_qp_in;
-    if ((size_t)group_i.shape(0) != N_i || (size_t)group_j.shape(0) != N_j) {
+    if (group_i.ndim() != 1 || group_j.ndim() != 1 ||
+        (seg_l_i.ndim() == 2 && group_i.shape(0) != seg_l_i.shape(0)) ||
+        (seg_l_j.ndim() == 2 && group_j.shape(0) != seg_l_j.shape(0))) {
         throw std::runtime_error("group_i/group_j must match N_i/N_j");
     }
-
-    py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, N_i, N_j});
-    auto j_view = J.mutable_unchecked<4>();
-
-    // Phase 0: release the GIL for the heavy compute region below.
-    py::gil_scoped_release release;
-
-    const double inv_4pi = 1.0 / (4.0 * M_PI);
-    const double a2_ek = a_ek * a_ek;
-    const double a4_ek = a2_ek * a2_ek;
-
-    std::vector<double> pos_i(N_i * n_qp * 3);
-    std::vector<double> pos_j(N_j * n_qp * 3);
-    std::vector<double> len_i(N_i);
-    std::vector<double> len_j(N_j);
-    for (size_t i = 0; i < N_i; i++) {
-        double dx = sri(i,0) - sli(i,0);
-        double dy = sri(i,1) - sli(i,1);
-        double dz = sri(i,2) - sli(i,2);
-        len_i[i] = std::sqrt(dx*dx + dy*dy + dz*dz);
-        for (size_t q = 0; q < n_qp; q++) {
-            double t = glt(q);
-            pos_i[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
-            pos_i[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
-            pos_i[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
-        }
-    }
-    for (size_t j = 0; j < N_j; j++) {
-        double dx = srj(j,0) - slj(j,0);
-        double dy = srj(j,1) - slj(j,1);
-        double dz = srj(j,2) - slj(j,2);
-        len_j[j] = std::sqrt(dx*dx + dy*dy + dz*dz);
-        for (size_t r = 0; r < n_qp; r++) {
-            double t = glt(r);
-            pos_j[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
-            pos_j[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
-            pos_j[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
-        }
-    }
-
-    // TILED OVER qr (momwire#762) — kernel 1's transformation, with the EK
-    // factor stage inside the chunk. Eligibility is a property of the (i, j)
-    // SEGMENT pair, not of the quadrature sub-pair, so it is decided once
-    // outside the chunk loop and every chunk sees the same branch. One chunk
-    // at n_qp <= 8, so the output is bit-identical.
-    MW_OMP_PARALLEL_FOR_COLLAPSE2
-    for (size_t i = 0; i < N_i; i++) {
-        for (size_t j = 0; j < N_j; j++) {
-            alignas(32) double R[BSPLINE_QR_TILE];
-            alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
-            alignas(32) double phases[BSPLINE_QR_TILE];
-            alignas(32) double cos_phases[BSPLINE_QR_TILE];
-            alignas(32) double sin_phases[BSPLINE_QR_TILE];
-            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
-            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
-
-            double acc_re[NMM], acc_im[NMM];
-            for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
-
-            const double *pi = &pos_i[i * n_qp * 3];
-            const double *pj = &pos_j[j * n_qp * 3];
-            const double Li = len_i[i];
-            const double Lj = len_j[j];
-            const size_t n_pairs = n_qp * n_qp;
-            const bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
-
-            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
-                const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
-                                     ? (n_pairs - base) : BSPLINE_QR_TILE;
-
-                size_t q = base / n_qp;
-                size_t r = base % n_qp;
-                for (size_t t = 0; t < m; t++) {
-                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
-                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
-                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
-                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
-
-                    const double wi = glw(q) * Li;
-                    const double ui = glt(q) * Li;
-                    const double wj = glw(r) * Lj;
-                    const double uj = glt(r) * Lj;
-                    double ui_pow[NM], uj_pow[NM];
-                    ui_pow[0] = 1.0;
-                    uj_pow[0] = 1.0;
-                    for (int e = 1; e < NM; e++) {
-                        ui_pow[e] = ui_pow[e-1] * ui;
-                        uj_pow[e] = uj_pow[e-1] * uj;
-                    }
-                    const double wij = wi * wj;
-                    for (int pp = 0; pp < NM; pp++) {
-                        for (int PP = 0; PP < NM; PP++) {
-                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
-                        }
-                    }
-
-                    if (++r == n_qp) { r = 0; ++q; }
-                }
-
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m; t++) {
-                    phases[t] = -k * R[t];
-                }
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m; t++) {
-                    cos_phases[t] = std::cos(phases[t]);
-                }
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m; t++) {
-                    sin_phases[t] = std::sin(phases[t]);
-                }
-                MW_OMP_SIMD()
-                for (size_t t = 0; t < m; t++) {
-                    inv_R_4pi[t] = inv_4pi / R[t];
-                    G_re[t] = cos_phases[t] * inv_R_4pi[t];
-                    G_im[t] = sin_phases[t] * inv_R_4pi[t];
-                }
-
-                // Eligibility is a property of the (i, j) SEGMENT pair, not of
-                // the quadrature sub-pair (numpy's `mask[:, None, :, None]`
-                // broadcast) — one branch here serves every (q, r) below.
-                bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
-                if (eligible) {
-                    // `_ek_factor`'s spelling, term by term: T1, T2, C1, C2,
-                    // fac = T1*C2 - T2*C1 + 1, then G *= fac (complex).
-                    MW_OMP_SIMD()
-                    for (size_t t = 0; t < m; t++) {
-                        double Rq = R[t];
-                        double r2 = Rq * Rq;
-                        double r4 = r2 * r2;
-                        double kr = k * Rq;
-                        double kr2 = kr * kr;
-                        double t1 = 0.25 * a4_ek / r4;
-                        double t2 = 0.5 * a2_ek / r2;
-                        double c1r = 1.0;
-                        double c1i = kr;
-                        double c2r = 3.0 * c1r - kr2;
-                        double c2i = 3.0 * c1i;
-                        double facr = t1 * c2r;
-                        double faci = t1 * c2i;
-                        facr = facr - t2 * c1r;
-                        faci = faci - t2 * c1i;
-                        facr = facr + 1.0;
-                        double gre = G_re[t];
-                        double gim = G_im[t];
-                        G_re[t] = gre * facr - gim * faci;
-                        G_im[t] = gre * faci + gim * facr;
-                    }
-                }
-
-                for (int pP = 0; pP < NMM; pP++) {
-                    double sr = acc_re[pP], si = acc_im[pP];
-                    const double *w_row = &wuwu[pP * m];
-                    // No `omp simd reduction` here (momwire#781): the clause LICENSES
-                    // reassociation, so the reduction tree follows whatever
-                    // vectorization factor the compiler picks per FUNCTION -- and the
-                    // reduced and EK kernels differ in register pressure. That made
-                    // their all-ineligible outputs disagree by 1 ulp on arm64 while
-                    // matching on x86-64, breaking the exact-reduction gates that
-                    // momwire#270 U2 relies on. Measured single-threaded (pinned,
-                    // passive wait, min of 5, 3 alternating rounds), the clause is
-                    // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
-                    // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
-                    // no cross-kernel equality gate to protect.
-                    for (size_t t = 0; t < m; t++) {
-                        sr += w_row[t] * G_re[t];
-                        si += w_row[t] * G_im[t];
-                    }
-                    acc_re[pP] = sr;
-                    acc_im[pP] = si;
-                }
-            }
-
-            for (int pP = 0; pP < NMM; pP++) {
-                j_view(pP / NM, pP % NM, i, j) =
-                    std::complex<double>(acc_re[pP], acc_im[pP]);
-            }
-        }
-    }
-
-    return J;
+    // momwire#1362: the reduced kernel's own walk and AVX2 lanes, with the
+    // coaxial factor applied between stage 1 and stage 2 on eligible pairs.
+    // One rule (a one-tier ladder): the pair-order ladder has not been
+    // measured against the coaxial factor (`_fill_ladder`). Each pair's
+    // arithmetic is the pre-#1362 EK kernel's, which this replaced: the same
+    // R, the same G, the same factor loop, and each moment the same
+    // ascending-t chain of one rounded multiply and one rounded add -- with
+    // t outermost (8c311afb) and four column pairs per vector lane
+    // (momwire#1290) only reordering work ACROSS chains. Gated to the bit
+    // against the walk (`reference=True`) and the solver's Z against the
+    // pre-#1362 build.
+    return seg_seg_full_moments_bspline_kernel_impl<D, false, true>(
+        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0,
+        ladder_from_rule(gl_t, gl_w), reference,
+        group_i.data(), group_j.data(), a_ek);
 }
 
 // Swept-k (batched) variant of seg_seg_full_moments_bspline_kernel_ek.
@@ -5059,21 +4963,22 @@ seg_seg_full_moments_bspline_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
-    double a_ek
+    double a_ek,
+    bool reference
 ) {
     switch (max_d) {
         case 1:
             return seg_seg_full_moments_bspline_kernel_ek<1>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
-                group_i, group_j, a_ek);
+                group_i, group_j, a_ek, reference);
         case 2:
             return seg_seg_full_moments_bspline_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
-                group_i, group_j, a_ek);
+                group_i, group_j, a_ek, reference);
         case 3:
             return seg_seg_full_moments_bspline_kernel_ek<3>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
-                group_i, group_j, a_ek);
+                group_i, group_j, a_ek, reference);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_ek: max_d must be 1, 2 or 3 "
@@ -6208,13 +6113,16 @@ void register_bspline(py::module_ &m) {
           "coaxial factor fac = 1 + T1*C2 - T2*C1 on eligible pairs and left "
           "alone otherwise — a literal transcription of "
           "_bspline_kernels._seg_seg_full_moments_offedge's `ek is not "
-          "None` branch, evaluated eagerly instead of via np.where.",
+          "None` branch, evaluated eagerly instead of via np.where. "
+          "reference=True walks every pair alone where the AVX2 lane path "
+          "is compiled (momwire#1362), the gate that path is held to.",
           py::arg("seg_l_i"), py::arg("seg_r_i"),
           py::arg("seg_l_j"), py::arg("seg_r_j"),
           py::arg("a_squared"), py::arg("k"),
           py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
-          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"));
+          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
+          py::arg("reference") = false);
     m.def("seg_seg_full_moments_bspline_swept_ek",
           &seg_seg_full_moments_bspline_swept_ek,
           "Batched (swept-k) twin of seg_seg_full_moments_bspline_ek "
