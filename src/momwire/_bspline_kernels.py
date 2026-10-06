@@ -1184,6 +1184,12 @@ def _phase_split_needed(ladder, k, seg_l_i, seg_r_i, seg_l_j, seg_r_j):
     return rows_ok, cols_ok
 
 
+def _ek_rows(labels, idx):
+    """`labels[idx]`, or None for an unset (whole-block) label array: an EK
+    spec's per-segment labels cut with the segments they label."""
+    return None if labels is None else np.asarray(labels)[idx]
+
+
 def _pair_ratio(seg_l_i, seg_r_i, seg_l_j, seg_r_j):
     """The ladder's selector: centre distance over the longer segment,
     shape (N_i, N_j). The C++ kernel computes the same quantity in place."""
@@ -1290,7 +1296,18 @@ def _seg_seg_full_moments_offedge(
                     k,
                     max_d,
                     n_qp,
-                    ek=ek,
+                    # The EK labels are per segment, so they are cut with the
+                    # segments (momwire#1362: before the EK fill took the
+                    # ladder no EK block reached this split).
+                    ek=(
+                        None
+                        if ek is None
+                        else _EK(
+                            a=ek.a,
+                            group_i=_ek_rows(ek.group_i, ri),
+                            group_j=_ek_rows(ek.group_j, cj),
+                        )
+                    ),
                     ladder=ladder,
                 )
         return out
