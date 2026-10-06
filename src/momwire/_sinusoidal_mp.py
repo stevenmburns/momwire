@@ -804,13 +804,19 @@ def basis_wings(starts, jbasis, coef, n_basis, width=N_SHAPES):
     row's basis, so the kernel's Q folds onto G by summing a basis's rows
     and columns. Unused slots sit on segment 0 with zero coefficients (the
     B-spline `supp_seg` / `polys` convention; a padded wing adds exact
-    zeros)."""
+    zeros).
+
+    A basis with no entry in these tables gets NO row. On a class subset of
+    a mixed deck (the above class of a crossing deck: a few hundred bases of
+    thousands) a zero row per absent basis made the kernel's Q an
+    (n_basis, n_basis) transient beside G that was zero outside the class
+    block — 550 MB at invl x32 (momwire#1354)."""
     starts = np.asarray(starts)
     jbasis = np.asarray(jbasis)
     seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
     order = np.argsort(jbasis, kind="stable")
     counts = np.bincount(jbasis[order], minlength=n_basis)
-    n_rows_per = np.maximum((counts + width - 1) // width, 1)
+    n_rows_per = (counts + width - 1) // width
     rows_basis = np.repeat(np.arange(n_basis), n_rows_per)
     R = rows_basis.size
     loc = np.zeros((R, width), dtype=np.int64)
@@ -828,21 +834,29 @@ def fold_rows_into(G, Qr, rows_basis, scale):
     """`G += scale . S Qr S^T` for the 0/1 selector S with `S[rows_basis[r],
     r] = 1`, without an (n, n) transient: a basis's extra rows and columns
     are added onto its first row and column in place, and the first
-    rows/columns then land on G one block of rows at a time."""
+    rows/columns then land on G one block of rows at a time. Only the bases
+    `rows_basis` names are touched (`basis_wings` gives an absent basis no
+    row)."""
     rows_basis = np.asarray(rows_basis)
+    bases = np.unique(rows_basis)
     first = np.full(G.shape[0], rows_basis.size, dtype=np.int64)
     np.minimum.at(first, rows_basis, np.arange(rows_basis.size))
-    extra = np.setdiff1d(np.arange(rows_basis.size), first)
+    extra = np.setdiff1d(np.arange(rows_basis.size), first[bases])
     if extra.size:
         tgt = first[rows_basis[extra]]
         np.add.at(Qr, tgt, Qr[extra])
         np.add.at(Qr.T, tgt, Qr.T[extra])
-    chunk = max(1, (64 << 20) // (16 * max(G.shape[1], 1)))
-    for r0 in range(0, G.shape[0], chunk):
-        r1 = min(r0 + chunk, G.shape[0])
+    first = first[bases]
+    whole = bases.size == G.shape[0]
+    chunk = max(1, (64 << 20) // (16 * max(bases.size, 1)))
+    for r0 in range(0, bases.size, chunk):
+        r1 = min(r0 + chunk, bases.size)
         blk = Qr[first[r0:r1]][:, first]
         blk *= scale
-        G[r0:r1] += blk
+        if whole:
+            G[r0:r1] += blk
+        else:
+            G[np.ix_(bases[r0:r1], bases)] += blk
 
 
 def taylor_shape_coefs(k, h, degree=REMAINDER_TAYLOR_DEGREE):
