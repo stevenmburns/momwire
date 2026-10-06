@@ -4604,10 +4604,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         (`_tested_contrib_rows`) and scattered through the source
         coefficients one observer chunk at a time.
         """
-        if (
-            self._active_medium is None
-            and _sinusoidal_mp.REMAINDER_ROUTE_ABOVE == "fused"
-        ):
+        if self._active_medium is None and _sinusoidal_mp._HAVE_REMAINDER_Q:
             c = np.asarray(geom["seg_centers"], dtype=float)
             t = np.asarray(geom["seg_tangents"], dtype=float)
             h = np.asarray(geom["seg_h"], dtype=float)
@@ -4800,24 +4797,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         ctx_x = self._crossing_context(geom, seg_view, medium)
         a_idx = np.nonzero(~seg_below)[0]
         b_idx = np.nonzero(seg_below)[0]
-        density = dict(
-            q=_sinusoidal_mp.COMPLETION_Q,
-            panel_order=_sinusoidal_mp.COMPLETION_PANEL_ORDER,
-            growth=_sinusoidal_mp.COMPLETION_GROWTH,
-        )
-        ax_a = _crossing_fill.axis_data(ctx_x, a_idx, **density)
-        ax_b = _crossing_fill.axis_data(ctx_x, b_idx, **density)
-        # Accumulated INTO G with G's sign and no (n, n) transient: the
-        # completions add to their `out`, so G is negated around the call
-        # (exact) when the sign is −1.
-        if _sinusoidal_mp.COMPLETION_SIGN == -1.0:
-            np.negative(G, out=G)
-            _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=G)
-            np.negative(G, out=G)
-        elif _sinusoidal_mp.COMPLETION_SIGN == 1.0:
-            _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=G)
-        elif _sinusoidal_mp.COMPLETION_SIGN != 0.0:
-            raise AssertionError("COMPLETION_SIGN is a sign")
+        ax_a = _crossing_fill.axis_data(ctx_x, a_idx)
+        ax_b = _crossing_fill.axis_data(ctx_x, b_idx)
+        # The completions are an additive correction to bspline's Z = −G and
+        # add to their `out`, so G is negated around the call (exact): they
+        # land with G's sign and no (n, n) transient.
+        np.negative(G, out=G)
+        _crossing_fill.self_completions(ctx_x, ax_b, ax_a, out=G)
+        np.negative(G, out=G)
         self._apply_loading(G, geom, seg_view, None, medium=medium)
         return G, seg_view
 
