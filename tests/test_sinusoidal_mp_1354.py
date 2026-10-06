@@ -261,17 +261,14 @@ def test_fill_kwarg_is_validated():
         SinusoidalGalerkinSolver(**DECKS["dipole"], fill="potential")
 
 
-def test_contacts_and_a_cornered_ek_basis_keep_the_direct_fill():
-    # momwire#1362: the extended kernel is served where every basis lies on
-    # one coaxial group, and a bend's basis does not.
-    s = SinusoidalGalerkinSolver(
-        **DECKS["dipole"], fill="mixed-potential", extended_kernel=True
-    )
-    assert s._mp_serves(s._build_geometry())
-    s = SinusoidalGalerkinSolver(
-        **DECKS["bent-L"], fill="mixed-potential", extended_kernel=True
-    )
-    assert not s._mp_serves(s._build_geometry())
+def test_contacts_keep_the_direct_fill_and_ek_corners_do_not():
+    # momwire#1368: every pair is extended, so the extended kernel is served
+    # on a bend too (#1362/#1366 served straight decks only).
+    for name in ("dipole", "bent-L"):
+        s = SinusoidalGalerkinSolver(
+            **DECKS[name], fill="mixed-potential", extended_kernel=True
+        )
+        assert s._mp_serves(s._build_geometry()), name
     contact = _dipole(
         z=0.0, ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld"
     )

@@ -62,6 +62,7 @@ from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _ek_axis_groups,
+    _ek_cut,
     _normalize_ladder,
     _refuse_complex_k,
     _seg_seg_full_moments_offedge,
@@ -581,9 +582,7 @@ def _ek_slice(ek, rows=None, cols=None):
     """
     if ek is None:
         return None
-    gi = ek.group_i if rows is None or ek.group_i is None else ek.group_i[rows]
-    gj = ek.group_j if cols is None or ek.group_j is None else ek.group_j[cols]
-    return _EK(a=ek.a, group_i=gi, group_j=gj)
+    return _ek_cut(ek, rows, cols)
 
 
 def _xfem_projection_coeffs(d):
@@ -1215,14 +1214,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         of the theory manual, the O(a²) azimuthal average of the Green's
         function over a source tube of radius a. Unlike `SinusoidalSolver`,
         which transcribes NEC's per-END IND1/IND2 gating, this Galerkin fill
-        applies EK to a segment PAIR iff the two segments are coaxial and of
-        equal radius (`_ek_axis_groups`) — a symmetric rule, so the Galerkin
-        symmetry of Z survives as an error detector. It agrees with NEC
-        exactly on straight wires and on perpendicular ground contacts (via
-        the mirrored source) and is strictly more conservative at bends,
-        radius steps and K ≥ 3 junctions, where NEC still extends the
-        cross-arm pairs and this rule does not (~1 % of Z at Δ/a = 2, O(h)
-        in the refinement limit — #249 §4.3).
+        applies EK to EVERY segment pair (momwire#1368; `_ek_axis_groups`),
+        with NEC Eq 89 in its two-radius form — the observer's radius as ρ,
+        the source's as the tube b, the factor's R floored at b
+        (`_ek_factor_floored`) — so Z is continuous in bend angle and in
+        radius ratio, as licensed NEC-4.2 and NEC-5 are. The rule is
+        symmetric in the pair, so the Galerkin symmetry of Z survives as an
+        error detector. (Before #1368 only coaxial equal-radius pairs were
+        extended, and Z jumped at the first bend angle and radius ratio.)
 
         Every fill an EK-on solve takes is C++-served (momwire#270): the
         same-edge static and reg moments, the off-edge moments single-k and
@@ -4036,7 +4035,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return _wire_spec.seg_radius(self._radius_per_wire, np.diff(seg_off))
 
     def _ek_axis_labels(self, geom, mirror):
-        """Cached coaxial-and-equal-radius labels for this geometry.
+        """Cached extended-kernel labels for this geometry: since momwire#1368
+        `_ek_axis_groups` gives every segment one label, so every pair —
+        real/real and real/image — is extended. The scan below is kept as
+        the shape the labels' convention needs (comparable arrays, cached),
+        and the history of the joint scan is kept with it.
 
         Returns `(group_i, group_j)`, both (n_segs,), for the observer and
         source sides of a fill. `mirror=False` is the free-space case, where
@@ -4100,10 +4103,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if not self.extended_kernel:
             return None
         group_i, group_j = self._ek_axis_labels(geom, mirror)
-        # a=None: each kernel call's own regularisation radius IS the EK
-        # radius, because eligibility requires equal radii and the off-edge
-        # kernel already regularises each observer row with its own wire's.
-        return _EK(a=None, group_i=group_i, group_j=group_j)
+        # a=None: each kernel call's own regularisation radius — the
+        # OBSERVER row's — is Eq 89's ρ. b_j is the source tube's radius per
+        # source segment (momwire#1368's two-radius factor; an image segment
+        # carries its own segment's radius). None on a uniform-radius mesh,
+        # where b = a on every pair and nothing needs carrying.
+        seg_a = np.asarray(self._seg_radius(geom), dtype=np.float64)
+        b_j = None if np.all(seg_a == seg_a[0]) else seg_a
+        return _EK(a=None, group_i=group_i, group_j=group_j, b_j=b_j)
 
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k

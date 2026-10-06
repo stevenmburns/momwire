@@ -1,20 +1,22 @@
 """momwire#1362: the sinusoidal Galerkin fill's mixed-potential form under
 the extended kernel.
 
-The extended kernel is NEC Eq 89's coaxial factor on G (`_bspline_kernels.
-_ek_factor`, a function of R alone) for a pair whose `_ek_axis_groups` labels
-match. Along a test segment the pair's label is fixed, so the integration by
-parts that turns the direct form into the mixed-potential one stays exact for
-every deck whose bases each lie on one coaxial group (`_mp_ek_exact`); a basis
-that turns a corner keeps the direct fill.
+The extended kernel is NEC Eq 89's factor on G (`_bspline_kernels.
+_ek_factor`, a function of R and the two radii). Since momwire#1368 every
+pair is extended, so the potential a test function sees is continuous along
+its support and the integration by parts that turns the direct form into the
+mixed-potential one is exact on every deck (#1366 served straight decks only,
+when a corner switched kernel). The corner and radius-step gates are
+`test_ek_continuous_1368.py`'s.
 
-The oracle is the direct fill with the extended kernel on the same deck. Its
-EK delta is a quadrature (`_folded_ek_delta_fields`) whose default panel
-count is under-resolved by up to ~4e-5 ohm on a 21-segment dipole, so the
-deck gate compares the EK EFFECT (Z_EK − Z_reduced) of the two fills with the
-direct fill's delta refined (`_N_PANEL_EK_DELTA_NEAR` x4): measured agreement
-1.6e-9 to 2.3e-7 ohm on effects of 4e-3 to 0.4 ohm, while the mixed-potential
-effect moves by at most 1.4e-10 ohm under its own refinement.
+The oracle here is the direct fill with the extended kernel on STRAIGHT decks,
+where its (coaxial) rule extends every pair too. Its EK delta is a quadrature
+(`_folded_ek_delta_fields`) whose default panel count is under-resolved by up
+to ~4e-5 ohm on a 21-segment dipole, so the deck gate compares the EK EFFECT
+(Z_EK − Z_reduced) of the two fills with the direct fill's delta refined
+(`_N_PANEL_EK_DELTA_NEAR` x4): measured agreement 1.6e-9 to 2.3e-7 ohm on
+effects of 4e-3 to 0.4 ohm, while the mixed-potential effect moves by at most
+1.4e-10 ohm under its own refinement.
 """
 
 from __future__ import annotations

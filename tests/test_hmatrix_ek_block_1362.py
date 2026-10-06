@@ -248,14 +248,9 @@ def test_an_all_ineligible_block_is_the_reduced_assembler(image):
         )
         red = acc.bspline_assemble_offedge_block(*args, *gl)
         assert np.array_equal(_bits(ek), _bits(red))
-    if image is not None:
-        # A horizontal wire is never coaxial with its own image, so the image
-        # block has no eligible pair and its own labels change nothing.
-        ek = acc.bspline_assemble_offedge_block_ek(*args, *gl, gi, gj, a)
-        assert np.array_equal(_bits(ek), _bits(red))
-        return
-    # Negative controls: with its labels the block moves, and a 1 ppm EK
-    # radius moves it again.
+    # Negative controls: with its labels the block moves — the image block
+    # too, since momwire#1368 extends a horizontal wire against its own image
+    # — and a 1 ppm EK radius moves it again.
     ek = acc.bspline_assemble_offedge_block_ek(*args, *gl, gi, gj, a)
     assert not np.array_equal(ek, red)
     ppm = acc.bspline_assemble_offedge_block_ek(*args, *gl, gi, gj, a * (1 + 1e-6))

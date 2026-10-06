@@ -478,14 +478,28 @@ seg_seg_full_moments_bspline_kernel_impl(
     // (unsquared) EK radius.
     const int64_t *grp_i = nullptr,
     const int64_t *grp_j = nullptr,
-    double a_ek = 0.0
+    double a_ek = 0.0,
+    // momwire#1368: the SOURCE tube's radius b of NEC Eq 89's two-radius
+    // factor (T1 = b^2 a^2 / 4R^4, T2 = b^2 / 2R^2, `a_ek` the observer's);
+    // negative = b = a_ek, the equal-radius factor to the bit.
+    double a_ek_src = -1.0
 ) {
     static_assert(!(EK && COMPLEX_K),
                   "the extended kernel is served for a real k only");
     static constexpr int NM = D + 1;          // moments per axis
     static constexpr int NMM = NM * NM;       // total moments
-    const double a2_ek = a_ek * a_ek;
-    const double a4_ek = a2_ek * a2_ek;
+    const double b_ek = a_ek_src < 0.0 ? a_ek : a_ek_src;
+    const double a2_ek = b_ek * b_ek;                  // b^2
+    const double a4_ek = a2_ek * (a_ek * a_ek);        // b^2 a^2
+    // momwire#1368: an observer inside the source tube's radius (only at a
+    // radius-step junction, where the thin wire's quadrature reaches within
+    // b of the fat wire) is outside the expansion Eq 89 is: its b^2/R^2
+    // exceeds 1 and the factor grows without bound (bs2 diverged under
+    // refinement at 5:1 and 20:1). The factor is evaluated no closer than
+    // the tube's surface, R_f = max(R, b). It bites only when b > a_ek
+    // (R >= a_ek always), so an equal-radius or thinner-source call never
+    // enters it and is the same arithmetic as before.
+    const bool ek_floor = EK && b_ek > a_ek;
 
     auto sli = seg_l_i.unchecked<2>();
     auto sri = seg_r_i.unchecked<2>();
@@ -743,6 +757,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                 MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
                     double Rq = R[t];
+                    if (ek_floor) Rq = std::max(Rq, b_ek);
                     double r2 = Rq * Rq;
                     double r4 = r2 * r2;
                     double kr = k * Rq;
@@ -1024,8 +1039,10 @@ seg_seg_full_moments_bspline_kernel_impl(
                         const __m256d v_t2n = _mm256_set1_pd(0.5 * a2_ek);
                         const __m256d v_one = _mm256_set1_pd(1.0);
                         const __m256d v_three = _mm256_set1_pd(3.0);
+                        const __m256d v_bek = _mm256_set1_pd(b_ek);
                         for (size_t t = 0; t < m; t++) {
-                            const __m256d Rq = _mm256_load_pd(R + t * LN);
+                            __m256d Rq = _mm256_load_pd(R + t * LN);
+                            if (ek_floor) Rq = _mm256_max_pd(Rq, v_bek);
                             const __m256d r2 = _mm256_mul_pd(Rq, Rq);
                             const __m256d r4 = _mm256_mul_pd(r2, r2);
                             const __m256d kr = _mm256_mul_pd(v_k, Rq);
@@ -1414,7 +1431,8 @@ seg_seg_full_moments_bspline_kernel_ek(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
-    bool reference = false
+    bool reference = false,
+    double a_ek_src = -1.0
 ) {
     if (group_i.ndim() != 1 || group_j.ndim() != 1 ||
         (seg_l_i.ndim() == 2 && group_i.shape(0) != seg_l_i.shape(0)) ||
@@ -1437,7 +1455,7 @@ seg_seg_full_moments_bspline_kernel_ek(
     // `tests/test_ek_pair_order_ladder_1362.py`.
     return seg_seg_full_moments_bspline_kernel_impl<D, false, true>(
         seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0,
-        ladder, reference, group_i.data(), group_j.data(), a_ek);
+        ladder, reference, group_i.data(), group_j.data(), a_ek, a_ek_src);
 }
 
 // Swept-k (batched) variant of seg_seg_full_moments_bspline_kernel_ek.
@@ -1483,7 +1501,8 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
-    bool reference = false
+    bool reference = false,
+    double a_ek_src = -1.0
 ) {
     static constexpr int NM = D + 1;
     static constexpr int NMM = NM * NM;
@@ -1521,8 +1540,12 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     py::gil_scoped_release release;
 
     const double inv_4pi = 1.0 / (4.0 * M_PI);
-    const double a2_ek = a_ek * a_ek;
-    const double a4_ek = a2_ek * a2_ek;
+    // momwire#1368: b = the source tube's radius (`a_ek_src`, negative = a_ek).
+    const double b_ek = a_ek_src < 0.0 ? a_ek : a_ek_src;
+    const double a2_ek = b_ek * b_ek;                  // b^2
+    const double a4_ek = a2_ek * (a_ek * a_ek);        // b^2 a^2
+    // The factor's R floored at the tube, as `..._kernel_impl` (momwire#1368).
+    const bool ek_floor = b_ek > a_ek;
 
     // Lengths, then PER TIER the quadrature positions -- with one tier the
     // pre-#1362 precompute split into two loops: the same expressions
@@ -1663,7 +1686,8 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                 // of the k loop exactly as the same-edge swept twin's do.
                 MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
-                    double r2 = R[t] * R[t];
+                    const double Rf = ek_floor ? std::max(R[t], b_ek) : R[t];
+                    double r2 = Rf * Rf;
                     double r4 = r2 * r2;
                     t1v[t] = 0.25 * a4_ek / r4;
                     t2v[t] = 0.5 * a2_ek / r2;
@@ -1692,7 +1716,7 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                 if (eligible) {
                     MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
-                        double kr = k * R[t];
+                        double kr = k * (ek_floor ? std::max(R[t], b_ek) : R[t]);
                         double kr2 = kr * kr;
                         double c1r = 1.0;
                         double c1i = kr;
@@ -1885,7 +1909,8 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                     e3 ? -1 : 0, e2 ? -1 : 0, e1 ? -1 : 0, e0 ? -1 : 0));
                 if (any_e) {
                     for (size_t t = 0; t < m; t++) {
-                        const __m256d Rq = _mm256_load_pd(R + t * LN);
+                        __m256d Rq = _mm256_load_pd(R + t * LN);
+                        if (ek_floor) Rq = _mm256_max_pd(Rq, _mm256_set1_pd(b_ek));
                         const __m256d r2 = _mm256_mul_pd(Rq, Rq);
                         const __m256d r4 = _mm256_mul_pd(r2, r2);
                         _mm256_store_pd(t1v + t * LN, _mm256_div_pd(v_t1n, r4));
@@ -1918,7 +1943,8 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                         // exact, so they are spelled t2 and 3.0 here.
                         const __m256d v_k = _mm256_set1_pd(k);
                         for (size_t t = 0; t < m; t++) {
-                            const __m256d Rq = _mm256_load_pd(R + t * LN);
+                            __m256d Rq = _mm256_load_pd(R + t * LN);
+                            if (ek_floor) Rq = _mm256_max_pd(Rq, _mm256_set1_pd(b_ek));
                             const __m256d kr = _mm256_mul_pd(v_k, Rq);
                             const __m256d kr2 = _mm256_mul_pd(kr, kr);
                             const __m256d t1 = _mm256_load_pd(t1v + t * LN);
@@ -4974,7 +5000,10 @@ seg_seg_full_moments_sinusoidal_kernel(
     // (N_j,) and the plain EK radius; a pair is extended iff its labels match.
     const int64_t *grp_i = nullptr,
     const int64_t *grp_j = nullptr,
-    double a_ek = 0.0
+    double a_ek = 0.0,
+    // momwire#1368: Eq 89's source tube b per SOURCE segment (N_j,), or
+    // nullptr for b = a_ek (the equal-radius factor).
+    const double *b_j = nullptr
 ) {
     static_assert(!(EK && COMPLEX_K),
                   "the extended kernel is served at a real k only");
@@ -5152,17 +5181,23 @@ seg_seg_full_moments_sinusoidal_kernel(
                     }
                 }
                 if (EK && grp_i[i] == grp_j[j] && grp_i[i] >= 0) {
+                    const double b2 = b_j ? b_j[j] * b_j[j] : a2_ek;
+                    // momwire#1368: the factor no closer than the source
+                    // tube (bspline's `ek_floor`); only b > a can bite.
+                    const double bj = b_j ? b_j[j] : a_ek;
+                    const bool ek_floor = bj > a_ek;
                     // NEC Eq 89's coaxial factor on G (`_bspline_kernels.
                     // _ek_factor`): fac = 1 + T1 C2 - T2 C1, C1 = 1 + jkR,
                     // C2 = 3 C1 - (kR)^2, T1 = a^4 / 4R^4, T2 = a^2 / 2R^2,
                     // in that order of operations.
                     for (size_t t = 0; t < m; t++) {
-                        const double r2 = R[t] * R[t];
+                        const double Rf = ek_floor ? std::max(R[t], bj) : R[t];
+                        const double r2 = Rf * Rf;
                         const double r4 = r2 * r2;
-                        const double kr = k_re * R[t];
+                        const double kr = k_re * Rf;
                         const double kr2 = kr * kr;
-                        const double t1 = 0.25 * (a2_ek * a2_ek) / r4;
-                        const double t2 = 0.5 * a2_ek / r2;
+                        const double t1 = 0.25 * (b2 * a2_ek) / r4;
+                        const double t2 = 0.5 * b2 / r2;
                         double fr = t1 * (3.0 - kr2);
                         double fi = t1 * (3.0 * kr);
                         fr = fr - t2;
@@ -5250,8 +5285,16 @@ seg_seg_full_moments_sinusoidal_tiered_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
-    double a_ek
+    double a_ek,
+    py::object b_j_obj
 ) {
+    py::array_t<double, py::array::c_style | py::array::forcecast> b_j_arr;
+    if (!b_j_obj.is_none()) {
+        b_j_arr = b_j_obj.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+        if ((size_t)b_j_arr.size() != (size_t)seg_l_j.shape(0))
+            throw std::runtime_error(
+                "seg_seg_full_moments_sinusoidal_tiered_ek: one b per source segment");
+    }
     if ((size_t)group_i.size() != (size_t)seg_l_i.shape(0) ||
         (size_t)group_j.size() != (size_t)seg_l_j.shape(0)) {
         throw std::runtime_error(
@@ -5260,7 +5303,8 @@ seg_seg_full_moments_sinusoidal_tiered_ek(
     PairOrderLadder ladder = ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
     return seg_seg_full_moments_sinusoidal_kernel<false, true>(
         seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, ladder,
-        group_i.data(), group_j.data(), a_ek);
+        group_i.data(), group_j.data(), a_ek,
+        b_j_obj.is_none() ? nullptr : b_j_arr.data());
 }
 
 // The sinusoidal fill's windowed assembler (momwire#1354): the B-spline
@@ -5557,7 +5601,9 @@ parallel_pair_moments_sinusoidal(
     py::array_t<double, py::array::c_style | py::array::forcecast> gw,
     py::array_t<double, py::array::c_style | py::array::forcecast> gx,
     py::array_t<double, py::array::c_style | py::array::forcecast> gwx,
-    py::object a_ek_obj
+    py::object a_ek_obj,
+    // momwire#1368: Eq 89's source tube b per pair (n,), or None for b = a_ek.
+    py::object b_ek_obj
 ) {
     static constexpr int NM = 3;
     // momwire#1362: `a_ek` (n,) is each pair's extended-kernel radius, 0 for a
@@ -5568,6 +5614,10 @@ parallel_pair_moments_sinusoidal(
     py::array_t<double, py::array::c_style | py::array::forcecast> a_ek_arr;
     if (has_ek) a_ek_arr = a_ek_obj.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
     const double *a_ekp = has_ek ? a_ek_arr.data() : nullptr;
+    py::array_t<double, py::array::c_style | py::array::forcecast> b_ek_arr;
+    const bool has_b = has_ek && !b_ek_obj.is_none();
+    if (has_b) b_ek_arr = b_ek_obj.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+    const double *b_ekp = has_b ? b_ek_arr.data() : nullptr;
     auto ci = c_i.unchecked<2>(); auto ti = t_i.unchecked<2>(); auto hi_ = h_i.unchecked<1>();
     auto cj = c_j.unchecked<2>(); auto tj = t_j.unchecked<2>(); auto hj_ = h_j.unchecked<1>();
     auto a2v = a2.unchecked<1>();
@@ -5583,6 +5633,8 @@ parallel_pair_moments_sinusoidal(
         throw std::runtime_error("rules must be (nodes, weights) pairs of one length");
     if (has_ek && (size_t)a_ek_arr.size() != n)
         throw std::runtime_error("parallel_pair_moments_sinusoidal: a_ek must be (n,)");
+    if (has_b && (size_t)b_ek_arr.size() != n)
+        throw std::runtime_error("parallel_pair_moments_sinusoidal: b_ek must be (n,)");
     py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, n});
     auto jv = J.mutable_unchecked<3>();
     const double kr = k.real(), kim = k.imag();
@@ -5623,10 +5675,13 @@ parallel_pair_moments_sinusoidal(
                 double g_re = std::cos(ph) * sc, g_im = std::sin(ph) * sc;
                 if (has_ek && a_ekp[p] > 0.0) {
                     const double a2e = a_ekp[p] * a_ekp[p];
-                    const double r2 = R * R, r4 = r2 * r2;
-                    const double kR = kr * R, kR2 = kR * kR;
-                    const double t1 = 0.25 * (a2e * a2e) / r4;
-                    const double t2 = 0.5 * a2e / r2;
+                    const double b2e = has_b ? b_ekp[p] * b_ekp[p] : a2e;
+                    // The factor no closer than the source tube (momwire#1368).
+                    const double Rf = (has_b && b_ekp[p] > a_ekp[p]) ? std::max(R, b_ekp[p]) : R;
+                    const double r2 = Rf * Rf, r4 = r2 * r2;
+                    const double kR = kr * Rf, kR2 = kR * kR;
+                    const double t1 = 0.25 * (b2e * a2e) / r4;
+                    const double t2 = 0.5 * b2e / r2;
                     double fr = t1 * (3.0 - kR2);
                     double fi = t1 * (3.0 * kR);
                     fr = fr - t2;
@@ -5731,22 +5786,23 @@ seg_seg_full_moments_bspline_ek(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
-    bool reference
+    bool reference,
+    double a_ek_src
 ) {
     const PairOrderLadder ladder = ladder_from_rule(gl_t, gl_w);
     switch (max_d) {
         case 1:
             return seg_seg_full_moments_bspline_kernel_ek<1>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 2:
             return seg_seg_full_moments_bspline_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 3:
             return seg_seg_full_moments_bspline_kernel_ek<3>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_ek: max_d must be 1, 2 or 3 "
@@ -5775,7 +5831,8 @@ seg_seg_full_moments_bspline_ek_tiered(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
-    bool reference
+    bool reference,
+    double a_ek_src
 ) {
     const PairOrderLadder ladder =
         ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
@@ -5783,15 +5840,15 @@ seg_seg_full_moments_bspline_ek_tiered(
         case 1:
             return seg_seg_full_moments_bspline_kernel_ek<1>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 2:
             return seg_seg_full_moments_bspline_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 3:
             return seg_seg_full_moments_bspline_kernel_ek<3>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_ek_tiered: max_d must be 1, 2 or 3 "
@@ -5816,22 +5873,23 @@ seg_seg_full_moments_bspline_swept_ek(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
-    bool reference
+    bool reference,
+    double a_ek_src
 ) {
     const PairOrderLadder ladder = ladder_from_rule(gl_t, gl_w);
     switch (max_d) {
         case 1:
             return seg_seg_full_moments_bspline_swept_kernel_ek<1>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 2:
             return seg_seg_full_moments_bspline_swept_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 3:
             return seg_seg_full_moments_bspline_swept_kernel_ek<3>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_swept_ek: max_d must be 1, 2 or 3 "
@@ -5860,7 +5918,8 @@ seg_seg_full_moments_bspline_swept_ek_tiered(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
-    bool reference
+    bool reference,
+    double a_ek_src
 ) {
     const PairOrderLadder ladder =
         ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
@@ -5868,15 +5927,15 @@ seg_seg_full_moments_bspline_swept_ek_tiered(
         case 1:
             return seg_seg_full_moments_bspline_swept_kernel_ek<1>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 2:
             return seg_seg_full_moments_bspline_swept_kernel_ek<2>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         case 3:
             return seg_seg_full_moments_bspline_swept_kernel_ek<3>(
                 seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
-                group_i, group_j, a_ek, reference);
+                group_i, group_j, a_ek, reference, a_ek_src);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_swept_ek_tiered: "
@@ -6937,7 +6996,8 @@ void register_bspline(py::module_ &m) {
           py::arg("a_squared"), py::arg("k"),
           py::arg("tier_t"), py::arg("tier_w"),
           py::arg("tier_n_qp"), py::arg("tier_ratio"),
-          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"));
+          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
+          py::arg("b_j") = py::none());
     m.def("assemble_Z_sinusoidal_windowed", &assemble_Z_sinusoidal_windowed,
           "Accumulate one window of sinusoidal pair moments into Z "
           "(momwire#1354): the windowed B-spline assembler with the basis as "
@@ -6960,7 +7020,8 @@ void register_bspline(py::module_ &m) {
           "separation integral, a pair per thread.",
           py::arg("c_i"), py::arg("t_i"), py::arg("h_i"), py::arg("c_j"), py::arg("t_j"),
           py::arg("h_j"), py::arg("a2"), py::arg("k"), py::arg("gt"), py::arg("gw"),
-          py::arg("gx"), py::arg("gwx"), py::arg("a_ek") = py::none());
+          py::arg("gx"), py::arg("gwx"), py::arg("a_ek") = py::none(),
+          py::arg("b_ek") = py::none());
     m.def("seg_seg_full_moments_bspline_swept",
           &seg_seg_full_moments_bspline_swept,
           "Batched (swept-k) off-edge full-kernel polynomial moments for the "
@@ -6994,7 +7055,7 @@ void register_bspline(py::module_ &m) {
           py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
-          py::arg("reference") = false);
+          py::arg("reference") = false, py::arg("a_ek_src") = -1.0);
     m.def("seg_seg_full_moments_bspline_ek_tiered",
           &seg_seg_full_moments_bspline_ek_tiered,
           "Distance-adaptive twin of seg_seg_full_moments_bspline_ek "
@@ -7011,7 +7072,7 @@ void register_bspline(py::module_ &m) {
           py::arg("tier_t"), py::arg("tier_w"),
           py::arg("tier_n_qp"), py::arg("tier_ratio"),
           py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
-          py::arg("reference") = false);
+          py::arg("reference") = false, py::arg("a_ek_src") = -1.0);
     m.def("seg_seg_full_moments_bspline_swept_ek",
           &seg_seg_full_moments_bspline_swept_ek,
           "Batched (swept-k) twin of seg_seg_full_moments_bspline_ek "
@@ -7029,7 +7090,7 @@ void register_bspline(py::module_ &m) {
           py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
           py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
-          py::arg("reference") = false);
+          py::arg("reference") = false, py::arg("a_ek_src") = -1.0);
     m.def("seg_seg_full_moments_bspline_swept_ek_tiered",
           &seg_seg_full_moments_bspline_swept_ek_tiered,
           "Distance-adaptive twin of seg_seg_full_moments_bspline_swept_ek "
@@ -7045,7 +7106,7 @@ void register_bspline(py::module_ &m) {
           py::arg("tier_t"), py::arg("tier_w"),
           py::arg("tier_n_qp"), py::arg("tier_ratio"),
           py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
-          py::arg("reference") = false);
+          py::arg("reference") = false, py::arg("a_ek_src") = -1.0);
     m.def("seg_seg_static_moments_bspline_uniform",
           &seg_seg_static_moments_bspline_uniform,
           "Closed-form same-edge static-kernel polynomial moments J_pq for a "
