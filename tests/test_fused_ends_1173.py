@@ -216,6 +216,7 @@ def test_batched_hit_check_walks_as_the_one_end_loop(rows, monkeypatch):
         "cf._LINE_END_AT_COLUMN",
         "cf._TABLE_MATVECS",
         "cf._TILE_MATVECS_ROWS",
+        "rz._TRIM_BETWEEN_BLOCKS",
     ],
 )
 def test_each_1335_fused_switch_keeps_z(flag):
