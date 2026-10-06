@@ -1183,12 +1183,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the longest segment passes kL = 0.5 — in free space that is the only
         tier, so the guard disables the ladder for that block entirely.
 
-        Not every fill honours it: the H-matrix and ArrayBlock fills have no
-        ladder on either term, and the frequency-swept fill takes it under the
-        extended kernel only (momwire#1362) -- its reduced twin has none
-        (`_fill_ladder` is what a fill should ask rather than reading this
-        property directly). The single-k extended kernel honours it since
-        momwire#1362 too.
+        Not every fill honours it: the ArrayBlock fill has no ladder on
+        either term, and the H-matrix and frequency-swept fills take it under
+        the extended kernel only (momwire#1362) -- their reduced twins have
+        none (`_fill_ladder` is what a fill should ask rather than reading
+        this property directly). The single-k extended kernel honours it
+        since momwire#1362 too.
 
         What it buys: on the 654-segment radial screen the two buried pair
         blocks went from 6.3 s to well under a second at the same Z, because

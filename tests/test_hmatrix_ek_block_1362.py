@@ -29,7 +29,10 @@ What a single build can pin, this file pins:
   a 1 ppm EK radius moves it;
 * one tier is the flat entry bit for bit; a ladder whose only tier is
   phase-limited is ignored, bit for bit, when every segment fails the guard;
-* solver level: the lane solve is the reference solve to the bit.
+* solver level: the EK H-matrix on the ladder is the flat EK H-matrix within
+  Z_TOL, with the tiered entries counted and the bits moved, EK off far away
+  and never reaching an EK entry; the lane solve is the reference solve to
+  the bit.
 
 The walk against the pre-#1362 build (two builds) is in the PR: 723
 recorded row/column calls, d = 1..3, free / PEC / refl, bit-equal; every
@@ -303,6 +306,26 @@ def _z(monkeypatch, deck, reference=None, **kw):
     return complex(np.atleast_1d(z)[0]), np.asarray(cur), route.n
 
 
+@pytest.mark.parametrize("ground", [None, "pec", "refl"])
+def test_the_ek_hmatrix_on_the_ladder_is_the_flat_one_within_the_derived_tolerance(
+    monkeypatch, ground
+):
+    deck = _deck(ground)
+    z_lad, _, n_lad = _z(monkeypatch, deck)
+    z_flat, _, n_flat = _z(monkeypatch, deck, pair_order_ladder=())
+    rel = abs(z_lad - z_flat) / abs(z_flat)
+    assert rel < Z_TOL, f"{ground}: EK H-matrix ladder vs flat {rel:.3e}"
+    # Negative controls: the tiered entries served the far blocks and moved
+    # the bits; the flat solve never reached them ...
+    assert sum(n_lad[e] for e in TIERED) > 0, n_lad
+    assert sum(n_flat[e] for e in TIERED) == 0, n_flat
+    assert z_lad != z_flat
+    # ... and EK is on: EK off sits far away and reaches no EK entry.
+    z_off, _, n_off = _z(monkeypatch, deck, extended_kernel=False)
+    assert abs(z_lad - z_off) / abs(z_off) > 1e3 * Z_TOL
+    assert sum(n_off.values()) == 0, n_off
+
+
 @pytest.mark.parametrize("ladder", [None, ()], ids=["ladder", "flat"])
 def test_an_ek_hmatrix_solve_is_the_reference_walk_to_the_bit(monkeypatch, ladder):
     deck = _deck("pec")
@@ -312,3 +335,30 @@ def test_an_ek_hmatrix_solve_is_the_reference_walk_to_the_bit(monkeypatch, ladde
     assert n == n_ref and sum(n.values()) > 0
     assert _bits(np.array([z])).tolist() == _bits(np.array([z_ref])).tolist()
     assert np.array_equal(_bits(c), _bits(c_ref))
+
+
+def test_a_deck_straddling_the_phase_guard(monkeypatch):
+    """A coarse parasitic (L = 4.8 m, past lambda / (4 pi) ~ 3.4 m at 7 MHz)
+    beside fine dipoles: its pairs may not take the phase-limited order-4
+    tier, so the far blocks are handed per-segment masks, and the answer is
+    still the flat solve within Z_TOL."""
+    deck = _deck()
+    deck["wires"] = deck["wires"] + [
+        np.array([(-12.0, 60.0, 10.0), (12.0, 60.0, 10.0)])
+    ]
+    deck["n_per_edge_per_wire"] = deck["n_per_edge_per_wire"] + [[5]]
+    masks = []
+    f = acc.bspline_assemble_offedge_block_ek_tiered
+
+    def spy(*a, **k):
+        masks.append((a[23].size, a[24].size))
+        return f(*a, **k)
+
+    with monkeypatch.context() as mp:
+        mp.setattr(acc, "bspline_assemble_offedge_block_ek_tiered", spy)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            z, _ = H.HMatrixSolver(**deck).compute_impedance()
+    assert masks and any(i or j for i, j in masks), "no call carried the guard"
+    z_flat, _, _ = _z(monkeypatch, deck, pair_order_ladder=())
+    assert abs(z - z_flat) / abs(z_flat) < Z_TOL

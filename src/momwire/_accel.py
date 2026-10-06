@@ -405,6 +405,10 @@ _CANCELLABLE_KERNELS = (
     "bspline_assemble_offedge_block_refl",
     "bspline_assemble_offedge_block_ek",
     "bspline_assemble_offedge_block_refl_ek",
+    # Their laddered twins (momwire#1362), the entries an EK H-matrix far
+    # block reaches by default; the same poll, so the same translation.
+    "bspline_assemble_offedge_block_ek_tiered",
+    "bspline_assemble_offedge_block_refl_ek_tiered",
     "sinusoidal_galerkin_far_fill",
     "somm_six_integrals_batch",
     # The razor-blade formulation's fused moment fill (momwire#742). It polls
