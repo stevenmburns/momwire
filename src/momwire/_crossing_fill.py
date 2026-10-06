@@ -2729,66 +2729,70 @@ def _column_tiles(plan, key_cls, cls_rows):
 _RECYCLE_HELD = True
 
 
-def _late_union(rows, first, last):
-    """Late-row triples (row, its tile, a tile that reads it) merged to one
-    per row: rows ascending, the tile (one per row: its key's, checked) and
-    the LAST reading tile. Checks every row is read after its own tile."""
-    rows = rows.astype(np.int64, copy=False)
-    if rows.size == 0:
-        return rows, first.astype(np.int64), last.astype(np.int64)
-    o = np.argsort(rows, kind="stable")
-    rows, first, last = rows[o], first[o].astype(np.int64), last[o].astype(np.int64)
-    del o
-    head = np.empty(rows.size, dtype=bool)
-    head[0] = True
-    np.not_equal(rows[1:], rows[:-1], out=head[1:])
-    starts = np.flatnonzero(head)
-    del head
-    first_h = first[starts]
-    if not (
-        np.array_equal(np.minimum.reduceat(first, starts), first_h)
-        and np.array_equal(np.maximum.reduceat(first, starts), first_h)
-    ):
-        raise AssertionError("a held row named in two tiles")
-    last = np.maximum.reduceat(last, starts)
-    rows = rows[starts]
-    if np.any(last <= first_h):
-        raise AssertionError("a held row is not read after its own tile")
-    return rows, first_h, last
+def _late_last(n_rows, n_tiles):
+    """A per-row LAST reading tile, -1 for a row nobody reads late: the one
+    array every late reader marks (`np.maximum.at`), O(rows) in 16 bits
+    where the tiles fit -- not a list of (row, tile) pairs, which repeat a
+    row once per group that holds it (4 M entries for 1.5 M rows at the
+    inverted L's x16)."""
+    return np.full(n_rows, -1, dtype=np.int16 if n_tiles < 2**15 else np.int32)
 
 
-def _held_slots(first, last, n_tiles):
-    """`(slot, n_slots)`: a held-store slot for each late row live over
-    tiles [first, last] (written at `first`, read at most at `last`), such
-    that no two rows live in one tile share a slot. Tile t frees the slots
-    of the rows last read before it, then hands slots to the rows it
-    writes: freed ones first, then fresh. Interval partitioning, so
-    `n_slots` is the most rows live in any one tile."""
-    n = first.size
-    slot = np.empty(n, dtype=np.int64)
-    by_first = np.argsort(first, kind="stable")
-    fb = np.searchsorted(first[by_first], np.arange(n_tiles + 1))
-    by_last = np.argsort(last, kind="stable")
-    lb = np.searchsorted(last[by_last], np.arange(n_tiles + 1))
-    free = np.zeros(0, dtype=np.int64)
-    n_slots = 0
-    # TEST-ONLY "recycle": a slot freed one tile early, at its row's last
-    # reading tile, so a row written there can overwrite it before the read.
+def _mark_late(last, rows, tiles_):
+    """`last[rows] = max(last[rows], tiles_)`, element by element (a row
+    named twice keeps its later tile)."""
+    rows = np.asarray(rows)
+    if rows.size:
+        vals = np.broadcast_to(np.asarray(tiles_, dtype=last.dtype), rows.shape)
+        np.maximum.at(last, rows.ravel(), vals.ravel())
+
+
+def _held_slots(n_tiles, tile_rows, last, hpos=None):
+    """The held store's slots, by a walk over the tiles in order; returns
+    the slot count and, given `hpos`, writes each late row's slot there.
+
+    `tile_rows(t)` is tile t's rows and `last[row]` the last tile reading a
+    row late (-1: none). Tile t first frees the slots of the rows last read
+    at tile t - 1, then hands slots to its own late rows: freed ones first,
+    then fresh. A row is live from its own tile through its last reading
+    tile, and no two live rows share a slot (interval partitioning: the
+    count is the most rows live in any tile). A late row must be read
+    AFTER its own tile; one that is not is refused (its reader would have
+    read it before it was evaluated)."""
     early = 1 if _PRODUCT_NEG_CONTROL == "recycle" else 0
+    free = np.zeros(0, dtype=np.int64)
+    pending = {}  # last tile -> slot arrays of the rows it frees
+    n_slots = 0
     for t in range(n_tiles):
-        if t + early:
-            gone = by_last[lb[t - 1 + early] : lb[t + early]]  # last read at t - 1
-            if gone.size:
-                free = np.concatenate([free, slot[gone]])
-        new = by_first[fb[t] : fb[t + 1]]
+        if not t & 15:
+            _cancel.poll()
+        # TEST-ONLY "recycle": the slots freed one tile early, at their rows'
+        # last reading tile, where a row written there can overwrite them.
+        rel = pending.pop(t - 1 + early, None)
+        if rel:
+            free = np.concatenate([free, *rel])
+        ids = tile_rows(t)
+        lt = last[ids]
+        m = lt >= 0
+        if not m.any():
+            continue
+        new, lt = ids[m], lt[m].astype(np.int64)
+        if np.any(lt <= t):
+            raise AssertionError("a held row is not read after its own tile")
         k = min(new.size, free.size)
-        if k:
-            slot[new[:k]] = free[free.size - k :]
-            free = free[: free.size - k]
-        if new.size > k:
-            slot[new[k:]] = n_slots + np.arange(new.size - k)
-            n_slots += new.size - k
-    return slot, n_slots
+        slots = np.concatenate(
+            [free[free.size - k :], n_slots + np.arange(new.size - k, dtype=np.int64)]
+        )
+        free = free[: free.size - k]
+        n_slots += new.size - k
+        if hpos is not None:
+            hpos[new] = slots
+        o = np.argsort(lt, kind="stable")
+        lt_s = lt[o]
+        cut = np.flatnonzero(np.diff(lt_s)) + 1
+        for part, L in zip(np.split(slots[o], cut), lt_s[np.r_[0, cut]].tolist()):
+            pending.setdefault(L, []).append(part)
+    return n_slots
 
 
 class _ProductTiles:
@@ -2832,7 +2836,7 @@ class _ProductTiles:
     its row-ordered store (`keep_values`). Nothing is summed. A fused end
     loop (`_FusedEnds`, phase 2) is handed each tile before its columns are
     served, reads the same copies, and names the rows it reads after their
-    own tile (`extra_late`), which the held store keeps beside the
+    own tile (`extra_last`), which the held store keeps beside the
     sandwich's. `_streamed_sandwich` then contracts each
     basis row once, when its whole pattern is present, against its columns
     in ascending order — its own argument, for column SETS; the left
@@ -2980,7 +2984,7 @@ class _ProductTiles:
         # Set by `_FusedEnds.attach`: the tile listener, and the rows its end
         # loops read after their own tile (held beside the sandwich's).
         self.listener = None
-        self.extra_late = None
+        self.extra_last = None
         self.hpos = None
         self.n_held = 0
         self._mark = None  # `_tile_rows`' row mask, made on first use
@@ -2998,7 +3002,7 @@ class _ProductTiles:
         """`hpos`: each row read AFTER its own tile a slot in the held store,
         written once when its tile runs — the sandwich's late rows (a below
         node whose table column completes at a later tile) and the fused end
-        loops' (`extra_late`).
+        loops' (`extra_last`).
 
         A many-group product (momwire#1335) RECYCLES the slots: each late
         row is live from its own tile to the last tile that reads it, and a
@@ -3039,7 +3043,9 @@ class _ProductTiles:
                     late_row[plan.chunk_idx(cols)[late]] = True
         n_sandwich = 0 if late_row is None else int(np.count_nonzero(late_row))
         _ROUTES["tile_held_rows"] = max(_ROUTES["tile_held_rows"], n_sandwich)
-        extra_rows = None if self.extra_late is None else self.extra_late[0]
+        extra_rows = (
+            None if self.extra_last is None else np.flatnonzero(self.extra_last >= 0)
+        )
         if extra_rows is not None and extra_rows.size:
             if late_row is None:
                 late_row = np.zeros(U, dtype=bool)
@@ -3055,20 +3061,23 @@ class _ProductTiles:
 
     def _plan_held_recycled(self):
         """`_plan_held` for a many-group product, slots recycled: every late
-        row as (row, its tile, the last tile that reads it), then
-        `_held_slots`. The sandwich's: group g's key k is read late by the
-        line nodes n with `kl_rank[g, n] == k` whose column is ready after
-        k's tile, the last at the latest such `ready[n]`, for every z of g.
-        The fused loops' come with theirs (`extra_late`)."""
+        row's LAST reading tile in one per-row array (`_late_last`), then
+        `_held_slots` walks the tiles. The sandwich's: group g's key k is
+        read late by the line nodes n with `kl_rank[g, n] == k` whose column
+        is ready after k's tile, the last at the latest such `ready[n]`, for
+        every z of g. The fused loops' come marked (`extra_last`)."""
         plan, U = self.plan, self.plan.n_rows
         ready = self._node_ready
-        rows, first, last = [], [], []
-        n_sandwich = 0
+        last = self.extra_last
+        n_extra = 0 if last is None else int(np.count_nonzero(last >= 0))
+        sand = None
         if self._may_hold:
+            if last is None:
+                last = _late_last(U, self.n_tiles)
+            sand = np.zeros(U, dtype=bool)
             for g0, g1 in _group_spans(*plan.kid.shape):
                 _cancel.poll()
-                tk = self.tile_of_key[plan.kid[g0:g1]]
-                late = tk < ready[None, :]
+                late = self.tile_of_key[plan.kid[g0:g1]] < ready[None, :]
                 for g in np.flatnonzero(late.any(axis=1)).tolist():
                     nodes = np.flatnonzero(late[g])
                     kl, inv = np.unique(
@@ -3077,37 +3086,22 @@ class _ProductTiles:
                     lk = np.full(kl.size, -1, dtype=np.int64)
                     np.maximum.at(lk, np.asarray(inv).ravel(), ready[nodes])
                     r = plan.rowtab[g0 + g][:, kl]
-                    rows.append(r.ravel())
-                    first.append(
-                        np.broadcast_to(
-                            self.tile_of_key[plan.kids[g0 + g][kl]].astype(np.int64),
-                            r.shape,
-                        ).ravel()
-                    )
-                    last.append(np.broadcast_to(lk, r.shape).ravel())
-                del tk, late
-            if rows:
-                n_sandwich = int(np.unique(np.concatenate(rows)).size)
+                    _mark_late(last, r, lk[None, :])
+                    sand[r] = True
+                del late
+        n_sandwich = 0 if sand is None else int(np.count_nonzero(sand))
         _ROUTES["tile_held_rows"] = max(_ROUTES["tile_held_rows"], n_sandwich)
-        if self.extra_late is not None and self.extra_late[0].size:
-            rows.append(np.asarray(self.extra_late[0], dtype=np.int64))
-            first.append(np.asarray(self.extra_late[1], dtype=np.int64))
-            last.append(np.asarray(self.extra_late[2], dtype=np.int64))
-        if not rows:
-            return
-        rows, first, last = _late_union(
-            np.concatenate(rows), np.concatenate(first), np.concatenate(last)
-        )
-        if rows.size == 0:
-            return
-        if self.extra_late is not None:
-            n_fused = rows.size - n_sandwich
+        if self.extra_last is not None:
+            n_fused = (
+                n_extra if sand is None else int(np.count_nonzero(~sand & (last >= 0)))
+            )
             _ROUTES["fused_held_rows"] = max(_ROUTES["fused_held_rows"], n_fused)
-        slot, n_slots = _held_slots(first, last, self.n_tiles)
-        self.n_held = n_slots
-        _ROUTES["held_slots"] = max(_ROUTES["held_slots"], n_slots)
+        del sand
+        if last is None or not np.any(last >= 0):
+            return
         self.hpos = np.full(U, -1, dtype=_index_dtype(U))
-        self.hpos[rows] = slot
+        self.n_held = _held_slots(self.n_tiles, self._tile_rows, last, self.hpos)
+        _ROUTES["held_slots"] = max(_ROUTES["held_slots"], self.n_held)
 
     def _tile_rows(self, t):
         """Tile t's rows, ascending: every row of its keys, over the groups."""
@@ -5444,8 +5438,8 @@ class _FusedEnds:
             self.mode = "stream"
             self.streaming = True
             self._slow_prepass()
-            tiles.extra_late = self._extra_late
-            self._extra_late = None
+            tiles.extra_last = self._extra_last
+            self._extra_last = None
         tiles.listener = self
         self.attached = True
         _ROUTES["fused_blocks"] += 1
@@ -5515,7 +5509,7 @@ class _FusedEnds:
             self.vg_batches = {}
         # The vector loop's other ends: whole vectors at one tile (or now).
         self.vw = {}  # end -> (vV[units], vW[units])
-        self._late_parts = []  # rows a line end reads before its tile
+        self._late = None  # per row, the last tile a fused loop reads it late
         self.v_tile = self._line_tiles(vcls)
         l_line_tile = self._line_tiles(lcls)
         if self.v_tile:
@@ -5580,16 +5574,17 @@ class _FusedEnds:
         # V, W and dz'W each). With several groups they are counted against
         # the store too, as the upper bound they are (some are the
         # sandwich's own late rows); one group keeps its old budget.
-        self._extra_late = self._late_rows()
+        self._extra_last = self._late_rows()
         held = 0
-        if len(plan.rowtab) > 1 and self._extra_late is not None:
+        if len(plan.rowtab) > 1 and self._extra_last is not None:
             if _RECYCLE_HELD:
                 # The held store's slots are recycled (`_plan_held`): what
                 # these rows add is the most of them live at once.
-                _first, _last = self._extra_late[1], self._extra_late[2]
-                held = 4 * _held_slots(_first, _last, tiles.n_tiles)[1]
+                held = 4 * _held_slots(
+                    tiles.n_tiles, tiles._tile_rows, self._extra_last
+                )
             else:
-                held = 4 * int(self._extra_late[0].size)
+                held = 4 * int(np.count_nonzero(self._extra_last >= 0))
         if self._hold_peak(s_tile, lcls) + held > max(
             2 * plan.n_rows, _STREAM_MIN_HOLD
         ):
@@ -5650,33 +5645,34 @@ class _FusedEnds:
 
     def _late_rows(self):
         """The rows the fused loops read after their own tile, for the tiles'
-        held store, as `(rows, first, last)` (`_late_union`: each row once,
-        its own tile, the last tile that reads it): the vector loop's grouped
-        ends' (a unit completing later reads them) and the line ends'
-        (`_line_tiles`); or None."""
-        parts = list(self._late_parts)
-        self._late_parts = []
+        held store, as a per-row last reading tile (`_late_last`, -1 for
+        none): the vector loop's grouped ends' (a unit completing later reads
+        them) and the line ends' (`_line_tiles`, marked already); or None."""
         if self.vg:
-            parts.append(self._late_grouped_rows())
-        parts = [p for p in parts if p[0].size]
-        if not parts:
+            self._late_grouped_rows()
+        last, self._late = self._late, None
+        if last is None or not np.any(last >= 0):
             return None
-        return _late_union(*(np.concatenate([p[j] for p in parts]) for j in range(3)))
+        return last
+
+    def _late_marks(self):
+        if self._late is None:
+            self._late = _late_last(self.plan.n_rows, self.tiles.n_tiles)
+        return self._late
 
     def _late_grouped_rows(self):
-        """The vector loop's grouped ends' late rows. Group g's row on line
-        node n is read late iff some unit reading n completes after that
-        row's tile: `tile_g[n] < maxT[n]`, maxT[n] the latest `unit_tile`
-        of a unit whose matvec row stores n -- which is also the last tile
-        that reads it. With one group this is the entry-by-entry test it
-        replaced (the same nodes); with several it is made per group, on the
-        zl values its ends ask."""
+        """Mark the vector loop's grouped ends' late rows. Group g's row on
+        line node n is read late iff some unit reading n completes after
+        that row's tile: `tile_g[n] < maxT[n]`, maxT[n] the latest
+        `unit_tile` of a unit whose matvec row stores n -- which is also the
+        last tile that reads it. With one group this is the entry-by-entry
+        test it replaced (the same nodes); with several it is made per
+        group, on the zl values its ends ask."""
         maxT = np.full(self._n_line, -1, dtype=np.int64)
         for M in (self.MV, self.MW):
             t_entry = np.repeat(self.unit_tile, np.diff(M.indptr))
             np.maximum.at(maxT, M.indices, t_entry)
         fast = self.fast
-        rows, first, last = [], [], []
         for g in np.unique(self.vg_g).tolist():
             _cancel.poll()
             tl = self.tiles.tile_of_key[self.plan.kid[g]]
@@ -5686,13 +5682,7 @@ class _FusedEnds:
             zls = np.unique(self.vg_zl[self.vg_g == g])
             base = fast.off[g] + zls * fast.nk[g]
             r = fast.rowflat[base[:, None] + fast.kl_rank[g][late_nodes][None, :]]
-            rows.append(r.ravel())
-            first.append(np.broadcast_to(tl[late_nodes], r.shape).ravel())
-            last.append(np.broadcast_to(maxT[late_nodes], r.shape).ravel())
-        if not rows:
-            z = np.zeros(0, dtype=np.int64)
-            return z, z, z
-        return tuple(np.concatenate(x) for x in (rows, first, last))
+            _mark_late(self._late_marks(), r, maxT[late_nodes][None, :])
 
     def _tile_line_of(self, g):
         """Group g's keys' tiles along the line, `tile_of_key[kid[g]]`
@@ -5716,7 +5706,7 @@ class _FusedEnds:
     def _line_tiles(self, cls):
         """{end: tile} for a loop's "line" ends: the latest tile of the keys
         it asks, one per group (`kids[g][kg[g]]`). Its rows in EARLIER tiles
-        are read late, so they go to `_late_parts` for the held store. With
+        are read late, so they are marked for the held store. With
         one group an end's keys are one key, its tile the old
         `tile_of_key[kg[0]]` (the group's local key ids are the global
         ones), and nothing is late."""
@@ -5742,20 +5732,17 @@ class _FusedEnds:
             TG = tile_gk[koff[:-1][None, :] + KG]  # (ends, groups)
             del KG
             T = TG.max(axis=1)
-            TN = TG[:, fast.grank]  # (ends, grouped nodes): each row's tile
+            early = TG[:, fast.grank] < T[:, None]  # (ends, grouped nodes)
             del TG
-            early = TN < T[:, None]
             if early.any():
                 R = _fast_desc_rows_batch(fast, [cls[i] for i in part])
-                self._late_parts.append(
-                    (
-                        R[early],
-                        TN[early],
-                        np.broadcast_to(T[:, None], early.shape)[early],
-                    )
+                _mark_late(
+                    self._late_marks(),
+                    R[early],
+                    np.broadcast_to(T[:, None], early.shape)[early],
                 )
                 del R
-            del early, TN
+            del early
             for i, t in zip(part, T.tolist()):
                 out[i] = int(t)
         return out
