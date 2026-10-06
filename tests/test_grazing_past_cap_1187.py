@@ -261,8 +261,9 @@ RAZOR_2P_FEED = {"average": 677.0 - 97.6j, "poor": 750.9 - 269.8j}
 # NEC-5, R low in both soils, and 0.1 ohm from each other.
 MEASURED = {
     ("bspline", "average"): 675.196 - 98.488j,
-    # momwire#1354: the mixed-potential fill, 2e-6 from bspline's answer on
-    # both soils (the direct fill read 675.172 - 98.538j / 748.853 - 269.494j).
+    # momwire#1354: the mixed-potential fill, 0.009 / 0.007 ohm from
+    # bspline's answer (1e-5 relative; the direct fill read 675.172 - 98.538j
+    # / 748.853 - 269.494j, 0.06 / 0.11 ohm from it).
     ("sg", "average"): 675.193 - 98.496j,
     ("bspline", "poor"): 748.945 - 269.428j,
     ("sg", "poor"): 748.943 - 269.435j,

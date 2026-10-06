@@ -56,7 +56,7 @@ PINNED = {
     # momwire#1354: the mixed-potential fill. The direct fill read
     # 71.2220705882 + 1.2490278872j / 71.7861410477 + 2.2249137096j; the new
     # fill sits 0.15 ohm closer to NEC-5 on both placements (1.84 / 2.12 ohm
-    # against 1.99 / 2.26) and 0.01 ohm from bspline's own answer.
+    # against 1.99 / 2.26) and 0.09 ohm from bspline's own answer on each.
     "sinusoidal-galerkin": (
         71.1117686390 + 1.1134179730j,
         71.6934518427 + 2.0954101627j,
