@@ -4493,13 +4493,51 @@ def _end_matvecs_serve(M, w):
     )
 
 
+# `_tile_matvecs` hands the rows to `end_matvecs_rows` (momwire#1335); False
+# gathers loc / hpos in numpy and calls `end_matvecs`, the reference.
+_TILE_MATVECS_ROWS = True
+_HAVE_END_MATVECS_ROWS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "end_matvecs_rows_1335", False)
+)
+
+
 def _tile_matvecs(M, w, R, k, loc, tb, held, hpos):
     """`_real_matvec_c(M, w * X[e])` for each row e of `R` (E product rows
     of n nodes each), X being the tile's kernel column `k` at those rows as
     `_FusedEnds._vw` reads it -- the tile block by `loc`, else the held
     store by `hpos`; (E, M.shape[0]) complex. By `end_matvecs` when it
-    serves, else the per-end numpy spelling, the same floats."""
+    serves, else the per-end numpy spelling, the same floats. Where the
+    accelerator carries `end_matvecs_rows` (momwire#1335) the rows go to it
+    whole and the loc / hpos gather is done per element in C++: the same
+    sums, without the two (E, n) index arrays."""
     R = np.asarray(R)
+    if (
+        _TILE_MATVECS_ROWS
+        and _HAVE_END_MATVECS_ROWS_ACCEL
+        and _end_matvecs_serve(M, w)
+        and loc.dtype == np.int32
+        and (hpos is None or hpos.dtype == np.int32)
+        and R.dtype in (np.int32, np.int64)
+    ):
+        try:
+            return _accel.acc.end_matvecs_rows(
+                M.indptr,
+                M.indices,
+                M.data,
+                M.shape[0],
+                w,
+                np.ascontiguousarray(R),
+                loc,
+                _EMPTY_I32_1D if hpos is None else hpos,
+                tb,
+                held,
+                k,
+                _near_interface._physical_cpu_count(),
+            )
+        except RuntimeError as exc:
+            if "not in hand" in str(exc):
+                raise AssertionError("a fused end reads a row not in hand") from None
+            raise
     li = loc[R]
     miss = li < 0
     hp = _EMPTY_I32

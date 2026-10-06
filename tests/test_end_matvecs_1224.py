@@ -152,3 +152,20 @@ def test_a_complex_basis_takes_the_numpy_vectors(monkeypatch):
     for e in range(R.shape[0]):
         V, _W = cf._FusedEnds._vw(R[e], loc, tb, held_arr, hpos)
         assert np.array_equal(got[e], cf._real_matvec_c(Mc, w * V))
+
+
+@pytest.mark.skipif(
+    not cf._HAVE_END_MATVECS_ROWS_ACCEL,
+    reason="the accelerator does not carry end_matvecs_rows",
+)
+@pytest.mark.parametrize("held", [False, True])
+@pytest.mark.parametrize("rdtype", [np.int32, np.int64])
+def test_end_matvecs_rows_is_the_gathered_kernel_to_the_bit(held, rdtype, monkeypatch):
+    """momwire#1335: `end_matvecs_rows` gathers loc / hpos per element in
+    C++; against the numpy gather + `end_matvecs` it is the same sums."""
+    M, w, R, loc, tb, held_arr, hpos = _operands(31 + held, held)
+    R = R.astype(rdtype)
+    got = cf._tile_matvecs(M, w, R, 2, loc, tb, held_arr, hpos)
+    monkeypatch.setattr(cf, "_TILE_MATVECS_ROWS", False)
+    want = cf._tile_matvecs(M, w, R, 2, loc, tb, held_arr, hpos)
+    assert np.array_equal(got.view(np.uint64), want.view(np.uint64))
