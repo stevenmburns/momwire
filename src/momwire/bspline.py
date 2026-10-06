@@ -1183,10 +1183,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the longest segment passes kL = 0.5 — in free space that is the only
         tier, so the guard disables the ladder for that block entirely.
 
-        Not every fill honours it: the H-matrix, ArrayBlock and
-        frequency-swept fills have no ladder on either term (`_fill_ladder`
-        is what a fill should ask rather than reading this property
-        directly). The extended kernel honours it since momwire#1362.
+        Not every fill honours it: the H-matrix and ArrayBlock fills have no
+        ladder on either term, and the frequency-swept fill takes it under the
+        extended kernel only (momwire#1362) -- its reduced twin has none
+        (`_fill_ladder` is what a fill should ask rather than reading this
+        property directly). The single-k extended kernel honours it since
+        momwire#1362 too.
 
         What it buys: on the 654-segment radial screen the two buried pair
         blocks went from 6.3 s to well under a second at the same Z, because
@@ -7787,16 +7789,24 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
         ek_img = None
         tangents_mirror = None
+        # The pair-order ladder, under EK only (momwire#1362): the swept EK
+        # twin takes the deck's ladder for both terms, asked for exactly as
+        # the per-k fills ask, so each k's moments are the per-k EK fill's.
+        # The reduced sweep has never taken a ladder and still does not.
+        ladder = ladder_img = None
+        if ek is not None:
+            ladder = self._fill_ladder(k_array, seg_l, seg_r, ek)
         if self.ground_z is not None:
-            # No pair-order ladder on this fill, image term included
-            # (momwire#1304 laddered the per-k image fills only): the swept
-            # batched kernel takes no ladder for its direct term either, so
-            # both terms stay at `n_qp_pair` and on one rule.
+            # Without EK, no pair-order ladder on this fill, image term
+            # included (momwire#1304 laddered the per-k image fills only):
+            # the reduced swept kernel takes no ladder for its direct term
+            # either, so both terms stay at `n_qp_pair` and on one rule.
             tangents_mirror = _ground_mirror.mirror_tangents(tangents)
             seg_l_img = self._image_positions(seg_l)
             seg_r_img = self._image_positions(seg_r)
             if self.extended_kernel:
                 ek_img = self._ek_spec(geom, mirror=True)
+                ladder_img = self._image_fill_ladder(k_array, seg_l, seg_r, ek_img)
 
         # Chunk size from the memory budget. Per k, the transients are
         # the all-pairs J tensor (nm² N² complex) plus the per-edge
@@ -7843,6 +7853,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 d,
                 self.n_qp_pair,
                 ek=ek,
+                ladder=ladder,
             )
             # Same-edge reg moments for this chunk. Computed per chunk —
             # the streaming kernel amortizes its R hoist over the chunk's
@@ -7875,6 +7886,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     d,
                     self.n_qp_pair,
                     ek=ek_img,
+                    ladder=ladder_img,
                 )
                 # Near-image blocks (momwire#631), the image-side twin of the
                 # same-edge overwrite this loop already does above: a

@@ -162,6 +162,11 @@ _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_EK_TIERED_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_ek_tiered"
 )
+# momwire#1362: the swept EK twin on the same ladder. Absent it, a laddered
+# EK sweep stacks the single-k EK fill per k, which serves the ladder.
+_HAVE_BSPLINE_OFFEDGE_SWEPT_EK_TIERED_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_swept_ek_tiered"
+)
 
 # Currently the C++ accelerator has explicit instantiations for D in {1, 2}.
 # Extend by adding `seg_seg_full_moments_bspline_kernel<3>(...)` and a switch
@@ -1521,7 +1526,7 @@ def _seg_seg_full_moments_offedge(
 
 
 def _seg_seg_full_moments_offedge_swept(
-    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, max_d, n_qp, *, ek=None
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, max_d, n_qp, *, ek=None, ladder=None
 ):
     """Batched-over-k `_seg_seg_full_moments_offedge`.
 
@@ -1539,11 +1544,27 @@ def _seg_seg_full_moments_offedge_swept(
     batched `seg_seg_full_moments_bspline_swept_ek` twin instead of falling
     back to stacking single-k calls. A spec with unset group labels (or no
     C++ EK twin available) still falls back to that stack.
+
+    `ladder` (momwire#1362) is the pair-order ladder, served under `ek` only:
+    the reduced sweep has never taken one and is left exactly as it was.
+    Each k gets the order the single-k fill would give the same pair at that
+    k -- the per-pair phase guard (momwire#920) is answered per k, the k
+    that answer it alike share one batched call, and a block that straddles
+    the guard is split by index exactly as `_seg_seg_full_moments_offedge`
+    splits it -- so a laddered EK sweep's moments are the single-k EK fill's
+    at every k.
     """
     # NOT `np.asarray(k_array, dtype=np.float64)` — see `_k_array_asarray`.
     k_array = _k_array_asarray(k_array)
     in_medium = _complex_k(k_array)
     a = _normalize_row_radius(a, np.asarray(seg_l_i).shape[0])
+    ladder = _normalize_ladder(ladder, n_qp) if ek is not None else ()
+    if ladder:
+        laddered = _offedge_swept_ladder_split(
+            seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, max_d, n_qp, ek, ladder
+        )
+        if laddered is not None:
+            return laddered
     _shape_ok = (
         _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL
         and max_d <= _BSPLINE_ACCEL_MAX_D
@@ -1584,6 +1605,7 @@ def _seg_seg_full_moments_offedge_swept(
                         if ek is not None
                         else None
                     ),
+                    ladder=ladder,
                 )
                 for s, e in zip(starts, stops)
             ],
@@ -1604,7 +1626,30 @@ def _seg_seg_full_moments_offedge_swept(
             np.ascontiguousarray(t01, dtype=np.float64),
             np.ascontiguousarray(w01, dtype=np.float64),
         )
-    if accel_ok_ek:
+    if accel_ok_ek and ladder and _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_TIERED_ACCEL:
+        # Every k here answers the phase guard alike for every pair (the
+        # split above), so one trim serves the call.
+        trimmed = _ladder_for_block(
+            ladder, k_array[0], seg_l_i, seg_r_i, seg_l_j, seg_r_j
+        )
+        tier_t, tier_w, tier_n_qp, tier_ratio = _ladder_arrays(n_qp, trimmed)
+        return _acc.seg_seg_full_moments_bspline_swept_ek_tiered(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            float(a) * float(a),
+            np.ascontiguousarray(k_array),
+            int(max_d),
+            tier_t,
+            tier_w,
+            tier_n_qp,
+            tier_ratio,
+            np.ascontiguousarray(ek.group_i, dtype=np.int64),
+            np.ascontiguousarray(ek.group_j, dtype=np.int64),
+            float(_ek_radius(ek, a)),
+        )
+    if accel_ok_ek and not ladder:
         gl_xi, gl_w = leggauss(n_qp)
         t01 = 0.5 * (gl_xi + 1.0)
         w01 = 0.5 * gl_w
@@ -1637,8 +1682,83 @@ def _seg_seg_full_moments_offedge_swept(
                 max_d,
                 n_qp,
                 ek=ek,
+                ladder=ladder or None,
             )
             for k in k_array
         ],
         axis=0,
     )
+
+
+def _offedge_swept_ladder_split(
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a, k_array, max_d, n_qp, ek, ladder
+):
+    """The phase-guard partition of a laddered EK sweep (momwire#1362), or
+    None when the block needs none.
+
+    The single-k fill answers the per-pair guard (momwire#920) at ITS k: a
+    pair passes when both segments have |k| L <= the ceiling. Over a sweep
+    the answer can change with k, so the k are grouped by the (row, column)
+    masks they produce and each group is one recursive call; within a group
+    a block that straddles the guard is split by index, as the single-k
+    fill splits it, with the EK labels sliced alongside the segments. What
+    is left is a block every pair of which answers the guard alike at every
+    k it serves, which `_ladder_for_block` trims exactly.
+    """
+    if all(n >= _LADDER_PHASE_LIMITED_BELOW for _r, n in ladder):
+        return None
+    seg_l_i, seg_r_i = np.asarray(seg_l_i), np.asarray(seg_r_i)
+    seg_l_j, seg_r_j = np.asarray(seg_l_j), np.asarray(seg_r_j)
+    keys = {}
+    for kk, k in enumerate(k_array):
+        rows_ok = _phase_row_mask(k, seg_l_i, seg_r_i)
+        cols_ok = _phase_row_mask(k, seg_l_j, seg_r_j)
+        keys.setdefault((rows_ok.tobytes(), cols_ok.tobytes()), []).append(kk)
+    nm = max_d + 1
+    shape = (k_array.shape[0], nm, nm, seg_l_i.shape[0], seg_l_j.shape[0])
+    if len(keys) > 1:
+        out = np.empty(shape, dtype=np.complex128)
+        for idx in keys.values():
+            out[idx] = _seg_seg_full_moments_offedge_swept(
+                seg_l_i,
+                seg_r_i,
+                seg_l_j,
+                seg_r_j,
+                a,
+                k_array[idx],
+                max_d,
+                n_qp,
+                ek=ek,
+                ladder=ladder,
+            )
+        return out
+    split = _phase_split_needed(ladder, k_array[0], seg_l_i, seg_r_i, seg_l_j, seg_r_j)
+    if split is None:
+        return None
+    rows_ok, cols_ok = split
+    out = np.empty(shape, dtype=np.complex128)
+    for ri in (np.flatnonzero(rows_ok), np.flatnonzero(~rows_ok)):
+        if ri.size == 0:
+            continue
+        for cj in (np.flatnonzero(cols_ok), np.flatnonzero(~cols_ok)):
+            if cj.size == 0:
+                continue
+            out[:, :, :, ri[:, None], cj[None, :]] = (
+                _seg_seg_full_moments_offedge_swept(
+                    seg_l_i[ri],
+                    seg_r_i[ri],
+                    seg_l_j[cj],
+                    seg_r_j[cj],
+                    a[ri] if np.ndim(a) else a,
+                    k_array,
+                    max_d,
+                    n_qp,
+                    ek=_EK(
+                        a=ek.a,
+                        group_i=_ek_rows(ek.group_i, ri),
+                        group_j=_ek_rows(ek.group_j, cj),
+                    ),
+                    ladder=ladder,
+                )
+            )
+    return out

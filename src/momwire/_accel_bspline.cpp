@@ -1447,6 +1447,29 @@ seg_seg_full_moments_bspline_kernel_ek(
 // geometry (positions, R, wuwu weights) and, under EK, the k-independent
 // T1/T2 halves of `fac` are hoisted out of the k loop and reused across the
 // whole k_array; only the phase and C1/C2 vary per frequency.
+//
+// momwire#1362 (follow-up to #1363/#1365): this twin was the last EK
+// off-edge fill still on the pre-#1290 per-pair loop. It now has
+//
+// * a t-outer stage 2 in the walk (8c311afb's reordering: each moment is
+//   still one ascending-t chain of one rounded multiply and one rounded add
+//   starting at 0.0, so the walk's moments are the pre-#1362 kernel's to the
+//   bit; only work ACROSS chains moved);
+// * the AVX2 four-column lanes of momwire#1290 (`!reference`, AVX2 build
+//   only): R, 1/(4 pi R), the moment weights and T1/T2 built once per group
+//   of four columns, then per k the walk's own loops over all four lanes'
+//   points, the coaxial factor applied per lane by a blend (eligibility is
+//   per PAIR, so the four lanes of a group can disagree), and stage 2 in
+//   vector accumulators. Gated to the bit against the walk
+//   (`reference=True`), which is the pre-#1362 arithmetic;
+// * the pair-order ladder of momwire#906 (the `_tiered` entry): a pair's
+//   order is chosen by the same selector as the single-k kernel and the
+//   factor is applied at whatever order the pair runs. A one-tier ladder is
+//   the single-rule entry bit for bit.
+//
+// A multi-chunk rule (n_qp > 8) keeps the original chunk semantics: each
+// chunk's sums start at 0.0 and the first chunk assigns while later chunks
+// add, exactly as before; such a pair is always walked.
 template<int D>
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_bspline_swept_kernel_ek(
@@ -1456,11 +1479,11 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
     double a_squared,
     py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    const PairOrderLadder& ladder,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
-    double a_ek
+    double a_ek,
+    bool reference = false
 ) {
     static constexpr int NM = D + 1;
     static constexpr int NMM = NM * NM;
@@ -1470,10 +1493,6 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     auto slj = seg_l_j.unchecked<2>();
     auto srj = seg_r_j.unchecked<2>();
     auto ka  = k_array.unchecked<1>();
-    auto glt = gl_t.unchecked<1>();
-    auto glw = gl_w.unchecked<1>();
-    auto gi_v = group_i.unchecked<1>();
-    auto gj_v = group_j.unchecked<1>();
 
     if (sli.shape(1) != 3 || sri.shape(1) != 3 ||
         slj.shape(1) != 3 || srj.shape(1) != 3) {
@@ -1482,17 +1501,19 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     if (sli.shape(0) != sri.shape(0) || slj.shape(0) != srj.shape(0)) {
         throw std::runtime_error("seg_l and seg_r must have matching N");
     }
-    if (glt.shape(0) != glw.shape(0)) {
-        throw std::runtime_error("gl_t and gl_w must have matching length");
-    }
-    size_t n_qp = glt.shape(0);
 
     size_t N_i = sli.shape(0);
     size_t N_j = slj.shape(0);
     size_t n_k = ka.shape(0);
-    if ((size_t)group_i.shape(0) != N_i || (size_t)group_j.shape(0) != N_j) {
+    const size_t n_tiers = ladder.n_tiers();
+    if (group_i.ndim() != 1 || group_j.ndim() != 1 ||
+        (size_t)group_i.shape(0) != N_i || (size_t)group_j.shape(0) != N_j) {
         throw std::runtime_error("group_i/group_j must match N_i/N_j");
     }
+    const int64_t *grp_i = group_i.data();
+    const int64_t *grp_j = group_j.data();
+    std::vector<double> ks(n_k);
+    for (size_t kk = 0; kk < n_k; kk++) ks[kk] = ka(kk);
 
     py::array_t<std::complex<double>> J({n_k, (size_t)NM, (size_t)NM, N_i, N_j});
     auto j_view = J.mutable_unchecked<5>();
@@ -1503,8 +1524,9 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
     const double a2_ek = a_ek * a_ek;
     const double a4_ek = a2_ek * a2_ek;
 
-    std::vector<double> pos_i(N_i * n_qp * 3);
-    std::vector<double> pos_j(N_j * n_qp * 3);
+    // Lengths, then PER TIER the quadrature positions -- with one tier the
+    // pre-#1362 precompute split into two loops: the same expressions
+    // produce the same doubles.
     std::vector<double> len_i(N_i);
     std::vector<double> len_j(N_j);
     for (size_t i = 0; i < N_i; i++) {
@@ -1512,167 +1534,461 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
         double dy = sri(i,1) - sli(i,1);
         double dz = sri(i,2) - sli(i,2);
         len_i[i] = std::sqrt(dx*dx + dy*dy + dz*dz);
-        for (size_t q = 0; q < n_qp; q++) {
-            double t = glt(q);
-            pos_i[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
-            pos_i[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
-            pos_i[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
-        }
     }
     for (size_t j = 0; j < N_j; j++) {
         double dx = srj(j,0) - slj(j,0);
         double dy = srj(j,1) - slj(j,1);
         double dz = srj(j,2) - slj(j,2);
         len_j[j] = std::sqrt(dx*dx + dy*dy + dz*dz);
-        for (size_t r = 0; r < n_qp; r++) {
-            double t = glt(r);
-            pos_j[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
-            pos_j[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
-            pos_j[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+    }
+    std::vector<std::vector<double>> pos_i(n_tiers);
+    std::vector<std::vector<double>> pos_j(n_tiers);
+    for (size_t tier = 0; tier < n_tiers; tier++) {
+        const size_t n_qp = ladder.n_qp(tier);
+        const double *gt = ladder.t_at(tier);
+        pos_i[tier].resize(N_i * n_qp * 3);
+        pos_j[tier].resize(N_j * n_qp * 3);
+        std::vector<double>& pi_t = pos_i[tier];
+        std::vector<double>& pj_t = pos_j[tier];
+        for (size_t i = 0; i < N_i; i++) {
+            for (size_t q = 0; q < n_qp; q++) {
+                double t = gt[q];
+                pi_t[(i*n_qp + q)*3 + 0] = (1.0 - t) * sli(i,0) + t * sri(i,0);
+                pi_t[(i*n_qp + q)*3 + 1] = (1.0 - t) * sli(i,1) + t * sri(i,1);
+                pi_t[(i*n_qp + q)*3 + 2] = (1.0 - t) * sli(i,2) + t * sri(i,2);
+            }
+        }
+        for (size_t j = 0; j < N_j; j++) {
+            for (size_t r = 0; r < n_qp; r++) {
+                double t = gt[r];
+                pj_t[(j*n_qp + r)*3 + 0] = (1.0 - t) * slj(j,0) + t * srj(j,0);
+                pj_t[(j*n_qp + r)*3 + 1] = (1.0 - t) * slj(j,1) + t * srj(j,1);
+                pj_t[(j*n_qp + r)*3 + 2] = (1.0 - t) * slj(j,2) + t * srj(j,2);
+            }
         }
     }
-
-    // TILED OVER qr (momwire#762) — kernel 2's transformation (chunk outside
-    // the k loop, so R / 1/(4 pi R) / wuwu and the k-independent EK terms T1,
-    // T2 are still built once per chunk and reused across the sweep), with
-    // kernel 3's EK factor stage inside the per-k body. First chunk assigns,
-    // later chunks accumulate; one chunk at n_qp <= 8, so bit-identical.
-    MW_OMP_PARALLEL_FOR_COLLAPSE2
-    for (size_t i = 0; i < N_i; i++) {
+    std::vector<double> c_i, c_j;
+    if (n_tiers > 1) {
+        c_i.resize(N_i * 3);
+        c_j.resize(N_j * 3);
+        for (size_t i = 0; i < N_i; i++) {
+            for (int d = 0; d < 3; d++) c_i[i*3 + d] = 0.5 * (sli(i,d) + sri(i,d));
+        }
         for (size_t j = 0; j < N_j; j++) {
-            alignas(32) double R[BSPLINE_QR_TILE];
-            alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
-            alignas(32) double phases[BSPLINE_QR_TILE];
-            alignas(32) double cos_phases[BSPLINE_QR_TILE];
-            alignas(32) double sin_phases[BSPLINE_QR_TILE];
-            alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
-            alignas(32) double t1v[BSPLINE_QR_TILE], t2v[BSPLINE_QR_TILE];
-            alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
+            for (int d = 0; d < 3; d++) c_j[j*3 + d] = 0.5 * (slj(j,d) + srj(j,d));
+        }
+    }
+    // The single-k kernel's selector, verbatim, so the two fills put a pair
+    // on the same rule.
+    auto pair_tier = [&](size_t i, size_t j) -> size_t {
+        size_t tier = 0;
+        if (n_tiers > 1) {
+            const double dx = c_i[i*3 + 0] - c_j[j*3 + 0];
+            const double dy = c_i[i*3 + 1] - c_j[j*3 + 1];
+            const double dz = c_i[i*3 + 2] - c_j[j*3 + 2];
+            const double ratio = std::sqrt(dx*dx + dy*dy + dz*dz)
+                                 / std::max(len_i[i], len_j[j]);
+            for (size_t t = 1; t < n_tiers; t++) {
+                if (ratio >= ladder.ratio[t]) tier = t; else break;
+            }
+        }
+        return tier;
+    };
 
-            const size_t n_pairs = n_qp * n_qp;
-            const double *pi = &pos_i[i * n_qp * 3];
-            const double *pj = &pos_j[j * n_qp * 3];
-            const double Li = len_i[i];
-            const double Lj = len_j[j];
-            const bool eligible = (gi_v(i) == gj_v(j)) && (gi_v(i) >= 0);
+    // The per-pair walk: the pre-#1362 loop body, tier-aware, with stage 2
+    // t-outer. TILED OVER qr (momwire#762) with the chunk OUTSIDE the k loop
+    // so R / 1/(4 pi R) / wuwu / T1 / T2 are built once per chunk and reused
+    // across the sweep. First chunk assigns, later chunks accumulate; one
+    // chunk at n_qp <= 8.
+    auto pair_walk = [&](size_t i, size_t j) {
+        alignas(32) double R[BSPLINE_QR_TILE];
+        alignas(32) double inv_R_4pi[BSPLINE_QR_TILE];
+        alignas(32) double phases[BSPLINE_QR_TILE];
+        alignas(32) double cos_phases[BSPLINE_QR_TILE];
+        alignas(32) double sin_phases[BSPLINE_QR_TILE];
+        alignas(32) double G_re[BSPLINE_QR_TILE], G_im[BSPLINE_QR_TILE];
+        alignas(32) double t1v[BSPLINE_QR_TILE], t2v[BSPLINE_QR_TILE];
+        alignas(32) double wuwu[NMM * BSPLINE_QR_TILE];
 
-            bool first_chunk = true;
-            for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
-                const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
-                                     ? (n_pairs - base) : BSPLINE_QR_TILE;
+        const size_t tier = pair_tier(i, j);
+        const size_t n_qp = ladder.n_qp(tier);
+        const double *gt = ladder.t_at(tier);
+        const double *gw = ladder.w_at(tier);
+        const size_t n_pairs = n_qp * n_qp;
+        const double *pi = &pos_i[tier][i * n_qp * 3];
+        const double *pj = &pos_j[tier][j * n_qp * 3];
+        const double Li = len_i[i];
+        const double Lj = len_j[j];
+        const bool eligible = (grp_i[i] == grp_j[j]) && (grp_i[i] >= 0);
 
-                size_t q = base / n_qp;
-                size_t r = base % n_qp;
+        bool first_chunk = true;
+        for (size_t base = 0; base < n_pairs; base += BSPLINE_QR_TILE) {
+            const size_t m = (n_pairs - base < BSPLINE_QR_TILE)
+                                 ? (n_pairs - base) : BSPLINE_QR_TILE;
+
+            size_t q = base / n_qp;
+            size_t r = base % n_qp;
+            for (size_t t = 0; t < m; t++) {
+                const double dx = pi[q*3 + 0] - pj[r*3 + 0];
+                const double dy = pi[q*3 + 1] - pj[r*3 + 1];
+                const double dz = pi[q*3 + 2] - pj[r*3 + 2];
+                R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+
+                const double wi = gw[q] * Li;
+                const double ui = gt[q] * Li;
+                const double wj = gw[r] * Lj;
+                const double uj = gt[r] * Lj;
+                double ui_pow[NM], uj_pow[NM];
+                ui_pow[0] = 1.0;
+                uj_pow[0] = 1.0;
+                for (int e = 1; e < NM; e++) {
+                    ui_pow[e] = ui_pow[e-1] * ui;
+                    uj_pow[e] = uj_pow[e-1] * uj;
+                }
+                const double wij = wi * wj;
+                for (int pp = 0; pp < NM; pp++) {
+                    for (int PP = 0; PP < NM; PP++) {
+                        wuwu[t * NMM + pp * NM + PP] = wij * ui_pow[pp] * uj_pow[PP];
+                    }
+                }
+
+                if (++r == n_qp) { r = 0; ++q; }
+            }
+            MW_OMP_SIMD()
+            for (size_t t = 0; t < m; t++) {
+                inv_R_4pi[t] = inv_4pi / R[t];
+            }
+            if (eligible) {
+                // T1, T2: functions of R and a_ek alone, so they hoist out
+                // of the k loop exactly as the same-edge swept twin's do.
+                MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
-                    const double dx = pi[q*3 + 0] - pj[r*3 + 0];
-                    const double dy = pi[q*3 + 1] - pj[r*3 + 1];
-                    const double dz = pi[q*3 + 2] - pj[r*3 + 2];
-                    R[t] = std::sqrt(dx*dx + dy*dy + dz*dz + a_squared);
+                    double r2 = R[t] * R[t];
+                    double r4 = r2 * r2;
+                    t1v[t] = 0.25 * a4_ek / r4;
+                    t2v[t] = 0.5 * a2_ek / r2;
+                }
+            }
 
-                    const double wi = glw(q) * Li;
-                    const double ui = glt(q) * Li;
-                    const double wj = glw(r) * Lj;
-                    const double uj = glt(r) * Lj;
-                    double ui_pow[NM], uj_pow[NM];
-                    ui_pow[0] = 1.0;
-                    uj_pow[0] = 1.0;
-                    for (int e = 1; e < NM; e++) {
-                        ui_pow[e] = ui_pow[e-1] * ui;
-                        uj_pow[e] = uj_pow[e-1] * uj;
-                    }
-                    const double wij = wi * wj;
-                    for (int pp = 0; pp < NM; pp++) {
-                        for (int PP = 0; PP < NM; PP++) {
-                            wuwu[(pp * NM + PP) * m + t] = wij * ui_pow[pp] * uj_pow[PP];
-                        }
-                    }
-
-                    if (++r == n_qp) { r = 0; ++q; }
+            for (size_t kk = 0; kk < n_k; kk++) {
+                const double k = ks[kk];
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    phases[t] = -k * R[t];
                 }
                 MW_OMP_SIMD()
                 for (size_t t = 0; t < m; t++) {
-                    inv_R_4pi[t] = inv_4pi / R[t];
+                    cos_phases[t] = std::cos(phases[t]);
+                }
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    sin_phases[t] = std::sin(phases[t]);
+                }
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m; t++) {
+                    G_re[t] = cos_phases[t] * inv_R_4pi[t];
+                    G_im[t] = sin_phases[t] * inv_R_4pi[t];
                 }
                 if (eligible) {
-                    // T1, T2: functions of R and a_ek alone, so they hoist out
-                    // of the k loop exactly as the same-edge swept twin's do.
                     MW_OMP_SIMD()
                     for (size_t t = 0; t < m; t++) {
-                        double r2 = R[t] * R[t];
-                        double r4 = r2 * r2;
-                        t1v[t] = 0.25 * a4_ek / r4;
-                        t2v[t] = 0.5 * a2_ek / r2;
+                        double kr = k * R[t];
+                        double kr2 = kr * kr;
+                        double c1r = 1.0;
+                        double c1i = kr;
+                        double c2r = 3.0 * c1r - kr2;
+                        double c2i = 3.0 * c1i;
+                        double facr = t1v[t] * c2r;
+                        double faci = t1v[t] * c2i;
+                        facr = facr - t2v[t] * c1r;
+                        faci = faci - t2v[t] * c1i;
+                        facr = facr + 1.0;
+                        double gre = G_re[t];
+                        double gim = G_im[t];
+                        G_re[t] = gre * facr - gim * faci;
+                        G_im[t] = gre * faci + gim * facr;
+                    }
+                }
+                // Stage 2, t outermost: each moment's chain starts at 0.0
+                // and adds w*G in ascending t, one rounded multiply and one
+                // rounded add per term -- the per-pP loop's order, so the
+                // moments do not move. No `omp simd reduction` (momwire#781):
+                // any vectorizing is ACROSS accumulators, which is exact.
+                double acc_re[NMM], acc_im[NMM];
+                for (int pP = 0; pP < NMM; pP++) { acc_re[pP] = 0.0; acc_im[pP] = 0.0; }
+                for (size_t t = 0; t < m; t++) {
+                    const double gr = G_re[t], gi = G_im[t];
+                    const double *w_t = &wuwu[t * NMM];
+                    for (int pP = 0; pP < NMM; pP++) {
+                        acc_re[pP] += w_t[pP] * gr;
+                        acc_im[pP] += w_t[pP] * gi;
+                    }
+                }
+                for (int pP = 0; pP < NMM; pP++) {
+                    std::complex<double> part(acc_re[pP], acc_im[pP]);
+                    if (first_chunk) {
+                        j_view(kk, pP / NM, pP % NM, i, j) = part;
+                    } else {
+                        j_view(kk, pP / NM, pP % NM, i, j) += part;
+                    }
+                }
+            }
+            first_chunk = false;
+        }
+    };
+
+#if MW_OFFEDGE_LANES_1290
+    if (!reference) {
+        // The lane kernel (momwire#1290's, for a sweep): four columns
+        // (i, j0..j0+3) at a time wherever they share a tier whose rule is
+        // one qr chunk of an EVEN order; anything else is walked. The
+        // k-independent tables are built once per group, then each k runs
+        // the walk's stage 1, factor and stage 2 over all four lanes. Every
+        // lane's arithmetic is the walk's for its pair, operation for
+        // operation (-ffp-contract=off, no fma written); the even order is
+        // what puts every cos/sin point through libmvec's vector entry on
+        // both routes (see the single-k kernel's lane notes).
+        constexpr size_t LN = 4;
+        const size_t n_grp = (N_j + LN - 1) / LN;
+        std::vector<std::vector<double>> pjT(n_tiers);
+        for (size_t tier = 0; tier < n_tiers; tier++) {
+            const size_t n_qp = ladder.n_qp(tier);
+            const std::vector<double>& pj_t = pos_j[tier];
+            std::vector<double>& out_t = pjT[tier];
+            out_t.resize(3 * n_qp * N_j);
+            for (size_t j = 0; j < N_j; j++) {
+                for (size_t c = 0; c < 3; c++) {
+                    for (size_t r = 0; r < n_qp; r++) {
+                        out_t[(c * n_qp + r) * N_j + j] = pj_t[(j*n_qp + r)*3 + c];
+                    }
+                }
+            }
+        }
+        const __m256d v_a2 = _mm256_set1_pd(a_squared);
+        const __m256d v_t1n = _mm256_set1_pd(0.25 * a4_ek);
+        const __m256d v_t2n = _mm256_set1_pd(0.5 * a2_ek);
+        const __m256d v_one = _mm256_set1_pd(1.0);
+        const __m256d v_three = _mm256_set1_pd(3.0);
+
+        #pragma omp parallel
+        {
+        alignas(32) double wv[BSPLINE_QR_TILE * NMM * LN];
+        alignas(32) double R[BSPLINE_QR_TILE * LN];
+        alignas(32) double inv_R_4pi[BSPLINE_QR_TILE * LN];
+        alignas(32) double t1v[BSPLINE_QR_TILE * LN];
+        alignas(32) double t2v[BSPLINE_QR_TILE * LN];
+        alignas(32) double phases[BSPLINE_QR_TILE * LN];
+        alignas(32) double cos_phases[BSPLINE_QR_TILE * LN];
+        alignas(32) double sin_phases[BSPLINE_QR_TILE * LN];
+        alignas(32) double G_re[BSPLINE_QR_TILE * LN];
+        alignas(32) double G_im[BSPLINE_QR_TILE * LN];
+        MW_OMP_FOR_COLLAPSE2
+        for (size_t i = 0; i < N_i; i++) {
+            for (size_t g = 0; g < n_grp; g++) {
+                const size_t j0 = g * LN;
+                bool lanes = j0 + LN <= N_j;
+                size_t tier = 0;
+                if (lanes) {
+                    tier = pair_tier(i, j0);
+                    for (size_t l = 1; l < LN; l++) {
+                        lanes = lanes && pair_tier(i, j0 + l) == tier;
+                    }
+                    const size_t nq = ladder.n_qp(tier);
+                    lanes = lanes && nq % 2 == 0 && nq * nq <= BSPLINE_QR_TILE;
+                }
+                if (!lanes) {
+                    const size_t j1 = std::min(j0 + LN, N_j);
+                    for (size_t j = j0; j < j1; j++) pair_walk(i, j);
+                    continue;
+                }
+
+                const size_t n_qp = ladder.n_qp(tier);
+                const size_t m = n_qp * n_qp;
+                const size_t m4 = m * LN;
+                const double *gt = ladder.t_at(tier);
+                const double *gw = ladder.w_at(tier);
+                const double *pi = &pos_i[tier][i * n_qp * 3];
+                const double *pT = pjT[tier].data();
+                const double Li = len_i[i];
+                double Lj[LN];
+                for (size_t l = 0; l < LN; l++) Lj[l] = len_j[j0 + l];
+
+                // R: the walk's `dx*dx + dy*dy + dz*dz + a_squared`, left to
+                // right, then a correctly rounded sqrt.
+                for (size_t q = 0; q < n_qp; q++) {
+                    const __m256d px = _mm256_set1_pd(pi[q*3 + 0]);
+                    const __m256d py = _mm256_set1_pd(pi[q*3 + 1]);
+                    const __m256d pz = _mm256_set1_pd(pi[q*3 + 2]);
+                    for (size_t r = 0; r < n_qp; r++) {
+                        const __m256d dx = _mm256_sub_pd(
+                            px, _mm256_loadu_pd(pT + r * N_j + j0));
+                        const __m256d dy = _mm256_sub_pd(
+                            py, _mm256_loadu_pd(pT + (n_qp + r) * N_j + j0));
+                        const __m256d dz = _mm256_sub_pd(
+                            pz, _mm256_loadu_pd(pT + (2 * n_qp + r) * N_j + j0));
+                        __m256d s = _mm256_add_pd(_mm256_mul_pd(dx, dx),
+                                                  _mm256_mul_pd(dy, dy));
+                        s = _mm256_add_pd(s, _mm256_mul_pd(dz, dz));
+                        s = _mm256_add_pd(s, v_a2);
+                        _mm256_store_pd(R + (q * n_qp + r) * LN, _mm256_sqrt_pd(s));
+                    }
+                }
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m4; t++) {
+                    inv_R_4pi[t] = inv_4pi / R[t];
+                }
+
+                // The moment weights, per lane in the walk's order: wij =
+                // wi*wj, then (wij*ui^p)*uj^P.
+                {
+                    __m256d wjv[8], ujp[8][NM];
+                    const __m256d vLj = _mm256_loadu_pd(Lj);
+                    for (size_t r = 0; r < n_qp; r++) {
+                        wjv[r] = _mm256_mul_pd(_mm256_set1_pd(gw[r]), vLj);
+                        const __m256d uj = _mm256_mul_pd(_mm256_set1_pd(gt[r]), vLj);
+                        ujp[r][0] = _mm256_set1_pd(1.0);
+                        for (int e = 1; e < NM; e++) {
+                            ujp[r][e] = _mm256_mul_pd(ujp[r][e-1], uj);
+                        }
+                    }
+                    for (size_t q = 0; q < n_qp; q++) {
+                        const double wi = gw[q] * Li;
+                        const double ui = gt[q] * Li;
+                        double ui_pow[NM];
+                        ui_pow[0] = 1.0;
+                        for (int e = 1; e < NM; e++) ui_pow[e] = ui_pow[e-1] * ui;
+                        for (size_t r = 0; r < n_qp; r++) {
+                            const size_t t = q * n_qp + r;
+                            const __m256d wij = _mm256_mul_pd(_mm256_set1_pd(wi), wjv[r]);
+                            for (int pp = 0; pp < NM; pp++) {
+                                const __m256d x =
+                                    _mm256_mul_pd(wij, _mm256_set1_pd(ui_pow[pp]));
+                                for (int PP = 0; PP < NM; PP++) {
+                                    _mm256_store_pd(wv + (t * NMM + pp * NM + PP) * LN,
+                                                    _mm256_mul_pd(x, ujp[r][PP]));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // EK eligibility per lane, and the k-independent T1/T2 when
+                // any lane is eligible (computed for all four; an ineligible
+                // lane's are never used).
+                const int64_t gi_i = grp_i[i];
+                const bool e0 = gi_i >= 0 && grp_j[j0 + 0] == gi_i;
+                const bool e1 = gi_i >= 0 && grp_j[j0 + 1] == gi_i;
+                const bool e2 = gi_i >= 0 && grp_j[j0 + 2] == gi_i;
+                const bool e3 = gi_i >= 0 && grp_j[j0 + 3] == gi_i;
+                const bool any_e = e0 || e1 || e2 || e3;
+                const __m256d emask = _mm256_castsi256_pd(_mm256_set_epi64x(
+                    e3 ? -1 : 0, e2 ? -1 : 0, e1 ? -1 : 0, e0 ? -1 : 0));
+                if (any_e) {
+                    for (size_t t = 0; t < m; t++) {
+                        const __m256d Rq = _mm256_load_pd(R + t * LN);
+                        const __m256d r2 = _mm256_mul_pd(Rq, Rq);
+                        const __m256d r4 = _mm256_mul_pd(r2, r2);
+                        _mm256_store_pd(t1v + t * LN, _mm256_div_pd(v_t1n, r4));
+                        _mm256_store_pd(t2v + t * LN, _mm256_div_pd(v_t2n, r2));
                     }
                 }
 
                 for (size_t kk = 0; kk < n_k; kk++) {
-                    double k = ka(kk);
+                    const double k = ks[kk];
                     MW_OMP_SIMD()
-                    for (size_t t = 0; t < m; t++) {
+                    for (size_t t = 0; t < m4; t++) {
                         phases[t] = -k * R[t];
                     }
                     MW_OMP_SIMD()
-                    for (size_t t = 0; t < m; t++) {
+                    for (size_t t = 0; t < m4; t++) {
                         cos_phases[t] = std::cos(phases[t]);
                     }
                     MW_OMP_SIMD()
-                    for (size_t t = 0; t < m; t++) {
+                    for (size_t t = 0; t < m4; t++) {
                         sin_phases[t] = std::sin(phases[t]);
                     }
                     MW_OMP_SIMD()
-                    for (size_t t = 0; t < m; t++) {
+                    for (size_t t = 0; t < m4; t++) {
                         G_re[t] = cos_phases[t] * inv_R_4pi[t];
                         G_im[t] = sin_phases[t] * inv_R_4pi[t];
                     }
-                    if (eligible) {
-                        MW_OMP_SIMD()
+                    if (any_e) {
+                        // The walk's factor loop per lane; its `t2v * c1r`
+                        // and `3.0 * c1r` multiply by c1r = 1.0, which is
+                        // exact, so they are spelled t2 and 3.0 here.
+                        const __m256d v_k = _mm256_set1_pd(k);
                         for (size_t t = 0; t < m; t++) {
-                            double kr = k * R[t];
-                            double kr2 = kr * kr;
-                            double c1r = 1.0;
-                            double c1i = kr;
-                            double c2r = 3.0 * c1r - kr2;
-                            double c2i = 3.0 * c1i;
-                            double facr = t1v[t] * c2r;
-                            double faci = t1v[t] * c2i;
-                            facr = facr - t2v[t] * c1r;
-                            faci = faci - t2v[t] * c1i;
-                            facr = facr + 1.0;
-                            double gre = G_re[t];
-                            double gim = G_im[t];
-                            G_re[t] = gre * facr - gim * faci;
-                            G_im[t] = gre * faci + gim * facr;
+                            const __m256d Rq = _mm256_load_pd(R + t * LN);
+                            const __m256d kr = _mm256_mul_pd(v_k, Rq);
+                            const __m256d kr2 = _mm256_mul_pd(kr, kr);
+                            const __m256d t1 = _mm256_load_pd(t1v + t * LN);
+                            const __m256d t2 = _mm256_load_pd(t2v + t * LN);
+                            const __m256d c2r = _mm256_sub_pd(v_three, kr2);
+                            const __m256d c2i = _mm256_mul_pd(v_three, kr);
+                            __m256d facr = _mm256_mul_pd(t1, c2r);
+                            __m256d faci = _mm256_mul_pd(t1, c2i);
+                            facr = _mm256_sub_pd(facr, t2);
+                            faci = _mm256_sub_pd(faci, _mm256_mul_pd(t2, kr));
+                            facr = _mm256_add_pd(facr, v_one);
+                            const __m256d gre = _mm256_load_pd(G_re + t * LN);
+                            const __m256d gim = _mm256_load_pd(G_im + t * LN);
+                            const __m256d nre = _mm256_sub_pd(_mm256_mul_pd(gre, facr),
+                                                              _mm256_mul_pd(gim, faci));
+                            const __m256d nim = _mm256_add_pd(_mm256_mul_pd(gre, faci),
+                                                              _mm256_mul_pd(gim, facr));
+                            _mm256_store_pd(G_re + t * LN, _mm256_blendv_pd(gre, nre, emask));
+                            _mm256_store_pd(G_im + t * LN, _mm256_blendv_pd(gim, nim, emask));
                         }
                     }
-                    for (int pP = 0; pP < NMM; pP++) {
-                        double sr = 0.0, si = 0.0;
-                        const double *w_row = &wuwu[pP * m];
-                        // No `omp simd reduction` here (momwire#781): the clause LICENSES
-                        // reassociation, so the reduction tree follows whatever
-                        // vectorization factor the compiler picks per FUNCTION -- and the
-                        // reduced and EK kernels differ in register pressure. That made
-                        // their all-ineligible outputs disagree by 1 ulp on arm64 while
-                        // matching on x86-64, breaking the exact-reduction gates that
-                        // momwire#270 U2 relies on. Measured single-threaded (pinned,
-                        // passive wait, min of 5, 3 alternating rounds), the clause is
-                        // worth -0.2%/+0.4% on the bspline fills -- i.e. nothing. It IS
-                        // worth ~4.6% in _accel_razor.cpp, which keeps its clause and has
-                        // no cross-kernel equality gate to protect.
+
+                    // Stage 2: per moment and lane, the walk's chain. Real
+                    // and imaginary sums in separate passes (NMM vector
+                    // accumulators each); `phases` holds the real sums once
+                    // its points are spent.
+                    for (int part = 0; part < 2; part++) {
+                        const double *G = part == 0 ? G_re : G_im;
+                        __m256d acc[NMM];
+                        for (int pP = 0; pP < NMM; pP++) acc[pP] = _mm256_setzero_pd();
                         for (size_t t = 0; t < m; t++) {
-                            sr += w_row[t] * G_re[t];
-                            si += w_row[t] * G_im[t];
+                            const __m256d gv = _mm256_load_pd(G + t * LN);
+                            const double *w_t = wv + t * NMM * LN;
+                            for (int pP = 0; pP < NMM; pP++) {
+                                acc[pP] = _mm256_add_pd(
+                                    acc[pP],
+                                    _mm256_mul_pd(_mm256_load_pd(w_t + pP * LN), gv));
+                            }
                         }
-                        std::complex<double> part(sr, si);
-                        if (first_chunk) {
-                            j_view(kk, pP / NM, pP % NM, i, j) = part;
+                        if (part == 0) {
+                            for (int pP = 0; pP < NMM; pP++) {
+                                _mm256_store_pd(phases + pP * LN, acc[pP]);
+                            }
                         } else {
-                            j_view(kk, pP / NM, pP % NM, i, j) += part;
+                            for (int pP = 0; pP < NMM; pP++) {
+                                const __m256d re = _mm256_load_pd(phases + pP * LN);
+                                const __m256d lo = _mm256_unpacklo_pd(re, acc[pP]);
+                                const __m256d hi = _mm256_unpackhi_pd(re, acc[pP]);
+                                double *o = reinterpret_cast<double *>(
+                                    &j_view(kk, pP / NM, pP % NM, i, j0));
+                                _mm256_storeu_pd(o, _mm256_permute2f128_pd(lo, hi, 0x20));
+                                _mm256_storeu_pd(o + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
+                            }
                         }
                     }
                 }
-                first_chunk = false;
             }
         }
+        }
+    } else
+#else
+    (void)reference;
+#endif
+    {
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t i = 0; i < N_i; i++) {
+        for (size_t j = 0; j < N_j; j++) {
+            pair_walk(i, j);
+        }
+    }
     }
 
     return J;
@@ -5139,24 +5455,72 @@ seg_seg_full_moments_bspline_swept_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
-    double a_ek
+    double a_ek,
+    bool reference
 ) {
+    const PairOrderLadder ladder = ladder_from_rule(gl_t, gl_w);
     switch (max_d) {
         case 1:
             return seg_seg_full_moments_bspline_swept_kernel_ek<1>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w,
-                group_i, group_j, a_ek);
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
+                group_i, group_j, a_ek, reference);
         case 2:
             return seg_seg_full_moments_bspline_swept_kernel_ek<2>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w,
-                group_i, group_j, a_ek);
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
+                group_i, group_j, a_ek, reference);
         case 3:
             return seg_seg_full_moments_bspline_swept_kernel_ek<3>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, gl_t, gl_w,
-                group_i, group_j, a_ek);
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
+                group_i, group_j, a_ek, reference);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_swept_ek: max_d must be 1, 2 or 3 "
+                "(add an explicit template instantiation in _accelerators.cpp)");
+    }
+}
+
+
+// The distance-adaptive (ladder) twin of the swept EK entry above
+// (momwire#1362): `seg_seg_full_moments_bspline_ek_tiered`'s ladder contract
+// over a k_array. The caller trims the ladder for the sweep's electrical
+// length (`_ladder_for_block`) per group of k it serves.
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_swept_ek_tiered(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    py::array_t<double, py::array::c_style | py::array::forcecast> k_array,
+    int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
+    double a_ek,
+    bool reference
+) {
+    const PairOrderLadder ladder =
+        ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
+    switch (max_d) {
+        case 1:
+            return seg_seg_full_moments_bspline_swept_kernel_ek<1>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
+                group_i, group_j, a_ek, reference);
+        case 2:
+            return seg_seg_full_moments_bspline_swept_kernel_ek<2>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
+                group_i, group_j, a_ek, reference);
+        case 3:
+            return seg_seg_full_moments_bspline_swept_kernel_ek<3>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k_array, ladder,
+                group_i, group_j, a_ek, reference);
+        default:
+            throw std::runtime_error(
+                "seg_seg_full_moments_bspline_swept_ek_tiered: "
+                "max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -6296,13 +6660,32 @@ void register_bspline(py::module_ &m) {
           "plus the EK eligibility mask and the k-independent T1/T2 halves "
           "of the coaxial factor hoisted out of the k loop the same way the "
           "same-edge swept twin hoists them. Returns (n_k, max_d+1, max_d+1, "
-          "N_i, N_j) complex.",
+          "N_i, N_j) complex. reference=True walks every pair alone where the "
+          "AVX2 lane path is compiled (momwire#1362), the gate that path is "
+          "held to.",
           py::arg("seg_l_i"), py::arg("seg_r_i"),
           py::arg("seg_l_j"), py::arg("seg_r_j"),
           py::arg("a_squared"), py::arg("k_array"),
           py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
-          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"));
+          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
+          py::arg("reference") = false);
+    m.def("seg_seg_full_moments_bspline_swept_ek_tiered",
+          &seg_seg_full_moments_bspline_swept_ek_tiered,
+          "Distance-adaptive twin of seg_seg_full_moments_bspline_swept_ek "
+          "(momwire#1362): the pair-order ladder contract of "
+          "seg_seg_full_moments_bspline_ek_tiered over a k_array. One tier "
+          "reproduces seg_seg_full_moments_bspline_swept_ek bit for bit; "
+          "reference=True walks every pair alone where the AVX2 lane path is "
+          "compiled.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k_array"),
+          py::arg("max_d"),
+          py::arg("tier_t"), py::arg("tier_w"),
+          py::arg("tier_n_qp"), py::arg("tier_ratio"),
+          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
+          py::arg("reference") = false);
     m.def("seg_seg_static_moments_bspline_uniform",
           &seg_seg_static_moments_bspline_uniform,
           "Closed-form same-edge static-kernel polynomial moments J_pq for a "
