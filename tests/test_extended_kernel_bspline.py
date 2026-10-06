@@ -2949,7 +2949,21 @@ _U1_ACCEL_ENTRY_POINTS = (
     # can no longer tell "EK stayed idle" from "nothing ran".
     "seg_seg_full_moments_bspline_tiered",
     "seg_seg_full_moments_bspline_cplx_tiered",
+    # ... and the EK twin's own tiered entry (momwire#1362): an EK block on
+    # the deck's ladder is served there.
+    "seg_seg_full_moments_bspline_ek_tiered",
 )
+
+# The single-k EK off-edge entries, whichever tier serves the block.
+_EK_OFFEDGE_ENTRIES = (
+    "seg_seg_full_moments_bspline_ek",
+    "seg_seg_full_moments_bspline_ek_tiered",
+)
+
+
+def _ek_offedge_calls(spy):
+    return sum(spy.counts[e] for e in _EK_OFFEDGE_ENTRIES)
+
 
 # The reduced (non-EK) off-edge entries, whichever tier serves the block.
 _REDUCED_OFFEDGE_ENTRIES = (
@@ -3684,7 +3698,7 @@ def test_u2_image_tensor_route_serves_the_joint_labels_to_cpp(
     sim._build_J_image_blocks(geom, sim.k)
     assert len(offedge_ek_spy) == 1
     _assert_mirrored_spec(offedge_ek_spy[0], sim)
-    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] > 0
+    assert _ek_offedge_calls(accel_spy) > 0, accel_spy.counts
 
 
 @pytestmark_u2
@@ -3711,7 +3725,7 @@ def test_u2_image_chunked_route_serves_the_joint_labels_to_cpp(
         _assert_mirrored_spec(ek, sim, rows=rows)
         row0 += len(ek.group_i)
     assert row0 == n_segs, "the observer chunks did not cover the mesh"
-    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] > 0
+    assert _ek_offedge_calls(accel_spy) > 0, accel_spy.counts
 
 
 # ----------------------------------------------------------------------
@@ -3723,7 +3737,7 @@ def test_u2_image_chunked_route_serves_the_joint_labels_to_cpp(
 @pytest.mark.parametrize("name", list(_G7_BSPLINE))
 def test_u2_ek_off_never_reaches_the_offedge_ek_entry_points(accel_spy, name):
     BSplineSolver(**_G7_BSPLINE[name], wavelength=LAM, degree=2).compute_impedance()
-    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] == 0
+    assert _ek_offedge_calls(accel_spy) == 0, accel_spy.counts
     assert accel_spy.counts["seg_seg_full_moments_bspline_swept_ek"] == 0
     # Vacuity guard: the zeros above mean nothing unless the non-EK off-edge
     # path was actually entered. Which it is — except on a deck that has no
@@ -3754,7 +3768,7 @@ def test_u2_missing_symbols_fall_back_to_numpy(numpy_offedge, accel_spy):
         extended_kernel=True,
     ).compute_impedance()
     assert np.isfinite(z)
-    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] == 0
+    assert _ek_offedge_calls(accel_spy) == 0, accel_spy.counts
     assert accel_spy.counts["seg_seg_full_moments_bspline_swept_ek"] == 0
 
 
@@ -3777,7 +3791,7 @@ def test_u2_ek_on_offedge_is_served_by_cpp(accel_spy, ek_call_counts):
         degree=2,
         extended_kernel=True,
     ).compute_impedance()
-    assert accel_spy.counts["seg_seg_full_moments_bspline_ek"] > 0
+    assert _ek_offedge_calls(accel_spy) > 0, accel_spy.counts
     assert accel_spy.counts["seg_seg_full_moments_bspline"] == 0
     # ... and the numpy off-edge closed form was not touched — with BOTH
     # C++ pairs live, nothing anywhere reaches `_ek_factor` any more.

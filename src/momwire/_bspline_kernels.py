@@ -157,6 +157,11 @@ _HAVE_BSPLINE_OFFEDGE_EK_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_SWEPT_EK_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_swept_ek"
 )
+# momwire#1362: the EK off-edge kernel on the pair-order ladder. Absent it, an
+# EK block with a ladder takes the numpy twin, as a reduced one does.
+_HAVE_BSPLINE_OFFEDGE_EK_TIERED_ACCEL = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_bspline_ek_tiered"
+)
 
 # Currently the C++ accelerator has explicit instantiations for D in {1, 2}.
 # Extend by adding `seg_seg_full_moments_bspline_kernel<3>(...)` and a switch
@@ -1293,18 +1298,13 @@ def _seg_seg_full_moments_offedge(
     in_medium = _complex_k(k)
     t01, w01 = _gl01(n_qp)
     # momwire#906: the pair-order ladder, validated, then trimmed for THIS
-    # block's electrical length. Serves the plain kernel only — the extended
-    # kernel's coaxial factor has not been measured on a ladder, and no caller
-    # combines the two (EK is refused on buried decks, and the free-space
-    # default ladder is empty).
+    # block's electrical length. Since momwire#1362 it serves the extended
+    # kernel too: the coaxial factor is applied at whatever order a pair runs
+    # (C++ `seg_seg_full_moments_bspline_ek_tiered`, and the numpy twin below,
+    # whose `_numpy_block` applies it per tier).
     ladder = _ladder_for_block(
         _normalize_ladder(ladder, n_qp), k, seg_l_i, seg_r_i, seg_l_j, seg_r_j
     )
-    if ladder and ek is not None:
-        raise NotImplementedError(
-            "the pair-order ladder (momwire#906) serves the plain off-edge "
-            "kernel only; pass ladder=None with an extended-kernel spec"
-        )
 
     # `n_qp` belongs in these predicates for the same reason `max_d` does: it
     # is a shape the kernels do not serve, and the numpy path does
@@ -1417,7 +1417,26 @@ def _seg_seg_full_moments_offedge(
             np.ascontiguousarray(w01, dtype=np.float64),
         )
 
-    if accel_ok_ek:
+    if accel_ok_ek and ladder and _HAVE_BSPLINE_OFFEDGE_EK_TIERED_ACCEL:
+        tier_t, tier_w, tier_n_qp, tier_ratio = _ladder_arrays(n_qp, ladder)
+        return _acc.seg_seg_full_moments_bspline_ek_tiered(
+            np.ascontiguousarray(seg_l_i, dtype=np.float64),
+            np.ascontiguousarray(seg_r_i, dtype=np.float64),
+            np.ascontiguousarray(seg_l_j, dtype=np.float64),
+            np.ascontiguousarray(seg_r_j, dtype=np.float64),
+            float(a) * float(a),
+            float(k),
+            int(max_d),
+            tier_t,
+            tier_w,
+            tier_n_qp,
+            tier_ratio,
+            np.ascontiguousarray(ek.group_i, dtype=np.int64),
+            np.ascontiguousarray(ek.group_j, dtype=np.int64),
+            float(_ek_radius(ek, a)),
+        )
+
+    if accel_ok_ek and not ladder:
         # The C++ EK twin (momwire#270 unit 2): the reduced kernel's own
         # geometry contract, plus the per-segment group labels and the
         # plain (unsquared) EK radius — `a` here is already scalar (the

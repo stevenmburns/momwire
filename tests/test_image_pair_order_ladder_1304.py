@@ -277,8 +277,8 @@ def test_g1304_5_resolution(monkeypatch):
     off = BSplineSolver(**_hlong(0.1, 30, pair_order_ladder=()))
     assert off._image_fill_ladder(off.k, sl, sr, None) == ()
 
-    # EK: none, and the EK image fill still solves (the kernel refuses
-    # ladder + EK, so a leak here would raise).
+    # EK: the same ladder since momwire#1362 (it was none while the kernel
+    # refused ladder + EK), and the EK image fill solves on it.
     vdeck = dict(
         wires=[np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 0.25 * WL)])],
         n_per_edge_per_wire=[[20]],
@@ -289,7 +289,9 @@ def test_g1304_5_resolution(monkeypatch):
         extended_kernel=True,
     )
     ek_s, _z, ek_calls = _solve_recording(vdeck, monkeypatch)
-    assert ek_calls and {kw.get("ladder") for _a, kw, _J in ek_calls} == {()}
+    assert ek_calls and {kw.get("ladder") for _a, kw, _J in ek_calls} == {
+        ek_s._fill_ladder(ek_s.k, sl, sr, None)
+    }
 
     # A buried deck's images ride the subset fill, never these two.
     counts = {"chunked": 0, "dense": 0}

@@ -1410,8 +1410,7 @@ seg_seg_full_moments_bspline_kernel_ek(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
     double a_squared,
     double k,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_t,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gl_w,
+    const PairOrderLadder& ladder,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
     double a_ek,
@@ -1424,19 +1423,21 @@ seg_seg_full_moments_bspline_kernel_ek(
     }
     // momwire#1362: the reduced kernel's own walk and AVX2 lanes, with the
     // coaxial factor applied between stage 1 and stage 2 on eligible pairs.
-    // One rule (a one-tier ladder): the pair-order ladder has not been
-    // measured against the coaxial factor (`_fill_ladder`). Each pair's
-    // arithmetic is the pre-#1362 EK kernel's, which this replaced: the same
-    // R, the same G, the same factor loop, and each moment the same
-    // ascending-t chain of one rounded multiply and one rounded add -- with
-    // t outermost (8c311afb) and four column pairs per vector lane
-    // (momwire#1290) only reordering work ACROSS chains. Gated to the bit
-    // against the walk (`reference=True`) and the solver's Z against the
-    // pre-#1362 build.
+    // Each pair's arithmetic at a given order is the pre-#1362 EK kernel's,
+    // which this replaced: the same R, the same G, the same factor loop, and
+    // each moment the same ascending-t chain of one rounded multiply and one
+    // rounded add -- with t outermost (8c311afb) and four column pairs per
+    // vector lane (momwire#1290) only reordering work ACROSS chains. Gated to
+    // the bit against the walk (`reference=True`).
+    //
+    // The ladder is the reduced kernel's (momwire#906): a pair's order is
+    // chosen by the same selector, and the factor is applied at whatever
+    // order the pair runs. A one-tier ladder is the single-rule entry bit for
+    // bit; the tiered entry's movement against it is gated in
+    // `tests/test_ek_pair_order_ladder_1362.py`.
     return seg_seg_full_moments_bspline_kernel_impl<D, false, true>(
         seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0,
-        ladder_from_rule(gl_t, gl_w), reference,
-        group_i.data(), group_j.data(), a_ek);
+        ladder, reference, group_i.data(), group_j.data(), a_ek);
 }
 
 // Swept-k (batched) variant of seg_seg_full_moments_bspline_kernel_ek.
@@ -4966,22 +4967,68 @@ seg_seg_full_moments_bspline_ek(
     double a_ek,
     bool reference
 ) {
+    const PairOrderLadder ladder = ladder_from_rule(gl_t, gl_w);
     switch (max_d) {
         case 1:
             return seg_seg_full_moments_bspline_kernel_ek<1>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
                 group_i, group_j, a_ek, reference);
         case 2:
             return seg_seg_full_moments_bspline_kernel_ek<2>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
                 group_i, group_j, a_ek, reference);
         case 3:
             return seg_seg_full_moments_bspline_kernel_ek<3>(
-                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, gl_t, gl_w,
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
                 group_i, group_j, a_ek, reference);
         default:
             throw std::runtime_error(
                 "seg_seg_full_moments_bspline_ek: max_d must be 1, 2 or 3 "
+                "(add an explicit template instantiation in _accelerators.cpp)");
+    }
+}
+
+
+// The distance-adaptive (ladder) twin of the entry above (momwire#1362): the
+// extended kernel on the pair-order ladder of momwire#906, with the
+// `seg_seg_full_moments_bspline_tiered` ladder contract and this entry's EK
+// arguments. Real k only, like every EK off-edge entry.
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_bspline_ek_tiered(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    double k,
+    int max_d,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
+    double a_ek,
+    bool reference
+) {
+    const PairOrderLadder ladder =
+        ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
+    switch (max_d) {
+        case 1:
+            return seg_seg_full_moments_bspline_kernel_ek<1>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
+                group_i, group_j, a_ek, reference);
+        case 2:
+            return seg_seg_full_moments_bspline_kernel_ek<2>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
+                group_i, group_j, a_ek, reference);
+        case 3:
+            return seg_seg_full_moments_bspline_kernel_ek<3>(
+                seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, ladder,
+                group_i, group_j, a_ek, reference);
+        default:
+            throw std::runtime_error(
+                "seg_seg_full_moments_bspline_ek_tiered: max_d must be 1, 2 or 3 "
                 "(add an explicit template instantiation in _accelerators.cpp)");
     }
 }
@@ -6121,6 +6168,23 @@ void register_bspline(py::module_ &m) {
           py::arg("a_squared"), py::arg("k"),
           py::arg("max_d"),
           py::arg("gl_t"), py::arg("gl_w"),
+          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
+          py::arg("reference") = false);
+    m.def("seg_seg_full_moments_bspline_ek_tiered",
+          &seg_seg_full_moments_bspline_ek_tiered,
+          "Distance-adaptive twin of seg_seg_full_moments_bspline_ek "
+          "(momwire#1362): the pair-order ladder contract of "
+          "seg_seg_full_moments_bspline_tiered (tier 0 the base order, tier "
+          "t >= 1 for pairs at centre distance over the longer segment >= "
+          "tier_ratio[t]) with the EK group labels and radius. The coaxial "
+          "factor is applied at whatever order a pair runs; one tier "
+          "reproduces seg_seg_full_moments_bspline_ek bit for bit.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("max_d"),
+          py::arg("tier_t"), py::arg("tier_w"),
+          py::arg("tier_n_qp"), py::arg("tier_ratio"),
           py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"),
           py::arg("reference") = false);
     m.def("seg_seg_full_moments_bspline_swept_ek",

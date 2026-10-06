@@ -25,8 +25,9 @@ What these gates pin, in order:
            the order-8 tier serves within 1e-11.
 - G-906-4  the phase guard: a block whose longest segment passes kL = 0.5
            loses its sub-8 tiers, both in the helper and at the C++ call.
-- G-906-5  a ladder is validated, not reordered, and refuses to combine with
-           the extended kernel.
+- G-906-5  a ladder is validated, not reordered. (It refused to combine with
+           the extended kernel until momwire#1362, whose gates are in
+           test_ek_pair_order_ladder_1362.py.)
 - G-906-6  resolution follows the deck: buried gets the buried ladder,
            free space gets none, explicit always wins, tiers at or above
            the base order are dropped.
@@ -34,7 +35,8 @@ What these gates pin, in order:
            tiered accelerator is what served it.
 - G-906-8  a bent free-space deck DOES reach a tiered entry, on both the
            dense and the chunked fill (momwire#907 inverted this gate); 8b
-           the extended kernel still refuses a ladder and is bit-identical;
+           an extended-kernel deck takes the ladder too (momwire#1362
+           inverted that gate) through the EK tiered entry;
            8c one fill resolves ONE ladder, so the sweep and the same-edge
            correction it subtracts cannot land on different orders.
 """
@@ -48,7 +50,6 @@ import pytest
 import momwire._bspline_kernels as _bk
 import momwire.bspline as _bs
 from momwire._bspline_kernels import (
-    _EK,
     _gl01,
     _ladder_arrays,
     _ladder_for_block,
@@ -73,6 +74,8 @@ TIERED = "seg_seg_full_moments_bspline_tiered"
 TIERED_CPLX = "seg_seg_full_moments_bspline_cplx_tiered"
 PLAIN = "seg_seg_full_moments_bspline"
 PLAIN_CPLX = "seg_seg_full_moments_bspline_cplx"
+EK_PLAIN = "seg_seg_full_moments_bspline_ek"
+EK_TIERED = "seg_seg_full_moments_bspline_ek_tiered"
 
 pytestmark = pytest.mark.skipif(
     not (
@@ -130,7 +133,9 @@ class _AccelSpy:
 
 @pytest.fixture
 def spy(monkeypatch):
-    s = _AccelSpy(_bk._acc, (TIERED, TIERED_CPLX, PLAIN, PLAIN_CPLX))
+    s = _AccelSpy(
+        _bk._acc, (TIERED, TIERED_CPLX, PLAIN, PLAIN_CPLX, EK_PLAIN, EK_TIERED)
+    )
     monkeypatch.setattr(_bk, "_acc", s)
     return s
 
@@ -223,16 +228,6 @@ def test_g906_5_a_ladder_is_validated_not_reordered():
         _normalize_ladder(((2, 4), (16, 8)), 32)
     with pytest.raises(ValueError, match="strictly descend"):
         _normalize_ladder(((2, 0),), 32)
-    sl, sr = _chain_deck(n=6)
-    ek = _EK(
-        a=None,
-        group_i=np.zeros(12, dtype=np.int64),
-        group_j=np.zeros(12, dtype=np.int64),
-    )
-    with pytest.raises(NotImplementedError, match="plain off-edge kernel only"):
-        _seg_seg_full_moments_offedge(
-            sl, sr, sl, sr, 1e-3, K_REAL, 2, 32, ek=ek, ladder=LADDER
-        )
 
 
 def test_g906_6_resolution_follows_the_deck():
@@ -320,32 +315,29 @@ def test_g906_8_free_space_now_reaches_a_tiered_entry(spy, chunked):
     assert spy.counts[TIERED_CPLX] == 0, spy.counts
 
 
-def test_g906_8b_the_extended_kernel_still_refuses_a_ladder(spy):
-    """The kernel raises on ladder+EK, and `_fill_ladder` is what keeps a
-    free-space EK deck from ever meeting that refusal now that the default is
-    no longer empty.
-
-    The kernel's own comment justified the refusal with "the free-space default
-    ladder is empty", which is exactly the assumption #907 flipped, so without
-    the guard every extended-kernel deck raises.
+def test_g906_8b_the_extended_kernel_takes_the_ladder(spy):
+    """momwire#1362 inverted this gate. Until then the kernel raised on
+    ladder+EK and `_fill_ladder` returned () under EK so a free-space EK
+    deck never met that refusal; now the EK fill asks for the deck's ladder
+    and the EK tiered entry serves it, the coaxial factor applied at every
+    order. The Z movement against the flat EK fill is gated in
+    test_ek_pair_order_ladder_1362.py; here, only that the route is taken
+    and the answer stays the flat fill's to the #1362 tolerance.
     """
     deck = _free_bent_deck(n_per_edge=25)
     s = BSplineSolver(**deck, extended_kernel=True)
     geom = s._build_geometry()
     ek = s._ek_spec(geom)
     assert ek is not None
-    # The deck still WISHES for the ladder ...
-    assert s.pair_order_ladder == ((16.0, 4),)
-    # ... and the fill declines to ask for it, so the refusal is never reached.
-    assert s._fill_ladder(s.k, geom["seg_l"], geom["seg_r"], ek) == ()
+    assert s._fill_ladder(s.k, geom["seg_l"], geom["seg_r"], ek) == ((16.0, 4),)
     z_ek, _ = s.compute_impedance()
-    # EK takes its own accelerator entry, so the plain counters stay at zero
-    # here; the tiered ones are the check that matters.
+    assert spy.counts[EK_TIERED] >= 1, spy.counts
     assert spy.counts[TIERED] == spy.counts[TIERED_CPLX] == 0, spy.counts
     z_ref, _ = BSplineSolver(
         **deck, extended_kernel=True, pair_order_ladder=()
     ).compute_impedance()
-    assert z_ek == z_ref, f"{z_ek!r} vs {z_ref!r}"
+    assert spy.counts[EK_PLAIN] >= 1, spy.counts
+    assert abs(z_ek - z_ref) < 1e-11 * abs(z_ref), f"{z_ek!r} vs {z_ref!r}"
 
 
 def test_g906_8c_every_pair_gets_ONE_order_however_the_fill_is_cut(spy):
