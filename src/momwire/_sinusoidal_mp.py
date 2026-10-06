@@ -60,6 +60,9 @@ _HAVE_SIN_ASSEMBLE = _acc is not None and hasattr(
 _HAVE_SIN_PARALLEL = _acc is not None and hasattr(
     _acc, "parallel_pair_moments_sinusoidal"
 )
+_HAVE_SIN_TIERED_EK = _acc is not None and hasattr(
+    _acc, "seg_seg_full_moments_sinusoidal_tiered_ek"
+)
 
 N_SHAPES = 3
 
@@ -123,11 +126,13 @@ def _gl01(n):
     return 0.5 * (x + 1.0), 0.5 * w
 
 
-def pair_moments_product(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, t01, w01):
+def pair_moments_product(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, t01, w01, ek=None):
     """Numpy reference of the product-rule pair moments on ONE rule:
     J[p, q, i, j] = sum_ab w_a w_b S_p(xi_a) S_q(xi'_b) G(R_ab), with
     G = exp(-jkR) / (4 pi R), R^2 = |r_a - r'_b|^2 + a2, on every (i, j).
-    `a2` is a scalar or per-row (N_i,)."""
+    `a2` is a scalar or per-row (N_i,). `ek = (group_i, group_j, a_ek)` puts
+    NEC Eq 89's coaxial factor on G for the pairs whose labels match
+    (momwire#1362)."""
     seg_l_i, seg_r_i = np.asarray(seg_l_i, float), np.asarray(seg_r_i, float)
     seg_l_j, seg_r_j = np.asarray(seg_l_j, float), np.asarray(seg_r_j, float)
     len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
@@ -145,18 +150,55 @@ def pair_moments_product(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, t01, w01):
     a2b = a2 if np.ndim(a2) == 0 else np.asarray(a2)[:, None, None, None]
     R = np.sqrt((diff * diff).sum(-1) + a2b)
     G = np.exp(-1j * k * R) / (4 * np.pi * R)
+    if ek is not None:
+        from ._bspline_kernels import _ek_factor
+
+        gi, gj, a_ek = ek
+        gi, gj = np.asarray(gi), np.asarray(gj)
+        elig = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
+        G = np.where(elig[:, None, :, None], G * _ek_factor(R, a_ek, k), G)
     return np.einsum("piq,iqjr,Pjr->pPij", ws_i, G, ws_j)
 
 
-def pair_moments_tiered(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder):
+def pair_moments_tiered(
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder, ek=None
+):
     """The ladder pair moments: order `n_qp` below the first threshold, each
     tier's order at and above its ratio (`bspline.pair_order_ladder`'s
     selector, centre distance over the longer segment). C++ when built, the
     numpy product rule per tier otherwise. `a2` scalar (one radius per call;
-    the caller splits mixed-radius rows into runs)."""
+    the caller splits mixed-radius rows into runs). `ek = (group_i, group_j,
+    a_ek)` takes the extended kernel on the label-matched pairs (momwire#1362,
+    real k only)."""
     seg_l_i, seg_r_i = np.asarray(seg_l_i, float), np.asarray(seg_r_i, float)
     seg_l_j, seg_r_j = np.asarray(seg_l_j, float), np.asarray(seg_r_j, float)
     ladder = tuple(ladder or ())
+    if ek is not None:
+        if np.imag(k) != 0.0:
+            raise ValueError("the extended kernel is served at a real k only")
+        if _HAVE_SIN_TIERED_EK:
+            from ._bspline_kernels import _ladder_arrays
+
+            tier_t, tier_w, tier_n, tier_r = _ladder_arrays(n_qp, ladder)
+            gi, gj, a_ek = ek
+            return _acc.seg_seg_full_moments_sinusoidal_tiered_ek(
+                np.ascontiguousarray(seg_l_i),
+                np.ascontiguousarray(seg_r_i),
+                np.ascontiguousarray(seg_l_j),
+                np.ascontiguousarray(seg_r_j),
+                float(a2),
+                float(np.real(k)),
+                tier_t,
+                tier_w,
+                tier_n,
+                tier_r,
+                np.ascontiguousarray(gi, dtype=np.int64),
+                np.ascontiguousarray(gj, dtype=np.int64),
+                float(a_ek),
+            )
+        return _pair_moments_tiered_numpy(
+            seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder, ek=ek
+        )
     if _HAVE_SIN_TIERED:
         from ._bspline_kernels import _ladder_arrays
 
@@ -178,9 +220,11 @@ def pair_moments_tiered(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder)
     )
 
 
-def _pair_moments_tiered_numpy(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder):
+def _pair_moments_tiered_numpy(
+    seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder, ek=None
+):
     block = pair_moments_product(
-        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, *_gl01(n_qp)
+        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, *_gl01(n_qp), ek=ek
     )
     if not ladder:
         return block
@@ -189,7 +233,7 @@ def _pair_moments_tiered_numpy(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, 
     ratio = _pair_ratio(seg_l_i, seg_r_i, seg_l_j, seg_r_j)
     for r, n in ladder:
         tier = pair_moments_product(
-            seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, *_gl01(n)
+            seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, *_gl01(n), ek=ek
         )
         block = np.where(ratio[None, None] >= r, tier, block)
     return block
@@ -241,7 +285,18 @@ def classify_pairs(c_i, t_i, h_i, c_j, t_j, h_j, *, near_ratio=NEAR_RATIO, tol=1
 
 
 def parallel_pair_moments(
-    c_i, t_i, h_i, c_j, t_j, h_j, a2, k, *, n_t=PARALLEL_N_T, n_xi=PARALLEL_N_XI
+    c_i,
+    t_i,
+    h_i,
+    c_j,
+    t_j,
+    h_j,
+    a2,
+    k,
+    *,
+    n_t=PARALLEL_N_T,
+    n_xi=PARALLEL_N_XI,
+    a_ek=None,
 ):
     """Exact (to quadrature) moments of PARALLEL pairs, (3, 3, n_pairs).
 
@@ -264,6 +319,12 @@ def parallel_pair_moments(
     Lambda itself is a kernel-free integral of trig shapes over an interval
     shorter than a segment: `n_xi` Gauss nodes are exact to rounding for
     k h below ~1.
+
+    `a_ek` (n,), when given, is each pair's extended-kernel radius, 0 where
+    the extended kernel does not reach the pair (momwire#1362): NEC Eq 89's
+    coaxial factor multiplies G inside the t integral, a function of
+    R = rho cosh t that is smooth there (its a^2 / R^2 and a^4 / R^4 terms
+    are bounded by rho >= a), so the same rule serves it.
     """
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
@@ -285,14 +346,26 @@ def parallel_pair_moments(
             np.ascontiguousarray(gw),
             np.ascontiguousarray(gx),
             np.ascontiguousarray(gwx),
+            None if a_ek is None else np.ascontiguousarray(a_ek, dtype=float),
         )
     return _parallel_pair_moments_numpy(
-        c_i, t_i, h_i, c_j, t_j, h_j, a2, k, n_t=n_t, n_xi=n_xi
+        c_i, t_i, h_i, c_j, t_j, h_j, a2, k, n_t=n_t, n_xi=n_xi, a_ek=a_ek
     )
 
 
 def _parallel_pair_moments_numpy(
-    c_i, t_i, h_i, c_j, t_j, h_j, a2, k, *, n_t=PARALLEL_N_T, n_xi=PARALLEL_N_XI
+    c_i,
+    t_i,
+    h_i,
+    c_j,
+    t_j,
+    h_j,
+    a2,
+    k,
+    *,
+    n_t=PARALLEL_N_T,
+    n_xi=PARALLEL_N_XI,
+    a_ek=None,
 ):
     """The numpy reference of `parallel_pair_moments`, in pair batches."""
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
@@ -317,6 +390,7 @@ def _parallel_pair_moments_numpy(
                 k,
                 n_t=n_t,
                 n_xi=n_xi,
+                a_ek=None if a_ek is None else np.asarray(a_ek)[sl],
             )
         return out
     s = np.sign(np.einsum("ij,ij->i", t_i, t_j))
@@ -349,6 +423,11 @@ def _parallel_pair_moments_numpy(
         R = rho[:, None] * np.cosh(t)
         # G d delta = exp(-jkR) / (4 pi R) . R dt
         Gdt = np.exp(-1j * k * R) / (4 * np.pi) * w_t
+        if a_ek is not None:
+            from ._bspline_kernels import _ek_factor
+
+            ae = np.asarray(a_ek, float)[:, None]
+            Gdt = np.where(ae > 0.0, Gdt * _ek_factor(R, ae, k), Gdt)
         beta = d_par[:, None] - delta  # xi' = s xi + beta
         # Omega(delta) = [lo, hi] in xi: xi' = s xi + beta inside [-h_j/2, h_j/2].
         lo = np.where(
@@ -391,14 +470,30 @@ def graded_endpoint_rule01(eps, n_per_panel, end):
 
 
 def near_pair_moments(
-    c_i, t_i, h_i, c_j, t_j, h_j, a2, k, *, pairs=None, near_ratio=NEAR_RATIO
+    c_i,
+    t_i,
+    h_i,
+    c_j,
+    t_j,
+    h_j,
+    a2,
+    k,
+    *,
+    pairs=None,
+    near_ratio=NEAR_RATIO,
+    ek=None,
 ):
     """Moments of every near pair of (i-segments, j-segments) by the rule its
     kind needs: `(ii, jj, J)` with J (3, 3, n_near). `a2` is per row (N_i,)
     or scalar. A touching non-parallel pair takes the graded composite rule
     toward the shared node on both segments; a near non-parallel pair that
     does not touch takes the `NEAR_N_QP` product rule; a parallel pair the
-    one-dimensional reduction."""
+    one-dimensional reduction.
+
+    `ek = (group_i, group_j)` (momwire#1362): the label-matched pairs take
+    the extended kernel, at the row's radius. Matching labels mean coaxial
+    (`_bspline_kernels._ek_axis_groups`), so every such pair is a PARALLEL
+    one and only the one-dimensional reduction ever carries the factor."""
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
     h_i, h_j = np.asarray(h_i, float), np.asarray(h_j, float)
@@ -407,8 +502,16 @@ def near_pair_moments(
     ii, jj, parallel, touching, end_i, end_j = pairs
     a2_row = np.broadcast_to(np.asarray(a2, float), (c_i.shape[0],))
     J = np.zeros((N_SHAPES, N_SHAPES, ii.shape[0]), dtype=np.complex128)
+    if ek is not None:
+        gi, gj = (np.asarray(g) for g in ek)
+        elig = (gi[ii] == gj[jj]) & (gi[ii] >= 0)
+        if (elig & ~parallel).any():
+            raise AssertionError("an extended-kernel pair must be coaxial")
     if parallel.any():
         p = parallel
+        a_ek = None
+        if ek is not None:
+            a_ek = np.where(elig[p], np.sqrt(a2_row[ii[p]]), 0.0)
         J[:, :, p] = parallel_pair_moments(
             c_i[ii[p]],
             t_i[ii[p]],
@@ -416,8 +519,9 @@ def near_pair_moments(
             c_j[jj[p]],
             t_j[jj[p]],
             h_j[jj[p]],
-            a2_row[ii[p]][None, :].T[:, 0] if False else a2_row[ii[p]],
+            a2_row[ii[p]],
             k,
+            a_ek=a_ek,
         )
     rest = ~parallel
     if not rest.any():
@@ -682,9 +786,12 @@ class WindowFill:
         scale=1.0,
         obs_idx=None,
         src_idx=None,
+        ek=None,
     ):
         """`obs_idx` / `src_idx` are the GLOBAL segment ids of the observer
-        and source lists (a class block of a mixed deck); default identity."""
+        and source lists (a class block of a mixed deck); default identity.
+        `ek = (group_obs, group_src)`, aligned with the two lists, takes the
+        extended kernel on the label-matched pairs (momwire#1362)."""
         obs_c, obs_t = np.asarray(obs_c, float), np.asarray(obs_t, float)
         src_c, src_t = np.asarray(src_c, float), np.asarray(src_t, float)
         obs_h, src_h = np.asarray(obs_h, float), np.asarray(src_h, float)
@@ -707,7 +814,8 @@ class WindowFill:
             if self.checkpoint is not None:
                 self.checkpoint()
             i1 = min(i0 + rows, n_obs)
-            J = self._window_moments(sl_o, sr_o, sl_s, sr_s, a_row, i0, i1)
+            ek_win = None if ek is None else (ek[0][i0:i1], ek[1])
+            J = self._window_moments(sl_o, sr_o, sl_s, sr_s, a_row, i0, i1, ek_win)
             ii, jj, Jn = near_pair_moments(
                 obs_c[i0:i1],
                 obs_t[i0:i1],
@@ -717,6 +825,7 @@ class WindowFill:
                 src_h,
                 a_row[i0:i1] ** 2,
                 self.k,
+                ek=ek_win,
             )
             if ii.size:
                 J[:, :, ii, jj] = Jn
@@ -737,11 +846,19 @@ class WindowFill:
             )
             del J
 
-    def _window_moments(self, sl_o, sr_o, sl_s, sr_s, a_row, i0, i1):
+    def _window_moments(self, sl_o, sr_o, sl_s, sr_s, a_row, i0, i1, ek=None):
         """The window's tiered moments, one call per run of equal observer
-        radius (the kernel takes one a^2 per call)."""
+        radius (the kernel takes one a^2 per call). `ek` is the window's
+        `(group_obs, group_src)`; an extended pair's radius is the run's (a
+        label match means equal radii)."""
         a = a_row[i0:i1]
         bounds = np.flatnonzero(np.diff(a)) + 1
+
+        def run_ek(s, e):
+            if ek is None:
+                return None
+            return (ek[0][s:e], ek[1], float(a[s]))
+
         if bounds.size == 0:
             return pair_moments_tiered(
                 sl_o[i0:i1],
@@ -752,6 +869,7 @@ class WindowFill:
                 self.k,
                 self.n_qp,
                 self.ladder,
+                ek=run_ek(0, i1 - i0),
             )
         edges = np.concatenate(([0], bounds, [i1 - i0]))
         return np.concatenate(
@@ -765,6 +883,7 @@ class WindowFill:
                     self.k,
                     self.n_qp,
                     self.ladder,
+                    ek=run_ek(s, e),
                 )
                 for s, e in zip(edges[:-1], edges[1:])
             ],

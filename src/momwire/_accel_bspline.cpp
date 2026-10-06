@@ -4283,7 +4283,7 @@ struct SinShapeValue<false> {
     using type = double;
 };
 
-template<bool COMPLEX_K>
+template<bool COMPLEX_K, bool EK = false>
 static py::array_t<std::complex<double>>
 seg_seg_full_moments_sinusoidal_kernel(
     py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
@@ -4293,9 +4293,17 @@ seg_seg_full_moments_sinusoidal_kernel(
     double a_squared,
     double k_re,
     double k_im,
-    const PairOrderLadder& ladder
+    const PairOrderLadder& ladder,
+    // EK only (momwire#1362): per-segment coaxial group labels (N_i,) /
+    // (N_j,) and the plain EK radius; a pair is extended iff its labels match.
+    const int64_t *grp_i = nullptr,
+    const int64_t *grp_j = nullptr,
+    double a_ek = 0.0
 ) {
+    static_assert(!(EK && COMPLEX_K),
+                  "the extended kernel is served at a real k only");
     using shape_t = typename SinShapeValue<COMPLEX_K>::type;
+    const double a2_ek = a_ek * a_ek;
     static constexpr int NM = 3;
     static constexpr int NMM = NM * NM;
 
@@ -4467,6 +4475,28 @@ seg_seg_full_moments_sinusoidal_kernel(
                         G_im[t] *= sc;
                     }
                 }
+                if (EK && grp_i[i] == grp_j[j] && grp_i[i] >= 0) {
+                    // NEC Eq 89's coaxial factor on G (`_bspline_kernels.
+                    // _ek_factor`): fac = 1 + T1 C2 - T2 C1, C1 = 1 + jkR,
+                    // C2 = 3 C1 - (kR)^2, T1 = a^4 / 4R^4, T2 = a^2 / 2R^2,
+                    // in that order of operations.
+                    for (size_t t = 0; t < m; t++) {
+                        const double r2 = R[t] * R[t];
+                        const double r4 = r2 * r2;
+                        const double kr = k_re * R[t];
+                        const double kr2 = kr * kr;
+                        const double t1 = 0.25 * (a2_ek * a2_ek) / r4;
+                        const double t2 = 0.5 * a2_ek / r2;
+                        double fr = t1 * (3.0 - kr2);
+                        double fi = t1 * (3.0 * kr);
+                        fr = fr - t2;
+                        fi = fi - t2 * kr;
+                        fr = fr + 1.0;
+                        const double gr = G_re[t], gi = G_im[t];
+                        G_re[t] = gr * fr - gi * fi;
+                        G_im[t] = gr * fi + gi * fr;
+                    }
+                }
                 // Source-side contraction per test node q: gq[P] = sum_r G sj[r][P];
                 // then the 3x3 outer product with the test shapes once per q.
                 size_t t = 0;
@@ -4523,6 +4553,38 @@ seg_seg_full_moments_sinusoidal_tiered(
     }
     return seg_seg_full_moments_sinusoidal_kernel<true>(
         seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k.real(), k.imag(), ladder);
+}
+
+// The extended-kernel twin of `seg_seg_full_moments_sinusoidal_tiered`
+// (momwire#1362): the same contraction with NEC Eq 89's coaxial factor on G
+// for the pairs whose group labels match (`_bspline_kernels._ek_axis_groups`,
+// the eligibility rule bspline's EK fill uses). A real k only: the extended
+// kernel is refused in the medium.
+static py::array_t<std::complex<double>>
+seg_seg_full_moments_sinusoidal_tiered_ek(
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_i,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_l_j,
+    py::array_t<double, py::array::c_style | py::array::forcecast> seg_r_j,
+    double a_squared,
+    double k,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j,
+    double a_ek
+) {
+    if ((size_t)group_i.size() != (size_t)seg_l_i.shape(0) ||
+        (size_t)group_j.size() != (size_t)seg_l_j.shape(0)) {
+        throw std::runtime_error(
+            "seg_seg_full_moments_sinusoidal_tiered_ek: one group label per segment");
+    }
+    PairOrderLadder ladder = ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
+    return seg_seg_full_moments_sinusoidal_kernel<false, true>(
+        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k, 0.0, ladder,
+        group_i.data(), group_j.data(), a_ek);
 }
 
 // The sinusoidal fill's windowed assembler (momwire#1354): the B-spline
@@ -4818,9 +4880,18 @@ parallel_pair_moments_sinusoidal(
     py::array_t<double, py::array::c_style | py::array::forcecast> gt,
     py::array_t<double, py::array::c_style | py::array::forcecast> gw,
     py::array_t<double, py::array::c_style | py::array::forcecast> gx,
-    py::array_t<double, py::array::c_style | py::array::forcecast> gwx
+    py::array_t<double, py::array::c_style | py::array::forcecast> gwx,
+    py::object a_ek_obj
 ) {
     static constexpr int NM = 3;
+    // momwire#1362: `a_ek` (n,) is each pair's extended-kernel radius, 0 for a
+    // pair the extended kernel does not reach (None: no pair). An extended
+    // pair takes NEC Eq 89's coaxial factor on G inside the t integral, where
+    // it is smooth: R = rho cosh t with rho >= a.
+    const bool has_ek = !a_ek_obj.is_none();
+    py::array_t<double, py::array::c_style | py::array::forcecast> a_ek_arr;
+    if (has_ek) a_ek_arr = a_ek_obj.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+    const double *a_ekp = has_ek ? a_ek_arr.data() : nullptr;
     auto ci = c_i.unchecked<2>(); auto ti = t_i.unchecked<2>(); auto hi_ = h_i.unchecked<1>();
     auto cj = c_j.unchecked<2>(); auto tj = t_j.unchecked<2>(); auto hj_ = h_j.unchecked<1>();
     auto a2v = a2.unchecked<1>();
@@ -4834,10 +4905,14 @@ parallel_pair_moments_sinusoidal(
     const size_t n_t = (size_t)gtv.shape(0), n_xi = (size_t)gxv.shape(0);
     if ((size_t)gwv.shape(0) != n_t || (size_t)gwxv.shape(0) != n_xi)
         throw std::runtime_error("rules must be (nodes, weights) pairs of one length");
+    if (has_ek && (size_t)a_ek_arr.size() != n)
+        throw std::runtime_error("parallel_pair_moments_sinusoidal: a_ek must be (n,)");
     py::array_t<std::complex<double>> J({(size_t)NM, (size_t)NM, n});
     auto jv = J.mutable_unchecked<3>();
     const double kr = k.real(), kim = k.imag();
     const bool cplx = kim != 0.0;
+    if (has_ek && cplx)
+        throw std::runtime_error("parallel_pair_moments_sinusoidal: the extended kernel needs a real k");
     py::gil_scoped_release release;
     const double inv_4pi = 1.0 / (4.0 * M_PI);
     #pragma omp parallel for schedule(dynamic, 64)
@@ -4869,7 +4944,22 @@ parallel_pair_moments_sinusoidal(
                 double sc = inv_4pi * w_t;
                 if (cplx) sc *= std::exp(kim * R);
                 const double ph = -kr * R;
-                const double g_re = std::cos(ph) * sc, g_im = std::sin(ph) * sc;
+                double g_re = std::cos(ph) * sc, g_im = std::sin(ph) * sc;
+                if (has_ek && a_ekp[p] > 0.0) {
+                    const double a2e = a_ekp[p] * a_ekp[p];
+                    const double r2 = R * R, r4 = r2 * r2;
+                    const double kR = kr * R, kR2 = kR * kR;
+                    const double t1 = 0.25 * (a2e * a2e) / r4;
+                    const double t2 = 0.5 * a2e / r2;
+                    double fr = t1 * (3.0 - kR2);
+                    double fi = t1 * (3.0 * kR);
+                    fr = fr - t2;
+                    fi = fi - t2 * kR;
+                    fr = fr + 1.0;
+                    const double gr = g_re, gi = g_im;
+                    g_re = gr * fr - gi * fi;
+                    g_im = gr * fi + gi * fr;
+                }
                 const double beta = dpar - delta;
                 double lo, hi;
                 if (s > 0.0) { lo = std::max(-0.5 * hI, -beta - 0.5 * hJ); hi = std::min(0.5 * hI, -beta + 0.5 * hJ); }
@@ -6113,6 +6203,17 @@ void register_bspline(py::module_ &m) {
           py::arg("a_squared"), py::arg("k"),
           py::arg("tier_t"), py::arg("tier_w"),
           py::arg("tier_n_qp"), py::arg("tier_ratio"));
+    m.def("seg_seg_full_moments_sinusoidal_tiered_ek",
+          &seg_seg_full_moments_sinusoidal_tiered_ek,
+          "The extended-kernel twin of seg_seg_full_moments_sinusoidal_tiered "
+          "(momwire#1362): NEC Eq 89's coaxial factor on G for the pairs whose "
+          "group labels match. Real k only.",
+          py::arg("seg_l_i"), py::arg("seg_r_i"),
+          py::arg("seg_l_j"), py::arg("seg_r_j"),
+          py::arg("a_squared"), py::arg("k"),
+          py::arg("tier_t"), py::arg("tier_w"),
+          py::arg("tier_n_qp"), py::arg("tier_ratio"),
+          py::arg("group_i"), py::arg("group_j"), py::arg("a_ek"));
     m.def("assemble_Z_sinusoidal_windowed", &assemble_Z_sinusoidal_windowed,
           "Accumulate one window of sinusoidal pair moments into Z "
           "(momwire#1354): the windowed B-spline assembler with the basis as "
@@ -6135,7 +6236,7 @@ void register_bspline(py::module_ &m) {
           "separation integral, a pair per thread.",
           py::arg("c_i"), py::arg("t_i"), py::arg("h_i"), py::arg("c_j"), py::arg("t_j"),
           py::arg("h_j"), py::arg("a2"), py::arg("k"), py::arg("gt"), py::arg("gw"),
-          py::arg("gx"), py::arg("gwx"));
+          py::arg("gx"), py::arg("gwx"), py::arg("a_ek") = py::none());
     m.def("seg_seg_full_moments_bspline_swept",
           &seg_seg_full_moments_bspline_swept,
           "Batched (swept-k) off-edge full-kernel polynomial moments for the "
