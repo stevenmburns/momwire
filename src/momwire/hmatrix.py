@@ -114,6 +114,14 @@ _HAVE_OFFEDGE_BLOCK_EK_ACCEL = _acc is not None and hasattr(
 _HAVE_OFFEDGE_BLOCK_REFL_EK_ACCEL = _acc is not None and hasattr(
     _acc, "bspline_assemble_offedge_block_refl_ek"
 )
+# momwire#1362: the two EK twins on the pair-order ladder. Absent them an EK
+# far block keeps the flat rule.
+_HAVE_OFFEDGE_BLOCK_EK_TIERED_ACCEL = _acc is not None and hasattr(
+    _acc, "bspline_assemble_offedge_block_ek_tiered"
+)
+_HAVE_OFFEDGE_BLOCK_REFL_EK_TIERED_ACCEL = _acc is not None and hasattr(
+    _acc, "bspline_assemble_offedge_block_refl_ek_tiered"
+)
 
 # Read from the binary for the same reason as `_bspline_kernels`'
 # `_BSPLINE_ACCEL_MAX_D`, and with the same pre-#999 fallback: an older .so
