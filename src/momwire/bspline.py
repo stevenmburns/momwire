@@ -1183,10 +1183,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the longest segment passes kL = 0.5 — in free space that is the only
         tier, so the guard disables the ladder for that block entirely.
 
-        Not every fill honours it: the extended kernel refuses a ladder
-        outright (see `_fill_ladder`, which is what a fill should ask rather
-        than reading this property directly), and the H-matrix, ArrayBlock
-        and frequency-swept fills have no ladder on either term.
+        Not every fill honours it: the H-matrix, ArrayBlock and
+        frequency-swept fills have no ladder on either term (`_fill_ladder`
+        is what a fill should ask rather than reading this property
+        directly). The extended kernel honours it since momwire#1362.
 
         What it buys: on the 654-segment radial screen the two buried pair
         blocks went from 6.3 s to well under a second at the same Z, because
@@ -2451,13 +2451,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         would re-impose the deck-wide cliff #920 removed — and #921's
         invariant holds for a better reason than it did.
 
-        Empty under the extended kernel, whose coaxial factor the ladder has
-        not been measured against — the kernel refuses the combination
-        outright, so this is what keeps an EK deck from raising once free
-        space has a non-empty default.
+        The extended kernel takes the same ladder (momwire#1362): its coaxial
+        factor is applied at whatever order a pair runs. It was empty under
+        EK until the factor had been measured on the ladder; the EK-on Z
+        moved by at most 4e-13 relative on the issue's decks, the size of the
+        ladder's own movement with EK off, against 4e-5 to 2.4e-4 between EK
+        on and off (`tests/test_ek_pair_order_ladder_1362.py`). `ek` stays in
+        the signature so every fill keeps asking here.
         """
-        if ek is not None:
-            return ()
+        del ek
         return _normalize_ladder(self.pair_order_ladder, self.n_qp_pair)
 
     def _image_fill_ladder(self, k, seg_l, seg_r, ek):
@@ -2484,10 +2486,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         sweep and its near-image fixup both ask here, so the fixup subtracts
         exactly the arithmetic the sweep added.
 
-        Empty under the extended kernel, for `_fill_ladder`'s reason.
+        Served under the extended kernel too, as `_fill_ladder` is
+        (momwire#1362).
         """
-        if ek is not None:
-            return ()
         if self._image_pair_order_ladder_arg is None:
             return self._fill_ladder(k, seg_l, seg_r, ek)
         base = self.n_qp_pair

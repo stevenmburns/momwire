@@ -140,14 +140,22 @@ def test_the_gate_sees_a_one_ppm_ek_radius():
 
 
 def _counting(monkeypatch, reference):
+    """Route the EK entries (one rule and, since the EK fill takes the
+    pair-order ladder, tiered) through `reference` and count calls."""
     calls = {"n": 0}
-    f = functools.partial(acc.seg_seg_full_moments_bspline_ek, reference=reference)
+    for name in (
+        "seg_seg_full_moments_bspline_ek",
+        "seg_seg_full_moments_bspline_ek_tiered",
+    ):
+        if not hasattr(acc, name):
+            continue
+        f = functools.partial(getattr(acc, name), reference=reference)
 
-    def counted(*a, **k):
-        calls["n"] += 1
-        return f(*a, **k)
+        def counted(*a, _f=f, **k):
+            calls["n"] += 1
+            return _f(*a, **k)
 
-    monkeypatch.setattr(acc, "seg_seg_full_moments_bspline_ek", counted)
+        monkeypatch.setattr(acc, name, counted)
     return calls
 
 
