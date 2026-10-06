@@ -428,6 +428,137 @@ static py::array_t<std::complex<double>> end_matvecs_rows(
     throw std::runtime_error("end_matvecs_rows: R must be int32 or int64");
 }
 
+// `end_matvecs_rows` with the rows never formed (momwire#1335): row
+// R[e, j] = rowflat[base_e[e] + base_j[j] + T[rsel[e], csel[j]]] -- the
+// fused grouped ends' rows (group g's z row against the needed line nodes'
+// local keys: base_e = off[g] + zl * nk[g], T = kl_rank, rsel = g, csel =
+// the nodes) and the line ends' (each grouped node's z row at the end's key
+// in its group: base_j = off[grank] + zl_rank * nk[grank], T = the ends'
+// key table, rsel = the end, csel = grank). Each x is then read as
+// `end_matvecs_rows` reads it, and summed by the same loop. Every index is
+// checked inside the loop and a bad one refused after it.
+template <class TI>
+static py::array_t<std::complex<double>> end_matvecs_table_t(
+    const int64_t *ip, const int64_t *ix, const double *dv, py::ssize_t n_out,
+    const double *wp, py::ssize_t n, py::ssize_t E, const int64_t *be,
+    const int64_t *bj, const TI *Tp, py::ssize_t t_rows, py::ssize_t t_cols,
+    const int64_t *rs, const int64_t *cs, const int32_t *rf, int64_t n_flat,
+    const int32_t *lp, py::ssize_t n_rows, const int32_t *hq, const Table &T,
+    const Table &H, int k, int n_threads) {
+    for (py::ssize_t e = 0; e < E; ++e)
+        if (rs[e] < 0 || rs[e] >= t_rows)
+            throw std::runtime_error("end_matvecs_table: row selector out of range");
+    for (py::ssize_t j = 0; j < n; ++j)
+        if (cs[j] < 0 || cs[j] >= t_cols)
+            throw std::runtime_error("end_matvecs_table: column selector out of range");
+    py::array_t<std::complex<double>> out(std::vector<py::ssize_t>{E, n_out});
+    double *Y = reinterpret_cast<double *>(out.mutable_data());
+    int bad = 0;
+    {
+        py::gil_scoped_release nogil;
+        int nt = 1;
+#ifdef _OPENMP
+        nt = omp_get_max_threads();
+        if (n_threads > 0) nt = std::min(nt, n_threads);
+#endif
+#pragma omp parallel for schedule(dynamic, 4) num_threads(nt) reduction(|:bad)
+        for (py::ssize_t e = 0; e < E; ++e) {
+            double *y = Y + 2 * e * n_out;
+            const TI *trow = Tp + rs[e] * t_cols;
+            const int64_t b0 = be[e];
+            for (py::ssize_t i = 0; i < n_out; ++i) {
+                double re = 0.0, im = 0.0;
+                for (int64_t jj = ip[i]; jj < ip[i + 1]; ++jj) {
+                    const int64_t j = ix[jj];
+                    const int64_t f = b0 + bj[j] + static_cast<int64_t>(trow[cs[j]]);
+                    if (f < 0 || f >= n_flat) {
+                        bad |= 1;
+                        continue;
+                    }
+                    const int64_t r = rf[f];
+                    if (r < 0 || r >= n_rows) {
+                        bad |= 1;
+                        continue;
+                    }
+                    const int32_t l = lp[r];
+                    const double *x;
+                    if (l >= 0 && l < T.rows) {
+                        x = T.at(l, k);
+                    } else if (l < 0 && hq != nullptr && hq[r] >= 0 && hq[r] < H.rows) {
+                        x = H.at(hq[r], k);
+                    } else {
+                        bad |= 2;
+                        continue;
+                    }
+                    const double xr = wp[j] * x[0];
+                    const double xi = wp[j] * x[1];
+                    re += dv[jj] * xr;
+                    im += dv[jj] * xi;
+                }
+                y[2 * i] = re;
+                y[2 * i + 1] = im;
+            }
+        }
+    }
+    if (bad & 1) throw std::runtime_error("end_matvecs_table: index out of range");
+    if (bad & 2)
+        throw std::runtime_error("end_matvecs_table: an end reads a row not in hand");
+    return out;
+}
+
+static py::array_t<std::complex<double>> end_matvecs_table(
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> indptr,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> indices,
+    py::array_t<double, py::array::c_style> data, py::ssize_t n_out,
+    py::array_t<double, py::array::c_style> w,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> base_e,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> base_j,
+    py::array table,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> rsel,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> csel,
+    py::array_t<int32_t, py::array::c_style> rowflat,
+    py::array_t<int32_t, py::array::c_style> loc,
+    py::array_t<int32_t, py::array::c_style> hpos, py::array tb, py::array held,
+    int k, int n_threads) {
+    const py::ssize_t n = w.size();
+    const py::ssize_t E = base_e.size();
+    if (rsel.size() != E) throw std::runtime_error("end_matvecs_table: one rsel per end");
+    if (base_j.size() != n || csel.size() != n)
+        throw std::runtime_error("end_matvecs_table: one base_j and csel per node");
+    if (table.ndim() != 2 || !(table.flags() & py::array::c_style))
+        throw std::runtime_error("end_matvecs_table: table must be 2-D C-contiguous");
+    if (indptr.size() != n_out + 1)
+        throw std::runtime_error("end_matvecs_table: indptr length");
+    const int64_t *ip = indptr.data();
+    const int64_t *ix = indices.data();
+    const double *dv = data.data();
+    const int64_t nnz = ip[n_out];
+    if (indices.size() < nnz || data.size() < nnz)
+        throw std::runtime_error("end_matvecs_table: short CSR arrays");
+    for (int64_t jj = 0; jj < nnz; ++jj)
+        if (ix[jj] < 0 || ix[jj] >= n)
+            throw std::runtime_error("end_matvecs_table: column out of range");
+    const py::ssize_t n_rows = loc.size();
+    const bool have_h = hpos.size() != 0;
+    if (have_h && hpos.size() != n_rows)
+        throw std::runtime_error("end_matvecs_table: hpos must match loc");
+    const Table T = table_of(tb, "tb"), H = table_of(held, "held");
+    const int32_t *hq = have_h ? hpos.data() : nullptr;
+    if (table.dtype().is(py::dtype::of<int32_t>()))
+        return end_matvecs_table_t<int32_t>(
+            ip, ix, dv, n_out, w.data(), n, E, base_e.data(), base_j.data(),
+            static_cast<const int32_t *>(table.data()), table.shape(0), table.shape(1),
+            rsel.data(), csel.data(), rowflat.data(), rowflat.size(), loc.data(), n_rows,
+            hq, T, H, k, n_threads);
+    if (table.dtype().is(py::dtype::of<int64_t>()))
+        return end_matvecs_table_t<int64_t>(
+            ip, ix, dv, n_out, w.data(), n, E, base_e.data(), base_j.data(),
+            static_cast<const int64_t *>(table.data()), table.shape(0), table.shape(1),
+            rsel.data(), csel.data(), rowflat.data(), rowflat.size(), loc.data(), n_rows,
+            hq, T, H, k, n_threads);
+    throw std::runtime_error("end_matvecs_table: table must be int32 or int64");
+}
+
 // The main sandwich's five-term combine (`_crossing_fill._combine`) of the
 // six left products L_i against the right weights, for the basis rows `J`
 // of four CSR matrices Q (U.x, U.y, V/W, W/V: the six terms read Q1, Q2,
@@ -704,4 +835,14 @@ void register_left_gather(py::module_ &m) {
           py::arg("hpos"), py::arg("tb"), py::arg("held"), py::arg("k"),
           py::arg("n_threads"));
     m.attr("end_matvecs_rows_1335") = true;
+    m.def("end_matvecs_table", &left_gather::end_matvecs_table,
+          "`end_matvecs_rows` with R[e, j] = rowflat[base_e[e] + base_j[j] + "
+          "table[rsel[e], csel[j]]] formed in the loop, never stored. "
+          "momwire#1335.",
+          py::arg("indptr"), py::arg("indices"), py::arg("data"),
+          py::arg("n_out"), py::arg("w"), py::arg("base_e"), py::arg("base_j"),
+          py::arg("table"), py::arg("rsel"), py::arg("csel"), py::arg("rowflat"),
+          py::arg("loc"), py::arg("hpos"), py::arg("tb"), py::arg("held"),
+          py::arg("k"), py::arg("n_threads"));
+    m.attr("end_matvecs_table_1335") = true;
 }
