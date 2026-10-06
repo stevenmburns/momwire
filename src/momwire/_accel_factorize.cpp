@@ -248,12 +248,14 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
             h = mix(h ^ k[1]);
             return h;
         };
-        // Sized for half the rows (a quarter-full table if every row were
-        // its own key) and grown at half load from there: the crossing
-        // plan's tables hold about one key per three rows, so this skips the
-        // early rehashes without reaching past the size growth ends at.
+        // Sized for the rows (half of factorize_rows' twice-the-rows), grown
+        // at half load from there: the crossing plan's tables hold about one
+        // key per three rows, so the table never rehashes on them and is
+        // the size growth from a small table would end at anyway, at
+        // factorize_rows' speed (momwire#1335: 2.9 vs 2.9 s on a 31.5 M-row
+        // table on Haswell, where the half-rows start rehashed to 5.1 s).
         size_t cap = 1024;
-        while (cap < static_cast<size_t>(n / 2)) cap <<= 1;
+        while (cap < static_cast<size_t>(n)) cap <<= 1;
         std::vector<uint64_t> table(cap, 0);
         size_t mask = cap - 1;
         size_t n_entered = 0;
