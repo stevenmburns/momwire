@@ -713,6 +713,39 @@ _BELOW_FOLD_INTO = True
 _BELOW_FOLD_CONTROL = None
 
 
+# Hand the heap's free pages back to the OS after each crossing block
+# (momwire#1335). A block frees a few hundred MB of plan and tile arrays, and
+# glibc keeps the pages of the ones it served from its heap, so the next
+# block's peak started from a level that varied run to run with the
+# allocator's luck (the reversed block entering at 1.34-1.38 GB at invl x32
+# on Haswell). Trimmed, it enters at ~0.66 GB and the fill's peak was
+# 1955 / 1968 / 1955 MB against 2040 / 2003 / 2011. No value is touched:
+# only free pages go. glibc only; a no-op elsewhere. False skips it.
+_TRIM_BETWEEN_BLOCKS = True
+_LIBC_TRIM = None
+
+
+def _trim_heap():
+    global _LIBC_TRIM
+    if not _TRIM_BETWEEN_BLOCKS:
+        return
+    if _LIBC_TRIM is None:
+        _LIBC_TRIM = False
+        try:
+            import ctypes
+            import sys
+
+            if sys.platform.startswith("linux"):
+                fn = ctypes.CDLL("libc.so.6").malloc_trim
+                fn.argtypes = [ctypes.c_size_t]
+                fn.restype = ctypes.c_int
+                _LIBC_TRIM = fn
+        except (OSError, AttributeError):
+            _LIBC_TRIM = False
+    if _LIBC_TRIM:
+        _LIBC_TRIM(0)
+
+
 def _ix_accumulate(Z, rows, cols, block, *, sign=1):
     """`Z[np.ix_(rows, cols)] += block` (or `-=`), a slab of columns at a
     time (momwire#1173 design C).
@@ -4760,6 +4793,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 if t is not None:
                     _ix_accumulate(Z, rows, cols, t, sign=-1)
                 del t
+                _trim_heap()
 
         if tents:
             cols = np.array([m for m, _ in tents], dtype=np.int64)
