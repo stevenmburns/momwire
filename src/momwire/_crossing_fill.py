@@ -5651,6 +5651,62 @@ class _FusedEnds:
             return "hit"
         return list(descs)
 
+    def _classify_loops(self, loops, product, fast, a_wire):
+        """`_classify` of the row loop then the column loop, their slow ends'
+        rows asked of the product together (`_CLASSIFY_HIT_ROWS` rows a
+        call): one pass over the keys where each loop paid its own
+        (momwire#1335). The walk is the two loops' in turn -- the first end
+        that hits stops it, counted, and the column loop is not walked when
+        the row loop hit -- so the descs, the decision and the counts are
+        `_classify`'s."""
+        descs, on_node, ends_of = [], [], []
+        for ends, args in loops:
+            d, o = _classify_ends(fast, a_wire, ends, args)
+            descs.append(d)
+            on_node.append(o)
+            ends_of.append((ends, args))
+        first_hit = None
+        span, owners, n_span = [], [], 0
+
+        def ask():
+            rows = np.concatenate(span)
+            hit = product.value_rows(rows + 0.0) >= 0
+            if hit.any():
+                return tuple(np.concatenate(owners)[int(np.argmax(hit))].tolist())
+            return None
+
+        for li, (ends, args) in enumerate(ends_of):
+            for e, ((pt, _sign, _fv), desc) in enumerate(zip(ends, descs[li])):
+                if desc is not None:
+                    continue
+                rows = self._slow_rows(pt, args, a_wire)
+                span.append(rows)
+                owners.append(
+                    np.tile(np.array([[li, e]], dtype=np.int64), (rows.shape[0], 1))
+                )
+                n_span += rows.shape[0]
+                if n_span >= _CLASSIFY_HIT_ROWS:
+                    first_hit = ask()
+                    span, owners, n_span = [], [], 0
+                    if first_hit is not None:
+                        break
+            if first_hit is not None:
+                break
+        if first_hit is None and span:
+            first_hit = ask()
+        for li in range(len(loops)):
+            if first_hit is not None and li > first_hit[0]:
+                break
+            stop = (
+                first_hit[1] + 1
+                if first_hit is not None and li == first_hit[0]
+                else len(descs[li])
+            )
+            _ROUTES["ends_line_on_node"] += int(sum(on_node[li][:stop]))
+        if first_hit is not None:
+            return "hit"
+        return [list(d) for d in descs]
+
     @staticmethod
     def _slow_rows(pt, args, a_wire):
         """The (n, 3) rows a slow end asks, as the memo keys them."""
@@ -5681,12 +5737,23 @@ class _FusedEnds:
         R, C, fast = self.R, self.C, plan.fast
         product = tiles.product
         a_wire = float(self.ctx.a_wire)
-        row_cls = self._classify(R["ends"], self.row_args, product, fast, a_wire)
-        if row_cls == "hit":
-            return self._decline("hit")
-        col_cls = self._classify(C["ends"], self.col_args, product, fast, a_wire)
-        if col_cls == "hit":
-            return self._decline("hit")
+        if _CLASSIFY_HIT_BATCHED:
+            got = self._classify_loops(
+                ((R["ends"], self.row_args), (C["ends"], self.col_args)),
+                product,
+                fast,
+                a_wire,
+            )
+            if got == "hit":
+                return self._decline("hit")
+            row_cls, col_cls = got
+        else:
+            row_cls = self._classify(R["ends"], self.row_args, product, fast, a_wire)
+            if row_cls == "hit":
+                return self._decline("hit")
+            col_cls = self._classify(C["ends"], self.col_args, product, fast, a_wire)
+            if col_cls == "hit":
+                return self._decline("hit")
         self.plan, self.tiles, self.fast = plan, tiles, fast
         self.row_cls, self.col_cls = row_cls, col_cls
         self.wR, self.wR_tz = _end_weights(R)
