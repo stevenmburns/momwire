@@ -209,6 +209,27 @@ def test_batched_hit_check_walks_as_the_one_end_loop(rows, monkeypatch):
     assert _same(got, ref)
 
 
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "cf._PREPASS_MISSES_PROVEN",
+        "cf._LINE_END_AT_COLUMN",
+        "cf._TABLE_MATVECS",
+        "cf._TILE_MATVECS_ROWS",
+    ],
+)
+def test_each_1335_fused_switch_keeps_z(flag):
+    """momwire#1335: each wall-time switch of the multi-group fused route,
+    off, is the gated route's Z to the bit (invl, 500-row tiles: rows held
+    across tiles, line ends and grouped ends spanning them)."""
+    make, flags, _mode = DECKS["invl4_tiny"]
+    ref, r0 = _fill(make, **{**flags, flag: False})
+    got, r = _fill(make, **flags)
+    assert r["cf.fused_mode_stream"] == r["cf.main_product"] >= 2, r
+    assert r0["cf.fused_mode_stream"] == r0["cf.main_product"], r0
+    assert _same(got, ref)
+
+
 def test_batched_rank1_adds_are_the_per_term_loop_to_the_bit():
     """`_rank1_adds` against `_rank1_add` term by term, with rows several
     terms write (so the order of the additions is what is tested)."""
@@ -262,6 +283,7 @@ def test_held_slots_never_share_a_slot_between_live_rows():
         s_t = hpos[live]
         assert np.unique(s_t).size == s_t.size, t
     assert n_slots == live_max and hpos.max() < n_slots
+    assert cf._held_live_peak(n_tiles, lambda t: by_tile[t], last) == n_slots
     bad = last.copy()
     bad[np.flatnonzero(late)[0]] = tile[np.flatnonzero(late)[0]]
     with pytest.raises(AssertionError, match="not read after its own tile"):

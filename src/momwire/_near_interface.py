@@ -1679,6 +1679,11 @@ class ProductMemo(TripleMemo):
     def __init__(self):
         super().__init__()
         self.product = None
+        # Set by a caller that has PROVED every row it is about to look up
+        # misses the product (the crossing fill's fused slow-end prepass,
+        # momwire#1335): the product is then not asked, which answers the
+        # same misses without a pass over its keys.
+        self.misses_proven = False
 
     def set_product(self, product):
         if self.product is not None or TripleMemo.__len__(self):
@@ -1702,7 +1707,7 @@ class ProductMemo(TripleMemo):
             block = np.empty((rows.shape[0], N_KEYS), dtype=np.complex128)
             self.stats["lookups"] += rows.shape[0]
         todo = np.flatnonzero(~hit)
-        if todo.size:
+        if todo.size and not self.misses_proven:
             v = self.product.value_rows(rows[todo] + 0.0)
             ok = v >= 0
             # A product still being evaluated, or one whose values were not
