@@ -187,6 +187,57 @@ def test_recycled_held_slots_are_the_one_slot_per_row_store_to_the_bit():
     assert _same(got, ref)
 
 
+@pytest.mark.parametrize("rows", [7, 1 << 20])
+def test_batched_hit_check_walks_as_the_one_end_loop(rows, monkeypatch):
+    """`_classify`'s slow-end hit check a span of rows at a time decides,
+    counts and stops as the end-by-end check: on the declining case (every
+    end slow, so the ends that are product rows hit) and on a fusing one."""
+    make = DECKS["crossing1"][0]
+    with monkeypatch.context() as mp:
+        mp.setattr(cf, "_fast_end_desc", lambda *a, **k: None)
+        mp.setattr(cf, "_END_CLASSIFY_BATCHED", False)
+        ref, r0 = _fill(make, **{"cf._CLASSIFY_HIT_BATCHED": False})
+        got, r = _fill(make, **{"cf._CLASSIFY_HIT_ROWS": rows})
+    assert r["cf.fused_declined_hit"] == r0["cf.fused_declined_hit"] >= 2, r
+    assert r["cf.ends_line_on_node"] == r0["cf.ends_line_on_node"], (r, r0)
+    assert _same(got, ref)
+    make, flags, _mode = DECKS["invl4"]
+    ref, r0 = _fill(make, **{**flags, "cf._CLASSIFY_HIT_BATCHED": False})
+    got, r = _fill(make, **{**flags, "cf._CLASSIFY_HIT_ROWS": rows})
+    assert r["cf.fused_mode_stream"] == r0["cf.fused_mode_stream"] >= 2, r
+    assert r["cf.ends_line_on_node"] == r0["cf.ends_line_on_node"], (r, r0)
+    assert _same(got, ref)
+
+
+def test_batched_rank1_adds_are_the_per_term_loop_to_the_bit():
+    """`_rank1_adds` against `_rank1_add` term by term, with rows several
+    terms write (so the order of the additions is what is tested)."""
+    rng = np.random.default_rng(13354)
+    t0 = rng.standard_normal((9, 31)) + 1j * rng.standard_normal((9, 31))
+    terms = []
+    for _ in range(40):
+        k = int(rng.integers(1, 4))
+        nz = np.sort(rng.choice(9, k, replace=False))
+        a = rng.standard_normal(k)
+        b = rng.standard_normal(31) + 1j * rng.standard_normal(31)
+        s = complex(rng.standard_normal(), rng.standard_normal()) * (-1) ** k
+        terms.append((nz, a, b, s))
+    want, got = t0.copy(), t0.copy()
+    buf = cf._Rank1Buffer()
+    for nz, a, b, s in terms:
+        cf._rank1_add(want, nz, a, b, s, buf)
+    cf._rank1_adds(got, terms)
+    assert np.array_equal(got.view(np.uint64), want.view(np.uint64))
+
+
+def test_batched_vector_adds_keep_z():
+    make, flags, _mode = DECKS["invl4_tiny"]
+    ref, _r0 = _fill(make, **{**flags, "cf._BATCHED_VECTOR_ADDS": False})
+    got, r = _fill(make, **flags)
+    assert r["cf.fused_mode_stream"] == r["cf.main_product"] >= 2, r
+    assert _same(got, ref)
+
+
 def test_held_slots_never_share_a_slot_between_live_rows():
     """`_held_slots` against brute force: two rows live in one tile (from
     their own tile through their last reading tile) never share a slot, and
