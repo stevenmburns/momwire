@@ -4489,18 +4489,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         the direct-field fill unchanged.
 
         Served: free space, the PEC image and the Sommerfeld composition, on
-        a single-medium deck with the reduced kernel. Not yet served: the
-        extended kernel (the moment kernels carry no EK factor on this
-        basis), a wire end in the plane (the direct form's #282 contact
-        correction has no mixed-form twin yet), and the reflection-coefficient
-        ground (NEC's dyad on the image FIELD has no exact potential-form
-        spelling — the potential trunk's `(w_A, w_Φ)` is a different
-        approximation, and this fill must not change the model under a
-        quadrature change).
+        a single-medium deck. Not yet served: a wire end in the plane (the
+        direct form's #282 contact correction has no mixed-form twin yet),
+        and the reflection-coefficient ground (NEC's dyad on the image FIELD
+        has no exact potential-form spelling — the potential trunk's
+        `(w_A, w_Φ)` is a different approximation, and this fill must not
+        change the model under a quadrature change).
+
+        The extended kernel (momwire#1362) is served where the split stays
+        exact: on a deck whose every basis lies on ONE coaxial group
+        (`_mp_ek_exact`). See there for why a basis that turns a corner is
+        not.
         """
-        if self.extended_kernel or self.junction_ports:
+        if self.junction_ports:
             # A junction port's column has a net inflow at its node by
             # design, so the by-parts boundary terms do not telescope for it.
+            return False
+        if self.extended_kernel and not self._mp_ek_exact(geom):
             return False
         if geom["ground_minus"].any() or geom["ground_plus"].any():
             return False
@@ -4508,6 +4513,44 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             if self.ground_model != "sommerfeld":
                 return False
         return True
+
+    def _mp_ek_exact(self, geom):
+        """Whether the mixed-potential split is EXACT for this deck under the
+        extended kernel (momwire#1362): every basis's support lies on one
+        `_ek_axis_labels` group.
+
+        The extended kernel is NEC Eq 89's coaxial factor on G, a function of
+        R alone, for a pair whose labels match. Along a test segment the
+        label of the pair (test segment, source segment) is fixed, so the
+        tangential derivative of the potential is the derivative of a fixed
+        kernel and the integration by parts that turns the direct form into
+        this one goes through per segment unchanged. What can break it is
+        the NODE between two segments of one basis: if the two carry
+        different labels, the potential the basis's test function sees jumps
+        there (one side extended against a given source, the other not), and
+        the by-parts boundary term f(node)·[Φ⁻ − Φ⁺] no longer telescopes —
+        nor, on the source side, do the two end charges a node's segments
+        put down, which the direct form handles by reducing the end bracket
+        at such a node (`_ek_reduced_ends`, momwire#299). A basis wholly on
+        one coaxial group has neither: every node inside its support joins
+        two segments with one label. That covers straight wires, collinear
+        junctions and their images; a bend, a K ≥ 3 junction or a polyline
+        corner sends the deck to the direct fill.
+        """
+        if not self.extended_kernel:
+            return True
+        labels, _ = self._ek_axis_labels(geom, False)
+        sv = self._basis_coefs(geom, self.k)
+        starts = np.asarray(sv["starts"])
+        jbasis = np.asarray(sv["jbasis"])
+        seg_of_entry = np.repeat(np.arange(starts.size - 1), np.diff(starts))
+        lab = np.asarray(labels)[seg_of_entry]
+        n_basis = int(jbasis.max()) + 1 if jbasis.size else 0
+        lo = np.full(n_basis, np.iinfo(np.int64).max)
+        hi = np.full(n_basis, np.iinfo(np.int64).min)
+        np.minimum.at(lo, jbasis, lab)
+        np.maximum.at(hi, jbasis, lab)
+        return bool(np.all(lo == hi))
 
     def _assemble_Z_mp(self, geom, k, eta=None):
         """The Galerkin matrix in mixed-potential form,
@@ -4573,9 +4616,19 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             ladder=DEFAULT_PAIR_ORDER_LADDER,
             checkpoint=self._checkpoint,
         )
-        fill.accumulate(c, t, h, a_row, c, t, h, scale=_sinusoidal_mp.DIRECT_SIGN)
+        # The extended kernel's labels (momwire#1362): the real block scores
+        # a segment against the real ones, the image block against their
+        # reflections from one joint scan (`_ek_axis_labels`).
+        ek_free = ek_image = None
+        if self.extended_kernel:
+            ek_free = self._ek_axis_labels(geom, False)
+        fill.accumulate(
+            c, t, h, a_row, c, t, h, scale=_sinusoidal_mp.DIRECT_SIGN, ek=ek_free
+        )
         if fg is not None:
             src_c, src_t = fg.image_sources()
+            if self.extended_kernel:
+                ek_image = self._ek_axis_labels(geom, True)
             fill.accumulate(
                 c,
                 t,
@@ -4585,6 +4638,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 src_t,
                 h,
                 scale=-_sinusoidal_mp.DIRECT_SIGN * fg.image_coefficient,
+                ek=ek_image,
             )
             if fg.mode == "compose":
                 self._mp_remainder(G, geom, seg_view, k, fg)

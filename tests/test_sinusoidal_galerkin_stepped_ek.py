@@ -122,8 +122,11 @@ def test_ek_on_uniform_radius_answer_is_unchanged_from_the_pre_unit_value():
     # number was recorded. momwire#654 moved this class's default to the point
     # gap, which is a different SOURCE and so legitimately a different answer —
     # exactly the kind of change this pin must not absorb silently.
+    # `fill="direct"` for the same reason (momwire#1362): the pin was taken
+    # on the direct fill, and the mixed-potential fill now serves this
+    # straight two-wire deck under the extended kernel (1.3e-6 ohm away).
     z, _ = SinusoidalGalerkinSolver(
-        extended_kernel=True, feed_model="segment", **kw
+        extended_kernel=True, feed_model="segment", fill="direct", **kw
     ).compute_impedance()
     assert z == pytest.approx(
         209.4439774792844 + 79.14170016358155j, abs=0.0, rel=1e-10
