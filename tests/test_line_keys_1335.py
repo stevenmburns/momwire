@@ -116,3 +116,19 @@ def test_switch_off_is_the_hash_kernel_route():
         m.setattr(ni, "_FACTORIZE", False)
         got, _r = pg._fill(make)
     assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+@pytest.mark.parametrize("chunk", [1, 7, 1000, 1 << 20])
+def test_stable_tile_order_is_the_stable_argsort(chunk, monkeypatch):
+    """The tiles' row order by counting, a chunk at a time, against
+    `np.argsort(kind="stable")` and its `searchsorted` bounds."""
+    monkeypatch.setattr(cf, "_TILE_ORDER_CHUNK", chunk)
+    rng = np.random.default_rng(13353)
+    n_tiles = 37
+    t_row = rng.integers(0, n_tiles, 20_011).astype(np.int16)
+    t_row[t_row == 5] = 6  # an empty tile
+    o, b = cf._stable_tile_order(t_row, n_tiles, np.int32)
+    want = np.argsort(t_row, kind="stable")
+    assert o.dtype == np.int32
+    assert np.array_equal(o, want)
+    assert np.array_equal(b, np.searchsorted(t_row[want], np.arange(n_tiles + 1)))
