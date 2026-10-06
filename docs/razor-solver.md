@@ -364,21 +364,23 @@ finding about razor. The EK row holds it with 4× margin, and its continuum
 limit lands 0.047 Ω from the binary's where the reduced row's lands 1.40 Ω
 away. That is the twin claim, restored on the reference's home turf.
 
-On Ward's actual 10-step taper the same lane holds the bar to Δ/a ≳ 3
-(dR 0.012, dX 0.040 over N = 20…140) and runs 1.6× over it in dX at
-Δ/a = 2.1 (dR 0.020, dX 0.078). The residual drift there is not a defect but
-the eligibility rule's own documented conservatism: momwire extends only
-COAXIAL EQUAL-RADIUS pairs, so it declines to extend ACROSS each of the nine
-radius steps, where NEC still extends some cross-arm pairs (`IND = 2`,
-#249 §4.3 — O(h) in the refinement limit). The uniform `fat` control, which
-has no step, is the clean measurement of the kernel and it is the sharp one.
+On Ward's actual 10-step taper the same lane holds the bar in dR and dX over
+the whole gated ladder (dX 0.009 over N = 20…200; the per-rung offset from
+NEC-5 is 0.015–0.025 Ω). Before momwire#1368 it ran 1.6× over in dX
+(0.078): the eligibility rule extended only COAXIAL EQUAL-RADIUS pairs and
+so declined to extend across each of the nine radius steps. Since #1368
+every pair is extended, unequal radii with NEC Eq 89's two-radius factor
+(razor's transposed spelling: R regularised by the source's radius, the
+tube b the observer's), which tracks NEC-5's step response to its print
+resolution.
 
 ### How it is spelled
 
 Eligibility is the **shared** rule — `_bspline_kernels._ek_axis_groups`,
 already used by `BSplineSolver` and `SinusoidalGalerkinSolver` — and is not
-re-derived here: two segments share a label iff they are COAXIAL and of EQUAL
-RADIUS on NEC's own thresholds, and a pair is extended iff its labels match.
+re-derived here: since momwire#1368 every segment shares one label, so every
+pair is extended (it used to be COAXIAL and EQUAL-RADIUS pairs only, which
+made Z jump at the first bend angle and radius ratio).
 That is the B-spline trunk's PAIR rule rather than `SinusoidalSolver`'s
 per-END `IND1`/`IND2` gating, because this formulation is mixed-potential:
 its rows are path integrals over arbitrary (observer point, source segment)
@@ -412,9 +414,9 @@ k-independent as the reduced ones:
 | axis | how |
 |---|---|
 | the two quadrature lanes | **orthogonal, and both serve it.** `nec5_quadrature` picks where the testing path is sampled; `extended_kernel` picks which kernel is sampled there. Neither reads the other; all four combinations are live |
-| PEC / refl-coef / Sommerfeld grounds | the ground supplies mirrored GEOMETRY, never the kernel's opinion. Eligibility over a ground is ONE scan of the shared rule over the real segments stacked on the mirrored ones, so a vertical wire (image coaxial, equal radius) extends — NEC's `IND = 0` perpendicular-ground branch — and a horizontal one (image merely parallel) does not. Two separate scans would call every real/image pair coaxial, the trap `BSplineSolver._ek_axis_labels` records |
+| PEC / refl-coef / Sommerfeld grounds | the ground supplies mirrored GEOMETRY, never the kernel's opinion. Every real/image pair is extended (momwire#1368), the vertical wire's — NEC's `IND = 0` perpendicular-ground branch — and, since #1368, a horizontal wire's too |
 | ground CONTACT | no code at all. The grounded tent's lower wing IS its own image, so the mirror policy above already decides it, and for the vertical contact that motivates the basis it decides "extend" |
-| per-wire radii | eligibility is equal-radius pairwise, so a taper extends within each section and not across a step. The pair's radius IS the kernel call's `a`, since eligibility requires the two to be equal |
+| per-wire radii | every pair extends across a step too (momwire#1368), with NEC Eq 89's two-radius factor: the kernel call's `a` (the source's) regularises R and the observer's radius is the tube b |
 | wire loading | orthogonal, no interaction: `L` is a surface-impedance path integral outside the fold and never sees the kernel |
 
 No combination is refused: every capability this class serves is served with

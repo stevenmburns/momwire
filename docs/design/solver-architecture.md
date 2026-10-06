@@ -1639,11 +1639,10 @@ it: `bs1-ek` 1.189 → **0.405 Ω**, `bs1` 6.881 → 1.708, `razor` reduced
 should extend to the LIMITS it publishes and not only to the gates; the
 ranking is unchanged, the magnitudes are not.
 On Ward's actual 10-step taper the same lane holds the bar in dR (0.020) and
-runs 1.6× over it in dX (0.078) — the eligibility rule's own documented
-conservatism at a radius step, where momwire extends only coaxial
-EQUAL-radius pairs and NEC still extends some cross-arm pairs (`IND = 2`,
-#249 §4.3, O(h) in the refinement limit). The uniform control has no step and
-is therefore the clean measurement of the kernel.
+ran 1.6× over it in dX (0.078) while momwire extended only coaxial
+EQUAL-radius pairs; since momwire#1368 every pair is extended with NEC Eq 89's
+two-radius factor and the dX spread is 0.009. The uniform control has no step
+and is the clean measurement of the kernel.
 
 **What the unit did NOT have to build, which is the pilot's claim again.**
 The eligibility rule is `_bspline_kernels._ek_axis_groups`, unchanged and
