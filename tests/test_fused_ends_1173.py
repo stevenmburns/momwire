@@ -40,7 +40,7 @@ from momwire import _crossing_fill as cf
 from momwire import razor as rz
 
 import test_product_grid_1173 as pg
-from test_crossing_serve_524 import crossing_deck, fan_rise_deck
+from test_crossing_serve_524 import crossing_deck, fan_rise_deck, invl_deck
 from test_razor_detached_1149 import detached_hub
 from momwire.razor import RazorSolver
 from test_triple_memo_1168 import _hub, _razor
@@ -75,6 +75,14 @@ DECKS = {
     "wa7ark_tiny": (lambda: pg._wa7ark(True), {"cf._TILE_ROWS": 4_000}, "stream"),
     "detached_hub": (lambda: _razor(detached_hub()), {}, "stream"),
     "hub16_x2": (lambda: _razor(_hub(2)), {"cf._TILE_ROWS": 2_000}, "stream"),
+    # Several groups (momwire#1335): the inverted L's above side is the mast
+    # plus one group per top-wire node, in both blocks.
+    "invl4": (lambda: _razor(invl_deck(n_radials=4)), {}, "stream"),
+    "invl4_tiny": (
+        lambda: _razor(invl_deck(n_radials=4)),
+        {"cf._TILE_ROWS": 500},
+        "stream",
+    ),
 }
 _SLOW = {
     "crossing1_default",
@@ -146,10 +154,31 @@ def test_a_slow_end_asking_a_product_row_declines_the_fusion(monkeypatch):
     assert _same(got, ref)
 
 
+def test_a_product_of_several_groups_fuses_and_keeps_no_store():
+    """momwire#1335: a product of several groups (the inverted L's) used to
+    decline the fusion and keep the V/W store. Now both its blocks stream,
+    with no store; at 500-row tiles a line end's keys and a unit's grouped
+    rows span tiles, so rows are held across them — and Z is the declining
+    route's (`_FUSED_MULTI_GROUP = False`) to the bit."""
+    make, flags, _mode = DECKS["invl4_tiny"]
+    ref, r0 = _fill(make, **{**flags, "cf._FUSED_MULTI_GROUP": False})
+    got, r = _fill(make, **flags)
+    n = r0["cf.main_product"]
+    assert n >= 2 and r0["cf.main_product_groups"] > 1, r0
+    assert r0["cf.fused_declined_groups"] == n == r0["cf.tile_stores"], r0
+    assert r["cf.fused_mode_stream"] == n and r["cf.tile_stores"] == 0, r
+    # Both loops' kinds ran inside the tiles: grouped vector ends over
+    # several tiles' units, line ends formed from held rows.
+    assert r["cf.fused_unit_tiles"] > 1 and r["cf.fused_col_te"] > 0, r
+    assert r["cf.fused_held_rows"] > 0, r
+    assert _same(got, ref)
+
+
 @pytest.mark.parametrize(
     "control, case, flag",
     [
         ("fused_order", "fan_rise_tiny", "cf._PRODUCT_NEG_CONTROL"),
+        ("group0", "invl4", "cf._PRODUCT_NEG_CONTROL"),
         ("shift", "crossing1", "rz._BELOW_FOLD_CONTROL"),
     ],
 )
@@ -157,7 +186,7 @@ def test_negative_controls_move_z(control, case, flag):
     make, flags, _mode = DECKS[case]
     ref, _r = _fill(make, **{**flags, **_PHASE1})
     got, r = _fill(make, **{**flags, flag: control})
-    if control == "fused_order":
+    if control in ("fused_order", "group0"):
         assert r["cf.fused_mode_stream"] >= 2, r
     else:
         assert r["rz.below_windows"] > 0, r
