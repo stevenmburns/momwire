@@ -10,6 +10,7 @@
 # WHICH LANES GATE WHAT (ci.yml job conditions):
 #   PR + push : lint, test, pynec
 #   push only : integration, slow, crossgate, memgate, macos
+#   nightly.yml (daily if main moved, v* tags, dispatch): nightly
 # `make gates` is what a merge to main will check, and `make test` + `make
 # pynec` + `make lint` are what block your PR.
 #
@@ -66,7 +67,7 @@ endif
 # a breach of the 16GB box's heavy-process budget.
 .NOTPARALLEL:
 
-.PHONY: build test pynec macos-set integration slow crossgate memgate lint gates ccache-stats
+.PHONY: build test pynec macos-set integration slow nightly crossgate memgate lint gates ccache-stats
 
 # Rebuild the C++ extensions in place, through ccache when available.
 # MOMWIRE_REQUIRE_ACCEL=1 makes a compile failure FAIL the lane: setup.py's
@@ -107,7 +108,12 @@ integration:
 
 # ci.yml `test-slow` job — the >couple-seconds tests.
 slow:
-	$(PY) pytest tests/ -m "slow and not memgate and not crossgate"
+	$(PY) pytest tests/ -m "slow and not memgate and not crossgate and not nightly"
+
+# nightly.yml `test-nightly` job — the whole-band sweeps (momwire#1359). Not in
+# `gates`: no merge waits on it; it runs daily when main moved and on `v*` tags.
+nightly:
+	$(PY) pytest tests/ -m nightly
 
 # ci.yml `test-crossgate` job — cross-engine certification. Inherits addopts'
 # xdist: these measure impedances, not memory, and parallelize fine.

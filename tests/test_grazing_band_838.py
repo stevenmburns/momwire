@@ -399,25 +399,27 @@ def test_every_band_node_converges_on_every_soil():
 
 
 @pytest.mark.slow
-def test_the_band_interpolates_to_the_bar():
+@pytest.mark.nightly
+@pytest.mark.parametrize("soil, f", [(s, f) for s in SOILS for f in FREQS])
+def test_the_band_interpolates_to_the_bar(soil, f):
     """The band matches the accuracy the 1 deg band already had (4.7e-4),
-    measured against the direct surfaces at off-node theta."""
+    measured against the direct surfaces at off-node theta.
+
+    NIGHTLY (momwire#1359): the per-push gate is
+    `test_grazing_interp_units_1359.py`, on the stored nodes of the worst deck.
+    """
     worst = 0.0
-    for soil in SOILS:
-        for f in FREQS:
-            g, eps_t, k2, om, lam_m = _grid(soil, f)
-            th = np.radians(np.linspace(0.105, 0.995, 23))
-            for r1l in (0.2, 1.0, 1.9):
-                r1 = np.full(th.shape, r1l * lam_m)
-                got = g.eval(r1, th)
-                ref = below.iv_surfaces_direct_below(
-                    eps_t, k2, r1, th, rtol=1e-9, omega=om
-                )
-                G = np.stack([got[k] for k in _SURF_KEYS])
-                R = np.stack([ref[k] for k in _SURF_KEYS])
-                worst = max(
-                    worst, float((np.abs(G - R) / np.abs(R).max(axis=0)[None, :]).max())
-                )
+    g, eps_t, k2, om, lam_m = _grid(soil, f)
+    th = np.radians(np.linspace(0.105, 0.995, 23))
+    for r1l in (0.2, 1.0, 1.9):
+        r1 = np.full(th.shape, r1l * lam_m)
+        got = g.eval(r1, th)
+        ref = below.iv_surfaces_direct_below(eps_t, k2, r1, th, rtol=1e-9, omega=om)
+        G = np.stack([got[k] for k in _SURF_KEYS])
+        R = np.stack([ref[k] for k in _SURF_KEYS])
+        worst = max(
+            worst, float((np.abs(G - R) / np.abs(R).max(axis=0)[None, :]).max())
+        )
     assert worst < BAND_BAR, f"{worst:.3e}"
 
 
@@ -596,24 +598,26 @@ def test_the_far_zone_is_deferred_until_something_reaches_it():
 
 
 @pytest.mark.slow
-def test_the_far_zone_interpolates_to_the_bar():
-    """The far annulus against the direct surfaces, at off-node points."""
+@pytest.mark.nightly
+@pytest.mark.parametrize("soil, f", [(s, f) for s in SOILS for f in FREQS])
+def test_the_far_zone_interpolates_to_the_bar(soil, f):
+    """The far annulus against the direct surfaces, at off-node points.
+
+    NIGHTLY (momwire#1359): the per-push gate is
+    `test_grazing_interp_units_1359.py`, on the stored nodes of the worst deck.
+    """
     worst = 0.0
-    for soil in SOILS:
-        for f in FREQS:
-            g, eps_t, k2, om, lam_m = _grid(soil, f)
-            r1 = np.linspace(2.05, 3.95, 11) * lam_m
-            for th_deg in (0.3, 2.0, 17.0, 45.0, 80.0):
-                th = np.radians(np.full(r1.shape, th_deg))
-                got = g.eval(r1, th)
-                ref = below.iv_surfaces_direct_below(
-                    eps_t, k2, r1, th, rtol=1e-9, omega=om
-                )
-                G = np.stack([got[k] for k in _SURF_KEYS])
-                R = np.stack([ref[k] for k in _SURF_KEYS])
-                worst = max(
-                    worst, float((np.abs(G - R) / np.abs(R).max(axis=0)[None, :]).max())
-                )
+    g, eps_t, k2, om, lam_m = _grid(soil, f)
+    r1 = np.linspace(2.05, 3.95, 11) * lam_m
+    for th_deg in (0.3, 2.0, 17.0, 45.0, 80.0):
+        th = np.radians(np.full(r1.shape, th_deg))
+        got = g.eval(r1, th)
+        ref = below.iv_surfaces_direct_below(eps_t, k2, r1, th, rtol=1e-9, omega=om)
+        G = np.stack([got[k] for k in _SURF_KEYS])
+        R = np.stack([ref[k] for k in _SURF_KEYS])
+        worst = max(
+            worst, float((np.abs(G - R) / np.abs(R).max(axis=0)[None, :]).max())
+        )
     assert worst < FAR_BAR, f"{worst:.3e}"
 
 

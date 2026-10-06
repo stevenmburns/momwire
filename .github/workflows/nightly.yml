@@ -1,0 +1,94 @@
+name: Nightly
+
+# The `nightly` lane (momwire#1359): whole-band SWEEPS whose per-push
+# question is answered by a unit test on stored nodes, and which stay because
+# a soil- or frequency-dependent regression shows only across the full sweep.
+# Today that is the four grazing-band "interpolates to the bar" sweeps (#838,
+# #935, #1064): 6 decks each, cold-filling whole theta bands -- ~33 of the
+# slow lane's ~142 worker-minutes, one of them a 27-minute test pinned to one
+# xdist worker that set the push run's floor. Their per-push replacements are
+# `tests/test_grazing_interp_units_1359.py`, in the default lane.
+#
+# Every `nightly` test is also marked `slow` (as `crossgate` is), so every
+# `not slow` spelling -- the PR lane, wheel smoke, macOS -- excludes it for
+# free, and `test-slow` in ci.yml subtracts it explicitly.
+#
+# When it runs:
+#   * schedule -- once a day, and only if main moved since the last green
+#     scheduled run (a quiet day costs one 10-second job, not half an hour);
+#   * push of a `v*` tag -- every release is checked on the full sweep;
+#   * workflow_dispatch -- a branch can buy it, as with ci.yml's lanes.
+#
+# NOT a required check, and not in ci.yml on purpose: a `schedule:` trigger on
+# ci.yml would also start every job there that has no `if:` (the PR lanes).
+
+on:
+  schedule:
+    - cron: '23 9 * * *'  # 09:23 UTC, 02:23 PDT -- after the day's merges
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  # A scheduled run on a commit the last green scheduled run already covered
+  # measures nothing new.
+  moved:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          last=$(gh api "repos/${{ github.repository }}/actions/workflows/nightly.yml/runs?event=schedule&status=success&per_page=1" \
+                   --jq '.workflow_runs[0].head_sha // ""') || last=""
+          if [ "$last" = "${{ github.sha }}" ]; then
+            echo "main has not moved since the last green nightly (${last:0:12}); skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  test-nightly:
+    needs: moved
+    if: needs.moved.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: py
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ${{ github.job }}-${{ runner.os }}
+      - run: pip install --upgrade pip
+      # Mirrors `build-system.requires` in pyproject.toml, as in ci.yml.
+      - run: pip install "setuptools>=61.0" wheel pybind11
+      - run: pip install -e .[test] --no-build-isolation
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      # Inherits addopts' xdist (-n auto). The sweeps are parametrized per
+      # deck and conftest leaves `nightly` items out of their modules' file
+      # groups, so the decks spread across workers.
+      - run: pytest tests/ -m nightly
+        env:
+          MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
+      - name: Upload per-test durations
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: durations/
+          retention-days: 90
+          if-no-files-found: ignore
