@@ -184,19 +184,18 @@ def test_d_the_reduced_kernel_still_fails_that_bar_on_fat_wire():
     assert mags == sorted(mags)
 
 
-def test_d_the_taper_deck_holds_the_bar_in_dr_and_is_recorded_in_dx():
-    """Ward's actual deck: the bar holds in dR; dX is pinned where measured.
+def test_d_the_taper_deck_holds_the_bar_in_dr_and_dx():
+    """Ward's actual deck: the sharp bar holds in dR AND, since momwire#1368,
+    in dX.
 
-    Nine radius STEPS separate this from the `fat` control, and momwire's
-    eligibility rule declines to extend ACROSS a step (it extends only
-    coaxial EQUAL-radius pairs) where NEC still extends some cross-arm pairs
-    at an `IND = 2` junction — strictly more conservative, and worth ≤ 0.27 %
-    of Z at Δ/a = 2 (momwire#272 measured it; the O(h) the #249 §4.3 estimate
-    named is wrong — the cost is O(a) and does not refine away). That
-    conservatism is what the dX spread
-    measures, so it is recorded at its measured level rather than gated at a
-    bar the rule cannot hold, and the reduced row's own dX (0.340) is carried
-    beside it so the comparison is not lost.
+    Nine radius STEPS separate this from the `fat` control. Until #1368
+    momwire's eligibility rule declined to extend across a step (coaxial
+    EQUAL-radius pairs only) and the dX spread sat at 0.0779 ohm, recorded
+    rather than gated. Extending every pair with NEC Eq 89's two-radius
+    factor (razor's transposed spelling) took it to 0.0092 ohm and the
+    per-rung offset from 0.03-0.11 to 0.015-0.025 ohm — NEC-5's step
+    response, which is what the twin claim needs. The reduced row's own dX
+    (0.340) is carried beside it so the comparison is not lost.
     """
     ek = [cols["ek_n5q"] - z5 for _n, z5, cols in golden("ward")]
     red = [cols["red_n5q"] - z5 for _n, z5, cols in golden("ward")]
@@ -206,7 +205,7 @@ def test_d_the_taper_deck_holds_the_bar_in_dr_and_is_recorded_in_dx():
         return max(vals) - min(vals)
 
     assert spread(ek, "real") <= TWIN_BAR
-    assert spread(ek, "imag") <= 0.10  # measured 0.0779
+    assert spread(ek, "imag") <= TWIN_BAR  # measured 0.0092 (0.0779 pre-#1368)
     # EK is still the better row on both parts, which is the claim that
     # matters on a taper.
     assert spread(ek, "real") < spread(red, "real")
@@ -456,9 +455,12 @@ def test_the_eligibility_rule_is_the_shared_one():
     assert len(set(src.tolist())) == 1
 
 
-def test_a_bend_and_a_radius_step_are_not_extended_across():
-    """Coaxial AND equal-radius, pairwise — the rule's two clauses, one deck
-    each. Neither is a razor decision; both fall out of the shared scan."""
+def test_a_bend_and_a_radius_step_are_extended_across():
+    """momwire#1368: every pair extends — across a bend and across a radius
+    step — so Z is continuous in angle and in radius ratio, as licensed
+    NEC-4.2 and NEC-5 are. The radii enter the factor instead (razor takes
+    Eq 89's two-radius form transposed: R by the source's radius, the tube b
+    the observer's). Not a razor decision; it falls out of the shared rule."""
     bent = RazorSolver(
         wires=[np.array([[-4.0, 0.0, 0.0], [0.0, 0.0, 2.0], [4.0, 0.0, 0.0]])],
         nsegs=6,
@@ -467,7 +469,7 @@ def test_a_bend_and_a_radius_step_are_not_extended_across():
         extended_kernel=True,
     )
     lab, _ = bent._ek_labels(bent._build_geometry())
-    assert len(set(lab.tolist())) == 2  # one group per straight arm
+    assert len(set(lab.tolist())) == 1
 
     step = RazorSolver(
         wires=[
@@ -480,9 +482,7 @@ def test_a_bend_and_a_radius_step_are_not_extended_across():
         extended_kernel=True,
     )
     lab, _ = step._ek_labels(step._build_geometry())
-    # collinear but unequal radii: two groups, so the step is not extended
-    # across even though the axes coincide.
-    assert len(set(lab.tolist())) == 2
+    assert len(set(lab.tolist())) == 1
 
 
 def test_the_observer_labels_follow_the_testing_path_halves():
@@ -517,12 +517,12 @@ def test_the_observer_labels_follow_the_testing_path_halves():
 # ==========================================================================
 # The mirror policy — the ground supplies geometry, never the kernel's opinion
 # ==========================================================================
-def test_the_image_eligibility_is_one_joint_scan():
-    """A VERTICAL wire's image is coaxial with it and of equal radius, so the
-    real/image pairs extend — NEC's `IND = 0` perpendicular-ground branch. A
-    HORIZONTAL wire's image is merely PARALLEL, offset by twice the height,
-    and does not. Two independent scans would label both 0 and 0 and declare
-    every real/image pair coaxial; the joint scan is what distinguishes them.
+def test_the_image_eligibility_extends_every_pair():
+    """A VERTICAL wire's image is coaxial with it, so the real/image pairs
+    extend — NEC's `IND = 0` perpendicular-ground branch. Since momwire#1368
+    a HORIZONTAL wire's real/image pairs extend too (they used to stay
+    reduced as merely parallel): every pair is extended, and at twice the
+    height the factor is 1 + O(a²/h²).
     """
     vert = RazorSolver(
         wires=[np.array([[0.0, 0.0, 2.0], [0.0, 0.0, 8.0]])],
@@ -544,7 +544,7 @@ def test_the_image_eligibility_is_one_joint_scan():
         extended_kernel=True,
     )
     real, img = horiz._ek_labels(horiz._build_geometry(), mirror=True)
-    assert set(real.tolist()).isdisjoint(set(img.tolist()))
+    assert set(real.tolist()) == set(img.tolist())
 
 
 def test_the_ground_never_changes_the_free_space_eligibility():
@@ -623,12 +623,12 @@ def test_ground_contact_takes_the_kernel_through_its_own_image():
     assert abs(mono - dip / 2.0) < 1e-6 * abs(dip)
 
 
-def test_mixed_radii_extend_within_a_section_and_not_across_the_step():
-    """Per-wire radii need no EK special case: eligibility is equal-radius
-    pairwise, so the shared rule already refuses across the step while
-    extending within each arm. Gated on the MASK, which is the statement
-    itself, plus the fill running and moving.
-    """
+def test_mixed_radii_extend_across_the_step_with_the_two_radius_factor():
+    """momwire#1368: across a radius step every pair extends, with NEC Eq 89's
+    two-radius factor (razor's transposed spelling: the observer's radius as
+    the tube). Gated on the MASK, plus the fill running and moving — and on
+    the radii reaching the factor: the step deck differs from a deck whose
+    observer radii are hidden from the factor (b = a everywhere)."""
     wires = [
         np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 5.0]]),
         np.array([[0.0, 0.0, 0.0], [0.0, 0.0, -5.0]]),
@@ -644,14 +644,27 @@ def test_mixed_radii_extend_within_a_section_and_not_across_the_step():
     step = RazorSolver(extended_kernel=True, wire_radius=[1e-2, 1e-3], **kw)
     lab, _ = step._ek_labels(step._build_geometry())
     mask = _bk._ek_pair_mask(_bk._EK(None, lab, lab), n, n)
-    # exactly the two within-arm blocks; the cross-arm quadrants are refused
-    half = n // 2
-    assert mask[:half, :half].all() and mask[half:, half:].all()
-    assert not mask[:half, half:].any() and not mask[half:, :half].any()
+    assert mask.all()
 
     red, _ = RazorSolver(wire_radius=[1e-2, 1e-3], **kw).compute_impedance()
     ek, _ = step.compute_impedance()
     assert abs(ek - red) > 1e-6
+    # The observer radii reach the factor: hiding them (b = the source's
+    # radius on every pair, the equal-radius factor) moves Z.
+    orig = _bk._EK.__new__
+
+    def no_tube(cls, *args, **kwargs):
+        e = orig(cls, *args, **kwargs)
+        return tuple.__new__(cls, (e.a, e.group_i, e.group_j, None, e.b_j))
+
+    try:
+        _bk._EK.__new__ = no_tube
+        hidden, _ = RazorSolver(
+            extended_kernel=True, wire_radius=[1e-2, 1e-3], **kw
+        ).compute_impedance()
+    finally:
+        _bk._EK.__new__ = orig
+    assert abs(ek - hidden) > 1e-6, (ek, hidden)
 
 
 def test_loading_is_orthogonal_to_the_kernel():

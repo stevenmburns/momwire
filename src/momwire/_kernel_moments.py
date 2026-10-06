@@ -17,8 +17,8 @@ both consume it, and momwire#425 is the record of pulse having reached into
 razor's module-level privates to do so.
 
 :func:`_static_axis_moments_ek` is the same two integrals under the EXTENDED
-(tubular) kernel, for the coaxial equal-radius pairs `_ek_axis_groups`
-declares eligible. It is a third function rather than a flag on the second
+(tubular) kernel, for every pair `_ek_axis_groups` declares eligible — every
+pair since momwire#1368, in NEC Eq 89's two-radius form. It is a third function rather than a flag on the second
 because the two are different closed forms, and because a caller that never
 asks for it must not enter it (the EK-off bit-identity standard).
 
@@ -111,7 +111,7 @@ def _static_axis_moments(u_r, rho2, seg_h):
     return m0, m1
 
 
-def _static_axis_moments_ek(u_r, rho2, seg_h, a):
+def _static_axis_moments_ek(u_r, rho2, seg_h, a, b=None):
     """Closed-form static moments of the EXTENDED (tubular) kernel.
 
     The same ``m0 = ∫₀^h dτ/…``, ``m1 = ∫₀^h τ dτ/…`` as
@@ -148,14 +148,27 @@ def _static_axis_moments_ek(u_r, rho2, seg_h, a):
     also collapse to :func:`_static_axis_moments` term by term at a = 0
     rather than merely rounding to it.
 
-    `a` is the pair's common radius — eligibility REQUIRES equal radii, so
-    the source column's radius (`RazorSolver._kernel_radius`) is that number
-    on every pair this is called for. Scalar or anything broadcasting
-    against ``(n_obs, n_seg)``, exactly as :func:`_axis_frame` takes it.
+    `a` is the radius that regularises R (the one :func:`_axis_frame` was
+    given). **Two radii (momwire#1368).** Every pair is extended since #1368,
+    unequal radii included, in NEC Eq 89's two-radius form: Eq 89's ρ is
+    the regularising `a` (the observer on its own surface) and its source
+    tube is `b` (default `a`), so the static integrand is
+    1/R − b²/(2R³) + 3b²a²/(4R⁵) and the same collection gives
+
+        m0 = [ asinh(u/ρ) + b²a²u/(4ρ²R³) − b²(ρ²−a²)u/(2ρ⁴R) ]₀^h
+        m1 = u_r·m0 + [ R + b²/(2R) − b²a²/(4R³) ]₀^h
+
+    — the formulas above with a⁴ → b²a² and the remaining a² → b², and
+    those to the bit at b = a (`b·b` is `a·a`). Razor takes the transposed
+    spelling (R regularised by the SOURCE's radius, b the observer's), which
+    gives the same Z_in to 1e-4 Ω on the #1368 step decks. Both scalar or
+    anything broadcasting against ``(n_obs, n_seg)``, exactly as
+    :func:`_axis_frame` takes it.
     """
     rho2_ = rho2
     a2 = a * a
-    a4 = a2 * a2
+    b2 = a2 if b is None else b * b
+    a4 = b2 * a2
     perp2 = rho2_ - a2
     u0 = -u_r
     u1 = seg_h[None, :] - u_r
@@ -168,13 +181,13 @@ def _static_axis_moments_ek(u_r, rho2, seg_h, a):
     # corrections difference too, but they carry an explicit a²/R² and their
     # loss is that much smaller, so they stay literal.
     c3 = 0.25 * a4 / rho2_
-    c1 = 0.5 * a2 * perp2 / (rho2_ * rho2_)
+    c1 = 0.5 * b2 * perp2 / (rho2_ * rho2_)
     m0 = asinh_diff(u0, u1, rho2_, r0, r1)
     m0 = m0 + c3 * (u1 / (r1 * r1 * r1) - u0 / (r0 * r0 * r0))
     m0 = m0 - c1 * (u1 / r1 - u0 / r0)
     # Q(u) = R + a²/(2R) − a⁴/(4R³), differenced the same way.
     qd = sqrt_diff(u0, u1, rho2_, r0, r1)
-    qd = qd + 0.5 * a2 * (1.0 / r1 - 1.0 / r0)
+    qd = qd + 0.5 * b2 * (1.0 / r1 - 1.0 / r0)
     qd = qd - 0.25 * a4 * (1.0 / (r1 * r1 * r1) - 1.0 / (r0 * r0 * r0))
     m1 = u_r * m0 + qd
     return m0, m1

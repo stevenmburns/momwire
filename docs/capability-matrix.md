@@ -138,7 +138,7 @@ renders in host dialogs.
 
 - `BSplineSolver` `buried+extended_kernel`, `HMatrixSolver` `buried+extended_kernel`, `ArrayBlockSolver` `buried+extended_kernel`, `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
 
-  > extended_kernel=True + a wire below the ground plane is not served: the extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping scored across the whole geometry, and momwire#553 measured neither what that grouping means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor what the mirror labels mean when the image of a buried source lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
+  > extended_kernel=True + a wire below the ground plane is not served: the extended kernel extends every pair of the geometry, and momwire#553 measured neither what that means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor for the image of a buried source, which lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
 
 - `BSplineSolver` `buried+pec`, `HMatrixSolver` `buried+pec`, `ArrayBlockSolver` `buried+pec`, `SinusoidalSolver` `buried+pec`, `SinusoidalGalerkinSolver` `buried+pec`, `RazorSolver` `buried+pec`
 

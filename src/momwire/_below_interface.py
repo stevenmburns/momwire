@@ -66,11 +66,10 @@ BURIED_ENRICHMENT_REFUSAL = (
 )
 BURIED_EXTENDED_KERNEL_REFUSAL = (
     "extended_kernel=True + a wire below the ground plane is not served: the "
-    "extended kernel's eligibility is a COAXIAL-AND-EQUAL-RADIUS grouping "
-    "scored across the whole geometry, and momwire#553 measured neither what "
-    "that grouping means for a pair spanning two media (the tube expansion's "
-    "O(a^2) term is written at one wavenumber) nor what the mirror labels "
-    "mean when the image of a buried source lands in the OTHER medium. "
+    "extended kernel extends every pair of the geometry, and momwire#553 "
+    "measured neither what that means for a pair spanning two media (the "
+    "tube expansion's O(a^2) term is written at one wavenumber) nor for the "
+    "image of a buried source, which lands in the OTHER medium. "
     "Solve the buried deck with extended_kernel=False, which is the default"
 )
 BURIED_DENSE_BUDGET_REFUSAL = (

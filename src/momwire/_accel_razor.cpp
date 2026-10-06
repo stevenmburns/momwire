@@ -107,17 +107,24 @@ static inline void razor_statics_reduced(double u_r, double rho2, double h,
 // single subtraction the numpy spelling forms it as: on an eligible pair the
 // observer sits on the source's own axis, so ρ = a and this is exactly 0.0,
 // which is what keeps the two 1/R terms from cancelling catastrophically.
+//
+// momwire#1368: NEC Eq 89's two-radius form, transposed for razor (R is
+// regularised by the SOURCE's radius `a_ek`, the tube b is the observer's
+// `b_ek`): a^4 -> b^2 a^2 and the other a^2 -> b^2, the equal-radius
+// statics to the bit at b = a_ek.
 static inline void razor_statics_ek(double u_r, double rho2, double h,
-                                    double a_ek, double *m0, double *m1) {
+                                    double a_ek, double b_ek,
+                                    double *m0, double *m1) {
     const double a2 = a_ek * a_ek;
-    const double a4 = a2 * a2;
+    const double b2 = b_ek * b_ek;
+    const double a4 = b2 * a2;
     const double perp2 = rho2 - a2;
     const double u0 = -u_r;
     const double u1 = h - u_r;
     const double r0 = std::sqrt(u0 * u0 + rho2);
     const double r1 = std::sqrt(u1 * u1 + rho2);
     const double c3 = 0.25 * a4 / rho2;
-    const double c1 = 0.5 * a2 * perp2 / (rho2 * rho2);
+    const double c1 = 0.5 * b2 * perp2 / (rho2 * rho2);
     // P and Q differenced TERM BY TERM, so the leading asinh and R differences
     // take their stable spellings and the two O(a²) corrections — which carry
     // an explicit a²/R² and lose that much less — stay literal (momwire#799).
@@ -125,7 +132,7 @@ static inline void razor_statics_ek(double u_r, double rho2, double h,
     mm0 = mm0 + c3 * (u1 / (r1 * r1 * r1) - u0 / (r0 * r0 * r0));
     mm0 = mm0 - c1 * (u1 / r1 - u0 / r0);
     double qd = stable_sqrt_diff(u0, u1, r0, r1);
-    qd = qd + 0.5 * a2 * (1.0 / r1 - 1.0 / r0);
+    qd = qd + 0.5 * b2 * (1.0 / r1 - 1.0 / r0);
     qd = qd - 0.25 * a4 * (1.0 / (r1 * r1 * r1) - 1.0 / (r0 * r0 * r0));
     *m0 = mm0;
     *m1 = u_r * mm0 + qd;
@@ -203,7 +210,10 @@ razor_seg_moments_impl(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i, // (n_obs,) or ()
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j, // (n_seg,) or ()
     py::array_t<double, py::array::c_style | py::array::forcecast> a_ek,     // (n_seg,) or ()
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    // momwire#1368: Eq 89's source tube b per OBSERVER, (n_obs,), or empty
+    // for b = a_ek (the equal-radius factor).
+    py::object b_obs_obj = py::none()
 ) {
     const size_t n_obs = (size_t)obs.shape(0);
     const size_t n_seg = (size_t)seg_h.shape(0);
@@ -245,6 +255,13 @@ razor_seg_moments_impl(
     const int64_t *gi = ek_on ? group_i.data() : nullptr;
     const int64_t *gj = ek_on ? group_j.data() : nullptr;
     const double *aek = ek_on ? a_ek.data() : nullptr;
+    py::array_t<double, py::array::c_style | py::array::forcecast> b_obs_arr;
+    if (!b_obs_obj.is_none())
+        b_obs_arr = b_obs_obj.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+    const bool has_b = ek_on && !b_obs_obj.is_none() && b_obs_arr.size() > 0;
+    if (has_b && (size_t)b_obs_arr.size() != n_obs)
+        throw std::runtime_error("b_obs must have shape (n_obs,) under the EK");
+    const double *bob = has_b ? b_obs_arr.data() : nullptr;
 
     py::array_t<std::complex<double>> M0({n_obs, n_seg});
     py::array_t<std::complex<double>> M1(
@@ -336,6 +353,7 @@ razor_seg_moments_impl(
             for (size_t p = p_lo; p < p_hi; p++) {
                 const double ox = ob(p, 0), oy = ob(p, 1), oz = ob(p, 2);
                 const int64_t gip = ek_on ? gi[p] : -1;
+                const double bp = has_b ? bob[p] : -1.0;
                 std::complex<double> *row0 = m0out + p * n_seg;
                 std::complex<double> *row1 = need_m1 ? m1out + p * n_seg : nullptr;
 
@@ -371,7 +389,8 @@ razor_seg_moments_impl(
                     const bool ek_pair = ek_on && gip >= 0 && gip == sgj[js];
                     double m0s, m1s;
                     if (ek_pair)
-                        razor_statics_ek(u_r, rho2, sh[js], saek[js], &m0s, &m1s);
+                        razor_statics_ek(u_r, rho2, sh[js], saek[js],
+                                         bp < 0.0 ? saek[js] : bp, &m0s, &m1s);
                     else
                         razor_statics_reduced(u_r, rho2, sh[js], &m0s, &m1s);
 
@@ -453,7 +472,9 @@ razor_seg_moments_impl(
                         // and in the pre-D4 order, R unfused as before.
                         const double ae = saek[js];
                         const double a2 = ae * ae;
-                        const double a4 = a2 * a2;
+                        const double be = bp < 0.0 ? ae : bp;
+                        const double b2 = be * be;
+                        const double a4 = b2 * a2;
                         for (size_t q0 = 0; q0 < n_qp; q0 += RAZOR_CPLX_CHUNK) {
                             const size_t nq = std::min(RAZOR_CPLX_CHUNK, n_qp - q0);
                             for (size_t q = 0; q < nq; q++) {
@@ -467,7 +488,7 @@ razor_seg_moments_impl(
                                 const double r4 = r2 * r2;
                                 const double kr = k_re * R;
                                 const double t1 = 0.25 * a4 / r4;
-                                const double t2 = 0.5 * a2 / r2;
+                                const double t2 = 0.5 * b2 / r2;
                                 const double kri = k_im * R;
                                 const double kr2r = kr * kr - kri * kri;
                                 const double kr2i = 2.0 * kr * kri;
@@ -498,7 +519,9 @@ razor_seg_moments_impl(
                         // the complex-k branch is above.
                         const double ae = saek[js];
                         const double a2 = ae * ae;
-                        const double a4 = a2 * a2;
+                        const double be = bp < 0.0 ? ae : bp;
+                        const double b2 = be * be;
+                        const double a4 = b2 * a2;
                         for (size_t q = 0; q < n_qp; q++) {
                             const double u = tq[q] - u_r;
                             const double R = std::sqrt(u * u + rho2);
@@ -506,7 +529,7 @@ razor_seg_moments_impl(
                             const double r4 = r2 * r2;
                             const double kr = k_re * R;
                             const double t1 = 0.25 * a4 / r4;
-                            const double t2 = 0.5 * a2 / r2;
+                            const double t2 = 0.5 * b2 / r2;
                             const double kr2 = kr * kr;
                             // C1 = 1 + jkR, C2 = 3·C1 − (kR)²
                             const double c1r = 1.0, c1i = kr;
@@ -564,11 +587,12 @@ razor_seg_moments(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i, // (n_obs,) or ()
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j, // (n_seg,) or ()
     py::array_t<double, py::array::c_style | py::array::forcecast> a_ek,     // (n_seg,) or ()
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object b_obs = py::none()
 ) {
     return razor_seg_moments_impl<false>(
         obs, seg_p0, seg_t, seg_h, a, xg, wg,
-        k, 0.0, need_m1, group_i, group_j, a_ek, cancel_flag);
+        k, 0.0, need_m1, group_i, group_j, a_ek, cancel_flag, b_obs);
 }
 
 // The in-medium entry (momwire#796). Throws `std::invalid_argument` rather
@@ -590,7 +614,8 @@ razor_seg_moments_cplx(
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_i, // (n_obs,) or ()
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> group_j, // (n_seg,) or ()
     py::array_t<double, py::array::c_style | py::array::forcecast> a_ek,     // (n_seg,) or ()
-    uintptr_t cancel_flag = 0
+    uintptr_t cancel_flag = 0,
+    py::object b_obs = py::none()
 ) {
     if (k.imag() > 0.0) {
         throw std::invalid_argument(
@@ -601,7 +626,7 @@ razor_seg_moments_cplx(
     }
     return razor_seg_moments_impl<true>(
         obs, seg_p0, seg_t, seg_h, a, xg, wg,
-        k.real(), k.imag(), need_m1, group_i, group_j, a_ek, cancel_flag);
+        k.real(), k.imag(), need_m1, group_i, group_j, a_ek, cancel_flag, b_obs);
 }
 
 
@@ -1067,7 +1092,8 @@ void register_razor(py::module_ &m) {
           py::arg("obs"), py::arg("seg_p0"), py::arg("seg_t"), py::arg("seg_h"),
           py::arg("a"), py::arg("xg"), py::arg("wg"), py::arg("k"),
           py::arg("need_m1"), py::arg("group_i"), py::arg("group_j"),
-          py::arg("a_ek"), py::arg("cancel_flag") = 0);
+          py::arg("a_ek"), py::arg("cancel_flag") = 0,
+          py::arg("b_obs") = py::none());
 
     // momwire#796, on its OWN flag for the same reason `razor_fill_742` is:
     // a .so built before this lands exports the real-k kernel and not this,
@@ -1085,7 +1111,8 @@ void register_razor(py::module_ &m) {
           py::arg("obs"), py::arg("seg_p0"), py::arg("seg_t"), py::arg("seg_h"),
           py::arg("a"), py::arg("xg"), py::arg("wg"), py::arg("k"),
           py::arg("need_m1"), py::arg("group_i"), py::arg("group_j"),
-          py::arg("a_ek"), py::arg("cancel_flag") = 0);
+          py::arg("a_ek"), py::arg("cancel_flag") = 0,
+          py::arg("b_obs") = py::none());
 
     // Design D4's vector bracket, exported for its accuracy test alone
     // (tests/test_razor_cplx_brackets.py): e^{-jkR} - 1 at every R, through

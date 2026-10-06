@@ -462,46 +462,49 @@ def test_axis_groups_antiparallel_tangents_still_collinear():
     assert _partition(_ek_axis_groups(lo, hi, t, a)) == {frozenset({0, 1, 2, 3})}
 
 
-def test_axis_groups_radius_step_splits():
-    lo, hi, t, a = _straight(4, 0.01)
-    a[2:] = 0.02
-    assert _partition(_ek_axis_groups(lo, hi, t, a)) == {
-        frozenset({0, 1}),
-        frozenset({2, 3}),
-    }
-
-
-def test_axis_groups_radius_step_inside_nec_tolerance_does_not_split():
-    lo, hi, t, a = _straight(4, 0.01)
-    a[2:] = 0.01 * (1.0 + 5e-7)  # inside NEC's 1e-6 radius threshold
-    assert _partition(_ek_axis_groups(lo, hi, t, a)) == {frozenset({0, 1, 2, 3})}
-
-
-def test_axis_groups_bend_splits_into_two_arms():
+def _bend_geometry():
     lo_z, hi_z, t_z, a_z = _straight(2, 0.01)
     lo_x, hi_x, t_x, a_x = _straight(
         2, 0.01, origin=(0.0, 0.0, 2 * H), axis=(1.0, 0.0, 0.0)
     )
-    lo = np.vstack([lo_z, lo_x])
-    hi = np.vstack([hi_z, hi_x])
-    t = np.vstack([t_z, t_x])
-    a = np.concatenate([a_z, a_x])
-    assert _partition(_ek_axis_groups(lo, hi, t, a)) == {
-        frozenset({0, 1}),
-        frozenset({2, 3}),
-    }
+    return (
+        np.vstack([lo_z, lo_x]),
+        np.vstack([hi_z, hi_x]),
+        np.vstack([t_z, t_x]),
+        np.concatenate([a_z, a_x]),
+    )
 
 
-def test_axis_groups_parallel_but_offset_wires_are_not_coaxial():
+def _offset_parallel_geometry():
     lo_a, hi_a, t_a, a_a = _straight(2, 0.01)
     lo_b, hi_b, t_b, a_b = _straight(2, 0.01, origin=(1.0, 0.0, 0.0))
-    labels = _ek_axis_groups(
+    return (
         np.vstack([lo_a, lo_b]),
         np.vstack([hi_a, hi_b]),
         np.vstack([t_a, t_b]),
         np.concatenate([a_a, a_b]),
     )
-    assert _partition(labels) == {frozenset({0, 1}), frozenset({2, 3})}
+
+
+def _radius_step_geometry():
+    lo, hi, t, a = _straight(4, 0.01)
+    a[2:] = 0.02
+    return lo, hi, t, a
+
+
+@pytest.mark.parametrize(
+    "geometry",
+    [_radius_step_geometry, _bend_geometry, _offset_parallel_geometry],
+    ids=["radius step", "bend", "parallel but offset"],
+)
+def test_axis_groups_extend_every_pair_since_1368(geometry):
+    """momwire#1368: the coaxial-and-equal-radius rule switched kernel at the
+    first non-zero bend angle and the first radius ratio above 1, where
+    licensed NEC-4.2 and NEC-5 respond continuously. Every pair is extended
+    now — one label — and the radii enter the factor itself
+    (`_ek_factor`'s two-radius form)."""
+    lo, hi, t, a = geometry()
+    assert _partition(_ek_axis_groups(lo, hi, t, a)) == {frozenset(range(len(a)))}
 
 
 def test_axis_groups_collinear_wires_with_a_gap_are_one_group():
@@ -840,20 +843,19 @@ def _g6_pair(name):
 
 
 @pytest.mark.parametrize("name", list(_G6_DECKS))
-def test_g6_coaxial_labels_agree_with_nec_ind_codes(name):
+def test_g6_every_touching_pair_extends_whatever_nec2s_ind_code(name):
+    """momwire#1368: the pair rule used to reproduce NEC-2's per-end IND
+    codes at a touching pair (IND = 2 at a bend, a radius step or a K >= 3
+    junction declined). Licensed NEC-4.2 and NEC-5 are continuous through a
+    bend and a step, and the pair rule was not; every pair extends now,
+    whatever `SinusoidalSolver._ek_gating` (NEC-2's spelling, kept for sin)
+    says."""
     sin, gs, bsp, gb = _g6_pair(name)
-    ind = np.stack(sin._ek_gating(gs))  # (2, N): ind[end, seg]
     labels, _ = bsp._ek_axis_labels(gb, False)
     touching = _facing_ends(gs)
     assert touching, f"{name}: no shared endpoints — the deck proves nothing"
-    for i, ei, j, ej in touching:
-        nec_extends = ind[ei, i] != 2 and ind[ej, j] != 2
-        assert (labels[i] == labels[j]) == nec_extends, (
-            f"{name}: segs {i}(end{ei + 1}, IND={ind[ei, i]}) / "
-            f"{j}(end{ej + 1}, IND={ind[ej, j]}) — NEC "
-            f"{'extends' if nec_extends else 'declines'}, labels "
-            f"{labels[i]} vs {labels[j]}"
-        )
+    for i, _ei, j, _ej in touching:
+        assert labels[i] == labels[j], (name, i, j, labels)
 
 
 @pytest.mark.parametrize(
@@ -868,12 +870,11 @@ def test_g6_decks_nec_extends_everywhere_are_one_coaxial_group(name, every_end_e
     assert len(np.unique(labels)) == 1, f"{name}: labels {labels}"
 
 
-def test_g6_ground_contact_branch_matches_through_the_image():
-    """NEC's IND = 0 ground case is justified by "the image continues the wire
-    straight through", so the B-spline rule has to reproduce it on the
-    MIRRORED source geometry rather than on the real one — a vertical
-    monopole is coaxial with its own image and extends; a slanted contact
-    (NEC: IND = 2) is not and does not."""
+def test_g6_ground_contact_extends_against_the_image_vertical_or_slanted():
+    """A vertical monopole extends against its own image (NEC's IND = 0
+    ground branch) and, since momwire#1368, so does a slanted contact, which
+    NEC-2 marks IND = 2: the image block is extended pair by pair like any
+    other."""
     for wire, perpendicular in (
         (np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 2.5]]), True),
         (np.array([[0.0, 0.0, 0.0], [1.5, 0.0, 2.0]]), False),
@@ -889,19 +890,17 @@ def test_g6_ground_contact_branch_matches_through_the_image():
         sin = SinusoidalSolver(**kw)
         bsp = BSplineSolver(degree=2, extended_kernel=True, **kw)
         ind1, _ind2 = sin._ek_gating(sin._build_geometry())
-        # The ground-contact end is segment 0's end 1 on both decks.
+        # The ground-contact end is segment 0's end 1 on both decks; NEC-2's
+        # code still tells the two apart, momwire's rule no longer does.
         assert (ind1[0] == 0) == perpendicular, f"NEC IND1[0] = {ind1[0]}"
         real, image = bsp._ek_axis_labels(bsp._build_geometry(), True)
-        extends = bool((real[:, None] == image[None, :]).any())
-        assert extends == perpendicular, (
-            f"perpendicular={perpendicular}: real {real} vs image {image}"
-        )
+        assert (real[:, None] == image[None, :]).all(), (real, image)
 
 
-def test_g6_a_horizontal_wire_is_never_coaxial_with_its_own_image():
-    """The negative control for the joint real+image label scan. Two
-    INDEPENDENT scans would label the real run 0 and the image run 0 and
-    declare every real/image pair coaxial — wrong by twice the height."""
+def test_g6_a_horizontal_wire_extends_against_its_own_image():
+    """Before momwire#1368 the joint real+image scan kept a horizontal wire
+    and its image (parallel, offset by twice the height) reduced. Every pair
+    extends now; at that distance the factor is 1 + O(a²/h²)."""
     bsp = BSplineSolver(
         wires=[np.array([[-2.5, 0.0, 1.0], [2.5, 0.0, 1.0]])],
         n_per_edge_per_wire=[[6]],
@@ -912,7 +911,7 @@ def test_g6_a_horizontal_wire_is_never_coaxial_with_its_own_image():
         extended_kernel=True,
     )
     real, image = bsp._ek_axis_labels(bsp._build_geometry(), True)
-    assert not (real[:, None] == image[None, :]).any(), f"{real} vs {image}"
+    assert (real[:, None] == image[None, :]).all(), f"{real} vs {image}"
 
 
 # ----------------------------------------------------------------------
@@ -1542,33 +1541,16 @@ def _image_solver(cls, extended_kernel=True, **over):
 
 
 def _assert_mirrored_spec(ek, sim, rows=None, cols=None):
-    """The spec really is the JOINT real+image labelling of `_IMAGE_DECK`.
-
-    A free-space spec (`mirror=False`) would pass a naive "is not None"
-    check and even a "the monopole extends" check, because there group_i is
-    group_j — but it would ALSO mark the horizontal wire eligible against
-    its own image, which is wrong by twice the height. Both halves are
-    asserted, so only the mirrored spec survives.
-    """
+    """The image fill got an EK spec, and it extends every real/image pair
+    (momwire#1368: the monopole against its own image as before, and now
+    the horizontal wire against its own too). `sim`, `rows` and `cols` are
+    kept for the callers' sake."""
+    del sim, rows, cols
     assert ek is not None, "the image fill got no EK spec"
     gi = np.asarray(ek.group_i)
     gj = np.asarray(ek.group_j)
     mask = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
-    n_mono = _IMAGE_DECK["n_per_edge_per_wire"][0][0]
-    seg_rows = np.arange(sim._build_geometry()["n_segs_total"])
-    r = seg_rows if rows is None else np.asarray(rows)
-    c = seg_rows if cols is None else np.asarray(cols)
-    mono_r, mono_c = r < n_mono, c < n_mono
-    if mono_r.any() and mono_c.any():
-        assert mask[np.ix_(mono_r, mono_c)].all(), (
-            "the vertical monopole must extend against its own image "
-            "(NEC's IND = 0 ground-contact branch)"
-        )
-    if (~mono_r).any() and (~mono_c).any():
-        assert not mask[np.ix_(~mono_r, ~mono_c)].any(), (
-            "the horizontal wire is parallel to its image, not coaxial — a "
-            "free-space (mirror=False) spec would wrongly extend it"
-        )
+    assert mask.all(), "every real/image pair extends since momwire#1368"
 
 
 @pytest.fixture
@@ -4074,12 +4056,8 @@ def test_u3_fused_offedge_block_image_labels_match_the_joint_spec(monkeypatch):
     mask = (group_i[:, None] == group_j[None, :]) & (group_i[:, None] >= 0)
     n_mono = _IMAGE_DECK["n_per_edge_per_wire"][0][0]
     mono = np.arange(mask.shape[0]) < n_mono
-    assert mask[np.ix_(mono, mono)].all(), (
-        "the monopole must extend to its own image (NEC's IND=0 branch)"
-    )
-    assert not mask[np.ix_(~mono, ~mono)].any(), (
-        "the horizontal wire must NOT extend to its own image"
-    )
+    assert mono.any() and (~mono).any()
+    assert mask.all(), "every real/image pair extends since momwire#1368"
 
 
 # ----------------------------------------------------------------------

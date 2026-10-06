@@ -272,9 +272,14 @@ the twin it always was; the two statements do not compete, they partition
 the domain by a/λ.
 
 **The eligibility rule is the shared one and is not re-derived here.**
-`_bspline_kernels._ek_axis_groups` labels two segments alike iff they are
-COAXIAL and of EQUAL RADIUS, on NEC's own thresholds, and a PAIR is extended
-iff its two labels match. That is the B-spline trunk's rule rather than
+`_bspline_kernels._ek_axis_groups` labels every segment alike since
+momwire#1368, so EVERY pair is extended, and a PAIR is extended iff its two
+labels match. Unequal radii take NEC Eq 89's two-radius factor in its
+transposed spelling — razor's R is regularised by the SOURCE's radius, so
+the tube b is the OBSERVER's (`_EK.b_i`) — which tracks NEC-5's radius-step
+response to its print resolution (#1368; before it the rule extended only
+coaxial equal-radius pairs and Z jumped at the first bend angle and radius
+ratio). That is the B-spline trunk's rule rather than
 `SinusoidalSolver`'s per-END IND1/IND2 gating, and the reason is that this
 formulation is mixed-potential: its rows are path integrals over arbitrary
 (observer point, source segment) pairs, not per-end brackets, so the pair
@@ -305,11 +310,11 @@ wing segments, so each half's quadrature points inherit that wing's label.
   the mirrored source is coaxial with the observer — which for the vertical
   contact that motivates the basis it is. The contact case needed no branch
   because the mirror policy already covers it.
-* **per-wire radii.** EK eligibility is EQUAL-RADIUS pairwise, so the shared
-  rule handles a taper by refusing to extend ACROSS a radius step while
-  extending within each section. That is strictly more conservative than
-  NEC, which still extends some cross-arm pairs at an `IND = 2` step
-  (#249 §4.3, O(h) in the refinement limit) — and it is visible as the one
+* **per-wire radii.** Since momwire#1368 every pair extends across a radius
+  step too, with the two-radius factor. (Before it, the rule refused to
+  extend ACROSS a step — strictly more conservative than NEC, which still
+  extends some cross-arm pairs at an `IND = 2` step — and that was visible
+  as the one
   place the fat-wire constancy is not quite as sharp: on Ward's 10-step
   taper the same EK twin lane holds the 0.05 Ω bar to Δ/a ≳ 3 and runs
   1.6× over it (dX) at Δ/a = 2.1, against the uniform `fat` control's 0.021.
@@ -1103,6 +1108,9 @@ class _FusedMoments:
         "group_i",
         "group_j",
         "a_ek",
+        # momwire#1368: Eq 89's source tube b per OBSERVER (razor's
+        # transposed two-radius spelling), or empty for b = a_ek.
+        "b_obs",
         "xg",
         "wg",
         # The complex-k fallback's memo (momwire#796). Deliberately the ONLY
@@ -1131,12 +1139,20 @@ class _FusedMoments:
             self.group_i = self._EMPTY_I64
             self.group_j = self._EMPTY_I64
             self.a_ek = self._EMPTY_F64
+            self.b_obs = self._EMPTY_F64
         else:
             self.group_i = np.ascontiguousarray(ek.group_i, dtype=np.int64)
             self.group_j = np.ascontiguousarray(ek.group_j, dtype=np.int64)
             self.a_ek = np.broadcast_to(
                 np.asarray(_ek_radius(ek, self.a), dtype=float), (n_seg,)
             ).copy()
+            self.b_obs = (
+                self._EMPTY_F64
+                if ek.b_i is None
+                else np.broadcast_to(
+                    np.asarray(ek.b_i, dtype=float), (obs.shape[0],)
+                ).copy()
+            )
         self.xg, self.wg = leggauss(n_qp_source)
         self._numpy = None
 
@@ -1157,7 +1173,12 @@ class _FusedMoments:
         if self._numpy is None:
             ek = None
             if self.group_i.size and self.group_j.size:
-                ek = _EK(a=self.a_ek, group_i=self.group_i, group_j=self.group_j)
+                ek = _EK(
+                    a=self.a_ek,
+                    group_i=self.group_i,
+                    group_j=self.group_j,
+                    b_i=self.b_obs if self.b_obs.size else None,
+                )
             geom = {
                 "seg_p0": self.seg_p0,
                 "seg_t": self.seg_t,
@@ -1177,6 +1198,8 @@ class _FusedMoments:
         sub.obs = self.obs[idx]
         if self.group_i.size:
             sub.group_i = self.group_i[idx]
+        if self.b_obs.size:
+            sub.b_obs = self.b_obs[idx]
         sub._numpy = None
         return sub
 
@@ -1195,6 +1218,8 @@ class _FusedMoments:
         sub.obs = self.obs[r0:r1]
         if self.group_i.size:
             sub.group_i = self.group_i[r0:r1]
+        if self.b_obs.size:
+            sub.b_obs = self.b_obs[r0:r1]
         sub._numpy = None
         return sub
 
@@ -1235,6 +1260,7 @@ class _FusedMoments:
             self.group_j,
             self.a_ek,
             solver._cancel_flag,
+            self.b_obs,
         )
         return M0, (M1 if need_m1 else None)
 
@@ -2823,9 +2849,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     def _ek_labels(self, geom, mirror=False):
         """Per-segment EK eligibility labels, as ``(source, mirrored source)``.
 
-        The shared rule and nothing else: `_ek_axis_groups` labels two
-        segments alike iff they are COAXIAL and of EQUAL RADIUS, on NEC's own
-        thresholds. This solver does not re-derive it and does not soften it
+        The shared rule and nothing else: `_ek_axis_groups` labels every
+        segment alike since momwire#1368, so every pair is extended (it used
+        to label two segments alike iff COAXIAL and of EQUAL RADIUS). This
+        solver does not re-derive it and does not soften it
         — in particular it does NOT reuse `SinusoidalSolver`'s per-END
         IND1/IND2 gating, which is the sinusoidal family's spelling of the
         same NEC rule against per-segment neighbour tables. Razor is
@@ -3028,7 +3055,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     n_seg,
                 )
                 a_ek = _ek_radius(ek, a)
-                m0e, m1e = _static_axis_moments_ek(u_r, rho2, seg_h, a_ek)
+                # Eq 89's source tube b, per OBSERVER here (momwire#1368):
+                # razor's R is regularised by the source's radius, so it
+                # takes the two-radius factor transposed.
+                b_ek = None if ek.b_i is None else np.asarray(ek.b_i)[lo:hi, None]
+                m0e, m1e = _static_axis_moments_ek(u_r, rho2, seg_h, a_ek, b=b_ek)
                 if mask.all():
                     # Eligibility is GEOMETRY, so "every pair of this chunk
                     # extends" — a straight uniform wire, and the fat twin
@@ -3040,7 +3071,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 else:
                     m0s = np.where(mask, m0e, m0s)
                     m1s = np.where(mask, m1e, m1s)
-                ekc = (mask, a_ek)
+                ekc = (mask, a_ek, b_ek)
             u = tau[None, :, :] - u_r[:, :, None]
             R = np.sqrt(u * u + rho2[:, :, None])
             chunks.append((lo, hi, R, m0s, m1s, ekc))
@@ -3097,7 +3128,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             if ekc is None:
                 rem = _expm1_neg_jkR(k, R) / R
             else:
-                mask, a_ek = ekc
+                mask, a_ek, b_ek = ekc
                 num = _expm1_neg_jkR(k, R)
                 scalar_a = np.ndim(a_ek) == 0
                 if mask is None:
@@ -3106,7 +3137,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     # gathered branch — same operands in the same order, only
                     # the broadcast shape of `a` differs.
                     a_m = a_ek if scalar_a else np.asarray(a_ek)[None, :, None]
-                    num = num * _ek_factor(R, a_m, k) + _ek_reg_extra(R, a_m, k)
+                    b_m = None if b_ek is None else b_ek[:, :, None]
+                    num = num * _ek_factor(R, a_m, k, b_m) + _ek_reg_extra(
+                        R, a_m, k, b_m
+                    )
                 else:
                     Rm = R[mask]
                     a_m = (
@@ -3116,8 +3150,13 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                             mask
                         ][:, None]
                     )
-                    num[mask] = num[mask] * _ek_factor(Rm, a_m, k) + _ek_reg_extra(
-                        Rm, a_m, k
+                    b_m = (
+                        None
+                        if b_ek is None
+                        else np.broadcast_to(b_ek, mask.shape)[mask][:, None]
+                    )
+                    num[mask] = num[mask] * _ek_factor(Rm, a_m, k, b_m) + _ek_reg_extra(
+                        Rm, a_m, k, b_m
                     )
                 rem = num / R
             M0[lo:hi] = (m0s + np.einsum("psq,sq->ps", rem, wq)) * inv4pi
@@ -3801,8 +3840,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Centroid i lies on segment i, so the centroid observers' labels ARE
         # the segment labels.
         cent = geom["seg_p0"] + 0.5 * seg_h[:, None] * seg_t
-        ek_cent = None if src_lab is None else _EK(None, src_lab, src_lab)
-        ek_cent_img = None if img_lab is None else _EK(None, src_lab, img_lab)
+        # Eq 89's source tube b per OBSERVER (momwire#1368, razor's transposed
+        # two-radius spelling): the radius of the segment the observer lies
+        # on. None on a uniform-radius mesh, where b = a on every pair.
+        obs_rad = None
+        if src_lab is not None:
+            seg_rad = np.asarray(self._seg_radius(geom), dtype=float)
+            obs_rad = None if np.all(seg_rad == seg_rad[0]) else seg_rad
+        ek_cent = None if src_lab is None else _EK(None, src_lab, src_lab, obs_rad)
+        ek_cent_img = None if img_lab is None else _EK(None, src_lab, img_lab, obs_rad)
         t2_chunks = self._seg_moments_prepare(cent, geom, a_src, ek=ek_cent)
 
         # --- the CHOPPED rows' second observation set: the knot itself
@@ -3879,13 +3925,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Each path point's EK label is the label of the wing segment it lies
         # on, in the same flattening the observers themselves take.
         path_lab = None if src_lab is None else self._ek_obs_labels_path(geom, src_lab)
+        path_rad = None if obs_rad is None else self._ek_obs_labels_path(geom, obs_rad)
         t1_row_chunks = []
         t1_row_chunks_img = [] if img_src is not None else None
         for lo in range(0, n_basis, rows):
             hi = min(lo + rows, n_basis)
             obs = pts[lo:hi].reshape(-1, 3)
             o_lab = None if path_lab is None else path_lab[lo * n_path : hi * n_path]
-            ek_path = None if o_lab is None else _EK(None, o_lab, src_lab)
+            o_rad = None if path_rad is None else path_rad[lo * n_path : hi * n_path]
+            ek_path = None if o_lab is None else _EK(None, o_lab, src_lab, o_rad)
             t1_row_chunks.append(
                 (
                     lo,
@@ -3895,7 +3943,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
             )
             if img_src is not None:
-                ek_path_img = None if img_lab is None else _EK(None, o_lab, img_lab)
+                ek_path_img = (
+                    None if img_lab is None else _EK(None, o_lab, img_lab, o_rad)
+                )
                 t1_row_chunks_img.append(
                     (
                         lo,

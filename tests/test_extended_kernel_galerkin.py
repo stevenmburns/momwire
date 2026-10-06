@@ -2747,9 +2747,10 @@ def _gd_decks(radius):
     }
 
 
-def _gd_shift(name, radius, cls=SinusoidalGalerkinSolver):
+def _gd_shift(name, radius, cls=SinusoidalGalerkinSolver, **extra):
     kw = dict(_gd_decks(radius)[name], feed_arclength=1.0, wavelength=_GD_LAM)
     kw["feed_model"] = "segment"  # held; see `_ladder_deck` (momwire#654)
+    kw.update(extra)
     if cls is BSplineSolver:
         kw.update(degree=2)
     off, _ = cls(**kw).compute_impedance()
@@ -3060,9 +3061,13 @@ def test_gd6_without_the_correction_these_decks_still_diverge(name):
     defect back. δZ must GROW from a = 0.02 to a = 0.002, by 2x on the L and
     the T ("radius step" grew 2.2x the same way, from the numbers on main,
     but the deck no longer runs under EK at all — momwire#398 D2)."""
+    # The DIRECT fill: the correction is that fill's (momwire#1368 sends a
+    # default EK solve to the mixed-potential fill, which extends every pair
+    # and needs no correction — the same deck there shrinks from 0.90 to
+    # 0.06 ohm on the L and from 1.05 to 0.07 on the T over this ladder).
     with _without_the_299_bracket_correction():
-        fat = abs(_gd_shift(name, 0.02))
-        thin = abs(_gd_shift(name, 0.002))
+        fat = abs(_gd_shift(name, 0.02, fill="direct"))
+        thin = abs(_gd_shift(name, 0.002, fill="direct"))
     assert thin > 1.5 * fat, f"{name}: {fat:.3f} → {thin:.3f}"
 
 

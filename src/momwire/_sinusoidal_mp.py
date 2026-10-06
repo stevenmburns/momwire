@@ -130,9 +130,10 @@ def pair_moments_product(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, t01, w01, ek
     """Numpy reference of the product-rule pair moments on ONE rule:
     J[p, q, i, j] = sum_ab w_a w_b S_p(xi_a) S_q(xi'_b) G(R_ab), with
     G = exp(-jkR) / (4 pi R), R^2 = |r_a - r'_b|^2 + a2, on every (i, j).
-    `a2` is a scalar or per-row (N_i,). `ek = (group_i, group_j, a_ek)` puts
-    NEC Eq 89's coaxial factor on G for the pairs whose labels match
-    (momwire#1362)."""
+    `a2` is a scalar or per-row (N_i,). `ek = (group_i, group_j, a_ek[, b_j])`
+    puts NEC Eq 89's factor on G for the pairs whose labels match
+    (momwire#1362): ρ = `a_ek`, the observer's radius, and the source tube
+    `b_j` per source segment (None or absent: b = a_ek; momwire#1368)."""
     seg_l_i, seg_r_i = np.asarray(seg_l_i, float), np.asarray(seg_r_i, float)
     seg_l_j, seg_r_j = np.asarray(seg_l_j, float), np.asarray(seg_r_j, float)
     len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
@@ -151,12 +152,14 @@ def pair_moments_product(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, t01, w01, ek
     R = np.sqrt((diff * diff).sum(-1) + a2b)
     G = np.exp(-1j * k * R) / (4 * np.pi * R)
     if ek is not None:
-        from ._bspline_kernels import _ek_factor
+        from ._bspline_kernels import _ek_factor_floored as _ek_factor
 
-        gi, gj, a_ek = ek
+        gi, gj, a_ek = ek[:3]
+        b_j = ek[3] if len(ek) > 3 else None
+        b = None if b_j is None else np.asarray(b_j, float)[None, None, :, None]
         gi, gj = np.asarray(gi), np.asarray(gj)
         elig = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
-        G = np.where(elig[:, None, :, None], G * _ek_factor(R, a_ek, k), G)
+        G = np.where(elig[:, None, :, None], G * _ek_factor(R, a_ek, k, b), G)
     return np.einsum("piq,iqjr,Pjr->pPij", ws_i, G, ws_j)
 
 
@@ -180,7 +183,8 @@ def pair_moments_tiered(
             from ._bspline_kernels import _ladder_arrays
 
             tier_t, tier_w, tier_n, tier_r = _ladder_arrays(n_qp, ladder)
-            gi, gj, a_ek = ek
+            gi, gj, a_ek = ek[:3]
+            b_j = ek[3] if len(ek) > 3 else None
             return _acc.seg_seg_full_moments_sinusoidal_tiered_ek(
                 np.ascontiguousarray(seg_l_i),
                 np.ascontiguousarray(seg_r_i),
@@ -195,6 +199,7 @@ def pair_moments_tiered(
                 np.ascontiguousarray(gi, dtype=np.int64),
                 np.ascontiguousarray(gj, dtype=np.int64),
                 float(a_ek),
+                None if b_j is None else np.ascontiguousarray(b_j, dtype=float),
             )
         return _pair_moments_tiered_numpy(
             seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, n_qp, ladder, ek=ek
@@ -297,6 +302,7 @@ def parallel_pair_moments(
     n_t=PARALLEL_N_T,
     n_xi=PARALLEL_N_XI,
     a_ek=None,
+    b_ek=None,
 ):
     """Exact (to quadrature) moments of PARALLEL pairs, (3, 3, n_pairs).
 
@@ -324,7 +330,9 @@ def parallel_pair_moments(
     the extended kernel does not reach the pair (momwire#1362): NEC Eq 89's
     coaxial factor multiplies G inside the t integral, a function of
     R = rho cosh t that is smooth there (its a^2 / R^2 and a^4 / R^4 terms
-    are bounded by rho >= a), so the same rule serves it.
+    are bounded by rho >= a), so the same rule serves it. `b_ek` (n,) is the
+    source tube's radius per pair (momwire#1368's two-radius factor; None:
+    b = a_ek).
     """
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
@@ -347,9 +355,10 @@ def parallel_pair_moments(
             np.ascontiguousarray(gx),
             np.ascontiguousarray(gwx),
             None if a_ek is None else np.ascontiguousarray(a_ek, dtype=float),
+            None if b_ek is None else np.ascontiguousarray(b_ek, dtype=float),
         )
     return _parallel_pair_moments_numpy(
-        c_i, t_i, h_i, c_j, t_j, h_j, a2, k, n_t=n_t, n_xi=n_xi, a_ek=a_ek
+        c_i, t_i, h_i, c_j, t_j, h_j, a2, k, n_t=n_t, n_xi=n_xi, a_ek=a_ek, b_ek=b_ek
     )
 
 
@@ -366,6 +375,7 @@ def _parallel_pair_moments_numpy(
     n_t=PARALLEL_N_T,
     n_xi=PARALLEL_N_XI,
     a_ek=None,
+    b_ek=None,
 ):
     """The numpy reference of `parallel_pair_moments`, in pair batches."""
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
@@ -391,6 +401,7 @@ def _parallel_pair_moments_numpy(
                 n_t=n_t,
                 n_xi=n_xi,
                 a_ek=None if a_ek is None else np.asarray(a_ek)[sl],
+                b_ek=None if b_ek is None else np.asarray(b_ek)[sl],
             )
         return out
     s = np.sign(np.einsum("ij,ij->i", t_i, t_j))
@@ -424,10 +435,11 @@ def _parallel_pair_moments_numpy(
         # G d delta = exp(-jkR) / (4 pi R) . R dt
         Gdt = np.exp(-1j * k * R) / (4 * np.pi) * w_t
         if a_ek is not None:
-            from ._bspline_kernels import _ek_factor
+            from ._bspline_kernels import _ek_factor_floored as _ek_factor
 
             ae = np.asarray(a_ek, float)[:, None]
-            Gdt = np.where(ae > 0.0, Gdt * _ek_factor(R, ae, k), Gdt)
+            be = None if b_ek is None else np.asarray(b_ek, float)[:, None]
+            Gdt = np.where(ae > 0.0, Gdt * _ek_factor(R, ae, k, be), Gdt)
         beta = d_par[:, None] - delta  # xi' = s xi + beta
         # Omega(delta) = [lo, hi] in xi: xi' = s xi + beta inside [-h_j/2, h_j/2].
         lo = np.where(
@@ -490,10 +502,12 @@ def near_pair_moments(
     does not touch takes the `NEAR_N_QP` product rule; a parallel pair the
     one-dimensional reduction.
 
-    `ek = (group_i, group_j)` (momwire#1362): the label-matched pairs take
-    the extended kernel, at the row's radius. Matching labels mean coaxial
-    (`_bspline_kernels._ek_axis_groups`), so every such pair is a PARALLEL
-    one and only the one-dimensional reduction ever carries the factor."""
+    `ek = (group_i, group_j[, b_j])` (momwire#1362): the label-matched
+    pairs take the extended kernel, ρ the row's radius and the source tube
+    `b_j` per source segment (momwire#1368; absent: b = ρ). Since #1368 every
+    pair matches (`_bspline_kernels._ek_axis_groups`), so every rule below
+    carries the factor: the parallel reduction inside its t integral, the
+    graded and product rules on G at their nodes."""
     c_i, c_j = np.asarray(c_i, float), np.asarray(c_j, float)
     t_i, t_j = np.asarray(t_i, float), np.asarray(t_j, float)
     h_i, h_j = np.asarray(h_i, float), np.asarray(h_j, float)
@@ -502,16 +516,19 @@ def near_pair_moments(
     ii, jj, parallel, touching, end_i, end_j = pairs
     a2_row = np.broadcast_to(np.asarray(a2, float), (c_i.shape[0],))
     J = np.zeros((N_SHAPES, N_SHAPES, ii.shape[0]), dtype=np.complex128)
+    b_pair = None
     if ek is not None:
-        gi, gj = (np.asarray(g) for g in ek)
+        gi, gj = np.asarray(ek[0]), np.asarray(ek[1])
         elig = (gi[ii] == gj[jj]) & (gi[ii] >= 0)
-        if (elig & ~parallel).any():
-            raise AssertionError("an extended-kernel pair must be coaxial")
+        b_j = ek[2] if len(ek) > 2 else None
+        if b_j is not None:
+            b_pair = np.asarray(b_j, float)[jj]
     if parallel.any():
         p = parallel
-        a_ek = None
+        a_ek = b_ek = None
         if ek is not None:
             a_ek = np.where(elig[p], np.sqrt(a2_row[ii[p]]), 0.0)
+            b_ek = None if b_pair is None else b_pair[p]
         J[:, :, p] = parallel_pair_moments(
             c_i[ii[p]],
             t_i[ii[p]],
@@ -522,6 +539,7 @@ def near_pair_moments(
             a2_row[ii[p]],
             k,
             a_ek=a_ek,
+            b_ek=b_ek,
         )
     rest = ~parallel
     if not rest.any():
@@ -555,15 +573,29 @@ def near_pair_moments(
             ti, wi = graded_endpoint_rule01(key[2], GRADED_N_PER_PANEL, key[0])
             tj, wj = graded_endpoint_rule01(key[3], GRADED_N_PER_PANEL, key[1])
         gi, gj = ii[group], jj[group]
+        ek_g = None
+        if ek is not None:
+            ek_g = (elig[group], None if b_pair is None else b_pair[group])
         J[:, :, group] = _pair_moments_two_rules_batch(
-            sl_i[gi], sr_i[gi], sl_j[gj], sr_j[gj], a2_row[gi], k, ti, wi, tj, wj
+            sl_i[gi],
+            sr_i[gi],
+            sl_j[gj],
+            sr_j[gj],
+            a2_row[gi],
+            k,
+            ti,
+            wi,
+            tj,
+            wj,
+            ek=ek_g,
         )
     return ii, jj, J
 
 
-def _pair_moments_two_rules_batch(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj):
+def _pair_moments_two_rules_batch(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj, ek=None):
     """Product-rule moments of a batch of pairs sharing the two rules:
-    (3, 3, n_pairs)."""
+    (3, 3, n_pairs). `ek = (eligible (n,), b (n,) or None)` takes the
+    extended kernel on the eligible pairs, ρ = √a2 (momwire#1368)."""
     len_i = np.linalg.norm(r_i - l_i, axis=1)
     len_j = np.linalg.norm(r_j - l_j, axis=1)
     pos_i = (1 - ti)[None, :, None] * l_i[:, None, :] + ti[None, :, None] * r_i[
@@ -581,6 +613,13 @@ def _pair_moments_two_rules_batch(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj):
     diff = pos_i[:, :, None, :] - pos_j[:, None, :, :]
     R = np.sqrt((diff * diff).sum(-1) + np.asarray(a2)[:, None, None])
     G = np.exp(-1j * k * R) / (4 * np.pi * R)  # (n, qi, qj)
+    if ek is not None:
+        from ._bspline_kernels import _ek_factor_floored as _ek_factor
+
+        elig, b = ek
+        rho = np.sqrt(np.asarray(a2, float))[:, None, None]
+        bb = None if b is None else np.asarray(b, float)[:, None, None]
+        G = np.where(np.asarray(elig)[:, None, None], G * _ek_factor(R, rho, k, bb), G)
     return np.einsum("pnq,nqr,Pnr->pPn", ws_i, G, ws_j)
 
 
@@ -790,8 +829,10 @@ class WindowFill:
     ):
         """`obs_idx` / `src_idx` are the GLOBAL segment ids of the observer
         and source lists (a class block of a mixed deck); default identity.
-        `ek = (group_obs, group_src)`, aligned with the two lists, takes the
-        extended kernel on the label-matched pairs (momwire#1362)."""
+        `ek = (group_obs, group_src[, b_src])`, aligned with the two lists,
+        takes the extended kernel on the label-matched pairs (momwire#1362),
+        with Eq 89's source tube `b_src` per source (momwire#1368; absent or
+        None: b = the observer's radius)."""
         obs_c, obs_t = np.asarray(obs_c, float), np.asarray(obs_t, float)
         src_c, src_t = np.asarray(src_c, float), np.asarray(src_t, float)
         obs_h, src_h = np.asarray(obs_h, float), np.asarray(src_h, float)
@@ -814,7 +855,7 @@ class WindowFill:
             if self.checkpoint is not None:
                 self.checkpoint()
             i1 = min(i0 + rows, n_obs)
-            ek_win = None if ek is None else (ek[0][i0:i1], ek[1])
+            ek_win = None if ek is None else (ek[0][i0:i1],) + tuple(ek[1:])
             J = self._window_moments(sl_o, sr_o, sl_s, sr_s, a_row, i0, i1, ek_win)
             ii, jj, Jn = near_pair_moments(
                 obs_c[i0:i1],
@@ -857,7 +898,8 @@ class WindowFill:
         def run_ek(s, e):
             if ek is None:
                 return None
-            return (ek[0][s:e], ek[1], float(a[s]))
+            b_src = ek[2] if len(ek) > 2 else None
+            return (ek[0][s:e], ek[1], float(a[s]), b_src)
 
         if bounds.size == 0:
             return pair_moments_tiered(
