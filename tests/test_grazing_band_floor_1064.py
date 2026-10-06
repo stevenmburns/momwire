@@ -274,31 +274,35 @@ def test_both_dispatches_agree_across_the_floor_edge():
 
 
 @pytest.mark.slow
-def test_the_floor_band_interpolates_to_the_bar():
+@pytest.mark.nightly
+@pytest.mark.parametrize("soil, f", [(s, f) for s in SOILS for f in FREQS])
+def test_the_floor_band_interpolates_to_the_bar(soil, f):
     """The floor band against the direct surfaces, at cell midpoints and thirds
     of [floor, 0.05] deg: where the queries it can receive are, and where a
-    4-point stencil is at its worst."""
+    4-point stencil is at its worst.
+
+    NIGHTLY (momwire#1359): one cold fill of the floor band in all three zones
+    per deck, ~5 min a deck at one thread. The per-push gate is
+    `test_grazing_interp_units_1359.py`, on the stored nodes of the worst deck
+    (C, 7 MHz); this sweep is where a soil- or frequency-dependent regression
+    would show."""
     worst, where = 0.0, None
-    for soil in SOILS:
-        for f in FREQS:
-            g, eps_t, k2, om, lam_m = _grid(soil, f)
-            g._ensure_band_floor()
-            nodes = g._regions[RI(below._ZONE_INNER, below._BAND_FLOOR)]["th_nodes"][:3]
-            th_q = np.concatenate(
-                [nodes[:-1] + 0.5 * np.diff(nodes), nodes[:-1] + 0.33 * np.diff(nodes)]
-            )
-            for r1l in (0.2, 1.0, 1.9):
-                r1 = np.full(th_q.shape, r1l * lam_m)
-                got = g.eval(r1, th_q)
-                ref = below.iv_surfaces_direct_below(
-                    eps_t, k2, r1, th_q, rtol=1e-9, omega=om
-                )
-                for k in _SURF_KEYS:
-                    a = np.asarray(got[k], dtype=complex)
-                    b = np.asarray(ref[k], dtype=complex)
-                    rel = np.max(np.abs(a - b) / np.maximum(np.abs(b), 1e-300))
-                    if rel > worst:
-                        worst, where = rel, (soil, f, r1l, k)
+    g, eps_t, k2, om, lam_m = _grid(soil, f)
+    g._ensure_band_floor()
+    nodes = g._regions[RI(below._ZONE_INNER, below._BAND_FLOOR)]["th_nodes"][:3]
+    th_q = np.concatenate(
+        [nodes[:-1] + 0.5 * np.diff(nodes), nodes[:-1] + 0.33 * np.diff(nodes)]
+    )
+    for r1l in (0.2, 1.0, 1.9):
+        r1 = np.full(th_q.shape, r1l * lam_m)
+        got = g.eval(r1, th_q)
+        ref = below.iv_surfaces_direct_below(eps_t, k2, r1, th_q, rtol=1e-9, omega=om)
+        for k in _SURF_KEYS:
+            a = np.asarray(got[k], dtype=complex)
+            b = np.asarray(ref[k], dtype=complex)
+            rel = np.max(np.abs(a - b) / np.maximum(np.abs(b), 1e-300))
+            if rel > worst:
+                worst, where = rel, (r1l, k)
     assert worst < FLOOR_BAND_BAR, f"{worst:.3e} at {where}"
 
 

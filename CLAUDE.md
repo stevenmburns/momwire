@@ -40,6 +40,19 @@ Two consequences, and the second is the one that gets missed:
 The `changes.code` half also means a docs-only push to main skips all five,
 so their absence from a run is not evidence they passed.
 
+### `nightly`: whole-band sweeps that a stored-node unit test replaced
+
+`.github/workflows/nightly.yml` runs `pytest -m nightly` (`make nightly`) once
+a day when main moved, on every `v*` tag, and on dispatch. It holds the
+grazing-band "interpolates to the bar" sweeps (momwire#1359), whose per-push
+gate is `tests/test_grazing_interp_units_1359.py` reading stored nodes from
+`tests/fixtures/grazing_1359/`. When that file's `test_the_fixture_is_current`
+fails, the grid code the numbers depend on changed: run
+`python tests/fixtures/grazing_1359/regenerate.py` (about a minute), read the
+"moved vs the previous fixture" line it prints, and commit the `.npz` files.
+A `nightly` test is also `slow`, so no other lane runs it, and nothing waits
+on it before a merge -- dispatch it on a branch that changes the grid.
+
 ## Test duration and performance: what CI timing can and cannot tell you
 
 **CI wall time never gates.** GitHub's runners spread ~3x on the same code:

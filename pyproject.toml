@@ -225,6 +225,14 @@ markers = [
     # excludes them without edits; the test-slow lane subtracts them
     # explicitly and the crossgate lane selects them with `-m crossgate`.
     "crossgate: crossing-serve eps1 certification solves (merge-to-main lane)",
+    # Whole-band SWEEPS over soils x frequencies whose per-push question is
+    # answered by a unit test on stored nodes (momwire#1359): the grazing-band
+    # "interpolates to the bar" sweeps. Kept for what only the full sweep can
+    # show -- a soil- or frequency-dependent regression -- and run by
+    # .github/workflows/nightly.yml (daily when main moved, every `v*` tag, on
+    # dispatch). Also marked `slow`, as crossgate is, so every `not slow`
+    # spelling excludes them for free; test-slow subtracts them explicitly.
+    "nightly: full-sweep checks run daily and at release, not per push (nightly.yml)",
     # Certification gates on memory residency/budget — tracemalloc peaks and
     # byte-budget arithmetic checked against a live allocation (issue #400).
     # These earn their keep on merge to main, not on every PR iteration or

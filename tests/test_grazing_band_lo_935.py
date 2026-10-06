@@ -271,38 +271,39 @@ def test_the_old_domain_is_unmoved_by_the_new_band():
 
 
 @pytest.mark.slow
-def test_the_low_band_interpolates_to_the_bar():
+@pytest.mark.nightly
+@pytest.mark.parametrize("soil, f", [(s, f) for s in SOILS for f in FREQS])
+def test_the_low_band_interpolates_to_the_bar(soil, f):
     """The new band against the direct surfaces, at OFF-NODE points.
 
     On-node agreement is trivially exact and would measure nothing. The
     queries are deliberately at cell midpoints and thirds, i.e. where a
     4-point Lagrange stencil is at its worst.
+
+    NIGHTLY (momwire#1359): the per-push gate is
+    `test_grazing_interp_units_1359.py`, on the stored nodes of the worst deck.
     """
     worst, where = 0.0, None
-    for soil in SOILS:
-        for f in FREQS:
-            g, eps_t, k2, om, lam_m = _grid(soil, f)
-            g._ensure_band_lo()
-            nodes = _lo_nodes(g)
-            th_q = np.concatenate(
-                [
-                    nodes[:-1] + 0.5 * np.diff(nodes),
-                    nodes[:-1] + 0.33 * np.diff(nodes),
-                ]
-            )
-            for r1l in (0.2, 1.0, 1.9):
-                r1 = np.full(th_q.shape, r1l * lam_m)
-                got = g.eval(r1, th_q)
-                ref = below.iv_surfaces_direct_below(
-                    eps_t, k2, r1, th_q, rtol=1e-9, omega=om
-                )
-                for k in _SURF_KEYS:
-                    a = np.asarray(got[k], dtype=complex)
-                    b = np.asarray(ref[k], dtype=complex)
-                    scale = np.maximum(np.abs(b), 1e-300)
-                    rel = np.max(np.abs(a - b) / scale)
-                    if rel > worst:
-                        worst, where = rel, (soil, f, r1l, k)
+    g, eps_t, k2, om, lam_m = _grid(soil, f)
+    g._ensure_band_lo()
+    nodes = _lo_nodes(g)
+    th_q = np.concatenate(
+        [
+            nodes[:-1] + 0.5 * np.diff(nodes),
+            nodes[:-1] + 0.33 * np.diff(nodes),
+        ]
+    )
+    for r1l in (0.2, 1.0, 1.9):
+        r1 = np.full(th_q.shape, r1l * lam_m)
+        got = g.eval(r1, th_q)
+        ref = below.iv_surfaces_direct_below(eps_t, k2, r1, th_q, rtol=1e-9, omega=om)
+        for k in _SURF_KEYS:
+            a = np.asarray(got[k], dtype=complex)
+            b = np.asarray(ref[k], dtype=complex)
+            scale = np.maximum(np.abs(b), 1e-300)
+            rel = np.max(np.abs(a - b) / scale)
+            if rel > worst:
+                worst, where = rel, (r1l, k)
     assert worst < LO_BAND_BAR, f"{worst:.3e} at {where}"
 
 

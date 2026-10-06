@@ -225,7 +225,14 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(_pytest.mark.xdist_group("memgate"))
         elif item.path.name in _PORTAL_GROUP_FILES:
             item.add_marker(_pytest.mark.xdist_group("portal"))
-        elif item.path.name in _FIXTURE_GROUP_FILES:
+        elif (
+            item.path.name in _FIXTURE_GROUP_FILES
+            and item.get_closest_marker("nightly") is None
+        ):
+            # A `nightly` sweep (momwire#1359) is parametrized one deck per
+            # case and fills its own deck's bands, so the module fixture is
+            # not what it costs; grouped, its six decks queued on one worker
+            # (the floor band's sweep was a 27-minute single item that way).
             item.add_marker(_pytest.mark.xdist_group(item.path.stem))
         elif item.path.name in _EZNEC_CORPUS_GROUP_FILES:
             item.add_marker(_pytest.mark.xdist_group("eznec_corpus"))

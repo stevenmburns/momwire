@@ -43,6 +43,11 @@ import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+# The workflows whose pytest jobs a Makefile lane mirrors. nightly.yml holds
+# one lane (momwire#1359) and is its own file only so that its `schedule:`
+# trigger does not start ci.yml's untriggered PR jobs; its job is held to the
+# same contract.
+WORKFLOWS = (CI, ROOT / ".github" / "workflows" / "nightly.yml")
 MAKEFILE = ROOT / "Makefile"
 
 # Guard on the SOURCE-CHECKOUT marker only: in a wheel neither file exists
@@ -65,6 +70,7 @@ LANE_TO_JOB = {
     "slow": "test-slow",
     "crossgate": "test-crossgate",
     "memgate": "test-memgate",
+    "nightly": "test-nightly",
 }
 
 _PYTEST_LINE = re.compile(r"(?:^|\s)(pytest\s+.*?)\s*$")
@@ -72,9 +78,13 @@ _PYTEST_LINE = re.compile(r"(?:^|\s)(pytest\s+.*?)\s*$")
 
 def _ci_pytest_commands() -> dict[str, list[str]]:
     """job name -> every pytest command any of its run scalars execute."""
-    doc = yaml.safe_load(CI.read_text())
     out: dict[str, list[str]] = {}
-    for job_name, job in (doc.get("jobs") or {}).items():
+    jobs = {}
+    for wf in WORKFLOWS:
+        for job_name, job in (yaml.safe_load(wf.read_text()).get("jobs") or {}).items():
+            assert job_name not in jobs, f"job {job_name!r} is in two workflows"
+            jobs[job_name] = job
+    for job_name, job in jobs.items():
         for step in job.get("steps") or []:
             run = step.get("run")
             if not run:

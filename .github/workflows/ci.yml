@@ -370,7 +370,11 @@ jobs:
       # dump tap STAYS, because the next process-history leak will also be
       # runner-only and a failure that discards its own evidence costs a
       # whole CI cycle to learn nothing from.
-      - run: pytest tests/ -m "slow and not memgate and not crossgate"
+      #
+      # `not nightly`: the whole-band grazing sweeps (momwire#1359) run in
+      # nightly.yml -- daily when main moved, and on every release tag. Their
+      # per-push gate is the stored-node unit test in the default lane.
+      - run: pytest tests/ -m "slow and not memgate and not crossgate and not nightly"
         if: needs.changes.outputs.code == 'true'
         env:
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
