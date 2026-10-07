@@ -1055,6 +1055,25 @@ static py::array_t<int16_t> tile_per_row(
     return out;
 }
 
+
+// `values[flat % n]` for non-negative int64 flat positions (momwire#1377):
+// the plan's key z, `lzv[kf % nL]`, an element copy per key.
+static py::array_t<double> take_mod(py::array_t<double, py::array::c_style> values,
+                                    py::array_t<int64_t, py::array::c_style> flat, int64_t n) {
+    if (n <= 0 || values.size() != n) throw std::runtime_error("take_mod: one value per residue");
+    const py::ssize_t m = flat.size();
+    const int64_t *F = flat.data();
+    const double *V = values.data();
+    for (py::ssize_t i = 0; i < m; ++i)
+        if (F[i] < 0) throw std::runtime_error("take_mod: negative position");
+    py::array_t<double> out(m);
+    double *O = out.mutable_data();
+    py::gil_scoped_release nogil;
+#pragma omp parallel for schedule(static)
+    for (py::ssize_t i = 0; i < m; ++i) O[i] = V[F[i] % n];
+    return out;
+}
+
 }  // namespace left_gather
 
 void register_left_gather(py::module_ &m) {
@@ -1119,6 +1138,10 @@ void register_left_gather(py::module_ &m) {
           py::arg("rowflat"), py::arg("off"), py::arg("nz"), py::arg("nk"), py::arg("kids"),
           py::arg("tile_of_key"), py::arg("n_rows"));
     m.attr("tile_init_passes_1377") = true;
+    m.def("take_mod", &left_gather::take_mod,
+          "values[flat % n] for non-negative int64 positions. momwire#1377.",
+          py::arg("values"), py::arg("flat"), py::arg("n"));
+    m.attr("take_mod_1377") = true;
     m.def("left_products_gathered", &left_gather::left_products_gathered,
           "The crossing main sandwich's six left products (P1 U, P2 U, "
           "P3 (k2 V + dz'W), P3 W, P4 W, P4 V) of four (n_out, nA) CSR "
