@@ -282,3 +282,29 @@ def test_threaded_key_classes_do_not_move_the_inverted_l():
     ref, _r = pg._fill(_invl, **{"cf._KEY_CLASSES_THREADS": 1})
     got, _r = pg._fill(_invl, **{"cf._KEY_CLASSES_THREADS": 4})
     assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+# ---------------------------------------------------------------- kept positions
+@pytest.mark.skipif(
+    acc is None or not getattr(acc, "kept_positions_1377", False),
+    reason="accelerator without kept_positions",
+)
+def test_kept_positions_do_not_move_the_plan():
+    """The merge's grid positions by the kernel are the numpy spans'
+    integers (the plan's `kept_pos`, compared whole), and Z does not move."""
+    seen = {}
+    real = cf._merge_groups_z
+
+    def spy(*a, **k):
+        out = real(*a, **k)
+        seen.setdefault(cf._KEPT_POS_ACCEL, []).append(out[1].copy())
+        return out
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(cf, "_merge_groups_z", spy)
+        ref, _r = pg._fill(_invl, **{"cf._KEPT_POS_ACCEL": False})
+        got, _r = pg._fill(_invl)
+    assert len(seen[True]) == len(seen[False]) >= 1
+    for a, b in zip(seen[False], seen[True]):
+        assert a.dtype == b.dtype and np.array_equal(a, b)
+    assert np.array_equal(pg._bits(got), pg._bits(ref))

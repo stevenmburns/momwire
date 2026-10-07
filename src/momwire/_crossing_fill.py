@@ -2289,6 +2289,12 @@ _MERGE_BY_Z = True
 _HAVE_MERGE_BY_Z_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "merge_rows_by_z_1290", False)
 )
+# ...and its rows' grid positions in one C++ pass (`kept_positions`,
+# momwire#1377); False is the numpy spans, the reference (the same integers).
+_KEPT_POS_ACCEL = True
+_HAVE_KEPT_POS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "kept_positions_1377", False)
+)
 # The plan's key ids by `factorize_line_keys` (momwire#1335); False is
 # `_first_groups` over the raveled line and its broadcast z, the reference
 # (the same integers, ~1.1 GB more transient at razor's inverted L x32).
@@ -2414,12 +2420,22 @@ def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
     # inverted L x32's merge spike); the same integers.
     kcat = np.concatenate(kfirst)
     kept_pos = np.empty(blk.size, dtype=_index_dtype(int(a_s.max(initial=0)) * nB + nB))
-    step = 1 << 20
-    for c0 in range(0, blk.size, step):
-        _cancel.poll()
-        bb = blk[c0 : c0 + step]
-        b = kcat[koff[g_s[bb]] + j_first[c0 : c0 + step]]
-        kept_pos[c0 : c0 + step] = a_s[bb].astype(np.int64) * nB + b
+    if (
+        _KEPT_POS_ACCEL
+        and _HAVE_KEPT_POS_ACCEL
+        and blk.dtype == np.int32
+        and j_first.dtype == np.int32
+        and kcat.dtype == np.int32
+    ):
+        # The same integers in one pass (`kept_positions`, momwire#1377).
+        _accel.acc.kept_positions(blk, j_first, g_s, a_s, koff, kcat, int(nB), kept_pos)
+    else:
+        step = 1 << 20
+        for c0 in range(0, blk.size, step):
+            _cancel.poll()
+            bb = blk[c0 : c0 + step]
+            b = kcat[koff[g_s[bb]] + j_first[c0 : c0 + step]]
+            kept_pos[c0 : c0 + step] = a_s[bb].astype(np.int64) * nB + b
     del kcat
     rowtab = [
         rowflat[off[g] : off[g] + nz[g] * nk[g]].reshape(nz[g], nk[g])

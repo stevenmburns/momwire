@@ -779,6 +779,52 @@ static py::tuple stable_tile_order(py::array_t<int16_t, py::array::c_style> t_ro
                 : stable_tile_order_impl<int32_t>(t_row, n_tiles, cancel_flag);
 }
 
+// `_crossing_fill._merge_groups_z`'s rows' flat grid positions (momwire#1377):
+// row q first appears as candidate j_first[q] of walk block blk[q], whose
+// grouped node is a_s[blk] and whose group is g_s[blk], at line node
+// kcat[koff[g] + j_first[q]]; its position is a * nB + that node. The numpy
+// spelling's integers, without its per-span temporaries.
+template <class O>
+static void kept_positions_impl(py::array_t<int32_t, py::array::c_style> blk,
+                                py::array_t<int32_t, py::array::c_style> j_first,
+                                py::array_t<int64_t, py::array::c_style | py::array::forcecast> g_s,
+                                py::array_t<int64_t, py::array::c_style | py::array::forcecast> a_s,
+                                py::array_t<int64_t, py::array::c_style | py::array::forcecast> koff,
+                                py::array_t<int32_t, py::array::c_style> kcat, int64_t nB,
+                                py::array_t<O, py::array::c_style> out) {
+    const py::ssize_t n = blk.size(), nb = g_s.size(), nk = kcat.size();
+    if (j_first.size() != n || out.size() != n || a_s.size() != nb)
+        throw std::runtime_error("kept_positions: shapes");
+    const int32_t *Bk = blk.data(), *J = j_first.data(), *Kc = kcat.data();
+    const int64_t *G = g_s.data(), *A = a_s.data(), *Ko = koff.data();
+    const py::ssize_t ng = koff.size() - 1;
+    O *Out = out.mutable_data();
+    int bad = 0;
+    {
+        py::gil_scoped_release nogil;
+#pragma omp parallel for schedule(static) reduction(| : bad)
+        for (py::ssize_t q = 0; q < n; ++q) {
+            const int64_t b = Bk[q];
+            if (b < 0 || b >= nb) {
+                bad |= 1;
+                continue;
+            }
+            const int64_t g = G[b];
+            if (g < 0 || g >= ng) {
+                bad |= 1;
+                continue;
+            }
+            const int64_t f = Ko[g] + J[q];
+            if (J[q] < 0 || f >= Ko[g + 1] || f >= nk) {
+                bad |= 1;
+                continue;
+            }
+            Out[q] = static_cast<O>(A[b] * nB + static_cast<int64_t>(Kc[f]));
+        }
+    }
+    if (bad) throw std::runtime_error("kept_positions: index out of range");
+}
+
 // A persistent exact-equality index over the rows of 1-3 float64 columns:
 // `find(cols)` is, per query row, the index of the FIRST stored row equal to
 // it, or -1 (a NaN row is never stored and never found) -- the lookup of
@@ -1518,6 +1564,15 @@ void register_factorize(py::module_ &m) {
           py::arg("col"), py::arg("cancel_flag") = 0, py::arg("n_threads") = 1);
     m.attr("factorize_float_classes_1377") = true;
     m.attr("factorize_float_classes_par_1377") = true;
+    m.def("kept_positions", &factorize::kept_positions_impl<int32_t>,
+          "The multi-group merge's rows' flat grid positions a * nB + "
+          "kcat[koff[g] + j_first] into out. momwire#1377.",
+          py::arg("blk"), py::arg("j_first"), py::arg("g_s"), py::arg("a_s"),
+          py::arg("koff"), py::arg("kcat"), py::arg("nB"), py::arg("out"));
+    m.def("kept_positions", &factorize::kept_positions_impl<int64_t>, py::arg("blk"),
+          py::arg("j_first"), py::arg("g_s"), py::arg("a_s"), py::arg("koff"),
+          py::arg("kcat"), py::arg("nB"), py::arg("out"));
+    m.attr("kept_positions_1377") = true;
     m.def("stable_tile_order", &factorize::stable_tile_order,
           "(o, b): the stable argsort of an int16 tile per row (int64 when "
           "wide, else int32) and the tiles' bounds in it, by counting. "
