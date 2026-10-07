@@ -28,6 +28,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
+import statistics
 import subprocess
 import sys
 from collections import defaultdict
@@ -208,6 +210,24 @@ def fetch(repo: str, n_runs: int, cache: Path, workflows) -> list[Path]:
     return dirs
 
 
+def split_nodeid(nodeid: str) -> str:
+    """The id pytest-split matches: xdist's ``--dist loadgroup`` reports a
+    grouped test as ``<nodeid>@<group>``, while collection sees ``<nodeid>``."""
+    return re.sub(r"@[A-Za-z0-9_]+$", "", nodeid)
+
+
+def write_split(groups, job: str, path: Path) -> None:
+    tests = groups.get((job, "Linux"), {})
+    if not tests:
+        raise SystemExit(f"no {job}/Linux records to write a split file from")
+    med = {
+        split_nodeid(nodeid): round(statistics.median(st.samples), 3)
+        for nodeid, st in tests.items()
+    }
+    path.write_text(json.dumps(dict(sorted(med.items())), indent=1) + "\n")
+    print(f"wrote {len(med)} {job} medians to {path}", file=sys.stderr)
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument(
@@ -241,6 +261,19 @@ def main(argv=None) -> int:
         help=f"workflow file(s) to fetch (default {', '.join(WORKFLOWS)})",
     )
     ap.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    ap.add_argument(
+        "--write-split",
+        type=Path,
+        metavar="PATH",
+        help="also write {nodeid: median seconds} for --split-job's Linux "
+        "group to PATH, the durations file pytest-split reads to balance "
+        "ci.yml's test-slow shards (tests/slow_durations.json)",
+    )
+    ap.add_argument(
+        "--split-job",
+        default="test-slow",
+        help="job whose medians --write-split records (default test-slow)",
+    )
     a = ap.parse_args(argv)
 
     roots = (
@@ -251,6 +284,8 @@ def main(argv=None) -> int:
         print(f"no duration records under {[str(r) for r in roots]}", file=sys.stderr)
         return 1
     print(report(groups, a.budget, a.top, a.min_runs))
+    if a.write_split:
+        write_split(groups, a.split_job, a.write_split)
     return 0
 
 
