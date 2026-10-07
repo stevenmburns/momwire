@@ -1802,7 +1802,6 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
         const vd v_a2 = set1(a_squared);
         const vd v_t1n = set1(0.25 * a4_ek);
         const vd v_t2n = set1(0.5 * a2_ek);
-        const vd v_bek = set1(b_ek);
 
         #pragma omp parallel
         {
@@ -1857,17 +1856,17 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                 // any lane is eligible (computed for every lane; an
                 // ineligible lane's are never used).
                 const int64_t gi_i = grp_i[i];
-                bool e[LN];
+                int64_t e[LN];
                 bool any_e = false;
                 for (size_t l = 0; l < LN; l++) {
-                    e[l] = gi_i >= 0 && grp_j[j0 + l] == gi_i;
-                    any_e = any_e || e[l];
+                    const bool el = gi_i >= 0 && grp_j[j0 + l] == gi_i;
+                    e[l] = el ? -1 : 0;
+                    any_e = any_e || el;
                 }
-                const vm emask = mask_from(e);
                 if (any_e) {
                     for (size_t t = 0; t < m; t++) {
                         vd Rq = load(R + t * LN);
-                        if (ek_floor) Rq = max(Rq, v_bek);
+                        if (ek_floor) Rq = max(Rq, set1(b_ek));
                         const vd r2 = mul(Rq, Rq);
                         const vd r4 = mul(r2, r2);
                         store(t1v + t * LN, div(v_t1n, r4));
@@ -1894,11 +1893,17 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                         G_re[t] = cos_phases[t] * inv_R_4pi[t];
                         G_im[t] = sin_phases[t] * inv_R_4pi[t];
                     }
+                    // The eligibility mask and the floor are built here, per
+                    // k, and stage 2 runs as one loop over the parts: held
+                    // across the k loop (and stage 2 as two inlined passes)
+                    // the same arithmetic measured 4-15 % slower on Haswell
+                    // (momwire#1372).
                     if (any_e) {
+                        const vm emask = load_mask(e);
                         const vd v_k = set1(k);
                         for (size_t t = 0; t < m; t++) {
                             vd Rq = load(R + t * LN);
-                            if (ek_floor) Rq = max(Rq, v_bek);
+                            if (ek_floor) Rq = max(Rq, set1(b_ek));
                             ek_factor(G_re + t * LN, G_im + t * LN,
                                       load(t1v + t * LN), load(t2v + t * LN),
                                       mul(v_k, Rq), emask);
@@ -1907,14 +1912,18 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
 
                     // Stage 2: real and imaginary sums in separate passes;
                     // `phases` holds the real sums once its points are spent.
-                    vd acc[NMM];
-                    stage2<NMM>(G_re, wv, m, acc);
-                    for (int pP = 0; pP < NMM; pP++) store(phases + pP * LN, acc[pP]);
-                    stage2<NMM>(G_im, wv, m, acc);
-                    for (int pP = 0; pP < NMM; pP++) {
-                        store_interleaved(
-                            reinterpret_cast<double *>(&j_view(kk, pP / NM, pP % NM, i, j0)),
-                            load(phases + pP * LN), acc[pP]);
+                    for (int part = 0; part < 2; part++) {
+                        vd acc[NMM];
+                        stage2<NMM>(part == 0 ? G_re : G_im, wv, m, acc);
+                        if (part == 0) {
+                            for (int pP = 0; pP < NMM; pP++) store(phases + pP * LN, acc[pP]);
+                        } else {
+                            for (int pP = 0; pP < NMM; pP++) {
+                                store_interleaved(
+                                    reinterpret_cast<double *>(&j_view(kk, pP / NM, pP % NM, i, j0)),
+                                    load(phases + pP * LN), acc[pP]);
+                            }
+                        }
                     }
                 }
             }
