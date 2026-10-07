@@ -2037,7 +2037,9 @@ def _evaluate_fresh(
                 k_p, k_m, sub, lam_mult, labels, permuted, take, plan
             )
         _SHEET_STATS["exact_rows"] += sub.shape[0]
-        return _column_twin(k_p, k_m, sub, lam_mult, labels, permuted)
+        return _column_twin(
+            k_p, k_m, sub, lam_mult, labels, permuted, _plan_cache(plan)
+        )
     if permuted:
         return _evaluate_fresh(eps_t, k2, sub, rtol, lam_mult, labels=labels), None
     if _use_column_route():
@@ -2082,7 +2084,33 @@ def _evaluate_fresh(
     )
 
 
-def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
+# The column twin's head + mid cache (`mw899::ColumnCache` in
+# _near_interface_accel.cpp): a column's head and mid nodes and factors
+# depend on its rho and extents alone, and a crossing fill asks for the same
+# rho in call after call for a few fresh members each time. Held per FILL (on
+# its SheetPlan), bounded at this many MiB, oldest entries dropped first; a
+# miss costs what the twin cost before. 0 turns it off. Every member reads
+# the same floats either way (tests/test_near_interface_column_cache.py).
+_COLUMN_CACHE_MB = float(os.environ.get("MOMWIRE_COLUMN_CACHE_MB") or "32")
+
+
+def _new_column_cache():
+    """A fresh fill-scoped column cache, or None (no twin, or switched off)."""
+    if _COLUMN_CACHE_MB <= 0 or _nia is None:
+        return None
+    cls = getattr(_nia, "ColumnCache", None)
+    if cls is None:
+        return None
+    return cls(int(_COLUMN_CACHE_MB * 2**20))
+
+
+def _plan_cache(plan):
+    return getattr(plan, "column_cache", None) if plan is not None else None
+
+
+def _column_twin(
+    k_p, k_m, sub, lam_mult, labels=None, permuted=False, column_cache=None
+):
     """The column twin over every row of `sub`: `_evaluate_fresh`'s exact
     path, unchanged by the plane sheets (it is their bit-identical
     reference). Same arguments, return shape and `permuted` contract as
@@ -2123,6 +2151,7 @@ def _column_twin(k_p, k_m, sub, lam_mult, labels=None, permuted=False):
         _GX,
         _GW,
         cancel_flag=_cancel.ptr(),
+        cache=column_cache,
     )
     if permuted:
         pos = np.empty(member_order.size, dtype=np.intp)
@@ -2321,7 +2350,7 @@ class SheetPlan:
     (`TripleMemo.sheet_plan`), so every call of the fill -- tiles, chunks,
     end spans, ACA samples -- serves the same rows from a sheet."""
 
-    __slots__ = ("planes", "heights", "depths")
+    __slots__ = ("planes", "heights", "depths", "column_cache")
 
     def __init__(self, planes=(), heights=()):
         """`heights`: (h, depth) pairs."""
@@ -2329,6 +2358,11 @@ class SheetPlan:
         hd = sorted((float(h), float(dd)) for h, dd in heights)
         self.heights = np.asarray([h for h, _dd in hd], dtype=float)
         self.depths = np.asarray([dd for _h, dd in hd], dtype=float)
+        # The fill's column-rule cache (`_new_column_cache`). It rides here
+        # because the plan is the one object every call of a fill carries;
+        # it decides when a column's head + mid are computed, never what
+        # they are, so it changes no row's value and no plan question.
+        self.column_cache = _new_column_cache()
 
     def __bool__(self):
         return bool(self.planes.size or self.heights.size)
@@ -3082,7 +3116,9 @@ def _evaluate_with_sheets(k_p, k_m, sub, lam_mult, labels, permuted, take, plan)
     rest = np.flatnonzero(~take[0])
     if rest.size:
         lab = None if labels is None else np.asarray(labels)[rest]
-        out[rest] = _column_twin(k_p, k_m, sub[rest], lam_mult, lab)
+        out[rest] = _column_twin(
+            k_p, k_m, sub[rest], lam_mult, lab, column_cache=_plan_cache(plan)
+        )
     n_sheets, n_height = _serve_from_sheets(
         k_p, k_m, sub, lam_mult, take, plan, out, "six"
     )

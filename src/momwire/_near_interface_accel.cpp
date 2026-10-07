@@ -73,8 +73,12 @@
 #include <complex>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 
 #include "_lanes.h"
@@ -150,6 +154,158 @@ struct NiAborted : std::exception {
 #define NI_THROW_IF_ABORTED()                                               \
     if (ni_aborted.load(std::memory_order_relaxed) || (ni_cancel && *ni_cancel)) \
         throw NiAborted {}
+
+// The column rule's head and mid, shared between columns of one rho.
+//
+// A column's rule is head + mid + tail (`column_rule`). The head and mid
+// nodes, and so their factors, are a function of rho and the extents
+// (a_head, lam_top) alone; the column's smallest s reaches them only through
+// the extents, and on every column the far-pair kill cap leaves alone the
+// extents are the same for every s. A crossing fill asks for the same rho in
+// call after call, each time for a different few members (its memo hands the
+// twin only fresh triples): on the bs2 inverted-L x16 fill, 20,772 columns
+// over 328 calls carried 6,520 distinct rho, 2.3 members a column, and the
+// head and mid (J0 at 465 nodes, and their factors) were 28 % of the
+// kernel's time on one thread.
+//
+// So the fill holds one of these (on its SheetPlan) and the twin keeps the
+// head + mid FACTORS here, keyed by the exact bits of (rho, a_head, lam_top),
+// for the context they were built in (k_p, k_m, p, detour and the Gauss
+// rule; a different context empties it). A hit copies the arrays
+// `column_factors` would have written for those nodes; the tail is built as
+// before; `column_factors_joined` lays the two out exactly as
+// `column_factors` lays out the whole rule. Every float a member reads is
+// therefore the float it read before -- the cache moves when a value is
+// computed, never what it is -- and the gate is uint64 equality against the
+// uncached call (tests/test_near_interface_column_cache.py).
+//
+// Bounded: entries are dropped oldest first past `max_bytes`. A miss costs
+// what the twin cost before, so the bound trades memory for hits, never
+// bits. Thread-safe: lookups and inserts take the mutex, and the twin does
+// both outside its parallel regions.
+namespace mw899 {
+class ColumnCache {
+  public:
+    explicit ColumnCache(size_t max_bytes) : max_bytes_(max_bytes) {}
+
+    struct Key {
+        uint64_t rho, a_head, lam_top;
+        bool operator==(const Key &o) const {
+            return rho == o.rho && a_head == o.a_head && lam_top == o.lam_top;
+        }
+    };
+    struct KeyHash {
+        size_t operator()(const Key &k) const {
+            uint64_t h = k.rho * 0x9E3779B97F4A7C15ULL;
+            h ^= k.a_head + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+            h ^= k.lam_top + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+            return static_cast<size_t>(h);
+        }
+    };
+    static uint64_t bits(double x) {
+        uint64_t u;
+        std::memcpy(&u, &x, sizeof u);
+        return u;
+    }
+    static Key key(double rho, double a_head, double lam_top) {
+        return Key{bits(rho), bits(a_head), bits(lam_top)};
+    }
+
+    // Empties the cache unless (k_p, k_m, p, detour, gx, gw) are the ones its
+    // entries were built under, bit for bit.
+    void set_context(double k_p, const cd &k_m, int p, double detour,
+                     const double *gx, const double *gw, int ng) {
+        std::vector<uint64_t> c;
+        c.reserve(6 + 2 * ng);
+        c.push_back(bits(k_p));
+        c.push_back(bits(k_m.real()));
+        c.push_back(bits(k_m.imag()));
+        c.push_back(static_cast<uint64_t>(p));
+        c.push_back(bits(detour));
+        c.push_back(static_cast<uint64_t>(ng));
+        for (int i = 0; i < ng; ++i) c.push_back(bits(gx[i]));
+        for (int i = 0; i < ng; ++i) c.push_back(bits(gw[i]));
+        std::lock_guard<std::mutex> lk(mu_);
+        if (c != context_) {
+            map_.clear();
+            order_.clear();
+            bytes_ = 0;
+            context_.swap(c);
+        }
+    }
+
+    std::shared_ptr<const HeadMid> find(const Key &k) {
+        std::lock_guard<std::mutex> lk(mu_);
+        auto it = map_.find(k);
+        if (it == map_.end()) {
+            ++misses_;
+            return nullptr;
+        }
+        ++hits_;
+        return it->second;
+    }
+
+    void insert(const Key &k, std::shared_ptr<const HeadMid> v) {
+        std::lock_guard<std::mutex> lk(mu_);
+        const size_t b = v->bytes();
+        if (b > max_bytes_ || map_.count(k)) return;
+        while (bytes_ + b > max_bytes_ && !order_.empty()) {
+            auto it = map_.find(order_.front());
+            bytes_ -= it->second->bytes();
+            map_.erase(it);
+            order_.pop_front();
+            ++evictions_;
+        }
+        map_.emplace(k, std::move(v));
+        order_.push_back(k);
+        bytes_ += b;
+    }
+
+    size_t hits() const { return hits_; }
+    size_t misses() const { return misses_; }
+    size_t evictions() const { return evictions_; }
+    size_t entries() const { return map_.size(); }
+    size_t bytes() const { return bytes_; }
+    size_t max_bytes() const { return max_bytes_; }
+
+  private:
+    size_t max_bytes_;
+    size_t bytes_ = 0, hits_ = 0, misses_ = 0, evictions_ = 0;
+    std::vector<uint64_t> context_;
+    std::unordered_map<Key, std::shared_ptr<const HeadMid>, KeyHash> map_;
+    std::deque<Key> order_;
+    std::mutex mu_;
+};
+
+// One column's rule and factors into `s`, through `cache` when there is one:
+// the head + mid factors from `hm` (a hit) or built here into `*fresh` (a
+// miss), the tail built as always. Returns K, the rule's node count.
+static size_t column_build(double rho, double k_p, const cd &kpc,
+                           const cd &km, double s_min, double lam_mult, int p,
+                           double detour, const double *gx, const double *gw,
+                           int ng, bool cached, double a_head, double lam_top,
+                           const HeadMid *hm,
+                           std::shared_ptr<const HeadMid> *fresh, Scratch &s) {
+    if (!cached) {
+        column_rule(rho, k_p, km, s_min, lam_mult, p, detour, gx, gw, ng, s);
+        column_factors(kpc, km, s);
+        return s.lam.size();
+    }
+    if (hm == nullptr) {
+        auto h = std::make_shared<HeadMid>();
+        s.lam.clear();
+        s.w.clear();
+        column_head_mid(rho, k_p, km, a_head, lam_top, p, detour, gx, gw, ng, s);
+        head_mid_factors(kpc, km, s, *h);
+        hm = h.get();
+        *fresh = std::move(h);
+    }
+    s.lam.clear();
+    s.w.clear();
+    column_tail(rho, s_min, lam_top, p, gx, gw, ng, s);
+    return column_factors_joined(kpc, km, *hm, s);
+}
+}  // namespace mw899
 
 // `six_point` over parallel (rho, z, zp) arrays: the (n, 6) table, OpenMP
 // across points with the GIL released. The wavenumbers arrive DERIVED
@@ -233,7 +389,7 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     double lam_mult, int p, double detour, int n_threads,
     py::array_t<double, py::array::c_style | py::array::forcecast> gx,
     py::array_t<double, py::array::c_style | py::array::forcecast> gw,
-    uintptr_t cancel_flag = 0) {
+    uintptr_t cancel_flag = 0, py::object cache = py::none()) {
     if (rho.ndim() != 1 || offsets.ndim() != 1 || z.ndim() != 1 ||
         zp.ndim() != 1)
         throw std::invalid_argument("rho, offsets, z and zp must be 1-D");
@@ -322,6 +478,29 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     const py::ssize_t n_col = static_cast<py::ssize_t>(by_column.size());
     const py::ssize_t n_mem = static_cast<py::ssize_t>(by_member.size());
 
+    // The column cache (see `mw899::ColumnCache`): every column's extents and
+    // its head + mid lookup, here with the GIL held and before any thread
+    // starts; the misses' new entries go in after the parallel regions.
+    mw899::ColumnCache *cc =
+        cache.is_none() ? nullptr : cache.cast<mw899::ColumnCache *>();
+    std::vector<double> c_ah, c_lt;
+    std::vector<std::shared_ptr<const mw899::HeadMid>> c_hit, c_new;
+    if (cc) {
+        cc->set_context(k_p, km, p, detour, gxp, gwp, ng);
+        c_ah.assign(nc, 0.0);
+        c_lt.assign(nc, 0.0);
+        c_hit.resize(nc);
+        c_new.resize(nc);
+        for (py::ssize_t c = 0; c < nc; ++c) {
+            if (ob(c + 1) == ob(c)) continue;
+            mw899::column_extents(k_p, km,
+                                  mw899::s_min_of(zb, pb, ob(c), ob(c + 1)),
+                                  lam_mult, c_ah[c], c_lt[c]);
+            c_hit[c] = cc->find(mw899::ColumnCache::key(rb(c), c_ah[c], c_lt[c]));
+        }
+    }
+    const bool cached = cc != nullptr;
+
     {
         py::gil_scoped_release release;
         NI_CANCEL_SETUP(cancel_flag);
@@ -334,10 +513,11 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             const py::ssize_t c = by_column[j];
             const py::ssize_t lo = ob(c), hi = ob(c + 1);
             mw899::Scratch s;
-            mw899::column_rule(rb(c), k_p, km, mw899::s_min_of(zb, pb, lo, hi),
-                               lam_mult, p, detour, gxp, gwp, ng, s);
-            mw899::column_factors(kpc, km, s);
-            const size_t K = s.lam.size();
+            const size_t K = mw899::column_build(
+                rb(c), k_p, kpc, km, mw899::s_min_of(zb, pb, lo, hi), lam_mult,
+                p, detour, gxp, gwp, ng, cached, cached ? c_ah[c] : 0.0,
+                cached ? c_lt[c] : 0.0, cached ? c_hit[c].get() : nullptr,
+                cached ? &c_new[c] : nullptr, s);
             for (py::ssize_t i = lo; i < hi; ++i) {
                 mw_contour::cd out[6];
                 mw899::column_member(s, K, zb(i), pb(i), out);
@@ -349,10 +529,11 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             const py::ssize_t c = by_member[j];
             const py::ssize_t lo = ob(c), hi = ob(c + 1);
             mw899::Scratch s;
-            mw899::column_rule(rb(c), k_p, km, mw899::s_min_of(zb, pb, lo, hi),
-                               lam_mult, p, detour, gxp, gwp, ng, s);
-            mw899::column_factors(kpc, km, s);
-            const size_t K = s.lam.size();
+            const size_t K = mw899::column_build(
+                rb(c), k_p, kpc, km, mw899::s_min_of(zb, pb, lo, hi), lam_mult,
+                p, detour, gxp, gwp, ng, cached, cached ? c_ah[c] : 0.0,
+                cached ? c_lt[c] : 0.0, cached ? c_hit[c].get() : nullptr,
+                cached ? &c_new[c] : nullptr, s);
             // `dynamic`: members of one column do NOT cost the same. The
             // rule is converged for the column's smallest s, so a member
             // with a larger s underflows part of its own tail and skips it
@@ -367,6 +548,12 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             }
         }
         NI_THROW_IF_ABORTED();
+    }
+    if (cc) {
+        for (py::ssize_t c = 0; c < nc; ++c)
+            if (c_new[c])
+                cc->insert(mw899::ColumnCache::key(rb(c), c_ah[c], c_lt[c]),
+                           std::move(c_new[c]));
     }
     return vals;
 }
@@ -701,6 +888,15 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // built between #680 and #899 exports `near_interface_680` and not this
     // one, so the two entries have to be asked about separately.
     m.attr("near_interface_columns_899") = true;
+    // The fill-held head + mid cache of the column twin (`mw899::ColumnCache`).
+    py::class_<mw899::ColumnCache>(m, "ColumnCache")
+        .def(py::init<size_t>(), py::arg("max_bytes"))
+        .def_property_readonly("hits", &mw899::ColumnCache::hits)
+        .def_property_readonly("misses", &mw899::ColumnCache::misses)
+        .def_property_readonly("evictions", &mw899::ColumnCache::evictions)
+        .def_property_readonly("entries", &mw899::ColumnCache::entries)
+        .def_property_readonly("bytes", &mw899::ColumnCache::bytes)
+        .def_property_readonly("max_bytes", &mw899::ColumnCache::max_bytes);
     m.def("near_interface_six_batch", &near_interface_six_batch,
           py::arg("k_p"), py::arg("k_m"), py::arg("rho"), py::arg("z"),
           py::arg("zp"), py::arg("rtol"), py::arg("lam_mult"),
@@ -713,6 +909,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
           py::arg("z"), py::arg("zp"), py::arg("lam_mult"), py::arg("p"),
           py::arg("detour"), py::arg("n_threads"), py::arg("gx"),
           py::arg("gw"), py::arg("cancel_flag") = 0,
+          py::arg("cache") = py::none(),
           "six_columns over CONCATENATED columns -> (n, 6) complex. Column c "
           "owns members offsets[c]..offsets[c+1], all at rho[c]; the answer "
           "keeps the members' order. Parallel over columns, and over the "

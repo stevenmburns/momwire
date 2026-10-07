@@ -318,9 +318,11 @@ static double s_min_of(const ZB &zb, const PB &pb, py::ssize_t lo,
 // evaluated once for the column; the only thing the column chooses for
 // itself is `s_min`, the smallest s = z - z' in it, which is the
 // slowest-decaying member and so the one the extents must be converged for.
-static void column_rule(double rho, double k_p, const cd &k_m, double s_min,
-                        double lam_mult, int p, double detour, const double *gx,
-                        const double *gw, int ng, Scratch &s) {
+// The rule's extents: `six_point`'s a_head and lam_top, from the column's
+// smallest s through the far-pair kill cap.
+static void column_extents(double k_p, const cd &k_m, double s_min,
+                           double lam_mult, double &a_head_out,
+                           double &lam_top_out) {
     const double kk = std::max(k_p, std::abs(k_m));
     double a_head = 1.1 * kk;
     double lam_top = lam_mult * kk;
@@ -332,9 +334,18 @@ static void column_rule(double rho, double k_p, const cd &k_m, double s_min,
         a_head = std::max(2.2 * k_p, std::min(a_head, lam_kill));
         lam_top = std::max(1.5 * a_head, lam_kill);
     }
-    s.lam.clear();
-    s.w.clear();
+    a_head_out = a_head;
+    lam_top_out = lam_top;
+}
 
+// The head and mid nodes, appended to s.lam / s.w. They depend on the column
+// through rho and the extents ALONE -- not on s_min, which reaches them only
+// through a_head and lam_top -- which is what lets `near_interface_six_columns`
+// share them between columns of one rho (`ColumnCache`).
+static void column_head_mid(double rho, double k_p, const cd &k_m,
+                            double a_head, double lam_top, int p, double detour,
+                            const double *gx, const double *gw, int ng,
+                            Scratch &s) {
     // --- head: `_head`'s detour, H rule and seeded edges (2 endpoints, 6
     // sevenths, 5 seeds per mark), then sub-seeded. H depends on rho alone,
     // so it is column-shared exactly. The Python side builds a SET and sorts
@@ -384,6 +395,12 @@ static void column_rule(double rho, double k_p, const cd &k_m, double s_min,
         s.w.push_back(s.wt[i] * b0);
     }
 
+}
+
+// The tail nodes, appended to s.lam / s.w: rho, s_min and lam_top.
+static void column_tail(double rho, double s_min, double lam_top, int p,
+                        const double *gx, const double *gw, int ng,
+                        Scratch &s) {
     // --- tail: `_ray_integral`'s geometric panels — starting at the lam0
     // scale and doubling toward the decay scale, which is what resolves the
     // 1/lam log content when s + rho is tiny — run out to 60 decay lengths
@@ -422,21 +439,31 @@ static void column_rule(double rho, double k_p, const cd &k_m, double s_min,
     }
 }
 
+// `_column_rule`: nodes and weights for one rho column, path derivative and
+// Bessel/Hankel factor folded in -- the extents, then head + mid + tail.
+static void column_rule(double rho, double k_p, const cd &k_m, double s_min,
+                        double lam_mult, int p, double detour, const double *gx,
+                        const double *gw, int ng, Scratch &s) {
+    double a_head, lam_top;
+    column_extents(k_p, k_m, s_min, lam_mult, a_head, lam_top);
+    s.lam.clear();
+    s.w.clear();
+    column_head_mid(rho, k_p, k_m, a_head, lam_top, p, detour, gx, gw, ng, s);
+    column_tail(rho, s_min, lam_top, p, gx, gw, ng, s);
+}
+
 // `_column_factors`: `_core` at every node with its z-dependent exponential
 // factored out and the weights folded in, such that
 // six(z, z') = F @ exp(gamma_m z' - gamma_p z). Index order is `_core`'s:
 // 0 U, 1 V, 2 W, 3 dzW, 4 dz dz' V, 5 dz'W.
-static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
-    const size_t K = s.lam.size();
-    const cd kp2 = k_p * k_p, km2 = k_m * k_m;
-    s.gpr.resize(K);
-    s.gpi.resize(K);
-    s.gmr.resize(K);
-    s.gmi.resize(K);
-    s.fr.resize(6 * K);
-    s.fi.resize(6 * K);
-    for (size_t k = 0; k < K; ++k) {
-        const cd l = s.lam[k], wk = s.w[k];
+// One node's factors: `column_factors`' loop body, shared with the cached
+// route so every node is the same arithmetic whichever builds it.
+static inline void factor_node(const cd &k_p, const cd &k_m, const cd &kp2,
+                               const cd &km2, const cd &l, const cd &wk,
+                               double *fr, double *fi, size_t stride,
+                               double &gpr, double &gpi, double &gmr,
+                               double &gmi) {
+    {
         const cd g_p = gamma_cut(l, k_p);
         const cd g_m = gamma_cut(l, k_m);
         // Fused complex products (momwire#1214, _fma_inline.h): the rule
@@ -455,14 +482,83 @@ static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
                          mul(mul(-mul(g_p, g_m), v), wk),
                          mul(mul(g_m, wv), wk)};
         for (int c = 0; c < 6; ++c) {
-            s.fr[c * K + k] = f[c].real();
-            s.fi[c * K + k] = f[c].imag();
+            fr[c * stride] = f[c].real();
+            fi[c * stride] = f[c].imag();
         }
-        s.gpr[k] = g_p.real();
-        s.gpi[k] = g_p.imag();
-        s.gmr[k] = g_m.real();
-        s.gmi[k] = g_m.imag();
+        gpr = g_p.real();
+        gpi = g_p.imag();
+        gmr = g_m.real();
+        gmi = g_m.imag();
     }
+}
+
+static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
+    const size_t K = s.lam.size();
+    const cd kp2 = k_p * k_p, km2 = k_m * k_m;
+    s.gpr.resize(K);
+    s.gpi.resize(K);
+    s.gmr.resize(K);
+    s.gmi.resize(K);
+    s.fr.resize(6 * K);
+    s.fi.resize(6 * K);
+    for (size_t k = 0; k < K; ++k)
+        factor_node(k_p, k_m, kp2, km2, s.lam[k], s.w[k], &s.fr[k], &s.fi[k],
+                    K, s.gpr[k], s.gpi[k], s.gmr[k], s.gmi[k]);
+}
+
+// A column's head + mid factors, held for reuse (`ColumnCache`): the arrays
+// `column_factors` writes, for those nodes only, in its layout (plane c of
+// fr / fi at c * K).
+struct HeadMid {
+    size_t K = 0;
+    std::vector<double> gpr, gpi, gmr, gmi, fr, fi;
+    size_t bytes() const { return (4 + 12) * K * sizeof(double); }
+};
+
+static void head_mid_factors(const cd &k_p, const cd &k_m, const Scratch &s,
+                             HeadMid &h) {
+    const size_t K = s.lam.size();
+    const cd kp2 = k_p * k_p, km2 = k_m * k_m;
+    h.K = K;
+    h.gpr.resize(K);
+    h.gpi.resize(K);
+    h.gmr.resize(K);
+    h.gmi.resize(K);
+    h.fr.resize(6 * K);
+    h.fi.resize(6 * K);
+    for (size_t k = 0; k < K; ++k)
+        factor_node(k_p, k_m, kp2, km2, s.lam[k], s.w[k], &h.fr[k], &h.fi[k],
+                    K, h.gpr[k], h.gpi[k], h.gmr[k], h.gmi[k]);
+}
+
+// `column_factors` over head + mid from `h` and the tail nodes in s.lam /
+// s.w: the same arrays, entry for entry, as `column_factors` over the whole
+// rule (head, mid and tail in that order). Returns K.
+static size_t column_factors_joined(const cd &k_p, const cd &k_m,
+                                    const HeadMid &h, Scratch &s) {
+    const size_t Kh = h.K, Kt = s.lam.size(), K = Kh + Kt;
+    const cd kp2 = k_p * k_p, km2 = k_m * k_m;
+    s.gpr.resize(K);
+    s.gpi.resize(K);
+    s.gmr.resize(K);
+    s.gmi.resize(K);
+    s.fr.resize(6 * K);
+    s.fi.resize(6 * K);
+    std::copy(h.gpr.begin(), h.gpr.end(), s.gpr.begin());
+    std::copy(h.gpi.begin(), h.gpi.end(), s.gpi.begin());
+    std::copy(h.gmr.begin(), h.gmr.end(), s.gmr.begin());
+    std::copy(h.gmi.begin(), h.gmi.end(), s.gmi.begin());
+    for (int c = 0; c < 6; ++c) {
+        std::copy(h.fr.begin() + c * Kh, h.fr.begin() + (c + 1) * Kh,
+                  s.fr.begin() + c * K);
+        std::copy(h.fi.begin() + c * Kh, h.fi.begin() + (c + 1) * Kh,
+                  s.fi.begin() + c * K);
+    }
+    for (size_t k = 0; k < Kt; ++k)
+        factor_node(k_p, k_m, kp2, km2, s.lam[k], s.w[k], &s.fr[Kh + k],
+                    &s.fi[Kh + k], K, s.gpr[Kh + k], s.gpi[Kh + k],
+                    s.gmr[Kh + k], s.gmi[Kh + k]);
+    return K;
 }
 
 // One member of a built column: the fused exponential and six dot products,
