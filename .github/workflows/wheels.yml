@@ -93,6 +93,9 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code || 'true' }}
+      # Tags and dispatches skip the filter step, so `|| 'true'` keeps the
+      # sdist check on for them.
+      packaging: ${{ steps.filter.outputs.packaging || 'true' }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name == 'push' && github.ref_type == 'branch'
@@ -108,6 +111,17 @@ jobs:
               - '!**/*.md'
               - '!LICENSE'
               - '!scripts/probe_*.py'
+            # What the sdist-verify job can actually catch: a build input
+            # missing from the sdist (MANIFEST.in, setup.py, the C++ sources
+            # and headers, the vendored extern/ tree), or this workflow.
+            packaging:
+              - 'MANIFEST.in'
+              - 'setup.py'
+              - 'pyproject.toml'
+              - 'src/**/*.cpp'
+              - 'src/**/*.h'
+              - 'extern/**'
+              - '.github/workflows/wheels.yml'
 
   build_wheels:
     name: wheels ${{ matrix.os }}
@@ -435,7 +449,12 @@ jobs:
   make_sdist:
     name: sdist
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    # On main pushes only when packaging inputs changed: a 3-4 min source
+    # compile that passed all 225 runs in the 14 days before this gate, and
+    # can only fail on a missing build input. Tags and dispatches always run
+    # it (the `packaging` output defaults to 'true' there), and the release
+    # job still gets its sdist on every tag.
+    if: needs.changes.outputs.code == 'true' && needs.changes.outputs.packaging == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
