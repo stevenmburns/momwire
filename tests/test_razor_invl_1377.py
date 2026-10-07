@@ -98,3 +98,91 @@ def test_class_sums_are_bincount():
     assert np.array_equal(got, want)
     with pytest.raises(RuntimeError, match="out of range"):
         acc.class_sums(np.array([n], dtype=np.int32), np.ones(1, dtype=np.int32), n)
+
+
+# ---------------------------------------------------------------- tiles
+needs_tiles = pytest.mark.skipif(
+    acc is None or not getattr(acc, "product_tiles_1377", False),
+    reason="accelerator without the product tile kernels",
+)
+
+
+@needs_tiles
+def test_tile_kernels_do_not_move_the_inverted_l():
+    """`product_rows` and `tile_block` against numpy's gathers and scatters
+    (`_TILE_KERNELS = False`): Z to the bit, and the fused tiles took the
+    kernel."""
+    ref, r0 = pg._fill(_invl, **{"cf._TILE_KERNELS": False})
+    got, r = pg._fill(_invl)
+    assert r0["cf.tile_blocks_fast"] == 0
+    assert (
+        r["cf.tile_blocks_fast"] >= 1 and r["cf.tiles"] >= r["cf.tile_blocks_fast"]
+    ), r
+    assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+@needs_tiles
+@pytest.mark.parametrize("kp_dtype", [np.int32, np.int64])
+@pytest.mark.parametrize("slot_z", [True, False])
+def test_product_rows_are_the_numpy_gathers(kp_dtype, slot_z):
+    rng = np.random.default_rng(13772)
+    nA, nB, nG, n_key = 40, 30, 5, 200
+    zA, zB = rng.normal(size=nA), rng.normal(size=nB)
+    key_r = rng.random(n_key) + 0.5
+    n_line = nB if slot_z else nA
+    kid = rng.integers(0, n_key, size=(nG, n_line)).astype(np.int32)
+    grank = rng.integers(0, nG, size=nA if slot_z else nB).astype(np.int64)
+    kept_pos = rng.integers(0, nA * nB, size=500).astype(kp_dtype)
+    ids = rng.integers(0, kept_pos.size, size=300).astype(np.int32)
+    a, b = np.divmod(kept_pos[ids].astype(np.int64), nB)
+    want = np.empty((ids.size, 3))
+    want[:, 0] = key_r[kid[grank[a], b]] if slot_z else key_r[kid[grank[b], a]]
+    want[:, 1], want[:, 2] = zA[a], zB[b]
+    got = acc.product_rows(ids, kept_pos, nB, slot_z, grank, kid, key_r, zA, zB)
+    assert np.array_equal(got.view(np.uint64), want.view(np.uint64))
+
+
+def _u64(a):
+    return np.ascontiguousarray(a).view(np.uint64)
+
+
+@needs_tiles
+@pytest.mark.parametrize("with_pos", [False, True])
+def test_tile_block_is_the_numpy_copies(with_pos):
+    rng = np.random.default_rng(13773)
+    n_rows, m, n_held = 1000, 120, 50
+    vals = rng.normal(size=(m, 6)) + 1j * rng.normal(size=(m, 6))
+    pos = rng.permutation(m) if with_pos else None
+    ids = np.sort(rng.choice(n_rows, size=m, replace=False)).astype(np.int32)
+    hpos = np.full(n_rows, -1, dtype=np.int32)
+    hpos[ids[::3]] = rng.permutation(n_held)[: ids[::3].size]
+    kcols = [0, 1, 2, 5]
+    done = np.zeros(n_rows, dtype=bool)
+    loc = np.full(n_rows, -1, dtype=np.int32)
+    held = np.zeros((n_held, 4), dtype=np.complex128, order="F")
+    v = vals if pos is None else vals[pos]
+    want_tb = v[:, kcols]
+    want_held = held.copy(order="F")
+    keep = hpos[ids] >= 0
+    want_held[hpos[ids][keep]] = want_tb[keep]
+    tb, twice = acc.tile_block(
+        vals,
+        np.zeros(0, np.int64) if pos is None else pos,
+        kcols,
+        ids,
+        done,
+        loc,
+        hpos,
+        held,
+    )
+    assert not twice and tb.flags.f_contiguous
+    assert np.array_equal(_u64(tb), _u64(want_tb))
+    assert np.array_equal(_u64(held), _u64(want_held))
+    assert done[ids].all() and done.sum() == m
+    assert np.array_equal(loc[ids], np.arange(m))
+    _tb, twice = acc.tile_block(
+        vals, np.zeros(0, np.int64), kcols, ids, done, loc, hpos, held
+    )
+    assert twice and _tb is None
+    acc.fill_rows_i32(ids, loc, -1)
+    assert (loc == -1).all()
