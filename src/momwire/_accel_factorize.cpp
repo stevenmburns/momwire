@@ -527,8 +527,112 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
 //   * the table is sized once at the first power of two >= 4n/3: groups <=
 //     rows, so its load never passes 3/4 and it never rehashes;
 //   * which slot a group lands in never decides its number.
+// `factorize_float_classes` across threads (momwire#1377), by
+// `factorize_line_keys_par`'s argument: thread p enters only the values whose
+// hash's top bits name it, each row gets its group's FIRST ROW, and a serial
+// walk numbers the groups where they first occur -- the same integers.
+static int64_t float_classes_par(const double *C, py::ssize_t n, int32_t *inv, int n_threads,
+                                 uintptr_t cancel_flag) {
+    int P = 1;
+    while (P * 2 <= n_threads && P < 64) P *= 2;
+    int shift = 0;
+    while ((1 << shift) < P) ++shift;
+    // Each table sized at 4/3 of an even share, grown at 3/4 load.
+    size_t cap0 = 16;
+    while (3 * cap0 * static_cast<size_t>(P) < 4 * static_cast<size_t>(n)) cap0 <<= 1;
+    {
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SETUP(cancel_flag);
+#pragma omp parallel num_threads(P)
+        {
+            int p = 0;
+#ifdef _OPENMP
+            p = omp_get_thread_num();
+            const int np_ = omp_get_num_threads();
+#else
+            const int np_ = 1;
+#endif
+            for (int part = p; part < P; part += np_) {
+                size_t cap = cap0, mask = cap - 1, n_in = 0;
+                std::vector<uint64_t> table(cap, 0);
+                auto rehash = [&]() {
+                    const size_t cap2 = cap * 2, mask2 = cap2 - 1;
+                    std::vector<uint64_t> fresh(cap2, 0);
+                    for (size_t t0 = 0; t0 < cap; ++t0) {
+                        const uint64_t slot = table[t0];
+                        if (slot == 0) continue;
+                        uint64_t b;
+                        std::memcpy(&b, C + ((slot & 0xffffffffULL) - 1), 8);
+                        size_t t = static_cast<size_t>(mix(0x9e3779b97f4a7c15ULL ^ float_key(b))) & mask2;
+                        while (fresh[t] != 0) t = (t + 1) & mask2;
+                        fresh[t] = slot;
+                    }
+                    table.swap(fresh);
+                    cap = cap2;
+                    mask = mask2;
+                };
+                uint64_t hs[kPrefetchBlock];
+                for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+                    MW_CANCEL_POLL();
+                    const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
+                    for (py::ssize_t i = i0; i < i1; ++i) {
+                        uint64_t b;
+                        std::memcpy(&b, C + i, 8);
+                        const uint64_t h = mix(0x9e3779b97f4a7c15ULL ^ float_key(b));
+                        hs[i - i0] = h;
+                        if (static_cast<int>(shift ? (h >> (64 - shift)) : 0) == part)
+                            MW_PREFETCH(table.data() + (static_cast<size_t>(h) & mask));
+                    }
+                    for (py::ssize_t i = i0; i < i1; ++i) {
+                        uint64_t b;
+                        std::memcpy(&b, C + i, 8);
+                        if (is_nan(b)) {
+                            if (part == 0) inv[i] = static_cast<int32_t>(i);
+                            continue;
+                        }
+                        const uint64_t h = hs[i - i0];
+                        if (static_cast<int>(shift ? (h >> (64 - shift)) : 0) != part) continue;
+                        if (4 * (n_in + 1) > 3 * cap) rehash();
+                        const uint64_t key = float_key(b);
+                        const uint64_t tag = h & 0xffffffff00000000ULL;
+                        size_t s = static_cast<size_t>(h) & mask;
+                        for (;;) {
+                            const uint64_t slot = table[s];
+                            if (slot == 0) {
+                                table[s] = tag | (static_cast<uint64_t>(i) + 1);
+                                ++n_in;
+                                inv[i] = static_cast<int32_t>(i);
+                                break;
+                            }
+                            if ((slot & 0xffffffff00000000ULL) == tag) {
+                                const py::ssize_t f =
+                                    static_cast<py::ssize_t>((slot & 0xffffffffULL) - 1);
+                                uint64_t fb;
+                                std::memcpy(&fb, C + f, 8);
+                                if (float_key(fb) == key) {
+                                    inv[i] = static_cast<int32_t>(f);
+                                    break;
+                                }
+                            }
+                            s = (s + 1) & mask;
+                        }
+                    }
+                }
+            }
+        }
+        MW_THROW_IF_ABORTED();
+    }
+    py::gil_scoped_release nogil;
+    int32_t next = 0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const int32_t r = inv[i];
+        inv[i] = r == static_cast<int32_t>(i) ? next++ : inv[r];
+    }
+    return next;
+}
+
 static py::tuple factorize_float_classes(py::array_t<double, py::array::c_style> col,
-                                         uintptr_t cancel_flag = 0) {
+                                         uintptr_t cancel_flag = 0, int n_threads = 1) {
     if (col.ndim() != 1)
         throw std::runtime_error("factorize_float_classes: one 1-D column");
     const py::ssize_t n = col.shape(0);
@@ -538,6 +642,14 @@ static py::tuple factorize_float_classes(py::array_t<double, py::array::c_style>
     py::array_t<int32_t> inverse(n);
     int32_t *inv = inverse.mutable_data();
     int64_t n_groups = 0;
+#ifdef _OPENMP
+    n_threads = std::min(n_threads, omp_get_max_threads());
+#else
+    n_threads = 1;
+#endif
+    if (n_threads > 1 && n > 0)
+        return py::make_tuple(py::int_(float_classes_par(C, n, inv, n_threads, cancel_flag)),
+                              inverse);
     if (n > 0) {
         py::gil_scoped_release nogil;
         MW_CANCEL_SERIAL_SETUP(cancel_flag);
@@ -1403,8 +1515,9 @@ void register_factorize(py::module_ &m) {
           "`factorize_rows` of one float64 column as (group count, inverse "
           "int32): the same groups and numbers, no first-row array, the table "
           "sized at 4/3 of the rows. momwire#1377.",
-          py::arg("col"), py::arg("cancel_flag") = 0);
+          py::arg("col"), py::arg("cancel_flag") = 0, py::arg("n_threads") = 1);
     m.attr("factorize_float_classes_1377") = true;
+    m.attr("factorize_float_classes_par_1377") = true;
     m.def("stable_tile_order", &factorize::stable_tile_order,
           "(o, b): the stable argsort of an int16 tile per row (int64 when "
           "wide, else int32) and the tiles' bounds in it, by counting. "
