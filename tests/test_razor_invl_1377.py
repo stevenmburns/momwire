@@ -333,3 +333,32 @@ def test_end_nonzero_memo_does_not_move_the_inverted_l():
     got, r = pg._fill(_invl)
     assert r["cf.fused_mode_stream"] == r0["cf.fused_mode_stream"] >= 1, r
     assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+# ---------------------------------------------------------------- late rows
+@pytest.mark.skipif(
+    acc is None or not getattr(acc, "late_sandwich_rows_1377", False),
+    reason="accelerator without late_sandwich_rows",
+)
+def test_late_sandwich_rows_are_the_numpy_walk():
+    """The sandwich's late rows by one C++ walk: the held store the numpy
+    walk plans (every row's slot compared, through `_held_slots`), and Z
+    to the bit, on 500-row tiles where rows are held."""
+    tiny = {"cf._TILE_ROWS": 500}
+    plans = {}
+    real = cf._held_slots
+
+    def spy(n_tiles, tile_rows, last, hpos=None):
+        n = real(n_tiles, tile_rows, last, hpos)
+        plans.setdefault(cf._LATE_ROWS_ACCEL, []).append((n, last.copy(), hpos.copy()))
+        return n
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(cf, "_held_slots", spy)
+        ref, r0 = pg._fill(_invl, **tiny, **{"cf._LATE_ROWS_ACCEL": False})
+        got, r = pg._fill(_invl, **tiny)
+    assert r["cf.tile_held_rows"] == r0["cf.tile_held_rows"] > 0, (r, r0)
+    assert len(plans[True]) == len(plans[False]) >= 1
+    for (n0, l0, h0), (n1, l1, h1) in zip(plans[False], plans[True]):
+        assert n0 == n1 and np.array_equal(l0, l1) and np.array_equal(h0, h1)
+    assert np.array_equal(pg._bits(got), pg._bits(ref))

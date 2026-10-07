@@ -923,6 +923,76 @@ static void fill_rows_i32(py::array_t<int32_t, py::array::c_style> ids,
     for (py::ssize_t i = 0; i < m; ++i) L[I[i]] = value;
 }
 
+
+// `_ProductTiles._plan_held_recycled`'s sandwich marks (momwire#1377): group
+// g's key k (local rank) is read late by the line nodes n with
+// kl_rank[g, n] == k whose column is ready after k's tile
+// (tile_of_key[kid[g, n]] < ready[n]), the last at the latest such ready[n];
+// every z row of (g, k) -- rowflat[off[g] + z * nk[g] + k] -- gets
+// last = max(last, that tile) and sand = true. numpy's walk did the same per
+// group by np.unique and np.maximum.at; a max of integers is the same in any
+// order, so the same `last` and `sand`. Serial: groups share rows.
+static void late_sandwich_rows(py::array_t<int16_t, py::array::c_style> tile_of_key,
+                               py::array_t<int32_t, py::array::c_style> kid,
+                               py::array_t<int32_t, py::array::c_style> kl_rank,
+                               py::array_t<int64_t, py::array::c_style | py::array::forcecast> ready,
+                               py::array_t<int32_t, py::array::c_style> rowflat,
+                               py::array_t<int64_t, py::array::c_style | py::array::forcecast> off,
+                               py::array_t<int64_t, py::array::c_style | py::array::forcecast> nz,
+                               py::array_t<int64_t, py::array::c_style | py::array::forcecast> nk,
+                               py::array_t<int16_t, py::array::c_style> last,
+                               py::array_t<bool, py::array::c_style> sand,
+                               uintptr_t cancel_flag = 0) {
+    if (kid.ndim() != 2 || kl_rank.ndim() != 2 || kid.shape(0) != kl_rank.shape(0) ||
+        kid.shape(1) != kl_rank.shape(1))
+        throw std::runtime_error("late_sandwich_rows: kid and kl_rank (groups, line)");
+    const py::ssize_t nG = kid.shape(0), nL = kid.shape(1);
+    if (ready.size() != nL || off.size() < nG || nz.size() < nG || nk.size() < nG)
+        throw std::runtime_error("late_sandwich_rows: shapes");
+    const py::ssize_t n_key = tile_of_key.size(), n_flat = rowflat.size(), n_rows = last.size();
+    if (sand.size() != n_rows) throw std::runtime_error("late_sandwich_rows: sand length");
+    const int16_t *TK = tile_of_key.data();
+    const int32_t *K = kid.data(), *KL = kl_rank.data(), *RF = rowflat.data();
+    const int64_t *RD = ready.data(), *OF = off.data(), *NZ = nz.data(), *NK = nk.data();
+    int16_t *LS = last.mutable_data();
+    bool *SD = sand.mutable_data();
+    int64_t max_nk = 0;
+    for (py::ssize_t g = 0; g < nG; ++g) {
+        max_nk = std::max(max_nk, NK[g]);
+        if (OF[g] < 0 || NZ[g] < 0 || NK[g] < 0 || OF[g] + NZ[g] * NK[g] > n_flat)
+            throw std::runtime_error("late_sandwich_rows: row table out of range");
+    }
+    for (py::ssize_t q = 0; q < nG * nL; ++q)
+        if (K[q] < 0 || K[q] >= n_key) throw std::runtime_error("late_sandwich_rows: key out of range");
+    for (py::ssize_t q = 0; q < n_flat; ++q)
+        if (RF[q] < 0 || RF[q] >= n_rows) throw std::runtime_error("late_sandwich_rows: row out of range");
+    py::gil_scoped_release nogil;
+    MW_CANCEL_SERIAL_SETUP(cancel_flag);
+    std::vector<int64_t> lk(static_cast<size_t>(max_nk), -1);
+    std::vector<int64_t> touched;
+    for (py::ssize_t g = 0; g < nG; ++g) {
+        MW_CANCEL_SERIAL_POLL();
+        touched.clear();
+        const int32_t *Kg = K + g * nL, *KLg = KL + g * nL;
+        for (py::ssize_t n = 0; n < nL; ++n) {
+            if (!(static_cast<int64_t>(TK[Kg[n]]) < RD[n])) continue;
+            const int32_t k = KLg[n];
+            if (k < 0 || k >= NK[g]) throw std::runtime_error("late_sandwich_rows: rank out of range");
+            if (lk[k] < 0) touched.push_back(k);
+            lk[k] = std::max(lk[k], RD[n]);
+        }
+        for (int64_t k : touched) {
+            const int16_t t = static_cast<int16_t>(lk[k]);
+            for (int64_t z = 0; z < NZ[g]; ++z) {
+                const int32_t row = RF[OF[g] + z * NK[g] + k];
+                if (LS[row] < t) LS[row] = t;
+                SD[row] = true;
+            }
+            lk[k] = -1;
+        }
+    }
+}
+
 }  // namespace left_gather
 
 void register_left_gather(py::module_ &m) {
@@ -970,6 +1040,14 @@ void register_left_gather(py::module_ &m) {
           "loc[ids] = value for int32 arrays. momwire#1377.",
           py::arg("ids"), py::arg("loc"), py::arg("value"));
     m.attr("product_tiles_1377") = true;
+    m.def("late_sandwich_rows", &left_gather::late_sandwich_rows,
+          "The sandwich's late rows of a many-group product: per group, each "
+          "key's latest ready tile over the line nodes that read it late, "
+          "marked over its z rows into last (max) and sand. momwire#1377.",
+          py::arg("tile_of_key"), py::arg("kid"), py::arg("kl_rank"), py::arg("ready"),
+          py::arg("rowflat"), py::arg("off"), py::arg("nz"), py::arg("nk"), py::arg("last"),
+          py::arg("sand"), py::arg("cancel_flag") = 0);
+    m.attr("late_sandwich_rows_1377") = true;
     m.def("left_products_gathered", &left_gather::left_products_gathered,
           "The crossing main sandwich's six left products (P1 U, P2 U, "
           "P3 (k2 V + dz'W), P3 W, P4 W, P4 V) of four (n_out, nA) CSR "

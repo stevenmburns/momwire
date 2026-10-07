@@ -2954,6 +2954,13 @@ _TILE_ORDER_CHUNK = 1 << 20
 # `_stable_tile_order` by `stable_tile_order` in C++ (momwire#1377); False
 # is the chunked numpy counting sort, the reference (the same integers).
 _TILE_ORDER_ACCEL = True
+# `_plan_held_recycled`'s sandwich marks by `late_sandwich_rows` in C++
+# (momwire#1377); False is the per-group numpy walk, the reference (the same
+# `last` and marks: a max of integers in any order).
+_LATE_ROWS_ACCEL = True
+_HAVE_LATE_ROWS_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "late_sandwich_rows_1377", False)
+)
 _HAVE_TILE_ORDER_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "stable_tile_order_1377", False)
 )
@@ -3306,7 +3313,31 @@ class _ProductTiles:
             if last is None:
                 last = _late_last(U, self.n_tiles)
             sand = np.zeros(U, dtype=bool)
-            for g0, g1 in _group_spans(*plan.kid.shape):
+            fast = (
+                _LATE_ROWS_ACCEL
+                and _HAVE_LATE_ROWS_ACCEL
+                and self.tile_of_key.dtype == np.int16
+                and last.dtype == np.int16
+                and plan.kid.dtype == np.int32
+                and plan.kl_rank.dtype == np.int32
+                and plan.rowflat.dtype == np.int32
+            )
+            if fast:
+                # The same marks in one C++ walk (`late_sandwich_rows`).
+                _accel.acc.late_sandwich_rows(
+                    self.tile_of_key,
+                    plan.kid,
+                    plan.kl_rank,
+                    ready,
+                    plan.rowflat,
+                    plan.off,
+                    plan.nz,
+                    plan.nk,
+                    last,
+                    sand,
+                    cancel_flag=_cancel.ptr(),
+                )
+            for g0, g1 in [] if fast else _group_spans(*plan.kid.shape):
                 _cancel.poll()
                 late = self.tile_of_key[plan.kid[g0:g1]] < ready[None, :]
                 for g in np.flatnonzero(late.any(axis=1)).tolist():
