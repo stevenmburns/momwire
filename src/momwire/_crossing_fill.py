@@ -2279,6 +2279,15 @@ _HAVE_LINE_KEYS_ACCEL = _accel.acc is not None and bool(
 _HAVE_GROUP_RANKS_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "group_first_ranks_1290", False)
 )
+# A many-group product's tiles class its keys by exact ρ with
+# `factorize_float_classes` (momwire#1377): `factorize_rows`' groups and
+# numbers in int32, with no first-row array and the table at 4/3 of the keys.
+# False is `_near_interface._factorize`, the reference (the same integers,
+# ~0.18 GB more transient at razor's inverted L x32).
+_LEAN_KEY_CLASSES = True
+_HAVE_FLOAT_CLASSES_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "factorize_float_classes_1377", False)
+)
 
 
 def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
@@ -2730,9 +2739,12 @@ def _column_tiles(plan, key_cls, cls_rows):
     # is one exact ρ), with equal ρ in line order.
     a_cls = plan.key_r[kid[anchor]]
     order = np.argsort(a_cls, kind="stable")
-    pos = np.empty(n_line, dtype=np.int64)
-    pos[order] = np.arange(n_line)
-    first = np.full(cls_rows.size, n_line, dtype=np.int64)
+    # Line positions in the line's own index width: `first` is one per class,
+    # ~11.3 M at razor's inverted L x32 (momwire#1377).
+    pdt = _index_dtype(n_line + 1)
+    pos = np.empty(n_line, dtype=pdt)
+    pos[order] = np.arange(n_line, dtype=pdt)
+    first = np.full(cls_rows.size, n_line, dtype=pdt)
     for g0, g1 in _group_spans(n_groups, n_line):
         _cancel.poll()
         c = key_cls[kid[g0:g1]]
@@ -2740,7 +2752,18 @@ def _column_tiles(plan, key_cls, cls_rows):
         del c
     if np.any(first >= n_line):
         raise AssertionError("a key class no line node asks")
-    new_at = np.bincount(first, weights=cls_rows, minlength=n_line)
+    # `bincount(first, weights=cls_rows)` a span of classes at a time: the
+    # weights are whole row counts, so every partial sum is an integer below
+    # 2^53 and exact, and the per-node totals are the one call's floats in
+    # any grouping, without its class-length intp and float64 copies.
+    new_at = np.zeros(n_line)
+    for c0 in range(0, first.size, _CLASS_SPAN):
+        _cancel.poll()
+        new_at += np.bincount(
+            first[c0 : c0 + _CLASS_SPAN],
+            weights=cls_rows[c0 : c0 + _CLASS_SPAN],
+            minlength=n_line,
+        )
     start = np.cumsum(new_at) - new_at
     t_pos = (start // max(1, int(_TILE_ROWS))).astype(np.int64)
     a_walk = a_cls[order]
@@ -2749,7 +2772,20 @@ def _column_tiles(plan, key_cls, cls_rows):
     t_pos = t_pos[run_head][run]
     _t, t_pos = np.unique(t_pos, return_inverse=True)
     t_pos = np.asarray(t_pos).ravel()
-    return t_pos[first], t_pos[pos], int(_t.size)
+    n_tiles = int(_t.size)
+    # Each class's tile in the width the tiles keep (`tile_of_key`), formed
+    # straight from the line's: the same integers, no int64 class array.
+    t_line = t_pos.astype(_tile_dtype(n_tiles), copy=False)
+    return t_line[first], t_pos[pos], n_tiles
+
+
+def _tile_dtype(n_tiles):
+    """The width of a tile number: `_ProductTiles.tile_of_key`'s."""
+    return np.int16 if n_tiles < 2**15 else np.int64
+
+
+# Classes per pass of the tiles' class-length integer work (momwire#1377).
+_CLASS_SPAN = 1 << 20
 
 
 # A many-group product's held store reuses a slot once the row in it has
@@ -2942,23 +2978,50 @@ class _ProductTiles:
         # The one call's columns: exact-ρ classes of the keys, ascending.
         # (the plan's `KeyIndex` formed exactly this `np.unique` already)
         column = plan.slot == "z" and len(plan.rowtab) > 1 and _COLUMN_TILES
-        got = _near_interface._factorize((plan.key_r,)) if column else None
+        lean = (
+            column
+            and _LEAN_KEY_CLASSES
+            and _HAVE_FLOAT_CLASSES_ACCEL
+            and _near_interface._FACTORIZE
+            and _near_interface._HAVE_FACTORIZE_ACCEL
+            and n_key <= _near_interface._FACTORIZE_MAX_ROWS
+        )
+        if lean:
+            # `_factorize`'s groups and numbers (`factorize_float_classes`),
+            # in int32 and without its first-row array.
+            n_cls, key_cls = _accel.acc.factorize_float_classes(
+                np.ascontiguousarray(plan.key_r, dtype=float), cancel_flag=_cancel.ptr()
+            )
+            n_cls = int(n_cls)
+            got = None
+        else:
+            got = _near_interface._factorize((plan.key_r,)) if column else None
         if got is not None:
             # Column tiles read the classes as labels (their walk orders the
             # line by ρ itself, `_column_tiles`), so they are numbered by one
             # hash pass instead of sorted: the same partition of the keys.
             key_cls = np.asarray(got[1]).ravel()
             n_cls = int(got[0].size)
-        else:
+        elif not lean:
             _r_u, key_cls = plan.keys.take_r_classes()
             n_cls = _r_u.size
         del got
-        rows_per_key = np.zeros(n_key, dtype=np.int64)
+        # A candidate count per key (an upper bound on its rows): at most the
+        # grouped nodes, so 32 bits.
+        rows_per_key = np.zeros(n_key, dtype=np.int32)
         for g, kj in enumerate(plan.kids):
             if not g & 255:
                 _cancel.poll()
-            rows_per_key[kj] += plan.nz[g]  # a candidate count: an upper bound
-        cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=n_cls)
+            rows_per_key[kj] += plan.nz[g]
+        if lean:
+            # `bincount(key_cls, weights=rows_per_key)` read in place
+            # (`class_sums`): whole counts, so the same floats.
+            cls_rows = _accel.acc.class_sums(
+                key_cls, rows_per_key, n_cls, cancel_flag=_cancel.ptr()
+            )
+        else:
+            cls_rows = np.bincount(key_cls, weights=rows_per_key, minlength=n_cls)
+        del rows_per_key
         col_ready = None
         if column:
             t_of_cls, col_ready, self.n_tiles = _column_tiles(plan, key_cls, cls_rows)
@@ -2969,9 +3032,11 @@ class _ProductTiles:
             _t, t_of_cls = np.unique(t_of_cls, return_inverse=True)
             t_of_cls = np.asarray(t_of_cls).ravel()
             self.n_tiles = int(_t.size)
+        del cls_rows
         self.tile_of_key = t_of_cls[key_cls].astype(
-            np.int16 if self.n_tiles < 2**15 else np.int64, copy=False
+            _tile_dtype(self.n_tiles), copy=False
         )
+        del t_of_cls, key_cls
         # Per group, its local keys sorted by tile -- or, with many groups,
         # every row in tile order (`_tile_rows`).
         self._gkeys = []

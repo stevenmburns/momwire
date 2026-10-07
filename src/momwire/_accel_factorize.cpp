@@ -347,6 +347,119 @@ static py::tuple factorize_line_keys(py::array_t<double, py::array::c_style> lin
     return py::make_tuple(out_first, kid);
 }
 
+// `factorize_rows` of ONE float64 column, answering only the group count and
+// the inverse, in int32 (momwire#1377): the crossing tiles' exact-rho classes
+// of the plan's keys (`_crossing_fill._ProductTiles`), ~11.3 M keys in
+// ~11.3 M classes at razor's inverted L x32, where `factorize_rows` stood
+// ~0.34 GB above its input (a table of twice the rows, an int64 inverse, the
+// `first` vector and its copy out). The groups and their numbers are
+// `group_rows`' -- the same equality (-0.0 folded, a NaN its own group, bits
+// otherwise), numbered in walk order -- and only the memory differs:
+//   * a slot holds the FIRST ROW of its group (under the hash tag), and that
+//     row's group is inv[row], written when the group was opened, so no
+//     `first` vector is kept;
+//   * the table is sized once at the first power of two >= 4n/3: groups <=
+//     rows, so its load never passes 3/4 and it never rehashes;
+//   * which slot a group lands in never decides its number.
+static py::tuple factorize_float_classes(py::array_t<double, py::array::c_style> col,
+                                         uintptr_t cancel_flag = 0) {
+    if (col.ndim() != 1)
+        throw std::runtime_error("factorize_float_classes: one 1-D column");
+    const py::ssize_t n = col.shape(0);
+    if (n >= static_cast<py::ssize_t>(std::numeric_limits<int32_t>::max()))
+        throw std::runtime_error("factorize_float_classes: too many rows for 32-bit ids");
+    const double *C = col.data();
+    py::array_t<int32_t> inverse(n);
+    int32_t *inv = inverse.mutable_data();
+    int64_t n_groups = 0;
+    if (n > 0) {
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
+        size_t cap = 16;
+        while (3 * cap < 4 * static_cast<size_t>(n)) cap <<= 1;
+        std::vector<uint64_t> table(cap, 0);
+        const size_t mask = cap - 1;
+        uint64_t hs[kPrefetchBlock];
+        // Hashed a block ahead with each home slot prefetched, then walked
+        // row by row (`group_rows`' argument: a prefetch reads nothing it
+        // could change).
+        for (py::ssize_t i0 = 0; i0 < n; i0 += kPrefetchBlock) {
+            MW_CANCEL_SERIAL_POLL();  // per 32-row block
+            const py::ssize_t i1 = std::min(n, i0 + kPrefetchBlock);
+            for (py::ssize_t i = i0; i < i1; ++i) {
+                uint64_t b;
+                std::memcpy(&b, C + i, 8);
+                hs[i - i0] = mix(0x9e3779b97f4a7c15ULL ^ float_key(b));
+                MW_PREFETCH(table.data() + (static_cast<size_t>(hs[i - i0]) & mask));
+            }
+            for (py::ssize_t i = i0; i < i1; ++i) {
+                uint64_t b;
+                std::memcpy(&b, C + i, 8);
+                if (is_nan(b)) {
+                    inv[i] = static_cast<int32_t>(n_groups++);
+                    continue;
+                }
+                const uint64_t key = float_key(b);
+                const uint64_t h = hs[i - i0];
+                const uint64_t tag = h & 0xffffffff00000000ULL;
+                size_t s = static_cast<size_t>(h) & mask;
+                for (;;) {
+                    const uint64_t slot = table[s];
+                    if (slot == 0) {
+                        table[s] = tag | (static_cast<uint64_t>(i) + 1);
+                        inv[i] = static_cast<int32_t>(n_groups++);
+                        break;
+                    }
+                    if ((slot & 0xffffffff00000000ULL) == tag) {
+                        const py::ssize_t f =
+                            static_cast<py::ssize_t>((slot & 0xffffffffULL) - 1);
+                        uint64_t fb;
+                        std::memcpy(&fb, C + f, 8);
+                        if (float_key(fb) == key) {
+                            inv[i] = inv[f];
+                            break;
+                        }
+                    }
+                    s = (s + 1) & mask;
+                }
+            }
+        }
+    }
+    return py::make_tuple(py::int_(n_groups), inverse);
+}
+
+// `np.bincount(idx, weights=w, minlength=n)` for int32 ids and int32 weights,
+// read in place (momwire#1377): the crossing tiles' rows per exact-rho class,
+// where numpy's call first copies both ~11.3 M-entry operands to intp and
+// float64 (and `np.add.at` over spans was 0.7 s). The weights are whole
+// counts and every partial sum stays below 2^53, so each double sum is exact
+// and the same in any order: bincount's floats.
+static py::array_t<double> class_sums(py::array_t<int32_t, py::array::c_style> idx,
+                                      py::array_t<int32_t, py::array::c_style> w,
+                                      int64_t n, uintptr_t cancel_flag = 0) {
+    if (idx.ndim() != 1 || w.ndim() != 1 || idx.shape(0) != w.shape(0))
+        throw std::runtime_error("class_sums: one weight per id");
+    if (n < 0) throw std::runtime_error("class_sums: negative length");
+    const py::ssize_t m = idx.shape(0);
+    const int32_t *I = idx.data();
+    const int32_t *W = w.data();
+    for (py::ssize_t i = 0; i < m; ++i)
+        if (I[i] < 0 || I[i] >= n) throw std::runtime_error("class_sums: id out of range");
+    py::array_t<double> out(static_cast<py::ssize_t>(n));
+    double *O = out.mutable_data();
+    {
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
+        std::fill(O, O + n, 0.0);
+        for (py::ssize_t i0 = 0; i0 < m; i0 += 1 << 16) {
+            MW_CANCEL_SERIAL_POLL();
+            const py::ssize_t i1 = std::min(m, i0 + (1 << 16));
+            for (py::ssize_t i = i0; i < i1; ++i) O[I[i]] += static_cast<double>(W[i]);
+        }
+    }
+    return out;
+}
+
 // A persistent exact-equality index over the rows of 1-3 float64 columns:
 // `find(cols)` is, per query row, the index of the FIRST stored row equal to
 // it, or -1 (a NaN row is never stored and never found) -- the lookup of
@@ -1075,6 +1188,16 @@ void register_factorize(py::module_ &m) {
           "table grown with the groups. momwire#1335.",
           py::arg("line"), py::arg("lz"), py::arg("cancel_flag") = 0);
     m.attr("factorize_line_keys_1335") = true;
+    m.def("factorize_float_classes", &factorize::factorize_float_classes,
+          "`factorize_rows` of one float64 column as (group count, inverse "
+          "int32): the same groups and numbers, no first-row array, the table "
+          "sized at 4/3 of the rows. momwire#1377.",
+          py::arg("col"), py::arg("cancel_flag") = 0);
+    m.attr("factorize_float_classes_1377") = true;
+    m.def("class_sums", &factorize::class_sums,
+          "`np.bincount(idx, weights=w, minlength=n)` of int32 ids and whole "
+          "int32 weights, read in place. momwire#1377.",
+          py::arg("idx"), py::arg("w"), py::arg("n"), py::arg("cancel_flag") = 0);
     // The capability flag, beside the bindings it vouches for (#710).
     m.attr("exact_factorize_1224") = true;
     m.attr("row_groups_1224") = true;
