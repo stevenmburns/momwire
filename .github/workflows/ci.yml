@@ -11,6 +11,14 @@ on:
   # branch that broke it could not have asked).
   workflow_dispatch:
 
+# A newer push to the same PR or a re-dispatch on the same branch supersedes
+# the older run, so cancel it. Pushes to main get a UNIQUE group (run_id):
+# every main commit keeps its own verdict, and a shared group would silently
+# drop queued main runs even with cancel-in-progress off.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # Which lanes are worth running for this diff. A docs- or site-only PR
   # cannot break the solvers, and PR #600 -- one markdown file -- burned
