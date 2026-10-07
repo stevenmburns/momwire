@@ -21,6 +21,11 @@ wing drops out is skipped when `scale` is negative, where its add of
              (j, r) count, every batch size, against `lanes=False`.
 - G-1290-F4  end to end, the buried Z with the mirror and lanes and with
              both flags cleared, bit for bit, the mirror counted as run.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 import sys
@@ -32,6 +37,7 @@ import pytest
 
 import momwire.bspline as _bs
 from momwire import BSplineSolver
+from _lane_gate import assert_lanes_match
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_field_galerkin_914 import screen_deck  # noqa: E402
@@ -107,14 +113,14 @@ def test_g1290_f1_one_mirror_call_is_the_two_scalar_calls(live_calls):
     real, seen = live_calls
     for i, (a, kw) in enumerate(seen[:: max(1, len(seen) // 6)]):
         Q1, Q2 = _mirror_vs_two(real, a, kw, -1.0, i)
-        assert np.array_equal(_bits(Q1), _bits(Q2)), i
+        assert_lanes_match(Q1, Q2, i)
 
 
 def test_g1290_f2_a_positive_scale_visits_every_column(live_calls):
     real, seen = live_calls
     a, kw = seen[len(seen) // 2]
     Q1, Q2 = _mirror_vs_two(real, a, kw, 1.0, 7)
-    assert np.array_equal(_bits(Q1), _bits(Q2))
+    assert_lanes_match(Q1, Q2)
     # and the scalar route did flip a -0 the skip would have kept
     rng = np.random.default_rng(7)
     seed = _target(Q1.shape[0], rng)
@@ -164,7 +170,7 @@ def test_g1290_f3_stage_one_lanes_on_signed_zeros(n_rows, n_src):
             lanes=lanes,
         )
         out.append(Q)
-    assert np.array_equal(_bits(out[0]), _bits(out[1]))
+    assert_lanes_match(out[0], out[1])
 
 
 def test_g1290_f4_the_buried_z_with_and_without(monkeypatch):
@@ -197,4 +203,4 @@ def test_g1290_f4_the_buried_z_with_and_without(monkeypatch):
     Zs, cs = fill(False)
     assert cm["mirror"] > 2, cm
     assert cs["mirror"] == 0 and cs["other"] == 0 and cs["scalar"] > cm["mirror"], cs
-    assert np.array_equal(_bits(Zm), _bits(Zs))
+    assert_lanes_match(Zm, Zs)

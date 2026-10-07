@@ -18,6 +18,11 @@ build being -ffp-contract=off), so the claim is equality of bytes with
     region), and pairs past the table's edge (the continuation);
   * on whole solves, G, Z and the currents with `_sommerfeld._PROJ_LANES`
     off.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ from test_sg_real_far_fill_staged_1290 import _array
 import momwire._accel as _accel
 from momwire import _sommerfeld
 from momwire import sinusoidal_galerkin as sg
+from _lane_gate import assert_lanes_match
 
 
 def _direct_sg(*args, **kw):
@@ -92,7 +98,7 @@ def test_live_calls_equal_the_per_pair_loop(name, recorded):
     assert lane_pairs == (pairs if LANES_BUILT else 0)
     for i, args in enumerate(calls):
         lanes, scalar = _both(args)
-        assert lanes.tobytes() == scalar.tobytes(), f"{name}: call {i} differs"
+        assert_lanes_match(lanes, scalar, f"{name}: call {i}")
 
 
 def _synthetic(args, n_src, seed):
@@ -132,7 +138,7 @@ def _synthetic(args, n_src, seed):
 def test_synthetic_pairs_on_every_arm(name, n_src, recorded):
     calls, _ = recorded[name]
     lanes, scalar = _both(_synthetic(calls[0], n_src, seed=n_src))
-    assert lanes.tobytes() == scalar.tobytes()
+    assert_lanes_match(lanes, scalar)
     assert np.all(np.isfinite(lanes))
 
 
@@ -158,6 +164,6 @@ def test_whole_solve_with_the_lanes_off(name, monkeypatch):
     mid = _accel.acc.somm_proj_lane_pairs()
     G0, Z0, I0 = capture()
     assert _accel.acc.somm_proj_lane_pairs() == mid
-    assert G1.tobytes() == G0.tobytes()
-    assert Z1.tobytes() == Z0.tobytes()
-    assert I1.tobytes() == I0.tobytes()
+    assert_lanes_match(G1, G0)
+    assert_lanes_match(Z1, Z0)
+    assert_lanes_match(I1, I0)

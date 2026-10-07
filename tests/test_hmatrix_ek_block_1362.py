@@ -56,6 +56,11 @@ at aca_tol 1e-12 / solve_tol 1e-13 the H-matrix's ladder movement falls to
 1.6e-13 (x4) and 5.8e-13 (x16). It sits three orders or more under the
 H-matrix's own distance from the dense fill. The gate below holds the test
 decks (all <= 2e-13) to #1365's Z_TOL = 1e-11.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -68,6 +73,7 @@ import pytest
 
 from momwire import _bspline_kernels as BK
 from momwire import hmatrix as H
+from _lane_gate import assert_lanes_match
 
 acc = BK._acc
 
@@ -185,7 +191,7 @@ def test_lanes_are_the_walk_to_the_bit(monkeypatch, image, degree, n_qp, ladder)
             out[reference] = (get_row(3), get_col(7), dense())
             assert sum(route.n.values()) == 3, route.n
     for got, want in zip(out[False], out[True]):
-        assert np.array_equal(_bits(got), _bits(want))
+        assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize("image", [None, "pec", "refl"])
@@ -194,9 +200,9 @@ def test_rows_columns_and_the_dense_block_agree_to_the_bit(image):
     (get_row, get_col, dense), I, J = _evaluators(s, image)
     Z = dense()
     for i in (0, 7, len(I) - 1):
-        assert np.array_equal(_bits(get_row(i)), _bits(Z[i]))
+        assert_lanes_match(get_row(i), Z[i])
     for j in (0, 11, len(J) - 1):
-        assert np.array_equal(_bits(get_col(j)), _bits(Z[:, j]))
+        assert_lanes_match(get_col(j), Z[:, j])
 
 
 def _flat_args(s, I, J, image):
@@ -247,7 +253,7 @@ def test_an_all_ineligible_block_is_the_reduced_assembler(image):
             *args, *gl, none_i, gj, a, reference=reference
         )
         red = acc.bspline_assemble_offedge_block(*args, *gl)
-        assert np.array_equal(_bits(ek), _bits(red))
+        assert_lanes_match(ek, red)
     # Negative controls: with its labels the block moves — the image block
     # too, since momwire#1368 extends a horizontal wire against its own image
     # — and a 1 ppm EK radius moves it again.
@@ -267,7 +273,7 @@ def test_one_tier_is_the_flat_entry_and_a_failed_guard_drops_the_limited_tier():
     one = acc.bspline_assemble_offedge_block_ek_tiered(
         *args, *BK._ladder_arrays(8, ()), gi, gj, a, none, none, 8
     )
-    assert np.array_equal(_bits(one), _bits(flat))
+    assert_lanes_match(one, flat)
     lad = BK._ladder_arrays(8, ((16.0, 4),))
     tiered = acc.bspline_assemble_offedge_block_ek_tiered(
         *args, *lad, gi, gj, a, none, none, 8
@@ -280,13 +286,13 @@ def test_one_tier_is_the_flat_entry_and_a_failed_guard_drops_the_limited_tier():
     guarded = acc.bspline_assemble_offedge_block_ek_tiered(
         *args, *lad, gi, gj, a, fail_i, fail_j, 8
     )
-    assert np.array_equal(_bits(guarded), _bits(flat))
+    assert_lanes_match(guarded, flat)
     # ... and the guard is per PAIR: failing only the source side does too.
     ok_i = np.ones_like(fail_i)
     half = acc.bspline_assemble_offedge_block_ek_tiered(
         *args, *lad, gi, gj, a, ok_i, fail_j, 8
     )
-    assert np.array_equal(_bits(half), _bits(flat))
+    assert_lanes_match(half, flat)
 
 
 # --- solver level --------------------------------------------------------------
@@ -328,8 +334,8 @@ def test_an_ek_hmatrix_solve_is_the_reference_walk_to_the_bit(monkeypatch, ladde
     z_ref, c_ref, n_ref = _z(monkeypatch, deck, reference=True, **kw)
     z, c, n = _z(monkeypatch, deck, reference=False, **kw)
     assert n == n_ref and sum(n.values()) > 0
-    assert _bits(np.array([z])).tolist() == _bits(np.array([z_ref])).tolist()
-    assert np.array_equal(_bits(c), _bits(c_ref))
+    assert_lanes_match(np.array([z]), np.array([z_ref]))
+    assert_lanes_match(c, c_ref)
 
 
 def test_a_deck_straddling_the_phase_guard(monkeypatch):

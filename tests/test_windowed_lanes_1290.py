@@ -19,6 +19,11 @@ are bit equality against it, not tolerance:
   COUNTED, so neither gate can pass without the assembler having run;
 * the lane kernel is compiled into the x86-64 AVX2 variant (elsewhere both
   spellings are the reference loop, and the bit gates hold trivially).
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -31,6 +36,7 @@ import pytest
 
 from momwire import _accel
 from momwire import bspline as B
+from _lane_gate import assert_lanes_match
 
 acc = B._acc
 
@@ -131,7 +137,7 @@ def test_lanes_are_the_reference_to_the_bit(d, cplx, seed):
     want = _run(c, True, cplx=cplx)
     got = _run(c, False, cplx=cplx)
     assert not np.array_equal(want, c["Z0"])  # the window added something
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize("cplx", [False, True])
@@ -142,7 +148,7 @@ def test_lanes_into_a_row_compact_z(cplx):
     row_of[c["m_idx"]] = np.arange(c["m_idx"].size)[::-1]
     want = _run(c, True, cplx=cplx, row_of=row_of)
     got = _run(c, False, cplx=cplx, row_of=row_of)
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize(
@@ -157,7 +163,7 @@ def test_lanes_on_edge_windows(window):
     c = _case(3, 2, window=window)
     want = _run(c, True)
     got = _run(c, False)
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 def test_the_gate_sees_one_ulp():
@@ -212,8 +218,8 @@ def test_a_free_space_solve_is_the_reference_to_the_bit(monkeypatch):
     z_ref, c_ref, n_ref = _solve(_free_array, monkeypatch, True)
     z, c, n = _solve(_free_array, monkeypatch, False)
     assert n_ref == n > 1  # the chunked fill ran, window by window
-    assert np.array_equal(_bits(z), _bits(z_ref))
-    assert np.array_equal(_bits(c), _bits(c_ref))
+    assert_lanes_match(z, z_ref)
+    assert_lanes_match(c, c_ref)
 
 
 def test_a_buried_solve_is_the_reference_to_the_bit(monkeypatch):
@@ -225,5 +231,5 @@ def test_a_buried_solve_is_the_reference_to_the_bit(monkeypatch):
     z_ref, c_ref, n_ref = _solve(make, monkeypatch, True)
     z, c, n = _solve(make, monkeypatch, False)
     assert n_ref == n > 0
-    assert np.array_equal(_bits(z), _bits(z_ref))
-    assert np.array_equal(_bits(c), _bits(c_ref))
+    assert_lanes_match(z, z_ref)
+    assert_lanes_match(c, c_ref)
