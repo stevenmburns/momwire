@@ -4763,7 +4763,9 @@ seg_seg_full_moments_sinusoidal_kernel(
     double a_ek = 0.0,
     // momwire#1368: Eq 89's source tube b per SOURCE segment (N_j,), or
     // nullptr for b = a_ek (the equal-radius factor).
-    const double *b_j = nullptr
+    const double *b_j = nullptr,
+    // The walk alone, every pair (the lanes' gate).
+    bool reference = false
 ) {
     static_assert(!(EK && COMPLEX_K),
                   "the extended kernel is served at a real k only");
@@ -4891,9 +4893,9 @@ seg_seg_full_moments_sinusoidal_kernel(
         split(ws_j[tier], wsj_re[tier], wsj_im[tier]);
     }
 
-    MW_OMP_PARALLEL_FOR_COLLAPSE2
-    for (size_t i = 0; i < N_i; i++) {
-        for (size_t j = 0; j < N_j; j++) {
+    // One pair (i, j) as the kernel has always computed it: the walk, and
+    // the reference the lanes below are gated against.
+    auto pair_walk = [&](size_t i, size_t j) {
             const size_t tier = pair_tier(i, j);
             const size_t n_qp = ladder.n_qp(tier);
             const double *pi = &pos_i[tier][i * n_qp * 3];
@@ -4994,7 +4996,155 @@ seg_seg_full_moments_sinusoidal_kernel(
             }
             for (int pP = 0; pP < NMM; pP++)
                 j_view(pP / NM, pP % NM, i, j) = std::complex<double>(acc_re[pP], acc_im[pP]);
+    };
+
+#if MW_OFFEDGE_LANES_1290
+    if (!reference && !EK) {
+        // The lane kernel: W columns (i, j0..j0+W-1) at a time, lane l
+        // holding the pair (i, j0+l), wherever the W share a tier whose rule
+        // is one qr chunk of an EVEN order -- the B-spline off-edge kernel's
+        // lanes (momwire#1290), on this basis's contraction. Anything else
+        // (mixed tiers, an odd order, a rule over BSPLINE_QR_TILE points,
+        // the N_j % W tail) is walked by `pair_walk`, unchanged.
+        //
+        // Each lane is the walk's arithmetic for its pair, operation for
+        // operation: R by `r_bcast` (the walk's expression), the same G, then
+        // the same two-level contraction -- per test node q, gq[P] summed
+        // over r ascending, then acc[p][P] over q ascending, every product
+        // rounded and every sum left to right (-ffp-contract=off, no fma
+        // written). cos/sin/exp are the one thing that is not textual: the
+        // walk's simd loops give whole vectors to libmvec's 4-wide entry and
+        // a remainder to SCALAR libm, which differ in the last bit. An even
+        // order makes m = n_qp^2 a multiple of 4, so the walk has no
+        // remainder and both routes put every point through the vector
+        // entry. Gated as uint64 against `reference=True`
+        // (tests/test_sinusoidal_lanes.py).
+        using namespace offedge_lanes;
+        constexpr size_t LN = W;
+        const size_t n_grp = (N_j + LN - 1) / LN;
+        // Source points (c, r, j) and source shapes (r, P, j), lane-major per
+        // tier: a group reads one quantity of one node for its W columns as
+        // a single load.
+        std::vector<std::vector<double>> pjT(n_tiers), sjT_re(n_tiers), sjT_im(n_tiers);
+        for (size_t tier = 0; tier < n_tiers; tier++) {
+            const size_t n_qp = ladder.n_qp(tier);
+            pjT[tier].resize(3 * n_qp * N_j);
+            sjT_re[tier].resize(n_qp * NM * N_j);
+            sjT_im[tier].resize(n_qp * NM * N_j);
+            for (size_t j = 0; j < N_j; j++) {
+                for (size_t r = 0; r < n_qp; r++) {
+                    for (size_t c = 0; c < 3; c++)
+                        pjT[tier][(c * n_qp + r) * N_j + j] = pos_j[tier][(j * n_qp + r) * 3 + c];
+                    for (int P = 0; P < NM; P++) {
+                        sjT_re[tier][(r * NM + P) * N_j + j] = wsj_re[tier][(j * n_qp + r) * NM + P];
+                        sjT_im[tier][(r * NM + P) * N_j + j] = wsj_im[tier][(j * n_qp + r) * NM + P];
+                    }
+                }
+            }
         }
+        const vd v_a2 = set1(a_squared);
+
+        #pragma omp parallel
+        {
+        // [t][lane]: point t of the walk's chunk for column j0 + lane.
+        alignas(ALIGN) double R[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double ph[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double G_re[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double G_im[BSPLINE_QR_TILE * LN];
+        MW_OMP_FOR_COLLAPSE2
+        for (size_t i = 0; i < N_i; i++) {
+            for (size_t g = 0; g < n_grp; g++) {
+                const size_t j0 = g * LN;
+                bool lanes = j0 + LN <= N_j;
+                size_t tier = 0;
+                if (lanes) {
+                    tier = pair_tier(i, j0);
+                    for (size_t l = 1; l < LN; l++)
+                        lanes = lanes && pair_tier(i, j0 + l) == tier;
+                    const size_t nq = ladder.n_qp(tier);
+                    lanes = lanes && nq % 2 == 0 && nq * nq <= BSPLINE_QR_TILE;
+                }
+                if (!lanes) {
+                    const size_t j1 = std::min(j0 + LN, N_j);
+                    for (size_t j = j0; j < j1; j++) pair_walk(i, j);
+                    continue;
+                }
+                const size_t n_qp = ladder.n_qp(tier);
+                const size_t m4 = n_qp * n_qp * LN;
+                const double *pi = &pos_i[tier][i * n_qp * 3];
+                r_bcast(R, pi, pjT[tier].data(), n_qp, N_j, j0, v_a2);
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m4; t++) ph[t] = -k_re * R[t];
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m4; t++) G_re[t] = std::cos(ph[t]);
+                MW_OMP_SIMD()
+                for (size_t t = 0; t < m4; t++) G_im[t] = std::sin(ph[t]);
+                if constexpr (COMPLEX_K) {
+                    MW_OMP_SIMD()
+                    for (size_t t = 0; t < m4; t++) ph[t] = std::exp(k_im * R[t]);
+                    MW_OMP_SIMD()
+                    for (size_t t = 0; t < m4; t++) {
+                        const double sc = ph[t] * inv_4pi / R[t];
+                        G_re[t] *= sc;
+                        G_im[t] *= sc;
+                    }
+                } else {
+                    MW_OMP_SIMD()
+                    for (size_t t = 0; t < m4; t++) {
+                        const double sc = inv_4pi / R[t];
+                        G_re[t] *= sc;
+                        G_im[t] *= sc;
+                    }
+                }
+                // The walk's contraction, per lane: gq[P] = sum_r G sj[r][P]
+                // for each test node q, then acc[p][P] += si[q][p] gq[P].
+                const double *si_re = &wsi_re[tier][i * n_qp * NM];
+                const double *si_im = &wsi_im[tier][i * n_qp * NM];
+                const double *sjr = sjT_re[tier].data() + j0;
+                const double *sji = sjT_im[tier].data() + j0;
+                vd acc_re[NMM], acc_im[NMM];
+                for (int pP = 0; pP < NMM; pP++) acc_re[pP] = acc_im[pP] = zero();
+                for (size_t q = 0; q < n_qp; q++) {
+                    vd gq_re[NM], gq_im[NM];
+                    for (int P = 0; P < NM; P++) gq_re[P] = gq_im[P] = zero();
+                    for (size_t r = 0; r < n_qp; r++) {
+                        const size_t t = q * n_qp + r;
+                        const vd gr = load(G_re + t * LN), gi = load(G_im + t * LN);
+                        for (int P = 0; P < NM; P++) {
+                            const vd sr = loadu(sjr + (r * NM + P) * N_j);
+                            const vd sim = loadu(sji + (r * NM + P) * N_j);
+                            gq_re[P] = add(gq_re[P], sub(mul(gr, sr), mul(gi, sim)));
+                            gq_im[P] = add(gq_im[P], add(mul(gr, sim), mul(gi, sr)));
+                        }
+                    }
+                    for (int p = 0; p < NM; p++) {
+                        const vd ar = set1(si_re[q * NM + p]), ai = set1(si_im[q * NM + p]);
+                        for (int P = 0; P < NM; P++) {
+                            acc_re[p * NM + P] = add(acc_re[p * NM + P],
+                                sub(mul(ar, gq_re[P]), mul(ai, gq_im[P])));
+                            acc_im[p * NM + P] = add(acc_im[p * NM + P],
+                                add(mul(ar, gq_im[P]), mul(ai, gq_re[P])));
+                        }
+                    }
+                }
+                for (int pP = 0; pP < NMM; pP++)
+                    store_interleaved(
+                        reinterpret_cast<double *>(&j_view(pP / NM, pP % NM, i, j0)),
+                        acc_re[pP], acc_im[pP]);
+            }
+        }
+        }
+    } else
+#else
+    (void)reference;
+#endif
+    {
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t i = 0; i < N_i; i++) {
+        for (size_t j = 0; j < N_j; j++) {
+            pair_walk(i, j);
+        }
+    }
     }
     return J;
 }
@@ -5010,7 +5160,8 @@ seg_seg_full_moments_sinusoidal_tiered(
     py::array_t<double, py::array::c_style | py::array::forcecast> tier_t,
     py::array_t<double, py::array::c_style | py::array::forcecast> tier_w,
     py::array_t<int64_t, py::array::c_style | py::array::forcecast> tier_n_qp,
-    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio
+    py::array_t<double, py::array::c_style | py::array::forcecast> tier_ratio,
+    bool reference
 ) {
     if (k.imag() > 0.0) {
         throw std::runtime_error(
@@ -5020,10 +5171,12 @@ seg_seg_full_moments_sinusoidal_tiered(
     PairOrderLadder ladder = ladder_from_arrays(tier_t, tier_w, tier_n_qp, tier_ratio);
     if (k.imag() == 0.0) {
         return seg_seg_full_moments_sinusoidal_kernel<false>(
-            seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k.real(), 0.0, ladder);
+            seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k.real(), 0.0, ladder,
+            nullptr, nullptr, 0.0, nullptr, reference);
     }
     return seg_seg_full_moments_sinusoidal_kernel<true>(
-        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k.real(), k.imag(), ladder);
+        seg_l_i, seg_r_i, seg_l_j, seg_r_j, a_squared, k.real(), k.imag(), ladder,
+        nullptr, nullptr, 0.0, nullptr, reference);
 }
 
 // The extended-kernel twin of `seg_seg_full_moments_sinusoidal_tiered`
@@ -6745,7 +6898,8 @@ void register_bspline(py::module_ &m) {
           py::arg("seg_l_j"), py::arg("seg_r_j"),
           py::arg("a_squared"), py::arg("k"),
           py::arg("tier_t"), py::arg("tier_w"),
-          py::arg("tier_n_qp"), py::arg("tier_ratio"));
+          py::arg("tier_n_qp"), py::arg("tier_ratio"),
+          py::arg("reference") = false);
     m.def("seg_seg_full_moments_sinusoidal_tiered_ek",
           &seg_seg_full_moments_sinusoidal_tiered_ek,
           "The extended-kernel twin of seg_seg_full_moments_sinusoidal_tiered "
