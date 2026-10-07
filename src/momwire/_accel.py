@@ -466,6 +466,12 @@ _CANCELLABLE_KERNELS = (
     "near_interface_six_columns",
     # momwire#1335: the plan's key ids (factorize_rows of the same rows).
     "factorize_line_keys",
+    # momwire#1377: the tiles' key classes and class sums, row order and
+    # late-row marks.
+    "factorize_float_classes",
+    "class_sums",
+    "stable_tile_order",
+    "late_sandwich_rows",
 )
 
 # Methods of the extension's classes that take `cancel_flag`, as (class,
