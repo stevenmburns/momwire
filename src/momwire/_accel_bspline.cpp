@@ -2068,15 +2068,292 @@ assemble_Z_bspline_kernel(
 }
 
 
-// momwire#1290: the windowed assembler's AVX2 lane kernel. Only where the
-// vector fma IS the scalar fma -- an x86 build with -mfma, whose mw_fma::fma
-// is std::fma, one vfmadd. The baseline (_sse2) variant, arm64 and MSVC keep
-// the reference loop alone, so their bits cannot move.
-#if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
+// momwire#1290: the windowed assemblers' lane kernel, written against the
+// lane layer (momwire#1372, `_lanes.h`). Only where the vector fma IS the
+// scalar fma (MW_LANES_FMA_EXACT: an x86 build with -mfma, whose mw_fma::fma
+// is std::fma, one vfmadd) and the backend packs (re, im) per lane pair. The
+// baseline (_sse2) variant, arm64 and MSVC keep the reference loops alone, so
+// their bits cannot move.
+#include "_lanes.h"
+#if MW_LANES_SIMD && MW_LANES_FMA_EXACT && MW_LANES_PACKED
 #define MW_WINDOWED_LANES_1290 1
-#include <immintrin.h>
 #else
 #define MW_WINDOWED_LANES_1290 0
+#endif
+
+#if MW_WINDOWED_LANES_1290
+// The lane kernel of both windowed assemblers (momwire#1290; one body since
+// momwire#1372): L entries (m, n..n+L-1) at a time, over TM x TN tiles of
+// (mi, ni). WEIGHTED selects the ground-image twin
+// (`assemble_Z_bspline_weighted_windowed_kernel`): complex per-pair weights
+// `WAd` / `WPd` in place of the tangent dot `Td`, and `scale` on each entry.
+// The arrays are the kernels' c-contiguous inputs, read raw.
+//
+// Every entry's arithmetic is its reference loop's, operation for operation.
+// Unweighted: the same products, the same fma chain over (p, q) for wA /
+// wPhi, the same fma(td, wA, zA) and `zPhi + wPhi` over (a, b) in the same
+// order, the same tangent dot, the same combine. Weighted: that loop has no
+// explicit fma and the build does not contract (momwire#1194), so every
+// product and sum is its own rounded op -- iA += prod * J and
+// iPhi += (p q prod) * J' as multiply-then-add in the same (p, q) order;
+// zA += wa * iA with the complex product as the compiler expands
+// std::complex's (re = ac - bd, im = ad + bc, four rounded products), which
+// is `cmul_packed`; the same scalar combine and scale per entry. (A product
+// whose parts are BOTH NaN is where the compiler's complex multiply calls
+// __muldc3 and this kernel does not; no finite fill reaches it.) In both, an
+// (a, b) the reference skips (sn outside [j0, j1)) is computed for that lane
+// and dropped by a blend, never added, so the accumulator is left as
+// `continue` left it. Nothing is reassociated: each Z entry is the
+// reference's to the bit on finite inputs.
+//
+// Measured (unweighted, Haswell, AVX2, free-space array at N = 2816, 13
+// calls, 9.0 M entries): the reference ran 2.09 s on one thread and 0.66 s on
+// four; this kernel 0.75 s and 0.29 s. What the reference paid for, in order:
+// one entry at a time is scalar and serial (each wA is a 9-deep fma chain),
+// and the row-at-a-time sweep wrote a column-major Z one cache line per
+// entry, 45 KB apart (a C-ordered Z ran the same call 1.5x faster). Lanes
+// vectorise across entries; tiles keep a tile's Z lines and its J rows
+// cache-resident while it fills. The entries are packed (re, im) per lane
+// pair so a contiguous run of J -- the common case, consecutive bases on
+// consecutive segments -- is read as it lies.
+template<int D, bool COMPLEX_EPS, bool ROW_MAP, bool WEIGHTED, class ZV>
+static void
+assemble_Z_bspline_windowed_lanes(
+    const double *Jd, const int64_t *ss, const double *pl, const double *Td,
+    const double *WAd, const double *WPd, std::complex<double> scale,
+    const int64_t *mi_p, const int64_t *ni_p, size_t n_m, size_t n_n,
+    int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+    double omega_mu, double inv_omega_eps, double c_re, double c_im,
+    ZV &z_view, const int64_t *row_of, uintptr_t cancel_flag
+) {
+    using namespace mw_lanes;
+    static constexpr int NM = D + 1;
+    constexpr int V = 4;                 // vectors per quantity
+    constexpr size_t L = V * (W / 2);    // entries per lane group
+    constexpr size_t K = 2 * L;
+    constexpr size_t TM = 64;  // tile rows (mi)
+    constexpr size_t TN = 16;  // tile columns (ni), a multiple of L
+    static_assert(TN % L == 0, "a tile holds whole lane groups");
+    constexpr int NP = NM * NM;
+    // ss (n_basis, NM), pl (n_basis, NM, NM), Td (n_segs, 3).
+    auto seg = [&](int64_t n, int b) { return ss[n * NM + b]; };
+    auto poly = [&](int64_t n, int b, int q) { return pl[(n * NM + b) * NM + q]; };
+    const size_t n_grp = (n_n + L - 1) / L;
+    const size_t n_pad = n_grp * L;
+    const size_t lane_stride = 2 * n_pad;
+    // Column side, once per call. Per (b, lane): the window-relative J offset
+    // in doubles (also the weight windows' offset within a row: they share
+    // J's trailing axes), the polynomial row and (unweighted) the source
+    // tangent, each (re, im)-duplicated; a lane the reference would skip
+    // carries a zero mask. Per (b, group): whether its lanes read one
+    // contiguous run of J (then `goff` is that run's start, else -1), and
+    // `gcov` 1 when every lane is live, 2 when none is (the reference skips
+    // that (a, b) for all of them, and an empty window has no J column to
+    // stage).
+    std::vector<int64_t> live2((size_t)NM * lane_stride, 0);
+    std::vector<int64_t> loff((size_t)NM * n_pad, 0);
+    std::vector<double> pn2((size_t)NM * NM * lane_stride, 0.0);
+    std::vector<double> tn2(WEIGHTED ? 0 : (size_t)NM * 3 * lane_stride, 0.0);
+    std::vector<int64_t> goff((size_t)NM * n_grp, -1);
+    std::vector<char> gcov((size_t)NM * n_grp, 0);
+    for (size_t ni = 0; ni < n_n; ni++) {
+        const int64_t n = ni_p[ni];
+        for (int b = 0; b < NM; b++) {
+            const int64_t sn = seg(n, b);
+            if (sn >= j0 && sn < j1) {
+                live2[(size_t)b * lane_stride + 2 * ni] = -1;
+                live2[(size_t)b * lane_stride + 2 * ni + 1] = -1;
+                loff[(size_t)b * n_pad + ni] = 2 * (sn - j0);
+                if (!WEIGHTED) {
+                    for (int c = 0; c < 3; c++) {
+                        const double t = Td[sn * 3 + c];
+                        tn2[((size_t)b * 3 + c) * lane_stride + 2 * ni] = t;
+                        tn2[((size_t)b * 3 + c) * lane_stride + 2 * ni + 1] = t;
+                    }
+                }
+            }
+            for (int q = 0; q < NM; q++) {
+                const double v = poly(n, b, q);
+                pn2[((size_t)b * NM + q) * lane_stride + 2 * ni] = v;
+                pn2[((size_t)b * NM + q) * lane_stride + 2 * ni + 1] = v;
+            }
+        }
+    }
+    for (int b = 0; b < NM; b++) {
+        for (size_t gi = 0; gi < n_grp; gi++) {
+            const size_t g = gi * L;
+            bool all = true, none = true, contig = true;
+            for (size_t l = 0; l < L; l++) {
+                const bool on = live2[(size_t)b * lane_stride + 2 * (g + l)] != 0;
+                all = all && on;
+                none = none && !on;
+                contig = contig && on &&
+                         loff[(size_t)b * n_pad + g + l] == loff[(size_t)b * n_pad + g] + 2 * (int64_t)l;
+            }
+            gcov[(size_t)b * n_grp + gi] = all ? 1 : (none ? 2 : 0);
+            if (contig) goff[(size_t)b * n_grp + gi] = loff[(size_t)b * n_pad + g];
+        }
+    }
+    const size_t J_row = 2 * (size_t)(j1 - j0);
+    const size_t J_plane = (size_t)(i1 - i0) * J_row;
+    size_t poff_j[NP], poff_s[NP];
+    for (int pq = 0; pq < NP; pq++) {
+        poff_j[pq] = (size_t)pq * J_plane;
+        poff_s[pq] = (size_t)pq * K;
+    }
+    const size_t n_tm = (n_m + TM - 1) / TM;
+    const size_t n_tn = (n_pad + TN - 1) / TN;
+
+    MW_CANCEL_SETUP(cancel_flag);
+    MW_OMP_PARALLEL_FOR_COLLAPSE2
+    for (size_t tm = 0; tm < n_tm; tm++) {
+        for (size_t tn = 0; tn < n_tn; tn++) {
+            MW_CANCEL_POLL();
+            const size_t mi_end = std::min(n_m, (tm + 1) * TM);
+            const size_t g_end = std::min(n_pad, (tn + 1) * TN);
+            double jst[NP * K], wast[K], wpst[K];
+            for (size_t mi = tm * TM; mi < mi_end; mi++) {
+                const int64_t m = mi_p[mi];
+                for (size_t g = tn * TN; g < g_end; g += L) {
+                    const size_t gi = g / L;
+                    vd zA[V], zP[V];
+                    for (int v = 0; v < V; v++) {
+                        zA[v] = zero();
+                        zP[v] = zero();
+                    }
+                    for (int a = 0; a < NM; a++) {
+                        const int64_t sm = seg(m, a);
+                        if (sm < i0 || sm >= i1) continue;
+                        vd tm0 = zero(), tm1 = zero(), tm2 = zero();
+                        if (!WEIGHTED) {
+                            tm0 = set1(Td[sm * 3 + 0]);
+                            tm1 = set1(Td[sm * 3 + 1]);
+                            tm2 = set1(Td[sm * 3 + 2]);
+                        }
+                        double pm[NM];
+                        for (int p = 0; p < NM; p++) pm[p] = poly(m, a, p);
+                        const size_t row = (size_t)(sm - i0) * J_row;
+                        const double *Jrow = Jd + row;
+                        for (int b = 0; b < NM; b++) {
+                            const char cov = gcov[(size_t)b * n_grp + gi];
+                            if (cov == 2) continue;
+                            const int64_t go = goff[(size_t)b * n_grp + gi];
+                            const double *base, *wab = nullptr, *wpb = nullptr;
+                            const size_t *po;
+                            if (go >= 0) {
+                                base = Jrow + go;
+                                if (WEIGHTED) {
+                                    wab = WAd + row + go;
+                                    wpb = WPd + row + go;
+                                }
+                                po = poff_j;
+                            } else {
+                                // Stage the lanes' J (and weights)
+                                // contiguously; a dead lane reads column 0 and
+                                // is masked.
+                                const int64_t *lo = &loff[(size_t)b * n_pad + g];
+                                for (int pq = 0; pq < NP; pq++)
+                                    for (size_t l = 0; l < L; l++) {
+                                        jst[pq * K + 2 * l] = Jrow[poff_j[pq] + lo[l]];
+                                        jst[pq * K + 2 * l + 1] = Jrow[poff_j[pq] + lo[l] + 1];
+                                    }
+                                if (WEIGHTED) {
+                                    for (size_t l = 0; l < L; l++) {
+                                        wast[2 * l] = WAd[row + lo[l]];
+                                        wast[2 * l + 1] = WAd[row + lo[l] + 1];
+                                        wpst[2 * l] = WPd[row + lo[l]];
+                                        wpst[2 * l + 1] = WPd[row + lo[l] + 1];
+                                    }
+                                    wab = wast;
+                                    wpb = wpst;
+                                }
+                                base = jst;
+                                po = poff_s;
+                            }
+                            // Unweighted: wA, wPhi as fused chains. Weighted:
+                            // iA, iPhi as rounded multiply-then-add.
+                            vd sA[V], sP[V];
+                            for (int v = 0; v < V; v++) {
+                                sA[v] = zero();
+                                sP[v] = zero();
+                            }
+                            for (int p = 0; p < NM; p++) {
+                                const vd mp = set1(pm[p]);
+                                for (int q = 0; q < NM; q++) {
+                                    const double *pnq =
+                                        &pn2[((size_t)b * NM + q) * lane_stride + 2 * g];
+                                    const double *jp = base + po[p * NM + q];
+                                    vd pr[V];
+                                    for (int v = 0; v < V; v++) {
+                                        pr[v] = mul(mp, loadu(pnq + W * v));
+                                        const vd jv = loadu(jp + W * v);
+                                        sA[v] = WEIGHTED ? add(sA[v], mul(pr[v], jv))
+                                                         : fmadd(pr[v], jv, sA[v]);
+                                    }
+                                    if (p >= 1 && q >= 1) {
+                                        const vd s = set1((double)(p * q));
+                                        const double *jl = base + po[(p - 1) * NM + (q - 1)];
+                                        for (int v = 0; v < V; v++) {
+                                            const vd jv = loadu(jl + W * v);
+                                            sP[v] = WEIGHTED ? add(sP[v], mul(mul(s, pr[v]), jv))
+                                                             : fmadd(mul(s, pr[v]), jv, sP[v]);
+                                        }
+                                    }
+                                }
+                            }
+                            const double *tb = WEIGHTED ? nullptr
+                                                        : &tn2[(size_t)b * 3 * lane_stride + 2 * g];
+                            for (int v = 0; v < V; v++) {
+                                vd nA, nP;
+                                if (WEIGHTED) {
+                                    nA = add(zA[v], cmul_packed(loadu(wab + W * v), sA[v]));
+                                    nP = add(zP[v], cmul_packed(loadu(wpb + W * v), sP[v]));
+                                } else {
+                                    const vd td = add(
+                                        add(mul(tm0, loadu(tb + W * v)),
+                                            mul(tm1, loadu(tb + lane_stride + W * v))),
+                                        mul(tm2, loadu(tb + 2 * lane_stride + W * v)));
+                                    nA = fmadd(td, sA[v], zA[v]);
+                                    nP = add(zP[v], sP[v]);
+                                }
+                                if (cov == 1) {
+                                    zA[v] = nA;
+                                    zP[v] = nP;
+                                } else {
+                                    const vm on = load_mask(
+                                        &live2[(size_t)b * lane_stride + 2 * g + W * v]);
+                                    zA[v] = blend(zA[v], nA, on);
+                                    zP[v] = blend(zP[v], nP, on);
+                                }
+                            }
+                        }
+                    }
+                    double zAs[K], zPs[K];
+                    for (int v = 0; v < V; v++) {
+                        storeu(zAs + W * v, zA[v]);
+                        storeu(zPs + W * v, zP[v]);
+                    }
+                    for (size_t l = 0; l < L && g + l < n_n; l++) {
+                        const int64_t n = ni_p[g + l];
+                        const double zA_re = zAs[2 * l], zA_im = zAs[2 * l + 1];
+                        const double zPhi_re = zPs[2 * l], zPhi_im = zPs[2 * l + 1];
+                        double Zre, Zim;
+                        if (COMPLEX_EPS) {
+                            Zre = -omega_mu * zA_im + (c_re * zPhi_re - c_im * zPhi_im);
+                            Zim = omega_mu * zA_re + (c_re * zPhi_im + c_im * zPhi_re);
+                        } else {
+                            Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
+                            Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
+                        }
+                        const std::complex<double> Zc(Zre, Zim);
+                        z_view(ROW_MAP ? row_of[m] : m, n) += WEIGHTED ? scale * Zc : Zc;
+                    }
+                }
+            }
+        }
+    }
+    MW_THROW_IF_ABORTED();
+}
 #endif
 
 
@@ -2171,213 +2448,12 @@ assemble_Z_bspline_windowed_kernel(
     MW_CANCEL_SETUP(cancel_flag);
 #if MW_WINDOWED_LANES_1290
     if (!reference) {
-        // The lane kernel (momwire#1290): L entries (m, n..n+L-1) at a time,
-        // over TM x TN tiles of (mi, ni).
-        //
-        // Every entry's arithmetic is the reference loop's, operation for
-        // operation: the same products, the same fma chain over (p, q) for
-        // wA / wPhi, the same fma(td, wA, zA) and `zPhi + wPhi` over (a, b) in
-        // the same order, the same tangent dot, the same combine. An (a, b)
-        // the reference skips (sn outside [j0, j1)) is computed here for that
-        // lane and then dropped by a blend, never added, so the accumulator is
-        // left as `continue` left it. Nothing is reassociated: each Z entry is
-        // the reference's to the bit.
-        //
-        // Measured (Haswell, free-space array at N = 2816, 13 calls, 9.0 M
-        // entries): the reference ran 2.09 s on one thread and 0.66 s on four;
-        // this kernel 0.75 s and 0.29 s. What the reference paid for, in
-        // order: one entry at a time is scalar and serial (each wA is a
-        // 9-deep fma chain), and the row-at-a-time sweep wrote a column-major
-        // Z one cache line per entry, 45 KB apart (a C-ordered Z ran the
-        // same call 1.5x faster). Lanes vectorise across entries; tiles keep
-        // a tile's Z lines and its J rows cache-resident while it fills. The
-        // entries are packed (re, im) per lane so a contiguous run of J --
-        // the common case, consecutive bases on consecutive segments -- is
-        // read as it lies.
-        constexpr int V = 4;         // ymm registers per quantity, two entries' (re, im) each
-        constexpr size_t L = 2 * V;  // entries per lane group
-        constexpr size_t K = 2 * L;
-        constexpr size_t TM = 64;  // tile rows (mi)
-        constexpr size_t TN = 16;  // tile columns (ni), a multiple of L
-        constexpr int NP = NM * NM;
-        const size_t n_grp = (n_n + L - 1) / L;
-        const size_t n_pad = n_grp * L;
-        const size_t lane_stride = 2 * n_pad;
-        // Column side, once per call. Per (b, lane): the window-relative J
-        // offset in doubles, the polynomial row and the source tangent, each
-        // (re, im)-duplicated; a lane the reference would skip carries a zero
-        // mask. Per (b, group): whether its lanes read one contiguous run of J
-        // (then `goff` is that run's start, else -1), and `gcov` 1 when every
-        // lane is live, 2 when none is (the reference skips that (a, b) for
-        // all of them, and an empty window has no J column to stage).
-        std::vector<int64_t> live2((size_t)NM * lane_stride, 0);
-        std::vector<int64_t> loff((size_t)NM * n_pad, 0);
-        std::vector<double> pn2((size_t)NM * NM * lane_stride, 0.0);
-        std::vector<double> tn2((size_t)NM * 3 * lane_stride, 0.0);
-        std::vector<int64_t> goff((size_t)NM * n_grp, -1);
-        std::vector<char> gcov((size_t)NM * n_grp, 0);
-        for (size_t ni = 0; ni < n_n; ni++) {
-            const int64_t n = ni_view(ni);
-            for (int b = 0; b < NM; b++) {
-                const int64_t sn = ss_view(n, b);
-                if (sn >= j0 && sn < j1) {
-                    live2[(size_t)b * lane_stride + 2 * ni] = -1;
-                    live2[(size_t)b * lane_stride + 2 * ni + 1] = -1;
-                    loff[(size_t)b * n_pad + ni] = 2 * (sn - j0);
-                    for (int c = 0; c < 3; c++) {
-                        const double t = t_view(sn, c);
-                        tn2[((size_t)b * 3 + c) * lane_stride + 2 * ni] = t;
-                        tn2[((size_t)b * 3 + c) * lane_stride + 2 * ni + 1] = t;
-                    }
-                }
-                for (int q = 0; q < NM; q++) {
-                    const double v = p_view(n, b, q);
-                    pn2[((size_t)b * NM + q) * lane_stride + 2 * ni] = v;
-                    pn2[((size_t)b * NM + q) * lane_stride + 2 * ni + 1] = v;
-                }
-            }
-        }
-        for (int b = 0; b < NM; b++) {
-            for (size_t gi = 0; gi < n_grp; gi++) {
-                const size_t g = gi * L;
-                bool all = true, none = true, contig = true;
-                for (size_t l = 0; l < L; l++) {
-                    const bool on = live2[(size_t)b * lane_stride + 2 * (g + l)] != 0;
-                    all = all && on;
-                    none = none && !on;
-                    contig = contig && on &&
-                             loff[(size_t)b * n_pad + g + l] == loff[(size_t)b * n_pad + g] + 2 * (int64_t)l;
-                }
-                gcov[(size_t)b * n_grp + gi] = all ? 1 : (none ? 2 : 0);
-                if (contig) goff[(size_t)b * n_grp + gi] = loff[(size_t)b * n_pad + g];
-            }
-        }
-        const double *Jd = reinterpret_cast<const double *>(J_chunk.data());
-        const size_t J_row = 2 * (size_t)(j1 - j0);
-        const size_t J_plane = (size_t)(i1 - i0) * J_row;
-        size_t poff_j[NP], poff_s[NP];
-        for (int pq = 0; pq < NP; pq++) {
-            poff_j[pq] = (size_t)pq * J_plane;
-            poff_s[pq] = (size_t)pq * K;
-        }
-        const size_t n_tm = (n_m + TM - 1) / TM;
-        const size_t n_tn = (n_pad + TN - 1) / TN;
-
-        MW_OMP_PARALLEL_FOR_COLLAPSE2
-        for (size_t tm = 0; tm < n_tm; tm++) {
-            for (size_t tn = 0; tn < n_tn; tn++) {
-                MW_CANCEL_POLL();
-                const size_t mi_end = std::min(n_m, (tm + 1) * TM);
-                const size_t g_end = std::min(n_pad, (tn + 1) * TN);
-                double jst[NP * K];
-                for (size_t mi = tm * TM; mi < mi_end; mi++) {
-                    const int64_t m = mi_view(mi);
-                    for (size_t g = tn * TN; g < g_end; g += L) {
-                        const size_t gi = g / L;
-                        __m256d zA[V], zP[V];
-                        for (int v = 0; v < V; v++) {
-                            zA[v] = _mm256_setzero_pd();
-                            zP[v] = _mm256_setzero_pd();
-                        }
-                        for (int a = 0; a < NM; a++) {
-                            const int64_t sm = ss_view(m, a);
-                            if (sm < i0 || sm >= i1) continue;
-                            const __m256d tm0 = _mm256_set1_pd(t_view(sm, 0));
-                            const __m256d tm1 = _mm256_set1_pd(t_view(sm, 1));
-                            const __m256d tm2 = _mm256_set1_pd(t_view(sm, 2));
-                            double pm[NM];
-                            for (int p = 0; p < NM; p++) pm[p] = p_view(m, a, p);
-                            const double *Jrow = Jd + (size_t)(sm - i0) * J_row;
-                            for (int b = 0; b < NM; b++) {
-                                const char cov = gcov[(size_t)b * n_grp + gi];
-                                if (cov == 2) continue;
-                                const int64_t go = goff[(size_t)b * n_grp + gi];
-                                const double *base;
-                                const size_t *po;
-                                if (go >= 0) {
-                                    base = Jrow + go;
-                                    po = poff_j;
-                                } else {
-                                    // Stage the lanes' J into a contiguous block;
-                                    // a dead lane reads column 0 and is masked.
-                                    const int64_t *lo = &loff[(size_t)b * n_pad + g];
-                                    for (int pq = 0; pq < NP; pq++)
-                                        for (size_t l = 0; l < L; l++) {
-                                            jst[pq * K + 2 * l] = Jrow[poff_j[pq] + lo[l]];
-                                            jst[pq * K + 2 * l + 1] = Jrow[poff_j[pq] + lo[l] + 1];
-                                        }
-                                    base = jst;
-                                    po = poff_s;
-                                }
-                                __m256d wA[V], wP[V];
-                                for (int v = 0; v < V; v++) {
-                                    wA[v] = _mm256_setzero_pd();
-                                    wP[v] = _mm256_setzero_pd();
-                                }
-                                for (int p = 0; p < NM; p++) {
-                                    const __m256d mp = _mm256_set1_pd(pm[p]);
-                                    for (int q = 0; q < NM; q++) {
-                                        const double *pnq =
-                                            &pn2[((size_t)b * NM + q) * lane_stride + 2 * g];
-                                        const double *jp = base + po[p * NM + q];
-                                        __m256d pr[V];
-                                        for (int v = 0; v < V; v++) {
-                                            pr[v] = _mm256_mul_pd(mp, _mm256_loadu_pd(pnq + 4 * v));
-                                            wA[v] = _mm256_fmadd_pd(pr[v], _mm256_loadu_pd(jp + 4 * v), wA[v]);
-                                        }
-                                        if (p >= 1 && q >= 1) {
-                                            const __m256d s = _mm256_set1_pd((double)(p * q));
-                                            const double *jl = base + po[(p - 1) * NM + (q - 1)];
-                                            for (int v = 0; v < V; v++)
-                                                wP[v] = _mm256_fmadd_pd(_mm256_mul_pd(s, pr[v]),
-                                                                        _mm256_loadu_pd(jl + 4 * v), wP[v]);
-                                        }
-                                    }
-                                }
-                                const double *tb = &tn2[(size_t)b * 3 * lane_stride + 2 * g];
-                                for (int v = 0; v < V; v++) {
-                                    const __m256d td = _mm256_add_pd(
-                                        _mm256_add_pd(_mm256_mul_pd(tm0, _mm256_loadu_pd(tb + 4 * v)),
-                                                      _mm256_mul_pd(tm1, _mm256_loadu_pd(tb + lane_stride + 4 * v))),
-                                        _mm256_mul_pd(tm2, _mm256_loadu_pd(tb + 2 * lane_stride + 4 * v)));
-                                    const __m256d nA = _mm256_fmadd_pd(td, wA[v], zA[v]);
-                                    const __m256d nP = _mm256_add_pd(zP[v], wP[v]);
-                                    if (cov == 1) {
-                                        zA[v] = nA;
-                                        zP[v] = nP;
-                                    } else {
-                                        const __m256d on = _mm256_loadu_pd(reinterpret_cast<const double *>(
-                                            &live2[(size_t)b * lane_stride + 2 * g + 4 * v]));
-                                        zA[v] = _mm256_blendv_pd(zA[v], nA, on);
-                                        zP[v] = _mm256_blendv_pd(zP[v], nP, on);
-                                    }
-                                }
-                            }
-                        }
-                        double zAs[K], zPs[K];
-                        for (int v = 0; v < V; v++) {
-                            _mm256_storeu_pd(zAs + 4 * v, zA[v]);
-                            _mm256_storeu_pd(zPs + 4 * v, zP[v]);
-                        }
-                        for (size_t l = 0; l < L && g + l < n_n; l++) {
-                            const int64_t n = ni_view(g + l);
-                            const double zA_re = zAs[2 * l], zA_im = zAs[2 * l + 1];
-                            const double zPhi_re = zPs[2 * l], zPhi_im = zPs[2 * l + 1];
-                            double Zre, Zim;
-                            if (COMPLEX_EPS) {
-                                Zre = -omega_mu * zA_im + (c_re * zPhi_re - c_im * zPhi_im);
-                                Zim = omega_mu * zA_re + (c_re * zPhi_im + c_im * zPhi_re);
-                            } else {
-                                Zre = -omega_mu * zA_im + zPhi_im * inv_omega_eps;
-                                Zim = omega_mu * zA_re - zPhi_re * inv_omega_eps;
-                            }
-                            z_view(ROW_MAP ? row_of[m] : m, n) += std::complex<double>(Zre, Zim);
-                        }
-                    }
-                }
-            }
-        }
-        MW_THROW_IF_ABORTED();
+        assemble_Z_bspline_windowed_lanes<D, COMPLEX_EPS, ROW_MAP, false>(
+            reinterpret_cast<const double *>(J_chunk.data()), support_seg.data(),
+            polys.data(), tangents.data(), nullptr, nullptr,
+            std::complex<double>(1.0, 0.0), m_idx.data(), n_idx.data(), n_m, n_n,
+            i0, i1, j0, j1, omega_mu, inv_omega_eps, c_re, c_im, z_view, row_of,
+            cancel_flag);
         return;
     }
 #else
@@ -2662,221 +2738,12 @@ assemble_Z_bspline_weighted_windowed_kernel(
     MW_CANCEL_SETUP(cancel_flag);
 #if MW_WINDOWED_LANES_1290
     if (!reference) {
-        // The lane kernel: the unweighted twin's (momwire#1290) shape --
-        // L entries (m, n..n+L-1) a step, (re, im)-packed, over TM x TN
-        // tiles of (mi, ni) -- carrying the per-pair complex weights.
-        //
-        // Every entry's arithmetic is the reference loop's, operation for
-        // operation. That loop has no explicit fma and the build does not
-        // contract (momwire#1194), so here too every product and sum is its
-        // own rounded op, never a vfmadd: iA += prod * J and
-        // iPhi += (p q prod) * J' as multiply-then-add in the same (p, q)
-        // order; zA += wa * iA with the complex product as the compiler
-        // expands std::complex's -- re = ac - bd, im = ad + bc, four rounded
-        // products -- which is exactly mul, mul, addsub on (re, im)-packed
-        // lanes; the same (a, b) order; the same scalar combine and scale
-        // per entry. A wing the reference skips (sn outside [j0, j1)) is
-        // computed for that lane and blended away, never added. So each Z
-        // entry is the reference's to the bit on finite inputs. (A product
-        // whose parts are BOTH NaN is where the compiler's complex multiply
-        // calls __muldc3 and this kernel does not; no finite fill reaches it.)
-        constexpr int V = 4;         // ymm registers per quantity, two entries' (re, im) each
-        constexpr size_t L = 2 * V;  // entries per lane group
-        constexpr size_t K = 2 * L;
-        constexpr size_t TM = 64;  // tile rows (mi)
-        constexpr size_t TN = 16;  // tile columns (ni), a multiple of L
-        constexpr int NP = NM * NM;
-        const size_t n_grp = (n_n + L - 1) / L;
-        const size_t n_pad = n_grp * L;
-        const size_t lane_stride = 2 * n_pad;
-        // Column side, once per call, as the unweighted twin builds it (the
-        // window-relative J offset in doubles is also the weight windows'
-        // offset within a row: they share J's trailing axes).
-        std::vector<int64_t> live2((size_t)NM * lane_stride, 0);
-        std::vector<int64_t> loff((size_t)NM * n_pad, 0);
-        std::vector<double> pn2((size_t)NM * NM * lane_stride, 0.0);
-        std::vector<int64_t> goff((size_t)NM * n_grp, -1);
-        std::vector<char> gcov((size_t)NM * n_grp, 0);
-        for (size_t ni = 0; ni < n_n; ni++) {
-            const int64_t n = ni_view(ni);
-            for (int b = 0; b < NM; b++) {
-                const int64_t sn = ss_view(n, b);
-                if (sn >= j0 && sn < j1) {
-                    live2[(size_t)b * lane_stride + 2 * ni] = -1;
-                    live2[(size_t)b * lane_stride + 2 * ni + 1] = -1;
-                    loff[(size_t)b * n_pad + ni] = 2 * (sn - j0);
-                }
-                for (int q = 0; q < NM; q++) {
-                    const double v = p_view(n, b, q);
-                    pn2[((size_t)b * NM + q) * lane_stride + 2 * ni] = v;
-                    pn2[((size_t)b * NM + q) * lane_stride + 2 * ni + 1] = v;
-                }
-            }
-        }
-        for (int b = 0; b < NM; b++) {
-            for (size_t gi = 0; gi < n_grp; gi++) {
-                const size_t g = gi * L;
-                bool all = true, none = true, contig = true;
-                for (size_t l = 0; l < L; l++) {
-                    const bool on = live2[(size_t)b * lane_stride + 2 * (g + l)] != 0;
-                    all = all && on;
-                    none = none && !on;
-                    contig = contig && on &&
-                             loff[(size_t)b * n_pad + g + l] == loff[(size_t)b * n_pad + g] + 2 * (int64_t)l;
-                }
-                gcov[(size_t)b * n_grp + gi] = all ? 1 : (none ? 2 : 0);
-                if (contig) goff[(size_t)b * n_grp + gi] = loff[(size_t)b * n_pad + g];
-            }
-        }
-        const double *Jd = reinterpret_cast<const double *>(J_chunk.data());
-        const double *WAd = reinterpret_cast<const double *>(wA_win.data());
-        const double *WPd = reinterpret_cast<const double *>(wPhi_win.data());
-        const size_t J_row = 2 * (size_t)(j1 - j0);
-        const size_t J_plane = (size_t)(i1 - i0) * J_row;
-        size_t poff_j[NP], poff_s[NP];
-        for (int pq = 0; pq < NP; pq++) {
-            poff_j[pq] = (size_t)pq * J_plane;
-            poff_s[pq] = (size_t)pq * K;
-        }
-        const size_t n_tm = (n_m + TM - 1) / TM;
-        const size_t n_tn = (n_pad + TN - 1) / TN;
-
-        MW_OMP_PARALLEL_FOR_COLLAPSE2
-        for (size_t tm = 0; tm < n_tm; tm++) {
-            for (size_t tn = 0; tn < n_tn; tn++) {
-                MW_CANCEL_POLL();
-                const size_t mi_end = std::min(n_m, (tm + 1) * TM);
-                const size_t g_end = std::min(n_pad, (tn + 1) * TN);
-                double jst[NP * K], wast[K], wpst[K];
-                for (size_t mi = tm * TM; mi < mi_end; mi++) {
-                    const int64_t m = mi_view(mi);
-                    for (size_t g = tn * TN; g < g_end; g += L) {
-                        const size_t gi = g / L;
-                        __m256d zA[V], zP[V];
-                        for (int v = 0; v < V; v++) {
-                            zA[v] = _mm256_setzero_pd();
-                            zP[v] = _mm256_setzero_pd();
-                        }
-                        for (int a = 0; a < NM; a++) {
-                            const int64_t sm = ss_view(m, a);
-                            if (sm < i0 || sm >= i1) continue;
-                            double pm[NM];
-                            for (int p = 0; p < NM; p++) pm[p] = p_view(m, a, p);
-                            const size_t row = (size_t)(sm - i0) * J_row;
-                            const double *Jrow = Jd + row;
-                            for (int b = 0; b < NM; b++) {
-                                const char cov = gcov[(size_t)b * n_grp + gi];
-                                if (cov == 2) continue;
-                                const int64_t go = goff[(size_t)b * n_grp + gi];
-                                const double *base, *wab, *wpb;
-                                const size_t *po;
-                                if (go >= 0) {
-                                    base = Jrow + go;
-                                    wab = WAd + row + go;
-                                    wpb = WPd + row + go;
-                                    po = poff_j;
-                                } else {
-                                    // Stage the lanes' J and weights contiguously;
-                                    // a dead lane reads column 0 and is masked.
-                                    const int64_t *lo = &loff[(size_t)b * n_pad + g];
-                                    for (int pq = 0; pq < NP; pq++)
-                                        for (size_t l = 0; l < L; l++) {
-                                            jst[pq * K + 2 * l] = Jrow[poff_j[pq] + lo[l]];
-                                            jst[pq * K + 2 * l + 1] = Jrow[poff_j[pq] + lo[l] + 1];
-                                        }
-                                    for (size_t l = 0; l < L; l++) {
-                                        wast[2 * l] = WAd[row + lo[l]];
-                                        wast[2 * l + 1] = WAd[row + lo[l] + 1];
-                                        wpst[2 * l] = WPd[row + lo[l]];
-                                        wpst[2 * l + 1] = WPd[row + lo[l] + 1];
-                                    }
-                                    base = jst;
-                                    wab = wast;
-                                    wpb = wpst;
-                                    po = poff_s;
-                                }
-                                __m256d iA[V], iP[V];
-                                for (int v = 0; v < V; v++) {
-                                    iA[v] = _mm256_setzero_pd();
-                                    iP[v] = _mm256_setzero_pd();
-                                }
-                                for (int p = 0; p < NM; p++) {
-                                    const __m256d mp = _mm256_set1_pd(pm[p]);
-                                    for (int q = 0; q < NM; q++) {
-                                        const double *pnq =
-                                            &pn2[((size_t)b * NM + q) * lane_stride + 2 * g];
-                                        const double *jp = base + po[p * NM + q];
-                                        __m256d pr[V];
-                                        for (int v = 0; v < V; v++) {
-                                            pr[v] = _mm256_mul_pd(mp, _mm256_loadu_pd(pnq + 4 * v));
-                                            iA[v] = _mm256_add_pd(
-                                                iA[v], _mm256_mul_pd(pr[v], _mm256_loadu_pd(jp + 4 * v)));
-                                        }
-                                        if (p >= 1 && q >= 1) {
-                                            const __m256d s = _mm256_set1_pd((double)(p * q));
-                                            const double *jl = base + po[(p - 1) * NM + (q - 1)];
-                                            for (int v = 0; v < V; v++)
-                                                iP[v] = _mm256_add_pd(
-                                                    iP[v], _mm256_mul_pd(_mm256_mul_pd(s, pr[v]),
-                                                                         _mm256_loadu_pd(jl + 4 * v)));
-                                        }
-                                    }
-                                }
-                                for (int v = 0; v < V; v++) {
-                                    // (wr, wi) x (xr, xi): [wr xr - wi xi, wr xi + wi xr].
-                                    const __m256d wa = _mm256_loadu_pd(wab + 4 * v);
-                                    const __m256d wp = _mm256_loadu_pd(wpb + 4 * v);
-                                    const __m256d cA = _mm256_addsub_pd(
-                                        _mm256_mul_pd(_mm256_movedup_pd(wa), iA[v]),
-                                        _mm256_mul_pd(_mm256_permute_pd(wa, 0xF),
-                                                      _mm256_permute_pd(iA[v], 0x5)));
-                                    const __m256d cP = _mm256_addsub_pd(
-                                        _mm256_mul_pd(_mm256_movedup_pd(wp), iP[v]),
-                                        _mm256_mul_pd(_mm256_permute_pd(wp, 0xF),
-                                                      _mm256_permute_pd(iP[v], 0x5)));
-                                    const __m256d nA = _mm256_add_pd(zA[v], cA);
-                                    const __m256d nP = _mm256_add_pd(zP[v], cP);
-                                    if (cov == 1) {
-                                        zA[v] = nA;
-                                        zP[v] = nP;
-                                    } else {
-                                        const __m256d on = _mm256_loadu_pd(reinterpret_cast<const double *>(
-                                            &live2[(size_t)b * lane_stride + 2 * g + 4 * v]));
-                                        zA[v] = _mm256_blendv_pd(zA[v], nA, on);
-                                        zP[v] = _mm256_blendv_pd(zP[v], nP, on);
-                                    }
-                                }
-                            }
-                        }
-                        double zAs[K], zPs[K];
-                        for (int v = 0; v < V; v++) {
-                            _mm256_storeu_pd(zAs + 4 * v, zA[v]);
-                            _mm256_storeu_pd(zPs + 4 * v, zP[v]);
-                        }
-                        for (size_t l = 0; l < L && g + l < n_n; l++) {
-                            const int64_t n = ni_view(g + l);
-                            const std::complex<double> zAc(zAs[2 * l], zAs[2 * l + 1]);
-                            const std::complex<double> zPhi(zPs[2 * l], zPs[2 * l + 1]);
-                            std::complex<double> Zc;
-                            if (COMPLEX_EPS) {
-                                Zc = std::complex<double>(
-                                    -omega_mu * zAc.imag()
-                                        + (c_re * zPhi.real() - c_im * zPhi.imag()),
-                                    omega_mu * zAc.real()
-                                        + (c_re * zPhi.imag() + c_im * zPhi.real()));
-                            } else {
-                                Zc = std::complex<double>(
-                                    -omega_mu * zAc.imag() + zPhi.imag() * inv_omega_eps,
-                                    omega_mu * zAc.real() - zPhi.real() * inv_omega_eps);
-                            }
-                            std::complex<double> add = scale * Zc;
-                            z_view(ROW_MAP ? row_of[m] : m, n) += add;
-                        }
-                    }
-                }
-            }
-        }
-        MW_THROW_IF_ABORTED();
+        assemble_Z_bspline_windowed_lanes<D, COMPLEX_EPS, ROW_MAP, true>(
+            reinterpret_cast<const double *>(J_chunk.data()), support_seg.data(),
+            polys.data(), nullptr, reinterpret_cast<const double *>(wA_win.data()),
+            reinterpret_cast<const double *>(wPhi_win.data()), scale,
+            m_idx.data(), n_idx.data(), n_m, n_n, i0, i1, j0, j1, omega_mu,
+            inv_omega_eps, c_re, c_im, z_view, row_of, cancel_flag);
         return;
     }
 #else
