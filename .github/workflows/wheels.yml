@@ -61,6 +61,15 @@ name: wheels
 on:
   workflow_dispatch:
     inputs:
+      # The pre-merge dispatch builds cp312 only by default: the per-Python
+      # smoke cells had zero failures in ~780 runs, and the full matrix made
+      # every C++ merge wait ~36 min (Windows builds the six Pythons one after
+      # another). Tick this on a release PR, or to chase a version-specific
+      # break; tags always build the full matrix.
+      full_matrix:
+        description: "Build and smoke every Python (cp310-cp315), as a tag does"
+        type: boolean
+        default: false
       pynec_find_links:
         description: >-
           --find-links URL for the pynec-accel release the cross-engine jobs
@@ -159,20 +168,20 @@ jobs:
         run: |
           grep -Fxq "version = \"${TAG#v}\"" pyproject.toml || {
             echo "pyproject.toml version does not match tag ${TAG}"; exit 1; }
-      - name: Build wheels (full matrix — tags and manual runs)
+      - name: Build wheels (full matrix — tags, and dispatches with full_matrix)
         # Tags build the full cp310–cp314 matrix from pyproject's
         # [tool.cibuildwheel].build. Two steps rather than a conditional
         # CIBW_BUILD env: an empty env value would OVERRIDE pyproject's
         # build spec instead of falling back to it.
-        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.full_matrix)
         uses: pypa/cibuildwheel@v4.2.1
         env:
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
-      - name: Build wheels (single-Python canary — main pushes)
+      - name: Build wheels (single-Python canary — main pushes and default dispatches)
         # Post-merge compiler canary (all 3 red runs in 30 days were MSVC),
         # not a release: one Python per OS is enough signal at ~1/5 the
         # work (#220).
-        if: "!(startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch')"
+        if: "!(startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.full_matrix))"
         uses: pypa/cibuildwheel@v4.2.1
         env:
           CIBW_BUILD: "cp312-*"
@@ -241,7 +250,7 @@ jobs:
       - id: pick
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || \
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.full_matrix }}" = "true" ] || \
              [[ "${{ github.ref }}" == refs/tags/* ]]; then
             echo 'versions=["3.10","3.11","3.12","3.13","3.14","3.15"]' >> "$GITHUB_OUTPUT"
           else
