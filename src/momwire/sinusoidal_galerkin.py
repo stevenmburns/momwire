@@ -1530,6 +1530,14 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         self._cached_ek_groups = None
         # geom → {mirror: (bad_lo, bad_hi)} for the EK end-bracket node rule.
         self._cached_ek_bad_ends = None
+        # momwire#1378: any segment under two radii, anywhere (not only at a gap).
+        # Advisory, once per solver, on the final mesh.
+        _wire_spec.advise_short_segments(
+            type(self).__name__,
+            self.wires_polylines,
+            self.n_per_edge_per_wire,
+            self._radius_per_wire,
+        )
         # momwire#959 (a stopgap until #1330): segments below the radius AT A
         # GAP leave the delta-gap model unreliable. Advisory, once per solver.
         _wire_spec.advise_gap_mesh_floor(

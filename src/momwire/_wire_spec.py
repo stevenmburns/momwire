@@ -844,6 +844,83 @@ def advise_gap_mesh_floor(
     )
 
 
+# --------------------------------------------------------------------------
+# The two-radius floor on segment length (momwire#1378) — an ADVISORY
+# --------------------------------------------------------------------------
+
+
+class ShortSegments(UserWarning):
+    """A solve's mesh has a segment shorter than two wire radii (momwire#1378).
+
+    Below delta/a = 2 no thin-wire kernel here is inside its validity (NEC's
+    own limit for its extended kernel), and the answer stops converging as the
+    mesh is refined: razor-2p leaves NEC-5's ladder below delta ~ a, and the
+    reduced-kernel lanes rise with no limit. Advisory only: nothing is
+    remeshed or refused. Independent of `GapMeshFloor`, which is the stricter,
+    gap-local floor for the delta-gap source; a deck can raise both.
+    """
+
+
+# Segment length over wire radius, below which the advisory fires. The floor
+# the `.maa` importer already applies. Strict: exactly 2 is silent.
+SHORT_SEGMENT_FLOOR = 2.0
+# Relative slack so a mesh built to land ON the floor (length / n / a == 2 up
+# to rounding) is not flagged by the last bit.
+_SHORT_SEGMENT_SLACK = 1e-9
+_SHORT_SEGMENT_NAMED = 4
+
+
+def short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire):
+    """``[(wire, shortest delta/a, n_short_segments)]`` for every wire with a
+    segment under `SHORT_SEGMENT_FLOOR` radii, worst first. Reads the mesh the
+    solver will solve: each edge split into its own segment count."""
+    found = []
+    for w, (pl, npe) in enumerate(zip(wires_polylines, n_per_edge_per_wire)):
+        a = float(radius_per_wire[w])
+        if a <= 0.0:
+            continue
+        h = _segment_lengths(pl, npe)
+        limit = SHORT_SEGMENT_FLOOR * a * (1.0 - _SHORT_SEGMENT_SLACK)
+        n_short = int(np.count_nonzero(h < limit))
+        if n_short:
+            found.append((w, float(h.min() / a), n_short))
+    found.sort(key=lambda t: (t[1], t[0]))
+    return found
+
+
+def short_segment_message(family, found):
+    """The advisory sentence for `short_segment_wires`' result."""
+    w0, worst, _ = found[0]
+    if len(found) == 1:
+        who = f"wire {w0} has segments {worst:.3g} radii long (shortest)"
+    else:
+        named = [
+            f"{w} ({ratio:.3g} radii)" for w, ratio, _n in found[:_SHORT_SEGMENT_NAMED]
+        ]
+        more = len(found) - _SHORT_SEGMENT_NAMED
+        if more > 0:
+            named.append(f"and {more} more")
+        who = (
+            f"wires {', '.join(named)} have segments shorter than "
+            f"{SHORT_SEGMENT_FLOOR:g} radii, worst {worst:.3g} on wire {w0}"
+        )
+    return (
+        f"{family}: {who}; below {SHORT_SEGMENT_FLOOR:g} radii the thin-wire "
+        f"kernels are outside their validity and results stop converging "
+        f"(momwire#1378)."
+    )
+
+
+def advise_short_segments(
+    family, wires_polylines, n_per_edge_per_wire, radius_per_wire
+):
+    """Warn `ShortSegments` once, naming the wires and the worst delta/a.
+    Called from every solver's constructor once the mesh is final."""
+    found = short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire)
+    if found:
+        warnings.warn(short_segment_message(family, found), ShortSegments, stacklevel=3)
+
+
 def solver_gaps(solver, *, junctions_are_gaps=False):
     """Every gap a constructed solver carries, as `advise_gap_mesh_floor`
     takes them: feeds, lumped loads, node gaps, junction ports and node
