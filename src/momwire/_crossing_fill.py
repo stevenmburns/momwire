@@ -2898,6 +2898,12 @@ def _held_slots(n_tiles, tile_rows, last, hpos=None):
 
 # `_stable_tile_order`'s chunk of rows (momwire#1335).
 _TILE_ORDER_CHUNK = 1 << 20
+# `_stable_tile_order` by `stable_tile_order` in C++ (momwire#1377); False
+# is the chunked numpy counting sort, the reference (the same integers).
+_TILE_ORDER_ACCEL = True
+_HAVE_TILE_ORDER_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "stable_tile_order_1377", False)
+)
 
 
 def _stable_tile_order(t_row, n_tiles, dtype):
@@ -2907,7 +2913,18 @@ def _stable_tile_order(t_row, n_tiles, dtype):
     a tile land in its slots in ascending order -- chunks in order, each
     chunk's own stable sort -- which is the stable argsort's answer, without
     its int64 permutation and the narrowing copy of it (~210 MB at razor's
-    inverted L x32)."""
+    inverted L x32). `stable_tile_order` (momwire#1377) is the same counting
+    sort in one C++ pass, 0.69 -> ~0.1 s there."""
+    if (
+        _TILE_ORDER_ACCEL
+        and _HAVE_TILE_ORDER_ACCEL
+        and t_row.dtype == np.int16
+        and dtype in (np.int32, np.int64)
+    ):
+        o, b = _accel.acc.stable_tile_order(
+            t_row, int(n_tiles), dtype == np.int64, cancel_flag=_cancel.ptr()
+        )
+        return o, b
     n = t_row.size
     counts = np.bincount(t_row, minlength=n_tiles).astype(np.int64)
     b = np.zeros(n_tiles + 1, dtype=np.int64)
