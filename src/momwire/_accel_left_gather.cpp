@@ -993,6 +993,68 @@ static void late_sandwich_rows(py::array_t<int16_t, py::array::c_style> tile_of_
     }
 }
 
+
+// `_ProductTiles.__init__`'s two per-group passes of a many-group product
+// (momwire#1377), group by group in the order numpy took them:
+//   key_row_counts: counts[kids[g][j]] += nz[g]       (an integer sum)
+//   tile_per_row:   t_row[rowflat[off[g] + z * nk[g] + j]] = tile_of_key[kids[g][j]]
+// (a row shared by groups is written in group order, as numpy wrote it).
+static py::array_t<int32_t> key_row_counts(
+    std::vector<py::array_t<int32_t, py::array::c_style>> kids,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> nz, int64_t n_key) {
+    if (static_cast<py::ssize_t>(kids.size()) > nz.size())
+        throw std::runtime_error("key_row_counts: one nz per group");
+    py::array_t<int32_t> out(static_cast<py::ssize_t>(n_key));
+    int32_t *O = out.mutable_data();
+    std::fill(O, O + n_key, 0);
+    const int64_t *NZ = nz.data();
+    for (size_t g = 0; g < kids.size(); ++g) {
+        const int32_t *K = kids[g].data();
+        const py::ssize_t m = kids[g].size();
+        for (py::ssize_t j = 0; j < m; ++j) {
+            if (K[j] < 0 || K[j] >= n_key) throw std::runtime_error("key_row_counts: key out of range");
+            O[K[j]] += static_cast<int32_t>(NZ[g]);
+        }
+    }
+    return out;
+}
+
+static py::array_t<int16_t> tile_per_row(
+    py::array_t<int32_t, py::array::c_style> rowflat,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> off,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> nz,
+    py::array_t<int64_t, py::array::c_style | py::array::forcecast> nk,
+    std::vector<py::array_t<int32_t, py::array::c_style>> kids,
+    py::array_t<int16_t, py::array::c_style> tile_of_key, int64_t n_rows) {
+    const py::ssize_t nG = static_cast<py::ssize_t>(kids.size());
+    if (off.size() < nG || nz.size() < nG || nk.size() < nG)
+        throw std::runtime_error("tile_per_row: one off, nz, nk per group");
+    const int32_t *RF = rowflat.data();
+    const int64_t *OF = off.data(), *NZ = nz.data(), *NK = nk.data();
+    const int16_t *TK = tile_of_key.data();
+    const py::ssize_t n_flat = rowflat.size(), n_key = tile_of_key.size();
+    py::array_t<int16_t> out(static_cast<py::ssize_t>(n_rows));
+    int16_t *T = out.mutable_data();
+    // np.empty's contents where no group writes; every row is written when
+    // the tables cover the rows, which the caller's tiles check.
+    std::fill(T, T + n_rows, static_cast<int16_t>(0));
+    for (py::ssize_t g = 0; g < nG; ++g) {
+        const int32_t *K = kids[g].data();
+        if (kids[g].size() != NK[g]) throw std::runtime_error("tile_per_row: kids[g] is nk[g] keys");
+        if (OF[g] < 0 || OF[g] + NZ[g] * NK[g] > n_flat)
+            throw std::runtime_error("tile_per_row: row table out of range");
+        for (int64_t z = 0; z < NZ[g]; ++z) {
+            const int32_t *row = RF + OF[g] + z * NK[g];
+            for (int64_t j = 0; j < NK[g]; ++j) {
+                if (row[j] < 0 || row[j] >= n_rows || K[j] < 0 || K[j] >= n_key)
+                    throw std::runtime_error("tile_per_row: index out of range");
+                T[row[j]] = TK[K[j]];
+            }
+        }
+    }
+    return out;
+}
+
 }  // namespace left_gather
 
 void register_left_gather(py::module_ &m) {
@@ -1048,6 +1110,15 @@ void register_left_gather(py::module_ &m) {
           py::arg("rowflat"), py::arg("off"), py::arg("nz"), py::arg("nk"), py::arg("last"),
           py::arg("sand"), py::arg("cancel_flag") = 0);
     m.attr("late_sandwich_rows_1377") = true;
+    m.def("key_row_counts", &left_gather::key_row_counts,
+          "counts[kids[g][j]] += nz[g] over the groups, int32. momwire#1377.",
+          py::arg("kids"), py::arg("nz"), py::arg("n_key"));
+    m.def("tile_per_row", &left_gather::tile_per_row,
+          "t_row[rowflat[off[g] + z * nk[g] + j]] = tile_of_key[kids[g][j]] over "
+          "the groups in order, int16. momwire#1377.",
+          py::arg("rowflat"), py::arg("off"), py::arg("nz"), py::arg("nk"), py::arg("kids"),
+          py::arg("tile_of_key"), py::arg("n_rows"));
+    m.attr("tile_init_passes_1377") = true;
     m.def("left_products_gathered", &left_gather::left_products_gathered,
           "The crossing main sandwich's six left products (P1 U, P2 U, "
           "P3 (k2 V + dz'W), P3 W, P4 W, P4 V) of four (n_out, nA) CSR "
