@@ -308,3 +308,28 @@ def test_kept_positions_do_not_move_the_plan():
     for a, b in zip(seen[False], seen[True]):
         assert a.dtype == b.dtype and np.array_equal(a, b)
     assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+# ---------------------------------------------------------------- end nonzeros
+def test_end_nonzero_memo_is_the_per_end_scan():
+    """Each end vector scanned once answers what a scan per end does."""
+    rng = np.random.default_rng(13779)
+    vecs = [np.where(rng.random(50) < 0.1, rng.normal(size=50), 0.0) for _ in range(9)]
+    vecs[3][7] = -0.0
+    vecs[4][2] = np.nan
+    ends = [(None, 1.0, vecs[i % 9]) for i in range(40)]
+    want = cf._polled_nonzeros(ends)
+    memo = {}
+    got = cf._polled_nonzeros(ends, memo)
+    assert len(memo) == 9
+    for a, b in zip(want, got):
+        assert np.array_equal(a, b)
+    assert np.array_equal(cf._live_rows_of(got), np.unique(np.concatenate(want)))
+    assert cf._live_rows_of([]).size == 0
+
+
+def test_end_nonzero_memo_does_not_move_the_inverted_l():
+    ref, r0 = pg._fill(_invl, **{"cf._END_NONZERO_MEMO": False})
+    got, r = pg._fill(_invl)
+    assert r["cf.fused_mode_stream"] == r0["cf.fused_mode_stream"] >= 1, r
+    assert np.array_equal(pg._bits(got), pg._bits(ref))
