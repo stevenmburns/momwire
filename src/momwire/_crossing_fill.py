@@ -2296,6 +2296,24 @@ _LINE_KEYS_ACCEL = True
 _HAVE_LINE_KEYS_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "factorize_line_keys_1335", False)
 )
+# ...across the physical cores, the keys partitioned by hash
+# (momwire#1377); 1 is the serial walk, the reference (the same integers).
+_LINE_KEYS_THREADS = None  # None: `_physical_cpu_count()`
+_HAVE_LINE_KEYS_PAR = _accel.acc is not None and bool(
+    getattr(_accel.acc, "factorize_line_keys_par_1377", False)
+)
+
+
+def _line_keys_threads():
+    """`factorize_line_keys`' thread argument, when its build takes one."""
+    if not _HAVE_LINE_KEYS_PAR:
+        return {}
+    n = _LINE_KEYS_THREADS
+    if n is None:
+        n = _near_interface._physical_cpu_count()
+    return {"n_threads": int(max(1, n))}
+
+
 _HAVE_GROUP_RANKS_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "group_first_ranks_1290", False)
 )
@@ -2511,7 +2529,10 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
         # line's z read in place, the ids int32 in the table's own shape,
         # the table grown with the keys rather than sized by the rows.
         kf, kid = _accel.acc.factorize_line_keys(
-            line, np.ascontiguousarray(lzv, dtype=float), cancel_flag=_cancel.ptr()
+            line,
+            np.ascontiguousarray(lzv, dtype=float),
+            cancel_flag=_cancel.ptr(),
+            **_line_keys_threads(),
         )
     else:
         kf, kid = _first_groups(line.ravel(), np.broadcast_to(lzv, line.shape).ravel())
