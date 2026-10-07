@@ -2329,6 +2329,13 @@ _HAVE_GROUP_RANKS_ACCEL = _accel.acc is not None and bool(
 # False is `_near_interface._factorize`, the reference (the same integers,
 # ~0.18 GB more transient at razor's inverted L x32).
 _LEAN_KEY_CLASSES = True
+# ...and its per-group integer passes (each key's candidate rows, each row's
+# tile) in C++ (`key_row_counts`, `tile_per_row`, momwire#1377); False is the
+# numpy loops over the groups, the reference (the same integers).
+_INIT_PASSES_ACCEL = True
+_HAVE_INIT_PASSES_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "tile_init_passes_1377", False)
+)
 _HAVE_FLOAT_CLASSES_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "factorize_float_classes_1377", False)
 )
@@ -3107,11 +3114,22 @@ class _ProductTiles:
         del got
         # A candidate count per key (an upper bound on its rows): at most the
         # grouped nodes, so 32 bits.
-        rows_per_key = np.zeros(n_key, dtype=np.int32)
-        for g, kj in enumerate(plan.kids):
-            if not g & 255:
-                _cancel.poll()
-            rows_per_key[kj] += plan.nz[g]
+        passes = (
+            _INIT_PASSES_ACCEL
+            and _HAVE_INIT_PASSES_ACCEL
+            and len(plan.rowtab) > 1
+            and plan.rowflat.dtype == np.int32
+            and all(kj.dtype == np.int32 for kj in plan.kids)
+        )
+        if passes:
+            # The same sums in one C++ pass (`key_row_counts`).
+            rows_per_key = _accel.acc.key_row_counts(plan.kids, plan.nz, n_key)
+        else:
+            rows_per_key = np.zeros(n_key, dtype=np.int32)
+            for g, kj in enumerate(plan.kids):
+                if not g & 255:
+                    _cancel.poll()
+                rows_per_key[kj] += plan.nz[g]
         if lean:
             # `bincount(key_cls, weights=rows_per_key)` read in place
             # (`class_sums`): whole counts, so the same floats.
@@ -3141,11 +3159,23 @@ class _ProductTiles:
         self._gkeys = []
         self._by_tile = None
         if len(plan.rowtab) > 1 and self.n_tiles < 2**15 and _TILE_ROW_ORDER:
-            t_row = np.empty(U, dtype=np.int16)
-            for g, (tab, kj) in enumerate(zip(plan.rowtab, plan.kids)):
-                if not g & 255:
-                    _cancel.poll()
-                t_row[tab] = self.tile_of_key[kj][None, :]
+            if passes and self.tile_of_key.dtype == np.int16:
+                # The same writes in group order, in C++ (`tile_per_row`).
+                t_row = _accel.acc.tile_per_row(
+                    plan.rowflat,
+                    plan.off,
+                    plan.nz,
+                    plan.nk,
+                    plan.kids,
+                    self.tile_of_key,
+                    U,
+                )
+            else:
+                t_row = np.empty(U, dtype=np.int16)
+                for g, (tab, kj) in enumerate(zip(plan.rowtab, plan.kids)):
+                    if not g & 255:
+                        _cancel.poll()
+                    t_row[tab] = self.tile_of_key[kj][None, :]
             # A row's tile is its key's, the same in every group holding it.
             # The rows in tile order, ascending within a tile: a stable sort
             # on the tile, by counting (`_stable_tile_order`).

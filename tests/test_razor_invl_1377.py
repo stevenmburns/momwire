@@ -362,3 +362,43 @@ def test_late_sandwich_rows_are_the_numpy_walk():
     for (n0, l0, h0), (n1, l1, h1) in zip(plans[False], plans[True]):
         assert n0 == n1 and np.array_equal(l0, l1) and np.array_equal(h0, h1)
     assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+# ---------------------------------------------------------------- tile init passes
+@pytest.mark.skipif(
+    acc is None or not getattr(acc, "tile_init_passes_1377", False),
+    reason="accelerator without the tile init passes",
+)
+def test_tile_init_passes_are_the_numpy_loops():
+    """Each row's tile (`t_row`, compared whole as `_stable_tile_order`
+    receives it) and Z, from the C++ passes and from the numpy loops."""
+    seen = {}
+    real = cf._stable_tile_order
+
+    def spy(t_row, n_tiles, dtype):
+        seen.setdefault(cf._INIT_PASSES_ACCEL, []).append(t_row.copy())
+        return real(t_row, n_tiles, dtype)
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(cf, "_stable_tile_order", spy)
+        ref, _r = pg._fill(_invl, **{"cf._INIT_PASSES_ACCEL": False})
+        got, _r = pg._fill(_invl)
+    assert len(seen[True]) == len(seen[False]) >= 1
+    for a, b in zip(seen[False], seen[True]):
+        assert np.array_equal(a, b)
+    assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+@pytest.mark.skipif(
+    acc is None or not getattr(acc, "tile_init_passes_1377", False),
+    reason="accelerator without the tile init passes",
+)
+def test_key_row_counts_are_the_fancy_sums():
+    rng = np.random.default_rng(13780)
+    n_key = 300
+    kids = [np.unique(rng.integers(0, n_key, 40)).astype(np.int32) for _ in range(25)]
+    nz = rng.integers(1, 9, 25)
+    want = np.zeros(n_key, dtype=np.int32)
+    for g, kj in enumerate(kids):
+        want[kj] += nz[g]
+    assert np.array_equal(acc.key_row_counts(kids, nz, n_key), want)
