@@ -1937,6 +1937,7 @@ _ROUTES = dict.fromkeys(
         "tile_held_rows",
         "tile_stores",
         "tile_column_products",
+        "tile_blocks_fast",
         "fused_blocks",
         "fused_mode_stream",
         "fused_mode_post",
@@ -2205,6 +2206,25 @@ class _ProductPlan(NamedTuple):
     def rows(self, ids):
         """The (|ids|, 3) rows (ρ_eff, z, z′), each written from the node
         pair at its first appearance — the floats the grid computed there."""
+        if (
+            self.kept_pos is not None
+            and _TILE_KERNELS
+            and _HAVE_TILE_KERNELS
+            and isinstance(self.line, _KeyLine)
+            and self.line.kid.dtype == np.int32
+        ):
+            # The same element copies in one pass (`product_rows`).
+            return _accel.acc.product_rows(
+                ids,
+                self.kept_pos,
+                int(self.nB),
+                self.slot == "z",
+                self.grank,
+                self.line.kid,
+                self.line.key_r,
+                self.zA,
+                self.zB,
+            )
         a_s, b_s = self.pairs(ids)
         rows = np.empty((a_s.size, 3), dtype=float)
         if self.slot == "z":
@@ -3355,34 +3375,63 @@ class _ProductTiles:
         # copied, so the layout moves no bit.
         held = np.empty((self.n_held, len(tb_keys)), dtype=np.complex128, order="F")
         o_ready, b_ready = self._ready
+        kcols = [ki[k] for k in tb_keys]
+        hpos_i32 = _EMPTY_I32_1D if self.hpos is None else self.hpos
         for t in range(self.n_tiles):
             _cancel.poll()
             ids = self._tile_rows(t)
-            if done[ids].any():
-                raise AssertionError("a product row was asked to evaluate twice")
-            done[ids] = True
+            # The tile's stores by `tile_block` (the fused route, 32-bit row
+            # ids): the copies below, element for element, in one pass.
+            fast = (
+                _TILE_KERNELS
+                and _HAVE_TILE_KERNELS
+                and self.store is None
+                and ids.dtype == np.int32
+                and loc.dtype == np.int32
+                and hpos_i32.dtype == np.int32
+            )
+            if not fast:
+                if done[ids].any():
+                    raise AssertionError("a product row was asked to evaluate twice")
+                done[ids] = True
             _ROUTES["tiles"] += 1
             _ROUTES["tile_rows"] += ids.size
             _ROUTES["tile_max_rows"] = max(_ROUTES["tile_max_rows"], ids.size)
             rows = plan.rows(ids)
             vals, pos = self._evaluate(rows)
             del rows
-            if pos is not None:
-                vals = vals[pos]
-            del pos
-            if self.store is not None:
-                self.store[ids, 0] = vals[:, ki["V"]]
-                self.store[ids, 1] = vals[:, ki["W"]]
-            tb = np.empty((ids.size, len(tb_keys)), dtype=np.complex128, order="F")
-            for j, k in enumerate(tb_keys):
-                tb[:, j] = vals[:, ki[k]]
-            del vals
-            if self.hpos is not None:
-                hp = self.hpos[ids]
-                keep = hp >= 0
-                held[hp[keep]] = tb[keep]
-                del hp, keep
-            loc[ids] = np.arange(ids.size)
+            if fast:
+                tb, twice = _accel.acc.tile_block(
+                    vals,
+                    _EMPTY_I64_1D if pos is None else pos,
+                    kcols,
+                    ids,
+                    done,
+                    loc,
+                    hpos_i32,
+                    held,
+                )
+                if twice:
+                    raise AssertionError("a product row was asked to evaluate twice")
+                _ROUTES["tile_blocks_fast"] += 1
+                del vals, pos
+            else:
+                if pos is not None:
+                    vals = vals[pos]
+                del pos
+                if self.store is not None:
+                    self.store[ids, 0] = vals[:, ki["V"]]
+                    self.store[ids, 1] = vals[:, ki["W"]]
+                tb = np.empty((ids.size, len(tb_keys)), dtype=np.complex128, order="F")
+                for j, k in enumerate(tb_keys):
+                    tb[:, j] = vals[:, ki[k]]
+                del vals
+                if self.hpos is not None:
+                    hp = self.hpos[ids]
+                    keep = hp >= 0
+                    held[hp[keep]] = tb[keep]
+                    del hp, keep
+                loc[ids] = np.arange(ids.size)
             if self.listener is not None:
                 # The fused end loops read this tile's V and W (and the held
                 # rows') before the sandwich's columns are served.
@@ -3395,7 +3444,10 @@ class _ProductTiles:
                 # formed their left products, and a name held here across the
                 # yield would keep them alive through the contraction.
                 yield cols, self._gather(cols, loc, tb, held)
-            loc[ids] = -1
+            if fast:
+                _accel.acc.fill_rows_i32(ids, loc, -1)
+            else:
+                loc[ids] = -1
             del tb
         if not done.all():
             raise AssertionError("the tiles left a product row unevaluated")
@@ -3416,6 +3468,15 @@ _CHUNK_INDEX_ACCEL = True
 _HAVE_CHUNK_INDEX_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "product_chunk_index_1290", False)
 )
+# A many-group product's per-tile bookkeeping in C++ (momwire#1377): the
+# rows' floats (`product_rows`) and, on the fused route, the tile block, the
+# held store, the places and the done marks (`tile_block`). Element copies
+# only; False is numpy's gathers and scatters, the reference.
+_TILE_KERNELS = True
+_HAVE_TILE_KERNELS = _accel.acc is not None and bool(
+    getattr(_accel.acc, "product_tiles_1377", False)
+)
+_EMPTY_I64_1D = np.zeros(0, dtype=np.int64)
 _EMPTY_I32_1D = np.zeros(0, dtype=np.int32)
 
 
