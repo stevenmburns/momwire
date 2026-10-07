@@ -359,6 +359,9 @@ _ACCEL_SOURCES = [
     # momwire#1290: SG's band scatter in `np.add.at`'s order. Its own TU: its
     # bits are that order's, and nothing else may move its codegen.
     "src/momwire/_accel_row_scatter.cpp",
+    # The remainder order's per-source scan (`_quadrature.remainder_qp_pairs`).
+    # Its own TU so that no existing kernel's codegen can move with it.
+    "src/momwire/_accel_qp_pairs.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
