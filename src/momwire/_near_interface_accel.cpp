@@ -660,8 +660,10 @@ static inline py::ssize_t cell_of(double t, const double *e, py::ssize_t n) {
 // in order. The two are therefore the same floats entry for entry; the
 // width-generic reference stays reachable (`generic=True`) and is gated
 // against this one as uint64 (tests/test_sheet_fixed_width_1290.py). Only
-// a lanes build (the AVX2 one) has the fixed route: the baseline, arm64 and MSVC builds
-// take the generic loop, which is the same floats anyway.
+// a lanes build (the AVX2 one) has the fixed route: the baseline and arm64 builds
+// take the generic loop, which is the same floats anyway. On MSVC (/fp:fast,
+// an unfused mw_fma::fma) the two are not the same floats, and the gate there
+// is the derived win32 tolerance (momwire#1371).
 static inline void cell_sum(const double *blk, const double *wr,
                             const double *ws, int p, int nd, double *acc) {
     for (int k = 0; k < nd; ++k) acc[k] = 0.0;
@@ -680,7 +682,7 @@ static inline void cell_sum(const double *blk, const double *wr,
     }
 }
 
-#if MW_LANES_SIMD && MW_LANES_FMA_EXACT
+#if MW_LANES_SIMD && MW_LANES_FUSED
 #define MW_SHEET_FIXED 1
 // ND doubles in ND / W lane-layer vectors (momwire#1372). `fmadd` is W
 // independent fused multiply-adds, one per lane, each rounding exactly as

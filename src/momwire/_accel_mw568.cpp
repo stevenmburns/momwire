@@ -11,12 +11,13 @@
 
 // The vector lanes (momwire#1290, on the lane layer `_lanes.h` since
 // momwire#1372): the below/below replay's stages, the below extents and the
-// field-form Galerkin assembly's first stage. Only where the layer has a
-// vector backend whose fmadd is the scalar mw_fma::fma (GCC/clang AVX2); the
-// baseline, arm64 and MSVC builds run the scalar loops the lanes are gated
-// against.
+// field-form Galerkin assembly's first stage. Where the layer runs its fused
+// kernels (MW_LANES_FUSED): GCC/clang AVX2, whose fmadd is the scalar
+// mw_fma::fma, so the gates are bit equality; and MSVC AVX2, where it is not
+// and the gates take the derived win32 tolerance (momwire#1371). The baseline
+// and arm64 builds run the scalar loops the lanes are gated against.
 #include "_lanes.h"
-#if MW_LANES_SIMD && MW_LANES_FMA_EXACT && MW_LANES_PACKED
+#if MW_LANES_SIMD && MW_LANES_FUSED && MW_LANES_PACKED
 #define MW568_LANES 1
 #else
 #define MW568_LANES 0
@@ -1909,8 +1910,8 @@ static py::tuple transmitted_field_proj_batch(
 // exactly as the scalar compare does. The division was the loop's cost
 // (one divsd a pair, ~1 s of SG buried x16 and ~4 s of invl x32 on Haswell).
 // `lanes=false` is the scalar loop, the reference the lanes are gated
-// against (tests/test_pair_extents_lanes_1290.py); the baseline, arm64 and
-// MSVC builds have only it.
+// against (tests/test_pair_extents_lanes_1290.py); the baseline and arm64
+// builds have only it.
 static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
                                                         py::array::forcecast> x,
                                     py::array_t<double, py::array::c_style |

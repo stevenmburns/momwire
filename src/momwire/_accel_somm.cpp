@@ -495,7 +495,8 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
 // crosses lanes, so a lane's value is `proj_one`'s. A block's last nb mod W
 // pairs take `proj_one` itself. `lanes=false` is the per-pair loop, the
 // reference the lanes are gated against (tests/test_somm_proj_lanes_1290.py);
-// the baseline, arm64 and MSVC builds have only it.
+// the baseline and arm64 builds have only it. On MSVC (/fp:fast) the gate is
+// the derived win32 tolerance, not bit equality (momwire#1371).
 #if MW_LANES_SIMD && MW_LANES_PACKED
 #define MW_SOMM_LANES 1
 #else
