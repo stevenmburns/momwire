@@ -460,6 +460,47 @@ static py::array_t<double> class_sums(py::array_t<int32_t, py::array::c_style> i
     return out;
 }
 
+// `_crossing_fill._stable_tile_order` (momwire#1377): o = the stable argsort
+// of an int16 tile per row, and b the tiles' bounds in it, by one counting
+// sort -- rows of a tile land in ascending row order, which is the stable
+// argsort's answer by definition. Integers only.
+template <class I>
+static py::tuple stable_tile_order_impl(py::array_t<int16_t, py::array::c_style> t_row,
+                                        int64_t n_tiles, uintptr_t cancel_flag) {
+    const py::ssize_t n = t_row.size();
+    const int16_t *T = t_row.data();
+    if (n_tiles < 0) throw std::runtime_error("stable_tile_order: negative n_tiles");
+    for (py::ssize_t i = 0; i < n; ++i)
+        if (T[i] < 0 || T[i] >= n_tiles)
+            throw std::runtime_error("stable_tile_order: tile out of range");
+    py::array_t<int64_t> b(static_cast<py::ssize_t>(n_tiles + 1));
+    py::array_t<I> o(n);
+    int64_t *B = b.mutable_data();
+    I *O = o.mutable_data();
+    {
+        py::gil_scoped_release nogil;
+        MW_CANCEL_SERIAL_SETUP(cancel_flag);
+        std::fill(B, B + n_tiles + 1, 0);
+        for (py::ssize_t i = 0; i < n; ++i) B[T[i] + 1]++;
+        for (int64_t t = 0; t < n_tiles; ++t) B[t + 1] += B[t];
+        std::vector<int64_t> cur(B, B + n_tiles);
+        for (py::ssize_t i0 = 0; i0 < n; i0 += 1 << 16) {
+            MW_CANCEL_SERIAL_POLL();
+            const py::ssize_t i1 = std::min(n, i0 + (1 << 16));
+            for (py::ssize_t i = i0; i < i1; ++i) O[cur[T[i]]++] = static_cast<I>(i);
+        }
+    }
+    return py::make_tuple(o, b);
+}
+
+static py::tuple stable_tile_order(py::array_t<int16_t, py::array::c_style> t_row,
+                                   int64_t n_tiles, bool wide, uintptr_t cancel_flag = 0) {
+    if (!wide && t_row.size() > std::numeric_limits<int32_t>::max())
+        throw std::runtime_error("stable_tile_order: too many rows for 32-bit order");
+    return wide ? stable_tile_order_impl<int64_t>(t_row, n_tiles, cancel_flag)
+                : stable_tile_order_impl<int32_t>(t_row, n_tiles, cancel_flag);
+}
+
 // A persistent exact-equality index over the rows of 1-3 float64 columns:
 // `find(cols)` is, per query row, the index of the FIRST stored row equal to
 // it, or -1 (a NaN row is never stored and never found) -- the lookup of
@@ -1194,6 +1235,12 @@ void register_factorize(py::module_ &m) {
           "sized at 4/3 of the rows. momwire#1377.",
           py::arg("col"), py::arg("cancel_flag") = 0);
     m.attr("factorize_float_classes_1377") = true;
+    m.def("stable_tile_order", &factorize::stable_tile_order,
+          "(o, b): the stable argsort of an int16 tile per row (int64 when "
+          "wide, else int32) and the tiles' bounds in it, by counting. "
+          "momwire#1377.",
+          py::arg("t_row"), py::arg("n_tiles"), py::arg("wide"), py::arg("cancel_flag") = 0);
+    m.attr("stable_tile_order_1377") = true;
     m.def("class_sums", &factorize::class_sums,
           "`np.bincount(idx, weights=w, minlength=n)` of int32 ids and whole "
           "int32 weights, read in place. momwire#1377.",

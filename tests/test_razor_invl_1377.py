@@ -186,3 +186,23 @@ def test_tile_block_is_the_numpy_copies(with_pos):
     assert twice and _tb is None
     acc.fill_rows_i32(ids, loc, -1)
     assert (loc == -1).all()
+
+
+@pytest.mark.parametrize("accel", [False, True])
+@pytest.mark.parametrize("dtype", [np.int32, np.int64])
+def test_stable_tile_order_routes_are_the_stable_argsort(accel, dtype, monkeypatch):
+    """Both spellings of the tiles' row order (the C++ counting sort and the
+    chunked numpy one) against `np.argsort(kind="stable")`."""
+    if accel and not getattr(acc, "stable_tile_order_1377", False):
+        pytest.skip("accelerator without stable_tile_order")
+    monkeypatch.setattr(cf, "_TILE_ORDER_ACCEL", accel)
+    monkeypatch.setattr(cf, "_TILE_ORDER_CHUNK", 777)
+    rng = np.random.default_rng(13774)
+    n_tiles = 41
+    t_row = rng.integers(0, n_tiles, 30_011).astype(np.int16)
+    t_row[t_row == 7] = 8  # an empty tile
+    o, b = cf._stable_tile_order(t_row, n_tiles, dtype)
+    want = np.argsort(t_row, kind="stable")
+    assert o.dtype == dtype
+    assert np.array_equal(o, want)
+    assert np.array_equal(b, np.searchsorted(t_row[want], np.arange(n_tiles + 1)))
