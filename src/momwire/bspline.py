@@ -1916,6 +1916,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.rotational_symmetry = bool(rotational_symmetry)
         if self.rotational_symmetry:
             self._rotational_map = self._rotational_check()
+        # momwire#1378: any segment under two radii, anywhere (not only at a gap).
+        # Advisory, once per solver, on the final mesh.
+        _wire_spec.advise_short_segments(
+            type(self).__name__,
+            self.wires_polylines,
+            self.n_per_edge_per_wire,
+            self._radius_per_wire,
+        )
         # momwire#959 (a stopgap until #1330): segments below the radius AT A
         # GAP leave the delta-gap model unreliable. Advisory, once per solver.
         _wire_spec.advise_gap_mesh_floor(
