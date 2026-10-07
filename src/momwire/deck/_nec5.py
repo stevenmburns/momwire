@@ -43,6 +43,8 @@ from .model import DistributedRLC, LoadSpec
 
 __all__ = [
     "parse_nec5",
+    "split_structures",
+    "Nec5Structure",
     "Nec5Deck",
     "Nec5Node",
     "Nec5Wire",
@@ -572,8 +574,13 @@ _REFUSED_BY_NAME = MappingProxyType(
         "dialect; PQ is the only print-control card EZNEC emits",
         "MP": "MP (multiprocessing hint) is not part of this engine's nec5 dialect",
         "SY": "SY (4nec2 symbolic variables) is not part of this engine's nec5 dialect",
-        "NX": "NX (next structure) is not part of this engine's nec5 dialect; EN is "
-        "the terminator EZNEC writes",
+        # NX is served, structure by structure, by `split_structures` (the
+        # engine shell splits a stream before parsing). Reaching this table
+        # means a caller handed a whole chained stream to `parse_nec5`, which
+        # reads ONE structure.
+        "NX": "NX (next structure) ends one structure and starts the next; "
+        "parse_nec5 reads one structure, so split a chained stream with "
+        "split_structures first",
     }
 )
 
@@ -1657,6 +1664,87 @@ class _Nec5Parser:
             requests=tuple(self.requests),
             pq=self.pq,
         )
+
+
+@dataclass(frozen=True)
+class Nec5Structure:
+    """One structure of an ``NX``-chained stream.
+
+    ``body`` is the structure's cards up to, not including, its terminator;
+    ``terminator`` is the line that closed it — an ``NX`` for every structure
+    but the last, the stream's ``EN`` for the last, or ``None`` when the
+    stream ran out first (a truncated stream, which the last structure's own
+    parse then refuses exactly as a truncated single deck is refused).
+    """
+
+    body: str
+    terminator: str | None
+
+    @property
+    def deck_text(self) -> str:
+        """The structure as a standalone deck: its body closed by ``EN``.
+
+        What the solver is handed, so a chained structure is solved by the
+        very path a one-structure deck takes. A truncated last structure stays
+        unterminated, so it still refuses as truncated.
+        """
+        if self.terminator is None:
+            return self.body
+        return self.body + "EN\n"
+
+    @property
+    def echo_text(self) -> str:
+        """The structure as the printout echoes it: its body and its own
+        terminator line (``NX`` or ``EN``), as read."""
+        if self.terminator is None:
+            return self.body
+        return self.body + self.terminator + "\n"
+
+
+def _mnemonic(line: str) -> str:
+    """The first two letters of a card line, upper-cased, or ``""``.
+
+    A sniff rather than :func:`parse_card`: splitting a stream must never
+    raise, because a bad field belongs to its own structure's parse, which
+    names it."""
+    tokens = line.strip().replace(",", " ").split()
+    return tokens[0][:2].upper() if tokens else ""
+
+
+def split_structures(text: str) -> list[Nec5Structure] | None:
+    """An ``NX``-chained stream's structures, in order, or ``None`` when the
+    text carries no ``NX`` before its ``EN`` (every EZNEC deck), which keeps
+    the one-structure path exactly as it was.
+
+    ``NX`` is NEC's "next structure": the licensed NEC-5 accepts it, solves
+    and prints each structure in turn, and starts every structure from
+    scratch — frequency, ground and loads do not carry across it (measured
+    black-box on a two-structure deck). SimNEC sends one when it batches several queued
+    runs into one engine call: each run's deck, ``NX`` between them, ``EN``
+    after the last. Everything after ``EN`` is not this stream, as in a
+    single deck.
+    """
+    structures: list[Nec5Structure] = []
+    body: list[str] = []
+    for line in text.splitlines():
+        mnemonic = _mnemonic(line)
+        if mnemonic in ("NX", "EN"):
+            structures.append(Nec5Structure("".join(body), line.strip()))
+            body = []
+            if mnemonic == "EN":
+                break
+        else:
+            body.append(line + "\n")
+    else:
+        # The stream ran out before EN. After an NX that is a truncated
+        # stream, so the missing structure is kept (empty) for its parse to
+        # refuse as truncated; with no NX at all it is a one-structure deck,
+        # and the None below hands it to the one-structure path unchanged.
+        if body or (structures and structures[-1].terminator is not None):
+            structures.append(Nec5Structure("".join(body), None))
+    if len(structures) < 2:
+        return None
+    return structures
 
 
 def parse_nec5(text: str) -> Nec5Deck:
