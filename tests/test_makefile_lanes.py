@@ -75,6 +75,15 @@ LANE_TO_JOB = {
 
 _PYTEST_LINE = re.compile(r"(?:^|\s)(pytest\s+.*?)\s*$")
 
+# pytest-split's flags partition a job's test set across a matrix; the shards'
+# union is the unsplit command, which is what the Makefile lane runs locally.
+# Only these four are dropped, so any other flag a sharded job adds still has
+# to appear in its lane.
+_SHARD_FLAGS = re.compile(
+    r"\s+--(?:splits|group|durations-path|splitting-algorithm)"
+    r"\s+(?:\$\{\{[^}]*\}\}|\S+)"
+)
+
 
 def _ci_pytest_commands() -> dict[str, list[str]]:
     """job name -> every pytest command any of its run scalars execute."""
@@ -97,7 +106,9 @@ def _ci_pytest_commands() -> dict[str, list[str]]:
                 line = re.sub(r"^\S*python[0-9.]*\s+-m\s+", "", line)
                 m = _PYTEST_LINE.search(line)
                 if m:
-                    out.setdefault(job_name, []).append(m.group(1))
+                    out.setdefault(job_name, []).append(
+                        _SHARD_FLAGS.sub("", m.group(1))
+                    )
     return out
 
 
