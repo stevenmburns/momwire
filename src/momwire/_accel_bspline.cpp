@@ -446,8 +446,10 @@ static PairOrderLadder ladder_from_arrays(
 
 // momwire#1290: the off-edge kernels' lane paths, written against the lane
 // layer (momwire#1372, `_lanes.h`) at its width W. Only where the layer has a
-// vector backend (the x86 AVX2 build, `_avx2`); the baseline (`_sse2`), arm64
-// and MSVC builds keep the per-pair walk alone, so their bits cannot move.
+// vector backend (the x86 AVX2 build, `_avx2`, GCC/clang or MSVC); the
+// baseline (`_sse2`) and arm64 builds keep the per-pair walk alone, so their
+// bits cannot move. On MSVC (/fp:fast) the lanes are gated against the walk by
+// the derived win32 tolerance, not bit equality (momwire#1371).
 #include "_lanes.h"
 #define MW_OFFEDGE_LANES_1290 MW_LANES_SIMD
 
@@ -2078,13 +2080,15 @@ assemble_Z_bspline_kernel(
 
 
 // momwire#1290: the windowed assemblers' lane kernel, written against the
-// lane layer (momwire#1372, `_lanes.h`). Only where the vector fma IS the
-// scalar fma (MW_LANES_FMA_EXACT: an x86 build with -mfma, whose mw_fma::fma
-// is std::fma, one vfmadd) and the backend packs (re, im) per lane pair. The
-// baseline (_sse2) variant, arm64 and MSVC keep the reference loops alone, so
-// their bits cannot move.
+// lane layer (momwire#1372, `_lanes.h`). Where the backend packs (re, im) per
+// lane pair and runs the fused kernels (MW_LANES_FUSED): an x86 GCC/clang
+// build with -mfma, whose mw_fma::fma is std::fma, one vfmadd, so the lanes
+// are the reference loops to the bit; and MSVC's AVX2 variant, where they are
+// not (/fp:fast, an unfused mw_fma::fma) and the gate is the derived win32
+// tolerance (momwire#1371). The baseline (_sse2) variant and arm64 keep the
+// reference loops alone, so their bits cannot move.
 #include "_lanes.h"
-#if MW_LANES_SIMD && MW_LANES_FMA_EXACT && MW_LANES_PACKED
+#if MW_LANES_SIMD && MW_LANES_FUSED && MW_LANES_PACKED
 #define MW_WINDOWED_LANES_1290 1
 #else
 #define MW_WINDOWED_LANES_1290 0

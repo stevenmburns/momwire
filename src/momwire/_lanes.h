@@ -25,14 +25,19 @@
 //             walk-shaped reference a kernel can be instantiated at, and how
 //             the layer is checked on a machine without the instruction set.
 // With none of them selected MW_LANES_SIMD is 0 and every kernel keeps its
-// scalar path alone: the `_sse2` baseline, macOS arm64 and MSVC builds.
+// scalar path alone: the `_sse2` baseline and macOS arm64 builds.
 //
-// MSVC (momwire#1371): the avx2 backend uses only intrinsics MSVC has, and the
-// compiler differences (force-inline spelling, the FMA macro MSVC does not
-// define under /arch:AVX2) are resolved below, so #1371 is the one-line
-// removal of `!defined(_MSC_VER)` in MW_LANES_AVX2. It stays off until then:
-// the Windows build is /fp:fast and its lanes are gated by a derived tolerance,
-// which is #1371's to establish.
+// MSVC (momwire#1371): the `_avx2` variant (/arch:AVX2) runs the avx2 backend
+// too. It uses only intrinsics MSVC has, and the compiler differences (the
+// force-inline spelling, the FMA macro MSVC does not define under /arch:AVX2)
+// are resolved below. Exactness does NOT carry over: the Windows build is
+// /fp:fast, which contracts and reassociates the scalar reference loops on its
+// own terms, and its `mw_fma::fma` is the unfused a*b + c. So on Windows a
+// kernel's lanes are gated against its walk by a DERIVED tolerance
+// (tests/_lane_gate.py), not bit equality: Windows needs no bit-compatibility
+// (2026-10-03), and the fused kernels run there too (2026-10-07; see
+// MW_LANES_FUSED below). Nothing here changes what GCC or clang compile, so
+// Linux and macOS keep their exact gates.
 //
 // The (re, im)-packed helpers (`cmul_packed`, `load_cpairs`) need an even W:
 // they hold W/2 complex values per vector. MW_LANES_PACKED says whether the
@@ -64,7 +69,7 @@
 #elif defined(MW_LANES_ENABLE_AVX512) && defined(__AVX512F__) && \
     defined(__AVX512DQ__) && defined(__AVX512VL__)
 #define MW_LANES_AVX512 1
-#elif MW_LANES_HAVE_AVX2 && !defined(_MSC_VER)
+#elif MW_LANES_HAVE_AVX2
 #define MW_LANES_AVX2 1
 #endif
 
@@ -77,14 +82,31 @@
 
 // Whether `fmadd` rounds as the scalar `mw_fma::fma` (_fma_inline.h) does on
 // this build: a kernel mirroring an mw_fma chain is exact only then. True for
-// the vector backends (their builds have FMA hardware); for the portable one
-// it follows _fma_inline.h's own test.
-#if defined(MW_LANES_AVX2) || defined(MW_LANES_AVX512) ||               \
+// the vector backends under GCC/clang (their builds have FMA hardware, and
+// mw_fma::fma is std::fma); for the portable one it follows _fma_inline.h's
+// own test. False under MSVC, whose mw_fma::fma is the unfused a*b + c.
+#if ((defined(MW_LANES_AVX2) || defined(MW_LANES_AVX512)) &&            \
+     !defined(_MSC_VER)) ||                                              \
     (defined(MW_LANES_PORTABLE) &&                                       \
      (defined(__FMA__) || defined(__ARM_FEATURE_FMA)) && !defined(_MSC_VER))
 #define MW_LANES_FMA_EXACT 1
 #else
 #define MW_LANES_FMA_EXACT 0
+#endif
+
+// Whether the FUSED kernels run their lanes: those whose lanes spell `fmadd`
+// to mirror an mw_fma chain (the windowed assembly, the below-interface
+// stages, the near-interface sheets). They run where the fusion is exact
+// (MW_LANES_FMA_EXACT), and on MSVC's vector backend, where it is not and the
+// lanes are gated against the walk by the derived win32 tolerance
+// (momwire#1371). A portable build without exact fusion keeps them off, so
+// the layer's portable check stays a bit gate. Under GCC/clang this IS
+// MW_LANES_FMA_EXACT.
+#if MW_LANES_FMA_EXACT ||                                                \
+    ((defined(MW_LANES_AVX2) || defined(MW_LANES_AVX512)) && defined(_MSC_VER))
+#define MW_LANES_FUSED 1
+#else
+#define MW_LANES_FUSED 0
 #endif
 
 #if defined(MW_LANES_AVX2) || defined(MW_LANES_AVX512)

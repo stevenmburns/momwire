@@ -481,7 +481,9 @@ MW_LANES_INLINE void surfaces_lanes(const GridView &G, int reg, int i0, int j0,
                                     const double (*wr)[B],
                                     const double (*wt)[B], double (*sre)[B],
                                     double (*sim)[B], int b) {
-    constexpr int CPV = W / 2;
+    // static: MSVC does not treat a plain constexpr local as a constant
+    // inside the [&] lambda below (C2131 on `q[CPV]`).
+    static constexpr int CPV = W / 2;
     static_assert(4 % CPV == 0, "a vector holds whole surfaces of the four");
     const py::ssize_t nth = G.nTh[reg];
     const py::ssize_t plane = G.nR[reg] * nth;

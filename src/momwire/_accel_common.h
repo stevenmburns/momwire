@@ -118,8 +118,12 @@ constexpr size_t BSPLINE_SAME_EDGE_MAX_N_QP = 8;
 // across the grid. GCC (and MSVC's /openmp:llvm) keeps collapse(2).
 #if defined(_MSC_VER)
 #  define MW_OMP_PARALLEL_FOR_COLLAPSE2 _Pragma("omp parallel for schedule(static)")
-// No MW_OMP_FOR_COLLAPSE2 for MSVC: its one user keeps main's structure
-// there (_accel_bspline.cpp's off-edge kernel).
+// The work-sharing half alone. The off-edge kernel's per-pair walk keeps
+// main's structure on MSVC and never uses it; the off-edge LANE kernels do,
+// since momwire#1371 switched the lane layer on there. They keep collapse(2):
+// a lane block's rows can be fewer than the threads, and /openmp:llvm takes
+// the clause (setup.py's flag note).
+#  define MW_OMP_FOR_COLLAPSE2 _Pragma("omp for collapse(2) schedule(static)")
 #else
 #  define MW_OMP_PARALLEL_FOR_COLLAPSE2 \
        _Pragma("omp parallel for collapse(2) schedule(static)")
