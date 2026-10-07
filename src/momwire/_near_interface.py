@@ -2091,7 +2091,10 @@ def _evaluate_fresh(
 # its SheetPlan), bounded at this many MiB, oldest entries dropped first; a
 # miss costs what the twin cost before. 0 turns it off. Every member reads
 # the same floats either way (tests/test_near_interface_column_cache.py).
-_COLUMN_CACHE_MB = float(os.environ.get("MOMWIRE_COLUMN_CACHE_MB") or "32")
+# 16 MiB: on the bs2 inverted-L x16 fill that serves 61 % of columns (32 MiB
+# 62 %, unbounded 69 %), and at x32 a 32 MiB budget raised peak RSS 85 MB
+# for no time the paired runs could see.
+_COLUMN_CACHE_MB = float(os.environ.get("MOMWIRE_COLUMN_CACHE_MB") or "16")
 
 
 def _new_column_cache():
