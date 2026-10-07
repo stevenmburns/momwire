@@ -1809,15 +1809,15 @@ static py::tuple transmitted_field_proj_batch(
 // numpy" on the assumption that numpy propagated — it did not, and that
 // assumption was the only thing making the physical cases disagree.
 
-// LANES (perf item 9). In the AVX2 build the row's columns go four to a
+// LANES (perf item 9). In the lanes build the row's columns go W to a
 // vector: each lane forms the scalar loop's dx, dy, rho2, hh, r1sq and
 // quotient with the same operations in the same order (separate multiplies
 // and adds, a correctly rounded division), and keeps a running max and min.
 // A max or a min is a selection, not an arithmetic result, so the order the
 // lanes and the scalar tail are combined in moves nothing: the values are
-// non-negative and never -0 (squares and their quotient), and
-// `_mm256_min_pd(q, acc)` returns `acc` when q is NaN, which drops the 0/0
-// pair exactly as the scalar compare does. The division was the loop's cost
+// non-negative and never -0 (squares and their quotient), and the lane
+// layer's `min(q, acc)` returns `acc` when q is NaN, which drops the 0/0 pair
+// exactly as the scalar compare does. The division was the loop's cost
 // (one divsd a pair, ~1 s of SG buried x16 and ~4 s of invl x32 on Haswell).
 // `lanes=false` is the scalar loop, the reference the lanes are gated
 // against (tests/test_pair_extents_lanes_1290.py); the baseline, arm64 and
@@ -1857,25 +1857,25 @@ static py::tuple pair_extents_below(py::array_t<double, py::array::c_style |
             double q_row = std::numeric_limits<double>::infinity();
             py::ssize_t j0 = i;
 #if MW568_LANES
-            if (lanes && n - i >= 4) {
-                const __m256d vx = _mm256_set1_pd(xi), vy = _mm256_set1_pd(yi);
-                const __m256d vd = _mm256_set1_pd(di);
-                __m256d vr = _mm256_setzero_pd();
-                __m256d vq = _mm256_set1_pd(std::numeric_limits<double>::infinity());
-                for (; j0 + 4 <= n; j0 += 4) {
-                    const __m256d dx = _mm256_sub_pd(vx, _mm256_loadu_pd(xp + j0));
-                    const __m256d dy = _mm256_sub_pd(vy, _mm256_loadu_pd(yp + j0));
-                    const __m256d rho2 = _mm256_add_pd(_mm256_mul_pd(dx, dx),
-                                                       _mm256_mul_pd(dy, dy));
-                    const __m256d hh = _mm256_add_pd(vd, _mm256_loadu_pd(dp + j0));
-                    const __m256d hh2 = _mm256_mul_pd(hh, hh);
-                    vr = _mm256_max_pd(_mm256_add_pd(rho2, hh2), vr);
-                    vq = _mm256_min_pd(_mm256_div_pd(hh2, rho2), vq);
+            if (lanes && n - i >= mw_lanes::W) {
+                using namespace mw_lanes;
+                const vd vx = set1(xi), vy = set1(yi);
+                const vd vdi = set1(di);
+                vd vr = zero();
+                vd vq = set1(std::numeric_limits<double>::infinity());
+                for (; j0 + W <= n; j0 += W) {
+                    const vd dx = sub(vx, loadu(xp + j0));
+                    const vd dy = sub(vy, loadu(yp + j0));
+                    const vd rho2 = add(mul(dx, dx), mul(dy, dy));
+                    const vd hh = add(vdi, loadu(dp + j0));
+                    const vd hh2 = mul(hh, hh);
+                    vr = max(add(rho2, hh2), vr);
+                    vq = min(div(hh2, rho2), vq);
                 }
-                alignas(32) double lr[4], lq[4];
-                _mm256_store_pd(lr, vr);
-                _mm256_store_pd(lq, vq);
-                for (int l = 0; l < 4; ++l) {
+                alignas(ALIGN) double lr[W], lq[W];
+                store(lr, vr);
+                store(lq, vq);
+                for (int l = 0; l < W; ++l) {
                     if (lr[l] > r1_row) r1_row = lr[l];
                     if (lq[l] < q_row) q_row = lq[l];
                 }
@@ -2014,24 +2014,23 @@ static void fg_stage2(FgTarget &T, const FgBatch &bt, const cd_fg *F,
 }
 
 #if MW568_LANES
-// Stage 1 for two adjacent (j, r) entries, NK row-wings: each lane is the
-// scalar step `acc += g * v` -- the real product of each part, then the add,
-// q in order from +0.0 -- on its own part.
+// Stage 1 for W/2 adjacent (j, r) entries, NK row-wings, (re, im) per lane
+// pair: each lane is the scalar step `acc += g * v` -- the real product of
+// each part, then the add, q in order from +0.0 -- on its own part.
 template <int NK>
-static inline void fg_stage1_two(const cd_fg *col, py::ssize_t nsq,
-                                 py::ssize_t q, const double *g, cd_fg *F,
-                                 py::ssize_t jr) {
-    __m256d acc[NK];
-    for (int k = 0; k < NK; ++k) acc[k] = _mm256_setzero_pd();
+static inline void fg_stage1_lanes(const cd_fg *col, py::ssize_t nsq,
+                                   py::ssize_t q, const double *g, cd_fg *F,
+                                   py::ssize_t jr) {
+    using namespace mw_lanes;
+    vd acc[NK];
+    for (int k = 0; k < NK; ++k) acc[k] = zero();
     for (py::ssize_t iq = 0; iq < q; ++iq) {
-        const __m256d v = _mm256_loadu_pd(
-            reinterpret_cast<const double *>(col + iq * nsq + jr));
+        const vd v = loadu(reinterpret_cast<const double *>(col + iq * nsq + jr));
         for (int k = 0; k < NK; ++k)
-            acc[k] = _mm256_add_pd(
-                acc[k], _mm256_mul_pd(_mm256_set1_pd(g[k * q + iq]), v));
+            acc[k] = add(acc[k], mul(set1(g[k * q + iq]), v));
     }
     for (int k = 0; k < NK; ++k)
-        _mm256_storeu_pd(reinterpret_cast<double *>(F + k * nsq + jr), acc[k]);
+        storeu(reinterpret_cast<double *>(F + k * nsq + jr), acc[k]);
 }
 #endif
 
@@ -2340,19 +2339,19 @@ static void assemble_field_galerkin(
                 // Stage 1: F[k, j, r] = sum_q g[k,q] * proj[ic*q+q, j*q+r]
 #if MW568_LANES
                 if (use_lanes) {
-                    const py::ssize_t npair = nsq / 2;
+                    constexpr py::ssize_t CPV = mw_lanes::W / 2;
+                    const py::ssize_t ngrp = nsq / CPV;
                     #pragma omp parallel for schedule(static)
-                    for (py::ssize_t jp = 0; jp < npair; ++jp) {
-                        const py::ssize_t jr = 2 * jp;
+                    for (py::ssize_t jp = 0; jp < ngrp; ++jp) {
+                        const py::ssize_t jr = CPV * jp;
                         switch (nk) {
-                            case 1: fg_stage1_two<1>(col, nsq, q, g, Fb, jr); break;
-                            case 2: fg_stage1_two<2>(col, nsq, q, g, Fb, jr); break;
-                            case 3: fg_stage1_two<3>(col, nsq, q, g, Fb, jr); break;
-                            default: fg_stage1_two<4>(col, nsq, q, g, Fb, jr); break;
+                            case 1: fg_stage1_lanes<1>(col, nsq, q, g, Fb, jr); break;
+                            case 2: fg_stage1_lanes<2>(col, nsq, q, g, Fb, jr); break;
+                            case 3: fg_stage1_lanes<3>(col, nsq, q, g, Fb, jr); break;
+                            default: fg_stage1_lanes<4>(col, nsq, q, g, Fb, jr); break;
                         }
                     }
-                    if (nsq % 2) {
-                        const py::ssize_t jr = nsq - 1;
+                    for (py::ssize_t jr = ngrp * CPV; jr < nsq; ++jr) {
                         cd acc[FG_BATCH];
                         for (py::ssize_t k = 0; k < nk; ++k) acc[k] = cd(0.0, 0.0);
                         for (py::ssize_t iq = 0; iq < q; ++iq) {
