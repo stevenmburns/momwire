@@ -11,6 +11,7 @@ by a caller; every kernel here only ever reads them (e.g. ``0.5 * (xi + 1)``),
 which allocates fresh arrays.
 """
 
+import os
 from functools import lru_cache
 
 import numpy as np
@@ -147,6 +148,25 @@ def remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap, c):
     return int(min(max(int(base), need), int(cap)))
 
 
+# Which route `remainder_qp_pairs` took, per call ("cpp") and per source the
+# scan left to the numpy body ("unsure"). Read by the tests; never reset here.
+_QP_SCAN_ROUTES = {"cpp": 0, "unsure": 0}
+
+# `MOMWIRE_QP_PAIRS_FORCE_NUMPY` sends every source through the numpy body (a
+# timing comparison, a bisect); `monkeypatch.setattr(_quadrature,
+# "_QP_FORCE_NUMPY", True)` does the same for one test. Read at call time.
+_QP_FORCE_NUMPY = bool(os.environ.get("MOMWIRE_QP_PAIRS_FORCE_NUMPY"))
+
+
+def _qp_pairs_scan():
+    """The C++ per-source scan (`_accel_qp_pairs.cpp`), or None."""
+    if _QP_FORCE_NUMPY:
+        return None
+    from ._accel import acc  # noqa: PLC0415 — the accelerator loads on use
+
+    return getattr(acc, "remainder_qp_pairs_scan", None) if acc is not None else None
+
+
 def remainder_qp_pairs(
     obs_nodes, src_l, src_r, ground_z, base, cap, c, *, edge_tol=0.0
 ):
@@ -211,7 +231,33 @@ def remainder_qp_pairs(
             return empty
 
     I_out, J_out, Q_out = [], [], []
-    for j in range(src_l.shape[0]):
+    scan = _qp_pairs_scan()
+    if scan is not None:
+        # The C++ scan answers every source whose order it is CERTAIN of and
+        # names the rest, which take the numpy body below: the list is the
+        # numpy route's on every build (see _accel_qp_pairs.cpp for why).
+        I_c, J_c, Q_c, unsure = scan(
+            obs,
+            int(n_node),
+            mir_l,
+            d,
+            dd,
+            lengths,
+            base,
+            cap,
+            float(c),
+            float(edge_tol),
+        )
+        _QP_SCAN_ROUTES["cpp"] += 1
+        _QP_SCAN_ROUTES["unsure"] += int(unsure.size)
+        if I_c.size:
+            I_out.append(I_c)
+            J_out.append(J_c)
+            Q_out.append(Q_c)
+        sources = unsure.tolist()
+    else:
+        sources = range(src_l.shape[0])
+    for j in sources:
         if lengths[j] <= 0.0 or not dd[j] > 0.0:
             continue  # the scalar rule skips both the same way
         ap = obs - mir_l[j]
