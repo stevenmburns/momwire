@@ -307,6 +307,23 @@ static size_t column_build(double rho, double k_p, const cd &kpc,
 }
 }  // namespace mw899
 
+// The column tail's conjugate identity, H2_0(conj w) = conj(H1_0(w)) bit for
+// bit (`column_tail`), counted over the caller's arguments: the number of w
+// for which xsf's two Hankels are NOT exact conjugates, as uint64. The gate
+// of tests/test_near_interface_hankel_conj.py, run on every build CI makes.
+static py::ssize_t near_interface_hankel_conj_mismatches(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> w) {
+    const std::complex<double> *wp = w.data();
+    const py::ssize_t n = w.size();
+    py::ssize_t bad = 0;
+    for (py::ssize_t i = 0; i < n; ++i) {
+        const std::complex<double> a = std::conj(xsf::cyl_hankel_1(0.0, wp[i]));
+        const std::complex<double> b = xsf::cyl_hankel_2(0.0, std::conj(wp[i]));
+        if (std::memcmp(&a, &b, sizeof a) != 0) ++bad;
+    }
+    return bad;
+}
+
 // `six_point` over parallel (rho, z, zp) arrays: the (n, 6) table, OpenMP
 // across points with the GIL released. The wavenumbers arrive DERIVED
 // (k_p real, k_m complex on the Im <= 0 branch) rather than as eps~, so the
@@ -888,6 +905,10 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // built between #680 and #899 exports `near_interface_680` and not this
     // one, so the two entries have to be asked about separately.
     m.attr("near_interface_columns_899") = true;
+    m.def("near_interface_hankel_conj_mismatches",
+          &near_interface_hankel_conj_mismatches, py::arg("w"),
+          "How many w break H2_0(conj w) == conj(H1_0(w)) as uint64 -- the "
+          "identity the column tail's down-ray rests on (TEST-ONLY).");
     // The fill-held head + mid cache of the column twin (`mw899::ColumnCache`).
     py::class_<mw899::ColumnCache>(m, "ColumnCache")
         .def(py::init<size_t>(), py::arg("max_bytes"))
