@@ -112,17 +112,18 @@ jobs:
       # to the old per-job family until the first main push writes the new
       # key; drop it once that entry exists.
       #
-      # max-size: one -O3 -g build of the extension is ~0.4 GB of objects,
-      # and the action's 500 MB default put the cache at 80-88 % full after a
-      # single build, so ccache's own cleanup evicted objects before the next
-      # run could use them (main-to-main hit rate 8/26).
+      # The key carries the RESOLVED Python patch (steps.py), not just 3.12:
+      # `python-version: '3.12'` resolves to whatever the runner image has
+      # cached, and images roll out unevenly (3.12.14 and 3.12.15 in the
+      # same run). The extension compiles against that interpreter's headers,
+      # so objects from one patch can never hit for the other -- a PR on
+      # 3.12.15 restoring main's 3.12.14 cache hit 4 of 32 compiles.
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: linux-py312
+          key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
             test-Linux
-          max-size: 1500M
           save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
@@ -324,10 +325,9 @@ jobs:
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: linux-py312
+          key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
             test-Linux
-          max-size: 1500M
           save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
       - run: pip install "setuptools>=61.0" wheel pybind11
@@ -382,10 +382,9 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: linux-py312
+          key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
             test-Linux
-          max-size: 1500M
           save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
@@ -485,10 +484,9 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: linux-py312
+          key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
             test-Linux
-          max-size: 1500M
           save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
@@ -543,10 +541,9 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: linux-py312
+          key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
             test-Linux
-          max-size: 1500M
           save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
@@ -597,10 +594,9 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: linux-py312
+          key: linux-py${{ steps.py.outputs.python-version }}
           restore-keys: |
             test-Linux
-          max-size: 1500M
           save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
