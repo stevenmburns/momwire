@@ -412,3 +412,113 @@ static inline void tangent_decomp(double tx, double ty, double tz, double &ux,
     tzc = tz;
 }
 }  // namespace somm_proj
+
+// The Sommerfeld grids' lane stages (momwire#1290), the pieces the above
+// (`_accel_somm.cpp`) and below (`_accel_mw568.cpp`) kernels share, written
+// against the lane layer (momwire#1372). The two differ in the theta clamp
+// and the region select (below has five theta bands across three R1 zones)
+// and in the projection, so those stay in each kernel; what follows the
+// region index -- the table-axis offsets, the stencil node clamp, the
+// Lagrange weights -- and the surface read are the same arithmetic in both.
+// Each lane is the scalar stage on its own pair (`proj_core`, `below_stencil`,
+// `below_surfaces`), in that stage's order.
+#include "_lanes.h"
+#if MW_LANES_SIMD && MW_LANES_PACKED
+namespace somm_proj_lanes {
+using namespace mw_lanes;
+using somm_proj::cd;
+using somm_proj::GridView;
+
+// The stencil after the region: for pairs b .. b+W-1 at clamped (rc, t) in
+// region `reg`, fr and ft on the region's axes, the first stencil node
+// i0 = (int)floor(fr) - 1, then `if (i0 < 0) i0 = 0; else if (i0 > n - 4)
+// i0 = n - 4` in int32 lanes (likewise j0), and lagrange4 at fr - i0 and
+// ft - j0. nR32/nTh32 are G.nR/G.nTh as int32 for the gathers (a table is a
+// few hundred nodes a side, far inside int32).
+template <int B>
+MW_LANES_INLINE void stencil_tail(const GridView &G, const int *nR32,
+                                  const int *nTh32, vd rc, vd t, vi reg,
+                                  int *reg_o, int *i0_o, int *j0_o,
+                                  double (*wr)[B], double (*wt)[B], int b) {
+    const vd fr = div(sub(rc, gather(G.rr0, reg)), gather(G.rdr, reg));
+    const vd ft = div(sub(t, gather(G.rth0, reg)), gather(G.rdth, reg));
+    const vi one = set1_i32(1), four = set1_i32(4), zi = zero_i32();
+    auto clamp = [&](vd f, const int *n32) {
+        const vi i = sub_i32(cvtt_i32(floor(f)), one);
+        const vi nm4 = sub_i32(gather_i32(n32, reg), four);
+        const vmi below = cmpgt_i32(zi, i);
+        const vmi above = cmpgt_i32(i, nm4);
+        return blend_i32(blend_i32(i, nm4, above), zi, below);
+    };
+    const vi i0 = clamp(fr, nR32);
+    const vi j0 = clamp(ft, nTh32);
+    storeu_i32(reg_o + b, reg);
+    storeu_i32(i0_o + b, i0);
+    storeu_i32(j0_o + b, j0);
+    // somm_proj::lagrange4: w0 = -u1 u2 u3 / 6, w1 = u0 u2 u3 / 2,
+    // w2 = -u0 u1 u3 / 2, w3 = u0 u1 u2 / 6, the negation on the first factor.
+    const vd c1 = set1(1.0), c2 = set1(2.0), c3 = set1(3.0), c6 = set1(6.0);
+    auto lagrange = [&](vd u, double (*w)[B]) {
+        const vd u0 = u, u1 = sub(u, c1), u2 = sub(u, c2), u3 = sub(u, c3);
+        storeu(w[0] + b, div(mul(mul(neg(u1), u2), u3), c6));
+        storeu(w[1] + b, div(mul(mul(u0, u2), u3), c2));
+        storeu(w[2] + b, div(mul(mul(neg(u0), u1), u3), c2));
+        storeu(w[3] + b, div(mul(mul(u0, u1), u2), c6));
+    };
+    lagrange(sub(fr, cvt_f64(i0)), wr);
+    lagrange(sub(ft, cvt_f64(j0)), wt);
+}
+
+// The surface read for one pair, W/2 surfaces to a vector: lanes (re, im) of
+// surfaces s .. s+W/2-1, so each step is the scalar step on every part at
+// once; written SoA, surface s's parts into sre/sim[s][b]. Per row,
+// ((r0 w0 + r1 w1) + r2 w2) + r3 w3, then acc = acc + rs wr[i] from +0.0;
+// complex-by-real is componentwise. FUSED (below, `below_surfaces`'
+// mw_fma helpers): the first product unfused, every later step one fma.
+// Not FUSED (above, `proj_core`'s std::complex): separate mul and add.
+template <int B, bool FUSED>
+MW_LANES_INLINE void surfaces_lanes(const GridView &G, int reg, int i0, int j0,
+                                    const double (*wr)[B],
+                                    const double (*wt)[B], double (*sre)[B],
+                                    double (*sim)[B], int b) {
+    constexpr int CPV = W / 2;
+    static_assert(4 % CPV == 0, "a vector holds whole surfaces of the four");
+    const py::ssize_t nth = G.nTh[reg];
+    const py::ssize_t plane = G.nR[reg] * nth;
+    const cd *base = G.vptr[reg] + (py::ssize_t)i0 * nth + j0;
+    const vd w0 = set1(wt[0][b]), w1 = set1(wt[1][b]), w2 = set1(wt[2][b]),
+             w3 = set1(wt[3][b]);
+    for (int s = 0; s < 4; s += CPV) {
+        const double *ps[CPV];
+        for (int c = 0; c < CPV; ++c)
+            ps[c] = reinterpret_cast<const double *>(base + (s + c) * plane);
+        vd acc = zero();
+        for (int i = 0; i < 4; ++i) {
+            auto ld = [&](int j) {
+                const double *q[CPV];
+                for (int c = 0; c < CPV; ++c) q[c] = ps[c] + 2 * i * nth + 2 * j;
+                return load_cpairs(q);
+            };
+            vd rs = mul(ld(0), w0);
+            if (FUSED) {
+                rs = fmadd(ld(1), w1, rs);
+                rs = fmadd(ld(2), w2, rs);
+                rs = fmadd(ld(3), w3, rs);
+                acc = fmadd(rs, set1(wr[i][b]), acc);
+            } else {
+                rs = add(rs, mul(ld(1), w1));
+                rs = add(rs, mul(ld(2), w2));
+                rs = add(rs, mul(ld(3), w3));
+                acc = add(acc, mul(rs, set1(wr[i][b])));
+            }
+        }
+        alignas(ALIGN) double v[W];
+        store(v, acc);
+        for (int c = 0; c < CPV; ++c) {
+            sre[s + c][b] = v[2 * c];
+            sim[s + c][b] = v[2 * c + 1];
+        }
+    }
+}
+}  // namespace somm_proj_lanes
+#endif
