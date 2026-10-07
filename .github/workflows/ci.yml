@@ -10,6 +10,16 @@ on:
   # merge that caused them (momwire#748: red on main for a day, because the
   # branch that broke it could not have asked).
   workflow_dispatch:
+    inputs:
+      # A dispatch is how a branch buys the lanes a PR does not run. The PR
+      # itself already runs `test` and `test-pynec` (and they gate the
+      # merge), so by default a dispatch skips them: re-running them on the
+      # same SHA was ~45% of all dispatches in the 2026-10-07 CI audit.
+      lanes:
+        description: "push-only = the lanes a PR doesn't run (macOS, slow, integration, crossgate, memgate); all = also test and test-pynec"
+        type: choice
+        options: [push-only, all]
+        default: push-only
 
 # A newer push to the same PR or a re-dispatch on the same branch supersedes
 # the older run, so cancel it. Pushes to main get a UNIQUE group (run_id):
@@ -38,6 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      native: ${{ steps.filter.outputs.native }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -59,6 +70,19 @@ jobs:
               - '!**/*.md'
               - '!LICENSE'
               - '!scripts/probe_*.py'
+            # What can break only on another platform: the compiled code, its
+            # build, and this workflow. A PR touching these gets test-macos
+            # automatically instead of a hand-dispatch of the whole workflow
+            # (44 of 149 merged PRs in the 2026-10-07 audit).
+            native:
+              - 'src/**/*.cpp'
+              - 'src/**/*.h'
+              - 'src/**/*.hpp'
+              - 'extern/**'
+              - 'setup.py'
+              - 'pyproject.toml'
+              - 'MANIFEST.in'
+              - '.github/workflows/ci.yml'
 
   lint:
     runs-on: ubuntu-latest
@@ -93,6 +117,7 @@ jobs:
 
   test:
     needs: changes
+    if: github.event_name != 'workflow_dispatch' || inputs.lanes == 'all'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -242,9 +267,14 @@ jobs:
     # macOS verdict it needs without this becoming a PR gate for everyone.
     # `gh workflow run ci.yml --ref <branch>` -- the same pre-merge pattern
     # eznec-dropin.yml already provides for the Windows lane.
+    #
+    # And on a PR that touches compiled code or its build (`native`): that is
+    # where the macOS-only failures came from (7 platform-only reds in the
+    # 2026-10-07 audit window), so those PRs get the verdict before merge.
     if: >-
       (github.event_name == 'workflow_dispatch'
-       || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+       || (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true'))
       && needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v7
@@ -371,6 +401,19 @@ jobs:
     # test, so this excludes memgate explicitly for the same reason as the
     # test job above, even though today nothing marked slow is also marked
     # memgate.
+    #
+    # Three shards (2026-10-07): one job was ~33 min and set the wall time of
+    # every main push and dispatch. pytest-split balances the shards from
+    # tests/slow_durations.json (per-test medians from main's own runs;
+    # refresh with `scripts/test_durations.py --write-split
+    # tests/slow_durations.json`). A test missing from the file is split by
+    # the file's average, so a stale file only unbalances, never drops, tests.
+    # The floor is the single slowest test (~556 s).
+    name: test-slow (${{ matrix.shard }}/3)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -416,7 +459,13 @@ jobs:
       # `not nightly`: the whole-band grazing sweeps (momwire#1359) run in
       # nightly.yml -- daily when main moved, and on every release tag. Their
       # per-push gate is the stored-node unit test in the default lane.
-      - run: pytest tests/ -m "slow and not memgate and not crossgate and not nightly"
+      - run: pip install pytest-split
+        if: needs.changes.outputs.code == 'true'
+      - run: >-
+          pytest tests/ -m "slow and not memgate and not crossgate and not nightly"
+          --splits 3 --group ${{ matrix.shard }}
+          --durations-path tests/slow_durations.json
+          --splitting-algorithm least_duration
         if: needs.changes.outputs.code == 'true'
         env:
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
@@ -425,7 +474,7 @@ jobs:
         if: always() && needs.changes.outputs.code == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: durations-${{ github.job }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: durations-${{ github.job }}-s${{ matrix.shard }}-${{ runner.os }}-py${{ steps.py.outputs.python-version }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: durations/
           retention-days: 90
           if-no-files-found: ignore
@@ -455,7 +504,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: momwire-677-dumps
+          name: momwire-677-dumps-s${{ matrix.shard }}
           path: 677-dumps/
           if-no-files-found: ignore
 
@@ -583,6 +632,7 @@ jobs:
     # build coverage — across the atlas/lapacke/mkl/openblas backends and on
     # Windows — now lives in python-necpp's own CI, which is its proper home;
     # this job only needs *a* working PyNEC to compare against.
+    if: github.event_name != 'workflow_dispatch' || inputs.lanes == 'all'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
