@@ -316,6 +316,9 @@ _ACCEL_HEADERS = [
     # The complex-k Galerkin far fill's vector sweep (momwire#1224), included
     # by `_accel_sinusoidal.cpp`.
     "src/momwire/_accel_sinusoidal_cplx.h",
+    # The SIMD lane layer (momwire#1372), included by the lane kernels'
+    # TUs and `_accel_somm_proj_inline.h`.
+    "src/momwire/_lanes.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -370,6 +373,8 @@ _NEAR_HEADERS = [
     "src/momwire/_fma_inline.h",
     # The column machinery both TUs of this extension share (momwire#1224).
     "src/momwire/_near_interface_columns_inline.h",
+    # The SIMD lane layer (momwire#1372): the sheet's fixed-width cell sum.
+    "src/momwire/_lanes.h",
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))
 
 # Compile the accelerator's translation units concurrently (momwire#687). With
