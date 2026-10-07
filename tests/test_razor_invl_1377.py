@@ -108,12 +108,17 @@ needs_tiles = pytest.mark.skipif(
 
 
 @needs_tiles
-def test_tile_kernels_do_not_move_the_inverted_l():
+@pytest.mark.parametrize("tile_rows", [None, 500])
+def test_tile_kernels_do_not_move_the_inverted_l(tile_rows):
     """`product_rows` and `tile_block` against numpy's gathers and scatters
     (`_TILE_KERNELS = False`): Z to the bit, and the fused tiles took the
-    kernel."""
-    ref, r0 = pg._fill(_invl, **{"cf._TILE_KERNELS": False})
-    got, r = pg._fill(_invl)
+    kernel -- with the default tiles, and with 500-row tiles, where rows
+    are held across tiles."""
+    tiny = {} if tile_rows is None else {"cf._TILE_ROWS": tile_rows}
+    ref, r0 = pg._fill(_invl, **tiny, **{"cf._TILE_KERNELS": False})
+    got, r = pg._fill(_invl, **tiny)
+    if tile_rows:
+        assert r["cf.held_slots"] > 0, r
     assert r0["cf.tile_blocks_fast"] == 0
     assert (
         r["cf.tile_blocks_fast"] >= 1 and r["cf.tiles"] >= r["cf.tile_blocks_fast"]
@@ -247,4 +252,33 @@ def test_threaded_line_keys_rehash_keeps_the_numbering():
 def test_threaded_line_keys_do_not_move_the_inverted_l():
     ref, _r = pg._fill(_invl, **{"cf._LINE_KEYS_THREADS": 1})
     got, _r = pg._fill(_invl, **{"cf._LINE_KEYS_THREADS": 4})
+    assert np.array_equal(pg._bits(got), pg._bits(ref))
+
+
+# ---------------------------------------------------------------- classes, threaded
+needs_classes_par = pytest.mark.skipif(
+    acc is None or not getattr(acc, "factorize_float_classes_par_1377", False),
+    reason="accelerator without the threaded key classes",
+)
+
+
+@needs_classes_par
+@pytest.mark.parametrize("threads", [2, 3, 4, 8])
+@pytest.mark.parametrize("n", [1, 7, 1000, 200_000])
+def test_threaded_float_classes_are_the_serial_walk(n, threads):
+    rng = np.random.default_rng(13778 + n + threads)
+    pool = np.array([0.0, -0.0, 1.5, 2.25, np.nan, 3.0, -1.0, np.inf])
+    col = rng.choice(pool, size=n)
+    if n >= 1000:  # many distinct values, so each thread's table rehashes
+        col[::2] = rng.integers(0, n, size=col[::2].size) * 0.125
+    n_ref, inv_ref = acc.factorize_float_classes(col)
+    n_got, inv_got = acc.factorize_float_classes(col, n_threads=threads)
+    assert n_got == n_ref
+    assert np.array_equal(inv_got, inv_ref)
+
+
+@needs_classes_par
+def test_threaded_key_classes_do_not_move_the_inverted_l():
+    ref, _r = pg._fill(_invl, **{"cf._KEY_CLASSES_THREADS": 1})
+    got, _r = pg._fill(_invl, **{"cf._KEY_CLASSES_THREADS": 4})
     assert np.array_equal(pg._bits(got), pg._bits(ref))

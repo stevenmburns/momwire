@@ -2326,6 +2326,22 @@ _LEAN_KEY_CLASSES = True
 _HAVE_FLOAT_CLASSES_ACCEL = _accel.acc is not None and bool(
     getattr(_accel.acc, "factorize_float_classes_1377", False)
 )
+# ...across the physical cores, the values partitioned by hash (the line
+# keys' argument); 1 is the serial walk, the reference.
+_KEY_CLASSES_THREADS = None  # None: `_physical_cpu_count()`
+_HAVE_FLOAT_CLASSES_PAR = _accel.acc is not None and bool(
+    getattr(_accel.acc, "factorize_float_classes_par_1377", False)
+)
+
+
+def _key_classes_threads():
+    """`factorize_float_classes`' thread argument, when its build takes one."""
+    if not _HAVE_FLOAT_CLASSES_PAR:
+        return {}
+    n = _KEY_CLASSES_THREADS
+    if n is None:
+        n = _near_interface._physical_cpu_count()
+    return {"n_threads": int(max(1, n))}
 
 
 def _merge_groups_z(zids, kids, zfirst, kfirst, nz, nk, n_key, nB):
@@ -3048,7 +3064,9 @@ class _ProductTiles:
             # `_factorize`'s groups and numbers (`factorize_float_classes`),
             # in int32 and without its first-row array.
             n_cls, key_cls = _accel.acc.factorize_float_classes(
-                np.ascontiguousarray(plan.key_r, dtype=float), cancel_flag=_cancel.ptr()
+                np.ascontiguousarray(plan.key_r, dtype=float),
+                cancel_flag=_cancel.ptr(),
+                **_key_classes_threads(),
             )
             n_cls = int(n_cls)
             got = None
