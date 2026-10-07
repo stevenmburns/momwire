@@ -476,7 +476,8 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
 #include "_accel_somm_proj_inline.h"
 
 // ---------------------------------------------------------------------------
-// The remainder projection's blocked loop and its AVX2 lanes (perf item 9).
+// The remainder projection's blocked loop and its lanes (perf item 9; on the
+// lane layer, `_lanes.h`, since momwire#1372).
 //
 // `proj_one` per pair is ~10 divisions (the stencil's two and lagrange4's
 // eight), sixty-four complex-by-real products in the surface read, the
@@ -484,20 +485,18 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
 // polar's sincos). SG above x16 spent 7.2 s of 21 s here on Haswell. The
 // blocked loop takes a row's sources in blocks of `ABOVE_BLOCK` and runs
 // `proj_one`'s stages over a block: the geometry and the libm calls per pair,
-// scalar; the stencil four pairs to a vector; the surface read two surfaces to
-// a vector (re, im of surface s and of s + 1 in the four lanes); the
-// projection four pairs to a vector; and the momwire#1258 continuation, where
-// a pair needs it, per pair on the lanes' surfaces. Every lane does the scalar
-// stage's operations in its order — the same selects, correctly rounded
-// divisions, and (the build being -ffp-contract=off, and these helpers using
-// std::complex, not the `mw_fma` ones) separate multiplies and adds, never a
-// fused one — and no reduction crosses lanes, so a lane's value is
-// `proj_one`'s. A block's last nb mod 4 pairs take `proj_one` itself.
-// `lanes=false` is the per-pair loop, the reference the lanes are gated
-// against (tests/test_somm_proj_lanes_1290.py); the baseline, arm64 and MSVC
-// builds have only it.
-#if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
-#include <immintrin.h>
+// scalar; the stencil W pairs to a vector; the surface read W/2 surfaces to
+// a vector (re, im of each in a lane pair); the projection W pairs to a
+// vector; and the momwire#1258 continuation, where a pair needs it, per pair
+// on the lanes' surfaces. Every lane does the scalar stage's operations in its
+// order — the same selects, correctly rounded divisions, and (the build being
+// -ffp-contract=off, and these helpers using std::complex, not the `mw_fma`
+// ones) separate multiplies and adds, never a fused one — and no reduction
+// crosses lanes, so a lane's value is `proj_one`'s. A block's last nb mod W
+// pairs take `proj_one` itself. `lanes=false` is the per-pair loop, the
+// reference the lanes are gated against (tests/test_somm_proj_lanes_1290.py);
+// the baseline, arm64 and MSVC builds have only it.
+#if MW_LANES_SIMD && MW_LANES_PACKED
 #define MW_SOMM_LANES 1
 #else
 #define MW_SOMM_LANES 0
@@ -508,115 +507,35 @@ using somm_proj::cd;
 constexpr int ABOVE_BLOCK = 64;
 
 #if MW_SOMM_LANES
-// `proj_core`'s stencil for pairs b .. b+3: theta and r1 clamped, the region,
-// the first stencil node (i0, j0) clamped, and lagrange4 at both offsets.
+using namespace mw_lanes;
+
+// `proj_core`'s stencil for pairs b .. b+W-1: theta and r1 clamped, the
+// region, then the shared tail (the first stencil node clamped, lagrange4 at
+// both offsets).
 static inline void stencil_lanes(const somm_proj::GridView &G, const int *nR32,
                                  const int *nTh32, const double *r1,
                                  const double *th, int *reg_o, int *i0_o,
                                  int *j0_o, double (*wr)[ABOVE_BLOCK],
                                  double (*wt)[ABOVE_BLOCK], int b) {
-    const __m256d t = _mm256_loadu_pd(th + b);
-    __m256d rc = _mm256_loadu_pd(r1 + b);
-    const __m256d c_r1max = _mm256_set1_pd(G.r1_max);
+    const vd t = loadu(th + b);
+    vd rc = loadu(r1 + b);
+    const vd c_r1max = set1(G.r1_max);
     // r1c = r1 > r1_max ? r1_max : r1
-    rc = _mm256_blendv_pd(rc, c_r1max, _mm256_cmp_pd(rc, c_r1max, _CMP_GT_OQ));
+    rc = blend(rc, c_r1max, cmp_gt(rc, c_r1max));
     // reg = r1c <= r_break ? (t <= split ? 0 : 1)
     //     : (r1c <= r_near ? (t <= split ? 2 : 3) : (t <= split ? 4 : 5))
-    const __m256d low = _mm256_cmp_pd(t, _mm256_set1_pd(G.th_split), _CMP_LE_OQ);
-    const __m256d side = _mm256_blendv_pd(_mm256_set1_pd(1.0), _mm256_setzero_pd(), low);
-    __m256d zone = _mm256_blendv_pd(
-        _mm256_set1_pd(4.0), _mm256_set1_pd(2.0),
-        _mm256_cmp_pd(rc, _mm256_set1_pd(G.r_near), _CMP_LE_OQ));
-    zone = _mm256_blendv_pd(zone, _mm256_setzero_pd(),
-                            _mm256_cmp_pd(rc, _mm256_set1_pd(G.r_break), _CMP_LE_OQ));
-    const __m128i reg = _mm256_cvttpd_epi32(_mm256_add_pd(zone, side));
-    const __m256d fr =
-        _mm256_div_pd(_mm256_sub_pd(rc, _mm256_i32gather_pd(G.rr0, reg, 8)),
-                      _mm256_i32gather_pd(G.rdr, reg, 8));
-    const __m256d ft =
-        _mm256_div_pd(_mm256_sub_pd(t, _mm256_i32gather_pd(G.rth0, reg, 8)),
-                      _mm256_i32gather_pd(G.rdth, reg, 8));
-    // i0 = (int)floor(fr) - 1; if (i0 < 0) i0 = 0; else if (i0 > n - 4) i0 = n - 4
-    const __m128i one = _mm_set1_epi32(1), four = _mm_set1_epi32(4);
-    const __m128i zero = _mm_setzero_si128();
-    auto clamp = [&](__m256d f, const int *n32) {
-        __m128i i = _mm_sub_epi32(_mm256_cvttpd_epi32(_mm256_floor_pd(f)), one);
-        const __m128i nm4 = _mm_sub_epi32(_mm_i32gather_epi32(n32, reg, 4), four);
-        const __m128i neg = _mm_cmpgt_epi32(zero, i);
-        const __m128i big = _mm_cmpgt_epi32(i, nm4);
-        return _mm_blendv_epi8(_mm_blendv_epi8(i, nm4, big), zero, neg);
-    };
-    const __m128i i0 = clamp(fr, nR32);
-    const __m128i j0 = clamp(ft, nTh32);
-    _mm_storeu_si128(reinterpret_cast<__m128i *>(reg_o + b), reg);
-    _mm_storeu_si128(reinterpret_cast<__m128i *>(i0_o + b), i0);
-    _mm_storeu_si128(reinterpret_cast<__m128i *>(j0_o + b), j0);
-    // somm_proj::lagrange4: w0 = -u1 u2 u3 / 6, w1 = u0 u2 u3 / 2,
-    // w2 = -u0 u1 u3 / 2, w3 = u0 u1 u2 / 6, the negation on the first factor.
-    const __m256d sgn = _mm256_set1_pd(-0.0);
-    const __m256d c1 = _mm256_set1_pd(1.0), c2 = _mm256_set1_pd(2.0),
-                  c3 = _mm256_set1_pd(3.0), c6 = _mm256_set1_pd(6.0);
-    auto lagrange = [&](__m256d u, double (*w)[ABOVE_BLOCK]) {
-        const __m256d u0 = u, u1 = _mm256_sub_pd(u, c1),
-                      u2 = _mm256_sub_pd(u, c2), u3 = _mm256_sub_pd(u, c3);
-        _mm256_storeu_pd(
-            w[0] + b,
-            _mm256_div_pd(_mm256_mul_pd(_mm256_mul_pd(_mm256_xor_pd(u1, sgn), u2), u3), c6));
-        _mm256_storeu_pd(
-            w[1] + b, _mm256_div_pd(_mm256_mul_pd(_mm256_mul_pd(u0, u2), u3), c2));
-        _mm256_storeu_pd(
-            w[2] + b,
-            _mm256_div_pd(_mm256_mul_pd(_mm256_mul_pd(_mm256_xor_pd(u0, sgn), u1), u3), c2));
-        _mm256_storeu_pd(
-            w[3] + b, _mm256_div_pd(_mm256_mul_pd(_mm256_mul_pd(u0, u1), u2), c6));
-    };
-    lagrange(_mm256_sub_pd(fr, _mm256_cvtepi32_pd(i0)), wr);
-    lagrange(_mm256_sub_pd(ft, _mm256_cvtepi32_pd(j0)), wt);
+    const vm low = cmp_le(t, set1(G.th_split));
+    const vd side = blend(set1(1.0), zero(), low);
+    vd zone = blend(set1(4.0), set1(2.0), cmp_le(rc, set1(G.r_near)));
+    zone = blend(zone, zero(), cmp_le(rc, set1(G.r_break)));
+    somm_proj_lanes::stencil_tail<ABOVE_BLOCK>(G, nR32, nTh32, rc, t,
+                                               cvtt_i32(add(zone, side)), reg_o,
+                                               i0_o, j0_o, wr, wt, b);
 }
 
-// `proj_core`'s surface read for one pair, two surfaces to a vector: lanes
-// (re, im) of surface s and of surface s + 1. Per row, ((r0 w0 + r1 w1) +
-// r2 w2) + r3 w3, then acc = acc + rs wr[i] from +0.0; std::complex's
-// complex-by-real product is componentwise, so each lane is the scalar part.
-static inline void surfaces_lanes(const somm_proj::GridView &G, int reg, int i0,
-                                  int j0, const double (*wr)[ABOVE_BLOCK],
-                                  const double (*wt)[ABOVE_BLOCK],
-                                  double (*sre)[ABOVE_BLOCK],
-                                  double (*sim)[ABOVE_BLOCK], int b) {
-    const py::ssize_t nth = G.nTh[reg];
-    const py::ssize_t plane = G.nR[reg] * nth;
-    const cd *base = G.vptr[reg] + (py::ssize_t)i0 * nth + j0;
-    const __m256d w0 = _mm256_set1_pd(wt[0][b]), w1 = _mm256_set1_pd(wt[1][b]),
-                  w2 = _mm256_set1_pd(wt[2][b]), w3 = _mm256_set1_pd(wt[3][b]);
-    for (int s = 0; s < 4; s += 2) {
-        const double *pa = reinterpret_cast<const double *>(base + s * plane);
-        const double *pb = reinterpret_cast<const double *>(base + (s + 1) * plane);
-        __m256d acc = _mm256_setzero_pd();
-        for (int i = 0; i < 4; ++i) {
-            const double *ra = pa + 2 * i * nth, *rb = pb + 2 * i * nth;
-            auto ld = [&](int j) {
-                return _mm256_insertf128_pd(
-                    _mm256_castpd128_pd256(_mm_loadu_pd(ra + 2 * j)),
-                    _mm_loadu_pd(rb + 2 * j), 1);
-            };
-            __m256d rs = _mm256_mul_pd(ld(0), w0);
-            rs = _mm256_add_pd(rs, _mm256_mul_pd(ld(1), w1));
-            rs = _mm256_add_pd(rs, _mm256_mul_pd(ld(2), w2));
-            rs = _mm256_add_pd(rs, _mm256_mul_pd(ld(3), w3));
-            acc = _mm256_add_pd(acc, _mm256_mul_pd(rs, _mm256_set1_pd(wr[i][b])));
-        }
-        alignas(32) double v[4];
-        _mm256_store_pd(v, acc);
-        sre[s][b] = v[0];
-        sim[s][b] = v[1];
-        sre[s + 1][b] = v[2];
-        sim[s + 1][b] = v[3];
-    }
-}
-
-// `proj_project` for pairs b .. b+3, std::complex's operators spelled per
+// `proj_project` for pairs b .. b+W-1, std::complex's operators spelled per
 // part (complex x complex as (ac - bd, ad + bc), complex x real
-// componentwise); writes the four entries.
+// componentwise); writes the W entries.
 static inline void project_lanes(const somm_proj::GridView &G,
                                  const double (*sre)[ABOVE_BLOCK],
                                  const double (*sim)[ABOVE_BLOCK],
@@ -626,58 +545,44 @@ static inline void project_lanes(const somm_proj::GridView &G,
                                  double toz, const double *ux, const double *uy,
                                  const double *thsrc, const double *tzsrc, int b,
                                  cd *out) {
-    auto L = [&](const double *p) { return _mm256_loadu_pd(p + b); };
-    const __m256d rho = L(rho_), dx = L(dx_), dy = L(dy_);
-    const __m256d sux = _mm256_loadu_pd(ux), suy = _mm256_loadu_pd(uy);
-    const __m256d sth = _mm256_loadu_pd(thsrc), stz = _mm256_loadu_pd(tzsrc);
-    const __m256d gr = L(gre), gi = L(gim);
-    const __m256d safe = _mm256_cmp_pd(rho, _mm256_set1_pd(G.tiny), _CMP_GT_OQ);
-    const __m256d inv = _mm256_blendv_pd(
-        _mm256_setzero_pd(), _mm256_div_pd(_mm256_set1_pd(1.0), rho), safe);
-    const __m256d dhx = _mm256_blendv_pd(sux, _mm256_mul_pd(dx, inv), safe);
-    const __m256d dhy = _mm256_blendv_pd(suy, _mm256_mul_pd(dy, inv), safe);
-    const __m256d cphi = _mm256_add_pd(_mm256_mul_pd(sux, dhx), _mm256_mul_pd(suy, dhy));
-    const __m256d sphi = _mm256_sub_pd(_mm256_mul_pd(sux, dhy), _mm256_mul_pd(suy, dhx));
-    const __m256d Vr = L(sre[0]), Vi = L(sim[0]), Zr = L(sre[1]), Zi = L(sim[1]);
-    const __m256d Hr = L(sre[2]), Hi = L(sim[2]), Pr = L(sre[3]), Pi = L(sim[3]);
-    auto cmr = [](__m256d ar, __m256d ai, __m256d br, __m256d bi) {
-        return _mm256_sub_pd(_mm256_mul_pd(ar, br), _mm256_mul_pd(ai, bi));
-    };
-    auto cmi = [](__m256d ar, __m256d ai, __m256d br, __m256d bi) {
-        return _mm256_add_pd(_mm256_mul_pd(ar, bi), _mm256_mul_pd(ai, br));
-    };
-    const __m256d sc = _mm256_mul_pd(sth, cphi);
+    auto L = [&](const double *p) { return loadu(p + b); };
+    const vd rho = L(rho_), dx = L(dx_), dy = L(dy_);
+    const vd sux = loadu(ux), suy = loadu(uy);
+    const vd sth = loadu(thsrc), stz = loadu(tzsrc);
+    const vd gr = L(gre), gi = L(gim);
+    const vm safe = cmp_gt(rho, set1(G.tiny));
+    const vd inv = blend(zero(), div(set1(1.0), rho), safe);
+    const vd dhx = blend(sux, mul(dx, inv), safe);
+    const vd dhy = blend(suy, mul(dy, inv), safe);
+    const vd cphi = add(mul(sux, dhx), mul(suy, dhy));
+    const vd sphi = sub(mul(sux, dhy), mul(suy, dhx));
+    const vd Vr = L(sre[0]), Vi = L(sim[0]), Zr = L(sre[1]), Zi = L(sim[1]);
+    const vd Hr = L(sre[2]), Hi = L(sim[2]), Pr = L(sre[3]), Pi = L(sim[3]);
+    auto cmr = [](vd ar, vd ai, vd br, vd bi) { return sub(mul(ar, br), mul(ai, bi)); };
+    auto cmi = [](vd ar, vd ai, vd br, vd bi) { return add(mul(ar, bi), mul(ai, br)); };
+    const vd sc = mul(sth, cphi);
     // e_rho = g * (stzsrc * IrhoV + (sthsrc * cphi) * IrhoH)
-    const __m256d tr = _mm256_add_pd(_mm256_mul_pd(stz, Vr), _mm256_mul_pd(sc, Hr));
-    const __m256d ti = _mm256_add_pd(_mm256_mul_pd(stz, Vi), _mm256_mul_pd(sc, Hi));
-    const __m256d er = cmr(gr, gi, tr, ti), ei = cmi(gr, gi, tr, ti);
+    const vd tr = add(mul(stz, Vr), mul(sc, Hr));
+    const vd ti = add(mul(stz, Vi), mul(sc, Hi));
+    const vd er = cmr(gr, gi, tr, ti), ei = cmi(gr, gi, tr, ti);
     // e_phi = g * ((sthsrc * sphi) * IphiH)
-    const __m256d f = _mm256_mul_pd(sth, sphi);
-    const __m256d ur = _mm256_mul_pd(f, Pr), ui = _mm256_mul_pd(f, Pi);
-    const __m256d pr = cmr(gr, gi, ur, ui), pi = cmi(gr, gi, ur, ui);
+    const vd f = mul(sth, sphi);
+    const vd ur = mul(f, Pr), ui = mul(f, Pi);
+    const vd pr = cmr(gr, gi, ur, ui), pi = cmi(gr, gi, ur, ui);
     // e_z = g * (stzsrc * IzV - (sthsrc * cphi) * IrhoV)
-    const __m256d cr = _mm256_sub_pd(_mm256_mul_pd(stz, Zr), _mm256_mul_pd(sc, Vr));
-    const __m256d ci = _mm256_sub_pd(_mm256_mul_pd(stz, Zi), _mm256_mul_pd(sc, Vi));
-    const __m256d zr = cmr(gr, gi, cr, ci), zi = cmi(gr, gi, cr, ci);
+    const vd cr = sub(mul(stz, Zr), mul(sc, Vr));
+    const vd ci = sub(mul(stz, Zi), mul(sc, Vi));
+    const vd zr = cmr(gr, gi, cr, ci), zi = cmi(gr, gi, cr, ci);
     // tox * (dhx * e_rho - dhy * e_phi) + toy * (dhy * e_rho + dhx * e_phi)
     //   + toz * e_z
-    const __m256d vtox = _mm256_set1_pd(tox), vtoy = _mm256_set1_pd(toy),
-                  vtoz = _mm256_set1_pd(toz);
-    const __m256d d1r = _mm256_sub_pd(_mm256_mul_pd(dhx, er), _mm256_mul_pd(dhy, pr));
-    const __m256d d1i = _mm256_sub_pd(_mm256_mul_pd(dhx, ei), _mm256_mul_pd(dhy, pi));
-    const __m256d d2r = _mm256_add_pd(_mm256_mul_pd(dhy, er), _mm256_mul_pd(dhx, pr));
-    const __m256d d2i = _mm256_add_pd(_mm256_mul_pd(dhy, ei), _mm256_mul_pd(dhx, pi));
-    const __m256d o_r = _mm256_add_pd(
-        _mm256_add_pd(_mm256_mul_pd(vtox, d1r), _mm256_mul_pd(vtoy, d2r)),
-        _mm256_mul_pd(vtoz, zr));
-    const __m256d o_i = _mm256_add_pd(
-        _mm256_add_pd(_mm256_mul_pd(vtox, d1i), _mm256_mul_pd(vtoy, d2i)),
-        _mm256_mul_pd(vtoz, zi));
-    const __m256d lo = _mm256_unpacklo_pd(o_r, o_i);  // re0 im0 re2 im2
-    const __m256d hi = _mm256_unpackhi_pd(o_r, o_i);  // re1 im1 re3 im3
-    double *op = reinterpret_cast<double *>(out);
-    _mm256_storeu_pd(op, _mm256_permute2f128_pd(lo, hi, 0x20));
-    _mm256_storeu_pd(op + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
+    const vd vtox = set1(tox), vtoy = set1(toy), vtoz = set1(toz);
+    const vd d1r = sub(mul(dhx, er), mul(dhy, pr));
+    const vd d1i = sub(mul(dhx, ei), mul(dhy, pi));
+    const vd d2r = add(mul(dhy, er), mul(dhx, pr));
+    const vd d2i = add(mul(dhy, ei), mul(dhx, pi));
+    const vd o_r = add(add(mul(vtox, d1r), mul(vtoy, d2r)), mul(vtoz, zr));
+    const vd o_i = add(add(mul(vtox, d1i), mul(vtoy, d2i)), mul(vtoz, zi));
+    store_interleaved(reinterpret_cast<double *>(out), o_r, o_i);
 }
 #endif  // MW_SOMM_LANES
 }  // namespace somm_lanes
@@ -769,7 +674,7 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
             cd *orow = &out_m(m, 0);
             for (py::ssize_t n0 = 0; n0 < S; n0 += B) {
                 const int nb = (int)std::min<py::ssize_t>(B, S - n0);
-                const int nq4 = nb & ~3;
+                const int nq4 = nb - nb % W;
                 // Geometry and the libm calls, per pair: `proj_one`'s
                 // dx/dy/rho/hh and `proj_core`'s r1, theta (clamped) and g.
                 for (int b = 0; b < nq4; ++b) {
@@ -787,12 +692,12 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
                     gre[b] = g.real();
                     gim[b] = g.imag();
                 }
-                for (int b = 0; b < nq4; b += 4)
+                for (int b = 0; b < nq4; b += W)
                     stencil_lanes(G, nR32, nTh32, r1, th, l_reg, l_i0, l_j0,
                                   l_wr, l_wt, b);
                 for (int b = 0; b < nq4; ++b)
-                    surfaces_lanes(G, l_reg[b], l_i0[b], l_j0[b], l_wr, l_wt,
-                                   l_sre, l_sim, b);
+                    somm_proj_lanes::surfaces_lanes<B, false>(
+                        G, l_reg[b], l_i0[b], l_j0[b], l_wr, l_wt, l_sre, l_sim, b);
                 // Past the table's edge (momwire#1258): the continuation, per
                 // pair, on the read surfaces, exactly as `proj_core` applies it.
                 if (G.far.on) {
@@ -807,7 +712,7 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
                         }
                     }
                 }
-                for (int b = 0; b < nq4; b += 4)
+                for (int b = 0; b < nq4; b += W)
                     project_lanes(G, l_sre, l_sim, gre, gim, rho, dx, dy, tox,
                                   toy, toz, &ux[n0 + b], &uy[n0 + b],
                                   &thsrc[n0 + b], &tzsrc[n0 + b], b,
