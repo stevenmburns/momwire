@@ -402,3 +402,28 @@ def test_key_row_counts_are_the_fancy_sums():
     for g, kj in enumerate(kids):
         want[kj] += nz[g]
     assert np.array_equal(acc.key_row_counts(kids, nz, n_key), want)
+
+
+# ---------------------------------------------------------------- key z
+@pytest.mark.skipif(
+    acc is None or not getattr(acc, "take_mod_1377", False),
+    reason="accelerator without take_mod",
+)
+def test_key_line_z_is_the_numpy_take():
+    seen = {}
+    real = cf._product_plan
+
+    def spy(*a, **k):
+        plan = real(*a, **k)
+        if not isinstance(plan, str):
+            seen.setdefault(cf._KEY_ZL_ACCEL, []).append(plan.key_zl.copy())
+        return plan
+
+    with pytest.MonkeyPatch.context() as m:
+        m.setattr(cf, "_product_plan", spy)
+        ref, _r = pg._fill(_invl, **{"cf._KEY_ZL_ACCEL": False})
+        got, _r = pg._fill(_invl)
+    assert len(seen[True]) == len(seen[False]) >= 1
+    for a, b in zip(seen[False], seen[True]):
+        assert np.array_equal(a.view(np.uint64), b.view(np.uint64))
+    assert np.array_equal(pg._bits(got), pg._bits(ref))

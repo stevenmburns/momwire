@@ -2305,6 +2305,12 @@ _HAVE_LINE_KEYS_ACCEL = _accel.acc is not None and bool(
 # ...across the physical cores, the keys partitioned by hash
 # (momwire#1377); 1 is the serial walk, the reference (the same integers).
 _LINE_KEYS_THREADS = None  # None: `_physical_cpu_count()`
+# The keys' line z by `take_mod` (momwire#1377); False is `lzv[kf % nL]`,
+# the reference (the same floats, copied).
+_KEY_ZL_ACCEL = True
+_HAVE_TAKE_MOD_ACCEL = _accel.acc is not None and bool(
+    getattr(_accel.acc, "take_mod_1377", False)
+)
 _HAVE_LINE_KEYS_PAR = _accel.acc is not None and bool(
     getattr(_accel.acc, "factorize_line_keys_par_1377", False)
 )
@@ -2579,7 +2585,18 @@ def _product_plan(ctx, eps_t, k_p, A, B, gz):
     # row table are the plan's O(groups x line) part (momwire#1224).
     kid = kid.reshape(nG, nL).astype(_index_dtype(kf.size), copy=False)
     key_r = line.ravel()[kf]
-    key_zl = lzv[kf % nL]
+    if (
+        _KEY_ZL_ACCEL
+        and _HAVE_TAKE_MOD_ACCEL
+        and kf.dtype == np.int64
+        and lzv.dtype == np.float64
+        and lzv.flags.c_contiguous
+    ):
+        # The same element copies, without the int64 remainder array
+        # (`take_mod`, momwire#1377).
+        key_zl = _accel.acc.take_mod(lzv, kf, int(nL))
+    else:
+        key_zl = lzv[kf % nL]
     # Every line value of key k is key_r[k] to the bit (equal under `==` and
     # positive, as rho_eff >= a > 0), so the plan reads its line through the
     # keys and the folded block goes here.
