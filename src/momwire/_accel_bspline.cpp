@@ -444,14 +444,118 @@ static PairOrderLadder ladder_from_arrays(
     return L;
 }
 
-// momwire#1290: the off-edge kernel's AVX2 lane path. Only in the x86 AVX2
-// build (`_avx2`); the baseline (`_sse2`), arm64 and MSVC builds keep the
-// per-pair walk alone, so their bits cannot move.
-#if defined(__AVX2__) && !defined(_MSC_VER)
-#define MW_OFFEDGE_LANES_1290 1
-#include <immintrin.h>
-#else
-#define MW_OFFEDGE_LANES_1290 0
+// momwire#1290: the off-edge kernels' lane paths, written against the lane
+// layer (momwire#1372, `_lanes.h`) at its width W. Only where the layer has a
+// vector backend (the x86 AVX2 build, `_avx2`); the baseline (`_sse2`), arm64
+// and MSVC builds keep the per-pair walk alone, so their bits cannot move.
+#include "_lanes.h"
+#define MW_OFFEDGE_LANES_1290 MW_LANES_SIMD
+
+#if MW_OFFEDGE_LANES_1290
+// The pieces the three off-edge lane kernels (single k, swept, H-matrix
+// table) share. Lane l of every [t][lane] buffer is one pair's point t, and
+// each helper is the walk's arithmetic for that pair, operation for operation.
+namespace offedge_lanes {
+using namespace mw_lanes;
+
+// R at the W pairs (i, j0 .. j0+W-1): the walk's `dx*dx + dy*dy + dz*dz +
+// a_squared`, left to right, then a correctly rounded sqrt. `pi` is the
+// observer's n_qp points (xyz-interleaved, broadcast to every lane); `pT` the
+// sources' lane-major (c, r, j) table.
+MW_LANES_INLINE void r_bcast(double *R, const double *pi, const double *pT,
+                             size_t n_qp, size_t N_j, size_t j0, vd v_a2) {
+    for (size_t q = 0; q < n_qp; q++) {
+        const vd px = set1(pi[q*3 + 0]);
+        const vd py = set1(pi[q*3 + 1]);
+        const vd pz = set1(pi[q*3 + 2]);
+        for (size_t r = 0; r < n_qp; r++) {
+            const vd dx = sub(px, loadu(pT + r * N_j + j0));
+            const vd dy = sub(py, loadu(pT + (n_qp + r) * N_j + j0));
+            const vd dz = sub(pz, loadu(pT + (2 * n_qp + r) * N_j + j0));
+            vd s = add(mul(dx, dx), mul(dy, dy));
+            s = add(s, mul(dz, dz));
+            s = add(s, v_a2);
+            store(R + (q * n_qp + r) * W, sqrt(s));
+        }
+    }
+}
+
+// The moment weights wv[t][pP][lane] for one observer length Li and W source
+// lengths Lj, per lane in the walk's order: wij = wi*wj, then
+// (wij*ui^p)*uj^P. The source-side factors, the only ones that differ across
+// lanes, are vectors; the observer's are scalars broadcast.
+template<int NM>
+MW_LANES_INLINE void wv_bcast(double *wv, const double *gt, const double *gw,
+                              size_t n_qp, double Li, const double *Lj) {
+    constexpr int NMM = NM * NM;
+    vd wjv[8], ujp[8][NM];
+    const vd vLj = loadu(Lj);
+    for (size_t r = 0; r < n_qp; r++) {
+        wjv[r] = mul(set1(gw[r]), vLj);
+        const vd uj = mul(set1(gt[r]), vLj);
+        ujp[r][0] = set1(1.0);
+        for (int e = 1; e < NM; e++) ujp[r][e] = mul(ujp[r][e-1], uj);
+    }
+    for (size_t q = 0; q < n_qp; q++) {
+        const double wi = gw[q] * Li;
+        const double ui = gt[q] * Li;
+        double ui_pow[NM];
+        ui_pow[0] = 1.0;
+        for (int e = 1; e < NM; e++) ui_pow[e] = ui_pow[e-1] * ui;
+        for (size_t r = 0; r < n_qp; r++) {
+            const size_t t = q * n_qp + r;
+            const vd wij = mul(set1(wi), wjv[r]);
+            for (int pp = 0; pp < NM; pp++) {
+                const vd x = mul(wij, set1(ui_pow[pp]));
+                for (int PP = 0; PP < NM; PP++) {
+                    store(wv + (t * NMM + pp * NM + PP) * W, mul(x, ujp[r][PP]));
+                }
+            }
+        }
+    }
+}
+
+// EK (momwire#1362): the walk's coaxial factor on G at one point t of every
+// lane, from that point's T1, T2 and kR. Eligibility is per PAIR, so the
+// lanes of a group can disagree (a group straddling a wire's end): every lane
+// computes G*fac and an ineligible lane keeps its G by a blend, which moves no
+// bits. The walk's `t2 * c1r` and `3.0 * c1r` multiply by c1r = 1.0, which is
+// exact, so they are spelled t2 and 3.0.
+MW_LANES_INLINE void ek_factor(double *gre_p, double *gim_p, vd t1, vd t2,
+                               vd kr, vm emask) {
+    const vd three = set1(3.0);
+    const vd kr2 = mul(kr, kr);
+    const vd c2r = sub(three, kr2);
+    const vd c2i = mul(three, kr);
+    vd facr = mul(t1, c2r);
+    vd faci = mul(t1, c2i);
+    facr = sub(facr, t2);
+    faci = sub(faci, mul(t2, kr));
+    facr = add(facr, set1(1.0));
+    const vd gre = load(gre_p);
+    const vd gim = load(gim_p);
+    const vd nre = sub(mul(gre, facr), mul(gim, faci));
+    const vd nim = add(mul(gre, faci), mul(gim, facr));
+    store(gre_p, blend(gre, nre, emask));
+    store(gim_p, blend(gim, nim, emask));
+}
+
+// Stage 2, one part (re or im) of G: per moment and lane, the walk's chain --
+// start at 0.0, add w*G in ascending t, one rounded multiply and one rounded
+// add per term. NMM vector accumulators; the parts never mixed in the walk.
+template<int NMM>
+MW_LANES_INLINE void stage2(const double *G, const double *wv, size_t m,
+                            vd *acc) {
+    for (int pP = 0; pP < NMM; pP++) acc[pP] = zero();
+    for (size_t t = 0; t < m; t++) {
+        const vd gv = load(G + t * W);
+        const double *w_t = wv + t * NMM * W;
+        for (int pP = 0; pP < NMM; pP++) {
+            acc[pP] = add(acc[pP], mul(load(w_t + pP * W), gv));
+        }
+    }
+}
+}  // namespace offedge_lanes
 #endif
 
 // EK (momwire#1362): the extended-kernel twin is this kernel with NEC Eq 89's
@@ -809,11 +913,11 @@ seg_seg_full_moments_bspline_kernel_impl(
 
 #if MW_OFFEDGE_LANES_1290
     if (!reference) {
-        // The lane kernel (momwire#1290): four columns (i, j0..j0+3) at a
-        // time, lane l holding the pair (i, j0+l), wherever the four share a
+        // The lane kernel (momwire#1290): W columns (i, j0..j0+W-1) at a
+        // time, lane l holding the pair (i, j0+l), wherever the W share a
         // tier whose rule is one qr chunk of an EVEN order. Anything else --
         // a group with mixed tiers, an odd order, a rule over
-        // BSPLINE_QR_TILE points, the N_j % 4 tail -- is walked pair by pair
+        // BSPLINE_QR_TILE points, the N_j % W tail -- is walked pair by pair
         // by `pair_walk` above, unchanged.
         //
         // Each lane's arithmetic is the walk's for its pair, operation for
@@ -824,8 +928,8 @@ seg_seg_full_moments_bspline_kernel_impl(
         // simd loops call libmvec's 4-wide entry for whole vectors and the
         // SCALAR libm function for a remainder, and the two differ in the
         // last bit. So the order must be even: m = n_qp^2 is then a multiple
-        // of 4, the walk has no remainder, and both routes put every point
-        // through the vector entry. An odd order leaves m % 4 == 1, whose
+        // of 4, the walk has no remainder, and both routes (the lanes' loops
+        // are m W long) put every point through the vector entry. An odd order leaves m % 4 == 1, whose
         // remainder point the walk sends to scalar libm, so it stays on the
         // walk. The moments are the walk's to the bit, and `reference=True`
         // keeps the walk reachable as the gate
@@ -845,10 +949,11 @@ seg_seg_full_moments_bspline_kernel_impl(
         // what bits are made of: cos and sin (a third of the lane time;
         // libmvec's fused sincos is slower here AND differs from them in the
         // last bit), the divide and sqrt, and stage 2's separate mul and add.
-        constexpr size_t LN = 4;
+        using namespace offedge_lanes;
+        constexpr size_t LN = W;
         const size_t n_grp = (N_j + LN - 1) / LN;
         // Source points lane-major per tier, (c, r, j): a group reads one
-        // coordinate of one node for its four columns as a single load.
+        // coordinate of one node for its W columns as a single load.
         std::vector<std::vector<double>> pjT(n_tiers);
         for (size_t tier = 0; tier < n_tiers; tier++) {
             const size_t n_qp = ladder.n_qp(tier);
@@ -863,7 +968,7 @@ seg_seg_full_moments_bspline_kernel_impl(
                 }
             }
         }
-        const __m256d v_a2 = _mm256_set1_pd(a_squared);
+        const vd v_a2 = set1(a_squared);
 
         #pragma omp parallel
         {
@@ -873,20 +978,21 @@ seg_seg_full_moments_bspline_kernel_impl(
         double w_Li = 0.0, w_Lj = 0.0;
         // The lane twin of `wuwu`, [t][pP][lane], held by the same rule with
         // one Lj per lane.
-        alignas(32) double wv[BSPLINE_QR_TILE * NMM * LN];
+        alignas(ALIGN) double wv[BSPLINE_QR_TILE * NMM * LN];
         bool v_held = false;
         size_t v_tier = 0;
         double v_Li = 0.0;
-        double v_Lj[LN] = {0.0, 0.0, 0.0, 0.0};
+        double v_Lj[LN];
+        for (size_t l = 0; l < LN; l++) v_Lj[l] = 0.0;
         // [t][lane]: point t of the walk's chunk for column j0 + lane.
-        alignas(32) double R[BSPLINE_QR_TILE * LN];
-        alignas(32) double inv_R_4pi[BSPLINE_QR_TILE * LN];
-        alignas(32) double phases[BSPLINE_QR_TILE * LN];
-        alignas(32) double cos_phases[BSPLINE_QR_TILE * LN];
-        alignas(32) double sin_phases[BSPLINE_QR_TILE * LN];
-        alignas(32) double G_re[BSPLINE_QR_TILE * LN];
-        alignas(32) double G_im[BSPLINE_QR_TILE * LN];
-        alignas(32) double decay[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double R[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double inv_R_4pi[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double phases[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double cos_phases[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double sin_phases[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double G_re[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double G_im[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double decay[BSPLINE_QR_TILE * LN];
         MW_OMP_FOR_COLLAPSE2
         for (size_t i = 0; i < N_i; i++) {
             for (size_t g = 0; g < n_grp; g++) {
@@ -915,77 +1021,26 @@ seg_seg_full_moments_bspline_kernel_impl(
                 const double *gt = ladder.t_at(tier);
                 const double *gw = ladder.w_at(tier);
                 const double *pi = &pos_i[tier][i * n_qp * 3];
-                const double *pT = pjT[tier].data();
                 const double Li = len_i[i];
                 double Lj[LN];
                 for (size_t l = 0; l < LN; l++) Lj[l] = len_j[j0 + l];
 
-                // R: the walk's `dx*dx + dy*dy + dz*dz + a_squared`, left to
-                // right, then a correctly rounded sqrt.
-                for (size_t q = 0; q < n_qp; q++) {
-                    const __m256d px = _mm256_set1_pd(pi[q*3 + 0]);
-                    const __m256d py = _mm256_set1_pd(pi[q*3 + 1]);
-                    const __m256d pz = _mm256_set1_pd(pi[q*3 + 2]);
-                    for (size_t r = 0; r < n_qp; r++) {
-                        const __m256d dx = _mm256_sub_pd(
-                            px, _mm256_loadu_pd(pT + r * N_j + j0));
-                        const __m256d dy = _mm256_sub_pd(
-                            py, _mm256_loadu_pd(pT + (n_qp + r) * N_j + j0));
-                        const __m256d dz = _mm256_sub_pd(
-                            pz, _mm256_loadu_pd(pT + (2 * n_qp + r) * N_j + j0));
-                        __m256d s = _mm256_add_pd(_mm256_mul_pd(dx, dx),
-                                                  _mm256_mul_pd(dy, dy));
-                        s = _mm256_add_pd(s, _mm256_mul_pd(dz, dz));
-                        s = _mm256_add_pd(s, v_a2);
-                        _mm256_store_pd(R + (q * n_qp + r) * LN, _mm256_sqrt_pd(s));
-                    }
-                }
+                r_bcast(R, pi, pjT[tier].data(), n_qp, N_j, j0, v_a2);
 
-                if (!(v_held && tier == v_tier && Li == v_Li && Lj[0] == v_Lj[0] &&
-                      Lj[1] == v_Lj[1] && Lj[2] == v_Lj[2] && Lj[3] == v_Lj[3])) {
-                    // Per lane, the walk's products in the walk's order --
-                    // wij = wi*wj, then (wij*ui^p)*uj^P -- with the
-                    // source-side factors, the only ones that differ across
-                    // lanes, as vectors. A mesh's segment lengths agree to
-                    // the bit far less often than they agree on paper, so
-                    // this refill runs on most groups and is worth the
-                    // vectors.
-                    __m256d wjv[8], ujp[8][NM];
-                    const __m256d vLj = _mm256_loadu_pd(Lj);
-                    for (size_t r = 0; r < n_qp; r++) {
-                        wjv[r] = _mm256_mul_pd(_mm256_set1_pd(gw[r]), vLj);
-                        const __m256d uj = _mm256_mul_pd(_mm256_set1_pd(gt[r]), vLj);
-                        ujp[r][0] = _mm256_set1_pd(1.0);
-                        for (int e = 1; e < NM; e++) {
-                            ujp[r][e] = _mm256_mul_pd(ujp[r][e-1], uj);
-                        }
-                    }
-                    for (size_t q = 0; q < n_qp; q++) {
-                        const double wi = gw[q] * Li;
-                        const double ui = gt[q] * Li;
-                        double ui_pow[NM];
-                        ui_pow[0] = 1.0;
-                        for (int e = 1; e < NM; e++) ui_pow[e] = ui_pow[e-1] * ui;
-                        for (size_t r = 0; r < n_qp; r++) {
-                            const size_t t = q * n_qp + r;
-                            const __m256d wij = _mm256_mul_pd(_mm256_set1_pd(wi), wjv[r]);
-                            for (int pp = 0; pp < NM; pp++) {
-                                const __m256d x =
-                                    _mm256_mul_pd(wij, _mm256_set1_pd(ui_pow[pp]));
-                                for (int PP = 0; PP < NM; PP++) {
-                                    _mm256_store_pd(wv + (t * NMM + pp * NM + PP) * LN,
-                                                    _mm256_mul_pd(x, ujp[r][PP]));
-                                }
-                            }
-                        }
-                    }
+                // A mesh's segment lengths agree to the bit far less often
+                // than they agree on paper, so this refill runs on most
+                // groups and is worth the vectors.
+                bool same = v_held && tier == v_tier && Li == v_Li;
+                for (size_t l = 0; l < LN; l++) same = same && Lj[l] == v_Lj[l];
+                if (!same) {
+                    wv_bcast<NM>(wv, gt, gw, n_qp, Li, Lj);
                     v_held = true;
                     v_tier = tier;
                     v_Li = Li;
                     for (size_t l = 0; l < LN; l++) v_Lj[l] = Lj[l];
                 }
 
-                // Stage 1, the walk's loops over all four lanes' points.
+                // Stage 1, the walk's loops over all the lanes' points.
                 MW_OMP_SIMD()
                 for (size_t t = 0; t < m4; t++) {
                     phases[t] = -k * R[t];
@@ -1019,90 +1074,45 @@ seg_seg_full_moments_bspline_kernel_impl(
                     }
                 }
 
-                // EK (momwire#1362): the walk's coaxial factor, per lane.
-                // Eligibility is per PAIR, so the four lanes of a group can
-                // disagree (a group straddling a wire's end); every lane
-                // computes G*fac and an ineligible lane keeps its G by a
-                // blend, which moves no bits. The arithmetic is the walk's
-                // loop operation for operation: its `t2 * c1r` and
-                // `3.0 * c1r` multiply by c1r = 1.0, which is exact, so they
-                // are spelled here as t2 and 3.0.
+                // EK (momwire#1362): the walk's coaxial factor, per lane
+                // (`ek_factor`), from the floored R where the walk floors it.
                 if (EK && grp_i[i] >= 0) {
                     const int64_t gi = grp_i[i];
-                    const bool e0 = grp_j[j0 + 0] == gi, e1 = grp_j[j0 + 1] == gi;
-                    const bool e2 = grp_j[j0 + 2] == gi, e3 = grp_j[j0 + 3] == gi;
-                    if (e0 || e1 || e2 || e3) {
-                        const __m256d emask = _mm256_castsi256_pd(_mm256_set_epi64x(
-                            e3 ? -1 : 0, e2 ? -1 : 0, e1 ? -1 : 0, e0 ? -1 : 0));
-                        const __m256d v_k = _mm256_set1_pd(k);
-                        const __m256d v_t1n = _mm256_set1_pd(0.25 * a4_ek);
-                        const __m256d v_t2n = _mm256_set1_pd(0.5 * a2_ek);
-                        const __m256d v_one = _mm256_set1_pd(1.0);
-                        const __m256d v_three = _mm256_set1_pd(3.0);
-                        const __m256d v_bek = _mm256_set1_pd(b_ek);
+                    bool e[LN];
+                    bool any_e = false;
+                    for (size_t l = 0; l < LN; l++) {
+                        e[l] = grp_j[j0 + l] == gi;
+                        any_e = any_e || e[l];
+                    }
+                    if (any_e) {
+                        const vm emask = mask_from(e);
+                        const vd v_k = set1(k);
+                        const vd v_t1n = set1(0.25 * a4_ek);
+                        const vd v_t2n = set1(0.5 * a2_ek);
+                        const vd v_bek = set1(b_ek);
                         for (size_t t = 0; t < m; t++) {
-                            __m256d Rq = _mm256_load_pd(R + t * LN);
-                            if (ek_floor) Rq = _mm256_max_pd(Rq, v_bek);
-                            const __m256d r2 = _mm256_mul_pd(Rq, Rq);
-                            const __m256d r4 = _mm256_mul_pd(r2, r2);
-                            const __m256d kr = _mm256_mul_pd(v_k, Rq);
-                            const __m256d kr2 = _mm256_mul_pd(kr, kr);
-                            const __m256d t1 = _mm256_div_pd(v_t1n, r4);
-                            const __m256d t2 = _mm256_div_pd(v_t2n, r2);
-                            const __m256d c2r = _mm256_sub_pd(v_three, kr2);
-                            const __m256d c2i = _mm256_mul_pd(v_three, kr);
-                            __m256d facr = _mm256_mul_pd(t1, c2r);
-                            __m256d faci = _mm256_mul_pd(t1, c2i);
-                            facr = _mm256_sub_pd(facr, t2);
-                            faci = _mm256_sub_pd(faci, _mm256_mul_pd(t2, kr));
-                            facr = _mm256_add_pd(facr, v_one);
-                            const __m256d gre = _mm256_load_pd(G_re + t * LN);
-                            const __m256d gim = _mm256_load_pd(G_im + t * LN);
-                            const __m256d nre = _mm256_sub_pd(_mm256_mul_pd(gre, facr),
-                                                              _mm256_mul_pd(gim, faci));
-                            const __m256d nim = _mm256_add_pd(_mm256_mul_pd(gre, faci),
-                                                              _mm256_mul_pd(gim, facr));
-                            _mm256_store_pd(G_re + t * LN, _mm256_blendv_pd(gre, nre, emask));
-                            _mm256_store_pd(G_im + t * LN, _mm256_blendv_pd(gim, nim, emask));
+                            vd Rq = load(R + t * LN);
+                            if (ek_floor) Rq = max(Rq, v_bek);
+                            const vd r2 = mul(Rq, Rq);
+                            const vd r4 = mul(r2, r2);
+                            ek_factor(G_re + t * LN, G_im + t * LN, div(v_t1n, r4),
+                                      div(v_t2n, r2), mul(v_k, Rq), emask);
                         }
                     }
                 }
 
-                // Stage 2: per moment and lane, the walk's chain -- start at
-                // 0.0, add w*G in ascending t. The real and imaginary sums
-                // are separate passes so each holds NMM accumulators, not
-                // 2 NMM, in registers; they never mixed in the walk either.
-                for (int part = 0; part < 2; part++) {
-                    const double *G = part == 0 ? G_re : G_im;
-                    __m256d acc[NMM];
-                    for (int pP = 0; pP < NMM; pP++) acc[pP] = _mm256_setzero_pd();
-                    for (size_t t = 0; t < m; t++) {
-                        const __m256d gv = _mm256_load_pd(G + t * LN);
-                        const double *w_t = wv + t * NMM * LN;
-                        for (int pP = 0; pP < NMM; pP++) {
-                            acc[pP] = _mm256_add_pd(
-                                acc[pP],
-                                _mm256_mul_pd(_mm256_load_pd(w_t + pP * LN), gv));
-                        }
-                    }
-                    if (part == 0) {
-                        for (int pP = 0; pP < NMM; pP++) {
-                            _mm256_store_pd(phases + pP * LN, acc[pP]);
-                        }
-                    } else {
-                        // (re, im) interleaved into the four contiguous
-                        // complex outputs of each moment; `phases` holds the
-                        // real sums, its points no longer needed.
-                        for (int pP = 0; pP < NMM; pP++) {
-                            const __m256d re = _mm256_load_pd(phases + pP * LN);
-                            const __m256d lo = _mm256_unpacklo_pd(re, acc[pP]);
-                            const __m256d hi = _mm256_unpackhi_pd(re, acc[pP]);
-                            double *o = reinterpret_cast<double *>(
-                                &j_view(pP / NM, pP % NM, i, j0));
-                            _mm256_storeu_pd(o, _mm256_permute2f128_pd(lo, hi, 0x20));
-                            _mm256_storeu_pd(o + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
-                        }
-                    }
+                // Stage 2, the real and imaginary sums in separate passes so
+                // each holds NMM accumulators, not 2 NMM, in registers.
+                // `phases` holds the real sums once its points are spent; the
+                // imaginary pass writes each moment's W complex outputs.
+                vd acc[NMM];
+                stage2<NMM>(G_re, wv, m, acc);
+                for (int pP = 0; pP < NMM; pP++) store(phases + pP * LN, acc[pP]);
+                stage2<NMM>(G_im, wv, m, acc);
+                for (int pP = 0; pP < NMM; pP++) {
+                    store_interleaved(
+                        reinterpret_cast<double *>(&j_view(pP / NM, pP % NM, i, j0)),
+                        load(phases + pP * LN), acc[pP]);
                 }
             }
         }
@@ -1763,16 +1773,17 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
 
 #if MW_OFFEDGE_LANES_1290
     if (!reference) {
-        // The lane kernel (momwire#1290's, for a sweep): four columns
-        // (i, j0..j0+3) at a time wherever they share a tier whose rule is
+        // The lane kernel (momwire#1290's, for a sweep): W columns
+        // (i, j0..j0+W-1) at a time wherever they share a tier whose rule is
         // one qr chunk of an EVEN order; anything else is walked. The
         // k-independent tables are built once per group, then each k runs
-        // the walk's stage 1, factor and stage 2 over all four lanes. Every
+        // the walk's stage 1, factor and stage 2 over all the lanes. Every
         // lane's arithmetic is the walk's for its pair, operation for
         // operation (-ffp-contract=off, no fma written); the even order is
         // what puts every cos/sin point through libmvec's vector entry on
         // both routes (see the single-k kernel's lane notes).
-        constexpr size_t LN = 4;
+        using namespace offedge_lanes;
+        constexpr size_t LN = W;
         const size_t n_grp = (N_j + LN - 1) / LN;
         std::vector<std::vector<double>> pjT(n_tiers);
         for (size_t tier = 0; tier < n_tiers; tier++) {
@@ -1788,24 +1799,23 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                 }
             }
         }
-        const __m256d v_a2 = _mm256_set1_pd(a_squared);
-        const __m256d v_t1n = _mm256_set1_pd(0.25 * a4_ek);
-        const __m256d v_t2n = _mm256_set1_pd(0.5 * a2_ek);
-        const __m256d v_one = _mm256_set1_pd(1.0);
-        const __m256d v_three = _mm256_set1_pd(3.0);
+        const vd v_a2 = set1(a_squared);
+        const vd v_t1n = set1(0.25 * a4_ek);
+        const vd v_t2n = set1(0.5 * a2_ek);
+        const vd v_bek = set1(b_ek);
 
         #pragma omp parallel
         {
-        alignas(32) double wv[BSPLINE_QR_TILE * NMM * LN];
-        alignas(32) double R[BSPLINE_QR_TILE * LN];
-        alignas(32) double inv_R_4pi[BSPLINE_QR_TILE * LN];
-        alignas(32) double t1v[BSPLINE_QR_TILE * LN];
-        alignas(32) double t2v[BSPLINE_QR_TILE * LN];
-        alignas(32) double phases[BSPLINE_QR_TILE * LN];
-        alignas(32) double cos_phases[BSPLINE_QR_TILE * LN];
-        alignas(32) double sin_phases[BSPLINE_QR_TILE * LN];
-        alignas(32) double G_re[BSPLINE_QR_TILE * LN];
-        alignas(32) double G_im[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double wv[BSPLINE_QR_TILE * NMM * LN];
+        alignas(ALIGN) double R[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double inv_R_4pi[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double t1v[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double t2v[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double phases[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double cos_phases[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double sin_phases[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double G_re[BSPLINE_QR_TILE * LN];
+        alignas(ALIGN) double G_im[BSPLINE_QR_TILE * LN];
         MW_OMP_FOR_COLLAPSE2
         for (size_t i = 0; i < N_i; i++) {
             for (size_t g = 0; g < n_grp; g++) {
@@ -1832,89 +1842,36 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                 const double *gt = ladder.t_at(tier);
                 const double *gw = ladder.w_at(tier);
                 const double *pi = &pos_i[tier][i * n_qp * 3];
-                const double *pT = pjT[tier].data();
                 const double Li = len_i[i];
                 double Lj[LN];
                 for (size_t l = 0; l < LN; l++) Lj[l] = len_j[j0 + l];
 
-                // R: the walk's `dx*dx + dy*dy + dz*dz + a_squared`, left to
-                // right, then a correctly rounded sqrt.
-                for (size_t q = 0; q < n_qp; q++) {
-                    const __m256d px = _mm256_set1_pd(pi[q*3 + 0]);
-                    const __m256d py = _mm256_set1_pd(pi[q*3 + 1]);
-                    const __m256d pz = _mm256_set1_pd(pi[q*3 + 2]);
-                    for (size_t r = 0; r < n_qp; r++) {
-                        const __m256d dx = _mm256_sub_pd(
-                            px, _mm256_loadu_pd(pT + r * N_j + j0));
-                        const __m256d dy = _mm256_sub_pd(
-                            py, _mm256_loadu_pd(pT + (n_qp + r) * N_j + j0));
-                        const __m256d dz = _mm256_sub_pd(
-                            pz, _mm256_loadu_pd(pT + (2 * n_qp + r) * N_j + j0));
-                        __m256d s = _mm256_add_pd(_mm256_mul_pd(dx, dx),
-                                                  _mm256_mul_pd(dy, dy));
-                        s = _mm256_add_pd(s, _mm256_mul_pd(dz, dz));
-                        s = _mm256_add_pd(s, v_a2);
-                        _mm256_store_pd(R + (q * n_qp + r) * LN, _mm256_sqrt_pd(s));
-                    }
-                }
+                r_bcast(R, pi, pjT[tier].data(), n_qp, N_j, j0, v_a2);
                 MW_OMP_SIMD()
                 for (size_t t = 0; t < m4; t++) {
                     inv_R_4pi[t] = inv_4pi / R[t];
                 }
-
-                // The moment weights, per lane in the walk's order: wij =
-                // wi*wj, then (wij*ui^p)*uj^P.
-                {
-                    __m256d wjv[8], ujp[8][NM];
-                    const __m256d vLj = _mm256_loadu_pd(Lj);
-                    for (size_t r = 0; r < n_qp; r++) {
-                        wjv[r] = _mm256_mul_pd(_mm256_set1_pd(gw[r]), vLj);
-                        const __m256d uj = _mm256_mul_pd(_mm256_set1_pd(gt[r]), vLj);
-                        ujp[r][0] = _mm256_set1_pd(1.0);
-                        for (int e = 1; e < NM; e++) {
-                            ujp[r][e] = _mm256_mul_pd(ujp[r][e-1], uj);
-                        }
-                    }
-                    for (size_t q = 0; q < n_qp; q++) {
-                        const double wi = gw[q] * Li;
-                        const double ui = gt[q] * Li;
-                        double ui_pow[NM];
-                        ui_pow[0] = 1.0;
-                        for (int e = 1; e < NM; e++) ui_pow[e] = ui_pow[e-1] * ui;
-                        for (size_t r = 0; r < n_qp; r++) {
-                            const size_t t = q * n_qp + r;
-                            const __m256d wij = _mm256_mul_pd(_mm256_set1_pd(wi), wjv[r]);
-                            for (int pp = 0; pp < NM; pp++) {
-                                const __m256d x =
-                                    _mm256_mul_pd(wij, _mm256_set1_pd(ui_pow[pp]));
-                                for (int PP = 0; PP < NM; PP++) {
-                                    _mm256_store_pd(wv + (t * NMM + pp * NM + PP) * LN,
-                                                    _mm256_mul_pd(x, ujp[r][PP]));
-                                }
-                            }
-                        }
-                    }
-                }
+                wv_bcast<NM>(wv, gt, gw, n_qp, Li, Lj);
 
                 // EK eligibility per lane, and the k-independent T1/T2 when
-                // any lane is eligible (computed for all four; an ineligible
-                // lane's are never used).
+                // any lane is eligible (computed for every lane; an
+                // ineligible lane's are never used).
                 const int64_t gi_i = grp_i[i];
-                const bool e0 = gi_i >= 0 && grp_j[j0 + 0] == gi_i;
-                const bool e1 = gi_i >= 0 && grp_j[j0 + 1] == gi_i;
-                const bool e2 = gi_i >= 0 && grp_j[j0 + 2] == gi_i;
-                const bool e3 = gi_i >= 0 && grp_j[j0 + 3] == gi_i;
-                const bool any_e = e0 || e1 || e2 || e3;
-                const __m256d emask = _mm256_castsi256_pd(_mm256_set_epi64x(
-                    e3 ? -1 : 0, e2 ? -1 : 0, e1 ? -1 : 0, e0 ? -1 : 0));
+                bool e[LN];
+                bool any_e = false;
+                for (size_t l = 0; l < LN; l++) {
+                    e[l] = gi_i >= 0 && grp_j[j0 + l] == gi_i;
+                    any_e = any_e || e[l];
+                }
+                const vm emask = mask_from(e);
                 if (any_e) {
                     for (size_t t = 0; t < m; t++) {
-                        __m256d Rq = _mm256_load_pd(R + t * LN);
-                        if (ek_floor) Rq = _mm256_max_pd(Rq, _mm256_set1_pd(b_ek));
-                        const __m256d r2 = _mm256_mul_pd(Rq, Rq);
-                        const __m256d r4 = _mm256_mul_pd(r2, r2);
-                        _mm256_store_pd(t1v + t * LN, _mm256_div_pd(v_t1n, r4));
-                        _mm256_store_pd(t2v + t * LN, _mm256_div_pd(v_t2n, r2));
+                        vd Rq = load(R + t * LN);
+                        if (ek_floor) Rq = max(Rq, v_bek);
+                        const vd r2 = mul(Rq, Rq);
+                        const vd r4 = mul(r2, r2);
+                        store(t1v + t * LN, div(v_t1n, r4));
+                        store(t2v + t * LN, div(v_t2n, r2));
                     }
                 }
 
@@ -1938,67 +1895,26 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
                         G_im[t] = sin_phases[t] * inv_R_4pi[t];
                     }
                     if (any_e) {
-                        // The walk's factor loop per lane; its `t2v * c1r`
-                        // and `3.0 * c1r` multiply by c1r = 1.0, which is
-                        // exact, so they are spelled t2 and 3.0 here.
-                        const __m256d v_k = _mm256_set1_pd(k);
+                        const vd v_k = set1(k);
                         for (size_t t = 0; t < m; t++) {
-                            __m256d Rq = _mm256_load_pd(R + t * LN);
-                            if (ek_floor) Rq = _mm256_max_pd(Rq, _mm256_set1_pd(b_ek));
-                            const __m256d kr = _mm256_mul_pd(v_k, Rq);
-                            const __m256d kr2 = _mm256_mul_pd(kr, kr);
-                            const __m256d t1 = _mm256_load_pd(t1v + t * LN);
-                            const __m256d t2 = _mm256_load_pd(t2v + t * LN);
-                            const __m256d c2r = _mm256_sub_pd(v_three, kr2);
-                            const __m256d c2i = _mm256_mul_pd(v_three, kr);
-                            __m256d facr = _mm256_mul_pd(t1, c2r);
-                            __m256d faci = _mm256_mul_pd(t1, c2i);
-                            facr = _mm256_sub_pd(facr, t2);
-                            faci = _mm256_sub_pd(faci, _mm256_mul_pd(t2, kr));
-                            facr = _mm256_add_pd(facr, v_one);
-                            const __m256d gre = _mm256_load_pd(G_re + t * LN);
-                            const __m256d gim = _mm256_load_pd(G_im + t * LN);
-                            const __m256d nre = _mm256_sub_pd(_mm256_mul_pd(gre, facr),
-                                                              _mm256_mul_pd(gim, faci));
-                            const __m256d nim = _mm256_add_pd(_mm256_mul_pd(gre, faci),
-                                                              _mm256_mul_pd(gim, facr));
-                            _mm256_store_pd(G_re + t * LN, _mm256_blendv_pd(gre, nre, emask));
-                            _mm256_store_pd(G_im + t * LN, _mm256_blendv_pd(gim, nim, emask));
+                            vd Rq = load(R + t * LN);
+                            if (ek_floor) Rq = max(Rq, v_bek);
+                            ek_factor(G_re + t * LN, G_im + t * LN,
+                                      load(t1v + t * LN), load(t2v + t * LN),
+                                      mul(v_k, Rq), emask);
                         }
                     }
 
-                    // Stage 2: per moment and lane, the walk's chain. Real
-                    // and imaginary sums in separate passes (NMM vector
-                    // accumulators each); `phases` holds the real sums once
-                    // its points are spent.
-                    for (int part = 0; part < 2; part++) {
-                        const double *G = part == 0 ? G_re : G_im;
-                        __m256d acc[NMM];
-                        for (int pP = 0; pP < NMM; pP++) acc[pP] = _mm256_setzero_pd();
-                        for (size_t t = 0; t < m; t++) {
-                            const __m256d gv = _mm256_load_pd(G + t * LN);
-                            const double *w_t = wv + t * NMM * LN;
-                            for (int pP = 0; pP < NMM; pP++) {
-                                acc[pP] = _mm256_add_pd(
-                                    acc[pP],
-                                    _mm256_mul_pd(_mm256_load_pd(w_t + pP * LN), gv));
-                            }
-                        }
-                        if (part == 0) {
-                            for (int pP = 0; pP < NMM; pP++) {
-                                _mm256_store_pd(phases + pP * LN, acc[pP]);
-                            }
-                        } else {
-                            for (int pP = 0; pP < NMM; pP++) {
-                                const __m256d re = _mm256_load_pd(phases + pP * LN);
-                                const __m256d lo = _mm256_unpacklo_pd(re, acc[pP]);
-                                const __m256d hi = _mm256_unpackhi_pd(re, acc[pP]);
-                                double *o = reinterpret_cast<double *>(
-                                    &j_view(kk, pP / NM, pP % NM, i, j0));
-                                _mm256_storeu_pd(o, _mm256_permute2f128_pd(lo, hi, 0x20));
-                                _mm256_storeu_pd(o + 4, _mm256_permute2f128_pd(lo, hi, 0x31));
-                            }
-                        }
+                    // Stage 2: real and imaginary sums in separate passes;
+                    // `phases` holds the real sums once its points are spent.
+                    vd acc[NMM];
+                    stage2<NMM>(G_re, wv, m, acc);
+                    for (int pP = 0; pP < NMM; pP++) store(phases + pP * LN, acc[pP]);
+                    stage2<NMM>(G_im, wv, m, acc);
+                    for (int pP = 0; pP < NMM; pP++) {
+                        store_interleaved(
+                            reinterpret_cast<double *>(&j_view(kk, pP / NM, pP % NM, i, j0)),
+                            load(phases + pP * LN), acc[pP]);
                     }
                 }
             }
@@ -4343,23 +4259,22 @@ bspline_assemble_offedge_block_kernel_ek(
         // Phase A: the table.
 #if MW_OFFEDGE_LANES_1290
         if (!reference) {
-            constexpr size_t LN = 4;
+            using namespace offedge_lanes;
+            constexpr size_t LN = W;
             const size_t n_grp = (n_pair + LN - 1) / LN;
-            const __m256d v_a2 = _mm256_set1_pd(a_squared);
-            const __m256d v_t1n = _mm256_set1_pd(0.25 * a4_ek);
-            const __m256d v_t2n = _mm256_set1_pd(0.5 * a2_ek);
-            const __m256d v_one = _mm256_set1_pd(1.0);
-            const __m256d v_three = _mm256_set1_pd(3.0);
-            const __m256d v_k = _mm256_set1_pd(k);
+            const vd v_a2 = set1(a_squared);
+            const vd v_t1n = set1(0.25 * a4_ek);
+            const vd v_t2n = set1(0.5 * a2_ek);
+            const vd v_k = set1(k);
             #pragma omp parallel
             {
             // [t][lane] point t of lane l's pair; wv [t][pP][lane].
-            alignas(32) double R[BSPLINE_QR_TILE * LN];
-            alignas(32) double G_re[BSPLINE_QR_TILE * LN];
-            alignas(32) double G_im[BSPLINE_QR_TILE * LN];
-            alignas(32) double wv[BSPLINE_QR_TILE * NMM * LN];
-            alignas(32) double PI[3 * 8 * LN], PJ[3 * 8 * LN];
-            alignas(32) double res[2 * NMM * LN];
+            alignas(ALIGN) double R[BSPLINE_QR_TILE * LN];
+            alignas(ALIGN) double G_re[BSPLINE_QR_TILE * LN];
+            alignas(ALIGN) double G_im[BSPLINE_QR_TILE * LN];
+            alignas(ALIGN) double wv[BSPLINE_QR_TILE * NMM * LN];
+            alignas(ALIGN) double PI[3 * 8 * LN], PJ[3 * 8 * LN];
+            alignas(ALIGN) double res[2 * NMM * LN];
             #pragma omp for schedule(static)
             for (size_t g = 0; g < n_grp; g++) {
                 MW_CANCEL_POLL();
@@ -4393,7 +4308,7 @@ bspline_assemble_offedge_block_kernel_ek(
                 const double *gw = ladder.w_at(tier);
                 const double *pIt = posI[tier].data();
                 const double *pJt = posJ[tier].data();
-                // Gather both sides lane-major, [c][q][lane]: four arbitrary
+                // Gather both sides lane-major, [c][q][lane]: W arbitrary
                 // pairs, so a column call (three source segments) fills its
                 // lanes as readily as a row call.
                 for (size_t c = 0; c < 3; c++) {
@@ -4406,49 +4321,49 @@ bspline_assemble_offedge_block_kernel_ek(
                 }
                 double Li4[LN], Lj4[LN];
                 for (size_t l = 0; l < LN; l++) { Li4[l] = lenI[si[l]]; Lj4[l] = lenJ[sj[l]]; }
-                const __m256d vLi = _mm256_loadu_pd(Li4);
-                const __m256d vLj = _mm256_loadu_pd(Lj4);
+                const vd vLi = loadu(Li4);
+                const vd vLj = loadu(Lj4);
 
                 // R and the moment weights, per lane in the walk's order:
                 // `dx*dx+dy*dy+dz*dz+a_squared` left to right; wi = gw*Li,
-                // wj = gw*Lj, wij = wi*wj, then (wij*ui^p)*uj^P.
-                __m256d ujp[8][NM], wjv[8];
+                // wj = gw*Lj, wij = wi*wj, then (wij*ui^p)*uj^P. Both sides
+                // vary across lanes here, so neither is broadcast.
+                vd ujp[8][NM], wjv[8];
                 for (size_t r = 0; r < n_qp; r++) {
-                    wjv[r] = _mm256_mul_pd(_mm256_set1_pd(gw[r]), vLj);
-                    const __m256d uj = _mm256_mul_pd(_mm256_set1_pd(gt[r]), vLj);
-                    ujp[r][0] = _mm256_set1_pd(1.0);
-                    for (int e = 1; e < NM; e++) ujp[r][e] = _mm256_mul_pd(ujp[r][e-1], uj);
+                    wjv[r] = mul(set1(gw[r]), vLj);
+                    const vd uj = mul(set1(gt[r]), vLj);
+                    ujp[r][0] = set1(1.0);
+                    for (int e = 1; e < NM; e++) ujp[r][e] = mul(ujp[r][e-1], uj);
                 }
                 for (size_t q = 0; q < n_qp; q++) {
-                    const __m256d px = _mm256_load_pd(PI + (0 * n_qp + q) * LN);
-                    const __m256d py = _mm256_load_pd(PI + (1 * n_qp + q) * LN);
-                    const __m256d pz = _mm256_load_pd(PI + (2 * n_qp + q) * LN);
-                    const __m256d wi = _mm256_mul_pd(_mm256_set1_pd(gw[q]), vLi);
-                    const __m256d ui = _mm256_mul_pd(_mm256_set1_pd(gt[q]), vLi);
-                    __m256d uip[NM];
-                    uip[0] = _mm256_set1_pd(1.0);
-                    for (int e = 1; e < NM; e++) uip[e] = _mm256_mul_pd(uip[e-1], ui);
+                    const vd px = load(PI + (0 * n_qp + q) * LN);
+                    const vd py = load(PI + (1 * n_qp + q) * LN);
+                    const vd pz = load(PI + (2 * n_qp + q) * LN);
+                    const vd wi = mul(set1(gw[q]), vLi);
+                    const vd ui = mul(set1(gt[q]), vLi);
+                    vd uip[NM];
+                    uip[0] = set1(1.0);
+                    for (int e = 1; e < NM; e++) uip[e] = mul(uip[e-1], ui);
                     for (size_t r = 0; r < n_qp; r++) {
                         const size_t t = q * n_qp + r;
-                        const __m256d dx = _mm256_sub_pd(px, _mm256_load_pd(PJ + (0 * n_qp + r) * LN));
-                        const __m256d dy = _mm256_sub_pd(py, _mm256_load_pd(PJ + (1 * n_qp + r) * LN));
-                        const __m256d dz = _mm256_sub_pd(pz, _mm256_load_pd(PJ + (2 * n_qp + r) * LN));
-                        __m256d s = _mm256_add_pd(_mm256_mul_pd(dx, dx), _mm256_mul_pd(dy, dy));
-                        s = _mm256_add_pd(s, _mm256_mul_pd(dz, dz));
-                        s = _mm256_add_pd(s, v_a2);
-                        _mm256_store_pd(R + t * LN, _mm256_sqrt_pd(s));
-                        const __m256d wij = _mm256_mul_pd(wi, wjv[r]);
+                        const vd dx = sub(px, load(PJ + (0 * n_qp + r) * LN));
+                        const vd dy = sub(py, load(PJ + (1 * n_qp + r) * LN));
+                        const vd dz = sub(pz, load(PJ + (2 * n_qp + r) * LN));
+                        vd s = add(mul(dx, dx), mul(dy, dy));
+                        s = add(s, mul(dz, dz));
+                        s = add(s, v_a2);
+                        store(R + t * LN, sqrt(s));
+                        const vd wij = mul(wi, wjv[r]);
                         for (int p = 0; p < NM; p++) {
-                            const __m256d x = _mm256_mul_pd(wij, uip[p]);
+                            const vd x = mul(wij, uip[p]);
                             for (int P = 0; P < NM; P++) {
-                                _mm256_store_pd(wv + (t * NMM + p * NM + P) * LN,
-                                                _mm256_mul_pd(x, ujp[r][P]));
+                                store(wv + (t * NMM + p * NM + P) * LN, mul(x, ujp[r][P]));
                             }
                         }
                     }
                 }
 
-                // Stage 1, the walk's fused loop body over all four lanes'
+                // Stage 1, the walk's fused loop body over all the lanes'
                 // points (same body, so the same libmvec entries; the even
                 // order leaves no scalar remainder on either route).
                 MW_OMP_SIMD()
@@ -4459,9 +4374,7 @@ bspline_assemble_offedge_block_kernel_ek(
                     G_im[tt] = std::sin(ph) * inv;
                 }
 
-                // EK: per lane; an ineligible lane keeps its G by a blend.
-                // The walk's `t2 * c1r` and `3.0 * c1r` multiply by
-                // c1r = 1.0, which is exact, so they are spelled t2 and 3.0.
+                // EK: per lane, `ek_factor`; this kernel's walk has no floor.
                 bool e[LN];
                 bool any_e = false;
                 for (size_t l = 0; l < LN; l++) {
@@ -4469,52 +4382,23 @@ bspline_assemble_offedge_block_kernel_ek(
                     any_e = any_e || e[l];
                 }
                 if (any_e) {
-                    const __m256d emask = _mm256_castsi256_pd(_mm256_set_epi64x(
-                        e[3] ? -1 : 0, e[2] ? -1 : 0, e[1] ? -1 : 0, e[0] ? -1 : 0));
+                    const vm emask = mask_from(e);
                     for (size_t t = 0; t < m; t++) {
-                        const __m256d Rq = _mm256_load_pd(R + t * LN);
-                        const __m256d r2 = _mm256_mul_pd(Rq, Rq);
-                        const __m256d r4 = _mm256_mul_pd(r2, r2);
-                        const __m256d kr = _mm256_mul_pd(v_k, Rq);
-                        const __m256d kr2 = _mm256_mul_pd(kr, kr);
-                        const __m256d t1 = _mm256_div_pd(v_t1n, r4);
-                        const __m256d t2 = _mm256_div_pd(v_t2n, r2);
-                        const __m256d c2r = _mm256_sub_pd(v_three, kr2);
-                        const __m256d c2i = _mm256_mul_pd(v_three, kr);
-                        __m256d facr = _mm256_mul_pd(t1, c2r);
-                        __m256d faci = _mm256_mul_pd(t1, c2i);
-                        facr = _mm256_sub_pd(facr, t2);
-                        faci = _mm256_sub_pd(faci, _mm256_mul_pd(t2, kr));
-                        facr = _mm256_add_pd(facr, v_one);
-                        const __m256d gre = _mm256_load_pd(G_re + t * LN);
-                        const __m256d gim = _mm256_load_pd(G_im + t * LN);
-                        const __m256d nre = _mm256_sub_pd(_mm256_mul_pd(gre, facr),
-                                                          _mm256_mul_pd(gim, faci));
-                        const __m256d nim = _mm256_add_pd(_mm256_mul_pd(gre, faci),
-                                                          _mm256_mul_pd(gim, facr));
-                        _mm256_store_pd(G_re + t * LN, _mm256_blendv_pd(gre, nre, emask));
-                        _mm256_store_pd(G_im + t * LN, _mm256_blendv_pd(gim, nim, emask));
+                        const vd Rq = load(R + t * LN);
+                        const vd r2 = mul(Rq, Rq);
+                        const vd r4 = mul(r2, r2);
+                        ek_factor(G_re + t * LN, G_im + t * LN, div(v_t1n, r4),
+                                  div(v_t2n, r2), mul(v_k, Rq), emask);
                     }
                 }
 
                 // Stage 2: per moment and lane, the walk's chain from 0.0 in
                 // ascending t (one chunk), real and imaginary in two passes.
-                for (int part = 0; part < 2; part++) {
-                    const double *G = part == 0 ? G_re : G_im;
-                    __m256d acc[NMM];
-                    for (int pP = 0; pP < NMM; pP++) acc[pP] = _mm256_setzero_pd();
-                    for (size_t t = 0; t < m; t++) {
-                        const __m256d gv = _mm256_load_pd(G + t * LN);
-                        const double *w_t = wv + t * NMM * LN;
-                        for (int pP = 0; pP < NMM; pP++) {
-                            acc[pP] = _mm256_add_pd(
-                                acc[pP], _mm256_mul_pd(_mm256_load_pd(w_t + pP * LN), gv));
-                        }
-                    }
-                    for (int pP = 0; pP < NMM; pP++) {
-                        _mm256_store_pd(res + (part * NMM + pP) * LN, acc[pP]);
-                    }
-                }
+                vd acc[NMM];
+                stage2<NMM>(G_re, wv, m, acc);
+                for (int pP = 0; pP < NMM; pP++) store(res + pP * LN, acc[pP]);
+                stage2<NMM>(G_im, wv, m, acc);
+                for (int pP = 0; pP < NMM; pP++) store(res + (NMM + pP) * LN, acc[pP]);
                 for (size_t l = 0; l < LN; l++) {
                     double *o = tab_p + (p0 + l) * 2 * NMM;
                     for (int x = 0; x < 2 * NMM; x++) o[x] = res[x * LN + l];
