@@ -295,6 +295,7 @@ static void sub_seed(const std::vector<double> &edges, double rho,
 struct Scratch {
     std::vector<double> edges, seeded, t, wt;
     std::vector<cd> lam, w;
+    std::vector<cd> h;  // the tail's up-ray Hankels (`column_tail`)
     // The factors, SPLIT into real and imaginary parts: the member loop is a
     // real-arithmetic reduction, and interleaved std::complex<double> would
     // hand the vectorizer a stride-2 gather on every operand.
@@ -424,17 +425,34 @@ static void column_tail(double rho, double s_min, double lam_top, int p,
             s.w.push_back(s.wt[i] * ray);
         }
     } else {
-        for (size_t i = 0; i < s.t.size(); ++i) {
+        // The down-ray's Hankel is the up-ray's conjugate, bit for bit, and is
+        // taken as that rather than computed again. Its argument is exactly
+        // the conjugate: lam_top and t are real, so t conj(ray) is t ray with
+        // the imaginary part's sign flipped (one exact product each) and
+        // dn rho = conj(up rho) likewise. H2_0(conj w) = conj(H1_0(w)) is
+        // exact in Amos's own arithmetic: zbesh rotates w by -i for H1 and by
+        // +i for H2, which for conj(w) gives the conjugate rotated argument;
+        // every step after that (zbknu's complex products, quotients, sqrt,
+        // exp, log, all conjugate-equivariant in IEEE arithmetic) carries the
+        // conjugation through; and the closing multiplier csgn is
+        // (-0, -2/pi) for H1 and (-0, +2/pi) for H2, conjugates including the
+        // signed zero. Measured: 0 mismatches as uint64 over the 4.0 M tail
+        // nodes of the bs2 inverted-L x16 fill and 3 M random first-quadrant
+        // arguments; `near_interface_hankel_conj_mismatches` is the gate
+        // (tests/test_near_interface_hankel_conj.py). The Hankels were half
+        // of the column twin's time.
+        const size_t nt = s.t.size();
+        s.h.resize(nt);
+        for (size_t i = 0; i < nt; ++i) {
             const cd up = lam_top + s.t[i] * ray;
+            s.h[i] = xsf::cyl_hankel_1(0.0, up * rho);
             s.lam.push_back(up);
-            s.w.push_back(s.wt[i] * ray * 0.5 *
-                          xsf::cyl_hankel_1(0.0, up * rho));
+            s.w.push_back(s.wt[i] * ray * 0.5 * s.h[i]);
         }
-        for (size_t i = 0; i < s.t.size(); ++i) {
+        for (size_t i = 0; i < nt; ++i) {
             const cd dn = lam_top + s.t[i] * std::conj(ray);
             s.lam.push_back(dn);
-            s.w.push_back(s.wt[i] * std::conj(ray) * 0.5 *
-                          xsf::cyl_hankel_2(0.0, dn * rho));
+            s.w.push_back(s.wt[i] * std::conj(ray) * 0.5 * std::conj(s.h[i]));
         }
     }
 }
