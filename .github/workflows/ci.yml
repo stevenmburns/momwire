@@ -93,10 +93,23 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
+      # ONE ccache for every Linux job, written by ONE job. All six Linux
+      # jobs compile the same five translation units with the same flags,
+      # but each used to key its own cache (`${{ github.job }}-Linux`), so
+      # the repo held five copies of the same objects plus a sixth nothing
+      # compiled through, sat over the 10 GB Actions cache cap, and evicted
+      # itself: about half of these installs missed (90-270 s instead of
+      # ~13 s) on PRs that touched no C++. Now `test` saves on push to main
+      # and every other job/event restores only. `restore-keys` falls back
+      # to the old per-job family until the first main push writes the new
+      # key; drop it once that entry exists.
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: ${{ github.job }}-${{ runner.os }}
+          key: linux-py312
+          restore-keys: |
+            test-Linux
+          save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
@@ -296,9 +309,20 @@ jobs:
           python-version: '3.12'
           cache: pip
       - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-py312
+          restore-keys: |
+            test-Linux
+          save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
       - run: pip install "setuptools>=61.0" wheel pybind11
+      # CC/CXX are what route the compile through ccache; without them this
+      # lane compiled from scratch on every run (median 225 s) while saving
+      # an empty cache under the bare `ccache` key.
       - run: pip install -e .[test] --no-build-isolation
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
       - run: pytest tests/ -m "integration and not slow and not memgate"
         env:
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
@@ -343,7 +367,10 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: ${{ github.job }}-${{ runner.os }}
+          key: linux-py312
+          restore-keys: |
+            test-Linux
+          save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
@@ -442,7 +469,10 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: ${{ github.job }}-${{ runner.os }}
+          key: linux-py312
+          restore-keys: |
+            test-Linux
+          save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
@@ -496,7 +526,10 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: ${{ github.job }}-${{ runner.os }}
+          key: linux-py312
+          restore-keys: |
+            test-Linux
+          save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
@@ -546,7 +579,10 @@ jobs:
       - uses: hendrikmuhs/ccache-action@v1.2
         if: needs.changes.outputs.code == 'true'
         with:
-          key: ${{ github.job }}-${{ runner.os }}
+          key: linux-py312
+          restore-keys: |
+            test-Linux
+          save: ${{ github.event_name == 'push' && github.job == 'test' }}
       - run: pip install --upgrade pip
         if: needs.changes.outputs.code == 'true'
       # Mirrors `build-system.requires` in pyproject.toml -- keep the two in
