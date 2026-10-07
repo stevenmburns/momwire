@@ -4975,15 +4975,35 @@ def _end_vectors(ctx, eps_t, k_p, ends, ax, w, w_tz, memo, args):
         yield from flush()
 
 
-def _polled_nonzeros(ends):
-    """`[np.flatnonzero(fv) for _p, _s, fv in ends]`, polling every 256 ends:
-    at x32 the whole list is ~0.15 s."""
+def _polled_nonzeros(ends, memo=None):
+    """`[np.flatnonzero(fv) for _p, _s, fv in ends]`, polling every 256 ends.
+
+    `memo` ({id(fv): (fv, nonzeros)}, momwire#1377) answers a vector seen
+    before from the first answer: an axis's two ends of one segment share
+    their vector, and the fused route asks both axes' lists for its live
+    rows and again for its loops -- ~23 k scans of n_basis floats at razor's
+    inverted L x32 where ~6 k are distinct. The same integers (the entry
+    keeps its vector, so an id is never reused under it)."""
     out = []
     for i, (_p, _s, fv) in enumerate(ends):
         if not i & 255:
             _cancel.poll()
-        out.append(np.flatnonzero(fv))
+        if memo is None:
+            out.append(np.flatnonzero(fv))
+            continue
+        got = memo.get(id(fv))
+        if got is None or got[0] is not fv:
+            got = (fv, np.flatnonzero(fv))
+            memo[id(fv)] = got
+        out.append(got[1])
     return out
+
+
+def _live_rows_of(nonzeros):
+    """`_end_live_rows` from the ends' nonzero lists (`_polled_nonzeros`)."""
+    if not nonzeros:
+        return np.zeros(0, dtype=np.int64)
+    return np.unique(np.concatenate(nonzeros))
 
 
 def _vec_batches(items, n):
@@ -5085,6 +5105,12 @@ def _rank1_add_cols(t_ab, nz, a, b, scale, buf):
 # one-node fill asserted. Real crossing nodes stand metres apart
 # (`_below_interface.MIN_CROSSING_NODE_SEPARATION_M`).
 _SAME_NODE_RHO = 1e-9
+
+
+# The fused route scans each end vector once (`_polled_nonzeros`' memo,
+# momwire#1377); False scans every end anew, the reference (the same
+# integers).
+_END_NONZERO_MEMO = True
 
 
 def _end_live_rows(ax):
@@ -5997,7 +6023,11 @@ class _FusedEnds:
         self.others = sup.rows if fwd else sup.cols
         self.posO = sup.pos_r if fwd else sup.pos_c
         nU = self.units.size
-        self.LA, self.LB = _end_live_rows(R), _end_live_rows(C)
+        # Each end vector scanned once for both its uses (`_polled_nonzeros`).
+        nz_memo = {} if _END_NONZERO_MEMO else None
+        nz_R = _polled_nonzeros(R["ends"], nz_memo)
+        nz_C = _polled_nonzeros(C["ends"], nz_memo)
+        self.LA, self.LB = _live_rows_of(nz_R), _live_rows_of(nz_C)
         self.posLA = _positions(R["n_basis"], self.LA)
         self.posLB = _positions(C["n_basis"], self.LB)
         # vector loop: (ends, classes, matrices V/W over the unit axis, their
@@ -6005,8 +6035,8 @@ class _FusedEnds:
         row = (R["ends"], self.row_cls, C, self.wC, self.wC_tz)
         col = (C["ends"], self.col_cls, R, self.wR, self.wR_tz)
         self.vec_loop, self.loc_loop = (row, col) if fwd else (col, row)
-        self.nz_vec = _polled_nonzeros(self.vec_loop[0])
-        self.nz_loc = _polled_nonzeros(self.loc_loop[0])
+        self.nz_vec, self.nz_loc = (nz_R, nz_C) if fwd else (nz_C, nz_R)
+        del nz_memo
         n_line = plan.kid.shape[1]
         self._n_line = n_line
         self._tile_lines = {}  # group -> its keys' tiles along the line
