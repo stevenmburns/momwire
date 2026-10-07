@@ -206,3 +206,45 @@ def test_stable_tile_order_routes_are_the_stable_argsort(accel, dtype, monkeypat
     assert o.dtype == dtype
     assert np.array_equal(o, want)
     assert np.array_equal(b, np.searchsorted(t_row[want], np.arange(n_tiles + 1)))
+
+
+# ---------------------------------------------------------------- line keys
+needs_par = pytest.mark.skipif(
+    acc is None or not getattr(acc, "factorize_line_keys_par_1377", False),
+    reason="accelerator without the threaded line keys",
+)
+
+
+@needs_par
+@pytest.mark.parametrize("threads", [2, 3, 4, 8])
+@pytest.mark.parametrize("shape", [(1, 1), (7, 1), (13, 29), (64, 300)])
+def test_threaded_line_keys_are_the_serial_walk(shape, threads):
+    rng = np.random.default_rng(13775 + shape[0] * 100 + shape[1] + threads)
+    nG, nL = shape
+    pool = np.array([0.0, -0.0, 1.5, 2.25, np.nan, 3.0, -1.0])
+    line = rng.choice(pool, size=(nG, nL))
+    lz = rng.choice(pool, size=nL)
+    want_f, want_k = acc.factorize_line_keys(line, lz)
+    got_f, got_k = acc.factorize_line_keys(line, lz, n_threads=threads)
+    assert got_k.dtype == np.int32
+    assert np.array_equal(np.asarray(got_f), np.asarray(want_f))
+    assert np.array_equal(got_k, want_k)
+
+
+@needs_par
+def test_threaded_line_keys_rehash_keeps_the_numbering():
+    """Many distinct keys: each thread's table grows through rehashes."""
+    rng = np.random.default_rng(13776)
+    line = rng.integers(0, 400_000, size=(37, 20_001)).astype(float) * 0.5
+    lz = rng.integers(0, 3, size=20_001).astype(float)
+    want_f, want_k = acc.factorize_line_keys(line, lz)
+    got_f, got_k = acc.factorize_line_keys(line, lz, n_threads=4)
+    assert np.array_equal(np.asarray(got_f), np.asarray(want_f))
+    assert np.array_equal(got_k, want_k)
+
+
+@needs_par
+def test_threaded_line_keys_do_not_move_the_inverted_l():
+    ref, _r = pg._fill(_invl, **{"cf._LINE_KEYS_THREADS": 1})
+    got, _r = pg._fill(_invl, **{"cf._LINE_KEYS_THREADS": 4})
+    assert np.array_equal(pg._bits(got), pg._bits(ref))
