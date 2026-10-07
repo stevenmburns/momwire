@@ -514,6 +514,75 @@ static inline cd below_divide_out(double k_p, const cd &k_m, double rho,
     return std::exp(-MW_BJ * arg) / r1;
 }
 
+// `below_divide_out` with the exponential's MODULUS held across pairs of one
+// depth sum (momwire queue item 4). The exponent -j (k_p rho + k_m hh) has
+// real part 0.0 + Im(k_m) hh, a function of hh alone, and on a buried radial
+// screen every pair of one observer row has the same hh. glibc's cexp is
+// exp(Re z) * (cos Im z, sin Im z) with one sincos, for a finite z whose real
+// part is at most (DBL_MAX_EXP - 1) ln 2 (s_cexp_template.c), and so is this
+// -- the real part here is <= 0 -- with exp(Re z) taken from `ex` when hh is
+// the previous pair's. The same libm calls on the same arguments: the same
+// floats. Used only where `cexp_split_ok()` has checked that claim against
+// this process's libm (`below_cexp_split_check`), and only on glibc builds.
+#if defined(__GLIBC__)
+#define MW568_CEXP_SPLIT 1
+static inline cd cexp_split(const cd &z, double ex) {
+    double sn, cs;
+    if (std::fabs(z.imag()) > std::numeric_limits<double>::min()) {
+        sincos(z.imag(), &sn, &cs);
+    } else {
+        sn = z.imag();
+        cs = 1.0;
+    }
+    return cd(ex * cs, ex * sn);
+}
+
+// Whether std::exp(complex) is cexp_split here, bit for bit, over a spread
+// of exponents like the divide-out's (real part -40 .. 0, imaginary part
+// -60 .. 0, tiny and zero imaginary parts included). Evaluated once.
+static bool below_cexp_split_check() {
+    uint64_t st = 0x9E3779B97F4A7C15ULL;
+    auto u01 = [&st]() {
+        st ^= st << 13;
+        st ^= st >> 7;
+        st ^= st << 17;
+        return (double)(st >> 11) * (1.0 / 9007199254740992.0);
+    };
+    for (int i = 0; i < 4096; ++i) {
+        double x = -40.0 * u01() * u01();
+        double y = -60.0 * u01();
+        if (i % 64 == 0) y = 0.0;
+        if (i % 64 == 1) y = -1e-310;
+        if (i % 64 == 2) x = 0.0;
+        const cd z(x, y);
+        const cd a = std::exp(z);
+        const cd b = cexp_split(z, std::exp(z.real()));
+        if (std::memcmp(&a, &b, sizeof a) != 0) return false;
+    }
+    return true;
+}
+
+static bool cexp_split_ok() {
+    static const bool ok = below_cexp_split_check();
+    return ok;
+}
+
+static inline cd below_divide_out_held(double k_p, const cd &k_m, double rho,
+                                       double hh, double r1, double &held_hh,
+                                       double &held_ex) {
+    const cd arg(mw_fma::fma(k_m.real(), hh, k_p * rho),
+                 0.0 + k_m.imag() * hh);
+    const cd z = -MW_BJ * arg;
+    if (!(hh == held_hh)) {
+        held_ex = std::exp(z.real());
+        held_hh = hh;
+    }
+    return cexp_split(z, held_ex) / r1;
+}
+#else
+#define MW568_CEXP_SPLIT 0
+#endif
+
 // Stage 5: the projection (eqs 143-147), over g.
 static inline cd below_project(const somm_proj::GridView &G, const cd *surf,
                                const cd &g, double rho, double dx, double dy,
@@ -838,6 +907,9 @@ static py::tuple remainder_field_proj_batch_below(
         nTh32[g] = static_cast<int>(G.nTh[g]);
     }
     const bool use_lanes = blocked && lanes;
+#if MW568_CEXP_SPLIT
+    const bool split = use_lanes && mw568_below::cexp_split_ok();
+#endif
 #else
     (void)lanes;
 #endif
@@ -901,6 +973,12 @@ static py::tuple remainder_field_proj_batch_below(
                 // in its order; only WHEN each runs moves.
                 constexpr int B = mw568_below::BELOW_BLOCK;
                 double dx[B], dy[B], rho[B], hh[B], r1[B], th[B];
+#if MW568_CEXP_SPLIT
+                // The held modulus (`below_divide_out_held`): per work item,
+                // so no thread reads another's. NaN matches no hh.
+                double held_hh = std::numeric_limits<double>::quiet_NaN();
+                double held_ex = 0.0;
+#endif
                 mw568_below::BelowStencil st[B];
                 cd surf[B][4];
                 cd g[B];
@@ -937,6 +1015,17 @@ static py::tuple remainder_field_proj_batch_below(
                             somm_proj_lanes::surfaces_lanes<B, true>(
                                 G, l_reg[b], l_i0[b], l_j0[b], l_wr, l_wt,
                                 l_sre, l_sim, b);
+#if MW568_CEXP_SPLIT
+                        if (split) {
+                            for (int b = 0; b < nq; ++b) {
+                                const cd gb = mw568_below::below_divide_out_held(
+                                    k_p, km, rho[b], hh[b], r1[b], held_hh,
+                                    held_ex);
+                                l_gre[b] = gb.real();
+                                l_gim[b] = gb.imag();
+                            }
+                        } else
+#endif
                         for (int b = 0; b < nq; ++b) {
                             const cd gb = mw568_below::below_divide_out(
                                 k_p, km, rho[b], hh[b], r1[b]);
@@ -2455,6 +2544,12 @@ void register_mw568(py::module_ &m) {
     // carry U2's contract too, handing `_sommerfeld_below` a missing symbol
     // instead of the graceful numpy fallback the guard exists to give.
     m.attr("below_fills_568") = true;
+#if MW568_CEXP_SPLIT
+    m.def("below_cexp_split_ok", []() { return mw568_below::cexp_split_ok(); },
+          "Whether this process's libm computes std::exp(complex) as "
+          "exp(re) * sincos(im) bit for bit, the claim batch_below's lane path "
+          "holds the modulus on (TEST-ONLY).");
+#endif
     // momwire#568 unit 3: the transmitted fills on that engine. Its OWN
     // capability flag, deliberately neither `contour_engine_568` nor
     // `below_fills_568` — a .so built at U1 or U2 exports those symbols and
