@@ -16,6 +16,11 @@ correctly rounded in any lane). Its gate is the on-node rows below, which
 take the early return, and the production check at the PR: the kernel's
 output on the three largest real calls of razor invl x32 equal as uint64 to
 main's, and full Z equal on invl/buried x4/x8 and x16.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from momwire import _near_interface as ni
 from momwire._near_interface import k_medium
 
 from test_crossing_serve_524 import SOIL_A, WL7
+from _lane_gate import assert_lanes_match
 
 K_P = 2.0 * np.pi / WL7
 EPS_T = complex(
@@ -128,7 +134,7 @@ def test_the_fixed_width_sum_is_the_generic_loop_to_the_bit(family, height):
     fast = _interp(sheet, sub, generic=False)
     ref = _interp(sheet, sub, generic=True)
     assert np.isfinite(ref).all()
-    assert np.array_equal(fast.view(np.uint64), ref.view(np.uint64))
+    assert_lanes_match(fast, ref)
     # The production entry is the default route.
     via = np.empty_like(fast)
     sheet.interpolate(sub, np.arange(sub.shape[0]), via)

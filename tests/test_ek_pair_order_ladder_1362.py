@@ -36,6 +36,11 @@ Negative controls, so a pass is evidence:
   kernel that dropped the factor on tiered pairs fails it, and so does the
   numpy-twin gate (the factor there is ~1e-7 against a 1e-13 gate);
 * the EK-on and EK-off ladder Z differ by far more than Z_TOL.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -55,6 +60,7 @@ from momwire._bspline_kernels import (
     _pair_ratio,
     _seg_seg_full_moments_offedge,
 )
+from _lane_gate import assert_lanes_match, moved_pairs
 
 acc = _bk._acc
 
@@ -151,7 +157,7 @@ def test_one_tier_is_the_plain_ek_entry_bit_for_bit():
     one = acc.seg_seg_full_moments_bspline_ek_tiered(
         sl, sr, sl, sr, A * A, K_REAL, 2, *_ladder_arrays(8, ()), g, g, A
     )
-    assert np.array_equal(_bits(one), _bits(plain))
+    assert_lanes_match(one, plain)
 
 
 @pytest.mark.parametrize("d", [1, 2, 3])
@@ -171,7 +177,7 @@ def test_ek_tiered_lanes_are_the_walk_to_the_bit(d, n_qp, ladder):
     got = acc.seg_seg_full_moments_bspline_ek_tiered(
         *args, gi, g[3:], A, reference=False
     )
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 def test_every_served_ek_pair_is_within_1e_9_of_the_base_order():
@@ -197,7 +203,7 @@ def test_the_factor_is_applied_on_the_tiered_pairs_and_only_the_eligible_ones():
     ek = acc.seg_seg_full_moments_bspline_ek_tiered(*args, g, g, A)
     red = acc.seg_seg_full_moments_bspline_tiered(*args)
     eligible = g[:, None] == g[None, :]
-    moved = np.any(ek != red, axis=(0, 1))
+    moved = moved_pairs(ek, red, (0, 1), eligible)
     assert np.array_equal(moved, eligible)
     ratio = _pair_ratio(sl, sr, sl, sr)
     for lo, hi in ((2.0, 16.0), (16.0, np.inf)):  # the order-8 and order-4 tiers
@@ -205,8 +211,8 @@ def test_the_factor_is_applied_on_the_tiered_pairs_and_only_the_eligible_ones():
         assert (tier & eligible).any() and (tier & ~eligible).any()
     # An all-ineligible EK block is the reduced tiered kernel, bit for bit.
     none = np.full_like(g, -1)
-    assert np.array_equal(
-        _bits(acc.seg_seg_full_moments_bspline_ek_tiered(*args, none, g, A)), _bits(red)
+    assert_lanes_match(
+        acc.seg_seg_full_moments_bspline_ek_tiered(*args, none, g, A), red
     )
 
 
@@ -307,5 +313,5 @@ def test_an_ek_solve_on_the_ladder_is_the_reference_walk_to_the_bit(monkeypatch)
     z_ref, c_ref, n_ref = run(True)
     z, c, n = run(False)
     assert n_ref == n > 0
-    assert np.array_equal(_bits(z), _bits(z_ref))
-    assert np.array_equal(_bits(c), _bits(c_ref))
+    assert_lanes_match(z, z_ref)
+    assert_lanes_match(c, c_ref)

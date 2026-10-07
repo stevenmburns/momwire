@@ -18,6 +18,11 @@ against it, as in `test_windowed_lanes_1290.py`:
 * end to end, grounded decks forced through the chunked fill (Sommerfeld,
   PEC, refl-coef): Z_in and currents equal the reference's bit for bit, with
   the calls COUNTED so the gate cannot pass without the assembler running.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import numpy as np
 import pytest
 
 from momwire import bspline as B
+from _lane_gate import assert_lanes_match
 
 acc = B._acc
 
@@ -122,7 +128,7 @@ def test_lanes_are_the_reference_to_the_bit(d, cplx, seed):
     want = _run(c, True, cplx=cplx)
     got = _run(c, False, cplx=cplx)
     assert not np.array_equal(want, c["Z0"])  # the window added something
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize("cplx", [False, True])
@@ -133,7 +139,7 @@ def test_lanes_into_a_row_compact_z(cplx):
     row_of[c["m_idx"]] = np.arange(c["m_idx"].size)[::-1]
     want = _run(c, True, cplx=cplx, row_of=row_of)
     got = _run(c, False, cplx=cplx, row_of=row_of)
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize(
@@ -148,7 +154,7 @@ def test_lanes_on_edge_windows(window):
     c = _case(3, 2, window=window)
     want = _run(c, True)
     got = _run(c, False)
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize("which", ["J", "wA", "wPhi"])
@@ -219,5 +225,5 @@ def test_a_grounded_solve_is_the_reference_to_the_bit(ground, monkeypatch):
     z_ref, c_ref, n_ref = _solve(make, monkeypatch, True)
     z, c, n = _solve(make, monkeypatch, False)
     assert n_ref == n > 1  # the image sweep ran, window by window
-    assert np.array_equal(_bits(z), _bits(z_ref))
-    assert np.array_equal(_bits(c), _bits(c_ref))
+    assert_lanes_match(z, z_ref)
+    assert_lanes_match(c, c_ref)

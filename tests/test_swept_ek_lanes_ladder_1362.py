@@ -37,6 +37,11 @@ max over 11 frequencies of |dZ_in| / |Z_in|, Haswell):
 with EK off), against 3e-5 or more between EK on and off; x4 over a PEC
 ground measured 1.0e-12. Z_TOL = 1e-11, the #1365 bar, sits an order over
 the worst of these and two over the test decks below.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -49,6 +54,7 @@ import pytest
 
 from momwire import _bspline_kernels as BK
 from momwire import bspline as B
+from _lane_gate import WIN32, assert_lanes_match, moved_pairs
 
 acc = BK._acc
 
@@ -111,7 +117,7 @@ def test_swept_ek_lanes_are_the_walk_to_the_bit(n_qp, d):
     blk, gi, gj = _block(0, 47, 61)
     want = _swept(blk, gi, gj, d, n_qp, reference=True)
     got = _swept(blk, gi, gj, d, n_qp)
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 def test_short_and_empty_column_blocks():
@@ -120,7 +126,7 @@ def test_short_and_empty_column_blocks():
         want = _swept(blk, gi, gj, 2, 8, reference=True)
         got = _swept(blk, gi, gj, 2, 8)
         assert got.shape == (len(KS), 3, 3, 9, n_j)
-        assert np.array_equal(_bits(got), _bits(want))
+        assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize("d", [1, 2, 3])
@@ -133,7 +139,7 @@ def test_each_k_is_the_single_k_ek_entry_to_the_bit(n_qp, d):
     t, w = BK._gl01(n_qp)
     for kk, k in enumerate(KS):
         one = acc.seg_seg_full_moments_bspline_ek(*blk, A * A, k, d, t, w, gi, gj, A)
-        assert np.array_equal(_bits(got[kk]), _bits(one)), kk
+        assert_lanes_match(got[kk], one, kk)
 
 
 @pytest.mark.parametrize("reference", [False, True])
@@ -143,7 +149,7 @@ def test_an_all_ineligible_block_is_the_reduced_swept_kernel(reference):
     got = _swept(blk, none, gj, 2, 8, reference=reference)
     t, w = BK._gl01(8)
     red = acc.seg_seg_full_moments_bspline_swept(*blk, A * A, KS, 2, t, w)
-    assert np.array_equal(_bits(got), _bits(red))
+    assert_lanes_match(got, red)
 
 
 def test_the_factor_moves_the_eligible_pairs_and_only_them():
@@ -153,7 +159,7 @@ def test_the_factor_moves_the_eligible_pairs_and_only_them():
     red = acc.seg_seg_full_moments_bspline_swept(*blk, A * A, KS, 2, t, w)
     eligible = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
     assert eligible.any() and (~eligible).any()
-    moved = np.any(ek != red, axis=(0, 1, 2))
+    moved = moved_pairs(ek, red, (0, 1, 2), eligible)
     assert np.array_equal(moved, eligible)
     n4 = (eligible.shape[1] // 4) * 4
     g = eligible[:, :n4].reshape(eligible.shape[0], -1, 4)
@@ -162,7 +168,11 @@ def test_the_factor_moves_the_eligible_pairs_and_only_them():
 
 def test_the_gate_sees_a_one_ppm_ek_radius():
     blk, gi, gj = _block(4, 30, 44)
-    want = _swept(blk, gi, gj, 2, 8, reference=True)
+    # The walk is the reference off Windows. On win32 the lanes already differ
+    # from it at the rounding level (/fp:fast), which would drown a one-ppm
+    # change; there the control holds the path fixed and compares lanes
+    # with lanes, so a moved bit is the radius reaching the lanes.
+    want = _swept(blk, gi, gj, 2, 8, reference=not WIN32)
     got = _swept(blk, gi, gj, 2, 8, a_ek=A * (1 + 1e-6))
     eligible = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
     moved = np.any(got != want, axis=(0, 1, 2))
@@ -215,12 +225,12 @@ def test_tiered_lanes_walk_and_single_k(d, n_qp, ladder):
     got = acc.seg_seg_full_moments_bspline_swept_ek_tiered(
         *geo, K_LAD, d, *lad, gi, gj, A_LAD
     )
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
     for kk, k in enumerate(K_LAD):
         one = acc.seg_seg_full_moments_bspline_ek_tiered(
             *geo, k, d, *lad, gi, gj, A_LAD
         )
-        assert np.array_equal(_bits(got[kk]), _bits(one)), kk
+        assert_lanes_match(got[kk], one, kk)
     # Negative control: the ladder moved the moments (an ignored ladder
     # would be the flat entry exactly).
     t, w = BK._gl01(n_qp)
@@ -239,7 +249,7 @@ def test_one_tier_is_the_flat_swept_entry_bit_for_bit():
     flat = acc.seg_seg_full_moments_bspline_swept_ek(
         *geo, K_LAD, 2, t, w, gi, gj, A_LAD
     )
-    assert np.array_equal(_bits(one), _bits(flat))
+    assert_lanes_match(one, flat)
 
 
 def test_the_factor_is_applied_on_the_tiered_pairs():
@@ -256,7 +266,7 @@ def test_the_factor_is_applied_on_the_tiered_pairs():
     ratio = BK._pair_ratio(sl, sr, sl, sr)
     for kk, k in enumerate(K_LAD):
         red = acc.seg_seg_full_moments_bspline_tiered(*geo, k, 2, *lad)
-        moved = np.any(ek[kk] != red, axis=(0, 1))
+        moved = moved_pairs(ek[kk], red, (0, 1), eligible)
         assert np.array_equal(moved, eligible)
     for lo, hi in ((1.5, 3.0), (3.0, np.inf)):
         tier = (ratio >= lo) & (ratio < hi)
@@ -292,7 +302,7 @@ def test_a_sweep_across_the_phase_guard_is_the_per_k_fill():
             one = BK._seg_seg_full_moments_offedge(
                 sl, sr, sl, sr, 0.001, float(k), 2, 8, ek=ek, ladder=ladder
             )
-            assert np.array_equal(_bits(got[kk]), _bits(one)), kk
+            assert_lanes_match(got[kk], one, kk)
 
 
 # --- solver level ------------------------------------------------------------
@@ -397,7 +407,7 @@ def test_an_ek_sweep_on_the_ladder_is_the_flat_sweep_within_the_derived_toleranc
     z_off_flat, _ = _sweep(
         monkeypatch, deck, f0, extended_kernel=False, pair_order_ladder=()
     )
-    assert np.array_equal(_bits(z_off), _bits(z_off_flat))
+    assert_lanes_match(z_off, z_off_flat)
 
 
 @pytest.mark.parametrize("ladder", [None, ()], ids=["ladder", "flat"])
@@ -409,4 +419,4 @@ def test_an_ek_sweep_is_the_reference_walk_to_the_bit(monkeypatch, ladder):
     z_ref, n_ref = _sweep(monkeypatch, deck, f0, reference=True, **kw)
     z, n = _sweep(monkeypatch, deck, f0, reference=False, **kw)
     assert n_ref == n and sum(n.values()) > 0
-    assert np.array_equal(_bits(z), _bits(z_ref))
+    assert_lanes_match(z, z_ref)

@@ -375,6 +375,19 @@ environment = { LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TA
 # the (now-external) libomp during repair.
 repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-wheel --exclude libomp --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
 
+# Windows, one interpreter: the lane gates too (momwire#1371). Since #1371 the
+# MSVC `_avx2` variant runs the lane layer, and ci.yml has no Windows lane, so
+# this is the only place its walk-vs-lanes gates run against an MSVC build.
+# There they take the derived tolerance (tests/_lane_gate.py), and
+# test_windows_lanes_1371.py fails the run if the lanes were not entered. One
+# interpreter is enough: the kernels' arithmetic does not depend on CPython's
+# version, and cp312 is also what a main push builds. The log variable makes
+# the run print each test's worst measured ratio (the tolerance's evidence).
+[[tool.cibuildwheel.overrides]]
+select = "cp312-win_amd64"
+test-environment = { MOMWIRE_LANE_GATE_LOG = "lane-gate.jsonl" }
+test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py {project}/tests/test_windows_lanes_1371.py {project}/tests/test_windowed_lanes_1290.py {project}/tests/test_weighted_windowed_lanes.py {project}/tests/test_below_lanes_1290.py {project}/tests/test_field_galerkin_lanes_1290.py {project}/tests/test_pair_extents_lanes_1290.py {project}/tests/test_sheet_fixed_width_1290.py {project}/tests/test_offedge_lanes_1290.py {project}/tests/test_offedge_ek_lanes_1362.py {project}/tests/test_swept_ek_lanes_ladder_1362.py {project}/tests/test_ek_pair_order_ladder_1362.py {project}/tests/test_hmatrix_ek_block_1362.py {project}/tests/test_somm_proj_lanes_1290.py -m "not slow and not memgate"'
+
 [tool.ruff.format]
 # The chapter-figure scripts keep their hand-wrapped compact matplotlib style
 # on purpose — the formatter would roughly double their line counts by

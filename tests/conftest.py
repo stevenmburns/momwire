@@ -288,3 +288,13 @@ def sheet_modes(request, monkeypatch):
     planned = stats["planes_planned"] + stats["heights_planned"]
     if request.param == "sheets" and planned and ni._use_sheet():
         assert stats["sheet_rows"] > 0, "a fill planned a sheet and served no row"
+
+
+# The win32 lane gate's measurements (tests/_lane_gate.py, momwire#1371):
+# with MOMWIRE_LANE_GATE_LOG set, print each test's worst lanes-vs-walk ratio
+# at the end of the run. Inert without the variable, and off Windows (the
+# gate logs only there).
+def pytest_terminal_summary(terminalreporter):
+    import _lane_gate
+
+    _lane_gate.report(terminalreporter)

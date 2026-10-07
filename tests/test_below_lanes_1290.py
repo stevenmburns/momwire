@@ -22,6 +22,11 @@ move a bit, so the gates are uint64:
 
 The scalar loops are the only route on the baseline, arm64 and MSVC builds
 (`below_lanes_1290` False there), where L1-L4 hold trivially and still run.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 import sys
@@ -33,6 +38,7 @@ import pytest
 
 from momwire import BSplineSolver
 from momwire import _sommerfeld_below as below
+from _lane_gate import WIN32, assert_lanes_match, lanes_match, lanes_match_values
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_field_galerkin_914 import screen_deck  # noqa: E402
@@ -75,7 +81,10 @@ def _bits(a):
 def _same(got, ref):
     """uint64 equality per part, with an unfilled region's NaNs (L3 reads
     tables the solve never filled) compared as NaN-for-NaN: which NaN payload
-    an operation propagates is not part of the claim."""
+    an operation propagates is not part of the claim. On win32 the derived
+    tolerance, which compares NaN for NaN the same way (momwire#1371)."""
+    if WIN32:
+        return lanes_match(got, ref)
     g = np.ascontiguousarray(got).view(np.float64)
     r = np.ascontiguousarray(ref).view(np.float64)
     nan = np.isnan(g)
@@ -96,8 +105,8 @@ def test_g1290_l1_the_lanes_are_the_scalar_loop(live_args):
     for i, args in enumerate(seen):
         lanes, scalar, pair = _three(real, args)
         for ref in (scalar, pair):
-            assert np.array_equal(_bits(lanes[0]), _bits(ref[0])), i
-            assert lanes[1:] == ref[1:], (i, lanes[1:], ref[1:])
+            assert_lanes_match(lanes[0], ref[0], i)
+            assert lanes_match_values(lanes[1:], ref[1:]), (i, lanes[1:], ref[1:])
         assert np.all(np.isfinite(lanes[0])), i
 
 
@@ -113,8 +122,8 @@ def test_g1290_l2_every_block_and_span_shape(live_args, n_src):
     lanes, scalar, pair = _three(real, args)
     assert lanes[0].shape[1] == n_src
     for ref in (scalar, pair):
-        assert np.array_equal(_bits(lanes[0]), _bits(ref[0]))
-        assert lanes[1:] == ref[1:]
+        assert_lanes_match(lanes[0], ref[0])
+        assert lanes_match_values(lanes[1:], ref[1:])
 
 
 def test_g1290_l3_every_edge_and_clamp(live_args):
@@ -150,7 +159,7 @@ def test_g1290_l3_every_edge_and_clamp(live_args):
     lanes, scalar, pair = _three(real, args)
     for ref in (scalar, pair):
         assert _same(lanes[0], ref[0])
-        assert lanes[1:] == ref[1:]
+        assert lanes_match_values(lanes[1:], ref[1:])
     assert lanes[1] > r1_max  # the R1 clamp was exercised
 
 
@@ -161,7 +170,7 @@ def test_g1290_l4_rows_are_independent_of_the_items(live_args):
     for rows in (slice(0, 1), slice(1, 4), slice(len(args[0]) - 3, None)):
         sub = list(args)
         sub[0], sub[1] = args[0][rows], args[1][rows]
-        assert np.array_equal(_bits(real(*sub)[0]), _bits(full[rows]))
+        assert_lanes_match(real(*sub)[0], full[rows])
 
 
 def test_g1290_l5_the_buried_z_with_and_without_the_lanes(monkeypatch):
@@ -188,4 +197,4 @@ def test_g1290_l5_the_buried_z_with_and_without_the_lanes(monkeypatch):
     Zs, cs = fill(False)
     assert cl["lanes"] > 0 and cl["scalar"] == 0, cl
     assert cs["scalar"] > 0 and cs["lanes"] == 0, cs
-    assert np.array_equal(_bits(Zl), _bits(Zs))
+    assert_lanes_match(Zl, Zs)

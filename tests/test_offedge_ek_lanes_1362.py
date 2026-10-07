@@ -24,6 +24,11 @@ bit:
   the data;
 * end to end, EK-on solves of a free-space array and a junction deck: Z_in
   and currents equal the reference's bit for bit, with the EK entry COUNTED.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ import pytest
 
 from momwire import _bspline_kernels as BK
 from momwire import bspline as B
+from _lane_gate import WIN32, assert_lanes_match, moved_pairs
 
 acc = BK._acc
 
@@ -94,7 +100,7 @@ def test_ek_lanes_are_the_walk_to_the_bit(n_qp, d):
     blk, gi, gj = _block(0, 47, 61)
     want = _ek(blk, gi, gj, d, n_qp, True)
     got = _ek(blk, gi, gj, d, n_qp, False)
-    assert np.array_equal(_bits(got), _bits(want))
+    assert_lanes_match(got, want)
 
 
 def test_short_and_empty_column_blocks():
@@ -103,7 +109,7 @@ def test_short_and_empty_column_blocks():
         want = _ek(blk, gi, gj, 2, 8, True)
         got = _ek(blk, gi, gj, 2, 8, False)
         assert got.shape == (3, 3, 9, n_j)
-        assert np.array_equal(_bits(got), _bits(want))
+        assert_lanes_match(got, want)
 
 
 @pytest.mark.parametrize("reference", [False, True])
@@ -111,7 +117,7 @@ def test_an_all_ineligible_block_is_the_reduced_kernel(reference):
     blk, gi, gj = _block(1, 40, 57)
     none = np.full_like(gi, -1)
     got = _ek(blk, none, gj, 2, 8, reference)
-    assert np.array_equal(_bits(got), _bits(_reduced(blk, 2, 8)))
+    assert_lanes_match(got, _reduced(blk, 2, 8))
 
 
 def test_the_factor_moves_the_eligible_pairs_and_only_them():
@@ -120,7 +126,7 @@ def test_the_factor_moves_the_eligible_pairs_and_only_them():
     red = _reduced(blk, 2, 8)
     eligible = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
     assert eligible.any() and (~eligible).any()
-    moved = np.any(ek != red, axis=(0, 1))
+    moved = moved_pairs(ek, red, (0, 1), eligible)
     assert np.array_equal(moved, eligible)
     # Lane groups straddling eligibility are present (a group of four columns
     # with both kinds of pair), so the per-lane blend is exercised.
@@ -131,7 +137,11 @@ def test_the_factor_moves_the_eligible_pairs_and_only_them():
 
 def test_the_gate_sees_a_one_ppm_ek_radius():
     blk, gi, gj = _block(4, 30, 44)
-    want = _ek(blk, gi, gj, 2, 8, True)
+    # The walk is the reference off Windows. On win32 the lanes already differ
+    # from it at the rounding level (/fp:fast), which would drown a one-ppm
+    # change; there the control holds the path fixed and compares lanes
+    # with lanes, so a moved bit is the radius reaching the lanes.
+    want = _ek(blk, gi, gj, 2, 8, not WIN32)
     got = _ek(blk, gi, gj, 2, 8, False, a_ek=A * (1 + 1e-6))
     eligible = (gi[:, None] == gj[None, :]) & (gi[:, None] >= 0)
     moved = np.any(got != want, axis=(0, 1))
@@ -213,5 +223,5 @@ def test_an_ek_solve_is_the_reference_to_the_bit(monkeypatch, make):
     z_ref, c_ref, n_ref = _solve(make, monkeypatch, True)
     z, c, n = _solve(make, monkeypatch, False)
     assert n_ref == n > 0
-    assert np.array_equal(_bits(z), _bits(z_ref))
-    assert np.array_equal(_bits(c), _bits(c_ref))
+    assert_lanes_match(z, z_ref)
+    assert_lanes_match(c, c_ref)

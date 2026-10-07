@@ -10,6 +10,11 @@ quotient the minimum drops), and through a live buried solve with
 `bspline._PAIR_EXTENTS_LANES` flipped. The red control is a cloud whose
 minimising pair sits in the lanes: the extents the gate compares must move
 when that pair's depth moves by 1e-12 relative.
+
+On Windows (MSVC, /fp:fast) the lanes run too since momwire#1371, and every
+lanes-vs-walk comparison here takes the derived win32 tolerance instead of bit
+equality (`assert_lanes_match`, tests/_lane_gate.py). Linux and macOS keep the
+bit gates.
 """
 
 from __future__ import annotations
@@ -21,6 +26,7 @@ from test_sg_cplx_far_fill_simd_1224 import _hub4
 import momwire._accel as _accel
 from momwire import bspline
 from momwire import sinusoidal_galerkin as sg
+from _lane_gate import assert_lanes_match
 
 pytestmark = pytest.mark.skipif(
     _accel.acc is None or not hasattr(_accel.acc, "pair_extents_below"),
@@ -43,7 +49,9 @@ def test_random_clouds(n):
     x, y = rng.uniform(-20, 20, (2, n))
     d = rng.uniform(1e-3, 2.0, n)
     lanes, scalar = _both(x, y, d)
-    assert _bytes(lanes) == _bytes(scalar)
+    assert_lanes_match(
+        np.asarray(lanes, dtype=np.float64), np.asarray(scalar, dtype=np.float64)
+    )
 
 
 @pytest.mark.parametrize("n", [6, 13, 40])
@@ -55,7 +63,9 @@ def test_duplicated_and_interface_nodes(n):
     d[2] = d[5] = 0.0  # interface nodes; with x/y equal below, 0/0
     x[5], y[5] = x[2], y[2]
     lanes, scalar = _both(x, y, d)
-    assert _bytes(lanes) == _bytes(scalar)
+    assert_lanes_match(
+        np.asarray(lanes, dtype=np.float64), np.asarray(scalar, dtype=np.float64)
+    )
     assert np.isfinite(lanes[1])
 
 
@@ -87,5 +97,5 @@ def test_live_buried_solve_with_the_lanes_off(monkeypatch):
     monkeypatch.setattr(bspline, "_PAIR_EXTENTS_LANES", False)
     Z0, I0 = sg.SinusoidalGalerkinSolver(**_hub4()).compute_impedance()
     assert True in calls and False in calls, calls
-    assert np.atleast_1d(Z1).tobytes() == np.atleast_1d(Z0).tobytes()
-    assert np.asarray(I1).tobytes() == np.asarray(I0).tobytes()
+    assert_lanes_match(np.atleast_1d(Z1), np.atleast_1d(Z0))
+    assert_lanes_match(np.asarray(I1), np.asarray(I0))
