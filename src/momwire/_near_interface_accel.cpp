@@ -77,9 +77,7 @@
 #include <stdexcept>
 #include <vector>
 
-#if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
-#include <immintrin.h>
-#endif
+#include "_lanes.h"
 
 #ifdef _OPENMP
 #include <omp.h>
@@ -449,8 +447,8 @@ static inline py::ssize_t cell_of(double t, const double *e, py::ssize_t n) {
 //
 // each sum in index order, every step one fused multiply-add, the inner sum
 // started at +0.0 and restarted per i. `cell_sum` spells it for any width;
-// `cell_sum_fixed<NV>` is the same arithmetic at a compile-time width of
-// 4 NV doubles, held in registers (momwire#1290): with `nd` a runtime value
+// `cell_sum_fixed<ND>` is the same arithmetic at a compile-time width of
+// ND doubles, held in registers (momwire#1290): with `nd` a runtime value
 // GCC keeps `inner` in memory and every j step is a store-to-load round
 // trip. It also runs the inner sums of rows i and i + 1 together. They are
 // independent chains, so that changes when each fused op issues, not which
@@ -458,7 +456,7 @@ static inline py::ssize_t cell_of(double t, const double *e, py::ssize_t n) {
 // in order. The two are therefore the same floats entry for entry; the
 // width-generic reference stays reachable (`generic=True`) and is gated
 // against this one as uint64 (tests/test_sheet_fixed_width_1290.py). Only
-// the AVX2 build has the fixed route: the baseline, arm64 and MSVC builds
+// a lanes build (the AVX2 one) has the fixed route: the baseline, arm64 and MSVC builds
 // take the generic loop, which is the same floats anyway.
 static inline void cell_sum(const double *blk, const double *wr,
                             const double *ws, int p, int nd, double *acc) {
@@ -478,51 +476,57 @@ static inline void cell_sum(const double *blk, const double *wr,
     }
 }
 
-#if defined(__AVX2__) && defined(__FMA__) && !defined(_MSC_VER)
+#if MW_LANES_SIMD && MW_LANES_FMA_EXACT
 #define MW_SHEET_FIXED 1
-// ND = 4 NV doubles in NV ymm registers. `_mm256_fmadd_pd` is four
+// ND doubles in ND / W lane-layer vectors (momwire#1372). `fmadd` is W
 // independent fused multiply-adds, one per lane, each rounding exactly as
 // `std::fma` does on that lane's operands, so a lane is the scalar chain.
-// Spelled with intrinsics because GCC 11, left to vectorise the plain loops
-// at a fixed width, spilled the inner sums to the stack and gathered across
-// j, which was barely faster than the generic loop.
-template <int NV>
+// Spelled in vectors because GCC 11, left to vectorise the plain loops at a
+// fixed width, spilled the inner sums to the stack and gathered across j,
+// which was barely faster than the generic loop. A width the backend's W does
+// not divide takes the generic loop, which is the same floats.
+template <int ND>
 static inline void cell_sum_fixed(const double *blk, const double *wr,
                                   const double *ws, int p, double *acc) {
-    constexpr int ND = 4 * NV;
+    using namespace mw_lanes;
+    if constexpr (ND % W != 0) {
+        cell_sum(blk, wr, ws, p, ND, acc);
+    } else {
+    constexpr int NV = ND / W;
     const std::int64_t row = static_cast<std::int64_t>(p) * ND;
-    __m256d a[NV];
-    for (int v = 0; v < NV; ++v) a[v] = _mm256_setzero_pd();
+    vd a[NV];
+    for (int v = 0; v < NV; ++v) a[v] = zero();
     int i = 0;
     for (; i + 2 <= p; i += 2) {
-        __m256d x0[NV], x1[NV];
-        for (int v = 0; v < NV; ++v) x0[v] = x1[v] = _mm256_setzero_pd();
+        vd x0[NV], x1[NV];
+        for (int v = 0; v < NV; ++v) x0[v] = x1[v] = zero();
         const double *V0 = blk + i * row;
         const double *V1 = V0 + row;
         for (int j = 0; j < p; ++j) {
-            const __m256d w = _mm256_set1_pd(ws[j]);
+            const vd w = set1(ws[j]);
             for (int v = 0; v < NV; ++v) {
-                x0[v] = _mm256_fmadd_pd(w, _mm256_loadu_pd(V0 + j * ND + 4 * v), x0[v]);
-                x1[v] = _mm256_fmadd_pd(w, _mm256_loadu_pd(V1 + j * ND + 4 * v), x1[v]);
+                x0[v] = fmadd(w, loadu(V0 + j * ND + W * v), x0[v]);
+                x1[v] = fmadd(w, loadu(V1 + j * ND + W * v), x1[v]);
             }
         }
-        const __m256d w0 = _mm256_set1_pd(wr[i]), w1 = _mm256_set1_pd(wr[i + 1]);
-        for (int v = 0; v < NV; ++v) a[v] = _mm256_fmadd_pd(w0, x0[v], a[v]);
-        for (int v = 0; v < NV; ++v) a[v] = _mm256_fmadd_pd(w1, x1[v], a[v]);
+        const vd w0 = set1(wr[i]), w1 = set1(wr[i + 1]);
+        for (int v = 0; v < NV; ++v) a[v] = fmadd(w0, x0[v], a[v]);
+        for (int v = 0; v < NV; ++v) a[v] = fmadd(w1, x1[v], a[v]);
     }
     for (; i < p; ++i) {
-        __m256d x0[NV];
-        for (int v = 0; v < NV; ++v) x0[v] = _mm256_setzero_pd();
+        vd x0[NV];
+        for (int v = 0; v < NV; ++v) x0[v] = zero();
         const double *V0 = blk + i * row;
         for (int j = 0; j < p; ++j) {
-            const __m256d w = _mm256_set1_pd(ws[j]);
+            const vd w = set1(ws[j]);
             for (int v = 0; v < NV; ++v)
-                x0[v] = _mm256_fmadd_pd(w, _mm256_loadu_pd(V0 + j * ND + 4 * v), x0[v]);
+                x0[v] = fmadd(w, loadu(V0 + j * ND + W * v), x0[v]);
         }
-        const __m256d w0 = _mm256_set1_pd(wr[i]);
-        for (int v = 0; v < NV; ++v) a[v] = _mm256_fmadd_pd(w0, x0[v], a[v]);
+        const vd w0 = set1(wr[i]);
+        for (int v = 0; v < NV; ++v) a[v] = fmadd(w0, x0[v], a[v]);
     }
-    for (int v = 0; v < NV; ++v) _mm256_storeu_pd(acc + 4 * v, a[v]);
+    for (int v = 0; v < NV; ++v) storeu(acc + W * v, a[v]);
+    }
 }
 #else
 #define MW_SHEET_FIXED 0
@@ -644,9 +648,9 @@ static void near_interface_grid_sheet(
             // width, and the reference, through the generic loop.
 #if MW_SHEET_FIXED
             if (fixed_ok && nk == 6)
-                mw_sheet::cell_sum_fixed<3>(blk, wr, ws, p, acc);
+                mw_sheet::cell_sum_fixed<12>(blk, wr, ws, p, acc);
             else if (fixed_ok && nk == 4)
-                mw_sheet::cell_sum_fixed<2>(blk, wr, ws, p, acc);
+                mw_sheet::cell_sum_fixed<8>(blk, wr, ws, p, acc);
             else
 #endif
                 mw_sheet::cell_sum(blk, wr, ws, p, nd, acc);
