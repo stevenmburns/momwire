@@ -1586,8 +1586,40 @@ def _run_sections(data: RunData) -> list[str]:
     return body
 
 
+# The cards that close a structure. EN closes the last (and every EZNEC
+# deck); NX closes one structure of a chained stream and opens the next.
+# Either is echoed AFTER the results, numbered as the card would have been.
+_STRUCTURE_TERMINATORS = frozenset({"EN", "NX"})
+
+
+def _terminator(cards: list[Card]) -> Card | None:
+    """The structure's closing card (``EN``, or ``NX`` in a chained stream)
+    when the echo ends with one, else ``None``."""
+    if cards and cards[-1].mnemonic in _STRUCTURE_TERMINATORS:
+        return cards[-1]
+    return None
+
+
+def _closing(seconds: float, *, closing: bool) -> list[str]:
+    """The ``RUN TIME`` trailer, or nothing for a structure an ``NX`` closed.
+
+    The licensed engine prints ``RUN TIME`` once per run of the program, at
+    its end: a structure that ``NX`` closes is followed straight away by the
+    next structure's ``1`` and header, and the stream's last structure
+    carries the one ``RUN TIME`` (measured black-box on a two-structure
+    deck)."""
+    if not closing:
+        return []
+    return ["", f"{_RUN_TIME_LABEL}{seconds:10.3f}"]
+
+
 def render_multi_printout(
-    deck: Nec5Deck, runs: list[RunData], *, basis: str | None = None
+    deck: Nec5Deck,
+    runs: list[RunData],
+    *,
+    basis: str | None = None,
+    closing: bool = True,
+    run_seconds: float | None = None,
 ) -> str:
     """A multi-run NEC-5 printout (momwire#1237): one ``XQ`` block per run,
     each block's cards replacing the previous block's sources, as the
@@ -1605,7 +1637,7 @@ def render_multi_printout(
     the per-block answers in block order.
     """
     cards = _post_ge_cards(deck.source_text)
-    terminator = cards[-1] if cards and cards[-1].mnemonic == "EN" else None
+    terminator = _terminator(cards)
     numbered = [(i, c) for i, c in enumerate(cards, start=1) if c is not terminator]
     # The echo groups follow EXECUTION, not the XQ blocks: an RP runs the
     # solution on the spot, so a block written `EX .. RP .. XQ` executes at
@@ -1656,12 +1688,19 @@ def render_multi_printout(
     body += [_card_echo(i, c) for i, c in pending]
     if terminator is not None:
         body.append(_card_echo(len(cards), terminator))
-    seconds = sum(r.run_seconds for r in runs)
-    body += ["", f"{_RUN_TIME_LABEL}{seconds:10.3f}"]
+    seconds = sum(r.run_seconds for r in runs) if run_seconds is None else run_seconds
+    body += _closing(seconds, closing=closing)
     return render_header(deck.source_text, basis=basis) + "\n".join(body) + "\n"
 
 
-def render_printout(deck: Nec5Deck, data: RunData, *, basis: str | None = None) -> str:
+def render_printout(
+    deck: Nec5Deck,
+    data: RunData,
+    *,
+    basis: str | None = None,
+    closing: bool = True,
+    run_seconds: float | None = None,
+) -> str:
     """A complete NEC-5 printout: U1's header, then everything through ``RUN TIME``.
 
     ``deck`` supplies what the printout ECHOES (its comment block, its
@@ -1676,9 +1715,14 @@ def render_printout(deck: Nec5Deck, data: RunData, *, basis: str | None = None) 
     and the last card echo is the odd one out: ``EN`` is echoed AFTER the
     results, with the line number it would have had at the top, because the
     engine reads it only once the run it terminates is over.
+
+    In an ``NX``-chained stream the same slot holds the ``NX`` echo, and
+    ``closing=False`` drops the ``RUN TIME`` trailer from every structure but
+    the last, whose ``run_seconds`` is the stream's total (:func:`_closing`).
+    Both default to the one-structure printout, byte for byte.
     """
     cards = _post_ge_cards(deck.source_text)
-    terminator = cards[-1] if cards and cards[-1].mnemonic == "EN" else None
+    terminator = _terminator(cards)
     body: list[str] = []
     body += _structure_specification(deck, data)
     body += _blank(_STRUCTURE_GAP)
@@ -1703,5 +1747,6 @@ def render_printout(deck: Nec5Deck, data: RunData, *, basis: str | None = None) 
     body.append("")
     if terminator is not None:
         body.append(_card_echo(len(cards), terminator))
-    body += ["", f"{_RUN_TIME_LABEL}{data.run_seconds:10.3f}"]
+    seconds = data.run_seconds if run_seconds is None else run_seconds
+    body += _closing(seconds, closing=closing)
     return render_header(deck.source_text, basis=basis) + "\n".join(body) + "\n"

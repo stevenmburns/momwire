@@ -42,10 +42,11 @@ from __future__ import annotations
 import codecs
 import sys
 import unicodedata
+from dataclasses import replace
 from pathlib import Path
 
 from ..deck import DeckError
-from ..deck._nec5 import parse_nec5
+from ..deck._nec5 import Nec5Deck, Nec5Structure, parse_nec5, split_structures
 from ..serve import Seam
 from . import _nec4, _printout, _serve
 
@@ -248,27 +249,97 @@ def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> st
         return _printout.render_refusal(
             text, f"unknown EZNEC dialect {dialect!r}; known: {known}", basis=basis
         )
+    structures = split_structures(text)
+    if structures is not None:
+        return _render_chain(structures, basis=basis)
+    answered = _answer(text, basis=basis)
+    if isinstance(answered, str):
+        return answered
+    deck, answers, multi = answered
+    if multi:
+        return _printout.render_multi_printout(deck, answers, basis=basis)
+    return _printout.render_printout(deck, answers[0], basis=basis)
+
+
+def _answer(
+    text: str, *, basis: str, echo_text: str | None = None
+) -> tuple[Nec5Deck, list[_printout.RunData], bool] | str:
+    """One structure's deck parsed and solved: ``(deck, answers, multi)``,
+    or the refusal printout naming why it could not be.
+
+    ``multi`` is momwire#1237's multi-run deck — one ``XQ`` block per run,
+    each served as its own single-run deck, printed in the licensed
+    multi-run layout. ``echo_text`` is what the printout echoes when it is
+    not the deck that was solved: a structure an ``NX`` closed is SOLVED as
+    the standalone deck its body makes (closed by ``EN``) and ECHOED with the
+    ``NX`` it arrived with.
+    """
+    echo = text if echo_text is None else echo_text
     try:
         deck = parse_nec5(text)
     except DeckError as exc:
-        return _printout.render_refusal(text, str(exc), basis=basis)
+        return _printout.render_refusal(echo, str(exc), basis=basis)
+    if echo_text is not None:
+        deck = replace(deck, source_text=echo_text)
     try:
         runs = _serve.split_runs(text)
     except _serve.ServeRefusal as exc:
-        return _printout.render_refusal(text, str(exc), basis=basis)
+        return _printout.render_refusal(echo, str(exc), basis=basis)
     if runs is not None:
-        # momwire#1237: one XQ block per run, each served as its own
-        # single-run deck and printed in the licensed multi-run layout.
         try:
             answers = [_serve.serve(parse_nec5(t), basis=basis) for t in runs]
         except (DeckError, _serve.ServeRefusal) as exc:
-            return _printout.render_refusal(text, str(exc), basis=basis)
-        return _printout.render_multi_printout(deck, answers, basis=basis)
+            return _printout.render_refusal(echo, str(exc), basis=basis)
+        return deck, answers, True
     try:
         data = _serve.serve(deck, basis=basis)
     except _serve.ServeRefusal as exc:
-        return _printout.render_refusal(text, str(exc), basis=basis)
-    return _printout.render_printout(deck, data, basis=basis)
+        return _printout.render_refusal(echo, str(exc), basis=basis)
+    return deck, [data], False
+
+
+def _render_chain(structures: list[Nec5Structure], *, basis: str) -> str:
+    """An ``NX``-chained stream's printout: each structure's own printout in
+    turn, as the licensed NEC-5 lays one out (measured black-box on a
+    two-structure deck).
+
+    Every structure starts from scratch — the engine carries no frequency,
+    ground or load across ``NX`` — so each is solved exactly as the
+    standalone deck its body makes. Each prints in full, header and comment
+    box included; a structure that ``NX`` closes ends on its ``NX`` echo
+    (numbered on from its own cards, where a lone deck's ``EN`` echo stands)
+    and is followed straight away by the next structure's header, and the
+    stream's last structure ends on the ``EN`` echo and the one ``RUN TIME``,
+    the whole stream's.
+
+    SimNEC is the caller that sends this: with enough runs queued it batches
+    several into one engine call, ``NX`` between them, and reads each run's
+    printout up to the ``NX`` echo. A structure that refuses ends the stream
+    there with its own refusal printout, naming the card, after the
+    structures that solved.
+    """
+    printouts: list[str] = []
+    seconds = 0.0
+    for k, structure in enumerate(structures):
+        last = k == len(structures) - 1
+        answered = _answer(
+            structure.deck_text, basis=basis, echo_text=structure.echo_text
+        )
+        if isinstance(answered, str):
+            printouts.append(answered)
+            break
+        deck, answers, multi = answered
+        seconds += sum(a.run_seconds for a in answers)
+        if multi:
+            printout = _printout.render_multi_printout(
+                deck, answers, basis=basis, closing=last, run_seconds=seconds
+            )
+        else:
+            printout = _printout.render_printout(
+                deck, answers[0], basis=basis, closing=last, run_seconds=seconds
+            )
+        printouts.append(printout)
+    return "".join(printouts)
 
 
 def run(
