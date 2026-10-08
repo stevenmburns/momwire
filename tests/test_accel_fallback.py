@@ -25,12 +25,18 @@ def _force_import_failure(monkeypatch):
     real (already-imported) module must be detached too. monkeypatch restores
     both after the test.
 
-    Since momwire#1032 there are THREE names to defeat, not one: `_load()`
-    walks a variant chain (`_avx2`, `_sse2`, then the unsuffixed legacy name),
-    so blanking only the historic name would leave the real variant loading and
-    this helper would quietly stop forcing anything.
+    Since momwire#1032 there are several names to defeat, not one: `_load()`
+    walks a variant chain (`_avx512` since momwire#1370, `_avx2`, `_sse2`, then
+    the unsuffixed legacy name), so blanking only the historic name would leave
+    the real variant loading and this helper would quietly stop forcing
+    anything.
     """
-    for name in ("_accelerators_avx2", "_accelerators_sse2", "_accelerators"):
+    for name in (
+        "_accelerators_avx512",
+        "_accelerators_avx2",
+        "_accelerators_sse2",
+        "_accelerators",
+    ):
         monkeypatch.setitem(sys.modules, f"momwire.{name}", None)
         monkeypatch.delattr(momwire, name, raising=False)
 
