@@ -36,11 +36,20 @@
 #include "_fma_inline.h"
 
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+// simdlen 8 under AVX-512: `_accel_common.h` has why (momwire#1370).
+#if defined(__AVX512F__)
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double exp(double);
+
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double sin(double);
+#else
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double sin(double);
+#endif
 #endif
 
 // MSVC's /openmp:llvm rejects `omp simd` (see `_accel_common.h`).

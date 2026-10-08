@@ -45,6 +45,17 @@ namespace py = pybind11;
 // The libmvec declarations and the MSVC `omp simd` neutralization, as in
 // `_near_interface_accel.cpp` (see there for why each exists).
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+// simdlen 8 under AVX-512: `_accel_common.h` has why (momwire#1370).
+#if defined(__AVX512F__)
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double exp(double);
+
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double cos(double);
+
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double sin(double);
+#else
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 
@@ -53,6 +64,7 @@ extern "C" double cos(double);
 
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double sin(double);
+#endif
 #endif
 
 #if defined(_MSC_VER)
