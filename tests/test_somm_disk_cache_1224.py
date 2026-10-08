@@ -151,6 +151,7 @@ def _cold_then_warm(tmp_path, decks):
     return _child(d, decks), _child(d, decks)
 
 
+@pytest.mark.slow
 def test_g1_a_warm_store_is_bit_identical_to_a_cold_fill(tmp_path):
     """The served deck (elevated monopole over a detached buried radial)
     reaches all three families in one solve."""

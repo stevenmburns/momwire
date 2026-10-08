@@ -211,6 +211,7 @@ def test_each_shared_node_is_filled_once_and_owned_by_the_low_band(
     )
 
 
+@pytest.mark.slow
 def test_the_floor_band_is_deferred_until_something_reaches_it():
     """A deck that reaches 0.07 deg pays nothing for the floor band."""
     g, eps_t, k2, om, lam_m = _grid("B", 7e6)

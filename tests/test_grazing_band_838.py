@@ -158,6 +158,7 @@ def test_the_band_divides_the_interval_exactly():
         assert g._regions[idx]["dth"] == math.radians(below._SOMM_BELOW_DTH_GRAZE_DEG)
 
 
+@pytest.mark.slow
 def test_theta_at_the_band_edge_routes_to_the_old_band():
     """The strict `<`, and why it has to be strict.
 
@@ -485,6 +486,7 @@ def test_the_far_zone_dtheta_divides_its_band_exactly():
         assert reg["th0"] == inner["th0"], (band, reg["th0"], inner["th0"])
 
 
+@pytest.mark.slow
 def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
     """R1 = r_near belongs to the NEAR zone, the way theta = 1 deg belongs to
     the old grazing band -- the same strict-inequality rule, on the other
@@ -545,6 +547,7 @@ def test_the_far_zone_seam_at_r_near_routes_the_old_domain_inward():
         assert abs(complex(got[k][0]) - complex(ref[k][0])) / scale < 1e-9
 
 
+@pytest.mark.slow
 def test_both_dispatches_agree_across_the_r_near_seam():
     """numpy and C++ carry two copies of the three-zone routing."""
     g, eps_t, k2, om, lam_m = _grid("A", 7e6)

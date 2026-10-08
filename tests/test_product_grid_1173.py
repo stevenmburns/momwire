@@ -646,6 +646,7 @@ def _bits(Z):
 @pytest.mark.parametrize(
     "nec5", [True, pytest.param(False, marks=pytest.mark.slow)], ids=["nec5", "default"]
 )
+@pytest.mark.slow
 def test_wa7ark_ground_rod_takes_the_below_grouped_product_to_the_bit(nec5):
     """The real-world deck: one short rod crossing the plane under a sloping
     antenna with above-side junctions. The above nodes are all distinct in

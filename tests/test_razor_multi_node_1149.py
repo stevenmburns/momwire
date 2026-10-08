@@ -216,6 +216,7 @@ def test_the_cross_node_blocks_are_symmetric_and_fall_with_separation():
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("lane", [True, False], ids=["2pt", "gl"])
 def test_eps_one_collapses_to_razors_free_space_fill(lane):
     """Measured 6.8e-13 on both lanes."""
@@ -232,6 +233,7 @@ def test_eps_one_collapses_to_razors_free_space_fill(lane):
     assert float(np.max(np.abs(Z1 - Zf)) / np.max(np.abs(Zf))) < 1e-9
 
 
+@pytest.mark.slow
 def test_reciprocity_decays_with_asymmetric_ports():
     """Above on rod 1, buried on rod 2: 4.05 / 3.95 measured."""
     xs = [nonrec(two(m)) for m in (1, 2, 4)]

@@ -41,6 +41,7 @@ def _make(lean=False):
     return lambda: _razor(invl_deck(16 if lean else 4, x=1, lean=lean))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("lean", [False, pytest.param(True, marks=pytest.mark.slow)])
 def test_many_groups_take_the_fast_ends_to_the_bit(lean):
     """inverted-L x1: the reversed block has 97 groups (161 leaning over

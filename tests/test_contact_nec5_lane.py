@@ -233,6 +233,7 @@ _DECAY_FINEST = {
 }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("geom,ground", sorted(_DECAY_FINEST))
 def test_contact_lane_decays_on_the_high_eps_grounds(geom, ground):
     """Sea water and very good ground: momwire's contact answer CONVERGES

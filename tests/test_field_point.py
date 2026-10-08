@@ -428,6 +428,7 @@ def _worst(cid, *, sign=1.0):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("cid", sorted(NEAR_POINT_BAR))
 def test_the_composed_point_field_sits_inside_its_measured_envelope(cid):
     """Every live cell of the composition, magnitude and phase, against the

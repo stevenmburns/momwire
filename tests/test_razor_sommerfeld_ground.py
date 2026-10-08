@@ -585,6 +585,7 @@ def test_the_grazing_key_raises_the_order_where_the_spike_is():
     assert _remainder_qp(obs, seg[:-1], seg[1:], 0.0, 3) == _REMAINDER_QP_CAP
 
 
+@pytest.mark.slow
 def test_a_grazing_wire_is_converged_in_the_remainder_order():
     """The physics gate, and it needs no binary — which is the point.
 

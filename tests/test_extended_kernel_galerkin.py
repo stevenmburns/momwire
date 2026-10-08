@@ -2228,6 +2228,7 @@ def _gs1_cost(monkeypatch, deck, eps, n_phi=_GS1_NPHI, radius=None):
     return abs(z_tube - z_axis) / abs(z_axis)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("eps", list(_S_EPS))
 @pytest.mark.parametrize("deck", list(_S_DECKS))
 def test_gs1_reduced_sommerfeld_remainder_is_negligible(monkeypatch, deck, eps):
@@ -3752,6 +3753,7 @@ _GD9D_PAYLOADS = {
 }
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("payload", list(_GD9D_PAYLOADS))
 def test_gd9d_the_field_kernel_ignores_its_batch_shape(payload):
     """The same pairs, cut into blocks of 1 … 256, give the same tables — bit

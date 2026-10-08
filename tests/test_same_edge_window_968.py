@@ -340,6 +340,7 @@ def test_windowing_did_not_disturb_an_ordinary_deck(name, degree):
     )
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("degree", [1, 2])
 def test_the_long_wire_stays_inside_its_reassociation_bound(degree):
     n, mem = 1200, 4

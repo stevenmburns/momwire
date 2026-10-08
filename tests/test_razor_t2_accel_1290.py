@@ -236,6 +236,7 @@ def _solved_fill(monkeypatch, deck, *, accel, lane):
 LANES = {"nec5": {"nec5_quadrature": True}, "gauss-legendre": {}}
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("lane", sorted(LANES))
 @pytest.mark.parametrize("name", sorted(DECKS))
 def test_the_fill_is_the_numpy_routes(monkeypatch, name, lane):

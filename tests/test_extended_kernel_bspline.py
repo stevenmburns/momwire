@@ -2200,6 +2200,7 @@ def _g16_score(deck, ground):
     return ratio, d_bsp, d_sin
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("deck,ground", _G16_CASES)
 def test_g16_finite_ground_shift_matches_sinusoidal(deck, ground):
     score, d_bsp, d_sin = _g16_score(deck, ground)
@@ -2233,6 +2234,7 @@ _G16B_TOL = 0.03
 _G16B_TOL_CONTACT = 0.15
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("deck,ground", _G16_CASES)
 def test_g16b_finite_ground_does_not_move_the_pec_mismatch(deck, ground):
     mm_g = _g16_score(deck, ground)[0]
@@ -2360,6 +2362,7 @@ def test_g16c_the_contact_oracle_converges_on_both_kernels():
 _G17_TOL = 1e-6
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("leaf_size,want_far", [(32, False), (4, True)])
 @pytest.mark.parametrize("ground", _G16_FINITE)
 def test_g17_hmatrix_agrees_with_the_dense_path_over_finite_ground(
