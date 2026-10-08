@@ -358,7 +358,7 @@ import scipy.sparse
 import scipy.spatial.distance
 
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
-from . import _medium_spec, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
+from . import _medium_spec, _schedule, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
 from . import _wire_loading, _wire_spec
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups_coaxial
@@ -5199,9 +5199,12 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             int(self._band_budget_bytes(n_basis) // per_seg),
         )
         if align:
+            # The round-UP stays in this step rule, not in the walk
+            # (momwire#1337 phase 2): sinusoidal's remainder rounds DOWN.
             step = -(-step // int(align)) * int(align)
-        for m0 in range(0, N, step):
-            m1 = min(m0 + step, N)
+        # No checkpoint in the walk: the consumers take one per NON-EMPTY
+        # band, after skipping an empty one, as they always did.
+        for m0, m1 in _schedule.chunks([(0, N)], step):
             yield m0, m1, int(starts[m0]), nnz if m1 == N else int(starts[m1])
 
     def _band_rows(self, ctx, G):
@@ -5730,8 +5733,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # `G − ½(C + Cᵀ)` is elementwise, so the bands are the same bits.
         mats = self._bracket_coef_mats(ctx, cols, col_of)
         step = max(1, self._band_budget_bytes(n_basis) // (16 * 6 * n_basis))
-        for i0 in range(0, n_basis, step):
-            i1 = min(i0 + step, n_basis)
+        # No checkpoint per row band, as before (momwire#1337 phase 2).
+        for i0, i1 in _schedule.chunks([(0, n_basis)], step):
             c_rows = sum(t[i0:i1] @ M for t, M in zip(T, mats))
             c_cols = sum(t @ M[:, i0:i1] for t, M in zip(T, mats))
             G[i0:i1] -= 0.5 * (c_rows + c_cols.T)

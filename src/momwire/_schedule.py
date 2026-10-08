@@ -45,15 +45,21 @@ groups, raise on a partial one) and the dense-threshold one-chunk override
 stay in the trunk's step rule; that remainder replay walks observers over a
 per-fill source dict, not `prepare` / `replay`'s window list.
 
-Not yet on it (phase 2 of momwire#1337): SG's default fill now walks
-`_sinusoidal_mp.WindowFill`, which is `chunks`, while its direct fill's
-`_segment_bands` rounds a band up to whole numpy-fill blocks (``align=``),
-one argument `chunks` lacks. hmatrix does NOT fit `sweep`: its blocks are
-a cluster partition over basis index sets, chosen by admissibility, and its
-far blocks are filled by ACA one row or column at a time on demand. It can
-take `walk` for its block loops; the partition and ACA stay its own
-schedule, and `zblock(I, J)` stays the general block this module's
-contiguous block is a case of.
+SG is on it too (phase 2 of momwire#1337): its default mixed-potential
+fill's observer windows (`_sinusoidal_mp.WindowFill.accumulate`) are
+`chunks`, as are the direct fill's test-segment bands (`_segment_bands`,
+which both banded fills walk) and the extended-kernel bracket's row bands.
+`_segment_bands` rounds a band UP to whole numpy-fill blocks (its
+``align=``) in its own step rule -- the opposite direction to sinusoidal's
+`row_group`, which is why neither rounding is an argument of `chunks` --
+and its consumers keep their checkpoint, which skips an empty band.
+
+Not yet on it (phase 2 of momwire#1337): hmatrix does NOT fit `sweep`: its
+blocks are a cluster partition over basis index sets, chosen by
+admissibility, and its far blocks are filled by ACA one row or column at a
+time on demand. It can take `walk` for its block loops; the partition and
+ACA stay its own schedule, and `zblock(I, J)` stays the general block this
+module's contiguous block is a case of.
 
 `STATS` counts what the walks did, so a gate can prove a fill came through
 here rather than through a path that no longer exists (the green-gate trap).

@@ -32,10 +32,17 @@ import warnings
 import numpy as np
 import pytest
 
+from momwire import _schedule
 from momwire import sinusoidal_galerkin as sg
-from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
-from test_sg_fused_banded_fill_1224 import _bands_every, dipole, ell
+from test_sg_fused_banded_fill_1224 import (
+    dipole,
+    ell,
+    force_bands,
+    logged_chunks,
+    record_walks,
+    segment_walks,
+)
 from test_sg_ordered_scatter_1290 import _case
 
 
@@ -197,13 +204,18 @@ DECKS = {
 
 def _solve(name, monkeypatch, accel, step):
     with monkeypatch.context() as m:
-        m.setattr(sg, "_BAND_MIN_SEGMENTS", 1)
-        m.setattr(SinusoidalGalerkinSolver, "_segment_bands", _bands_every(step))
+        # The step through the production step rule, which walks the
+        # schedule layer (momwire#1337): not a test-built `_segment_bands`.
+        force_bands(m, step)
+        log = record_walks(m)
         m.setattr(sg, "_ROW_SCATTER_ACCEL", accel)
         counts = _counting(m)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             z, cur = DECKS[name]().compute_impedance()
+        assert _schedule.STATS["chunks"] == logged_chunks(log)
+    (walk,) = segment_walks(log)
+    assert len(walk) > 1 and all(i1 - i0 == step for i0, i1 in walk[:-1]), walk
     return np.asarray(z), np.concatenate([np.ravel(c) for c in cur]), counts
 
 

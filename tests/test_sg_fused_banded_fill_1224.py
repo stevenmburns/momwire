@@ -60,6 +60,7 @@ from test_junction_ports import _port_pair_solver
 from test_mixed_fill_fused_1224 import detached_hub_deck
 from test_sg_mixed_sign_1159 import mixed
 
+from momwire import _schedule
 from momwire import sinusoidal_galerkin as sg
 from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
 
@@ -151,17 +152,76 @@ _COUNTED = (
 )
 
 
-def _bands_every(step):
-    """`_segment_bands` at a fixed `step` test segments a band."""
+def force_bands(m, step, *, unaligned=False):
+    """`step` test segments a band, asked for through the PRODUCTION step
+    rule (`_segment_bands`, which walks `_schedule.chunks`): the band budget
+    is zeroed, so the rule's floor `_BAND_MIN_SEGMENTS` is the step. A band
+    on the numpy far fill is still rounded up to that loop's blocks, as in
+    production, unless `unaligned` drops the rounding (the red control).
 
-    def bands(self, ctx, n_basis, n_cols, n_triples, align=None):
-        starts = np.asarray(ctx["starts"])
-        n, nnz = int(ctx["N"]), int(np.asarray(ctx["w_entry"]).shape[0])
-        for m0 in range(0, n, step):
-            m1 = min(m0 + step, n)
-            yield m0, m1, int(starts[m0]), nnz if m1 == n else int(starts[m1])
+    Replacing `_segment_bands` with a test-built generator, as this helper
+    once did, would bypass the schedule layer the method now walks, and the
+    gates riding on it would stay green whatever the layer did
+    (momwire#1337 phase 2). The zero budget also bands the extended
+    kernel's end bracket one basis row at a time."""
+    m.setattr(sg, "_BAND_MIN_SEGMENTS", step)
+    m.setattr(SinusoidalGalerkinSolver, "_band_budget_bytes", lambda self, n: 0)
+    if unaligned:
+        real = SinusoidalGalerkinSolver._segment_bands
 
-    return bands
+        def bands(self, ctx, n_basis, n_cols, n_triples, align=None):
+            return real(self, ctx, n_basis, n_cols, n_triples, align=None)
+
+        m.setattr(SinusoidalGalerkinSolver, "_segment_bands", bands)
+
+
+class Walked:
+    """One `_schedule.chunks` walk as `record_walks` saw it: the function
+    that iterated it (`by`), its arguments, the chunks it yielded, and how
+    many checkpoints the walk itself called."""
+
+    __slots__ = ("by", "spans", "chunk", "has_checkpoint", "got", "checkpoints")
+
+    def __init__(self, by, spans, chunk, has_checkpoint):
+        self.by, self.spans, self.chunk = by, list(spans), chunk
+        self.has_checkpoint = has_checkpoint
+        self.got, self.checkpoints = [], 0
+
+
+def record_walks(m):
+    """Log every `_schedule.chunks` walk (`Walked`) and reset
+    `_schedule.STATS`. The real walk runs underneath, and counts."""
+    log = []
+    real = _schedule.chunks
+
+    def chunks(spans, chunk, checkpoint=None):
+        # The generator's body first runs inside the loop that iterates it,
+        # so the caller's frame names the walker.
+        w = Walked(
+            sys._getframe(1).f_code.co_name, spans, chunk, checkpoint is not None
+        )
+        log.append(w)
+
+        def tally():
+            w.checkpoints += 1
+            checkpoint()
+
+        for c in real(spans, chunk, None if checkpoint is None else tally):
+            w.got.append(c)
+            yield c
+
+    m.setattr(_schedule, "chunks", chunks)
+    _schedule.reset_stats()
+    return log
+
+
+def logged_chunks(log):
+    return sum(len(w.got) for w in log)
+
+
+def segment_walks(log):
+    """The bands `_segment_bands` walked on the layer, one list per fill."""
+    return [w.got for w in log if w.by == "_segment_bands"]
 
 
 def _assemble(
@@ -172,11 +232,15 @@ def _assemble(
     step=None,
     scatter=None,
     fallback=None,
+    unaligned=False,
 ):
     """G through the production seam (`_assemble_Z_ported`, which every
-    solve calls), plus how often each fill branch ran. `budget` is the band
-    budget (it also bands the end bracket's C); `step` overrides the bands
-    with a fixed number of test segments each. `fallback` takes a path the
+    solve calls), plus how often each fill branch ran and the bands the
+    fill walked on the schedule layer (`counts["walks"]`, `force_bands`).
+    `budget` is the band budget (it also bands the end bracket's C); `step`
+    forces a number of test segments a band through the production step
+    rule instead (`force_bands`; `unaligned` drops its numpy-block rounding,
+    for the red control). `fallback` takes a path the
     shipped build does not: "whole-plane-class" refuses the class-restricted
     fill (a mixed class is then filled against the whole source list and its
     quadrant cut out, per band), "numpy" hides the fused C++ far fill."""
@@ -191,8 +255,6 @@ def _assemble(
         # The budget decides the bands here, on decks a few hundred segments
         # long, so the production floor of 64 segments a band is lifted.
         m.setattr(sg, "_BAND_MIN_SEGMENTS", 1)
-        if step is not None:
-            m.setattr(SinusoidalGalerkinSolver, "_segment_bands", _bands_every(step))
         for meth in _COUNTED:
             real = getattr(SinusoidalGalerkinSolver, meth)
 
@@ -206,6 +268,9 @@ def _assemble(
         m.setattr(
             SinusoidalGalerkinSolver, "_band_budget_bytes", lambda self, n_basis: budget
         )
+        if step is not None:
+            force_bands(m, step, unaligned=unaligned)
+        log = record_walks(m)
         if whole:
             m.setattr(
                 SinusoidalGalerkinSolver, "_band_fill_serves", lambda self, n: False
@@ -216,6 +281,10 @@ def _assemble(
             geom = s._build_geometry()
             with s._operating_medium(geom) as medium:
                 G = s._assemble_Z_ported(geom, s.k, s._medium_eta(medium))[0]
+        # Every chunk the layer counted was a walk logged here, so the bands
+        # below are what the fill walked through `_schedule`.
+        assert _schedule.STATS["chunks"] == logged_chunks(log)
+    counts["walks"] = segment_walks(log)
     return np.array(G, copy=True), counts
 
 
@@ -243,6 +312,11 @@ def test_banded_fill_is_bit_equal_to_the_whole_triple_fill(name, step, monkeypat
     assert counts["_scatter_band"] >= 3, counts
     assert counts["_scatter_coef_product"] == 0, counts
     assert counts_ref["_scatter_band"] == 0 and counts_ref["_scatter_coef_product"] == 1
+    # ... and its bands were the schedule layer's walk (momwire#1337): one
+    # walk over every test segment, a band per scatter (no band is empty
+    # on these decks), `step` segments a band where forced.
+    _assert_walked_the_layer(counts, step)
+    assert counts_ref["walks"] == []
     if name == "ek-ell":
         # The end bracket fired, and took its row bands.
         assert counts["_bracket_coef_mats"] >= 1, counts
@@ -269,10 +343,19 @@ def test_the_fallback_fills_band_too(name, fallback, monkeypatch):
     _numpy_blocks_of(8, name, monkeypatch)
     G, counts = _assemble(name, monkeypatch, whole=False, fallback=fallback)
     G_ref, _ = _assemble(name, monkeypatch, whole=True, fallback=fallback)
-    assert counts["_scatter_band"] >= 3, counts
+    _assert_walked_the_layer(counts)
     assert np.array_equal(G, G_ref), (
         f"{name}/{fallback}: {int((G != G_ref).sum())} of {G.size} cells differ"
     )
+
+
+def _assert_walked_the_layer(counts, step=None):
+    (walk,) = counts["walks"]
+    assert walk[0][0] == 0 and all(a[1] == b[0] for a, b in zip(walk, walk[1:]))
+    assert len(walk) == counts["_scatter_band"] >= 3, (walk, counts)
+    if step is not None:
+        heights = {i1 - i0 for i0, i1 in walk[:-1]}
+        assert len(heights) == 1 and heights.pop() % step == 0, walk
 
 
 def test_numpy_bands_must_align_to_the_numpy_blocks(monkeypatch):
@@ -281,9 +364,17 @@ def test_numpy_bands_must_align_to_the_numpy_blocks(monkeypatch):
     boundary, so bands of 3 segments — the whole fill takes this deck's 80
     segments in ONE block, above the boundary, and 3-segment bands sit below
     it — are NOT the whole fill's bits. (The aligned bands are, above.)"""
-    G, _ = _assemble(
-        "mixed-detached", monkeypatch, whole=False, step=3, fallback="numpy"
+    G, counts = _assemble(
+        "mixed-detached",
+        monkeypatch,
+        whole=False,
+        step=3,
+        fallback="numpy",
+        unaligned=True,
     )
+    # The production walk, with only the alignment taken out.
+    (walk,) = counts["walks"]
+    assert len(walk) > 1 and walk[0] == (0, 3), walk
     G_ref, _ = _assemble("mixed-detached", monkeypatch, whole=True, fallback="numpy")
     assert np.allclose(G, G_ref, rtol=0.0, atol=1e-12 * np.abs(G_ref).max())
     if np.array_equal(G, G_ref):
