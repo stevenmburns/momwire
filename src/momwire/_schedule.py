@@ -10,12 +10,11 @@ the solve may be cancelled -- and it never reads a moment, a weight or a
 wavenumber. The formulation hands it callbacks; it calls them.
 
 **The unit of work is a block**: observer rows ``[i0, i1)`` against source
-columns ``[j0, j1)`` at one chunk of the k axis -- §F's ``zblock(I, J)``, so
-an H-matrix's block evaluator can sit behind the same walk that a dense
-fill's windows do. The three axes are the interface: `sweep` walks observer
-chunks x source blocks, `k_chunks` walks the k axis, and `prepare` /
-`replay` split a fill into the half that does not depend on k and the half
-that does.
+columns ``[j0, j1)`` at one chunk of the k axis -- the contiguous case of
+§F's ``zblock(I, J)``. The three axes are the interface: `sweep` walks
+observer chunks x source blocks (and `walk` a list of blocks), `k_chunks`
+walks the k axis, and `prepare` / `replay` split a fill into the half that
+does not depend on k and the half that does.
 
 **The schedule moves no float.** Every walk here is the loop it replaced:
 the same chunk boundaries, in the same order, with the checkpoints at the
@@ -33,36 +32,39 @@ and #347 enforced with ``del`` at every rebind, now a property of the walk.
 A callback that releases a buffer EARLY (before an assembler call, so the
 call's own transient does not ride on top of it) still says so.
 
-**Cancellation (#1342)**: `chunks`, `sweep`, `diagonal`, `k_chunks` and
-`replay` call the solver's ``checkpoint`` once per chunk, edge, k-chunk or
+**Cancellation (#1342)**: `chunks`, `sweep`, `walk`, `k_chunks` and
+`replay` call the solver's ``checkpoint`` once per chunk, block, k-chunk or
 replayed window -- exactly where the per-solver loops called it.
 
 How the trunks not yet on it plug in (phase 2 of momwire#1337):
 
-* **hmatrix** (`build_hmatrix`, `_offedge_block_evaluators*`). Its blocks are
-  admissible-cluster pairs, not observer chunks x source runs, so it does
-  not use `sweep`. It uses this module the other way round: the cluster
-  tree is a list of ``(I, J)`` blocks the H-matrix chooses, and each block
-  evaluation is a B-spline fill restricted to rows I and columns J. That is
-  `ObserverRows` (rows I as contiguous runs) plus a `sweep` with
-  ``sources=`` the runs of J -- i.e. ``zblock(I, J)`` built from this
-  layer's walk over the formulation's callbacks. The interface takes it;
-  what it needs first is the B-spline windowed assembler writing an
-  ``(|I|, |J|)`` compact target, which `ObserverRows`' ``row_of`` already is
-  on the row axis and nothing yet is on the column axis.
-* **sinusoidal** (its band fill). Whole-row bands sized by a byte budget
-  (`_fill_row_bytes` against `swept_mem_mb`), a sparse-M matmul per band,
-  a checkpoint per band and a Sommerfeld remainder replayed per band:
-  `mb_rows` + `sweep` with one source block, and the replay is
-  `prepare`/`replay` over the bands. What does NOT fit as written is its
-  band ALIGNMENT -- a band boundary there is moved to a basis boundary
-  (``align=``), which `chunks` does not do. That is one more argument to
-  `chunks` (a snap-to callback), not a different interface.
-* **SG** is not a separate copy any more: momwire#1354 moved its default
-  fill onto the B-spline kernel (`_sinusoidal_mp.WindowFill`), whose
-  observer-window loop is a sixth spelling of `sweep` and the cheapest of
-  the three to migrate. Its direct field fill (`fill="direct"`) keeps the
-  band layout `_segment_bands` gives it.
+* **sinusoidal** (`SinusoidalSolver._assemble_Z`'s observer bands). Rows per
+  band from `_fill_row_bytes` against `swept_mem_mb`, the whole fill as one
+  band below `_DENSE_ASSEMBLY_THRESHOLD` (a dense zgemm's blocking follows
+  the row count there), one checkpoint per band, and the Sommerfeld
+  remainder's source side built once and replayed per band. That is
+  `mb_rows` + `chunks` (the threshold rule stays the formulation's: it
+  passes the chunk), and the remainder is `prepare` / `replay`. Fits as is.
+* **SG** is no longer the copy the issue counted: momwire#1354 moved its
+  default fill onto the B-spline kernel, and the loop it walks now,
+  `_sinusoidal_mp.WindowFill.accumulate`, is `chunks` with a checkpoint per
+  window -- a sixth spelling, and the cheapest to migrate. Its direct field
+  fill keeps `_segment_bands`, whose ``align=`` rounds a band UP to whole
+  numpy-fill blocks because that fill's per-entry values move with its
+  block height on a complex k. `chunks` cannot express that rounding;
+  it is one argument (a step that is a multiple of `align`), not a
+  different interface.
+* **hmatrix** does NOT fit `sweep`, and that is a finding rather than a
+  gap. Its blocks are the cluster partition's ``(I, J)`` pairs over BASIS
+  index sets, chosen by geometry (admissibility), not by a byte budget, and
+  its far blocks are filled adaptively by partial-pivoted ACA, one row or
+  column at a time on demand -- a schedule the formulation's compression
+  decides, which no up-front walk can own. What it takes from here is
+  `walk` (its near and far loops are checkpointed walks over a block list)
+  and, for #1251-style restriction, nothing new. `zblock(I, J)` stays the
+  block evaluator §F names; this module's block is its contiguous special
+  case, and the H-matrix's is the general one. The interface reaches
+  ``zblock`` through `walk`, not the reverse.
 
 `STATS` counts what the walks did, so a gate can prove a fill came through
 here rather than through a path that no longer exists (the green-gate trap).
@@ -76,7 +78,7 @@ STATS = {
     "sweeps": 0,
     "chunks": 0,
     "blocks": 0,
-    "edges": 0,
+    "walked": 0,
     "k_chunks": 0,
     "prepares": 0,
     "replays": 0,
@@ -169,18 +171,19 @@ def sweep(spans, chunk, block, *, sources, checkpoint=None, restrict=None):
     return n
 
 
-def diagonal(edges, fix, *, checkpoint=None, keep=None):
-    """Call ``fix(*edge)`` for each entry of `edges` that `keep` (if given)
-    accepts, with a checkpoint before each: the per-edge correction pass
-    (same-edge, near-image) that follows a sweep. `keep` may raise -- a
-    restriction that covers part of an edge refuses rather than skips."""
-    for edge in edges:
-        if keep is not None and not keep(edge):
+def walk(blocks, fill, *, checkpoint=None, keep=None):
+    """Call ``fill(*block)`` for each entry of `blocks` that `keep` (if
+    given) accepts, with a checkpoint before each: a fill whose blocks are a
+    list rather than a grid -- the per-edge correction passes (same-edge,
+    near-image) that follow a sweep. `keep` may raise: a restriction that
+    covers part of an edge refuses rather than skips."""
+    for block in blocks:
+        if keep is not None and not keep(block):
             continue
         if checkpoint is not None:
             checkpoint()
-        STATS["edges"] += 1
-        fix(*edge)
+        STATS["walked"] += 1
+        fill(*block)
 
 
 def k_chunks(n_k, chunk, checkpoint=None):

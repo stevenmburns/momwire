@@ -4715,7 +4715,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # One checkpoint per same-edge block. An unrequested edge writes only
         # its own wire's rows, so a restricted fill skips it whole.
-        _schedule.diagonal(
+        _schedule.walk(
             entries,
             _fix_edge,
             checkpoint=self._checkpoint,
@@ -4913,7 +4913,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
 
         # An unrequested edge writes only its own wire's rows.
-        _schedule.diagonal(
+        _schedule.walk(
             self._near_image_edge_blocks(geom),
             _fix_image_edge,
             checkpoint=self._checkpoint,
@@ -6740,7 +6740,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         # The same-edge correction is a DIAGONAL block, so it is written only
         # where the wire is on both axes (momwire#1029).
-        _schedule.diagonal(
+        _schedule.walk(
             self._edge_ingredients(geom),
             _fix_edge,
             checkpoint=self._checkpoint,
