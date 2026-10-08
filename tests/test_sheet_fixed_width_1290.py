@@ -33,7 +33,7 @@ from momwire import _near_interface as ni
 from momwire._near_interface import k_medium
 
 from test_crossing_serve_524 import SOIL_A, WL7
-from _lane_gate import assert_lanes_match
+from _lane_gate import VECTOR_VARIANTS, assert_lanes_match
 
 K_P = 2.0 * np.pi / WL7
 EPS_T = complex(
@@ -121,7 +121,7 @@ def test_the_avx2_build_has_the_fixed_route():
     """The gate below compares two routes only where the fixed one is built;
     on the AVX2 variant it must be, or the comparison is the generic loop
     against itself."""
-    if _accel.VARIANT == "avx2":
+    if _accel.VARIANT in VECTOR_VARIANTS:
         assert ni._nia.grid_sheet_fixed_1290 is True
 
 

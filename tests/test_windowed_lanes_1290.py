@@ -36,7 +36,7 @@ import pytest
 
 from momwire import _accel
 from momwire import bspline as B
-from _lane_gate import assert_lanes_match
+from _lane_gate import VECTOR_VARIANTS, assert_lanes_match
 
 acc = B._acc
 
@@ -58,7 +58,7 @@ def test_the_lane_kernel_is_compiled_into_the_avx2_variant():
     assert hasattr(acc, "windowed_lanes_1290"), (
         "the .so predates momwire#1290: rebuild (`make build`)"
     )
-    if _accel.VARIANT == "avx2":
+    if _accel.VARIANT in VECTOR_VARIANTS:
         assert acc.windowed_lanes_1290
 
 
