@@ -16,10 +16,14 @@
 //
 // BACKENDS, chosen once here:
 //   avx2      W = 4, __m256d. GCC/clang with -mavx2 -mfma (the `_avx2`
-//             variant). The reference: the kernels were written against it.
+//             variant), and the `_avx512` variant too (momwire#1370 level 1):
+//             its AVX-512 flags define __AVX2__ and __FMA__ as well, and with
+//             MW_LANES_ENABLE_AVX512 unset this is the branch it takes. The
+//             reference: the kernels were written against it.
 //   avx512    W = 8, __m512d with __mmask8 masks. NOT switched on: it is
 //             selected only under MW_LANES_ENABLE_AVX512, which no build sets
-//             (momwire#1370 adds the variant and the dispatch).
+//             (the `_avx512` variant exists since #1370; 8-wide lanes are its
+//             level 2).
 //   portable  W = MW_LANES_PORTABLE_WIDTH (default 1, i.e. scalar), plain
 //             arrays and std:: math. Selected by MW_LANES_FORCE_PORTABLE; the
 //             walk-shaped reference a kernel can be instantiated at, and how
