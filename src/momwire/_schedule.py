@@ -36,16 +36,24 @@ call's own transient does not ride on top of it) still says so.
 `replay` call the solver's ``checkpoint`` once per chunk, block, k-chunk or
 replayed window -- exactly where the per-solver loops called it.
 
-Not yet on it (phase 2 of momwire#1337): sinusoidal's observer bands are
-`mb_rows` + `chunks` with its remainder as `prepare` / `replay`, and fit as
-they are; SG's default fill now walks `_sinusoidal_mp.WindowFill`, which is
-`chunks`, while its direct fill's `_segment_bands` rounds a band up to whole
-numpy-fill blocks (``align=``), one argument `chunks` lacks. hmatrix does
-NOT fit `sweep`: its blocks are a cluster partition over basis index sets,
-chosen by admissibility, and its far blocks are filled by ACA one row or
-column at a time on demand. It can take `walk` for its block loops; the
-partition and ACA stay its own schedule, and `zblock(I, J)` stays the
-general block this module's contiguous block is a case of.
+Sinusoidal is on it (phase 2 of momwire#1337): its single-medium fill's
+observer bands are `mb_rows` + `chunks`, a mixed deck's class bands are
+`chunks` over `runs` of the class (the fused Z bands are `chunks` inside
+each, with no checkpoint), and the Sommerfeld remainder's observer replay
+is `elem_rows` + `chunks`. Its `row_group` alignment (round DOWN to whole
+groups, raise on a partial one) and the dense-threshold one-chunk override
+stay in the trunk's step rule; that remainder replay walks observers over a
+per-fill source dict, not `prepare` / `replay`'s window list.
+
+Not yet on it (phase 2 of momwire#1337): SG's default fill now walks
+`_sinusoidal_mp.WindowFill`, which is `chunks`, while its direct fill's
+`_segment_bands` rounds a band up to whole numpy-fill blocks (``align=``),
+one argument `chunks` lacks. hmatrix does NOT fit `sweep`: its blocks are
+a cluster partition over basis index sets, chosen by admissibility, and its
+far blocks are filled by ACA one row or column at a time on demand. It can
+take `walk` for its block loops; the partition and ACA stay its own
+schedule, and `zblock(I, J)` stays the general block this module's
+contiguous block is a case of.
 
 `STATS` counts what the walks did, so a gate can prove a fill came through
 here rather than through a path that no longer exists (the green-gate trap).
