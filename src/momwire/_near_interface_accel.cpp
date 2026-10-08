@@ -104,6 +104,17 @@ namespace py = pybind11;
 // libmvec and would choke on redeclaring the CRT's exp/sin/cos, and macOS
 // has neither libmvec nor the AVX2 simdlen(4) form.
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+// simdlen 8 under AVX-512: `_accel_common.h` has why (momwire#1370).
+#if defined(__AVX512F__)
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double exp(double);
+
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double cos(double);
+
+#pragma omp declare simd notinbranch simdlen(8)
+extern "C" double sin(double);
+#else
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 
@@ -112,6 +123,7 @@ extern "C" double cos(double);
 
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double sin(double);
+#endif
 #endif
 
 // `omp simd` neutralization for MSVC, whose /openmp:llvm rejects the
