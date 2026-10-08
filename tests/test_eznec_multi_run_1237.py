@@ -123,3 +123,69 @@ def test_a_later_block_that_changes_more_than_its_sources_is_refused(card):
     out = render(text, basis=TWIN)
     assert "NEC ERROR" in out
     assert "XQ block 2 carries " + card[:2] in out
+
+
+# momwire#1395: the runs share one fill and factorisation. SimNEC's runs drive
+# the same sites with different values, so each later run is only its own
+# drive and tables, as in the licensed engine. The gates: the printout is the
+# one a fresh solve per run gives, the structure is prepared once per group,
+# and a run that drives other sites is prepared on its own.
+
+
+def _per_run(monkeypatch):
+    """`render` as it was before #1395: every run solved from scratch."""
+    monkeypatch.setattr(
+        _serve,
+        "serve_runs",
+        lambda decks, basis=_serve.BASIS: [_serve.serve(d, basis=basis) for d in decks],
+    )
+
+
+def _without_times(text):
+    return [ln for ln in text.splitlines() if "TIME" not in ln.upper()]
+
+
+@pytest.mark.parametrize("basis", [_serve.BASIS, TWIN])
+@pytest.mark.parametrize("name", DECKS)
+def test_shared_runs_print_what_fresh_solves_print(name, basis, monkeypatch):
+    shared = render(_deck(name), basis=basis)
+    _per_run(monkeypatch)
+    fresh = render(_deck(name), basis=basis)
+    assert _without_times(shared) == _without_times(fresh)
+
+
+def _count_prepares(monkeypatch):
+    calls = []
+    real = _serve._prepare
+
+    def counting(deck, **kwargs):
+        calls.append(deck)
+        return real(deck, **kwargs)
+
+    monkeypatch.setattr(_serve, "_prepare", counting)
+    return calls
+
+
+@pytest.mark.parametrize("name", DECKS)
+def test_the_structure_is_prepared_once_per_group(name, monkeypatch):
+    calls = _count_prepares(monkeypatch)
+    out = render(_deck(name), basis=TWIN)
+    assert "NEC ERROR" not in out
+    assert len(calls) == 1
+
+
+def test_a_run_on_other_sites_is_prepared_on_its_own(monkeypatch):
+    """Block 2 drives segment 10 instead of 11: a different port set, so it
+    cannot share block 1's solution, and it prints what a fresh solve does."""
+    text = _deck("two-port")
+    head, second = text.split("XQ\n", 1)
+    second = second.replace("EX 0 1 11 0", "EX 0 1 10 0").replace(
+        "EX 0 2 11 0", "EX 0 2 10 0"
+    )
+    text = head + "XQ\n" + second
+    calls = _count_prepares(monkeypatch)
+    shared = render(text, basis=TWIN)
+    assert len(calls) == 2
+    monkeypatch.undo()
+    _per_run(monkeypatch)
+    assert _without_times(shared) == _without_times(render(text, basis=TWIN))

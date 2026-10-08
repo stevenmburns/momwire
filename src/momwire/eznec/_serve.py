@@ -4342,6 +4342,63 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     here too, by name, through the same channel — a printout that says which
     basis could not do what is worth more than a traceback EZNEC discards.
     """
+    return _finish(deck, _prepare(deck, basis=basis))
+
+
+def serve_runs(decks: list[Nec5Deck], *, basis: str = BASIS) -> list[RunData]:
+    """Solve a multi-run deck's runs (:func:`split_runs`), sharing one fill and
+    factorisation across them (momwire#1395).
+
+    :func:`split_runs` guarantees every run carries the first block's
+    structure, ground, loads and frequency; the runs differ only in their
+    source values and requests. SimNEC writes exactly that: one run per port,
+    1 V there and 1e-10 V on the others, so every run drives the SAME sites.
+    Those runs reuse the first run's prepared port solution, and each costs
+    only its own drive and tables, as a run does in the licensed engine
+    (measured: each extra run there costs about a tenth of the first).
+
+    A run whose sources sit on a different set of sites would be meshed and
+    ported differently, so it is served on its own; its answer is then
+    exactly what :func:`serve` gives, as is every shared run's.
+    """
+    answers: list[RunData] = []
+    prepared: _Prepared | None = None
+    for deck in decks:
+        # Every run is refused or served on its own cards, shared or not: a
+        # later run's request (an RP range, say) is checked as it always was.
+        reason = refusal(deck)
+        if reason is not None:
+            raise ServeRefusal(reason)
+        sites = frozenset(source.at for source in deck.sources)
+        if prepared is None or sites != prepared.source_sites:
+            prepared = _prepare(deck, basis=basis)
+        answers.append(_finish(deck, prepared))
+    return answers
+
+
+@dataclass
+class _Prepared:
+    """What a run needs from its structure: the solved solver and its port
+    solution, with the mesh and stamped sites they were built on. Everything
+    here depends on the structure, ground, loads, frequency and WHICH sites
+    carry sources, never on the source values (momwire#1395)."""
+
+    structure: Structure
+    mesh: _Mesh
+    by_address: dict
+    cards: tuple
+    frequency: float
+    wavelength: float
+    omega: float
+    medium: GroundMedium | None
+    solver: object
+    solution: object
+    source_sites: frozenset
+
+
+def _prepare(deck: Nec5Deck, *, basis: str = BASIS) -> _Prepared:
+    """The structure half of :func:`serve`: refusals, mesh, fill, factor and
+    the per-port solution."""
     reason = refusal(deck)
     if reason is not None:
         raise ServeRefusal(reason)
@@ -4436,6 +4493,34 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
         # an INTERNAL ERROR frame (momwire#667).
         raise ServeRefusal(str(exc)) from None
     solution = solver.compute_port_solution()
+    return _Prepared(
+        structure=structure,
+        mesh=mesh,
+        by_address=by_address,
+        cards=cards,
+        frequency=frequency,
+        wavelength=wavelength,
+        omega=omega,
+        medium=medium,
+        solver=solver,
+        solution=solution,
+        source_sites=frozenset(source.at for source in deck.sources),
+    )
+
+
+def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
+    """The run half of :func:`serve`: this deck's sources driven through the
+    prepared port solution, then every table its printout reports."""
+    structure = prepared.structure
+    mesh = prepared.mesh
+    by_address = prepared.by_address
+    cards = prepared.cards
+    frequency = prepared.frequency
+    wavelength = prepared.wavelength
+    omega = prepared.omega
+    medium = prepared.medium
+    solver = prepared.solver
+    solution = prepared.solution
     state = _port_state(deck, mesh, cards, solution.y, wavelength)
     # Back across T: the structure is driven by the SOLVER's gap EMFs, which
     # is the one place besides the admittance that the two conventions meet.
