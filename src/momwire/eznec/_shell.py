@@ -287,7 +287,7 @@ def _answer(
         return _printout.render_refusal(echo, str(exc), basis=basis)
     if runs is not None:
         try:
-            answers = [_serve.serve(parse_nec5(t), basis=basis) for t in runs]
+            answers = _serve.serve_runs([parse_nec5(t) for t in runs], basis=basis)
         except (DeckError, _serve.ServeRefusal) as exc:
             return _printout.render_refusal(echo, str(exc), basis=basis)
         return deck, answers, True
