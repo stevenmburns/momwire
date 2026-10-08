@@ -225,8 +225,15 @@ def probe_version() -> str:
     return f"NEC5momwire.{major}.{minor}"
 
 
+STREAMING_REFUSAL = (
+    "momwire does not serve the streaming mode ('- -': decks on stdin, printouts on stdout) that SimNEC 5.4 uses for NEC5CL_a5x engines; give "
+    "it two file paths, as SimNEC does for every other NEC-5 engine (momwire#1395)"
+)
+
+
 def main(argv: list[str] | None = None) -> int:
-    """The process entry point. Returns 0. Always returns 0."""
+    """The process entry point. Returns 0, except for SimNEC's streaming call
+    (``- -``), which is refused with 2 (momwire#1395)."""
     args = list(sys.argv[1:] if argv is None else argv)
     prog = sys.argv[0] if argv is None else "momwire-eznec-client"
 
@@ -240,6 +247,11 @@ def main(argv: list[str] | None = None) -> int:
         print(ARGUMENT_ERROR_OUTPUT)
         return 0
     deck_path, printout_path = args
+    if "-" in (deck_path, printout_path):
+        # SimNEC 5.4's streaming call (momwire#1395): refused on stderr with a
+        # failing status rather than a printout written to a file named "-".
+        print(STREAMING_REFUSAL, file=sys.stderr)
+        return 2
     is_nec4, basis = _mech.filename_nec4(prog)
     dialect = "nec4" if is_nec4 else "nec5"
     if not is_nec4:
