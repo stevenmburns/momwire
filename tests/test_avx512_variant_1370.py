@@ -37,8 +37,13 @@ of this repository with momwire installed (a wheel or `pip install .`):
 modules whose vector-stage predicates name `_avx512` since #1370). On Linux
 those gates are BIT equality, walk against lanes, inside one build -- so they
 hold under `_avx512` exactly when the wider autovectorised loops and libmvec's
-8-lane routines leave each lane's arithmetic alone, which is what level 1
-claims and what only this machine can show.
+8-lane routines leave each lane's arithmetic alone. Under Intel SDE's
+Skylake-X emulation (2026-10-07, 3d110fe0) they did NOT all hold: the
+off-edge and EK lane gates and the SG class fill's column independence
+differ in the last bits (<= 1.9e-16 relative), because which entries of a
+libmvec loop fall to the scalar tail depends on the loop's length modulo the
+vector width, and at width 8 the walk's and the lanes' tails no longer
+coincide. Expect those failures here until that is resolved (momwire#1370).
 
 `-s` prints the measured |dZ|/|Z| per deck; MOMWIRE_AVX512_LOG=<path> also
 writes them as JSON, which is how Z_RTOL is to be re-derived.
