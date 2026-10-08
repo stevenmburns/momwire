@@ -55,6 +55,7 @@ from . import (
     _ground_refl,
     _ground_spec,
     _medium_spec,
+    _schedule,
     _sommerfeld,
     _sommerfeld_below,
     _sommerfeld_transmitted,
@@ -4757,7 +4758,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         M = obs_c.shape[0]
 
         S = None if consume is not None else np.empty((3, M, N), dtype=np.complex128)
-        chunk = max(1, _REMAINDER_CHUNK_ELEMS // max(prepared["n_src"], 1))
+        chunk = _schedule.elem_rows(_REMAINDER_CHUNK_ELEMS, prepared["n_src"])
         if row_group > 1:
             if M % row_group:
                 # The last chunk would be a partial group, which is the one
@@ -4767,9 +4768,9 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     f"observer count {M} is not a multiple of row_group {row_group}"
                 )
             chunk = max(row_group, (chunk // row_group) * row_group)
-        for i0 in range(0, M, chunk):
-            self._checkpoint()  # per observer chunk of the eval block
-            i1 = min(i0 + chunk, M)
+        # One checkpoint per observer chunk of the eval block, called by the
+        # walk at the top of each chunk (momwire#1337 phase 2).
+        for i0, i1 in _schedule.chunks([(0, M)], chunk, self._checkpoint):
             table = proj(obs_c[i0:i1], obs_t[i0:i1])
             # Per output element this is a sum over the q source nodes and
             # nothing else, so it does not see the chunk it is in: the block
@@ -5946,15 +5947,15 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         chunk = (
             N
             if N < _DENSE_ASSEMBLY_THRESHOLD
-            else max(1, int(self.swept_mem_mb * 1024 * 1024 // self._fill_row_bytes(N)))
+            else _schedule.mb_rows(self.swept_mem_mb, self._fill_row_bytes(N))
         )
 
         G = np.zeros((N, N), dtype=np.complex128)
         seg_c = geom["seg_centers"]
         seg_t = geom["seg_tangents"]
-        for i0 in range(0, N, chunk):
-            self._checkpoint()  # per observer chunk of the fill
-            i1 = min(i0 + chunk, N)
+        # One checkpoint per observer chunk of the fill, called by the walk
+        # at the top of each chunk (momwire#1337 phase 2).
+        for i0, i1 in _schedule.chunks([(0, N)], chunk, self._checkpoint):
             rows = (i0, i1)
             Phi_c, Phi_s, Phi_co = self._field_tensor(
                 geom, k, obs_rows=rows, cos_shape=cos_shape, eta=eta
@@ -6172,8 +6173,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for s, e, row, D in self._class_bands(
                 geom, keep, idx, k_cls, med, eta_cls, cos_shape, plan
             ):
-                for z0 in range(s, e, zband):
-                    z1 = min(z0 + zband, e)
+                # No checkpoint per Z band: the class band above took one.
+                for z0, z1 in _schedule.chunks([(s, e)], zband):
                     if whole:
                         dst = [P[z0:z1] for P in Phi]
                     else:
@@ -6262,18 +6263,6 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 )
         return out if into is None else into
 
-    @staticmethod
-    def _index_runs(idx):
-        """Contiguous runs `(start, stop)` of a sorted index array. A class's
-        segments are whole wires, and wires are segment-contiguous, so a
-        class is a handful of runs — the observer bands its fill walks."""
-        if idx.size == 0:
-            return []
-        cut = np.flatnonzero(np.diff(idx) != 1) + 1
-        firsts = np.concatenate(([0], cut))
-        lasts = np.concatenate((cut, [idx.size]))
-        return [(int(idx[a]), int(idx[b - 1]) + 1) for a, b in zip(firsts, lasts)]
-
     def _class_block(self, geom, keep, idx, k, medium, eta, cos_shape, plan):
         """One medium's (3, n, n) block of a mixed deck, whole: its
         `_class_bands` stacked. The fill no longer holds this (momwire#1224
@@ -6342,16 +6331,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         chunk = (
             n
             if n < _DENSE_ASSEMBLY_THRESHOLD
-            else max(1, int(self.swept_mem_mb * 1024 * 1024 // self._fill_row_bytes(n)))
+            else _schedule.mb_rows(self.swept_mem_mb, self._fill_row_bytes(n))
         )
-        bands = [
-            (b0, min(b0 + chunk, e0))
-            for s0, e0 in self._index_runs(idx)
-            for b0 in range(s0, e0, chunk)
-        ]
         row = 0
-        for s, e in bands:
-            self._checkpoint()  # per observer band of the class block
+        # The class's contiguous runs cut into `chunk`-row bands, one
+        # checkpoint per band, called by the walk at the top of each band
+        # (momwire#1337 phase 2). The walk is lazy, so that checkpoint fires
+        # after the consumer has dropped the previous band, as before.
+        for s, e in _schedule.chunks(_schedule.runs(idx), chunk, self._checkpoint):
             band = (s, e)
             Phi = self._field_tensor(
                 geom_src,

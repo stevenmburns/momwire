@@ -40,6 +40,7 @@ import numpy as np
 import pytest
 from test_crossing_serve_524 import hub_deck, invl_deck
 
+from momwire import _schedule
 from momwire import sinusoidal as sn
 from momwire.sinusoidal import SinusoidalSolver
 
@@ -183,7 +184,7 @@ def _class_band_heights(s, geom):
         chunk = max(1, int(s.swept_mem_mb * 1024 * 1024 // s._fill_row_bytes(n)))
         out += [
             min(b0 + chunk, e0) - b0
-            for s0, e0 in s._index_runs(idx)
+            for s0, e0 in _schedule.runs(idx)
             for b0 in range(s0, e0, chunk)
         ]
     return out
