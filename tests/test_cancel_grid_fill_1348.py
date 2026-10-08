@@ -212,6 +212,7 @@ def _z(engine):
     )
 
 
+@pytest.mark.slow
 def test_an_aborted_fill_leaves_no_partial_grid_in_memory_or_on_disk(
     monkeypatch, cold_memory, tmp_path
 ):

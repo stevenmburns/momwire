@@ -325,6 +325,7 @@ def test_the_wing_table_holds_only_real_wings(n_radials):
     assert np.array_equal(supp.ravel()[ent[ent >= 0]], rows)
 
 
+@pytest.mark.slow
 def test_the_pair_correction_stays_small_on_a_surface_screen(monkeypatch):
     """Memory bound on the correction itself (tracemalloc sees numpy's
     buffers) on the accelerated route every shipped build takes. Measured

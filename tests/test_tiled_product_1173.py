@@ -89,6 +89,7 @@ def _grid(make):
     "case",
     [pytest.param(c, marks=pytest.mark.slow) if c in _SLOW else c for c in DECKS],
 )
+@pytest.mark.slow
 def test_tiles_are_the_grid_route_to_the_bit(case):
     make, slot = DECKS[case]
     ref, r_off = _grid(make)
@@ -153,6 +154,7 @@ def test_hub16_tiles_to_the_bit(x):
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("control, case", [("split", "fan_rise"), ("held", "wa7ark")])
 def test_negative_controls_move_z(control, case):
     """ "split" cuts every tile's columns (the rule witness s_min is then

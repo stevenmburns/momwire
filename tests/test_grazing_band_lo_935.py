@@ -343,6 +343,7 @@ def test_both_dispatches_agree_on_the_low_band():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_the_low_band_is_deferred_until_something_reaches_it():
     """A deck that reaches 0.5 deg pays nothing for the 0.05 deg band.
 

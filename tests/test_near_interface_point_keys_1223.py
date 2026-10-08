@@ -57,6 +57,7 @@ def test_the_family_is_its_own_and_the_six_do_not_widen():
     assert ni.N_KEYS == 6
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("soil", sorted(SOILS))
 @pytest.mark.parametrize("triple", TRIPLES, ids=IDS)
 def test_each_key_is_the_derivative_of_the_six(soil, triple):
@@ -80,6 +81,7 @@ def test_each_key_is_the_derivative_of_the_six(soil, triple):
     assert np.max(np.abs(fd - got)) <= 1e-6 * np.max(np.abs(got))
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("soil", sorted(SOILS))
 @pytest.mark.parametrize("triple", TRIPLES, ids=IDS)
 def test_the_column_route_is_the_point_routes_twin(soil, triple):

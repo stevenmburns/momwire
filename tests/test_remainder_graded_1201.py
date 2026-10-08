@@ -299,6 +299,7 @@ def test_the_graded_listing_is_as_symmetric_as_the_deck():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @needs_acc
 @pytest.mark.parametrize("pair", [(5, 5), (5, 6), (6, 5), (5, 7)])
 def test_pair_moments_converge_to_brute_force(pair):

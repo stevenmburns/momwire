@@ -146,6 +146,7 @@ def _check_past_edge(name, full):
     assert worst_frozen > 50.0, (name, worst_frozen)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("name", sorted(GROUNDS))
 def test_past_the_edge_the_surfaces_are_the_oracles(name):
     _check_past_edge(name, full=False)
