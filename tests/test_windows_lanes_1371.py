@@ -16,14 +16,24 @@ build:
   is the signature of the lane branch having executed; equal bits on this
   synthetic case would mean the call never left the walk.
 
+The wheel also carries `_sse2`, the variant a CPU without AVX2 loads (Dan's).
+No `/arch:AVX2` means no `__AVX2__`, so `_lanes.h` selects no backend there and
+every kernel keeps its walk. The last test forces that variant in a subprocess
+and checks it loads, compiled no lane and entered none, and solves the
+projection deck to the AVX2 variant's answer.
+
 Off Windows the module skips: Linux and macOS have their own compiled-in
 assertions in each lane test module, and bit equality there.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
 import sys
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -81,3 +91,56 @@ def test_a_fused_kernel_runs_its_lanes():
             lanes = _run(c, False)
             moved += int(np.any(bits(lanes) != bits(walk)))
     assert moved > 0, "the windowed lanes gave the walk's bits on every case"
+
+
+# Run under MOMWIRE_FORCE_VARIANT=sse2; prints what loaded and the deck's Z.
+_SSE2_PROBE = """
+import json, warnings
+import momwire._accel as _accel
+from momwire import _near_interface as ni
+from test_sg_cplx_far_fill_simd_1224 import _hub4
+from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+acc = _accel.acc
+before = acc.somm_proj_lane_pairs()
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    Z, _ = SinusoidalGalerkinSolver(**_hub4(), fill="direct").compute_impedance()
+print(json.dumps({
+    "variant": _accel.VARIANT,
+    "built": [acc.offedge_lanes_1290, acc.windowed_lanes_1290,
+              acc.below_lanes_1290, acc.somm_proj_lanes_built(),
+              ni._nia.grid_sheet_fixed_1290],
+    "lane_pairs": acc.somm_proj_lane_pairs() - before,
+    "z": [complex(Z).real, complex(Z).imag],
+}))
+"""
+
+
+def test_the_sse2_variant_runs_its_walks():
+    from test_sg_cplx_far_fill_simd_1224 import _hub4
+
+    from momwire.sinusoidal_galerkin import SinusoidalGalerkinSolver
+
+    env = dict(os.environ, MOMWIRE_FORCE_VARIANT="sse2")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(Path(__file__).parent), env.get("PYTHONPATH", "")]
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", _SSE2_PROBE],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    got = json.loads(out.stdout.strip().splitlines()[-1])
+    assert got["variant"] == "sse2", got
+    assert not any(got["built"]), got
+    assert got["lane_pairs"] == 0, got
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        want, _ = SinusoidalGalerkinSolver(**_hub4(), fill="direct").compute_impedance()
+        want = complex(want)
+    # Two builds of one solver: a check the variant works, not a bit gate.
+    # 1e-9 is the derived solver tolerances' floor (see tests/_lane_gate.py).
+    assert abs(complex(*got["z"]) - want) <= 1e-9 * abs(want), (got["z"], want)
