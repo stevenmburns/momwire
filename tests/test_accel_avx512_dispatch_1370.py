@@ -380,10 +380,9 @@ def test_setup_builds_exactly_what_the_loader_checks():
 # This box, for real
 # ---------------------------------------------------------------------------
 
-_X86_LINUX = sys.platform == "linux" and _accel.platform.machine().lower() in (
-    "x86_64",
-    "amd64",
-)
+_X86 = _accel.platform.machine().lower() in ("x86_64", "amd64")
+_X86_LINUX = sys.platform == "linux" and _X86
+_X86_WIN = sys.platform == "win32" and _X86
 
 
 @pytest.mark.skipif(not _X86_LINUX, reason="/proc/cpuinfo is the oracle (x86 Linux)")
@@ -442,3 +441,21 @@ def test_this_box_chooses_avx512_exactly_when_it_has_it():
         momwire.accelerator_variant,
         _accel._avx512_missing(),
     )
+
+
+@pytest.mark.skipif(
+    sys.platform != "win32" or not _X86_WIN,
+    reason="the Windows half of the check (x86-64 Windows)",
+)
+def test_the_cpuid_probe_loads_and_agrees_with_windows_here():
+    """On a real Windows box: the probe built and loads, and its decoding
+    agrees with IsProcessorFeaturePresent wherever both can answer (AVX2,
+    and AVX-512F with the OS's state)."""
+    if not _accel._extension_built("_avx2"):
+        pytest.skip("a single-variant install")
+    flags = _accel._cpuid_flags()
+    assert flags is not None, "momwire._cpuid did not build or load"
+    pf_avx2 = _accel._windows_feature_present(_accel._PF_AVX2_INSTRUCTIONS_AVAILABLE)
+    pf_f = _accel._windows_feature_present(_accel._PF_AVX512F_INSTRUCTIONS_AVAILABLE)
+    assert ("avx2" in flags) == (pf_avx2 is True), (sorted(flags), pf_avx2)
+    assert ("avx512f" in flags) == (pf_f is True), (sorted(flags), pf_f)

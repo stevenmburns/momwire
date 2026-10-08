@@ -320,12 +320,18 @@ test-requires = "pytest pytest-xdist"
 # against the installed wheel, so `import momwire` resolves to the wheel, not
 # src/.
 #
+# The two #1370 modules: the AVX-512 dispatch (on Windows the only place the
+# cpuid probe meets a real IsProcessorFeaturePresent), and the AVX-512
+# variant's runtime check, which skips with its reason on a runner without
+# AVX-512 and runs (the variant loaded, every extension its build, a solve
+# set against `_avx2`) on one that has it.
+#
 # `test_glibc_floor.py` reads the installed extensions' dynamic symbol table.
 # On Linux this runs INSIDE the manylinux_2_28 image, which is the one place
 # its strict rule (every glibc symbol <= 2.28) means anything; elsewhere it
 # skips. Its libmvec rule is what catches a vector function newer than the
 # floor, which links fine and then fails to import (Design D4).
-test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py -m "not slow and not memgate"'
+test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py {project}/tests/test_accel_avx512_dispatch_1370.py {project}/tests/test_avx512_variant_1370.py -m "not slow and not memgate"'
 
 [tool.cibuildwheel.linux]
 # glibc >= 2.28 ships libmvec; manylinux2014 (glibc 2.17) does NOT, so the
@@ -386,7 +392,7 @@ repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-w
 [[tool.cibuildwheel.overrides]]
 select = "cp312-win_amd64"
 test-environment = { MOMWIRE_LANE_GATE_LOG = "lane-gate.jsonl" }
-test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py {project}/tests/test_windows_lanes_1371.py {project}/tests/test_windowed_lanes_1290.py {project}/tests/test_weighted_windowed_lanes.py {project}/tests/test_below_lanes_1290.py {project}/tests/test_field_galerkin_lanes_1290.py {project}/tests/test_pair_extents_lanes_1290.py {project}/tests/test_sheet_fixed_width_1290.py {project}/tests/test_offedge_lanes_1290.py {project}/tests/test_offedge_ek_lanes_1362.py {project}/tests/test_swept_ek_lanes_ladder_1362.py {project}/tests/test_ek_pair_order_ladder_1362.py {project}/tests/test_hmatrix_ek_block_1362.py {project}/tests/test_somm_proj_lanes_1290.py -m "not slow and not memgate"'
+test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py {project}/tests/test_accel_avx512_dispatch_1370.py {project}/tests/test_avx512_variant_1370.py {project}/tests/test_windows_lanes_1371.py {project}/tests/test_windowed_lanes_1290.py {project}/tests/test_weighted_windowed_lanes.py {project}/tests/test_below_lanes_1290.py {project}/tests/test_field_galerkin_lanes_1290.py {project}/tests/test_pair_extents_lanes_1290.py {project}/tests/test_sheet_fixed_width_1290.py {project}/tests/test_offedge_lanes_1290.py {project}/tests/test_offedge_ek_lanes_1362.py {project}/tests/test_swept_ek_lanes_ladder_1362.py {project}/tests/test_ek_pair_order_ladder_1362.py {project}/tests/test_hmatrix_ek_block_1362.py {project}/tests/test_somm_proj_lanes_1290.py -m "not slow and not memgate"'
 
 [tool.ruff.format]
 # The chapter-figure scripts keep their hand-wrapped compact matplotlib style
