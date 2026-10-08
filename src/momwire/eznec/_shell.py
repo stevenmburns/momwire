@@ -374,13 +374,20 @@ def run(
     return printout
 
 
+STREAMING_REFUSAL = (
+    "momwire does not serve the streaming mode ('- -': decks on stdin, printouts on stdout) that SimNEC 5.4 uses for NEC5CL_a5x engines; give "
+    "it two file paths, as SimNEC does for every other NEC-5 engine (momwire#1395)"
+)
+
+
 def main(
     argv: list[str] | None = None,
     *,
     basis: str = _serve.BASIS,
     dialect: str = "nec5",
 ) -> int:
-    """The process entry point.  Returns 0.  Always returns 0.
+    """The process entry point.  Returns 0, except for SimNEC's streaming call
+    (``- -``), which is refused on stderr with 2 (momwire#1395).
 
     ``basis`` is not a command line flag and must not become one: the real
     engine takes two positional paths and nothing else, and EZNEC sends
@@ -409,6 +416,13 @@ def main(
         return 0
 
     deck_path, printout_path = args
+    if "-" in (deck_path, printout_path):
+        # SimNEC 5.4's streaming call (momwire#1395). There is no printout
+        # file to refuse in, and answering 0 with nothing on stdout leaves the
+        # caller waiting forever, so this one refusal goes to stderr with a
+        # failing status, which SimNEC reports as a NEC failure.
+        print(STREAMING_REFUSAL, file=sys.stderr)
+        return 2
     try:
         run(deck_path, printout_path, basis=basis, dialect=dialect)
     except Exception as exc:  # noqa: BLE001 - the last line of defence
