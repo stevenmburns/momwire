@@ -392,7 +392,7 @@ _NEAR_HEADERS = [
 ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 
 # ---------------------------------------------------------------------------
-# The double build (momwire#1032)
+# The variant build (momwire#1032, momwire#1370)
 # ---------------------------------------------------------------------------
 #
 # A wheel built `/arch:AVX2` (MSVC) or `-mavx2 -mfma` (GCC) LOADS on a CPU that
@@ -402,10 +402,30 @@ ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 # pure-Python fallback never ran and the process simply vanished — three days
 # of a user's time on the QRZ thread.
 #
-# So on x86 both extensions are compiled TWICE from the same sources: once with
-# today's flags (`_avx2`) and once at the x86-64 baseline (`_sse2`), and
-# `momwire._accel` picks by a CPU-feature check before importing either. The
-# wheel roughly doubles in size; that is the whole cost.
+# So on x86 every extension is compiled once per instruction set from the same
+# sources, and `momwire._accel` picks by a CPU-feature check before importing
+# any of them:
+#
+#   _avx512  the AVX2 flags plus AVX-512 F/CD/BW/DQ/VL (MSVC: /arch:AVX512,
+#            which documents exactly that set). momwire#1370 level 1: the
+#            compiler's autovectorised loops and the libmvec calls widen to
+#            512 bits; the hand-written lanes stay the 4-wide AVX2 backend,
+#            because `_lanes.h` takes its AVX-512 backend only under
+#            MW_LANES_ENABLE_AVX512, which no build sets.
+#   _avx2    today's flags.
+#   _sse2    the x86-64 baseline.
+#
+# The AVX-512 set is spelled flag by flag rather than as -march=x86-64-v4. The
+# loader may only choose a build whose every instruction it has checked for,
+# and x86-64-v4 also licenses BMI1/2, LZCNT, MOVBE, F16C and the v2 set, none
+# of which the AVX2 build asks for and none of which the check would then be
+# allowed to skip. The five named flags are the set the loader tests (and the
+# set MSVC's /arch:AVX512 enables), so the build and the check cannot drift
+# apart. Tuning is unchanged (GCC's generic tuning at either spelling), and
+# -ffp-contract=off and the explicit-fma policy (momwire#1194) carry over
+# because the variant is the AVX2 argument list with flags ADDED.
+#
+# Cost: one more compile of every extension per x86 wheel.
 #
 # NOT on macOS or non-x86: setup.py's darwin branch passes no AVX flag on
 # either Mac arch (it is the simple-pragmas port), and no other architecture
@@ -420,10 +440,40 @@ _DOUBLE_BUILD = platform.machine().lower() in _X86_MACHINES and sys.platform != 
 # AVX, and GCC's x86-64 target implies SSE2.
 _AVX2_ONLY_FLAGS = {"/arch:AVX2", "-mavx2", "-mfma"}
 
+# What the AVX-512 build adds to the AVX2 one. `momwire._accel`'s
+# `_AVX512_REQUIRED` is this list's flag names (plus avx2 and fma), and the
+# dispatch test holds the two equal.
+_AVX512_GCC_FLAGS = [
+    "-mavx512f",
+    "-mavx512cd",
+    "-mavx512bw",
+    "-mavx512dq",
+    "-mavx512vl",
+]
+
 
 def _baseline(args):
     """`args` with the AVX2-specific flags removed, order otherwise intact."""
     return [a for a in args if a not in _AVX2_ONLY_FLAGS]
+
+
+def _avx512(args):
+    """`args` raised from AVX2 to AVX-512 F/CD/BW/DQ/VL, order otherwise intact.
+
+    MSVC: /arch:AVX2 becomes /arch:AVX512. GCC: the five flags follow -mfma,
+    so everything after it (-ffp-contract=off among them) still applies.
+    """
+    out = []
+    for a in args:
+        if a == "/arch:AVX2":
+            out.append("/arch:AVX512")
+            continue
+        out.append(a)
+        if a == "-mfma":
+            out.extend(_AVX512_GCC_FLAGS)
+    if out == list(args):
+        raise ValueError(f"no AVX2 flag to raise to AVX-512 in {args}")
+    return out
 
 
 def _variant(base_name, suffix, sources, *, depends, compile_args, include_dirs=None):
@@ -449,6 +499,7 @@ def _variant(base_name, suffix, sources, *, depends, compile_args, include_dirs=
 
 if _DOUBLE_BUILD:
     _VARIANTS = (
+        ("_avx512", _avx512(extra_compile_args), _avx512(_near_compile_args)),
         ("_avx2", extra_compile_args, _near_compile_args),
         ("_sse2", _baseline(extra_compile_args), _baseline(_near_compile_args)),
     )
@@ -487,6 +538,22 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
             depends=_NEAR_HEADERS,
             compile_args=_near_args,
             include_dirs=["extern/xsf/include"],
+        )
+    )
+
+# The CPU probe (momwire#1370): `cpuid` and `xgetbv` for the loader, which
+# needs AVX-512 DQ/VL/CD/BW on Windows and IsProcessorFeaturePresent answers
+# for F alone. One build, at the baseline and without OpenMP or -lmvec: it is
+# imported BEFORE the loader knows what this CPU runs, so it may contain
+# nothing a CPU lacking any of the variants could fault on. Built wherever the
+# variants are, so the Linux suite checks its decoding against /proc/cpuinfo
+# on real hardware.
+if _DOUBLE_BUILD:
+    ext_modules.append(
+        Pybind11Extension(
+            "momwire._cpuid",
+            ["src/momwire/_cpuid.cpp"],
+            extra_compile_args=["/O2"] if sys.platform == "win32" else ["-O2"],
         )
     )
 
