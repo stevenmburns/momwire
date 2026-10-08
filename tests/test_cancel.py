@@ -100,18 +100,27 @@ def test_precancelled_array_solver_raises(cls):
 
 def test_precancel_is_fast_relative_to_full_solve():
     # The pre-cancelled solve raises at the first checkpoint (after geometry,
-    # before the fill), so it must be a small fraction of a full solve.
-    t0 = time.perf_counter()
-    _dipole(SinusoidalSolver, nsegs=120).compute_impedance()
-    full = time.perf_counter() - t0
+    # before the fill), so it must be a small fraction of a full solve. Each
+    # side is the best of three: at 120 segments the C++ fill made a full solve
+    # ~20 ms on a macOS runner, where one sample of each flipped the ratio
+    # (15.0 vs 19.3 ms on main). 400 segments keeps the fill dominant.
+    def best(fn):
+        times = []
+        for _ in range(3):
+            t0 = time.perf_counter()
+            fn()
+            times.append(time.perf_counter() - t0)
+        return min(times)
 
-    token = CancelToken()
-    token.cancel()
-    t0 = time.perf_counter()
-    with pytest.raises(SolveAborted):
-        _dipole(SinusoidalSolver, cancel=token, nsegs=120).compute_impedance()
-    aborted = time.perf_counter() - t0
+    full = best(lambda: _dipole(SinusoidalSolver, nsegs=400).compute_impedance())
 
+    def aborted_solve():
+        token = CancelToken()
+        token.cancel()
+        with pytest.raises(SolveAborted):
+            _dipole(SinusoidalSolver, cancel=token, nsegs=400).compute_impedance()
+
+    aborted = best(aborted_solve)
     assert aborted < 0.5 * full, (
         f"abort {aborted * 1e3:.1f}ms vs full {full * 1e3:.1f}ms"
     )
