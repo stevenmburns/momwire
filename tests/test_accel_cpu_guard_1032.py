@@ -70,8 +70,9 @@ def test_the_force_override_pins_one_variant(monkeypatch):
 
 
 def test_a_bogus_force_value_warns_and_chooses_normally(monkeypatch):
-    monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "avx512")
-    with pytest.warns(RuntimeWarning, match="avx512"):
+    # Not "avx512": that is a real variant since momwire#1370.
+    monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "avx1024")
+    with pytest.warns(RuntimeWarning, match="avx1024"):
         chain = _accel._variants_to_try(False)
     assert chain == (_accel._SSE2, _accel._LEGACY)
 
@@ -120,6 +121,7 @@ def _recording_loader(monkeypatch, present: str):
 def test_an_unsupported_cpu_loads_the_baseline_not_the_avx2_build(monkeypatch):
     """On the user's machine momwire stays ACCELERATED — by the SSE2 build."""
     monkeypatch.delenv(_accel._FORCE_VARIANT_ENV, raising=False)
+    monkeypatch.setattr(_accel, "_avx512_missing", lambda: ("avx512f",))
     monkeypatch.setattr(_accel, "_cpu_supports_extension", lambda: False)
     asked = _recording_loader(monkeypatch, "_sse2")
 
@@ -133,6 +135,7 @@ def test_an_unsupported_cpu_loads_the_baseline_not_the_avx2_build(monkeypatch):
 
 def test_an_avx2_cpu_loads_the_avx2_build(monkeypatch):
     monkeypatch.delenv(_accel._FORCE_VARIANT_ENV, raising=False)
+    monkeypatch.setattr(_accel, "_avx512_missing", lambda: ("avx512f",))
     monkeypatch.setattr(_accel, "_cpu_supports_extension", lambda: True)
     asked = _recording_loader(monkeypatch, "_avx2")
 
@@ -151,6 +154,7 @@ def test_require_accel_raises_when_nothing_in_the_chain_loads(monkeypatch):
     # The chain must come from the CPU verdict, not from an override the
     # surrounding lane happens to have set — this test names what it tried.
     monkeypatch.delenv(_accel._FORCE_VARIANT_ENV, raising=False)
+    monkeypatch.setattr(_accel, "_avx512_missing", lambda: ("avx512f",))
     monkeypatch.setattr(_accel, "_cpu_supports_extension", lambda: False)
     monkeypatch.setattr(_accel, "_import_variant", lambda *a: None)
     monkeypatch.setattr(_accel, "_extension_built", lambda *_: True)
@@ -166,6 +170,7 @@ def test_require_accel_raises_when_nothing_in_the_chain_loads(monkeypatch):
 def test_a_pure_python_install_stays_silent(monkeypatch):
     """Nothing built for this platform is the expected case, not a problem."""
     monkeypatch.delenv(_accel._FORCE_VARIANT_ENV, raising=False)
+    monkeypatch.setattr(_accel, "_avx512_missing", lambda: ("avx512f",))
     monkeypatch.setattr(_accel, "_cpu_supports_extension", lambda: True)
     monkeypatch.setattr(_accel, "_import_variant", lambda *a: None)
     monkeypatch.setattr(_accel, "_extension_built", lambda *_: False)
@@ -180,6 +185,7 @@ def test_a_pure_python_install_stays_silent(monkeypatch):
 
 
 def _only_avx2_and_sse2_built(monkeypatch):
+    monkeypatch.setattr(_accel, "_avx512_missing", lambda: ("avx512f",))
     monkeypatch.setattr(_accel, "_cpu_supports_extension", lambda: True)
     monkeypatch.setattr(_accel, "_import_variant", lambda *a: None)
     monkeypatch.setattr(
@@ -241,9 +247,7 @@ def test_the_companion_follows_the_chosen_variant():
 
     if momwire.accelerator_variant is None:
         pytest.skip("pure-Python install: no variant to agree about")
-    suffix = dict(
-        (label, sfx) for label, sfx in (_accel._AVX2, _accel._SSE2, _accel._LEGACY)
-    )[momwire.accelerator_variant]
+    suffix = dict(_accel._ALL_VARIANTS)[momwire.accelerator_variant]
     assert _accel.acc.__name__ == f"momwire._accelerators{suffix}"
     if ni._nia is not None:
         assert ni._nia.__name__ == f"momwire._near_interface_accel{suffix}"
@@ -359,10 +363,14 @@ def test_this_box_is_answered_consistently():
     if os.environ.get(_accel._FORCE_VARIANT_ENV):
         pytest.skip("the variant is pinned by the environment, not by this CPU")
     verdict = _accel._cpu_supports_extension()
-    if verdict is True:
-        assert momwire.accelerator_variant in ("avx2", None)
+    avx512 = _accel._cpu_supports_avx512()
+    if verdict is True and avx512 is True:
+        # momwire#1370: an AVX-512 CPU prefers the AVX-512 build.
+        assert momwire.accelerator_variant in ("avx512", "legacy", None)
+    elif verdict is True:
+        assert momwire.accelerator_variant in ("avx2", "legacy", None)
     else:
-        assert momwire.accelerator_variant != "avx2"
+        assert momwire.accelerator_variant not in ("avx2", "avx512")
 
 
 def test_only_one_variant_is_ever_loaded_in_this_process():
@@ -383,7 +391,7 @@ def test_only_one_variant_is_ever_loaded_in_this_process():
     )
 
 
-@pytest.mark.parametrize("variant", ["avx2", "sse2"])
+@pytest.mark.parametrize("variant", ["avx512", "avx2", "sse2"])
 def test_each_variant_imports_in_a_fresh_interpreter(variant):
     """Not a mock: start a real interpreter, force the variant, and confirm the
     extension it names actually loads and reports itself.
@@ -395,6 +403,10 @@ def test_each_variant_imports_in_a_fresh_interpreter(variant):
     """
     if not _accel._extension_built(f"_{variant}"):
         pytest.skip(f"the {variant} variant is not built in this checkout")
+    if variant == "avx512" and _accel._cpu_supports_avx512() is not True:
+        # Importing it here is the crash itself; the refusal on this CPU is
+        # gated in test_accel_avx512_dispatch_1370.py instead.
+        pytest.skip(f"this CPU cannot run it (missing: {_accel._avx512_missing()})")
     out = subprocess.run(
         [
             sys.executable,

@@ -45,8 +45,8 @@ import warnings
 def _extension_built(variant_suffix: str | None = None) -> bool:
     """True if a compiled ``_accelerators`` extension exists on disk.
 
-    ``variant_suffix`` names one variant ("_avx2", "_sse2", "" for the
-    unsuffixed legacy build); None asks about ANY of them, which is what
+    ``variant_suffix`` names one variant ("_avx512", "_avx2", "_sse2", "" for
+    the unsuffixed legacy build); None asks about ANY of them, which is what
     "was this install built with an accelerator at all" means.
 
     Distinguishes "built but won't load" from "never built": the file's presence
@@ -54,7 +54,11 @@ def _extension_built(variant_suffix: str | None = None) -> bool:
     warning rather than an expected pure-Python fallback.
     """
     pkg = pathlib.Path(__file__).parent
-    names = ("_avx2", "_sse2", "") if variant_suffix is None else (variant_suffix,)
+    names = (
+        ("_avx512", "_avx2", "_sse2", "")
+        if variant_suffix is None
+        else (variant_suffix,)
+    )
     return any(
         (pkg / f"_accelerators{name}{ext}").exists()
         for name in names
@@ -145,31 +149,206 @@ def _cpu_supports_extension_uncaught() -> bool | None:
     if platform.machine().lower() not in _X86_MACHINES:
         return None  # nothing to look for; setup.py's flags are x86's
     if sys.platform == "win32":
-        try:
-            import ctypes
+        return _windows_feature_present(_PF_AVX2_INSTRUCTIONS_AVAILABLE)
+    flags = _linux_cpu_flags()
+    if flags is None:
+        return None
+    return all(f in flags for f in _LINUX_REQUIRED_FLAGS)
 
-            fn = ctypes.windll.kernel32.IsProcessorFeaturePresent
-            fn.restype = ctypes.c_int
-            fn.argtypes = [ctypes.c_uint32]
-            return bool(fn(_PF_AVX2_INSTRUCTIONS_AVAILABLE))
-        except Exception:  # noqa: BLE001 — a guard that can raise defeats its own purpose
-            # No windll, no such export, a stub kernel32, a ctypes built
-            # without windll on a Windows-like host: every one of them
-            # means "cannot tell", and none of them may propagate out of
-            # `import momwire`.
-            return None
+
+def _windows_feature_present(feature: int) -> bool | None:
+    """`IsProcessorFeaturePresent(feature)`; None when it cannot be asked."""
+    try:
+        import ctypes
+
+        fn = ctypes.windll.kernel32.IsProcessorFeaturePresent
+        fn.restype = ctypes.c_int
+        fn.argtypes = [ctypes.c_uint32]
+        return bool(fn(feature))
+    except Exception:  # noqa: BLE001 — a guard that can raise defeats its own purpose
+        # No windll, no such export, a stub kernel32, a ctypes built without
+        # windll on a Windows-like host: every one of them means "cannot
+        # tell", and none of them may propagate out of `import momwire`.
+        return None
+
+
+def _linux_cpu_flags() -> frozenset[str] | None:
+    """The first ``flags`` (x86) or ``Features`` (arm) line of /proc/cpuinfo,
+    as a set; None when there is no procfs or no such line.
+
+    One core's line answers for the CPU. The kernel lists a feature only when
+    it is usable: an AVX or AVX-512 flag is cleared when the kernel does not
+    enable that xstate in XCR0, so a flag here already means "the CPU has it
+    AND the OS saves its registers".
+    """
     try:
         with open(_CPUINFO_PATH, encoding="ascii", errors="replace") as fh:
             for line in fh:
                 if not line.startswith("flags") and not line.startswith("Features"):
                     continue
                 _, _, rest = line.partition(":")
-                flags = set(rest.split())
-                # One core's flag line answers for the CPU; stop at the first.
-                return all(f in flags for f in _LINUX_REQUIRED_FLAGS)
+                return frozenset(rest.split())
     except OSError:
         return None  # no procfs (a container, a BSD, a locked-down sandbox)
     return None  # a procfs with no flags line at all
+
+
+# ---------------------------------------------------------------------------
+# The AVX-512 check (momwire#1370)
+# ---------------------------------------------------------------------------
+#
+# The `_avx512` variant is the AVX2 build plus AVX-512 F/CD/BW/DQ/VL (setup.py's
+# `_AVX512_GCC_FLAGS`; MSVC's /arch:AVX512 enables the same five). It may be
+# chosen only when every one of them is present AND the OS saves the opmask and
+# zmm registers: anything less is momwire#1032's silent death one level up.
+#
+#   linux   /proc/cpuinfo. The kernel clears the avx512* flags when it has not
+#           enabled their xstate in XCR0, so a listed flag answers both.
+#   win32   IsProcessorFeaturePresent(PF_AVX512F_INSTRUCTIONS_AVAILABLE) speaks
+#           for F alone, and F alone is not enough (Knights Landing/Mill have
+#           F/CD/ER/PF without DQ/BW/VL). So the rest comes from
+#           `momwire._cpuid`, a baseline-built probe: CPUID leaf 7 for the
+#           feature bits, XCR0 for the state, decoded below by the kernel's
+#           rule. Both must agree; a probe that did not build or load answers
+#           None.
+#   darwin  never: no variant is built there. The macOS wheel is arm64 only,
+#           and a source build on an Intel Mac takes the single unsuffixed
+#           extension (setup.py builds variants only on x86 off darwin).
+#   other   never: no AVX-512 off x86.
+#
+# Same asymmetry as the AVX2 check. A wrong "no" costs the AVX-512 speedup and
+# keeps `_avx2`; a wrong "yes" kills the interpreter. So every path that cannot
+# read the answer returns None, and None never selects `_avx512`.
+
+# IsProcessorFeaturePresent: AVX-512F, with the OS's xstate support.
+_PF_AVX512F_INSTRUCTIONS_AVAILABLE = 41
+
+# Everything the `_avx512` build was compiled to use, in /proc/cpuinfo's
+# spelling: the AVX2 build's pair and the five AVX-512 subsets. The dispatch
+# test holds the last five equal to setup.py's `_AVX512_GCC_FLAGS`.
+_AVX512_REQUIRED = (
+    "avx2",
+    "fma",
+    "avx512f",
+    "avx512cd",
+    "avx512bw",
+    "avx512dq",
+    "avx512vl",
+)
+
+# CPUID feature bits (Intel SDM vol. 2A, "CPUID"), by /proc/cpuinfo name.
+_LEAF1_ECX_BITS = {"fma": 12, "avx": 28}
+_LEAF1_ECX_OSXSAVE = 27
+_LEAF7_EBX_BITS = {
+    "avx2": 5,
+    "avx512f": 16,
+    "avx512dq": 17,
+    "avx512cd": 28,
+    "avx512bw": 30,
+    "avx512vl": 31,
+}
+_LEAF7_AVX512 = frozenset(n for n in _LEAF7_EBX_BITS if n.startswith("avx512"))
+# XCR0 components the OS must save: SSE (bit 1) and the AVX upper halves
+# (bit 2) for any AVX instruction; plus the opmask (5), ZMM_Hi256 (6) and
+# Hi16_ZMM (7) for AVX-512.
+_XCR0_AVX = 0b0000_0110
+_XCR0_AVX512 = 0b1110_0110
+
+
+def _flags_from_cpuid(
+    max_leaf: int, leaf1_ecx: int, leaf7_ebx: int, xcr0: int
+) -> frozenset[str]:
+    """The flags these registers vouch for, by the rule Linux applies before
+    listing them in /proc/cpuinfo: an AVX-family feature counts only if the
+    OS has OSXSAVE set and saves the AVX state in XCR0, and an AVX-512 one only
+    if it also saves the opmask and zmm state. A leaf above `max_leaf` (CPUID
+    leaf 0's eax) is not asked for, and reads as no bits."""
+    flags: set[str] = set()
+    if max_leaf < 1 or not (leaf1_ecx >> _LEAF1_ECX_OSXSAVE) & 1:
+        return frozenset()
+    os_avx = (xcr0 & _XCR0_AVX) == _XCR0_AVX
+    os_avx512 = (xcr0 & _XCR0_AVX512) == _XCR0_AVX512
+    if not os_avx:
+        return frozenset()
+    flags.update(n for n, b in _LEAF1_ECX_BITS.items() if (leaf1_ecx >> b) & 1)
+    if max_leaf >= 7:
+        for name, bit in _LEAF7_EBX_BITS.items():
+            if name in _LEAF7_AVX512 and not os_avx512:
+                continue
+            if (leaf7_ebx >> bit) & 1:
+                flags.add(name)
+    return frozenset(flags)
+
+
+def _cpuid_flags() -> frozenset[str] | None:
+    """`_flags_from_cpuid` on this CPU's registers, through `momwire._cpuid`;
+    None when the probe is not built or does not load."""
+    try:
+        probe = importlib.import_module(f"{__package__}._cpuid")
+    except ImportError:
+        return None
+    max_leaf = probe.cpuid(0, 0)[0]
+    leaf1_ecx = probe.cpuid(1, 0)[2] if max_leaf >= 1 else 0
+    leaf7_ebx = probe.cpuid(7, 0)[1] if max_leaf >= 7 else 0
+    return _flags_from_cpuid(max_leaf, leaf1_ecx, leaf7_ebx, probe.xcr0())
+
+
+def _avx512_missing() -> tuple[str, ...] | None:
+    """Which of `_AVX512_REQUIRED` this CPU (and OS) lacks.
+
+    ``()``    — checked, nothing missing: the `_avx512` build runs here.
+    a tuple   — checked, these are missing: importing it would fault.
+    ``None``  — no `_avx512` build applies to this platform, or the CPU could
+                not be interrogated. Never selects the variant.
+
+    Never raises, for `_cpu_supports_extension`'s reason.
+    """
+    try:
+        return _avx512_missing_uncaught()
+    except Exception:  # noqa: BLE001 — None means "do not choose AVX-512"
+        return None
+
+
+def _avx512_missing_uncaught() -> tuple[str, ...] | None:
+    if sys.platform == "darwin":
+        return None
+    if platform.machine().lower() not in _X86_MACHINES:
+        return None
+    if sys.platform == "win32":
+        flags = _cpuid_flags()
+        if flags is None:
+            return None
+        if _windows_feature_present(_PF_AVX512F_INSTRUCTIONS_AVAILABLE) is not True:
+            # The OS does not vouch for F (or cannot be asked): whatever CPUID
+            # says, F does not count.
+            flags = flags - {"avx512f"}
+    else:
+        flags = _linux_cpu_flags()
+        if flags is None:
+            return None
+    return tuple(f for f in _AVX512_REQUIRED if f not in flags)
+
+
+def _cpu_supports_avx512() -> bool | None:
+    """`_avx512_missing` as a verdict: True, False, or None (cannot tell)."""
+    missing = _avx512_missing()
+    return None if missing is None else not missing
+
+
+def _forced_avx512_refused_message(missing: tuple[str, ...] | None) -> str:
+    """Why `MOMWIRE_FORCE_VARIANT=avx512` loaded nothing on this CPU."""
+    why = (
+        "this CPU could not be checked for AVX-512"
+        if missing is None
+        else f"this CPU lacks {', '.join(missing)}"
+    )
+    return (
+        f"momwire: {_FORCE_VARIANT_ENV}='avx512', but {why}, so the AVX-512 "
+        "build was NOT loaded: here it would not raise, it would kill the "
+        "interpreter with an illegal instruction (momwire#1032). Falling back "
+        "to the slower pure-Python path. Unset it, or name a variant this CPU "
+        "runs."
+    )
 
 
 def _no_avx2_message() -> str:
@@ -233,36 +412,59 @@ def _platform_hint() -> str:
 # every non-x86 build still produce, and what an install predating momwire#1032
 # has on disk. Keeping it in the chain is what lets a wheel built either way
 # load in either loader.
+_AVX512 = ("avx512", "_avx512")
 _AVX2 = ("avx2", "_avx2")
 _SSE2 = ("sse2", "_sse2")
 _LEGACY = ("legacy", "")
+# Most preferred first.
+_ALL_VARIANTS = (_AVX512, _AVX2, _SSE2, _LEGACY)
 
 # Test-only override, documented here because it has no other documentation:
 # forces the chain to one variant so the accelerator suite can be run against
-# the BASELINE build on an AVX2 box. Not a supported user knob — a wrong value
-# here is how you get the fault this whole issue is about, on purpose.
+# one build on a box that would choose another. Not a supported user knob.
+#
+# 'avx2', 'sse2' and 'legacy' are taken on trust: forcing 'avx2' on a CPU
+# without AVX2 is how you get the fault this whole issue is about, on purpose,
+# and that is unchanged. 'avx512' is NOT: it is honoured only where the
+# AVX-512 check passes, and anywhere else it loads nothing and says why
+# (`_forced_avx512_refused_message`). A timing or gate run that asked for
+# AVX-512 on the wrong box then fails loudly instead of dying silently, and a
+# typo'd fleet host cannot be mistaken for an AVX-512 measurement.
 _FORCE_VARIANT_ENV = "MOMWIRE_FORCE_VARIANT"
 
 
-def _variants_to_try(verdict: bool | None) -> tuple[tuple[str, str], ...]:
+def _variants_to_try(
+    verdict: bool | None, avx512: bool | None = None
+) -> tuple[tuple[str, str], ...]:
     """The (label, suffix) chain to attempt, most preferred first.
 
+    `verdict` is the AVX2 check (`_cpu_supports_extension`), `avx512` the
+    AVX-512 one (`_cpu_supports_avx512`).
+
     UNKNOWN IS NOT OPTIMISTIC. A CPU we could not classify gets the baseline
-    build, never the AVX2 one: guessing wrong upward kills the interpreter with
-    no output, and guessing wrong downward costs speed. Those are not
-    comparable mistakes, so the tie always breaks the same way.
+    build, never the AVX2 one, and the AVX-512 build only on two checked yeses:
+    guessing wrong upward kills the interpreter with no output, and guessing
+    wrong downward costs speed. Those are not comparable mistakes, so the tie
+    always breaks the same way.
+
+    A forced 'avx512' on a CPU that did not pass the AVX-512 check returns the
+    EMPTY chain, and `_load` says why (see `_FORCE_VARIANT_ENV`).
     """
     forced = os.environ.get(_FORCE_VARIANT_ENV)
     if forced:
+        if forced == "avx512":
+            return (_AVX512,) if avx512 is True else ()
         chain = {"avx2": (_AVX2,), "sse2": (_SSE2,), "legacy": (_LEGACY,)}.get(forced)
         if chain is not None:
             return chain
         warnings.warn(
-            f"{_FORCE_VARIANT_ENV}={forced!r} is not one of 'avx2', 'sse2', "
-            "'legacy'; ignoring it and choosing normally.",
+            f"{_FORCE_VARIANT_ENV}={forced!r} is not one of 'avx512', 'avx2', "
+            "'sse2', 'legacy'; ignoring it and choosing normally.",
             RuntimeWarning,
             stacklevel=3,
         )
+    if verdict is True and avx512 is True:
+        return (_AVX512, _AVX2, _SSE2, _LEGACY)
     if verdict is True:
         return (_AVX2, _SSE2, _LEGACY)
     return (_SSE2, _LEGACY)
@@ -289,20 +491,24 @@ def _load():
     its place.
     """
     verdict = _cpu_supports_extension()
-    chain = _variants_to_try(verdict)
+    missing = _avx512_missing()
+    chain = _variants_to_try(verdict, None if missing is None else not missing)
     for label, suffix in chain:
         mod = _import_variant("_accelerators", suffix)
         if mod is not None:
             _alias_historic_name("_accelerators", mod)
             return mod, True, label
 
-    # Nothing in the chain imported. Two very different reasons, and the user
-    # needs to be told which.
-    tried = ", ".join(label for label, _ in chain)
-    variants = (_AVX2, _SSE2, _LEGACY)
-    forced_suffix = dict(variants).get(os.environ.get(_FORCE_VARIANT_ENV))
-    present = [label for label, suffix in variants if _extension_built(suffix)]
-    if forced_suffix is not None and not _extension_built(forced_suffix) and present:
+    # Nothing in the chain imported. Several very different reasons, and the
+    # user needs to be told which.
+    tried = ", ".join(label for label, _ in chain) or "none"
+    forced_suffix = dict(_ALL_VARIANTS).get(os.environ.get(_FORCE_VARIANT_ENV))
+    present = [label for label, suffix in _ALL_VARIANTS if _extension_built(suffix)]
+    if forced_suffix == _AVX512[1] and not chain:
+        # Forced AVX-512 on a CPU that did not pass the check: refused BEFORE
+        # any import, whether or not the build is on disk.
+        reason = _forced_avx512_refused_message(missing)
+    elif forced_suffix is not None and not _extension_built(forced_suffix) and present:
         # The test-only override named a build this install does not carry
         # (momwire#1038). Said plainly: without it, a caller guesses, and the
         # usual guess (a missing OpenMP runtime) sends the debugging elsewhere.
@@ -359,14 +565,16 @@ def _alias_historic_name(base_name: str, mod) -> None:
 def import_companion(base_name: str):
     """Import `base_name` from the SAME variant `_accelerators` came from.
 
-    `_near_interface` has its own optional extension, and the two must match:
+    `_near_interface` has its own optional extensions, and they must match:
     an AVX2 `_near_interface_accel` beside an SSE2 `_accelerators` faults on
-    exactly the CPU the split exists for, and it would fault from the module
-    nobody was looking at. One decision, made once, read by both.
+    exactly the CPU the split exists for (an AVX-512 one beside an AVX2
+    `_accelerators`, on the CPU `_avx512` was refused on), and it would fault
+    from the module nobody was looking at. One decision, made once, read by
+    all of them.
     """
     if VARIANT is None:
         return None
-    suffix = dict((label, sfx) for label, sfx in (_AVX2, _SSE2, _LEGACY))[VARIANT]
+    suffix = dict(_ALL_VARIANTS)[VARIANT]
     mod = _import_variant(base_name, suffix)
     if mod is not None:
         _alias_historic_name(base_name, mod)
