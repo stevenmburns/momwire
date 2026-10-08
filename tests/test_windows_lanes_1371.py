@@ -39,7 +39,7 @@ import numpy as np
 import pytest
 
 import momwire._accel as _accel
-from _lane_gate import bits
+from _lane_gate import VECTOR_VARIANTS, bits
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32", reason="the MSVC build's lane switch (momwire#1371)"
@@ -48,7 +48,9 @@ pytestmark = pytest.mark.skipif(
 
 def test_the_avx2_variant_is_loaded():
     assert _accel.LOADED
-    assert _accel.VARIANT == "avx2", (
+    # `_avx512` (momwire#1370) runs the same AVX2 lane backend, on a runner
+    # that has AVX-512.
+    assert _accel.VARIANT in VECTOR_VARIANTS, (
         f"loaded {_accel.VARIANT!r}: the lane gates on this runner would "
         "compare the walk with itself"
     )

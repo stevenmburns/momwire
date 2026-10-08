@@ -48,6 +48,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from test_crossing_serve_524 import hub_deck
+from _lane_gate import VECTOR_VARIANTS
 from test_sg_mixed_class_fill_1224 import _kernel_columns
 
 import momwire._accel as _accel
@@ -80,8 +81,9 @@ C0 = 299792458.0
 WL7 = C0 / 7e6
 SOMM = dict(ground_z=0.0, ground_eps=(13.0, 0.005), ground_model="sommerfeld")
 
-# Where the vector stage exists to be observed: glibc libmvec at AVX2.
-_VECTOR_BUILD = sys.platform == "linux" and _accel.VARIANT == "avx2"
+# Where the vector stage exists to be observed: glibc libmvec at AVX2, and at
+# AVX-512 since momwire#1370 (the same sources, widened by the compiler).
+_VECTOR_BUILD = sys.platform == "linux" and _accel.VARIANT in VECTOR_VARIANTS
 
 
 # ---------------------------------------------------------------------------

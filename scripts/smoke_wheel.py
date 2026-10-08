@@ -64,38 +64,48 @@ def main() -> int:
             "this interpreter."
         )
 
-    # THE VARIANT, and that the wheel really carries both (momwire#1032).
+    # THE VARIANT, and that the wheel really carries every build (momwire#1032,
+    # momwire#1370).
     #
     # An AVX2-only wheel imports and solves perfectly on every runner we own —
     # all of them have AVX2 — and dies with an illegal instruction on the CPUs
     # this split exists for. So "it worked here" proves nothing about the half
     # that matters; the presence of the baseline .so on disk is the only thing
-    # a runner can check on the user's behalf.
+    # a runner can check on the user's behalf. The same holds one level up:
+    # most runners lack AVX-512, so only the files say the `_avx512` build
+    # shipped.
     print(f"variant     {momwire.accelerator_variant}")
     pkg = mod.parent
+    names = ("_accelerators", "_near_interface_accel", "_near_interface_point_accel")
     variants = {
-        v: sorted(pkg.glob(f"_accelerators_{v}*"))
-        + sorted(pkg.glob(f"_near_interface_accel_{v}*"))
-        for v in ("avx2", "sse2")
+        v: sorted(f for n in names for f in pkg.glob(f"{n}_{v}.*"))
+        for v in ("avx512", "avx2", "sse2")
     }
     for name, files in variants.items():
-        print(f"  {name:5s} {len(files)} extension file(s)")
+        print(f"  {name:6s} {len(files)} extension file(s)")
 
-    double_build = bool(variants["avx2"]) or bool(variants["sse2"])
+    double_build = any(variants.values())
     if double_build:
-        if momwire.accelerator_variant != "avx2":
+        from momwire import _accel
+
+        # This CPU's own answer decides which build it must have chosen: an
+        # AVX-512 runner (some GitHub-hosted ones are) takes `_avx512`.
+        want = "avx512" if _accel._cpu_supports_avx512() is True else "avx2"
+        print(f"  avx512 check: missing {_accel._avx512_missing()}")
+        if momwire.accelerator_variant != want:
             raise SystemExit(
-                f"FAIL: this runner has AVX2, so it must choose the avx2 "
-                f"variant; it chose {momwire.accelerator_variant!r}. Either "
-                f"the CPU check is wrong or the avx2 extension is missing."
+                f"FAIL: this runner should choose the {want} variant; it chose "
+                f"{momwire.accelerator_variant!r}. Either the CPU check is "
+                f"wrong or the {want} extension is missing."
             )
-        if len(variants["sse2"]) != 2:
-            raise SystemExit(
-                "FAIL: the wheel does not carry BOTH baseline extensions "
-                f"(found {[f.name for f in variants['sse2']]}). A wheel "
-                "without them is the AVX2-only wheel that momwire#1032 is "
-                "about, and no runner here can detect that at run time."
-            )
+        for v, files in variants.items():
+            if len(files) != len(names):
+                raise SystemExit(
+                    f"FAIL: the wheel does not carry all {len(names)} {v} "
+                    f"extensions (found {[f.name for f in files]}). A wheel "
+                    "missing a variant fails on exactly the CPUs that need it, "
+                    "and no runner here can detect that at run time."
+                )
     else:
         # macOS and non-x86: one unsuffixed extension, as it has always been.
         print("  (single-variant platform: no AVX2 split)")

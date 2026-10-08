@@ -40,6 +40,7 @@ import warnings
 
 import numpy as np
 import pytest
+from _lane_gate import VECTOR_VARIANTS
 from test_crossing_serve_524 import hub_deck, invl_deck
 from test_mixed_fill_fused_1224 import detached_hub_deck
 
@@ -240,7 +241,7 @@ def test_the_real_kernel_needs_the_padding():
             assert np.array_equal(w[:, cols], g)
         wrong = _kernel_columns(s, ctx, geom, k, eta, cols, (cv.pad + 1) % 4)
         red += any(not np.array_equal(w[:, cols], g) for w, g in zip(whole, wrong))
-    if sys.platform == "linux" and _accel.VARIANT == "avx2":
+    if sys.platform == "linux" and _accel.VARIANT in VECTOR_VARIANTS:
         assert red == 8, f"a wrong padding moved bits in only {red} of 8 subsets"
 
 
