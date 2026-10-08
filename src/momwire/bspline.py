@@ -88,6 +88,7 @@ from . import _potential_ground
 from . import _quadrature
 from . import _remainder_graded
 from . import _rotational_symmetry
+from . import _schedule
 from . import _sommerfeld
 from . import _sommerfeld_below
 from . import _wire_loading
@@ -953,114 +954,31 @@ def _pair_extents_below_rect(obs, src, d_obs, d_src, pairs=1 << 20, *, r1_cap=No
     return best, best_hh
 
 
-def _contiguous_runs(idx):
-    """`[(start, stop), ...]` — the maximal runs of consecutive integers in
-    a sorted index array (a subset that is a union of whole wires is a few
-    of these)."""
-    idx = np.asarray(idx, dtype=np.int64)
-    if idx.size == 0:
-        return []
-    cuts = np.flatnonzero(np.diff(idx) != 1) + 1
-    starts = np.concatenate(([0], cuts))
-    stops = np.concatenate((cuts, [idx.size]))
-    return [(int(idx[s0]), int(idx[s1 - 1]) + 1) for s0, s1 in zip(starts, stops)]
+# `_schedule.runs`, under the name the buried fill's gates import.
+_contiguous_runs = _schedule.runs
 
 
-class _ObserverRows:
-    """The observer restriction of the ABOVE-GROUND fill (momwire#1131) —
-    the twin of the buried fill's `rows=` / `compact=` (momwire#1029,
-    #1132), threaded through the chunked writers instead of the pair
-    classes.
+class _ObserverRows(_schedule.ObserverRows):
+    """The observer restriction of the ABOVE-GROUND fill (momwire#1131) --
+    the twin of the buried fill's `rows=` / `compact=` (momwire#1029, #1132),
+    threaded through the chunked writers instead of the pair classes.
 
-    `seg_rows` is a sorted set of global segment indices made of whole
-    wires; `basis_rows` (R) is the basis rows whose whole live support lies
-    inside it (`_below_interface._crossing_basis_rows`, which refuses a split
-    basis by name). Every writer asks this object three things, and nothing
-    else about the restriction:
-
-    * `windows(i0, i1)` — the parts of an observer chunk `[i0, i1)` that
-      hold requested segments, as contiguous sub-windows. The writers keep
-      the DENSE fill's chunk boundaries and only drop the unrequested
-      segments inside each chunk. A basis's wings in one chunk all lie in
-      one run of whole wires, so they fall in one sub-window, and each
-      `(m, n)` entry receives the same addend, in the same order, as the
-      dense chunk gave it — which is why a requested row is the dense
-      chunked fill's row bit for bit, not merely to roundoff.
-    * `held(m_idx)` — `m_idx` less the rows the fill does not write. A
-      basis outside R can touch a requested window only through a PADDED
-      support slot (`supp_seg` is zero-padded, so an unlive slot names
-      segment 0), which adds an exact zero to a row nobody reads.
-    * `covers(sl)` — whether a same-edge / near-image block's edge is
-      requested. All or nothing: an edge is part of one wire.
-
-    `row_of` is None on the square target (Z stays `(n, n)` with every
-    unrequested row exactly zero) and the compact map (basis row m held at
-    row `row_of[m]`, -1 elsewhere) on the row-compact one. `loading_map` is
-    what `_apply_loading` takes in either case: the compact map, or the
-    identity on R, so the square target's unrequested rows stay zero too.
+    `_schedule.ObserverRows` is the restriction; this names the B-spline
+    basis rows it keeps: `basis_rows` (R) is the rows whose whole live
+    support lies inside `seg_rows` (`_below_interface._crossing_basis_rows`,
+    which refuses a split basis by name).
     """
 
-    __slots__ = ("basis_rows", "loading_map", "row_of", "runs", "seg_mask", "_held")
+    __slots__ = ()
 
     def __init__(self, seg_rows, supp_seg, polys, n_segs, *, compact):
-        seg_rows = np.asarray(seg_rows, dtype=np.int64)
-        if seg_rows.ndim != 1 or np.any(np.diff(seg_rows) <= 0):
-            raise ValueError("rows= must be a sorted 1-D array of distinct segments")
-        if seg_rows.size and (seg_rows[0] < 0 or seg_rows[-1] >= n_segs):
-            raise ValueError(f"rows= holds a segment outside [0, {n_segs})")
-        n_basis = int(supp_seg.shape[0])
-        self.basis_rows = _below_interface._crossing_basis_rows(
-            supp_seg, polys, seg_rows
+        super().__init__(
+            seg_rows,
+            n_segs,
+            supp_seg.shape[0],
+            lambda rows: _below_interface._crossing_basis_rows(supp_seg, polys, rows),
+            compact=compact,
         )
-        self.seg_mask = np.zeros(int(n_segs), dtype=bool)
-        self.seg_mask[seg_rows] = True
-        self.runs = _contiguous_runs(seg_rows)
-        self._held = np.zeros(n_basis, dtype=bool)
-        self._held[self.basis_rows] = True
-        loading_map = np.full(n_basis, -1, dtype=np.int64)
-        if compact:
-            loading_map[self.basis_rows] = np.arange(
-                self.basis_rows.size, dtype=np.int64
-            )
-            self.row_of = loading_map
-        else:
-            loading_map[self.basis_rows] = self.basis_rows
-            self.row_of = None
-        self.loading_map = loading_map
-
-    def new_Z(self, n_basis):
-        if self.row_of is None:
-            # Column-major, as `_compute_Z_dense_chunked`'s own square Z is.
-            return np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
-        # C order: nothing factors a row-compact Z (momwire#1132's reason).
-        return np.zeros((self.basis_rows.size, n_basis), dtype=np.complex128)
-
-    def windows(self, i0, i1):
-        out = []
-        for r0, r1 in self.runs:
-            a0, a1 = max(r0, i0), min(r1, i1)
-            if a0 < a1:
-                out.append((a0, a1))
-        return out
-
-    def held(self, m_idx):
-        return m_idx[self._held[m_idx]]
-
-    def covers(self, sl):
-        inside = self.seg_mask[sl]
-        if inside.all():
-            return True
-        if inside.any():
-            raise ValueError(
-                f"rows= covers part of the edge [{sl.start}, {sl.stop}); the "
-                f"above-ground fill restricts by whole wires (momwire#1131)"
-            )
-        return False
-
-    def kwargs(self):
-        """The assemblers' extra argument: only the compact target passes
-        one, so the square target's calls are the shipped ones."""
-        return {} if self.row_of is None else {"row_of": self.row_of}
 
 
 class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
@@ -3849,9 +3767,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_basis = polys.shape[0]
         Q = np.zeros((n_basis, n_basis), dtype=np.complex128)
         chunk = max(1, (1 << 19) // max(n_nodes * q, 1))
-        for i0 in range(0, n_seg, chunk):
-            self._checkpoint()  # per observer chunk of the eval+assemble block
-            i1 = min(i0 + chunk, n_seg)
+        # A checkpoint per observer chunk of the eval+assemble block.
+        for i0, i1 in _schedule.chunks([(0, n_seg)], chunk, self._checkpoint):
             obs = nodes[i0:i1].reshape(-1, 3)
             t_obs = np.repeat(tang[i0:i1], q, axis=0)
             proj = _sommerfeld.remainder_field_proj(
@@ -4149,20 +4066,27 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         d = self.degree
         ek = _EK_SAME_EDGE if self.extended_kernel else None
+        return [
+            (sl, _seg_seg_static_moments(arc, a_w, max_d=d, ek=ek), arc, a_w)
+            for _w, sl, arc, a_w in self._edge_ingredients(geom)
+        ]
+
+    def _edge_ingredients(self, geom):
+        """`(wire, global_slice, edge_arc, radius)` per edge, in wire order:
+        what every same-edge block is built from. O(N_e) each; `edge_arc` is
+        `geom`'s own array."""
         per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
-        prep = []
+        out = []
         for w in range(len(per_wire)):
-            pw = per_wire[w]
-            ed_off = pw["edge_offsets"]
-            ed_arc = pw["edge_arc_edges"]
+            ed_off = per_wire[w]["edge_offsets"]
+            ed_arc = per_wire[w]["edge_arc_edges"]
             base = seg_off[w]
             a_w = float(self._radius_per_wire[w])
             for i_e in range(len(ed_off) - 1):
                 sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d, ek=ek)
-                prep.append((sl, A_st, ed_arc[i_e], a_w))
-        return prep
+                out.append((w, sl, ed_arc[i_e], a_w))
+        return out
 
     def _same_edge_prep_swept_chunks(self, prep, k_array):
         """Yield `(ki, k, same_edge_k)` per sweep point, where `same_edge_k`
@@ -4220,11 +4144,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # k-chunk out of what is left, rather than pretending the rebuild
         # is free.
         transient_bytes = max_ne2 * n_qp * n_qp * 8
-        budget = max((self.swept_mem_mb << 20) - transient_bytes, 0)
-        chunk = max(1, min(n_k, budget // max(bytes_per_k, 1)))
-        for c0 in range(0, n_k, chunk):
-            self._checkpoint()  # before each chunk's batched reg-moment build
-            ks = k_array[c0 : c0 + chunk]
+        chunk = _schedule.k_chunk(n_k, self.swept_mem_mb, bytes_per_k, transient_bytes)
+        # A checkpoint before each chunk's batched reg-moment build.
+        for c0, c1 in _schedule.k_chunks(n_k, chunk, self._checkpoint):
+            ks = k_array[c0:c1]
             reg_chunk = [
                 _seg_seg_reg_moments_from_geometry_swept(
                     _seg_seg_reg_geometry(ed_arc, a_w, max_d=d, n_qp=n_qp, ek=ek), ks
@@ -4542,15 +4465,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         ek = self._ek_spec(geom) if self.extended_kernel else None
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
 
-        # Fortran order: `_lu_solve(overwrite_a=True)` can only
-        # factor in place on a column-major matrix — C order would silently
-        # cost a full n_basis-squared copy at solve time (issue #136).
-        if restrict is None:
-            Z = np.zeros((n_basis, n_basis), dtype=np.complex128, order="F")
-            row_kw = {}
-        else:
-            Z = restrict.new_Z(n_basis)
-            row_kw = restrict.kwargs()
+        Z, row_kw = _schedule.new_target(n_basis, restrict)
         supp_c = np.ascontiguousarray(supp_seg, dtype=np.int64)
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
         tan_c = np.ascontiguousarray(tangents, dtype=np.float64)
@@ -4599,16 +4514,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # Row-chunk budget: bytes per observer row of the (d+1, d+1, ·, N)
         # chunk, against the same transient budget the swept path uses.
         #
-        # Honest only if the loop itself never holds two windows at once
-        # (issue #338): `J_chunk = producer(...)` allocates the NEW window
-        # before rebinding the name, so without the `del` below the OLD
-        # window (still referenced by `J_chunk` from the prior iteration)
-        # stays resident while its replacement is built — one budget's
-        # worth of accidental double-buffering on top of the one the
-        # arithmetic accounts for. Measured at 8,320 basis,
-        # swept_mem_mb=256: 511 MB transient (1.997x budget) before this
-        # `del`, 255 MB (0.996x) after — bit-exact, since nothing about
-        # the windows' contents or the accumulation order changes.
+        # Honest only if the walk never holds two windows at once (issue
+        # #338: 511 MB transient, 1.997x budget, at 8,320 basis and
+        # swept_mem_mb=256 when the old window outlived its rebind; 255 MB,
+        # 0.996x, without). Each window is `_sweep_block`'s local, so it
+        # dies when the block returns, before `_schedule.sweep` builds the
+        # next.
         #
         # `_offedge_fallback_row_bytes` adds the numpy-fallback producer's
         # own internal-intermediate overhead (issue #347) — zero, and this
@@ -4618,31 +4529,38 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         row_bytes = (d + 1) ** 2 * n_segs * 16 + self._offedge_fallback_row_bytes(
             n_segs
         )
-        chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
+        chunk = _schedule.mb_rows(self.swept_mem_mb, row_bytes)
         # momwire#907: ONE ladder for the whole fill. The same-edge correction
         # below subtracts what this sweep added, so the two must agree on
         # every pair's order; see `_fill_ladder` for why per-window resolution
         # does not.
         ladder = self._fill_ladder(k, seg_l, seg_r, ek)
-        for i0 in range(0, n_segs, chunk):
-            self._checkpoint()  # per observer chunk of the fill+assemble
-            i1 = min(i0 + chunk, n_segs)
-            # momwire#1131: the requested parts of this chunk, or the chunk.
-            for w0, w1 in [(i0, i1)] if restrict is None else restrict.windows(i0, i1):
-                J_chunk = _seg_seg_full_moments_offedge(
-                    seg_l[w0:w1],
-                    seg_r[w0:w1],
-                    seg_l,
-                    seg_r,
-                    a_row[w0:w1],
-                    k,
-                    d,
-                    self.n_qp_pair,
-                    ek=_ek_slice(ek, rows=slice(w0, w1)),
-                    ladder=ladder,
-                )
-                _accumulate(J_chunk, w0, w1, 0, n_segs, _bases_touching(w0, w1), all_n)
-                del J_chunk  # drop this window before the next one is built (#338)
+
+        def _sweep_block(w0, w1, j0, j1):
+            J_chunk = _seg_seg_full_moments_offedge(
+                seg_l[w0:w1],
+                seg_r[w0:w1],
+                seg_l,
+                seg_r,
+                a_row[w0:w1],
+                k,
+                d,
+                self.n_qp_pair,
+                ek=_ek_slice(ek, rows=slice(w0, w1)),
+                ladder=ladder,
+            )
+            _accumulate(J_chunk, w0, w1, j0, j1, _bases_touching(w0, w1), all_n)
+
+        # One checkpoint per observer chunk; under `restrict` (momwire#1131)
+        # each chunk keeps only its requested windows.
+        _schedule.sweep(
+            [(0, n_segs)],
+            chunk,
+            _sweep_block,
+            sources=[(0, n_segs)],
+            checkpoint=self._checkpoint,
+            restrict=restrict,
+        )
 
         # Same-edge fixup: the sweep above added the full-kernel block for
         # every pair; each same-edge block must instead be the analytic
@@ -4655,18 +4573,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # last two whole-edge residencies left after #967 chunked
             # everything around them; built per observer window they never
             # exist at full height. `ed_arc` and `a_w` are O(N_e).
-            per_wire = geom["per_wire"]
-            seg_off = geom["seg_offsets"]
-            edge_ingredients = []
-            for w in range(len(per_wire)):
-                pw = per_wire[w]
-                ed_off = pw["edge_offsets"]
-                ed_arc = pw["edge_arc_edges"]
-                base = seg_off[w]
-                a_w = float(self._radius_per_wire[w])
-                for i_e in range(len(ed_off) - 1):
-                    sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                    edge_ingredients.append((sl, ed_arc[i_e], a_w))
+            edge_ingredients = [
+                (sl, arc, a_w) for _w, sl, arc, a_w in self._edge_ingredients(geom)
+            ]
             same_edge_prep = []
         # THE CORRECTION IS CHUNKED TOO (momwire#966). The sweep above is
         # bounded by `swept_mem_mb`; this block used to be bounded only by the
@@ -4724,11 +4633,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ]
         else:
             entries = [(sl, A_st, reg, None, None) for sl, A_st, reg in same_edge_prep]
-        for sl, A_st, reg, ed_arc_e, a_w in entries:
-            if restrict is not None and not restrict.covers(sl):
-                # An unrequested edge writes only its own wire's rows.
-                continue
-            self._checkpoint()  # per same-edge correction block
+
+        def _fix_edge(sl, A_st, reg, ed_arc_e, a_w):
             A_reg = None
             if reg is not None:
                 A_reg = (
@@ -4749,11 +4655,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             corr_row_bytes = (d + 1) ** 2 * n_edge * 16 + (
                 self._offedge_fallback_row_bytes(n_edge)
             )
-            corr_chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // corr_row_bytes))
+            corr_chunk = _schedule.mb_rows(self.swept_mem_mb, corr_row_bytes)
             if not _SAME_EDGE_CORR_CHUNKED:
                 corr_chunk = max(1, n_edge)  # the pre-#966 whole-edge route
-            for r0 in range(sl.start, sl.stop, corr_chunk):
-                r1 = min(r0 + corr_chunk, sl.stop)
+
+            def _corr_block(r0, r1, j0, j1):
                 win = slice(r0, r1)
                 # The correction subtracts what the sweep above already added
                 # for these pairs, so it must be filled with exactly the
@@ -4795,13 +4701,26 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     A_st_w = A_st[:, :, lo:hi, :]
                     A_reg_w = A_reg[:, :, lo:hi, :]
                 corr = (A_st_w + A_reg_w) - J_win
-                del J_win, A_st_w, A_reg_w  # before the next window (#338)
-                _accumulate(
-                    corr, r0, r1, sl.start, sl.stop, _bases_touching(r0, r1), e_idx
-                )
-                del corr
-            del A_reg
+                del J_win, A_st_w, A_reg_w  # not beside the assembler's call (#338)
+                _accumulate(corr, r0, r1, j0, j1, _bases_touching(r0, r1), e_idx)
 
+            # The edge's own row windows against its own columns; no
+            # checkpoint inside one edge's correction.
+            _schedule.sweep(
+                [(sl.start, sl.stop)],
+                corr_chunk,
+                _corr_block,
+                sources=[(sl.start, sl.stop)],
+            )
+
+        # One checkpoint per same-edge block. An unrequested edge writes only
+        # its own wire's rows, so a restricted fill skips it whole.
+        _schedule.diagonal(
+            entries,
+            _fix_edge,
+            checkpoint=self._checkpoint,
+            keep=None if restrict is None else (lambda e: restrict.covers(e[0])),
+        )
         return Z
 
     def _accumulate_Z_image_chunked(
@@ -4853,10 +4772,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         polys_c = np.ascontiguousarray(polys, dtype=np.float64)
         all_n = np.arange(n_basis, dtype=np.int64)
 
-        # Same lifetime discipline as `_compute_Z_dense_chunked` (#338):
-        # `del` the window and weight arrays before the next iteration
-        # rebinds their names, so the loop never holds an old chunk and its
-        # replacement at once.
+        # The window and its weight windows are `_image_block`'s locals, so
+        # the walk never holds an old chunk beside its replacement (#338).
         #
         # #338 left this arithmetic sizing the moment window ALONE — the
         # weight windows `weights_fn` returns (and, for refl-coef, the
@@ -4873,78 +4790,78 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             + self._image_weight_row_bytes(n_segs)
             + self._offedge_fallback_row_bytes(n_segs)
         )
-        chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
+        chunk = _schedule.mb_rows(self.swept_mem_mb, row_bytes)
         row_kw = {} if restrict is None else restrict.kwargs()
 
         def _rows(m_idx):
             return m_idx if restrict is None else restrict.held(m_idx)
 
-        for c0 in range(0, n_segs, chunk):
-            self._checkpoint()  # per observer chunk of the image fill
-            c1 = min(c0 + chunk, n_segs)
-            if restrict is None:
-                wins = [(c0, c1)]
-            else:
-                # momwire#1131: the requested parts of this chunk.
-                wins = restrict.windows(c0, c1)
-            for i0, i1 in wins:
-                J_chunk = _seg_seg_full_moments_offedge(
-                    seg_l[i0:i1],
-                    seg_r[i0:i1],
-                    seg_l_img,
-                    seg_r_img,
-                    a_row[i0:i1],
-                    k,
-                    d,
-                    self.n_qp_pair,
-                    ek=_ek_slice(ek, rows=slice(i0, i1)),
-                    ladder=ladder,
-                )
-                m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
-                # Same producer contract as `_accumulate` in the free-space
-                # chunked fill (issue #318 audit): the offedge producer emits
-                # C-contiguous complex128 on every path, so the wrapper this
-                # replaced was the same dead no-op. `forcecast` on the
-                # assembler stays the safety net.
-                assert J_chunk.dtype == np.complex128 and J_chunk.flags.c_contiguous, (
-                    f"moment window must be C-contiguous complex128, got {J_chunk.dtype}"
-                )
-                # The window producers are gemm/elementwise expressions, so they
-                # emit C-contiguous complex128 of exactly the chunk's shape
-                # already — same producer contract as the moment window above,
-                # asserted rather than re-wrapped.
-                w_A_win, w_Phi_win = weights_fn(i0, i1)
-                assert all(
-                    w.shape == (i1 - i0, n_segs)
-                    and w.dtype == np.complex128
-                    and w.flags.c_contiguous
-                    for w in (w_A_win, w_Phi_win)
-                ), (
-                    f"weight windows must be C-contiguous complex128 ({i1 - i0}, {n_segs})"
-                )
-                _acc.assemble_Z_bspline_weighted_windowed(
-                    J_chunk,
-                    supp_c,
-                    polys_c,
-                    # The j-window is the full [0, n_segs), so the producers hand
-                    # back whole rows.
-                    w_A_win,
-                    w_Phi_win,
-                    _rows(np.nonzero(m_mask)[0].astype(np.int64)),
-                    all_n,
-                    int(i0),
-                    int(i1),
-                    0,
-                    int(n_segs),
-                    float(self.omega),
-                    float(self.eps),
-                    float(self.mu),
-                    complex(-1.0),
-                    Z,
-                    self._cancel_flag,
-                    **row_kw,
-                )
-                del J_chunk, w_A_win, w_Phi_win  # (#338)
+        def _image_block(i0, i1, j0, j1):
+            J_chunk = _seg_seg_full_moments_offedge(
+                seg_l[i0:i1],
+                seg_r[i0:i1],
+                seg_l_img,
+                seg_r_img,
+                a_row[i0:i1],
+                k,
+                d,
+                self.n_qp_pair,
+                ek=_ek_slice(ek, rows=slice(i0, i1)),
+                ladder=ladder,
+            )
+            m_mask = ((supp_c >= i0) & (supp_c < i1)).any(axis=1)
+            # Same producer contract as `_accumulate` in the free-space
+            # chunked fill (issue #318 audit): the offedge producer emits
+            # C-contiguous complex128 on every path, so the wrapper this
+            # replaced was the same dead no-op. `forcecast` on the
+            # assembler stays the safety net.
+            assert J_chunk.dtype == np.complex128 and J_chunk.flags.c_contiguous, (
+                f"moment window must be C-contiguous complex128, got {J_chunk.dtype}"
+            )
+            # The window producers are gemm/elementwise expressions, so they
+            # emit C-contiguous complex128 of exactly the chunk's shape
+            # already — same producer contract as the moment window above,
+            # asserted rather than re-wrapped.
+            w_A_win, w_Phi_win = weights_fn(i0, i1)
+            assert all(
+                w.shape == (i1 - i0, n_segs)
+                and w.dtype == np.complex128
+                and w.flags.c_contiguous
+                for w in (w_A_win, w_Phi_win)
+            ), f"weight windows must be C-contiguous complex128 ({i1 - i0}, {n_segs})"
+            _acc.assemble_Z_bspline_weighted_windowed(
+                J_chunk,
+                supp_c,
+                polys_c,
+                # The j-window is the full [0, n_segs), so the producers hand
+                # back whole rows.
+                w_A_win,
+                w_Phi_win,
+                _rows(np.nonzero(m_mask)[0].astype(np.int64)),
+                all_n,
+                int(i0),
+                int(i1),
+                int(j0),
+                int(j1),
+                float(self.omega),
+                float(self.eps),
+                float(self.mu),
+                complex(-1.0),
+                Z,
+                self._cancel_flag,
+                **row_kw,
+            )
+
+        # One checkpoint per observer chunk; under `restrict` (momwire#1131)
+        # each chunk keeps only its requested windows.
+        _schedule.sweep(
+            [(0, n_segs)],
+            chunk,
+            _image_block,
+            sources=[(0, n_segs)],
+            checkpoint=self._checkpoint,
+            restrict=restrict,
+        )
 
         # Near-image fixup (momwire#631), the image-side twin of the
         # free-space same-edge fixup in `_compute_Z_dense_chunked`: the sweep
@@ -4953,10 +4870,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # off-edge quadrature cannot do at this order. Accumulate the
         # DIFFERENCE, so the pairs it does not name keep exactly the
         # arithmetic they had rather than merely the same value.
-        for sl, arc, a_eff in self._near_image_edge_blocks(geom):
-            if restrict is not None and not restrict.covers(sl):
-                continue  # writes only its own (unrequested) wire's rows
-            self._checkpoint()  # per near-image correction block
+        def _fix_image_edge(sl, arc, a_eff):
             J_edge = _seg_seg_full_moments_offedge(
                 seg_l[sl],
                 seg_r[sl],
@@ -4970,7 +4884,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ladder=ladder,
             )
             corr = self._near_image_analytic_block(arc, a_eff, k) - J_edge
-            del J_edge  # same lifetime discipline as the sweep above (#338)
+            del J_edge  # not beside the weight windows (#338)
             w_A_win, w_Phi_win = weights_fn(sl.start, sl.stop)
             e_idx = np.nonzero(((supp_c >= sl.start) & (supp_c < sl.stop)).any(axis=1))[
                 0
@@ -4997,7 +4911,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 self._cancel_flag,
                 **row_kw,
             )
-            del corr, w_A_win, w_Phi_win  # (#338)
+
+        # An unrequested edge writes only its own wire's rows.
+        _schedule.diagonal(
+            self._near_image_edge_blocks(geom),
+            _fix_image_edge,
+            checkpoint=self._checkpoint,
+            keep=None if restrict is None else (lambda e: restrict.covers(e[0])),
+        )
 
     # ------------------------------------------------------------------
     # Distributed series wire loading (stevenmburns/momwire#131)
@@ -6757,37 +6678,38 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     **row_kw,
                 )
 
-        runs = _contiguous_runs(seg_idx)
+        runs = _schedule.runs(seg_idx)
         # momwire#1029: the OBSERVER axis may be narrowed; sources stay
         # `seg_idx`, and `chunk` is sized off the source axis as before.
-        obs_runs = runs if obs_idx is None else _contiguous_runs(obs_idx)
+        obs_runs = runs if obs_idx is None else _schedule.runs(obs_idx)
         n_sub = int(seg_idx.size)
         row_bytes = (d + 1) ** 2 * n_sub * 16
-        chunk = max(1, int(self.swept_mem_mb * 1024 * 1024 // row_bytes))
-        for r0, r1 in obs_runs:
-            for i0 in range(r0, r1, chunk):
-                self._checkpoint()  # per observer chunk of the buried subset fill
-                i1 = min(i0 + chunk, r1)
-                for j0, j1 in runs:
-                    J_win = _seg_seg_full_moments_offedge(
-                        seg_l[i0:i1],
-                        seg_r[i0:i1],
-                        src_l[j0:j1],
-                        src_r[j0:j1],
-                        a_row[i0:i1],
-                        k,
-                        d,
-                        self.n_qp_pair,
-                        ladder=ladder,
-                    )
-                    _accumulate(J_win, i0, i1, j0, j1)
-                    del J_win  # one window live at a time (#338)
+        chunk = _schedule.mb_rows(self.swept_mem_mb, row_bytes)
+
+        def _subset_block(i0, i1, j0, j1):
+            J_win = _seg_seg_full_moments_offedge(
+                seg_l[i0:i1],
+                seg_r[i0:i1],
+                src_l[j0:j1],
+                src_r[j0:j1],
+                a_row[i0:i1],
+                k,
+                d,
+                self.n_qp_pair,
+                ladder=ladder,
+            )
+            _accumulate(J_win, i0, i1, j0, j1)
+
+        # Every (observer chunk x source run) rectangle, one window live at a
+        # time (#338), a checkpoint per observer chunk.
+        _schedule.sweep(
+            obs_runs, chunk, _subset_block, sources=runs, checkpoint=self._checkpoint
+        )
 
         if mirror_sources:
             return
         # Same-edge fixup, per edge of each subset wire (the dense path's
         # overwrite, as a correction window).
-        per_wire = geom["per_wire"]
         seg_off = geom["seg_offsets"]
         on_subset = np.zeros(int(geom["n_segs_total"]), dtype=bool)
         on_subset[seg_idx] = True
@@ -6795,37 +6717,35 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if obs_idx is not None:
             on_obs = np.zeros_like(on_subset)
             on_obs[np.asarray(obs_idx, dtype=np.int64)] = True
-        for w in range(len(per_wire)):
-            # the same-edge correction is a DIAGONAL block, so it is written
-            # only where the wire is on both axes (momwire#1029).
-            if not (on_subset[seg_off[w]] and on_obs[seg_off[w]]):
-                continue
-            pw = per_wire[w]
-            ed_off = pw["edge_offsets"]
-            ed_arc = pw["edge_arc_edges"]
-            base = seg_off[w]
-            a_w = float(self._radius_per_wire[w])
-            for i_e in range(len(ed_off) - 1):
-                self._checkpoint()  # per same-edge correction block
-                sl = slice(base + ed_off[i_e], base + ed_off[i_e + 1])
-                A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
-                A_reg = _seg_seg_reg_moments(
-                    ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
-                )
-                J_edge = _seg_seg_full_moments_offedge(
-                    seg_l[sl],
-                    seg_r[sl],
-                    seg_l[sl],
-                    seg_r[sl],
-                    a_row[sl],
-                    k,
-                    d,
-                    self.n_qp_pair,
-                    ladder=ladder,
-                )
-                corr = (A_st + A_reg) - J_edge
-                del J_edge
-                _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop)
+
+        def _fix_edge(w, sl, arc, a_w):
+            A_st = _seg_seg_static_moments(arc, a_w, max_d=d)
+            A_reg = _seg_seg_reg_moments(
+                arc, a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
+            )
+            J_edge = _seg_seg_full_moments_offedge(
+                seg_l[sl],
+                seg_r[sl],
+                seg_l[sl],
+                seg_r[sl],
+                a_row[sl],
+                k,
+                d,
+                self.n_qp_pair,
+                ladder=ladder,
+            )
+            corr = (A_st + A_reg) - J_edge
+            del J_edge
+            _accumulate(corr, sl.start, sl.stop, sl.start, sl.stop)
+
+        # The same-edge correction is a DIAGONAL block, so it is written only
+        # where the wire is on both axes (momwire#1029).
+        _schedule.diagonal(
+            self._edge_ingredients(geom),
+            _fix_edge,
+            checkpoint=self._checkpoint,
+            keep=lambda e: on_subset[seg_off[e[0]]] and on_obs[seg_off[e[0]]],
+        )
 
     def _buried_serve_plan(self, geom, a_idx, obs_a, obs_b, k_p, k_m, crossing=False):
         """Grid extents for the three field-form blocks, or a named refusal —
@@ -6947,7 +6867,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tensor_bytes = (
             (self.degree + 1) ** 2 * int(n_segs) ** 2 * np.dtype(np.complex128).itemsize
         )
-        return tensor_bytes <= (self.swept_mem_mb << 20)
+        return _schedule.fits_mb(tensor_bytes, self.swept_mem_mb)
 
     def _compute_Z_operator(
         self, geom, supp_seg, polys, same_edge_prep=None, rows=None, compact=False
@@ -7838,8 +7758,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # sets the high-water mark, since the loop below overwrites `reg_geo`
         # edge by edge rather than keeping every edge's table alive together.
         transient_bytes = max_ne2 * n_qp * n_qp * 8
-        budget = max((self.swept_mem_mb << 20) - transient_bytes, 0)
-        chunk = max(1, min(n_k, budget // max(bytes_per_k, 1)))
+        chunk = _schedule.k_chunk(n_k, self.swept_mem_mb, bytes_per_k, transient_bytes)
 
         def _assemble_swept(J_tensor, t_row, t_col, omega_chunk):
             return _acc.assemble_Z_bspline_swept(
@@ -7854,9 +7773,8 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 int(d),
             )
 
-        for c0 in range(0, n_k, chunk):
-            self._checkpoint()  # top of each k-chunk
-            ks = k_array[c0 : c0 + chunk]
+        for c0, c1 in _schedule.k_chunks(n_k, chunk, self._checkpoint):
+            ks = k_array[c0:c1]
             omega_chunk = ks * self.c
             J = _seg_seg_full_moments_offedge_swept(
                 seg_l,
