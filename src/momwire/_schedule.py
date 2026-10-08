@@ -36,35 +36,16 @@ call's own transient does not ride on top of it) still says so.
 `replay` call the solver's ``checkpoint`` once per chunk, block, k-chunk or
 replayed window -- exactly where the per-solver loops called it.
 
-How the trunks not yet on it plug in (phase 2 of momwire#1337):
-
-* **sinusoidal** (`SinusoidalSolver._assemble_Z`'s observer bands). Rows per
-  band from `_fill_row_bytes` against `swept_mem_mb`, the whole fill as one
-  band below `_DENSE_ASSEMBLY_THRESHOLD` (a dense zgemm's blocking follows
-  the row count there), one checkpoint per band, and the Sommerfeld
-  remainder's source side built once and replayed per band. That is
-  `mb_rows` + `chunks` (the threshold rule stays the formulation's: it
-  passes the chunk), and the remainder is `prepare` / `replay`. Fits as is.
-* **SG** is no longer the copy the issue counted: momwire#1354 moved its
-  default fill onto the B-spline kernel, and the loop it walks now,
-  `_sinusoidal_mp.WindowFill.accumulate`, is `chunks` with a checkpoint per
-  window -- a sixth spelling, and the cheapest to migrate. Its direct field
-  fill keeps `_segment_bands`, whose ``align=`` rounds a band UP to whole
-  numpy-fill blocks because that fill's per-entry values move with its
-  block height on a complex k. `chunks` cannot express that rounding;
-  it is one argument (a step that is a multiple of `align`), not a
-  different interface.
-* **hmatrix** does NOT fit `sweep`, and that is a finding rather than a
-  gap. Its blocks are the cluster partition's ``(I, J)`` pairs over BASIS
-  index sets, chosen by geometry (admissibility), not by a byte budget, and
-  its far blocks are filled adaptively by partial-pivoted ACA, one row or
-  column at a time on demand -- a schedule the formulation's compression
-  decides, which no up-front walk can own. What it takes from here is
-  `walk` (its near and far loops are checkpointed walks over a block list)
-  and, for #1251-style restriction, nothing new. `zblock(I, J)` stays the
-  block evaluator §F names; this module's block is its contiguous special
-  case, and the H-matrix's is the general one. The interface reaches
-  ``zblock`` through `walk`, not the reverse.
+Not yet on it (phase 2 of momwire#1337): sinusoidal's observer bands are
+`mb_rows` + `chunks` with its remainder as `prepare` / `replay`, and fit as
+they are; SG's default fill now walks `_sinusoidal_mp.WindowFill`, which is
+`chunks`, while its direct fill's `_segment_bands` rounds a band up to whole
+numpy-fill blocks (``align=``), one argument `chunks` lacks. hmatrix does
+NOT fit `sweep`: its blocks are a cluster partition over basis index sets,
+chosen by admissibility, and its far blocks are filled by ACA one row or
+column at a time on demand. It can take `walk` for its block loops; the
+partition and ACA stay its own schedule, and `zblock(I, J)` stays the
+general block this module's contiguous block is a case of.
 
 `STATS` counts what the walks did, so a gate can prove a fill came through
 here rather than through a path that no longer exists (the green-gate trap).
