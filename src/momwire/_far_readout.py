@@ -26,6 +26,8 @@ once because there is only one readout to land it in (momwire#570).
 from __future__ import annotations
 
 import math
+import threading
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -428,6 +430,37 @@ def _cliff_image_moments(
     return total
 
 
+# momwire#1395: the phase factor exp(j k r_hat . r_n) depends only on the
+# directions, the element centres and k, never on the currents. SimNEC's
+# multi-run decks ask for the same RP grid on the same structure once per
+# port, so the factor is kept for the next run. A hit returns the very array
+# a fresh build would, so no number moves. Small (a few entries) and capped
+# by size, so a fine grid on a large deck is built as before, not stored.
+_PHASE_CACHE: OrderedDict = OrderedDict()
+_PHASE_CACHE_ENTRIES = 4
+_PHASE_CACHE_MAX_ELEMENTS = 4_000_000  # complex128 entries: 64 MB per array
+_PHASE_CACHE_LOCK = threading.Lock()  # the resident server solves concurrently
+
+
+def _phase_factor(rhat, centres, k, grid_key):
+    """``exp(j k r_hat . centres)`` on the direction grid, from the cache when
+    the same grid, centres and k were asked for before."""
+    key = (float(k), grid_key, centres.shape, centres.tobytes())
+    with _PHASE_CACHE_LOCK:
+        hit = _PHASE_CACHE.get(key)
+        if hit is not None:
+            _PHASE_CACHE.move_to_end(key)
+            return hit
+    phase = k * np.einsum("ijc,nc->ijn", rhat, centres)
+    factor = np.exp(1j * phase)
+    if factor.size <= _PHASE_CACHE_MAX_ELEMENTS:
+        with _PHASE_CACHE_LOCK:
+            _PHASE_CACHE[key] = factor
+            while len(_PHASE_CACHE) > _PHASE_CACHE_ENTRIES:
+                _PHASE_CACHE.popitem(last=False)
+    return factor
+
+
 def _far_moments(mid, moment, k, theta, phi, ground, ground_z, freq_hz, cliff=None):
     """Complex ``(M_theta, M_phi)`` on the ``theta`` x ``phi`` grids (radians).
 
@@ -485,9 +518,11 @@ def _far_moments(mid, moment, k, theta, phi, ground, ground_z, freq_hz, cliff=No
     theta_hat = np.stack([cos_t_g * cos_p_g, cos_t_g * sin_p_g, -sin_t_g], axis=-1)
     phi_hat = np.stack([-sin_p_g, cos_p_g, np.zeros_like(rx)], axis=-1)
 
+    grid_key = (theta.shape, theta.tobytes(), phi.shape, phi.tobytes())
+
     def moments_of(centres, weights):
-        phase = k * np.einsum("ijc,nc->ijn", rhat, centres)
-        return np.einsum("ijn,nc->ijc", np.exp(1j * phase), weights)
+        factor = _phase_factor(rhat, centres, k, grid_key)
+        return np.einsum("ijn,nc->ijc", factor, weights)
 
     # The reflected wave's own polarisation basis: h along phi_hat, v the
     # in-plane partner. PEC is rho_h = -1, rho_v = +1, so the Fresnel step
