@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from . import _accel
+from . import _accel, _schedule
 from ._quadrature import leggauss
 
 _acc = _accel.acc
@@ -851,10 +851,9 @@ class WindowFill:
             if src_idx is None
             else np.asarray(src_idx, dtype=np.int64)
         )
-        for i0 in range(0, n_obs, rows):
-            if self.checkpoint is not None:
-                self.checkpoint()
-            i1 = min(i0 + rows, n_obs)
+        # One checkpoint per observer window, called by the walk at the top
+        # of each window (momwire#1337 phase 2).
+        for i0, i1 in _schedule.chunks([(0, n_obs)], rows, self.checkpoint):
             ek_win = None if ek is None else (ek[0][i0:i1],) + tuple(ek[1:])
             J = self._window_moments(sl_o, sr_o, sl_s, sr_s, a_row, i0, i1, ek_win)
             ii, jj, Jn = near_pair_moments(
