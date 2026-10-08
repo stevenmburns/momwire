@@ -365,6 +365,7 @@ from . import (
     _near_interface,
     _potential_ground,
     _razor_class,
+    _schedule,
     _sommerfeld_below,
     _wire_loading,
     _wire_spec,
@@ -771,12 +772,12 @@ def _ix_accumulate(Z, rows, cols, block, *, sign=1):
     if np.unique(rows).size != rows.size or np.unique(cols).size != cols.size:
         raise ValueError("_ix_accumulate takes index sets without repeats")
     w = max(1, _IX_SLAB_BYTES // (16 * max(1, rows.size)))
-    for c0 in range(0, cols.size, w):
-        ix = np.ix_(rows, cols[c0 : c0 + w])
+    for c0, c1 in _schedule.chunks([(0, cols.size)], w):
+        ix = np.ix_(rows, cols[c0:c1])
         if sign > 0:
-            Z[ix] += block[:, c0 : c0 + w]
+            Z[ix] += block[:, c0:c1]
         else:
-            Z[ix] -= block[:, c0 : c0 + w]
+            Z[ix] -= block[:, c0:c1]
 
 
 def derive_n_qp_path(k, wires_polylines, n_per_edge_per_wire):
@@ -1033,7 +1034,7 @@ def _remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap=None):
     )
 
 
-class _PreparedChunks:
+class _PreparedChunks(_schedule.Prepared):
     """The numpy fill's chunk list, BOUND to the source set it was built from.
 
     :class:`_FusedMoments` binds the geometry prepare was handed; this is the
@@ -1045,18 +1046,15 @@ class _PreparedChunks:
     mirror preserves segment lengths. Bind them here and the coincidence is
     not load-bearing any more.
 
-    Iterable, because a chunk list is what every consumer wants and the
-    binding is the only thing being added.
+    The window list is `_schedule.prepare`'s; the binding is the only thing
+    added.
     """
 
-    __slots__ = ("chunks", "seg_h")
+    __slots__ = ("seg_h",)
 
     def __init__(self, chunks, seg_h):
-        self.chunks = chunks
+        super().__init__(chunks)
         self.seg_h = seg_h
-
-    def __iter__(self):
-        return iter(self.chunks)
 
 
 # A window's T1 and T2 evaluate its wing centroids once between them when
@@ -3043,11 +3041,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_obs = obs.shape[0]
         xg, _wg = leggauss(self.n_qp_source)
         tau = 0.5 * seg_h[:, None] * (1.0 + xg[None, :])
-        step = max(1, _CHUNK_ELEMS // max(1, n_seg * self.n_qp_source))
-        chunks = []
-        for lo in range(0, n_obs, step):
-            self._checkpoint()
-            hi = min(lo + step, n_obs)
+
+        def _build(lo, hi):
             u_r, rho2 = _axis_frame(obs[lo:hi], seg_p0, seg_t, a)
             m0s, m1s = _static_axis_moments(u_r, rho2, seg_h)
             ekc = None
@@ -3082,8 +3077,13 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 ekc = (mask, a_ek, b_ek)
             u = tau[None, :, :] - u_r[:, :, None]
             R = np.sqrt(u * u + rho2[:, :, None])
-            chunks.append((lo, hi, R, m0s, m1s, ekc))
-        return _PreparedChunks(chunks, seg_h)
+            return R, m0s, m1s, ekc
+
+        # One checkpoint per observer chunk, as each chunk's tables are built.
+        step = _schedule.elem_rows(_CHUNK_ELEMS, n_seg * self.n_qp_source)
+        return _PreparedChunks(
+            _schedule.prepare(n_obs, step, _build, checkpoint=self._checkpoint), seg_h
+        )
 
     def _seg_moments_from_prepared(self, chunks, k, n_obs, *, need_m1=True):
         """Finish :meth:`_seg_moments_prepare`'s chunks at one wavenumber.
@@ -3131,8 +3131,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         M0 = np.empty((n_obs, n_seg), dtype=np.complex128)
         M1 = np.empty((n_obs, n_seg), dtype=np.complex128) if need_m1 else None
         inv4pi = 1.0 / (4.0 * np.pi)
-        for lo, hi, R, m0s, m1s, ekc in chunks:
-            self._checkpoint()
+        for lo, hi, R, m0s, m1s, ekc in _schedule.replay(chunks, self._checkpoint):
             if ekc is None:
                 rem = _expm1_neg_jkR(k, R) / R
             else:
@@ -3929,39 +3928,38 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         img_src = self._image_sources(geom)
         weighted = img_src is not None and img_src["weighted"]
         budget = _WEIGHTED_CHUNK_ELEMS if weighted else _CHUNK_ELEMS
-        rows = max(1, budget // max(1, n_path * n_basis))
+        rows = _schedule.elem_rows(budget, n_path * n_basis)
         # Each path point's EK label is the label of the wing segment it lies
         # on, in the same flattening the observers themselves take.
         path_lab = None if src_lab is None else self._ek_obs_labels_path(geom, src_lab)
         path_rad = None if obs_rad is None else self._ek_obs_labels_path(geom, obs_rad)
-        t1_row_chunks = []
-        t1_row_chunks_img = [] if img_src is not None else None
-        for lo in range(0, n_basis, rows):
-            hi = min(lo + rows, n_basis)
-            obs = pts[lo:hi].reshape(-1, 3)
-            o_lab = None if path_lab is None else path_lab[lo * n_path : hi * n_path]
-            o_rad = None if path_rad is None else path_rad[lo * n_path : hi * n_path]
-            ek_path = None if o_lab is None else _EK(None, o_lab, src_lab, o_rad)
-            t1_row_chunks.append(
-                (
-                    lo,
-                    hi,
-                    obs.shape[0],
-                    self._seg_moments_prepare(obs, geom, a_src, ek=ek_path),
-                )
-            )
-            if img_src is not None:
-                ek_path_img = (
-                    None if img_lab is None else _EK(None, o_lab, img_lab, o_rad)
-                )
-                t1_row_chunks_img.append(
-                    (
-                        lo,
-                        hi,
-                        obs.shape[0],
-                        self._seg_moments_prepare(obs, img_src, a_src, ek=ek_path_img),
+
+        def _t1_window(sources, labels):
+            # One basis-row window's T1 observers, prepared against one source
+            # set: `(n_obs, token)`, the payload `_source_block_rows` replays.
+            def build(lo, hi):
+                obs = pts[lo:hi].reshape(-1, 3)
+                ek_path = None
+                if path_lab is not None:
+                    o_lab = path_lab[lo * n_path : hi * n_path]
+                    o_rad = (
+                        None
+                        if path_rad is None
+                        else path_rad[lo * n_path : hi * n_path]
                     )
+                    ek_path = _EK(None, o_lab, labels, o_rad)
+                return obs.shape[0], self._seg_moments_prepare(
+                    obs, sources, a_src, ek=ek_path
                 )
+
+            return build
+
+        t1_row_chunks = _schedule.prepare(n_basis, rows, _t1_window(geom, src_lab))
+        t1_row_chunks_img = (
+            None
+            if img_src is None
+            else _schedule.prepare(n_basis, rows, _t1_window(img_src, img_lab))
+        )
 
         # Under NEC-5's path rule every T1 observer is a wing centroid, the
         # very point (and EK label) T2 observes there, so the block evaluates
@@ -5116,19 +5114,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         The body is `_source_block_rows`, which yields the finished rows a
         window at a time; this is its whole-block and `out=` spelling.
         """
-        T1 = (
-            None
-            if out is not None
-            else np.empty(
-                (prepared["n_basis"], prepared["n_basis"]), np.complex128, order="F"
+        if out is not None:
+            return _schedule.fold_rows(
+                out,
+                self._source_block_rows(
+                    geom, prepared, sources, k, omega, ground=ground, eps=eps
+                ),
             )
-        )
-        for lo, hi, rows_T1 in self._source_block_rows(
+        n = prepared["n_basis"]
+        T1 = np.empty((n, n), np.complex128, order="F")
+        for _window in self._source_block_rows(
             geom, prepared, sources, k, omega, ground=ground, eps=eps, into=T1
         ):
-            if out is not None:
-                out[lo:hi] -= rows_T1
-        return T1 if out is None else out
+            pass  # each window's rows are written into T1 in place
+        return T1
 
     def _source_block_rows(
         self, geom, prepared, sources, k, omega, *, ground=None, eps=None, into=None
@@ -5196,7 +5195,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     ),
                 )
 
-        w_step = max(1, _WEIGHTED_CHUNK_ELEMS // max(1, prepared["n_seg"]))
+        w_step = _schedule.elem_rows(_WEIGHTED_CHUNK_ELEMS, prepared["n_seg"])
         # One slot: the current window's (lo, hi, centroids, their M0 rows)
         # when its T1 and T2 share the centroid evaluation.
         shared = [None] if sources.get("t1_on_centroids") else None
@@ -5213,9 +5212,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             elif w_Phi_fn is not None:
                 M0c = M0c.copy()
             if w_Phi_fn is not None:
-                for a in range(c0, c1, w_step):
-                    self._checkpoint()
-                    b = min(a + w_step, c1)
+                for a, b in _schedule.chunks([(c0, c1)], w_step, self._checkpoint):
                     _w_A_unused, w_Phi = w_Phi_fn(a, b)
                     M0c[a - c0 : b - c0] *= w_Phi
             return M0c
@@ -5424,13 +5421,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # window of a column-major matrix is still one contiguous run per
         # column, and every write below is elementwise, so the layout
         # changes no value.
-        for lo, hi, n_obs_chunk, static in sources["t1_row_chunks"]:
-            self._checkpoint()
-            rows_T1 = (
-                into[lo:hi]
-                if into is not None
-                else np.empty((hi - lo, n_basis), dtype=np.complex128)
-            )
+        for lo, hi, n_obs_chunk, static in _schedule.replay(
+            sources["t1_row_chunks"], self._checkpoint
+        ):
+            rows_T1 = _schedule.row_window(into, lo, hi, n_basis)
             if shared is not None:
                 # Under NEC-5's path rule the window's T1 observers are the
                 # centroids of its wings (`_testing_paths`), each one twice
