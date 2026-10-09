@@ -3645,10 +3645,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         zero and the compact target is written in its own row numbering."""
         if prepared["loading"] is None:
             return
-        row_of = None if restrict is None else restrict.loading_map
+        # Unrestricted, the calls are the ones they always were (no extra
+        # argument), so a seam patched with the old signature still serves.
+        kw = {} if restrict is None else {"row_of": restrict.loading_map}
         spec = _wire_loading.loading_for(self, omega, geom)
-        self._apply_loading(Z, prepared["loading"], spec, row_of=row_of)
-        self._apply_charge(Z, prepared["charge"], spec, row_of=row_of)
+        self._apply_loading(Z, prepared["loading"], spec, **kw)
+        self._apply_charge(Z, prepared["charge"], spec, **kw)
 
     @staticmethod
     def _stencil_rows(stencil, vals, row_of):
