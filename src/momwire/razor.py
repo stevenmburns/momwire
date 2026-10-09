@@ -4975,8 +4975,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         A crossing tent is a row of BOTH media (two half tents, one full
         row number), so it is requested in both or neither. The path axes
-        `A` and `P` stay whole: they are the test functionals' geometry,
-        O(points), and the support is what selects rows in the block.
+        `A` and `P` hold the requested rows only (`_crossing_path_axis(held=)`):
+        every cross-block structure is sized by its axis, so a whole axis
+        would hold a dense fill's working memory for a sector's rows.
         """
         tents = self._crossing_tents(geom)
         if detached and tents:
