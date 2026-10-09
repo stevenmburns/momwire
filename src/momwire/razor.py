@@ -4877,9 +4877,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sub["seg_a"] = self._seg_radius(geom)[seg_i]
         return sub, np.asarray(rows, dtype=np.int64), chop
 
-    def _crossing_path_axis(self, geom, tents, side):
+    def _crossing_path_axis(self, geom, tents, side, held=None):
         """The path-test axis of one medium's rows over the FULL geometry:
-        its own tents whole, plus each crossing tent's `side` half."""
+        its own tents whole, plus each crossing tent's `side` half.
+
+        `held` (momwire#1337 phase 2), a boolean mask over the full basis,
+        keeps only the rows it marks: a row-restricted crossing fill tests
+        only its requested rows, so the axis -- and every cross-block
+        structure built over its points -- holds no other row's path.
+        A kept row's record is the one the whole axis holds."""
         media = self._wire_media()
         seg_off = np.asarray(geom["seg_offsets"])
         mine_seg = set()
@@ -4897,6 +4903,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         knot = self._knot_points(geom)
         recs = []
         for m in range(geom["n_basis_total"]):
+            if held is not None and not held[m]:
+                continue
             if m in crossing:
                 alive = [j for j in (0, 1) if int(geom["wing_seg"][m, j]) in mine_seg][
                     0
@@ -5057,8 +5065,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             panel_order=_CROSSING_PANEL_ORDER,
             q=_CROSSING_Q,
         )
-        A = self._crossing_path_axis(geom, tents, _medium_spec.ABOVE)
-        P = self._crossing_path_axis(geom, tents, _medium_spec.BELOW)
+        # Under `restrict` each test axis holds the requested rows only
+        # (momwire#1337): the cross blocks' supports read no other row.
+        held = None if z_of is None else z_of >= 0
+        A = self._crossing_path_axis(geom, tents, _medium_spec.ABOVE, held)
+        P = self._crossing_path_axis(geom, tents, _medium_spec.BELOW, held)
         seg_off = np.asarray(geom["seg_offsets"])
         media = self._wire_media()
         seg_of = {
