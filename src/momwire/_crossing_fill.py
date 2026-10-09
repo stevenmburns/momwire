@@ -4594,7 +4594,9 @@ def _point_observer_block_chunked(
 
 
 @_cancelable
-def cross_complete_block(ctx, A, B, *, corner=True, support=None, into=None):
+def cross_complete_block(
+    ctx, A, B, *, corner=True, support=None, into=None, into_row_of=None
+):
     """t_ab = M + SW + SQ + BT + CORNER over (above axis A × below axis B),
     on designed kernels. Returns the full (n_basis, n_basis) block in the
     subtracting field-block convention (`Z -= t_ab`).
@@ -4613,7 +4615,13 @@ def cross_complete_block(ctx, A, B, *, corner=True, support=None, into=None):
     caller folds the block into as `into[np.ix_(rows, cols)] -= t_ab`. When
     the block streams (`_FusedEnds`) each finished column is folded there
     as it finishes and None is returned; otherwise the block is returned
-    and the caller folds it."""
+    and the caller folds it.
+
+    `into_row_of` (momwire#1337 phase 2) is for an `into` whose rows are not
+    the block's: a row-restricted razor fill, whose target is compact. Block
+    row `i` (a support row) is folded into `into` row `into_row_of[i]`; the
+    entries and the one subtraction per entry are unchanged. None is the
+    identity, the call as it always was."""
     # One fill = one memo, exactly as `cross_complete_block_split` does it
     # (momwire#1017). This route built none, so momwire#688's cross-call dedup
     # — the whole reason the parameter exists — never fired for `RazorSolver`,
@@ -4638,6 +4646,7 @@ def cross_complete_block(ctx, A, B, *, corner=True, support=None, into=None):
         support=sup,
         units_on="cols",
         into=into,
+        into_row_of=into_row_of,
     )
     t_ab = _main_sandwich(
         ctx, A, B, eps_t, k_p, c1, gz, memo=memo, support=sup, ends=ends
@@ -5889,12 +5898,16 @@ class _FusedEnds:
         support,
         units_on,
         into=None,
+        into_row_of=None,
     ):
         self.ctx, self.R, self.C = ctx, R, C
         self.eps_t, self.k_p, self.c1, self.gz, self.memo = eps_t, k_p, c1, gz, memo
         self.row_args, self.col_args = row_args, col_args
         self.corner, self.support = corner, support
         self.units_on, self.into = units_on, into
+        # `into`'s row for each block row (momwire#1337), or None: the
+        # block's rows ARE `into`'s.
+        self.into_row_of = into_row_of
         self.attached = False
         self.streaming = False
 
@@ -6942,6 +6955,10 @@ class _FusedEnds:
                 self.res[:, U] = block
             return
         Z = self.into
+        if self.into_row_of is not None:
+            # A restricted target's rows (momwire#1337): the same entries,
+            # each folded into the row that holds it there.
+            zr = self.into_row_of[zr]
         w = max(1, _Z_SLAB_BYTES // (16 * max(1, zr.size)))
         for c0 in range(0, zc.size, w):
             ix = np.ix_(zr, zc[c0 : c0 + w])
@@ -7103,7 +7120,15 @@ def _ends_and_corner_reversed(
 
 @_cancelable
 def cross_complete_block_reversed(
-    ctx, P, Q, *, corner=True, sw_end=SW_BY_PARTS, support=None, into=None
+    ctx,
+    P,
+    Q,
+    *,
+    corner=True,
+    sw_end=SW_BY_PARTS,
+    support=None,
+    into=None,
+    into_row_of=None,
 ):
     """The block the other way round: BELOW test rows × ABOVE source columns.
 
@@ -7127,6 +7152,9 @@ def cross_complete_block_reversed(
     axes on both sides this reproduces `cross_complete_block`'s transpose
     bit for bit, in both media, under the default `sw_end`. The rejected
     `SW_BY_ROLE` spelling agrees at ε̃ = 1 and is 7.94e-4 away at soil A.
+
+    `into_row_of` is `cross_complete_block`'s: `into`'s row for each of this
+    block's rows (momwire#1337 phase 2), None for the identity.
     """
     eps_t, k_p, gz, c1, memo = _block_preamble(ctx)  # momwire#1017, as above
     # `support=(rows, cols)` as `cross_complete_block`'s: this block's rows
@@ -7151,6 +7179,7 @@ def cross_complete_block_reversed(
         support=sup,
         units_on="rows",
         into=into,
+        into_row_of=into_row_of,
     )
     t_ba = _main_sandwich(
         ctx, Q, P, eps_t, k_p, c1, gz, memo=memo, support=sup_t, ends=ends

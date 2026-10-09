@@ -29,8 +29,9 @@ What is gated:
   two wavenumbers;
 * **negative controls** -- radial 1's rows are not radial 0's bit for bit,
   and a fold that loses one window moves Z_in;
-* **refusals** -- a split wire, `compact` without `rows`, and the buried
-  fills (PR 6) by name.
+* **refusals** -- a split wire, and `compact` without `rows`. The buried
+  fills this PR refused take `rows=` since PR 6
+  (`test_razor_rows_buried_1337.py`).
 """
 
 from __future__ import annotations
@@ -442,28 +443,3 @@ def test_compact_without_rows_is_refused():
     s = solver(ground="free")
     with pytest.raises(ValueError, match="pass rows= as well"):
         s._compute_Z_operator(s._build_geometry(), compact=True)
-
-
-def test_the_buried_fills_refuse_rows_by_name():
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        s = RazorSolver(
-            wires=[np.array([(0.0, 0.0, -1.15), (0.0, 0.0, -0.15)])],
-            n_per_edge_per_wire=[[11]],
-            feeds=[(0, 0.5, 1 + 0j)],
-            wavelength=299792458.0 / 7.0e6,
-            wire_radius=0.001,
-            ground_z=0.0,
-            ground_eps=(13.0, 0.005),
-            ground_model="sommerfeld",
-        )
-    assert s._below_plane
-    geom = s._build_geometry()
-    with pytest.raises(ValueError, match="PR 6"):
-        s._compute_Z_operator(geom, rows=np.arange(geom["n_segs_total"]))
-    restrict = _razor._ObserverRows(np.arange(geom["n_segs_total"]), geom, compact=True)
-    prep = s._assemble_Z_prepare(geom, restrict=restrict)
-    with pytest.raises(ValueError, match="PR 6"):
-        s._assemble_Z_from_prepared(geom, prep, s.k, s.c * s.k, restrict=restrict)
-    with pytest.raises(ValueError, match="PR 6"):
-        s._assemble_Z_prepare(geom, restrict=restrict, chop={0: "A"})
