@@ -48,7 +48,7 @@ from scipy.sparse.linalg import splu
 from .bspline import BSplineSolver, _SplineBasis, _EK_SAME_EDGE, _ek_slice
 from ._port_solution import PortSolution, port_impedances, refuse_undriven
 
-from . import _ground_mirror, _ground_refl, _potential_ground, _sommerfeld
+from . import _ground_mirror, _ground_refl, _potential_ground, _schedule, _sommerfeld
 from ._bspline_kernels import (
     _LADDER_PHASE_LIMITED_BELOW,
     _ek_radius,
@@ -1699,9 +1699,13 @@ class HMatrixSolver(BSplineSolver):
         if somm:
             eps_t, c2 = self._somm_eps_c2()
 
+        # The partition and ACA are hmatrix's own schedule; the two block
+        # loops below are `_schedule.walk`s over its lists (momwire#1337),
+        # near then far, a checkpoint before each block, as before.
         near_blocks = []
-        for s, t in part["near"]:
-            self._checkpoint()  # per near-block dense fill
+
+        def near_fill(s, t):
+            # per near-block dense fill
             I, J = s.indices, t.indices
             D = self.zblock(I, J, k=k)
             if grounded:
@@ -1716,6 +1720,8 @@ class HMatrixSolver(BSplineSolver):
                     D = D - self._zblock_image(I, J, k=k)
             near_blocks.append((I, J, D))
 
+        _schedule.walk(part["near"], near_fill, checkpoint=self._checkpoint)
+
         use_accel = (
             _HAVE_OFFEDGE_BLOCK_ACCEL
             and self.degree <= _OFFEDGE_BLOCK_ACCEL_MAX_D
@@ -1728,8 +1734,9 @@ class HMatrixSolver(BSplineSolver):
         far_blocks = []
         precond_extra = []  # first-ring far blocks, dense, for the preconditioner
         p_eta = self.precond_eta
-        for s, t in part["far"]:
-            self._checkpoint()  # per far-block ACA build
+
+        def far_fill(s, t):
+            # per far-block ACA build
             I, J = s.indices, t.indices
             mI, nJ = I.size, J.size
 
@@ -1758,6 +1765,8 @@ class HMatrixSolver(BSplineSolver):
                     and not admissible(s, t, p_eta)
                 ):
                     precond_extra.append((I, J, U @ V))
+
+        _schedule.walk(part["far"], far_fill, checkpoint=self._checkpoint)
 
         if somm:
             # The smooth remainder as ONE extra global low-rank far block
