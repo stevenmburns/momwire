@@ -1122,13 +1122,53 @@ class _ObserverRows(_schedule.ObserverRows):
         )
 
 
-# The buried fills' `rows=` is momwire#1337 phase 2 PR 6; until it lands they
-# refuse it by name rather than fill the rows unrestricted.
-_ROWS_BURIED_REFUSAL = (
-    "razor's rows= serves the above-ground fills (free space, PEC, "
-    "refl-coef, Sommerfeld); the buried, detached and crossing fills do not "
-    "take it yet (momwire#1337 phase 2, PR 6)"
-)
+def _refuse_other_restriction(bound, restrict):
+    """Raise unless a prepared fill bound to `bound` (a
+    `_schedule.restriction_key`) may be replayed under `restrict`
+    (momwire#1337): the same R, or both unrestricted. The target (square or
+    compact) is not part of the key, so the same R on the other target is
+    served."""
+    if bound == _schedule.restriction_key(restrict):
+        return
+    built = "every row" if bound is None else f"{len(bound[1]) // 8} rows of R"
+    asked = (
+        "no restriction"
+        if restrict is None
+        else f"another one ({restrict.basis_rows.size} rows)"
+    )
+    raise ValueError(
+        f"this prepared razor fill was built for {built} and is "
+        f"replayed under {asked}: a prepared fill binds the rows= it "
+        f"was prepared for (momwire#1337). Prepare again under this rows="
+    )
+
+
+def _medium_restriction(z_of, rows_m):
+    """One medium's share of a restricted crossing fill (momwire#1337 phase
+    2): ``(sub, z_rows)``.
+
+    `z_of` is the whole deck's target row of each full basis row (-1 where
+    the row is not requested; the restriction's `loading_map`), and `rows_m`
+    the medium's basis map (`_medium_geometry`: sub-row i is full row
+    ``rows_m[i]``). `sub` restricts the medium's own fill to the sub-rows
+    whose full row is requested, on a COMPACT target -- the sub-block is a
+    transient that is folded into Z and dropped, so it is never wider than
+    the requested rows -- and `z_rows[j]` is the Z row the sub-block's row j
+    folds into. A crossing tent requested in Z is requested in BOTH media,
+    because both half tents carry its full row number.
+
+    The restriction is by basis row: the medium geometry has no wire table,
+    so its segment axis is not part of it (empty, and never read by razor's
+    writers, which ask `basis_windows` and `target` only)."""
+    sub_rows = np.flatnonzero(z_of[rows_m] >= 0).astype(np.int64)
+    sub = _schedule.ObserverRows(
+        np.zeros(0, dtype=np.int64),
+        0,
+        rows_m.size,
+        lambda _seg_rows: sub_rows,
+        compact=True,
+    )
+    return sub, z_of[rows_m[sub_rows]]
 
 
 # A window's T1 and T2 evaluate its wing centroids once between them when
@@ -3919,12 +3959,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the restriction (:class:`_PreparedRows`), so a replay under another
         one raises. The centroid (T2) tokens stay whole: a requested row
         reads centroids of whatever wings it has, and `_seg_moments_rows`
-        evaluates only the ones a window reads. `chop` and `loading=False`
-        are the crossing fill's, and the crossing fill does not take `rows=`
-        yet (PR 6), so either with `restrict` is refused.
+        evaluates only the ones a window reads. `chop` composes with it (PR
+        6): the knot observers are a T2 set, prepared whole like the
+        centroids, and a chopped row reads its knot by basis row inside the
+        window that holds it (`_source_block_rows`), wherever that window
+        falls. So does `loading=False`, which builds no stencil at all.
         """
-        if restrict is not None and (chop or not loading):
-            raise ValueError(_ROWS_BURIED_REFUSAL)
         seg_t, seg_h = geom["seg_t"], geom["seg_h"]
         wing_seg, wing_sigma, wing_rise = (
             geom["wing_seg"],
@@ -4248,16 +4288,22 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `prepared` was built under, and it names the target: square with
         every unrequested row exactly zero, or row-compact. It must be the
         prepare's restriction (or one with the same R and another target);
-        anything else is refused before a row is written, in
-        `_source_block_rows`. Both blocks write only R, through
-        `restrict.target`, and the loading goes through `loading_map`.
+        anything else is refused here, before a row is written (and again
+        by `_source_block_rows`, against each source set's windows). Both
+        blocks write only R, through `restrict.target`, and the loading goes
+        through `loading_map`.
+
+        Every route takes it (PR 6 for the buried three): the all-below
+        deck's two blocks exactly as above; the crossing and detached decks
+        through `_assemble_Z_crossing(restrict=)`, which restricts each
+        medium's own fill and the cross blocks' rows. The crossing route
+        fills from its own per-medium prepares, so this `prepared` holds
+        only its loading for it -- and its binding, which is why the check
+        is made here and not left to the source blocks.
         """
+        _refuse_other_restriction(prepared.get("restrict_key"), restrict)
         crossing = getattr(self, "_crossing", False)
         detached = getattr(self, "_detached", False)
-        if restrict is not None and (
-            crossing or detached or getattr(self, "_below_plane", False)
-        ):
-            raise ValueError(_ROWS_BURIED_REFUSAL)
         if crossing or detached:
             # momwire#1149: the crossing assembly (U2), or the same with zero
             # crossing tents (U1's detached deck). Loading goes on AFTER it,
@@ -4273,11 +4319,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # medium, the loading reads no kernel, and the two half tents'
             # stencils sum to the whole tent's (`_loading_stencil`, "The
             # crossing tent").
-            Z = self._assemble_Z_crossing(geom, k, omega, detached=detached)
-            self._load_in_place(Z, prepared, geom, omega)
+            # Unrestricted, the calls are the ones they always were (no extra
+            # argument), so a seam patched with the old signature still serves.
+            rkw = {} if restrict is None else {"restrict": restrict}
+            Z = self._assemble_Z_crossing(geom, k, omega, detached=detached, **rkw)
+            self._load_in_place(Z, prepared, geom, omega, restrict=restrict)
             return Z
         if getattr(self, "_below_plane", False):
-            return self._assemble_Z_below_plane(geom, prepared, k, omega)
+            rkw = {} if restrict is None else {"restrict": restrict}
+            return self._assemble_Z_below_plane(geom, prepared, k, omega, **rkw)
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k, omega, restrict=restrict
         )
@@ -4605,7 +4655,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return _bspline._pair_extents_below_rect(obs, src, d_o, d_s, r1_cap=r1_cap)
 
     def _assemble_Z_below_plane(
-        self, geom, prepared, k, omega, *, plan_skip=None, into=None
+        self, geom, prepared, k, omega, *, plan_skip=None, into=None, restrict=None
     ):
         """The razor-blade matrix of a WHOLLY-below deck (momwire#812, unit 1
         of the razor buried arc), in the lower-medium family:
@@ -4654,7 +4704,18 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         prepared tables and the ground's windows over those rows. The
         caller's loading is refused here: it is applied to the whole block
         after the fold (`_load_in_place`), and a crossing deck applies its
-        loading once on the full geometry instead (momwire#1149 U3)."""
+        loading once on the full geometry instead (momwire#1149 U3).
+
+        `restrict` (momwire#1337 phase 2, PR 6) is the
+        :class:`_schedule.ObserverRows` `prepared` was built under, as for
+        the above-ground fill: both blocks write only its rows R, into its
+        target, and the loading goes through its `loading_map`. With `into`
+        it is the crossing assembly's per-medium restriction, and `into` is
+        ``(Z, rows, z_rows)``: window rows ``[d0, d1)`` of the restriction's
+        compact target fold into Z's rows ``z_rows[d0:d1]`` (the requested
+        sub-rows' places in the crossing deck's own target), against the
+        same columns `rows`. Unrestricted, ``z_rows`` is `rows` and the
+        windows are basis rows, so the fold is the one above."""
         eps_t = _ground_refl.eps_tilde(self.ground_eps, omega, self.eps)
         ground = _potential_ground.BelowMediumGround(
             self, geom, k, omega, eps_tilde=eps_t
@@ -4669,12 +4730,22 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if into is not None:
             if prepared["loading"] is not None:
                 raise ValueError("into= folds an unloaded block; load the whole Z")
-            Z, rows = into
+            Z, rows, *z_rows = into
+            z_rows = rows if not z_rows else z_rows[0]
+            if restrict is not None and restrict.row_of is None:
+                raise ValueError("into= under rows= folds a compact target")
             direct = self._source_block_rows(
-                geom, prepared, prepared, k_m, omega, eps=eps_m
+                geom, prepared, prepared, k_m, omega, eps=eps_m, restrict=restrict
             )
             image = self._source_block_rows(
-                geom, prepared, prepared["image"], k_m, omega, ground=ground, eps=eps_m
+                geom,
+                prepared,
+                prepared["image"],
+                k_m,
+                omega,
+                ground=ground,
+                eps=eps_m,
+                restrict=restrict,
             )
             for (lo, hi, d_rows), (lo_i, hi_i, i_rows) in zip(
                 direct, image, strict=True
@@ -4686,11 +4757,11 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 d_rows -= i_rows
                 del i_rows
                 _BELOW_FOLD_ROUTES["windows"] += 1
-                _ix_accumulate(Z, rows[lo:hi], rows, d_rows)
+                _ix_accumulate(Z, z_rows[lo:hi], rows, d_rows)
                 del d_rows
             return None
         Z = self._assemble_Z_source_block(
-            geom, prepared, prepared, k_m, omega, eps=eps_m
+            geom, prepared, prepared, k_m, omega, eps=eps_m, restrict=restrict
         )
         self._assemble_Z_source_block(
             geom,
@@ -4701,9 +4772,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ground=ground,
             eps=eps_m,
             out=Z,
+            restrict=restrict,
         )
         # Loading last and outside the fold, exactly as above.
-        self._load_in_place(Z, prepared, geom, omega)
+        self._load_in_place(Z, prepared, geom, omega, restrict=restrict)
         return Z
 
     # ------------------------------------------------------------------
@@ -4840,7 +4912,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 recs += self._path_test_rows(geom, [m], paths=paths, knot=knot)
         return _crossing_fill.path_test_axis(geom["n_basis_total"], recs)
 
-    def _assemble_Z_crossing(self, geom, k, omega, *, detached=False):
+    def _assemble_Z_crossing(self, geom, k, omega, *, detached=False, restrict=None):
         """The razor-blade matrix of a deck that CROSSES the interface, as
         four masked terms indexed by (row HALF) x (column WING):
 
@@ -4876,6 +4948,27 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         blocks, with nothing chopped. On either deck the caller applies the
         loading afterwards, once, on the full geometry (momwire#1149 U3),
         a buried jacket's charge-side term included (momwire#1154).
+
+        **`restrict`** (momwire#1337 phase 2, PR 6): the deck's
+        :class:`_ObserverRows`, whose target Z is (square, every other row
+        zero, or row-compact). Each of the four terms is restricted by ROW
+        and keeps every column, so each requested entry takes the same
+        addends in the same order, from the same zero:
+
+        * each medium's own fill is prepared and filled for the sub-rows
+          whose full row is in R only (`_medium_restriction`, a compact
+          transient), and folded into Z's rows for them;
+        * the cross blocks' `support` keeps the requested rows of their
+          test axis and every column, and a streamed block folds into Z
+          through `into_row_of`; a block with no requested row is not
+          formed;
+        * the node charges' requested rows are added to the crossing
+          tents' columns.
+
+        A crossing tent is a row of BOTH media (two half tents, one full
+        row number), so it is requested in both or neither. The path axes
+        `A` and `P` stay whole: they are the test functionals' geometry,
+        O(points), and the support is what selects rows in the block.
         """
         tents = self._crossing_tents(geom)
         if detached and tents:
@@ -4897,22 +4990,45 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 levers=_RAZOR_NODE_LEVERS,
             )
 
+        n = geom["n_basis_total"]
+        # The deck's target row of each full basis row (momwire#1337): the
+        # identity unrestricted, the restriction's `loading_map` (-1 where a
+        # row is not requested) under `restrict`.
+        z_of = None if restrict is None else restrict.loading_map
+
         geom_a, rows_a, chop_a = self._medium_geometry(geom, _medium_spec.ABOVE)
-        prep_a = self._assemble_Z_prepare(geom_a, chop=chop_a, loading=False)
-        Z_a = self._assemble_Z_source_block(geom_a, prep_a, prep_a, k, omega)
+        sub_a, z_a = (
+            (None, rows_a) if z_of is None else _medium_restriction(z_of, rows_a)
+        )
+        # Unrestricted, every call below is the one it always was (no extra
+        # argument), so a seam patched with the old signature still serves.
+        akw = {} if sub_a is None else {"restrict": sub_a}
+        prep_a = self._assemble_Z_prepare(geom_a, chop=chop_a, loading=False, **akw)
+        Z_a = self._assemble_Z_source_block(geom_a, prep_a, prep_a, k, omega, **akw)
         if prep_a["image"] is not None:
             ground_a = _potential_ground.potential_ground_for(self, geom_a, k, omega)
             self._assemble_Z_source_block(
-                geom_a, prep_a, prep_a["image"], k, omega, ground=ground_a, out=Z_a
+                geom_a,
+                prep_a,
+                prep_a["image"],
+                k,
+                omega,
+                ground=ground_a,
+                out=Z_a,
+                **akw,
             )
 
         geom_b, rows_b, chop_b = self._medium_geometry(geom, _medium_spec.BELOW)
-        prep_b = self._assemble_Z_prepare(geom_b, chop=chop_b, loading=False)
-        n = geom["n_basis_total"]
+        sub_b, z_b = (
+            (None, rows_b) if z_of is None else _medium_restriction(z_of, rows_b)
+        )
+        bkw = {} if sub_b is None else {"restrict": sub_b}
+        prep_b = self._assemble_Z_prepare(geom_b, chop=chop_b, loading=False, **bkw)
         # Column-major, so the solve can factor it in place (momwire#1173);
         # every write below is an elementwise += / -= into index blocks.
-        Z = np.zeros((n, n), dtype=np.complex128, order="F")
-        _ix_accumulate(Z, rows_a, rows_a, Z_a)
+        # Under `restrict` it is the restriction's target, zeroed.
+        Z, _row_kw = _schedule.new_target(n, restrict)
+        _ix_accumulate(Z, z_a, rows_a, Z_a)
         del Z_a
         # The below block is folded in a row window at a time (momwire#1173
         # design C phase 2): it never exists beside Z. After the above block,
@@ -4920,13 +5036,19 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # crossing tent's) is `(0 + Z_a) + Z_b` as it was.
         if _BELOW_FOLD_INTO:
             self._assemble_Z_below_plane(
-                geom_b, prep_b, k, omega, plan_skip=nodes, into=(Z, rows_b)
+                geom_b,
+                prep_b,
+                k,
+                omega,
+                plan_skip=nodes,
+                into=(Z, rows_b) if sub_b is None else (Z, rows_b, z_b),
+                **bkw,
             )
         else:
             Z_b = self._assemble_Z_below_plane(
-                geom_b, prep_b, k, omega, plan_skip=nodes
+                geom_b, prep_b, k, omega, plan_skip=nodes, **bkw
             )
-            _ix_accumulate(Z, rows_b, rows_b, Z_b)
+            _ix_accumulate(Z, z_b, rows_b, Z_b)
             del Z_b
 
         ctx = self._crossing_context(geom, k=k, omega=omega)
@@ -4950,22 +5072,31 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for side in (_medium_spec.ABOVE, _medium_spec.BELOW)
         }
         seg_a = self._seg_radius(geom)
+        # The cross blocks' rows: every test row, or under `restrict` the
+        # requested ones, folded into Z through `z_of` (momwire#1337).
+        fold_kw = {} if z_of is None else {"into_row_of": z_of}
+        test_a = rows_a if z_of is None else rows_a[z_of[rows_a] >= 0]
+        test_b = rows_b if z_of is None else rows_b[z_of[rows_b] >= 0]
         for src, rows, cols, block, test_axis in (
             (
                 _medium_spec.BELOW,
-                rows_a,
+                test_a,
                 rows_b,
                 _crossing_fill.cross_complete_block,
                 A,
             ),
             (
                 _medium_spec.ABOVE,
-                rows_b,
+                test_b,
                 rows_a,
                 _crossing_fill.cross_complete_block_reversed,
                 P,
             ),
         ):
+            if not rows.size:
+                # No requested row reads this block (momwire#1337): it adds
+                # nothing to Z's target, so it is not formed.
+                continue
             # Each cross block at its SOURCE wire's radius (momwire#1149
             # U2b), the convention razor's reduced kernel takes everywhere
             # (`_seg_moments_prepare`): the source axis is partitioned by
@@ -4989,16 +5120,32 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # itself and answers None (`into=`, design C phase 2): the
                 # same one subtraction per entry, never the whole block.
                 t = block(
-                    ctx_r, test_axis, ax, corner=False, support=(rows, cols), into=Z
+                    ctx_r,
+                    test_axis,
+                    ax,
+                    corner=False,
+                    support=(rows, cols),
+                    into=Z,
+                    **fold_kw,
                 )
                 if t is not None:
-                    _ix_accumulate(Z, rows, cols, t, sign=-1)
+                    _ix_accumulate(
+                        Z, rows if z_of is None else z_of[rows], cols, t, sign=-1
+                    )
                 del t
                 _trim_heap()
 
         if tents:
             cols = np.array([m for m, _ in tents], dtype=np.int64)
-            Z[:, cols] += self._crossing_node_charges(geom, tents, ctx, A, P, omega)
+            charges = self._crossing_node_charges(geom, tents, ctx, A, P, omega)
+            if restrict is None:
+                Z[:, cols] += charges
+            else:
+                # The requested rows' share, into their target rows: the
+                # same one add per entry (momwire#1337).
+                R = restrict.basis_rows
+                _ix_accumulate(Z, z_of[R], cols, charges[R])
+            del charges
 
         return Z
 
@@ -5338,19 +5485,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         prepared windows must have been cut by this restriction's R
         (:class:`_PreparedRows`); a replay under any other is refused here,
         before a row is written."""
-        bound = sources["t1_row_chunks"].key
-        if bound != _schedule.restriction_key(restrict):
-            built = "every row" if bound is None else f"{len(bound[1]) // 8} rows of R"
-            asked = (
-                "no restriction"
-                if restrict is None
-                else f"another one ({restrict.basis_rows.size} rows)"
-            )
-            raise ValueError(
-                f"this prepared razor fill was built for {built} and is "
-                f"replayed under {asked}: a prepared fill binds the rows= it "
-                f"was prepared for (momwire#1337). Prepare again under this rows="
-            )
+        _refuse_other_restriction(sources["t1_row_chunks"].key, restrict)
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
         q_a, q_b = prepared["q_a"], prepared["q_b"]
@@ -5885,18 +6020,15 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         basis is `geom`'s wings and it has no same-edge hoist, so they are
         accepted and not read.
 
-        The buried, detached and crossing fills refuse `rows=` until PR 6.
+        Every route takes it: free space and the folding and composing
+        grounds (PR 5), and the all-below, detached and crossing fills (PR
+        6). On the crossing deck a crossing tent's row is requested when
+        both of its wires are, like any junction tent.
         """
         if rows is None:
             if compact:
                 raise ValueError("compact=True restricts rows: pass rows= as well")
             return self._assemble_Z(geom, self.k)
-        if (
-            getattr(self, "_crossing", False)
-            or getattr(self, "_detached", False)
-            or getattr(self, "_below_plane", False)
-        ):
-            raise ValueError(_ROWS_BURIED_REFUSAL)
         restrict = _ObserverRows(rows, geom, compact=compact)
         prepared = self._assemble_Z_prepare(geom, restrict=restrict)
         Z = self._assemble_Z_from_prepared(
