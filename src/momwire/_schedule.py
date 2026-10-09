@@ -85,6 +85,7 @@ STATS = {
     "prepares": 0,
     "replays": 0,
     "folds": 0,
+    "basis_windows": 0,
 }
 
 
@@ -228,6 +229,28 @@ class ObserverRows:
     * `covers(sl)` -- whether an edge's correction block is requested. All
       or nothing: an edge is part of one wire.
 
+    A formulation whose observer rows are BASIS rows (razor's tents, with
+    its junction through-currents numbered after the interior tents on the
+    same axis) asks two more, both on the basis axis:
+
+    * `basis_windows(i0, i1)` -- the parts of a dense basis-row window
+      ``[i0, i1)`` that hold rows of R, as contiguous sub-windows; the
+      twin of `windows` over `runs(basis_rows)`. `prepare(restrict=)` walks
+      it, so a restricted prepare builds only those rows, still at the dense
+      window's boundaries.
+    * `target(lo, hi)` -- the rows of the destination that basis rows
+      ``[lo, hi)`` land in: themselves on the square target, ``row_of``'s
+      contiguous image on the compact one. Refuses a range not wholly in R.
+
+    `key` is what a prepared fill binds: the basis rows it was built for.
+    Two restrictions with the same R build the same windows whatever their
+    target, so `compact` is not part of it. `restriction_key` spells the
+    unrestricted fill as None.
+
+    R must be strictly increasing inside ``[0, n_basis)``; a `basis_rows_of`
+    that returns anything else is refused rather than sorted, because the
+    compact target's row order IS R's order and the caller reads it back.
+
     `row_of` is None on the square target (Z stays ``(n, n)`` with every
     unrequested row exactly zero) and the compact map (basis row m held at
     row ``row_of[m]``, -1 elsewhere) on the row-compact one. `loading_map`
@@ -235,7 +258,16 @@ class ObserverRows:
     map leaves the square target's unrequested rows zero too.
     """
 
-    __slots__ = ("basis_rows", "loading_map", "row_of", "runs", "seg_mask", "_held")
+    __slots__ = (
+        "basis_rows",
+        "basis_runs",
+        "key",
+        "loading_map",
+        "row_of",
+        "runs",
+        "seg_mask",
+        "_held",
+    )
 
     def __init__(self, seg_rows, n_segs, n_basis, basis_rows_of, *, compact):
         seg_rows = np.asarray(seg_rows, dtype=np.int64)
@@ -244,7 +276,16 @@ class ObserverRows:
         if seg_rows.size and (seg_rows[0] < 0 or seg_rows[-1] >= n_segs):
             raise ValueError(f"rows= holds a segment outside [0, {n_segs})")
         n_basis = int(n_basis)
-        self.basis_rows = basis_rows_of(seg_rows)
+        basis_rows = np.asarray(basis_rows_of(seg_rows), dtype=np.int64)
+        if basis_rows.ndim != 1 or np.any(np.diff(basis_rows) <= 0):
+            raise ValueError(
+                "basis_rows_of must return a sorted 1-D array of distinct rows"
+            )
+        if basis_rows.size and (basis_rows[0] < 0 or basis_rows[-1] >= n_basis):
+            raise ValueError(f"basis_rows_of named a row outside [0, {n_basis})")
+        self.basis_rows = basis_rows
+        self.basis_runs = runs(basis_rows)
+        self.key = (n_basis, basis_rows.tobytes())
         self.seg_mask = np.zeros(int(n_segs), dtype=bool)
         self.seg_mask[seg_rows] = True
         self.runs = runs(seg_rows)
@@ -276,6 +317,23 @@ class ObserverRows:
                 out.append((a0, a1))
         return out
 
+    def basis_windows(self, i0, i1):
+        out = []
+        for r0, r1 in self.basis_runs:
+            a0, a1 = max(r0, i0), min(r1, i1)
+            if a0 < a1:
+                out.append((a0, a1))
+        STATS["basis_windows"] += len(out)
+        return out
+
+    def target(self, lo, hi):
+        if not (0 <= lo < hi <= self._held.size and self._held[lo:hi].all()):
+            raise ValueError(f"basis rows [{lo}, {hi}) are not all requested")
+        if self.row_of is None:
+            return lo, hi
+        t0 = int(self.row_of[lo])
+        return t0, t0 + (hi - lo)
+
     def held(self, m_idx):
         return m_idx[self._held[m_idx]]
 
@@ -294,6 +352,13 @@ class ObserverRows:
         """The writers' extra argument: only the compact target passes one,
         so the square target's calls are the unrestricted ones."""
         return {} if self.row_of is None else {"row_of": self.row_of}
+
+
+def restriction_key(restrict):
+    """What a prepared fill binds to say which rows it built: None for the
+    unrestricted fill, `ObserverRows.key` otherwise. A replay compares it
+    with its own and refuses a mismatch."""
+    return None if restrict is None else restrict.key
 
 
 def new_target(n_basis, restrict=None):
@@ -348,13 +413,31 @@ class Prepared:
         return iter(self.windows)
 
 
-def prepare(n_rows, step, build, *, checkpoint=None):
+def prepare(n_rows, step, build, *, checkpoint=None, restrict=None):
     """``[(lo, hi, *build(lo, hi))]`` over ``[0, n_rows)`` in `step`-row
     windows: a fill's k-independent half, built once. `build` returns the
-    window's payload as a tuple."""
+    window's payload as a tuple.
+
+    Under `restrict` (an `ObserverRows` whose rows are this axis) each dense
+    window keeps only its `basis_windows`, so `build` never sees an
+    unrequested row and the windows that remain sit at the dense windows'
+    boundaries. `lo, hi` stay basis rows; a writer maps them with
+    `restrict.target`. One checkpoint per DENSE window, as unrestricted."""
     STATS["prepares"] += 1
+    if restrict is None:
+        return [
+            (lo, hi, *build(lo, hi))
+            for lo, hi in chunks([(0, n_rows)], step, checkpoint)
+        ]
+    if n_rows != restrict.key[0]:
+        raise ValueError(
+            f"a restriction over {restrict.key[0]} basis rows cannot cut "
+            f"a {n_rows}-row prepare"
+        )
     return [
-        (lo, hi, *build(lo, hi)) for lo, hi in chunks([(0, n_rows)], step, checkpoint)
+        (a0, a1, *build(a0, a1))
+        for lo, hi in chunks([(0, n_rows)], step, checkpoint)
+        for a0, a1 in restrict.basis_windows(lo, hi)
     ]
 
 
