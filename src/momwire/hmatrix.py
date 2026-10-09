@@ -544,6 +544,10 @@ class HMatrixSolver(BSplineSolver):
     so the class is usable and correct from the start.
     """
 
+    # momwire#1408: this class's fills never reach the dense route's
+    # exact-kernel correction, so `exact_kernel=True` is refused here.
+    _serves_exact_kernel = False
+
     # momwire#792: `BSplineSolver`'s row in every cell but ONE. This
     # class used to inherit that row whole, on the survey's finding that
     # enrichment merely forces a dense-path fallback here rather than being
