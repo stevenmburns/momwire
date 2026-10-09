@@ -238,6 +238,11 @@ _HAVE_FIELD_GALERKIN_MIRROR = _HAVE_FIELD_GALERKIN_STRIDED and getattr(
 )
 _FIELD_GALERKIN_MIRROR = True
 _FIELD_GALERKIN_LANES = True
+# The field-form block's observer chunk: this many projected-table entries,
+# `(chunk·q) x (n_src·q)`, a chunk (`_field_galerkin_block`'s step rule). A
+# module constant only so a test can force several chunks on a small deck
+# through the production rule (momwire#1337); nothing else should change it.
+_FIELD_GALERKIN_CHUNK_ELEMS = 1 << 19
 
 
 def _fg_lanes_kw():
@@ -6190,7 +6195,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         pos_s = np.full(n_seg_total, -1, dtype=np.int64)
         pos_s[src_idx] = np.arange(n_src)
 
-        chunk = max(1, (1 << 19) // max(n_src * q * q, 1))
+        chunk = max(1, _FIELD_GALERKIN_CHUNK_ELEMS // max(n_src * q * q, 1))
         if symmetric:
             # The caller's claim, checked rather than trusted: a mirror
             # assembled over two DIFFERENT axes is a wrong block, not a slow one.
@@ -6226,9 +6231,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 scale,
             )
             return Q
-        for i0 in range(0, n_obs, chunk):
-            self._checkpoint()
-            i1 = min(i0 + chunk, n_obs)
+        for i0, i1 in _schedule.chunks([(0, n_obs)], chunk, self._checkpoint):
             proj = proj_fn(
                 obs[i0 * q : i1 * q],
                 t_obs[i0 * q : i1 * q],
@@ -6338,9 +6341,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         different chunk order. The gate is the reference route at 1e-12.
         """
         QT = Q.T
-        for i0 in range(0, n_axis, chunk):
-            self._checkpoint()
-            i1 = min(i0 + chunk, n_axis)
+        for i0, i1 in _schedule.chunks([(0, n_axis)], chunk, self._checkpoint):
             proj = proj_fn(
                 nodes[i0 * q : i1 * q],
                 tangents[i0 * q : i1 * q],

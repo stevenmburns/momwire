@@ -54,12 +54,19 @@ which both banded fills walk) and the extended-kernel bracket's row bands.
 `row_group`, which is why neither rounding is an argument of `chunks` --
 and its consumers keep their checkpoint, which skips an empty band.
 
-Not yet on it (phase 2 of momwire#1337): hmatrix does NOT fit `sweep`: its
-blocks are a cluster partition over basis index sets, chosen by
-admissibility, and its far blocks are filled by ACA one row or column at a
-time on demand. It can take `walk` for its block loops; the partition and
-ACA stay its own schedule, and `zblock(I, J)` stays the general block this
-module's contiguous block is a case of.
+B-spline's field-form Galerkin block (`_field_galerkin_block` and its
+symmetric twin, the buried fill's remainder and transmitted blocks) walks
+its observer chunks on `chunks` too (phase 2 of momwire#1337); the chunk
+height, projected-table entries against `_FIELD_GALERKIN_CHUNK_ELEMS`, is
+the trunk's rule.
+
+hmatrix does NOT fit `sweep`: its blocks are a cluster partition over basis
+index sets, chosen by admissibility, and its far blocks are filled by ACA
+one row or column at a time on demand. So `build_hmatrix` takes `walk` for
+its two block loops -- the near blocks, then the far ones, a checkpoint
+before each (phase 2 of momwire#1337) -- while the partition and ACA stay
+its own schedule, and `zblock(I, J)` stays the general block this module's
+contiguous block is a case of.
 
 `STATS` counts what the walks did, so a gate can prove a fill came through
 here rather than through a path that no longer exists (the green-gate trap).
