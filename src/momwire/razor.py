@@ -1057,6 +1057,80 @@ class _PreparedChunks(_schedule.Prepared):
         self.seg_h = seg_h
 
 
+class _PreparedRows(_schedule.Prepared):
+    """A source set's T1 basis-row windows, BOUND to the observer rows they
+    were built for (momwire#1337 phase 2, the restriction twin of
+    :class:`_PreparedChunks`' source binding, momwire#745).
+
+    `key` is `_schedule.restriction_key` of the restriction `prepare` cut
+    the windows by: None for the unrestricted fill. `_source_block_rows`
+    compares it with the restriction it is asked to fill under and refuses
+    a mismatch, so a prepared fill reused under another `rows=` raises
+    instead of writing the rows it happens to hold into the rows the caller
+    asked for.
+    """
+
+    __slots__ = ("key",)
+
+    def __init__(self, windows, key):
+        super().__init__(windows)
+        self.key = key
+
+    def __len__(self):
+        return len(self.windows)
+
+
+class _ObserverRows(_schedule.ObserverRows):
+    """Razor's observer restriction (momwire#1337 phase 2): the tents whose
+    rows a `rows=` fill writes.
+
+    `seg_rows` is a sorted set of global segments made of WHOLE wires; a
+    set that holds part of a wire is refused by name, as bspline's is
+    (`_below_interface._crossing_basis_rows`). R is the tents whose two
+    wings both lie inside it: every interior tent of a requested wire, and
+    a junction tent exactly when both of its ends' wires are requested. A
+    junction tent with one wing outside is NOT held -- its row is a
+    through-current between a requested and an unrequested wire, and which
+    of those rows a sector solve needs is the junction-spelling decision of
+    momwire#1251, not this restriction's. A grounded tent's ghost wing names
+    its real wing's segment, so it is held with its wire.
+    """
+
+    __slots__ = ()
+
+    def __init__(self, seg_rows, geom, *, compact):
+        wing_seg = geom["wing_seg"]
+        n_segs = int(geom["n_segs_total"])
+        seg_off = geom["seg_offsets"]
+
+        def basis_rows_of(rows):
+            inside = np.zeros(n_segs, dtype=bool)
+            inside[rows] = True
+            for w in range(len(seg_off) - 1):
+                n_w = seg_off[w + 1] - seg_off[w]
+                n_in = int(inside[seg_off[w] : seg_off[w + 1]].sum())
+                if 0 < n_in < n_w:
+                    raise ValueError(
+                        f"rows= holds {n_in} of wire {w}'s {n_w} segments. "
+                        f"Razor's rows= restricts by whole wires "
+                        f"(momwire#1337): name every segment of a wire or none"
+                    )
+            return np.flatnonzero(inside[wing_seg].all(axis=1)).astype(np.int64)
+
+        super().__init__(
+            seg_rows, n_segs, wing_seg.shape[0], basis_rows_of, compact=compact
+        )
+
+
+# The buried fills' `rows=` is momwire#1337 phase 2 PR 6; until it lands they
+# refuse it by name rather than fill the rows unrestricted.
+_ROWS_BURIED_REFUSAL = (
+    "razor's rows= serves the above-ground fills (free space, PEC, "
+    "refl-coef, Sommerfeld); the buried, detached and crossing fills do not "
+    "take it yet (momwire#1337 phase 2, PR 6)"
+)
+
+
 # A window's T1 and T2 evaluate its wing centroids once between them when
 # the path rule puts T1 there (`RazorSolver._assemble_Z_prepare`). False
 # evaluates them per term, the in-process reference: the same moment rows.
@@ -3558,20 +3632,39 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             "vals": vals,
         }
 
-    def _load_in_place(self, Z, prepared, geom, omega):
+    def _load_in_place(self, Z, prepared, geom, omega, *, restrict=None):
         """Add the wire loading and its charge term to `Z` in place, from the
         prepared stencils, when the deck carries any — the one spelling of the
         three `_assemble_Z_from_prepared` exits (free space / folding ground,
         the crossing deck, the all-below deck). Always LAST and outside any
-        fold: the term is the conductor's own, with no image and no weight."""
+        fold: the term is the conductor's own, with no image and no weight.
+
+        Under `restrict` (momwire#1337) the stencil's rows go through its
+        `loading_map`: a requested row lands in its target row and every
+        other entry is dropped, so the square target's unrequested rows stay
+        zero and the compact target is written in its own row numbering."""
         if prepared["loading"] is None:
             return
+        row_of = None if restrict is None else restrict.loading_map
         spec = _wire_loading.loading_for(self, omega, geom)
-        self._apply_loading(Z, prepared["loading"], spec)
-        self._apply_charge(Z, prepared["charge"], spec)
+        self._apply_loading(Z, prepared["loading"], spec, row_of=row_of)
+        self._apply_charge(Z, prepared["charge"], spec, row_of=row_of)
 
     @staticmethod
-    def _apply_loading(Z, stencil, spec):
+    def _stencil_rows(stencil, vals, row_of):
+        """`(rows, cols, vals)` of a stencil's entries, with the rows mapped
+        through `row_of` and the unmapped (-1) entries dropped. The kept
+        entries keep their order, so each target entry takes the same
+        addends in the same order `np.add.at` gave the unrestricted one."""
+        rows, cols = stencil["rows"], stencil["cols"]
+        if row_of is None:
+            return rows, cols, vals
+        mapped = row_of[rows]
+        keep = mapped >= 0
+        return mapped[keep], cols[keep], vals[keep]
+
+    @staticmethod
+    def _apply_loading(Z, stencil, spec, *, row_of=None):
         """`Z += L` in place: the loading term at one ω (`_loading_stencil`).
 
         `spec` is the shared `_wire_loading.LoadingSpec` (momwire#428) — the
@@ -3585,14 +3678,20 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         z_seg = spec.z_seg
         if z_seg is not None:
-            np.add.at(
-                Z,
-                (stencil["rows"], stencil["cols"]),
-                z_seg[stencil["seg"]] * stencil["vals"],
+            rows, cols, vals = RazorSolver._stencil_rows(
+                stencil, z_seg[stencil["seg"]] * stencil["vals"], row_of
             )
+            np.add.at(Z, (rows, cols), vals)
         if spec.lumped is not None:
             idx, z_l = spec.lumped
-            np.add.at(Z, (idx, idx), z_l)
+            if row_of is None:
+                np.add.at(Z, (idx, idx), z_l)
+            else:
+                idx = np.asarray(idx)
+                mapped = row_of[idx]
+                keep = mapped >= 0
+                z_l = np.broadcast_to(np.asarray(z_l), idx.shape)[keep]
+                np.add.at(Z, (mapped[keep], idx[keep]), z_l)
         return Z
 
     def _has_buried_jacket(self):
@@ -3684,7 +3783,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         }
 
     @staticmethod
-    def _apply_charge(Z, stencil, spec):
+    def _apply_charge(Z, stencil, spec, *, row_of=None):
         """`Z += zq_seg ∘ stencil` in place (`_charge_stencil`, momwire#1154).
 
         Refuses the one inconsistent pairing rather than dropping a term: a
@@ -3698,14 +3797,13 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "(momwire#1154): the prepare half and the loading spec disagree "
                 "about which wires are jacketed below the interface"
             )
-        np.add.at(
-            Z,
-            (stencil["rows"], stencil["cols"]),
-            spec.zq_seg[stencil["seg"]] * stencil["vals"],
+        rows, cols, vals = RazorSolver._stencil_rows(
+            stencil, spec.zq_seg[stencil["seg"]] * stencil["vals"], row_of
         )
+        np.add.at(Z, (rows, cols), vals)
         return Z
 
-    def _assemble_Z_prepare(self, geom, *, chop=None, loading=True):
+    def _assemble_Z_prepare(self, geom, *, chop=None, loading=True, restrict=None):
         """K-independent work for the razor-blade fill: stencils and moments.
 
         Everything `_assemble_Z_from_prepared` needs that does not depend on
@@ -3808,7 +3906,23 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         row that is already GROUNDED, whose T2 the fill rewrites for the
         plane-is-the-reference reason below — two rules for one row's
         endpoints is a silent contradiction, so it raises.
+
+        **`restrict`** (momwire#1337 phase 2): an :class:`_ObserverRows`, and
+        the prepare builds the T1 windows of its rows R ONLY -- each dense
+        window cut to its `basis_windows`, on both source sets, at the dense
+        windows' boundaries (`_schedule.prepare(restrict=)`). An unrequested
+        row's observer tokens are never built, which is where the restricted
+        fill's memory goes: building the dense windows and dropping rows at
+        replay would hold the whole token set. The window lists are bound to
+        the restriction (:class:`_PreparedRows`), so a replay under another
+        one raises. The centroid (T2) tokens stay whole: a requested row
+        reads centroids of whatever wings it has, and `_seg_moments_rows`
+        evaluates only the ones a window reads. `chop` and `loading=False`
+        are the crossing fill's, and the crossing fill does not take `rows=`
+        yet (PR 6), so either with `restrict` is refused.
         """
+        if restrict is not None and (chop or not loading):
+            raise ValueError(_ROWS_BURIED_REFUSAL)
         seg_t, seg_h = geom["seg_t"], geom["seg_h"]
         wing_seg, wing_sigma, wing_rise = (
             geom["wing_seg"],
@@ -3954,11 +4068,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
             return build
 
-        t1_row_chunks = _schedule.prepare(n_basis, rows, _t1_window(geom, src_lab))
+        # `restrict` cuts each dense window to its requested rows, so an
+        # unrequested row's tokens are never built (momwire#1337).
+        key = _schedule.restriction_key(restrict)
+        t1_row_chunks = _PreparedRows(
+            _schedule.prepare(
+                n_basis, rows, _t1_window(geom, src_lab), restrict=restrict
+            ),
+            key,
+        )
         t1_row_chunks_img = (
             None
             if img_src is None
-            else _schedule.prepare(n_basis, rows, _t1_window(img_src, img_lab))
+            else _PreparedRows(
+                _schedule.prepare(
+                    n_basis, rows, _t1_window(img_src, img_lab), restrict=restrict
+                ),
+                key,
+            )
         )
 
         # Under NEC-5's path rule every T1 observer is a wing centroid, the
@@ -3978,6 +4105,8 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             )
         )
         prepared = {
+            # The restriction the T1 windows were cut by (momwire#1337).
+            "restrict_key": key,
             "t1_on_centroids": on_cent,
             "n_basis": n_basis,
             "n_seg": seg_h.size,
@@ -4083,7 +4212,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 prepared["image"]["src_r"] = geom["seg_p0"] + seg_h[:, None] * seg_t
         return prepared
 
-    def _assemble_Z_from_prepared(self, geom, prepared, k, omega):
+    def _assemble_Z_from_prepared(self, geom, prepared, k, omega, *, restrict=None):
         """Fill the razor-blade impedance matrix at one wavenumber.
 
         Free space is one source block. Over a ground it is that block
@@ -4112,9 +4241,21 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Only `k` and `omega` (=c·k, passed separately so a swept caller can
         reuse one `omega_array` without recomputing it) vary here; every
         other ingredient comes from `prepared` (`_assemble_Z_prepare`).
+
+        `restrict` (momwire#1337 phase 2) is the :class:`_ObserverRows`
+        `prepared` was built under, and it names the target: square with
+        every unrequested row exactly zero, or row-compact. It must be the
+        prepare's restriction (or one with the same R and another target);
+        anything else is refused before a row is written, in
+        `_source_block_rows`. Both blocks write only R, through
+        `restrict.target`, and the loading goes through `loading_map`.
         """
         crossing = getattr(self, "_crossing", False)
         detached = getattr(self, "_detached", False)
+        if restrict is not None and (
+            crossing or detached or getattr(self, "_below_plane", False)
+        ):
+            raise ValueError(_ROWS_BURIED_REFUSAL)
         if crossing or detached:
             # momwire#1149: the crossing assembly (U2), or the same with zero
             # crossing tents (U1's detached deck). Loading goes on AFTER it,
@@ -4135,7 +4276,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             return Z
         if getattr(self, "_below_plane", False):
             return self._assemble_Z_below_plane(geom, prepared, k, omega)
-        Z = self._assemble_Z_source_block(geom, prepared, prepared, k, omega)
+        Z = self._assemble_Z_source_block(
+            geom, prepared, prepared, k, omega, restrict=restrict
+        )
         image = prepared["image"]
         if image is not None:
             # The ground object is built HERE, not carried from the prepare
@@ -4148,7 +4291,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # The image block folds into Z window by window (momwire#1173):
             # `Z -= block`, without the block ever existing whole.
             self._assemble_Z_source_block(
-                geom, prepared, image, k, omega, ground=ground, out=Z
+                geom, prepared, image, k, omega, ground=ground, out=Z, restrict=restrict
             )
         # Loading last, and OUTSIDE the fold: `Z = (Z_free − Z_image) + L`.
         # The loading term is a property of the conductor's surface, not of
@@ -4157,7 +4300,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # per metre of the wire itself. That is also why it needs no branch
         # per ground: this one line serves free space, both folding grounds
         # and the composing one.
-        self._load_in_place(Z, prepared, geom, omega)
+        self._load_in_place(Z, prepared, geom, omega, restrict=restrict)
         return Z
 
     # ------------------------------------------------------------------
@@ -5003,7 +5146,17 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return out
 
     def _assemble_Z_source_block(
-        self, geom, prepared, sources, k, omega, *, ground=None, eps=None, out=None
+        self,
+        geom,
+        prepared,
+        sources,
+        k,
+        omega,
+        *,
+        ground=None,
+        eps=None,
+        out=None,
+        restrict=None,
     ):
         """One source set's contribution to the razor-blade matrix.
 
@@ -5113,24 +5266,57 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         The body is `_source_block_rows`, which yields the finished rows a
         window at a time; this is its whole-block and `out=` spelling.
+
+        Under `restrict` (momwire#1337 phase 2) the whole block is
+        `_schedule.new_target`'s -- square and zeroed, or row-compact -- and
+        only R's rows are written; `out` is such a target too.
         """
         if out is not None:
             return _schedule.fold_rows(
                 out,
                 self._source_block_rows(
-                    geom, prepared, sources, k, omega, ground=ground, eps=eps
+                    geom,
+                    prepared,
+                    sources,
+                    k,
+                    omega,
+                    ground=ground,
+                    eps=eps,
+                    restrict=restrict,
                 ),
             )
         n = prepared["n_basis"]
-        T1 = np.empty((n, n), np.complex128, order="F")
+        if restrict is None:
+            T1 = np.empty((n, n), np.complex128, order="F")
+        else:
+            # Zeroed: the square target's unrequested rows are never written.
+            T1, _row_kw = _schedule.new_target(n, restrict)
         for _window in self._source_block_rows(
-            geom, prepared, sources, k, omega, ground=ground, eps=eps, into=T1
+            geom,
+            prepared,
+            sources,
+            k,
+            omega,
+            ground=ground,
+            eps=eps,
+            into=T1,
+            restrict=restrict,
         ):
             pass  # each window's rows are written into T1 in place
         return T1
 
     def _source_block_rows(
-        self, geom, prepared, sources, k, omega, *, ground=None, eps=None, into=None
+        self,
+        geom,
+        prepared,
+        sources,
+        k,
+        omega,
+        *,
+        ground=None,
+        eps=None,
+        into=None,
+        restrict=None,
     ):
         """Yield `(lo, hi, rows)`: rows [lo, hi) of one source set's finished
         block (`_assemble_Z_source_block`, whose docstring is this body's),
@@ -5141,7 +5327,28 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         fresh array, so only one window of the block exists at a time.
         Every operation below is elementwise on the row axis (momwire#1173),
         so a window's rows are the whole block's rows bit for bit, whatever
-        the layout of the array they are written in."""
+        the layout of the array they are written in.
+
+        Under `restrict` (momwire#1337 phase 2) the windows are the
+        restricted prepare's -- basis rows of R, cut at the dense windows'
+        boundaries -- and each lands at `restrict.target(lo, hi)`, which is
+        what `lo, hi` are on the way out: the destination's rows. The
+        prepared windows must have been cut by this restriction's R
+        (:class:`_PreparedRows`); a replay under any other is refused here,
+        before a row is written."""
+        bound = sources["t1_row_chunks"].key
+        if bound != _schedule.restriction_key(restrict):
+            built = "every row" if bound is None else f"{len(bound[1]) // 8} rows of R"
+            asked = (
+                "no restriction"
+                if restrict is None
+                else f"another one ({restrict.basis_rows.size} rows)"
+            )
+            raise ValueError(
+                f"this prepared razor fill was built for {built} and is "
+                f"replayed under {asked}: a prepared fill binds the rows= it "
+                f"was prepared for (momwire#1337). Prepare again under this rows="
+            )
         s_a, s_b = prepared["s_a"], prepared["s_b"]
         h_a, h_b = prepared["h_a"], prepared["h_b"]
         q_a, q_b = prepared["q_a"], prepared["q_b"]
@@ -5424,7 +5631,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for lo, hi, n_obs_chunk, static in _schedule.replay(
             sources["t1_row_chunks"], self._checkpoint
         ):
-            rows_T1 = _schedule.row_window(into, lo, hi, n_basis)
+            # The destination's rows: these basis rows themselves, or under
+            # `restrict` their image in its target (momwire#1337).
+            d0, d1 = (lo, hi) if restrict is None else restrict.target(lo, hi)
+            rows_T1 = _schedule.row_window(into, d0, d1, n_basis)
             if shared is not None:
                 # Under NEC-5's path rule the window's T1 observers are the
                 # centroids of its wings (`_testing_paths`), each one twice
@@ -5631,7 +5841,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 # `free − (C2·img + Q) ≠ (free − C2·img) − Q` in float64. The
                 # two halves meet HERE and the caller's `Z -=` is untouched.
                 rows_T1 += Q_rows
-            yield lo, hi, rows_T1
+            yield d0, d1, rows_T1
 
     def _assemble_Z(self, geom, k):
         """Fill the razor-blade impedance matrix at one wavenumber.
@@ -5644,6 +5854,53 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """
         prepared = self._assemble_Z_prepare(geom)
         return self._assemble_Z_from_prepared(geom, prepared, k, self.c * k)
+
+    def _compute_Z_operator(
+        self,
+        geom,
+        supp_seg=None,
+        polys=None,
+        same_edge_prep=None,
+        rows=None,
+        compact=False,
+    ):
+        """The loaded Z at `self.k`, optionally restricted to observer `rows`
+        -- the call the sector route makes (`_rotational_symmetry`,
+        momwire#1029/#1131), on razor (momwire#1337 phase 2, the prerequisite
+        of #1251).
+
+        `rows=None` is `_assemble_Z` itself. `rows` is a sorted array of
+        global segments made of whole wires, and the fill computes only the
+        tent rows R of :class:`_ObserverRows` -- square with every other row
+        exactly zero, or with `compact=True` as ``(Z[R], R)``, the B-spline
+        route's contract. A requested row is the dense fill's row BIT FOR BIT:
+        each prepared window is the dense window cut to its requested rows,
+        and a window's rows do not depend on where the window falls
+        (`_source_block_rows`, momwire#1173).
+
+        `supp_seg`, `polys` and `same_edge_prep` are the route's positional
+        shape -- bspline's basis tables and its same-edge hoist. Razor's
+        basis is `geom`'s wings and it has no same-edge hoist, so they are
+        accepted and not read.
+
+        The buried, detached and crossing fills refuse `rows=` until PR 6.
+        """
+        if rows is None:
+            if compact:
+                raise ValueError("compact=True restricts rows: pass rows= as well")
+            return self._assemble_Z(geom, self.k)
+        if (
+            getattr(self, "_crossing", False)
+            or getattr(self, "_detached", False)
+            or getattr(self, "_below_plane", False)
+        ):
+            raise ValueError(_ROWS_BURIED_REFUSAL)
+        restrict = _ObserverRows(rows, geom, compact=compact)
+        prepared = self._assemble_Z_prepare(geom, restrict=restrict)
+        Z = self._assemble_Z_from_prepared(
+            geom, prepared, self.k, self.c * self.k, restrict=restrict
+        )
+        return (Z, restrict.basis_rows) if compact else Z
 
     # ------------------------------------------------------------------
     # solve
