@@ -1553,8 +1553,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         if self.exact_kernel:
             if not self._serves_exact_kernel:
                 raise NotImplementedError(
-                    f"exact_kernel=True is served by BSplineSolver's dense "
-                    f"fill only, not by {type(self).__name__} (momwire#1408)"
+                    f"exact_kernel=True is not served by {type(self).__name__}: "
+                    "its fills never reach the exact-kernel correction "
+                    "(momwire#1408)"
                 )
             if use_singular_enrichment:
                 raise NotImplementedError(
