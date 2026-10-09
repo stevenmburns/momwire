@@ -127,14 +127,7 @@ def eznec_server(short_room, transport):
     server = Server(path, idle_timeout=3600.0, log=log, connection=connection)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
-    deadline = time.monotonic() + 10
-    while time.monotonic() < deadline and server.served == 0:
-        probe = mech.connect(path)
-        if probe is None:
-            time.sleep(0.01)
-            continue
-        probe.close()
-        break
+    assert server.listening.wait(10), "the server never started listening"
     yield path, server, log
     server.stop()
     thread.join(timeout=10)
@@ -182,11 +175,9 @@ def test_the_server_answers_deck_after_deck_warm(eznec_server, tmp_path):
     path, server, _log = eznec_server
     deck = _deck("0010")
     expected = _expected_file_bytes(deck, tmp_path)
-    # The fixture's readiness probe is itself a connection, so count deltas.
-    start = server.served
     for _ in range(3):
         assert _ask(path, deck.read_bytes()) == expected
-    assert server.served - start == 3
+    assert server.served == 3
 
 
 def test_the_daemon_logs_whether_its_accelerator_is_live(monkeypatch):
