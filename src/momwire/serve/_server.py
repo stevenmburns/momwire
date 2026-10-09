@@ -137,6 +137,10 @@ class Server:
         self.idle_since = time.monotonic()
         self.served = 0
         self.stopping = False
+        # Set once the socket is listening and its address is published, so an
+        # embedded caller (the in-process tests) can wait for readiness instead
+        # of probing with a connection that would itself be counted (#1380).
+        self.listening = threading.Event()
 
     def note(self, text: str) -> None:
         try:
@@ -243,6 +247,7 @@ class Server:
             self.note(f"another server already owns {self.path}; exiting")
             return 0
         self.note(f"listening pid={os.getpid()} socket={self.path}")
+        self.listening.set()
         # Only the main thread may install handlers; embedded servers (the
         # in-process tests) rely on stop() instead, and a real daemon process
         # always runs this on its main thread.
