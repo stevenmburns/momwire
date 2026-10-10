@@ -691,6 +691,17 @@ def _complex(card: Card, k: int) -> complex:
 # --------------------------------------------------------------------------
 
 
+# What a parser attribute may hold besides lists and dicts of cards
+# (`_Nec5Parser.clone`): values no card handler can change in place.
+_IMMUTABLE_STATE = (str, int, float, bool, type(None))
+
+
+def _frozen(value) -> bool:
+    """A frozen dataclass instance (a ground card's value)."""
+    params = getattr(type(value), "__dataclass_params__", None)
+    return params is not None and params.frozen
+
+
 class _Nec5Parser:
     """A straight-line reader: cards accumulate, the deck comes out at the end.
 
@@ -1511,7 +1522,18 @@ class _Nec5Parser:
     # -- the loop ----------------------------------------------------------
 
     def feed(self, text: str) -> None:
-        for line in text.splitlines():
+        self.feed_lines(text.splitlines())
+        self.close()
+
+    def feed_lines(self, lines) -> None:
+        """Read ``lines`` (no terminators) as the next lines of the deck.
+
+        Split out of :meth:`feed` so that several decks sharing their leading
+        lines can read those once (:func:`parse_nec5_shared`): reading a
+        deck's lines in two calls is reading them in one."""
+        if self._saw_en:
+            return
+        for line in lines:
             card = parse_card(line)
             if card is None:
                 continue
@@ -1520,6 +1542,28 @@ class _Nec5Parser:
                 self._saw_en = True
                 break
             self.card(card)
+
+    def clone(self) -> _Nec5Parser:
+        """An independent parser in exactly this one's state.
+
+        Every attribute is a list or dict of immutable cards (frozen
+        dataclasses, strings) or an immutable value, so copying the
+        containers is a full copy; anything else is refused rather than
+        shared, which is what keeps one deck's cards out of another's."""
+        other = _Nec5Parser.__new__(_Nec5Parser)
+        for name, value in self.__dict__.items():
+            kind = type(value)
+            if kind is list:
+                value = list(value)
+            elif kind is dict:
+                value = dict(value)
+            elif not (isinstance(value, _IMMUTABLE_STATE) or _frozen(value)):
+                raise TypeError(f"parser state {name!r} is a {kind.__name__}")
+            other.__dict__[name] = value
+        return other
+
+    def close(self) -> None:
+        """The end of the text: refuse a deck that never reached ``EN``."""
         if not self._saw_en:
             # A divergence from the nec2 front-end, on purpose: `_nec2.feed`
             # closes a deck at EOF whether or not a terminator arrived,
@@ -1757,3 +1801,47 @@ def parse_nec5(text: str) -> Nec5Deck:
     parser = _Nec5Parser()
     parser.feed(text)
     return parser.deck(text)
+
+
+def parse_nec5_shared(texts) -> list[Nec5Deck | Exception]:
+    """``[parse_nec5(t) for t in texts]``, with each outcome IN PLACE rather
+    than raised: a text that fails to parse yields the exception its own
+    ``parse_nec5`` would have raised, so a caller can raise them in the
+    order it always did.
+
+    The lines every text starts with are read ONCE (momwire#1420): a
+    multi-run deck and the single-run decks :func:`~momwire.eznec._serve.
+    split_runs` makes of it all begin with the same comment block and
+    geometry, and parsing those four times was a tenth of a small SimNEC
+    call. The parser is a straight-line reader, so its state after the
+    shared lines is the same whichever text they came from; each text then
+    continues from a copy of it (:meth:`_Nec5Parser.clone`).
+    """
+    texts = list(texts)
+    if not texts:
+        return []
+    split = [text.splitlines() for text in texts]
+    first = split[0]
+    shared = 0
+    limit = min(len(lines) for lines in split)
+    while shared < limit and all(lines[shared] == first[shared] for lines in split):
+        shared += 1
+    prefix = _Nec5Parser()
+    failed: Exception | None = None
+    try:
+        prefix.feed_lines(first[:shared])
+    except Exception as exc:  # noqa: BLE001 — held; every text meets it at this card
+        failed = exc
+    out: list[Nec5Deck | Exception] = []
+    for text, lines in zip(texts, split, strict=True):
+        if failed is not None:
+            out.append(failed)
+            continue
+        try:
+            parser = prefix.clone()
+            parser.feed_lines(lines[shared:])
+            parser.close()
+            out.append(parser.deck(text))
+        except Exception as exc:  # noqa: BLE001 — held, the caller raises it
+            out.append(exc)
+    return out
