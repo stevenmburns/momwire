@@ -63,6 +63,7 @@ def test_ground_model_validation():
         SinusoidalSolver(**kw, ground_eps=(10, 0.002), ground_model="sommerfeld")
 
 
+@pytest.mark.slow
 def test_wires_below_ground_rejected():
     """Below the plane is a LEGAL deck under Sommerfeld since momwire#1222 —
     the buried serve fills it at k_m — and is still refused, by name, under

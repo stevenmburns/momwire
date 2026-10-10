@@ -86,6 +86,7 @@ def both():
     return Zs, cs, Zr, cr
 
 
+@pytest.mark.slow
 def test_g1224_s1_the_projected_table_is_reciprocal():
     s = BSplineSolver(**screen_deck(12))
     seen = []

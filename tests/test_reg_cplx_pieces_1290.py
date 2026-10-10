@@ -70,6 +70,7 @@ def test_g1290_p2_the_thread_count_does_not_reach_the_answer(monkeypatch):
     assert np.array_equal(_bits(many), _bits(single))
 
 
+@pytest.mark.slow
 def test_g1290_p3_the_buried_z_with_and_without_the_pieces(monkeypatch):
     def fill(pieces):
         monkeypatch.setattr(bk, "_REG_CPLX_PIECES", pieces)

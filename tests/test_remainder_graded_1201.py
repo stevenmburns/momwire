@@ -122,6 +122,7 @@ def _owned_sample(seed=1201):
     return obs, t_obs, src, t_src, owner
 
 
+@pytest.mark.slow
 @needs_acc
 def test_the_owned_kernel_is_the_table_kernel_entry_for_entry(monkeypatch):
     """Each listed pair is the (owner, n) entry of the full table, from the
@@ -184,6 +185,7 @@ def test_the_fused_inner_moments_are_the_numpy_ones(monkeypatch):
     assert np.abs(fused - ref).max() <= 1e-11 * np.abs(ref).max()
 
 
+@pytest.mark.slow
 @needs_acc
 def test_the_fused_inner_cancels_as_solve_aborted():
     from momwire import CancelToken, SolveAborted
@@ -384,6 +386,7 @@ def test_the_graded_rule_lands_on_the_converged_48_radial_screen():
     _lands_and_misses(surface_screen_deck(48), REF_48, 1e4 * GRADED_BAR)
 
 
+@pytest.mark.slow
 def test_a_deck_with_nothing_grazing_never_reaches_the_graded_route():
     """The short-circuit is load-bearing: an elevated wire lists no pair on
     either route, so switching the graded rule off changes no bit."""

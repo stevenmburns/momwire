@@ -138,6 +138,7 @@ def test_the_units_own_scope_cells_are_declared():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("build", [crossing_deck(1), hub_deck()])
 def test_the_flip_decks_are_served_now(build):
     """The two decks whose sentence this section pinned before U2 construct

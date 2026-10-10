@@ -296,6 +296,7 @@ def test_the_floor_refusal_names_the_height_and_the_way_out():
     assert SURFACE_HEIGHT_CLASS.issue in msg
 
 
+@pytest.mark.slow
 def test_the_advisory_fires_inside_the_band_and_is_silent_above_it():
     """Unconditional within the class, absent outside it — and the band edge
     is `advisory_h_over_a`, whose value is read off a measured slope table in

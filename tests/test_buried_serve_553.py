@@ -836,6 +836,7 @@ def test_gu5_7_the_extended_kernel_refuses_a_buried_deck():
         s.compute_impedance()
 
 
+@pytest.mark.slow
 def test_gu5_7_the_dense_budget_refuses_rather_than_chunking(monkeypatch):
     """Since momwire#915 the buried fill HAS a chunked route — the windowed
     assemblers' complex-eps twins — so a budget the dense tensor does not

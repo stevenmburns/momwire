@@ -573,6 +573,7 @@ def test_both_dispatches_agree_across_the_r_near_seam():
         assert rel < 1e-13, f"R1 {r1_l} lam, theta {th_deg}: {rel:.3e}"
 
 
+@pytest.mark.slow
 def test_the_far_zone_is_deferred_until_something_reaches_it():
     """Nothing under 2 lambda_m pays for the far annulus.
 
@@ -682,6 +683,7 @@ def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
     )
 
 
+@pytest.mark.slow
 def test_the_tail_cap_refuses_by_name_below_the_floor():
     """The measured ladder, pinned: converged at 0.02-0.12 deg, capped below.
 

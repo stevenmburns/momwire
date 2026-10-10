@@ -159,6 +159,7 @@ def test_past_the_edge_the_surfaces_are_the_oracles_everywhere(name):
     _check_past_edge(name, full=True)
 
 
+@pytest.mark.slow
 def test_the_continuation_is_continuous_at_the_edge():
     """No step in the served surfaces as R1 crosses r1_max (the edge is the
     interpolated table; the continuation is matched to it)."""
@@ -290,7 +291,15 @@ def _kept(rows):
     return [row for row in rows if not 81.5 < row[1] < 90.0 - 1e-9]
 
 
-@pytest.mark.parametrize("name", DECKS)
+@pytest.mark.parametrize(
+    "name",
+    [
+        # grazing-near is the slow deck (median 8.8 s on Linux CI);
+        # grazing-far keeps the comparison on every PR.
+        pytest.param(n, marks=[pytest.mark.slow] if n == "grazing-near" else [])
+        for n in DECKS
+    ],
+)
 def test_the_near_field_past_the_table_is_the_licensed_engines(name):
     """razor-2p (NEC-5's formulation twin) against x13, per point. Within 15
     degrees of the horizon -- where the field is the ground wave and the

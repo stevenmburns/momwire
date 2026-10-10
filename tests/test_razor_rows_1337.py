@@ -172,11 +172,11 @@ CASES = [
         g,
         lane,
         id=f"{lane}-{g}",
-        # The Gauss-Legendre Sommerfeld fill is ~8 s: the push lane carries
-        # it, and the NEC-5 lane covers the remainder rows on every PR.
-        marks=[pytest.mark.slow]
-        if (lane, g) == ("gauss-legendre", "sommerfeld")
-        else [],
+        # Both Sommerfeld fills are slow (~8-10 s median on Linux CI): the
+        # push lane carries them, and the two-row window of
+        # test_one_and_two_row_windows_are_the_dense_rows keeps the NEC-5
+        # Sommerfeld rows on every PR.
+        marks=[pytest.mark.slow] if g == "sommerfeld" else [],
     )
     for g in GROUNDS
     for lane in LANES
@@ -232,7 +232,9 @@ def test_the_full_restriction_is_the_dense_fill():
 
 
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("ground", ["free", "pec", "sommerfeld"])
+@pytest.mark.parametrize(
+    "ground", ["free", "pec", pytest.param("sommerfeld", marks=pytest.mark.slow)]
+)
 def test_the_restricted_prepare_builds_only_requested_rows(ground, monkeypatch):
     s = solver(ground=ground)
     geom = s._build_geometry()
@@ -283,15 +285,25 @@ def test_rows_none_never_builds_the_restriction(monkeypatch):
 
 
 @pytest.mark.filterwarnings("ignore")
-@pytest.mark.parametrize("step", [1, 2])
 @pytest.mark.parametrize(
-    ("ground", "lane"),
+    ("ground", "lane", "step"),
     [
-        ("free", "nec5"),
-        ("pec", "gauss-legendre"),
-        ("refl-coef", "nec5"),
-        ("sommerfeld", "nec5"),
-        ("pec", "numpy"),
+        # The one-row Sommerfeld window is the slow one (median ~10 s on Linux
+        # CI); the two-row window keeps the NEC-5 Sommerfeld rows on every PR.
+        pytest.param(
+            g,
+            lane,
+            step,
+            marks=[pytest.mark.slow] if (g, step) == ("sommerfeld", 1) else [],
+        )
+        for g, lane in [
+            ("free", "nec5"),
+            ("pec", "gauss-legendre"),
+            ("refl-coef", "nec5"),
+            ("sommerfeld", "nec5"),
+            ("pec", "numpy"),
+        ]
+        for step in [1, 2]
     ],
 )
 def test_one_and_two_row_windows_are_the_dense_rows(

@@ -139,6 +139,7 @@ def test_g902_3_a_pair_shares_the_demanding_rungs_lattice():
         other.blend(b, 0.5, lo)
 
 
+@pytest.mark.slow
 def test_g902_4_a_band_sweep_is_one_pair_and_a_second_sweep_is_free():
     """The fill economy the issue asked for: 50 points across 2.5 % (the
     20 m band) on the Bydipole1 soil fill at most one pair — two masters,

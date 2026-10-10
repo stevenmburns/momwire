@@ -1205,6 +1205,7 @@ def test_lattice_fft_ground_matches_dense():
     assert abs(za - zd) / abs(zd) < 1e-3
 
 
+@pytest.mark.slow
 def test_lattice_fft_solve_iterations_bounded():
     """The Floquet preconditioner keeps iteration growth to edge effects —
     far below the block-Jacobi count on the same grid."""

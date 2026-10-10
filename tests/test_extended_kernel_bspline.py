@@ -2469,8 +2469,20 @@ def _tube_averaged_proj(a, n_phi=_G18_NPHI):
     return original, ring
 
 
-@pytest.mark.parametrize("eps_name", list(_G16_EPS))
-@pytest.mark.parametrize("deck", list(_G16_DECKS))
+# The sea-water cases on the bent and contact decks are the slow ones (median
+# 9-10 s on Linux CI): the push lane carries them, and the other six keep both
+# decks and both grounds on every PR.
+_G18_SLOW = {("bent", "sea"), ("mono_contact", "sea")}
+
+
+@pytest.mark.parametrize(
+    "deck,eps_name",
+    [
+        pytest.param(d, e, marks=[pytest.mark.slow] if (d, e) in _G18_SLOW else [])
+        for e in _G16_EPS
+        for d in _G16_DECKS
+    ],
+)
 def test_g18_reduced_sommerfeld_remainder_is_negligible(
     monkeypatch, deck, eps_name, request
 ):

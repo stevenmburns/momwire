@@ -251,7 +251,15 @@ def test_the_sweeps_own_padding_is_load_bearing():
 # The fill.
 
 
-@pytest.mark.parametrize("name", sorted(DECKS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        # The buried dipole is the slow deck (median 5.5 s on Linux CI); the
+        # crossing and the hub keep the complex fill on every PR.
+        pytest.param(n, marks=[pytest.mark.slow] if n == "buried-dipole" else [])
+        for n in sorted(DECKS)
+    ],
+)
 def test_g_and_z_match_the_scalar_spelling(name):
     ref = np.load(_REF)
     G, Z, calls = _capture(DECKS[name])
