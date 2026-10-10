@@ -36,20 +36,20 @@ from momwire.eznec import _resident, _serve, _shell
 from momwire.eznec._nec4 import render as render_nec4
 
 # A half-metre dipole at 299.7925 MHz (lambda = 1 m), the shape of capture
-# 0010, eleven segments, fed on the centre segment. h = 0.5/11 = 45.5 mm.
-# Thin (a = 0.5 mm, capture 0010's own): h/a 91, auto stays off. Fat
-# (a = 20 mm): h/a 2.27 < 3, auto engages. Near (a = 12 mm): h/a 3.79,
+# 0010 but twelve segments, so NEC-5's node 6 is the centre. h = 41.7 mm.
+# Thin (a = 0.5 mm, capture 0010's own): h/a 83, auto stays off. Fat
+# (a = 20 mm): h/a 2.08 < 3, auto engages. Near (a = 13 mm): h/a 3.21,
 # fat enough to tempt but above the threshold, so it must stay off too.
 _DECK = (
     "CM synthetic fat-wire dipole (momwire#1428)\nCE\n"
-    "GW 1,11,0.,-.25,0.,0.,.25,0.,{a}\nGE 0,-1\n"
+    "GW 1,12,0.,-.25,0.,0.,.25,0.,{a}\nGE 0,-1\n"
     "FR 0,1,0,0,299.7925\nGN -1\nEX 4,1,6,0,1.414214,0.\nPQ 0\n"
     "RP 0,1,37,1000,90.,0.,0.,10.,0.\nEN\n"
 )
-THIN, FAT, NEAR = 0.0005, 0.02, 0.012
+THIN, FAT, NEAR = 0.0005, 0.02, 0.013
 
-# The same antenna in the nec2 dialect, for the portal (EX 0 on segment 6,
-# the centre of eleven).
+# A fat dipole in the nec2 dialect, for the portal and the NEC-4.2 slot
+# (EX 0 on segment 6, the centre of eleven; h/a 2.27).
 _NEC2 = (
     "CM synthetic fat-wire dipole (momwire#1428)\nCE\n"
     "GW 1 11 0 -0.25 0 0 0.25 0 {a}\nGE 0\n"
@@ -105,12 +105,16 @@ def _serve_resident(deck: str, basis: str = "bspline") -> str:
     socket pair, exactly as the thin client sends it: the bytes, then EOF."""
     ours, theirs = socket.socketpair()
     log = io.StringIO()
-    worker = threading.Thread(
-        target=_resident._connection,
-        args=(theirs, 1, log, threading.Lock()),
-        kwargs={"basis": basis},
-        daemon=True,
-    )
+
+    def handle() -> None:
+        # The daemon's accept loop owns the socket and closes it after the
+        # handler returns; the handler only closes its own text wrappers.
+        try:
+            _resident._connection(theirs, 1, log, threading.Lock(), basis=basis)
+        finally:
+            theirs.close()
+
+    worker = threading.Thread(target=handle, daemon=True)
     worker.start()
     try:
         ours.sendall(deck.replace("\n", "\r\n").encode("latin-1"))
@@ -138,15 +142,22 @@ def _printed_z(printout: str) -> complex:
 
 
 def _direct(a: float, exact_kernel) -> complex:
-    """bs2 constructed directly on the same antenna: the NEC-5 dialect's
-    kernel default (extended, momwire#1326) and a centre feed."""
+    """bs2 constructed directly on the same antenna, spelled as the NEC-5
+    dialect spells a node feed: two six-segment halves meeting at the centre
+    node, driven by a node gap there, under the dialect's kernel default
+    (extended, momwire#1326)."""
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         solver = BSplineSolver(
-            wires=[np.array([(0.0, -0.25, 0.0), (0.0, 0.25, 0.0)])],
-            n_per_edge_per_wire=[[11]],
-            feeds=[(0, 0.25, 1.0 + 0j)],
-            wavelength=299_792_458.0 / 299.7925e6,
+            wires=[
+                np.array([(0.0, -0.25, 0.0), (0.0, 0.0, 0.0)]),
+                np.array([(0.0, 0.0, 0.0), (0.0, 0.25, 0.0)]),
+            ],
+            n_per_edge_per_wire=[[6], [6]],
+            feeds=[],
+            node_gaps=[(1, "start", 1.0 + 0j)],
+            # The dialect's own c (299.8 MHz*m), as the seam meshes it.
+            wavelength=_serve.SPEED_OF_LIGHT_MHZ_M / 299.7925,
             wire_radius=a,
             extended_kernel=True,
             exact_kernel=exact_kernel,
@@ -180,7 +191,7 @@ def test_the_roster_binds_auto_on_bs2_and_nowhere_else():
 
 def test_the_resident_seam_runs_the_exact_kernel_on_a_fat_wire(corrections, built):
     printout = _serve_resident(_deck(FAT))
-    assert corrections == [11], corrections
+    assert corrections == [12], corrections
     (solver,) = built
     assert solver.exact_kernel_requested == "auto"
     assert solver.exact_kernel is True
@@ -220,7 +231,7 @@ def test_the_one_shot_render_and_the_daemon_agree(corrections):
     assert _shell.render(_deck(FAT), basis="bspline") == _serve_resident(
         _deck(FAT)
     ).replace("\r\n", "\n")
-    assert corrections == [11, 11]
+    assert corrections == [12, 12]
 
 
 @pytest.mark.parametrize("basis", ["bspline-d1", "razor-2p", "sinusoidal"])
