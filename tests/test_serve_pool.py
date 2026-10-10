@@ -47,6 +47,7 @@ from momwire.serve._pool import (
     thread_budget,
     write_message,
 )
+from eznec_reproducibility import blank_undefined
 from momwire.serve._server import Server
 
 HERE = Path(__file__).resolve().parent
@@ -465,6 +466,19 @@ def daemon(short_room):
             proc.wait(timeout=30)
 
 
+def _claimed(printout: bytes) -> str:
+    """What the seam claims to reproduce ACROSS PROCESSES: everything but the
+    four undefined quantities momwire#578 measured (``eznec_reproducibility``),
+    the same narrowing ``test_eznec_shell`` applies to its own subprocess
+    comparisons. The oracle here is rendered in the test process and the
+    answer in a worker, and the 4-square fixture's open-stub rows carry a
+    crumb that moves with process history (seen on CI as -0.0000E+00 against
+    6.1162E-07 in a 1E+10-ohm row's imaginary cell). The SimNEC replay decks,
+    which carry no such row, are compared byte for byte in the PR's gate.
+    """
+    return blank_undefined(printout.decode("latin-1").replace("\r\n", "\n"))
+
+
 def _first_differences(answers, expected) -> str:
     """The first few differing printout lines, for a red byte comparison."""
     rows = []
@@ -497,7 +511,9 @@ def test_the_daemon_answers_a_crew_in_parallel_with_the_one_shot_bytes(
     deadline = time.monotonic() + _DEADLINE
     while True:
         answers = _round(3, lambda i: _ask(path, payloads[i]))
-        assert answers == expected, _first_differences(answers, expected)
+        assert [_claimed(a) for a in answers] == [_claimed(e) for e in expected], (
+            _first_differences(answers, expected)
+        )
         rows = [
             (int(c), int(p), float(a), float(b))
             for c, p, a, b in _TRACE.findall(log_path.read_text(errors="replace"))
@@ -555,7 +571,9 @@ def test_a_crashed_worker_reaches_its_caller_as_the_seam_s_error_frame(
         frame, _ = _shell.seam_failure(body, exc, basis=basis)
         assert answer == frame.replace("\n", "\r\n")
         # The front end is still up, and the next caller is answered properly.
-        assert _ask(path, deck.read_bytes()) == _oracle(deck, tmp_path)
+        assert _claimed(_ask(path, deck.read_bytes())) == _claimed(
+            _oracle(deck, tmp_path)
+        )
     finally:
         server.stop()
         thread.join(timeout=10)
