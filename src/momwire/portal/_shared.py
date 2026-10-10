@@ -24,6 +24,13 @@ died with every one-second engine process:
   inside itself, and a second concurrent solve would compete with the first
   for the same cores while doubling peak memory. Serialising is the honest
   version of the budget the crew was pretending to have.
+  The eznec daemon (``momwire-nec5`` and kin) chose the other way in
+  momwire#1418: its solves are mostly Python, a crew of SimNEC processes
+  queued behind the lock at crew speed 1, and splitting its small in-process
+  caches across workers was judged the cheaper loss, so it solves in a pool
+  of worker processes (:mod:`momwire.serve._pool`). This daemon keeps the
+  lock because its ``--cache`` of whole solvers is the point of it, and N
+  processes would be N caches.
 
 Everything protocol-shaped is :func:`~momwire.portal._portal.resident_loop`,
 called once per connection with the socket's own file objects. That is not a
