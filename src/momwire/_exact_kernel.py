@@ -59,6 +59,8 @@ from math import comb, factorial
 
 import numpy as np
 
+from ._accel import acc as _acc
+
 _FOURPI = 4.0 * np.pi
 _T_SWITCH = 6.0  # near (closed form) below, far series at and above, in |z|/a
 _N_GL = 16  # Gauss-Legendre order per smooth piece
@@ -543,3 +545,78 @@ def coaxial_block(x0, sgn, h, a, k, nd):
     """
     x0 = np.asarray(x0, dtype=np.float64)
     return CoaxialRows(x0, sgn, h, a, k, nd, max_cached=0).rows(0, x0.shape[0])
+
+
+# --------------------------------------------------------------------------
+# the C++ route (momwire#1410)
+# --------------------------------------------------------------------------
+# `_accel_exact_kernel.cpp` ports the kernel, the pair moments and the
+# row windows with their cross-window cache; the dedup there hashes instead of
+# sorting, and keys a pair on its least image under the coaxial pair's exact
+# symmetries (forward segments, transpose, mirror), which halves a uniform
+# run's unique pairs and extends the dedup to graded meshes. Not bit-exact
+# with the numpy route above by decision: the two agree to a derived
+# tolerance (tests/test_exact_kernel_accel_1410.py), and the numpy route stays
+# the reference and the fallback where the accelerator is absent.
+#
+# `_USE_ACCEL` is the switch the tests flip to hold the routes against each
+# other; `_SYMMETRIC = False` keeps numpy's own key in the C++ route.
+_HAVE_ACCEL = _acc is not None and hasattr(_acc, "exact_kernel_1410")
+_USE_ACCEL = True
+_SYMMETRIC = True
+_ACCEL_MAX_ND = 6
+
+
+def _accel_rules():
+    xg, wg = _gl01(_N_GL)
+    xs, ws = _gl01(_N_SPLIT)
+    return _acc.ExactKernelRules(xg, wg, xs, ws, _gl01_log(_N_SPLIT))
+
+
+class CoaxialRowsAccel:
+    """`CoaxialRows` through the C++ kernel: the same windows, the same
+    `rows(r0, r1)` and `evaluated`, the cache bounded the same way."""
+
+    def __init__(
+        self, x0, sgn, h, a, k, nd, max_cached=None, *, symmetric=None, n_threads=0
+    ):
+        h = np.asarray(h, dtype=np.float64)
+        self.n = int(h.shape[0])
+        self.nd = nd
+        self.q = 1e-11 * float(np.max(h)) if self.n else 1.0
+        self._impl = _acc.ExactKernelCoaxialRows(
+            np.asarray(x0, dtype=np.float64),
+            np.asarray(sgn, dtype=np.float64),
+            h,
+            float(a),
+            float(k),
+            int(nd),
+            -1 if max_cached is None else int(max_cached),
+            self.q,
+            _SYMMETRIC if symmetric is None else bool(symmetric),
+            _accel_rules(),
+            int(n_threads),
+        )
+
+    @property
+    def evaluated(self):
+        return int(self._impl.evaluated)
+
+    def rows(self, r0, r1):
+        """(nd, nd, r1 - r0, n): observer rows [r0, r1) of the block."""
+        out = np.empty((self.nd, self.nd, r1 - r0, self.n), dtype=np.complex128)
+        self._impl.rows(int(r0), int(r1), out)
+        return out
+
+
+def accel_serves(k, nd):
+    """Whether the C++ route takes this group (and is switched on)."""
+    return _HAVE_ACCEL and _USE_ACCEL and nd <= _ACCEL_MAX_ND and not np.iscomplexobj(k)
+
+
+def coaxial_rows(x0, sgn, h, a, k, nd, max_cached=None):
+    """The row-window source the solver walks: C++ where it serves, else
+    the numpy `CoaxialRows`."""
+    if accel_serves(k, nd):
+        return CoaxialRowsAccel(x0, sgn, h, a, k, nd, max_cached=max_cached)
+    return CoaxialRows(x0, sgn, h, a, k, nd, max_cached=max_cached)

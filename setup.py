@@ -362,6 +362,10 @@ _ACCEL_SOURCES = [
     # The remainder order's per-source scan (`_quadrature.remainder_qp_pairs`).
     # Its own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_qp_pairs.cpp",
+    # momwire#1410: the exact ring kernel's coaxial pair moments and their
+    # row-window dedup. Its own TU so that no existing kernel's codegen can
+    # move with it (momwire#1187).
+    "src/momwire/_accel_exact_kernel.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
