@@ -22,11 +22,13 @@ from __future__ import annotations
 import re
 import warnings
 from pathlib import Path
+from types import MappingProxyType
 
 import pytest
 
+from momwire import BSplineSolver
 from momwire._wire_spec import GapMeshFloor
-from momwire.deck import DeckError, ExtendedKernelDefault, build_solver, parse
+from momwire.deck import DeckError, ExtendedKernelDefault, _solver, build_solver, parse
 from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import _serve
 from momwire.eznec._nec4 import render as render_nec4
@@ -215,20 +217,50 @@ def test_the_nec42_slot_prints_ek_as_nec42_does():
     assert _z(printout) == _z(render_nec4(DIPOLE_NEC2.format(ek=""), basis="bspline"))
 
 
-@pytest.mark.parametrize("basis", ["bspline", "sinusoidal"])
-def test_the_fat_dipole_lands_nearer_nec42_with_the_default(monkeypatch, basis):
-    """p10, a 28 MHz dipole at Delta/a = 1.5: the issue's ladder measured the
-    extended kernel 4-5 ohm nearer NEC-4.2 there on both families."""
+def _p10() -> tuple[str, complex]:
     (deck,) = (FIXTURES / "eznec_nec42" / "probes").glob("p10_*.nec")
     (out,) = (FIXTURES / "eznec_nec42" / "printouts").glob("p10_*.out")
-    target = _z(out.read_text(encoding="latin-1"))
-    text = deck.read_text(encoding="latin-1")
-    on = abs(_z(render_nec4(text, basis=basis)) - target)
-    from momwire.deck import _solver
+    return deck.read_text(encoding="latin-1"), _z(out.read_text(encoding="latin-1"))
 
+
+def _force_reduced(monkeypatch) -> None:
     monkeypatch.setattr(
         _solver, "extended_kernel_default_refusal", lambda *a, **k: "forced off"
     )
+
+
+@pytest.mark.parametrize("basis", ["bspline", "sinusoidal"])
+def test_the_fat_dipole_lands_nearer_nec42_with_the_default(monkeypatch, basis):
+    """p10, a 28 MHz dipole at Delta/a = 1.5: the issue's ladder measured the
+    extended kernel 4-5 ohm nearer NEC-4.2 there on both families.
+
+    Measured with bs2's exact ring kernel OFF: the roster binds "auto" on
+    ``bspline`` (momwire#1428), which engages at this Delta/a and takes every
+    pair of a straight wire, so the kernel this test is about would have
+    nothing to act on (the next test)."""
+    monkeypatch.setattr(
+        _solver,
+        "BASES",
+        MappingProxyType(
+            {**_solver.BASES, "bspline": (BSplineSolver, MappingProxyType({}))}
+        ),
+    )
+    text, target = _p10()
+    on = abs(_z(render_nec4(text, basis=basis)) - target)
+    _force_reduced(monkeypatch)
     with pytest.warns(ExtendedKernelDefault):
         off = abs(_z(render_nec4(text, basis=basis)) - target)
     assert on < off - 1.0, (on, off)
+
+
+def test_under_the_exact_kernel_the_straight_fat_dipole_ignores_ek(monkeypatch):
+    """bs2 as the roster binds it ("auto", momwire#1428) runs the exact ring
+    kernel on p10: every pair of a straight wire is coaxial, so the extended
+    kernel the dialect defaults to acts on none of them and turning it off
+    moves no number."""
+    text, _target = _p10()
+    on = _z(render_nec4(text, basis="bspline"))
+    _force_reduced(monkeypatch)
+    with pytest.warns(ExtendedKernelDefault):
+        off = _z(render_nec4(text, basis="bspline"))
+    assert on == off
