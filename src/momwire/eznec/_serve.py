@@ -1768,6 +1768,42 @@ def _phantom_tags(deck: Nec5Deck, wavelength: float) -> frozenset[int]:
     # 1.3 ms and 3.0 ms.  3.0 ms for the whole corpus is what makes it
     # affordable on every deck rather than only behind a candidate card.
     ends = [(tuple(wire.end1), tuple(wire.end2)) for wire in deck.wires]
+    # momwire#1420: the same three tests, asked in an order that stops early.
+    # A wire too long to be the phantom needs no clearance at all, and the
+    # clearance tests, "the nearest endpoint is farther than both floors",
+    # are "EVERY endpoint is farther than the larger floor", which the first
+    # near endpoint settles: on a real antenna that is the first one tried,
+    # so the scan is O(wires) rather than O(wires^2). Exact, not close: the
+    # same `math.dist` values meet the same comparisons. A non-finite
+    # coordinate or wavelength keeps the full scan, whose `min` over a NaN
+    # depends on where in the list the NaN sits.
+    if not (
+        math.isfinite(wavelength)
+        and all(math.isfinite(c) for pair in ends for end in pair for c in end)
+    ):
+        return _phantom_tags_full(deck, ends, wavelength)
+    tags = []
+    for index, (a, b) in enumerate(ends):
+        extent = math.dist(a, b)
+        if not extent < _PHANTOM_EXTENT_LAMBDA * wavelength:
+            continue
+        floor = max(
+            _PHANTOM_CLEARANCE_LAMBDA * wavelength, _PHANTOM_CLEARANCE_EXTENTS * extent
+        )
+        if all(
+            math.dist(here, there) > floor
+            for other, pair in enumerate(ends)
+            if other != index
+            for here in (a, b)
+            for there in pair
+        ):
+            tags.append(deck.wires[index].tag)
+    return frozenset(tags)
+
+
+def _phantom_tags_full(deck: Nec5Deck, ends, wavelength: float) -> frozenset[int]:
+    """:func:`_phantom_tags`' full scan, the spelling before momwire#1420,
+    kept for the non-finite decks whose answer depends on its order."""
     tags = []
     for index, (a, b) in enumerate(ends):
         extent = math.dist(a, b)

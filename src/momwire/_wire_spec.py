@@ -321,6 +321,18 @@ def _vertex_key(pl):
     return tuple(tuple(v) for v in np.round(np.asarray(pl, dtype=float), 9))
 
 
+def _vertex_keys(pls):
+    """Every polyline's `_vertex_key` at once when they all share one shape,
+    else ``None`` (momwire#1420). One `np.round` over the stack rounds each
+    coordinate exactly as the per-wire call does; the keys hold Python
+    floats where `_vertex_key`'s hold numpy scalars of the same values, which
+    hash and compare identically, so the buckets are the same buckets."""
+    if not pls or any(pl.ndim != 2 or pl.shape != pls[0].shape for pl in pls):
+        return None
+    rounded = np.round(np.array(pls), 9).tolist()
+    return [tuple(tuple(v) for v in verts) for verts in rounded]
+
+
 def find_duplicated_wires(wires_polylines):
     """``[(input index, twin input index, reversed)]`` for every wire whose
     polyline repeats an earlier one's, vertex for vertex, in either
@@ -347,10 +359,11 @@ def find_duplicated_wires(wires_polylines):
         return []
     tol = 1e-12 * max(1.0, max(float(np.max(np.abs(pl))) for pl in good))
     seen, out = {}, []
+    keys = _vertex_keys(pls)
     for i, pl in enumerate(pls):
         if pl.ndim != 2:
             continue  # malformed; the caller's own shape check names it
-        verts = _vertex_key(pl)
+        verts = keys[i] if keys is not None else _vertex_key(pl)
         key = min(verts, verts[::-1])
         if key in seen:
             first = seen[key]
@@ -752,6 +765,29 @@ def _segment_lengths(polyline, npe):
     return np.repeat(lengths / np.asarray(npe, dtype=float), np.asarray(npe))
 
 
+def _straight_segment_lengths(wires_polylines, n_per_edge_per_wire):
+    """`_segment_lengths` of every wire, from one array expression, when every
+    wire is a single straight edge (every EZNEC card); else ``None``
+    (momwire#1420). The edge length is `np.linalg.norm`'s own
+    ``sqrt(add.reduce(d * d, axis=1))`` and each segment that length over the
+    edge's count, so every entry is the per-wire call's, bit for bit."""
+    pls = [np.asarray(pl, dtype=float) for pl in wires_polylines]
+    counts = [np.asarray(npe) for npe in n_per_edge_per_wire]
+    if (
+        not pls
+        or len(counts) != len(pls)
+        or any(pl.shape != (2, 3) for pl in pls)
+        or any(c.shape != (1,) for c in counts)
+    ):
+        return None
+    stacked = np.array(pls)
+    d = stacked[:, 1] - stacked[:, 0]
+    lengths = np.sqrt(np.add.reduce(d * d, axis=1))
+    n = np.array([c[0] for c in counts])
+    per = lengths / n.astype(float)
+    return [np.repeat(per[w : w + 1], counts[w]) for w in range(len(pls))]
+
+
 def gap_past_floor(polyline, npe, a, where, floor, depth):
     """``(fires, delta/a, span/a)`` for a gap at `where` on one wire: an
     arclength from the first vertex (None: the midpoint), or "start"/"end"
@@ -936,11 +972,12 @@ def short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire):
     segment under `SHORT_SEGMENT_FLOOR` radii, worst first. Reads the mesh the
     solver will solve: each edge split into its own segment count."""
     found = []
+    straight = _straight_segment_lengths(wires_polylines, n_per_edge_per_wire)
     for w, (pl, npe) in enumerate(zip(wires_polylines, n_per_edge_per_wire)):
         a = float(radius_per_wire[w])
         if a <= 0.0:
             continue
-        h = _segment_lengths(pl, npe)
+        h = straight[w] if straight is not None else _segment_lengths(pl, npe)
         limit = SHORT_SEGMENT_FLOOR * a * (1.0 - _SHORT_SEGMENT_SLACK)
         n_short = int(np.count_nonzero(h < limit))
         if n_short:
