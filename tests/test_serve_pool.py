@@ -298,40 +298,60 @@ def test_a_worker_s_stderr_chunk_comes_back_and_its_stderr_reaches_the_log(
     assert "[worker " in log.text()
 
 
-@pytest.mark.integration
-def test_a_lone_worker_keeps_its_threads_and_a_crew_divides_them(make_pool):
-    # Pinned WIDE so the division is visible whatever the lane exported (the
-    # xdist lane pins one thread, and a limit never raises a count).
-    env = _worker_env()
-    env.update(OMP_NUM_THREADS="8", OPENBLAS_NUM_THREADS="8")
-    pool, log = make_pool(max_workers=2, cores=8, trace=True, env=env)
-    lone = json.loads(_ask_pool(pool, "THREADS")[0])
-    assert lone["blas"] and all(n == 8 for n in lone["blas"])
-    assert re.search(r"worker pid=\d+ t0=\S+ t1=\S+ threads=None", log.text())
-    # Grow the crew to two, then look again.
+def _crew_of_two(pool):
     deadline = time.monotonic() + _DEADLINE
     while len(pool.live()) < 2:
         _round(2, lambda i: _ask_pool(pool, "SLEEP 0.3"))
         assert time.monotonic() < deadline
-    report = json.loads(_ask_pool(pool, "THREADS")[0])
+
+
+def _wide_env(width: str) -> dict[str, str]:
+    """Worker env pinned to ``width`` threads, whatever the lane exported
+    (the xdist lane pins one, and a limit never raises a count)."""
+    env = _worker_env()
+    env.update(OMP_NUM_THREADS=width, OPENBLAS_NUM_THREADS=width)
+    return env
+
+
+@pytest.mark.integration
+def test_a_lone_worker_keeps_its_threads_and_a_crew_divides_them(make_pool):
+    pool, log = make_pool(max_workers=2, cores=8, trace=True, env=_wide_env("8"))
+    lone = json.loads(_ask_pool(pool, "THREADS")[0])
+    assert re.search(r"worker pid=\d+ t0=\S+ t1=\S+ threads=None", log.text())
+    # OpenBLAS caps itself at the box's cores, so the lone count is read, not
+    # assumed; OpenMP takes the environment's 8 as given.
+    assert lone["blas"] and lone["openmp"] == [8] * len(lone["openmp"])
+    _crew_of_two(pool)
+    crew = json.loads(_ask_pool(pool, "THREADS")[0])
     assert log.text().rstrip().endswith("threads=4")
-    assert report["blas"] and all(n == 4 for n in report["blas"])
+    assert crew["blas"] == [min(4, n) for n in lone["blas"]]
+    assert crew["openmp"] == [4] * len(lone["openmp"])
+    assert crew["openmp"], "no OpenMP runtime seen: the division went unobserved"
+
+
+@pytest.mark.integration
+def test_a_share_of_one_keeps_blas_on_its_threaded_path(make_pool):
+    """OpenBLAS's one-thread path rounds differently from its threaded one,
+    so BLAS is never limited below two; OpenMP takes the share of one."""
+    pool, log = make_pool(max_workers=2, cores=2, trace=True, env=_wide_env("8"))
+    lone = json.loads(_ask_pool(pool, "THREADS")[0])
+    _crew_of_two(pool)
+    crew = json.loads(_ask_pool(pool, "THREADS")[0])
+    assert log.text().rstrip().endswith("threads=1")
+    assert crew["blas"] == [min(2, n) for n in lone["blas"]]
+    assert crew["openmp"] == [1] * len(lone["openmp"])
 
 
 @pytest.mark.integration
 def test_a_share_never_raises_a_pinned_thread_count(make_pool):
     """A server started under a one-thread pin keeps one thread in a crew:
     thread count moves round-off, so raising it would move answers."""
-    env = _worker_env()
-    env.update(OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
-    pool, log = make_pool(max_workers=2, cores=8, trace=True, env=env)
-    deadline = time.monotonic() + _DEADLINE
-    while len(pool.live()) < 2:
-        _round(2, lambda i: _ask_pool(pool, "SLEEP 0.3"))
-        assert time.monotonic() < deadline
-    report = json.loads(_ask_pool(pool, "THREADS")[0])
+    pool, log = make_pool(max_workers=2, cores=8, trace=True, env=_wide_env("1"))
+    _crew_of_two(pool)
+    crew = json.loads(_ask_pool(pool, "THREADS")[0])
     assert log.text().rstrip().endswith("threads=4")
-    assert report["blas"] and all(n == 1 for n in report["blas"])
+    assert crew["blas"] and all(n == 1 for n in crew["blas"])
+    assert all(n == 1 for n in crew["openmp"])
 
 
 @pytest.mark.integration
@@ -438,6 +458,21 @@ def daemon(short_room):
             proc.wait(timeout=30)
 
 
+def _first_differences(answers, expected) -> str:
+    """The first few differing printout lines, for a red byte comparison."""
+    rows = []
+    for i, (got, want) in enumerate(zip(answers, expected)):
+        a, b = got.split(b"\r\n"), want.split(b"\r\n")
+        rows += [
+            f"deck {i} line {n}: got {x!r} want {y!r}"
+            for n, (x, y) in enumerate(zip(a, b))
+            if x != y
+        ][:4]
+        if len(a) != len(b):
+            rows.append(f"deck {i}: {len(a)} lines, want {len(b)}")
+    return "\n".join(rows[:12])
+
+
 _TRACE = re.compile(r"\[conn (\d+)\] worker pid=(\d+) t0=(\S+) t1=(\S+) threads=")
 
 
@@ -455,7 +490,7 @@ def test_the_daemon_answers_a_crew_in_parallel_with_the_one_shot_bytes(
     deadline = time.monotonic() + _DEADLINE
     while True:
         answers = _round(3, lambda i: _ask(path, payloads[i]))
-        assert answers == expected
+        assert answers == expected, _first_differences(answers, expected)
         rows = [
             (int(c), int(p), float(a), float(b))
             for c, p, a, b in _TRACE.findall(log_path.read_text(errors="replace"))

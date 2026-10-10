@@ -44,10 +44,10 @@ def stub() -> Seam:
         if word == "THREADS":
             from threadpoolctl import threadpool_info
 
-            blas = [
-                i["num_threads"] for i in threadpool_info() if i["user_api"] == "blas"
-            ]
-            return json.dumps({"pid": os.getpid(), "blas": blas}), ""
+            info = threadpool_info()
+            blas = [i["num_threads"] for i in info if i["user_api"] == "blas"]
+            omp = [i["num_threads"] for i in info if i["user_api"] == "openmp"]
+            return json.dumps({"pid": os.getpid(), "blas": blas, "openmp": omp}), ""
         if word == "PRINT":
             print("this must not reach the protocol")
             return "printed", ""
