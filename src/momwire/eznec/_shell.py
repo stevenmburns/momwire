@@ -473,6 +473,24 @@ def _internal_error_reason(exc: BaseException) -> str:
     return f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
 
 
+def seam_failure(
+    body: str, exc: BaseException, *, basis: str = _serve.BASIS, dialect: str = "nec5"
+) -> tuple[str, str]:
+    """The seam's answer for a deck whose solve failed unforeseen: the
+    ``NEC ERROR`` printout :func:`_internal_error_reason` frames.
+
+    One owner because two callers must frame it identically: :func:`seam`'s
+    own catch, and the resident server's worker pool when the worker solving
+    the deck dies under it (momwire#1418) -- the caller reads the same
+    printout either way."""
+    return (
+        _printout.render_refusal(
+            body, _internal_error_reason(exc), basis=basis, dialect=dialect
+        ),
+        "",
+    )
+
+
 def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
     """This dialect as a :class:`momwire.serve.Seam` (momwire#719 U4).
 
@@ -502,12 +520,7 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
         try:
             return render(body, basis=basis, dialect=dialect), ""
         except Exception as exc:  # noqa: BLE001 - the seam's last line of defence
-            return (
-                _printout.render_refusal(
-                    body, _internal_error_reason(exc), basis=basis, dialect=dialect
-                ),
-                "",
-            )
+            return seam_failure(body, exc, basis=basis, dialect=dialect)
 
     return Seam(
         name="eznec",

@@ -30,6 +30,11 @@ for — and it must not raise either, because EZNEC reads the printout file and
 nothing else.  So it is resolved HERE, before any deck is read, and a bad name
 is handed to the shell as a basis it will refuse by name in the printout.
 
+The frozen exe is also the resident daemon's WORKER (momwire#1418): the
+daemon solves in a pool of processes, and in a bundle the only program to
+start is this one, so ``--serve-worker`` as the FIRST argument makes it a
+worker and nothing else.
+
 The frozen exe is also the resident daemon (momwire#718 phase 3): in a
 deployed bundle there is no system Python, so the native client's only spawn
 target is the bundle's own exe, and ``--serve`` dispatches it exactly as
@@ -47,6 +52,7 @@ from momwire.deck._solver import (
 )
 from momwire.eznec import _serve
 from momwire.eznec._shell import main
+from momwire.serve._pool import WORKER_FLAG
 
 MARKER = "eznec-"
 
@@ -111,9 +117,17 @@ def run(argv: list[str]) -> int:
     does the same (momwire#1295).  EZNEC's spelling cannot produce either,
     and after the flags the contract is the untouched two positional paths.
     """
+    rest = argv[1:]
+    if rest[:1] == [WORKER_FLAG]:
+        # A worker of the resident server's pool (momwire#1418): the daemon
+        # starts THIS exe again, because a frozen bundle has no other
+        # interpreter. The seam to build arrives on stdin, so neither the name
+        # nor any flag below applies.
+        from momwire.serve._worker import worker_main
+
+        return worker_main(rest[1:])
     basis = basis_for(argv[0])
     dialect = dialect_for(argv[0])
-    rest = argv[1:]
     if "--serve" in rest:
         from momwire.eznec._resident import serve_main
 

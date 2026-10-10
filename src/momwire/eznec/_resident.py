@@ -28,9 +28,10 @@ import io
 import sys
 
 from ..serve import run_session
+from ..serve._pool import WorkerPool, configured_max_workers
 from ..serve._server import ConnLog, serve_forever, take_value
 from . import _serve
-from ._shell import _PRINTOUT_ERRORS, seam
+from ._shell import _PRINTOUT_ERRORS, seam, seam_failure
 
 # The one-shot shell's file codec, restated for the socket: the printout
 # bytes on the wire ARE the file's bytes (write_printout's contract), and the
@@ -40,9 +41,29 @@ _CODEC = "latin-1"
 
 
 def _connection(
-    conn, number: int, log, solve_lock, *, basis: str, dialect: str = "nec5"
+    conn,
+    number: int,
+    log,
+    solve_lock,
+    *,
+    basis: str,
+    dialect: str = "nec5",
+    pool: WorkerPool | None = None,
 ) -> None:
-    """One deck over one connection: the eznec seam's half of the server."""
+    """One deck over one connection: the eznec seam's half of the server.
+
+    With a ``pool`` the deck is solved in a worker process and nothing is
+    serialised here (momwire#1418); the framing, the codec and the bytes on
+    the wire are this function's either way, so a caller cannot tell which.
+    """
+    the_seam = seam(basis=basis, dialect=dialect)
+    if pool is not None:
+
+        def crashed(body: str, _terminator: str, exc: BaseException):
+            return seam_failure(body, exc, basis=basis, dialect=dialect)
+
+        the_seam = pool.bind(the_seam, crashed, label=f"[conn {number}] ")
+        solve_lock = None
     rx = tx = None
     try:
         rx = io.TextIOWrapper(conn.makefile("rb"), encoding=_CODEC, errors="replace")
@@ -53,7 +74,7 @@ def _connection(
             newline="\r\n",
         )
         run_session(
-            seam(basis=basis, dialect=dialect),
+            the_seam,
             rx,
             tx,
             ConnLog(log, f"[conn {number}] "),
@@ -184,8 +205,10 @@ def serve_main(argv: list[str]) -> int:
     basis, argv = take_value(argv, "--basis", _serve.BASIS)
     dialect, argv = take_value(argv, "--dialect", "nec5")
 
-    def connection(conn, number, log, solve_lock):
-        _connection(conn, number, log, solve_lock, basis=basis, dialect=dialect)
+    def connection(conn, number, log, solve_lock, pool=None):
+        _connection(
+            conn, number, log, solve_lock, basis=basis, dialect=dialect, pool=pool
+        )
 
     return serve_forever(
         path,
@@ -193,4 +216,28 @@ def serve_main(argv: list[str]) -> int:
         log_path,
         connection,
         configure=lambda log: _configure(log, argv),
+        pool_factory=lambda log, idle: _pool(log, idle, basis, dialect),
+    )
+
+
+def _pool(log, idle_timeout: float, basis: str, dialect: str) -> WorkerPool | None:
+    """This daemon's workers (momwire#1418), or None for the one-lock server.
+
+    The spec is what a worker needs to build the very seam :func:`_connection`
+    builds, by name: it crosses a process boundary as JSON.
+    """
+    cap, why = configured_max_workers()
+    if cap == 0:
+        log.write(f"worker pool: off ({why}); solves are serialised in-process\n")
+        return None
+    log.write(f"worker pool: at most {cap} worker(s) ({why})\n")
+    return WorkerPool(
+        {
+            "factory": "momwire.eznec._shell:seam",
+            "kwargs": {"basis": basis, "dialect": dialect},
+            "status": "momwire.eznec._resident:accelerator_status",
+        },
+        log,
+        max_workers=cap,
+        idle_timeout=idle_timeout,
     )

@@ -36,6 +36,10 @@ Ten gates, derived from the seam's own contract (momwire#497 U1):
    construction — so this counts the daemon's own ``listening pid=`` lines:
    none means the fallback ladder carried the run silently, which is a
    FAILURE of this gate rather than a pass, and two means a double spawn.
+   Since momwire#1418 it also reads the pool's ``worker pid=... ready`` line:
+   the daemon solves in worker processes, a frozen worker is the bundle's own
+   exe started with ``--serve-worker``, and a pool that cannot start one
+   answers in-process with perfect printouts -- so only the log can tell.
 7. **Self-containment of the accelerator** (nt only) — the bundle carries
    ``libomp140.x86_64.dll`` AND the daemon loaded the bundle's own copy of it.
    momwire#737 shipped two phases of bundle without that DLL, so every
@@ -618,6 +622,22 @@ def _gates(exe: Path, work: Path, room: Path, env: dict[str, str]) -> int:
         failures += 1
     else:
         print(f"ok   {stem}: resident, one daemon, warm launch {warm:.3f} s")
+
+    # gate 6b — the daemon solved in a WORKER (momwire#1418).  A frozen worker
+    # is the bundle's own exe started with `--serve-worker`, a path no other
+    # gate reaches; when it cannot start, the pool answers in-process and every
+    # printout above is still perfect, so only the log can say it happened.
+    ready = [line for line in log_lines(room, "pool: worker pid=") if " ready " in line]
+    failed = log_lines(room, "pool: a worker failed to start")
+    if failed or not ready:
+        print(
+            f"FAIL {exe.name}: the daemon's worker pool never started a worker "
+            f"— {failed or 'no worker ready line'}"
+        )
+        _dump_room(room)
+        failures += 1
+    else:
+        print(f"ok   {exe.name}: answered by a pool worker ({len(ready)} started)")
 
     for stem in SERVE_IDS:
         deck = FIXTURES / f"{stem}.nec"

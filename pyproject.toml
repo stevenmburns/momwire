@@ -386,10 +386,13 @@ repair-wheel-command = "DYLD_LIBRARY_PATH=$(brew --prefix libomp)/lib delocate-w
 # The exact-kernel C++ route's agreement with its numpy reference rides here
 # for the same reason (momwire#1410): an MSVC /fp:fast build of it runs nowhere
 # else.
+# test_serve_pool.py rides here too (momwire#1418): the resident server's
+# worker pool spawns processes and talks to them over pipes, and the shipped
+# Windows bundle runs that server, so its one Windows run is this one.
 [[tool.cibuildwheel.overrides]]
 select = "cp312-win_amd64"
 test-environment = { MOMWIRE_LANE_GATE_LOG = "lane-gate.jsonl" }
-test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py {project}/tests/test_windows_lanes_1371.py {project}/tests/test_windowed_lanes_1290.py {project}/tests/test_weighted_windowed_lanes.py {project}/tests/test_below_lanes_1290.py {project}/tests/test_field_galerkin_lanes_1290.py {project}/tests/test_pair_extents_lanes_1290.py {project}/tests/test_sheet_fixed_width_1290.py {project}/tests/test_offedge_lanes_1290.py {project}/tests/test_offedge_ek_lanes_1362.py {project}/tests/test_swept_ek_lanes_ladder_1362.py {project}/tests/test_ek_pair_order_ladder_1362.py {project}/tests/test_hmatrix_ek_block_1362.py {project}/tests/test_somm_proj_lanes_1290.py {project}/tests/test_exact_kernel_accel_1410.py -m "not slow and not memgate"'
+test-command = 'python -c "import momwire._accelerators; import momwire._near_interface_accel; from momwire import bspline as b; assert b._HAVE_BSPLINE_ASSEMBLE_ACCEL and b._HAVE_BSPLINE_SWEPT_ASSEMBLE_ACCEL; from momwire import _near_interface as ni; assert ni._HAVE_NEAR_INTERFACE_ACCEL" && pytest {project}/tests/test_momwire.py {project}/tests/test_hmatrix.py {project}/tests/test_array_block.py {project}/tests/test_glibc_floor.py {project}/tests/test_windows_lanes_1371.py {project}/tests/test_windowed_lanes_1290.py {project}/tests/test_weighted_windowed_lanes.py {project}/tests/test_below_lanes_1290.py {project}/tests/test_field_galerkin_lanes_1290.py {project}/tests/test_pair_extents_lanes_1290.py {project}/tests/test_sheet_fixed_width_1290.py {project}/tests/test_offedge_lanes_1290.py {project}/tests/test_offedge_ek_lanes_1362.py {project}/tests/test_swept_ek_lanes_ladder_1362.py {project}/tests/test_ek_pair_order_ladder_1362.py {project}/tests/test_hmatrix_ek_block_1362.py {project}/tests/test_somm_proj_lanes_1290.py {project}/tests/test_exact_kernel_accel_1410.py {project}/tests/test_serve_pool.py -m "not slow and not memgate"'
 
 [tool.ruff.format]
 # The chapter-figure scripts keep their hand-wrapped compact matplotlib style
