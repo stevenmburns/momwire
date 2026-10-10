@@ -1221,6 +1221,29 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         more wires is not excluded: its collinear through-pair takes the
         exact kernel, though the ring-uniform current it assumes is no
         better there than for the thin-wire kernels.
+
+        **"auto"** (momwire#1408 follow-up) resolves once, at construction,
+        to True iff (i) this route serves the kernel -- not a subclass that
+        refuses it, not `use_singular_enrichment`, not `rotational_symmetry`,
+        no buried wire, no complex wavenumber or permittivity -- and (ii)
+        some segment is fat for its length, h/a < `EXACT_KERNEL_AUTO_H_OVER_A`
+        (3). Every segment is in a coaxial group (its own, at least), so
+        (ii) is "the correction would act on a segment that short". The
+        threshold is the kernel-error table's: the extended kernel's error
+        is 2.1e-3 at |z|/a = 3 and 3.1e-2 at 1. Where (i) fails, "auto"
+        resolves False silently -- it never raises where True would refuse
+        -- and a restricted-row fill reached under "auto" skips the
+        correction rather than refusing it. `exact_kernel_requested` holds
+        what was asked for and `exact_kernel` what runs (a bool, after
+        resolution), which is what a reader should report. Under "auto" a
+        point-gap feed does not warn; True still does.
+
+        **Bends.** The correction covers coaxial pairs only, so where a
+        straight run turns, the pair leaves the exact kernel for the
+        extended (or reduced) one. At a = 50 mm that step is ~0.024 ohm,
+        ~1e-4 relative, and flat under refinement; it is accepted and
+        documented rather than smoothed (the continuous form is
+        momwire#1413), so "auto" engages on bent fat wires too.
     wavelength, halfdriver_factor, wire_radius, nsegs : shared solver
         conventions (see SinusoidalSolver for the same surface).
     wire_conductivity : distributed conductor loss (#131). None (default)
@@ -1370,6 +1393,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # momwire#1408: subclasses that replace the dense fill (H-matrix, array
     # blocks) never reach the exact-kernel correction, so they refuse it.
     _serves_exact_kernel = True
+    # What `exact_kernel=` accepts. Public so a consumer can gate on the
+    # capability ("auto" in BSplineSolver.EXACT_KERNEL_CHOICES) instead of
+    # parsing a version or a signature.
+    EXACT_KERNEL_CHOICES = (False, True, "auto")
+    # "auto" engages when some segment's length is below this many radii
+    # (the kernel-error table: EK 2.1e-3 at |z|/a = 3, 3.1e-2 at 1).
+    EXACT_KERNEL_AUTO_H_OVER_A = 3.0
 
     def __init__(
         self,
@@ -1549,7 +1579,18 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # measurements behind it.
         # momwire#1408: the exact ring kernel on coaxial pairs, opt-in. Off,
         # nothing below reads it but the guard in `_compute_Z_operator`.
-        self.exact_kernel = bool(exact_kernel)
+        if isinstance(exact_kernel, str):
+            if exact_kernel != "auto":
+                raise ValueError(
+                    f"exact_kernel must be True, False or 'auto', got {exact_kernel!r}"
+                )
+            self.exact_kernel_requested = "auto"
+            # Resolved at the end of __init__ (`_resolve_exact_kernel_auto`),
+            # once the geometry and the ground are known; off until then.
+            self.exact_kernel = False
+        else:
+            self.exact_kernel_requested = bool(exact_kernel)
+            self.exact_kernel = bool(exact_kernel)
         if self.exact_kernel:
             if not self._serves_exact_kernel:
                 raise NotImplementedError(
@@ -1919,7 +1960,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             _wire_spec.solver_gaps(self),
             gap_model="point",
         )
-        if self.exact_kernel and self.feed_model == "point" and self.feeds:
+        if self.exact_kernel_requested == "auto":
+            self.exact_kernel = self._resolve_exact_kernel_auto()
+        if (
+            self.exact_kernel_requested is True
+            and self.feed_model == "point"
+            and self.feeds
+        ):
             warnings.warn(
                 "exact_kernel=True with a point-gap feed: under the exact ring "
                 "kernel a zero-width gap has no limiting reactance (each halving "
@@ -1929,6 +1976,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 RuntimeWarning,
                 stacklevel=2,
             )
+
+    def _resolve_exact_kernel_auto(self):
+        """`exact_kernel="auto"`'s value (see the class docstring): True iff
+        this route serves the exact kernel and some segment is shorter than
+        `EXACT_KERNEL_AUTO_H_OVER_A` radii. Never raises a refusal."""
+        if not self._serves_exact_kernel:
+            return False
+        if self.use_singular_enrichment or self.rotational_symmetry:
+            return False
+        if self.ground_z is not None and self._has_buried_wires():
+            return False
+        if np.iscomplexobj(self.k) or np.iscomplexobj(self.eps):
+            return False
+        geom = self._build_geometry()
+        h = np.linalg.norm(geom["seg_r"] - geom["seg_l"], axis=1)
+        a = self._seg_radius(geom)
+        return bool(np.any(h < self.EXACT_KERNEL_AUTO_H_OVER_A * a))
 
     def _rotational_ground_kind(self):
         """The ground's name for the rotational-symmetry rule (momwire#1029
@@ -6962,8 +7026,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         peak on exactly the entry point the SimNEC portal and the array
         benchmarks drive (issue #235).
         """
-        if self.exact_kernel:
-            self._refuse_exact_kernel_route(rows, compact)
+        use_exact = self.exact_kernel
+        if use_exact:
+            if self.exact_kernel_requested == "auto":
+                # "auto" never refuses: an unserved route skips the
+                # correction, and the solver says so.
+                if self._exact_kernel_route_refusal(rows, compact) is not None:
+                    use_exact = self.exact_kernel = False
+            else:
+                self._refuse_exact_kernel_route(rows, compact)
         if self.ground_z is not None and self._has_buried_wires():
             # Per-segment media (momwire#553 U5). Structurally a different
             # fill, not a flag inside this one: three pair classes, two
@@ -7007,7 +7078,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             Z = self._assemble_Z(J, supp_seg, polys, geom)
             del J
 
-        if self.exact_kernel:
+        if use_exact:
             self._checkpoint()
             self._add_exact_kernel_correction(Z, geom, supp_seg, polys, self.k)
 
@@ -7058,23 +7129,30 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # wire property, added once to the final Z).
         return self._apply_loading(Z)
 
-    def _refuse_exact_kernel_route(self, rows, compact):
-        """The routes `exact_kernel` does not serve, refused by name."""
+    def _exact_kernel_route_refusal(self, rows, compact):
+        """Why this fill route does not serve `exact_kernel`, or None."""
         if rows is not None or compact:
-            raise NotImplementedError(
+            return (
                 "exact_kernel=True serves the dense fill only; a restricted-row "
                 "fill (sector route) has no exact-kernel correction (momwire#1408)"
             )
         if self.ground_z is not None and self._has_buried_wires():
-            raise NotImplementedError(
+            return (
                 "exact_kernel=True is refused for buried wires: the exact ring "
                 "kernel here is written for a real wavenumber (momwire#1408)"
             )
         if np.iscomplexobj(self.k) or np.iscomplexobj(self.eps):
-            raise NotImplementedError(
+            return (
                 "exact_kernel=True is refused in a lossy medium (complex k or "
                 "permittivity) (momwire#1408)"
             )
+        return None
+
+    def _refuse_exact_kernel_route(self, rows, compact):
+        """The routes `exact_kernel` does not serve, refused by name."""
+        why = self._exact_kernel_route_refusal(rows, compact)
+        if why is not None:
+            raise NotImplementedError(why)
 
     def _exact_kernel_groups(self, geom):
         """[(segment indices, [(slice, arc, radius) per edge])] per coaxial
