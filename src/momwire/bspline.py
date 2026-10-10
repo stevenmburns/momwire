@@ -1245,7 +1245,10 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         correction rather than refusing it. `exact_kernel_requested` holds
         what was asked for and `exact_kernel` what runs (a bool, after
         resolution), which is what a reader should report. Under "auto" a
-        point-gap feed does not warn; True still does.
+        point-gap feed does not warn; True still does. The mesh advisories
+        read the resolved value (momwire#1412): where the exact kernel runs,
+        `ShortSegments` is silent and `GapMeshFloor` states the point-gap
+        drift and names the end-port feed instead of the thin-wire collapse.
 
         **Bends.** The correction covers coaxial pairs only, so where a
         straight run turns, the pair leaves the exact kernel for the
@@ -1950,27 +1953,41 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         self.rotational_symmetry = bool(rotational_symmetry)
         if self.rotational_symmetry:
             self._rotational_map = self._rotational_check()
+        if self.exact_kernel_requested == "auto":
+            self.exact_kernel = self._resolve_exact_kernel_auto()
+        # The advisories below read the RESOLVED kernel (momwire#1412), so they
+        # follow "auto" -- which is why they come after it. The fill can still
+        # drop the correction under "auto" for a restricted-row route, but the
+        # only one is the rotational sector route, which "auto" already
+        # resolves False for here.
+        # True with a route the fill will refuse (buried, lossy) counts as
+        # not running: the fill raises before any number comes out.
+        servable = self._exact_kernel_servable()
+        exact_runs = bool(self.exact_kernel) and servable
         # momwire#1378: any segment under two radii, anywhere (not only at a gap).
-        # Advisory, once per solver, on the final mesh.
+        # Advisory, once per solver, on the final mesh; silent where the exact
+        # ring kernel runs.
         _wire_spec.advise_short_segments(
             type(self).__name__,
             self.wires_polylines,
             self.n_per_edge_per_wire,
             self._radius_per_wire,
+            exact_kernel=exact_runs,
         )
-        # momwire#959 (a stopgap until #1330): segments below the radius AT A
-        # GAP leave the delta-gap model unreliable. Advisory, once per solver.
+        # momwire#959: segments below the radius AT A GAP. Advisory, once per
+        # solver; its text follows the kernel (thin-wire collapse, or the
+        # exact kernel's point-gap drift), and under the exact kernel the
+        # end-port junction ports are not gaps.
         _wire_spec.advise_gap_mesh_floor(
             type(self).__name__,
             self.wires_polylines,
             self.n_per_edge_per_wire,
             self._radius_per_wire,
             self.extended_kernel,
-            _wire_spec.solver_gaps(self),
+            _wire_spec.solver_gaps(self, end_ports_are_gaps=not exact_runs),
             gap_model="point",
+            exact_kernel=True if exact_runs else (False if servable else None),
         )
-        if self.exact_kernel_requested == "auto":
-            self.exact_kernel = self._resolve_exact_kernel_auto()
         if (
             self.exact_kernel_requested is True
             and self.feed_model == "point"
@@ -1990,18 +2007,23 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         """`exact_kernel="auto"`'s value (see the class docstring): True iff
         this route serves the exact kernel and some segment is shorter than
         `EXACT_KERNEL_AUTO_H_OVER_A` radii. Never raises a refusal."""
+        if not self._exact_kernel_servable():
+            return False
+        geom = self._build_geometry()
+        h = np.linalg.norm(geom["seg_r"] - geom["seg_l"], axis=1)
+        a = self._seg_radius(geom)
+        return bool(np.any(h < self.EXACT_KERNEL_AUTO_H_OVER_A * a))
+
+    def _exact_kernel_servable(self):
+        """Whether this solver's construction-time route serves the exact
+        ring kernel: condition (i) of "auto" (see the class docstring)."""
         if not self._serves_exact_kernel:
             return False
         if self.use_singular_enrichment or self.rotational_symmetry:
             return False
         if self.ground_z is not None and self._has_buried_wires():
             return False
-        if np.iscomplexobj(self.k) or np.iscomplexobj(self.eps):
-            return False
-        geom = self._build_geometry()
-        h = np.linalg.norm(geom["seg_r"] - geom["seg_l"], axis=1)
-        a = self._seg_radius(geom)
-        return bool(np.any(h < self.EXACT_KERNEL_AUTO_H_OVER_A * a))
+        return not (np.iscomplexobj(self.k) or np.iscomplexobj(self.eps))
 
     def _rotational_ground_kind(self):
         """The ground's name for the rotational-symmetry rule (momwire#1029

@@ -678,12 +678,31 @@ def reads_input_wires(kind):
 class GapMeshFloor(UserWarning):
     """Segments shorter than the wire's radius at a gap (momwire#959).
 
-    A STOPGAP. The thin-wire model this tree solves (a reduced or extended
-    kernel with a delta-gap source) is unreliable where the segments at a gap
-    are shorter than the wire radius: the answer drifts toward 0 ohm as they
-    shrink instead of converging. The fix is an exact kernel with a
-    finite-width feed (momwire#1330); until then this says so. Advisory only:
-    nothing is remeshed or refused.
+    The thin-wire model (a reduced or extended kernel with a delta-gap
+    source) is unreliable where the segments at a gap are shorter than the
+    wire radius: the answer drifts toward 0 ohm as they shrink instead of
+    converging. Advisory only: nothing is remeshed or refused. The text
+    depends on the kernel that ran (`advise_gap_mesh_floor`'s
+    `exact_kernel`):
+
+    * A family with no exact kernel points at momwire#1330, still open for
+      it.
+    * A bspline solve that COULD take the exact ring kernel (momwire#1408)
+      but did not names it: `exact_kernel=True` with an end-port feed (two
+      facing wire ends driven through `junction_ports`) converges at such a
+      mesh.
+    * A bspline solve that RAN the exact kernel (momwire#1412) does not
+      collapse; instead a zero-width gap has no limiting reactance there --
+      each halving of the segments at it adds about 4 ln2 w eps0 a of
+      susceptance (0.18 mS of the 0.197 mS asymptote by delta/a 0.18 at
+      d/lambda 0.0085; X falls ~1 ohm per halving), so the reactance keeps
+      drifting. The advisory says that and names the end-port feed, and the
+      end-port junction ports themselves are not gaps under it: their gap
+      is the geometric distance between the two ends, fixed under
+      refinement, and that ladder converges first order down to delta/a
+      0.28 (momwire#1408's study). The floor that triggers it is unchanged;
+      it marks where the per-halving drift has reached most of its
+      asymptote (0.13 mS at delta/a 0.74).
 
     Measured on a free-space 600 MHz dipole (L = 0.24 m, a = 3.175 mm, a 2 a
     mesh elsewhere), relative to the same deck with a 2 a gap segment:
@@ -783,6 +802,7 @@ def advise_gap_mesh_floor(
     gaps,
     *,
     gap_model,
+    exact_kernel=None,
 ):
     """Warn `GapMeshFloor` once, naming every gap past the floor
     (`gap_past_floor` with this family's `GAP_DEPTH[gap_model]`).
@@ -790,6 +810,13 @@ def advise_gap_mesh_floor(
     `gaps` is ``[(label, [(wire, where), ...])]``: a feed, load, port or
     junction and the wire position(s) it sits at. Deduped per gap; the worst
     member speaks for it.
+
+    `exact_kernel` picks the text (see `GapMeshFloor`): None for a solve
+    that cannot take the exact ring kernel (another family, or a bspline
+    route it does not serve), False for one that could and did not, True
+    for one that ran it. It never changes which gaps fire; the caller
+    leaves the end ports out of `gaps` under the exact kernel
+    (`solver_gaps(end_ports_are_gaps=False)`).
     """
     floor = GAP_FLOOR_EXTENDED if extended_kernel else GAP_FLOOR_REDUCED
     depth = GAP_DEPTH[gap_model]
@@ -823,25 +850,45 @@ def advise_gap_mesh_floor(
             f"{label}, where the segments are down to {ratio:.3g} of the "
             f"radius over {span:.3g} radii"
         )
-        if not extended_kernel and ratio >= GAP_FLOOR_EXTENDED:
+        if not exact_kernel and not extended_kernel and ratio >= GAP_FLOOR_EXTENDED:
             part += (
                 f" (extended_kernel=True holds to delta/a ~ "
                 f"{GAP_FLOOR_EXTENDED:g}, which covers this)"
             )
         parts.append(part)
     more = f"; and {len(found) - 6} more" if len(found) > 6 else ""
-    warnings.warn(
-        f"{family}: the impedance is unreliable at "
-        + "; ".join(parts)
-        + more
-        + ". This solver's thin-wire model with a delta-gap source does not "
-        "converge where the segments at a gap are shorter than the wire "
-        "radius: the answer drifts toward 0 ohm as they shrink. The fix is "
-        "an exact kernel with a finite-width feed, momwire#1330. Advisory: "
-        "nothing is remeshed. See stevenmburns/momwire#959.",
-        GapMeshFloor,
-        stacklevel=3,
-    )
+    where = "; ".join(parts) + more
+    if exact_kernel:
+        text = (
+            f"{family}: the reactance depends on the mesh at {where}. "
+            "Under the exact ring kernel a zero-width gap has no limiting "
+            "reactance: each halving of the segments at it adds about "
+            "4 ln2 w eps0 a of susceptance, so the reactance keeps drifting "
+            "as the mesh is refined. A gap of fixed width is the end-port "
+            "feed: two facing wire ends driven through junction_ports "
+            "(momwire#1408). Advisory: nothing is remeshed. See "
+            "stevenmburns/momwire#959."
+        )
+    else:
+        if exact_kernel is None:
+            fix = (
+                "An exact kernel with a fixed-width feed is momwire#1330, "
+                "open for this solver."
+            )
+        else:
+            fix = (
+                "exact_kernel=True with an end-port feed (two facing wire "
+                "ends driven through junction_ports) converges at this "
+                "mesh (momwire#1408)."
+            )
+        text = (
+            f"{family}: the impedance is unreliable at {where}. This "
+            "solver's thin-wire model with a delta-gap source does not "
+            "converge where the segments at a gap are shorter than the wire "
+            f"radius: the answer drifts toward 0 ohm as they shrink. {fix} "
+            "Advisory: nothing is remeshed. See stevenmburns/momwire#959."
+        )
+    warnings.warn(text, GapMeshFloor, stacklevel=3)
 
 
 # --------------------------------------------------------------------------
@@ -858,6 +905,20 @@ class ShortSegments(UserWarning):
     reduced-kernel lanes rise with no limit. Advisory only: nothing is
     remeshed or refused. Independent of `GapMeshFloor`, which is the stricter,
     gap-local floor for the delta-gap source; a deck can raise both.
+
+    SILENT where the exact ring kernel ran (bspline, `exact_kernel` True
+    after resolution -- momwire#1412). Every segment lies in a coaxial group
+    (its own straight run at least), so its self and same-line pairs take
+    the exact kernel, and those are the pairs the floor is about. The pairs
+    it does not cover keep the thin-wire kernel, and short segments next to
+    them were measured too (end-port-fed fat dipole, a = 12.5 mm at
+    lambda = 1 m, ladder delta/a 2 -> 0.25): a 45 degree bend, a 135 degree
+    turn, a T junction, a radius step (0.6 a beyond it), a parallel wire 4 a
+    and 10 a away, and a vertical dipole 2 a above a PEC ground all
+    converge first order under the exact kernel (each step about half the
+    last), where the extended kernel's steps grow. So bends, junctions,
+    offset wires and images do not re-arm it. The bend's own ~1e-4 step is
+    a fixed offset, not a convergence failure (momwire#1413).
     """
 
 
@@ -912,20 +973,28 @@ def short_segment_message(family, found):
 
 
 def advise_short_segments(
-    family, wires_polylines, n_per_edge_per_wire, radius_per_wire
+    family, wires_polylines, n_per_edge_per_wire, radius_per_wire, *, exact_kernel=False
 ):
     """Warn `ShortSegments` once, naming the wires and the worst delta/a.
-    Called from every solver's constructor once the mesh is final."""
+    Called from every solver's constructor once the mesh is final.
+    `exact_kernel`: the exact ring kernel runs in this solve (resolved, not
+    requested), which silences it (see `ShortSegments`)."""
+    if exact_kernel:
+        return
     found = short_segment_wires(wires_polylines, n_per_edge_per_wire, radius_per_wire)
     if found:
         warnings.warn(short_segment_message(family, found), ShortSegments, stacklevel=3)
 
 
-def solver_gaps(solver, *, junctions_are_gaps=False):
+def solver_gaps(solver, *, junctions_are_gaps=False, end_ports_are_gaps=True):
     """Every gap a constructed solver carries, as `advise_gap_mesh_floor`
     takes them: feeds, lumped loads, node gaps, junction ports and node
     ports — and, when `junctions_are_gaps`, every junction of three or more
-    members — each labelled with its wire and position."""
+    members — each labelled with its wire and position.
+
+    `end_ports_are_gaps=False` leaves out the ports on a ONE-member junction
+    (a lone wire end: the end-port feed), whose gap is geometric rather than
+    the mesh's -- under the exact ring kernel it converges (momwire#1412)."""
     gaps = []
     for i, (w, arc, _v) in enumerate(getattr(solver, "feeds", None) or []):
         pos = "its midpoint" if arc is None else f"{float(arc):.4g} m"
@@ -946,6 +1015,8 @@ def solver_gaps(solver, *, junctions_are_gaps=False):
             if 0 <= j < len(junctions):
                 ported.add(j)
                 members = [(int(w), end) for w, end in junctions[j]]
+                if not end_ports_are_gaps and len(members) == 1:
+                    continue
                 gaps.append((f"{kind} {i} (junction {j})", members))
     if junctions_are_gaps:
         for j, group in enumerate(junctions):
