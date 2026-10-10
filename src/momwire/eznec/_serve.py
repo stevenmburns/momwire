@@ -1098,28 +1098,55 @@ def _plane_crossings(deck: Nec5Deck) -> dict[int, _PlaneCrossing]:
     crossings: dict[int, _PlaneCrossing] = {}
     if not _has_interface(deck):
         return crossings
-    for wire in deck.wires:
-        a = np.asarray(wire.end1, dtype=float)
-        b = np.asarray(wire.end2, dtype=float)
-        tol = _ground_spec.ground_touch_tol(np.array([a, b]))
-        za, zb = float(a[2]), float(b[2])
-        if not ((za < -tol and zb > tol) or (za > tol and zb < -tol)):
-            continue
-        z = [p[2] for p in node_points(wire)]
-        node = next((k for k, zk in enumerate(z) if abs(zk) <= tol), None)
-        if node is not None:
-            x, y = node_points(wire)[node][:2]
-            segment = None
-        else:
-            t = za / (za - zb)
-            x, y = (a + (b - a) * t)[:2]
-            segment = next(
-                k for k in range(wire.segment_count) if (z[k] < 0.0) != (z[k + 1] < 0.0)
-            )
-        crossings[wire.tag] = _PlaneCrossing(
-            tag=wire.tag, point=(float(x), float(y), 0.0), node=node, segment=segment
-        )
+    ends, tol = _card_ends(deck)
+    if not len(tol):
+        return crossings
+    za, zb = ends[:, 0, 2], ends[:, 1, 2]
+    across = ((za < -tol) & (zb > tol)) | ((za > tol) & (zb < -tol))
+    # momwire#1420: the per-card test above is one array expression; only a
+    # card that does cross (rare: a radial field crossing the plane has one
+    # per radial, an elevated antenna none) walks its nodes in Python.
+    for i in np.flatnonzero(across).tolist():
+        crossings_add(crossings, deck.wires[i], float(tol[i]))
     return crossings
+
+
+def _card_ends(deck: Nec5Deck) -> tuple[np.ndarray, np.ndarray]:
+    """Every ``GW``'s two ends as one ``(n, 2, 3)`` array, end 1 first, and
+    each card's own ``_ground_spec.ground_touch_tol`` — the same value, bit
+    for bit, as asking the card's two-point polyline one at a time
+    (``_ground_spec.segment_touch_tols``).  Rebuilt on every call rather than
+    cached: it is one array build, and a long-lived server sees many decks
+    (momwire#1420)."""
+    wires = deck.wires
+    if not wires:
+        return np.zeros((0, 2, 3)), np.zeros(0)
+    ends = np.array([(w.end1, w.end2) for w in wires], dtype=float)
+    return ends, _ground_spec.segment_touch_tols(ends[:, 0], ends[:, 1])
+
+
+def crossings_add(
+    crossings: dict[int, _PlaneCrossing], wire: Nec5Wire, tol: float
+) -> None:
+    """Record where ``wire`` — already known to cross the plane, judged on
+    its own tolerance ``tol`` — meets it."""
+    a = np.asarray(wire.end1, dtype=float)
+    b = np.asarray(wire.end2, dtype=float)
+    za, zb = float(a[2]), float(b[2])
+    z = [p[2] for p in node_points(wire)]
+    node = next((k for k, zk in enumerate(z) if abs(zk) <= tol), None)
+    if node is not None:
+        x, y = node_points(wire)[node][:2]
+        segment = None
+    else:
+        t = za / (za - zb)
+        x, y = (a + (b - a) * t)[:2]
+        segment = next(
+            k for k in range(wire.segment_count) if (z[k] < 0.0) != (z[k + 1] < 0.0)
+        )
+    crossings[wire.tag] = _PlaneCrossing(
+        tag=wire.tag, point=(float(x), float(y), 0.0), node=node, segment=segment
+    )
 
 
 def _spans(deck: Nec5Deck) -> list[tuple[int, np.ndarray]]:
@@ -1131,18 +1158,34 @@ def _spans(deck: Nec5Deck) -> list[tuple[int, np.ndarray]]:
     split at z = 0 is judged exactly as the two cards a user would have
     written in its place — the spelling momwire#667 already serves.
     """
+    tags, ends, _tol = _span_table(deck)
+    return [(tag, ends[i]) for i, tag in enumerate(tags)]
+
+
+def _span_table(deck: Nec5Deck) -> tuple[list[int], np.ndarray, np.ndarray]:
+    """:func:`_spans` as arrays: the spans' tags in order, their ends as one
+    ``(m, 2, 3)`` array, and each span's ``ground_touch_tol``.  The geometry
+    rules below read this so that each asks its question of every span in
+    one array expression and walks only the spans that answer it
+    (momwire#1420).  Values are those :func:`_spans` hands out, bit for
+    bit: a half's ends are the card's end and the crossing point, exactly as
+    ``np.array([pl[0], x])`` spells them."""
     crossings = _plane_crossings(deck)
-    spans = []
+    if not crossings:
+        ends, tol = _card_ends(deck)
+        return [wire.tag for wire in deck.wires], ends, tol
+    tags: list[int] = []
+    rows: list[tuple] = []
     for wire in deck.wires:
-        pl = np.array([wire.end1, wire.end2], dtype=float)
         crossing = crossings.get(wire.tag)
         if crossing is None:
-            spans.append((wire.tag, pl))
+            tags.append(wire.tag)
+            rows.append((wire.end1, wire.end2))
             continue
-        x = np.asarray(crossing.point, dtype=float)
-        spans.append((wire.tag, np.array([pl[0], x])))
-        spans.append((wire.tag, np.array([x, pl[1]])))
-    return spans
+        tags += [wire.tag, wire.tag]
+        rows += [(wire.end1, crossing.point), (crossing.point, wire.end2)]
+    ends = np.array(rows, dtype=float)
+    return tags, ends, _ground_spec.segment_touch_tols(ends[:, 0], ends[:, 1])
 
 
 def _crossing_nodes(deck: Nec5Deck) -> set[tuple[int, int, int]]:
@@ -1154,12 +1197,12 @@ def _crossing_nodes(deck: Nec5Deck) -> set[tuple[int, int, int]]:
     nodes: set[tuple[int, int, int]] = set()
     if not _has_interface(deck):
         return nodes
-    for _tag, pl in _spans(deck):
-        tol = _ground_spec.ground_touch_tol(pl)
-        if float(pl[:, 2].min()) < -tol:
-            for end in pl:
-                if abs(float(end[2])) <= tol:
-                    nodes.add(_node_key(tuple(end)))
+    _tags, ends, tol = _span_table(deck)
+    below = np.minimum(ends[:, 0, 2], ends[:, 1, 2]) < -tol
+    for i in np.flatnonzero(below).tolist():
+        for end in ends[i]:
+            if abs(float(end[2])) <= tol[i]:
+                nodes.add(_node_key(tuple(end)))
     return nodes
 
 
@@ -1176,11 +1219,8 @@ def _has_buried_wire(deck: Nec5Deck) -> bool:
     spelling too (momwire#1281)."""
     if not _has_interface(deck):
         return False
-    for _tag, pl in _spans(deck):
-        tol = _ground_spec.ground_touch_tol(pl)
-        if float(pl[:, 2].min()) < -tol:
-            return True
-    return False
+    _tags, ends, tol = _span_table(deck)
+    return bool(np.any(np.minimum(ends[:, 0, 2], ends[:, 1, 2]) < -tol))
 
 
 def _geometry_refusal(deck: Nec5Deck) -> str | None:
@@ -1217,27 +1257,25 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
         return None
     sommerfeld = isinstance(deck.ground, Nec5SommerfeldGround)
     card = "GD" if isinstance(deck.ground, Nec5MininecGround) else "GN 1"
-    spans = _spans(deck)
-    for tag, pl in spans:
-        tol = _ground_spec.ground_touch_tol(pl)
-        zmin = float(pl[:, 2].min())
-        if zmin < -tol:
-            # Wholly below, or ENDING in the plane — the below member of a
-            # crossing junction (momwire#667), served through
-            # `grounded_crossing_exemption` at serve time. No span reaches
-            # above as well: `_spans` has already split the one card that did.
-            if not sommerfeld:
-                return _REFUSE_BURIED_NO_MEDIUM.format(
-                    tag=tag, zmin=zmin, card=card, why=_WHY_NO_MEDIUM[card]
-                )
-            continue
-        if abs(pl[0, 2]) <= tol and abs(pl[1, 2]) <= tol:
-            return _REFUSE_IN_PLANE_WIRE.format(tag=tag)
-    buried = [
-        tag
-        for tag, pl in spans
-        if float(pl[:, 2].max()) < -_ground_spec.ground_touch_tol(pl)
-    ]
+    tags, ends, tol = _span_table(deck)
+    z0, z1 = ends[:, 0, 2], ends[:, 1, 2]
+    zmin = np.minimum(z0, z1)
+    zmax = np.maximum(z0, z1)
+    # momwire#1420: the spans are judged in one array expression each, and
+    # the FIRST span that refuses names the sentence, as the per-span walk
+    # this replaced did. A span reaching below is buried (a refusal unless
+    # the ground is Sommerfeld) and is never also judged in-plane.
+    below = zmin < -tol
+    in_plane = ~below & (np.abs(z0) <= tol) & (np.abs(z1) <= tol)
+    refusing = in_plane if sommerfeld else below | in_plane
+    if np.any(refusing):
+        i = int(np.argmax(refusing))
+        if below[i]:
+            return _REFUSE_BURIED_NO_MEDIUM.format(
+                tag=tags[i], zmin=float(zmin[i]), card=card, why=_WHY_NO_MEDIUM[card]
+            )
+        return _REFUSE_IN_PLANE_WIRE.format(tag=tags[i])
+    buried = [tags[i] for i in np.flatnonzero(zmax < -tol).tolist()]
     if buried:
         # A contact end that a buried wire also ENDS on is a crossing
         # junction, not a contact (momwire#667): exempt those nodes here on
@@ -1245,13 +1283,13 @@ def _geometry_refusal(deck: Nec5Deck) -> str | None:
         # through `grounded_crossing_exemption` and has the last word.
         crossing_nodes = _crossing_nodes(deck)
         contacts = []
-        for tag, pl in spans:
-            if float(pl[:, 2].max()) <= _ground_spec.ground_touch_tol(pl):
-                continue  # not an above wire
+        # the above wires; spelled `not <=` as the walk spelled its skip
+        for i in np.flatnonzero(~(zmax <= tol)).tolist():
+            pl = ends[i]
             for end_index in _ground_spec.contact_ends([pl], 0.0):
                 end = pl[0] if end_index[1] == "start" else pl[1]
                 if _node_key(tuple(end)) not in crossing_nodes:
-                    contacts.append(tag)
+                    contacts.append(tags[i])
                     break
         if contacts:
             return _REFUSE_BURIED_WITH_CONTACT.format(cw=contacts[0], bw=buried[0])
