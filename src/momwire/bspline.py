@@ -1962,7 +1962,13 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # resolves False for here.
         # True with a route the fill will refuse (buried, lossy) counts as
         # not running: the fill raises before any number comes out.
-        servable = self._exact_kernel_servable()
+        try:
+            servable = self._exact_kernel_servable()
+        except ValueError:
+            # A wire-media reading the fill refuses by name (a crossing, a
+            # wire below a ground with no lower medium): it says so there,
+            # not from an advisory.
+            servable = False
         exact_runs = bool(self.exact_kernel) and servable
         # momwire#1378: any segment under two radii, anywhere (not only at a gap).
         # Advisory, once per solver, on the final mesh; silent where the exact
