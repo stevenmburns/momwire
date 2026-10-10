@@ -1,4 +1,5 @@
-"""The mesh floor AT A GAP warns — momwire#959, a stopgap for momwire#1330.
+"""The mesh floor AT A GAP warns — momwire#959, a stopgap for momwire#1330
+(bspline's exact-kernel text: tests/test_exact_kernel_advisories_1412.py).
 
 Measured (the `GapMeshFloor` docstring carries the numbers): the delta-gap
 model collapses toward 0 ohm when the segments at a gap are shorter than the
@@ -76,7 +77,10 @@ def test_the_measured_failing_stencil_warns_and_its_neighbour_does_not(
     assert len(found) == 1
     msg = found[0]
     assert "source 0 (wire 0 at 0.12 m)" in msg
-    assert "momwire#1330" in msg and "momwire#959" in msg
+    # bspline can take the exact kernel and names it (momwire#1412); the
+    # other families point at momwire#1330
+    fix = "momwire#1408" if cls is BSplineSolver else "momwire#1330"
+    assert fix in msg and "momwire#959" in msg
     assert "coarsen" not in msg and "fewer segments" not in msg
     assert _advice(cls, **_fed(*ok, **kw)) == []
 
