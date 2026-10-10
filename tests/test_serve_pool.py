@@ -367,7 +367,11 @@ def test_idle_workers_are_reaped_on_the_idle_rule_keeping_one(make_pool):
     time.sleep(1.5)
     _ask_pool(pool, "SLEEP 0")
     assert len(pool.live()) == 1
-    assert "idle 1s; stopped" in log.text()
+    # The reaped worker is stopped off the answering thread; wait for its line.
+    deadline = time.monotonic() + 15
+    while "idle 1s; stopped" not in log.text():
+        assert time.monotonic() < deadline, log.text()
+        time.sleep(0.05)
 
 
 @pytest.mark.integration

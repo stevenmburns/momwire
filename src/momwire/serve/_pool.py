@@ -43,8 +43,10 @@ Sizing
   time to the frame that asked for it.
 * **The cap** is ``min(cores, RAM / 4 / 150 MB)``: one worker per core the
   process may run on, and never more than a quarter of physical memory at the
-  ~150 MB a warm worker holds (measured on the SimNEC replay decks). On an
-  8-thread box with 8 GB that is 8 workers, ~1.2 GB in all.
+  ~150 MB budgeted per warm worker (measured 106-126 MB resident on the
+  SimNEC replay decks, Haswell; larger decks hold more). On an 8-thread box
+  with 8 GB that is 8 workers, ~1.2 GB in all. The front end itself holds
+  ~95 MB: it imports the package, but never solves.
   ``MOMWIRE_SERVE_WORKERS=N`` overrides it; ``MOMWIRE_SERVE_WORKERS=0`` turns
   the pool off and answers in-process under the old lock.
 * **Threads are divided.** A frame is solved with its OpenMP pool limited to
@@ -505,6 +507,13 @@ class WorkerPool:
             worker.answered += 1
             idle = self._reap_locked()
             self.cond.notify_all()
+        if idle:
+            # Off this thread: it is carrying a frame's answer back to its
+            # caller, and a worker's interpreter shutdown is not that caller's
+            # time to spend.
+            threading.Thread(target=self._stop_idle, args=(idle,), daemon=True).start()
+
+    def _stop_idle(self, idle: list[_Worker]) -> None:
         for gone in idle:
             gone.stop()
             self.note(f"worker pid={gone.pid} idle {self.idle_timeout:g}s; stopped")
