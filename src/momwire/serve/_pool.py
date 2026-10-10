@@ -47,9 +47,17 @@ Sizing
   8-thread box with 8 GB that is 8 workers, ~1.2 GB in all.
   ``MOMWIRE_SERVE_WORKERS=N`` overrides it; ``MOMWIRE_SERVE_WORKERS=0`` turns
   the pool off and answers in-process under the old lock.
-* **Threads are divided.** A frame is solved with its BLAS and OpenMP pools
-  limited to ``cores // live workers``; a lone worker is not limited at all,
-  so a single caller keeps exactly today's thread count.
+* **Threads are divided.** A frame is solved with its OpenMP pool limited to
+  ``cores // live workers`` and its BLAS pool to the same share but never
+  below two; a lone worker is not limited at all, so a single caller keeps
+  exactly today's thread count. The floor is for the answers, not the
+  speed: OpenBLAS's one-thread path rounds differently from its threaded
+  one (measured: the 4-square fixture's near-zero columns move between
+  ``OPENBLAS_NUM_THREADS=1`` and ``2``, while 2, 4 and 8 agree to the bit),
+  so a share of one would make a crew's printout differ in its last digits
+  from a lone server's. BLAS is a sliver of these solves, so two threads
+  per worker oversubscribe nothing that matters. No limit ever RAISES a
+  count the worker was started with.
 * **Idle workers are reaped** on the server's own idle rule: one that has
   answered nothing for ``--idle-timeout`` seconds is stopped, keeping one.
 
@@ -245,9 +253,13 @@ class _Worker:
     """One child process, its pipes, and its bookkeeping (under the pool's
     condition)."""
 
-    def __init__(self, proc: subprocess.Popen) -> None:
+    def __init__(self, proc: subprocess.Popen, pid: int) -> None:
         self.proc = proc
-        self.pid = proc.pid
+        # The pid the WORKER reported, not ``proc.pid``: a Windows venv's
+        # ``python.exe`` is a launcher that runs the real interpreter as its
+        # child, so the process solving is not the process started. The
+        # launcher still owns the pipes, so its exit is still the worker's.
+        self.pid = pid
         self.busy = False
         self.last_used = time.monotonic()
         self.answered = 0
@@ -405,7 +417,7 @@ class WorkerPool:
                 self.spawn_failed_at = time.monotonic()
                 self.cond.notify_all()
             return
-        worker = _Worker(proc)
+        worker = _Worker(proc, int(ready["ready"]))
         with self.cond:
             self.starting -= 1
             if self.closed:

@@ -50,11 +50,16 @@ def _claim_stdout():
     return os.fdopen(fd, "wb")
 
 
+# The smallest BLAS share a worker is limited to (see ``_Threads``).
+_BLAS_FLOOR = 2
+
+
 class _Threads:
     """Limit the BLAS and OpenMP pools for one frame, or not at all.
 
-    A limit only ever LOWERS a pool: each API is held to the smaller of the
-    pool's share and the count this worker already runs with, so a server
+    BLAS is held to the share but never below ``_BLAS_FLOOR``, OpenMP to the
+    share. A limit only ever LOWERS a pool: each API is held to the smaller
+    of that and the count this worker already runs with, so a server
     started under ``OMP_NUM_THREADS=1`` (a bisect, a test lane) keeps one
     thread rather than being raised to its share. Thread count is not
     numerically inert -- a reduction split across threads rounds
@@ -78,14 +83,19 @@ class _Threads:
             self._controller = ThreadpoolController()
             self._modules = len(sys.modules)
         limits = {}
-        for api in ("blas", "openmp"):
+        for api, share in (
+            # BLAS never below two: its one-thread path rounds differently
+            # from its threaded one (the pool module's "Threads are divided").
+            ("blas", max(int(threads), _BLAS_FLOOR)),
+            ("openmp", int(threads)),
+        ):
             counts = [
                 lib.num_threads
                 for lib in self._controller.lib_controllers
                 if lib.user_api == api
             ]
             if counts:
-                limits[api] = min(int(threads), *counts)
+                limits[api] = min(share, *counts)
         if not limits:
             return contextlib.nullcontext()
         return self._controller.limit(limits=limits)
