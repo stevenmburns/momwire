@@ -268,11 +268,15 @@ def test_the_resident_route_stamps_the_same_basis_the_flag_named(monkeypatch, ba
     """
     captured = {}
 
-    def fake_serve_forever(path, idle_raw, log_path, connection, *, configure):
+    def fake_serve_forever(
+        path, idle_raw, log_path, connection, *, configure, pool_factory=None
+    ):
         captured["connection"] = connection
+        captured["pool_factory"] = pool_factory
         return 0
 
     monkeypatch.setattr(_resident, "serve_forever", fake_serve_forever)
+    monkeypatch.delenv("MOMWIRE_SERVE_WORKERS", raising=False)
     assert (
         _resident.serve_main(["--serve", "--socket", "unused.sock", "--basis", basis])
         == 0
@@ -280,10 +284,17 @@ def test_the_resident_route_stamps_the_same_basis_the_flag_named(monkeypatch, ba
 
     server, client = socket.socketpair()
     log = io.StringIO()
+    # The daemon's own route since momwire#1418: the deck is solved in a
+    # worker process the pool builds from the SAME --basis, so the stamp is
+    # read off a printout that crossed that process boundary.
+    pool = captured["pool_factory"](log, 900.0)
+    assert pool is not None
+    assert pool.spec["kwargs"]["basis"] == basis
+    pool.start()
 
     def work():
         try:
-            captured["connection"](server, 1, log, None)
+            captured["connection"](server, 1, log, None, pool=pool)
         finally:
             # The connection's own file objects hold dups; closing the socket
             # too is what ends the client's read, and without it the recv
@@ -305,10 +316,12 @@ def test_the_resident_route_stamps_the_same_basis_the_flag_named(monkeypatch, ba
     finally:
         worker.join(timeout=120)
         client.close()
+        pool.close()
 
     answer = b"".join(chunks).decode("latin-1")
     assert "ANTENNA INPUT PARAMETERS" in answer
     assert_stamped(answer, basis=basis)
+    assert "pool: worker pid=" in log.getvalue()
 
 
 @pytest.mark.integration
