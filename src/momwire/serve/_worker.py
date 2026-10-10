@@ -52,6 +52,13 @@ def _claim_stdout():
 class _Threads:
     """Limit the BLAS and OpenMP pools for one frame, or not at all.
 
+    A limit only ever LOWERS a pool: each API is held to the smaller of the
+    pool's share and the count this worker already runs with, so a server
+    started under ``OMP_NUM_THREADS=1`` (a bisect, a test lane) keeps one
+    thread rather than being raised to its share. Thread count is not
+    numerically inert -- a reduction split across threads rounds
+    differently -- so raising a pinned count would move answers.
+
     The controller is rebuilt whenever new modules have been imported since
     it was built, because it only sees the native libraries loaded at
     construction and a first solve can load more.
@@ -69,7 +76,18 @@ class _Threads:
 
             self._controller = ThreadpoolController()
             self._modules = len(sys.modules)
-        return self._controller.limit(limits=int(threads))
+        limits = {}
+        for api in ("blas", "openmp"):
+            counts = [
+                lib.num_threads
+                for lib in self._controller.lib_controllers
+                if lib.user_api == api
+            ]
+            if counts:
+                limits[api] = min(int(threads), *counts)
+        if not limits:
+            return contextlib.nullcontext()
+        return self._controller.limit(limits=limits)
 
 
 def worker_main(argv: list[str] | None = None) -> int:
