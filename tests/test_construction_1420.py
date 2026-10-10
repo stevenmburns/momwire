@@ -42,6 +42,8 @@ def _decks():
 
 
 def _full(deck, wavelength):
+    if len(deck.wires) < 2:  # `_phantom_tags`' own guard, ahead of either scan
+        return frozenset()
     ends = [(tuple(w.end1), tuple(w.end2)) for w in deck.wires]
     return _serve._phantom_tags_full(deck, ends, wavelength)
 
