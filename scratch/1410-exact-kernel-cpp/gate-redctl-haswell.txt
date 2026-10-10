@@ -1,0 +1,20 @@
+DIFF build/temp.linux-x86_64-cpython-312/_accelerators_avx2/src/momwire/_accelerators.o
+DIFF build/temp.linux-x86_64-cpython-312/_accelerators_sse2/src/momwire/_accelerators.o
+objects differing: 2 of 32
+transpose: exit 1 :: 81 failed, 106 passed in 8.83s
+cache_slot: exit 1 :: 76 failed, 111 passed in 8.61s
+window_r0: exit 1 :: 72 failed, 115 passed in 9.03s
+far_power: exit 1 :: 99 failed, 88 passed in 8.47s
+reversal_sign: exit 1 :: 14 failed, 173 passed in 9.30s
+restored build 0
+?? build.log
+b9ed36b157d6d66abff13b42222ab97848c62a90
+build exit 0 :: running build_ext
+test exit 0 :: ==== 8223 passed, 27 skipped, 4 xfailed, 502 warnings in 556.61s (0:09:16) =====
+slow exit 0 :: ========== 680 passed, 35 skipped, 240 warnings in 1803.64s (0:30:03) ==========
+integration exit 0 :: ===== 2937 passed, 1 skipped, 2 xfailed, 94 warnings in 180.63s (0:03:00) ======
+memgate exit 0 :: ==== 49 passed, 1 skipped, 11968 deselected, 1 warning in 129.73s (0:02:09) ====
+ruff-check exit 0 :: All checks passed!
+ruff-format exit 0 :: 911 files already formatted
+
+[exited with code 0]

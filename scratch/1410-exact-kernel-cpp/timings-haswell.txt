@@ -1,0 +1,69 @@
+== base 79a9cecc
+  uptime before:  07:53:45 up 110 days, 17:26,  2 users,  load average: 0.26, 3.47, 6.94
+dipole301: total 0.192 s  correction 0.153 s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+  uptime after:  07:53:46 up 110 days, 17:26,  2 users,  load average: 0.32, 3.43, 6.91
+  uptime before:  07:53:46 up 110 days, 17:26,  2 users,  load average: 0.32, 3.43, 6.91
+nbs301: total 1.277 s  correction 0.774 s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+  uptime after:  07:53:50 up 110 days, 17:26,  2 users,  load average: 0.94, 3.51, 6.92
+  uptime before:  07:53:50 up 110 days, 17:26,  2 users,  load average: 0.94, 3.51, 6.92
+fat1000: total 1.892 s  correction 1.582 s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+  uptime after:  07:53:56 up 110 days, 17:26,  2 users,  load average: 1.50, 3.58, 6.92
+  uptime before:  07:53:56 up 110 days, 17:26,  2 users,  load average: 1.50, 3.58, 6.92
+fat3000-fill: total 3.896 s  correction inf s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+  uptime after:  07:54:08 up 110 days, 17:26,  2 users,  load average: 2.50, 3.73, 6.94
+  uptime before:  07:54:08 up 110 days, 17:26,  2 users,  load average: 2.50, 3.73, 6.94
+fat3000: total 16.718 s  correction 12.813 s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+  uptime after:  07:54:43 up 110 days, 17:26,  2 users,  load average: 2.18, 3.53, 6.75
+  uptime:  07:55:00 up 110 days, 17:27,  2 users,  load average: 1.91, 3.40, 6.66
+RSS base fat3000: 	Maximum resident set size (kbytes): 1166728 :: fat3000: total 16.948 s  correction 13.031 s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+	Average total size (kbytes): 0
+  uptime:  07:55:04 up 110 days, 17:27,  2 users,  load average: 1.84, 3.36, 6.63
+RSS base fat3000-fill: 	Maximum resident set size (kbytes): 1166908 :: fat3000-fill: total 3.901 s  correction inf s  (/home/smburns/stevenmburns/mw1410/base/src/momwire/__init__.py)
+	Average total size (kbytes): 0
+== change f88f9343
+  uptime before:  07:55:04 up 110 days, 17:27,  2 users,  load average: 1.84, 3.36, 6.63
+dipole301: total 0.085 s  correction 0.046 s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+  uptime after:  07:55:05 up 110 days, 17:27,  2 users,  load average: 1.84, 3.36, 6.63
+  uptime before:  07:55:05 up 110 days, 17:27,  2 users,  load average: 1.84, 3.36, 6.63
+nbs301: total 0.747 s  correction 0.250 s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+  uptime after:  07:55:08 up 110 days, 17:27,  2 users,  load average: 1.77, 3.32, 6.60
+  uptime before:  07:55:08 up 110 days, 17:27,  2 users,  load average: 1.77, 3.32, 6.60
+fat1000: total 0.800 s  correction 0.486 s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+  uptime after:  07:55:11 up 110 days, 17:27,  2 users,  load average: 2.27, 3.40, 6.60
+  uptime before:  07:55:11 up 110 days, 17:27,  2 users,  load average: 2.27, 3.40, 6.60
+fat3000-fill: total 3.899 s  correction inf s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+  uptime after:  07:55:23 up 110 days, 17:27,  2 users,  load average: 2.64, 3.44, 6.58
+  uptime before:  07:55:23 up 110 days, 17:27,  2 users,  load average: 2.64, 3.44, 6.58
+fat3000: total 8.171 s  correction 4.244 s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+  uptime after:  07:55:40 up 110 days, 17:27,  2 users,  load average: 2.79, 3.43, 6.53
+  uptime:  07:55:48 up 110 days, 17:28,  2 users,  load average: 3.08, 3.47, 6.51
+RSS change fat3000: 	Maximum resident set size (kbytes): 1166508 :: fat3000: total 8.100 s  correction 4.198 s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+	Average total size (kbytes): 0
+  uptime:  07:55:53 up 110 days, 17:28,  2 users,  load average: 2.91, 3.43, 6.48
+RSS change fat3000-fill: 	Maximum resident set size (kbytes): 1166608 :: fat3000-fill: total 3.916 s  correction inf s  (/home/smburns/stevenmburns/mw1410/change/src/momwire/__init__.py)
+	Average total size (kbytes): 0
+DONE
+
+== change2 b9ed36b1
+  uptime before:  08:45:49 up 110 days, 18:18,  2 users,  load average: 0.23, 4.14, 7.58
+dipole301: total 0.085 s  correction 0.048 s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+  uptime after:  08:45:50 up 110 days, 18:18,  2 users,  load average: 0.23, 4.14, 7.58
+  uptime before:  08:45:50 up 110 days, 18:18,  2 users,  load average: 0.23, 4.14, 7.58
+nbs301: total 0.747 s  correction 0.243 s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+  uptime after:  08:45:53 up 110 days, 18:18,  2 users,  load average: 0.29, 4.08, 7.55
+  uptime before:  08:45:53 up 110 days, 18:18,  2 users,  load average: 0.29, 4.08, 7.55
+fat1000: total 0.791 s  correction 0.478 s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+  uptime after:  08:45:56 up 110 days, 18:18,  2 users,  load average: 0.29, 4.08, 7.55
+  uptime before:  08:45:56 up 110 days, 18:18,  2 users,  load average: 0.29, 4.08, 7.55
+fat3000-fill: total 3.892 s  correction inf s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+  uptime after:  08:46:08 up 110 days, 18:18,  2 users,  load average: 0.45, 3.93, 7.44
+  uptime before:  08:46:08 up 110 days, 18:18,  2 users,  load average: 0.45, 3.93, 7.44
+fat3000: total 8.160 s  correction 4.222 s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+  uptime after:  08:46:25 up 110 days, 18:18,  2 users,  load average: 1.13, 3.90, 7.37
+  uptime:  08:46:34 up 110 days, 18:18,  2 users,  load average: 1.11, 3.81, 7.31
+RSS change2 fat3000: 	Maximum resident set size (kbytes): 1166804 :: fat3000: total 8.122 s  correction 4.212 s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+	Average total size (kbytes): 0
+  uptime:  08:46:38 up 110 days, 18:18,  2 users,  load average: 1.10, 3.76, 7.27
+RSS change2 fat3000-fill: 	Maximum resident set size (kbytes): 1166436 :: fat3000-fill: total 3.925 s  correction inf s  (/home/smburns/stevenmburns/mw1410/change2/src/momwire/__init__.py)
+	Average total size (kbytes): 0
+DONE
