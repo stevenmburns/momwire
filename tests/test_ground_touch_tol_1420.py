@@ -331,10 +331,15 @@ def test_the_seam_runs_the_table_path(monkeypatch):
     monkeypatch.setattr(S, "_span_table", spy_table)
     monkeypatch.setattr(_ground_spec, "segment_touch_tols", spy_vector)
     monkeypatch.setattr(_ground_spec, "ground_touch_tol", spy_tol)
-    for name in ("dan_through.nec", "thr_n21.nec"):
-        text = (FIXTURES / "eznec_split_1281" / name).read_text(encoding="latin-1")
-        out = render(text, basis="razor-2p")
-        assert "NEC ERROR" not in out or "crossing" in out
+    monopole = (
+        "CM contact monopole\nCE\nGW 1 10 0 0 0 0 0 5 1e-3\n"
+        "GW 2 4 0 0 5 1 0 5 1e-3\nGE 1\nGN 1\nFR 0 1 0 0 14\n"
+        "EX 0 1 1 0 1 0\nXQ\nEN\n"
+    )
+    out = render(monopole, basis="razor-2p")
+    assert "NEC ERROR" not in out
+    buried = monopole.replace("GW 2 4 0 0 5 1 0 5", "GW 2 4 0 0 -1 1 0 -1")
+    assert "below" in render(buried, basis="razor-2p")
     assert counts["table"] > 0 and counts["vector"] > 0
     assert counts["per_card_in_rules"] == 0
 
