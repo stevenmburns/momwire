@@ -14,8 +14,13 @@ diagonal of each uniform run-pair block instead of one per pair. Gates:
 * the dedup ran, counted from the production seam: on a uniform run the
   kernel sees 2n - 1 pairs over all windows, not n²;
 * pairs that share lengths and offset but differ in a per-segment field the
-  moment depends on (an EK group label, a tube radius) keep their own
-  values: the run boundary sees the field;
+  moment depends on (an EK group label, a radius, a length inside an edge)
+  keep their own values: the run boundary sees the field, and each test has
+  a red twin that drops the field from `RUN_FIELDS` and must fail the gate;
+* a diagonal sitting on a ladder threshold (16, the buried 2, a coarse tier)
+  or a run on the phase guard's ceiling is evaluated pair by pair, through
+  the production seam on the C++ and the numpy off-edge kernels, with a red
+  twin (`TIE_REL = 0`);
 * the representative pairs' same-edge geometry is the square table's;
 * memory: a graded wire, where nothing deduplicates, still peaks at one
   window.
@@ -26,12 +31,15 @@ coordinates' roundoff -- |x|·eps over distances no smaller than the radius,
 a relative ~|x|·eps/a per moment, 2.2e-16 · 0.5 / 0.004 ≈ 3e-14 on these
 decks -- and by a length difference inside the run resolution `q` =
 1e-11·h, which uniform meshes never use (their lengths agree to roundoff).
-Measured max|ΔZ|/max|Z| on Haswell: <= 7.5e-15 over every deck here (the
-cross-wire gathers of the end-port pair are the largest), 3e-15 on a
-601-segment dipole, 1.2e-14 on a 3,000-segment 9 m wire (|x|/a = 4,500).
+Measured max|ΔZ|/max|Z| on Haswell: <= 4.2e-15 over every deck here
+(1.7e-15 on the tie decks, which read 1.4e-12 to 2.0e-12 with the tie rule
+off), 3e-15 on a 601-segment dipole, 1.2e-14 on a 3,000-segment 9 m wire
+(|x|/a = 4,500).
 Gated at 1e-13, ten times inside Steve's 1e-12 bar for the exact-kernel
-routes: a dropped run field reads 1.4e-11 (a 5e-7 radius step) to 1.4e-5
-(an EK label), a mis-offset window or an ignored reversal 0.09 and up.
+routes. The red twins above measure what a wrong value reads (in the PR);
+two more red controls were run by hand on Haswell and are not in the suite,
+since they need a source edit: a window-relative row offset in the gather
+(43 tests fail, ΔZ 0.03 to 1.04) and an ignored reversal (6 fail, 0.16).
 """
 
 from __future__ import annotations
@@ -240,13 +248,26 @@ def _relabelled(s, split):
     return labels
 
 
-def test_ek_group_change_keeps_its_own_values(monkeypatch):
+def _drop_fields(monkeypatch, drop):
+    """The red control: run boundaries blind to the `drop` fields."""
+    if drop:
+        kept = tuple(f for f in EKB.RUN_FIELDS if f not in drop)
+        monkeypatch.setattr(EKB, "RUN_FIELDS", kept)
+
+
+# Red with the label fields dropped: measured 1.4e-5 on Haswell.
+@pytest.mark.parametrize("drop", [None, ("group_i", "group_j")])
+def test_ek_group_change_keeps_its_own_values(monkeypatch, drop):
     monkeypatch.setattr(EKB, "TOEPLITZ_MIN_PAIRS", 0)
+    _drop_fields(monkeypatch, drop)
     s = _solver(extended_kernel=True, **_DECKS["end-port pair"])
     # wire 0 is segments 0..36: relabel from 20 on
     monkeypatch.setattr(s, "_ek_axis_labels", _relabelled(s, 20))
     rel, made = _dedup_vs_reference(monkeypatch, s, 5)
     (base,) = made
+    if drop:
+        assert rel > TOL_Z, "the gate cannot see a dropped label field"
+        return
     assert rel <= TOL_Z
     assert len(base.runs) == 3, base.runs  # the label change split wire 0
     # the field matters: the same geometry, extended vs not, differs
@@ -271,13 +292,16 @@ def test_tube_radius_change_keeps_its_own_values(monkeypatch):
     assert rel <= TOL_Z
 
 
-def test_radius_change_inside_an_edge_keeps_its_own_values(monkeypatch):
+# Red with the radius fields dropped: measured 1.4e-11 on Haswell.
+@pytest.mark.parametrize("drop", [None, ("a", "b_j")])
+def test_radius_change_inside_an_edge_keeps_its_own_values(monkeypatch, drop):
     """A radius is per wire, so in a real deck it changes only where an edge
     does, and the edge boundary alone would split the run. Here it changes
     mid-wire (by 5e-7, inside the coaxial rule's 1e-6 tolerance): the observer
     radius `a` and, under EK, the tube radius `b_j` must split the run on
     their own. The fill reads the same radii (`_seg_radius`)."""
     monkeypatch.setattr(EKB, "TOEPLITZ_MIN_PAIRS", 0)
+    _drop_fields(monkeypatch, drop)
     s = _solver(extended_kernel=True, **_DECKS["end-port pair"])
     orig = s._seg_radius
 
@@ -289,8 +313,180 @@ def test_radius_change_inside_an_edge_keeps_its_own_values(monkeypatch):
     monkeypatch.setattr(s, "_seg_radius", seg_radius)
     rel, made = _dedup_vs_reference(monkeypatch, s, 5)
     (base,) = made
+    if drop:
+        assert rel > TOL_Z, "the gate cannot see a dropped radius field"
+        return
     assert rel <= TOL_Z
     assert len(base.runs) == 3, base.runs
+
+
+# A length change INSIDE one edge. The deck front ends cannot make one: every
+# edge is meshed `np.linspace(0, edge_len, n_e + 1)` (`_build_geometry`), so a
+# length changes only where an edge does and the "edge" field already splits
+# the run. BaseRows takes its geometry as arrays, so a two-pitch edge is
+# built here directly and the gather is held against BaseRows' own per-pair
+# route (every block below the threshold), which is `_exact_kernel_base_J`'s
+# arithmetic. Red with "h" dropped from the run fields.
+@pytest.mark.parametrize("drop", [None, ("h",)])
+def test_length_change_inside_an_edge_keeps_its_own_values(monkeypatch, drop):
+    _drop_fields(monkeypatch, drop)
+    h = np.r_[np.full(30, 0.01), np.full(30, 0.013)]
+    arc = np.r_[0.0, np.cumsum(h)]
+    z = np.array([0.0, 0.0, 1.0])
+    seg_l, seg_r = arc[:-1, None] * z, arc[1:, None] * z
+    n = h.size
+
+    def rows(min_pairs):
+        monkeypatch.setattr(EKB, "TOEPLITZ_MIN_PAIRS", min_pairs)
+        base = EKB.BaseRows(
+            seg_l=seg_l,
+            seg_r=seg_r,
+            seg_a=np.full(n, A),
+            tangents=np.tile(z, (n, 1)),
+            S=np.arange(n),
+            g_edges=[(slice(0, n), arc, A)],
+            k=2 * np.pi,
+            d=2,
+            n_qp_pair=8,
+            n_qp_same_edge=4,
+            ek=None,
+            ladder=_bspline.DEFAULT_PAIR_ORDER_LADDER,
+            ek_se=None,
+            n_segs_total=n,
+        )
+        out = np.concatenate(
+            [base.rows(r0, min(n, r0 + 7)) for r0 in range(0, n, 7)], 2
+        )
+        return out, base
+
+    want, ref = rows(10**12)
+    got, base = rows(0)
+    assert ref.toeplitz_blocks == 0 and base.toeplitz_blocks > 0
+    rel = _rel(got, want)
+    if drop:
+        assert rel > TOL_Z, "the gate cannot see a dropped length field"
+        return
+    assert len(base.runs) == 2
+    assert rel <= TOL_Z
+
+
+# --------------------------------------------------------------------------
+# ties: a branch keyed on pair geometry, sitting on its threshold
+# --------------------------------------------------------------------------
+# Collinear equal-length edges put every off-edge ladder ratio (centre
+# distance over the longer length) on an integer, so the free-space ladder's
+# 16 -- and the buried ladder's 2 -- is met EXACTLY and the kernel's `>=`
+# goes either way by roundoff. At kL 0.49 the order-4 tier is far from the
+# order-8 base, so a gathered tie diagonal moved Z by 2.0e-12 (one wire, two
+# edges) and 1.4e-12 (two wires joined) before the fix (the #1421 review).
+_W2 = [np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 3.5), (0.0, 0.0, 7.0)])]
+_TIE_DECKS = {
+    "two edges kL 0.49": dict(wires=_W2, n=[[70, 70]], wavelength=0.64),
+    "two wires joined": dict(
+        wires=[_W2[0][:2], _W2[0][1:]],
+        n=[[70], [70]],
+        wavelength=0.64,
+        junctions=[[(0, "end"), (1, "start")]],
+    ),
+    # the buried ladder's thresholds on a free-space deck (its order 32)
+    "buried ladder": dict(
+        wires=_W2,
+        n=[[70, 70]],
+        wavelength=0.64,
+        n_qp_pair=32,
+        pair_order_ladder=_bspline.BURIED_PAIR_ORDER_LADDER,
+    ),
+    # a coarse tier at the 2 threshold, where order 2 is far from order 8
+    "coarse tier at 2": dict(
+        wires=_W2, n=[[70, 70]], wavelength=0.64, pair_order_ladder=((2.0, 2),)
+    ),
+    # |k|·h = 0.5 to roundoff (k = 1, h = 0.5 off an offset origin, so the
+    # lengths differ in their last bits): the phase guard on its ceiling
+    "phase guard ceiling": dict(
+        wires=[np.array([(0.0, 0.0, 0.137), (0.0, 0.0, 35.137), (0.0, 0.0, 70.137)])],
+        n=[[70, 70]],
+        wavelength=2 * np.pi,
+    ),
+}
+
+
+def _tie_solver(deck):
+    kw = dict(_TIE_DECKS[deck])
+    wl = kw.pop("wavelength")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return BSplineSolver(
+            wires=kw.pop("wires"),
+            n_per_edge_per_wire=kw.pop("n"),
+            wavelength=wl,
+            wire_radius=0.004,
+            exact_kernel=True,
+            **kw,
+        )
+
+
+def _numpy_offedge(monkeypatch):
+    for name in (
+        "_HAVE_BSPLINE_ACCEL",
+        "_HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL",
+        "_HAVE_BSPLINE_OFFEDGE_EK_ACCEL",
+        "_HAVE_BSPLINE_OFFEDGE_EK_TIERED_ACCEL",
+    ):
+        monkeypatch.setattr(BK, name, False)
+
+
+@pytest.mark.parametrize("rows", [None, 70])
+@pytest.mark.parametrize("route", ["accel", "numpy"])
+@pytest.mark.parametrize("deck", sorted(_TIE_DECKS))
+def test_tie_diagonals_are_evaluated_per_pair(monkeypatch, deck, route, rows):
+    """Production threshold, through the production seam, on the C++ and the
+    numpy off-edge kernels; default windows (the numpy route's are too short
+    to gather at order 32) and 70-row windows, one per edge, which always
+    gather (a tie diagonal sits at the end of edge 0, where a shorter window
+    would leave too few rows to gather)."""
+    if route == "numpy":
+        _numpy_offedge(monkeypatch)
+    elif not BK._HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL:
+        pytest.skip("the C++ off-edge kernels are not built")
+    s = _tie_solver(deck)
+    rel, made = _dedup_vs_reference(monkeypatch, s, rows)
+    assert rel <= TOL_Z
+    if deck == "phase guard ceiling":
+        assert all(any(b._phase_tie) for b in made), "the guard tie was missed"
+    if rows is None:
+        return
+    assert sum(b.toeplitz_blocks for b in made) > 0, "nothing was gathered"
+    if deck != "phase guard ceiling":
+        assert sum(b.tie_pairs for b in made) > 0, "no tie was found"
+
+
+# Red without the tie rule (TIE_REL = 0), on the decks where the two tiers
+# are far apart; measured in the PR.
+@pytest.mark.parametrize("route", ["accel", "numpy"])
+@pytest.mark.parametrize("deck", ["two edges kL 0.49", "two wires joined"])
+def test_tie_rule_is_load_bearing(monkeypatch, deck, route):
+    if route == "numpy":
+        _numpy_offedge(monkeypatch)
+    elif not BK._HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL:
+        pytest.skip("the C++ off-edge kernels are not built")
+    monkeypatch.setattr(EKB, "TIE_REL", 0.0)
+    rel, _made = _dedup_vs_reference(monkeypatch, _tie_solver(deck))
+    assert rel > TOL_Z, "the gate cannot see a gathered tie"
+
+
+# Red with the phase-guard tie unseen: BaseRows reads a ceiling 1e-6 off the
+# kernels' own, so no run is flagged while the kernels still split on 0.5.
+# Measured 1.2e-12 on Haswell.
+@pytest.mark.parametrize("route", ["accel", "numpy"])
+def test_phase_guard_tie_is_load_bearing(monkeypatch, route):
+    if route == "numpy":
+        _numpy_offedge(monkeypatch)
+    elif not BK._HAVE_BSPLINE_OFFEDGE_TIERED_ACCEL:
+        pytest.skip("the C++ off-edge kernels are not built")
+    monkeypatch.setattr(EKB, "_LADDER_PHASE_KL_CEILING", 0.5 * (1 + 1e-6))
+    rel, made = _dedup_vs_reference(monkeypatch, _tie_solver("phase guard ceiling"))
+    assert not any(any(b._phase_tie) for b in made)
+    assert rel > TOL_Z, "the gate cannot see a gathered phase-guard tie"
 
 
 # --------------------------------------------------------------------------
