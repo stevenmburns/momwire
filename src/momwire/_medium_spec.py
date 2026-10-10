@@ -306,6 +306,16 @@ def wire_media(polylines, ground_z, *, lower_medium, pec, crossing_ends=()):
     if ground_z is None:
         return tuple(ABOVE for _ in polylines)
     gz = float(ground_z)
+    # momwire#1420: the common answer — every wire ABOVE — asked of all the
+    # wires at once, with the walk's own test (``zmin >= gz - tol`` on each
+    # wire's own `ground_touch_tol`). Anything else, including a NaN, takes
+    # the walk below, which owns every refusal.
+    ends = _ground_spec.two_point_ends(polylines)
+    if ends is not None:
+        start, end = ends
+        tol = _ground_spec.segment_touch_tols(start, end)
+        if np.all(np.minimum(start[:, 2], end[:, 2]) >= gz - tol):
+            return tuple(ABOVE for _ in polylines)
     crossing_ends = frozenset(crossing_ends)
     labels = []
     for w, pl in enumerate(polylines):
