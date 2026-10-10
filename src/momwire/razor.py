@@ -1411,15 +1411,6 @@ _CENTRE_FEEDS_REFUSAL = (
 )
 
 
-# `RazorSolver._ground_ends`'s in-plane-edge refusal, one spelling for its
-# vector path and its walk (momwire#1420).
-_IN_PLANE_EDGE = (
-    "wire {i} has an edge lying in the ground plane "
-    "(both endpoints at ground_z) — degenerate over a "
-    "conducting ground"
-)
-
-
 class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
@@ -2401,6 +2392,14 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # is wholly below the plane.
             self._below_plane = True
 
+    # The in-plane-edge refusal, one spelling for `_ground_ends`' vector path
+    # and its walk (momwire#1420).
+    _IN_PLANE_EDGE = (
+        "wire {i} has an edge lying in the ground plane "
+        "(both endpoints at ground_z) — degenerate over a "
+        "conducting ground"
+    )
+
     def _ground_ends(self):
         """Which wire ENDS lie in the ground plane; everything else refused.
 
@@ -2448,7 +2447,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             at_end = np.abs(end[:, 2] - gz) <= tol
             in_plane = at_start & at_end
             if in_plane.any():
-                raise ValueError(_IN_PLANE_EDGE.format(i=int(np.argmax(in_plane))))
+                raise ValueError(self._IN_PLANE_EDGE.format(i=int(np.argmax(in_plane))))
             # Inserted in the walk's order (wire by wire, start before end),
             # so even the frozenset's iteration order is the walk's.
             touching = set()
@@ -2463,7 +2462,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             tol = _ground_spec.ground_touch_tol(pl)
             at = np.abs(pl[:, 2] - gz) <= tol
             if np.any(at[:-1] & at[1:]):
-                raise ValueError(_IN_PLANE_EDGE.format(i=i))
+                raise ValueError(self._IN_PLANE_EDGE.format(i=i))
             if np.any(at[1:-1]):
                 raise NotImplementedError(
                     f"wire {i} touches the ground plane at an interior "
