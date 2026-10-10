@@ -3757,13 +3757,23 @@ def _element_geometry(structure: Structure, wavelength: float):
     """
     centres, lengths, tags = [], [], []
     for wire, points in zip(structure.wires, structure.points, strict=True):
-        for k in range(wire.segment_count):
-            a = np.asarray(points[k], dtype=float)
-            b = np.asarray(points[k + 1], dtype=float)
-            centres.append(0.5 * (a + b) / wavelength)
-            lengths.append(float(np.linalg.norm(b - a)) / wavelength)
-            tags.append(wire.tag)
+        n = wire.segment_count
+        if n <= 0:
+            continue
+        # momwire#1420: one array per wire rather than two per element. The
+        # centre is the same elementwise ``0.5 * (a + b) / wavelength``, and
+        # the length keeps ``np.linalg.norm``'s own arithmetic for a vector,
+        # ``sqrt(d.dot(d))``, row by row — so both columns are bit-identical
+        # to the per-element walk this replaced.
+        p = np.asarray(points[: n + 1], dtype=float)
+        a, b = p[:-1], p[1:]
+        centres.extend(0.5 * (a + b) / wavelength)
+        lengths.extend(float(_sqrt(d.dot(d))) / wavelength for d in b - a)
+        tags.extend([wire.tag] * n)
     return centres, lengths, tags
+
+
+_sqrt = np.sqrt
 
 
 def _element_currents_and_charges(
@@ -3803,22 +3813,27 @@ def _element_currents_and_charges(
         )
     slopes = solver.current_slopes(coeffs, centres_per_piece)
 
+    # momwire#1420: each piece's knot array converted once, not once per
+    # element; the per-element arithmetic is unchanged, scalar for scalar.
+    knot_currents = [np.asarray(k) for k in knot_currents]
+    jw = 1j * omega
+    split_elements = mesh.split_elements
     currents, charges = [], []
     for index, (piece_index, element) in enumerate(mesh.element_of):
         if piece_index == _NO_PIECE:
             currents.append(0j)
             charges.append(0j)
             continue
-        split = mesh.split_elements.get(index)
+        split = split_elements.get(index) if split_elements else None
         if split is not None:
-            first = np.asarray(knot_currents[split.lower])[0]
-            last = np.asarray(knot_currents[split.upper])[-1]
+            first = knot_currents[split.lower][0]
+            last = knot_currents[split.upper][-1]
             currents.append(0.5 * (first + last))
-            charges.append(-slopes[split.centre_piece][-1] / (1j * omega))
+            charges.append(-slopes[split.centre_piece][-1] / jw)
             continue
-        knots = np.asarray(knot_currents[piece_index])
+        knots = knot_currents[piece_index]
         currents.append(0.5 * (knots[element] + knots[element + 1]))
-        charges.append(-slopes[piece_index][element] / (1j * omega))
+        charges.append(-slopes[piece_index][element] / jw)
     return currents, charges
 
 
