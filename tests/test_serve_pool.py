@@ -300,8 +300,13 @@ def test_a_worker_s_stderr_chunk_comes_back_and_its_stderr_reaches_the_log(
 
 @pytest.mark.integration
 def test_a_lone_worker_keeps_its_threads_and_a_crew_divides_them(make_pool):
-    pool, log = make_pool(max_workers=2, cores=8, trace=True)
-    _ask_pool(pool, "THREADS")
+    # Pinned WIDE so the division is visible whatever the lane exported (the
+    # xdist lane pins one thread, and a limit never raises a count).
+    env = _worker_env()
+    env.update(OMP_NUM_THREADS="8", OPENBLAS_NUM_THREADS="8")
+    pool, log = make_pool(max_workers=2, cores=8, trace=True, env=env)
+    lone = json.loads(_ask_pool(pool, "THREADS")[0])
+    assert lone["blas"] and all(n == 8 for n in lone["blas"])
     assert re.search(r"worker pid=\d+ t0=\S+ t1=\S+ threads=None", log.text())
     # Grow the crew to two, then look again.
     deadline = time.monotonic() + _DEADLINE
@@ -311,6 +316,22 @@ def test_a_lone_worker_keeps_its_threads_and_a_crew_divides_them(make_pool):
     report = json.loads(_ask_pool(pool, "THREADS")[0])
     assert log.text().rstrip().endswith("threads=4")
     assert report["blas"] and all(n == 4 for n in report["blas"])
+
+
+@pytest.mark.integration
+def test_a_share_never_raises_a_pinned_thread_count(make_pool):
+    """A server started under a one-thread pin keeps one thread in a crew:
+    thread count moves round-off, so raising it would move answers."""
+    env = _worker_env()
+    env.update(OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1")
+    pool, log = make_pool(max_workers=2, cores=8, trace=True, env=env)
+    deadline = time.monotonic() + _DEADLINE
+    while len(pool.live()) < 2:
+        _round(2, lambda i: _ask_pool(pool, "SLEEP 0.3"))
+        assert time.monotonic() < deadline
+    report = json.loads(_ask_pool(pool, "THREADS")[0])
+    assert log.text().rstrip().endswith("threads=4")
+    assert report["blas"] and all(n == 1 for n in report["blas"])
 
 
 @pytest.mark.integration
