@@ -649,6 +649,17 @@ def _cancel_ptr(cancel):
     return cancel.ptr if cancel is not None else 0
 
 
+def _static_is_toeplitz(seg_endpoints):
+    """Whether `_seg_seg_static_moments` serves this edge from its Toeplitz
+    table (a uniform edge), so that its (i, j) entry depends on j - i alone:
+    the test that method branches on, shared with the exact-kernel base
+    dedup (momwire#1421), which folds the table into its diagonals."""
+    h_seg = np.diff(np.asarray(seg_endpoints, dtype=np.float64))
+    return h_seg.size >= 1 and bool(
+        np.allclose(h_seg, h_seg[0], rtol=1e-12, atol=1e-15)
+    )
+
+
 def _seg_seg_static_moments(
     seg_endpoints, a, max_d, *, ek=None, rows=None, cancel=None
 ):
@@ -695,7 +706,7 @@ def _seg_seg_static_moments(
     r0, r1 = (0, N) if rows is None else rows.indices(N)[:2]
     n_row = max(0, r1 - r0)
 
-    uniform = N >= 1 and np.allclose(h_seg, h_seg[0], rtol=1e-12, atol=1e-15)
+    uniform = _static_is_toeplitz(seg_endpoints)
     if not uniform:
         alpha = sl[r0:r1, None]
         beta = sr[r0:r1, None]
@@ -852,6 +863,49 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
         geo["wu_row"] = np.ascontiguousarray(wu_pow[:, r0:r1, :])
         geo["n_row"] = max(0, r1 - r0)
     return geo
+
+
+def _seg_seg_reg_nodes(seg_endpoints, max_d, n_qp):
+    """(s_q, wu_pow): one edge's quadrature nodes in arc length, (N, n_qp),
+    and weight-folded local powers, (max_d+1, N, n_qp) -- the O(N) half of
+    `_seg_seg_reg_geometry`, element for element its arithmetic, for a caller
+    that pairs the segments itself (`_seg_seg_reg_geometry_pairs`)."""
+    gl_xi, gl_w = leggauss(n_qp)
+    t01 = 0.5 * (gl_xi + 1.0)
+    w01 = 0.5 * gl_w
+    sl = seg_endpoints[:-1]
+    h_seg = seg_endpoints[1:] - sl
+    N = len(sl)
+    s_q = sl[:, None] + t01[None, :] * h_seg[:, None]
+    u_q = (t01[None, :] * h_seg[:, None]) * np.ones((N, 1))
+    w_q = (w01[None, :] * h_seg[:, None]) * np.ones((N, 1))
+    u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)
+    return s_q, w_q[None, :, :] * u_pow
+
+
+def _seg_seg_reg_geometry_pairs(nodes, a, n_qp, rows, cols, *, ek=None):
+    """`_seg_seg_reg_geometry` for observer segments `rows` against source
+    segments `cols` (index arrays into one edge), from that edge's
+    `_seg_seg_reg_nodes`: the windowed dict `_seg_seg_reg_moments_from_geometry`
+    takes, R built by the same in-place steps. Every R entry and power is the
+    one the square table holds for that pair, so a pair's moment does not
+    depend on which other pairs share the call (the exact-kernel base dedup,
+    momwire#1421, evaluates its representative pairs this way)."""
+    s_q, wu_pow = nodes
+    R = s_q[rows].ravel()[:, None] - s_q[cols].ravel()[None, :]
+    R *= R
+    R += a * a
+    np.sqrt(R, out=R)
+    return {
+        "R": R,
+        "wu_pow": np.ascontiguousarray(wu_pow[:, cols, :]),
+        "N": len(cols),
+        "n_qp": n_qp,
+        "a": a,
+        "ek": ek,
+        "wu_row": np.ascontiguousarray(wu_pow[:, rows, :]),
+        "n_row": len(rows),
+    }
 
 
 def _ek_reg_kernel(R, a, k):
