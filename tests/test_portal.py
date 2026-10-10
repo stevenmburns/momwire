@@ -4056,14 +4056,17 @@ CACHE_LOAD_BASE = mutate(
     "LD 0 1 3 3 50. 1.e-6 0.\nLD 4 1 7 7 25. -40.\n",
 )
 
-# A free-space deck at Δ/a = 2.27 — the regime where the extended kernel is
+# A free-space deck at Δ/a = 3.03 — the regime where the extended kernel is
 # worth several percent (issue #849). The plain CACHE_BASE wire is 500× too
 # thin for an EK mutation to move a printed digit, so a cross-deck cache test
-# on it can only ever assert the MISS; this one asserts the answer too.
+# on it can only ever assert the MISS; this one asserts the answer too. It sits
+# just ABOVE bs2's exact-kernel "auto" threshold (Δ/a 3, momwire#1428): below
+# it the exact ring kernel takes every pair of a straight wire and the EK card
+# would have nothing left to move.
 CACHE_FAT_BASE = (
     "CM cross-deck cache probe, fat\n"
     "CE\n"
-    "GW 1 11 0. 0. -2.5 0. 0. 2.5 0.2\n"
+    "GW 1 11 0. 0. -2.5 0. 0. 2.5 0.15\n"
     "GE 0\n"
     "EX 0 1 6 0 1.\n"
     "FR 0 1 0 0 30. 0\n"
