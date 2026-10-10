@@ -445,6 +445,7 @@ def test_grid_far_zone_accuracy(far_grid):
         assert np.max(np.abs(gi[kk] - di[kk])) < 2e-3 * scale, kk
 
 
+@pytest.mark.slow
 def test_grid_far_zone_matches_near_keyed_layout(far_grid, monkeypatch):
     """The split changes the tabulation, not the answers: far-zone queries
     agree with the pre-#159 near-keyed layout (forced by raising the split
@@ -462,6 +463,7 @@ def test_grid_far_zone_matches_near_keyed_layout(far_grid, monkeypatch):
         assert np.max(np.abs(a[kk] - b[kk])) < 2e-3 * scale, kk
 
 
+@pytest.mark.slow
 def test_grid_resolves_the_near_interface_boundary_layer():
     """momwire#443: ground contact queries the grid at R1 << lambda in the
     steep band, where the surfaces carry a boundary layer of width ~1/|k1|
@@ -521,6 +523,7 @@ def test_grid_small_extent_keeps_pre_split_layout():
     assert g._regions[2]["n_th"] == 24
 
 
+@pytest.mark.slow
 def test_grid_r1_max_is_capped(monkeypatch):
     """A geometry that would size the grid to hundreds of wavelengths — the
     NEC TL-anchor idiom, or any large structure over real ground (issue

@@ -198,6 +198,7 @@ def test_the_low_band_divides_the_interval_exactly():
         )
 
 
+@pytest.mark.slow
 def test_theta_at_the_low_band_edge_routes_to_the_mid_band():
     """The strict `<` at the new seam, asserted on the FILL STATE.
 
@@ -225,6 +226,7 @@ def test_theta_at_the_low_band_edge_routes_to_the_mid_band():
         )
 
 
+@pytest.mark.slow
 def test_the_old_domain_is_unmoved_by_the_new_band():
     """Nothing at or above 0.1 deg may change. This is the whole contract.
 

@@ -282,6 +282,7 @@ def test_the_values_sit_inside_the_envelope(name):
         assert len(kept) == len(rows)
 
 
+@pytest.mark.slow
 def test_the_grazing_rows_are_in_the_envelope():
     """The four rows #1257 had to leave out (R = 1000 m, off the broadside
     plane, within 15 degrees of the horizon) are kept now, and each sits

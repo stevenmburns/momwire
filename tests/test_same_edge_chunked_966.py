@@ -133,7 +133,7 @@ def test_chunked_is_bit_identical_where_the_edge_fits_one_chunk(name, degree):
     assert zc == zd, f"{name} d={degree}: {zc!r} != {zd!r}"
 
 
-@pytest.mark.parametrize("degree", [1, 2])
+@pytest.mark.parametrize("degree", [1, pytest.param(2, marks=pytest.mark.slow)])
 def test_chunked_matches_dense_where_chunking_actually_engages(degree):
     """G-966-2. A long single wire under a small budget: many windows.
 

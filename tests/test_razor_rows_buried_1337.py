@@ -431,6 +431,7 @@ def test_a_replay_under_another_restriction_raises(deck):
     assert np.array_equal(bits(Z_sq[r0.basis_rows]), bits(Z_c))
 
 
+@pytest.mark.slow
 @pytest.mark.filterwarnings("ignore")
 def test_the_all_below_restriction_composes_with_the_sweep():
     """Restrict once at prepare, replay per k: each k's rows are that k's

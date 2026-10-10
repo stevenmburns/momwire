@@ -501,6 +501,7 @@ def _ladders_seen(deck):
     return z, seen
 
 
+@pytest.mark.slow
 @pytest.mark.filterwarnings("ignore:crossing node")
 def test_g921_one_fill_resolves_one_ladder_on_the_buried_path():
     """momwire#921 on the buried path, re-aimed by #920.

@@ -274,9 +274,16 @@ SWEPT_DECKS = {
 
 
 @pytest.mark.parametrize(
-    "name", ["dipole", pytest.param("crossing", marks=pytest.mark.slow)]
+    "cls,name",
+    [
+        # BSplineSolver on the dipole is the slow one of the two dipole cases
+        # (median 5.2 s on Linux CI); the razor dipole stays on every PR.
+        pytest.param(BSplineSolver, "dipole", marks=pytest.mark.slow),
+        (RazorSolver, "dipole"),
+        pytest.param(BSplineSolver, "crossing", marks=pytest.mark.slow),
+        pytest.param(RazorSolver, "crossing", marks=pytest.mark.slow),
+    ],
 )
-@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver])
 def test_a_swept_solve_is_the_single_frequency_solves(name, cls, free_space_pair):
     """eps~(w) per frequency: swept == single, and the sweep carries the term
     (its first point is not the free-space pair's).

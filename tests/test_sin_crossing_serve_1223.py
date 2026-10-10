@@ -146,6 +146,7 @@ def test_a_buried_hub_is_refused_by_name():
     )
 
 
+@pytest.mark.slow
 def test_sg_keeps_serving_what_this_lane_refuses():
     """The scope limits are the point-matched lane's, not SG's."""
     s = SinusoidalGalerkinSolver(

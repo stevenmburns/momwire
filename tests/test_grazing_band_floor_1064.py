@@ -94,6 +94,7 @@ def test_the_floor_band_lattice_runs_one_node_past_its_edge():
         assert f_nodes[2] == edge, "the 0.05 deg node is not the edge itself"
 
 
+@pytest.mark.slow
 def test_theta_at_the_floor_edge_routes_to_the_low_band():
     """The strict `<` at the new edge, asserted on the FILL STATE (a region is
     materialized if and only if a query routes into it)."""
@@ -121,6 +122,7 @@ def test_theta_at_the_floor_edge_routes_to_the_low_band():
         )
 
 
+@pytest.mark.slow
 def test_the_old_domain_never_touches_the_floor_band():
     """Nothing at or above 0.05 deg may read the floor band's lattice."""
     g, eps_t, k2, om, lam_m = _grid("A", 7e6)

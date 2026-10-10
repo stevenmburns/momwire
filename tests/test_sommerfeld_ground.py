@@ -119,6 +119,7 @@ def test_default_model_is_refl_coef():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_remote_wire_stays_bounded_and_irrelevant(monkeypatch):
     """A 1-segment wire parked ~150 wavelengths from a dipole — the NEC
     TL-anchor idiom, and any large structure over real ground (issue #157) —
@@ -889,6 +890,7 @@ def _grazing_wire(h, n_seg=16, **overrides):
     return kw
 
 
+@pytest.mark.slow
 def test_the_near_image_block_is_the_same_edge_kernel_at_a_eff(monkeypatch):
     """The identity the whole fix rests on, checked against brute force.
 
@@ -995,6 +997,7 @@ def test_a_grazing_wire_is_insensitive_to_the_pair_order():
     assert rel < 1e-3, f"still order-sensitive over PEC: {rel:.3%}"
 
 
+@pytest.mark.slow
 def test_a_grazing_wire_converges_under_mesh_refinement():
     """#631's own symptom, gated directly: the answer must SETTLE.
 

@@ -553,6 +553,7 @@ def test_g56812_the_fifth_surface_is_not_a_multiple_of_the_first(cell, record_pr
 G_568_13_TOL = 1e-7
 
 
+@pytest.mark.slow
 def test_g56813_the_grazing_band_converges_honestly_and_agrees(record_property):
     """Deep in cot θ, at and around the grid's own grazing floor.
 

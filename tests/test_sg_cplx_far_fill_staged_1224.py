@@ -54,7 +54,11 @@ pytestmark = pytest.mark.skipif(
 )
 
 DECK_PARAMS = [
-    *sorted(DECKS),
+    # The buried dipole is the slow deck here too (median 5.5 s on Linux CI).
+    *(
+        pytest.param(n, marks=[pytest.mark.slow] if n == "buried-dipole" else [])
+        for n in sorted(DECKS)
+    ),
     # The production deck's geometry at x1 (N = 177); the timed deck is x16.
     pytest.param("hub16", marks=pytest.mark.slow),
 ]

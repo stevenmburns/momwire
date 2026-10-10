@@ -43,6 +43,7 @@ def _drive(*args: str, timeout: float = 600) -> subprocess.CompletedProcess[str]
     )
 
 
+@pytest.mark.slow
 def test_installed_entry_point_passes_simnecs_launch_contract(tmp_path):
     done = _drive(str(ENGINE), str(DECK), "--repeat", "2", "--home", str(tmp_path))
     assert done.returncode == 0, done.stdout + done.stderr

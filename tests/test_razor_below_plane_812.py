@@ -208,7 +208,9 @@ def test_a_wholly_below_deck_collapses_to_free_space_at_eps_one(serve_below, ver
 # ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("vertical", [True, False])
+@pytest.mark.parametrize(
+    "vertical", [True, pytest.param(False, marks=pytest.mark.slow)]
+)
 def test_razor_and_bspline_converge_together_at_soil(
     serve_below, vertical, record_property
 ):

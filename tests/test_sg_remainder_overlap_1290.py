@@ -91,7 +91,15 @@ def _capture(make, monkeypatch, seen=None):
     return G["G"], np.atleast_1d(Z), np.asarray(cur)
 
 
-@pytest.mark.parametrize("name", sorted(DECKS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        # The N = 251 array is the slow deck (median 8.5 s on Linux CI); the
+        # other three keep the overlapped fold on every PR.
+        pytest.param(n, marks=[pytest.mark.slow] if n == "array-low-251" else [])
+        for n in sorted(DECKS)
+    ],
+)
 def test_overlapped_fold_equals_the_inline_fold_to_the_byte(name, monkeypatch):
     if name != "array-low-251":
         # Small decks are one chunk at the shipped size; a smaller chunk gives

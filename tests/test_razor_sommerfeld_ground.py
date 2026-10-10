@@ -191,8 +191,19 @@ def test_the_epsilon_one_limit_is_free_space_bit_for_bit(lane):
     assert np.array_equal(free, unity)
 
 
-@pytest.mark.parametrize("lane", [False, True])
-@pytest.mark.parametrize("loss", ["lossless", "lossy"])
+@pytest.mark.parametrize(
+    "loss,lane",
+    [
+        # lossy without the lane is the slow case (median 7.5 s on Linux CI).
+        pytest.param(
+            loss,
+            lane,
+            marks=[pytest.mark.slow] if (loss, lane) == ("lossy", False) else [],
+        )
+        for lane in [False, True]
+        for loss in ["lossless", "lossy"]
+    ],
+)
 def test_pec_limit_decays_smoothly_to_the_pec_image(lane, loss):
     """|Z(ε̃) − Z_PEC| falls monotonically as ε̃ grows, at C₂'s own rate.
 

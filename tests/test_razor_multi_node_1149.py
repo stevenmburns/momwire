@@ -149,6 +149,7 @@ def without_the_node_term(monkeypatch):
 # ----------------------------------------------------------------------
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize(
     "name, deck, n_tents",
     [("two", two(), 2), pytest.param("hub/fan", hub_fan(), 4, marks=pytest.mark.slow)],
@@ -240,6 +241,7 @@ def test_reciprocity_decays_with_asymmetric_ports():
     assert all(r >= 3.0 for r in ratios(xs)), (xs, ratios(xs))
 
 
+@pytest.mark.slow
 def test_without_the_node_term_it_is_flat(without_the_node_term):
     """The red control: 4.26e-2 -> 4.18e-2."""
     xs = [nonrec(two(m)) for m in (1, 2)]
@@ -324,6 +326,7 @@ def test_the_preflight_refuses_with_the_fills_own_sentence(m, sep):
     assert str(exc.value) == pre
 
 
+@pytest.mark.slow
 def test_the_endpoint_plan_alone_passed_the_deck_the_grid_refuses(monkeypatch):
     """The red control for the gate above: with the evaluated-pairs half
     removed, the pre-flight says "served" at 64 m x2 and the fill then
