@@ -356,3 +356,85 @@ def test_a_seeded_one_bit_change_fails_the_tolerance_gate(monkeypatch):
     monkeypatch.setattr(_ground_spec, "segment_touch_tols", off_by_one_ulp)
     with pytest.raises(AssertionError):
         test_segment_touch_tols_is_ground_touch_tol_per_row(3)
+
+
+# ---- razor `_ground_ends` and `_medium_spec.wire_media` ------------------
+def _outcome(fn):
+    try:
+        return ("ok", fn())
+    except (ValueError, NotImplementedError) as exc:
+        return (type(exc).__name__, str(exc))
+
+
+def _walk_only(monkeypatch_ctx):
+    """Force the per-wire walks: the vector paths take only what
+    ``two_point_ends`` hands them."""
+    monkeypatch_ctx.setattr(_ground_spec, "two_point_ends", lambda polylines: None)
+
+
+def _random_polylines(rng, n):
+    pts = []
+    for _ in range(n):
+        a = [
+            float(rng.uniform(-2, 2)),
+            float(rng.uniform(-2, 2)),
+            float(rng.choice(ZS)),
+        ]
+        b = [
+            float(rng.uniform(-2, 2)),
+            float(rng.uniform(-2, 2)),
+            float(rng.choice(ZS)),
+        ]
+        pts.append(np.array([a, b]))
+    return pts
+
+
+def test_ground_ends_and_wire_media_match_their_walks():
+    from momwire import _medium_spec
+    from momwire.razor import RazorSolver
+
+    rng = np.random.default_rng(14202)
+    seen = {"ok": 0, "ValueError": 0}
+    for _ in range(3000):
+        pls = _random_polylines(rng, int(rng.integers(1, 7)))
+        gz = float(rng.choice([0.0, 0.5, -0.5]))
+        probe = RazorSolver.__new__(RazorSolver)
+        probe.wires_polylines = pls
+        probe.ground_z = gz
+        lower = bool(rng.integers(0, 2))
+
+        def media(pls=pls, gz=gz, lower=lower):
+            return _medium_spec.wire_media(pls, gz, lower_medium=lower, pec=not lower)
+
+        fast = (_outcome(probe._ground_ends), _outcome(media))
+        with pytest.MonkeyPatch.context() as m:
+            _walk_only(m)
+            walk = (_outcome(probe._ground_ends), _outcome(media))
+        assert fast == walk
+        # the frozenset iterates in the walk's order too
+        if fast[0][0] == "ok":
+            assert list(fast[0][1]) == list(walk[0][1])
+        seen[fast[0][0]] = seen.get(fast[0][0], 0) + 1
+    assert seen["ok"] > 100 and seen["ValueError"] > 100, seen
+
+
+def test_the_seam_takes_the_vector_ground_paths(monkeypatch):
+    """Through ``render``: razor's ground ends and the media labels were
+    answered from ``two_point_ends``' arrays, never by the walk."""
+    calls = {"vector": 0, "walk": 0}
+    real = _ground_spec.two_point_ends
+
+    def spy(polylines):
+        got = real(polylines)
+        calls["vector" if got is not None else "walk"] += 1
+        return got
+
+    monkeypatch.setattr(_ground_spec, "two_point_ends", spy)
+    out = render(
+        "CM contact monopole\nCE\nGW 1 10 0 0 0 0 0 5 1e-3\n"
+        "GW 2 4 0 0 5 1 0 5 1e-3\nGE 1\nGN 1\nFR 0 1 0 0 14\n"
+        "EX 0 1 1 0 1 0\nXQ\nEN\n",
+        basis="razor-2p",
+    )
+    assert "NEC ERROR" not in out
+    assert calls["vector"] >= 2 and calls["walk"] == 0

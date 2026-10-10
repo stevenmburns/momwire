@@ -185,6 +185,22 @@ def segment_touch_tols(start, end):
     return 1e-6 * np.maximum(length, 1e-30)
 
 
+def two_point_ends(polylines):
+    """``(start, end)`` as two ``(n, 3)`` arrays when EVERY polyline is a
+    single straight edge (two 3-D points), else ``None``.
+
+    The vector paths beside the per-wire walks (momwire#1420) take this
+    shape and nothing else: a multi-vertex polyline has interior anchors the
+    walks have rules about, so for those the walk answers. ``None`` for no
+    polylines too — the walk over nothing is already free.
+    """
+    arrays = [np.asarray(pl, dtype=np.float64) for pl in polylines]
+    if not arrays or any(a.shape != (2, 3) for a in arrays):
+        return None
+    stacked = np.array(arrays)
+    return stacked[:, 0], stacked[:, 1]
+
+
 def contact_ends(polylines, ground_z):
     """Which wire ENDS lie in the ground plane: `(wire_index, "start"|"end")`.
 

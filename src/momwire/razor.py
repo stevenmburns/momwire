@@ -1411,6 +1411,15 @@ _CENTRE_FEEDS_REFUSAL = (
 )
 
 
+# `RazorSolver._ground_ends`'s in-plane-edge refusal, one spelling for its
+# vector path and its walk (momwire#1420).
+_IN_PLANE_EDGE = (
+    "wire {i} has an edge lying in the ground plane "
+    "(both endpoints at ground_z) — degenerate over a "
+    "conducting ground"
+)
+
+
 class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
@@ -2426,16 +2435,35 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         gz = self.ground_z
         if gz is None:
             return frozenset()
+        # momwire#1420: wires that are one straight edge each (every EZNEC
+        # card) are asked all at once — the same per-wire tolerance and the
+        # same `|z - gz| <= tol` test per anchor; such a wire has no interior
+        # anchor, so the only refusal it can meet is the in-plane edge, named
+        # for the first wire that has one, as the walk below names it.
+        ends = _ground_spec.two_point_ends(self.wires_polylines)
+        if ends is not None:
+            start, end = ends
+            tol = _ground_spec.segment_touch_tols(start, end)
+            at_start = np.abs(start[:, 2] - gz) <= tol
+            at_end = np.abs(end[:, 2] - gz) <= tol
+            in_plane = at_start & at_end
+            if in_plane.any():
+                raise ValueError(_IN_PLANE_EDGE.format(i=int(np.argmax(in_plane))))
+            # Inserted in the walk's order (wire by wire, start before end),
+            # so even the frozenset's iteration order is the walk's.
+            touching = set()
+            for i in np.flatnonzero(at_start | at_end).tolist():
+                if at_start[i]:
+                    touching.add((i, "start"))
+                if at_end[i]:
+                    touching.add((i, "end"))
+            return frozenset(touching)
         touching = set()
         for i, pl in enumerate(self.wires_polylines):
             tol = _ground_spec.ground_touch_tol(pl)
             at = np.abs(pl[:, 2] - gz) <= tol
             if np.any(at[:-1] & at[1:]):
-                raise ValueError(
-                    f"wire {i} has an edge lying in the ground plane "
-                    "(both endpoints at ground_z) — degenerate over a "
-                    "conducting ground"
-                )
+                raise ValueError(_IN_PLANE_EDGE.format(i=i))
             if np.any(at[1:-1]):
                 raise NotImplementedError(
                     f"wire {i} touches the ground plane at an interior "
