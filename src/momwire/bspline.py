@@ -303,6 +303,15 @@ _SAME_EDGE_DROP_R = True
 # choose between.
 _SAME_EDGE_WINDOW_BLOCKS = True
 
+# momwire#1411: the exact-kernel correction walks each coaxial group in
+# observer-row windows (`swept_mem_mb` each) rather than building the group's
+# whole (d+1)²·n² block. Off restores the whole-group route, the reference the
+# windows are gated against; like the switches above it is for gates, not
+# callers. `_EXACT_KERNEL_ROWS_OVERRIDE` pins the window height (rows) so a
+# gate can cut a small deck into many windows.
+_EXACT_KERNEL_ROW_WINDOWS = True
+_EXACT_KERNEL_ROWS_OVERRIDE = None
+
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
 # Constant Vandermonde inverses for uniform sample points [0, 1/d, ..., 1].
@@ -7166,37 +7175,45 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             edges.setdefault(int(labels[sl.start]), []).append((sl, arc, a_w))
         return [(np.flatnonzero(labels == g), edges[g]) for g in sorted(edges)]
 
-    def _exact_kernel_base_J(self, geom, S, g_edges, k):
+    def _exact_kernel_base_J(self, geom, S, g_edges, k, rows=None, fill=None):
         """The (d+1, d+1, n, n) moments the free-space fill put on the
         group's pairs, recomputed through the same kernels with the same
         arguments (`_build_J_blocks` restricted to the group), so the
-        correction removes them to roundoff whichever fill route ran."""
+        correction removes them to roundoff whichever fill route ran.
+
+        `rows` (a slice of the group's LOCAL segment order, momwire#1411)
+        returns only those observer rows, (d+1, d+1, r1 - r0, n): every
+        kernel below takes an observer window natively, as the chunked fill
+        uses them. `fill` is `_exact_kernel_fill_spec`'s (ek, ladder), hoisted
+        by a caller that walks many windows."""
         d = self.degree
         seg_l, seg_r = geom["seg_l"], geom["seg_r"]
         n = S.size
+        r0, r1 = (0, n) if rows is None else rows.indices(n)[:2]
+        Sr = S[r0:r1]
         if len(g_edges) == 1:
-            J = np.zeros((d + 1, d + 1, n, n), dtype=complex)
+            J = np.zeros((d + 1, d + 1, r1 - r0, n), dtype=complex)
         else:
-            ek = self._ek_spec(geom) if self.extended_kernel else None
+            ek, ladder = fill or self._exact_kernel_fill_spec(geom, k)
             ek_g = None
             if ek is not None:
                 ek_g = ek._replace(
-                    group_i=ek.group_i[S],
+                    group_i=ek.group_i[Sr],
                     group_j=ek.group_j[S],
-                    b_i=None if ek.b_i is None else ek.b_i[S],
+                    b_i=None if ek.b_i is None else ek.b_i[Sr],
                     b_j=None if ek.b_j is None else ek.b_j[S],
                 )
             J = _seg_seg_full_moments_offedge(
+                seg_l[Sr],
+                seg_r[Sr],
                 seg_l[S],
                 seg_r[S],
-                seg_l[S],
-                seg_r[S],
-                self._seg_radius(geom)[S],
+                self._seg_radius(geom)[Sr],
                 k,
                 d,
                 self.n_qp_pair,
                 ek=ek_g,
-                ladder=self._fill_ladder(k, seg_l, seg_r, ek),
+                ladder=ladder,
             )
         ek_se = _EK_SAME_EDGE if self.extended_kernel else None
         loc = np.full(int(geom["n_segs_total"]), -1, dtype=np.int64)
@@ -7204,19 +7221,175 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for sl, arc, a_w in g_edges:
             l0 = int(loc[sl.start])
             l1 = l0 + (sl.stop - sl.start)
-            J[:, :, l0:l1, l0:l1] = _seg_seg_static_moments(
-                arc, a_w, max_d=d, ek=ek_se
-            ) + _seg_seg_reg_moments(
-                arc, a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge, ek=ek_se
+            lo, hi = max(l0, r0), min(l1, r1)
+            if lo >= hi:
+                continue
+            win = None if (lo, hi) == (l0, l1) else slice(lo - l0, hi - l0)
+            J[:, :, lo - r0 : hi - r0, l0:l1] = _seg_seg_static_moments(
+                arc, a_w, max_d=d, ek=ek_se, rows=win
+            ) + _seg_seg_reg_moments_from_geometry(
+                _seg_seg_reg_geometry(
+                    arc,
+                    a_w,
+                    max_d=d,
+                    n_qp=self.n_qp_pair_same_edge,
+                    ek=ek_se,
+                    rows=win,
+                ),
+                k,
             )
         return J
+
+    def _exact_kernel_fill_spec(self, geom, k):
+        """(ek, ladder): the whole-mesh EK spec and pair-order ladder the
+        fill used, which the base moments must reproduce."""
+        ek = self._ek_spec(geom) if self.extended_kernel else None
+        return ek, self._fill_ladder(k, geom["seg_l"], geom["seg_r"], ek)
+
+    def _exact_kernel_row_bytes(self, n):
+        """Transient bytes per observer row of one group window (momwire#1411):
+        the exact rows, the base rows and their difference (complex), the
+        static rows (real), the same-edge distance table R (n_qp² per pair),
+        and the dedup keys with `np.unique`'s sort copies (~200 B per pair),
+        plus the numpy off-edge fallback's own overhead when that runs."""
+        nd2 = (self.degree + 1) ** 2
+        per_pair = 3 * nd2 * 16 + nd2 * 8 + 2 * 8 * self.n_qp_pair_same_edge**2 + 200
+        return n * per_pair + self._offedge_fallback_row_bytes(n)
 
     def _add_exact_kernel_correction(self, Z, geom, supp_seg, polys, k):
         """Z += Z_exact - Z_base over every coaxial group (momwire#1408).
 
-        In place. Per group: the exact ring-kernel moments of all its pairs
-        (`_exact_kernel.coaxial_block`) minus the moments the fill used,
-        assembled over the bases supported on the group."""
+        In place, by observer-row windows of each group (momwire#1411): a
+        window's exact moments (`_exact_kernel.CoaxialRows`) minus the base
+        moments the fill used, accumulated straight into Z through the
+        windowed assembler. Peak memory is one window -- `swept_mem_mb`, the
+        fill's own transient budget -- plus the dedup cache, bounded by the
+        same budget and O(n) on a uniform run. The whole-group block it
+        replaces traced 5.6 GB inside this call on one 3,000-segment fat wire
+        at d = 2 (process peak 4.6 GB against the fill's own 1.1 GB); the
+        windows trace 176 MB there and leave the process peak at the fill's.
+        The pre-#1411 whole-group route stays behind
+        `_EXACT_KERNEL_ROW_WINDOWS` as the reference this one is gated
+        against."""
+        if not _EXACT_KERNEL_ROW_WINDOWS:
+            return self._add_exact_kernel_correction_whole(Z, geom, supp_seg, polys, k)
+        d = self.degree
+        nd = d + 1
+        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
+        tang = geom["tangents"]
+        seg_a = self._seg_radius(geom)
+        n_total = int(geom["n_segs_total"])
+        polys_c = np.ascontiguousarray(polys, dtype=np.float64)
+        accel = (
+            _HAVE_BSPLINE_WINDOWED_ASSEMBLE_ACCEL
+            and d <= _BSPLINE_ASSEMBLE_ACCEL_MAX_D
+            and not np.iscomplexobj(self.eps)
+        )
+        fill = self._exact_kernel_fill_spec(geom, k)
+        for S, g_edges in self._exact_kernel_groups(geom):
+            n = S.size
+            axis = tang[S[0]]
+            x0 = (seg_l[S] - seg_l[S[0]]) @ axis
+            sgn = np.where(tang[S] @ axis >= 0.0, 1.0, -1.0)
+            h = np.linalg.norm(seg_r[S] - seg_l[S], axis=1)
+            budget = self.swept_mem_mb * 1024 * 1024
+            exact = _exact_kernel.CoaxialRows(
+                x0,
+                sgn,
+                h,
+                float(seg_a[S[0]]),
+                k,
+                nd,
+                max_cached=max(1, budget // (nd * nd * 16 + 256)),
+            )
+            # Bases are relabelled onto the group's local segment order;
+            # a wing elsewhere points at the sentinel n, which no window
+            # holds, so both assemblers skip it.
+            loc = np.full(n_total, n, dtype=np.int64)
+            loc[S] = np.arange(n)
+            supp_loc = np.where(supp_seg >= 0, loc[supp_seg], n).astype(np.int64)
+            supp_loc = np.ascontiguousarray(supp_loc)
+            B = np.flatnonzero(np.any(supp_loc < n, axis=1)).astype(np.int64)
+            tan_loc = np.zeros((n + 1, 3))
+            tan_loc[:n] = tang[S]
+            chunk = _schedule.mb_rows(
+                self.swept_mem_mb, self._exact_kernel_row_bytes(n)
+            )
+            if _EXACT_KERNEL_ROWS_OVERRIDE is not None:
+                chunk = int(_EXACT_KERNEL_ROWS_OVERRIDE)
+            for r0 in range(0, n, chunk):
+                r1 = min(n, r0 + chunk)
+                self._checkpoint()
+                dJ = exact.rows(r0, r1)
+                dJ -= self._exact_kernel_base_J(
+                    geom, S, g_edges, k, rows=slice(r0, r1), fill=fill
+                )
+                sB = supp_loc[B]
+                M = B[np.any((sB >= r0) & (sB < r1), axis=1)]
+                if accel:
+                    _acc.assemble_Z_bspline_windowed(
+                        np.ascontiguousarray(dJ),
+                        supp_loc,
+                        polys_c,
+                        tan_loc,
+                        M,
+                        B,
+                        int(r0),
+                        int(r1),
+                        0,
+                        int(n),
+                        float(self.omega),
+                        float(self.eps),
+                        float(self.mu),
+                        Z,
+                        self._cancel_flag,
+                    )
+                else:
+                    self._assemble_Z_window_numpy(
+                        Z, dJ, supp_loc, polys_c, tan_loc, M, B, r0, r1, n
+                    )
+                del dJ
+
+    def _assemble_Z_window_numpy(self, Z, J, supp, polys, tan, M, N, r0, r1, n):
+        """Z[M, N] += the assembly of one observer-row window J (d+1, d+1,
+        r1 - r0, n) whose source window is [0, n): the numpy twin of
+        `assemble_Z_bspline_windowed`, wings outside either window skipped
+        (`_assemble_Z`'s own loop, restricted). For the degrees and media
+        the C++ assembler does not take."""
+        d = self.degree
+        n_wings = d + 1
+        p_vec = np.arange(1, d + 1, dtype=np.float64)
+        Z_A = np.zeros((M.size, N.size), dtype=np.complex128)
+        Z_Phi = np.zeros((M.size, N.size), dtype=np.complex128)
+        for a in range(n_wings):
+            sm = supp[M, a]
+            on_m = (sm >= r0) & (sm < r1)
+            im = np.where(on_m, sm - r0, 0)
+            for b in range(n_wings):
+                sn = supp[N, b]
+                on_n = (sn >= 0) & (sn < n)
+                jn = np.where(on_n, sn, 0)
+                mask = on_m[:, None] & on_n[None, :]
+                J_blk = J[:, :, im[:, None], jn[None, :]] * mask
+                td_blk = tan[np.where(on_m, sm, n)] @ tan[np.where(on_n, sn, n)].T
+                Z_A += td_blk * np.einsum(
+                    "mp,pPmn,nP->mn", polys[M, a, :], J_blk, polys[N, b, :]
+                )
+                if d >= 1:
+                    deriv_m = polys[M, a, 1:] * p_vec[None, :]
+                    deriv_n = polys[N, b, 1:] * p_vec[None, :]
+                    Z_Phi += np.einsum(
+                        "mp,pPmn,nP->mn", deriv_m, J_blk[:d, :d], deriv_n
+                    )
+                del J_blk
+        Z[np.ix_(M, N)] += 1j * self.omega * self.mu * Z_A + Z_Phi / (
+            1j * self.omega * self.eps
+        )
+
+    def _add_exact_kernel_correction_whole(self, Z, geom, supp_seg, polys, k):
+        """The pre-#1411 route: each group's whole (d+1)²·n² correction block
+        at once, assembled by `_assemble_Z`. The reference the row-window
+        route is gated against (`_EXACT_KERNEL_ROW_WINDOWS = False`)."""
         d = self.degree
         nd = d + 1
         seg_l, seg_r = geom["seg_l"], geom["seg_r"]
