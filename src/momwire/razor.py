@@ -1411,6 +1411,14 @@ _CENTRE_FEEDS_REFUSAL = (
 )
 
 
+def _same_stamp(a, b) -> bool:
+    """Whether two `_find_junctions` input stamps name the same inputs: the
+    same polyline LIST object at the same length (identity, not equality —
+    a rebuilt list is a new geometry as far as the kept answer knows), the
+    same ``ground_z`` and the same declared-junctions object."""
+    return a[0] is b[0] and a[1] == b[1] and a[2] == b[2] and a[3] is b[3]
+
+
 class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
@@ -2525,6 +2533,28 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         tolerance is absolute), so coincident ends could otherwise disagree
         about a plane they share.
         """
+        # momwire#1420: a construction asks this four times of the same
+        # wires (the node-gap check, `_wire_media` via the grounded junction
+        # ends, `_crossing_junctions`, `_build_geometry`), and on a small deck
+        # the grouping was a tenth of the whole call. The answer is kept ON
+        # THE SOLVER, stamped with the inputs it was computed from, so it
+        # dies with the solver and a pool worker serving many decks holds
+        # none of them; every caller gets fresh dicts and lists, since
+        # `_build_geometry` rebuilds groups from them.
+        stamp = (
+            self.wires_polylines,
+            len(self.wires_polylines),
+            self.ground_z,
+            self._declared_junctions,
+        )
+        kept = self.__dict__.get("_junctions_kept")
+        if kept is None or not _same_stamp(kept[0], stamp):
+            kept = (stamp, self._detect_junctions())
+            self.__dict__["_junctions_kept"] = kept
+        return [{"ends": list(g["ends"]), "grounded": g["grounded"]} for g in kept[1]]
+
+    def _detect_junctions(self):
+        """:meth:`_find_junctions` itself, uncached."""
         grounded_ends = self._ground_ends()
         labels, points = [], []
         for i, pl in enumerate(self.wires_polylines):
