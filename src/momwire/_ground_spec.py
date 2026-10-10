@@ -148,9 +148,41 @@ def ground_touch_tol(polyline):
     the plane" is a question about the GROUND, asked identically by every
     solver, and answered before any formulation is chosen.
     """
+    # momwire#1420: the same arithmetic as
+    # ``np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1))`` spelled as the
+    # ufuncs those three calls reduce to, because this runs hundreds of times
+    # per small deck and the wrappers cost more than the work.  For a real
+    # array ``linalg.norm(x, axis=1)`` IS ``sqrt(add.reduce(x * x, axis=1))``,
+    # ``np.diff(pl, axis=0)`` IS ``pl[1:] - pl[:-1]`` and ``np.sum`` IS
+    # ``add.reduce``, so the value is bit-identical, not merely close
+    # (tests/test_ground_touch_tol_1420.py holds it to the old spelling).
     pl = np.asarray(polyline, dtype=np.float64)
-    length = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+    d = _subtract(pl[1:], pl[:-1])
+    length = float(_add_reduce(_sqrt(_add_reduce(_multiply(d, d), axis=1))))
     return 1e-6 * max(length, 1e-30)
+
+
+_add_reduce = np.add.reduce
+_subtract = np.subtract
+_multiply = np.multiply
+_sqrt = np.sqrt
+
+
+def segment_touch_tols(start, end):
+    """`ground_touch_tol` of many TWO-POINT polylines at once.
+
+    ``start`` and ``end`` are ``(n, 3)`` arrays; entry ``i`` of the result
+    is exactly ``ground_touch_tol([start[i], end[i]])`` — the same ufuncs on
+    the same operands in the same order, so bit-identical rather than close
+    (tests/test_ground_touch_tol_1420.py). The per-deck geometry rules in
+    `momwire.eznec._serve` ask the tolerance of every card on every run, and
+    one array call replaces a Python loop of tiny-array calls (momwire#1420).
+    """
+    d = _subtract(
+        np.asarray(end, dtype=np.float64), np.asarray(start, dtype=np.float64)
+    )
+    length = _sqrt(_add_reduce(_multiply(d, d), axis=1))
+    return 1e-6 * np.maximum(length, 1e-30)
 
 
 def contact_ends(polylines, ground_z):
