@@ -319,8 +319,9 @@ def test_a_lone_worker_keeps_its_threads_and_a_crew_divides_them(make_pool):
     lone = json.loads(_ask_pool(pool, "THREADS")[0])
     assert re.search(r"worker pid=\d+ t0=\S+ t1=\S+ threads=None", log.text())
     # OpenBLAS caps itself at the box's cores, so the lone count is read, not
-    # assumed; OpenMP takes the environment's 8 as given.
-    assert lone["blas"] and lone["openmp"] == [8] * len(lone["openmp"])
+    # assumed (and macOS numpy's Accelerate is not a pool threadpoolctl
+    # reports at all); OpenMP takes the environment's 8 as given.
+    assert lone["openmp"] == [8] * len(lone["openmp"])
     _crew_of_two(pool)
     crew = json.loads(_ask_pool(pool, "THREADS")[0])
     assert log.text().rstrip().endswith("threads=4")
@@ -340,6 +341,7 @@ def test_a_share_of_one_keeps_blas_on_its_threaded_path(make_pool):
     assert log.text().rstrip().endswith("threads=1")
     assert crew["blas"] == [min(2, n) for n in lone["blas"]]
     assert crew["openmp"] == [1] * len(lone["openmp"])
+    assert crew["openmp"], "no OpenMP runtime seen: the division went unobserved"
 
 
 @pytest.mark.integration
@@ -350,7 +352,8 @@ def test_a_share_never_raises_a_pinned_thread_count(make_pool):
     _crew_of_two(pool)
     crew = json.loads(_ask_pool(pool, "THREADS")[0])
     assert log.text().rstrip().endswith("threads=4")
-    assert crew["blas"] and all(n == 1 for n in crew["blas"])
+    assert crew["blas"] or crew["openmp"], "no thread pool seen at all"
+    assert all(n == 1 for n in crew["blas"])
     assert all(n == 1 for n in crew["openmp"])
 
 
