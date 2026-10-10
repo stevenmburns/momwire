@@ -83,7 +83,7 @@ def _mutants(text, rng, n):
     return out
 
 
-MULTI = (FIXTURES / "eznec_multi_run_1237").glob("*.nec")
+MULTI = sorted((FIXTURES / "eznec_multi_run_1237").glob("*.nec"))
 
 
 def test_shared_parse_is_the_one_at_a_time_parse_on_every_fixture():
@@ -99,7 +99,7 @@ def test_shared_parse_is_the_one_at_a_time_parse_on_every_fixture():
 def test_shared_parse_agrees_on_decks_broken_everywhere():
     rng = np.random.default_rng(1420)
     kinds = set()
-    for path in sorted(MULTI):
+    for path in MULTI:
         for text in _mutants(path.read_text(encoding="latin-1"), rng, 120):
             try:
                 runs = _serve.split_runs(text) or []
@@ -152,7 +152,7 @@ def test_render_refuses_exactly_as_before(monkeypatch):
     rng = np.random.default_rng(7)
     new = _shell._answer
     refusals = 0
-    for path in sorted(MULTI):
+    for path in MULTI:
         for text in _mutants(path.read_text(encoding="latin-1"), rng, 60):
             got = new(text, basis="razor-2p")
             if not isinstance(got, str):
@@ -199,3 +199,8 @@ def test_a_seeded_shared_list_fails_the_gate(monkeypatch):
     monkeypatch.setattr(_nec5._Nec5Parser, "clone", leaky)
     with pytest.raises(AssertionError):
         test_shared_parse_is_the_one_at_a_time_parse_on_every_fixture()
+
+
+def test_the_multi_run_fixtures_are_there():
+    """A list, not a generator: every gate above reads it."""
+    assert len(MULTI) >= 3
