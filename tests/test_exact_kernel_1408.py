@@ -221,6 +221,10 @@ def test_swapped_kernel_reproduces_the_fill(monkeypatch, deck, ek):
     exact-kernel solve must then equal the ordinary one, to the fill's
     quadrature accuracy (n_qp_pair_same_edge=8 holds that below 1e-9)."""
     kern = _extended if ek else _reduced
+    # The swap reaches the numpy route only: the C++ route (momwire#1410)
+    # compiles its kernel in. That route is held to this one by
+    # tests/test_exact_kernel_accel_1410.py.
+    monkeypatch.setattr(EK, "_USE_ACCEL", False)
     monkeypatch.setattr(EK, "ring_kernel", kern)
     monkeypatch.setattr(
         EK,
@@ -264,6 +268,7 @@ def test_swapped_kernel_reproduces_the_fill(monkeypatch, deck, ek):
 
 def test_swapped_kernel_detects_a_wrong_kernel(monkeypatch):
     """The same gate is not vacuous: a kernel 1e-6 off moves Z."""
+    monkeypatch.setattr(EK, "_USE_ACCEL", False)
     monkeypatch.setattr(EK, "ring_kernel", lambda z, a, k: _reduced(z, a, k) * 1.000001)
     monkeypatch.setattr(
         EK,
