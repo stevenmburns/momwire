@@ -169,7 +169,16 @@ DECKS = {
 
 
 @pytest.mark.parametrize("basis", ["razor-2p", "bspline"])
-@pytest.mark.parametrize("name", sorted(DECKS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        "hub4",
+        "hub11",
+        # a buried split and a phantom deck are 6-20 s each: the push lane's
+        pytest.param("split", marks=pytest.mark.slow),
+        pytest.param("phantom", marks=pytest.mark.slow),
+    ],
+)
 def test_finish_matches_the_walks_at_the_seam(monkeypatch, name, basis):
     seen = {"geometry": 0, "elements": 0, "razor": 0}
     geometry, elements = _serve._element_geometry, _serve._element_currents_and_charges
