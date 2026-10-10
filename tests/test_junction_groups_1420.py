@@ -140,7 +140,7 @@ def test_grid_matches_the_walk_on_a_very_large_wire_deck():
 MONOPOLE = (
     "CM radials on a perfect ground\nCE\nGW 1 10 0 0 0 0 0 5 1e-3\n"
     + "".join(
-        f"GW {k + 2} 4 0 0 0.5 {2 * np.cos(a)!r} {2 * np.sin(a)!r} 0.5 1e-3\n"
+        f"GW {k + 2} 4 0 0 5 {float(2 * np.cos(a))!r} {float(2 * np.sin(a))!r} 5 1e-3\n"
         for k, a in enumerate(np.linspace(0, 2 * np.pi, 6, endpoint=False))
     )
     + "GE 1\nGN 1\nFR 0 1 0 0 14\nEX 0 1 1 0 1 0\nXQ\nEN\n"
