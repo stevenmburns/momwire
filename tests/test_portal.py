@@ -3642,13 +3642,19 @@ def test_a_driven_segment_load_is_applied_exactly_once(basis):
 
 # λ = 10 m at 30 MHz; 11 segments over 5 m is Δ = 0.4545 m, so Δ/a = 2.27.
 _FAT_WIRE = "GW 1 11 0. 0. -2.5 0. 0. 2.5 0.2\n"
+# The same dipole at a = 0.15 m, Δ/a = 3.03: just ABOVE the h/a 3 at which the
+# default basis's exact ring kernel engages ("auto", momwire#1428). On
+# `_FAT_WIRE` bs2 runs the exact kernel on every pair of the straight wire, so
+# the EK card has nothing left to move there and a default-basis EK gate on it
+# would pass whatever the card did. The default-basis gates use this one; the
+# sinusoidal gates and the nec2c pins below stay on `_FAT_WIRE`.
+_FAT_WIRE_BS2 = "GW 1 11 0. 0. -2.5 0. 0. 2.5 0.15\n"
 
 
-def _fat_deck(kernel_card: str = "") -> str:
+def _fat_deck(kernel_card: str = "", wire: str = _FAT_WIRE) -> str:
     card = f"{kernel_card}\n" if kernel_card else ""
     return (
-        f"CE ek fat wire\n{_FAT_WIRE}GE 0\n{card}"
-        "FR 0 1 0 0 30. 1\nEX 0 1 6 0 1.\nXQ\nNX\n"
+        f"CE ek fat wire\n{wire}GE 0\n{card}FR 0 1 0 0 30. 1\nEX 0 1 6 0 1.\nXQ\nNX\n"
     )
 
 
@@ -3696,9 +3702,9 @@ def test_the_ek_card_moves_the_impedance_on_a_fat_wire(scoped_engine):
     passthrough is the engine's and every basis in the roster but Galerkin has
     to carry it.
     """
-    for basis in ([], ["--basis", "sinusoidal"]):
-        rc_off, off, err_off = _run_main(basis, deck=_fat_deck())
-        rc_on, on, err_on = _run_main(basis, deck=_fat_deck("EK"))
+    for basis, wire in (([], _FAT_WIRE_BS2), (["--basis", "sinusoidal"], _FAT_WIRE)):
+        rc_off, off, err_off = _run_main(basis, deck=_fat_deck(wire=wire))
+        rc_on, on, err_on = _run_main(basis, deck=_fat_deck("EK", wire))
         assert (rc_off, rc_on) == (0, 0) and not err_off and not err_on
         assert "ERROR-NEC2C" not in off and "ERROR-NEC2C" not in on
         shift = _relative(_first_z(off), _first_z(on))
@@ -3771,18 +3777,20 @@ def test_every_ek_field_but_minus_one_is_the_extended_kernel(card):
     {0, -1}, which is the #814 failure class exactly: a deck the reference
     engine runs, turned into a fabricated SimNEC readout by our refusal.
     """
-    rc, out, err = _run_main([], deck=_fat_deck(card))
+    rc, out, err = _run_main([], deck=_fat_deck(card, _FAT_WIRE_BS2))
     assert rc == 0 and err == ""
     assert "ERROR-NEC2C" not in out, out[-600:]
     assert "THE EXTENDED THIN WIRE KERNEL WILL BE USED" in out
-    assert _first_z(out) == _first_z(_run_main([], deck=_fat_deck("EK"))[1])
+    assert _first_z(out) == _first_z(
+        _run_main([], deck=_fat_deck("EK", _FAT_WIRE_BS2))[1]
+    )
 
 
 @pytest.mark.integration
 def test_ek_minus_one_is_the_reduced_kernel():
     """The other side of the same rule, and the no-card default with it."""
-    z_bare = _first_z(_run_main([], deck=_fat_deck())[1])
-    rc, out, _err = _run_main([], deck=_fat_deck("EK -1"))
+    z_bare = _first_z(_run_main([], deck=_fat_deck(wire=_FAT_WIRE_BS2))[1])
+    rc, out, _err = _run_main([], deck=_fat_deck("EK -1", _FAT_WIRE_BS2))
     assert rc == 0 and "THE EXTENDED THIN WIRE KERNEL WILL BE USED" not in out
     assert _first_z(out) == z_bare
 
@@ -3798,7 +3806,7 @@ def test_two_groups_of_one_deck_under_two_kernels_get_two_operators():
     every other assertion in this file still passes.
     """
     deck = (
-        f"CE ek rearm fat\n{_FAT_WIRE}GE 0\nEK -1\n"
+        f"CE ek rearm fat\n{_FAT_WIRE_BS2}GE 0\nEK -1\n"
         "FR 0 1 0 0 30. 1\nEX 0 1 6 0 1.\nXQ\nEK\nXQ\nNX\n"
     )
     rc, out, err = _run_main([], deck=deck)
@@ -3806,8 +3814,8 @@ def test_two_groups_of_one_deck_under_two_kernels_get_two_operators():
     rows = aip_impedances(out)
     assert len(rows) == 2, rows
     first, second = complex(*map(float, rows[0])), complex(*map(float, rows[1]))
-    assert first == _first_z(_run_main([], deck=_fat_deck("EK -1"))[1])
-    assert second == _first_z(_run_main([], deck=_fat_deck("EK"))[1])
+    assert first == _first_z(_run_main([], deck=_fat_deck("EK -1", _FAT_WIRE_BS2))[1])
+    assert second == _first_z(_run_main([], deck=_fat_deck("EK", _FAT_WIRE_BS2))[1])
     assert _relative(first, second) >= 0.02, f"{first} vs {second}"
 
 
