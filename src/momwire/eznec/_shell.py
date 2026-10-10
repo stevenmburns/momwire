@@ -46,7 +46,12 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..deck import DeckError
-from ..deck._nec5 import Nec5Deck, Nec5Structure, parse_nec5, split_structures
+from ..deck._nec5 import (
+    Nec5Deck,
+    Nec5Structure,
+    parse_nec5_shared,
+    split_structures,
+)
 from ..serve import Seam
 from . import _nec4, _printout, _serve
 
@@ -275,19 +280,33 @@ def _answer(
     ``NX`` it arrived with.
     """
     echo = text if echo_text is None else echo_text
+    # momwire#1420: the deck and its runs share their leading cards, so they
+    # are parsed together (`parse_nec5_shared`) — which needs the runs'
+    # texts first. Splitting is pure text work; its refusal, like each
+    # parse's, is held and raised exactly where the one-at-a-time spelling
+    # raised it: the deck's own parse first, then the split, then the runs.
     try:
-        deck = parse_nec5(text)
+        runs = _serve.split_runs(text)
+        split_failure = None
+    except Exception as exc:  # noqa: BLE001 — held, raised after the parse
+        runs, split_failure = None, exc
+    parsed = parse_nec5_shared([text, *(runs or ())])
+    try:
+        deck = _raised(parsed[0])
     except DeckError as exc:
         return _printout.render_refusal(echo, str(exc), basis=basis)
     if echo_text is not None:
         deck = replace(deck, source_text=echo_text)
     try:
-        runs = _serve.split_runs(text)
+        if split_failure is not None:
+            raise split_failure
     except _serve.ServeRefusal as exc:
         return _printout.render_refusal(echo, str(exc), basis=basis)
     if runs is not None:
         try:
-            answers = _serve.serve_runs([parse_nec5(t) for t in runs], basis=basis)
+            answers = _serve.serve_runs(
+                [_raised(run) for run in parsed[1:]], basis=basis
+            )
         except (DeckError, _serve.ServeRefusal) as exc:
             return _printout.render_refusal(echo, str(exc), basis=basis)
         return deck, answers, True
@@ -296,6 +315,14 @@ def _answer(
     except _serve.ServeRefusal as exc:
         return _printout.render_refusal(echo, str(exc), basis=basis)
     return deck, [data], False
+
+
+def _raised(outcome: Nec5Deck | Exception) -> Nec5Deck:
+    """A :func:`parse_nec5_shared` outcome as ``parse_nec5`` would have
+    returned it: the deck, or its exception raised here."""
+    if isinstance(outcome, Exception):
+        raise outcome
+    return outcome
 
 
 def _render_chain(structures: list[Nec5Structure], *, basis: str) -> str:
