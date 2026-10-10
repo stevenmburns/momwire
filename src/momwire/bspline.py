@@ -1213,9 +1213,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         `extended_kernel` selects. The kernel is log-singular at z = 0; the
         self and adjacent cells integrate its log term by product
         integration against the basis polynomials (`_exact_kernel`). The
-        correction is computed in numpy (O(n) kernel work on a uniformly
-        meshed run, O(n²) moment storage per coaxial group) and assembled
-        into Z as Z_exact - Z_base over the group's bases.
+        exact moments are computed in C++ where the accelerator is built
+        (`_accel_exact_kernel.cpp`, momwire#1410; the numpy route otherwise),
+        by observer-row windows of `swept_mem_mb` (momwire#1411), with O(n)
+        kernel work on a uniformly meshed run, and assembled into Z as
+        Z_exact - Z_base over the group's bases.
 
         **The feed.** Under the exact kernel a zero-width gap has no
         limiting reactance: each halving of the gap adds 4ln2·ωε₀a of
@@ -7279,7 +7281,12 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         the exact rows, the base rows and their difference (complex), the
         static rows (real), the same-edge distance table R (n_qp² per pair),
         and the dedup keys with `np.unique`'s sort copies (~200 B per pair),
-        plus the numpy off-edge fallback's own overhead when that runs."""
+        plus the numpy off-edge fallback's own overhead when that runs. The
+        C++ route's dedup (momwire#1410) holds an 8-byte slot per pair and,
+        per key new to the window, its moments and its table entry: a few
+        bytes a pair on a uniform run, up to ~300 on a graded mesh where
+        every pair is new, inside this total either way (memgate:
+        tests/test_exact_kernel_accel_1410.py)."""
         nd2 = (self.degree + 1) ** 2
         per_pair = 3 * nd2 * 16 + nd2 * 8 + 2 * 8 * self.n_qp_pair_same_edge**2 + 200
         return n * per_pair + self._offedge_fallback_row_bytes(n)
@@ -7321,7 +7328,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             sgn = np.where(tang[S] @ axis >= 0.0, 1.0, -1.0)
             h = np.linalg.norm(seg_r[S] - seg_l[S], axis=1)
             budget = self.swept_mem_mb * 1024 * 1024
-            exact = _exact_kernel.CoaxialRows(
+            exact = _exact_kernel.coaxial_rows(
                 x0,
                 sgn,
                 h,
