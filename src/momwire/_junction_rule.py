@@ -61,10 +61,88 @@ def coincident_groups(points, tol: float = JUNCTION_TOL) -> list[int]:
     representative `r` is first seen at `i == r`), or assign `label[rep[i]]`
     to merge node ids.
     """
+    pts = [np.asarray(p, dtype=float) for p in points]
+    cells = _cells(pts, tol)
+    if cells is None:
+        return _first_match_walk(pts, tol)
+    # momwire#1420: the same rule, asked of the representatives NEAR each
+    # point instead of all of them. Points are binned on a grid of side
+    # 2 * tol; any representative within `tol` of a point lies in the point's
+    # own cell or one of its 26 neighbours (`_cells` says why, and when it
+    # declines to bin). The candidates are then tried in ascending index —
+    # which is creation order, since a representative's index is where its
+    # group started — with the walk's own distance expression, so the first
+    # one that passes is the one the walk would have stopped at. Memory is
+    # O(P) and time O(P) for well-spread points, where the walk is
+    # O(P * groups): a deck of thousands of wire ends used to pay millions
+    # of `norm` calls here.
+    rep: list[int] = []
+    buckets: dict[tuple[int, int, int], list[int]] = {}
+    get = buckets.get
+    for i, (cx, cy, cz) in enumerate(cells):
+        candidates: list[int] = []
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    found = get((cx + dx, cy + dy, cz + dz))
+                    if found:
+                        candidates += found
+        hit = -1
+        if candidates:
+            candidates.sort()
+            p = pts[i]
+            for j in candidates:
+                if float(np.linalg.norm(p - pts[j])) <= tol:
+                    hit = j
+                    break
+        if hit < 0:
+            rep.append(i)
+            buckets.setdefault((cx, cy, cz), []).append(i)
+        else:
+            rep.append(hit)
+    return rep
+
+
+# Bin indices stay exact, and two points within `tol` of each other stay in
+# adjacent bins, while |coordinate| / (2 * tol) stays below 2**48: each
+# quotient then carries under 2**48 * 2**-53 = 1/32 of a bin of rounding, so
+# two of them differ by at most 1/2 + 1/16 bins and their floors by at most
+# one. Past it (|x| > 560 km at the 1e-9 m default) the walk answers.
+_MAX_CELL = 2.0**48
+
+
+def _cells(pts, tol) -> list | None:
+    """Each point's grid cell for :func:`coincident_groups`, or ``None`` when
+    the grid cannot promise the walk's answer and the walk must run instead.
+
+    The promise: if the walk's ``norm(p - q) <= tol`` holds then every
+    coordinate differs by at most ``tol`` (to a few ulps, since a norm is
+    never below one of its components by more than rounding), so on a grid
+    of side ``2 * tol`` the two cells differ by at most one in each axis —
+    with room to spare for the rounding of ``x / (2 * tol)`` (``_MAX_CELL``). It is declined for a non-finite or
+    non-positive ``tol``, a non-finite coordinate (NaN never matches in the
+    walk, which the walk itself then spells), points that are not 3-vectors,
+    and coordinates past ``_MAX_CELL`` bins from the origin.
+    """
+    if not pts:
+        return []
+    if not (np.isfinite(tol) and tol > 0.0):
+        return None
+    if any(p.shape != (3,) for p in pts):
+        return None
+    q = np.floor(np.array(pts) / (2.0 * tol))
+    if not np.all(np.abs(q) < _MAX_CELL):  # also False for NaN and inf
+        return None
+    return q.astype(np.int64).tolist()
+
+
+def _first_match_walk(pts, tol) -> list[int]:
+    """The rule as a walk over every representative, the spelling
+    :func:`coincident_groups` used before momwire#1420 and still uses
+    wherever the grid declines (:func:`_cells`)."""
     rep: list[int] = []
     reps: list[tuple[int, np.ndarray]] = []
-    for i, p in enumerate(points):
-        p = np.asarray(p, dtype=float)
+    for i, p in enumerate(pts):
         for j, q in reps:
             if float(np.linalg.norm(p - q)) <= tol:
                 rep.append(j)
