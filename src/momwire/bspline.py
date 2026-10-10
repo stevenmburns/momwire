@@ -7309,13 +7309,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         return n * per_pair + self._offedge_fallback_row_bytes(n)
 
     def _exact_kernel_base_cache_bytes(self):
-        """The share of `swept_mem_mb` held back from the row windows for the
+        """The most of `swept_mem_mb` held back from the row windows for the
         base dedup's cross-window cache (momwire#1421): a sixteenth. The
-        cache holds one (d+1)² complex moment per diagonal of a uniform
-        run-pair block -- 2n - 1 on a uniform run, 864 kB at n = 3,000,
-        d = 2 -- and nothing on a graded mesh, so the cap only bites on
-        pathological meshes, where a block past it is deduplicated inside its
-        window and not remembered."""
+        windows give up only what the cache can hold
+        (`BaseRows.cache_entries_needed`), capped here: one (d+1)² complex
+        moment per diagonal of a run-pair block that can gather -- 2n - 1 on
+        a uniform run, 870 kB at n = 3,000, d = 2 -- and nothing on a graded
+        mesh or one of many tiny edges, whose windows are then main's. The
+        cap only bites on pathological meshes, where a block past it is
+        deduplicated inside its window and not remembered."""
         return int(self.swept_mem_mb * 1024 * 1024) // 16
 
     def _add_exact_kernel_correction(self, Z, geom, supp_seg, polys, k):
@@ -7385,8 +7387,6 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             window_mb = self.swept_mem_mb
             base = None
             if _EXACT_KERNEL_BASE_DEDUP:
-                reserve = self._exact_kernel_base_cache_bytes()
-                window_mb = (budget - reserve) / (1024 * 1024)
                 base = _exact_kernel_base.BaseRows(
                     seg_l=seg_l,
                     seg_r=seg_r,
@@ -7402,8 +7402,14 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     ladder=fill[1],
                     ek_se=_EK_SAME_EDGE if self.extended_kernel else None,
                     n_segs_total=n_total,
-                    max_cached=max(1, reserve // (nd * nd * 16 + 1)),
                 )
+                entry = nd * nd * 16 + 1
+                reserve = min(
+                    self._exact_kernel_base_cache_bytes(),
+                    base.cache_entries_needed() * entry,
+                )
+                base.max_cached = reserve // entry
+                window_mb = (budget - reserve) / (1024 * 1024)
             chunk = _schedule.mb_rows(window_mb, self._exact_kernel_row_bytes(n))
             if _EXACT_KERNEL_ROWS_OVERRIDE is not None:
                 chunk = int(_EXACT_KERNEL_ROWS_OVERRIDE)

@@ -54,6 +54,40 @@ own key resolution), never by a different rule. Pairs not in such a block
 -- unequal lengths, short runs, a graded mesh -- are recomputed exactly as
 before, in one call per run.
 
+Branches keyed on pair geometry (the tie hazard)
+------------------------------------------------
+"A function of m" holds for a moment only if every branch the kernel takes
+on the pair's geometry answers the same way along the diagonal. Where a
+branch compares a geometric quantity to a threshold and the diagonal sits ON
+the threshold, coordinate roundoff decides it pair by pair, and a gathered
+value would copy the representative's answer to pairs that took the other
+branch. Audited, numpy and C++ (momwire#1421 review):
+
+* the LADDER TIER, `ratio >= threshold` with ratio = centre distance over
+  the longer length (`seg_seg_full_moments_bspline_tiered` and `..._ek_tiered`
+  in _accel_bspline.cpp, `_pair_ratio` + `np.where(ratio >= r)` in
+  `_seg_seg_full_moments_offedge`'s numpy twin), every threshold of the
+  ladder (free space 16, buried 2 and 16, or an explicit ladder). Collinear
+  equal-length edges put the ratio on an integer, so this tie is common.
+  Handled: a diagonal within TIE_REL of a threshold is evaluated pair by pair
+  (`_tie_diagonals`);
+* the PHASE GUARD, |k|·h <= 0.5 per segment (`_phase_row_mask`, with
+  `_phase_split_needed` / `_ladder_for_block`), when the ladder has a
+  phase-limited tier. Handled: a run whose |k|·h is within TIE_REL of the
+  ceiling never gathers off-edge;
+* the EK pair mask, `group_i == group_j and >= 0`: integer labels, constant
+  on a run (RUN_FIELDS), no tie;
+* the EK radius floor, `max(R, b)` per quadrature point: continuous in R,
+  equal on both sides of the tie, no jump;
+* route splits on the block (`_ek_src_runs` by b_j, the mixed-radius row
+  runs by a, `_serves_n_qp`, the SIMD lanes vs the scalar walk): each pair's
+  arithmetic is its own in every route ("operation for operation" in the
+  C++), so they move nothing but bookkeeping;
+* same-edge: the reg kernel (C++ `seg_seg_reg_moments_bspline_swept_window`
+  and `..._ek_window`, numpy einsum) has no geometric branch, and the static
+  Toeplitz table is exact per diagonal (no translation);
+* `expm1_neg_jkR` has no branch on R for real k.
+
 The m values are remembered across windows per (A, B), capped at
 `max_cached` entries in all; past the cap a block is still deduplicated
 inside its window, only not remembered. `evaluated` counts the pairs handed
@@ -64,8 +98,11 @@ served by the gather.
 import numpy as np
 
 from ._bspline_kernels import (
+    _LADDER_PHASE_KL_CEILING,
+    _LADDER_PHASE_LIMITED_BELOW,
     _seg_seg_full_moments_offedge,
     _static_is_toeplitz,
+    _seg_seg_reg_geometry,
     _seg_seg_reg_geometry_pairs,
     _seg_seg_reg_moments_from_geometry,
     _seg_seg_reg_nodes,
@@ -80,6 +117,15 @@ RUN_FIELDS = ("edge", "h", "sgn", "a", "group_i", "group_j", "b_i", "b_j")
 # (A ∩ window) x B block with fewer pairs than this is recomputed directly.
 # Tests set 0 to push small decks through the gather.
 TOEPLITZ_MIN_PAIRS = 4096
+
+# A diagonal (or a run) whose tier decision sits within this RELATIVE distance
+# of a threshold is evaluated pair by pair, never gathered: on it the kernel's
+# own `>=` is decided by coordinate roundoff and may differ pair to pair
+# (momwire#1421 review: collinear equal-length edges put every off-edge ratio
+# on an integer, so the free-space ladder's 16 is met exactly). Roundoff moves
+# a ratio by ~|x|·eps/h, under 1e-12 on any mesh here; the margin is 1000x
+# that. Tests set 0 to prove the gate sees the tie (a red control).
+TIE_REL = 1e-9
 
 
 def _per_segment(field, S, n):
@@ -127,6 +173,7 @@ class BaseRows:
         self.max_cached = max_cached
         self.evaluated = 0
         self.toeplitz_blocks = 0
+        self.tie_pairs = 0  # pairs evaluated one by one on a tie diagonal
         self._cache = {}
         self._n_cached = 0
 
@@ -181,6 +228,16 @@ class BaseRows:
         # length classes: runs whose lengths agree within q, the only runs a
         # Toeplitz block can pair (a graded mesh is all singletons, so its
         # rows find no partner in O(1))
+        # the phase guard (`_phase_row_mask`): a run whose |k|·h sits on the
+        # ceiling may answer it differently segment to segment
+        phase_limited = any(n < _LADDER_PHASE_LIMITED_BELOW for _r, n in ladder or ())
+        self._phase_tie = [
+            phase_limited
+            and abs(abs(k) * run[2] - _LADDER_PHASE_KL_CEILING)
+            <= TIE_REL * _LADDER_PHASE_KL_CEILING
+            for run in self.runs
+        ]
+        self._thresholds = np.array([r for r, _n in ladder or ()], dtype=np.float64)
         order = sorted(range(len(self.runs)), key=lambda r: self.runs[r][2])
         self._class_of = np.empty(len(self.runs), dtype=np.int64)
         self._classes = []
@@ -193,6 +250,30 @@ class BaseRows:
             else:
                 self._classes.append([r])
             self._class_of[r] = len(self._classes) - 1
+        # partners in O(useful work): a class longest run first, so a row
+        # block stops at the first partner too short to gather; same-edge
+        # partners per edge
+        for c in self._classes:
+            c.sort(key=lambda r: -(self.runs[r][1] - self.runs[r][0]))
+        self._edge_runs = [[] for _ in self.edges]
+        for r, run in enumerate(self.runs):
+            self._edge_runs[run[4]].append(r)
+
+    def cache_entries_needed(self):
+        """Diagonal values the cross-window cache can ever hold: n_A + n_B - 1
+        per run pair of one length class that can gather at all (n_A·n_B at
+        least the gather threshold). 2n - 1 on a uniform run, 0 on a graded
+        mesh or one of many tiny edges, so the windows give up only what
+        the cache can use (`BSplineSolver._exact_kernel_base_cache_bytes`)."""
+        need = 0
+        for c in self._classes:  # longest run first
+            lens = [self.runs[r][1] - self.runs[r][0] for r in c]
+            for la in lens:
+                for lb in lens:
+                    if not self._eligible(la, lb):
+                        break
+                    need += la + lb - 1
+        return need
 
     # ------------------------------------------------------------------
     # the two kernels, on index arrays of the group's local order
@@ -225,12 +306,32 @@ class BaseRows:
     def _reg(self, e, rows, cols):
         """Same-edge smooth-kernel moments of edge `e`; rows and cols are
         local indices inside it."""
-        l0, _l1, arc, a_w = self.edges[e]
+        l0, l1, arc, a_w = self.edges[e]
+        self.evaluated += len(rows) * len(cols)
+        rows, cols = np.asarray(rows), np.asarray(cols)
+        if (
+            cols.size == l1 - l0
+            and cols[0] == l0
+            and cols[-1] == l1 - 1
+            and rows[-1] - rows[0] == rows.size - 1
+        ):
+            # a contiguous row window against the whole edge: the per-pair
+            # route's own call (cheaper than the pairs path on many tiny
+            # edges, and the same arithmetic)
+            win = slice(int(rows[0]) - l0, int(rows[-1]) + 1 - l0)
+            geo = _seg_seg_reg_geometry(
+                arc,
+                a_w,
+                max_d=self.d,
+                n_qp=self.n_qp_same_edge,
+                ek=self.ek_se,
+                rows=win,
+            )
+            return _seg_seg_reg_moments_from_geometry(geo, self.k)
         nodes = self._nodes.get(e)
         if nodes is None:
             nodes = _seg_seg_reg_nodes(arc, self.d, self.n_qp_same_edge)
             self._nodes = {e: nodes}  # one edge's O(N) tables at a time
-        self.evaluated += len(rows) * len(cols)
         geo = _seg_seg_reg_geometry_pairs(
             nodes,
             a_w,
@@ -265,21 +366,29 @@ class BaseRows:
                 if lo >= hi:
                     continue
                 A = int(self.run_of[l0])
-                if self._foldable(e, A) and self._eligible(hi - lo, l1 - l0):
+                if self._eligible(hi - lo, l1 - l0) and self._foldable(e, A):
                     # one run on a uniform edge: the static table rides in
                     # the same diagonals as the reg moments
                     self._toeplitz(A, lo, hi, A, "reg", e, static=True)
                     continue
                 win = None if (lo, hi) == (l0, l1) else slice(lo - l0, hi - l0)
-                self._put(
-                    lo,
-                    hi,
-                    l0,
-                    l1,
-                    _seg_seg_static_moments(
-                        arc, a_w, max_d=self.d, ek=self.ek_se, rows=win
-                    ),
+                static = _seg_seg_static_moments(
+                    arc, a_w, max_d=self.d, ek=self.ek_se, rows=win
                 )
+                if len(self._edge_runs[e]) == 1 and not self._eligible(
+                    hi - lo, l1 - l0
+                ):
+                    # one run, too few rows to gather: the per-pair route's
+                    # own block, static + reg, in one put
+                    self._put(
+                        lo,
+                        hi,
+                        l0,
+                        l1,
+                        static + self._reg(e, np.arange(lo, hi), np.arange(l0, l1)),
+                    )
+                    continue
+                self._put(lo, hi, l0, l1, static)
                 self._fill(lo, hi, "reg", e)
         finally:
             self._out = None
@@ -321,12 +430,20 @@ class BaseRows:
             a0, a1, _hA, _sA, eA = self.runs[A]
             ra0, ra1 = max(a0, lo), min(a1, hi)
             toe = []
-            for B in self._classes[self._class_of[A]]:
-                b0, b1, _hB, _sB, eB = self.runs[B]
-                if (eB == eA) != (kind == "reg"):
-                    continue
-                if self._eligible(ra1 - ra0, b1 - b0):
-                    toe.append(B)
+            if kind == "reg":
+                for B in self._edge_runs[eA]:
+                    b0, b1 = self.runs[B][:2]
+                    if self._class_of[B] == self._class_of[A] and self._eligible(
+                        ra1 - ra0, b1 - b0
+                    ):
+                        toe.append(B)
+            elif not self._phase_tie[A]:
+                for B in self._classes[self._class_of[A]]:
+                    b0, b1, _hB, _sB, eB = self.runs[B]
+                    if not self._eligible(ra1 - ra0, b1 - b0):
+                        break  # longest first: the rest are shorter
+                    if eB != eA and not self._phase_tie[B]:
+                        toe.append(B)
             if not toe:
                 short.append((ra0, ra1))
                 continue
@@ -343,14 +460,16 @@ class BaseRows:
             return
         # off-edge: one call over every column, as the per-pair route makes
         # it, each row range then taking only the columns off its own edge
+        # (each row's own-edge block zeroed in the call's output, so one put
+        # per row range writes every pair once; the same-edge pass fills it)
         rows = np.concatenate([np.arange(a, b) for a, b in short])
         vals = self._eval(kind, e, rows, np.arange(self.n))
         i = 0
         for a, b in short:
             for x, y in _split_by_edge(a, b, self.edge_bounds):
-                eX = int(self.runs[int(self.run_of[x])][4])
-                for c, f in self._span(kind, eX):
-                    self._put(x, y, c, f, vals[:, :, i + x - a : i + y - a, c:f])
+                l0, l1 = self.edges[int(self.runs[int(self.run_of[x])][4])][:2]
+                vals[:, :, i + x - a : i + y - a, l0:l1] = 0.0
+            self._put(a, b, 0, self.n, vals[:, :, i : i + b - a, :])
             i += b - a
 
     def _span(self, kind, e):
@@ -401,41 +520,31 @@ class BaseRows:
         key = (A, B, static)
         entry = self._cache.get(key)
         if entry is None:
-            entry = (
-                np.empty((self.nd, self.nd, size), dtype=complex),
-                np.zeros(size, dtype=bool),
-            )
+            F = np.empty((self.nd, self.nd, size), dtype=complex)
+            have = np.zeros(size, dtype=bool)
+            ties = np.zeros(0, dtype=np.int64)
+            if kind == "off" and self._thresholds.size:
+                ties = self._tie_diagonals(a0, b0, nA, nB, sA, sB, m_min, size)
+                F[:, :, ties] = 0.0  # evaluated per pair in the gather
+                have[ties] = True
+            entry = (F, have, ties)
             if self.max_cached is None or self._n_cached + size <= self.max_cached:
                 self._cache[key] = entry
                 self._n_cached += size
-        F, have = entry
+        F, have, ties = entry
         # the diagonals the rows need
         ip = np.arange(ra0 - a0, ra1 - a0)
         t_ends = np.concatenate([-sA * ip, sB * (nB - 1) - sA * ip]) - m_min
         tlo, thi = int(t_ends.min()), int(t_ends.max())
         need = tlo + np.flatnonzero(~have[tlo : thi + 1])
         if need.size:
-            m = need + m_min
-            # a boundary pair on each diagonal: row 0, row nA-1, column 0,
-            # column nB-1, the first that holds it
-            left = np.ones(m.size, dtype=bool)
-            for line, at in (("row", 0), ("row", nA - 1), ("col", 0), ("col", nB - 1)):
-                if not left.any():
-                    break
+            for line, at, ok, other in _boundary_pairs(need + m_min, nA, nB, sA, sB):
                 if line == "row":
-                    other = sB * (m + sA * at)
-                    ok = left & (other >= 0) & (other < nB)
-                    if ok.any():
-                        vals = self._eval(kind, e, np.array([a0 + at]), b0 + other[ok])
-                        F[:, :, need[ok]] = vals[:, :, 0, :]
+                    vals = self._eval(kind, e, np.array([a0 + at]), b0 + other)
+                    F[:, :, need[ok]] = vals[:, :, 0, :]
                 else:
-                    other = sA * (sB * at - m)
-                    ok = left & (other >= 0) & (other < nA)
-                    if ok.any():
-                        vals = self._eval(kind, e, a0 + other[ok], np.array([b0 + at]))
-                        F[:, :, need[ok]] = vals[:, :, :, 0]
-                left &= ~ok
-            assert not left.any(), "a diagonal missed every boundary line"
+                    vals = self._eval(kind, e, a0 + other, np.array([b0 + at]))
+                    F[:, :, need[ok]] = vals[:, :, :, 0]
             if static:
                 # same indexing: m = j - i, m_min = -(N - 1)
                 F[:, :, need] += self._static_diagonals(e)[:, :, need]
@@ -448,11 +557,68 @@ class BaseRows:
             else:
                 src = F[:, :, t0 - nB + 1 : t0 + 1][:, :, ::-1]
             self._put(i, i + 1, b0, b1, src[:, :, None, :])
+        if ties.size:
+            # the tie diagonals hold zeros above; each pair on them is its own
+            m_tie = ties + m_min
+            for i in range(ra0, ra1):
+                jp = sB * (m_tie + sA * (i - a0))
+                jp = jp[(jp >= 0) & (jp < nB)]
+                if jp.size:
+                    self.tie_pairs += int(jp.size)
+                    vals = self._eval(kind, e, np.array([i]), b0 + jp)
+                    for c, j in enumerate(jp.tolist()):
+                        self._put(
+                            i, i + 1, b0 + j, b0 + j + 1, vals[:, :, :, c : c + 1]
+                        )
+
+    def _tie_diagonals(self, a0, b0, nA, nB, sA, sB, m_min, size):
+        """The diagonals of an off-edge (A, B) block whose ladder ratio --
+        centre distance over the longer length, the kernels' own selector
+        (`_pair_ratio`; `ratio >= ladder.ratio[t]` in _accel_bspline.cpp) --
+        sits within TIE_REL of a threshold, read off each diagonal's
+        boundary pair."""
+        m = np.arange(size) + m_min
+        ii = np.empty(size, dtype=np.int64)
+        jj = np.empty(size, dtype=np.int64)
+        for line, at, ok, other in _boundary_pairs(m, nA, nB, sA, sB):
+            ii[ok] = at if line == "row" else other
+            jj[ok] = other if line == "row" else at
+        I, J = self.S[a0 + ii], self.S[b0 + jj]
+        sl, sr = self.seg_l, self.seg_r
+        dist = np.linalg.norm(0.5 * (sl[I] + sr[I]) - 0.5 * (sl[J] + sr[J]), axis=1)
+        longer = np.maximum(
+            np.linalg.norm(sr[I] - sl[I], axis=1), np.linalg.norm(sr[J] - sl[J], axis=1)
+        )
+        ratio = dist / longer
+        thr = self._thresholds
+        near = np.abs(ratio[:, None] - thr[None, :]) <= TIE_REL * thr[None, :]
+        return np.flatnonzero(near.any(axis=1))
+
+
+def _boundary_pairs(m, nA, nB, sA, sB):
+    """A boundary pair on each diagonal m of an nA x nB block: row 0, row
+    nA - 1, column 0, column nB - 1, the first that holds it (every diagonal
+    meets one). Yields (line, at, mask into m, the other index)."""
+    left = np.ones(m.size, dtype=bool)
+    for line, at in (("row", 0), ("row", nA - 1), ("col", 0), ("col", nB - 1)):
+        if not left.any():
+            break
+        if line == "row":
+            other = sB * (m + sA * at)
+            ok = left & (other >= 0) & (other < nB)
+        else:
+            other = sA * (sB * at - m)
+            ok = left & (other >= 0) & (other < nA)
+        if ok.any():
+            yield line, at, ok, other[ok]
+        left &= ~ok
+    assert not left.any(), "a diagonal missed every boundary line"
 
 
 def _split_by_edge(a, b, bounds):
     """[a, b) cut at the edge starts in `bounds` (sorted)."""
-    cuts = [x for x in bounds if a < x < b]
+    lo, hi = np.searchsorted(bounds, [a, b], side="right")
+    cuts = [x for x in bounds[lo:hi] if a < x < b]
     pts = [a, *cuts, b]
     return list(zip(pts[:-1], pts[1:]))
 
