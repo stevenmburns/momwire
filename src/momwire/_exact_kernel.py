@@ -415,43 +415,17 @@ def pair_moments_far(hi, hj, c, si, sj, a, k, nd):
     return np.einsum("Psi,Psi,Psipq->pqP", wy, Kz, Wy)
 
 
-def coaxial_block(x0, sgn, h, a, k, nd):
-    """(nd, nd, n, n) exact-kernel moment block of one coaxial group.
-
-    ``x0`` (n,) axial coordinate of each segment's START (its ``seg_l``),
-    ``sgn`` (n,) ±1 its direction along the axis, ``h`` (n,) its length.
-    Pairs are deduplicated on (h_i, h_j, c, σ_i, σ_j), so a uniform run costs
-    O(n) kernel work rather than O(n²).
-    """
-    x0 = np.asarray(x0, dtype=np.float64)
-    sgn = np.asarray(sgn, dtype=np.float64)
-    h = np.asarray(h, dtype=np.float64)
-    n = x0.shape[0]
-    I, J = np.meshgrid(np.arange(n), np.arange(n), indexing="ij")
-    I, J = I.ravel(), J.ravel()
-    c = x0[J] - x0[I]
-    q = 1e-11 * float(np.max(h))
-    key = np.stack(
-        [
-            np.round(h[I] / q),
-            np.round(h[J] / q),
-            np.round(c / q),
-            sgn[I],
-            sgn[J],
-        ],
-        -1,
-    )
-    uniq, first, inv = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    inv = inv.ravel()
-    ui, uj = I[first], J[first]
-    hi, hj, cu, si, sj = h[ui], h[uj], c[first], sgn[ui], sgn[uj]
+def _unique_pair_moments(h, sgn, ui, uj, cu, a, k, nd):
+    """(nd, nd, U) moments of the representative pairs (ui[u], uj[u]) at
+    axial offsets cu[u]: far pairs vectorised, the rest one at a time."""
+    hi, hj, si, sj = h[ui], h[uj], sgn[ui], sgn[uj]
     # minimum |z| over the pair: |c + y| over the corner hull
     ylo = np.minimum.reduce([np.zeros_like(hi), sj * hj, -si * hi, sj * hj - si * hi])
     yhi = np.maximum.reduce([np.zeros_like(hi), sj * hj, -si * hi, sj * hj - si * hi])
     zlo, zhi = cu + ylo, cu + yhi
     dmin = np.where((zlo <= 0.0) & (zhi >= 0.0), 0.0, np.minimum(abs(zlo), abs(zhi)))
     far = dmin >= np.maximum(hi, hj)
-    vals = np.empty((nd, nd, uniq.shape[0]), dtype=np.complex128)
+    vals = np.empty((nd, nd, ui.shape[0]), dtype=np.complex128)
     fi = np.flatnonzero(far)
     step = 4096
     for s0 in range(0, fi.size, step):
@@ -461,4 +435,111 @@ def coaxial_block(x0, sgn, h, a, k, nd):
         )
     for u in np.flatnonzero(~far):
         vals[:, :, u] = pair_moments(hi[u], hj[u], cu[u], si[u], sj[u], a, k, nd)
-    return vals[:, :, inv].reshape(nd, nd, n, n)
+    return vals
+
+
+class CoaxialRows:
+    """Observer-row windows of one coaxial group's exact-kernel moment block
+    (momwire#1411): ``rows(r0, r1)`` is ``coaxial_block(...)[:, :, r0:r1]``
+    without the (nd, nd, n, n) block ever existing.
+
+    Pairs are deduplicated on (h_i, h_j, c, σ_i, σ_j) as in `coaxial_block`,
+    and the deduplication is carried ACROSS windows by a cache keyed the same
+    way, so a uniform run still costs O(n) kernel work however many windows
+    it is cut into. Walking the windows in row order, a key is first met in
+    the earliest window holding it and, inside that window, at its first pair
+    in row-major order -- the whole block's own first occurrence. So each
+    unique moment is evaluated from the same representative pair as the
+    whole-block route, and a window is that block's rows to the bit.
+
+    ``max_cached`` bounds the cache (entries). A key met after the cache is
+    full is still deduplicated inside its window, just not remembered: a
+    graded mesh with O(n²) distinct pairs then costs what it costs today in
+    kernel work, without the O(n²) residency. ``evaluated`` counts the unique
+    moments computed, for gates that hold the O(n) claim.
+    """
+
+    def __init__(self, x0, sgn, h, a, k, nd, max_cached=None):
+        self.x0 = np.asarray(x0, dtype=np.float64)
+        self.sgn = np.asarray(sgn, dtype=np.float64)
+        self.h = np.asarray(h, dtype=np.float64)
+        self.n = self.x0.shape[0]
+        self.a, self.k, self.nd = a, k, nd
+        self.q = 1e-11 * float(np.max(self.h))
+        self.max_cached = max_cached
+        self.evaluated = 0
+        self._index = {}
+        self._vals = np.empty((nd, nd, 0), dtype=np.complex128)
+
+    def _remember(self, keys, miss, vals):
+        if self.max_cached is not None:
+            room = self.max_cached - len(self._index)
+            if room <= 0:
+                return
+            miss = miss[:room]
+        n0 = len(self._index)
+        need = n0 + miss.size
+        if need > self._vals.shape[2]:
+            grown = np.empty(
+                (self.nd, self.nd, max(need, 2 * self._vals.shape[2])),
+                dtype=np.complex128,
+            )
+            grown[:, :, :n0] = self._vals[:, :, :n0]
+            self._vals = grown
+        self._vals[:, :, n0:need] = vals[:, :, miss]
+        for j, u in enumerate(miss.tolist()):
+            self._index[keys[u]] = n0 + j
+
+    def rows(self, r0, r1):
+        """(nd, nd, r1 - r0, n): observer rows [r0, r1) of the block."""
+        n, nd, q = self.n, self.nd, self.q
+        m = r1 - r0
+        I = np.repeat(np.arange(r0, r1), n)
+        J = np.tile(np.arange(n), m)
+        c = self.x0[J] - self.x0[I]
+        key = np.stack(
+            [
+                np.round(self.h[I] / q),
+                np.round(self.h[J] / q),
+                np.round(c / q),
+                self.sgn[I],
+                self.sgn[J],
+            ],
+            -1,
+        )
+        uniq, first, inv = np.unique(
+            key, axis=0, return_index=True, return_inverse=True
+        )
+        del key
+        inv = inv.ravel()
+        keys = list(map(tuple, uniq.tolist()))
+        del uniq
+        get = self._index.get
+        pos = np.fromiter((get(t, -1) for t in keys), dtype=np.int64, count=len(keys))
+        vals = np.empty((nd, nd, len(keys)), dtype=np.complex128)
+        hit = np.flatnonzero(pos >= 0)
+        vals[:, :, hit] = self._vals[:, :, pos[hit]]
+        miss = np.flatnonzero(pos < 0)
+        if miss.size:
+            f = first[miss]
+            vals[:, :, miss] = _unique_pair_moments(
+                self.h, self.sgn, I[f], J[f], c[f], self.a, self.k, nd
+            )
+            self.evaluated += int(miss.size)
+            self._remember(keys, miss, vals)
+        del I, J, c, first
+        return vals[:, :, inv].reshape(nd, nd, m, n)
+
+
+def coaxial_block(x0, sgn, h, a, k, nd):
+    """(nd, nd, n, n) exact-kernel moment block of one coaxial group.
+
+    ``x0`` (n,) axial coordinate of each segment's START (its ``seg_l``),
+    ``sgn`` (n,) ±1 its direction along the axis, ``h`` (n,) its length.
+    Pairs are deduplicated on (h_i, h_j, c, σ_i, σ_j), so a uniform run costs
+    O(n) kernel work rather than O(n²). The whole block at once: the solver
+    walks it in row windows instead (`CoaxialRows`, momwire#1411), and this
+    is the reference those windows are gated against.
+    """
+    x0 = np.asarray(x0, dtype=np.float64)
+    return CoaxialRows(x0, sgn, h, a, k, nd, max_cached=0).rows(0, x0.shape[0])
