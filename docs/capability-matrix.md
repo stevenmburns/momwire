@@ -27,7 +27,7 @@ dialect (`momwire.eznec`) addresses nodes and reads the whole roster.
 
 | `--basis`             | class                      | bound                  | `nec2` |
 | --------------------- | -------------------------- | ---------------------- | ------ |
-| `bspline`             | `BSplineSolver`            | —                      | yes    |
+| `bspline`             | `BSplineSolver`            | `exact_kernel='auto'`  | yes    |
 | `bspline-d1`          | `BSplineSolver`            | `degree=1`             | yes    |
 | `hmatrix`             | `HMatrixSolver`            | —                      | yes    |
 | `arrayblock`          | `ArrayBlockSolver`         | —                      | yes    |
@@ -55,7 +55,7 @@ included).
 
 | class                      | `--basis`                                                              | `wire_loading` | `extended_kernel` | `junction_ports` | `node_gaps` | `knot_feeds` | `per_wire_radius` | `singular_enrichment` | `centre_feeds` |
 | -------------------------- | ---------------------------------------------------------------------- | -------------- | ----------------- | ---------------- | ----------- | ------------ | ----------------- | --------------------- | -------------- |
-| `BSplineSolver`            | `bspline`, `bspline-d1 (degree=1)`                                     | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `BSplineSolver`            | `bspline (exact_kernel='auto')`, `bspline-d1 (degree=1)`               | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
 | `HMatrixSolver`            | `hmatrix`                                                              | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
 | `ArrayBlockSolver`         | `arrayblock`                                                           | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
 | `SinusoidalSolver`         | `sinusoidal`                                                           | yes            | yes               | **no**           | **no**      | **no**       | yes               | **no**                | yes            |
