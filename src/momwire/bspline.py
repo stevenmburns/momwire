@@ -82,6 +82,7 @@ from . import _below_interface
 from . import _bspline_kernels
 from . import _crossing_fill
 from . import _exact_kernel
+from . import _exact_kernel_base
 from . import _feed_snap
 from . import _ground_mirror
 from . import _ground_refl
@@ -311,6 +312,13 @@ _SAME_EDGE_WINDOW_BLOCKS = True
 # gate can cut a small deck into many windows.
 _EXACT_KERNEL_ROW_WINDOWS = True
 _EXACT_KERNEL_ROWS_OVERRIDE = None
+
+# momwire#1421: the windows' BASE moments (what the fill put on the group's
+# pairs) come from `_exact_kernel_base.BaseRows`, which evaluates one pair per
+# diagonal of each uniform run-pair block rather than every pair. Off restores
+# the per-pair recompute (`_exact_kernel_base_J`), the reference it is gated
+# against; for gates, not callers.
+_EXACT_KERNEL_BASE_DEDUP = True
 
 _BSPLINE_ASSEMBLE_ACCEL_MAX_D = 2
 
@@ -7286,10 +7294,31 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         per key new to the window, its moments and its table entry: a few
         bytes a pair on a uniform run, up to ~300 on a graded mesh where
         every pair is new, inside this total either way (memgate:
-        tests/test_exact_kernel_accel_1410.py)."""
+        tests/test_exact_kernel_accel_1410.py).
+
+        The base dedup (momwire#1421) builds the same-edge R table and the
+        reg rows only for the pairs it recomputes directly -- all of them on
+        a graded mesh, which this total already prices -- and gathers the
+        rest from O(n) diagonal values, so its window transients stay inside
+        this total too. Its cross-window cache is not a per-row cost: it is
+        held to `_exact_kernel_base_cache_bytes`, which the windows' budget
+        gives up before this total divides it (memgates:
+        tests/test_exact_kernel_base_dedup_1421.py)."""
         nd2 = (self.degree + 1) ** 2
         per_pair = 3 * nd2 * 16 + nd2 * 8 + 2 * 8 * self.n_qp_pair_same_edge**2 + 200
         return n * per_pair + self._offedge_fallback_row_bytes(n)
+
+    def _exact_kernel_base_cache_bytes(self):
+        """The most of `swept_mem_mb` held back from the row windows for the
+        base dedup's cross-window cache (momwire#1421): a sixteenth. The
+        windows give up only what the cache can hold
+        (`BaseRows.cache_entries_needed`), capped here: one (d+1)² complex
+        moment per diagonal of a run-pair block that can gather -- 2n - 1 on
+        a uniform run, 870 kB at n = 3,000, d = 2 -- and nothing on a graded
+        mesh or one of many tiny edges, whose windows are then main's. The
+        cap only bites on pathological meshes, where a block past it is
+        deduplicated inside its window and not remembered."""
+        return int(self.swept_mem_mb * 1024 * 1024) // 16
 
     def _add_exact_kernel_correction(self, Z, geom, supp_seg, polys, k):
         """Z += Z_exact - Z_base over every coaxial group (momwire#1408).
@@ -7305,7 +7334,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         windows trace 176 MB there and leave the process peak at the fill's.
         The pre-#1411 whole-group route stays behind
         `_EXACT_KERNEL_ROW_WINDOWS` as the reference this one is gated
-        against."""
+        against.
+
+        The base moments are subtracted in place by
+        `_exact_kernel_base.BaseRows` (momwire#1421): one kernel evaluation
+        per diagonal of each uniform run-pair block, so a uniform run's base
+        costs O(n) kernel work like its exact moments (5,999 pairs instead
+        of 9,000,000 on the 3,000-segment wire), and pairs it cannot gather
+        are recomputed as `_exact_kernel_base_J` does, which stays behind
+        `_EXACT_KERNEL_BASE_DEDUP` as the reference."""
         if not _EXACT_KERNEL_ROW_WINDOWS:
             return self._add_exact_kernel_correction_whole(Z, geom, supp_seg, polys, k)
         d = self.degree
@@ -7347,18 +7384,45 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             B = np.flatnonzero(np.any(supp_loc < n, axis=1)).astype(np.int64)
             tan_loc = np.zeros((n + 1, 3))
             tan_loc[:n] = tang[S]
-            chunk = _schedule.mb_rows(
-                self.swept_mem_mb, self._exact_kernel_row_bytes(n)
-            )
+            window_mb = self.swept_mem_mb
+            base = None
+            if _EXACT_KERNEL_BASE_DEDUP:
+                base = _exact_kernel_base.BaseRows(
+                    seg_l=seg_l,
+                    seg_r=seg_r,
+                    seg_a=seg_a,
+                    tangents=tang,
+                    S=S,
+                    g_edges=g_edges,
+                    k=k,
+                    d=d,
+                    n_qp_pair=self.n_qp_pair,
+                    n_qp_same_edge=self.n_qp_pair_same_edge,
+                    ek=fill[0],
+                    ladder=fill[1],
+                    ek_se=_EK_SAME_EDGE if self.extended_kernel else None,
+                    n_segs_total=n_total,
+                )
+                entry = nd * nd * 16 + 1
+                reserve = min(
+                    self._exact_kernel_base_cache_bytes(),
+                    base.cache_entries_needed() * entry,
+                )
+                base.max_cached = reserve // entry
+                window_mb = (budget - reserve) / (1024 * 1024)
+            chunk = _schedule.mb_rows(window_mb, self._exact_kernel_row_bytes(n))
             if _EXACT_KERNEL_ROWS_OVERRIDE is not None:
                 chunk = int(_EXACT_KERNEL_ROWS_OVERRIDE)
             for r0 in range(0, n, chunk):
                 r1 = min(n, r0 + chunk)
                 self._checkpoint()
                 dJ = exact.rows(r0, r1)
-                dJ -= self._exact_kernel_base_J(
-                    geom, S, g_edges, k, rows=slice(r0, r1), fill=fill
-                )
+                if base is not None:
+                    base.subtract_from(dJ, r0, r1)
+                else:
+                    dJ -= self._exact_kernel_base_J(
+                        geom, S, g_edges, k, rows=slice(r0, r1), fill=fill
+                    )
                 sB = supp_loc[B]
                 M = B[np.any((sB >= r0) & (sB < r1), axis=1)]
                 if accel:
