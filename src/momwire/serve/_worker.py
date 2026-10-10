@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import importlib
 import os
+import signal
 import sys
 import time
 
@@ -92,6 +93,11 @@ class _Threads:
 
 def worker_main(argv: list[str] | None = None) -> int:
     del argv  # everything arrives on stdin
+    # The front end owns this process's lifetime (end of stdin ends it). A
+    # Ctrl-C in the terminal of a foreground server reaches the whole process
+    # group, and a traceback from every worker would only bury the server's
+    # own exit in its log.
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     out = _claim_stdout()
     stdin = sys.stdin.buffer
     spec = read_message(stdin)
