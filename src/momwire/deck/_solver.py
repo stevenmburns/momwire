@@ -111,7 +111,18 @@ _C_LIGHT = C_LIGHT  # momwire#456: one owner, in `momwire._constants`
 # free.
 BASES = MappingProxyType(
     {
-        "bspline": (BSplineSolver, MappingProxyType({})),
+        # bs2 asks for the exact ring kernel where a segment is fat for its
+        # length (momwire#1428): "auto" resolves True only when some segment
+        # has h/a < `BSplineSolver.EXACT_KERNEL_AUTO_H_OVER_A` (3), so every
+        # mesh above that builds the call it always did, bit for bit. It is
+        # bound HERE, on the roster name, so every front end that reads
+        # `bspline` -- the NEC-5 and NEC-4.2 seams (`momwire.eznec`, SimNEC's
+        # and EZNEC's `momwire-nec5-bspline`), the nec2 portal and
+        # `build_solver` -- solves the deck antennaknobs' bs2 solves
+        # (antennaknobs#1965 passes "auto" there by default). Not on
+        # `bspline-d1`, whose degree the exact kernel was never gated at, nor
+        # on the H-matrix / array-block subclasses, which do not serve it.
+        "bspline": (BSplineSolver, MappingProxyType({"exact_kernel": "auto"})),
         "bspline-d1": (BSplineSolver, MappingProxyType({"degree": 1})),
         "hmatrix": (HMatrixSolver, MappingProxyType({})),
         "arrayblock": (ArrayBlockSolver, MappingProxyType({})),
