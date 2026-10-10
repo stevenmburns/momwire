@@ -6286,6 +6286,38 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
     # ------------------------------------------------------------------
     # field readout
 
+    def _end_wings(self, geom):
+        """``(wire, knot, wing indices)`` for every wire END that junction
+        wings sit on: ``knot`` is 0 or -1, and the indices (ascending) select
+        the flattened junction wings whose ``(segment, rise)`` is that end's
+        — exactly the boolean masks :meth:`currents_at_knots` used to build
+        per wire per call, so the sums over them are the same sums.
+
+        A function of the geometry alone, so it is kept beside it ON THE
+        SOLVER (momwire#1420), stamped with the geometry dict it came from:
+        a run reads its knot currents several times, and each read paid two
+        masks per wire."""
+        kept = self.__dict__.get("_end_wings_kept")
+        if kept is not None and kept[0] is geom:
+            return kept[1]
+        n_interior = geom["n_basis_interior"]
+        seg_offsets = geom["seg_offsets"]
+        j_seg = geom["wing_seg"][n_interior:].reshape(-1)
+        j_rise = geom["wing_rise"][n_interior:].reshape(-1)
+        by_end: dict[tuple[int, bool], list[int]] = {}
+        for k, (seg, rise) in enumerate(zip(j_seg.tolist(), j_rise.tolist())):
+            by_end.setdefault((int(seg), bool(rise)), []).append(k)
+        table = []
+        for w_idx in range(len(geom["per_wire"])):
+            start = by_end.get((int(seg_offsets[w_idx]), False))
+            if start:
+                table.append((w_idx, 0, np.asarray(start, dtype=np.intp)))
+            end = by_end.get((int(seg_offsets[w_idx + 1]) - 1, True))
+            if end:
+                table.append((w_idx, -1, np.asarray(end, dtype=np.intp)))
+        self.__dict__["_end_wings_kept"] = (geom, table)
+        return table
+
     @_wire_spec.reads_input_wires("per_wire")
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh knot (momwire#309 unit 3).
@@ -6337,14 +6369,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         coeffs = np.asarray(coeffs)
         geom = self._build_geometry()
         per_wire = geom["per_wire"]
-        seg_offsets = geom["seg_offsets"]
         basis_offsets = geom["basis_offsets"]
         n_interior = geom["n_basis_interior"]
-        wing_seg, wing_rise, wing_sigma = (
-            geom["wing_seg"],
-            geom["wing_rise"],
-            geom["wing_sigma"],
-        )
+        wing_seg, wing_sigma = geom["wing_seg"], geom["wing_sigma"]
 
         out = []
         for w_idx, pw in enumerate(per_wire):
@@ -6358,19 +6385,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # Flatten the junction tents' two wings into one (seg, rise,
             # sigma, coeff) list per side, so a wire's end knot is just
             # "every wing whose (segment, rise) is that end's".
-            j_seg = wing_seg[n_interior:].reshape(-1)
-            j_rise = wing_rise[n_interior:].reshape(-1)
             j_sigma = wing_sigma[n_interior:].reshape(-1)
             j_coeff = np.repeat(coeffs[n_interior:], 2)
-            for w_idx in range(len(per_wire)):
-                start_seg = seg_offsets[w_idx]
-                end_seg = seg_offsets[w_idx + 1] - 1
-                at_start = (j_seg == start_seg) & ~j_rise
-                if at_start.any():
-                    out[w_idx][0] = (j_sigma[at_start] * j_coeff[at_start]).sum()
-                at_end = (j_seg == end_seg) & j_rise
-                if at_end.any():
-                    out[w_idx][-1] = (j_sigma[at_end] * j_coeff[at_end]).sum()
+            for w_idx, knot, wings in self._end_wings(geom):
+                out[w_idx][knot] = (j_sigma[wings] * j_coeff[wings]).sum()
 
         if s_array is None:
             return out
@@ -6427,7 +6445,10 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         for w_idx, pw in enumerate(per_wire):
             arc = pw["arc_at_knot"]
             # One constant per segment, and the whole of the derivative.
-            slope = np.diff(knot_currents[w_idx]) / np.diff(arc)
+            # (Spelled as the slices `np.diff` computes, without its wrapper:
+            # momwire#1420.)
+            knots = knot_currents[w_idx]
+            slope = (knots[1:] - knots[:-1]) / (arc[1:] - arc[:-1])
             s_eval = (
                 arc if s_array is None else np.asarray(s_array[w_idx], dtype=np.float64)
             )
@@ -6437,8 +6458,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             s_eval = np.clip(s_eval, arc[0], arc[-1])
             # `side="right"` is the right-hand span; the clip puts the final
             # knot back on the last one.
-            span = np.clip(
-                np.searchsorted(arc, s_eval, side="right") - 1, 0, slope.shape[0] - 1
+            span = np.minimum(
+                np.maximum(np.searchsorted(arc, s_eval, side="right") - 1, 0),
+                slope.shape[0] - 1,
             )
             out.append(np.asarray(slope[span], dtype=np.complex128))
         return out
