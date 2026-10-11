@@ -176,13 +176,17 @@ def _close(printed: complex, exact: complex) -> bool:
 # the roster
 
 
-def test_the_roster_binds_auto_on_bs2_and_nowhere_else():
+def test_the_roster_binds_auto_on_bs2_and_razor_and_nowhere_else():
     assert BASES["bspline"][1]["exact_kernel"] == "auto"
     assert NEC2_BASES["bspline"][1]["exact_kernel"] == "auto"
-    others = {name for name, (_c, kw) in BASES.items() if "exact_kernel" in kw}
-    assert others == {"bspline"}
-    # The name it binds must be a choice the class declares.
-    assert "auto" in BSplineSolver.EXACT_KERNEL_CHOICES
+    bound = {name for name, (_c, kw) in BASES.items() if "exact_kernel" in kw}
+    # razor-2p and its deprecated spelling since momwire#1433.
+    assert bound == {"bspline", "razor-2p", "razor-nec5"}
+    # The name it binds must be a choice each class declares.
+    for name in bound:
+        cls, kw = BASES[name]
+        assert kw["exact_kernel"] == "auto"
+        assert "auto" in cls.EXACT_KERNEL_CHOICES
 
 
 # --------------------------------------------------------------------------
@@ -234,7 +238,7 @@ def test_the_one_shot_render_and_the_daemon_agree(corrections):
     assert corrections == [12, 12]
 
 
-@pytest.mark.parametrize("basis", ["bspline-d1", "razor-2p", "sinusoidal"])
+@pytest.mark.parametrize("basis", ["bspline-d1", "sinusoidal"])
 def test_other_bases_are_untouched(corrections, basis):
     _shell.render(_deck(FAT), basis=basis)
     assert corrections == []
