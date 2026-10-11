@@ -350,6 +350,7 @@ it on, and each is gated with it on.
 
 from dataclasses import dataclass
 import os
+import warnings
 
 import math
 
@@ -362,6 +363,8 @@ from . import (
     _ground_spec,
     _medium_spec,
     _crossing_fill,
+    _exact_kernel,
+    _exact_kernel_seam,
     _near_interface,
     _potential_ground,
     _razor_class,
@@ -800,6 +803,50 @@ def derive_n_qp_path(k, wires_polylines, n_per_edge_per_wire):
     if k * h_max <= PATH_ORDER_KH_SWITCH:
         return PATH_ORDER_FINE
     return PATH_ORDER_COARSE
+
+
+# momwire#1433: the exact-kernel correction's assembly in C++.
+_HAVE_EXACT_POINT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
+    _acc, "exact_kernel_point_assemble"
+)
+
+
+def _point_assemble_numpy(
+    dM0,
+    dM1,
+    row_m,
+    row_o,
+    row_cA,
+    row_cP,
+    col_ptr,
+    col_n,
+    ent_j,
+    ent_t,
+    ent_rise,
+    ent_q,
+    h,
+    Z,
+):
+    """The numpy twin of `exact_kernel_point_assemble` (the reference it is
+    gated against, and the route without the accelerator):
+
+        Z[m, n] += cA Σ_e t_e Δmom_e(o) - cP Σ_e q_e ΔM0(o, j_e)
+
+    over row entries (m, o, cA, cP) and each column n's wing entries e."""
+    nb = col_n.size
+    ncount = np.diff(col_ptr)
+    ecol = np.repeat(np.arange(nb), ncount)
+    d1 = dM1[:, ent_j] / h[ent_j]
+    mom = np.where(ent_rise.astype(bool), d1, dM0[:, ent_j] - d1)
+    P1 = np.zeros((dM0.shape[0], nb), dtype=np.complex128)
+    P0 = np.zeros((dM0.shape[0], nb), dtype=np.complex128)
+    np.add.at(P1.T, ecol, (mom * ent_t).T)
+    np.add.at(P0.T, ecol, (dM0[:, ent_j] * ent_q).T)
+    contrib = row_cA[:, None] * P1[row_o] - row_cP[:, None] * P0[row_o]
+    um, inv = np.unique(row_m, return_inverse=True)
+    acc = np.zeros((um.size, nb), dtype=np.complex128)
+    np.add.at(acc, inv, contrib)
+    Z[np.ix_(um, col_n)] += acc
 
 
 def _use_razor_fill_accel():
@@ -1419,7 +1466,12 @@ def _same_stamp(a, b) -> bool:
     return a[0] is b[0] and a[1] == b[1] and a[2] == b[2] and a[3] is b[3]
 
 
-class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
+class RazorSolver(
+    _exact_kernel_seam.ExactKernelOption,
+    _ElementCurrents,
+    _SweptPortSolutions,
+    _Cancelable,
+):
     """Tent-basis MoM with razor-blade (mixed-potential path) testing.
 
     The NEC-5 formulation twin — see the module docstring for the physics.
@@ -1758,6 +1810,7 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         nsegs=101,
         wire_radius=0.0005,
         extended_kernel=False,
+        exact_kernel=False,
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
@@ -1984,6 +2037,12 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 f"{_below_interface.BURIED_EXTENDED_KERNEL_REFUSAL}"
             )
         self._cached_ek_groups = None
+        # The exact ring kernel on coaxial pairs (momwire#1433), through the
+        # shared option (`_exact_kernel_seam`): False -- the default -- is
+        # structurally absent (no line of the correction runs), True is
+        # refused by name on the routes it does not serve, and "auto" is
+        # resolved at the end of __init__ once the mesh is final.
+        self._exact_kernel_init(exact_kernel)
 
         if n_per_edge_per_wire is None:
             n_per_edge_per_wire = [None] * n_w
@@ -2178,16 +2237,24 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
         self.z = None
         self._cached_geometry = None
+        if self.exact_kernel_requested == "auto":
+            self.exact_kernel = self._resolve_exact_kernel_auto()
+        # The advisories read the RESOLVED kernel (momwire#1412/#1433).
+        exact_runs, servable = self._exact_kernel_resolved()
         # momwire#1378: any segment under two radii, anywhere (not only at a gap).
-        # Advisory, once per solver, on the final mesh.
+        # Advisory, once per solver, on the final mesh; silent where the exact
+        # ring kernel runs.
         _wire_spec.advise_short_segments(
             type(self).__name__,
             self.wires_polylines,
             self.n_per_edge_per_wire,
             self._radius_per_wire,
+            exact_kernel=exact_runs,
         )
-        # momwire#959 (a stopgap until #1330): segments below the radius AT A
-        # GAP leave the delta-gap model unreliable. Advisory, once per solver.
+        # momwire#959: segments below the radius AT A GAP. Advisory, once per
+        # solver. Razor's gaps are knots of zero width, so under the exact
+        # kernel the text states the drift and points at bspline's end-port
+        # feed rather than offering one (`EXACT_KERNEL_FIXED_GAP_FEED`).
         _wire_spec.advise_gap_mesh_floor(
             type(self).__name__,
             self.wires_polylines,
@@ -2196,7 +2263,29 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             self.extended_kernel,
             _wire_spec.solver_gaps(self),
             gap_model="knot",
+            exact_kernel=True if exact_runs else (False if servable else None),
+            fixed_gap_feed=self.EXACT_KERNEL_FIXED_GAP_FEED,
         )
+        if self.exact_kernel_requested is True and self.feeds:
+            warnings.warn(
+                _exact_kernel_seam.point_gap_warning(self.EXACT_KERNEL_FIXED_GAP_FEED),
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    # -- the exact-kernel option's hooks (`_exact_kernel_seam`, momwire#1433)
+    # Razor's feeds are knots: no gap of fixed width to offer.
+    EXACT_KERNEL_FIXED_GAP_FEED = False
+
+    def _exact_kernel_buried(self):
+        return bool(self._below_plane or self._detached or self._crossing)
+
+    def _exact_kernel_lossy(self):
+        return bool(np.iscomplexobj(self.k))
+
+    def _exact_kernel_h_and_a(self):
+        geom = self._build_geometry()
+        return geom["seg_h"], self._seg_radius(geom)
 
     # ------------------------------------------------------------------
     # geometry
@@ -4359,6 +4448,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         is made here and not left to the source blocks.
         """
         _refuse_other_restriction(prepared.get("restrict_key"), restrict)
+        # The exact ring kernel (momwire#1433): refused by name on a route it
+        # does not serve under True, skipped under "auto"; False reads nothing.
+        use_exact = self._exact_kernel_fill_gate(restrict, False)
         crossing = getattr(self, "_crossing", False)
         detached = getattr(self, "_detached", False)
         if crossing or detached:
@@ -4388,6 +4480,9 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         Z = self._assemble_Z_source_block(
             geom, prepared, prepared, k, omega, restrict=restrict
         )
+        if use_exact:
+            self._checkpoint()
+            self._add_exact_kernel_correction(Z, geom, k, omega)
         image = prepared["image"]
         if image is not None:
             # The ground object is built HERE, not carried from the prepare
@@ -4411,6 +4506,182 @@ class RazorSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # and the composing one.
         self._load_in_place(Z, prepared, geom, omega, restrict=restrict)
         return Z
+
+    # ------------------------------------------------------------------
+    # the exact ring kernel on coaxial pairs (momwire#1433)
+    # ------------------------------------------------------------------
+
+    def _add_exact_kernel_correction(self, Z, geom, k, omega):
+        """Z += (Z_exact - Z_base) over every coaxial equal-radius group.
+
+        Razor's matrix element is linear in two moment tables, M0[o, j] =
+        ∫_seg_j g dl' and M1[o, j] = ∫_seg_j τ' g dl', taken at observer
+        POINTS o (`_seg_moments`): the testing-path nodes for T1 (under
+        `nec5_quadrature` the wing centroids) and the segment centroids for
+        T2. On a coaxial pair the observer lies on the source's own line at
+        its own radius, so the exact ring kernel replaces g there exactly,
+        and the replacement is the kernel layer's 1-D point moments
+        (`_exact_kernel.point_rows`: τ'^q, q = 0, 1, against K, the log
+        singularity integrated in closed form). Nothing two-dimensional is
+        needed: a path-tested row has no outer integral. The derivation is
+        `scratch/1433/DERIVATION.md`.
+
+        Per group the correction is the fill's own algebra applied to
+        ΔM = M_exact - M_base on the group's pairs, M_base recomputed through
+        `_seg_moments` with the fill's kernel spec (reduced or EK) at the
+        same observer points, so it removes what the fill put there to
+        roundoff:
+
+            ΔT1[m, n] = Σ_nodes w (t_obs·axis) Σ_wings (σ t_src·axis) Δmom
+            ΔT2[m, n] = Σ_wings q (ΔM0[c_after(m)] - ΔM0[c_before(m)])
+            ΔZ        = jωμ ΔT1 - ΔT2 / (jωε)
+
+        with Δmom = ΔM1/h on a rising wing and ΔM0 - ΔM1/h on a falling one
+        (`_source_block_rows`' wing algebra); a grounded row has no before
+        centroid. The free-space block only: an image keeps the fill's
+        kernel, as bs2's does. Walked by observer windows of each group, so
+        the transient is a window's (rows, n_group) tables; the assembly is
+        C++ (`exact_kernel_point_assemble`) where built.
+        """
+        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
+        n_seg = seg_h.size
+        seg_r = seg_p0 + seg_h[:, None] * seg_t
+        seg_a = np.asarray(self._seg_radius(geom), dtype=float)
+        wing_seg, wing_sigma = geom["wing_seg"], geom["wing_sigma"]
+        wing_rise = geom["wing_rise"]
+        n_basis = wing_seg.shape[0]
+        grounded = np.zeros(n_basis, dtype=bool)
+        grounded[np.asarray(geom["grounded_bases"], dtype=np.int64)] = True
+        pts, tans, wts = self._testing_paths(geom)
+        n_path = pts.shape[1]
+        half = n_path // 2
+        node_seg = np.concatenate(
+            [
+                np.repeat(wing_seg[:, :1], half, 1),
+                np.repeat(wing_seg[:, 1:], half, 1),
+            ],
+            1,
+        )
+        cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
+        on_cent = bool(self.nec5_quadrature and n_path == 2)
+        c_A = 1j * omega * self.mu
+        c_Phi = 1j * omega * self.eps
+        # The fill's kernel spec, so the base moments are the fill's.
+        src_lab = obs_rad = None
+        if self.extended_kernel:
+            src_lab, _img = self._ek_labels(geom, mirror=self.ground_z is not None)
+            obs_rad = None if np.all(seg_a == seg_a[0]) else seg_a
+        accel = _HAVE_EXACT_POINT_ASSEMBLE_ACCEL and _exact_kernel.point_accel_serves(
+            k, 2
+        )
+        _labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
+        for _g, S in groups:
+            n = S.size
+            axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_p0, seg_r, seg_t)
+            loc = np.full(n_seg, -1, dtype=np.int64)
+            loc[S] = np.arange(n)
+            # Columns: every live wing on the group, grouped by basis (CSR).
+            eb, ej, et, er, eq = [], [], [], [], []
+            for w in (0, 1):
+                ss = wing_seg[:, w]
+                b = np.flatnonzero((loc[ss] >= 0) & (wing_sigma[:, w] != 0))
+                j = loc[ss[b]]
+                eb.append(b)
+                ej.append(j)
+                et.append(wing_sigma[b, w] * sgn[j])
+                er.append(wing_rise[b, w])
+                eq.append(
+                    wing_sigma[b, w] * np.where(wing_rise[b, w], 1.0, -1.0) / h[j]
+                )
+            eb = np.concatenate(eb)
+            if eb.size == 0:
+                continue
+            order = np.argsort(eb, kind="stable")
+            eb = eb[order]
+            ent = [
+                np.ascontiguousarray(np.concatenate(x)[order]) for x in (ej, et, er, eq)
+            ]
+            ent[0] = ent[0].astype(np.int64)
+            ent[2] = ent[2].astype(np.uint8)
+            B, first = np.unique(eb, return_index=True)
+            col_ptr = np.append(first, eb.size).astype(np.int64)
+            # Observers: the group's centroids (T2; T1 too under
+            # `nec5_quadrature`), then the path nodes on the group otherwise.
+            # Row entries (m, observer, jωμ-side coefficient, 1/jωε-side one).
+            obs_pt, obs_seg = [cent[S]], [S]
+            r_m, r_o, r_A, r_P = [], [], [], []
+            for w, sign in ((0, -1.0), (1, 1.0)):
+                rows = np.flatnonzero(loc[wing_seg[:, w]] >= 0)
+                cP = np.full(rows.size, sign / c_Phi, dtype=np.complex128)
+                if w == 0:
+                    cP[grounded[rows]] = 0.0
+                cA = np.zeros(rows.size, dtype=np.complex128)
+                if on_cent:
+                    cA = c_A * wts[rows, w] * (tans[rows, w] @ axis)
+                r_m.append(rows)
+                r_o.append(loc[wing_seg[rows, w]])
+                r_A.append(cA)
+                r_P.append(cP)
+            if not on_cent:
+                mm, pp = np.nonzero(loc[node_seg] >= 0)
+                obs_pt.append(pts[mm, pp])
+                obs_seg.append(node_seg[mm, pp])
+                r_m.append(mm)
+                r_o.append(n + np.arange(mm.size))
+                r_A.append(c_A * wts[mm, pp] * np.einsum("ij,j->i", tans[mm, pp], axis))
+                r_P.append(np.zeros(mm.size, dtype=np.complex128))
+            obs_pt = np.ascontiguousarray(np.concatenate(obs_pt))
+            obs_seg = np.concatenate(obs_seg)
+            obs_x = (obs_pt - seg_p0[S[0]]) @ axis
+            r_o = np.concatenate(r_o)
+            by_o = np.argsort(r_o, kind="stable")
+            r_o = r_o[by_o]
+            r_m = np.concatenate(r_m)[by_o].astype(np.int64)
+            r_A = np.ascontiguousarray(np.concatenate(r_A)[by_o])
+            r_P = np.ascontiguousarray(np.concatenate(r_P)[by_o])
+            exact = _exact_kernel.point_rows(
+                x0, sgn, h, float(seg_a[S[0]]), k, 2, max_cached=4 * n + 1024
+            )
+            sub = {
+                "seg_p0": seg_p0[S],
+                "seg_t": seg_t[S],
+                "seg_h": seg_h[S],
+                "seg_a": seg_a[S],
+            }
+            n_obs = obs_x.size
+            chunk = max(1, _CHUNK_ELEMS // max(1, 4 * n))
+            for o0 in range(0, n_obs, chunk):
+                o1 = min(n_obs, o0 + chunk)
+                self._checkpoint()
+                mom = exact.rows(obs_x[o0:o1])  # (2, rows, n)
+                ek = None
+                if src_lab is not None:
+                    o = obs_seg[o0:o1]
+                    ek = _EK(
+                        None,
+                        src_lab[o],
+                        src_lab[S],
+                        None if obs_rad is None else obs_rad[o],
+                    )
+                M0b, M1b = self._seg_moments(obs_pt[o0:o1], sub, k, ek=ek)
+                dM0 = np.subtract(mom[0], M0b, out=M0b)
+                dM1 = np.subtract(mom[1], M1b, out=M1b)
+                del mom
+                e0, e1 = np.searchsorted(r_o, [o0, o1])
+                args = (r_m[e0:e1], r_o[e0:e1] - o0, r_A[e0:e1], r_P[e0:e1])
+                if accel:
+                    _acc.exact_kernel_point_assemble(
+                        np.ascontiguousarray(dM0),
+                        np.ascontiguousarray(dM1),
+                        *args,
+                        col_ptr,
+                        B.astype(np.int64),
+                        *ent,
+                        np.ascontiguousarray(h),
+                        Z,
+                    )
+                else:
+                    _point_assemble_numpy(dM0, dM1, *args, col_ptr, B, *ent, h, Z)
 
     # ------------------------------------------------------------------
     # the crossing trunk's view of this solver (momwire#813)

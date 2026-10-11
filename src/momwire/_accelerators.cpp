@@ -39,5 +39,6 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_row_scatter(m);
     register_qp_pairs(m);
     register_exact_kernel(m);
+    register_exact_kernel_point(m);
 }
 
