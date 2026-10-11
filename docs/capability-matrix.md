@@ -25,17 +25,17 @@ column below — that dialect addresses segment centres, and a family
 that snaps to knots is refused there by name (momwire#821). The NEC-5
 dialect (`momwire.eznec`) addresses nodes and reads the whole roster.
 
-| `--basis`             | class                      | bound                  | `nec2` |
-| --------------------- | -------------------------- | ---------------------- | ------ |
-| `bspline`             | `BSplineSolver`            | `exact_kernel='auto'`  | yes    |
-| `bspline-d1`          | `BSplineSolver`            | `degree=1`             | yes    |
-| `hmatrix`             | `HMatrixSolver`            | —                      | yes    |
-| `arrayblock`          | `ArrayBlockSolver`         | —                      | yes    |
-| `sinusoidal`          | `SinusoidalSolver`         | —                      | yes    |
-| `sinusoidal-galerkin` | `SinusoidalGalerkinSolver` | —                      | yes    |
-| `razor-2p`            | `RazorSolver`              | `nec5_quadrature=True` | **no** |
-| `razor-nec5`          | `RazorSolver`              | `nec5_quadrature=True` | **no** |
-| `pulse`               | `HarringtonSolver`         | —                      | yes    |
+| `--basis`             | class                      | bound                                       | `nec2` |
+| --------------------- | -------------------------- | ------------------------------------------- | ------ |
+| `bspline`             | `BSplineSolver`            | `exact_kernel='auto'`                       | yes    |
+| `bspline-d1`          | `BSplineSolver`            | `degree=1`                                  | yes    |
+| `hmatrix`             | `HMatrixSolver`            | —                                           | yes    |
+| `arrayblock`          | `ArrayBlockSolver`         | —                                           | yes    |
+| `sinusoidal`          | `SinusoidalSolver`         | —                                           | yes    |
+| `sinusoidal-galerkin` | `SinusoidalGalerkinSolver` | —                                           | yes    |
+| `razor-2p`            | `RazorSolver`              | `exact_kernel='auto', nec5_quadrature=True` | **no** |
+| `razor-nec5`          | `RazorSolver`              | `exact_kernel='auto', nec5_quadrature=True` | **no** |
+| `pulse`               | `HarringtonSolver`         | —                                           | yes    |
 
 ## Axes
 
@@ -53,16 +53,16 @@ antennaknobs catalog's 103 designs carry a repeated shape, so
 refusing would take working capability off the rest, the Yagi class
 included).
 
-| class                      | `--basis`                                                              | `wire_loading` | `extended_kernel` | `junction_ports` | `node_gaps` | `knot_feeds` | `per_wire_radius` | `singular_enrichment` | `centre_feeds` |
-| -------------------------- | ---------------------------------------------------------------------- | -------------- | ----------------- | ---------------- | ----------- | ------------ | ----------------- | --------------------- | -------------- |
-| `BSplineSolver`            | `bspline (exact_kernel='auto')`, `bspline-d1 (degree=1)`               | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
-| `HMatrixSolver`            | `hmatrix`                                                              | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
-| `ArrayBlockSolver`         | `arrayblock`                                                           | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
-| `SinusoidalSolver`         | `sinusoidal`                                                           | yes            | yes               | **no**           | **no**      | **no**       | yes               | **no**                | yes            |
-| `SinusoidalGalerkinSolver` | `sinusoidal-galerkin`                                                  | yes            | yes               | yes              | yes         | yes          | yes               | **no**                | yes            |
-| `RazorSolver`              | `razor-2p (nec5_quadrature=True)`, `razor-nec5 (nec5_quadrature=True)` | yes            | yes               | **no**           | yes         | yes          | yes               | **no**                | **no**         |
-| `HarringtonSolver`         | `pulse`                                                                | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                | yes            |
-| `PulseSolver`              | —                                                                      | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                | yes            |
+| class                      | `--basis`                                                                                                        | `wire_loading` | `extended_kernel` | `junction_ports` | `node_gaps` | `knot_feeds` | `per_wire_radius` | `singular_enrichment` | `centre_feeds` |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------- | ----------------- | ---------------- | ----------- | ------------ | ----------------- | --------------------- | -------------- |
+| `BSplineSolver`            | `bspline (exact_kernel='auto')`, `bspline-d1 (degree=1)`                                                         | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `HMatrixSolver`            | `hmatrix`                                                                                                        | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `ArrayBlockSolver`         | `arrayblock`                                                                                                     | yes            | yes               | yes              | yes         | yes          | yes               | yes                   | yes            |
+| `SinusoidalSolver`         | `sinusoidal`                                                                                                     | yes            | yes               | **no**           | **no**      | **no**       | yes               | **no**                | yes            |
+| `SinusoidalGalerkinSolver` | `sinusoidal-galerkin`                                                                                            | yes            | yes               | yes              | yes         | yes          | yes               | **no**                | yes            |
+| `RazorSolver`              | `razor-2p (exact_kernel='auto', nec5_quadrature=True)`, `razor-nec5 (exact_kernel='auto', nec5_quadrature=True)` | yes            | yes               | **no**           | yes         | yes          | yes               | **no**                | **no**         |
+| `HarringtonSolver`         | `pulse`                                                                                                          | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                | yes            |
+| `PulseSolver`              | —                                                                                                                | **no**         | **no**            | **no**           | **no**      | **no**       | **no**            | **no**                | yes            |
 
 ## Grounds, contact and buried
 

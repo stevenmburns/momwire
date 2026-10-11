@@ -2298,7 +2298,14 @@ class RazorSolver(
     EXACT_KERNEL_FIXED_GAP_FEED = False
 
     def _exact_kernel_buried(self):
-        return bool(self._below_plane or self._detached or self._crossing)
+        # Read with defaults: probes that stub `_refuse_buried_geometry` (the
+        # wire-media gates) construct a solver whose route flags were never
+        # set, and the advisories ask this at construction.
+        return bool(
+            getattr(self, "_below_plane", False)
+            or getattr(self, "_detached", False)
+            or getattr(self, "_crossing", False)
+        )
 
     def _exact_kernel_lossy(self):
         return bool(np.iscomplexobj(self.k))
