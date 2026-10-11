@@ -77,9 +77,9 @@ def test_the_measured_failing_stencil_warns_and_its_neighbour_does_not(
     assert len(found) == 1
     msg = found[0]
     assert "source 0 (wire 0 at 0.12 m)" in msg
-    # bspline can take the exact kernel and names it (momwire#1412); the
-    # other families point at momwire#1330
-    fix = "momwire#1408" if cls is BSplineSolver else "momwire#1330"
+    # bspline and razor can take the exact kernel and name it (momwire#1412,
+    # #1433); the other families point at momwire#1330
+    fix = "momwire#1408" if cls in (BSplineSolver, RazorSolver) else "momwire#1330"
     assert fix in msg and "momwire#959" in msg
     assert "coarsen" not in msg and "fewer segments" not in msg
     assert _advice(cls, **_fed(*ok, **kw)) == []

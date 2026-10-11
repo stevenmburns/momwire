@@ -197,10 +197,12 @@ def test_gap_floor_off_names_the_exact_kernel():
     assert "momwire#1330" not in msg
 
 
+# Razor took the exact kernel in momwire#1433; its "could, did not" text
+# is held in tests/test_exact_kernel_razor_1433.py.
 @pytest.mark.parametrize(
     "cls, deck",
-    [(RazorSolver, _dipole(0.25)), (BSplineSolver, _screen(exact_kernel="auto"))],
-    ids=["razor", "bspline-buried"],
+    [(BSplineSolver, _screen(exact_kernel="auto"))],
+    ids=["bspline-buried"],
 )
 def test_gap_floor_without_an_exact_kernel_points_at_1330(cls, deck):
     # the buried deck's mast feed sits on a fine run: mesh it so
