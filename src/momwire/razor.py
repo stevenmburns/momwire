@@ -1521,6 +1521,26 @@ class RazorSolver(
         identical to `BSplineSolver`'s and `SinusoidalSolver`'s, so a deck's
         `EK` card reaches this class through the same `build_solver` line
         that reaches them.
+    exact_kernel: the exact ring kernel on coaxial pairs (momwire#1433),
+        `BSplineSolver`'s option with its semantics, through the shared
+        `_exact_kernel_seam`: False (the default) is structurally absent and
+        bit-for-bit the fill without it; True replaces, after the free-space
+        fill, the kernel of every pair of segments on ONE line at ONE radius
+        by K(z) = (1/2π)∮e^{-jkR}/(4πR)dφ, R² = z² + 4a²sin²(φ/2); "auto"
+        resolves at construction to True iff it is served and some segment
+        is shorter than 3 radii. Razor's rows are path-tested, so the
+        correction is the kernel layer's 1-D point moments ∫τ'^q K dτ' at the
+        observer points the fill uses, assembled by the fill's own wing
+        algebra (`_add_exact_kernel_correction`; derivation in
+        scratch/1433/DERIVATION.md). Bends, offset wires, images and the
+        Sommerfeld remainder keep `extended_kernel`'s kernel. Refused by name
+        (skipped under "auto"): buried wires, a complex wavenumber,
+        restricted-row fills. **Razor's feed is a knot gap of zero width**,
+        and under the exact kernel such a gap has no limiting reactance:
+        each halving of the segments at it adds about 4 ln2·ωε₀a of
+        susceptance, so X keeps drifting logarithmically where the thin-wire
+        kernels drift faster; conductance, currents away from the feed and
+        far fields converge. A gap of fixed width is bspline's end-port feed.
     ground_z: height of the ground plane, or None for free space. With
         `ground_eps` unset the plane is a perfect conductor. Over PEC this
         solver is gated against the licensed NEC-5 binary's own `GN 1`
