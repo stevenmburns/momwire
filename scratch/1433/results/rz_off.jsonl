@@ -1,0 +1,244 @@
+{"deck": "decks/0000_cardioid-l-network-feed.nec", "printout": "1161bd65015252a2", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0001_4-square-array-w-feed-system.nec", "printout": "6360be4f7bf4aea6", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0002_4-square-array-w-feed-system.nec", "printout": "6c0c74c531fc6a16", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0003_4-square-array-w-feed-system.nec", "printout": "3ec195f1dc9e1cbc", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0004_4-square-array-w-feed-system.nec", "printout": "986edb66d84ffdd0", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0005_4-square-array-w-feed-system.nec", "printout": "0fad6a43bd459824", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0006_4-square-array-w-feed-system.nec", "printout": "03d00d1f08553e1e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0007_4-square-array-w-feed-system.nec", "printout": "96b9eca52462d4b8", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0008_4-square-array-w-feed-system.nec", "printout": "769e5c9535c8e4df", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0009_4-square-array-w-feed-system.nec", "printout": "62b5e2679b1ea9bf", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0010_dipole-in-free-space.nec", "printout": "df96711ccf03fa8a", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0011_dipole-with-coax-feedline.nec", "printout": "823b27ae568c452f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0012_network-connection-test.nec", "printout": "4c3b6bf1214fb12e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0013_vhf-ground-plane.nec", "printout": "2842501007169760", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0014_network-connection-test.nec", "printout": "9dab53b30143005f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0015_vertical-over-real-ground.nec", "printout": "e88a6e616ea3c670", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0016_network-connection-test.nec", "printout": "bbe872e7c3724ce6", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0017_network-connection-test.nec", "printout": "7d831ca8e6fdf7ff", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0018_network-connection-test.nec", "printout": "974420ef41dcedea", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0019_vertical-over-real-ground.nec", "printout": "64d3cb662972aa4d", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0020_vertical-over-real-ground.nec", "printout": "cf5aacb15301fbb5", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0021_vertical-over-real-ground.nec", "printout": "e9d4a630642b8894", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0022_vertical-over-real-ground.nec", "printout": "85eccf90e8911cd1", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "decks/0023_4-square-array-l-ntwk-feed.nec", "printout": "04bb49ffb6f61cdf", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0024_4-square-array-w-feed-system.nec", "printout": "c5d83520f4b8140f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0025_4-sq-l-ntwrk-z-match.nec", "printout": "12039dd334e98374", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0026_cardioid-with-feed-system.nec", "printout": "a40bc797ed398310", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0027_cardioid-with-feed-system.nec", "printout": "e7971036a2b1f57e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0028_17-10m-log-per-arrl-ant-book.nec", "printout": "b8890576bda517a9", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0029_dipole-with-coax-feedline.nec", "printout": "68be3917df44a655", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0030_dipole-with-coax-feedline.nec", "printout": "b8f73e32cd1dc4c7", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0031_40-meter-four-square-array.nec", "printout": "99aa7ad9dd6dcb9a", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0032_cardioid.nec", "printout": "3150852378ff31be", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0033_elevated-radial-system.nec", "printout": "0f8343cecf1760d9", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0034_elevated-radial-system.nec", "printout": "14e68b97111f49dd", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0035_five-element-yagi.nec", "printout": "53ab202744436b04", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0036_dipole-in-free-space.nec", "printout": "be8fda3765c68f38", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0037_dipole-in-free-space.nec", "printout": "40d594dc96a8e668", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0038_dipole-in-free-space.nec", "printout": "e32148e1cf33ef55", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0039_dipole-in-free-space.nec", "printout": "0a16a83dba7606fa", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0040_dipole-in-free-space.nec", "printout": "01392148a34f4ff0", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0041_dipole-in-free-space.nec", "printout": "75d2e482246c89b0", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0042_dipole-in-free-space.nec", "printout": "295d5400a5bb8dd1", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0043_vertical-over-real-ground.nec", "printout": "778130822bc76377", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0044_vertical-over-real-ground.nec", "printout": "df307068d7b086ab", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0045_vertical-over-real-ground.nec", "printout": "1f57ce24ef09b7ea", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0046_vertical-over-real-ground.nec", "printout": "aa2633fc4006b54f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0047_vertical-over-real-ground.nec", "printout": "de404c7b7ffdc3c6", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0048_vertical-over-real-ground.nec", "printout": "5623c4b3890e4fa5", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0059_back-yard-inverted-vee.nec", "printout": "b73886fe4ce43cb6", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0060_back-yard-inverted-vee.nec", "printout": "0616dadd045b6966", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0063_15m-quad-ant-book-p-12-2.nec", "printout": "e276a37ea7d38d0f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0064_15m-quad-ant-book-p-12-2.nec", "printout": "303708acb679a06b", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0067_nbs-yagi-ant-book-p-18-7.nec", "printout": "8bae6b561972d7bc", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0068_nbs-yagi-ant-book-p-18-7.nec", "printout": "70e1cb1f4b7d0315", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0069_w8jk-with-0-1-wavelength-sp.nec", "printout": "4b97e4aac2307d1e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0070_w8jk-with-0-1-wavelength-sp.nec", "printout": "aa8d33a92e5e0aa4", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0075_field-day-special-jun-84-qst.nec", "printout": "385b0a1b3ba93962", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0076_field-day-special-jun-84-qst.nec", "printout": "e33e93853650b471", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0077_field-day-special-jun-84-qst.nec", "printout": "187eb7751e8a42ff", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0078_field-day-special-jun-84-qst.nec", "printout": "39396ec90b896d83", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0079_k5rp.nec", "printout": "aa4ea5d16201b837", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0080_k5rp.nec", "printout": "400fbda12c3b2a2d", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0081_n4pc-loop-cq-dec-1990.nec", "printout": "6672377e8340fd69", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0082_n4pc-loop-cq-dec-1990.nec", "printout": "9329222b0444e3c6", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0083_n4pc-loop-cq-dec-1990.nec", "printout": "2a549205d5624de2", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0084_n4pc-loop-cq-dec-1990.nec", "printout": "dfe9f3f918bfca3a", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0107_vertical-over-real-ground.nec", "printout": "92f597861ee165c7", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "decks/0108_vertical-over-real-ground.nec", "printout": "cebcc9b794f53c2e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0109_vertical-over-real-ground.nec", "printout": "c448e52036034177", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0110_vertical-over-real-ground.nec", "printout": "cb880d90125a2aad", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0111_vertical-over-real-ground.nec", "printout": "394b44306dddfc0e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0112_vertical-over-real-ground.nec", "printout": "8bfa1a7ab29369af", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "decks/0113_back-yard-dipole.nec", "printout": "377c2fc331dd22cb", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0114_back-yard-dipole.nec", "printout": "af5120849d76b399", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0115_back-yard-dipole.nec", "printout": "e25f98fde4ce324f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0116_40-meter-four-square-array.nec", "printout": "556707e9f72ab32e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0117_40-meter-four-square-array.nec", "printout": "5918c16e0b0e613f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0120_cardioid-l-network-feed.nec", "printout": "782f651d00ad0ea4", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "decks/0121_cardioid-l-network-feed.nec", "printout": "e06f5705136e747a", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_crossing_source_1282/dan_end1.nec", "printout": "9e02b3c8c3309352", "warn": ["CoarseCrossingNode", "ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_crossing_source_1282/dan_end1_via6.nec", "printout": "c14a3e7b7488fa79", "warn": ["CoarseCrossingNode", "ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_crossing_source_1282/dan_seg1end2.nec", "printout": "60b78514da22960d", "warn": ["CoarseCrossingNode", "ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_endcode_1092/invvee_apex.nec", "printout": "968056f7d2d3af75", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_endcode_1092/synthetic_ex_endcode.nec", "printout": "f9d654d1d8d9c02e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_gyrator_1134/Cardioidmodnec2.nec", "printout": "48aee1ca8c0997e8", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_gyrator_1134/Cardioidmodnec4.nec", "printout": "6dd39a442b8d3800", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_gyrator_1134/Cardioidmodnec5.nec", "printout": "d11dcba10a869ce8", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_gyrator_1134/gyrator_current.nec", "printout": "589a1663b5c1ba54", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_gyrator_1134/native_current.nec", "printout": "45899149f25207c3", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_ld01_1085/synthetic_ld01.nec", "printout": "d92590b741cdbb5f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_ld23_1088/synthetic_ld23.nec", "printout": "be2d56d86ec3060c", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_ld5_1082/synthetic_ld5.nec", "printout": "0e67f79de4fbca34", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_ld5_virtual_1096/synthetic_ld5_virtual.nec", "printout": "18f0404663e3d04f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0183.nec", "printout": "ad16718cf8159a8d", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0192.nec", "printout": "f49945eabc549f61", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0193.nec", "printout": "4db0be84457d3d94", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0194.nec", "printout": "8e838388551315f8", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0195.nec", "printout": "687e56402936e9bb", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0196.nec", "printout": "c4a3f9412f424360", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/0202.nec", "printout": "b3edecaecf1d1631", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_load_probes_1110/M_0120_ex4_plus_probe.nec", "printout": "67844f8ade0c2481", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_multi_run_1237/two-port-ground.nec", "printout": "24795a63d4f5a60b", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_multi_run_1237/two-port-xq.nec", "printout": "7c937c5a86adc489", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_multi_run_1237/two-port.nec", "printout": "8a14ac0a91df29ba", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_multi_voltage_network_1105/0187.nec", "printout": "f027adf95df7db7b", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_multi_voltage_network_1105/V_0120_two_voltage_through_network.nec", "printout": "695d82b9808e2fb9", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_ne_spherical_1257/dipole-ne1-free.nec", "printout": "d440641c4c1a6f73", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_ne_spherical_1257/dipole-ne1-ground.nec", "printout": "4224f946d97a04b1", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0223_dipole-ex6.nec", "printout": "a958d3332aaf42b4", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0224_dipole-ex0.nec", "printout": "e3c06601e6ebe3e5", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0225_dipole-ld4.nec", "printout": "257f0a8c5d5063e8", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0226_dipole-ld4-repeat.nec", "printout": "d0fcca9c60c53dc0", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0227_dipole-ld5-copper.nec", "printout": "82535bc096ba7689", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0228_dipole-10m-free.nec", "printout": "f03186da2d4a1662", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0229_dipole-10m-gn1.nec", "printout": "ed16dd6282b52b0f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0230_dipole-10m-gn1-gd.nec", "printout": "21c595633342354e", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0231_dipole-10m-gn2.nec", "printout": "56d0be0e671ae610", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0232_dipole-10m-gn3.nec", "printout": "197ef2e3247c49cd", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0233_dipole-13p9mhz-xq.nec", "printout": "301d9bb1befb31bf", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_nec42/0234_cardioid-l-network.nec", "printout": "159f197d2d6c5fe2", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0235_foursquare-tl.nec", "printout": "5bbed23f3228cf83", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0236_dipole-ex6-repeat.nec", "printout": "e5b29d4bc084ef3e", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0237_dipole-ex6-elevation.nec", "printout": "6845348a6f185529", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0238_dipole-ex6-3d.nec", "printout": "26ae16023785dd9f", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_nec42/0239_dipole-buried-gn3.nec", "printout": "98ab80f7843ecc6e", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "multisource/m1_cardioid-2-current-sources.nec", "printout": "4317f8dd8fb27ed2", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "multisource/m2_foursquare-4-current-sources.nec", "printout": "4ab7db8a74f3393f", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p10_fat_dipole.nec", "printout": "08fcf8f08dbe7b3c", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "probes/p11_ne1_free.nec", "printout": "8fffb3173a6c2eff", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p12_nh1_free.nec", "printout": "a3441f23e0e33001", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p13_ne1_gn3.nec", "printout": "bd24670bc14a1b44", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p14_ne0_gn3.nec", "printout": "69867d3a8be0e303", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p15_ne1_gn2.nec", "printout": "315b3a6ccd977f10", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p1_junction.nec", "printout": "4ab660a76d5cd1e4", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "probes/p2_three_frequencies.nec", "printout": "6e92d9bd00d75067", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p3_rlc_loads.nec", "printout": "35e0c14f7ed33812", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "probes/p4_near_field.nec", "printout": "1e50783a8d46524e", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p5_gd_xq.nec", "printout": "8bf3a5473651f28f", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "probes/p6_voltage_source_on_network.nec", "printout": "e98bd36e11b60343", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "probes/p7_gn2_7mhz.nec", "printout": "9fc6754056881322", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "probes/p8_two_runs.nec", "printout": "6beaa43d0d97ee73", "warn": ["RazorFarMeshClass"], "solvers": 2, "resolved": ["False"], "corr_calls": 0}
+{"deck": "probes/p9_above_and_buried_gn2.nec", "printout": "927c64ddffa44ee7", "warn": ["ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_one_field_ge_1116/WA7ARK-OCF-Load-Xfmr-TL.nec", "printout": "a75ecb50f138825b", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_one_field_ge_1116/WA7ARK-OCF-LoadOnly.nec", "printout": "b4853193659d31cc", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_phantom_1139/ground_rod_efhw_wa7ark.nec", "printout": "4592350f2ce310ca", "warn": ["CoarseCrossingNode", "ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_probe_ex_1099/synthetic_probe_ex.nec", "printout": "fb623d5c397c56f3", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_probe_ex_1099/synthetic_probe_ex_noprobe.nec", "printout": "e9de5e2c7d45201d", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_simnec_1230/dipole-ex5.nec", "printout": "81c147961c1879e3", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_simnec_1230/dipole-rp-norange.nec", "printout": "292131cbd78dbac2", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_simnec_1230/dipole-rp-range.nec", "printout": "e892e8ca4e5271af", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_split_1281/dan_through.nec", "printout": "5d3a6b828175bc42", "warn": ["CoarseCrossingNode", "ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "eznec_split_1281/hs_n204.nec", "printout": "dd34d6ad8ac6ec05", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_split_1281/hs_n21.nec", "printout": "02a1942d432ff8e6", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_split_1281/thr_n204.nec", "printout": "e1e9de73f57ded7e", "warn": [], "solvers": 0, "resolved": [], "corr_calls": 0}
+{"deck": "eznec_split_1281/thr_n21.nec", "printout": "27546a6d32302a5b", "warn": ["CoarseCrossingNode", "ExtendedKernelDefault", "RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "somm_far_1258/grazing-far.nec", "printout": "f47c13cbbf100fc3", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "somm_far_1258/grazing-near.nec", "printout": "6e9a487c0a264d10", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_1000.nec", "printout": "1d644c1cf5ccad9c", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_1400.nec", "printout": "156a3dd7e0de7d9f", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_160.nec", "printout": "62b5d2f96a80efd2", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_2000.nec", "printout": "0f4d5c5cb9a0d587", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_320.nec", "printout": "ce93500a7dc90590", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_40.nec", "printout": "403c524b20be08c1", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_500.nec", "printout": "17bbaa6029d377cd", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_700.nec", "printout": "75a506c0cf45a3ff", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to1_80.nec", "printout": "3410d1d5e690081a", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_1000.nec", "printout": "2680abc92f98c2c7", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_1400.nec", "printout": "6cbb4fbb28988c62", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_160.nec", "printout": "6082ddf85e0897bb", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_2000.nec", "printout": "68411929fd001063", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_320.nec", "printout": "2b57c91fbd612b81", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_40.nec", "printout": "dc48d31a1bbfa957", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_500.nec", "printout": "ba9b04efca9c57c8", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_700.nec", "printout": "aab5906fffcce7ff", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step16to8_80.nec", "printout": "b18bfcf2fb93c3f7", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_1000.nec", "printout": "dbe069298562e1f2", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_1400.nec", "printout": "472266b5bdfddc1c", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_160.nec", "printout": "5ceca6897463dd18", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_2000.nec", "printout": "a559627245d90fa6", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_320.nec", "printout": "ca31f58cf0076313", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_40.nec", "printout": "1e801e2e006547ae", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_500.nec", "printout": "48cf63bba473c951", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_700.nec", "printout": "0371f74fe478c322", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/step2to1_80.nec", "printout": "656d39793e521cd1", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_1000.nec", "printout": "ce05924b02ec51f1", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_1400.nec", "printout": "617f62a46ab7dd5b", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_160.nec", "printout": "2d1e323d6aef1da9", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_2000.nec", "printout": "75717c7780c6523a", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_320.nec", "printout": "133ac0511040ed65", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_40.nec", "printout": "e3d099c697ced513", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_500.nec", "printout": "8610818cf0bea009", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_700.nec", "printout": "3de60c29dcc03724", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/straight_80.nec", "printout": "4efd1c10bf0acede", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_1000.nec", "printout": "81641c918a45ba1f", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_1400.nec", "printout": "9ed015aa26490193", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_160.nec", "printout": "0ea9d28b58f1a890", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_2000.nec", "printout": "40c68fe7f65f136c", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_320.nec", "printout": "f9e3954b32698a58", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_40.nec", "printout": "c4bd85524849ccea", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_500.nec", "printout": "c9f83bd4f24086b0", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_700.nec", "printout": "cf7037ddacc39c2c", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/taper_80.nec", "printout": "bc2fd04a99974c05", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_1000.nec", "printout": "68d375b90f082730", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_1400.nec", "printout": "80ed3ff1f818cfca", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_160.nec", "printout": "573f24d1ff67572d", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_2000.nec", "printout": "851735a4536b600d", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_320.nec", "printout": "af10a1ab854ce105", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_40.nec", "printout": "6a04570dcaa75c88", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_500.nec", "printout": "ed8414dd08a69b45", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_700.nec", "printout": "a87876118931f73d", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u16_80.nec", "printout": "b92ab5060c4f26f4", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_1000.nec", "printout": "c1baba77988b4d33", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_1400.nec", "printout": "6345702cf17ad552", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_160.nec", "printout": "c85849ce40fc1ecb", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_2000.nec", "printout": "929dad6817a02045", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_320.nec", "printout": "a1ec1b9ff211432c", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_40.nec", "printout": "e785ab0865289bc3", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_500.nec", "printout": "5307ea4c98b448c4", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_700.nec", "printout": "48928c6df590f1bb", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/u1_80.nec", "printout": "9be111eec7da43fd", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1coarse_1000.nec", "printout": "37dd5bb7539d13a3", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1coarse_1400.nec", "printout": "e3ff41ca2473a40e", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1coarse_2000.nec", "printout": "2ac19a7fcaa9b21b", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1coarse_320.nec", "printout": "60f8db643a3310fc", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1coarse_700.nec", "printout": "a6303ccab112e4fb", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1fine_1000.nec", "printout": "c2e1113adcc21e31", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1fine_1400.nec", "printout": "2c3aea2e348aeae2", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1fine_2000.nec", "printout": "4e42c8dc6972d9a6", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1fine_320.nec", "printout": "60f8db643a3310fc", "warn": ["RazorFarMeshClass"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"deck": "dan_decks/w1fine_700.nec", "printout": "c9f140dde10fc228", "warn": ["RazorFarMeshClass", "ShortSegments"], "solvers": 1, "resolved": ["False"], "corr_calls": 0}
+{"catalog": "arrays.folded_invveearray", "Z": "f699c41dd9c21c45", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "arrays.moxonarray", "Z": "829768e45347bd45", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "beams.moxon", "Z": "607e33aa66f16aca", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "beams.owa_yagi", "Z": "db1e77564d5c312e", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "broadband.lpda", "Z": "be0e73d71165d3a1", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "dipoles.dipole_turnstile", "Z": "3ba611815b2119b2", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "loops.diamond_loop_turnstile", "Z": "81504f60185e61e1", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "loops.horizontal_loop", "Z": "6fb5d850ae259334", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "loops.skyloop_lmatch", "Z": "5c1612a050133844", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "loops.triangular_skyloop", "Z": "8e77baf874e121cd", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "wire.rhombic", "Z": "679a4af9812f5c6b", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "wire.sterba", "Z": "45cebe7820c611b8", "resolved": ["False"], "corr_calls": 0}
+{"catalog": "wire.sterba_bl", "Z": "a47d214509104411", "resolved": ["False"], "corr_calls": 0}
