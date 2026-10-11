@@ -327,3 +327,57 @@ def test_point_gap_warns_under_true_only():
         "no fixed-width gap" in m for m in rt(_warnings_of(exact_kernel=True, **FAT))
     )
     assert not rt(_warnings_of(exact_kernel="auto", **FAT))
+
+
+# -- the roster: razor-2p binds "auto" through the NEC-5 seam ------------------
+
+_SEAM_DECK = (
+    "CM synthetic fat-wire dipole (momwire#1433)\nCE\n"
+    "GW 1,12,0.,-.25,0.,0.,.25,0.,{a}\nGE 0,-1\n"
+    "FR 0,1,0,0,299.7925\nGN -1\nEX 4,1,6,0,1.414214,0.\nPQ 0\n"
+    "RP 0,1,37,1000,90.,0.,0.,10.,0.\nEN\n"
+)
+
+
+def _seam_counted(monkeypatch):
+    seen = []
+    orig = RazorSolver._add_exact_kernel_correction
+
+    def counted(self, *args):
+        seen.append(1)
+        return orig(self, *args)
+
+    monkeypatch.setattr(RazorSolver, "_add_exact_kernel_correction", counted)
+    return seen
+
+
+@pytest.mark.parametrize("basis", ["razor-2p", "razor-nec5"])
+def test_the_seam_runs_the_exact_kernel_on_a_fat_wire(monkeypatch, basis):
+    from momwire.eznec import _shell
+
+    seen = _seam_counted(monkeypatch)
+    _shell.render(_SEAM_DECK.format(a="0.02"), basis=basis)  # h/a 2.08
+    assert seen == [1]
+
+
+@pytest.mark.parametrize("a", ["0.0005", "0.013"])  # h/a 83 and 3.21
+def test_the_seam_prints_the_same_bytes_above_the_gate(monkeypatch, a):
+    from types import MappingProxyType
+
+    from momwire.deck import _solver
+    from momwire.eznec import _shell
+
+    seen = _seam_counted(monkeypatch)
+    ours = _shell.render(_SEAM_DECK.format(a=a), basis="razor-2p")
+    assert seen == []
+    monkeypatch.setattr(
+        _solver,
+        "BASES",
+        MappingProxyType(
+            {
+                **_solver.BASES,
+                "razor-2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
+            }
+        ),
+    )
+    assert _shell.render(_SEAM_DECK.format(a=a), basis="razor-2p") == ours

@@ -149,7 +149,18 @@ BASES = MappingProxyType(
         # convergence and certification work by constructing
         # `RazorSolver(...)` directly, whose `nec5_quadrature` kwarg
         # defaults to `False`.
-        "razor-2p": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
+        #
+        # Both razor names bind `exact_kernel="auto"` (momwire#1433), on the
+        # bs2 entry's terms: it engages only where some segment is under 3
+        # radii, so every mesh above that builds the call it always did, bit
+        # for bit. Below it, razor-2p's extended kernel leaves NEC-5's ladder
+        # (#1378, #1422), and the exact ring kernel puts it back on it: on
+        # Dan's tapered dipole at 2000 segs/lambda razor-2p reads X 0.355 ohm
+        # from NEC-5 and razor-2p exact 0.036 (scratch/1433, the PR's tables).
+        "razor-2p": (
+            RazorSolver,
+            MappingProxyType({"nec5_quadrature": True, "exact_kernel": "auto"}),
+        ),
         # DEPRECATED spelling of `razor-2p`, kept because it shipped: in the
         # EZNEC drop-in's launcher names (`momwire-eznec-razor-nec5`, which
         # momwire#819 keeps beside the current spelling) and in antennaknobs'
@@ -167,7 +178,10 @@ BASES = MappingProxyType(
         # Neither razor name serves the `nec2` dialect (momwire#821): see
         # `NEC2_BASES` below. Both stay in THIS roster because the NEC-5
         # dialect (`momwire.eznec`) reads it and serves them.
-        "razor-nec5": (RazorSolver, MappingProxyType({"nec5_quadrature": True})),
+        "razor-nec5": (
+            RazorSolver,
+            MappingProxyType({"nec5_quadrature": True, "exact_kernel": "auto"}),
+        ),
         # The pulse family, and ONE name for it (momwire#564), on momwire#654's
         # rule: a roster entry is a menu item, so it should be the dish worth
         # ordering. `HarringtonSolver` and `PulseSolver` are the same basis and
