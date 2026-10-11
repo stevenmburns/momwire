@@ -87,7 +87,51 @@ Razor's source is a delta gap at a knot, which has zero width. Under the exact k
 
 ## 7. Results
 
-See the PR (momwire#1433 part B) for the ladder tables. The raw JSON lines are in `results/`.
+All runs were on Haswell, from a fresh clone of the branch with a fresh venv. The raw JSON lines are in `results/`. NEC-5 is the licensed binary, run as a black box, and its numbers are antennaknobs' `scratch/dan-tapered-1422/tables.md` and `scratch/1327-endcap/bb/`. bs2 exact numbers are the same tables' `bs2-exact-auto` column.
+
+**Dan's tapered dipole (`taper`), source X in ohms, through the NEC-5 seam:**
+
+| segs/λ | min h/a | NEC-5 | razor-2p | razor-2p exact | bs2 exact | razor-2p − NEC-5 | razor-2p exact − NEC-5 |
+|---|---|---|---|---|---|---|---|
+| 320 | 4.17 | −0.1460 | −0.1503 | −0.1531 | +0.1008 | −0.0043 | −0.0071 |
+| 500 | 2.60 | −0.0379 | −0.0538 | −0.0572 | +0.0751 | −0.0159 | −0.0193 |
+| 700 | 1.89 | +0.0061 | −0.0292 | −0.0265 | +0.0298 | −0.0353 | −0.0326 |
+| 1000 | 1.33 | +0.0198 | −0.0499 | −0.0207 | −0.0262 | −0.0697 | −0.0405 |
+| 1400 | 0.95 | +0.0385 | −0.1287 | −0.0270 | −0.0830 | −0.1672 | −0.0655 |
+| 2000 | 0.66 | −0.0026 | −0.3571 | −0.0383 | −0.1444 | −0.3545 | −0.0357 |
+
+**At 2000 segs/λ (Δ/a 0.66), each variant of the family, X − NEC-5 in ohms:**
+
+| variant | razor-2p | razor-2p exact |
+|---|---|---|
+| taper | −0.355 | −0.036 |
+| straight | −0.573 | −0.050 |
+| u16 | +0.800 | +0.080 |
+| step16to8 | +0.340 | +0.060 |
+| step16to1 | −0.435 | −0.314 |
+
+R moves the same way. For u16 the values are NEC-5 90.558, razor-2p 92.124 and razor-2p exact 90.574. For straight they are 92.982, 93.350 and 92.969.
+
+**#1378's gap-free ladder** (5 m dipole, 28 MHz, a = 23.8 mm). S is the broadside short-circuit current; the table gives S − S_ref in µA, where S_ref is the body-of-revolution open tube:
+
+| N | Δ/a | NEC-5 | razor-2p | razor-2p exact | bs2 exact |
+|---|---|---|---|---|---|
+| 81 | 2.59 | +228+1999j | +236+1986j | +235+1973j | +85+566j |
+| 161 | 1.30 | +139+1020j | +129+909j | +143+1025j | +45+281j |
+| 321 | 0.65 | +75+501j | +16+83j | +78+514j | +23+133j |
+| 641 | 0.33 | +37+238j | −114−671j | +41+251j | +12+59j |
+| 1281 | 0.16 | +17+104j | −283−1487j | +21+118j | +6+22j |
+
+**#1408's fat dipole** (L = 0.47λ, d/λ 0.0085, knot/point gap). G = Re(1/Z) in mS, followed by the step per halving:
+
+| n (Δ/a) | razor-2p | razor-2p exact | bs2 exact |
+|---|---|---|---|
+| 74 (1.49) | 13.249 | 13.266 (−0.275) | 13.052 (−0.087) |
+| 150 (0.74) | 13.026 | 13.117 (−0.148) | 13.008 (−0.045) |
+| 300 (0.37) | 12.827 (Z 73.0−19.0j) | 13.042 (−0.076) | 12.986 (−0.022) |
+| 600 (0.18) | collapse (Z 0.004−0.55j) | 13.003 (−0.039) | 12.975 (−0.011) |
+
+The two exact lanes extrapolate to the same G: 12.965 and 12.964 mS. B per halving climbs toward 4 ln2·ωε₀a = 0.1965 mS on both exact lanes (razor-2p exact +0.090, +0.144; bs2 exact +0.165, +0.182), which is the knot gap's log drift of §6.
 
 ## 8. What sin (#1434) and SG (#1435) would reuse
 
