@@ -620,3 +620,219 @@ def coaxial_rows(x0, sgn, h, a, k, nd, max_cached=None):
     if accel_serves(k, nd):
         return CoaxialRowsAccel(x0, sgn, h, a, k, nd, max_cached=max_cached)
     return CoaxialRows(x0, sgn, h, a, k, nd, max_cached=max_cached)
+
+
+# --------------------------------------------------------------------------
+# point moments: the 1-D primitive (momwire#1433)
+# --------------------------------------------------------------------------
+# A point- or path-tested row (razor-2p's centroids, sin's match points)
+# observes the field at a POINT on the wire's surface, so what it needs of a
+# coaxial source segment is the 1-D moments of K against the source's local
+# polynomial,
+#
+#     N_q(c, h) = ∫₀^h v^q K(c + v) dv,      q < nq,
+#
+# with the observer at the origin and the segment running forward from c.
+# A segment that runs backward along the axis is the same integral with
+# c = σ(x₀ - x_obs) (K is even), so (c, h) is the whole geometry. The
+# singular point is v* = -c. The pieces from it outward take the same three
+# rules as `pair_moments`' pieces (the log split within 2a of it, geometric
+# grading beyond, one Gauss-Legendre rule on a piece at least its own length
+# away), with the polynomial v^q in place of the 2-D weight W_pq.
+
+
+def _point_piece(v0, sgn, d, ell, a, k, nq):
+    """∫_d^{d+ell} f(v0 + sgn·ζ) K(ζ) dζ for f = v^q, q < nq: (nq,) complex."""
+    if ell <= 0.0:
+        return np.zeros(nq, dtype=np.complex128)
+
+    def powers(zeta):
+        v = v0 + sgn * zeta
+        return v[:, None] ** np.arange(nq)[None, :]
+
+    def smooth(lo, hi):
+        z, w = _gl_on(lo, hi)
+        return (w * ring_kernel(z, a, k)) @ powers(z)
+
+    def graded(lo, hi):
+        tot = np.zeros(nq, dtype=np.complex128)
+        for c0, c1 in _chunks(lo, hi):
+            tot = tot + smooth(c0, c1)
+        return tot
+
+    def from_zero(b):
+        b0 = min(b, 2.0 * a)
+        x, w = _gl01(_N_SPLIT)
+        wl = _gl01_log(_N_SPLIT)
+        z = b0 * x
+        A, B = ring_kernel_split(z, a, k)
+        f = b0 * (w * (B + A * np.log(b0)) + wl * A)
+        tot = f @ powers(z)
+        if b > b0:
+            tot = tot + graded(b0, b)
+        return tot
+
+    if d >= ell:
+        return smooth(d, d + ell)
+    if d >= 2.0 * a:
+        return graded(d, d + ell)
+    out = from_zero(d + ell)
+    if d > 0.0:
+        out = out - from_zero(d)
+    return out
+
+
+def point_moments(c, h, a, k, nq):
+    """(nq,) complex N_q(c, h) = ∫₀^h v^q K(c + v) dv for ONE observer and
+    one coaxial source segment: `c` is the segment's start relative to the
+    observer along the direction the segment runs, `h` its length."""
+    vs = -float(c)
+    h = float(h)
+    if 0.0 < vs < h:
+        return _point_piece(vs, -1.0, 0.0, vs, a, k, nq) + _point_piece(
+            vs, 1.0, 0.0, h - vs, a, k, nq
+        )
+    if vs <= 0.0:
+        return _point_piece(vs, 1.0, -vs, h, a, k, nq)
+    return _point_piece(vs, -1.0, vs - h, h, a, k, nq)
+
+
+def point_moments_far(c, h, a, k, nq):
+    """Vectorised `point_moments` for segments at least their own length from
+    the observer (min |c + v| ≥ h): one Gauss-Legendre rule each. Arrays of
+    shape (P,); returns (nq, P)."""
+    c = np.asarray(c, dtype=np.float64)
+    h = np.asarray(h, dtype=np.float64)
+    x, w = _gl01(_N_GL)
+    v = h[:, None] * x[None, :]
+    Kz = ring_kernel(c[:, None] + v, a, k)
+    wv = h[:, None] * w[None, :] * Kz
+    return np.stack([np.sum(wv * v**q, axis=1) for q in range(nq)])
+
+
+class PointRows:
+    """The exact-kernel point moments of one coaxial group's source segments
+    at a set of observer points: the numpy reference of the C++
+    `ExactKernelPointRows`.
+
+    ``x0`` (n,) each segment's START along the axis, ``sgn`` (n,) ±1 its
+    direction, ``h`` (n,) its length; `rows(x_obs)` returns (nq, m, n) with
+    entry [q, o, j] = ∫₀^{h_j} τ^q K(x0_j + σ_j τ - x_o) dτ, τ the segment's
+    own arc from its start -- the source polynomial's coordinate. Pairs are
+    deduplicated on the quantised (c, h), and remembered across calls
+    (bounded by `max_cached`), so a uniform run costs O(n) kernel work.
+    """
+
+    def __init__(self, x0, sgn, h, a, k, nq, max_cached=None):
+        self.x0 = np.asarray(x0, dtype=np.float64)
+        self.sgn = np.asarray(sgn, dtype=np.float64)
+        self.h = np.asarray(h, dtype=np.float64)
+        self.n = self.x0.shape[0]
+        self.a, self.k, self.nq = a, k, nq
+        self.q = 1e-11 * float(np.max(self.h)) if self.n else 1.0
+        self.max_cached = max_cached
+        self.evaluated = 0
+        self._cache = {}
+
+    def rows(self, x_obs):
+        x_obs = np.asarray(x_obs, dtype=np.float64)
+        m, n, nq = x_obs.shape[0], self.n, self.nq
+        c = self.sgn[None, :] * (self.x0[None, :] - x_obs[:, None])
+        hh = np.broadcast_to(self.h[None, :], (m, n))
+        key = np.stack([np.round(c / self.q), np.round(hh / self.q)], -1).reshape(-1, 2)
+        uniq, first, inv = np.unique(
+            key, axis=0, return_index=True, return_inverse=True
+        )
+        inv = inv.ravel()
+        cf, hf = c.ravel()[first], hh.ravel()[first]
+        vals = np.empty((nq, uniq.shape[0]), dtype=np.complex128)
+        keys = list(map(tuple, uniq.tolist()))
+        miss = []
+        for u, t in enumerate(keys):
+            hit = self._cache.get(t)
+            if hit is None:
+                miss.append(u)
+            else:
+                vals[:, u] = hit
+        miss = np.asarray(miss, dtype=np.int64)
+        if miss.size:
+            dmin = np.where(
+                (cf[miss] <= 0.0) & (cf[miss] + hf[miss] >= 0.0),
+                0.0,
+                np.minimum(np.abs(cf[miss]), np.abs(cf[miss] + hf[miss])),
+            )
+            far = dmin >= hf[miss]
+            fm = miss[far]
+            if fm.size:
+                vals[:, fm] = point_moments_far(cf[fm], hf[fm], self.a, self.k, nq)
+            for u in miss[~far]:
+                vals[:, u] = point_moments(cf[u], hf[u], self.a, self.k, nq)
+            self.evaluated += int(miss.size)
+            for u in miss.tolist():
+                if self.max_cached is not None and len(self._cache) >= self.max_cached:
+                    break
+                self._cache[keys[u]] = vals[:, u].copy()
+        # into the segment's own coordinate: τ = v forward, τ = v too on a
+        # backward segment, whose c already carries σ (K is even).
+        return vals[:, inv].reshape(nq, m, n)
+
+
+_HAVE_POINT_ACCEL = _acc is not None and hasattr(_acc, "exact_kernel_point_1433")
+
+
+def _point_rules():
+    xg, wg = _gl01(_N_GL)
+    xs, ws = _gl01(_N_SPLIT)
+    return _acc.ExactKernelPointRules(xg, wg, xs, ws, _gl01_log(_N_SPLIT))
+
+
+class PointRowsAccel:
+    """`PointRows` through the C++ kernel (`_accel_exact_kernel_point.cpp`):
+    the same `rows(x_obs)` and `evaluated`, the cache bounded the same way,
+    and the pair keyed on the lesser of its mirror images."""
+
+    def __init__(self, x0, sgn, h, a, k, nq, max_cached=None, *, n_threads=0):
+        h = np.asarray(h, dtype=np.float64)
+        self.n = int(h.shape[0])
+        self.nq = nq
+        q = 1e-11 * float(np.max(h)) if self.n else 1.0
+        self._impl = _acc.ExactKernelPointRows(
+            np.asarray(x0, dtype=np.float64),
+            np.asarray(sgn, dtype=np.float64),
+            h,
+            float(a),
+            float(k),
+            int(nq),
+            -1 if max_cached is None else int(max_cached),
+            q,
+            _point_rules(),
+            int(n_threads),
+        )
+
+    @property
+    def evaluated(self):
+        return int(self._impl.evaluated)
+
+    def rows(self, x_obs):
+        x_obs = np.ascontiguousarray(x_obs, dtype=np.float64)
+        out = np.empty((self.nq, x_obs.shape[0], self.n), dtype=np.complex128)
+        self._impl.rows(x_obs, out)
+        return out
+
+
+def point_accel_serves(k, nq):
+    """Whether the C++ point route takes this group (and is switched on)."""
+    return (
+        _HAVE_POINT_ACCEL
+        and _USE_ACCEL
+        and nq <= _ACCEL_MAX_ND
+        and not np.iscomplexobj(k)
+    )
+
+
+def point_rows(x0, sgn, h, a, k, nq, max_cached=None):
+    """The point-moment source a solver walks: C++ where it serves
+    (`PointRowsAccel`), else the numpy `PointRows`."""
+    if point_accel_serves(k, nq):
+        return PointRowsAccel(x0, sgn, h, a, k, nq, max_cached=max_cached)
+    return PointRows(x0, sgn, h, a, k, nq, max_cached=max_cached)

@@ -285,6 +285,10 @@ else:
 # spent a benchmark round comparing a stale .so against numpy and read a 6x
 # speedup where the current code had 19x. Every new inline header belongs here.
 _ACCEL_HEADERS = [
+    # momwire#1433: the exact ring kernel and its dedup table, shared by the
+    # 1410 pair-moment TU and the 1433 point-moment TU.
+    "src/momwire/_exact_kernel_ring_inline.h",
+    "src/momwire/_exact_kernel_table_inline.h",
     "src/momwire/_bspline_static_moments_inline.h",
     "src/momwire/_bspline_ek_moments_inline.h",
     "src/momwire/_contour_engine_inline.h",
@@ -366,6 +370,10 @@ _ACCEL_SOURCES = [
     # row-window dedup. Its own TU so that no existing kernel's codegen can
     # move with it (momwire#1187).
     "src/momwire/_accel_exact_kernel.cpp",
+    # momwire#1433: the exact ring kernel's point moments (razor-2p, and the
+    # point-tested families after it). Its own TU for 1410's reason; the
+    # kernel itself is the shared `_exact_kernel_ring_inline.h`.
+    "src/momwire/_accel_exact_kernel_point.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
