@@ -28,12 +28,14 @@ from momwire.razor import RazorSolver
 
 
 def test_razor_2p_and_razor_nec5_are_in_the_roster():
+    # exact_kernel="auto" since momwire#1433 (bit-identical above h/a 3).
+    want = {"nec5_quadrature": True, "exact_kernel": "auto"}
     solver_class, kwargs = BASES["razor-2p"]
     assert solver_class is RazorSolver
-    assert dict(kwargs) == {"nec5_quadrature": True}
+    assert dict(kwargs) == want
     solver_class, kwargs = BASES["razor-nec5"]
     assert solver_class is RazorSolver
-    assert dict(kwargs) == {"nec5_quadrature": True}
+    assert dict(kwargs) == want
 
 
 def test_plain_razor_retired_from_the_roster_753():
@@ -66,7 +68,14 @@ def test_razor_2p_is_the_current_spelling_and_razor_nec5_an_alias():
     two_p, kw_2p = BASES["razor-2p"]
     alias, kw_alias = BASES["razor-nec5"]
     assert two_p is alias is RazorSolver
-    assert dict(kw_2p) == dict(kw_alias) == {"nec5_quadrature": True}
+    assert (
+        dict(kw_2p)
+        == dict(kw_alias)
+        == {
+            "nec5_quadrature": True,
+            "exact_kernel": "auto",
+        }
+    )
     # And both remain distinct from the Gauss-Legendre lane, which retired
     # from the roster at momwire#753 and is reached by construction instead
     # (see test_plain_razor_retired_from_the_roster_753).
