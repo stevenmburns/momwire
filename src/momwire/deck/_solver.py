@@ -113,7 +113,7 @@ BASES = MappingProxyType(
     {
         # bs2 asks for the exact ring kernel where a segment is fat for its
         # length (momwire#1428): "auto" resolves True only when some segment
-        # has h/a < `BSplineSolver.EXACT_KERNEL_AUTO_H_OVER_A` (3), so every
+        # has h/a < `EXACT_KERNEL_AUTO_H_OVER_A` (3, `_exact_kernel_seam`), so every
         # mesh above that builds the call it always did, bit for bit. It is
         # bound HERE, on the roster name, so every front end that reads
         # `bspline` -- the NEC-5 and NEC-4.2 seams (`momwire.eznec`, SimNEC's

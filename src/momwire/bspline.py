@@ -63,7 +63,6 @@ from ._bspline_kernels import (
     _EK,
     _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL,
     _ek_axis_groups,
-    _ek_axis_groups_coaxial,
     _ek_cut,
     _normalize_ladder,
     _refuse_complex_k,
@@ -82,6 +81,7 @@ from . import _below_interface
 from . import _bspline_kernels
 from . import _crossing_fill
 from . import _exact_kernel
+from . import _exact_kernel_seam
 from . import _feed_snap
 from . import _ground_mirror
 from . import _ground_refl
@@ -998,7 +998,31 @@ class _ObserverRows(_schedule.ObserverRows):
         )
 
 
-class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
+def _exact_kernel_refusals(use_singular_enrichment, rotational_symmetry):
+    """``[(condition, message)]``: bs2's own refusals of `exact_kernel=True`
+    (`_exact_kernel_seam.ExactKernelOption._exact_kernel_family_refusals`)."""
+    return [
+        (
+            bool(use_singular_enrichment),
+            "exact_kernel=True + use_singular_enrichment=True is "
+            "refused: the enrichment blocks have no exact-kernel "
+            "correction (momwire#1408)",
+        ),
+        (
+            bool(rotational_symmetry),
+            "exact_kernel=True + rotational_symmetry=True is refused: "
+            "the sector route fills restricted rows, which the "
+            "exact-kernel correction does not serve (momwire#1408)",
+        ),
+    ]
+
+
+class BSplineSolver(
+    _exact_kernel_seam.ExactKernelOption,
+    _ElementCurrents,
+    _SweptPortSolutions,
+    _Cancelable,
+):
     """Degree-d B-spline Galerkin MoM, multi-wire polylines with junctions.
 
     **Usable Δ/a floor (issue #248).** Like every reduced-kernel
@@ -1404,16 +1428,11 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         },
     )
 
-    # momwire#1408: subclasses that replace the dense fill (H-matrix, array
-    # blocks) never reach the exact-kernel correction, so they refuse it.
-    _serves_exact_kernel = True
-    # What `exact_kernel=` accepts. Public so a consumer can gate on the
-    # capability ("auto" in BSplineSolver.EXACT_KERNEL_CHOICES) instead of
-    # parsing a version or a signature.
-    EXACT_KERNEL_CHOICES = (False, True, "auto")
-    # "auto" engages when some segment's length is below this many radii
-    # (the kernel-error table: EK 2.1e-3 at |z|/a = 3, 3.1e-2 at 1).
-    EXACT_KERNEL_AUTO_H_OVER_A = 3.0
+    # momwire#1408: `_serves_exact_kernel`, `EXACT_KERNEL_CHOICES` and
+    # `EXACT_KERNEL_AUTO_H_OVER_A` come from `_exact_kernel_seam.
+    # ExactKernelOption` (momwire#1433), shared with every family that serves
+    # the kernel. Subclasses that replace the dense fill (H-matrix, array
+    # blocks) never reach the correction and set `_serves_exact_kernel` False.
 
     def __init__(
         self,
@@ -1593,37 +1612,15 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             # measurements behind it.
         # momwire#1408: the exact ring kernel on coaxial pairs, opt-in. Off,
         # nothing below reads it but the guard in `_compute_Z_operator`.
-        if isinstance(exact_kernel, str):
-            if exact_kernel != "auto":
-                raise ValueError(
-                    f"exact_kernel must be True, False or 'auto', got {exact_kernel!r}"
-                )
-            self.exact_kernel_requested = "auto"
-            # Resolved at the end of __init__ (`_resolve_exact_kernel_auto`),
-            # once the geometry and the ground are known; off until then.
-            self.exact_kernel = False
-        else:
-            self.exact_kernel_requested = bool(exact_kernel)
-            self.exact_kernel = bool(exact_kernel)
-        if self.exact_kernel:
-            if not self._serves_exact_kernel:
-                raise NotImplementedError(
-                    f"exact_kernel=True is not served by {type(self).__name__}: "
-                    "its fills never reach the exact-kernel correction "
-                    "(momwire#1408)"
-                )
-            if use_singular_enrichment:
-                raise NotImplementedError(
-                    "exact_kernel=True + use_singular_enrichment=True is "
-                    "refused: the enrichment blocks have no exact-kernel "
-                    "correction (momwire#1408)"
-                )
-            if rotational_symmetry:
-                raise NotImplementedError(
-                    "exact_kernel=True + rotational_symmetry=True is refused: "
-                    "the sector route fills restricted rows, which the "
-                    "exact-kernel correction does not serve (momwire#1408)"
-                )
+        # Parsed, and True's refusals raised, by the shared option
+        # (`_exact_kernel_seam`, momwire#1433); "auto" is resolved at the end
+        # of __init__ (`_resolve_exact_kernel_auto`), once the geometry and
+        # the ground are known, and is off until then. The two refusals of
+        # this family's own are `_exact_kernel_family_refusals`.
+        self._exact_kernel_init(
+            exact_kernel,
+            _exact_kernel_refusals(use_singular_enrichment, rotational_symmetry),
+        )
         self.swept_mem_mb = int(swept_mem_mb)
         if self.swept_mem_mb < 1:
             raise ValueError(f"swept_mem_mb must be >= 1, got {swept_mem_mb}")
@@ -1963,15 +1960,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # only one is the rotational sector route, which "auto" already
         # resolves False for here.
         # True with a route the fill will refuse (buried, lossy) counts as
-        # not running: the fill raises before any number comes out.
-        try:
-            servable = self._exact_kernel_servable()
-        except ValueError:
-            # A wire-media reading the fill refuses by name (a crossing, a
-            # wire below a ground with no lower medium): it says so there,
-            # not from an advisory.
-            servable = False
-        exact_runs = bool(self.exact_kernel) and servable
+        # not running: the fill raises before any number comes out
+        # (`_exact_kernel_resolved`).
+        exact_runs, servable = self._exact_kernel_resolved()
         # momwire#1378: any segment under two radii, anywhere (not only at a gap).
         # Advisory, once per solver, on the final mesh; silent where the exact
         # ring kernel runs.
@@ -1995,6 +1986,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             _wire_spec.solver_gaps(self, end_ports_are_gaps=not exact_runs),
             gap_model="point",
             exact_kernel=True if exact_runs else (False if servable else None),
+            fixed_gap_feed=self.EXACT_KERNEL_FIXED_GAP_FEED,
         )
         if (
             self.exact_kernel_requested is True
@@ -2002,36 +1994,30 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             and self.feeds
         ):
             warnings.warn(
-                "exact_kernel=True with a point-gap feed: under the exact ring "
-                "kernel a zero-width gap has no limiting reactance (each halving "
-                "of the gap adds 4 ln2 w eps0 a of susceptance), so the feed "
-                "reactance drifts with the mesh. A fixed geometric gap is two "
-                "facing wire ends driven through junction_ports (momwire#1408).",
+                _exact_kernel_seam.point_gap_warning(self.EXACT_KERNEL_FIXED_GAP_FEED),
                 RuntimeWarning,
                 stacklevel=2,
             )
 
-    def _resolve_exact_kernel_auto(self):
-        """`exact_kernel="auto"`'s value (see the class docstring): True iff
-        this route serves the exact kernel and some segment is shorter than
-        `EXACT_KERNEL_AUTO_H_OVER_A` radii. Never raises a refusal."""
-        if not self._exact_kernel_servable():
-            return False
+    # -- the exact-kernel option's hooks (`_exact_kernel_seam`, momwire#1433)
+    def _exact_kernel_family_refusals(self):
+        """The two refusals of `exact_kernel=True` this family adds to the
+        shared ones, on the solver's current flags; either also makes "auto"
+        resolve False."""
+        return _exact_kernel_refusals(
+            self.use_singular_enrichment, self.rotational_symmetry
+        )
+
+    def _exact_kernel_buried(self):
+        return self.ground_z is not None and self._has_buried_wires()
+
+    def _exact_kernel_lossy(self):
+        return bool(np.iscomplexobj(self.k) or np.iscomplexobj(self.eps))
+
+    def _exact_kernel_h_and_a(self):
         geom = self._build_geometry()
         h = np.linalg.norm(geom["seg_r"] - geom["seg_l"], axis=1)
-        a = self._seg_radius(geom)
-        return bool(np.any(h < self.EXACT_KERNEL_AUTO_H_OVER_A * a))
-
-    def _exact_kernel_servable(self):
-        """Whether this solver's construction-time route serves the exact
-        ring kernel: condition (i) of "auto" (see the class docstring)."""
-        if not self._serves_exact_kernel:
-            return False
-        if self.use_singular_enrichment or self.rotational_symmetry:
-            return False
-        if self.ground_z is not None and self._has_buried_wires():
-            return False
-        return not (np.iscomplexobj(self.k) or np.iscomplexobj(self.eps))
+        return h, self._seg_radius(geom)
 
     def _rotational_ground_kind(self):
         """The ground's name for the rotational-symmetry rule (momwire#1029
@@ -7065,15 +7051,9 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         peak on exactly the entry point the SimNEC portal and the array
         benchmarks drive (issue #235).
         """
-        use_exact = self.exact_kernel
-        if use_exact:
-            if self.exact_kernel_requested == "auto":
-                # "auto" never refuses: an unserved route skips the
-                # correction, and the solver says so.
-                if self._exact_kernel_route_refusal(rows, compact) is not None:
-                    use_exact = self.exact_kernel = False
-            else:
-                self._refuse_exact_kernel_route(rows, compact)
+        # "auto" never refuses: an unserved route skips the correction, and
+        # the solver says so (`_exact_kernel_seam`, momwire#1433).
+        use_exact = self._exact_kernel_fill_gate(rows, compact)
         if self.ground_z is not None and self._has_buried_wires():
             # Per-segment media (momwire#553 U5). Structurally a different
             # fill, not a flag inside this one: three pair classes, two
@@ -7168,42 +7148,16 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # wire property, added once to the final Z).
         return self._apply_loading(Z)
 
-    def _exact_kernel_route_refusal(self, rows, compact):
-        """Why this fill route does not serve `exact_kernel`, or None."""
-        if rows is not None or compact:
-            return (
-                "exact_kernel=True serves the dense fill only; a restricted-row "
-                "fill (sector route) has no exact-kernel correction (momwire#1408)"
-            )
-        if self.ground_z is not None and self._has_buried_wires():
-            return (
-                "exact_kernel=True is refused for buried wires: the exact ring "
-                "kernel here is written for a real wavenumber (momwire#1408)"
-            )
-        if np.iscomplexobj(self.k) or np.iscomplexobj(self.eps):
-            return (
-                "exact_kernel=True is refused in a lossy medium (complex k or "
-                "permittivity) (momwire#1408)"
-            )
-        return None
-
-    def _refuse_exact_kernel_route(self, rows, compact):
-        """The routes `exact_kernel` does not serve, refused by name."""
-        why = self._exact_kernel_route_refusal(rows, compact)
-        if why is not None:
-            raise NotImplementedError(why)
-
     def _exact_kernel_groups(self, geom):
         """[(segment indices, [(slice, arc, radius) per edge])] per coaxial
         equal-radius group: the segments the exact ring kernel covers."""
-        seg_l, seg_r = geom["seg_l"], geom["seg_r"]
-        labels = _ek_axis_groups_coaxial(
-            seg_l, seg_r, geom["tangents"], self._seg_radius(geom)
+        labels, groups = _exact_kernel_seam.coaxial_groups(
+            geom["seg_l"], geom["seg_r"], geom["tangents"], self._seg_radius(geom)
         )
         edges = {}
         for _w, sl, arc, a_w in self._edge_ingredients(geom):
             edges.setdefault(int(labels[sl.start]), []).append((sl, arc, a_w))
-        return [(np.flatnonzero(labels == g), edges[g]) for g in sorted(edges)]
+        return [(S, edges[g]) for g, S in groups]
 
     def _exact_kernel_base_J(self, geom, S, g_edges, k, rows=None, fill=None):
         """The (d+1, d+1, n, n) moments the free-space fill put on the
@@ -7323,10 +7277,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         fill = self._exact_kernel_fill_spec(geom, k)
         for S, g_edges in self._exact_kernel_groups(geom):
             n = S.size
-            axis = tang[S[0]]
-            x0 = (seg_l[S] - seg_l[S[0]]) @ axis
-            sgn = np.where(tang[S] @ axis >= 0.0, 1.0, -1.0)
-            h = np.linalg.norm(seg_r[S] - seg_l[S], axis=1)
+            _axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_l, seg_r, tang)
             budget = self.swept_mem_mb * 1024 * 1024
             exact = _exact_kernel.coaxial_rows(
                 x0,
@@ -7433,10 +7384,7 @@ class BSplineSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         n_total = int(geom["n_segs_total"])
         for S, g_edges in self._exact_kernel_groups(geom):
             n = S.size
-            axis = tang[S[0]]
-            x0 = (seg_l[S] - seg_l[S[0]]) @ axis
-            sgn = np.where(tang[S] @ axis >= 0.0, 1.0, -1.0)
-            h = np.linalg.norm(seg_r[S] - seg_l[S], axis=1)
+            _axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_l, seg_r, tang)
             dJ = _exact_kernel.coaxial_block(x0, sgn, h, float(seg_a[S[0]]), k, nd)
             dJ -= self._exact_kernel_base_J(geom, S, g_edges, k)
             # assemble over the bases touching the group; wings elsewhere

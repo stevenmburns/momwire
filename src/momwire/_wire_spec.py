@@ -829,6 +829,13 @@ def gap_past_floor(polyline, npe, a, where, floor, depth):
     return all(n >= depth for n in sides), ratio, span
 
 
+_END_PORT_FEED = (
+    "A gap of fixed width is the end-port "
+    "feed: two facing wire ends driven through junction_ports "
+    "(momwire#1408)."
+)
+
+
 def advise_gap_mesh_floor(
     family,
     wires_polylines,
@@ -839,6 +846,7 @@ def advise_gap_mesh_floor(
     *,
     gap_model,
     exact_kernel=None,
+    fixed_gap_feed=True,
 ):
     """Warn `GapMeshFloor` once, naming every gap past the floor
     (`gap_past_floor` with this family's `GAP_DEPTH[gap_model]`).
@@ -853,6 +861,12 @@ def advise_gap_mesh_floor(
     for one that ran it. It never changes which gaps fire; the caller
     leaves the end ports out of `gaps` under the exact kernel
     (`solver_gaps(end_ports_are_gaps=False)`).
+
+    `fixed_gap_feed` (momwire#1433): whether the family can drive a gap of
+    fixed width -- the end-port feed, two facing wire ends through
+    `junction_ports` (`ExactKernelOption.EXACT_KERNEL_FIXED_GAP_FEED`). A
+    family that cannot (razor's feeds are knots) is told where one is
+    instead of being told to build it.
     """
     floor = GAP_FLOOR_EXTENDED if extended_kernel else GAP_FLOOR_REDUCED
     depth = GAP_DEPTH[gap_model]
@@ -900,10 +914,15 @@ def advise_gap_mesh_floor(
             "Under the exact ring kernel a zero-width gap has no limiting "
             "reactance: each halving of the segments at it adds about "
             "4 ln2 w eps0 a of susceptance, so the reactance keeps drifting "
-            "as the mesh is refined. A gap of fixed width is the end-port "
-            "feed: two facing wire ends driven through junction_ports "
-            "(momwire#1408). Advisory: nothing is remeshed. See "
-            "stevenmburns/momwire#959."
+            "as the mesh is refined. "
+            + (
+                _END_PORT_FEED
+                if fixed_gap_feed
+                else "This solver's feeds are zero-width knot gaps; a gap of "
+                "fixed width is bspline's end-port feed (two facing wire ends "
+                "driven through junction_ports, momwire#1408)."
+            )
+            + " Advisory: nothing is remeshed. See stevenmburns/momwire#959."
         )
     else:
         if exact_kernel is None:
@@ -911,11 +930,18 @@ def advise_gap_mesh_floor(
                 "An exact kernel with a fixed-width feed is momwire#1330, "
                 "open for this solver."
             )
-        else:
+        elif fixed_gap_feed:
             fix = (
                 "exact_kernel=True with an end-port feed (two facing wire "
                 "ends driven through junction_ports) converges at this "
                 "mesh (momwire#1408)."
+            )
+        else:
+            fix = (
+                "exact_kernel=True removes the collapse, but this solver's "
+                "knot gap has zero width, so its reactance still drifts "
+                "(about 4 ln2 w eps0 a of susceptance per halving); a gap of "
+                "fixed width is bspline's end-port feed (momwire#1408)."
             )
         text = (
             f"{family}: the impedance is unreliable at {where}. This "
@@ -942,8 +968,9 @@ class ShortSegments(UserWarning):
     remeshed or refused. Independent of `GapMeshFloor`, which is the stricter,
     gap-local floor for the delta-gap source; a deck can raise both.
 
-    SILENT where the exact ring kernel ran (bspline, `exact_kernel` True
-    after resolution -- momwire#1412). Every segment lies in a coaxial group
+    SILENT where the exact ring kernel ran (any family serving it --
+    `_exact_kernel_seam.ExactKernelOption` -- with `exact_kernel` True after
+    resolution; momwire#1412, measured on bspline). Every segment lies in a coaxial group
     (its own straight run at least), so its self and same-line pairs take
     the exact kernel, and those are the pairs the floor is about. The pairs
     it does not cover keep the thin-wire kernel, and short segments next to
