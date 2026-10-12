@@ -11,11 +11,12 @@ Where the CPU has them, this checks that:
     (`_accelerators` and both near-interface companions) is its `_avx512`
     build -- a stray `_avx2` companion is the mixed-variant state
     `import_companion` exists to prevent;
-  * the lane layer is compiled into it (the 4-wide AVX2 backend, so the lane
-    gates below compare lanes against the walk, not the walk against itself);
+  * the lane layer is compiled into it at W = 8 (`lane_width_1370`), so the
+    lane gates below compare the 8-wide lanes against the walk -- not the
+    walk against itself, and not the 4-wide lanes again;
   * a small solve set agrees with the `_avx2` build, each variant run in its
-    own interpreter (two builds of one extension never share a process);
-    to `Z_RTOL`, below.
+    own interpreter (two builds of one extension never share a process):
+    BIT-identical on Linux, to `Z_RTOL` elsewhere.
 
 The lane gates themselves are the existing modules, run in the same session
 so they execute under this variant. On the AVX-512 machine, from a checkout
@@ -34,16 +35,16 @@ of this repository with momwire installed (a wheel or `pip install .`):
         tests/test_sg_mixed_class_fill_1224.py
 
 (the module list is pyproject's cp312-win_amd64 lane-gate set plus the two SG
-modules whose vector-stage predicates name `_avx512` since #1370). On Linux
-those gates are BIT equality, walk against lanes, inside one build -- so they
-hold under `_avx512` exactly when the wider autovectorised loops and libmvec's
-8-lane routines leave each lane's arithmetic alone. Under Intel SDE's
-Skylake-X emulation (2026-10-07, 3d110fe0) they did NOT all hold: the
-off-edge and EK lane gates and the SG class fill's column independence
-differ in the last bits (<= 1.9e-16 relative), because which entries of a
-libmvec loop fall to the scalar tail depends on the loop's length modulo the
-vector width, and at width 8 the walk's and the lanes' tails no longer
-coincide. Expect those failures here until that is resolved (momwire#1370).
+modules whose vector-stage predicates name `_avx512`). On Linux those gates
+are BIT equality, walk against lanes, inside one build, and they hold at
+W = 8 by the layer's contract (`_lanes.h`: a lane's floats never depend on
+W). Step 1 broke 32 of them, because its autovectorised loops ran 8 wide and
+which points of a libmvec loop fall to the scalar tail depends on the loop's
+length modulo that factor. Step 2.1 holds every autovectorised loop at the
+AVX2 factor and on the AVX2 libmvec entries (setup.py,
+`_libmvec_avx512.cpp`), so the walks compute what `_avx2`'s compute, the
+lanes compute what the walks compute, and the solve set is `_avx2`'s to the
+bit.
 
 `-s` prints the measured |dZ|/|Z| per deck; MOMWIRE_AVX512_LOG=<path> also
 writes them as JSON, which is how Z_RTOL is to be re-derived.
@@ -83,21 +84,21 @@ def _skip_reason() -> str | None:
 
 pytestmark = pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")
 
-# |Z_avx512 - Z_avx2| / |Z_avx2| per deck, from the variants' precedent until
-# an AVX-512 measurement replaces it. The precedent is this very solve set run
-# under `_sse2` against `_avx2` (Skylake, GCC 13.3, 2026-10-07):
+# Linux (GCC): the solve set is `_avx2`'s to the bit (see the module
+# docstring), and the gate says so.
+#
+# Elsewhere (a forced Windows run; not offered unforced there yet) the bound
+# is |Z_avx512 - Z_avx2| / |Z_avx2| from the variants' precedent: this solve
+# set run under `_sse2` against `_avx2` (Skylake, GCC 13.3, 2026-10-07):
 #
 #   free_dipole 3.5e-15   pec_dipole 5.4e-14   sommerfeld_dipole 1.1e-14
 #   buried_hub  7.4e-14   sg_hub     4.1e-13   razor_invl        3.7e-15
 #
-# `_avx512` differs from `_avx2` in the same two ways `_sse2` does: libm
-# routines that agree to a few ulp (libmvec's 8-lane forms against its 4-lane
-# ones, as against scalar libm), and loops vectorised at another width that
-# perform the same IEEE operations. So the same spread is expected, and the
-# gate is the worst of it (4.1e-13) with ~250x headroom: 1e-10, a decade
-# under the 1e-9 floor test_windows_lanes_1371 uses for sse2-vs-avx2.
-# Re-derive on the AVX-512 machine: MOMWIRE_AVX512_LOG=<path> records each
-# deck's ratio.
+# The worst of it (4.1e-13) with ~250x headroom: 1e-10, a decade under the
+# 1e-9 floor test_windows_lanes_1371 uses for sse2-vs-avx2. Re-derive on a
+# Windows AVX-512 machine: MOMWIRE_AVX512_LOG=<path> records each deck's
+# ratio.
+BITWISE = sys.platform == "linux"
 Z_RTOL = 1e-10
 
 DECKS = (
@@ -204,7 +205,7 @@ def test_every_extension_is_the_avx512_build():
 
 
 def test_every_lane_path_is_compiled_in():
-    """The 4-wide AVX2 lane backend, in the AVX-512 build."""
+    """The lane paths, in the AVX-512 build, on its 8-wide backend."""
     from momwire import _near_interface as ni
 
     acc = _accel.acc
@@ -216,6 +217,8 @@ def test_every_lane_path_is_compiled_in():
         "grid_sheet_fixed_1290": ni._nia.grid_sheet_fixed_1290,
     }
     assert all(built.values()), built
+    assert acc.lane_width_1370 == 8, acc.lane_width_1370
+    assert ni._nia.lane_width_1370 == 8, ni._nia.lane_width_1370
 
 
 def test_the_subprocesses_ran_the_variants_they_were_told(both):
@@ -239,4 +242,7 @@ def test_the_solve_set_matches_the_avx2_build(both, deck):
             fh.write(
                 json.dumps({"deck": deck, "rel": rel, "bitwise": got == want}) + "\n"
             )
-    assert rel <= Z_RTOL, (deck, got, want, rel)
+    if BITWISE:
+        assert got == want, (deck, got, want, rel)
+    else:
+        assert rel <= Z_RTOL, (deck, got, want, rel)
