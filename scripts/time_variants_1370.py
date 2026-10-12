@@ -166,12 +166,56 @@ def _child(args) -> int:
         for _ in range(args.warmup):
             _make(args.deck).compute_impedance()
         solver = _make(args.deck)
+        spent = _time_the_dense_solves()
         t0 = time.perf_counter()
         out = solver.compute_impedance()
         dt = time.perf_counter() - t0
     z = complex(np.asarray(out[0] if isinstance(out, tuple) else out).ravel()[0])
-    print(json.dumps({"variant": want, "time": dt, "z": [z.real, z.imag]}))
+    print(
+        json.dumps(
+            {
+                "variant": want,
+                "time": dt,
+                "solve": spent["s"],
+                "solve_calls": spent["calls"],
+                "file": momwire.__file__,
+                "z": [z.real, z.imag],
+            }
+        )
+    )
     return 0
+
+
+def _time_the_dense_solves() -> dict:
+    """Wrap the dense LU entry points the solvers reach (`bspline._lu_solve`
+    and SG's `_solve_in_place` call `scipy.linalg.lu_factor`/`lu_solve`; the
+    constraint and port paths call `scipy.linalg.solve` / `np.linalg.solve`),
+    so the parent can split a solve into the LAPACK part (OpenBLAS in every
+    variant) and the rest (the fills, which the variants compile). Installed
+    after the warmups. `calls` is reported so a split of 0 s reads as "the
+    wrappers were never reached", not as "the solve was free"."""
+    import numpy as np
+    import scipy.linalg
+
+    spent = {"s": 0.0, "calls": 0}
+
+    def wrap(owner, name):
+        fn = getattr(owner, name)
+
+        def timed(*a, **kw):
+            t = time.perf_counter()
+            try:
+                return fn(*a, **kw)
+            finally:
+                spent["s"] += time.perf_counter() - t
+                spent["calls"] += 1
+
+        setattr(owner, name, timed)
+
+    for name in ("lu_factor", "lu_solve", "solve"):
+        wrap(scipy.linalg, name)
+    wrap(np.linalg, "solve")
+    return spent
 
 
 def _parse_cpus(spec):
@@ -231,6 +275,15 @@ def main() -> int:
     ap.add_argument("--warmup", type=int, default=0)
     ap.add_argument("--decks", default=",".join(DECKS))
     ap.add_argument("--variants", help="comma list; default: every runnable one")
+    ap.add_argument(
+        "--arm",
+        action="append",
+        default=[],
+        metavar="LABEL=VARIANT@SRC",
+        help="also time VARIANT from another build, with SRC (a checkout's "
+        "src/) first on the children's PYTHONPATH, labelled LABEL and "
+        "interleaved with the rest; e.g. avx512-s1=avx512@/home/me/s1/src",
+    )
     ap.add_argument("--out", default="time_variants_1370.json")
     ap.add_argument("--child", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--deck", help=argparse.SUPPRESS)
@@ -250,12 +303,20 @@ def main() -> int:
     variants, notes = _variants()
     if args.variants:
         variants = [v for v in args.variants.split(",") if v]
+    # (label, forced variant, PYTHONPATH prefix or None)
+    arms = [(v, v, None) for v in variants]
+    for spec in args.arm:
+        label, _, rest = spec.partition("=")
+        variant, _, src = rest.partition("@")
+        arms.append((label, variant, os.path.abspath(src)))
     print(f"cpu      {cpu['model']}  ({cpu['machine']}, {cpu['logical_cpus']} logical)")
     print(f"flags    {' '.join(cpu.get('flags', [])) or '(no /proc/cpuinfo)'}")
     print(f"momwire  {mw_version}  {momwire.__file__}")
     print(f"python   {sys.version.split()[0]}")
     print(f"threads  {args.threads}  cpus {args.cpus or 'unbound'}")
     print(f"variants {variants}  {notes}")
+    for label, variant, src in arms[len(variants) :]:
+        print(f"arm      {label}: {variant} from {src}")
     print()
 
     env = dict(os.environ)
@@ -266,10 +327,13 @@ def main() -> int:
 
     rows = []
     for deck in [d for d in args.decks.split(",") if d]:
-        got = {v: {"times": [], "z": None, "error": None} for v in variants}
+        got = {
+            a[0]: {"times": [], "solve": [], "z": None, "file": None, "error": None}
+            for a in arms
+        }
         for _ in range(args.repeats):
-            for variant in variants:
-                if got[variant]["error"]:
+            for label, variant, src in arms:
+                if got[label]["error"]:
                     continue
                 cmd = [
                     sys.executable,
@@ -282,54 +346,75 @@ def main() -> int:
                 ]
                 if args.cpus:
                     cmd += ["--cpus", args.cpus]
-                res = subprocess.run(
-                    cmd,
-                    env={**env, "MOMWIRE_FORCE_VARIANT": variant},
-                    capture_output=True,
-                    text=True,
-                )
+                child_env = {**env, "MOMWIRE_FORCE_VARIANT": variant}
+                if src:
+                    child_env["PYTHONPATH"] = os.pathsep.join(
+                        p for p in (src, env.get("PYTHONPATH", "")) if p
+                    )
+                res = subprocess.run(cmd, env=child_env, capture_output=True, text=True)
                 if res.returncode != 0:
-                    got[variant]["error"] = res.stderr[-2000:]
-                    print(f"{deck} {variant}: FAILED\n{res.stderr[-2000:]}")
+                    got[label]["error"] = res.stderr[-2000:]
+                    print(f"{deck} {label}: FAILED\n{res.stderr[-2000:]}")
                     continue
                 one = json.loads(res.stdout.strip().splitlines()[-1])
-                got[variant]["times"].append(one["time"])
-                got[variant]["z"] = one["z"]
-        for variant in variants:
-            g = got[variant]
+                if not one["solve_calls"]:
+                    got[label]["error"] = "the dense-solve wrappers were never reached"
+                    print(f"{deck} {label}: FAILED (no dense solve was timed)")
+                    continue
+                got[label]["times"].append(one["time"])
+                got[label]["solve"].append(one["solve"])
+                got[label]["z"] = one["z"]
+                got[label]["file"] = one["file"]
+        for label, _variant, _src in arms:
+            g = got[label]
             if g["error"]:
-                rows.append({"deck": deck, "variant": variant, "error": g["error"]})
+                rows.append({"deck": deck, "variant": label, "error": g["error"]})
                 continue
+            fills = [t - s for t, s in zip(g["times"], g["solve"], strict=True)]
             row = {
                 "deck": deck,
-                "variant": variant,
+                "variant": label,
                 "times": g["times"],
+                "solve_times": g["solve"],
                 "median": statistics.median(g["times"]),
                 "min": min(g["times"]),
+                "median_solve": statistics.median(g["solve"]),
+                "median_rest": statistics.median(fills),
                 "z": g["z"],
+                "file": g["file"],
             }
             rows.append(row)
-            print(f"  {deck:18s} {variant:7s} median {row['median']:.3f} s", flush=True)
+            print(
+                f"  {deck:18s} {label:9s} median {row['median']:.3f} s "
+                f"(LAPACK {row['median_solve']:.3f}, rest {row['median_rest']:.3f})"
+                f"  {row['file']}",
+                flush=True,
+            )
 
     print()
-    print(f"{'deck':18s} {'variant':7s} {'median s':>9s} {'min s':>8s} "
-          f"{'vs avx2':>8s} {'|dZ|/|Z| vs avx2':>17s}")  # fmt: skip
+    print(f"{'deck':18s} {'variant':9s} {'median s':>9s} {'min s':>8s} "
+          f"{'rest s':>7s} {'vs avx2':>8s} {'rest vs':>8s} "
+          f"{'|dZ|/|Z| vs avx2':>17s}")  # fmt: skip
     ref = {r["deck"]: r for r in rows if r["variant"] == "avx2" and "median" in r}
     for r in rows:
         if "median" not in r:
-            print(f"{r['deck']:18s} {r['variant']:7s} {'FAILED':>9s}")
+            print(f"{r['deck']:18s} {r['variant']:9s} {'FAILED':>9s}")
             continue
         base = ref.get(r["deck"])
-        speed = rel = None
+        speed = rest = rel = None
         if base is not None:
             speed = base["median"] / r["median"]
+            rest = base["median_rest"] / r["median_rest"]
             zb = complex(*base["z"])
             rel = abs(complex(*r["z"]) - zb) / abs(zb)
             r["speedup_vs_avx2"] = speed
+            r["rest_speedup_vs_avx2"] = rest
             r["rel_dz_vs_avx2"] = rel
         print(
-            f"{r['deck']:18s} {r['variant']:7s} {r['median']:9.3f} {r['min']:8.3f} "
+            f"{r['deck']:18s} {r['variant']:9s} {r['median']:9.3f} {r['min']:8.3f} "
+            f"{r['median_rest']:7.3f} "
             f"{'' if speed is None else f'{speed:7.3f}x':>8s} "
+            f"{'' if rest is None else f'{rest:7.3f}x':>8s} "
             f"{'' if rel is None else f'{rel:.2e}':>17s}"
         )
 
@@ -344,6 +429,7 @@ def main() -> int:
                 "repeats": args.repeats,
                 "warmup": args.warmup,
                 "variants": variants,
+                "arms": arms,
                 "notes": notes,
                 "rows": rows,
             },
