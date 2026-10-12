@@ -501,9 +501,13 @@ def _environment_label(deck, ground) -> str:
 
 
 def _ground_file(deck) -> str | None:
-    """The Sommerfeld-table file name the deck's ``GN 2`` card carries, or
-    ``None``.  The nec4 dialect reads the card without it (momwire#1317); the
-    printout says the file was not read, as the licensed engine does."""
+    """The Sommerfeld-table file name the deck's ``GN`` card carries, or
+    ``None``.  The nec4 dialect reads the card without it, on every GN type
+    (momwire#1317, momwire#1443); the caller asks only under a Sommerfeld
+    ground (``GN 2``/``GN 3``), the one place a table file means anything, and
+    the printout says the file was not read, as the licensed engine does on
+    ``GN 2``.  Under any other ground the name is only echoed on the card's
+    continuation line (``_printout._card_echo``)."""
     written = [c for c in deck.data_cards if c.mnemonic == "GN"]
     return written[-1].trailer if written else None
 

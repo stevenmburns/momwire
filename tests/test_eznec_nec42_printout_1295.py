@@ -874,7 +874,7 @@ def test_a_phased_drive_against_the_licensed_engine(served, capsys):
 
 
 # ==========================================================================
-# a GN 2 naming a Sommerfeld-table file (momwire#1317)
+# a GN naming a Sommerfeld-table file (momwire#1317, momwire#1443)
 # ==========================================================================
 
 
@@ -887,12 +887,14 @@ def _timeless(text: str) -> list[str]:
     ]
 
 
-def test_a_gn2_file_name_prints_that_the_file_was_not_read():
+@pytest.mark.parametrize("ground_type", [2, 3])
+def test_a_sommerfeld_gn_file_name_prints_that_the_file_was_not_read(ground_type):
     """The licensed engine's line, in its captured place (the cache block of
     p7, this deck's own printout, first line only), and the name echoed on
     the card's continuation line; every other line is the bare card's
-    printout."""
-    bare_card = "GN 2 0 0 0 13. .005 0 0 0 0"
+    printout.  GN 3 (momwire#1443) is the same half-space, so the same block,
+    under its own environment word."""
+    bare_card = f"GN {ground_type} 0 0 0 13. .005 0 0 0 0"
     bare = render(
         _edited("p7", "GN 2,0,0,0,13.,.005", bare_card), basis=BASIS, dialect="nec4"
     )
@@ -913,12 +915,37 @@ def test_a_gn2_file_name_prints_that_the_file_was_not_read():
             "",
             gndino,
             "",
-            " " * 40 + "FINITE GROUND.  SOMMERFELD SOLUTION GN2",
+            " " * 40 + f"FINITE GROUND.  SOMMERFELD SOLUTION GN{ground_type}",
         ], name
         assert lines.count(gndino) == 1 and lines.count(echo) == 1, name
         kept = [*lines[: env_at + 2], *lines[env_at + 5 :]]
         kept.remove(echo)
         assert kept == _timeless(bare), name
+
+
+@pytest.mark.parametrize("ground_type", [-1, 1])
+def test_a_file_name_on_a_table_free_gn_is_only_echoed(ground_type):
+    """Free space and perfect ground keep no Sommerfeld table, so a trailer
+    there (SimNEC appends NOFILE to every GN card, momwire#1443) is the card's
+    echo and nothing more: no "unable to open" line for a file no solve
+    would read, and every other line the bare card's printout."""
+    bare_card = f"GN {ground_type} 0 0 0 13. .005 0 0 0 0"
+    bare = render(
+        _edited("p7", "GN 2,0,0,0,13.,.005", bare_card), basis=BASIS, dialect="nec4"
+    )
+    assert "NEC ERROR" not in bare
+    for name in ("NOFILE", "SOMEX10.NEC"):
+        named = render(
+            _edited("p7", "GN 2,0,0,0,13.,.005", f"{bare_card} {name}"),
+            basis=BASIS,
+            dialect="nec4",
+        )
+        assert "NEC ERROR" not in named and "GNDINO" not in named, name
+        echo = " " * 43 + "  0.00000E+00  " + name.ljust(40)
+        lines = _timeless(named)
+        assert lines.count(echo) == 1, name
+        lines.remove(echo)
+        assert lines == _timeless(bare), name
 
 
 # ==========================================================================
