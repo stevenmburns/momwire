@@ -1602,13 +1602,48 @@ def node_points(wire: Nec5Wire) -> list[tuple[float, float, float]]:
     into one node without leaning on the tolerance to save them (the same
     line ``momwire.deck._polylines`` draws).
     """
+    return _wire_nodes(wire)[0]
+
+
+def _node_grid(wire: Nec5Wire) -> np.ndarray:
+    """``node_points`` as one ``(segment_count + 1, 3)`` array, ends authored.
+
+    Built in one shot rather than a node at a time (momwire#1445): the same
+    ``a + (b - a) * (k / n)`` per element -- ``arange / n`` is ``k / n``
+    correctly rounded, exactly as the Python division is -- so the same
+    bits, at a fraction of the per-node array overhead.
+    """
     n = wire.segment_count
     a = np.asarray(wire.end1, dtype=float)
     b = np.asarray(wire.end2, dtype=float)
-    points = [tuple(a + (b - a) * (k / n)) for k in range(n + 1)]
+    grid = a + (b - a) * (np.arange(n + 1) / n)[:, None]
+    grid[0] = wire.end1
+    grid[-1] = wire.end2
+    return grid
+
+
+def _wire_nodes(
+    wire: Nec5Wire,
+) -> tuple[list[tuple[float, float, float]], list[tuple[int, int, int]]]:
+    """A wire's ``node_points`` and their ``_node_key`` s, from one grid.
+
+    The points keep their old element types (``numpy.float64`` inside, the
+    authored values at the ends), and the keys are ``_node_key``'s own
+    rounding -- division by the tolerance, then round-half-even -- done as
+    one array; anything ``rint`` could not hand back as an exact int64 (a
+    non-finite or astronomically large coordinate) takes ``_node_key``
+    itself, node by node.
+    """
+    grid = _node_grid(wire)
+    points = list(map(tuple, grid))
     points[0] = wire.end1
     points[-1] = wire.end2
-    return points
+    scaled = np.rint(grid / _NODE_EPS)
+    if np.all(np.abs(scaled) < 2.0**62):
+        keys = list(map(tuple, scaled.astype(np.int64).tolist()))
+    else:
+        keys = [_node_key(point) for point in points]
+    return points, keys
 
 
 def _node_key(point) -> tuple[int, int, int]:
@@ -1683,13 +1718,13 @@ class Structure:
 
 def structure_of(deck: Nec5Deck) -> Structure:
     """Count a deck's nodes, elements and unknowns."""
-    points = tuple(tuple(node_points(w)) for w in deck.wires)
+    nodes = [_wire_nodes(w) for w in deck.wires]
+    points = tuple(tuple(wire_points) for wire_points, _ in nodes)
     ground_plane = deck.ge_flag != 0
     degree: dict[tuple[int, int, int], int] = {}
-    for wire, wire_points in zip(deck.wires, points, strict=True):
+    for wire, (_, keys) in zip(deck.wires, nodes, strict=True):
         last = wire.segment_count
-        for k, point in enumerate(wire_points):
-            key = _node_key(point)
+        for k, key in enumerate(keys):
             ends = 1 if k in (0, last) else 2
             degree[key] = degree.get(key, 0) + ends
     if ground_plane:
