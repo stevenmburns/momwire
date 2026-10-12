@@ -99,7 +99,7 @@ class _Counting:
         return counted
 
 
-def _dipole_z(n_seg):
+def _dipole_z(n_seg, swept_mem_mb):
     wl = 299792458.0 / 14.2e6
     half = 0.48 * wl / 2
     solver = BSplineSolver(
@@ -108,15 +108,22 @@ def _dipole_z(n_seg):
         feeds=[(0, half, 1 + 0j)],
         wavelength=wl,
         wire_radius=1e-3,
+        # A small budget windows the same-edge correction; at the default a
+        # 401-segment edge is one whole block and the windowed route (where
+        # the gather and the combine live) never runs.
+        swept_mem_mb=swept_mem_mb,
     )
     z = solver.compute_impedance()
     return np.asarray(z[0] if isinstance(z, tuple) else z)
 
 
-def test_g1441_0a_4_a_dipoles_z_is_bit_identical_and_the_kernels_ran(monkeypatch):
+@pytest.mark.parametrize("swept_mem_mb", [1, 4])
+def test_g1441_0a_4_a_dipoles_z_is_bit_identical_and_the_kernels_ran(
+    swept_mem_mb, monkeypatch
+):
     counting = _Counting(bk._acc)
     monkeypatch.setattr(bk, "_acc", counting)
-    got, ref = _both(monkeypatch, lambda: _dipole_z(401))
+    got, ref = _both(monkeypatch, lambda: _dipole_z(401, swept_mem_mb))
     assert np.array_equal(_bits(got), _bits(ref))
     # The C++ ran on the first solve: what agrees is C++ against numpy.
     assert all(n > 0 for n in counting.calls.values()), counting.calls
