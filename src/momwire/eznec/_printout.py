@@ -52,6 +52,7 @@ it now answers.
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 
 from ..deck._cards import Card, parse_card
@@ -150,6 +151,7 @@ _STAMP_NO_VARIANT = "none"
 _STAMP_UNNAMED_BASIS = "-"
 
 
+@functools.cache
 def _momwire_version() -> str:
     """The running release, or ``unknown`` — never an exception.
 
@@ -159,6 +161,11 @@ def _momwire_version() -> str:
     for a source or pip install.  An editable install reports the version
     recorded at ``pip install -e`` time, so a dev box that skipped the
     reinstall after a bump stamps the stale number.
+
+    Read ONCE per process (momwire#1445): the resident server stamps every
+    printout it answers, and the release it is running cannot change under
+    it, while the lookup cost ~5 ms a solve.  Tests that fake the version
+    clear the cache (``_momwire_version.cache_clear()``).
     """
     import momwire_serve_client
 
