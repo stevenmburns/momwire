@@ -66,6 +66,7 @@ from ._bspline_kernels import (
     _ek_cut,
     _normalize_ladder,
     _refuse_complex_k,
+    _same_edge_corr,
     _seg_seg_full_moments_offedge,
     _seg_seg_full_moments_offedge_swept,
     _seg_seg_reg_geometry,
@@ -4865,7 +4866,7 @@ class BSplineSolver(
                 else:
                     A_st_w = A_st[:, :, lo:hi, :]
                     A_reg_w = A_reg[:, :, lo:hi, :]
-                corr = (A_st_w + A_reg_w) - J_win
+                corr = _same_edge_corr(A_st_w, A_reg_w, J_win)
                 del J_win, A_st_w, A_reg_w  # not beside the assembler's call (#338)
                 _accumulate(corr, r0, r1, j0, j1, _bases_touching(r0, r1), e_idx)
 

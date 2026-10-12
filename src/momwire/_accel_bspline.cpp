@@ -6336,6 +6336,121 @@ seg_seg_static_moments_bspline_uniform_ek_table(double h, double a, size_t N,
 }
 
 
+// The same-edge correction's serial glue, in parallel (momwire#1441 step 0a).
+//
+// At 8 threads on Rocketlake, half of a bs2 free-space solve ran on one
+// thread, and three numpy steps of the windowed same-edge correction were
+// most of it: the Toeplitz gather out of the static table, the regular
+// part's pair-distance table, and the `(A_st + A_reg) - J` combine. All
+// three are elementwise, so each is spelled here with numpy's own operations
+// in numpy's own order, one output element per iteration, and the answer is
+// bit-identical at any thread count. The callers in `_bspline_kernels` /
+// `bspline` keep the numpy spelling as the fallback and as the reference.
+
+// `out[p, q, i - r0, j] = table[p, q, j - i + (N - 1)]` for rows [r0, r1):
+// numpy's `table[:, :, idx]` gather, a copy.
+static py::array_t<double>
+toeplitz_gather_rows(
+    py::array_t<double, py::array::c_style | py::array::forcecast> table,
+    size_t N, size_t r0, size_t r1) {
+    if (table.ndim() != 3 || (size_t)table.shape(2) != 2 * N - 1) {
+        throw std::runtime_error("toeplitz_gather_rows: table must be (nd, nd, 2N-1)");
+    }
+    if (r1 < r0 || r1 > N) {
+        throw std::runtime_error("toeplitz_gather_rows: need 0 <= r0 <= r1 <= N");
+    }
+    const size_t n_p = (size_t)table.shape(0), n_q = (size_t)table.shape(1);
+    const size_t n_row = r1 - r0, L = 2 * N - 1;
+    py::array_t<double> out({n_p, n_q, n_row, N});
+    const double* src = table.data();
+    double* dst = out.mutable_data();
+    {
+        py::gil_scoped_release release;
+        const long long n_lines = (long long)(n_p * n_q * n_row);
+#pragma omp parallel for schedule(static)
+        for (long long line = 0; line < n_lines; ++line) {
+            const size_t pq = (size_t)line / n_row;
+            const size_t i = r0 + (size_t)line % n_row;
+            const double* t = src + pq * L + (N - 1) - i;
+            double* o = dst + (size_t)line * N;
+            for (size_t j = 0; j < N; ++j) o[j] = t[j];
+        }
+    }
+    return out;
+}
+
+// `R = s_row[:, None] - s_col[None, :]; R *= R; R += a2; sqrt(R)`, as
+// `_seg_seg_reg_geometry` builds it in place: the difference, its square,
+// plus `a * a` (the caller passes that product, formed as numpy formed it),
+// then a correctly rounded sqrt. Two roundings before the sqrt, never fused:
+// this translation unit is built with -ffp-contract=off.
+static py::array_t<double>
+reg_distance_table(
+    py::array_t<double, py::array::c_style | py::array::forcecast> s_row,
+    py::array_t<double, py::array::c_style | py::array::forcecast> s_col,
+    double a2) {
+    const size_t n_r = (size_t)s_row.shape(0), n_c = (size_t)s_col.shape(0);
+    py::array_t<double> out({n_r, n_c});
+    const double* sr = s_row.data();
+    const double* sc = s_col.data();
+    double* R = out.mutable_data();
+    {
+        py::gil_scoped_release release;
+#pragma omp parallel for schedule(static)
+        for (long long i = 0; i < (long long)n_r; ++i) {
+            const double si = sr[i];
+            double* row = R + (size_t)i * n_c;
+            for (size_t j = 0; j < n_c; ++j) {
+                double d = si - sc[j];
+                d *= d;
+                d += a2;
+                row[j] = std::sqrt(d);
+            }
+        }
+    }
+    return out;
+}
+
+// `(A_st + A_reg) - J` with A_st real and the other two complex, all the same
+// shape: numpy promotes A_st to complex as `x + 0j`, adds componentwise, then
+// subtracts componentwise. The imaginary part is `(0.0 + im(A_reg)) - im(J)`,
+// written out because `0.0 + -0.0` is `+0.0`, so dropping the `0.0 +` would
+// change the sign of an exact zero.
+static py::array_t<std::complex<double>>
+same_edge_corr_combine(
+    py::array_t<double, py::array::c_style | py::array::forcecast> A_st,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> A_reg,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> J) {
+    const size_t n = (size_t)A_st.size();
+    if ((size_t)A_reg.size() != n || (size_t)J.size() != n ||
+        A_st.ndim() != A_reg.ndim() || A_st.ndim() != J.ndim()) {
+        throw std::runtime_error("same_edge_corr_combine: shapes differ");
+    }
+    for (py::ssize_t k = 0; k < A_st.ndim(); ++k) {
+        if (A_st.shape(k) != A_reg.shape(k) || A_st.shape(k) != J.shape(k)) {
+            throw std::runtime_error("same_edge_corr_combine: shapes differ");
+        }
+    }
+    std::vector<py::ssize_t> shape(A_st.shape(), A_st.shape() + A_st.ndim());
+    py::array_t<std::complex<double>> out(shape);
+    const double* st = A_st.data();
+    const double* rg = reinterpret_cast<const double*>(A_reg.data());
+    const double* jj = reinterpret_cast<const double*>(J.data());
+    double* o = reinterpret_cast<double*>(out.mutable_data());
+    {
+        py::gil_scoped_release release;
+#pragma omp parallel for schedule(static)
+        for (long long e = 0; e < (long long)n; ++e) {
+            const double re = st[e] + rg[2 * e];
+            const double im = 0.0 + rg[2 * e + 1];
+            o[2 * e] = re - jj[2 * e];
+            o[2 * e + 1] = im - jj[2 * e + 1];
+        }
+    }
+    return out;
+}
+
+
 // Assemble the (Z_pe, Z_ep, Z_ee) blocks for the singular basis enrichment at
 // K≥3 junctions (PR #47 productized path).
 //
@@ -7049,6 +7164,19 @@ void register_bspline(py::module_ &m) {
           "on every eligible pair they are equal.",
           py::arg("h"), py::arg("a"), py::arg("N"), py::arg("max_d"),
           py::arg("a_ek"), py::arg("cancel_flag") = 0);
+    m.def("toeplitz_gather_rows", &toeplitz_gather_rows,
+          py::arg("table"), py::arg("N"), py::arg("r0"), py::arg("r1"),
+          "Rows [r0, r1) of the (nd, nd, N, N) Toeplitz gather of an (nd, nd, "
+          "2N-1) table, in parallel; a copy, bit-identical to numpy's "
+          "(momwire#1441).");
+    m.def("reg_distance_table", &reg_distance_table,
+          py::arg("s_row"), py::arg("s_col"), py::arg("a2"),
+          "sqrt((s_row[:, None] - s_col[None, :])**2 + a2), numpy's in-place "
+          "order, in parallel; bit-identical (momwire#1441).");
+    m.def("same_edge_corr_combine", &same_edge_corr_combine,
+          py::arg("A_st"), py::arg("A_reg"), py::arg("J"),
+          "(A_st + A_reg) - J with numpy's float-to-complex promotion, in "
+          "parallel; bit-identical (momwire#1441).");
     m.def("seg_seg_static_moments_bspline_uniform_table",
           &seg_seg_static_moments_bspline_uniform_table,
           "The 2N-1 Toeplitz TABLE behind "

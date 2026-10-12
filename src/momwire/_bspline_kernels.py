@@ -146,6 +146,19 @@ _HAVE_BSPLINE_REG_SWEPT_ACCEL = _acc is not None and hasattr(
 _HAVE_BSPLINE_OFFEDGE_SWEPT_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_full_moments_bspline_swept"
 )
+# momwire#1441 step 0a: the windowed same-edge correction's three elementwise
+# numpy steps (the Toeplitz gather, the regular part's distance table, the
+# `(A_st + A_reg) - J` combine), in parallel C++. At 8 threads they were most
+# of the half of a bs2 free-space solve that ran on one thread. Each is numpy's
+# own arithmetic in numpy's order, so it is bit-identical at any thread count.
+# `_SAME_EDGE_GLUE_ACCEL = False` takes the numpy spellings, the reference the
+# C++ is gated against (tests/test_same_edge_glue_1441.py); tests flip it,
+# nothing else should.
+_SAME_EDGE_GLUE_ACCEL = True
+_HAVE_SAME_EDGE_GLUE_ACCEL = _acc is not None and all(
+    hasattr(_acc, f)
+    for f in ("toeplitz_gather_rows", "reg_distance_table", "same_edge_corr_combine")
+)
 # The extended-kernel twins of the two SAME-EDGE kernels (momwire#270 unit 1).
 # Separate capability flags, following the module's existing one-flag-per-
 # symbol pattern: an extension built before #270 lacks these symbols and the
@@ -636,6 +649,8 @@ def _toeplitz_gather(table, N, r0, r1):
     and the whole cost of the windowed static path is this indexing rather
     than a rebuilt table (momwire#968).
     """
+    if _SAME_EDGE_GLUE_ACCEL and _HAVE_SAME_EDGE_GLUE_ACCEL:
+        return _acc.toeplitz_gather_rows(table, int(N), int(r0), int(r1))
     idx = np.arange(N)[None, :] - np.arange(r0, r1)[:, None] + (N - 1)
     return np.ascontiguousarray(table[:, :, idx])
 
@@ -834,10 +849,18 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
     # else references, and `diff` is dead after the sqrt, so the whole
     # expression collapses onto one buffer. Bit-identical: the operations and
     # their order are unchanged, only their destination.
-    R = s_row[:, None] - s_flat[None, :]
-    R *= R
-    R += a * a
-    np.sqrt(R, out=R)
+    if _SAME_EDGE_GLUE_ACCEL and _HAVE_SAME_EDGE_GLUE_ACCEL:
+        # The same four steps per element, in parallel (momwire#1441).
+        R = _acc.reg_distance_table(
+            np.ascontiguousarray(s_row, dtype=np.float64),
+            np.ascontiguousarray(s_flat, dtype=np.float64),
+            a * a,
+        )
+    else:
+        R = s_row[:, None] - s_flat[None, :]
+        R *= R
+        R += a * a
+        np.sqrt(R, out=R)
 
     # u^p evaluated at every quadrature node, weight-folded
     u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)  # (max_d+1, N, n_qp)
@@ -1923,3 +1946,22 @@ def _offedge_swept_ladder_split(
                 )
             )
     return out
+
+
+def _same_edge_corr(A_st_w, A_reg_w, J_win):
+    """`(A_st_w + A_reg_w) - J_win`, the same-edge correction's combine.
+
+    In parallel C++ where the operands have the types it is written for (real
+    static moments, complex regular part and off-edge block), which is every
+    caller today; numpy otherwise, and as the reference (momwire#1441).
+    """
+    if (
+        _SAME_EDGE_GLUE_ACCEL
+        and _HAVE_SAME_EDGE_GLUE_ACCEL
+        and A_st_w.dtype == np.float64
+        and A_reg_w.dtype == np.complex128
+        and J_win.dtype == np.complex128
+        and A_st_w.shape == A_reg_w.shape == J_win.shape
+    ):
+        return _acc.same_edge_corr_combine(A_st_w, A_reg_w, J_win)
+    return (A_st_w + A_reg_w) - J_win
