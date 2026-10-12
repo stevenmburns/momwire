@@ -6,7 +6,7 @@ pyinstaller are installed::
     python scripts/eznec_freeze/build.py
 
 Produces ``dist/momwire-eznec/`` containing the launchers EZNEC and SimNEC
-point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec4[-<basis>][.exe]``
+point at -- ``momwire-nec5[-<basis>][.exe]``, ``momwire-nec42[-<basis>][.exe]``
 and the deprecated ``momwire-eznec[-<basis>][.exe]`` -- the single frozen
 ``momwire-eznec-engine[.exe]`` they run, and that engine's ``_internal``
 runtime.  The bundle directory must be kept together — a launcher spawns the engine BESIDE it, and
@@ -58,9 +58,11 @@ ENGINE_NAME = f"{NAME}-engine"
 # answers EZNEC's External NEC-5 slot AND SimNEC's NEC-5 engine -- SimNEC
 # reads the deck SYNTAX off a substring of the engine path (`nec2c`, then
 # `nec5`, momwire#1239) and EZNEC does not read the name at all, so one name
-# serves both hosts.  `momwire-nec4[-<basis>]` answers EZNEC's External
+# serves both hosts.  `momwire-nec42[-<basis>]` answers EZNEC's External
 # NEC-4.2 slot: the launcher reads `nec4` in its own name as the dialect and
-# the basis past `nec4-`.
+# the basis past `nec42-`.  `nec42` and not `nec4` (momwire#1443): SimNEC
+# recognises an engine by `nec42` in its path, as it does `nec5`; a copy
+# renamed to carry only `nec4` still answers, its basis read past `nec4-`.
 #
 # Every one is a COPY of the one native launcher (`entry.py`,
 # `momwire_eznec_client.c`), so a copy is a working launcher and costs ~31 KB
@@ -77,8 +79,8 @@ NEC5_LAUNCHERS = {
     "momwire-nec5-razor-2p": "the tent basis, razor-blade testing",
 }
 NEC4_LAUNCHERS = {
-    "momwire-nec4": "the default, degree-2 B-spline (bs2)",
-    "momwire-nec4-sinusoidal": "the sinusoidal basis, point matched",
+    "momwire-nec42": "the default, degree-2 B-spline (bs2)",
+    "momwire-nec42-sinusoidal": "the sinusoidal basis, point matched",
 }
 
 # The DEPRECATED names: the `momwire-eznec[-<basis>]` launchers every release
@@ -376,7 +378,7 @@ def readme_text(release: str, signing_note: str, suffix: str) -> str:
         "In EZNEC, choose the external engine you want - External NEC-5 or\n"
         "External NEC-4.2 - and point its engine path at a LAUNCHER from the\n"
         "matching family below, in this folder.  The name picks the deck\n"
-        "dialect, so a momwire-nec4 name belongs in the NEC-4.2 slot and a\n"
+        "dialect, so a momwire-nec42 name belongs in the NEC-4.2 slot and a\n"
         "momwire-nec5 name in the NEC-5 slot.  Keep the folder together: a\n"
         "launcher runs the engine beside it, and the engine needs its\n"
         "_internal runtime beside IT.\n"
@@ -418,17 +420,20 @@ def readme_text(release: str, signing_note: str, suffix: str) -> str:
         "formulation NEC-5 itself uses, which is why it agrees with the\n"
         "licensed engine to the fraction of an ohm measured below.\n"
         "\n"
-        "In the NEC-4.2 slot, momwire-nec4-sinusoidal is the sinusoidal basis\n"
-        "with point matching, the basis family NEC-4.2 itself belongs to.\n"
-        "razor cannot serve this slot: NEC-4.2 decks put their sources at\n"
-        "segment centres and razor places sources at knots, so a\n"
-        "momwire-nec4-razor-2p copy refuses, by name, in the printout.\n"
+        "In the NEC-4.2 slot, momwire-nec42-sinusoidal is the sinusoidal\n"
+        "basis with point matching, the basis family NEC-4.2 itself belongs\n"
+        "to.  razor cannot serve this slot: NEC-4.2 decks put their sources\n"
+        "at segment centres and razor places sources at knots, so a\n"
+        "momwire-nec42-razor-2p copy refuses, by name, in the printout.\n"
         "\n"
         "SIMNEC.  Point SimNEC's NEC-5 engine setting at momwire-nec5.exe or\n"
         "momwire-nec5-razor-2p.exe.  SimNEC decides which deck syntax to write\n"
         "from the engine's NAME, which must contain nec5, so the old\n"
         "momwire-eznec names will not do there.  Same engine, same warm start;\n"
-        "a path with no spaces in it is safest.\n"
+        "a path with no spaces in it is safest.  SimNEC recognises a NEC-4.2\n"
+        "engine by nec42 in its name, which is why the NEC-4.2 launchers\n"
+        "carry it; a copy named with just nec4 still answers the NEC-4.2\n"
+        "slot in EZNEC.\n"
         "\n"
         "REPRODUCTION IS NOT ACCURACY.  razor-2p agrees with the licensed\n"
         "engine because it runs the same algorithm, not because it is more\n"
@@ -481,9 +486,9 @@ def readme_text(release: str, signing_note: str, suffix: str) -> str:
         "of an ohm of formulation.\n"
         "\n"
         "MAKING ANOTHER.  The basis rides on the FILENAME: everything after\n"
-        "'nec5-' or 'nec4-' selects it.  So copy a LAUNCHER in this folder —\n"
+        "'nec5-' or 'nec42-' selects it.  So copy a LAUNCHER in this folder —\n"
         "a few tens of kilobytes, not the engine — rename the copy to\n"
-        "momwire-nec5-<basis>.exe or momwire-nec4-<basis>.exe, and that\n"
+        "momwire-nec5-<basis>.exe or momwire-nec42-<basis>.exe, and that\n"
         "basis is what answers, in that slot.  Known bases:\n"
         "\n"
         f"{nec5_known}\n"

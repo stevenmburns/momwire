@@ -75,7 +75,7 @@ The same tag also triggers `eznec-dropin`, which Authenticode-signs the
 frozen engine and the compiled launcher `momwire-eznec.exe`, then copies
 the launcher once per name in `launcher_stems()` in
 `scripts/eznec_freeze/build.py` (today seven: `momwire-nec5[-razor-2p]`,
-`momwire-nec4[-sinusoidal]`, and the deprecated `momwire-eznec-razor-2p` /
+`momwire-nec42[-sinusoidal]`, and the deprecated `momwire-eznec-razor-2p` /
 `-razor-nec5` beside `momwire-eznec` itself) with Azure Artifact Signing
 before zipping them. Non-tag builds sign with a throwaway self-signed cert,
 so a tag is the ONLY time the real certificate is exercised.

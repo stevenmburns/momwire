@@ -608,7 +608,7 @@ def skeleton(line: str) -> tuple[str, tuple[tuple[int, str], ...]]:
 
 
 # The slot's default basis and its point-matched twin, the launcher a
-# NEC-4.2 user compares against first (``momwire-nec4-sinusoidal.exe``).
+# NEC-4.2 user compares against first (``momwire-nec42-sinusoidal.exe``).
 SERVED_BASES = ("bspline", "sinusoidal")
 
 
@@ -1003,7 +1003,7 @@ _DAN_REFUSAL = (
 @pytest.mark.parametrize("basis", SERVED_BASES)
 def test_dans_ne1_dipole_over_gn3_serves_through_the_slot(basis, tmp_path):
     """Through the slot's process entry, the way EZNEC launches
-    ``momwire-nec4.exe``: two paths, a printout written.  Before momwire#1352
+    ``momwire-nec42.exe``: two paths, a printout written.  Before momwire#1352
     this printout was the one line Dan reported."""
     deck, out = tmp_path / "EZ.NEC", tmp_path / "NEC.OUT"
     deck.write_bytes(DAN_NE1_GN3.encode("latin-1"))

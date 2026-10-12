@@ -90,8 +90,9 @@ def basis_for(prog: str) -> str:
     on a stream nobody sees.
     """
     if dialect_for(prog) == "nec4":
-        # A nec4 name reads its basis past `nec4` alone: the NEC-5 markers
-        # cannot coexist with it in a name that means one slot.
+        # A nec4 name reads its basis past `nec42` (else `nec4`, momwire#1443)
+        # alone: the NEC-5 markers cannot coexist with it in a name that
+        # means one slot.
         suffix = nec4_basis_from_program_name(prog)
     else:
         suffix = basis_from_program_name(prog, MARKER, consumed=ENGINE_SEGMENT)

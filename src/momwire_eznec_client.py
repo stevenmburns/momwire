@@ -53,9 +53,10 @@ _CLIENT_SEGMENT = "client"
 # `momwire-nec5[-<basis>]` is the family SimNEC's NEC command setting points
 # at; the basis rides past this marker exactly as it rides past `eznec-`.
 _NEC5_MARKER = "nec5-"
-# momwire#1295: a name carrying `nec4` (`momwire-nec4[-<basis>]`) answers
-# EZNEC's External NEC-4.2 slot. It is read FIRST and alone: the dialect is the
-# engine's identity, and the basis then rides past `nec4` only.
+# momwire#1295: a name carrying `nec4` (shipped as `momwire-nec42[-<basis>]`,
+# momwire#1443) answers EZNEC's External NEC-4.2 slot. It is read FIRST and
+# alone: the dialect is the engine's identity, and the basis then rides past
+# `nec42` (else `nec4`) only.
 
 DEFAULT_IDLE_TIMEOUT = 900.0
 

@@ -24,7 +24,7 @@ that process.
    download still fails.
 4. Point EZNEC's external-engine path at `momwire-nec5.exe` inside that
    folder. (For EZNEC's External NEC-4.2 engine option, point it at
-   `momwire-nec4.exe` instead — see [below](#choosing-the-formulation).)
+   `momwire-nec42.exe` instead — see [below](#choosing-the-formulation).)
 
 That is the whole installation. No Python, no environment, nothing on PATH.
 EZNEC's interface, models and displays stay EZNEC's; the electromagnetics
@@ -89,8 +89,8 @@ momwire-nec5-razor-2p.exe     the tent basis with razor-blade path testing,
                               at NEC-5's two-point rule
 
 EZNEC's External NEC-4.2 slot:
-momwire-nec4.exe              the default — degree-2 B-spline (bs2)
-momwire-nec4-sinusoidal.exe   the sinusoidal basis, point matched
+momwire-nec42.exe             the default — degree-2 B-spline (bs2)
+momwire-nec42-sinusoidal.exe  the sinusoidal basis, point matched
 
 The old names, deprecated — still shipped, still identical:
 momwire-eznec.exe             = momwire-nec5.exe
@@ -100,12 +100,12 @@ momwire-eznec-razor-nec5.exe  = momwire-nec5-razor-2p.exe
 momwire-eznec-engine.exe      the compute engine the launchers run
 ```
 
-The name picks the deck dialect as well as the basis, so a `momwire-nec4`
+The name picks the deck dialect as well as the basis, so a `momwire-nec42`
 name belongs in EZNEC's NEC-4.2 slot and a `momwire-nec5` name in its NEC-5
 slot. In the NEC-4.2 slot, `sinusoidal` is the basis family NEC-4.2 itself
 belongs to; razor cannot serve there, because NEC-4.2 decks put their sources
 at segment centres and razor places sources at knots, so a
-`momwire-nec4-razor-2p` copy refuses by name.
+`momwire-nec42-razor-2p` copy refuses by name.
 
 In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
 - **Current sources** (`EX 6`), including several at once, so a phased array
@@ -223,10 +223,10 @@ on the deck above — is formulation. A disagreement is information about the
 mesh before it is information about either engine.
 
 **Making another.** The basis rides on the *filename*: everything after
-`nec5-` (or `nec4-`) selects it, a Windows `.exe` stripped first. So a copy
+`nec5-` (or `nec42-`) selects it, a Windows `.exe` stripped first. So a copy
 you make yourself works — copy a **launcher** (a couple of hundred kilobytes,
 not the engine), rename the copy to `momwire-nec5-<basis>.exe` (or
-`momwire-nec4-<basis>.exe`) in the same folder, and that basis answers in that
+`momwire-nec42-<basis>.exe`) in the same folder, and that basis answers in that
 slot. This is the same rule the [SimNEC portal's](/reference/portal-usage/)
 `momwire-nec2c-<basis>` commands use, with one owner behind both. The bundle
 ships two per slot because that is what the parity work was about; the rest
@@ -243,6 +243,12 @@ The `momwire-nec5` names are also what
 [SimNEC's NEC-5 engine setting](/reference/portal-usage/#simnecs-nec-5-engine)
 needs, since SimNEC reads `nec5` in the path. A deprecated
 `momwire-eznec-<basis>.exe` copy still works in EZNEC, as it always did.
+
+The NEC-4.2 launchers carry `nec42` for the same reason: SimNEC recognises an
+engine by `nec42` in its name, as it does `nec5`, so `momwire-nec42.exe` is
+what its NEC-4.2 engine setting takes. (Releases before momwire#1443 shipped
+them as `momwire-nec4[-<basis>].exe`.) A copy named with just `nec4` — no
+`2` — still answers EZNEC's NEC-4.2 slot, its basis read past `nec4-`.
 
 `sinusoidal` cannot answer the NEC-5 dialect — every deck in it drives a NODE, and
 under point matching the match points are the segment centres, so a delta at a

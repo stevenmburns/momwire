@@ -361,6 +361,12 @@ def basis_from_program_name(
 # executable's NAME is the only signal, as it already is for the basis.
 NEC4_MARKER = "nec4"
 
+# The marker the shipped launchers carry (momwire#1443): SimNEC recognises an
+# engine by `nec42` in its path, so `momwire-nec42[-<basis>]` is the name, and
+# the basis is read past `nec42` when the name carries it.  A name carrying
+# only `nec4` (a renamed copy) still reads past `nec4`, as it did before.
+NEC42_MARKER = "nec42"
+
 
 def _program_stem(prog: str) -> str:
     """``prog``'s basename, casefolded, a Windows ``.exe`` stripped — the
@@ -383,19 +389,23 @@ def dialect_from_program_name(prog: str) -> str:
 def nec4_basis_from_program_name(prog: str) -> str | None:
     """The basis a nec4 program name selects, or ``None`` for the default.
 
-    ``<anything>nec4`` ends the name: the default.  ``<anything>nec4-<basis>``
-    names ``<basis>``, and ``<anything>nec4-`` names the empty basis, which
+    The marker is :data:`NEC42_MARKER` when the name carries it, else
+    :data:`NEC4_MARKER` (momwire#1443).  ``<anything>nec42`` ends the name:
+    the default.  ``<anything>nec42-<basis>`` names ``<basis>``, and
+    ``<anything>nec42-`` names the empty basis, which
     :func:`basis_from_program_name` already treats as a typo to refuse rather
     than as the default.  Any other continuation is returned whole as the
-    suffix — ``momwire-nec42`` names the basis ``"2"`` — so it reaches the
+    suffix — ``momwire-nec42x`` names the basis ``"x"`` — so it reaches the
     refusal by name: an unknown suffix never falls back silently (momwire#628).
-    A name without the marker returns ``None``; the caller has already
-    decided the dialect with :func:`dialect_from_program_name`.
+    A name carrying ``nec4`` but not ``nec42`` reads the same way past
+    ``nec4``.  A name without either marker returns ``None``; the caller has
+    already decided the dialect with :func:`dialect_from_program_name`.
     """
     name = _program_stem(prog)
     if NEC4_MARKER not in name:
         return None
-    rest = name.split(NEC4_MARKER, 1)[1]
+    marker = NEC42_MARKER if NEC42_MARKER in name else NEC4_MARKER
+    rest = name.split(marker, 1)[1]
     if rest == "":
         return None
     return rest[1:] if rest.startswith("-") else rest

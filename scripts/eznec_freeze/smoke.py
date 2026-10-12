@@ -97,7 +97,7 @@ Ten gates, derived from the seam's own contract (momwire#497 U1):
 10. **The NEC-4.2 names** (momwire#1295) — ``build.py``'s ``NEC4_LAUNCHERS``
    are present and serve a deck EZNEC's External NEC-4.2 slot actually wrote
    (``tests/fixtures/eznec_nec42/``): byte-identical to the module run in the
-   nec4 dialect and the basis read past ``nec4-`` (but for the three
+   nec4 dialect and the basis read past ``nec42-`` (but for the three
    wall-clock values a NEC-4.2 printout carries, masked), under the NEC-4.2 banner
    (never NEC-5's), a SOLVE and not a refusal, stamped with that basis, and
    with a feed-point impedance within 5 % of the licensed NEC-4.2's own
@@ -840,14 +840,15 @@ def _licensed_nec4_impedance() -> complex:
 def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
     """Gate 10 — the NEC-4.2 names (momwire#1295).
 
-    Each shipped ``momwire-nec4[-<basis>]`` must be present and serve a deck
+    Each shipped ``momwire-nec42[-<basis>]`` must be present and serve a deck
     the NEC-4.2 slot wrote, byte-identically to ``_shell.main`` run in the
-    nec4 dialect and the basis its name reads past ``nec4-`` — the default
+    nec4 dialect and the basis its name reads past ``nec42-`` — the default
     for the plain name.  Byte identity is the gate on the bundle; the banner,
     the solve, the stamp and the licensed impedance are what make the
     comparison unable to pass on a wrong dialect or a refusal (both sides of
     a refusal are byte-equal too, gate 4's blind spot).
     """
+    from momwire.deck._solver import nec4_basis_from_program_name
     from momwire.eznec._serve import BASIS as DEFAULT_BASIS
 
     failures = 0
@@ -860,7 +861,9 @@ def _gate_nec4(exe: Path, work: Path, env: dict[str, str]) -> int:
             print(f"FAIL {launcher.name}: shipped NEC-4.2 launcher is MISSING")
             failures += 1
             continue
-        basis = stem.partition("nec4-")[2] or None
+        # The name rule itself, not a restatement: past `nec42-` for the
+        # shipped names (momwire#1443).
+        basis = nec4_basis_from_program_name(stem)
         v_out = work / f"{NEC4_DECK}.{stem}.frozen.out"
         m_out = work / f"{NEC4_DECK}.{stem}.module.out"
         run([str(launcher), str(deck), str(v_out)], v_out, env=env)

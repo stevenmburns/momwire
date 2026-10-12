@@ -131,11 +131,15 @@ typedef int lock_t;
  * `_NEC5_MARKER` rule, spelt again here for the copy that drifts. */
 #define NEC5_MARKER "nec5-"
 
-/* momwire#1295: a name carrying `nec4` (`momwire-nec4[-<basis>]`) answers
- * EZNEC's External NEC-4.2 slot.  Read FIRST and alone -- the slot is the
- * engine's identity, and the basis then rides past `nec4` only -- by the rule
- * `momwire_serve_client.filename_nec4` spells, copied here whole. */
+/* momwire#1295: a name carrying `nec4` answers EZNEC's External NEC-4.2
+ * slot.  Read FIRST and alone -- the slot is the engine's identity, and the
+ * basis then rides past the marker only -- by the rule
+ * `momwire_serve_client.filename_nec4` spells, copied here whole.  The
+ * marker is `nec42` when the name carries it (momwire#1443: the shipped
+ * `momwire-nec42[-<basis>]`, which SimNEC recognises by `nec42`), else
+ * `nec4`, so a renamed copy carrying only `nec4` reads as it always has. */
 #define NEC4_MARKER "nec4"
+#define NEC42_MARKER "nec42"
 #define NEC4_KEY_ELEMENT "dialect=nec4"
 
 /* SimNEC's configure step runs `"<path>" -version` on a nec5 engine, takes
@@ -564,9 +568,10 @@ static void resolve_path(const char *path, char *out, size_t cap)
  * names are ours and a Windows rename is the only thing that recases them.
  *
  * `*nec4` is set when the name carries NEC4_MARKER (momwire#1295).  Such a
- * name reads its basis past the marker alone: nothing after it is the
- * default, `-<basis>` names one, and any other continuation (`nec42`) is
- * returned whole so it reaches the engine's refusal by name. */
+ * name reads its basis past the marker alone -- NEC42_MARKER when it carries
+ * that, else NEC4_MARKER (momwire#1443): nothing after it is the default,
+ * `-<basis>` names one, and any other continuation (`nec42x`) is returned
+ * whole so it reaches the engine's refusal by name. */
 static int basis_of(const char *argv0, char *out, size_t cap, int *nec4)
 {
     char name[PATH_CAP];
@@ -597,10 +602,15 @@ static int basis_of(const char *argv0, char *out, size_t cap, int *nec4)
         name[len - 4] = '\0';
     }
 
-    marker = strstr(name, NEC4_MARKER);
+    marker = strstr(name, NEC42_MARKER);
+    if (marker != NULL) {
+        suffix = marker + strlen(NEC42_MARKER);
+    } else {
+        marker = strstr(name, NEC4_MARKER);
+        suffix = marker != NULL ? marker + strlen(NEC4_MARKER) : NULL;
+    }
     if (marker != NULL) {
         *nec4 = 1;
-        suffix = marker + strlen(NEC4_MARKER);
         if (suffix[0] == '\0') {
             out[0] = '\0';
             return 0;

@@ -8,7 +8,8 @@ each.
 
 Found 2026-10-04 at the 0.71.0 pre-tag Windows GUI check: both were written
 by EZNEC Pro/2+ v7.0.4 with its External NEC-4.2 slot pointed straight at
-the 0.71.0 release candidate's momwire-nec4.exe (not through the capture
+the 0.71.0 release candidate's momwire-nec4.exe, the launcher's name until
+momwire#1443 renamed it momwire-nec42.exe (not through the capture
 shim, so there is no meta.tsv), and both came back refused - the reader then
 admitted a current source only as a group's sole source.  The same
 Cardioid.ez through the NEC-5 slot is capture 0032 in
