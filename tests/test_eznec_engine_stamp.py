@@ -112,6 +112,31 @@ def assert_stamped(text: str, *, basis: str) -> None:
     assert len(line) < 80, line
 
 
+@pytest.fixture(autouse=True)
+def _fresh_version_cache():
+    """The stamp reads the version once per process (momwire#1445); every gate
+    here that fakes it needs that one read to happen inside the fake."""
+    _printout._momwire_version.cache_clear()
+    yield
+    _printout._momwire_version.cache_clear()
+
+
+def _metadata_says(monkeypatch, answer) -> None:
+    """Make the installed metadata answer ``answer`` (a ``version`` stand-in).
+
+    The fast scan (momwire#1445) reads the real install before
+    ``importlib.metadata`` is ever asked, so a fake of the latter alone would
+    be a fake nothing consults.  The scan is made to defer instead, which is
+    the route every non-plain layout takes.
+    """
+
+    def defer():
+        raise mech._NotPlain("faked")
+
+    monkeypatch.setattr(mech, "_scan_metadata_version", defer)
+    monkeypatch.setattr(importlib.metadata, "version", answer)
+
+
 # --------------------------------------------------------------------------
 # the stamp text itself
 # --------------------------------------------------------------------------
@@ -143,7 +168,7 @@ def test_a_missing_package_version_stamps_unknown_rather_than_raising(monkeypatc
     def boom(name):
         raise importlib.metadata.PackageNotFoundError(name)
 
-    monkeypatch.setattr(importlib.metadata, "version", boom)
+    _metadata_says(monkeypatch, boom)
     assert engine_stamp("bspline") == (
         f" momwire unknown bspline {momwire.accelerator_variant or 'none'}"
     )
@@ -152,9 +177,7 @@ def test_a_missing_package_version_stamps_unknown_rather_than_raising(monkeypatc
 def test_any_metadata_failure_is_caught_not_just_the_documented_one(monkeypatch):
     """A half-written ``dist-info`` raises from inside the reader rather than
     as ``PackageNotFoundError``, so the handler is deliberately blanket."""
-    monkeypatch.setattr(
-        importlib.metadata, "version", lambda name: (_ for _ in ()).throw(OSError("x"))
-    )
+    _metadata_says(monkeypatch, lambda name: (_ for _ in ()).throw(OSError("x")))
     assert engine_stamp("bspline").split()[1] == "unknown"
 
 
@@ -437,7 +460,7 @@ def _plant(bundle: Path, *versions: str) -> None:
 def test_the_baked_version_wins_over_the_metadata_in_a_frozen_bundle(
     monkeypatch, tmp_path
 ):
-    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _metadata_says(monkeypatch, lambda name: "0.66.0")
     _freeze(monkeypatch, tmp_path, baked="9.8.7")
     assert mech.momwire_version() == "9.8.7"
     assert engine_stamp("bspline").split()[1] == "9.8.7"
@@ -449,7 +472,7 @@ def test_the_metadata_is_the_fallback_when_a_bundle_has_nothing_baked(
 ):
     """A bundle frozen before momwire#1277 (or with the bake lost) still stamps
     a version — the metadata's, which is what every bundle did before."""
-    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _metadata_says(monkeypatch, lambda name: "0.66.0")
     _freeze(monkeypatch, tmp_path, baked=None)
     assert importlib.util.find_spec(mech.BUILD_VERSION_MODULE) is None
     assert mech.momwire_version() == "0.66.0"
@@ -458,7 +481,7 @@ def test_the_metadata_is_the_fallback_when_a_bundle_has_nothing_baked(
 
 @pytest.mark.parametrize("baked", ["", "   ", None])
 def test_an_empty_or_missing_baked_value_is_not_a_version(monkeypatch, tmp_path, baked):
-    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _metadata_says(monkeypatch, lambda name: "0.66.0")
     _freeze(monkeypatch, tmp_path, baked="x")
     sys.modules[mech.BUILD_VERSION_MODULE].VERSION = baked
     assert mech.momwire_version() == "0.66.0"
@@ -576,7 +599,200 @@ def test_the_clients_version_probes_read_the_baked_version(monkeypatch, tmp_path
     import momwire_eznec_client
     import momwire_nec2c_client
 
-    monkeypatch.setattr(importlib.metadata, "version", lambda name: "0.66.0")
+    _metadata_says(monkeypatch, lambda name: "0.66.0")
     _freeze(monkeypatch, tmp_path, baked="9.8.7")
     assert momwire_nec2c_client.probe_version() == "NEC2momwire.9.8"
     assert momwire_eznec_client.probe_version() == "NEC5momwire.9.8"
+
+
+# --------------------------------------------------------------------------
+# the metadata read without importing importlib.metadata (momwire#1445)
+# --------------------------------------------------------------------------
+#
+# A thin client is one call long, and `import importlib.metadata` was most of
+# it.  The scan in `momwire_serve_client` answers the plain layout itself and
+# defers everything else to the real reader, so the gates below hold two
+# things: on every plain layout the scan ANSWERS (it did not just defer, which
+# would make the equality the old reader compared with itself), and its answer
+# is the real reader's.  Each layout is its own `sys.path`.
+
+
+def _info(root: Path, dirname: str, filename: str, text: str) -> Path:
+    info = root / dirname
+    info.mkdir(parents=True, exist_ok=True)
+    (info / filename).write_text(text, encoding="utf-8", newline="")
+    return root
+
+
+def _meta(version: str, name: str = "momwire") -> str:
+    return f"Metadata-Version: 2.1\nName: {name}\nVersion: {version}\n\nbody\n"
+
+
+def _both_readers(monkeypatch, entries: list[Path]) -> tuple[str, str]:
+    monkeypatch.setattr(sys, "path", [str(e) for e in entries])
+    importlib.invalidate_caches()
+    return mech._scan_metadata_version(), importlib.metadata.version("momwire")
+
+
+PLAIN_LAYOUTS = {
+    "one dist-info": lambda t: [
+        _info(t, "momwire-1.2.3.dist-info", "METADATA", _meta("1.2.3"))
+    ],
+    "first path entry wins": lambda t: [
+        _info(t / "a", "momwire-2.0.0.dist-info", "METADATA", _meta("2.0.0")),
+        _info(t / "b", "momwire-1.0.0.dist-info", "METADATA", _meta("1.0.0")),
+    ],
+    "a missing entry is skipped": lambda t: [
+        t / "absent",
+        _info(t / "b", "momwire-1.0.0.dist-info", "METADATA", _meta("1.0.0")),
+    ],
+    "the name is case-folded": lambda t: [
+        _info(t, "MomWire-3.1.0.dist-info", "METADATA", _meta("3.1.0", "MomWire"))
+    ],
+    "an egg-info answers from PKG-INFO": lambda t: [
+        _info(t, "momwire.egg-info", "PKG-INFO", _meta("0.9.1"))
+    ],
+    "another project's metadata is not momwire's": lambda t: [
+        _info(
+            t / "a",
+            "momwire_extra-9.0.0.dist-info",
+            "METADATA",
+            _meta("9.0.0", "momwire_extra"),
+        ),
+        _info(t / "a", "momwirex-8.0.0.dist-info", "METADATA", _meta("8.0.0", "x")),
+        _info(t / "b", "momwire-1.5.0.dist-info", "METADATA", _meta("1.5.0")),
+    ],
+    "the header name is case-insensitive": lambda t: [
+        _info(
+            t,
+            "momwire-4.0.0.dist-info",
+            "METADATA",
+            "Name: momwire\nVERSION:  4.0rc1\n",
+        )
+    ],
+    "CRLF endings": lambda t: [
+        _info(
+            t,
+            "momwire-5.0.0.dist-info",
+            "METADATA",
+            "Name: momwire\r\nVersion: 5.0.0\r\n\r\n",
+        )
+    ],
+}
+
+
+@pytest.mark.parametrize("layout", sorted(PLAIN_LAYOUTS))
+def test_the_scan_answers_plain_layouts_as_the_real_reader_does(
+    monkeypatch, tmp_path, layout
+):
+    scanned, real = _both_readers(monkeypatch, PLAIN_LAYOUTS[layout](tmp_path))
+    assert scanned == real
+
+
+def test_the_scan_follows_the_directory_listing_order_within_one_entry(
+    monkeypatch, tmp_path
+):
+    """The overlay case (momwire#1277) outside a bundle: two dist-infos in ONE
+    directory, and the real reader takes the first in ``os.listdir`` order,
+    unsorted.  Whichever that is, the scan must agree."""
+    for v in ("0.66.0", "0.68.0"):
+        _info(tmp_path, f"momwire-{v}.dist-info", "METADATA", _meta(v))
+    scanned, real = _both_readers(monkeypatch, [tmp_path])
+    assert scanned == real
+
+
+NOT_PLAIN_LAYOUTS = {
+    "a folded Version header": lambda t: [
+        _info(
+            t, "momwire-1.0.0.dist-info", "METADATA", "Name: momwire\nVersion: 1\n x\n"
+        )
+    ],
+    "no Version header": lambda t: [
+        _info(t, "momwire-1.0.0.dist-info", "METADATA", "Name: momwire\n\nVersion: 1\n")
+    ],
+    "no METADATA or PKG-INFO": lambda t: [
+        _info(t, "momwire-1.0.0.dist-info", "RECORD", "")
+    ],
+    "nothing installed": lambda t: [t],
+}
+
+
+@pytest.mark.parametrize("layout", sorted(NOT_PLAIN_LAYOUTS))
+def test_the_scan_defers_what_it_cannot_read_with_certainty(
+    monkeypatch, tmp_path, layout
+):
+    entries = NOT_PLAIN_LAYOUTS[layout](tmp_path)
+    monkeypatch.setattr(sys, "path", [str(e) for e in entries])
+    with pytest.raises(mech._NotPlain):
+        mech._scan_metadata_version()
+
+
+def test_a_zip_or_an_egg_on_the_path_is_left_to_the_real_reader(monkeypatch, tmp_path):
+    """Both are searched through ``zipfile``, which is the import the scan
+    exists to avoid — so it does not search them at all, and defers."""
+    archive = tmp_path / "bundle.zip"
+    archive.write_bytes(b"PK\x05\x06" + b"\0" * 18)
+    egg = tmp_path / "momwire-1.0.0-py3.egg"
+    egg.mkdir()
+    for entry in (archive, egg):
+        monkeypatch.setattr(sys, "path", [str(entry)])
+        with pytest.raises(mech._NotPlain):
+            mech._scan_metadata_version()
+
+
+def test_a_finder_that_answers_for_distributions_is_left_to_the_real_reader(
+    monkeypatch, tmp_path
+):
+    class Finder:
+        @staticmethod
+        def find_distributions(context=None):
+            return iter(())
+
+    root = _info(tmp_path, "momwire-1.0.0.dist-info", "METADATA", _meta("1.0.0"))
+    monkeypatch.setattr(sys, "meta_path", [Finder, *sys.meta_path])
+    monkeypatch.setattr(sys, "path", [str(root)])
+    with pytest.raises(mech._NotPlain):
+        mech._scan_metadata_version()
+
+
+def test_a_deferred_scan_still_gets_the_real_readers_answer(monkeypatch, tmp_path):
+    entries = NOT_PLAIN_LAYOUTS["a folded Version header"](tmp_path)
+    monkeypatch.setattr(sys, "path", [str(e) for e in entries])
+    importlib.invalidate_caches()
+    assert mech.momwire_version() == importlib.metadata.version("momwire")
+
+
+def test_this_install_is_answered_by_the_scan_itself():
+    """The suite's own install is the plain shape, so here the fast path is
+    the one that runs — not a deferral that happens to agree."""
+    assert mech._scan_metadata_version() == importlib.metadata.version("momwire")
+
+
+def test_a_thin_client_keys_its_server_without_importing_importlib_metadata():
+    """The point of the scan: each client's whole hot path — ``config_key``,
+    which is ``dist_version`` plus a digest — never loads the module."""
+    import subprocess
+
+    probe = (
+        "import sys, momwire_eznec_client as c, momwire_nec2c_client as n;"
+        "c.config_key(None, 900.0); n.config_key(['x'], 900.0);"
+        "print('importlib.metadata' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "False", out.stderr
+
+
+def test_the_stamp_reads_the_version_once_per_process(monkeypatch):
+    calls = []
+
+    def counted():
+        calls.append(1)
+        return "1.2.3"
+
+    monkeypatch.setattr(mech, "momwire_version", counted)
+    first = engine_stamp("bspline")
+    second = engine_stamp("razor-2p")
+    assert first.split()[1] == second.split()[1] == "1.2.3"
+    assert len(calls) == 1
