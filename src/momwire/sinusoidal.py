@@ -937,6 +937,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
+        insulation_loss_tangent=None,
         distributed_rlc=None,
         swept_mem_mb=256,
         cancel=None,
@@ -960,6 +961,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 "wire_conductivity": wire_conductivity,
                 "insulation_radius": insulation_radius,
                 "insulation_eps_r": insulation_eps_r,
+                "insulation_loss_tangent": insulation_loss_tangent,
                 "distributed_rlc": distributed_rlc,
             },
             sites={
@@ -979,6 +981,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         wire_conductivity = _per_wire["wire_conductivity"]
         insulation_radius = _per_wire["insulation_radius"]
         insulation_eps_r = _per_wire["insulation_eps_r"]
+        insulation_loss_tangent = _per_wire["insulation_loss_tangent"]
         distributed_rlc = _per_wire["distributed_rlc"]
         feeds = _sites["feeds"]
         if feeds is None:
@@ -1174,6 +1177,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             insulation_radius,
             insulation_eps_r,
             distributed_rlc,
+            insulation_loss_tangent,
         )
 
         if n_per_edge_per_wire is None:
@@ -6446,7 +6450,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         * the loading is read at the solve's REAL ω — `medium.k_p·c` — never
           at k_m·c, which is not a frequency; the centre current σ·AC is the
           view's own, so a stitched view's buried entries are already at k_m;
-        * a JACKETED buried wire adds #1154's charge-side term. Its local
+        * a JACKETED buried wire adds #1154's charge-side term (and a lossy
+          jacket adds #765's through the same `zq`, in either medium). Its local
           potential dS'·q, q = −(1/jω)·dI/dl, is the field zq·I″ with
           zq = dS'/(jω); SG tests it by parts as zq·∫f_i′f_j′, whose pointwise
           form is −zq·f_j″. On the three-term shape f″(0) = −k²·σC, so
@@ -6478,7 +6483,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
 
     @_wire_spec.reads_input_wires("loss")
     def wire_loss_power(self, coeffs, omega=None):
-        """Ohmic power dissipated in the wire metal, from a solve's coeffs.
+        """Power dissipated in the wire — its metal and its jacket — from a
+        solve's coeffs.
 
         P_wire = ½ Σ_w Re[Z'_w(ω)] · Σ_{s∈w} ∫|I_s(ξ)|² dξ — the physical
         ∫R'(l)·|I(l)|² dl readout, same contract as the BSpline family's.
@@ -6490,8 +6496,12 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ∫|I|² = |P|²h + 2Re(P·R̄)·(2/k)sin(kh/2)
                     + |Q|²(h/2 − sin(kh)/2k) + |R|²(h/2 + sin(kh)/2k)
 
-        (P–Q and Q–R cross terms vanish by parity). Insulation loading is
-        purely reactive and contributes nothing.
+        (P–Q and Q–R cross terms vanish by parity). A lossless jacket
+        contributes nothing; one with tan δ > 0 (momwire#765) adds its
+        dielectric loss ½·Re(zq_loss,w)·Σ_{s∈w} ∫|I_s′(ξ)|² dξ, with
+        I′ = k·(Q·cos kξ − R·sin kξ) and so, by the same parity,
+
+            ∫|I′|² = k²·[|Q|²(h/2 + sin(kh)/2k) + |R|²(h/2 − sin(kh)/2k)].
 
         Returns (total_watts, per_wire_watts ndarray (n_wires,)).
         """
@@ -6533,6 +6543,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        zq_loss = _wire_loading.jacket_loss_charge(self, omega)
+        if zq_loss is not None:
+            int_abs_di2 = (k * k) * (
+                np.abs(Q) ** 2 * (0.5 * h + sin_kh / (2.0 * k))
+                + np.abs(R) ** 2 * (0.5 * h - sin_kh / (2.0 * k))
+            )
+            np.add.at(per_wire, wire_of, 0.5 * np.real(zq_loss)[wire_of] * int_abs_di2)
         return float(per_wire.sum()), per_wire
 
     def _buried_wire_loss_power(self, coeffs, omega, geom, below):
@@ -6555,7 +6572,10 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
               + ½|Q|²·[I(k − k̄) − I(k + k̄)] + ½|R|²·[I(k − k̄) + I(k + k̄)],
 
         which is the air closed form term for term at real k
-        (I(0) = h, I(2k) = sin(kh)/k).
+        (I(0) = h, I(2k) = sin(kh)/k). A lossy jacket's term (momwire#765)
+        integrates |I′|², I′ = k·(Q·cos kξ − R·sin kξ), the same way:
+
+            = |k|²·{ ½|Q|²·[I(k − k̄) + I(k + k̄)] + ½|R|²·[I(k − k̄) − I(k + k̄)] }.
         """
         medium = _crossing_fill.buried_medium(
             self.ground_eps, omega, self.eps, omega / self.c
@@ -6594,6 +6614,13 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        zq_loss = _wire_loading.jacket_loss_charge(self, omega)
+        if zq_loss is not None:
+            int_abs_di2 = np.abs(k_seg) ** 2 * (
+                0.5 * np.abs(Q) ** 2 * np.real(i_diff + i_sum)
+                + 0.5 * np.abs(R) ** 2 * np.real(i_diff - i_sum)
+            )
+            np.add.at(per_wire, wire_of, 0.5 * np.real(zq_loss)[wire_of] * int_abs_di2)
         return float(per_wire.sum()), per_wire
 
     def _feed_segment_current(self, alpha, seg_view, feed_seg, xi=0.0):

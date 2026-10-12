@@ -322,7 +322,8 @@ sinusoidal shapes, closed-form per segment, in `_apply_loading`. On every
 buried route (wholly buried, mixed, crossing) the shapes are written at
 their segment's own k and the loading is read at the solve's REAL ω — k_m·c
 is not a frequency — and a jacketed buried wire adds #1154's charge-side
-term as the derivative overlap zq·∫f_i′ f_j′ (momwire#1156).
+term as the derivative overlap zq·∫f_i′ f_j′ (momwire#1156). A lossy jacket
+(momwire#765) rides the same zq, in either medium.
 
 ## (k, η) are ARGUMENTS of the fill — momwire#995
 
@@ -5103,7 +5104,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         # (momwire#428); the overlap VALUES above are this rule's own share.
         spec = _wire_loading.loading_for(self, omega, geom)
         if spec.zq_seg is not None:
-            # A jacketed BURIED wire's charge-side term (momwire#1154): the
+            # A jacket's charge-side term (momwire#1154 buried, #765 lossy): the
             # local potential dS'·q, q = −(1/jω)·dI/dl, tested by parts the
             # way bspline's `_charge_gram` tests it —
             #
@@ -5121,7 +5122,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             #                    + R_eR_f·(h/2 − sin(kh)/2k) ].
             #
             # `zq_seg` is None on every deck without a jacketed wire below
-            # the interface, so every other fill is structurally untouched.
+            # the interface or a lossy jacket, so every other fill is
+            # structurally untouched.
             #
             # The R·R term's h/2 − sin(kh)/2k is `i_ss`, spelled without the
             # subtraction for the same reason as the series term (#1283).

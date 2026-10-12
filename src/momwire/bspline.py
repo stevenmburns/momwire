@@ -1295,7 +1295,13 @@ class BSplineSolver(
         together (scalar / per-wire like wire_conductivity). Adds King's
         quasi-static series inductance μ₀/2π·(1−1/εr)·ln(b/a) per meter —
         the insulated-wire velocity-factor effect (the wire tunes a few
-        percent long). Purely reactive; no dissipation modeled.
+        percent long) — with the equivalent kernel radius (#865). Purely
+        reactive unless a loss tangent is given.
+    insulation_loss_tangent : the jacket's dielectric loss tangent tan δ
+        (momwire#765), scalar / per-wire like the two above, NaN or 0 for a
+        lossless jacket; needs `insulation_radius`. Served as a charge-side
+        term (`_charge_gram` scaled by `_wire_loading.jacket_loss_charge`);
+        `wire_loss_power` counts its watts.
     distributed_rlc : NEC's `LD 2` / `LD 3` per-metre RLC (momwire#1088).
         None (default) = off; one `_wire_loading.DistributedRLC` applies to
         every wire, or a per-wire sequence whose None entries switch
@@ -1462,6 +1468,7 @@ class BSplineSolver(
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
+        insulation_loss_tangent=None,
         distributed_rlc=None,
         nsegs=101,
         ground_z=None,
@@ -1498,6 +1505,7 @@ class BSplineSolver(
                 "wire_conductivity": wire_conductivity,
                 "insulation_radius": insulation_radius,
                 "insulation_eps_r": insulation_eps_r,
+                "insulation_loss_tangent": insulation_loss_tangent,
                 "distributed_rlc": distributed_rlc,
             },
             sites={
@@ -1512,6 +1520,7 @@ class BSplineSolver(
         wire_conductivity = _per_wire["wire_conductivity"]
         insulation_radius = _per_wire["insulation_radius"]
         insulation_eps_r = _per_wire["insulation_eps_r"]
+        insulation_loss_tangent = _per_wire["insulation_loss_tangent"]
         distributed_rlc = _per_wire["distributed_rlc"]
         feeds = _sites["feeds"]
         if feeds is None:
@@ -1711,6 +1720,7 @@ class BSplineSolver(
             insulation_radius,
             insulation_eps_r,
             distributed_rlc,
+            insulation_loss_tangent,
         )
         # Per-instance cache for the k-independent loading Gram structure
         # (rows, cols, vals, wire_of_nnz) — see `_loading_gram`.
@@ -5131,11 +5141,12 @@ class BSplineSolver(
         The same closed-form moments as `_loading_gram`, on the
         differentiated per-segment polynomials (exact, since `polys` is).
         Cached per instance; built only when a deck has a jacketed buried
-        wire.
+        wire or a lossy jacket.
 
-        `wire_loss_power` does not read it: that readout is the METAL's
-        ohmic loss, and the real part of ΔS′ is the soil's loss seen through
-        the jacket, which the solved impedance carries.
+        `wire_loss_power` reads only the lossy jacket's share of it
+        (`_wire_loading.jacket_loss_charge`, momwire#765): the real part of
+        the buried ΔS′ is the soil's loss seen through the jacket, which the
+        solved impedance carries and the wire ledger must not count.
         """
         cached = self._cached_charge_gram
         if cached is not None:
@@ -5216,9 +5227,10 @@ class BSplineSolver(
         self._add_wire_scaled(
             Z, (rows, cols, vals, wire_ids), spec.z_wire, row_of=row_of
         )
-        # A jacketed BURIED wire's charge-side term (momwire#1154), after the
-        # series one. `zq_wire` is None on every deck without one, so every
-        # other fill is structurally what it was.
+        # A jacket's charge-side term — a BURIED jacket's (momwire#1154), a
+        # lossy one's (momwire#765) — after the series one. `zq_wire` is None
+        # on every deck without one, so every other fill is structurally what
+        # it was.
         if spec.zq_wire is not None:
             self._add_wire_scaled(Z, self._charge_gram(), spec.zq_wire, row_of=row_of)
         return Z
@@ -5265,7 +5277,7 @@ class BSplineSolver(
                 (zw[wire_ids] * vals, (rows, cols)), shape=(n, n)
             ).tocsr()
             if spec.zq_wire is not None:
-                # The buried jacket's charge-side term (momwire#1154), so the
+                # The jacket's charge-side term (momwire#1154, #765), so the
                 # H-matrix blocks carry what the dense `_apply_loading` does.
                 q_rows, q_cols, q_vals, q_wire = self._charge_gram()
                 L = (
@@ -5281,12 +5293,16 @@ class BSplineSolver(
 
     @_wire_spec.reads_input_wires("loss")
     def wire_loss_power(self, coeffs, omega=None):
-        """Ohmic power dissipated in the wire metal, from a solve's coeffs.
+        """Power dissipated in the wire — its metal and its jacket — from a
+        solve's coeffs.
 
         P_wire = ½ Σ_w Re[Z'_w(ω)] · (c^H S_w c) — the ∫ R'(l)·|I(l)|² dl
-        readout the downstream power budget reports. Insulation loading is
-        purely reactive and contributes nothing here. Trailing KCL
-        Lagrange-multiplier entries in `coeffs` are ignored.
+        readout the downstream power budget reports — plus, on a jacket with
+        tan δ > 0 (momwire#765), its dielectric loss
+        ½ Σ_w Re[zq_loss,w] · (c^H D_w c) = ½·Re(zq)·∫|dI/dl|² dl, through
+        the same derivative Gram the fill loads (`_charge_gram`). A lossless
+        jacket contributes nothing. Trailing KCL Lagrange-multiplier entries
+        in `coeffs` are ignored.
 
         Returns (total_watts, per_wire_watts ndarray (n_wires,)).
         """
@@ -5305,6 +5321,18 @@ class BSplineSolver(
         )
         contrib = 0.5 * r_w[wire_ids] * np.real(np.conj(c[rows]) * c[cols]) * vals
         np.add.at(per_wire, wire_ids, contrib)
+        zq_loss = _wire_loading.jacket_loss_charge(
+            self, self.omega if omega is None else omega
+        )
+        if zq_loss is not None:
+            q_rows, q_cols, q_vals, q_wire = self._charge_gram()
+            contrib = (
+                0.5
+                * np.real(zq_loss)[q_wire]
+                * np.real(np.conj(c[q_rows]) * c[q_cols])
+                * q_vals
+            )
+            np.add.at(per_wire, q_wire, contrib)
         return float(per_wire.sum()), per_wire
 
     # ------------------------------------------------------------------

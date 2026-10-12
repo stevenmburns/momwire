@@ -324,6 +324,7 @@ def _check_mesh_and_material(solver, sectors, polylines, axis, tol):
         ("conductivity", solver.wire_conductivity, "S/m", 1.0),
         ("jacket radius", solver.insulation_radius, "mm", 1e3),
         ("jacket eps_r", solver.insulation_eps_r, "", 1.0),
+        ("jacket loss tangent", solver.insulation_loss_tangent, "", 1.0),
     )
     for c in range(len(sectors[0])):
         w0 = sectors[0][c]
