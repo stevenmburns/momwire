@@ -1232,7 +1232,11 @@ class BSplineSolver(
         halves of an end-port feed) with the exact ring kernel
         K(z) = (1/2π)∮e^{-jkR}/(4πR)dφ, R² = z² + 4a²sin²(φ/2) — at every
         separation along that line, not only near the source, so no kernel
-        switch sits inside a wire. Every other pair (bends, offset parallel
+        switch sits inside a wire. A pair on one line across a radius step
+        (momwire#1438) takes the two-radius kernel, each ring on its own
+        wire's surface: R² = z² + a_i² + a_j² - 2a_i a_j cos φ
+        (`_exact_kernel.ring_kernel2`, symmetric in the radii, so Z stays
+        symmetric). Every other pair (bends, offset parallel
         wires, the ground image, the Sommerfeld remainder) keeps the kernel
         `extended_kernel` selects. The kernel is log-singular at z = 0; the
         self and adjacent cells integrate its log term by product
@@ -7159,6 +7163,28 @@ class BSplineSolver(
             edges.setdefault(int(labels[sl.start]), []).append((sl, arc, a_w))
         return [(S, edges[g]) for g, S in groups]
 
+    def _exact_kernel_lines(self, geom):
+        """[(segment indices, radius labels, [(slice, arc, radius) per
+        edge])] per coaxial line carrying a radius step (momwire#1438,
+        `_exact_kernel_seam.coaxial_lines`). An edge is one straight run at
+        one radius, so it lies on exactly one line."""
+        seg_a = self._seg_radius(geom)
+        labels, _groups = _exact_kernel_seam.coaxial_groups(
+            geom["seg_l"], geom["seg_r"], geom["tangents"], seg_a
+        )
+        lines = _exact_kernel_seam.coaxial_lines(
+            geom["seg_l"], geom["seg_r"], geom["tangents"], seg_a, labels
+        )
+        line_of = np.full(int(geom["n_segs_total"]), -1, dtype=np.int64)
+        for i, (S, _lab) in enumerate(lines):
+            line_of[S] = i
+        edges = {}
+        for _w, sl, arc, a_w in self._edge_ingredients(geom):
+            i = int(line_of[sl.start])
+            if i >= 0:
+                edges.setdefault(i, []).append((sl, arc, a_w))
+        return [(S, lab, edges[i]) for i, (S, lab) in enumerate(lines)]
+
     def _exact_kernel_base_J(self, geom, S, g_edges, k, rows=None, fill=None):
         """The (d+1, d+1, n, n) moments the free-space fill put on the
         group's pairs, recomputed through the same kernels with the same
@@ -7246,7 +7272,10 @@ class BSplineSolver(
         return n * per_pair + self._offedge_fallback_row_bytes(n)
 
     def _add_exact_kernel_correction(self, Z, geom, supp_seg, polys, k):
-        """Z += Z_exact - Z_base over every coaxial group (momwire#1408).
+        """Z += Z_exact - Z_base over every coaxial group (momwire#1408),
+        and over the cross-radius pairs of every line with a radius step
+        (momwire#1438: `_exact_kernel.CoaxialCrossRows`, the base masked to
+        those pairs).
 
         In place, by observer-row windows of each group (momwire#1411): a
         window's exact moments (`_exact_kernel.CoaxialRows`) minus the base
@@ -7275,19 +7304,27 @@ class BSplineSolver(
             and not np.iscomplexobj(self.eps)
         )
         fill = self._exact_kernel_fill_spec(geom, k)
-        for S, g_edges in self._exact_kernel_groups(geom):
+        budget = self.swept_mem_mb * 1024 * 1024
+        max_cached = max(1, budget // (nd * nd * 16 + 256))
+        # The one-radius groups, then the cross-radius pairs of every line
+        # with a radius step (momwire#1438). The two own disjoint pairs, so
+        # their corrections add.
+        jobs = [(S, g_edges, None) for S, g_edges in self._exact_kernel_groups(geom)]
+        jobs += [
+            (S, g_edges, lab) for S, lab, g_edges in self._exact_kernel_lines(geom)
+        ]
+        for S, g_edges, lab in jobs:
             n = S.size
+            cross = lab is not None
             _axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_l, seg_r, tang)
-            budget = self.swept_mem_mb * 1024 * 1024
-            exact = _exact_kernel.coaxial_rows(
-                x0,
-                sgn,
-                h,
-                float(seg_a[S[0]]),
-                k,
-                nd,
-                max_cached=max(1, budget // (nd * nd * 16 + 256)),
-            )
+            if cross:
+                exact = _exact_kernel.CoaxialCrossRows(
+                    x0, sgn, h, seg_a[S], lab, k, nd, max_cached=max_cached
+                )
+            else:
+                exact = _exact_kernel.coaxial_rows(
+                    x0, sgn, h, float(seg_a[S[0]]), k, nd, max_cached=max_cached
+                )
             # Bases are relabelled onto the group's local segment order;
             # a wing elsewhere points at the sentinel n, which no window
             # holds, so both assemblers skip it.
@@ -7307,9 +7344,14 @@ class BSplineSolver(
                 r1 = min(n, r0 + chunk)
                 self._checkpoint()
                 dJ = exact.rows(r0, r1)
-                dJ -= self._exact_kernel_base_J(
+                base = self._exact_kernel_base_J(
                     geom, S, g_edges, k, rows=slice(r0, r1), fill=fill
                 )
+                if cross:
+                    # The same-radius pairs are the one-radius groups'.
+                    base[:, :, ~exact.mask(r0, r1)] = 0.0
+                dJ -= base
+                del base
                 sB = supp_loc[B]
                 M = B[np.any((sB >= r0) & (sB < r1), axis=1)]
                 if accel:
@@ -7382,11 +7424,21 @@ class BSplineSolver(
         tang = geom["tangents"]
         seg_a = self._seg_radius(geom)
         n_total = int(geom["n_segs_total"])
-        for S, g_edges in self._exact_kernel_groups(geom):
+        jobs = [(S, g_edges, None) for S, g_edges in self._exact_kernel_groups(geom)]
+        jobs += [
+            (S, g_edges, lab) for S, lab, g_edges in self._exact_kernel_lines(geom)
+        ]
+        for S, g_edges, lab in jobs:
             n = S.size
             _axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_l, seg_r, tang)
-            dJ = _exact_kernel.coaxial_block(x0, sgn, h, float(seg_a[S[0]]), k, nd)
-            dJ -= self._exact_kernel_base_J(geom, S, g_edges, k)
+            if lab is None:
+                dJ = _exact_kernel.coaxial_block(x0, sgn, h, float(seg_a[S[0]]), k, nd)
+                dJ -= self._exact_kernel_base_J(geom, S, g_edges, k)
+            else:
+                dJ = _exact_kernel.coaxial_cross_block(x0, sgn, h, seg_a[S], lab, k, nd)
+                base = self._exact_kernel_base_J(geom, S, g_edges, k)
+                base[:, :, lab[:, None] == lab[None, :]] = 0.0
+                dJ -= base
             # assemble over the bases touching the group; wings elsewhere
             # point at one extra all-zero segment
             loc = np.full(n_total, n, dtype=np.int64)

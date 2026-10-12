@@ -1526,7 +1526,10 @@ class RazorSolver(
         `_exact_kernel_seam`: False (the default) is structurally absent and
         bit-for-bit the fill without it; True replaces, after the free-space
         fill, the kernel of every pair of segments on ONE line at ONE radius
-        by K(z) = (1/2π)∮e^{-jkR}/(4πR)dφ, R² = z² + 4a²sin²(φ/2); "auto"
+        by K(z) = (1/2π)∮e^{-jkR}/(4πR)dφ, R² = z² + 4a²sin²(φ/2), and of
+        every pair on one line across a radius step by the two-radius
+        kernel, observer ring on its own surface and source ring on its own,
+        R² = z² + a_o² + a_s² - 2a_o a_s cos φ (momwire#1438); "auto"
         resolves at construction to True iff it is served and some segment
         is shorter than 3 radii. Razor's rows are path-tested, so the
         correction is the kernel layer's 1-D point moments ∫τ'^q K dτ' at the
@@ -4539,7 +4542,11 @@ class RazorSolver(
     # ------------------------------------------------------------------
 
     def _add_exact_kernel_correction(self, Z, geom, k, omega):
-        """Z += (Z_exact - Z_base) over every coaxial equal-radius group.
+        """Z += (Z_exact - Z_base) over every coaxial equal-radius group,
+        and over the cross-radius pairs of every line with a radius step
+        (momwire#1438): there the observer point's ring is on ITS segment's
+        surface and the source's on the source's (`_exact_kernel.
+        PointCrossRows`), and the base is masked to those pairs.
 
         Razor's matrix element is linear in two moment tables, M0[o, j] =
         ∫_seg_j g dl' and M1[o, j] = ∫_seg_j τ' g dl', taken at observer
@@ -4601,8 +4608,13 @@ class RazorSolver(
         accel = _HAVE_EXACT_POINT_ASSEMBLE_ACCEL and _exact_kernel.point_accel_serves(
             k, 2
         )
-        _labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
-        for _g, S in groups:
+        labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
+        # The one-radius groups, then the cross-radius pairs of every line
+        # with a radius step (momwire#1438): disjoint (observer, source)
+        # pairs, so the corrections add.
+        jobs = [(S, None) for _g, S in groups]
+        jobs += _exact_kernel_seam.coaxial_lines(seg_p0, seg_r, seg_t, seg_a, labels)
+        for S, lab in jobs:
             n = S.size
             axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_p0, seg_r, seg_t)
             loc = np.full(n_seg, -1, dtype=np.int64)
@@ -4666,9 +4678,19 @@ class RazorSolver(
             r_m = np.concatenate(r_m)[by_o].astype(np.int64)
             r_A = np.ascontiguousarray(np.concatenate(r_A)[by_o])
             r_P = np.ascontiguousarray(np.concatenate(r_P)[by_o])
-            exact = _exact_kernel.point_rows(
-                x0, sgn, h, float(seg_a[S[0]]), k, 2, max_cached=4 * n + 1024
-            )
+            if lab is None:
+                exact = _exact_kernel.point_rows(
+                    x0, sgn, h, float(seg_a[S[0]]), k, 2, max_cached=4 * n + 1024
+                )
+            else:
+                # Option A: the observer on its own surface, the source on
+                # its own (`_exact_kernel.ring_kernel2`).
+                exact = _exact_kernel.PointCrossRows(
+                    x0, sgn, h, seg_a[S], lab, k, 2, max_cached=4 * n + 1024
+                )
+                lab_of = np.full(n_seg, -1, dtype=np.int64)
+                lab_of[S] = lab
+                obs_lab, obs_a = lab_of[obs_seg], seg_a[obs_seg]
             sub = {
                 "seg_p0": seg_p0[S],
                 "seg_t": seg_t[S],
@@ -4680,7 +4702,10 @@ class RazorSolver(
             for o0 in range(0, n_obs, chunk):
                 o1 = min(n_obs, o0 + chunk)
                 self._checkpoint()
-                mom = exact.rows(obs_x[o0:o1])  # (2, rows, n)
+                if lab is None:
+                    mom = exact.rows(obs_x[o0:o1])  # (2, rows, n)
+                else:
+                    mom = exact.rows(obs_x[o0:o1], obs_a[o0:o1], obs_lab[o0:o1])
                 ek = None
                 if src_lab is not None:
                     o = obs_seg[o0:o1]
@@ -4691,6 +4716,11 @@ class RazorSolver(
                         None if obs_rad is None else obs_rad[o],
                     )
                 M0b, M1b = self._seg_moments(obs_pt[o0:o1], sub, k, ek=ek)
+                if lab is not None:
+                    # The same-radius pairs are the one-radius groups'.
+                    same = obs_lab[o0:o1, None] == lab[None, :]
+                    M0b[same] = 0.0
+                    M1b[same] = 0.0
                 dM0 = np.subtract(mom[0], M0b, out=M0b)
                 dM1 = np.subtract(mom[1], M1b, out=M1b)
                 del mom
