@@ -6426,10 +6426,15 @@ class RazorSolver(
         p1 = p0 + np.asarray(geom["seg_h"], dtype=float)[:, None] * np.asarray(
             geom["seg_t"], dtype=float
         )
+        # Rounded once as whole arrays and walked as Python floats
+        # (momwire#1445): two `np.round` calls PER SEGMENT were this check's
+        # whole cost -- 3.3 ms of a 30 ms warm solve at 400 segments, more
+        # than the LU. The same elementwise rounding, so the same keys.
         seen = {}
-        for i in range(p0.shape[0]):
-            a = tuple(np.round(p0[i], 9))
-            b = tuple(np.round(p1[i], 9))
+        ends = zip(np.round(p0, 9).tolist(), np.round(p1, 9).tolist())
+        for i, (a, b) in enumerate(ends):
+            a = tuple(a)
+            b = tuple(b)
             key = (a, b) if a <= b else (b, a)
             if key in seen:
                 raise ValueError(
