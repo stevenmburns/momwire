@@ -342,10 +342,22 @@ def digest(parts: list[str]) -> str:
     The caller decides what is identity — the rule from #379: an upgrade, a
     different venv, a different basis is a DIFFERENT engine and must not be
     served by whatever is still resident from before.
-    """
-    import hashlib
 
-    return hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:16]
+    SHA-256 from CPython's own built-in module where it has one, ahead of
+    ``hashlib``: the digest is the same function either way, but ``hashlib``
+    loads OpenSSL's ``_hashlib`` first, ~1.1 ms of every warm client launch
+    on Haswell (momwire#1445).  ``_sha2`` is the module's name from 3.12,
+    ``_sha256`` before; a build with neither gets ``hashlib``.
+    """
+    try:
+        from _sha2 import sha256  # type: ignore[import-not-found]
+    except ImportError:
+        try:
+            from _sha256 import sha256  # type: ignore[import-not-found]
+        except ImportError:
+            from hashlib import sha256
+
+    return sha256("\0".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 def filename_basis(prog: str, marker: str, consumed: str | None = None) -> str | None:

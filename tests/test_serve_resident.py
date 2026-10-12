@@ -876,3 +876,35 @@ def test_a_client_with_a_runtime_dir_never_imports_tempfile(tmp_path):
         env=env,
     )
     assert out.stdout.strip() == "False", out.stderr
+
+
+@pytest.mark.parametrize(
+    "parts",
+    [
+        [],
+        [""],
+        ["eznec.0.76", sys.executable, "900.0", "basis=razor-2p"],
+        ["nec2c.1.2", "/opt/py/bin/python", "1e9", "dialect=nec4", "Ω µ"],
+    ],
+)
+def test_the_digest_is_sha256_whichever_module_computes_it(parts):
+    """momwire#1445 moved the key's hash off ``hashlib`` (whose OpenSSL load
+    cost a client launch ~1 ms) onto CPython's built-in SHA-256. The key is
+    shared with the C client and every resident server, so it is held to
+    ``hashlib``'s answer here, byte for byte."""
+    import hashlib
+
+    want = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()[:16]
+    assert mech.digest(parts) == want
+
+
+def test_a_client_keys_its_server_without_loading_openssl():
+    probe = (
+        "import sys, momwire_eznec_client as c;"
+        "c.config_key(None, 900.0);"
+        "print('_hashlib' in sys.modules)"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", probe], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "False", out.stderr
