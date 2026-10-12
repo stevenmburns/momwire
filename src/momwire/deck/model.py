@@ -73,6 +73,16 @@ class WireMaterial:
     # :func:`~momwire._wire_loading.series_impedance_per_wire`, so this is
     # a fourth optional field rather than an alternative to the first.
     distributed_rlc: DistributedRLC | None = None
+    # The jacket's dielectric loss tangent (momwire#765).  None is a lossless
+    # jacket, and it means nothing without ``insulation_radius``.  Last so the
+    # positional order of the fields above is unchanged.
+    insulation_loss_tangent: float | None = None
+
+    def __post_init__(self) -> None:
+        if self.insulation_loss_tangent is not None and self.insulation_radius is None:
+            raise ValueError(
+                "insulation_loss_tangent needs a jacket (insulation_radius)"
+            )
 
 
 @dataclass(frozen=True)

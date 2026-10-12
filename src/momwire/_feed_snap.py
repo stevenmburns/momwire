@@ -260,6 +260,7 @@ def mirror_images(solver, wire, arc_a, arc_b):
             _per_wire(solver, "wire_conductivity", n_w),
             _per_wire(solver, "insulation_radius", n_w),
             _per_wire(solver, "insulation_eps_r", n_w),
+            _per_wire(solver, "insulation_loss_tangent", n_w),
             _per_wire(solver, "distributed_rlc", n_w),
         )
     )

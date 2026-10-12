@@ -737,7 +737,8 @@ def group_loads(model: DeckModel) -> tuple[tuple[int, ...], ...]:
 
 
 def _wire_loading(materials) -> dict[str, object]:
-    """The per-wire conductivity / insulation / per-metre-RLC a solver takes.
+    """The per-wire conductivity / insulation / per-metre-RLC a solver takes
+    (and the jacket's loss tangent, momwire#765, when one is named).
 
     momwire's per-wire convention is one entry per wire with ``NaN`` for "not
     this one", and an array is only passed when SOMETHING in it is finite —
@@ -769,6 +770,16 @@ def _wire_loading(materials) -> dict[str, object]:
             for m in materials
         ]
     )
+    loss_tangent = np.array(
+        [
+            m.insulation_loss_tangent
+            if m is not None
+            and m.insulation_radius is not None
+            and m.insulation_loss_tangent is not None
+            else nan
+            for m in materials
+        ]
+    )
     distributed = [m.distributed_rlc if m is not None else None for m in materials]
     kwargs: dict[str, object] = {}
     if np.isfinite(conductivity).any():
@@ -776,6 +787,10 @@ def _wire_loading(materials) -> dict[str, object]:
     if np.isfinite(radius).any():
         kwargs["insulation_radius"] = radius
         kwargs["insulation_eps_r"] = eps_r
+        # Only when some jacket names one, so a lossless deck builds with
+        # exactly the kwargs it always did (momwire#765).
+        if np.isfinite(loss_tangent).any():
+            kwargs["insulation_loss_tangent"] = loss_tangent
     if any(entry is not None for entry in distributed):
         kwargs["distributed_rlc"] = distributed
     return kwargs

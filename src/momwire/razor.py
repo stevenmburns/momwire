@@ -192,7 +192,8 @@ sign's oracle, the junction and grounded-end readings, and why the
 resulting L is symmetric while the field matrix is not.
 
 DISTRIBUTED loading (`wire_conductivity`, `insulation_radius`,
-`insulation_eps_r`, `distributed_rlc`) is the siblings' API verbatim, over
+`insulation_eps_r`, `insulation_loss_tangent`, `distributed_rlc`) is the
+siblings' API verbatim, over
 the same `_wire_loading` physics. LUMPED loads (`lumped_loads`, a sequence of
 ``(wire_index, arclength, impedance)``) are razor's own kwarg: the other
 rows serve a lumped load as port algebra over a zero-volt gap a consumer
@@ -209,8 +210,10 @@ per solved wavenumber beside the reflection-coefficient weights.
 
 A jacket on a BURIED wire adds one more term, on the charge side rather
 than the series side (momwire#1154): `_charge_stencil`, scaled per solved ω
-by the shared `LoadingSpec.zq_seg` = ΔS′/(jω). It is absent on every deck
-without a jacketed wire in the lower medium.
+by the shared `LoadingSpec.zq_seg` = ΔS′/(jω). A jacket with a loss
+tangent (`insulation_loss_tangent`, momwire#765) adds its dielectric loss
+through the same term, in either medium. It is absent on every deck
+without a jacketed wire in the lower medium or a lossy jacket.
 
 Per-wire radius (momwire#147)
 -----------------------------
@@ -1835,6 +1838,7 @@ class RazorSolver(
         wire_conductivity=None,
         insulation_radius=None,
         insulation_eps_r=None,
+        insulation_loss_tangent=None,
         distributed_rlc=None,
         lumped_loads=None,
         ground_z=None,
@@ -1872,6 +1876,7 @@ class RazorSolver(
                 "wire_conductivity": wire_conductivity,
                 "insulation_radius": insulation_radius,
                 "insulation_eps_r": insulation_eps_r,
+                "insulation_loss_tangent": insulation_loss_tangent,
                 "distributed_rlc": distributed_rlc,
             },
             sites={
@@ -1887,6 +1892,7 @@ class RazorSolver(
         wire_conductivity = _per_wire["wire_conductivity"]
         insulation_radius = _per_wire["insulation_radius"]
         insulation_eps_r = _per_wire["insulation_eps_r"]
+        insulation_loss_tangent = _per_wire["insulation_loss_tangent"]
         distributed_rlc = _per_wire["distributed_rlc"]
         feeds = _sites["feeds"]
         if feeds is None:
@@ -2215,6 +2221,7 @@ class RazorSolver(
             insulation_radius,
             insulation_eps_r,
             distributed_rlc,
+            insulation_loss_tangent,
         )
         self.lumped_loads = _wire_loading.normalize_lumped_loads(lumped_loads, n_w)
 
@@ -3910,11 +3917,15 @@ class RazorSolver(
                 np.add.at(Z, (mapped[keep], idx[keep]), z_l)
         return Z
 
-    def _has_buried_jacket(self):
-        """Whether a finite jacket sits on a wire in the lower medium — the
-        decks `_charge_stencil` exists for (momwire#1154). Asks nothing of
-        the geometry unless a jacket and a finite ground are both present,
-        so every other deck's prepare is what it was."""
+    def _has_jacket_charge(self):
+        """Whether `loading_for` can serve a charge-side term — a finite
+        jacket on a wire in the lower medium (momwire#1154) or a jacket with
+        tan δ > 0 anywhere (momwire#765): the decks `_charge_stencil` exists
+        for. Asks nothing of the geometry unless a lossy jacket, or a jacket
+        and a finite ground, are present, so every other deck's prepare is
+        what it was."""
+        if _wire_loading.has_lossy_jacket(self):
+            return True
         if self.insulation_radius is None or self.ground_eps is None:
             return False
         jacketed = np.isfinite(self.insulation_radius)
@@ -3922,8 +3933,9 @@ class RazorSolver(
         return any(j and m == _medium_spec.BELOW for j, m in zip(jacketed, media))
 
     def _charge_stencil(self, geom):
-        """The k-independent half of a buried jacket's CHARGE-side term
-        (momwire#1154, `_wire_loading.jacket_elastance`).
+        """The k-independent half of a jacket's CHARGE-side term
+        (momwire#1154, `_wire_loading.jacket_elastance`; and a lossy
+        jacket's, momwire#765, `_wire_loading.jacket_loss_elastance`).
 
         **The derivation.** On a jacketed wire in the soil the thin-wire
         kernel at the equivalent radius a′ misses a local elastance ΔS′, so
@@ -3959,7 +3971,9 @@ class RazorSolver(
         the two halves, so the full-geometry stencil applied once after the
         crossing assembly is the crossing row's term — the argument
         `_loading_stencil` makes for the series term. Each segment lies
-        wholly in one medium, and zq is zero on every ABOVE segment.
+        wholly in one medium, and the buried term's zq is zero on every
+        ABOVE segment; a lossy jacket's is not, and needs nothing different —
+        the derivation never asked which medium is outside the shell.
 
         Returns ``(rows, cols, seg, vals)``; `seg` is the segment whose zq
         scales the entry.
@@ -4003,15 +4017,16 @@ class RazorSolver(
         """`Z += zq_seg ∘ stencil` in place (`_charge_stencil`, momwire#1154).
 
         Refuses the one inconsistent pairing rather than dropping a term: a
-        spec carrying a buried jacket's zq with no stencil prepared would be
-        a jacketed buried wire served with the free-space pair."""
+        spec carrying a jacket's zq with no stencil prepared would be a
+        jacketed buried wire served with the free-space pair, or a lossy
+        jacket served lossless."""
         if spec.zq_seg is None:
             return Z
         if stencil is None:
             raise RuntimeError(
-                "a jacketed buried wire's charge term has no prepared stencil "
-                "(momwire#1154): the prepare half and the loading spec disagree "
-                "about which wires are jacketed below the interface"
+                "a jacket's charge term has no prepared stencil (momwire#1154, "
+                "#765): the prepare half and the loading spec disagree about "
+                "which wires carry one"
             )
         rows, cols, vals = RazorSolver._stencil_rows(
             stencil, spec.zq_seg[stencil["seg"]] * stencil["vals"], row_of
@@ -4365,14 +4380,15 @@ class RazorSolver(
                 if loading and (self._loading_active or self.lumped_loads)
                 else None
             ),
-            # A jacketed BURIED wire's charge-side term (momwire#1154): the
-            # same split — the stencil is geometry, its ΔS′/(jω) is built per
-            # solved ω — and the same `loading` flag, so the crossing
-            # assembly's sub-geometries never carry it. `None` on every deck
-            # without such a wire, which is every deck that existed before.
+            # A jacket's charge-side term — a BURIED jacket's (momwire#1154)
+            # or a lossy one's (momwire#765): the same split — the stencil is
+            # geometry, its ΔS′/(jω) is built per solved ω — and the same
+            # `loading` flag, so the crossing assembly's sub-geometries never
+            # carry it. `None` on every deck without such a wire, which is
+            # every deck that existed before.
             "charge": (
                 self._charge_stencil(geom)
-                if loading and self._has_buried_jacket()
+                if loading and self._has_jacket_charge()
                 else None
             ),
         }
@@ -6708,13 +6724,16 @@ class RazorSolver(
 
     @_wire_spec.reads_input_wires("loss")
     def wire_loss_power(self, coeffs, omega=None):
-        """Ohmic power dissipated in the wire metal, from a solve's coeffs.
+        """Power dissipated in the wire — its metal and its jacket — from a
+        solve's coeffs.
 
         P_wire = ½ Σ_w Re[Z'_w(ω)] · ∫_w |I(l)|² dl — the readout the
         downstream power budget reports, with the same signature and the
         same ``(total_watts, per_wire_watts)`` return as
-        `BSplineSolver.wire_loss_power` and `SinusoidalSolver`'s. Insulation
-        loading is purely reactive and contributes nothing here.
+        `BSplineSolver.wire_loss_power` and `SinusoidalSolver`'s. A lossless
+        jacket contributes nothing; one with tan δ > 0 (momwire#765) adds
+        ½·Re(zq_loss)·∫|dI/dl|² dl, and dI/dl is the constant (b − a)/h on
+        each segment, so its integral there is |b − a|²/h.
 
         This is a PHYSICAL integral over the conductor, so it is the
         Galerkin overlap of the tent basis with itself, not the testing-path
@@ -6763,6 +6782,10 @@ class RazorSolver(
         r_w = np.real(_wire_loading.loading_for(self, omega, geom).z_wire)
         wire_of = self._wire_of_seg(geom)
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
+        zq_loss = _wire_loading.jacket_loss_charge(self, omega)
+        if zq_loss is not None:
+            int_abs_di2 = np.abs(i_hi - i_lo) ** 2 / h
+            np.add.at(per_wire, wire_of, 0.5 * np.real(zq_loss)[wire_of] * int_abs_di2)
         return float(per_wire.sum()), per_wire
 
     def lumped_load_power(self, coeffs):

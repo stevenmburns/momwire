@@ -24,8 +24,7 @@ HF (stevenmburns/momwire#131):
       L'_ins = μ₀/(2π) · (1 − 1/εr) · ln(b/a)      [H/m]
 
   This slows the guided wave on the wire — the familiar few-percent
-  "insulated wire tunes long" velocity-factor effect. Dielectric loss
-  (tan δ) is deliberately out of scope for now.
+  "insulated wire tunes long" velocity-factor effect.
 
   It is one half of a PAIR: the kernel sees the jacket through the
   equivalent radius a′ (`equivalent_radius`, momwire#865), which is where
@@ -46,8 +45,33 @@ HF (stevenmburns/momwire#131):
   three-term shapes, momwire#1156), razor as the potential ``zq · q``
   differenced across the testing path (`RazorSolver._charge_stencil`).
 
-Both enter the MoM as one per-wire series impedance Z'(ω) = Z'_int +
-jωL'_ins, applied through each solver family's own testing scheme: the
+* **Dielectric loss** (momwire#765) — a jacket with loss tangent tan δ has
+  the complex permittivity ε* = εr·(1 − j·tan δ) (the e^{jωt} convention
+  every family here solves in). Its loss lives in the jacket's ELASTANCE,
+  the same shell `equivalent_radius` already serves at the real εr, so the
+  kernel radius a′ and King's L′ stay real and unchanged and the loss is
+  the further charge-side term (`jacket_loss_elastance`)
+
+      ΔS′_loss = ln(b/a)/(2π ε₀) · (1/ε* − 1/εr)
+               = ln(b/a)/(2π ε₀ εr) · tan δ·(j − tan δ)/(1 + tan² δ)
+
+  served through the same ``zq = ΔS′/(jω)`` channel on EVERY jacketed wire
+  with tan δ > 0, above ground or below it. The two charge terms are exact
+  summands of one elastance gap — the true shell elastance is
+  ln(b/a)/ε* + ln(R/b)/ε̃ in any exterior ε̃ — so a lossy buried jacket
+  carries both. On the charge rather than as a complex L′ because the
+  dissipation is ½·Re(zq)·|dI/dl|² per metre, i.e. it goes as |E|² ∝ |q|²
+  in the jacket, which is not |I|² on a short or tip-loaded wire. Its TEM
+  series equivalent, R′_d = Re(zq)·k₀² = ωμ₀·ln(b/a)·tan δ /
+  (2π εr (1 + tan² δ)) Ω/m, is only the long-wire reading of it.
+
+  Sign: Im(1/ε*) = tan δ/(εr(1 + tan² δ)) > 0, so Im ΔS′_loss > 0 and the
+  shunt power per metre, ½·Re(V·(jωq)*) = ½·ω·Im(ΔS′)·|q|², is positive;
+  Re(zq) = Im(ΔS′)/ω > 0 is that dissipation, and each family adds +zq on
+  the side of Z where a positive series R′ is a loss.
+
+The series terms enter the MoM as one per-wire series impedance
+Z'(ω) = Z'_int + jωL'_ins, applied through each solver family's own testing scheme: the
 Galerkin BSpline family loads Z over same-wire basis overlaps (see
 `BSplineSolver._loading_gram`), while the point-matched SinusoidalSolver
 applies NEC's impedance boundary condition at the segment-centre match
@@ -76,9 +100,10 @@ once rather than four times:
   per wire, per SEGMENT when a geometry is given, and the lumped loads
   resolved to whatever index the formulation names a site by.
 
-  The spec also carries the buried jacket's charge-side coefficient
-  (``zq_wire`` / ``zq_seg``, momwire#1154), ω-dependent twice over: through
-  1/(jω) and through the soil's ε̃(ω).
+  The spec also carries the jacket's charge-side coefficient
+  (``zq_wire`` / ``zq_seg``): the buried jacket's elastance gap
+  (momwire#1154), ω-dependent twice over, through 1/(jω) and through the
+  soil's ε̃(ω), plus a lossy jacket's dielectric term (momwire#765).
 
 `loading_for` is on the correct side of every prepare/replay boundary by
 construction: it takes ω as an argument and caches nothing, so a solver
@@ -171,6 +196,42 @@ def jacket_elastance(radius, ins_radius, eps_r, eps_ext, eps0):
         np.log(ins_radius / radius)
         / (2.0 * np.pi * eps0 * eps_r)
         * (1.0 - 1.0 / np.asarray(eps_ext, dtype=np.complex128))
+    )
+
+
+def jacket_loss_elastance(radius, ins_radius, eps_r, tan_delta, eps0):
+    """The elastance a LOSSY jacket adds to the lossless pair [m/F]
+    (momwire#765).
+
+        ΔS′_loss = ln(b/a)/(2π ε₀) · (1/ε* − 1/εr),   ε* = εr·(1 − j·tan δ)
+                 = ln(b/a)/(2π ε₀ εr) · tan δ·(j − tan δ)/(1 + tan² δ)
+
+    The second line is the first with the difference taken in closed form,
+    so a small tan δ costs no cancellation and the term is exactly linear in
+    tan δ to first order. ``eps0`` is the absolute permittivity εr is
+    relative to, as in `jacket_elastance`.
+
+    It is the jacket's shell elastance ln(b/a)/(2π ε₀ ε*) less the real-εr
+    one `equivalent_radius` already gives the kernel, so it adds to
+    `jacket_elastance` in any exterior rather than replacing it. Im > 0 is
+    the dissipation: ½·ω·Im(ΔS′)·|q|² watts per metre.
+    """
+    if ins_radius <= radius:
+        raise ValueError(
+            f"insulation_radius ({ins_radius}) must exceed the conductor "
+            f"radius ({radius})"
+        )
+    if eps_r < 1.0:
+        raise ValueError(f"insulation_eps_r must be >= 1, got {eps_r}")
+    if not (np.isfinite(tan_delta) and tan_delta >= 0.0):
+        raise ValueError(
+            f"insulation_loss_tangent must be finite and >= 0, got {tan_delta}"
+        )
+    t = float(tan_delta)
+    return (
+        np.log(ins_radius / radius)
+        / (2.0 * np.pi * eps0 * eps_r)
+        * (t * (1j - t) / (1.0 + t * t))
     )
 
 
@@ -448,14 +509,22 @@ def configure_loading(
     insulation_radius,
     insulation_eps_r,
     distributed_rlc=None,
+    insulation_loss_tangent=None,
 ):
     """Normalise and validate the house loading kwargs onto `solver`.
 
-    Sets `wire_conductivity`, `insulation_radius`, `insulation_eps_r` — each
-    None (off) or a normalized (n_wires,) float array with NaN switching a
-    wire off — plus `distributed_rlc` (None, or a length-n_wires tuple of
-    `DistributedRLC`-or-None, momwire#1088), and the `_loading_active`
-    predicate every fill branches on.
+    Sets `wire_conductivity`, `insulation_radius`, `insulation_eps_r`,
+    `insulation_loss_tangent` — each None (off) or a normalized (n_wires,)
+    float array with NaN switching a wire off — plus `distributed_rlc`
+    (None, or a length-n_wires tuple of `DistributedRLC`-or-None,
+    momwire#1088), and the `_loading_active` predicate every fill branches
+    on.
+
+    The loss tangent (momwire#765) is a property OF a jacket: it needs
+    `insulation_radius`, and a finite entry on a wire whose jacket is NaN is
+    refused rather than ignored. Unlike εr it is optional per jacketed wire —
+    NaN there, and 0, both mean a lossless jacket, and both leave the fill
+    structurally what it is without the kwarg.
     Reads `solver._radius_per_wire`, so the constructor must have normalized
     the radius first.
 
@@ -472,6 +541,9 @@ def configure_loading(
     )
     solver.insulation_eps_r = normalize_per_wire(
         insulation_eps_r, n_wires, "insulation_eps_r"
+    )
+    solver.insulation_loss_tangent = normalize_per_wire(
+        insulation_loss_tangent, n_wires, "insulation_loss_tangent"
     )
     solver.distributed_rlc = normalize_distributed_rlc(distributed_rlc, n_wires)
     if (solver.insulation_radius is None) != (solver.insulation_eps_r is None):
@@ -491,6 +563,27 @@ def configure_loading(
                 solver.insulation_radius[w],
                 solver.insulation_eps_r[w],
             )
+    if solver.insulation_loss_tangent is not None:
+        tan_d = solver.insulation_loss_tangent
+        if solver.insulation_radius is None:
+            raise ValueError(
+                "insulation_loss_tangent needs a jacket: give insulation_radius "
+                "and insulation_eps_r with it"
+            )
+        for w in range(n_wires):
+            if np.isnan(tan_d[w]):
+                continue
+            if not np.isfinite(tan_d[w]) or tan_d[w] < 0.0:
+                raise ValueError(
+                    f"insulation_loss_tangent[{w}] must be finite and >= 0, "
+                    f"got {tan_d[w]}"
+                )
+            if not np.isfinite(solver.insulation_radius[w]):
+                raise ValueError(
+                    f"insulation_loss_tangent[{w}] is set on a wire with no "
+                    f"jacket (its insulation_radius is NaN); NaN switches the "
+                    f"loss tangent off there too"
+                )
     if solver.wire_conductivity is not None:
         for w in np.nonzero(np.isfinite(solver.wire_conductivity))[0]:
             if solver.wire_conductivity[w] <= 0.0:
@@ -580,14 +673,16 @@ class LoadingSpec:
     * ``lumped`` — ``(indices, Z_L)`` for the configured lumped loads, or
       None. The index is whatever the formulation names a site by (razor: a
       basis index at a knot).
-    * ``zq_wire`` / ``zq_seg`` — the buried jacket's CHARGE-side coefficient
-      ``ΔS′/(jω)`` [Ω·m] (`jacket_elastance`, momwire#1154), per wire and
-      gathered per segment, same shapes as ``z_wire`` / ``z_seg``. Nonzero
-      only on jacketed wires in the lower medium, and None — structurally
-      absent, not zero — whenever the deck has no such wire, so every
-      above-ground and free-space fill is untouched. A consumer that serves
-      a buried deck with a jacket must apply it (or refuse): it is not a
-      series term and ``z_wire`` does not contain it.
+    * ``zq_wire`` / ``zq_seg`` — the jacket's CHARGE-side coefficient
+      ``ΔS′/(jω)`` [Ω·m] (`jacket_charge`), per wire and gathered per
+      segment, same shapes as ``z_wire`` / ``z_seg``: a buried jacket's
+      elastance gap (`jacket_elastance`, momwire#1154) plus a lossy
+      jacket's dielectric term (`jacket_loss_elastance`, momwire#765).
+      Nonzero only on jacketed wires in the lower medium or with tan δ > 0,
+      and None — structurally absent, not zero — whenever the deck has no
+      such wire, so every other fill is untouched. A consumer that serves a
+      jacket must apply it (or refuse): it is not a series term and
+      ``z_wire`` does not contain it.
     """
 
     __slots__ = ("z_wire", "z_seg", "lumped", "zq_wire", "zq_seg")
@@ -655,6 +750,62 @@ def buried_jacket_charge(solver, omega):
     return out
 
 
+def _lossy_jackets(solver):
+    """Indices of the wires whose jacket has tan δ > 0 (momwire#765)."""
+    tan_d = getattr(solver, "insulation_loss_tangent", None)
+    if tan_d is None:
+        return []
+    return [
+        w for w in range(tan_d.shape[0]) if np.isfinite(tan_d[w]) and tan_d[w] > 0.0
+    ]
+
+
+def has_lossy_jacket(solver):
+    """Whether `jacket_loss_charge` serves a term on this solver — the
+    geometry-side gate for a formulation that prepares a charge stencil."""
+    return bool(_lossy_jackets(solver))
+
+
+def jacket_loss_charge(solver, omega):
+    """``ΔS′_loss,w/(jω)`` per wire — ``(n_wires,)`` or ``(n_wires, n_k)`` —
+    or None when no jacket carries tan δ > 0 (momwire#765).
+
+    Real part ln(b/a)·tan δ/(2π ε₀ εr ω (1 + tan² δ)) > 0: the jacket's
+    dissipation per |dI/dl|², which the wire-loss ledgers read on its own
+    (``½·Re(zq)·∫|dI/dl|² dl``). Nonzero on every lossy jacketed wire, in
+    either medium — the shell is the jacket's, whatever is outside it.
+    """
+    lossy = _lossy_jackets(solver)
+    if not lossy:
+        return None
+    omega = np.asarray(omega, dtype=float)
+    out = np.zeros((solver.insulation_radius.shape[0],) + omega.shape, np.complex128)
+    a = solver._conductor_radius_per_wire
+    for w in lossy:
+        out[w] = jacket_loss_elastance(
+            a[w],
+            solver.insulation_radius[w],
+            solver.insulation_eps_r[w],
+            solver.insulation_loss_tangent[w],
+            solver.eps,
+        ) / (1j * omega)
+    return out
+
+
+def jacket_charge(solver, omega):
+    """The whole charge-side coefficient ``zq`` per wire, or None: the
+    buried jacket's elastance gap (`buried_jacket_charge`) plus a lossy
+    jacket's (`jacket_loss_charge`), each a separate summand so that a deck
+    with only one of them gets that one's array unchanged."""
+    zq = buried_jacket_charge(solver, omega)
+    loss = jacket_loss_charge(solver, omega)
+    if loss is None:
+        return zq
+    if zq is None:
+        return loss
+    return zq + loss
+
+
 def loading_for(solver, omega, geom=None):
     """The loading spec at `omega` — the shared read, once for four rows.
 
@@ -708,7 +859,7 @@ def loading_for(solver, omega, geom=None):
             np.asarray(idx, dtype=np.int64),
             np.asarray([z for _w, _a, z in entries], dtype=np.complex128),
         )
-    zq_wire = buried_jacket_charge(solver, omega) if solver._loading_active else None
+    zq_wire = jacket_charge(solver, omega) if solver._loading_active else None
     zq_seg = None
     if zq_wire is not None and geom is not None:
         zq_seg = zq_wire[solver._wire_of_seg(geom)]

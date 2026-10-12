@@ -198,13 +198,15 @@ the equation.
 Two spellings, one equation:
 
 - **Distributed** — `wire_conductivity`, `insulation_radius`,
-  `insulation_eps_r`, the siblings' API verbatim over the same
-  `_wire_loading` physics (exact solid-cylinder I₀/I₁ internal impedance,
-  King's insulated-antenna jacket inductance, per-wire with `NaN` switching
-  a wire off). `wire_loss_power(coeffs)` reads back the dissipated watts. A
-  jacket on a BURIED wire also takes a charge-side term, the soil's
-  correction to the kernel's equivalent radius (momwire#1154,
-  `_charge_stencil`).
+  `insulation_eps_r`, `insulation_loss_tangent`, the siblings' API verbatim
+  over the same `_wire_loading` physics (exact solid-cylinder I₀/I₁ internal
+  impedance, King's insulated-antenna jacket inductance, per-wire with `NaN`
+  switching a wire off). `wire_loss_power(coeffs)` reads back the dissipated
+  watts, the jacket's dielectric loss included. A jacket on a BURIED wire
+  also takes a charge-side term, the soil's correction to the kernel's
+  equivalent radius (momwire#1154, `_charge_stencil`), and a jacket with a
+  loss tangent takes its dielectric loss through the same stencil in either
+  medium (momwire#765).
 - **Lumped** — `lumped_loads=[(wire_index, arclength, impedance), …]`, which
   is razor's own kwarg. The other solvers serve a lumped load as deck-level
   port algebra over a zero-volt `feeds` gap a consumer stamps afterwards,

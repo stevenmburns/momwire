@@ -351,6 +351,7 @@ _OUT_OF_SCOPE = {
     "wire_conductivity": _WIRE_LOADING_REFUSAL,
     "insulation_radius": _WIRE_LOADING_REFUSAL,
     "insulation_eps_r": _WIRE_LOADING_REFUSAL,
+    "insulation_loss_tangent": _WIRE_LOADING_REFUSAL,
 }
 
 # NO `current_slopes` on this class, deliberately, and its ABSENCE is the
