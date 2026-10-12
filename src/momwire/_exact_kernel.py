@@ -1,4 +1,5 @@
-"""The exact ring kernel for coaxial same-radius segment pairs (momwire#1408).
+"""The exact ring kernel for coaxial segment pairs (momwire#1408; across a
+radius step, momwire#1438: `ring_kernel2` and the section at the end).
 
 For a current that does not vary around a straight wire of radius ``a``, the
 field on the wire's SURFACE due to a ring of that current at axial separation
@@ -107,9 +108,17 @@ def _near(z, a, k, split):
     """The near closed form at |z| = z (z ≥ 0 array). With ``split`` returns
     (A, B) such that K = A ln z + B; otherwise K."""
     rho2 = z * z + 4.0 * a * a
-    rho = np.sqrt(rho2)
     m = 4.0 * a * a / rho2
     m1 = z * z / rho2
+    return _near_series(z, rho2, m, m1, k, split)
+
+
+def _near_series(z, rho2, m, m1, k, split):
+    """The near series given ρ², the elliptic parameter m and m1 = 1 - m
+    (passed exactly). One radius: ρ² = z² + 4a², m = 4a²/ρ²; two radii
+    (`ring_kernel2`): ρ² = z² + (a₁ + a₂)², m = 4a₁a₂/ρ². ``split`` is the
+    one-radius log split and is served for that form only."""
+    rho = np.sqrt(rho2)
     Km, Em = _agm_KE(m1)
     N = _near_terms(float(k * np.max(rho)) if rho.size else 0.0)
     if split:
@@ -837,3 +846,408 @@ def point_rows(x0, sgn, h, a, k, nq, max_cached=None):
     if point_accel_serves(k, nq):
         return PointRowsAccel(x0, sgn, h, a, k, nq, max_cached=max_cached)
     return PointRows(x0, sgn, h, a, k, nq, max_cached=max_cached)
+
+
+# --------------------------------------------------------------------------
+# two radii: coaxial rings across a radius step (momwire#1438)
+# --------------------------------------------------------------------------
+# Each ring sits on its own wire's surface: the source current on a ring of
+# the SOURCE segment's radius a₂, the field tested on the OBSERVER's own
+# surface, radius a₁. For coaxial rings at axial separation z,
+#
+#     R² = z² + a₁² + a₂² - 2a₁a₂ cos φ = ρ² (1 - m cos²(φ/2)),
+#     ρ² = z² + (a₁ + a₂)²,   m = 4a₁a₂/ρ²,   m₁ = 1 - m = (z² + δ²)/ρ²,
+#
+# δ = a₁ - a₂. That is the one-radius form with a² → a₁a₂ and 2a → a₁ + a₂,
+# so every ring average ∫₀^π R^p dφ is the same 2ρ^p J_{p/2}(m), from the
+# same AGM and the same recurrence (`_near_series`), and K₂ is symmetric in
+# (a₁, a₂). At a₁ = a₂ it IS the one-radius kernel; the callers never ask
+# for that case here (one radius keeps its own route, untouched).
+#
+# The singular split. The Legendre split K(m) = K_reg - (K(m₁)/π) ln m₁
+# holds unchanged, and ln m₁ = ln(z² + δ²) - ln ρ², so
+#
+#     K₂(z) = A(z) ln(z² + δ²) + B(z),   A, B smooth and even in z,
+#
+# with A the one-radius log coefficient at the generalised (ρ, m). At δ = 0
+# that is A·2 ln|z| + B, the one-radius split, and the step from one form to
+# the other is continuous in δ (gate: tests/test_exact_kernel_two_radius_1438
+# .py). At δ ≠ 0 there is NO real singularity: K₂ is analytic on the real z
+# axis, bounded at z = 0, and its nearest singularities are the log branch
+# points z = ±i|δ| (where R vanishes at φ = 0). So the moments need no
+# product rule: Gauss-Legendre converges geometrically on any chunk whose
+# distance to ±i|δ| is at least half its length, which is the bound the
+# one-radius graded chunks already rest on. A piece is cut as one rule on
+# [d, |δ|] (length ≤ |δ| ≤ its distance to the branch points) and geometric
+# chunks from max(d, |δ|) outward. The chunk count grows as ln(ℓ/|δ|); the
+# radius groups differ by more than 1e-6 relative (`_ek_axis_groups_coaxial`),
+# which bounds it near 13.
+#
+# Far, |z| ≥ 6√(a₁a₂): the series about s₀ = z² + a₁² + a₂² with
+# ε = -2a₁a₂ cos φ, ⟨εⁿ⟩ = (a₁a₂)ⁿ C(n, n/2). There 2a₁a₂/s₀ ≤ 2/38 because
+# a₁² + a₂² ≥ 2a₁a₂: the one-radius bound at t = 6, so the same five terms
+# hold the same accuracy.
+
+
+def _near2(z, a1, a2, k):
+    s = a1 + a2
+    dl = a1 - a2
+    rho2 = z * z + s * s
+    m = 4.0 * a1 * a2 / rho2
+    m1 = (z * z + dl * dl) / rho2
+    return _near_series(z, rho2, m, m1, k, split=False)
+
+
+def _far2(z, a1, a2, k):
+    s0 = z * z + a1 * a1 + a2 * a2
+    r = np.sqrt(s0)
+    x = 1j * k * r
+    p = a1 * a2
+    P = _far_polys()
+    acc = np.zeros(z.shape, dtype=np.complex128)
+    for n in (0, 2, 4, 6, 8):
+        acc = acc + _FAR_C[n] * p**n * P[n](x) / r ** (2 * n + 1)
+    return np.exp(-x) * acc / _FOURPI
+
+
+def ring_kernel2(z, a1, a2, k):
+    """The exact ring kernel between coaxial rings of radii ``a1`` (the
+    observer's) and ``a2`` (the source's) at axial separation ``z``:
+    (1/2π)∮ e^{-jkR}/(4πR) dφ, R² = z² + a1² + a2² - 2 a1 a2 cos φ.
+
+    Broadcasts over ``z``, ``a1``, ``a2``; ``k`` real. Finite at z = 0 when
+    a1 ≠ a2. Symmetric in (a1, a2); the solvers still pass the observer's
+    radius first, so a swapped-in asymmetric kernel (the mechanism gates)
+    reaches the fill's own convention."""
+    z, a1, a2 = np.broadcast_arrays(
+        np.abs(np.asarray(z, dtype=np.float64)),
+        np.asarray(a1, dtype=np.float64),
+        np.asarray(a2, dtype=np.float64),
+    )
+    out = np.empty(z.shape, dtype=np.complex128)
+    near = z < _T_SWITCH * np.sqrt(a1 * a2)
+    if np.any(near):
+        out[near] = _near2(z[near], a1[near], a2[near], k)
+    if not np.all(near):
+        far = ~near
+        out[far] = _far2(z[far], a1[far], a2[far], k)
+    return out
+
+
+class _Piece2(_Piece):
+    """`_Piece` between rings of two radii: analytic on the real axis, the
+    branch points at ±i|δ| (`ring_kernel2`'s derivation), so the piece takes
+    graded Gauss-Legendre from the scale |δ| and no log split."""
+
+    def __init__(self, y_star, sgn, hi, hj, si, sj, nd, a1, a2, k, y_mid):
+        super().__init__(y_star, sgn, hi, hj, si, sj, nd, a1, k, y_mid)
+        self.a1, self.a2 = a1, a2
+        self.dl = abs(a1 - a2)
+
+    def smooth(self, lo, hi_):
+        z, w = _gl_on(lo, hi_)
+        Kz = ring_kernel2(z, self.a1, self.a2, self.k)
+        return np.einsum("i,i,ipq->pq", w, Kz, self.W(z))
+
+    def integrate(self, d, ell):
+        return _integrate_two_radius(self, d, ell)
+
+
+def _integrate_two_radius(piece, d, ell):
+    """∫_d^{d+ell} of a two-radius piece: one rule on [d, |δ|], geometric
+    chunks from max(d, |δ|) outward."""
+    if ell <= 0.0:
+        return 0.0
+    if d >= ell:
+        return piece.smooth(d, d + ell)
+    dl = piece.dl
+    if d >= dl:
+        return piece.graded(d, d + ell)
+    e = min(dl, d + ell)
+    out = piece.smooth(d, e)
+    if d + ell > e:
+        out = out + piece.graded(e, d + ell)
+    return out
+
+
+def pair_moments2(hi, hj, c, si, sj, a1, a2, k, nd):
+    """`pair_moments` between an observer segment i of radius ``a1`` and a
+    coaxial source segment j of radius ``a2`` (a1 ≠ a2): the same 1-D
+    reduction through W_pq, the two-radius kernel and its piece rule."""
+    y_star = -c
+    corners = np.sort([0.0, sj * hj, -si * hi, sj * hj - si * hi])
+    out = np.zeros((nd, nd), dtype=np.complex128)
+    for y0, y1 in zip(corners[:-1], corners[1:]):
+        if y1 - y0 <= 0.0:
+            continue
+        subs = [(y0, y1)]
+        if y0 < y_star < y1:
+            subs = [(y0, y_star), (y_star, y1)]
+        for ya, yb in subs:
+            sgn = 1.0 if y_star <= ya else -1.0
+            d = ya - y_star if sgn > 0 else y_star - yb
+            piece = _Piece2(y_star, sgn, hi, hj, si, sj, nd, a1, a2, k, 0.5 * (ya + yb))
+            out += piece.integrate(max(d, 0.0), yb - ya)
+    return out
+
+
+def pair_moments2_far(hi, hj, c, si, sj, a1, a2, k, nd):
+    """Vectorised `pair_moments2` for pairs at least their own length from
+    z = 0 (min |z| ≥ max(h_i, h_j)): `pair_moments_far` with the two-radius
+    kernel. Arrays of shape (P,); returns (nd, nd, P)."""
+    hi, hj, c, si, sj, a1, a2 = (
+        np.asarray(v, dtype=np.float64) for v in (hi, hj, c, si, sj, a1, a2)
+    )
+    corners = np.sort(
+        np.stack([np.zeros_like(hi), sj * hj, -si * hi, sj * hj - si * hi], -1), -1
+    )
+    x, w = _gl01(_N_GL)
+    lo = corners[:, :-1, None]
+    ln = (corners[:, 1:] - corners[:, :-1])[:, :, None]
+    y = lo + ln * x
+    wy = ln * w
+    Kz = ring_kernel2(c[:, None, None] + y, a1[:, None, None], a2[:, None, None], k)
+    Wy = _weight(
+        y,
+        hi[:, None, None],
+        hj[:, None, None],
+        si[:, None, None],
+        sj[:, None, None],
+        nd,
+    )
+    return np.einsum("Psi,Psi,Psipq->pqP", wy, Kz, Wy)
+
+
+def _min_abs_z(c, ylo, yhi):
+    zlo, zhi = c + ylo, c + yhi
+    return np.where((zlo <= 0.0) & (zhi >= 0.0), 0.0, np.minimum(abs(zlo), abs(zhi)))
+
+
+class CoaxialCrossRows:
+    """Observer-row windows of the two-radius moments of one coaxial LINE
+    (momwire#1438): `rows(r0, r1)` is (nd, nd, r1 - r0, n), holding J_pq of
+    every pair whose two segments carry different radius-group labels
+    (``lab``) and zero on every same-radius pair, which the one-radius
+    groups own. Pairs are deduplicated on (h_i, h_j, c, σ_i, σ_j, a_i, a_j),
+    and remembered across windows (bounded by ``max_cached``), so two
+    uniform runs cost O(n) kernel work."""
+
+    def __init__(self, x0, sgn, h, a, lab, k, nd, max_cached=None):
+        self.x0 = np.asarray(x0, dtype=np.float64)
+        self.sgn = np.asarray(sgn, dtype=np.float64)
+        self.h = np.asarray(h, dtype=np.float64)
+        self.a = np.asarray(a, dtype=np.float64)
+        self.lab = np.asarray(lab)
+        self.n = self.x0.shape[0]
+        self.k, self.nd = k, nd
+        self.q = 1e-11 * float(np.max(self.h))
+        self.qa = 1e-11 * float(np.max(self.a))
+        self.max_cached = max_cached
+        self.evaluated = 0
+        self._cache = {}
+
+    def mask(self, r0, r1):
+        """(r1 - r0, n) True on the window's cross-radius pairs."""
+        return self.lab[r0:r1, None] != self.lab[None, :]
+
+    def rows(self, r0, r1):
+        n, nd = self.n, self.nd
+        out = np.zeros((nd, nd, r1 - r0, n), dtype=np.complex128)
+        I, J = np.nonzero(self.mask(r0, r1))
+        if I.size == 0:
+            return out
+        I0 = I + r0
+        c = self.x0[J] - self.x0[I0]
+        key = np.stack(
+            [
+                np.round(self.h[I0] / self.q),
+                np.round(self.h[J] / self.q),
+                np.round(c / self.q),
+                self.sgn[I0],
+                self.sgn[J],
+                np.round(self.a[I0] / self.qa),
+                np.round(self.a[J] / self.qa),
+            ],
+            -1,
+        )
+        uniq, first, inv = np.unique(
+            key, axis=0, return_index=True, return_inverse=True
+        )
+        inv = inv.ravel()
+        keys = list(map(tuple, uniq.tolist()))
+        vals = np.empty((nd, nd, len(keys)), dtype=np.complex128)
+        miss = []
+        for u, t in enumerate(keys):
+            hit = self._cache.get(t)
+            if hit is None:
+                miss.append(u)
+            else:
+                vals[:, :, u] = hit
+        miss = np.asarray(miss, dtype=np.int64)
+        if miss.size:
+            f = first[miss]
+            ui, uj, cu = I0[f], J[f], c[f]
+            hi, hj = self.h[ui], self.h[uj]
+            si, sj = self.sgn[ui], self.sgn[uj]
+            ai, aj = self.a[ui], self.a[uj]
+            ys = [np.zeros_like(hi), sj * hj, -si * hi, sj * hj - si * hi]
+            dmin = _min_abs_z(cu, np.minimum.reduce(ys), np.maximum.reduce(ys))
+            far = dmin >= np.maximum(hi, hj)
+            fm = np.flatnonzero(far)
+            if fm.size:
+                vals[:, :, miss[fm]] = pair_moments2_far(
+                    hi[fm], hj[fm], cu[fm], si[fm], sj[fm], ai[fm], aj[fm], self.k, nd
+                )
+            for t in np.flatnonzero(~far):
+                vals[:, :, miss[t]] = pair_moments2(
+                    hi[t], hj[t], cu[t], si[t], sj[t], ai[t], aj[t], self.k, nd
+                )
+            self.evaluated += int(miss.size)
+            for u in miss.tolist():
+                if self.max_cached is not None and len(self._cache) >= self.max_cached:
+                    break
+                self._cache[keys[u]] = vals[:, :, u].copy()
+        out[:, :, I, J] = vals[:, :, inv]
+        return out
+
+
+def coaxial_cross_block(x0, sgn, h, a, lab, k, nd):
+    """(nd, nd, n, n) two-radius block of one coaxial line, whole (the
+    reference the row windows are gated against)."""
+    n = np.asarray(x0).shape[0]
+    return CoaxialCrossRows(x0, sgn, h, a, lab, k, nd, max_cached=0).rows(0, n)
+
+
+def _point_piece2(v0, sgn, d, ell, a1, a2, k, nq):
+    """`_point_piece` between rings of two radii (`_integrate_two_radius`)."""
+
+    class _P:
+        dl = abs(a1 - a2)
+
+        @staticmethod
+        def smooth(lo, hi):
+            z, w = _gl_on(lo, hi)
+            v = v0 + sgn * z
+            return (w * ring_kernel2(z, a1, a2, k)) @ (
+                v[:, None] ** np.arange(nq)[None, :]
+            )
+
+        @staticmethod
+        def graded(lo, hi):
+            tot = np.zeros(nq, dtype=np.complex128)
+            for c0, c1 in _chunks(lo, hi):
+                tot = tot + _P.smooth(c0, c1)
+            return tot
+
+    out = _integrate_two_radius(_P, d, ell)
+    return np.zeros(nq, dtype=np.complex128) if np.isscalar(out) else out
+
+
+def point_moments2(c, h, a1, a2, k, nq):
+    """`point_moments` with the observer on a ring of radius ``a1`` and the
+    source segment's current on rings of radius ``a2`` (a1 ≠ a2)."""
+    vs = -float(c)
+    h = float(h)
+    if 0.0 < vs < h:
+        return _point_piece2(vs, -1.0, 0.0, vs, a1, a2, k, nq) + _point_piece2(
+            vs, 1.0, 0.0, h - vs, a1, a2, k, nq
+        )
+    if vs <= 0.0:
+        return _point_piece2(vs, 1.0, -vs, h, a1, a2, k, nq)
+    return _point_piece2(vs, -1.0, vs - h, h, a1, a2, k, nq)
+
+
+def point_moments2_far(c, h, a1, a2, k, nq):
+    """Vectorised `point_moments2` for segments at least their own length
+    from the observer. Arrays of shape (P,); returns (nq, P)."""
+    c = np.asarray(c, dtype=np.float64)
+    h = np.asarray(h, dtype=np.float64)
+    x, w = _gl01(_N_GL)
+    v = h[:, None] * x[None, :]
+    Kz = ring_kernel2(
+        c[:, None] + v,
+        np.asarray(a1, dtype=np.float64)[:, None],
+        np.asarray(a2, dtype=np.float64)[:, None],
+        k,
+    )
+    wv = h[:, None] * w[None, :] * Kz
+    return np.stack([np.sum(wv * v**q, axis=1) for q in range(nq)])
+
+
+class PointCrossRows:
+    """The two-radius point moments of one coaxial LINE (momwire#1438):
+    `rows(x_obs, a_obs, lab_obs)` is (nq, m, n) with entry [q, o, j] =
+    ∫₀^{h_j} τ^q K₂(x0_j + σ_j τ - x_o; a_obs[o], a_j) dτ on every pair whose
+    observer and source carry different radius-group labels, and zero on the
+    same-radius pairs the one-radius groups own. Deduplicated on the
+    quantised (c, h, a_obs, a_src) and remembered across calls."""
+
+    def __init__(self, x0, sgn, h, a, lab, k, nq, max_cached=None):
+        self.x0 = np.asarray(x0, dtype=np.float64)
+        self.sgn = np.asarray(sgn, dtype=np.float64)
+        self.h = np.asarray(h, dtype=np.float64)
+        self.a = np.asarray(a, dtype=np.float64)
+        self.lab = np.asarray(lab)
+        self.n = self.x0.shape[0]
+        self.k, self.nq = k, nq
+        self.q = 1e-11 * float(np.max(self.h)) if self.n else 1.0
+        self.qa = 1e-11 * float(np.max(self.a)) if self.n else 1.0
+        self.max_cached = max_cached
+        self.evaluated = 0
+        self._cache = {}
+
+    def rows(self, x_obs, a_obs, lab_obs):
+        x_obs = np.asarray(x_obs, dtype=np.float64)
+        a_obs = np.asarray(a_obs, dtype=np.float64)
+        m, n, nq = x_obs.shape[0], self.n, self.nq
+        out = np.zeros((nq, m, n), dtype=np.complex128)
+        O, J = np.nonzero(np.asarray(lab_obs)[:, None] != self.lab[None, :])
+        if O.size == 0:
+            return out
+        c = self.sgn[J] * (self.x0[J] - x_obs[O])
+        hh = self.h[J]
+        ao, aj = a_obs[O], self.a[J]
+        key = np.stack(
+            [
+                np.round(c / self.q),
+                np.round(hh / self.q),
+                np.round(ao / self.qa),
+                np.round(aj / self.qa),
+            ],
+            -1,
+        )
+        uniq, first, inv = np.unique(
+            key, axis=0, return_index=True, return_inverse=True
+        )
+        inv = inv.ravel()
+        keys = list(map(tuple, uniq.tolist()))
+        vals = np.empty((nq, len(keys)), dtype=np.complex128)
+        miss = []
+        for u, t in enumerate(keys):
+            hit = self._cache.get(t)
+            if hit is None:
+                miss.append(u)
+            else:
+                vals[:, u] = hit
+        miss = np.asarray(miss, dtype=np.int64)
+        if miss.size:
+            f = first[miss]
+            cf, hf, af, bf = c[f], hh[f], ao[f], aj[f]
+            dmin = _min_abs_z(cf, 0.0, hf)
+            far = dmin >= hf
+            fm = np.flatnonzero(far)
+            if fm.size:
+                vals[:, miss[fm]] = point_moments2_far(
+                    cf[fm], hf[fm], af[fm], bf[fm], self.k, nq
+                )
+            for t in np.flatnonzero(~far):
+                vals[:, miss[t]] = point_moments2(
+                    cf[t], hf[t], af[t], bf[t], self.k, nq
+                )
+            self.evaluated += int(miss.size)
+            for u in miss.tolist():
+                if self.max_cached is not None and len(self._cache) >= self.max_cached:
+                    break
+                self._cache[keys[u]] = vals[:, u].copy()
+        out[:, O, J] = vals[:, inv]
+        return out
