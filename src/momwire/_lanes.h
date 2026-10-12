@@ -16,14 +16,12 @@
 //
 // BACKENDS, chosen once here:
 //   avx2      W = 4, __m256d. GCC/clang with -mavx2 -mfma (the `_avx2`
-//             variant), and the `_avx512` variant too (momwire#1370 level 1):
-//             its AVX-512 flags define __AVX2__ and __FMA__ as well, and with
-//             MW_LANES_ENABLE_AVX512 unset this is the branch it takes. The
-//             reference: the kernels were written against it.
-//   avx512    W = 8, __m512d with __mmask8 masks. NOT switched on: it is
-//             selected only under MW_LANES_ENABLE_AVX512, which no build sets
-//             (the `_avx512` variant exists since #1370; 8-wide lanes are its
-//             level 2).
+//             variant). The reference: the kernels were written against it.
+//   avx512    W = 8, __m512d with __mmask8 masks. Selected only under
+//             MW_LANES_ENABLE_AVX512, which the `_avx512` variant sets
+//             (momwire#1370 step 2.1; setup.py). Its AVX-512 flags define
+//             __AVX2__ and __FMA__ too, so without the macro it would take
+//             the avx2 branch.
 //   portable  W = MW_LANES_PORTABLE_WIDTH (default 1, i.e. scalar), plain
 //             arrays and std:: math. Selected by MW_LANES_FORCE_PORTABLE; the
 //             walk-shaped reference a kernel can be instantiated at, and how
@@ -207,10 +205,10 @@ MW_LANES_INLINE void store_interleaved(double *o, vd re, vd im) {
 
 #elif defined(MW_LANES_AVX512)
 // -------------------------------------------------------------- avx512 ----
-// For momwire#1370. Compile-checked, never run: no build defines
-// MW_LANES_ENABLE_AVX512. Masks are k-registers, so `blend` is a masked move,
-// not blendv; there is no addsub, so `cmul_packed` is a masked add over a
-// subtract -- the same two roundings per lane.
+// For momwire#1370: the `_avx512` variant's backend. Masks are k-registers,
+// so `blend` is a masked move, not blendv; there is no addsub, so
+// `cmul_packed` is a masked add over a subtract -- the same two roundings per
+// lane.
 constexpr int W = 8;
 typedef __m512d vd;
 typedef __mmask8 vm;

@@ -432,6 +432,14 @@ _ALL_VARIANTS = (_AVX512, _AVX2, _SSE2, _LEGACY)
 # typo'd fleet host cannot be mistaken for an AVX-512 measurement.
 _FORCE_VARIANT_ENV = "MOMWIRE_FORCE_VARIANT"
 
+# Where a passed AVX-512 check CHOOSES `_avx512` on its own (momwire#1370 step
+# 2.1). Linux only for now. The Windows build exists and can be forced on a
+# CPU that passes the check, but its 8-wide lanes have never been gated under
+# MSVC's /fp:fast (the Windows lane gates are a tolerance derived for the
+# 4-wide backend, tests/_lane_gate.py), so it is not offered until a Windows
+# AVX-512 run has re-derived that tolerance. macOS builds no variants.
+_AVX512_AUTO_PLATFORMS = ("linux",)
+
 
 def _variants_to_try(
     verdict: bool | None, avx512: bool | None = None
@@ -448,7 +456,8 @@ def _variants_to_try(
     always breaks the same way.
 
     A forced 'avx512' on a CPU that did not pass the AVX-512 check returns the
-    EMPTY chain, and `_load` says why (see `_FORCE_VARIANT_ENV`).
+    EMPTY chain, and `_load` says why (see `_FORCE_VARIANT_ENV`). Unforced,
+    `_avx512` is offered only on `_AVX512_AUTO_PLATFORMS`.
     """
     forced = os.environ.get(_FORCE_VARIANT_ENV)
     if forced:
@@ -463,7 +472,7 @@ def _variants_to_try(
             RuntimeWarning,
             stacklevel=3,
         )
-    if verdict is True and avx512 is True:
+    if verdict is True and avx512 is True and sys.platform in _AVX512_AUTO_PLATFORMS:
         return (_AVX512, _AVX2, _SSE2, _LEGACY)
     if verdict is True:
         return (_AVX2, _SSE2, _LEGACY)

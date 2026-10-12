@@ -34,11 +34,11 @@ import numpy as np
 
 WIN32 = sys.platform == "win32"
 
-# The variants that compile the lane layer's AVX2 backend: `_avx2`, and
-# `_avx512` (momwire#1370), which defines __AVX2__/__FMA__ too and keeps the
-# 4-wide backend because no build sets MW_LANES_ENABLE_AVX512. A gate that
-# asserts "the lanes were built" on the AVX2 variant asserts it on both, or
-# under `_avx512` it compares the walk with itself and passes vacuously.
+# The variants that compile a vector lane backend: `_avx2` (W = 4) and
+# `_avx512` (W = 8 since momwire#1370 step 2.1, MW_LANES_ENABLE_AVX512). A
+# gate that asserts "the lanes were built" on the AVX2 variant asserts it on
+# both, or under `_avx512` it compares the walk with itself and passes
+# vacuously. The width itself is the extension's `lane_width_1370`.
 VECTOR_VARIANTS = ("avx2", "avx512")
 
 # DERIVED, not chosen (momwire#1371). Measured on windows-latest (MSVC 14.51,

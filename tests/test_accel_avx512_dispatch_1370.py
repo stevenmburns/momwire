@@ -38,7 +38,12 @@ def unforced(monkeypatch):
     monkeypatch.delenv("MOMWIRE_REQUIRE_ACCEL", raising=False)
 
 
-def test_the_preference_order_is_avx512_avx2_sse2_legacy(unforced):
+@pytest.fixture
+def linux(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+
+
+def test_the_preference_order_is_avx512_avx2_sse2_legacy(unforced, linux):
     assert _accel._variants_to_try(True, True) == (
         _accel._AVX512,
         _accel._AVX2,
@@ -46,6 +51,19 @@ def test_the_preference_order_is_avx512_avx2_sse2_legacy(unforced):
         _accel._LEGACY,
     )
     assert _accel._ALL_VARIANTS == _accel._variants_to_try(True, True)
+
+
+def test_windows_is_not_offered_avx512_unforced_yet(unforced, monkeypatch):
+    """Step 2.1 turns on the 8-wide lanes, and nothing has gated them under
+    MSVC: a passed check on Windows still chooses `_avx2` (forcing works)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert _accel._variants_to_try(True, True) == (
+        _accel._AVX2,
+        _accel._SSE2,
+        _accel._LEGACY,
+    )
+    monkeypatch.setenv(_accel._FORCE_VARIANT_ENV, "avx512")
+    assert _accel._variants_to_try(True, True) == (_accel._AVX512,)
 
 
 @pytest.mark.parametrize("avx512", [False, None])
@@ -261,7 +279,7 @@ def _cpu(monkeypatch, *, avx2, missing):
     monkeypatch.setattr(_accel, "_avx512_missing", lambda: missing)
 
 
-def test_an_avx512_cpu_loads_the_avx512_build(monkeypatch, unforced):
+def test_an_avx512_cpu_loads_the_avx512_build(monkeypatch, unforced, linux):
     _cpu(monkeypatch, avx2=True, missing=())
     asked = _recording_loader(monkeypatch, "_avx512")
     _mod, loaded, variant = _accel._load()
@@ -269,7 +287,7 @@ def test_an_avx512_cpu_loads_the_avx512_build(monkeypatch, unforced):
     assert asked == ["_accelerators_avx512"]
 
 
-def test_an_avx512_cpu_without_the_build_takes_avx2(monkeypatch, unforced):
+def test_an_avx512_cpu_without_the_build_takes_avx2(monkeypatch, unforced, linux):
     """An install predating #1370 on an AVX-512 box: the chain steps down."""
     _cpu(monkeypatch, avx2=True, missing=())
     asked = _recording_loader(monkeypatch, "_avx2")
@@ -436,7 +454,10 @@ def test_this_box_chooses_avx512_exactly_when_it_has_it():
         pytest.skip("the variant is pinned by the environment, not by this CPU")
     if not _accel._extension_built("_avx512"):
         pytest.skip("no _avx512 build in this install")
-    has = _accel._cpu_supports_avx512() is True
+    has = (
+        _accel._cpu_supports_avx512() is True
+        and sys.platform in _accel._AVX512_AUTO_PLATFORMS
+    )
     assert (momwire.accelerator_variant == "avx512") == has, (
         momwire.accelerator_variant,
         _accel._avx512_missing(),

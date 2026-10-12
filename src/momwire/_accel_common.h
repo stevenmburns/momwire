@@ -61,27 +61,15 @@ void register_exact_kernel_point(py::module_ &m);
 // also excluded: Apple clang defines __GNUC__ but there is no libmvec on
 // macOS (and arm64 has no AVX2 simdlen(4) form either), so the sincos calls
 // stay scalar/NEON-autovectorized there too.
+//
+// The `_avx512` variant keeps simdlen(4) too, and supplies the `_ZGVeN4v_*`
+// names that GCC then asks for (`_libmvec_avx512.cpp`, momwire#1370).
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
-// The `_avx512` variant (momwire#1370) declares them 8 lanes wide: glibc's
-// AVX-512 entry points are `_ZGVeN8v_*` only. A simdlen(4) declaration
-// compiled with -mavx512f names `_ZGVeN4v_*`, which no libmvec exports; the
-// link (-shared) does not object, and the extension then fails to import on
-// exactly the CPUs it was built for (measured: all three extensions carried
-// undefined `_ZGVeN4v_{sin,cos,exp}`). The other variants preprocess to the
-// simdlen(4) block unchanged.
-#if defined(__AVX512F__)
-#pragma omp declare simd notinbranch simdlen(8)
-extern "C" double cos(double);
-
-#pragma omp declare simd notinbranch simdlen(8)
-extern "C" double sin(double);
-#else
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double cos(double);
 
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double sin(double);
-#endif
 #endif
 
 // The B-spline pair kernels' qr blocking width, in ONE place.

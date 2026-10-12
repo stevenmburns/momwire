@@ -419,11 +419,12 @@ ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 # any of them:
 #
 #   _avx512  the AVX2 flags plus AVX-512 F/CD/BW/DQ/VL (MSVC: /arch:AVX512,
-#            which documents exactly that set). momwire#1370 level 1: the
-#            compiler's autovectorised loops and the libmvec calls widen to
-#            512 bits; the hand-written lanes stay the 4-wide AVX2 backend,
-#            because `_lanes.h` takes its AVX-512 backend only under
-#            MW_LANES_ENABLE_AVX512, which no build sets.
+#            which documents exactly that set), and MW_LANES_ENABLE_AVX512:
+#            the hand-written lane kernels (`_lanes.h`) run 8 wide. Everything
+#            else computes what `_avx2` computes, to the bit (GCC): the
+#            autovectorised loops keep the AVX2 vectorisation factor
+#            (-mprefer-vector-width=256) and the AVX2 libmvec entries
+#            (`_libmvec_avx512.cpp` has why and how). momwire#1370 step 2.1.
 #   _avx2    today's flags.
 #   _sse2    the x86-64 baseline.
 #
@@ -436,6 +437,15 @@ ParallelCompile("NPY_NUM_BUILD_JOBS").install()
 # apart. Tuning is unchanged (GCC's generic tuning at either spelling), and
 # -ffp-contract=off and the explicit-fma policy (momwire#1194) carry over
 # because the variant is the AVX2 argument list with flags ADDED.
+#
+# The bit identity with `_avx2` is the design, not a coincidence. libmvec's
+# 8-lane AVX-512 routines agree with its 4-lane AVX2 ones to the bit (measured,
+# `_libmvec_avx512.cpp`), but a loop vectorised 8 wide sends a different set of
+# its points to scalar libm in the tail, and scalar libm differs from libmvec
+# in the last bits. Step 1 (512-bit loops and the 8-lane libmvec, lanes still
+# 4 wide) was 0.92-1.00x of `_avx2` and broke 32 walk-vs-lanes bit gates for
+# exactly that reason; holding the loops at 256 bits keeps every gate and
+# every pinned Z, and leaves the 8-wide speed to the kernels written for it.
 #
 # Cost: one more compile of every extension per x86 wheel.
 #
@@ -464,6 +474,23 @@ _AVX512_GCC_FLAGS = [
 ]
 
 
+# Selects `_lanes.h`'s 8-wide __m512d backend (momwire#1370 step 2.1).
+_LANES_AVX512_MACRO = "MW_LANES_ENABLE_AVX512"
+
+# What else the GCC AVX-512 build adds, beyond the instruction sets. The
+# vector width keeps every autovectorised loop at the AVX2 factor, so its
+# libmvec tails are the AVX2 build's (see the variant notes above); it does
+# not touch the lane layer, which is written in intrinsics.
+_AVX512_GCC_EXTRA = [
+    "-mprefer-vector-width=256",
+    f"-D{_LANES_AVX512_MACRO}",
+]
+
+# The `_avx512` build's one extra source per extension: the 4-lane libmvec
+# names GCC asks for under -mavx512f and glibc does not export.
+_AVX512_SOURCES = ["src/momwire/_libmvec_avx512.cpp"]
+
+
 def _baseline(args):
     """`args` with the AVX2-specific flags removed, order otherwise intact."""
     return [a for a in args if a not in _AVX2_ONLY_FLAGS]
@@ -474,15 +501,18 @@ def _avx512(args):
 
     MSVC: /arch:AVX2 becomes /arch:AVX512. GCC: the five flags follow -mfma,
     so everything after it (-ffp-contract=off among them) still applies.
+    Both turn on the lane layer's 8-wide backend; GCC also holds the
+    autovectoriser at 256 bits (`_AVX512_GCC_EXTRA`).
     """
     out = []
     for a in args:
         if a == "/arch:AVX2":
-            out.append("/arch:AVX512")
+            out.extend(["/arch:AVX512", f"/D{_LANES_AVX512_MACRO}"])
             continue
         out.append(a)
         if a == "-mfma":
             out.extend(_AVX512_GCC_FLAGS)
+            out.extend(_AVX512_GCC_EXTRA)
     if out == list(args):
         raise ValueError(f"no AVX2 flag to raise to AVX-512 in {args}")
     return out
@@ -520,11 +550,12 @@ else:
 
 ext_modules = []
 for _suffix, _accel_args, _near_args in _VARIANTS:
+    _extra = _AVX512_SOURCES if _suffix == "_avx512" else []
     ext_modules.append(
         _variant(
             "_accelerators",
             _suffix,
-            _ACCEL_SOURCES,
+            _ACCEL_SOURCES + _extra,
             depends=_ACCEL_HEADERS,
             compile_args=_accel_args,
         )
@@ -533,7 +564,7 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
         _variant(
             "_near_interface_accel",
             _suffix,
-            ["src/momwire/_near_interface_accel.cpp"],
+            ["src/momwire/_near_interface_accel.cpp"] + _extra,
             depends=_NEAR_HEADERS,
             compile_args=_near_args,
             include_dirs=["extern/xsf/include"],
@@ -546,7 +577,7 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
         _variant(
             "_near_interface_point_accel",
             _suffix,
-            ["src/momwire/_near_interface_point_accel.cpp"],
+            ["src/momwire/_near_interface_point_accel.cpp"] + _extra,
             depends=_NEAR_HEADERS,
             compile_args=_near_args,
             include_dirs=["extern/xsf/include"],

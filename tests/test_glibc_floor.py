@@ -130,13 +130,20 @@ def test_libmvec_symbols_exist_in_glibc_2_28():
         assert "_ZGVdN4v_exp" in _undefined_versions(avx2[0]), (
             "the AVX2 accelerator no longer binds libmvec exp (Design D4's bracket)"
         )
-    # The AVX-512 build binds libmvec's 8-lane entry points; glibc has no
-    # 4-lane AVX-512 ones, and a `_ZGVeN4v_*` reference (unversioned, so
-    # flagged above) is an extension that cannot import (momwire#1370).
+    # The AVX-512 build binds the AVX2 build's 4-lane entry points, and
+    # defines the `_ZGVeN4v_*` names GCC asks for under -mavx512f itself
+    # (`_libmvec_avx512.cpp`, momwire#1370 step 2.1). An undefined
+    # `_ZGVeN4v_*` (unversioned, so flagged above) is an extension that cannot
+    # import; an undefined `_ZGVeN8v_*` is the 8-lane binding whose loop tails
+    # broke the lane bit gates in step 1.
     for so in (p for p in exts if "_avx512" in p.name):
         syms = _undefined_versions(so)
-        assert "_ZGVeN8v_sin" in syms, f"{so.name} binds no 8-lane libmvec sin"
-        assert not [s for s in syms if s.startswith("_ZGVeN4v_")], so.name
+        if "_accelerators_" in so.name:
+            assert "_ZGVdN4v_sin" in syms, f"{so.name} binds no 4-lane libmvec sin"
+        assert not [s for s in syms if s.startswith("_ZGVe")], (
+            so.name,
+            sorted(s for s in syms if s.startswith("_ZGVe")),
+        )
 
 
 def test_every_glibc_symbol_exists_in_glibc_2_28_on_a_2_28_host():

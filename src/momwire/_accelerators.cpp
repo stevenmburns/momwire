@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_lanes.h"
 
 // Thin module TU (momwire#687): the sections register themselves; their
 // prototypes live in _accel_common.h so every TU compiles against the seam.
@@ -40,5 +41,16 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_qp_pairs(m);
     register_exact_kernel(m);
     register_exact_kernel_point(m);
+
+    // momwire#1370: the lane layer's width in THIS build -- 4 for the AVX2
+    // backend, 8 for the AVX-512 one, 0 where the build has no vector backend
+    // (`_sse2`, arm64). A lane gate that passes under `_avx512` proves the
+    // 8-wide backend only if this says 8; otherwise it compared the 4-wide
+    // lanes again.
+#if MW_LANES_SIMD
+    m.attr("lane_width_1370") = (int)mw_lanes::W;
+#else
+    m.attr("lane_width_1370") = 0;
+#endif
 }
 

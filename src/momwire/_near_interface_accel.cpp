@@ -104,17 +104,6 @@ namespace py = pybind11;
 // libmvec and would choke on redeclaring the CRT's exp/sin/cos, and macOS
 // has neither libmvec nor the AVX2 simdlen(4) form.
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
-// simdlen 8 under AVX-512: `_accel_common.h` has why (momwire#1370).
-#if defined(__AVX512F__)
-#pragma omp declare simd notinbranch simdlen(8)
-extern "C" double exp(double);
-
-#pragma omp declare simd notinbranch simdlen(8)
-extern "C" double cos(double);
-
-#pragma omp declare simd notinbranch simdlen(8)
-extern "C" double sin(double);
-#else
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 
@@ -123,7 +112,6 @@ extern "C" double cos(double);
 
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double sin(double);
-#endif
 #endif
 
 // `omp simd` neutralization for MSVC, whose /openmp:llvm rejects the
@@ -965,6 +953,13 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // AVX2 variant does); either way `generic=True` reaches the width-generic
     // loop they are gated against.
     m.attr("grid_sheet_fixed_1290") = bool(MW_SHEET_FIXED);
+    // momwire#1370: the lane layer's width in this build (see
+    // `_accelerators.cpp`); 0 without a vector backend.
+#if MW_LANES_SIMD
+    m.attr("lane_width_1370") = (int)mw_lanes::W;
+#else
+    m.attr("lane_width_1370") = 0;
+#endif
     m.def("near_interface_grid_sheet", &near_interface_grid_sheet,
           py::arg("sub"), py::arg("idx"), py::arg("fixed"), py::arg("height"),
           py::arg("rho_edges"), py::arg("s_edges"), py::arg("cell_off"),
