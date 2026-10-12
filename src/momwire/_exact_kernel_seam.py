@@ -107,11 +107,45 @@ def point_gap_warning(fixed_gap_feed=True):
 
 
 def coaxial_groups(seg_l, seg_r, tangents, seg_a):
-    """``[(label, segment indices)]`` per coaxial equal-radius group, in
-    label order: the segments the exact ring kernel covers. Every segment
-    is in one (its own, at least)."""
+    """``(labels, [(label, segment indices)])`` per coaxial equal-radius
+    group, in label order: the segments the one-radius exact ring kernel
+    covers. Every segment is in one (its own, at least). The pairs between
+    groups on one line are `coaxial_lines`'."""
     labels = _ek_axis_groups_coaxial(seg_l, seg_r, tangents, seg_a)
     return labels, [(int(g), np.flatnonzero(labels == g)) for g in np.unique(labels)]
+
+
+def coaxial_lines(seg_l, seg_r, tangents, seg_a, labels):
+    """``[(segment indices, their radius-group labels)]`` per coaxial LINE
+    that carries more than one radius (momwire#1438): the segments whose
+    cross-radius pairs take the two-radius kernel (`_exact_kernel.
+    ring_kernel2`). `labels` are `coaxial_groups`' one-radius labels.
+
+    Which pairs, and why all of them: every pair on the line whose two
+    segments sit in different radius groups, at any separation. The exact
+    kernel is exact at every distance, so engagement is a property of the
+    geometry (same line) and never of a distance cutoff that Z could jump
+    across; the one-radius groups take every pair of the group the same
+    way. Far pairs cost one vectorised rule each and move by the EK error
+    there (3.6e-5 relative at |z|/a = 10). The pairs that matter are the
+    ones touching the step, where the fat side's h/a is small and the
+    thin-wire kernel's error is O(1).
+
+    A line is the one-radius rule with the radius test dropped
+    (`_ek_axis_groups_coaxial` with every radius set to the largest, so its
+    perpendicular tolerance is tol·a_max): same line in NEC's thresholds. A
+    line holding one radius group has no cross pairs and is not listed, so
+    a deck without a radius step never enters the two-radius path."""
+    seg_a = np.asarray(seg_a, dtype=float)
+    line = _ek_axis_groups_coaxial(
+        seg_l, seg_r, tangents, np.full(seg_a.shape, float(np.max(seg_a)))
+    )
+    out = []
+    for g in np.unique(line):
+        S = np.flatnonzero(line == g)
+        if np.unique(labels[S]).size > 1:
+            out.append((S, labels[S]))
+    return out
 
 
 def group_frame(S, seg_l, seg_r, tangents):
