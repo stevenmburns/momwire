@@ -53,14 +53,18 @@ captures show, and nothing else:
   perfect ground's, which is what the licensed engine answered (0230's
   impedance equals 0229's, the same ground with no ``GD``, to every digit).
   Its leading integer (2 on every capture) moves nothing here.
-* A ``GN 2`` card's trailing non-numeric token is a Sommerfeld-table FILE
-  name, ``NOFILE`` included (momwire#1317).  No EZNEC capture writes one; the
-  licensed engine, given ``GN 2 0 0 0 13. .005 0 0 0 0 NOFILE`` as a black
-  box, reported it could not open the file, computed the tables from the GN
-  fields and solved.  The name is a cache, not physics, so it is accepted and
-  ignored: the solve is the card's without it, and the printout echoes the
-  name and says the file was not read.  On any other GN type a trailer still
-  refuses, because no run shows what the licensed engine does with one there.
+* A ``GN`` card's trailing non-numeric token is a Sommerfeld-table FILE
+  name, ``NOFILE`` included, on EVERY ground type (momwire#1317 for GN 2,
+  momwire#1443 for the rest).  No EZNEC capture writes one, but SimNEC
+  appends ``NOFILE`` to every GN card whatever the engine.  The licensed
+  engine, run as a black box (2026-10-12) on a 21-segment 30 MHz dipole at
+  10 m with ``GN g 0 0 0 13. .005 0 0 0 0 [NOFILE]`` for g = -1, 0, 1, 2, 3,
+  exited 0 on all ten runs, and printed the same input impedance with and
+  without ``NOFILE`` to every digit on all five types.  Without a trailer,
+  GN 2 and GN 3 reported they could not open their default table file; with
+  ``NOFILE`` they did not look for one.  The name is a cache, not physics,
+  so it is accepted and ignored on every type: the solve is the card's
+  without it, and the printout echoes the name (``eznec._nec4._ground_file``).
 * ``EK`` is read and IGNORED, and every run solves with the extended kernel
   (momwire#1326, Steve's decision 2026-10-04).  NEC-4.2 has one thin-wire
   model and no extended-kernel switch: the binary, given ``EK 0`` as a black
@@ -173,16 +177,10 @@ class _Nec4Parser(_Nec2Parser):
 
     def _gn(self, card: Card) -> None:
         if card.trailer is not None:
-            if card.i(0) != 2:
-                raise DeckError(
-                    f"GN {card.i(0)} carries a trailing token {card.trailer!r}; "
-                    f"this engine's nec4 dialect reads a Sommerfeld-table file "
-                    f"name on GN 2 only, the one ground type the licensed "
-                    f"NEC-4.2 was observed reading it on"
-                )
-            # The Sommerfeld-table FILE (module docstring): a cache, so the
-            # card is read without it.  The printout reads the name back off
-            # the deck text (``eznec._nec4._ground_file``).
+            # The Sommerfeld-table FILE (module docstring), on any GN type
+            # (momwire#1443): a cache, so the card is read without it.  The
+            # printout reads the name back off the deck text
+            # (``eznec._nec4._ground_file``).
             card = Card(card.mnemonic, card.values, card.raw)
         if card.i(0) == 3:
             if card.i(1) != 0:

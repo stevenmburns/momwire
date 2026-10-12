@@ -433,8 +433,9 @@ def _port_table(heading: str, rows: tuple[PortRow, ...]) -> list[str]:
 
 
 def _environment(shared: RunData, ground_file: str | None) -> list[str]:
-    """ANTENNA ENVIRONMENT, with one line more when ``GN 2`` names a
-    Sommerfeld-table file (momwire#1317).
+    """ANTENNA ENVIRONMENT, with one line more when a Sommerfeld ``GN``
+    (``GN 2``, or ``GN 3`` since momwire#1443) names a table file
+    (momwire#1317).
 
     The licensed engine prints a four-line block there on EVERY ``GN 2`` run
     (0231, p7): a blank, ``GNDINO: UNABLE TO OPEN FILE`` and the name as A40,
