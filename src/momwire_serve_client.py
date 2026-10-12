@@ -424,9 +424,11 @@ def runtime_dir() -> str:
     tests get an isolated server and how a user with an odd home can move it.
     One directory for BOTH clients: the keys already separate the engines, and
     a second env override would be a second thing to document and get wrong.
-    """
-    import tempfile
 
+    ``tempfile`` is imported only on the fallbacks that read it: it drags in
+    ``shutil``, ``random`` and friends, ~5 ms of every warm client launch
+    that had a runtime directory all along (momwire#1445).
+    """
     base = os.environ.get("MOMWIRE_PORTAL_RUNTIME_DIR")
     if not base:
         if os.name == "nt":
@@ -435,6 +437,7 @@ def runtime_dir() -> str:
                 base = os.path.join(local, "momwire-portal")
             else:
                 import getpass
+                import tempfile
 
                 base = os.path.join(
                     tempfile.gettempdir(), f"momwire-portal-{getpass.getuser()}"
@@ -444,6 +447,8 @@ def runtime_dir() -> str:
             if xdg and os.path.isdir(xdg):
                 base = os.path.join(xdg, "momwire-portal")
             else:
+                import tempfile
+
                 base = os.path.join(
                     tempfile.gettempdir(), f"momwire-portal-{os.getuid()}"
                 )
