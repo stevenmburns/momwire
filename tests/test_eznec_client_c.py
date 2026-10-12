@@ -589,7 +589,7 @@ def test_rung_four_writes_a_named_refusal_and_still_exits_zero(client_exe, tmp_p
 # --------------------------------------------------------------------------
 # EZNEC's NEC-4.2 slot (momwire#1295)
 
-NEC4_TWIN_NAME = "momwire-nec4-sinusoidal"
+NEC4_TWIN_NAME = "momwire-nec42-sinusoidal"
 NEC42_DECK = (
     Path(__file__).resolve().parent / "fixtures" / "eznec_nec42" / "0224_dipole-ex0.nec"
 )
@@ -616,7 +616,7 @@ def _nec4_oracle(tmp_path: Path) -> bytes:
 def test_a_nec4_named_copy_answers_the_nec42_slot_on_its_own_server(
     client_exe, tmp_path
 ):
-    """``momwire-nec4-sinusoidal`` reads the deck in the nec4 dialect and
+    """``momwire-nec42-sinusoidal`` reads the deck in the nec4 dialect and
     solves it point-matched, under a key no NEC-5 name can share: the
     ``dialect=nec4`` element precedes the basis element in the D2 digest."""
     bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC4_TWIN_NAME,))
@@ -661,6 +661,63 @@ def test_a_nec4_named_copy_one_shots_in_the_nec42_slot(client_exe, tmp_path):
         assert proc.returncode == 0, proc.stderr
         assert _unclocked(out.read_bytes()) == expected
         assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+# The C copy of the name rule, held to the stdlib one (momwire#1443): an
+# engine that records the argv the launcher derived from ITS OWN name, then
+# refuses both rungs, so nothing solves and the record is the whole result.
+_ARGV_SHIM = (
+    "#!/bin/sh\n"
+    'for arg in "$@"; do printf "%s\\n" "$arg" >> "$MW_ARGV_LOG"; done\n'
+    'printf "%s\\n" "--END--" >> "$MW_ARGV_LOG"\n'
+    "exit 1\n"
+)
+
+
+def _flag_value(args: list[str], flag: str) -> str | None:
+    return args[args.index(flag) + 1] if flag in args else None
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "name",
+    [
+        "momwire-nec42",
+        "momwire-nec42-sinusoidal",
+        "Momwire-NEC42-Bspline-D1.EXE",
+        "momwire-nec42-",
+        "momwire-nec42x",
+        # A renamed copy carrying `nec4` but not `nec42` reads past `nec4`.
+        "momwire-nec4",
+        "momwire-nec4-sinusoidal",
+        "momwire-nec4-",
+        "momwire-nec43",
+        "momwire-nec5-razor-2p",
+    ],
+)
+def test_the_c_name_rule_is_the_stdlib_one(client_exe, tmp_path, monkeypatch, name):
+    is_nec4, basis = mech.filename_nec4(name)
+    bundle = _bundle(client_exe, _ARGV_SHIM, names=(name,))
+    room = _room()
+    log = tmp_path / "argv.log"
+    monkeypatch.setenv("MW_ARGV_LOG", str(log))
+    try:
+        out = tmp_path / "argv.out"
+        proc = _run(bundle, name, [str(NEC42_DECK), str(out)], room)
+        assert proc.returncode == 0, proc.stderr
+        calls = [
+            c.splitlines() for c in log.read_text().split("--END--\n") if c.strip()
+        ]
+        # Rung 2's --serve spawn and rung 3's one-shot both carry the name's
+        # reading of itself.
+        assert len(calls) == 2, calls
+        for args in calls:
+            assert (_flag_value(args, "--dialect") == "nec4") == is_nec4, args
+            if is_nec4:
+                assert _flag_value(args, "--basis") == basis, args
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)

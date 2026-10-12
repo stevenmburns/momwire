@@ -13,6 +13,11 @@ Every capture recorded the same launch:
   "C:\EZNEC 7.0\Docs\momwire-nec4-capture.exe" "EZ.NEC" "NEC.OUT"
   cwd = the engine's own folder, stdin not redirected, exit 0 accepted
 
+The shim's name is recorded as it was at capture.  The shipped NEC-4.2
+launchers have been named momwire-nec42[-<basis>] since momwire#1443
+(SimNEC recognises an engine by nec42 in its name); a name carrying only
+nec4, like the shim's, still selects the NEC-4.2 slot.
+
 Pairs that are the same deck: 0223/0236 (re-captured), 0225/0226.
 0223/0224 are one antenna under EX 6 (current) and EX 0 (voltage).
 

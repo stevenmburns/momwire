@@ -101,18 +101,31 @@ def test_the_fixtures_are_the_captures_as_written():
 @pytest.mark.parametrize(
     "prog, dialect, basis",
     [
+        # The shipped names (momwire#1443): the basis is read past `nec42`.
+        ("momwire-nec42", "nec4", None),
+        ("momwire-nec42.exe", "nec4", None),
+        ("C:\\EZNEC 7.0\\Docs\\momwire-nec42.exe", "nec4", None),
+        ("momwire-nec42-sinusoidal.exe", "nec4", "sinusoidal"),
+        ("Momwire-NEC42-Sinusoidal-Galerkin.EXE", "nec4", "sinusoidal-galerkin"),
+        ("/opt/bin/momwire-nec42-bspline-d1", "nec4", "bspline-d1"),
+        ("momwire-nec42-razor-2p.exe", "nec4", "razor-2p"),
+        ("momwire-nec42-", "nec4", ""),
+        ("momwire-nec42x", "nec4", "x"),
+        # A renamed copy carrying `nec4` but not `nec42` reads as it did
+        # before momwire#1443, past `nec4`.
         ("momwire-nec4", "nec4", None),
         ("momwire-nec4.exe", "nec4", None),
         ("C:\\EZNEC 7.0\\Docs\\momwire-nec4.exe", "nec4", None),
         ("momwire-nec4-sinusoidal.exe", "nec4", "sinusoidal"),
         ("Momwire-NEC4-Sinusoidal-Galerkin.EXE", "nec4", "sinusoidal-galerkin"),
         ("/opt/bin/momwire-nec4-bspline-d1", "nec4", "bspline-d1"),
+        ("My-NEC4-engine.exe", "nec4", "engine"),
         # Copies the README cannot stop someone making: each NAMES its basis,
         # so each reaches the refusal rather than the default.
         ("momwire-nec4-razor-2p.exe", "nec4", "razor-2p"),
         ("momwire-nec4-", "nec4", ""),
         ("momwire-nec4-rzaor", "nec4", "rzaor"),
-        ("momwire-nec42.exe", "nec4", "2"),
+        ("momwire-nec43.exe", "nec4", "3"),
         # The capture shim's own name: a nec4 name with an unknown suffix.
         ("momwire-nec4-capture.exe", "nec4", "capture"),
         # The NEC-5 family is untouched.
@@ -132,10 +145,12 @@ def test_the_name_picks_the_slot_and_the_basis(prog, dialect, basis):
 @pytest.mark.parametrize(
     "prog, dialect, basis",
     [
+        ("momwire-nec42.exe", "nec4", _serve.BASIS),
+        ("momwire-nec42-sinusoidal.exe", "nec4", "sinusoidal"),
+        ("momwire-nec42-razor-2p.exe", "nec4", "razor-2p"),
+        ("momwire-nec42-.exe", "nec4", ""),
         ("momwire-nec4.exe", "nec4", _serve.BASIS),
         ("momwire-nec4-sinusoidal.exe", "nec4", "sinusoidal"),
-        ("momwire-nec4-razor-2p.exe", "nec4", "razor-2p"),
-        ("momwire-nec4-.exe", "nec4", ""),
         ("momwire-eznec.exe", "nec5", _serve.BASIS),
         ("momwire-eznec-razor-2p.exe", "nec5", "razor-2p"),
         ("momwire-eznec-engine.exe", "nec5", _serve.BASIS),
@@ -178,7 +193,7 @@ def test_a_nec4_named_daemon_serves_the_nec4_slot(monkeypatch):
         "momwire.eznec._resident.serve_main",
         lambda argv: seen.update(argv=argv) or 0,
     )
-    assert _entry_module().run(["momwire-nec4-pulse.exe", "--serve"]) == 0
+    assert _entry_module().run(["momwire-nec42-pulse.exe", "--serve"]) == 0
     assert seen["argv"] == ["--serve", "--basis", "pulse", "--dialect", "nec4"]
 
 
@@ -216,7 +231,10 @@ def test_every_nec4_console_script_names_a_basis_the_slot_serves():
     family = {
         k: v for k, v in scripts.items() if dialect_from_program_name(k) == "nec4"
     }
-    assert "momwire-nec4" in family and "momwire-nec4-sinusoidal" in family
+    assert "momwire-nec42" in family and "momwire-nec42-sinusoidal" in family
+    # momwire#1443: the old `momwire-nec4*` launchers are not shipped; every
+    # script in the family carries the `nec42` SimNEC recognises.
+    assert all("nec42" in k for k in family), sorted(family)
     assert set(family.values()) == {"momwire_eznec_client:main"}
     bases = {nec4_basis_from_program_name(k) for k in family} - {None}
     assert bases == set(NEC2_BASES)
