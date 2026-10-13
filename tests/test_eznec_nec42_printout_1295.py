@@ -892,8 +892,9 @@ def test_a_sommerfeld_gn_file_name_prints_that_the_file_was_not_read(ground_type
     """The licensed engine's line, in its captured place (the cache block of
     p7, this deck's own printout, first line only), and the name echoed on
     the card's continuation line; every other line is the bare card's
-    printout.  GN 3 (momwire#1443) is the same half-space, so the same block,
-    under its own environment word."""
+    printout.  GN 3 (momwire#1443) is the same half-space under its own
+    environment word, and its line is its own too, after the medium, as the
+    licensed engine prints it (momwire#1463)."""
     bare_card = f"GN {ground_type} 0 0 0 13. .005 0 0 0 0"
     bare = render(
         _edited("p7", "GN 2,0,0,0,13.,.005", bare_card), basis=BASIS, dialect="nec4"
@@ -906,19 +907,22 @@ def test_a_sommerfeld_gn_file_name_prints_that_the_file_was_not_read(ground_type
             dialect="nec4",
         )
         assert "NEC ERROR" not in named, name
-        gndino = " GNDINO: UNABLE TO OPEN FILE " + name.ljust(40)
         echo = " " * 43 + "  0.00000E+00  " + name.ljust(40)
         lines = _timeless(named)
         env_at = _section(lines, "- - - ANTENNA ENVIRONMENT - - -")
-        assert lines[env_at + 1 : env_at + 6] == [
-            "",
-            "",
-            gndino,
-            "",
-            " " * 40 + f"FINITE GROUND.  SOMMERFELD SOLUTION GN{ground_type}",
-        ], name
+        medium = " " * 40 + f"FINITE GROUND.  SOMMERFELD SOLUTION GN{ground_type}"
+        if ground_type == 2:
+            gndino = " GNDINO: UNABLE TO OPEN FILE " + name.ljust(40)
+            assert lines[env_at + 1 : env_at + 6] == ["", "", gndino, "", medium], name
+            kept = [*lines[: env_at + 2], *lines[env_at + 5 :]]
+        else:
+            # GN 3's own line, after the medium (0232, p16; momwire#1463).
+            gndino = " GNDINO3: Unable to open file " + name.ljust(40)
+            assert lines[env_at + 1 : env_at + 3] == ["", medium], name
+            assert lines[env_at + 6 : env_at + 8] == ["", gndino], name
+            assert "COMPLEX DIELECTRIC CONSTANT=" in lines[env_at + 5], name
+            kept = [*lines[: env_at + 6], *lines[env_at + 8 :]]
         assert lines.count(gndino) == 1 and lines.count(echo) == 1, name
-        kept = [*lines[: env_at + 2], *lines[env_at + 5 :]]
         kept.remove(echo)
         assert kept == _timeless(bare), name
 
