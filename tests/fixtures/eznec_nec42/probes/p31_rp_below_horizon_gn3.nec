@@ -1,0 +1,12 @@
+CM Vertical dipole over GN 3, RP through the horizon, at no range and at a range
+CM
+CM momwire#1463 probe deck (not an EZNEC capture)
+CE
+GW 1 21 0. 0. 1. 0. 0. 11. .001
+GE 1
+GN 3 0 0 0 13. .005 0 0 NOFILE
+FR 0 1 0 0 7.1 0
+EX 0 1 11 0 1. 0.
+RP 0 5 1 1000 80. 0. 5. 0.
+RP 0 5 1 1000 80. 0. 5. 0. 1000.
+EN
