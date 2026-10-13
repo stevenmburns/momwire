@@ -169,6 +169,7 @@ def test_a_grid_point_on_a_ground_contact_refuses_by_name():
     assert "where wire 1 stands on the finite ground" in printed
 
 
+@pytest.mark.slow
 def test_a_buried_deck_near_field_refuses_by_name():
     text = _nec2(wire="GW 1 {n} -5. 0. -.5 5. 0. -.5 .001", ge="GE -1")
     printed = _portal_refusal(text)
