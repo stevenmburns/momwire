@@ -37,6 +37,18 @@ Three kinds of port, declared at construction, and they can be mixed:
 Ports are numbered `[feeds…, junction_ports…, node_gaps…]`, and that is the
 order every port readout is in.
 
+**A junction port has one terminal.** Its voltage is the node's potential and
+its current is the current the port puts into the wires at the node, on every
+family that serves it. Nothing in the model carries that current back, so a
+junction port on its own is not a one-port in the circuit sense: its
+`Re(Y)` is not a radiation conductance and can be negative. An L of two
+wires driven at its corner reads −26.9 − 342.3j Ω on both `BSplineSolver` and
+`SinusoidalGalerkinSolver` (momwire#1165), and that is not a sign error.
+Junction ports are for a network that closes the current: an element between
+nodes A and B sees `Z_AA + Z_BB − Z_AB − Z_BA` of `Z = inv(sol.y)`. That
+impedance is passive, its input power is the radiated power, and across two
+facing wire ends it tends to a delta gap's as the gap closes.
+
 ```python
 sol = solver.compute_port_solution()  # one fill, one factorisation
 sol.y  # (n_ports, n_ports) short-circuit Y

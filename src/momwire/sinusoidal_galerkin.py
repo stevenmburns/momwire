@@ -6249,12 +6249,23 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         Junction port p: the source is an EMF in the infinitesimal lead
         between the port terminal and the node, so testing it against basis
-        w gives -1 × (w's net current THROUGH that lead) = -1 × (w's net
-        inflow at the node). Every ordinary basis has zero net inflow there
-        — that is #177's KCL identity, the very property that makes the port
-        impossible in the point-matched solver — and `g_q` has δ_pq by
-        construction. So the whole column is a single -1 at row N+p: the
-        port's excitation touches exactly the port's own row, exactly.
+        w gives -1 × (w's net current THROUGH that lead, terminal to node).
+        What flows through the lead into the node leaves it along the wires,
+        so that is MINUS w's net inflow at the node from its members: the
+        column entry is +1 × (w's net inflow at the node). Every ordinary
+        basis has zero net inflow there — that is #177's KCL identity, the
+        very property that makes the port impossible in the point-matched
+        solver — and `g_q` has δ_pq by construction. So the whole column is
+        a single +1 at row N+p: the port's excitation touches exactly the
+        port's own row, exactly.
+
+        The sign is momwire#1165's. It was -1, which is the same EMF with
+        the lead read from the node to the terminal: every junction port's
+        (V, I) was reversed against `BSplineSolver`'s. That cancels in the
+        port's own Y and between two junction ports, so no driving-point
+        impedance moved; it showed only where a junction port met a gap
+        feed, as the opposite sign of their mutual admittance, and as wire
+        currents of the wrong sign under a junction-port drive.
 
         Node port p (M5b formulation (a)): the source is a ZERO-width delta
         gap sitting exactly at the junction node, E^app = V·δ(s − s_node)
@@ -6310,7 +6321,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 col = -int_f / hm
             np.add.at(U[:, j], seg_view["jbasis"][s:e], col)
         for p in range(len(self.junction_ports)):
-            U[N + p, len(self.feeds) + p] = -1.0
+            U[N + p, len(self.feeds) + p] = 1.0
         if self.node_ports:
             n0 = len(self.feeds) + len(self.junction_ports)
             U[:, n0:] = -self._node_cut_vectors(geom, seg_view, k)
@@ -6347,10 +6358,13 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """Per-port current readout, ordered [gap feeds…, junction ports…,
         node ports…].
 
-        A junction port's readout is `α_{N+p}` — its own basis amplitude,
-        which by construction IS the current injected at the node — and that
-        equals -U[:, port]·α exactly, so the port block of Y is symmetric to
-        machine precision whichever branch below runs.
+        A junction port's readout is `-α_{N+p}`. Its basis carries unit
+        current from the members INTO the node, so its amplitude is the
+        current the wires deliver to the node and the current the port puts
+        into the wires is minus that (momwire#1165; `BSplineSolver`'s
+        reference direction). It equals -U[:, port]·α exactly, so the port
+        block of Y is symmetric to machine precision whichever branch below
+        runs.
 
         A NODE port's readout is the current through the node, -U[:, port]·α,
         which is likewise the exact dual of its drive: the drive column IS the
@@ -6389,7 +6403,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 )
                 for j, fi in enumerate(geom["feed_segs"])
             ]
-            + [alpha[N + p] for p in range(len(self.junction_ports))]
+            + [-alpha[N + p] for p in range(len(self.junction_ports))]
             + [-(U[:, n0 + p] @ alpha) for p in range(len(self.node_ports))],
             dtype=np.complex128,
         )
