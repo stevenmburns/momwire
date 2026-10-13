@@ -69,27 +69,93 @@ jobs:
               - '!LICENSE'
               - '!scripts/probe_*.py'
 
+  # TWO bundles from one job, as a matrix so they share every step below --
+  # above all the signing-mode decision, which must exist exactly once
+  # (#711). `standard` is the release zip on python.org's 3.12; `win7`
+  # (momwire#1456) is the same code frozen with the community PythonWin7
+  # 3.12 interpreter, whose python312.dll starts on Windows 7, plus an
+  # import-table gate. fail-fast is off so a red Win7 leg never cancels the
+  # standard one, and the release job below attaches whatever is green.
   freeze:
-    name: freeze + smoke (windows)
+    name: freeze + smoke (windows, ${{ matrix.target }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [standard, win7]
+    env:
+      MOMWIRE_BUNDLE_TARGET: ${{ matrix.target }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
+        if: matrix.target == 'standard'
         with:
           python-version: '3.12'
+      # The Win7 leg's interpreter: PythonWin7 (github.com/adang1345/
+      # PythonWin7), a THIRD-PARTY build of CPython. The sha256 pin is the
+      # whole control on it -- bumping the version is a deliberate edit of
+      # both lines, re-proved by a dispatch. The nupkg form is the full
+      # interpreter as a plain zip (pip and venv included) and registers
+      # nothing, unlike the installer. Prepending it to GITHUB_PATH makes it
+      # THE `python` for every later step of this leg; the next step proves
+      # that rather than trusting PATH order.
+      - name: PythonWin7 interpreter (win7, pinned by sha256)
+        if: matrix.target == 'win7'
+        shell: pwsh
+        env:
+          PYWIN7_URL: https://github.com/adang1345/PythonWin7/releases/download/v3.12.15/python.3.12.15.nupkg
+          PYWIN7_SHA256: 2e63c26e1f2e8cf84c8ab8399699255a23d8c4b66506fa8866ea1214ccc832e2
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          $pkg = Join-Path $env:RUNNER_TEMP 'pywin7.zip'
+          Invoke-WebRequest -Uri $env:PYWIN7_URL -OutFile $pkg
+          $got = (Get-FileHash $pkg -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $env:PYWIN7_SHA256) { throw "PythonWin7 nupkg sha256 $got != pinned $env:PYWIN7_SHA256" }
+          $dir = Join-Path $env:RUNNER_TEMP 'pywin7'
+          Expand-Archive $pkg $dir
+          $tools = Join-Path $dir 'tools'
+          if (-not (Test-Path (Join-Path $tools 'api-ms-win-core-path-l1-1-0.dll'))) { throw "PythonWin7 nupkg lacks its PathCch shim" }
+          "$tools\Scripts" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $tools | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: Prove the Win7 leg runs the PythonWin7 interpreter
+        if: matrix.target == 'win7'
+        shell: pwsh
+        run: |
+          python -VV
+          $exe = python -c "import sys; print(sys.executable)"
+          if ($exe -notlike "$env:RUNNER_TEMP\pywin7\tools\*") { throw "python is $exe, not the PythonWin7 interpreter" }
       # python -m pip: on Windows pip.exe refuses to replace itself in-place.
       - run: python -m pip install --upgrade pip
+      # The Win7 leg builds EVERYTHING with the MSVC 14.44 toolset. The
+      # MSVCP140.dll a freeze bundles comes from the MSVC bin directory on
+      # PATH, and from 14.5x on it imports CopyFile2, CreateFile2 and
+      # GetSystemTimePreciseAsFileTime, none of which Windows 7 has (the first
+      # dispatch of this leg, run 38427318212, failed the import gate on
+      # exactly that). Pinning only the bundled DLL would not do: a runtime
+      # older than the toolset that compiled the accelerator is unsupported,
+      # so the accelerator is built with 14.44 too. DISTUTILS_USE_SDK makes
+      # setuptools take the compiler on PATH instead of finding the newest
+      # one through vswhere.
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.target == 'win7'
+        with:
+          toolset: '14.44'
       # Install momwire from this checkout (builds the MSVC accelerator, same
       # toolchain path the wheels take) plus the freezer.
       - run: pip install . "pyinstaller>=6.10,<7"
+        env:
+          DISTUTILS_USE_SDK: ${{ matrix.target == 'win7' && '1' || '' }}
       # cl.exe on PATH for the native launcher: pip's own build of the C++
       # accelerator finds the MSVC toolchain itself (setuptools looks it up
       # through vswhere), but build_msvc.bat is a bare compiler invocation and
-      # does not.
+      # does not. The Win7 leg keeps its 14.44 pin here too, since this PATH
+      # is also where the freeze collects MSVCP140.dll from.
       - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          toolset: ${{ matrix.target == 'win7' && '14.44' || '' }}
       # THE MODE, decided exactly once. Every signing step below, the secrets
       # scope on the build step, the bundle name, and build.py's own
       # post-condition (sign.py must have signed when the mode says signing
@@ -234,6 +300,13 @@ jobs:
       # smoke's residency gate (two launches, one spawned daemon) is what says
       # the fast path works on the OS it ships to.
       - run: python scripts/eznec_freeze/smoke.py dist/momwire-eznec/momwire-eznec.exe
+      # The ONLY Windows 7 check before a user runs it: there is no Win7
+      # runner, so the smoke above proves the freeze, not Win7. Fails on any
+      # import of an API Windows 7 SP1 lacks outside the allow-list. Its
+      # function list is curated, not exhaustive -- see the script.
+      - name: Windows 7 import gate (win7)
+        if: matrix.target == 'win7'
+        run: python scripts/eznec_freeze/scan_win7_imports.py dist/momwire-eznec
       # One name, computed once, used by the zip, the upload, and (on tags)
       # the release job's download. A tag keeps the canonical name the
       # release job asks for by name; anything else is a rehearsal build and
@@ -256,12 +329,17 @@ jobs:
       # Canonical requires ref_type == tag AND a push event: a dispatch run
       # ON a tag ref is a signing test, not a release build, and must not
       # produce release-look-alike bytes (#711 retro-review).
+      #
+      # The Win7 leg's canonical name is momwire-eznec-windows-win7, and its
+      # rehearsal names carry the same -win7 infix, so neither leg's artifact
+      # can be mistaken for the other's.
       - name: Name the bundle
         shell: pwsh
         run: |
-          $base = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_EVENT_NAME -eq 'push') { 'momwire-eznec-windows' }
-                  elseif ($env:MOMWIRE_SIGN_MODE -eq 'azure') { 'momwire-eznec-windows-SIGNTEST' }
-                  else { 'momwire-eznec-windows-SELFSIGNED-rehearsal' }
+          $stem = if ($env:MOMWIRE_BUNDLE_TARGET -eq 'win7') { 'momwire-eznec-windows-win7' } else { 'momwire-eznec-windows' }
+          $base = if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_EVENT_NAME -eq 'push') { $stem }
+                  elseif ($env:MOMWIRE_SIGN_MODE -eq 'azure') { "$stem-SIGNTEST" }
+                  else { "$stem-SELFSIGNED-rehearsal" }
           "BUNDLE=$base" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Zip the bundle
         shell: pwsh
@@ -331,7 +409,13 @@ jobs:
     # picked in the ref dropdown also satisfies startsWith(refs/tags/), and
     # without the guard it would silently REPLACE the published release
     # asset (#711 retro-review). Only a pushed tag releases.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    #
+    # `!cancelled()` and not the implicit success(): `needs: freeze` covers
+    # BOTH matrix legs, so a red Win7 leg (a third-party interpreter, gated
+    # by a curated scan) would otherwise hold back the standard zip that
+    # every EZNEC user downloads. The standard zip stays a hard requirement
+    # all the same: its download below fails the job if its leg failed.
+    if: ${{ !cancelled() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -339,6 +423,17 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: momwire-eznec-windows
+      # The Win7 bundle (momwire#1456) is best-effort on a release: attached
+      # when its leg is green, skipped (the step goes yellow) when it is not.
+      - uses: actions/download-artifact@v8
+        id: win7
+        continue-on-error: true
+        with:
+          name: momwire-eznec-windows-win7
+      - uses: softprops/action-gh-release@v3
+        if: steps.win7.outcome == 'success'
+        with:
+          files: momwire-eznec-windows-win7.zip
       - uses: softprops/action-gh-release@v3
         with:
           # NO generate_release_notes here, and that asymmetry is the point:

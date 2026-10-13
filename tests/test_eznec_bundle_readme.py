@@ -150,3 +150,36 @@ def test_the_readme_table_has_one_row_per_shipped_executable():
     # ~70-column wrap.
     table = build.launcher_table(".exe")
     assert max(len(line) for line in table.splitlines()) <= 72
+
+
+def test_only_the_win7_readme_states_the_win7_prerequisites():
+    """momwire#1456: the Windows 7 zip names what the PC needs; the release
+    zip does not, and an unknown target refuses rather than defaulting."""
+    build = _build()
+    args = ("9.9.9", "SIGNING: this build is unsigned.", ".exe")
+    standard = build.readme_text(*args)
+    assert standard == build.readme_text(*args, "standard")
+    assert standard == build.readme_text(*args, "standard", True)
+    assert "WINDOWS 7 BUILD" not in standard
+    for bundled in (False, True):
+        win7 = build.readme_text(*args, "win7", bundled)
+        block = build.win7_prerequisites(bundled)
+        for needed in (
+            "Windows 7 SP1, 64-bit",
+            "KB2533623",
+            "KB2999226",
+            "2015-2022 x64",
+        ):
+            assert needed in win7, (bundled, needed)
+        # The Win7 README is the standard one plus the prerequisites, nothing else.
+        assert win7.replace(block, "", 1) == standard
+        assert max(len(line) for line in block.splitlines()) <= 72
+    # The UCRT line says which this bundle is, never both.
+    assert "carries its own copy" in build.win7_prerequisites(True)
+    assert "does not carry its own copy" in build.win7_prerequisites(False)
+    try:
+        build.readme_text(*args, "win8")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unknown bundle target must refuse")
