@@ -8,6 +8,11 @@ input the result depends on -- geometry, radius, frequency, basis flags,
 the kernel's rules, the route -- misses rather than meeting a stale entry,
 and that a ground change (which the free-space correction does not read)
 shares the entry and still adds the same bits. The byte gate over the fixture decks lives in the PR (#1454).
+
+These are the DIRECT rule's caches -- its moments are keyed on k -- so the
+module switches the k-series off (step 3, `_exact_kernel_series`), which
+otherwise serves every deck here and leaves the per-wavenumber row objects
+unused. The series' own cache is held in `test_exact_kernel_series_1454.py`.
 """
 
 import threading
@@ -16,11 +21,22 @@ import warnings
 import numpy as np
 import pytest
 
-from momwire import RazorSolver, _exact_kernel as EK, _razor_exact_plan as P
+from momwire import (
+    RazorSolver,
+    _exact_kernel as EK,
+    _exact_kernel_series as ES,
+    _razor_exact_plan as P,
+)
 
 needs_accel = pytest.mark.skipif(
     not EK._HAVE_POINT_ACCEL, reason="accelerator not built"
 )
+
+
+@pytest.fixture(autouse=True)
+def _the_direct_rule(monkeypatch):
+    monkeypatch.setattr(ES, "ENABLED", False)
+
 
 L = 0.47
 

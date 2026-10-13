@@ -352,6 +352,7 @@ it on, and each is gated with it on.
 """
 
 from dataclasses import dataclass
+import functools
 import os
 import warnings
 
@@ -368,6 +369,7 @@ from . import (
     _crossing_fill,
     _exact_kernel,
     _exact_kernel_seam,
+    _exact_kernel_series,
     _near_interface,
     _potential_ground,
     _razor_class,
@@ -4594,6 +4596,13 @@ class RazorSolver(
         (momwire#1454: the resident server's repeat calls). Both are reused
         only on exactly the inputs they were computed from, so a hit adds the
         same bits a fresh call does.
+
+        Under `_exact_kernel_series.ENABLED` (step 3 of momwire#1454, off by
+        default) a group whose segments are short enough at this k takes its
+        exact moments from the k-series on geometry-only coefficients
+        instead: the plan keeps that source for its lifetime, whatever the
+        frequency, so a sweep integrates each pair once. Derivation and
+        measurements: `docs/design/exact-kernel-static-dynamic-split.md`.
         """
         seg_a = np.asarray(self._seg_radius(geom), dtype=float)
         pts, tans, wts = self._testing_paths(geom)
@@ -4617,22 +4626,46 @@ class RazorSolver(
         plan, cached = _razor_exact_plan.plan_for(
             geom, seg_a, pts, tans, wts, src_lab, on_cent, _CHUNK_ELEMS, context
         )
-        keep = cached and _razor_exact_plan.rows_cacheable(k)
+        # Which rule serves each group's exact moments: the k-series on
+        # geometry-only coefficients where the group is short enough at this
+        # k (`_exact_kernel_series.serves`), the direct rule otherwise. The
+        # choice reads the geometry and k alone, never what is cached.
+        ser_on = _exact_kernel_series.ENABLED and _exact_kernel_series.accel_serves(
+            k, 2
+        )
+        by_series = [
+            ser_on and _exact_kernel_series.serves(k, g.reach) for g in plan.groups
+        ]
+        n_groups = len(plan.groups)
+        keep_ser = cached and any(by_series)
+        skey = _razor_exact_plan.series_key() if keep_ser else None
+        series = plan.take_series(skey) if keep_ser else None
+        if series is None:
+            series = [None] * n_groups
+        ser_count = [(s.built, s.reused, s.evaluated) for s in series if s is not None]
+        keep = cached and not all(by_series) and _razor_exact_plan.rows_cacheable(k)
         rkey = _razor_exact_plan.rows_key(k) if keep else None
         sources = plan.take_rows(rkey) if keep else None
         if sources is None:
-            sources = [None] * len(plan.groups)
+            sources = [None] * n_groups
         for i, g in enumerate(plan.groups):
             r_A = _razor_exact_plan.row_cA(g, c_A)
             r_P = _razor_exact_plan.row_cP(g, c_Phi)
-            exact = sources[i]
-            if exact is None:
-                exact = sources[i] = _exact_kernel.point_rows(
-                    g.x0, g.sgn, g.h, g.a, k, 2, max_cached=4 * g.n + 1024
-                )
+            if by_series[i]:
+                if series[i] is None:
+                    series[i] = _exact_kernel_series.PointSeriesAccel(
+                        g.x0, g.sgn, g.h, g.a, 2, max_cached=4 * g.n + 1024
+                    )
+                exact_rows = functools.partial(series[i].rows, k=k)
+            else:
+                if sources[i] is None:
+                    sources[i] = _exact_kernel.point_rows(
+                        g.x0, g.sgn, g.h, g.a, k, 2, max_cached=4 * g.n + 1024
+                    )
+                exact_rows = sources[i].rows
             for o0, o1, e0, e1, r_o_win, ek_win in g.windows:
                 self._checkpoint()
-                mom = exact.rows(g.obs_x[o0:o1])  # (2, rows, n)
+                mom = exact_rows(g.obs_x[o0:o1])  # (2, rows, n)
                 ek = None
                 if ek_win is not None:
                     ek = _EK(None, *ek_win)
@@ -4658,8 +4691,15 @@ class RazorSolver(
                     )
         # Only a completed correction's sources go back: a cancelled one may
         # stop mid-window, and a group it never reached has none.
-        if keep and all(isinstance(s, _exact_kernel.PointRowsAccel) for s in sources):
+        direct = [s for s, ser in zip(sources, by_series) if not ser]
+        if keep and all(isinstance(s, _exact_kernel.PointRowsAccel) for s in direct):
             plan.give_rows(rkey, sources)
+        if any(by_series):
+            now = [(s.built, s.reused, s.evaluated) for s in series if s is not None]
+            was = np.sum(ser_count, axis=0) if ser_count else np.zeros(3, dtype=int)
+            _razor_exact_plan.count_series(*(np.sum(now, axis=0) - was).tolist())
+            if keep_ser:
+                plan.give_series(skey, series)
 
     # ------------------------------------------------------------------
     # the crossing trunk's view of this solver (momwire#813)

@@ -42,6 +42,16 @@ the rows key adds k, the kernel's quadrature rules and whether the C++
 route serves. Only the C++ route's objects are kept: the numpy reference
 (`PointRows`) is the one a test swaps a kernel into.
 
+Step 3 adds what does NOT depend on k: where a group's segments are short
+enough at the call's wavenumber (`_exact_kernel_series.serves`), its exact
+moments come from a power series in k whose coefficients are geometry-only,
+and the plan keeps that group's series source (`PointSeriesAccel`) for its
+own lifetime, under a key that holds no wavenumber. A frequency sweep then
+integrates each pair once. That route is not bit-identical to the direct
+rule (it agrees to ~1e-15 of a moment), so it is behind
+`_exact_kernel_series.ENABLED`; with the switch off this module is
+momwire#1455's, bit for bit.
+
 Bounded: `_PLAN_ENTRIES` geometries (least recently used out), each with at
 most `_ROWS_ENTRIES` wavenumbers, and a geometry whose tables would exceed
 `_PLAN_MAX_BYTES` is computed as before and not stored. The resident server
@@ -58,7 +68,7 @@ from collections import OrderedDict
 
 import numpy as np
 
-from . import _exact_kernel, _exact_kernel_seam
+from . import _exact_kernel, _exact_kernel_seam, _exact_kernel_series
 
 # Switch, for gates that compare the cached and uncached routes in one
 # process. Read at call time.
@@ -74,6 +84,13 @@ _PLANS: OrderedDict = OrderedDict()
 # Hit/miss counters, for gates that must show the cache actually served.
 STATS = {"plan_hit": 0, "plan_miss": 0, "rows_hit": 0, "rows_miss": 0}
 
+# The static/dynamic split's counters (step 3, `_exact_kernel_series`): a
+# correction that found a geometry's series sources (`hit`) or had to make
+# them (`miss`), then per unique pair: coefficient sets integrated (`built`,
+# the static cache's misses), pairs found already built (`reused`, its
+# hits) and Horner evaluations of the series (`evaluated`).
+SERIES_STATS = {"hit": 0, "miss": 0, "built": 0, "reused": 0, "evaluated": 0}
+
 
 def clear():
     """Drop every cached plan and zero the counters."""
@@ -81,6 +98,8 @@ def clear():
         _PLANS.clear()
         for key in STATS:
             STATS[key] = 0
+        for key in SERIES_STATS:
+            SERIES_STATS[key] = 0
 
 
 def _arr_key(a):
@@ -103,6 +122,7 @@ class _Group:
         "sgn",
         "h",
         "a",
+        "reach",
         "col_ptr",
         "B",
         "B64",
@@ -127,6 +147,7 @@ class Plan:
         self.groups = groups
         self.nbytes = nbytes
         self._rows = OrderedDict()  # rows key -> [PointRowsAccel per group]
+        self._series = {}  # series key -> [PointSeriesAccel per group]
 
     def take_rows(self, key):
         """The row objects stored for `key`, checked out (None on a miss)."""
@@ -142,6 +163,43 @@ class Plan:
             self._rows.move_to_end(key)
             while len(self._rows) > _ROWS_ENTRIES:
                 self._rows.popitem(last=False)
+
+    def take_series(self, key):
+        """The series sources stored for `key`, checked out (None on a
+        miss). They hold no wavenumber, so one set serves every frequency
+        for the plan's lifetime."""
+        with _LOCK:
+            got = self._series.pop(key, None)
+            SERIES_STATS["hit" if got is not None else "miss"] += 1
+            return got
+
+    def give_series(self, key, series):
+        """Put a finished correction's series sources back. One set per
+        plan: a set built under other rules replaces the one held."""
+        with _LOCK:
+            self._series.clear()
+            self._series[key] = series
+
+
+def series_key():
+    """What a group's series coefficients depend on besides the plan."""
+    return (
+        _exact_kernel._N_GL,
+        _exact_kernel._N_SPLIT,
+        _exact_kernel._GRADE,
+        _exact_kernel._T_SWITCH,
+        _exact_kernel_series.X_MAX,
+        _exact_kernel_series.X_CENTRED,
+        _exact_kernel_series.N_RING,
+        _exact_kernel_series.SERIES_TOL,
+    )
+
+
+def count_series(built, reused, evaluated):
+    with _LOCK:
+        SERIES_STATS["built"] += built
+        SERIES_STATS["reused"] += reused
+        SERIES_STATS["evaluated"] += evaluated
 
 
 def rows_key(k):
@@ -261,6 +319,7 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
         g.n = n
         g.x0, g.sgn, g.h = x0, sgn, np.ascontiguousarray(h)
         g.a = float(seg_a[S[0]])
+        g.reach = _exact_kernel_series.group_reach(h, g.a)
         g.col_ptr, g.B, g.B64, g.ent = col_ptr, B, B.astype(np.int64), ent
         g.a_parts, g.p_parts = a_parts, p_parts
         g.by_o, g.r_o, g.r_m = by_o, r_o, r_m
@@ -290,8 +349,17 @@ def _group_nbytes(g):
         arrs.append(w[4])
         if w[5] is not None:
             arrs += [x for x in w[5] if x is not None]
-    # Each group's PointRowsAccel holds at most 4n + 1024 pairs (~80 B each).
-    return sum(a.nbytes for a in arrs) + 80 * (4 * g.n + 1024) * _ROWS_ENTRIES
+    # Each group's PointRowsAccel holds at most 4n + 1024 pairs (~80 B each),
+    # one per kept wavenumber.
+    nbytes = sum(a.nbytes for a in arrs) + 80 * (4 * g.n + 1024) * _ROWS_ENTRIES
+    if _exact_kernel_series.ENABLED:
+        # Its series source holds the same pairs once, each with at most
+        # N_CAP real coefficients per moment -- and never more pairs than
+        # observers times segments, which is what bounds a two-segment
+        # wire's source (a deck of many short wires is many groups).
+        pairs = min(4 * g.n + 1024, g.obs_x.size * g.n)
+        nbytes += _exact_kernel_series.PAIR_NBYTES * pairs
+    return nbytes
 
 
 def _freeze(groups):
@@ -350,6 +418,8 @@ def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context
         bool(on_cent),
         int(chunk_elems),
         tuple(context),
+        # the byte bound a plan was admitted under counts the series sources
+        bool(_exact_kernel_series.ENABLED),
     )
     with _LOCK:
         plan = _PLANS.get(key)
