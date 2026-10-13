@@ -726,6 +726,120 @@ def _gain_db(power_gain: float) -> float:
     return 10.0 * math.log10(power_gain)
 
 
+# ---------------------------------------------------------------------------
+# The same three readouts over a whole grid at once (momwire#1448).
+#
+# SimNEC asks for a pattern on every engine call, and on a small deck the
+# per-point loop over ``_polarisation`` / ``_gain_db`` / ``_phase_deg`` cost
+# more than the solve. The grid forms below are those functions, operation for
+# operation, with one rule that the printouts depend on: every IEEE-exact step
+# (``+ - * /``, ``sqrt``, comparisons, ``fmod``) runs in numpy, and every
+# TRANSCENDENTAL step (``abs`` of a complex, ``atan2``, ``cos``, ``log10``)
+# runs through the very function the scalar path calls, mapped over the grid.
+#
+# That split is the byte-identity argument. numpy's own ``arctan2``, ``cos``,
+# ``log10`` and complex ``absolute`` are not libm: depending on the build and
+# the CPU they dispatch to SIMD kernels accurate to an ulp or so but not equal
+# to libm's bits, and an ulp is all a printed last digit needs to move.
+# ``abs(complex)`` in particular is libm's ``hypot`` (CPython's ``_Py_c_abs``),
+# where ``math.hypot`` is CPython's own vector norm: the same value to an ulp,
+# different bits, so neither stands in for the other. Mapping the scalar
+# functions costs tens of ns a call, a few ms on a 1387-point grid, against
+# the tens of µs per point the loop cost.
+#
+# ``math.degrees`` / ``math.radians`` are a single multiplication by these two
+# constants in CPython (``radToDeg = 180.0 / Py_MATH_PI``), so the products
+# below are bit-for-bit those functions; a test pins that.
+_RAD_TO_DEG = 180.0 / math.pi
+_DEG_TO_RAD = math.pi / 180.0
+
+
+def _libm(fn, *arrays: np.ndarray) -> np.ndarray:
+    """``fn`` (a scalar ``math`` function, or ``abs``) applied element by
+    element through the scalar function itself, so the bits are its own."""
+    shape = np.shape(arrays[0])
+    return np.fromiter(
+        map(fn, *(np.ravel(a).tolist() for a in arrays)),
+        dtype=float,
+        count=int(np.prod(shape)),
+    ).reshape(shape)
+
+
+def _phase_deg_grid(values: np.ndarray) -> np.ndarray:
+    """:func:`_phase_deg` over an array, bit for bit."""
+    return _libm(math.atan2, values.imag, values.real) * _RAD_TO_DEG
+
+
+def _gain_db_grid(power_gain: np.ndarray) -> np.ndarray:
+    """:func:`_gain_db` over an array, bit for bit: ``DB10``'s floor first,
+    then ``10·log10`` of only what clears it (``math.log10`` refuses zero)."""
+    power_gain = np.asarray(power_gain, dtype=float)
+    out = np.full(power_gain.shape, _GAIN_FLOOR_DB)
+    live = ~(power_gain < _GAIN_FLOOR2)
+    out[live] = 10.0 * _libm(math.log10, power_gain[live])
+    return out
+
+
+def _polarisation_grid(
+    a: np.ndarray,
+    b: np.ndarray,
+    theta_phase_deg: np.ndarray,
+    phi_phase_deg: np.ndarray,
+    floor_scale: float = 1.0,
+    linear_below: float = 5.0e-5,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """:func:`_polarisation` over arrays, bit for bit: ``(axial, tilt, sense)``
+    with ``sense`` an object array of the same strings.
+
+    Takes what the caller already holds rather than the complex components:
+    ``a = abs(E_theta)``, ``b = abs(E_phi)`` and the two phases from
+    :func:`_phase_deg_grid` — exactly the values the scalar form computes
+    first, so they are formed once and shared with the printed columns.
+
+    Every branch of the scalar form is a mask here, taken in the scalar's
+    order: the blank-row floor wins over everything, a non-positive major
+    axis or a ratio under ``linear_below`` is LINEAR, and otherwise the sign
+    of ``sin δ`` picks LEFT or RIGHT.
+
+    That sign is read off ``radians(δ)`` rather than by calling ``sin``.
+    ``δ`` is wrapped into ``[-180, 180)``, so ``radians(δ)`` lies in
+    ``[-π₆₄, π₆₄)``, where π₆₄ (the double nearest π) sits just BELOW π.
+    There ``sin`` keeps its argument's sign: ``sin(-π₆₄)`` is ``-1.2e-16``,
+    and ``sin(-0.0)`` is ``-0.0``, which ``>= 0`` accepts exactly as it
+    accepts ``-0.0`` itself. The scalar's only use of ``sin δ`` is ``>= 0``,
+    so the comparison is the same one.
+    """
+    raw2 = floor_scale * floor_scale
+    blank = (a * a * raw2 <= _FIELD_FLOOR2) & (b * b * raw2 <= _FIELD_FLOOR2)
+    # ``(δ + 180) % 360 - 180`` as CPython's float ``%`` computes it: libm's
+    # exact ``fmod``, then the divisor added to a negative remainder, and a
+    # zero remainder taking the divisor's (positive) sign.
+    wrapped = np.fmod((phi_phase_deg - theta_phase_deg) + 180.0, 360.0)
+    wrapped = np.where(wrapped < 0.0, wrapped + 360.0, wrapped)
+    wrapped = np.where(wrapped == 0.0, 0.0, wrapped)
+    delta = wrapped - 180.0
+    a2, b2 = a * a, b * b
+    cos_2d = _libm(math.cos, (2.0 * delta) * _DEG_TO_RAD)
+    squared = a2 * a2 + b2 * b2 + 2.0 * a2 * b2 * cos_2d
+    # Python's ``max(x, 0.0)`` keeps ``x`` unless ``0.0 > x`` (so -0.0 stays).
+    root = np.sqrt(np.where(0.0 > squared, 0.0, squared))
+    major2 = 0.5 * (a2 + b2 + root)
+    minor2 = 0.5 * (a2 + b2 - root)
+    minor2 = np.where(0.0 > minor2, 0.0, minor2)
+    cos_d = _libm(math.cos, delta * _DEG_TO_RAD)
+    tilt = 0.5 * (_libm(math.atan2, 2.0 * a * b * cos_d, a2 - b2) * _RAD_TO_DEG)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ratio = np.sqrt(minor2 / major2)
+    linear = (major2 <= 0.0) | (ratio < linear_below)
+    left = (delta * _DEG_TO_RAD) >= 0.0
+    axial = np.where(linear, 0.0, np.where(left, ratio, -ratio))
+    sense = np.where(linear, "LINEAR", np.where(left, "LEFT", "RIGHT")).astype(object)
+    axial = np.where(blank, 0.0, axial)
+    tilt = np.where(blank, 0.0, tilt)
+    sense[blank] = ""
+    return axial, tilt, sense
+
+
 def pattern_fields(
     mid,
     moment,
