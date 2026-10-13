@@ -1,0 +1,396 @@
+"""Razor's exact-kernel correction, split into what geometry decides and what
+each call computes, with a small cross-call cache of the first (momwire#1454).
+
+`RazorSolver._add_exact_kernel_correction` used to rebuild, on every call,
+everything below that depends on geometry alone: the coaxial groups, each
+group's axial frame, the column and row tables of the wing algebra, the
+observer points and the observer windows. On a small deck that was most of
+the correction (measured on Dan's UR0GT 7.3 MHz deck, warm, one thread:
+`coaxial_groups` ~2.4 ms and the tables ~1.5 ms of a ~7.9 ms correction).
+In the resident server a SimNEC client asks for the same deck again and
+again, so this module keeps that work, keyed on everything it is computed
+from.
+
+It also keeps each group's `PointRowsAccel` -- the C++ point-moment source,
+which remembers every pair it has evaluated -- for the wavenumber it was
+built at. A second call at the same k then reads every pair moment from that
+object's own cache instead of re-integrating it (the other ~2.7 ms). Pair
+moments depend on k, so a different k never sees them.
+
+EXACT, NOT APPROXIMATE. Every number the correction adds is computed by the
+same operations on the same values as before:
+
+* The plan holds the inputs the old loop derived from geometry, and the
+  per-call arithmetic (`row_cA`, `row_cP`) is the old expression applied to
+  the same arrays, part by part, at the same shapes, so even an elementwise
+  kernel that treated a tail differently could not move a bit.
+* A `PointRowsAccel` reused at the same k on the same observer windows
+  returns what a fresh one would. Its cache is filled in first-met order
+  and never evicted, so after any prefix of the windows it holds exactly
+  the values a fresh object would have stored by that point (each from the
+  key's first-met pair), and a key it declined at the cap is recomputed
+  from the same first-met pair of its window every time. The same windows
+  in the same order therefore read the same values.
+
+The key is the arrays themselves (bytes, dtype and shape), not a hash, so a
+geometry, radius, testing-path, label, ground (through the labels' mirror
+and the grounded rows) or quadrature-lane change cannot meet a stale plan;
+the rows key adds k, the kernel's quadrature rules and whether the C++
+route serves. Only the C++ route's objects are kept: the numpy reference
+(`PointRows`) is the one a test swaps a kernel into.
+
+Bounded: `_PLAN_ENTRIES` geometries (least recently used out), each with at
+most `_ROWS_ENTRIES` wavenumbers, and a geometry whose tables would exceed
+`_PLAN_MAX_BYTES` is computed as before and not stored. The resident server
+solves concurrently, so a plan is immutable once built and a wavenumber's
+row objects are checked OUT for the length of one correction (a concurrent
+call at the same k builds its own, and the first to finish puts its set
+back).
+"""
+
+from __future__ import annotations
+
+import threading
+from collections import OrderedDict
+
+import numpy as np
+
+from . import _exact_kernel, _exact_kernel_seam
+
+# Switch, for gates that compare the cached and uncached routes in one
+# process. Read at call time.
+ENABLED = True
+
+_PLAN_ENTRIES = 4
+_ROWS_ENTRIES = 4
+_PLAN_MAX_BYTES = 64 << 20
+
+_LOCK = threading.Lock()
+_PLANS: OrderedDict = OrderedDict()
+
+# Hit/miss counters, for gates that must show the cache actually served.
+STATS = {"plan_hit": 0, "plan_miss": 0, "rows_hit": 0, "rows_miss": 0}
+
+
+def clear():
+    """Drop every cached plan and zero the counters."""
+    with _LOCK:
+        _PLANS.clear()
+        for key in STATS:
+            STATS[key] = 0
+
+
+def _arr_key(a):
+    a = np.ascontiguousarray(a)
+    return (a.dtype.str, a.shape, a.tobytes())
+
+
+def _readonly(a):
+    a = np.asarray(a)
+    a.flags.writeable = False
+    return a
+
+
+class _Group:
+    """One coaxial group's geometry-only tables (see `build_plan`)."""
+
+    __slots__ = (
+        "n",
+        "x0",
+        "sgn",
+        "h",
+        "a",
+        "col_ptr",
+        "B",
+        "B64",
+        "ent",
+        "a_parts",
+        "p_parts",
+        "by_o",
+        "r_o",
+        "r_m",
+        "obs_pt",
+        "obs_x",
+        "sub",
+        "windows",
+        "nbytes",
+    )
+
+
+class Plan:
+    """The geometry-only half of the correction; immutable once built."""
+
+    def __init__(self, groups, nbytes):
+        self.groups = groups
+        self.nbytes = nbytes
+        self._rows = OrderedDict()  # rows key -> [PointRowsAccel per group]
+
+    def take_rows(self, key):
+        """The row objects stored for `key`, checked out (None on a miss)."""
+        with _LOCK:
+            got = self._rows.pop(key, None)
+            STATS["rows_hit" if got is not None else "rows_miss"] += 1
+            return got
+
+    def give_rows(self, key, rows):
+        """Put a finished correction's row objects back for `key`."""
+        with _LOCK:
+            self._rows[key] = rows
+            self._rows.move_to_end(key)
+            while len(self._rows) > _ROWS_ENTRIES:
+                self._rows.popitem(last=False)
+
+
+def rows_key(k):
+    """What a group's point-moment values depend on besides the plan."""
+    return (
+        float(k),
+        _exact_kernel._N_GL,
+        _exact_kernel._N_SPLIT,
+        _exact_kernel._GRADE,
+        _exact_kernel._T_SWITCH,
+    )
+
+
+def rows_cacheable(k):
+    """Whether the row objects at `k` are the C++ route's (the only ones
+    kept)."""
+    return _exact_kernel.point_accel_serves(k, 2)
+
+
+def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
+    """The geometry-only tables of every coaxial group that carries a wing,
+    in `coaxial_groups`' order. The expressions are the ones
+    `RazorSolver._add_exact_kernel_correction` evaluated inline before
+    momwire#1454, so the tables hold the same values."""
+    seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
+    n_seg = seg_h.size
+    seg_r = seg_p0 + seg_h[:, None] * seg_t
+    wing_seg, wing_sigma = geom["wing_seg"], geom["wing_sigma"]
+    wing_rise = geom["wing_rise"]
+    n_basis = wing_seg.shape[0]
+    grounded = np.zeros(n_basis, dtype=bool)
+    grounded[np.asarray(geom["grounded_bases"], dtype=np.int64)] = True
+    n_path = pts.shape[1]
+    half = n_path // 2
+    node_seg = np.concatenate(
+        [
+            np.repeat(wing_seg[:, :1], half, 1),
+            np.repeat(wing_seg[:, 1:], half, 1),
+        ],
+        1,
+    )
+    cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
+    obs_rad = None
+    if src_lab is not None:
+        obs_rad = None if np.all(seg_a == seg_a[0]) else seg_a
+    _labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
+    out = []
+    total = 0
+    for _g, S in groups:
+        n = S.size
+        axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_p0, seg_r, seg_t)
+        loc = np.full(n_seg, -1, dtype=np.int64)
+        loc[S] = np.arange(n)
+        # Columns: every live wing on the group, grouped by basis (CSR).
+        eb, ej, et, er, eq = [], [], [], [], []
+        for w in (0, 1):
+            ss = wing_seg[:, w]
+            b = np.flatnonzero((loc[ss] >= 0) & (wing_sigma[:, w] != 0))
+            j = loc[ss[b]]
+            eb.append(b)
+            ej.append(j)
+            et.append(wing_sigma[b, w] * sgn[j])
+            er.append(wing_rise[b, w])
+            eq.append(wing_sigma[b, w] * np.where(wing_rise[b, w], 1.0, -1.0) / h[j])
+        eb = np.concatenate(eb)
+        if eb.size == 0:
+            continue
+        order = np.argsort(eb, kind="stable")
+        eb = eb[order]
+        ent = [np.ascontiguousarray(np.concatenate(x)[order]) for x in (ej, et, er, eq)]
+        ent[0] = ent[0].astype(np.int64)
+        ent[2] = ent[2].astype(np.uint8)
+        B, first = np.unique(eb, return_index=True)
+        col_ptr = np.append(first, eb.size).astype(np.int64)
+        # Observers: the group's centroids (T2; T1 too under
+        # `nec5_quadrature`), then the path nodes on the group otherwise.
+        # Rows (m, observer) here; their jωμ- and 1/jωε-side coefficients
+        # are kept as the factors the call multiplies (`row_cA`, `row_cP`).
+        obs_pt, obs_seg = [cent[S]], [S]
+        r_m, r_o, a_parts, p_parts = [], [], [], []
+        for w, sign in ((0, -1.0), (1, 1.0)):
+            rows = np.flatnonzero(loc[wing_seg[:, w]] >= 0)
+            p_parts.append((sign, rows.size, grounded[rows] if w == 0 else None))
+            if on_cent:
+                a_parts.append((wts[rows, w], tans[rows, w] @ axis))
+            else:
+                a_parts.append((None, rows.size))
+            r_m.append(rows)
+            r_o.append(loc[wing_seg[rows, w]])
+        if not on_cent:
+            mm, pp = np.nonzero(loc[node_seg] >= 0)
+            obs_pt.append(pts[mm, pp])
+            obs_seg.append(node_seg[mm, pp])
+            r_m.append(mm)
+            r_o.append(n + np.arange(mm.size))
+            a_parts.append((wts[mm, pp], np.einsum("ij,j->i", tans[mm, pp], axis)))
+            p_parts.append((None, mm.size, None))
+        obs_pt = np.ascontiguousarray(np.concatenate(obs_pt))
+        obs_seg = np.concatenate(obs_seg)
+        obs_x = (obs_pt - seg_p0[S[0]]) @ axis
+        r_o = np.concatenate(r_o)
+        by_o = np.argsort(r_o, kind="stable")
+        r_o = r_o[by_o]
+        r_m = np.concatenate(r_m)[by_o].astype(np.int64)
+        n_obs = obs_x.size
+        chunk = max(1, chunk_elems // max(1, 4 * n))
+        windows = []
+        for o0 in range(0, n_obs, chunk):
+            o1 = min(n_obs, o0 + chunk)
+            e0, e1 = np.searchsorted(r_o, [o0, o1])
+            ek = None
+            if src_lab is not None:
+                o = obs_seg[o0:o1]
+                ek = (src_lab[o], src_lab[S], None if obs_rad is None else obs_rad[o])
+            windows.append((o0, o1, int(e0), int(e1), r_o[e0:e1] - o0, ek))
+        g = _Group()
+        g.n = n
+        g.x0, g.sgn, g.h = x0, sgn, np.ascontiguousarray(h)
+        g.a = float(seg_a[S[0]])
+        g.col_ptr, g.B, g.B64, g.ent = col_ptr, B, B.astype(np.int64), ent
+        g.a_parts, g.p_parts = a_parts, p_parts
+        g.by_o, g.r_o, g.r_m = by_o, r_o, r_m
+        g.obs_pt, g.obs_x = obs_pt, obs_x
+        g.sub = {
+            "seg_p0": seg_p0[S],
+            "seg_t": seg_t[S],
+            "seg_h": seg_h[S],
+            "seg_a": seg_a[S],
+        }
+        g.windows = windows
+        g.nbytes = _group_nbytes(g)
+        total += g.nbytes
+        out.append(g)
+    return out, total
+
+
+def _group_nbytes(g):
+    arrs = [g.x0, g.sgn, g.h, g.col_ptr, g.B, g.B64, g.by_o, g.r_o, g.r_m]
+    arrs += [g.obs_pt, g.obs_x, *g.ent, *g.sub.values()]
+    for part in g.a_parts:
+        arrs += [x for x in part if isinstance(x, np.ndarray)]
+    for _s, _n, mask in g.p_parts:
+        if mask is not None:
+            arrs.append(mask)
+    for w in g.windows:
+        arrs.append(w[4])
+        if w[5] is not None:
+            arrs += [x for x in w[5] if x is not None]
+    # Each group's PointRowsAccel holds at most 4n + 1024 pairs (~80 B each).
+    return sum(a.nbytes for a in arrs) + 80 * (4 * g.n + 1024) * _ROWS_ENTRIES
+
+
+def _freeze(groups):
+    """Make every array a plan hands out read-only, so a callee that wrote
+    into one would raise rather than poison the next call."""
+    for g in groups:
+        for name in ("x0", "sgn", "h", "col_ptr", "B", "B64", "by_o", "r_o", "r_m"):
+            _readonly(getattr(g, name))
+        _readonly(g.obs_pt)
+        _readonly(g.obs_x)
+        for a in g.ent:
+            _readonly(a)
+        for a in g.sub.values():
+            _readonly(a)
+        for part in g.a_parts:
+            for x in part:
+                if isinstance(x, np.ndarray):
+                    _readonly(x)
+        for _s, _n, mask in g.p_parts:
+            if mask is not None:
+                _readonly(mask)
+        for w in g.windows:
+            _readonly(w[4])
+            if w[5] is not None:
+                for x in w[5]:
+                    if x is not None:
+                        _readonly(x)
+
+
+def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context=()):
+    """The plan for these inputs: from the cache when the very same inputs
+    were planned before, else built (and stored, within the bounds).
+
+    `context` is the solver's own description of its route (class, basis
+    flags, ground), compared as part of the key. The plan reads none of it
+    beyond what the arrays already carry; it is there so that a solver
+    configured differently never shares an entry, whatever the arrays say."""
+    if not ENABLED:
+        groups, nbytes = build_plan(
+            geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems
+        )
+        return Plan(groups, nbytes), False
+    key = (
+        _arr_key(geom["seg_p0"]),
+        _arr_key(geom["seg_t"]),
+        _arr_key(geom["seg_h"]),
+        _arr_key(seg_a),
+        _arr_key(geom["wing_seg"]),
+        _arr_key(geom["wing_sigma"]),
+        _arr_key(geom["wing_rise"]),
+        _arr_key(np.asarray(geom["grounded_bases"], dtype=np.int64)),
+        _arr_key(pts),
+        _arr_key(tans),
+        _arr_key(wts),
+        None if src_lab is None else _arr_key(src_lab),
+        bool(on_cent),
+        int(chunk_elems),
+        tuple(context),
+    )
+    with _LOCK:
+        plan = _PLANS.get(key)
+        if plan is not None:
+            _PLANS.move_to_end(key)
+            STATS["plan_hit"] += 1
+            return plan, True
+        STATS["plan_miss"] += 1
+    groups, nbytes = build_plan(
+        geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems
+    )
+    plan = Plan(groups, nbytes)
+    if nbytes <= _PLAN_MAX_BYTES:
+        _freeze(groups)
+        with _LOCK:
+            _PLANS[key] = plan
+            _PLANS.move_to_end(key)
+            while len(_PLANS) > _PLAN_ENTRIES:
+                _PLANS.popitem(last=False)
+        return plan, True
+    return plan, False
+
+
+def row_cA(g, c_A):
+    """The rows' jωμ-side coefficients, in observer order: the expression
+    the correction always used, part by part."""
+    parts = []
+    for W, P in g.a_parts:
+        if W is None:
+            parts.append(np.zeros(P, dtype=np.complex128))
+        else:
+            parts.append(c_A * W * P)
+    return np.ascontiguousarray(np.concatenate(parts)[g.by_o])
+
+
+def row_cP(g, c_Phi):
+    """The rows' 1/jωε-side coefficients, in observer order."""
+    parts = []
+    for sign, size, zero in g.p_parts:
+        if sign is None:
+            parts.append(np.zeros(size, dtype=np.complex128))
+            continue
+        cP = np.full(size, sign / c_Phi, dtype=np.complex128)
+        if zero is not None:
+            cP[zero] = 0.0
+        parts.append(cP)
+    return np.ascontiguousarray(np.concatenate(parts)[g.by_o])
