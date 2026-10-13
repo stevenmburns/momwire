@@ -1005,10 +1005,27 @@ class _Nec2Parser:
 
     # -- execution ---------------------------------------------------------
 
+    def _unarmed_execute(self, card: Card) -> None:
+        """An execute card that runs nothing: read past, in this dialect.
+
+        The hook is the nec4 dialect's (momwire#1463), where an ``RP``,
+        ``NE`` or ``NH`` after the run still prints its table and so has to
+        be a card this engine reads.
+
+        The arming rule above was measured on a trailing ``XQ``.  nec2c
+        prints a further ``RP``/``NE``/``NH`` table as well (oracle
+        ``5b4az.ae6ty.1.17``, 2026-10-13: ``RP`` then ``NE``, ``NE`` then
+        ``RP``, ``XQ`` then both, and two ``RP`` cards each print every
+        table under one ANTENNA INPUT PARAMETERS block), and the nec2
+        portal does not print it yet: its printout is not the NEC-4.2
+        slot's, so momwire#1463 left this dialect as it found it.
+        """
+
     def _execute(self, card: Card) -> None:
         if not self._armed and self._executed:
             # An execute card with nothing new since the previous one
             # produces no output at all.
+            self._unarmed_execute(card)
             self.groups.append(None)
             return
         request: FarFieldRequest | NearFieldRequest | None = None

@@ -62,7 +62,8 @@ captures show, and nothing else:
   exited 0 on all ten runs, and printed the same input impedance with and
   without ``NOFILE`` to every digit on all five types.  Without a trailer,
   GN 2 and GN 3 reported they could not open their default table file; with
-  ``NOFILE`` they did not look for one.  The name is a cache, not physics,
+  ``NOFILE`` they report that they could not open THAT one (probes p16 and
+  p30, momwire#1463), and compute the table either way.  The name is a cache, not physics,
   so it is accepted and ignored on every type: the solve is the card's
   without it, and the printout echoes the name (``eznec._nec4._ground_file``).
 * ``EK`` is read and IGNORED, and every run solves with the extended kernel
@@ -87,6 +88,20 @@ captures show, and nothing else:
   headings.  That is the NEC-5 seam's ``NE 1`` exactly (momwire#1257), so the
   two slots place their points with one function.  The nec2 dialect keeps
   refusing it (``_Nec2Parser._near_coordinates``).
+
+* A further ``RP``, ``NE`` or ``NH`` card after a run, with no card between
+  that changes the drive or the matrix, prints ONE MORE TABLE of the run it
+  follows (momwire#1463).  Measured on the licensed binary as a black box
+  (probes p20-p28, 2026-10-13): ``RP`` then ``NE``, ``NE`` then ``RP``,
+  ``XQ`` then both, and two ``RP`` cards each print every table, in card
+  order, each under its own card's echo, with the input parameters, currents
+  and power budget printed once.  A further ``XQ`` there prints nothing.
+  The ``nec2`` reading drops every such card (its arming rule, measured on a
+  trailing ``XQ``); this dialect keeps the model's group list as the parent
+  builds it, one entry per execute card and ``None`` for these, and reads
+  each such card for its refusals (``_unarmed_execute``).  The slot's
+  printout finds the cards again by position and prints their tables from
+  the run already solved (``eznec._nec4``).
 
 Everything else the captures carry is a ``nec2`` card with the ``nec2``
 meaning: ``GW``, ``LD 4`` and ``LD 5``, ``FR 0``, ``GN -1``/``1``/``2`` (``GN 1``
@@ -155,6 +170,16 @@ class _Nec4Parser(_Nec2Parser):
                 f"from the zenith and phi from +x, in degrees)"
             )
         return coordinates
+
+    def _unarmed_execute(self, card: Card) -> None:
+        """A further ``RP``/``NE``/``NH`` after a run asks for one more table
+        of that run (module docstring), so it is read as strictly as the card
+        that ran: a form this dialect refuses is refused here too, not
+        skipped because nothing was solved for it."""
+        if card.mnemonic == "RP":
+            self._far_field(card)
+        elif card.mnemonic in ("NE", "NH"):
+            self._near_field(card)
 
     def _ek(self, card: Card) -> None:
         """Ignored: NEC-4.2's ``EK`` has no effect (module docstring), so
