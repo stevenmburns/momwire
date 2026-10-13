@@ -1,0 +1,51 @@
+
+ur0gt_7300_norp.nec  (5 rounds, interleaved, 1 thread)
+pattern   what         base ms  change ms    delta
+repeat    render         14.90      14.83    -0.07
+repeat    correction      1.21       1.26    +0.05
+sweep5    render         17.34      14.93    -2.40
+sweep5    correction      3.60       1.34    -2.26
+sweep103  render         17.34      14.93    -2.41
+sweep103  correction      3.60       1.35    -2.26
+  base: tree <main at 7025747b>, series absent
+    repeat: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 75, 'rows_miss': 0}
+    sweep5: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 2, 'rows_miss': 73}
+    sweep103: 206 calls, {'plan_hit': 206, 'plan_miss': 0, 'rows_hit': 2, 'rows_miss': 204}
+  change: tree <branch>, series on
+    repeat: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 75, 'series_miss': 0, 'series_built': 0, 'series_reused': 36525, 'series_evaluated': 0}
+    sweep5: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 75, 'series_miss': 0, 'series_built': 0, 'series_reused': 36525, 'series_evaluated': 36525}
+    sweep103: 206 calls, {'plan_hit': 206, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 206, 'series_miss': 0, 'series_built': 0, 'series_reused': 100322, 'series_evaluated': 100322}
+
+UR0GT_at_7300_kHz_108_segs.nec  (5 rounds, interleaved, 1 thread)
+pattern   what         base ms  change ms    delta
+repeat    render         42.17      42.07    -0.10
+repeat    correction      1.24       1.29    +0.04
+sweep5    render         52.64      50.31    -2.32
+sweep5    correction      3.64       1.37    -2.26
+sweep103  render         52.75      50.31    -2.43
+sweep103  correction      3.64       1.37    -2.26
+  base: tree <main at 7025747b>, series absent
+    repeat: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 75, 'rows_miss': 0}
+    sweep5: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 2, 'rows_miss': 73}
+    sweep103: 206 calls, {'plan_hit': 206, 'plan_miss': 0, 'rows_hit': 2, 'rows_miss': 204}
+  change: tree <branch>, series on
+    repeat: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 75, 'series_miss': 0, 'series_built': 0, 'series_reused': 36525, 'series_evaluated': 0}
+    sweep5: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 75, 'series_miss': 0, 'series_built': 0, 'series_reused': 36525, 'series_evaluated': 36525}
+    sweep103: 206 calls, {'plan_hit': 206, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 206, 'series_miss': 0, 'series_built': 0, 'series_reused': 100322, 'series_evaluated': 100322}
+
+UR0GT_at_1800_kHz_56_segs.nec  (5 rounds, interleaved, 1 thread)
+pattern   what         base ms  change ms    delta
+repeat    render         33.26      33.12    -0.14
+repeat    correction      0.71       0.76    +0.06
+sweep5    render         39.34      37.30    -2.04
+sweep5    correction      2.61       0.82    -1.79
+sweep103  render         39.29      37.37    -1.92
+sweep103  correction      2.61       0.82    -1.79
+  base: tree <main at 7025747b>, series absent
+    repeat: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 75, 'rows_miss': 0}
+    sweep5: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 2, 'rows_miss': 73}
+    sweep103: 206 calls, {'plan_hit': 206, 'plan_miss': 0, 'rows_hit': 2, 'rows_miss': 204}
+  change: tree <branch>, series on
+    repeat: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 75, 'series_miss': 0, 'series_built': 0, 'series_reused': 24450, 'series_evaluated': 0}
+    sweep5: 75 calls, {'plan_hit': 75, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 75, 'series_miss': 0, 'series_built': 0, 'series_reused': 24450, 'series_evaluated': 24450}
+    sweep103: 206 calls, {'plan_hit': 206, 'plan_miss': 0, 'rows_hit': 0, 'rows_miss': 0, 'series_hit': 206, 'series_miss': 0, 'series_built': 0, 'series_reused': 67156, 'series_evaluated': 67156}
