@@ -1366,6 +1366,7 @@ def test_g651_razor_serves_buried_and_the_off_switch_names_what_serves_it():
     assert "BSplineSolver" in _razor._BURIED_FILL_REFUSAL
 
 
+@pytest.mark.slow
 def test_g651_the_off_sentence_is_what_a_buried_deck_raises(monkeypatch):
     """The sentence and the raise stay ONE object, checked by raising it on a
     real deck with the switch off; with it on (the default) the same deck is
