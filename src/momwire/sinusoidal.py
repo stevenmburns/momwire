@@ -500,6 +500,72 @@ def _sin_minus_arg(u):
     return np.where(np.abs(u) < 0.1, series, np.sin(u) - u)
 
 
+def _abs_shape_integrals(k, h):
+    """The |I|² family's integrals over ξ ∈ [−h/2, h/2], each to full
+    relative precision, for real or complex k (momwire#1323):
+
+        (∫(cos kξ − 1), ∫|sin kξ|², ∫|cos kξ − 1|², ∫|cos kξ|²).
+
+    They are the conjugated siblings of
+    `sinusoidal_galerkin._loading_integrals`, for the power readouts. With
+    G(c) = ∫(cos cξ − 1) dξ = h·T(ch/2), T(u) = sin(u)/u − 1 = S(u)/u
+    (`_sin_minus_arg`, so nothing is subtracted), and k ± k̄ = 2 Re k, 2j Im k:
+
+        ∫|sin kξ|²       = ½·[G(k − k̄) − G(k + k̄)]
+        ∫|cos kξ|²       = h + ½·[G(k − k̄) + G(k + k̄)]
+        ∫|cos kξ − 1|²   = ½·[G(k − k̄) + G(k + k̄)] − 2·Re G(k)
+
+    G(k − k̄) ≥ 0 and G(k + k̄) ≤ 0, so the first is a sum of same-signed
+    terms. The last still cancels -- every G is O(|k|²h³) and the answer
+    O(|k|⁴h⁵) -- so below |k|h/2 = 0.25 it is its own double Taylor series,
+
+        h·Σ_{m,n≥1} (−1)^{m+n} z^m z̄^n / ((2m)!·(2n)!·(2(m+n) + 1)),
+        z = (kh/2)²,
+
+        cut at m, n ≤ 7 (the first omitted term is under 1e-20 of the sum
+    there). At real k these are `_loading_integrals`' three, and h/2 +
+    sin(kh)/2k.
+    """
+    k = np.asarray(k, dtype=np.complex128)
+    h = np.asarray(h, dtype=np.float64)
+
+    def g_of(c):
+        u = 0.5 * c * h
+        u2 = u * u
+        series = (
+            -u2
+            / 6.0
+            * (
+                1.0
+                - u2 / 20.0 * (1.0 - u2 / 42.0 * (1.0 - u2 / 72.0 * (1.0 - u2 / 110.0)))
+            )
+        )
+        safe = np.where(u == 0, 1.0, u)
+        return h * np.where(np.abs(u) < 0.1, series, _sin_minus_arg(u) / safe)
+
+    g_k = g_of(k)
+    g_d = np.real(g_of(k - np.conj(k)))
+    g_s = np.real(g_of(k + np.conj(k)))
+    i_ss = 0.5 * (g_d - g_s)
+    i_cc = h + 0.5 * (g_d + g_s)
+    z = (0.5 * k * h) ** 2
+    zc = np.conj(z)
+    series = np.zeros(np.broadcast(k, h).shape, dtype=np.float64)
+    zm = np.ones_like(z)
+    for m in range(1, 8):
+        zm = zm * z
+        zn = np.ones_like(z)
+        for n in range(1, 8):
+            zn = zn * zc
+            series = series + np.real(zm * zn) * (
+                (-1) ** (m + n)
+                / (math.factorial(2 * m) * math.factorial(2 * n) * (2 * (m + n) + 1))
+            )
+    literal = 0.5 * (g_d + g_s) - 2.0 * np.real(g_k)
+    i_gg = np.where(np.abs(0.5 * k * h) < 0.25, h * series, literal)
+    return g_k, i_ss, i_gg, i_cc
+
+
 def _recip_sin_gap(kd):
     """1/sin(kΔ) − 1/(2 sin(kΔ/2)) to full relative precision (momwire#606).
 
@@ -6496,12 +6562,27 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             ∫|I|² = |P|²h + 2Re(P·R̄)·(2/k)sin(kh/2)
                     + |Q|²(h/2 − sin(kh)/2k) + |R|²(h/2 + sin(kh)/2k)
 
-        (P–Q and Q–R cross terms vanish by parity). A lossless jacket
-        contributes nothing; one with tan δ > 0 (momwire#765) adds its
-        dielectric loss ½·Re(zq_loss,w)·Σ_{s∈w} ∫|I_s′(ξ)|² dξ, with
+        (P–Q and Q–R cross terms vanish by parity). EVALUATED in the
+        cancellation-free spelling of that same integral (momwire#1323, the
+        readout's share of #1283): on a short segment P and R grow like
+        1/(kh)² with opposite signs while P + R stays O(1), so the literal
+        sum adds terms of size (1/kh)⁴·h to return one of size h, and on a
+        crossing node's sliver wing the loss power was rounding. With
+        U = P + R taken from the closed-form `AC` (never σA + σC) the shape
+        is U + Q·sin kξ + R·(cos kξ − 1) and
+
+            ∫|I|² = |U|²h + 2Re(U·R̄)·∫(cos kξ − 1)
+                    + |Q|²·∫sin² kξ + |R|²·∫(cos kξ − 1)²,
+
+        each integral itself spelled without subtraction
+        (`_abs_shape_integrals`).
+
+        A lossless jacket contributes nothing; one with tan δ > 0
+        (momwire#765) adds its dielectric loss
+        ½·Re(zq_loss,w)·Σ_{s∈w} ∫|I_s′(ξ)|² dξ, with
         I′ = k·(Q·cos kξ − R·sin kξ) and so, by the same parity,
 
-            ∫|I′|² = k²·[|Q|²(h/2 + sin(kh)/2k) + |R|²(h/2 − sin(kh)/2k)].
+            ∫|I′|² = k²·[|Q|²·∫cos² kξ + |R|²·∫sin² kξ].
 
         Returns (total_watts, per_wire_watts ndarray (n_wires,)).
         """
@@ -6524,20 +6605,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         starts = seg_view["starts"]
         rows = np.repeat(np.arange(n_segs, dtype=np.int64), starts[1:] - starts[:-1])
         alpha_e = np.asarray(coeffs)[seg_view["jbasis"]]
-        P = np.zeros(n_segs, dtype=np.complex128)
+        U = np.zeros(n_segs, dtype=np.complex128)
         Q = np.zeros(n_segs, dtype=np.complex128)
         R = np.zeros(n_segs, dtype=np.complex128)
-        np.add.at(P, rows, alpha_e * seg_view["sigma"] * seg_view["A"])
+        np.add.at(U, rows, alpha_e * seg_view["sigma"] * seg_view["AC"])
         np.add.at(Q, rows, alpha_e * seg_view["B"])
         np.add.at(R, rows, alpha_e * seg_view["sigma"] * seg_view["C"])
 
-        sin_kh = np.sin(k * h)
-        sin_kh_2 = np.sin(0.5 * k * h)
+        i_g, i_ss, i_gg, i_cc = _abs_shape_integrals(k, h)
         int_abs_i2 = (
-            np.abs(P) ** 2 * h
-            + 2.0 * np.real(P * np.conj(R)) * (2.0 / k) * sin_kh_2
-            + np.abs(Q) ** 2 * (0.5 * h - sin_kh / (2.0 * k))
-            + np.abs(R) ** 2 * (0.5 * h + sin_kh / (2.0 * k))
+            np.abs(U) ** 2 * h
+            + 2.0 * np.real(U * np.conj(R) * np.conj(i_g))
+            + np.abs(Q) ** 2 * i_ss
+            + np.abs(R) ** 2 * i_gg
         )
         # zeros where switched off
         r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
@@ -6545,10 +6625,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         zq_loss = _wire_loading.jacket_loss_charge(self, omega)
         if zq_loss is not None:
-            int_abs_di2 = (k * k) * (
-                np.abs(Q) ** 2 * (0.5 * h + sin_kh / (2.0 * k))
-                + np.abs(R) ** 2 * (0.5 * h - sin_kh / (2.0 * k))
-            )
+            int_abs_di2 = (k * k) * (np.abs(Q) ** 2 * i_cc + np.abs(R) ** 2 * i_ss)
             np.add.at(per_wire, wire_of, 0.5 * np.real(zq_loss)[wire_of] * int_abs_di2)
         return float(per_wire.sum()), per_wire
 
@@ -6572,10 +6649,14 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
               + ½|Q|²·[I(k − k̄) − I(k + k̄)] + ½|R|²·[I(k − k̄) + I(k + k̄)],
 
         which is the air closed form term for term at real k
-        (I(0) = h, I(2k) = sin(kh)/k). A lossy jacket's term (momwire#765)
-        integrates |I′|², I′ = k·(Q·cos kξ − R·sin kξ), the same way:
+        (I(0) = h, I(2k) = sin(kh)/k). Evaluated, like the air readout, as
+        the shape U + Q·sin kξ + R·(cos kξ − 1) with U from the closed-form
+        `AC` and `_abs_shape_integrals`' cancellation-free integrals
+        (momwire#1323): the buried side is where a crossing node's sliver
+        wing lives. A lossy jacket's term (momwire#765) integrates |I′|²,
+        I′ = k·(Q·cos kξ − R·sin kξ), the same way:
 
-            = |k|²·{ ½|Q|²·[I(k − k̄) + I(k + k̄)] + ½|R|²·[I(k − k̄) − I(k + k̄)] }.
+            = |k|²·{ |Q|²·∫|cos kξ|² + |R|²·∫|sin kξ|² }.
         """
         medium = _crossing_fill.buried_medium(
             self.ground_eps, omega, self.eps, omega / self.c
@@ -6591,24 +6672,19 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         starts = seg_view["starts"]
         rows = np.repeat(np.arange(n_segs, dtype=np.int64), np.diff(starts))
         alpha_e = np.asarray(coeffs)[seg_view["jbasis"]]
-        P = np.zeros(n_segs, dtype=np.complex128)
+        U = np.zeros(n_segs, dtype=np.complex128)
         Q = np.zeros(n_segs, dtype=np.complex128)
         R = np.zeros(n_segs, dtype=np.complex128)
-        np.add.at(P, rows, alpha_e * seg_view["sigma"] * seg_view["A"])
+        np.add.at(U, rows, alpha_e * seg_view["sigma"] * seg_view["AC"])
         np.add.at(Q, rows, alpha_e * seg_view["B"])
         np.add.at(R, rows, alpha_e * seg_view["sigma"] * seg_view["C"])
 
-        def _icos(c):
-            return h * np.sinc(c * h / (2.0 * np.pi))
-
-        kc = np.conj(k_seg)
-        i_diff = np.real(_icos(k_seg - kc))
-        i_sum = _icos(k_seg + kc)
+        i_g, i_ss, i_gg, i_cc = _abs_shape_integrals(k_seg, h)
         int_abs_i2 = (
-            np.abs(P) ** 2 * h
-            + 2.0 * np.real(P * np.conj(R) * _icos(kc))
-            + 0.5 * np.abs(Q) ** 2 * np.real(i_diff - i_sum)
-            + 0.5 * np.abs(R) ** 2 * np.real(i_diff + i_sum)
+            np.abs(U) ** 2 * h
+            + 2.0 * np.real(U * np.conj(R) * np.conj(i_g))
+            + np.abs(Q) ** 2 * i_ss
+            + np.abs(R) ** 2 * i_gg
         )
         per_wire = np.zeros(len(self.wires_polylines), dtype=np.float64)
         r_w = np.real(_wire_loading.loading_for(self, omega).z_wire)
@@ -6617,8 +6693,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         zq_loss = _wire_loading.jacket_loss_charge(self, omega)
         if zq_loss is not None:
             int_abs_di2 = np.abs(k_seg) ** 2 * (
-                0.5 * np.abs(Q) ** 2 * np.real(i_diff + i_sum)
-                + 0.5 * np.abs(R) ** 2 * np.real(i_diff - i_sum)
+                np.abs(Q) ** 2 * i_cc + np.abs(R) ** 2 * i_ss
             )
             np.add.at(per_wire, wire_of, 0.5 * np.real(zq_loss)[wire_of] * int_abs_di2)
         return float(per_wire.sum()), per_wire
