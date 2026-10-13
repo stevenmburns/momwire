@@ -4591,18 +4591,12 @@ class RazorSolver(
         accel = _HAVE_EXACT_POINT_ASSEMBLE_ACCEL and _exact_kernel.point_accel_serves(
             k, 2
         )
+        # The ground is not in the key: the correction is the free-space
+        # block only, and what the ground does reach (the grounded rows, the
+        # mirrored EK labels) is already in the arrays compared.
         context = (
             type(self).__qualname__,
-            repr(
-                (
-                    self.nec5_quadrature,
-                    self.n_qp_path,
-                    self.extended_kernel,
-                    self.ground_z,
-                    self.ground_eps,
-                    getattr(self, "ground_model", None),
-                )
-            ),
+            repr((self.nec5_quadrature, self.n_qp_path, self.extended_kernel)),
         )
         plan, cached = _razor_exact_plan.plan_for(
             geom, seg_a, pts, tans, wts, src_lab, on_cent, _CHUNK_ELEMS, context

@@ -4,9 +4,10 @@
 and, per wavenumber, each group's C++ point-moment source with its pair
 cache. These hold that a hit is EXACT (Z to the bit against the uncached
 route), that the cache really serves (the counters move), and that every
-input the result depends on -- geometry, radius, frequency, ground, basis
-flags, the kernel's rules, the route -- misses rather than meeting a stale
-entry. The byte gate over the fixture decks lives in the PR (#1454).
+input the result depends on -- geometry, radius, frequency, basis flags,
+the kernel's rules, the route -- misses rather than meeting a stale entry,
+and that a ground change (which the free-space correction does not read)
+shares the entry and still adds the same bits. The byte gate over the fixture decks lives in the PR (#1454).
 """
 
 import threading
@@ -133,12 +134,26 @@ def test_a_frequency_change_reuses_the_geometry_but_not_the_moments():
         dict(ground_z=-0.5, ground_eps=(13.0, 0.005), ground_model="refl-coef"),
     ],
 )
-def test_a_ground_change_misses(ground):
+def test_a_ground_change_adds_the_same_bits(ground):
+    """The correction is the free-space block only, so a wire clear of the
+    ground shares the plan and the moments across grounds -- and the hit adds
+    exactly what a fresh call does over the new ground."""
     _z()
     got = _z(**ground)
-    assert P.STATS["plan_hit"] == 0 and P.STATS["plan_miss"] == 2
-    assert P.STATS["rows_hit"] == 0
+    assert P.STATS["plan_hit"] == 1 and P.STATS["rows_hit"] == 1
     assert _same_bits(got, _fresh(**ground))
+    assert not _same_bits(got, _fresh()), "the ground did not reach Z"
+
+
+@needs_accel
+def test_a_grounded_wire_misses_on_its_grounded_rows():
+    """A wire touching the plane: the ground changes which rows are grounded,
+    which is in the key."""
+    mono = dict(wires=[np.array([(0.0, 0.0, 0.0), (0.0, 0.0, 0.25)])], npe=[[30]])
+    _z(**mono)
+    got = _z(**mono, ground_z=0.0)
+    assert P.STATS["plan_hit"] == 0 and P.STATS["plan_miss"] == 2
+    assert _same_bits(got, _fresh(**mono, ground_z=0.0))
 
 
 @needs_accel
@@ -216,22 +231,24 @@ def test_concurrent_calls_add_the_same_bits():
 @needs_accel
 def test_the_seam_sequence_matches_fresh_printouts():
     """Through the EZNEC seam, as the resident server serves it: one deck,
-    the same deck at a second frequency, a second geometry, then the first
-    again -- every printout byte-identical to the uncached route's, and the
+    the same deck at a second frequency, a second geometry, the first again,
+    then the first over two grounds -- every printout byte-identical to the uncached route's, and the
     repeats hit."""
     from momwire.eznec import _shell
 
     deck = (
         "CM fat-wire dipole (momwire#1454)\nCE\n"
-        "GW 1,12,0.,-.25,0.,0.,.25,0.,{a}\nGE 0,-1\n"
-        "FR 0,1,0,0,{f}\nGN -1\nEX 4,1,6,0,1.414214,0.\nPQ 0\n"
+        "GW 1,12,0.,-.25,1.,0.,.25,1.,{a}\nGE 0,-1\n"
+        "FR 0,1,0,0,{f}\n{gn}\nEX 4,1,6,0,1.414214,0.\nPQ 0\n"
         "RP 0,1,37,1000,90.,0.,0.,10.,0.\nEN\n"
     )
     seq = [
-        dict(a="0.02", f="299.7925"),
-        dict(a="0.02", f="280.0"),
-        dict(a="0.021", f="299.7925"),
-        dict(a="0.02", f="299.7925"),
+        dict(a="0.02", f="299.7925", gn="GN -1"),
+        dict(a="0.02", f="280.0", gn="GN -1"),
+        dict(a="0.021", f="299.7925", gn="GN -1"),
+        dict(a="0.02", f="299.7925", gn="GN -1"),
+        dict(a="0.02", f="299.7925", gn="GN 1"),
+        dict(a="0.02", f="299.7925", gn="GN 2,0,0,0,13.,.005"),
     ]
 
     def render(cfg):
@@ -248,5 +265,6 @@ def test_the_seam_sequence_matches_fresh_printouts():
     P.clear()
     got = [strip(render(c)) for c in seq]
     assert got == want
-    assert P.STATS["plan_hit"] >= 2  # the second frequency and the repeat
-    assert P.STATS["rows_hit"] >= 1  # the repeat
+    assert len(set(got)) == len(got) - 1  # only the repeat prints the same
+    assert P.STATS["plan_hit"] >= 4  # second frequency, repeat, two grounds
+    assert P.STATS["rows_hit"] >= 3  # the repeat and the two grounds

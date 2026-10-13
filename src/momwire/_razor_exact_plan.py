@@ -33,8 +33,11 @@ same operations on the same values as before:
   in the same order therefore read the same values.
 
 The key is the arrays themselves (bytes, dtype and shape), not a hash, so a
-geometry, radius, testing-path, label, ground (through the labels' mirror
-and the grounded rows) or quadrature-lane change cannot meet a stale plan;
+geometry, radius, testing-path, label or quadrature-lane change cannot meet
+a stale plan. The ground is deliberately not in it: the correction is the
+free-space block only, so a plan and its moments are the same over any
+ground, and what a ground does reach -- the grounded rows, the EK labels'
+mirror -- is in the arrays compared;
 the rows key adds k, the kernel's quadrature rules and whether the C++
 route serves. Only the C++ route's objects are kept: the numpy reference
 (`PointRows`) is the one a test swaps a kernel into.
@@ -323,7 +326,7 @@ def plan_for(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems, context
     were planned before, else built (and stored, within the bounds).
 
     `context` is the solver's own description of its route (class, basis
-    flags, ground), compared as part of the key. The plan reads none of it
+    flags), compared as part of the key. The plan reads none of it
     beyond what the arrays already carry; it is there so that a solver
     configured differently never shares an entry, whatever the arrays say."""
     if not ENABLED:
