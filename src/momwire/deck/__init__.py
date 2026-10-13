@@ -45,6 +45,7 @@ from ._solver import (
     BASES,
     NEC2_BASES,
     BuiltSolver,
+    ExtendedKernelAboveGround,
     ExtendedKernelDefault,
     PortPlan,
     PortSite,
@@ -106,6 +107,7 @@ __all__ = [
     "Nec5ExecuteRequest",
     # what build_solver returns, and the roster it chooses from
     "BuiltSolver",
+    "ExtendedKernelAboveGround",
     "ExtendedKernelDefault",
     "PortPlan",
     "PortSite",

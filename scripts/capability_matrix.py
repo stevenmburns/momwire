@@ -278,6 +278,24 @@ def render() -> str:
         lines.append("")
         lines.append("  > " + reason)
         lines.append("")
+
+    partial: dict[str, list[str]] = {}
+    for cls in CLASSES:
+        for key, what in sorted(cls.capabilities.partials.items()):
+            partial.setdefault(what, []).append(f"`{cls.__name__}` `{key}`")
+    lines += [
+        "## Served in part",
+        "",
+        "A combination a row takes without refusing and without serving it",
+        "whole (`Capabilities.partials`). The sentence is what the solver does",
+        "there, and it reaches a user as an advisory rather than an exception.",
+        "",
+    ]
+    for what in sorted(partial, key=lambda r: (partial[r][0], r)):
+        lines.append("- " + ", ".join(partial[what]))
+        lines.append("")
+        lines.append("  > " + what)
+        lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
 

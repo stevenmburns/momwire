@@ -72,6 +72,45 @@ BURIED_EXTENDED_KERNEL_REFUSAL = (
     "image of a buried source, which lands in the OTHER medium. "
     "Solve the buried deck with extended_kernel=False, which is the default"
 )
+# momwire#1170 stage 0. The B-spline family no longer draws the refusal
+# above: it serves the extended kernel on the pairs whose two segments are
+# both above ground and keeps the reduced kernel on every pair that touches
+# a buried segment. This sentence is what that family DECLARES in the
+# refusal's place (`Capabilities.partials`) and what its advisory opens with,
+# so a consumer reads one statement of what "extended" means on such a deck.
+BURIED_EXTENDED_KERNEL_ABOVE_ONLY = (
+    "extended_kernel=True + a wire below the ground plane is served in part: "
+    "the extended kernel acts on the pairs whose two segments are both above "
+    "the ground plane (and on their images), and every pair that touches a "
+    "segment below it keeps the reduced kernel, because the extended kernel "
+    "in the lower medium and across the interface is not derived yet "
+    "(momwire#1170). A wire that crosses the plane at a junction changes "
+    "kernel there"
+)
+
+
+class ExtendedKernelAboveGround(UserWarning):
+    """`extended_kernel=True` on a deck with buried wires acted on the
+    above-ground pairs only (momwire#1170 stage 0): the buried wires kept the
+    reduced kernel. Raised once per solver, at its first buried fill."""
+
+
+def extended_kernel_above_advisory(wire_extended):
+    """The advisory for a mixed-kernel buried solve: the declared sentence,
+    then WHICH wires kept the reduced kernel, by 0-based solver wire index.
+
+    `wire_extended` is `BSplineSolver.extended_kernel_wires()`'s tuple."""
+    reduced = [i for i, on in enumerate(wire_extended) if not on]
+    shown = ", ".join(str(i) for i in reduced[:12])
+    if len(reduced) > 12:
+        shown += f", ... ({len(reduced)} in all)"
+    return (
+        f"{BURIED_EXTENDED_KERNEL_ABOVE_ONLY}. On this deck {len(reduced)} of "
+        f"{len(wire_extended)} wires are below the plane and kept the reduced "
+        f"kernel (wire index {shown})"
+    )
+
+
 BURIED_DENSE_BUDGET_REFUSAL = (
     "a deck with buried wires is filled through the DENSE moment tensor on "
     "this build and this one does not fit: {n} segments need about {need:.0f} "

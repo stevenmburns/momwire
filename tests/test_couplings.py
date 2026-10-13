@@ -189,10 +189,22 @@ def test_the_accelerated_assemblies_really_refuse_buried(cls, value):
     assert c.reason in str(exc.value)
 
 
-@pytest.mark.parametrize("cls", [BSplineSolver, RazorSolver])
+def test_bspline_serves_the_extended_kernel_on_a_buried_deck_in_part():
+    """BSplineSolver left the row at momwire#1170 stage 0: the combination is
+    served above ground, declared under `partials`, and said once."""
+    assert BSplineSolver.capabilities.refusal("buried", "extended_kernel") is None
+    declared = BSplineSolver.capabilities.partials["buried+extended_kernel"]
+    s = BSplineSolver(**_buried_kw(), extended_kernel=True)
+    with pytest.warns(UserWarning, match="served in part") as seen:
+        s.compute_impedance()
+    assert any(declared in str(w.message) for w in seen)
+
+
+@pytest.mark.parametrize("cls", [RazorSolver])
 def test_the_extended_kernel_really_refuses_buried(cls):
     """RazorSolver joined the row with momwire#1149 U0, when its `buried` cell
-    turned True: before that the combination was unreachable on razor."""
+    turned True: before that the combination was unreachable on razor.
+    BSplineSolver left it at momwire#1170 stage 0 (the test above)."""
     c = _find_for(cls, "kernel", "extended", "wire_position", "buried")
     with pytest.raises((NotImplementedError, ValueError)) as exc:
         cls(**_buried_kw(), extended_kernel=True).compute_impedance()

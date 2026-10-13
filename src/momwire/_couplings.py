@@ -145,10 +145,13 @@ COUPLINGS: tuple[Coupling, ...] = (
         # each would undo that.
         applies_to=("ArrayBlockSolver",),
     ),
-    # The extended kernel's eligibility is a coaxial-and-equal-radius grouping
-    # scored across the whole geometry, and nobody has measured what that
-    # means for a pair spanning two media. RazorSolver since momwire#1149 U0,
-    # when its buried cell turned True.
+    # The extended kernel is scored across the whole geometry, and nobody has
+    # measured what it means for a pair spanning two media. RazorSolver since
+    # momwire#1149 U0, when its buried cell turned True. BSplineSolver left
+    # this row at momwire#1170 stage 0: it serves the combination IN PART
+    # (extended above ground, reduced on every pair touching a buried
+    # segment) and declares that under `capabilities.partials`, which is not
+    # a refusal and so is not a row here.
     Coupling(
         axis_a="kernel",
         value_a="extended",
@@ -156,7 +159,7 @@ COUPLINGS: tuple[Coupling, ...] = (
         value_b="buried",
         reason=_BURIED_EXTENDED_KERNEL_REFUSAL,
         issue="momwire#553",
-        applies_to=("BSplineSolver", "RazorSolver"),
+        applies_to=("RazorSolver",),
     ),
     # Not an axis pair: `near_correction` is a constructor keyword. Kept
     # because it is a real refused combination and the inventory is the point.

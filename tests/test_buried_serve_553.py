@@ -830,10 +830,14 @@ def test_gu5_7_singular_enrichment_refuses_a_buried_deck():
         s.compute_impedance()
 
 
-def test_gu5_7_the_extended_kernel_refuses_a_buried_deck():
+def test_gu5_7_the_extended_kernel_is_served_above_ground_and_says_so():
+    """A refusal until momwire#1170 stage 0. Now the above-ground pairs take
+    the extended kernel, the buried wire keeps the reduced one, and the fill
+    says which (`tests/test_ek_above_ground_1170.py` holds the gates)."""
     s = served_deck(extended_kernel=True)
-    with pytest.raises(NotImplementedError, match="extended_kernel"):
+    with pytest.warns(UserWarning, match=r"1 of 2 wires are below the plane"):
         s.compute_impedance()
+    assert s.extended_kernel_wires() == (True, False)
 
 
 @pytest.mark.slow

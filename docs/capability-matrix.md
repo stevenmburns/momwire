@@ -120,7 +120,7 @@ a gap, not a claim of emptiness.
 
 ## The recorded reasons
 
-44 sentences across 83 declared cells, verbatim. A sentence shared by several rows is printed
+44 sentences across 80 declared cells, verbatim. A sentence shared by several rows is printed
 once and its sites listed: the tree keeps one message per refusal rather
 than a copy in each, and this is where that shows.
 
@@ -135,10 +135,6 @@ renders in host dialogs.
 - `BSplineSolver` `buried+crossing`, `HMatrixSolver` `buried+crossing`, `ArrayBlockSolver` `buried+crossing`, `SinusoidalSolver` `buried+crossing`, `SinusoidalGalerkinSolver` `buried+crossing`, `RazorSolver` `buried+crossing`
 
   > momwire serves wires wholly at or above the interface, wires strictly below it, and current CROSSING it only through a crossing junction (momwire#524 phase 2): split the wire AT the interface into a below wire whose end stands in the plane and an above wire starting there, and declare the junction between them - that deck is served, with continuity of current and the interface slope condition emerging from the fill itself. A single polyline with points on both sides is not split for you here, because feeds, loads, junctions and per-wire results are keyed on its wire index and a split would renumber them; the deck seams split a card wire at the plane themselves and keep its addresses (the NEC-2 portal since momwire#667, the EZNEC seam since momwire#1281). Alternatively leave the buried part DETACHED (a buried radial screen under a base-fed vertical is served that way, momwire#553), or raise the whole wire clear of the interface
-
-- `BSplineSolver` `buried+extended_kernel`, `HMatrixSolver` `buried+extended_kernel`, `ArrayBlockSolver` `buried+extended_kernel`, `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
-
-  > extended_kernel=True + a wire below the ground plane is not served: the extended kernel extends every pair of the geometry, and momwire#553 measured neither what that means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor for the image of a buried source, which lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
 
 - `BSplineSolver` `buried+pec`, `HMatrixSolver` `buried+pec`, `ArrayBlockSolver` `buried+pec`, `SinusoidalSolver` `buried+pec`, `SinusoidalGalerkinSolver` `buried+pec`, `RazorSolver` `buried+pec`
 
@@ -288,6 +284,10 @@ renders in host dialogs.
 
   > SinusoidalSolver serves a crossing node whose two members' tilts off the interface normal sum to at most 30 degrees (momwire#1223 stage 2): its imposed node condition, I'_above = I'_below/eps_tilde, is the charge match for a wire crossing the plane normally, and a node that leans converges to a different slope ratio, leaving an impedance error that grows with the lean and does not refine away. Solve it with SinusoidalGalerkinSolver or BSplineSolver, whose node slope emerges from the solution
 
+- `SinusoidalSolver` `buried+extended_kernel`, `SinusoidalGalerkinSolver` `buried+extended_kernel`, `RazorSolver` `buried+extended_kernel`
+
+  > extended_kernel=True + a wire below the ground plane is not served: the extended kernel extends every pair of the geometry, and momwire#553 measured neither what that means for a pair spanning two media (the tube expansion's O(a^2) term is written at one wavenumber) nor for the image of a buried source, which lands in the OTHER medium. Solve the buried deck with extended_kernel=False, which is the default
+
 - `SinusoidalSolver` `junction_ports`
 
   > junction_ports are not supported on SinusoidalSolver: the sinusoidal basis enforces KCL identically, so a node-current port is outside its span (momwire#177; same limitation as NEC-2). Use BSplineSolver, or do what NEC requires: mesh a short bridge wire across the gap and gap-feed it
@@ -303,3 +303,13 @@ renders in host dialogs.
 - `SinusoidalSolver` `singular_enrichment`
 
   > singular enrichment is not built for SinusoidalSolver, and will not be: the enrichment in tree (`use_singular_enrichment`) is the B-spline family's junction basis — an extra dof carrying the s^(-1/2) edge shape, written against that family's knot vector and integrated by its Galerkin testing. It is kept as a B-spline-only EXPERIMENTAL feature (maintainer decision, momwire#445, 2026-09-02): it has not yet bought anything measurable, so it is not extended to any other formulation and may be removed altogether later. This cell is a NEVER, not a not-yet. There is no `use_singular_enrichment` keyword on this class at all, so asking for it is a caller typo (a TypeError) rather than this sentence
+
+## Served in part
+
+A combination a row takes without refusing and without serving it
+whole (`Capabilities.partials`). The sentence is what the solver does
+there, and it reaches a user as an advisory rather than an exception.
+
+- `BSplineSolver` `buried+extended_kernel`
+
+  > extended_kernel=True + a wire below the ground plane is served in part: the extended kernel acts on the pairs whose two segments are both above the ground plane (and on their images), and every pair that touches a segment below it keeps the reduced kernel, because the extended kernel in the lower medium and across the interface is not derived yet (momwire#1170). A wire that crosses the plane at a junction changes kernel there
