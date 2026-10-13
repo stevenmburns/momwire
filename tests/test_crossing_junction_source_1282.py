@@ -51,8 +51,17 @@ KNOT_BASES = ("razor-nec5", "razor-2p", "bspline", "bspline-d1", "sinusoidal-gal
 PINNED = {
     "razor-nec5": (70.8068660130 - 0.2415288500j, 71.4387098395 + 0.4515876592j),
     "razor-2p": (70.8068660130 - 0.2415288500j, 71.4387098395 + 0.4515876592j),
-    "bspline": (71.1232015671 + 1.2012528422j, 71.7044595259 + 2.1861961542j),
-    "bspline-d1": (71.0012455387 + 0.9516474150j, 71.6041366040 + 1.6922649323j),
+    # momwire#1170 stage 0: the B-spline rows moved, and only they. This
+    # deck's dialect solves extended by default, and until then its buried
+    # radials sent the whole deck back to the reduced kernel; now the
+    # vertical's pairs are extended. Before: 71.1232015671 + 1.2012528422j /
+    # 71.7044595259 + 2.1861961542j (bspline) and 71.0012455387 +
+    # 0.9516474150j / 71.6041366040 + 1.6922649323j (d1). The move is 3.2 to
+    # 4.2 milliohm, toward NEC-5 on all four (bspline 1.9271 -> 1.9232 and
+    # 2.2120 -> 2.2078 ohm). Measured on Skylake at 94c0b16b; the razor and
+    # sinusoidal rows read their pins to the last digit there.
+    "bspline": (71.1222331958 + 1.1974414978j, 71.7035730045 + 2.1820406785j),
+    "bspline-d1": (71.0004567564 + 0.9485060802j, 71.6033974267 + 1.6890268420j),
     # momwire#1354: the mixed-potential fill. The direct fill read
     # 71.2220705882 + 1.2490278872j / 71.7861410477 + 2.2249137096j; the new
     # fill sits 0.15 ohm closer to NEC-5 on both placements (1.84 / 2.12 ohm
