@@ -1,0 +1,10 @@
+CM G8HUL vertical on a 2 m ground stake, x1, fed directly on wire 1 segment 1
+CE
+GW 1 40 0 0 0 0 0 20.1 0.001
+GW 2 10 0 0 0 0 0 -2 0.001
+GE -1
+GN 3 0 0 0 13 0.005 NOFILE
+EX 0 1 1 0 1 0
+FR 0 1 0 0 7.2 0
+XQ
+EN

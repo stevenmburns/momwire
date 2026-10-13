@@ -1,0 +1,10 @@
+CM fat vertical (a = 25 mm) on a 1 m ground stake, x2
+CE
+GW 1 160 0 0 0 0 0 10 0.025
+GW 2 16 0 0 0 0 0 -1 0.025
+GE -1
+GN 3 0 0 0 13 0.005 NOFILE
+EX 0 1 40 0 1 0
+FR 0 1 0 0 7 0
+XQ
+EN
