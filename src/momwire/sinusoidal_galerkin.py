@@ -417,6 +417,59 @@ _JUNCTION_PORTS_FINITE_GROUND_REFUSAL = (
     "(Z_pp ~ 1/(jw*4*pi*eps*a)) would survive. Use BSplineSolver, a PEC "
     "ground (ground_z alone), or free space"
 )
+# momwire#1344: two SEGMENTS on one path, in different wires (a radial
+# screen's rises, each inside its own radial's polyline). `drop_duplicated_wires`
+# keys on whole wires, so it never sees them. The mixed-potential fill solves
+# them; the direct-field fill answers them from rounding.
+_DIRECT_FILL_COINCIDENT_REFUSAL = (
+    "the direct-field fill cannot solve coincident conductors: for two "
+    "segments on one path its answer depends on rounding (momwire#1344: the "
+    "rise-spelled fan read -5.6 - 3326j ohm as written, 3977 - 26802j ohm "
+    "moved 0.3 m, and 32.8 - 341.1j ohm, the right answer, moved 1 m). The "
+    "mixed-potential fill solves them: it is this family's default and "
+    "serves free space, a PEC ground and a Sommerfeld ground, but not "
+    'fill="direct", junction_ports, a wire end in the ground plane or a '
+    "reflection-coefficient ground. Solve the deck with BSplineSolver, or "
+    "spell it so that the mixed-potential fill serves it"
+)
+
+
+def _coincident_segments(seg_l, seg_r):
+    """The first two segments that share BOTH endpoints, in either order, or
+    None. EQUAL, not close, on `_wire_spec.find_duplicated_wires`' terms:
+    bucketed on nanometre-rounded endpoints and then held to 1e-12 of the
+    deck's coordinate scale, because a pair merely close is another
+    conductor, which is served, and a looser test would start refusing it."""
+    a = np.asarray(seg_l, dtype=float)
+    b = np.asarray(seg_r, dtype=float)
+    if a.shape[0] < 2:
+        return None
+    ka = np.round(a * 1e9).astype(np.int64)
+    kb = np.round(b * 1e9).astype(np.int64)
+    eq0, eq1 = ka[:, 0] == kb[:, 0], ka[:, 1] == kb[:, 1]
+    swap = (
+        (ka[:, 0] > kb[:, 0])
+        | (eq0 & (ka[:, 1] > kb[:, 1]))
+        | (eq0 & eq1 & (ka[:, 2] > kb[:, 2]))
+    )[:, None]
+    rows = np.hstack([np.where(swap, kb, ka), np.where(swap, ka, kb)])
+    _uniq, first, inverse, counts = np.unique(
+        rows, axis=0, return_index=True, return_inverse=True, return_counts=True
+    )
+    inverse = inverse.ravel()
+    tol = 1e-12 * max(1.0, float(np.max(np.abs(a))), float(np.max(np.abs(b))))
+    for u in np.flatnonzero(counts > 1):
+        members = np.flatnonzero(inverse == u)
+        m = int(members[0])
+        for n in members[1:]:
+            n = int(n)
+            same = max(np.abs(a[m] - a[n]).max(), np.abs(b[m] - b[n]).max())
+            flip = max(np.abs(a[m] - b[n]).max(), np.abs(b[m] - a[n]).max())
+            if min(same, flip) <= tol:
+                return m, n
+    return None
+
+
 _JUNCTION_PORTS_MIXED_RADII_REFUSAL = (
     "junction_ports with mixed per-wire radii are not implemented on "
     "SinusoidalGalerkinSolver: the kernel is not reciprocal under mixed "
@@ -4462,6 +4515,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
 
         if self.fill == "mixed-potential" and self._mp_serves(geom):
             return self._assemble_Z_mp(geom, k, eta)
+        self._refuse_coincident_segments(geom)
 
         # (k, eta) is ONE operating point and both halves are arguments
         # (momwire#995); a wholly-buried solve hands in k_m with eta_m.
@@ -4515,6 +4569,17 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
     # ------------------------------------------------------------------
     # The mixed-potential fill on the B-spline pair machinery (momwire#1354)
     # ------------------------------------------------------------------
+
+    def _refuse_coincident_segments(self, geom):
+        """The direct-field fill's refusal of two segments on one path
+        (momwire#1344); a no-op on every deck without such a pair."""
+        pair = _coincident_segments(geom["seg_l"], geom["seg_r"])
+        if pair is not None:
+            raise ValueError(
+                f"{type(self).__name__}: segments {pair[0]} and {pair[1]} "
+                "coincide, end for end -- two conductors written on one path "
+                f"-- and {_DIRECT_FILL_COINCIDENT_REFUSAL} - momwire#1344"
+            )
 
     def _mp_serves(self, geom):
         """Whether `fill="mixed-potential"` fills THIS deck; the rest take
