@@ -39,6 +39,7 @@ from . import _printout
 from ._nec4_printout import (
     FarFieldGround,
     Nec4Printout,
+    Nec4Report,
     Nec4Run,
     Preamble,
     SegmentRow,
@@ -144,9 +145,75 @@ def _unmeasured(what: str) -> str:
 
 
 _EXECUTE = frozenset({"RP", "XQ", "NE", "NH"})
+_REPORTS = frozenset({"RP", "NE", "NH"})
 
 
-def _served_shape(deck) -> list[tuple[int, object]]:
+def _further_tables(text: str, deck) -> tuple[list[int | None], dict[int, list]]:
+    """Where each run's cards sit in the echo, and the tables asked of a run
+    after it ran.
+
+    Returns ``(echo_at, further)``.  ``echo_at`` has one entry per entry of
+    ``deck.groups``: the echo number of its execute card, ``None`` for an
+    idle one.  ``further`` maps a run's group index to the ``(echo number,
+    card)`` of every ``RP``/``NE``/``NH`` card after it that the deck reader
+    found nothing new for (its ``None`` groups): the licensed engine prints
+    one more table of the same run for each, in card order (momwire#1463,
+    p20-p28).  An idle ``XQ`` is not among them: it prints nothing (p27), so
+    its echo joins the cards echoed in front of whatever follows.
+
+    Until momwire#1463 every idle card was skipped, an ``RP`` or ``NE``
+    included, and its table was missing from the printout with nothing said.
+    """
+    numbered = [
+        (i, card)
+        for i, card in enumerate(_printout._post_ge_cards(text), start=1)
+        if card.mnemonic in _EXECUTE
+    ]
+    if len(numbered) != len(deck.groups):
+        raise Nec4Refusal(
+            f"{len(numbered)} execute cards against {len(deck.groups)} execute "
+            f"runs: this engine cannot place the card echo"
+        )
+    echo_at: list[int | None] = []
+    further: dict[int, list] = {}
+    run = None
+    for index, ((number, card), group) in enumerate(
+        zip(numbered, deck.groups, strict=True)
+    ):
+        if group is not None:
+            run = index
+            echo_at.append(number)
+            continue
+        echo_at.append(None)
+        if card.mnemonic in _REPORTS:
+            # The first execute card of a deck always runs, so a run stands
+            # in front of every idle card.
+            further.setdefault(run, []).append((number, card))
+    return echo_at, further
+
+
+def _served_table(card) -> None:
+    """:class:`Nec4Refusal` for an ``RP`` form no NEC-4.2 printout shows.
+
+    Asked of every ``RP`` the printout answers, the card that ran and any
+    after it alike.  ``NE``/``NH`` pass: rectangular and spherical grids,
+    free space, a perfect ground and the Sommerfeld one (GN 2 and GN 3
+    alike) each print in one layout (probes p4 and p11-p15, momwire#1352).
+    The dialect refuses every other coordinate system before this is asked;
+    the cells a finite ground cannot answer refuse in :func:`_near_field`,
+    which owns the grid.
+    """
+    if card.mnemonic != "RP":
+        return
+    if card.i(0) != 0:
+        raise Nec4Refusal(_unmeasured(f"RP mode {card.i(0)}"))
+    if card.i(3) not in _SERVED_XNDA:
+        raise Nec4Refusal(_unmeasured(f"RP with XNDA {card.i(3)}"))
+    if card.f(8) != 0.0:
+        raise Nec4Refusal(_unmeasured("RP at a nonzero range"))
+
+
+def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]:
     """``(group index, group)`` for every run the deck executes, or
     :class:`Nec4Refusal` for a shape no NEC-4.2 printout shows.
 
@@ -155,6 +222,14 @@ def _served_shape(deck) -> list[tuple[int, object]]:
     changing only the sources (p8).  A later run that refills the matrix (a
     new ``FR``, ``GN`` or load between execute cards), or a sweep with more
     than one execute card, is unmeasured.
+
+    A further ``RP``/``NE``/``NH`` card of a run (:func:`_further_tables`) is
+    measured at one frequency (p20-p28).  After a sweep it is not, and
+    neither is one that follows a ``GD`` card read since the run: the
+    licensed engine prints a FREQUENCY and an ANTENNA ENVIRONMENT block
+    there and no input parameters (p32's second pattern, kept out of the
+    fixtures), a layout this printout does not lay out.  Both refuse by
+    name: a table left out with nothing said is momwire#1463's fault.
     """
     for card in deck.geometry:
         if card.mnemonic not in _SERVED_GEOMETRY:
@@ -176,45 +251,35 @@ def _served_shape(deck) -> list[tuple[int, object]]:
             raise Nec4Refusal(
                 _unmeasured("a later execute card after a card that refills the matrix")
             )
-    for _index, group in runs:
+    gd_at = [
+        i
+        for i, card in enumerate(_printout._post_ge_cards(text), start=1)
+        if card.mnemonic == "GD"
+    ]
+    for index, group in runs:
         if group.ground.kind == "refl":
             raise Nec4Refusal(_unmeasured("the GN 0 reflection-coefficient ground"))
         if group.pq is not None and group.pq.restricted:
             raise Nec4Refusal(_unmeasured("a PQ card restricted to a segment range"))
-        report = group.report
-        if report is None:
-            continue
-        if report.mnemonic in ("NE", "NH"):
-            # Rectangular and spherical grids, free space, a perfect ground
-            # and the Sommerfeld one (GN 2 and GN 3 alike): probes p4 and
-            # p11-p15 print each, in one layout (momwire#1352).  The dialect
-            # refuses every other coordinate system before this is asked;
-            # the cells a finite ground cannot answer refuse in
-            # :func:`_near_field`, which owns the grid.
-            continue
-        if report.i(0) != 0:
-            raise Nec4Refusal(_unmeasured(f"RP mode {report.i(0)}"))
-        if report.i(3) not in _SERVED_XNDA:
-            raise Nec4Refusal(_unmeasured(f"RP with XNDA {report.i(3)}"))
-        if report.f(8) != 0.0:
-            raise Nec4Refusal(_unmeasured("RP at a nonzero range"))
+        if group.report is not None:
+            _served_table(group.report)
+        for number, card in further.get(index, ()):
+            if len(group.freqs_mhz) != 1:
+                raise Nec4Refusal(
+                    _unmeasured(
+                        f"a further {card.mnemonic} card after a frequency sweep's "
+                        f"execute card"
+                    )
+                )
+            if any(echo_at[index] < at < number for at in gd_at):
+                raise Nec4Refusal(
+                    _unmeasured(
+                        f"a further {card.mnemonic} card after a GD card read "
+                        f"since the run it follows"
+                    )
+                )
+            _served_table(card)
     return runs
-
-
-def _execute_card_numbers(text: str, deck) -> list[int | None]:
-    """Per entry of ``deck.groups``, the echo number of its execute card
-    (``None`` for an idle one), numbered as the card echo numbers them."""
-    numbers = [
-        i
-        for i, card in enumerate(_printout._post_ge_cards(text), start=1)
-        if card.mnemonic in _EXECUTE
-    ]
-    if len(numbers) != len(deck.groups):
-        raise Nec4Refusal(
-            f"{len(numbers)} execute cards against {len(deck.groups)} execute "
-            f"runs: this engine cannot place the card echo"
-        )
-    return [n if g is not None else None for n, g in zip(numbers, deck.groups)]
 
 
 def solve(text: str, *, basis: str) -> Nec4Printout:
@@ -239,9 +304,9 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
         deck = parse_deck(text, dialect="nec4")
     except _DECK_REFUSALS as exc:
         raise Nec4Refusal(str(exc)) from exc
-    plan = _served_shape(deck)
-    echo_at = _execute_card_numbers(text, deck)
-    runs = []
+    echo_at, further = _further_tables(text, deck)
+    plan = _served_shape(text, deck, echo_at, further)
+    runs: list[Nec4Run | Nec4Report] = []
     try:
         solver = DeckSolver(deck, basis=basis)
         connections = _connections(solver, deck)
@@ -261,6 +326,10 @@ def solve(text: str, *, basis: str) -> Nec4Printout:
                         preamble=count == 0,
                     )
                 )
+            # One frequency here (`_served_shape`), so `records` is the run
+            # every further table is read from.
+            for number, card in further.get(index, ()):
+                runs.append(_report(deck, solver, group, freq, records, card, number))
     except (
         PortalError,
         ValueError,
@@ -306,13 +375,7 @@ def _run(
     networks, excitation = _networks(solver, result, index)
     gd = _far_ground_card(deck)
     second = group.second_medium
-    report = group.report
-    patterns = ()
-    near = ()
-    if report is not None and report.mnemonic == "RP":
-        patterns = (_pattern(report, result, freq, gd),)
-    elif report is not None:
-        near = (_near_field(report, result, solver),)
+    patterns, near = _tables(group.report, result, solver, freq, gd)
     charges = (
         _charge_rows(_charges(solver, result, connections, freq), solver, local)
         if group.pq is not None and group.pq.prints
@@ -389,17 +452,43 @@ def _run(
             network_loss=result.p_network if excitation else None,
         ),
         near_fields=near,
-        far_field_ground=(
-            None
-            if gd is None or second is None
-            else FarFieldGround(
-                _GD_KIND[gd.i(0)],
-                second.edge_distance,
-                second.height,
-                second.eps_r2,
-                second.sigma2,
-            )
-        ),
+        far_field_ground=_far_field_ground(gd, second),
+        patterns=patterns,
+    )
+
+
+def _tables(card, result, solver, freq: float, gd):
+    """``(patterns, near fields)`` one ``RP``/``NE``/``NH`` card asks of a
+    solved run; both empty for an ``XQ`` (``card`` is ``None``)."""
+    if card is None:
+        return (), ()
+    if card.mnemonic == "RP":
+        return (_pattern(card, result, freq, gd),), ()
+    return (), (_near_field(card, result, solver),)
+
+
+def _far_field_ground(gd, second) -> FarFieldGround | None:
+    if gd is None or second is None:
+        return None
+    return FarFieldGround(
+        _GD_KIND[gd.i(0)],
+        second.edge_distance,
+        second.height,
+        second.eps_r2,
+        second.sigma2,
+    )
+
+
+def _report(deck, solver, group, freq: float, records, card, number: int) -> Nec4Report:
+    """One further table of a run already solved (:func:`_further_tables`):
+    nothing is solved again, the card reads the run's own currents."""
+    result = records.result
+    gd = _far_ground_card(deck)
+    patterns, near = _tables(card, result, solver, freq, gd)
+    return Nec4Report(
+        echo_through=number,
+        near_fields=near,
+        far_field_ground=_far_field_ground(gd, group.second_medium),
         patterns=patterns,
     )
 

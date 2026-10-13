@@ -7,10 +7,11 @@ fills the dataclass.
 
 Every heading, column header, field width and blank-line run below was
 MEASURED off real NEC-4.2 printouts, used as black-box OUTPUT only: the
-seventeen captured decks (``tests/fixtures/eznec_nec42/``) and nine probe
+seventeen captured decks (``tests/fixtures/eznec_nec42/``) and the probe
 decks written to settle what the captures did not show
-(``tests/fixtures/eznec_nec42/probes/``), run through the licensed NEC-4.2
-(LLNL-CODE-491368) console build, release 7768648, on 2026-10-03, and kept
+(``tests/fixtures/eznec_nec42/probes/``, nine at first and more since, each
+dated in the README there), run through the licensed NEC-4.2
+(LLNL-CODE-491368) console build, release 7768648, from 2026-10-03 on, and kept
 beside them under ``printouts/``.  A capture is cited by its number (0234),
 a probe by its name (p1).  No NEC-4.2 source,
 algorithm or internal structure is described or relied on, and none may be.
@@ -41,7 +42,9 @@ prefix, then (networks), input parameters, currents, charges, power budget,
 power budget.  A deck with several runs prints the run block once per run
 (:class:`Nec4Run`): an ``FR`` sweep repeats it from FREQUENCY down for every
 frequency (p2), a later execute card echoes its own cards and repeats it
-from the input parameters down (p8).
+from the input parameters down (p8).  A further ``RP``/``NE``/``NH`` card
+that changes nothing echoes its cards and prints its own table alone
+(:class:`Nec4Report`, p20-p28).
 """
 
 from __future__ import annotations
@@ -65,6 +68,7 @@ from ._printout import (
 __all__ = [
     "FarFieldGround",
     "Nec4Printout",
+    "Nec4Report",
     "Nec4Run",
     "Preamble",
     "SegmentRow",
@@ -194,6 +198,26 @@ class Nec4Run:
 
 
 @dataclass(frozen=True)
+class Nec4Report:
+    """One more table of the run before it: a further ``RP``, ``NE`` or
+    ``NH`` card with nothing between that changes the drive or the matrix
+    (momwire#1463).
+
+    The licensed engine prints such a card's echo hard against the previous
+    table, at a later run's spacing, and under it the card's own table and
+    nothing else: no input parameters, no currents, no power budget (p20
+    ``RP`` then ``NE``, p21 ``NE`` then ``RP``, p22 after an ``XQ``, p27 two
+    ``RP`` cards and an ``NH``).  Under a ``GD`` card every pattern, this
+    one included, is preceded by its FAR FIELD GROUND PARAMETERS block (p28).
+    """
+
+    echo_through: int
+    near_fields: tuple[NearFieldBlock, ...] = ()
+    far_field_ground: FarFieldGround | None = None
+    patterns: tuple[PatternBlock, ...] = ()
+
+
+@dataclass(frozen=True)
 class Nec4Printout:
     """Everything a NEC-4.2 printout prints that the deck text does not."""
 
@@ -203,7 +227,8 @@ class Nec4Printout:
     # One tuple of signed segment numbers per multiple-wire junction.
     junctions: tuple[tuple[int, ...], ...]
     segments: tuple[SegmentRow, ...]
-    runs: tuple[Nec4Run, ...]
+    # In printed order: each run, then the further tables asked of it.
+    runs: tuple[Nec4Run | Nec4Report, ...]
     run_seconds: float
 
 
@@ -510,6 +535,15 @@ def _run(run: Nec4Run) -> list[str]:
         body += gap(_SECTION_GAP)
     body += _printout._power_budget(run.power)
     body += gap(_SECTION_GAP)
+    return body + _tables(run)
+
+
+def _tables(run: Nec4Run | Nec4Report) -> list[str]:
+    """The near-field and pattern tables one card asks for, each followed by
+    its captured gap: the tail of a run, and the whole of a further card's
+    answer."""
+    gap = _printout._blank
+    body: list[str] = []
     for near in run.near_fields:
         body += _printout._near_field(near)
         body += gap(_SECTION_GAP)
@@ -563,7 +597,8 @@ def render_nec4_printout(
         # One blank more than a section's own gap separates two runs, the
         # same one that stands before the closing EN echo: six blanks
         # between one frequency's pattern and the next FREQUENCY (p2), four
-        # between a power budget and the next run's card echo (p8).
+        # between a power budget and the next run's card echo (p8), and the
+        # same again in front of a further table's card echo (p20, p21).
         if index:
             body.append("")
         if run.echo_through is not None:
@@ -574,7 +609,7 @@ def render_nec4_printout(
             ]
             echoed = run.echo_through
             body += [*block, *gap(_STRUCTURE_GAP if index == 0 else _SECTION_GAP)]
-        body += _run(run)
+        body += _tables(run) if isinstance(run, Nec4Report) else _run(run)
     body.append("")
     body += [line for i, c in numbered[echoed:] for line in _echo(i, c)]
     if terminator is not None:
