@@ -46,6 +46,7 @@ void register_row_scatter(py::module_ &m);
 void register_qp_pairs(py::module_ &m);
 void register_exact_kernel(py::module_ &m);
 void register_exact_kernel_point(py::module_ &m);
+void register_exact_kernel_series(py::module_ &m);
 
 // The Python-free half: libmvec declarations, constants, OpenMP macros and
 // the cancellation machinery now live in `_mw_core.h`, included here at the
