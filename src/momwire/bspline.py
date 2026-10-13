@@ -1238,11 +1238,16 @@ class BSplineSolver(
         kernel at the node. It was a refusal before; now the first buried
         fill raises `ExtendedKernelAboveGround` once, naming the wires that
         kept the reduced kernel, and `extended_kernel_wires()` reports the
-        same per wire. Measured: against the all-reduced solve it moves a
-        buried-radial vertical and a vertical on a ground stake by the
-        above-ground deck's own EK shift; whether that is nearer NEC-4.2 or
-        NEC-5 on a given deck is recorded in the PR, not assumed.
-        `tests/test_ek_above_ground_1170.py` counts the pairs per kernel.
+        same per wire. Measured, at equal mesh against the all-reduced solve
+        it replaces: with a buried wire detached and 1.4 wavelengths off,
+        the feed's EK shift is the above-only deck's to 2e-6 of itself. On
+        1 mm wire the shift is small against the deck's own gap to either
+        engine: 5-7 milliohm on a 16-radial buried-radial vertical (gaps
+        0.5-9 ohm) and at most 0.12 ohm on a 20 m end-fed vertical on a 2 m
+        stake (gaps 45-170 ohm). On a 25 mm vertical on a 1 m stake, at
+        segment/radius 5 and 2.5, it is 0.16-0.23 ohm, TOWARD NEC-5 and AWAY
+        from NEC-4.2. `tests/test_ek_above_ground_1170.py` counts the pairs
+        per kernel.
     exact_kernel : the exact ring kernel on coaxial pairs (momwire#1408),
         opt-in. False (the default) leaves every fill exactly as it was, bit
         for bit: no line of the correction runs. True replaces, after the

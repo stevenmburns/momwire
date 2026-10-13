@@ -1,0 +1,10 @@
+CM fat vertical (a = 25 mm) on a 1 m ground stake, x1, NEC-5 dialect
+CE
+GW 1 80 0 0 0 0 0 10 0.025
+GW 2 8 0 0 0 0 0 -1 0.025
+GE -1 0
+GN 0 0 0 0 13 0.005 1 0 NOFILE
+EX 0 1 20 2 1 0
+FR 0 1 0 0 7 0
+XQ 0
+EN

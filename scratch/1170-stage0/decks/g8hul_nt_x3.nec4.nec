@@ -1,0 +1,13 @@
+CM G8HUL vertical on a 2 m ground stake, refined x3 (SY symbols written out)
+CE
+GW 1 120 0 0 0 0 0 20.1 0.001
+GW 2 30 0 0 0 0 0 -2 0.001
+GW 99 1 10 10 10 10 10 10.1 0.001
+GE -1
+GN 3 0 0 0 13 0.005
+EK
+EX 0 99 1 0 1 0
+NT 1 1 99 1 0.2 0 -1.4 0 9.8 0
+FR 0 1 0 0 7.2 0
+XQ
+EN
