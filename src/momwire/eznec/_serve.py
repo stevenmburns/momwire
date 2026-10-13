@@ -519,8 +519,10 @@ from ..networks import NetworkReducer
 from .._far_readout import (
     Ground,
     _FIELD_FLOOR2,
-    _gain_db,
-    _polarisation,
+    _gain_db_grid,
+    _libm,
+    _phase_deg_grid,
+    _polarisation_grid,
     average_gain,
     pattern_fields,
 )
@@ -3943,6 +3945,108 @@ def _far_ground(deck: Nec5Deck, medium: GroundMedium | None) -> Ground:
     return Ground("sommerfeld", medium.eps_r, medium.sigma)
 
 
+def _pattern_rows(
+    thetas: np.ndarray,
+    phis: np.ndarray,
+    e_theta: np.ndarray,
+    e_phi: np.ndarray,
+    g_v: np.ndarray,
+    g_h: np.ndarray,
+    below_horizon: np.ndarray | None,
+    floor_scale: float,
+    range_m: float,
+    range_phase_deg: float | None,
+) -> tuple[PatternRow, ...]:
+    """The ``(n_theta, n_phi)`` grid's rows, phi-major as the printout walks
+    them (every theta of the first phi, then the next phi).
+
+    This was a per-point loop over the scalar readouts until momwire#1448,
+    and on a small deck SimNEC paid more for it than for the solve. It is now
+    the same arithmetic over the whole grid at once — the grid forms in
+    :mod:`momwire._far_readout` are the scalar ones operation for operation
+    (that module's note says how the bits are kept) — and every printed-digit
+    rule the loop carried is a mask here, applied in the loop's order.
+    """
+    # Phi-major, the printed order: row r is (theta[r % n_theta], phi[r // n_theta]).
+    n_theta, n_phi = len(thetas), len(phis)
+    et = e_theta.T.ravel()
+    ep = e_phi.T.ravel()
+    # A component that is EXACTLY zero — the vertical's zenith, a linear
+    # dipole's co-polar null, where a spherical unit vector has an exactly
+    # zero component and every moment term cancels term for term — still
+    # carries the sign of its zeros out of the sum, and ``atan2(-0.0, 0.0)``
+    # prints ``-0.00`` where the capture prints ``0.00``.  The angle of zero
+    # is not a number; normalize the zero rather than invent an angle for it.
+    #
+    # ...and a component that is merely dust is zeroed outright, for the same
+    # reason one decimal further down: its magnitude and its phase are both
+    # noise, and they move with thread count and process history (momwire#578,
+    # class A — 92.5% of the moving lines). Done BEFORE the polarisation so
+    # the ellipse is formed from what the row actually prints. An exact zero
+    # is under this floor too, so the one mask carries both rules; either way
+    # the component becomes a POSITIVE ``0j``, which is what the ``0.00``
+    # phase needs.
+    #
+    # Zeroing one component does not blank the row's TILT: with ``a = 0`` the
+    # tilt is ``½·atan2(±0.0, -b²)``, and the sign of that zero is the sign of
+    # ``cos δ``, so the row prints TILT +90 or -90 by the phase of E(PHI). The
+    # grid form keeps that signed zero because it is the same IEEE product.
+    # (0010's capture prints -90 on its exact-zero ``phi = 0`` row and +90 on
+    # the dust rows after it, whose own phase it kept; this seam zeroes that
+    # dust, so it prints -90 on all of them, as it did before #1448 too.)
+    et = np.where(et.real * et.real + et.imag * et.imag <= _PRINTED_DUST_FLOOR2, 0j, et)
+    ep = np.where(ep.real * ep.real + ep.imag * ep.imag <= _PRINTED_DUST_FLOOR2, 0j, ep)
+    below = None
+    if below_horizon is not None and below_horizon.any():
+        # Rows the engine does not compute (see the caller) are not computed
+        # here either: zeroed going in, and overwritten coming out.
+        below = np.tile(below_horizon, n_phi)
+        et[below] = 0j
+        ep[below] = 0j
+    et_mag = _libm(abs, et)
+    ep_mag = _libm(abs, ep)
+    et_deg = _phase_deg_grid(et)
+    ep_deg = _phase_deg_grid(ep)
+    axial, tilt, sense = _polarisation_grid(
+        et_mag, ep_mag, et_deg, ep_deg, floor_scale, linear_below=_AXIAL_PRINTS_ZERO
+    )
+    if range_phase_deg is not None:
+        et_mag, ep_mag = et_mag / range_m, ep_mag / range_m
+        et_deg = et_deg + range_phase_deg
+        ep_deg = ep_deg + range_phase_deg
+    g_v_rows = g_v.T.ravel()
+    g_h_rows = g_h.T.ravel()
+    vert = _gain_db_grid(g_v_rows)
+    hor = _gain_db_grid(g_h_rows)
+    total = _gain_db_grid(g_v_rows + g_h_rows)
+    if below is not None:
+        # The licensed engine's all-zero row (see the caller): its gains are
+        # already at the floor (the caller zeroed g_v/g_h), and everything
+        # else prints 0, with no range phase added to it.
+        for column in (axial, tilt, et_mag, et_deg, ep_mag, ep_deg):
+            column[below] = 0.0
+        sense[below] = ""
+    theta_col = np.tile(thetas, n_phi).tolist()
+    phi_col = np.repeat(phis, n_theta).tolist()
+    return tuple(
+        map(
+            PatternRow,
+            theta_col,
+            phi_col,
+            vert.tolist(),
+            hor.tolist(),
+            total.tolist(),
+            axial.tolist(),
+            tilt.tolist(),
+            sense.tolist(),
+            et_mag.tolist(),
+            et_deg.tolist(),
+            ep_mag.tolist(),
+            ep_deg.tolist(),
+        )
+    )
+
+
 def _pattern(
     request: Nec5FarFieldRequest,
     solver: BSplineSolver,
@@ -4039,78 +4143,18 @@ def _pattern(
     else:
         range_phase_deg = None
 
-    rows = []
-    for j in range(request.n_phi):
-        for i in range(request.n_theta):
-            if below_horizon is not None and below_horizon[i]:
-                rows.append(
-                    PatternRow(
-                        theta_deg=float(thetas[i]),
-                        phi_deg=float(phis[j]),
-                        vert_db=_gain_db(0.0),
-                        hor_db=_gain_db(0.0),
-                        total_db=_gain_db(0.0),
-                        axial_ratio=0.0,
-                        tilt_deg=0.0,
-                        sense="",
-                        e_theta_magnitude=0.0,
-                        e_theta_phase_deg=0.0,
-                        e_phi_magnitude=0.0,
-                        e_phi_phase_deg=0.0,
-                    )
-                )
-                continue
-            et, ep = complex(e_theta[i, j]), complex(e_phi[i, j])
-            # A component that is EXACTLY zero — the vertical's zenith, a
-            # linear dipole's co-polar null, where a spherical unit vector
-            # has an exactly zero component and every moment term cancels
-            # term for term — still carries the sign of its zeros out of the
-            # sum, and ``atan2(-0.0, 0.0)`` prints ``-0.00`` where the
-            # capture prints ``0.00``.  The angle of zero is not a number;
-            # normalize the zero rather than invent an angle for it.  Only
-            # an exact zero is touched: a dust component is a real (tiny)
-            # field with a real phase, and 0010's TILT column reads +90 or
-            # -90 off it (compare its ``phi = 0`` and ``phi = 1`` rows).
-            if et == 0:
-                et = 0j
-            if ep == 0:
-                ep = 0j
-            # ...and a component that is merely dust is zeroed outright, for
-            # the same reason one decimal further down: its magnitude and its
-            # phase are both noise, and they move with thread count and
-            # process history (momwire#578, class A — 92.5% of the moving
-            # lines). Done BEFORE `_polarisation` so the ellipse is formed
-            # from what the row actually prints.
-            if et.real * et.real + et.imag * et.imag <= _PRINTED_DUST_FLOOR2:
-                et = 0j
-            if ep.real * ep.real + ep.imag * ep.imag <= _PRINTED_DUST_FLOOR2:
-                ep = 0j
-            axial, tilt, sense = _polarisation(
-                et, ep, floor_scale, linear_below=_AXIAL_PRINTS_ZERO
-            )
-            et_mag, ep_mag = abs(et), abs(ep)
-            et_deg = math.degrees(math.atan2(et.imag, et.real))
-            ep_deg = math.degrees(math.atan2(ep.imag, ep.real))
-            if range_phase_deg is not None:
-                et_mag, ep_mag = et_mag / range_m, ep_mag / range_m
-                et_deg += range_phase_deg
-                ep_deg += range_phase_deg
-            rows.append(
-                PatternRow(
-                    theta_deg=float(thetas[i]),
-                    phi_deg=float(phis[j]),
-                    vert_db=_gain_db(float(g_v[i, j])),
-                    hor_db=_gain_db(float(g_h[i, j])),
-                    total_db=_gain_db(float(g_v[i, j] + g_h[i, j])),
-                    axial_ratio=axial,
-                    tilt_deg=tilt,
-                    sense=sense,
-                    e_theta_magnitude=et_mag,
-                    e_theta_phase_deg=et_deg,
-                    e_phi_magnitude=ep_mag,
-                    e_phi_phase_deg=ep_deg,
-                )
-            )
+    rows = _pattern_rows(
+        thetas,
+        phis,
+        e_theta,
+        e_phi,
+        g_v,
+        g_h,
+        below_horizon,
+        floor_scale,
+        range_m,
+        range_phase_deg,
+    )
 
     ranged = {"range_m": range_m, "range_phase_deg": range_phase_deg} if range_m else {}
     if range_m and lower_k is not None:
@@ -4125,12 +4169,12 @@ def _pattern(
     if request.xnda % 10 == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
         # not and 1001 (0013, 0035) does.
-        return PatternBlock(rows=tuple(rows), **ranged)
+        return PatternBlock(rows=rows, **ranged)
     average, solid = average_gain(
         g_v + g_h, thetas, request.d_theta_deg, request.d_phi_deg, request.n_phi
     )
     return PatternBlock(
-        rows=tuple(rows),
+        rows=rows,
         **ranged,
         average_power_gain=average,
         solid_angle_pi=abs(solid) / math.pi,

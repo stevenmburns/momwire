@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import functools
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from ..deck._cards import Card, parse_card
 from ..deck._nec5 import Nec5Deck
@@ -644,9 +645,16 @@ class PowerBudget:
     network_loss: float | None = None
 
 
-@dataclass(frozen=True)
-class PatternRow:
+class PatternRow(NamedTuple):
     """One direction's row of ``RADIATION PATTERNS``.
+
+    A named tuple rather than a frozen dataclass since momwire#1448: SimNEC
+    asks for a 1387-direction pattern on every engine call, and a frozen
+    dataclass's ``__init__`` (one ``object.__setattr__`` per field) cost
+    more per row than everything else the row builder does. The fields, their
+    order and their immutability are unchanged, and the field order IS the
+    printed column order, which lets the renderer hand a row straight to its
+    one ``%`` template (``_PATTERN_ROW``).
 
     :attr:`sense` is a STRING, blank included.  The captures print ``LINEAR``
     / ``LEFT`` / ``RIGHT`` in that column and leave it EMPTY on rows whose
@@ -1502,6 +1510,21 @@ def _near_field(block: NearFieldBlock) -> list[str]:
     return lines
 
 
+# One pattern row as ONE printf template (momwire#1448): the columns are
+# ``{theta:8.2f}{phi:9.2f}{vert:11.2f}{hor:8.2f}{total:8.2f}{axial:11.5f}
+# {tilt:9.2f}``, two blanks, the sense left-justified to its width, then
+# ``_e(|E_theta|, 15, 5)``, its phase ``9.2f``, and the same for E_phi. Python's
+# ``%`` and ``format`` share one float formatter (``PyOS_double_to_string``),
+# so a ``%8.2f`` cell is the ``{:8.2f}`` cell byte for byte, ``-0.00`` and
+# ``inf`` included, and ``%-6s`` is ``ljust(6)``; formatting a 1387-row table
+# through one template is what makes the RP section cheap on SimNEC's
+# every-call pattern. A :class:`PatternRow` IS the argument tuple: its fields
+# are in exactly this column order.
+_PATTERN_ROW = (
+    f"%8.2f%9.2f%11.2f%8.2f%8.2f%11.5f%9.2f  %-{_SENSE_WIDTH}s%15.5E%9.2f%15.5E%9.2f"
+)
+
+
 def _pattern(block: PatternBlock) -> list[str]:
     """One ``RP`` answer.  The 3-D trailer prints only when it is carried."""
     if block.range_m is None:
@@ -1532,18 +1555,7 @@ def _pattern(block: PatternBlock) -> list[str]:
             *_PATTERN_COLUMNS[:2],
             _PATTERN_RANGE_UNITS,
         ]
-    for row in block.rows:
-        lines.append(
-            f"{row.theta_deg:8.2f}{row.phi_deg:9.2f}"
-            f"{row.vert_db:11.2f}{row.hor_db:8.2f}{row.total_db:8.2f}"
-            f"{row.axial_ratio:11.5f}{row.tilt_deg:9.2f}"
-            + "  "
-            + row.sense.ljust(_SENSE_WIDTH)
-            + _e(row.e_theta_magnitude, 15, 5)
-            + f"{row.e_theta_phase_deg:9.2f}"
-            + _e(row.e_phi_magnitude, 15, 5)
-            + f"{row.e_phi_phase_deg:9.2f}"
-        )
+    lines += [_PATTERN_ROW % row for row in block.rows]
     if block.average_power_gain is not None:
         lines += [
             "",
