@@ -393,6 +393,9 @@ _ACCEL_SOURCES = [
     # point-tested families after it). Its own TU for 1410's reason; the
     # kernel itself is the shared `_exact_kernel_ring_inline.h`.
     "src/momwire/_accel_exact_kernel_point.cpp",
+    # momwire#1454: the same point moments as a power series in k with
+    # geometry-only coefficients. Its own TU for 1410's reason.
+    "src/momwire/_accel_exact_kernel_series.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
