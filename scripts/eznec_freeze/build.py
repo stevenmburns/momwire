@@ -141,6 +141,50 @@ NEC4_KNOWN_BASES = (
 )
 
 
+# Which bundle this freeze is (momwire#1456).  `standard` is the release zip,
+# frozen with python.org's 3.12; `win7` is the same code frozen with the
+# community PythonWin7 interpreter, whose python312.dll starts on Windows 7.
+# Read from MOMWIRE_BUNDLE_TARGET; only the README differs between them --
+# what makes the bundle Win7-capable is the interpreter the workflow
+# installs, and scan_win7_imports.py is the gate on that.
+TARGETS = ("standard", "win7")
+
+
+def win7_prerequisites(ucrt_bundled: bool) -> str:
+    """The Windows 7 README's prerequisites block (momwire#1456).
+
+    Whether the freeze collected Microsoft's app-local UCRT depends on the
+    build machine (the CI runner's freeze does; a desktop's may not), so the
+    UCRT line says which this bundle is rather than asserting either.
+    """
+    if ucrt_bundled:
+        ucrt = (
+            "  - The Universal C Runtime: this bundle carries its own copy\n"
+            "    (_internal\\ucrtbase.dll), so nothing to install.  If it\n"
+            "    still will not start, install KB2999226 or the Microsoft\n"
+            "    Visual C++ 2015-2022 x64 redistributable.\n"
+        )
+    else:
+        ucrt = (
+            "  - The Universal C Runtime: KB2999226, or the Microsoft Visual C++\n"
+            "    2015-2022 x64 redistributable, which installs it.  This bundle\n"
+            "    does not carry its own copy.\n"
+        )
+    return (
+        "WINDOWS 7 BUILD.  This bundle is frozen with the community PythonWin7\n"
+        "interpreter so that it starts on Windows 7.  It needs, on the Windows 7\n"
+        "PC:\n"
+        "\n"
+        "  - Windows 7 SP1, 64-bit.\n"
+        "  - KB2533623 (adds AddDllDirectory; any SP1 PC kept up to date with\n"
+        "    Windows Update has it).\n"
+        f"{ucrt}"
+        "\n"
+        "On Windows 10 or 11, use the regular momwire-eznec-windows.zip instead.\n"
+        "\n"
+    )
+
+
 def launcher_stems() -> tuple[str, ...]:
     """Every launcher the bundle ships, by file stem: the primary families
     first, then the deprecated names.  The engine is not a launcher."""
@@ -330,14 +374,25 @@ def _wrap_bases(bases: tuple[str, ...], indent: str) -> str:
     return "\n".join(lines)
 
 
-def readme_text(release: str, signing_note: str, suffix: str) -> str:
+def readme_text(
+    release: str,
+    signing_note: str,
+    suffix: str,
+    target: str = "standard",
+    ucrt_bundled: bool = False,
+) -> str:
     """The bundle's README.txt, LF line endings (the caller writes CRLF).
 
-    A function of three strings and the module's constants, so it can be
+    A function of its arguments and the module's constants, so it can be
     gated without a freeze (`tests/test_eznec_bundle_readme.py`).
+    ``target`` is one of `TARGETS`; the Windows 7 bundle carries its
+    prerequisites up front (momwire#1456), worded by ``ucrt_bundled``.
     """
+    if target not in TARGETS:
+        raise ValueError(f"unknown bundle target {target!r}; expected one of {TARGETS}")
     nec5_known = _wrap_bases(NEC5_KNOWN_BASES, "  NEC-5 slot:    ")
     nec4_known = _wrap_bases(NEC4_KNOWN_BASES, "  NEC-4.2 slot:  ")
+    win7 = win7_prerequisites(ucrt_bundled) if target == "win7" else ""
     return (
         f"momwire-eznec {release} — momwire standing in for the external\n"
         "NEC-5 and NEC-4.2 engines EZNEC Pro+ v7 launches, and for SimNEC's\n"
@@ -345,6 +400,7 @@ def readme_text(release: str, signing_note: str, suffix: str) -> str:
         "\n"
         f"{signing_note}\n"
         "\n"
+        f"{win7}"
         "INSTALL INTO A FOLDER OF ITS OWN.  The zip holds a momwire-eznec\\\n"
         "folder; extract it somewhere dedicated, e.g. C:\\momwire-eznec\\ -\n"
         "NOT into EZNEC's Docs folder, and NOT over a previous release.\n"
@@ -511,6 +567,12 @@ def main() -> int:
     # Read ONCE: the baked constant, the README's title line and (through the
     # launcher's own build script) the server key all name the same release.
     release = version("momwire")
+    # Checked before the freeze, so a mistyped target fails in seconds rather
+    # than after PyInstaller has run.
+    target = os.environ.get("MOMWIRE_BUNDLE_TARGET", "standard")
+    if target not in TARGETS:
+        print(f"ERROR: MOMWIRE_BUNDLE_TARGET={target!r} is not one of {TARGETS}")
+        return 1
     bake_dir = _bake_version(release)
     print(f"baked version: {release} ({bake_dir / BUILD_VERSION_MODULE}.py)")
     cmd = [
@@ -723,8 +785,10 @@ def main() -> int:
     else:
         signing_note = "SIGNING: this build is unsigned."
 
+    ucrt_bundled = any(bundle.rglob("ucrtbase.dll"))
     (bundle / "README.txt").write_text(
-        readme_text(release, signing_note, exe.suffix), newline="\r\n"
+        readme_text(release, signing_note, exe.suffix, target, ucrt_bundled),
+        newline="\r\n",
     )
     print(f"bundle ready: {bundle}")
     return 0
