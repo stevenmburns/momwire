@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import replace
 
 import numpy as np
 
@@ -83,7 +84,8 @@ _SERVED_CARDS = frozenset(
 _SERVED_GEOMETRY = frozenset({"GW", "GE"})
 
 # The pattern request forms captured: XNDA 1000 (a cut) and 1001 (the 3-D
-# grid, with its average-gain trailer), RP mode 0, no range.
+# grid, with its average-gain trailer), RP mode 0, at no range or at one
+# (the range form, momwire#1463: `_at_range`).
 _SERVED_XNDA = frozenset({1000, 1001})
 
 # A GD card's leading integer, as the one captured value prints it.
@@ -209,8 +211,8 @@ def _served_table(card) -> None:
         raise Nec4Refusal(_unmeasured(f"RP mode {card.i(0)}"))
     if card.i(3) not in _SERVED_XNDA:
         raise Nec4Refusal(_unmeasured(f"RP with XNDA {card.i(3)}"))
-    if card.f(8) != 0.0:
-        raise Nec4Refusal(_unmeasured("RP at a nonzero range"))
+    if card.f(8) < 0.0:
+        raise Nec4Refusal(_unmeasured("RP at a negative range"))
 
 
 def _served_shape(text: str, deck, echo_at, further) -> list[tuple[int, object]]:
@@ -375,7 +377,7 @@ def _run(
     networks, excitation = _networks(solver, result, index)
     gd = _far_ground_card(deck)
     second = group.second_medium
-    patterns, near = _tables(group.report, result, solver, freq, gd)
+    patterns, near = _tables(group.report, result, solver, freq, gd, medium)
     charges = (
         _charge_rows(_charges(solver, result, connections, freq), solver, local)
         if group.pq is not None and group.pq.prints
@@ -457,13 +459,13 @@ def _run(
     )
 
 
-def _tables(card, result, solver, freq: float, gd):
+def _tables(card, result, solver, freq: float, gd, medium):
     """``(patterns, near fields)`` one ``RP``/``NE``/``NH`` card asks of a
     solved run; both empty for an ``XQ`` (``card`` is ``None``)."""
     if card is None:
         return (), ()
     if card.mnemonic == "RP":
-        return (_pattern(card, result, freq, gd),), ()
+        return (_pattern(card, result, freq, gd, medium),), ()
     return (), (_near_field(card, result, solver),)
 
 
@@ -484,7 +486,9 @@ def _report(deck, solver, group, freq: float, records, card, number: int) -> Nec
     nothing is solved again, the card reads the run's own currents."""
     result = records.result
     gd = _far_ground_card(deck)
-    patterns, near = _tables(card, result, solver, freq, gd)
+    patterns, near = _tables(
+        card, result, solver, freq, gd, _medium(group.ground, freq)
+    )
     return Nec4Report(
         echo_through=number,
         near_fields=near,
@@ -865,7 +869,7 @@ def _far_ground_card(deck):
     return gd[-1] if gd else None
 
 
-def _pattern(card, result, freq_mhz: float, gd):
+def _pattern(card, result, freq_mhz: float, gd, medium: GroundMedium | None):
     """One ``RP 0`` card's answer, through the NEC-5 seam's row builder.
 
     Under a ``GD`` card the reflected far field takes the card's second
@@ -891,7 +895,7 @@ def _pattern(card, result, freq_mhz: float, gd):
     cliff = None
     if gd is not None and second is not None and result.ground.kind != "free":
         cliff = (_CIRCULAR_CLIFF, second)
-    return pattern_block(
+    block = pattern_block(
         request,
         result.solver,
         result.coeffs,
@@ -902,6 +906,78 @@ def _pattern(card, result, freq_mhz: float, gd):
         ground_z=result.ground_z or 0.0,
         cliff=cliff,
     )
+    range_m = card.f(8)
+    if range_m == 0.0:
+        return block
+    return _at_range(block, range_m, freq_mhz, medium, result.ground.kind != "free")
+
+
+def _at_range(
+    block, range_m: float, freq_mhz: float, medium: GroundMedium | None, grounded: bool
+):
+    """A pattern as NEC-4.2 prints it for an ``RP`` with a range field
+    (momwire#1463: SimNEC writes ``RP 0 19 73 1001 0 0 5 5 1000``).
+
+    Read off the licensed binary's printouts of one deck at range 0 and at
+    1000 m (p17 against p16 over GN 3, p19 against p18 in free space, and
+    p29, p30, p31 for the other grounds), as black-box output:
+
+    * the heading gains ``RANGE=`` and ``EXP(-JKR)/R=`` lines and the field
+      columns read ``VOLTS/M``, the NEC-5 printout's range form to the byte;
+    * every gain, the axial ratio, the tilt and the sense are the range-0
+      row's, and so is the average-gain trailer;
+    * each E magnitude is the range-0 one divided by the range, and each E
+      phase is the range-0 one plus the heading's phase, in degrees and not
+      wrapped again (p18 prints 293.42 for 179.10 + 114.32), so a component
+      that is zero prints the bare shift;
+    * the heading's phase is that of ``exp(-jkR)`` at the wavelength the
+      printout itself prints, 299.8/f (7.1 MHz at 1000 m prints 114.32; the
+      SI speed of light gives 114.10);
+    * over a Sommerfeld ground, GN 2 and GN 3 alike, one more line gives the
+      LOWER MEDIUM's ``exp(-jkR)/R`` at ``k*sqrt(eps_c)``, ``eps_c`` being
+      the complex constant the environment block prints (2.23389-107 at
+      -164.12 degrees for 13 / 0.005 S/m, every digit).  A perfect ground
+      prints no such line, with or without ``GD`` (p29, p28);
+    * a row below the horizon over a ground is all zeros as at range 0, and
+      its two phases are the LOWER MEDIUM's phase over a Sommerfeld ground
+      (p31) and 0.00 over a perfect one (p32).
+
+    The row builder is asked for the range-0 block and the range is applied
+    here rather than through its own ``range_m``: its wavenumber is the
+    solve's, and the two phases printed here follow the printed wavelength.
+    """
+    k = 2.0 * math.pi * freq_mhz / _C_MHZ_M
+    shift = _phase_of(-k * range_m)
+    lower = {}
+    below_shift = 0.0
+    if medium is not None:
+        k_lower = k * np.sqrt(medium.eps_c)
+        below_shift = _phase_of(-k_lower.real * range_m)
+        lower = {
+            "lower_range_mag": math.exp(k_lower.imag * range_m) / range_m,
+            "lower_range_phase_deg": below_shift,
+        }
+    rows = []
+    for row in block.rows:
+        below = grounded and row.theta_deg > 90.0 + 1e-9
+        rows.append(
+            row._replace(
+                e_theta_magnitude=row.e_theta_magnitude / range_m,
+                e_phi_magnitude=row.e_phi_magnitude / range_m,
+                e_theta_phase_deg=below_shift
+                if below
+                else row.e_theta_phase_deg + shift,
+                e_phi_phase_deg=below_shift if below else row.e_phi_phase_deg + shift,
+            )
+        )
+    return replace(
+        block, rows=tuple(rows), range_m=range_m, range_phase_deg=shift, **lower
+    )
+
+
+def _phase_of(radians: float) -> float:
+    """The phase of ``exp(j*radians)`` in degrees, in (-180, 180]."""
+    return math.degrees(math.atan2(math.sin(radians), math.cos(radians)))
 
 
 # --------------------------------------------------------------------------
