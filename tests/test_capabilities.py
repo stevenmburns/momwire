@@ -743,7 +743,13 @@ def test_hmatrix_differs_from_bspline_in_the_buried_cell_and_the_solve_axis():
     assert {k: v for k, v in c.axes.items() if k != "solve_strategy"} == {
         k: v for k, v in b.axes.items() if k != "solve_strategy"
     }
-    assert c._replace(buried=True, refusals=b.refusals, axes=b.axes) == b
+    # momwire#1170 stage 0: the parent's one partial is about a buried deck,
+    # which this row refuses whole, so it does not inherit it.
+    assert not c.partials and set(b.partials) == {"buried+extended_kernel"}
+    assert (
+        c._replace(buried=True, refusals=b.refusals, axes=b.axes, partials=b.partials)
+        == b
+    )
     assert c.refusal("buried") == c.refusals["buried"]
     assert "the fast operator has no per-segment medium" in c.refusal("buried")
     # ...and everything the parent's row said around it is still said: the

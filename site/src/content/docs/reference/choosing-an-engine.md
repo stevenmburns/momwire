@@ -123,7 +123,8 @@ licensed engine's own convergence path at the 0.01 % level — it converges
 the row still refuses — a feed at a junction of three or more wire ends, a
 wire crossing the interface mid-span rather than at a junction, ground
 contact combined with buried wires, the extended kernel on a buried deck
-(as `bspline` does), contact under the
+(`bspline` serves it above ground and keeps the reduced kernel on the buried
+wires), contact under the
 reflection-coefficient ground, and a feed named at a segment *centre*, which
 is why razor is not a nec2 engine (momwire#821) — is documented in
 [`docs/razor-solver.md`](https://github.com/stevenmburns/momwire/blob/main/docs/razor-solver.md)

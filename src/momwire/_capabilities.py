@@ -281,6 +281,16 @@ class Capabilities(NamedTuple):
     # proxy makes that a guarantee instead of a convention — and this row is
     # handed to consumers in two other repos.
     axes: Mapping[str, tuple[str, ...]] = MappingProxyType({})
+    # Combinations SERVED IN PART (momwire#1170 stage 0): an "a+b" key, in
+    # `refusals`' spelling, to the sentence that says what the solver does
+    # there instead of the whole thing. Not a refusal -- `refusal()` returns
+    # None for these and the constructor takes the combination -- and not
+    # silence either: `buried+extended_kernel` on the B-spline family means
+    # "extended above ground, reduced on the buried wires", and a consumer
+    # that reports the kernel a deck solved with has to be able to say so.
+    # Last and defaulted to empty, as every field since `knot_feeds` is: an
+    # absent key claims nothing, and the empty row must keep working.
+    partials: Mapping[str, str] = MappingProxyType({})
 
     def _served(self, cell: str) -> bool:
         if cell in ("pec", "refl-coef", "sommerfeld"):

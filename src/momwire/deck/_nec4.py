@@ -76,7 +76,8 @@ captures show, and nothing else:
   wire it costs 0.5-2 ohm, inside the model gap either way), so it is this
   dialect's DEFAULT (`DeckModel.extended_kernel_default`), and a basis or a
   deck that cannot take it falls back to the reduced kernel with an
-  advisory rather than refusing.
+  advisory rather than refusing.  A deck with wires below the ground keeps it
+  on its above-ground wires where the basis can (momwire#1170 stage 0).
 
 * ``NE``/``NH`` read coordinate system 1, the SPHERICAL grid, beside the
   rectangular 0 (momwire#1352): EZNEC writes ``NE 1`` when its user enters a

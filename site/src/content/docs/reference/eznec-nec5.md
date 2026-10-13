@@ -135,10 +135,13 @@ echoed, and ignored, and the printout says so in NEC-4.2's own words, "THE EK
 AND KH COMMANDS HAVE NO EFFECT IN NEC-4". On fat wire this lands closer to both
 engines: on a 28 MHz dipole whose segments are 1.5 radii long it is 4 to 5 Ω
 nearer NEC-4.2. On thin wire it moves the answer by a fraction of an ohm. A few
-decks cannot take the extended kernel: a wire below the ground, or two wires of
-different radii meeting at a junction on `sinusoidal-galerkin`. Those decks
-are solved with the reduced kernel, and the engine logs an
-`ExtendedKernelDefault` advisory instead of refusing.
+decks cannot take the extended kernel: a wire below the ground on any basis
+but `bspline`, or two wires of different radii meeting at a junction on
+`sinusoidal-galerkin`. Those decks are solved with the reduced kernel, and the
+engine logs an `ExtendedKernelDefault` advisory instead of refusing. On
+`bspline`, a deck with wires below the ground keeps the extended kernel on its
+above-ground wires; the buried wires use the reduced kernel, and the advisory
+says so.
 
 **The `momwire-eznec` names are deprecated.** They are what earlier releases
 said to point EZNEC at, and they still ship and answer exactly as before —

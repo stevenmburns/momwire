@@ -57,6 +57,7 @@ from typing import Any
 
 import numpy as np
 
+from .._below_interface import ExtendedKernelAboveGround
 from .._constants import C_LIGHT
 from .._ground_spec import ground_touch_tol
 from ..array_block import ArrayBlockSolver
@@ -71,7 +72,9 @@ from ._polylines import Mesh, to_polylines
 from .model import DeckModel, Environment, LoadSpec
 
 __all__ = [
+    "ExtendedKernelAboveGround",
     "ExtendedKernelDefault",
+    "extended_kernel_partial",
     "extended_kernel_default_refusal",
     "BuiltSolver",
     "PortPlan",
@@ -228,7 +231,9 @@ _NATIVE_LOADING = (RazorSolver,)
 
 class ExtendedKernelDefault(UserWarning):
     """A dialect's default extended kernel fell back to the reduced kernel
-    (momwire#1326).
+    (momwire#1326), or was served on part of the deck only (momwire#1170
+    stage 0: a B-spline basis extends the above-ground pairs of a deck with
+    buried wires and keeps the reduced kernel on the buried ones).
 
     NEC-4 and NEC-5 decks solve with the extended kernel by default, because
     both engines' thin-wire models behave as EK-on (NEC-5 has no ``EK`` card;
@@ -262,18 +267,72 @@ def extended_kernel_default_refusal(
     reason = caps.refusal("extended_kernel")
     if reason is None and basis_kwargs.get("use_singular_enrichment"):
         reason = caps.refusal("extended_kernel", "singular_enrichment")
-    if reason is None and ground_z is not None:
-        buried = any(
-            float(np.asarray(pl, dtype=float)[:, 2].min())
-            < ground_z - ground_touch_tol(np.asarray(pl, dtype=float))
-            for pl in polylines
-        )
-        if buried:
-            reason = caps.refusal("buried", "extended_kernel")
+    if reason is None and _wires_below(polylines, ground_z):
+        reason = caps.refusal("buried", "extended_kernel")
     if reason is None and len(set(radii)) > 1:
         if any(len({radii[w] for w, _end in members}) > 1 for members in junctions):
             reason = caps.refusal("extended_kernel", "stepped_radius_junction")
     return reason
+
+
+def _wires_below(polylines: Sequence[Any], ground_z: float | None) -> list[int]:
+    """Indices of the polylines with a point below the ground plane, by the
+    rule :func:`extended_kernel_default_refusal` asks its buried question."""
+    if ground_z is None:
+        return []
+    return [
+        i
+        for i, pl in enumerate(polylines)
+        if float(np.asarray(pl, dtype=float)[:, 2].min())
+        < ground_z - ground_touch_tol(np.asarray(pl, dtype=float))
+    ]
+
+
+def extended_kernel_partial(
+    solver_class: type, polylines: Sequence[Any], ground_z: float | None
+) -> tuple[str, list[int]] | None:
+    """``(declared sentence, buried wire indices)`` when ``solver_class``
+    serves the extended kernel on this geometry IN PART, else ``None``
+    (momwire#1170 stage 0).
+
+    The one such case: a deck with wires below the ground plane on a family
+    that declares ``partials["buried+extended_kernel"]``.  The extended
+    kernel then acts on the above-ground pairs and the buried wires keep the
+    reduced kernel, and the front end says so instead of falling back.
+    """
+    declared = solver_class.capabilities.partials.get("buried+extended_kernel")
+    if declared is None:
+        return None
+    below = _wires_below(polylines, ground_z)
+    return (declared, below) if below else None
+
+
+def _warn_kernel_partial(
+    basis: str,
+    below: Sequence[int],
+    n_wires: int,
+    *,
+    default: bool,
+    stacklevel: int = 3,
+) -> str:
+    asked = (
+        "this deck's dialect solves with the extended kernel by default"
+        if default
+        else "this deck asks for the extended kernel"
+    )
+    message = (
+        f"basis {basis!r}: {asked}, and it has wires below the ground plane. "
+        f"The above-ground wires solved with the extended kernel; the "
+        f"{len(below)} of {n_wires} wires below the plane kept the reduced "
+        f"kernel, on every pair that touches them, because the extended "
+        f"kernel is not derived for the lower medium yet (momwire#1170)"
+    )
+    warnings.warn(
+        message,
+        ExtendedKernelDefault if default else ExtendedKernelAboveGround,
+        stacklevel=stacklevel,
+    )
+    return message
 
 
 def _warn_kernel_fallback(basis: str, reason: str, stacklevel: int = 3) -> str:
@@ -973,7 +1032,12 @@ def construct_solver(
       ``extended_kernel_default`` set, an ``extended_kernel`` request this
       basis or geometry cannot take (:func:`extended_kernel_default_refusal`)
       falls back to the reduced kernel with an ``ExtendedKernelDefault``
-      advisory, appended to ``advisories`` — never a refusal.
+      advisory, appended to ``advisories`` — never a refusal;
+    * the extended kernel SERVED IN PART (momwire#1170 stage 0): on a deck
+      with wires below the ground plane, a family that declares
+      ``partials["buried+extended_kernel"]`` keeps the extended kernel on
+      the above-ground pairs, and the advisory says the buried wires kept
+      the reduced kernel (:func:`extended_kernel_partial`).
 
     Returns ``(solver, extended_kernel)``, the second being the kernel the
     solver was actually built with.  ``before_construct`` is a front end's
@@ -1009,6 +1073,42 @@ def construct_solver(
             advisory = _warn_kernel_fallback(basis, reason, stacklevel=3 + warn_depth)
             if advisories is not None:
                 advisories.append(advisory)
+    partial = None
+    if extended_kernel:
+        # momwire#1170 stage 0: served in part on a buried deck, asked for
+        # or defaulted. Said here, in deck words, and the solver's own
+        # once-per-solver advisory is then marked as already given.
+        partial = extended_kernel_partial(
+            solver_class, polylines, ground.get("ground_z")
+        )
+        n_wires = len(list(polylines))
+        if (
+            partial is not None
+            and extended_kernel_default
+            and len(partial[1]) == n_wires
+        ):
+            # Every wire is below the plane, so the extended kernel would act
+            # on no pair at all: the default is the reduced kernel, as it was.
+            partial = None
+            extended_kernel = False
+            advisory = _warn_kernel_fallback(
+                basis,
+                "every wire of this deck is below the ground plane, where "
+                "the extended kernel is not derived yet (momwire#1170)",
+                stacklevel=3 + warn_depth,
+            )
+            if advisories is not None:
+                advisories.append(advisory)
+        elif partial is not None:
+            advisory = _warn_kernel_partial(
+                basis,
+                partial[1],
+                n_wires,
+                default=extended_kernel_default,
+                stacklevel=3 + warn_depth,
+            )
+            if advisories is not None:
+                advisories.append(advisory)
     if extended_kernel:
         kwargs["extended_kernel"] = True
     if before_construct is not None:
@@ -1025,6 +1125,8 @@ def construct_solver(
         **ground,
         **basis_kwargs,
     )
+    if partial is not None:
+        solver._warned_ek_above = True
     return solver, bool(extended_kernel)
 
 

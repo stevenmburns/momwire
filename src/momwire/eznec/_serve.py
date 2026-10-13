@@ -90,7 +90,9 @@ The basis, and why it is the one
 portal solves every NEC-2 deck with, plus the EXTENDED KERNEL (momwire#1326):
 NEC-5's own kernel behaves as EK-on and this dialect has no card to say
 otherwise, so every basis here takes it unless it or the deck cannot, and
-then solves reduced with an ``ExtendedKernelDefault`` advisory.
+then solves reduced with an ``ExtendedKernelDefault`` advisory.  A deck with
+buried wires keeps it above ground on ``bspline`` (momwire#1170 stage 0): the
+buried wires solve reduced, and the same advisory says which.
 
 The family used to be no choice at all, and that claim was wrong.  NEC-5
 addresses NODES and ``node_gaps`` (momwire#305, the apex-feed arc) is the only
@@ -4642,6 +4644,8 @@ def _prepare(deck: Nec5Deck, *, basis: str = BASIS) -> _Prepared:
     # EK-on and the dialect has no card for it, so this seam solves EK-on
     # unless the basis or the deck cannot take it, and then falls back to the
     # reduced kernel with an `ExtendedKernelDefault` advisory, not a refusal.
+    # Buried wires on a B-spline basis: extended above ground, reduced on the
+    # buried wires, same advisory (momwire#1170 stage 0).
     try:
         solver = _solver_for(
             deck,

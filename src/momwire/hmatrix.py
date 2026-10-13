@@ -576,6 +576,9 @@ class HMatrixSolver(BSplineSolver):
             **BSplineSolver.capabilities.refusals,
             "buried": _BURIED_FAST_OPERATOR_REFUSAL,
         },
+        # The parent's one partial is about a buried deck, which this class
+        # refuses whole (momwire#1170 stage 0).
+        partials={},
     )
 
     # ------------------------------------------------------------------

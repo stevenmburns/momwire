@@ -749,6 +749,7 @@ SINGULAR_ENRICHMENT_NEVER = (
 # and a serve-time refusal with no numbers in it is not actionable.
 _BURIED_ENRICHMENT_REFUSAL = _below_interface.BURIED_ENRICHMENT_REFUSAL
 _BURIED_EXTENDED_KERNEL_REFUSAL = _below_interface.BURIED_EXTENDED_KERNEL_REFUSAL
+_BURIED_EXTENDED_KERNEL_ABOVE_ONLY = _below_interface.BURIED_EXTENDED_KERNEL_ABOVE_ONLY
 _BURIED_DENSE_BUDGET_REFUSAL = _below_interface.BURIED_DENSE_BUDGET_REFUSAL
 _BURIED_GRAZING_REFUSAL = _below_interface.BURIED_GRAZING_REFUSAL
 _BURIED_CROSS_RANGE_REFUSAL = _below_interface.BURIED_CROSS_RANGE_REFUSAL
@@ -1224,6 +1225,24 @@ class BSplineSolver(
         deck's own EK shift, so it is the one place the mixture is visible.
         The full table, the O(a²) confirmation and the tolerances are in
         tests/test_extended_kernel_bspline.py Gate 18.
+
+        **Buried wires under EK** (momwire#1170 stage 0). A deck with wires
+        below a Sommerfeld ground plane is served IN PART: a pair whose two
+        segments are both above ground takes the extended kernel, direct and
+        image, as on an all-above deck, and every pair that touches a buried
+        segment keeps the reduced kernel — the below/below blocks at the
+        in-medium wavenumber, and the cross-medium blocks, which are field
+        integrals with no thin-wire kernel in them. The extended kernel in
+        and across the soil is not derived (the later stages of #1170), so a
+        wire continued below the plane through a crossing junction changes
+        kernel at the node. It was a refusal before; now the first buried
+        fill raises `ExtendedKernelAboveGround` once, naming the wires that
+        kept the reduced kernel, and `extended_kernel_wires()` reports the
+        same per wire. Measured: against the all-reduced solve it moves a
+        buried-radial vertical and a vertical on a ground stake by the
+        above-ground deck's own EK shift; whether that is nearer NEC-4.2 or
+        NEC-5 on a given deck is recorded in the PR, not assumed.
+        `tests/test_ek_above_ground_1170.py` counts the pairs per kernel.
     exact_kernel : the exact ring kernel on coaxial pairs (momwire#1408),
         opt-in. False (the default) leaves every fill exactly as it was, bit
         for bit: no line of the correction runs. True replaces, after the
@@ -1430,9 +1449,13 @@ class BSplineSolver(
             "buried+refl-coef": _medium_spec.BURIED_REFL_REFUSAL,
             "buried+contact": _medium_spec.CONTACT_WITH_BURIED_REFUSAL,
             "buried+singular_enrichment": _BURIED_ENRICHMENT_REFUSAL,
-            "buried+extended_kernel": _BURIED_EXTENDED_KERNEL_REFUSAL,
             "buried+crossing": _medium_spec.CROSSING_REFUSAL,
         },
+        # momwire#1170 stage 0: served, but not on every pair -- the
+        # extended kernel acts above ground and the buried wires keep the
+        # reduced kernel. It was a refusal until then, and the accelerated
+        # subclasses still refuse a buried deck outright.
+        partials={"buried+extended_kernel": _BURIED_EXTENDED_KERNEL_ABOVE_ONLY},
     )
 
     # momwire#1408: `_serves_exact_kernel`, `EXACT_KERNEL_CHOICES` and
@@ -1604,6 +1627,9 @@ class BSplineSolver(
         # the axis-group labels, identity-checked, same pattern as
         # `SinusoidalSolver._cached_ek_gating`.
         self._cached_ek_groups = None
+        # momwire#1170 stage 0: the buried fill's masked spec, same cache shape.
+        self._cached_ek_above = None
+        self._warned_ek_above = False
         if self.extended_kernel:
             # One refusal rather than a half-served path (#249 §5). The
             # second (finite ground) was lifted by momwire#269 — see below.
@@ -4213,6 +4239,94 @@ class BSplineSolver(
         b_j = None if np.all(seg_a == seg_a[0]) else seg_a
         return _EK(a=None, group_i=group_i, group_j=group_j, b_j=b_j)
 
+    def _ek_spec_above(self, geom, mirror=False):
+        """The `_EK` spec of a deck with BURIED wires (momwire#1170 stage 0):
+        `_ek_spec`'s labels with every segment below the interface marked
+        never-extend (-1, the marker `_ek_axis_groups` reserves), or None
+        when the extended kernel is off or no segment is above.
+
+        The extended kernel is the O(a^2) tube average of the free-space
+        Green's function at ONE wavenumber. A pair of above-ground segments
+        is that case, and so is an above segment against the mirror of an
+        above source (the image block momwire#269 serves). A pair that
+        touches a buried segment is not: the pair spans two media, or sits
+        in the lower one, where neither the expansion's wavenumber nor its
+        image has been measured (the later stages of #1170). Those pairs
+        keep the reduced kernel, so the mask is on the SEGMENT, both as an
+        observer and as a source, real or mirrored.
+
+        Only the buried fill asks here. A deck with no buried wire never
+        does, which is what keeps every other route's labels, and bits,
+        what they were. Cached per geometry object and mirror flag.
+        """
+        if not self.extended_kernel:
+            return None
+        cached = self._cached_ek_above
+        if cached is None or cached[0] is not geom:
+            cached = (geom, {})
+            self._cached_ek_above = cached
+        hit = cached[1].get(mirror)
+        if hit is None:
+            below = np.asarray(self._below_segments(geom), dtype=bool)
+            if below.all():
+                hit = (None,)
+            else:
+                spec = self._ek_spec(geom, mirror=mirror)
+                hit = (
+                    spec._replace(
+                        group_i=np.where(below, -1, spec.group_i),
+                        group_j=np.where(below, -1, spec.group_j),
+                    ),
+                )
+            cached[1][mirror] = hit
+        return hit[0]
+
+    def _advise_ek_above(self):
+        """Say, once per solver, that this buried deck's extended kernel is
+        the above-ground one (`ExtendedKernelAboveGround`, momwire#1170). A
+        front end that has already said it in its own words sets
+        `_warned_ek_above` and this stays silent."""
+        if not self.extended_kernel or self._warned_ek_above:
+            return
+        self._warned_ek_above = True
+        wires = self.extended_kernel_wires()
+        if all(wires):
+            return
+        warnings.warn(
+            _below_interface.extended_kernel_above_advisory(wires),
+            _below_interface.ExtendedKernelAboveGround,
+            stacklevel=4,
+        )
+
+    def _ek_subset(self, geom, obs_sel, seg_idx, mirror):
+        """`_ek_spec_above` for one buried-fill subset block, cut to nothing
+        when the block has no eligible pair: `(spec, same_edge_spec)`, both
+        None for a block of buried segments, so that block makes exactly the
+        reduced-kernel calls it made before the mask existed."""
+        ek = self._ek_spec_above(geom, mirror=mirror)
+        if ek is None:
+            return None, None
+        if not (np.any(ek.group_i[obs_sel] >= 0) and np.any(ek.group_j[seg_idx] >= 0)):
+            return None, None
+        return ek, _EK_SAME_EDGE
+
+    def extended_kernel_wires(self):
+        """Per wire, whether its pairs take the extended kernel: a tuple of
+        bools, one per wire, all False with `extended_kernel=False`.
+
+        All True on a deck with no buried wire. On a deck with wires below a
+        Sommerfeld ground plane (momwire#1170 stage 0) a buried wire is
+        False: every pair that touches one of its segments keeps the reduced
+        kernel, and the extended kernel acts on the pairs whose two segments
+        are both above ground (and on their images).
+        """
+        n = len(self.wires_polylines)
+        if not self.extended_kernel:
+            return (False,) * n
+        if self.ground_z is None or not self._has_buried_wires():
+            return (True,) * n
+        return tuple(m != _medium_spec.BELOW for m in self._wire_media())
+
     def _same_edge_prep(self, geom):
         """k-independent per-same-edge precompute hoisted out of the swept-k
         loop: each edge's analytic static-moment block, plus the O(N_e)
@@ -6631,6 +6745,13 @@ class BSplineSolver(
         if mirror_sources:
             src_l = self._image_positions(src_l)
             src_r = self._image_positions(src_r)
+        # momwire#1170 stage 0: None on every block of buried segments and
+        # on every block of an `extended_kernel=False` solve, which is then
+        # the call below as it always was. Set, it is the above/above block
+        # (direct or image) under the extended kernel.
+        ek, ek_se = self._ek_subset(geom, obs_sel, seg_idx, mirror_sources)
+        ek_kw = {} if ek is None else {"ek": _ek_slice(ek, rows=obs_sel, cols=seg_idx)}
+        ek_se_kw = {} if ek_se is None else {"ek": ek_se}
         block = _seg_seg_full_moments_offedge(
             seg_l[obs_sel],
             seg_r[obs_sel],
@@ -6641,6 +6762,7 @@ class BSplineSolver(
             d,
             self.n_qp_pair,
             ladder=self._fill_ladder(k, seg_l[seg_idx], seg_r[seg_idx], None),
+            **ek_kw,
         )
         if not mirror_sources:
             # Same-edge overwrite, per edge of each subset wire. The image
@@ -6669,9 +6791,16 @@ class BSplineSolver(
                     s_hi = s_lo + (ed_off[i_e + 1] - ed_off[i_e])
                     sl = slice(lo, hi)
                     ssl = slice(s_lo, s_hi)
-                    A_st = _seg_seg_static_moments(ed_arc[i_e], a_w, max_d=d)
+                    A_st = _seg_seg_static_moments(
+                        ed_arc[i_e], a_w, max_d=d, **ek_se_kw
+                    )
                     A_reg = _seg_seg_reg_moments(
-                        ed_arc[i_e], a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
+                        ed_arc[i_e],
+                        a_w,
+                        k,
+                        max_d=d,
+                        n_qp=self.n_qp_pair_same_edge,
+                        **ek_se_kw,
                     )
                     block[:, :, sl, ssl] = A_st + A_reg
         J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=np.complex128)
@@ -6684,7 +6813,11 @@ class BSplineSolver(
         n = int(geom["n_segs_total"])
         _below_interface.refuse_out_of_scope(
             use_singular_enrichment=self.use_singular_enrichment,
-            extended_kernel=self.extended_kernel,
+            # momwire#1170 stage 0: not refused on this family any more. The
+            # subset fills extend the above/above pairs and leave the rest
+            # reduced (`_ek_spec_above`), and the fill says so once
+            # (`_advise_ek_above`).
+            extended_kernel=False,
             n=n,
             degree=self.degree,
             dense_fits=self._dense_tensor_fits_budget(n),
@@ -6786,6 +6919,17 @@ class BSplineSolver(
         # The dense twin `_build_J_blocks_subset` resolves the same way, so
         # the two routes to this block stay the same arithmetic.
         ladder = self._fill_ladder(k, seg_l[seg_idx], seg_r[seg_idx], None)
+        # momwire#1170 stage 0, as in `_build_J_blocks_subset`: None unless
+        # this is an above/above block of an extended-kernel solve. The
+        # whole-mesh spec is cut to each window, sweep and same-edge fixup
+        # alike, so the fixup subtracts the arithmetic the sweep added.
+        ek, ek_se = self._ek_subset(
+            geom, seg_idx if obs_idx is None else obs_idx, seg_idx, mirror_sources
+        )
+        ek_se_kw = {} if ek_se is None else {"ek": ek_se}
+
+        def _ek_kw(rows, cols):
+            return {} if ek is None else {"ek": _ek_slice(ek, rows=rows, cols=cols)}
 
         def _bases_touching(lo, hi):
             mask = ((supp_c >= lo) & (supp_c < hi)).any(axis=1)
@@ -6887,6 +7031,7 @@ class BSplineSolver(
                 d,
                 self.n_qp_pair,
                 ladder=ladder,
+                **_ek_kw(slice(i0, i1), slice(j0, j1)),
             )
             _accumulate(J_win, i0, i1, j0, j1)
 
@@ -6909,9 +7054,9 @@ class BSplineSolver(
             on_obs[np.asarray(obs_idx, dtype=np.int64)] = True
 
         def _fix_edge(w, sl, arc, a_w):
-            A_st = _seg_seg_static_moments(arc, a_w, max_d=d)
+            A_st = _seg_seg_static_moments(arc, a_w, max_d=d, **ek_se_kw)
             A_reg = _seg_seg_reg_moments(
-                arc, a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge
+                arc, a_w, k, max_d=d, n_qp=self.n_qp_pair_same_edge, **ek_se_kw
             )
             J_edge = _seg_seg_full_moments_offedge(
                 seg_l[sl],
@@ -6923,6 +7068,7 @@ class BSplineSolver(
                 d,
                 self.n_qp_pair,
                 ladder=ladder,
+                **_ek_kw(sl, sl),
             )
             corr = (A_st + A_reg) - J_edge
             del J_edge
@@ -7016,6 +7162,7 @@ class BSplineSolver(
         `CrossingContext` adapter that names the basis, and the per-instance
         media and node caches.
         """
+        self._advise_ek_above()
         return _below_interface.compute_Z_operator_buried(
             geom,
             supp_seg,
