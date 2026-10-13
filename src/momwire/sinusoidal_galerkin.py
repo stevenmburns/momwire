@@ -1691,10 +1691,21 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         * with mixed per-wire radii the kernel is not even symmetric (M2's
           finding), and the correction's regularization radius is ambiguous
           at a node whose members disagree about `a`.
+
+        A junction port at a CROSSING node is refused by its own sentence
+        (momwire#849). The finite-ground sentence ends "Use BSplineSolver",
+        and BSplineSolver refuses that port too; what serves the node on
+        both is a series source (`node_gaps`, momwire#1285).
         """
         if not self.junction_ports:
             return
         if self.ground_z is not None and self.ground_eps is not None:
+            crossing = set(self._crossing_junction_indices())
+            for j_idx, _v in self.junction_ports:
+                if j_idx in crossing:
+                    raise NotImplementedError(
+                        _below_interface.crossing_junction_port_refusal(j_idx)
+                    )
             raise NotImplementedError(_JUNCTION_PORTS_FINITE_GROUND_REFUSAL)
         if self._uniform_radius is None:
             raise NotImplementedError(_JUNCTION_PORTS_MIXED_RADII_REFUSAL)

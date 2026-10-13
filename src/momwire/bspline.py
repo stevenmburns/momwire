@@ -2760,6 +2760,10 @@ class BSplineSolver(
         port_rows = []
         for j_idx, _v in self.junction_ports:
             if j_idx in grounded:
+                if j_idx in self._crossing_junctions():
+                    raise ValueError(
+                        _below_interface.crossing_junction_port_refusal(j_idx)
+                    )
                 raise ValueError(
                     f"junction {j_idx} is both grounded and a junction port — "
                     "a grounded node's voltage is pinned by the ground image, "

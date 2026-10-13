@@ -194,6 +194,28 @@ def grounded_junctions(polylines, ground_z, groups):
 MIN_CROSSING_NODE_SEPARATION_M = 1.0
 
 
+def crossing_junction_port_refusal(j_idx):
+    """Why a junction port at CROSSING junction `j_idx` is refused, and what
+    serves the case instead (momwire#849).
+
+    The refusal used to quote the ground CONTACT's reason -- the node's
+    voltage pinned by its own image -- at a node that has no contact image:
+    the crossing fill carries the current across it. What is true there is
+    #813's adjudication: a junction port drives the node's potential against
+    a reference, and none can be taken at a node between two media, where
+    each medium's (A, Phi) is in its own gauge. A series source on the node
+    takes no reference and is served (momwire#1285)."""
+    return (
+        f"junction {j_idx} is a crossing node -- it joins a wire above the "
+        "ground interface to one below it -- and a junction port is not "
+        "served there: a junction port drives the node's potential against a "
+        "reference, and no potential reference can be taken at a node "
+        "between two media (momwire#813). A series source ON the node is "
+        "served instead: pass node_gaps at the node (momwire#1285), or feed "
+        "a segment beside it"
+    )
+
+
 def _closest_crossing_nodes(crossing, groups, polylines):
     """`(separation, i, j, points)` for the closest pair of crossing nodes."""
     pts = []
