@@ -368,6 +368,7 @@ from . import (
     _near_interface,
     _potential_ground,
     _razor_class,
+    _razor_exact_plan,
     _schedule,
     _sommerfeld_below,
     _wire_loading,
@@ -4569,146 +4570,86 @@ class RazorSolver(
         kernel, as bs2's does. Walked by observer windows of each group, so
         the transient is a window's (rows, n_group) tables; the assembly is
         C++ (`exact_kernel_point_assemble`) where built.
+
+        The geometry-only half -- the groups, their frames, the wing and row
+        tables, the observer windows -- is `_razor_exact_plan`'s, kept across
+        calls on the same inputs, and each group's point-moment source is
+        kept with its pair cache for the wavenumber it was built at
+        (momwire#1454: the resident server's repeat calls). Both are reused
+        only on exactly the inputs they were computed from, so a hit adds the
+        same bits a fresh call does.
         """
-        seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
-        n_seg = seg_h.size
-        seg_r = seg_p0 + seg_h[:, None] * seg_t
         seg_a = np.asarray(self._seg_radius(geom), dtype=float)
-        wing_seg, wing_sigma = geom["wing_seg"], geom["wing_sigma"]
-        wing_rise = geom["wing_rise"]
-        n_basis = wing_seg.shape[0]
-        grounded = np.zeros(n_basis, dtype=bool)
-        grounded[np.asarray(geom["grounded_bases"], dtype=np.int64)] = True
         pts, tans, wts = self._testing_paths(geom)
-        n_path = pts.shape[1]
-        half = n_path // 2
-        node_seg = np.concatenate(
-            [
-                np.repeat(wing_seg[:, :1], half, 1),
-                np.repeat(wing_seg[:, 1:], half, 1),
-            ],
-            1,
-        )
-        cent = seg_p0 + 0.5 * seg_h[:, None] * seg_t
-        on_cent = bool(self.nec5_quadrature and n_path == 2)
+        on_cent = bool(self.nec5_quadrature and pts.shape[1] == 2)
         c_A = 1j * omega * self.mu
         c_Phi = 1j * omega * self.eps
         # The fill's kernel spec, so the base moments are the fill's.
-        src_lab = obs_rad = None
+        src_lab = None
         if self.extended_kernel:
             src_lab, _img = self._ek_labels(geom, mirror=self.ground_z is not None)
-            obs_rad = None if np.all(seg_a == seg_a[0]) else seg_a
         accel = _HAVE_EXACT_POINT_ASSEMBLE_ACCEL and _exact_kernel.point_accel_serves(
             k, 2
         )
-        _labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
-        for _g, S in groups:
-            n = S.size
-            axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_p0, seg_r, seg_t)
-            loc = np.full(n_seg, -1, dtype=np.int64)
-            loc[S] = np.arange(n)
-            # Columns: every live wing on the group, grouped by basis (CSR).
-            eb, ej, et, er, eq = [], [], [], [], []
-            for w in (0, 1):
-                ss = wing_seg[:, w]
-                b = np.flatnonzero((loc[ss] >= 0) & (wing_sigma[:, w] != 0))
-                j = loc[ss[b]]
-                eb.append(b)
-                ej.append(j)
-                et.append(wing_sigma[b, w] * sgn[j])
-                er.append(wing_rise[b, w])
-                eq.append(
-                    wing_sigma[b, w] * np.where(wing_rise[b, w], 1.0, -1.0) / h[j]
+        context = (
+            type(self).__qualname__,
+            repr(
+                (
+                    self.nec5_quadrature,
+                    self.n_qp_path,
+                    self.extended_kernel,
+                    self.ground_z,
+                    self.ground_eps,
+                    getattr(self, "ground_model", None),
                 )
-            eb = np.concatenate(eb)
-            if eb.size == 0:
-                continue
-            order = np.argsort(eb, kind="stable")
-            eb = eb[order]
-            ent = [
-                np.ascontiguousarray(np.concatenate(x)[order]) for x in (ej, et, er, eq)
-            ]
-            ent[0] = ent[0].astype(np.int64)
-            ent[2] = ent[2].astype(np.uint8)
-            B, first = np.unique(eb, return_index=True)
-            col_ptr = np.append(first, eb.size).astype(np.int64)
-            # Observers: the group's centroids (T2; T1 too under
-            # `nec5_quadrature`), then the path nodes on the group otherwise.
-            # Row entries (m, observer, jωμ-side coefficient, 1/jωε-side one).
-            obs_pt, obs_seg = [cent[S]], [S]
-            r_m, r_o, r_A, r_P = [], [], [], []
-            for w, sign in ((0, -1.0), (1, 1.0)):
-                rows = np.flatnonzero(loc[wing_seg[:, w]] >= 0)
-                cP = np.full(rows.size, sign / c_Phi, dtype=np.complex128)
-                if w == 0:
-                    cP[grounded[rows]] = 0.0
-                cA = np.zeros(rows.size, dtype=np.complex128)
-                if on_cent:
-                    cA = c_A * wts[rows, w] * (tans[rows, w] @ axis)
-                r_m.append(rows)
-                r_o.append(loc[wing_seg[rows, w]])
-                r_A.append(cA)
-                r_P.append(cP)
-            if not on_cent:
-                mm, pp = np.nonzero(loc[node_seg] >= 0)
-                obs_pt.append(pts[mm, pp])
-                obs_seg.append(node_seg[mm, pp])
-                r_m.append(mm)
-                r_o.append(n + np.arange(mm.size))
-                r_A.append(c_A * wts[mm, pp] * np.einsum("ij,j->i", tans[mm, pp], axis))
-                r_P.append(np.zeros(mm.size, dtype=np.complex128))
-            obs_pt = np.ascontiguousarray(np.concatenate(obs_pt))
-            obs_seg = np.concatenate(obs_seg)
-            obs_x = (obs_pt - seg_p0[S[0]]) @ axis
-            r_o = np.concatenate(r_o)
-            by_o = np.argsort(r_o, kind="stable")
-            r_o = r_o[by_o]
-            r_m = np.concatenate(r_m)[by_o].astype(np.int64)
-            r_A = np.ascontiguousarray(np.concatenate(r_A)[by_o])
-            r_P = np.ascontiguousarray(np.concatenate(r_P)[by_o])
-            exact = _exact_kernel.point_rows(
-                x0, sgn, h, float(seg_a[S[0]]), k, 2, max_cached=4 * n + 1024
-            )
-            sub = {
-                "seg_p0": seg_p0[S],
-                "seg_t": seg_t[S],
-                "seg_h": seg_h[S],
-                "seg_a": seg_a[S],
-            }
-            n_obs = obs_x.size
-            chunk = max(1, _CHUNK_ELEMS // max(1, 4 * n))
-            for o0 in range(0, n_obs, chunk):
-                o1 = min(n_obs, o0 + chunk)
+            ),
+        )
+        plan, cached = _razor_exact_plan.plan_for(
+            geom, seg_a, pts, tans, wts, src_lab, on_cent, _CHUNK_ELEMS, context
+        )
+        keep = cached and _razor_exact_plan.rows_cacheable(k)
+        rkey = _razor_exact_plan.rows_key(k) if keep else None
+        sources = plan.take_rows(rkey) if keep else None
+        if sources is None:
+            sources = [None] * len(plan.groups)
+        for i, g in enumerate(plan.groups):
+            r_A = _razor_exact_plan.row_cA(g, c_A)
+            r_P = _razor_exact_plan.row_cP(g, c_Phi)
+            exact = sources[i]
+            if exact is None:
+                exact = sources[i] = _exact_kernel.point_rows(
+                    g.x0, g.sgn, g.h, g.a, k, 2, max_cached=4 * g.n + 1024
+                )
+            for o0, o1, e0, e1, r_o_win, ek_win in g.windows:
                 self._checkpoint()
-                mom = exact.rows(obs_x[o0:o1])  # (2, rows, n)
+                mom = exact.rows(g.obs_x[o0:o1])  # (2, rows, n)
                 ek = None
-                if src_lab is not None:
-                    o = obs_seg[o0:o1]
-                    ek = _EK(
-                        None,
-                        src_lab[o],
-                        src_lab[S],
-                        None if obs_rad is None else obs_rad[o],
-                    )
-                M0b, M1b = self._seg_moments(obs_pt[o0:o1], sub, k, ek=ek)
+                if ek_win is not None:
+                    ek = _EK(None, *ek_win)
+                M0b, M1b = self._seg_moments(g.obs_pt[o0:o1], dict(g.sub), k, ek=ek)
                 dM0 = np.subtract(mom[0], M0b, out=M0b)
                 dM1 = np.subtract(mom[1], M1b, out=M1b)
                 del mom
-                e0, e1 = np.searchsorted(r_o, [o0, o1])
-                args = (r_m[e0:e1], r_o[e0:e1] - o0, r_A[e0:e1], r_P[e0:e1])
+                args = (g.r_m[e0:e1], r_o_win, r_A[e0:e1], r_P[e0:e1])
                 if accel:
                     _acc.exact_kernel_point_assemble(
                         np.ascontiguousarray(dM0),
                         np.ascontiguousarray(dM1),
                         *args,
-                        col_ptr,
-                        B.astype(np.int64),
-                        *ent,
-                        np.ascontiguousarray(h),
+                        g.col_ptr,
+                        g.B64,
+                        *g.ent,
+                        g.h,
                         Z,
                     )
                 else:
-                    _point_assemble_numpy(dM0, dM1, *args, col_ptr, B, *ent, h, Z)
+                    _point_assemble_numpy(
+                        dM0, dM1, *args, g.col_ptr, g.B, *g.ent, g.h, Z
+                    )
+        # Only a completed correction's sources go back: a cancelled one may
+        # stop mid-window, and a group it never reached has none.
+        if keep and all(isinstance(s, _exact_kernel.PointRowsAccel) for s in sources):
+            plan.give_rows(rkey, sources)
 
     # ------------------------------------------------------------------
     # the crossing trunk's view of this solver (momwire#813)
