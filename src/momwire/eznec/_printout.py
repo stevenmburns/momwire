@@ -1406,27 +1406,39 @@ def _network_runs(
     return runs
 
 
+# The current and charge rows as one ``%`` template each (momwire#1448), for
+# the reason ``_PATTERN_ROW`` gives: ``{element:7d}{tag:5d}``, then ``_e(v, 13,
+# 5)`` per value cell, then ``{phase:10.4f}``, byte for byte.
+_CURRENT_ROW = "%7d%5d" + "%13.5E" * 7 + "%10.4f"
+_CHARGE_ROW = "%7d%5d" + "%13.5E" * 5 + "%10.4f"
+
+
 def _currents(data: RunData) -> list[str]:
     lines = [_CURRENTS_HEADING, "", _CURRENTS_NOTE, "", *_CURRENTS_COLUMNS]
-    for row in data.currents:
-        cells = (*row.center, row.length, row.real, row.imag, row.magnitude)
-        lines.append(
-            f"{row.element:7d}{row.tag:5d}"
-            + "".join(_e(value, 13, 5) for value in cells)
-            + f"{row.phase_deg:10.4f}"
+    lines += [
+        _CURRENT_ROW
+        % (
+            row.element,
+            row.tag,
+            *row.center,
+            row.length,
+            row.real,
+            row.imag,
+            row.magnitude,
+            row.phase_deg,
         )
+        for row in data.currents
+    ]
     return lines
 
 
 def _charges(data: RunData) -> list[str]:
     lines = [_CHARGES_HEADING, "", _CHARGES_NOTE, "", *_CHARGES_COLUMNS]
-    for row in data.charges:
-        cells = (*row.center, row.length, row.magnitude)
-        lines.append(
-            f"{row.element:7d}{row.tag:5d}"
-            + "".join(_e(value, 13, 5) for value in cells)
-            + f"{row.phase_deg:10.4f}"
-        )
+    lines += [
+        _CHARGE_ROW
+        % (row.element, row.tag, *row.center, row.length, row.magnitude, row.phase_deg)
+        for row in data.charges
+    ]
     return lines
 
 

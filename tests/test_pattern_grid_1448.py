@@ -34,7 +34,16 @@ from momwire._far_readout import (
     _polarisation_grid,
 )
 from momwire.eznec import _serve
-from momwire.eznec._printout import PatternBlock, PatternRow, _pattern
+from momwire.eznec._printout import (
+    ChargeRow,
+    PatternBlock,
+    PatternRow,
+    RunData,
+    WireCurrentRow,
+    _charges,
+    _currents,
+    _pattern,
+)
 
 
 def _same_bits(got, want) -> bool:
@@ -326,3 +335,38 @@ def test_the_row_template_is_the_old_fstring_byte_for_byte():
         rows.append(PatternRow(*v[:7].tolist(), "LEFT", *v[7:].tolist()))
     lines = _pattern(PatternBlock(rows=tuple(rows)))
     assert lines[-len(rows) :] == [_old_row_line(r) for r in rows]
+
+
+def test_the_current_and_charge_templates_are_the_old_fstrings():
+    """Same move for the Wire Currents / Wire Charge Densities rows."""
+
+    def old_current(row):
+        cells = (*row.center, row.length, row.real, row.imag, row.magnitude)
+        return (
+            f"{row.element:7d}{row.tag:5d}"
+            + "".join(f"{value:13.5E}" for value in cells)
+            + f"{row.phase_deg:10.4f}"
+        )
+
+    def old_charge(row):
+        cells = (*row.center, row.length, row.magnitude)
+        return (
+            f"{row.element:7d}{row.tag:5d}"
+            + "".join(f"{value:13.5E}" for value in cells)
+            + f"{row.phase_deg:10.4f}"
+        )
+
+    rng = np.random.default_rng(6)
+    awkward = [0.0, -0.0, 1e-300, -5e-5, 99999.99995, math.inf, math.nan]
+    currents, charges = [], []
+    for k in range(300):
+        v = rng.normal(size=8) * 10.0 ** rng.integers(-12, 4, size=8)
+        if k < len(awkward):
+            v[:] = awkward[k]
+        v = v.tolist()
+        center = (v[0], v[1], v[2])
+        currents.append(WireCurrentRow(k + 1, k % 7 + 1, center, *v[3:]))
+        charges.append(ChargeRow(k + 1, k % 7 + 1, center, v[3], v[4], v[5]))
+    data = RunData(currents=tuple(currents), charges=tuple(charges))
+    assert _currents(data)[-len(currents) :] == [old_current(r) for r in currents]
+    assert _charges(data)[-len(charges) :] == [old_charge(r) for r in charges]
