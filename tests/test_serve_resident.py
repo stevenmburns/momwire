@@ -857,24 +857,28 @@ def test_the_windows_runtime_directory_falls_back_to_a_named_tmp(monkeypatch, tm
     assert expected.is_dir()
 
 
-def test_a_client_with_a_runtime_dir_never_imports_tempfile(tmp_path):
+def test_a_client_with_a_runtime_dir_never_imports_tempfile(short_room):
     """momwire#1445: ``tempfile`` costs a warm client launch ~5-7 ms and is
     read only by the fallbacks for a box with no runtime directory, so the
     path a client walks to its socket -- key, directory, name -- leaves it
-    unimported when the directory is given."""
+    unimported when the directory is given.
+
+    ``short_room`` and not tmp_path: on macOS tmp_path is long enough that
+    the socket name passes the 104-byte ``sun_path`` limit, and the probe
+    dies on that guard before it can answer the question asked here."""
     probe = (
         "import sys, momwire_eznec_client as c;"
         "c._mech.socket_path(c.config_key(None, 900.0));"
         "print('tempfile' in sys.modules)"
     )
-    env = dict(os.environ, MOMWIRE_PORTAL_RUNTIME_DIR=str(tmp_path))
+    env = dict(os.environ, MOMWIRE_PORTAL_RUNTIME_DIR=str(short_room))
     out = subprocess.run(
         [sys.executable, "-c", probe],
         capture_output=True,
         text=True,
-        check=True,
         env=env,
     )
+    assert out.returncode == 0, out.stderr
     assert out.stdout.strip() == "False", out.stderr
 
 
