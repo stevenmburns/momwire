@@ -137,7 +137,7 @@ A source also remembers its pairs' values at the last k it was asked for, so the
 
 ## 10. Measured
 
-All on one Skylake box (i7-6700K), branch against `main` at 7025747b built in a second tree, with the harnesses in `scratch/1454-split/`.
+All on one Skylake box (i7-6700K), branch against `main` at ae412830 built in a second tree, with the harnesses in `scratch/1454-split/`. Sections 10.2 to 10.4 were taken once before the branch was rebased onto ae412830 and again after; the two runs agree in every count, and the tables are the second run's.
 
 ### 10.1 Against 30-digit arithmetic, on both sides of each switch
 
@@ -219,15 +219,15 @@ Dan's UR0GT 7.3 MHz deck without RP (108 segments, 3 XQ runs, 6 groups, 487 uniq
 
 | deck | pattern | render, main | render, series | correction, main | correction, series |
 |---|---|---|---|---|---|
-| 7.3 MHz, no RP | same deck repeated | 14.90 | 14.83 | 1.21 | 1.26 |
-| 7.3 MHz, no RP | 5-frequency sweep | 17.34 | 14.93 | 3.60 | 1.34 |
-| 7.3 MHz, no RP | 103-point sweep | 17.34 | 14.93 | 3.60 | 1.35 |
-| 7.3 MHz, with RP | same deck repeated | 42.17 | 42.07 | 1.24 | 1.29 |
-| 7.3 MHz, with RP | 5-frequency sweep | 52.64 | 50.31 | 3.64 | 1.37 |
-| 7.3 MHz, with RP | 103-point sweep | 52.75 | 50.31 | 3.64 | 1.37 |
-| 1.8 MHz, with RP | same deck repeated | 33.26 | 33.12 | 0.71 | 0.76 |
-| 1.8 MHz, with RP | 5-frequency sweep | 39.34 | 37.30 | 2.61 | 0.82 |
-| 1.8 MHz, with RP | 103-point sweep | 39.29 | 37.37 | 2.61 | 0.82 |
+| 7.3 MHz, no RP | same deck repeated | 14.86 | 14.96 | 1.21 | 1.27 |
+| 7.3 MHz, no RP | 5-frequency sweep | 17.32 | 15.09 | 3.60 | 1.36 |
+| 7.3 MHz, no RP | 103-point sweep | 17.29 | 15.13 | 3.59 | 1.36 |
+| 7.3 MHz, with RP | same deck repeated | 41.78 | 41.88 | 1.23 | 1.29 |
+| 7.3 MHz, with RP | 5-frequency sweep | 52.41 | 50.31 | 3.63 | 1.38 |
+| 7.3 MHz, with RP | 103-point sweep | 52.41 | 50.23 | 3.63 | 1.38 |
+| 1.8 MHz, with RP | same deck repeated | 33.16 | 33.42 | 0.70 | 0.77 |
+| 1.8 MHz, with RP | 5-frequency sweep | 39.09 | 37.42 | 2.61 | 0.83 |
+| 1.8 MHz, with RP | 103-point sweep | 39.10 | 37.51 | 2.61 | 0.83 |
 
 A sweep's correction now costs what a repeat's does. What is left of it (about 1.3 ms on the 7.3 MHz deck) is the base moments it subtracts, the key lookups and the Python around them, none of which this step touches.
 
