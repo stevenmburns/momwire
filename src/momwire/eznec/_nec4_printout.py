@@ -299,6 +299,8 @@ _CHARGES_COLUMNS: tuple[str, ...] = (
 # The first line of the licensed engine's Sommerfeld-table cache block (0231,
 # p7), the file name following as A40.
 _GNDINO = " GNDINO: UNABLE TO OPEN FILE "
+_GNDINO3 = " GNDINO3: Unable to open file "
+_GN3 = "GN3"
 
 _FAR_GROUND_HEADING = " " * 31 + "- - - FAR FIELD GROUND PARAMETERS - - -"
 _FAR_GROUND_INDENT = " " * 40
@@ -471,10 +473,20 @@ def _environment(shared: RunData, ground_file: str | None) -> list[str]:
     A NAMED file is the deck's own request, so its first line, the one that
     says the file was not read, is kept in its captured place; the table
     lines are not, because this engine keeps no table file and has no table
-    time to report."""
+    time to report.
+
+    ``GN 3`` prints its own block, in its own words and its own place: a
+    blank and ``GNDINO3: Unable to open file`` with the name as A40, then
+    ``Will compute Sommerfeld-ground tables``, AFTER the medium (0232 with
+    its default ``SOMGN3D.NEC``, p16 with SimNEC's ``NOFILE``).  The same rule
+    keeps its first line for a named file (momwire#1463; until then a named
+    ``GN 3`` printed ``GN 2``'s line in ``GN 2``'s place, which no NEC-4.2
+    printout shows)."""
     lines = _printout._environment(shared)
     if ground_file is None:
         return lines
+    if shared.environment.endswith(_GN3):
+        return [*lines, "", _GNDINO3 + ground_file.ljust(40)]
     return [*lines[:2], "", _GNDINO + ground_file.ljust(40), "", *lines[2:]]
 
 
