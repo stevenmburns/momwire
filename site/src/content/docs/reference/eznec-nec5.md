@@ -119,6 +119,12 @@ In the NEC-4.2 slot, momwire reads the cards EZNEC's NEC-4.2 writer emits:
 - **The Sommerfeld-table file name** that NEC-4.2 may write at the end of a
   `GN` card. NEC-4.2 uses that file only as a cache, so momwire reads the
   name and ignores it, and computes the ground from the card's own values.
+- **Several result cards in one run.** Every `RP`, `NE` and `NH` card after
+  the excitation prints its own table, in card order, so a deck can ask for a
+  pattern and a near field together.
+- **`RP` with a range**, the form SimNEC writes (`RP 0 19 73 1001 0 0 5 5
+  1000`): the pattern's fields are printed in volts per metre at that range,
+  as NEC-4.2 prints them. The gains are the same with or without a range.
 
 Each source's impedance agrees with the licensed NEC-4.2 to within about 2 %.
 

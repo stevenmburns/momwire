@@ -23,7 +23,8 @@ Pairs that are the same deck: 0223/0236 (re-captured), 0225/0226.
 
 probes/<probe>.nec
   Nine decks written for momwire#1295 phase 2 (not EZNEC captures), each to
-  show NEC-4.2's layout of a shape the captures do not carry, and six more:
+  show NEC-4.2's layout of a shape the captures do not carry, and twenty-three
+  more:
     p1  three wires at one node (junction table, connection columns)
     p2  an FR sweep of three frequencies under one RP
     p3  series and parallel RLC loads (LD 0, LD 1)
@@ -57,6 +58,66 @@ probes/<probe>.nec
   the exact value is zero (theta = 90 prints Z = 2.6485E-14 at R = 1).  This
   is the NEC-5 oracle's NE 1, point for point (momwire#1257).
 
+  p16-p32, written for momwire#1463 (SimNEC's RP card carries a range, and
+  a run may carry several RP / NE / NH cards): one antenna, a 10 m vertical
+  dipole of 21 segments with its lower end 1 m up, fed at its centre at
+  7.1 MHz, over GN 3 and GN 2 with SimNEC's NOFILE (13, 0.005 S/m), over
+  GN 1 with and without GD, and in free space.  Run 2026-10-13 on the laptop
+  by the same black-box ritual, each in a fresh directory, decks LF.
+    p16 RP at a range of 1000 m over GN 3      p17 the same RP at no range
+    p18 RP at a range in free space            p19 the same RP at no range
+    p20 RP then NE over GN 3                   p23 the same in free space
+    p21 NE then RP at a range over GN 3        p24 the same in free space
+    p22 XQ, then RP, then NE over GN 3         p25 the same in free space
+    p26 SimNEC's own RP card (RP 0 19 73 1001 0 0 5 5 1000), then NE 1
+    p27 RP, RP at a range, NH, then XQ over GN 3
+    p28 GN 1 + GD: RP at a range, RP at none, then NE
+    p29 RP at a range over GN 1                p30 RP at a range over GN 2
+    p31 RP through the horizon over GN 3, at no range and then at a range
+    p32 the same over GN 1
+  What the printouts show (black box, layout and printed numbers only):
+    - Every RP, NE and NH card after the run prints its own table, in card
+      order.  The first prints at the end of the run's block; each further
+      one echoes its card four blank lines below the previous table (six
+      below a pattern) and prints its table three blank lines under the
+      echo, with no input parameters, currents or power budget of its own.
+      An XQ with nothing new prints nothing but its echo (p27), and an XQ
+      that ran the deck leaves both tables to the cards after it (p22).
+    - Under GD every pattern is preceded by its FAR FIELD GROUND PARAMETERS
+      block, a further one included (p28).
+    - RP with a range: the heading gains RANGE= and EXP(-JKR)/R= lines and
+      the field columns read VOLTS/M.  The gains, the axial ratio, the tilt,
+      the sense and the average-gain trailer are the range-free printout's
+      to every digit (p16 against p17, p18 against p19); each E magnitude is
+      the range-free one over the range, and each E phase the range-free
+      one plus the heading's phase, not wrapped again (p18 prints 293.42).
+      The heading's phase is that of exp(-jkR) at the wavelength the
+      printout prints, 299.8/f: 114.32 degrees at 7.1 MHz and 1000 m.
+    - Over GN 2 and GN 3 the heading carries a LOWER MEDIUM line as well,
+      exp(-jkR)/R at k*sqrt(eps_c) with eps_c the complex constant the
+      environment block prints: 2.23389-107 (a three-digit exponent, the E
+      dropped) at -164.12 degrees.  GN 1 prints no such line, with GD or
+      without (p28, p29).
+    - A row below the horizon over a ground is all zeros, at a range too;
+      its two phases at a range are the LOWER MEDIUM's over GN 3 (p31) and
+      0.00 over GN 1 (p32).
+    - A GN 3 that names its table file prints " GNDINO3: Unable to open
+      file <name as A40>" and "Will compute Sommerfeld-ground tables" after
+      the medium, where a GN 2 prints its own block above it (p16, p30).
+
+refused/r1_gd_after_a_run.nec, .out
+  One more deck and its licensed printout, same day and ritual, for a shape
+  this engine REFUSES by name: an RP, then a GD card, then a second RP.  The
+  licensed engine prints a FREQUENCY and an ANTENNA ENVIRONMENT block in
+  front of the second pattern and no input parameters.  Kept as the record
+  of why (tests/test_eznec_nec42_rp_ne_1463.py); not among the byte gates.
+
+  The issue's own deck, a wire standing ON a GN 3 ground with no radials,
+  is not among the probes: on it the licensed engine's GN 2 and GN 3 give
+  65 + j134 and 190 + j1772 ohms, and this engine 45 - j20, so its numbers
+  gate nothing.  Its layout is the probes'; the issue's decks themselves
+  are served in tests/test_eznec_nec42_rp_ne_1463.py.
+
 printouts/<capture or probe>.out
   Licensed NEC-4.2 (LLNL-CODE-491368), nec42cl-serial release 7768648, run
   2026-10-03 on the build machine, black box: each deck above in, the
@@ -66,8 +127,11 @@ printouts/<capture or probe>.out
   are OUTPUT only; no NEC-4.2 source, build tree or binary is in this
   repository, and none may be.  Line 2 is blank in every one (the engine
   prints no build tag), and the Sommerfeld-table cache messages in 0231,
-  0232, 0239, p7, p9 and p13-p15 are the engine's own file handling, which the gates
-  normalise away (tests/test_eznec_nec42_printout_1295.py).
+  0232, 0239, p7, p9, p13-p15 and the GN 2 / GN 3 probes of p16-p31 are the
+  engine's own file handling, which the gates normalise away
+  (tests/test_eznec_nec42_printout_1295.py; under a NAMED file the line
+  saying it was not opened stays, and this engine prints it).  p16-p32 were
+  run 2026-10-13 on the laptop, the same release.
 
   These printouts are a machine-portable oracle, NOT a byte-portable one.
   The Windows box's licensed NEC-4.2 (the 2014 LLNL NEC42W64CL.exe), run

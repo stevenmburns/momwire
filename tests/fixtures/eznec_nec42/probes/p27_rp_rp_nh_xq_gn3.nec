@@ -1,0 +1,14 @@
+CM Vertical dipole over GN 3, two RP cards, then NH, then XQ
+CM
+CM momwire#1463 probe deck (not an EZNEC capture)
+CE
+GW 1 21 0. 0. 1. 0. 0. 11. .001
+GE 1
+GN 3 0 0 0 13. .005 0 0 NOFILE
+FR 0 1 0 0 7.1 0
+EX 0 1 11 0 1. 0.
+RP 0 19 2 1001 0. 0. 5. 90.
+RP 0 1 3 1000 80. 0. 0. 45. 1000.
+NH 0 1 1 2 5. 0. 1. 0. 0. 2.
+XQ
+EN
