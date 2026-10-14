@@ -21,9 +21,6 @@ Every tolerance below is a multiple of a number measured on 2026-10-13
 """
 
 import math
-import os
-import threading
-import time
 
 import numpy as np
 import pytest
@@ -72,12 +69,13 @@ RATE = 2.0
 def standin(monkeypatch, clean):
     """A closed-form kernel obeying S = omega*mu*G(eps_t; R1/lam_m, theta),
     smooth in ln Im(eps_t), with every evaluated node counted."""
-    count = {"nodes": 0, "calls": 0}
+    count = {"nodes": 0, "calls": 0, "eps": []}
 
     def fake(eps_t, k2, R1, theta, rtol=1e-9, omega=None, mu=_MU0, **_kw):
         R1b, thb = np.broadcast_arrays(np.asarray(R1, float), np.asarray(theta, float))
         count["nodes"] += R1b.size
         count["calls"] += 1
+        count["eps"].append(complex(eps_t))
         r = R1b / sb._lambda_m(eps_t, k2)
         s = -complex(eps_t).imag
         phase = RATE * math.log(s) * (1.0 + r) + thb if s > 0 else thb
@@ -462,7 +460,6 @@ def test_a_second_process_reads_the_anchors_and_fills_nothing(standin, store):
     assert sum(n.endswith(".npz") for n in names) == (trigger - 1) + (
         sb._SOMM_BELOW_ANCHOR_POINTS
     )
-    assert not [n for n in names if n.endswith(".lock")]
 
 
 def test_a_crew_of_processes_counts_as_one_sweep(standin, store):
@@ -518,72 +515,36 @@ def test_the_seen_list_is_shared_and_bounded(store):
     assert dc.note_seen("other", (1.0, 2.0)) == [(1.0, 2.0)]
 
 
-def test_one_lock_one_holder_and_a_dead_holders_lock_is_taken_over(store):
-    path = store / "x.npz.lock"
-    assert dc._try_lock(path)
-    assert not dc._try_lock(path)
-    dc._unlock(path)
-    assert dc._try_lock(path)
-    if os.name == "posix":
-        # A holder that died without unlocking: no such process. (Elsewhere
-        # there is no cheap probe, and the lock's age is what frees it.)
-        path.write_text("999999999")
-        assert not dc._try_lock(path)  # this attempt removes it ...
-        assert dc._try_lock(path)  # ... and the next one holds it
-        dc._unlock(path)
-    path.write_text(str(os.getpid()))
-    old = time.time() - dc._LOCK_STALE_S - 1.0
-    os.utime(path, (old, old))
-    assert not dc._try_lock(path)
-    assert dc._try_lock(path)
-    dc._unlock(path)
+def test_each_worker_starts_its_walk_at_its_own_anchor(standin, monkeypatch):
+    """A crew that needs one stencil spreads out over it: the walk starts at
+    the process's own offset and wraps around."""
+    monkeypatch.setenv(sb.ENV_ANCHORS, "on")
+    n = sb._SOMM_BELOW_ANCHOR_POINTS
+    monkeypatch.setattr(sb.os, "getpid", lambda: 3 * n + 5)
+    del standin["eps"][:]
+    _grid(9.65e6, 0.45)
+    plan = sb._anchor_plan(_medium(9.65e6)[0])
+    order = []
+    for e in standin["eps"]:
+        if e not in order:
+            order.append(e)
+    assert order == [plan.rungs[(5 + j) % n] for j in range(n)]
 
 
-def test_coordinated_runs_each_task_once_and_never_two_at_once_per_key(store):
-    """Four threads stand in for four worker processes (the lock is a file, so
-    it excludes threads exactly as it excludes processes). Each asks for the
-    same three tables; inside one table's lock there is never a second
-    worker, and every worker runs every task."""
-    inside = {k: 0 for k in "abc"}
-    overlaps, ran = [], []
-    guard = threading.Lock()
-
-    def task(name):
-        def fn():
-            with guard:
-                inside[name] += 1
-                if inside[name] > 1:
-                    overlaps.append(name)
-            time.sleep(0.01)
-            with guard:
-                inside[name] -= 1
-                ran.append(name)
-
-        return (("below", name), (), fn)
-
-    def worker():
-        dc.coordinated([task(k) for k in "abc"])
-
-    threads = [threading.Thread(target=worker) for _ in range(4)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
-    assert not overlaps
-    assert sorted(ran) == sorted("abc" * 4)
-    assert not list(store.glob("*.lock"))
-
-
-def test_coordinated_gives_up_waiting_on_a_stuck_lock(store, monkeypatch):
-    monkeypatch.setattr(dc, "_LOCK_WAIT_S", 0.1)
-    key = ("below", "stuck")
-    lock = dc._lock_path(key, ())
-    assert dc._try_lock(lock)  # held by this live process, never released
-    ran = []
-    dc.coordinated([(key, (), lambda: ran.append(1))])
-    assert ran == [1]
-    assert lock.exists()  # not ours to remove
-    dc._unlock(lock)
+def test_an_anchor_another_worker_stored_mid_walk_is_read_not_filled(
+    standin, store, monkeypatch
+):
+    """Worker A stores the whole stencil. Worker B, already holding a stale
+    view of none of it, reads each anchor from disk just before it would fill
+    it, and fills nothing."""
+    monkeypatch.setenv(sb.ENV_ANCHORS, "on")
+    _grid(9.65e6, 0.45)
+    _new_process()
+    monkeypatch.setattr(sb.os, "getpid", lambda: 12345)
+    fills, nodes = sb.SWEEP_STATS["anchor_fills"], standin["nodes"]
+    assert type(_grid(9.66e6, 0.45)) is sb.SommerfeldGridBelowBlended
+    assert sb.SWEEP_STATS["anchor_fills"] == fills
+    assert standin["nodes"] == nodes
 
 
 def test_with_the_store_off_nothing_is_written(standin, tmp_path, monkeypatch):
