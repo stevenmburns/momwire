@@ -4395,7 +4395,7 @@ def _check_basis_can_host(
     if inert and issubclass(solver_class, _NATIVE_LOADING):
         raise ServeRefusal(
             f"wire {mesh.pieces[inert[0]].tag} is one segment long and meets "
-            f"no other wire at either end, so basis {basis!r} has no basis "
+            f"no other wire at either end, so basis {basis} has no basis "
             f"function to put on it and it would scatter nothing "
             f"(momwire#608); this deck declares {len(inert)} such GW card"
             f"{'s' if len(inert) > 1 else ''}"
