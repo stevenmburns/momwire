@@ -7,7 +7,7 @@ One "solve" is what a served deck pays per run: construct a `RazorSolver`
 (razor-2p: `nec5_quadrature=True, exact_kernel="auto"`), then
 `compute_port_solution()`, then the knot-current readout of its column. The
 geometry is the core-split notes' dipole: horizontal, 10 m, 6 m up, radius
-5 mm, lambda = 22 m; `pec` adds a perfect ground plane at z = 0. Each
+2 mm (`--radius`), lambda = 22 m; `pec` adds a perfect ground plane at z = 0. Each
 repetition perturbs the wavelength by a few ppm so no cache can answer it.
 
 Phases are INCLUSIVE wall times of the wrapped methods, so the table is
@@ -37,6 +37,9 @@ def main():
     ap.add_argument("--n", type=int, nargs="+", default=[12, 50, 108, 400, 800])
     ap.add_argument("--ground", nargs="+", default=["free", "pec"])
     ap.add_argument("--reps", type=int, default=0, help="0 = by size")
+    # 2 mm keeps every segment above 3 radii up to N = 1600, so the exact
+    # ring kernel ("auto") never engages and the fill is the plain one.
+    ap.add_argument("--radius", type=float, default=0.002)
     args = ap.parse_args()
 
     from momwire import RazorSolver, razor
@@ -110,7 +113,7 @@ def main():
                 s = RazorSolver(
                     wires=[[(0.0, -5.0, 6.0), (0.0, 5.0, 6.0)]],
                     nsegs=n,
-                    wire_radius=0.005,
+                    wire_radius=args.radius,
                     wavelength=22.0 * (1.0 + 3e-6 * r),
                     feed_arclength=5.0,
                     nec5_quadrature=True,
