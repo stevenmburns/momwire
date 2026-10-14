@@ -1,0 +1,279 @@
+// The NEC-5 deck READER in C++: card text in, the parsed deck and the
+// reader's refusals out, with no Python anywhere. It is the hardened copy of
+// momwire's own reader -- `deck/_cards.py` (`parse_card`), `deck/_nec5.py`
+// (`_Nec5Parser`, `parse_nec5`, `parse_nec5_shared`, `split_structures`) and
+// the two text-level steps of the EZNEC seam that come before a solve,
+// `eznec/_serve.py`'s `split_runs` and `eznec/_shell.py`'s `_answer` /
+// `render` up to the call to `serve`. Python stays the reference: every
+// deck the reader accepts is the same record field for field (floats bit for
+// bit, ints as Python's exact ints), and every deck it refuses is refused
+// with the same exception type and the same message, raised at the same
+// card, gated by `tests/test_nec5_deck_core.py` and
+// `scripts/core_split/deck_compare.py`.
+//
+//     std::string text = ...;              // the deck file's bytes, LATIN-1
+//                                          // (what `_shell.read_deck` decodes)
+//     mw::nec5::Deck deck = mw::nec5::parse_nec5(text);   // throws ParseError
+//     mw::nec5::StreamRead s = mw::nec5::read_stream(text);   // the seam's
+//                                          // front: NX structures, XQ runs,
+//                                          // and which refusal it prints
+//
+// TEXT. Input is latin-1 bytes, one byte per code point, because that is how
+// the seam reads a deck. Every string this reader RETURNS (comments, the CE
+// text, the source text, messages) is UTF-8: a message can carry characters
+// outside latin-1 because Python upper-cases a mnemonic before it names it
+// (`µ` becomes U+039C). Python's own `str` rules are reproduced for the 256
+// latin-1 code points (`isspace`, `isalpha`, `isdigit`, `upper`,
+// `splitlines`), each pinned against Python by a test. No message carries
+// Python-specific text (a repr, an interpreter error): the Python reader's
+// messages were made plain first, and these are those.
+//
+// NUMBERS. A field is Python's `float()` of the token after `D`->`E`
+// (underscores, `inf`/`nan` spellings and all; correctly rounded, so the
+// same bits), and an integer field is `int(round(f))`: round half to even,
+// an exact integer however large (`Int`), OverflowError / ValueError (in the
+// reader's words, `Card.i`) on an infinite / NaN field exactly where
+// Python's is raised.
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+namespace mw {
+namespace nec5 {
+
+// Python's int, as exact as Python's: a field is an integral double of any
+// magnitude, and the reader adds and subtracts them (segment boundaries,
+// `segment - 1`). Base 1e9 limbs, little-endian; zero is empty and positive.
+class Int {
+  public:
+    Int() = default;
+    Int(long long v) { set_i64(v); }  // NOLINT: implicit, like Python's
+    static Int from_integral_double(double d);
+
+    bool fits_i64() const;
+    long long i64() const;  // throws std::out_of_range when it does not fit
+    std::string str() const;
+    bool is_zero() const { return mag_.empty(); }
+    bool negative() const { return neg_; }
+
+    Int abs() const;
+    Int operator+(const Int &o) const;
+    Int operator-(const Int &o) const;
+    int compare(const Int &o) const;
+    bool operator==(const Int &o) const { return compare(o) == 0; }
+    bool operator!=(const Int &o) const { return compare(o) != 0; }
+    bool operator<(const Int &o) const { return compare(o) < 0; }
+    bool operator<=(const Int &o) const { return compare(o) <= 0; }
+    bool operator>(const Int &o) const { return compare(o) > 0; }
+    bool operator>=(const Int &o) const { return compare(o) >= 0; }
+
+  private:
+    void set_i64(long long v);
+    void trim();
+    bool neg_ = false;
+    std::vector<std::uint32_t> mag_;
+};
+
+// The exception types the Python reader can raise, by their Python names.
+enum class ErrorKind { deck_error, overflow_error, value_error, index_error, serve_refusal };
+const char *error_kind_name(ErrorKind k);  // "DeckError", "OverflowError", ...
+
+struct ParseError : std::runtime_error {
+    ErrorKind kind;
+    ParseError(ErrorKind k, const std::string &utf8_message)
+        : std::runtime_error(utf8_message), kind(k) {}
+};
+
+// --- the model (`deck/_nec5.py`'s dataclasses, field for field) ------------
+
+struct Node {  // Nec5Node: a favored wire and a node, never canonicalised
+    Int tag;
+    Int node;
+};
+
+struct Wire {  // Nec5Wire
+    Int tag;
+    Int segment_count;
+    double end1[3] = {0, 0, 0};
+    double end2[3] = {0, 0, 0};
+    double radius = 0;
+};
+
+struct Ground {
+    // Nec5FreeSpace | Nec5PerfectGround | Nec5SommerfeldGround |
+    // Nec5MininecGround; the fields a kind does not carry stay default.
+    enum Kind { free_space, perfect, sommerfeld, mininec } kind = free_space;
+    double eps_r = 0, sigma = 0;
+    double mu_re = 1, mu_im = 0;
+    Int spelling;  // sommerfeld: 0 (GN 0) or 2 (GN 2)
+    Int ix;        // mininec: GD's first field
+    bool sigma_sets_im_epsc = false;  // mininec
+};
+
+struct Source {  // Nec5Source
+    Int kind;
+    Node at;
+    double drive_re = 0, drive_im = 0;
+    Int end_code;
+    Int printed_location;
+};
+
+struct LoadSpec {  // deck.model.LoadSpec
+    std::string kind;  // "fixed", "series", "parallel"
+    double r = 0, l = 0, c = 0, x = 0;
+};
+
+struct Load {  // Nec5Load
+    Node at;
+    LoadSpec spec;
+    Int end_code;
+    Int printed_location;
+};
+
+struct Conductivity {  // Nec5Conductivity
+    Int tag, segment_from, segment_thru;
+    double sigma = 0;
+};
+
+struct DistributedRLC {  // _wire_loading.DistributedRLC
+    std::string kind;  // "series", "parallel"
+    double r = 0, l = 0, c = 0;
+};
+
+struct DistributedRLCCard {  // Nec5DistributedRLC
+    Int tag, segment_from, segment_thru;
+    DistributedRLC spec;
+};
+
+// One entry of `load_cards` (deck order, every kind): which list, which index.
+struct LoadCardRef {
+    enum Kind { load, conductivity, distributed_rlc } kind;
+    std::size_t index;
+};
+
+struct TransmissionLine {  // Nec5TransmissionLine
+    Node end_a, end_b;
+    double z0 = 0, length_m = 0;
+    double shunt[4] = {0, 0, 0, 0};
+};
+
+struct Network {  // Nec5Network: three complex entries, (re, im) each
+    Node end_a, end_b;
+    double y11[2] = {0, 0}, y12[2] = {0, 0}, y22[2] = {0, 0};
+};
+
+struct Request {
+    // Nec5FarFieldRequest (RP) | Nec5NearFieldRequest (NE / NH) |
+    // Nec5ExecuteRequest (XQ); the fields a kind does not carry stay default.
+    enum Kind { far_field, near_field, execute } kind = execute;
+    // far_field
+    Int n_theta, n_phi, xnda;
+    double theta0_deg = 0, phi0_deg = 0, d_theta_deg = 0, d_phi_deg = 0, range_m = 0;
+    Int mode;
+    // near_field
+    Int coordinates;
+    Int counts[3];
+    double origin[3] = {0, 0, 0}, step[3] = {0, 0, 0};
+    bool magnetic = false;
+    // execute
+    Int flag;
+};
+
+struct Deck {  // Nec5Deck, in its field order
+    std::vector<std::string> comments;  // UTF-8, each a CM card's raw[2:]
+    std::string ce_text;                // UTF-8
+    std::string source_text;            // UTF-8: the text the deck was read from
+    std::vector<Wire> wires;
+    Int ge_flag;
+    Int ge_second = -1;
+    Ground ground;
+    std::vector<Source> sources;
+    std::vector<Load> loads;
+    std::vector<Conductivity> conductivities;
+    std::vector<LoadCardRef> load_cards;
+    std::vector<std::pair<Int, double>> wire_conductivity;  // insertion order
+    std::vector<DistributedRLCCard> distributed_rlc;
+    std::vector<std::pair<Int, DistributedRLC>> wire_distributed_rlc;
+    std::vector<TransmissionLine> transmission_lines;
+    std::vector<Network> networks;
+    bool has_frequency = false;
+    double frequency_mhz = 0;
+    std::vector<Request> requests;
+    bool has_pq = false;
+    Int pq;
+
+    const Wire *wire(const Int &tag) const;  // Nec5Deck.wire
+};
+
+// --- the reader --------------------------------------------------------------
+
+// `parse_nec5(text)`: one structure's deck, or ParseError.
+Deck parse_nec5(const std::string &latin1_text);
+
+// `parse_nec5_shared(texts)`: each text's outcome in place.
+struct DeckOutcome {
+    bool ok = false;
+    Deck deck;
+    ErrorKind kind = ErrorKind::deck_error;
+    std::string message;  // UTF-8
+};
+std::vector<DeckOutcome> parse_nec5_shared(const std::vector<std::string> &latin1_texts);
+
+// `split_structures(text)`: false is Python's None (no NX before EN).
+struct Structure {
+    std::string body;  // latin-1, each line "\n"-terminated
+    bool has_terminator = false;
+    std::string terminator;  // latin-1, the NX / EN line stripped
+    std::string deck_text() const;
+    std::string echo_text() const;
+};
+bool split_structures(const std::string &latin1_text, std::vector<Structure> &out);
+
+// `_serve.split_runs(text)`: false is None; throws ParseError(serve_refusal).
+bool split_runs(const std::string &latin1_text, std::vector<std::string> &out);
+
+// `_shell._answer(text, echo_text=...)` up to the solve: the deck it would
+// serve (and the per-run decks of a multi-run deck), or the refusal it
+// prints (`refused`, the message), or the exception that escapes it
+// (`raised`, which `_shell.main`'s last line of defence then reports).
+struct Answer {
+    enum Kind { refused, raised, single, multi } kind = refused;
+    ErrorKind error_kind = ErrorKind::deck_error;
+    std::string message;  // UTF-8; refused / raised
+    Deck deck;            // single / multi; source_text is the echo text
+    std::vector<Deck> runs;  // multi
+};
+Answer answer(const std::string &latin1_text, const std::string *latin1_echo_text);
+
+// `_shell.render(text)` for the nec5 dialect, up to the solve: the NX
+// structures (if chained) and each one's answer, in order, stopping after
+// the first that refuses or raises (`_render_chain`'s break).
+struct StreamRead {
+    bool chained = false;
+    std::vector<Structure> structures;
+    std::vector<Answer> answers;
+};
+StreamRead read_stream(const std::string &latin1_text);
+
+// --- the comparison format ---------------------------------------------------
+// One line per field, in the reference's own spelling
+// (`scripts/core_split/deck_compare.py` writes the Python side): floats as
+// their 64 bits in hex, ints in decimal, strings as UTF-8 hex.
+std::string dump_parse(const std::string &latin1_text);   // parse_nec5's outcome
+std::string dump_stream(const std::string &latin1_text);  // read_stream
+std::string dump_deck(const Deck &deck, const std::string &path);
+
+// The latin-1 `str` rules and number spellings, exposed for the tests that
+// pin them against Python one code point / token at a time. `op` is one of
+// "strip", "split", "splitlines", "upper", "isalpha", "isdigit", "isspace",
+// "float", "round", "g", "+g", "card"; the result is the dump-format
+// rendering.
+std::string text_probe(const std::string &op, const std::string &latin1_arg);
+
+}  // namespace nec5
+}  // namespace mw

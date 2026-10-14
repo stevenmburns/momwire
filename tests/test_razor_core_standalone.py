@@ -50,6 +50,9 @@ CORE_SOURCES = (
     "_accel_razor_cplx.cpp",
     "_razor_solve_core.cpp",
     "_razor_front_core.cpp",
+    # The NEC-5 deck reader (unit 2a): the executable's first step, card text
+    # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
+    "_nec5_deck_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -129,7 +132,7 @@ def driver(accel, tmp_path_factory):
         str(PKG),
     ]
     out = tmp_path_factory.mktemp("razor_core")
-    drivers = ("razor_chain_driver", "razor_front_driver")
+    drivers = ("razor_chain_driver", "razor_front_driver", "nec5_deck_driver")
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
     for src in sources:  # concurrently: the -O3 core TUs dominate the cost
@@ -160,6 +163,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_razor_core.h" in seen, "the dependency files are not what they seem"
     assert "_razor_solve_core.h" in seen, "the solve prototype's core was not built"
     assert "_razor_front_core.h" in seen, "the front half's core was not built"
+    assert "_nec5_deck_core.h" in seen, "the deck reader's core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -314,3 +318,51 @@ def test_geometry_to_currents_in_cxx_alone_is_the_python_route(driver, tmp_path)
     assert (tmp_path / "front_X.bin").read_bytes() == np.ravel(
         sol.coeffs, order="F"
     ).tobytes()
+
+
+# --- deck text -> the parsed deck, no Python --------------------------------
+
+
+def _deck_compare_module():
+    spec = importlib.util.spec_from_file_location(
+        "core_split_deck_compare", SPLIT / "deck_compare.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_deck_reader_in_cxx_alone_is_the_python_reader(driver):
+    """Every NEC deck in tests/fixtures through the reader in a process with
+    no Python: the parse and the seam's front (NX structures, XQ runs, the
+    refusal it prints) are the Python reader's, field for field."""
+    dc = _deck_compare_module()
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    assert len(decks) >= 250
+    run = subprocess.run(
+        [str(driver[0]["nec5_deck_driver"]), *map(str, decks)],
+        capture_output=True,
+    )
+    assert run.returncode == 0, run.stderr
+    chunks = run.stdout.decode("ascii").split("== ")[1:]
+    assert len(chunks) == len(decks)
+    outcomes = set()
+    for path, chunk in zip(decks, chunks, strict=True):
+        name, body = chunk.split("\n", 1)
+        assert name == str(path)
+        parse, stream = body.split("--\n", 1)
+        text = path.read_bytes().decode("latin-1")
+        ref = dc.py_parse(text)
+        assert dc.first_difference(ref, parse) is None, (
+            f"{path}: {dc.first_difference(ref, parse)}"
+        )
+        ref = dc.py_stream(text)
+        assert dc.first_difference(ref, stream) is None, (
+            f"{path}: {dc.first_difference(ref, stream)}"
+        )
+        outcomes.add("refused" if parse.startswith("parse !") else "parsed")
+    assert outcomes == {"parsed", "refused"}
