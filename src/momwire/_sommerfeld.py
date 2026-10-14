@@ -48,6 +48,7 @@ from . import _somm_disk_cache
 from ._accel import acc as _acc
 from ._cancel import SolveAborted
 from ._constants import C_LIGHT
+from ._quadrature import leggauss
 
 # Far-pair grid-extent cap, in wavelengths (issue #157). The interpolation
 # grid's radius `r1_max` is sized to the geometry's largest image-point
@@ -183,7 +184,7 @@ _MU0 = 4e-7 * np.pi
 
 # Gauss–Legendre rule shared by all contour sections.
 _GAUSS_N = 24
-_GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
+_GX, _GW = (np.array(a) for a in leggauss(_GAUSS_N))
 
 # Recursion cap for the adaptive sections (branch-point neighborhoods).
 _ADAPT_DEPTH = 14

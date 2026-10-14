@@ -74,6 +74,7 @@ from ._port_solution import (
     port_impedances,
     refuse_undriven,
 )
+from ._quadrature import leggauss
 from ._stable import asinh_diff
 from ._stable import expm1_neg_j as _expm1_neg_j
 from ._stable import expm1_neg_j_from_half as _expm1_neg_j_from_half
@@ -1468,9 +1469,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         cached = self._leggauss_cache.get(n)
         if cached is not None:
             return cached
-        gx, gw = np.polynomial.legendre.leggauss(n)
-        gx = np.ascontiguousarray(gx, dtype=np.float64)
-        gw = np.ascontiguousarray(gw, dtype=np.float64)
+        gx, gw = (np.array(a, dtype=np.float64) for a in leggauss(n))
         self._leggauss_cache[n] = (gx, gw)
         return gx, gw
 

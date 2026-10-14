@@ -101,10 +101,18 @@ from typing import NamedTuple, Protocol
 
 import numpy as np
 import scipy.sparse as _sp
-from numpy.polynomial.legendre import leggauss
 
 from . import _accel, _aca, _cancel, _ground_refl, _near_interface, _sommerfeld_below
+from ._quadrature import leggauss as _leggauss_shared
 from ._sommerfeld_transmitted import _c1_moment
+
+
+def leggauss(n):
+    """Writable copies of the shared Gauss-Legendre rule (`_quadrature.leggauss`
+    hands out read-only cached arrays; this module's callers used to receive
+    numpy's own fresh ones)."""
+    x, w = _leggauss_shared(n)
+    return x.copy(), w.copy()
 
 
 class CoarseCrossingNode(UserWarning):
