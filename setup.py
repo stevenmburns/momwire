@@ -335,6 +335,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_mw_binding.h",
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
+    "src/momwire/_razor_front_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -405,6 +406,10 @@ _ACCEL_SOURCES = [
     # TUs: they only CALL the razor kernels, across a TU boundary, so no
     # kernel's codegen can move with them (momwire#1187).
     "src/momwire/_razor_solve_core.cpp",
+    # The razor-2p FRONT half (construction, geometry, the prepared tables,
+    # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
+    # Its own TU: it calls no kernel and no kernel calls it.
+    "src/momwire/_razor_front_core.cpp",
     "src/momwire/_accel_razor_solve.cpp",
 ]
 

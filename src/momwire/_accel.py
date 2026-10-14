@@ -483,6 +483,7 @@ _CANCELLABLE_METHODS = (
     # The razor-2p solve prototype polls between windows and inside the
     # moment fill it calls.
     ("RazorSolveContext", "port_solution"),
+    ("RazorSolveContext", "front_port_solution"),
 )
 
 
