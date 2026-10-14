@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_mw_binding.h"
+#include "_nec5_razor_seam_core.h"
 #include "_razor_front_core.h"
 #include "_razor_solve_core.h"
 
@@ -529,6 +530,173 @@ py::dict razor_front_build(py::dict kw, int64_t chunk_elems) {
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// The NEC-5 seam's structure half (`_nec5_razor_seam_core.h`), test-facing:
+// deck text in; per structure and run, what the C++ seam did; per
+// preparation, the keyword arguments it hands RazorSolver (spelled exactly as
+// `deck._solver.construct_solver` spells them, Python types included), the
+// mesh and the structure counts, and on request the solved coefficients.
+
+py::dict seam_kwargs(const mw::nec5::Prepared &p) {
+    const mw::razor::FrontInputs &in = p.inputs;
+    py::dict kw;
+    py::list wires, npe;
+    for (size_t w = 0; w < in.wire_points.size(); w++) {
+        py::array_t<double> a({static_cast<ptrdiff_t>(2), static_cast<ptrdiff_t>(3)});
+        std::copy(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6, a.mutable_data());
+        wires.append(a);
+        py::list c;
+        for (int64_t v : in.counts[w].v) c.append(v);
+        npe.append(c);
+    }
+    kw["wires"] = wires;
+    kw["n_per_edge_per_wire"] = npe;
+    py::list feeds;
+    for (const auto &f : in.feeds) feeds.append(py::make_tuple(f.wire, f.arc, f.volts));
+    kw["feeds"] = feeds;
+    kw["wavelength"] = in.wavelength;
+    if (in.radius_shape.empty()) {
+        kw["wire_radius"] = in.radius[0];
+    } else {
+        py::list r;
+        for (double v : in.radius) r.append(v);
+        kw["wire_radius"] = r;
+    }
+    kw["cancel"] = py::none();
+    if (!in.node_gaps.empty()) {
+        py::list gaps;
+        for (const auto &g : in.node_gaps)
+            gaps.append(py::make_tuple(g.wire, g.end == mw::razor::End::start ? "start" : "end",
+                                       g.volts));
+        kw["node_gaps"] = gaps;
+    }
+    if (in.extended_kernel) kw["extended_kernel"] = true;
+    if (in.has_ground) kw["ground_z"] = in.ground_z;
+    kw["nec5_quadrature"] = true;
+    kw["exact_kernel"] = "auto";
+    return kw;
+}
+
+py::object node_tuple(const mw::nec5::Node &n) {
+    return py::make_tuple(py::int_(py::str(n.tag.str())), py::int_(py::str(n.node.str())));
+}
+
+py::dict seam_mesh(const mw::nec5::Prepared &p) {
+    const mw::nec5::SeamMesh &m = p.mesh;
+    py::dict d;
+    py::list pieces, junctions, sites, feeds, gaps;
+    for (const auto &pc : m.pieces)
+        pieces.append(py::make_tuple(py::int_(py::str(pc.tag.str())), pc.first_node,
+                                     pc.last_node, pc.radius));
+    for (const auto &g : m.junctions) {
+        py::list members;
+        for (const auto &e : g) members.append(end_label(e));
+        junctions.append(members);
+    }
+    static const char *spell[] = {"gap", "node"};
+    static const char *ends[] = {"start", "end", "interior"};
+    for (const auto &s : m.sites) {
+        py::dict x;
+        x["at"] = node_tuple(s.at);
+        x["spelling"] = spell[s.spelling];
+        x["piece"] = s.piece;
+        x["end"] = ends[s.end];
+        x["sign"] = s.sign;
+        x["arclength"] = s.arclength;
+        x["contact"] = s.contact;
+        x["index"] = s.index;
+        x["column"] = s.column;
+        x["weight"] = s.weight;
+        sites.append(x);
+    }
+    for (long long i : m.feeds) feeds.append(i);
+    for (long long i : m.gaps) gaps.append(i);
+    d["pieces"] = pieces;
+    d["junctions"] = junctions;
+    d["sites"] = sites;
+    d["feeds"] = feeds;
+    d["gaps"] = gaps;
+    py::list element_of;
+    for (const auto &e : m.element_of) element_of.append(py::make_tuple(e.first, e.second));
+    d["element_of"] = element_of;
+    d["node_count"] = p.structure.node_count;
+    d["wire_element_count"] = p.structure.wire_element_count;
+    d["unknown_count"] = p.structure.unknown_count;
+    d["ground_plane"] = p.structure.ground_plane;
+    d["frequency"] = p.frequency_mhz;
+    d["wavelength"] = p.wavelength;
+    d["omega"] = p.omega;
+    if (p.has_medium)
+        d["medium"] = py::make_tuple(p.medium_eps_r, p.medium_sigma,
+                                     std::complex<double>(p.medium_eps_c[0], p.medium_eps_c[1]));
+    else
+        d["medium"] = py::none();
+    py::list src;
+    for (const auto &n : p.source_sites) src.append(node_tuple(n));
+    d["source_sites"] = src;
+    return d;
+}
+
+py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
+    const std::string text = latin1;
+    mw::nec5::SeamResult r;
+    {
+        py::gil_scoped_release release;
+        r = mw::nec5::razor_seam(text);
+    }
+    static const char *route[] = {"served", "refused", "raised", "declined"};
+    static const char *read[] = {"refused", "raised", "single", "multi"};
+    static const char *run[] = {"prepared", "shared", "refused", "raised", "declined"};
+    py::dict out;
+    out["route"] = route[r.route];
+    out["message"] = r.message;
+    out["error_kind"] = r.error_kind;
+    out["chained"] = r.chained;
+    py::list structures;
+    for (const auto &so : r.structures) {
+        py::list runs;
+        for (const auto &o : so.runs) {
+            py::dict x;
+            x["kind"] = run[o.kind];
+            x["message"] = o.message;
+            x["error_kind"] = o.error_kind;
+            x["prepared"] = o.prepared_index;
+            runs.append(x);
+        }
+        py::dict sd;
+        sd["read"] = read[so.read];
+        sd["runs"] = runs;
+        structures.append(sd);
+    }
+    out["structures"] = structures;
+    py::list prepared;
+    for (const auto &p : r.prepared) {
+        py::dict pd;
+        pd["kwargs"] = seam_kwargs(p);
+        pd["mesh"] = seam_mesh(p);
+        const mw::razor::Front &f = *p.front;
+        pd["cols"] = np2(f.cols, f.n_basis, f.n_ports);
+        pd["ties"] = ties_list(f);
+        if (solve) {
+            const ptrdiff_t n = f.n_basis, m = f.n_ports;
+            const mw::razor::Lapack &lp = scipy_lapack();
+            py::array_t<cd, py::array::f_style> X({n, m});
+            int info = 0;
+            {
+                cd *x = X.mutable_data();
+                py::gil_scoped_release release;
+                mw::razor::SolveContext ctx;
+                info = mw::razor::solve_ports(f, ctx, lp, x, 0);
+            }
+            pd["X"] = X;
+            pd["info"] = info;
+        }
+        prepared.append(pd);
+    }
+    out["prepared"] = prepared;
+    return out;
+}
+
 }  // namespace
 
 void register_razor_solve(py::module_ &m) {
@@ -582,6 +750,21 @@ void register_razor_solve(py::module_ &m) {
           },
           "TEST HOOK: the core's frozen Gauss-Legendre rule of order n (None "
           "beyond the table).");
+    m.attr("nec5_razor_seam_proto") = true;
+    m.def("nec5_razor_seam", &nec5_razor_seam, py::arg("latin1"), py::arg("solve") = false,
+          "TEST HOOK: the NEC-5 seam's structure half for razor-2p in C++ "
+          "(`_nec5_razor_seam_core.h`): a deck's latin-1 bytes in; the route, "
+          "each structure's and run's outcome, and per preparation the "
+          "RazorSolver keyword arguments, the mesh, the port columns and, "
+          "with solve, the solved coefficients X (n_basis, n_ports).");
+    m.def("nec5_seam_constants", []() {
+        py::dict d;
+        d["speed_of_light_mhz_m"] = mw::nec5::SPEED_OF_LIGHT_MHZ_M;
+        d["node_eps"] = mw::nec5::NODE_EPS;
+        d["probe_volts"] = mw::nec5::PROBE_VOLTS;
+        d["epsc_conductivity_factor"] = mw::nec5::EPSC_CONDUCTIVITY_FACTOR;
+        return d;
+    }, "TEST HOOK: the constants the C++ seam carries in place of Python's.");
     m.def("razor_front_constants", []() {
         py::dict d;
         d["eps"] = mw::razor::EPS;

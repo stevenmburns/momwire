@@ -340,6 +340,7 @@ _ACCEL_HEADERS = [
     # (scripts/gen_leggauss_header.py), read by the front half.
     "src/momwire/_leggauss_table.h",
     "src/momwire/_nec5_deck_core.h",
+    "src/momwire/_nec5_razor_seam_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -421,6 +422,11 @@ _ACCEL_SOURCES = [
     # beyond parsing, and nothing calls them on the default path.
     "src/momwire/_nec5_deck_core.cpp",
     "src/momwire/_accel_nec5_deck.cpp",
+    # The NEC-5 seam's structure half for razor-2p (unit 2b): the scope
+    # ladder, the mesh and the ports, deck -> RazorSolver's arguments,
+    # Python-free; `_accel_razor_solve.cpp` binds it. Its own TU: O(N)
+    # geometry, and nothing calls it on the default path.
+    "src/momwire/_nec5_razor_seam_core.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
