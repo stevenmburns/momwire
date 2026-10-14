@@ -179,6 +179,9 @@ _FIXTURE_GROUP_FILES = (
     # ungrouped against ~80 s of actual distinct work, with single tests
     # reading 281 s purely from duplication. Same shape as the entries above.
     "test_surface_radials_865.py",
+    # The core/binding split's standalone check compiles razor's core TUs at
+    # -O3 in its module fixture; scattered, every worker would compile them.
+    "test_razor_core_standalone.py",
     # momwire#1029 phase 2b: the sector route's swept gate sweeps three
     # wavenumbers of a buried Sommerfeld deck, and a Sommerfeld grid is built
     # per k. Measured on this file's own deck, one thread: 4.1-5.0 s per NEW
