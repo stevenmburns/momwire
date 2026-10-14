@@ -423,17 +423,6 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: momwire-eznec-windows
-      # The Win7 bundle (momwire#1456) is best-effort on a release: attached
-      # when its leg is green, skipped (the step goes yellow) when it is not.
-      - uses: actions/download-artifact@v8
-        id: win7
-        continue-on-error: true
-        with:
-          name: momwire-eznec-windows-win7
-      - uses: softprops/action-gh-release@v3
-        if: steps.win7.outcome == 'success'
-        with:
-          files: momwire-eznec-windows-win7.zip
       - uses: softprops/action-gh-release@v3
         with:
           # NO generate_release_notes here, and that asymmetry is the point:
@@ -455,3 +444,18 @@ jobs:
           #                    updates, and the same pre-pend mechanism runs
           #                    against an EMPTY body, which is just the notes.
           files: momwire-eznec-windows.zip
+      # The Win7 bundle (momwire#1456) is best-effort on a release, and comes
+      # AFTER the standard zip is attached so that nothing on this path can
+      # hold that zip back: attached when its leg is green, skipped (the step
+      # goes yellow) when it is not or when the attach itself fails.
+      - uses: actions/download-artifact@v8
+        id: win7
+        continue-on-error: true
+        with:
+          name: momwire-eznec-windows-win7
+      - uses: softprops/action-gh-release@v3
+        if: steps.win7.outcome == 'success'
+        continue-on-error: true
+        with:
+          files: momwire-eznec-windows-win7.zip
+          fail_on_unmatched_files: true
