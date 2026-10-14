@@ -100,6 +100,20 @@ def pytest_configure(config):
         _pin_worker_threads()
 
 
+@_pytest.fixture(autouse=True)
+def _fresh_below_sweep_state():
+    """momwire#1471: the below/below grid getter switches from exact fills to
+    anchor-blended ones once it has seen enough nearby frequencies on one
+    soil, and what it has seen is per-process state. Forgotten before every
+    test, so a test's numbers depend on its own solves and not on which tests
+    xdist happened to run before it in the same worker. A module that was
+    never imported has nothing to forget, and is not imported for this."""
+    mod = sys.modules.get("momwire._sommerfeld_below")
+    if mod is not None:
+        mod.reset_sweep_state()
+    yield
+
+
 def pytest_unconfigure(config):
     import shutil
 

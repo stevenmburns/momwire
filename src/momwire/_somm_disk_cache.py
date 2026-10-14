@@ -18,6 +18,12 @@ What is persisted, per family:
   every region the last one reached.
 * below->above (transmitted) -- the physical grid (`get_grid_below_above`).
 
+Beside the grids (momwire#1471): the below family's sweep ANCHORS are grids
+like any other and live here under their own keys; a `<grid>.npz.lock` file
+marks a table some process is filling (`coordinated`), and a `seen-*.json`
+file lists the frequencies a soil has been asked for (`note_seen`), so the
+worker processes of one resident server act as one sweep.
+
 Contract:
 
 * **A hit is bit-identical to a fresh fill.** Arrays go to `.npz` exactly (no
@@ -543,6 +549,14 @@ def _evict(d: Path, keep: Path) -> None:
                 except OSError:
                     pass
             continue
+        if ent.name.endswith(".lock"):
+            # A writer that died holding one (momwire#1471, `coordinated`).
+            if now - st.st_mtime > _LOCK_STALE_S:
+                try:
+                    os.unlink(ent.path)
+                except OSError:
+                    pass
+            continue
         if ent.name.endswith(".npz"):
             files.append((st.st_mtime, st.st_size, ent.path))
     total = sum(f[1] for f in files)
@@ -597,6 +611,214 @@ def fetch_or_fill(key, fill, *, extra=(), track=False):
         except TypeError:
             pass
     return obj
+
+
+def fetch(key, *, extra=(), track=False):
+    """The grid for `key` if it is on disk, else None. Never fills.
+
+    For a caller that has a cheaper way to get the grid than its own fill
+    when the file is absent (the below family's sweep anchors, momwire#1471).
+    """
+    if not enabled():
+        return None
+    try:
+        named = _identity(key, extra)
+    except Exception:  # noqa: BLE001 — no identity means no disk, never an error
+        named = None
+    if named is None:
+        return None
+    name, ident = named
+    path = cache_dir() / name
+    obj = _load(path, ident)
+    if obj is None:
+        return None
+    STATS["hits"] += 1
+    if track:
+        try:
+            _TRACKED[obj] = (path, ident)
+        except TypeError:
+            pass
+    return obj
+
+
+def store(key, obj, *, extra=()) -> None:
+    """Write `obj` as the grid for `key`, replacing what is there. For a
+    caller that changed a grid it got from `fetch` (an anchor that grew)."""
+    if not enabled():
+        return
+    try:
+        named = _identity(key, extra)
+        if named is not None:
+            _store(cache_dir() / named[0], named[1], obj)
+    except Exception:  # noqa: BLE001 — the disk is an optimization; the grid stands
+        pass
+
+
+def present(key, *, extra=()) -> bool:
+    """True when a file for `key` exists under this code and state. The file
+    is not read, so a corrupt one still answers True and is a miss later."""
+    if not enabled():
+        return False
+    try:
+        named = _identity(key, extra)
+        return named is not None and (cache_dir() / named[0]).exists()
+    except Exception:  # noqa: BLE001 — the disk is an optimization
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Cross-process coordination (momwire#1471)
+# ---------------------------------------------------------------------------
+#
+# The resident server solves a crew's frames in separate worker PROCESSES
+# (momwire#1418) that share nothing but this directory. Two things have to
+# cross that boundary for a frequency sweep to cost one set of anchor tables
+# rather than one set per worker: which nearby frequencies the crew has been
+# asked for (`note_seen`), and who is filling which table (`coordinated`).
+
+# A lock file older than this belongs to a writer that died without removing
+# it. A live fill refreshes nothing while it runs, so this is longer than any
+# single table fill measured (the grazing bands, one thread: under a minute).
+_LOCK_STALE_S = 900.0
+# A waiter gives up on somebody else's lock after this long and does the work
+# itself. Fills are deterministic and stores are atomic, so a duplicate fill
+# costs time and nothing else; waiting forever on a stuck holder costs a solve.
+_LOCK_WAIT_S = 120.0
+_LOCK_POLL_S = 0.02
+_SEEN_MAX = 64
+
+
+def _lock_path(key, extra):
+    named = _identity(key, extra)
+    if named is None:
+        return None
+    return cache_dir() / (named[0] + ".lock")
+
+
+def _pid_alive(pid) -> bool:
+    if os.name != "posix":
+        return True  # no cheap, safe probe; the mtime rule covers it
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return True
+
+
+def _try_lock(path: Path) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            age = time.time() - path.stat().st_mtime
+            holder = path.read_text().strip()
+        except OSError:
+            return False  # gone again, or unreadable: look once more later
+        if age > _LOCK_STALE_S or (holder and not _pid_alive(holder)):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return False
+    except OSError:
+        return False
+    try:
+        os.write(fd, str(os.getpid()).encode())
+    finally:
+        os.close(fd)
+    return True
+
+
+def _unlock(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def coordinated(tasks, poll=None) -> None:
+    """Run every task's `fn` once in this process, each under the cross-process
+    lock of its key, taking whichever lock is free first.
+
+    `tasks` is a list of `(key, extra, fn)`. A crew of workers that all need
+    the same N tables therefore fills N different tables at once, and a
+    worker that finds a table's lock held does its other tables first and
+    then waits for that one. `fn` runs after the wait, under the lock, and
+    must look at the disk itself (`fetch_or_fill` does): by then the other
+    worker's table is there and the fill is a load.
+
+    With the disk level off there is nothing to coordinate with, and the
+    tasks simply run in order. Never an error: a lock that cannot be taken
+    within `_LOCK_WAIT_S` is ignored, at the price of a duplicate fill.
+    """
+    if not enabled():
+        for _key, _extra, fn in tasks:
+            fn()
+        return
+    pending = []
+    for key, extra, fn in tasks:
+        try:
+            path = _lock_path(key, extra)
+        except Exception:  # noqa: BLE001 — no identity means no lock, never an error
+            path = None
+        pending.append((path, fn))
+    waited = 0.0
+    while pending:
+        progressed = False
+        for item in list(pending):
+            path, fn = item
+            held = path is not None and waited < _LOCK_WAIT_S and _try_lock(path)
+            if path is not None and waited < _LOCK_WAIT_S and not held:
+                continue
+            try:
+                fn()
+            finally:
+                if held:
+                    _unlock(path)
+            pending.remove(item)
+            progressed = True
+        if progressed:
+            waited = 0.0
+        elif pending:
+            if poll is not None:
+                poll()
+            time.sleep(_LOCK_POLL_S)
+            waited += _LOCK_POLL_S
+
+
+def note_seen(tag: str, value: tuple) -> list:
+    """Record `value` (a tuple of floats) under `tag` in a small file every
+    process sharing this directory reads, and return the values recorded so
+    far (this one included). Lost updates between racing writers are
+    harmless: the list is advice about what has been asked for, never data."""
+    value = tuple(float(v) for v in value)
+    if not enabled():
+        return [value]
+    digest = hashlib.sha256(tag.encode()).hexdigest()[:40]
+    path = cache_dir() / f"seen-{digest}.json"
+    try:
+        seen = [
+            tuple(float.fromhex(v) for v in row) for row in json.loads(path.read_text())
+        ]
+    except (OSError, ValueError, TypeError):
+        seen = []
+    if value in seen:
+        return seen
+    seen = (seen + [value])[-_SEEN_MAX:]
+    tmp = path.parent / f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps([[v.hex() for v in row] for row in seen]))
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+    return seen
 
 
 def note_mutated(obj) -> None:
