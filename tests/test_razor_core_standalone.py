@@ -40,7 +40,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
 FIXTURE = ROOT / "tests" / "fixtures" / "razor_window_n12.npz"
-CORE_SOURCES = ("_razor_core.cpp", "_razor_t2_core.cpp", "_accel_razor_cplx.cpp")
+# `_razor_solve_core.cpp` is the whole-solve prototype's driver of the other
+# two; it is compiled and linked here so that it, too, stays Python-free.
+CORE_SOURCES = (
+    "_razor_core.cpp",
+    "_razor_t2_core.cpp",
+    "_accel_razor_cplx.cpp",
+    "_razor_solve_core.cpp",
+)
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="flags are read from setup.py's Linux branch"
@@ -143,6 +150,7 @@ def test_the_core_includes_no_python_header(driver):
     _, deps = driver
     seen = " ".join(d.read_text() for d in deps)
     assert "_razor_core.h" in seen, "the dependency files are not what they seem"
+    assert "_razor_solve_core.h" in seen, "the solve prototype's core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
