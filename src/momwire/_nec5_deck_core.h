@@ -275,5 +275,9 @@ std::string dump_deck(const Deck &deck, const std::string &path);
 // rendering.
 std::string text_probe(const std::string &op, const std::string &latin1_arg);
 
+// Python's `format(x, "g")` (printf's `%g` in the C locale, with Python's
+// spellings of NaN and the infinities): the `{x:g}` the seam's sentences use.
+std::string format_g(double x);
+
 }  // namespace nec5
 }  // namespace mw
