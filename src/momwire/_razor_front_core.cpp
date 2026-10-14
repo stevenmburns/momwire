@@ -7,11 +7,11 @@
 // -ffp-contract=off) gives the same bits. The three numpy spellings that are
 // NOT single operations are reproduced as numpy computes them:
 //
-//   np.linalg.norm(v), v a 3-vector -> sqrt(0.0 + ddot(v, v)), BLAS's ddot
-//                                      (injected; see the header);
+//   a 3-vector's length (`_vec3.norm3`) -> sqrt((x*x + y*y) + z*z);
 //   np.add.reduce(x) over a 1-D run -> numpy's pairwise sum (`pairwise_sum`);
 //   np.round(x, 9)                  -> rint(x * 1e9) / 1e9.
 #include "_razor_front_core.h"
+#include "_leggauss_table.h"
 
 // MSVC builds every TU /fp:fast (setup.py), which may fuse and reassociate.
 // This TU is numpy's elementwise arithmetic spelled one IEEE operation at a
@@ -20,6 +20,11 @@
 #if defined(_MSC_VER)
 #pragma float_control(precise, on)
 #pragma fp_contract(off)
+#endif
+
+#include <locale.h>
+#if defined(__APPLE__)
+#include <xlocale.h>
 #endif
 
 #include <array>
@@ -35,16 +40,24 @@
 namespace mw {
 namespace razor {
 
-const double LEGGAUSS12_X[12] = {
-    -0x1.f68f1d8e42e81p-1, -0x1.cee874ffb88b3p-1, -0x1.8a30aeed88f36p-1,
-    -0x1.2cb4f05c077f9p-1, -0x1.78a8d20a8b19dp-2, -0x1.007a5f8f630e4p-3,
-    0x1.007a5f8f630e4p-3,  0x1.78a8d20a8b19dp-2,  0x1.2cb4f05c077f9p-1,
-    0x1.8a30aeed88f36p-1,  0x1.cee874ffb88b3p-1,  0x1.f68f1d8e42e81p-1};
-const double LEGGAUSS12_W[12] = {
-    0x1.8275d9dea6d53p-5, 0x1.b60602bce61afp-4, 0x1.47d7258f22d96p-3,
-    0x1.a0163e6b1ab6bp-3, 0x1.de3155c256aaep-3, 0x1.fe40ce6d4f022p-3,
-    0x1.fe40ce6d4f022p-3, 0x1.de3155c256aaep-3, 0x1.a0163e6b1ab6bp-3,
-    0x1.47d7258f22d96p-3, 0x1.b60602bce61afp-4, 0x1.8275d9dea6d53p-5};
+// `_quadrature.leggauss(n)`: the frozen rule's half, mirrored as
+// `_quadrature._from_half` mirrors it (negation is exact).
+bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w) {
+    if (n < 1 || n > leggauss_table::N_MAX) return false;
+    const int lo = leggauss_table::OFFSET[n - 1], hi = leggauss_table::OFFSET[n];
+    const int64_t m = n / 2;
+    x.clear();
+    w.clear();
+    for (int64_t i = 0; i < m; i++) {
+        x.push_back(-leggauss_table::NODES[hi - 1 - i]);
+        w.push_back(leggauss_table::WEIGHTS[hi - 1 - i]);
+    }
+    for (int k = lo; k < hi; k++) {
+        x.push_back(leggauss_table::NODES[k]);
+        w.push_back(leggauss_table::WEIGHTS[k]);
+    }
+    return true;
+}
 
 namespace {
 
@@ -73,7 +86,7 @@ constexpr double MAX_CELL = 281474976710656.0;  // `_junction_rule._MAX_CELL`, 2
     throw FrontError(FrontErrorKind::not_implemented, m);
 }
 
-std::string end_repr(End e) { return e == End::start ? "'start'" : "'end'"; }
+std::string end_name(End e) { return e == End::start ? "start" : "end"; }
 
 // numpy's pairwise summation of a contiguous run (`pairwise_sum_DOUBLE`),
 // which is what `np.add.reduce` does to a 1-D float64 array: the run is
@@ -120,225 +133,59 @@ double ground_touch_tol(const double *p, ptrdiff_t m) {
     return 1e-6 * std::max(length, 1e-30);
 }
 
-std::string shape_repr(const std::vector<int64_t> &shape) {
-    std::ostringstream o;
-    o << "(";
-    for (size_t i = 0; i < shape.size(); i++) {
-        if (i) o << ", ";
-        o << shape[i];
-    }
-    if (shape.size() == 1) o << ",";
-    o << ")";
-    return o.str();
-}
-
 }  // namespace
 
 // --------------------------------------------------------------------------
-// numpy's str() of a 1-D float64 array, default print options (precision 8,
-// floatmode 'maxprec', linewidth 75, threshold 1000, edgeitems 3): the text
-// `_wire_spec.normalize_wire_radius` puts in its refusal.
+// The shared refusals' portable spellings (`_wire_spec.format_numbers` /
+// `format_shape`): numbers as printf `%.12g` (Python's `%` operator, which
+// spells NaN and the infinities `nan` / `inf` / `-inf`), comma-separated in
+// brackets; a shape as its extents joined by `x`.
 
 namespace {
 
-// The shortest decimal digits that round-trip, and the decimal exponent of
-// the first: x = d.ddd * 10**exp10. `x` is finite and nonzero.
-void shortest_digits(double x, std::string &digits, int &exp10) {
+std::string format_12g(double x) {
+    if (std::isnan(x)) return "nan";
+    if (std::isinf(x)) return x > 0 ? "inf" : "-inf";
     char buf[64];
-    for (int p = 0; p < 17; p++) {
-        std::snprintf(buf, sizeof buf, "%.*e", p, std::fabs(x));
-        if (std::strtod(buf, nullptr) == std::fabs(x)) break;
-    }
-    const char *e = std::strchr(buf, 'e');
-    digits.clear();
-    for (const char *c = buf; c < e; c++)
-        if (*c != '.') digits += *c;
-    exp10 = std::atoi(e + 1);
-}
-
-std::string trim_zeros(std::string frac) {
-    while (!frac.empty() && frac.back() == '0') frac.pop_back();
-    return frac;
-}
-
-// dragon4_positional(x, precision=8, unique=True, fractional=True, trim='.'),
-// split at the point: (integer part with sign, fractional part).
-std::pair<std::string, std::string> positional_parts(double x) {
-    const std::string sign = std::signbit(x) ? "-" : "";
-    if (x == 0.0) return {sign + "0", ""};
-    std::string digits;
-    int e10 = 0;
-    shortest_digits(x, digits, e10);
-    const int n_frac = std::max(0, static_cast<int>(digits.size()) - 1 - e10);
-    if (n_frac > 8) {
-        char buf[512];
-        std::snprintf(buf, sizeof buf, "%.8f", std::fabs(x));
-        std::string s(buf);
-        const size_t dot = s.find('.');
-        return {sign + s.substr(0, dot), trim_zeros(s.substr(dot + 1))};
-    }
-    std::string ip, fp;
-    if (e10 >= 0) {
-        for (int i = 0; i <= e10; i++)
-            ip += i < static_cast<int>(digits.size()) ? digits[static_cast<size_t>(i)] : '0';
-        if (static_cast<int>(digits.size()) > e10 + 1) fp = digits.substr(static_cast<size_t>(e10 + 1));
-    } else {
-        ip = "0";
-        fp = std::string(static_cast<size_t>(-e10 - 1), '0') + digits;
-    }
-    return {sign + ip, trim_zeros(fp)};
-}
-
-// dragon4_scientific(x, precision=8, unique=True, trim='.'), split into
-// (integer part with sign, fractional part, exponent as a signed int).
-std::tuple<std::string, std::string, int> scientific_parts(double x) {
-    const std::string sign = std::signbit(x) ? "-" : "";
-    if (x == 0.0) return std::make_tuple(sign + "0", std::string(), 0);
-    std::string digits;
-    int e10 = 0;
-    shortest_digits(x, digits, e10);
-    if (digits.size() > 9) {
-        char buf[64];
-        std::snprintf(buf, sizeof buf, "%.8e", std::fabs(x));
-        const char *e = std::strchr(buf, 'e');
-        digits.clear();
-        for (const char *c = buf; c < e; c++)
-            if (*c != '.') digits += *c;
-        e10 = std::atoi(e + 1);
-    }
-    return std::make_tuple(sign + digits.substr(0, 1), trim_zeros(digits.substr(1)), e10);
-}
-
-std::string exp_text(int e, int width) {
-    std::string d = std::to_string(std::abs(e));
-    while (static_cast<int>(d.size()) < width) d = "0" + d;
-    return std::string(e < 0 ? "-" : "+") + d;
+#if defined(_MSC_VER)
+    static _locale_t c = _create_locale(LC_NUMERIC, "C");
+    _snprintf_l(buf, sizeof buf, "%.12g", c, x);
+#else
+    static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    locale_t old = uselocale(c);
+    std::snprintf(buf, sizeof buf, "%.12g", x);
+    uselocale(old);
+#endif
+    return buf;
 }
 
 }  // namespace
 
-std::string numpy_array_str(const std::vector<double> &all) {
-    if (all.empty()) return "[]";
-    // Summarised past numpy's threshold: three items at each edge.
-    const bool summary = all.size() > 1000;
-    std::vector<double> data;
-    if (summary) {
-        data.assign(all.begin(), all.begin() + 3);
-        data.insert(data.end(), all.end() - 3, all.end());
-    } else {
-        data = all;
+std::string format_numbers(const std::vector<double> &values) {
+    std::string s = "[";
+    for (size_t i = 0; i < values.size(); i++) {
+        if (i) s += ", ";
+        s += format_12g(values[i]);
     }
-    std::vector<double> finite;
-    bool neginf = false, any_nonfinite = false;
-    for (double v : data) {
-        if (std::isfinite(v)) {
-            finite.push_back(v);
-        } else {
-            any_nonfinite = true;
-            if (std::isinf(v) && v < 0) neginf = true;
-        }
+    return s + "]";
+}
+
+std::string format_shape(const std::vector<int64_t> &shape) {
+    if (shape.empty()) return "scalar";
+    std::string s;
+    for (size_t i = 0; i < shape.size(); i++) {
+        if (i) s += "x";
+        s += std::to_string(shape[i]);
     }
-    bool exp_format = false;
-    {
-        double mx = 0.0, mn = 0.0;
-        bool any = false;
-        for (double v : finite) {
-            if (v == 0.0) continue;
-            const double a = std::fabs(v);
-            mx = any ? std::max(mx, a) : a;
-            mn = any ? std::min(mn, a) : a;
-            any = true;
-        }
-        if (any && (mx >= 1e8 || mn < 0.0001 || mx / mn > 1000.0)) exp_format = true;
-    }
-    size_t pad_left = 0, pad_right = 0, precision = 0;
-    int exp_size = -1;
-    if (!finite.empty()) {
-        if (exp_format) {
-            size_t ew = 0;
-            for (double v : finite) {
-                auto p = scientific_parts(v);
-                pad_left = std::max(pad_left, std::get<0>(p).size());
-                precision = std::max(precision, std::get<1>(p).size());
-                ew = std::max(ew, exp_text(std::get<2>(p), 2).size());
-            }
-            exp_size = static_cast<int>(ew) - 1;
-            pad_right = static_cast<size_t>(exp_size) + 2 + precision;
-        } else {
-            for (double v : finite) {
-                auto p = positional_parts(v);
-                pad_left = std::max(pad_left, p.first.size());
-                pad_right = std::max(pad_right, p.second.size());
-            }
-        }
-    }
-    if (any_nonfinite) {
-        const ptrdiff_t offset = static_cast<ptrdiff_t>(pad_right) + 1;
-        ptrdiff_t pl = static_cast<ptrdiff_t>(pad_left);
-        pl = std::max(pl, static_cast<ptrdiff_t>(3) - offset);
-        pl = std::max(pl, static_cast<ptrdiff_t>(3) + (neginf ? 1 : 0) - offset);
-        pad_left = static_cast<size_t>(pl);
-    }
-    auto fmt = [&](double v) -> std::string {
-        if (!std::isfinite(v)) {
-            std::string ret = std::isnan(v) ? "nan" : (v < 0 ? "-inf" : "inf");
-            const ptrdiff_t w = static_cast<ptrdiff_t>(pad_left + pad_right + 1) -
-                                static_cast<ptrdiff_t>(ret.size());
-            return std::string(static_cast<size_t>(std::max<ptrdiff_t>(w, 0)), ' ') + ret;
-        }
-        if (exp_format) {
-            auto p = scientific_parts(v);
-            std::string ip = std::get<0>(p), fp = std::get<1>(p);
-            while (fp.size() < precision) fp += '0';
-            while (ip.size() < pad_left) ip = " " + ip;
-            return ip + "." + fp + "e" + exp_text(std::get<2>(p), exp_size);
-        }
-        auto p = positional_parts(v);
-        std::string ip = p.first, fp = p.second;
-        while (ip.size() < pad_left) ip = " " + ip;
-        while (fp.size() < pad_right) fp += ' ';
-        return ip + "." + fp;
-    };
-    // `_formatArray` for one axis: words joined by " ", wrapped at 74.
-    const std::string hanging = " ";
-    const size_t elem_width = 74;
-    std::string s, line = hanging;
-    auto extend = [&](const std::string &word) {
-        bool wrap = line.size() + word.size() > elem_width;
-        if (line.size() <= hanging.size()) wrap = false;
-        if (wrap) {
-            size_t end = line.find_last_not_of(' ');
-            s += (end == std::string::npos ? std::string() : line.substr(0, end + 1)) + "\n";
-            line = hanging;
-        }
-        line += word;
-    };
-    const size_t n = data.size();
-    for (size_t i = 0; i < n; i++) {
-        if (summary && i == 3) {
-            extend("...");
-            line += " ";
-        }
-        extend(fmt(data[i]));
-        if (i + 1 < n) line += " ";
-    }
-    s += line;
-    return "[" + s.substr(hanging.size()) + "]";
+    return s;
 }
 
 // --------------------------------------------------------------------------
 
+// `_vec3.norm3`: `(x*x + y*y) + z*z`, each operation rounded on its own,
+// then a correctly rounded square root -- the same bits on every CPU.
 double Front::norm3(const double *v) const {
-    if (ddot_ != nullptr) {
-        int n = 3, inc = 1;
-        double x[3] = {v[0], v[1], v[2]};
-        return std::sqrt(0.0 + ddot_(&n, x, &inc, x, &inc));
-    }
-    double s = 0.0;
-    s += v[0] * v[0];
-    s += v[1] * v[1];
-    s += v[2] * v[2];
-    return std::sqrt(0.0 + s);
+    return std::sqrt((v[0] * v[0] + v[1] * v[1]) + v[2] * v[2]);
 }
 
 // What this front half does not cover, checked on the ARGUMENTS before any
@@ -856,8 +703,7 @@ void Front::prepare() {
     }
 }
 
-std::string Front::build(const FrontInputs &in, const Blas &blas) {
-    ddot_ = blas.ddot;
+std::string Front::build(const FrontInputs &in) {
     const std::string why = scope(in);
     if (!why.empty()) return why;
     construct(in);
@@ -873,14 +719,14 @@ std::string Front::build(const FrontInputs &in, const Blas &blas) {
             radius_per_wire.assign(static_cast<size_t>(n_wires), in.radius[0]);
         } else if (in.radius_shape.size() != 1 || in.radius_shape[0] != n_wires) {
             value_error("wire_radius: expected a scalar or a length-" + std::to_string(n_wires) +
-                        " sequence (one entry per wire), got shape " + shape_repr(in.radius_shape));
+                        " sequence (one entry per wire), got shape " + format_shape(in.radius_shape));
         } else {
             radius_per_wire = in.radius;
         }
         for (double r : radius_per_wire)
             if (!std::isfinite(r) || r <= 0.0)
                 value_error("wire_radius entries must be positive and finite, got " +
-                            numpy_array_str(radius_per_wire));
+                            format_numbers(radius_per_wire));
         uniform_radius = true;
         for (double r : radius_per_wire)
             if (r != radius_per_wire[0]) uniform_radius = false;
@@ -963,7 +809,7 @@ std::string Front::build(const FrontInputs &in, const Blas &blas) {
             const std::pair<int64_t, End> member(g.wire, g.end);
             auto it = end_to_junction.find(member);
             if (it == end_to_junction.end())
-                value_error(at + "wire " + std::to_string(g.wire) + " " + end_repr(g.end) +
+                value_error(at + "the " + end_name(g.end) + " of wire " + std::to_string(g.wire) +
                             " is not a member of any junction group \xe2\x80\x94 a series node gap "
                             "lives at a junction; for a feed inside a wire use feeds=");
             const size_t j = it->second;
@@ -972,8 +818,8 @@ std::string Front::build(const FrontInputs &in, const Blas &blas) {
                             " has a single member \xe2\x80\x94 there is no through-current path to "
                             "be in series with (a lone-end attachment is junction_ports=)");
             if (seen_members.count(member))
-                value_error(at + "wire " + std::to_string(g.wire) + " " + end_repr(g.end) +
-                            " listed twice");
+                value_error(at + "the " + end_name(g.end) + " of wire " + std::to_string(g.wire) +
+                            " is listed twice");
             if (seen_junctions.count(j) && groups_[j].ends.size() == 2)
                 value_error(at + "junction " + std::to_string(j) +
                             " already carries a node gap and joins only two wire ends, so a gap "
@@ -989,9 +835,9 @@ std::string Front::build(const FrontInputs &in, const Blas &blas) {
                 for (auto &e : g.ends) grounded_members.insert(e);
         for (size_t i = 0; i < node_gaps.size(); i++)
             if (grounded_members.count({node_gaps[i].wire, node_gaps[i].end}))
-                value_error("node_gaps[" + std::to_string(i) + "]: wire " +
-                            std::to_string(node_gaps[i].wire) + " " + end_repr(node_gaps[i].end) +
-                            " stands in the ground plane, and a grounded end's tent is already "
+                value_error("node_gaps[" + std::to_string(i) + "]: the " +
+                            end_name(node_gaps[i].end) + " of wire " +
+                            std::to_string(node_gaps[i].wire) + " stands in the ground plane, and a grounded end's tent is already "
                             "the series path between that wire and the plane (momwire#151 "
                             "grounds the node through the image) \xe2\x80\x94 drive it with feeds= "
                             "at that end instead");
@@ -1029,19 +875,17 @@ std::string Front::build(const FrontInputs &in, const Blas &blas) {
             for (int64_t s = seg_offsets[w]; s < seg_offsets[w + 1]; s++)
                 if (seg_h[s] < EXACT_KERNEL_AUTO_H_OVER_A * radius_per_wire[w]) return "exact-kernel";
 
-    // The solve-time half: the bundle refusal, the ports, the tables.
-    refuse_coincident_segments();
-    port_columns();
-    if (in.xg.empty()) {
-        if (in.n_qp_source != 12) return "quadrature-table";
-        xg.assign(LEGGAUSS12_X, LEGGAUSS12_X + 12);
-        wg.assign(LEGGAUSS12_W, LEGGAUSS12_W + 12);
-    } else {
-        if (static_cast<int64_t>(in.xg.size()) != in.n_qp_source || in.wg.size() != in.xg.size())
-            value_error("razor front: xg / wg must hold n_qp_source nodes");
-        xg = in.xg;
-        wg = in.wg;
+    // The solve-time half: the bundle refusal, the ports, the tables. What
+    // these raise, Python raises from `compute_port_solution`.
+    try {
+        refuse_coincident_segments();
+        port_columns();
+    } catch (const FrontError &e) {
+        throw FrontError(e.kind, e.what(), true);
     }
+    // The frozen table (`_quadrature.leggauss`); an order beyond it is
+    // numpy's eigensolve in Python, which this front half does not replay.
+    if (!leggauss(in.n_qp_source, xg, wg)) return "quadrature-order";
     prepare();
     // `_schedule.elem_rows(_CHUNK_ELEMS, n_path * n_basis)`
     window_rows = std::max<int64_t>(1, in.chunk_elems / std::max<int64_t>(1, 2 * n_basis));

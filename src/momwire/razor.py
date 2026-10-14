@@ -6772,20 +6772,17 @@ class RazorSolver(
         -- runs on this route. It returns the geometry as `_build_geometry`'s
         own dict (the readouts read it), the port columns and the solved
         coefficients; Y is `cols.T @ X` here, as on the Python route. The
-        Gauss-Legendre table is this solver's own (`leggauss`), so it is the
-        table the Python route would use. Refusals the Python front half
+        Gauss-Legendre rules are the frozen table `leggauss` reads, through
+        the header generated from it. Refusals the Python front half
         raises at construction or at the solve, the core raises with the same
         type and message.
         """
         reason = self._cxx_front_refusal()
         if reason is None:
             self._checkpoint()
-            xg, wg = leggauss(self.n_qp_source)
             ctx = _cxx_context()
             out = ctx.front_port_solution(
                 self._cxx_kwargs,
-                xg,
-                wg,
                 _CHUNK_ELEMS,
                 self._cancel_flag,
                 _CXX_WANT_Z,

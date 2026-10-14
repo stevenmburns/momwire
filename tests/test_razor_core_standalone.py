@@ -205,7 +205,7 @@ def test_the_cxx_chain_is_the_python_chain_bit_for_bit(driver, accel, prefix, tm
 
 def _scipy_openblas():
     """SciPy's bundled OpenBLAS: the library whose zgetrf/zgetrs the Python
-    route reaches (`cython_lapack`) and whose ddot equals numpy's norm."""
+    route reaches (`cython_lapack`)."""
     import glob
 
     import scipy

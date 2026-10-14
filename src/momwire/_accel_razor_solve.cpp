@@ -158,18 +158,6 @@ py::dict counters(const mw::razor::SolveContext &ctx) {
 // arguments in, geometry -> prepared tables -> port columns -> fill -> LU in
 // C++, the solved coefficients out.
 
-const mw::razor::Blas &scipy_blas() {
-    // SciPy's own ddot, the norm `np.linalg.norm` reaches (measured equal to
-    // numpy's bundled OpenBLAS on Haswell, Skylake and an AVX-512
-    // Rocketlake, where the tail of the kernel fuses into FMAs).
-    static mw::razor::Blas b;
-    if (b.ddot == nullptr) {
-        py::dict capi = py::module_::import("scipy.linalg.cython_blas").attr("__pyx_capi__");
-        b.ddot = reinterpret_cast<mw::razor::ddot_fn>(capsule_pointer(capi, "ddot"));
-    }
-    return b;
-}
-
 // The arguments did not convert the way the constructor reads them: the
 // Python front half answers (and refuses in its own words).
 struct Malformed {};
@@ -466,37 +454,29 @@ py::list ties_list(const mw::razor::Front &f) {
 // Build the front half from RazorSolver's keyword arguments. Returns
 // (decline, front): decline a str naming what is not covered (front None),
 // or None with the Front built. FrontError raises as the Python side does.
-std::pair<std::string, std::unique_ptr<mw::razor::Front>> build_front(
-    const py::dict &kw, py::object xg, py::object wg, int64_t chunk_elems) {
+std::pair<std::string, std::unique_ptr<mw::razor::Front>> build_front(const py::dict &kw,
+                                                                     int64_t chunk_elems) {
     mw::razor::FrontInputs in;
     try {
         in = front_inputs(kw);
     } catch (Malformed &) {
         return {"malformed-args", nullptr};
     }
-    if (!xg.is_none()) {
-        auto x = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(xg);
-        auto w = py::array_t<double, py::array::c_style | py::array::forcecast>::ensure(wg);
-        in.xg.assign(x.data(), x.data() + x.size());
-        in.wg.assign(w.data(), w.data() + w.size());
-    }
     in.chunk_elems = chunk_elems;
     std::unique_ptr<mw::razor::Front> f(new mw::razor::Front());
-    const mw::razor::Blas &blas = scipy_blas();  // with the GIL: it may import
     std::string why;
     {
         py::gil_scoped_release release;
-        why = f->build(in, blas);
+        why = f->build(in);
     }
     if (!why.empty()) return {why, nullptr};
     return {"", std::move(f)};
 }
 
-py::dict front_port_solution(mw::razor::SolveContext &ctx, py::dict kw, py::object xg,
-                             py::object wg, int64_t chunk_elems, uintptr_t cancel_flag,
-                             bool want_z, bool want_front) {
+py::dict front_port_solution(mw::razor::SolveContext &ctx, py::dict kw, int64_t chunk_elems,
+                             uintptr_t cancel_flag, bool want_z, bool want_front) {
     py::dict out;
-    auto built = build_front(kw, xg, wg, chunk_elems);
+    auto built = build_front(kw, chunk_elems);
     if (!built.first.empty()) {
         out["decline"] = built.first;
         return out;
@@ -533,9 +513,9 @@ py::dict front_port_solution(mw::razor::SolveContext &ctx, py::dict kw, py::obje
     return out;
 }
 
-py::dict razor_front_build(py::dict kw, py::object xg, py::object wg, int64_t chunk_elems) {
+py::dict razor_front_build(py::dict kw, int64_t chunk_elems) {
     py::dict out;
-    auto built = build_front(kw, xg, wg, chunk_elems);
+    auto built = build_front(kw, chunk_elems);
     if (!built.first.empty()) {
         out["decline"] = built.first;
         return out;
@@ -576,7 +556,6 @@ void register_razor_solve(py::module_ &m) {
         .def_property_readonly("counters", &counters)
         .def_property_readonly("n_basis", &mw::razor::SolveContext::n_basis)
         .def("front_port_solution", &front_port_solution, py::arg("kwargs"),
-             py::arg("xg") = py::none(), py::arg("wg") = py::none(),
              py::arg("chunk_elems") = 2000000, py::arg("cancel_flag") = 0,
              py::arg("want_z") = false, py::arg("want_front") = false,
              "razor-2p's whole solve from RazorSolver's own keyword arguments: "
@@ -589,13 +568,20 @@ void register_razor_solve(py::module_ &m) {
 
     m.attr("razor_front_proto") = true;
     m.def("razor_front_build", &razor_front_build, py::arg("kwargs"),
-          py::arg("xg") = py::none(), py::arg("wg") = py::none(),
           py::arg("chunk_elems") = 2000000,
           "The front half alone (no fill, no LU): the same dict as "
           "RazorSolveContext.front_port_solution's, without X, with 'front'.");
-    m.def("razor_front_numpy_str",
-          [](std::vector<double> v) { return mw::razor::numpy_array_str(v); },
-          "TEST HOOK: the core's spelling of numpy's str() of a 1-D float array.");
+    m.def("razor_front_format_numbers",
+          [](std::vector<double> v) { return mw::razor::format_numbers(v); },
+          "TEST HOOK: the core's `_wire_spec.format_numbers`.");
+    m.def("razor_front_leggauss",
+          [](int64_t n) -> py::object {
+              std::vector<double> x, w;
+              if (!mw::razor::leggauss(n, x, w)) return py::none();
+              return py::make_tuple(np1(x), np1(w));
+          },
+          "TEST HOOK: the core's frozen Gauss-Legendre rule of order n (None "
+          "beyond the table).");
     m.def("razor_front_constants", []() {
         py::dict d;
         d["eps"] = mw::razor::EPS;
@@ -605,8 +591,6 @@ void register_razor_solve(py::module_ &m) {
         d["exact_kernel_auto_h_over_a"] = mw::razor::EXACT_KERNEL_AUTO_H_OVER_A;
         d["chunk_elems"] = mw::razor::FrontInputs().chunk_elems;
         d["n_qp_source"] = mw::razor::FrontInputs().n_qp_source;
-        d["leggauss12_x"] = std::vector<double>(mw::razor::LEGGAUSS12_X, mw::razor::LEGGAUSS12_X + 12);
-        d["leggauss12_w"] = std::vector<double>(mw::razor::LEGGAUSS12_W, mw::razor::LEGGAUSS12_W + 12);
         return d;
     }, "TEST HOOK: the constants the front half carries in place of Python's.");
     // The front half's refusals, as the Python front half raises them.
