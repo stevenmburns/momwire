@@ -188,8 +188,8 @@ static inline void razor_cplx_pad_and_bracket(double *Rb, size_t nq,
 // that loop (libmvec's last bits and a Taylor expm1), so it is gated on Z;
 // the header of `_accel_razor_cplx.cpp` carries the error budget.
 //
-// `if (COMPLEX_K)` rather than `if constexpr`: the build is -std=gnu++11, and
-// this is the idiom `if (ek_pair)` already uses here. The branch folds at -O3,
+// `if (COMPLEX_K)` rather than `if constexpr`: written when the build was
+// -std=gnu++11, and the idiom `if (ek_pair)` already uses here. The branch folds at -O3,
 // and the <false> instantiation is textually the pre-#796 loop so the real-k
 // output stays bit-identical (proven by rebuild and array_equal, the #762
 // protocol, not by reading).

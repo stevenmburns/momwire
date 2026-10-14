@@ -41,7 +41,7 @@
 // that is all `_wynn_epsilon` is ever handed). Peak stack is ~10 kB per
 // `wynn_epsilon` call at NC = 6 plus ~0.6 kB per `adaptive_segment` frame.
 //
-// Portability: C++11 (the build is -std=gnu++11), no GCC builtins, no VLAs,
+// Portability: C++11-clean (the build is C++17), no GCC builtins, no VLAs,
 // nothing that needs _USE_MATH_DEFINES from the includer.
 
 #pragma once
