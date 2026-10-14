@@ -528,7 +528,11 @@ def test_each_worker_starts_its_walk_at_its_own_anchor(standin, monkeypatch):
     for e in standin["eps"]:
         if e not in order:
             order.append(e)
-    assert order == [plan.rungs[(5 + j) % n] for j in range(n)]
+    # The first rung filled is the one whose GLOBAL ladder index is this
+    # process's offset, so workers at shifted stencils still spread out.
+    first = (5 - plan.n0) % n
+    assert (plan.n0 + first) % n == 5
+    assert order == [plan.rungs[(first + j) % n] for j in range(n)]
 
 
 def test_an_anchor_another_worker_stored_mid_walk_is_read_not_filled(

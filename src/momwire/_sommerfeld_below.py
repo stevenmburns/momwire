@@ -2073,6 +2073,7 @@ class _AnchorPlan:
     eps_r: float
     rungs: tuple  # the anchors' eps_t
     weights: np.ndarray
+    n0: int = 0  # the first rung's index on the global ladder
 
     def key(self, j):
         """Anchor j's cache key. The slot an exact grid's key gives to its
@@ -2105,7 +2106,7 @@ def _anchor_plan(eps_t):
         complex(eps_t.real, -math.exp((n0 + j) * _SOMM_BELOW_ANCHOR_STEP))
         for j in range(n)
     )
-    return _AnchorPlan(s, eps_t.real, rungs, w)
+    return _AnchorPlan(s, eps_t.real, rungs, w, n0)
 
 
 def _is_sweep(plan, r1_wl):
@@ -2173,7 +2174,7 @@ def _ensure_anchors(plan, r1_wl, idx=None):
     that moves R1/lam_m across a size bucket pays for the difference rather
     than for the anchors again.
 
-    The anchors are walked starting at a per-process offset, wrapping around,
+    The anchors are walked starting at a per-process rung, wrapping around,
     and each one is read from disk just before it would be filled. A crew of
     workers that all need the same stencil therefore starts on different
     anchors, and each picks up whatever the others have stored meanwhile.
@@ -2184,7 +2185,10 @@ def _ensure_anchors(plan, r1_wl, idx=None):
     n = len(plan.rungs)
     out = [None] * n
     k2 = _anchor_k2()
-    start = os.getpid() % n
+    # The offset is on the GLOBAL ladder, not within this plan: workers at
+    # different frequencies hold stencils shifted by a rung or two, and an
+    # offset relative to the stencil would send them to the same rungs.
+    start = (os.getpid() - plan.n0) % n
     for step in range(n):
         j = (start + step) % n
         key = plan.key(j)
