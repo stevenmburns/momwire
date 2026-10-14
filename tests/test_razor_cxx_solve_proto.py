@@ -170,3 +170,20 @@ def test_the_lapack_is_scipys_own():
         capi["zgetrf"]
     )
     assert "char *, int *, int *, __pyx_t_double_complex *" in str(capi["zgetrs"])
+
+
+def test_a_released_pool_keeps_the_context_and_its_counters(monkeypatch, capture_z):
+    # Every solve releases the buffers here; the counters must carry on and
+    # the next solve must regrow the pool and still be the Python route.
+    monkeypatch.setattr(razor, "_CXX_POOL_MAX_BASIS", 0)
+    ctx = razor._cxx_context()
+    before = ctx.counters
+    for _ in range(2):
+        py, z_py, cx, solver = _both(monkeypatch, capture_z, CASES["pec"])
+        assert solver._cxx_z.tobytes() == z_py.tobytes()
+        assert cx.coeffs.tobytes() == py.coeffs.tobytes()
+    after = razor._cxx_context().counters
+    assert razor._cxx_context() is ctx
+    assert after["solves"] == before["solves"] + 2
+    assert after["pool_grows"] > before["pool_grows"]
+    assert ctx.n_basis == 0

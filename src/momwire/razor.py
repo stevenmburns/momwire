@@ -1265,9 +1265,10 @@ _RAZOR_CXX = None
 # "python:<reason>" naming the first thing the C++ route does not cover.
 # Tests read it, so an agreement gate can prove the C++ branch RAN.
 _CXX_ROUTE = {}
-# One context (the C++ buffer pool) per thread, reused across solves; dropped
-# after a solve above this many basis functions, so a big Z (16 n^2 bytes) is
-# not held between solves.
+# One context (the C++ buffer pool) per thread, reused across solves; its
+# buffers are released after a solve above this many basis functions, so a
+# big Z (16 n^2 bytes) is not held between solves. The context itself, and
+# its counters, live on.
 _CXX_CONTEXTS = threading.local()
 _CXX_POOL_MAX_BASIS = 1024
 # TEST-ONLY: keep a copy of the filled Z (before the LU) as `solver._cxx_z`.
@@ -6801,7 +6802,7 @@ class RazorSolver(
             _CXX_WANT_Z,
         )
         if n_basis > _CXX_POOL_MAX_BASIS:
-            _CXX_CONTEXTS.ctx = None
+            ctx.release()
         if Z is not None:
             self._cxx_z = Z
         if info:
