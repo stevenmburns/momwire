@@ -1,0 +1,318 @@
+// razor T2 core: the two kernels behind `_accel_razor_t2.cpp`'s bindings,
+// with no pybind11 type in their signatures and no Python header included.
+// Its own TU, for the reason the pre-split one was: its float order is the
+// numpy route's, derived term by term, and nothing else may move its codegen.
+#include "_mw_core.h"
+#include "_razor_core.h"
+
+#include <cstdlib>
+#include <stdexcept>
+#include <vector>
+
+// momwire#1290: razor's T2 rows and the block's final combination, fused.
+//
+// `RazorSolver._source_block_rows` finishes each row window as
+//
+//     rows = c_A * T1 - T2 / c_Phi,
+//     T2   = dM0[:, s_a] * q_a + dM0[:, s_b] * q_b,
+//     dM0  = M0w[plus] - M0w[minus]          (row-wise; no minus = no subtraction)
+//
+// numpy spells that with two (rows, n_seg) gathers and their difference, two
+// (rows, n_basis) column gathers, and five more (rows, n_basis) temporaries,
+// then copies the result into the window of a column-major Z. At the free
+// 8-dipole array, N = 2816, that glue was ~0.28 s of a 1.27 s solve. Here
+// each entry is read where it lies and written once.
+//
+// THE BITS ARE THE NUMPY ROUTE'S, BY DERIVATION, on any build that does not
+// contract (every non-MSVC build of this TU passes -ffp-contract=off; MSVC
+// gets the pragmas below):
+//
+//   * dM0 is one complex subtraction, componentwise, as numpy's.
+//   * `dM0 * q` with q real is numpy's complex multiply by q + 0j:
+//     (dr*q - di*0, dr*0 + di*q). The 0-products are exact zeros, so with or
+//     without a fused multiply-add (numpy's AVX2 loop uses fmaddsub; its
+//     baseline loop does not) each part is ONE rounding of dr*q, resp. di*q,
+//     up to the sign of an exact zero. The sum of the two wings is a
+//     componentwise add. So T2 is fixed by the operands on every platform.
+//   * `fuse` (the free-space / above-ground case): c_A = i*a and c_Phi = i*b,
+//     both with an EXACTLY zero real part. Then c_A * x is
+//     (0*xr - a*xi, 0*xi + a*xr) = (-(a*xi), a*xr), one rounding each, with
+//     or without fma, for the same reason. numpy's complex division is Smith's:
+//     for |br| < |bi| it takes rat = br/bi = 0 and scl = 1/(bi + br*rat) =
+//     1/bi, and returns ((xr*rat + xi)*scl, (xi*rat - xr)*scl) =
+//     (xi*scl, (-xr)*scl): the products with rat are exact zeros, so a
+//     contracting build (arm64 clang) gets the same numbers too. The
+//     combination is therefore
+//
+//         re = -(a*t1i) - t2i*scl,   im = a*t1r + t2r*scl,
+//
+//     each operation rounded once, which is what is written below.
+//   * Without `fuse` (a lossy medium's complex eps, so c_Phi has a real
+//     part), Smith's division has no exact shortcut and a contracting numpy
+//     build rounds it differently from a non-contracting one. The kernel then
+//     writes T2 alone and the caller divides and combines in numpy, so that
+//     half stays numpy's own arithmetic by construction.
+//
+// Signed zeros aside, the fused route is the numpy route bit for bit; the
+// tests hold it to a bound derived from the operands rather than to `==`,
+// because the bits of the numpy side belong to numpy's build, not to this one
+// (tests/test_razor_t2_accel_1290.py).
+#if defined(_MSC_VER)
+#pragma float_control(precise, on)
+#pragma fp_contract(off)
+#endif
+
+
+namespace mw {
+namespace razor {
+
+namespace {
+// A complex128 2-D array as the kernel below addresses it: through byte
+// strides, as double pairs. The loop is the pre-split text over this type.
+struct View {
+    char *base = nullptr;
+    ptrdiff_t s0 = 0, s1 = 0, rows = 0, cols = 0;
+    inline double *at(ptrdiff_t r, ptrdiff_t c) const {
+        return reinterpret_cast<double *>(base + r * s0 + c * s1);
+    }
+};
+template <class T>
+View as_view(const view<T, 2> &v) {
+    View o;
+    o.base = reinterpret_cast<char *>(const_cast<cd *>(v.data()));
+    o.s0 = v.st[0];
+    o.s1 = v.st[1];
+    o.rows = v.shape(0);
+    o.cols = v.shape(1);
+    return o;
+}
+}  // namespace
+
+void t2_rows(view<cd, 2> out_v, const view<const cd, 2> *t1_v,
+             view<const cd, 2> m0w, view<const cd, 2> m0k,
+             view<const int64_t, 1> plus, view<const int64_t, 1> minus,
+             view<const int64_t, 1> s_a, view<const int64_t, 1> s_b,
+             view<const double, 1> q_a, view<const double, 1> q_b,
+             double c_a_imag, double c_phi_imag) {
+    const View o = as_view(out_v);
+    const bool fuse = t1_v != nullptr;
+    View t;
+    if (fuse) {
+        t = as_view(*t1_v);
+        if (t.rows != o.rows || t.cols != o.cols)
+            throw std::invalid_argument("razor_t2_rows: t1 must have out's shape");
+        if (!(c_phi_imag != 0.0))
+            throw std::invalid_argument("razor_t2_rows: c_Phi must be nonzero");
+    }
+    const View w = as_view(m0w);
+    const View k = as_view(m0k);
+    const ptrdiff_t n_rows = o.rows, n_basis = o.cols, n_seg = w.cols;
+    const ptrdiff_t n_w = w.rows, n_tab = w.rows + k.rows;
+    if (k.rows > 0 && k.cols != n_seg)
+        throw std::invalid_argument("razor_t2_rows: M0k must have M0w's columns");
+    if (plus.shape(0) != n_rows || minus.shape(0) != n_rows)
+        throw std::invalid_argument("razor_t2_rows: plus/minus need one entry per row");
+    if (s_a.shape(0) != n_basis || s_b.shape(0) != n_basis ||
+        q_a.shape(0) != n_basis || q_b.shape(0) != n_basis)
+        throw std::invalid_argument("razor_t2_rows: per-basis arrays disagree on n_basis");
+    const char *who = "razor_t2_rows";
+    require_contiguous(plus, who, "plus");
+    require_contiguous(minus, who, "minus");
+    require_contiguous(s_a, who, "s_a");
+    require_contiguous(s_b, who, "s_b");
+    require_contiguous(q_a, who, "q_a");
+    require_contiguous(q_b, who, "q_b");
+    const int64_t *pp = plus.data(), *pm = minus.data();
+    const int64_t *sa = s_a.data(), *sb = s_b.data();
+    const double *qa = q_a.data(), *qb = q_b.data();
+    // Every index is checked HERE, before the first read, so a caller
+    // bug is an exception and not a read off the end of a table.
+    for (ptrdiff_t r = 0; r < n_rows; r++)
+        if (pp[r] < 0 || pp[r] >= n_tab || pm[r] >= n_tab)
+            throw std::invalid_argument("razor_t2_rows: row table index out of range");
+    for (ptrdiff_t j = 0; j < n_basis; j++)
+        if (sa[j] < 0 || sa[j] >= n_seg || sb[j] < 0 || sb[j] >= n_seg)
+            throw std::invalid_argument("razor_t2_rows: wing segment index out of range");
+
+    // Row r of the stacked table [M0w; M0k], resolved once per row.
+    std::vector<const char *> row_p(n_rows), row_m(n_rows);
+    for (ptrdiff_t r = 0; r < n_rows; r++) {
+        row_p[r] = pp[r] < n_w ? w.base + pp[r] * w.s0 : k.base + (pp[r] - n_w) * k.s0;
+        row_m[r] = pm[r] < 0 ? nullptr
+                   : pm[r] < n_w ? w.base + pm[r] * w.s0
+                                 : k.base + (pm[r] - n_w) * k.s0;
+    }
+    // The column stride of each row pointer's own table: the two tables need
+    // not share a layout.
+    std::vector<ptrdiff_t> cs_p(n_rows), cs_m(n_rows);
+    for (ptrdiff_t r = 0; r < n_rows; r++) {
+        cs_p[r] = pp[r] < n_w ? w.s1 : k.s1;
+        cs_m[r] = (pm[r] >= 0 && pm[r] >= n_w) ? k.s1 : w.s1;
+    }
+
+    const double a = c_a_imag;
+    const double scl = fuse ? 1.0 / c_phi_imag : 0.0;
+    // Walk the window in `out`'s memory order: rows innermost when its rows
+    // are the short stride (a window of the column-major Z), columns
+    // innermost otherwise. Every entry is independent, so the order and the
+    // thread count move no value.
+    const bool rows_inner = std::llabs(static_cast<long long>(o.s0)) <
+                            std::llabs(static_cast<long long>(o.s1));
+
+    auto one = [&](ptrdiff_t r, ptrdiff_t j) {
+        const char *P = row_p[r];
+        const char *M = row_m[r];
+        const double *pa = reinterpret_cast<const double *>(P + sa[j] * cs_p[r]);
+        const double *pb = reinterpret_cast<const double *>(P + sb[j] * cs_p[r]);
+        double dar = pa[0], dai = pa[1], dbr = pb[0], dbi = pb[1];
+        if (M != nullptr) {
+            const double *ma = reinterpret_cast<const double *>(M + sa[j] * cs_m[r]);
+            const double *mb = reinterpret_cast<const double *>(M + sb[j] * cs_m[r]);
+            dar = dar - ma[0];
+            dai = dai - ma[1];
+            dbr = dbr - mb[0];
+            dbi = dbi - mb[1];
+        }
+        const double t2r = dar * qa[j] + dbr * qb[j];
+        const double t2i = dai * qa[j] + dbi * qb[j];
+        double *y = o.at(r, j);
+        if (fuse) {
+            const double *x = t.at(r, j);
+            const double xr = x[0], xi = x[1];
+            y[0] = -(a * xi) - t2i * scl;
+            y[1] = a * xr + t2r * scl;
+        } else {
+            y[0] = t2r;
+            y[1] = t2i;
+        }
+    };
+
+    if (rows_inner) {
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t j = 0; j < n_basis; j++)
+            for (ptrdiff_t r = 0; r < n_rows; r++) one(r, j);
+    } else {
+#pragma omp parallel for schedule(static)
+        for (ptrdiff_t r = 0; r < n_rows; r++)
+            for (ptrdiff_t j = 0; j < n_basis; j++) one(r, j);
+    }
+}
+
+
+// The composing ground's remainder rows (`_source_block_rows`' Q), from the
+// projected field moments `f` of the window's observers:
+//
+//     rem_a = f[o, s_a, 1] / h_a,   rem_a = f[o, s_a, 0] - rem_a  (falling wing)
+//     rem_b = the same on s_b,
+//     Q[r]  = sum over the r-th n_path observers o of (rem_a*sig_a + rem_b*sig_b)*w[o]
+//
+// with `f` row `obs_row[o]` for observer o (the window's distinct observers,
+// `_potential_ground._distinct_observers`), so the gathered (n_obs, n_seg, 2)
+// copy is never formed.
+//
+// THE BITS ARE THE NUMPY ROUTE'S: each operation is numpy's on the same
+// operands, spelled as numpy's complex loops spell it with a real operand
+// promoted to x + 0j. The division is Smith's with a zero imaginary part
+// (rat = 0/h = +0, scl = 1/(h + 0*rat)), so each part is (x + y*rat)*scl;
+// the multiplies by sig and by w are (ar*s - ai*0, ar*0 + ai*s). Every
+// product with the zero is an exact zero, so a build that fuses them into an
+// fma rounds the same numbers, and the terms are written in numpy's order,
+// so the signs of zeros are its too. The path sum is numpy's reduction over
+// a strided axis, sequential from its first element.
+void q_rows(view<const cd, 3> f, view<const int64_t, 1> obs_row,
+            view<const int64_t, 1> s_a, view<const int64_t, 1> s_b,
+            view<const double, 1> h_a, view<const double, 1> h_b,
+            view<const bool, 1> fall_a, view<const bool, 1> fall_b,
+            view<const double, 1> sig_a, view<const double, 1> sig_b,
+            view<const double, 1> wts, ptrdiff_t n_path, view<cd, 2> out) {
+    if (f.shape(2) != 2)
+        throw std::invalid_argument("razor_q_rows: f must be (n_u, n_seg, 2)");
+    const ptrdiff_t n_u = f.shape(0), n_seg = f.shape(1);
+    const ptrdiff_t n_obs = obs_row.size();
+    const ptrdiff_t n_basis = s_a.size();
+    if (n_path < 1 || n_obs % n_path != 0)
+        throw std::invalid_argument("razor_q_rows: n_obs must be whole paths");
+    if (wts.size() != n_obs)
+        throw std::invalid_argument("razor_q_rows: one weight per observer");
+    if (s_b.size() != n_basis || h_a.size() != n_basis || h_b.size() != n_basis ||
+        fall_a.size() != n_basis || fall_b.size() != n_basis ||
+        sig_a.size() != n_basis || sig_b.size() != n_basis)
+        throw std::invalid_argument("razor_q_rows: per-basis arrays disagree on n_basis");
+    const char *who = "razor_q_rows";
+    require_contiguous(f, who, "f");
+    require_contiguous(obs_row, who, "obs_row");
+    require_contiguous(s_a, who, "s_a");
+    require_contiguous(s_b, who, "s_b");
+    require_contiguous(h_a, who, "h_a");
+    require_contiguous(h_b, who, "h_b");
+    require_contiguous(fall_a, who, "fall_a");
+    require_contiguous(fall_b, who, "fall_b");
+    require_contiguous(sig_a, who, "sig_a");
+    require_contiguous(sig_b, who, "sig_b");
+    require_contiguous(wts, who, "wts");
+    const int64_t *orow = obs_row.data();
+    const int64_t *sa = s_a.data(), *sb = s_b.data();
+    for (ptrdiff_t o = 0; o < n_obs; o++)
+        if (orow[o] < 0 || orow[o] >= n_u)
+            throw std::invalid_argument("razor_q_rows: observer row out of range");
+    for (ptrdiff_t j = 0; j < n_basis; j++)
+        if (sa[j] < 0 || sa[j] >= n_seg || sb[j] < 0 || sb[j] >= n_seg)
+            throw std::invalid_argument("razor_q_rows: wing segment index out of range");
+    const double *F = reinterpret_cast<const double *>(f.data());
+    const double *ha = h_a.data(), *hb = h_b.data();
+    const bool *fa = fall_a.data(), *fb = fall_b.data();
+    const double *ga = sig_a.data(), *gb = sig_b.data(), *w = wts.data();
+    const ptrdiff_t n_rows = n_obs / n_path;
+    if (out.shape(0) != n_rows || out.shape(1) != n_basis || !out.c_contiguous())
+        throw std::invalid_argument("razor_q_rows: out must be C-contiguous (n_rows, n_basis)");
+    double *Y = reinterpret_cast<double *>(out.data());
+
+    // One wing's rem: f[., s, 1] / h by Smith's with a zero imaginary part,
+    // and on a falling wing f[., s, 0] minus that.
+    auto wing = [&](const double *frow, int64_t s, double h, bool fall, double *r) {
+        const double *m = frow + 4 * s;  // (n_seg, 2) complex: m[0..1] moment 0, m[2..3] moment 1
+        const double rat = 0.0 / h;
+        const double scl = 1.0 / (h + 0.0 * rat);
+        double xr = (m[2] + m[3] * rat) * scl;
+        double xi = (m[3] - m[2] * rat) * scl;
+        if (fall) {
+            xr = m[0] - xr;
+            xi = m[1] - xi;
+        }
+        r[0] = xr;
+        r[1] = xi;
+    };
+
+#pragma omp parallel for schedule(static)
+    for (ptrdiff_t r = 0; r < n_rows; r++) {
+        for (ptrdiff_t j = 0; j < n_basis; j++) {
+            double accr = 0.0, acci = 0.0;
+            for (ptrdiff_t p = 0; p < n_path; p++) {
+                const ptrdiff_t o = r * n_path + p;
+                const double *frow = F + 4 * n_seg * orow[o];
+                double ra[2], rb[2];
+                wing(frow, sa[j], ha[j], fa[j], ra);
+                wing(frow, sb[j], hb[j], fb[j], rb);
+                const double s1 = ga[j], s2 = gb[j];
+                // rem_a*sig_a + rem_b*sig_b, each a complex multiply by s + 0j.
+                const double ir = (ra[0] * s1 - ra[1] * 0.0) + (rb[0] * s2 - rb[1] * 0.0);
+                const double ii = (ra[0] * 0.0 + ra[1] * s1) + (rb[0] * 0.0 + rb[1] * s2);
+                // *= w[o], a complex multiply by w + 0j.
+                const double vr = ir * w[o] - ii * 0.0;
+                const double vi = ir * 0.0 + ii * w[o];
+                if (p == 0) {
+                    accr = vr;
+                    acci = vi;
+                } else {
+                    accr = accr + vr;
+                    acci = acci + vi;
+                }
+            }
+            Y[2 * (r * n_basis + j)] = accr;
+            Y[2 * (r * n_basis + j) + 1] = acci;
+        }
+    }
+}
+
+}  // namespace razor
+}  // namespace mw
