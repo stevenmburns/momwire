@@ -20,6 +20,21 @@ import numpy as np
 from ._junction_rule import coincident_end_groups
 
 
+def format_numbers(values) -> str:
+    """Numbers for a message, spelled the same in every language: each one
+    printf-style ``%.12g``, comma-separated, in square brackets. A message
+    that embeds Python's or numpy's own printing (an array repr, a tuple
+    shape) cannot be reproduced by the C++ path without copying that
+    printing, so the shared refusals use this instead."""
+    return "[" + ", ".join("%.12g" % float(v) for v in values) + "]"
+
+
+def format_shape(shape) -> str:
+    """An array shape for a message: its extents joined by ``x`` (``3``,
+    ``2x3``; a 0-d value is ``scalar``), not Python's tuple repr."""
+    return "x".join(str(int(n)) for n in shape) if len(shape) else "scalar"
+
+
 def normalize_wire_radius(value, n_wires, *, per_wire_refusal=None):
     """`wire_radius` → ``((n_wires,) float array, uniform value or None)``.
 
@@ -49,11 +64,12 @@ def normalize_wire_radius(value, n_wires, *, per_wire_refusal=None):
     elif radius.shape != (n_wires,):
         raise ValueError(
             f"wire_radius: expected a scalar or a length-{n_wires} sequence "
-            f"(one entry per wire), got shape {radius.shape}"
+            f"(one entry per wire), got shape {format_shape(radius.shape)}"
         )
     if not np.all(np.isfinite(radius)) or np.any(radius <= 0.0):
         raise ValueError(
-            f"wire_radius entries must be positive and finite, got {radius}"
+            "wire_radius entries must be positive and finite, got "
+            + format_numbers(radius.ravel())
         )
     uniform = float(radius[0]) if np.all(radius == radius[0]) else None
     return radius, uniform
@@ -235,7 +251,7 @@ def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
         j_idx = end_to_junction.get(member)
         if j_idx is None:
             raise ValueError(
-                f"node_gaps[{i}]: wire {wire} {end!r} is not a member "
+                f"node_gaps[{i}]: the {end} of wire {wire} is not a member "
                 "of any junction group — a series node gap lives at a "
                 "junction; for a feed inside a wire use feeds="
             )
@@ -246,7 +262,9 @@ def normalize_node_gaps(node_gaps, junctions, n_wires, *, junction_ports=()):
                 "with (a lone-end attachment is junction_ports=)"
             )
         if member in seen_members:
-            raise ValueError(f"node_gaps[{i}]: wire {wire} {end!r} listed twice")
+            raise ValueError(
+                f"node_gaps[{i}]: the {end} of wire {wire} is listed twice"
+            )
         if j_idx in seen_junctions and len(junctions[j_idx]) == 2:
             raise ValueError(
                 f"node_gaps[{i}]: junction {j_idx} already carries a "
