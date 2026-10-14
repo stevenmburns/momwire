@@ -2187,7 +2187,7 @@ class RazorSolver(
         for i, (w_i, end_i, _v) in enumerate(self.node_gaps):
             if (w_i, end_i) in grounded_members:
                 raise ValueError(
-                    f"node_gaps[{i}]: wire {w_i} {end_i!r} stands in the "
+                    f"node_gaps[{i}]: the {end_i} of wire {w_i} stands in the "
                     "ground plane, and a grounded end's tent is already the "
                     "series path between that wire and the plane (momwire#151"
                     " grounds the node through the image) — drive it with "
