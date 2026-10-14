@@ -33,8 +33,9 @@
 //     kernels only;
 //   * the Gauss-Legendre table is `numpy.polynomial.legendre.leggauss`, an
 //     eigensolve; it is an INPUT (`FrontInputs::xg/wg`), and the built-in
-//     table for the default order 12 is numpy's own output, pinned bit for
-//     bit by a test.
+//     table for the default order 12 is numpy's own x86-64 output, pinned
+//     bit for bit by a test. numpy on macOS arm64 gives other bits (its
+//     LAPACK), which that test records as an expected failure there.
 //
 // SCOPE: the class `_razor_solve_core.h` serves -- free space or a PERFECT
 // ground (`ground_z` with no `ground_eps`, which is also what the NEC-5 seam
