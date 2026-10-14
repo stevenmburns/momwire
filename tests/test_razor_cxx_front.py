@@ -19,6 +19,7 @@ branch, and the port columns -- then fills and factors
 
 import importlib.util
 import pathlib
+import sys
 import warnings
 
 import numpy as np
@@ -532,11 +533,30 @@ def test_an_ambiguous_feed_warns_on_both_routes(monkeypatch, capture):
 # --- the constants the core carries ----------------------------------------
 
 
-def test_the_built_in_tables_are_numpys_and_razors():
+# numpy's `leggauss` is an eigensolve through the platform's LAPACK, and on
+# macOS arm64 its order-12 nodes and weights are NOT the bits numpy gives on
+# x86-64 Linux and Windows (measured on CI's test-macos, run 38621861548), so
+# the built-in table -- numpy's x86 output -- is not that platform's numpy.
+# The routed solve is unaffected (it passes the solver's own table); the
+# standalone executable on macOS would differ from momwire-on-macOS there.
+# Strict, so the day the two agree this says so.
+_NUMPY_LEGGAUSS_DIFFERS = pytest.mark.xfail(
+    sys.platform == "darwin",
+    reason="numpy's leggauss(12) on macOS arm64 is not its x86-64 output",
+    strict=True,
+)
+
+
+@_NUMPY_LEGGAUSS_DIFFERS
+def test_the_built_in_table_is_numpys():
     k = acc.razor_front_constants()
     x, w = np.polynomial.legendre.leggauss(12)
     assert np.array(k["leggauss12_x"]).tobytes() == x.tobytes()
     assert np.array(k["leggauss12_w"]).tobytes() == w.tobytes()
+
+
+def test_the_built_in_constants_are_razors():
+    k = acc.razor_front_constants()
     assert k["eps"] == RazorSolver.eps and k["mu"] == RazorSolver.mu
     from momwire import _exact_kernel_seam, _feed_snap, _junction_rule
 
@@ -549,6 +569,7 @@ def test_the_built_in_tables_are_numpys_and_razors():
     assert k["n_qp_source"] == 12  # RazorSolver's default, the table's order
 
 
+@_NUMPY_LEGGAUSS_DIFFERS
 def test_the_built_in_table_answers_as_the_passed_one():
     kw = dict(BASE, **CASES["pec_ek"])
     x, w = razor.leggauss(12)
