@@ -1,0 +1,19 @@
+# razor-2p front-half driver deck (scripts/core_split/razor_front_driver.cpp),
+# read by tests/test_razor_core_standalone.py on both sides: an inverted V
+# whose apex is a three-wire junction (a vertical stub rises from it), a
+# kinked reflector, and a base-fed monopole standing on a perfect ground;
+# per-wire radii, the extended kernel, a gap feed on the V, a source at the
+# monopole's grounded end, and a series EMF in the stub's branch of the apex.
+wavelength 22.0
+radius 0.002 0.002 0.003 0.0025 0.004
+ground 0.0
+ek 1
+exact auto
+wire 9 : 0.0 -4.0 5.0  0.0 0.0 7.0
+wire 9 : 0.0 0.0 7.0  0.0 4.0 5.0
+wire 4 : 0.0 0.0 7.0  0.0 0.0 9.0
+wire 8 8 : 1.2 -4.5 5.5  1.2 0.0 6.8  1.2 4.5 5.5
+wire 6 : 3.0 0.0 0.0  3.0 0.0 3.3
+feed 0 2.0 1.0 0.0
+feed 4 0.0 0.5 0.25
+gap 2 start 0.0 1.0
