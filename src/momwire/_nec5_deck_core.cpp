@@ -5,14 +5,12 @@
 #include "_nec5_deck_core.h"
 
 #include <algorithm>
-#include <charconv>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
-#include <system_error>
 
 #if defined(_MSC_VER)
 // The extension's MSVC flags are /fp:fast, which licenses the compiler to
@@ -55,23 +53,12 @@ void Int::trim() {
 
 Int Int::from_integral_double(double d) {
     if (d > -9.2e18 && d < 9.2e18) return Int(static_cast<long long>(d));
-    // Exact decimal digits of an integral double: to_chars with an explicit
-    // precision prints the exact value, not the shortest round trip.
-    char buf[400];
-    auto r = std::to_chars(buf, buf + sizeof buf, d, std::chars_format::fixed, 0);
-    std::string s(buf, r.ptr);
-    Int out;
-    std::size_t start = 0;
-    if (!s.empty() && s[0] == '-') {
-        out.neg_ = true;
-        start = 1;
-    }
-    for (std::size_t end = s.size(); end > start;) {
-        std::size_t begin = end >= start + 9 ? end - 9 : start;
-        out.mag_.push_back(static_cast<std::uint32_t>(std::stoul(s.substr(begin, end - begin))));
-        end = begin;
-    }
-    out.trim();
+    // |d| >= 2^63: an integer mantissa times a power of two, doubled exactly.
+    int e = 0;
+    double m = std::frexp(std::fabs(d), &e);  // |d| = m * 2^e, m in [0.5, 1)
+    Int out(static_cast<long long>(std::ldexp(m, 53)));
+    for (int k = 0; k < e - 53; ++k) out = out + out;
+    if (d < 0) out = Int(0) - out;
     return out;
 }
 
@@ -309,6 +296,21 @@ double strtod_c(const char *s) {
 #endif
 }
 
+// snprintf(fmt, x) in the C locale, whatever the process's locale is.
+std::string format_c(const char *fmt, double x) {
+    char buf[64];
+#if defined(_MSC_VER)
+    static _locale_t c = _create_locale(LC_NUMERIC, "C");
+    _snprintf_l(buf, sizeof buf, fmt, c, x);
+#else
+    static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    locale_t old = uselocale(c);
+    std::snprintf(buf, sizeof buf, fmt, x);
+    uselocale(old);
+#endif
+    return buf;
+}
+
 bool digitpart(const std::string &s, std::size_t &k, std::string &out) {
     // digit (["_"] digit)*
     if (k >= s.size() || !(s[k] >= '0' && s[k] <= '9')) return false;
@@ -367,14 +369,10 @@ bool py_float(const std::string &token, double &value) {
         if (!digitpart(token, k, clean)) return false;
     }
     if (k != token.size()) return false;
-    double v = 0;
-    auto r = std::from_chars(clean.data(), clean.data() + clean.size(), v,
-                             std::chars_format::general);
-    if (r.ec == std::errc::result_out_of_range) {
-        v = strtod_c(clean.c_str());  // overflow to inf / underflow, correctly rounded
-    } else if (r.ec != std::errc() || r.ptr != clean.data() + clean.size()) {
-        return false;
-    }
+    // The grammar above admitted plain decimal only; strtod in the C locale
+    // rounds it correctly (glibc, Apple libc and the UCRT alike), overflow
+    // to inf and underflow included.
+    double v = strtod_c(clean.c_str());
     value = negative ? -v : v;
     return true;
 }
@@ -386,9 +384,7 @@ Int py_round(double x) { return Int::from_integral_double(std::nearbyint(x)); }
 std::string py_g(double x, bool plus = false) {
     if (std::isnan(x)) return plus ? "+nan" : "nan";
     if (std::isinf(x)) return x > 0 ? (plus ? "+inf" : "inf") : "-inf";
-    char buf[64];
-    auto r = std::to_chars(buf, buf + sizeof buf, x, std::chars_format::general, 6);
-    std::string s(buf, r.ptr);
+    std::string s = format_c("%g", x);
     if (plus && !std::signbit(x)) s = "+" + s;
     return s;
 }
