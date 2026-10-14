@@ -10,6 +10,7 @@ dialect: a deck that does not tokenize has no cards to refuse.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 __all__ = ["DeckError", "Card", "parse_card", "tokenize"]
@@ -57,7 +58,24 @@ class Card:
         return self.values[k] if k < len(self.values) else 0.0
 
     def i(self, k: int) -> int:
-        return int(round(self.f(k)))
+        """Field ``k`` as an integer: rounded half to even, exact however
+        large.  An infinite or NaN field has no integer, and refuses here
+        with the exception type Python's own conversion raises (OverflowError
+        / ValueError) but in this module's words, which name the card and
+        the field rather than the interpreter's float-to-int conversion: the
+        C++ reader (`_nec5_deck_core.cpp`) raises the same text."""
+        value = self.f(k)
+        if math.isnan(value):
+            raise ValueError(
+                f"{self.mnemonic} field {k + 1} is NaN; an integer field must be "
+                f"a finite number"
+            )
+        if math.isinf(value):
+            raise OverflowError(
+                f"{self.mnemonic} field {k + 1} is infinite; an integer field must "
+                f"be a finite number"
+            )
+        return int(round(value))
 
     @property
     def text(self) -> str:
@@ -84,12 +102,17 @@ def parse_card(line: str) -> Card | None:
     if not stripped:
         return None
     tokens = stripped.replace(",", " ").split()
+    if not tokens:
+        # A line of separators alone. IndexError is the type this line has
+        # always raised (an empty token list's first element); the message
+        # says what the line is.
+        raise IndexError(f"card line has no mnemonic, only separators: {stripped}")
     head = tokens[0]
     if len(head) > 2 and head[:2].isalpha() and head[2] in _FUSED_FIELD_START:
         tokens = [head[:2], head[2:], *tokens[1:]]
     mnemonic = tokens[0].upper()
     if len(mnemonic) != 2 or not mnemonic.isalpha():
-        raise DeckError(f"CARD'S MNEMONIC CODE TOO SHORT OR MISSING: {stripped!r}")
+        raise DeckError(f"CARD'S MNEMONIC CODE TOO SHORT OR MISSING: {stripped}")
     if mnemonic in ("CM", "CE"):
         # Comment bodies are free text; tokenizing them would refuse a
         # perfectly ordinary English comment for containing an apostrophe.
@@ -107,9 +130,7 @@ def parse_card(line: str) -> Card | None:
     for token in fields:
         parsed = _to_float(token)
         if parsed is None:
-            raise DeckError(
-                f"NON-NUMERICAL CHARACTER IN FIELD: {token!r} on {stripped!r}"
-            )
+            raise DeckError(f"NON-NUMERICAL CHARACTER IN FIELD: {token} on {stripped}")
         values.append(parsed)
     return Card(mnemonic, tuple(values), line.rstrip("\n"), trailer)
 

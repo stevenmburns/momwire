@@ -989,7 +989,7 @@ class _Nec5Parser:
         if trailer is None or trailer == "NOFILE":
             return
         raise DeckError(
-            f"GN names a Sommerfeld-table file {trailer!r}; this engine computes "
+            f"GN names a Sommerfeld-table file {trailer}; this engine computes "
             f"its own Sommerfeld solution and serves only NOFILE, the name NEC-5 "
             f"takes to skip writing the table"
         )
@@ -1003,7 +1003,7 @@ class _Nec5Parser:
         """
         if card.trailer is not None:
             raise DeckError(
-                f"GN {code} carries a trailing token {card.trailer!r}; only a "
+                f"GN {code} carries a trailing token {card.trailer}; only a "
                 f"finite ground (GN 0 / GN 2) carries the Sommerfeld-table file "
                 f"field"
             )
