@@ -159,17 +159,8 @@ def snap(
     if tie and tap and mirror is not None and not os.environ.get(_TAP):
         lo, hi = sorted((near, next_))
         if not mirror(float(arcs[lo]), float(arcs[hi])):
-            where = "" if wire is None else f" on wire {wire}"
-            warnings.warn(
-                f"{family}: the {what} arclength {target:.12g}{where} falls "
-                f"exactly between two sites this basis can carry, at "
-                f"{arcs[lo]:.12g} and {arcs[hi]:.12g}, and the deck is not "
-                f"symmetric about it, so the choice changes the answer. The "
-                f"smaller-arclength rule took {arcs[pick]:.12g}. Name one of "
-                f"the two sites, or change the wire's segment count by one "
-                f"so the request lands on a site (momwire#1262).",
-                AmbiguousSite,
-                stacklevel=3,
+            warn_tie(
+                family, what, target, wire, arcs[lo], arcs[hi], arcs[pick], stacklevel=3
             )
     if tap and os.environ.get(_TAP):
         _record(family, what, wire, target, margin, total_arc, arcs.size)
@@ -185,6 +176,26 @@ def snap(
                 stacklevel=3,
             )
     return pick, margin
+
+
+def warn_tie(family, what, target, wire, lo, hi, picked, *, stacklevel):
+    """`snap`'s warning for a tie the deck's symmetry does not excuse
+    (momwire#1262): the sites at arclengths `lo` and `hi`, `picked` taken.
+    Its own function so a snap made elsewhere (razor-2p's C++ front half,
+    which reports its ties) warns in the same words; `stacklevel` counts from
+    the caller's frame, as `warnings.warn`'s does."""
+    where = "" if wire is None else f" on wire {wire}"
+    warnings.warn(
+        f"{family}: the {what} arclength {target:.12g}{where} falls "
+        f"exactly between two sites this basis can carry, at "
+        f"{lo:.12g} and {hi:.12g}, and the deck is not "
+        f"symmetric about it, so the choice changes the answer. The "
+        f"smaller-arclength rule took {picked:.12g}. Name one of "
+        f"the two sites, or change the wire's segment count by one "
+        f"so the request lands on a site (momwire#1262).",
+        AmbiguousSite,
+        stacklevel=stacklevel + 1,
+    )
 
 
 def _point_at(polyline, arc):

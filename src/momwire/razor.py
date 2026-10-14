@@ -1274,6 +1274,25 @@ _CXX_POOL_MAX_BASIS = 1024
 # TEST-ONLY: keep a copy of the filled Z (before the LU) as `solver._cxx_z`.
 _CXX_WANT_Z = False
 
+# The razor-2p FRONT half in C++ (`_razor_front_core.cpp`, unit 1 of the
+# standalone executable): under the same opt-in, a `compute_port_solution`
+# with nothing prepared hands the constructor's OWN arguments to C++, which
+# validates and normalises them as `__init__` does, builds the geometry, the
+# prepared tables and the port columns, and fills and factors -- no Python
+# front half on the solve. A solve it does not cover (`_cxx_front_refusal`,
+# or the core's own decline) falls through to the routes below, with the
+# reason counted here; a solve it covers counts "cxx-front" in `_CXX_ROUTE`.
+_HAVE_RAZOR_FRONT_CXX = _acc is not None and bool(
+    getattr(_acc, "razor_front_proto", False)
+)
+_CXX_FRONT_ROUTE = {}
+# False keeps the opted-in solve on the fill-only route below (the
+# prototype's own tests exercise that route this way).
+_CXX_FRONT = True
+# TEST-ONLY: keep the core's prepared tables and normalised arguments as
+# `solver._cxx_front`, and its port columns as `solver._cxx_cols`.
+_CXX_WANT_FRONT = False
+
 
 def _razor_cxx_wanted():
     if _RAZOR_CXX is not None:
@@ -1913,6 +1932,27 @@ class RazorSolver(
         cancel=None,
         **unsupported,
     ):
+        wires = list(wires) if wires is not None else []
+        # The constructor's own arguments, as given, for the C++ front half
+        # (`_cxx_front_port_solution`), which reads them the way this method
+        # does. References only; nothing is copied.
+        self._cxx_kwargs = {
+            "wires": wires,
+            "n_per_edge_per_wire": n_per_edge_per_wire,
+            "nsegs": nsegs,
+            "wire_radius": wire_radius,
+            "feeds": feeds,
+            "feed_wire_index": feed_wire_index,
+            "feed_arclength": feed_arclength,
+            "node_gaps": node_gaps,
+            "ground_z": ground_z,
+            "wavelength": wavelength,
+            "extended_kernel": extended_kernel,
+            "exact_kernel": exact_kernel,
+            "n_qp_path": n_qp_path,
+            "n_qp_source": n_qp_source,
+            "n_qp_sommerfeld": n_qp_sommerfeld,
+        }
         # momwire#1042: a wire listed twice is solved once. Dropped here,
         # before anything reads a wire index, and every wire-indexed argument
         # remapped; the per-wire readouts re-expand through `_wire_dedup`.
@@ -1925,7 +1965,7 @@ class RazorSolver(
             self._wire_dedup,
         ) = _wire_spec.drop_duplicated_wires(
             type(self).__name__,
-            list(wires) if wires is not None else [],
+            wires,
             n_per_edge_per_wire,
             per_wire={
                 "wire_radius": wire_radius,
@@ -6640,6 +6680,10 @@ class RazorSolver(
         `basis` is an opaque `_RazorBasis` handle, stable across the ports
         of this one solution and NOT across solves.
         """
+        if prepared is None and _CXX_FRONT and _razor_cxx_wanted():
+            solution = self._cxx_front_port_solution()
+            if solution is not None:
+                return solution
         geom = self._build_geometry()
         self._checkpoint()
         if prepared is None:
@@ -6668,6 +6712,125 @@ class RazorSolver(
             y=Y,
             coeffs=X,
             port_currents=Y,  # the same object: the readout IS the Y matrix
+            basis=_RazorBasis(geom=geom, k=self.k),
+        )
+
+    def _cxx_front_refusal(self):
+        """Why the C++ front half does not take this solve, or None.
+
+        Read off the CONSTRUCTED solver, so it costs nothing: the routes the
+        core does not serve (`_razor_front_core.h`'s scope) as `__init__`
+        resolved them. The core then reads the constructor's own arguments
+        and may still decline by name (a wire below the plane, the exact
+        kernel engaging, ...), which is counted the same way.
+        """
+        if not _HAVE_RAZOR_FRONT_CXX:
+            return "no-kernel"
+        if not (
+            _use_razor_fill_accel()
+            and _use_razor_assemble_accel()
+            and _use_razor_t2_accel()
+            and _HAVE_RAZOR_T1_ROWS_ACCEL
+        ):
+            return "numpy-route"
+        if type(self) is not RazorSolver:
+            return "subclass"
+        if not (self.nec5_quadrature and _CENTROID_SHARE):
+            return "path-rule"
+        if self.eps != RazorSolver.eps or self.mu != RazorSolver.mu:
+            return "medium"
+        if (
+            getattr(self, "_crossing", False)
+            or getattr(self, "_detached", False)
+            or getattr(self, "_below_plane", False)
+        ):
+            return "buried-route"
+        if self._loading_active or self.lumped_loads or self._has_jacket_charge():
+            return "loading"
+        if self.ground_eps is not None:
+            return "finite-ground"
+        if self.ground_phi_mode != "normal":
+            return "ground-phi-mode"
+        if self._wire_dedup is not None:
+            return "duplicated-wire"
+        if self._declared_junctions is not None:
+            return "declared-junctions"
+        if _complex_k(self.k):
+            return "complex-k"
+        if self.exact_kernel:
+            return "exact-kernel"
+        if os.environ.get(_feed_snap._TAP):
+            return "snap-tally"
+        return None
+
+    def _cxx_front_port_solution(self):
+        """`compute_port_solution` with the front half in C++ too, or None.
+
+        The core takes the constructor's arguments (`self._cxx_kwargs`), so
+        nothing the Python front half builds -- `_build_geometry`,
+        `_assemble_Z_prepare`, `_refuse_coincident_segments`, `_port_columns`
+        -- runs on this route. It returns the geometry as `_build_geometry`'s
+        own dict (the readouts read it), the port columns and the solved
+        coefficients; Y is `cols.T @ X` here, as on the Python route. The
+        Gauss-Legendre table is this solver's own (`leggauss`), so it is the
+        table the Python route would use. Refusals the Python front half
+        raises at construction or at the solve, the core raises with the same
+        type and message.
+        """
+        reason = self._cxx_front_refusal()
+        if reason is None:
+            self._checkpoint()
+            xg, wg = leggauss(self.n_qp_source)
+            ctx = _cxx_context()
+            out = ctx.front_port_solution(
+                self._cxx_kwargs,
+                xg,
+                wg,
+                _CHUNK_ELEMS,
+                self._cancel_flag,
+                _CXX_WANT_Z,
+                _CXX_WANT_FRONT,
+            )
+            reason = out["decline"]
+        if reason is not None:
+            _CXX_FRONT_ROUTE[reason] = _CXX_FRONT_ROUTE.get(reason, 0) + 1
+            return None
+        _CXX_FRONT_ROUTE["front"] = _CXX_FRONT_ROUTE.get("front", 0) + 1
+        _CXX_ROUTE["cxx-front"] = _CXX_ROUTE.get("cxx-front", 0) + 1
+        cols = out["cols"]
+        if cols.shape[0] > _CXX_POOL_MAX_BASIS:
+            ctx.release()
+        if self._cached_geometry is None:
+            self._cached_geometry = out["geom"]
+        geom = self._cached_geometry
+        if _CXX_WANT_Z:
+            self._cxx_z = out["Z"]
+        if _CXX_WANT_FRONT:
+            self._cxx_front = out["front"]
+            self._cxx_cols = cols
+            self._cxx_geom = out["geom"]
+        # An ambiguous snap warns exactly as `_feed_snap.snap` would have.
+        for _feed, w, target, lo, hi, picked in out["ties"]:
+            if not _feed_snap.mirror_images(self, w, lo, hi):
+                _feed_snap.warn_tie(
+                    type(self).__name__, "site", target, w, lo, hi, picked, stacklevel=2
+                )
+        if out["info"]:
+            # `lu_factor`'s warning, then `_bspline._lu_solve`'s refusal.
+            import scipy.linalg
+
+            warnings.warn(
+                f"Diagonal number {out['info']} is exactly zero. Singular matrix.",
+                scipy.linalg.LinAlgWarning,
+                stacklevel=3,
+            )
+            raise np.linalg.LinAlgError("singular matrix")
+        X = out["X"]
+        Y = cols.T @ X
+        return PortSolution(
+            y=Y,
+            coeffs=X,
+            port_currents=Y,
             basis=_RazorBasis(geom=geom, k=self.k),
         )
 
