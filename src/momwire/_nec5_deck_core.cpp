@@ -1822,6 +1822,8 @@ std::string text_probe(const std::string &op, const std::string &arg) {
     return o.s;
 }
 
+std::string format_g(double x) { return py_g(x); }
+
 }  // namespace nec5
 }  // namespace mw
 
