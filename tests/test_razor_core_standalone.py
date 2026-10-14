@@ -41,13 +41,17 @@ PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
 FIXTURE = ROOT / "tests" / "fixtures" / "razor_window_n12.npz"
 # `_razor_solve_core.cpp` is the whole-solve prototype's driver of the other
-# two; it is compiled and linked here so that it, too, stays Python-free.
+# two, and `_razor_front_core.cpp` its front half (construction, geometry,
+# the prepared tables, the port columns); both are compiled and linked here
+# so that they, too, stay Python-free.
 CORE_SOURCES = (
     "_razor_core.cpp",
     "_razor_t2_core.cpp",
     "_accel_razor_cplx.cpp",
     "_razor_solve_core.cpp",
+    "_razor_front_core.cpp",
 )
+DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "linux", reason="flags are read from setup.py's Linux branch"
@@ -125,22 +129,26 @@ def driver(accel, tmp_path_factory):
         str(PKG),
     ]
     out = tmp_path_factory.mktemp("razor_core")
-    sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / "razor_chain_driver.cpp"]
-    objects, deps, procs = [], [], []
+    drivers = ("razor_chain_driver", "razor_front_driver")
+    sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
+    objects, deps, procs = {}, [], []
     for src in sources:  # concurrently: the -O3 core TUs dominate the cost
         obj, dep = out / (src.stem + ".o"), out / (src.stem + ".d")
         cmd = [*base, "-MD", "-MF", str(dep), "-c", str(src), "-o", str(obj)]
         procs.append((cmd, subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True)))
-        objects.append(str(obj))
+        objects[src.stem] = str(obj)
         deps.append(dep)
     for cmd, proc in procs:
         _, err = proc.communicate()
         assert proc.returncode == 0, f"{shlex.join(cmd)}\n{err}"
-    exe = out / "razor_chain_driver"
-    cmd = [*cxx, *objects, *link_args, "-o", str(exe)]
-    run = subprocess.run(cmd, capture_output=True, text=True)
-    assert run.returncode == 0, f"{shlex.join(cmd)}\n{run.stderr}"
-    return exe, deps
+    core = [objects[pathlib.Path(s).stem] for s in CORE_SOURCES]
+    exes = {}
+    for d in drivers:
+        exes[d] = out / d
+        cmd = [*cxx, *core, objects[d], *link_args, "-ldl", "-o", str(exes[d])]
+        run = subprocess.run(cmd, capture_output=True, text=True)
+        assert run.returncode == 0, f"{shlex.join(cmd)}\n{run.stderr}"
+    return exes, deps
 
 
 def test_the_core_includes_no_python_header(driver):
@@ -151,19 +159,21 @@ def test_the_core_includes_no_python_header(driver):
     seen = " ".join(d.read_text() for d in deps)
     assert "_razor_core.h" in seen, "the dependency files are not what they seem"
     assert "_razor_solve_core.h" in seen, "the solve prototype's core was not built"
+    assert "_razor_front_core.h" in seen, "the front half's core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
 
 def test_the_driver_links_no_python(driver):
-    exe, _ = driver
-    libs = subprocess.run(["ldd", str(exe)], capture_output=True, text=True).stdout
-    assert "libpython" not in libs, libs
+    exes, _ = driver
+    for exe in exes.values():
+        libs = subprocess.run(["ldd", str(exe)], capture_output=True, text=True).stdout
+        assert "libpython" not in libs, libs
 
 
 @pytest.mark.parametrize("prefix", ["", "ek_"], ids=["reduced", "extended_kernel"])
 def test_the_cxx_chain_is_the_python_chain_bit_for_bit(driver, accel, prefix, tmp_path):
-    exe, _ = driver
+    exe = driver[0]["razor_chain_driver"]
     cap = _capture_module()
     w = np.load(FIXTURE)
     ek = w[prefix + "sm_group_i"].size > 0
@@ -184,3 +194,123 @@ def test_the_cxx_chain_is_the_python_chain_bit_for_bit(driver, accel, prefix, tm
         assert mine == np.ravel(ref, order=order).tobytes(), (
             f"{name}: the C++ chain and the Python chain disagree"
         )
+
+
+# --- geometry -> currents, no Python -------------------------------------
+
+
+def _scipy_openblas():
+    """SciPy's bundled OpenBLAS: the library whose zgetrf/zgetrs the Python
+    route reaches (`cython_lapack`) and whose ddot equals numpy's norm."""
+    import glob
+
+    import scipy
+
+    found = sorted(
+        glob.glob(
+            str(
+                pathlib.Path(scipy.__file__).parent.parent / "scipy.libs" / "*openblas*"
+            )
+        )
+    )
+    if not found:
+        pytest.skip("no bundled OpenBLAS beside SciPy (not a wheel install)")
+    return found[0]
+
+
+def _read_deck(path):
+    """The fixture deck as RazorSolver's keyword arguments (razor-2p)."""
+    kw = dict(
+        wires=[],
+        n_per_edge_per_wire=[],
+        feeds=[],
+        node_gaps=[],
+        nec5_quadrature=True,
+        extended_kernel=False,
+        exact_kernel="auto",
+    )
+    for line in path.read_text().splitlines():
+        line = line.split("#")[0].split()
+        if not line:
+            continue
+        key, rest = line[0], line[1:]
+        if key == "wavelength":
+            kw["wavelength"] = float(rest[0])
+        elif key == "radius":
+            r = [float(v) for v in rest]
+            kw["wire_radius"] = r[0] if len(r) == 1 else r
+        elif key == "ground":
+            kw["ground_z"] = float(rest[0])
+        elif key == "ek":
+            kw["extended_kernel"] = rest[0] != "0"
+        elif key == "exact":
+            kw["exact_kernel"] = {"auto": "auto", "on": True}.get(rest[0], False)
+        elif key == "wire":
+            cut = rest.index(":")
+            kw["n_per_edge_per_wire"].append([int(c) for c in rest[:cut]])
+            xyz = [float(v) for v in rest[cut + 1 :]]
+            kw["wires"].append([tuple(xyz[i : i + 3]) for i in range(0, len(xyz), 3)])
+        elif key == "feed":
+            arc = None if rest[1] == "mid" else float(rest[1])
+            kw["feeds"].append(
+                (int(rest[0]), arc, complex(float(rest[2]), float(rest[3])))
+            )
+        elif key == "gap":
+            kw["node_gaps"].append(
+                (int(rest[0]), rest[1], complex(float(rest[2]), float(rest[3])))
+            )
+    return kw
+
+
+def test_geometry_to_currents_in_cxx_alone_is_the_python_route(driver, tmp_path):
+    """The front half, the fill and the LU, from a deck file, in a process
+    with no Python: Z and the coefficients are the Python route's bytes."""
+    from scipy.linalg import cython_blas, cython_lapack
+
+    from momwire import RazorSolver, razor
+
+    lib = _scipy_openblas()
+    # The library the driver loads IS the one the Python route calls: SciPy's
+    # cython_blas / cython_lapack (whose capsules the binding reads) resolve
+    # their BLAS and LAPACK against it.
+    for module in (cython_blas, cython_lapack):
+        deps = subprocess.run(["ldd", module.__file__], capture_output=True, text=True)
+        assert os.path.realpath(lib) in {
+            os.path.realpath(w)
+            for w in deps.stdout.split()
+            if w.startswith("/") and "openblas" in w
+        }, deps.stdout
+
+    run = subprocess.run(
+        [str(driver[0]["razor_front_driver"]), str(DECK), lib, str(tmp_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    meta = (tmp_path / "front_meta.txt").read_text().split()
+    assert meta[0].isdigit(), f"the driver did not solve: {meta}"
+    n, m, info = (int(v) for v in meta)
+    assert info == 0
+
+    seen = {}
+    orig = razor._bspline._lu_solve
+
+    def lu(Z, rhs, **k):
+        seen["Z"] = np.array(Z, order="F", copy=True)
+        return orig(Z, rhs, **k)
+
+    razor._bspline._lu_solve = lu
+    saved = razor._RAZOR_CXX
+    razor._RAZOR_CXX = False
+    try:
+        sol = RazorSolver(**_read_deck(DECK)).compute_port_solution()
+    finally:
+        razor._bspline._lu_solve = orig
+        razor._RAZOR_CXX = saved
+    assert sol.coeffs.shape == (n, m) and m == 3
+    assert (tmp_path / "front_Z.bin").read_bytes() == np.ravel(
+        seen["Z"], order="F"
+    ).tobytes()
+    assert (tmp_path / "front_X.bin").read_bytes() == np.ravel(
+        sol.coeffs, order="F"
+    ).tobytes()
