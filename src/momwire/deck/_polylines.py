@@ -58,6 +58,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from .model import DeckModel, DeckWire, WireMaterial
+from .._vec3 import norm3
 
 __all__ = ["Mesh", "split_at_plane", "to_polylines"]
 
@@ -497,7 +498,7 @@ def to_polylines(model: DeckModel, ports: tuple[tuple[int, float], ...]) -> Mesh
         np.stack([np.asarray(nodes[n], dtype=float) for n in path], axis=0)
         for path in polylines
     )
-    lengths = [np.linalg.norm(np.diff(a, axis=0), axis=1) for a in arrays]
+    lengths = [norm3(np.diff(a, axis=0)) for a in arrays]
 
     forced = set(node_gap_nodes)
     junctions: list[tuple[tuple[int, str], ...]] = []

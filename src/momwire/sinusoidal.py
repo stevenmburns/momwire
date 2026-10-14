@@ -77,6 +77,7 @@ from ._port_solution import (
 from ._stable import asinh_diff
 from ._stable import expm1_neg_j as _expm1_neg_j
 from ._stable import expm1_neg_j_from_half as _expm1_neg_j_from_half
+from ._vec3 import norm3
 
 _HAVE_FIELD_TENSOR = _acc is not None and hasattr(_acc, "sinusoidal_field_tensor")
 # momwire#1222: the complex-k twin of `sinusoidal_field_tensor`, both shape
@@ -1631,7 +1632,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         normal (0 for a vertical member, 90 for one lying in the plane)."""
         node, nxt = self._node_adjacent_edge(w, end)
         d = np.asarray(nxt, dtype=float) - np.asarray(node, dtype=float)
-        cos = abs(d[2]) / float(np.linalg.norm(d))
+        cos = abs(d[2]) / float(norm3(d))
         return float(np.degrees(np.arccos(min(1.0, cos))))
 
     def _refuse_coincident_crossing_members(self, crossing):
@@ -1655,7 +1656,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             for i in range(len(edges)):
                 for jj in range(i + 1, len(edges)):
                     (n0, f0), (n1, f1) = edges[i], edges[jj]
-                    if np.linalg.norm(n0 - n1) <= a and np.linalg.norm(f0 - f1) <= a:
+                    if norm3(n0 - n1) <= a and norm3(f0 - f1) <= a:
                         raise NotImplementedError(
                             _COINCIDENT_CROSSING_MEMBERS_REFUSAL.format(
                                 j=j, a=members[i][0], b=members[jj][0]
@@ -1754,7 +1755,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                 p0 = pl[e_idx]
                 p1 = pl[e_idx + 1]
                 vec = p1 - p0
-                edge_len = float(np.linalg.norm(vec))
+                edge_len = float(norm3(vec))
                 if edge_len < 1e-15:
                     raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
                 tan = vec / edge_len
@@ -3430,7 +3431,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         z_eval = np.einsum("...d,...d->...", rvec, t_src)
         # Perpendicular component:
         rho_vec = rvec - z_eval[..., None] * t_src  # (M, N, 3)
-        rho_axis = np.linalg.norm(rho_vec, axis=-1)  # (M, N)
+        rho_axis = norm3(rho_vec)  # (M, N)
         rho_eval = np.sqrt(rho_axis * rho_axis + a * a)  # (M, N), >= a
 
         # Tangent dot products; t_obs is shape (M, 1, 3), broadcasting
@@ -5675,7 +5676,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         rvec = obs_c - src_c
         z_eval = rvec @ src_t
         rho_vec = rvec - z_eval[..., None] * src_t
-        rho_axis = np.linalg.norm(rho_vec, axis=-1)
+        rho_axis = norm3(rho_vec)
         a = np.asarray(a_obs, dtype=float)
         a = a.reshape(a.shape[:1]) if a.ndim == 2 else a
         rho_eval = np.sqrt(rho_axis * rho_axis + a * a)

@@ -18,6 +18,7 @@ from typing import NamedTuple
 import numpy as np
 
 from ._junction_rule import coincident_end_groups
+from ._vec3 import norm3
 
 
 def format_numbers(values) -> str:
@@ -122,11 +123,11 @@ def check_junction_coincidence(wires_polylines, n_per_edge_per_wire, junctions):
             else:
                 anchor, edge, count = pl[-1], pl[-1] - pl[-2], npe[-1]
             anchors.append(anchor)
-            seg_lens.append(float(np.linalg.norm(edge)) / max(int(count), 1))
+            seg_lens.append(float(norm3(edge)) / max(int(count), 1))
         tol = max(_JUNCTION_COINCIDENCE_FLOOR, 1e-3 * min(seg_lens))
         w0, end0 = group[0]
         for (w, end), anchor in zip(group[1:], anchors[1:]):
-            dist = float(np.linalg.norm(anchor - anchors[0]))
+            dist = float(norm3(anchor - anchors[0]))
             if dist > tol:
                 raise ValueError(
                     f"junction {j}: members do not coincide - wire {w} {end} at "
@@ -779,16 +780,16 @@ GAP_DEPTH = {"point": 1, "knot": 0, "segment": 0}
 
 def _segment_lengths(polyline, npe):
     pl = np.asarray(polyline, dtype=float)
-    lengths = np.linalg.norm(np.diff(pl, axis=0), axis=1)
+    lengths = norm3(np.diff(pl, axis=0))
     return np.repeat(lengths / np.asarray(npe, dtype=float), np.asarray(npe))
 
 
 def _straight_segment_lengths(wires_polylines, n_per_edge_per_wire):
     """`_segment_lengths` of every wire, from one array expression, when every
     wire is a single straight edge (every EZNEC card); else ``None``
-    (momwire#1420). The edge length is `np.linalg.norm`'s own
-    ``sqrt(add.reduce(d * d, axis=1))`` and each segment that length over the
-    edge's count, so every entry is the per-wire call's, bit for bit."""
+    (momwire#1420). The edge length is `norm3`'s, as in the per-wire call,
+    and each segment that length over the edge's count, so every entry is the
+    per-wire call's, bit for bit."""
     pls = [np.asarray(pl, dtype=float) for pl in wires_polylines]
     counts = [np.asarray(npe) for npe in n_per_edge_per_wire]
     if (
@@ -800,7 +801,7 @@ def _straight_segment_lengths(wires_polylines, n_per_edge_per_wire):
         return None
     stacked = np.array(pls)
     d = stacked[:, 1] - stacked[:, 0]
-    lengths = np.sqrt(np.add.reduce(d * d, axis=1))
+    lengths = norm3(d)
     n = np.array([c[0] for c in counts])
     per = lengths / n.astype(float)
     return [np.repeat(per[w : w + 1], counts[w]) for w in range(len(pls))]

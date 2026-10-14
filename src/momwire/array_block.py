@@ -81,6 +81,7 @@ from .hmatrix import (
     _OFFEDGE_BLOCK_ACCEL_MAX_D,
     HMatrixSolver,
 )
+from ._vec3 import norm3
 
 
 # ----------------------------------------------------------------------
@@ -571,16 +572,16 @@ def _detect_lattice(cen, tol=1e-6):
     if P < 4:
         return None
     d = cen - cen[0]
-    norms = np.linalg.norm(d, axis=1)
+    norms = norm3(d)
     nz = np.argsort(norms)
     nz = nz[norms[nz] > tol]
     if nz.size == 0:
         return None
     v1 = d[nz[0]]
     v2 = None
-    n1 = np.linalg.norm(v1)
+    n1 = norm3(v1)
     for idx in nz[1:]:
-        if np.linalg.norm(np.cross(v1, d[idx])) > 1e-9 * n1 * norms[idx]:
+        if norm3(np.cross(v1, d[idx])) > 1e-9 * n1 * norms[idx]:
             v2 = d[idx]
             break
     A = np.array([v1]) if v2 is None else np.array([v1, v2])

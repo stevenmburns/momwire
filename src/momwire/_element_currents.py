@@ -20,6 +20,7 @@ this mixin unchanged along with it.
 from __future__ import annotations
 
 import numpy as np
+from ._vec3 import norm3
 
 
 class _ElementCurrents:
@@ -111,7 +112,7 @@ class _ElementCurrents:
             # accumulate `arc_at_knot` from the per-segment lengths. Only the
             # subdiv > 1 path uses it; subdiv == 1 asks for the mesh knots by
             # name so the sample positions are the solver's own, bit for bit.
-            step = np.linalg.norm(knots[1:] - knots[:-1], axis=1)
+            step = norm3(knots[1:] - knots[:-1])
             arcs.append(np.concatenate([[0.0], np.cumsum(step)]))
 
         currents = self.currents_at_knots(coeffs, None if subdiv == 1 else arcs)

@@ -49,6 +49,7 @@ import numpy as np
 
 from . import _accel, _schedule
 from ._quadrature import leggauss
+from ._vec3 import norm3
 
 _acc = _accel.acc
 _HAVE_SIN_TIERED = _acc is not None and hasattr(
@@ -136,8 +137,8 @@ def pair_moments_product(seg_l_i, seg_r_i, seg_l_j, seg_r_j, a2, k, t01, w01, ek
     `b_j` per source segment (None or absent: b = a_ek; momwire#1368)."""
     seg_l_i, seg_r_i = np.asarray(seg_l_i, float), np.asarray(seg_r_i, float)
     seg_l_j, seg_r_j = np.asarray(seg_l_j, float), np.asarray(seg_r_j, float)
-    len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
-    len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
+    len_i = norm3(seg_r_i - seg_l_i)
+    len_j = norm3(seg_r_j - seg_l_j)
     t = t01[None, :, None]
     pos_i = (1 - t) * seg_l_i[:, None, :] + t * seg_r_i[:, None, :]
     pos_j = (1 - t) * seg_l_j[:, None, :] + t * seg_r_j[:, None, :]
@@ -271,7 +272,7 @@ def classify_pairs(c_i, t_i, h_i, c_j, t_j, h_j, *, near_ratio=NEAR_RATIO, tol=1
     ii = np.repeat(np.arange(c_i.shape[0]), [len(x) for x in hits])
     jj = np.fromiter((j for x in hits for j in x), dtype=np.int64, count=ii.size)
     if ii.size:
-        dist = np.linalg.norm(c_i[ii] - c_j[jj], axis=1)
+        dist = norm3(c_i[ii] - c_j[jj])
         keep = dist < near_ratio * np.maximum(h_i[ii], h_j[jj])
         ii, jj = ii[keep], jj[keep]
         order = np.lexsort((jj, ii))
@@ -281,7 +282,7 @@ def classify_pairs(c_i, t_i, h_i, c_j, t_j, h_j, *, near_ratio=NEAR_RATIO, tol=1
     ends_i = np.stack(segment_ends(c_i, t_i, h_i), axis=1)  # (Ni, 2, 3)
     ends_j = np.stack(segment_ends(c_j, t_j, h_j), axis=1)
     scale = np.maximum(h_i[ii], h_j[jj])
-    d = np.linalg.norm(ends_i[ii][:, :, None, :] - ends_j[jj][:, None, :, :], axis=3)
+    d = norm3(ends_i[ii][:, :, None, :] - ends_j[jj][:, None, :, :])
     close = d <= tol * scale[:, None, None]
     touching = close.any(axis=(1, 2)) & ~parallel
     shared_i = np.where(touching, np.argmax(close.any(axis=2), axis=1), -1)
@@ -596,8 +597,8 @@ def _pair_moments_two_rules_batch(l_i, r_i, l_j, r_j, a2, k, ti, wi, tj, wj, ek=
     """Product-rule moments of a batch of pairs sharing the two rules:
     (3, 3, n_pairs). `ek = (eligible (n,), b (n,) or None)` takes the
     extended kernel on the eligible pairs, ρ = √a2 (momwire#1368)."""
-    len_i = np.linalg.norm(r_i - l_i, axis=1)
-    len_j = np.linalg.norm(r_j - l_j, axis=1)
+    len_i = norm3(r_i - l_i)
+    len_j = norm3(r_j - l_j)
     pos_i = (1 - ti)[None, :, None] * l_i[:, None, :] + ti[None, :, None] * r_i[
         :, None, :
     ]

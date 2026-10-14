@@ -44,6 +44,7 @@ from . import (
     _sommerfeld_transmitted,
 )
 from ._quadrature import leggauss
+from ._vec3 import norm3
 
 # Gauss order for the buried fill's THREE field-form blocks. See
 # `n_qp_buried_field` for the measurement that set it (momwire#553's fifth
@@ -527,7 +528,7 @@ def crossing_node_members(
                 edge = np.asarray(pl[e + 1], dtype=float) - np.asarray(
                     pl[e], dtype=float
                 )
-                length = float(np.linalg.norm(edge))
+                length = float(norm3(edge))
                 h = length / int(npe[e])
                 if h_adjacent is None:
                     h_adjacent = h
@@ -593,15 +594,11 @@ def cross_pair_separation(seg_l, seg_r, a_idx, b_idx):
     c = 0.5 * (np.asarray(seg_l) + np.asarray(seg_r))
     ca = c[a_idx]
     cb = c[b_idx]
-    d = np.linalg.norm(ca[:, None, :] - cb[None, :, :], axis=-1)
+    d = norm3(ca[:, None, :] - cb[None, :, :])
     h = float(
         max(
-            np.linalg.norm(
-                np.asarray(seg_r)[a_idx] - np.asarray(seg_l)[a_idx], axis=-1
-            ).max(),
-            np.linalg.norm(
-                np.asarray(seg_r)[b_idx] - np.asarray(seg_l)[b_idx], axis=-1
-            ).max(),
+            norm3(np.asarray(seg_r)[a_idx] - np.asarray(seg_l)[a_idx]).max(),
+            norm3(np.asarray(seg_r)[b_idx] - np.asarray(seg_l)[b_idx]).max(),
         )
     )
     return float(d.min()), h

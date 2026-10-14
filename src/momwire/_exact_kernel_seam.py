@@ -38,6 +38,7 @@ from __future__ import annotations
 import numpy as np
 
 from ._bspline_kernels import _ek_axis_groups_coaxial
+from ._vec3 import norm3
 
 # What `exact_kernel=` accepts. Public on every serving class (re-exported as
 # `EXACT_KERNEL_CHOICES`), so a consumer can gate on the capability ("auto"
@@ -121,7 +122,7 @@ def group_frame(S, seg_l, seg_r, tangents):
     axis = tangents[S[0]]
     x0 = (seg_l[S] - seg_l[S[0]]) @ axis
     sgn = np.where(tangents[S] @ axis >= 0.0, 1.0, -1.0)
-    h = np.linalg.norm(seg_r[S] - seg_l[S], axis=1)
+    h = norm3(seg_r[S] - seg_l[S])
     return axis, x0, sgn, h
 
 

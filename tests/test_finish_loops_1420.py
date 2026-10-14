@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from momwire._vec3 import norm3
 from momwire.eznec import _serve
 from momwire.eznec._shell import render
 from momwire.razor import RazorSolver
@@ -33,7 +34,10 @@ def _ref_element_geometry(structure, wavelength):
             a = np.asarray(points[k], dtype=float)
             b = np.asarray(points[k + 1], dtype=float)
             centres.append(0.5 * (a + b) / wavelength)
-            lengths.append(float(np.linalg.norm(b - a)) / wavelength)
+            # The length in `norm3`'s order: the walk took a 1-D
+            # `np.linalg.norm`, BLAS ddot, which is that order on Skylake
+            # but fused on AVX-512 machines.
+            lengths.append(float(norm3(b - a)) / wavelength)
             tags.append(wire.tag)
     return centres, lengths, tags
 

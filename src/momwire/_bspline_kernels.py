@@ -125,6 +125,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 import numpy as np
+from ._vec3 import norm3
 
 from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._bspline_ek_moments import D_ek_moment
@@ -597,7 +598,7 @@ def _ek_axis_groups_coaxial(seg_l, seg_r, tangents, seg_a, tol=1e-6):
             dvec = centers[i][None, :] - rep_c
             axial = dvec @ tangents[i]
             perp = dvec - axial[:, None] * tangents[i][None, :]
-            coaxial = np.linalg.norm(perp, axis=1) <= tol * rep_a
+            coaxial = norm3(perp) <= tol * rep_a
             hit = np.flatnonzero(collinear & same_a & coaxial)
             if hit.size:
                 labels[i] = int(hit[0])
@@ -1301,8 +1302,8 @@ def _ladder_for_block(ladder, k, seg_l_i, seg_r_i, seg_l_j, seg_r_j):
     if not ladder:
         return ()
     len_max = max(
-        float(np.linalg.norm(np.asarray(seg_r_i) - np.asarray(seg_l_i), axis=1).max()),
-        float(np.linalg.norm(np.asarray(seg_r_j) - np.asarray(seg_l_j), axis=1).max()),
+        float(norm3(np.asarray(seg_r_i) - np.asarray(seg_l_i)).max()),
+        float(norm3(np.asarray(seg_r_j) - np.asarray(seg_l_j)).max()),
     )
     if abs(k) * len_max <= _LADDER_PHASE_KL_CEILING:
         return ladder
@@ -1318,7 +1319,7 @@ def _phase_row_mask(k, seg_l, seg_r):
     is what lets the block be split by index instead of masked per pair — no
     kernel change, and the split is exact rather than conservative.
     """
-    lengths = np.linalg.norm(np.asarray(seg_r) - np.asarray(seg_l), axis=1)
+    lengths = norm3(np.asarray(seg_r) - np.asarray(seg_l))
     return lengths * abs(k) <= _LADDER_PHASE_KL_CEILING
 
 
@@ -1397,11 +1398,11 @@ def _pair_ratio(seg_l_i, seg_r_i, seg_l_j, seg_r_j):
     shape (N_i, N_j). The C++ kernel computes the same quantity in place."""
     seg_l_i, seg_r_i = np.asarray(seg_l_i), np.asarray(seg_r_i)
     seg_l_j, seg_r_j = np.asarray(seg_l_j), np.asarray(seg_r_j)
-    len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
-    len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
+    len_i = norm3(seg_r_i - seg_l_i)
+    len_j = norm3(seg_r_j - seg_l_j)
     c_i = 0.5 * (seg_l_i + seg_r_i)
     c_j = 0.5 * (seg_l_j + seg_r_j)
-    dist = np.linalg.norm(c_i[:, None, :] - c_j[None, :, :], axis=2)
+    dist = norm3(c_i[:, None, :] - c_j[None, :, :])
     return dist / np.maximum(len_i[:, None], len_j[None, :])
 
 
@@ -1693,8 +1694,8 @@ def _seg_seg_full_moments_offedge(
         )
 
     def _numpy_block(t01, w01):
-        len_i = np.linalg.norm(seg_r_i - seg_l_i, axis=1)
-        len_j = np.linalg.norm(seg_r_j - seg_l_j, axis=1)
+        len_i = norm3(seg_r_i - seg_l_i)
+        len_j = norm3(seg_r_j - seg_l_j)
 
         pos_i = (1 - t01[None, :, None]) * seg_l_i[:, None, :] + t01[
             None, :, None

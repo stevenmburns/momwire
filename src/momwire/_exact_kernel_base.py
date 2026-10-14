@@ -148,6 +148,7 @@ from ._bspline_kernels import (
     _seg_seg_reg_nodes,
     _seg_seg_static_moments,
 )
+from ._vec3 import norm3
 
 # The per-segment fields a run must hold constant. Tests drop one to prove
 # the collision gate sees it (a red control); nothing else should touch it.
@@ -239,7 +240,7 @@ class BaseRows:
         Ls = np.asarray(seg_l, dtype=np.float64)[self.S]
         Rs = np.asarray(seg_r, dtype=np.float64)[self.S]
         u = Rs - Ls
-        h = np.linalg.norm(u, axis=1)
+        h = norm3(u)
         X = max(float(np.max(np.abs(Ls))), float(np.max(np.abs(Rs)))) if n else 0.0
         self.rho = rho = RUN_TOL_EPS * np.finfo(np.float64).eps * X
         fields = {
@@ -663,10 +664,8 @@ class BaseRows:
             jj[ok] = other if line == "row" else at
         I, J = self.S[a0 + ii], self.S[b0 + jj]
         sl, sr = self.seg_l, self.seg_r
-        dist = np.linalg.norm(0.5 * (sl[I] + sr[I]) - 0.5 * (sl[J] + sr[J]), axis=1)
-        longer = np.maximum(
-            np.linalg.norm(sr[I] - sl[I], axis=1), np.linalg.norm(sr[J] - sl[J], axis=1)
-        )
+        dist = norm3(0.5 * (sl[I] + sr[I]) - 0.5 * (sl[J] + sr[J]))
+        longer = np.maximum(norm3(sr[I] - sl[I]), norm3(sr[J] - sl[J]))
         ratio = dist / longer
         thr = self._thresholds
         near = np.abs(ratio[:, None] - thr[None, :]) <= TIE_REL * thr[None, :]
@@ -674,8 +673,9 @@ class BaseRows:
 
 
 def _norm(v):
-    """|v| of one 3-vector (cheaper than `np.linalg.norm` in a loop)."""
-    return float(np.sqrt(v @ v))
+    """|v| of one 3-vector, in `norm3`'s fixed order (a 1-D ``v @ v`` is BLAS
+    ``ddot``, which fuses on AVX-512 machines)."""
+    return norm3(v)
 
 
 def _same_vector(u, s0, s1, rho):

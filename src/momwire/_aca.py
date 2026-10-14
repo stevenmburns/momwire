@@ -16,6 +16,7 @@ they touch/overlap). Smaller eta => stricter => fewer/larger near blocks.
 import numpy as np
 
 from ._cancel import _Cancelable
+from ._vec3 import norm3
 
 
 class Cluster:
@@ -44,7 +45,7 @@ class Cluster:
 
     @property
     def diam(self):
-        return float(np.linalg.norm(self.hi - self.lo))
+        return float(norm3(self.hi - self.lo))
 
     def leaves(self):
         if self.is_leaf:
@@ -90,7 +91,7 @@ def build_cluster_tree(indices, box_lo, box_hi, leaf_size=32):
 def box_distance(a, b):
     """Euclidean gap between two axis-aligned boxes (0 if they overlap)."""
     delta = np.maximum(np.maximum(a.lo - b.hi, b.lo - a.hi), 0.0)
-    return float(np.linalg.norm(delta))
+    return float(norm3(delta))
 
 
 def admissible(a, b, eta):

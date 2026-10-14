@@ -59,6 +59,7 @@ from ._printout import (
     PortRow,
     PowerBudget,
 )
+from .._vec3 import norm3
 
 __all__ = ["Nec4Refusal", "basis_refusal", "render", "solve"]
 
@@ -404,7 +405,7 @@ def _run(
                 seg.number,
                 seg.tag,
                 tuple(seg.centre / local(seg.centre)),
-                float(np.linalg.norm(seg.direction)) / local(seg.centre),
+                float(norm3(seg.direction)) / local(seg.centre),
                 value,
             )
         )
@@ -566,7 +567,7 @@ def _segment_row(seg, i_minus: int, i_plus: int) -> SegmentRow:
     return SegmentRow(
         seg.number,
         tuple(float(c) for c in seg.centre),
-        float(np.linalg.norm(d)),
+        float(norm3(d)),
         math.degrees(math.atan2(d[2], math.hypot(d[0], d[1]))),
         math.degrees(math.atan2(d[1], d[0])),
         seg.radius,
@@ -786,11 +787,11 @@ def _charges(solver, result, connections, freq_mhz: float):
         ):
             if not free:
                 continue
-            tol = max(float(np.linalg.norm(point)), 1.0) * 1e-9
+            tol = max(float(norm3(point)), 1.0) * 1e-9
             for w_idx, (start, end, length) in enumerate(polyline_ends):
-                if np.linalg.norm(start - point) <= tol:
+                if norm3(start - point) <= tol:
                     s = 0.0
-                elif np.linalg.norm(end - point) <= tol:
+                elif norm3(end - point) <= tol:
                     s = length
                 else:
                     continue
@@ -816,7 +817,7 @@ def _charge_rows(charges, solver, local):
     first = 0
     for wi, wire in enumerate(solver.wires):
         segs = solver.segments[first : first + wire.n_seg]
-        length = float(np.linalg.norm(segs[0].direction))
+        length = float(norm3(segs[0].direction))
         start_end = (
             (True, segs[0], wire.p1),
             (False, segs[-1], wire.p2),

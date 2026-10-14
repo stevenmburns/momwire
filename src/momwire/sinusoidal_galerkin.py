@@ -381,6 +381,7 @@ from .sinusoidal import (
     _recip_sin_gap,
     _sin_minus_arg,
 )
+from ._vec3 import norm3
 
 # D1 serves a FULLY-buried deck (one pair class, one medium) and D2 the
 # MIXED deck (above x above at k_p, below x below at k_m, the transmitted
@@ -1959,7 +1960,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             u = np.einsum("pgd,pd->pg", d, tb[bi])
             u = np.clip(u, -hh[bi][:, None], hh[bi][:, None])
             perp = d - u[..., None] * tb[bi][:, None, :]
-            return np.linalg.norm(perp, axis=-1).min(axis=1)
+            return norm3(perp).min(axis=1)
 
         gap = np.minimum(
             _gap(m, n, c, t, cs, ts),  # test segment sampled against the source
