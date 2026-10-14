@@ -336,6 +336,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
     "src/momwire/_razor_front_core.h",
+    # The frozen Gauss-Legendre rules, generated from `_leggauss_table.py`
+    # (scripts/gen_leggauss_header.py), read by the front half.
+    "src/momwire/_leggauss_table.h",
     "src/momwire/_nec5_deck_core.h",
 ]
 
