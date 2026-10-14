@@ -60,6 +60,7 @@ from math import comb, factorial
 import numpy as np
 
 from ._accel import acc as _acc
+from ._quadrature import leggauss
 
 _FOURPI = 4.0 * np.pi
 _T_SWITCH = 6.0  # near (closed form) below, far series at and above, in |z|/a
@@ -217,7 +218,7 @@ def ring_kernel_split(z, a, k):
 # --------------------------------------------------------------------------
 @lru_cache(maxsize=8)
 def _gl01(n):
-    x, w = np.polynomial.legendre.leggauss(n)
+    x, w = leggauss(n)
     return 0.5 * (x + 1.0), 0.5 * w
 
 

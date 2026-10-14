@@ -87,6 +87,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import _cancel, _somm_disk_cache
+from ._quadrature import leggauss
 from ._accel import acc as _acc
 from ._sommerfeld import (
     _GRID_CACHE,
@@ -511,8 +512,8 @@ _SOMM_BELOW_BAND_FLOOR_SHARED = ((2, 0), (3, 1))
 # LPDA's eight nodes. 0.0125° stays refused.
 _SOMM_BELOW_TH_MIN_DEG = 0.05 - 2.0 * _SOMM_BELOW_DTH_BAND_LO_DEG
 
-_GX, _GW = np.polynomial.legendre.leggauss(_GAUSS_N)
-_GXC, _GWC = np.polynomial.legendre.leggauss(_GAUSS_N_COARSE)
+_GX, _GW = (np.array(a) for a in leggauss(_GAUSS_N))
+_GXC, _GWC = (np.array(a) for a in leggauss(_GAUSS_N_COARSE))
 
 
 # ---------------------------------------------------------------------------

@@ -4979,7 +4979,7 @@ class RazorSolver(
         gz = float(self.ground_z)
         obs = self._testing_paths(geom)[0].reshape(-1, 3)
         seg_h, seg_t, seg_p0 = geom["seg_h"], geom["seg_t"], geom["seg_p0"]
-        xg, _wg = np.polynomial.legendre.leggauss(self.n_qp_sommerfeld)
+        xg, _wg = leggauss(self.n_qp_sommerfeld)
         tq = 0.5 * (xg + 1.0)
         src = (
             seg_p0[:, None, :]
