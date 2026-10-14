@@ -20,6 +20,15 @@ pytestmark = pytest.mark.skipif(
     not razor._HAVE_RAZOR_SOLVE_CXX, reason="accelerator without razor_solve_proto"
 )
 
+
+@pytest.fixture(autouse=True)
+def _fill_only_route(monkeypatch):
+    # These gates are the FILL-ONLY route's (the Python front half, then the
+    # fill and the LU in C++). With the C++ front half on, an unprepared
+    # solve takes that instead; `tests/test_razor_cxx_front.py` gates it.
+    monkeypatch.setattr(razor, "_CXX_FRONT", False)
+
+
 DIPOLE = [[(0.0, -5.0, 6.0), (0.0, 5.0, 6.0)]]
 BASE = dict(
     wire_radius=0.002,
