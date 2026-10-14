@@ -258,6 +258,7 @@ from .._near_readout import (
     near_point_refusal,
     rectangular_grid,
 )
+from .._vec3 import norm3, dot3
 
 # --basis choices (mirrors the CLI's MOMWIRE_BASES/VARIANTS subset that makes
 # sense behind SimNEC): name -> (solver class, solver kwargs, banner suffix).
@@ -1673,7 +1674,7 @@ def _connection_data(wires, interpolates: bool = False) -> list[tuple[int, int]]
         p1 = np.asarray(w.p1, dtype=float)
         p2 = np.asarray(w.p2, dtype=float)
         step = (p2 - p1) / w.n_seg
-        slen = float(np.linalg.norm(step)) * _SMIN
+        slen = float(norm3(step)) * _SMIN
         for k in range(w.n_seg):
             idx += 1
             a = p1 + k * step
@@ -1728,7 +1729,7 @@ def _port_signs(built, model) -> np.ndarray:
     for index, site in enumerate(built.ports.sites):
         polyline = np.asarray(polylines[feeds[index][0]], dtype=float)
         arclength = feeds[index][1]
-        lengths = np.linalg.norm(np.diff(polyline, axis=0), axis=1)
+        lengths = norm3(np.diff(polyline, axis=0))
         edge = int(np.searchsorted(np.cumsum(lengths), arclength, side="left"))
         edge = min(edge, len(lengths) - 1)
         walk = polyline[edge + 1] - polyline[edge]
@@ -1736,7 +1737,7 @@ def _port_signs(built, model) -> np.ndarray:
         authored = np.asarray(wire.vertices[-1], dtype=float) - np.asarray(
             wire.vertices[0], dtype=float
         )
-        signs[index] = 1.0 if float(np.dot(walk, authored)) >= 0.0 else -1.0
+        signs[index] = 1.0 if float(dot3(walk, authored)) >= 0.0 else -1.0
     return signs
 
 
@@ -2499,10 +2500,8 @@ class DeckSolver:
         # 2's segment 14, a 90-degree error hidden behind a perfectly plausible
         # magnitude. Require the element to run along the NEC segment too, and
         # fall back to pure distance if nothing does.
-        unit_e = dirs / np.maximum(np.linalg.norm(dirs, axis=1, keepdims=True), 1e-30)
-        unit_s = wanted_dir / np.maximum(
-            np.linalg.norm(wanted_dir, axis=1, keepdims=True), 1e-30
-        )
+        unit_e = dirs / np.maximum(norm3(dirs)[:, None], 1e-30)
+        unit_s = wanted_dir / np.maximum(norm3(wanted_dir)[:, None], 1e-30)
         aligned = np.abs(unit_s @ unit_e.T) >= 0.5
         cost = np.where(aligned, d2, np.inf)
         fallback = ~np.isfinite(cost).any(axis=1)
@@ -2538,7 +2537,7 @@ class DeckSolver:
         out = np.empty(len(self.segments), dtype=np.complex128)
         for i, seg in enumerate(self.segments):
             j = nearest[i]
-            sign = 1.0 if float(np.dot(dirs[j], seg.direction)) >= 0 else -1.0
+            sign = 1.0 if float(dot3(dirs[j], seg.direction)) >= 0 else -1.0
             out[i] = sign * vals[j]
         return out
 
@@ -3080,7 +3079,7 @@ def _segmentation_rows(deck: PortalDeck, solver: DeckSolver) -> list[str]:
     connections = _connection_data(solver.wires, deck.ground_plane_interpolates)
     for seg, (i_minus, i_plus) in zip(solver.segments, connections):
         d = seg.direction
-        length = float(np.linalg.norm(d))
+        length = float(norm3(d))
         alpha = math.degrees(math.atan2(d[2], math.hypot(d[0], d[1])))
         beta = math.degrees(math.atan2(d[1], d[0]))
         rows.append(
@@ -3434,7 +3433,7 @@ def _wire_arc_at_knot(solver, w_idx: int) -> np.ndarray:
         seg = np.linspace(polyline[i], polyline[i + 1], n_e + 1)
         parts.append(seg if i == 0 else seg[1:])
     knots = np.vstack(parts)
-    step = np.linalg.norm(np.diff(knots, axis=0), axis=1)
+    step = norm3(np.diff(knots, axis=0))
     return np.concatenate([[0.0], np.cumsum(step)])
 
 
@@ -3620,7 +3619,7 @@ def _run_records(
             seg.number,
             seg.tag,
             seg.centre / wavelength,
-            float(np.linalg.norm(seg.direction)) / wavelength,
+            float(norm3(seg.direction)) / wavelength,
             complex(currents[seg.number - 1]),
         )
         for seg in _printed_segments(group.pt, solver)
@@ -3633,7 +3632,7 @@ def _run_records(
                 seg.number,
                 seg.tag,
                 seg.centre / wavelength,
-                float(np.linalg.norm(seg.direction)) / wavelength,
+                float(norm3(seg.direction)) / wavelength,
                 complex(charges[seg.number - 1]),
             )
             for seg in _charge_segments(group.pq, solver)

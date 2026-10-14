@@ -204,6 +204,7 @@ from ._quadrature import leggauss
 # into a shared module is itself one of momwire#416's findings.
 from ._kernel_moments import _axis_frame, _static_axis_moments
 from ._stable import expm1_neg_jkR as _expm1_neg_jkR
+from ._vec3 import norm3
 
 # Working-array budget for the chunked fills, in complex128 elements
 # (~32 MB per temporary), razor's constant and razor's reason: the moment
@@ -742,7 +743,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             w_l, w_r, w_t, w_h = [], [], [], []
             for e_idx in range(pl.shape[0] - 1):
                 edge = pl[e_idx + 1] - pl[e_idx]
-                edge_len = float(np.linalg.norm(edge))
+                edge_len = float(norm3(edge))
                 if edge_len < 1e-15:
                     raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
                 tan = edge / edge_len

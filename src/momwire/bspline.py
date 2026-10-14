@@ -110,6 +110,7 @@ from ._port_solution import (
     port_impedances,
     refuse_undriven,
 )
+from ._vec3 import norm3, dot3
 
 # Cross-edge quadrature defaults, resolved per deck by `BSplineSolver.n_qp_pair`.
 # Two constants because there are two fills; see that property for the
@@ -561,7 +562,7 @@ def _segment_touch_lists(seg_l, seg_r):
     n = seg_l.shape[0]
     ends = np.concatenate([seg_l, seg_r])
     owner = np.concatenate([np.arange(n), np.arange(n)])
-    lens = np.linalg.norm(seg_r - seg_l, axis=1)
+    lens = norm3(seg_r - seg_l)
     tol = 1e-9 * max(float(lens.max()), 1e-300)
     pairs = cKDTree(ends).query_pairs(tol, output_type="ndarray")
     a, b = owner[pairs[:, 0]], owner[pairs[:, 1]]
@@ -2066,7 +2067,7 @@ class BSplineSolver(
 
     def _exact_kernel_h_and_a(self):
         geom = self._build_geometry()
-        h = np.linalg.norm(geom["seg_r"] - geom["seg_l"], axis=1)
+        h = norm3(geom["seg_r"] - geom["seg_l"])
         return h, self._seg_radius(geom)
 
     def _rotational_ground_kind(self):
@@ -2153,7 +2154,7 @@ class BSplineSolver(
                 p0 = pl[e_idx]
                 p1 = pl[e_idx + 1]
                 edge_vec = p1 - p0
-                edge_len = float(np.linalg.norm(edge_vec))
+                edge_len = float(norm3(edge_vec))
                 if edge_len < 1e-15:
                     raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
                 tan = edge_vec / edge_len
@@ -2385,7 +2386,7 @@ class BSplineSolver(
                     if node_end and n_v > 2 and interior:
                         e0 = 0 if z_at[0] else n_v - 2
                         edge = pl_arr[e0 + 1] - pl_arr[e0]
-                        seg_len = float(np.linalg.norm(edge))
+                        seg_len = float(norm3(edge))
                         slope = abs(float(edge[2])) / seg_len if seg_len > 0 else 0.0
                         l_min = _crossing_fill.node_panel_floor(h_floor, slope)
                         if l_min is not None:
@@ -5890,7 +5891,7 @@ class BSplineSolver(
         # Z_ee: symmetric. Fill upper triangle, mirror.
         for e in range(n_enrich):
             for f in range(e, n_enrich):
-                td = float(np.dot(tangents[seg_e_arr[e]], tangents[seg_e_arr[f]]))
+                td = float(dot3(tangents[seg_e_arr[e]], tangents[seg_e_arr[f]]))
                 diff = pos_e_all[e, :, None, :] - pos_e_all[f, None, :, :]
                 R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)
                 iR_4pi = inv_4pi / R
@@ -5942,8 +5943,8 @@ class BSplineSolver(
                 pos_m[:, 2] = (1.0 - t) * seg_l[seg_m, 2] + t * seg_r[seg_m, 2]
                 for e in range(n_enrich):
                     seg_e = int(seg_e_arr[e])
-                    td_me = float(np.dot(tangents[seg_m], tangents[seg_e]))
-                    td_em = float(np.dot(tangents[seg_e], tangents[seg_m]))
+                    td_me = float(dot3(tangents[seg_m], tangents[seg_e]))
+                    td_em = float(dot3(tangents[seg_e], tangents[seg_m]))
                     # Z_pe leg: i = m-axis, j = e-axis
                     diff = pos_m[:, None, :] - pos_e_all[e, None, :, :]
                     R = np.sqrt(np.sum(diff * diff, axis=-1) + a_squared)

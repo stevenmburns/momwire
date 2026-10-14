@@ -20,6 +20,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from momwire._vec3 import norm3
 from momwire import _junction_rule
 from momwire._junction_rule import JUNCTION_TOL, coincident_groups
 from momwire.eznec._shell import render
@@ -27,12 +28,16 @@ from momwire.razor import RazorSolver
 
 
 def _walk(points, tol=JUNCTION_TOL):
-    """``coincident_groups`` as spelled before momwire#1420."""
+    """``coincident_groups`` as spelled before momwire#1420, its distance in
+    `norm3`'s order for a 3-vector (a 1-D `np.linalg.norm` is BLAS ddot,
+    which fuses on AVX-512 machines)."""
     rep, reps = [], []
     for i, p in enumerate(points):
         p = np.asarray(p, dtype=float)
         for j, q in reps:
-            if float(np.linalg.norm(p - q)) <= tol:
+            d = p - q
+            dist = norm3(d) if d.shape == (3,) else np.linalg.norm(d)
+            if float(dist) <= tol:
                 rep.append(j)
                 break
         else:

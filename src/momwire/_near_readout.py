@@ -55,6 +55,7 @@ import numpy as np
 
 from . import _field_point, _ground_refl, _ground_spec
 from ._far_readout import _element_fields, _image_moments
+from ._vec3 import norm3
 
 __all__ = [
     "NEAR_FIELD_SUBDIV",
@@ -263,6 +264,6 @@ def near_point_refusal(points, polylines, ground_z):
                 contacts.append((index, end, tol))
     for point in points:
         for index, end, tol in contacts:
-            if float(np.linalg.norm(point - end)) <= tol:
+            if float(norm3(point - end)) <= tol:
                 return ("contact", point, index)
     return None

@@ -46,6 +46,7 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+from ._vec3 import norm3
 import scipy.linalg
 
 # 1e-9 of the deck's largest extent. The registered tolerance (§3.1): the
@@ -103,13 +104,13 @@ def _rho(pl, axis):
 
 
 def _arc_length(pl):
-    return float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+    return float(np.sum(norm3(np.diff(pl, axis=0))))
 
 
 def _worst_z_angle(pl):
     """(degrees off z, of the worst edge). 0 for a purely vertical wire."""
     d = np.diff(pl, axis=0)
-    n = np.linalg.norm(d, axis=1)
+    n = norm3(d)
     cos = np.abs(d[:, 2]) / np.maximum(n, 1e-300)
     return float(np.max(np.degrees(np.arccos(np.clip(cos, -1.0, 1.0)))))
 
@@ -207,7 +208,7 @@ def _match_under(polylines, wires, axis, theta, tol):
             b = polylines[u]
             if b.shape != a.shape:
                 continue
-            d = float(np.max(np.linalg.norm(a - b, axis=1)))
+            d = float(np.max(norm3(a - b)))
             if d <= tol and u not in taken:
                 best = u
                 break
@@ -399,7 +400,7 @@ def _port_sites(solver, polylines):
     sites = []
     for i, (w, arc, _v) in enumerate(solver.feeds):
         pl = polylines[int(w)]
-        seg = np.linalg.norm(np.diff(pl, axis=0), axis=1)
+        seg = norm3(np.diff(pl, axis=0))
         total = float(np.sum(seg))
         s = 0.5 * total if arc is None else float(arc)
         s = min(max(s, 0.0), total)

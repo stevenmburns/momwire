@@ -70,6 +70,7 @@ import warnings
 from typing import NamedTuple
 
 import numpy as np
+from ._vec3 import norm3
 
 
 class AmbiguousSite(UserWarning):
@@ -190,7 +191,7 @@ def _point_at(polyline, arc):
     """The 3-D point `arc` metres along `polyline` from its first vertex."""
     pl = np.asarray(polyline, dtype=float)
     edges = np.diff(pl, axis=0)
-    lengths = np.linalg.norm(edges, axis=1)
+    lengths = norm3(edges)
     cum = np.concatenate([[0.0], np.cumsum(lengths)])
     e = int(np.clip(np.searchsorted(cum, arc, side="right") - 1, 0, len(edges) - 1))
     t = (arc - cum[e]) / lengths[e] if lengths[e] > 0 else 0.0
@@ -235,7 +236,7 @@ def mirror_images(solver, wire, arc_a, arc_b):
     p_a = _point_at(polylines[wire], arc_a)
     p_b = _point_at(polylines[wire], arc_b)
     d = p_b - p_a
-    norm = float(np.linalg.norm(d))
+    norm = float(norm3(d))
     if norm == 0.0:
         return True
     n = d / norm
@@ -284,7 +285,7 @@ def mirror_images(solver, wire, arc_a, arc_b):
         out = []
         for w, arc, value in entries:
             pl = polylines[w]
-            total = float(np.sum(np.linalg.norm(np.diff(pl, axis=0), axis=1)))
+            total = float(np.sum(norm3(np.diff(pl, axis=0))))
             out.append((_point_at(pl, total / 2.0 if arc is None else arc), value))
         return out
 

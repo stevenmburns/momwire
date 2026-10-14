@@ -37,6 +37,7 @@ its existing value; it changes no number anywhere.
 from __future__ import annotations
 
 import numpy as np
+from ._vec3 import norm3
 
 # Two wire endpoints this close are a junction, not a coincidence.
 #
@@ -92,7 +93,7 @@ def coincident_groups(points, tol: float = JUNCTION_TOL) -> list[int]:
             candidates.sort()
             p = pts[i]
             for j in candidates:
-                if float(np.linalg.norm(p - pts[j])) <= tol:
+                if float(norm3(p - pts[j])) <= tol:
                     hit = j
                     break
         if hit < 0:
@@ -136,6 +137,13 @@ def _cells(pts, tol) -> list | None:
     return q.astype(np.int64).tolist()
 
 
+def _distance(d) -> float:
+    """``|d|``: `norm3`'s fixed order for a 3-vector, which is every real
+    point; numpy's own norm for any other shape, which only reaches here
+    because the grid declines it (:func:`_cells`)."""
+    return float(norm3(d)) if d.shape == (3,) else float(np.linalg.norm(d))
+
+
 def _first_match_walk(pts, tol) -> list[int]:
     """The rule as a walk over every representative, the spelling
     :func:`coincident_groups` used before momwire#1420 and still uses
@@ -144,7 +152,7 @@ def _first_match_walk(pts, tol) -> list[int]:
     reps: list[tuple[int, np.ndarray]] = []
     for i, p in enumerate(pts):
         for j, q in reps:
-            if float(np.linalg.norm(p - q)) <= tol:
+            if _distance(p - q) <= tol:
                 rep.append(j)
                 break
         else:

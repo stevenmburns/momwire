@@ -62,6 +62,7 @@ import math
 import numpy as np
 from . import _sommerfeld
 from ._quadrature import leggauss
+from ._vec3 import norm3
 
 # Geometric grading ratio and points per panel. Measured on #631's grazing
 # wire (h/lambda = 1.09e-4) against brute force at q = 4000: the self pair's
@@ -295,7 +296,7 @@ def _seg_dist(P, A, D):
     with np.errstate(divide="ignore", invalid="ignore"):
         traw = np.where(dd > 0.0, np.einsum("ij,ij->i", P - A, D) / dd, 0.0)
     t = np.clip(traw, 0.0, 1.0)
-    return np.linalg.norm(P - (A + t[:, None] * D), axis=1), traw
+    return norm3(P - (A + t[:, None] * D)), traw
 
 
 def pair_moments(
@@ -397,7 +398,7 @@ def _chunk_moments(
     anchor = np.concatenate(anchor)
     mpt = mA[pid] + sv[:, None] * mD[pid]
     d_seg, _ = _seg_dist(mpt, sA[pid], sD[pid])
-    d_pt = np.linalg.norm(mpt - anchor, axis=1)
+    d_pt = norm3(mpt - anchor)
     scale = np.maximum(np.where(kind_seg, d_seg, d_pt) / Li[pid], SCALE_FLOOR)
     o_pair, s_o, w_o = _nodes(*_panels(pid, sv, scale, SIGMA), xg, wg)
 
@@ -440,7 +441,7 @@ def _inner_moments(
     tid = np.concatenate([ar, ar, ar[foot], kx])
     tv = np.concatenate([np.zeros(n_o), np.ones(n_o), traw[foot], ux])
     spt = A_o[tid] + tv[:, None] * D_o[tid]
-    r1 = np.linalg.norm(mobs[tid] - spt, axis=1)
+    r1 = norm3(mobs[tid] - spt)
     scale_i = np.maximum(r1 / Lj_o[tid], SCALE_FLOOR)
     p_own, p0, p1 = _panels(tid, tv, scale_i, SIGMA)
     if _sommerfeld._acc is not None and hasattr(

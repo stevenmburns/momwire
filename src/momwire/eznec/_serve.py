@@ -558,6 +558,7 @@ from ._printout import (
     RunData,
     WireCurrentRow,
 )
+from .._vec3 import norm3
 
 # The printed-dust floor for THIS seam, and its own number — the portal's
 # ``_PRINTED_DUST_FLOOR2`` is not imported on purpose (momwire#578). That
@@ -1905,7 +1906,7 @@ class _Piece:
 
     @property
     def length(self) -> float:
-        return float(np.linalg.norm(self.points[1] - self.points[0]))
+        return float(norm3(self.points[1] - self.points[0]))
 
 
 @dataclass
@@ -2179,7 +2180,7 @@ def build_mesh(
                     inside_piece[(wire.tag, k)] = (
                         index,
                         float(
-                            np.linalg.norm(
+                            norm3(
                                 np.asarray(points[k], dtype=float)
                                 - mesh.pieces[index].points[0]
                             )
@@ -2320,13 +2321,11 @@ def _split_element(mesh: _Mesh, points, lower: int, upper: int) -> _SplitElement
     a = np.asarray(points[first.first_node], dtype=float)
     b = np.asarray(points[first.last_node], dtype=float)
     centre = 0.5 * (a + b)
-    s = float(np.linalg.norm(centre - first.points[0]))
+    s = float(norm3(centre - first.points[0]))
     if s <= first.length:
         return _SplitElement(lower, upper, lower, s)
     second = mesh.pieces[upper]
-    return _SplitElement(
-        lower, upper, upper, float(np.linalg.norm(centre - second.points[0]))
-    )
+    return _SplitElement(lower, upper, upper, float(norm3(centre - second.points[0])))
 
 
 def _canonical_end(end: tuple[int, str]) -> tuple[int, int]:
@@ -2958,9 +2957,7 @@ def _line_card(
     different numbers, so the captured column is what picks the reading.
     """
     length = line.length_m or float(
-        np.linalg.norm(
-            _node_point(structure, line.end_a) - _node_point(structure, line.end_b)
-        )
+        norm3(_node_point(structure, line.end_a) - _node_point(structure, line.end_b))
     )
     if length == 0.0:
         raise ServeRefusal(
@@ -3837,18 +3834,15 @@ def _element_geometry(structure: Structure, wavelength: float):
             continue
         # momwire#1420: one array per wire rather than two per element. The
         # centre is the same elementwise ``0.5 * (a + b) / wavelength``, and
-        # the length keeps ``np.linalg.norm``'s own arithmetic for a vector,
-        # ``sqrt(d.dot(d))``, row by row — so both columns are bit-identical
-        # to the per-element walk this replaced.
+        # the length is `norm3`'s, row by row: the per-element walk this
+        # replaced took ``sqrt(d.dot(d))``, BLAS ``ddot``, which is `norm3`'s
+        # order on the reference machines and fused on AVX-512 ones.
         p = np.asarray(points[: n + 1], dtype=float)
         a, b = p[:-1], p[1:]
         centres.extend(0.5 * (a + b) / wavelength)
-        lengths.extend(float(_sqrt(d.dot(d))) / wavelength for d in b - a)
+        lengths.extend(float(length) / wavelength for length in norm3(b - a))
         tags.extend([wire.tag] * n)
     return centres, lengths, tags
-
-
-_sqrt = np.sqrt
 
 
 def _element_currents_and_charges(

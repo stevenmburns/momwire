@@ -415,6 +415,7 @@ from ._port_solution import (
 )
 from . import _quadrature
 from ._quadrature import leggauss
+from ._vec3 import norm3
 
 # Two wire endpoints this close are a junction, not a coincidence. The rule
 # and the value both live in `_junction_rule` now (momwire#590 step 1); this
@@ -804,7 +805,7 @@ def derive_n_qp_path(k, wires_polylines, n_per_edge_per_wire):
     h_max = 0.0
     for pl, npe in zip(wires_polylines, n_per_edge_per_wire):
         for e_idx in range(pl.shape[0] - 1):
-            edge_len = float(np.linalg.norm(pl[e_idx + 1] - pl[e_idx]))
+            edge_len = float(norm3(pl[e_idx + 1] - pl[e_idx]))
             h_max = max(h_max, edge_len / npe[e_idx])
     if k * h_max <= PATH_ORDER_KH_SWITCH:
         return PATH_ORDER_FINE
@@ -2792,7 +2793,7 @@ class RazorSolver(
             w_p0, w_tan, w_h = [], [], []
             for e_idx in range(pl.shape[0] - 1):
                 edge = pl[e_idx + 1] - pl[e_idx]
-                edge_len = float(np.linalg.norm(edge))
+                edge_len = float(norm3(edge))
                 if edge_len < 1e-15:
                     raise ValueError(f"wire {w_idx} edge {e_idx} has zero length")
                 tan = edge / edge_len
@@ -4878,7 +4879,7 @@ class RazorSolver(
             skip = np.asarray(plan_skip, dtype=float).reshape(-1, 3)
             keep = np.ones(pts.shape[0], dtype=bool)
             for node in skip:
-                keep &= np.linalg.norm(pts - node[None, :], axis=1) > _JUNCTION_TOL
+                keep &= norm3(pts - node[None, :]) > _JUNCTION_TOL
             pts = pts[keep]
         d = gz - pts[:, 2]
         # `np.min` first: on an empty point set it raises the same ValueError

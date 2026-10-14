@@ -150,6 +150,7 @@ import math
 from typing import NamedTuple
 
 import numpy as np
+from ._vec3 import norm3
 
 from . import (
     _ground_mirror,
@@ -492,7 +493,7 @@ class Remainder:
         tq = 0.5 * (xg + 1.0)
         span = seg_r - seg_l
         nodes = seg_l[:, None, :] + tq[None, :, None] * span[:, None, :]
-        h = np.linalg.norm(span, axis=1)
+        h = norm3(span)
         u_phys = h[:, None] * tq[None, :]  # (n_src, n_qp) physical arc offsets
         w_node = 0.5 * h[:, None] * wg[None, :]
         # Moment weights W[p, j, q] = w_q · u_q^p, the quadrature dual of
@@ -670,7 +671,7 @@ class RemainderBelow(Remainder):
         tq = 0.5 * (xg + 1.0)
         span = seg_r - seg_l
         nodes = seg_l[:, None, :] + tq[None, :, None] * span[:, None, :]
-        h = np.linalg.norm(span, axis=1)
+        h = norm3(span)
         u_phys = h[:, None] * tq[None, :]
         w_node = 0.5 * h[:, None] * wg[None, :]
         W = w_node[None] * u_phys[None] ** np.arange(n_moment)[:, None, None]

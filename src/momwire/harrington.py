@@ -124,6 +124,7 @@ from .pulse import (
 # answering across it.
 from ._junction_rule import JUNCTION_TOL as _JUNCTION_TOL
 from ._junction_rule import canonical_groups, coincident_groups
+from ._vec3 import norm3
 
 # The deck layer's "same point" grid (`deck/_polylines._NODE_EPS`). Ends
 # between the two tolerances are refused rather than silently disconnected —
@@ -386,7 +387,7 @@ class HarringtonSolver(PulseSolver):
             for node_j, q in ends[:i]:
                 if node_of[node_i] == node_of[node_j]:
                     continue
-                d = float(np.linalg.norm(p - q))
+                d = float(norm3(p - q))
                 if _JUNCTION_TOL < d <= _NEAR_COINCIDENT_TOL:
                     raise ValueError(
                         f"two wire ends are {d:.3g} m apart — closer than the "

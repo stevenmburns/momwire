@@ -16,6 +16,8 @@ from functools import lru_cache
 
 import numpy as np
 
+from ._vec3 import norm3
+
 
 @lru_cache(maxsize=None)
 def _leggauss_cached(n: int):
@@ -84,7 +86,7 @@ def remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap, c):
 
     d = mir_r - mir_l
     dd = np.einsum("ij,ij->i", d, d)
-    lengths = np.linalg.norm(src_r - src_l, axis=1)
+    lengths = norm3(src_r - src_l)
 
     # O(N) short-circuit before the O(N) numpy passes below, so a deck with
     # nothing near the plane pays nothing for a rule that cannot fire on it.
@@ -135,9 +137,7 @@ def remainder_qp(obs_pts, src_l, src_r, ground_z, base, cap, c):
             interior = (t_raw > 0.0) & (t_raw < 1.0)
             if not interior.any():
                 continue
-            r_min = float(
-                np.min(np.linalg.norm(obs[interior] - closest[interior], axis=1))
-            )
+            r_min = float(np.min(norm3(obs[interior] - closest[interior])))
         else:
             continue  # a degenerate mirror has no broadside to approach
         if r_min <= 0.0:
@@ -217,7 +217,7 @@ def remainder_qp_pairs(
     mir_r[:, 2] = 2.0 * ground_z - src_r[:, 2]
     d = mir_r - mir_l
     dd = np.einsum("ij,ij->i", d, d)
-    lengths = np.linalg.norm(src_r - src_l, axis=1)
+    lengths = norm3(src_r - src_l)
 
     # The scalar rule's short-circuit, unchanged: if even the deck-wide bound
     # asks for no more than `base`, no pair can.
@@ -272,7 +272,7 @@ def remainder_qp_pairs(
             continue
         t = np.clip(t_raw, 0.0, 1.0)
         closest = mir_l[j] + t[:, None] * d[j]
-        dist = np.where(interior, np.linalg.norm(obs - closest, axis=1), np.inf)
+        dist = np.where(interior, norm3(obs - closest), np.inf)
         r_min = dist.reshape(n_obs_seg, n_node).min(axis=1)
         hit = np.isfinite(r_min)
         with np.errstate(divide="ignore"):
