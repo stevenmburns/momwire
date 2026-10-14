@@ -11,6 +11,9 @@ do, and every split runs them, base vs change, on one quiet machine.
 | `mwtrace_plugin.py` + `cmp_traces.py` | Did any bound function's output move? The plugin hashes every native call's inputs and outputs over a pytest lane; the comparator matches two runs by (function, input hash). This is the bit-identity gate. |
 | `objdiff.py` | Is the machine code the same? Every TU the split did not touch must be instruction-identical; for the split kernels, compare FP-op sequences or multisets (`--pair`). |
 | `bench_calls.py` (+ `capture_window.py`) | Does a call cost the same? Per-call medians on tiny inputs (binding and OpenMP-wake cost) and on captured real windows. |
+| `profile_razor_solve.py` | Where a warm razor-2p solve's time goes: construction, geometry, prepare, fill (and the native time in it), LU, readout, per N and ground. `MOMWIRE_RAZOR_CXX=1` times the C++ solve prototype instead. |
+| `profile_server_call.py` | One `momwire-nec5-razor-2p` call on a tiny deck: client wall, the launcher's interpreter start, and the server's render split into parse, serve, solve and printout. |
+| `cxx_solve_corpus.py` | The C++ solve prototype (`_razor_solve_core.cpp`) against the Python route on every deck given: Z, X, Y and the printout byte for byte, with the route each solve took. |
 
 `capture_window.py` also regenerates the fixture of
 `tests/test_razor_core_standalone.py`, which builds the razor core TUs and
