@@ -334,6 +334,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_mw_core.h",
     "src/momwire/_mw_binding.h",
     "src/momwire/_razor_core.h",
+    "src/momwire/_razor_solve_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -399,6 +400,12 @@ _ACCEL_SOURCES = [
     # momwire#1497: the fused elementwise complex multiply (`_cmul.cmul`). Its
     # own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_cmul.cpp",
+    # The razor-2p solve prototype: every fill window and the LU in one C++
+    # call (`_razor_solve_core.cpp`, Python-free) and its binding. Their own
+    # TUs: they only CALL the razor kernels, across a TU boundary, so no
+    # kernel's codegen can move with them (momwire#1187).
+    "src/momwire/_razor_solve_core.cpp",
+    "src/momwire/_accel_razor_solve.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
