@@ -19,10 +19,12 @@ What is persisted, per family:
 * below->above (transmitted) -- the physical grid (`get_grid_below_above`).
 
 Beside the grids (momwire#1471): the below family's sweep ANCHORS are grids
-like any other and live here under their own keys; a `<grid>.npz.lock` file
-marks a table some process is filling (`coordinated`), and a `seen-*.json`
-file lists the frequencies a soil has been asked for (`note_seen`), so the
-worker processes of one resident server act as one sweep.
+like any other and live here under their own keys, and a `seen-*.json` file
+lists the frequencies a soil has been asked for (`note_seen`), so the worker
+processes of one resident server act as one sweep. There are no lock files:
+fills are deterministic and stores atomic, so two workers filling the same
+table cost time and nothing else, and a worker killed mid-fill leaves nothing
+behind for the others to wait on.
 
 Contract:
 
@@ -549,14 +551,6 @@ def _evict(d: Path, keep: Path) -> None:
                 except OSError:
                     pass
             continue
-        if ent.name.endswith(".lock"):
-            # A writer that died holding one (momwire#1471, `coordinated`).
-            if now - st.st_mtime > _LOCK_STALE_S:
-                try:
-                    os.unlink(ent.path)
-                except OSError:
-                    pass
-            continue
         if ent.name.endswith(".npz"):
             files.append((st.st_mtime, st.st_size, ent.path))
     total = sum(f[1] for f in files)
@@ -667,126 +661,14 @@ def present(key, *, extra=()) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Cross-process coordination (momwire#1471)
+# What a crew has asked for (momwire#1471)
 # ---------------------------------------------------------------------------
 #
 # The resident server solves a crew's frames in separate worker PROCESSES
-# (momwire#1418) that share nothing but this directory. Two things have to
-# cross that boundary for a frequency sweep to cost one set of anchor tables
-# rather than one set per worker: which nearby frequencies the crew has been
-# asked for (`note_seen`), and who is filling which table (`coordinated`).
-
-# A lock file older than this belongs to a writer that died without removing
-# it. A live fill refreshes nothing while it runs, so this is longer than any
-# single table fill measured (the grazing bands, one thread: under a minute).
-_LOCK_STALE_S = 900.0
-# A waiter gives up on somebody else's lock after this long and does the work
-# itself. Fills are deterministic and stores are atomic, so a duplicate fill
-# costs time and nothing else; waiting forever on a stuck holder costs a solve.
-_LOCK_WAIT_S = 120.0
-_LOCK_POLL_S = 0.02
+# (momwire#1418) that share nothing but this directory. For a frequency sweep
+# to cost one set of anchor tables rather than one set per worker, the crew's
+# count of nearby frequencies has to cross that boundary; this file carries it.
 _SEEN_MAX = 64
-
-
-def _lock_path(key, extra):
-    named = _identity(key, extra)
-    if named is None:
-        return None
-    return cache_dir() / (named[0] + ".lock")
-
-
-def _pid_alive(pid) -> bool:
-    if os.name != "posix":
-        return True  # no cheap, safe probe; the mtime rule covers it
-    try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return False
-    except (OSError, ValueError):
-        return True
-    return True
-
-
-def _try_lock(path: Path) -> bool:
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        try:
-            age = time.time() - path.stat().st_mtime
-            holder = path.read_text().strip()
-        except OSError:
-            return False  # gone again, or unreadable: look once more later
-        if age > _LOCK_STALE_S or (holder and not _pid_alive(holder)):
-            try:
-                path.unlink()
-            except OSError:
-                pass
-        return False
-    except OSError:
-        return False
-    try:
-        os.write(fd, str(os.getpid()).encode())
-    finally:
-        os.close(fd)
-    return True
-
-
-def _unlock(path: Path) -> None:
-    try:
-        path.unlink()
-    except OSError:
-        pass
-
-
-def coordinated(tasks, poll=None) -> None:
-    """Run every task's `fn` once in this process, each under the cross-process
-    lock of its key, taking whichever lock is free first.
-
-    `tasks` is a list of `(key, extra, fn)`. A crew of workers that all need
-    the same N tables therefore fills N different tables at once, and a
-    worker that finds a table's lock held does its other tables first and
-    then waits for that one. `fn` runs after the wait, under the lock, and
-    must look at the disk itself (`fetch_or_fill` does): by then the other
-    worker's table is there and the fill is a load.
-
-    With the disk level off there is nothing to coordinate with, and the
-    tasks simply run in order. Never an error: a lock that cannot be taken
-    within `_LOCK_WAIT_S` is ignored, at the price of a duplicate fill.
-    """
-    if not enabled():
-        for _key, _extra, fn in tasks:
-            fn()
-        return
-    pending = []
-    for key, extra, fn in tasks:
-        try:
-            path = _lock_path(key, extra)
-        except Exception:  # noqa: BLE001 — no identity means no lock, never an error
-            path = None
-        pending.append((path, fn))
-    waited = 0.0
-    while pending:
-        progressed = False
-        for item in list(pending):
-            path, fn = item
-            held = path is not None and waited < _LOCK_WAIT_S and _try_lock(path)
-            if path is not None and waited < _LOCK_WAIT_S and not held:
-                continue
-            try:
-                fn()
-            finally:
-                if held:
-                    _unlock(path)
-            pending.remove(item)
-            progressed = True
-        if progressed:
-            waited = 0.0
-        elif pending:
-            if poll is not None:
-                poll()
-            time.sleep(_LOCK_POLL_S)
-            waited += _LOCK_POLL_S
 
 
 def note_seen(tag: str, value: tuple) -> list:

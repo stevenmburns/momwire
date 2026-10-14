@@ -2173,47 +2173,47 @@ def _ensure_anchors(plan, r1_wl, idx=None):
     that moves R1/lam_m across a size bucket pays for the difference rather
     than for the anchors again.
 
-    Each anchor is touched under its own cross-process lock, after adopting
-    what is on disk, so a crew of workers fills different anchors at once and
-    none of them fills what another already has.
+    The anchors are walked starting at a per-process offset, wrapping around,
+    and each one is read from disk just before it would be filled. A crew of
+    workers that all need the same stencil therefore starts on different
+    anchors, and each picks up whatever the others have stored meanwhile.
+    Nothing waits on anything: two workers can still fill the same anchor
+    (fills are deterministic and stores atomic, so that costs time only), and
+    a worker killed mid-fill leaves nothing that stalls the others.
     """
-    out = [None] * len(plan.rungs)
-    tasks = []
+    n = len(plan.rungs)
+    out = [None] * n
     k2 = _anchor_k2()
-    for j, eps_a in enumerate(plan.rungs):
+    start = os.getpid() % n
+    for step in range(n):
+        j = (start + step) % n
         key = plan.key(j)
-        out[j] = _ANCHOR_CACHE.get(key)
-        if _anchor_serves(out[j], r1_wl, idx):
-            continue
-
-        def work(j=j, eps_a=eps_a, key=key):
-            grid = _ANCHOR_CACHE.get(key)
-            if not _anchor_serves(grid, r1_wl, idx):
-                grid = _adopt_regions(grid, _somm_disk_cache.fetch(key))
-                changed = False
-                if not _anchor_serves(grid, r1_wl):
-                    SWEEP_STATS["anchor_fills"] += 1
-                    grid = SommerfeldGridBelow(
-                        eps_a,
-                        k2,
-                        r1_wl * _lambda_m(eps_a, k2),
-                        omega=key[4],
-                        mu=key[5],
-                        seed=grid,
-                    )
-                    changed = True
-                if idx is not None and not grid._regions[idx]["filled"]:
-                    grid._fill_region(idx)
-                    changed = True
-                if changed:
-                    _somm_disk_cache.store(key, grid)
+        grid = _ANCHOR_CACHE.get(key)
+        if not _anchor_serves(grid, r1_wl, idx):
+            _cancel.poll()
+            grid = _adopt_regions(grid, _somm_disk_cache.fetch(key))
+            changed = False
+            if not _anchor_serves(grid, r1_wl):
+                SWEEP_STATS["anchor_fills"] += 1
+                eps_a = plan.rungs[j]
+                grid = SommerfeldGridBelow(
+                    eps_a,
+                    k2,
+                    r1_wl * _lambda_m(eps_a, k2),
+                    omega=key[4],
+                    mu=key[5],
+                    seed=grid,
+                )
+                changed = True
+            if idx is not None and not grid._regions[idx]["filled"]:
+                grid._fill_region(idx)
+                changed = True
+            if changed:
+                _somm_disk_cache.store(key, grid)
             if key not in _ANCHOR_CACHE:
                 _evict_fifo(_ANCHOR_CACHE, _ANCHOR_CACHE_MAX)
             _ANCHOR_CACHE[key] = grid
-            out[j] = grid
-
-        tasks.append((key, (), work))
-    _somm_disk_cache.coordinated(tasks, poll=_cancel.poll)
+        out[j] = grid
     return out
 
 
