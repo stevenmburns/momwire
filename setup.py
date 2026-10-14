@@ -195,7 +195,16 @@ if sys.platform == "win32":
     # chooses to keep it. It stays for now because Windows speed cannot be
     # measured off Windows; moving to /fp:precise (plus /fp:contract, which
     # keeps contraction inside a single expression only) is the follow-up.
-    extra_compile_args = ["/O2", "/arch:AVX2", "/openmp:llvm", "/fp:fast", "/MP"]
+    # /std:c++17: every extension is C++17 (the near-interface pair already
+    # was, momwire#680). MSVC's default is C++14.
+    extra_compile_args = [
+        "/O2",
+        "/arch:AVX2",
+        "/openmp:llvm",
+        "/fp:fast",
+        "/MP",
+        "/std:c++17",
+    ]
     extra_link_args = []
 elif sys.platform == "darwin":
     # Apple clang ships no OpenMP runtime and macOS has no libmvec, so this
@@ -215,7 +224,7 @@ elif sys.platform == "darwin":
         "-fno-math-errno",
         # No implicit FMA contraction: see the Linux branch (momwire#1194).
         "-ffp-contract=off",
-        "-std=gnu++11",
+        "-std=gnu++17",
         f"-I{os.path.join(_libomp, 'include')}",
     ]
     extra_link_args = [
@@ -261,20 +270,17 @@ else:
         "-ffp-contract=off",
         "-g",
         "-fno-omit-frame-pointer",
-        "-std=gnu++11",
+        "-std=gnu++17",
     ]
     extra_link_args = ["-fopenmp", "-lpthread", "-lmvec"]
 
 # The near-interface twin (momwire#680 U2) compiles against the vendored
-# scipy/xsf headers (extern/xsf, header-only), which are C++17. The main
-# `_accelerators` extension stays at gnu++11 untouched; only this second,
-# equally-optional extension gets the newer standard.
-if sys.platform == "win32":
-    _near_compile_args = extra_compile_args + ["/std:c++17"]
-else:
-    _near_compile_args = [
-        "-std=gnu++17" if a == "-std=gnu++11" else a for a in extra_compile_args
-    ]
+# scipy/xsf headers (extern/xsf, header-only), which are C++17. It used to be
+# the ONLY C++17 extension, with `_accelerators` held at gnu++11 so it stayed
+# byte-untouched. `_accelerators` moved to C++17 too after a same-machine
+# comparison over every exercised bound function found no moved output bit.
+# The two lists are now the same flags.
+_near_compile_args = list(extra_compile_args)
 
 # The inline headers `_accelerators.cpp` pulls in. setuptools rebuilds an
 # object file only when a listed source or DEPENDENCY is newer than it, and a

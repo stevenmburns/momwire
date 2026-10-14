@@ -354,8 +354,9 @@ seg_seg_reg_moments_bspline_swept_ek_window(
 // was harmless only while it never served complex k. The factorization above
 // is the correct continuation; |k| is the wrong one.
 //
-// `if (COMPLEX_K)` rather than `if constexpr`: the build is -std=gnu++11, and
-// this is the idiom `if (EK)` already uses here. The branch folds at -O3.
+// `if (COMPLEX_K)` rather than `if constexpr`: written when the build was
+// -std=gnu++11, and the idiom `if (EK)` already uses here. The branch folds
+// at -O3.
 // The distance-adaptive pair-order ladder (momwire#906). Tier 0 is the base
 // Gauss-Legendre rule and always eligible; tier t > 0 serves a pair whose
 // centre distance over the longer segment is >= ratio[t]. Thresholds ascend,

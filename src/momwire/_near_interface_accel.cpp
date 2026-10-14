@@ -36,8 +36,8 @@
 // (extern/xsf, header-only C++17, scipy.special's own Amos translation —
 // see extern/xsf/VENDOR-PIN.md). Its underflow contract is load-bearing:
 // Amos underflow returns the exact 0.0 rather than NaN, which is precisely
-// the quiet-panel rule above. This is also why the module is compiled at
-// C++17 in its OWN extension: `_accelerators` stays at gnu++11, untouched.
+// the quiet-panel rule above. This is why the module was the first one
+// compiled at C++17; `_accelerators` has since followed.
 //
 // The numpy walk (`_near_interface.six_point`) stays production's reference;
 // the gates against it are RELATIVE (1e-12), never bit — the transcendental
