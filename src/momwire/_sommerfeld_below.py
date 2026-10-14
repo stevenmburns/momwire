@@ -1951,10 +1951,10 @@ def r1_bracket_one_bucket(lo, hi, eps_t, k2):
 # wavelengths, theta) the four surfaces divided by omega*mu depend on
 # frequency ONLY through eps_t = eps_r - j*sigma/(omega*eps0): measured, the
 # same eps_t tabulated at free-space wavelengths 15, 30 and 160 m agrees to
-# 5e-10 of scale, the contour's own tolerance. A sweep is a one-dimensional walk in Im(eps_t),
-# and along it every table node is a smooth function, so a HIGH-ORDER
-# interpolation across a ladder of anchors reaches what the linear blend
-# could not. Measured over the six regions Ward's deck reads (worst node,
+# 5e-10 of scale, the contour's own tolerance. A sweep is a one-dimensional
+# walk in Im(eps_t), and along it every table node is a smooth function, so a
+# HIGH-ORDER interpolation across a ladder of anchors reaches what the linear
+# blend could not. Measured over the six regions Ward's deck reads (worst node,
 # relative to max(|node|, 1e-3 of its surface's largest value) / relative to
 # the surface's largest value), anchors on a geometric ladder in Im(eps_t),
 # Lagrange in ln Im(eps_t) through the p+1 nearest rungs, target mid-ladder,
@@ -1969,11 +1969,20 @@ def r1_bracket_one_bucket(lo, hi, eps_t, k2):
 # verdict was right about it). The tables' own spatial interpolation error is
 # 3.6e-5 of scale, so degree 7 on a 10 % ladder sits three decades under what
 # the lattice already costs. Polynomial in ln Im(eps_t) beats polynomial in
-# Im(eps_t) by 3x to 10x at every rung of that table.
+# Im(eps_t) by 3x to 13x from degree 2 up, until both reach the contour's
+# own noise (2 %, degree 7), and by 1.4x for the linear blend. The
+# other two soils measured, 20 - 77j and 5 - 0.9j, read 2.3e-8 and 1.1e-9 of
+# scale at 10 % / degree 7.
+#
+# What reaches the answer is smaller still: feed Z from blended tables against
+# the exact fill, 9-12 MHz on Ward's deck and 13-15 MHz on Dan AC6LA's
+# buried-radial vertical, reads 2.8e-12 and 5.1e-12 (a cubic on the same
+# ladder 7.4e-9, the linear blend 1.6e-6).
 #
 # An anchor is an ordinary exact grid at the rung's eps_t and a fixed
 # reference wavelength, so it is cached and persisted by the machinery the
-# exact grids already use, and its lazy regions stay lazy.
+# exact grids already use, and its lazy regions stay lazy. It GROWS when a
+# larger table is asked for (`_ensure_anchors`), evaluating only its new rows.
 _SOMM_BELOW_ANCHOR_STEP = math.log(1.1)
 _SOMM_BELOW_ANCHOR_POINTS = 8
 
