@@ -95,6 +95,10 @@ class SolveContext {
     // its singular-matrix error; X is then not written).
     int lu_solve(const Lapack &lp, cd *b, int n_rhs);
 
+    // Free Z and the window pool (a big solve's buffers are not held until
+    // the next one); the counters are kept.
+    void release();
+
     const cd *z() const { return z_.data(); }
     ptrdiff_t n_basis() const { return n_; }
 
