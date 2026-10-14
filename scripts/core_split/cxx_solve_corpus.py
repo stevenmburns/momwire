@@ -9,8 +9,13 @@ Every deck is served as `momwire-nec5-razor-2p` serves it
    route first (Z captured as `_bspline._lu_solve` receives it) and then the
    opted-in route on the same solver, and the two are compared byte for byte
    -- Z before the factorisation, the solved coefficients X, and Y. Which
-   route the second call took is read off `razor._CXX_ROUTE`, so a deck the
-   prototype does not cover is counted as such and never as an agreement;
+   route the second call took is read off `razor._CXX_ROUTE` ("cxx-front":
+   the C++ front half too; "cxx": the fill and LU only) and, when the front
+   half declined, why (`razor._CXX_FRONT_ROUTE`), so a deck the prototype does
+   not cover is counted as such and never as an agreement. On "cxx-front"
+   every array the C++ front half built -- the geometry dict, the prepared
+   tables, the normalised constructor state, the port columns -- is compared
+   with the Python front half's (`front_compare.py`);
 2. plain, once with the C++ route off and once on, comparing the two
    printouts byte for byte.
 
@@ -39,8 +44,12 @@ def main():
     from momwire import RazorSolver, razor
     from momwire.eznec import _shell
 
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import front_compare as fc
+
     warnings.simplefilter("ignore")
     razor._CXX_WANT_Z = True
+    razor._CXX_WANT_FRONT = True
     orig_cps = RazorSolver.compute_port_solution
     orig_lu = razor._bspline._lu_solve
     cap = {}
@@ -57,17 +66,35 @@ def main():
         z_py = cap.get("Z")
         razor._RAZOR_CXX = True
         before = dict(razor._CXX_ROUTE)
+        before_front = dict(razor._CXX_FRONT_ROUTE)
         self._cxx_z = None
         b = orig_cps(self, prepared)
         route = [r for r in razor._CXX_ROUTE if razor._CXX_ROUTE[r] != before.get(r, 0)]
+        front = [
+            r
+            for r in razor._CXX_FRONT_ROUTE
+            if razor._CXX_FRONT_ROUTE[r] != before_front.get(r, 0)
+        ]
         rec = {
             "route": route[0] if route else "none",
+            "front": front[0] if front else "none",
             "n_basis": int(a.coeffs.shape[0]),
         }
         rec["X_same"] = a.coeffs.tobytes() == b.coeffs.tobytes()
         rec["Y_same"] = a.y.tobytes() == b.y.tobytes()
         z_cx = self._cxx_z
-        if rec["route"] == "cxx":
+        if rec["route"] == "cxx-front":
+            geom, front_py, cols = fc.python_front(self)
+            diffs = (
+                fc.differences(geom, self._cxx_geom, "geom")
+                + fc.differences(front_py, self._cxx_front, "front")
+                + fc.differences(cols, self._cxx_cols, "cols")
+            )
+            rec["front_same"] = not diffs
+            rec["front_arrays"] = len(geom) + len(front_py) + 1
+            if diffs:
+                rec["front_diffs"] = diffs[:8]
+        if rec["route"] in ("cxx", "cxx-front"):
             rec["Z_same"] = z_py is not None and z_py.tobytes() == z_cx.tobytes()
             if not rec["Z_same"]:
                 rec["dZ"] = float(np.abs(z_py - z_cx).max())

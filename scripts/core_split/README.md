@@ -13,7 +13,9 @@ do, and every split runs them, base vs change, on one quiet machine.
 | `bench_calls.py` (+ `capture_window.py`) | Does a call cost the same? Per-call medians on tiny inputs (binding and OpenMP-wake cost) and on captured real windows. |
 | `profile_razor_solve.py` | Where a warm razor-2p solve's time goes: construction, geometry, prepare, fill (and the native time in it), LU, readout, per N and ground. `MOMWIRE_RAZOR_CXX=1` times the C++ solve prototype instead. |
 | `profile_server_call.py` | One `momwire-nec5-razor-2p` call on a tiny deck: client wall, the launcher's interpreter start, and the server's render split into parse, serve, solve and printout. |
-| `cxx_solve_corpus.py` | The C++ solve prototype (`_razor_solve_core.cpp`) against the Python route on every deck given: Z, X, Y and the printout byte for byte, with the route each solve took. |
+| `cxx_solve_corpus.py` | The C++ solve prototype (`_razor_solve_core.cpp`, and its front half `_razor_front_core.cpp`) against the Python route on every deck given: Z, X, Y and the printout byte for byte, every front-half array against the Python front half's (`front_compare.py`), with the route each solve took and why the front half declined where it did. |
+| `front_compare.py` | The Python front half's arrays under the C++ front half's names (`python_front`), and a bytes/dtype/shape/type comparison (`differences`). Shared by the corpus script and `tests/test_razor_cxx_front.py`. |
+| `razor_front_driver.cpp` | geometry -> currents with no Python: a plain-text deck through the front half, the fill and the LU, with BLAS/LAPACK dlopen'ed from an OpenBLAS (SciPy's bundled one makes it the Python route's routines). `tests/test_razor_core_standalone.py` builds it from the core TUs alone and requires Z and X byte-equal to the Python route's on `tests/fixtures/razor_front_deck.txt`; with a REPEATS argument it times the chain warm. |
 
 `capture_window.py` also regenerates the fixture of
 `tests/test_razor_core_standalone.py`, which builds the razor core TUs and
