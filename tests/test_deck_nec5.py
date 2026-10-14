@@ -751,3 +751,41 @@ def test_the_sp_classifier_reads_the_form_not_the_values(card, shape):
     from momwire.deck._nec5 import _classify_sp
 
     assert _classify_sp(parse_card(card)) == shape
+
+
+# -- the messages are plain text, not Python reprs ---------------------------
+
+
+def test_the_reader_names_tokens_and_fields_in_plain_text():
+    """Every message the reader builds from deck text spells that text as
+    written -- no Python repr quoting -- and an integer field that has no
+    integer (inf, nan) says so in the reader's own words, keeping the
+    exception type the conversion raises. The C++ reader
+    (`_nec5_deck_core.cpp`) raises the same text."""
+    body = DIPOLE.replace("GN -1", "{}")
+    cases = {
+        "GN 0,0,0,0,13.,.005,1.,0.,soil's.tab": (
+            DeckError,
+            "GN names a Sommerfeld-table file soil's.tab; this engine computes",
+        ),
+        "GN 1 NOFILE": (DeckError, "GN 1 carries a trailing token NOFILE; only a"),
+        "GN inf": (
+            OverflowError,
+            "GN field 1 is infinite; an integer field must be a finite number",
+        ),
+    }
+    for card, (kind, text) in cases.items():
+        with pytest.raises(kind) as exc:
+            parse_nec5(body.format(card))
+        assert text in str(exc.value), str(exc.value)
+    with pytest.raises(ValueError) as exc:
+        parse_nec5(DIPOLE.replace("FR 0,1,0,0", "FR 0,nan,0,0"))
+    assert str(exc.value) == (
+        "FR field 2 is NaN; an integer field must be a finite number"
+    )
+    with pytest.raises(DeckError) as exc:
+        parse_nec5(DIPOLE.replace("GE 0,-1", "GE 0,-1,x'y"))
+    assert str(exc.value) == "NON-NUMERICAL CHARACTER IN FIELD: x'y on GE 0,-1,x'y"
+    with pytest.raises(IndexError) as exc:
+        parse_nec5(DIPOLE.replace("GE 0,-1", "GE 0,-1\n , ,"))
+    assert str(exc.value) == "card line has no mnemonic, only separators: , ,"

@@ -89,11 +89,11 @@ def test_mnemonic_and_field_errors_are_verbatim():
     is interpreted."""
     with pytest.raises(DeckError) as exc:
         parse_card("X 1 2")
-    assert str(exc.value) == "CARD'S MNEMONIC CODE TOO SHORT OR MISSING: 'X 1 2'"
+    assert str(exc.value) == "CARD'S MNEMONIC CODE TOO SHORT OR MISSING: X 1 2"
     with pytest.raises(DeckError) as exc:
         parse_card("GW 1 five 0 0 0 1 0 0 1E-3")
     assert str(exc.value) == (
-        "NON-NUMERICAL CHARACTER IN FIELD: 'five' on 'GW 1 five 0 0 0 1 0 0 1E-3'"
+        "NON-NUMERICAL CHARACTER IN FIELD: five on GW 1 five 0 0 0 1 0 0 1E-3"
     )
 
 
@@ -107,12 +107,12 @@ def test_the_gn_trailer_hole_is_the_last_token_only():
     with pytest.raises(DeckError) as exc:
         parse_card("GN 0 0 0 0 NOFILE 13. .005")
     assert str(exc.value) == (
-        "NON-NUMERICAL CHARACTER IN FIELD: 'NOFILE' on 'GN 0 0 0 0 NOFILE 13. .005'"
+        "NON-NUMERICAL CHARACTER IN FIELD: NOFILE on GN 0 0 0 0 NOFILE 13. .005"
     )
     with pytest.raises(DeckError) as exc:
         parse_card("GD 0 0 0 0 13. .005 NOFILE")
     assert str(exc.value) == (
-        "NON-NUMERICAL CHARACTER IN FIELD: 'NOFILE' on 'GD 0 0 0 0 13. .005 NOFILE'"
+        "NON-NUMERICAL CHARACTER IN FIELD: NOFILE on GD 0 0 0 0 13. .005 NOFILE"
     )
     assert parse_card("GN 0 0 0 0 13. .005 NOFILE").trailer == "NOFILE"
     assert parse_card("GN 0 0 0 0 13. .005").trailer is None
