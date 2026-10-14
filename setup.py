@@ -329,6 +329,11 @@ _ACCEL_HEADERS = [
     # The SIMD lane layer (momwire#1372), included by the lane kernels'
     # TUs and `_accel_somm_proj_inline.h`.
     "src/momwire/_lanes.h",
+    # The core/binding split: the Python-free preamble, the numpy -> view
+    # seam, and the razor core's interface.
+    "src/momwire/_mw_core.h",
+    "src/momwire/_mw_binding.h",
+    "src/momwire/_razor_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -343,6 +348,12 @@ _ACCEL_SOURCES = [
     "src/momwire/_accel_somm.cpp",
     "src/momwire/_accel_mw568.cpp",
     "src/momwire/_accel_razor.cpp",
+    # The razor kernels with no Python in their signatures or includes;
+    # _accel_razor.cpp is their binding. A core TU is a kernel TU like any
+    # other here (its own object, the same flags); what makes it core is
+    # that it includes no Python or pybind11 header, which
+    # tests/test_razor_core_standalone.py holds to.
+    "src/momwire/_razor_core.cpp",
     # momwire#1201: its own TU so a new caller of the inline `proj_one`
     # cannot move the codegen of the _accel_somm.cpp kernels (momwire#1194).
     "src/momwire/_accel_somm_pairs.cpp",
@@ -366,6 +377,8 @@ _ACCEL_SOURCES = [
     # own TU for the left gather's reason: its float order is the numpy
     # route's, derived term by term, and nothing else may move its codegen.
     "src/momwire/_accel_razor_t2.cpp",
+    # Its core, isolated for the same reason.
+    "src/momwire/_razor_t2_core.cpp",
     # momwire#1290: SG's band scatter in `np.add.at`'s order. Its own TU: its
     # bits are that order's, and nothing else may move its codegen.
     "src/momwire/_accel_row_scatter.cpp",
