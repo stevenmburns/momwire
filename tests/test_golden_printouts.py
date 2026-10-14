@@ -113,23 +113,33 @@ def test_the_manifest_is_the_corpus():
         assert G._sha(golden) == e["printout_sha256"], e["golden"]
 
 
-def test_the_blanking_touches_network_rows_only():
+# The tables momwire#578's rules and rule 5 are written for. Measured on this
+# corpus: network rows in 32 printouts, wire-current rows in 32 and charge
+# rows in 28 (dust rows twelve-plus decades under the table's peak); the
+# wire-loss line of rule 4 is allowed and does not fire.
+_BLANKABLE = (
+    "STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS",
+    "Wire Currents",
+    "Wire Charge Densities",
+    "POWER BUDGET",
+)
+
+
+def test_the_blanking_stays_in_its_tables():
     """`undefined_blanked` narrows the cross-machine claim, so it must not
-    reach past what it was measured on: over the whole corpus every line it
-    changes is a row of a network-connection table (momwire#578's rule 4, the
-    wire-loss crumb, and rule 3, wire-table dust, never fire on this corpus;
-    if one starts to, this names the line so the claim is re-measured)."""
+    reach past the tables its rules were measured on: never a feed row, a
+    pattern, a near field or a loading table."""
     for deck, basis in G.CASES:
         golden = G.golden_path(deck, basis).read_bytes().decode("latin-1")
         lines = golden.split("\n")
         blanked = undefined_blanked(golden).split("\n")
         assert len(blanked) == len(lines)
-        table = False
+        table = ""
         for before, after in zip(lines, blanked):
             if before.strip().startswith("- - -"):
-                table = "NETWORK CONNECTION POINTS" in before
+                table = before
             if before != after:
-                assert table, (deck, basis, before)
+                assert any(t in table for t in _BLANKABLE), (deck, basis, before)
 
 
 @pytest.mark.parametrize(
