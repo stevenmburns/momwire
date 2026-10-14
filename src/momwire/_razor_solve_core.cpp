@@ -86,7 +86,6 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     reserve(obs_, static_cast<size_t>(n_need * 3));
     for (ptrdiff_t p = 0; p < n_need; p++)
         for (int c = 0; c < 3; c++) obs_[p * 3 + c] = in.cent(need_[p], c);
-    const bool ek = in.group_i.size() > 0 && src.group_j.size() > 0;
     view<const int64_t, 1> gi;
     view<const double, 1> bo;
     if (in.group_i.size() > 0) {
@@ -99,7 +98,6 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         for (ptrdiff_t p = 0; p < n_need; p++) bo_[p] = in.b_obs(need_[p]);
         bo = c_view<const double, 1>(bo_.data(), {n_need});
     }
-    (void)ek;
 
     const size_t plane = static_cast<size_t>(n_need * n_seg);
     reserve(m0_, plane);
@@ -210,6 +208,24 @@ void SolveContext::fill(const SolveInputs &in) {
     counters.solves++;
     counters.fill_seconds +=
         std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+}
+
+void SolveContext::release() {
+    n_ = 0;
+    std::vector<cd>().swap(z_);
+    std::vector<cd>().swap(m0_);
+    std::vector<cd>().swap(m1_);
+    std::vector<cd>().swap(t1_);
+    std::vector<cd>().swap(img_);
+    std::vector<double>().swap(obs_);
+    std::vector<double>().swap(bo_);
+    std::vector<int64_t>().swap(need_);
+    std::vector<int64_t>().swap(gi_);
+    std::vector<int64_t>().swap(obs_row_);
+    std::vector<int64_t>().swap(plus_);
+    std::vector<int64_t>().swap(minus_);
+    std::vector<int64_t>().swap(mark_);
+    std::vector<int>().swap(ipiv_);
 }
 
 int SolveContext::lu_solve(const Lapack &lp, cd *b, int n_rhs) {
