@@ -50,7 +50,7 @@ CASES = {
             [(0.0, 0.0, 6.0), (0.0, 0.0, 9.0)],
         ],
         n_per_edge_per_wire=[[9], [9], [7]],
-        feeds=[(0, 2.5, 1.0 + 0j), (2, 1.5, 0.5 + 0.25j)],
+        feeds=[(0, 5.0 * 4 / 9, 1.0 + 0j), (2, 3.0 * 3 / 7, 0.5 + 0.25j)],
     ),
     "kinked_pec": dict(
         wires=[[(0.0, -5.0, 4.0), (0.0, 0.0, 6.0), (0.0, 5.0, 4.0)]],
@@ -80,10 +80,11 @@ def capture_z(monkeypatch):
 def _both(monkeypatch, seen, kw):
     monkeypatch.setattr(razor, "_RAZOR_CXX", False)
     seen.clear()
-    py = RazorSolver(**BASE, **kw).compute_port_solution()
+    kw = {**BASE, **kw}
+    py = RazorSolver(**kw).compute_port_solution()
     z_py = seen["Z"]
     monkeypatch.setattr(razor, "_RAZOR_CXX", True)
-    solver = RazorSolver(**BASE, **kw)
+    solver = RazorSolver(**kw)
     cx = solver.compute_port_solution()
     return py, z_py, cx, solver
 
