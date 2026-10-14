@@ -711,10 +711,16 @@ void assemble_t1(
     }
     if (static_cast<size_t>(ta.shape(1)) != n_basis ||
         static_cast<size_t>(tb.shape(1)) != n_basis ||
-        static_cast<size_t>(sb.shape(0)) != n_basis) {
+        static_cast<size_t>(sb.shape(0)) != n_basis ||
+        static_cast<size_t>(ha.shape(0)) != n_basis ||
+        static_cast<size_t>(hb.shape(0)) != n_basis ||
+        static_cast<size_t>(fa.shape(0)) != n_basis ||
+        static_cast<size_t>(fb.shape(0)) != n_basis) {
         throw std::runtime_error(
             "razor_assemble_t1: per-basis arrays disagree on n_basis");
     }
+    if (m0.shape(1) != m1.shape(1))
+        throw std::runtime_error("razor_assemble_t1: M0 and M1 disagree on columns");
     for (size_t j = 0; j < n_basis; j++) {
         if (sa(j) < 0 || static_cast<size_t>(sa(j)) >= n_seg ||
             sb(j) < 0 || static_cast<size_t>(sb(j)) >= n_seg) {
@@ -941,10 +947,17 @@ void assemble_t1_weighted(
     }
     if (static_cast<size_t>(sb.shape(0)) != n_basis ||
         static_cast<size_t>(ga.shape(0)) != n_basis ||
-        static_cast<size_t>(gb.shape(0)) != n_basis) {
+        static_cast<size_t>(gb.shape(0)) != n_basis ||
+        static_cast<size_t>(ha.shape(0)) != n_basis ||
+        static_cast<size_t>(hb.shape(0)) != n_basis ||
+        static_cast<size_t>(fa.shape(0)) != n_basis ||
+        static_cast<size_t>(fb.shape(0)) != n_basis) {
         throw std::runtime_error(
             "razor_assemble_t1_weighted: per-basis arrays disagree on n_basis");
     }
+    if (m0.shape(1) != m1.shape(1))
+        throw std::runtime_error(
+            "razor_assemble_t1_weighted: M0 and M1 disagree on columns");
     for (size_t j = 0; j < n_basis; j++) {
         if (sa(j) < 0 || static_cast<size_t>(sa(j)) >= n_seg ||
             sb(j) < 0 || static_cast<size_t>(sb(j)) >= n_seg) {
