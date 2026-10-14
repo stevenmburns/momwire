@@ -349,6 +349,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
     "src/momwire/_razor_front_core.h",
+    "src/momwire/_nec5_deck_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -428,6 +429,12 @@ _ACCEL_SOURCES = [
     # Its own TU: it calls no kernel and no kernel calls it.
     "src/momwire/_razor_front_core.cpp",
     "src/momwire/_accel_razor_solve.cpp",
+    # The NEC-5 deck reader (unit 2a of the standalone razor-2p executable):
+    # `deck/_nec5.py` and the EZNEC seam's text-level front in C++, Python-
+    # free, and its test-facing binding. Their own TUs: no float arithmetic
+    # beyond parsing, and nothing calls them on the default path.
+    "src/momwire/_nec5_deck_core.cpp",
+    "src/momwire/_accel_nec5_deck.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
