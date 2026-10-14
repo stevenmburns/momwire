@@ -57,3 +57,25 @@ def test_the_node_gap_refusals_name_the_end_in_words():
     assert "node_gaps[1]: the end of wire 0 is listed twice" in str(exc.value)
     for msg in (str(exc.value),):
         assert "'end'" not in msg and "'start'" not in msg
+
+
+def test_the_inert_wire_refusal_names_the_basis_without_a_repr():
+    """The seam's inert one-segment wire refusal (momwire#608) names the
+    basis plainly, not as a Python string repr, so the C++ seam (#1479) says
+    the same words."""
+    from momwire.eznec import _serve
+    from momwire.deck._nec5 import parse_nec5
+
+    deck = parse_nec5(
+        "CM one-segment GW, junctioned at neither end\nCE\n"
+        "GW 1,8,0.,-2.,0.,0.,2.,0.,.001\n"
+        "GW 2,1,0.5,-0.25,0.,0.5,0.25,0.,.001\n"
+        "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,4,0,1.,0.\nXQ\nEN\n"
+    )
+    with pytest.raises(_serve.ServeRefusal) as exc:
+        _serve.serve(deck, basis="razor-2p")
+    assert str(exc.value) == (
+        "wire 2 is one segment long and meets no other wire at either end, so "
+        "basis razor-2p has no basis function to put on it and it would "
+        "scatter nothing (momwire#608); this deck declares 1 such GW card"
+    )
