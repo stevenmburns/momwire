@@ -174,6 +174,8 @@ void register_razor_solve(py::module_ &m) {
              "column-major; info > 0 when U(info, info) is exactly zero (X "
              "is then the right-hand side, unsolved); Z the filled matrix "
              "before factorisation when want_z, else None.")
+        .def("release", &mw::razor::SolveContext::release,
+             "Free Z and the window pool; the counters are kept.")
         .def_property_readonly("counters", &counters)
         .def_property_readonly("n_basis", &mw::razor::SolveContext::n_basis);
 }
