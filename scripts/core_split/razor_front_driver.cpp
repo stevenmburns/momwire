@@ -9,7 +9,7 @@
 // prints the medians in ms: "build fill lu total" -- build is the front half
 // (construction, geometry, tables, port columns).
 //
-// LIBOPENBLAS.so supplies ddot / zgetrf / zgetrs (tried as `scipy_<name>_`,
+// LIBOPENBLAS.so supplies zgetrf / zgetrs (tried as `scipy_<name>_`,
 // then `<name>_`): pointing it at SciPy's bundled OpenBLAS makes the driver
 // call the very routines the Python route reaches, which is what lets
 // tests/test_razor_core_standalone.py require the same BYTES. Nothing of
@@ -151,8 +151,6 @@ int main(int argc, char **argv) {
         std::cerr << dlerror() << "\n";
         return 2;
     }
-    mw::razor::Blas blas;
-    blas.ddot = reinterpret_cast<mw::razor::ddot_fn>(sym(lib, "ddot"));
     mw::razor::Lapack lp;
     lp.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(sym(lib, "zgetrf"));
     lp.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(sym(lib, "zgetrs"));
@@ -162,7 +160,7 @@ int main(int argc, char **argv) {
     mw::razor::Front front;
     std::ofstream meta(out + "/front_meta.txt");
     try {
-        const std::string why = front.build(in, blas);
+        const std::string why = front.build(in);
         if (!why.empty()) {
             meta << "decline " << why << "\n";
             return 0;
@@ -194,7 +192,7 @@ int main(int argc, char **argv) {
         for (int r = 0; r < reps; r++) {
             const auto t0 = clk::now();
             mw::razor::Front f;
-            f.build(in, blas);
+            f.build(in);
             std::vector<cd> x(static_cast<size_t>(f.n_basis * f.n_ports));
             for (int64_t j = 0; j < f.n_ports; j++)
                 for (int64_t i = 0; i < f.n_basis; i++)

@@ -10,32 +10,21 @@
 //     ...                             // RazorSolver (wires, counts, radii,
 //                                     // feeds, node gaps, ground, lambda, EK)
 //     mw::razor::Front front;
-//     std::string why = front.build(in, blas);   // "" = covered, else the
-//                                                // reason it is not; throws
-//                                                // FrontError where Python
-//                                                // raises
+//     std::string why = front.build(in);   // "" = covered, else the
+//                                          // reason it is not; throws
+//                                          // FrontError where Python
+//                                          // raises
 //     mw::razor::SolveContext ctx;
 //     std::vector<cd> X(front.n_basis * front.n_ports);
 //     int info = mw::razor::solve_ports(front, ctx, lapack, X.data(), 0);
 //
 // It is the SAME arithmetic as the Python front half, gated byte for byte
-// against it (`scripts/core_split/cxx_front_corpus.py`,
-// `tests/test_razor_cxx_front.py`). Where the Python spelling reaches a
-// library whose rounding is the library's, the library is injected rather
-// than imitated:
-//
-//   * the edge length is `np.linalg.norm` of a 3-vector, which is BLAS
-//     `ddot` -- OpenBLAS's kernel, which on an AVX-512 machine fuses its
-//     tail into FMAs and elsewhere does not (measured: Rocketlake vs Skylake
-//     and Haswell). So `Blas::ddot` is the caller's: the binding hands SciPy's
-//     (`cython_blas`), measured identical to numpy's on all three machines.
-//     Null means the plain sequential sum, which is numpy's on the non-AVX-512
-//     kernels only;
-//   * the Gauss-Legendre table is `numpy.polynomial.legendre.leggauss`, an
-//     eigensolve; it is an INPUT (`FrontInputs::xg/wg`), and the built-in
-//     table for the default order 12 is numpy's own x86-64 output, pinned
-//     bit for bit by a test. numpy on macOS arm64 gives other bits (its
-//     LAPACK), which that test records as an expected failure there.
+// against it (`scripts/core_split/cxx_solve_corpus.py`,
+// `tests/test_razor_cxx_front.py`). No library's rounding is involved: the
+// Python reference spells a 3-vector's length in one fixed order on every CPU
+// (`_vec3.norm3`, momwire#1484), and its Gauss-Legendre rules are a frozen
+// table (`_leggauss_table.py`), which this front half reads through a header
+// generated from it (`_leggauss_table.h`, scripts/gen_leggauss_header.py).
 //
 // SCOPE: the class `_razor_solve_core.h` serves -- free space or a PERFECT
 // ground (`ground_z` with no `ground_eps`, which is also what the NEC-5 seam
@@ -66,18 +55,19 @@
 namespace mw {
 namespace razor {
 
-// The two exception types the Python front half raises.
+// The two exception types the Python front half raises. `solve_phase`:
+// raised where Python raises it from `compute_port_solution` (the bundle
+// refusal, the port columns, the tables) rather than from the constructor,
+// which is the difference between a refusal and an internal error on the
+// NEC-5 seam (it turns only the CONSTRUCTOR's NotImplementedError into a
+// refusal).
 enum class FrontErrorKind { value_error, not_implemented };
 
 struct FrontError : std::runtime_error {
     FrontErrorKind kind;
-    FrontError(FrontErrorKind k, const std::string &m) : std::runtime_error(m), kind(k) {}
-};
-
-// Fortran BLAS ddot, by pointer: the caller decides which library.
-typedef double (*ddot_fn)(int *n, double *x, int *incx, double *y, int *incy);
-struct Blas {
-    ddot_fn ddot = nullptr;
+    bool solve_phase = false;
+    FrontError(FrontErrorKind k, const std::string &m, bool solve = false)
+        : std::runtime_error(m), kind(k), solve_phase(solve) {}
 };
 
 enum class End : int8_t { start = 0, end = 1 };
@@ -138,9 +128,6 @@ struct FrontInputs {
     int64_t n_qp_path = 0;
     int64_t n_qp_source = 12;
     int64_t n_qp_sommerfeld = 3;
-    // Gauss-Legendre nodes and weights of order `n_qp_source`; empty takes
-    // the built-in order-12 table (numpy's own output).
-    std::vector<double> xg, wg;
     // The fill's working-array budget, in complex elements (`_CHUNK_ELEMS`).
     int64_t chunk_elems = 2000000;
 };
@@ -177,7 +164,7 @@ class Front {
     // Build everything. Returns "" when this solve is covered, else the name
     // of what the front half does not cover (the caller keeps the Python
     // front half); throws FrontError where the Python front half raises.
-    std::string build(const FrontInputs &in, const Blas &blas);
+    std::string build(const FrontInputs &in);
 
     // --- construction, normalised (the solver's own numbering) -----------
     int64_t n_wires = 0;
@@ -241,7 +228,6 @@ class Front {
     void refuse_coincident_segments() const;
     void prepare();
     void port_columns();
-    ddot_fn ddot_ = nullptr;
     std::vector<Junction> groups_;  // `_find_junctions`
 };
 
@@ -252,13 +238,14 @@ class Front {
 int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
                 uintptr_t cancel_flag);
 
-// numpy's `str()` of a 1-D float64 array, default print options: the text the
-// radius refusal quotes.
-std::string numpy_array_str(const std::vector<double> &values);
+// `_wire_spec.format_numbers` / `format_shape`: the refusals' portable
+// spellings of numbers (`%.12g`, comma-separated, in brackets) and shapes.
+std::string format_numbers(const std::vector<double> &values);
+std::string format_shape(const std::vector<int64_t> &shape);
 
-// The built-in Gauss-Legendre table of order 12 (numpy's leggauss(12)).
-extern const double LEGGAUSS12_X[12];
-extern const double LEGGAUSS12_W[12];
+// `_quadrature.leggauss(n)` for a tabled order (1..192), from the frozen
+// table; false beyond it.
+bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w);
 // RazorSolver.eps / RazorSolver.mu, and the Python front half's tolerances:
 // `_junction_rule.JUNCTION_TOL`, `_feed_snap.AMBIGUITY_TOL_FRAC`,
 // `_exact_kernel_seam.EXACT_KERNEL_AUTO_H_OVER_A`. A test pins each to its

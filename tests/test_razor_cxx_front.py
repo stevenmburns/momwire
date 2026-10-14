@@ -19,7 +19,6 @@ branch, and the port columns -- then fills and factors
 
 import importlib.util
 import pathlib
-import sys
 import warnings
 
 import numpy as np
@@ -380,9 +379,11 @@ def test_the_core_declines_what_the_attributes_cannot_see():
     assert acc.razor_front_build(dict(kw, feeds=[(0.5, 1.0, 1)]))["decline"] == (
         "malformed-args"
     )
-    assert acc.razor_front_build(dict(kw, n_qp_source=8))["decline"] == (
-        "quadrature-table"
+    # Beyond the frozen table Python takes numpy's eigensolve, not replayed.
+    assert acc.razor_front_build(dict(kw, n_qp_source=193))["decline"] == (
+        "quadrature-order"
     )
+    assert acc.razor_front_build(dict(kw, n_qp_source=8))["decline"] is None
     assert acc.razor_front_build(kw)["decline"] is None
 
 
@@ -533,26 +534,18 @@ def test_an_ambiguous_feed_warns_on_both_routes(monkeypatch, capture):
 # --- the constants the core carries ----------------------------------------
 
 
-# numpy's `leggauss` is an eigensolve through the platform's LAPACK, and on
-# macOS arm64 its order-12 nodes and weights are NOT the bits numpy gives on
-# x86-64 Linux and Windows (measured on CI's test-macos, run 38621861548), so
-# the built-in table -- numpy's x86 output -- is not that platform's numpy.
-# The routed solve is unaffected (it passes the solver's own table); the
-# standalone executable on macOS would differ from momwire-on-macOS there.
-# Strict, so the day the two agree this says so.
-_NUMPY_LEGGAUSS_DIFFERS = pytest.mark.xfail(
-    sys.platform == "darwin",
-    reason="numpy's leggauss(12) on macOS arm64 is not its x86-64 output",
-    strict=True,
-)
+def test_the_table_is_the_frozen_one_for_every_tabled_order():
+    """The core's Gauss-Legendre rules are `_quadrature.leggauss`'s, bit for
+    bit, on every platform: both read the one frozen table (momwire#1484),
+    the core through the header generated from it."""
+    from momwire import _leggauss_table, _quadrature
 
-
-@_NUMPY_LEGGAUSS_DIFFERS
-def test_the_built_in_table_is_numpys():
-    k = acc.razor_front_constants()
-    x, w = np.polynomial.legendre.leggauss(12)
-    assert np.array(k["leggauss12_x"]).tobytes() == x.tobytes()
-    assert np.array(k["leggauss12_w"]).tobytes() == w.tobytes()
+    for n in range(1, _leggauss_table.N_MAX + 1):
+        x, w = acc.razor_front_leggauss(n)
+        rx, rw = _quadrature.leggauss(n)
+        assert x.tobytes() == rx.tobytes() and w.tobytes() == rw.tobytes(), n
+    assert acc.razor_front_leggauss(_leggauss_table.N_MAX + 1) is None
+    assert acc.razor_front_leggauss(0) is None
 
 
 def test_the_built_in_constants_are_razors():
@@ -567,15 +560,6 @@ def test_the_built_in_constants_are_razors():
     )
     assert k["chunk_elems"] == razor._CHUNK_ELEMS
     assert k["n_qp_source"] == 12  # RazorSolver's default, the table's order
-
-
-@_NUMPY_LEGGAUSS_DIFFERS
-def test_the_built_in_table_answers_as_the_passed_one():
-    kw = dict(BASE, **CASES["pec_ek"])
-    x, w = razor.leggauss(12)
-    a = acc.razor_front_build(kw)
-    b = acc.razor_front_build(kw, x, w)
-    assert fc.differences(a["front"], b["front"]) == []
 
 
 @pytest.mark.parametrize(
@@ -598,5 +582,7 @@ def test_the_built_in_table_answers_as_the_passed_one():
         list(np.random.default_rng(6).standard_normal(1200)),
     ],
 )
-def test_the_radius_refusal_quotes_numpys_array_text(values):
-    assert acc.razor_front_numpy_str(values) == str(np.array(values, dtype=float))
+def test_the_radius_refusal_spells_numbers_as_wire_spec_does(values):
+    from momwire import _wire_spec
+
+    assert acc.razor_front_format_numbers(values) == _wire_spec.format_numbers(values)
