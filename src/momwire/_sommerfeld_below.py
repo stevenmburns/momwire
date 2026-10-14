@@ -1310,6 +1310,7 @@ def iv_surfaces_direct_below(
 
     nz = np.nonzero(~zero)[0]
     if nz.size:
+        SWEEP_STATS["direct_nodes"] += int(nz.size)
         r1 = R1f[nz]
         rho = np.maximum(r1 * np.cos(thf[nz]), 0.0)
         h = np.maximum(r1 * np.sin(thf[nz]), 0.0)
@@ -1344,6 +1345,27 @@ def iv_surfaces_direct_below(
 # ---------------------------------------------------------------------------
 # The grid
 # ---------------------------------------------------------------------------
+
+
+def _seed_rows(seed, ridx, r_start, dr, n_r, th0_deg, dth_deg, n_th):
+    """The rows of region `ridx` a seed grid already holds on THIS lattice, as
+    a (surface, row, theta) array, or None when it holds none: no seed, the
+    region unfilled there, or a lattice that is not this one's first rows
+    (the far annulus of a seed smaller than 2 lam_m starts somewhere else)."""
+    if seed is None:
+        return None
+    reg = seed._regions[ridx]
+    if not reg["filled"] or reg["n_th"] != n_th:
+        return None
+    same = (
+        abs(reg["r0"] - r_start) <= 1e-9 * dr
+        and abs(reg["dr"] - dr) <= 1e-12 * dr
+        and abs(reg["th0"] - math.radians(th0_deg)) <= 1e-15
+        and abs(reg["dth"] - math.radians(dth_deg)) <= 1e-15
+    )
+    if not same:
+        return None
+    return reg["vals"][:, : min(reg["n_r"], n_r), :]
 
 
 class SommerfeldGridBelow(SommerfeldGrid):
@@ -1387,8 +1409,21 @@ class SommerfeldGridBelow(SommerfeldGrid):
     """
 
     regime = "below"
+    # False in `SommerfeldGridBelowBlended` (momwire#1471), whose constructor
+    # builds this lattice and fills every region from its anchors instead.
+    _eager = True
 
-    def __init__(self, eps_t, k2, r1_max, rtol=1e-9, omega=None, mu=_MU0, health=None):
+    def __init__(
+        self,
+        eps_t,
+        k2,
+        r1_max,
+        rtol=1e-9,
+        omega=None,
+        mu=_MU0,
+        health=None,
+        seed=None,
+    ):
         self.eps_t = complex(eps_t)
         self.k2 = float(k2)
         from ._sommerfeld import _C_LIGHT
@@ -1498,7 +1533,35 @@ class SommerfeldGridBelow(SommerfeldGrid):
             n_th = int(round((th1 - th0) / dth)) + 1
             r_nodes = r_start + dr * np.arange(n_r)
             th_nodes = np.radians(th0 + dth * np.arange(n_th))
-            if ridx in _DEFERRED_REGIONS:
+            # momwire#1471: a `seed` is a smaller grid at the same eps_t and
+            # frequency. Its nodes coincide with this grid's, so the rows it
+            # has are taken and only the rows past them are evaluated -- in
+            # every region it has filled, deferred ones included.
+            kept = _seed_rows(seed, ridx, r_start, dr, n_r, th0, dth, n_th)
+            if kept is not None:
+                _cancel.poll()
+                surf = {
+                    key: np.empty((n_r, n_th), dtype=np.complex128)
+                    for key in _SURF_KEYS
+                }
+                n_kept = kept.shape[1]
+                for s_i, key in enumerate(_SURF_KEYS):
+                    surf[key][:n_kept] = kept[s_i]
+                if n_kept < n_r:
+                    rr, tt = np.meshgrid(r_nodes[n_kept:], th_nodes, indexing="ij")
+                    more = iv_surfaces_direct_below(
+                        self.eps_t,
+                        self.k2,
+                        rr,
+                        tt,
+                        rtol=rtol,
+                        omega=self.omega,
+                        mu=self.mu,
+                        health=health,
+                    )
+                    for key in _SURF_KEYS:
+                        surf[key][n_kept:] = more[key]
+            elif ridx in _DEFERRED_REGIONS or not self._eager:
                 surf = None  # deferred; see `_fill_region`
             else:
                 _cancel.poll()
@@ -1873,6 +1936,378 @@ def r1_bracket_one_bucket(lo, hi, eps_t, k2):
     return _somm_r1_bucket_wl(x_lo) == _somm_r1_bucket_wl(x_hi)
 
 
+# ---------------------------------------------------------------------------
+# Sweep anchors (momwire#1471)
+# ---------------------------------------------------------------------------
+#
+# `get_grid_below` keys and fills on the caller's exact eps_t, for the reason
+# its docstring gives: the 1 % eps ladder with a LINEAR blend that serves the
+# above/above family reads 4e-3 to 1.5e-2 here. A frequency sweep therefore
+# paid one whole fill per point (Ward AE6TY's 67-segment deck: ~5 s of
+# single-thread contour work per frequency against 0.3 s for everything
+# else), and nothing was shared between points.
+#
+# What is shared is this. In the lattice's own coordinates (R1 in in-medium
+# wavelengths, theta) the four surfaces divided by omega*mu depend on
+# frequency ONLY through eps_t = eps_r - j*sigma/(omega*eps0): measured, the
+# same eps_t tabulated at free-space wavelengths 15, 30 and 160 m agrees to
+# 5e-10 of scale, the contour's own tolerance. A sweep is a one-dimensional walk in Im(eps_t),
+# and along it every table node is a smooth function, so a HIGH-ORDER
+# interpolation across a ladder of anchors reaches what the linear blend
+# could not. Measured over the six regions Ward's deck reads (worst node,
+# relative to max(|node|, 1e-3 of its surface's largest value) / relative to
+# the surface's largest value), anchors on a geometric ladder in Im(eps_t),
+# Lagrange in ln Im(eps_t) through the p+1 nearest rungs, target mid-ladder,
+# at eps_t = 13 - 8.66j, the hardest of three soils tried:
+#
+#   step    linear          cubic           degree 5        degree 7
+#    2 %    2.9e-2/9.4e-5   8.6e-6/2.8e-8   7.5e-9/4.6e-11  4.0e-10/2.6e-11
+#    5 %    1.9e-1/3.8e-4   2.2e-4/1.1e-6   1.2e-6/6.6e-9   1.2e-8/1.1e-10
+#   10 %    1.2e+0/2.3e-3   5.3e-3/1.8e-5   1.1e-4/4.0e-7   4.5e-6/2.3e-8
+#
+# (the first column is the #902-style blend, and is why the old docstring's
+# verdict was right about it). The tables' own spatial interpolation error is
+# 3.6e-5 of scale, so degree 7 on a 10 % ladder sits three decades under what
+# the lattice already costs. Polynomial in ln Im(eps_t) beats polynomial in
+# Im(eps_t) by 3x to 10x at every rung of that table.
+#
+# An anchor is an ordinary exact grid at the rung's eps_t and a fixed
+# reference wavelength, so it is cached and persisted by the machinery the
+# exact grids already use, and its lazy regions stay lazy.
+_SOMM_BELOW_ANCHOR_STEP = math.log(1.1)
+_SOMM_BELOW_ANCHOR_POINTS = 8
+
+# When anchors are used. A blend needs `_SOMM_BELOW_ANCHOR_POINTS` anchor
+# fills (about ten for a 9-12 MHz sweep, as the stencil walks) where an exact
+# grid needs one, so a lone frequency must never pay for them and a sweep
+# should. Which is which is not known in advance, so this is the rent-or-buy
+# rule: fill exactly until the same soil and table size have been asked for
+# at `_SOMM_BELOW_ANCHOR_TRIGGER` distinct frequencies within
+# `_SOMM_BELOW_ANCHOR_WINDOW_STEPS` ladder steps (about 21 %) of each other,
+# then build the anchors. Anchors already on disk (an earlier sweep) are used
+# at once. At 8 no job is slower than about 2.2x what it would have cost
+# knowing its length in advance (8 frequencies: 7 exact fills + ~10 anchor
+# fills against 8), and every job of 7 or fewer nearby frequencies -- band
+# edges and centre, a five-point SWR check -- is exactly what it was. The
+# price is 7 exact fills at the head of a long sweep, which a crew of worker
+# processes pays in parallel anyway. The count is shared through the disk
+# cache (`_somm_disk_cache.note_seen`), so a crew counts as one sweep.
+_SOMM_BELOW_ANCHOR_TRIGGER = 8
+_SOMM_BELOW_ANCHOR_WINDOW_STEPS = 2.0
+
+# The free-space wavelength anchors are tabulated at. Any value serves (the
+# normalised table does not depend on it); one value makes every sweep on a
+# soil share its anchors whatever its band.
+_SOMM_BELOW_ANCHOR_LAMBDA0_M = 1.0
+
+ENV_ANCHORS = "MOMWIRE_BELOW_ANCHORS"
+
+_BLENDED_KEY = ("anchors-1471",)
+_ANCHOR_CACHE: dict = {}
+_ANCHOR_CACHE_MAX = 96
+_SWEEP_SEEN: dict = {}
+_SWEEP_SEEN_MAX = 256
+
+# What was built, for tests and benchmarks (never for control). `direct_nodes`
+# counts contour evaluations, the unit every cost here is made of.
+SWEEP_STATS = {
+    "exact_grids": 0,
+    "anchor_fills": 0,
+    "blended_grids": 0,
+    "blended_regions": 0,
+    "exact_regions_on_blended": 0,
+    "direct_nodes": 0,
+}
+
+
+def anchor_mode():
+    """`MOMWIRE_BELOW_ANCHORS`: "auto" (default; see
+    `_SOMM_BELOW_ANCHOR_TRIGGER`), "off" (every grid is the exact fill, as
+    before momwire#1471) or "on" (every lossy grid is blended from anchors)."""
+    v = os.environ.get(ENV_ANCHORS, "auto").strip().lower()
+    if v in ("0", "off", "false", "no", "exact"):
+        return "off"
+    if v in ("1", "on", "true", "yes", "always"):
+        return "on"
+    return "auto"
+
+
+def reset_sweep_state():
+    """Forget the frequencies seen, the anchors held and the blended grids
+    cached in this process (exact grids stay). The test suite calls this
+    before every test, so whether a test's grid is exact or blended depends
+    on that test alone and not on what ran before it in the same worker."""
+    _SWEEP_SEEN.clear()
+    _ANCHOR_CACHE.clear()
+    for key in [k for k in _GRID_CACHE if k[-1:] == _BLENDED_KEY]:
+        del _GRID_CACHE[key]
+
+
+def _lagrange_weights(t, n):
+    """Weights of the degree n-1 Lagrange interpolant through the integer
+    nodes 0..n-1, at t. One-hot on a node."""
+    w = np.ones(n)
+    for a in range(n):
+        for b in range(n):
+            if a != b:
+                w[a] *= (t - b) / (a - b)
+    return w
+
+
+def _anchor_k2():
+    return 2.0 * np.pi / _SOMM_BELOW_ANCHOR_LAMBDA0_M
+
+
+@dataclass
+class _AnchorPlan:
+    s: float  # -Im(eps_t) of the target
+    eps_r: float
+    rungs: tuple  # the anchors' eps_t
+    weights: np.ndarray
+
+    def key(self, j):
+        """Anchor j's cache key. The slot an exact grid's key gives to its
+        size says "anchor" instead: an anchor GROWS (`_ensure_anchors`), so
+        its size is a property of the file and not of its name."""
+        from ._sommerfeld import _C_LIGHT
+
+        k2 = _anchor_k2()
+        return ("below", self.rungs[j], k2, "anchor-1471", k2 * _C_LIGHT, _MU0)
+
+    @property
+    def family(self):
+        return f"below-sweep:{float(self.eps_r).hex()}"
+
+
+def _anchor_plan(eps_t):
+    """The anchors and weights that reconstruct a grid at `eps_t`, or None
+    where the scheme does not apply: a lossless or gain medium has no
+    Im(eps_t) ladder to walk (and no frequency dependence in eps_t to need
+    one), and those keep the exact fill."""
+    eps_t = complex(eps_t)
+    s = -eps_t.imag
+    if not (np.isfinite(s) and s > 0.0 and np.isfinite(eps_t.real)):
+        return None
+    n = int(_SOMM_BELOW_ANCHOR_POINTS)
+    x = math.log(s) / _SOMM_BELOW_ANCHOR_STEP
+    n0 = math.floor(x) - (n // 2 - 1)
+    w = _lagrange_weights(x - n0, n)
+    rungs = tuple(
+        complex(eps_t.real, -math.exp((n0 + j) * _SOMM_BELOW_ANCHOR_STEP))
+        for j in range(n)
+    )
+    return _AnchorPlan(s, eps_t.real, rungs, w)
+
+
+def _is_sweep(plan, r1_wl):
+    """Note this frequency and say whether the soil has now been asked for at
+    enough nearby ones, on a table of about this size, to be worth anchors.
+    Shared across the processes that share the disk cache, so a crew of
+    workers counts as one sweep. "About this size" is one 1.25 bucket either
+    way: a sweep moves R1/lam_m slowly, and a different deck on the same soil
+    is not this sweep."""
+    mine = (float(plan.s), float(r1_wl))
+    seen = _SWEEP_SEEN.setdefault(plan.family, [])
+    if mine not in seen:
+        seen.append(mine)
+        del seen[:-_SWEEP_SEEN_MAX]
+    both = set(seen) | set(_somm_disk_cache.note_seen(plan.family, mine))
+    window = _SOMM_BELOW_ANCHOR_WINDOW_STEPS * _SOMM_BELOW_ANCHOR_STEP
+    near = {
+        s
+        for s, r in both
+        if s > 0.0
+        and abs(math.log(s / plan.s)) <= window
+        and 1.0 / 1.26 <= r / r1_wl <= 1.26
+    }
+    return len(near) >= _SOMM_BELOW_ANCHOR_TRIGGER
+
+
+def _anchor_serves(grid, r1_wl, idx=None):
+    return (
+        grid is not None
+        and grid.r1_max / grid.lam_m >= r1_wl * (1.0 - 1e-9)
+        and (idx is None or grid._regions[idx]["filled"])
+    )
+
+
+def _adopt_regions(grid, other):
+    """Take from `other` (the same anchor, as another process left it on
+    disk) every region it has filled and `grid` has not, where the two
+    lattices coincide. Returns the larger of the two, so enriched."""
+    if grid is None or other is None:
+        return grid if other is None else other
+    if other.r1_max > grid.r1_max:
+        grid, other = other, grid
+    for mine, theirs in zip(grid._regions, other._regions):
+        if mine["filled"] or not theirs["filled"]:
+            continue
+        if (
+            theirs["n_r"] >= mine["n_r"]
+            and theirs["n_th"] == mine["n_th"]
+            and abs(theirs["r0"] - mine["r0"]) <= 1e-9 * mine["dr"]
+            and abs(theirs["dr"] - mine["dr"]) <= 1e-12 * mine["dr"]
+        ):
+            mine["vals"] = np.ascontiguousarray(theirs["vals"][:, : mine["n_r"], :])
+            mine["filled"] = True
+    return grid
+
+
+def _ensure_anchors(plan, r1_wl, idx=None):
+    """The plan's anchor grids, each tabulated to at least `r1_wl` in-medium
+    wavelengths and, with `idx`, with that region filled.
+
+    An anchor is an ordinary exact grid at its rung's eps_t and the reference
+    wavelength. It is filled once to the size first asked for and GROWN after
+    that: a larger table's nodes coincide with a smaller one's, so growing
+    evaluates the new rows only (`SommerfeldGridBelow(seed=...)`), and a sweep
+    that moves R1/lam_m across a size bucket pays for the difference rather
+    than for the anchors again.
+
+    Each anchor is touched under its own cross-process lock, after adopting
+    what is on disk, so a crew of workers fills different anchors at once and
+    none of them fills what another already has.
+    """
+    out = [None] * len(plan.rungs)
+    tasks = []
+    k2 = _anchor_k2()
+    for j, eps_a in enumerate(plan.rungs):
+        key = plan.key(j)
+        out[j] = _ANCHOR_CACHE.get(key)
+        if _anchor_serves(out[j], r1_wl, idx):
+            continue
+
+        def work(j=j, eps_a=eps_a, key=key):
+            grid = _ANCHOR_CACHE.get(key)
+            if not _anchor_serves(grid, r1_wl, idx):
+                grid = _adopt_regions(grid, _somm_disk_cache.fetch(key))
+                changed = False
+                if not _anchor_serves(grid, r1_wl):
+                    SWEEP_STATS["anchor_fills"] += 1
+                    grid = SommerfeldGridBelow(
+                        eps_a,
+                        k2,
+                        r1_wl * _lambda_m(eps_a, k2),
+                        omega=key[4],
+                        mu=key[5],
+                        seed=grid,
+                    )
+                    changed = True
+                if idx is not None and not grid._regions[idx]["filled"]:
+                    grid._fill_region(idx)
+                    changed = True
+                if changed:
+                    _somm_disk_cache.store(key, grid)
+            if key not in _ANCHOR_CACHE:
+                _evict_fifo(_ANCHOR_CACHE, _ANCHOR_CACHE_MAX)
+            _ANCHOR_CACHE[key] = grid
+            out[j] = grid
+
+        tasks.append((key, (), work))
+    _somm_disk_cache.coordinated(tasks, poll=_cancel.poll)
+    return out
+
+
+def _anchors_ready(plan, r1_wl):
+    """True when every anchor of the plan is already this size, in this
+    process or on disk (an earlier sweep), so a blend costs no fill now."""
+    for j in range(len(plan.rungs)):
+        key = plan.key(j)
+        grid = _ANCHOR_CACHE.get(key)
+        if not _anchor_serves(grid, r1_wl):
+            grid = _adopt_regions(grid, _somm_disk_cache.fetch(key))
+            if not _anchor_serves(grid, r1_wl):
+                return False
+            if key not in _ANCHOR_CACHE:
+                _evict_fifo(_ANCHOR_CACHE, _ANCHOR_CACHE_MAX)
+            _ANCHOR_CACHE[key] = grid
+    return True
+
+
+class SommerfeldGridBelowBlended(SommerfeldGridBelow):
+    """A below/below grid at the caller's exact eps_t and frequency whose
+    region values are interpolated across anchor grids in Im(eps_t)
+    (momwire#1471) instead of evaluated on the contour.
+
+    The lattice, the routing, the refusals and the laziness are the parent's:
+    this class only changes where a region's numbers come from. The scaling
+    is S = omega*mu*G(eps_t; R1/lam_m, theta) with the lattice proportional
+    to lam_m, the law `scaled_to` says was never measured for this family; it
+    is measured now (the section comment above), and it is what makes an
+    anchor tabulated at one wavelength serve every frequency.
+
+    A region whose lattice does not line up with the anchors' node for node
+    is filled by the parent, exactly, at this grid's own eps_t. That is the
+    far annulus of a grid smaller than 2 lam_m, which no query routes to, and
+    any soil where the lateral-wave beat sets the radial spacing. Never
+    persisted: the blend is a weighted sum and the anchors are what is kept.
+    """
+
+    _eager = False
+
+    def __init__(self, eps_t, k2, r1_max, omega, mu, plan):
+        self._plan = plan
+        super().__init__(eps_t, k2, r1_max, omega=omega, mu=mu)
+        self._r1_wl = self.r1_max / self.lam_m
+        for ridx in range(len(self._regions)):
+            if ridx not in _DEFERRED_REGIONS:
+                self._fill_region(ridx)
+
+    def _rows_served(self, idx, anchors):
+        """How many rows of region `idx` this grid and every anchor share node
+        for node, or 0 when they do not line up or do not reach the region's
+        outer edge with a centred stencil."""
+        reg = self._regions[idx]
+        r_hi = (self.r_break, self.r_near, self.r1_max)[idx // _N_BANDS]
+        if r_hi <= reg["r0"] + 2.0 * reg["dr"]:
+            return 0  # a zone this grid does not reach: no query routes here
+        rows = reg["n_r"]
+        tol = 1e-9 * reg["dr"] / self.lam_m
+        for a in anchors:
+            ar = a._regions[idx]
+            same = (
+                ar["n_th"] == reg["n_th"]
+                and abs(ar["th0"] - reg["th0"]) <= 1e-15
+                and abs(ar["dth"] - reg["dth"]) <= 1e-15
+                and abs(ar["dr"] / a.lam_m - reg["dr"] / self.lam_m) <= tol
+                and abs(ar["r0"] / a.lam_m - reg["r0"] / self.lam_m) <= tol
+            )
+            if not same:
+                return 0
+            rows = min(rows, ar["n_r"])
+        # The outermost query lands at fr = (r_hi - r0)/dr and reads rows
+        # floor(fr) - 1 .. floor(fr) + 2. `n_r` itself is a ceil of a float
+        # quotient and comes out one row long on some lam_m, which is why the
+        # row count is compared against what is read and not against `n_r`.
+        need = max(int(math.floor((r_hi - reg["r0"]) / reg["dr"] + 1e-6)) + 3, 4)
+        return rows if rows >= need else 0
+
+    def _fill_region(self, idx):
+        reg = self._regions[idx]
+        if reg["filled"]:
+            return
+        _cancel.poll()
+        anchors = _ensure_anchors(self._plan, self._r1_wl)
+        rows = self._rows_served(idx, anchors)
+        if not rows:
+            SWEEP_STATS["exact_regions_on_blended"] += 1
+            super()._fill_region(idx)
+            return
+        anchors = _ensure_anchors(self._plan, self._r1_wl, idx)
+        # Accumulated elementwise in a fixed order, so a node two regions
+        # share (the floor band's copies of the low band's columns) blends to
+        # the same bits in both.
+        acc = None
+        for w, a in zip(self._plan.weights, anchors):
+            term = (w / (a.omega * a.mu)) * a._regions[idx]["vals"][:, :rows, :]
+            acc = term if acc is None else acc + term
+        reg["vals"] = np.ascontiguousarray(acc * (self.omega * self.mu))
+        reg["n_r"] = rows
+        reg["r_nodes"] = reg["r_nodes"][:rows]
+        reg["filled"] = True
+        SWEEP_STATS["blended_regions"] += 1
+
+
 def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0):
     """Cached `SommerfeldGridBelow`, sharing `_sommerfeld`'s grid cache.
 
@@ -1891,8 +2326,14 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
     cache would have doubled the eviction bookkeeping and left two places
     to get the FIFO bound wrong.
 
-    No normalized-master layer here (see `SommerfeldGridBelow`): the
-    physical grid is what gets cached.
+    A lone frequency gets the physical grid, filled at the caller's exact
+    eps_t, and that grid is what gets cached. A SWEEP is served from anchors
+    (momwire#1471, the section above): once the same soil and table size
+    have been asked for at `_SOMM_BELOW_ANCHOR_TRIGGER` nearby frequencies,
+    the grid is a `SommerfeldGridBelowBlended`, the same lattice with values
+    interpolated at high order across exact grids on a ladder in Im(eps_t).
+    `MOMWIRE_BELOW_ANCHORS=off` keeps every grid exact; a caller passing
+    `health` always watches an exact fill.
 
     **The ε̃ ladder does NOT apply below, and this is the third appearance
     of one inversion.** `_somm_eps_bucket` quantizes Im(ε̃) onto a 1 %
@@ -1915,10 +2356,11 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
     exact 20 − 77.03616j reads 5.98e-3 / 1.52e-2 / 4.13e-3 / 6.59e-3 per
     surface, against 1.5e-6 … 5.7e-5 when both sides share one ε̃.
 
-    And it buys nothing here. ε̃ = ε_r − jσ/(ωε₀) is frequency-dependent,
-    so a sweep re-keys on ω anyway (this family has no normalized master to
-    amortize across frequencies), and a single deck is a single ε̃. So the
-    below family keys and FILLS on the caller's exact ε̃. The above/above
+    So the below family keys on the caller's exact ε̃, and a blended grid
+    is INTERPOLATED to it rather than snapped to a rung: what failed above is
+    the nearest-rung and linear readings of the ladder (momwire#1471 measured
+    the linear one at 2.3e-3 of scale on a 10 % ladder and the degree-7 one
+    at 2.3e-8), not the idea of sharing fills across ε̃. The above/above
     ladder in `_sommerfeld.get_grid` is untouched — its premise still holds
     there.
 
@@ -1932,10 +2374,13 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
     r1b_wl = _r1_bucket_below_wl(r1_max, lam_m)
     key = ("below", eps_t, k2, r1b_wl, float(omega), float(mu))
     grid = _GRID_CACHE.get(key)
+    if grid is None and health is None:
+        grid = _GRID_CACHE.get(key + _BLENDED_KEY)
     if grid is None:
         _evict_fifo(_GRID_CACHE, _GRID_CACHE_MAX)
 
         def fill():
+            SWEEP_STATS["exact_grids"] += 1
             return SommerfeldGridBelow(
                 eps_t,
                 k2,
@@ -1949,10 +2394,29 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
         # the tally of a fill it watched, so it gets a fresh one. `track`:
         # the band regions fill lazily, and each one re-writes the file.
         with _cancel.scope_flag(cancel_flag):
-            if health is None:
-                grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
-            else:
+            if health is not None:
                 grid = fill()
+            else:
+                # momwire#1471: a sweep is served from anchors. An exact grid
+                # already on disk is still the first choice, and a lone
+                # frequency still takes the exact fill.
+                mode = anchor_mode()
+                plan = None if mode == "off" else _anchor_plan(eps_t)
+                # The size the grid will have: the ctor's own clamp.
+                r1_wl = min(max(r1b_wl, 0.35), _SOMM_BELOW_R1_CAP_LAMBDA_M)
+                if plan is not None and mode == "auto":
+                    sweep = _is_sweep(plan, r1_wl)
+                    grid = _somm_disk_cache.fetch(key, track=True)
+                    if grid is None and not (sweep or _anchors_ready(plan, r1_wl)):
+                        plan = None
+                if grid is None and plan is not None:
+                    grid = SommerfeldGridBelowBlended(
+                        eps_t, k2, r1b_wl * lam_m, float(omega), float(mu), plan
+                    )
+                    SWEEP_STATS["blended_grids"] += 1
+                    key = key + _BLENDED_KEY
+                elif grid is None:
+                    grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
         _GRID_CACHE[key] = grid
     return grid
 
