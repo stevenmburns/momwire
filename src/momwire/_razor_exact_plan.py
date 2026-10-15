@@ -82,6 +82,7 @@ from collections import OrderedDict
 import numpy as np
 
 from . import _exact_kernel, _exact_kernel_seam, _exact_kernel_series
+from ._vec3 import dot3
 
 # Switch, for gates that compare the cached and uncached routes in one
 # process. Read at call time.
@@ -241,6 +242,9 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
     (momwire#1438). The expressions are the ones
     `RazorSolver._add_exact_kernel_correction` evaluated inline before
     momwire#1454, so the tables hold the same values."""
+    # Every 3-vector product below is `dot3`'s fixed order, not `@`/einsum
+    # (numpy's BLAS FMA chain / einsum's lane split), so the plan is one
+    # that a C++ replay (momwire#1479) forms bit for bit.
     seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
     n_seg = seg_h.size
     seg_r = seg_p0 + seg_h[:, None] * seg_t
@@ -307,7 +311,7 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
             rows = np.flatnonzero(loc[wing_seg[:, w]] >= 0)
             p_parts.append((sign, rows.size, grounded[rows] if w == 0 else None))
             if on_cent:
-                a_parts.append((wts[rows, w], tans[rows, w] @ axis))
+                a_parts.append((wts[rows, w], dot3(tans[rows, w], axis)))
             else:
                 a_parts.append((None, rows.size))
             r_m.append(rows)
@@ -318,11 +322,11 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
             obs_seg.append(node_seg[mm, pp])
             r_m.append(mm)
             r_o.append(n + np.arange(mm.size))
-            a_parts.append((wts[mm, pp], np.einsum("ij,j->i", tans[mm, pp], axis)))
+            a_parts.append((wts[mm, pp], dot3(tans[mm, pp], axis)))
             p_parts.append((None, mm.size, None))
         obs_pt = np.ascontiguousarray(np.concatenate(obs_pt))
         obs_seg = np.concatenate(obs_seg)
-        obs_x = (obs_pt - seg_p0[S[0]]) @ axis
+        obs_x = dot3(obs_pt - seg_p0[S[0]], axis)
         r_o = np.concatenate(r_o)
         by_o = np.argsort(r_o, kind="stable")
         r_o = r_o[by_o]

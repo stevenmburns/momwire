@@ -125,7 +125,7 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 
 import numpy as np
-from ._vec3 import norm3
+from ._vec3 import dot3, norm3
 
 from ._bspline_static_moments import MAX_D as _BSPLINE_MOMENTS_MAX_D
 from ._bspline_ek_moments import D_ek_moment
@@ -591,12 +591,14 @@ def _ek_axis_groups_coaxial(seg_l, seg_r, tangents, seg_a, tol=1e-6):
     rep_a = np.empty(0, dtype=np.float64)
     for i in range(n):
         if rep_a.size:
-            collinear = np.abs(rep_t @ tangents[i]) >= 1.0 - tol
+            # `dot3`, not `@` (numpy's BLAS FMA chain): one fixed order a C++
+            # replay of the exact-kernel plan matches (momwire#1479).
+            collinear = np.abs(dot3(rep_t, tangents[i])) >= 1.0 - tol
             same_a = np.abs(seg_a[i] / rep_a - 1.0) <= tol
             # Perpendicular component of the center-to-center offset,
             # resolved in each representative's own axis frame.
             dvec = centers[i][None, :] - rep_c
-            axial = dvec @ tangents[i]
+            axial = dot3(dvec, tangents[i])
             perp = dvec - axial[:, None] * tangents[i][None, :]
             coaxial = norm3(perp) <= tol * rep_a
             hit = np.flatnonzero(collinear & same_a & coaxial)
