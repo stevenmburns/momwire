@@ -57,7 +57,6 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.linalg
 import scipy.sparse
-from scipy.interpolate import BSpline
 
 from ._bspline_kernels import (
     _EK,
@@ -455,6 +454,73 @@ def _design_matrix_band(vals, first, n_seg, d):
     if np.any(padded[:, :, width] != 0.0):
         raise AssertionError("nonzero design-matrix entry outside the segment band")
     return padded[:, :, :width].copy()
+
+
+def _wire_span_polynomials(coeffs, polys, kept, local_to_global, n_seg, d):
+    """The solved current on each knot span of one wire, as a polynomial.
+
+    Returns (n_seg, d+1) complex: row s holds the coefficients, lowest
+    power first, of Σ_m c_m·Φ_m on span s in the span's own local arc
+    u = s_arc - arc[s] — the same local variable, and the same per-(basis,
+    wing) polynomials, that `_build_basis_polynomials` hands the fills.
+
+    Bases are summed in ascending local index on every span, so the
+    order of accumulation is fixed by the mesh, not by the junction or
+    ground layout that decided which bases were kept. A dropped (free-end)
+    basis contributes nothing, as its zero coefficient did before.
+    """
+    out = np.zeros((n_seg, d + 1), dtype=np.complex128)
+    if not kept:
+        return out
+    j = np.array([kj for (kj, _kind, _junc, _end) in kept], dtype=np.int64)
+    m = np.array([local_to_global[i] for i in range(len(kept))], dtype=np.int64)
+    c = np.asarray(coeffs)[m]
+    seg_lo = np.maximum(0, j - d)
+    seg_hi = np.minimum(n_seg, j + 1)
+    # band[s, b, :] is the polynomial of basis s + b on span s, and
+    # band_c[s, b] its coefficient: basis j covers spans max(0, j-d) ..
+    # min(n_seg, j+1) - 1, its wing w sitting on span max(0, j-d) + w.
+    band = np.zeros((n_seg, d + 1, d + 1), dtype=np.float64)
+    band_c = np.zeros((n_seg, d + 1), dtype=np.complex128)
+    for w in range(d + 1):
+        span = seg_lo + w
+        ok = span < seg_hi
+        b = j[ok] - span[ok]
+        band[span[ok], b, :] = polys[m[ok], w, :]
+        band_c[span[ok], b] = c[ok]
+    for b in range(d + 1):
+        out += band_c[:, b, None] * band[:, b, :]
+    return out
+
+
+def _eval_span_polynomials(span_polys, arc, s, derivative):
+    """Evaluate `_wire_span_polynomials` (or its arc derivative) at ``s``.
+
+    ``s`` must already lie in [arc[0], arc[-1]]. The span is the knot rule
+    the basis itself uses (`_bspline_basis_rows`): a sample in
+    [arc[i], arc[i+1]) uses span i, so a sample ON an interior knot reads
+    the span to its RIGHT, and the last knot closes the last span. That
+    choice is invisible in the current, which is continuous, and decides
+    the slope at a knot when degree 1 makes it piecewise constant.
+
+    Horner in the local arc u; the derivative is the exact one of the
+    span polynomial (degree d - 1), not a difference.
+    """
+    n_seg, n_poly = span_polys.shape
+    d = n_poly - 1
+    span = np.searchsorted(arc, s, side="right") - 1
+    np.clip(span, 0, n_seg - 1, out=span)
+    u = s - arc[span]
+    coef = span_polys[span]
+    if not derivative:
+        val = coef[:, d].copy()
+        for p in range(d - 1, -1, -1):
+            val = val * u + coef[:, p]
+        return val
+    val = d * coef[:, d]
+    for p in range(d - 1, 0, -1):
+        val = val * u + p * coef[:, p]
+    return val
 
 
 # Module-level caches for `_build_geometry` and `_build_basis_polynomials`.
@@ -8685,10 +8751,12 @@ class BSplineSolver(
 
         The twin of :meth:`currents_at_knots`, differentiated in the basis
         rather than around it: a B-spline of degree ``d`` is a polynomial on
-        each knot span and scipy's :class:`~scipy.interpolate.BSpline` hands
-        back its exact derivative as a spline of degree ``d-1``, so this is
+        each knot span, and this differentiates the span polynomials
+        `_build_basis_polynomials` already built (degree ``d-1``), so it is
         the same sum evaluated with the same coefficients and no step size
-        anywhere.
+        anywhere. (scipy's ``BSpline.derivative`` did this until momwire
+        #1489; the two agree to the tolerance
+        ``tests/test_bspline_own_readouts_1489.py`` derives.)
 
         Returned per wire, in ``wires_polylines`` order, at the mesh knots
         (``s_array=None``) or at the arc positions given per wire — the same
@@ -8701,7 +8769,8 @@ class BSplineSolver(
         discretisation of a quantity this basis already knows exactly. At
         ``degree >= 2`` the derivative is continuous across a knot; at
         ``degree == 1`` it is piecewise constant and a sample taken AT a knot
-        lands on whichever span scipy assigns it, so ask for centres.
+        reads the span to its right (the last span at the wire's end, the
+        convention scipy's spline used), so ask for centres.
 
         Singular enrichment is refused rather than silently dropped: the
         enrichment shape ``(u/h)·log(u/h)`` contributes nothing to the
@@ -8717,7 +8786,7 @@ class BSplineSolver(
             )
         coeffs = np.asarray(coeffs)
         geom = self._build_geometry()
-        _, _, _, wire_knots, wire_basis_global = self._build_basis_polynomials(geom)
+        _, polys, _, wire_knots, wire_basis_global = self._build_basis_polynomials(geom)
         d = self.degree
 
         out = []
@@ -8732,23 +8801,32 @@ class BSplineSolver(
                     knots_vec[0],
                     knots_vec[-1],
                 )
-            kept, local_to_global = wire_basis_global[w_idx]
-            c_basis = np.zeros(len(knots_vec) - d - 1, dtype=np.complex128)
-            for kept_idx, (j_local, _, _, _) in enumerate(kept):
-                c_basis[j_local] = coeffs[local_to_global[kept_idx]]
             if s_eval.shape[0] == 0:
                 out.append(np.zeros(0, dtype=np.complex128))
                 continue
-            spline = BSpline(knots_vec, c_basis, d, extrapolate=False)
-            out.append(np.asarray(spline.derivative(1)(s_eval), dtype=np.complex128))
+            kept, local_to_global = wire_basis_global[w_idx]
+            span_polys = _wire_span_polynomials(
+                coeffs, polys, kept, local_to_global, len(arc_at_knot) - 1, d
+            )
+            slope = _eval_span_polynomials(
+                span_polys, arc_at_knot, s_eval, derivative=True
+            )
+            # A sample that is not a number reads as not a number, as the
+            # scipy spline this replaces returned it (its out-of-range
+            # answer); clipping cannot move one into the wire.
+            slope[np.isnan(s_eval)] = complex(np.nan, np.nan)
+            out.append(slope)
         return out
 
     @_wire_spec.reads_input_wires("per_wire")
     def currents_at_knots(self, coeffs, s_array=None):
         """Per-wire complex current at every mesh knot.
 
-        Evaluates Σ_kept c_g · B_{j_local}(s_knot) per wire using scipy's
-        B-spline design matrix on the wire's clamped knot vector.
+        Evaluates Σ_kept c_g · B_{j_local}(s_knot) per wire from the
+        per-span basis polynomials `_build_basis_polynomials` built (Horner
+        in each span's local arc), on the wire's clamped knot range. Until
+        momwire#1489 this read scipy's B-spline design matrix; the two agree
+        to the tolerance ``tests/test_bspline_own_readouts_1489.py`` derives.
 
         When `s_array` is provided as a list of 1D arc-length arrays (one per
         wire), the basis sum is evaluated at those arc positions instead of
@@ -8764,8 +8842,8 @@ class BSplineSolver(
         """
         coeffs = np.asarray(coeffs)
         geom = self._build_geometry()
-        supp_seg, _, _, wire_knots, wire_basis_global = self._build_basis_polynomials(
-            geom
+        supp_seg, polys, _, wire_knots, wire_basis_global = (
+            self._build_basis_polynomials(geom)
         )
         n_poly = supp_seg.shape[0]
         d = self.degree
@@ -8795,21 +8873,20 @@ class BSplineSolver(
             I_out = np.zeros(s_eval.shape[0], dtype=np.complex128)
             kept, local_to_global = wire_basis_global[w_idx]
             if s_eval.shape[0] > 0:
-                # Basis rows at [0, wire_arc] — clip tiny FP overshoots that
-                # would push the endpoint epsilon outside the clamped knot range.
-                dm_vals, dm_first = _bspline_basis_rows(s_eval, knots_vec, d)
-                dm_cols = dm_first[:, None] + np.arange(d + 1)
-                # Scatter the kept coefficients onto their bases (dropped
-                # free-end bases keep their 0) and sum each row over its
-                # own d+1 stored entries. Those entries are in ascending
-                # column order, so the per-row accumulation order matches
-                # the ascending-basis loop this replaces term for term —
-                # the terms it drops are the exact zeros off the band.
-                c_basis = np.zeros(len(knots_vec) - d - 1, dtype=np.complex128)
-                for kept_idx, (j_local, _, _, _) in enumerate(kept):
-                    c_basis[j_local] = coeffs[local_to_global[kept_idx]]
-                for e in range(d + 1):
-                    I_out += c_basis[dm_cols[:, e]] * dm_vals[:, e]
+                # Positions are clipped into [0, wire_arc] above — tiny FP
+                # overshoots at an end land on the end. A position that is
+                # not a number has no current, and is refused as the scipy
+                # design matrix this replaced refused it.
+                if np.isnan(s_eval).any():
+                    raise ValueError(
+                        "a current sample position along a wire is not a finite number"
+                    )
+                span_polys = _wire_span_polynomials(
+                    coeffs, polys, kept, local_to_global, len(arc_at_knot) - 1, d
+                )
+                I_out += _eval_span_polynomials(
+                    span_polys, arc_at_knot, s_eval, derivative=False
+                )
 
             if enrich_specs is not None:
                 seg_off_w = geom["seg_offsets"][w_idx]
