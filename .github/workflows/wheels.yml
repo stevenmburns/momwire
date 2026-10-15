@@ -174,7 +174,7 @@ jobs:
         # CIBW_BUILD env: an empty env value would OVERRIDE pyproject's
         # build spec instead of falling back to it.
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.full_matrix)
-        uses: pypa/cibuildwheel@v4.2.1
+        uses: pypa/cibuildwheel@v4.3.1
         env:
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
       - name: Build wheels (single-Python canary — main pushes and default dispatches)
@@ -182,7 +182,7 @@ jobs:
         # not a release: one Python per OS is enough signal at ~1/5 the
         # work (#220).
         if: "!(startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.full_matrix))"
-        uses: pypa/cibuildwheel@v4.2.1
+        uses: pypa/cibuildwheel@v4.3.1
         env:
           CIBW_BUILD: "cp312-*"
           MOMWIRE_DURATIONS_OUT: ${{ github.workspace }}/durations/durations.jsonl
