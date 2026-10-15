@@ -127,8 +127,12 @@ def test_another_release_beside_it_is_refused_in_the_printout(tmp_path):
     """A momwire environment whose installed release is not the executable's:
     every deck is refused, by name, in the printout; nothing is solved."""
     home = tmp_path / "env"
-    sp = home / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}"
-    meta = sp / "site-packages" / "momwire-0.0.1.dist-info"
+    if sys.platform == "win32":
+        sp = home / "Lib" / "site-packages"
+    else:
+        sp = home / "lib" / f"python{sys.version_info[0]}.{sys.version_info[1]}"
+        sp = sp / "site-packages"
+    meta = sp / "momwire-0.0.1.dist-info"
     meta.mkdir(parents=True)
     (meta / "METADATA").write_text(
         "Metadata-Version: 2.1\nName: momwire\nVersion: 0.0.1\n\n"
