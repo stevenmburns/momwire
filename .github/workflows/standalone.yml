@@ -45,7 +45,7 @@ jobs:
         shell: pwsh
         run: |
           $lib = (Get-ChildItem -Recurse ob -Filter libopenblas.lib | Select-Object -First 1).FullName
-          cmake -S standalone -B build-exe -G "Visual Studio 17 2022" -A x64 `
+          cmake -S standalone -B build-exe -A x64 `
             "-DMW_OPENBLAS_LIB=$lib" "-DMW_DEFAULT_PYTHON_HOME=$PWD\venv" `
             "-DPython3_EXECUTABLE=$((Get-Command python).Source)"
           cmake --build build-exe --config Release
