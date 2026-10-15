@@ -87,6 +87,7 @@ from . import _feed_snap
 from . import _ground_mirror
 from . import _ground_refl
 from . import _ground_spec
+from . import _lapack
 from . import _medium_spec
 from . import _potential_ground
 from . import _quadrature
@@ -570,10 +571,10 @@ def _lu_solve(Z, rhs, overwrite_a=False, overwrite_b=False):
     still raises `LinAlgError`, as `solve` did, where `lu_factor` alone only
     warns and the solve would return inf/NaN.
     """
-    lu_piv = scipy.linalg.lu_factor(Z, overwrite_a=overwrite_a)
+    lu_piv = _lapack.lu_factor(Z, overwrite_a=overwrite_a)
     if not np.all(np.diagonal(lu_piv[0])):
         raise np.linalg.LinAlgError("singular matrix")
-    return scipy.linalg.lu_solve(lu_piv, rhs, overwrite_b=overwrite_b)
+    return _lapack.lu_solve(lu_piv, rhs, overwrite_b=overwrite_b)
 
 
 def _evict_fifo(cache: dict, limit: int) -> None:
@@ -5767,7 +5768,7 @@ class BSplineSolver(
         sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         w = sol[:, 0]
         X = sol[:, 1:]
-        lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
+        lam = _lapack.solve(kcl_A @ X, kcl_A @ w)
         return w - X @ lam
 
     def _solve_with_kcl_ports(self, Z, V, kcl_A, overwrite=False):
@@ -5787,7 +5788,7 @@ class BSplineSolver(
         sol = _lu_solve(Z, rhs, overwrite_a=overwrite, overwrite_b=True)
         W = sol[:, :n_p]
         X = sol[:, n_p:]
-        Lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ W)
+        Lam = _lapack.solve(kcl_A @ X, kcl_A @ W)
         return W - X @ Lam
 
     def _solve_with_kcl_batch(self, Z, v, kcl_A):
@@ -5803,17 +5804,17 @@ class BSplineSolver(
         n_k, n_b = Z.shape[0], Z.shape[1]
         if kcl_A.shape[0] == 0:
             rhs = np.broadcast_to(v[None, :, None], (n_k, n_b, 1))
-            return np.linalg.solve(Z, rhs)[:, :, 0]
+            return _lapack.solve_stacked(Z, rhs)[:, :, 0]
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_k, n_b, 1 + n_c), dtype=np.complex128)
         rhs[:, :, 0] = v[None, :]
         rhs[:, :, 1:] = kcl_A.T[None, :, :]
-        sol = np.linalg.solve(Z, rhs)  # (n_k, n_b, 1 + n_c)
+        sol = _lapack.solve_stacked(Z, rhs)  # (n_k, n_b, 1 + n_c)
         w = sol[:, :, 0]
         X = sol[:, :, 1:]
         S = np.einsum("cm,kmn->kcn", kcl_A, X)
         Aw = np.einsum("cm,km->kc", kcl_A, w)
-        lam = np.linalg.solve(S, Aw[:, :, None])[:, :, 0]
+        lam = _lapack.solve_stacked(S, Aw[:, :, None])[:, :, 0]
         return w - np.einsum("kmc,kc->km", X, lam)
 
     def _solve_with_kcl_swept_ports(self, Z, V, kcl_A):
@@ -5826,17 +5827,17 @@ class BSplineSolver(
         n_b, n_p = V.shape
         if kcl_A.shape[0] == 0:
             rhs = np.broadcast_to(V[None, :, :], (n_k, n_b, n_p))
-            return np.linalg.solve(Z, rhs)
+            return _lapack.solve_stacked(Z, rhs)
         n_c = kcl_A.shape[0]
         rhs = np.empty((n_k, n_b, n_p + n_c), dtype=np.complex128)
         rhs[:, :, :n_p] = V[None, :, :]
         rhs[:, :, n_p:] = kcl_A.T[None, :, :]
-        sol = np.linalg.solve(Z, rhs)
+        sol = _lapack.solve_stacked(Z, rhs)
         W = sol[:, :, :n_p]
         X = sol[:, :, n_p:]
         S = np.einsum("cm,kmn->kcn", kcl_A, X)
         AW = np.einsum("cm,kmp->kcp", kcl_A, W)
-        Lam = np.linalg.solve(S, AW)
+        Lam = _lapack.solve_stacked(S, AW)
         return W - np.einsum("kmc,kcp->kmp", X, Lam)
 
     # ------------------------------------------------------------------

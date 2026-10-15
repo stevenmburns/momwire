@@ -43,7 +43,6 @@ from dataclasses import dataclass
 
 
 import numpy as np
-import scipy.linalg
 import scipy.sparse
 
 from . import (
@@ -63,6 +62,7 @@ from . import (
     _wire_spec,
 )
 from . import bspline as _bspline
+from . import _lapack
 from .bspline import SINGULAR_ENRICHMENT_NEVER
 from ._accel import acc as _acc
 from ._cancel import _Cancelable
@@ -6805,8 +6805,8 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         # are what gets stashed: the collocation G is not symmetric, so the
         # wire-loading adjoint oracle needs Gᵀw = r, which is the same
         # factorization at trans=0. One getrf serves both.
-        lu_piv = scipy.linalg.lu_factor(G.T, overwrite_a=True)
-        alpha = scipy.linalg.lu_solve(lu_piv, v, trans=1)
+        lu_piv = _lapack.lu_factor(G.T, overwrite_a=True)
+        alpha = _lapack.lu_solve(lu_piv, v, trans=1)
 
         Z_drive = self._feed_impedances(alpha, geom, seg_view, voltages)
         self.Z_factors = lu_piv  # LU of Gᵀ; adjoint solve = lu_solve(·, trans=0)
@@ -6868,7 +6868,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
         B = np.zeros((n_segs, n_ports), dtype=np.complex128)
         for j, fi in enumerate(feed_segs):
             B[fi, j] = -1.0 / geom["seg_h"][fi]
-        alphas = scipy.linalg.solve(G, B)  # (n_segs, n_ports)
+        alphas = _lapack.solve(G, B)  # (n_segs, n_ports)
 
         Y = np.zeros((n_ports, n_ports), dtype=np.complex128)
         for j in range(n_ports):
@@ -6931,7 +6931,7 @@ class SinusoidalSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
                     G, seg_view = self._assemble_Z(
                         geom, self.k, self._medium_eta(medium)
                     )
-                alpha = scipy.linalg.solve(G, v)
+                alpha = _lapack.solve(G, v)
                 z_out[i] = self._feed_impedances(alpha, geom, seg_view, voltages)
         return z_out
 

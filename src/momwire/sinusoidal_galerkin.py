@@ -361,6 +361,7 @@ import scipy.spatial.distance
 from . import _below_interface, _crossing_fill, _field_ground, _ground_mirror
 from . import _medium_spec, _schedule, _sinusoidal_mp, _sommerfeld, _sommerfeld_below
 from . import _wire_loading, _wire_spec
+from . import _lapack
 from ._accel import acc as _acc
 from ._bspline_kernels import _ek_axis_groups_coaxial
 from ._bspline_kernels import _reg_cplx_pool as _piece_pool
@@ -893,10 +894,10 @@ def _solve_in_place(G, rhs):
     Callers must not read G afterwards; neither SG solve does, and this
     family stashes no matrix or factors on the solver.
     """
-    lu_piv = scipy.linalg.lu_factor(G, overwrite_a=True)
+    lu_piv = _lapack.lu_factor(G, overwrite_a=True)
     if not np.all(np.diagonal(lu_piv[0])):
         raise np.linalg.LinAlgError("singular matrix")
-    return scipy.linalg.lu_solve(lu_piv, rhs)
+    return _lapack.lu_solve(lu_piv, rhs)
 
 
 def _solve_constrained(G, rhs, C):

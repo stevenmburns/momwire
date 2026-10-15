@@ -47,7 +47,7 @@ from typing import NamedTuple
 
 import numpy as np
 from ._vec3 import norm3
-import scipy.linalg
+from . import _lapack
 
 # 1e-9 of the deck's largest extent. The registered tolerance (§3.1): the
 # structure probe measures rotated radials landing 3.9e-16 m (4 radials) to
@@ -722,7 +722,7 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     n = len(sectors)
     sq = math.sqrt(n)
     K0, m, _p = harmonic_zero_block(solver, Z, sectors, axial, row_of=row_of)
-    lu = scipy.linalg.lu_factor(K0, overwrite_a=True)
+    lu = _lapack.lu_factor(K0, overwrite_a=True)
 
     def z_inv(rhs):
         rhs = np.asarray(rhs, dtype=np.complex128).reshape(rhs.shape[0], -1)
@@ -734,7 +734,7 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
         refuse_if_not_invariant(rhs, sectors)
         r0 = rhs[sectors[0]]
         top = np.vstack([sq * r0, rhs[axial]])
-        sol = scipy.linalg.lu_solve(lu, top)
+        sol = _lapack.lu_solve(lu, top)
         out = np.empty((rhs.shape[0], rhs.shape[1]), dtype=np.complex128)
         per_sector = sol[:m] / sq
         for t in range(n):
@@ -746,7 +746,7 @@ def solve(solver, Z, v, kcl_A, sectors, axial, row_of=None):
     if kcl_A.shape[0] == 0:
         return w
     X = z_inv(kcl_A.T.astype(np.complex128))
-    lam = scipy.linalg.solve(kcl_A @ X, kcl_A @ w)
+    lam = _lapack.solve(kcl_A @ X, kcl_A @ w)
     return w - X @ lam
 
 

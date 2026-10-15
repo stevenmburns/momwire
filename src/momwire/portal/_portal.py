@@ -251,6 +251,7 @@ from .._far_readout import (
     pattern_fields,
 )
 from .._ground_spec import ground_touch_tol as _ground_touch_tol
+from .. import _lapack
 from .._near_readout import (
     NEAR_FIELD_SUBDIV,
     near_field_at,
@@ -2118,7 +2119,7 @@ class DeckSolver:
         """
         n = self.n_ports
         if np.any(z_load):
-            y_eff = np.linalg.solve(
+            y_eff = _lapack.solve_stacked(
                 (np.eye(n, dtype=np.complex128) + z_load[:, None] * y).T, y.T
             ).T
         else:
@@ -2176,7 +2177,7 @@ class DeckSolver:
                 self.model, self.plan, group=group_index, voltages=v_source, held=held
             )
             if reducer is None:
-                v_gap = np.linalg.solve(eye + z_load[:, None] * y, v_source)
+                v_gap = _lapack.solve_stacked(eye + z_load[:, None] * y, v_source)
                 i_port = y @ v_gap
                 return reducer, (v_gap, v_gap, i_port, i_port.copy())
             v_applied, i_port, i_source = self._composed(
@@ -2198,7 +2199,7 @@ class DeckSolver:
             rhs = rhs - m[np.ix_(i_rows, v_rows)] @ spec[v_rows]
         volts = spec.copy()
         try:
-            volts[i_rows] = np.linalg.solve(m[np.ix_(i_rows, i_rows)], rhs)
+            volts[i_rows] = _lapack.solve_stacked(m[np.ix_(i_rows, i_rows)], rhs)
         except np.linalg.LinAlgError as exc:
             segments = [driven[k][1] for k in i_rows]
             raise PortalError(
@@ -2355,7 +2356,7 @@ class DeckSolver:
                 system = np.eye(self.n_ports, dtype=np.complex128) + (
                     z_load[:, None] * y
                 )
-                v_gap = np.linalg.solve(system, v_source)
+                v_gap = _lapack.solve_stacked(system, v_source)
                 i_port = y @ v_gap
                 # No network branch reaches this group, so the source current
                 # IS the segment current, the applied voltage IS the gap's, and
