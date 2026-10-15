@@ -480,7 +480,7 @@ import numpy as np
 from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
 from .. import _ground_spec, _medium_spec
-from .. import _lapack
+from .. import _cmul, _lapack
 from ..deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
@@ -3298,7 +3298,7 @@ def _port_state(
     (driven,) = [site.index for site in mesh.sites if site.driven]
     probe = np.zeros(n, dtype=np.complex128)
     probe[driven] = 1.0
-    loaded = np.eye(n, dtype=np.complex128) + z_series[:, None] * y
+    loaded = np.eye(n, dtype=np.complex128) + _cmul.cmul(z_series[:, None], y)
 
     if not cards:
         # No network reaches this deck, so the source current IS the port
@@ -3308,13 +3308,13 @@ def _port_state(
         v_gap = _lapack.solve_stacked(loaded, probe)
         i_port = _lapack.matmul(y, v_gap)
         i_source = i_port
-        v_applied = v_gap + z_series * i_port
+        v_applied = v_gap + _cmul.cmul(z_series, i_port)
     else:
         y_eff = y if not np.any(z_series) else _lapack.solve_stacked(loaded.T, y.T).T
         v_applied, i_port, i_source = _reduced_state(
             cards, n, probe, (driven,), y_eff, wavelength
         )
-        v_gap = v_applied - z_series * i_port
+        v_gap = v_applied - _cmul.cmul(z_series, i_port)
 
     scale = (
         source.drive
@@ -3322,10 +3322,10 @@ def _port_state(
         else source.drive / complex(i_source[driven])  # EX 4: the current is set
     )
     return _PortState(
-        v_applied=v_applied * scale,
-        v_gap=v_gap * scale,
-        i_port=i_port * scale,
-        i_source=i_source * scale,
+        v_applied=_cmul.cmul(v_applied, scale),
+        v_gap=_cmul.cmul(v_gap, scale),
+        i_port=_cmul.cmul(i_port, scale),
+        i_source=_cmul.cmul(i_source, scale),
         z_load=z_load,
     )
 
@@ -3429,7 +3429,7 @@ def _multi_drive_state(
     """
     n = len(mesh.sites)
     driven = [site.index for site in mesh.sites if site.driven]
-    loaded = np.eye(n, dtype=np.complex128) + z_series[:, None] * y
+    loaded = np.eye(n, dtype=np.complex128) + _cmul.cmul(z_series[:, None], y)
     y_eff = y if not np.any(z_series) else _lapack.solve_stacked(loaded.T, y.T).T
 
     site_of = {site.at: site.index for site in mesh.sites}
@@ -3509,7 +3509,7 @@ def _multi_drive_state(
         v_applied[v_sites] = spec[v_rows]
     return _PortState(
         v_applied=v_applied,
-        v_gap=v_applied - z_series * i_port,
+        v_gap=v_applied - _cmul.cmul(z_series, i_port),
         i_port=i_port,
         i_source=i_source,
         z_load=z_load,

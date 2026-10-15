@@ -396,6 +396,9 @@ _ACCEL_SOURCES = [
     # momwire#1454: the same point moments as a power series in k with
     # geometry-only coefficients. Its own TU for 1410's reason.
     "src/momwire/_accel_exact_kernel_series.cpp",
+    # momwire#1497: the fused elementwise complex multiply (`_cmul.cmul`). Its
+    # own TU so that no existing kernel's codegen can move with it.
+    "src/momwire/_accel_cmul.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
