@@ -54,6 +54,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     np.host.zgemv = &MWX(zgemv_);
     np.host.getrf = lp.getrf;
     np.host.getrs = lp.getrs;
+    np.zgesvx = &MWX(zgesvx_);  // the network solve's expert driver
     nec5::EngineStamp stamp;
     stamp.version = version;
     stamp.variant = variant;

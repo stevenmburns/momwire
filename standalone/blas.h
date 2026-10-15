@@ -9,6 +9,7 @@
 #pragma once
 
 #include <complex>
+#include <cstddef>
 
 #ifndef MW_BLAS_PREFIX
 #define MW_BLAS_PREFIX mwx_
@@ -27,6 +28,10 @@ void MWX(dgetrs_)(char *, int *, int *, double *, int *, int *, double *, int *,
 void MWX(zgemm_)(const char *, const char *, const int *, const int *, const int *, const void *,
                  const void *, const int *, const void *, const int *, const void *, void *,
                  const int *);
+void MWX(zgesvx_)(const char *, const char *, const int *, const int *, void *, const int *, void *,
+                  const int *, int *, char *, double *, double *, void *, const int *, void *,
+                  const int *, double *, double *, double *, void *, double *, int *, std::size_t,
+                  std::size_t, std::size_t);
 void MWX(zgemv_)(const char *, const int *, const int *, const void *, const void *, const int *,
                  const void *, const int *, const void *, void *, const int *);
 }
