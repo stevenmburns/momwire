@@ -22,8 +22,10 @@ Gates:
 """
 
 import ast
-import importlib
 import math
+import os
+import subprocess
+import sys
 from fractions import Fraction
 from pathlib import Path
 
@@ -133,17 +135,37 @@ def test_accelerator_is_the_fused_formula_bit_for_bit(adversarial):
     assert _cmul.CALLS["accel"] == before + 1
 
 
-def test_baseline_variant_is_the_fused_formula_bit_for_bit(adversarial):
+def test_baseline_variant_is_the_fused_formula_bit_for_bit(adversarial, tmp_path):
     """The x86-64 baseline build has no hardware FMA: its `std::fma` is
-    libm's (the UCRT's on Windows), which must still round once."""
+    libm's (the UCRT's on Windows), which must still round once. The two
+    variants cannot share a process (pybind11 registers their types once), so
+    the baseline one runs in a child forced onto it."""
     if _accel.VARIANT != "avx2":
         pytest.skip(f"no separate baseline variant beside this one ({_accel.VARIANT})")
-    try:
-        sse2 = importlib.import_module("momwire._accelerators_sse2")
-    except ImportError:
+    if not _accel._extension_built("_sse2"):
         pytest.skip("the x86-64 baseline variant is not built")
     a, b, ref = adversarial
-    assert _same(sse2.fused_cmul(a, b), ref)
+    np.save(tmp_path / "a.npy", a)
+    np.save(tmp_path / "b.npy", b)
+    child = (
+        "import sys, numpy as np\n"
+        "from momwire import _accel, _cmul\n"
+        "assert _accel.VARIANT == 'sse2', _accel.VARIANT\n"
+        "d = sys.argv[1]\n"
+        "a, b = np.load(d + '/a.npy'), np.load(d + '/b.npy')\n"
+        "np.save(d + '/out.npy', _cmul.cmul(a, b))\n"
+        "assert _cmul.CALLS['accel'] == 1, _cmul.CALLS\n"
+    )
+    env = dict(os.environ, MOMWIRE_FORCE_VARIANT="sse2")
+    done = subprocess.run(
+        [sys.executable, "-c", child, str(tmp_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    assert _same(np.load(tmp_path / "out.npy"), ref)
 
 
 @pytest.mark.skipif(not hasattr(math, "fma"), reason="math.fma needs Python 3.13")
@@ -293,9 +315,10 @@ def test_non_complex128_products_are_numpys_own(x, y):
 # 4. the run path is held to the helper, and it runs --------------------------
 
 # The run path's complex elementwise products, by function, with how many
-# `cmul` calls each makes. A `*` in these functions is a complex product by
+# `cmul` calls each spells (`_port_state`'s `z_series * i_port` is written
+# once in each branch, so #1497's eight products are nine calls). A `*` in these functions is a complex product by
 # construction (every operand is a port quantity), so none may remain.
-CMUL_SITES = {"eznec/_serve.py": {"_port_state": 6, "_multi_drive_state": 2}}
+CMUL_SITES = {"eznec/_serve.py": {"_port_state": 7, "_multi_drive_state": 2}}
 
 
 def _functions(tree):
