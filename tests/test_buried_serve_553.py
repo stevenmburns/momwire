@@ -830,6 +830,7 @@ def test_gu5_7_singular_enrichment_refuses_a_buried_deck():
         s.compute_impedance()
 
 
+@pytest.mark.slow
 def test_gu5_7_the_extended_kernel_is_served_above_ground_and_says_so():
     """A refusal until momwire#1170 stage 0. Now the above-ground pairs take
     the extended kernel, the buried wire keeps the reduced one, and the fill

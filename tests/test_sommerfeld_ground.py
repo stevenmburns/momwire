@@ -1022,6 +1022,7 @@ def test_a_grazing_wire_converges_under_mesh_refinement():
     assert step2 < 0.05, f"refinement step still {step2:.3%} of |Z|"
 
 
+@pytest.mark.slow
 def test_the_grazing_remainder_order_is_keyed_and_matters():
     """The remainder half, the same self-consistency razor's #510 gate uses.
 

@@ -288,13 +288,13 @@ def test_rows_none_never_builds_the_restriction(monkeypatch):
 @pytest.mark.parametrize(
     ("ground", "lane", "step"),
     [
-        # The one-row Sommerfeld window is the slow one (median ~10 s on Linux
-        # CI); the two-row window keeps the NEC-5 Sommerfeld rows on every PR.
+        # Both Sommerfeld windows are slow (medians ~10 s on Linux CI): the
+        # push lane carries the NEC-5 Sommerfeld rows.
         pytest.param(
             g,
             lane,
             step,
-            marks=[pytest.mark.slow] if (g, step) == ("sommerfeld", 1) else [],
+            marks=[pytest.mark.slow] if g == "sommerfeld" else [],
         )
         for g, lane in [
             ("free", "nec5"),

@@ -189,6 +189,7 @@ def test_the_accelerated_assemblies_really_refuse_buried(cls, value):
     assert c.reason in str(exc.value)
 
 
+@pytest.mark.slow
 def test_bspline_serves_the_extended_kernel_on_a_buried_deck_in_part():
     """BSplineSolver left the row at momwire#1170 stage 0: the combination is
     served above ground, declared under `partials`, and said once."""

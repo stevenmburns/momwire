@@ -607,9 +607,25 @@ def _numpy_offedge(monkeypatch):
         monkeypatch.setattr(BK, name, False)
 
 
-@pytest.mark.parametrize("rows", [None, 70])
-@pytest.mark.parametrize("route", ["accel", "numpy"])
-@pytest.mark.parametrize("deck", sorted(_TIE_DECKS))
+@pytest.mark.parametrize(
+    ("deck", "route", "rows"),
+    [
+        # The numpy route on the buried ladder runs a median 8-12 s on CI.
+        pytest.param(
+            deck,
+            route,
+            rows,
+            marks=(
+                [pytest.mark.slow]
+                if (deck, route) == ("buried ladder", "numpy")
+                else []
+            ),
+        )
+        for rows in [None, 70]
+        for route in ["accel", "numpy"]
+        for deck in sorted(_TIE_DECKS)
+    ],
+)
 def test_tie_diagonals_are_evaluated_per_pair(monkeypatch, deck, route, rows):
     """Production threshold, through the production seam, on the C++ and the
     numpy off-edge kernels; default windows (the numpy route's are too short

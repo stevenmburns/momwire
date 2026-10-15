@@ -194,11 +194,12 @@ def test_the_epsilon_one_limit_is_free_space_bit_for_bit(lane):
 @pytest.mark.parametrize(
     "loss,lane",
     [
-        # lossy without the lane is the slow case (median 7.5 s on Linux CI).
+        # lossy is the slow case, with or without the lane (medians 7.5 s and
+        # 6.9 s on Linux CI).
         pytest.param(
             loss,
             lane,
-            marks=[pytest.mark.slow] if (loss, lane) == ("lossy", False) else [],
+            marks=[pytest.mark.slow] if loss == "lossy" else [],
         )
         for lane in [False, True]
         for loss in ["lossless", "lossy"]

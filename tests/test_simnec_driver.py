@@ -66,6 +66,7 @@ def test_driver_reports_the_exit_code_simnec_hides(tmp_path):
     assert "the real reason" in done.stdout
 
 
+@pytest.mark.slow
 def test_driver_reports_a_name_that_selects_no_basis(tmp_path):
     # momwire#528: the file name is the engine selector, and an unknown one
     # exits 3 at the probe with the reason on stdout, which is where the

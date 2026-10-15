@@ -135,7 +135,14 @@ def _cell_bytes(cells):
     ]
 
 
-@pytest.mark.parametrize("name", sorted(DECKS))
+@pytest.mark.parametrize(
+    "name",
+    [
+        # buried-dipole runs a median 6.2 s on Linux CI.
+        pytest.param(n, marks=[pytest.mark.slow] if n == "buried-dipole" else [])
+        for n in sorted(DECKS)
+    ],
+)
 def test_threaded_near_cells_equal_the_serial_loop_to_the_byte(name, monkeypatch):
     G1, Z1, I1, cells1, threaded = _solve(DECKS[name], monkeypatch)
     assert threaded > 0, f"{name}: no near-cell collection ran on the pool"
