@@ -836,6 +836,22 @@ def _gate_nec5(exe: Path, work: Path, env: dict[str, str]) -> int:
     return failures
 
 
+def _nec5_feed_impedance(printout: Path) -> str:
+    """The first ANTENNA INPUT PARAMETERS row's Z, for the log only.
+
+    A NEC-5 feed row carries the node's end number after its segment (twelve
+    numbers, not :func:`feed_impedance`'s eleven), so Z is read from the
+    row's END: the fifth and fourth numbers from it, before Y and the power.
+    """
+    lines = printout.read_bytes().decode("latin-1").splitlines()
+    start = next((i for i, ln in enumerate(lines) if SOLVED in ln), len(lines))
+    for line in lines[start + 1 :]:
+        cells = _NUMBER.findall(line)
+        if len(cells) >= 11:
+            return f"{float(cells[-5]):.3f} {float(cells[-4]):+.3f}j"
+    return "(no feed row)"
+
+
 def _gate_4nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
     """Gate 11 — 4nec2's form (momwire#1488): ``ENGINE < nec2d.tmp``."""
     failures = 0
@@ -895,12 +911,9 @@ def _gate_4nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
             print(f"FAIL {launcher.name} (4nec2 form): .GMO is not the sample's")
             failures += 1
         else:
-            z = feed_impedance(printout.read_bytes().decode("latin-1"))
             print(
                 f"ok   {launcher.name} (4nec2 form): names from stdin, no EN, "
-                f".GMO = sample, Z = {z.real:.3f} {z.imag:+.3f}j"
-                if z is not None
-                else f"ok   {launcher.name} (4nec2 form)"
+                f".GMO = sample, Z = {_nec5_feed_impedance(printout)}"
             )
     return failures
 
