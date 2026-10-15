@@ -40,7 +40,11 @@ if(NOT MW_OPENBLAS_LIB)
 endif()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
-find_package(OpenMP REQUIRED COMPONENTS CXX)
+if(NOT MSVC)
+  # MSVC takes /openmp:llvm on the compile line (setup.py's runtime); its
+  # FindOpenMP answer is plain /openmp (vcomp), a second runtime.
+  find_package(OpenMP REQUIRED COMPONENTS CXX)
+endif()
 
 # The release this executable is: pyproject.toml's version, read at configure
 # time and compared at run time against the installed momwire's.
@@ -114,7 +118,17 @@ if(MSVC)
 else()
   target_compile_options(momwire-razor2p PRIVATE -O2 -fopenmp)
 endif()
-target_link_libraries(momwire-razor2p PRIVATE ${MW_OPENBLAS_LIB} OpenMP::OpenMP_CXX)
+target_link_libraries(momwire-razor2p PRIVATE ${MW_OPENBLAS_LIB})
+if(MSVC)
+  # pyconfig.h asks MSVC to link pythonXY.lib on its own (#pragma comment);
+  # this executable must never link it (it loads the DLL for the fallback).
+  target_link_options(momwire-razor2p PRIVATE
+    /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.lib
+    /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}_d.lib
+    /NODEFAULTLIB:python3.lib)
+else()
+  target_link_libraries(momwire-razor2p PRIVATE OpenMP::OpenMP_CXX)
+endif()
 if(UNIX AND NOT APPLE)
   # libstdc++ / libgcc static (the spike's cold-start measurement); libc,
   # libm, libmvec and libgomp stay shared, as the extension has them.
