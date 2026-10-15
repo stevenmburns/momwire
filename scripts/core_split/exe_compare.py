@@ -14,7 +14,9 @@ Every deck is answered four ways:
                   OpenBLAS published as `sys._mw_host_lapack`;
 * ``launcher`` -- the real `momwire-nec5-razor-2p` (its own resident server,
                   started fresh in a private runtime directory with this
-                  process's environment, so at T threads);
+                  process's environment, so at T threads; the server divides
+                  the cores among its live workers, so an auto-mode gate runs
+                  with --workers 1, a lone caller, as EZNEC is);
 * ``python``   -- `printout_compare.python_printout` in this process: what the
                   launcher writes, on numpy's and scipy's own libraries.
 
@@ -72,7 +74,9 @@ def _answer(exe, launcher, deck: Path, work: Path, threads: str, launcher_env) -
     """The three subprocess answers for one deck."""
     work.mkdir(parents=True)
     out = {}
-    env = dict(os.environ, MOMWIRE_THREADS=threads)
+    env = dict(os.environ)
+    if threads != "auto":
+        env["MOMWIRE_THREADS"] = threads
     (work / "cxx").mkdir()
     subprocess.run(
         [exe, str(deck), str(work / "exe.out")],
@@ -120,9 +124,15 @@ def main(argv=None):
     workers = int(_arg(args, "--workers", "4"))
     if exe is None:
         raise SystemExit("--exe EXE is required")
+    # One count for every side, or neither set: "auto", the executable's own
+    # size policy against the launcher's default (every hardware thread).
     threads = os.environ.get("OPENBLAS_NUM_THREADS")
-    if threads is None or os.environ.get("OMP_NUM_THREADS") != threads:
-        raise SystemExit("set OPENBLAS_NUM_THREADS and OMP_NUM_THREADS to one count")
+    if os.environ.get("OMP_NUM_THREADS") != threads:
+        raise SystemExit(
+            "set OPENBLAS_NUM_THREADS and OMP_NUM_THREADS to one count, or neither"
+        )
+    if threads is None:
+        threads = "auto"
     decks = pc._decks(args)
     work = Path(tempfile.mkdtemp(prefix="exe_compare_"))
     runtime = work / "runtime"  # the launcher's private resident server
@@ -150,7 +160,11 @@ def main(argv=None):
                 for name in ("exe", "fallback"):
                     if a[name] != ref:
                         problems.append(f"{name}: " + pc.first_difference(ref, a[name]))
-                if a["route"].startswith("cxx"):
+                # In auto mode the two routes run at different counts by design
+                # (the C++ route by size, the fallback at the launcher's
+                # default), and the LU's last bits follow the count: arrays are
+                # compared only at a fixed count; printouts always.
+                if a["route"].startswith("cxx") and threads != "auto":
                     if len(a["cxx_runs"]) != len(a["py_runs"]):
                         problems.append(
                             f"runs {len(a['py_runs'])} (python) / {len(a['cxx_runs'])} (c++)"
