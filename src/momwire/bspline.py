@@ -351,55 +351,100 @@ _V_UNIT_INV: dict[int, np.ndarray] = {
 }
 
 
-def _design_matrix_rows(dm_csr, d):
-    """Split a `BSpline.design_matrix` CSR into per-row (values, columns).
+def _bspline_basis_rows(x, t, k):
+    """Every basis function that is nonzero at each sample, on knots ``t``.
 
-    Returns two (n_rows, d+1) arrays. The dense form of that CSR is
-    (n_rows, n_basis) with only d+1 nonzeros per row, so materialising it
-    costs O(n_rows · n_basis) for O(n_rows · d) of content (#329); every
-    consumer here reads inside the band, so none of them needs it.
+    Returns ``(values, first)``: ``values`` is (n_samples, k+1) and row ``i``
+    holds bases ``first[i] .. first[i] + k`` at ``x[i]``, in ascending order.
+    This is the whole content of a B-spline design matrix (each row has
+    exactly k+1 bases that can be nonzero), without the matrix.
 
-    The two structural facts this relies on — exactly d+1 stored entries
-    per row, at consecutive columns in ascending order — are scipy's
-    output shape rather than anything we control, so they are checked
-    here (O(n_rows · d), the same order as the gather itself) instead of
-    assumed.
+    It is scipy's ``BSpline.design_matrix`` reproduced to the bit (momwire
+    #1489, which drops scipy.interpolate from the import path): the same
+    span search and the same Cox-de Boor recurrence, term for term, so the
+    basis polynomials every bs2 fill is built from do not move.
+    ``tests/test_bspline_own_readouts_1489.py`` holds the two equal bit for
+    bit on clamped knots at every supported degree, knot samples included.
+
+    Span rule: a sample in ``[t[l], t[l+1])`` uses span ``l`` -- so a sample
+    exactly ON an interior knot takes the span to its RIGHT -- except the
+    last knot of the base interval, which closes the last span. Repeated
+    knots resolve to the last copy. A sample outside ``[t[k], t[n]]``
+    (n = len(t) - k - 1) or not a finite number is refused, as scipy's
+    ``extrapolate=False`` design matrix refuses it.
     """
-    width = d + 1
-    n_rows = dm_csr.shape[0]
-    if not np.array_equal(np.diff(dm_csr.indptr), np.full(n_rows, width)):
-        raise AssertionError(
-            "BSpline.design_matrix no longer stores exactly d+1 entries per row"
-        )
-    cols = dm_csr.indices.reshape(n_rows, width)
-    if width > 1 and not np.all(np.diff(cols, axis=1) == 1):
-        raise AssertionError(
-            "BSpline.design_matrix columns are no longer consecutive ascending"
-        )
-    return dm_csr.data.reshape(n_rows, width), cols
+    x = np.ascontiguousarray(np.asarray(x, dtype=np.float64).reshape(-1))
+    t = np.asarray(t, dtype=np.float64)
+    n = t.shape[0] - k - 1
+    m = x.shape[0]
+    if m:
+        if not np.all(np.isfinite(x)):
+            raise ValueError("a B-spline sample position is not a finite number")
+        lo, hi = float(t[k]), float(t[n])
+        x_min, x_max = float(x.min()), float(x.max())
+        if x_min < lo or x_max > hi:
+            bad = x_min if x_min < lo else x_max
+            raise ValueError(
+                f"B-spline sample position {bad:.17g} lies outside the knot "
+                f"range {lo:.17g} to {hi:.17g}"
+            )
+    ell = np.searchsorted(t, x, side="right") - 1
+    np.clip(ell, k, n - 1, out=ell)
+    h = np.zeros((m, k + 1), dtype=np.float64)
+    h[:, 0] = 1.0
+    # Cox-de Boor, written in the order scipy's C evaluates it so the
+    # roundoff is the same: at each level j, h[nn-1] += w·(xb - x) and
+    # h[nn] = w·(x - xa) with w = hh[nn-1] / (xb - xa), and a zero-width
+    # knot pair (the clamped ends) contributes nothing.
+    with np.errstate(divide="ignore", invalid="ignore"):
+        for j in range(1, k + 1):
+            hh = h[:, :j].copy()
+            h[:, 0] = 0.0
+            for nn in range(1, j + 1):
+                xb = t[ell + nn]
+                xa = t[ell + nn - j]
+                same = xb == xa
+                w = hh[:, nn - 1] / (xb - xa)
+                h[:, nn - 1] = np.where(same, h[:, nn - 1], h[:, nn - 1] + w * (xb - x))
+                h[:, nn] = np.where(same, 0.0, w * (x - xa))
+    return h, ell - k
 
 
-def _design_matrix_band(dm_csr, n_seg, d):
+def _bspline_design_matrix_dense(x, t, k):
+    """The dense (n_samples, n_basis) design matrix, from `_bspline_basis_rows`.
+
+    For the few-sample callers only (a feed point, a source quadrature): it
+    is O(n_samples · n_basis), the cost #329 removed from the basis build.
+    """
+    vals, first = _bspline_basis_rows(x, t, k)
+    n_basis = np.asarray(t).shape[0] - k - 1
+    out = np.zeros((vals.shape[0], n_basis), dtype=np.float64)
+    rows = np.arange(vals.shape[0])[:, None]
+    out[rows, first[:, None] + np.arange(k + 1)] = vals
+    return out
+
+
+def _design_matrix_band(vals, first, n_seg, d):
     """Per-segment basis values as (n_seg, d+1 samples, d+1 bases).
 
-    Band column b holds basis (seg + b): segment s lies inside the
-    support of exactly bases s .. s+d, so this band is all of the dense
-    design matrix that any per-segment consumer can read.
+    ``vals`` / ``first`` are `_bspline_basis_rows` at d+1 samples per
+    segment, segment-major. Band column b holds basis (seg + b): segment s
+    lies inside the support of exactly bases s .. s+d, so this band is all
+    of the dense design matrix that any per-segment consumer can read.
 
-    Sample rows are gathered by each row's OWN column start, not by a
-    shared per-segment offset. A segment's last sample sits on its
-    right-hand knot, and scipy resolves a sample on an interior knot into
-    the NEXT span; such a row starts one column higher and carries a
-    trailing entry for the basis whose support opens at that knot, which
-    is zero there. Whether a given segment's endpoint sample lands that
-    way is a floating-point question (arc[s] + h[s] need not round to
-    arc[s+1]), so the offset is read per row and the out-of-band column
-    is checked to be zero rather than reasoned about.
+    Sample rows are placed by each row's OWN first basis, not by a shared
+    per-segment offset. A segment's last sample sits on its right-hand knot,
+    and the span rule resolves a sample on an interior knot into the NEXT
+    span; such a row starts one basis higher and carries a trailing entry
+    for the basis whose support opens at that knot, which is zero there.
+    Whether a given segment's endpoint sample lands that way is a
+    floating-point question (arc[s] + h[s] need not round to arc[s+1]), so
+    the offset is read per row and the out-of-band column is checked to be
+    zero rather than reasoned about.
     """
     width = d + 1
-    data, cols = _design_matrix_rows(dm_csr, d)
-    data = data.reshape(n_seg, width, width)
-    starts = cols.reshape(n_seg, width, width)[:, :, 0]
+    data = vals.reshape(n_seg, width, width)
+    starts = first.reshape(n_seg, width)
     off = starts - np.arange(n_seg)[:, None]
     if off.min() < 0 or off.max() > 1:
         raise AssertionError(
@@ -2951,22 +2996,22 @@ class BSplineSolver(
             arc_at_knot_w = pw["arc_at_knot"]
             n_total_w = pw["n_total"]
 
-            # Vectorize: per-wire single BSpline.design_matrix + constant
-            # V_unit_inv lookup replaces per-(basis, wing) BSpline
+            # Vectorize: one basis evaluation per wire + constant
+            # V_unit_inv lookup replaces per-(basis, wing) spline
             # construction + per-segment linspace/vander/solve.
             #
             # Sample points: d+1 uniform u within each segment, in global
-            # arc. shape (n_total_w, d+1) → flatten for design_matrix.
+            # arc. shape (n_total_w, d+1) → flatten for the evaluation.
             unit = np.linspace(0.0, 1.0, d + 1)  # (d+1,) shared across segs
             u_local_per_seg = h_per_seg_w[:, None] * unit[None, :]  # (N, d+1)
             u_global_per_seg = arc_at_knot_w[:-1, None] + u_local_per_seg
             u_flat = u_global_per_seg.reshape(-1)
 
-            # All basis values at all sample points in one design_matrix
-            # call, kept in the (n_total_w, d+1, d+1) band: band column b
+            # All basis values at all sample points in one
+            # `_bspline_basis_rows` call, kept in the (n_total_w, d+1, d+1) band: band column b
             # of segment s is basis s+b, the only bases that segment sees.
             DM_seg = _design_matrix_band(
-                BSpline.design_matrix(u_flat, knots, d), n_total_w, d
+                *_bspline_basis_rows(u_flat, knots, d), n_total_w, d
             )
 
             # V_unit_inv @ vals: convert d+1 basis values per segment to
@@ -5536,10 +5581,11 @@ class BSplineSolver(
         # length; `arc` is that same length ACCUMULATED over the mesh, and the
         # two differ in the last ulps — measured 3.6e-15 short on a
         # 95-segment 19.84542 m wire, which put the request past `knots[-d-1]`
-        # and made `BSpline.design_matrix` raise `Out of bounds` on a feed
-        # that was exactly where it was asked for. `_feed_cell` already clips
-        # the same request for the segment model ("one at the wire's far end
-        # is clipped to the last cell"); this is that clip for the point one.
+        # and made the basis evaluation (then scipy's design matrix) refuse
+        # it as out of bounds on a feed that was exactly where it was asked
+        # for. `_feed_cell` already clips the same request for the segment
+        # model ("one at the wire's far end is clipped to the last cell");
+        # this is that clip for the point one.
         #
         # Inside a RELATIVE tolerance of the two ends only, so an arclength
         # that is genuinely off the wire still reaches the raise rather than
@@ -5553,7 +5599,7 @@ class BSplineSolver(
 
         if self.feed_smoothing_factor is None and self.feed_model == "point":
             # Delta-gap (original)
-            DM = BSpline.design_matrix(np.array([s_f]), knots, d).toarray()[0]
+            DM = _bspline_design_matrix_dense(np.array([s_f]), knots, d)[0]
             v = np.zeros(n_basis_total, dtype=np.complex128)
             for kept_idx, (j, _kind, _junc_idx, _end_pos) in enumerate(kept):
                 m_global = local_to_global[kept_idx]
@@ -5575,7 +5621,7 @@ class BSplineSolver(
             # (1/h)·∫_cell Φ_m ds — exact, the integrand being degree d on
             # exactly one knot span (see the docstring).
             weights = (0.5 * h_cell * gl_w) / h_cell
-            DM = BSpline.design_matrix(t, knots, d).toarray()
+            DM = _bspline_design_matrix_dense(t, knots, d)
             v_full = DM.T @ weights
             v = np.zeros(n_basis_total, dtype=np.complex128)
             for kept_idx, (j, _kind, _junc_idx, _end_pos) in enumerate(kept):
@@ -5622,7 +5668,7 @@ class BSplineSolver(
         )
 
         # Evaluate every basis at the quadrature points and integrate.
-        DM = BSpline.design_matrix(t, knots, d).toarray()  # (n_qp, n_basis_w_full)
+        DM = _bspline_design_matrix_dense(t, knots, d)  # (n_qp, n_basis_w_full)
         v_full = np.einsum("qj,q,q->j", DM, g_vals, weights)  # (n_basis_w_full,)
 
         v = np.zeros(n_basis_total, dtype=np.complex128)
@@ -8817,9 +8863,10 @@ class BSplineSolver(
             I_out = np.zeros(s_eval.shape[0], dtype=np.complex128)
             kept, local_to_global = wire_basis_global[w_idx]
             if s_eval.shape[0] > 0:
-                # design_matrix at [0, wire_arc] — clip tiny FP overshoots that
+                # Basis rows at [0, wire_arc] — clip tiny FP overshoots that
                 # would push the endpoint epsilon outside the clamped knot range.
-                DM = BSpline.design_matrix(s_eval, knots_vec, d)
+                dm_vals, dm_first = _bspline_basis_rows(s_eval, knots_vec, d)
+                dm_cols = dm_first[:, None] + np.arange(d + 1)
                 # Scatter the kept coefficients onto their bases (dropped
                 # free-end bases keep their 0) and sum each row over its
                 # own d+1 stored entries. Those entries are in ascending
@@ -8829,7 +8876,6 @@ class BSplineSolver(
                 c_basis = np.zeros(len(knots_vec) - d - 1, dtype=np.complex128)
                 for kept_idx, (j_local, _, _, _) in enumerate(kept):
                     c_basis[j_local] = coeffs[local_to_global[kept_idx]]
-                dm_vals, dm_cols = _design_matrix_rows(DM, d)
                 for e in range(d + 1):
                     I_out += c_basis[dm_cols[:, e]] * dm_vals[:, e]
 
