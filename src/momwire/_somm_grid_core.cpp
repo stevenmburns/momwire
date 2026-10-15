@@ -300,6 +300,59 @@ Grid scaled_to(const Grid &src, double k2, double omega, double mu) {
     return g;
 }
 
+namespace {
+
+// numpy's complex SCALAR arithmetic (scalarmath: plain products, numpy's
+// divide); a float operand is (x, 0).
+inline cd ns_mul(cd a, cd b) {
+    return cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+}
+inline cd ns_div(cd a, cd b) {  // `CDOUBLE_divide`
+    const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
+    const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
+    if (in2r_abs >= in2i_abs) {
+        if (in2r_abs == 0 && in2i_abs == 0) return cd(in1r / in2r_abs, in1i / in2i_abs);
+        const double rat = in2i / in2r;
+        const double scl = 1.0 / (in2r + in2i * rat);
+        return cd((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
+    }
+    const double rat = in2r / in2i;
+    const double scl = 1.0 / (in2i + in2r * rat);
+    return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+}
+
+}  // namespace
+
+std::vector<cd> far_pack(const Grid &g) {
+    const cd eps = g.eps_t;
+    if (eps == cd(1.0, 0.0)) return {};
+    const double k = g.k2, ks = k * k;
+    const cd root = std::sqrt(eps);  // np.sqrt: glibc csqrt
+    cd k1 = ns_mul(cd(k, 0.0), root);
+    if (k1.imag() > 0) k1 = std::conj(k1);
+    const cd k1s = ns_mul(k1, k1);
+    const cd sap = ns_div(cd(-1.0, 0.0), std::sqrt(cd(eps.real() + 1.0, eps.imag() + 0.0)));
+    const cd ap = std::asin(sap);   // np.arcsin: glibc casin
+    const cd cap = std::cos(ap);    // np.cos: glibc ccos
+    const cd g1p_arg = ns_mul(ns_mul(cd(ks, 0.0), cap), cap) - k1s;
+    const cd g1p = std::sqrt(cd(g1p_arg.real() + 0.0, g1p_arg.imag() + 0.0));
+    // dden = k1s * 1j * k * cap_ - ks * ks * cap_ * sap / g1p
+    const cd left = ns_mul(ns_mul(ns_mul(k1s, cd(0.0, 1.0)), cd(k, 0.0)), cap);
+    const cd right = ns_div(ns_mul(ns_mul(cd(ks * ks, 0.0), cap), sap), g1p);
+    const cd dden(left.real() - right.real(), left.imag() - right.imag());
+    // res_fv = 2.0 * (1j * k * sap) / dden; `1j * k` is CPython's, `* sap`
+    // numpy's reflected scalar product
+    const cd jk = py_mul(cd(0.0, 1.0), cd(k, 0.0));
+    const cd res_fv = ns_div(ns_mul(cd(2.0, 0.0), ns_mul(jk, sap)), dden);
+    const cd g2_arg(k1s.real() - ks, k1s.imag() - 0.0);
+    cd g2k1 = std::sqrt(cd(g2_arg.real() + 0.0, g2_arg.imag() + 0.0));
+    if (g2k1.real() < 0) g2k1 = cd(-g2k1.real(), -g2k1.imag());
+    const cd c2 = py_div(cd(eps.real() - 1.0, eps.imag() - 0.0), cd(eps.real() + 1.0, eps.imag() + 0.0));
+    const cd c1k = py_div(py_mul(py_mul(cd(-0.0, -1.0), cd(g.omega, 0.0)), cd(g.mu, 0.0)),
+                          cd(4.0 * PI, 0.0));
+    return {eps, k1, c2, c1k, ap, res_fv, g2k1, cd(k, 0.0)};
+}
+
 double r1_bucket_wl(double r1_wl) {
     const double x = py_max(r1_wl, 0.1);
     // math.log(x, 1.25) is log(x) / log(1.25)

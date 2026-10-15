@@ -42,6 +42,10 @@ int main(int argc, char **argv) {
         }
         std::fclose(t);
         std::fclose(b);
+        const std::vector<somm_core::cd> far = somm_core::far_pack(g);
+        std::FILE *fp = std::fopen((base + ".far").c_str(), "wb");
+        std::fwrite(far.data(), sizeof(somm_core::cd), far.size(), fp);
+        std::fclose(fp);
         k++;
     }
     return 0;
