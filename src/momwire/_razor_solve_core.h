@@ -94,6 +94,9 @@ class SolveContext {
     // Returns 0, or i > 0 when U(i, i) is exactly zero (the caller raises
     // its singular-matrix error; X is then not written).
     int lu_solve(const Lapack &lp, cd *b, int n_rhs);
+    // `np.add.at(Z, (rows, cols), vals)`: unbuffered, in order, onto the
+    // filled matrix (column-major), before `lu_solve`.
+    void add_at(const int64_t *rows, const int64_t *cols, const cd *vals, size_t n);
 
     // Free Z and the window pool (a big solve's buffers are not held until
     // the next one); the counters are kept.

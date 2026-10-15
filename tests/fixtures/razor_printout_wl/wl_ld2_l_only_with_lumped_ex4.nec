@@ -1,0 +1,10 @@
+CM LD 2 inductance alone (R' = C' = 0 print blank) beside an LD 0 lumped load, EX 4 drive
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GE 0
+LD 2,1,1,21,0.,1.E-6,0.
+LD 0,1,6,0,10.,0.,0.
+EX 4 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+XQ
+EN

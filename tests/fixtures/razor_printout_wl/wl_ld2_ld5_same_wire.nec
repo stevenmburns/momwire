@@ -1,0 +1,11 @@
+CM LD 5 copper and an LD 2 per-metre series R-L on one wire (the two add)
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.0008
+GE 0
+LD 5,1,1,21,5.8E+7,1.
+LD 2,1,1,21,0.5,2.E-7,0.
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+PQ 0
+XQ
+EN
