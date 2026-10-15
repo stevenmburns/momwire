@@ -246,7 +246,19 @@ def _gl01_log(n):
     lm = np.empty(n)
     lm[0] = -1.0
     lm[1:] = (-1.0) ** (m[1:] + 1) / (m[1:] * (m[1:] + 1.0))
-    return w * (V @ ((2.0 * m + 1.0) * lm))
+    c = ((2.0 * m + 1.0) * lm).tolist()
+    # `V @ c` as a plain left-to-right sum per node, not a BLAS matvec: the
+    # matvec's summation order is the BLAS kernel's, which differs by CPU
+    # (Rocketlake's AVX-512 kernel and Skylake's AVX2 one gave different
+    # bits for n = 20), and these weights reach every exact-kernel fill.
+    # A fixed order is one a C++ replay of the fill (momwire#1479) can match.
+    rows = []
+    for row in V.tolist():
+        acc = 0.0
+        for v, cm in zip(row, c, strict=True):
+            acc += v * cm
+        rows.append(acc)
+    return w * np.array(rows)
 
 
 # --------------------------------------------------------------------------
