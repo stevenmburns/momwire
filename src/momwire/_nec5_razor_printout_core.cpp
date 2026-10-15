@@ -15,6 +15,7 @@
 #endif
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
@@ -95,6 +96,18 @@ namespace {
 
 std::string e(double x, int width, int digits) { return py_format_e(x, width, digits); }
 std::string f(double x, int width, int digits) { return py_format_f(x, width, digits); }
+
+// `_e_fortran`: a three-digit exponent drops its `E` to keep the width. A
+// non-finite value has no `E` to split on, and Python raises there.
+std::string e_fortran(double x, int width, int digits) {
+    if (!std::isfinite(x)) throw Decline{"a non-finite lower-medium range cell (Python raises)"};
+    std::string text = py_format_e(x, 0, digits);
+    const std::size_t at = text.find('E');
+    const int exponent = std::atoi(text.c_str() + at + 1);
+    if (std::abs(exponent) >= 100) text = text.substr(0, at) + text.substr(at + 1);
+    if (text.size() < static_cast<std::size_t>(width)) text = std::string(width - text.size(), ' ') + text;
+    return text;
+}
 
 // ============================================================================
 // CPython 3.12's arithmetic
@@ -575,6 +588,22 @@ struct LoadRowC {  // `LoadRow`, for an LD 0 / 1 / 4 card (`_loading_row`)
          has_capacitance = false;
 };
 
+struct PatternRowC {  // `PatternRow`
+    double theta = 0, phi = 0, vert = 0, hor = 0, total = 0, axial = 0, tilt = 0;
+    std::string sense;
+    double et_mag = 0, et_deg = 0, ep_mag = 0, ep_deg = 0;
+};
+
+struct PatternBlockC {  // `PatternBlock`
+    std::vector<PatternRowC> rows;
+    bool has_average = false;
+    double average_power_gain = 0, solid_angle_pi = 0, power_radiated_4pi = 0;
+    bool has_range = false;
+    double range_m = 0, range_phase_deg = 0;
+    bool has_lower = false;
+    double lower_range_mag = 0, lower_range_phase_deg = 0;
+};
+
 struct RunDataC {  // `RunData`, for the decks this unit prints
     long long node_count = 0, wire_element_count = 0, unknown_count = 0;
     double frequency_mhz = 0, wavelength_m = 0;
@@ -584,6 +613,7 @@ struct RunDataC {  // `RunData`, for the decks this unit prints
     std::vector<PortRowC> sources;
     std::vector<ElementRowC> currents, charges;
     double input_power = 0, radiated_power = 0, wire_loss = 0, efficiency = 0;
+    std::vector<PatternBlockC> patterns;
 };
 
 // A preparation's solve: `PortSolution.coeffs` (column-major n_basis x
@@ -718,7 +748,11 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
     if (deck.sources.size() > 1) {
         // `_multi_drive_state` with no cards. With a series load, `y_eff =
         // solve(loaded.T, y.T).T`, loaded = `eye + z_series[:, None] * y`.
-        CMat y_eff = y;
+        // `y_eff` is the TRANSPOSED view of the C-ordered solution (numpy's
+        // `.T`): its products see that layout (numpy's matmul picks its gemv
+        // by strides), so it is kept as `xt` and read through `yeff_op`.
+        CMat xt;
+        Op yeff_op = y.op();
         if (any_series) {
             CMat lt(n, n), yt(n, n);
             for (int64_t i = 0; i < n; i++)
@@ -727,10 +761,12 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
                     lt.at(j, i) = cd((i == j ? 1.0 : 0.0) + prod.real(), 0.0 + prod.imag());
                     yt.at(i, j) = y.at(j, i);
                 }
-            const CMat xt = np_solve_matrix(np, lt, yt);
-            for (int64_t i = 0; i < n; i++)
-                for (int64_t j = 0; j < n; j++) y_eff.at(i, j) = xt.at(j, i);
+            xt = np_solve_matrix(np, lt, yt);
+            yeff_op = Op{xt.v.data(), n, n, 1, n};
         }
+        const auto y_eff_at = [&](int64_t i, int64_t j) {
+            return any_series ? xt.at(j, i) : y.at(i, j);
+        };
         std::vector<int64_t> driven;
         for (const SeamSite &site : p.mesh.sites) {
             bool is_driven = false;
@@ -760,7 +796,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             const int64_t nd = static_cast<int64_t>(driven.size());
             CMat m(nd, nd);
             for (int64_t i = 0; i < nd; i++)
-                for (int64_t j = 0; j < nd; j++) m.at(i, j) = y_eff.at(driven[i], driven[j]);
+                for (int64_t j = 0; j < nd; j++) m.at(i, j) = y_eff_at(driven[i], driven[j]);
             std::vector<cd> rhs;
             for (int64_t r : i_rows) rhs.push_back(spec[static_cast<std::size_t>(r)]);
             if (!v_sites.empty()) {
@@ -781,7 +817,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             for (std::size_t k = 0; k < i_sites.size(); k++) volts[static_cast<std::size_t>(i_sites[k])] = vi[k];
         }
         st.v_applied = volts;
-        st.i_port = mv(np, y_eff.op(), st.v_applied);
+        st.i_port = mv(np, yeff_op, st.v_applied);
         st.i_source = st.i_port;
         for (std::size_t k = 0; k < i_sites.size(); k++)
             st.i_source[static_cast<std::size_t>(i_sites[k])] = spec[static_cast<std::size_t>(i_rows[k])];
@@ -864,6 +900,376 @@ std::vector<std::vector<cd>> knot_currents(const razor::Front &fr, const std::ve
 
 const double *arc_of(const razor::Front &fr, int64_t w) {
     return fr.arc_at_knot.data() + fr.seg_offsets[w] + w;
+}
+
+// ============================================================================
+// the radiation pattern (`_serve._pattern`, `_far_readout.pattern_fields`)
+// ============================================================================
+
+// CPython's `cmath.sqrt` for a finite value (numpy's complex sqrt gives the
+// same bits on the machines measured, so `_image_coeffs`' np.sqrt is this).
+cd py_csqrt(cd z) {
+    if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
+        throw Decline{"a non-finite complex square root"};
+    if (z.real() == 0.0 && z.imag() == 0.0) return cd(0.0, z.imag());
+    double ax = std::fabs(z.real());
+    const double ay = std::fabs(z.imag());
+    double sq;
+    if (ax < DBL_MIN && ay < DBL_MIN) {
+        ax = std::ldexp(ax, 53);
+        sq = std::ldexp(std::sqrt(ax + std::hypot(ax, std::ldexp(ay, 53))), -27);
+    } else {
+        ax /= 8.0;
+        sq = 2.0 * std::sqrt(ax + std::hypot(ax, ay / 8.0));
+    }
+    const double d = ay / (2.0 * sq);
+    if (z.real() >= 0.0) return cd(sq, std::copysign(d, z.imag()));
+    return cd(d, std::copysign(sq, z.imag()));
+}
+
+// numpy's complex add / subtract and the fused complex multiply of two
+// arrays; a REAL operand promoted to complex (x, 0).
+inline cd c_add(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }
+inline cd c_sub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }
+inline cd c_mul_real(cd a, double x) { return np_cmul(a, cd(x, 0.0)); }
+
+// `np.linspace(a, b, num)` for 3-vectors (`num >= 2`): numpy 2.5's form,
+// including the step-zero branch, which applies to EVERY coordinate as soon
+// as one coordinate's step is zero.
+void linspace3(const double *a, const double *b, int64_t num, std::vector<double> &out) {
+    const double div = static_cast<double>(num - 1);
+    double delta[3], step[3];
+    bool any_zero = false;
+    for (int c = 0; c < 3; c++) {
+        delta[c] = b[c] - a[c];
+        step[c] = delta[c] / div;
+        if (step[c] == 0.0) any_zero = true;
+    }
+    for (int64_t i = 0; i < num; i++)
+        for (int c = 0; c < 3; c++) {
+            double y = static_cast<double>(i);
+            y = any_zero ? (y / div) * delta[c] : y * step[c];
+            out.push_back(i == num - 1 ? b[c] : y + a[c]);
+        }
+}
+
+// `RazorSolver.element_currents(coeffs)` (subdiv 1): per wire the knots
+// along its edges (each edge an np.linspace, later edges without their first
+// knot), the element midpoints `0.5 * (k1 + k0)` and moments
+// `(0.5 * (I1 + I0))[:, None] * (k1 - k0)`.
+void element_moments(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i,
+                     std::vector<double> &mid, std::vector<cd> &moment) {
+    for (int64_t w = 0; w < fr.n_wires; w++) {
+        std::vector<double> knots;
+        const int64_t p0 = fr.pt_off[static_cast<std::size_t>(w)];
+        const std::vector<int64_t> &npe = fr.npe[static_cast<std::size_t>(w)];
+        for (std::size_t e = 0; e < npe.size(); e++) {
+            std::vector<double> seg;
+            linspace3(&fr.points[static_cast<std::size_t>(3 * (p0 + e))],
+                      &fr.points[static_cast<std::size_t>(3 * (p0 + e + 1))], npe[e] + 1, seg);
+            knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
+        }
+        const std::vector<cd> &cur = knot_i[static_cast<std::size_t>(w)];
+        const std::size_t n_el = knots.size() / 3 - 1;
+        if (cur.size() != n_el + 1) throw std::logic_error("knot currents and knots disagree");
+        for (std::size_t e = 0; e < n_el; e++) {
+            const double *k0 = &knots[3 * e], *k1 = &knots[3 * e + 3];
+            const cd el = np_cmul(cd(0.5, 0.0), c_add(cur[e + 1], cur[e]));  // `0.5 * (...)`
+            for (int c = 0; c < 3; c++) {
+                mid.push_back(0.5 * (k1[c] + k0[c]));
+                moment.push_back(c_mul_real(el, k1[c] - k0[c]));
+            }
+        }
+    }
+}
+
+// The direction grid's unit vectors (`_far_moments`), C order (theta, phi).
+struct Grid {
+    int64_t nt = 0, np_ = 0;
+    std::vector<double> rx, ry, rz, sin_t, cos_t, sin_p, cos_p;
+};
+
+// `moments_of(centres, weights)`: Σ_n exp(j k r̂·r_n) w_n, the phase an einsum
+// over c summed (c0 + c2) + c1, the moment an einsum over n summed in order
+// from 0 with numpy's plain complex products (both measured: numpy 2.5,
+// AVX2 and AVX-512 alike).
+std::vector<cd> moments_of(const Grid &g, double k, const std::vector<double> &centres,
+                           const std::vector<cd> &weights) {
+    const std::size_t n = centres.size() / 3;
+    std::vector<cd> out(static_cast<std::size_t>(g.nt * g.np_ * 3), cd(0.0, 0.0));
+    for (int64_t i = 0; i < g.nt * g.np_; i++) {
+        const double x = g.rx[i], y = g.ry[i], z = g.rz[i];
+        cd acc[3] = {cd(0.0, 0.0), cd(0.0, 0.0), cd(0.0, 0.0)};
+        for (std::size_t m = 0; m < n; m++) {
+            const double *c = &centres[3 * m];
+            const double phase = k * ((x * c[0] + z * c[2]) + y * c[1]);
+            // `np.exp(1j * phase)`: (±0, phase) -> (cos, sin), exp(±0) = 1
+            const double re0 = std::fma(0.0, phase, -(1.0 * 0.0));
+            const double ex = std::exp(re0);
+            const cd f(ex * std::cos(phase), ex * std::sin(phase));
+            for (int cc = 0; cc < 3; cc++) {
+                const cd w = weights[3 * m + cc];
+                acc[cc] = cd(acc[cc].real() + (f.real() * w.real() - f.imag() * w.imag()),
+                             acc[cc].imag() + (f.real() * w.imag() + f.imag() * w.real()));
+            }
+        }
+        for (int cc = 0; cc < 3; cc++) out[static_cast<std::size_t>(3 * i + cc)] = acc[cc];
+    }
+    return out;
+}
+
+// `np.sum(a * b, axis=-1)` for a complex (.., 3) by a real (.., 3).
+inline cd dot3(const cd *a, const double *b) {
+    return c_add(c_add(c_mul_real(a[0], b[0]), c_mul_real(a[1], b[1])), c_mul_real(a[2], b[2]));
+}
+
+enum class FarGround { free, pec, refl };
+
+// `_far_moments` for elements above the plane (the seam's covered decks):
+// free space, the PEC image, or the image weighted by `_image_coeffs`.
+void far_moments(const Grid &g, double k, const std::vector<double> &mid,
+                 const std::vector<cd> &moment, FarGround ground, double eps_r, double sigma,
+                 double freq_hz, std::vector<cd> &m_theta, std::vector<cd> &m_phi) {
+    const std::vector<cd> direct = moments_of(g, k, mid, moment);
+    std::vector<cd> total = direct;
+    if (ground != FarGround::free) {
+        std::vector<double> mid_img = mid;
+        std::vector<cd> mom_img(moment.size());
+        for (std::size_t m = 0; m < mid.size() / 3; m++) {
+            mid_img[3 * m + 2] = 2.0 * 0.0 - mid[3 * m + 2];
+            for (int c = 0; c < 3; c++)
+                mom_img[3 * m + c] = c_mul_real(moment[3 * m + c], c == 2 ? 1.0 : -1.0);
+        }
+        const std::vector<cd> img = moments_of(g, k, mid_img, mom_img);
+        if (ground == FarGround::pec) {
+            for (std::size_t q = 0; q < total.size(); q++) total[q] = c_add(direct[q], img[q]);
+        } else {
+            // `_eps_complex`: eps_r - 1j * sigma / (omega * EPS0), CPython's
+            const double omega = 2.0 * 3.141592653589793 * freq_hz;
+            const cd js = py_cmul(cd(0.0, 1.0), cd(sigma, 0.0));
+            const cd frac = py_cdiv(js, cd(omega * 8.854187817e-12, 0.0));
+            const cd eps_c(eps_r - frac.real(), 0.0 - frac.imag());
+            for (int64_t i = 0; i < g.nt * g.np_; i++) {
+                const double rx = g.rx[i], ry = g.ry[i], rz = g.rz[i];
+                const int64_t it = i / g.np_, ip = i % g.np_;
+                const double cp = g.cos_p[ip], sp = g.sin_p[ip], ct = g.cos_t[it], st = g.sin_t[it];
+                const double h_hat[3] = {-sp, cp, 0.0};
+                const double v_hat[3] = {(-cp) * ct, (-sp) * ct, st};
+                const cd *mi = &img[static_cast<std::size_t>(3 * i)];
+                const cd m_h = dot3(mi, h_hat), m_v = dot3(mi, v_hat);
+                // `_image_coeffs`
+                const cd under(eps_c.real() - rx * rx, eps_c.imag() - 0.0);
+                const cd qq = py_csqrt(cd(under.real() - ry * ry, under.imag() - 0.0));
+                const cd rho_h = np_cdiv(cd(rz - qq.real(), 0.0 - qq.imag()), cd(rz + qq.real(), 0.0 + qq.imag()));
+                const cd e_rz = np_cmul(eps_c, cd(rz, 0.0));
+                const cd rho_v = np_cdiv(c_sub(e_rz, qq), c_add(e_rz, qq));
+                const cd a = np_cmul(rho_v, m_v), b = np_cmul(rho_h, m_h);
+                for (int c = 0; c < 3; c++) {
+                    const cd refl = c_sub(c_mul_real(a, v_hat[c]), c_mul_real(b, h_hat[c]));
+                    total[static_cast<std::size_t>(3 * i + c)] = c_add(direct[static_cast<std::size_t>(3 * i + c)], refl);
+                }
+            }
+        }
+    }
+    m_theta.resize(static_cast<std::size_t>(g.nt * g.np_));
+    m_phi.resize(static_cast<std::size_t>(g.nt * g.np_));
+    for (int64_t i = 0; i < g.nt * g.np_; i++) {
+        const int64_t it = i / g.np_, ip = i % g.np_;
+        const double cp = g.cos_p[ip], sp = g.sin_p[ip], ct = g.cos_t[it], st = g.sin_t[it];
+        const double theta_hat[3] = {ct * cp, ct * sp, -st};
+        const double phi_hat[3] = {-sp, cp, 0.0};
+        m_theta[i] = dot3(&total[static_cast<std::size_t>(3 * i)], theta_hat);
+        m_phi[i] = dot3(&total[static_cast<std::size_t>(3 * i)], phi_hat);
+    }
+}
+
+constexpr double RAD_TO_DEG = 180.0 / 3.141592653589793;
+constexpr double DEG_TO_RAD = 3.141592653589793 / 180.0;
+constexpr double ETA0 = 376.730313668;
+
+// `_gain_db_grid` for one value: DB10's floor, then 10 log10 (CPython's).
+double gain_db(double g) {
+    if (g < 1.0e-20) return -999.99;
+    if (std::isnan(g)) return g;
+    return 10.0 * std::log10(g);
+}
+
+// `_serve._pattern` + `_pattern_rows` for one RP card.
+PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
+                            const std::vector<cd> &moment, FarGround ground, double eps_r,
+                            double sigma, double frequency_mhz, double wavelength, double p_in,
+                            bool lower, cd eps_c_medium) {
+    if (!rq.n_theta.fits_i64() || !rq.n_phi.fits_i64() || !rq.xnda.fits_i64())
+        throw Decline{"a pattern count past 64 bits"};
+    const int64_t nt = rq.n_theta.i64(), nph = rq.n_phi.i64();
+    if (nt < 1 || nph < 1) throw Decline{"an empty pattern grid"};
+    if (!rq.mode.is_zero()) throw Decline{"a pattern mode other than 0"};
+    std::vector<double> thetas(static_cast<std::size_t>(nt)), phis(static_cast<std::size_t>(nph));
+    for (int64_t i = 0; i < nt; i++) thetas[i] = rq.theta0_deg + rq.d_theta_deg * static_cast<double>(i);
+    for (int64_t i = 0; i < nph; i++) phis[i] = rq.phi0_deg + rq.d_phi_deg * static_cast<double>(i);
+    const double k = 2.0 * 3.141592653589793 / wavelength;
+    Grid g;
+    g.nt = nt;
+    g.np_ = nph;
+    for (double t : thetas) {
+        const double r = t * DEG_TO_RAD;
+        g.sin_t.push_back(std::sin(r));
+        g.cos_t.push_back(std::cos(r));
+    }
+    for (double ph : phis) {
+        const double r = ph * DEG_TO_RAD;
+        g.sin_p.push_back(std::sin(r));
+        g.cos_p.push_back(std::cos(r));
+    }
+    for (int64_t it = 0; it < nt; it++)
+        for (int64_t ip = 0; ip < nph; ip++) {
+            g.rx.push_back(g.sin_t[it] * g.cos_p[ip]);
+            g.ry.push_back(g.sin_t[it] * g.sin_p[ip]);
+            g.rz.push_back(g.cos_t[it]);
+        }
+    std::vector<cd> m_theta, m_phi;
+    far_moments(g, k, mid, moment, ground, eps_r, sigma, frequency_mhz * 1e6, m_theta, m_phi);
+    // `pattern_fields`
+    const cd scale = py_cdiv(py_cmul(py_cmul(cd(-0.0, -1.0), cd(ETA0, 0.0)), cd(k, 0.0)),
+                             cd(4.0 * 3.141592653589793, 0.0));
+    const double norm = p_in > 0 ? ((ETA0 * k) * k) / ((8.0 * 3.141592653589793) * p_in) : 0.0;
+    const std::size_t n = m_theta.size();
+    std::vector<cd> e_t(n), e_p(n);
+    std::vector<double> g_v(n), g_h(n);
+    for (std::size_t q = 0; q < n; q++) {
+        e_t[q] = np_cmul(scale, m_theta[q]);
+        e_p[q] = np_cmul(scale, m_phi[q]);
+        const double at = std::hypot(m_theta[q].real(), m_theta[q].imag());
+        const double ap = std::hypot(m_phi[q].real(), m_phi[q].imag());
+        g_v[q] = norm * (at * at);
+        g_h[q] = norm * (ap * ap);
+    }
+    std::vector<bool> below(static_cast<std::size_t>(nt), false);
+    bool any_below = false;
+    if (ground != FarGround::free)
+        for (int64_t it = 0; it < nt; it++)
+            if (thetas[it] > 90.0 + 1e-9) below[it] = any_below = true;
+    if (any_below)
+        for (int64_t it = 0; it < nt; it++)
+            if (below[it])
+                for (int64_t ip = 0; ip < nph; ip++) g_v[it * nph + ip] = g_h[it * nph + ip] = 0.0;
+    const double floor_scale = 1.0 / wavelength;
+    PatternBlockC block;
+    const double range_m = rq.range_m;
+    double range_phase = 0.0;
+    if (range_m != 0.0) {
+        range_phase = py_degrees(py_atan2(-std::sin(k * range_m), std::cos(k * range_m)));
+        block.has_range = true;
+        block.range_m = range_m;
+        block.range_phase_deg = range_phase;
+        if (lower) {
+            const cd root = py_csqrt(eps_c_medium);
+            const double kk = 2.0 * 3.141592653589793 / wavelength;
+            const cd lk = py_cmul(cd(kk, 0.0), root);
+            const double kr = lk.real() * range_m;
+            block.has_lower = true;
+            block.lower_range_mag = std::exp(lk.imag() * range_m) / range_m;
+            block.lower_range_phase_deg = py_degrees(py_atan2(-std::sin(kr), std::cos(kr)));
+        }
+    }
+    // `_pattern_rows`, phi-major
+    const double dust = 1.0e-14, field_floor = 1.0e-20, raw2 = floor_scale * floor_scale;
+    for (int64_t ip = 0; ip < nph; ip++)
+        for (int64_t it = 0; it < nt; it++) {
+            const std::size_t q = static_cast<std::size_t>(it * nph + ip);
+            cd et = e_t[q], ep = e_p[q];
+            if (et.real() * et.real() + et.imag() * et.imag() <= dust) et = cd(0.0, 0.0);
+            if (ep.real() * ep.real() + ep.imag() * ep.imag() <= dust) ep = cd(0.0, 0.0);
+            const bool bl = any_below && below[static_cast<std::size_t>(it)];
+            if (bl) et = ep = cd(0.0, 0.0);
+            double a = std::hypot(et.real(), et.imag()), b = std::hypot(ep.real(), ep.imag());
+            double ad = py_atan2(et.imag(), et.real()) * RAD_TO_DEG;
+            double bd = py_atan2(ep.imag(), ep.real()) * RAD_TO_DEG;
+            // `_polarisation_grid`
+            const bool blank = (a * a * raw2 <= field_floor) && (b * b * raw2 <= field_floor);
+            double wrapped = std::fmod((bd - ad) + 180.0, 360.0);
+            if (wrapped < 0.0) wrapped = wrapped + 360.0;
+            if (wrapped == 0.0) wrapped = 0.0;
+            const double delta = wrapped - 180.0;
+            const double a2 = a * a, b2 = b * b;
+            const double cos_2d = std::cos((2.0 * delta) * DEG_TO_RAD);
+            const double squared = a2 * a2 + b2 * b2 + 2.0 * a2 * b2 * cos_2d;
+            const double root = std::sqrt(0.0 > squared ? 0.0 : squared);
+            const double major2 = 0.5 * (a2 + b2 + root);
+            double minor2 = 0.5 * (a2 + b2 - root);
+            if (0.0 > minor2) minor2 = 0.0;
+            const double cos_d = std::cos(delta * DEG_TO_RAD);
+            double tilt = 0.5 * (py_atan2(2.0 * a * b * cos_d, a2 - b2) * RAD_TO_DEG);
+            const double ratio = std::sqrt(minor2 / major2);
+            const bool linear = (major2 <= 0.0) || (ratio < 5.0e-6);
+            const bool left = (delta * DEG_TO_RAD) >= 0.0;
+            double axial = linear ? 0.0 : (left ? ratio : -ratio);
+            std::string sense = linear ? "LINEAR" : (left ? "LEFT" : "RIGHT");
+            if (blank) {
+                axial = 0.0;
+                tilt = 0.0;
+                sense = "";
+            }
+            if (range_m != 0.0) {
+                a = a / range_m;
+                b = b / range_m;
+                ad = ad + range_phase;
+                bd = bd + range_phase;
+            }
+            PatternRowC row;
+            row.theta = thetas[static_cast<std::size_t>(it)];
+            row.phi = phis[static_cast<std::size_t>(ip)];
+            row.vert = gain_db(g_v[q]);
+            row.hor = gain_db(g_h[q]);
+            row.total = gain_db(g_v[q] + g_h[q]);
+            row.axial = axial;
+            row.tilt = tilt;
+            row.sense = sense;
+            row.et_mag = a;
+            row.et_deg = ad;
+            row.ep_mag = b;
+            row.ep_deg = bd;
+            if (bl) {
+                row.axial = row.tilt = row.et_mag = row.et_deg = row.ep_mag = row.ep_deg = 0.0;
+                row.sense = "";
+            }
+            block.rows.push_back(row);
+        }
+    // XNDA's A digit asks for the average gain (Python's non-negative `% 10`)
+    int64_t digit = rq.xnda.i64() % 10;
+    if (digit < 0) digit += 10;
+    if (digit != 0) {
+        // `average_gain(g_v + g_h, thetas, d_theta, d_phi, n_phi)`
+        const double d_theta = rq.d_theta_deg, d_phi = rq.d_phi_deg;
+        const auto np_max = [](double x, double y) {
+            return std::isnan(x) ? x : std::isnan(y) ? y : (x >= y ? x : y);
+        };
+        const auto np_min = [](double x, double y) {
+            return std::isnan(x) ? x : std::isnan(y) ? y : (x <= y ? x : y);
+        };
+        std::vector<double> band(static_cast<std::size_t>(nt));
+        for (int64_t it = 0; it < nt; it++) {
+            const double lo = np_max(thetas[it] - 0.5 * d_theta, thetas[0]) * DEG_TO_RAD;
+            const double hi = np_min(thetas[it] + 0.5 * d_theta, thetas[nt - 1]) * DEG_TO_RAD;
+            band[it] = std::cos(lo) - std::cos(hi);
+        }
+        const int64_t columns = std::max<int64_t>(nph - 1, 1);
+        const double step = d_phi != 0.0 ? d_phi * DEG_TO_RAD : 2.0 * 3.141592653589793;
+        std::vector<double> weighted;
+        for (int64_t it = 0; it < nt; it++)
+            for (int64_t ip = 0; ip < columns; ip++) {
+                const std::size_t q = static_cast<std::size_t>(it * nph + ip);
+                weighted.push_back((g_v[q] + g_h[q]) * band[static_cast<std::size_t>(it)]);
+            }
+        const double total = (0.0 + np_pairwise(weighted.data(), static_cast<int64_t>(weighted.size()))) * step;
+        const double solid = ((0.0 + np_pairwise(band.data(), nt)) * static_cast<double>(columns)) * step;
+        const double average = solid != 0.0 ? total / solid : 0.0;
+        block.has_average = true;
+        block.average_power_gain = average;
+        block.solid_angle_pi = std::fabs(solid) / 3.141592653589793;
+        block.power_radiated_4pi = average * p_in;
+    }
+    return block;
 }
 
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
@@ -1049,6 +1455,28 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     data.radiated_power = p_radiated;
     data.wire_loss = p_load;
     data.efficiency = p_in > 0 ? (100.0 * p_radiated) / p_in : 0.0;
+    // `patterns=tuple(_pattern(...) for request in deck.requests if RP)`, over
+    // `_far_ground(deck, medium)`: PEC for GN 1, the Fresnel-weighted image
+    // ("refl") for a bare GD's medium, free space otherwise.
+    bool any_rp = false;
+    for (const Request &rq : deck.requests) any_rp = any_rp || rq.kind == Request::far_field;
+    if (any_rp) {
+        FarGround fg = FarGround::free;
+        if (deck.ground.kind == Ground::perfect)
+            fg = FarGround::pec;
+        else if (p.has_medium) {
+            if (deck.ground.kind != Ground::mininec) throw Decline{"a pattern over a Sommerfeld ground"};
+            fg = FarGround::refl;
+        }
+        std::vector<double> mid;
+        std::vector<cd> moment;
+        element_moments(fr, knots, mid, moment);
+        for (const Request &rq : deck.requests)
+            if (rq.kind == Request::far_field)
+                data.patterns.push_back(pattern_block(
+                    rq, mid, moment, fg, p.medium_eps_r, p.medium_sigma, p.frequency_mhz,
+                    p.wavelength, p_in, p.has_medium, cd(p.medium_eps_c[0], p.medium_eps_c[1])));
+    }
     return data;
 }
 
@@ -1296,6 +1724,56 @@ std::string element_row(const ElementRowC &r, bool current) {
     return out;
 }
 
+// `_printout._pattern`: the heading (with the range form's lines), the rows
+// through `_PATTERN_ROW`, and the 3-D trailer when it is carried.
+Lines pattern_lines(const PatternBlockC &block) {
+    const std::string heading = sp(48) + "- - - RADIATION PATTERNS - - -";
+    const Lines columns = {
+        "  - - ANGLES - -          - POWER GAINS -        - - - POLARIZATION "
+        "- - -    - - - E(THETA) - - -    - - - E(PHI) - - -",
+        "  THETA     PHI        VERT.   HOR.    TOTAL      AXIAL     TILT   "
+        "SENSE     MAGNITUDE    PHASE      MAGNITUDE    PHASE ",
+        " DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.       "
+        "        VOLTS     DEGREES       VOLTS     DEGREES"};
+    Lines lines;
+    if (!block.has_range) {
+        lines.push_back(heading);
+        lines.push_back("");
+        add(lines, columns);
+    } else {
+        const std::string ind = sp(54);
+        lines.push_back(heading);
+        lines.push_back(ind + "RANGE=" + e(block.range_m, 13, 6) + " METERS");
+        lines.push_back(ind + "EXP(-JKR)/R=" + e(1.0 / block.range_m, 12, 5) + " AT PHASE" +
+                        f(block.range_phase_deg, 7, 2) + " DEGREES");
+        lines.push_back("");
+        if (block.has_lower)
+            lines.push_back(sp(39) + "LOWER MEDIUM - EXP(-JKR)/R=" +
+                            e_fortran(block.lower_range_mag, 12, 5) + " AT PHASE" +
+                            f(block.lower_range_phase_deg, 7, 2) + " DEGREES");
+        lines.push_back("");
+        lines.push_back(columns[0]);
+        lines.push_back(columns[1]);
+        lines.push_back(" DEGREES  DEGREES       DB      DB      DB        RATIO     DEG.       "
+                        "       VOLTS/M    DEGREES      VOLTS/M    DEGREES");
+    }
+    for (const PatternRowC &r : block.rows)
+        lines.push_back(f(r.theta, 8, 2) + f(r.phi, 9, 2) + f(r.vert, 11, 2) + f(r.hor, 8, 2) +
+                        f(r.total, 8, 2) + f(r.axial, 11, 5) + f(r.tilt, 9, 2) + "  " +
+                        ljust(r.sense, 6) + e(r.et_mag, 15, 5) + f(r.et_deg, 9, 2) +
+                        e(r.ep_mag, 15, 5) + f(r.ep_deg, 9, 2));
+    if (block.has_average) {
+        add(lines, {"", "",
+                    "   AVERAGE POWER GAIN=" + e(block.average_power_gain, 12, 5) +
+                        "       SOLID ANGLE USED IN AVERAGING=(" + f(block.solid_angle_pi, 7, 4) +
+                        ")*PI STERADIANS.",
+                    "",
+                    "   POWER RADIATED ASSUMING RADIATION INTO 4*PI STERADIANS =" +
+                        e(block.power_radiated_4pi, 12, 5) + " WATTS"});
+    }
+    return lines;
+}
+
 Lines run_sections(const RunDataC &data) {
     Lines body;
     if (!data.sources.empty()) {
@@ -1333,6 +1811,10 @@ Lines run_sections(const RunDataC &data) {
                watts("RADIATED POWER", data.radiated_power), watts("WIRE LOSS", data.wire_loss),
                ind + ljust("EFFICIENCY", 14) + "=" + f(data.efficiency, 7, 2) + " PERCENT"});
     blanks(body, 3);
+    for (const PatternBlockC &block : data.patterns) {
+        add(body, pattern_lines(block));
+        blanks(body, 5);
+    }
     return body;
 }
 
@@ -1551,13 +2033,11 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
     return s.chained ? s.structures[k].echo_text() : text;
 }
 
-// The runs Python FINISHES carry no RP / NE / NH (this unit's scope); LD 0 /
-// 1 / 4 print (LD 2 / 3 / 5 decline as wire loading in the seam).
+// The runs Python FINISHES carry no NE / NH (this unit's scope); LD 0 / 1 /
+// 4 and RP print (LD 2 / 3 / 5 decline as wire loading in the seam).
 void check_scope(const Deck &run) {
-    for (const Request &r : run.requests) {
-        if (r.kind == Request::far_field) throw Decline{"radiation pattern not yet in C++"};
+    for (const Request &r : run.requests)
         if (r.kind == Request::near_field) throw Decline{"near field not yet in C++"};
-    }
 }
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,
