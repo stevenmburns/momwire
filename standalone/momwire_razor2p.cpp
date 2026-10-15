@@ -147,6 +147,20 @@ void set_threads(int n, bool omp) {
     set_env("OMP_NUM_THREADS", std::to_string(n));
 }
 
+// OpenBLAS sizes its thread pool in a load-time constructor (gotoblas_init),
+// from OPENBLAS_NUM_THREADS, else every CPU -- before main() can choose -- and
+// a 16-thread pool started and torn down around a one-thread deck costs ~8
+// busy CPUs for the life of the process (measured: Rocketlake). This runs
+// first (a numbered constructor precedes the default ones) and has the pool
+// start at one thread; `set_threads` grows it only on a route that wants
+// more. The fallback's numpy and scipy still read the count set_threads
+// exports before CPython starts.
+#if defined(__GNUC__) && !defined(_WIN32)
+__attribute__((constructor(101))) void one_blas_thread_at_load() {
+    setenv("OPENBLAS_NUM_THREADS", "1", 1);
+}
+#endif
+
 // --- where momwire's Python lives -------------------------------------------
 // MOMWIRE_PYTHON_HOME names a venv (or an unpacked environment with the same
 // shape); else the build's MW_DEFAULT_PYTHON_HOME. The interpreter library is
