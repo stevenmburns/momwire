@@ -818,6 +818,17 @@ _HAVE_EXACT_POINT_ASSEMBLE_ACCEL = _acc is not None and hasattr(
 )
 
 
+def _window_rows(rows):
+    """A one-radius point-moment source's ``rows(x)`` in the correction
+    loop's ``(x, o0, o1)`` form, which a cross job also reads its observers'
+    radii and labels by (momwire#1438)."""
+
+    def call(x, _o0, _o1):
+        return rows(x)
+
+    return call
+
+
 def _point_assemble_numpy(
     dM0,
     dM1,
@@ -1533,7 +1544,10 @@ class RazorSolver(
         `_exact_kernel_seam`: False (the default) is structurally absent and
         bit-for-bit the fill without it; True replaces, after the free-space
         fill, the kernel of every pair of segments on ONE line at ONE radius
-        by K(z) = (1/2π)∮e^{-jkR}/(4πR)dφ, R² = z² + 4a²sin²(φ/2); "auto"
+        by K(z) = (1/2π)∮e^{-jkR}/(4πR)dφ, R² = z² + 4a²sin²(φ/2), and of
+        every pair on one line across a radius step by the two-radius
+        kernel, observer ring on its own surface and source ring on its own,
+        R² = z² + a_o² + a_s² - 2a_o a_s cos φ (momwire#1438); "auto"
         resolves at construction to True iff it is served and some segment
         is shorter than 3 radii. Razor's rows are path-tested, so the
         correction is the kernel layer's 1-D point moments ∫τ'^q K dτ' at the
@@ -4559,7 +4573,14 @@ class RazorSolver(
     # ------------------------------------------------------------------
 
     def _add_exact_kernel_correction(self, Z, geom, k, omega):
-        """Z += (Z_exact - Z_base) over every coaxial equal-radius group.
+        """Z += (Z_exact - Z_base) over every coaxial equal-radius group,
+        and over the cross-radius pairs of every line with a radius step
+        (momwire#1438): there the observer point's ring is on ITS segment's
+        surface and the source's on the source's (`_exact_kernel.
+        PointCrossRows`), and the base is masked to those pairs. Those are
+        the plan's cross jobs (`_razor_exact_plan.build_plan`), after the
+        groups; they always take the direct rule, and their moment source is
+        rebuilt each call and never kept.
 
         Razor's matrix element is linear in two moment tables, M0[o, j] =
         ∫_seg_j g dl' and M1[o, j] = ∫_seg_j τ' g dl', taken at observer
@@ -4634,9 +4655,13 @@ class RazorSolver(
         ser_on = _exact_kernel_series.ENABLED and _exact_kernel_series.accel_serves(
             k, 2
         )
+        # A cross-radius job (momwire#1438, `g.lab` set) is never the
+        # series': its coefficients are written for one radius.
         by_series = [
-            ser_on and _exact_kernel_series.serves(k, g.reach) for g in plan.groups
+            ser_on and g.lab is None and _exact_kernel_series.serves(k, g.reach)
+            for g in plan.groups
         ]
+        one = [g.lab is None for g in plan.groups]
         n_groups = len(plan.groups)
         keep_ser = cached and any(by_series)
         skey = _razor_exact_plan.series_key() if keep_ser else None
@@ -4644,7 +4669,11 @@ class RazorSolver(
         if series is None:
             series = [None] * n_groups
         ser_count = [(s.built, s.reused, s.evaluated) for s in series if s is not None]
-        keep = cached and not all(by_series) and _razor_exact_plan.rows_cacheable(k)
+        keep = (
+            cached
+            and not all(ser for ser, o in zip(by_series, one) if o)
+            and _razor_exact_plan.rows_cacheable(k)
+        )
         rkey = _razor_exact_plan.rows_key(k) if keep else None
         sources = plan.take_rows(rkey) if keep else None
         if sources is None:
@@ -4652,25 +4681,46 @@ class RazorSolver(
         for i, g in enumerate(plan.groups):
             r_A = _razor_exact_plan.row_cA(g, c_A)
             r_P = _razor_exact_plan.row_cP(g, c_Phi)
-            if by_series[i]:
+            cross_lab = None
+            if g.lab is not None:
+                # A cross job: the two-radius moments, the observer's ring on
+                # its own segment's surface and the source's on its own
+                # (`_exact_kernel.PointCrossRows`), on the direct rule. Built
+                # each call and never kept (the numpy source, like
+                # `PointRows`), so `sources[i]` stays None.
+                cross = _exact_kernel.PointCrossRows(
+                    g.x0, g.sgn, g.h, g.a, g.lab, k, 2, max_cached=4 * g.n + 1024
+                )
+
+                def exact_rows(x, o0, o1, _c=cross, _g=g):
+                    return _c.rows(x, _g.obs_a[o0:o1], _g.obs_lab[o0:o1])
+
+                cross_lab = g.lab
+            elif by_series[i]:
                 if series[i] is None:
                     series[i] = _exact_kernel_series.PointSeriesAccel(
                         g.x0, g.sgn, g.h, g.a, 2, max_cached=4 * g.n + 1024
                     )
-                exact_rows = functools.partial(series[i].rows, k=k)
+                exact_rows = _window_rows(functools.partial(series[i].rows, k=k))
             else:
                 if sources[i] is None:
                     sources[i] = _exact_kernel.point_rows(
                         g.x0, g.sgn, g.h, g.a, k, 2, max_cached=4 * g.n + 1024
                     )
-                exact_rows = sources[i].rows
+                exact_rows = _window_rows(sources[i].rows)
             for o0, o1, e0, e1, r_o_win, ek_win in g.windows:
                 self._checkpoint()
-                mom = exact_rows(g.obs_x[o0:o1])  # (2, rows, n)
+                mom = exact_rows(g.obs_x[o0:o1], o0, o1)  # (2, rows, n)
                 ek = None
                 if ek_win is not None:
                     ek = _EK(None, *ek_win)
                 M0b, M1b = self._seg_moments(g.obs_pt[o0:o1], dict(g.sub), k, ek=ek)
+                if cross_lab is not None:
+                    # The same-radius pairs are the one-radius groups'.
+                    on = g.obs_lab[o0:o1, None] == cross_lab[None, :]
+                    M0b[on] = 0.0
+                    M1b[on] = 0.0
+                    del on
                 dM0 = np.subtract(mom[0], M0b, out=M0b)
                 dM1 = np.subtract(mom[1], M1b, out=M1b)
                 del mom
@@ -4692,7 +4742,7 @@ class RazorSolver(
                     )
         # Only a completed correction's sources go back: a cancelled one may
         # stop mid-window, and a group it never reached has none.
-        direct = [s for s, ser in zip(sources, by_series) if not ser]
+        direct = [s for s, ser, o in zip(sources, by_series, one) if o and not ser]
         if keep and all(isinstance(s, _exact_kernel.PointRowsAccel) for s in direct):
             plan.give_rows(rkey, sources)
         if any(by_series):
