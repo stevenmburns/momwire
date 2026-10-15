@@ -2127,6 +2127,9 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     // `near_fields=tuple(_near_field(...) for request if NE / NH)`: free
     // space, or GN 1's image (the seam declines a near field over GD).
     for (const Request &rq : deck.requests)
+        if (rq.kind == Request::near_field && deck.ground.kind == Ground::mininec)
+            throw Decline{"a near field over GD (its reflected-field remainder)"};
+    for (const Request &rq : deck.requests)
         if (rq.kind == Request::near_field)
             data.near_fields.push_back(std::make_shared<NearBlockC>(
                 near_block(rq, fr, knots, p, deck.ground.kind == Ground::perfect)));
