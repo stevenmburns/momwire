@@ -183,9 +183,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-import scipy.linalg
 
 from . import _feed_snap, _ground_spec, _potential_ground, _wire_spec
+from . import _lapack
 from ._cancel import _Cancelable
 from ._capabilities import Capabilities
 from ._element_currents import _ElementCurrents
@@ -1019,7 +1019,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             rhs[m_i] += v_i
 
         self._checkpoint()
-        coeffs = scipy.linalg.solve(Z, rhs)
+        coeffs = _lapack.solve(Z, rhs)
         z_per_feed = port_impedances(voltages, np.array([coeffs[m] for m in idx]))
         return (z_per_feed[0] if len(self.feeds) == 1 else z_per_feed), coeffs
 
@@ -1095,7 +1095,7 @@ class PulseSolver(_ElementCurrents, _SweptPortSolutions, _Cancelable):
             B[m_j, j] = 1.0
 
         self._checkpoint()
-        coeffs = scipy.linalg.solve(Z, B)
+        coeffs = _lapack.solve(Z, B)
         Y = coeffs[idx, :]
         return PortSolution(
             y=Y,

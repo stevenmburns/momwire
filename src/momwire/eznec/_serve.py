@@ -480,6 +480,7 @@ import numpy as np
 from ..bspline import BSplineSolver
 from ..deck._cards import tokenize
 from .. import _ground_spec, _medium_spec
+from .. import _lapack
 from ..deck._nec5 import (
     Nec5Conductivity,
     Nec5Deck,
@@ -3304,12 +3305,12 @@ def _port_state(
         # current and the applied voltage is the gap's plus the load drop.
         # This branch is U4's arithmetic, conjugated by T and no more, which
         # is what keeps every bare capture's printout where it was.
-        v_gap = np.linalg.solve(loaded, probe)
+        v_gap = _lapack.solve_stacked(loaded, probe)
         i_port = y @ v_gap
         i_source = i_port
         v_applied = v_gap + z_series * i_port
     else:
-        y_eff = y if not np.any(z_series) else np.linalg.solve(loaded.T, y.T).T
+        y_eff = y if not np.any(z_series) else _lapack.solve_stacked(loaded.T, y.T).T
         v_applied, i_port, i_source = _reduced_state(
             cards, n, probe, (driven,), y_eff, wavelength
         )
@@ -3429,7 +3430,7 @@ def _multi_drive_state(
     n = len(mesh.sites)
     driven = [site.index for site in mesh.sites if site.driven]
     loaded = np.eye(n, dtype=np.complex128) + z_series[:, None] * y
-    y_eff = y if not np.any(z_series) else np.linalg.solve(loaded.T, y.T).T
+    y_eff = y if not np.any(z_series) else _lapack.solve_stacked(loaded.T, y.T).T
 
     site_of = {site.at: site.index for site in mesh.sites}
     row_of = {index: k for k, index in enumerate(driven)}
@@ -3474,7 +3475,7 @@ def _multi_drive_state(
         rhs = spec[i_rows]
         if v_sites:
             rhs = rhs - m[np.ix_(i_rows, v_rows)] @ spec[v_rows]
-        volts[i_sites] = np.linalg.solve(m[np.ix_(i_rows, i_rows)], rhs)
+        volts[i_sites] = _lapack.solve_stacked(m[np.ix_(i_rows, i_rows)], rhs)
     # With no I-set (momwire#1099, momwire#1105) `volts` above IS the answer -
     # there is no map to measure and nothing to invert, network or none: the
     # applied voltages are the deck's own set quantity, not a current a map
