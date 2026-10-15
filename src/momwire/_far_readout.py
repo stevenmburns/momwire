@@ -888,8 +888,14 @@ def pattern_fields(
     e_theta = scale * m_theta
     e_phi = scale * m_phi
     norm = ETA0 * k * k / (8.0 * math.pi * p_in) if p_in > 0 else 0.0
-    g_v = norm * np.abs(m_theta) ** 2
-    g_h = norm * np.abs(m_phi) ** 2
+    # |M| through libm's hypot (`_libm(abs, ...)`), as the printed E columns
+    # take theirs: numpy's complex absolute dispatches by CPU (its AVX-512 and
+    # AVX2 loops disagree in the last bit on large arrays), and a gain is a
+    # printed number. Measured printout-neutral on the NEC-5 seam's 2,225
+    # pattern decks (corpus, fixtures, harvested suite texts; razor-2p and
+    # bspline): the bits of a gain move, no printed digit did.
+    g_v = norm * _libm(abs, m_theta) ** 2
+    g_h = norm * _libm(abs, m_phi) ** 2
     return e_theta, e_phi, g_v, g_h
 
 
