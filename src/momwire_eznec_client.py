@@ -218,7 +218,10 @@ def _last_ditch(printout_path: str, reason: str) -> None:
         with open(printout_path, "w", encoding="latin-1", newline="\r\n") as handle:
             handle.write(f" ***** NEC ERROR - {reason}\n")
     except OSError:
-        pass
+        # No printout channel either: stdout is the last one (momwire#1488),
+        # never a silent exit 0.
+        print(f"{ARGUMENT_ERROR_INPUT} {printout_path}")
+        print(f"NEC ERROR - {reason}")
 
 
 def probe_version() -> str:

@@ -480,9 +480,22 @@ def _decode_path(raw: bytes) -> str:
     return os.fsdecode(raw)
 
 
+def strip_path_line(line: str) -> str:
+    """One stdin line as a path: surrounding whitespace (CR and LF included)
+    stripped, then ONE pair of surrounding double quotes, as Ward AE6TY's
+    port reads them (a ``.tmp`` line ``"..\\out\\x.inp"`` is the path
+    ``..\\out\\x.inp``).  Spaces inside the quotes are the path's own.  A
+    lone or mismatched quote is left in place, for the OS to refuse as the
+    name it is."""
+    line = line.strip()
+    if len(line) >= 2 and line[0] == '"' and line[-1] == '"':
+        line = line[1:-1]
+    return line
+
+
 def stdin_paths(stream=None) -> list[str] | None:
-    """The file names 4nec2 sends on stdin: the first two lines, each with
-    surrounding whitespace (CR and LF included) stripped.
+    """The file names 4nec2 sends on stdin: the first two lines, each read by
+    :func:`strip_path_line`.
 
     ``None`` when there is no stdin to read, or it is a terminal: a person
     who types the bare command gets the argument error at once rather than an
@@ -504,7 +517,7 @@ def stdin_paths(stream=None) -> list[str] | None:
             line = source.readline()
             if isinstance(line, bytes):
                 line = _decode_path(line)
-            line = line.strip()
+            line = strip_path_line(line)
             if not line:
                 break
             paths.append(line)

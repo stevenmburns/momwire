@@ -924,3 +924,65 @@ def test_the_c_gmo_path_is_the_stdlib_one(client_exe, tmp_path, printout):
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_the_c_client_reads_quoted_names_with_spaces(client_exe, tmp_path):
+    """Ward's port strips surrounding quotes from a ``.tmp`` line; before
+    momwire#1488's fix a quoted name made this launcher write nothing."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_NAME,))
+    room = _room()
+    engine_dir = tmp_path / "bin"
+    out_dir = tmp_path / "my out"
+    engine_dir.mkdir()
+    out_dir.mkdir()
+    (out_dir / "EX 3.inp").write_bytes(_4nec2_deck())
+    names = b'"../my out/EX 3.inp"\r\n  "../my out/EX 3.out" \r\n'
+    try:
+        proc = _run(bundle, NEC5_NAME, [], room, stdin=names, cwd=engine_dir)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == ""
+        assert b"NEC ERROR" not in (out_dir / "EX 3.out").read_bytes()
+        assert (out_dir / "EX 3.GMO").read_bytes() == (
+            EXAMPLE3 / "EXAMPLE3.GMO"
+        ).read_bytes()
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_an_unwritable_printout_is_named_on_stdout_never_silent(client_exe, tmp_path):
+    """A printout path that cannot be opened (a stray quote names a folder
+    that is not there): every rung fails to write, and the failure reaches
+    stdout -- from the one-shot engine, whose stdout this launcher shares --
+    rather than an exit 0 that said nothing anywhere."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_NAME,))
+    room = _room()
+    (tmp_path / "deck.inp").write_bytes(_4nec2_deck())
+    names = b'deck.inp\r\n"no such dir/deck.out\r\n'
+    try:
+        proc = _run(bundle, NEC5_NAME, [], room, stdin=names, cwd=tmp_path)
+        assert proc.returncode == 0
+        assert '"no such dir/deck.out' in proc.stdout
+        assert "UNABLE TO OPEN FILE" in proc.stdout
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+def test_rung_four_names_an_unwritable_printout_on_stdout(client_exe, tmp_path):
+    bundle = _bundle(client_exe, None, names=(NEC5_NAME,))
+    room = _room()
+    bad = str(tmp_path / "no such dir" / "x.out")
+    try:
+        proc = _run(bundle, NEC5_NAME, [str(_deck(BASIS_DECK)), bad], room)
+        assert proc.returncode == 0
+        assert proc.stdout.splitlines()[0] == f"UNABLE TO OPEN FILE {bad}"
+        assert "MOMWIRE ENGINE UNAVAILABLE" in proc.stdout
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)

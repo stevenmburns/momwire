@@ -108,7 +108,8 @@ Eleven gates, derived from the seam's own contract (momwire#497 U1):
    having reached the right dialect at all.
 11. **4nec2's form** (momwire#1488) — each NEC-5 launcher run as 4nec2 runs
    its engine: NO arguments, the deck and printout names on stdin (CRLF,
-   relative to the working directory, in the OS's own separators -- so
+   relative to the working directory, bare for one launcher and quoted
+   for the other, in the OS's own separators -- so
    backslashes on Windows, exactly 4nec2's ``..\out\EXAMPLE3.inp``), on
    Dan AC6LA's Example 3, which has no ``EN`` card and asks for a ``.GMO``
    (``GE 0 0 1``).  The printout must equal the module's one-shot in the
@@ -867,7 +868,10 @@ def _gate_4nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
         deck = out_dir / "EXAMPLE3.inp"
         deck.write_bytes((EXAMPLE3 / "EXAMPLE3.inp").read_bytes())
         names = os.path.join("..", "out", "EXAMPLE3")
-        stdin = f"{names}.inp\r\n{names}.out\r\n".encode()
+        # The plain name gets 4nec2's bare form, the twin a quoted one (Ward's
+        # port strips a pair of surrounding quotes, and so do the launchers).
+        q = '"' if "nec5-" in stem else ""
+        stdin = f"{q}{names}.inp{q}\r\n{q}{names}.out{q}\r\n".encode()
         result = subprocess.run(
             [str(launcher)],
             input=stdin,

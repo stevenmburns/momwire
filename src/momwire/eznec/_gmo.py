@@ -3,7 +3,7 @@
 4nec2 draws its geometry window from a printout's SEGMENTATION DATA table,
 which a NEC-5 printout does not carry.  The "NEC-5 with 4nec2" package
 rebuilds that table from a file the engine writes beside the printout when
-the deck's ``GE`` card carries a third field of 1 (``GE 0 0 1``):
+the deck's ``GE`` card carries a nonzero third field (``GE 0 0 1``):
 ``<printout stem>.GMO``.
 
 Everything here is read off ONE sample: Ward AE6TY's razor-2p port (76.7)
@@ -23,11 +23,25 @@ The numbering is the one the printout's ``Number of nodes`` already counts
 wire adds no node of its own because both its ends fuse into the arms'.
 Nodes are numbered in order of first appearance, walking the ``GW`` cards in
 deck order and each wire from end 1 to end 2; elements are the segments in
-the same order, each from its end-1-side node to its end-2-side node.  The
-sample cannot tell first appearance from some other order (its x coordinate
-rises monotonically along the whole structure), so that choice, the ground
-plane's image, and an ``NX`` chain's file are open questions for Ward, listed
-in the PR for momwire#1488.
+the same order, each from its end-1-side node to its end-2-side node.
+
+Measured against Ward's 76.7 exe in 4nec2's stdin form (Windows-builder
+sitting, 2026-10-15) beyond the sample, and identical: first-appearance node
+order, no image nodes or elements over a ``GE 1`` ground, an ``NX`` chain's
+file is its last requesting structure's, and the refused deck the sitting
+tried gets none (here, a deck that does not parse gets none; one that parses
+and then refuses at the solve still gets its geometry -- see `gmo_text`).
+
+One deliberate difference: WHICH ends fuse.  This file joins two wire ends
+exactly when the solver connects them -- the same 1 µm grid, which is the
+electrical tolerance bs2 and the other bases join wires by -- so the drawing
+4nec2 rebuilds from it shows the structure that was solved.  Ward's port
+joins ends up to about 1e-4 m apart in its file, a join its own solver does
+not make.  Measured: two wire ends between 1e-6 m and 1e-4 m apart are ONE
+node in Ward's file and TWO in ours.  Closer than 1e-6 m both files show
+one node; beyond about 1e-4 m, both show two.  Kept by
+Steve's decision (momwire#1488): a drawing that shows a join the solve did
+not make would hide exactly the gap a user needs to see.
 """
 
 from __future__ import annotations

@@ -88,6 +88,12 @@ __all__ = [
 # exactly this to stdout and exits 0 (capture doc, "Invocation protocol").
 ARGUMENT_ERROR_OUTPUT = "ERROR getting output file from command line"
 
+# Observed: the real engine names a file it cannot open this way on stdout
+# ("UNABLE TO OPEN FILE -i", capture doc).  Printed, followed by the path,
+# when the PRINTOUT cannot be written, which is the one failure the printout
+# itself cannot carry.
+UNABLE_TO_OPEN = "UNABLE TO OPEN FILE"
+
 # NOT observed — the real engine answers a bare command line with its console
 # prompt loop, which is deliberately not implemented (see rule 3 above).  The
 # same shape and the same exit 0 is the honest stand-in for a path EZNEC never
@@ -584,9 +590,11 @@ def _report_internal_error(
             _printout.render_refusal(deck_text, reason, basis=basis, dialect=dialect),
         )
     except OSError:
-        # The output path itself is unwritable; there is no channel left, and
-        # a non-zero exit would only be discarded. Stay quiet, stay zero.
-        pass
+        # The output path itself is unwritable, so the printout channel is
+        # gone.  Say so on stdout, the channel the argument errors use, rather
+        # than exit 0 having written nothing anywhere (momwire#1488: a quoted
+        # path did exactly that).  Still exit 0: the code is not a channel.
+        print(f"{UNABLE_TO_OPEN} {printout_path}")
 
 
 def _internal_error_reason(exc: BaseException) -> str:
