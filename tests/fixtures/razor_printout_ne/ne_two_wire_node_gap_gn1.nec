@@ -1,0 +1,12 @@
+CM NE 0 over GN 1 with two driven verticals (E field on a line between them)
+CE
+GW 1 12 0 0 0 0 0 2.5 0.0015
+GW 2 12 2 0 0 2 0 2.5 0.0015
+GE 1
+GN 1
+EX 0 1 1 0 1 0
+EX 0 2 1 0 0 1
+FR 0 1 0 0 28.0 0
+NE 0 5 1 1 -1 0 1.25 1 0 0
+XQ
+EN
