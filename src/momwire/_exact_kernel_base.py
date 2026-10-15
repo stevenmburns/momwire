@@ -128,6 +128,22 @@ branch. Audited, numpy and C++ (momwire#1421 review):
   Toeplitz table is exact per diagonal (no translation);
 * `expm1_neg_jkR` has no branch on R for real k.
 
+Cross mode (momwire#1438)
+-------------------------
+A coaxial line with a radius step is one more job, after its one-radius
+groups: the two-radius kernel on the pairs whose segments carry different
+radius labels (`cross_lab`), and only those -- the rest are the groups'.
+With `cross_lab` the base produces exactly those pairs and never evaluates
+or writes another: no same-edge pass (an edge is one radius, so every
+same-edge pair is a same-radius pair), off-edge Toeplitz partners only
+across labels, and a row's span the columns of the other labels. The rules
+above hold unchanged across the step, because everything a base moment reads
+per segment is constant on a run: the observer's radius `a` is a run field,
+and so are the EK tube radii `b_i`, `b_j`; the label is added as one more
+(it follows `a`, so it cuts nothing a radius does not). So a fat run and a
+thin run gather only as a pair of runs, each at its own radius, and a
+diagonal's representative has the same two radii as every pair on it.
+
 The m values are remembered across windows per (A, B), capped at
 `max_cached` entries in all; past the cap a block is still deduplicated
 inside its window, only not remembered. `evaluated` counts the pairs handed
@@ -208,6 +224,7 @@ class BaseRows:
         ek_se,
         n_segs_total,
         max_cached=None,
+        cross_lab=None,
     ):
         self.seg_l, self.seg_r, self.seg_a = seg_l, seg_r, seg_a
         self.S = np.asarray(S)
@@ -221,6 +238,11 @@ class BaseRows:
         self.tie_pairs = 0  # pairs evaluated one by one on a tie diagonal
         self._cache = {}
         self._n_cached = 0
+        # momwire#1438: a stepped line's cross job. Only the pairs whose
+        # segments carry different radius labels are produced; every other
+        # pair is the one-radius groups' and is never evaluated or written.
+        self.cross = cross_lab is not None
+        self.cross_lab = None if cross_lab is None else np.asarray(cross_lab)
 
         # the group's edges in local order
         loc = np.full(int(n_segs_total), -1, dtype=np.int64)
@@ -253,6 +275,12 @@ class BaseRows:
             "b_j": _per_segment(None if ek is None else ek.b_j, self.S, n),
         }
         exact = [fields[f] for f in RUN_FIELDS if f != "h"]
+        if self.cross:
+            # one label per edge (an edge is one radius) and so per run
+            for l0, l1, _arc, _a in self.edges:
+                if l1 > l0 and np.any(self.cross_lab[l0:l1] != self.cross_lab[l0]):
+                    raise ValueError("an edge spans two radius labels")
+            exact.append(self.cross_lab.astype(np.float64))
         # "h" stands for the whole geometric rule (the segment vector, the
         # progression, the pair drift): the red control drops all of it
         self._geometric = use_h = "h" in RUN_FIELDS
@@ -319,6 +347,17 @@ class BaseRows:
         self._edge_runs = [[] for _ in self.edges]
         for r, run in enumerate(self.runs):
             self._edge_runs[run[4]].append(r)
+        if self.cross:
+            self._run_lab = [int(self.cross_lab[run[0]]) for run in self.runs]
+            # per label, the column ranges carrying any OTHER label: a cross
+            # row's whole span (its own edge is its own label, so it is out)
+            self._other = {}
+            for lab in np.unique(self.cross_lab).tolist():
+                off = np.flatnonzero(self.cross_lab != lab)
+                cut = np.flatnonzero(np.diff(off) != 1) + 1
+                self._other[lab] = [
+                    (int(c[0]), int(c[-1]) + 1) for c in np.split(off, cut) if c.size
+                ]
 
     def cache_entries_needed(self):
         """Diagonal values the cross-window cache can ever hold: n_A + n_B - 1
@@ -333,6 +372,8 @@ class BaseRows:
                 for B, lb in zip(c, lens):
                     if not self._eligible(la, lb):
                         break
+                    if self.cross and self._run_lab[A] == self._run_lab[B]:
+                        continue
                     if self._same_step(A, B):
                         need += la + lb - 1
         return need
@@ -438,6 +479,9 @@ class BaseRows:
         try:
             if len(self.edges) > 1:
                 self._fill(r0, r1, "off", None)
+            if self.cross:
+                # every same-edge pair is a same-radius pair
+                return
             for e, (l0, l1, arc, a_w) in enumerate(self.edges):
                 lo, hi = max(l0, r0), min(l1, r1)
                 if lo >= hi:
@@ -521,6 +565,8 @@ class BaseRows:
                     b0, b1, _hB, _sB, eB = self.runs[B]
                     if not self._eligible(ra1 - ra0, b1 - b0):
                         break  # longest first: the rest are shorter
+                    if self.cross and self._run_lab[B] == self._run_lab[A]:
+                        continue
                     if eB != eA and not self._phase_tie[B] and self._same_step(A, B):
                         toe.append(B)
             if not toe:
@@ -536,6 +582,22 @@ class BaseRows:
         short = _merge(short)
         if kind == "reg":
             self._direct(short, [self.edges[e][:2]], kind, e)
+            return
+        if self.cross:
+            # a cross job: per label, its rows against every other label's
+            # columns, one call each
+            rows = np.concatenate([np.arange(a, b) for a, b in short])
+            labs = self.cross_lab[rows]
+            for lab in np.unique(labs).tolist():
+                ri = rows[labs == lab]
+                ci = np.concatenate([np.arange(c, f) for c, f in self._other[lab]])
+                vals = self._eval(kind, e, ri, ci)
+                dst = self._out
+                at = (slice(None), slice(None), (ri - self._r0)[:, None], ci[None, :])
+                if self._sign > 0:
+                    dst[at] += vals
+                else:
+                    dst[at] -= vals
             return
         # off-edge: one call over every column, as the per-pair route makes
         # it, each row range then taking only the columns off its own edge
@@ -556,6 +618,8 @@ class BaseRows:
         l0, l1 = self.edges[e][:2]
         if kind == "reg":
             return [(l0, l1)]
+        if self.cross:
+            return self._other[int(self.cross_lab[l0])]
         return [r for r in ((0, l0), (l1, self.n)) if r[0] < r[1]]
 
     def _direct(self, row_ranges, col_ranges, kind, e):

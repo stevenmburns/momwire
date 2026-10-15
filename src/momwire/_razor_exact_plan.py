@@ -52,6 +52,19 @@ rule (it agrees to ~1e-15 of a moment), so it is behind
 `_exact_kernel_series.ENABLED`; with the switch off this module is
 momwire#1455's, bit for bit.
 
+Cross-radius jobs (momwire#1438). A coaxial line with a radius step adds one
+job after the one-radius groups (`_exact_kernel_seam.coaxial_lines`): the
+same tables over the line's segments, plus each segment's radius label and
+each observer's radius and label, so the correction can take the two-radius
+moments on exactly the pairs whose labels differ. Those tables join the plan:
+the line, its labels and its observers are functions of the segment
+geometry and radii, which the key already holds byte for byte, and they
+count toward `_PLAN_MAX_BYTES` like a group's. The job's moment source does
+NOT join the rows cache: it is the numpy `_exact_kernel.PointCrossRows`
+(the route a test swaps `ring_kernel2` into), rebuilt every call, and it
+never takes the k-series, whose coefficients are one radius's. A deck with
+no step lists no line, so its plan is the one-radius plan exactly.
+
 Bounded: `_PLAN_ENTRIES` geometries (least recently used out), each with at
 most `_ROWS_ENTRIES` wavenumbers, and a geometry whose tables would exceed
 `_PLAN_MAX_BYTES` is computed as before and not stored. The resident server
@@ -123,6 +136,9 @@ class _Group:
         "h",
         "a",
         "reach",
+        "lab",
+        "obs_lab",
+        "obs_a",
         "col_ptr",
         "B",
         "B64",
@@ -221,7 +237,8 @@ def rows_cacheable(k):
 
 def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
     """The geometry-only tables of every coaxial group that carries a wing,
-    in `coaxial_groups`' order. The expressions are the ones
+    in `coaxial_groups`' order, then of every stepped line's cross job
+    (momwire#1438). The expressions are the ones
     `RazorSolver._add_exact_kernel_correction` evaluated inline before
     momwire#1454, so the tables hold the same values."""
     seg_p0, seg_t, seg_h = geom["seg_p0"], geom["seg_t"], geom["seg_h"]
@@ -245,10 +262,16 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
     obs_rad = None
     if src_lab is not None:
         obs_rad = None if np.all(seg_a == seg_a[0]) else seg_a
-    _labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
+    labels, groups = _exact_kernel_seam.coaxial_groups(seg_p0, seg_r, seg_t, seg_a)
+    # The one-radius groups, then the cross-radius pairs of every line with a
+    # radius step (momwire#1438): their own jobs, after the groups', owning
+    # the (observer, source) pairs whose segments carry different radius
+    # labels, so the two corrections add. A deck with no step lists no line.
+    jobs = [(S, None) for _g, S in groups]
+    jobs += _exact_kernel_seam.coaxial_lines(seg_p0, seg_r, seg_t, seg_a, labels)
     out = []
     total = 0
-    for _g, S in groups:
+    for S, lab in jobs:
         n = S.size
         axis, x0, sgn, h = _exact_kernel_seam.group_frame(S, seg_p0, seg_r, seg_t)
         loc = np.full(n_seg, -1, dtype=np.int64)
@@ -318,8 +341,21 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
         g = _Group()
         g.n = n
         g.x0, g.sgn, g.h = x0, sgn, np.ascontiguousarray(h)
-        g.a = float(seg_a[S[0]])
-        g.reach = _exact_kernel_series.group_reach(h, g.a)
+        if lab is None:
+            g.a = float(seg_a[S[0]])
+            g.reach = _exact_kernel_series.group_reach(h, g.a)
+            g.lab = g.obs_lab = g.obs_a = None
+        else:
+            # A cross job: per-segment radii and labels, and each observer's
+            # own (`_exact_kernel.PointCrossRows`). The k-series covers one
+            # radius only, so no reach: the direct rule always serves it.
+            g.a = np.ascontiguousarray(seg_a[S])
+            g.reach = None
+            g.lab = np.ascontiguousarray(lab)
+            lab_of = np.full(n_seg, -1, dtype=np.int64)
+            lab_of[S] = lab
+            g.obs_lab = np.ascontiguousarray(lab_of[obs_seg])
+            g.obs_a = np.ascontiguousarray(seg_a[obs_seg])
         g.col_ptr, g.B, g.B64, g.ent = col_ptr, B, B.astype(np.int64), ent
         g.a_parts, g.p_parts = a_parts, p_parts
         g.by_o, g.r_o, g.r_m = by_o, r_o, r_m
@@ -340,6 +376,8 @@ def build_plan(geom, seg_a, pts, tans, wts, src_lab, on_cent, chunk_elems):
 def _group_nbytes(g):
     arrs = [g.x0, g.sgn, g.h, g.col_ptr, g.B, g.B64, g.by_o, g.r_o, g.r_m]
     arrs += [g.obs_pt, g.obs_x, *g.ent, *g.sub.values()]
+    if g.lab is not None:
+        arrs += [g.a, g.lab, g.obs_lab, g.obs_a]
     for part in g.a_parts:
         arrs += [x for x in part if isinstance(x, np.ndarray)]
     for _s, _n, mask in g.p_parts:
@@ -349,9 +387,14 @@ def _group_nbytes(g):
         arrs.append(w[4])
         if w[5] is not None:
             arrs += [x for x in w[5] if x is not None]
+    nbytes = sum(a.nbytes for a in arrs)
+    if g.lab is not None:
+        # A cross job keeps no moment source (its numpy `PointCrossRows` is
+        # rebuilt each call), so its tables are all it holds.
+        return nbytes
     # Each group's PointRowsAccel holds at most 4n + 1024 pairs (~80 B each),
     # one per kept wavenumber.
-    nbytes = sum(a.nbytes for a in arrs) + 80 * (4 * g.n + 1024) * _ROWS_ENTRIES
+    nbytes += 80 * (4 * g.n + 1024) * _ROWS_ENTRIES
     if _exact_kernel_series.ENABLED:
         # Its series source holds the same pairs once, each with at most
         # N_CAP real coefficients per moment -- and never more pairs than
@@ -370,6 +413,9 @@ def _freeze(groups):
             _readonly(getattr(g, name))
         _readonly(g.obs_pt)
         _readonly(g.obs_x)
+        if g.lab is not None:
+            for a in (g.a, g.lab, g.obs_lab, g.obs_a):
+                _readonly(a)
         for a in g.ent:
             _readonly(a)
         for a in g.sub.values():
