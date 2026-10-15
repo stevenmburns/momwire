@@ -570,6 +570,9 @@ def _lu_solve(Z, rhs, overwrite_a=False, overwrite_b=False):
     a locally built F-ordered rhs take the solution. An EXACTLY singular Z
     still raises `LinAlgError`, as `solve` did, where `lu_factor` alone only
     warns and the solve would return inf/NaN.
+
+    Both calls go through `momwire._lapack`, which is scipy's own unless a
+    host process has published its LAPACK there.
     """
     lu_piv = _lapack.lu_factor(Z, overwrite_a=overwrite_a)
     if not np.all(np.diagonal(lu_piv[0])):

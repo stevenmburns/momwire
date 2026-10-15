@@ -892,7 +892,8 @@ def _solve_in_place(G, rhs):
     `lu_factor` alone would (it only warns).
 
     Callers must not read G afterwards; neither SG solve does, and this
-    family stashes no matrix or factors on the solver.
+    family stashes no matrix or factors on the solver. The factor and solve
+    go through `momwire._lapack` (scipy's unless a host published its own).
     """
     lu_piv = _lapack.lu_factor(G, overwrite_a=True)
     if not np.all(np.diagonal(lu_piv[0])):
