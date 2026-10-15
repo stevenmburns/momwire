@@ -1435,9 +1435,11 @@ static int is_space(char c)
            c == '\f';
 }
 
-/* One path line off stdin, surrounding whitespace stripped.  Returns 1 for a
- * path, 0 when stdin ended or the line strips to nothing (the name is
- * missing), -1 for a line too long to be a path this launcher can hold. */
+/* One path line off stdin: surrounding whitespace stripped, then ONE pair of
+ * surrounding double quotes (`momwire_serve_client.strip_path_line`, as Ward
+ * AE6TY's port reads a quoted `.tmp` line).  Returns 1 for a path, 0 when
+ * stdin ended or the line strips to nothing (the name is missing), -1 for a
+ * line too long to be a path this launcher can hold. */
 static int stdin_path(char *out, size_t cap)
 {
     size_t len;
@@ -1454,6 +1456,10 @@ static int stdin_path(char *out, size_t cap)
         out[--len] = '\0';
     }
     while (start < len && is_space(out[start])) {
+        start++;
+    }
+    if (len - start >= 2 && out[start] == '"' && out[len - 1] == '"') {
+        out[--len] = '\0';
         start++;
     }
     if (start > 0) {
@@ -1954,7 +1960,12 @@ static void last_ditch(const char *printout_path, const char *reason)
     if (written < 0) {
         return;
     }
-    write_whole_file(printout_path, line, strlen(line));
+    if (write_whole_file(printout_path, line, strlen(line)) != 0) {
+        /* No printout channel either: stdout is the last one, never a silent
+         * exit 0 (momwire#1488). */
+        printf("%s %s\n", ARGUMENT_ERROR_INPUT, printout_path);
+        printf("NEC ERROR - MOMWIRE ENGINE UNAVAILABLE - %s\n", reason);
+    }
 }
 
 int main(int argc, char **argv)

@@ -27,7 +27,6 @@ import pytest
 
 import momwire_eznec_client as eznec_client
 import momwire_serve_client as mech
-from momwire.deck import DeckError
 from momwire.deck._nec5 import parse_nec5
 from momwire.eznec import _gmo, _serve, _shell
 
@@ -94,9 +93,14 @@ def test_ge_without_a_third_field_asks_for_nothing(ge):
 
 
 @pytest.mark.parametrize("value", ["2", "-1", "7"])
-def test_any_other_third_field_refuses_by_name(value):
-    with pytest.raises(DeckError, match=f"GE's third field is {value};"):
-        parse_nec5(_deck("GW 1 3 0 0 0 0 0 1 .001\n", f"GE 0 0 {value}"))
+def test_any_nonzero_third_field_asks_for_the_file(value):
+    """Ward AE6TY's 76.7 writes the file and solves for every nonzero value
+    (Windows-builder sitting, 2026-10-15), and this engine matches him."""
+    text = _deck("GW 1 3 0 0 0 0 0 1 .001\n", f"GE 0 0 {value}")
+    assert parse_nec5(text).geometry_file is True
+    assert _gmo.gmo_text(text) == _gmo.gmo_text(
+        text.replace(f"GE 0 0 {value}", "GE 0 0 1")
+    )
 
 
 def test_no_captured_deck_asks_for_a_geometry_file():
@@ -280,6 +284,31 @@ def test_stdin_paths_returns_what_arrived(raw, expected):
     assert mech.stdin_paths(_Pipe(raw)) == expected
 
 
+@pytest.mark.parametrize(
+    ("line", "path"),
+    [
+        ('"..\\out\\x.inp"\r\n', "..\\out\\x.inp"),
+        ('  "my files\\x y.inp"  \r\n', "my files\\x y.inp"),
+        ('"x.inp\r\n', '"x.inp'),
+        ('x.inp"\r\n', 'x.inp"'),
+        ('"\r\n', '"'),
+        ('""\r\n', ""),
+        ('""x.inp""\r\n', '"x.inp"'),
+    ],
+)
+def test_one_pair_of_surrounding_quotes_is_stripped(line, path):
+    """Ward's port strips surrounding double quotes from a ``.tmp`` line; a
+    quoted path made every momwire launcher write nothing at all before this
+    (momwire#1488). One pair only, spaces inside kept, and a lone or
+    mismatched quote left for the OS to refuse by name."""
+    assert mech.strip_path_line(line) == path
+
+
+def test_stdin_paths_reads_quoted_names():
+    stream = _Pipe(b'"..\\out\\EX 3.inp"\r\n"..\\out\\EX 3.out"\r\n')
+    assert mech.stdin_paths(stream) == ["..\\out\\EX 3.inp", "..\\out\\EX 3.out"]
+
+
 def test_stdin_paths_never_reads_a_terminal():
     assert mech.stdin_paths(_Terminal(b"deck.inp\nout.out\n")) is None
 
@@ -437,6 +466,65 @@ def test_the_shell_with_nothing_on_stdin_is_the_empty_command_line(
     _stdin(monkeypatch, b"")
     assert _shell.main([]) == 0
     assert capsys.readouterr().out.splitlines() == [_shell.ARGUMENT_ERROR_INPUT]
+
+
+def test_the_shell_reads_quoted_names_with_spaces(tmp_path, monkeypatch, capsys):
+    """The quoted form, with a space inside each name: the deck is found and
+    both files land where the quotes said."""
+    engine_dir = tmp_path / "bin"
+    out_dir = tmp_path / "my out"
+    engine_dir.mkdir()
+    out_dir.mkdir()
+    (out_dir / "EX 3.inp").write_bytes(_free_space_example3())
+    monkeypatch.chdir(engine_dir)
+    sep = os.sep.encode()
+    names = b'"..' + sep + b"my out" + sep + b'EX 3.inp"\r\n'
+    names += b'  "..' + sep + b"my out" + sep + b'EX 3.out"  \r\n'
+    _stdin(monkeypatch, names)
+
+    assert _shell.main([]) == 0
+
+    assert capsys.readouterr().out == ""
+    assert b"NEC ERROR" not in (out_dir / "EX 3.out").read_bytes()
+    assert (out_dir / "EX 3.GMO").read_bytes() == (
+        EXAMPLE3 / "EXAMPLE3.GMO"
+    ).read_bytes()
+
+
+def test_a_mismatched_quote_on_the_deck_is_refused_in_the_printout(
+    tmp_path, monkeypatch, capsys
+):
+    """``"deck.inp`` names a file that is not there: the refusal names it in
+    the printout, which is written where the second line says."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "deck.inp").write_bytes(_free_space_example3())
+    _stdin(monkeypatch, b'"deck.inp\r\ndeck.out\r\n')
+    assert _shell.main([]) == 0
+    printout = (tmp_path / "deck.out").read_bytes().decode("latin-1")
+    assert "NEC ERROR" in printout and 'UNABLE TO READ INPUT FILE "deck.inp' in printout
+
+
+def test_an_unwritable_printout_is_named_on_stdout_never_silent(
+    tmp_path, monkeypatch, capsys
+):
+    """The printout path cannot be opened (its folder does not exist, as a
+    path with a stray quote does not on Windows): there is no file to refuse
+    in, so the failure is named on stdout. Before momwire#1488's fix this
+    exited 0 having said nothing anywhere."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "deck.inp").write_bytes(_free_space_example3())
+    bad = os.path.join('"no such dir', "deck.out")
+    _stdin(monkeypatch, b"deck.inp\r\n" + bad.encode() + b"\r\n")
+    assert _shell.main([]) == 0
+    assert capsys.readouterr().out.splitlines() == [f"{_shell.UNABLE_TO_OPEN} {bad}"]
+
+
+def test_the_thin_clients_last_ditch_is_never_silent(tmp_path, capsys):
+    bad = str(tmp_path / "no such dir" / "x.out")
+    eznec_client._last_ditch(bad, "MOMWIRE ENGINE UNAVAILABLE - test")
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == f"{eznec_client.ARGUMENT_ERROR_INPUT} {bad}"
+    assert "MOMWIRE ENGINE UNAVAILABLE - test" in out[1]
 
 
 def test_the_nec42_slot_never_reads_stdin(tmp_path, monkeypatch, capsys):

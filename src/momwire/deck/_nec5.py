@@ -458,8 +458,8 @@ class Nec5Deck:
     wires: tuple[Nec5Wire, ...] = ()
     ge_flag: int = 0
     ge_second: int = -1
-    # GE's third field (momwire#1488): 1 asks for a ``.GMO`` geometry file
-    # beside the printout, the file 4nec2's NEC-5 package reads its
+    # GE's third field (momwire#1488): nonzero asks for a ``.GMO`` geometry
+    # file beside the printout, the file 4nec2's NEC-5 package reads its
     # SEGMENTATION DATA from; 0 (or absent) asks for none.
     geometry_file: bool = False
     ground: Nec5Ground = Nec5FreeSpace()
@@ -946,23 +946,16 @@ class _Nec5Parser:
         A third field asks for a geometry file (momwire#1488): ``GE 0 0 1``
         is how 4nec2's NEC-5 package asks the engine to write
         ``<printout stem>.GMO`` (nodes, then elements), which it rebuilds its
-        SEGMENTATION DATA table from.  Absent or 0 asks for nothing.  Any
-        other value refuses by name: the one sample of the file (Ward AE6TY's
-        port, on Dan AC6LA's 4nec2 Example 3) shows what 1 writes and nothing
-        else, and a flag read as "no file" when it meant some other file
-        would be a silent wrong answer.
+        SEGMENTATION DATA table from.  Absent or 0 asks for nothing; ANY
+        nonzero value asks for the same file.  That last rule is measured, not
+        guessed: Ward AE6TY's port (76.7), the one engine that writes the file
+        and the reference for its layout, writes it and solves for every
+        nonzero value tried (Windows-builder sitting, 2026-10-15).  A C++
+        reader (#1479) reads the field the same way.
         """
         self.ge_flag = card.i(0)
         self.ge_second = card.i(1)
-        geometry = card.i(2)
-        if geometry not in (0, 1):
-            raise DeckError(
-                f"GE's third field is {geometry}; this engine serves 0 (no geometry "
-                f"file) and 1 (write the .GMO geometry file beside the printout, "
-                f"as 4nec2's NEC-5 package asks), and no sample output says what "
-                f"any other value writes"
-            )
-        self.geometry_file = geometry == 1
+        self.geometry_file = card.i(2) != 0
 
     # -- ground ------------------------------------------------------------
     #
