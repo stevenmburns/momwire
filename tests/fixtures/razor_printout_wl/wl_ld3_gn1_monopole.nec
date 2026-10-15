@@ -1,0 +1,10 @@
+CM LD 3 per-metre parallel R-L on a monopole over a perfect ground
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GE 1
+GN 1
+LD 3,1,1,20,300.,1.E-6,0.
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+XQ
+EN

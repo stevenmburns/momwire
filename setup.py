@@ -336,6 +336,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
     "src/momwire/_razor_front_core.h",
+    "src/momwire/_razor_wire_loading_core.h",
     # The frozen Gauss-Legendre rules, generated from `_leggauss_table.py`
     # (scripts/gen_leggauss_header.py), read by the front half.
     "src/momwire/_leggauss_table.h",
@@ -433,6 +434,11 @@ _ACCEL_SOURCES = [
     # standalone driver is its caller); it is built here so every platform's
     # toolchain compiles it. Its own TU: nothing calls it on the default path.
     "src/momwire/_nec5_razor_printout_core.cpp",
+    # WIRE loading for that C++ path (LD 5 skin effect through the vendored
+    # xsf's `cyl_bessel_ie`, scipy.special.ive's own code; LD 2 / LD 3
+    # per-metre RLC), Python-free. The ONE TU of this extension that
+    # includes xsf: its headers define functions non-inline.
+    "src/momwire/_razor_wire_loading_core.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
@@ -535,6 +541,7 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
             _ACCEL_SOURCES,
             depends=_ACCEL_HEADERS,
             compile_args=_accel_args,
+            include_dirs=["extern/xsf/include"],
         )
     )
     ext_modules.append(

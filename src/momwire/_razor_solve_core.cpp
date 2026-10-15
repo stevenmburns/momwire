@@ -228,6 +228,14 @@ void SolveContext::release() {
     std::vector<int>().swap(ipiv_);
 }
 
+void SolveContext::add_at(const int64_t *rows, const int64_t *cols, const cd *vals, size_t n) {
+    cd *z = z_.data();
+    for (size_t i = 0; i < n; i++) {
+        cd &e = z[static_cast<size_t>(rows[i]) + static_cast<size_t>(cols[i]) * static_cast<size_t>(n_)];
+        e = cd(e.real() + vals[i].real(), e.imag() + vals[i].imag());
+    }
+}
+
 int SolveContext::lu_solve(const Lapack &lp, cd *b, int n_rhs) {
     if (lp.getrf == nullptr || lp.getrs == nullptr)
         throw std::invalid_argument("razor_solve: no LAPACK routines were supplied");

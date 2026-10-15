@@ -572,6 +572,25 @@ py::dict seam_kwargs(const mw::nec5::Prepared &p) {
     }
     if (in.extended_kernel) kw["extended_kernel"] = true;
     if (in.has_ground) kw["ground_z"] = in.ground_z;
+    // `_solver_for`'s loading: an LD 5 conductivity array and an LD 2 / 3
+    // list of `DistributedRLC` (or None), one entry per piece.
+    if (in.loading.has_conductivity) {
+        py::array_t<double> a(static_cast<ptrdiff_t>(in.loading.conductivity.size()));
+        std::copy(in.loading.conductivity.begin(), in.loading.conductivity.end(), a.mutable_data());
+        kw["wire_conductivity"] = a;
+    }
+    if (in.loading.has_rlc) {
+        py::object rlc_type = py::module_::import("momwire._wire_loading").attr("DistributedRLC");
+        py::list rlc;
+        for (const auto &e : in.loading.rlc) {
+            if (e.kind == mw::razor::WireRLC::none)
+                rlc.append(py::none());
+            else
+                rlc.append(rlc_type(e.kind == mw::razor::WireRLC::series ? "series" : "parallel",
+                                    e.r, e.l, e.c));
+        }
+        kw["distributed_rlc"] = rlc;
+    }
     kw["nec5_quadrature"] = true;
     kw["exact_kernel"] = "auto";
     return kw;

@@ -589,9 +589,12 @@ struct ElementRowC {  // `WireCurrentRow` / `ChargeRow`
     double magnitude = 0, phase_deg = 0;
 };
 
-struct LoadRowC {  // `LoadRow`, for an LD 0 / 1 / 4 card (`_loading_row`)
+struct LoadRowC {  // `LoadRow` (`_loading_row`): every LD card's row
     Int tag, node_from, node_thru;
-    std::string kind;  // "FIXED IMPEDANCE", "SERIES", "PARALLEL"
+    // "FIXED IMPEDANCE", "SERIES", "PARALLEL" (LD 4 / 0 / 1), "WIRE" (LD 5),
+    // "SERIES (PER METER)" / "PARALLEL (PER METER)" (LD 2 / LD 3)
+    std::string kind;
+    double conductivity = 0;
     double resistance = 0, reactance = 0, inductance = 0, capacitance = 0;
     bool has_resistance = false, has_reactance = false, has_inductance = false,
          has_capacitance = false;
@@ -1811,6 +1814,35 @@ NearBlockC near_block(const Request &rq, const razor::Front &fr,
     return block;
 }
 
+// `RazorSolver.wire_loss_power(coeffs, omega)[0]` (momwire#1501's hypot):
+// each segment's end currents from the wings (`np.add.at` in entry order),
+// `h * (|a|^2 + Re(a conj b) + |b|^2) / 3`, weighted by ½ Re Z'_w at
+// `omega`, summed per wire in segment order, then over the wires.
+double wire_loss_power(const razor::Front &fr, const std::vector<cd> &coeffs, double omega) {
+    if (!fr.loading.active()) return 0.0;
+    const int64_t n_seg = fr.n_seg;
+    std::vector<cd> i_lo(static_cast<std::size_t>(n_seg), cd(0.0, 0.0)), i_hi = i_lo;
+    for (int64_t b = 0; b < fr.n_basis; b++)
+        for (int w = 0; w < 2; w++) {
+            const std::size_t q = static_cast<std::size_t>(2 * b + w);
+            const cd v = np_cmul(coeffs[static_cast<std::size_t>(b)], cd(fr.wing_sigma[q], 0.0));
+            cd &t = fr.wing_rise.p[q] ? i_hi[static_cast<std::size_t>(fr.wing_seg[q])]
+                                      : i_lo[static_cast<std::size_t>(fr.wing_seg[q])];
+            t = c_add(t, v);
+        }
+    const std::vector<cd> z_wire = razor::series_impedance_per_wire(omega, fr.radius_per_wire, fr.loading);
+    std::vector<double> per_wire(static_cast<std::size_t>(fr.n_wires), 0.0);
+    for (int64_t w = 0; w < fr.n_wires; w++)
+        for (int64_t s = fr.seg_offsets[w]; s < fr.seg_offsets[w + 1]; s++) {
+            const cd lo = i_lo[static_cast<std::size_t>(s)], hi = i_hi[static_cast<std::size_t>(s)];
+            const double ml = std::hypot(lo.real(), lo.imag()), mh = std::hypot(hi.real(), hi.imag());
+            const double cross = np_cmul(lo, std::conj(hi)).real();
+            const double gram = (fr.seg_h[s] * ((ml * ml + cross) + mh * mh)) / 3.0;
+            per_wire[static_cast<std::size_t>(w)] += (0.5 * z_wire[static_cast<std::size_t>(w)].real()) * gram;
+        }
+    return 0.0 + np_pairwise(per_wire.data(), fr.n_wires);
+}
+
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
                 std::vector<RunArrays> *arrays) {
     const razor::Front &fr = *p.front;
@@ -1824,14 +1856,41 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         arrays->push_back(RunArrays{s.y.v, coeffs, st.v_applied, st.v_gap, st.i_port, st.i_source});
 
     RunDataC data;
-    // `loads=tuple(_loading_row(card) for card in deck.load_cards)`: LD 0 / 1
-    // / 4 only (LD 2 / 3 / 5 decline as wire loading in the seam). A zero
-    // field the card wrote prints BLANK (`spec.x or None`, `spec.r or None`).
+    // `loads=tuple(_loading_row(card) for card in deck.load_cards)`, deck
+    // order. A zero field the card wrote prints BLANK (`spec.x or None`,
+    // `spec.r or None`; an LD 2 / 3 field passed as written and blanked when
+    // falsy).
     for (const LoadCardRef &ref : deck.load_cards) {
-        if (ref.kind != LoadCardRef::load) throw Decline{"wire loading not yet in C++"};
+        const auto truthy = [](double v) { return v != 0.0 || std::isnan(v); };
+        if (ref.kind == LoadCardRef::conductivity) {
+            const Conductivity &cc = deck.conductivities[ref.index];
+            LoadRowC row;
+            row.tag = cc.tag;
+            row.node_from = cc.segment_from;
+            row.node_thru = cc.segment_thru;
+            row.conductivity = cc.sigma;
+            row.kind = "WIRE";
+            data.loads.push_back(row);
+            continue;
+        }
+        if (ref.kind == LoadCardRef::distributed_rlc) {
+            const DistributedRLCCard &dc = deck.distributed_rlc[ref.index];
+            LoadRowC row;
+            row.tag = dc.tag;
+            row.node_from = dc.segment_from;
+            row.node_thru = dc.segment_thru;
+            row.resistance = dc.spec.r;
+            row.has_resistance = truthy(dc.spec.r);
+            row.inductance = dc.spec.l;
+            row.has_inductance = truthy(dc.spec.l);
+            row.capacitance = dc.spec.c;
+            row.has_capacitance = truthy(dc.spec.c);
+            row.kind = dc.spec.kind == "series" ? "SERIES (PER METER)" : "PARALLEL (PER METER)";
+            data.loads.push_back(row);
+            continue;
+        }
         const Load &load = deck.loads[ref.index];
         const LoadSpec &spec = load.spec;
-        const auto truthy = [](double v) { return v != 0.0 || std::isnan(v); };
         LoadRowC row;
         row.tag = load.at.tag;
         row.node_from = load.printed_location;
@@ -1980,7 +2039,9 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         const double mag = std::hypot(st.i_port[k].real(), st.i_port[k].imag());
         watts.push_back(st.z_load[k].real() * (mag * mag));
     }
-    const double p_load = 0.5 * (0.0 + np_pairwise(watts.data(), static_cast<int64_t>(watts.size())));
+    double p_load = 0.5 * (0.0 + np_pairwise(watts.data(), static_cast<int64_t>(watts.size())));
+    // `if deck.wire_conductivity: p_load += solver.wire_loss_power(coeffs, omega)[0]`
+    if (!deck.wire_conductivity.empty()) p_load += wire_loss_power(fr, coeffs, p.omega);
     // `_connection_points(cards)`: each card's end A then end B, a site once
     std::vector<int64_t> points;
     for (const SeamCard &c : p.cards)
@@ -2326,6 +2387,26 @@ void place(std::string &canvas, const std::string &text, long long end) {
 
 // `_load_row` for the FIXED IMPEDANCE and SERIES / PARALLEL shapes.
 std::string load_row(const LoadRowC &row) {
+    if (row.kind == "SERIES (PER METER)" || row.kind == "PARALLEL (PER METER)") {
+        std::string canvas(122, ' ');
+        if (!row.tag.is_zero()) place(canvas, row.tag.str(), 8);
+        place(canvas, row.node_from.str(), 13);
+        place(canvas, row.node_thru.str(), 18);
+        if (row.has_resistance) place(canvas, py_format_e(row.resistance, 11, 4), 34);
+        if (row.has_inductance) place(canvas, py_format_e(row.inductance, 11, 4), 47);
+        if (row.has_capacitance) place(canvas, py_format_e(row.capacitance, 11, 4), 60);
+        place(canvas, center(row.kind, 20), 122);
+        return canvas;
+    }
+    if (row.kind == "WIRE") {
+        std::string canvas(110, ' ');
+        if (!row.tag.is_zero()) place(canvas, row.tag.str(), 8);
+        place(canvas, row.node_from.str(), 13);
+        place(canvas, row.node_thru.str(), 18);
+        place(canvas, py_format_e(row.conductivity, 11, 4), 99);
+        place(canvas, row.kind, 108);
+        return canvas;
+    }
     if (row.kind == "SERIES" || row.kind == "PARALLEL") {
         std::string canvas(110, ' ');
         if (!row.tag.is_zero()) place(canvas, row.tag.str(), 8);

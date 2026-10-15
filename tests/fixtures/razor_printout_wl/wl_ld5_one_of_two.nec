@@ -1,0 +1,10 @@
+CM LD 5 on the second of two dipoles only (the first carries no conductivity)
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GW 2 21 1.2 0 -2.5 1.2 0 2.5 0.001
+GE 0
+LD 5,2,1,21,3.7E+7,1.
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+XQ
+EN
