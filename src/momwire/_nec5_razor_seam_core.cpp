@@ -39,6 +39,30 @@ const char *const REFUSE_RP_RANGE =
     "momwire#1230) is served, and what the engine does with a negative distance has never "
     "been observed";
 
+const char *const REFUSE_MIXED_ORDER =
+    "this deck writes an NT card before a TL card; a mixed NETWORK DATA table is served in the "
+    "order every captured mixed deck writes it - every TL card, then every NT card, one "
+    "sub-table each - and no captured printout says which sub-table an interleaved deck heads "
+    "with, or which order its STRUCTURE EXCITATION DATA connection points print in";
+
+std::string refuse_zero_length_line(const std::string &first, const std::string &second) {
+    return "a TL card between " + first + " and " + second +
+           " writes no length and the two nodes are the same point, so there is no distance for "
+           "NEC's zero-length rule to resolve it to";
+}
+
+std::string refuse_probe_at_network_point(const std::string &at, const std::string &card) {
+    return "the EX 0 at " + at +
+           " is one of EZNEC's 1e-10 V load probes beside an EX 4, but that node is also an end "
+           "of " + card +
+           ", so it is a network CONNECTION POINT - and a set voltage there is not a passive "
+           "probe: NEC-5 applies it as a port-voltage constraint, which moves the drive rows by "
+           "ohms rather than by nothing (adding one to capture 0120 moves both of its rows by "
+           "about 10 ohms). A probe OFF the network is served (momwire#1110) because there the "
+           "printout cannot tell it from a deck without it - move the EX 0 to the load's own "
+           "node, or drop it and read the load current out of the CURRENTS table";
+}
+
 std::string refuse_mixed_drive_kinds(long long count, long long voltages, long long currents,
                                      const std::string &at, const std::string &why) {
     return "this deck carries " + std::to_string(count) + " EX cards writing BOTH kinds - " +
@@ -139,11 +163,26 @@ double complex_abs(double re, double im) {
     return h;
 }
 
-// `_load_probe_refusal`, on a deck with no TL / NT (declined before the
-// ladder), so no probe sits at a network connection point.
+// `_network_card_name`: "the NT card between 5,1 and 1,34".
+std::string network_card_name(const char *mnemonic, const Node &a, const Node &b) {
+    return std::string("the ") + mnemonic + " card between " + at_of(a) + " and " + at_of(b);
+}
+
+// `_load_probe_refusal`.
 std::string load_probe_refusal(const Deck &d) {
     std::vector<Node> loaded;
     for (const Load &l : d.loads) loaded.push_back(l.at);
+    // the connection points, the first card naming each (`setdefault`)
+    std::vector<std::pair<Node, std::string>> network;
+    const auto claim = [&](const Node &at, const std::string &name) {
+        for (const auto &kv : network)
+            if (same_node(kv.first, at)) return;
+        network.emplace_back(at, name);
+    };
+    for (const TransmissionLine &t : d.transmission_lines)
+        for (const Node &at : {t.end_a, t.end_b}) claim(at, network_card_name("TL", t.end_a, t.end_b));
+    for (const Network &n : d.networks)
+        for (const Node &at : {n.end_a, n.end_b}) claim(at, network_card_name("NT", n.end_a, n.end_b));
     long long voltages = 0;
     for (const Source &s : d.sources)
         if (s.kind.is_zero()) voltages++;
@@ -163,8 +202,49 @@ std::string load_probe_refusal(const Deck &d) {
         }
         if (!why.empty())
             return refuse_mixed_drive_kinds(count, voltages, count - voltages, at, why);
+        for (const auto &kv : network)
+            if (same_node(kv.first, s.at)) return refuse_probe_at_network_point(at, kv.second);
     }
     return "";
+}
+
+// The deck's text back in latin-1 (the reader keeps it as UTF-8 of latin-1).
+std::string utf8_to_latin1(const std::string &u) {
+    std::string out;
+    for (std::size_t i = 0; i < u.size(); i++) {
+        const unsigned char c = static_cast<unsigned char>(u[i]);
+        if (c < 0x80) {
+            out += static_cast<char>(c);
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < u.size() && c <= 0xC3) {
+            out += static_cast<char>(((c & 0x1F) << 6) | (static_cast<unsigned char>(u[i + 1]) & 0x3F));
+            i++;
+        } else {
+            throw Declined{"source-text-encoding"};
+        }
+    }
+    return out;
+}
+
+// `_interleaves_networks`: an NT card written before the deck's last TL card.
+bool interleaves_networks(const Deck &d) {
+    std::vector<int> kinds;  // 0 TL, 1 NT
+    try {
+        for (const std::string &line : latin1_splitlines(utf8_to_latin1(d.source_text))) {
+            Card card;
+            if (!read_card(line, card)) continue;
+            if (card.mnemonic == "TL") kinds.push_back(0);
+            if (card.mnemonic == "NT") kinds.push_back(1);
+        }
+    } catch (const ParseError &) {
+        throw Declined{"network-card-order"};  // `tokenize` raises: Python's escape
+    }
+    long long first_nt = -1, last_tl = -1;
+    for (std::size_t i = 0; i < kinds.size(); i++) {
+        if (kinds[i] == 1 && first_nt < 0) first_nt = static_cast<long long>(i);
+        if (kinds[i] == 0) last_tl = static_cast<long long>(i);
+    }
+    if (first_nt < 0 || last_tl < 0) return false;
+    return first_nt < last_tl;
 }
 
 // `_drive_refusal`.
@@ -222,9 +302,9 @@ std::string geometry_refusal(const Deck &d) {
 std::string scope_refusal(const Deck &d, std::string &declined) {
     declined.clear();
     try {
-        // Declined before the ladder: the network cards (TL / NT, the first
-        // rung's own subject) and a Sommerfeld ground (GN 0 / GN 2).
-        if (!d.transmission_lines.empty() || !d.networks.empty()) throw Declined{"networks"};
+        // The first rung, then a Sommerfeld ground (GN 0 / GN 2) declines.
+        if (!d.transmission_lines.empty() && !d.networks.empty() && interleaves_networks(d))
+            return REFUSE_MIXED_ORDER;
         if (d.ground.kind == Ground::sommerfeld) throw Declined{"finite-ground"};
         if (d.sources.empty()) return REFUSE_NO_EX;
         std::string drive = drive_refusal(d);
@@ -300,10 +380,11 @@ bool too_close(double a, double b) {
     return std::fabs(a - b) <= 1e-12 * std::max(std::fabs(a), std::fabs(b));
 }
 
-// `_phantom_tags`: is any wire EZNEC's parked circuit node? A phantom wire
-// is not ported (its sites reach no momwire port), so finding one declines.
-void refuse_phantom(const Deck &d, double wavelength) {
-    if (d.wires.size() < 2) return;
+// `_phantom_tags`: the wires EZNEC parked as circuit NODES (deck order). A
+// comparison within an ulp or two of its threshold declines.
+std::vector<Int> phantom_tags(const Deck &d, double wavelength) {
+    std::vector<Int> tags;
+    if (d.wires.size() < 2) return tags;
     const double extent_limit = 0.05 * wavelength;
     for (size_t i = 0; i < d.wires.size(); i++) {
         const Wire &w = d.wires[i];
@@ -326,8 +407,10 @@ void refuse_phantom(const Deck &d, double wavelength) {
                 }
         }
         if (near) continue;
-        throw Declined{unsure ? "phantom-threshold" : "phantom-wire"};
+        if (unsure) throw Declined{"phantom-threshold"};
+        tags.push_back(w.tag);
     }
+    return tags;
 }
 
 // The pieces' end keys -> the (piece, end) members meeting there, as
@@ -354,6 +437,7 @@ void assign_columns(SeamMesh &mesh) {
         for (const JunctionEnd &m : mesh.junctions[j]) junction_of[m] = static_cast<long long>(j);
     std::map<long long, long long> declared;  // junction -> declaring site
     for (SeamSite &site : mesh.sites) {
+        if (site.spelling == SeamSite::virtual_) continue;  // no column, no weight
         long long junction = -1;
         if (!site.contact && site.end != SeamSite::interior) {
             auto it = junction_of.find(
@@ -453,10 +537,23 @@ Prepared prepare(const Deck &d) {
     for (const auto &kv : degree) p.structure.unknown_count += std::max(kv.second - 1, 0LL);
 
     // --- `build_mesh` (razor: the delta-gap spelling, nothing cut) ---------
-    refuse_phantom(d, p.wavelength);
+    // A phantom GW becomes NO piece (momwire#1139): its elements stay in
+    // `element_of` against piece -1, and its addressed nodes are virtual.
+    p.phantom_tags = phantom_tags(d, p.wavelength);
+    const auto is_phantom = [&](const Int &tag) {
+        for (const Int &t : p.phantom_tags)
+            if (t == tag) return true;
+        return false;
+    };
     SeamMesh &mesh = p.mesh;
+    std::vector<long long> piece_of_wire(d.wires.size(), -1);
     for (size_t i = 0; i < d.wires.size(); i++) {
         const Wire &w = d.wires[i];
+        if (is_phantom(w.tag)) {
+            for (long long k = 0; k < nseg[i]; k++) mesh.element_of.emplace_back(-1, k);
+            continue;
+        }
+        piece_of_wire[i] = static_cast<long long>(mesh.pieces.size());
         SeamPiece piece;
         piece.tag = w.tag;
         piece.first_node = 0;
@@ -465,13 +562,12 @@ Prepared prepare(const Deck &d) {
         std::copy(w.end2, w.end2 + 3, piece.points + 3);
         piece.radius = w.radius;
         mesh.pieces.push_back(piece);
-        for (long long k = 0; k < nseg[i]; k++)
-            mesh.element_of.emplace_back(static_cast<long long>(i), k);
+        for (long long k = 0; k < nseg[i]; k++) mesh.element_of.emplace_back(piece_of_wire[i], k);
     }
     junctions_of(mesh);
 
-    // `_addressed_nodes`: the sources' and the lumped loads' (no TL / NT
-    // here), per tag.
+    // `_addressed_nodes`: the sources', the lumped loads' and the network
+    // ends' (lines, then networks, end A before end B), per tag.
     std::map<Int, std::set<long long>> addressed;
     for (const Source &s : d.sources) {
         if (!s.at.node.fits_i64()) throw Declined{"node-range"};
@@ -480,6 +576,19 @@ Prepared prepare(const Deck &d) {
     for (const Load &l : d.loads) {
         if (!l.at.node.fits_i64()) throw Declined{"node-range"};
         addressed[l.at.tag].insert(l.at.node.i64());
+    }
+    std::vector<Node> network_ends;
+    for (const TransmissionLine &t : d.transmission_lines) {
+        network_ends.push_back(t.end_a);
+        network_ends.push_back(t.end_b);
+    }
+    for (const Network &n : d.networks) {
+        network_ends.push_back(n.end_a);
+        network_ends.push_back(n.end_b);
+    }
+    for (const Node &at : network_ends) {
+        if (!at.node.fits_i64()) throw Declined{"node-range"};
+        addressed[at.tag].insert(at.node.i64());
     }
     for (const auto &kv : addressed) {
         const Int &tag = kv.first;
@@ -494,7 +603,13 @@ Prepared prepare(const Deck &d) {
             SeamSite site;
             site.at = at;
             const long long last = w >= 0 ? nseg[w] : 0;
-            if (w >= 0 && 0 < node && node < last) {
+            if (is_phantom(tag)) {
+                // `_site_for`: a phantom node is a deck port and nothing else
+                site.spelling = SeamSite::virtual_;
+                site.piece = -1;
+                site.end = SeamSite::none;
+                site.sign = 0.0;
+            } else if (w >= 0 && 0 < node && node < last) {
                 // `_interior_site`
                 grid_point(d.wires[w], last, node, pt);
                 const long long deg = degree[node_key(pt)];
@@ -505,20 +620,20 @@ Prepared prepare(const Deck &d) {
                                   "a delta gap, which drives one wire's own knot and would "
                                   "leave the others unconnected"};
                 site.spelling = SeamSite::gap;
-                site.piece = w;
+                site.piece = piece_of_wire[w];
                 site.end = SeamSite::interior;
                 site.sign = 1.0;
-                site.arclength = norm3_diff(pt, mesh.pieces[w].points);
+                site.arclength = norm3_diff(pt, mesh.pieces[site.piece].points);
             } else {
                 if (w < 0 || !(node == 0 || node == last))
                     throw Refusal{"no wire piece carries node " + std::to_string(node) +
                                   " of tag " + tag.str()};
-                const SeamPiece &piece = mesh.pieces[w];
+                const SeamPiece &piece = mesh.pieces[piece_of_wire[w]];
                 const bool start = node == 0;
                 const double *point = start ? piece.points : piece.points + 3;
                 const bool grounded = ground_plane && std::fabs(point[2]) <= NODE_EPS;
                 const long long meeting = degree[node_key(point)] - (grounded ? 1 : 0);
-                site.piece = w;
+                site.piece = piece_of_wire[w];
                 site.end = start ? SeamSite::at_start : SeamSite::at_end;
                 site.arclength = start ? 0.0 : piece.length();
                 if (meeting >= 2) {
@@ -609,6 +724,66 @@ Prepared prepare(const Deck &d) {
                           "scatter nothing (momwire#608); this deck declares " +
                           std::to_string(inert.size()) + " such GW card" +
                           (inert.size() > 1 ? "s" : "")};
+    }
+
+    // --- `_cards`: the TL / NT cards resolved onto sites, lines first --------
+    {
+        const auto site_of = [&](const Node &at) {
+            for (const SeamSite &x : mesh.sites)
+                if (same_node(x.at, at)) return x.index;
+            throw std::logic_error("a network end with no site");
+        };
+        const auto wire_index = [&](const Int &tag) {
+            for (size_t i = 0; i < d.wires.size(); i++)
+                if (d.wires[i].tag == tag) return static_cast<long long>(i);
+            throw Refusal{"no GW card declares tag " + tag.str()};
+        };
+        // `_signed_segment`: `first_element(tag) + max(node, 1) - 1`, negated
+        // for a "-1" node
+        const auto signed_segment = [&](const Node &at) {
+            const long long w = wire_index(at.tag);
+            long long first = 1;
+            for (long long i = 0; i < w; i++) first += nseg[static_cast<size_t>(i)];
+            const long long node = at.node.i64();
+            const long long seg = first + std::max(node, 1LL) - 1;
+            return node == 0 ? -seg : seg;
+        };
+        for (const TransmissionLine &t : d.transmission_lines) {
+            double length = t.length_m;
+            if (length == 0.0) {  // `line.length_m or norm3(a - b)`
+                double pa[3], pb[3];
+                const long long wa = wire_index(t.end_a.tag), wb = wire_index(t.end_b.tag);
+                grid_point(d.wires[wa], nseg[wa], t.end_a.node.i64(), pa);
+                grid_point(d.wires[wb], nseg[wb], t.end_b.node.i64(), pb);
+                length = norm3_diff(pa, pb);
+            }
+            if (length == 0.0) throw Refusal{refuse_zero_length_line(at_of(t.end_a), at_of(t.end_b))};
+            SeamCard c;
+            c.kind = SeamCard::tl;
+            c.payload[0] = t.z0;
+            c.payload[1] = length;
+            for (int k = 0; k < 4; k++) c.payload[2 + k] = t.shunt[k];
+            c.site_a = site_of(t.end_a);
+            c.site_b = site_of(t.end_b);
+            c.tag_from = t.end_a.tag;
+            c.segment_from = signed_segment(t.end_a);
+            c.tag_to = t.end_b.tag;
+            c.segment_to = signed_segment(t.end_b);
+            p.cards.push_back(c);
+        }
+        for (const Network &n : d.networks) {
+            SeamCard c;
+            c.kind = SeamCard::nt;
+            const double payload[6] = {n.y11[0], n.y11[1], n.y12[0], n.y12[1], n.y22[0], n.y22[1]};
+            std::copy(payload, payload + 6, c.payload);
+            c.site_a = site_of(n.end_a);
+            c.site_b = site_of(n.end_b);
+            c.tag_from = n.end_a.tag;
+            c.segment_from = signed_segment(n.end_a);
+            c.tag_to = n.end_b.tag;
+            c.segment_to = signed_segment(n.end_b);
+            p.cards.push_back(c);
+        }
     }
 
     // --- `construct_solver` -------------------------------------------------

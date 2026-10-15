@@ -126,6 +126,16 @@ def python_seam(text):
     return rec
 
 
+def _phantom_tags_of(structure, mesh):
+    tags, k = [], 0
+    for wire in structure.wires:
+        n = wire.segment_count
+        if n and all(mesh.element_of[k + j][0] == -1 for j in range(n)):
+            tags.append(wire.tag)
+        k += n
+    return sorted(tags)
+
+
 def python_mesh(prepared):
     """`_prepare`'s structure, mesh, medium and sites in the C++ binding's
     layout (`seam_mesh`)."""
@@ -165,6 +175,23 @@ def python_mesh(prepared):
         if medium is None
         else (medium.eps_r, medium.sigma, complex(medium.eps_c)),
         "source_sites": sorted((n.tag, n.node) for n in prepared.source_sites),
+        # `_cards`: kind, the six fields, the two sites, the NETWORK DATA
+        # row's addresses
+        "cards": [
+            (
+                c.card.kind,
+                tuple(float(v) for v in c.card.payload),
+                c.site_a,
+                c.site_b,
+                c.row.tag_from,
+                c.row.segment_from,
+                c.row.tag_to,
+                c.row.segment_to,
+            )
+            for c in prepared.cards
+        ],
+        # a phantom GW has no piece: its elements map to piece -1
+        "phantom_tags": _phantom_tags_of(structure, mesh),
     }
 
 
@@ -207,6 +234,7 @@ def compare(text, acc, fc):
         mesh = python_mesh(p["prepared"])
         cmesh = dict(c["mesh"])
         cmesh["source_sites"] = sorted(cmesh["source_sites"])
+        cmesh["phantom_tags"] = sorted(cmesh["phantom_tags"])
         d += fc.differences(mesh, cmesh, f"prepared[{k}].mesh")
         if "X" in p:
             x_same = (

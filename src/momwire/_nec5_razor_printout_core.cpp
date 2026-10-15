@@ -1561,6 +1561,8 @@ NearBlockC near_block(const Request &rq, const razor::Front &fr,
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
                 std::vector<RunArrays> *arrays) {
     const razor::Front &fr = *p.front;
+    for (const SeamSite &site : p.mesh.sites)
+        if (site.spelling == SeamSite::virtual_) throw Decline{"phantom wires not yet in the C++ run half"};
     const PortState st = port_state(deck, p, s, np);
     // `coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)`
     const int64_t nc = p.mesh.n_columns(), ns = static_cast<int64_t>(p.mesh.sites.size());
@@ -2356,7 +2358,10 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
 
 // Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH (LD 2 / 3 / 5,
 // networks, a Sommerfeld ground and a near field over GD decline in the seam).
-void check_scope(const Deck &run) { (void)run; }
+void check_scope(const Deck &run) {
+    if (!run.transmission_lines.empty() || !run.networks.empty())
+        throw Decline{"networks not yet in the C++ run half"};
+}
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,
              const NumpyLinalg &np) {
