@@ -8384,7 +8384,8 @@ class BSplineSolver(
             active_junctions = sorted(active)
             self._auto_active_junctions = active_junctions
             if not active_junctions:
-                return _solution(B.T @ X1, X1)  # pass-1 result is final
+                # pass-1 result is final
+                return _solution(_lapack.matmul(B.T, X1), X1)
 
         if self.use_singular_enrichment:
             enrich = self._enrichment_Z_assemble(
@@ -8418,10 +8419,11 @@ class BSplineSolver(
                 # vectors are zero on the enrichment dofs); the returned
                 # columns keep the enrichment block, which is part of the
                 # solved current — `basis.n_poly` marks the split.
-                return _solution(B.T @ X[:n_p, :], X)
+                return _solution(_lapack.matmul(B.T, X[:n_p, :]), X)
 
         X = self._solve_with_kcl_ports(Z, B, kcl_con, overwrite=True)
-        return _solution(B.T @ X, X)  # Y[i, j] = v_i^T · solve(Z, v_j)
+        # Y[i, j] = v_i^T · solve(Z, v_j)
+        return _solution(_lapack.matmul(B.T, X), X)
 
     def _port_solutions_swept(self, k_array):
         """Per-k `PortSolution` generator behind `compute_y_matrix_swept` and

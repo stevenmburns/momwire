@@ -74,6 +74,7 @@ import math
 
 import numpy as np
 
+from .. import _lapack
 from ..networks import TL, Admittance, Driven, Network, NetworkReducer, PortOnWire
 from .model import DeckModel, DeckWire, NetworkCard
 
@@ -322,7 +323,7 @@ def reduced_ports(reducer, y_eff, wavelength: float, n_ports: int, driven):
     v_applied = np.asarray(v[:n_ports], dtype=np.complex128).copy()
     for port, volts in zip(reducer.driven_port_idx, reducer.driven_voltages):
         v_applied[port] = volts
-    i_port = y_eff @ v_applied
+    i_port = _lapack.matmul(y_eff, v_applied)
     i_source = i_port.copy()
     for port in driven:
         i_source[port] = j[system.terminations[port][0]]

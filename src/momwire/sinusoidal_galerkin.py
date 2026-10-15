@@ -921,12 +921,13 @@ def _solve_constrained(G, rhs, C):
     T = -np.linalg.solve(C[:, p], C[:, r])
     Grp = G[np.ix_(r, p)]
     Gpr = G[np.ix_(p, r)]
-    Gc = G[np.ix_(r, r)] + T.T @ Gpr + Grp @ T + T.T @ G[np.ix_(p, p)] @ T
-    rhs_c = rhs[r] + T.T @ rhs[p]
+    mm = _lapack.matmul
+    Gc = G[np.ix_(r, r)] + mm(T.T, Gpr) + mm(Grp, T) + mm(mm(T.T, G[np.ix_(p, p)]), T)
+    rhs_c = rhs[r] + mm(T.T, rhs[p])
     x_r = _solve_in_place(np.asfortranarray(Gc), rhs_c)
     x = np.empty((n,) + x_r.shape[1:], dtype=np.result_type(x_r, T))
     x[r] = x_r
-    x[p] = T @ x_r
+    x[p] = _lapack.matmul(T, x_r)
     return x
 
 
@@ -6454,7 +6455,7 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
         """
         N = geom["n_segs"]
         if self.feed_readout == "variational":
-            return -(U.T @ alpha)
+            return -_lapack.matmul(U.T, alpha)
         n0 = len(self.feeds) + len(self.junction_ports)
         return np.array(
             [
@@ -6472,7 +6473,10 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
                 for j, fi in enumerate(geom["feed_segs"])
             ]
             + [-alpha[N + p] for p in range(len(self.junction_ports))]
-            + [-(U[:, n0 + p] @ alpha) for p in range(len(self.node_ports))],
+            + [
+                -_lapack.matmul(U[:, n0 + p], alpha)
+                for p in range(len(self.node_ports))
+            ],
             dtype=np.complex128,
         )
 

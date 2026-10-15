@@ -365,6 +365,7 @@ from . import (
     _feed_snap,
     _ground_refl,
     _ground_spec,
+    _lapack,
     _medium_spec,
     _crossing_fill,
     _exact_kernel,
@@ -6620,7 +6621,7 @@ class RazorSolver(
         self._checkpoint()
         # In place, as in `compute_impedance`: Z is dead after this solve.
         X = _bspline._lu_solve(Z, cols.astype(np.complex128), overwrite_a=True)
-        Y = cols.T @ X
+        Y = _lapack.matmul(cols.T, X)
         return PortSolution(
             y=Y,
             coeffs=X,
