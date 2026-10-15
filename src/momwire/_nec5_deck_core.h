@@ -279,5 +279,36 @@ std::string text_probe(const std::string &op, const std::string &latin1_arg);
 // spellings of NaN and the infinities): the `{x:g}` the seam's sentences use.
 std::string format_g(double x);
 
+// --- the pieces the printout writer shares ------------------------------------
+// (`_nec5_razor_printout_core.cpp` re-reads the deck's card images for its
+// echo, as `_printout._post_ge_cards` does, and lays out the comment box.)
+
+// `deck/_cards.Card`: a mnemonic (UTF-8, upper-cased) and its numeric fields.
+struct Card {
+    std::string mnemonic;
+    std::vector<double> values;
+    std::string raw;  // latin-1
+    bool has_trailer = false;
+    std::string trailer;  // latin-1
+
+    double f(std::size_t k) const;  // a field the card did not write reads 0
+    Int i(std::size_t k) const;     // rounded half to even; throws ParseError
+                                    // (OverflowError / ValueError) where Python raises
+    std::string text() const;       // raw[2:]
+};
+
+// `parse_card(line)`: false for a blank line; throws ParseError as Python raises.
+bool read_card(const std::string &latin1_line, Card &card);
+
+// Python's `str` rules over latin-1 (one byte, one code point).
+std::vector<std::string> latin1_splitlines(const std::string &latin1);
+std::vector<std::string> latin1_split(const std::string &latin1);
+std::string latin1_upper(const std::string &latin1, std::size_t *length = nullptr);  // UTF-8
+std::string latin1_to_utf8(const std::string &latin1);
+bool latin1_isspace(unsigned char c);
+
+// snprintf(fmt, x) in the C locale, whatever the process's locale is.
+std::string format_c_locale(const char *fmt, double x);
+
 }  // namespace nec5
 }  // namespace mw
