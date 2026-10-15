@@ -107,13 +107,13 @@ cd py_cmul(cd a, cd b) {
 
 // `_Py_c_quot` (3.12: Smith's method, no Annex G recovery). A zero divisor
 // is Python's ZeroDivisionError, whose text is the interpreter's: it is
-// DECLINED here rather than spelled in C++ (the one caller that can reach
-// it is an EX 4 whose port carries no current), and Python answers it.
+// DECLINED here rather than spelled in C++ (an EX 4 whose port carries no
+// current; an LD capacitance at zero frequency), and Python answers it.
 cd py_cdiv(cd a, cd b) {
     const double abs_breal = b.real() < 0 ? -b.real() : b.real();
     const double abs_bimag = b.imag() < 0 ? -b.imag() : b.imag();
     if (abs_breal >= abs_bimag) {
-        if (abs_breal == 0.0) throw Decline{"an EX 4 port with no current (Python raises)"};
+        if (abs_breal == 0.0) throw Decline{"a complex division by zero (Python raises)"};
         const double ratio = b.imag() / b.real();
         const double denom = b.real() + b.imag() * ratio;
         return cd((a.real() + a.imag() * ratio) / denom, (a.imag() - a.real() * ratio) / denom);
@@ -198,6 +198,29 @@ cd np_cdiv(cd a, cd b) {
     const double rat = in2r / in2i;
     const double scl = 1.0 / (in2i + in2r * rat);
     return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+}
+
+// `DOUBLE_pairwise_sum` over `n` contiguous float64 values (the front core's
+// `pairwise_sum`, measured against numpy 2.5 there).
+double np_pairwise(const double *a, int64_t n) {
+    if (n < 8) {
+        double res = 0.0;
+        for (int64_t i = 0; i < n; i++) res += a[i];
+        return res;
+    }
+    if (n <= 128) {
+        double r[8];
+        for (int j = 0; j < 8; j++) r[j] = a[j];
+        int64_t i = 8;
+        for (; i < n - (n % 8); i += 8)
+            for (int j = 0; j < 8; j++) r[j] += a[i + j];
+        double res = ((r[0] + r[1]) + (r[2] + r[3])) + ((r[4] + r[5]) + (r[6] + r[7]));
+        for (; i < n; i++) res += a[i];
+        return res;
+    }
+    int64_t n2 = n / 2;
+    n2 -= n2 % 8;
+    return np_pairwise(a, n2) + np_pairwise(a + n2, n - n2);
 }
 
 // `CDOUBLE_pairwise_sum` over `n` complex values (2n reals), stride 1.
@@ -489,6 +512,41 @@ std::vector<cd> np_solve(const NumpyLinalg &np, const CMat &a, const std::vector
     return x;
 }
 
+// `numpy.linalg.solve(a, b)` / `_lapack.solve_stacked(a, b)` for a square
+// C-ordered `a` and a C-ordered (n, k) `b`: both copied to Fortran order, one
+// zgesv with k right-hand sides (numpy), or getrf + getrs (the host). The
+// solution comes back C-ordered, as both return it.
+CMat np_solve_matrix(const NumpyLinalg &np, const CMat &a, const CMat &b) {
+    const int64_t n = a.rows, k = b.cols;
+    std::vector<cd> af(static_cast<std::size_t>(n * n)), bf(static_cast<std::size_t>(n * k));
+    for (int64_t j = 0; j < n; j++)
+        for (int64_t i = 0; i < n; i++) af[static_cast<std::size_t>(i + j * n)] = a.at(i, j);
+    for (int64_t j = 0; j < k; j++)
+        for (int64_t i = 0; i < n; i++) bf[static_cast<std::size_t>(i + j * n)] = b.at(i, j);
+    if (np.host.zgemm != nullptr && n > 0 && k > 0) {
+        if (n > std::numeric_limits<int>::max() || k > std::numeric_limits<int>::max())
+            throw Decline{"a solve past the LP64 host's int range"};
+        int ni = static_cast<int>(n), ki = static_cast<int>(k), info = 0;
+        std::vector<int> ipiv(static_cast<std::size_t>(n));
+        np.host.getrf(&ni, &ni, af.data(), &ni, ipiv.data(), &info);
+        if (info > 0) throw Decline{"a singular loaded admittance (the host route raises)"};
+        if (info < 0) throw Decline{"the host's getrf refused an argument"};
+        char trans = 'N';
+        np.host.getrs(&trans, &ni, &ki, af.data(), &ni, ipiv.data(), bf.data(), &ni, &info);
+        if (info != 0) throw Decline{"the host's getrs refused an argument"};
+    } else if (n > 0 && k > 0) {
+        const np_int nn = n, nrhs = k, lda = n, ldb = n;
+        std::vector<np_int> ipiv(static_cast<std::size_t>(n));
+        np_int info = 0;
+        np.zgesv(&nn, &nrhs, af.data(), &lda, ipiv.data(), bf.data(), &ldb, &info);
+        if (info > 0) throw Decline{"a singular loaded admittance (numpy raises)"};
+    }
+    CMat x(n, k);
+    for (int64_t j = 0; j < k; j++)
+        for (int64_t i = 0; i < n; i++) x.at(i, j) = bf[static_cast<std::size_t>(i + j * n)];
+    return x;
+}
+
 // ============================================================================
 // the run half (`_serve._finish`)
 // ============================================================================
@@ -509,11 +567,20 @@ struct ElementRowC {  // `WireCurrentRow` / `ChargeRow`
     double magnitude = 0, phase_deg = 0;
 };
 
+struct LoadRowC {  // `LoadRow`, for an LD 0 / 1 / 4 card (`_loading_row`)
+    Int tag, node_from, node_thru;
+    std::string kind;  // "FIXED IMPEDANCE", "SERIES", "PARALLEL"
+    double resistance = 0, reactance = 0, inductance = 0, capacitance = 0;
+    bool has_resistance = false, has_reactance = false, has_inductance = false,
+         has_capacitance = false;
+};
+
 struct RunDataC {  // `RunData`, for the decks this unit prints
     long long node_count = 0, wire_element_count = 0, unknown_count = 0;
     double frequency_mhz = 0, wavelength_m = 0;
     enum Env { free_space, perfect_ground, finite_ground } environment = free_space;
     double eps_r = 0, sigma = 0, eps_c[2] = {0, 0};
+    std::vector<LoadRowC> loads;
     std::vector<PortRowC> sources;
     std::vector<ElementRowC> currents, charges;
     double input_power = 0, radiated_power = 0, wire_loss = 0, efficiency = 0;
@@ -564,10 +631,75 @@ std::vector<cd> transform_c(const Prepared &p) {
 }
 
 struct PortState {  // `_PortState`
-    std::vector<cd> v_applied, v_gap, i_port, i_source;
+    std::vector<cd> v_applied, v_gap, i_port, i_source, z_load;
 };
 
-// `_port_state`, network-free and load-free (the decks this unit prints):
+// `LoadSpec.impedance(freq_hz)` for LD 0 / 1 / 4, with
+// `_wire_loading.rlc_impedance`'s arithmetic: its numpy 0-d values (a sum is
+// numpy's add, `1.0 / y` numpy's complex divide) and its CPython complex
+// scalars (`1j * omega * l` is `_Py_c_prod` twice, `1.0 / (...)` is
+// `_Py_c_quot`). A zero element drops out of its branch; all three zero is
+// 0 (series) or inf (parallel).
+cd load_impedance(const LoadSpec &spec, double freq_hz) {
+    const double omega = 2.0 * 3.141592653589793 * freq_hz;
+    if (spec.kind == "fixed") return cd(spec.r, spec.x);
+    const auto truthy = [](double v) { return v != 0.0 || std::isnan(v); };
+    const auto j_omega = [&](double v) { return py_cmul(py_cmul(cd(0.0, 1.0), cd(omega, 0.0)), cd(v, 0.0)); };
+    if (spec.kind != "series" && spec.kind != "parallel")
+        throw Decline{"an unknown load kind"};
+    if (spec.r == 0.0 && spec.l == 0.0 && spec.c == 0.0)
+        return spec.kind == "parallel" ? cd(std::numeric_limits<double>::infinity(), 0.0)
+                                       : cd(0.0, 0.0);
+    if (spec.kind == "series") {
+        // `np.asarray(r, complex128) + 0j * np.asarray(omega, float)`
+        const cd zero_omega = np_cmul(cd(0.0, 0.0), cd(omega, 0.0));
+        cd z(spec.r + zero_omega.real(), 0.0 + zero_omega.imag());
+        if (truthy(spec.l)) {
+            const cd t = j_omega(spec.l);
+            z = cd(z.real() + t.real(), z.imag() + t.imag());
+        }
+        if (truthy(spec.c)) {
+            const cd t = py_cdiv(cd(1.0, 0.0), j_omega(spec.c));
+            z = cd(z.real() + t.real(), z.imag() + t.imag());
+        }
+        return z;
+    }
+    cd y(0.0, 0.0);  // `np.zeros(np.shape(omega), dtype=complex128)`
+    if (truthy(spec.r)) y = cd(y.real() + 1.0 / spec.r, y.imag() + 0.0);
+    if (truthy(spec.l)) {
+        const cd t = py_cdiv(cd(1.0, 0.0), j_omega(spec.l));
+        y = cd(y.real() + t.real(), y.imag() + t.imag());
+    }
+    if (truthy(spec.c)) {
+        const cd t = j_omega(spec.c);
+        y = cd(y.real() + t.real(), y.imag() + t.imag());
+    }
+    return np_cdiv(cd(1.0, 0.0), y);
+}
+
+// `site.load` for every site (`_prepare`'s loop: `by_address[load.at].load
+// += load.spec.impedance(frequency_hz)`, Python complex adds from 0j).
+std::vector<cd> site_loads(const Deck &deck, const Prepared &p) {
+    std::vector<cd> z(p.mesh.sites.size(), cd(0.0, 0.0));
+    const double freq_hz = p.frequency_mhz * 1e6;
+    for (const Load &load : deck.loads) {
+        const cd v = load_impedance(load.spec, freq_hz);
+        bool found = false;
+        for (const SeamSite &site : p.mesh.sites)
+            if (site.at.tag == load.at.tag && site.at.node == load.at.node) {
+                cd &acc = z[static_cast<std::size_t>(site.index)];
+                acc = cd(acc.real() + v.real(), acc.imag() + v.imag());
+                found = true;
+                break;
+            }
+        if (!found) throw std::logic_error("a load with no site");  // the seam built one per load
+    }
+    return z;
+}
+
+// `_port_state`, network-free (the decks this unit prints), with lumped loads
+// in series inside their ports (no virtual site reaches here: the seam
+// declines phantom wires, so `_series_loads` leaves `z_load` as it is):
 // `y = t.T @ y_solver @ t`, then one scaled unit probe, or the constrained
 // multi-source drive (`_multi_drive_state`).
 PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np) {
@@ -576,10 +708,29 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
     // `t.T @ y_solver`: t.T is the cast copy in its own (Fortran) order
     const CMat r1 = mm(np, Op{tc.data(), n, nc, 1, n}, s.y.op());
     const CMat y = mm(np, r1.op(), Op{tc.data(), nc, n, n, 1});
-    const std::vector<cd> z_series(static_cast<std::size_t>(n), cd(0.0, 0.0));
+    const std::vector<cd> z_load = site_loads(deck, p);
+    const std::vector<cd> &z_series = z_load;
+    bool any_series = false;
+    for (const cd &z : z_series)
+        if (py_ctruth(z) || std::isnan(z.real()) || std::isnan(z.imag())) any_series = true;
     PortState st;
+    st.z_load = z_load;
     if (deck.sources.size() > 1) {
-        // `_multi_drive_state` with no cards and no loads: y_eff = y.
+        // `_multi_drive_state` with no cards. With a series load, `y_eff =
+        // solve(loaded.T, y.T).T`, loaded = `eye + z_series[:, None] * y`.
+        CMat y_eff = y;
+        if (any_series) {
+            CMat lt(n, n), yt(n, n);
+            for (int64_t i = 0; i < n; i++)
+                for (int64_t j = 0; j < n; j++) {
+                    const cd prod = np_cmul(z_series[i], y.at(i, j));
+                    lt.at(j, i) = cd((i == j ? 1.0 : 0.0) + prod.real(), 0.0 + prod.imag());
+                    yt.at(i, j) = y.at(j, i);
+                }
+            const CMat xt = np_solve_matrix(np, lt, yt);
+            for (int64_t i = 0; i < n; i++)
+                for (int64_t j = 0; j < n; j++) y_eff.at(i, j) = xt.at(j, i);
+        }
         std::vector<int64_t> driven;
         for (const SeamSite &site : p.mesh.sites) {
             bool is_driven = false;
@@ -609,7 +760,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             const int64_t nd = static_cast<int64_t>(driven.size());
             CMat m(nd, nd);
             for (int64_t i = 0; i < nd; i++)
-                for (int64_t j = 0; j < nd; j++) m.at(i, j) = y.at(driven[i], driven[j]);
+                for (int64_t j = 0; j < nd; j++) m.at(i, j) = y_eff.at(driven[i], driven[j]);
             std::vector<cd> rhs;
             for (int64_t r : i_rows) rhs.push_back(spec[static_cast<std::size_t>(r)]);
             if (!v_sites.empty()) {
@@ -630,7 +781,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             for (std::size_t k = 0; k < i_sites.size(); k++) volts[static_cast<std::size_t>(i_sites[k])] = vi[k];
         }
         st.v_applied = volts;
-        st.i_port = mv(np, y.op(), st.v_applied);
+        st.i_port = mv(np, y_eff.op(), st.v_applied);
         st.i_source = st.i_port;
         for (std::size_t k = 0; k < i_sites.size(); k++)
             st.i_source[static_cast<std::size_t>(i_sites[k])] = spec[static_cast<std::size_t>(i_rows[k])];
@@ -728,6 +879,35 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         arrays->push_back(RunArrays{s.y.v, coeffs, st.v_applied, st.v_gap, st.i_port, st.i_source});
 
     RunDataC data;
+    // `loads=tuple(_loading_row(card) for card in deck.load_cards)`: LD 0 / 1
+    // / 4 only (LD 2 / 3 / 5 decline as wire loading in the seam). A zero
+    // field the card wrote prints BLANK (`spec.x or None`, `spec.r or None`).
+    for (const LoadCardRef &ref : deck.load_cards) {
+        if (ref.kind != LoadCardRef::load) throw Decline{"wire loading not yet in C++"};
+        const Load &load = deck.loads[ref.index];
+        const LoadSpec &spec = load.spec;
+        const auto truthy = [](double v) { return v != 0.0 || std::isnan(v); };
+        LoadRowC row;
+        row.tag = load.at.tag;
+        row.node_from = load.printed_location;
+        row.node_thru = load.printed_location;
+        if (spec.kind == "fixed") {
+            row.kind = "FIXED IMPEDANCE";
+            row.resistance = spec.r;
+            row.has_resistance = true;
+            row.reactance = spec.x;
+            row.has_reactance = truthy(spec.x);
+        } else {
+            row.kind = spec.kind == "series" ? "SERIES" : "PARALLEL";
+            row.resistance = spec.r;
+            row.has_resistance = truthy(spec.r);
+            row.inductance = spec.l;
+            row.has_inductance = truthy(spec.l);
+            row.capacitance = spec.c;
+            row.has_capacitance = truthy(spec.c);
+        }
+        data.loads.push_back(row);
+    }
     // the source rows, deck order
     std::vector<double> powers;
     for (const Source &src : deck.sources) {
@@ -760,11 +940,14 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         data.sources.push_back(row);
     }
     const double p_in = py_sum(powers);
-    // `0.5 * float(np.sum(np.real(z_load) * np.abs(i_port) ** 2))`, z_load = 0
-    bool nonfinite = false;
-    for (const cd &i : st.i_port)
-        if (!std::isfinite(i.real()) || !std::isfinite(i.imag())) nonfinite = true;
-    const double p_load = 0.5 * (nonfinite ? std::numeric_limits<double>::quiet_NaN() : 0.0);
+    // `0.5 * float(np.sum(np.real(z_load) * np.abs(i_port) ** 2))`: numpy's
+    // hypot, its square, its product, and np.sum's identity plus pairwise sum
+    std::vector<double> watts;
+    for (std::size_t k = 0; k < st.i_port.size(); k++) {
+        const double mag = std::hypot(st.i_port[k].real(), st.i_port[k].imag());
+        watts.push_back(st.z_load[k].real() * (mag * mag));
+    }
+    const double p_load = 0.5 * (0.0 + np_pairwise(watts.data(), static_cast<int64_t>(watts.size())));
     const double p_radiated = (p_in - 0.0) - p_load;
 
     // `_element_geometry`
@@ -1025,10 +1208,59 @@ Lines environment(const RunDataC &data) {
             m + "COMPLEX DIELECTRIC CONSTANT=" + e(data.eps_c[0], 12, 5) + e(data.eps_c[1], 12, 5)};
 }
 
+// `canvas[end - len(text) : end] = list(text)` with Python's slice rules (a
+// cell wider than its field shifts the rest of the row, as Python's does).
+void place(std::string &canvas, const std::string &text, long long end) {
+    const long long n = static_cast<long long>(canvas.size());
+    long long a = end - static_cast<long long>(text.size()), b = end;
+    if (a < 0) a = std::max(0LL, a + n);
+    if (b < 0) b = std::max(0LL, b + n);
+    a = std::min(a, n);
+    b = std::min(b, n);
+    if (b < a) b = a;
+    canvas.replace(static_cast<std::size_t>(a), static_cast<std::size_t>(b - a), text);
+}
+
+// `_load_row` for the FIXED IMPEDANCE and SERIES / PARALLEL shapes.
+std::string load_row(const LoadRowC &row) {
+    if (row.kind == "SERIES" || row.kind == "PARALLEL") {
+        std::string canvas(110, ' ');
+        if (!row.tag.is_zero()) place(canvas, row.tag.str(), 8);
+        place(canvas, row.node_from.str(), 13);
+        place(canvas, row.node_thru.str(), 18);
+        if (row.has_resistance) place(canvas, py_format_e(row.resistance, 11, 4), 34);
+        if (row.has_inductance) place(canvas, py_format_e(row.inductance, 11, 4), 47);
+        if (row.has_capacitance) place(canvas, py_format_e(row.capacitance, 11, 4), 60);
+        place(canvas, center(row.kind, 8), 110);
+        return canvas;
+    }
+    std::string canvas(118, ' ');
+    place(canvas, row.tag.str(), 8);
+    place(canvas, row.node_from.str(), 13);
+    place(canvas, row.node_thru.str(), 18);
+    place(canvas, py_format_e(row.resistance, 11, 4), 73);
+    if (row.has_reactance) place(canvas, py_format_e(row.reactance, 11, 4), 86);
+    std::string kind = row.kind;
+    if (kind.size() < 16) kind += std::string(16 - kind.size(), ' ');  // ljust(16)
+    place(canvas, kind, 118);
+    return canvas;
+}
+
 Lines loading(const RunDataC &data) {
-    return {sp(31) + "- - - STRUCTURE IMPEDANCE LOADING - - -", "",
-            sp(35) + "THIS STRUCTURE IS NOT LOADED",
-            "ALLOCATE CM:" + d(data.unknown_count * data.unknown_count, 15)};
+    Lines lines = {sp(31) + "- - - STRUCTURE IMPEDANCE LOADING - - -", ""};
+    if (data.loads.empty()) {
+        lines.push_back(sp(35) + "THIS STRUCTURE IS NOT LOADED");
+    } else {
+        lines.push_back("");
+        lines.push_back("       LOCATION          RESISTANCE   INDUCTANCE  CAPACITANCE       "
+                        "IMPEDANCE (OHMS)     CONDUCTIVITY    TYPE");
+        lines.push_back("    ITAG FROM THRU          OHMS        HENRYS       FARADS        "
+                        "REAL      IMAGINARY    MHOS/METER");
+        lines.push_back("");
+        for (const LoadRowC &row : data.loads) lines.push_back(load_row(row));
+    }
+    lines.push_back("ALLOCATE CM:" + d(data.unknown_count * data.unknown_count, 15));
+    return lines;
 }
 
 Lines timing() {
@@ -1319,9 +1551,9 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
     return s.chained ? s.structures[k].echo_text() : text;
 }
 
-// The runs Python FINISHES carry no LD / RP / NE / NH (this unit's scope).
+// The runs Python FINISHES carry no RP / NE / NH (this unit's scope); LD 0 /
+// 1 / 4 print (LD 2 / 3 / 5 decline as wire loading in the seam).
 void check_scope(const Deck &run) {
-    if (!run.load_cards.empty()) throw Decline{"lumped loads not yet in C++"};
     for (const Request &r : run.requests) {
         if (r.kind == Request::far_field) throw Decline{"radiation pattern not yet in C++"};
         if (r.kind == Request::near_field) throw Decline{"near field not yet in C++"};

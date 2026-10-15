@@ -1,0 +1,11 @@
+CM LD 1 with every element zero (an open) on a monopole over a perfect ground
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GE 1
+GN 1
+LD 1,1,10,0,0,0,0
+LD 4,1,5,0,2,0
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+XQ
+EN
