@@ -482,6 +482,7 @@ def _printout_compare_module():
 
 
 PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
+LD_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ld"
 
 
 def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
@@ -545,10 +546,10 @@ def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     assert counts.get("served|frame", 0) >= 2, counts
     assert counts.get("runs", 0) >= 30 and counts.get("multi-port", 0) >= 5, counts
     assert {
-        "lumped loads not yet in C++",
         "radiation pattern not yet in C++",
         "near field not yet in C++",
     } <= reasons, reasons
+    assert "lumped loads not yet in C++" not in reasons, reasons
 
 
 def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
@@ -579,6 +580,33 @@ def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
     chain = answers[0]["printout"]
     assert chain.count(b"- - - ANTENNA INPUT PARAMETERS - - -") == 2
     assert b"NEC ERROR - this deck carries no FR card" in chain
+
+
+def test_the_lumped_load_decks_print_their_loads(driver, tmp_path):
+    """LD 0 / 1 / 4 print through the C++ run half (`load_impedance`, the
+    loads in series inside their ports, the loaded admittance of a
+    multi-source drive, the WIRE LOSS watts, the loading table). Each
+    committed LD deck prints (none declines) with its loading rows, so each
+    path -- a series RLC in the driven segment, parallel traps, a fixed
+    reactance under two volts, two loaded current sources, EZNEC's 1e-10 V
+    probe at a loaded node, an all-zero parallel card (an open) over a
+    perfect ground -- is compared byte for byte by the test above."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(LD_DECKS.glob("*.nec"))
+    assert len(decks) == 6
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    for path, ans in zip(decks, answers, strict=True):
+        assert (ans["route"], ans["seam"], ans["raised"]) == (
+            "printed",
+            "served",
+            "",
+        ), path
+        assert b"THIS STRUCTURE IS NOT LOADED" not in ans["printout"], path
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
 
 
 def test_the_printout_spells_outside_latin1_as_python_does(driver):
