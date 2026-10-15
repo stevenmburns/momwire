@@ -40,9 +40,8 @@
 //     (`NumpyLinalg`: cblas_zgemm / cblas_zgemv / cblas_zdotu_sub, zgesv,
 //     the ILP64 OpenBLAS numpy's wheels bundle) -- a sum's order is the
 //     kernel's, and only the kernel knows it;
-//   * numpy's elementwise complex multiply is FUSED on the CPUs numpy
-//     dispatches its x86-64-v3 / ASIMD loops to (`fma(a.re, b.re, -(a.im *
-//     b.im))`), and plain elsewhere (`NumpyLinalg::fused_cmul`); its complex
+//   * the run path's elementwise complex multiply is `_cmul.cmul`, FUSED on
+//     every CPU (`fma(a.re, b.re, -(a.im * b.im))`); numpy's complex
 //     division, scalar arithmetic and pairwise sums are replayed as written;
 //   * Python's complex `*` / `/` are CPython 3.12's `_Py_c_prod` /
 //     `_Py_c_quot`, `sum()` of floats its compensated sum, `math.atan2` its
@@ -81,19 +80,37 @@ using cblas_zdotu_sub_fn = void (*)(np_int n, const void *x, np_int incx, const 
 using zgesv_fn = void (*)(const np_int *n, const np_int *nrhs, void *a, const np_int *lda,
                           np_int *ipiv, void *b, const np_int *ldb, np_int *info);
 
+// --- the host route (`momwire._lapack`, ABI 2) --------------------------------
+// The LP64 Fortran BLAS a host publishes as `sys._mw_host_lapack` (OpenBLAS's
+// `zgemm_` / `zgemv_`: every argument by reference, no hidden string
+// lengths), beside the LU pair (`razor::Lapack`'s types).
+using f_zgemm_fn = void (*)(const char *transa, const char *transb, const int *m, const int *n,
+                            const int *k, const void *alpha, const void *a, const int *lda,
+                            const void *b, const int *ldb, const void *beta, void *c,
+                            const int *ldc);
+using f_zgemv_fn = void (*)(const char *trans, const int *m, const int *n, const void *alpha,
+                            const void *a, const int *lda, const void *x, const int *incx,
+                            const void *beta, void *y, const int *incy);
+
+struct HostLinalg {
+    f_zgemm_fn zgemm = nullptr;
+    f_zgemv_fn zgemv = nullptr;
+    razor::zgetrf_fn getrf = nullptr;
+    razor::zgetrs_fn getrs = nullptr;
+};
+
 struct NumpyLinalg {
     cblas_zgemm_fn zgemm = nullptr;
     cblas_zgemv_fn zgemv = nullptr;
     cblas_zdotu_sub_fn zdotu_sub = nullptr;
     zgesv_fn zgesv = nullptr;
-    // numpy's elementwise complex multiply: fused multiply-add (its
-    // x86-64-v3 and ASIMD loops) or two roundings (its x86-64-v2 loop).
-    bool fused_cmul = true;
+    // When `host.zgemm` is set, the Python run path runs with this table
+    // published, and so does this: every product is `_lapack.matmul`'s ONE
+    // fixed call per shape and every solve `_lapack.solve_stacked`'s getrf +
+    // getrs, all on the host's library; numpy's four entries above go unused
+    // (an empty operand still takes numpy's `@`, as `_lapack` hands it there).
+    HostLinalg host;
 };
-
-// What numpy's dispatcher picks on THIS CPU: x86-64 with AVX2 + FMA3 (the
-// x86-64-v3 target) or aarch64 fuse; an older x86-64 does not.
-bool numpy_fuses_complex_multiply();
 
 // --- the printout ------------------------------------------------------------
 
