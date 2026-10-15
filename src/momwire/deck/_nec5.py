@@ -458,6 +458,10 @@ class Nec5Deck:
     wires: tuple[Nec5Wire, ...] = ()
     ge_flag: int = 0
     ge_second: int = -1
+    # GE's third field (momwire#1488): 1 asks for a ``.GMO`` geometry file
+    # beside the printout, the file 4nec2's NEC-5 package reads its
+    # SEGMENTATION DATA from; 0 (or absent) asks for none.
+    geometry_file: bool = False
     ground: Nec5Ground = Nec5FreeSpace()
     sources: tuple[Nec5Source, ...] = ()
     loads: tuple[Nec5Load, ...] = ()
@@ -721,6 +725,7 @@ class _Nec5Parser:
         self._by_tag: dict[int, Nec5Wire] = {}
         self.ge_flag: int | None = None
         self.ge_second: int = -1
+        self.geometry_file: bool = False
         # Free space until a ground card says otherwise.  Every one of the 49
         # captures carries exactly one GN or GD, so this default is armor
         # rather than a hot path.
@@ -937,9 +942,27 @@ class _Nec5Parser:
         ``GE 0,-1``, NEC-5 accepts it and takes its own default for the
         missing flag, and ``card.i(1)`` already reads a missing field as 0 —
         the same default, so no separate "absent" sentinel is needed.
+
+        A third field asks for a geometry file (momwire#1488): ``GE 0 0 1``
+        is how 4nec2's NEC-5 package asks the engine to write
+        ``<printout stem>.GMO`` (nodes, then elements), which it rebuilds its
+        SEGMENTATION DATA table from.  Absent or 0 asks for nothing.  Any
+        other value refuses by name: the one sample of the file (Ward AE6TY's
+        port, on Dan AC6LA's 4nec2 Example 3) shows what 1 writes and nothing
+        else, and a flag read as "no file" when it meant some other file
+        would be a silent wrong answer.
         """
         self.ge_flag = card.i(0)
         self.ge_second = card.i(1)
+        geometry = card.i(2)
+        if geometry not in (0, 1):
+            raise DeckError(
+                f"GE's third field is {geometry}; this engine serves 0 (no geometry "
+                f"file) and 1 (write the .GMO geometry file beside the printout, "
+                f"as 4nec2's NEC-5 package asks), and no sample output says what "
+                f"any other value writes"
+            )
+        self.geometry_file = geometry == 1
 
     # -- ground ------------------------------------------------------------
     #
@@ -1694,6 +1717,7 @@ class _Nec5Parser:
             wires=tuple(self.wires),
             ge_flag=self.ge_flag,
             ge_second=self.ge_second,
+            geometry_file=self.geometry_file,
             ground=self.ground,
             sources=tuple(self.sources),
             loads=tuple(self.loads),

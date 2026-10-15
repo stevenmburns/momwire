@@ -172,18 +172,31 @@ def _run(
     args: list[str],
     room: Path,
     transport: str | None = None,
+    *,
+    stdin: bytes | None = None,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess:
+    """The launcher as a host runs it. ``stdin`` is what arrives there --
+    nothing (``/dev/null``) unless a test is speaking 4nec2's form, so a
+    test runner's own stdin never reaches the launcher (momwire#1488)."""
     env = {**os.environ, "MOMWIRE_PORTAL_RUNTIME_DIR": str(room)}
     if transport is None:
         env.pop(mech.TRANSPORT_ENV, None)
     else:
         env[mech.TRANSPORT_ENV] = transport
-    return subprocess.run(
+    proc = subprocess.run(
         [str(bundle / name), *args],
         capture_output=True,
-        text=True,
         timeout=300,
         env=env,
+        cwd=cwd,
+        **({"stdin": subprocess.DEVNULL} if stdin is None else {"input": stdin}),
+    )
+    return subprocess.CompletedProcess(
+        proc.args,
+        proc.returncode,
+        proc.stdout.decode(errors="replace"),
+        proc.stderr.decode(errors="replace"),
     )
 
 
@@ -718,6 +731,186 @@ def test_the_c_name_rule_is_the_stdlib_one(client_exe, tmp_path, monkeypatch, na
             assert (_flag_value(args, "--dialect") == "nec4") == is_nec4, args
             if is_nec4:
                 assert _flag_value(args, "--basis") == basis, args
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+# --------------------------------------------------------------------------
+# the 4nec2 front end (momwire#1488)
+# --------------------------------------------------------------------------
+
+EXAMPLE3 = Path(__file__).resolve().parent / "fixtures" / "4nec2_example3"
+# 4nec2's two names, as POSIX spells the same relative paths.
+_NAMES_4NEC2 = b"../out/EXAMPLE3.inp\r\n../out/EXAMPLE3.out\r\n"
+
+
+def _4nec2_room(tmp_path: Path) -> tuple[Path, Path]:
+    """The engine runs in ``bin``; 4nec2's files sit in ``out`` beside it."""
+    engine_dir = tmp_path / "bin"
+    out_dir = tmp_path / "out"
+    engine_dir.mkdir()
+    out_dir.mkdir()
+    (out_dir / "EXAMPLE3.inp").write_bytes((EXAMPLE3 / "EXAMPLE3.inp").read_bytes())
+    return engine_dir, out_dir
+
+
+def _4nec2_oracle(tmp_path: Path, basis: str | None) -> bytes:
+    out = tmp_path / f"oracle-4nec2-{basis or 'default'}.out"
+    kwargs = {} if basis is None else {"basis": basis}
+    _shell.run(EXAMPLE3 / "EXAMPLE3.inp", out, en_optional=True, **kwargs)
+    return out.read_bytes()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ("name", "basis"), [(NEC5_NAME, None), (NEC5_TWIN_NAME, "razor-2p")]
+)
+def test_the_c_client_reads_4nec2s_names_from_stdin(client_exe, tmp_path, name, basis):
+    """``ENGINE < nec2d.tmp`` against a real daemon: the names arrive on
+    stdin with CRLF, relative to the working directory; the deck has no EN;
+    the ``.GMO`` comes back framed and lands beside the printout as Ward's
+    sample, and the printout is the one-shot's to the byte."""
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(name,))
+    room = _room()
+    engine_dir, out_dir = _4nec2_room(tmp_path)
+    expected = _4nec2_oracle(tmp_path, basis)
+    try:
+        proc = _run(bundle, name, [], room, stdin=_NAMES_4NEC2, cwd=engine_dir)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout == ""
+        assert (out_dir / "EXAMPLE3.out").read_bytes() == expected
+        assert (out_dir / "EXAMPLE3.GMO").read_bytes() == (
+            EXAMPLE3 / "EXAMPLE3.GMO"
+        ).read_bytes()
+        assert len(_listening(room)) == 1, _listening(room)
+        assert list(engine_dir.iterdir()) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_rung_three_carries_the_stdin_allowance_and_writes_the_gmo(
+    client_exe, tmp_path
+):
+    """No daemon can start, so the one-shot engine answers: the paths reach
+    it on its command line, and ``--en-optional`` carries what came with
+    them. The engine itself writes the ``.GMO``."""
+    bundle = _bundle(client_exe, _REFUSING_SHIM, names=(NEC5_NAME,))
+    room = _room()
+    engine_dir, out_dir = _4nec2_room(tmp_path)
+    expected = _4nec2_oracle(tmp_path, None)
+    try:
+        proc = _run(bundle, NEC5_NAME, [], room, stdin=_NAMES_4NEC2, cwd=engine_dir)
+        assert proc.returncode == 0, proc.stderr
+        assert (out_dir / "EXAMPLE3.out").read_bytes() == expected
+        assert (out_dir / "EXAMPLE3.GMO").read_bytes() == (
+            EXAMPLE3 / "EXAMPLE3.GMO"
+        ).read_bytes()
+        assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("stdin", "fault"),
+    [
+        (b"", "UNABLE TO OPEN FILE"),
+        (b"\r\n", "UNABLE TO OPEN FILE"),
+        (b"deck.inp\r\n", "UNABLE TO OPEN SECOND FILE"),
+    ],
+)
+def test_the_c_clients_stdin_form_faults_like_its_command_line(
+    client_exe, tmp_path, stdin, fault
+):
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC5_NAME,))
+    room = _room()
+    try:
+        proc = _run(bundle, NEC5_NAME, [], room, stdin=stdin, cwd=tmp_path)
+        assert proc.returncode == 0
+        assert proc.stdout.splitlines() == [fault]
+        assert list(tmp_path.iterdir()) == []
+        assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+@pytest.mark.integration
+def test_a_nec4_named_copy_never_reads_stdin(client_exe, tmp_path):
+    bundle = _bundle(client_exe, _ENGINE_SHIM, names=(NEC4_TWIN_NAME,))
+    room = _room()
+    try:
+        proc = _run(bundle, NEC4_TWIN_NAME, [], room, stdin=_NAMES_4NEC2, cwd=tmp_path)
+        assert proc.returncode == 0
+        assert proc.stdout.splitlines() == ["UNABLE TO OPEN FILE"]
+        assert _listening(room) == []
+    finally:
+        _stop(room)
+        shutil.rmtree(bundle, ignore_errors=True)
+
+
+# A stand-in daemon that answers every deck with one canned framed answer, so
+# the C copy of the stem rule can be held to the stdlib one without a solve.
+_CANNED_GMO = b"     0\r\n     0\r\n"
+_CANNED_PRINTOUT = b" canned printout\r\n"
+_FRAMING_DAEMON = """
+import sys
+import momwire_serve_client as mech
+from momwire.serve._server import serve_forever, take_value
+
+argv = [a for a in sys.argv[1:] if a != "--serve"]
+path, argv = take_value(argv, "--socket")
+log_path, argv = take_value(argv, "--log")
+answer = mech.GMO_FRAME_START + {gmo!r} + mech.GMO_FRAME_END + {printout!r}
+
+def connection(conn, number, log, solve_lock, pool=None):
+    reader = conn.makefile("rb")
+    reader.read()
+    reader.close()
+    conn.sendall(answer)
+
+sys.exit(serve_forever(path, "60", log_path, connection))
+"""
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "printout",
+    [
+        "EX3.out",
+        "EX3.OUT",
+        "a.b.c",
+        "noext",
+        "dir.d/noext",
+        ".out",
+        "..out",
+        "x/...a.b",
+    ],
+)
+def test_the_c_gmo_path_is_the_stdlib_one(client_exe, tmp_path, printout):
+    daemon = tmp_path / "framing_daemon.py"
+    daemon.write_text(
+        _FRAMING_DAEMON.format(gmo=_CANNED_GMO, printout=_CANNED_PRINTOUT)
+    )
+    shim = f'#!/bin/sh\nexec "{sys.executable}" "{daemon}" "$@"\n'
+    bundle = _bundle(client_exe, shim, names=(NEC5_NAME,))
+    room = _room()
+    work = tmp_path / "work"
+    (work / "x").mkdir(parents=True)
+    (work / "dir.d").mkdir()
+    (work / "deck.nec").write_bytes(b"CM\r\nCE\r\nEN\r\n")
+    try:
+        proc = _run(bundle, NEC5_NAME, ["deck.nec", printout], room, cwd=work)
+        assert proc.returncode == 0, proc.stderr
+        assert len(_listening(room)) == 1, _listening(room)
+        assert (work / printout).read_bytes() == _CANNED_PRINTOUT
+        assert (work / mech.gmo_path(printout)).read_bytes() == _CANNED_GMO
     finally:
         _stop(room)
         shutil.rmtree(bundle, ignore_errors=True)

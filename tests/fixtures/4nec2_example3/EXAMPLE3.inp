@@ -1,0 +1,11 @@
+CM Example 3 :	Inverted-V over ground
+CM 		See GetStarted.txt
+CE 
+GW 1 20 -16.38304 0 8.5284713 -0.1 0 20 1.0262e-3
+GW 2 1 -0.1 0 20 0.1 0 20 1.0262e-3
+GW 3 20 0.1 0 20 16.383041 0 8.5284713 1.0262e-3
+GE 0 0 1
+GN 2 0 0 0 14 .006
+EX 0 2 1 0 1 0
+FR 0 1 0 0 3.680
+XQ
