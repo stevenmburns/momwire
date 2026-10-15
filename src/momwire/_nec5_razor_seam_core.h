@@ -150,6 +150,9 @@ struct SeamResult {
     bool chained = false;
     std::vector<StructureOutcome> structures;
     std::vector<Prepared> prepared;
+    // The reader's answers the outcomes above are for (`read_stream`): each
+    // structure's deck and its runs' decks, which the run half reads.
+    StreamRead stream;
 };
 
 // The whole seam, deck text to the solver's arguments: `_shell.render`'s

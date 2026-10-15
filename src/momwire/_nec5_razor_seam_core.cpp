@@ -781,6 +781,7 @@ SeamResult razor_seam(const std::string &text) {
         r.structures.push_back(std::move(so));
         if (stopped) break;
     }
+    r.stream = std::move(s);
     return r;
 }
 
