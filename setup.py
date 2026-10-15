@@ -341,6 +341,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_leggauss_table.h",
     "src/momwire/_nec5_deck_core.h",
     "src/momwire/_nec5_razor_seam_core.h",
+    "src/momwire/_nec5_razor_printout_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -427,6 +428,11 @@ _ACCEL_SOURCES = [
     # Python-free; `_accel_razor_solve.cpp` binds it. Its own TU: O(N)
     # geometry, and nothing calls it on the default path.
     "src/momwire/_nec5_razor_seam_core.cpp",
+    # The run half and the printout writer for razor-2p (unit 3a): deck text
+    # to the printout's bytes, Python-free. Nothing binds it yet (the
+    # standalone driver is its caller); it is built here so every platform's
+    # toolchain compiles it. Its own TU: nothing calls it on the default path.
+    "src/momwire/_nec5_razor_printout_core.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
