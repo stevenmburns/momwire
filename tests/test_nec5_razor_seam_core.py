@@ -331,15 +331,47 @@ CASES = {
         "wire_radius entries must be positive and finite, got [0]",
     ),
     # --- declined by name -----------------------------------------------
-    "declines_tl": (
+    # TL / NT and phantom wires are the structure half's since the networks
+    # stage: the card ends are sites, a phantom's nodes virtual sites.
+    "serves_tl": (
         HEAD
         + DIPOLE
         + "GW 2,3,0.,10.,5.,0.,10.3,5.,.001\n"
         + "GE 0,-1\nFR 0,1,0,0,30.\nTL 1,6,2,2,50.,1.,0.,0.,0.,0.\nEX 0,2,2,0,1.,0.\n"
         + RP
         + "EN\n",
-        "declined",
-        "networks",
+        "served",
+        "",
+    ),
+    "serves_nt_gyrator_on_a_phantom": (
+        HEAD
+        + DIPOLE
+        + "GW 2,3,0.,10000.,0.,0.,10000.05,0.,.001\n"
+        + "GE 0,-1\nFR 0,1,0,0,30.\nNT 2,2,1,6,0.,0.,0.,1.,0.,0.\nEX 0,2,2,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "served",
+        "",
+    ),
+    "refuses_an_interleaved_network_table": (
+        HEAD
+        + DIPOLE
+        + "GW 2,3,0.,10.,5.,0.,10.3,5.,.001\n"
+        + "GE 0,-1\nFR 0,1,0,0,30.\nNT 1,2,2,2,0.,0.,0.,1.,0.,0.\n"
+        + "TL 1,6,2,2,50.,1.,0.,0.,0.,0.\nEX 0,1,6,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "writes an NT card before a TL card",
+    ),
+    "refuses_a_zero_length_line": (
+        HEAD
+        + DIPOLE
+        + "GE 0,-1\nFR 0,1,0,0,30.\nTL 1,6,1,6,50.,0.,0.,0.,0.,0.\nEX 0,1,6,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "writes no length",
     ),
     "declines_sommerfeld": (
         HEAD
@@ -364,15 +396,15 @@ CASES = {
         "declined",
         "front:exact-kernel",
     ),
-    "declines_a_phantom_wire": (
+    "serves_a_phantom_wire": (
         HEAD
         + DIPOLE
         + "GW 2,3,0.,10000.,0.,0.,10000.05,0.,.001\n"
         + "GE 0,-1\nFR 0,1,0,0,30.\nEX 0,1,6,0,1.,0.\n"
         + RP
         + "EN\n",
-        "declined",
-        "phantom-wire",
+        "served",
+        "",
     ),
     "declines_near_field_over_gd": (
         HEAD
