@@ -118,9 +118,10 @@ are other libraries, which is the point of publishing one.
 NOT HERE: numpy's ELEMENTWISE complex multiply. numpy picks its loop by CPU
 at run time, and its x86-64-v3 / AVX-512 / ASIMD loops round
 ``a.re*b.re - a.im*b.im`` once (a fused multiply-add) where its baseline
-x86-64 loop rounds twice; so a product such as ``v * scale`` on the run path
-has CPU-dependent last bits that no published library decides. A host that
-replays a run has to know which loop the embedded numpy took.
+x86-64 loop rounds twice, so no published library decides those bits. The
+run path's complex elementwise products go through :func:`momwire._cmul.cmul`
+instead, which always fuses with numpy's formula: a host that replays a run
+fuses too, whatever loop the embedded numpy would have taken.
 """
 
 from __future__ import annotations

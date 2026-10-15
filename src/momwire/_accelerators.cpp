@@ -41,5 +41,6 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     register_exact_kernel(m);
     register_exact_kernel_point(m);
     register_exact_kernel_series(m);
+    register_cmul(m);
 }
 
