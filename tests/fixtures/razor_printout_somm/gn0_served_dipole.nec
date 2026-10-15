@@ -1,0 +1,10 @@
+CM GN 0: an elevated dipole over Sommerfeld ground (served by Python: declines at construction)
+CE
+GW 1 21 0 -2.5 6 0 2.5 6 0.001
+GE 0
+GN 0 0 0 0 13.0 -50.0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 10 1 1000 0 0 10 0 0
+XQ
+EN
