@@ -63,6 +63,8 @@ import unicodedata
 from dataclasses import replace
 from pathlib import Path
 
+import momwire_serve_client as _mech
+
 from ..deck import DeckError
 from ..deck._nec5 import (
     Nec5Deck,
@@ -70,8 +72,6 @@ from ..deck._nec5 import (
     parse_nec5_shared,
     split_structures,
 )
-import momwire_serve_client as _mech
-
 from ..serve import Seam
 from . import _gmo, _nec4, _printout, _serve
 
