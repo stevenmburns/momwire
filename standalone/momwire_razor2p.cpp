@@ -123,10 +123,10 @@ void log_route(const std::string &route, const std::string &deck) {
     }
 }
 
-// Below this many basis functions a deck's solve runs on one thread: thread
-// start-up and two pools' spinning cost more than the parallel fill saves
-// (dip21: 0.45 ms on one thread, ~4-75 ms on eight). Unit 5 measures where
-// the crossover really is.
+// Below this many basis functions a deck's solve runs on one thread, through
+// the serial copy (no OpenMP runtime): starting threads costs more than the
+// parallel fill saves on a small deck (Rocketlake, dip21: ~0.4 ms answered on
+// one thread, ~0.75 ms on eight). Unit 5 measures where the crossover is.
 constexpr long long SMALL_SOLVE = 256;
 
 // The fallback's thread count (MOMWIRE_THREADS, else every hardware thread).
