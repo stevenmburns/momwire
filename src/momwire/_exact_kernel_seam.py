@@ -38,7 +38,7 @@ from __future__ import annotations
 import numpy as np
 
 from ._bspline_kernels import _ek_axis_groups_coaxial
-from ._vec3 import norm3
+from ._vec3 import dot3, norm3
 
 # What `exact_kernel=` accepts. Public on every serving class (re-exported as
 # `EXACT_KERNEL_CHOICES`), so a consumer can gate on the capability ("auto"
@@ -154,8 +154,11 @@ def group_frame(S, seg_l, seg_r, tangents):
     tangent), each segment's START along it measured from the first
     segment's start, its direction ±1 along it, and its length."""
     axis = tangents[S[0]]
-    x0 = (seg_l[S] - seg_l[S[0]]) @ axis
-    sgn = np.where(tangents[S] @ axis >= 0.0, 1.0, -1.0)
+    # `dot3`, not `@`: a (n, 3) @ (3,) product is numpy's BLAS dgemv, an FMA
+    # chain in the kernel's own order (momwire#1479: one fixed order that a
+    # C++ replay of the exact-kernel plan can match; `_vec3`'s docstring).
+    x0 = dot3(seg_l[S] - seg_l[S[0]], axis)
+    sgn = np.where(dot3(tangents[S], axis) >= 0.0, 1.0, -1.0)
     h = norm3(seg_r[S] - seg_l[S])
     return axis, x0, sgn, h
 
