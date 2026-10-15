@@ -53,6 +53,9 @@ CORE_SOURCES = (
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
+    # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
+    # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents).
+    "_nec5_razor_seam_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -132,7 +135,12 @@ def driver(accel, tmp_path_factory):
         str(PKG),
     ]
     out = tmp_path_factory.mktemp("razor_core")
-    drivers = ("razor_chain_driver", "razor_front_driver", "nec5_deck_driver")
+    drivers = (
+        "razor_chain_driver",
+        "razor_front_driver",
+        "nec5_deck_driver",
+        "nec5_razor_driver",
+    )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
     for src in sources:  # concurrently: the -O3 core TUs dominate the cost
@@ -164,6 +172,7 @@ def test_the_core_includes_no_python_header(driver):
     assert "_razor_solve_core.h" in seen, "the solve prototype's core was not built"
     assert "_razor_front_core.h" in seen, "the front half's core was not built"
     assert "_nec5_deck_core.h" in seen, "the deck reader's core was not built"
+    assert "_nec5_razor_seam_core.h" in seen, "the seam's core was not built"
     for marker in ("Python.h", "pybind11", "numpy"):
         assert marker not in seen, f"a core TU includes {marker}"
 
@@ -220,6 +229,22 @@ def _scipy_openblas():
     if not found:
         pytest.skip("no bundled OpenBLAS beside SciPy (not a wheel install)")
     return found[0]
+
+
+# One BLAS / OpenMP thread on both sides of a byte comparison. OpenBLAS's LU
+# is deterministic at a given thread count but not ACROSS thread counts once
+# the matrix is big enough to thread (measured: a 104-unknown deck gives
+# other bits at 1 and 16 threads, the same on the Python route and in the
+# driver), and the driver inherits the ENVIRONMENT while the in-process
+# library was sized when it loaded -- which can disagree, because a test
+# module may export a width at import (tests/test_momwire.py exports 8).
+_ONE_THREAD = {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
+
+
+def _one_thread():
+    from threadpoolctl import threadpool_limits
+
+    return threadpool_limits(limits=1)
 
 
 def _read_deck(path):
@@ -289,6 +314,7 @@ def test_geometry_to_currents_in_cxx_alone_is_the_python_route(driver, tmp_path)
         [str(driver[0]["razor_front_driver"]), str(DECK), lib, str(tmp_path)],
         capture_output=True,
         text=True,
+        env=dict(os.environ, **_ONE_THREAD),
     )
     assert run.returncode == 0, run.stderr
     meta = (tmp_path / "front_meta.txt").read_text().split()
@@ -307,7 +333,8 @@ def test_geometry_to_currents_in_cxx_alone_is_the_python_route(driver, tmp_path)
     saved = razor._RAZOR_CXX
     razor._RAZOR_CXX = False
     try:
-        sol = RazorSolver(**_read_deck(DECK)).compute_port_solution()
+        with _one_thread():
+            sol = RazorSolver(**_read_deck(DECK)).compute_port_solution()
     finally:
         razor._bspline._lu_solve = orig
         razor._RAZOR_CXX = saved
@@ -366,3 +393,66 @@ def test_the_deck_reader_in_cxx_alone_is_the_python_reader(driver):
         )
         outcomes.add("refused" if parse.startswith("parse !") else "parsed")
     assert outcomes == {"parsed", "refused"}
+
+
+# --- deck text -> currents, no Python ----------------------------------------
+
+
+def _seam_compare_module():
+    spec = importlib.util.spec_from_file_location(
+        "core_split_seam_compare", SPLIT / "seam_compare.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_deck_text_to_currents_in_cxx_alone_is_the_python_seam(driver, tmp_path):
+    """Every NEC deck in tests/fixtures through the reader, the seam's
+    structure half, the front half, the fill and the LU, in a process with no
+    Python: each deck the C++ path answers is answered as the Python seam
+    answers it -- the same route, the same refusal sentence or exception, the
+    same number of preparations, and every solved coefficient the same bytes
+    (both sides on one BLAS thread: `_ONE_THREAD`). A deck it declines is
+    counted, never compared."""
+    sc = _seam_compare_module()
+    lib = _scipy_openblas()
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    run = subprocess.run(
+        [str(driver[0]["nec5_razor_driver"]), lib, str(tmp_path), *map(str, decks)],
+        capture_output=True,
+        env=dict(os.environ, **_ONE_THREAD),
+    )
+    assert run.returncode == 0, run.stderr
+    chunks = run.stdout.decode("ascii").split("== ")[1:]
+    assert len(chunks) == len(decks)
+    routes = {}
+    for i, (path, chunk) in enumerate(zip(decks, chunks, strict=True)):
+        lines = chunk.splitlines()
+        assert lines[0] == str(path)
+        route = lines[1].split(" ", 1)[1]
+        kind = lines[2].split(" ", 1)[1] if " " in lines[2] else ""
+        message = bytes.fromhex(lines[3].split(" ", 1)[1] if " " in lines[3] else "")
+        prepared = [line.split() for line in lines[4:]]
+        routes[route] = routes.get(route, 0) + 1
+        if route == "declined":
+            continue
+        with _one_thread():
+            py = sc.python_seam(path.read_bytes().decode("latin-1"))
+        assert (route, kind, message.decode("utf-8")) == (
+            py["outcome"],
+            py["error_kind"],
+            py["message"],
+        ), path
+        assert len(prepared) == len(py["prepared"]), path
+        for k, (row, ref) in enumerate(zip(prepared, py["prepared"], strict=True)):
+            n, m, info = int(row[2]), int(row[3]), int(row[4])
+            assert info == 0 and ref["X"].shape == (n, m), path
+            x = (tmp_path / f"{i}_{k}_X.bin").read_bytes()
+            assert x == np.ravel(ref["X"], order="F").tobytes(), path
+    # Not vacuous: the C++ path answers decks of every kind it covers.
+    assert routes.get("served", 0) >= 20 and routes.get("refused", 0) >= 5, routes
