@@ -751,14 +751,24 @@ def _4nec2_room(tmp_path: Path) -> tuple[Path, Path]:
     out_dir = tmp_path / "out"
     engine_dir.mkdir()
     out_dir.mkdir()
-    (out_dir / "EXAMPLE3.inp").write_bytes((EXAMPLE3 / "EXAMPLE3.inp").read_bytes())
+    (out_dir / "EXAMPLE3.inp").write_bytes(_4nec2_deck())
     return engine_dir, out_dir
 
 
+def _4nec2_deck() -> bytes:
+    """Example 3 over no ground: Dan's geometry (so Ward's ``.GMO``) without
+    the Sommerfeld fill, which costs ~13 s a solve. The smoke and the slow
+    test in test_eznec_4nec2_1488.py run the deck as sent."""
+    raw = (EXAMPLE3 / "EXAMPLE3.inp").read_bytes()
+    return raw.replace(b"GN 2 0 0 0 14 .006", b"GN -1")
+
+
 def _4nec2_oracle(tmp_path: Path, basis: str | None) -> bytes:
+    deck = tmp_path / "oracle-EXAMPLE3.inp"
+    deck.write_bytes(_4nec2_deck())
     out = tmp_path / f"oracle-4nec2-{basis or 'default'}.out"
     kwargs = {} if basis is None else {"basis": basis}
-    _shell.run(EXAMPLE3 / "EXAMPLE3.inp", out, en_optional=True, **kwargs)
+    _shell.run(deck, out, en_optional=True, **kwargs)
     return out.read_bytes()
 
 
