@@ -128,6 +128,7 @@ def _budget(name, basis):
 BSPLINE_THR_N204_LOSS = 4.759522e-05
 
 
+@pytest.mark.slow
 def test_dans_through_deck_reads_its_copper_loss():
     """thr_n204 on Sin-Galerkin: 4.761e-5 W and 99.32 %. Before the fix the
     same solve read 4.971e-4 W and 92.91 %."""

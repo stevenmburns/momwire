@@ -308,7 +308,12 @@ def _z(monkeypatch, deck, reference=None, **kw):
 
 
 @pytest.mark.parametrize(
-    "ground", [None, pytest.param("pec", marks=pytest.mark.slow), "refl"]
+    "ground",
+    [
+        None,
+        pytest.param("pec", marks=pytest.mark.slow),
+        pytest.param("refl", marks=pytest.mark.slow),
+    ],
 )
 def test_the_ek_hmatrix_on_the_ladder_is_the_flat_one_within_the_derived_tolerance(
     monkeypatch, ground

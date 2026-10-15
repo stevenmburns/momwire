@@ -290,7 +290,8 @@ def _assemble(
 
 def _cases():
     for name in DECKS:
-        marks = [pytest.mark.slow] if name in _HUB else []
+        # buried-dipole's whole-deck fill runs a median 5.7 s on Linux CI.
+        marks = [pytest.mark.slow] if name in (*_HUB, "buried-dipole") else []
         yield pytest.param(name, None, marks=marks, id=f"{name}-256k")
         if name in _THIN:
             for step in (1, 2, 3):

@@ -542,6 +542,7 @@ def test_g921_one_fill_resolves_one_ladder_on_the_buried_path():
         assert np.array_equal(sub, ref[rows, cols]), (rows, cols)
 
 
+@pytest.mark.slow
 @pytest.mark.filterwarnings("ignore:crossing node")
 def test_g921_the_gate_is_not_vacuous_a_uniform_buried_deck_does_tier():
     """The control for the gate above: strip the coarse segment and the same

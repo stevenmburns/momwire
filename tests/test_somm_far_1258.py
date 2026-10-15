@@ -291,15 +291,10 @@ def _kept(rows):
     return [row for row in rows if not 81.5 < row[1] < 90.0 - 1e-9]
 
 
-@pytest.mark.parametrize(
-    "name",
-    [
-        # grazing-near is the slow deck (median 8.8 s on Linux CI);
-        # grazing-far keeps the comparison on every PR.
-        pytest.param(n, marks=[pytest.mark.slow] if n == "grazing-near" else [])
-        for n in DECKS
-    ],
-)
+# Both decks are slow (medians 8.8 s and 8.4 s on Linux CI): the push lane
+# carries the comparison.
+@pytest.mark.slow
+@pytest.mark.parametrize("name", DECKS)
 def test_the_near_field_past_the_table_is_the_licensed_engines(name):
     """razor-2p (NEC-5's formulation twin) against x13, per point. Within 15
     degrees of the horizon -- where the field is the ground wave and the
