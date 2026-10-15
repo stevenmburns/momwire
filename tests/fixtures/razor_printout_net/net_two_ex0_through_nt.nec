@@ -1,0 +1,11 @@
+CM two voltage sources, one of them a network end (an all-EX 0 drive through a network)
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GW 2 21 1.5 0 -2.5 1.5 0 2.5 0.001
+GE 0
+NT 1,11,2,11,0.,0.,0.,0.02,0.,0.
+EX 0 1 11 0 1 0
+EX 0 2 11 0 0 1
+FR 0 1 0 0 28.5 0
+XQ
+EN

@@ -56,6 +56,7 @@
 #include "_nec5_razor_seam_core.h"
 #include "_razor_solve_core.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -99,6 +100,15 @@ struct HostLinalg {
     razor::zgetrs_fn getrs = nullptr;
 };
 
+// SciPy's LAPACK expert driver (`scipy.linalg.lapack.zgesvx`, LP64 Fortran,
+// the three hidden CHARACTER lengths passed): what `networks.MNASystem.solve`
+// calls, outside the `_lapack` seam, so it is SciPy's library on every route.
+using zgesvx_fn = void (*)(const char *fact, const char *trans, const int *n, const int *nrhs,
+                           void *a, const int *lda, void *af, const int *ldaf, int *ipiv,
+                           char *equed, double *r, double *c, void *b, const int *ldb, void *x,
+                           const int *ldx, double *rcond, double *ferr, double *berr, void *work,
+                           double *rwork, int *info, std::size_t, std::size_t, std::size_t);
+
 struct NumpyLinalg {
     cblas_zgemm_fn zgemm = nullptr;
     cblas_zgemv_fn zgemv = nullptr;
@@ -110,6 +120,8 @@ struct NumpyLinalg {
     // getrs, all on the host's library; numpy's four entries above go unused
     // (an empty operand still takes numpy's `@`, as `_lapack` hands it there).
     HostLinalg host;
+    // the network solve's (TL / NT decks); null declines them
+    zgesvx_fn zgesvx = nullptr;
 };
 
 // --- the printout ------------------------------------------------------------

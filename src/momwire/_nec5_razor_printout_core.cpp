@@ -17,6 +17,9 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <complex>
+#include <tuple>
+#include <functional>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -192,6 +195,12 @@ cd np_cmul(cd a, cd b) {
     return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
               std::fma(a.real(), b.imag(), a.imag() * b.real()));
 }
+
+// numpy's complex add / subtract and the fused complex multiply of two
+// arrays; a REAL operand promoted to complex (x, 0).
+inline cd c_add(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }
+inline cd c_sub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }
+inline cd c_mul_real(cd a, double x) { return np_cmul(a, cd(x, 0.0)); }
 
 // Scalar math (`cdouble_ctype_multiply`): never fused.
 cd np_scalar_cmul(cd a, cd b) {
@@ -607,6 +616,13 @@ struct PatternBlockC {  // `PatternBlock`
     double lower_range_mag = 0, lower_range_phase_deg = 0;
 };
 
+struct NetworkRowC {  // `NetworkRow` / `LineRow`
+    bool line = false, crossed = false;
+    Int tag_from, tag_to;
+    long long segment_from = 0, segment_to = 0;
+    double cells[6] = {0, 0, 0, 0, 0, 0};  // NT: Y11, Y12, Y22; TL: |Z0|, length, shunts
+};
+
 struct RunDataC {  // `RunData`, for the decks this unit prints
     long long node_count = 0, wire_element_count = 0, unknown_count = 0;
     double frequency_mhz = 0, wavelength_m = 0;
@@ -618,6 +634,10 @@ struct RunDataC {  // `RunData`, for the decks this unit prints
     double input_power = 0, radiated_power = 0, wire_loss = 0, efficiency = 0;
     std::vector<PatternBlockC> patterns;
     std::vector<std::shared_ptr<NearBlockC>> near_fields;
+    std::vector<NetworkRowC> networks;
+    std::vector<PortRowC> connections;  // STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS
+    bool has_network_loss = false;
+    double network_loss = 0;
 };
 
 // A preparation's solve: `PortSolution.coeffs` (column-major n_basis x
@@ -736,14 +756,201 @@ std::vector<cd> site_loads(const Deck &deck, const Prepared &p) {
 // declines phantom wires, so `_series_loads` leaves `z_load` as it is):
 // `y = t.T @ y_solver @ t`, then one scaled unit probe, or the constrained
 // multi-source drive (`_multi_drive_state`).
+// ============================================================================
+// the networks (`_serve._reduced_state`: `deck._networks.flat_network`,
+// `networks.NetworkReducer.apply_branches`, `MNASystem`, `reduced_ports`)
+// ============================================================================
+
+// numpy scalar negation and the scalar product (scalarmath: never fused)
+inline cd np_neg(cd a) { return cd(-a.real(), -a.imag()); }
+
+// One Group-2 element (`_Group2Element`) as the NEC-5 seam builds them: a
+// chain-matrix row (`terms`) or a termination (`b` = the port, c_v = 1).
+struct G2 {
+    std::vector<std::tuple<int64_t, cd, cd>> terms;  // (node, k, c_v)
+    bool termination = false;
+    int64_t b = -1;
+    cd c_j, e;
+};
+
+// `tl_abcd(z0, length, wavelength)` (vf 1, no loss): (A, B, C, D).
+void tl_abcd(double z0, double length, double wavelength, cd abcd[4]) {
+    const double pi = 3.141592653589793;
+    const double beta = 2.0 * pi / (1.0 * wavelength);
+    const double f_mhz = 299792458.0 / wavelength / 1e6;
+    const double loss = 0.0 * std::sqrt(f_mhz) + 0.0 * f_mhz;  // k1*sqrt(f) + k2*f
+    const double neper_per_db = 1.0 / (20.0 / std::log(10.0));
+    const double feet_per_m = 1.0 / 0.3048;
+    const double alpha = loss * neper_per_db * feet_per_m / 100.0;
+    const cd jb = py_cmul(cd(0.0, 1.0), cd(beta, 0.0));               // `1j * beta`
+    const cd sum(alpha + jb.real(), 0.0 + jb.imag());                  // np.float64 + complex
+    const cd gl = np_scalar_cmul(sum, cd(length, 0.0));                // `* length`
+    const cd sh = std::sinh(gl), ch = std::cosh(gl);                   // glibc csinh / ccosh
+    abcd[0] = ch;
+    abcd[1] = np_scalar_cmul(cd(z0, 0.0), sh);
+    abcd[2] = np_cdiv(sh, cd(z0, 0.0));
+    abcd[3] = ch;
+}
+
+struct NetSolve {
+    std::vector<cd> v_applied, i_port, i_source;
+};
+
+// `_reduced_state(cards, n, voltages, driven, y_eff, wavelength)`.
+NetSolve reduced_state(const Prepared &p, int64_t n, const std::vector<cd> &voltages,
+                       const std::vector<int64_t> &held, const Op &yeff_op,
+                       const std::function<cd(int64_t, int64_t)> &y_eff_at, double wavelength,
+                       const NumpyLinalg &np) {
+    if (np.zgesvx == nullptr) throw Decline{"no zgesvx for the network solve"};
+    // `flat_network`: every port that is not an endpoint (or is held, or
+    // carries a voltage) is a Driven source at its voltage
+    std::set<int64_t> endpoints;
+    for (const SeamCard &c : p.cards) {
+        endpoints.insert(c.site_a);
+        endpoints.insert(c.site_b);
+    }
+    std::vector<int64_t> src_port;
+    std::vector<cd> src_volts;
+    for (int64_t k = 0; k < n; k++) {
+        const cd v = voltages[static_cast<std::size_t>(k)];
+        const bool is_held = std::find(held.begin(), held.end(), k) != held.end();
+        if (!endpoints.count(k) || is_held || v.real() != 0.0 || v.imag() != 0.0) {
+            src_port.push_back(k);
+            src_volts.push_back(v);
+        }
+    }
+    // `apply_branches`: G = Y_real, the cards' branches, the terminations
+    std::vector<cd> g(static_cast<std::size_t>(n * n));
+    for (int64_t i = 0; i < n; i++)
+        for (int64_t j = 0; j < n; j++) g[static_cast<std::size_t>(i * n + j)] = y_eff_at(i, j);
+    auto G = [&](int64_t i, int64_t j) -> cd & { return g[static_cast<std::size_t>(i * n + j)]; };
+    std::vector<G2> elements;
+    std::vector<std::tuple<int64_t, int64_t, cd>> couplings;
+    for (const SeamCard &c : p.cards) {
+        const int64_t a = c.site_a, b = c.site_b;
+        if (c.kind == SeamCard::nt) {
+            if (a == b) throw Decline{"an NT card with both ends on one site"};
+            const cd y11(c.payload[0], c.payload[1]), y12(c.payload[2], c.payload[3]),
+                y22(c.payload[4], c.payload[5]);
+            G(a, a) = c_add(G(a, a), y11);
+            G(a, b) = c_add(G(a, b), y12);
+            G(b, a) = c_add(G(b, a), y12);
+            G(b, b) = c_add(G(b, b), y22);
+            continue;
+        }
+        // `card_branches`' TL: z0 = |F1|, crossed when F1 < 0; then the end shunts
+        const double z0 = std::fabs(c.payload[0]);
+        const bool transposed = c.payload[0] < 0.0;
+        cd abcd[4];
+        tl_abcd(z0, c.payload[1], wavelength, abcd);
+        const cd w_a(1.0, 0.0), w_b = transposed ? cd(-1.0, 0.0) : cd(1.0, 0.0);
+        const int64_t i1 = static_cast<int64_t>(elements.size()), i2 = i1 + 1;
+        G2 e1;  // v_a with its own current's incidence; v_b sensed
+        e1.terms.emplace_back(a, w_a, w_a);
+        e1.terms.emplace_back(b, cd(0.0, 0.0), np_scalar_cmul(np_neg(abcd[0]), w_b));
+        e1.c_j = cd(0.0, 0.0);
+        e1.e = cd(0.0, 0.0);
+        G2 e2;
+        e2.terms.emplace_back(b, cd(-w_b.real(), -w_b.imag()), np_scalar_cmul(np_neg(abcd[2]), w_b));
+        e2.c_j = np_neg(abcd[3]);
+        e2.e = cd(0.0, 0.0);
+        elements.push_back(e1);
+        elements.push_back(e2);
+        couplings.emplace_back(i1, i2, np_neg(abcd[1]));
+        couplings.emplace_back(i2, i1, cd(1.0, 0.0));
+        const cd sa(c.payload[2], c.payload[3]), sb(c.payload[4], c.payload[5]);
+        if (py_ctruth(sa) || std::isnan(sa.real()) || std::isnan(sa.imag())) G(a, a) = c_add(G(a, a), sa);
+        if (py_ctruth(sb) || std::isnan(sb.real()) || std::isnan(sb.imag())) G(b, b) = c_add(G(b, b), sb);
+    }
+    // the terminations, port by port (sorted): `v_k = E`
+    std::map<int64_t, int64_t> termination_of;
+    {
+        std::map<int64_t, cd> emf;
+        for (std::size_t k = 0; k < src_port.size(); k++) emf[src_port[k]] = src_volts[k];
+        for (const auto &kv : emf) {
+            G2 t;
+            t.termination = true;
+            t.b = kv.first;
+            t.c_j = cd(0.0, 0.0);  // `sum([], 0j)`
+            t.e = kv.second;
+            termination_of[kv.first] = static_cast<int64_t>(elements.size());
+            elements.push_back(t);
+        }
+    }
+    // `MNASystem`: A = [[G, B], [C^T, D]], rhs = [0; e]
+    const int64_t m = static_cast<int64_t>(elements.size()), N = n + m;
+    if (N > std::numeric_limits<int>::max()) throw Decline{"a network past the LP64 int range"};
+    std::vector<cd> A(static_cast<std::size_t>(N * N), cd(0.0, 0.0)), rhs(static_cast<std::size_t>(N), cd(0.0, 0.0));
+    auto AT = [&](int64_t i, int64_t j) -> cd & { return A[static_cast<std::size_t>(i * N + j)]; };
+    for (int64_t i = 0; i < n; i++)
+        for (int64_t j = 0; j < n; j++) AT(i, j) = G(i, j);
+    for (int64_t x = 0; x < m; x++) {
+        const G2 &el = elements[static_cast<std::size_t>(x)];
+        const int64_t col = n + x;
+        if (!el.termination) {
+            for (const auto &t : el.terms) {
+                const int64_t node = std::get<0>(t);
+                AT(node, col) = c_add(AT(node, col), std::get<1>(t));
+                AT(col, node) = c_add(AT(col, node), std::get<2>(t));
+            }
+        } else {
+            AT(el.b, col) = c_sub(AT(el.b, col), cd(1.0, 0.0));
+            AT(col, el.b) = c_add(AT(col, el.b), cd(1.0, 0.0));
+        }
+        AT(col, col) = el.c_j;
+        rhs[static_cast<std::size_t>(col)] = el.e;
+    }
+    for (const auto &c : couplings) {
+        const int64_t i = n + std::get<0>(c), k = n + std::get<1>(c);
+        AT(i, k) = c_add(AT(i, k), std::get<2>(c));
+    }
+    // `MNASystem.solve`: scipy's `zgesvx(A, rhs)` (fact 'E', trans 'N'), on
+    // Fortran copies, x the refined solution
+    std::vector<cd> af(static_cast<std::size_t>(N * N)), a_f(static_cast<std::size_t>(N * N)),
+        x(static_cast<std::size_t>(N)), b = rhs, work(static_cast<std::size_t>(2 * N));
+    for (int64_t j = 0; j < N; j++)
+        for (int64_t i = 0; i < N; i++) a_f[static_cast<std::size_t>(i + j * N)] = AT(i, j);
+    std::vector<int> ipiv(static_cast<std::size_t>(N));
+    std::vector<double> r(static_cast<std::size_t>(N)), cc(static_cast<std::size_t>(N)),
+        rwork(static_cast<std::size_t>(2 * N));
+    int nn = static_cast<int>(N), nrhs = 1, info = 0;
+    double rcond = 0.0, ferr = 0.0, berr = 0.0;
+    char fact = 'E', trans = 'N', equed = 'B';
+    np.zgesvx(&fact, &trans, &nn, &nrhs, a_f.data(), &nn, af.data(), &nn, ipiv.data(), &equed,
+              r.data(), cc.data(), b.data(), &nn, x.data(), &nn, &rcond, &ferr, &berr,
+              work.data(), rwork.data(), &info, 1, 1, 1);
+    if ((0 < info && info <= nn) || !std::isfinite(rcond) || rcond < 1e-12)
+        throw Decline{"a singular network (Python raises SingularNetworkError)"};
+    // `reduced_ports`
+    NetSolve out;
+    out.v_applied.assign(x.begin(), x.begin() + n);
+    for (std::size_t k = 0; k < src_port.size(); k++)
+        out.v_applied[static_cast<std::size_t>(src_port[k])] = src_volts[k];
+    out.i_port = mv(np, yeff_op, out.v_applied);
+    out.i_source = out.i_port;
+    for (int64_t port : held)
+        out.i_source[static_cast<std::size_t>(port)] = x[static_cast<std::size_t>(n + termination_of.at(port))];
+    return out;
+}
+
 PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np) {
     const int64_t nc = p.mesh.n_columns(), n = static_cast<int64_t>(p.mesh.sites.size());
     const std::vector<cd> tc = transform_c(p);
     // `t.T @ y_solver`: t.T is the cast copy in its own (Fortran) order
     const CMat r1 = mm(np, Op{tc.data(), n, nc, 1, n}, s.y.op());
-    const CMat y = mm(np, r1.op(), Op{tc.data(), nc, n, n, 1});
+    CMat y = mm(np, r1.op(), Op{tc.data(), nc, n, n, 1});
     const std::vector<cd> z_load = site_loads(deck, p);
-    const std::vector<cd> &z_series = z_load;
+    // `_series_loads`: a load on a VIRTUAL site pins `y` there (its admittance
+    // to the return) and leaves the series path
+    std::vector<cd> z_series = z_load;
+    for (const SeamSite &site : p.mesh.sites) {
+        const cd z = z_load[static_cast<std::size_t>(site.index)];
+        if (site.spelling != SeamSite::virtual_ || !(py_ctruth(z) || std::isnan(z.real()) || std::isnan(z.imag())))
+            continue;
+        y.at(site.index, site.index) = np_cdiv(cd(1.0, 0.0), z);
+        z_series[static_cast<std::size_t>(site.index)] = cd(0.0, 0.0);
+    }
+    const bool cards = !p.cards.empty();
     bool any_series = false;
     for (const cd &z : z_series)
         if (py_ctruth(z) || std::isnan(z.real()) || std::isnan(z.imag())) any_series = true;
@@ -768,7 +975,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             xt = np_solve_matrix(np, lt, yt);
             yeff_op = Op{xt.v.data(), n, n, 1, n};
         }
-        const auto y_eff_at = [&](int64_t i, int64_t j) {
+        const std::function<cd(int64_t, int64_t)> y_eff_at = [&](int64_t i, int64_t j) {
             return any_series ? xt.at(j, i) : y.at(i, j);
         };
         std::vector<int64_t> driven;
@@ -799,8 +1006,20 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
         if (!i_sites.empty()) {
             const int64_t nd = static_cast<int64_t>(driven.size());
             CMat m(nd, nd);
-            for (int64_t i = 0; i < nd; i++)
-                for (int64_t j = 0; j < nd; j++) m.at(i, j) = y_eff_at(driven[i], driven[j]);
+            if (!cards) {
+                for (int64_t i = 0; i < nd; i++)
+                    for (int64_t j = 0; j < nd; j++) m.at(i, j) = y_eff_at(driven[i], driven[j]);
+            } else {
+                // the map measured a column at a time through the SAME reducer
+                for (int64_t column = 0; column < nd; column++) {
+                    std::vector<cd> probe(static_cast<std::size_t>(n), cd(0.0, 0.0));
+                    probe[static_cast<std::size_t>(driven[column])] = cd(1.0, 0.0);
+                    const NetSolve r = reduced_state(p, n, probe, driven, yeff_op, y_eff_at,
+                                                     p.wavelength, np);
+                    for (int64_t i = 0; i < nd; i++)
+                        m.at(i, column) = r.i_source[static_cast<std::size_t>(driven[i])];
+                }
+            }
             std::vector<cd> rhs;
             for (int64_t r : i_rows) rhs.push_back(spec[static_cast<std::size_t>(r)]);
             if (!v_sites.empty()) {
@@ -820,11 +1039,23 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             const std::vector<cd> vi = np_solve(np, mii, rhs);
             for (std::size_t k = 0; k < i_sites.size(); k++) volts[static_cast<std::size_t>(i_sites[k])] = vi[k];
         }
-        st.v_applied = volts;
-        st.i_port = mv(np, yeff_op, st.v_applied);
-        st.i_source = st.i_port;
-        for (std::size_t k = 0; k < i_sites.size(); k++)
-            st.i_source[static_cast<std::size_t>(i_sites[k])] = spec[static_cast<std::size_t>(i_rows[k])];
+        if (!cards) {
+            st.v_applied = volts;
+            st.i_port = mv(np, yeff_op, st.v_applied);
+            st.i_source = st.i_port;
+        } else {
+            const NetSolve r = reduced_state(p, n, volts, driven, yeff_op, y_eff_at, p.wavelength, np);
+            st.v_applied = r.v_applied;
+            st.i_port = r.i_port;
+            st.i_source = r.i_source;
+        }
+        if (!i_sites.empty()) {
+            for (std::size_t k = 0; k < i_sites.size(); k++)
+                st.i_source[static_cast<std::size_t>(i_sites[k])] = spec[static_cast<std::size_t>(i_rows[k])];
+        } else if (cards) {
+            for (std::size_t k = 0; k < v_sites.size(); k++)
+                st.v_applied[static_cast<std::size_t>(v_sites[k])] = spec[static_cast<std::size_t>(v_rows[k])];
+        }
         st.v_gap.resize(static_cast<std::size_t>(n));
         for (int64_t k = 0; k < n; k++)
             st.v_gap[k] = st.v_applied[k] - np_cmul(z_series[k], st.i_port[k]);
@@ -843,22 +1074,49 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             const cd prod = np_cmul(z_series[i], y.at(i, j));
             loaded.at(i, j) = cd((i == j ? 1.0 : 0.0) + prod.real(), 0.0 + prod.imag());
         }
-    std::vector<cd> v_gap = np_solve(np, loaded, probe);
-    std::vector<cd> i_port = mv(np, y.op(), v_gap);
-    std::vector<cd> v_applied(static_cast<std::size_t>(n));
-    for (int64_t k = 0; k < n; k++) v_applied[k] = v_gap[k] + np_cmul(z_series[k], i_port[k]);
+    std::vector<cd> v_gap, i_port, v_applied(static_cast<std::size_t>(n)), i_source;
+    if (!cards) {
+        v_gap = np_solve(np, loaded, probe);
+        i_port = mv(np, y.op(), v_gap);
+        for (int64_t k = 0; k < n; k++) v_applied[k] = v_gap[k] + np_cmul(z_series[k], i_port[k]);
+        i_source = i_port;
+    } else {
+        // `y_eff = y`, or `solve(loaded.T, y.T).T` (a transposed view)
+        CMat xt;
+        Op yeff_op = y.op();
+        if (any_series) {
+            CMat lt(n, n), yt(n, n);
+            for (int64_t i = 0; i < n; i++)
+                for (int64_t j = 0; j < n; j++) {
+                    lt.at(j, i) = loaded.at(i, j);
+                    yt.at(i, j) = y.at(j, i);
+                }
+            xt = np_solve_matrix(np, lt, yt);
+            yeff_op = Op{xt.v.data(), n, n, 1, n};
+        }
+        const std::function<cd(int64_t, int64_t)> y_eff_at = [&](int64_t i, int64_t j) {
+            return any_series ? xt.at(j, i) : y.at(i, j);
+        };
+        const NetSolve r = reduced_state(p, n, probe, {driven}, yeff_op, y_eff_at, p.wavelength, np);
+        v_applied = r.v_applied;
+        i_port = r.i_port;
+        i_source = r.i_source;
+        v_gap.resize(static_cast<std::size_t>(n));
+        for (int64_t k = 0; k < n; k++) v_gap[k] = v_applied[k] - np_cmul(z_series[k], i_port[k]);
+    }
     const cd drive(source.drive_re, source.drive_im);
     const cd scale = source.kind.is_zero()
                          ? drive
-                         : py_cdiv(drive, i_port[static_cast<std::size_t>(driven)]);
+                         : py_cdiv(drive, i_source[static_cast<std::size_t>(driven)]);
     for (int64_t k = 0; k < n; k++) {
         v_applied[k] = np_cmul(v_applied[k], scale);
         v_gap[k] = np_cmul(v_gap[k], scale);
         i_port[k] = np_cmul(i_port[k], scale);
+        i_source[k] = np_cmul(i_source[k], scale);
     }
     st.v_applied = v_applied;
     st.v_gap = v_gap;
-    st.i_source = i_port;
+    st.i_source = i_source;
     st.i_port = i_port;
     return st;
 }
@@ -931,11 +1189,6 @@ cd py_csqrt(cd z) {
     return cd(d, std::copysign(sq, z.imag()));
 }
 
-// numpy's complex add / subtract and the fused complex multiply of two
-// arrays; a REAL operand promoted to complex (x, 0).
-inline cd c_add(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }
-inline cd c_sub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }
-inline cd c_mul_real(cd a, double x) { return np_cmul(a, cd(x, 0.0)); }
 
 // `np.linspace(a, b, num)` for 3-vectors (`num >= 2`): numpy 2.5's form,
 // including the step-zero branch, which applies to EVERY coordinate as soon
@@ -1561,8 +1814,6 @@ NearBlockC near_block(const Request &rq, const razor::Front &fr,
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
                 std::vector<RunArrays> *arrays) {
     const razor::Front &fr = *p.front;
-    for (const SeamSite &site : p.mesh.sites)
-        if (site.spelling == SeamSite::virtual_) throw Decline{"phantom wires not yet in the C++ run half"};
     const PortState st = port_state(deck, p, s, np);
     // `coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)`
     const int64_t nc = p.mesh.n_columns(), ns = static_cast<int64_t>(p.mesh.sites.size());
@@ -1603,8 +1854,96 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         data.loads.push_back(row);
     }
     // the source rows, deck order
+    // `_gyrator_drives`: an EX 0 on a phantom node behind an NT gyrator
+    // (Y11 = Y22 = 0, Y12 = jB, |B| >= 1e-12) reports at the node the gyrator
+    // drives, with the card's `-Y12 * V` as its current (momwire#1134).
+    struct Gyrator {
+        Node source_at, real_at;
+        cd current;
+    };
+    std::vector<Gyrator> gyrators;
+    {
+        const auto is_phantom = [&](const Int &tag) {
+            for (const Int &t : p.phantom_tags)
+                if (t == tag) return true;
+            return false;
+        };
+        std::vector<const Network *> candidates;
+        for (const Network &net : deck.networks) {
+            const bool y11 = net.y11[0] != 0.0 || net.y11[1] != 0.0;
+            const bool y22 = net.y22[0] != 0.0 || net.y22[1] != 0.0;
+            if (!(y11 || y22) && !(net.y12[0] != 0.0) && std::fabs(net.y12[1]) >= 1e-12)
+                candidates.push_back(&net);
+        }
+        if (!candidates.empty() && !p.phantom_tags.empty()) {
+            const auto card_count = [&](const Node &at) {
+                long long n = 0;
+                for (const TransmissionLine &t : deck.transmission_lines)
+                    n += same_node(t.end_a, at) + same_node(t.end_b, at);
+                for (const Network &x : deck.networks) n += same_node(x.end_a, at) + same_node(x.end_b, at);
+                return n;
+            };
+            const auto drives_at = [&](const Node &at) {
+                std::vector<const Source *> out;
+                for (const Source &src : deck.sources)
+                    if (same_node(src.at, at)) out.push_back(&src);
+                return out;
+            };
+            std::vector<Node> claimed;
+            for (const Network *net : candidates) {
+                std::vector<Node> on_phantom;
+                for (const Node &at : {net->end_a, net->end_b})
+                    if (is_phantom(at.tag)) on_phantom.push_back(at);
+                if (on_phantom.size() != 1) continue;
+                const Node at = on_phantom[0];
+                const Node real = same_node(at, net->end_a) ? net->end_b : net->end_a;
+                bool taken = !drives_at(real).empty();
+                for (const Node &c : claimed) taken = taken || same_node(c, real);
+                if (taken) continue;
+                const std::vector<const Source *> held = drives_at(at);
+                if (held.size() != 1 || card_count(at) != 1) continue;
+                const Source &src = *held[0];
+                const cd drive(src.drive_re, src.drive_im);
+                if (!src.kind.is_zero() || !py_ctruth(drive)) continue;
+                claimed.push_back(real);
+                bool seen = false;  // `found[at] = ...` (a dict: the last one wins)
+                for (Gyrator &g : gyrators)
+                    if (same_node(g.source_at, at)) {
+                        g = Gyrator{at, real, py_cmul(cd(-net->y12[0], -net->y12[1]), drive)};
+                        seen = true;
+                    }
+                if (!seen) gyrators.push_back(Gyrator{at, real, py_cmul(cd(-net->y12[0], -net->y12[1]), drive)});
+            }
+        }
+    }
+    const auto port_row_at = [&](const Node &at, cd voltage, cd current) {
+        PortRowC row;
+        row.tag = at.tag;
+        const Int node = at.node < Int(1) ? Int(1) : at.node;
+        row.segment = Int(first_element(deck, at.tag)) + node - Int(1);
+        row.end_index = at.node.is_zero() ? 2 : 1;
+        row.voltage = voltage;
+        row.current = current;
+        row.impedance = ratio(voltage, current);
+        row.admittance = ratio(current, voltage);
+        row.power = 0.5 * py_cmul(voltage, std::conj(current)).real();
+        return row;
+    };
     std::vector<double> powers;
     for (const Source &src : deck.sources) {
+        const Gyrator *gy = nullptr;
+        for (const Gyrator &g : gyrators)
+            if (same_node(g.source_at, src.at)) gy = &g;
+        if (gy != nullptr) {
+            int64_t real_index = -1;
+            for (const SeamSite &site : p.mesh.sites)
+                if (same_node(site.at, gy->real_at)) real_index = site.index;
+            const PortRowC row = port_row_at(gy->real_at, st.v_applied[static_cast<std::size_t>(real_index)],
+                                             gy->current);
+            powers.push_back(row.power);
+            data.sources.push_back(row);
+            continue;
+        }
         int64_t index = -1;
         for (const SeamSite &site : p.mesh.sites)
             if (same_node(site.at, src.at)) index = site.index;
@@ -1642,7 +1981,43 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         watts.push_back(st.z_load[k].real() * (mag * mag));
     }
     const double p_load = 0.5 * (0.0 + np_pairwise(watts.data(), static_cast<int64_t>(watts.size())));
-    const double p_radiated = (p_in - 0.0) - p_load;
+    // `_connection_points(cards)`: each card's end A then end B, a site once
+    std::vector<int64_t> points;
+    for (const SeamCard &c : p.cards)
+        for (int64_t site : {c.site_a, c.site_b})
+            if (std::find(points.begin(), points.end(), site) == points.end()) points.push_back(site);
+    std::vector<double> network_powers;
+    for (int64_t index : points) {
+        const SeamSite &site = p.mesh.sites[static_cast<std::size_t>(index)];
+        const PortRowC row = port_row_at(site.at, st.v_applied[static_cast<std::size_t>(index)],
+                                         st.i_port[static_cast<std::size_t>(index)]);
+        network_powers.push_back(row.power);
+        data.connections.push_back(row);
+    }
+    // `p_network = -sum(row.power for row in connections)` (0 with none)
+    const double p_network = network_powers.empty() ? 0.0 : -py_sum(network_powers);
+    const double p_radiated = (p_in - p_network) - p_load;
+    if (p_network > 1e-9 * std::max(p_in, 1.0)) {
+        data.has_network_loss = true;
+        data.network_loss = p_network;
+    }
+    for (const SeamCard &c : p.cards) {
+        NetworkRowC row;
+        row.line = c.kind == SeamCard::tl;
+        row.tag_from = c.tag_from;
+        row.segment_from = c.segment_from;
+        row.tag_to = c.tag_to;
+        row.segment_to = c.segment_to;
+        if (row.line) {
+            row.cells[0] = std::fabs(c.payload[0]);
+            row.cells[1] = c.payload[1];
+            for (int k = 0; k < 4; k++) row.cells[2 + k] = c.payload[2 + k];
+            row.crossed = c.payload[0] < 0.0;
+        } else {
+            std::copy(c.payload, c.payload + 6, row.cells);
+        }
+        data.networks.push_back(row);
+    }
 
     // `_element_geometry`
     const double wavelength = p.wavelength;
@@ -1701,12 +2076,15 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     const cd jw = py_cmul(cd(0.0, 1.0), cd(p.omega, 0.0));
     for (std::size_t index = 0; index < p.mesh.element_of.size(); index++) {
         const auto &pe = p.mesh.element_of[index];
-        const std::vector<cd> &k = knots[static_cast<std::size_t>(pe.first)];
-        const int64_t el = pe.second;
-        const cd sum(k[el].real() + k[el + 1].real(), k[el].imag() + k[el + 1].imag());
-        const cd current = np_scalar_cmul(cd(0.5, 0.0), sum);
-        const cd sl = slopes[static_cast<std::size_t>(pe.first)][static_cast<std::size_t>(el)];
-        const cd charge = np_cdiv(cd(-sl.real(), -sl.imag()), jw);
+        cd current(0.0, 0.0), charge(0.0, 0.0);  // a PHANTOM element's row is exactly 0
+        if (pe.first >= 0) {
+            const std::vector<cd> &k = knots[static_cast<std::size_t>(pe.first)];
+            const int64_t el = pe.second;
+            const cd sum(k[el].real() + k[el + 1].real(), k[el].imag() + k[el + 1].imag());
+            current = np_scalar_cmul(cd(0.5, 0.0), sum);
+            const cd sl = slopes[static_cast<std::size_t>(pe.first)][static_cast<std::size_t>(el)];
+            charge = np_cdiv(cd(-sl.real(), -sl.imag()), jw);
+        }
         ElementRowC row;
         row.element = static_cast<long long>(index) + 1;
         row.tag = tags[index];
@@ -2093,8 +2471,52 @@ Lines near_lines(const NearBlockC &block) {
     return lines;
 }
 
+// `_printout._network_data`: one heading, a sub-table per run of one row
+// kind, a blank between runs; `_network_row`: I9 + 3 I6, a blank, six E14.4,
+// and a TL's line type.
+Lines network_data(const RunDataC &data) {
+    const Lines nt_columns = {
+        "      - FROM -    - TO -                          -  -  ADMITTANCE "
+        "MATRIX ELEMENTS (MHOS)  -  -",
+        "      TAG   SEG.   TAG  SEG.             (ONE,ONE)                   "
+        "(ONE,TWO)                   (TWO,TWO)",
+        "      NO.   NO.   NO.   NO.        REAL          IMAG.         REAL   "
+        "       IMAG.         REAL          IMAG."};
+    const Lines tl_columns = {
+        "      - FROM -    - TO -           TRANSMISSION LINE               "
+        "-  -  SHUNT ADMITTANCES (MHOS)  -  -              LINE",
+        "      TAG  SEG.   TAG  SEG.      IMPEDANCE      LENGTH            "
+        "- END ONE -                 - END TWO -            TYPE",
+        "      NO.   NO.   NO.   NO.         OHMS        METERS         REAL   "
+        "       IMAG.         REAL          IMAG."};
+    const auto rjust = [](const std::string &t, std::size_t w) {
+        return t.size() >= w ? t : std::string(w - t.size(), ' ') + t;
+    };
+    Lines lines = {sp(44) + "- - - NETWORK DATA - - -", ""};
+    for (std::size_t i = 0; i < data.networks.size(); i++) {
+        const NetworkRowC &r = data.networks[i];
+        if (i == 0 || data.networks[i - 1].line != r.line) {
+            if (i) lines.push_back("");
+            add(lines, r.line ? tl_columns : nt_columns);
+        }
+        std::string line = rjust(r.tag_from.str(), 9) + rjust(std::to_string(r.segment_from), 6) +
+                           rjust(r.tag_to.str(), 6) + rjust(std::to_string(r.segment_to), 6) + " ";
+        for (double v : r.cells) line += e(v, 14, 4);
+        if (r.line) line += std::string("   ") + (r.crossed ? "CROSSED" : "STRAIGHT");
+        lines.push_back(line);
+    }
+    return lines;
+}
+
 Lines run_sections(const RunDataC &data) {
     Lines body;
+    if (!data.connections.empty()) {
+        body.push_back(sp(27) + "- - - STRUCTURE EXCITATION DATA AT NETWORK CONNECTION POINTS - - -");
+        body.push_back("");
+        add(body, PORT_COLUMNS);
+        for (const PortRowC &r : data.connections) body.push_back(port_row(r));
+        blanks(body, 3);
+    }
     if (!data.sources.empty()) {
         body.push_back(sp(42) + "- - - ANTENNA INPUT PARAMETERS - - -");
         body.push_back("");
@@ -2127,8 +2549,9 @@ Lines run_sections(const RunDataC &data) {
         return ind + ljust(label, 14) + "=" + e(v, 11, 4) + " WATTS";
     };
     add(body, {sp(40) + "- - - POWER BUDGET - - -", "", watts("INPUT POWER", data.input_power),
-               watts("RADIATED POWER", data.radiated_power), watts("WIRE LOSS", data.wire_loss),
-               ind + ljust("EFFICIENCY", 14) + "=" + f(data.efficiency, 7, 2) + " PERCENT"});
+               watts("RADIATED POWER", data.radiated_power), watts("WIRE LOSS", data.wire_loss)});
+    if (data.has_network_loss) body.push_back(watts("NETWORK LOSS", data.network_loss));
+    body.push_back(ind + ljust("EFFICIENCY", 14) + "=" + f(data.efficiency, 7, 2) + " PERCENT");
     blanks(body, 3);
     for (const auto &near : data.near_fields) {
         add(body, near_lines(*near));
@@ -2157,6 +2580,10 @@ void tail_sections(Lines &body, const RunDataC &first) {
     blanks(body, 3);
     add(body, timing());
     blanks(body, 3);
+    if (!first.networks.empty()) {
+        add(body, network_data(first));
+        blanks(body, 3);
+    }
 }
 
 Lines closing_lines(bool closing) {
@@ -2358,10 +2785,7 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
 
 // Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH (LD 2 / 3 / 5,
 // networks, a Sommerfeld ground and a near field over GD decline in the seam).
-void check_scope(const Deck &run) {
-    if (!run.transmission_lines.empty() || !run.networks.empty())
-        throw Decline{"networks not yet in the C++ run half"};
-}
+void check_scope(const Deck &run) { (void)run; }
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,
              const NumpyLinalg &np) {
