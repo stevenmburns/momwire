@@ -1,0 +1,11 @@
+CM a current source spelled as EZNEC writes it: an EX 0 on a parked wire behind an NT gyrator
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GW 2 3 0 2000 0 0 2000.05 0 0.001
+GE 0
+LD 4,2,2,0,1.E+10,0.
+NT 2,2,1,11,0.,0.,0.,1.,0.,0.
+EX 0 2 2 0 1.414214 0
+FR 0 1 0 0 28.5 0
+XQ
+EN

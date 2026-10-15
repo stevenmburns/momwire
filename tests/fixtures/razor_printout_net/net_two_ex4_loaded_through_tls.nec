@@ -1,0 +1,17 @@
+CM two loaded verticals over GN 1, each fed by an EX 4 through its own TL from a parked common node
+CE
+GW 1 12 0 0 0 0 0 2.5 0.0015
+GW 2 12 2 0 0 2 0 2.5 0.0015
+GW 3 3 0 2000 5 0 2000.05 5 0.001
+GE 1
+GN 1
+LD 0,1,1,0,18.,0.,0.
+LD 0,2,1,0,18.,0.,0.
+LD 4,3,2,0,1.E+10,0.
+TL 3,2,1,1,50.,2.6,0.,0.,0.,0.
+TL 3,2,2,1,50.,2.9,0.,0.,0.,0.
+EX 4 1 1 0 1.414214 0
+EX 4 2 1 0 0 1.414214
+FR 0 1 0 0 28.0 0
+XQ
+EN
