@@ -593,8 +593,8 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
         for (const auto &e : g) members.append(end_label(e));
         junctions.append(members);
     }
-    static const char *spell[] = {"gap", "node"};
-    static const char *ends[] = {"start", "end", "interior"};
+    static const char *spell[] = {"gap", "node", "virtual"};
+    static const char *ends[] = {"start", "end", "interior", "none"};
     for (const auto &s : m.sites) {
         py::dict x;
         x["at"] = node_tuple(s.at);
@@ -634,6 +634,18 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
     py::list src;
     for (const auto &n : p.source_sites) src.append(node_tuple(n));
     d["source_sites"] = src;
+    py::list cards;
+    for (const auto &c : p.cards) {
+        py::list payload;
+        for (double v : c.payload) payload.append(v);
+        cards.append(py::make_tuple(c.kind == mw::nec5::SeamCard::tl ? "TL" : "NT", py::tuple(payload),
+                                    c.site_a, c.site_b, py::int_(py::str(c.tag_from.str())),
+                                    c.segment_from, py::int_(py::str(c.tag_to.str())), c.segment_to));
+    }
+    d["cards"] = cards;
+    py::list phantom;
+    for (const auto &t : p.phantom_tags) phantom.append(py::int_(py::str(t.str())));
+    d["phantom_tags"] = phantom;
     return d;
 }
 

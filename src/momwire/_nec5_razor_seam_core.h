@@ -89,9 +89,12 @@ struct SeamPiece {  // `_Piece` (never cut here: one per GW)
 
 struct SeamSite {  // `_Site`
     Node at;
-    enum Spelling { gap, node } spelling = gap;
+    // "virtual": a node on a PHANTOM wire (`_phantom_tags`, momwire#1139), a
+    // deck port with no momwire port under it: piece -1, end "none", no
+    // column, no weight.
+    enum Spelling { gap, node, virtual_ } spelling = gap;
     long long piece = -1;
-    enum EndKind { at_start, at_end, interior } end = at_start;
+    enum EndKind { at_start, at_end, interior, none } end = at_start;
     double sign = 0, arclength = 0;
     bool contact = false;
     long long index = -1, column = -1;
@@ -107,6 +110,18 @@ struct SeamMesh {  // `_Mesh`
     std::vector<long long> feeds, gaps;                     // site indices
     std::vector<std::pair<long long, long long>> element_of;  // (piece, element)
     long long n_columns() const { return static_cast<long long>(feeds.size() + gaps.size()); }
+};
+
+// One `TL` / `NT` card resolved onto sites (`_Card`): the six fields in NEC's
+// order (`NetworkCard.payload`: a TL's signed Z0, its RESOLVED length and its
+// two shunt admittances; an NT's Y11, Y12, Y22), the two sites it attaches
+// to, and what its NETWORK DATA row prints (`LineRow` / `NetworkRow`).
+struct SeamCard {
+    enum Kind { tl, nt } kind = tl;
+    double payload[6] = {0, 0, 0, 0, 0, 0};
+    long long site_a = -1, site_b = -1;
+    Int tag_from, tag_to;
+    long long segment_from = 0, segment_to = 0;  // signed: negative for a "-1" node
 };
 
 struct SeamStructure {  // `Structure`: the STRUCTURE SPECIFICATION counts
@@ -128,6 +143,8 @@ struct Prepared {
     double medium_eps_r = 0, medium_sigma = 0;
     double medium_eps_c[2] = {0, 0};
     std::vector<Node> source_sites;  // the drive's addresses, deck order
+    std::vector<SeamCard> cards;     // `_cards`: lines, then networks, deck order
+    std::vector<Int> phantom_tags;   // `_phantom_tags`, deck order
 };
 
 struct RunOutcome {
