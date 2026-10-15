@@ -159,7 +159,9 @@ def run(argv: list[str]) -> int:
             rest = rest[1:]
         else:
             break
-    return main(rest, basis=basis, dialect=dialect, en_optional=en_optional)
+    if en_optional:
+        return main(rest, basis=basis, dialect=dialect, en_optional=True)
+    return main(rest, basis=basis, dialect=dialect)
 
 
 if __name__ == "__main__":

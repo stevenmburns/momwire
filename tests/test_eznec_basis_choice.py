@@ -420,6 +420,38 @@ def test_a_leading_basis_flag_one_shots_a_twin_through_the_engine(monkeypatch):
     }
 
 
+@pytest.mark.parametrize(
+    "flags",
+    [
+        ["--en-optional", "--basis", "razor-2p"],
+        ["--basis", "razor-2p", "--en-optional"],
+    ],
+)
+def test_the_stdin_allowance_rides_the_one_shot_as_a_leading_flag(monkeypatch, flags):
+    """momwire#1488: a launcher that read 4nec2's two names from stdin runs
+    this one-shot with them on its command line, and ``--en-optional``
+    carries the allowance that came with them, in any order among the
+    machinery flags and never after the paths."""
+    entry = _entry_module()
+    seen = {}
+    monkeypatch.setattr(
+        entry,
+        "main",
+        lambda argv, *, basis, dialect, en_optional=False: (
+            seen.update(argv=argv, basis=basis, en_optional=en_optional) or 0
+        ),
+    )
+    assert entry.run(["momwire-eznec-engine.exe", *flags, "d.inp", "d.out"]) == 0
+    assert seen == {
+        "argv": ["d.inp", "d.out"],
+        "basis": "razor-2p",
+        "en_optional": True,
+    }
+    assert entry.run(["momwire-eznec-engine.exe", "d.inp", "--en-optional"]) == 0
+    assert seen["argv"] == ["d.inp", "--en-optional"]
+    assert seen["en_optional"] is False
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("prog", ["momwire-eznec-", "momwire-eznec-rzaor.exe"])
 def test_a_name_that_matches_no_basis_refuses_in_the_printout(prog):
