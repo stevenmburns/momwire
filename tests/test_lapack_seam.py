@@ -9,14 +9,15 @@ Three gates:
    zgetrs, which are the library `scipy.linalg.lu_factor` calls -- gives the
    default's bits wherever the default is scipy's getrf + getrs, the
    per-slice getrf + getrs answer where it is numpy's gesv (another library),
-   and a counter proving the host route ran. End to end, the NEC-5 printouts
-   of four decks under five bases are byte-identical with and without it.
+   and a counter proving the host route ran. End to end, NEC-5 and NEC-2
+   printouts over five bases are byte-identical with and without it.
 3. A SOURCE SCAN: no module under `src/momwire` calls a dense LU / solve /
    inverse directly any more, apart from an explicit allowlist that says why.
 """
 
 import ast
 import ctypes
+import io
 import re
 import sys
 import warnings
@@ -187,6 +188,7 @@ def test_default_route_raises_and_warns_as_the_replaced_call(no_host):
         assert _outcome(seam, *args) == _outcome(ref, *args), name
 
 
+@pytest.mark.integration
 def test_default_route_on_moment_matrices_from_real_decks(no_host, monkeypatch):
     """Z matrices captured at the seam during real solves, then re-factored
     through the seam and through scipy directly: the same bits."""
@@ -200,7 +202,7 @@ def test_default_route_on_moment_matrices_from_real_decks(no_host, monkeypatch):
         return real_factor(a, *args, **kw)
 
     monkeypatch.setattr(_lapack, "lu_factor", spy)
-    for deck, basis in (("0033", "bspline"), ("0035", "sinusoidal")):
+    for deck, basis in (("0033", "bspline"), ("0035", "sinusoidal-galerkin")):
         (path,) = DECKS.glob(f"{deck}_*.nec")
         _shell.render(path.read_text(), basis=basis)
     monkeypatch.setattr(_lapack, "lu_factor", real_factor)
@@ -340,37 +342,66 @@ def test_a_bad_table_is_refused_in_plain_words(monkeypatch):
         _lapack.lu_factor(a)
 
 
-_TIME = re.compile(r"TIME|[Tt]ime|ELAPSED|[Ee]lapsed|\bsec\b|seconds")
+_TIME = re.compile(r"TIME|[Tt]ime|ELAPSED|[Ee]lapsed|\bm?sec\b|seconds")
 
 
 def _masked(text):
     return [line for line in text.splitlines() if not _TIME.search(line)]
 
 
-# Decks chosen for the sites they reach: a free-space dipole (the plain
-# solve), elevated radials (junctions: the KCL Schur solve), a network deck
-# (the port-space solves of the NEC-5 seam), and a five-element Yagi.
-E2E_DECKS = ("0010", "0033", "0012", "0035")
-E2E_BASES = ("bspline", "razor-2p", "sinusoidal", "sinusoidal-galerkin", "pulse")
+# The NEC-5 render serves the knot bases only: every deck in that dialect
+# names a node, which the point-matched families (sinusoidal, pulse) refuse
+# by design. They answer through the NEC-2 portal instead. Decks chosen for
+# the sites they reach: a dipole (the plain solve), junctions (the KCL Schur
+# solve), networks and two sources (the port-space solves of both seams).
+NEC5_DECKS = ("0010", "0033", "0012", "0035")
+NEC5_BASES = ("bspline", "razor-2p", "sinusoidal-galerkin")
+NEC2_DECKS = (
+    "dipole_free_space",
+    "catalog_dipoles_invvee",
+    "dipole_nt_network",
+    "two_source_sensor_lines",
+)
+NEC2_BASES = ("bspline", "sinusoidal", "sinusoidal-galerkin", "pulse")
+NEC2_DIR = Path(__file__).resolve().parent / "fixtures" / "nec_portal"
 
 
-def test_fake_host_printouts_are_byte_identical_end_to_end(monkeypatch):
+def _printouts():
     from momwire.eznec import _shell
+    from momwire.portal import _portal
 
+    out = {}
+    for d in NEC5_DECKS:
+        text = next(DECKS.glob(f"{d}_*.nec")).read_text()
+        for b in NEC5_BASES:
+            out[("nec5", d, b)] = _shell.render(text, basis=b)
+    for d in NEC2_DECKS:
+        text = (NEC2_DIR / f"{d}.deck").read_text()
+        for b in NEC2_BASES:
+            buf = io.StringIO()
+            with _portal.engine_scope():
+                rc = _portal.main(
+                    ["--basis", b],
+                    stdin=io.StringIO(text),
+                    stdout=buf,
+                    stderr=io.StringIO(),
+                )
+            assert rc == 0, (d, b)
+            out[("nec2", d, b)] = buf.getvalue()
+    return out
+
+
+@pytest.mark.integration
+def test_fake_host_printouts_are_byte_identical_end_to_end(monkeypatch):
     callers = _spy_callers(monkeypatch)
-    texts = {d: next(DECKS.glob(f"{d}_*.nec")).read_text() for d in E2E_DECKS}
     monkeypatch.delattr(sys, "_mw_host_lapack", raising=False)
-    default = {
-        (d, b): _shell.render(t, basis=b) for d, t in texts.items() for b in E2E_BASES
-    }
+    default = _printouts()
     before = _calls()
     monkeypatch.setattr(sys, "_mw_host_lapack", _table(), raising=False)
-    host = {
-        (d, b): _shell.render(t, basis=b) for d, t in texts.items() for b in E2E_BASES
-    }
+    host = _printouts()
     assert _ran(before, getrf=len(default), getrs=len(default))
     for key, text in default.items():
-        assert "refuse" not in text.lower()[:400], key
+        assert "ERROR" not in text, key
         assert _masked(host[key]) == _masked(text), key
     for module in (
         "momwire.bspline",
@@ -378,6 +409,7 @@ def test_fake_host_printouts_are_byte_identical_end_to_end(monkeypatch):
         "momwire.sinusoidal_galerkin",
         "momwire.pulse",
         "momwire.eznec._serve",
+        "momwire.portal._portal",
     ):
         assert module in callers, module
 
