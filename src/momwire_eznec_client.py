@@ -27,7 +27,12 @@ feature is "as slow as today", never "the engine is broken":
    three), and exit 0, because the exit code is not a channel (rule 1).
 
 The shell's three rules bind this client exactly as they bind the engine:
-exit 0 always, always write the printout, never read stdin.
+exit 0 always, always write the printout, and read stdin only when the
+command line is empty — 4nec2's form (momwire#1488), where the two file names
+arrive on stdin and the deck may end without ``EN``. A deck whose ``GE`` card
+asks for a ``.GMO`` geometry file gets it back framed ahead of the printout
+(``momwire_serve_client.split_answer``), and this client writes it beside the
+printout.
 
 Like ``momwire_nec2c_client``, this module imports stdlib only — the shared
 finding-the-server mechanics live in ``momwire_serve_client`` and the tests
@@ -129,7 +134,8 @@ def _server_command(
 def _served_bytes(
     deck_bytes: bytes, basis: str | None, idle_timeout: float, dialect: str = "nec5"
 ) -> bytes:
-    """The printout bytes, answered warm — rungs 1 and 2 of the ladder."""
+    """The answer bytes, warm — rungs 1 and 2 of the ladder: the printout,
+    or a ``.GMO`` frame and then the printout (``_mech.split_answer``)."""
     path = _mech.socket_path(config_key(basis, idle_timeout, dialect))
     log_path = f"{path}.log"
     conn = _mech.obtain(
@@ -159,7 +165,11 @@ def _served_bytes(
 
 
 def _one_shot(
-    deck_path: str, printout_path: str, basis: str | None, dialect: str = "nec5"
+    deck_path: str,
+    printout_path: str,
+    basis: str | None,
+    dialect: str = "nec5",
+    en_optional: bool = False,
 ) -> None:
     """Rung 3: the stock one-shot, correct at today's speed.
 
@@ -181,6 +191,10 @@ def _one_shot(
     if dialect != "nec5":
         # The EZNEC slot rides the same way, for the same reason (#1295).
         kwargs.append(f"dialect={dialect!r}")
+    if en_optional:
+        # Paths that came from stdin (4nec2, #1488) reach the child on its
+        # command line, so the allowance they carry has to ride along too.
+        kwargs.append("en_optional=True")
     if kwargs:
         command = [
             sys.executable,
@@ -241,6 +255,14 @@ def main(argv: list[str] | None = None) -> int:
     if args == ["-version"]:
         print(probe_version())
         return 0
+    is_nec4, basis = _mech.filename_nec4(prog)
+    en_optional = False
+    if not args and not is_nec4:
+        # 4nec2's form (#1488): `ENGINE < nec2d.tmp`, the two names on stdin.
+        from_stdin = _mech.stdin_paths()
+        if from_stdin is not None:
+            args = from_stdin
+            en_optional = True
     if len(args) < 1:
         print(ARGUMENT_ERROR_INPUT)
         return 0
@@ -253,7 +275,6 @@ def main(argv: list[str] | None = None) -> int:
         # failing status rather than a printout written to a file named "-".
         print(STREAMING_REFUSAL, file=sys.stderr)
         return 2
-    is_nec4, basis = _mech.filename_nec4(prog)
     dialect = "nec4" if is_nec4 else "nec5"
     if not is_nec4:
         basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
@@ -263,15 +284,21 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with open(deck_path, "rb") as handle:
             deck_bytes = handle.read()
+        if en_optional:
+            deck_bytes = _mech.EN_OPTIONAL_REQUEST + deck_bytes
         answer = _served_bytes(deck_bytes, basis, DEFAULT_IDLE_TIMEOUT, dialect)
+        gmo, printout = _mech.split_answer(answer)
+        if gmo is not None:
+            with open(_mech.gmo_path(printout_path), "wb") as handle:
+                handle.write(gmo)
         with open(printout_path, "wb") as handle:
-            handle.write(answer)
+            handle.write(printout)
         return 0
     except Exception:  # noqa: BLE001 - the served lane is an optimisation; any failure falls through to one-shot
         pass
 
     try:
-        _one_shot(deck_path, printout_path, basis, dialect)
+        _one_shot(deck_path, printout_path, basis, dialect, en_optional)
     except Exception as exc:  # noqa: BLE001 - the printout is the only channel EZNEC reads; refuse in it, exit 0
         _last_ditch(
             printout_path,

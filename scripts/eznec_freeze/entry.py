@@ -63,6 +63,10 @@ MARKER = "eznec-"
 # copy still names its basis.
 ENGINE_SEGMENT = "engine"
 
+# The launcher's one-shot rung for a run whose paths came from stdin
+# (momwire#1488): spelt again in `momwire_eznec_client.c`.
+EN_OPTIONAL_FLAG = "--en-optional"
+
 
 def dialect_for(prog: str) -> str:
     """The EZNEC slot this program name answers: ``"nec4"`` when the name
@@ -115,8 +119,13 @@ def run(argv: list[str]) -> int:
     rung runs a twin through the bundle's single engine exe (momwire#718
     phase 3 — the per-variant frozen stubs are what that client subsumes),
     and ``--dialect nec4`` before or after it is how a NEC-4.2-slot launcher
-    does the same (momwire#1295).  EZNEC's spelling cannot produce either,
-    and after the flags the contract is the untouched two positional paths.
+    does the same (momwire#1295).  ``--en-optional`` is the third: a launcher
+    that read its two paths from stdin (4nec2's form, momwire#1488) hands
+    them to this one-shot on the command line, and the flag carries the
+    allowance that came with them -- the deck may end without ``EN``.
+    EZNEC's spelling cannot produce any of them, and after the flags the
+    contract is the untouched two positional paths.  An EMPTY command line is
+    the engine's own stdin form, which ``main`` reads.
     """
     rest = argv[1:]
     if rest[:1] == [WORKER_FLAG]:
@@ -137,13 +146,20 @@ def run(argv: list[str]) -> int:
         if dialect != "nec5" and "--dialect" not in rest:
             rest = [*rest, "--dialect", dialect]
         return serve_main(rest)
-    while len(rest) >= 2 and rest[0] in ("--basis", "--dialect"):
-        if rest[0] == "--basis":
-            basis = rest[1]
+    en_optional = False
+    while rest:
+        if len(rest) >= 2 and rest[0] in ("--basis", "--dialect"):
+            if rest[0] == "--basis":
+                basis = rest[1]
+            else:
+                dialect = rest[1]
+            rest = rest[2:]
+        elif rest[0] == EN_OPTIONAL_FLAG:
+            en_optional = True
+            rest = rest[1:]
         else:
-            dialect = rest[1]
-        rest = rest[2:]
-    return main(rest, basis=basis, dialect=dialect)
+            break
+    return main(rest, basis=basis, dialect=dialect, en_optional=en_optional)
 
 
 if __name__ == "__main__":

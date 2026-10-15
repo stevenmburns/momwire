@@ -29,12 +29,30 @@ Three rules, and they are the whole unit
    program, try a different location" path, which blames the user's install
    for what is actually a refusal.  The file is the only channel there is.
 
-3. **Never read stdin.**  The real engine, given no arguments, prompts for a
-   filename — but it reads that from the console device, not stdin, so a
-   piped answer is ignored and it dies at end-of-file.  EZNEC never takes
-   that path, so this engine does not implement the prompt loop at all: the
-   argv form is the whole interface, and stdin stays untouched whether it is
-   a terminal, a pipe carrying bytes, or /dev/null.
+3. **Stdin is read only when the command line is empty.**  EZNEC and
+   SimNEC always pass the two paths (SimNEC's ``- -`` streaming call is
+   refused, momwire#1395), and with paths on the command line stdin stays
+   untouched whether it is a terminal, a pipe carrying bytes, or /dev/null.
+   With NO arguments, the NEC-5 slot reads the two paths from stdin, one per
+   line (momwire#1488): that is how 4nec2 runs its engine, as
+   ``ENGINE.exe < nec2d.tmp`` with ``..\\out\\EXAMPLE3.inp`` and
+   ``..\\out\\EXAMPLE3.out`` in the file, resolved against the working
+   directory like any relative path.  A terminal on stdin is not read (a
+   person who types the bare command gets the argument error at once), and
+   the NEC-4.2 slot never reads stdin at all.
+
+The 4nec2 front end
+-------------------
+A deck that arrives through stdin may end without ``EN`` (4nec2 writes none),
+and only such a deck: the two-argument form still refuses a deck with no
+``EN`` as truncated, because every deck EZNEC and SimNEC write carries one.
+The engine closes the deck the way NEC's own card reader does at end of
+file, with an ``EN`` the printout echoes.  And any deck whose ``GE`` card
+carries a third field of 1 (``GE 0 0 1``, momwire#1488) gets a
+``<printout stem>.GMO`` geometry file beside its printout
+(:mod:`momwire.eznec._gmo`), which 4nec2's NEC-5 package rebuilds its
+SEGMENTATION DATA table from; no EZNEC or SimNEC deck has a third ``GE``
+field, so their runs write exactly what they wrote before.
 """
 
 from __future__ import annotations
@@ -52,8 +70,10 @@ from ..deck._nec5 import (
     parse_nec5_shared,
     split_structures,
 )
+import momwire_serve_client as _mech
+
 from ..serve import Seam
-from . import _nec4, _printout, _serve
+from . import _gmo, _nec4, _printout, _serve
 
 __all__ = [
     "ARGUMENT_ERROR_INPUT",
@@ -218,6 +238,51 @@ def write_printout(printout_path: Path, text: str) -> None:
         handle.write(text)
 
 
+def write_gmo(gmo_path: Path, text: str) -> None:
+    """Write a ``.GMO`` file with CRLF endings, as the sample has them and as
+    every printout this engine writes has them (:func:`write_printout`)."""
+    with gmo_path.open("w", encoding=_CODEC, newline="\r\n") as handle:
+        handle.write(text)
+
+
+def close_deck(text: str) -> str:
+    """``text`` closed by ``EN`` when no line of it is one (momwire#1488).
+
+    For a deck whose file names came from stdin: 4nec2 writes no ``EN``, and
+    NEC's own card reader closes a deck at end of file.  A deck that has an
+    ``EN`` anywhere is returned unchanged, which keeps everything after it out
+    of the deck exactly as before.
+    """
+    for line in text.splitlines():
+        tokens = line.strip().replace(",", " ").split()
+        if tokens and tokens[0][:2].upper() == "EN":
+            return text
+    if text and not text.endswith(("\n", "\r")):
+        text += "\n"
+    return text + "EN\n"
+
+
+def render_files(
+    text: str,
+    *,
+    basis: str = _serve.BASIS,
+    dialect: str = "nec5",
+    en_optional: bool = False,
+) -> tuple[str, str | None]:
+    """``(printout, gmo)``: :func:`render`'s printout, and the ``.GMO``
+    geometry file the deck asks for, or ``None`` when it asks for none
+    (momwire#1488).  The NEC-4.2 slot never writes one.
+
+    ``en_optional`` is the stdin form's: the deck is closed by
+    :func:`close_deck` before anything reads it.
+    """
+    if en_optional and dialect == "nec5":
+        text = close_deck(text)
+    printout = render(text, basis=basis, dialect=dialect)
+    gmo = _gmo.gmo_text(text) if dialect == "nec5" else None
+    return printout, gmo
+
+
 def render(text: str, *, basis: str = _serve.BASIS, dialect: str = "nec5") -> str:
     """One deck's text as a printout: the results, or a refusal that says why.
 
@@ -375,6 +440,7 @@ def run(
     *,
     basis: str = _serve.BASIS,
     dialect: str = "nec5",
+    en_optional: bool = False,
 ) -> str:
     """Serve one deck: read it, render a printout, write the printout.
 
@@ -385,18 +451,28 @@ def run(
 
     Paths are used as given, so they resolve against the current directory the
     way EZNEC's cwd-relative ``"EZN5.NEC"`` does.
+
+    A deck that asks for a ``.GMO`` file (``GE`` third field 1, momwire#1488)
+    gets it written beside the printout, before it, at
+    ``<printout stem>.GMO``.  ``en_optional`` is the stdin form's: a deck
+    with no ``EN`` is closed rather than refused.
     """
     deck = Path(deck_path)
     out = Path(printout_path)
 
     text = read_deck(deck)
+    gmo = None
     if text is None:
         printout = _printout.render_refusal(
             None, f"UNABLE TO READ INPUT FILE {deck}", basis=basis, dialect=dialect
         )
     else:
-        printout = render(text, basis=basis, dialect=dialect)
+        printout, gmo = render_files(
+            text, basis=basis, dialect=dialect, en_optional=en_optional
+        )
 
+    if gmo is not None:
+        write_gmo(Path(_gmo.gmo_path(str(printout_path))), gmo)
     write_printout(out, printout)
     return printout
 
@@ -412,6 +488,7 @@ def main(
     *,
     basis: str = _serve.BASIS,
     dialect: str = "nec5",
+    en_optional: bool = False,
 ) -> int:
     """The process entry point.  Returns 0, except for SimNEC's streaming call
     (``- -``), which is refused on stderr with 2 (momwire#1395).
@@ -429,8 +506,21 @@ def main(
     there is no output path to write it to.  Every other failure, including an
     unexpected exception from anywhere below, still leaves a printout behind
     with a ``NEC ERROR`` line in it.
+
+    With no arguments the NEC-5 slot takes the two paths from stdin, one per
+    line (4nec2's form, momwire#1488), and the deck may then end without
+    ``EN``.  ``en_optional`` is that same allowance passed by a launcher whose
+    OWN paths came from stdin and which runs this as its one-shot rung with
+    the paths on the command line; like ``basis`` it is not a flag.
     """
     args = list(sys.argv[1:] if argv is None else argv)
+
+    if not args and dialect == "nec5":
+        from_stdin = _mech.stdin_paths()
+        if from_stdin is not None:
+            # One name is the one-argument fault, none the empty command line.
+            args = from_stdin
+            en_optional = True
 
     if len(args) < 1:
         print(ARGUMENT_ERROR_INPUT)
@@ -451,7 +541,13 @@ def main(
         print(STREAMING_REFUSAL, file=sys.stderr)
         return 2
     try:
-        run(deck_path, printout_path, basis=basis, dialect=dialect)
+        run(
+            deck_path,
+            printout_path,
+            basis=basis,
+            dialect=dialect,
+            en_optional=en_optional,
+        )
     except Exception as exc:  # noqa: BLE001 - the last line of defence
         # A traceback on stderr would be invisible (EZNEC captures neither
         # stderr nor the exit code), and a missing file would be read as a
@@ -500,6 +596,31 @@ def _internal_error_reason(exc: BaseException) -> str:
     return f"INTERNAL ERROR IN MOMWIRE ENGINE - {type(exc).__name__}: {exc}"
 
 
+# The resident engine's side of the 4nec2 front end's wire additions
+# (momwire#1488), as text: the socket wrapper is latin-1 with CRLF
+# translation, so these are `momwire_serve_client`'s byte constants exactly.
+_EN_OPTIONAL_REQUEST = _mech.EN_OPTIONAL_REQUEST.decode("latin-1")
+_GMO_FRAME_START = _mech.GMO_FRAME_START.decode("latin-1").replace("\r\n", "\n")
+_GMO_FRAME_END = _mech.GMO_FRAME_END.decode("latin-1").replace("\r\n", "\n")
+
+
+def _request(body: str) -> tuple[str, bool]:
+    """``(deck text, en_optional)`` from a resident request's body: a launcher
+    whose paths came from stdin sends :data:`momwire_serve_client.
+    EN_OPTIONAL_REQUEST` ahead of the deck."""
+    if body.startswith(_EN_OPTIONAL_REQUEST):
+        return body[len(_EN_OPTIONAL_REQUEST) :], True
+    return body, False
+
+
+def framed(printout: str, gmo: str | None) -> str:
+    """The resident answer: the printout alone, or the ``.GMO`` file framed
+    ahead of it (:func:`momwire_serve_client.split_answer` is the reader)."""
+    if gmo is None:
+        return printout
+    return f"{_GMO_FRAME_START}{gmo}{_GMO_FRAME_END}{printout}"
+
+
 def seam_failure(
     body: str, exc: BaseException, *, basis: str = _serve.BASIS, dialect: str = "nec5"
 ) -> tuple[str, str]:
@@ -510,6 +631,7 @@ def seam_failure(
     own catch, and the resident server's worker pool when the worker solving
     the deck dies under it (momwire#1418) -- the caller reads the same
     printout either way."""
+    body, _ = _request(body)
     return (
         _printout.render_refusal(
             body, _internal_error_reason(exc), basis=basis, dialect=dialect
@@ -536,6 +658,12 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
     seam per basis.  ``dialect`` is the EZNEC slot, per server like the
     basis (momwire#1295).
 
+    Two additions ride the same bytes for the 4nec2 front end (momwire#1488),
+    and neither changes a byte for a deck that does not use them: a body that
+    starts with the stdin form's request line may end without ``EN``, and a
+    deck that asks for a ``.GMO`` file gets it framed ahead of the printout
+    (:func:`framed`), which the launcher writes beside the printout.
+
     The :class:`~momwire.serve.Seam` invariant — ``answer`` never raises —
     is kept the same way :func:`main` keeps exit 0: anything
     :func:`render`'s three gates did not foresee comes back as the
@@ -545,7 +673,11 @@ def seam(*, basis: str = _serve.BASIS, dialect: str = "nec5") -> Seam:
 
     def answer(body: str, terminator: str) -> tuple[str, str]:
         try:
-            return render(body, basis=basis, dialect=dialect), ""
+            text, en_optional = _request(body)
+            printout, gmo = render_files(
+                text, basis=basis, dialect=dialect, en_optional=en_optional
+            )
+            return framed(printout, gmo), ""
         except Exception as exc:  # noqa: BLE001 - the seam's last line of defence
             return seam_failure(body, exc, basis=basis, dialect=dialect)
 

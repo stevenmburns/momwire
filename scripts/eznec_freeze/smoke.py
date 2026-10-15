@@ -7,7 +7,7 @@ Usage::
 The argument is a LAUNCHER — the native client EZNEC points at — and every
 gate below runs the bundle end to end: launcher, spawned engine, printout.
 
-Ten gates, derived from the seam's own contract (momwire#497 U1):
+Eleven gates, derived from the seam's own contract (momwire#497 U1):
 
 1. **Byte identity** — on decks that serve, the bundle's printout must
    equal ``python -m momwire.eznec``'s byte for byte (the printout carries no
@@ -106,6 +106,14 @@ Ten gates, derived from the seam's own contract (momwire#497 U1):
    on "this is an answer about this antenna", not on accuracy: the byte
    identity is the gate on the bundle, the impedance the gate on the deck
    having reached the right dialect at all.
+11. **4nec2's form** (momwire#1488) — each NEC-5 launcher run as 4nec2 runs
+   its engine: NO arguments, the deck and printout names on stdin (CRLF,
+   relative to the working directory, in the OS's own separators -- so
+   backslashes on Windows, exactly 4nec2's ``..\out\EXAMPLE3.inp``), on
+   Dan AC6LA's Example 3, which has no ``EN`` card and asks for a ``.GMO``
+   (``GE 0 0 1``).  The printout must equal the module's one-shot in the
+   basis the name claims, and the ``.GMO`` must equal Ward AE6TY's sample
+   (``tests/fixtures/4nec2_example3/``) byte for byte.
 
 Gate 4 exists because momwire#628 was exactly that bug on the other route:
 a copy named for one engine served another, and the printout was internally
@@ -150,6 +158,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 FIXTURES = REPO / "tests" / "fixtures" / "eznec" / "decks"
 NEC4_FIXTURES = REPO / "tests" / "fixtures" / "eznec_nec42"
+EXAMPLE3 = REPO / "tests" / "fixtures" / "4nec2_example3"
 
 # The one frozen program in the bundle — `build.py`'s ENGINE_NAME and the
 # client's ENGINE_NAME, restated here rather than imported because gate 5 is
@@ -827,6 +836,75 @@ def _gate_nec5(exe: Path, work: Path, env: dict[str, str]) -> int:
     return failures
 
 
+def _gate_4nec2(exe: Path, work: Path, env: dict[str, str]) -> int:
+    """Gate 11 — 4nec2's form (momwire#1488): ``ENGINE < nec2d.tmp``."""
+    failures = 0
+    for stem in _nec5_launchers():
+        launcher = exe.with_name(f"{stem}{exe.suffix}")
+        if not launcher.is_file():
+            continue  # gate 9 names a missing launcher
+        room = work / f"4nec2-{stem}"
+        shutil.rmtree(room, ignore_errors=True)
+        engine_dir, out_dir = room / "bin", room / "out"
+        engine_dir.mkdir(parents=True)
+        out_dir.mkdir()
+        deck = out_dir / "EXAMPLE3.inp"
+        deck.write_bytes((EXAMPLE3 / "EXAMPLE3.inp").read_bytes())
+        names = os.path.join("..", "out", "EXAMPLE3")
+        stdin = f"{names}.inp\r\n{names}.out\r\n".encode()
+        result = subprocess.run(
+            [str(launcher)],
+            input=stdin,
+            capture_output=True,
+            timeout=300,
+            env=env,
+            cwd=engine_dir,
+        )
+        basis = stem.partition("nec5-")[2] or None
+        m_out = work / f"EXAMPLE3.{stem}.module.out"
+        run(
+            [
+                sys.executable,
+                "-c",
+                "import sys;from momwire.eznec._shell import main;"
+                f"kw = {{'basis': {basis!r}}} if {basis!r} else {{}};"
+                "sys.exit(main(sys.argv[1:], en_optional=True, **kw))",
+                str(deck),
+                str(m_out),
+            ],
+            m_out,
+        )
+        printout = out_dir / "EXAMPLE3.out"
+        gmo = out_dir / "EXAMPLE3.GMO"
+        if result.returncode != 0 or result.stdout.strip():
+            print(
+                f"FAIL {launcher.name} (4nec2 form): exit {result.returncode}, "
+                f"stdout {result.stdout!r}"
+            )
+            failures += 1
+        elif not printout.is_file() or printout.read_bytes() != m_out.read_bytes():
+            print(f"FAIL {launcher.name} (4nec2 form): printout is not the module's")
+            failures += 1
+        elif SOLVED not in printout.read_bytes().decode("latin-1"):
+            print(f"FAIL {launcher.name} (4nec2 form): did not serve EXAMPLE3")
+            failures += 1
+        elif (
+            not gmo.is_file()
+            or gmo.read_bytes() != (EXAMPLE3 / "EXAMPLE3.GMO").read_bytes()
+        ):
+            print(f"FAIL {launcher.name} (4nec2 form): .GMO is not the sample's")
+            failures += 1
+        else:
+            z = feed_impedance(printout.read_bytes().decode("latin-1"))
+            print(
+                f"ok   {launcher.name} (4nec2 form): names from stdin, no EN, "
+                f".GMO = sample, Z = {z.real:.3f} {z.imag:+.3f}j"
+                if z is not None
+                else f"ok   {launcher.name} (4nec2 form)"
+            )
+    return failures
+
+
 def _licensed_nec4_impedance() -> complex:
     """The licensed NEC-4.2's feed-point Z for gate 10's deck, read out of its
     committed printout (``tests/fixtures/eznec_nec42/printouts/``)."""
@@ -970,6 +1048,7 @@ def main() -> int:
         failures = _gates(exe, work, room, env)
         failures += _gate_nec5(exe, work, env)
         failures += _gate_nec4(exe, work, env)
+        failures += _gate_4nec2(exe, work, env)
     finally:
         stop(room)
 

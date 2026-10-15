@@ -13,7 +13,23 @@
  *
  *   1. exit 0 always -- the exit code is not a channel EZNEC reads;
  *   2. always write the printout -- the file is the only channel there is;
- *   3. never read stdin -- EZNEC never writes one.
+ *   3. read stdin only when the command line is empty -- EZNEC and SimNEC
+ *      always pass two paths, and 4nec2 runs its engine as
+ *      `ENGINE.exe < nec2d.tmp`, the two paths on stdin (momwire#1488).
+ *
+ * THE 4NEC2 FRONT END (momwire#1488).  With no arguments, and a NEC-5-slot
+ * name, and stdin not a terminal, the first two lines of stdin are the deck
+ * and printout paths (surrounding whitespace, CR included, stripped;
+ * relative paths resolve against the working directory).  4nec2's deck ends
+ * without EN, so a run whose paths came from stdin tells the engine so:
+ * EN_OPTIONAL_REQUEST ahead of the deck on the wire, EN_OPTIONAL_FLAG on the
+ * one-shot rung's command line.  And a deck whose GE card asks for a `.GMO`
+ * geometry file (`GE 0 0 1`) gets the file back framed AHEAD of the
+ * printout -- GMO_FRAME_START, the file, GMO_FRAME_END, then the printout --
+ * which this launcher writes to `<printout stem>.GMO`.  An answer without
+ * the frame is the printout alone, byte for byte what it always was.
+ * `momwire_serve_client` owns these constants and the stem rule in Python;
+ * the tests hold this copy to it.
  *
  * THE WIRE PROTOCOL (momwire.eznec._resident, pinned by
  * tests/test_serve_resident.py): connect, send the deck bytes verbatim, shut
@@ -59,6 +75,7 @@
 #ifdef _WIN32
 #define _CRT_SECURE_NO_WARNINGS 1
 #define WIN32_LEAN_AND_MEAN 1
+#include <io.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <afunix.h>
@@ -178,6 +195,18 @@ typedef int lock_t;
  * path to write to) -- captured behavior, the same strings as the shell's. */
 #define ARGUMENT_ERROR_INPUT "UNABLE TO OPEN FILE"
 #define ARGUMENT_ERROR_OUTPUT "UNABLE TO OPEN SECOND FILE"
+
+/* The 4nec2 front end's wire additions (momwire#1488), as
+ * `momwire_serve_client` spells them.  Lengths are explicit because every
+ * one of them starts with NUL. */
+static const char EN_OPTIONAL_REQUEST[] = "\0EN-OPTIONAL\n";
+#define EN_OPTIONAL_REQUEST_LEN (sizeof EN_OPTIONAL_REQUEST - 1)
+static const char GMO_FRAME_START[] = "\0GMO\r\n";
+#define GMO_FRAME_START_LEN (sizeof GMO_FRAME_START - 1)
+static const char GMO_FRAME_END[] = "\0\r\n";
+#define GMO_FRAME_END_LEN (sizeof GMO_FRAME_END - 1)
+#define GMO_SUFFIX ".GMO"
+#define EN_OPTIONAL_FLAG "--en-optional"
 
 #define TRANSPORT_ENV "MOMWIRE_SERVE_TRANSPORT"
 #define UNIX_SUFFIX ".sock"
@@ -1363,6 +1392,86 @@ static void forget_process(proc_t child)
 }
 
 /* --------------------------------------------------------------------------
+ * the 4nec2 front end (momwire#1488)
+ * ------------------------------------------------------------------------*/
+
+/* `<printout stem>.GMO`: `momwire_serve_client.gmo_path`, which is
+ * `os.path.splitext` -- the extension is the last dot of the last path
+ * component, provided some character before it in that component is not a
+ * dot (so `.out` and `..out` have none), and a path with none gets the
+ * suffix appended. */
+static int gmo_path_of(const char *printout, char *out, size_t cap)
+{
+    size_t len = strlen(printout);
+    size_t base = 0;
+    size_t stem = len;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        if (is_sep(printout[i])) {
+            base = i + 1;
+        }
+    }
+    i = base;
+    while (i < len && printout[i] == '.') {
+        i++;
+    }
+    for (; i < len; i++) {
+        if (printout[i] == '.') {
+            stem = i;
+        }
+    }
+    if (stem + sizeof GMO_SUFFIX > cap) {
+        return -1;
+    }
+    memcpy(out, printout, stem);
+    memcpy(out + stem, GMO_SUFFIX, sizeof GMO_SUFFIX);
+    return 0;
+}
+
+static int is_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\v' ||
+           c == '\f';
+}
+
+/* One path line off stdin, surrounding whitespace stripped.  Returns 1 for a
+ * path, 0 when stdin ended or the line strips to nothing (the name is
+ * missing), -1 for a line too long to be a path this launcher can hold. */
+static int stdin_path(char *out, size_t cap)
+{
+    size_t len;
+    size_t start = 0;
+
+    if (fgets(out, (int)cap, stdin) == NULL) {
+        return 0;
+    }
+    len = strlen(out);
+    if (len == cap - 1 && out[len - 1] != '\n' && !feof(stdin)) {
+        return -1;
+    }
+    while (len > 0 && is_space(out[len - 1])) {
+        out[--len] = '\0';
+    }
+    while (start < len && is_space(out[start])) {
+        start++;
+    }
+    if (start > 0) {
+        memmove(out, out + start, len - start + 1);
+    }
+    return out[0] != '\0';
+}
+
+static int stdin_is_terminal(void)
+{
+#ifdef _WIN32
+    return _isatty(_fileno(stdin));
+#else
+    return isatty(fileno(stdin));
+#endif
+}
+
+/* --------------------------------------------------------------------------
  * files and the wire
  * ------------------------------------------------------------------------*/
 
@@ -1477,6 +1586,7 @@ typedef struct {
     char basis[256];            /* the suffix this name selected */
     int named_basis;            /* whether the name selected one at all */
     int nec4;                   /* whether the name selects the NEC-4.2 slot */
+    int en_optional;            /* the paths came from stdin (momwire#1488) */
     char unix_path[PATH_CAP];   /* <runtime>/<key>.sock */
     char tcp_path[PATH_CAP];    /* <runtime>/<key>.port */
     char address[PATH_CAP];     /* the one this client would SPAWN on */
@@ -1693,6 +1803,40 @@ static sock_t obtain(const setup_t *setup)
     }
 }
 
+/* The answer's files: the `.GMO` frame's contents beside the printout when
+ * the answer carries one (momwire#1488), then the printout.  A frame that
+ * never closes is not an answer this engine writes, so it fails over to
+ * rung 3 rather than reaching the file. */
+static int write_answer(const char *printout_path, const char *data, size_t len)
+{
+    char gmo_path[PATH_CAP];
+    size_t i;
+
+    if (len < GMO_FRAME_START_LEN ||
+        memcmp(data, GMO_FRAME_START, GMO_FRAME_START_LEN) != 0) {
+        return write_whole_file(printout_path, data, len);
+    }
+    for (i = GMO_FRAME_START_LEN; i + GMO_FRAME_END_LEN <= len; i++) {
+        if (memcmp(data + i, GMO_FRAME_END, GMO_FRAME_END_LEN) == 0) {
+            break;
+        }
+    }
+    if (i + GMO_FRAME_END_LEN > len) {
+        note("the resident engine's .GMO frame never closed");
+        return -1;
+    }
+    if (gmo_path_of(printout_path, gmo_path, sizeof gmo_path) != 0) {
+        note("the .GMO path is too long");
+        return -1;
+    }
+    if (write_whole_file(gmo_path, data + GMO_FRAME_START_LEN,
+                         i - GMO_FRAME_START_LEN) != 0) {
+        return -1;
+    }
+    return write_whole_file(printout_path, data + i + GMO_FRAME_END_LEN,
+                            len - i - GMO_FRAME_END_LEN);
+}
+
 static int served(const setup_t *setup, const char *deck_path,
                   const char *printout_path)
 {
@@ -1701,6 +1845,12 @@ static int served(const setup_t *setup, const char *deck_path,
     sock_t sock;
     int status = -1;
 
+    if (setup->en_optional &&
+        buf_add(&deck, EN_OPTIONAL_REQUEST, EN_OPTIONAL_REQUEST_LEN) != 0) {
+        note("out of memory reading %s", deck_path);
+        buf_free(&deck);
+        return -1;
+    }
     if (read_whole_file(deck_path, &deck) != 0) {
         buf_free(&deck);
         return -1;
@@ -1739,7 +1889,7 @@ static int served(const setup_t *setup, const char *deck_path,
         buf_free(&answer);
         return -1;
     }
-    status = write_whole_file(printout_path, answer.data, answer.len);
+    status = write_answer(printout_path, answer.data, answer.len);
     buf_free(&answer);
     return status;
 }
@@ -1751,7 +1901,7 @@ static int served(const setup_t *setup, const char *deck_path,
 static int one_shot(const setup_t *setup, const char *deck_path,
                     const char *printout_path)
 {
-    char *args[8];
+    char *args[10];
     int n = 0;
     proc_t child;
     int status;
@@ -1768,6 +1918,9 @@ static int one_shot(const setup_t *setup, const char *deck_path,
     if (setup->nec4) {
         args[n++] = (char *)"--dialect";
         args[n++] = (char *)"nec4";
+    }
+    if (setup->en_optional) {
+        args[n++] = (char *)EN_OPTIONAL_FLAG;
     }
     args[n++] = (char *)deck_path;
     args[n++] = (char *)printout_path;
@@ -1806,9 +1959,12 @@ static void last_ditch(const char *printout_path, const char *reason)
 
 int main(int argc, char **argv)
 {
-    setup_t setup;
+    static setup_t setup;
+    static char stdin_deck[PATH_CAP];
+    static char stdin_printout[PATH_CAP];
     const char *deck_path;
     const char *printout_path;
+    int en_optional = 0;
 
     /* Rule 1 in both directions: EZNEC reads the printout and nothing else,
      * so every path below returns 0 -- including the two argument faults,
@@ -1819,15 +1975,37 @@ int main(int argc, char **argv)
         return 0;
     }
     if (argc < 2) {
-        printf("%s\n", ARGUMENT_ERROR_INPUT);
-        return 0;
-    }
-    if (argc != 3) {
+        /* 4nec2's form (momwire#1488): the two paths on stdin, for a NEC-5
+         * slot name and a stdin that is not a terminal.  Otherwise, and when
+         * a name is missing, the same argument errors as the command line. */
+        int nec4 = 0;
+        char ignored[256];
+        int got;
+        basis_of(argv[0], ignored, sizeof ignored, &nec4);
+        if (nec4 || stdin_is_terminal()) {
+            printf("%s\n", ARGUMENT_ERROR_INPUT);
+            return 0;
+        }
+        got = stdin_path(stdin_deck, sizeof stdin_deck);
+        if (got != 1) {
+            printf("%s\n", ARGUMENT_ERROR_INPUT);
+            return 0;
+        }
+        got = stdin_path(stdin_printout, sizeof stdin_printout);
+        if (got != 1) {
+            printf("%s\n", ARGUMENT_ERROR_OUTPUT);
+            return 0;
+        }
+        deck_path = stdin_deck;
+        printout_path = stdin_printout;
+        en_optional = 1;
+    } else if (argc != 3) {
         printf("%s\n", ARGUMENT_ERROR_OUTPUT);
         return 0;
+    } else {
+        deck_path = argv[1];
+        printout_path = argv[2];
     }
-    deck_path = argv[1];
-    printout_path = argv[2];
 
 #ifdef _WIN32
     {
@@ -1844,6 +2022,7 @@ int main(int argc, char **argv)
 #endif
 
     memset(&setup, 0, sizeof setup);
+    setup.en_optional = en_optional;
     if (plan(&setup, argv[0]) == 0 && served(&setup, deck_path, printout_path) == 0) {
         return 0;
     }

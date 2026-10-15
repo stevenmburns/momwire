@@ -418,6 +418,103 @@ def filename_nec4(prog: str) -> tuple[bool, str | None]:
     return True, rest[1:] if rest.startswith("-") else rest
 
 
+# --------------------------------------------------------------------------
+# the 4nec2 front end (momwire#1488)
+# --------------------------------------------------------------------------
+#
+# 4nec2 runs its engine as `ENGINE.exe < nec2d.tmp`: no arguments, and the
+# two file names on stdin, one per line. The deck it names carries no EN card,
+# and when its GE card asks (`GE 0 0 1`) the engine writes a `.GMO` geometry
+# file beside the printout. Everything below is shared by the engine's own
+# shell and the Python thin client, and spelt again in C by the native
+# launcher, which cannot import it; the tests hold the copies together.
+
+# The first line of a deck sent to the resident engine by a launcher that
+# took its file names from stdin: the deck may end without EN. A deck never
+# starts with NUL, so the line cannot be mistaken for a card.
+EN_OPTIONAL_REQUEST = b"\x00EN-OPTIONAL\n"
+
+# An answer that carries a `.GMO` file starts with GMO_FRAME_START, then the
+# file's bytes, then GMO_FRAME_END, then the printout's bytes. A printout never
+# starts with NUL and a `.GMO` file holds digits, signs, points, `E`, spaces
+# and CRLF only, so neither marker can occur inside what it delimits. An
+# answer without the frame is the printout alone, exactly as before.
+GMO_FRAME_START = b"\x00GMO\r\n"
+GMO_FRAME_END = b"\x00\r\n"
+GMO_SUFFIX = ".GMO"
+
+
+def split_answer(answer: bytes) -> tuple[bytes | None, bytes]:
+    """``(gmo, printout)`` from a resident engine's answer bytes.
+
+    ``gmo`` is ``None`` when the answer carries no frame. A frame that never
+    closes is not an answer this engine writes; it raises ``ValueError`` so
+    the launcher's ladder takes the one-shot rung rather than writing it.
+    """
+    if not answer.startswith(GMO_FRAME_START):
+        return None, answer
+    end = answer.find(GMO_FRAME_END, len(GMO_FRAME_START))
+    if end < 0:
+        raise ValueError("the resident engine's .GMO frame never closed")
+    gmo = answer[len(GMO_FRAME_START) : end]
+    return gmo, answer[end + len(GMO_FRAME_END) :]
+
+
+def gmo_path(printout_path: str) -> str:
+    """``<printout stem>.GMO``: the printout path with its extension replaced.
+
+    The extension is :func:`os.path.splitext`'s: a dot in a directory name is
+    not one, a leading dot (``.out``) names a file rather than an extension,
+    and a printout with no extension gets ``.GMO`` appended. Separators are
+    the OS's own: on Windows both ``\\`` and ``/``, elsewhere ``/`` only.
+    """
+    stem, _ = os.path.splitext(printout_path)
+    return stem + GMO_SUFFIX
+
+
+def _decode_path(raw: bytes) -> str:
+    """A file name as the front end wrote it: the ANSI code page on Windows
+    (4nec2 is a Windows program), the filesystem encoding elsewhere."""
+    if os.name == "nt":
+        return raw.decode("mbcs", errors="replace")
+    return os.fsdecode(raw)
+
+
+def stdin_paths(stream=None) -> list[str] | None:
+    """The file names 4nec2 sends on stdin: the first two lines, each with
+    surrounding whitespace (CR and LF included) stripped.
+
+    ``None`` when there is no stdin to read, or it is a terminal: a person
+    who types the bare command gets the argument error at once rather than an
+    engine silently waiting on the keyboard. The list is shorter than two
+    when stdin ends early, and a line that strips to nothing ends it, so the
+    caller's argument errors name which name was missing.
+    """
+    import sys
+
+    stream = sys.stdin if stream is None else stream
+    if stream is None:
+        return None
+    try:
+        if stream.isatty():
+            return None
+        source = getattr(stream, "buffer", stream)
+        paths: list[str] = []
+        while len(paths) < 2:
+            line = source.readline()
+            if isinstance(line, bytes):
+                line = _decode_path(line)
+            line = line.strip()
+            if not line:
+                break
+            paths.append(line)
+        return paths
+    except (OSError, ValueError):
+        # Closed, or unreadable (pytest's captured stdin raises OSError):
+        # nothing arrived.
+        return []
+
+
 def runtime_dir() -> str:
     """The per-user directory holding sockets, lockfiles and server logs.
 

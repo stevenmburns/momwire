@@ -402,7 +402,9 @@ def test_one_argument_prints_the_observed_error_and_writes_nothing(tmp_path):
 @pytest.mark.integration
 def test_no_arguments_errors_on_stdout_rather_than_prompting(tmp_path):
     """The real engine prompts on the console device here; that path is
-    deliberately not implemented, and stdin is still never read."""
+    deliberately not implemented. An empty command line reads its two paths
+    from stdin (4nec2's form, momwire#1488), and an empty stdin carries
+    neither, so it is the same argument error it always was."""
     proc = run_engine([], cwd=tmp_path)
 
     assert proc.returncode == 0
