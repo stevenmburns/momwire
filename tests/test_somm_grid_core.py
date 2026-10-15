@@ -6,6 +6,7 @@ standalone executable's link), asked for a handful of grids that reach the
 fill's branches -- a ladder rung pair (the blend), a value on a rung, a grid
 past the near/far split, a lossy and a near-lossless soil -- and every scalar,
 lattice and value byte is compared with Python's fill (disk cache off).
+Its `far_cpp_pack` (the momwire#1258 continuation's constants) too.
 `scripts/core_split/somm_grid_compare.py` runs the same comparison over the
 corpus's own calls and random ones.
 """
@@ -78,3 +79,5 @@ def test_the_cxx_grid_is_get_grids(tmp_path, monkeypatch):
         blob = (tmp_path / f"{k}.bin").read_bytes()
         raw = b"".join(reg["vals"].tobytes() for reg in g._regions)
         assert blob == raw, c
+        far = (tmp_path / f"{k}.far").read_bytes()
+        assert far == s.far_cpp_pack(g).astype("complex128").tobytes(), c

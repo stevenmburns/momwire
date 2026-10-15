@@ -1,5 +1,6 @@
 """The C++ Sommerfeld grid (`_somm_grid_core.cpp`, momwire#1479 Sommerfeld
-S2) against `_sommerfeld.get_grid`, call by call, bit for bit.
+S2) against `_sommerfeld.get_grid`, call by call, bit for bit, and its `far_cpp_pack` (the momwire#1258 continuation's
+constants the remainder kernels take).
 
     python scripts/core_split/somm_grid_compare.py CALLS.jsonl [--random N]
 
@@ -184,6 +185,9 @@ def main(argv=None):
             if blob[off : off + len(raw)] != raw:
                 problems.append(f"region {r} values")
             off += len(raw)
+        far = np.ascontiguousarray(s.far_cpp_pack(g), dtype=np.complex128).tobytes()
+        if (work / f"{k}.far").read_bytes() != far:
+            problems.append("far pack")
         if problems:
             bad += 1
             print(f"call {k} {c}: {problems}")
