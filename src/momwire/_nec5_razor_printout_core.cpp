@@ -173,13 +173,11 @@ double py_degrees(double x) { return (180.0 / 3.141592653589793) * x; }
 // numpy's arithmetic
 // ============================================================================
 
-// The elementwise complex multiply (`simd_cmul_f64`: `muladdsub(a_re, b,
-// a_im * b_rev)`), fused on the CPUs numpy dispatches its fused loop to.
-cd np_cmul(cd a, cd b, bool fused) {
-    if (fused)
-        return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-                  std::fma(a.real(), b.imag(), a.imag() * b.real()));
-    return cd(a.real() * b.real() - a.imag() * b.imag(), a.real() * b.imag() + a.imag() * b.real());
+// The elementwise complex multiply as the run path spells it (`_cmul.cmul`,
+// numpy's fused formula, on every CPU): each part one fused multiply-add.
+cd np_cmul(cd a, cd b) {
+    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
+              std::fma(a.real(), b.imag(), a.imag() * b.real()));
 }
 
 // Scalar math (`cdouble_ctype_multiply`): never fused.
@@ -355,10 +353,50 @@ void np_matrixmatrix(const NumpyLinalg &np, const cd *ip1, int64_t is1_m, int64_
     np.zgemm(ROW_MAJOR, trans1, trans2, m, p, n, &ONE, ip1, lda, ip2, ldb, &ZERO, op, ldc);
 }
 
+// The C-contiguous complex128 copy `_lapack.matmul` hands the host
+// (`np.ascontiguousarray(x, dtype=complex128)`).
+std::vector<cd> c_copy(const Op &a) {
+    std::vector<cd> out(static_cast<std::size_t>(a.d0 * a.d1));
+    for (int64_t i = 0; i < a.d0; i++)
+        for (int64_t j = 0; j < a.d1; j++)
+            out[static_cast<std::size_t>(i * a.d1 + j)] = a.p[i * a.s0 + j * a.s1];
+    return out;
+}
+
+// `_lapack.matmul` with an ABI 2 table: ONE fixed call per shape, on
+// row-major copies read column-major (a 2-D @ 2-D is `zgemm('N', 'N', n, m,
+// k, 1, b, n, a, k, 0, c, n)`; a 2-D @ 1-D is `zgemv('T', k, m, 1, a, k, x,
+// 1, 0, y, 1)`). A 1-D `b` is `vec_op`'s (n, 1) with a zero second stride.
+void host_matmul(const HostLinalg &h, const Op &a, const Op &b, cd *out, int64_t os_m,
+                 int64_t os_p) {
+    const int64_t m = a.d0, k = a.d1;
+    const bool b_vector = b.d1 == 1 && b.s1 == 0;
+    if (std::max({m, k, b.d1}) > std::numeric_limits<int>::max())
+        throw Decline{"a product past the LP64 host's int range"};
+    const std::vector<cd> a2 = c_copy(a), b2 = c_copy(b);
+    const int mm_ = static_cast<int>(m), kk = static_cast<int>(k), one = 1;
+    if (b_vector) {
+        std::vector<cd> y(static_cast<std::size_t>(m), cd(0.0, 0.0));
+        h.zgemv("T", &kk, &mm_, &ONE, a2.data(), &kk, b2.data(), &one, &ZERO, y.data(), &one);
+        for (int64_t i = 0; i < m; i++) out[i * os_m] = y[static_cast<std::size_t>(i)];
+        return;
+    }
+    const int nn = static_cast<int>(b.d1);
+    std::vector<cd> c(static_cast<std::size_t>(m * b.d1), cd(0.0, 0.0));
+    h.zgemm("N", "N", &nn, &mm_, &kk, &ONE, b2.data(), &nn, a2.data(), &kk, &ZERO, c.data(), &nn);
+    for (int64_t i = 0; i < m; i++)
+        for (int64_t j = 0; j < b.d1; j++)
+            out[i * os_m + j * os_p] = c[static_cast<std::size_t>(i * b.d1 + j)];
+}
+
 // `CDOUBLE_matmul` for one (m, n) @ (n, p) product into `out` (strides in
-// elements; a 1-D result has `os_p` 0).
+// elements; a 1-D result has `os_p` 0). With a host table, `_lapack.matmul`.
 void np_matmul(const NumpyLinalg &np, const Op &a, const Op &b, cd *out, int64_t os_m,
                int64_t os_p) {
+    if (np.host.zgemm != nullptr && a.d0 > 0 && a.d1 > 0 && b.d1 > 0) {
+        host_matmul(np.host, a, b, out, os_m, os_p);
+        return;
+    }
     const int64_t dm = a.d0, dn = a.d1, dp = b.d1;
     const int64_t is1_m = a.s0, is1_n = a.s1, is2_n = b.s0, is2_p = b.s1;
     const bool special = dm == 1 || dn == 1 || dp == 1;
@@ -422,12 +460,27 @@ std::vector<cd> mv(const NumpyLinalg &np, const Op &a, const std::vector<cd> &x)
 // `numpy.linalg.solve(a, b)` for a square C-ordered `a` and a vector `b`:
 // numpy copies both into Fortran order and calls zgesv. A singular block is
 // numpy's LinAlgError, in numpy's words: declined, and Python answers it.
+// With a host table, `_lapack.solve_stacked`: getrf on the Fortran copy,
+// then getrs ('N', one right-hand side), LP64 on the host's library.
 std::vector<cd> np_solve(const NumpyLinalg &np, const CMat &a, const std::vector<cd> &b) {
     const np_int n = a.rows, nrhs = 1;
     std::vector<cd> af(static_cast<std::size_t>(n * n));
     for (np_int j = 0; j < n; j++)
         for (np_int i = 0; i < n; i++) af[static_cast<std::size_t>(i + j * n)] = a.at(i, j);
     std::vector<cd> x(b);
+    if (np.host.zgemm != nullptr && n > 0) {
+        if (n > std::numeric_limits<int>::max())
+            throw Decline{"a solve past the LP64 host's int range"};
+        int ni = static_cast<int>(n), one = 1, info = 0;
+        std::vector<int> ipiv(static_cast<std::size_t>(n));
+        np.host.getrf(&ni, &ni, af.data(), &ni, ipiv.data(), &info);
+        if (info > 0) throw Decline{"a singular drive block (the host route raises)"};
+        if (info < 0) throw Decline{"the host's getrf refused an argument"};
+        char trans = 'N';
+        np.host.getrs(&trans, &ni, &one, af.data(), &ni, ipiv.data(), x.data(), &ni, &info);
+        if (info != 0) throw Decline{"the host's getrs refused an argument"};
+        return x;
+    }
     std::vector<np_int> ipiv(static_cast<std::size_t>(n > 0 ? n : 1));
     const np_int lda = std::max<np_int>(n, 1), ldb = lda;
     np_int info = 0;
@@ -524,7 +577,6 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
     const CMat r1 = mm(np, Op{tc.data(), n, nc, 1, n}, s.y.op());
     const CMat y = mm(np, r1.op(), Op{tc.data(), nc, n, n, 1});
     const std::vector<cd> z_series(static_cast<std::size_t>(n), cd(0.0, 0.0));
-    const bool fused = np.fused_cmul;
     PortState st;
     if (deck.sources.size() > 1) {
         // `_multi_drive_state` with no cards and no loads: y_eff = y.
@@ -584,7 +636,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
             st.i_source[static_cast<std::size_t>(i_sites[k])] = spec[static_cast<std::size_t>(i_rows[k])];
         st.v_gap.resize(static_cast<std::size_t>(n));
         for (int64_t k = 0; k < n; k++)
-            st.v_gap[k] = st.v_applied[k] - np_cmul(z_series[k], st.i_port[k], fused);
+            st.v_gap[k] = st.v_applied[k] - np_cmul(z_series[k], st.i_port[k]);
         return st;
     }
     const Source &source = deck.sources[0];
@@ -597,21 +649,21 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
     CMat loaded(n, n);
     for (int64_t i = 0; i < n; i++)
         for (int64_t j = 0; j < n; j++) {
-            const cd prod = np_cmul(z_series[i], y.at(i, j), fused);
+            const cd prod = np_cmul(z_series[i], y.at(i, j));
             loaded.at(i, j) = cd((i == j ? 1.0 : 0.0) + prod.real(), 0.0 + prod.imag());
         }
     std::vector<cd> v_gap = np_solve(np, loaded, probe);
     std::vector<cd> i_port = mv(np, y.op(), v_gap);
     std::vector<cd> v_applied(static_cast<std::size_t>(n));
-    for (int64_t k = 0; k < n; k++) v_applied[k] = v_gap[k] + np_cmul(z_series[k], i_port[k], fused);
+    for (int64_t k = 0; k < n; k++) v_applied[k] = v_gap[k] + np_cmul(z_series[k], i_port[k]);
     const cd drive(source.drive_re, source.drive_im);
     const cd scale = source.kind.is_zero()
                          ? drive
                          : py_cdiv(drive, i_port[static_cast<std::size_t>(driven)]);
     for (int64_t k = 0; k < n; k++) {
-        v_applied[k] = np_cmul(v_applied[k], scale, fused);
-        v_gap[k] = np_cmul(v_gap[k], scale, fused);
-        i_port[k] = np_cmul(i_port[k], scale, fused);
+        v_applied[k] = np_cmul(v_applied[k], scale);
+        v_gap[k] = np_cmul(v_gap[k], scale);
+        i_port[k] = np_cmul(i_port[k], scale);
     }
     st.v_applied = v_applied;
     st.v_gap = v_gap;
@@ -621,8 +673,7 @@ PortState port_state(const Deck &deck, const Prepared &p, const Solved &s, const
 }
 
 // razor's `currents_at_knots` for one wire (`_end_wings` included).
-std::vector<std::vector<cd>> knot_currents(const razor::Front &fr, const std::vector<cd> &coeffs,
-                                           bool fused) {
+std::vector<std::vector<cd>> knot_currents(const razor::Front &fr, const std::vector<cd> &coeffs) {
     std::vector<std::vector<cd>> out;
     for (int64_t w = 0; w < fr.n_wires; w++) {
         const int64_t n_knots = fr.seg_offsets[w + 1] - fr.seg_offsets[w] + 1;
@@ -646,7 +697,7 @@ std::vector<std::vector<cd>> knot_currents(const razor::Front &fr, const std::ve
             for (int64_t k : wings) {
                 const int64_t b = n_interior + k / 2, side = k % 2;
                 const double sigma = fr.wing_sigma[static_cast<std::size_t>(2 * b + side)];
-                terms.push_back(np_cmul(cd(sigma, 0.0), coeffs[static_cast<std::size_t>(b)], fused));
+                terms.push_back(np_cmul(cd(sigma, 0.0), coeffs[static_cast<std::size_t>(b)]));
             }
             return np_csum(terms);
         };
@@ -666,7 +717,6 @@ const double *arc_of(const razor::Front &fr, int64_t w) {
 
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
                 std::vector<RunArrays> *arrays) {
-    const bool fused = np.fused_cmul;
     const razor::Front &fr = *p.front;
     const PortState st = port_state(deck, p, s, np);
     // `coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)`
@@ -746,7 +796,7 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     }
 
     // `_element_currents_and_charges`
-    const std::vector<std::vector<cd>> knots = knot_currents(fr, coeffs, fused);
+    const std::vector<std::vector<cd>> knots = knot_currents(fr, coeffs);
     std::vector<std::vector<cd>> slopes;
     for (std::size_t w = 0; w < p.mesh.pieces.size(); w++) {
         const SeamPiece &piece = p.mesh.pieces[w];
@@ -1261,25 +1311,6 @@ std::string render_refusal(const std::string *latin1_deck_text, const std::strin
                            const std::string &basis, const EngineStamp &stamp) {
     return render_header(latin1_deck_text, basis, stamp) + "\n" + " ***** NEC ERROR - " +
            utf8_reason + "\n";
-}
-
-bool numpy_fuses_complex_multiply() {
-#if defined(__x86_64__) || defined(_M_X64)
-#if defined(__GNUC__) || defined(__clang__)
-    // numpy's X86_V3 dispatch target (AVX2, FMA3, BMI1/2, F16C, LZCNT, MOVBE)
-    __builtin_cpu_init();
-#if (defined(__clang__) && __clang_major__ >= 16) || \
-    (!defined(__clang__) && defined(__GNUC__) && __GNUC__ >= 12)
-    return __builtin_cpu_supports("x86-64-v3");
-#else
-    return __builtin_cpu_supports("avx2") && __builtin_cpu_supports("fma");
-#endif
-#else
-    return true;  // MSVC: unit 4 decides (no __builtin_cpu_supports)
-#endif
-#else
-    return true;
-#endif
 }
 
 namespace {
