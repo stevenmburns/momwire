@@ -1,6 +1,7 @@
-"""`momwire._lapack`: the one seam every Z-path dense LU goes through.
+"""`momwire._lapack`: the one seam every Z-path dense LU goes through, and
+every dense complex product on the NEC-5 run path.
 
-Three gates:
+Four gates:
 
 1. DEFAULT (nothing published) is the replaced call, bit for bit -- on wide
    random matrices and on moment matrices captured from real decks, with the
@@ -13,6 +14,11 @@ Three gates:
    printouts over five bases are byte-identical with and without it.
 3. A SOURCE SCAN: no module under `src/momwire` calls a dense LU / solve /
    inverse directly any more, apart from an explicit allowlist that says why.
+4. THE PRODUCTS (`matmul`, ABI 2): the default and an ABI 1 table are `a @ b`
+   bit for bit; an ABI 2 fake host (scipy's own `cython_blas` zgemm / zgemv)
+   gives exactly the documented call's bits on that library and a counter
+   proving it ran; a source scan holds the run path's product sites to the
+   seam; end to end, the printouts come out of the host's products.
 """
 
 import ast
@@ -26,7 +32,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import scipy.linalg
-from scipy.linalg import cython_lapack
+from scipy.linalg import cython_blas, cython_lapack
 
 from momwire import _lapack
 
@@ -61,6 +67,26 @@ def _capsule_address(name):
 def _table(real=True):
     names = ("zgetrf", "zgetrs") + (("dgetrf", "dgetrs") if real else ())
     return {"abi": 1, **{n: _capsule_address(n) for n in names}}
+
+
+def _blas_address(name):
+    cap = cython_blas.__pyx_capi__[name]
+    api = ctypes.pythonapi
+    api.PyCapsule_GetName.restype = ctypes.c_char_p
+    api.PyCapsule_GetName.argtypes = [ctypes.py_object]
+    api.PyCapsule_GetPointer.restype = ctypes.c_void_p
+    api.PyCapsule_GetPointer.argtypes = [ctypes.py_object, ctypes.c_char_p]
+    return api.PyCapsule_GetPointer(cap, api.PyCapsule_GetName(cap))
+
+
+def _table2():
+    """ABI 2: scipy's LU pair and its BLAS zgemm / zgemv."""
+    return {
+        **_table(),
+        "abi": 2,
+        "zgemm": _blas_address("zgemm"),
+        "zgemv": _blas_address("zgemv"),
+    }
 
 
 @pytest.fixture
@@ -332,9 +358,17 @@ def test_what_the_host_cannot_take_goes_the_default_way(fake_host, monkeypatch):
 
 def test_a_bad_table_is_refused_in_plain_words(monkeypatch):
     a = np.eye(3, dtype=np.complex128)
-    monkeypatch.setattr(sys, "_mw_host_lapack", {**_table(), "abi": 2}, raising=False)
-    with pytest.raises(RuntimeError, match="ABI 2; momwire reads ABI 1"):
+    monkeypatch.setattr(sys, "_mw_host_lapack", {**_table(), "abi": 3}, raising=False)
+    with pytest.raises(RuntimeError, match="ABI 3; momwire reads ABI 1 and ABI 2"):
         _lapack.lu_factor(a)
+    monkeypatch.setattr(sys, "_mw_host_lapack", {**_table(), "abi": 2})
+    with pytest.raises(RuntimeError, match="ABI 2, which must give both zgemm"):
+        _lapack.lu_factor(a)
+    table = _table2()
+    del table["zgemv"]
+    monkeypatch.setattr(sys, "_mw_host_lapack", table)
+    with pytest.raises(RuntimeError, match="must give both zgemm and zgemv"):
+        _lapack.matmul(a, a)
     table = _table(real=False)
     del table["zgetrs"]
     monkeypatch.setattr(sys, "_mw_host_lapack", table)
@@ -546,3 +580,216 @@ def test_no_z_path_module_calls_a_dense_lu_directly():
     )
     stale = {k: v for k, v in ALLOWED.items() if seen.get(k, 0) < v}
     assert not stale, f"allowlist entries that no longer match anything: {stale}"
+
+
+# ---------------------------------------------------------------------------
+# 4. the products: `matmul` (ABI 2)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fake_host2(monkeypatch):
+    """scipy's LAPACK and BLAS, published as an ABI 2 table."""
+    monkeypatch.setattr(sys, "_mw_host_lapack", _table2(), raising=False)
+    yield _lapack.HOST_CALLS
+
+
+def _operands(rng):
+    """(a, b) pairs of every shape and layout the run path hands `matmul`:
+    complex and real operands, C- and F-ordered, transposed and sliced
+    views, matrix @ matrix / vector, vector @ matrix / vector, 1 x 1 and
+    single-row / -column matrices."""
+    out = []
+    for m, k, n in ((1, 1, 1), (1, 5, 1), (3, 1, 4), (7, 16, 1), (33, 257, 5)):
+        a, b = _rand(rng, m, k), _rand(rng, k, n)
+        ar, br = _rand(rng, m, k, real=True), _rand(rng, k, n, real=True)
+        out += [
+            (a, b),
+            (np.asfortranarray(a), b),
+            (a, np.asfortranarray(b)),
+            (ar, b),  # T.T @ y / cols.T @ X: real @ complex
+            (a, br),  # (T.T @ y) @ T
+            (np.ascontiguousarray(ar.T).T, b),  # a transposed (F) view
+            (a, b[:, 0]),  # matrix @ vector
+            (ar, b[:, 0]),  # _transform(mesh) @ v_gap
+            (a[0], b),  # vector @ matrix
+            (a[0], b[:, 0]),  # vector @ vector: U[:, p] @ alpha
+            (ar[0], b[:, 0]),
+            (a[:, ::-1], b[::-1]),  # negative strides
+        ]
+    big = _rand(rng, 300, 4)
+    out.append((big.T, big))  # numpy's syrk case: a is b's own transpose
+    return out
+
+
+def test_default_matmul_is_the_operator_bit_for_bit(no_host):
+    rng = np.random.default_rng(1500)
+    before = _calls()
+    for a, b in _operands(rng):
+        assert _same(_lapack.matmul(a, b), a @ b), (a.shape, b.shape)
+    # what the host could never take still answers as `@` does
+    i = np.arange(6).reshape(2, 3)
+    assert _same(_lapack.matmul(i, i.T), i @ i.T)
+    stack = _rand(rng, 2, 3, 3)
+    assert _same(_lapack.matmul(stack, stack), stack @ stack)
+    assert _calls() == before
+
+
+def test_an_abi_1_table_leaves_every_product_to_numpy(fake_host):
+    rng = np.random.default_rng(1501)
+    before = _calls()
+    for a, b in _operands(rng):
+        assert _same(_lapack.matmul(a, b), a @ b)
+    assert _calls() == before
+
+
+def _host_reference(a, b):
+    """The module docstring's call per shape, made through scipy's own f2py
+    BLAS wrappers on the same library: the C-contiguous complex128 operands
+    read column-major are their transposes, so no wrapper copies them."""
+    from scipy.linalg import blas
+
+    a = np.ascontiguousarray(a, dtype=np.complex128)
+    b = np.ascontiguousarray(b, dtype=np.complex128)
+    if a.ndim == 2 and b.ndim == 2:
+        return np.ascontiguousarray(blas.zgemm(1.0, b.T, a.T).T)
+    if a.ndim == 2:
+        return blas.zgemv(1.0, a.T, b, trans=1)
+    if b.ndim == 2:
+        return blas.zgemv(1.0, b.T, a, trans=0)
+    return blas.zgemv(1.0, a[:, None], b, trans=1)[0]
+
+
+def test_fake_host_products_are_the_hosts_call_and_run(fake_host2):
+    rng = np.random.default_rng(1502)
+    for a, b in _operands(rng):
+        before = _calls()
+        got = _lapack.matmul(a, b)
+        ran = {k: _lapack.HOST_CALLS[k] - before[k] for k in ("gemm", "gemv")}
+        assert ran == (
+            {"gemm": 1, "gemv": 0} if a.ndim == b.ndim == 2 else {"gemm": 0, "gemv": 1}
+        ), (a.shape, b.shape)
+        ref = _host_reference(a, b)
+        assert _same(got, ref), (a.shape, b.shape)
+        assert got.flags.c_contiguous or got.ndim == 0
+        np.testing.assert_allclose(got, a @ b, rtol=1e-12, atol=1e-12)
+
+
+def test_fake_host_products_skip_what_the_host_cannot_take(fake_host2):
+    rng = np.random.default_rng(1503)
+    before = _calls()
+    real = _rand(rng, 4, 4, real=True)
+    single = _rand(rng, 4, 4).astype(np.complex64)
+    stack = _rand(rng, 2, 4, 4)
+    empty = np.zeros((4, 0), dtype=np.complex128)
+    for a, b in ((real, real), (single, single), (stack, stack), (empty, empty.T)):
+        assert _same(_lapack.matmul(a, b), a @ b)
+    with pytest.raises(ValueError):
+        _lapack.matmul(_rand(rng, 3, 4), _rand(rng, 3, 4))  # numpy's own error
+    assert _calls() == before
+
+
+# Where the NEC-5 run path forms its dense complex products, by module and
+# function; each must reach them through `_lapack.matmul` only.
+PRODUCT_SITES = {
+    "eznec/_serve.py": ("_port_state", "_multi_drive_state", "_finish"),
+    "razor.py": ("RazorSolver.compute_port_solution",),
+    "bspline.py": ("BSplineSolver.compute_port_solution",),
+    "sinusoidal_galerkin.py": (
+        "_solve_constrained",
+        "SinusoidalGalerkinSolver._port_currents",
+    ),
+    "deck/_networks.py": ("reduced_ports",),
+    "networks/_reduce.py": ("MNASystem.branch_power",),
+}
+
+
+def _functions(tree):
+    """{qualified name: node} for module-level functions and class methods."""
+    out = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            out[node.name] = node
+        elif isinstance(node, ast.ClassDef):
+            for item in node.body:
+                if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    out[f"{node.name}.{item.name}"] = item
+    return out
+
+
+def test_the_run_path_products_go_through_the_seam():
+    for rel, names in PRODUCT_SITES.items():
+        fns = _functions(ast.parse((SRC / rel).read_text(), filename=rel))
+        for name in names:
+            assert name in fns, (rel, name)
+            direct = [
+                n.lineno
+                for n in ast.walk(fns[name])
+                if (isinstance(n, ast.BinOp) and isinstance(n.op, ast.MatMult))
+                or (
+                    isinstance(n, ast.Call)
+                    and (_dotted(n.func) or "").split(".")[-1]
+                    in ("dot", "matmul", "einsum", "vdot", "inner")
+                    and _dotted(n.func) != "_lapack.matmul"
+                )
+            ]
+            assert not direct, f"{rel} {name}: a product at lines {direct}"
+
+
+def _printed_alike(a, b):
+    """Two printouts that differ at most in a printed number's last digit
+    (a product's last bits, read through a 5-digit cell)."""
+    la, lb = _masked(a), _masked(b)
+    if len(la) != len(lb):
+        return False
+    for x, y in zip(la, lb):
+        if x == y:
+            continue
+        tx, ty = x.split(), y.split()
+        if len(tx) != len(ty):
+            return False
+        for u, v in zip(tx, ty):
+            if u == v:
+                continue
+            try:
+                fu, fv = float(u), float(v)
+            except ValueError:
+                return False
+            if abs(fu - fv) > 2e-4 * max(abs(fu), abs(fv)) + 1e-30:
+                return False
+    return True
+
+
+@pytest.mark.integration
+def test_fake_host_products_run_end_to_end(monkeypatch):
+    """With an ABI 2 table the NEC-5 and NEC-2 printouts come out of the
+    host's products: every routed module made its product through the seam
+    and the host ran it. scipy's BLAS is not numpy's, so the products' last
+    bits may move against the default (measured on Haswell: 312 of 4,645
+    products on razor-2p, rel <= 2e-15) -- and no printout moved there, over
+    2,011. The gate asks for no more than a printed last digit."""
+    callers = set()
+    real = _lapack.matmul
+
+    def spy(a, b):
+        callers.add(sys._getframe(1).f_globals["__name__"])
+        return real(a, b)
+
+    monkeypatch.setattr(_lapack, "matmul", spy)
+    monkeypatch.delattr(sys, "_mw_host_lapack", raising=False)
+    default = _printouts()
+    before = _calls()
+    monkeypatch.setattr(sys, "_mw_host_lapack", _table2(), raising=False)
+    host = _printouts()
+    assert _lapack.HOST_CALLS["gemm"] - before["gemm"] >= len(NEC5_DECKS) * 2
+    assert _lapack.HOST_CALLS["gemv"] - before["gemv"] >= len(NEC5_DECKS) * 2
+    for module in (
+        "momwire.eznec._serve",
+        "momwire.razor",
+        "momwire.bspline",
+        "momwire.deck._networks",
+    ):
+        assert module in callers, module
+    for key, text in default.items():
+        assert "ERROR" not in host[key], key
+        assert _printed_alike(host[key], text), key
