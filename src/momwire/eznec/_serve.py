@@ -3284,7 +3284,7 @@ def _port_state(
     identical in its last bits.
     """
     t = _transform(mesh)
-    y = t.T @ y_solver @ t
+    y = _lapack.matmul(_lapack.matmul(t.T, y_solver), t)
     n = len(mesh.sites)
     z_load = np.array([site.load for site in mesh.sites], dtype=np.complex128)
     # Two load vectors from here down, and they differ only at a VIRTUAL site
@@ -3306,7 +3306,7 @@ def _port_state(
         # This branch is U4's arithmetic, conjugated by T and no more, which
         # is what keeps every bare capture's printout where it was.
         v_gap = _lapack.solve_stacked(loaded, probe)
-        i_port = y @ v_gap
+        i_port = _lapack.matmul(y, v_gap)
         i_source = i_port
         v_applied = v_gap + z_series * i_port
     else:
@@ -3474,7 +3474,7 @@ def _multi_drive_state(
         # unrounded, or a byte-gated printout could move in its last digit.
         rhs = spec[i_rows]
         if v_sites:
-            rhs = rhs - m[np.ix_(i_rows, v_rows)] @ spec[v_rows]
+            rhs = rhs - _lapack.matmul(m[np.ix_(i_rows, v_rows)], spec[v_rows])
         volts[i_sites] = _lapack.solve_stacked(m[np.ix_(i_rows, i_rows)], rhs)
     # With no I-set (momwire#1099, momwire#1105) `volts` above IS the answer -
     # there is no map to measure and nothing to invert, network or none: the
@@ -3483,7 +3483,7 @@ def _multi_drive_state(
 
     if not cards:
         v_applied = volts
-        i_port = y_eff @ v_applied
+        i_port = _lapack.matmul(y_eff, v_applied)
         i_source = i_port.copy()
     else:
         v_applied, i_port, i_source = _reduced_state(
@@ -4691,7 +4691,9 @@ def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
     state = _port_state(deck, mesh, cards, solution.y, wavelength)
     # Back across T: the structure is driven by the SOLVER's gap EMFs, which
     # is the one place besides the admittance that the two conventions meet.
-    coeffs = solution.coeffs @ (_transform(mesh) @ state.v_gap)
+    coeffs = _lapack.matmul(
+        solution.coeffs, _lapack.matmul(_transform(mesh), state.v_gap)
+    )
 
     # One row per EX card, in DECK order — which is the order 0031 prints its
     # four in, and which is not the order the sites were built in (those are

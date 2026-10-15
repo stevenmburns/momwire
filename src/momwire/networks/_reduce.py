@@ -50,6 +50,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .. import _lapack
 from .._constants import C_LIGHT
 
 FEET_PER_M = 1.0 / 0.3048
@@ -591,7 +592,9 @@ class MNASystem:
         if kind == "group1":
             nodes, y_block = payload
             vb = v[nodes]
-            return 0.5 * float(np.real(np.conj(vb) @ (y_block @ vb)))
+            return 0.5 * float(
+                np.real(_lapack.matmul(np.conj(vb), _lapack.matmul(y_block, vb)))
+            )
         if kind == "group2":
             el = self.elements[payload]
             va = 0j if el.a is None else v[el.a]
