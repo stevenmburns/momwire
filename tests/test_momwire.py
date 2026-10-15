@@ -4773,13 +4773,20 @@ def _reference_basis_polynomials_dense(sim, geom):
     """The pre-#329 `_build_basis_polynomials` body, verbatim.
 
     Kept here as the bit-exactness oracle for the banded rewrite: it
-    densifies the design matrix with `.toarray()` and contracts the full
-    (n_total_w, d+1, n_basis_w) block, so it exercises none of the CSR
+    densifies the design matrix and contracts the full
+    (n_total_w, d+1, n_basis_w) block, so it exercises none of the
     banding the solver now uses.
-    """
-    from scipy.interpolate import BSpline
 
-    from momwire.bspline import _V_UNIT_INV
+    The dense matrix comes from momwire's own basis evaluation
+    (`_bspline_design_matrix_dense`, momwire#1489), the same values the
+    solver bands, so this stays an exact test of the BANDING on every
+    platform. Until #1489 it was scipy's `design_matrix(...).toarray()`;
+    momwire's evaluator equals scipy's to the bit where scipy's compiled
+    de Boor is not fused into FMAs (x86-64), and
+    `tests/test_bspline_own_readouts_1489.py` holds that relation, and its
+    tolerance elsewhere, separately.
+    """
+    from momwire.bspline import _V_UNIT_INV, _bspline_design_matrix_dense
 
     d = sim.degree
     n_wings = d + 1
@@ -4824,7 +4831,7 @@ def _reference_basis_polynomials_dense(sim, geom):
         u_global_per_seg = arc_at_knot_w[:-1, None] + u_local_per_seg
         u_flat = u_global_per_seg.reshape(-1)
 
-        DM = BSpline.design_matrix(u_flat, knots, d).toarray()
+        DM = _bspline_design_matrix_dense(u_flat, knots, d)
         DM_seg = DM.reshape(n_total_w, d + 1, n_basis_w)
 
         V_unit_inv = _V_UNIT_INV[d]
