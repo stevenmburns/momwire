@@ -1,0 +1,11 @@
+CM a crossed TL with end shunts, length 0 (NEC's node-to-node rule), feeding a second dipole
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GW 2 21 1.2 0 -2.6 1.2 0 2.6 0.001
+GE 0
+TL 1,11,2,11,-300.,0.,0.002,0.,0.,-0.001
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+PQ 0
+XQ
+EN

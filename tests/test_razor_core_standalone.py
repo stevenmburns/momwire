@@ -485,6 +485,7 @@ PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
 LD_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ld"
 RP_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_rp"
 NE_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ne"
+NET_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_net"
 
 
 def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
@@ -659,6 +660,35 @@ def test_the_near_field_decks_print_their_fields(driver, tmp_path):
             "",
         ), path
         assert b"- - - NEAR " in ans["printout"], path
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
+
+
+def test_the_network_decks_print_their_networks(driver, tmp_path):
+    """TL / NT print through the C++ run half: the reducer (`flat_network`,
+    the chain-matrix TL stamps with glibc's complex sinh / cosh, the NT and
+    shunt admittances, the terminations), SciPy's `zgesvx` on the MNA system,
+    `reduced_ports`, the multi-source columns through the same reducer, the
+    NETWORK DATA tables, the connection points and the gyrator readout.
+    Each committed deck prints with its network -- a crossed TL with shunts
+    at NEC's zero length, a TL table then an NT table, EZNEC's current source
+    (a gyrator on a parked wire), two loaded current sources through lines
+    from a parked node, two voltage sources across an NT -- and is compared
+    byte for byte by the corpus test above."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(NET_DECKS.glob("*.nec"))
+    assert len(decks) == 5
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    for path, ans in zip(decks, answers, strict=True):
+        assert (ans["route"], ans["seam"], ans["raised"]) == (
+            "printed",
+            "served",
+            "",
+        ), path
+        assert b"- - - NETWORK DATA - - -" in ans["printout"], path
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path
