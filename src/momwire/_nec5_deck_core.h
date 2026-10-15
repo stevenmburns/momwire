@@ -191,6 +191,7 @@ struct Deck {  // Nec5Deck, in its field order
     std::vector<Wire> wires;
     Int ge_flag;
     Int ge_second = -1;
+    bool geometry_file = false;  // GE's third field nonzero (momwire#1488)
     Ground ground;
     std::vector<Source> sources;
     std::vector<Load> loads;

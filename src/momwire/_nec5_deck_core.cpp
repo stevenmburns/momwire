@@ -577,6 +577,7 @@ struct Parser {
     bool has_ge = false;
     Int ge_flag;
     Int ge_second = -1;
+    bool geometry_file = false;
     Ground ground;
     std::vector<Source> sources;
     std::vector<Load> loads;
@@ -700,6 +701,8 @@ struct Parser {
         ge_flag = card.i(0);
         has_ge = true;
         ge_second = card.i(1);
+        // GE's third field (momwire#1488): nonzero asks for a `.GMO` file.
+        geometry_file = !card.i(2).is_zero();
     }
 
     // -- ground --
@@ -1173,6 +1176,7 @@ struct Parser {
         d.wires = wires;
         d.ge_flag = ge_flag;
         d.ge_second = ge_second;
+        d.geometry_file = geometry_file;
         d.ground = ground;
         d.sources = sources;
         d.loads = loads;
@@ -1570,6 +1574,7 @@ void dump_deck_into(Out &o, const Deck &d, const std::string &p) {
     }
     o.i(p + ".ge_flag", d.ge_flag);
     o.i(p + ".ge_second", d.ge_second);
+    o.b(p + ".geometry_file", d.geometry_file);
     {
         std::string q = p + ".ground";
         const Ground &g = d.ground;

@@ -255,6 +255,18 @@ CASES = {
     "ge one field": (DIPOLE.replace("GE 0,-1", "GE 1"), "parsed"),
     "ge three fields": (DIPOLE.replace("GE 0,-1", "GE -1,5,7"), "parsed"),
     "ge infinite second": (DIPOLE.replace("GE 0,-1", "GE 0,-inf"), "OverflowError"),
+    # GE's third field (momwire#1488): any nonzero integer asks for the .GMO
+    # file; it is read as an integer at the GE card, so a non-finite one
+    # raises there.
+    "ge third field one": (DIPOLE.replace("GE 0,-1", "GE 0,-1,1"), "parsed"),
+    "ge third field two": (DIPOLE.replace("GE 0,-1", "GE 0,-1,2"), "parsed"),
+    "ge third field rounds to zero": (
+        DIPOLE.replace("GE 0,-1", "GE 0,-1,0.4"),
+        "parsed",
+    ),
+    "ge third field negative": (DIPOLE.replace("GE 0,-1", "GE 0,-1,-1"), "parsed"),
+    "ge infinite third": (DIPOLE.replace("GE 0,-1", "GE 0,-1,inf"), "OverflowError"),
+    "ge nan third": (DIPOLE.replace("GE 0,-1", "GE 0,-1,nan"), "ValueError"),
     # -- GN --
     "gn perfect": (deck("GN 1"), "parsed"),
     "gn sommerfeld": (deck("GN 0,0,0,0,13.,.005,1.,0."), "parsed"),
