@@ -370,3 +370,37 @@ def test_the_current_and_charge_templates_are_the_old_fstrings():
     data = RunData(currents=tuple(currents), charges=tuple(charges))
     assert _currents(data)[-len(currents) :] == [old_current(r) for r in currents]
     assert _charges(data)[-len(charges) :] == [old_charge(r) for r in charges]
+
+
+def test_the_gains_take_abs_from_libm_hypot():
+    """`pattern_fields`' gains are ``norm·|M|²`` with ``|M|`` from libm's
+    hypot (CPython's ``abs(complex)``), not numpy's complex absolute, whose
+    AVX-512 and AVX2 loops disagree in the last bit: a gain printed on one
+    machine is the gain printed on another, and a C++ replay of the readout
+    (momwire#1479) has one function to call."""
+    from momwire._far_readout import ETA0, Ground, _far_moments, pattern_fields
+
+    rng = np.random.default_rng(1479)
+    mid = rng.standard_normal((40, 3))
+    moment = rng.standard_normal((40, 3)) + 1j * rng.standard_normal((40, 3))
+    thetas = np.linspace(0.0, 180.0, 37)
+    phis = np.linspace(0.0, 360.0, 25)
+    k, p_in = 2.0 * math.pi / 10.0, 0.37
+    _e_t, _e_p, g_v, g_h = pattern_fields(
+        mid, moment, k, thetas, phis, Ground("free"), 0.0, 30e6, p_in
+    )
+    m_theta, m_phi = _far_moments(
+        mid, moment, k, np.radians(thetas), np.radians(phis), Ground("free"), 0.0, 30e6
+    )
+    norm = ETA0 * k * k / (8.0 * math.pi * p_in)
+    want_v = (
+        norm
+        * np.array([abs(v) for v in m_theta.ravel().tolist()]).reshape(m_theta.shape)
+        ** 2
+    )
+    want_h = (
+        norm
+        * np.array([abs(v) for v in m_phi.ravel().tolist()]).reshape(m_phi.shape) ** 2
+    )
+    assert _same_bits(g_v, want_v)
+    assert _same_bits(g_h, want_h)
