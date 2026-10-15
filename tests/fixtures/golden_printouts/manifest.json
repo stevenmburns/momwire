@@ -1,5 +1,5 @@
 {
- "commit": "35d31624cf1704f00c5dc81d59f23235fdbb9539",
+ "commit": "2c473632fcec08a9b71f815fac12098b002b6d10",
  "generator": "scripts/golden_printouts.py",
  "bases": [
   "bspline",
@@ -27,16 +27,16 @@
     "user_api": "blas",
     "internal_api": "openblas",
     "num_threads": 1,
-    "filepath": "libscipy_openblas-5f890258.so",
-    "version": "0.3.31.dev",
+    "filepath": "libscipy_openblas64_-f48b354e.so",
+    "version": "0.3.34.106.0",
     "architecture": "Haswell"
    },
    {
     "user_api": "blas",
     "internal_api": "openblas",
     "num_threads": 1,
-    "filepath": "libscipy_openblas64_-f48b354e.so",
-    "version": "0.3.34.106.0",
+    "filepath": "libscipy_openblas-5f890258.so",
+    "version": "0.3.31.dev",
     "architecture": "Haswell"
    }
   ],
