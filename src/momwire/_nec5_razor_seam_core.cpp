@@ -628,8 +628,14 @@ Prepared prepare(const Deck &d) {
     // a site like a source. Its impedance is the run half's; here only that
     // `LoadSpec.impedance` cannot raise on it (a non-finite value, or an
     // element whose `omega * L` / `omega * C` underflows to a zero divisor).
-    if (!d.wire_conductivity.empty() || !d.wire_distributed_rlc.empty())
-        throw Declined{"wire-loading"};
+    // WIRE loading reaches the solver as keyword arguments (below); a value
+    // `configure_loading` or the solve would raise on declines by name.
+    for (const auto &tc : d.wire_conductivity)
+        if (!std::isfinite(tc.second) || !(tc.second > 0.0)) throw Declined{"wire-loading-values"};
+    for (const auto &tr : d.wire_distributed_rlc)
+        if (!std::isfinite(tr.second.r) || !std::isfinite(tr.second.l) || !std::isfinite(tr.second.c) ||
+            (tr.second.kind != "series" && tr.second.kind != "parallel"))
+            throw Declined{"wire-loading-values"};
     {
         const double omega = 2.0 * 3.141592653589793 * (d.frequency_mhz * 1e6);
         for (const Load &l : d.loads) {
@@ -983,6 +989,36 @@ Prepared prepare(const Deck &d) {
         g.end = mesh.sites[s].end == SeamSite::at_start ? End::start : End::end;
         g.volts = cd(0.0, 0.0);
         in.node_gaps.push_back(g);
+    }
+    // `_solver_for`'s loading: `LD 5` conductivity and `LD 2` / `LD 3`
+    // per-metre RLC, one entry per PIECE by its tag (NaN / none where the
+    // tag carries none), and no keyword at all where the deck has none.
+    if (!d.wire_conductivity.empty()) {
+        in.loading.has_conductivity = true;
+        for (const SeamPiece &piece : mesh.pieces) {
+            double sigma = std::numeric_limits<double>::quiet_NaN();
+            for (const auto &tc : d.wire_conductivity)
+                if (tc.first == piece.tag) {
+                    sigma = tc.second;
+                    break;
+                }
+            in.loading.conductivity.push_back(sigma);
+        }
+    }
+    if (!d.wire_distributed_rlc.empty()) {
+        in.loading.has_rlc = true;
+        for (const SeamPiece &piece : mesh.pieces) {
+            razor::WireRLC e;
+            for (const auto &tr : d.wire_distributed_rlc)
+                if (tr.first == piece.tag) {
+                    e.kind = tr.second.kind == "series" ? razor::WireRLC::series : razor::WireRLC::parallel;
+                    e.r = tr.second.r;
+                    e.l = tr.second.l;
+                    e.c = tr.second.c;
+                    break;
+                }
+            in.loading.rlc.push_back(e);
+        }
     }
     in.has_ground = has_ground;
     in.ground_z = 0.0;
