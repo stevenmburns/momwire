@@ -49,6 +49,12 @@ Grid scaled_to(const Grid &g, double k2, double omega, double mu);
 // the fill's either way).
 const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu);
 
+// `_sommerfeld.far_cpp_pack(grid)`: `_far_constants` in `_FAR_PACK_ORDER`
+// (eps, k1, c2, c1k, ap, res_fv, g2k1, k2), empty for free space. numpy's
+// complex scalar sqrt / arcsin / cos are glibc's csqrt / casin / ccos and its
+// scalar products plain (measured, AVX2 and AVX-512).
+std::vector<cd> far_pack(const Grid &g);
+
 // `_somm_r1_bucket_wl` and `_somm_eps_rungs` (exposed for the tests).
 double r1_bucket_wl(double r1_wl);
 void eps_rungs(cd eps_t, cd &lo, cd &hi, double &t);
