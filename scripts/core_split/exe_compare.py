@@ -133,6 +133,11 @@ def main(argv=None):
         )
     if threads is None:
         threads = "auto"
+    if threads != "auto":
+        # The resident launcher gives each live worker `cores // workers`
+        # threads, never more than it started with: more concurrent callers
+        # than that would answer below T (two network decks move).
+        workers = max(1, min(workers, (os.cpu_count() or 1) // int(threads)))
     decks = pc._decks(args)
     work = Path(tempfile.mkdtemp(prefix="exe_compare_"))
     runtime = work / "runtime"  # the launcher's private resident server
