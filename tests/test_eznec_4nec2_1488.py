@@ -40,6 +40,18 @@ def _example3_text() -> str:
     return (EXAMPLE3 / "EXAMPLE3.inp").read_bytes().decode("latin-1")
 
 
+# Example 3 over NO ground: the same geometry -- so the same ``.GMO`` --
+# with the Sommerfeld fill (~13 s on a Haswell) taken out, for the default
+# lane. The deck as Dan sent it is solved in the slow lane below.
+_SOMMERFELD_CARD = b"GN 2 0 0 0 14 .006"
+
+
+def _free_space_example3() -> bytes:
+    raw = (EXAMPLE3 / "EXAMPLE3.inp").read_bytes()
+    assert raw.count(_SOMMERFELD_CARD) == 1
+    return raw.replace(_SOMMERFELD_CARD, b"GN -1")
+
+
 def _deck(body: str, ge: str = "GE 0 0 1") -> str:
     """A deck around ``body``'s GW cards, closed by ``EN``: free space, one
     drive on the first wire's first segment, one frequency, one ``XQ``."""
@@ -321,13 +333,16 @@ def test_the_seam_reads_the_stdin_forms_request_line():
 # --------------------------------------------------------------------------
 
 
-def _room(tmp_path: Path) -> tuple[Path, Path]:
-    """4nec2's layout: the engine runs in ``bin``, the files sit in ``out``."""
+def _room(tmp_path: Path, deck: bytes | None = None) -> tuple[Path, Path]:
+    """4nec2's layout: the engine runs in ``bin``, the files sit in ``out``.
+    The deck is Example 3 over no ground unless ``deck`` says otherwise."""
     engine_dir = tmp_path / "bin"
     out_dir = tmp_path / "out"
     engine_dir.mkdir()
     out_dir.mkdir()
-    (out_dir / "EXAMPLE3.inp").write_bytes((EXAMPLE3 / "EXAMPLE3.inp").read_bytes())
+    (out_dir / "EXAMPLE3.inp").write_bytes(
+        _free_space_example3() if deck is None else deck
+    )
     return engine_dir, out_dir
 
 
@@ -343,21 +358,24 @@ def _stdin(monkeypatch, raw: bytes) -> None:
 
 
 def _impedance(printout: bytes) -> complex:
-    """The ANTENNA INPUT PARAMETERS row's impedance, read off the printout."""
+    """The ANTENNA INPUT PARAMETERS row's impedance, read off the printout:
+    the row ends V, I, Z, Y (re/im pairs) and the power, so Z is the fifth
+    and fourth numbers from the end."""
     lines = printout.decode("latin-1").splitlines()
     for k, line in enumerate(lines):
         if "ANTENNA INPUT PARAMETERS" in line:
             for row in lines[k + 1 :]:
                 fields = row.split()
-                if len(fields) >= 9 and fields[0].isdigit():
-                    return complex(float(fields[6]), float(fields[7]))
+                if len(fields) >= 11 and fields[0].isdigit():
+                    return complex(float(fields[-5]), float(fields[-4]))
     raise AssertionError("no ANTENNA INPUT PARAMETERS row")
 
 
 @pytest.mark.parametrize("basis", [_serve.BASIS, "razor-2p"])
 def test_the_shell_reads_4nec2s_names_from_stdin(tmp_path, monkeypatch, capsys, basis):
     """No arguments, the two relative names on stdin with CRLF, a deck with
-    no EN: the printout and the sample's ``.GMO`` land beside the deck."""
+    no EN: the printout and the sample's ``.GMO`` land beside the deck, and
+    the printout is the one the deck closed by EN would have had."""
     engine_dir, out_dir = _room(tmp_path)
     monkeypatch.chdir(engine_dir)
     _stdin(monkeypatch, _NAMES)
@@ -370,11 +388,36 @@ def test_the_shell_reads_4nec2s_names_from_stdin(tmp_path, monkeypatch, capsys, 
     ).read_bytes()
     printout = (out_dir / "EXAMPLE3.out").read_bytes()
     assert b"NEC ERROR" not in printout
-    z = _impedance(printout)
-    if basis == "razor-2p":
-        # Ward's port of this very formulation, from the sample's printout.
-        assert abs(z - complex(61.409, 18.768)) < 0.05
+    closed = tmp_path / "closed.nec"
+    closed.write_bytes(_free_space_example3() + b"EN\r\n")
+    _shell.run(closed, tmp_path / "closed.out", basis=basis)
+    assert printout == (tmp_path / "closed.out").read_bytes()
     assert list(engine_dir.iterdir()) == []
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("basis", [_serve.BASIS, "razor-2p"])
+def test_dans_example3_over_sommerfeld_ground_end_to_end(tmp_path, monkeypatch, basis):
+    """The deck exactly as Dan sent it, Sommerfeld ground and all: the
+    sample's ``.GMO``, and on razor-2p the impedance Ward's port of the same
+    formulation printed, 61.409 + j18.768 ohms (measured here 61.406 +
+    j18.765; his port builds its own Sommerfeld grid, ours blends a cached
+    one, and the two are documented to differ at this level)."""
+    engine_dir, out_dir = _room(tmp_path, (EXAMPLE3 / "EXAMPLE3.inp").read_bytes())
+    monkeypatch.chdir(engine_dir)
+    _stdin(monkeypatch, _NAMES)
+
+    assert _shell.main([], basis=basis) == 0
+
+    assert (out_dir / "EXAMPLE3.GMO").read_bytes() == (
+        EXAMPLE3 / "EXAMPLE3.GMO"
+    ).read_bytes()
+    z = _impedance((out_dir / "EXAMPLE3.out").read_bytes())
+    if basis == "razor-2p":
+        assert abs(z - complex(61.409, 18.768)) < 0.01, z
+    else:
+        # bs2 answers in its own basis; pinned so a change is noticed.
+        assert abs(z - complex(61.834, 21.469)) < 0.01, z
 
 
 def test_the_shell_with_one_name_on_stdin_is_the_one_argument_fault(
@@ -409,7 +452,7 @@ def test_the_two_argument_form_writes_the_gmo_too(tmp_path):
     """The file follows the deck, not the form: the same deck with an EN,
     named on the command line, gets the same ``.GMO``."""
     deck = tmp_path / "EXAMPLE3.nec"
-    deck.write_bytes((EXAMPLE3 / "EXAMPLE3.inp").read_bytes() + b"EN\r\n")
+    deck.write_bytes(_free_space_example3() + b"EN\r\n")
     _shell.run(deck, tmp_path / "EXAMPLE3.out", basis="razor-2p")
     assert (tmp_path / "EXAMPLE3.GMO").read_bytes() == (
         EXAMPLE3 / "EXAMPLE3.GMO"
