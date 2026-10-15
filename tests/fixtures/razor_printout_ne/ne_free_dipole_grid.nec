@@ -1,0 +1,9 @@
+CM NE 0: a rectangular grid around a free-space dipole (X fastest, then Y, then Z)
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+NE 0 3 2 2 -1.0 0.5 -1.5 1.0 0.75 3.0
+XQ
+EN

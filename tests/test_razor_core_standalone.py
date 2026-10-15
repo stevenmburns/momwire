@@ -484,6 +484,7 @@ def _printout_compare_module():
 PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
 LD_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ld"
 RP_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_rp"
+NE_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ne"
 
 
 def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
@@ -546,9 +547,9 @@ def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     assert counts.get("served", 0) >= 25 and counts.get("refused", 0) >= 50, counts
     assert counts.get("served|frame", 0) >= 2, counts
     assert counts.get("runs", 0) >= 30 and counts.get("multi-port", 0) >= 5, counts
-    assert "near field not yet in C++" in reasons, reasons
-    assert "lumped loads not yet in C++" not in reasons, reasons
-    assert "radiation pattern not yet in C++" not in reasons, reasons
+    # The run half declines nothing by name any more: LD 0 / 1 / 4, RP and
+    # NE / NH all print (what is left declines in the seam, before it).
+    assert not any(r.endswith("not yet in C++") for r in reasons), reasons
 
 
 def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
@@ -631,6 +632,33 @@ def test_the_pattern_decks_print_their_patterns(driver, tmp_path):
             "",
         ), path
         assert b"RADIATION PATTERNS" in ans["printout"], path
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
+
+
+def test_the_near_field_decks_print_their_fields(driver, tmp_path):
+    """NE / NH print through the C++ run half over free space and GN 1:
+    the grid (rectangular, or spherical with its axes exact), razor-2p's
+    current resampled eight ways along each edge (numpy's linspace and
+    interp), the mixed-potential E (current and node-charge sums) or the H
+    curl, the PEC image, the zero floor. Each committed deck prints with its
+    table -- a free-space grid, a spherical NH over GN 1 through the horizon
+    and the nadir, a near field beside a pattern on a loaded V, two driven
+    verticals over GN 1 -- and is compared byte for byte above."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(NE_DECKS.glob("*.nec"))
+    assert len(decks) == 4
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    for path, ans in zip(decks, answers, strict=True):
+        assert (ans["route"], ans["seam"], ans["raised"]) == (
+            "printed",
+            "served",
+            "",
+        ), path
+        assert b"- - - NEAR " in ans["printout"], path
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path

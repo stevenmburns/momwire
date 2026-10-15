@@ -1,0 +1,12 @@
+CM a loaded inverted V: a near field and a pattern on one run
+CE
+GW 1 15 0 0 6 4 0 2 0.001
+GW 2 15 0 0 6 -4 0 2 0.001
+GE 0
+LD 0,1,5,0,10,1.0E-07,0
+EX 0 1 1 0 1 0
+FR 0 1 0 0 18.1 0
+NE 0 2 1 3 0.5 0 5.5 1 0 0.25
+RP 0 7 1 1000 0 0 15 0 0
+XQ
+EN

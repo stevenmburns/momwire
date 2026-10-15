@@ -588,6 +588,9 @@ struct LoadRowC {  // `LoadRow`, for an LD 0 / 1 / 4 card (`_loading_row`)
          has_capacitance = false;
 };
 
+struct NearRowC;
+struct NearBlockC;
+
 struct PatternRowC {  // `PatternRow`
     double theta = 0, phi = 0, vert = 0, hor = 0, total = 0, axial = 0, tilt = 0;
     std::string sense;
@@ -614,6 +617,7 @@ struct RunDataC {  // `RunData`, for the decks this unit prints
     std::vector<ElementRowC> currents, charges;
     double input_power = 0, radiated_power = 0, wire_loss = 0, efficiency = 0;
     std::vector<PatternBlockC> patterns;
+    std::vector<std::shared_ptr<NearBlockC>> near_fields;
 };
 
 // A preparation's solve: `PortSolution.coeffs` (column-major n_basis x
@@ -1272,6 +1276,288 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
     return block;
 }
 
+// ============================================================================
+// the near field (`_serve._near_field`, `_near_readout.near_field_at`)
+// ============================================================================
+
+struct NearRowC {  // `NearFieldRow`
+    double point[3] = {0, 0, 0};
+    double mag[3] = {0, 0, 0}, deg[3] = {0, 0, 0};
+};
+
+struct NearBlockC {  // `NearFieldBlock`
+    std::vector<NearRowC> rows;
+    bool magnetic = false;
+};
+
+// CPython's `divmod(x, 90.0)` (float_divmod), for `cos_sin_deg`.
+void py_divmod(double vx, double wx, double &floordiv, double &mod) {
+    mod = std::fmod(vx, wx);
+    double div = (vx - mod) / wx;
+    if (mod != 0.0) {
+        if ((wx < 0) != (mod < 0)) {
+            mod += wx;
+            div -= 1.0;
+        }
+    } else {
+        mod = std::copysign(0.0, wx);
+    }
+    if (div != 0.0) {
+        floordiv = std::floor(div);
+        if (div - floordiv > 0.5) floordiv += 1.0;
+    } else {
+        floordiv = std::copysign(0.0, vx / wx);
+    }
+}
+
+// `cos_sin_deg`: exact on the four axes, libm elsewhere.
+void cos_sin_deg(double a, double &c, double &s) {
+    double quarter, rest;
+    py_divmod(a, 90.0, quarter, rest);
+    if (rest == 0.0) {
+        long long q = static_cast<long long>(quarter) % 4;
+        if (q < 0) q += 4;
+        static const double table[4][2] = {{1.0, 0.0}, {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}};
+        c = table[q][0];
+        s = table[q][1];
+        return;
+    }
+    const double rad = a * DEG_TO_RAD;
+    c = std::cos(rad);
+    s = std::sin(rad);
+}
+
+// `grid_points(coordinates, counts, origin, step)`: X fastest, then Y, then Z
+// (R, theta, phi for a spherical card), each `start + idx * step`.
+std::vector<double> near_points(const Request &rq) {
+    for (int i = 0; i < 3; i++)
+        if (!rq.counts[i].fits_i64()) throw Decline{"a near-field count past 64 bits"};
+    if (!rq.coordinates.fits_i64() || (rq.coordinates.i64() != 0 && rq.coordinates.i64() != 1))
+        throw Decline{"a near-field coordinate system other than 0 or 1 (Python raises)"};
+    const int64_t nx = rq.counts[0].i64(), ny = rq.counts[1].i64(), nz = rq.counts[2].i64();
+    if (nx < 0 || ny < 0 || nz < 0 || nx * ny * nz > 10000000) throw Decline{"a near-field grid out of range"};
+    std::vector<double> out;
+    for (int64_t iz = 0; iz < nz; iz++)
+        for (int64_t iy = 0; iy < ny; iy++)
+            for (int64_t ix = 0; ix < nx; ix++) {
+                const double idx[3] = {static_cast<double>(ix), static_cast<double>(iy), static_cast<double>(iz)};
+                double v[3];
+                for (int c = 0; c < 3; c++) v[c] = rq.origin[c] + idx[c] * rq.step[c];
+                if (rq.coordinates.i64() == 0) {
+                    out.insert(out.end(), v, v + 3);
+                } else {
+                    double ct, st, cp, sp;
+                    cos_sin_deg(v[1], ct, st);
+                    cos_sin_deg(v[2], cp, sp);
+                    out.push_back((v[0] * st) * cp);
+                    out.push_back((v[0] * st) * sp);
+                    out.push_back(v[0] * ct);
+                }
+            }
+    return out;
+}
+
+// numpy's `interp(x, xp, fp)` (no slopes cache difference: the same quotient).
+double np_interp(double x, const double *xp, const double *fp, int64_t n) {
+    if (std::isnan(x)) return x;
+    if (x > xp[n - 1]) return fp[n - 1];
+    if (x < xp[0]) return fp[0];
+    if (x == xp[n - 1]) return fp[n - 1];
+    const int64_t j = static_cast<int64_t>(std::upper_bound(xp, xp + n, x) - xp) - 1;
+    if (x == xp[j]) return fp[j];
+    const double slope = (fp[j + 1] - fp[j]) / (xp[j + 1] - xp[j]);
+    double r = slope * (x - xp[j]) + fp[j];
+    if (std::isnan(r)) {
+        r = slope * (x - xp[j + 1]) + fp[j + 1];
+        if (std::isnan(r) && fp[j] == fp[j + 1]) r = fp[j];
+    }
+    return r;
+}
+
+struct Elements {  // `element_currents(coeffs, subdiv)`'s (mid, moment, nodes, delta)
+    std::vector<double> mid, nodes;
+    std::vector<cd> moment, delta;
+};
+
+// `element_currents(coeffs, subdiv=8)`: each edge split 8 ways (linspace),
+// the arc along the chords (`norm3` steps, `np.cumsum`), the current there by
+// `np.interp` of the knot currents (real and imaginary apart, then
+// `Ire + 1j * Iim`), and the elements' midpoints, moments, nodes and steps.
+Elements element_currents_sub(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i,
+                              int64_t subdiv) {
+    Elements el;
+    for (int64_t w = 0; w < fr.n_wires; w++) {
+        std::vector<double> knots;
+        const int64_t p0 = fr.pt_off[static_cast<std::size_t>(w)];
+        const std::vector<int64_t> &npe = fr.npe[static_cast<std::size_t>(w)];
+        for (std::size_t e = 0; e < npe.size(); e++) {
+            std::vector<double> seg;
+            linspace3(&fr.points[static_cast<std::size_t>(3 * (p0 + e))],
+                      &fr.points[static_cast<std::size_t>(3 * (p0 + e + 1))], npe[e] * subdiv + 1, seg);
+            knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
+        }
+        const std::size_t nk = knots.size() / 3;
+        std::vector<double> arcs(nk, 0.0);
+        double run = 0.0;
+        for (std::size_t q = 1; q < nk; q++) {
+            const double dx = knots[3 * q] - knots[3 * q - 3], dy = knots[3 * q + 1] - knots[3 * q - 2],
+                         dz = knots[3 * q + 2] - knots[3 * q - 1];
+            const double step = std::sqrt((dx * dx + dy * dy) + dz * dz);
+            run = q == 1 ? step : run + step;
+            arcs[q] = run;
+        }
+        const int64_t a0 = fr.seg_offsets[static_cast<std::size_t>(w)] + w;
+        const int64_t na = fr.seg_offsets[static_cast<std::size_t>(w) + 1] - fr.seg_offsets[static_cast<std::size_t>(w)] + 1;
+        const double *arc = &fr.arc_at_knot[static_cast<std::size_t>(a0)];
+        const std::vector<cd> &kc = knot_i[static_cast<std::size_t>(w)];
+        std::vector<double> re(kc.size()), im(kc.size());
+        for (std::size_t q = 0; q < kc.size(); q++) {
+            re[q] = kc[q].real();
+            im[q] = kc[q].imag();
+        }
+        std::vector<cd> cur(nk);
+        for (std::size_t q = 0; q < nk; q++) {
+            const double ir = np_interp(arcs[q], arc, re.data(), na);
+            const double ii = np_interp(arcs[q], arc, im.data(), na);
+            const cd j_ii = np_cmul(cd(0.0, 1.0), cd(ii, 0.0));  // `1j * Iim`
+            cur[q] = cd(ir + j_ii.real(), 0.0 + j_ii.imag());
+        }
+        std::vector<cd> element(nk - 1);
+        for (std::size_t q = 0; q + 1 < nk; q++) {
+            element[q] = np_cmul(cd(0.5, 0.0), c_add(cur[q + 1], cur[q]));
+            for (int c = 0; c < 3; c++) {
+                el.mid.push_back(0.5 * (knots[3 * q + 3 + c] + knots[3 * q + c]));
+                el.moment.push_back(c_mul_real(element[q], knots[3 * q + 3 + c] - knots[3 * q + c]));
+            }
+        }
+        el.nodes.insert(el.nodes.end(), knots.begin(), knots.end());
+        for (std::size_t q = 0; q < nk; q++) {
+            const cd in = q == 0 ? cd(0.0, 0.0) : element[q - 1];
+            const cd out = q + 1 == nk ? cd(0.0, 0.0) : element[q];
+            el.delta.push_back(c_sub(in, out));
+        }
+    }
+    return el;
+}
+
+// `_element_fields(points, elements, k, radius, magnetic)`: the mixed-potential
+// E (or H), every element sum over axis 1 in numpy's order (from the first
+// term, in sequence).
+std::vector<cd> element_fields(const std::vector<double> &points, const Elements &el, double k,
+                               double radius, bool magnetic) {
+    const std::size_t np_pts = points.size() / 3;
+    std::vector<cd> out(np_pts * 3);
+    const cd mjk = py_cmul(cd(-0.0, -1.0), cd(k, 0.0));  // `-1j * k`
+    const auto geometry = [&](const double *p, const double *s, double rh[3], double &r, cd &green) {
+        double rv[3];
+        for (int c = 0; c < 3; c++) rv[c] = p[c] - s[c];
+        r = std::sqrt(((rv[0] * rv[0] + rv[1] * rv[1]) + rv[2] * rv[2]) + radius * radius);
+        for (int c = 0; c < 3; c++) rh[c] = rv[c] / r;
+        const cd arg = c_mul_real(mjk, r);
+        const double ex = std::exp(arg.real());
+        green = np_cdiv(cd(ex * std::cos(arg.imag()), ex * std::sin(arg.imag())),
+                        cd((4.0 * 3.141592653589793) * r, 0.0));
+    };
+    const std::size_t n_el = el.mid.size() / 3, n_nodes = el.nodes.size() / 3;
+    if (magnetic) {
+        const cd jk = py_cmul(cd(0.0, 1.0), cd(k, 0.0));
+        for (std::size_t p = 0; p < np_pts; p++) {
+            cd acc[3];
+            for (std::size_t n = 0; n < n_el; n++) {
+                double rh[3], r;
+                cd green;
+                geometry(&points[3 * p], &el.mid[3 * n], rh, r, green);
+                const cd *m = &el.moment[3 * n];
+                cd cross[3];
+                for (int c = 0; c < 3; c++) {
+                    const int i = (c + 1) % 3, j = (c + 2) % 3;
+                    cross[c] = c_sub(c_mul_real(m[i], rh[j]), c_mul_real(m[j], rh[i]));
+                }
+                const cd weight = np_cmul(cd(jk.real() + 1.0 / r, jk.imag() + 0.0), green);
+                for (int c = 0; c < 3; c++) {
+                    const cd t = np_cmul(weight, cross[c]);
+                    acc[c] = n == 0 ? t : c_add(acc[c], t);
+                }
+            }
+            for (int c = 0; c < 3; c++) out[3 * p + c] = acc[c];
+        }
+        return out;
+    }
+    const cd pre = py_cmul(py_cmul(cd(-0.0, -1.0), cd(ETA0, 0.0)), cd(k, 0.0));        // `-1j * ETA0 * k`
+    const cd pre_q = py_cdiv(py_cmul(cd(-0.0, -1.0), cd(ETA0, 0.0)), cd(k, 0.0));      // `-1j * ETA0 / k`
+    const cd jk = py_cmul(cd(0.0, 1.0), cd(k, 0.0));                                     // `1j * k`
+    for (std::size_t p = 0; p < np_pts; p++) {
+        cd vec[3], sca[3];
+        for (std::size_t n = 0; n < n_el; n++) {
+            double rh[3], r;
+            cd green;
+            geometry(&points[3 * p], &el.mid[3 * n], rh, r, green);
+            for (int c = 0; c < 3; c++) {
+                const cd t = np_cmul(green, el.moment[3 * n + c]);
+                vec[c] = n == 0 ? t : c_add(vec[c], t);
+            }
+        }
+        for (std::size_t n = 0; n < n_nodes; n++) {
+            double rh[3], r;
+            cd green;
+            geometry(&points[3 * p], &el.nodes[3 * n], rh, r, green);
+            const cd jkr = c_mul_real(jk, r);
+            const cd one_plus(1.0 + jkr.real(), 0.0 + jkr.imag());
+            cd x = np_cmul(el.delta[n], one_plus);
+            x = np_cdiv(x, cd(r, 0.0));
+            x = np_cmul(x, green);
+            const cd scalar = np_cmul(pre_q, x);
+            for (int c = 0; c < 3; c++) {
+                const cd t = c_mul_real(scalar, rh[c]);
+                sca[c] = n == 0 ? t : c_add(sca[c], t);
+            }
+        }
+        for (int c = 0; c < 3; c++) {
+            const cd e = np_cmul(pre, n_el ? vec[c] : cd(0.0, 0.0));
+            out[3 * p + c] = c_add(e, n_nodes ? sca[c] : cd(0.0, 0.0));
+        }
+    }
+    return out;
+}
+
+// `_serve._near_field` over free space or GN 1, and `near_field_block`.
+NearBlockC near_block(const Request &rq, const razor::Front &fr,
+                      const std::vector<std::vector<cd>> &knot_i, const Prepared &p, bool pec) {
+    const std::vector<double> points = near_points(rq);
+    const double k = 2.0 * 3.141592653589793 / p.wavelength;
+    double radius = p.mesh.pieces.empty() ? 0.0 : p.mesh.pieces[0].radius;
+    for (const SeamPiece &piece : p.mesh.pieces)
+        if (piece.radius < radius) radius = piece.radius;  // Python's `min`
+    if (p.mesh.pieces.empty()) throw Decline{"a near field with no wire"};
+    const Elements el = element_currents_sub(fr, knot_i, 8);
+    std::vector<cd> field = element_fields(points, el, k, radius, rq.magnetic);
+    if (pec) {
+        Elements img = el;
+        for (std::size_t n = 0; n < el.mid.size() / 3; n++) {
+            img.mid[3 * n + 2] = 2.0 * 0.0 - el.mid[3 * n + 2];
+            for (int c = 0; c < 3; c++) img.moment[3 * n + c] = c_mul_real(el.moment[3 * n + c], c == 2 ? 1.0 : -1.0);
+        }
+        for (std::size_t n = 0; n < el.nodes.size() / 3; n++) img.nodes[3 * n + 2] = 2.0 * 0.0 - el.nodes[3 * n + 2];
+        for (std::size_t n = 0; n < el.delta.size(); n++) img.delta[n] = cd(-el.delta[n].real(), -el.delta[n].imag());
+        const std::vector<cd> image = element_fields(points, img, k, radius, rq.magnetic);
+        for (std::size_t q = 0; q < field.size(); q++) field[q] = c_add(field[q], image[q]);
+    }
+    NearBlockC block;
+    block.magnetic = rq.magnetic;
+    for (std::size_t q = 0; q < points.size() / 3; q++) {
+        NearRowC row;
+        for (int c = 0; c < 3; c++) {
+            row.point[c] = points[3 * q + c];
+            cd cell = field[3 * q + c];
+            if (cell.real() * cell.real() + cell.imag() * cell.imag() <= 1.0e-20) cell = cd(0.0, 0.0);
+            row.mag[c] = std::hypot(cell.real(), cell.imag());
+            row.deg[c] = py_degrees(py_atan2(cell.imag(), cell.real()));
+        }
+        block.rows.push_back(row);
+    }
+    return block;
+}
+
 RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const NumpyLinalg &np,
                 std::vector<RunArrays> *arrays) {
     const razor::Front &fr = *p.front;
@@ -1458,6 +1744,12 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     // `patterns=tuple(_pattern(...) for request in deck.requests if RP)`, over
     // `_far_ground(deck, medium)`: PEC for GN 1, the Fresnel-weighted image
     // ("refl") for a bare GD's medium, free space otherwise.
+    // `near_fields=tuple(_near_field(...) for request if NE / NH)`: free
+    // space, or GN 1's image (the seam declines a near field over GD).
+    for (const Request &rq : deck.requests)
+        if (rq.kind == Request::near_field)
+            data.near_fields.push_back(std::make_shared<NearBlockC>(
+                near_block(rq, fr, knots, p, deck.ground.kind == Ground::perfect)));
     bool any_rp = false;
     for (const Request &rq : deck.requests) any_rp = any_rp || rq.kind == Request::far_field;
     if (any_rp) {
@@ -1774,6 +2066,31 @@ Lines pattern_lines(const PatternBlockC &block) {
     return lines;
 }
 
+// `_printout._near_field`: heading, three header lines, a row a point.
+Lines near_lines(const NearBlockC &block) {
+    const std::string kind = block.magnetic ? "MAGNETIC" : "ELECTRIC";
+    const std::string c = block.magnetic ? "H" : "E";
+    const std::string unit = block.magnetic ? "AMPS/M" : "VOLTS/M";
+    const auto rjust = [](const std::string &t, std::size_t w) {
+        return t.size() >= w ? t : std::string(w - t.size(), ' ') + t;
+    };
+    std::string units = "      METERS      METERS      METERS";
+    for (std::size_t w : {16, 13, 13}) units += rjust(unit, w) + rjust("DEGREES", 10);
+    Lines lines = {sp(38) + "- - - NEAR " + kind + " FIELDS - - -", "",
+                   "              -  LOCATION  -                     -  " + c + "X  -"
+                   "               -  " + c + "Y  -               -  " + c + "Z  -",
+                   "        X           Y           Z           MAGNITUDE   PHASE"
+                   "      MAGNITUDE   PHASE      MAGNITUDE   PHASE",
+                   units};
+    for (const NearRowC &r : block.rows) {
+        std::string line = e(r.point[0], 14, 4) + e(r.point[1], 12, 4) + e(r.point[2], 12, 4);
+        const int widths[3] = {15, 14, 14};
+        for (int k = 0; k < 3; k++) line += e(r.mag[k], widths[k], 4) + f(r.deg[k], 9, 2);
+        lines.push_back(line);
+    }
+    return lines;
+}
+
 Lines run_sections(const RunDataC &data) {
     Lines body;
     if (!data.sources.empty()) {
@@ -1811,6 +2128,10 @@ Lines run_sections(const RunDataC &data) {
                watts("RADIATED POWER", data.radiated_power), watts("WIRE LOSS", data.wire_loss),
                ind + ljust("EFFICIENCY", 14) + "=" + f(data.efficiency, 7, 2) + " PERCENT"});
     blanks(body, 3);
+    for (const auto &near : data.near_fields) {
+        add(body, near_lines(*near));
+        blanks(body, 3);
+    }
     for (const PatternBlockC &block : data.patterns) {
         add(body, pattern_lines(block));
         blanks(body, 5);
@@ -2033,12 +2354,9 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
     return s.chained ? s.structures[k].echo_text() : text;
 }
 
-// The runs Python FINISHES carry no NE / NH (this unit's scope); LD 0 / 1 /
-// 4 and RP print (LD 2 / 3 / 5 decline as wire loading in the seam).
-void check_scope(const Deck &run) {
-    for (const Request &r : run.requests)
-        if (r.kind == Request::near_field) throw Decline{"near field not yet in C++"};
-}
+// Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH (LD 2 / 3 / 5,
+// networks, a Sommerfeld ground and a near field over GD decline in the seam).
+void check_scope(const Deck &run) { (void)run; }
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,
              const NumpyLinalg &np) {
