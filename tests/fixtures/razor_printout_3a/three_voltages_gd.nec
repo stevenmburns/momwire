@@ -1,0 +1,15 @@
+CM unit 3a: three EX 0 with complex volts over a MININEC ground (GD),
+CM ground plane on, charges printed.
+CE
+GW 1,12,0.,0.,0.,0.,0.,10.,.01
+GW 2,12,5.,0.,0.,5.,0.,10.,.01
+GW 3,12,0.,5.,0.,0.,5.,10.,.01
+GE 1,-1
+FR 0,1,0,0,7.15
+GD 0,0,0,0,13.,.005,1.,0.
+EX 0,1,-1,0,1.414214,0.
+EX 0,2,-1,0,0.,-1.414214
+EX 0,3,-1,0,-1.,1.
+PQ 0
+XQ 0
+EN
