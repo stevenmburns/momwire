@@ -275,8 +275,149 @@ std::string drive_refusal(const Deck &d) {
 // the card's own end. Its tolerance is its own, never larger than the card's
 // (a half is no longer than its card), so the card's says "below" for both
 // unless the end sits within an ulp of the line, which declines.
+// `cos_sin_deg` / `grid_points` (the printout core walks the same grid for
+// the rows; this copy is the refusal's, `_grid_points` shared by both in
+// Python): X fastest, then Y, then Z, or (R, theta, phi) placed exactly on
+// the axes through CPython's float `divmod`.
+void py_divmod(double vx, double wx, double &floordiv, double &mod) {
+    mod = std::fmod(vx, wx);
+    double div = (vx - mod) / wx;
+    if (mod != 0.0) {
+        if ((wx < 0) != (mod < 0)) {
+            mod += wx;
+            div -= 1.0;
+        }
+    } else {
+        mod = std::copysign(0.0, wx);
+    }
+    if (div != 0.0) {
+        floordiv = std::floor(div);
+        if (div - floordiv > 0.5) floordiv += 1.0;
+    } else {
+        floordiv = std::copysign(0.0, vx / wx);
+    }
+}
+
+void cos_sin_deg(double a, double &c, double &s) {
+    double quarter, rest;
+    py_divmod(a, 90.0, quarter, rest);
+    if (rest == 0.0) {
+        long long q = static_cast<long long>(quarter) % 4;
+        if (q < 0) q += 4;
+        static const double table[4][2] = {{1.0, 0.0}, {0.0, 1.0}, {-1.0, 0.0}, {0.0, -1.0}};
+        c = table[q][0];
+        s = table[q][1];
+        return;
+    }
+    const double rad = a * (3.141592653589793 / 180.0);
+    c = std::cos(rad);
+    s = std::sin(rad);
+}
+
+std::vector<double> near_grid(const Request &rq) {
+    for (int i = 0; i < 3; i++)
+        if (!rq.counts[i].fits_i64()) throw Declined{"near-field-count"};
+    if (!rq.coordinates.fits_i64() || (rq.coordinates.i64() != 0 && rq.coordinates.i64() != 1))
+        throw Declined{"near-field-coordinates"};
+    const long long nx = rq.counts[0].i64(), ny = rq.counts[1].i64(), nz = rq.counts[2].i64();
+    if (nx < 0 || ny < 0 || nz < 0 || nx * ny * nz > 10000000) throw Declined{"near-field-count"};
+    std::vector<double> out;
+    for (long long iz = 0; iz < nz; iz++)
+        for (long long iy = 0; iy < ny; iy++)
+            for (long long ix = 0; ix < nx; ix++) {
+                const double idx[3] = {static_cast<double>(ix), static_cast<double>(iy), static_cast<double>(iz)};
+                double v[3];
+                for (int c = 0; c < 3; c++) v[c] = rq.origin[c] + idx[c] * rq.step[c];
+                if (rq.coordinates.i64() == 0) {
+                    out.insert(out.end(), v, v + 3);
+                } else {
+                    double ct, st, cp, sp;
+                    cos_sin_deg(v[1], ct, st);
+                    cos_sin_deg(v[2], cp, sp);
+                    out.push_back((v[0] * st) * cp);
+                    out.push_back((v[0] * st) * sp);
+                    out.push_back(v[0] * ct);
+                }
+            }
+    return out;
+}
+
+// `_near_field_refusal` over a finite ground (`near_point_refusal`): a point
+// below the interface first, then a point ON a wire end standing in the
+// plane (the solver's own per-wire tolerance).
+std::string near_field_refusal(const Deck &d, const Request &rq) {
+    const std::string card = rq.magnetic ? "NH (near magnetic field)" : "NE (near electric field)";
+    const std::vector<double> pts = near_grid(rq);
+    const auto where = [&](const double *pt) {
+        return "(" + format_g(pt[0]) + ", " + format_g(pt[1]) + ", " + format_g(pt[2]) + ")";
+    };
+    for (std::size_t q = 0; q < pts.size() / 3; q++)
+        if (pts[3 * q + 2] < 0.0)
+            return card + " asks for the field at " + where(&pts[3 * q]) +
+                   " metres, which is below "
+                   "this deck's finite ground. The field inside the soil is the transmitted "
+                   "field, and this engine's near-field readout composes the field ABOVE the "
+                   "interface only (the transmitted readout is momwire#524), so it will not "
+                   "print a number for a point in the soil. Every point at or above z = 0 is "
+                   "served - on a spherical (NE 1) grid, keep theta (from the zenith) "
+                   "between -90 and 90 degrees";
+    struct Contact {
+        std::size_t wire;
+        const double *end;
+        double tol;
+    };
+    std::vector<Contact> contacts;
+    for (std::size_t i = 0; i < d.wires.size(); i++) {
+        const Wire &w = d.wires[i];
+        const double tol = touch_tol(w.end1, w.end2);
+        for (const double *end : {w.end1, w.end2})
+            if (std::fabs(end[2] - 0.0) <= tol) contacts.push_back(Contact{i, end, tol});
+    }
+    for (std::size_t q = 0; q < pts.size() / 3; q++)
+        for (const Contact &c : contacts)
+            if (norm3_diff(&pts[3 * q], c.end) <= c.tol) {
+                const std::string tag = d.wires[c.wire].tag.str();
+                return card + " asks for the field at " + where(&pts[3 * q]) +
+                       " metres, which is "
+                       "where wire " + tag + " stands on this deck's finite ground - and the field AT a "
+                       "contact-fed wire's base over a finite ground is singular. The image "
+                       "cancels the base node's charge only by 2/(1+epsilon), so a finite "
+                       "residual charge sits exactly at the observation point and the composed "
+                       "field there grows without bound as the solved current is resampled - 36.6 "
+                       "V/m at one sample per element, 1230 V/m at sixty-four. The engine's own "
+                       "printed cell is its discretization's regularization of that same "
+                       "singularity and sits INSIDE that ladder rather than at the end of it, so "
+                       "this seam will not print a number that is an artifact of a sampling "
+                       "constant. The same deck's FAR field, its currents, its charges and its "
+                       "impedance are all served, and the near "
+                       "field is served at every point off the contact - move the " + card +
+                       " card's observation point off wire " + tag + "'s base";
+            }
+    return "";
+}
+
 std::string geometry_refusal(const Deck &d) {
     if (d.ground.kind == Ground::free_space) return "";
+    if (d.ground.kind == Ground::sommerfeld) {
+        // Over GN 0 / GN 2 a wire below the plane is served (the buried
+        // Sommerfeld route, momwire#553), so only an in-plane span refuses,
+        // the first in deck order (a crossing card's halves end in the plane
+        // and are never in it). A buried or crossing wire then declines: the
+        // buried route (and the buried-with-contact sentence that guards it)
+        // is not in C++.
+        bool buried = false;
+        for (const Wire &w : d.wires) {
+            const double tol = touch_tol(w.end1, w.end2);
+            const double za = w.end1[2], zb = w.end2[2];
+            if (std::min(za, zb) < -tol) {
+                buried = true;
+                continue;
+            }
+            if (std::fabs(za) <= tol && std::fabs(zb) <= tol) return refuse_in_plane_wire(w.tag.str());
+        }
+        if (buried) throw Declined{"finite-ground-buried"};
+        return "";
+    }
     const bool gd = d.ground.kind == Ground::mininec;
     for (const Wire &w : d.wires) {
         const double tol = touch_tol(w.end1, w.end2);
@@ -302,10 +443,8 @@ std::string geometry_refusal(const Deck &d) {
 std::string scope_refusal(const Deck &d, std::string &declined) {
     declined.clear();
     try {
-        // The first rung, then a Sommerfeld ground (GN 0 / GN 2) declines.
         if (!d.transmission_lines.empty() && !d.networks.empty() && interleaves_networks(d))
             return REFUSE_MIXED_ORDER;
-        if (d.ground.kind == Ground::sommerfeld) throw Declined{"finite-ground"};
         if (d.sources.empty()) return REFUSE_NO_EX;
         std::string drive = drive_refusal(d);
         if (!drive.empty()) return drive;
@@ -315,11 +454,16 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
             if (!finite3(w.end1) || !finite3(w.end2)) throw Declined{"non-finite-geometry"};
         std::string geometry = geometry_refusal(d);
         if (!geometry.empty()) return geometry;
-        // `_has_buried_wire` is False here: free space has no plane, and
-        // over GN 1 / GD a span below it refused just above.
+        // `_has_buried_wire` is False here: free space has no plane, over
+        // GN 1 / GD a span below it refused just above, and over GN 0 / GN 2
+        // it declined. A near field over a FINITE ground (GN 0 / GN 2 / GD)
+        // asks `near_point_refusal` of its grid.
         for (const Request &r : d.requests) {
-            if (r.kind == Request::near_field && d.ground.kind == Ground::mininec)
-                throw Declined{"near-field-over-gd"};  // `near_point_refusal`
+            if (r.kind == Request::near_field &&
+                (d.ground.kind == Ground::mininec || d.ground.kind == Ground::sommerfeld)) {
+                const std::string near = near_field_refusal(d, r);
+                if (!near.empty()) return near;
+            }
             if (r.kind == Request::far_field && r.range_m < 0.0) return REFUSE_RP_RANGE;
         }
         if (d.requests.empty()) return REFUSE_NO_REQUEST;
@@ -684,10 +828,12 @@ Prepared prepare(const Deck &d) {
 
     // --- `_medium`, `_ground_kwargs` ----------------------------------------
     const bool has_ground = d.ground.kind != Ground::free_space;
-    if (d.ground.kind == Ground::mininec) {
+    if (d.ground.kind == Ground::mininec || d.ground.kind == Ground::sommerfeld) {
         p.has_medium = true;
         p.medium_eps_r = d.ground.eps_r;
-        if (d.ground.sigma_sets_im_epsc) {
+        const bool negative = d.ground.kind == Ground::mininec ? d.ground.sigma_sets_im_epsc
+                                                               : d.ground.sigma < 0.0;
+        if (negative) {
             p.medium_eps_c[0] = d.ground.eps_r;
             p.medium_eps_c[1] = d.ground.sigma;
             p.medium_sigma = -d.ground.sigma / (p.wavelength * EPSC_CONDUCTIVITY_FACTOR);
@@ -795,6 +941,10 @@ Prepared prepare(const Deck &d) {
             if (std::min(piece.points[2], piece.points[5]) <
                 0.0 - touch_tol(piece.points, piece.points + 3))
                 throw Declined{"wire-below-plane"};
+    // GN 0 / GN 2 construct RazorSolver(ground_eps=..., ground_model=
+    // "sommerfeld"): the composing fill (the Sommerfeld grid and its
+    // remainder) is not in C++, so a deck that reaches construction declines.
+    if (d.ground.kind == Ground::sommerfeld) throw Declined{"front:finite-ground"};
     razor::FrontInputs &in = p.inputs;
     for (const SeamPiece &piece : mesh.pieces) {
         in.points.insert(in.points.end(), piece.points, piece.points + 6);

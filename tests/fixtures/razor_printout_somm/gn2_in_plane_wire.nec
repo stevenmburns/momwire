@@ -1,0 +1,11 @@
+CM GN 2: a wire lying in the ground plane (refused by name)
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GW 2 5 1 0 0 2 0 0 0.002
+GE 1
+GN 2 0 0 0 13.0 0.005
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 1 37 1000 90 0 0 10 0
+XQ
+EN

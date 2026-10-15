@@ -485,6 +485,7 @@ PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
 LD_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ld"
 RP_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_rp"
 NE_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ne"
+SOMM_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_somm"
 NET_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_net"
 
 
@@ -692,6 +693,36 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path
+
+
+def test_the_sommerfeld_decks_refuse_or_decline_by_name(driver, tmp_path):
+    """GN 0 / GN 2 reach the C++ structure half (the Sommerfeld fill does
+    not): its refusals print here, byte for byte -- a near field at a
+    grounded base, a wire in the plane, a spherical grid reaching under a GD
+    -- and a deck Python would solve declines by name, at construction
+    (`front:finite-ground`) or, buried, before it (`finite-ground-buried`)."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(SOMM_DECKS.glob("*.nec"))
+    assert len(decks) == 5
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    routes = {
+        p.stem: (a["route"], a["seam"], a["reason"])
+        for p, a in zip(decks, answers, strict=True)
+    }
+    assert routes == {
+        "gd_nh_spherical_below": ("printed", "refused", ""),
+        "gn0_buried_radial": ("declined", "declined", "finite-ground-buried"),
+        "gn0_ne_at_contact": ("printed", "refused", ""),
+        "gn0_served_dipole": ("declined", "declined", "front:finite-ground"),
+        "gn2_in_plane_wire": ("printed", "refused", ""),
+    }, routes
+    for path, ans in zip(decks, answers, strict=True):
+        if ans["route"] == "printed":
+            assert ans["printout"] == pc.python_printout(
+                path.read_bytes().decode("latin-1")
+            ), path
 
 
 def test_the_printout_spells_outside_latin1_as_python_does(driver):

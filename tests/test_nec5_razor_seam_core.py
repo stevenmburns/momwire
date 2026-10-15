@@ -380,7 +380,46 @@ CASES = {
         + RP
         + "EN\n",
         "declined",
-        "finite-ground",
+        "front:finite-ground",
+    ),
+    "refuses_a_near_field_at_a_sommerfeld_contact": (
+        HEAD
+        + MONO
+        + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,-1,0,1.,0.\n"
+        + "NE 0,1,1,1,0.,0.,0.,0.,0.,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "stands on this deck's finite ground",
+    ),
+    "refuses_an_in_plane_wire_over_sommerfeld": (
+        HEAD
+        + MONO
+        + "GW 2,5,1.,0.,0.,2.,0.,0.,.002\n"
+        + "GE 1,-1\nGN 2,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,-1,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "lies in the ground plane",
+    ),
+    "declines_a_buried_wire_over_sommerfeld": (
+        HEAD
+        + "GW 1,10,0.,-2.5,-0.5,0.,2.5,-0.5,.002\n"
+        + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,5,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "declined",
+        "finite-ground-buried",
+    ),
+    "refuses_a_near_field_below_gd": (
+        HEAD
+        + MONO
+        + GD
+        + "EX 0,1,-1,0,1.,0.\nNE 0,1,1,1,1.,0.,-1.,0.,0.,0.\n"
+        + RP
+        + "EN\n",
+        "refused",
+        "which is below this deck's finite ground",
     ),
     "declines_wire_loading": (
         HEAD
@@ -406,15 +445,15 @@ CASES = {
         "served",
         "",
     ),
-    "declines_near_field_over_gd": (
+    "serves_a_near_field_over_gd": (
         HEAD
         + MONO
         + GD
         + "EX 0,1,-1,0,1.,0.\nNE 0,1,1,1,1.,0.,1.,0.,0.,0.\n"
         + RP
         + "EN\n",
-        "declined",
-        "near-field-over-gd",
+        "served",
+        "",
     ),
 }
 
