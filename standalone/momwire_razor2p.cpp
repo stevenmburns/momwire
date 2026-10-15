@@ -30,10 +30,12 @@
 // deck, and REFUSES, in the printout, on a mismatch: it never runs one
 // release's C++ beside another's Python.
 //
-// THREADS. The executable sets its own count (MOMWIRE_THREADS, else every
-// hardware thread) on its OpenBLAS and on OpenMP, and exports it as
-// OPENBLAS_NUM_THREADS / OMP_NUM_THREADS before CPython starts, so the
-// embedded numpy and scipy run on the same count.
+// THREADS. The executable sets its own count on its OpenBLAS and on OpenMP:
+// MOMWIRE_THREADS, else by the deck's size for the C++ route (`threads_for`:
+// 1, 4, or one per physical core) and every hardware thread for the fallback
+// (the launcher's default), exported as OPENBLAS_NUM_THREADS /
+// OMP_NUM_THREADS before CPython starts so the embedded numpy and scipy read
+// it.
 //
 // Gate hooks (environment; never set in use):
 //   MW_EXE_ROUTE_LOG=FILE    append "<route> <deck>" (cxx | fallback:<why>)
@@ -57,10 +59,12 @@
 #include <windows.h>
 #else
 #include <dirent.h>
+#include <sched.h>
 #include <dlfcn.h>
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <cstdint>
@@ -123,18 +127,62 @@ void log_route(const std::string &route, const std::string &deck) {
     }
 }
 
-// Below this many basis functions a deck's solve runs on one thread, through
-// the serial copy (no OpenMP runtime): starting threads costs more than the
-// parallel fill saves on a small deck (Rocketlake, dip21: ~0.4 ms answered on
-// one thread, ~0.75 ms on eight). Unit 5 measures where the crossover is.
-constexpr long long SMALL_SOLVE = 256;
-
-// The fallback's thread count (MOMWIRE_THREADS, else every hardware thread).
+// The fallback's thread count (MOMWIRE_THREADS, else every hardware thread:
+// the launcher's own default, which its thread-sensitive printouts need).
 int fallback_threads = 1;
 
 int hardware_threads() {
     const int n = static_cast<int>(std::thread::hardware_concurrency());
     return n > 0 ? n : 1;
+}
+
+// Physical cores this process may run on (SMT siblings counted once), else
+// the hardware threads. The C++ route never runs more threads than this: its
+// two pools (the OpenMP fill, the OpenBLAS LU) each spin between their
+// regions, and on SMT siblings they cost ~80-100 ms a call at every size
+// (Rocketlake, 16 threads on 8 cores, unit 5).
+int physical_cores() {
+#if defined(_WIN32)
+    DWORD len = 0;
+    GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len);
+    std::vector<char> buf(len);
+    auto *info = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(buf.data());
+    if (len == 0 || !GetLogicalProcessorInformationEx(RelationProcessorCore, info, &len))
+        return hardware_threads();
+    int cores = 0;
+    for (DWORD off = 0; off < len;) {
+        auto *p = reinterpret_cast<SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX *>(buf.data() + off);
+        cores += p->Relationship == RelationProcessorCore;
+        off += p->Size;
+    }
+    return cores > 0 ? cores : hardware_threads();
+#else
+    cpu_set_t set;
+    if (sched_getaffinity(0, sizeof set, &set) != 0) return hardware_threads();
+    std::vector<std::string> seen;
+    for (int c = 0; c < CPU_SETSIZE; c++) {
+        if (!CPU_ISSET(c, &set)) continue;
+        std::string siblings;
+        const std::string f = "/sys/devices/system/cpu/cpu" + std::to_string(c) +
+                              "/topology/thread_siblings_list";
+        if (!read_file(f, siblings)) return CPU_COUNT(&set);
+        if (std::find(seen.begin(), seen.end(), siblings) == seen.end()) seen.push_back(siblings);
+    }
+    return seen.empty() ? hardware_threads() : static_cast<int>(seen.size());
+#endif
+}
+
+// The size policy, from the largest solve's basis functions (unit 5's sweep,
+// Rocketlake, 8 cores / 16 threads, one process per call): up to ~100 one
+// thread is fastest (dip101 2.7 ms; 4 threads 2.9, 8 threads 3.5), so under
+// 128 the deck runs on the serial copy and never starts OpenMP; from ~150
+// to ~300 four threads win (dip301 8.2 ms against 14.6 on one and 8.4 on
+// eight); from ~400 every core (dip801 36 ms on 8, 42 on 4, 99 on 1).
+int threads_for(long long n_basis) {
+    const int cores = physical_cores();
+    if (n_basis < 128) return 1;
+    if (n_basis < 384) return std::min(4, cores);
+    return cores;
 }
 
 // The executable's OpenBLAS, OpenMP (only when `omp`: the serial route never
@@ -526,13 +574,11 @@ int main(int argc, char **argv) {
         why = "gmo";
     if (why.empty()) {
         const Clock::time_point t = Clock::now();
-        // The size policy: a deck whose largest solve is under SMALL_SOLVE
-        // basis functions runs on one thread, through the serial copy (no
-        // OpenMP); a larger one on every hardware thread. MOMWIRE_THREADS
-        // overrides it: 1 is the serial copy, more the threaded one.
+        // The size policy (`threads_for`). MOMWIRE_THREADS overrides it: 1 is
+        // the serial copy, more the threaded one.
         if (forced_threads <= 0) {
             const long long n = mws::exe::largest_solve(text);
-            threads = n >= 0 && n < SMALL_SOLVE ? 1 : hardware_threads();
+            threads = n >= 0 ? threads_for(n) : 1;
         }
         const std::string arrays_dir = env("MW_EXE_ARRAYS");
         std::string printout;
