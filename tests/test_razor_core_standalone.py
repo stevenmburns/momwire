@@ -59,6 +59,8 @@ CORE_SOURCES = (
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, linked into `nec5_razor_printout_driver.cpp`.
     "_nec5_razor_printout_core.cpp",
+    # Wire loading (LD 5 / 2 / 3): the vendored xsf's Bessel ratio.
+    "_razor_wire_loading_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -136,6 +138,8 @@ def driver(accel, tmp_path_factory):
         *compile_args,
         "-I",
         str(PKG),
+        "-I",
+        str(ROOT / "extern" / "xsf" / "include"),
     ]
     out = tmp_path_factory.mktemp("razor_core")
     drivers = (
@@ -485,6 +489,7 @@ PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
 LD_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ld"
 RP_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_rp"
 NE_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ne"
+WL_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_wl"
 SOMM_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_somm"
 NET_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_net"
 
@@ -723,6 +728,32 @@ def test_the_sommerfeld_decks_refuse_or_decline_by_name(driver, tmp_path):
             assert ans["printout"] == pc.python_printout(
                 path.read_bytes().decode("latin-1")
             ), path
+
+
+def test_the_wire_loading_decks_print_their_loading(driver, tmp_path):
+    """WIRE loading prints through the C++ path: LD 5's internal impedance
+    (the vendored xsf's `cyl_bessel_ie`, which is scipy.special.ive's own
+    code), LD 2 / LD 3's per-metre RLC, the loading stencil added after the
+    fill and before the LU, WIRE LOSS (libm's hypot, momwire#1501) and the
+    WIRE / PER METER rows. Each committed deck answers as Python does --
+    LD 5 on one wire of two, LD 5 and LD 2 on one wire, LD 3 over GN 1, LD 5
+    on every wire under two sources with a pattern, LD 2's inductance alone
+    beside a lumped load, and LD 3's capacitance refused by name."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(WL_DECKS.glob("*.nec"))
+    assert len(decks) == 6
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    for path, ans in zip(decks, answers, strict=True):
+        refused = path.stem.endswith("_refused")
+        want = ("printed", "refused" if refused else "served", "")
+        assert (ans["route"], ans["seam"], ans["raised"]) == want, path
+        if not refused:
+            assert b"THIS STRUCTURE IS NOT LOADED" not in ans["printout"], path
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
 
 
 def test_the_printout_spells_outside_latin1_as_python_does(driver):

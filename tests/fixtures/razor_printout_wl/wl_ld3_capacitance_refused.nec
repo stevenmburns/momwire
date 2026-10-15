@@ -1,0 +1,10 @@
+CM LD 3 with a per-metre capacitance: refused by name (NEC scales that field by the segment)
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GE 1
+GN 1
+LD 3,1,1,20,300.,1.E-6,5.E-12
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+XQ
+EN

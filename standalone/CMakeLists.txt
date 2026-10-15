@@ -79,6 +79,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_nec5_deck_core.cpp
   ${MW_SRC}/_nec5_razor_seam_core.cpp
   ${MW_SRC}/_nec5_razor_printout_core.cpp
+  ${MW_SRC}/_razor_wire_loading_core.cpp
 )
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
 # `mw_core_serial`, the same sources with `mw` renamed `mws` and no OpenMP
@@ -93,13 +94,14 @@ else()
   set(MW_OMP_FLAG -fopenmp)
 endif()
 add_library(mw_core OBJECT ${MW_CORE_SOURCES} route.cpp)
-target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core PRIVATE ${MW_CORE_FLAGS} ${MW_OMP_FLAG})
 target_compile_definitions(mw_core PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX})
 add_library(mw_core_serial OBJECT ${MW_CORE_SOURCES} route.cpp)
-target_include_directories(mw_core_serial PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(mw_core_serial PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core_serial PRIVATE ${MW_CORE_FLAGS})
 target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX} mw=mws
+  xsf=mws_xsf  # the vendored xsf defines non-inline functions: one copy each
   razor_cplx_brackets=mws_razor_cplx_brackets)  # the one free function
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.

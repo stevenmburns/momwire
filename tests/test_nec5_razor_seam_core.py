@@ -421,14 +421,23 @@ CASES = {
         "refused",
         "which is below this deck's finite ground",
     ),
-    "declines_wire_loading": (
+    "serves_wire_loading": (
         HEAD
         + DIPOLE
         + "GE 0,-1\nFR 0,1,0,0,30.\nLD 5,0,1,11,5.8E+7,1.\nEX 0,1,6,0,1.,0.\n"
         + RP
         + "EN\n",
-        "declined",
-        "wire-loading",
+        "served",
+        "",
+    ),
+    "serves_per_metre_rlc": (
+        HEAD
+        + DIPOLE
+        + "GE 0,-1\nFR 0,1,0,0,30.\nLD 2,1,1,11,0.5,2.E-7,0.\nEX 0,1,6,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "served",
+        "",
     ),
     "declines_the_exact_kernel": (
         HEAD + "GW 1,11,0.,-2.5,5.,0.,2.5,5.,.2\n" + FREE_TAIL,

@@ -46,6 +46,7 @@
 
 #include "_mw_core.h"
 #include "_razor_solve_core.h"
+#include "_razor_wire_loading_core.h"
 
 #include <memory>
 #include <string>
@@ -117,6 +118,9 @@ struct FrontInputs {
     bool feed_midpoint = true;
     double feed_arclength = 0.0;
     std::vector<NodeGapSpec> node_gaps;
+    // `wire_conductivity` / `distributed_rlc` (configure_loading's reading);
+    // the NEC-5 seam's lumped loads are ports, never here.
+    WireLoading loading;
     bool has_ground = false;
     double ground_z = 0.0;
     double wavelength = 22.0;
@@ -214,6 +218,13 @@ class Front {
     std::vector<int64_t> feed_basis;
     std::vector<Tie> ties;
 
+    // --- the wire loading (`_loading_stencil` x `loading_for`'s z_seg at
+    // the fill's omega): Z(row, col) += val, in this order, after the fill
+    // and its image fold and before the LU (`_load_in_place`).
+    WireLoading loading;
+    std::vector<int64_t> load_rows, load_cols;
+    std::vector<cd> load_vals;
+
     // The fill's arguments, as views into this object (valid while it is).
     SolveInputs solve_inputs(uintptr_t cancel_flag) const;
 
@@ -228,6 +239,7 @@ class Front {
     void refuse_coincident_segments() const;
     void prepare();
     void port_columns();
+    void loading_stencil();
     std::vector<Junction> groups_;  // `_find_junctions`
 };
 

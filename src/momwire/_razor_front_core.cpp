@@ -887,6 +887,17 @@ std::string Front::build(const FrontInputs &in) {
     // numpy's eigensolve in Python, which this front half does not replay.
     if (!leggauss(in.n_qp_source, xg, wg)) return "quadrature-order";
     prepare();
+    if (in.loading.active()) {
+        if (in.loading.has_conductivity) {
+            if (static_cast<int64_t>(in.loading.conductivity.size()) != n_wires) return "loading-shape";
+            for (double sigma : in.loading.conductivity)
+                if (std::isfinite(sigma) && !(sigma > 0.0)) return "loading-values";
+        }
+        if (in.loading.has_rlc && static_cast<int64_t>(in.loading.rlc.size()) != n_wires)
+            return "loading-shape";
+        loading = in.loading;
+        loading_stencil();
+    }
     // `_schedule.elem_rows(_CHUNK_ELEMS, n_path * n_basis)`
     window_rows = std::max<int64_t>(1, in.chunk_elems / std::max<int64_t>(1, 2 * n_basis));
     return "";
@@ -938,6 +949,47 @@ SolveInputs Front::solve_inputs(uintptr_t cancel_flag) const {
     return s;
 }
 
+// `_loading_stencil(geom)` (every ordered pair of wing entries sharing a
+// segment, segment-major, each segment's entries in their stable order;
+// `(3/8 or 1/8) * h * sigma_l * sigma_r`), times `loading_for`'s z_seg at
+// the fill's omega (numpy's complex-by-real product).
+void Front::loading_stencil() {
+    const std::vector<cd> z_wire = series_impedance_per_wire(omega, radius_per_wire, loading);
+    struct Entry {
+        int64_t basis, seg;
+        bool rise;
+        double sigma;
+    };
+    std::vector<Entry> ent;
+    for (int64_t b = 0; b < n_basis; b++)
+        for (int w = 0; w < 2; w++) {
+            const size_t q = static_cast<size_t>(2 * b + w);
+            const double sg = wing_sigma[q];
+            if (sg != 0.0) ent.push_back(Entry{b, wing_seg[q], wing_rise.p[q], sg});
+        }
+    std::stable_sort(ent.begin(), ent.end(), [](const Entry &x, const Entry &y) { return x.seg < y.seg; });
+    std::vector<int64_t> wire_of(static_cast<size_t>(n_seg));
+    for (int64_t w = 0; w < n_wires; w++)
+        for (int64_t s = seg_offsets[w]; s < seg_offsets[w + 1]; s++) wire_of[s] = w;
+    size_t i = 0;
+    while (i < ent.size()) {
+        size_t j = i;
+        while (j < ent.size() && ent[j].seg == ent[i].seg) j++;
+        const int64_t s = ent[i].seg;
+        const cd z = z_wire[static_cast<size_t>(wire_of[s])];
+        for (size_t a = i; a < j; a++)
+            for (size_t b = i; b < j; b++) {
+                double v = (ent[a].rise == ent[b].rise ? 0.375 : 0.125) * seg_h[s];
+                v *= ent[a].sigma * ent[b].sigma;
+                load_rows.push_back(ent[a].basis);
+                load_cols.push_back(ent[b].basis);
+                load_vals.push_back(cd(std::fma(z.real(), v, -(z.imag() * 0.0)),
+                                       std::fma(z.real(), 0.0, z.imag() * v)));
+            }
+        i = j;
+    }
+}
+
 int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
                 uintptr_t cancel_flag) {
     const int64_t n = front.n_basis, m = front.n_ports;
@@ -945,6 +997,9 @@ int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
     for (int64_t j = 0; j < m; j++)
         for (int64_t i = 0; i < n; i++) x[j * n + i] = cd(front.cols[i * m + j], 0.0);
     ctx.fill(front.solve_inputs(cancel_flag));
+    if (!front.load_vals.empty())
+        ctx.add_at(front.load_rows.data(), front.load_cols.data(), front.load_vals.data(),
+                   front.load_vals.size());
     return ctx.lu_solve(lp, x, static_cast<int>(m));
 }
 

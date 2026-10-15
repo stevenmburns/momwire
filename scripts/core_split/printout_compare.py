@@ -180,6 +180,8 @@ def build_driver(out_dir: Path) -> Path:
         *compile_args,
         "-I",
         str(PKG),
+        "-I",
+        str(ROOT / "extern" / "xsf" / "include"),
     ]
     sources = [PKG / s for s in t.CORE_SOURCES] + [SPLIT / f"{DRIVER}.cpp"]
     procs, objects = [], []
