@@ -36,8 +36,9 @@ EXAMPLE3 = FIXTURES / "4nec2_example3" / "EXAMPLE3.inp"
 
 
 def _launcher() -> str:
+    name = "momwire-nec5-razor-2p" + (".exe" if sys.platform == "win32" else "")
     found = shutil.which("momwire-nec5-razor-2p") or str(
-        Path(sys.executable).parent / "momwire-nec5-razor-2p"
+        Path(sys.executable).parent / name
     )
     assert Path(found).exists(), found
     return found
