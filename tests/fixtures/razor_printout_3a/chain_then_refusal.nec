@@ -1,0 +1,28 @@
+CM unit 3a: an NX chain whose second structure is served and whose third
+CM is refused (no FR card): two printouts, then the refusal.
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+FR 0,1,0,0,299.793
+GN -1
+EX 4,1,6,0,1.414214,0.
+PQ 0
+XQ 0
+NX
+CM second structure
+CE
+GW 1,15,0.,0.,0.,0.,0.,10.3,.02
+GE 1,-1
+FR 0,1,0,0,7.
+GN 1
+EX 0,1,-1,0,1.,0.
+XQ 0
+NX
+CM third structure
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+GN -1
+EX 4,1,6,0,1.414214,0.
+XQ 0
+EN

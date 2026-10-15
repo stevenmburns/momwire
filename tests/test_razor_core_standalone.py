@@ -56,6 +56,9 @@ CORE_SOURCES = (
     # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
     # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents).
     "_nec5_razor_seam_core.cpp",
+    # The run half and the printout writer (unit 3a): deck text to the
+    # printout's bytes, linked into `nec5_razor_printout_driver.cpp`.
+    "_nec5_razor_printout_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -140,6 +143,7 @@ def driver(accel, tmp_path_factory):
         "razor_front_driver",
         "nec5_deck_driver",
         "nec5_razor_driver",
+        "nec5_razor_printout_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -443,6 +447,13 @@ def test_deck_text_to_currents_in_cxx_alone_is_the_python_seam(driver, tmp_path)
             continue
         with _one_thread():
             py = sc.python_seam(path.read_bytes().decode("latin-1"))
+        if py["outcome"] == "printout-raised":
+            # Python raised WRITING a printout (the echo's own card read),
+            # after the preparations it had reached: the seam's answer is
+            # "served", those preparations a prefix of the C++ seam's, and
+            # the frame is the printout test's to compare (below).
+            py = dict(py, outcome="served", error_kind="", message="")
+            prepared = prepared[: len(py["prepared"])]
         assert (route, kind, message.decode("utf-8")) == (
             py["outcome"],
             py["error_kind"],
@@ -456,3 +467,188 @@ def test_deck_text_to_currents_in_cxx_alone_is_the_python_seam(driver, tmp_path)
             assert x == np.ravel(ref["X"], order="F").tobytes(), path
     # Not vacuous: the C++ path answers decks of every kind it covers.
     assert routes.get("served", 0) >= 20 and routes.get("refused", 0) >= 5, routes
+
+
+# --- deck text -> the printout, no Python ------------------------------------
+
+
+def _printout_compare_module():
+    spec = importlib.util.spec_from_file_location(
+        "core_split_printout_compare", SPLIT / "printout_compare.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
+
+
+def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
+    """Every NEC deck in tests/fixtures through the whole chain -- the
+    reader, the seam's structure half, the front half, the fill and the LU,
+    the run half and the printout writer -- in a process with no Python:
+    every deck the C++ path prints is, byte for byte, the file
+    `momwire-nec5-razor-2p` writes for it (results, refusals and the
+    INTERNAL ERROR frame alike; both sides on one BLAS thread). Below the
+    printed digits, every run either side finishes carries the same bytes:
+    the solve's Y (`cols.T @ X`, numpy's zgemm / zdotu), the coefficients
+    `_finish` reads (`X @ (T @ v_gap)`), and `_port_state`'s four vectors.
+    A deck it declines is counted by reason, never compared."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = [
+        p
+        for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
+        if p.is_file() and p.suffix in (".nec", ".deck")
+    ]
+    saved = {k: os.environ.get(k) for k in _ONE_THREAD}
+    os.environ.update(_ONE_THREAD)
+    try:
+        answers = pc.run_driver(
+            driver[0]["nec5_razor_printout_driver"], decks, tmp_path, arrays=True
+        )
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+    counts, reasons = {}, set()
+    with _one_thread():
+        for path, ans in zip(decks, answers, strict=True):
+            if ans["route"] == "declined":
+                reasons.add(ans["reason"])
+                continue
+            key = ans["seam"] + ("|frame" if ans["raised"] else "")
+            counts[key] = counts.get(key, 0) + 1
+            py_runs = []
+            ref = pc.python_printout(path.read_bytes().decode("latin-1"), runs=py_runs)
+            assert ans["printout"] == ref, (
+                f"{path}: {pc.first_difference(ref, ans['printout'])}"
+            )
+            if ans["raised"]:
+                continue
+            assert len(ans["runs"]) == len(py_runs), path
+            for k, (cx, py) in enumerate(zip(ans["runs"], py_runs, strict=True)):
+                for name in pc.ARRAYS:
+                    mine = np.ascontiguousarray(py[name], dtype=np.complex128)
+                    assert cx[name] == mine.tobytes(), f"{path} run {k}: {name}"
+                counts["runs"] = counts.get("runs", 0) + 1
+                ports = int(round(len(cx["y"]) ** 0.5 / 4))  # 16 bytes a cell
+                if ports > 1:
+                    counts["multi-port"] = counts.get("multi-port", 0) + 1
+    # Not vacuous: results, refusals and the last line of defence all print,
+    # and the three run-half declines are reached by name.
+    assert counts.get("served", 0) >= 25 and counts.get("refused", 0) >= 50, counts
+    assert counts.get("served|frame", 0) >= 2, counts
+    assert counts.get("runs", 0) >= 30 and counts.get("multi-port", 0) >= 5, counts
+    assert {
+        "lumped loads not yet in C++",
+        "radiation pattern not yet in C++",
+        "near field not yet in C++",
+    } <= reasons, reasons
+
+
+def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
+    """The committed 3a decks print (none declines), so each path they were
+    written for -- a dense node-gap column through zgemm, numpy's zgesv
+    under two set currents, a complex EX 4 scale, three complex volts over a
+    GD, an NX chain ending on a refusal, a three-run deck sharing one
+    preparation, the echo's two raises -- is compared above, not skipped."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(PRINTOUT_DECKS.glob("*.nec"))
+    assert len(decks) == 7
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    routes = {
+        p.stem: (a["route"], a["seam"], a["raised"])
+        for p, a in zip(decks, answers, strict=True)
+    }
+    assert routes == {
+        "chain_then_refusal": ("printed", "refused", ""),
+        "echo_raises_inf_field": ("printed", "served", "OverflowError"),
+        "echo_raises_nxq": ("printed", "served", "DeckError"),
+        "multi_run_three_ports": ("printed", "served", ""),
+        "node_gap_ex4_complex": ("printed", "served", ""),
+        "node_gap_two_sources": ("printed", "served", ""),
+        "three_voltages_gd": ("printed", "served", ""),
+    }, routes
+    chain = answers[0]["printout"]
+    assert chain.count(b"- - - ANTENNA INPUT PARAMETERS - - -") == 2
+    assert b"NEC ERROR - this deck carries no FR card" in chain
+
+
+def test_the_printout_spells_outside_latin1_as_python_does(driver):
+    """`write_printout`'s transliteration: every character momwire's own
+    sentences carry outside latin-1 (and the two `str.upper` takes a latin-1
+    letter to), the em dash's spacing rule, and a character no table names,
+    through the C++ writer and through Python's codec, the same bytes."""
+    from momwire.eznec import _shell
+
+    chars = set()
+    for p in (ROOT / "src" / "momwire").rglob("*.py"):
+        chars |= {c for c in p.read_text(encoding="utf-8") if ord(c) >= 0x100}
+    chars |= {"Μ", "Ÿ", "一"}
+    text = "".join(sorted(chars)) + "\na—b a — b —x\n—"
+    run = subprocess.run(
+        [str(driver[0]["nec5_razor_printout_driver"]), "--transliterate"],
+        input=text.encode("utf-8"),
+        capture_output=True,
+    )
+    assert run.returncode == 0, run.stderr
+    ref = text.replace("\n", "\r\n").encode("latin-1", errors=_shell._PRINTOUT_ERRORS)
+    assert run.stdout == ref
+
+
+def test_the_printout_cells_are_pythons_format(driver):
+    """Every float cell width the writer uses, over the edges (NaN of both
+    signs, the infinities, signed zeros, subnormals, three-digit exponents,
+    exact ties) and 20,000 random bit patterns: printf in the C locale is
+    Python's format, NaN spelled as Python spells it."""
+    import struct
+
+    rng = np.random.default_rng(1479)
+    values = [
+        float("nan"),
+        -float("nan"),
+        float("inf"),
+        -float("inf"),
+        0.0,
+        -0.0,
+        5e-324,
+        1e-310,
+        1e100,
+        -9.99995e99,
+        0.125,
+        2.5,
+        1.000005,
+        123456.78905,
+        *rng.standard_normal(5000) * 10.0 ** rng.integers(-30, 30, 5000),
+    ]
+    bits = [struct.unpack("<Q", struct.pack("<d", v))[0] for v in values]
+    bits += [int(b) for b in rng.integers(0, 2**63, 15000, dtype=np.int64)]
+    run = subprocess.run(
+        [str(driver[0]["nec5_razor_printout_driver"]), "--format"],
+        input="".join(f"{b:016x}\n" for b in bits).encode(),
+        capture_output=True,
+    )
+    assert run.returncode == 0, run.stderr
+    lines = run.stdout.decode().splitlines()
+    assert len(lines) == len(bits)
+    for b, line in zip(bits, lines, strict=True):
+        x = struct.unpack("<d", struct.pack("<Q", b))[0]
+        ref = "|".join(
+            (
+                f"{x:13.5E}",
+                f"{x:11.4E}",
+                f"{x:12.4E}",
+                f"{x:10.3E}",
+                f"{x:10.4f}",
+                f"{x:7.2f}",
+                f"{x:7.3f}",
+            )
+        )
+        assert line == ref, hex(b)
