@@ -297,18 +297,24 @@ double strtod_c(const char *s) {
 }
 
 // snprintf(fmt, x) in the C locale, whatever the process's locale is.
+// Any length: a `%f` of a large double runs to hundreds of digits.
 std::string format_c(const char *fmt, double x) {
-    char buf[64];
+    std::vector<char> buf(64);
+    for (;;) {
 #if defined(_MSC_VER)
-    static _locale_t c = _create_locale(LC_NUMERIC, "C");
-    _snprintf_l(buf, sizeof buf, fmt, c, x);
+        static _locale_t c = _create_locale(LC_NUMERIC, "C");
+        const int n = _snprintf_l(buf.data(), buf.size(), fmt, c, x);
+        if (n >= 0 && static_cast<std::size_t>(n) < buf.size()) return buf.data();
+        buf.resize(n >= 0 ? static_cast<std::size_t>(n) + 1 : 2 * buf.size());
 #else
-    static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
-    locale_t old = uselocale(c);
-    std::snprintf(buf, sizeof buf, fmt, x);
-    uselocale(old);
+        static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+        locale_t old = uselocale(c);
+        const int n = std::snprintf(buf.data(), buf.size(), fmt, x);
+        uselocale(old);
+        if (n >= 0 && static_cast<std::size_t>(n) < buf.size()) return buf.data();
+        buf.resize(n >= 0 ? static_cast<std::size_t>(n) + 1 : 2 * buf.size());
 #endif
-    return buf;
+    }
 }
 
 bool digitpart(const std::string &s, std::size_t &k, std::string &out) {
@@ -420,30 +426,6 @@ std::string hex_bytes(const std::string &s) {
 const char *kFusedFieldStart = "0123456789.+-";
 
 bool fused_start(char c) { return c != '\0' && std::strchr(kFusedFieldStart, c) != nullptr; }
-
-struct Card {
-    std::string mnemonic;  // UTF-8 (upper-cased)
-    std::vector<double> values;
-    std::string raw;  // latin-1
-    bool has_trailer = false;
-    std::string trailer;  // latin-1
-
-    double f(std::size_t k) const { return k < values.size() ? values[k] : 0.0; }
-    // `Card.i`: an infinite / NaN field raises where Python's does, in its words
-    Int i(std::size_t k) const {
-        double v = f(k);
-        if (std::isnan(v))
-            throw ParseError(ErrorKind::value_error,
-                             mnemonic + " field " + std::to_string(k + 1) +
-                                 " is NaN; an integer field must be a finite number");
-        if (std::isinf(v))
-            throw ParseError(ErrorKind::overflow_error,
-                             mnemonic + " field " + std::to_string(k + 1) +
-                                 " is infinite; an integer field must be a finite number");
-        return py_round(v);
-    }
-    std::string text() const { return raw.size() > 2 ? raw.substr(2) : std::string(); }
-};
 
 // `parse_card(line)`: false for a blank line.
 bool parse_card(const std::string &line, Card &card) {
@@ -1823,6 +1805,34 @@ std::string text_probe(const std::string &op, const std::string &arg) {
 }
 
 std::string format_g(double x) { return py_g(x); }
+
+// --- the pieces the printout writer shares (`_nec5_razor_printout_core.cpp`)
+
+double Card::f(std::size_t k) const { return k < values.size() ? values[k] : 0.0; }
+
+// `Card.i`: an infinite / NaN field raises where Python's does, in its words
+Int Card::i(std::size_t k) const {
+    double v = f(k);
+    if (std::isnan(v))
+        throw ParseError(ErrorKind::value_error,
+                         mnemonic + " field " + std::to_string(k + 1) +
+                             " is NaN; an integer field must be a finite number");
+    if (std::isinf(v))
+        throw ParseError(ErrorKind::overflow_error,
+                         mnemonic + " field " + std::to_string(k + 1) +
+                             " is infinite; an integer field must be a finite number");
+    return py_round(v);
+}
+
+std::string Card::text() const { return raw.size() > 2 ? raw.substr(2) : std::string(); }
+
+bool read_card(const std::string &latin1_line, Card &card) { return parse_card(latin1_line, card); }
+std::vector<std::string> latin1_splitlines(const std::string &s) { return py_splitlines(s); }
+std::vector<std::string> latin1_split(const std::string &s) { return py_split(s); }
+std::string latin1_upper(const std::string &s, std::size_t *length) { return py_upper(s, length); }
+std::string latin1_to_utf8(const std::string &s) { return utf8(s); }
+bool latin1_isspace(unsigned char c) { return py_isspace(c); }
+std::string format_c_locale(const char *fmt, double x) { return format_c(fmt, x); }
 
 }  // namespace nec5
 }  // namespace mw
