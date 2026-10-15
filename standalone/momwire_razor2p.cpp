@@ -584,7 +584,13 @@ int main(int argc, char **argv) {
         std::string printout;
         bool printed;
         if (threads == 1 && env("MW_EXE_COPY") != "threads") {
-            set_threads(1, false);
+            // The fill on one thread with no OpenMP; OpenBLAS on two when the
+            // size policy chose (not MOMWIRE_THREADS): its one-thread path
+            // rounds differently from its threaded one, alike at 2, 4, 8 and
+            // 16 (measured), and the launcher's default is threaded, so a
+            // thread-sensitive printout cell (a 1e10-ohm network pin's
+            // reactance) prints the launcher's digits.
+            set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
             printed = mws::exe::answer(text, VERSION, "avx2", arrays_dir, printout, why);
         } else {
             set_threads(threads, true);
