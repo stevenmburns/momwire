@@ -1,0 +1,11 @@
+CM GN 0: a buried radial beside a grounded monopole (Python refuses it; the buried rungs are not in C++, so it declines)
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GW 2 10 0 0 -0.05 3 0 -0.05 0.002
+GE 1
+GN 0 0 0 0 13.0 0.005
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 1 37 1000 90 0 0 10 0
+XQ
+EN
