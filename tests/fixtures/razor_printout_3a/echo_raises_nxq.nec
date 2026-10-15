@@ -1,0 +1,21 @@
+CM unit 3a: the stream splitter closes the first structure at NXQ, and the
+CM echo then re-reads that line as a card and refuses its mnemonic - Python
+CM reports it through the last line of defence; so does the C++ printout.
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+FR 0,1,0,0,299.7925
+GN -1
+EX 4,1,6,0,1.414214,0.
+PQ 0
+XQ 0
+NXQ 1
+CM second structure
+CE
+GW 1,11,0.,-.25,0.,0.,.25,0.,.0005
+GE 0,-1
+FR 0,1,0,0,299.7925
+GN -1
+EX 4,1,6,0,1.414214,0.
+XQ 0
+EN

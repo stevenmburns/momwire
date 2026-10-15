@@ -1,0 +1,173 @@
+// deck file in -> printout file out, with no Python: the NEC-5 deck reader,
+// the seam's structure half, razor-2p's front half, the fill and the LU,
+// the run half and the printout writer (`_nec5_razor_printout_core.h`).
+//
+//     nec5_razor_printout_driver SCIPY_OPENBLAS NUMPY_OPENBLAS BASIS VERSION VARIANT MARKER
+//         OUTDIR DECK...
+//
+// SCIPY_OPENBLAS supplies zgetrf / zgetrs (`scipy_<name>_`, then `<name>_`):
+// the LU SciPy's `lu_factor` / `lu_solve` reach. NUMPY_OPENBLAS supplies the
+// ILP64 CBLAS and zgesv numpy's matmul and `linalg.solve` call
+// (`scipy_cblas_zgemm64_`, ...). VERSION / VARIANT / MARKER are line 2's
+// stamp fields (MARKER "-" for none). For each deck (read as bytes: latin-1,
+// as the seam reads it) it prints
+//
+//     == PATH
+//     route printed|declined
+//     seam served|refused|raised|declined
+//     raised KIND              (printed through the INTERNAL ERROR frame; else empty)
+//     reason HEX               (declined: why, UTF-8 hex)
+//
+// and writes a printed deck's printout bytes to OUTDIR/<deck index>.out.
+// With MW_PRINTOUT_ARRAYS=1 in the environment it also prints
+//
+//     arrays N                 (how many runs were finished)
+//
+// and writes each finished run's arrays (`RunArrays`, complex128) to
+// OUTDIR/<deck index>_<run>_<name>.bin, name one of y, coeffs, v_applied,
+// v_gap, i_port, i_source.
+//
+// Two probes the tests pin against Python one value at a time:
+//
+//     nec5_razor_printout_driver --transliterate < UTF8   # write_printout's bytes
+//     nec5_razor_printout_driver --format < HEX_LINES     # per 64-bit pattern: the
+//         # `{:13.5E}` `{:11.4E}` `{:12.4E}` `{:10.3E}` `{:10.4f}` `{:7.2f}` `{:7.3f}` cells
+// `scripts/core_split/printout_compare.py` and
+// `tests/test_razor_core_standalone.py` require every byte to be
+// `momwire-nec5-razor-2p`'s.
+#include "_nec5_razor_printout_core.h"
+
+#include <dlfcn.h>
+
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <sstream>
+#include <string>
+#include <vector>
+
+namespace {
+
+void *sym(void *lib, const std::vector<std::string> &names) {
+    for (const std::string &n : names) {
+        void *p = dlsym(lib, n.c_str());
+        if (p != nullptr) return p;
+    }
+    std::cerr << "no " << names[0] << " in the library\n";
+    std::exit(2);
+}
+
+void *open_lib(const char *path) {
+    void *lib = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (lib == nullptr) {
+        std::cerr << dlerror() << "\n";
+        std::exit(2);
+    }
+    return lib;
+}
+
+std::string hex(const std::string &s) {
+    static const char *d = "0123456789abcdef";
+    std::string out;
+    for (unsigned char c : s) {
+        out += d[c >> 4];
+        out += d[c & 15];
+    }
+    return out;
+}
+
+}  // namespace
+
+int main(int argc, char **argv) {
+    if (argc == 2 && std::string(argv[1]) == "--transliterate") {
+        const std::string text((std::istreambuf_iterator<char>(std::cin)),
+                               std::istreambuf_iterator<char>());
+        const std::string out = mw::nec5::printout_bytes(text);
+        std::fwrite(out.data(), 1, out.size(), stdout);
+        return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--format") {
+        std::string line;
+        while (std::getline(std::cin, line)) {
+            const unsigned long long bits = std::stoull(line, nullptr, 16);
+            double x;
+            std::memcpy(&x, &bits, sizeof x);
+            std::printf("%s|%s|%s|%s|%s|%s|%s\n", mw::nec5::py_format_e(x, 13, 5).c_str(),
+                        mw::nec5::py_format_e(x, 11, 4).c_str(),
+                        mw::nec5::py_format_e(x, 12, 4).c_str(),
+                        mw::nec5::py_format_e(x, 10, 3).c_str(),
+                        mw::nec5::py_format_f(x, 10, 4).c_str(),
+                        mw::nec5::py_format_f(x, 7, 2).c_str(),
+                        mw::nec5::py_format_f(x, 7, 3).c_str());
+        }
+        return 0;
+    }
+    if (argc < 8) {
+        std::cerr << "usage: nec5_razor_printout_driver SCIPY_OPENBLAS NUMPY_OPENBLAS BASIS "
+                     "VERSION VARIANT MARKER OUTDIR DECK...\n";
+        return 2;
+    }
+    void *scipy_lib = open_lib(argv[1]);
+    void *numpy_lib = open_lib(argv[2]);
+    mw::razor::Lapack lp;
+    lp.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(sym(scipy_lib, {"scipy_zgetrf_", "zgetrf_"}));
+    lp.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(sym(scipy_lib, {"scipy_zgetrs_", "zgetrs_"}));
+    mw::nec5::NumpyLinalg np;
+    np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(
+        sym(numpy_lib, {"scipy_cblas_zgemm64_", "cblas_zgemm64_"}));
+    np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(
+        sym(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
+    np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
+        sym(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
+    np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
+    np.fused_cmul = mw::nec5::numpy_fuses_complex_multiply();
+    const std::string basis = argv[3];
+    mw::nec5::EngineStamp stamp;
+    stamp.version = argv[4];
+    stamp.variant = argv[5];
+    stamp.marker = std::string(argv[6]) == "-" ? std::string() : std::string(argv[6]);
+    const std::string out = argv[7];
+    static const char *seam[] = {"served", "refused", "raised", "declined"};
+    mw::razor::SolveContext ctx;
+    const char *want = std::getenv("MW_PRINTOUT_ARRAYS");
+    const bool dump = want != nullptr && std::string(want) == "1";
+    for (int i = 8; i < argc; i++) {
+        std::ifstream f(argv[i], std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::vector<mw::nec5::RunArrays> arrays;
+        const mw::nec5::PrintoutResult r =
+            mw::nec5::razor_printout(text, basis, stamp, ctx, lp, np, dump ? &arrays : nullptr);
+        const bool printed = r.route == mw::nec5::PrintoutResult::printed;
+        std::printf("== %s\nroute %s\nseam %s\nraised %s\nreason %s\n", argv[i],
+                    printed ? "printed" : "declined", seam[r.seam], r.raised_kind.c_str(),
+                    hex(r.reason).c_str());
+        if (printed) {
+            std::ostringstream name;
+            name << out << "/" << (i - 8) << ".out";
+            std::FILE *w = std::fopen(name.str().c_str(), "wb");
+            std::fwrite(r.printout.data(), 1, r.printout.size(), w);
+            std::fclose(w);
+        }
+        if (dump) {
+            std::printf("arrays %zu\n", arrays.size());
+            for (std::size_t k = 0; k < arrays.size(); k++) {
+                const mw::nec5::RunArrays &a = arrays[k];
+                const std::pair<const char *, const std::vector<mw::cd> *> named[] = {
+                    {"y", &a.y},         {"coeffs", &a.coeffs}, {"v_applied", &a.v_applied},
+                    {"v_gap", &a.v_gap}, {"i_port", &a.i_port}, {"i_source", &a.i_source}};
+                for (const auto &nv : named) {
+                    std::ostringstream name;
+                    name << out << "/" << (i - 8) << "_" << k << "_" << nv.first << ".bin";
+                    std::FILE *w = std::fopen(name.str().c_str(), "wb");
+                    std::fwrite(nv.second->data(), sizeof(mw::cd), nv.second->size(), w);
+                    std::fclose(w);
+                }
+            }
+        }
+        std::fflush(stdout);
+    }
+    return 0;
+}
