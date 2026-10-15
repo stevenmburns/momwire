@@ -483,6 +483,7 @@ def _printout_compare_module():
 
 PRINTOUT_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_3a"
 LD_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ld"
+RP_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_rp"
 
 
 def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
@@ -545,11 +546,9 @@ def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
     assert counts.get("served", 0) >= 25 and counts.get("refused", 0) >= 50, counts
     assert counts.get("served|frame", 0) >= 2, counts
     assert counts.get("runs", 0) >= 30 and counts.get("multi-port", 0) >= 5, counts
-    assert {
-        "radiation pattern not yet in C++",
-        "near field not yet in C++",
-    } <= reasons, reasons
+    assert "near field not yet in C++" in reasons, reasons
     assert "lumped loads not yet in C++" not in reasons, reasons
+    assert "radiation pattern not yet in C++" not in reasons, reasons
 
 
 def test_the_printout_decks_take_the_paths_they_name(driver, tmp_path):
@@ -604,6 +603,34 @@ def test_the_lumped_load_decks_print_their_loads(driver, tmp_path):
             "",
         ), path
         assert b"THIS STRUCTURE IS NOT LOADED" not in ans["printout"], path
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
+
+
+def test_the_pattern_decks_print_their_patterns(driver, tmp_path):
+    """RP prints through the C++ run half (razor-2p's element moments, the
+    moment sums in numpy's einsum order, the PEC image or the image weighted
+    by the GD medium's Fresnel coefficients, the hypot gains, the dust floor
+    and the polarisation ellipse, the average gain, the range form). Each
+    committed RP deck prints (none declines) with its patterns -- a GD
+    medium at a range (the LOWER MEDIUM line) with the average gain, rows
+    past the horizon over a perfect ground, a whole sphere and a second card
+    in free space, a loaded inverted V at a range with negative theta -- and
+    is compared byte for byte by the corpus test above."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(RP_DECKS.glob("*.nec"))
+    assert len(decks) == 4
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    for path, ans in zip(decks, answers, strict=True):
+        assert (ans["route"], ans["seam"], ans["raised"]) == (
+            "printed",
+            "served",
+            "",
+        ), path
+        assert b"RADIATION PATTERNS" in ans["printout"], path
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path

@@ -1,0 +1,11 @@
+CM an inverted V with a series RLC, a range in free space, negative theta
+CE
+GW 1 15 0 0 6 4 0 2 0.001
+GW 2 15 0 0 6 -4 0 2 0.001
+GE 0
+LD 0,1,5,0,10,1.0E-07,0
+EX 0 1 1 0 1 0
+FR 0 1 0 0 18.1 0
+RP 0 13 3 1000 -90 0 15 45 250
+XQ
+EN

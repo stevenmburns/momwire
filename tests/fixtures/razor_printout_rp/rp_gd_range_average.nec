@@ -1,0 +1,10 @@
+CM RP over a bare GD medium, at a range (the lower-medium line), with the average gain
+CE
+GW 1 21 0 0 4 0 0 9 0.001
+GE 0
+GD 0 0 0 0 13.0 0.005 0 0
+EX 0 1 11 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 10 13 1001 0 0 10 30 1000
+XQ
+EN
