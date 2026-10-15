@@ -1,0 +1,56 @@
+// The Sommerfeld interpolation grid with no Python (momwire#1479 Sommerfeld
+// S2): `_sommerfeld.get_grid` and what it builds — the r1 bucket and the
+// eps ladder's rung pair, the frequency-independent normalized masters
+// (`SommerfeldGrid.__init__`: the region layout, `iv_surfaces_direct` over
+// the six-integral kernel and the R1 = 0 limits), the rung pair's `blend`
+// and the physical `scaled_to` view. Every value is the Python grid's, bit
+// for bit: Python's complex scalars are CPython 3.12's arithmetic, numpy's
+// arrays its fused complex product (`_cmul`'s formula) and its divide.
+//
+// The module constants are the shipped defaults (`_SOMM_R1_CAP_LAMBDA` 15,
+// `_SOMM_R1_NEAR_LAMBDA` 4, `_SOMM_EPS_IM_BUCKET` 0.10,
+// `_SOMM_R1_SWEEP_SLACK` 0.05); a caller that sees any of their
+// `MOMWIRE_SOMM_*` environment overrides set must not use this.
+#pragma once
+
+#include <complex>
+#include <cstdint>
+#include <vector>
+
+namespace somm_core {
+
+using cd = std::complex<double>;
+
+struct GridRegion {  // one of `SommerfeldGrid._regions`
+    double r0 = 0, dr = 0;
+    int64_t n_r = 0;
+    double th0 = 0, dth = 0;  // radians
+    int64_t n_th = 0;
+    std::vector<cd> vals;  // (4, n_r, n_th), C order: IrhoV, IzV, IrhoH, IphiH
+};
+
+struct Grid {  // `SommerfeldGrid`
+    cd eps_t, lattice_eps;
+    double k2 = 0, omega = 0, mu = 0;
+    double r1_max = 0, r_break = 0, r_near = 0, r0_fill = 0;
+    std::vector<GridRegion> regions;
+};
+
+// `SommerfeldGrid(eps_t, k2, r1_max, rtol, omega, mu, lattice_eps=...)`.
+Grid fill_grid(cd eps_t, double k2, double r1_max, double rtol, double omega, double mu,
+               cd lattice_eps);
+
+// `SommerfeldGrid.blend` / `.scaled_to`.
+Grid blend(const Grid &a, const Grid &b, double t, cd eps_t);
+Grid scaled_to(const Grid &g, double k2, double omega, double mu);
+
+// `_sommerfeld.get_grid(eps_t, k2, r1_max, omega, mu)`, with this process's
+// own memo of masters and views (the in-process caches' role; values are
+// the fill's either way).
+const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu);
+
+// `_somm_r1_bucket_wl` and `_somm_eps_rungs` (exposed for the tests).
+double r1_bucket_wl(double r1_wl);
+void eps_rungs(cd eps_t, cd &lo, cd &hi, double &t);
+
+}  // namespace somm_core
