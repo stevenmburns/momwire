@@ -123,6 +123,8 @@ int main(int argc, char **argv) {
     np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
         sym(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
     np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
+    // the network solve's expert driver: SciPy's (`networks.MNASystem.solve`)
+    np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(sym(scipy_lib, {"scipy_zgesvx_", "zgesvx_"}));
     const std::string basis = argv[3];
     mw::nec5::EngineStamp stamp;
     stamp.version = argv[4];
