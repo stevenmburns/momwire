@@ -360,6 +360,7 @@ import math
 
 import numpy as np
 
+from ._far_readout import _libm
 from . import (
     _below_interface,
     _feed_snap,
@@ -6861,9 +6862,16 @@ class RazorSolver(
         np.add.at(i_lo, ent_seg[~ent_rise], ent_val[~ent_rise])
 
         h = np.asarray(geom["seg_h"], dtype=np.float64)
+        # |I| through libm's hypot (`_far_readout._libm(abs, ...)`), not numpy's
+        # complex absolute, whose AVX-512 and AVX2 loops disagree in the last
+        # bit: the WIRE LOSS line is a printed number (momwire#1479).
         int_abs_i2 = (
             h
-            * (np.abs(i_lo) ** 2 + np.real(i_lo * np.conj(i_hi)) + np.abs(i_hi) ** 2)
+            * (
+                _libm(abs, i_lo) ** 2
+                + np.real(i_lo * np.conj(i_hi))
+                + _libm(abs, i_hi) ** 2
+            )
             / 3.0
         )
         # zeros where switched off. `geom` goes in even though only `z_wire`
@@ -6876,7 +6884,7 @@ class RazorSolver(
         np.add.at(per_wire, wire_of, 0.5 * r_w[wire_of] * int_abs_i2)
         zq_loss = _wire_loading.jacket_loss_charge(self, omega)
         if zq_loss is not None:
-            int_abs_di2 = np.abs(i_hi - i_lo) ** 2 / h
+            int_abs_di2 = _libm(abs, i_hi - i_lo) ** 2 / h
             np.add.at(per_wire, wire_of, 0.5 * np.real(zq_loss)[wire_of] * int_abs_di2)
         return float(per_wire.sum()), per_wire
 
