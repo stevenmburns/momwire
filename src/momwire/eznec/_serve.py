@@ -4056,6 +4056,7 @@ def _pattern(
     *,
     ground_z: float = 0.0,
     cliff=None,
+    p_radiated: float | None = None,
 ) -> PatternBlock:
     """One ``RP 0`` card's answer.
 
@@ -4140,13 +4141,24 @@ def _pattern(
     else:
         range_phase_deg = None
 
+    # XNDA's D digit (momwire#1503): 1 asks for DIRECTIVE gains in the rows,
+    # the same pattern normalised to the RADIATED power rather than the input
+    # power -- measured black-box on the NEC-5 engine with a 40 ohm load in
+    # the wire (76.9 % efficiency): every row moves by 10*log10(Pin/Prad) and
+    # the average-gain trailer does not move (it stays a power gain). Only a
+    # caller that passes the budget's radiated power can ask for it.
+    directive = p_radiated is not None and request.xnda // 10 % 10 == 1
+    g_v_rows, g_h_rows = g_v, g_h
+    if directive:
+        scale = p_in / p_radiated if p_radiated > 0 else 0.0
+        g_v_rows, g_h_rows = g_v * scale, g_h * scale
     rows = _pattern_rows(
         thetas,
         phis,
         e_theta,
         e_phi,
-        g_v,
-        g_h,
+        g_v_rows,
+        g_h_rows,
         below_horizon,
         floor_scale,
         range_m,
@@ -4154,6 +4166,8 @@ def _pattern(
     )
 
     ranged = {"range_m": range_m, "range_phase_deg": range_phase_deg} if range_m else {}
+    if directive:
+        ranged["directive"] = True
     if range_m and lower_k is not None:
         # Over a finite ground the range form adds the LOWER medium's
         # exp(-j k_m R)/R (momwire#1237, captured over GN 0, GN 2 and GD; a
@@ -4165,8 +4179,12 @@ def _pattern(
         )
     if request.xnda % 10 == 0:
         # XNDA's A digit asks for the average gain; 1000 (0010, 0044) does
-        # not and 1001 (0013, 0035) does.
+        # not and 1001 (0013, 0035) does.  So do 1003 (4nec2's default, the
+        # same printout as 1001) and 1002, which prints the trailer with no
+        # rows (momwire#1503, measured black-box on the NEC-5 engine).
         return PatternBlock(rows=rows, **ranged)
+    if request.xnda % 10 == 2:
+        rows = ()
     average, solid = average_gain(
         g_v + g_h, thetas, request.d_theta_deg, request.d_phi_deg, request.n_phi
     )
@@ -4825,6 +4843,7 @@ def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:
                 lower_k=None
                 if medium is None
                 else (2.0 * math.pi / wavelength) * cmath.sqrt(medium.eps_c),
+                p_radiated=p_radiated,
             )
             for request in deck.requests
             if isinstance(request, Nec5FarFieldRequest)
