@@ -1,0 +1,10 @@
+CM An electric near field over GD: currents over the PEC image, the field in
+CM the medium (`near_ground(medium=)`).
+CE
+GW 1,21,0.,-5.,8.,0.,5.,8.,.001
+GE 1
+FR 0,1,0,0,14.
+GD 0,0,0,0,13.,.005
+EX 0,1,11,0,1.,0.
+NE 0,2,1,2,2.,0.,1.,3.,0.,4.
+EN
