@@ -99,6 +99,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_somm_proj_core.cpp
   ${MW_SRC}/_somm_below_proj_core.cpp
   ${MW_SRC}/_somm_below_grid_core.cpp
+  ${MW_SRC}/_somm_below_fill_core.cpp
   ${MW_SRC}/_near_interface_core.cpp
   ${MW_SRC}/_near_interface_eval.cpp
   ${MW_SRC}/_razor_crossing_core.cpp

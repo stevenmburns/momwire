@@ -13,6 +13,8 @@
 // `MOMWIRE_SOMM_*` environment overrides set must not use this.
 #pragma once
 
+#include <filesystem>
+
 #include <complex>
 #include <cstdint>
 #include <string>
@@ -67,6 +69,11 @@ struct DiskStats {
     uint64_t hits = 0, misses = 0, writes = 0, rejected = 0;
 };
 DiskStats disk_stats();
+// The configured store's directory and tag (false while it is off), and its
+// LRU eviction after a write -- for the below/below table's files, which
+// share the directory and the size bound (`_somm_below_fill_core`).
+bool disk_location(std::filesystem::path &dir, std::string &tag);
+void disk_evict(const std::filesystem::path &keep);
 
 // CPython 3.12's complex division (`_Py_c_quot`), for a caller spelling a
 // Python complex expression (C2 = (eps~ - 1) / (eps~ + 1)).

@@ -1,6 +1,8 @@
 // The C++ route (route.h): compiled once per namespace, see there.
 #include "route.h"
 
+#include "_somm_below_fill_core.h"
+
 #include "_nec5_razor_printout_core.h"
 #include "_nec5_razor_seam_core.h"
 #include "_razor_solve_core.h"
@@ -16,7 +18,13 @@
 namespace mw {
 namespace exe {
 
-void configure_grid_cache(const std::string &tag) { somm_core::configure_disk_cache(tag); }
+void configure_grid_cache(const std::string &tag) {
+    somm_core::configure_disk_cache(tag);
+    // The below/below table (momwire#1512 B5): filled here, kept in the same
+    // store, its anchors' seen list beside it.
+    somm_below::configure_below_store(true);
+    somm_below::set_source(somm_below::fill_source());
+}
 
 long long largest_solve(const std::string &latin1_text) {
     const nec5::SeamResult r = nec5::razor_seam(latin1_text);

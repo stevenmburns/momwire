@@ -20,6 +20,7 @@
 // column-major complex128) to OUTDIR/<deck index>_<K>_X.bin.
 // tests/test_razor_core_standalone.py builds it from the core TUs alone and
 // requires every line and every byte to be the Python seam's.
+#include "_somm_below_fill_core.h"
 #include "_nec5_razor_seam_core.h"
 #include "_razor_solve_core.h"
 
@@ -74,6 +75,8 @@ int main(int argc, char **argv) {
     const std::string out = argv[2];
     static const char *route[] = {"served", "refused", "raised", "declined"};
     mw::razor::SolveContext ctx;
+    // The below/below table filled here, as the executable fills it (B5).
+    somm_below::set_source(somm_below::fill_source());
     for (int i = 3; i < argc; i++) {
         std::ifstream f(argv[i], std::ios::binary);
         const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
