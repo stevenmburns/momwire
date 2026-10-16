@@ -35,8 +35,10 @@
 // the extended kernel, and the exact ring kernel where "auto" engages it
 // (`_razor_exact_core.h`, radius steps included). Anything else `build` declines BY NAME (returns the
 // reason) and the caller keeps the Python front half: a wire listed twice
-// (momwire#1042's merge), declared `junctions=`, a wire below the plane
-// (the shared buried sentences), `exact_kernel=True`. Inside the scope every refusal the Python front half raises is
+// (momwire#1042's merge), declared `junctions=`, `exact_kernel=True`, and
+// a buried deck's FILL ("buried-fill", momwire#1512): its construction --
+// `_refuse_buried_geometry`'s media, crossing scope and route, with every
+// sentence it raises -- is here, the medium-by-medium fill is not yet. Inside the scope every refusal the Python front half raises is
 // raised here as a `FrontError` of the same kind with the same message, in
 // the same order.
 //
@@ -76,6 +78,9 @@ struct FrontError : std::runtime_error {
 };
 
 enum class End : int8_t { start = 0, end = 1 };
+// razor's buried route (`_refuse_buried_geometry`): none, or exactly one of
+// `_below_plane`, `_detached`, `_crossing` (momwire#1149, momwire#1512 B1).
+enum class Buried : int8_t { none = 0, below_plane = 1, detached = 2, crossing = 3 };
 enum class ExactKernel : int8_t { off = 0, on = 1, automatic = 2 };
 
 // One wire's `n_per_edge_per_wire` entry: None (-> `nsegs` on every edge), a
@@ -210,6 +215,11 @@ class Front {
     bool has_ground = false;
     double ground_z = 0.0;
     bool extended_kernel = false;
+    // The buried route and its wire media (`_wire_media`: true = BELOW), and
+    // the crossing junctions (indices into the detected groups, in order).
+    Buried buried = Buried::none;
+    std::vector<char> media_below;
+    std::vector<size_t> crossing;
     double c = 0.0, k = 0.0, omega = 0.0, c_a_imag = 0.0, c_phi_imag = 0.0;
 
     // --- geometry (`_build_geometry`'s dict) -----------------------------
@@ -280,6 +290,7 @@ class Front {
     void construct(const FrontInputs &in);
     std::string scope(const FrontInputs &in);
     void ground_ends(std::vector<std::pair<int64_t, End>> &touching);
+    void refuse_buried_geometry(const std::vector<std::pair<int64_t, End>> &touching);
     void detect_junctions(const std::vector<std::pair<int64_t, End>> &grounded_ends,
                           std::vector<Junction> &groups);
     void build_geometry();

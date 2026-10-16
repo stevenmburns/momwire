@@ -25,7 +25,10 @@
 //
 // SCOPE (the decks the C++ solve covers): free space, GN 1, a bare GD
 // (which the seam solves over a PERFECT image) or GN 0 / GN 2 above the
-// plane (the composing Sommerfeld fill, momwire#1479 S3), no TL / NT, no WIRE loading
+// plane (the composing Sommerfeld fill, momwire#1479 S3); a buried deck's
+// structure half (the plane crossings split at z = 0, momwire#1281, and the
+// crossing sites, momwire#1282) is here, its fill declines "front:buried-fill"
+// (momwire#1512); no TL / NT, no WIRE loading
 // (LD 5 / LD 2 / LD 3; a lumped LD 0 / 1 / 4 is a port site here, its
 // impedance the run half's), no phantom wire, finite coordinates, frequency
 // and radii, at most `MAX_SEGMENTS` segments in all. Anything else is
@@ -56,6 +59,8 @@
 #include "_razor_front_core.h"
 
 #include <array>
+#include <map>
+#include <set>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -79,11 +84,39 @@ constexpr double EPSC_CONDUCTIVITY_FACTOR = 59.96;
 
 using NodeKey = std::array<long long, 3>;  // `_node_key`
 
-struct SeamPiece {  // `_Piece` (never cut here: one per GW)
+// `_PlaneCrossing` (momwire#1281): where a card crossing z = 0 meets it,
+// at a node (`node`) or inside a segment (`segment`, 0-based); -1 = none.
+struct PlaneCrossing {
+    Int tag;
+    double point[3] = {0, 0, 0};
+    long long node = -1, segment = -1;
+};
+
+// One `_span_table` row: a card, or one half of a crossing card.
+struct Span {
+    Int tag;
+    double a[3] = {0, 0, 0}, b[3] = {0, 0, 0};
+    double tol = 0;
+};
+
+std::vector<PlaneCrossing> plane_crossings(const Deck &d);
+std::vector<Span> span_table(const Deck &d);
+std::set<NodeKey> crossing_nodes(const Deck &d);
+bool has_buried_wire(const Deck &d);
+
+// `_SplitElement`: a deck element cut in two at z = 0, read back on the
+// pieces holding its two end nodes, its charge at its old centre.
+struct SplitElement {
+    long long lower = -1, upper = -1, centre_piece = -1;
+    double centre_s = 0;
+};
+
+struct SeamPiece {  // `_Piece`: a run of one GW (cut only at z = 0)
     Int tag;
     long long first_node = 0, last_node = 0;
     double points[6] = {0, 0, 0, 0, 0, 0};  // start, end
     double radius = 0;
+    bool cut_start = false, cut_end = false;  // an end at a z = 0 cut
     long long n_elements() const { return last_node - first_node; }
     double length() const;  // `_vec3.norm3(points[1] - points[0])`
 };
@@ -98,6 +131,7 @@ struct SeamSite {  // `_Site`
     enum EndKind { at_start, at_end, interior, none } end = at_start;
     double sign = 0, arclength = 0;
     bool contact = false;
+    bool crossing = false;  // a series source on a crossing node (momwire#1282)
     long long index = -1, column = -1;
     double weight = 0;
 };
@@ -110,6 +144,7 @@ struct SeamMesh {  // `_Mesh`
     std::vector<SeamSite> sites;
     std::vector<long long> feeds, gaps;                     // site indices
     std::vector<std::pair<long long, long long>> element_of;  // (piece, element)
+    std::map<long long, SplitElement> split_elements;  // by element index
     long long n_columns() const { return static_cast<long long>(feeds.size() + gaps.size()); }
 };
 
@@ -146,6 +181,10 @@ struct Prepared {
     std::vector<Node> source_sites;  // the drive's addresses, deck order
     std::vector<SeamCard> cards;     // `_cards`: lines, then networks, deck order
     std::vector<Int> phantom_tags;   // `_phantom_tags`, deck order
+    // Built up to the front, whose fill is not in C++ yet (the buried fill,
+    // momwire#1512): kept on a declined route so a gate can compare the
+    // preparation, never solved.
+    bool unsolved = false;
 };
 
 struct RunOutcome {
