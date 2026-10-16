@@ -281,6 +281,9 @@ def main(argv=None):
     arrays = "--arrays" in args
     if arrays:
         args.remove("--arrays")
+    below_bridge = "--below-bridge" in args
+    if below_bridge:
+        args.remove("--below-bridge")
     work = Path(tempfile.mkdtemp(prefix="printout_compare_"))
     if args and args[0] == "--texts":
         decks, labels = [], []
@@ -308,6 +311,18 @@ def main(argv=None):
     if driver is None:
         (work / "build").mkdir()
         driver = build_driver(work / "build")
+    # `--below-bridge` (momwire#1512, until the below table is ported): the
+    # Python route renders every deck FIRST, and the below/below grids it
+    # filled are handed to the driver (`MW_TEST_BELOW_TABLES`), so a buried
+    # deck is printed by C++ end to end on Python's tables.
+    if below_bridge:
+        sys.path.insert(0, str(SPLIT))
+        import buried_z_compare as bz  # noqa: PLC0415 - the gate's own dumper
+
+        for d in decks:  # fills the grids; the comparison renders again
+            python_printout(d.read_bytes().decode("latin-1"))
+        bz.dump_below_grids(work / "bridge")
+        os.environ["MW_TEST_BELOW_TABLES"] = str(work / "bridge")
     answers = run_driver(driver, decks, work / "out", arrays=arrays)
     runs_compared = 0
 

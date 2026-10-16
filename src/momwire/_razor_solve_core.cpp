@@ -426,6 +426,11 @@ void SolveContext::release() {
     std::vector<int>().swap(ipiv_);
 }
 
+void SolveContext::set_z(const cd *z, ptrdiff_t n) {
+    n_ = n;
+    z_.assign(z, z + static_cast<size_t>(n * n));
+}
+
 void SolveContext::add_at(const int64_t *rows, const int64_t *cols, const cd *vals, size_t n) {
     cd *z = z_.data();
     for (size_t i = 0; i < n; i++) {

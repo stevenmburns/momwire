@@ -324,6 +324,28 @@ mw::razor::FrontInputs front_inputs(const py::dict &kw) {
     }
     in.wavelength = kw.contains("wavelength") ? as_float(kw["wavelength"]) : 22.0;
     in.extended_kernel = kw.contains("extended_kernel") && py::bool_(get("extended_kernel"));
+    // The wire loading (`_solver_for`'s): an LD 5 conductivity per piece (NaN
+    // where none) and LD 2 / 3 `DistributedRLC`s (or None).
+    py::object cond = get("wire_conductivity");
+    if (!cond.is_none()) {
+        in.loading.has_conductivity = true;
+        for (py::handle v : cond) in.loading.conductivity.push_back(v.cast<double>());
+    }
+    py::object rlc = get("distributed_rlc");
+    if (!rlc.is_none()) {
+        in.loading.has_rlc = true;
+        for (py::handle v : rlc) {
+            mw::razor::WireRLC e;
+            if (!v.is_none()) {
+                const std::string kind = v.attr("kind").cast<std::string>();
+                e.kind = kind == "series" ? mw::razor::WireRLC::series : mw::razor::WireRLC::parallel;
+                e.r = v.attr("r").cast<double>();
+                e.l = v.attr("l").cast<double>();
+                e.c = v.attr("c").cast<double>();
+            }
+            in.loading.rlc.push_back(e);
+        }
+    }
     py::object ek = get("exact_kernel");
     if (py::isinstance<py::str>(ek)) {
         if (ek.cast<std::string>() != "auto") throw Malformed{};
@@ -527,7 +549,9 @@ py::dict razor_buried_stages(py::dict kw, int64_t chunk_elems, std::string below
     {
         py::gil_scoped_release release;
         why = f.build(in);
-        if (why == mw::razor::BURIED_FILL_PENDING) why = mw::razor::fill_buried(f, z, &st, 0);
+        if ((why.empty() || why == mw::razor::BURIED_FILL_PENDING) &&
+            f.buried != mw::razor::Buried::none)
+            why = mw::razor::fill_buried(f, z, &st, 0);
     }
     out["route"] = why.empty() ? std::string("filled") : "stopped:" + why;
     const ptrdiff_t n = f.n_basis;
