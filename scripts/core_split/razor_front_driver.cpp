@@ -177,7 +177,7 @@ int main(int argc, char **argv) {
     for (int64_t j = 0; j < m; j++)
         for (int64_t i = 0; i < n; i++) X[j * n + i] = cd(front.cols[i * m + j], 0.0);
     mw::razor::SolveContext ctx;
-    ctx.fill(front.solve_inputs(0));
+    mw::razor::fill_front(front, ctx, 0);
     write(out + "/front_Z.bin", ctx.z(), sizeof(cd) * static_cast<size_t>(n * n));
     const int info = ctx.lu_solve(lp, X.data(), static_cast<int>(m));
     write(out + "/front_X.bin", X.data(), sizeof(cd) * X.size());
@@ -198,7 +198,7 @@ int main(int argc, char **argv) {
                 for (int64_t i = 0; i < f.n_basis; i++)
                     x[j * f.n_basis + i] = cd(f.cols[i * f.n_ports + j], 0.0);
             const auto t1 = clk::now();
-            ctx.fill(f.solve_inputs(0));
+            mw::razor::fill_front(f, ctx, 0);
             const auto t2 = clk::now();
             ctx.lu_solve(lp, x.data(), static_cast<int>(f.n_ports));
             const auto t3 = clk::now();

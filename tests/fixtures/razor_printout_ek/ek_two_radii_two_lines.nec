@@ -1,0 +1,10 @@
+CM Two parallel fat dipoles of different radii: one radius per line, the EK tube per observer
+CE
+GW 1 41 0 0 -2.5 0 0 2.5 0.05
+GW 2 41 1.0 0 -2.5 1.0 0 2.5 0.03
+GE 0
+EX 0 1 21 0 1 0
+EX 0 2 21 0 0 1
+FR 0 1 0 0 28.0 0
+XQ
+EN

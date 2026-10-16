@@ -867,13 +867,16 @@ std::string Front::build(const FrontInputs &in) {
         value_error("no ports: give at least one feeds= gap or one node_gaps= series EMF");
 
     // The geometry, then "auto"'s resolution on it (`_resolve_exact_kernel_
-    // auto`): any segment under three radii engages the exact ring kernel,
-    // which this front half does not serve.
+    // auto`): any segment under three radii engages the exact ring kernel.
     build_geometry();
+    exact = false;
     if (in.exact_kernel == ExactKernel::automatic)
-        for (int64_t w = 0; w < n_wires; w++)
+        for (int64_t w = 0; w < n_wires && !exact; w++)
             for (int64_t s = seg_offsets[w]; s < seg_offsets[w + 1]; s++)
-                if (seg_h[s] < EXACT_KERNEL_AUTO_H_OVER_A * radius_per_wire[w]) return "exact-kernel";
+                if (seg_h[s] < EXACT_KERNEL_AUTO_H_OVER_A * radius_per_wire[w]) {
+                    exact = true;
+                    break;
+                }
 
     // The solve-time half: the bundle refusal, the ports, the tables. What
     // these raise, Python raises from `compute_port_solution`.
@@ -900,6 +903,14 @@ std::string Front::build(const FrontInputs &in) {
     }
     // `_schedule.elem_rows(_CHUNK_ELEMS, n_path * n_basis)`
     window_rows = std::max<int64_t>(1, in.chunk_elems / std::max<int64_t>(1, 2 * n_basis));
+    chunk_elems = in.chunk_elems;
+    // The correction's geometry-only tables; a radius step on a coaxial line
+    // needs the two-radius jobs, which this route does not serve yet.
+    exact_plan.groups.clear();
+    if (exact) {
+        const std::string why = build_exact_plan(*this, exact_plan);
+        if (!why.empty()) return why;
+    }
     return "";
 }
 
@@ -990,13 +1001,21 @@ void Front::loading_stencil() {
     }
 }
 
+void fill_front(const Front &front, SolveContext &ctx, uintptr_t cancel_flag) {
+    if (front.exact)
+        ctx.fill(front.solve_inputs(cancel_flag),
+                 [&](cd *z) { add_exact_correction(front, front.exact_plan, z, cancel_flag); });
+    else
+        ctx.fill(front.solve_inputs(cancel_flag));
+}
+
 int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
                 uintptr_t cancel_flag) {
     const int64_t n = front.n_basis, m = front.n_ports;
     // `cols.astype(np.complex128)`, column-major.
     for (int64_t j = 0; j < m; j++)
         for (int64_t i = 0; i < n; i++) x[j * n + i] = cd(front.cols[i * m + j], 0.0);
-    ctx.fill(front.solve_inputs(cancel_flag));
+    fill_front(front, ctx, cancel_flag);
     if (!front.load_vals.empty())
         ctx.add_at(front.load_rows.data(), front.load_cols.data(), front.load_vals.data(),
                    front.load_vals.size());

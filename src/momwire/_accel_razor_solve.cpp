@@ -492,7 +492,7 @@ py::dict front_port_solution(mw::razor::SolveContext &ctx, py::dict kw, int64_t 
         py::gil_scoped_release release;
         for (ptrdiff_t j = 0; j < m; j++)
             for (ptrdiff_t i = 0; i < n; i++) x[j * n + i] = cd(f.cols[i * m + j], 0.0);
-        ctx.fill(f.solve_inputs(cancel_flag));
+        mw::razor::fill_front(f, ctx, cancel_flag);
     }
     if (want_z) {
         py::array_t<cd, py::array::f_style> Zc({n, n});

@@ -17,13 +17,14 @@
 // these): real k; the NEC-5 path rule (n_path = 2) with T1 sharing the
 // centroid moments (`t1_on_centroids`); free space or a PERFECT ground (the
 // unweighted image fold, grounded rows included); with or without the
-// extended kernel's labels; no loading, no exact ring kernel, no chop, no
+// extended kernel's labels; no loading, no chop, no
 // row restriction.
 #pragma once
 
 #include "_mw_core.h"
 
 #include <chrono>
+#include <functional>
 
 namespace mw {
 namespace razor {
@@ -88,6 +89,11 @@ class SolveContext {
     // Z (n_basis, n_basis) is written column-major into the context's own
     // buffer, which survives until the next fill; `z()` reads it.
     void fill(const SolveInputs &in);
+    // The same, with `between(Z)` run once on the free block before the
+    // image folds in: razor's `Z = free; Z += exact correction; Z -= image`
+    // (`_assemble_Z`). Each element sees the same operations in the same
+    // order as `fill` when `between` adds nothing.
+    void fill(const SolveInputs &in, const std::function<void(cd *)> &between);
 
     // Factor the context's Z in place and solve Z X = B for B's columns,
     // overwriting `b` (n_basis, n_rhs, column-major, ld = n_basis) with X.

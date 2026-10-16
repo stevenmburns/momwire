@@ -29,12 +29,13 @@
 // SCOPE: the class `_razor_solve_core.h` serves -- free space or a PERFECT
 // ground (`ground_z` with no `ground_eps`, which is also what the NEC-5 seam
 // builds for a GD card), a real k, razor-2p's two-point path rule
-// (`nec5_quadrature=True`), with or without the extended kernel, no loading,
-// no exact ring kernel. Anything else `build` declines BY NAME (returns the
-// reason) and the caller keeps the Python front half: a wire listed twice
-// (momwire#1042's merge), declared `junctions=`, a wire below the plane
-// (the shared buried sentences), the exact ring kernel ("auto" engaging, or
-// True). Inside the scope every refusal the Python front half raises is
+// (`nec5_quadrature=True`), with or without the extended kernel, and the
+// exact ring kernel where "auto" engages it on one radius per coaxial line
+// (`_razor_exact_core.h`). Anything else `build` declines BY NAME (returns
+// the reason) and the caller keeps the Python front half: a wire listed
+// twice (momwire#1042's merge), declared `junctions=`, a wire below the
+// plane (the shared buried sentences), `exact_kernel=True`, and a radius
+// step on a coaxial line ("exact-kernel-cross"). Inside the scope every refusal the Python front half raises is
 // raised here as a `FrontError` of the same kind with the same message, in
 // the same order.
 //
@@ -45,6 +46,7 @@
 #pragma once
 
 #include "_mw_core.h"
+#include "_razor_exact_core.h"
 #include "_razor_solve_core.h"
 #include "_razor_wire_loading_core.h"
 
@@ -225,6 +227,12 @@ class Front {
     std::vector<int64_t> load_rows, load_cols;
     std::vector<cd> load_vals;
 
+    // --- the exact ring kernel (momwire#1433), when "auto" engages it:
+    // the plan the correction walks (`_razor_exact_plan.build_plan`).
+    bool exact = false;
+    ExactPlan exact_plan;
+    int64_t chunk_elems = 0;
+
     // The fill's arguments, as views into this object (valid while it is).
     SolveInputs solve_inputs(uintptr_t cancel_flag) const;
 
@@ -242,6 +250,10 @@ class Front {
     void loading_stencil();
     std::vector<Junction> groups_;  // `_find_junctions`
 };
+
+// The fill of a built Front into ctx's Z: the free block, the exact ring
+// kernel's correction when "auto" engaged it, then the image (no loading).
+void fill_front(const Front &front, SolveContext &ctx, uintptr_t cancel_flag);
 
 // fill + LU for every port of a built Front: X (n_basis, n_ports),
 // column-major, is written with the solution. Returns 0, or i > 0 when U(i,
