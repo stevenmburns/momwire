@@ -574,6 +574,14 @@ int main(int argc, char **argv) {
         why = "gmo";
     if (why.empty()) {
         const Clock::time_point t = Clock::now();
+        // The Sommerfeld masters' own store (momwire#1479 S4), keyed by this
+        // build, before anything can fill a grid (the size policy's
+        // seam builds the front): a rebuild at the same version starts a fresh directory.
+        {
+            const std::string tag = std::string(VERSION) + "-" + __DATE__ + "-" + __TIME__;
+            mws::exe::configure_grid_cache(tag);
+            mw::exe::configure_grid_cache(tag);
+        }
         // The size policy (`threads_for`). MOMWIRE_THREADS overrides it: 1 is
         // the serial copy, more the threaded one.
         if (forced_threads <= 0) {
