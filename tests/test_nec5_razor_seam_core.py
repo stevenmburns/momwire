@@ -439,10 +439,17 @@ CASES = {
         "served",
         "",
     ),
-    "declines_the_exact_kernel": (
+    "serves_the_exact_kernel": (
         HEAD + "GW 1,11,0.,-2.5,5.,0.,2.5,5.,.2\n" + FREE_TAIL,
+        "served",
+        "",
+    ),
+    "declines_the_exact_kernel_across_a_radius_step": (
+        HEAD
+        + "GW 1,6,0.,-2.5,5.,0.,0.,5.,.2\nGW 2,5,0.,0.,5.,0.,2.5,5.,.25\n"
+        + FREE_TAIL,
         "declined",
-        "front:exact-kernel",
+        "front:exact-kernel-cross",
     ),
     "serves_a_phantom_wire": (
         HEAD

@@ -167,7 +167,9 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     }
 }
 
-void SolveContext::fill(const SolveInputs &in) {
+void SolveContext::fill(const SolveInputs &in) { fill(in, nullptr); }
+
+void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &between) {
     const auto t0 = std::chrono::steady_clock::now();
     const ptrdiff_t n = in.s_a.shape(0);
     const char *who = "razor_solve";
@@ -198,12 +200,27 @@ void SolveContext::fill(const SolveInputs &in) {
         z_.resize(nn);
         counters.pool_grows++;
     }
-    for (ptrdiff_t lo = 0; lo < n; lo += in.window_rows) {
-        const ptrdiff_t hi = std::min(n, lo + in.window_rows);
+    if (!between) {
+        for (ptrdiff_t lo = 0; lo < n; lo += in.window_rows) {
+            const ptrdiff_t hi = std::min(n, lo + in.window_rows);
+            poll(in.cancel_flag);
+            window(in, in.real, lo, hi, false);
+            if (in.has_image) window(in, in.image, lo, hi, true);
+            counters.windows++;
+        }
+    } else {
+        for (ptrdiff_t lo = 0; lo < n; lo += in.window_rows) {
+            poll(in.cancel_flag);
+            window(in, in.real, lo, std::min(n, lo + in.window_rows), false);
+            counters.windows++;
+        }
         poll(in.cancel_flag);
-        window(in, in.real, lo, hi, false);
-        if (in.has_image) window(in, in.image, lo, hi, true);
-        counters.windows++;
+        between(z_.data());
+        if (in.has_image)
+            for (ptrdiff_t lo = 0; lo < n; lo += in.window_rows) {
+                poll(in.cancel_flag);
+                window(in, in.image, lo, std::min(n, lo + in.window_rows), true);
+            }
     }
     counters.solves++;
     counters.fill_seconds +=
