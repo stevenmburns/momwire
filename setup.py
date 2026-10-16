@@ -353,6 +353,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
     "src/momwire/_somm_proj_core.h",
+    "src/momwire/_somm_grid_core.h",
     "src/momwire/_accel_somm_proj_py.h",
 ]
 
@@ -374,6 +375,9 @@ _ACCEL_SOURCES = [
     # S3: the remainder's projection and moment reduction, likewise
     # (`_accel_somm.cpp` / `_accel_mw568.cpp` bind them).
     "src/momwire/_somm_proj_core.cpp",
+    # S3: the grid itself, which the C++ front half builds for the composing
+    # ground (`_razor_front_core.cpp`, linked here as well).
+    "src/momwire/_somm_grid_core.cpp",
     "src/momwire/_accel_mw568.cpp",
     "src/momwire/_accel_razor.cpp",
     # The razor kernels with no Python in their signatures or includes;

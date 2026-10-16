@@ -15,8 +15,10 @@
 //
 // Scope (the binding's caller, `RazorSolver._cxx_port_solution`, routes only
 // these): real k; the NEC-5 path rule (n_path = 2) with T1 sharing the
-// centroid moments (`t1_on_centroids`); free space or a PERFECT ground (the
-// unweighted image fold, grounded rows included); with or without the
+// centroid moments (`t1_on_centroids`); free space, a PERFECT ground (the
+// unweighted image fold, grounded rows included) or the composing Sommerfeld
+// ground (GN 0 / GN 2, momwire#1479 S3: the C2-weighted image plus the
+// smooth remainder Q, `C2 img + Q` folded with the one minus); with or without the
 // extended kernel's labels; no loading, no chop, no
 // row restriction.
 #pragma once
@@ -25,6 +27,10 @@
 
 #include <chrono>
 #include <functional>
+
+namespace somm_proj {
+struct GridView;
+}
 
 namespace mw {
 namespace razor {
@@ -50,6 +56,26 @@ struct SourceSet {
     view<const double, 2> td_b;
 };
 
+// The composing ground's image block (`_source_block_rows` with a ground
+// whose `fused_window_rule` is WINDOW_RULE_CONSTANT_MIRROR and whose
+// `remainder` is present): what the weighted assembler, the scaled T2 and
+// the remainder's `field_windows` read, all built by the caller.
+struct Compose {
+    cd eps_t, c2;  // the ground's eps~ and C2 = (eps~ - 1) / (eps~ + 1)
+    double ground_z = 0.0;
+    view<const double, 2> obs_pts, obs_tans;  // (n_basis * n_path, 3): the path
+    view<const double, 2> src_c, src_t;       // (n_seg, 3): centroids, tangents
+    view<const double, 1> sig_a, sig_b;       // (n_basis): the wing signs
+    // The remainder: the grid's view (`grid_cpp_args`), the source nodes and
+    // their tangents (n_seg * n_qp, 3), and the moment weights W (2, n_seg,
+    // n_qp), C-contiguous.
+    const somm_proj::GridView *grid = nullptr;
+    size_t n_reg = 0;
+    view<const double, 2> rem_src, rem_t_src;
+    const double *W = nullptr;
+    ptrdiff_t n_qp = 0;
+};
+
 struct SolveInputs {
     // The centroid observers (n_seg, 3), with their EK labels and tubes.
     view<const double, 2> cent;
@@ -69,6 +95,8 @@ struct SolveInputs {
     SourceSet real;
     bool has_image = false;
     SourceSet image;
+    bool compose = false;  // the image block is the composing ground's
+    Compose comp;
     ptrdiff_t window_rows = 0;  // basis rows per window (>= 1)
     uintptr_t cancel_flag = 0;
 };
@@ -79,6 +107,7 @@ struct Counters {
     uint64_t solves = 0, windows = 0, image_windows = 0;
     uint64_t seg_moments_calls = 0, assemble_t1_calls = 0, t2_rows_calls = 0;
     uint64_t lu_calls = 0, pool_grows = 0;
+    uint64_t compose_windows = 0;
     double fill_seconds = 0.0, lu_seconds = 0.0;
 };
 
@@ -116,6 +145,10 @@ class SolveContext {
     std::vector<cd> z_;
     // The window pool: grown, never shrunk, reused across windows and solves.
     std::vector<cd> m0_, m1_, t1_, img_;
+    // The composing ground's: the C2-scaled M0, the projected remainder, its
+    // arc moments and the Q rows.
+    std::vector<cd> m0c_, proj_, mom_, q_;
+    std::vector<int64_t> q_row_;
     std::vector<double> obs_;
     std::vector<int64_t> need_, gi_, obs_row_, plus_, minus_, mark_;
     std::vector<double> bo_;

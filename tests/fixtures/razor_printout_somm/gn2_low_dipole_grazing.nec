@@ -1,0 +1,10 @@
+CM A dipole 5 cm over GN 2 poor soil: an observer over its own source's image
+CM keys the remainder's source order above its base (momwire#510).
+CE
+GW 1,21,0.,-5.,.05,0.,5.,.05,.001
+GE 1
+FR 0,1,0,0,14.
+GN 2,0,0,0,5.,.001
+EX 0,1,11,0,1.,0.
+RP 0,4,1,1000,0.,0.,30.,0.
+EN

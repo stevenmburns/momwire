@@ -373,14 +373,23 @@ CASES = {
         "refused",
         "writes no length",
     ),
-    "declines_sommerfeld": (
+    "serves_sommerfeld": (
         HEAD
         + MONO
         + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,-1,0,1.,0.\n"
         + RP
         + "EN\n",
-        "declined",
-        "front:finite-ground",
+        "served",
+        "",
+    ),
+    "serves_sommerfeld_gn2": (
+        HEAD
+        + DIPOLE
+        + "GE 1,-1\nGN 2,0,0,0,5.,.001\nFR 0,1,0,0,30.\nEX 0,1,6,0,1.,0.\n"
+        + RP
+        + "EN\n",
+        "served",
+        "",
     ),
     "refuses_a_near_field_at_a_sommerfeld_contact": (
         HEAD

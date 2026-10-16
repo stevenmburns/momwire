@@ -20,9 +20,24 @@
 // so the order moves no value. The `_m0w` gather of the Python route is the
 // identity on this branch (its runs of `need` are consecutive slices of the
 // shared M0, concatenated back in order), so M0w IS M0.
+//
+// Over the composing ground (momwire#1479 S3) the image window is the same
+// replay with the ground's three differences, in `_source_block_rows`' order:
+//
+//   T1      = razor_assemble_t1_weighted(M0, M1, ..., path points and their
+//             tangents, centroids and segment tangents, CONSTANT_MIRROR,
+//             eps~, ground_z, C2, obs_row=obs_row)
+//   M0w     = M0 * w_Phi, w_Phi = C2 everywhere (numpy's fused complex
+//             product, `_cmul`'s formula: the CPUs the gates run on fuse it)
+//   Q       = razor_q_rows(remainder_moment_reduce(remainder_field_proj_batch(
+//             path points, their tangents, the remainder's source nodes,
+//             ...), W), arange, ...)
+//   rows    = razor_t2_rows(..., M0w, ...) + Q      (`C2 img + Q`, then the
+//             one `out[lo:hi] -= rows`)
 #include "_razor_solve_core.h"
 
 #include "_razor_core.h"
+#include "_somm_proj_core.h"
 
 namespace mw {
 namespace razor {
@@ -118,10 +133,22 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     }
     reserve(t1_, static_cast<size_t>(nb * n));
     auto vt1 = c_view<cd, 2>(t1_.data(), {nb, n});
-    assemble_t1(view<const cd, 2>(vm0), view<const cd, 2>(vm1), in.s_a, in.s_b, in.h_a,
-                in.h_b, in.fall_a, in.fall_b, row_slice(in.tans, lo * np, hi * np),
-                src.td_a, src.td_b, slice1(in.wts, lo * np, hi * np), in.n_path,
-                c_view<const int64_t, 1>(obs_row_.data(), {nb * np}), vt1);
+    const bool compose = image && in.compose;
+    if (compose) {
+        const Compose &c = in.comp;
+        assemble_t1_weighted(view<const cd, 2>(vm0), view<const cd, 2>(vm1), in.s_a, in.s_b,
+                             in.h_a, in.h_b, in.fall_a, in.fall_b, c.sig_a, c.sig_b,
+                             row_slice(c.obs_pts, lo * np, hi * np),
+                             row_slice(c.obs_tans, lo * np, hi * np), c.src_c, c.src_t,
+                             slice1(in.wts, lo * np, hi * np), in.n_path,
+                             /* WINDOW_RULE_CONSTANT_MIRROR */ 1, c.eps_t, c.ground_z, c.c2,
+                             c_view<const int64_t, 1>(obs_row_.data(), {nb * np}), vt1);
+    } else {
+        assemble_t1(view<const cd, 2>(vm0), view<const cd, 2>(vm1), in.s_a, in.s_b, in.h_a,
+                    in.h_b, in.fall_a, in.fall_b, row_slice(in.tans, lo * np, hi * np),
+                    src.td_a, src.td_b, slice1(in.wts, lo * np, hi * np), in.n_path,
+                    c_view<const int64_t, 1>(obs_row_.data(), {nb * np}), vt1);
+    }
     counters.assemble_t1_calls++;
 
     // T2's row references into M0 (`_t2_tables`), grounded rows dropping
@@ -150,11 +177,50 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         reserve(img_, static_cast<size_t>(nb * n));
         dst = c_view<cd, 2>(img_.data(), {nb, n});
     }
-    t2_rows(dst, &t1c, view<const cd, 2>(vm0), m0k,
+    view<const cd, 2> m0w(vm0);
+    if (compose) {
+        // `M0c[a - c0 : b - c0] *= w_Phi`: each part one fused multiply-add.
+        const cd c2 = in.comp.c2;
+        reserve(m0c_, plane);
+        const cd *src0 = m0_.data();
+        cd *dst0 = m0c_.data();
+        for (size_t i = 0; i < plane; i++) {
+            const double ar = src0[i].real(), ai = src0[i].imag();
+            dst0[i] = cd(std::fma(ar, c2.real(), -(ai * c2.imag())),
+                         std::fma(ar, c2.imag(), ai * c2.real()));
+        }
+        m0w = c_view<const cd, 2>(m0c_.data(), {n_need, n_seg});
+    }
+    t2_rows(dst, &t1c, m0w, m0k,
             c_view<const int64_t, 1>(plus_.data(), {nb}),
             c_view<const int64_t, 1>(minus_.data(), {nb}), in.s_a, in.s_b, in.q_a, in.q_b,
             in.c_a_imag, in.c_phi_imag);
     counters.t2_rows_calls++;
+    if (compose) {
+        // The remainder over the window's path points (`field_windows`,
+        // `distinct=True`), its arc moments, and the Q rows, added before
+        // the one minus: `rows_T1 += Q_rows`.
+        const Compose &c = in.comp;
+        const ptrdiff_t m_obs = nb * np, s_src = c.rem_src.shape(0);
+        reserve(proj_, static_cast<size_t>(m_obs * s_src));
+        somm_core::field_proj_batch(*c.grid, c.n_reg, m_obs, s_src,
+                                    &c.obs_pts(lo * np, 0), &c.obs_tans(lo * np, 0),
+                                    c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
+                                    proj_.data(), in.cancel_flag, true);
+        reserve(mom_, static_cast<size_t>(m_obs * n_seg * 2));
+        somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_obs, mom_.data());
+        reserve(q_row_, static_cast<size_t>(m_obs));
+        for (ptrdiff_t o = 0; o < m_obs; o++) q_row_[o] = o;
+        reserve(q_, static_cast<size_t>(nb * n));
+        q_rows(c_view<const cd, 3>(mom_.data(), {m_obs, n_seg, 2}),
+               c_view<const int64_t, 1>(q_row_.data(), {m_obs}), in.s_a, in.s_b, in.h_a,
+               in.h_b, in.fall_a, in.fall_b, c.sig_a, c.sig_b,
+               slice1(in.wts, lo * np, hi * np), np, c_view<cd, 2>(q_.data(), {nb, n}));
+        cd *im = img_.data();
+        const cd *q = q_.data();
+        for (size_t i = 0, e = static_cast<size_t>(nb * n); i < e; i++) im[i] += q[i];
+        counters.compose_windows++;
+    }
     if (image) {
         // `out[lo:hi] -= rows`: one complex subtraction per entry.
         cd *z = z_.data();
@@ -193,6 +259,20 @@ void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &
         throw std::invalid_argument("razor_solve: group_i must be (n_seg,)");
     if (in.b_obs.size() > 0 && in.b_obs.shape(0) != n_seg)
         throw std::invalid_argument("razor_solve: b_obs must be (n_seg,)");
+    if (in.compose) {
+        const Compose &c = in.comp;
+        if (!in.has_image || c.grid == nullptr || c.W == nullptr || c.n_qp < 1)
+            throw std::invalid_argument("razor_solve: a composing ground needs its image and remainder");
+        if (c.obs_pts.shape(0) != n * 2 || c.obs_tans.shape(0) != n * 2 ||
+            c.src_c.shape(0) != n_seg || c.src_t.shape(0) != n_seg ||
+            c.sig_a.shape(0) != n || c.sig_b.shape(0) != n ||
+            c.rem_src.shape(0) != n_seg * c.n_qp || c.rem_t_src.shape(0) != n_seg * c.n_qp)
+            throw std::invalid_argument("razor_solve: the composing ground's tables are mis-shaped");
+        require_contiguous(c.obs_pts, who, "obs_pts");
+        require_contiguous(c.obs_tans, who, "obs_tans");
+        require_contiguous(c.rem_src, who, "rem_src");
+        require_contiguous(c.rem_t_src, who, "rem_t_src");
+    }
 
     n_ = n;
     const size_t nn = static_cast<size_t>(n * n);
@@ -234,6 +314,11 @@ void SolveContext::release() {
     std::vector<cd>().swap(m1_);
     std::vector<cd>().swap(t1_);
     std::vector<cd>().swap(img_);
+    std::vector<cd>().swap(m0c_);
+    std::vector<cd>().swap(proj_);
+    std::vector<cd>().swap(mom_);
+    std::vector<cd>().swap(q_);
+    std::vector<int64_t>().swap(q_row_);
     std::vector<double>().swap(obs_);
     std::vector<double>().swap(bo_);
     std::vector<int64_t>().swap(need_);
