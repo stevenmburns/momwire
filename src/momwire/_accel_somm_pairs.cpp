@@ -1,5 +1,5 @@
 #include "_accel_common.h"
-#include "_accel_somm_proj_inline.h"
+#include "_accel_somm_proj_py.h"
 
 // momwire#1201: the Sommerfeld remainder at LISTED (observer, source) pairs.
 //
