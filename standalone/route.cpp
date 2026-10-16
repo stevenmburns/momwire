@@ -4,6 +4,7 @@
 #include "_nec5_razor_printout_core.h"
 #include "_nec5_razor_seam_core.h"
 #include "_razor_solve_core.h"
+#include "_somm_grid_core.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -14,6 +15,8 @@
 
 namespace mw {
 namespace exe {
+
+void configure_grid_cache(const std::string &tag) { somm_core::configure_disk_cache(tag); }
 
 long long largest_solve(const std::string &latin1_text) {
     const nec5::SeamResult r = nec5::razor_seam(latin1_text);
