@@ -51,6 +51,7 @@ from test_crossing_serve_524 import hub_deck
 from test_sg_mixed_class_fill_1224 import _kernel_columns
 
 import momwire._accel as _accel
+from momwire import _sommerfeld_below
 from momwire import sinusoidal_galerkin as sg
 
 
@@ -260,7 +261,16 @@ def test_the_sweeps_own_padding_is_load_bearing():
         for n in sorted(DECKS)
     ],
 )
-def test_g_and_z_match_the_scalar_spelling(name):
+def test_g_and_z_match_the_scalar_spelling(name, monkeypatch):
+    # The reference was written when every fill read the below/below table
+    # on its point lattice, and the spelling that wrote it is gone. This
+    # file's subject is the complex far fill's own arithmetic, not the
+    # table's lattice, so the fill reads the lattice the reference saw.
+    monkeypatch.setattr(
+        _sommerfeld_below,
+        "_SOMM_BELOW_SPACING_FILL",
+        _sommerfeld_below._SOMM_BELOW_SPACING_POINT,
+    )
     ref = np.load(_REF)
     G, Z, calls = _capture(DECKS[name])
     assert calls > 0, "the complex far fill never ran"
