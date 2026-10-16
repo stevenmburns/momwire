@@ -1,0 +1,41 @@
+dan      R1=0.02  th=0.0581   spread=2e-35 cpp=5.2e-09 numpy=3.6e-09 long=6.6e-09/7259 long_cf=5.7e-12/7259 wa=1.6e-10/27 wa_b=1.9e-11/12
+salt1.8  R1=0.02  th=0.0581   spread=2e-34 cpp=1.7e-08 numpy=1.7e-08 long=1.9e-08/7250 long_cf=6.4e-12/7250 wa=7.5e-11/27 wa_b=2.7e-11/12
+dan      R1=0.02  th=0.04175  spread=1e-35 cpp=3.9e-09 numpy=1.0e-08 long=1.9e-09/10029 long_cf=5.7e-12/10029 wa=6.6e-11/27 wa_b=5.4e-12/12
+fresh28  R1=0.02  th=0.04175  spread=2e-34 cpp=8.1e-09 numpy=8.1e-09 long=6.6e-09/10020 long_cf=5.8e-12/10020 wa=4.8e-11/27 wa_b=1.8e-11/12
+salt1.8  R1=0.02  th=0.04175  spread=4e-34 cpp=3.9e-08 numpy=3.8e-08 long=4.2e-08/10017 long_cf=6.4e-12/10017 wa=4.1e-11/27 wa_b=3.5e-11/12
+dan      R1=0.02  th=0.08085  spread=5e-36 cpp=4.9e-09 numpy=4.3e-09 long=2.4e-09/5253 long_cf=5.8e-12/5253 wa=3.3e-11/27 wa_b=1.3e-11/12
+salt1.8  R1=0.02  th=0.08085  spread=5e-35 cpp=1.1e-08 numpy=1.1e-08 long=9.8e-09/5247 long_cf=6.4e-12/5247 wa=5.9e-11/27 wa_b=9.3e-12/12
+fresh28  R1=0.02  th=0.0581   spread=5e-35 cpp=1.0e-09 numpy=1.1e-09 long=3.1e-09/7252 long_cf=5.8e-12/7252 wa=3.3e-11/27 wa_b=1.3e-11/12
+fresh28  R1=0.02  th=0.08085  spread=4e-35 cpp=2.8e-09 numpy=2.7e-09 long=1.6e-09/5248 long_cf=5.8e-12/5248 wa=4.0e-11/27 wa_b=1.5e-11/12
+salt1.8  R1=0.02  th=0.03     spread=6e-34 cpp=5.9e-08 numpy=6.0e-08 long=6.2e-08/13841 long_cf=6.3e-12/13841 wa=1.2e-10/27 wa_b=1.4e-11/12
+fresh28  R1=0.02  th=0.03     spread=4e-34 cpp=1.1e-08 numpy=9.6e-09 long=1.3e-08/13845 long_cf=6.0e-12/13845 wa=1.2e-10/27 wa_b=1.8e-11/12
+dan      R1=0.02  th=0.1125   spread=2e-36 cpp=8.5e-10 numpy=2.6e-09 long=1.0e-09/3802 long_cf=5.7e-12/3802 wa=9.6e-11/27 wa_b=2.1e-11/12
+dan      R1=0.02  th=0.03     spread=4e-35 cpp=1.4e-08 numpy=9.2e-09 long=1.1e-08/13858 long_cf=5.7e-12/13858 wa=8.1e-11/27 wa_b=2.6e-11/12
+salt1.8  R1=0.02  th=0.1125   spread=6e-35 cpp=2.4e-09 numpy=2.5e-09 long=1.4e-09/3797 long_cf=6.4e-12/3797 wa=1.7e-11/27 wa_b=2.5e-11/12
+dan      R1=0.02  th=0.1566   spread=1e-36 cpp=1.6e-09 numpy=1.9e-09 long=1.5e-09/2751 long_cf=5.8e-12/2751 wa=1.5e-10/27 wa_b=9.8e-12/12
+salt1.8  R1=0.02  th=0.1566   spread=3e-35 cpp=6.1e-10 numpy=5.8e-10 long=1.0e-09/2748 long_cf=6.4e-12/2748 wa=4.5e-12/27 wa_b=1.3e-11/12
+dan      R1=0.2   th=45       spread=0e+00 cpp=1.4e-11 numpy=1.4e-11 long=5.8e-13/25 long_cf=5.8e-13/25 wa=1.4e-11/22 wa_b=3.9e-16/19
+fresh28  R1=0.02  th=0.1566   spread=2e-35 cpp=2.0e-09 numpy=1.9e-09 long=3.9e-10/2749 long_cf=5.7e-12/2749 wa=4.1e-11/27 wa_b=1.6e-11/12
+dan      R1=2.0   th=0.1      spread=3e-42 cpp=6.9e-10 numpy=6.9e-10 long=6.9e-11/3943 long_cf=6.9e-11/3943 wa=1.9e-10/20 wa_b=2.7e-12/14
+dan      R1=1.0   th=45       spread=0e+00 cpp=1.6e-11 numpy=1.6e-11 long=2.7e-12/22 long_cf=2.7e-12/22 wa=1.6e-11/20 wa_b=1.6e-11/20
+salt1.8  R1=2.0   th=0.1      spread=8e-41 cpp=8.2e-10 numpy=8.2e-10 long=8.2e-11/4128 long_cf=8.2e-11/4128 wa=2.3e-10/22 wa_b=1.9e-11/13
+fresh28  R1=0.02  th=0.1125   spread=2e-35 cpp=9.2e-10 numpy=8.2e-10 long=6.9e-10/3798 long_cf=5.7e-12/3798 wa=6.0e-11/27 wa_b=1.5e-11/12
+salt1.8  R1=1.0   th=45       spread=0e+00 cpp=1.5e-11 numpy=1.5e-11 long=6.2e-13/25 long_cf=6.2e-13/25 wa=1.5e-11/22 wa_b=1.5e-11/22
+salt1.8  R1=1.0   th=1        spread=1e-41 cpp=1.1e-10 numpy=1.1e-10 long=1.1e-11/436 long_cf=1.1e-11/436 wa=4.1e-11/22 wa_b=1.1e-13/12
+fresh1.8 R1=1.0   th=1        spread=1e-41 cpp=4.5e-11 numpy=4.5e-11 long=4.5e-12/399 long_cf=4.5e-12/399 wa=1.4e-11/19 wa_b=3.6e-14/12
+fresh1.8 R1=1.0   th=45       spread=0e+00 cpp=4.5e-11 numpy=4.5e-11 long=1.7e-12/20 long_cf=1.7e-12/20 wa=4.5e-11/17 wa_b=4.5e-11/17
+salt28   R1=1.0   th=1        spread=1e-40 cpp=1.1e-10 numpy=1.1e-10 long=1.1e-11/436 long_cf=1.1e-11/436 wa=4.0e-11/22 wa_b=1.1e-13/12
+salt28   R1=1.0   th=45       spread=0e+00 cpp=1.4e-11 numpy=1.4e-11 long=5.9e-13/25 long_cf=5.9e-13/25 wa=1.4e-11/22 wa_b=1.4e-11/22
+dan      R1=2.0   th=0.05     spread=7e-42 cpp=7.0e-10 numpy=7.0e-10 long=7.0e-11/7762 long_cf=7.0e-11/7762 wa=2.0e-10/20 wa_b=2.8e-12/14
+fresh28  R1=1.0   th=1        spread=2e-39 cpp=4.7e-12 numpy=4.7e-12 long=4.8e-13/433 long_cf=4.8e-13/433 wa=1.5e-12/22 wa_b=1.8e-15/13
+fresh28  R1=1.0   th=45       spread=0e+00 cpp=5.5e-12 numpy=5.5e-12 long=2.1e-13/22 long_cf=2.1e-13/22 wa=5.5e-12/19 wa_b=5.5e-12/19
+salt1.8  R1=2.0   th=0.05     spread=1e-40 cpp=8.3e-10 numpy=8.3e-10 long=8.2e-11/8130 long_cf=8.2e-11/8130 wa=2.5e-10/22 wa_b=1.9e-11/13
+dan      R1=1.0   th=0.05     spread=1e-40 cpp=1.3e-10 numpy=1.3e-10 long=1.3e-11/7702 long_cf=1.3e-11/7702 wa=3.2e-11/22 wa_b=1.7e-13/12
+fresh1.8 R1=1.0   th=0.05     spread=1e-40 cpp=4.7e-11 numpy=4.7e-11 long=4.8e-12/7460 long_cf=4.8e-12/7460 wa=1.0e-11/21 wa_b=5.9e-14/12
+dan      R1=0.2   th=0.05     spread=2e-38 cpp=3.7e-11 numpy=3.7e-11 long=4.5e-11/7852 long_cf=3.9e-12/7852 wa=1.4e-11/24 wa_b=1.7e-13/11
+salt1.8  R1=1.0   th=0.05     spread=1e-39 cpp=1.2e-10 numpy=1.2e-10 long=1.2e-11/8161 long_cf=1.2e-11/8161 wa=4.0e-11/24 wa_b=1.6e-13/12
+fresh28  R1=1.0   th=0.05     spread=7e-40 cpp=5.3e-12 numpy=5.3e-12 long=1.4e-12/8122 long_cf=5.3e-13/8122 wa=1.5e-12/24 wa_b=3.0e-15/13
+salt28   R1=1.0   th=0.05     spread=7e-39 cpp=1.2e-10 numpy=1.2e-10 long=1.4e-11/8161 long_cf=1.2e-11/8161 wa=3.9e-11/24 wa_b=1.6e-13/12
+dan      R1=1.0   th=0.005    spread=2e-38 long=5.3e-10/72916 long_cf=1.3e-11/72916 wa=3.4e-11/22 wa_b=1.8e-13/12
+fresh28  R1=1.0   th=0.005    spread=1e-37 long=5.0e-10/77112 long_cf=5.4e-13/77112 wa=1.6e-12/24 wa_b=2.6e-15/13
+salt1.8  R1=1.0   th=0.005    spread=3e-37 long=2.5e-09/77493 long_cf=1.7e-11/77493 wa=4.2e-11/24 wa_b=1.7e-13/12
