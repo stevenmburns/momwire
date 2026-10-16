@@ -1498,8 +1498,16 @@ def compute_Z_operator_buried(
             W_a,
         )
 
+    # A matrix fill integrates the table, so it takes the fill spacing
+    # (`_sommerfeld_below._SOMM_BELOW_SPACING_FILL`).
     grid_below = _sommerfeld_below.get_grid_below(
-        eps_t, k_p, plan["r1_below"], omega, mu=mu, cancel_flag=cancel_flag
+        eps_t,
+        k_p,
+        plan["r1_below"],
+        omega,
+        mu=mu,
+        cancel_flag=cancel_flag,
+        spacing=_sommerfeld_below._SOMM_BELOW_SPACING_FILL,
     )
 
     def proj_bb(o, to, s, ts):

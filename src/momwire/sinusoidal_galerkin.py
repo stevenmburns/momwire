@@ -4954,6 +4954,8 @@ class SinusoidalGalerkinSolver(SinusoidalSolver):
             self.omega,
             mu=self.mu,
             cancel_flag=self._cancel_flag,
+            # A fill integrates the table: the fill spacing.
+            spacing=_sommerfeld_below._SOMM_BELOW_SPACING_FILL,
         )
         k_p, k_m = medium.k_p, medium.k_m
         flag = self._cancel_flag

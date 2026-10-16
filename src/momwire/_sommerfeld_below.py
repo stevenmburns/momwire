@@ -335,6 +335,57 @@ _SOMM_BELOW_R_BREAK_LAMBDA_M = 0.2
 _SOMM_BELOW_DTH_GRAZE_DEG = 1.0
 _SOMM_BELOW_DTH_STEEP_DEG = 2.5
 
+# The lattice SPACING, as (dr, dth, band) multipliers on the constants above
+# (the buried-table study after momwire#1471). `dr` scales both radial steps,
+# `dth` the grazing and steep angle steps (and divides the far annulus's cell
+# counts), `band` the 0.1-1 deg band's step; the sub-0.1 deg floor bands keep
+# theirs. Every constant above is a PER-POINT calibration against a 2e-4 bar,
+# and that bar is what a point reader needs.
+#
+# The matrix fill is not a point reader: every Z entry integrates the table
+# over a segment pair, and Z measures far less sensitive than a point. Over
+# a Dan-like 16-radial deck, the `dan_end1` fixtures and Ward's
+# above-and-below deck, (2, 8, 1) moved the feed Z by at most 2.5e-5
+# relative while per-point error reached ~1e-2 -- against a mesh-doubling
+# step of 1e-3 or more and a razor-2p/bspline spread of ~1e-2 on the same
+# decks -- and cut the table from 5,954 to 754 nodes (Dan-like) and 7,462 to
+# 644 (Ward). The band's step is the one axis Z reads: doubling it costs
+# 1.4e-4 on 25 mm-deep radials, so it stays.
+#
+# So there are two spacings, chosen by the CALLER: the matrix fills pass
+# `_SOMM_BELOW_SPACING_FILL`; anything that reads the table at a point keeps
+# `_SOMM_BELOW_SPACING_POINT` (today's lattice, and the default of both
+# `SommerfeldGridBelow` and `get_grid_below`). The spacing is part of every
+# cache key that holds one of these grids -- in process, on disk and for the
+# sweep anchors -- so the two never serve each other.
+_SOMM_BELOW_SPACING_POINT = (1.0, 1.0, 1.0)
+_SOMM_BELOW_SPACING_FILL = (2.0, 8.0, 1.0)
+
+
+def _scaled_dth(base_deg, scale, width_deg):
+    """The angle step for a band `width_deg` wide: the calibrated `base_deg`
+    itself at scale 1, else the step of the whole number of cells nearest
+    `base_deg * scale`, so the band's nodes still end on its edge (the
+    divide-exactly rule the far annulus spells as a cell count)."""
+    if scale == 1.0:
+        return base_deg
+    return width_deg / max(1, round(width_deg / (base_deg * scale)))
+
+
+def _far_cells(cells, scale):
+    """The far annulus's cell count at angle-step `scale` (at least 2)."""
+    if scale == 1.0:
+        return cells
+    return max(2, round(cells / scale))
+
+
+def _spacing(spacing):
+    """A spacing as the float triple every key and grid carries; None is the
+    point spacing."""
+    v = _SOMM_BELOW_SPACING_POINT if spacing is None else spacing
+    return tuple(float(x) for x in v)
+
+
 # The grazing floor, in degrees, below which the grid REFUSES.
 #
 # θ = 0 is h = 0: the tail loses its e^{−γ_m h} decay entirely and what is
@@ -1424,8 +1475,11 @@ class SommerfeldGridBelow(SommerfeldGrid):
         mu=_MU0,
         health=None,
         seed=None,
+        spacing=None,
     ):
         self.eps_t = complex(eps_t)
+        self.spacing = _spacing(spacing)
+        s_dr, s_th, s_band = self.spacing
         self.k2 = float(k2)
         from ._sommerfeld import _C_LIGHT
 
@@ -1448,20 +1502,20 @@ class SommerfeldGridBelow(SommerfeldGrid):
         self.r_near = min(_SOMM_BELOW_R1_NEAR_CAP_LAMBDA_M * lam_m, self.r1_max)
         self.th_min = math.radians(_SOMM_BELOW_TH_MIN_DEG)
         split = _SOMM_TH_SPLIT_DEG
-        dr_in = _SOMM_BELOW_DR_NEAR_LAMBDA_M * lam_m
-        dr_out = min(_SOMM_BELOW_DR_LAMBDA_M * lam_m, beat / 6.0)
-        self.beat_binds = beat / 6.0 < _SOMM_BELOW_DR_LAMBDA_M * lam_m
+        dr_in = _SOMM_BELOW_DR_NEAR_LAMBDA_M * s_dr * lam_m
+        dr_out = min(_SOMM_BELOW_DR_LAMBDA_M * s_dr * lam_m, beat / 6.0)
+        self.beat_binds = beat / 6.0 < _SOMM_BELOW_DR_LAMBDA_M * s_dr * lam_m
         th0 = _SOMM_BELOW_TH_MIN_DEG
         band_hi = _SOMM_BELOW_TH_BAND_HI_DEG
-        dthb = _SOMM_BELOW_DTH_BAND_DEG
         band_lo_hi = _SOMM_BELOW_TH_BAND_LO_HI_DEG
+        dthb = _scaled_dth(_SOMM_BELOW_DTH_BAND_DEG, s_band, band_hi - band_lo_hi)
         band_floor_hi = _SOMM_BELOW_TH_BAND_FLOOR_HI_DEG
         dthb_lo = _SOMM_BELOW_DTH_BAND_LO_DEG
         # The floor band's lattice runs one node past its routing edge (see
         # `_SOMM_BELOW_TH_BAND_FLOOR_HI_DEG`), so it is spelled by node count.
         floor_top = th0 + dthb_lo * (_SOMM_BELOW_BAND_FLOOR_NODES - 1)
-        dthg = _SOMM_BELOW_DTH_GRAZE_DEG
-        dths = _SOMM_BELOW_DTH_STEEP_DEG
+        dthg = _scaled_dth(_SOMM_BELOW_DTH_GRAZE_DEG, s_th, split - band_hi)
+        dths = _scaled_dth(_SOMM_BELOW_DTH_STEEP_DEG, s_th, 90.0 - split)
         self.th_band_hi = math.radians(band_hi)
         self.th_band_lo_hi = math.radians(band_lo_hi)
         self.th_band_floor_hi = math.radians(band_floor_hi)
@@ -1478,8 +1532,8 @@ class SommerfeldGridBelow(SommerfeldGrid):
         # a shared node — the same seam the grid already has at `split`.
         #
         # Far-annulus Δθ, from cell counts so it divides its band exactly.
-        dthg_far = (split - band_hi) / _SOMM_BELOW_FAR_GRAZE_CELLS
-        dths_far = (90.0 - split) / _SOMM_BELOW_FAR_STEEP_CELLS
+        dthg_far = (split - band_hi) / _far_cells(_SOMM_BELOW_FAR_GRAZE_CELLS, s_th)
+        dths_far = (90.0 - split) / _far_cells(_SOMM_BELOW_FAR_STEEP_CELLS, s_th)
         # Region order is (R₁ zone) × (θ band), θ fastest — `region_index`
         # owns the stride: 0-4 inner, 5-9 near, 10-14 far. `_interp` here and
         # `proj_one_below` in `_accel_mw568.cpp` are two copies of this one
@@ -1529,6 +1583,12 @@ class SommerfeldGridBelow(SommerfeldGrid):
             # side and gets the CENTRED leg of the cubic. The low end only
             # pads where there is room — R₁ < 0 is not a geometry.
             pad_lo = pad if r0 > 0.0 else 0
+            # A coarse radial step can put a low pad row at or under R1 = 0,
+            # which is not a geometry (the study's dr = 3x refused at
+            # construction). Drop pad rows until the first is strictly
+            # positive; a query in [r0, r1] still has a row below it.
+            while pad_lo > 0 and r0 - pad_lo * dr <= 1e-9 * dr:
+                pad_lo -= 1
             r_start = r0 - pad_lo * dr
             n_r = max(int(np.ceil((r1 - r0) / dr)) + 1 + pad_lo + pad, 4)
             n_th = int(round((th1 - th0) / dth)) + 1
@@ -2075,22 +2135,33 @@ class _AnchorPlan:
     rungs: tuple  # the anchors' eps_t
     weights: np.ndarray
     n0: int = 0  # the first rung's index on the global ladder
+    spacing: tuple = _SOMM_BELOW_SPACING_POINT
 
     def key(self, j):
         """Anchor j's cache key. The slot an exact grid's key gives to its
         size says "anchor" instead: an anchor GROWS (`_ensure_anchors`), so
-        its size is a property of the file and not of its name."""
+        its size is a property of the file and not of its name. The spacing
+        closes it: a fill anchor and a point anchor are different lattices."""
         from ._sommerfeld import _C_LIGHT
 
         k2 = _anchor_k2()
-        return ("below", self.rungs[j], k2, "anchor-1471", k2 * _C_LIGHT, _MU0)
+        return (
+            "below",
+            self.rungs[j],
+            k2,
+            "anchor-1471",
+            k2 * _C_LIGHT,
+            _MU0,
+            self.spacing,
+        )
 
     @property
     def family(self):
-        return f"below-sweep:{float(self.eps_r).hex()}"
+        sp = ",".join(float(v).hex() for v in self.spacing)
+        return f"below-sweep:{float(self.eps_r).hex()}:{sp}"
 
 
-def _anchor_plan(eps_t):
+def _anchor_plan(eps_t, spacing=None):
     """The anchors and weights that reconstruct a grid at `eps_t`, or None
     where the scheme does not apply: a lossless or gain medium has no
     Im(eps_t) ladder to walk (and no frequency dependence in eps_t to need
@@ -2107,7 +2178,7 @@ def _anchor_plan(eps_t):
         complex(eps_t.real, -math.exp((n0 + j) * _SOMM_BELOW_ANCHOR_STEP))
         for j in range(n)
     )
-    return _AnchorPlan(s, eps_t.real, rungs, w, n0)
+    return _AnchorPlan(s, eps_t.real, rungs, w, n0, _spacing(spacing))
 
 
 def _is_sweep(plan, r1_wl):
@@ -2208,6 +2279,7 @@ def _ensure_anchors(plan, r1_wl, idx=None):
                     omega=key[4],
                     mu=key[5],
                     seed=grid,
+                    spacing=plan.spacing,
                 )
                 changed = True
             if idx is not None and not grid._regions[idx]["filled"]:
@@ -2261,7 +2333,7 @@ class SommerfeldGridBelowBlended(SommerfeldGridBelow):
 
     def __init__(self, eps_t, k2, r1_max, omega, mu, plan):
         self._plan = plan
-        super().__init__(eps_t, k2, r1_max, omega=omega, mu=mu)
+        super().__init__(eps_t, k2, r1_max, omega=omega, mu=mu, spacing=plan.spacing)
         self._r1_wl = self.r1_max / self.lam_m
         for ridx in range(len(self._regions)):
             if ridx not in _DEFERRED_REGIONS:
@@ -2322,7 +2394,9 @@ class SommerfeldGridBelowBlended(SommerfeldGridBelow):
         SWEEP_STATS["blended_regions"] += 1
 
 
-def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0):
+def get_grid_below(
+    eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0, spacing=None
+):
     """Cached `SommerfeldGridBelow`, sharing `_sommerfeld`'s grid cache.
 
     `cancel_flag` is the solve's raw flag address (`_Cancelable._cancel_flag`,
@@ -2386,7 +2460,8 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
     eps_t = complex(eps_t)
     lam_m = _lambda_m(eps_t, k2)
     r1b_wl = _r1_bucket_below_wl(r1_max, lam_m)
-    key = ("below", eps_t, k2, r1b_wl, float(omega), float(mu))
+    spacing = _spacing(spacing)
+    key = ("below", eps_t, k2, r1b_wl, float(omega), float(mu), spacing)
     grid = _GRID_CACHE.get(key)
     if grid is None and health is None:
         grid = _GRID_CACHE.get(key + _BLENDED_KEY)
@@ -2402,6 +2477,7 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
                 omega=float(omega),
                 mu=float(mu),
                 health=health,
+                spacing=spacing,
             )
 
         # The disk level (momwire#1224). A caller asking for `health` wants
@@ -2415,7 +2491,7 @@ def get_grid_below(eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0
                 # already on disk is still the first choice, and a lone
                 # frequency still takes the exact fill.
                 mode = anchor_mode()
-                plan = None if mode == "off" else _anchor_plan(eps_t)
+                plan = None if mode == "off" else _anchor_plan(eps_t, spacing)
                 # The size the grid will have: the ctor's own clamp.
                 r1_wl = min(max(r1b_wl, 0.35), _SOMM_BELOW_R1_CAP_LAMBDA_M)
                 if plan is not None and mode == "auto":
