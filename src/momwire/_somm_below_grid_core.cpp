@@ -124,7 +124,7 @@ class Bridge : public Source {
         for (int r : regions_for(g, mx_r1, mn_th, mx_th))
             if (!g.regions[r].filled)
                 throw std::runtime_error("below-table bridge: region " + std::to_string(r) +
-                                         " was not filled by the Python route");
+                                         " was not in the dumped tables");
     }
 
   private:
