@@ -75,10 +75,12 @@ struct Compose {
     const double *W = nullptr;
     ptrdiff_t n_qp = 0;
     // The below medium's remainder (momwire#1512 B2, `RemainderBelow`): when
-    // set, the projection of path points [o0, o0 + m) against the
-    // remainder's source nodes, (m, n_src) row-major into `out`, in place of
-    // the above grid's `field_proj_batch` (`grid` then unused).
-    std::function<void(ptrdiff_t o0, ptrdiff_t m, cd *out)> proj;
+    // set, the projection of m observers (points and tangents, (m, 3) row
+    // major) against the remainder's source nodes, (m, n_src) row-major into
+    // `out`, in place of the above grid's `field_proj_batch` (`grid` then
+    // unused). The window hands it the bit-distinct (point, tangent) rows of
+    // its path, as `RemainderBelow.field_windows(distinct=True)` projects.
+    std::function<void(const double *pts, const double *tans, ptrdiff_t m, cd *out)> proj;
 };
 
 struct SolveInputs {
@@ -171,6 +173,8 @@ class SolveContext {
     std::vector<cd> m0c_, proj_, mom_, q_;
     std::vector<int64_t> q_row_;
     std::vector<double> obs_;
+    std::vector<double> dpt_, dtan_;  // the window's distinct path rows (below)
+    std::vector<int64_t> need_dist_;
     std::vector<int64_t> need_, gi_, obs_row_, plus_, minus_, mark_;
     std::vector<double> bo_;
     std::vector<int> ipiv_;

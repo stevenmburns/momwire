@@ -39,6 +39,9 @@
 #include "_razor_core.h"
 #include "_somm_proj_core.h"
 
+#include <cstring>
+#include <unordered_map>
+
 namespace mw {
 namespace razor {
 
@@ -97,6 +100,39 @@ void moments(const SolveInputs &in, view<const double, 2> obs, const SourceSet &
     else
         seg_moments(obs, src.seg_p0, src.seg_t, in.seg_h, in.a, in.xg, in.wg, in.k, need_m1, gi,
                     src.group_j, src.a_ek, in.cancel_flag, bo, m0, m1);
+}
+
+// `_distinct_observers(o_p, o_t)`: the rows (point, tangent) equal to the
+// BIT (so -0.0 is not 0.0) grouped in first-appearance order. `first` gets
+// each group's first row, `inv` each row's group; false (both untouched)
+// when every row is distinct, as `(None, None)` answers there.
+bool distinct_rows(const double *pts, const double *tans, ptrdiff_t m, std::vector<int64_t> &first,
+                   std::vector<int64_t> &inv) {
+    if (m < 2) return false;
+    struct Key {
+        uint64_t b[6];
+        bool operator==(const Key &o) const { return std::memcmp(b, o.b, sizeof b) == 0; }
+    };
+    struct Hash {
+        size_t operator()(const Key &k) const {
+            uint64_t h = 1469598103934665603ull;
+            for (uint64_t v : k.b) h = (h ^ v) * 1099511628211ull;
+            return static_cast<size_t>(h ^ (h >> 29));
+        }
+    };
+    std::unordered_map<Key, int64_t, Hash> seen;
+    seen.reserve(static_cast<size_t>(m));
+    first.clear();
+    if (inv.size() < static_cast<size_t>(m)) inv.resize(static_cast<size_t>(m));
+    for (ptrdiff_t o = 0; o < m; o++) {
+        Key k;
+        std::memcpy(k.b, pts + 3 * o, 3 * sizeof(double));
+        std::memcpy(k.b + 3, tans + 3 * o, 3 * sizeof(double));
+        auto it = seen.emplace(k, static_cast<int64_t>(first.size()));
+        if (it.second) first.push_back(o);
+        inv[static_cast<size_t>(o)] = it.first->second;
+    }
+    return static_cast<ptrdiff_t>(first.size()) < m;
 }
 
 void poll(uintptr_t flag) {
@@ -260,22 +296,44 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         // The remainder over the window's path points (`field_windows`,
         // `distinct=True`), its arc moments, and the Q rows, added before
         // the one minus: `rows_T1 += Q_rows`.
+        // Below (`RemainderBelow`), only the window's bit-distinct (point,
+        // tangent) rows are projected and each row reads its group's moments
+        // (`distinct=True`'s `(moments, inverse)`): under nec5_quadrature each
+        // wing centroid is observed by both bases ending on it. A row's
+        // projection is its own point's and tangent's, so the gathered rows
+        // are the rows the whole window gave.
         const Compose &c = in.comp;
         const ptrdiff_t m_obs = nb * np, s_src = c.rem_src.shape(0);
-        reserve(proj_, static_cast<size_t>(m_obs * s_src));
+        const double *w_pts = &c.obs_pts(lo * np, 0), *w_tans = &c.obs_tans(lo * np, 0);
+        ptrdiff_t m_u = m_obs;
+        reserve(q_row_, static_cast<size_t>(m_obs));
+        bool gathered = false;
+        if (c.proj && distinct_rows(w_pts, w_tans, m_obs, need_dist_, q_row_)) {
+            m_u = static_cast<ptrdiff_t>(need_dist_.size());
+            reserve(dpt_, static_cast<size_t>(3 * m_u));
+            reserve(dtan_, static_cast<size_t>(3 * m_u));
+            for (ptrdiff_t u = 0; u < m_u; u++)
+                for (int c3 = 0; c3 < 3; c3++) {
+                    dpt_[3 * u + c3] = w_pts[3 * need_dist_[u] + c3];
+                    dtan_[3 * u + c3] = w_tans[3 * need_dist_[u] + c3];
+                }
+            w_pts = dpt_.data();
+            w_tans = dtan_.data();
+            gathered = true;
+        }
+        if (!gathered)
+            for (ptrdiff_t o = 0; o < m_obs; o++) q_row_[o] = o;
+        reserve(proj_, static_cast<size_t>(m_u * s_src));
         if (c.proj)
-            c.proj(lo * np, m_obs, proj_.data());
+            c.proj(w_pts, w_tans, m_u, proj_.data());
         else
-            somm_core::field_proj_batch(*c.grid, c.n_reg, m_obs, s_src,
-                                        &c.obs_pts(lo * np, 0), &c.obs_tans(lo * np, 0),
+            somm_core::field_proj_batch(*c.grid, c.n_reg, m_u, s_src, w_pts, w_tans,
                                         c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
                                         proj_.data(), in.cancel_flag, true);
-        reserve(mom_, static_cast<size_t>(m_obs * n_seg * 2));
-        somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_obs, mom_.data());
-        reserve(q_row_, static_cast<size_t>(m_obs));
-        for (ptrdiff_t o = 0; o < m_obs; o++) q_row_[o] = o;
+        reserve(mom_, static_cast<size_t>(m_u * n_seg * 2));
+        somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_u, mom_.data());
         reserve(q_, static_cast<size_t>(nb * n));
-        q_rows(c_view<const cd, 3>(mom_.data(), {m_obs, n_seg, 2}),
+        q_rows(c_view<const cd, 3>(mom_.data(), {m_u, n_seg, 2}),
                c_view<const int64_t, 1>(q_row_.data(), {m_obs}), in.s_a, in.s_b, in.h_a,
                in.h_b, in.fall_a, in.fall_b, c.sig_a, c.sig_b,
                slice1(in.wts, lo * np, hi * np), np, c_view<cd, 2>(q_.data(), {nb, n}));
@@ -415,6 +473,9 @@ void SolveContext::release() {
     std::vector<cd>().swap(mom_);
     std::vector<cd>().swap(q_);
     std::vector<int64_t>().swap(q_row_);
+    std::vector<int64_t>().swap(need_dist_);
+    std::vector<double>().swap(dpt_);
+    std::vector<double>().swap(dtan_);
     std::vector<double>().swap(obs_);
     std::vector<double>().swap(bo_);
     std::vector<int64_t>().swap(need_);
