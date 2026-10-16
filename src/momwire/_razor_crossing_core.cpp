@@ -643,7 +643,16 @@ std::vector<cd> main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const 
         }
     }
     }
-    for (cd &v : t) v = np_cmul(v, c.c1);
+    {
+        const std::ptrdiff_t nt2 = static_cast<std::ptrdiff_t>(t.size());
+        const int ntc = team(be, t.size());
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static) num_threads(ntc) if (ntc > 1)
+#else
+        (void)ntc;
+#endif
+        for (std::ptrdiff_t q = 0; q < nt2; q++) t[static_cast<size_t>(q)] = np_cmul(t[static_cast<size_t>(q)], c.c1);
+    }
     return t;
 }
 
@@ -770,19 +779,28 @@ void add_end_terms(const Ctx &c, BlockEval &be, double a_wire, const Axis &R, co
     // Row loop: R's ends against C's line.
     {
         const std::vector<EndVec> evs = end_vectors(c, be, a_wire, R.ends, C, r_above);
-        for (const EndVec &ev : evs) {
-            const cd s_plus = py_prod(c.c1, cd(ev.sign, 0.0));
-            const cd s_minus = py_prod(neg_c1, cd(ev.sign, 0.0));
-            for (int pass = 0; pass < 2; pass++) {
-                const std::vector<cd> &vec = pass == 0 ? ev.vV : ev.vW;
-                const cd scale = pass == 0 ? s_plus : s_minus;
-                for (size_t i = 0; i < ev.fv->size(); i++) {
-                    const double fvi = (*ev.fv)[i];
-                    if (fvi == 0.0) continue;
-                    cd *row = &E_r[static_cast<size_t>(posLA[i]) * static_cast<size_t>(nC)];
-                    for (int64_t j = 0; j < nC; j++) {
-                        const cd o = np_cmul(np_cmul(cd(fvi, 0.0), vec[static_cast<size_t>(j)]), scale);
-                        row[j] = cd(row[j].real() + o.real(), row[j].imag() + o.imag());
+        // Columns split over the team; each entry takes the ends' rank-1
+        // terms in end order, as the serial loop adds them.
+        const int nt = team(be, evs.size() * static_cast<size_t>(nC));
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static, 1) num_threads(nt) if (nt > 1)
+#endif
+        for (int ch = 0; ch < nt; ch++) {
+            const int64_t j0 = nC * ch / nt, j1 = nC * (ch + 1) / nt;
+            for (const EndVec &ev : evs) {
+                const cd s_plus = py_prod(c.c1, cd(ev.sign, 0.0));
+                const cd s_minus = py_prod(neg_c1, cd(ev.sign, 0.0));
+                for (int pass = 0; pass < 2; pass++) {
+                    const std::vector<cd> &vec = pass == 0 ? ev.vV : ev.vW;
+                    const cd scale = pass == 0 ? s_plus : s_minus;
+                    for (size_t i = 0; i < ev.fv->size(); i++) {
+                        const double fvi = (*ev.fv)[i];
+                        if (fvi == 0.0) continue;
+                        cd *row = &E_r[static_cast<size_t>(posLA[i]) * static_cast<size_t>(nC)];
+                        for (int64_t j = j0; j < j1; j++) {
+                            const cd o = np_cmul(np_cmul(cd(fvi, 0.0), vec[static_cast<size_t>(j)]), scale);
+                            row[j] = cd(row[j].real() + o.real(), row[j].imag() + o.imag());
+                        }
                     }
                 }
             }
@@ -791,25 +809,36 @@ void add_end_terms(const Ctx &c, BlockEval &be, double a_wire, const Axis &R, co
     // Column loop: C's ends against R's line (W, then V).
     {
         const std::vector<EndVec> evs = end_vectors(c, be, a_wire, C.ends, R, !r_above);
-        for (const EndVec &ev : evs) {
-            const cd s_plus = py_prod(c.c1, cd(ev.sign, 0.0));
-            const cd s_minus = py_prod(neg_c1, cd(ev.sign, 0.0));
-            for (int pass = 0; pass < 2; pass++) {
-                const std::vector<cd> &vec = pass == 0 ? ev.vW : ev.vV;
-                const cd scale = pass == 0 ? s_minus : s_plus;
-                for (size_t jn = 0; jn < ev.fv->size(); jn++) {
-                    const double fvj = (*ev.fv)[jn];
-                    if (fvj == 0.0) continue;
-                    // E_r's columns (rows LA), then E_c's (every row).
-                    for (size_t i = 0; i < LA.size(); i++) {
-                        const cd o = np_cmul(np_cmul(vec[static_cast<size_t>(LA[i])], cd(fvj, 0.0)), scale);
-                        cd &e = E_r[i * static_cast<size_t>(nC) + jn];
-                        e = cd(e.real() + o.real(), e.imag() + o.imag());
-                    }
-                    for (int64_t i = 0; i < nR; i++) {
-                        const cd o = np_cmul(np_cmul(vec[static_cast<size_t>(i)], cd(fvj, 0.0)), scale);
-                        cd &e = E_c[static_cast<size_t>(i) * LB.size() + static_cast<size_t>(posLB[jn])];
-                        e = cd(e.real() + o.real(), e.imag() + o.imag());
+        // Rows split over the team (E_r's rows LA and E_c's rows apart);
+        // each entry takes the ends' terms in end order, as serially.
+        const int64_t nLA = static_cast<int64_t>(LA.size());
+        const int nt = team(be, evs.size() * static_cast<size_t>(nR));
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static, 1) num_threads(nt) if (nt > 1)
+#endif
+        for (int ch = 0; ch < nt; ch++) {
+            const int64_t a0 = nLA * ch / nt, a1 = nLA * (ch + 1) / nt;
+            const int64_t r0 = nR * ch / nt, r1 = nR * (ch + 1) / nt;
+            for (const EndVec &ev : evs) {
+                const cd s_plus = py_prod(c.c1, cd(ev.sign, 0.0));
+                const cd s_minus = py_prod(neg_c1, cd(ev.sign, 0.0));
+                for (int pass = 0; pass < 2; pass++) {
+                    const std::vector<cd> &vec = pass == 0 ? ev.vW : ev.vV;
+                    const cd scale = pass == 0 ? s_minus : s_plus;
+                    for (size_t jn = 0; jn < ev.fv->size(); jn++) {
+                        const double fvj = (*ev.fv)[jn];
+                        if (fvj == 0.0) continue;
+                        // E_r's columns (rows LA), then E_c's (every row).
+                        for (int64_t i = a0; i < a1; i++) {
+                            const cd o = np_cmul(np_cmul(vec[static_cast<size_t>(LA[static_cast<size_t>(i)])], cd(fvj, 0.0)), scale);
+                            cd &e = E_r[static_cast<size_t>(i) * static_cast<size_t>(nC) + jn];
+                            e = cd(e.real() + o.real(), e.imag() + o.imag());
+                        }
+                        for (int64_t i = r0; i < r1; i++) {
+                            const cd o = np_cmul(np_cmul(vec[static_cast<size_t>(i)], cd(fvj, 0.0)), scale);
+                            cd &e = E_c[static_cast<size_t>(i) * LB.size() + static_cast<size_t>(posLB[jn])];
+                            e = cd(e.real() + o.real(), e.imag() + o.imag());
+                        }
                     }
                 }
             }
@@ -1018,18 +1047,33 @@ void crossing_blocks(const Front &f, std::vector<cd> &z,
                 // sandwich over (above source Q = ax, below test P),
                 // transposed; the ends with the rows below.
                 const std::vector<cd> tba = main_sandwich(c, be, r, ax, P);
-                t.assign(static_cast<size_t>(n * n), cd(0.0, 0.0));
+                t.resize(static_cast<size_t>(n * n));
+                const int ntt = team(be, t.size());
+#if defined(_OPENMP)
+                #pragma omp parallel for schedule(static) num_threads(ntt) if (ntt > 1)
+#else
+                (void)ntt;
+#endif
                 for (int64_t i = 0; i < n; i++)
                     for (int64_t j = 0; j < n; j++) t[static_cast<size_t>(i * n + j)] = tba[static_cast<size_t>(j * n + i)];
                 add_end_terms(c, be, r, P, ax, false, t);
             }
-            // The fold: `Z[rows, cols] -= t`.
-            for (int64_t ci : cols)
+            // The fold: `Z[rows, cols] -= t`, columns apart.
+            const std::ptrdiff_t ncols = static_cast<std::ptrdiff_t>(cols.size());
+            const int ntf = team(be, cols.size() * rows.size());
+#if defined(_OPENMP)
+            #pragma omp parallel for schedule(static) num_threads(ntf) if (ntf > 1)
+#else
+            (void)ntf;
+#endif
+            for (std::ptrdiff_t cq = 0; cq < ncols; cq++) {
+                const int64_t ci = cols[static_cast<size_t>(cq)];
                 for (int64_t ri : rows) {
                     cd &e = z[static_cast<size_t>(ci * n + ri)];
                     const cd v = t[static_cast<size_t>(ri * n + ci)];
                     e = cd(e.real() - v.real(), e.imag() - v.imag());
                 }
+            }
         }
     }
     // 5. The node charges into the crossing tents' columns: Z[:, cols] += charges.
