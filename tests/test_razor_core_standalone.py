@@ -770,8 +770,9 @@ def test_the_exact_kernel_decks_print_their_correction(driver, tmp_path):
     prints -- a fat dipole, a fat monopole's grounded base row under its
     image, two lines of two radii (the EK tube per observer), a bent loaded
     wire over a ground (one group per leg), two collinear wires as one group
-    -- and is compared byte for byte by the corpus test above; a radius step
-    on one line (the two-radius cross jobs) declines by name."""
+    -- and a radius step on one line (the two-radius cross jobs after the
+    groups, momwire#1438), each compared byte for byte by the corpus test
+    above."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
@@ -779,12 +780,6 @@ def test_the_exact_kernel_decks_print_their_correction(driver, tmp_path):
     assert len(decks) == 6
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     for path, ans in zip(decks, answers, strict=True):
-        if path.stem.endswith("_declined"):
-            assert (ans["route"], ans["reason"]) == (
-                "declined",
-                "front:exact-kernel-cross",
-            ), path
-            continue
         assert (ans["route"], ans["seam"], ans["raised"]) == (
             "printed",
             "served",

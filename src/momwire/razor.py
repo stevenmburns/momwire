@@ -6758,14 +6758,15 @@ class RazorSolver(
         if _complex_k(self.k):
             return "complex-k"
         # The exact ring kernel: the core replays the C++ point route (the
-        # direct rule, `PointRowsAccel` and `exact_kernel_point_assemble`)
-        # and declines a radius step by name ("exact-kernel-cross"); the
-        # k-series and the numpy point route stay Python's.
+        # direct rule, `PointRowsAccel`, `PointCrossRowsAccel` and
+        # `exact_kernel_point_assemble`); the k-series and the numpy point
+        # route stay Python's.
         if self.exact_kernel:
             if _exact_kernel_series.ENABLED:
                 return "exact-kernel-series"
             if not (
                 _HAVE_EXACT_POINT_ASSEMBLE_ACCEL
+                and _exact_kernel._HAVE_POINT_CROSS_ACCEL
                 and _exact_kernel.point_accel_serves(self.k, 2)
             ):
                 return "exact-kernel-numpy"

@@ -9,6 +9,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <tuple>
 #include <vector>
@@ -28,6 +29,7 @@ namespace detail {
 #include "_exact_kernel_ring_inline.h"
 #include "_exact_kernel_table_inline.h"
 #include "_exact_kernel_point_inline.h"
+#include "_exact_kernel_cross_inline.h"
 }  // namespace detail
 
 struct PointRows::Impl {
@@ -57,6 +59,30 @@ PointRows::PointRows(PointRows &&) noexcept = default;
 int64_t PointRows::n() const { return impl_->core.n(); }
 int64_t PointRows::evaluated() const { return impl_->core.evaluated(); }
 void PointRows::rows(const double *x_obs, int64_t m, cd *out) { impl_->core.rows(x_obs, m, out); }
+
+struct PointCrossRows::Impl {
+    detail::PointCrossRowsCore core;
+};
+
+PointCrossRows::PointCrossRows(const double *x0, const double *sgn, const double *h,
+                               const double *a, const int64_t *lab, int64_t n, double k, int nq,
+                               int64_t max_cached, double q, double qa, const PointRules &rules,
+                               int n_threads)
+    : impl_(new Impl{detail::PointCrossRowsCore(x0, sgn, h, a, lab, n, k, nq, max_cached, q, qa,
+                                                to_rules(rules), n_threads)}) {
+    if (nq < 1 || nq > detail::MAXND)
+        throw std::runtime_error("PointCrossRows: nq must be in [1, 6]");
+    if (!(q > 0.0) || !(qa > 0.0))
+        throw std::runtime_error("PointCrossRows: q and qa must be positive");
+}
+PointCrossRows::~PointCrossRows() = default;
+PointCrossRows::PointCrossRows(PointCrossRows &&) noexcept = default;
+int64_t PointCrossRows::n() const { return impl_->core.n(); }
+int64_t PointCrossRows::evaluated() const { return impl_->core.evaluated(); }
+void PointCrossRows::rows(const double *x_obs, const double *a_obs, const int64_t *lab_obs,
+                          int64_t m, cd *out) {
+    impl_->core.rows(x_obs, a_obs, lab_obs, m, out);
+}
 
 void point_assemble(const cd *dM0, const cd *dM1, int64_t n, const int64_t *row_m,
                     const int64_t *row_o, const cd *row_cA, const cd *row_cP, int64_t R,
