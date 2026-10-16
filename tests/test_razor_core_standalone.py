@@ -71,6 +71,7 @@ CORE_SOURCES = (
     "_somm_kernel_core.cpp",
     "_somm_grid_core.cpp",
     "_somm_proj_core.cpp",
+    "_somm_below_proj_core.cpp",
     # The near-field remainder over a finite ground (S4).
     "_somm_field_core.cpp",
 )
