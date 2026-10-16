@@ -144,6 +144,7 @@ py::dict counters(const mw::razor::SolveContext &ctx) {
     d["solves"] = c.solves;
     d["windows"] = c.windows;
     d["image_windows"] = c.image_windows;
+    d["compose_windows"] = c.compose_windows;
     d["seg_moments_calls"] = c.seg_moments_calls;
     d["assemble_t1_calls"] = c.assemble_t1_calls;
     d["t2_rows_calls"] = c.t2_rows_calls;
@@ -303,6 +304,22 @@ mw::razor::FrontInputs front_inputs(const py::dict &kw) {
     py::object gz = get("ground_z");
     in.has_ground = !gz.is_none();
     if (in.has_ground) in.ground_z = as_float(gz);
+    py::object geps = get("ground_eps");
+    if (!geps.is_none()) {
+        // `(eps_r, sigma)` only: a complex eps~ is not the seam's spelling.
+        if (!is_sequence(geps) || py::len(geps) != 2) throw Malformed{};
+        py::sequence t = py::reinterpret_borrow<py::sequence>(geps);
+        in.ground_eps_given = true;
+        in.ground_eps_r = as_float(t[0]);
+        in.ground_sigma = as_float(t[1]);
+    }
+    py::object gmodel = get("ground_model");
+    if (!gmodel.is_none()) {
+        if (!py::isinstance<py::str>(gmodel)) throw Malformed{};
+        const std::string m = gmodel.cast<std::string>();
+        if (m != "refl-coef" && m != "sommerfeld") throw Malformed{};
+        in.ground_sommerfeld = m == "sommerfeld";
+    }
     in.wavelength = kw.contains("wavelength") ? as_float(kw["wavelength"]) : 22.0;
     in.extended_kernel = kw.contains("extended_kernel") && py::bool_(get("extended_kernel"));
     py::object ek = get("exact_kernel");
@@ -416,6 +433,16 @@ py::dict front_dict(const mw::razor::Front &f) {
         d["img_seg_t"] = np2(f.img_seg_t, ns, 3);
         d["img_td_a"] = np2(f.img_td_a, 3, n);
         d["img_td_b"] = np2(f.img_td_b, 3, n);
+    }
+    if (f.compose) {
+        // The composing ground's per-solve half (momwire#1479 S3).
+        d["eps_t"] = py::cast(f.eps_t);
+        d["c2"] = py::cast(f.c2);
+        d["obs_pts"] = np2(f.obs_pts, 2 * n, 3);
+        d["sig_a"] = np1(f.sig_a);
+        d["sig_b"] = np1(f.sig_b);
+        d["r1_max"] = f.r1_max;
+        d["n_qp_rem"] = f.n_qp_rem;
     }
     d["window_rows"] = f.window_rows;
     d["k"] = f.k;
@@ -572,6 +599,10 @@ py::dict seam_kwargs(const mw::nec5::Prepared &p) {
     }
     if (in.extended_kernel) kw["extended_kernel"] = true;
     if (in.has_ground) kw["ground_z"] = in.ground_z;
+    if (in.ground_eps_given) {
+        kw["ground_eps"] = py::make_tuple(in.ground_eps_r, in.ground_sigma);
+        kw["ground_model"] = in.ground_sommerfeld ? "sommerfeld" : "refl-coef";
+    }
     // `_solver_for`'s loading: an LD 5 conductivity array and an LD 2 / 3
     // list of `DistributedRLC` (or None), one entry per piece.
     if (in.loading.has_conductivity) {

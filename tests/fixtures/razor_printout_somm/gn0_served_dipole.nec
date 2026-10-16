@@ -1,4 +1,4 @@
-CM GN 0: an elevated dipole over Sommerfeld ground (served by Python: declines at construction)
+CM GN 0: an elevated dipole over Sommerfeld ground (the composing fill, served in C++ since S3)
 CE
 GW 1 21 0 -2.5 6 0 2.5 6 0.001
 GE 0
