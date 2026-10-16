@@ -1,0 +1,72 @@
+dan      R1=0.2 th= 0.05 ref=  7852 ref~ref2=4.6e-11 base= 7032 wa:24/6e-11 ext1:1635/4e-11 ext2:1330/4e-11 ext3:79/6e-11 ext1+wa:13/5e-11 ext2+wa:16/5e-11 ext3+wa:11/4e-11
+dan      R1=0.2 th= 0.10 ref=  3989 ref~ref2=9.7e-12 base= 3579 wa:24/2e-11 ext1:1055/4e-11 ext2:862/4e-11 ext3:78/3e-11 ext1+wa:13/1e-11 ext2+wa:16/1e-11 ext3+wa:11/1e-11
+dan      R1=0.2 th= 0.20 ref=  2027 ref~ref2=5.2e-12 base= 1822 wa:24/2e-11 ext1:654/4e-11 ext2:540/4e-11 ext3:75/3e-11 ext1+wa:14/5e-12 ext2+wa:15/4e-12 ext3+wa:11/4e-12
+dan      R1=0.2 th= 0.50 ref=   828 ref~ref2=5.4e-12 base=  746 wa:24/5e-12 ext1:332/3e-11 ext2:278/4e-11 ext3:66/4e-11 ext1+wa:14/3e-12 ext2+wa:15/8e-12 ext3+wa:11/4e-12
+dan      R1=0.2 th= 1.00 ref=   422 ref~ref2=4.7e-12 base=  381 wa:23/1e-11 ext1:194/3e-11 ext2:165/4e-11 ext3:55/3e-11 ext1+wa:14/3e-12 ext2+wa:15/6e-12 ext3+wa:11/4e-12
+dan      R1=0.2 th=10.00 ref=    46 ref~ref2=1.9e-12 base=   42 wa:16/1e-12 ext1:31/1e-11 ext2:27/1e-11 ext3:19/9e-12 ext1+wa:13/2e-12 ext2+wa:12/1e-12 ext3+wa:10/2e-12
+dan      R1=0.2 th=45.00 ref=    25 ref~ref2=6.4e-13 base=   22 wa:22/1e-11 ext1:19/6e-12 ext2:17/4e-12 ext3:14/4e-12 ext1+wa:19/6e-12 ext2+wa:17/4e-12 ext3+wa:14/4e-12
+dan      R1=0.2 th=80.00 ref=    19 ref~ref2=1.8e-12 base=   18 wa:18/6e-12 ext1:16/2e-12 ext2:15/2e-12 ext3:13/2e-12 ext1+wa:16/2e-12 ext2+wa:15/2e-12 ext3+wa:13/2e-12
+dan      R1=1.0 th= 0.05 ref=  7702 ref~ref2=1.7e-11 base= 6883 wa:22/2e-11 ext1:2413/1e-10 ext2:1984/1e-10 ext3:279/1e-10 ext1+wa:16/1e-11 ext2+wa:16/1e-11 ext3+wa:16/1e-11
+dan      R1=1.0 th= 0.10 ref=  3913 ref~ref2=1.7e-11 base= 3504 wa:22/4e-11 ext1:1464/1e-10 ext2:1216/1e-10 ext3:257/1e-10 ext1+wa:16/1e-11 ext2+wa:16/3e-11 ext3+wa:16/1e-11
+dan      R1=1.0 th= 0.20 ref=  1988 ref~ref2=1.7e-11 base= 1783 wa:21/6e-11 ext1:865/1e-10 ext2:726/1e-10 ext3:221/1e-10 ext1+wa:16/1e-11 ext2+wa:16/1e-11 ext3+wa:16/1e-11
+dan      R1=1.0 th= 0.50 ref=   812 ref~ref2=1.6e-11 base=  730 wa:21/5e-11 ext1:419/1e-10 ext2:356/1e-10 ext3:159/1e-10 ext1+wa:15/2e-11 ext2+wa:16/1e-11 ext3+wa:16/1e-11
+dan      R1=1.0 th= 1.00 ref=   413 ref~ref2=1.5e-11 base=  372 wa:20/5e-11 ext1:238/1e-10 ext2:204/1e-10 ext3:113/1e-10 ext1+wa:15/9e-12 ext2+wa:16/2e-11 ext3+wa:16/1e-11
+dan      R1=1.0 th=10.00 ref=    44 ref~ref2=3.6e-12 base=   40 wa:14/3e-12 ext1:34/3e-11 ext2:30/3e-11 ext3:25/4e-11 ext1+wa:13/5e-12 ext2+wa:12/3e-12 ext3+wa:12/4e-12
+dan      R1=1.0 th=45.00 ref=    22 ref~ref2=7.1e-12 base=   20 wa:20/2e-11 ext1:19/3e-11 ext2:17/4e-11 ext3:17/1e-11 ext1+wa:19/3e-11 ext2+wa:17/4e-11 ext3+wa:17/1e-11
+dan      R1=1.0 th=80.00 ref=    17 ref~ref2=7.4e-11 base=   15 wa:15/9e-12 ext1:15/5e-12 ext2:14/7e-12 ext3:14/7e-11 ext1+wa:15/5e-12 ext2+wa:14/7e-12 ext3+wa:14/7e-11
+dan      R1=2.0 th= 0.05 ref=  7762 ref~ref2=9.1e-11 base= 6943 wa:20/1e-10 ext1:2873/7e-10 ext2:2382/6e-10 ext3:495/7e-10 ext1+wa:17/7e-11 ext2+wa:17/1e-10 ext3+wa:17/6e-11
+dan      R1=2.0 th= 0.10 ref=  3943 ref~ref2=1.0e-10 base= 3533 wa:20/3e-10 ext1:1701/6e-10 ext2:1425/6e-10 ext3:427/7e-10 ext1+wa:17/7e-11 ext2+wa:17/5e-11 ext3+wa:17/7e-11
+dan      R1=2.0 th= 0.20 ref=  2002 ref~ref2=8.9e-11 base= 1797 wa:20/1e-10 ext1:987/7e-10 ext2:834/6e-10 ext3:338/7e-10 ext1+wa:17/7e-11 ext2+wa:17/1e-10 ext3+wa:17/6e-11
+dan      R1=2.0 th= 0.50 ref=   817 ref~ref2=8.7e-11 base=  735 wa:19/2e-10 ext1:468/7e-10 ext2:400/7e-10 ext3:220/6e-10 ext1+wa:17/6e-11 ext2+wa:15/1e-10 ext3+wa:17/7e-11
+dan      R1=2.0 th= 1.00 ref=   415 ref~ref2=9.5e-11 base=  374 wa:19/8e-11 ext1:262/7e-10 ext2:226/7e-10 ext3:147/6e-10 ext1+wa:16/8e-11 ext2+wa:15/7e-11 ext3+wa:17/7e-11
+dan      R1=2.0 th=10.00 ref=    43 ref~ref2=6.1e-11 base=   39 wa:13/9e-12 ext1:35/5e-10 ext2:32/4e-10 ext3:29/3e-10 ext1+wa:12/9e-11 ext2+wa:12/5e-11 ext3+wa:13/5e-11
+dan      R1=2.0 th=45.00 ref=    20 ref~ref2=1.8e-09 base=   17 wa:17/5e-11 ext1:17/4e-11 ext2:17/4e-11 ext3:17/2e-09 ext1+wa:17/4e-11 ext2+wa:17/4e-11 ext3+wa:17/2e-09
+dan      R1=2.0 th=80.00 ref=    14 ref~ref2=5.7e-09 base=   12 wa:12/1e-11 ext1:12/2e-11 ext2:12/9e-11 ext3:12/6e-09 ext1+wa:12/2e-11 ext2+wa:12/9e-11 ext3+wa:12/6e-09
+salt1.8  R1=0.2 th= 0.05 ref=  8202 ref~ref2=7.3e-11 base= 7382 wa:26/7e-11 ext1:1927/3e-11 ext2:1567/5e-11 ext3:99/6e-11 ext1+wa:14/7e-11 ext2+wa:16/7e-11 ext3+wa:12/7e-11
+salt1.8  R1=0.2 th= 0.10 ref=  4164 ref~ref2=1.1e-11 base= 3754 wa:26/7e-12 ext1:1210/2e-11 ext2:992/2e-11 ext3:97/2e-11 ext1+wa:14/1e-11 ext2+wa:16/9e-12 ext3+wa:12/1e-11
+salt1.8  R1=0.2 th= 0.20 ref=  2114 ref~ref2=2.4e-12 base= 1909 wa:26/5e-12 ext1:735/2e-11 ext2:609/2e-11 ext3:92/2e-11 ext1+wa:14/5e-12 ext2+wa:16/4e-12 ext3+wa:12/6e-12
+salt1.8  R1=0.2 th= 0.50 ref=   864 ref~ref2=6.9e-13 base=  781 wa:25/1e-11 ext1:366/2e-11 ext2:308/2e-11 ext3:79/2e-11 ext1+wa:15/3e-12 ext2+wa:16/4e-12 ext3+wa:12/3e-12
+salt1.8  R1=0.2 th= 1.00 ref=   439 ref~ref2=5.1e-13 base=  398 wa:24/1e-11 ext1:212/2e-11 ext2:180/2e-11 ext3:64/2e-11 ext1+wa:15/3e-12 ext2+wa:16/3e-12 ext3+wa:12/2e-12
+salt1.8  R1=0.2 th=10.00 ref=    48 ref~ref2=1.5e-13 base=   44 wa:17/2e-12 ext1:32/1e-11 ext2:29/5e-12 ext3:20/7e-12 ext1+wa:13/2e-12 ext2+wa:13/8e-13 ext3+wa:11/7e-13
+salt1.8  R1=0.2 th=45.00 ref=    25 ref~ref2=3.0e-13 base=   23 wa:23/7e-12 ext1:20/3e-12 ext2:17/6e-12 ext3:14/8e-12 ext1+wa:20/3e-12 ext2+wa:17/6e-12 ext3+wa:14/8e-12
+salt1.8  R1=0.2 th=80.00 ref=    20 ref~ref2=5.7e-13 base=   19 wa:19/2e-12 ext1:17/1e-12 ext2:15/9e-13 ext3:13/1e-12 ext1+wa:17/1e-12 ext2+wa:15/9e-13 ext3+wa:13/1e-12
+salt1.8  R1=1.0 th= 0.05 ref=  8161 ref~ref2=3.5e-12 base= 7341 wa:24/5e-11 ext1:2779/1e-10 ext2:2295/1e-10 ext3:357/1e-10 ext1+wa:14/2e-11 ext2+wa:17/3e-11 ext3+wa:16/1e-11
+salt1.8  R1=1.0 th= 0.10 ref=  4143 ref~ref2=1.7e-12 base= 3733 wa:24/5e-11 ext1:1654/1e-10 ext2:1380/1e-10 ext3:321/1e-10 ext1+wa:15/1e-11 ext2+wa:17/3e-11 ext3+wa:16/1e-11
+salt1.8  R1=1.0 th= 0.20 ref=  2103 ref~ref2=2.5e-11 base= 1898 wa:24/5e-11 ext1:963/1e-10 ext2:812/1e-10 ext3:267/1e-10 ext1+wa:15/1e-11 ext2+wa:17/3e-11 ext3+wa:16/1e-11
+salt1.8  R1=1.0 th= 0.50 ref=   859 ref~ref2=2.3e-11 base=  777 wa:23/3e-11 ext1:459/1e-10 ext2:392/1e-10 ext3:184/1e-10 ext1+wa:16/2e-11 ext2+wa:17/2e-11 ext3+wa:16/1e-11
+salt1.8  R1=1.0 th= 1.00 ref=   436 ref~ref2=2.2e-11 base=  395 wa:22/3e-11 ext1:259/1e-10 ext2:223/1e-10 ext3:128/1e-10 ext1+wa:16/2e-11 ext2+wa:17/2e-11 ext3+wa:16/1e-11
+salt1.8  R1=1.0 th=10.00 ref=    47 ref~ref2=5.2e-12 base=   43 wa:15/4e-12 ext1:36/4e-11 ext2:32/3e-11 ext3:28/2e-11 ext1+wa:14/3e-12 ext2+wa:13/4e-12 ext3+wa:13/3e-12
+salt1.8  R1=1.0 th=45.00 ref=    25 ref~ref2=1.8e-11 base=   22 wa:22/2e-11 ext1:22/6e-12 ext2:20/8e-12 ext3:19/2e-11 ext1+wa:22/6e-12 ext2+wa:20/8e-12 ext3+wa:19/2e-11
+salt1.8  R1=1.0 th=80.00 ref=    18 ref~ref2=1.6e-10 base=   16 wa:16/8e-12 ext1:16/5e-12 ext2:16/6e-12 ext3:15/2e-10 ext1+wa:16/5e-12 ext2+wa:16/6e-12 ext3+wa:15/2e-10
+salt1.8  R1=2.0 th= 0.05 ref=  8130 ref~ref2=1.6e-10 base= 7310 wa:22/2e-10 ext1:3197/8e-10 ext2:2662/8e-10 ext3:601/7e-10 ext1+wa:14/1e-10 ext2+wa:17/2e-10 ext3+wa:17/9e-11
+salt1.8  R1=2.0 th= 0.10 ref=  4128 ref~ref2=1.5e-11 base= 3717 wa:22/2e-10 ext1:1868/8e-10 ext2:1572/8e-10 ext3:504/9e-10 ext1+wa:14/8e-11 ext2+wa:17/2e-10 ext3+wa:17/9e-11
+salt1.8  R1=2.0 th= 0.20 ref=  2095 ref~ref2=5.6e-12 base= 1890 wa:21/3e-10 ext1:1072/8e-10 ext2:911/8e-10 ext3:388/7e-10 ext1+wa:14/1e-10 ext2+wa:17/2e-10 ext3+wa:17/9e-11
+salt1.8  R1=2.0 th= 0.50 ref=   855 ref~ref2=1.5e-10 base=  773 wa:21/2e-10 ext1:504/7e-10 ext2:433/7e-10 ext3:245/8e-10 ext1+wa:15/1e-10 ext2+wa:16/2e-10 ext3+wa:17/9e-11
+salt1.8  R1=2.0 th= 1.00 ref=   434 ref~ref2=1.4e-10 base=  393 wa:20/2e-10 ext1:281/7e-10 ext2:243/7e-10 ext3:161/6e-10 ext1+wa:16/1e-10 ext2+wa:16/2e-10 ext3+wa:17/8e-11
+salt1.8  R1=2.0 th=10.00 ref=    46 ref~ref2=1.5e-11 base=   42 wa:14/1e-11 ext1:38/3e-10 ext2:34/3e-10 ext3:31/2e-10 ext1+wa:13/5e-11 ext2+wa:13/2e-11 ext3+wa:13/3e-11
+salt1.8  R1=2.0 th=45.00 ref=    23 ref~ref2=1.8e-08 base=   20 wa:20/3e-11 ext1:20/3e-11 ext2:20/2e-10 ext3:20/2e-08 ext1+wa:20/3e-11 ext2+wa:20/2e-10 ext3+wa:20/2e-08
+salt1.8  R1=2.0 th=80.00 ref=    16 ref~ref2=1.3e-07 base=   14 wa:14/1e-11 ext1:15/1e-11 ext2:15/7e-09 ext3:15/1e-07 ext1+wa:15/1e-11 ext2+wa:15/7e-09 ext3+wa:15/1e-07
+fresh28  R1=0.2 th= 0.05 ref=  8230 ref~ref2=6.3e-11 base= 7409 wa:26/6e-11 ext1:1949/2e-11 ext2:1585/2e-11 ext3:101/7e-11 ext1+wa:14/7e-11 ext2+wa:17/7e-11 ext3+wa:12/7e-11
+fresh28  R1=0.2 th= 0.10 ref=  4178 ref~ref2=1.1e-11 base= 3767 wa:26/4e-12 ext1:1222/6e-12 ext2:1003/1e-11 ext3:99/2e-11 ext1+wa:14/8e-12 ext2+wa:16/6e-12 ext3+wa:12/7e-12
+fresh28  R1=0.2 th= 0.20 ref=  2121 ref~ref2=3.6e-12 base= 1916 wa:26/7e-12 ext1:741/7e-12 ext2:615/7e-12 ext3:94/1e-11 ext1+wa:14/4e-12 ext2+wa:16/5e-12 ext3+wa:12/4e-12
+fresh28  R1=0.2 th= 0.50 ref=   866 ref~ref2=7.0e-13 base=  784 wa:25/5e-12 ext1:368/7e-12 ext2:310/7e-12 ext3:80/7e-12 ext1+wa:15/2e-12 ext2+wa:16/1e-12 ext3+wa:12/1e-12
+fresh28  R1=0.2 th= 1.00 ref=   440 ref~ref2=1.6e-12 base=  399 wa:24/3e-12 ext1:213/9e-12 ext2:181/9e-12 ext3:65/8e-12 ext1+wa:15/2e-12 ext2+wa:16/7e-13 ext3+wa:12/9e-13
+fresh28  R1=0.2 th=10.00 ref=    48 ref~ref2=6.0e-13 base=   44 wa:17/8e-13 ext1:32/4e-12 ext2:28/4e-12 ext3:20/2e-12 ext1+wa:13/8e-13 ext2+wa:13/4e-13 ext3+wa:11/3e-13
+fresh28  R1=0.2 th=45.00 ref=    25 ref~ref2=5.5e-13 base=   23 wa:22/3e-13 ext1:19/3e-12 ext2:17/2e-12 ext3:14/2e-12 ext1+wa:19/3e-12 ext2+wa:17/2e-12 ext3+wa:14/2e-12
+fresh28  R1=0.2 th=80.00 ref=    20 ref~ref2=2.8e-13 base=   18 wa:18/5e-12 ext1:16/2e-12 ext2:15/5e-13 ext3:13/6e-13 ext1+wa:16/2e-12 ext2+wa:15/5e-13 ext3+wa:13/6e-13
+fresh28  R1=1.0 th= 0.05 ref=  8122 ref~ref2=2.6e-12 base= 7301 wa:24/3e-12 ext1:2751/6e-12 ext2:2272/5e-12 ext3:350/5e-12 ext1+wa:14/5e-12 ext2+wa:17/3e-12 ext3+wa:16/3e-12
+fresh28  R1=1.0 th= 0.10 ref=  4123 ref~ref2=1.0e-12 base= 3712 wa:24/2e-12 ext1:1639/5e-12 ext2:1368/6e-12 ext3:316/6e-12 ext1+wa:14/5e-12 ext2+wa:17/9e-13 ext3+wa:16/9e-13
+fresh28  R1=1.0 th= 0.20 ref=  2092 ref~ref2=5.0e-13 base= 1887 wa:23/3e-12 ext1:955/6e-12 ext2:805/6e-12 ext3:263/6e-12 ext1+wa:15/1e-12 ext2+wa:17/1e-12 ext3+wa:16/5e-13
+fresh28  R1=1.0 th= 0.50 ref=   853 ref~ref2=1.0e-12 base=  771 wa:23/1e-12 ext1:455/5e-12 ext2:389/4e-12 ext3:181/4e-12 ext1+wa:16/9e-13 ext2+wa:17/7e-13 ext3+wa:16/7e-13
+fresh28  R1=1.0 th= 1.00 ref=   433 ref~ref2=9.4e-13 base=  392 wa:22/2e-12 ext1:256/5e-12 ext2:220/5e-12 ext3:126/5e-12 ext1+wa:16/1e-12 ext2+wa:17/6e-13 ext3+wa:16/7e-13
+fresh28  R1=1.0 th=10.00 ref=    45 ref~ref2=3.5e-13 base=   41 wa:15/2e-14 ext1:35/2e-12 ext2:31/2e-12 ext3:27/9e-13 ext1+wa:13/1e-14 ext2+wa:12/6e-13 ext3+wa:13/2e-13
+fresh28  R1=1.0 th=45.00 ref=    22 ref~ref2=3.9e-13 base=   19 wa:19/6e-12 ext1:19/2e-12 ext2:17/3e-12 ext3:17/8e-13 ext1+wa:19/2e-12 ext2+wa:17/3e-12 ext3+wa:17/8e-13
+fresh28  R1=1.0 th=80.00 ref=    16 ref~ref2=3.2e-12 base=   14 wa:14/4e-12 ext1:14/2e-12 ext2:14/5e-13 ext3:13/3e-12 ext1+wa:14/2e-12 ext2+wa:14/5e-13 ext3+wa:13/3e-12
+fresh28  R1=2.0 th= 0.05 ref=  8125 ref~ref2=4.7e-12 base= 7305 wa:22/2e-12 ext1:3194/6e-12 ext2:2662/6e-12 ext3:601/5e-12 ext1+wa:14/8e-12 ext2+wa:17/9e-13 ext3+wa:17/4e-12
+fresh28  R1=2.0 th= 0.10 ref=  4124 ref~ref2=4.0e-12 base= 3713 wa:22/1e-12 ext1:1866/5e-12 ext2:1570/5e-12 ext3:503/6e-12 ext1+wa:14/7e-12 ext2+wa:17/1e-12 ext3+wa:17/3e-12
+fresh28  R1=2.0 th= 0.20 ref=  2092 ref~ref2=2.0e-12 base= 1887 wa:21/3e-12 ext1:1070/4e-12 ext2:909/6e-12 ext3:387/5e-12 ext1+wa:14/7e-12 ext2+wa:17/1e-12 ext3+wa:17/2e-12
+fresh28  R1=2.0 th= 0.50 ref=   852 ref~ref2=4.6e-12 base=  770 wa:21/2e-12 ext1:501/5e-12 ext2:431/5e-12 ext3:243/5e-12 ext1+wa:15/2e-12 ext2+wa:16/1e-12 ext3+wa:17/5e-12
+fresh28  R1=2.0 th= 1.00 ref=   432 ref~ref2=1.3e-12 base=  391 wa:20/1e-12 ext1:278/4e-12 ext2:241/5e-12 ext3:159/5e-12 ext1+wa:15/2e-12 ext2+wa:16/8e-13 ext3+wa:17/2e-12
+fresh28  R1=2.0 th=10.00 ref=    44 ref~ref2=1.9e-12 base=   39 wa:13/3e-13 ext1:36/1e-12 ext2:32/2e-12 ext3:29/2e-12 ext1+wa:12/9e-14 ext2+wa:12/3e-13 ext3+wa:13/2e-12
+fresh28  R1=2.0 th=45.00 ref=    17 ref~ref2=2.1e-11 base=   15 wa:15/4e-12 ext1:15/3e-12 ext2:15/2e-12 ext3:15/2e-11 ext1+wa:15/3e-12 ext2+wa:15/2e-12 ext3+wa:15/2e-11
+fresh28  R1=2.0 th=80.00 ref=    12 ref~ref2=3.5e-11 base=   10 wa:10/4e-12 ext1:10/3e-12 ext2:10/3e-12 ext3:10/4e-11 ext1+wa:10/3e-12 ext2+wa:10/3e-12 ext3+wa:10/4e-11

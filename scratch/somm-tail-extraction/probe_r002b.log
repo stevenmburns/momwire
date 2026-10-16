@@ -1,0 +1,6 @@
+dan 0.03 {'wa': 27, 'ext3': 16, 'ext1+wa': 12, 'ext3+wa': 7} max pairwise comp 7.3e-11
+salt1.8 0.03 {'wa': 27, 'ext3': 16, 'ext1+wa': 12, 'ext3+wa': 7} max pairwise comp 9.5e-11
+salt1.8 0.0809 {'wa': 27, 'ext3': 16, 'ext1+wa': 12, 'ext3+wa': 7} max pairwise comp 1.4e-10
+dan 0.157 {'wa': 27, 'ext3': 16, 'ext1+wa': 11, 'ext3+wa': 7} max pairwise comp 1.3e-10
+fresh28 0.03 {'wa': 27, 'ext3': 16, 'ext1+wa': 12, 'ext3+wa': 7} max pairwise comp 9.5e-11
+rc=0
