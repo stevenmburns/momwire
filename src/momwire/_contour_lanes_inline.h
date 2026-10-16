@@ -186,21 +186,28 @@ MW_SL_INLINE V sin_libm(V x, int act) {
 }
 
 // mw_contour::mw_bessel_asymptotic<double> on the lanes of `act`.
+//
+// J1 = false (momwire#1512) is the same J0 without the order-1 P/Q sums and
+// J1's own line: nothing J0 reads comes from them, so J0 is unchanged bit for
+// bit, and a caller that discards J1 (`mw899::bessel_j0_many`) stops paying
+// for it. j1 is left unwritten then.
+template <bool J1 = true>
 static inline void asymptotic(V z, M act, V &j0, V &j1) {
     const int ab = bits(act);
     V P0, Q0, P1, Q1;
     pq(z, 0.0, act, P0, Q0);
-    pq(z, 4.0, act, P1, Q1);
+    if (J1) pq(z, 4.0, act, P1, Q1);
     const V cz = cos_libm(z, ab);
     const V sz = sin_libm(z, ab);
     const V pref = sqrt(div(set1(1.0), mul(set1(mw_contour::MW_PI), z)));
     j0 = mul(pref, fma(add(P0, Q0), cz, mul(sub(P0, Q0), sz)));
-    j1 = mul(pref, fma(add(P1, Q1), sz, mul(sub(Q1, P1), cz)));
+    if (J1) j1 = mul(pref, fma(add(P1, Q1), sz, mul(sub(Q1, P1), cz)));
 }
 
 // mw_contour::bessel_j0_j1x at REAL arguments x = (xr, +0): the tail's.
 // `xr` is the real part of x = lam * rho; nx = mw_norm2(x), as the scalar
 // forms it from the complex x. Small lanes (see below) return garbage.
+template <bool J1 = true>
 static inline void bessel_j0_j1x_real(V xr, V nx, V &j0, V &j1x) {
     const M small = lt(nx, set1(1e-12));
     const V ax = fabs(xr);
@@ -222,12 +229,12 @@ static inline void bessel_j0_j1x_real(V xr, V nx, V &j0, V &j1x) {
     }
     if (any(asy)) {
         V a, b;
-        asymptotic(ax, asy, a, b);
+        asymptotic<J1>(ax, asy, a, b);
         b0 = blend(b0, a, asy);
-        b1 = blend(b1, b, asy);
+        if (J1) b1 = blend(b1, b, asy);
     }
     j0 = b0;
-    j1x = div(b1, ax);
+    if (J1) j1x = div(b1, ax);
     // A lane with |x|^2 < 1e-12 is the scalar's small branch, whose values
     // are complex in general: `six_below_tail` reports it and its caller
     // recomputes that node with the scalar integrand.
@@ -359,20 +366,23 @@ struct CsinF {
 };
 
 // mw_contour::mw_bessel_asymptotic<cd> on the lanes of `act`.
+// J1 = false: `asymptotic`'s note.
+template <bool J1 = true>
 static inline void asymptotic_c(C z, M act, C &j0, C &j1) {
     const int ab = bits(act);
     C P0, Q0, P1, Q1;
     pq_c(z, 0.0, act, P0, Q0);
-    pq_c(z, 4.0, act, P1, Q1);
+    if (J1) pq_c(z, 4.0, act, P1, Q1);
     const C cz = per_lane(z, CcosF(), ab);
     const C sz = per_lane(z, CsinF(), ab);
     const C pref = csqrt_libm(cdiv(1.0, cscale(mw_contour::MW_PI, z)), ab);
     j0 = cmul(pref, cmul_add(cadd(P0, Q0), cz, cmul(csub(P0, Q0), sz)));
-    j1 = cmul(pref, cmul_add(cadd(P1, Q1), sz, cmul(csub(Q1, P1), cz)));
+    if (J1) j1 = cmul(pref, cmul_add(cadd(P1, Q1), sz, cmul(csub(Q1, P1), cz)));
 }
 
 // mw_contour::bessel_j0_j1x at complex x with Im x != 0 and |x|^2 >= 1e-12
 // (the caller routes the other lanes to the scalar function).
+template <bool J1 = true>
 static inline void bessel_j0_j1x_complex(C x, V nx, C &j0, C &j1x) {
     const C z = cblend(x, cneg(x), lt(x.re, set1(0.0)));
     const M ser = lt(nx, set1(64.0));
@@ -393,12 +403,12 @@ static inline void bessel_j0_j1x_complex(C x, V nx, C &j0, C &j1x) {
     }
     if (any(asy)) {
         C a, b;
-        asymptotic_c(z, asy, a, b);
+        asymptotic_c<J1>(z, asy, a, b);
         b0 = cblend(b0, a, asy);
-        b1 = cblend(b1, b, asy);
+        if (J1) b1 = cblend(b1, b, asy);
     }
     j0 = b0;
-    j1x = cdiv(b1, z);
+    if (J1) j1x = cdiv(b1, z);
 }
 
 // mw_contour::bessel_j0_j1x at W arbitrary arguments x[0..W): the real path
@@ -406,12 +416,7 @@ static inline void bessel_j0_j1x_complex(C x, V nx, C &j0, C &j1x) {
 // scalar function itself on any lane neither serves (|x| < 1e-6, or a mixed
 // group's on-axis lanes).
 static inline void bessel_j0_j1x_any(const cd *x, cd *j0, cd *j1x) {
-    Buf xr, xi;
-    for (int l = 0; l < W; ++l) {
-        xr.v[l] = x[l].real();
-        xi.v[l] = x[l].imag();
-    }
-    const C xv{loadu(xr.v), loadu(xi.v)};
+    const C xv = cload(x);
     const V nx = norm2(xv);
     const int axis = bits(eq(xv.im, set1(0.0)));
     int left = bits(lt(nx, set1(1e-12)));
@@ -434,6 +439,33 @@ static inline void bessel_j0_j1x_any(const cd *x, cd *j0, cd *j1x) {
     }
     for (int l = 0; l < W; ++l)
         if (left & (1 << l)) mw_contour::bessel_j0_j1x(x[l], j0[l], j1x[l]);
+}
+
+// `bessel_j0_j1x_any`'s J0 alone (momwire#1512): the same regimes, the same
+// lanes and the same scalar fallback, the order-1 work (`asymptotic`'s J1 =
+// false, the J1/x divides) skipped. Every j0 is the one the pair returns.
+static inline void bessel_j0_any(const cd *x, cd *j0) {
+    const C xv = cload(x);
+    const V nx = norm2(xv);
+    const int axis = bits(eq(xv.im, set1(0.0)));
+    int left = bits(lt(nx, set1(1e-12)));
+    if (axis == ALL) {
+        V a, b;
+        bessel_j0_j1x_real<false>(xv.re, nx, a, b);
+        const Buf ab = spill(a);
+        for (int l = 0; l < W; ++l) j0[l] = cd(ab.v[l], 0.0);
+    } else {
+        left |= axis;
+        C a, b;
+        bessel_j0_j1x_complex<false>(xv, nx, a, b);
+        const Buf ar = spill(a.re), ai = spill(a.im);
+        for (int l = 0; l < W; ++l) j0[l] = cd(ar.v[l], ai.v[l]);
+    }
+    for (int l = 0; l < W; ++l)
+        if (left & (1 << l)) {
+            cd b1x;
+            mw_contour::bessel_j0_j1x(x[l], j0[l], b1x);
+        }
 }
 
 // `mw568_below::SixBelow::operator()` at W nodes lam: the d12 pair, the decay

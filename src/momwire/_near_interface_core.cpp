@@ -358,12 +358,19 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
         // Polled per column, and per member of a column too big to be one
         // work item; checked between those columns, whose rules are built
         // serially.
-        #pragma omp parallel for schedule(dynamic) num_threads(nt)
+        //
+        // One Scratch per THREAD, not per column (momwire#1512): every array
+        // in it is rewritten in full before it is read (`column_build`), so a
+        // column sees nothing of the last one but the capacity, and the
+        // per-column allocate-and-zero of a dozen K-sized vectors goes.
+        #pragma omp parallel num_threads(nt)
+        {
+        mw899::Scratch s;
+        #pragma omp for schedule(dynamic)
         for (std::ptrdiff_t j = 0; j < n_col; ++j) {
             NI_CANCEL_POLL();
             const std::ptrdiff_t c = by_column[j];
             const std::ptrdiff_t lo = offsets[c], hi = offsets[c + 1];
-            mw899::Scratch s;
             s.lanes = lanes && mw_sl::kActive;
             const size_t K = mw899::column_build(
                 rho[c], k_p, kpc, km, mw899::s_min_of(Arr{z}, Arr{zp}, lo, hi), lam_mult,
@@ -375,6 +382,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
                 mw899::column_member(s, K, z[i], zp[i], o6);
                 for (int q = 0; q < 6; ++q) out[6 * i + q] = o6[q];
             }
+        }
         }
         for (std::ptrdiff_t j = 0; j < n_mem; ++j) {
             NI_THROW_IF_ABORTED();
