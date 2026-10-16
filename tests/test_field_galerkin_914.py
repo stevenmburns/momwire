@@ -117,13 +117,17 @@ DECKS = {
 # vertical member below the plane (hub 141.017−43.425j → 148.634−30.463j,
 # crossing 138.961−102.610j → 169.776−82.280j, screen12 98.787−67.076j →
 # 105.070−54.251j; antennaknobs scratch/956-derivation is the record).
+# The matrix fills' coarser below/below table (`_sommerfeld_below.
+# _SOMM_BELOW_SPACING_FILL`) moved them again, by 1.5e-5, 6.3e-8 and 1.3e-5
+# relative: hub 148.634045567−30.463037886j, crossing 169.775596898−
+# 82.280023587j, screen12 105.070030090−54.251084913j before it.
 Z_PINNED = {
-    "hub": 148.634045567 - 30.463037886j,
-    "crossing": 169.775596898 - 82.280023587j,
+    "hub": 148.632121115 - 30.461875786j,
+    "crossing": 169.775598952 - 82.280012977j,
     # Measured on the NUMPY path at f537080 and asserted equal on both here;
     # this deck is new with these tests, so the pin is a same-commit record of
     # the reference's answer rather than a value inherited from before it.
-    "screen12": 105.070030090 - 54.251084913j,
+    "screen12": 105.068535264 - 54.251499350j,
 }
 
 
