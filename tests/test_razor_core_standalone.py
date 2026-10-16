@@ -73,6 +73,7 @@ CORE_SOURCES = (
     "_somm_proj_core.cpp",
     "_somm_below_proj_core.cpp",
     "_somm_below_grid_core.cpp",
+    "_somm_below_fill_core.cpp",
     "_near_interface_core.cpp",
     "_near_interface_eval.cpp",
     "_razor_crossing_core.cpp",
@@ -718,6 +719,48 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
         ), path
 
 
+BURIED_DECKS = [
+    ROOT / "tests" / "fixtures" / rel
+    for rel in (
+        "eznec_crossing_source_1282/dan_end1.nec",
+        "eznec_crossing_source_1282/dan_end1_via6.nec",
+        "eznec_crossing_source_1282/dan_seg1end2.nec",
+        "eznec_nec42/probes/p9_above_and_buried_gn2.nec",
+        "eznec_phantom_1139/ground_rod_efhw_wa7ark.nec",
+        "eznec_split_1281/dan_through.nec",
+        "eznec_split_1281/thr_n21.nec",
+    )
+]
+
+
+def test_the_buried_decks_print_with_their_tables_filled_in_cxx(
+    driver, tmp_path, monkeypatch
+):
+    """A buried deck through the C++ path end to end (momwire#1512 B1-B6, B5):
+    the crossing and split seams, the two media's fills, the cross blocks and
+    node charges, the below/below table filled in C++ (`_somm_below_fill_core`,
+    the integrand `_somm_below_six_inline.h` shared with the extension), and
+    the run half's split rows and transmitted far field -- each deck printed,
+    none declined, and each printout the launcher's bytes. Exact tables
+    (MOMWIRE_BELOW_ANCHORS=off): the anchors' sweep state lives per process,
+    and the driver and this process see different histories."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    answers = pc.run_driver(
+        driver[0]["nec5_razor_printout_driver"], BURIED_DECKS, tmp_path
+    )
+    served = 0
+    for path, ans in zip(BURIED_DECKS, answers, strict=True):
+        assert ans["route"] == "printed", (path, ans.get("reason"))
+        served += ans["seam"] == "served"
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
+    assert served >= 5
+
+
 def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
     """GN 0 / GN 2 through the C++ path (momwire#1479 S3): the composing fill
     -- the C2-weighted image, its scaled charge term and the smooth remainder
@@ -728,8 +771,7 @@ def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
     in the plane, a spherical grid reaching under a GD); a near field over the
     composing ground prints too (S4: `C2 image + remainder` through
     `_somm_field_core`); and a buried radial screen prints its refusal
-    (momwire#1512 B1: the buried seam and front are C++; a buried deck the
-    fill would serve declines by name until its below table is, B5)."""
+    (momwire#1512 B1)."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")

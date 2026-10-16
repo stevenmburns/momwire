@@ -51,6 +51,9 @@ struct Grid {
     double lam_m = 0, r1_max = 0, r1_cap = 0, r_break = 0, r_near = 0;
     double th_min = 0, th_band_floor_hi = 0, th_band_lo_hi = 0, th_band_hi = 0, th_split = 0;
     Region regions[N_REGIONS];
+    // each region's theta lattice in degrees (`th0 + dth * arange`), for the
+    // fill (B5); the bridge leaves them 0.
+    double th0_deg[N_REGIONS] = {}, dth_deg[N_REGIONS] = {};
 };
 
 // `k_medium(eps_t, k2)`: k2 * numpy's scalar csqrt(eps~) (numpy's unfused

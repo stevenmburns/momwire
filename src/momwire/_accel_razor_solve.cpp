@@ -3,6 +3,7 @@
 #include "_nec5_razor_seam_core.h"
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
+#include "_somm_below_fill_core.h"
 #include "_razor_front_core.h"
 #include "_razor_solve_core.h"
 
@@ -533,7 +534,11 @@ py::dict razor_buried_stages(py::dict kw, int64_t chunk_elems, std::string below
     struct Restore {
         ~Restore() { somm_below::set_source(nullptr); }
     } restore;
-    if (!below_tables.empty()) somm_below::set_source(somm_below::bridge_source(below_tables));
+    // "fill": the table filled in C++ (B5); else a bridge directory.
+    if (below_tables == "fill")
+        somm_below::set_source(somm_below::fill_source());
+    else if (!below_tables.empty())
+        somm_below::set_source(somm_below::bridge_source(below_tables));
     mw::razor::FrontInputs in;
     try {
         in = front_inputs(kw);

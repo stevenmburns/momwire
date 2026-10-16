@@ -1,7 +1,7 @@
 """razor-2p's BURIED fill in C++ (momwire#1512 step 3) against the Python
 route, stage by stage, deck by deck.
 
-    python scripts/core_split/buried_z_compare.py OUT.jsonl DECK_OR_DIR...
+    python scripts/core_split/buried_z_compare.py [--fill] OUT.jsonl DECK_OR_DIR...
 
 Each deck goes through the Python launcher's own route (`_shell.render(text,
 basis="razor-2p")`, the C++ route forced off), with `RazorSolver.__init__`'s
@@ -23,9 +23,12 @@ as far as the port reaches; every stage it answers must be Python's, BYTE
 for byte. A stage it does not reach yet is counted, never compared. One JSON
 line per solve; a summary on stdout; exit status 1 on any mismatch.
 
-`MOMWIRE_BELOW_ANCHORS` is whatever the environment says, on both sides
-(the drivers read Python's below tables through the test bridge until the
-table itself is ported, `MW_TEST_BELOW_TABLES`).
+`MOMWIRE_BELOW_ANCHORS` is whatever the environment says, on both sides.
+The C++ side reads its below/below tables through the test bridge (the grids
+the Python route filled, `dump_below_grids`), or with ``--fill`` fills them
+itself (B5); a whole-corpus run wants MOMWIRE_BELOW_ANCHORS=off, since Python's
+sweep state carries from deck to deck in one process and the C++ side's does
+not.
 """
 
 from __future__ import annotations
@@ -133,7 +136,7 @@ def dump_below_grids(out_dir):
         if not (isinstance(key, tuple) and key and key[0] == "below"):
             continue
         _tag, eps_t, k2, r1b_wl, omega, mu, spacing = key[:7]
-        blended = len(key) > 7
+        blended = "anchors-1471" in key
         parts = [b"MWBELOW1"]
         parts.append(
             struct.pack(
@@ -190,8 +193,14 @@ def main(argv):
     from momwire import _accel
 
     acc = _accel.acc
-    out_path = Path(argv[1])
-    decks = _decks(argv[2:])
+    args = list(argv[1:])
+    # `--fill`: the below table filled in C++ (momwire#1512 B5) instead of
+    # read through the bridge from the Python route's grids.
+    fill = "--fill" in args
+    if fill:
+        args.remove("--fill")
+    out_path = Path(args[0])
+    decks = _decks(args[1:])
     tally = Counter()
     bad = 0
     with out_path.open("w") as out:
@@ -199,10 +208,13 @@ def main(argv):
             text = deck.read_text(encoding="latin-1")
             solves = python_stages(text)
             bridge = out_path.with_suffix(".tables")
-            dump_below_grids(bridge)
+            if not fill:
+                dump_below_grids(bridge)
             for k, py in enumerate(solves):
                 row = {"deck": str(deck), "solve": k}
-                got = acc.razor_buried_stages(py["kwargs"], below_tables=str(bridge))
+                got = acc.razor_buried_stages(
+                    py["kwargs"], below_tables="fill" if fill else str(bridge)
+                )
                 row["route"] = got.get("route")
                 row["reached"] = []
                 mism = []
