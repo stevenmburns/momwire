@@ -815,7 +815,7 @@ static py::tuple below_six_integrals_batch(
     py::array_t<double, py::array::c_style | py::array::forcecast> wa_pow =
         py::array_t<double>(0),
     int wa_order = 10, int wa_min_sums = 4, int wa_agree = 2,
-    bool lanes = true) {
+    bool lanes = true, int vecmath = 0) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
     // momwire#1441: the weighted-averages tail rule; an empty `wa_pow` is the
@@ -857,6 +857,8 @@ static py::tuple below_six_integrals_batch(
 
     {
         py::gil_scoped_release release;
+        // momwire#1441 step 4: the lanes' vector-math mode for this call.
+        const mw_sl::VecmathScope vm_scope(lanes ? vecmath : 0);
         // momwire#1348: polled per node. A grid fill is one call per region
         // and a region is up to thousands of nodes, so a poll at the call
         // boundary alone would hold a cancel for a whole region.
@@ -2729,13 +2731,15 @@ void register_mw568(py::module_ &m) {
           py::arg("max_panels"), py::arg("cancel_flag") = 0,
           py::arg("wa_pow") = py::array_t<double>(0), py::arg("wa_order") = 10,
           py::arg("wa_min_sums") = 4, py::arg("wa_agree") = 2,
-          py::arg("lanes") = true);
+          py::arg("lanes") = true, py::arg("vecmath") = 0);
     // momwire#1441: the batch takes the weighted-averages tail rule
     // (`wa_pow` empty = the plain walk).
     m.attr("below_tail_wa_1441") = true;
     // momwire#1441 step 3: the tail integrand runs four nodes at a time;
     // `lanes=False` is the scalar walk it is gated against, bit for bit.
     m.attr("below_six_lanes_1441") = true;
+    // momwire#1441 step 4: `vecmath`, as somm_six_integrals_batch's.
+    m.attr("lanes_vecmath_1441") = mw_sl::kVecmathBuilt;
     m.def("remainder_field_proj_batch_below", &remainder_field_proj_batch_below,
           "Interpolated + projected below/below remainder table — the complex-"
           "wavenumber TWIN of remainder_field_proj_batch (which carries a "

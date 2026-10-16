@@ -451,7 +451,8 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     std::complex<double> eps_t, double k2,
     py::array_t<double, py::array::c_style | py::array::forcecast> rho,
     py::array_t<double, py::array::c_style | py::array::forcecast> h,
-    double rtol, int form, uintptr_t cancel_flag = 0, bool lanes = true) {
+    double rtol, int form, uintptr_t cancel_flag = 0, bool lanes = true,
+    int vecmath = 0) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
     const py::ssize_t n = rb.shape(0);
@@ -468,6 +469,8 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     auto ob = out.mutable_unchecked<2>();
     const somm::cd et(eps_t);
     MW_CANCEL_SETUP(cancel_flag);
+    // momwire#1441 step 4: the lanes' vector-math mode for this call.
+    const mw_sl::VecmathScope vm_scope(lanes ? vecmath : 0);
 
     #pragma omp parallel for schedule(dynamic)
     for (py::ssize_t i = 0; i < n; ++i) {
@@ -1346,10 +1349,15 @@ void register_somm(py::module_ &m) {
           "Returns (n, 6) complex in _six_integrals order.",
           py::arg("eps_t"), py::arg("k2"), py::arg("rho"), py::arg("h"),
           py::arg("rtol") = 1e-9, py::arg("form") = 0,
-          py::arg("cancel_flag") = 0, py::arg("lanes") = true);
+          py::arg("cancel_flag") = 0, py::arg("lanes") = true,
+          py::arg("vecmath") = 0);
     // momwire#1441 step 3: the integrand runs four contour nodes at a time;
     // `lanes=False` is the scalar walk it is gated against, bit for bit.
     m.attr("somm_six_lanes_1441") = true;
+    // momwire#1441 step 4: `vecmath` (MW_SL_VM_* bits) routes the lanes'
+    // transcendentals through libmvec; the value is the mask this build can
+    // honour (0 where libmvec is not available, and a request is then libm).
+    m.attr("lanes_vecmath_1441") = mw_sl::kVecmathBuilt;
     m.def("remainder_field_proj_batch", &remainder_field_proj_batch,
           "Fused Sommerfeld smooth-remainder assembly: interpolate the four "
           "grid surfaces (4x4 Lagrange) and project t_m.F(r_m,r_n).t_n per "

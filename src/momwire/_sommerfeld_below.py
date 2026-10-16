@@ -87,6 +87,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from . import _cancel, _somm_disk_cache
+from . import _sommerfeld as _somm
 from ._quadrature import leggauss
 from ._accel import acc as _acc
 from ._sommerfeld import (
@@ -706,6 +707,7 @@ def _six_below_accel(k_p, k_m, rho, h, rtol, selfconv):
             if _SIX_LANES or not hasattr(_acc, "below_six_lanes_1441")
             else {"lanes": False}
         ),
+        **_somm._vecmath_kw(_acc, _SIX_LANES),
     )
 
 
@@ -2323,7 +2325,7 @@ class _AnchorPlan:
             _MU0,
             self.spacing,
             _tail_rule(),
-        )
+        ) + _somm._vecmath_key(_acc, _SIX_LANES)
 
     @property
     def family(self):
@@ -2640,7 +2642,7 @@ def get_grid_below(
         float(mu),
         spacing,
         _tail_rule(),
-    )
+    ) + _somm._vecmath_key(_acc, _SIX_LANES)
     grid = _GRID_CACHE.get(key)
     if grid is None and health is None:
         grid = _GRID_CACHE.get(key + _BLENDED_KEY)

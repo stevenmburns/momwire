@@ -77,6 +77,51 @@
 #define MW_SL_INLINE static inline
 #endif
 
+// momwire#1441 step 4: the opt-in vector-math route (`vecmath` on the
+// bindings, `_LANES_VECMATH` in Python). Off -- the default -- every lane calls
+// libm exactly as above and the lanes are the scalar walk's bits. On, the
+// lanes' transcendental functions run on glibc's libmvec, one vector call per
+// four lanes instead of four libm calls: _ZGVdN4v_* on the avx2 build, two
+// _ZGVbN2v_* on the sse2 one. libmvec is not libm (its functions are within a
+// few ulps, not correctly rounded alike), so ON is a different table, gated by
+// measurement (the census on momwire#1441), and the Python side puts the mode
+// in every key of a table it fills. libmvec is glibc-only: MSVC, macOS, musl
+// and the portable backend compile the route away, `kVecmathBuilt` is 0, and a
+// request for it is the libm route (Python reads the built mask and keys on
+// what actually ran).
+//
+// The mode is a bit mask, so the census can price each family on its own:
+#define MW_SL_VM_CEXP 1   // complex exp: exp(Re) * (cos, sin)(Im)
+#define MW_SL_VM_TRIG 2   // the Bessel asymptotics' sin / cos, real and complex
+#define MW_SL_VM_CLOG 4   // complex log: (log hypot, atan2)
+#define MW_SL_VM_CSQRT 8  // csqrt: the lanes' own principal root (lean_sqrt)
+#define MW_SL_VM_ALL 15
+#if !defined(MW_SL_NO_VECMATH) && defined(__GLIBC__) && !defined(_MSC_VER) && \
+    (defined(MW_SL_AVX2) || defined(MW_SL_SSE2)) && defined(__x86_64__)
+#define MW_SL_VECMATH 1
+#include <atomic>
+// Only functions libmvec has had since glibc 2.22: the Linux wheels build on
+// manylinux_2_28, and a 2.35 function (sinh, cosh, hypot, atan2, log1p, ...)
+// links locally and then fails to IMPORT from the wheel
+// (tests/test_glibc_floor.py). hypot, log1p, sinh and cosh are composed
+// below from these and IEEE operations; atan2 stays libm per lane.
+extern "C" {
+#if defined(MW_SL_AVX2)
+__m256d _ZGVdN4v_exp(__m256d);
+__m256d _ZGVdN4v_sin(__m256d);
+__m256d _ZGVdN4v_cos(__m256d);
+__m256d _ZGVdN4v_log(__m256d);
+#else
+__m128d _ZGVbN2v_exp(__m128d);
+__m128d _ZGVbN2v_sin(__m128d);
+__m128d _ZGVbN2v_cos(__m128d);
+__m128d _ZGVbN2v_log(__m128d);
+#endif
+}
+#else
+#define MW_SL_VECMATH 0
+#endif
+
 namespace mw_sl {
 
 constexpr int W = 4;
@@ -96,6 +141,39 @@ constexpr bool kActive = true;
 constexpr bool kActive = false;
 #endif
 typedef std::complex<double> cd;
+
+// The vector-math mode of the call in flight (MW_SL_VM_* bits). One per
+// module: a binding that takes `vecmath` sets it for its own duration
+// (VecmathScope) and every other binding finds it 0. A process-wide value
+// rather than an argument threaded through every lane function, because it
+// is an A/B switch for the census and the tests -- two concurrent calls with
+// DIFFERENT modes in one process are not supported (one mode per process is).
+#if MW_SL_VECMATH
+constexpr int kVecmathBuilt = kActive ? MW_SL_VM_ALL : 0;
+inline std::atomic<int> g_vecmath{0};
+MW_SL_INLINE bool vecmath_on(int bit) {
+    return (g_vecmath.load(std::memory_order_relaxed) & bit) != 0;
+}
+#else
+constexpr int kVecmathBuilt = 0;
+MW_SL_INLINE bool vecmath_on(int) { return false; }
+#endif
+struct VecmathScope {
+    explicit VecmathScope(int mode) {
+#if MW_SL_VECMATH
+        g_vecmath.store(mode & kVecmathBuilt, std::memory_order_relaxed);
+#else
+        (void)mode;
+#endif
+    }
+    ~VecmathScope() {
+#if MW_SL_VECMATH
+        g_vecmath.store(0, std::memory_order_relaxed);
+#endif
+    }
+    VecmathScope(const VecmathScope &) = delete;
+    VecmathScope &operator=(const VecmathScope &) = delete;
+};
 
 #if defined(MW_SL_AVX2)
 // ---------------------------------------------------------------- avx2 ----
@@ -371,9 +449,9 @@ struct CsqrtF {
 struct ClogF {
     cd operator()(const cd &v) const { return std::log(v); }
 };
-MW_SL_INLINE C cexp(C z, int act = ALL) { return per_lane(z, CexpF(), act); }
-MW_SL_INLINE C csqrt_libm(C z, int act = ALL) { return per_lane(z, CsqrtF(), act); }
-MW_SL_INLINE C clog(C z, int act = ALL) { return per_lane(z, ClogF(), act); }
+MW_SL_INLINE C cexp_libm(C z, int act = ALL) { return per_lane(z, CexpF(), act); }
+MW_SL_INLINE C csqrt_per_lane(C z, int act = ALL) { return per_lane(z, CsqrtF(), act); }
+MW_SL_INLINE C clog_libm(C z, int act = ALL) { return per_lane(z, ClogF(), act); }
 
 // mw_cdiv::div, per lane bit for bit. libgcc's Smith step is written once,
 // with the operands swapped per lane, so a lane runs the three divides its
@@ -475,6 +553,208 @@ MW_SL_INLINE C gamma_cut(C lam, const cd &k) {
     const C mj = cset1(-mw_branch::MW_BRANCH_J);
     const C j = cset1(mw_branch::MW_BRANCH_J);
     return cmul(lean_sqrt(cmul(mj, csub(lam, kk))), lean_sqrt(cmul(j, cadd(lam, kk))));
+}
+
+
+// ---- the vector-math route (momwire#1441 step 4) --------------------------
+#if MW_SL_VECMATH
+namespace vm {
+#if defined(MW_SL_AVX2)
+#define MW_SL_VM1_(name, sym) \
+    MW_SL_INLINE V name(V a) { return V{sym(a.v)}; }
+MW_SL_VM1_(exp, _ZGVdN4v_exp)
+MW_SL_VM1_(sin, _ZGVdN4v_sin)
+MW_SL_VM1_(cos, _ZGVdN4v_cos)
+MW_SL_VM1_(log, _ZGVdN4v_log)
+#else
+#define MW_SL_VM1_(name, sym) \
+    MW_SL_INLINE V name(V a) { return V{sym(a.lo), sym(a.hi)}; }
+MW_SL_VM1_(exp, _ZGVbN2v_exp)
+MW_SL_VM1_(sin, _ZGVbN2v_sin)
+MW_SL_VM1_(cos, _ZGVbN2v_cos)
+MW_SL_VM1_(log, _ZGVbN2v_log)
+#endif
+#undef MW_SL_VM1_
+
+// a*a = p + e exactly: the fused residual where fma is one op, Veltkamp's
+// split where it is not (the sse2 baseline).
+MW_SL_INLINE void two_square(V a, V &p, V &e) {
+    p = mul(a, a);
+#if MW_SL_FUSED
+    e = fma(a, a, neg(p));
+#else
+    const V c = mul(set1(134217729.0), a);
+    const V hi = sub(c, sub(c, a));
+    const V lo = sub(a, hi);
+    e = add(add(sub(mul(hi, hi), p), mul(set1(2.0), mul(hi, lo))), mul(lo, lo));
+#endif
+}
+
+// |z| without overflow or underflow of the squares: m sqrt(1 + (n/m)^2).
+MW_SL_INLINE V hypot(V x, V y) {
+    const V ax = fabs(x), ay = fabs(y);
+    const V m = vmax(ax, ay);
+    const V n = blend(ax, ay, gt(ax, ay));  // the smaller
+    const V r = div(n, m);
+    return mul(m, sqrt(fma(r, r, set1(1.0))));
+}
+
+// The lanes of `act` that `ok` refuses, recomputed by the scalar f: the
+// guards keep the vector formulas to the range where they are the function
+// (no overflow of an intermediate, finite operands); outside it, libm.
+template <class F>
+MW_SL_INLINE C patch(C r, C z, M ok, int act, F f) {
+    const int bad = act & ~bits(ok);
+    if (!bad) return r;
+    Buf rr = spill(r.re), ri = spill(r.im);
+    const Buf zr = spill(z.re), zi = spill(z.im);
+    for (int l = 0; l < W; ++l) {
+        if (!(bad & (1 << l))) continue;
+        const cd v = f(cd(zr.v[l], zi.v[l]));
+        rr.v[l] = v.real();
+        ri.v[l] = v.imag();
+    }
+    return C{loadu(rr.v), loadu(ri.v)};
+}
+
+// exp(x + iy) = e^x (cos y, sin y): glibc's cexp in this range, with
+// libmvec's exp, cos and sin.
+MW_SL_INLINE C cexp(C z, int act) {
+    const V e = exp(z.re);
+    const C r{mul(e, cos(z.im)), mul(e, sin(z.im))};
+    const M ok = m_and(le(z.re, set1(700.0)), le(fabs(z.im), set1(1e9)));
+    return patch(r, z, ok, act, CexpF());
+}
+
+// log(z) = (log |z|, atan2(y, x)), atan2 by libm per lane (libmvec's is
+// GLIBC_2.35). Near |z| = 1, log |z| is a small number that log(hypot) gets
+// only to an absolute ulp of 1; there it is log1p(x^2 - 1 + y^2) / 2, with
+// both squares' rounding errors kept (Dekker) so the cancellation leaves the
+// right digits, and log1p(u) = log(w) u / (w - 1), w = 1 + u (Goldberg).
+MW_SL_INLINE C clog(C z, int act) {
+    const V h = hypot(z.re, z.im);
+    V lr = log(h);
+    const M near1 = m_and(gt(h, set1(0.5)), lt(h, set1(2.0)));
+    if (any(near1)) {
+        V px, ex, py, ey;
+        two_square(z.re, px, ex);
+        two_square(z.im, py, ey);
+        const V u = add(add(sub(px, set1(1.0)), py), add(ex, ey));
+        const V w = add(set1(1.0), u);
+        const V wm1 = sub(w, set1(1.0));
+        const M exact1 = eq(wm1, set1(0.0));
+        const V lp = blend(div(mul(log(w), u), blend(wm1, set1(1.0), exact1)), u, exact1);
+        lr = blend(lr, mul(set1(0.5), lp), near1);
+    }
+    Buf ai = spill(z.im);
+    const Buf zr = spill(z.re);
+    for (int l = 0; l < W; ++l)
+        if (act & (1 << l)) ai.v[l] = mw_fma::opaque(std::atan2(ai.v[l], zr.v[l]));
+    const C r{lr, loadu(ai.v)};
+    const M ok = m_and(ge(h, set1(2.2250738585072014e-308)), le(h, set1(1e300)));
+    return patch(r, z, ok, act, ClogF());
+}
+
+// cosh y and sinh y from one exp: (e + 1/e)/2 and (e - 1/e)/2 with e =
+// exp|y|; for |y| < 1/2, where that difference cancels, sinh by its odd
+// series (the y^19 term is below 1e-22 relative there).
+MW_SL_INLINE void cosh_sinh(V y, V &ch, V &sh) {
+    const V ay = fabs(y);
+    const V e = exp(ay), ei = div(set1(1.0), e);
+    ch = mul(set1(0.5), add(e, ei));
+    V big = mul(set1(0.5), sub(e, ei));
+    const V y2 = mul(ay, ay);
+    // Horner in y^2: 1 + y2/3! + y2^2/5! + ... + y2^8/17!
+    V p = set1(1.0 / 355687428096000.0);
+    p = fma(p, y2, set1(1.0 / 1307674368000.0));
+    p = fma(p, y2, set1(1.0 / 6227020800.0));
+    p = fma(p, y2, set1(1.0 / 39916800.0));
+    p = fma(p, y2, set1(1.0 / 362880.0));
+    p = fma(p, y2, set1(1.0 / 5040.0));
+    p = fma(p, y2, set1(1.0 / 120.0));
+    p = fma(p, y2, set1(1.0 / 6.0));
+    const V small = add(ay, mul(mul(ay, y2), p));
+    sh = copysign(blend(big, small, lt(ay, set1(0.5))), y);
+}
+
+// cos z = (cos x cosh y, -sin x sinh y), sin z = (sin x cosh y, cos x sinh y).
+struct CcosF_ {
+    cd operator()(const cd &v) const { return std::cos(v); }
+};
+struct CsinF_ {
+    cd operator()(const cd &v) const { return std::sin(v); }
+};
+MW_SL_INLINE void ccos_csin(C z, int act, C &cz, C &sz) {
+    const V cx = cos(z.re), sx = sin(z.re);
+    V ch, sh;
+    cosh_sinh(z.im, ch, sh);
+    cz = C{mul(cx, ch), neg(mul(sx, sh))};
+    sz = C{mul(sx, ch), mul(cx, sh)};
+    const M ok = m_and(le(fabs(z.im), set1(700.0)), le(fabs(z.re), set1(1e9)));
+    cz = patch(cz, z, ok, act, CcosF_());
+    sz = patch(sz, z, ok, act, CsinF_());
+}
+}  // namespace vm
+#endif
+
+// The lanes' transcendental functions: libm per lane (the default, the scalar
+// walk's bits), or the vector-math route when the call in flight asked for it.
+MW_SL_INLINE C cexp(C z, int act = ALL) {
+#if MW_SL_VECMATH
+    if (vecmath_on(MW_SL_VM_CEXP)) return vm::cexp(z, act);
+#endif
+    return cexp_libm(z, act);
+}
+MW_SL_INLINE C clog(C z, int act = ALL) {
+#if MW_SL_VECMATH
+    if (vecmath_on(MW_SL_VM_CLOG)) return vm::clog(z, act);
+#endif
+    return clog_libm(z, act);
+}
+// glibc's csqrt per lane; under the vector route, the lanes' own principal
+// root (lean_sqrt, above: IEEE square roots and divides, a different rounding
+// from glibc's csqrt, the same branch).
+MW_SL_INLINE C csqrt_libm(C z, int act = ALL) {
+#if MW_SL_VECMATH
+    if (vecmath_on(MW_SL_VM_CSQRT)) return lean_sqrt(z);
+#endif
+    return csqrt_per_lane(z, act);
+}
+// std::cos / std::sin of each lane of `act` (complex).
+struct CcosF {
+    cd operator()(const cd &v) const { return std::cos(v); }
+};
+struct CsinF {
+    cd operator()(const cd &v) const { return std::sin(v); }
+};
+MW_SL_INLINE void ccos_csin(C z, int act, C &cz, C &sz) {
+#if MW_SL_VECMATH
+    if (vecmath_on(MW_SL_VM_TRIG)) {
+        vm::ccos_csin(z, act, cz, sz);
+        return;
+    }
+#endif
+    cz = per_lane(z, CcosF(), act);
+    sz = per_lane(z, CsinF(), act);
+}
+// std::cos / std::sin of each lane of `act` (real); the others keep x.
+MW_SL_INLINE V cos_lanes(V x, int act) {
+#if MW_SL_VECMATH
+    if (vecmath_on(MW_SL_VM_TRIG)) return vm::cos(x);
+#endif
+    Buf r = spill(x);
+    for (int l = 0; l < W; ++l)
+        if (act & (1 << l)) r.v[l] = mw_fma::opaque(std::cos(mw_fma::opaque(r.v[l])));
+    return loadu(r.v);
+}
+MW_SL_INLINE V sin_lanes(V x, int act) {
+#if MW_SL_VECMATH
+    if (vecmath_on(MW_SL_VM_TRIG)) return vm::sin(x);
+#endif
+    Buf r = spill(x);
+    for (int l = 0; l < W; ++l)
+        if (act & (1 << l)) r.v[l] = mw_fma::opaque(std::sin(mw_fma::opaque(r.v[l])));
+    return loadu(r.v);
 }
 
 }  // namespace mw_sl
