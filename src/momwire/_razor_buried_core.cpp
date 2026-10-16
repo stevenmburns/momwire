@@ -10,6 +10,12 @@
 #include "_somm_proj_core.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
 #include <cstdio>
 #include <set>
 #include <stdexcept>
@@ -412,19 +418,42 @@ std::string grazing_refusal(const Front &s, const std::vector<double> &plan_skip
     // capped only when the all-pairs minimum is under the floor with a pair
     // past the cap (`_pair_extents_below`).
     auto plan_extents = [&](bool capped, double &r1_max, double &th) {
+        // A max and a min, exact in any order: rows split over threads, and
+        // a pair whose ratio is plainly over the running minimum (squares,
+        // a 1e-9 margin over their ~1e-16 rounding) skips its root.
+        const std::ptrdiff_t npp = static_cast<std::ptrdiff_t>(np_);
+        int n_chunks = 1;
+#if defined(_OPENMP)
+        n_chunks = std::max(1, std::min<int>(omp_get_max_threads(), static_cast<int>(np_)));
+#endif
+        std::vector<double> mx(static_cast<size_t>(n_chunks), 0.0),
+            mn(static_cast<size_t>(n_chunks), std::numeric_limits<double>::infinity());
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static, 1) num_threads(n_chunks) if (n_chunks > 1)
+#endif
+        for (int ch = 0; ch < n_chunks; ch++) {
+            double r1sq_hi = 0.0, ratio_lo = std::numeric_limits<double>::infinity();
+            for (std::ptrdiff_t i = npp * ch / n_chunks; i < npp * (ch + 1) / n_chunks; i++)
+                for (size_t j = 0; j < np_; j++) {
+                    const double dx = pts[3 * i] - pts[3 * j], dy = pts[3 * i + 1] - pts[3 * j + 1];
+                    const double rho2 = dx * dx + dy * dy;
+                    const double hh = d[i] + d[j];
+                    const double r1sq = rho2 + hh * hh;
+                    r1sq_hi = std::max(r1sq_hi, r1sq);
+                    if (hh > 0.0 && hh * hh > (ratio_lo * ratio_lo) * rho2 * (1.0 + 1e-9)) continue;
+                    const double rho = std::sqrt(rho2);
+                    if (!(rho > 0.0)) continue;
+                    if (capped && !(r1sq <= r1_cap * r1_cap)) continue;
+                    ratio_lo = std::min(ratio_lo, hh / rho);
+                }
+            mx[static_cast<size_t>(ch)] = r1sq_hi;
+            mn[static_cast<size_t>(ch)] = ratio_lo;
+        }
         double r1sq_max = 0.0, ratio_min = std::numeric_limits<double>::infinity();
-        for (size_t i = 0; i < np_; i++)
-            for (size_t j = 0; j < np_; j++) {
-                const double dx = pts[3 * i] - pts[3 * j], dy = pts[3 * i + 1] - pts[3 * j + 1];
-                const double rho2 = dx * dx + dy * dy;
-                const double hh = d[i] + d[j];
-                const double r1sq = rho2 + hh * hh;
-                r1sq_max = std::max(r1sq_max, r1sq);
-                const double rho = std::sqrt(rho2);
-                if (!(rho > 0.0)) continue;
-                if (capped && !(r1sq <= r1_cap * r1_cap)) continue;
-                ratio_min = std::min(ratio_min, hh / rho);
-            }
+        for (int ch = 0; ch < n_chunks; ch++) {
+            r1sq_max = std::max(r1sq_max, mx[static_cast<size_t>(ch)]);
+            ratio_min = std::min(ratio_min, mn[static_cast<size_t>(ch)]);
+        }
         r1_max = std::sqrt(r1sq_max);
         th = std::atan(ratio_min);
     };
@@ -442,19 +471,62 @@ std::string grazing_refusal(const Front &s, const std::vector<double> &plan_skip
             const double tq = 0.5 * (x + 1.0);
             for (int c = 0; c < 3; c++) src.push_back(s.seg_p0[3 * g + c] + (tq * s.seg_h[g]) * s.seg_t[3 * g + c]);
         }
-    double best = std::numeric_limits<double>::infinity(), best_hh = 0.0, near = std::numeric_limits<double>::infinity();
-    for (size_t i = 0; i < s.obs_pts.size() / 3; i++) {
-        const double d_o = gz - s.obs_pts[3 * i + 2];
-        for (size_t j = 0; j < src.size() / 3; j++) {
-            const double rho = std::hypot(s.obs_pts[3 * i] - src[3 * j], s.obs_pts[3 * i + 1] - src[3 * j + 1]);
-            const double hh = d_o + (gz - src[3 * j + 2]);
-            double th = std::atan2(hh, rho);
-            if (std::sqrt(rho * rho + hh * hh) > r1_cap) th = std::numeric_limits<double>::infinity();
-            near = std::min(near, std::fabs(th - floor));
-            if (th < best) {
-                best = th;
-                best_hh = hh;
+    // Only a pair with theta at or under U = max(th_min, floor) can move the
+    // answer: a lower minimum replaces th_min (and its depth) only when under
+    // it, and `near` is asked only whether some theta sits within 1e-12 of
+    // the floor. So a pair whose depth sum clears tan(U) (1 + 1e-6) times its
+    // separation is past U by far more than atan2's ulp and is skipped, and
+    // a pair past the cap is +inf (no effect) without its atan2. The kept
+    // pairs are the same arithmetic in the same (i, j) order; per-chunk
+    // minima merge in chunk order with the strict `<`, so the first minimum
+    // (and its depth) is the serial loop's at any thread count.
+    const double u_th = std::max(th_min, floor);
+    const double t_skip = u_th * (1.0 + 1e-6) < 0.5 * M_PI ? std::tan(u_th) * (1.0 + 1e-6)
+                                                          : std::numeric_limits<double>::infinity();
+    const double t_skip2 = (t_skip * t_skip) * (1.0 + 1e-9);
+    const std::ptrdiff_t n_obs = static_cast<std::ptrdiff_t>(s.obs_pts.size() / 3);
+    const size_t n_src = src.size() / 3;
+    struct Min3 {
+        double best, best_hh, near;
+    };
+    int n_chunks = 1;
+#if defined(_OPENMP)
+    n_chunks = std::max(1, std::min<int>(omp_get_max_threads(), static_cast<int>(n_obs)));
+#endif
+    std::vector<Min3> part(static_cast<size_t>(n_chunks), Min3{std::numeric_limits<double>::infinity(), 0.0,
+                                                               std::numeric_limits<double>::infinity()});
+#if defined(_OPENMP)
+    #pragma omp parallel for schedule(static, 1) num_threads(n_chunks) if (n_chunks > 1)
+#endif
+    for (int ch = 0; ch < n_chunks; ch++) {
+        const std::ptrdiff_t i0 = n_obs * ch / n_chunks, i1 = n_obs * (ch + 1) / n_chunks;
+        Min3 m = part[static_cast<size_t>(ch)];
+        for (std::ptrdiff_t i = i0; i < i1; i++) {
+            const double d_o = gz - s.obs_pts[3 * i + 2];
+            for (size_t j = 0; j < n_src; j++) {
+                const double dx = s.obs_pts[3 * i] - src[3 * j], dy = s.obs_pts[3 * i + 1] - src[3 * j + 1];
+                const double hh = d_o + (gz - src[3 * j + 2]);
+                // The skip on squares (no hypot): its rounding is ~1e-16
+                // against the 1e-6 margin, and inf or NaN never skips.
+                if (hh > 0.0 && hh * hh > t_skip2 * (dx * dx + dy * dy)) continue;
+                const double rho = std::hypot(dx, dy);
+                if (std::sqrt(rho * rho + hh * hh) > r1_cap) continue;
+                const double th = std::atan2(hh, rho);
+                m.near = std::min(m.near, std::fabs(th - floor));
+                if (th < m.best) {
+                    m.best = th;
+                    m.best_hh = hh;
+                }
             }
+        }
+        part[static_cast<size_t>(ch)] = m;
+    }
+    double best = std::numeric_limits<double>::infinity(), best_hh = 0.0, near = std::numeric_limits<double>::infinity();
+    for (const Min3 &m : part) {
+        near = std::min(near, m.near);
+        if (m.best < best) {
+            best = m.best;
+            best_hh = m.best_hh;
         }
     }
     if (best < th_min) {
