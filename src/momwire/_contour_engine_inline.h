@@ -17,6 +17,8 @@
 //   wynn_epsilon     best even column, elementwise, finite-guarded
 //   head_contour     first-quadrant half-sine detour lam(t) = t + jH sin(pi t/a)
 //   tail_below       real-axis tail panelled at the J0(lam rho) zeros
+//   wa_estimate      its optional weighted-averages stop (momwire#1441;
+//                    `_wa_estimate`, the below/below family only)
 //   run_contour      a = 1.1 max(|k_p|, |k_m|), marks = (k_p, |Re k_m|)
 //
 // THE THREE MEASURED GUARDS in `tail_below` are transcribed verbatim, because
@@ -461,6 +463,59 @@ static inline int head_contour(const F &f, double a, double rho,
     return ne - 1;
 }
 
+// `_sommerfeld_below._tail_below`'s weighted-averages stop (momwire#1441):
+// Mosig-Michalski weighted averages as Sidi's W-algorithm, on the tail's
+// partial sums at the J0 zero lattice. `pow` is one remainder power per
+// component (null = the plain walk, which every caller but the below/below
+// family gets); the rest are `_WA_ORDER`, `_WA_MIN_SUMS`, `_WA_AGREE`.
+struct WaRule {
+    const double *pow;
+    int order;
+    int min_sums;
+    int agree;
+};
+
+// At most this many lattice sums in the W table (`_WA_ORDER` + 1 <= this).
+const int MW_WA_KEEP = 16;
+
+// `_wa_estimate`: omega_n = (-1)^n (xi_n/xi_0)^p e^{-(xi_n - xi_0) h} (the
+// window-normalised remainder estimate; a constant factor in omega cancels
+// from M/N), divided differences in t = 1/xi. `xs`, `odd` and `s` (k, NC) are
+// the window oldest first. Returns false where numpy returns None.
+template <int NC>
+static inline bool wa_estimate(const double *xs, const bool *odd, const cd *s,
+                               int k, const double *pw, double h, cd *est) {
+    const double span = (xs[k - 1] - xs[0]) * h;
+    if (span > 600.0) return false;
+    double t[MW_WA_KEEP];
+    cd m[MW_WA_KEEP * NC];
+    cd nn[MW_WA_KEEP * NC];
+    for (int i = 0; i < k; ++i) {
+        t[i] = 1.0 / xs[i];
+        const double ex = std::exp(-(xs[i] - xs[0]) * h);
+        const double sg = odd[i] ? -1.0 : 1.0;
+        for (int c = 0; c < NC; ++c) {
+            const double om = sg * std::pow(xs[i] / xs[0], pw[c]) * ex;
+            m[i * NC + c] = s[i * NC + c] / om;
+            nn[i * NC + c] = cd(1.0 / om, 0.0);
+        }
+    }
+    for (int j = 1; j < k; ++j) {
+        for (int i = 0; i + j < k; ++i) {
+            const double dt = t[i + j] - t[i];
+            for (int c = 0; c < NC; ++c) {
+                m[i * NC + c] = (m[(i + 1) * NC + c] - m[i * NC + c]) / dt;
+                nn[i * NC + c] = (nn[(i + 1) * NC + c] - nn[i * NC + c]) / dt;
+            }
+        }
+    }
+    for (int c = 0; c < NC; ++c) {
+        est[c] = m[c] / nn[c];
+        if (!mw_finite(est[c])) return false;
+    }
+    return true;
+}
+
 // `_tail_below`: the integral from a to infinity along the real axis,
 // panelled at the J0(lam rho) zeros. See the header comment for the three
 // guards; each one is load-bearing.
@@ -469,7 +524,7 @@ static inline void tail_below(const F &f, double a, double rho, double h,
                               const cd *ref, double rtol, const double *gx,
                               const double *gw, int ng, int max_panels,
                               cd *out, int *parts_out, bool *converged_out,
-                              bool *accel_out) {
+                              bool *accel_out, const WaRule *wa = 0) {
     const double INF = std::numeric_limits<double>::infinity();
     double dl_decay = (h > 0.0) ? (1.5 / h) : INF;
     if (!std::isfinite(dl_decay)) dl_decay = std::max(1.0, 10.0 * a);
@@ -487,15 +542,26 @@ static inline void tail_below(const F &f, double a, double rho, double h,
     cd contrib[NC];
     cd ring[MW_TAIL_KEEP * NC];
 
+    // The weighted-averages window: the last `wa->order + 1` lattice sums.
+    const bool use_wa = (wa != 0) && (wa->pow != 0) && std::isfinite(lat);
+    double wa_x[MW_WA_KEEP];
+    bool wa_odd[MW_WA_KEEP];
+    cd wa_s[MW_WA_KEEP * NC];
+    cd wa_prev[NC], wa_est[NC];
+    int wa_n = 0, agree = 0;
+    bool have_prev = false;
+    const int wa_keep = use_wa ? std::min(wa->order + 1, MW_WA_KEEP) : 0;
+
     double z = a;
     int parts = 0, quiet = 0;
     bool converged = false;
     while (parts < max_panels) {
         double nz = INF;
+        double n = 0.0;
         if (std::isfinite(lat)) {
             // The `+ 1e-9` is the zero-length-panel guard: without it a z
             // sitting exactly on the lattice floors back onto itself.
-            const double n = std::floor((z - off) / lat + 1e-9) + 1.0;
+            n = std::floor((z - off) / lat + 1e-9) + 1.0;
             nz = off + n * lat;
         }
         const double znext = std::min(nz, z + dl_decay);
@@ -522,6 +588,45 @@ static inline void tail_below(const F &f, double a, double rho, double h,
             }
         } else {
             quiet = 0;
+        }
+        if (use_wa && znext == nz) {
+            // A lattice-aligned sum: the walk landed on J0's n-th zero.
+            if (wa_n == wa_keep) {
+                for (int i = 1; i < wa_n; ++i) {
+                    wa_x[i - 1] = wa_x[i];
+                    wa_odd[i - 1] = wa_odd[i];
+                    for (int c = 0; c < NC; ++c)
+                        wa_s[(i - 1) * NC + c] = wa_s[i * NC + c];
+                }
+                --wa_n;
+            }
+            wa_x[wa_n] = z;
+            wa_odd[wa_n] = std::fmod(n, 2.0) != 0.0;
+            for (int c = 0; c < NC; ++c) wa_s[wa_n * NC + c] = acc[c];
+            ++wa_n;
+            bool have = false;
+            if (wa_n >= 3)
+                have = wa_estimate<NC>(wa_x, wa_odd, wa_s, wa_n, wa->pow, h,
+                                       wa_est);
+            if (have && have_prev && wa_n >= wa->min_sums) {
+                double d = 0.0;
+                for (int c = 0; c < NC; ++c)
+                    d = std::max(d, std::abs(wa_est[c] - wa_prev[c]));
+                if (d < rtol * smax) {
+                    if (++agree >= wa->agree) {
+                        for (int c = 0; c < NC; ++c) acc[c] = wa_est[c];
+                        converged = true;
+                        break;
+                    }
+                } else {
+                    agree = 0;
+                }
+            } else if (!have) {
+                agree = 0;
+            }
+            have_prev = have;
+            if (have)
+                for (int c = 0; c < NC; ++c) wa_prev[c] = wa_est[c];
         }
     }
 
@@ -554,7 +659,8 @@ static inline ContourHealth run_contour(const F &f, double k_p, const cd &k_m,
                                         double rho, double h, double rtol,
                                         int depth, double detour,
                                         const double *gx, const double *gw,
-                                        int ng, int max_panels, cd *out) {
+                                        int ng, int max_panels, cd *out,
+                                        const WaRule *wa = 0) {
     const double a = 1.1 * std::max(std::abs(k_p), std::abs(k_m));
     const double marks[2] = {k_p, std::abs(k_m.real())};
     cd head[NC], tail[NC];
@@ -562,7 +668,7 @@ static inline ContourHealth run_contour(const F &f, double k_p, const cd &k_m,
     hh.head_panels = head_contour<NC>(f, a, rho, marks, 2, rtol, depth, detour,
                                       gx, gw, ng, head);
     tail_below<NC>(f, a, rho, h, head, rtol, gx, gw, ng, max_panels, tail,
-                   &hh.tail_panels, &hh.converged, &hh.accel);
+                   &hh.tail_panels, &hh.converged, &hh.accel, wa);
     for (int c = 0; c < NC; ++c) out[c] = head[c] + tail[c];
     return hh;
 }

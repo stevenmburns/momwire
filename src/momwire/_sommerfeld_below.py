@@ -165,6 +165,39 @@ _DETOUR_COARSE = 1.2
 # keeps its value.
 _MAX_TAIL_PANELS = 24000
 
+# The below/below tail's extrapolation (momwire#1441): Mosig–Michalski
+# weighted averages, run as Sidi's W-algorithm on the tail's partial sums at
+# the J₀ zero lattice ξ_n = (n − ¼)π/ρ, with the analytic remainder estimate
+#
+#     S − S_n ≈ ω_n Σ_i c_i ξ_n^{−i},   ω_n = (−1)^n ξ_n^{p} e^{−ξ_n h},
+#
+# p the large-λ power of each integrand's amplitude (`_WA_POW`: D₂ ~ λ^{−3},
+# D₁ ~ λ^{−1}, |J₀|, |J₁| ~ (λρ)^{−½}, J₁/x one power lower). The W-algorithm
+# eliminates the c_i exactly, so a grazing node — whose tail used to walk to
+# λ ≈ ln(1/rtol)/h, ~6.4/tan θ panels, 7,000 at 0.05° — stops in ~20 panels.
+#
+# What it changes and what it does not. The quiet test runs first on every
+# panel, unchanged, so a node whose tail goes quiet by itself (every steep
+# node: the 1.5/h decay cap makes its panels shorter than the lattice) stops
+# exactly as before, bit for bit. WA stops a walk only when two successive
+# estimates in a row agree to rtol × the same scale the quiet test uses, and
+# never before `_WA_MIN_SUMS` lattice sums. The Wynn fallback at the panel
+# budget is untouched. Measured against an mpmath reference
+# (scratch/wa-tail/): see the PR.
+#
+# `_TAIL_WA` is the A/B switch (tests flip it; nothing else should).
+_TAIL_WA = True
+_WA_ORDER = 10
+_WA_MIN_SUMS = 4
+_WA_AGREE = 2
+_WA_POW = (-0.5, -0.5, -0.5, -1.5, -2.5, -0.5)
+
+
+def _wa_pow():
+    """The below/below integrands' remainder powers, or None when WA is off."""
+    return _WA_POW if _TAIL_WA else None
+
+
 # Cap on the R₁ a below/below grid will tabulate, in IN-MEDIUM wavelengths
 # λ_m = 2π/|k_m|. See `SommerfeldGridBelow` for why this is a product-regime
 # number and not the ±=+ family's 15λ.
@@ -580,8 +613,13 @@ _GXC, _GWC = (np.array(a) for a in leggauss(_GAUSS_N_COARSE))
 # ITS OWN capability flag, deliberately NOT `contour_engine_568`: a .so built
 # at U1 exports the engine's test entry points but none of these symbols, and
 # a shared flag would have it claim a contract it cannot serve.
-_HAVE_BELOW_FILLS_ACCEL = _acc is not None and bool(
-    getattr(_acc, "below_fills_568", False)
+_HAVE_BELOW_FILLS_ACCEL = (
+    _acc is not None
+    and bool(getattr(_acc, "below_fills_568", False))
+    # momwire#1441: the batch takes the weighted-averages tail rule. A binary
+    # built before it would fill a table with the OLD tail under the new
+    # key, so it is not used at all (the numpy engine serves instead).
+    and bool(getattr(_acc, "below_tail_wa_1441", False))
 )
 
 # momwire#1290: the AVX2 build runs the replay kernel's blocked stages four
@@ -604,6 +642,19 @@ _FORCE_NUMPY = bool(os.environ.get("MOMWIRE_BELOW_FORCE_NUMPY"))
 def _use_below_accel():
     """True when the below/below fills should ride the C++ contour engine."""
     return _HAVE_BELOW_FILLS_ACCEL and not _FORCE_NUMPY
+
+
+def _wa_accel_kw():
+    """The tail rule for `below_six_integrals_batch`. An empty array is the
+    plain walk; a build without the keyword predates #1441 and is refused
+    rather than silently serving the old rule (`_HAVE_BELOW_TAIL_WA`)."""
+    pw = _wa_pow()
+    return {
+        "wa_pow": np.zeros(0) if pw is None else np.asarray(pw, dtype=float),
+        "wa_order": _WA_ORDER,
+        "wa_min_sums": _WA_MIN_SUMS,
+        "wa_agree": _WA_AGREE,
+    }
 
 
 def _six_below_accel(k_p, k_m, rho, h, rtol, selfconv):
@@ -635,6 +686,7 @@ def _six_below_accel(k_p, k_m, rho, h, rtol, selfconv):
         _GWC,
         _MAX_TAIL_PANELS,
         cancel_flag=_cancel.ptr(),
+        **_wa_accel_kw(),
     )
 
 
@@ -920,7 +972,43 @@ def _head(f, a, rho, marks, rtol, depth, detour, gx, gw):
     return total, len(e) - 1
 
 
-def _tail_below(f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS):
+def _wa_estimate(xs, sums, odd, wa_pow, h):
+    """Sidi's W-algorithm over the lattice sums `sums` (k, NC) at ξ = `xs`,
+    remainder estimate ω_n = (−1)^n ξ_n^p e^{−ξ_n h} per component; None when
+    the window spans too many e-folds for ω to be represented.
+
+    ω is normalised to the window's first point — a constant factor in ω
+    cancels from M/N — so e^{−ξh} cannot underflow on a far lattice point.
+    The divided differences run in t = 1/ξ, the variable the c_i are a
+    series in.
+    """
+    xi = np.asarray(xs, dtype=float)
+    span = (xi[-1] - xi[0]) * h
+    if span > 600.0:
+        return None
+    sign = np.where(np.asarray(odd), -1.0, 1.0)
+    om = (
+        sign[:, None]
+        * (xi / xi[0])[:, None] ** np.asarray(wa_pow, dtype=float)[None, :]
+        * np.exp(-(xi - xi[0]) * h)[:, None]
+    )
+    t = 1.0 / xi
+    m = np.asarray(sums) / om
+    nn = 1.0 / om
+    k = len(xi)
+    for j in range(1, k):
+        dt = (t[j:] - t[: k - j])[:, None]
+        m = (m[1:] - m[:-1]) / dt
+        nn = (nn[1:] - nn[:-1]) / dt
+    est = m[0] / nn[0]
+    if not np.all(np.isfinite(est)):
+        return None
+    return est
+
+
+def _tail_below(
+    f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS, wa_pow=None
+):
     """∫ from a to ∞ along the real axis, panelled at the J₀(λρ) zeros.
 
     Three guards, each one a measured phase-0 trap:
@@ -938,6 +1026,10 @@ def _tail_below(f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS):
       the relative test is floored by `ref` (the head's scale), so a
       remainder sitting decades below the divided-out factor still
       terminates on an absolute bar rather than chasing its own ulps.
+
+    `wa_pow` (momwire#1441) turns on the weighted-averages stop: one
+    remainder power per component (`_WA_POW`), None for the plain walk —
+    which is what the transmitted family, sharing this function, gets.
     """
     dl_decay = (1.5 / h) if h > 0 else np.inf
     if not np.isfinite(dl_decay):
@@ -958,8 +1050,13 @@ def _tail_below(f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS):
     quiet = 0
     converged = False
     ref_scale = float(np.max(np.abs(ref))) if ref is not None else 0.0
+    use_wa = wa_pow is not None and np.isfinite(lat)
+    wa_x, wa_s, wa_odd = [], [], []
+    wa_prev = None
+    agree = 0
     while parts < max_panels:
-        znext = min(next_zero(z), z + dl_decay)
+        zl = next_zero(z)
+        znext = min(zl, z + dl_decay)
         contrib = _adaptive_segment(f, z, znext, rtol, 6, gx, gw, ref=ref_scale)
         acc = contrib if acc is None else acc + contrib
         sums.append(acc.copy())
@@ -974,6 +1071,28 @@ def _tail_below(f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS):
                 break
         else:
             quiet = 0
+        if use_wa and znext == zl:
+            # A lattice-aligned sum: the walk landed on J₀'s n-th zero.
+            wa_x.append(z)
+            wa_s.append(acc.copy())
+            wa_odd.append(round((z - off) / lat) % 2 == 1)
+            if len(wa_x) > _WA_ORDER + 1:
+                del wa_x[0], wa_s[0], wa_odd[0]
+            est = None
+            if len(wa_x) >= 3:
+                est = _wa_estimate(wa_x, wa_s, wa_odd, wa_pow, h)
+            if est is not None and wa_prev is not None and len(wa_x) >= _WA_MIN_SUMS:
+                if float(np.max(np.abs(est - wa_prev))) < rtol * smax:
+                    agree += 1
+                    if agree >= _WA_AGREE:
+                        acc = est
+                        converged = True
+                        break
+                else:
+                    agree = 0
+            elif est is None:
+                agree = 0
+            wa_prev = est
     accel = False
     if not converged and len(sums) >= 8:
         acc = _wynn_epsilon(np.array(sums[-min(len(sums), 41) :]))
@@ -982,7 +1101,18 @@ def _tail_below(f, a, rho, h, ref, rtol, gx, gw, max_panels=_MAX_TAIL_PANELS):
 
 
 def _run_contour(
-    f, k_p, k_m, rho, h, rtol, depth, detour, gx, gw, max_panels=_MAX_TAIL_PANELS
+    f,
+    k_p,
+    k_m,
+    rho,
+    h,
+    rtol,
+    depth,
+    detour,
+    gx,
+    gw,
+    max_panels=_MAX_TAIL_PANELS,
+    wa_pow=None,
 ):
     """Head + tail for ONE contour. `h` is the TAIL'S DECAY LENGTH, not a
     coordinate: the below/below integrand decays as e^{−γ_m h} with
@@ -991,12 +1121,13 @@ def _run_contour(
     as surely. `max_panels` is the transmitted family's other handle: its
     grazing rows need a bigger budget than any below/below geometry does,
     and the default keeps this family's numbers bit-for-bit unchanged.
+    `wa_pow` is `_tail_below`'s; the below/below callers pass `_wa_pow()`.
     """
     a = 1.1 * max(abs(k_p), abs(k_m))
     marks = (k_p, abs(k_m.real))
     head, hp = _head(f, a, rho, marks, rtol, depth, detour, gx, gw)
     tail, tp, conv, accel = _tail_below(
-        f, a, rho, h, head, rtol, gx, gw, max_panels=max_panels
+        f, a, rho, h, head, rtol, gx, gw, max_panels=max_panels, wa_pow=wa_pow
     )
     return head + tail, hp, tp, conv, accel
 
@@ -1026,6 +1157,12 @@ def _refuse_if_capped(conv, panels, rho, h, where=None):
     momwire#838's floor). This fires for a query
     BELOW the floor, or for a soil whose panel demand is worse than any
     measured — which is the case that used to return a confident number.
+
+    Under the weighted-averages tail (momwire#1441, `_TAIL_WA`) a below/below
+    node converges in tens of panels at any angle, down to h = 0, so this is
+    a safety net under the WA stop rather than a limit anything reaches; the
+    floor and the cap stay, unchanged, because they are what the plain walk
+    (and the grid bands built around it) were measured against.
     """
     if conv:
         return
@@ -1094,7 +1231,17 @@ def _six_integrals_below(
         return _integrand_six_below(lam, rho, h, k_p, k_m)
 
     fine, hp, tp, conv, accel = _run_contour(
-        f, k_p, k_m, rho, h, min(rtol, 1e-11), _ADAPT_DEPTH, _DETOUR, _GX, _GW
+        f,
+        k_p,
+        k_m,
+        rho,
+        h,
+        min(rtol, 1e-11),
+        _ADAPT_DEPTH,
+        _DETOUR,
+        _GX,
+        _GW,
+        wa_pow=_wa_pow(),
     )
     if health is not None:
         health.note(where, tp, hp, conv, accel)
@@ -1111,6 +1258,7 @@ def _six_integrals_below(
             _DETOUR_COARSE,
             _GXC,
             _GWC,
+            wa_pow=_wa_pow(),
         )
         scale = np.maximum(np.abs(fine), 1e-300)
         rel = float(np.max(np.abs(fine - coarse) / scale))

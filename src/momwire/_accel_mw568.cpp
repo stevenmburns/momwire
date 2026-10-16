@@ -337,7 +337,7 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
                           bool selfconv, double rtol_coarse, int depth_coarse,
                           double detour_coarse, const double *gxc,
                           const double *gwc, int ngc, int max_panels,
-                          SixResult &r) {
+                          const mw_contour::WaRule *wa, SixResult &r) {
     SixBelow f;
     f.rho = rho;
     f.h = h;
@@ -345,7 +345,7 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
     f.k_m = k_m;
     const mw_contour::ContourHealth hh = mw_contour::run_contour<6>(
         f, k_p, k_m, rho, h, rtol_fine, depth, detour, gx, gw, ng, max_panels,
-        r.val);
+        r.val, wa);
     r.head_panels = hh.head_panels;
     r.tail_panels = hh.tail_panels;
     r.converged = hh.converged;
@@ -355,7 +355,7 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
         cd coarse[6];
         mw_contour::run_contour<6>(f, k_p, k_m, rho, h, rtol_coarse,
                                    depth_coarse, detour_coarse, gxc, gwc, ngc,
-                                   max_panels, coarse);
+                                   max_panels, coarse, wa);
         double worst = 0.0;
         for (int c = 0; c < 6; ++c) {
             const double scale = std::max(std::abs(r.val[c]), 1e-300);
@@ -781,9 +781,29 @@ static py::tuple below_six_integrals_batch(
     bool selfconv, double rtol_coarse, int depth_coarse, double detour_coarse,
     py::array_t<double, py::array::c_style | py::array::forcecast> gxc,
     py::array_t<double, py::array::c_style | py::array::forcecast> gwc,
-    int max_panels, uintptr_t cancel_flag = 0) {
+    int max_panels, uintptr_t cancel_flag = 0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> wa_pow =
+        py::array_t<double>(0),
+    int wa_order = 10, int wa_min_sums = 4, int wa_agree = 2) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
+    // momwire#1441: the weighted-averages tail rule; an empty `wa_pow` is the
+    // plain walk. Validated here, where a bad rule can still raise.
+    mw_contour::WaRule wa_rule;
+    wa_rule.pow = 0;
+    wa_rule.order = wa_order;
+    wa_rule.min_sums = wa_min_sums;
+    wa_rule.agree = wa_agree;
+    if (wa_pow.size() != 0) {
+        if (wa_pow.ndim() != 1 || wa_pow.shape(0) != 6)
+            throw std::invalid_argument("wa_pow must be empty or shape (6,)");
+        if (wa_order < 2 || wa_order + 1 > mw_contour::MW_WA_KEEP)
+            throw std::invalid_argument("wa_order out of range");
+        if (wa_min_sums < 3 || wa_agree < 1)
+            throw std::invalid_argument("wa_min_sums >= 3 and wa_agree >= 1");
+        wa_rule.pow = wa_pow.data();
+    }
+    const mw_contour::WaRule *wa = &wa_rule;
     const py::ssize_t n = rb.shape(0);
     if (hb.shape(0) != n)
         throw std::invalid_argument("rho and h must have the same length");
@@ -821,7 +841,7 @@ static py::tuple below_six_integrals_batch(
             mw568_below::six_below_one(
                 rb(i), hb(i), k_p, km, rtol_fine, depth, detour, gxp, gwp, ng,
                 selfconv, rtol_coarse, depth_coarse, detour_coarse, gxcp, gwcp,
-                ngc, max_panels, r);
+                ngc, max_panels, wa, r);
             for (int c = 0; c < 6; ++c) vb(i, c) = r.val[c];
             tp[i] = r.tail_panels;
             hp[i] = r.head_panels;
@@ -2675,7 +2695,12 @@ void register_mw568(py::module_ &m) {
           py::arg("gx"), py::arg("gw"), py::arg("selfconv"),
           py::arg("rtol_coarse"), py::arg("depth_coarse"),
           py::arg("detour_coarse"), py::arg("gxc"), py::arg("gwc"),
-          py::arg("max_panels"), py::arg("cancel_flag") = 0);
+          py::arg("max_panels"), py::arg("cancel_flag") = 0,
+          py::arg("wa_pow") = py::array_t<double>(0), py::arg("wa_order") = 10,
+          py::arg("wa_min_sums") = 4, py::arg("wa_agree") = 2);
+    // momwire#1441: the batch takes the weighted-averages tail rule
+    // (`wa_pow` empty = the plain walk).
+    m.attr("below_tail_wa_1441") = true;
     m.def("remainder_field_proj_batch_below", &remainder_field_proj_batch_below,
           "Interpolated + projected below/below remainder table — the complex-"
           "wavenumber TWIN of remainder_field_proj_batch (which carries a "
