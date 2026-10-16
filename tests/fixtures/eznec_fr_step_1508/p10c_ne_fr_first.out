@@ -1,0 +1,50 @@
+1
+ x13
+
+
+
+                                ***********************************************
+                                *                                             *
+                                *  NUMERICAL ELECTROMAGNETICS CODE (NEC-5)    *
+                                *                                             *
+                                ***********************************************
+
+
+
+
+                      **********************************************************
+
+                          momwire#1508 probe p10c_ne_fr_first                                          
+                                                                                                       
+
+                      **********************************************************
+
+
+
+
+
+                                 - - - STRUCTURE SPECIFICATION - - -
+
+                                     COORDINATES MUST BE INPUT IN
+                                     METERS OR BE SCALED TO METERS
+                                     BEFORE STRUCTURE INPUT IS ENDED
+
+ Model definition commands:
+
+ GW    1    21  0.00000E+00 -2.50000E+00  1.00000E+01  0.00000E+00  2.50000E+00  1.00000E+01  1.00000E-03
+ GE    0    0
+
+ Number of nodes :    22
+ Number of wire elements :    21
+ Number of patch elements:     0
+ Number unknowns:    20
+
+
+
+
+ ***** INPUT LINE  1  FR   0    2    0    0  2.80000E+01  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  2  EX   0    1   11    0  1.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+ ***** INPUT LINE  3  NE   0    1    1    3  0.00000E+00  0.00000E+00  9.00000E+00  0.00000E+00  0.00000E+00  1.00000E+00
+ ***** INPUT LINE  4  EN   0    0    0    0  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00  0.00000E+00
+
+ RUN TIME =     0.020

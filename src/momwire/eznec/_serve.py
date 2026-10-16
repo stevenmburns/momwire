@@ -4510,7 +4510,7 @@ def _loading_row(card: Nec5Load | Nec5Conductivity) -> LoadRow:
     )
 
 
-def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
+def serve(deck: Nec5Deck, *, basis: str = BASIS, shared: dict | None = None) -> RunData:
     """Solve one rung-1 deck and return everything its printout reports.
 
     ``basis`` is one of ``momwire.deck._solver.BASES`` — the same names
@@ -4524,8 +4524,13 @@ def serve(deck: Nec5Deck, *, basis: str = BASIS) -> RunData:
     cheap, card-level answer.  A basis that cannot host THIS deck refuses
     here too, by name, through the same channel — a printout that says which
     basis could not do what is worth more than a traceback EZNEC discards.
+
+    ``shared`` is a stepping ``FR``'s sweep state (momwire#1508): one dict
+    for every frequency of one deck, which keeps the fill's
+    wavenumber-independent half (:func:`_port_solution`) across them.
+    ``None`` is a one-point deck, solved exactly as it always was.
     """
-    return _finish(deck, _prepare(deck, basis=basis))
+    return _finish(deck, _prepare(deck, basis=basis, shared=shared))
 
 
 def serve_runs(decks: list[Nec5Deck], *, basis: str = BASIS) -> list[RunData]:
@@ -4579,9 +4584,11 @@ class _Prepared:
     source_sites: frozenset
 
 
-def _prepare(deck: Nec5Deck, *, basis: str = BASIS) -> _Prepared:
+def _prepare(
+    deck: Nec5Deck, *, basis: str = BASIS, shared: dict | None = None
+) -> _Prepared:
     """The structure half of :func:`serve`: refusals, mesh, fill, factor and
-    the per-port solution."""
+    the per-port solution. ``shared``: :func:`serve`'s."""
     reason = refusal(deck)
     if reason is not None:
         raise ServeRefusal(reason)
@@ -4677,7 +4684,7 @@ def _prepare(deck: Nec5Deck, *, basis: str = BASIS) -> _Prepared:
         # NotImplementedError; on this seam that is a refusal by name, not
         # an INTERNAL ERROR frame (momwire#667).
         raise ServeRefusal(str(exc)) from None
-    solution = solver.compute_port_solution()
+    solution = _port_solution(solver, shared)
     return _Prepared(
         structure=structure,
         mesh=mesh,
@@ -4691,6 +4698,94 @@ def _prepare(deck: Nec5Deck, *, basis: str = BASIS) -> _Prepared:
         solution=solution,
         source_sites=frozenset(source.at for source in deck.sources),
     )
+
+
+def _port_solution(solver, shared: dict | None):
+    """``solver.compute_port_solution()``, sharing the fill's
+    wavenumber-independent half across a stepping ``FR``'s frequencies
+    (momwire#1508).
+
+    Every frequency still gets its OWN solver, built by the one-point path
+    (:func:`_prepare`), so everything that moves with frequency — the
+    loads' impedances, the ground's ε̃(ω), networks and lines, the wire
+    loading — is stamped per step exactly as a one-point deck stamps it.
+    What is shared is what the solvers' own swept entry points share
+    (``RazorSolver._port_solutions_swept``): razor's
+    ``_assemble_Z_prepare`` — the wing/path stencils and the closed-form
+    static segment moments — built once and replayed per frequency through
+    ``compute_port_solution(prepared=...)``, the composition that method is
+    documented to be. It is keyed on the geometry it was built from (a
+    frequency that meshes differently builds its own) and on the kernel,
+    and taken only where the solver's ``compute_port_solution`` is
+    razor's own rather than a subclass's.
+
+    Every other family, and razor's subclasses, solve as a one-point deck
+    does; their per-frequency caches (the Sommerfeld grids and anchors) are
+    shared by running every step in this one process.
+    """
+    if shared is None:
+        return solver.compute_port_solution()
+    from ..razor import RazorSolver
+
+    if (
+        type(solver).compute_port_solution is BSplineSolver.compute_port_solution
+        and not solver.use_singular_enrichment
+    ):
+        geom = solver._build_geometry()
+        # Whole-edge blocks, where the one-point fill builds them per
+        # observer window (momwire#968): shared only while the static and
+        # the per-k regularised block fit the solver's own sweep budget.
+        nm = solver.degree + 1
+        sum_ne2 = sum(
+            (sl.stop - sl.start) ** 2 for sl in solver._same_edge_slices(geom)
+        )
+        if 2 * nm * nm * sum_ne2 * 16 > solver.swept_mem_mb * 2**20:
+            return solver.compute_port_solution()
+        key = ("bspline", type(solver), solver.extended_kernel, _geometry_digest(geom))
+        prep = shared.get(key)
+        if prep is None:
+            prep = shared[key] = solver._same_edge_prep(geom)
+        ((_ki, _k, same_edge_k),) = solver._same_edge_prep_swept_chunks(
+            prep, np.array([solver.k])
+        )
+        return solver.compute_port_solution(same_edge_prep=same_edge_k)
+    if type(solver).compute_port_solution is not RazorSolver.compute_port_solution:
+        return solver.compute_port_solution()
+    geom = solver._build_geometry()
+    key = (type(solver), solver.extended_kernel, _geometry_digest(geom))
+    prepared = shared.get(key)
+    if prepared is None:
+        prepared = shared[key] = solver._assemble_Z_prepare(geom)
+    return solver.compute_port_solution(prepared=prepared)
+
+
+def _geometry_digest(value) -> str:
+    """A content hash of a solver's geometry dict: every array's dtype, shape
+    and bytes and every scalar's repr, walked in key order."""
+    import hashlib
+
+    h = hashlib.sha256()
+
+    def walk(v):
+        if isinstance(v, np.ndarray):
+            h.update(f"a{v.dtype.str}{v.shape}".encode())
+            h.update(np.ascontiguousarray(v).tobytes())
+        elif isinstance(v, Mapping):
+            h.update(b"{")
+            for k in sorted(v, key=repr):
+                h.update(repr(k).encode())
+                walk(v[k])
+            h.update(b"}")
+        elif isinstance(v, (list, tuple)):
+            h.update(b"[")
+            for item in v:
+                walk(item)
+            h.update(b"]")
+        else:
+            h.update(repr(v).encode())
+
+    walk(value)
+    return h.hexdigest()
 
 
 def _finish(deck: Nec5Deck, prepared: _Prepared) -> RunData:

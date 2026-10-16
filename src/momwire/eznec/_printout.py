@@ -1066,6 +1066,11 @@ def _post_ge_cards(deck_text: str) -> list[Card]:
     return cards
 
 
+# The deck's post-``GE`` card images, for a caller outside this module that
+# has to read the deck the way its echo does (momwire#1508's stepping rules).
+post_ge_cards = _post_ge_cards
+
+
 def _card_echo(index: int, card: Card) -> str:
     """``***** INPUT LINE  n  XX`` — four integer fields, then six reals.
 
@@ -1168,12 +1173,14 @@ def _environment(data: RunData) -> list[str]:
     ]
 
 
-def _loading(data: RunData) -> list[str]:
+def _loading(data: RunData, *, allocate: bool = True) -> list[str]:
     """The loading table, or the one line that says there is none.
 
     ``ALLOCATE CM:`` follows immediately, with no blank line between — it is
     printed by whatever allocates the matrix rather than by this section, and
-    lands here in all fifty-seven captures.
+    lands here in all fifty-seven captures.  A stepping ``FR`` allocates once,
+    so only its first frequency prints the line (``allocate=False`` for the
+    rest; momwire#1508's probes).
     """
     lines = [_LOADING_HEADING, ""]
     if not data.loads:
@@ -1181,7 +1188,8 @@ def _loading(data: RunData) -> list[str]:
     else:
         lines += ["", *_LOADING_COLUMNS, ""]
         lines += [_load_row(row) for row in data.loads]
-    lines.append(f"{_ALLOCATE_LABEL}{data.unknown_count**2:15d}")
+    if allocate:
+        lines.append(f"{_ALLOCATE_LABEL}{data.unknown_count**2:15d}")
     return lines
 
 
@@ -1728,6 +1736,63 @@ def render_multi_printout(
         body += _run_sections(data)
     body.append("")
     body += [_card_echo(i, c) for i, c in pending]
+    if terminator is not None:
+        body.append(_card_echo(len(cards), terminator))
+    seconds = sum(r.run_seconds for r in runs) if run_seconds is None else run_seconds
+    body += _closing(seconds, closing=closing)
+    return render_header(deck.source_text, basis=basis) + "\n".join(body) + "\n"
+
+
+def render_stepped_printout(
+    deck: Nec5Deck,
+    runs: list[RunData],
+    *,
+    basis: str | None = None,
+    closing: bool = True,
+    run_seconds: float | None = None,
+) -> str:
+    """A stepping-``FR`` printout (momwire#1508): the one run answered at each
+    frequency in turn, as the licensed NEC-5 lays it out (probed black-box,
+    ``tests/fixtures/eznec_fr_step_1508``):
+
+      * the structure, then the card echoes through the card that runs the
+        sweep (the first ``RP`` or ``XQ``);
+      * per frequency, the frequency, environment, loading and timing
+        sections and the run's results — a frequency block is a whole
+        single-run body, and ``ALLOCATE CM:`` prints in the first one only;
+        one blank more separates a block from the one before it;
+      * the echoes left after the sweep (an ``XQ`` after an ``RP``), the
+        ``EN`` echo and one ``RUN TIME``.
+
+    `runs` are the answers in frequency order.
+    """
+    cards = _post_ge_cards(deck.source_text)
+    terminator = _terminator(cards)
+    numbered = [(i, c) for i, c in enumerate(cards, start=1) if c is not terminator]
+    run_at = next(k for k, (_, c) in enumerate(numbered) if c.mnemonic in ("RP", "XQ"))
+    first = runs[0]
+    body: list[str] = []
+    body += _structure_specification(deck, first)
+    body += _blank(_STRUCTURE_GAP)
+    body += [_card_echo(i, c) for i, c in numbered[: run_at + 1]]
+    body += _blank(_STRUCTURE_GAP)
+    for k, data in enumerate(runs):
+        if k:
+            body.append("")
+        body += _frequency(data)
+        body += _blank(_SECTION_GAP)
+        body += _environment(data)
+        body += _blank(_SECTION_GAP)
+        body += _loading(data, allocate=k == 0)
+        body += _blank(_SECTION_GAP)
+        body += _timing(data)
+        body += _blank(_SECTION_GAP)
+        if data.networks:
+            body += _network_data(data)
+            body += _blank(_SECTION_GAP)
+        body += _run_sections(data)
+    body.append("")
+    body += [_card_echo(i, c) for i, c in numbered[run_at + 1 :]]
     if terminator is not None:
         body.append(_card_echo(len(cards), terminator))
     seconds = sum(r.run_seconds for r in runs) if run_seconds is None else run_seconds

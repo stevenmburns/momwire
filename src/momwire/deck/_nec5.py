@@ -493,6 +493,10 @@ class Nec5Deck:
     transmission_lines: tuple[Nec5TransmissionLine, ...] = ()
     networks: tuple[Nec5Network, ...] = ()
     frequency_mhz: float | None = None
+    # A stepping `FR` (momwire#1508): every frequency it asks for, in order,
+    # the first being `frequency_mhz`. Empty for a one-frequency deck, which
+    # is every deck EZNEC or SimNEC writes.
+    frequencies_mhz: tuple[float, ...] = ()
     requests: tuple[Nec5Request, ...] = ()
     pq: int | None = None
 
@@ -636,6 +640,20 @@ _EX_KINDS = frozenset({0, 4})
 _RP_XNDA = frozenset({1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013})
 
 
+def _stepped_frequencies(
+    first: float, step: float, count: int, *, multiplicative: bool
+) -> tuple[float, ...]:
+    """A stepping ``FR``'s frequencies: ``count`` of them from ``first``, each
+    the previous one plus ``step`` or times ``step``.  Accumulated one step at
+    a time, as NEC-2 steps its frequency loop, rather than ``first + n*step``:
+    the two differ in the last bit, and the loop's value is the one NEC
+    solves at."""
+    out = [float(first)]
+    for _ in range(count - 1):
+        out.append(out[-1] * step if multiplicative else out[-1] + step)
+    return tuple(out)
+
+
 def _rp_xnda_refusal(xnda: int) -> str:
     """The sentence for an ``RP 0`` whose XNDA this engine does not print:
     which digit asks for what, and what to set instead (4nec2 writes these
@@ -753,8 +771,10 @@ class _Nec5Parser:
     No execute-card state machine, unlike :class:`~momwire.deck._nec2.
     _Nec2Parser`.  EZNEC writes one request card per deck and launches the
     engine once per frequency point (capture study, "Sweep protocol"), so
-    there is exactly one operating point in a deck and nothing for a group
-    to separate.  Requests are collected in a tuple anyway, because the
+    there is one operating point in an EZNEC deck and nothing for a group
+    to separate.  A stepping ``FR`` (momwire#1508) is a list of frequencies
+    for that one run, not a group, so it needs no state machine either.
+    Requests are collected in a tuple anyway, because the
     grammar allows more than one and silently dropping the second would be
     the wrong kind of quiet.
     """
@@ -787,6 +807,7 @@ class _Nec5Parser:
         self.lines: list[Nec5TransmissionLine] = []
         self.networks: list[Nec5Network] = []
         self.frequency_mhz: float | None = None
+        self.frequencies_mhz: tuple[float, ...] = ()
         self.requests: list[Nec5Request] = []
         self.pq: int | None = None
         self._saw_en = False
@@ -1489,21 +1510,34 @@ class _Nec5Parser:
     # -- requests ----------------------------------------------------------
 
     def _fr(self, card: Card) -> None:
-        """``FR 0,1,0,0,<MHz>`` — one frequency, always.
+        """``FR`` — one frequency, or a stepped list of them (momwire#1508).
 
-        EZNEC never uses NEC's multi-frequency stepping: a sweep is one
-        process launch per point, each with a freshly regenerated deck
-        (capture study, "Sweep protocol").  A stepping ``FR`` would ask this
-        seam for something its protocol has no way to return.
+        EZNEC and SimNEC never step: a sweep is one process launch per point,
+        each with a freshly regenerated deck (capture study, "Sweep
+        protocol"), so their decks always carry ``FR 0,1,0,0,<MHz>``.  A deck
+        written by hand, or by a front end that hands the engine a whole
+        sweep, may step.  The list is NEC-2's: ``I2`` frequencies starting at
+        ``F``, each the last plus ``dF`` (``I1`` 0) or the last times ``dF``
+        (``I1`` 1), accumulated step by step as NEC-2 does; ``I2`` of 1 or
+        less is one frequency, as it always was here.  The licensed NEC-5
+        reads the card the same way (probed black-box,
+        ``tests/fixtures/eznec_fr_step_1508``).
         """
         n = card.i(1)
-        if n > 1:
-            raise DeckError(
-                f"FR asks for {n} frequency points; this seam is one process per "
-                f"point (EZNEC regenerates the whole deck per frequency and never "
-                f"emits a stepping FR), so a multi-point FR is not served"
-            )
         self.frequency_mhz = card.f(4)
+        if n <= 1:
+            self.frequencies_mhz = ()
+            return
+        stepping = card.i(0)
+        if stepping not in (0, 1):
+            raise DeckError(
+                f"FR stepping type {stepping} is not one NEC defines; 0 steps "
+                f"the frequency by adding the increment and 1 by multiplying "
+                f"by it"
+            )
+        self.frequencies_mhz = _stepped_frequencies(
+            card.f(4), card.f(5), n, multiplicative=stepping == 1
+        )
 
     def _rp(self, card: Card) -> None:
         mode = card.i(0)
@@ -1610,6 +1644,8 @@ class _Nec5Parser:
                 value = list(value)
             elif kind is dict:
                 value = dict(value)
+            elif kind is tuple and all(isinstance(v, _IMMUTABLE_STATE) for v in value):
+                pass  # a stepping FR's frequencies (momwire#1508)
             elif not (isinstance(value, _IMMUTABLE_STATE) or _frozen(value)):
                 raise TypeError(f"parser state {name!r} is a {kind.__name__}")
             other.__dict__[name] = value
@@ -1759,6 +1795,7 @@ class _Nec5Parser:
             transmission_lines=tuple(self.lines),
             networks=tuple(self.networks),
             frequency_mhz=self.frequency_mhz,
+            frequencies_mhz=self.frequencies_mhz,
             requests=tuple(self.requests),
             pq=self.pq,
         )

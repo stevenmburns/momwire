@@ -1,0 +1,8 @@
+CM momwire#1508 probe p05_neg3
+CE
+GW 1 21 0 -2.5 10 0 2.5 10 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 3 0 0 30 -1
+XQ
+EN
