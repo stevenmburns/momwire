@@ -81,26 +81,6 @@ cd py_square(cd x) {  // `x ** 2`: c_powu(x, 2) = c_prod(c_1, c_prod(x, x))
     return py_mul(cd(1.0, 0.0), py_mul(x, x));
 }
 
-// CPython's `cmath.sqrt` for a finite value (numpy's complex sqrt equals it:
-// measured on AVX2 and AVX-512); glibc's csqrt is another algorithm.
-cd py_csqrt(cd z) {
-    if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
-        throw std::domain_error("a non-finite complex square root");
-    if (z.real() == 0.0 && z.imag() == 0.0) return cd(0.0, z.imag());
-    double ax = std::fabs(z.real());
-    const double ay = std::fabs(z.imag());
-    double sq;
-    if (ax < std::numeric_limits<double>::min() && ay < std::numeric_limits<double>::min()) {
-        ax = std::ldexp(ax, 53);
-        sq = std::ldexp(std::sqrt(ax + std::hypot(ax, std::ldexp(ay, 53))), -27);
-    } else {
-        ax /= 8.0;
-        sq = 2.0 * std::sqrt(ax + std::hypot(ax, ay / 8.0));
-    }
-    const double d = ay / (2.0 * sq);
-    if (z.real() >= 0.0) return cd(sq, std::copysign(d, z.imag()));
-    return cd(d, std::copysign(sq, z.imag()));
-}
 
 // numpy's elementwise complex multiply (fused, `_cmul`'s formula).
 inline cd np_mul(cd a, cd b) {
@@ -247,7 +227,9 @@ Grid fill_grid(cd eps_t, double k2, double r1_max, double rtol, double omega, do
     const double lam = 2.0 * PI / g.k2;
     g.r1_max = py_min(py_max(r1_max, 0.35 * lam), R1_CAP_LAMBDA * lam);
     // k1 = self.k2 * np.sqrt(self.lattice_eps): numpy scalar arithmetic
-    const cd root = py_csqrt(lattice_eps);  // np.sqrt == cmath.sqrt (measured)
+    // numpy's complex sqrt is libm's csqrt (4cbda950: cmath.sqrt differs from
+    // it on purely imaginary input; equal elsewhere on the samples measured).
+    const cd root = std::sqrt(lattice_eps);
     cd k1(g.k2 * root.real() - 0.0 * root.imag(), g.k2 * root.imag() + 0.0 * root.real());
     if (k1.imag() > 0) k1 = std::conj(k1);
     const double abs_k1 = std::hypot(k1.real(), k1.imag());
