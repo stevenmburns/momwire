@@ -160,11 +160,10 @@ REF = {
 }
 
 # Vec-norm error (max |got - ref| / max |ref|). MEASURED on Rocketlake over all
-# 41 spot nodes plus 6 more, both machines: worst 3.2e-12 (salt28, R1 = 0.02
-# lam_m, 0.042 deg); componentwise worst 4.5e-11, at a STEEP node whose tail
-# goes quiet before WA can act (fresh1.8 R1 = 1, 45 deg -- main reads the same
-# there). Main's engine at the R1 = 0.02 corner reads up to 4.4e-9 vec-norm
-# (5.9e-8 componentwise) on the same references.
+# 48 nodes of scratch/wa-tail/spot*.jsonl, both machines: worst 3.4e-12, and
+# componentwise worst 4.5e-11, both at salt28, R1 = 0.02 lam_m, 0.042 deg.
+# Main's engine at the R1 = 0.02 corner reads up to 4.4e-9 vec-norm (5.9e-8
+# componentwise) on the same references.
 REF_TOL = 3e-11
 
 
