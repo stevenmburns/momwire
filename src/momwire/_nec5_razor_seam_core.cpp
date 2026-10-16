@@ -130,6 +130,12 @@ std::string written(const Node &n) { return n.node.is_zero() ? std::string("-1")
 std::string at_of(const Node &n) { return n.tag.str() + "," + written(n); }
 
 bool same_node(const Node &a, const Node &b) { return a.tag == b.tag && a.node == b.node; }
+struct PairLess {
+    bool operator()(const std::pair<Int, long long> &a, const std::pair<Int, long long> &b) const {
+        if (a.first != b.first) return a.first < b.first;
+        return a.second < b.second;
+    }
+};
 struct NodeLess {
     bool operator()(const Node &a, const Node &b) const {
         if (a.tag != b.tag) return a.tag < b.tag;
@@ -401,44 +407,194 @@ std::string near_field_refusal(const Deck &d, const Request &rq) {
     return "";
 }
 
-std::string geometry_refusal(const Deck &d) {
-    if (d.ground.kind == Ground::free_space) return "";
-    if (d.ground.kind == Ground::sommerfeld) {
-        // Over GN 0 / GN 2 a wire below the plane is served (the buried
-        // Sommerfeld route, momwire#553), so only an in-plane span refuses,
-        // the first in deck order (a crossing card's halves end in the plane
-        // and are never in it). A buried or crossing wire then declines: the
-        // buried route (and the buried-with-contact sentence that guards it)
-        // is not in C++.
-        bool buried = false;
-        for (const Wire &w : d.wires) {
-            const double tol = touch_tol(w.end1, w.end2);
-            const double za = w.end1[2], zb = w.end2[2];
-            if (std::min(za, zb) < -tol) {
-                buried = true;
-                continue;
-            }
-            if (std::fabs(za) <= tol && std::fabs(zb) <= tol) return refuse_in_plane_wire(w.tag.str());
-        }
-        if (buried) throw Declined{"finite-ground-buried"};
-        return "";
+NodeKey node_key(const double *p);
+void grid_point(const Wire &w, long long n, long long k, double *out);
+
+// --- the plane crossings and the spans (momwire#1281, #1512 B1) -------------
+
+// `_has_interface`: a ground card that puts a plane at z = 0.
+bool has_interface(const Deck &d) { return d.ground.kind != Ground::free_space; }
+
+// `crossings_add`: where a card crossing the plane meets it, on its own
+// tolerance: at a node within it of z = 0 (the first such), else inside the
+// segment whose ends straddle z = 0, at `a + (b - a) * t`, t = za / (za - zb).
+PlaneCrossing crossing_of(const Wire &w, double tol) {
+    if (!w.segment_count.fits_i64()) throw Declined{"segment-count"};
+    const long long n = w.segment_count.i64();
+    if (n < 1 || n > MAX_SEGMENTS) throw Declined{"segment-count"};
+    PlaneCrossing c;
+    c.tag = w.tag;
+    std::vector<double> z(static_cast<size_t>(n + 1));
+    double pt[3];
+    for (long long k = 0; k <= n; k++) {
+        grid_point(w, n, k, pt);
+        z[static_cast<size_t>(k)] = pt[2];
     }
-    const bool gd = d.ground.kind == Ground::mininec;
+    for (long long k = 0; k <= n; k++)
+        if (std::fabs(z[static_cast<size_t>(k)]) <= tol) {
+            grid_point(w, n, k, pt);
+            c.point[0] = pt[0];
+            c.point[1] = pt[1];
+            c.point[2] = 0.0;
+            c.node = k;
+            return c;
+        }
+    const double za = w.end1[2], zb = w.end2[2];
+    const double t = za / (za - zb);
+    for (int q = 0; q < 2; q++) c.point[q] = w.end1[q] + (w.end2[q] - w.end1[q]) * t;
+    c.point[2] = 0.0;
+    for (long long k = 0; k < n; k++)
+        if ((z[static_cast<size_t>(k)] < 0.0) != (z[static_cast<size_t>(k + 1)] < 0.0)) {
+            c.segment = k;
+            return c;
+        }
+    throw std::logic_error("a crossing card with no straddling segment");
+}
+
+}  // namespace
+
+// `_plane_crossings`: every card whose ends lie STRICTLY on opposite sides
+// of the plane, on its own tolerance, in deck order.
+std::vector<PlaneCrossing> plane_crossings(const Deck &d) {
+    std::vector<PlaneCrossing> out;
+    if (!has_interface(d)) return out;
     for (const Wire &w : d.wires) {
         const double tol = touch_tol(w.end1, w.end2);
         const double za = w.end1[2], zb = w.end2[2];
-        const bool across = (za < -tol && zb > tol) || (za > tol && zb < -tol);
-        if (across) {
-            const double zlow = std::min(za, zb);
-            if (!(zlow < -tol * (1.0 + 1e-9))) throw Declined{"crossing-tolerance"};
-            return refuse_buried_no_medium(w.tag.str(), zlow, gd);
+        if ((za < -tol && zb > tol) || (za > tol && zb < -tol)) out.push_back(crossing_of(w, tol));
+    }
+    return out;
+}
+
+const PlaneCrossing *crossing_for(const std::vector<PlaneCrossing> &cs, const Int &tag) {
+    for (const PlaneCrossing &c : cs)
+        if (c.tag == tag) return &c;
+    return nullptr;
+}
+
+// `_span_table`: the conductors the SOLVE sees -- each card, a crossing card
+// as its two halves meeting at the crossing point -- with each span's own
+// tolerance.
+std::vector<Span> span_table(const Deck &d) {
+    const std::vector<PlaneCrossing> cs = plane_crossings(d);
+    std::vector<Span> out;
+    for (const Wire &w : d.wires) {
+        const PlaneCrossing *c = cs.empty() ? nullptr : crossing_for(cs, w.tag);
+        auto add = [&](const double *a, const double *b) {
+            Span s;
+            s.tag = w.tag;
+            std::copy(a, a + 3, s.a);
+            std::copy(b, b + 3, s.b);
+            s.tol = touch_tol(a, b);
+            out.push_back(s);
+        };
+        if (c == nullptr) {
+            add(w.end1, w.end2);
+        } else {
+            add(w.end1, c->point);
+            add(c->point, w.end2);
         }
-        // np.minimum: no NaN reaches here (non-finite geometry declined)
-        const double zmin = std::min(za, zb);
-        const bool below = zmin < -tol;
-        const bool in_plane = !below && std::fabs(za) <= tol && std::fabs(zb) <= tol;
-        if (below) return refuse_buried_no_medium(w.tag.str(), zmin, gd);
-        if (in_plane) return refuse_in_plane_wire(w.tag.str());
+    }
+    return out;
+}
+
+// `_crossing_nodes`: the plane nodes a buried span ENDS on.
+std::set<NodeKey> crossing_nodes(const Deck &d) {
+    std::set<NodeKey> nodes;
+    if (!has_interface(d)) return nodes;
+    for (const Span &s : span_table(d)) {
+        if (!(std::min(s.a[2], s.b[2]) < -s.tol)) continue;
+        for (const double *e : {s.a, s.b})
+            if (std::fabs(e[2]) <= s.tol) nodes.insert(node_key(e));
+    }
+    return nodes;
+}
+
+// `_has_buried_wire`: any span reaching STRICTLY below the plane.
+bool has_buried_wire(const Deck &d) {
+    if (!has_interface(d)) return false;
+    for (const Span &s : span_table(d))
+        if (std::min(s.a[2], s.b[2]) < -s.tol) return true;
+    return false;
+}
+
+namespace {
+
+const char *const REFUSE_BURIED_WITH_CONTACT_TAIL =
+    " is buried "
+    "below it, and that COMBINATION is not served though each half is. "
+    "momwire continues a contact wire's current into the ground as a scaled "
+    "IMAGE, which works only because nothing is ever inside the ground to "
+    "look at it - and a buried wire is exactly that. What a buried wire "
+    "should see is the contact current spreading in the lower medium - a "
+    "real soil current this deck has no conductor for. momwire#524 phase 2 "
+    "measured every consistent spelling of the missing physics against "
+    "engine prints for these decks, and those prints have since been "
+    "withdrawn as a reference (momwire#929): they were captured with the "
+    "ground card's two fields written in the wrong order (antennaknobs#1025), and this deck "
+    "class has no documented spelling at all - the flag that serves buried "
+    "wires leaves a conductor ENDING on the interface without a basis "
+    "function there, and the flag that bonds such an end is documented as "
+    "not usable when wires are buried. The ~3 ohm / ~6 ohm residual and the "
+    "point-electrode reading drawn from it were therefore measured against "
+    "a combination the engine does not document. The refusal stands on "
+    "momwire's own physics and is unchanged: this deck has no conductor for "
+    "the spreading current, so no honest serve of the class exists in "
+    "either convention. Respell the radial - or the whole screen "
+    "of them - to RISE to the surface and join the monopole at z = 0 "
+    "(momwire's native API serves that crossing junction for one above "
+    "wire over N below wires, buried-hub spelling included), raise the "
+    "above-ground wire clear of z = 0 (an elevated feed over a buried "
+    "counterpoise is served), or model the buried structure alone";
+
+std::string refuse_buried_near_field(const std::string &card) {
+    return card +
+           " asks for a field on a deck with a wire below the ground plane, "
+           "and a buried deck's near field is not served. The point evaluator "
+           "composes a direct term, an image term and a Sommerfeld remainder, and "
+           "which three of those a point gets depends on which side of the "
+           "interface it and the source are on - reconciling the two readouts (a "
+           "REMAINDER above, a WHOLE transmitted field across) is momwire#524 phase "
+           "3, and the three crossing regimes refuse by name until it lands. This "
+           "deck's IMPEDANCE, its CURRENTS, its CHARGES and its RADIATION PATTERN "
+           "are all served: drop the " +
+           card + " card, or lift the wire above z = 0";
+}
+
+// `_geometry_refusal`, over the spans: the first span refusing (buried with
+// no lower medium under GN 1 / GD, or in the plane), then over GN 0 / GN 2 a
+// buried span on a deck that also stands an above span's END in the plane
+// that is not a crossing node.
+std::string geometry_refusal(const Deck &d) {
+    if (!has_interface(d)) return "";
+    const bool sommerfeld = d.ground.kind == Ground::sommerfeld;
+    const bool gd = d.ground.kind == Ground::mininec;
+    const std::vector<Span> spans = span_table(d);
+    for (const Span &s : spans) {
+        const double z0 = s.a[2], z1 = s.b[2];
+        const double zmin = std::min(z0, z1);
+        const bool below = zmin < -s.tol;
+        const bool in_plane = !below && std::fabs(z0) <= s.tol && std::fabs(z1) <= s.tol;
+        if (sommerfeld ? in_plane : (below || in_plane)) {
+            if (below) return refuse_buried_no_medium(s.tag.str(), zmin, gd);
+            return refuse_in_plane_wire(s.tag.str());
+        }
+    }
+    const Span *buried = nullptr;
+    for (const Span &s : spans)
+        if (std::max(s.a[2], s.b[2]) < -s.tol) {
+            buried = &s;
+            break;
+        }
+    if (buried == nullptr) return "";
+    const std::set<NodeKey> cnodes = crossing_nodes(d);
+    for (const Span &s : spans) {
+        if (std::max(s.a[2], s.b[2]) <= s.tol) continue;
+        // `contact_ends([pl], 0.0)`, sorted: the end before the start
+        for (const double *e : {s.b, s.a})
+            if (std::fabs(e[2] - 0.0) <= s.tol && !cnodes.count(node_key(e)))
+                return "wire " + s.tag.str() + " stands an END in the ground plane and wire " +
+                       buried->tag.str() + REFUSE_BURIED_WITH_CONTACT_TAIL;
     }
     return "";
 }
@@ -467,7 +623,11 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
         // GN 1 / GD a span below it refused just above, and over GN 0 / GN 2
         // it declined. A near field over a FINITE ground (GN 0 / GN 2 / GD)
         // asks `near_point_refusal` of its grid.
+        const bool buried = has_buried_wire(d);
         for (const Request &r : d.requests) {
+            if (r.kind == Request::near_field && buried)
+                return refuse_buried_near_field(r.magnetic ? "NH (near magnetic field)"
+                                                           : "NE (near electric field)");
             if (r.kind == Request::near_field &&
                 (d.ground.kind == Ground::mininec || d.ground.kind == Ground::sommerfeld)) {
                 const std::string near = near_field_refusal(d, r);
@@ -720,36 +880,16 @@ Prepared prepare(const Deck &d) {
     p.structure.wire_element_count = total;
     for (const auto &kv : degree) p.structure.unknown_count += std::max(kv.second - 1, 0LL);
 
-    // --- `build_mesh` (razor: the delta-gap spelling, nothing cut) ---------
+    // --- `build_mesh` (razor: the delta-gap spelling, cut only at z = 0) -----
     // A phantom GW becomes NO piece (momwire#1139): its elements stay in
-    // `element_of` against piece -1, and its addressed nodes are virtual.
+    // `element_of` against piece -1, and its addressed nodes are virtual. A
+    // card crossing the plane is cut there (`_wire_runs`, momwire#1281).
     p.phantom_tags = phantom_tags(d, p.wavelength);
     const auto is_phantom = [&](const Int &tag) {
         for (const Int &t : p.phantom_tags)
             if (t == tag) return true;
         return false;
     };
-    SeamMesh &mesh = p.mesh;
-    std::vector<long long> piece_of_wire(d.wires.size(), -1);
-    for (size_t i = 0; i < d.wires.size(); i++) {
-        const Wire &w = d.wires[i];
-        if (is_phantom(w.tag)) {
-            for (long long k = 0; k < nseg[i]; k++) mesh.element_of.emplace_back(-1, k);
-            continue;
-        }
-        piece_of_wire[i] = static_cast<long long>(mesh.pieces.size());
-        SeamPiece piece;
-        piece.tag = w.tag;
-        piece.first_node = 0;
-        piece.last_node = nseg[i];
-        std::copy(w.end1, w.end1 + 3, piece.points);
-        std::copy(w.end2, w.end2 + 3, piece.points + 3);
-        piece.radius = w.radius;
-        mesh.pieces.push_back(piece);
-        for (long long k = 0; k < nseg[i]; k++) mesh.element_of.emplace_back(piece_of_wire[i], k);
-    }
-    junctions_of(mesh);
-
     // `_addressed_nodes`: the sources', the lumped loads' and the network
     // ends' (lines, then networks, end A before end B), per tag.
     std::map<Int, std::set<long long>> addressed;
@@ -761,19 +901,137 @@ Prepared prepare(const Deck &d) {
         if (!l.at.node.fits_i64()) throw Declined{"node-range"};
         addressed[l.at.tag].insert(l.at.node.i64());
     }
-    std::vector<Node> network_ends;
-    for (const TransmissionLine &t : d.transmission_lines) {
-        network_ends.push_back(t.end_a);
-        network_ends.push_back(t.end_b);
+    {
+        std::vector<Node> network_ends;
+        for (const TransmissionLine &t : d.transmission_lines) {
+            network_ends.push_back(t.end_a);
+            network_ends.push_back(t.end_b);
+        }
+        for (const Network &n : d.networks) {
+            network_ends.push_back(n.end_a);
+            network_ends.push_back(n.end_b);
+        }
+        for (const Node &at : network_ends) {
+            if (!at.node.fits_i64()) throw Declined{"node-range"};
+            addressed[at.tag].insert(at.node.i64());
+        }
     }
-    for (const Network &n : d.networks) {
-        network_ends.push_back(n.end_a);
-        network_ends.push_back(n.end_b);
+    const std::vector<PlaneCrossing> crossings = plane_crossings(d);
+    const std::set<NodeKey> cnodes = crossing_nodes(d);
+    SeamMesh &mesh = p.mesh;
+    // (tag, node) -> (piece, end) for a node at a piece end; (piece, metres
+    // along it) for an addressed node strictly inside a piece.
+    std::map<std::pair<Int, long long>, std::pair<long long, End>, PairLess> piece_of_node;
+    std::map<std::pair<Int, long long>, std::pair<long long, double>, PairLess> inside_piece;
+    for (size_t i = 0; i < d.wires.size(); i++) {
+        const Wire &w = d.wires[i];
+        const long long last = nseg[i];
+        if (is_phantom(w.tag)) {
+            for (long long k = 0; k < last; k++) mesh.element_of.emplace_back(-1, k);
+            continue;
+        }
+        std::vector<long long> inside_nodes;
+        {
+            auto it = addressed.find(w.tag);
+            if (it != addressed.end())
+                for (long long k : it->second)
+                    if (0 < k && k < last) inside_nodes.push_back(k);
+        }
+        const auto node_pt = [&](long long k, double *out) { grid_point(w, last, k, out); };
+        struct Run {
+            long long a, b;
+            double start[3], end[3];
+            bool cut_start, cut_end;
+        };
+        std::vector<Run> runs;
+        const PlaneCrossing *c = crossings.empty() ? nullptr : crossing_for(crossings, w.tag);
+        const auto plain = [&](long long a, long long b) {
+            Run r;
+            r.a = a;
+            r.b = b;
+            node_pt(a, r.start);
+            node_pt(b, r.end);
+            r.cut_start = r.cut_end = false;
+            return r;
+        };
+        if (c == nullptr) {
+            runs.push_back(plain(0, last));
+        } else if (c->node >= 0) {
+            const long long k = c->node;
+            std::set<long long> cut{0, last, k};
+            std::vector<long long> v(cut.begin(), cut.end());
+            for (size_t q = 0; q + 1 < v.size(); q++) {
+                Run r = plain(v[q], v[q + 1]);
+                if (r.a == k) std::copy(c->point, c->point + 3, r.start);
+                if (r.b == k) std::copy(c->point, c->point + 3, r.end);
+                runs.push_back(r);
+            }
+        } else {
+            const long long j = c->segment;
+            if (j > 0) runs.push_back(plain(0, j));
+            Run lo = plain(j, j + 1);
+            std::copy(c->point, c->point + 3, lo.end);
+            lo.cut_end = true;
+            runs.push_back(lo);
+            Run hi = plain(j, j + 1);
+            std::copy(c->point, c->point + 3, hi.start);
+            hi.cut_start = true;
+            runs.push_back(hi);
+            if (j + 1 < last) runs.push_back(plain(j + 1, last));
+        }
+        long long lower_half = -1;
+        for (const Run &r : runs) {
+            const long long index = static_cast<long long>(mesh.pieces.size());
+            SeamPiece piece;
+            piece.tag = w.tag;
+            piece.first_node = r.a;
+            piece.last_node = r.b;
+            std::copy(r.start, r.start + 3, piece.points);
+            std::copy(r.end, r.end + 3, piece.points + 3);
+            piece.radius = w.radius;
+            piece.cut_start = r.cut_start;
+            piece.cut_end = r.cut_end;
+            mesh.pieces.push_back(piece);
+            if (!r.cut_start) piece_of_node[{w.tag, r.a}] = {index, End::start};
+            if (!r.cut_end) piece_of_node.emplace(std::make_pair(w.tag, r.b), std::make_pair(index, End::end));
+            for (long long k : inside_nodes)
+                if (r.a < k && k < r.b) {
+                    double pk[3];
+                    node_pt(k, pk);
+                    inside_piece[{w.tag, k}] = {index, norm3_diff(pk, mesh.pieces[index].points)};
+                }
+            if (r.cut_end) {
+                lower_half = index;
+                continue;
+            }
+            if (r.cut_start) {
+                // `_split_element`: the half holding the element's old centre.
+                const SeamPiece &first = mesh.pieces[static_cast<size_t>(lower_half)];
+                double a[3], b[3], centre[3];
+                node_pt(first.first_node, a);
+                node_pt(first.last_node, b);
+                for (int q = 0; q < 3; q++) centre[q] = 0.5 * (a[q] + b[q]);
+                SplitElement split;
+                split.lower = lower_half;
+                split.upper = index;
+                const double s0 = norm3_diff(centre, first.points);
+                if (s0 <= first.length()) {
+                    split.centre_piece = lower_half;
+                    split.centre_s = s0;
+                } else {
+                    split.centre_piece = index;
+                    split.centre_s = norm3_diff(centre, mesh.pieces[static_cast<size_t>(index)].points);
+                }
+                mesh.split_elements[static_cast<long long>(mesh.element_of.size())] = split;
+                mesh.element_of.emplace_back(split.centre_piece, 0);
+                continue;
+            }
+            for (long long k = 0; k < r.b - r.a; k++) mesh.element_of.emplace_back(index, k);
+        }
     }
-    for (const Node &at : network_ends) {
-        if (!at.node.fits_i64()) throw Declined{"node-range"};
-        addressed[at.tag].insert(at.node.i64());
-    }
+    junctions_of(mesh);
+
+    // One site per addressed node (`_site_for`).
     for (const auto &kv : addressed) {
         const Int &tag = kv.first;
         long long w = -1;  // `Structure.index_of`
@@ -786,17 +1044,19 @@ Prepared prepare(const Deck &d) {
             const Node at{tag, Int(node)};
             SeamSite site;
             site.at = at;
-            const long long last = w >= 0 ? nseg[w] : 0;
+            const auto inside = inside_piece.find({tag, node});
+            const auto where = piece_of_node.find({tag, node});
             if (is_phantom(tag)) {
                 // `_site_for`: a phantom node is a deck port and nothing else
                 site.spelling = SeamSite::virtual_;
                 site.piece = -1;
                 site.end = SeamSite::none;
                 site.sign = 0.0;
-            } else if (w >= 0 && 0 < node && node < last) {
+            } else if (inside != inside_piece.end()) {
                 // `_interior_site`
-                grid_point(d.wires[w], last, node, pt);
-                const long long deg = degree[node_key(pt)];
+                grid_point(d.wires[w], nseg[w], node, pt);
+                const auto dg = degree.find(node_key(pt));
+                const long long deg = dg == degree.end() ? 0 : dg->second;
                 if (deg != 2)
                     throw Refusal{at_of(at) + " addresses a node INSIDE wire " + tag.str() +
                                   " where " + std::to_string(deg - 2) +
@@ -804,39 +1064,95 @@ Prepared prepare(const Deck &d) {
                                   "a delta gap, which drives one wire's own knot and would "
                                   "leave the others unconnected"};
                 site.spelling = SeamSite::gap;
-                site.piece = piece_of_wire[w];
+                site.piece = inside->second.first;
                 site.end = SeamSite::interior;
                 site.sign = 1.0;
-                site.arclength = norm3_diff(pt, mesh.pieces[site.piece].points);
+                site.arclength = inside->second.second;
             } else {
-                if (w < 0 || !(node == 0 || node == last))
+                if (where == piece_of_node.end())
                     throw Refusal{"no wire piece carries node " + std::to_string(node) +
                                   " of tag " + tag.str()};
-                const SeamPiece &piece = mesh.pieces[piece_of_wire[w]];
-                const bool start = node == 0;
+                const long long pi = where->second.first;
+                const End which = where->second.second;
+                const SeamPiece &piece = mesh.pieces[static_cast<size_t>(pi)];
+                const bool start = which == End::start;
                 const double *point = start ? piece.points : piece.points + 3;
-                const bool grounded = ground_plane && std::fabs(point[2]) <= NODE_EPS;
-                const long long meeting = degree[node_key(point)] - (grounded ? 1 : 0);
-                site.piece = piece_of_wire[w];
-                site.end = start ? SeamSite::at_start : SeamSite::at_end;
-                site.arclength = start ? 0.0 : piece.length();
-                if (meeting >= 2) {
-                    if (grounded)
+                const NodeKey key = node_key(point);
+                bool in_junction = false;
+                for (const auto &g : mesh.junctions)
+                    for (const JunctionEnd &e : g)
+                        if (e == JunctionEnd(pi, which)) in_junction = true;
+                if (cnodes.count(key) && in_junction) {
+                    // `_crossing_site` (momwire#1282), razor's "gap" spelling
+                    const std::vector<JunctionEnd> *members = nullptr;
+                    for (const auto &g : mesh.junctions) {
+                        for (const JunctionEnd &e : g)
+                            if (e == JunctionEnd(pi, which)) members = &g;
+                        if (members != nullptr) break;
+                    }
+                    int above = 0, below = 0, plane = 0;
+                    for (const JunctionEnd &m : *members) {
+                        const SeamPiece &mp = mesh.pieces[static_cast<size_t>(m.first)];
+                        const double tol = touch_tol(mp.points, mp.points + 3);
+                        if (std::max(mp.points[2], mp.points[5]) > tol)
+                            above++;
+                        else if (std::min(mp.points[2], mp.points[5]) < -tol)
+                            below++;
+                        else
+                            plane++;
+                    }
+                    if (!(members->size() == 2 && above == 1 && below == 1)) {
+                        const long long count = static_cast<long long>(members->size());
+                        if (above > 0 && below > 0)
+                            throw Refusal{
+                                at_of(at) + " puts a series source on a crossing junction in the "
+                                "ground plane where " + std::to_string(count) + " wires meet (" +
+                                std::to_string(above) + " above the ground, " + std::to_string(below) +
+                                " buried). A source on a crossing node is served where ONE wire "
+                                "rises from it and ONE buried wire ends on it (momwire#1282); with " +
+                                std::to_string(count) + " wires it would sit between the named wire "
+                                "and the other " + std::to_string(count - 1) +
+                                " together, which has no measured spelling at a crossing node. "
+                                "Bring ONE buried wire up to the node (join the others to it at "
+                                "depth, the buried-hub spelling) under ONE rising wire, or put the "
+                                "source on the rising wire one segment up"};
                         throw Refusal{at_of(at) +
                                       " addresses a node where several wires meet IN the "
                                       "ground plane; a series source at a grounded junction is "
                                       "not served at this seam"};
-                    site.spelling = meeting >= 3 ? SeamSite::node : SeamSite::gap;
-                    site.sign = start ? 1.0 : -1.0;
-                } else if (grounded) {
+                    }
                     site.spelling = SeamSite::gap;
-                    site.sign = 1.0;
-                    site.contact = true;
+                    site.piece = pi;
+                    site.end = start ? SeamSite::at_start : SeamSite::at_end;
+                    site.sign = start ? 1.0 : -1.0;
+                    site.arclength = start ? 0.0 : piece.length();
+                    site.crossing = true;
                 } else {
-                    throw Refusal{at_of(at) + " addresses a FREE end of wire " + tag.str() +
-                                  " - nothing carries current past a lone conductor end, so "
-                                  "there is no path for a source, a load or a network "
-                                  "connection to sit in"};
+                    const bool grounded = ground_plane && std::fabs(point[2]) <= NODE_EPS;
+                    const auto dg = degree.find(key);
+                    if (dg == degree.end()) throw Declined{"degree-key"};
+                    const long long meeting = dg->second - (grounded ? 1 : 0);
+                    site.piece = pi;
+                    site.end = start ? SeamSite::at_start : SeamSite::at_end;
+                    site.arclength = start ? 0.0 : piece.length();
+                    if (meeting >= 2) {
+                        if (grounded)
+                            throw Refusal{at_of(at) +
+                                          " addresses a node where several wires meet IN the "
+                                          "ground plane; a series source at a grounded junction is "
+                                          "not served at this seam"};
+                        site.spelling = meeting >= 3 ? SeamSite::node : SeamSite::gap;
+                        site.sign = start ? 1.0 : -1.0;
+                    } else if (grounded) {
+                        site.spelling = SeamSite::gap;
+                        site.sign = 1.0;
+                        site.contact = true;
+                    } else {
+                        throw Refusal{at_of(at) + " addresses a FREE end of wire " + tag.str() +
+                                      " - nothing carries current past a lone conductor end, so "
+                                      "there is no path for a source, a load or a network "
+                                      "connection to sit in"};
+                    }
                 }
             }
             site.index = static_cast<long long>(mesh.sites.size());
@@ -976,11 +1292,15 @@ Prepared prepare(const Deck &d) {
     // The extended kernel by default: razor declares no refusal for it, a
     // stepped radius at a junction is a condition it serves, and a wire
     // below the plane (`_wires_below`) refused on the ladder already.
+    // `extended_kernel_default_refusal`: a wire below the plane (`_wires_below`
+    // on the pieces) takes the reduced kernel, with an advisory the printout
+    // does not carry.
+    bool wires_below = false;
     if (has_ground)
         for (const SeamPiece &piece : mesh.pieces)
             if (std::min(piece.points[2], piece.points[5]) <
                 0.0 - touch_tol(piece.points, piece.points + 3))
-                throw Declined{"wire-below-plane"};
+                wires_below = true;
     razor::FrontInputs &in = p.inputs;
     for (const SeamPiece &piece : mesh.pieces) {
         in.points.insert(in.points.end(), piece.points, piece.points + 6);
@@ -1062,7 +1382,7 @@ Prepared prepare(const Deck &d) {
         in.ground_sommerfeld = true;
     }
     in.wavelength = p.wavelength;
-    in.extended_kernel = true;
+    in.extended_kernel = !wires_below;
     in.exact_kernel = razor::ExactKernel::automatic;
     return p;
 }
@@ -1113,6 +1433,10 @@ RunOutcome run_one(const Deck &d, SeamResult &r, long long *shared_with) {
             o.error_kind = ni ? "NotImplementedError" : "ValueError";
             o.message = e.what();
             return o;
+        }
+        if (why == "buried-fill") {
+            p.unsolved = true;
+            r.prepared.push_back(std::move(p));
         }
         if (!why.empty()) throw Declined{"front:" + why};
         o.kind = RunOutcome::prepared;

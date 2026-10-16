@@ -148,6 +148,14 @@ bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w) {
 
 namespace {
 
+const char *const BURIED_EXTENDED_KERNEL_REFUSAL =
+    "extended_kernel=True + a wire below the ground plane is not served: the "
+    "extended kernel extends every pair of the geometry, and momwire#553 "
+    "measured neither what that means for a pair spanning two media (the "
+    "tube expansion's O(a^2) term is written at one wavenumber) nor for the "
+    "image of a buried source, which lands in the OTHER medium. "
+    "Solve the buried deck with extended_kernel=False, which is the default";
+
 const char *const BUNDLE_REFUSAL =
     "this deck spells a conductor as N geometrically COINCIDENT segments (a "
     "bundle). Razor's tent basis puts one column per segment, so N coincident "
@@ -368,6 +376,317 @@ void Front::ground_ends(std::vector<std::pair<int64_t, End>> &touching) {
     }
 }
 
+namespace {
+
+// `_medium_spec` / `_below_interface` / razor's buried sentences, word for
+// word (momwire#1512 B1).
+const char *const CROSSING_REFUSAL_TEXT =
+    "momwire serves "
+    "wires wholly at or above the interface, wires strictly below it, and "
+    "current CROSSING it only through a crossing junction (momwire#524 "
+    "phase 2): split the wire AT the interface into a below wire whose end "
+    "stands in the plane and an above wire starting there, and declare the "
+    "junction between them - that deck is served, with continuity of "
+    "current and the interface slope condition emerging from the fill "
+    "itself. A single polyline with points on both sides is not split for "
+    "you here, because feeds, loads, junctions and per-wire results are "
+    "keyed on its wire index and a split would renumber them; the deck seams "
+    "split a card wire at the plane themselves and keep its addresses (the "
+    "NEC-2 portal since momwire#667, the EZNEC seam since momwire#1281). "
+    "Alternatively leave the "
+    "buried part DETACHED (a buried radial screen under a base-fed "
+    "vertical is served that way, momwire#553), or raise the whole wire "
+    "clear of the interface";
+const char *const BURIED_PEC_REFUSAL_TEXT =
+    "over a PERFECTLY CONDUCTING ground, which has no lower medium "
+    "to put it in: the field inside a perfect conductor is identically zero, "
+    "so a wire there is not buried, it is shorted out. A buried wire is "
+    "served only under ground_model='sommerfeld' with a ground_eps, where "
+    "the half-space below the interface is a real medium with a wavenumber "
+    "k_m = k0*sqrt(eps_tilde) of its own (momwire#553). Raise the wire to or "
+    "above the plane, or give the solve a Sommerfeld ground";
+const char *const CONTACT_WITH_BURIED_REFUSAL_TEXT =
+    "that COMBINATION is not served, though each "
+    "half is. momwire's contact model continues the wire's current into the "
+    "ground as the C2-scaled IMAGE (momwire#151), which is a fiction that "
+    "works because no observer is ever inside the ground to look at it - and "
+    "a buried wire is exactly such an observer. What it should see is the "
+    "contact current SPREADING in the lower medium - a real soil current "
+    "this deck has NO CONDUCTOR for. momwire#524 phase 2 measured every "
+    "consistent spelling of the missing cross-medium physics against "
+    "engine prints for exactly these decks - and those prints have since "
+    "been withdrawn as a reference (momwire#929). They were captured with "
+    "the ground card's two fields written in the wrong order (antennaknobs#1025), and this "
+    "deck class turns out to have no documented spelling at all: the flag "
+    "that serves buried wires leaves a conductor ENDING on the interface "
+    "without a basis function there, and the flag that bonds such an end is "
+    "documented as not usable when wires are buried. So the ~3 ohm (lone) / "
+    "~6 ohm (fan) residual was measured against a combination the engine "
+    "does not document, and neither it nor the point-electrode reading "
+    "drawn from it is evidence about this deck. The refusal itself is "
+    "unchanged and rests on momwire's own physics: the contact model has no "
+    "conductor for the spreading current, so there is nothing honest to "
+    "serve here in either convention. "
+    "Serve it by giving the spreading current its conductor: respell the "
+    "radial - or the whole SCREEN of them - to RISE to the surface and "
+    "junction-join the monopole at z = 0; that crossing junction is served "
+    "for one above wire over N below wires (momwire#524 phase 2, fan "
+    "widening), including the screen's buried-hub spelling (one rise, N "
+    "radials joined at depth). Or raise the above-ground wire clear of "
+    "the interface (an elevated feed over a buried counterpoise is "
+    "served), or solve the buried structure on its own";
+
+// Python's `format(x, ".<p>g")` / `"{:g}"` (p = 6): printf's %g in the C
+// locale, with Python's spellings of the non-finite values.
+std::string py_g(double x, int p = 6) {
+    if (std::isnan(x)) return "nan";
+    if (std::isinf(x)) return x > 0 ? "inf" : "-inf";
+    char fmt[16], buf[64];
+    std::snprintf(fmt, sizeof fmt, "%%.%dg", p);
+#if defined(_MSC_VER)
+    static _locale_t c = _create_locale(LC_NUMERIC, "C");
+    _snprintf_l(buf, sizeof buf, fmt, c, x);
+#else
+    static locale_t c = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+    locale_t old = uselocale(c);
+    std::snprintf(buf, sizeof buf, fmt, x);
+    uselocale(old);
+#endif
+    return buf;
+}
+
+}  // namespace
+
+// `_refuse_buried_geometry`: `_wire_media` (`_medium_spec.wire_media` with
+// the crossing exemption `_grounded_junction_ends`), then
+// `_crossing_junctions` (`_below_interface.crossing_junctions`,
+// two_radius=True) and the route. Every refusal is Python's, in its order.
+void Front::refuse_buried_geometry(const std::vector<std::pair<int64_t, End>> &touching) {
+    buried = Buried::none;
+    media_below.assign(static_cast<size_t>(n_wires), 0);
+    crossing.clear();
+    if (!has_ground) return;
+    const double gz = ground_z;
+    const auto pl = [&](int64_t w) { return points.data() + 3 * pt_off[w]; };
+    const auto np_ = [&](int64_t w) { return static_cast<ptrdiff_t>(pt_off[w + 1] - pt_off[w]); };
+    const auto zmin_of = [&](int64_t w) {
+        const double *p = pl(w);
+        double z = p[2];
+        for (ptrdiff_t i = 1; i < np_(w); i++) z = std::min(z, p[3 * i + 2]);
+        return z;
+    };
+    const auto zmax_of = [&](int64_t w) {
+        const double *p = pl(w);
+        double z = p[2];
+        for (ptrdiff_t i = 1; i < np_(w); i++) z = std::max(z, p[3 * i + 2]);
+        return z;
+    };
+    const auto end_point = [&](int64_t w, End e) {
+        return e == End::start ? pl(w) : pl(w) + 3 * (np_(w) - 1);
+    };
+    // Every wire at or above the plane: the common answer, no labels to read.
+    bool any_below = false;
+    for (int64_t w = 0; w < n_wires; w++)
+        if (!(zmin_of(w) >= gz - ground_touch_tol(pl(w), np_(w)))) any_below = true;
+    if (!any_below) return;
+
+    // `_find_junctions` (the detected groups) and the exemption
+    // (`_medium_spec.grounded_crossing_exemption`).
+    std::vector<Junction> groups;
+    detect_junctions(touching, groups);
+    std::set<std::pair<int64_t, End>> exempt;
+    for (const Junction &g : groups) {
+        if (g.ends.size() < 2) continue;
+        const int64_t w0 = g.ends[0].first;
+        const double *pt = end_point(w0, g.ends[0].second);
+        if (std::fabs(pt[2] - gz) > ground_touch_tol(pl(w0), np_(w0))) continue;
+        bool reaches = false;
+        for (const auto &m : g.ends)
+            if (zmax_of(m.first) > gz + ground_touch_tol(pl(m.first), np_(m.first))) reaches = true;
+        if (!reaches) continue;
+        for (const auto &m : g.ends) exempt.insert(m);
+    }
+
+    // `wire_media`'s walk.
+    const bool lower_medium = compose;  // ground_eps under "sommerfeld" (scope)
+    for (int64_t w = 0; w < n_wires; w++) {
+        const double *p = pl(w);
+        const ptrdiff_t m = np_(w);
+        const double tol = ground_touch_tol(p, m);
+        const double zmin = zmin_of(w), zmax = zmax_of(w);
+        if (zmin >= gz - tol) continue;
+        bool crossing_below = false;
+        if (!(zmax > gz + tol)) {
+            const bool ts = std::fabs(p[2] - gz) <= tol;
+            const bool te = std::fabs(p[3 * (m - 1) + 2] - gz) <= tol;
+            if (ts || te) {
+                crossing_below = true;
+                for (ptrdiff_t i = 1; i + 1 < m; i++)
+                    if (!(p[3 * i + 2] < gz - tol)) crossing_below = false;
+                if (m > 2) {
+                    double imax = p[5];
+                    for (ptrdiff_t i = 1; i + 1 < m; i++) imax = std::max(imax, p[3 * i + 2]);
+                    if (imax >= gz - tol) crossing_below = false;
+                }
+                if (ts && !exempt.count({w, End::start})) crossing_below = false;
+                if (te && !exempt.count({w, End::end})) crossing_below = false;
+            }
+        }
+        if (zmax >= gz - tol && !crossing_below)
+            value_error("wire " + std::to_string(w) + " crosses the ground interface mid-span "
+                        "(polyline z runs " + py_g(zmin) + " to " + py_g(zmax) +
+                        " across ground_z = " + py_g(gz) + "): " + CROSSING_REFUSAL_TEXT);
+        if (!lower_medium)
+            value_error("wire " + std::to_string(w) + " runs below the ground plane (min z = " +
+                        py_g(zmin) + " < ground_z = " + py_g(gz) + ") " + BURIED_PEC_REFUSAL_TEXT);
+        media_below[static_cast<size_t>(w)] = 1;
+    }
+    int64_t first_below = -1;
+    for (int64_t w = 0; w < n_wires; w++)
+        if (media_below[static_cast<size_t>(w)]) {
+            first_below = w;
+            break;
+        }
+    // `_ground_spec.contact_ends`, sorted as Python sorts ("end" < "start").
+    std::vector<std::pair<int64_t, End>> contacts;
+    for (int64_t w = 0; w < n_wires; w++) {
+        const double *p = pl(w);
+        const ptrdiff_t m = np_(w);
+        const double tol = ground_touch_tol(p, m);
+        if (std::fabs(p[3 * (m - 1) + 2] - gz) <= tol) contacts.emplace_back(w, End::end);
+        if (std::fabs(p[2] - gz) <= tol) contacts.emplace_back(w, End::start);
+    }
+    for (const auto &c : contacts)
+        if (!exempt.count(c))
+            value_error("wire " + std::to_string(c.first) +
+                        " stands an END in the ground plane (ground CONTACT) and wire " +
+                        std::to_string(first_below) + " is buried below it: " +
+                        CONTACT_WITH_BURIED_REFUSAL_TEXT);
+
+    // `_crossing_junctions`.
+    for (size_t j = 0; j < groups.size(); j++) {
+        if (!groups[j].grounded) continue;
+        bool a = false, b = false;
+        for (const auto &m : groups[j].ends) (media_below[static_cast<size_t>(m.first)] ? b : a) = true;
+        if (a && b) crossing.push_back(j);
+    }
+    {
+        std::set<std::pair<int64_t, End>> earned;
+        for (size_t j : crossing)
+            for (const auto &m : groups[j].ends) earned.insert(m);
+        for (const auto &c : contacts)
+            if (!earned.count(c))
+                value_error("wire " + std::to_string(c.first) +
+                            " stands an END in the ground plane (ground CONTACT) and wire " +
+                            std::to_string(first_below) + " is buried below it: " +
+                            CONTACT_WITH_BURIED_REFUSAL_TEXT);
+    }
+    if (!crossing.empty()) {
+        if (crossing.size() > 1) {
+            std::vector<const double *> pts;
+            for (size_t j : crossing) pts.push_back(end_point(groups[j].ends[0].first, groups[j].ends[0].second));
+            double best = 0.0;
+            size_t bi = 0, bj = 0;
+            bool have = false;
+            for (size_t i = 0; i < pts.size(); i++)
+                for (size_t q = i + 1; q < pts.size(); q++) {
+                    const double sep = std::hypot(pts[i][0] - pts[q][0], pts[i][1] - pts[q][1]);
+                    if (!have || sep < best || (std::isnan(sep) && !std::isnan(best))) {
+                        if (!have || !std::isnan(best)) {
+                            best = sep;
+                            bi = i;
+                            bj = q;
+                            have = true;
+                        }
+                    }
+                }
+            if (best < 1.0)
+                not_implemented(
+                    "crossing junctions " + std::to_string(crossing[bi]) + " and " +
+                    std::to_string(crossing[bj]) + ", at (" + py_g(pts[bi][0]) + ", " +
+                    py_g(pts[bi][1]) + ") and (" + py_g(pts[bj][0]) + ", " + py_g(pts[bj][1]) +
+                    "), stand " + py_g(best) +
+                    " m apart: the crossing serve completes several crossing nodes per deck "
+                    "from 1 m apart, the closest separation its two-node collapse was gated at "
+                    "(antennaknobs plan U9), and closer crossing nodes have no measured completion");
+        }
+        for (size_t j : crossing) {
+            int n_above = 0;
+            for (const auto &m : groups[j].ends)
+                if (!media_below[static_cast<size_t>(m.first)]) n_above++;
+            if (n_above != 1)
+                not_implemented(
+                    "crossing junction with more than one above member: the "
+                    "crossing serve joins ONE above wire to N below wires "
+                    "at the interface (momwire#524 fan widening); the "
+                    "above-tent x above-tent interface corner has no "
+                    "measured convention");
+        }
+        for (size_t j = 0; j < groups.size(); j++) {
+            if (std::find(crossing.begin(), crossing.end(), j) != crossing.end()) continue;
+            bool a = false, b = false;
+            for (const auto &m : groups[j].ends) (media_below[static_cast<size_t>(m.first)] ? b : a) = true;
+            if (!groups[j].grounded && !(a && b)) continue;
+            not_implemented(
+                "a deck with a crossing junction and an in-plane or "
+                "media-mixing OTHER junction is not served: the complete "
+                "crossing spelling completes every value-1 end on its axes, "
+                "and a junction standing in the interface sits where the "
+                "corner and image terms live, which has no measured "
+                "completion (momwire#524 phase 2, momwire#1133)");
+        }
+        double rmax = radius_per_wire[0], rmin = radius_per_wire[0];
+        for (double r : radius_per_wire) {
+            rmax = std::max(rmax, r);
+            rmin = std::min(rmin, r);
+        }
+        if (rmax - rmin > 0.0) {
+            // `crossing_side_radii(media, radii, crossing_above_member(...))`
+            int64_t above_member = -1;
+            if (crossing.size() == 1)
+                for (const auto &m : groups[crossing[0]].ends)
+                    if (!media_below[static_cast<size_t>(m.first)]) {
+                        above_member = m.first;
+                        break;
+                    }
+            for (int side = 0; side < 2; side++) {
+                if (side == 0 && above_member >= 0) continue;
+                bool have = false;
+                double lo = 0.0, hi = 0.0;
+                for (int64_t w = 0; w < n_wires; w++) {
+                    if ((media_below[static_cast<size_t>(w)] != 0) != (side == 1)) continue;
+                    const double r = radius_per_wire[static_cast<size_t>(w)];
+                    if (!have) {
+                        lo = hi = r;
+                        have = true;
+                    } else {
+                        lo = std::min(lo, r);
+                        hi = std::max(hi, r);
+                    }
+                }
+                if (hi - lo > 0.0)
+                    not_implemented(std::string("crossing serve with per-wire radii that differ within the ") +
+                                    (side == 0 ? "above" : "below") +
+                                    " wires: the two-radius rule serves one radius per side "
+                                    "of the interface (the node's point tests at the buried "
+                                    "radius, antennaknobs plan U5); a spread within one side has "
+                                    "no measured node radius");
+            }
+            if (crossing.size() > 1)
+                not_implemented("a TWO-RADIUS crossing deck with " + std::to_string(crossing.size()) +
+                                " crossing junctions: the two-radius node (antennaknobs plan U5) and more "
+                                "than one crossing node (plan U9) were each measured alone, and "
+                                "a two-radius deck with several nodes has no measured completion");
+        }
+        buried = Buried::crossing;
+        return;
+    }
+    bool any_above = false;
+    for (int64_t w = 0; w < n_wires; w++)
+        if (!media_below[static_cast<size_t>(w)]) any_above = true;
+    buried = any_above ? Buried::detached : Buried::below_plane;
+}
+
 // `_junction_rule.coincident_groups`: each point's representative (the
 // first point within JUNCTION_TOL of it, by the cell grid when it can
 // promise the walk's answer, else the walk). `pts` is (n_pts, 3).
@@ -540,7 +859,11 @@ void Front::build_geometry() {
         return e == End::end ? seg_offsets[static_cast<size_t>(w) + 1] - 1
                              : seg_offsets[static_cast<size_t>(w)];
     };
-    for (const Junction &g : groups_) {
+    for (size_t gi = 0; gi < groups_.size(); gi++) {
+        // A crossing group takes the free-space topology (momwire#813):
+        // its grounded flag is demoted here, as `_build_geometry` does.
+        Junction g = groups_[gi];
+        if (std::find(crossing.begin(), crossing.end(), gi) != crossing.end()) g.grounded = false;
         Junction jn;
         jn.ends = g.ends;
         jn.grounded = g.grounded;
@@ -1035,18 +1358,13 @@ std::string Front::build(const FrontInputs &in_raw) {
         radius_value = radius_per_wire[0];
     }
 
-    // `_refuse_buried_geometry` over a perfect ground: every wire at or
-    // above the plane (`_medium_spec.wire_media`), else the shared buried
-    // sentences, which stay Python's.
-    if (has_ground)
-        for (int64_t w = 0; w < n_wires; w++) {
-            const double *p = points.data() + 3 * pt_off[w];
-            const ptrdiff_t m = pt_off[w + 1] - pt_off[w];
-            double zmin = p[2];
-            for (ptrdiff_t i = 1; i < m; i++) zmin = std::min(zmin, p[3 * i + 2]);
-            if (!(zmin >= ground_z - ground_touch_tol(p, m))) return "below-plane";
-        }
+    // `_refuse_buried_geometry` (momwire#1512 B1): the wire media with the
+    // crossing exemption, the crossing serve's scope, and the route.
+    refuse_buried_geometry(touching);
     extended_kernel = in.extended_kernel;
+    if (extended_kernel && buried != Buried::none)
+        not_implemented(std::string("razor's buried fill does not take the extended kernel: ") +
+                        BURIED_EXTENDED_KERNEL_REFUSAL);
 
     // `n_per_edge_per_wire`.
     if (in.counts_given && static_cast<int64_t>(in.counts.size()) != n_wires)
@@ -1172,7 +1490,8 @@ std::string Front::build(const FrontInputs &in_raw) {
     // auto`): any segment under three radii engages the exact ring kernel.
     build_geometry();
     exact = false;
-    if (in.exact_kernel == ExactKernel::automatic)
+    // `_serves_exact_kernel` is False on every buried route.
+    if (in.exact_kernel == ExactKernel::automatic && buried == Buried::none)
         for (int64_t w = 0; w < n_wires && !exact; w++)
             for (int64_t s = seg_offsets[w]; s < seg_offsets[w + 1]; s++)
                 if (seg_h[s] < EXACT_KERNEL_AUTO_H_OVER_A * radius_per_wire[w]) {
@@ -1188,6 +1507,8 @@ std::string Front::build(const FrontInputs &in_raw) {
     } catch (const FrontError &e) {
         throw FrontError(e.kind, e.what(), true);
     }
+    // The buried fill (momwire#1512 B2-B5) is not here yet.
+    if (buried != Buried::none) return "buried-fill";
     // The frozen table (`_quadrature.leggauss`); an order beyond it is
     // numpy's eigensolve in Python, which this front half does not replay.
     if (!leggauss(in.n_qp_source, xg, wg)) return "quadrature-order";
