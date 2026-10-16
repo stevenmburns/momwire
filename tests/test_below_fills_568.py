@@ -201,6 +201,9 @@ def test_g5686_the_six_integrals_agree_off_spec(eps_r, sigma, f_hz, record_prope
     assert worst < G_568_6_TOL, f"({eps_r}, {sigma}, {f_hz:g}): {worst:.3e}"
 
 
+G_568_SELFCONV_FLOOR = 1e-11  # the fine machine's rtol (`min(rtol, 1e-11)`)
+
+
 def test_g5686_the_coarse_self_convergence_machine_is_the_same_call(record_property):
     """`selfconv=True` re-runs the whole contour on Gauss-16, rtol ×100 and a
     shallower detour. Both rules, both depths and both detours are ARGUMENTS to
@@ -231,9 +234,17 @@ def test_g5686_the_coarse_self_convergence_machine_is_the_same_call(record_prope
         worst_val = max(worst_val, cwise(got, ref))
         # The spread is an ESTIMATE five decades above the realized error, so
         # the two machines' estimates need only agree relatively, not exactly.
+        # FLOORED at the fine machine's rtol (momwire#1441): under the
+        # weighted-averages tail the fine and coarse machines extrapolate to
+        # the same limit, and at three of these seven nodes the spread fell
+        # from 1e-10..4e-8 to 5e-16..1e-12 -- roundoff, on which a relative
+        # comparison of two machines is noise against noise (it read 0.28 at
+        # (0.3, 0.2), 5e-16 against 7e-16). Over the floor nothing changed:
+        # MEASURED worst 1.3e-3 with WA on, 8.8e-5 with it off.
         worst_spread = max(
             worst_spread,
-            abs(hc.worst_selfconv - hn.worst_selfconv) / max(hn.worst_selfconv, 1e-300),
+            abs(hc.worst_selfconv - hn.worst_selfconv)
+            / max(hn.worst_selfconv, G_568_SELFCONV_FLOOR),
         )
         assert hc.worst_selfconv_at == hn.worst_selfconv_at
     record_property("worst_rel", float(worst_val))
