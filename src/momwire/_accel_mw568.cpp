@@ -1,6 +1,7 @@
 #include "_accel_common.h"
 #include "_branch_cut_inline.h"
-#include "_accel_somm_proj_inline.h"
+#include "_accel_somm_proj_py.h"
+#include "_somm_proj_core.h"
 // The shared adaptive-contour engine (momwire#568 unit 1): the C++ twin of
 // `_sommerfeld_below`'s head + tail machinery, templated on the integrand.
 // Header-only, reentrant, allocation-free -- U2/U3 instantiate it with their
@@ -1105,27 +1106,7 @@ static py::array_t<std::complex<double>> remainder_moment_reduce(
     const cd *pp = proj.data();
     {
         py::gil_scoped_release release;
-        #pragma omp parallel for schedule(static)
-        for (py::ssize_t o = 0; o < M; ++o) {
-            const cd *row = pp + o * N * q;
-            cd *orow = op + o * N * P;
-            for (py::ssize_t j = 0; j < N; ++j) {
-                const cd *pn = row + j * q;
-                for (py::ssize_t m = 0; m < P; ++m) {
-                    const double *wn = wp + (m * N + j) * q;
-                    double are = 0.0, aim = 0.0;
-                    for (py::ssize_t k = 0; k < q; ++k) {
-                        const double pr = pn[k].real(), pi = pn[k].imag();
-                        const double w = wn[k], z = 0.0;
-                        const double re = pr * w - pi * z;
-                        const double im = pr * z + pi * w;
-                        are = re + are;
-                        aim = im + aim;
-                    }
-                    orow[j * P + m] = cd(are, aim);
-                }
-            }
-        }
+        somm_core::moment_reduce(pp, wp, P, N, q, M, op);
     }
     return out;
 }

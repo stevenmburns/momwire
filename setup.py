@@ -352,6 +352,8 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_razor_seam_core.h",
     "src/momwire/_nec5_razor_printout_core.h",
     "src/momwire/_somm_kernel_core.h",
+    "src/momwire/_somm_proj_core.h",
+    "src/momwire/_accel_somm_proj_py.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -369,6 +371,9 @@ _ACCEL_SOURCES = [
     # it. It includes `_mw_core.h` for the binding TU's `omp declare simd`
     # set, so its codegen is the kernel's own (momwire#1194).
     "src/momwire/_somm_kernel_core.cpp",
+    # S3: the remainder's projection and moment reduction, likewise
+    # (`_accel_somm.cpp` / `_accel_mw568.cpp` bind them).
+    "src/momwire/_somm_proj_core.cpp",
     "src/momwire/_accel_mw568.cpp",
     "src/momwire/_accel_razor.cpp",
     # The razor kernels with no Python in their signatures or includes;
