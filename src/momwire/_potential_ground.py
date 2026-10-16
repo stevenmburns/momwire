@@ -664,6 +664,8 @@ class RemainderBelow(Remainder):
             self._omega,
             mu=solver.mu,
             cancel_flag=solver._cancel_flag,
+            # A fill integrates the table: the fill spacing.
+            spacing=_sommerfeld_below._SOMM_BELOW_SPACING_FILL,
         )
 
         n_src = seg_l.shape[0]
