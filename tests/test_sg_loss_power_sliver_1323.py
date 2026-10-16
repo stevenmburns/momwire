@@ -142,7 +142,10 @@ def test_dans_through_deck_reads_its_copper_loss():
 def test_decks_without_a_sliver_read_what_they_did(name):
     """The spelling changes no deck whose segments are ordinary: these two
     read the same loss before and after, to the readout's own rounding."""
-    want = {"thr_n21": 4.732150e-05, "hs_n204": 4.761289e-05}[name]
+    # Re-pinned for the matrix fills' coarser below/below table, which moved
+    # them by 1.2e-5 and 1.5e-5 relative (4.732150e-05 and 4.761289e-05
+    # before it); the tolerance is unchanged.
+    want = {"thr_n21": 4.732208e-05, "hs_n204": 4.761358e-05}[name]
     assert _budget(name, "sinusoidal-galerkin").wire_loss == pytest.approx(
         want, rel=2e-6
     )
