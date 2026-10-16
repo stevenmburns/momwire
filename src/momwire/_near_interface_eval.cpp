@@ -17,6 +17,10 @@
 #include <string>
 #include <tuple>
 
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
 namespace ni_eval {
 
 namespace {
@@ -232,16 +236,14 @@ class PlaneSheet {
     void interpolate(const double *sub, std::ptrdiff_t m, const std::vector<std::ptrdiff_t> &idx,
                      Six *out, int n_threads) {
         if (!flat_ok_) flatten();
-        std::vector<cd> o(static_cast<size_t>(m) * N_KEYS);
-        for (std::ptrdiff_t r = 0; r < m; r++)
-            for (int k = 0; k < N_KEYS; k++) o[static_cast<size_t>(r) * N_KEYS + k] = out[r][k];
+        // `out` is (m, N_KEYS) row-major already (Six is N_KEYS contiguous
+        // complexes), and grid_sheet writes only rows idx: in place.
+        static_assert(sizeof(Six) == N_KEYS * sizeof(cd), "Six is N_KEYS contiguous complexes");
         ni_core::grid_sheet(sub, m, idx.data(), static_cast<std::ptrdiff_t>(idx.size()), zp_, height_,
                             rho_edges_.data(), static_cast<std::ptrdiff_t>(rho_edges_.size() - 1),
                             s_edges_.data(), static_cast<std::ptrdiff_t>(s_edges_.size() - 1),
-                            cell_off_.data(), cheb().x, cheb().bw, SHEET_P, vals_.data(), o.data(),
-                            n_threads, KEY_RPOW, N_KEYS, false);
-        for (std::ptrdiff_t q : idx)
-            for (int k = 0; k < N_KEYS; k++) out[q][k] = o[static_cast<size_t>(q) * N_KEYS + k];
+                            cell_off_.data(), cheb().x, cheb().bw, SHEET_P, vals_.data(),
+                            reinterpret_cast<cd *>(out), n_threads, KEY_RPOW, N_KEYS, false);
     }
 
   private:
@@ -432,30 +434,87 @@ std::string py_repr(double x) {
 
 Memo::Memo() : cache(new ni_core::ColumnCache(16u << 20)) {}
 
-Memo::Key Memo::key(const double *row) {
-    return Key{bits(row[0] + 0.0), bits(row[1] + 0.0), bits(row[2] + 0.0)};
+uint64_t TripleIndex::mix(uint64_t a, uint64_t b, uint64_t c) {
+    uint64_t h = a * 0x9E3779B97F4A7C15ULL;
+    h ^= b + 0x7F4A7C159E3779B9ULL + (h << 6) + (h >> 2);
+    h ^= c + 0x94D049BB133111EBULL + (h << 6) + (h >> 2);
+    h ^= h >> 33;
+    h *= 0xFF51AFD7ED558CCDULL;
+    h ^= h >> 33;
+    return h;
 }
 
-size_t Memo::Hash::operator()(const Key &k) const {
-    uint64_t h = k.r * 0x9E3779B97F4A7C15ULL;
-    h ^= k.z + 0x7F4A7C159E3779B9ULL + (h << 6) + (h >> 2);
-    h ^= k.p + 0x94D049BB133111EBULL + (h << 6) + (h >> 2);
-    return static_cast<size_t>(h);
+void TripleIndex::rehash(size_t want) {
+    size_t cap = 1024;
+    while (cap < want) cap <<= 1;
+    std::vector<Slot> old;
+    old.swap(slots_);
+    slots_.assign(cap, Slot{0, NONE});
+    mask_ = cap - 1;
+    for (const Slot &s : old) {
+        if (s.v == NONE) continue;
+        const Key &k = keys_[s.v];
+        size_t p = static_cast<size_t>(mix(k.a, k.b, k.c)) & mask_;
+        while (slots_[p].v != NONE) p = (p + 1) & mask_;
+        slots_[p] = s;
+    }
+}
+
+uint32_t TripleIndex::find(const double *row) const {
+    const uint64_t a = bits(row[0] + 0.0), b = bits(row[1] + 0.0), c = bits(row[2] + 0.0);
+    const uint64_t h = mix(a, b, c);
+    const uint32_t tag = static_cast<uint32_t>(h >> 32);
+    for (size_t p = static_cast<size_t>(h) & mask_;; p = (p + 1) & mask_) {
+        const Slot &s = slots_[p];
+        if (s.v == NONE) return NONE;
+        if (s.tag == tag) {
+            const Key &k = keys_[s.v];
+            if (k.a == a && k.b == b && k.c == c) return s.v;
+        }
+    }
+}
+
+uint32_t TripleIndex::find_or_insert(const double *row, uint32_t v, bool &inserted) {
+    if (2 * (n_ + 1) > slots_.size()) rehash(2 * slots_.size());
+    const uint64_t a = bits(row[0] + 0.0), b = bits(row[1] + 0.0), c = bits(row[2] + 0.0);
+    const uint64_t h = mix(a, b, c);
+    const uint32_t tag = static_cast<uint32_t>(h >> 32);
+    for (size_t p = static_cast<size_t>(h) & mask_;; p = (p + 1) & mask_) {
+        Slot &s = slots_[p];
+        if (s.v == NONE) {
+            s = Slot{tag, v};
+            if (keys_.size() <= v) keys_.resize(static_cast<size_t>(v) + 1, Key{0, 0, 0});
+            keys_[v] = Key{a, b, c};
+            n_++;
+            inserted = true;
+            return v;
+        }
+        if (s.tag == tag) {
+            const Key &k = keys_[s.v];
+            if (k.a == a && k.b == b && k.c == c) {
+                inserted = false;
+                return s.v;
+            }
+        }
+    }
+}
+
+uint32_t Memo::find(const double *row) const {
+    if (std::isnan(row[0]) || std::isnan(row[1]) || std::isnan(row[2])) return TripleIndex::NONE;
+    return idx_.find(row);
 }
 
 bool Memo::lookup(const double *row, Six &out) const {
-    if (std::isnan(row[0]) || std::isnan(row[1]) || std::isnan(row[2])) return false;
-    auto it = idx_.find(key(row));
-    if (it == idx_.end()) return false;
-    out = vals_[it->second];
+    const uint32_t i = find(row);
+    if (i == TripleIndex::NONE) return false;
+    out = vals_[i];
     return true;
 }
 
 void Memo::insert(const double *row, const Six &v) {
-    const Key k = key(row);
-    if (idx_.count(k)) return;
-    idx_.emplace(k, vals_.size());
-    vals_.push_back(v);
+    bool ins = false;
+    idx_.find_or_insert(row, static_cast<uint32_t>(vals_.size()), ins);
+    if (ins) vals_.push_back(v);
 }
 
 void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int64_t *labels,
@@ -537,62 +596,134 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
     }
 }
 
+void designed_index(const Evaluator &ev, Memo &memo, const double *rho, const double *z,
+                    const double *zp, size_t n, const int64_t *labels, uint32_t *idx,
+                    int n_threads) {
+    // The memo's hits first (read-only, so any split). A row's hit or miss
+    // depends on its triple alone, so the misses' first appearances are the
+    // order `_unique_rows` then the memo filter would give the fresh rows.
+    const std::ptrdiff_t nn = static_cast<std::ptrdiff_t>(n);
+    const bool memo_empty = memo.size() == 0;
+#if defined(_OPENMP)
+    int nt = omp_get_max_threads();
+    if (n_threads > 0) nt = std::min(nt, n_threads);
+    if (n < 16384) nt = 1;
+    #pragma omp parallel for schedule(static) num_threads(nt) if (nt > 1)
+#else
+    (void)n_threads;
+#endif
+    for (std::ptrdiff_t i = 0; i < nn; i++) {
+        const double row[3] = {rho[i], z[i], zp[i]};
+        idx[i] = memo_empty ? TripleIndex::NONE : memo.find(row);
+    }
+    size_t n_miss = 0;
+    for (size_t i = 0; i < n; i++) n_miss += idx[i] == TripleIndex::NONE;
+    if (n_miss == 0) return;
+    // The misses, each distinct triple claimed in the memo at its value's
+    // future index (base + its place among the fresh rows); nothing reads
+    // the memo before the values land. A NaN row never hits the memo, so
+    // NaN triples are deduplicated apart (their key bits alike).
+    const uint32_t base = static_cast<uint32_t>(memo.size());
+    TripleIndex &keys = memo.keys();
+    TripleIndex nan_rows;
+    std::vector<double> rows;
+    std::vector<int64_t> lab;
+    auto claim = [&](size_t i) {
+        const double row[3] = {rho[i], z[i], zp[i]};
+        const uint32_t next = base + static_cast<uint32_t>(rows.size() / 3);
+        bool ins = false;
+        const bool nan = std::isnan(row[0]) || std::isnan(row[1]) || std::isnan(row[2]);
+        const uint32_t v = nan ? nan_rows.find_or_insert(row, next, ins) : keys.find_or_insert(row, next, ins);
+        if (ins) {
+            rows.insert(rows.end(), row, row + 3);
+            if (labels) lab.push_back(labels[i]);
+        }
+        return v;
+    };
+#if defined(_OPENMP)
+    if (nt > 1) {
+        // Each chunk's misses deduplicated on their own (any thread), then
+        // the chunks' distinct triples claimed in chunk order, each at its
+        // first appearance within the chunk: the claim order is the serial
+        // walk's (first appearance over the whole call), with one claim per
+        // chunk-distinct triple instead of one per point.
+        std::vector<uint32_t> loc(n, TripleIndex::NONE);
+        std::vector<std::vector<size_t>> first(static_cast<size_t>(nt));
+        std::vector<std::vector<uint32_t>> to(static_cast<size_t>(nt));
+        #pragma omp parallel for schedule(static, 1) num_threads(nt)
+        for (int c = 0; c < nt; c++) {
+            const size_t i0 = n * static_cast<size_t>(c) / static_cast<size_t>(nt);
+            const size_t i1 = n * static_cast<size_t>(c + 1) / static_cast<size_t>(nt);
+            TripleIndex li;
+            li.reserve((i1 - i0) / 8);
+            std::vector<size_t> &fc = first[static_cast<size_t>(c)];
+            for (size_t i = i0; i < i1; i++) {
+                if (idx[i] != TripleIndex::NONE) continue;
+                const double row[3] = {rho[i], z[i], zp[i]};
+                bool ins = false;
+                loc[i] = li.find_or_insert(row, static_cast<uint32_t>(fc.size()), ins);
+                if (ins) fc.push_back(i);
+            }
+        }
+        size_t n_first = 0;
+        for (const auto &fc : first) n_first += fc.size();
+        keys.reserve(keys.size() + n_first);
+        rows.reserve(3 * n_first);
+        if (labels) lab.reserve(n_first);
+        for (int c = 0; c < nt; c++) {
+            const std::vector<size_t> &fc = first[static_cast<size_t>(c)];
+            std::vector<uint32_t> &tc = to[static_cast<size_t>(c)];
+            tc.resize(fc.size());
+            for (size_t u = 0; u < fc.size(); u++) tc[u] = claim(fc[u]);
+        }
+        #pragma omp parallel for schedule(static, 1) num_threads(nt)
+        for (int c = 0; c < nt; c++) {
+            const size_t i0 = n * static_cast<size_t>(c) / static_cast<size_t>(nt);
+            const size_t i1 = n * static_cast<size_t>(c + 1) / static_cast<size_t>(nt);
+            const std::vector<uint32_t> &tc = to[static_cast<size_t>(c)];
+            for (size_t i = i0; i < i1; i++)
+                if (loc[i] != TripleIndex::NONE) idx[i] = tc[loc[i]];
+        }
+    } else
+#endif
+    {
+        for (size_t i = 0; i < n; i++)
+            if (idx[i] == TripleIndex::NONE) idx[i] = claim(i);
+    }
+    const size_t m = rows.size() / 3;
+    if (m == 0) return;
+    std::vector<Six> vals(m);
+    evaluate_fresh(ev, rows.data(), m, labels ? lab.data() : nullptr,
+                   memo.have_plan ? &memo.plan : nullptr, memo.cache.get(), vals.data());
+    memo.append_values(vals.data(), m);
+}
+
 void designed_tables(const Evaluator &ev, Memo *memo, const double *rho, const double *z,
                      const double *zp, size_t n, const int64_t *labels, Six *out) {
+    if (memo != nullptr) {
+        std::vector<uint32_t> idx(n);
+        designed_index(ev, *memo, rho, z, zp, n, labels, idx.data(), 1);
+        for (size_t i = 0; i < n; i++) out[i] = memo->at(idx[i]);
+        return;
+    }
     // `_unique_rows`: distinct rows (-0.0 == 0.0) in first-appearance order.
-    struct K {
-        uint64_t a, b, c;
-        bool operator==(const K &o) const { return a == o.a && b == o.b && c == o.c; }
-    };
-    struct H {
-        size_t operator()(const K &k) const {
-            uint64_t h = k.a * 0x9E3779B97F4A7C15ULL;
-            h ^= k.b + 0x7F4A7C159E3779B9ULL + (h << 6) + (h >> 2);
-            h ^= k.c + 0x94D049BB133111EBULL + (h << 6) + (h >> 2);
-            return static_cast<size_t>(h);
-        }
-    };
-    std::unordered_map<K, size_t, H> seen;
+    TripleIndex seen;
     seen.reserve(n);
     std::vector<double> rows;
     std::vector<int64_t> lab;
-    std::vector<size_t> inverse(n);
+    std::vector<uint32_t> inverse(n);
     for (size_t i = 0; i < n; i++) {
-        const K k{bits(rho[i] + 0.0), bits(z[i] + 0.0), bits(zp[i] + 0.0)};
-        auto it = seen.find(k);
-        if (it == seen.end()) {
-            it = seen.emplace(k, rows.size() / 3).first;
-            rows.push_back(rho[i]);
-            rows.push_back(z[i]);
-            rows.push_back(zp[i]);
+        const double row[3] = {rho[i], z[i], zp[i]};
+        bool ins = false;
+        inverse[i] = seen.find_or_insert(row, static_cast<uint32_t>(rows.size() / 3), ins);
+        if (ins) {
+            rows.insert(rows.end(), row, row + 3);
             if (labels) lab.push_back(labels[i]);
         }
-        inverse[i] = it->second;
     }
     const size_t m = rows.size() / 3;
     std::vector<Six> block(m);
-    if (memo == nullptr) {
-        evaluate_fresh(ev, rows.data(), m, labels ? lab.data() : nullptr, nullptr, nullptr, block.data());
-    } else {
-        std::vector<size_t> fresh;
-        for (size_t r = 0; r < m; r++)
-            if (!memo->lookup(&rows[3 * r], block[r])) fresh.push_back(r);
-        if (!fresh.empty()) {
-            std::vector<double> sub;
-            std::vector<int64_t> sl;
-            for (size_t r : fresh) {
-                sub.insert(sub.end(), rows.begin() + 3 * r, rows.begin() + 3 * r + 3);
-                if (labels) sl.push_back(lab[r]);
-            }
-            std::vector<Six> vals(fresh.size());
-            evaluate_fresh(ev, sub.data(), fresh.size(), labels ? sl.data() : nullptr,
-                           memo->have_plan ? &memo->plan : nullptr, memo->cache.get(), vals.data());
-            for (size_t j = 0; j < fresh.size(); j++) {
-                block[fresh[j]] = vals[j];
-                memo->insert(&sub[3 * j], vals[j]);
-            }
-        }
-    }
+    evaluate_fresh(ev, rows.data(), m, labels ? lab.data() : nullptr, nullptr, nullptr, block.data());
     for (size_t i = 0; i < n; i++) out[i] = block[inverse[i]];
 }
 
