@@ -258,10 +258,10 @@ jobs:
     # bitten already — pynec-accel's vendored libgomp silently disabling the
     # accelerator through a static-TLS clash — and a silent accelerator
     # passes every assertion in this suite. Three clean days is not evidence
-    # it cannot happen. `wheels.yml` is the second net, running a macos-14
+    # it cannot happen. `wheels.yml` is the second net, running a macos-15
     # cross-engine leg on every main push and every `v*` tag; it validates a
     # WHEEL, though, not the suite, which is why this lane still earns a run.
-    runs-on: macos-14
+    runs-on: macos-15
     # Push-to-main as before, PLUS `workflow_dispatch` so a branch touching
     # platform-shaped code (the C client, the serve transports) can buy the
     # macOS verdict it needs without this becoming a PR gate for everyone.

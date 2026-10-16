@@ -40,9 +40,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             libomp: yes
-          - os: macos-14
+          - os: macos-15
             libomp: no
           - os: ubuntu-latest
           - os: windows-latest
@@ -77,8 +77,8 @@ jobs:
         run: java scripts/simnec_driver/SimNECDriver.java "$env:ENGINE" tests/fixtures/nec_portal/dipole_free_space.deck tests/fixtures/nec_portal/dipole_rp_pattern.deck --repeat 2
 
   checkout:
-    name: this checkout (macos-14)
-    runs-on: macos-14
+    name: this checkout (macos-15)
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
