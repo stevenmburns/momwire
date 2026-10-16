@@ -6,10 +6,10 @@
 // their difference assembled into Z). The point moments and the assembly are
 // `_exact_kernel_point_core.h`, the extension's own text.
 //
-// SCOPE: one radius per coaxial line. A line that carries a radius step
-// needs the two-radius cross jobs (`_exact_kernel.PointCrossRows`), numpy
-// only today; `build_exact_plan` returns "exact-kernel-cross" for it and the
-// front half declines by that name.
+// Both kinds of job: the one-radius coaxial groups, then the cross-radius
+// pairs of every line that carries a radius step (momwire#1438), whose
+// two-radius moments are `_exact_kernel_cross_inline.h`, the extension's own
+// text (`_exact_kernel.point_cross_rows`).
 #pragma once
 
 #include <complex>
@@ -45,13 +45,18 @@ struct ExactGroup {  // `_razor_exact_plan._Group`, one-radius
     std::vector<int64_t> lab_obs, lab_src;  // EK labels (empty: reduced kernel)
     std::vector<double> b_obs;              // EK tube per observer (empty: one radius)
     std::vector<ExactWindow> windows;
+    // A cross job (momwire#1438): a line's segments with their radii and
+    // radius labels, which are its observers' too (the centroids).
+    bool cross = false;
+    std::vector<double> cross_a;
+    std::vector<int64_t> cross_lab;
 };
 
 struct ExactPlan {
     std::vector<ExactGroup> groups;
 };
 
-// "" and the plan; or the reason this is not served ("exact-kernel-cross").
+// "" and the plan (nothing in it is declined today).
 std::string build_exact_plan(const Front &front, ExactPlan &plan);
 
 // Z (column-major, n_basis x n_basis) += every group's correction, in plan

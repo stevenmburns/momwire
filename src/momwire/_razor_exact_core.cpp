@@ -14,6 +14,7 @@
 #endif
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 #include <numeric>
 #include <stdexcept>
@@ -141,8 +142,21 @@ std::string build_exact_plan(const Front &f, ExactPlan &plan) {
     for (int64_t s = 0; s < n_seg; s++)
         for (int c = 0; c < 3; c++) seg_r[3 * s + c] = f.seg_p0[3 * s + c] + f.seg_h[s] * f.seg_t[3 * s + c];
     const std::vector<int64_t> labels = coaxial_labels(f.seg_p0, seg_r, f.seg_t, seg_a);
-    // `coaxial_lines`: the one-radius rule with every radius the largest; a
-    // line holding more than one radius group needs the two-radius jobs.
+    // The jobs: every one-radius group, then every coaxial LINE carrying
+    // more than one radius group (`coaxial_lines`: the one-radius rule with
+    // every radius the largest), whose cross-radius pairs take the
+    // two-radius moments (momwire#1438).
+    struct Job {
+        std::vector<int64_t> S, lab;
+    };
+    std::vector<Job> jobs;
+    const int64_t n_groups = labels.empty() ? 0 : *std::max_element(labels.begin(), labels.end()) + 1;
+    for (int64_t gl = 0; gl < n_groups; gl++) {
+        Job j;
+        for (int64_t s = 0; s < n_seg; s++)
+            if (labels[s] == gl) j.S.push_back(s);
+        jobs.push_back(std::move(j));
+    }
     {
         double amax = seg_a.empty() ? 0.0 : seg_a[0];
         for (double v : seg_a) amax = std::max(amax, v);
@@ -150,12 +164,15 @@ std::string build_exact_plan(const Front &f, ExactPlan &plan) {
             coaxial_labels(f.seg_p0, seg_r, f.seg_t, std::vector<double>(seg_a.size(), amax));
         const int64_t nl = line.empty() ? 0 : *std::max_element(line.begin(), line.end()) + 1;
         for (int64_t g = 0; g < nl; g++) {
-            int64_t first = -1;
+            Job j;
+            bool step = false;
             for (int64_t s = 0; s < n_seg; s++)
                 if (line[s] == g) {
-                    if (first < 0) first = labels[s];
-                    else if (labels[s] != first) return "exact-kernel-cross";
+                    if (!j.lab.empty() && labels[s] != j.lab[0]) step = true;
+                    j.S.push_back(s);
+                    j.lab.push_back(labels[s]);
                 }
+            if (step) jobs.push_back(std::move(j));
         }
     }
     std::vector<bool> grounded(static_cast<size_t>(n_basis), false);
@@ -165,12 +182,10 @@ std::string build_exact_plan(const Front &f, ExactPlan &plan) {
     bool one_radius = true;
     for (double v : seg_a)
         if (!(v == seg_a[0])) one_radius = false;
-    const int64_t n_groups = labels.empty() ? 0 : *std::max_element(labels.begin(), labels.end()) + 1;
     const int64_t chunk_elems = f.chunk_elems;  // razor's `_CHUNK_ELEMS`
-    for (int64_t gl = 0; gl < n_groups; gl++) {
+    for (Job &job : jobs) {
         ExactGroup g;
-        for (int64_t s = 0; s < n_seg; s++)
-            if (labels[s] == gl) g.S.push_back(s);
+        g.S = job.S;
         const int64_t n = static_cast<int64_t>(g.S.size());
         const int64_t s0 = g.S[0];
         const double *axis = &f.seg_t[3 * s0];
@@ -259,6 +274,13 @@ std::string build_exact_plan(const Front &f, ExactPlan &plan) {
             g.windows.push_back(wd);
         }
         g.a = seg_a[s0];
+        if (!job.lab.empty()) {
+            // A cross job: per-segment radii and labels, the observers' own
+            // (the centroids: the segments themselves).
+            g.cross = true;
+            g.cross_lab = job.lab;
+            for (int64_t s : g.S) g.cross_a.push_back(seg_a[s]);
+        }
         for (int64_t s : g.S) {
             for (int c = 0; c < 3; c++) {
                 g.sub_p0.push_back(f.seg_p0[3 * s + c]);
@@ -286,8 +308,19 @@ void add_exact_correction(const Front &f, const ExactPlan &plan, cd *Z, uintptr_
         const int64_t n = g.n;
         double hmax = g.h[0];
         for (double v : g.h) hmax = std::max(hmax, v);
-        mw::ek::PointRows source(g.x0.data(), g.sgn.data(), g.h.data(), n, g.a, f.k, 2,
-                                 4 * n + 1024, 1e-11 * hmax, rules, 0);
+        std::unique_ptr<mw::ek::PointRows> source;
+        std::unique_ptr<mw::ek::PointCrossRows> cross;
+        if (g.cross) {
+            double amax = g.cross_a[0];
+            for (double v : g.cross_a) amax = std::max(amax, v);
+            cross.reset(new mw::ek::PointCrossRows(g.x0.data(), g.sgn.data(), g.h.data(),
+                                                   g.cross_a.data(), g.cross_lab.data(), n, f.k,
+                                                   2, 4 * n + 1024, 1e-11 * hmax, 1e-11 * amax,
+                                                   rules, 0));
+        } else {
+            source.reset(new mw::ek::PointRows(g.x0.data(), g.sgn.data(), g.h.data(), n, g.a,
+                                               f.k, 2, 4 * n + 1024, 1e-11 * hmax, rules, 0));
+        }
         // `row_cA` / `row_cP`, then by observer
         const size_t nr = g.part_w.size();
         std::vector<cd> a_pre(nr), p_pre(nr), r_A(nr), r_P(nr);
@@ -305,7 +338,11 @@ void add_exact_correction(const Front &f, const ExactPlan &plan, cd *Z, uintptr_
             if (flag && *flag) throw AbortedError{};
             const int64_t rows = w.o1 - w.o0;
             std::vector<cd> mom(static_cast<size_t>(2 * rows * n));
-            source.rows(&g.obs_x[w.o0], rows, mom.data());
+            if (cross)
+                cross->rows(&g.obs_x[w.o0], &g.cross_a[w.o0], &g.cross_lab[w.o0], rows,
+                            mom.data());
+            else
+                source->rows(&g.obs_x[w.o0], rows, mom.data());
             std::vector<cd> m0b(static_cast<size_t>(rows * n)), m1b(static_cast<size_t>(rows * n));
             view<const int64_t, 1> gi, gj;
             view<const double, 1> aek, bo;
@@ -330,6 +367,13 @@ void add_exact_correction(const Front &f, const ExactPlan &plan, cd *Z, uintptr_
                         c_view<const double, 1>(f.wg.data(), {static_cast<ptrdiff_t>(f.wg.size())}),
                         f.k, true, gi, gj, aek, cancel_flag, bo,
                         c_view<cd, 2>(m0b.data(), {rows, n}), c_view<cd, 2>(m1b.data(), {rows, n}));
+            if (cross)  // the same-radius pairs are the one-radius groups'
+                for (int64_t o = 0; o < rows; o++)
+                    for (int64_t j = 0; j < n; j++)
+                        if (g.cross_lab[w.o0 + o] == g.cross_lab[j]) {
+                            m0b[o * n + j] = cd(0.0, 0.0);
+                            m1b[o * n + j] = cd(0.0, 0.0);
+                        }
             // `np.subtract(mom[q], M_qb)`
             const size_t pl = static_cast<size_t>(rows * n);
             for (size_t i = 0; i < pl; i++) {

@@ -144,6 +144,28 @@ CASES = {
         wire_radius=0.2,
         extended_kernel=True,
     ),
+    # A radius step on one line: the groups, then the line's cross-radius
+    # pairs on the two-radius moments (momwire#1438).
+    "exact_radius_step": dict(
+        wires=[
+            [(0.0, -5.0, 6.0), (0.0, 0.0, 6.0)],
+            [(0.0, 0.0, 6.0), (0.0, 5.0, 6.0)],
+        ],
+        n_per_edge_per_wire=[[10], [10]],
+        wire_radius=[0.3, 0.4],
+        feeds=[(0, 2.5, 1.0 + 0j)],
+    ),
+    "exact_radius_step_ek_pec": dict(
+        wires=[
+            [(0.0, -5.0, 6.0), (0.0, 0.0, 6.0)],
+            [(0.0, 0.0, 6.0), (0.0, 5.0, 6.0)],
+        ],
+        n_per_edge_per_wire=[[10], [10]],
+        wire_radius=[0.3, 0.4],
+        feeds=[(0, 2.5, 1.0 + 0j)],
+        ground_z=0.0,
+        extended_kernel=True,
+    ),
     "exact_two_lines_ek": dict(
         wires=[DIPOLE[0], [(1.5, -5.0, 6.0), (1.5, 5.0, 6.0)]],
         n_per_edge_per_wire=[[21], [17]],
@@ -343,19 +365,6 @@ DECLINES = [
     (dict(ground_z=0.0, ground_eps=13.0 - 1.2j), "finite-ground"),
     (dict(nec5_quadrature=False, n_qp_path=2), "path-rule"),
     (dict(exact_kernel=True), "exact-kernel"),
-    # A radius step on one line: the two-radius cross jobs (momwire#1438).
-    (
-        dict(
-            wires=[
-                [(0.0, -5.0, 6.0), (0.0, 0.0, 6.0)],
-                [(0.0, 0.0, 6.0), (0.0, 5.0, 6.0)],
-            ],
-            n_per_edge_per_wire=[[10], [10]],
-            wire_radius=[0.3, 0.4],
-            feeds=[(0, 2.5, 1.0 + 0j)],
-        ),
-        "exact-kernel-cross",
-    ),
     (
         dict(
             wires=[DIPOLE[0], DIPOLE[0][::-1], [(1.0, -5.0, 6.0), (1.0, 5.0, 6.0)]],
