@@ -163,9 +163,25 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         const int64_t row = in.grounded(g);
         if (row >= lo && row < hi) minus_[row - lo] = -1;
     }
-    ptrdiff_t k_shape[2] = {0, n_seg}, k_st[2] = {static_cast<ptrdiff_t>(sizeof(cd) * n_seg),
-                                                  static_cast<ptrdiff_t>(sizeof(cd))};
-    view<const cd, 2> m0k(nullptr, k_shape, k_st);
+    // A chopped row (`_t2_tables`): "A" is knot - centroid(A), "B" is
+    // centroid(B) - knot, the knot being row n_need + (its chop index) of the
+    // stacked table [M0w; M0k]. After the grounded rows, as Python orders it.
+    const ptrdiff_t n_chop = in.chop_rows.shape(0);
+    for (ptrdiff_t q = 0; q < n_chop; q++) {
+        const int64_t row = in.chop_rows(q);
+        if (row < lo || row >= hi) continue;
+        if (in.chop_keep_a(q)) {
+            plus_[row - lo] = n_need + q;
+            minus_[row - lo] = mark_[sa[row]];
+        } else {
+            plus_[row - lo] = mark_[sb[row]];
+            minus_[row - lo] = n_need + q;
+        }
+    }
+    const std::vector<cd> &m0k_tab = image ? m0k_img_ : m0k_;
+    ptrdiff_t k_shape[2] = {n_chop, n_seg}, k_st[2] = {static_cast<ptrdiff_t>(sizeof(cd) * n_seg),
+                                                       static_cast<ptrdiff_t>(sizeof(cd))};
+    view<const cd, 2> m0k(n_chop ? m0k_tab.data() : nullptr, k_shape, k_st);
     const view<const cd, 2> t1c(vt1);
     view<cd, 2> dst;
     if (!image) {
@@ -233,6 +249,31 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     }
 }
 
+// `_seg_moments_from_prepared(t2_chop_chunks, k, n_chop, need_m1=False)`
+// against one source set, and over the composing ground's image times its
+// w_Phi (C2): `M0k * w_Phi_k`, numpy's fused product.
+void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, bool image,
+                                std::vector<cd> &out) {
+    const ptrdiff_t n_chop = in.chop_rows.shape(0), n_seg = in.seg_h.shape(0);
+    out.assign(static_cast<size_t>(n_chop * n_seg), cd(0.0, 0.0));
+    if (n_chop == 0) return;
+    ptrdiff_t z_shape[2] = {0, 0}, z_st[2] = {static_cast<ptrdiff_t>(sizeof(cd)),
+                                              static_cast<ptrdiff_t>(sizeof(cd))};
+    view<cd, 2> none(nullptr, z_shape, z_st);
+    seg_moments(in.chop_pts, src.seg_p0, src.seg_t, in.seg_h, in.a, in.xg, in.wg, in.k, false,
+                view<const int64_t, 1>(), view<const int64_t, 1>(), view<const double, 1>(),
+                in.cancel_flag, view<const double, 1>(),
+                c_view<cd, 2>(out.data(), {n_chop, n_seg}), none);
+    counters.seg_moments_calls++;
+    if (image && in.compose) {
+        const cd c2 = in.comp.c2;
+        for (cd &v : out) {
+            const double ar = v.real(), ai = v.imag();
+            v = cd(std::fma(ar, c2.real(), -(ai * c2.imag())), std::fma(ar, c2.imag(), ai * c2.real()));
+        }
+    }
+}
+
 void SolveContext::fill(const SolveInputs &in) { fill(in, nullptr); }
 
 void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &between) {
@@ -274,6 +315,16 @@ void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &
         require_contiguous(c.rem_t_src, who, "rem_t_src");
     }
 
+    if (in.chop_rows.shape(0) > 0) {
+        if (in.chop_keep_a.shape(0) != in.chop_rows.shape(0) ||
+            in.chop_pts.shape(0) != in.chop_rows.shape(0))
+            throw std::invalid_argument("razor_solve: the chopped rows' tables are mis-shaped");
+        knot_moments(in, in.real, false, m0k_);
+        if (in.has_image) knot_moments(in, in.image, true, m0k_img_);
+    } else {
+        m0k_.clear();
+        m0k_img_.clear();
+    }
     n_ = n;
     const size_t nn = static_cast<size_t>(n * n);
     if (z_.size() < nn) {

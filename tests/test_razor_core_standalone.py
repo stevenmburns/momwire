@@ -50,6 +50,7 @@ CORE_SOURCES = (
     "_accel_razor_cplx.cpp",
     "_razor_solve_core.cpp",
     "_razor_front_core.cpp",
+    "_razor_buried_core.cpp",
     # The exact ring kernel (momwire#1479): razor's plan and correction, and
     # the point moments' Python-free twin of the extension's TU.
     "_razor_exact_core.cpp",
