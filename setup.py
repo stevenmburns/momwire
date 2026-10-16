@@ -349,6 +349,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_core.h",
     "src/momwire/_razor_solve_core.h",
     "src/momwire/_razor_front_core.h",
+    "src/momwire/_razor_buried_core.h",
     "src/momwire/_razor_wire_loading_core.h",
     # The exact ring kernel's point moments, Python-free (momwire#1479): the
     # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
@@ -455,6 +456,10 @@ _ACCEL_SOURCES = [
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.
     "src/momwire/_razor_front_core.cpp",
+    # razor-2p's BURIED fill (momwire#1512 step 3): the media's own fronts,
+    # their fold, the cross blocks; Python-free. Its own TU: it only calls
+    # the kernels and the solve core, across TU boundaries.
+    "src/momwire/_razor_buried_core.cpp",
     # The front half's exact ring kernel (momwire#1479): the plan and the
     # correction, and the point moments' Python-free twin of
     # `_accel_exact_kernel_point.cpp` (the same inline text, so the same

@@ -1507,12 +1507,12 @@ std::string Front::build(const FrontInputs &in_raw) {
     } catch (const FrontError &e) {
         throw FrontError(e.kind, e.what(), true);
     }
-    // The buried fill (momwire#1512 B2-B5) is not here yet.
-    if (buried != Buried::none) return "buried-fill";
     // The frozen table (`_quadrature.leggauss`); an order beyond it is
     // numpy's eigensolve in Python, which this front half does not replay.
     if (!leggauss(in.n_qp_source, xg, wg)) return "quadrature-order";
     prepare();
+    n_qp_sommerfeld = in.n_qp_sommerfeld;
+    chunk_elems = in.chunk_elems;
     if (in.loading.active()) {
         if (in.loading.has_conductivity) {
             if (static_cast<int64_t>(in.loading.conductivity.size()) != n_wires) return "loading-shape";
@@ -1524,6 +1524,10 @@ std::string Front::build(const FrontInputs &in_raw) {
         loading = in.loading;
         loading_stencil();
     }
+    // A buried deck fills medium by medium (`_assemble_Z_crossing` /
+    // `_assemble_Z_below_plane`, `_razor_buried_core.h`): the full geometry
+    // keeps only its loading; each medium's front is built at the fill.
+    if (buried != Buried::none) return BURIED_FILL_PENDING;
     if (compose) {
         const std::string why_c = prepare_compose(in.n_qp_sommerfeld);
         if (!why_c.empty()) return why_c;

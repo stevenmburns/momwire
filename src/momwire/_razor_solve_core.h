@@ -99,6 +99,12 @@ struct SolveInputs {
     Compose comp;
     ptrdiff_t window_rows = 0;  // basis rows per window (>= 1)
     uintptr_t cancel_flag = 0;
+    // CHOPPED rows (momwire#813 unit 2, a buried medium's front): sorted
+    // basis rows whose T2 endpoint is the KNOT, which half survives
+    // (keep_a: centroid(A) -> knot), and the knots (n_chop, 3). Empty: none.
+    view<const int64_t, 1> chop_rows;
+    view<const bool, 1> chop_keep_a;
+    view<const double, 2> chop_pts;
 };
 
 // What ran, for tests to read (the "green gate that measures nothing" rule:
@@ -153,7 +159,10 @@ class SolveContext {
     std::vector<int64_t> need_, gi_, obs_row_, plus_, minus_, mark_;
     std::vector<double> bo_;
     std::vector<int> ipiv_;
-    std::vector<cd> m0k_;  // stays empty: no chopped rows on this route
+    std::vector<cd> m0k_;      // the chopped rows' knot moments, per source set
+    std::vector<cd> m0k_img_;
+    void knot_moments(const SolveInputs &in, const SourceSet &src, bool image,
+                      std::vector<cd> &out);
 
     template <class T>
     void reserve(std::vector<T> &v, size_t n) {

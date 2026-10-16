@@ -1,6 +1,7 @@
 #include "_accel_common.h"
 #include "_mw_binding.h"
 #include "_nec5_razor_seam_core.h"
+#include "_razor_buried_core.h"
 #include "_razor_front_core.h"
 #include "_razor_solve_core.h"
 
@@ -501,6 +502,38 @@ std::pair<std::string, std::unique_ptr<mw::razor::Front>> build_front(const py::
     return {"", std::move(f)};
 }
 
+// momwire#1512 step 3's gate (`scripts/core_split/buried_z_compare.py`): a
+// buried solve's matrix at each stage the C++ fill reaches, from the
+// arguments the seam handed RazorSolver.
+py::dict razor_buried_stages(py::dict kw, int64_t chunk_elems) {
+    py::dict out;
+    mw::razor::FrontInputs in;
+    try {
+        in = front_inputs(kw);
+    } catch (Malformed &) {
+        out["route"] = "malformed-args";
+        return out;
+    }
+    in.chunk_elems = chunk_elems;
+    mw::razor::Front f;
+    std::string why;
+    mw::razor::BuriedStages st;
+    std::vector<cd> z;
+    {
+        py::gil_scoped_release release;
+        why = f.build(in);
+        if (why == mw::razor::BURIED_FILL_PENDING) why = mw::razor::fill_buried(f, z, &st, 0);
+    }
+    out["route"] = why.empty() ? std::string("filled") : "stopped:" + why;
+    const ptrdiff_t n = f.n_basis;
+    for (size_t i = 0; i < st.reached.size(); i++) {
+        py::array_t<cd, py::array::f_style> a({n, n});
+        std::copy(st.z[i].begin(), st.z[i].end(), a.mutable_data());
+        out[py::str(st.reached[i])] = a;
+    }
+    return out;
+}
+
 py::dict front_port_solution(mw::razor::SolveContext &ctx, py::dict kw, int64_t chunk_elems,
                              uintptr_t cancel_flag, bool want_z, bool want_front) {
     py::dict out;
@@ -805,6 +838,10 @@ void register_razor_solve(py::module_ &m) {
              "(`_build_geometry`'s dict), ties, and Z / front on request.");
 
     m.attr("razor_front_proto") = true;
+    m.def("razor_buried_stages", &razor_buried_stages, py::arg("kwargs"),
+          py::arg("chunk_elems") = 2000000,
+          "momwire#1512 step 3's gate: a buried solve's matrix at each stage the "
+          "C++ fill reaches ('above', 'below', 'cross', 'final'), column-major.");
     m.def("razor_front_build", &razor_front_build, py::arg("kwargs"),
           py::arg("chunk_elems") = 2000000,
           "The front half alone (no fill, no LU): the same dict as "
