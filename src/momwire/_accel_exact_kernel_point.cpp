@@ -1,6 +1,7 @@
 #include "_accel_common.h"
 
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #ifdef _OPENMP
 #include <omp.h>
@@ -43,6 +44,11 @@ namespace exact_kernel_point_1433 {
 
 #define MW_EK_RELEASE_GIL py::gil_scoped_release release;
 #include "_exact_kernel_point_inline.h"
+
+// momwire#1438's two-radius point moments (`PointCrossRows`), in the GIL
+// release scope's spelling this TU uses.
+#define MW_EK_RELEASE_GIL py::gil_scoped_release release;
+#include "_exact_kernel_cross_inline.h"
 
 static Rules make_rules(py::array_t<double, py::array::c_style | py::array::forcecast> xg,
                         py::array_t<double, py::array::c_style | py::array::forcecast> wg,
@@ -119,6 +125,88 @@ static py::array_t<std::complex<double>> point_moments_py(double c, double h, do
     for (int q = 0; q < nq; ++q) O[q] = M[q];
     return out;
 }
+
+static py::array_t<std::complex<double>> point_moments2_py(double c, double h, double a1,
+                                                           double a2, double k, int nq,
+                                                           Rules rules) {
+    if (nq < 1 || nq > MAXND) throw std::runtime_error("point moments: nq must be in [1, 6]");
+    cd M[MAXND];
+    point_moments2(c, h, a1, a2, k, nq, rules, M);
+    py::array_t<std::complex<double>> out(nq);
+    cd *O = out.mutable_data();
+    for (int q = 0; q < nq; ++q) O[q] = M[q];
+    return out;
+}
+
+static py::array_t<std::complex<double>> ring_kernel2_py(
+    py::array_t<double, py::array::c_style | py::array::forcecast> z, double a1, double a2,
+    double k) {
+    py::array_t<std::complex<double>> out(z.size());
+    const double *Z = z.data();
+    cd *O = out.mutable_data();
+    for (py::ssize_t i = 0; i < z.size(); ++i) O[i] = ring_kernel2(Z[i], a1, a2, k);
+    return out;
+}
+
+// PointCrossRows through the core class, its arguments checked here.
+class PointCrossRowsAccel {
+  public:
+    PointCrossRowsAccel(py::array_t<double, py::array::c_style | py::array::forcecast> x0,
+                        py::array_t<double, py::array::c_style | py::array::forcecast> sgn,
+                        py::array_t<double, py::array::c_style | py::array::forcecast> h,
+                        py::array_t<double, py::array::c_style | py::array::forcecast> a,
+                        py::array_t<int64_t, py::array::c_style | py::array::forcecast> lab,
+                        double k, int nq, int64_t max_cached, double q, double qa, Rules rules,
+                        int n_threads)
+        : impl_(make(x0, sgn, h, a, lab, k, nq, max_cached, q, qa, rules, n_threads)) {}
+
+    int64_t n() const { return impl_.n(); }
+    int64_t evaluated() const { return impl_.evaluated(); }
+    int64_t cached() const { return impl_.cached(); }
+
+    void rows(py::array_t<double, py::array::c_style | py::array::forcecast> x_obs,
+              py::array_t<double, py::array::c_style | py::array::forcecast> a_obs,
+              py::array_t<int64_t, py::array::c_style | py::array::forcecast> lab_obs,
+              py::array out) {
+        const int64_t m = static_cast<int64_t>(x_obs.size());
+        if (a_obs.size() != m || lab_obs.size() != m)
+            throw std::runtime_error(
+                "ExactKernelPointCrossRows.rows: x_obs, a_obs, lab_obs must share a length");
+        if (out.ndim() != 3 || out.shape(0) != impl_.nq() || out.shape(1) != m ||
+            out.shape(2) != impl_.n())
+            throw std::runtime_error("ExactKernelPointCrossRows.rows: out must be (nq, m, n)");
+        if (!out.dtype().is(py::dtype::of<std::complex<double>>()) ||
+            !(out.flags() & py::array::c_style) || !out.writeable())
+            throw std::runtime_error(
+                "ExactKernelPointCrossRows.rows: out must be complex128, C-contiguous, "
+                "writeable");
+        impl_.rows(x_obs.data(), a_obs.data(), lab_obs.data(), m,
+                   static_cast<cd *>(out.mutable_data()));
+    }
+
+  private:
+    PointCrossRowsCore impl_;
+
+    static PointCrossRowsCore make(
+        py::array_t<double, py::array::c_style | py::array::forcecast> &x0,
+        py::array_t<double, py::array::c_style | py::array::forcecast> &sgn,
+        py::array_t<double, py::array::c_style | py::array::forcecast> &h,
+        py::array_t<double, py::array::c_style | py::array::forcecast> &a,
+        py::array_t<int64_t, py::array::c_style | py::array::forcecast> &lab, double k, int nq,
+        int64_t max_cached, double q, double qa, Rules &rules, int n_threads) {
+        if (nq < 1 || nq > MAXND)
+            throw std::runtime_error("ExactKernelPointCrossRows: nq must be in [1, 6]");
+        const py::ssize_t n = x0.size();
+        if (sgn.size() != n || h.size() != n || a.size() != n || lab.size() != n)
+            throw std::runtime_error(
+                "ExactKernelPointCrossRows: x0, sgn, h, a, lab must share a length");
+        if (!(q > 0.0) || !(qa > 0.0))
+            throw std::runtime_error("ExactKernelPointCrossRows: q and qa must be positive");
+        return PointCrossRowsCore(x0.data(), sgn.data(), h.data(), a.data(), lab.data(),
+                                  static_cast<int64_t>(n), k, nq, max_cached, q, qa, rules,
+                                  n_threads);
+    }
+};
 
 // ---------------------------------------------------------------------------
 // The point-tested correction's assembly (razor-2p's wing algebra, #1433):
@@ -210,5 +298,31 @@ void register_exact_kernel_point(py::module_ &m) {
           py::arg("row_cA"), py::arg("row_cP"), py::arg("col_ptr"), py::arg("col_n"),
           py::arg("ent_j"), py::arg("ent_t"), py::arg("ent_rise"), py::arg("ent_q"),
           py::arg("h"), py::arg("Z"), py::arg("n_threads") = 0);
+    m.def("exact_kernel_point_moments2", &point_moments2_py,
+          "(nq,) two-radius point moments of one segment (observer ring a1, source a2). "
+          "momwire#1438.",
+          py::arg("c"), py::arg("h"), py::arg("a1"), py::arg("a2"), py::arg("k"), py::arg("nq"),
+          py::arg("rules"));
+    m.def("exact_kernel_ring_kernel2", &ring_kernel2_py,
+          "The two-radius ring kernel K2(z; a1, a2) at each z. momwire#1438.", py::arg("z"),
+          py::arg("a1"), py::arg("a2"), py::arg("k"));
+    py::class_<PointCrossRowsAccel>(m, "ExactKernelPointCrossRows")
+        .def(py::init<py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<double, py::array::c_style | py::array::forcecast>,
+                      py::array_t<int64_t, py::array::c_style | py::array::forcecast>, double,
+                      int, int64_t, double, double, Rules, int>(),
+             py::arg("x0"), py::arg("sgn"), py::arg("h"), py::arg("a"), py::arg("lab"),
+             py::arg("k"), py::arg("nq"), py::arg("max_cached"), py::arg("q"), py::arg("qa"),
+             py::arg("rules"), py::arg("n_threads") = 0)
+        .def("rows", &PointCrossRowsAccel::rows,
+             "Write the two-radius moments at observers x_obs (radii a_obs, labels lab_obs) "
+             "into out (nq, m, n), complex128, C-contiguous; zero on same-label pairs.",
+             py::arg("x_obs"), py::arg("a_obs"), py::arg("lab_obs"), py::arg("out"))
+        .def_property_readonly("evaluated", &PointCrossRowsAccel::evaluated)
+        .def_property_readonly("cached", &PointCrossRowsAccel::cached)
+        .def_property_readonly("n", &PointCrossRowsAccel::n);
     m.attr("exact_kernel_point_1433") = true;
+    m.attr("exact_kernel_point_cross_1438") = true;
 }
