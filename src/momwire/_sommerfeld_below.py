@@ -185,12 +185,21 @@ _MAX_TAIL_PANELS = 24000
 # budget is untouched. Measured against an mpmath reference
 # (scratch/wa-tail/): see the PR.
 #
-# `_TAIL_WA` is the A/B switch (tests flip it; nothing else should).
+# `_TAIL_WA` is the A/B switch (tests flip it; nothing else should). It and
+# the constants below are part of every table key (`_tail_rule`), so a table
+# filled under one rule is never served under the other.
 _TAIL_WA = True
 _WA_ORDER = 10
 _WA_MIN_SUMS = 4
 _WA_AGREE = 2
 _WA_POW = (-0.5, -0.5, -0.5, -1.5, -2.5, -0.5)
+
+
+def _tail_rule():
+    """The tail rule as a cache-key component, read at call time."""
+    if not _TAIL_WA:
+        return ("tail", "wynn")
+    return ("tail", "wa-1441", _WA_ORDER, _WA_MIN_SUMS, _WA_AGREE, _WA_POW)
 
 
 def _wa_pow():
@@ -2289,7 +2298,9 @@ class _AnchorPlan:
         """Anchor j's cache key. The slot an exact grid's key gives to its
         size says "anchor" instead: an anchor GROWS (`_ensure_anchors`), so
         its size is a property of the file and not of its name. The spacing
-        closes it: a fill anchor and a point anchor are different lattices."""
+        and the tail rule close it: a fill anchor and a point anchor are
+        different lattices, and a table integrated under the weighted-averages
+        tail (momwire#1441) is different bytes from one under the old walk."""
         from ._sommerfeld import _C_LIGHT
 
         k2 = _anchor_k2()
@@ -2301,6 +2312,7 @@ class _AnchorPlan:
             k2 * _C_LIGHT,
             _MU0,
             self.spacing,
+            _tail_rule(),
         )
 
     @property
@@ -2609,7 +2621,16 @@ def get_grid_below(
     lam_m = _lambda_m(eps_t, k2)
     r1b_wl = _r1_bucket_below_wl(r1_max, lam_m)
     spacing = _spacing(spacing)
-    key = ("below", eps_t, k2, r1b_wl, float(omega), float(mu), spacing)
+    key = (
+        "below",
+        eps_t,
+        k2,
+        r1b_wl,
+        float(omega),
+        float(mu),
+        spacing,
+        _tail_rule(),
+    )
     grid = _GRID_CACHE.get(key)
     if grid is None and health is None:
         grid = _GRID_CACHE.get(key + _BLENDED_KEY)
