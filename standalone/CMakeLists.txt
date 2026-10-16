@@ -31,6 +31,17 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it" OFF)
+# Which of the extension's two x86-64 variants the C++ core is compiled as
+# (setup.py `_VARIANTS`): avx2 (-mavx2 -mfma), or sse2, the x86-64 baseline
+# the extension's `_sse2` modules are (its flags minus the AVX2 ones). The
+# Sommerfeld lanes (momwire#1441 step 3) follow the flags, as in the
+# extension: __m256d under avx2, two __m128d under sse2. One variant per
+# build for now; the in-process choice comes with the Windows work (#1512).
+set(MW_EXE_VARIANT "avx2" CACHE STRING "C++ core variant: avx2 or sse2")
+set_property(CACHE MW_EXE_VARIANT PROPERTY STRINGS avx2 sse2)
+if(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
+  message(FATAL_ERROR "MW_EXE_VARIANT must be avx2 or sse2")
+endif()
 set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
 set(MW_DEFAULT_PYTHON_HOME "" CACHE PATH "momwire environment used when MOMWIRE_PYTHON_HOME is unset")
 set(MW_LIBPYTHON "" CACHE STRING "Python library opened for the fallback (default: this Python's)")
@@ -110,11 +121,17 @@ set(MW_CORE_SOURCES
 # runtime at all (`omp simd` stays: -fopenmp-simd / MSVC's simd no-ops), so a
 # one-thread answer never initialises the OpenMP runtime (route.h).
 if(MSVC)
-  set(MW_CORE_FLAGS /O2 /arch:AVX2 /fp:fast /std:c++17)
+  set(MW_CORE_FLAGS /O2 /fp:fast /std:c++17)
+  if(MW_EXE_VARIANT STREQUAL "avx2")
+    list(APPEND MW_CORE_FLAGS /arch:AVX2)
+  endif()
   set(MW_OMP_FLAG /openmp:llvm)
 else()
-  set(MW_CORE_FLAGS -O3 -fopenmp-simd -mavx2 -mfma -fno-math-errno -ffp-contract=off
+  set(MW_CORE_FLAGS -O3 -fopenmp-simd -fno-math-errno -ffp-contract=off
       -fno-strict-overflow -fvisibility=hidden)
+  if(MW_EXE_VARIANT STREQUAL "avx2")
+    list(APPEND MW_CORE_FLAGS -mavx2 -mfma)
+  endif()
   set(MW_OMP_FLAG -fopenmp)
 endif()
 add_library(mw_core OBJECT ${MW_CORE_SOURCES} route.cpp)
@@ -139,6 +156,7 @@ if(MW_EXE_NO_PYTHON)
   target_compile_definitions(${MW_EXE} PRIVATE
     NDEBUG
     MW_EXE_NO_PYTHON=1
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}")
 else()
@@ -147,6 +165,7 @@ else()
   target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${Python3_INCLUDE_DIRS})
   target_compile_definitions(${MW_EXE} PRIVATE
     NDEBUG
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
     MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
     MW_VERSION="${MW_VERSION}"
     MW_LIBPYTHON="${MW_LIBPYTHON}")
@@ -180,7 +199,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 if(MW_EXE_NO_PYTHON)
-  message(STATUS "${MW_EXE} ${MW_VERSION}: no Python, OpenBLAS ${MW_OPENBLAS_LIB}")
+  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): no Python, OpenBLAS ${MW_OPENBLAS_LIB}")
 else()
-  message(STATUS "${MW_EXE} ${MW_VERSION}: Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB}")
+  message(STATUS "${MW_EXE} ${MW_VERSION} (${MW_EXE_VARIANT}): Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB}")
 endif()
