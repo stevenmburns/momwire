@@ -1,0 +1,10 @@
+CM A near field over GN 2: the reflected-field remainder is not in C++ yet,
+CM so the deck declines by name.
+CE
+GW 1,21,0.,-5.,10.,0.,5.,10.,.001
+GE 1
+FR 0,1,0,0,14.
+GN 2,0,0,0,13.,.005
+EX 0,1,11,0,1.,0.
+NE 0,1,1,3,1.,0.,1.,0.,0.,2.
+EN

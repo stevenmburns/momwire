@@ -55,6 +55,10 @@ const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu
 // scalar products plain (measured, AVX2 and AVX-512).
 std::vector<cd> far_pack(const Grid &g);
 
+// CPython 3.12's complex division (`_Py_c_quot`), for a caller spelling a
+// Python complex expression (C2 = (eps~ - 1) / (eps~ + 1)).
+cd py_quot(cd a, cd b);
+
 // `_somm_r1_bucket_wl` and `_somm_eps_rungs` (exposed for the tests).
 double r1_bucket_wl(double r1_wl);
 void eps_rungs(cd eps_t, cd &lo, cd &hi, double &t);

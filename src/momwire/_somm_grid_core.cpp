@@ -407,6 +407,8 @@ const Grid &norm_master(cd rung, double r1b_wl, cd lattice_eps) {
 
 }  // namespace
 
+cd py_quot(cd a, cd b) { return py_div(a, b); }
+
 const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu) {
     static std::map<VKey, std::unique_ptr<Grid>> views;
     const double lam = 2.0 * PI / k2;

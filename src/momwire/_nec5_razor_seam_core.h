@@ -23,8 +23,9 @@
 //     for (const mw::nec5::Prepared &p : r.prepared)   // built fronts
 //         mw::razor::solve_ports(*p.front, ctx, lapack, X, 0);   // currents
 //
-// SCOPE (the decks the C++ solve covers): free space, GN 1, or a bare GD
-// (which the seam solves over a PERFECT image), no TL / NT, no WIRE loading
+// SCOPE (the decks the C++ solve covers): free space, GN 1, a bare GD
+// (which the seam solves over a PERFECT image) or GN 0 / GN 2 above the
+// plane (the composing Sommerfeld fill, momwire#1479 S3), no TL / NT, no WIRE loading
 // (LD 5 / LD 2 / LD 3; a lumped LD 0 / 1 / 4 is a port site here, its
 // impedance the run half's), no phantom wire, finite coordinates, frequency
 // and radii, at most `MAX_SEGMENTS` segments in all. Anything else is
