@@ -351,11 +351,8 @@ static void bessel_j0_many(Scratch &s) {
     s.b0s.resize(n);
     const size_t W = static_cast<size_t>(mw_sl::W);
     size_t i = 0;
-    cd j0[mw_sl::W], j1x[mw_sl::W];
-    for (; i + W <= n; i += W) {
-        mw_contour_lanes::bessel_j0_j1x_any(&s.xs[i], j0, j1x);
-        for (size_t l = 0; l < W; ++l) s.b0s[i + l] = j0[l];
-    }
+    // J0 alone (the column never reads J1/x): `bessel_j0_any`.
+    for (; i + W <= n; i += W) mw_contour_lanes::bessel_j0_any(&s.xs[i], &s.b0s[i]);
     for (; i < n; ++i) {
         cd b1x;
         mw_contour::bessel_j0_j1x(s.xs[i], s.b0s[i], b1x);
@@ -569,14 +566,7 @@ static inline void factor_nodes_lanes(const cd &k_p, const cd &k_m, const cd &kp
                                       double *gpr, double *gpi, double *gmr,
                                       double *gmi) {
     using namespace mw_sl;
-    Buf lr, li, wr, wi;
-    for (int j = 0; j < W; ++j) {
-        lr.v[j] = l[j].real();
-        li.v[j] = l[j].imag();
-        wr.v[j] = wk[j].real();
-        wi.v[j] = wk[j].imag();
-    }
-    const C L{loadu(lr.v), loadu(li.v)}, WK{loadu(wr.v), loadu(wi.v)};
+    const C L = cload(l), WK = cload(wk);
     const C g_p = mw_sl::gamma_cut(L, k_p);
     const C g_m = mw_sl::gamma_cut(L, k_m);
     const C u = cdiv(cscale(2.0, L), cadd(g_p, g_m));
@@ -634,9 +624,32 @@ static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
 // A column's head + mid factors, held for reuse (`ColumnCache`): the arrays
 // `column_factors` writes, for those nodes only, in its layout (plane c of
 // fr / fi at c * K).
+//
+// Its arrays are written in full by `head_mid_factors` before anything reads
+// them, so they are allocated WITHOUT the zero fill a std::vector<double>
+// resize does (momwire#1512): a miss built that fill, then overwrote it.
+template <class T>
+struct NoFillAlloc : std::allocator<T> {
+    template <class U>
+    struct rebind {
+        using other = NoFillAlloc<U>;
+    };
+    NoFillAlloc() = default;
+    template <class U>
+    NoFillAlloc(const NoFillAlloc<U> &) noexcept {}
+    template <class U>
+    void construct(U *p) noexcept {
+        ::new (static_cast<void *>(p)) U;  // default-init: no value written
+    }
+    template <class U, class... A>
+    void construct(U *p, A &&...a) {
+        ::new (static_cast<void *>(p)) U(std::forward<A>(a)...);
+    }
+};
+
 struct HeadMid {
     size_t K = 0;
-    std::vector<double> gpr, gpi, gmr, gmi, fr, fi;
+    std::vector<double, NoFillAlloc<double>> gpr, gpi, gmr, gmi, fr, fi;
     size_t bytes() const { return (4 + 12) * K * sizeof(double); }
 };
 
@@ -704,17 +717,23 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
     for (size_t k0 = 0; k0 < K; k0 += MW_BLOCK) {
         const int nb =
             static_cast<int>(std::min<size_t>(MW_BLOCK, K - k0));
-        double amax = -std::numeric_limits<double>::infinity();
         // Explicit fused multiply-adds (momwire#1214, _fma_inline.h), here and
         // in the six sums below: the sites GCC contracted before
         // -ffp-contract=off (#1194), in the split it chose (the first product
         // fused, the second rounded). The lane sums themselves stay adds, in
         // the order the lanes fix.
+        //
+        // The block is dead when its largest exponent is under MW_EXP_ZERO,
+        // NaN ignored (std::max(amax, NaN) keeps amax) -- i.e. when no node's
+        // exponent is >= MW_EXP_ZERO, NaN failing the test. Spelled as that
+        // OR rather than as the running max, whose serial vmaxsd chain was the
+        // loop's whole cost (momwire#1512): the same decision, vectorized.
+        int live = 0;
         for (int j = 0; j < nb; ++j) {
             ar[j] = mw_fma::fma(gmr[k0 + j], zp, -(gpr[k0 + j] * z));
-            amax = std::max(amax, ar[j]);
+            live |= ar[j] >= MW_EXP_ZERO;
         }
-        if (amax < MW_EXP_ZERO) continue;  // exactly zero, see MW_EXP_ZERO
+        if (!live) continue;  // exactly zero, see MW_EXP_ZERO
         MW_NI_SIMD()
         for (int j = 0; j < nb; ++j) {
             ai[j] = mw_fma::fma(gmi[k0 + j], zp, -(gpi[k0 + j] * z));
@@ -738,43 +757,64 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
         // hub16 x16 fill (Haswell); the lanes cost nothing measurable
         // (see mw_lanes for why they are a vector type).
         static_assert(MW_LANES == 4, "the lane combine is written for four");
-        for (int c = 0; c < 6; ++c) {
-            const double *fr = s.fr.data() + c * K + k0;
-            const double *fi = s.fi.data() + c * K + k0;
-            mw_lanes sr = {0.0, 0.0, 0.0, 0.0}, si = {0.0, 0.0, 0.0, 0.0};
+        //
+        // The six columns are walked TOGETHER, three at a time, each with its
+        // own lane accumulators (momwire#1512): column c's lane l still takes
+        // nodes l, l + 4, ... in order and then the leftovers, so every sum
+        // is the one the column-at-a-time loop formed, bit for bit. One
+        // column alone was a single 4-cycle add chain per four nodes; three
+        // give the core independent chains to overlap, and er / ei are read
+        // once per three columns rather than once per column.
+        for (int c0 = 0; c0 < 6; c0 += 3) {
+            const double *fr[3], *fi[3];
+            for (int u = 0; u < 3; ++u) {
+                fr[u] = s.fr.data() + (c0 + u) * K + k0;
+                fi[u] = s.fi.data() + (c0 + u) * K + k0;
+            }
+            mw_lanes sr[3], si[3];
+            for (int u = 0; u < 3; ++u) {
+                sr[u] = mw_lanes{0.0, 0.0, 0.0, 0.0};
+                si[u] = mw_lanes{0.0, 0.0, 0.0, 0.0};
+            }
             int j = 0;
             for (; j + MW_LANES <= nb; j += MW_LANES) {
 #if defined(__GNUC__)
-                mw_lanes a, b, x, y;  // memcpy: unaligned loads, no aliasing
+                mw_lanes a, b;  // memcpy: unaligned loads, no aliasing
                 std::memcpy(&a, er + j, sizeof a);
                 std::memcpy(&b, ei + j, sizeof b);
-                std::memcpy(&x, fr + j, sizeof x);
-                std::memcpy(&y, fi + j, sizeof y);
-                // Lane by lane through the scalar mw_fma::fma, which GCC
-                // packs back into one vfmadd per sum under -mfma.
-                const mw_lanes by = b * y, bx = b * x;
-                mw_lanes p, q;
-                for (int l = 0; l < MW_LANES; ++l) {
-                    p[l] = mw_fma::fma(a[l], x[l], -by[l]);
-                    q[l] = mw_fma::fma(a[l], y[l], bx[l]);
+                for (int u = 0; u < 3; ++u) {
+                    mw_lanes x, y;
+                    std::memcpy(&x, fr[u] + j, sizeof x);
+                    std::memcpy(&y, fi[u] + j, sizeof y);
+                    // Lane by lane through the scalar mw_fma::fma, which GCC
+                    // packs back into one vfmadd per sum under -mfma.
+                    const mw_lanes by = b * y, bx = b * x;
+                    mw_lanes p, q;
+                    for (int l = 0; l < MW_LANES; ++l) {
+                        p[l] = mw_fma::fma(a[l], x[l], -by[l]);
+                        q[l] = mw_fma::fma(a[l], y[l], bx[l]);
+                    }
+                    sr[u] += p;
+                    si[u] += q;
                 }
-                sr += p;
-                si += q;
 #else
-                for (int l = 0; l < MW_LANES; ++l) {
-                    sr[l] += mw_fma::fma(er[j + l], fr[j + l],
-                                         -(ei[j + l] * fi[j + l]));
-                    si[l] += mw_fma::fma(er[j + l], fi[j + l],
-                                         ei[j + l] * fr[j + l]);
-                }
+                for (int u = 0; u < 3; ++u)
+                    for (int l = 0; l < MW_LANES; ++l) {
+                        sr[u][l] += mw_fma::fma(er[j + l], fr[u][j + l],
+                                                -(ei[j + l] * fi[u][j + l]));
+                        si[u][l] += mw_fma::fma(er[j + l], fi[u][j + l],
+                                                ei[j + l] * fr[u][j + l]);
+                    }
 #endif
             }
-            for (int l = 0; j < nb; ++j, ++l) {
-                sr[l] += mw_fma::fma(er[j], fr[j], -(ei[j] * fi[j]));
-                si[l] += mw_fma::fma(er[j], fi[j], ei[j] * fr[j]);
+            for (int u = 0; u < 3; ++u) {
+                for (int jj = j, l = 0; jj < nb; ++jj, ++l) {
+                    sr[u][l] += mw_fma::fma(er[jj], fr[u][jj], -(ei[jj] * fi[u][jj]));
+                    si[u][l] += mw_fma::fma(er[jj], fi[u][jj], ei[jj] * fr[u][jj]);
+                }
+                accr[c0 + u] += (sr[u][0] + sr[u][1]) + (sr[u][2] + sr[u][3]);
+                acci[c0 + u] += (si[u][0] + si[u][1]) + (si[u][2] + si[u][3]);
             }
-            accr[c] += (sr[0] + sr[1]) + (sr[2] + sr[3]);
-            acci[c] += (si[0] + si[1]) + (si[2] + si[3]);
         }
     }
     for (int c = 0; c < 6; ++c) out[c] = cd(accr[c], acci[c]);
