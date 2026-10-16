@@ -356,12 +356,14 @@ repair-wheel-command = "auditwheel repair --exclude libgomp.so.1 -w {dest_dir} {
 environment = { MOMWIRE_STRIP_SYMBOLS = "1" }
 
 [tool.cibuildwheel.macos]
-# Native Apple Silicon only for this first cut (the macos-14 runner is arm64).
+# Native Apple Silicon only for this first cut (the macos-15 runner is arm64).
 # Intel macOS (x86_64) is intentionally out of scope.
 archs = ["arm64"]
 # libomp is provided by `brew install libomp` — at build AND at runtime (the
 # wheel no longer bundles it, see --exclude below). Point setup.py's darwin
-# branch at it and pin the deployment target to the runner's floor.
+# branch at it. The deployment target stays at 14.0 although the runner is
+# macOS 15 (GitHub retires macos-14 on 2026-11-02): libomp is not vendored, so the
+# wheel's floor is our own code's, and macOS 14 users keep getting a wheel.
 environment = { LIBOMP_PREFIX = "/opt/homebrew/opt/libomp", MACOSX_DEPLOYMENT_TARGET = "14.0" }
 # Do NOT vendor libomp (`--exclude libomp`): leave the extension referencing
 # Homebrew's libomp by its absolute install-name
