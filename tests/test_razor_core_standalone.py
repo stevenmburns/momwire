@@ -50,6 +50,10 @@ CORE_SOURCES = (
     "_accel_razor_cplx.cpp",
     "_razor_solve_core.cpp",
     "_razor_front_core.cpp",
+    # The exact ring kernel (momwire#1479): razor's plan and correction, and
+    # the point moments' Python-free twin of the extension's TU.
+    "_razor_exact_core.cpp",
+    "_exact_kernel_point_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -492,6 +496,7 @@ NE_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ne"
 WL_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_wl"
 SOMM_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_somm"
 NET_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_net"
+EK_DECKS = ROOT / "tests" / "fixtures" / "razor_printout_ek"
 
 
 def test_deck_text_to_printout_in_cxx_alone_is_the_launchers(driver, tmp_path):
@@ -751,6 +756,40 @@ def test_the_wire_loading_decks_print_their_loading(driver, tmp_path):
         assert (ans["route"], ans["seam"], ans["raised"]) == want, path
         if not refused:
             assert b"THIS STRUCTURE IS NOT LOADED" not in ans["printout"], path
+        assert ans["printout"] == pc.python_printout(
+            path.read_bytes().decode("latin-1")
+        ), path
+
+
+def test_the_exact_kernel_decks_print_their_correction(driver, tmp_path):
+    """The exact ring kernel (momwire#1433) through the C++ path: "auto"
+    engages it on segments under three radii, `build_exact_plan` replays
+    `_razor_exact_plan.build_plan` and `add_exact_correction` the
+    correction (the point moments are the extension's own inline text), after
+    the free block and before the image and the loading. Each committed deck
+    prints -- a fat dipole, a fat monopole's grounded base row under its
+    image, two lines of two radii (the EK tube per observer), a bent loaded
+    wire over a ground (one group per leg), two collinear wires as one group
+    -- and is compared byte for byte by the corpus test above; a radius step
+    on one line (the two-radius cross jobs) declines by name."""
+    pc = _printout_compare_module()
+    if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
+        pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
+    decks = sorted(EK_DECKS.glob("*.nec"))
+    assert len(decks) == 6
+    answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
+    for path, ans in zip(decks, answers, strict=True):
+        if path.stem.endswith("_declined"):
+            assert (ans["route"], ans["reason"]) == (
+                "declined",
+                "front:exact-kernel-cross",
+            ), path
+            continue
+        assert (ans["route"], ans["seam"], ans["raised"]) == (
+            "printed",
+            "served",
+            "",
+        ), path
         assert ans["printout"] == pc.python_printout(
             path.read_bytes().decode("latin-1")
         ), path

@@ -1,0 +1,8 @@
+CM A fat dipole in free space: every segment under three radii engages the exact ring kernel
+CE
+GW 1 51 0 0 -2.5 0 0 2.5 0.05
+GE 0
+EX 0 1 26 0 1 0
+FR 0 1 0 0 28.0 0
+XQ
+EN

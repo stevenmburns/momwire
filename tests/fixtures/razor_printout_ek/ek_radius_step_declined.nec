@@ -1,0 +1,9 @@
+CM A radius step on one line: the two-radius cross jobs, declined by name
+CE
+GW 1 20 0 0 -2 0 0 0 0.04
+GW 2 20 0 0 0 0 0 2 0.02
+GE 0
+EX 0 2 1 0 1 0
+FR 0 1 0 0 30.0 0
+XQ
+EN
