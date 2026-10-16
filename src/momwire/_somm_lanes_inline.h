@@ -100,27 +100,22 @@
     (defined(MW_SL_AVX2) || defined(MW_SL_SSE2)) && defined(__x86_64__)
 #define MW_SL_VECMATH 1
 #include <atomic>
+// Only functions libmvec has had since glibc 2.22: the Linux wheels build on
+// manylinux_2_28, and a 2.35 function (sinh, cosh, hypot, atan2, log1p, ...)
+// links locally and then fails to IMPORT from the wheel
+// (tests/test_glibc_floor.py). hypot, log1p, sinh and cosh are composed
+// below from these and IEEE operations; atan2 stays libm per lane.
 extern "C" {
 #if defined(MW_SL_AVX2)
 __m256d _ZGVdN4v_exp(__m256d);
 __m256d _ZGVdN4v_sin(__m256d);
 __m256d _ZGVdN4v_cos(__m256d);
-__m256d _ZGVdN4v_sinh(__m256d);
-__m256d _ZGVdN4v_cosh(__m256d);
 __m256d _ZGVdN4v_log(__m256d);
-__m256d _ZGVdN4v_log1p(__m256d);
-__m256d _ZGVdN4vv_atan2(__m256d, __m256d);
-__m256d _ZGVdN4vv_hypot(__m256d, __m256d);
 #else
 __m128d _ZGVbN2v_exp(__m128d);
 __m128d _ZGVbN2v_sin(__m128d);
 __m128d _ZGVbN2v_cos(__m128d);
-__m128d _ZGVbN2v_sinh(__m128d);
-__m128d _ZGVbN2v_cosh(__m128d);
 __m128d _ZGVbN2v_log(__m128d);
-__m128d _ZGVbN2v_log1p(__m128d);
-__m128d _ZGVbN2vv_atan2(__m128d, __m128d);
-__m128d _ZGVbN2vv_hypot(__m128d, __m128d);
 #endif
 }
 #else
@@ -567,34 +562,19 @@ namespace vm {
 #if defined(MW_SL_AVX2)
 #define MW_SL_VM1_(name, sym) \
     MW_SL_INLINE V name(V a) { return V{sym(a.v)}; }
-#define MW_SL_VM2_(name, sym) \
-    MW_SL_INLINE V name(V a, V b) { return V{sym(a.v, b.v)}; }
 MW_SL_VM1_(exp, _ZGVdN4v_exp)
 MW_SL_VM1_(sin, _ZGVdN4v_sin)
 MW_SL_VM1_(cos, _ZGVdN4v_cos)
-MW_SL_VM1_(sinh, _ZGVdN4v_sinh)
-MW_SL_VM1_(cosh, _ZGVdN4v_cosh)
 MW_SL_VM1_(log, _ZGVdN4v_log)
-MW_SL_VM1_(log1p, _ZGVdN4v_log1p)
-MW_SL_VM2_(atan2, _ZGVdN4vv_atan2)
-MW_SL_VM2_(hypot, _ZGVdN4vv_hypot)
 #else
 #define MW_SL_VM1_(name, sym) \
     MW_SL_INLINE V name(V a) { return V{sym(a.lo), sym(a.hi)}; }
-#define MW_SL_VM2_(name, sym) \
-    MW_SL_INLINE V name(V a, V b) { return V{sym(a.lo, b.lo), sym(a.hi, b.hi)}; }
 MW_SL_VM1_(exp, _ZGVbN2v_exp)
 MW_SL_VM1_(sin, _ZGVbN2v_sin)
 MW_SL_VM1_(cos, _ZGVbN2v_cos)
-MW_SL_VM1_(sinh, _ZGVbN2v_sinh)
-MW_SL_VM1_(cosh, _ZGVbN2v_cosh)
 MW_SL_VM1_(log, _ZGVbN2v_log)
-MW_SL_VM1_(log1p, _ZGVbN2v_log1p)
-MW_SL_VM2_(atan2, _ZGVbN2vv_atan2)
-MW_SL_VM2_(hypot, _ZGVbN2vv_hypot)
 #endif
 #undef MW_SL_VM1_
-#undef MW_SL_VM2_
 
 // a*a = p + e exactly: the fused residual where fma is one op, Veltkamp's
 // split where it is not (the sse2 baseline).
@@ -608,6 +588,15 @@ MW_SL_INLINE void two_square(V a, V &p, V &e) {
     const V lo = sub(a, hi);
     e = add(add(sub(mul(hi, hi), p), mul(set1(2.0), mul(hi, lo))), mul(lo, lo));
 #endif
+}
+
+// |z| without overflow or underflow of the squares: m sqrt(1 + (n/m)^2).
+MW_SL_INLINE V hypot(V x, V y) {
+    const V ax = fabs(x), ay = fabs(y);
+    const V m = vmax(ax, ay);
+    const V n = blend(ax, ay, gt(ax, ay));  // the smaller
+    const V r = div(n, m);
+    return mul(m, sqrt(fma(r, r, set1(1.0))));
 }
 
 // The lanes of `act` that `ok` refuses, recomputed by the scalar f: the
@@ -637,26 +626,55 @@ MW_SL_INLINE C cexp(C z, int act) {
     return patch(r, z, ok, act, CexpF());
 }
 
-// log(z) = (log |z|, atan2(y, x)). Near |z| = 1, log |z| is a small number
-// that log(hypot) gets only to an absolute ulp of 1; there it is
-// log1p(x^2 - 1 + y^2) / 2 with x^2 - 1 fused (exact up to one rounding), as
-// glibc's clog does it.
+// log(z) = (log |z|, atan2(y, x)), atan2 by libm per lane (libmvec's is
+// GLIBC_2.35). Near |z| = 1, log |z| is a small number that log(hypot) gets
+// only to an absolute ulp of 1; there it is log1p(x^2 - 1 + y^2) / 2, with
+// both squares' rounding errors kept (Dekker) so the cancellation leaves the
+// right digits, and log1p(u) = log(w) u / (w - 1), w = 1 + u (Goldberg).
 MW_SL_INLINE C clog(C z, int act) {
     const V h = hypot(z.re, z.im);
     V lr = log(h);
     const M near1 = m_and(gt(h, set1(0.5)), lt(h, set1(2.0)));
     if (any(near1)) {
-        // x^2 - 1 + y^2 with both squares' rounding errors kept (Dekker), so
-        // the cancellation near |z| = 1 leaves the right digits.
         V px, ex, py, ey;
         two_square(z.re, px, ex);
         two_square(z.im, py, ey);
         const V u = add(add(sub(px, set1(1.0)), py), add(ex, ey));
-        lr = blend(lr, mul(set1(0.5), log1p(u)), near1);
+        const V w = add(set1(1.0), u);
+        const V wm1 = sub(w, set1(1.0));
+        const M exact1 = eq(wm1, set1(0.0));
+        const V lp = blend(div(mul(log(w), u), blend(wm1, set1(1.0), exact1)), u, exact1);
+        lr = blend(lr, mul(set1(0.5), lp), near1);
     }
-    const C r{lr, atan2(z.im, z.re)};
+    Buf ai = spill(z.im);
+    const Buf zr = spill(z.re);
+    for (int l = 0; l < W; ++l)
+        if (act & (1 << l)) ai.v[l] = mw_fma::opaque(std::atan2(ai.v[l], zr.v[l]));
+    const C r{lr, loadu(ai.v)};
     const M ok = m_and(ge(h, set1(2.2250738585072014e-308)), le(h, set1(1e300)));
     return patch(r, z, ok, act, ClogF());
+}
+
+// cosh y and sinh y from one exp: (e + 1/e)/2 and (e - 1/e)/2 with e =
+// exp|y|; for |y| < 1/2, where that difference cancels, sinh by its odd
+// series (the y^19 term is below 1e-22 relative there).
+MW_SL_INLINE void cosh_sinh(V y, V &ch, V &sh) {
+    const V ay = fabs(y);
+    const V e = exp(ay), ei = div(set1(1.0), e);
+    ch = mul(set1(0.5), add(e, ei));
+    V big = mul(set1(0.5), sub(e, ei));
+    const V y2 = mul(ay, ay);
+    // Horner in y^2: 1 + y2/3! + y2^2/5! + ... + y2^8/17!
+    V p = set1(1.0 / 355687428096000.0);
+    p = fma(p, y2, set1(1.0 / 1307674368000.0));
+    p = fma(p, y2, set1(1.0 / 6227020800.0));
+    p = fma(p, y2, set1(1.0 / 39916800.0));
+    p = fma(p, y2, set1(1.0 / 362880.0));
+    p = fma(p, y2, set1(1.0 / 5040.0));
+    p = fma(p, y2, set1(1.0 / 120.0));
+    p = fma(p, y2, set1(1.0 / 6.0));
+    const V small = add(ay, mul(mul(ay, y2), p));
+    sh = copysign(blend(big, small, lt(ay, set1(0.5))), y);
 }
 
 // cos z = (cos x cosh y, -sin x sinh y), sin z = (sin x cosh y, cos x sinh y).
@@ -667,7 +685,9 @@ struct CsinF_ {
     cd operator()(const cd &v) const { return std::sin(v); }
 };
 MW_SL_INLINE void ccos_csin(C z, int act, C &cz, C &sz) {
-    const V cx = cos(z.re), sx = sin(z.re), ch = cosh(z.im), sh = sinh(z.im);
+    const V cx = cos(z.re), sx = sin(z.re);
+    V ch, sh;
+    cosh_sinh(z.im, ch, sh);
     cz = C{mul(cx, ch), neg(mul(sx, sh))};
     sz = C{mul(sx, ch), mul(cx, sh)};
     const M ok = m_and(le(fabs(z.im), set1(700.0)), le(fabs(z.re), set1(1e9)));
