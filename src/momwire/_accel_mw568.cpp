@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_branch_cut_inline.h"
+#include "_cdiv_inline.h"
 #include "_accel_somm_proj_inline.h"
 // The shared adaptive-contour engine (momwire#568 unit 1): the C++ twin of
 // `_sommerfeld_below`'s head + tail machinery, templated on the integrand.
@@ -255,8 +256,11 @@ static inline void d12(const cd &lam, const cd &k1, const cd &k2, cd &d1,
     const cd k1s = mw_fma::mul(k1, k1);
     const cd k2s = mw_fma::mul(k2, k2);
     const cd g2ks = mw_fma::mul(g2, k1s + k2s);
-    d1 = 2.0 / (g1 + g2) - 2.0 * k2s / g2ks;
-    d2 = 2.0 / mw_fma::mul_add(k1s, g2, mw_fma::mul(k2s, g1)) - 2.0 / g2ks;
+    // The four divides are mw_cdiv::div, libgcc's own rounding without the
+    // call (momwire#1441).
+    d1 = mw_cdiv::div(2.0, g1 + g2) - mw_cdiv::div(2.0 * k2s, g2ks);
+    d2 = mw_cdiv::div(2.0, mw_fma::mul_add(k1s, g2, mw_fma::mul(k2s, g1))) -
+         mw_cdiv::div(2.0, g2ks);
 }
 
 // `_integrand_six_below`, term for term and in its order:
@@ -1348,8 +1352,8 @@ struct SixTransmitted {
         }
         const cd zzk = lam * lam;  // NOT g^2 + k^2 -- see the note above
         const double kp2 = k_p * k_p;
-        const cd a = e / (k_m * k_m * g_p + kp2 * g_m);  // (7f)
-        const cd u = e / (g_m + g_p);                    // (7g)
+        const cd a = mw_cdiv::div(e, k_m * k_m * g_p + kp2 * g_m);  // (7f)
+        const cd u = mw_cdiv::div(e, g_m + g_p);                    // (7g)
         const cd x = lam * rho;
         cd b0, b1x;
         mw_contour::bessel_j0_j1x(x, b0, b1x);

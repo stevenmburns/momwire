@@ -408,6 +408,7 @@ _CPP_CODE = {
     ),
     "_contour_engine_inline.h": None,
     "_branch_cut_inline.h": None,
+    "_cdiv_inline.h": None,
     "_fma_inline.h": None,
 }
 

@@ -308,6 +308,10 @@ _ACCEL_HEADERS = [
     "src/momwire/_accel_somm_proj_inline.h",
     "src/momwire/_somm_field_core.h",
     "src/momwire/_branch_cut_inline.h",
+    # The integrands' complex division without the libgcc call (momwire#1441),
+    # included by `_contour_engine_inline.h`, `_accel_somm.cpp` and
+    # `_accel_mw568.cpp`.
+    "src/momwire/_cdiv_inline.h",
     # Both of these were MISSING until momwire#824, and the omission is what
     # that issue actually was. The far static-moment header is included by
     # _accel_bspline.cpp; the cross-lane stable spellings (#799) by three TUs.
@@ -416,6 +420,8 @@ _NEAR_HEADERS = [
     # The shared branch cut (#714) -- this extension carries the third
     # call site, so an edit to it must rebuild this .so too.
     "src/momwire/_branch_cut_inline.h",
+    # The contour engine's complex division (momwire#1441).
+    "src/momwire/_cdiv_inline.h",
     # The contour engine's fused multiply-adds (momwire#1194).
     "src/momwire/_fma_inline.h",
     # The column machinery both TUs of this extension share (momwire#1224).

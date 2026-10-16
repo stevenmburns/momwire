@@ -45,8 +45,8 @@ struct CoreSix {
         const cd g_p = gamma_cut(lam, k_p);
         const cd g_m = gamma_cut(lam, k_m);
         const cd e = 2.0 * std::exp(g_m * zp - g_p * z) * lam;
-        const cd u = e / (g_p + g_m);
-        const cd v = e / (km2 * g_p + kp2 * g_m);
+        const cd u = mw_cdiv::div(e, g_p + g_m);
+        const cd v = mw_cdiv::div(e, km2 * g_p + kp2 * g_m);
         const cd w = (g_p - g_m) * v;
         out[0] = u;
         out[1] = v;
@@ -487,11 +487,11 @@ static inline void factor_node(const cd &k_p, const cd &k_m, const cd &kp2,
         // Fused complex products (momwire#1214, _fma_inline.h): the rule
         // build is most of this kernel's time (a column's members share it),
         // and GCC contracted every one of these products before #1194. Each
-        // `mul` keeps the operands in the order written; the divisions stay
-        // library calls, as they always were.
+        // `mul` keeps the operands in the order written. The divisions are
+        // mw_cdiv::div, libgcc's rounding without the call (momwire#1441).
         using mw_fma::mul;
-        const cd u = 2.0 * l / (g_p + g_m);
-        const cd v = 2.0 * l / (mul(km2, g_p) + mul(kp2, g_m));
+        const cd u = mw_cdiv::div(2.0 * l, g_p + g_m);
+        const cd v = mw_cdiv::div(2.0 * l, mul(km2, g_p) + mul(kp2, g_m));
         const cd wv = mul(g_p - g_m, v);
         const cd f[6] = {mul(u, wk),
                          mul(v, wk),
