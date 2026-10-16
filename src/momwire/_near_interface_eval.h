@@ -51,6 +51,41 @@ struct NodePair {
 };
 SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, double wire_radius);
 
+// An open-addressing map from an exact triple's bits (each `x + 0.0`, so
+// -0.0 and 0.0 are one key) to a dense index: what `_unique_rows` and the
+// memo's dict decide, without a node allocation per key. Lookups are const
+// and may run from several threads at once; inserts are single-threaded.
+class TripleIndex {
+  public:
+    static constexpr uint32_t NONE = 0xFFFFFFFFu;
+    TripleIndex() { rehash(1024); }
+    // The index stored for `row`, or NONE.
+    uint32_t find(const double *row) const;
+    // The index stored for `row`; when absent, `v` is stored and returned
+    // with `inserted` set.
+    uint32_t find_or_insert(const double *row, uint32_t v, bool &inserted);
+    size_t size() const { return n_; }
+    void reserve(size_t n) {
+        if (2 * n > slots_.size()) rehash(2 * n);
+    }
+
+  private:
+    // A slot is 8 bytes (the hash's high half as a tag, the value); the key
+    // bits live in keys_[value], read only on a tag match, so a probe walks
+    // a table a quarter the size of one holding the keys.
+    struct Slot {
+        uint32_t tag, v;
+    };
+    struct Key {
+        uint64_t a, b, c;
+    };
+    static uint64_t mix(uint64_t a, uint64_t b, uint64_t c);
+    void rehash(size_t want);
+    std::vector<Slot> slots_;
+    std::vector<Key> keys_;
+    size_t mask_ = 0, n_ = 0;
+};
+
 // One fill's memo (`ProductMemo` / `TripleMemo`): exact-triple keyed, with
 // the fill's sheet plan and column cache.
 class Memo {
@@ -58,21 +93,21 @@ class Memo {
     Memo();
     bool lookup(const double *row, Six &out) const;
     void insert(const double *row, const Six &v);
+    // The stored value's index for `row` (NONE: absent, or a NaN row, which
+    // never hits), and the value at an index.
+    uint32_t find(const double *row) const;
+    const Six &at(uint32_t i) const { return vals_[i]; }
+    // `designed_index`'s fresh rows: the keys claimed (index = the value's
+    // future position) before the values are appended in that order.
+    TripleIndex &keys() { return idx_; }
+    void append_values(const Six *v, size_t m) { vals_.insert(vals_.end(), v, v + m); }
     SheetPlan plan;
     bool have_plan = false;
     std::unique_ptr<ni_core::ColumnCache> cache;
     size_t size() const { return vals_.size(); }
 
   private:
-    struct Key {
-        uint64_t r, z, p;
-        bool operator==(const Key &o) const { return r == o.r && z == o.z && p == o.p; }
-    };
-    struct Hash {
-        size_t operator()(const Key &k) const;
-    };
-    static Key key(const double *row);
-    std::unordered_map<Key, size_t, Hash> idx_;
+    TripleIndex idx_;
     std::vector<Six> vals_;
 };
 
@@ -88,6 +123,13 @@ struct Evaluator {
 // optional per-point labels (`group_labels`): out is (n, 6).
 void designed_tables(const Evaluator &ev, Memo *memo, const double *rho, const double *z,
                      const double *zp, size_t n, const int64_t *labels, Six *out);
+
+// The same evaluation through a memo, each point answered as an index into
+// it (`memo.at(idx[i])`): the values `designed_tables` copies out, without the
+// copy. `n_threads` splits only the read-only memo lookups.
+void designed_index(const Evaluator &ev, Memo &memo, const double *rho, const double *z,
+                    const double *zp, size_t n, const int64_t *labels, uint32_t *idx,
+                    int n_threads = 1);
 
 // `_evaluate_fresh` over distinct rows (m, 3): (m, 6).
 void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int64_t *labels,

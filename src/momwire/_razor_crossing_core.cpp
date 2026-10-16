@@ -15,6 +15,10 @@
 #include <stdexcept>
 #include <thread>
 
+#if defined(_OPENMP)
+#include <omp.h>
+#endif
+
 namespace mw {
 namespace razor {
 
@@ -458,6 +462,21 @@ struct BlockEval {
     ni_eval::Memo memo;
 };
 
+// The OpenMP team for the block's own loops: the evaluator's cap, held to
+// what OpenMP would give (1 in the serial copy). Every loop it splits writes
+// disjoint outputs, each one's arithmetic its serial order's.
+int team(const BlockEval &be, size_t work) {
+#if defined(_OPENMP)
+    int nt = omp_get_max_threads();
+    if (be.ev.n_threads > 0) nt = std::min(nt, be.ev.n_threads);
+    return work < 4096 ? 1 : std::max(1, nt);
+#else
+    (void)be;
+    (void)work;
+    return 1;
+#endif
+}
+
 // `_tables(ctx_r, eps_t, k_p, rho, z, zp, rtol, memo, group_labels)` over n
 // asked points: rho folded with the radius.
 void tables(BlockEval &be, double a_wire, const std::vector<double> &rho, const std::vector<double> &z,
@@ -467,6 +486,54 @@ void tables(BlockEval &be, double a_wire, const std::vector<double> &rho, const 
     out.resize(rho.size());
     ni_eval::designed_tables(be.ev, &be.memo, re.data(), z.data(), zp.data(), rho.size(),
                              labels ? labels->data() : nullptr, out.data());
+}
+
+// The same, each point answered as its value's index in the block's memo
+// (`rho` already folded with the radius).
+void table_index(BlockEval &be, const std::vector<double> &re, const std::vector<double> &z,
+                 const std::vector<double> &zp, const std::vector<int64_t> *labels, std::vector<uint32_t> &idx) {
+    idx.resize(re.size());
+    ni_eval::designed_index(be.ev, be.memo, re.data(), z.data(), zp.data(), re.size(),
+                            labels ? labels->data() : nullptr, idx.data(), team(be, re.size()));
+}
+
+// One key of every memo value, contiguous (the contractions' gathers).
+std::vector<cd> key_plane(const ni_eval::Memo &memo, int key) {
+    std::vector<cd> out(memo.size());
+    for (size_t j = 0; j < out.size(); j++) out[j] = memo.at(static_cast<uint32_t>(j))[static_cast<size_t>(key)];
+    return out;
+}
+
+// One real CSR row against complex v: each part's products summed in the
+// row's order (`(M @ v.real) + 1j (M @ v.imag)`, scipy's row loop). Plain
+// restrict-qualified pointers: through the vectors' accessors the loop ran
+// ten times slower, with the same arithmetic.
+inline void csr_row_dot(const int64_t *__restrict ix, const double *__restrict d, int64_t j0, int64_t j1,
+                        const double *__restrict v, double &re_out, double &im_out) {
+    double re = 0.0, im = 0.0;
+    for (int64_t jj = j0; jj < j1; jj++) {
+        const double *x = v + 2 * ix[jj];
+        const double a = d[jj];
+        re += a * x[0];
+        im += a * x[1];
+    }
+    re_out = re;
+    im_out = im;
+}
+
+// y[c] += a * tab[ix[c]], each part one product and one sum (no FMA): the
+// left products' inner loop, with nothing aliased so it vectorizes alike in
+// the serial and the threaded copy (elementwise, so its bits never depend on
+// how it is vectorized).
+void axpy_gather(cd *__restrict y, const cd *__restrict tab, const uint32_t *__restrict ix, double a,
+                 size_t n) {
+    double *__restrict yd = reinterpret_cast<double *>(y);
+    const double *__restrict td = reinterpret_cast<const double *>(tab);
+    for (size_t cc = 0; cc < n; cc++) {
+        const size_t k = 2 * static_cast<size_t>(ix[cc]);
+        yd[2 * cc] = yd[2 * cc] + a * td[k];
+        yd[2 * cc + 1] = yd[2 * cc + 1] + a * td[k + 1];
+    }
 }
 
 // `_main_sandwich(ctx, A, B, ...)` with the plan: the (nA basis x nB basis)
@@ -483,85 +550,99 @@ std::vector<cd> main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const 
         be.memo.have_plan = true;
     }
     // The tables over the whole grid, row a * nB + b.
-    std::vector<double> rho(nA * nB), z(nA * nB), zp(nA * nB);
-    for (size_t a = 0; a < nA; a++)
-        for (size_t b = 0; b < nB; b++) {
-            const size_t q = a * nB + b;
-            rho[q] = std::hypot(A.nodes[3 * a] - B.nodes[3 * b], A.nodes[3 * a + 1] - B.nodes[3 * b + 1]);
-            z[q] = A.nodes[3 * a + 2] - c.gz;
-            zp[q] = B.nodes[3 * b + 2] - c.gz;
+    std::vector<uint32_t> K;
+    {
+        std::vector<double> re(nA * nB), z(nA * nB), zp(nA * nB);
+        const std::ptrdiff_t nAp = static_cast<std::ptrdiff_t>(nA);
+        const int nt = team(be, nA * nB);
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static) num_threads(nt) if (nt > 1)
+#else
+        (void)nt;
+#endif
+        for (std::ptrdiff_t ap = 0; ap < nAp; ap++) {
+            const size_t a = static_cast<size_t>(ap);
+            for (size_t b = 0; b < nB; b++) {
+                const size_t q = a * nB + b;
+                const double rho = std::hypot(A.nodes[3 * a] - B.nodes[3 * b], A.nodes[3 * a + 1] - B.nodes[3 * b + 1]);
+                re[q] = std::hypot(rho, a_wire);
+                z[q] = A.nodes[3 * a + 2] - c.gz;
+                zp[q] = B.nodes[3 * b + 2] - c.gz;
+            }
         }
-    std::vector<Six> K;
-    tables(be, a_wire, rho, z, zp, nullptr, K);
+        table_index(be, re, z, zp, nullptr, K);
+    }
     const double k2sq = c.k_p * c.k_p;
     const std::vector<int64_t> rA = support_rows(A), rB = support_rows(B);
     const std::array<CSR, 4> P = row_weights(A, rA), Q = row_weights(B, rB);
-    // Left products, `left_products_gathered`'s sums.
+    // The four keys the contraction reads, one plane each over the memo's
+    // values; `k2 V + dzpW` is a function of the value alone.
+    const std::vector<cd> KU = key_plane(be.memo, K_U), KV = key_plane(be.memo, K_V),
+                          KW = key_plane(be.memo, K_W);
+    std::vector<cd> KX(KV.size());
+    {
+        const std::vector<cd> KD = key_plane(be.memo, K_DZPW);
+        for (size_t j = 0; j < KX.size(); j++)
+            KX[j] = cd(k2sq * KV[j].real() + KD[j].real(), k2sq * KV[j].imag() + KD[j].imag());
+    }
+    // Per row of rA (rows apart, any thread): its left products
+    // (`left_products_gathered`'s sums, six (nB) rows) into the thread's own
+    // buffer, then `combine_rows` against Q's rows: ((((T0 + T1) + T2) + T3)
+    // + T4) - T5. Only the row's own products feed its combine, so nothing
+    // (nr x nB) is ever held.
+    static const int qsel[6] = {0, 1, 2, 3, 2, 3};
+    std::vector<cd> t(static_cast<size_t>(A.n_basis * B.n_basis), cd(0.0, 0.0));
     const size_t nr = rA.size();
-    std::vector<cd> L[6];
-    for (int m = 0; m < 6; m++) L[m].assign(nr * nB, cd(0.0, 0.0));
-    for (size_t i = 0; i < nr; i++) {
+    const std::ptrdiff_t nrp = static_cast<std::ptrdiff_t>(nr);
+    const int nt = team(be, nr * nB);
+#if defined(_OPENMP)
+    #pragma omp parallel num_threads(nt) if (nt > 1)
+#else
+    (void)nt;
+#endif
+    {
+    std::vector<cd> Lrow(6 * nB);
+#if defined(_OPENMP)
+    #pragma omp for schedule(dynamic)
+#endif
+    for (std::ptrdiff_t ip = 0; ip < nrp; ip++) {
+        const size_t i = static_cast<size_t>(ip);
+        std::fill(Lrow.begin(), Lrow.end(), cd(0.0, 0.0));
+        cd *L[6];
+        for (int m = 0; m < 6; m++) L[m] = &Lrow[static_cast<size_t>(m) * nB];
         for (int pm = 0; pm < 3; pm++) {
             const CSR &M = P[static_cast<size_t>(pm)];
             for (int64_t jj = M.indptr[i]; jj < M.indptr[i + 1]; jj++) {
                 const double a = M.data[static_cast<size_t>(jj)];
-                const size_t row = static_cast<size_t>(M.indices[static_cast<size_t>(jj)]) * nB;
+                const uint32_t *kx = &K[static_cast<size_t>(M.indices[static_cast<size_t>(jj)]) * nB];
                 if (pm < 2) {
-                    cd *y = &L[pm][i * nB];
-                    for (size_t cc = 0; cc < nB; cc++) {
-                        const cd u = K[row + cc][K_U];
-                        y[cc] = cd(y[cc].real() + a * u.real(), y[cc].imag() + a * u.imag());
-                    }
+                    axpy_gather(L[pm], KU.data(), kx, a, nB);
                 } else {
-                    cd *y2 = &L[2][i * nB];
-                    cd *y3 = &L[3][i * nB];
-                    for (size_t cc = 0; cc < nB; cc++) {
-                        const cd v = K[row + cc][K_V], d = K[row + cc][K_DZPW];
-                        const double xr = k2sq * v.real() + d.real();
-                        const double xi = k2sq * v.imag() + d.imag();
-                        y2[cc] = cd(y2[cc].real() + a * xr, y2[cc].imag() + a * xi);
-                        const cd w = K[row + cc][K_W];
-                        y3[cc] = cd(y3[cc].real() + a * w.real(), y3[cc].imag() + a * w.imag());
-                    }
+                    axpy_gather(L[2], KX.data(), kx, a, nB);
+                    axpy_gather(L[3], KW.data(), kx, a, nB);
                 }
             }
         }
         const CSR &M = P[3];
         for (int64_t jj = M.indptr[i]; jj < M.indptr[i + 1]; jj++) {
             const double a = M.data[static_cast<size_t>(jj)];
-            const size_t row = static_cast<size_t>(M.indices[static_cast<size_t>(jj)]) * nB;
-            cd *y4 = &L[4][i * nB];
-            cd *y5 = &L[5][i * nB];
-            for (size_t cc = 0; cc < nB; cc++) {
-                const cd w = K[row + cc][K_W];
-                y4[cc] = cd(y4[cc].real() + a * w.real(), y4[cc].imag() + a * w.imag());
-                const cd v = K[row + cc][K_V];
-                y5[cc] = cd(y5[cc].real() + a * v.real(), y5[cc].imag() + a * v.imag());
-            }
+            const uint32_t *kx = &K[static_cast<size_t>(M.indices[static_cast<size_t>(jj)]) * nB];
+            axpy_gather(L[4], KW.data(), kx, a, nB);
+            axpy_gather(L[5], KV.data(), kx, a, nB);
         }
-    }
-    // `combine_rows`: ((((T0 + T1) + T2) + T3) + T4) - T5 against Q's rows.
-    static const int qsel[6] = {0, 1, 2, 3, 2, 3};
-    std::vector<cd> t(static_cast<size_t>(A.n_basis * B.n_basis), cd(0.0, 0.0));
-    for (size_t i = 0; i < nr; i++)
         for (size_t j = 0; j < rB.size(); j++) {
             double tr[6], ti[6];
             for (int m = 0; m < 6; m++) {
-                const CSR &M = Q[static_cast<size_t>(qsel[m])];
-                double sr = 0.0, si = 0.0;
-                for (int64_t jj = M.indptr[j]; jj < M.indptr[j + 1]; jj++) {
-                    const double a = M.data[static_cast<size_t>(jj)];
-                    const cd x = L[m][i * nB + static_cast<size_t>(M.indices[static_cast<size_t>(jj)])];
-                    sr += a * x.real();
-                    si += a * x.imag();
-                }
-                tr[m] = sr;
-                ti[m] = si;
+                const CSR &Mq = Q[static_cast<size_t>(qsel[m])];
+                csr_row_dot(Mq.indices.data(), Mq.data.data(), Mq.indptr[j], Mq.indptr[j + 1],
+                            reinterpret_cast<const double *>(L[m]), tr[m], ti[m]);
             }
             t[static_cast<size_t>(rA[i] * B.n_basis + rB[j])] =
                 cd(((((tr[0] + tr[1]) + tr[2]) + tr[3]) + tr[4]) - tr[5],
                    ((((ti[0] + ti[1]) + ti[2]) + ti[3]) + ti[4]) - ti[5]);
         }
+    }
+    }
     for (cd &v : t) v = np_cmul(v, c.c1);
     return t;
 }
@@ -578,16 +659,12 @@ struct EndVec {
 
 std::vector<cd> real_matvec(const CSR &M, const std::vector<cd> &v) {
     std::vector<cd> out(static_cast<size_t>(M.n_rows));
-    for (int64_t i = 0; i < M.n_rows; i++) {
-        double re = 0.0, im = 0.0;
-        for (int64_t jj = M.indptr[i]; jj < M.indptr[i + 1]; jj++) {
-            const cd x = v[static_cast<size_t>(M.indices[static_cast<size_t>(jj)])];
-            const double xr = 1.0 * x.real(), xi = 1.0 * x.imag();
-            re += M.data[static_cast<size_t>(jj)] * xr;
-            im += M.data[static_cast<size_t>(jj)] * xi;
-        }
-        out[static_cast<size_t>(i)] = cd(re, im);
-    }
+    const int64_t *ip = M.indptr.data();
+    const int64_t *ix = M.indices.data();
+    const double *d = M.data.data();
+    const double *vd = reinterpret_cast<const double *>(v.data());
+    double *od = reinterpret_cast<double *>(out.data());
+    for (int64_t i = 0; i < M.n_rows; i++) csr_row_dot(ix, d, ip[i], ip[i + 1], vd, od[2 * i], od[2 * i + 1]);
     return out;
 }
 
@@ -606,43 +683,64 @@ std::vector<EndVec> end_vectors(const Ctx &c, BlockEval &be, double a_wire, cons
         w_tz[k] = line.w[k] * line.t[3 * k + 2];
     }
     const size_t per = std::max<size_t>(1, static_cast<size_t>(END_BATCH_PAIRS) / std::max<size_t>(1, n));
+    out.resize(ends.size());
+    std::vector<double> re, z, zp;
+    std::vector<int64_t> lab;
+    std::vector<uint32_t> te;
     for (size_t g0 = 0; g0 < ends.size(); g0 += per) {
         const size_t g1 = std::min(ends.size(), g0 + per);
-        std::vector<double> rho, z, zp;
-        std::vector<int64_t> lab;
-        for (size_t e = g0; e < g1; e++) {
-            const End &E = ends[e];
-            const double endz = on_plane_side(E.pt[2] - c.gz, end_above, "end point");
+        const size_t ne = g1 - g0;
+        // The ends' own z, refused in order before any point is formed.
+        std::vector<double> endz(ne);
+        for (size_t e = g0; e < g1; e++) endz[e - g0] = on_plane_side(ends[e].pt[2] - c.gz, end_above, "end point");
+        re.resize(ne * n);
+        z.resize(ne * n);
+        zp.resize(ne * n);
+        lab.resize(ne * n);
+        const std::ptrdiff_t nep = static_cast<std::ptrdiff_t>(ne);
+        const int nt = team(be, ne * n);
+#if defined(_OPENMP)
+        #pragma omp parallel for schedule(static) num_threads(nt) if (nt > 1)
+#else
+        (void)nt;
+#endif
+        for (std::ptrdiff_t ep = 0; ep < nep; ep++) {
+            const size_t e = static_cast<size_t>(ep);
+            const End &E = ends[g0 + e];
             for (size_t k = 0; k < n; k++) {
                 const double *q = &line.nodes[3 * k];
-                if (end_above) {
-                    rho.push_back(std::hypot(E.pt[0] - q[0], E.pt[1] - q[1]));
-                    z.push_back(endz);
-                    zp.push_back(line_z[k]);
-                } else {
-                    rho.push_back(std::hypot(q[0] - E.pt[0], q[1] - E.pt[1]));
-                    z.push_back(line_z[k]);
-                    zp.push_back(endz);
-                }
-                lab.push_back(static_cast<int64_t>(e - g0));
+                const size_t i = e * n + k;
+                const double rho = end_above ? std::hypot(E.pt[0] - q[0], E.pt[1] - q[1])
+                                             : std::hypot(q[0] - E.pt[0], q[1] - E.pt[1]);
+                re[i] = std::hypot(rho, a_wire);
+                z[i] = end_above ? endz[e] : line_z[k];
+                zp[i] = end_above ? line_z[k] : endz[e];
+                lab[i] = static_cast<int64_t>(e);
             }
         }
-        std::vector<Six> te;
-        tables(be, a_wire, rho, z, zp, (g1 - g0) > 1 ? &lab : nullptr, te);
-        for (size_t e = g0; e < g1; e++) {
-            std::vector<cd> V(n), W(n);
+        table_index(be, re, z, zp, ne > 1 ? &lab : nullptr, te);
+#if defined(_OPENMP)
+        #pragma omp parallel num_threads(nt) if (nt > 1)
+#endif
+        {
+        std::vector<cd> V(n), W(n);  // each thread's, reused end to end
+#if defined(_OPENMP)
+        #pragma omp for schedule(dynamic)
+#endif
+        for (std::ptrdiff_t ep = 0; ep < nep; ep++) {
+            const size_t e = static_cast<size_t>(ep);
             for (size_t k = 0; k < n; k++) {
-                const cd v = te[(e - g0) * n + k][K_V], ww = te[(e - g0) * n + k][K_W];
+                const Six &s = be.memo.at(te[e * n + k]);
                 // `w * V`: numpy's (w + 0j)(V): each part one rounding.
-                V[k] = np_cmul(cd(w[k], 0.0), v);
-                W[k] = np_cmul(cd(w_tz[k], 0.0), ww);
+                V[k] = np_cmul(cd(w[k], 0.0), s[K_V]);
+                W[k] = np_cmul(cd(w_tz[k], 0.0), s[K_W]);
             }
-            EndVec ev;
-            ev.sign = ends[e].sign;
-            ev.fv = &ends[e].fv;
+            EndVec &ev = out[g0 + e];
+            ev.sign = ends[g0 + e].sign;
+            ev.fv = &ends[g0 + e].fv;
             ev.vV = real_matvec(line.Fd, V);
             ev.vW = real_matvec(line.F, W);
-            out.push_back(std::move(ev));
+        }
         }
     }
     return out;
@@ -777,7 +875,7 @@ std::vector<cd> node_charges(const Ctx &c, const Axis &A, const Axis &P,
     BlockEval be;  // `_near_interface.TripleMemo()`: no sheet plan
     be.ev.k_p = c.k_p;
     be.ev.k_m = c.k_m;
-    be.ev.n_threads = 1;
+    be.ev.n_threads = n_physical_threads();
     be.ev.cancel_flag = cancel_flag;
     for (int pass = 0; pass < 2; pass++) {
         const bool above = pass == 0;
