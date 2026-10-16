@@ -71,6 +71,8 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
 // The projection's loop and lanes are in `_somm_proj_core.cpp` (momwire#1479
 // S3); `remainder_field_proj_batch` below binds them.
 #include "_somm_proj_core.h"
+// The near-field remainder's kernel (`reflected_field_batch` below binds it).
+#include "_somm_field_core.h"
 
 
 // obs/t_obs (M,3), src/t_src (S,3); returns (M,S) complex. The grid is passed
@@ -120,6 +122,45 @@ static py::array_t<std::complex<double>> remainder_field_proj_batch(
                                 t_obs.data(), src.data(), t_src.data(),
                                 ground_z, k, out.mutable_data(), cancel_flag,
                                 lanes);
+    return out;
+}
+
+// The near-field remainder at observation points (`_somm_field_core.cpp`):
+// E, or H by the curl when `step` > 0. points (N, 3), src_mid (S, 3),
+// src_moment (S, 3) complex; returns (N, 3) complex. The grid is passed as
+// `remainder_field_proj_batch` takes it.
+static py::array_t<std::complex<double>> reflected_field_batch_impl(
+    py::array_t<double, py::array::c_style | py::array::forcecast> points,
+    py::array_t<double, py::array::c_style | py::array::forcecast> src_mid,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> src_moment,
+    double ground_z, double k, bool magnetic, double omega, double mu, double step,
+    double r1_max, double r_break, double th_split, double r_near,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_r0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dr,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_th0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> reg_dth,
+    std::vector<py::array_t<std::complex<double>,
+                            py::array::c_style | py::array::forcecast>> reg_vals,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> far) {
+    if (points.ndim() != 2 || points.shape(1) != 3 || src_mid.ndim() != 2 ||
+        src_mid.shape(1) != 3 || src_moment.ndim() != 2 || src_moment.shape(1) != 3 ||
+        src_moment.shape(0) != src_mid.shape(0))
+        throw std::runtime_error("points, src_mid and src_moment must be (*, 3), the sources alike");
+    somm_proj::GridView G = somm_proj::build_grid_view(
+        r1_max, r_break, th_split, r_near, reg_r0.unchecked<1>(), reg_dr.unchecked<1>(),
+        reg_th0.unchecked<1>(), reg_dth.unchecked<1>(), reg_vals);
+    somm_proj::set_far(G, far);
+    const py::ssize_t n = points.shape(0), s = src_mid.shape(0);
+    py::array_t<std::complex<double>> out({n, py::ssize_t(3)});
+    {
+        py::gil_scoped_release release;
+        if (magnetic)
+            somm_core::reflected_h_field(G, n, points.data(), s, src_mid.data(), src_moment.data(),
+                                         ground_z, k, omega, mu, step, out.mutable_data());
+        else
+            somm_core::reflected_field(G, n, points.data(), s, src_mid.data(), src_moment.data(),
+                                       ground_z, k, out.mutable_data());
+    }
     return out;
 }
 
@@ -684,6 +725,18 @@ void register_somm(py::module_ &m) {
           py::arg("reg_r0"), py::arg("reg_dr"), py::arg("reg_th0"),
           py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"),
           py::arg("cancel_flag") = 0, py::arg("lanes") = true);
+    m.def("reflected_field_batch", &reflected_field_batch_impl,
+          "The Sommerfeld ground's near-field REMAINDER at observation points "
+          "(`_somm_field_core.cpp`): E, or with magnetic=True H = curl(E) / "
+          "(-j omega mu) by central differences at `step`. points (N, 3), "
+          "src_mid (S, 3), src_moment (S, 3) complex; returns (N, 3) complex. "
+          "The grid flattened as `remainder_field_proj_batch` takes it, with "
+          "its far pack. GIL released, OpenMP over points.",
+          py::arg("points"), py::arg("src_mid"), py::arg("src_moment"),
+          py::arg("ground_z"), py::arg("k"), py::arg("magnetic"), py::arg("omega"),
+          py::arg("mu"), py::arg("step"), py::arg("r1_max"), py::arg("r_break"),
+          py::arg("th_split"), py::arg("r_near"), py::arg("reg_r0"), py::arg("reg_dr"),
+          py::arg("reg_th0"), py::arg("reg_dth"), py::arg("reg_vals"), py::arg("far"));
     m.def("somm_proj_lanes_built", []() { return somm_core::proj_lanes_built(); },
           "Whether this build has remainder_field_proj_batch's AVX2 lanes "
           "(perf item 9); without them `lanes=True` runs the per-pair loop.");
