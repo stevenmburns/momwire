@@ -1,6 +1,8 @@
 // razor-2p's buried fill in C++: see `_razor_buried_core.h`.
 #include "_razor_buried_core.h"
 
+#include "_razor_crossing_core.h"
+
 #include "_somm_below_grid_core.h"
 #include "_somm_below_proj_core.h"
 #include "_somm_grid_core.h"
@@ -762,7 +764,19 @@ std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stag
         scatter(b, fill_part(*b.front, ctx, cancel_flag, &bm, &rem));
     }
     record("below");
-    return "cross";
+    // 4-5. The cross blocks and the node charges.
+    std::vector<std::pair<int64_t, int>> tents;
+    for (int64_t m = 0; m < n; m++) {
+        const bool b0 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m)]))] != 0;
+        const bool b1 = f.media_below[static_cast<size_t>(wire_of_seg(f, f.wing_seg[static_cast<size_t>(2 * m + 1)]))] != 0;
+        if (b0 != b1) tents.emplace_back(m, b0 ? 0 : 1);
+    }
+    crossing_blocks(f, out, tents, cancel_flag);
+    record("cross");
+    // 6. The loading, once, on the full geometry.
+    if (!f.load_rows.empty()) add_loading(f, out);
+    record("final");
+    return "";
 }
 
 }  // namespace razor

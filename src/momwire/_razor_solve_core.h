@@ -151,6 +151,8 @@ class SolveContext {
     // `np.add.at(Z, (rows, cols), vals)`: unbuffered, in order, onto the
     // filled matrix (column-major), before `lu_solve`.
     void add_at(const int64_t *rows, const int64_t *cols, const cd *vals, size_t n);
+    // Z (n, n) column-major, filled elsewhere (the buried fill), copied in.
+    void set_z(const cd *z, ptrdiff_t n);
 
     // Free Z and the window pool (a big solve's buffers are not held until
     // the next one); the counters are kept.

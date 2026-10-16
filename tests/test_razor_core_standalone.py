@@ -74,6 +74,8 @@ CORE_SOURCES = (
     "_somm_below_proj_core.cpp",
     "_somm_below_grid_core.cpp",
     "_near_interface_core.cpp",
+    "_near_interface_eval.cpp",
+    "_razor_crossing_core.cpp",
     # The near-field remainder over a finite ground (S4).
     "_somm_field_core.cpp",
 )
@@ -725,8 +727,9 @@ def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
     kernel); the refusals print too (a near field at a grounded base, a wire
     in the plane, a spherical grid reaching under a GD); a near field over the
     composing ground prints too (S4: `C2 image + remainder` through
-    `_somm_field_core`); and a buried wire declines by name
-    (`finite-ground-buried`)."""
+    `_somm_field_core`); and a buried radial screen prints its refusal
+    (momwire#1512 B1: the buried seam and front are C++; a buried deck the
+    fill would serve declines by name until its below table is, B5)."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
@@ -741,7 +744,7 @@ def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
     assert routes == {
         "gd_ne_dipole": served,
         "gd_nh_spherical_below": ("printed", "refused", ""),
-        "gn0_buried_radial": ("declined", "declined", "finite-ground-buried"),
+        "gn0_buried_radial": ("printed", "refused", ""),
         "gn0_inverted_vee_junction": served,
         "gn0_nh_dipole": served,
         "gn0_ne_at_contact": ("printed", "refused", ""),

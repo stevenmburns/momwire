@@ -36,6 +36,7 @@
 // `tests/test_razor_core_standalone.py` require every byte to be
 // `momwire-nec5-razor-2p`'s.
 #include "_nec5_razor_printout_core.h"
+#include "_somm_below_grid_core.h"
 
 #include <dlfcn.h>
 
@@ -82,6 +83,10 @@ std::string hex(const std::string &s) {
 }  // namespace
 
 int main(int argc, char **argv) {
+    // TEST-ONLY (momwire#1512): the below/below tables the Python route
+    // filled, read through the bridge until the table itself is ported.
+    if (const char *dir = std::getenv("MW_TEST_BELOW_TABLES"))
+        if (dir[0] != '\0') somm_below::set_source(somm_below::bridge_source(dir));
     if (argc == 2 && std::string(argv[1]) == "--transliterate") {
         const std::string text((std::istreambuf_iterator<char>(std::cin)),
                                std::istreambuf_iterator<char>());
