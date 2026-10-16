@@ -669,6 +669,19 @@ def test_the_far_zone_interpolates_to_the_bar(soil, f):
 _TAIL_CAP_SERVED = (0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.04, 0.03, 0.023, 0.02)
 _TAIL_CAP_REFUSED = (0.0125, 0.01)
 
+# momwire#1441: under the weighted-averages tail a grazing node converges in
+# ~20 panels at ANY angle, down to h = 0, so the cap is no longer reachable
+# from a below/below query and nothing below would refuse. The cap, its Wynn
+# fallback and the refusal are all still there -- they are the safety net
+# under the WA stop -- so these gates run the walk without WA (the A/B switch
+# `_TAIL_WA`), which is the only way left to reach the net and check it holds.
+# The ladder above was measured that way and is unchanged.
+
+
+@pytest.fixture
+def plain_walk(monkeypatch):
+    monkeypatch.setattr(below, "_TAIL_WA", False)
+
 
 def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
     eps_t, k2, om, lam_m = _deck(soil, f)
@@ -684,7 +697,7 @@ def _direct_at(soil, f, th_deg, r1_over_lam=1.0, health=None):
 
 
 @pytest.mark.slow
-def test_the_tail_cap_refuses_by_name_below_the_floor():
+def test_the_tail_cap_refuses_by_name_below_the_floor(plain_walk):
     """The measured ladder, pinned: converged at 0.02-0.12 deg, capped below.
 
     Both halves matter: a change that made the contour cheaper would move the
@@ -700,7 +713,7 @@ def test_the_tail_cap_refuses_by_name_below_the_floor():
             _direct_at("A", 7e6, th_deg)
 
 
-def test_the_cap_refusal_names_the_query_and_the_way_out():
+def test_the_cap_refusal_names_the_query_and_the_way_out(plain_walk):
     """A refusal that does not say which knob to move is a crash with prose."""
     with pytest.raises(ValueError) as exc:
         _direct_at("A", 7e6, 0.0125)
@@ -717,7 +730,7 @@ def test_the_cap_refusal_names_the_query_and_the_way_out():
         assert want in msg, f"refusal does not mention {want!r}: {msg}"
 
 
-def test_the_health_counter_still_bumps_before_the_refusal():
+def test_the_health_counter_still_bumps_before_the_refusal(plain_walk):
     """momwire#841 replaces a silent counter with a refusal; it does not
     remove the counter. `scratch/probe838_band_cost.py` reads the panel count
     off a refused point, which only works if `note` runs first."""
@@ -738,7 +751,7 @@ def test_the_health_counter_still_bumps_before_the_refusal():
 # dispatch (`test_the_tail_cap_refuses_by_name_below_the_floor`,
 # `test_the_cap_refusal_names_the_query_and_the_way_out`).
 @pytest.mark.slow
-def test_both_dispatches_refuse_at_the_cap():
+def test_both_dispatches_refuse_at_the_cap(plain_walk):
     """One copy of the prose, reached from both routes. The C++ and numpy
     contours both come back through `_six_integrals_below*` carrying `conv`,
     which is why the refusal sits there and not in `_tail_below` -- and why
