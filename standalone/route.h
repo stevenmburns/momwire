@@ -25,8 +25,13 @@ void configure_grid_cache(const std::string &tag);
 // OpenBLAS (the `sys._mw_host_lapack` route). True: `printout` holds the
 // file's bytes. False: declined, `reason` says why. With `arrays_dir`, each
 // finished run's arrays are written there (the gate's).
+// `failed`: declined because a C++ exception escaped (`failure_kind` is
+// "MemoryError" for std::bad_alloc, else "RuntimeError"; `failure_message`
+// its what()), which the no-Python build reports as an INTERNAL ERROR.
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
-            const std::string &arrays_dir, std::string &printout, std::string &reason);
+            const std::string &arrays_dir, std::string &printout, std::string &reason,
+            bool *failed = nullptr, std::string *failure_kind = nullptr,
+            std::string *failure_message = nullptr, std::string *raised_kind = nullptr);
 
 }  // namespace exe
 }  // namespace mw

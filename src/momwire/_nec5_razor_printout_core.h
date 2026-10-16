@@ -143,6 +143,12 @@ struct PrintoutResult {
     std::string raised_kind;
     std::string printout;  // printed: the file's bytes (latin-1, CRLF)
     std::string reason;    // declined: why
+    // declined because a C++ exception escaped the run half (memory, ...):
+    // its Python-style kind ("MemoryError" for std::bad_alloc, else the C++
+    // type) and what(). The hybrid falls back; the no-Python build writes
+    // the INTERNAL ERROR printout from it.
+    bool cxx_failed = false;
+    std::string failure_kind, failure_message;
 };
 
 // One finished run's intermediate arrays, for the gates that hold them to

@@ -29,6 +29,14 @@ Each deck is counted by the route that answered it in the ``exe`` pass
 (`cxx:serial`, `cxx:threads`, or `fallback:<why>`); a gate in which every deck
 took the fallback measures nothing, so both counts are printed. One JSON line
 per deck; a summary on stdout; exit status 1 on any mismatch.
+
+``--standalone``: EXE is the no-Python build (`momwire-razor2p-standalone`,
+momwire#1512). There is no fallback to force, so each deck is answered by the
+executable, the launcher and ``python`` only. A deck the C++ route serves,
+refuses or raises on must print the launcher's bytes; a deck it declines
+(route ``refused:<why>``) must be a refusal printout saying "not served by
+this build", and is counted, by reason, as an expected refusal -- the list of
+what this build does not serve yet.
 """
 
 from __future__ import annotations
@@ -70,8 +78,10 @@ def _read_runs(directory: Path) -> list[dict]:
     return runs
 
 
-def _answer(exe, launcher, deck: Path, work: Path, threads: str, launcher_env) -> dict:
-    """The three subprocess answers for one deck."""
+def _answer(
+    exe, launcher, deck: Path, work: Path, threads: str, launcher_env, standalone=False
+) -> dict:
+    """The three subprocess answers for one deck (two with ``standalone``)."""
     work.mkdir(parents=True)
     out = {}
     env = dict(os.environ)
@@ -89,6 +99,24 @@ def _answer(exe, launcher, deck: Path, work: Path, threads: str, launcher_env) -
     out["route"] = (work / "route").read_text().split(" ", 1)[0]
     out["exe"] = (work / "exe.out").read_bytes()
     out["cxx_runs"] = _read_runs(work / "cxx")
+    if standalone:
+        out["fallback"] = None
+        out["py_runs"] = []
+        out["host_calls"] = {}
+    else:
+        _fallback(exe, deck, work, env, out)
+    if launcher is not None:
+        subprocess.run(
+            [launcher, str(deck), str(work / "launcher.out")],
+            env=launcher_env,
+            capture_output=True,
+            check=False,
+        )
+        out["launcher"] = (work / "launcher.out").read_bytes()
+    return out
+
+
+def _fallback(exe, deck, work, env, out) -> None:
     (work / "py").mkdir()
     subprocess.run(
         [exe, str(deck), str(work / "fallback.out")],
@@ -105,15 +133,6 @@ def _answer(exe, launcher, deck: Path, work: Path, threads: str, launcher_env) -
     out["py_runs"] = _read_runs(work / "py")
     calls = work / "py" / "host_calls.json"
     out["host_calls"] = json.loads(calls.read_text()) if calls.exists() else {}
-    if launcher is not None:
-        subprocess.run(
-            [launcher, str(deck), str(work / "launcher.out")],
-            env=launcher_env,
-            capture_output=True,
-            check=False,
-        )
-        out["launcher"] = (work / "launcher.out").read_bytes()
-    return out
 
 
 def main(argv=None):
@@ -122,6 +141,9 @@ def main(argv=None):
     exe = _arg(args, "--exe")
     launcher = _arg(args, "--launcher")
     workers = int(_arg(args, "--workers", "4"))
+    standalone = "--standalone" in args
+    if standalone:
+        args.remove("--standalone")
     if exe is None:
         raise SystemExit("--exe EXE is required")
     # One count for every side, or neither set: "auto", the executable's own
@@ -146,10 +168,13 @@ def main(argv=None):
 
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
-            pool.submit(_answer, exe, launcher, d, work / str(i), threads, launcher_env)
+            pool.submit(
+                _answer, exe, launcher, d, work / str(i), threads, launcher_env, standalone
+            )
             for i, d in enumerate(decks)
         ]
         counts, routes, mismatches, runs_compared = Counter(), Counter(), 0, 0
+        refusals = Counter()
         with open(out_path, "w") as out:
             for deck, fut in zip(decks, futures, strict=True):
                 python = pc.python_printout(deck.read_bytes().decode("latin-1"))
@@ -162,14 +187,22 @@ def main(argv=None):
                     problems.append(
                         "python != launcher: " + pc.first_difference(ref, python)
                     )
-                for name in ("exe", "fallback"):
-                    if a[name] != ref:
-                        problems.append(f"{name}: " + pc.first_difference(ref, a[name]))
+                if standalone and a["route"].startswith("refused:"):
+                    # a decline of the C++ route: this build's named refusal
+                    refusals[a["route"].split(":", 1)[1]] += 1
+                    if b"not served by this build: " not in a["exe"]:
+                        problems.append("a declined deck without the named refusal")
+                    elif ref is not None and b"not served by this build" in ref:
+                        problems.append("the launcher printed this build's refusal")
+                else:
+                    for name in ("exe",) if standalone else ("exe", "fallback"):
+                        if a[name] != ref:
+                            problems.append(f"{name}: " + pc.first_difference(ref, a[name]))
                 # In auto mode the two routes run at different counts by design
                 # (the C++ route by size, the fallback at the launcher's
                 # default), and the LU's last bits follow the count: arrays are
                 # compared only at a fixed count; printouts always.
-                if a["route"].startswith("cxx") and threads != "auto":
+                if a["route"].startswith("cxx") and threads != "auto" and not standalone:
                     if len(a["cxx_runs"]) != len(a["py_runs"]):
                         problems.append(
                             f"runs {len(a['py_runs'])} (python) / {len(a['cxx_runs'])} (c++)"
@@ -198,9 +231,15 @@ def main(argv=None):
                 out.flush()
     shutil.rmtree(work, ignore_errors=True)
     cxx = sum(v for k, v in routes.items() if k.startswith("cxx"))
+    other = "refused by this build" if standalone else "fallback"
     print(
-        f"decks {len(decks)} at {threads} thread(s): C++ route {cxx}, fallback {len(decks) - cxx}"
+        f"decks {len(decks)} at {threads} thread(s): C++ route {cxx}, {other} {len(decks) - cxx}"
     )
+    if standalone:
+        print(
+            "expected refusals (not served by this build): "
+            + (", ".join(f"{k} {v}" for k, v in refusals.most_common()) or "none")
+        )
     print("by route: " + ", ".join(f"{k} {v}" for k, v in routes.most_common()))
     print(
         f"runs whose arrays were compared, C++ vs fallback ({', '.join(ARRAYS)}): {runs_compared}"

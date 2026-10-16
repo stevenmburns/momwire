@@ -14,6 +14,12 @@
 # CPython is never linked: its headers give PyConfig's layout, and the library
 # is opened at run time only for a deck the C++ route declines. The Python
 # found here must be the minor version the momwire environment runs.
+#
+# -DMW_EXE_NO_PYTHON=ON builds `momwire-razor2p-standalone` instead
+# (momwire#1512): no embedded interpreter, no Python headers, no version
+# check against an installed momwire; the launcher layer is C++
+# (launcher.cpp), and a deck the C++ route declines is a refusal printout
+# naming why. No Python is needed to configure or build it.
 cmake_minimum_required(VERSION 3.20)
 project(momwire_razor2p LANGUAGES CXX)
 
@@ -24,6 +30,7 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
+option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it" OFF)
 set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
 set(MW_DEFAULT_PYTHON_HOME "" CACHE PATH "momwire environment used when MOMWIRE_PYTHON_HOME is unset")
 set(MW_LIBPYTHON "" CACHE STRING "Python library opened for the fallback (default: this Python's)")
@@ -39,7 +46,9 @@ if(NOT MW_OPENBLAS_LIB)
   message(FATAL_ERROR "set MW_OPENBLAS_LIB to an mwx_-prefixed static OpenBLAS")
 endif()
 
-find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+if(NOT MW_EXE_NO_PYTHON)
+  find_package(Python3 REQUIRED COMPONENTS Interpreter Development.Module)
+endif()
 if(NOT MSVC)
   # MSVC takes /openmp:llvm on the compile line (setup.py's runtime); its
   # FindOpenMP answer is plain /openmp (vcomp), a second runtime.
@@ -56,7 +65,7 @@ if(NOT MW_VERSION)
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${MW_ROOT}/pyproject.toml")
 
-if(NOT MW_LIBPYTHON)
+if(NOT MW_LIBPYTHON AND NOT MW_EXE_NO_PYTHON)
   if(WIN32)
     set(MW_LIBPYTHON "python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.dll")
   elseif(APPLE)
@@ -114,36 +123,56 @@ target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLA
   somm_core=mws_somm_core)  # the Sommerfeld cores' namespace
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
-add_executable(momwire-razor2p momwire_razor2p.cpp $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
-target_include_directories(momwire-razor2p PRIVATE ${MW_SRC} ${Python3_INCLUDE_DIRS})
-target_compile_definitions(momwire-razor2p PRIVATE
-  NDEBUG
-  MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
-  MW_VERSION="${MW_VERSION}"
-  MW_LIBPYTHON="${MW_LIBPYTHON}")
-if(MW_DEFAULT_PYTHON_HOME)
-  target_compile_definitions(momwire-razor2p PRIVATE MW_DEFAULT_PYTHON_HOME="${MW_DEFAULT_PYTHON_HOME}")
+if(MW_EXE_NO_PYTHON)
+  set(MW_EXE momwire-razor2p-standalone)
+  add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
+                 $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_EXE_NO_PYTHON=1
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}")
+else()
+  set(MW_EXE momwire-razor2p)
+  add_executable(${MW_EXE} momwire_razor2p.cpp $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${Python3_INCLUDE_DIRS})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}"
+    MW_LIBPYTHON="${MW_LIBPYTHON}")
+  if(MW_DEFAULT_PYTHON_HOME)
+    target_compile_definitions(${MW_EXE} PRIVATE MW_DEFAULT_PYTHON_HOME="${MW_DEFAULT_PYTHON_HOME}")
+  endif()
 endif()
 if(MSVC)
-  target_compile_options(momwire-razor2p PRIVATE /O2 /std:c++17 /openmp:llvm)
+  target_compile_options(${MW_EXE} PRIVATE /O2 /std:c++17 /openmp:llvm)
 else()
-  target_compile_options(momwire-razor2p PRIVATE -O2 -fopenmp)
+  # -ffp-contract=off: the launcher's .GMO grid is numpy's arithmetic
+  target_compile_options(${MW_EXE} PRIVATE -O2 -fopenmp -ffp-contract=off)
 endif()
-target_link_libraries(momwire-razor2p PRIVATE ${MW_OPENBLAS_LIB})
+target_link_libraries(${MW_EXE} PRIVATE ${MW_OPENBLAS_LIB})
 if(MSVC)
-  # pyconfig.h asks MSVC to link pythonXY.lib on its own (#pragma comment);
-  # this executable must never link it (it loads the DLL for the fallback).
-  target_link_options(momwire-razor2p PRIVATE
-    /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.lib
-    /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}_d.lib
-    /NODEFAULTLIB:python3.lib)
+  if(NOT MW_EXE_NO_PYTHON)
+    # pyconfig.h asks MSVC to link pythonXY.lib on its own (#pragma comment);
+    # this executable must never link it (it loads the DLL for the fallback).
+    target_link_options(${MW_EXE} PRIVATE
+      /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}.lib
+      /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}_d.lib
+      /NODEFAULTLIB:python3.lib)
+  endif()
 else()
-  target_link_libraries(momwire-razor2p PRIVATE OpenMP::OpenMP_CXX)
+  target_link_libraries(${MW_EXE} PRIVATE OpenMP::OpenMP_CXX)
 endif()
 if(UNIX AND NOT APPLE)
   # libstdc++ / libgcc static (the spike's cold-start measurement); libc,
   # libm, libmvec and libgomp stay shared, as the extension has them.
-  target_link_libraries(momwire-razor2p PRIVATE -static-libstdc++ -static-libgcc ${CMAKE_DL_LIBS} pthread m mvec)
+  target_link_libraries(${MW_EXE} PRIVATE -static-libstdc++ -static-libgcc ${CMAKE_DL_LIBS} pthread m mvec)
 endif()
 
-message(STATUS "momwire-razor2p ${MW_VERSION}: Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB}")
+if(MW_EXE_NO_PYTHON)
+  message(STATUS "${MW_EXE} ${MW_VERSION}: no Python, OpenBLAS ${MW_OPENBLAS_LIB}")
+else()
+  message(STATUS "${MW_EXE} ${MW_VERSION}: Python ${Python3_VERSION} (${MW_LIBPYTHON}), OpenBLAS ${MW_OPENBLAS_LIB}")
+endif()
