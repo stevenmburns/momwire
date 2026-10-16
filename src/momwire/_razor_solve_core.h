@@ -74,6 +74,11 @@ struct Compose {
     view<const double, 2> rem_src, rem_t_src;
     const double *W = nullptr;
     ptrdiff_t n_qp = 0;
+    // The below medium's remainder (momwire#1512 B2, `RemainderBelow`): when
+    // set, the projection of path points [o0, o0 + m) against the
+    // remainder's source nodes, (m, n_src) row-major into `out`, in place of
+    // the above grid's `field_proj_batch` (`grid` then unused).
+    std::function<void(ptrdiff_t o0, ptrdiff_t m, cd *out)> proj;
 };
 
 struct SolveInputs {
@@ -92,6 +97,14 @@ struct SolveInputs {
     size_t n_path = 2;
     view<const int64_t, 1> grounded;  // sorted basis rows, or empty
     double k = 0.0, c_a_imag = 0.0, c_phi_imag = 0.0;
+    // A lossy medium (the below medium, momwire#1512 B2): the kernel's
+    // wavenumber is complex (`razor_seg_moments_cplx`) and c_Phi = j omega
+    // eps_m has a real part, so T2 is not fused: `c_A * T1 - T2 / c_Phi`,
+    // numpy's fused product and Smith division. `k` is then unused.
+    bool k_complex = false;
+    cd k_c;
+    bool unfused = false;
+    cd c_a, c_phi;
     SourceSet real;
     bool has_image = false;
     SourceSet image;

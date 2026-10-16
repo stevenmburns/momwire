@@ -368,6 +368,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_front_core.h",
     "src/momwire/_razor_buried_core.h",
     "src/momwire/_somm_below_proj_core.h",
+    "src/momwire/_somm_below_grid_core.h",
     "src/momwire/_razor_wire_loading_core.h",
     # The exact ring kernel's point moments, Python-free (momwire#1479): the
     # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
@@ -412,6 +413,9 @@ _ACCEL_SOURCES = [
     # The below/below remainder's projection, Python-free (momwire#1512 B2):
     # the kernel `remainder_field_proj_batch_below` binds, moved verbatim.
     "src/momwire/_somm_below_proj_core.cpp",
+    # The below/below grid's state, key and sources (momwire#1512 B2; its
+    # fill is B5's). No float arithmetic beyond the key.
+    "src/momwire/_somm_below_grid_core.cpp",
     # S3: the grid itself, which the C++ front half builds for the composing
     # ground (`_razor_front_core.cpp`, linked here as well).
     "src/momwire/_somm_grid_core.cpp",
