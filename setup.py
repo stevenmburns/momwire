@@ -304,6 +304,7 @@ _ACCEL_HEADERS = [
     # stale-.so lesson, which is exactly why this list exists.
     "src/momwire/_accel_common.h",
     "src/momwire/_accel_somm_proj_inline.h",
+    "src/momwire/_somm_field_core.h",
     "src/momwire/_branch_cut_inline.h",
     # Both of these were MISSING until momwire#824, and the omission is what
     # that issue actually was. The far static-moment header is included by
@@ -346,6 +347,10 @@ _ACCEL_SOURCES = [
     "src/momwire/_accel_bspline.cpp",
     "src/momwire/_accel_sinusoidal.cpp",
     "src/momwire/_accel_somm.cpp",
+    # The Sommerfeld near-field remainder (`_field_point`), one spelled
+    # kernel rather than numpy's CPU-dependent arctan2 and einsum; its
+    # binding is in `_accel_somm.cpp`.
+    "src/momwire/_somm_field_core.cpp",
     "src/momwire/_accel_mw568.cpp",
     "src/momwire/_accel_razor.cpp",
     # The razor kernels with no Python in their signatures or includes;
