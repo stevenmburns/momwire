@@ -1,0 +1,12 @@
+CM LD 4 with reactance on a driven node, two voltage sources
+CE
+GW 1 21 0 0 -2.5 0 0 2.5 0.001
+GW 2 21 1.5 0 -2.5 1.5 0 2.5 0.001
+GE 0
+LD 4,1,11,0,50,-25
+LD 4,2,11,0,0,10
+EX 0 1 11 0 1 0
+EX 0 2 11 0 0 1
+FR 0 1 0 0 28.5 0
+XQ
+EN

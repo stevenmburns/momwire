@@ -12,6 +12,27 @@
 //
 // A growable array of a trivially copyable T. Every operation that
 // allocates, and the destructor, need the GIL; element access does not.
+#ifdef MW_EK_NO_PYTHON
+// The Python-free core TU (momwire#1479): the same interface over a plain
+// vector (nothing there for tracemalloc to see).
+template <class T>
+class NpVec {
+  public:
+    void reserve(size_t c) { v_.reserve(c); }
+    void resize(size_t n) { v_.resize(n); }
+    void assign(size_t n, const T &v) { v_.assign(n, v); }
+    void push_back(const T &v) { v_.push_back(v); }
+    T &operator[](size_t i) { return v_[i]; }
+    const T &operator[](size_t i) const { return v_[i]; }
+    size_t size() const { return v_.size(); }
+    bool empty() const { return v_.empty(); }
+    T *data() { return v_.data(); }
+    const T *data() const { return v_.data(); }
+
+  private:
+    std::vector<T> v_;
+};
+#else
 template <class T>
 class NpVec {
   public:
@@ -49,6 +70,8 @@ class NpVec {
     T *p_;
     py::object buf_;
 };
+
+#endif
 
 // ---------------------------------------------------------------------------
 // the dedup key and its table

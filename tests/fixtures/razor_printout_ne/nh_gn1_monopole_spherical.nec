@@ -1,0 +1,10 @@
+CM NH 1: a spherical grid over a monopole on a perfect ground, through the horizon and the nadir
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GE 1
+GN 1
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+NH 1 2 4 3 3.0 0 0 2.0 60 45
+XQ
+EN

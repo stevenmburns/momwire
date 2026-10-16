@@ -1,0 +1,10 @@
+CM GN 0: a grounded monopole, NE asked at its base (refused by name)
+CE
+GW 1 20 0 0 0 0 0 2.6 0.002
+GE 1
+GN 0 0 0 0 13.0 0.005
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+NE 0 1 1 1 0 0 0 0 0 0
+XQ
+EN

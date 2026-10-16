@@ -1,0 +1,73 @@
+# momwire-razor2p (standalone/, unit 4) under MSVC: does it configure, build,
+# load CPython at run time and answer as the launcher does?
+#
+# Linux is gated byte for byte on the fleet (scripts/core_split/exe_compare.py
+# against a static OpenBLAS pinned to SciPy's build). Here the OpenBLAS is the
+# project's own Windows release (a DLL, unprefixed names: MW_BLAS_PREFIX
+# empty), which is NOT SciPy's Windows build, so the corpus comparison below
+# is recorded rather than required: what this job requires is the build and
+# the launcher contract (tests/test_standalone_exe.py). Windows identity is
+# measured on the Windows builder.
+name: standalone
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [proto/razor-cxx-solve]
+    paths:
+      - "standalone/**"
+      - ".github/workflows/standalone.yml"
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: OpenBLAS 0.3.31 (x64 release)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://github.com/OpenMathLib/OpenBLAS/releases/download/v0.3.31/OpenBLAS-0.3.31-x64.zip -OutFile ob.zip
+          Expand-Archive ob.zip -DestinationPath ob
+          Get-ChildItem -Recurse ob -Include *.lib,*.dll | Select-Object FullName
+      - name: momwire environment
+        shell: pwsh
+        run: |
+          python -m venv venv
+          venv\Scripts\python -m pip install -q -U pip setuptools wheel pybind11
+          venv\Scripts\python -m pip install -q -e ".[test]"
+      - name: configure + build (MSVC)
+        shell: pwsh
+        run: |
+          $lib = (Get-ChildItem -Recurse ob -Filter libopenblas.lib | Select-Object -First 1).FullName
+          cmake -S standalone -B build-exe -A x64 `
+            "-DMW_OPENBLAS_LIB=$lib" "-DMW_DEFAULT_PYTHON_HOME=$PWD\venv" `
+            "-DPython3_EXECUTABLE=$((Get-Command python).Source)"
+          cmake --build build-exe --config Release
+      - name: contract tests
+        shell: pwsh
+        run: |
+          $dll = (Get-ChildItem -Recurse ob -Filter libopenblas.dll | Select-Object -First 1).DirectoryName
+          $py = Split-Path (Get-Command python).Source
+          $env:PATH = "$dll;$py;$PWD\venv\Scripts;$env:PATH"
+          $env:MOMWIRE_LIBPYTHON = "$py\python312.dll"
+          $env:MOMWIRE_RAZOR2P_EXE = "$PWD\build-exe\Release\momwire-razor2p.exe"
+          venv\Scripts\python -m pytest -q -n 0 tests/test_standalone_exe.py -rs
+      - name: corpus slice (recorded, not required)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $dll = (Get-ChildItem -Recurse ob -Filter libopenblas.dll | Select-Object -First 1).DirectoryName
+          $py = Split-Path (Get-Command python).Source
+          $env:PATH = "$dll;$py;$PWD\venv\Scripts;$env:PATH"
+          $env:MOMWIRE_LIBPYTHON = "$py\python312.dll"
+          $env:OPENBLAS_NUM_THREADS = "1"; $env:OMP_NUM_THREADS = "1"
+          venv\Scripts\python scripts/core_split/exe_compare.py exe-win.jsonl `
+            --exe build-exe\Release\momwire-razor2p.exe `
+            --launcher venv\Scripts\momwire-nec5-razor-2p.exe --workers 2 `
+            tests/fixtures/razor_printout_3a tests/fixtures/eznec

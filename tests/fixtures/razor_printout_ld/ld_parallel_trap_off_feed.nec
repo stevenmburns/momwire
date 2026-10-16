@@ -1,0 +1,10 @@
+CM LD 1: parallel L-C traps either side of the feed, R open
+CE
+GW 1 41 0 0 -5 0 0 5 0.0015
+GE 0
+LD 1,1,10,0,0,1.0E-06,2.4E-11
+LD 1,1,32,0,0,1.0E-06,2.4E-11
+EX 0 1 21 0 1 0
+FR 0 1 0 0 14.2 0
+XQ
+EN

@@ -477,7 +477,14 @@ _CANCELLABLE_KERNELS = (
 # Methods of the extension's classes that take `cancel_flag`, as (class,
 # method): the census reads module-level kernels only, so these are listed by
 # hand and wrapped on the class.
-_CANCELLABLE_METHODS = (("RowIndex", "find"), ("RowGroups", "add"))
+_CANCELLABLE_METHODS = (
+    ("RowIndex", "find"),
+    ("RowGroups", "add"),
+    # The razor-2p solve prototype polls between windows and inside the
+    # moment fill it calls.
+    ("RazorSolveContext", "port_solution"),
+    ("RazorSolveContext", "front_port_solution"),
+)
 
 
 def _install_cancel_translation(mod) -> None:

@@ -1,0 +1,22 @@
+CM unit 3a: SimNEC's multi-run shape on three ports (no RP): every XQ
+CM executes, the three runs share one preparation.
+CE
+GW 1 21 0.0 -5.2 10.0 0.0 5.2 10.0 1.0e-03
+GW 2 21 4.282 -5.2 10.0 4.282 5.2 10.0 1.0e-03
+GW 3 21 -4.282 -5.2 10.0 -4.282 5.2 10.0 1.0e-03
+GE 00
+FR 0 1 0 0 14.0 1
+EX 0 1 11 0 1.0
+EX 0 2 11 0 1.0e-10
+EX 0 3 11 0 1.0e-10
+PQ 0
+XQ
+EX 0 1 11 0 1.0e-10
+EX 0 2 11 0 1.0
+EX 0 3 11 0 1.0e-10
+XQ
+EX 0 1 11 0 1.0e-10
+EX 0 2 11 0 1.0e-10
+EX 0 3 11 0 1.0
+XQ
+EN

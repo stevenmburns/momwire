@@ -295,6 +295,8 @@ _ACCEL_HEADERS = [
     # 1410 pair-moment TU and the 1433 point-moment TU.
     "src/momwire/_exact_kernel_ring_inline.h",
     "src/momwire/_exact_kernel_table_inline.h",
+    # momwire#1438: the two-radius point moments, included by the 1433 TU.
+    "src/momwire/_exact_kernel_cross_inline.h",
     "src/momwire/_bspline_static_moments_inline.h",
     "src/momwire/_bspline_ek_moments_inline.h",
     "src/momwire/_contour_engine_inline.h",
@@ -334,6 +336,21 @@ _ACCEL_HEADERS = [
     "src/momwire/_mw_core.h",
     "src/momwire/_mw_binding.h",
     "src/momwire/_razor_core.h",
+    "src/momwire/_razor_solve_core.h",
+    "src/momwire/_razor_front_core.h",
+    "src/momwire/_razor_wire_loading_core.h",
+    # The exact ring kernel's point moments, Python-free (momwire#1479): the
+    # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
+    # and razor's exact-kernel plan and correction for the C++ route.
+    "src/momwire/_exact_kernel_point_inline.h",
+    "src/momwire/_exact_kernel_point_core.h",
+    "src/momwire/_razor_exact_core.h",
+    # The frozen Gauss-Legendre rules, generated from `_leggauss_table.py`
+    # (scripts/gen_leggauss_header.py), read by the front half.
+    "src/momwire/_leggauss_table.h",
+    "src/momwire/_nec5_deck_core.h",
+    "src/momwire/_nec5_razor_seam_core.h",
+    "src/momwire/_nec5_razor_printout_core.h",
 ]
 
 # The accelerator's translation units (momwire#687). The monolith was one
@@ -399,6 +416,43 @@ _ACCEL_SOURCES = [
     # momwire#1497: the fused elementwise complex multiply (`_cmul.cmul`). Its
     # own TU so that no existing kernel's codegen can move with it.
     "src/momwire/_accel_cmul.cpp",
+    # The razor-2p solve prototype: every fill window and the LU in one C++
+    # call (`_razor_solve_core.cpp`, Python-free) and its binding. Their own
+    # TUs: they only CALL the razor kernels, across a TU boundary, so no
+    # kernel's codegen can move with them (momwire#1187).
+    "src/momwire/_razor_solve_core.cpp",
+    # The razor-2p FRONT half (construction, geometry, the prepared tables,
+    # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
+    # Its own TU: it calls no kernel and no kernel calls it.
+    "src/momwire/_razor_front_core.cpp",
+    # The front half's exact ring kernel (momwire#1479): the plan and the
+    # correction, and the point moments' Python-free twin of
+    # `_accel_exact_kernel_point.cpp` (the same inline text, so the same
+    # bits). Their own TUs for 1410's reason.
+    "src/momwire/_razor_exact_core.cpp",
+    "src/momwire/_exact_kernel_point_core.cpp",
+    "src/momwire/_accel_razor_solve.cpp",
+    # The NEC-5 deck reader (unit 2a of the standalone razor-2p executable):
+    # `deck/_nec5.py` and the EZNEC seam's text-level front in C++, Python-
+    # free, and its test-facing binding. Their own TUs: no float arithmetic
+    # beyond parsing, and nothing calls them on the default path.
+    "src/momwire/_nec5_deck_core.cpp",
+    "src/momwire/_accel_nec5_deck.cpp",
+    # The NEC-5 seam's structure half for razor-2p (unit 2b): the scope
+    # ladder, the mesh and the ports, deck -> RazorSolver's arguments,
+    # Python-free; `_accel_razor_solve.cpp` binds it. Its own TU: O(N)
+    # geometry, and nothing calls it on the default path.
+    "src/momwire/_nec5_razor_seam_core.cpp",
+    # The run half and the printout writer for razor-2p (unit 3a): deck text
+    # to the printout's bytes, Python-free. Nothing binds it yet (the
+    # standalone driver is its caller); it is built here so every platform's
+    # toolchain compiles it. Its own TU: nothing calls it on the default path.
+    "src/momwire/_nec5_razor_printout_core.cpp",
+    # WIRE loading for that C++ path (LD 5 skin effect through the vendored
+    # xsf's `cyl_bessel_ie`, scipy.special.ive's own code; LD 2 / LD 3
+    # per-metre RLC), Python-free. The ONE TU of this extension that
+    # includes xsf: its headers define functions non-inline.
+    "src/momwire/_razor_wire_loading_core.cpp",
 ]
 
 # Same staleness rationale for the near-interface twin: the contour engine
@@ -501,6 +555,7 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
             _ACCEL_SOURCES,
             depends=_ACCEL_HEADERS,
             compile_args=_accel_args,
+            include_dirs=["extern/xsf/include"],
         )
     )
     ext_modules.append(

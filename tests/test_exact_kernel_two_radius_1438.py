@@ -240,6 +240,85 @@ def test_point_cross_rows_match_the_scalar_primitive():
     assert np.all(got[:, lab[:, None] == lab[None, :]] == 0)
 
 
+_CROSS_ACCEL = pytest.mark.skipif(
+    not EK._HAVE_POINT_CROSS_ACCEL, reason="accelerator without the two-radius rows"
+)
+
+
+@_CROSS_ACCEL
+def test_the_cxx_two_radius_kernel_is_the_numpy_kernel():
+    """`_exact_kernel_cross_inline.h`'s K2 against `ring_kernel2` across the
+    near/far switch and through z = 0 (measured <= 1.1e-16 relative)."""
+    from momwire._accel import acc
+
+    for a1, a2 in ((0.004, 0.0015), (0.0015, 0.004), (0.02, 0.019)):
+        z = np.concatenate([[0.0], np.geomspace(1e-7, 2.0, 400)])
+        want = EK.ring_kernel2(z, a1, a2, K)
+        got = acc.exact_kernel_ring_kernel2(z, a1, a2, K)
+        assert np.max(np.abs(got - want) / np.abs(want)) <= 1e-14
+
+
+@_CROSS_ACCEL
+def test_the_cxx_cross_rows_are_the_numpy_rows():
+    """`PointCrossRowsAccel` against the numpy `PointCrossRows`: the same
+    pairs, zero on the same-radius ones, the values to the near series'
+    roundoff (measured 2.9e-16 of the block's largest), the same
+    deduplication, and bits independent of the thread count and of how the
+    observers are cut into windows."""
+    x0, sgn, h, a, lab = _line()
+    xo = x0 + 0.5 * h
+    want = EK.PointCrossRows(x0, sgn, h, a, lab, K, 2).rows(xo, a, lab)
+    src = EK.PointCrossRowsAccel(x0, sgn, h, a, lab, K, 2)
+    got = src.rows(xo, a, lab)
+    same = lab[:, None] == lab[None, :]
+    assert np.all(got[:, same] == 0) and np.all(got[0, ~same] != 0)
+    assert np.max(np.abs(got - want)) <= 1e-14 * np.max(np.abs(want))
+    assert src.evaluated <= 2 * 20
+    for nt in (1, 4):
+        one = EK.PointCrossRowsAccel(x0, sgn, h, a, lab, K, 2, n_threads=nt)
+        parts = [
+            one.rows(xo[r0 : r0 + 7], a[r0 : r0 + 7], lab[r0 : r0 + 7])
+            for r0 in (0, 7, 14)
+        ]
+        assert np.concatenate(parts, 1).tobytes() == got.tobytes()
+    # A capped cache recomputes what it declined, to the same bits.
+    capped = EK.PointCrossRowsAccel(x0, sgn, h, a, lab, K, 2, max_cached=3)
+    again = [capped.rows(xo, a, lab) for _ in range(2)]
+    assert again[0].tobytes() == again[1].tobytes() == got.tobytes()
+
+
+@_CROSS_ACCEL
+def test_the_cxx_scalar_primitive_is_the_numpy_one():
+    from momwire._accel import acc
+
+    rules = EK._point_rules()
+    for c, h, a1, a2 in (
+        (-0.003, 0.006, 0.004, 0.0015),
+        (0.0, 0.006, 0.0015, 0.004),
+        (-0.006, 0.006, 0.004, 0.0015),
+        (0.02, 0.006, 0.004, 0.0015),
+        (-0.0031, 0.0062, 0.004, 0.00399),
+    ):
+        want = EK.point_moments2(c, h, a1, a2, K, 2)
+        got = acc.exact_kernel_point_moments2(c, h, a1, a2, K, 2, rules)
+        assert np.max(np.abs(got - want)) <= 1e-14 * np.max(np.abs(want)), (c, a1, a2)
+
+
+def test_the_solvers_take_the_cxx_cross_rows_where_it_serves(monkeypatch):
+    built = []
+    for name in ("PointCrossRows", "PointCrossRowsAccel"):
+        orig = getattr(EK, name)
+
+        def spy(*a, _orig=orig, _name=name, **kw):
+            built.append(_name)
+            return _orig(*a, **kw)
+
+        monkeypatch.setattr(EK, name, spy)
+    _z(RazorSolver, exact_kernel=True)
+    want = "PointCrossRowsAccel" if EK._HAVE_POINT_CROSS_ACCEL else "PointCrossRows"
+    assert built and set(built) == {want}
+
+
 # --------------------------------------------------------------------------
 # the solvers
 # --------------------------------------------------------------------------
@@ -616,13 +695,13 @@ def test_razor_series_never_serves_a_cross_pair(_plans, monkeypatch, deck):
         init(self, x0, sgn, h, a, *rest, **kw)
 
     monkeypatch.setattr(ES.PointSeriesAccel, "__init__", spy)
-    orig = EK.PointCrossRows
+    orig = EK.point_cross_rows
 
     def cspy(*a, **kw):
         cross.append(1)
         return orig(*a, **kw)
 
-    monkeypatch.setattr(EK, "PointCrossRows", cspy)
+    monkeypatch.setattr(EK, "point_cross_rows", cspy)
     ES.ENABLED = True
     PLAN.clear()
     got = _razor_z(_STEPS[deck])

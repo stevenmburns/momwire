@@ -1,0 +1,10 @@
+CM A fat monopole on a perfect ground: the grounded base row, then the image after the correction
+CE
+GW 1 30 0 0 0 0 0 2.6 0.04
+GE 1
+GN 1
+EX 0 1 1 0 1 0
+FR 0 1 0 0 28.5 0
+RP 0 3 2 1000 0 0 30 90
+XQ
+EN
