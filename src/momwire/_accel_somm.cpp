@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_branch_cut_inline.h"
+#include "_cdiv_inline.h"
 #include "_fma_inline.h"
 
 #include <cstring>
@@ -131,7 +132,7 @@ static void jy01_series(cd z, cd &j0, cd &j1x, cd &y0, cd &y1) {
     }
     const cd lg = std::log(0.5 * z) + EULER_GAMMA;
     y0 = (2.0 / SPI) * mw_fma::mul_add(lg, j0, s0);
-    y1 = (2.0 / SPI) * (mw_fma::mul(lg, mw_fma::mul(j1x, z)) - 1.0 / z) -
+    y1 = (2.0 / SPI) * (mw_fma::mul(lg, mw_fma::mul(j1x, z)) - mw_cdiv::div(1.0, z)) -
          mw_fma::mul(z / (2.0 * SPI), s1);
 }
 
@@ -150,7 +151,7 @@ static void jy01_series(cd z, cd &j0, cd &j1x, cd &y0, cd &y1) {
 // break, so both truncate exactly where a per-order loop would.
 static void hankel_asym_sums(cd z, bool want_plus, cd &s0m, cd &s1m, cd &s0p,
                              cd &s1p) {
-    const cd iz = -CI / z;  // s = -1
+    const cd iz = mw_cdiv::div(-CI, z);  // s = -1
     cd t0(1.0, 0.0), t1(1.0, 0.0);
     s0m = s1m = s0p = s1p = cd(1.0, 0.0);
     double prev0 = 1e300, prev1 = 1e300;
@@ -201,11 +202,12 @@ static void bessel_j0_j1x(cd x, cd &b0, cd &b1x) {
     // per-order calls did four of each.
     cd s0m, s1m, s0p, s1p;
     hankel_asym_sums(x, true, s0m, s1m, s0p, s1p);
-    const cd w = std::sqrt(2.0 / (SPI * x));
+    const cd w = std::sqrt(mw_cdiv::div(2.0, SPI * x));
     const cd e = std::exp(mw_fma::mul(-CI, x - 0.25 * SPI));
-    const cd p = mw_fma::mul(w, e), pinv = w / e;
+    const cd p = mw_fma::mul(w, e), pinv = mw_cdiv::div(w, e);
     b0 = 0.5 * mw_fma::mul_add(pinv, s0p, mw_fma::mul(p, s0m));
-    b1x = mw_fma::mul(0.5 * CI, mw_fma::mul(p, s1m) - mw_fma::mul(pinv, s1p)) / x;
+    b1x = mw_cdiv::div(
+        mw_fma::mul(0.5 * CI, mw_fma::mul(p, s1m) - mw_fma::mul(pinv, s1p)), x);
 }
 
 // (H2_0(x)/2, H2_1(x)/(2x)) — the Hankel-form pair of _integrand_six.
@@ -214,15 +216,15 @@ static void hankel2_half(cd x, cd &b0, cd &b1x) {
         cd j0, j1x, y0, y1;
         jy01_series(x, j0, j1x, y0, y1);
         b0 = 0.5 * (j0 - mw_fma::mul(CI, y0));
-        b1x = 0.5 * (mw_fma::mul(j1x, x) - mw_fma::mul(CI, y1)) / x;
+        b1x = mw_cdiv::div(0.5 * (mw_fma::mul(j1x, x) - mw_fma::mul(CI, y1)), x);
         return;
     }
     cd s0m, s1m, s0p, s1p;
     hankel_asym_sums(x, false, s0m, s1m, s0p, s1p);
-    const cd p = mw_fma::mul(std::sqrt(2.0 / (SPI * x)),
+    const cd p = mw_fma::mul(std::sqrt(mw_cdiv::div(2.0, SPI * x)),
                              std::exp(mw_fma::mul(-CI, x - 0.25 * SPI)));
     b0 = mw_fma::mul(0.5 * p, s0m);
-    b1x = mw_fma::mul(mw_fma::mul(0.5 * CI, p), s1m) / x;
+    b1x = mw_cdiv::div(mw_fma::mul(mw_fma::mul(0.5 * CI, p), s1m), x);
 }
 
 // ---- the six integrands and quadrature (ports of the Python names) -------
@@ -277,8 +279,11 @@ static inline void integrand_six(const SommCtx &c, cd lam, cd out[6]) {
     const cd k1s = mul(c.k1, c.k1);
     const cd k2s = mul(c.k2, c.k2);
     const cd g2ks = mul(g2, k1s + k2s);
-    const cd d1 = 2.0 / (g1 + g2) - 2.0 * k2s / g2ks;
-    const cd d2 = 2.0 / mw_fma::mul_add(k1s, g2, mul(k2s, g1)) - 2.0 / g2ks;
+    // The four divides are mw_cdiv::div, libgcc's own rounding without the
+    // call (momwire#1441).
+    const cd d1 = mw_cdiv::div(2.0, g1 + g2) - mw_cdiv::div(2.0 * k2s, g2ks);
+    const cd d2 = mw_cdiv::div(2.0, mw_fma::mul_add(k1s, g2, mul(k2s, g1))) -
+                  mw_cdiv::div(2.0, g2ks);
     const cd e = std::exp(-g2 * c.h);
     const cd x = lam * c.rho;
     cd b0, b1x;

@@ -51,6 +51,7 @@
 #include <complex>
 #include <limits>
 
+#include "_cdiv_inline.h"
 #include "_fma_inline.h"
 
 namespace mw_contour {
@@ -183,7 +184,7 @@ static inline void mw_bessel_series(const T &z, T &j0, T &j1) {
 template <class T>
 static inline void mw_bessel_miller(const T &z, double az, T &j0, T &j1) {
     const int M = 2 * static_cast<int>(0.75 * az + 16.0);
-    const T inv2z = T(2.0) / z;
+    const T inv2z = mw_cdiv::div(T(2.0), z);
     T fp1(0.0), fn(1e-280);
     T s(0.0), j0v(0.0), j1v(0.0);
     for (int n = M; n >= 1; --n) {
@@ -203,7 +204,7 @@ static inline void mw_bessel_miller(const T &z, double az, T &j0, T &j1) {
         }
     }
     s += j0v;
-    const T inv_s = T(1.0) / s;
+    const T inv_s = mw_cdiv::div(T(1.0), s);
     j0 = mw_fma::mul(j0v, inv_s);
     j1 = mw_fma::mul(j1v, inv_s);
 }
@@ -217,7 +218,7 @@ static inline void mw_bessel_pq(const T &z, double mu, T &P, T &Q) {
     P = T(1.0);
     Q = T(0.0);
     T c(1.0);
-    const T iz = T(1.0) / z;
+    const T iz = mw_cdiv::div(T(1.0), z);
     double prev = std::numeric_limits<double>::infinity();
     for (int k = 1; k <= 40; ++k) {
         const double kk = 2.0 * k - 1.0;
@@ -243,7 +244,7 @@ static inline void mw_bessel_asymptotic(const T &z, T &j0, T &j1) {
     mw_bessel_pq(z, 4.0, P1, Q1);
     const T cz = std::cos(z);
     const T sz = std::sin(z);
-    const T pref = std::sqrt(T(1.0) / (MW_PI * z));
+    const T pref = std::sqrt(mw_cdiv::div(T(1.0), MW_PI * z));
     // J0 = sqrt(2/(pi z)) [P0 cos(z - pi/4) - Q0 sin(z - pi/4)] with
     // cos(z - pi/4) = (cos z + sin z)/sqrt2, sin(z - pi/4) = (sin z - cos z)/sqrt2.
     j0 = mw_fma::mul(pref, mw_fma::mul_add(P0 + Q0, cz, mw_fma::mul(P0 - Q0, sz)));
@@ -282,7 +283,7 @@ static inline void bessel_j0_j1x(const cd &x, cd &j0, cd &j1x) {
     cd b0, b1;
     mw_bessel_j0_j1(z, nx, b0, b1);
     j0 = b0;
-    j1x = b1 / z;
+    j1x = mw_cdiv::div(b1, z);
 }
 
 // ---------------------------------------------------------------------------
@@ -372,7 +373,7 @@ static inline void wynn_epsilon(const cd *s, int n, cd *best) {
             for (int c = 0; c < NC; ++c) {
                 cd d = cur[(i + 1) * NC + c] - cur[i * NC + c];
                 if (std::abs(d) < 1e-300) d = cd(1e-300, 0.0);
-                nxt[i * NC + c] = prev[i * NC + c] + cd(1.0, 0.0) / d;
+                nxt[i * NC + c] = prev[i * NC + c] + mw_cdiv::div(1.0, d);
             }
         }
         const int mm = m - 1;
