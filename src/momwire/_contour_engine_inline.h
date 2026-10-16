@@ -55,6 +55,7 @@
 
 #include "_cdiv_inline.h"
 #include "_fma_inline.h"
+#include "_somm_lanes_inline.h"
 
 namespace mw_contour {
 
@@ -301,6 +302,54 @@ struct ContourHealth {
     bool accel;
 };
 
+// Lanes (momwire#1441 step 3). An integrand that can evaluate W nodes at
+// once says so with `static const bool kLanes = true` and two members:
+//   bool lanes_on() const                  -- the run-time switch, so the
+//                                             scalar walk stays callable;
+//   void lanes(const double *t, cd *fv) const -- the integrand at the W real
+//                                             abscissae t[0..W), fv[l*NC + c]
+//                                             the scalar call's out[c] at t[l],
+//                                             bit for bit.
+// gauss_segment then forms the same abscissae and sums the same products in
+// the same node order; only who computes the values changes. Every other
+// integrand compiles to the scalar loop alone.
+template <class G, class = void>
+struct mw_has_lanes {
+    static const bool value = false;
+};
+template <class G>
+struct mw_has_lanes<G, decltype(void(G::kLanes))> {
+    static const bool value = G::kLanes;
+};
+
+template <int NC, class G, bool L = mw_has_lanes<G>::value>
+struct mw_gauss_lanes {
+    static inline bool run(const G &, double, double, const double *,
+                           const double *, int, cd *) {
+        return false;
+    }
+};
+template <int NC, class G>
+struct mw_gauss_lanes<NC, G, true> {
+    static inline bool run(const G &g, double mid, double half, const double *gx,
+                           const double *gw, int ng, cd *out) {
+        const int W = mw_sl::W;
+        if (!g.lanes_on() || ng % W != 0) return false;
+        double t[mw_sl::W];
+        cd fv[mw_sl::W * NC];
+        for (int i = 0; i < ng; i += W) {
+            for (int l = 0; l < W; ++l) t[l] = mw_fma::fma(half, gx[i + l], mid);
+            g.lanes(t, fv);
+            for (int l = 0; l < W; ++l) {
+                const double w = gw[i + l] * half;
+                for (int c = 0; c < NC; ++c)
+                    out[c] = mw_fma::mul_add(fv[l * NC + c], w, out[c]);
+            }
+        }
+        return true;
+    }
+};
+
 // `_gauss_segment`: f(mid + half*gx) @ (gw * half), vector-valued.
 // `G` is a real-abscissa integrand: void operator()(double t, cd *out) const.
 template <int NC, class G>
@@ -310,6 +359,7 @@ static inline void gauss_segment(const G &g, double z0, double z1,
     const double mid = 0.5 * (z0 + z1);
     const double half = 0.5 * (z1 - z0);
     for (int c = 0; c < NC; ++c) out[c] = cd(0.0, 0.0);
+    if (mw_gauss_lanes<NC, G>::run(g, mid, half, gx, gw, ng, out)) return;
     cd fv[NC];
     for (int i = 0; i < ng; ++i) {
         g(mw_fma::fma(half, gx[i], mid), fv);
@@ -393,6 +443,24 @@ static inline void wynn_epsilon(const cd *s, int n, cd *best) {
     }
 }
 
+// HeadWrap's and TailWrap's forwarding to an integrand with lanes
+// (F::head_lanes(lr, li, fv) at the detour's lam, F::tail_lanes(t, fv) at W
+// real abscissae). Free templates, so a wrapper over an integrand without
+// them never instantiates the calls.
+template <class F>
+static inline bool mw_tail_lanes_on(const F &f) {
+    return f.lanes_on();
+}
+template <class F>
+static inline void mw_tail_lanes(const F &f, const double *t, cd *fv) {
+    f.tail_lanes(t, fv);
+}
+template <class F>
+static inline void mw_head_lanes(const F &f, const double *lr, const double *li,
+                                 cd *fv) {
+    f.head_lanes(lr, li, fv);
+}
+
 // The head's parametrized integrand: lam(t) = t + jH sin(pi t / a), carrying
 // its own dlam/dt. `F` is the caller's integrand,
 // void operator()(cd lam, cd *out) const.
@@ -410,6 +478,26 @@ struct HeadWrap {
         f(lam, out);
         for (int i = 0; i < NC; ++i) out[i] = mw_fma::mul(out[i], dl);
     }
+    // The integrand's own head lanes, when it has them (see mw_has_lanes):
+    // the detour's lam and dlam/dt per node exactly as above, the W integrand
+    // values from F::head_lanes, then the same products by dlam/dt.
+    static const bool kLanes = mw_has_lanes<F>::value;
+    bool lanes_on() const { return mw_tail_lanes_on(f); }
+    void lanes(const double *t, cd *fv) const {
+        double lr[mw_sl::W], li[mw_sl::W];
+        cd dl[mw_sl::W];
+        for (int l = 0; l < mw_sl::W; ++l) {
+            const double s = mw_fma::opaque(std::sin(mw_fma::opaque(MW_PI * t[l] / a)));
+            const double c = mw_fma::opaque(std::cos(mw_fma::opaque(MW_PI * t[l] / a)));
+            lr[l] = t[l];
+            li[l] = H * s;
+            dl[l] = cd(1.0, H * (MW_PI / a) * c);
+        }
+        mw_head_lanes(f, lr, li, fv);
+        for (int l = 0; l < mw_sl::W; ++l)
+            for (int i = 0; i < NC; ++i)
+                fv[l * NC + i] = mw_fma::mul(fv[l * NC + i], dl[l]);
+    }
 };
 
 // The tail runs along the real axis; the caller's integrand still takes a
@@ -419,6 +507,10 @@ struct TailWrap {
     const F &f;
     explicit TailWrap(const F &f_) : f(f_) {}
     void operator()(double z, cd *out) const { f(cd(z, 0.0), out); }
+    // The integrand's own tail lanes, when it has them (see mw_has_lanes).
+    static const bool kLanes = mw_has_lanes<F>::value;
+    bool lanes_on() const { return mw_tail_lanes_on(f); }
+    void lanes(const double *t, cd *fv) const { mw_tail_lanes(f, t, fv); }
 };
 
 // `_head`: the integral over [0, a], deformed into the FIRST quadrant.

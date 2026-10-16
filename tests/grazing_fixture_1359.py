@@ -410,6 +410,9 @@ _CPP_CODE = {
     "_branch_cut_inline.h": None,
     "_cdiv_inline.h": None,
     "_fma_inline.h": None,
+    # The tail and head integrands' lanes (momwire#1441 step 3).
+    "_somm_lanes_inline.h": None,
+    "_contour_lanes_inline.h": None,
 }
 
 _SKIP_TOKENS = {

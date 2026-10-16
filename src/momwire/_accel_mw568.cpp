@@ -9,6 +9,7 @@
 // _accel_common.h: this TU is the only consumer, and live engine work
 // (momwire#696) should rebuild one TU, not five.
 #include "_contour_engine_inline.h"
+#include "_contour_lanes_inline.h"
 
 // The vector lanes (momwire#1290, on the lane layer `_lanes.h` since
 // momwire#1372): the below/below replay's stages, the below extents and the
@@ -312,6 +313,33 @@ struct SixBelow {
         out[4] = mul(mul(common, b0), lam);
         out[5] = mul(mul(mul(d1, e), b0), lam);
     }
+    // Lanes (momwire#1441 step 3): four contour nodes at a time, each lane
+    // this operator() bit for bit (_contour_lanes_inline.h). The contour
+    // engine's TailWrap hands over real abscissae t (lam = (t, +0)), its
+    // HeadWrap the detour's lam; a lane the lanes do not serve (the Bessel
+    // pair's |x| < 1e-6 branch at rho = 0) is recomputed here by the scalar
+    // operator().
+    static const bool kLanes = true;
+    bool use_lanes = true;
+    bool lanes_on() const { return use_lanes; }
+    void lanes_at(const mw_sl::C &lam, bool real_axis, cd *fv) const {
+        mw_sl::C o[6];
+        const int left = mw_contour_lanes::six_below(rho, h, k_p, k_m, lam, real_axis, o);
+        for (int c = 0; c < 6; ++c) {
+            const mw_sl::Buf re = mw_sl::spill(o[c].re), im = mw_sl::spill(o[c].im);
+            for (int l = 0; l < mw_sl::W; ++l) fv[l * 6 + c] = cd(re.v[l], im.v[l]);
+        }
+        if (left) {
+            for (int l = 0; l < mw_sl::W; ++l)
+                if (left & (1 << l)) (*this)(mw_sl::lane(lam, l), fv + l * 6);
+        }
+    }
+    void tail_lanes(const double *t, cd *fv) const {
+        lanes_at(mw_sl::C{mw_sl::loadu(t), mw_sl::set1(0.0)}, true, fv);
+    }
+    void head_lanes(const double *lr, const double *li, cd *fv) const {
+        lanes_at(mw_sl::C{mw_sl::loadu(lr), mw_sl::loadu(li)}, false, fv);
+    }
 };
 
 // What one node of `_six_integrals_below` produces: the six values plus
@@ -337,8 +365,10 @@ static void six_below_one(double rho, double h, double k_p, const cd &k_m,
                           bool selfconv, double rtol_coarse, int depth_coarse,
                           double detour_coarse, const double *gxc,
                           const double *gwc, int ngc, int max_panels,
-                          const mw_contour::WaRule *wa, SixResult &r) {
+                          const mw_contour::WaRule *wa, SixResult &r,
+                          bool lanes = true) {
     SixBelow f;
+    f.use_lanes = lanes;
     f.rho = rho;
     f.h = h;
     f.k_p = cd(k_p, 0.0);
@@ -784,7 +814,8 @@ static py::tuple below_six_integrals_batch(
     int max_panels, uintptr_t cancel_flag = 0,
     py::array_t<double, py::array::c_style | py::array::forcecast> wa_pow =
         py::array_t<double>(0),
-    int wa_order = 10, int wa_min_sums = 4, int wa_agree = 2) {
+    int wa_order = 10, int wa_min_sums = 4, int wa_agree = 2,
+    bool lanes = true) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
     // momwire#1441: the weighted-averages tail rule; an empty `wa_pow` is the
@@ -841,7 +872,7 @@ static py::tuple below_six_integrals_batch(
             mw568_below::six_below_one(
                 rb(i), hb(i), k_p, km, rtol_fine, depth, detour, gxp, gwp, ng,
                 selfconv, rtol_coarse, depth_coarse, detour_coarse, gxcp, gwcp,
-                ngc, max_panels, wa, r);
+                ngc, max_panels, wa, r, lanes && mw_sl::kActive);
             for (int c = 0; c < 6; ++c) vb(i, c) = r.val[c];
             tp[i] = r.tail_panels;
             hp[i] = r.head_panels;
@@ -2697,10 +2728,14 @@ void register_mw568(py::module_ &m) {
           py::arg("detour_coarse"), py::arg("gxc"), py::arg("gwc"),
           py::arg("max_panels"), py::arg("cancel_flag") = 0,
           py::arg("wa_pow") = py::array_t<double>(0), py::arg("wa_order") = 10,
-          py::arg("wa_min_sums") = 4, py::arg("wa_agree") = 2);
+          py::arg("wa_min_sums") = 4, py::arg("wa_agree") = 2,
+          py::arg("lanes") = true);
     // momwire#1441: the batch takes the weighted-averages tail rule
     // (`wa_pow` empty = the plain walk).
     m.attr("below_tail_wa_1441") = true;
+    // momwire#1441 step 3: the tail integrand runs four nodes at a time;
+    // `lanes=False` is the scalar walk it is gated against, bit for bit.
+    m.attr("below_six_lanes_1441") = true;
     m.def("remainder_field_proj_batch_below", &remainder_field_proj_batch_below,
           "Interpolated + projected below/below remainder table — the complex-"
           "wavenumber TWIN of remainder_field_proj_batch (which carries a "

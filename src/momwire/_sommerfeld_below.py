@@ -639,6 +639,11 @@ _HAVE_BELOW_FILLS_ACCEL = (
 _HAVE_BELOW_LANES = _acc is not None and hasattr(_acc, "below_lanes_1290")
 _BELOW_LANES = True
 
+# momwire#1441 step 3: the six integrals' contour integrand runs four nodes at
+# a time, the same floats as its scalar walk (tests/test_somm_lanes_1441.py).
+# False passes `lanes=False`, the reference; tests flip it, nothing else should.
+_SIX_LANES = True
+
 # The tests' handle on the dispatch — the parity gates have to drive BOTH
 # machines inside one process, and a cross-process env var cannot do that.
 # `MOMWIRE_BELOW_FORCE_NUMPY` is the same switch for a whole run (a timing
@@ -696,6 +701,11 @@ def _six_below_accel(k_p, k_m, rho, h, rtol, selfconv):
         _MAX_TAIL_PANELS,
         cancel_flag=_cancel.ptr(),
         **_wa_accel_kw(),
+        **(
+            {}
+            if _SIX_LANES or not hasattr(_acc, "below_six_lanes_1441")
+            else {"lanes": False}
+        ),
     )
 
 

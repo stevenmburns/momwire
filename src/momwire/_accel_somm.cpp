@@ -2,6 +2,7 @@
 #include "_branch_cut_inline.h"
 #include "_cdiv_inline.h"
 #include "_fma_inline.h"
+#include "_somm_six_lanes_inline.h"
 
 #include <cstring>
 #ifdef _OPENMP
@@ -262,6 +263,7 @@ struct SommCtx {
     double rho, h;
     cd k1, k2;
     bool bessel;
+    bool lanes;  // the rule's nodes four at a time (momwire#1441 step 3)
 };
 
 // The six lambda-integrands of NEC eqs 148-153 (= _integrand_six).
@@ -307,6 +309,20 @@ static Six gauss_segment(const SommCtx &c, cd z0, cd z1) {
     const cd mid = 0.5 * (z0 + z1);
     const cd half = 0.5 * (z1 - z0);
     Six acc;
+    if (c.lanes) {
+        // The 24 integrand values four nodes at a time, each lane the walk
+        // below bit for bit (_somm_six_lanes_inline.h), then the same
+        // weighted sum in the same node order.
+        cd fv[24 * 6];
+        somm_six_lanes::gauss_values<24>(c.rho, c.h, c.k1, c.k2, c.bessel, mid,
+                                         half, GX, fv);
+        for (int q = 0; q < 24; ++q) {
+            const cd w = GW[q] * half;
+            for (int i = 0; i < 6; ++i)
+                acc.v[i] = mw_fma::mul_add(fv[q * 6 + i], w, acc.v[i]);
+        }
+        return acc;
+    }
     cd f[6];
     for (int q = 0; q < 24; ++q) {
         integrand_six(c, mw_fma::mul_add(half, GX[q], mid), f);
@@ -363,7 +379,7 @@ static Six tail(const SommCtx &c, cd z0, cd direction, double panel,
 // 1 force Bessel, 2 force Hankel. eps_t == 1 is short-circuited by the
 // caller (and again here for safety).
 static void six_integrals(cd eps_t, double k2d, double rho, double h,
-                          double rtol, int form, cd out[6]) {
+                          double rtol, int form, cd out[6], bool lanes = true) {
     for (int i = 0; i < 6; ++i) out[i] = cd(0.0, 0.0);
     if (eps_t == cd(1.0, 0.0)) return;
     const cd k2(k2d, 0.0);
@@ -376,7 +392,7 @@ static void six_integrals(cd eps_t, double k2d, double rho, double h,
     const double kmax_eff = std::min(kmax, kcap);
     const double qtol = std::min(rtol, 1e-11);
     const bool use_bessel = (form == 0) ? (rho < 2.0 * h) : (form == 1);
-    SommCtx c{rho, h, k1, k2, use_bessel};
+    SommCtx c{rho, h, k1, k2, use_bessel, lanes};
     Six total;
     if (use_bessel) {
         const double p = std::min(rho > 0.0 ? 1.0 / rho : 1e300, 1.0 / h);
@@ -435,7 +451,7 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     std::complex<double> eps_t, double k2,
     py::array_t<double, py::array::c_style | py::array::forcecast> rho,
     py::array_t<double, py::array::c_style | py::array::forcecast> h,
-    double rtol, int form, uintptr_t cancel_flag = 0) {
+    double rtol, int form, uintptr_t cancel_flag = 0, bool lanes = true) {
     auto rb = rho.unchecked<1>();
     auto hb = h.unchecked<1>();
     const py::ssize_t n = rb.shape(0);
@@ -457,7 +473,8 @@ static py::array_t<std::complex<double>> somm_six_integrals_batch(
     for (py::ssize_t i = 0; i < n; ++i) {
         MW_CANCEL_POLL();
         somm::cd res[6];
-        somm::six_integrals(et, k2, rb(i), hb(i), rtol, form, res);
+        somm::six_integrals(et, k2, rb(i), hb(i), rtol, form, res,
+                            lanes && mw_sl::kActive);
         for (int j = 0; j < 6; ++j) ob(i, j) = res[j];
     }
     MW_THROW_IF_ABORTED();
@@ -1329,7 +1346,10 @@ void register_somm(py::module_ &m) {
           "Returns (n, 6) complex in _six_integrals order.",
           py::arg("eps_t"), py::arg("k2"), py::arg("rho"), py::arg("h"),
           py::arg("rtol") = 1e-9, py::arg("form") = 0,
-          py::arg("cancel_flag") = 0);
+          py::arg("cancel_flag") = 0, py::arg("lanes") = true);
+    // momwire#1441 step 3: the integrand runs four contour nodes at a time;
+    // `lanes=False` is the scalar walk it is gated against, bit for bit.
+    m.attr("somm_six_lanes_1441") = true;
     m.def("remainder_field_proj_batch", &remainder_field_proj_batch,
           "Fused Sommerfeld smooth-remainder assembly: interpolate the four "
           "grid surfaces (4x4 Lagrange) and project t_m.F(r_m,r_n).t_n per "
