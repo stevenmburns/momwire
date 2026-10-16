@@ -135,8 +135,12 @@ def _answer_lines(text: str, echo: str | None, path: str, out: list[str]) -> boo
     if isinstance(answered, _Refused):
         out.append(f"{path} = refused {_s(str(answered))}")
         return False
-    deck, answers, multi = answered
-    if multi:
+    deck, answers, layout = answered
+    if layout == "stepped":
+        # momwire#1508: the one run at each frequency (the deck carries them)
+        out.append(f"{path} = stepped")
+        dump(deck, f"{path}.deck", out)
+    elif layout == "multi":
         out.append(f"{path} = multi")
         dump(deck, f"{path}.deck", out)
         (served,) = answers

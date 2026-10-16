@@ -620,6 +620,8 @@ struct PatternBlockC {  // `PatternBlock`
     double range_m = 0, range_phase_deg = 0;
     bool has_lower = false;
     double lower_range_mag = 0, lower_range_phase_deg = 0;
+    // XNDA's D digit 1 (momwire#1503): the rows are DIRECTIVE gains.
+    bool directive = false;
 };
 
 struct NetworkRowC {  // `NetworkRow` / `LineRow`
@@ -1377,7 +1379,7 @@ double gain_db(double g) {
 PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
                             const std::vector<cd> &moment, FarGround ground, double eps_r,
                             double sigma, double frequency_mhz, double wavelength, double p_in,
-                            bool lower, cd eps_c_medium) {
+                            bool lower, cd eps_c_medium, double p_radiated) {
     if (!rq.n_theta.fits_i64() || !rq.n_phi.fits_i64() || !rq.xnda.fits_i64())
         throw Decline{"a pattern count past 64 bits"};
     const int64_t nt = rq.n_theta.i64(), nph = rq.n_phi.i64();
@@ -1434,6 +1436,19 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
                 for (int64_t ip = 0; ip < nph; ip++) g_v[it * nph + ip] = g_h[it * nph + ip] = 0.0;
     const double floor_scale = 1.0 / wavelength;
     PatternBlockC block;
+    // XNDA's D digit (momwire#1503): 1 asks for DIRECTIVE gains in the rows,
+    // the pattern normalised to the radiated power (`g_v * scale`, numpy's
+    // plain product); the average-gain trailer stays a power gain.
+    const bool directive = rq.xnda.i64() / 10 % 10 == 1;
+    std::vector<double> g_v_rows = g_v, g_h_rows = g_h;
+    if (directive) {
+        const double sc = p_radiated > 0 ? p_in / p_radiated : 0.0;
+        for (std::size_t q = 0; q < n; q++) {
+            g_v_rows[q] = g_v[q] * sc;
+            g_h_rows[q] = g_h[q] * sc;
+        }
+        block.directive = true;
+    }
     const double range_m = rq.range_m;
     double range_phase = 0.0;
     if (range_m != 0.0) {
@@ -1498,9 +1513,9 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
             PatternRowC row;
             row.theta = thetas[static_cast<std::size_t>(it)];
             row.phi = phis[static_cast<std::size_t>(ip)];
-            row.vert = gain_db(g_v[q]);
-            row.hor = gain_db(g_h[q]);
-            row.total = gain_db(g_v[q] + g_h[q]);
+            row.vert = gain_db(g_v_rows[q]);
+            row.hor = gain_db(g_h_rows[q]);
+            row.total = gain_db(g_v_rows[q] + g_h_rows[q]);
             row.axial = axial;
             row.tilt = tilt;
             row.sense = sense;
@@ -1518,6 +1533,8 @@ PatternBlockC pattern_block(const Request &rq, const std::vector<double> &mid,
     int64_t digit = rq.xnda.i64() % 10;
     if (digit < 0) digit += 10;
     if (digit != 0) {
+        // A = 2 prints the trailer with no rows (momwire#1503).
+        if (digit == 2) block.rows.clear();
         // `average_gain(g_v + g_h, thetas, d_theta, d_phi, n_phi)`
         const double d_theta = rq.d_theta_deg, d_phi = rq.d_phi_deg;
         const auto np_max = [](double x, double y) {
@@ -2307,7 +2324,8 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
             if (rq.kind == Request::far_field)
                 data.patterns.push_back(pattern_block(
                     rq, mid, moment, fg, p.medium_eps_r, p.medium_sigma, p.frequency_mhz,
-                    p.wavelength, p_in, p.has_medium, cd(p.medium_eps_c[0], p.medium_eps_c[1])));
+                    p.wavelength, p_in, p.has_medium, cd(p.medium_eps_c[0], p.medium_eps_c[1]),
+                    p_radiated));
     }
     return data;
 }
@@ -2581,7 +2599,10 @@ std::string element_row(const ElementRowC &r, bool current) {
 Lines pattern_lines(const PatternBlockC &block) {
     const std::string heading = sp(48) + "- - - RADIATION PATTERNS - - -";
     const Lines columns = {
-        "  - - ANGLES - -          - POWER GAINS -        - - - POLARIZATION "
+        std::string("  - - ANGLES - -") +
+            (block.directive ? "       - DIRECTIVE GAINS -       "
+                             : "          - POWER GAINS -        ") +
+            "- - - POLARIZATION "
         "- - -    - - - E(THETA) - - -    - - - E(PHI) - - -",
         "  THETA     PHI        VERT.   HOR.    TOTAL      AXIAL     TILT   "
         "SENSE     MAGNITUDE    PHASE      MAGNITUDE    PHASE ",

@@ -588,6 +588,8 @@ struct Parser {
     std::vector<Network> networks;
     bool has_frequency = false;
     double frequency_mhz = 0;
+    std::vector<double> frequencies_mhz;
+    bool frequencies_too_many = false;
     std::vector<Request> requests;
     bool has_pq = false;
     Int pq;
@@ -1025,18 +1027,77 @@ struct Parser {
 
     // -- requests --
 
+    // `_fr`: one frequency, or a stepped list of them (momwire#1508): I2
+    // frequencies from F, each the last plus dF (I1 0) or times dF (I1 1),
+    // accumulated one step at a time (`_stepped_frequencies`).
     void fr(const Card &card) {
         Int n = card.i(1);
-        if (n > Int(1))
-            deck_error("FR asks for " + S(n) +
-                       " frequency points; this seam is one process per point (EZNEC "
-                       "regenerates the whole deck per frequency and never emits a stepping "
-                       "FR), so a multi-point FR is not served");
         frequency_mhz = card.f(4);
         has_frequency = true;
+        frequencies_mhz.clear();
+        frequencies_too_many = false;
+        if (n <= Int(1)) return;
+        Int stepping = card.i(0);
+        if (stepping != Int(0) && stepping != Int(1))
+            deck_error("FR stepping type " + S(stepping) +
+                       " is not one NEC defines; 0 steps the frequency by adding the "
+                       "increment and 1 by multiplying by it");
+        const double first = card.f(4), step = card.f(5);
+        const bool multiplicative = stepping == Int(1);
+        // Python builds the whole tuple; past this count it would take
+        // gigabytes, and the seam declines such a deck by name instead.
+        const long long cap = 1000000;
+        if (!n.fits_i64() || n.i64() > cap) {
+            frequencies_too_many = true;
+            frequencies_mhz.push_back(first);
+            return;
+        }
+        const long long count = n.i64();
+        frequencies_mhz.reserve(static_cast<std::size_t>(count));
+        frequencies_mhz.push_back(first);
+        for (long long k = 1; k < count; ++k) {
+            const double last = frequencies_mhz.back();
+            frequencies_mhz.push_back(multiplicative ? last * step : last + step);
+        }
     }
 
     static Int at_least_one(const Int &v) { return v < Int(1) ? Int(1) : v; }
+
+    // `_RP_XNDA` (momwire#1503): X = 1, N = 0, D = 0 or 1, any averaging A.
+    static bool rp_xnda_served(const Int &xnda) {
+        if (!xnda.fits_i64()) return false;
+        switch (xnda.i64()) {
+        case 1000: case 1001: case 1002: case 1003:
+        case 1010: case 1011: case 1012: case 1013: return true;
+        default: return false;
+        }
+    }
+
+    // `_rp_xnda_refusal`: which digit asks for what, and what to set instead.
+    static std::string rp_xnda_refusal(const Int &xnda) {
+        const std::string served =
+            "this engine prints XNDA 1000 to 1003 and 1010 to 1013: vertical and "
+            "horizontal gains (X = 1), no normalized-gain table (N = 0), power or "
+            "directive gain (D = 0 or 1), with any averaging digit A";
+        if (xnda < Int(0) || xnda > Int(9999))
+            return "RP 0 with XNDA " + S(xnda) + " is not an XNDA this engine reads; " + served;
+        const long long v = xnda.i64();
+        const long long x = v / 1000, n = v / 100 % 10, d = v / 10 % 10;
+        std::vector<std::string> asks;
+        if (x == 0)
+            asks.push_back("major / minor axis gains (X = 0)");
+        else if (x != 1)
+            asks.push_back("output format X = " + std::to_string(x));
+        if (n != 0) asks.push_back("a normalized-gain table (N = " + std::to_string(n) + ")");
+        if (d != 0 && d != 1) asks.push_back("gain type D = " + std::to_string(d));
+        if (asks.empty()) asks.push_back("averaging A = " + std::to_string(v % 10));
+        std::string joined;
+        for (size_t i = 0; i < asks.size(); ++i) joined += (i ? " and " : "") + asks[i];
+        return "RP 0 with XNDA " + S(xnda) + " asks for " + joined +
+               ", which this engine does not print; " + served +
+               ".  In 4nec2, set Generate > Far Field's Expert settings to X = 1 "
+               "(vertical / horizontal) and N = 0 (no normalization)";
+    }
 
     void rp(const Card &card) {
         Int mode = card.i(0);
@@ -1045,10 +1106,8 @@ struct Parser {
                        " is not part of this engine's nec5 dialect, which serves RP 0 (the "
                        "normal far-field request) alone");
         Int xnda = card.i(3);
-        if (xnda != Int(1000) && xnda != Int(1001))
-            deck_error("RP 0 with XNDA " + S(xnda) +
-                       " is not part of this engine's nec5 dialect, which serves the two "
-                       "forms EZNEC emits: 1000 (2-D slice) and 1001 (3-D)");
+        if (!rp_xnda_served(xnda))
+            deck_error(rp_xnda_refusal(xnda));
         Request r;
         r.kind = Request::far_field;
         r.mode = mode;
@@ -1199,6 +1258,8 @@ struct Parser {
         d.networks = networks;
         d.has_frequency = has_frequency;
         d.frequency_mhz = frequency_mhz;
+        d.frequencies_mhz = frequencies_mhz;
+        d.frequencies_too_many = frequencies_too_many;
         d.requests = requests;
         d.has_pq = has_pq;
         d.pq = pq;
@@ -1414,6 +1475,47 @@ bool split_runs(const std::string &text, std::vector<std::string> &out) {
     return true;
 }
 
+// `_shell._stepping_refusal`: why a stepping-FR deck is not served, or ""
+// when it is (momwire#1508). `deck_text` is the deck's source text (the echo
+// when one was given), latin-1.
+std::string stepping_refusal(const std::string &deck_text, bool multi_run) {
+    if (multi_run)
+        return "a stepping FR is served in a deck with one run; this deck has several "
+               "XQ blocks, and the licensed NEC-5 answers every block after the first at "
+               "the sweep's last frequency only, which this engine does not reproduce. "
+               "Give each run its own deck, or step one frequency per run";
+    // `_printout.post_ge_cards`: every card after GE, through EN.
+    std::vector<std::string> cards;
+    bool seen_ge = false;
+    for (const std::string &line : latin1_splitlines(deck_text)) {
+        Card card;
+        if (!read_card(line, card)) continue;
+        if (!seen_ge) {
+            seen_ge = card.mnemonic == "GE";
+            continue;
+        }
+        cards.push_back(card.mnemonic);
+        if (card.mnemonic == "EN") break;
+    }
+    std::size_t first = cards.size();
+    for (std::size_t k = 0; k < cards.size(); ++k)
+        if (cards[k] == "RP" || cards[k] == "XQ") {
+            first = k;
+            break;
+        }
+    if (first == cards.size())
+        return "a stepping FR needs an XQ or RP after it to run the sweep; without one "
+               "the licensed NEC-5 solves no frequency at all (a near-field request "
+               "alone does not start the loop), so add XQ after the last request";
+    for (std::size_t k = first + 1; k < cards.size(); ++k)
+        if (cards[k] != "XQ" && cards[k] != "EN" && cards[k] != "NX")
+            return cards[k] +
+                   " follows the card that runs the stepping FR's sweep; the licensed "
+                   "NEC-5 answers it at the sweep's last frequency only, which this engine "
+                   "does not reproduce. Put every request before the first RP or XQ";
+    return "";
+}
+
 Answer answer(const std::string &text, const std::string *echo_text) {
     Answer a;
     std::vector<std::string> runs;
@@ -1442,6 +1544,15 @@ Answer answer(const std::string &text, const std::string *echo_text) {
     if (split_failed)
         return stop(split_failure.kind, split_failure.what(),
                     split_failure.kind == ErrorKind::serve_refusal);
+    if (!deck.frequencies_mhz.empty()) {
+        // `_answer`'s stepping branch (momwire#1508).
+        const std::string why = stepping_refusal(echo_text ? *echo_text : text, has_runs);
+        if (!why.empty()) return stop(ErrorKind::serve_refusal, why, true);
+        a.kind = Answer::stepped;
+        a.multi_run = has_runs;
+        a.deck = std::move(deck);
+        return a;
+    }
     if (has_runs) {
         for (std::size_t k = 1; k < parsed.size(); ++k) {
             if (!parsed[k].ok)
@@ -1661,6 +1772,9 @@ void dump_deck_into(Out &o, const Deck &d, const std::string &p) {
     }
     if (d.has_frequency) o.f(p + ".frequency_mhz", d.frequency_mhz);
     else o.none(p + ".frequency_mhz");
+    o.seq(p + ".frequencies_mhz", "tuple", d.frequencies_mhz.size());
+    for (std::size_t k = 0; k < d.frequencies_mhz.size(); ++k)
+        o.f(idx(p + ".frequencies_mhz", k), d.frequencies_mhz[k]);
     o.seq(p + ".requests", "tuple", d.requests.size());
     for (std::size_t k = 0; k < d.requests.size(); ++k) {
         std::string q = idx(p + ".requests", k);
@@ -1735,6 +1849,10 @@ std::string dump_stream(const std::string &text) {
         case Answer::raised: o.error(q, a.error_kind, a.message); break;
         case Answer::single:
             o.s += q + " = single\n";
+            dump_deck_into(o, a.deck, q + ".deck");
+            break;
+        case Answer::stepped:
+            o.s += q + " = stepped\n";
             dump_deck_into(o, a.deck, q + ".deck");
             break;
         case Answer::multi:

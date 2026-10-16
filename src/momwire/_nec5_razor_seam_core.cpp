@@ -1124,6 +1124,14 @@ SeamResult razor_seam(const std::string &text) {
             so.runs.push_back(o);
             stop(o);
             stopped = true;
+        } else if (a.kind == Answer::stepped) {
+            // A stepping FR (momwire#1508): not in the C++ route yet.
+            RunOutcome o;
+            o.kind = RunOutcome::declined;
+            o.message = "stepping-fr";
+            so.runs.push_back(o);
+            stop(o);
+            stopped = true;
         } else if (a.kind == Answer::single) {
             RunOutcome o = run_one(a.deck, r, nullptr);
             so.runs.push_back(o);
