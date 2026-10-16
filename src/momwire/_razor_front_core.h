@@ -178,6 +178,24 @@ class Front {
     // of what the front half does not cover (the caller keeps the Python
     // front half); throws FrontError where the Python front half raises.
     std::string build(const FrontInputs &in);
+    bool dedup(const FrontInputs &in, FrontInputs &out);
+
+    // --- momwire#1042: a wire listed twice, solved once -------------------
+    // (`_wire_spec.drop_duplicated_wires`; the standalone route only -- the
+    // extension's C++ front route declines it). `dedup_kept[i]` is the
+    // caller's index of solved wire i; each dropped copy is (caller's index,
+    // its twin's caller index, reversed), sorted. Everything below is in the
+    // SOLVED numbering; readouts re-expand through these.
+    bool has_dedup = false;
+    int64_t n_input_wires = 0;
+    std::vector<int64_t> dedup_kept;
+    struct Dropped {
+        int64_t copy = 0, twin = 0;
+        bool reversed = false;
+    };
+    std::vector<Dropped> dedup_removed;
+    // The solved index of caller's wire w, or -1 for a dropped copy.
+    int64_t solved_index(int64_t w) const;
 
     // --- construction, normalised (the solver's own numbering) -----------
     int64_t n_wires = 0;

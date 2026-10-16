@@ -119,6 +119,11 @@ struct Refusal {
 struct Declined {
     std::string reason;
 };
+// An exception Python's `_prepare` / `RazorSolver(...)` raises at this point
+// (not a ServeRefusal): `_shell`'s INTERNAL ERROR printout reports it.
+struct Raised {
+    std::string kind, message;
+};
 
 // `Nec5Node.written` and the "tag,node" spelling every sentence uses.
 std::string written(const Node &n) { return n.node.is_zero() ? std::string("-1") : n.node.str(); }
@@ -450,8 +455,12 @@ std::string scope_refusal(const Deck &d, std::string &declined) {
         if (!drive.empty()) return drive;
         if (!d.has_frequency || d.frequency_mhz <= 0.0) return REFUSE_NO_FR;
         if (!std::isfinite(d.frequency_mhz)) throw Declined{"non-finite-frequency"};
-        for (const Wire &w : d.wires)
-            if (!finite3(w.end1) || !finite3(w.end2)) throw Declined{"non-finite-geometry"};
+        // Over a ground the geometry checks read the coordinates (NaN rules
+        // not replayed here); in free space they go to `structure_of`, whose
+        // `_node_key` raises on them as Python's does.
+        if (d.ground.kind != Ground::free_space)
+            for (const Wire &w : d.wires)
+                if (!finite3(w.end1) || !finite3(w.end2)) throw Declined{"non-finite-geometry"};
         std::string geometry = geometry_refusal(d);
         if (!geometry.empty()) return geometry;
         // `_has_buried_wire` is False here: free space has no plane, over
@@ -631,7 +640,10 @@ Prepared prepare(const Deck &d) {
     // WIRE loading reaches the solver as keyword arguments (below); a value
     // `configure_loading` or the solve would raise on declines by name.
     for (const auto &tc : d.wire_conductivity)
-        if (!std::isfinite(tc.second) || !(tc.second > 0.0)) throw Declined{"wire-loading-values"};
+        // NaN is the loading's own "none" (the C++ and Python solvers both
+        // read it so); infinity or a non-positive value declines
+        if (!std::isnan(tc.second) && (!std::isfinite(tc.second) || !(tc.second > 0.0)))
+            throw Declined{"wire-loading-values"};
     for (const auto &tr : d.wire_distributed_rlc)
         if (!std::isfinite(tr.second.r) || !std::isfinite(tr.second.l) || !std::isfinite(tr.second.c) ||
             (tr.second.kind != "series" && tr.second.kind != "parallel"))
@@ -655,28 +667,50 @@ Prepared prepare(const Deck &d) {
     p.omega = 2.0 * 3.141592653589793 * frequency * 1e6;
 
     // --- `structure_of` ----------------------------------------------------
+    // Wire by wire, as `_wire_nodes` meets them: a count numpy's `arange`
+    // refuses raises its ValueError (from 2**63 + 1024 up; below that a
+    // count past MAX_SEGMENTS declines), and a coordinate `round` cannot
+    // take raises where `_node_key` does.
     long long total = 0;
     std::vector<long long> nseg;
+    const Int arange_limit = Int(9223372036854775807LL) + Int(1025);
+    const bool ground_plane = !d.ge_flag.is_zero();
+    std::unordered_map<NodeKey, long long, KeyHash> degree;
+    double pt[3];
     for (const Wire &w : d.wires) {
+        if (w.segment_count >= arange_limit)
+            throw Raised{"ValueError", "Maximum allowed size exceeded"};
         if (!w.segment_count.fits_i64()) throw Declined{"segment-count"};
         const long long n = w.segment_count.i64();
         if (n < 1 || n > MAX_SEGMENTS) throw Declined{"segment-count"};
         total += n;
         if (total > MAX_SEGMENTS) throw Declined{"segment-count"};
         nseg.push_back(n);
-    }
-    for (const Wire &w : d.wires)
-        if (!std::isfinite(w.radius)) throw Declined{"non-finite-radius"};
-    const bool ground_plane = !d.ge_flag.is_zero();
-    std::unordered_map<NodeKey, long long, KeyHash> degree;
-    double pt[3];
-    for (size_t i = 0; i < d.wires.size(); i++) {
-        const long long n = nseg[i];
+        // `np.rint(grid / _NODE_EPS)` under 2**62 everywhere, or
+        // `_node_key` point by point (ends authored): NaN and infinity raise
+        bool fits = true;
+        for (long long k = 0; k <= n && fits; k++) {
+            grid_point(w, n, k, pt);
+            for (int c = 0; c < 3; c++)
+                fits = fits && std::fabs(std::nearbyint(pt[c] / NODE_EPS)) < 4611686018427387904.0;
+        }
+        if (!fits)
+            for (long long k = 0; k <= n; k++) {
+                grid_point(w, n, k, pt);
+                for (int c = 0; c < 3; c++) {
+                    const double q = pt[c] / NODE_EPS;
+                    if (std::isnan(q)) throw Raised{"ValueError", "cannot convert float NaN to integer"};
+                    if (std::isinf(q))
+                        throw Raised{"OverflowError", "cannot convert float infinity to integer"};
+                }
+            }
         for (long long k = 0; k <= n; k++) {
-            grid_point(d.wires[i], n, k, pt);
+            grid_point(w, n, k, pt);
             degree[node_key(pt)] += (k == 0 || k == n) ? 1 : 2;
         }
     }
+    for (const Wire &w : d.wires)
+        if (!std::isfinite(w.radius)) throw Declined{"non-finite-radius"};
     if (ground_plane)
         for (const Wire &w : d.wires)
             for (const double *e : {w.end1, w.end2})
@@ -962,7 +996,8 @@ Prepared prepare(const Deck &d) {
     for (const SeamPiece &piece : mesh.pieces)
         if (!(piece.radius == mesh.pieces[0].radius)) uniform = false;
     if (mesh.pieces.size() == 1) uniform = true;
-    if (mesh.pieces.empty()) throw Declined{"no-wires"};
+    // `RazorSolver(wires=[])` (every GW a phantom, momwire#1139)
+    if (mesh.pieces.empty()) throw Raised{"ValueError", "wires must be non-empty"};
     if (uniform) {
         in.radius.assign(1, mesh.pieces[0].radius);
         in.radius_shape.clear();
@@ -1090,6 +1125,10 @@ RunOutcome run_one(const Deck &d, SeamResult &r, long long *shared_with) {
     } catch (const Declined &e) {
         o.kind = RunOutcome::declined;
         o.message = e.reason;
+    } catch (const Raised &e) {
+        o.kind = RunOutcome::raised;
+        o.error_kind = e.kind;
+        o.message = e.message;
     }
     return o;
 }
