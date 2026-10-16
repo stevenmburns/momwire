@@ -5,6 +5,9 @@
 // text it writes is that Python's, byte for byte, and so is the order in
 // which it computes (an exception escapes where Python's does).
 #include "_nec5_razor_printout_core.h"
+#include "_somm_field_core.h"
+#include "_somm_grid_core.h"
+#include "_accel_somm_proj_inline.h"
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's and
 // CPython's arithmetic one IEEE operation at a time, so it asks for precise
@@ -1793,8 +1796,70 @@ std::vector<cd> element_fields(const std::vector<double> &points, const Elements
 }
 
 // `_serve._near_field` over free space or GN 1, and `near_field_block`.
+// The composing ground's near-field remainder (`_field_point.reflected_field_at`
+// / `reflected_h_field_at` through `_somm_field_core`): the grid sized by
+// `max_image_distance` over the observation points (or, for H, the six
+// offset sets `points + shift`) and the element midpoints, at the solver's
+// omega and `_sommerfeld._MU0`, then the kernel.
+std::vector<cd> near_remainder(const std::vector<double> &points, const Elements &el, cd eps_t,
+                               double k, double omega, bool magnetic) {
+    const double mu0 = 4e-7 * 3.141592653589793;
+    const double step = 1e-3 * (2.0 * 3.141592653589793 / k);  // CURL_STEP_WAVELENGTHS
+    std::vector<double> ex;
+    const std::size_t n = points.size() / 3;
+    if (magnetic) {
+        for (int axis = 0; axis < 3; axis++)
+            for (double sign : {1.0, -1.0})
+                for (std::size_t q = 0; q < n; q++)
+                    for (int c = 0; c < 3; c++)
+                        ex.push_back(points[3 * q + c] + (c == axis ? sign * step : 0.0));
+    } else {
+        ex = points;
+    }
+    ex.insert(ex.end(), el.mid.begin(), el.mid.end());
+    const double r1_max = razor::max_image_distance(ex.data(), ex.data(), ex.size() / 3, 0.0);
+    const somm_core::Grid &g = somm_core::get_grid(eps_t, k, r1_max, omega, mu0);
+    const std::size_t n_reg = g.regions.size();
+    if (n_reg > somm_proj::MAX_REGIONS) throw Decline{"a near-field grid layout"};
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cd *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS],
+        nth[somm_proj::MAX_REGIONS];
+    for (std::size_t r = 0; r < n_reg; r++) {
+        r0[r] = g.regions[r].r0;
+        dr[r] = g.regions[r].dr;
+        th0[r] = g.regions[r].th0;
+        dth[r] = g.regions[r].dth;
+        vals[r] = g.regions[r].vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(g.regions[r].n_th);
+    }
+    somm_proj::GridView G = somm_proj::build_grid_view(g.r1_max, g.r_break, 30.0 * (M_PI / 180.0),
+                                                       g.r_near, r0, dr, th0, dth, n_reg, vals,
+                                                       shape0, nr, nth);
+    const std::vector<cd> far = somm_core::far_pack(g);
+    somm_proj::set_far(G, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    std::vector<cd> out(3 * n);
+    const std::ptrdiff_t n_src = static_cast<std::ptrdiff_t>(el.mid.size() / 3);
+    if (magnetic)
+        somm_core::reflected_h_field(G, static_cast<std::ptrdiff_t>(n), points.data(), n_src,
+                                     el.mid.data(), el.moment.data(), 0.0, k, omega, mu0, step,
+                                     out.data());
+    else
+        somm_core::reflected_field(G, static_cast<std::ptrdiff_t>(n), points.data(), n_src,
+                                   el.mid.data(), el.moment.data(), 0.0, k, out.data());
+    return out;
+}
+
+// `near_ground` / `near_field_at`: free space, GN 1's image (`pec`), or the
+// composing ground (`compose`: GN 0 / GN 2's eps~ from the solver's ground,
+// GD's from its medium -- one expression, at the solver's own omega):
+// `field + (C2 * image + remainder)`, C2's product numpy's fused one.
 NearBlockC near_block(const Request &rq, const razor::Front &fr,
-                      const std::vector<std::vector<cd>> &knot_i, const Prepared &p, bool pec) {
+                      const std::vector<std::vector<cd>> &knot_i, const Prepared &p, bool pec,
+                      bool compose) {
     const std::vector<double> points = near_points(rq);
     const double k = 2.0 * 3.141592653589793 / p.wavelength;
     double radius = p.mesh.pieces.empty() ? 0.0 : p.mesh.pieces[0].radius;
@@ -1803,7 +1868,7 @@ NearBlockC near_block(const Request &rq, const razor::Front &fr,
     if (p.mesh.pieces.empty()) throw Decline{"a near field with no wire"};
     const Elements el = element_currents_sub(fr, knot_i, 8);
     std::vector<cd> field = element_fields(points, el, k, radius, rq.magnetic);
-    if (pec) {
+    if (pec || compose) {
         Elements img = el;
         for (std::size_t n = 0; n < el.mid.size() / 3; n++) {
             img.mid[3 * n + 2] = 2.0 * 0.0 - el.mid[3 * n + 2];
@@ -1811,8 +1876,24 @@ NearBlockC near_block(const Request &rq, const razor::Front &fr,
         }
         for (std::size_t n = 0; n < el.nodes.size() / 3; n++) img.nodes[3 * n + 2] = 2.0 * 0.0 - el.nodes[3 * n + 2];
         for (std::size_t n = 0; n < el.delta.size(); n++) img.delta[n] = cd(-el.delta[n].real(), -el.delta[n].imag());
-        const std::vector<cd> image = element_fields(points, img, k, radius, rq.magnetic);
-        for (std::size_t q = 0; q < field.size(); q++) field[q] = c_add(field[q], image[q]);
+        std::vector<cd> image = element_fields(points, img, k, radius, rq.magnetic);
+        if (compose) {
+            // `solver.omega` = 2 * np.pi * (c / wavelength); `eps_tilde((eps_r,
+            // sigma), omega, eps0)`; C2 = (eps_t - 1.0) / (eps_t + 1.0).
+            const double omega = (2.0 * 3.141592653589793) * (fr.c / p.wavelength);
+            const cd eps_t(p.medium_eps_r, (-p.medium_sigma) / (omega * razor::EPS));
+            const cd c2 = somm_core::py_quot(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0),
+                                             cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
+            const std::vector<cd> rem = near_remainder(points, el, eps_t, k, omega, rq.magnetic);
+            for (std::size_t q = 0; q < field.size(); q++) {
+                const cd im = image[q];
+                const cd scaled(std::fma(c2.real(), im.real(), -(c2.imag() * im.imag())),
+                                std::fma(c2.real(), im.imag(), c2.imag() * im.real()));
+                field[q] = c_add(field[q], c_add(scaled, rem[q]));
+            }
+        } else {
+            for (std::size_t q = 0; q < field.size(); q++) field[q] = c_add(field[q], image[q]);
+        }
     }
     NearBlockC block;
     block.magnetic = rq.magnetic;
@@ -2204,17 +2285,13 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     // which `_far_moments` serves as ONE branch above the plane (the seam
     // declines a buried wire) -- and free space otherwise.
     // `near_fields=tuple(_near_field(...) for request if NE / NH)`: free
-    // space, or GN 1's image (a near field over GD or GN 0 / GN 2 declines).
-    for (const Request &rq : deck.requests)
-        if (rq.kind == Request::near_field && deck.ground.kind == Ground::mininec)
-            throw Decline{"a near field over GD (its reflected-field remainder)"};
-    for (const Request &rq : deck.requests)
-        if (rq.kind == Request::near_field && deck.ground.kind == Ground::sommerfeld)
-            throw Decline{"a near field over a Sommerfeld ground"};
+    // space, GN 1's image, or the composing ground's `C2 image + remainder`
+    // (GN 0 / GN 2, and GD's medium over its PEC-image currents).
     for (const Request &rq : deck.requests)
         if (rq.kind == Request::near_field)
             data.near_fields.push_back(std::make_shared<NearBlockC>(
-                near_block(rq, fr, knots, p, deck.ground.kind == Ground::perfect)));
+                near_block(rq, fr, knots, p, deck.ground.kind == Ground::perfect,
+                           p.has_medium)));
     bool any_rp = false;
     for (const Request &rq : deck.requests) any_rp = any_rp || rq.kind == Request::far_field;
     if (any_rp) {
@@ -2886,8 +2963,7 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
     return s.chained ? s.structures[k].echo_text() : text;
 }
 
-// Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH (a near field
-// over GD or GN 0 / GN 2 declines in `run_data`).
+// Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH.
 void check_scope(const Deck &run) { (void)run; }
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,
