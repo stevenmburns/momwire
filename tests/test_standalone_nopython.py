@@ -117,8 +117,8 @@ def test_no_python_anywhere_in_the_executable():
 
 @pytest.mark.parametrize(
     "deck",
-    [DIPOLE, REFUSES, RAISES, EXAMPLE3.with_name("EXAMPLE3_EN.nec")],
-    ids=["served", "refused", "raised", "gmo"],
+    [DIPOLE, REFUSES, RAISES, EXAMPLE3.with_name("EXAMPLE3_EN.nec"), BURIED],
+    ids=["served", "refused", "raised", "gmo", "buried"],
 )
 def test_a_deck_answers_as_the_launcher(deck, tmp_path):
     _same(*_both([deck.name, "x.out"], tmp_path))
@@ -199,20 +199,6 @@ def test_an_unwritable_gmo(tmp_path):
     )
     _same(exe, ref, de, dl)
     assert b"IsADirectoryError" in (de / "x.out").read_bytes()
-
-
-def test_a_declined_deck_is_refused_by_name(tmp_path):
-    """A deck the C++ route does not serve (a buried wire, Step 3 of
-    momwire#1512) is a refusal printout naming it, not a fallback."""
-    out = tmp_path / "x.out"
-    r = subprocess.run([EXE, str(BURIED), str(out)], capture_output=True, check=False)
-    assert r.returncode == 0 and r.stdout == b""
-    text = out.read_bytes()
-    assert (
-        b" ***** NEC ERROR - not served by this build: a wire below a finite ground"
-        in text
-    )
-    assert text.startswith(b"1\r\n momwire ")
 
 
 @pytest.mark.parametrize(
