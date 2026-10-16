@@ -72,9 +72,9 @@ def python_seam(text):
     orig_cps = RazorSolver.compute_port_solution
     orig_refusal = _printout.render_refusal
 
-    def prepare(deck, *, basis=_serve.BASIS):
+    def prepare(deck, *, basis=_serve.BASIS, shared=None):
         current.clear()
-        p = orig_prepare(deck, basis=basis)
+        p = orig_prepare(deck, basis=basis, shared=shared)
         rec["prepared"].append(dict(current, prepared=p))
         return p
 
