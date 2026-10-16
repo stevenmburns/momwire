@@ -88,6 +88,7 @@
 #endif
 
 #include "_contour_engine_inline.h"
+#include "_contour_lanes_inline.h"
 #include "_branch_cut_inline.h"
 #include "xsf/bessel.h"
 
@@ -406,7 +407,7 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     double lam_mult, int p, double detour, int n_threads,
     py::array_t<double, py::array::c_style | py::array::forcecast> gx,
     py::array_t<double, py::array::c_style | py::array::forcecast> gw,
-    uintptr_t cancel_flag = 0, py::object cache = py::none()) {
+    uintptr_t cancel_flag = 0, py::object cache = py::none(), bool lanes = true) {
     if (rho.ndim() != 1 || offsets.ndim() != 1 || z.ndim() != 1 ||
         zp.ndim() != 1)
         throw std::invalid_argument("rho, offsets, z and zp must be 1-D");
@@ -530,6 +531,7 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             const py::ssize_t c = by_column[j];
             const py::ssize_t lo = ob(c), hi = ob(c + 1);
             mw899::Scratch s;
+            s.lanes = lanes && mw_sl::kActive;
             const size_t K = mw899::column_build(
                 rb(c), k_p, kpc, km, mw899::s_min_of(zb, pb, lo, hi), lam_mult,
                 p, detour, gxp, gwp, ng, cached, cached ? c_ah[c] : 0.0,
@@ -546,6 +548,7 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
             const py::ssize_t c = by_member[j];
             const py::ssize_t lo = ob(c), hi = ob(c + 1);
             mw899::Scratch s;
+            s.lanes = lanes && mw_sl::kActive;
             const size_t K = mw899::column_build(
                 rb(c), k_p, kpc, km, mw899::s_min_of(zb, pb, lo, hi), lam_mult,
                 p, detour, gxp, gwp, ng, cached, cached ? c_ah[c] : 0.0,
@@ -932,7 +935,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
           py::arg("z"), py::arg("zp"), py::arg("lam_mult"), py::arg("p"),
           py::arg("detour"), py::arg("n_threads"), py::arg("gx"),
           py::arg("gw"), py::arg("cancel_flag") = 0,
-          py::arg("cache") = py::none(),
+          py::arg("cache") = py::none(), py::arg("lanes") = true,
           "six_columns over CONCATENATED columns -> (n, 6) complex. Column c "
           "owns members offsets[c]..offsets[c+1], all at rho[c]; the answer "
           "keeps the members' order. Parallel over columns, and over the "
@@ -940,6 +943,9 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
           "grouping belongs in ONE call. `n_threads` <= 0 takes OpenMP's own "
           "count and is never raised above it. No rtol: the fixed rule's "
           "resolution is `p` and its extents the e^{-60} dead range.");
+    // momwire#1441 step 3: the rule's Bessel pairs and factors run four nodes
+    // at a time; `lanes=False` is the scalar walk, gated bit for bit.
+    m.attr("six_columns_lanes_1441") = true;
     // The plane sheet's flag (momwire#1173 Design E), its own name for the
     // same reason as the two above.
     // Design E's sheets, on the strip grid (phase 2): their own flag, for the

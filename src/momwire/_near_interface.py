@@ -197,6 +197,20 @@ _HAVE_POINT_COLUMNS_ACCEL = _nipa is not None and bool(
     getattr(_nipa, "point_columns_1224", False)
 )
 
+# momwire#1441 step 3: the column rule's Bessel pairs and spectral factors run
+# four nodes at a time, the same floats as the scalar walk
+# (tests/test_somm_lanes_1441.py). False passes `lanes=False`, the reference;
+# tests flip it, nothing else should.
+_SIX_COLUMNS_LANES = True
+
+
+def _columns_lanes_kw():
+    """`near_interface_six_columns`' lanes switch, for a binding that has it."""
+    if _SIX_COLUMNS_LANES or not hasattr(_nia, "six_columns_lanes_1441"):
+        return {}
+    return {"lanes": False}
+
+
 # The tests' handle on the dispatch — parity gates drive BOTH machines inside
 # one process. `MOMWIRE_NEAR_INTERFACE_FORCE_NUMPY` is the whole-run switch (a
 # timing comparison, a bisect); `monkeypatch.setattr(ni, "_FORCE_NUMPY", True)`
@@ -2155,6 +2169,7 @@ def _column_twin(
         _GW,
         cancel_flag=_cancel.ptr(),
         cache=column_cache,
+        **_columns_lanes_kw(),
     )
     if permuted:
         pos = np.empty(member_order.size, dtype=np.intp)
@@ -3275,6 +3290,7 @@ def _designed_tables_reference(
                     _GX,
                     _GW,
                     cancel_flag=_cancel.ptr(),
+                    **_columns_lanes_kw(),
                 )
                 placed = fresh_pos[member_order]
             block[placed] = vals

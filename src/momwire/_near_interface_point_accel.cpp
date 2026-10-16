@@ -37,6 +37,7 @@
 #endif
 
 #include "_contour_engine_inline.h"
+#include "_contour_lanes_inline.h"
 #include "_branch_cut_inline.h"
 #include "xsf/bessel.h"
 

@@ -518,6 +518,11 @@ def _six_integrals(eps_t, k2, rho, h, rtol=1e-9, form=None):
 
 _FORM_CODE = {None: 0, "J": 1, "H": 2}
 
+# momwire#1441 step 3: the C++ integrand runs four contour nodes at a time, the
+# same floats as its scalar walk (tests/test_somm_lanes_1441.py). False passes
+# `lanes=False`, the reference; tests flip it, nothing else should.
+_SIX_LANES = True
+
 
 def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None, cancel_flag=0):
     """`_six_integrals` over parallel (ρ, h) arrays; returns (n, 6) complex.
@@ -538,8 +543,20 @@ def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None, cancel_flag=0)
     if eps_t == 1.0:
         return np.zeros((rho.size, 6), dtype=np.complex128)
     if _acc is not None and hasattr(_acc, "somm_six_integrals_batch"):
+        kw = (
+            {}
+            if _SIX_LANES or not hasattr(_acc, "somm_six_lanes_1441")
+            else {"lanes": False}
+        )
         return _acc.somm_six_integrals_batch(
-            eps_t, float(k2), rho, h, float(rtol), _FORM_CODE[form], int(cancel_flag)
+            eps_t,
+            float(k2),
+            rho,
+            h,
+            float(rtol),
+            _FORM_CODE[form],
+            int(cancel_flag),
+            **kw,
         )
     flag = None
     if cancel_flag:

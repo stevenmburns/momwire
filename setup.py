@@ -336,6 +336,12 @@ _ACCEL_HEADERS = [
     # The SIMD lane layer (momwire#1372), included by the lane kernels'
     # TUs and `_accel_somm_proj_inline.h`.
     "src/momwire/_lanes.h",
+    # The Sommerfeld integrands' lanes (momwire#1441 step 3): the lane
+    # primitives, and the above-ground integrand on them (`_accel_somm.cpp`).
+    "src/momwire/_somm_lanes_inline.h",
+    "src/momwire/_somm_six_lanes_inline.h",
+    # ... and the contour engine's tail integrand on them (`_accel_mw568.cpp`).
+    "src/momwire/_contour_lanes_inline.h",
     # The core/binding split: the Python-free preamble, the numpy -> view
     # seam, and the razor core's interface.
     "src/momwire/_mw_core.h",
@@ -424,6 +430,10 @@ _NEAR_HEADERS = [
     "src/momwire/_cdiv_inline.h",
     # The contour engine's fused multiply-adds (momwire#1194).
     "src/momwire/_fma_inline.h",
+    # The contour engine's lane hook and the Bessel lanes the column rule
+    # uses (momwire#1441 step 3).
+    "src/momwire/_somm_lanes_inline.h",
+    "src/momwire/_contour_lanes_inline.h",
     # The column machinery both TUs of this extension share (momwire#1224).
     "src/momwire/_near_interface_columns_inline.h",
     # The SIMD lane layer (momwire#1372): the sheet's fixed-width cell sum.

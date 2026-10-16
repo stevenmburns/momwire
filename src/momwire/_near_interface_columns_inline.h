@@ -300,6 +300,11 @@ struct Scratch {
     // real-arithmetic reduction, and interleaved std::complex<double> would
     // hand the vectorizer a stride-2 gather on every operand.
     std::vector<double> gpr, gpi, gmr, gmi, fr, fi;
+    // momwire#1441 step 3: the rule's Bessel pairs and factors four nodes at
+    // a time (`lanes=False` is the scalar walk, gated bit for bit), and the
+    // per-node staging those batches read.
+    bool lanes = mw_sl::kActive;
+    std::vector<cd> xs, b0s, dls;
 };
 
 // The column's smallest s = z - z', which is the one thing the rule needs
@@ -339,6 +344,24 @@ static void column_extents(double k_p, const cd &k_m, double s_min,
     lam_top_out = lam_top;
 }
 
+// J0 of every s.xs into s.b0s, mw_contour::bessel_j0_j1x's value bit for
+// bit: W arguments at a time (_contour_lanes_inline.h), the last few alone.
+static void bessel_j0_many(Scratch &s) {
+    const size_t n = s.xs.size();
+    s.b0s.resize(n);
+    const size_t W = static_cast<size_t>(mw_sl::W);
+    size_t i = 0;
+    cd j0[mw_sl::W], j1x[mw_sl::W];
+    for (; i + W <= n; i += W) {
+        mw_contour_lanes::bessel_j0_j1x_any(&s.xs[i], j0, j1x);
+        for (size_t l = 0; l < W; ++l) s.b0s[i + l] = j0[l];
+    }
+    for (; i < n; ++i) {
+        cd b1x;
+        mw_contour::bessel_j0_j1x(s.xs[i], s.b0s[i], b1x);
+    }
+}
+
 // The head and mid nodes, appended to s.lam / s.w. They depend on the column
 // through rho and the extents ALONE -- not on s_min, which reaches them only
 // through a_head and lam_top -- which is what lets `near_interface_six_columns`
@@ -370,14 +393,29 @@ static void column_head_mid(double rho, double k_p, const cd &k_m,
     s.edges.erase(std::unique(s.edges.begin(), s.edges.end()), s.edges.end());
     sub_seed(s.edges, rho, s.seeded);
     fixed_gauss(s.seeded, p, gx, gw, ng, s.t, s.wt);
-    for (size_t i = 0; i < s.t.size(); ++i) {
-        const double t = s.t[i];
-        const cd l(t, H * std::sin(MW_PI * t / a_head));
-        const cd dl(1.0, H * (MW_PI / a_head) * std::cos(MW_PI * t / a_head));
-        cd b0, b1x;
-        mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
-        s.lam.push_back(l);
-        s.w.push_back(s.wt[i] * dl * b0);
+    if (s.lanes) {
+        const size_t n = s.t.size();
+        s.xs.resize(n);
+        s.dls.resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            const double t = s.t[i];
+            const cd l(t, H * std::sin(MW_PI * t / a_head));
+            s.dls[i] = cd(1.0, H * (MW_PI / a_head) * std::cos(MW_PI * t / a_head));
+            s.lam.push_back(l);
+            s.xs[i] = l * rho;
+        }
+        bessel_j0_many(s);
+        for (size_t i = 0; i < n; ++i) s.w.push_back(s.wt[i] * s.dls[i] * s.b0s[i]);
+    } else {
+        for (size_t i = 0; i < s.t.size(); ++i) {
+            const double t = s.t[i];
+            const cd l(t, H * std::sin(MW_PI * t / a_head));
+            const cd dl(1.0, H * (MW_PI / a_head) * std::cos(MW_PI * t / a_head));
+            cd b0, b1x;
+            mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
+            s.lam.push_back(l);
+            s.w.push_back(s.wt[i] * dl * b0);
+        }
     }
 
     // --- mid: the real axis [a_head, lam_top], same J0 factor. `six_point`
@@ -388,12 +426,24 @@ static void column_head_mid(double rho, double k_p, const cd &k_m,
     s.edges.push_back(lam_top);
     sub_seed(s.edges, rho, s.seeded);
     fixed_gauss(s.seeded, p, gx, gw, ng, s.t, s.wt);
-    for (size_t i = 0; i < s.t.size(); ++i) {
-        const cd l(s.t[i], 0.0);
-        cd b0, b1x;
-        mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
-        s.lam.push_back(l);
-        s.w.push_back(s.wt[i] * b0);
+    if (s.lanes) {
+        const size_t n = s.t.size();
+        s.xs.resize(n);
+        for (size_t i = 0; i < n; ++i) {
+            const cd l(s.t[i], 0.0);
+            s.lam.push_back(l);
+            s.xs[i] = l * rho;
+        }
+        bessel_j0_many(s);
+        for (size_t i = 0; i < n; ++i) s.w.push_back(s.wt[i] * s.b0s[i]);
+    } else {
+        for (size_t i = 0; i < s.t.size(); ++i) {
+            const cd l(s.t[i], 0.0);
+            cd b0, b1x;
+            mw_contour::bessel_j0_j1x(l * rho, b0, b1x);
+            s.lam.push_back(l);
+            s.w.push_back(s.wt[i] * b0);
+        }
     }
 
 }
@@ -510,6 +560,63 @@ static inline void factor_node(const cd &k_p, const cd &k_m, const cd &kp2,
     }
 }
 
+// `factor_node` at W consecutive nodes l[0..W), w[0..W): the same products
+// in the same order per lane (_somm_lanes_inline.h), written to the same
+// slots (node j's at offset j of each plane).
+static inline void factor_nodes_lanes(const cd &k_p, const cd &k_m, const cd &kp2,
+                                      const cd &km2, const cd *l, const cd *wk,
+                                      double *fr, double *fi, size_t stride,
+                                      double *gpr, double *gpi, double *gmr,
+                                      double *gmi) {
+    using namespace mw_sl;
+    Buf lr, li, wr, wi;
+    for (int j = 0; j < W; ++j) {
+        lr.v[j] = l[j].real();
+        li.v[j] = l[j].imag();
+        wr.v[j] = wk[j].real();
+        wi.v[j] = wk[j].imag();
+    }
+    const C L{loadu(lr.v), loadu(li.v)}, WK{loadu(wr.v), loadu(wi.v)};
+    const C g_p = mw_sl::gamma_cut(L, k_p);
+    const C g_m = mw_sl::gamma_cut(L, k_m);
+    const C u = cdiv(cscale(2.0, L), cadd(g_p, g_m));
+    const C v = cdiv(cscale(2.0, L), cadd(cmul(cset1(km2), g_p), cmul(cset1(kp2), g_m)));
+    const C wv = cmul(csub(g_p, g_m), v);
+    const C f[6] = {cmul(u, WK),
+                    cmul(v, WK),
+                    cmul(wv, WK),
+                    cmul(cmul(cneg(g_p), wv), WK),
+                    cmul(cmul(cneg(cmul(g_p, g_m)), v), WK),
+                    cmul(cmul(g_m, wv), WK)};
+    for (int c = 0; c < 6; ++c) {
+        storeu(fr + c * stride, f[c].re);
+        storeu(fi + c * stride, f[c].im);
+    }
+    storeu(gpr, g_p.re);
+    storeu(gpi, g_p.im);
+    storeu(gmr, g_m.re);
+    storeu(gmi, g_m.im);
+}
+
+// `factor_node` over nodes [k0, k1) of lam / w into the planes at fr / fi
+// (offset `off` + k, plane stride `stride`) and the gamma arrays.
+static inline void factor_range(bool lanes, const cd &k_p, const cd &k_m,
+                                const cd &kp2, const cd &km2, const cd *lam,
+                                const cd *w, size_t n, double *fr, double *fi,
+                                size_t stride, double *gpr, double *gpi,
+                                double *gmr, double *gmi) {
+    size_t k = 0;
+    if (lanes) {
+        const size_t W = static_cast<size_t>(mw_sl::W);
+        for (; k + W <= n; k += W)
+            factor_nodes_lanes(k_p, k_m, kp2, km2, lam + k, w + k, fr + k, fi + k,
+                               stride, gpr + k, gpi + k, gmr + k, gmi + k);
+    }
+    for (; k < n; ++k)
+        factor_node(k_p, k_m, kp2, km2, lam[k], w[k], fr + k, fi + k, stride,
+                    gpr[k], gpi[k], gmr[k], gmi[k]);
+}
+
 static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
     const size_t K = s.lam.size();
     const cd kp2 = k_p * k_p, km2 = k_m * k_m;
@@ -519,9 +626,9 @@ static void column_factors(const cd &k_p, const cd &k_m, Scratch &s) {
     s.gmi.resize(K);
     s.fr.resize(6 * K);
     s.fi.resize(6 * K);
-    for (size_t k = 0; k < K; ++k)
-        factor_node(k_p, k_m, kp2, km2, s.lam[k], s.w[k], &s.fr[k], &s.fi[k],
-                    K, s.gpr[k], s.gpi[k], s.gmr[k], s.gmi[k]);
+    factor_range(s.lanes, k_p, k_m, kp2, km2, s.lam.data(), s.w.data(), K,
+                 s.fr.data(), s.fi.data(), K, s.gpr.data(), s.gpi.data(),
+                 s.gmr.data(), s.gmi.data());
 }
 
 // A column's head + mid factors, held for reuse (`ColumnCache`): the arrays
@@ -544,9 +651,9 @@ static void head_mid_factors(const cd &k_p, const cd &k_m, const Scratch &s,
     h.gmi.resize(K);
     h.fr.resize(6 * K);
     h.fi.resize(6 * K);
-    for (size_t k = 0; k < K; ++k)
-        factor_node(k_p, k_m, kp2, km2, s.lam[k], s.w[k], &h.fr[k], &h.fi[k],
-                    K, h.gpr[k], h.gpi[k], h.gmr[k], h.gmi[k]);
+    factor_range(s.lanes, k_p, k_m, kp2, km2, s.lam.data(), s.w.data(), K,
+                 h.fr.data(), h.fi.data(), K, h.gpr.data(), h.gpi.data(),
+                 h.gmr.data(), h.gmi.data());
 }
 
 // `column_factors` over head + mid from `h` and the tail nodes in s.lam /
@@ -572,10 +679,9 @@ static size_t column_factors_joined(const cd &k_p, const cd &k_m,
         std::copy(h.fi.begin() + c * Kh, h.fi.begin() + (c + 1) * Kh,
                   s.fi.begin() + c * K);
     }
-    for (size_t k = 0; k < Kt; ++k)
-        factor_node(k_p, k_m, kp2, km2, s.lam[k], s.w[k], &s.fr[Kh + k],
-                    &s.fi[Kh + k], K, s.gpr[Kh + k], s.gpi[Kh + k],
-                    s.gmr[Kh + k], s.gmi[Kh + k]);
+    factor_range(s.lanes, k_p, k_m, kp2, km2, s.lam.data(), s.w.data(), Kt,
+                 s.fr.data() + Kh, s.fi.data() + Kh, K, s.gpr.data() + Kh,
+                 s.gpi.data() + Kh, s.gmr.data() + Kh, s.gmi.data() + Kh);
     return K;
 }
 
