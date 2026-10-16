@@ -28,6 +28,25 @@ static const double SER_EPS2 = 1e-34;
 static const double BESSEL_SWITCH2 = 144.0;
 static const cd CI(0.0, 1.0);
 
+// 1/k for jy01_series' harmonic numbers, k = 1..61 (momwire#1512). Each
+// entry is a constant expression the compiler folds to the correctly rounded
+// double, i.e. the very value the loop's `1.0 / double(k)` divides out, so
+// the sums are unchanged; the loop loses two scalar divides per term, which
+// shared the divider with its four packed ones (mw_contour::MW_INV's note).
+static const double SL_INV[62] = {
+    0.0, 1.0 / 1.0, 1.0 / 2.0, 1.0 / 3.0, 1.0 / 4.0, 1.0 / 5.0,
+    1.0 / 6.0, 1.0 / 7.0, 1.0 / 8.0, 1.0 / 9.0, 1.0 / 10.0, 1.0 / 11.0,
+    1.0 / 12.0, 1.0 / 13.0, 1.0 / 14.0, 1.0 / 15.0, 1.0 / 16.0, 1.0 / 17.0,
+    1.0 / 18.0, 1.0 / 19.0, 1.0 / 20.0, 1.0 / 21.0, 1.0 / 22.0, 1.0 / 23.0,
+    1.0 / 24.0, 1.0 / 25.0, 1.0 / 26.0, 1.0 / 27.0, 1.0 / 28.0, 1.0 / 29.0,
+    1.0 / 30.0, 1.0 / 31.0, 1.0 / 32.0, 1.0 / 33.0, 1.0 / 34.0, 1.0 / 35.0,
+    1.0 / 36.0, 1.0 / 37.0, 1.0 / 38.0, 1.0 / 39.0, 1.0 / 40.0, 1.0 / 41.0,
+    1.0 / 42.0, 1.0 / 43.0, 1.0 / 44.0, 1.0 / 45.0, 1.0 / 46.0, 1.0 / 47.0,
+    1.0 / 48.0, 1.0 / 49.0, 1.0 / 50.0, 1.0 / 51.0, 1.0 / 52.0, 1.0 / 53.0,
+    1.0 / 54.0, 1.0 / 55.0, 1.0 / 56.0, 1.0 / 57.0, 1.0 / 58.0, 1.0 / 59.0,
+    1.0 / 60.0, 1.0 / 61.0,
+};
+
 MW_SL_INLINE C c_one() { return C{set1(1.0), set1(0.0)}; }
 
 // The truncating loops below run every lane until the last one stops, and
@@ -80,8 +99,8 @@ static inline void jy01_series(C z, M act, C &j0o, C &j1o, C &y0, C &y1) {
     for (int k = 1; k <= 60 && any(act); ++k) {
         t0 = cmul(t0, cdivr(q, set1(double(k * k))));
         t1 = cmul(t1, cdivr(q, set1(double(k * (k + 1)))));
-        hk += 1.0 / double(k);
-        hk1 += 1.0 / double(k + 1);
+        hk += SL_INV[k];
+        hk1 += SL_INV[k + 1];
         j0 = cadd(j0, t0);
         j1x = cadd(j1x, t1);
         const C term0 = cscale(hk, t0);

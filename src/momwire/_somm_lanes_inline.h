@@ -299,6 +299,33 @@ MW_SL_INLINE C caddr(C z, double s) { return C{add(z.re, set1(s)), z.im}; }
 MW_SL_INLINE C csubr(C z, double s) { return C{sub(z.re, set1(s)), z.im}; }
 MW_SL_INLINE C cblend(C a, C b, M m) { return C{blend(a.re, b.re, m), blend(a.im, b.im, m)}; }
 
+// W consecutive std::complex<double> (array-compatible: re, im, re, im, ...)
+// as lanes, by vector loads and shuffles (momwire#1512). Staging them through
+// a Buf -- W scalar stores, then one wide load of the same bytes -- defeats
+// store forwarding, and the load waits for the stores to retire. Moves only:
+// every lane holds the value the Buf route gave it.
+MW_SL_INLINE C cload(const cd *p) {
+    const double *d = reinterpret_cast<const double *>(p);
+#if defined(MW_SL_AVX2)
+    const __m256d a = _mm256_loadu_pd(d), b = _mm256_loadu_pd(d + 4);
+    // unpack: (r0 r2 r1 r3), (i0 i2 i1 i3); permute (0 2 1 3) puts them in order.
+    return C{V{_mm256_permute4x64_pd(_mm256_unpacklo_pd(a, b), 0xD8)},
+             V{_mm256_permute4x64_pd(_mm256_unpackhi_pd(a, b), 0xD8)}};
+#elif defined(MW_SL_SSE2)
+    const __m128d d0 = _mm_loadu_pd(d), d1 = _mm_loadu_pd(d + 2), d2 = _mm_loadu_pd(d + 4),
+                  d3 = _mm_loadu_pd(d + 6);
+    return C{V{_mm_unpacklo_pd(d0, d1), _mm_unpacklo_pd(d2, d3)},
+             V{_mm_unpackhi_pd(d0, d1), _mm_unpackhi_pd(d2, d3)}};
+#else
+    C r;
+    for (int l = 0; l < W; ++l) {
+        r.re.v[l] = d[2 * l];
+        r.im.v[l] = d[2 * l + 1];
+    }
+    return r;
+#endif
+}
+
 // mw_fma::mul: re = fma(xr, yr, -(xi yi)), im = fma(xr, yi, xi yr).
 MW_SL_INLINE C cmul(C x, C y) {
     return C{fma(x.re, y.re, neg(mul(x.im, y.im))), fma(x.re, y.im, mul(x.im, y.re))};
