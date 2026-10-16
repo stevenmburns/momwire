@@ -146,6 +146,7 @@ def test_g1441_v3_the_switch_reaches_kernels_and_keys(monkeypatch):
 
     monkeypatch.setattr(ACC, "somm_six_integrals_batch", spy)
     monkeypatch.setenv("MOMWIRE_SOMM_CACHE", "0")
+    monkeypatch.setattr(somm, "_LANES_VECMATH", 0)
     saved = [dict(somm._GRID_CACHE), dict(somm._NORM_CACHE)]
     somm._GRID_CACHE.clear()
     somm._NORM_CACHE.clear()
