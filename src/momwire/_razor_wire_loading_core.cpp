@@ -49,25 +49,19 @@ cd np_div(cd a, cd b) {
     return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
 }
 
-// numpy's complex sqrt (equal to CPython's `cmath.sqrt` on the machines
-// measured) for a finite value.
+// numpy's complex sqrt: libm's `csqrt` (measured equal on 29,000 values,
+// the purely imaginary arguments a conductor's (j omega mu sigma) is among
+// them -- where CPython's `cmath.sqrt` gives other bits on half of them).
 cd np_sqrt(cd z) {
-    if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
-        throw std::invalid_argument("wire loading: a non-finite square root");
-    if (z.real() == 0.0 && z.imag() == 0.0) return cd(0.0, z.imag());
-    double ax = std::fabs(z.real());
-    const double ay = std::fabs(z.imag());
-    double s;
-    if (ax < DBL_MIN && ay < DBL_MIN) {
-        ax = std::ldexp(ax, 53);
-        s = std::ldexp(std::sqrt(ax + std::hypot(ax, std::ldexp(ay, 53))), -27);
-    } else {
-        ax /= 8.0;
-        s = 2.0 * std::sqrt(ax + std::hypot(ax, ay / 8.0));
-    }
-    const double d = ay / (2.0 * s);
-    if (z.real() >= 0.0) return cd(s, std::copysign(d, z.imag()));
-    return cd(d, std::copysign(s, z.imag()));
+#if defined(__GNUC__)
+    __complex__ double c;
+    __real__ c = z.real();
+    __imag__ c = z.imag();
+    c = __builtin_csqrt(c);
+    return cd(__real__ c, __imag__ c);
+#else
+    return std::sqrt(z);
+#endif
 }
 
 inline cd add(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }

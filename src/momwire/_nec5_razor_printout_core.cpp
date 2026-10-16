@@ -1172,6 +1172,22 @@ const double *arc_of(const razor::Front &fr, int64_t w) {
 // ============================================================================
 
 // CPython's `cmath.sqrt` for a finite value (numpy's complex sqrt gives the
+// numpy's complex sqrt (`np.sqrt` on a complex array or scalar): libm's
+// `csqrt`, which is NOT CPython's `cmath.sqrt` on every argument (a purely
+// imaginary one differs on about half, measured), so `_image_coeffs`' np.sqrt
+// is this and `cmath.sqrt` (the lower medium's k) is `py_csqrt` below.
+cd np_csqrt(cd z) {
+#if defined(__GNUC__)
+    __complex__ double c;
+    __real__ c = z.real();
+    __imag__ c = z.imag();
+    c = __builtin_csqrt(c);
+    return cd(__real__ c, __imag__ c);
+#else
+    return std::sqrt(z);
+#endif
+}
+
 // same bits on the machines measured, so `_image_coeffs`' np.sqrt is this).
 cd py_csqrt(cd z) {
     if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
@@ -1319,7 +1335,7 @@ void far_moments(const Grid &g, double k, const std::vector<double> &mid,
                 const cd m_h = dot3(mi, h_hat), m_v = dot3(mi, v_hat);
                 // `_image_coeffs`
                 const cd under(eps_c.real() - rx * rx, eps_c.imag() - 0.0);
-                const cd qq = py_csqrt(cd(under.real() - ry * ry, under.imag() - 0.0));
+                const cd qq = np_csqrt(cd(under.real() - ry * ry, under.imag() - 0.0));
                 const cd rho_h = np_cdiv(cd(rz - qq.real(), 0.0 - qq.imag()), cd(rz + qq.real(), 0.0 + qq.imag()));
                 const cd e_rz = np_cmul(eps_c, cd(rz, 0.0));
                 const cd rho_v = np_cdiv(c_sub(e_rz, qq), c_add(e_rz, qq));
