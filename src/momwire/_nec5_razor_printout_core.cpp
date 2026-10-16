@@ -1360,9 +1360,113 @@ enum class FarGround { free, pec, refl };
 
 // `_far_moments` for elements above the plane (the seam's covered decks):
 // free space, the PEC image, or the image weighted by `_image_coeffs`.
-void far_moments(const Grid &g, double k, const std::vector<double> &mid,
-                 const std::vector<cd> &moment, FarGround ground, double eps_r, double sigma,
+// `_eps_complex(eps_r, sigma, freq_hz)`: eps_r - 1j * sigma / (omega * EPS0),
+// CPython's complex arithmetic.
+cd eps_complex(double eps_r, double sigma, double freq_hz) {
+    const double omega = 2.0 * 3.141592653589793 * freq_hz;
+    const cd js = py_cmul(cd(0.0, 1.0), cd(sigma, 0.0));
+    const cd frac = py_cdiv(js, cd(omega * 8.854187817e-12, 0.0));
+    return cd(eps_r - frac.real(), 0.0 - frac.imag());
+}
+
+// `_sommerfeld_below.k_medium(eps_t, k2)`: k2 * numpy's scalar csqrt, the
+// scalar product unfused, on the Im <= 0 branch; a Python complex.
+cd k_medium_of(cd eps_t, double k2) {
+    const cd s = np_csqrt(eps_t);
+    cd km(k2 * s.real() - 0.0 * s.imag(), k2 * s.imag() + 0.0 * s.real());
+    if (km.imag() > 0) km = cd(km.real(), -km.imag());
+    return km;
+}
+
+// numpy's complex exp (`npy_cexp`: libm's cexp).
+cd np_cexp(cd z) {
+#if defined(__GNUC__)
+    __complex__ double c;
+    __real__ c = z.real();
+    __imag__ c = z.imag();
+    c = __builtin_cexp(c);
+    return cd(__real__ c, __imag__ c);
+#else
+    return std::exp(z);
+#endif
+}
+
+// `transmitted_moments(mid, moment, k_p, k_m, theta, phi, ground_z)` over
+// the BELOW elements, with `transmitted_factors` and `_k_mz` (momwire#570):
+// numpy's array products fused (`np_cmul`), CPython's on the scalars, each
+// row's sum over the elements numpy's identity plus pairwise sum.
+void transmitted_moments(const Grid &g, double k_p, cd k_m, const std::vector<double> &mid,
+                         const std::vector<cd> &moment, double ground_z, std::vector<cd> &t_theta,
+                         std::vector<cd> &t_phi) {
+    const std::size_t n = mid.size() / 3;
+    const int64_t nt = g.nt, np_ = g.np_;
+    const cd km2 = py_cmul(k_m, k_m);
+    const double kp2 = k_p * k_p;
+    const cd kp_over_km = py_cdiv(cd(k_p, 0.0), k_m);
+    std::vector<cd> k_mz(static_cast<std::size_t>(nt)), t_e(k_mz.size()), t_h(k_mz.size()),
+        t_v(k_mz.size());
+    for (int64_t it = 0; it < nt; it++) {
+        const double st = g.sin_t[it], ct = g.cos_t[it];
+        // `_k_mz`: sqrt(k_m^2 - (k_p sin)^2), the decaying root
+        const double ks = k_p * st;
+        cd q = np_csqrt(c_sub(km2, cd(ks * ks, 0.0)));
+        if (q.imag() > 0.0) q = cd(-q.real(), -q.imag());
+        k_mz[it] = q;
+        // `transmitted_factors`
+        const double kpc = k_p * ct;
+        const cd k_pz(kpc + 0.0, 0.0 + 0.0);
+        const cd two_kpz = np_cmul(cd(2.0, 0.0), k_pz);
+        const cd ts = np_cdiv(two_kpz, c_add(k_pz, q));
+        const cd num = np_cmul(np_cmul(two_kpz, cd(k_p, 0.0)), k_m);
+        const cd den = c_add(np_cmul(km2, k_pz), np_cmul(cd(kp2, 0.0), q));
+        const cd tp = np_cdiv(num, den);
+        t_e[it] = ts;
+        t_h[it] = np_cmul(tp, np_cdiv(q, k_m));
+        t_v[it] = np_cmul(cd(-tp.real(), -tp.imag()), np_cmul(kp_over_km, cd(st, 0.0)));
+    }
+    const cd jkp = py_cmul(cd(0.0, 1.0), cd(k_p, 0.0));  // `1j * k_p`
+    t_theta.assign(static_cast<std::size_t>(nt * np_), cd(0.0, 0.0));
+    t_phi.assign(t_theta.size(), cd(0.0, 0.0));
+    std::vector<cd> a(n), b(n);
+    for (int64_t it = 0; it < nt; it++) {
+        const cd ref = np_cmul(jkp, cd(g.cos_t[it] * ground_z, 0.0));
+        for (int64_t ip = 0; ip < np_; ip++) {
+            const int64_t i = it * np_ + ip;
+            const double cp = g.cos_p[ip], sp = g.sin_p[ip];
+            for (std::size_t m = 0; m < n; m++) {
+                const double *c = &mid[3 * m];
+                const cd *w = &moment[3 * m];
+                const double lateral = g.rx[i] * c[0] + g.ry[i] * c[1];
+                const cd depth = np_cmul(k_mz[it], cd(ground_z - c[2], 0.0));
+                const cd arg = c_add(c_sub(np_cmul(jkp, cd(lateral, 0.0)), np_cmul(cd(0.0, 1.0), depth)), ref);
+                const cd carrier = np_cexp(arg);
+                const cd m_par = c_add(np_cmul(cd(cp, 0.0), w[0]), np_cmul(cd(sp, 0.0), w[1]));
+                const cd s_x = np_cmul(cd(sp, 0.0), w[0]);
+                const cd m_perp = c_add(cd(-s_x.real(), -s_x.imag()), np_cmul(cd(cp, 0.0), w[1]));
+                a[m] = np_cmul(carrier, c_add(np_cmul(t_h[it], m_par), np_cmul(t_v[it], w[2])));
+                b[m] = np_cmul(np_cmul(carrier, t_e[it]), m_perp);
+            }
+            t_theta[static_cast<std::size_t>(i)] = np_csum(a);
+            t_phi[static_cast<std::size_t>(i)] = np_csum(b);
+        }
+    }
+}
+
+void far_moments(const Grid &g, double k, const std::vector<double> &mid_all,
+                 const std::vector<cd> &moment_all, FarGround ground, double eps_r, double sigma,
                  double freq_hz, std::vector<cd> &m_theta, std::vector<cd> &m_phi) {
+    // `_below_elements`: the elements more than a hair below the plane radiate
+    // through the interface, the rest direct + image (`mid[~below]`).
+    std::vector<double> mid, mid_b;
+    std::vector<cd> moment, moment_b;
+    for (std::size_t m = 0; m < mid_all.size() / 3; m++) {
+        const bool below = ground != FarGround::free && mid_all[3 * m + 2] < 0.0 - 1e-9;
+        (below ? mid_b : mid).insert((below ? mid_b : mid).end(), &mid_all[3 * m], &mid_all[3 * m] + 3);
+        (below ? moment_b : moment)
+            .insert((below ? moment_b : moment).end(), &moment_all[3 * m], &moment_all[3 * m] + 3);
+    }
+    if (!mid_b.empty() && ground == FarGround::pec)
+        throw Decline{"far field of a below element over a perfect ground"};
     const std::vector<cd> direct = moments_of(g, k, mid, moment);
     std::vector<cd> total = direct;
     if (ground != FarGround::free) {
@@ -1377,11 +1481,7 @@ void far_moments(const Grid &g, double k, const std::vector<double> &mid,
         if (ground == FarGround::pec) {
             for (std::size_t q = 0; q < total.size(); q++) total[q] = c_add(direct[q], img[q]);
         } else {
-            // `_eps_complex`: eps_r - 1j * sigma / (omega * EPS0), CPython's
-            const double omega = 2.0 * 3.141592653589793 * freq_hz;
-            const cd js = py_cmul(cd(0.0, 1.0), cd(sigma, 0.0));
-            const cd frac = py_cdiv(js, cd(omega * 8.854187817e-12, 0.0));
-            const cd eps_c(eps_r - frac.real(), 0.0 - frac.imag());
+            const cd eps_c = eps_complex(eps_r, sigma, freq_hz);
             for (int64_t i = 0; i < g.nt * g.np_; i++) {
                 const double rx = g.rx[i], ry = g.ry[i], rz = g.rz[i];
                 const int64_t it = i / g.np_, ip = i % g.np_;
@@ -1413,6 +1513,15 @@ void far_moments(const Grid &g, double k, const std::vector<double> &mid,
         const double phi_hat[3] = {-sp, cp, 0.0};
         m_theta[i] = dot3(&total[static_cast<std::size_t>(3 * i)], theta_hat);
         m_phi[i] = dot3(&total[static_cast<std::size_t>(3 * i)], phi_hat);
+    }
+    if (!mid_b.empty()) {
+        std::vector<cd> t_theta, t_phi;
+        transmitted_moments(g, k, k_medium_of(eps_complex(eps_r, sigma, freq_hz), k), mid_b, moment_b,
+                            0.0, t_theta, t_phi);
+        for (std::size_t i = 0; i < m_theta.size(); i++) {
+            m_theta[i] = c_add(m_theta[i], t_theta[i]);
+            m_phi[i] = c_add(m_phi[i], t_phi[i]);
+        }
     }
 }
 
@@ -2286,7 +2395,10 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         const int64_t solved = fr.solved_index(static_cast<int64_t>(w));
         if (solved < 0) {
             // a dropped copy (momwire#1042): zero slope at every centre
-            slopes.emplace_back(static_cast<std::size_t>(ne), cd(0.0, 0.0));
+            std::size_t n_s = static_cast<std::size_t>(ne);
+            for (const auto &se : p.mesh.split_elements)
+                if (se.second.centre_piece == static_cast<long long>(w)) n_s++;
+            slopes.emplace_back(n_s, cd(0.0, 0.0));
             continue;
         }
         const double *arc = arc_of(fr, solved);
@@ -2296,9 +2408,14 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
             const cd diff(I[j + 1].real() - I[j].real(), I[j + 1].imag() - I[j].imag());
             slope[j] = np_cdiv(diff, cd(arc[j + 1] - arc[j], 0.0));
         }
+        // A deck element cut at z = 0 (momwire#1281) reads its charge at its
+        // OLD centre, one extra sample appended to the half that holds it.
+        std::vector<double> centres_s;
+        for (int64_t k = 0; k < ne; k++) centres_s.push_back((static_cast<double>(k) + 0.5) * step);
+        for (const auto &se : p.mesh.split_elements)
+            if (se.second.centre_piece == static_cast<long long>(w)) centres_s.push_back(se.second.centre_s);
         std::vector<cd> out;
-        for (int64_t k = 0; k < ne; k++) {
-            double sv = (static_cast<double>(k) + 0.5) * step;
+        for (double sv : centres_s) {
             sv = std::min(std::max(sv, arc[0]), arc[n_knots - 1]);  // np.clip
             // searchsorted(arc, s, side="right") - 1, clamped
             const int64_t right = std::upper_bound(arc, arc + n_knots, sv) - arc;
@@ -2311,7 +2428,15 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     for (std::size_t index = 0; index < p.mesh.element_of.size(); index++) {
         const auto &pe = p.mesh.element_of[index];
         cd current(0.0, 0.0), charge(0.0, 0.0);  // a PHANTOM element's row is exactly 0
-        if (pe.first >= 0) {
+        const auto split = p.mesh.split_elements.find(static_cast<long long>(index));
+        if (pe.first >= 0 && split != p.mesh.split_elements.end()) {
+            const SplitElement &se = split->second;
+            const cd first = knots[static_cast<std::size_t>(se.lower)].front();
+            const cd last = knots[static_cast<std::size_t>(se.upper)].back();
+            current = np_scalar_cmul(cd(0.5, 0.0), cd(first.real() + last.real(), first.imag() + last.imag()));
+            const cd sl = slopes[static_cast<std::size_t>(se.centre_piece)].back();
+            charge = np_cdiv(cd(-sl.real(), -sl.imag()), jw);
+        } else if (pe.first >= 0) {
             const std::vector<cd> &k = knots[static_cast<std::size_t>(pe.first)];
             const int64_t el = pe.second;
             const cd sum(k[el].real() + k[el + 1].real(), k[el].imag() + k[el + 1].imag());
@@ -2516,6 +2641,11 @@ Lines structure_specification(const Deck &deck, const RunDataC &data) {
                     "   WHERE WIRE ENDS TOUCH GROUND, CURRENT WILL BE INTERPOLATED TO IMAGE IN "
                     "GROUND PLANE.",
                     "", ""});
+    const std::vector<std::string> notes = split_notes(deck);
+    if (!notes.empty()) {
+        add(lines, notes);
+        lines.push_back("");
+    }
     lines.push_back(" Number of nodes :" + d(data.node_count, 6));
     lines.push_back(" Number of wire elements :" + d(data.wire_element_count, 6));
     lines.push_back(" Number of patch elements:" + d(0LL, 6));

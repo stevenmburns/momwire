@@ -1459,6 +1459,43 @@ RunOutcome run_one(const Deck &d, SeamResult &r, long long *shared_with) {
 
 }  // namespace
 
+// `_split_notes`: the printout's one line per card split at z = 0
+// (momwire#1281), in the deck's own tag and segment numbering.
+std::vector<std::string> split_notes(const Deck &d) {
+    std::vector<std::string> notes;
+    const std::vector<PlaneCrossing> cs = plane_crossings(d);
+    const auto segments = [](long long a, long long b) {
+        return a == b ? "SEGMENT " + std::to_string(a)
+                      : "SEGMENTS " + std::to_string(a) + "-" + std::to_string(b);
+    };
+    for (const Wire &w : d.wires) {
+        const PlaneCrossing *c = crossing_for(cs, w.tag);
+        if (c == nullptr) continue;
+        const long long n = w.segment_count.i64();
+        const bool below_first = w.end1[2] < 0.0;
+        const std::string first = below_first ? "BELOW" : "ABOVE", second = below_first ? "ABOVE" : "BELOW";
+        const std::string tag = w.tag.str();
+        if (c->node >= 0) {
+            const long long k = c->node;
+            notes.push_back("   WIRE " + tag + " CROSSES Z = 0 AT NODE " + std::to_string(k) +
+                            ": SPLIT THERE INTO " + segments(1, k) + " " + first + " AND " +
+                            segments(k + 1, n) + " " + second + " (momwire#1281).");
+            continue;
+        }
+        const long long s = c->segment + 1;
+        double pa[3], pb[3];
+        grid_point(w, n, s - 1, pa);
+        grid_point(w, n, s, pb);
+        const double centre_z = 0.5 * (pa[2] + pb[2]);
+        notes.push_back("   WIRE " + tag + " CROSSES Z = 0 INSIDE SEGMENT " + std::to_string(s) +
+                        ": SPLIT THERE INTO " + segments(1, s) + " " + first + " AND " +
+                        segments(s, n) + " " + second + ", SEGMENT " + std::to_string(s) +
+                        " SOLVED AS TWO AND PRINTED AT ITS CENTRE, " +
+                        (centre_z < 0.0 ? "BELOW" : "ABOVE") + " (momwire#1281).");
+    }
+    return notes;
+}
+
 SeamResult razor_seam(const std::string &text) {
     SeamResult r;
     StreamRead s = read_stream(text);
