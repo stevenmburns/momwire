@@ -144,3 +144,45 @@ def test_another_release_beside_it_is_refused_in_the_printout(tmp_path):
     text = (tmp_path / "x.out").read_bytes().decode("latin-1")
     assert "the momwire installed beside it is 0.0.1" in text, text
     assert "NEC ERROR" in text
+
+
+SOMM_DIPOLE = FIXTURES / "razor_printout_somm" / "gn0_served_dipole.nec"
+
+
+def test_the_sommerfeld_grid_store_is_its_own_and_moves_no_byte(tmp_path):
+    """The executable keeps its own store of the Sommerfeld masters (S4,
+    Steve 10-15): a GN 0 deck run cold writes it under MOMWIRE_SOMM_CACHE_DIR
+    /exe/<version and build>, a second run reads it, a damaged file is a miss
+    that is refilled, and every printout is the launcher's, byte for byte.
+    With MOMWIRE_SOMM_CACHE=0 nothing is written."""
+    store = tmp_path / "store"
+    env = dict(os.environ, MOMWIRE_SOMM_CACHE_DIR=str(store), MOMWIRE_SOMM_CACHE="1")
+    ref = _run([_launcher(), str(SOMM_DIPOLE), str(tmp_path / "ref.out")], cwd=tmp_path)
+    assert ref.returncode == 0, ref.stderr
+    want = (tmp_path / "ref.out").read_bytes()
+
+    def exe_run(name, extra=None):
+        routes = tmp_path / f"{name}.routes"
+        r = _run(
+            [EXE, str(SOMM_DIPOLE), str(tmp_path / f"{name}.out")],
+            cwd=tmp_path,
+            env={**env, **(extra or {})},
+            routes=routes,
+        )
+        assert r.returncode == 0, r.stderr
+        assert routes.read_text().startswith("cxx"), routes.read_text()
+        assert (tmp_path / f"{name}.out").read_bytes() == want, name
+
+    exe_run("cold")
+    grids = sorted((store / "exe").glob("*/*.grid"))
+    assert grids, list(store.rglob("*"))
+    stamps = [g.read_bytes() for g in grids]
+    exe_run("warm")
+    assert [g.read_bytes() for g in grids] == stamps
+    grids[0].write_bytes(grids[0].read_bytes()[:-9] + b"\0" * 9)
+    exe_run("damaged")
+    assert grids[0].read_bytes() == stamps[0]
+
+    off = tmp_path / "off"
+    exe_run("off", {"MOMWIRE_SOMM_CACHE": "0", "MOMWIRE_SOMM_CACHE_DIR": str(off)})
+    assert not off.exists()

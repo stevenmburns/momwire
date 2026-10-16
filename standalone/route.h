@@ -16,6 +16,11 @@ namespace exe {
 // when the structure half does not serve it (the deck then goes elsewhere).
 long long largest_solve(const std::string &latin1_text);
 
+// The Sommerfeld grid's persistent store for this copy (serial or threaded):
+// `tag` is the executable's identity, its version and build
+// (`somm_core::configure_disk_cache`).
+void configure_grid_cache(const std::string &tag);
+
 // `momwire-nec5-razor-2p`'s printout for this deck, on the executable's own
 // OpenBLAS (the `sys._mw_host_lapack` route). True: `printout` holds the
 // file's bytes. False: declined, `reason` says why. With `arrays_dir`, each
