@@ -4687,10 +4687,10 @@ class RazorSolver(
             if g.lab is not None:
                 # A cross job: the two-radius moments, the observer's ring on
                 # its own segment's surface and the source's on its own
-                # (`_exact_kernel.PointCrossRows`), on the direct rule. Built
-                # each call and never kept (the numpy source, like
-                # `PointRows`), so `sources[i]` stays None.
-                cross = _exact_kernel.PointCrossRows(
+                # (`_exact_kernel.point_cross_rows`: C++ where it serves, the
+                # numpy `PointCrossRows` otherwise), on the direct rule. Built
+                # each call and never kept, so `sources[i]` stays None.
+                cross = _exact_kernel.point_cross_rows(
                     g.x0, g.sgn, g.h, g.a, g.lab, k, 2, max_cached=4 * g.n + 1024
                 )
 

@@ -60,9 +60,10 @@ moments on exactly the pairs whose labels differ. Those tables join the plan:
 the line, its labels and its observers are functions of the segment
 geometry and radii, which the key already holds byte for byte, and they
 count toward `_PLAN_MAX_BYTES` like a group's. The job's moment source does
-NOT join the rows cache: it is the numpy `_exact_kernel.PointCrossRows`
-(the route a test swaps `ring_kernel2` into), rebuilt every call, and it
-never takes the k-series, whose coefficients are one radius's. A deck with
+NOT join the rows cache: it is `_exact_kernel.point_cross_rows`'s (C++
+where it serves; the numpy `PointCrossRows`, the route a test swaps
+`ring_kernel2` into, otherwise), rebuilt every call, and it never takes the
+k-series, whose coefficients are one radius's. A deck with
 no step lists no line, so its plan is the one-radius plan exactly.
 
 Bounded: `_PLAN_ENTRIES` geometries (least recently used out), each with at
@@ -393,8 +394,8 @@ def _group_nbytes(g):
             arrs += [x for x in w[5] if x is not None]
     nbytes = sum(a.nbytes for a in arrs)
     if g.lab is not None:
-        # A cross job keeps no moment source (its numpy `PointCrossRows` is
-        # rebuilt each call), so its tables are all it holds.
+        # A cross job keeps no moment source (`point_cross_rows`' is rebuilt
+        # each call), so its tables are all it holds.
         return nbytes
     # Each group's PointRowsAccel holds at most 4n + 1024 pairs (~80 B each),
     # one per kept wavenumber.

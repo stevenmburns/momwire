@@ -1263,3 +1263,66 @@ class PointCrossRows:
                 self._cache[keys[u]] = vals[:, u].copy()
         out[:, O, J] = vals[:, inv]
         return out
+
+
+_HAVE_POINT_CROSS_ACCEL = _acc is not None and hasattr(
+    _acc, "exact_kernel_point_cross_1438"
+)
+
+
+class PointCrossRowsAccel:
+    """`PointCrossRows` through the C++ kernel (`_exact_kernel_cross_inline.h`,
+    compiled into `_accel_exact_kernel_point.cpp`): the same `rows(x_obs,
+    a_obs, lab_obs)` and `evaluated`, the same key (the quantised c, h,
+    a_obs, a_src), the cache bounded the same way. Not bit-exact with the
+    numpy class (that one sizes its near series per call, from the largest
+    ρ in the batch): every value here is a function of its own pair alone,
+    so the bits do not depend on the batch or the thread count; the
+    agreement is gated at a tolerance (tests/test_exact_kernel_two_radius_
+    1438.py). It is the one implementation the solvers and the standalone
+    razor-2p path (momwire#1479) share."""
+
+    def __init__(self, x0, sgn, h, a, lab, k, nq, max_cached=None, *, n_threads=0):
+        h = np.asarray(h, dtype=np.float64)
+        a = np.asarray(a, dtype=np.float64)
+        self.n = int(h.shape[0])
+        self.nq = nq
+        q = 1e-11 * float(np.max(h)) if self.n else 1.0
+        qa = 1e-11 * float(np.max(a)) if self.n else 1.0
+        self._impl = _acc.ExactKernelPointCrossRows(
+            np.asarray(x0, dtype=np.float64),
+            np.asarray(sgn, dtype=np.float64),
+            h,
+            a,
+            np.asarray(lab, dtype=np.int64),
+            float(k),
+            int(nq),
+            -1 if max_cached is None else int(max_cached),
+            q,
+            qa,
+            _point_rules(),
+            int(n_threads),
+        )
+
+    @property
+    def evaluated(self):
+        return int(self._impl.evaluated)
+
+    def rows(self, x_obs, a_obs, lab_obs):
+        x_obs = np.ascontiguousarray(x_obs, dtype=np.float64)
+        out = np.empty((self.nq, x_obs.shape[0], self.n), dtype=np.complex128)
+        self._impl.rows(
+            x_obs,
+            np.ascontiguousarray(a_obs, dtype=np.float64),
+            np.ascontiguousarray(lab_obs, dtype=np.int64),
+            out,
+        )
+        return out
+
+
+def point_cross_rows(x0, sgn, h, a, lab, k, nq, max_cached=None):
+    """The two-radius point-moment source a solver walks: C++ where it
+    serves (`PointCrossRowsAccel`), else the numpy `PointCrossRows`."""
+    if _HAVE_POINT_CROSS_ACCEL and point_accel_serves(k, nq):
+        return PointCrossRowsAccel(x0, sgn, h, a, lab, k, nq, max_cached=max_cached)
+    return PointCrossRows(x0, sgn, h, a, lab, k, nq, max_cached=max_cached)
