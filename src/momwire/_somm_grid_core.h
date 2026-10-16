@@ -15,6 +15,7 @@
 
 #include <complex>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace somm_core {
@@ -54,6 +55,18 @@ const Grid &get_grid(cd eps_t, double k2, double r1_max, double omega, double mu
 // complex scalar sqrt / arcsin / cos are glibc's csqrt / casin / ccos and its
 // scalar products plain (measured, AVX2 and AVX-512).
 std::vector<cd> far_pack(const Grid &g);
+
+// The executable's own persistent store of the normalized masters (off
+// until configured; the extension and the drivers never configure it).
+// `tag` is the executable's identity (its version and build); the
+// directory is MOMWIRE_SOMM_CACHE_DIR, else the platform cache dir's
+// momwire/sommerfeld, then exe/<tag>. MOMWIRE_SOMM_CACHE=0 (off / false /
+// no) leaves it off; MOMWIRE_SOMM_CACHE_MAX_MB (default 512) bounds it.
+void configure_disk_cache(const std::string &tag);
+struct DiskStats {
+    uint64_t hits = 0, misses = 0, writes = 0, rejected = 0;
+};
+DiskStats disk_stats();
 
 // CPython 3.12's complex division (`_Py_c_quot`), for a caller spelling a
 // Python complex expression (C2 = (eps~ - 1) / (eps~ + 1)).

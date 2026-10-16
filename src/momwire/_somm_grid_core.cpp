@@ -12,12 +12,28 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
+#include <exception>
+#include <mutex>
+#include <thread>
 #include <cmath>
+#include <cctype>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <map>
 #include <memory>
+#include <random>
+#include <sstream>
 #include <stdexcept>
+#include <string>
+#include <system_error>
 #include <tuple>
+#include <vector>
 
 namespace somm_core {
 
@@ -132,10 +148,7 @@ std::vector<Surf> iv_surfaces(cd eps_t, double k2, const std::vector<double> &r1
         if (!(r1[i] == 0.0)) nz.push_back(i);
     std::vector<cd> six(nz.size() * 6);
     const bool free_space = eps_t == cd(1.0, 0.0);
-#if defined(_OPENMP)
-#pragma omp parallel for schedule(dynamic)
-#endif
-    for (std::ptrdiff_t q = 0; q < static_cast<std::ptrdiff_t>(nz.size()); q++) {
+    auto node = [&](std::ptrdiff_t q) {
         const std::size_t i = nz[static_cast<std::size_t>(q)];
         const double c = std::cos(th[i]), s = std::sin(th[i]);
         double rho = r1[i] * c, h = r1[i] * s;
@@ -150,7 +163,43 @@ std::vector<Surf> iv_surfaces(cd eps_t, double k2, const std::vector<double> &r1
             somm_core::six_integrals(eps_t, k2, rho, h, rtol, 0, res);
         }
         for (int k = 0; k < 6; k++) six[static_cast<std::size_t>(q) * 6 + k] = res[k];
+    };
+    const std::ptrdiff_t n_nz = static_cast<std::ptrdiff_t>(nz.size());
+#if defined(_OPENMP)
+#pragma omp parallel for schedule(dynamic)
+    for (std::ptrdiff_t q = 0; q < n_nz; q++) node(q);
+#else
+    // The executable's serial copy has no OpenMP, and a cold fill is seconds
+    // of independent nodes: plain threads, each node its own arithmetic, so
+    // which thread takes it moves no bit. MOMWIRE_THREADS (the executable's
+    // own override) bounds them.
+    unsigned n_thr = std::thread::hardware_concurrency();
+    if (const char *mt = std::getenv("MOMWIRE_THREADS")) {
+        const long v = std::strtol(mt, nullptr, 10);
+        if (v > 0) n_thr = static_cast<unsigned>(v);
     }
+    n_thr = std::max(1u, std::min<unsigned>(n_thr, 64u));
+    if (n_thr == 1 || n_nz < 64) {
+        for (std::ptrdiff_t q = 0; q < n_nz; q++) node(q);
+    } else {
+        std::atomic<std::ptrdiff_t> next{0};
+        std::exception_ptr failed;
+        std::mutex failed_mu;
+        std::vector<std::thread> pool;
+        for (unsigned t = 0; t < n_thr; t++)
+            pool.emplace_back([&] {
+                try {
+                    for (std::ptrdiff_t q = next++; q < n_nz; q = next++) node(q);
+                } catch (...) {
+                    std::lock_guard<std::mutex> lock(failed_mu);
+                    if (!failed) failed = std::current_exception();
+                    next = n_nz;
+                }
+            });
+        for (std::thread &th_ : pool) th_.join();
+        if (failed) std::rethrow_exception(failed);
+    }
+#endif
     const cd jk2 = py_mul(cd(0.0, 1.0), cd(k2, 0.0));  // 1j * k2
     for (std::size_t i = 0; i < n; i++) {
         Surf &o = out[i];
@@ -388,6 +437,280 @@ void eps_rungs(cd eps_t, cd &lo, cd &hi, double &t) {
     hi = cd(re, -hi_im);
 }
 
+// ---------------------------------------------------------------------------
+// The executable's own persistent store of the normalized masters (Steve
+// 10-15: the exe keeps ITS OWN cache, beside Python's, keyed by the exe's
+// version plus the grid's inputs; the first new frequency or ground pays the
+// cold fill once). The masters are the expensive, frequency-independent
+// level; the physical views over them stay in-process, as in Python.
+//
+// The contract is `_somm_disk_cache`'s: a hit is the fill's bytes (raw
+// IEEE doubles, the key re-checked, a checksum over the whole file); any
+// failure is a miss or a skipped write, never an error; writes go to a
+// unique temporary file renamed into place, so concurrent processes and a
+// killed one leave only whole files. Least-recently-used eviction (mtime;
+// a hit refreshes it) keeps the directory under MOMWIRE_SOMM_CACHE_MAX_MB.
+namespace {
+
+namespace fs = std::filesystem;
+
+struct DiskConfig {
+    bool on = false;
+    fs::path dir;
+    std::string tag;
+    uint64_t max_bytes = 512ull << 20;
+};
+DiskConfig g_disk;
+DiskStats g_stats;
+
+const char MAGIC[] = "MWSOMMGRID1\n";
+
+uint64_t fnv1a(const std::string &b) {
+    uint64_t h = 1469598103934665603ull;
+    for (unsigned char c : b) {
+        h ^= c;
+        h *= 1099511628211ull;
+    }
+    return h;
+}
+
+template <class T>
+void put(std::string &b, const T &v) {
+    b.append(reinterpret_cast<const char *>(&v), sizeof(T));
+}
+
+template <class T>
+bool get(const std::string &b, size_t &at, T &v) {
+    if (b.size() - at < sizeof(T) || at > b.size()) return false;
+    std::memcpy(&v, b.data() + at, sizeof(T));
+    at += sizeof(T);
+    return true;
+}
+
+uint64_t bits(double x) {
+    uint64_t u;
+    std::memcpy(&u, &x, sizeof u);
+    return u;
+}
+
+// The file for one master: its key's exact bits, in hex.
+fs::path master_path(const double key[5]) {
+    std::string name = "master";
+    char buf[24];
+    for (int i = 0; i < 5; i++) {
+        std::snprintf(buf, sizeof buf, "-%016llx", static_cast<unsigned long long>(bits(key[i])));
+        name += buf;
+    }
+    return g_disk.dir / (name + ".grid");
+}
+
+std::string serialize(const double key[5], const Grid &g) {
+    std::string b(MAGIC);
+    const uint64_t tl = g_disk.tag.size();
+    put(b, tl);
+    b += g_disk.tag;
+    for (int i = 0; i < 5; i++) put(b, key[i]);
+    const double scalars[13] = {g.eps_t.real(), g.eps_t.imag(), g.lattice_eps.real(),
+                                g.lattice_eps.imag(), g.k2, g.omega, g.mu, g.r1_max,
+                                g.r_break, g.r_near, g.r0_fill, 0.0, 0.0};
+    for (double v : scalars) put(b, v);
+    put(b, static_cast<uint64_t>(g.regions.size()));
+    for (const GridRegion &r : g.regions) {
+        put(b, r.r0);
+        put(b, r.dr);
+        put(b, r.n_r);
+        put(b, r.th0);
+        put(b, r.dth);
+        put(b, r.n_th);
+        put(b, static_cast<uint64_t>(r.vals.size()));
+        b.append(reinterpret_cast<const char *>(r.vals.data()), r.vals.size() * sizeof(cd));
+    }
+    put(b, fnv1a(b));
+    return b;
+}
+
+bool deserialize(const std::string &b, const double key[5], Grid &g) {
+    const size_t m = sizeof(MAGIC) - 1;
+    if (b.size() < m + sizeof(uint64_t) || b.compare(0, m, MAGIC) != 0) return false;
+    uint64_t sum;
+    std::memcpy(&sum, b.data() + b.size() - sizeof sum, sizeof sum);
+    if (fnv1a(b.substr(0, b.size() - sizeof sum)) != sum) return false;
+    size_t at = m;
+    uint64_t tl;
+    if (!get(b, at, tl) || tl > b.size() - at || b.compare(at, tl, g_disk.tag) != 0 ||
+        tl != g_disk.tag.size())
+        return false;
+    at += tl;
+    for (int i = 0; i < 5; i++) {
+        double k;
+        if (!get(b, at, k) || bits(k) != bits(key[i])) return false;
+    }
+    double sc[13];
+    for (double &v : sc)
+        if (!get(b, at, v)) return false;
+    g.eps_t = cd(sc[0], sc[1]);
+    g.lattice_eps = cd(sc[2], sc[3]);
+    g.k2 = sc[4];
+    g.omega = sc[5];
+    g.mu = sc[6];
+    g.r1_max = sc[7];
+    g.r_break = sc[8];
+    g.r_near = sc[9];
+    g.r0_fill = sc[10];
+    uint64_t n_reg;
+    if (!get(b, at, n_reg) || n_reg > 64) return false;
+    g.regions.assign(static_cast<size_t>(n_reg), GridRegion());
+    for (GridRegion &r : g.regions) {
+        uint64_t nv;
+        if (!get(b, at, r.r0) || !get(b, at, r.dr) || !get(b, at, r.n_r) || !get(b, at, r.th0) ||
+            !get(b, at, r.dth) || !get(b, at, r.n_th) || !get(b, at, nv))
+            return false;
+        if (r.n_r < 0 || r.n_th < 0 || nv != static_cast<uint64_t>(4 * r.n_r * r.n_th) ||
+            nv > (b.size() - at) / sizeof(cd))
+            return false;
+        r.vals.resize(static_cast<size_t>(nv));
+        std::memcpy(r.vals.data(), b.data() + at, nv * sizeof(cd));
+        at += nv * sizeof(cd);
+    }
+    return at + sizeof(uint64_t) == b.size();
+}
+
+bool disk_load(const double key[5], Grid &g) {
+    std::error_code ec;
+    const fs::path path = master_path(key);
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::stringstream ss;
+    ss << in.rdbuf();
+    if (!in.good() && !in.eof()) return false;
+    if (!deserialize(ss.str(), key, g)) {
+        g_stats.rejected++;
+        return false;
+    }
+    fs::last_write_time(path, fs::file_time_type::clock::now(), ec);  // LRU
+    return true;
+}
+
+void evict(const fs::path &keep) {
+    std::error_code ec;
+    std::vector<std::pair<fs::file_time_type, fs::path>> files;
+    uint64_t total = 0;
+    const auto now = fs::file_time_type::clock::now();
+    for (const auto &e : fs::directory_iterator(g_disk.dir, ec)) {
+        std::error_code e2;
+        if (!e.is_regular_file(e2)) continue;
+        const fs::path p = e.path();
+        const auto t = fs::last_write_time(p, e2);
+        if (e2) continue;
+        if (p.extension() == ".tmp") {
+            if (now - t > std::chrono::hours(1)) fs::remove(p, e2);
+            continue;
+        }
+        if (p.extension() != ".grid") continue;
+        const uint64_t size = fs::file_size(p, e2);
+        if (e2) continue;
+        total += size;
+        files.emplace_back(t, p);
+    }
+    std::sort(files.begin(), files.end());
+    for (const auto &f : files) {
+        if (total <= g_disk.max_bytes) break;
+        if (f.second == keep) continue;
+        std::error_code e2;
+        const uint64_t size = fs::file_size(f.second, e2);
+        if (!e2 && fs::remove(f.second, e2)) total -= size;
+    }
+}
+
+void disk_store(const double key[5], const Grid &g) {
+    std::error_code ec;
+    fs::create_directories(g_disk.dir, ec);
+    if (ec) return;
+    const fs::path path = master_path(key);
+    std::random_device rd;
+    char tmpname[64];
+    std::snprintf(tmpname, sizeof tmpname, ".%08x%08x.tmp", rd(), rd());
+    const fs::path tmp = g_disk.dir / (path.filename().string() + tmpname);
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) return;
+        const std::string b = serialize(key, g);
+        out.write(b.data(), static_cast<std::streamsize>(b.size()));
+        if (!out) {
+            out.close();
+            fs::remove(tmp, ec);
+            return;
+        }
+    }
+    fs::rename(tmp, path, ec);
+    if (ec) {
+        fs::remove(tmp, ec);
+        return;
+    }
+    g_stats.writes++;
+    evict(path);
+}
+
+}  // namespace
+
+void configure_disk_cache(const std::string &tag) {
+    g_disk = DiskConfig();
+    const char *en = std::getenv("MOMWIRE_SOMM_CACHE");
+    if (en != nullptr) {
+        std::string v(en);
+        v.erase(0, v.find_first_not_of(" \t"));
+        v.erase(v.find_last_not_of(" \t") + 1);
+        for (char &c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (v == "0" || v == "off" || v == "false" || v == "no") return;
+    }
+    fs::path base;
+    const char *dir = std::getenv("MOMWIRE_SOMM_CACHE_DIR");
+    if (dir != nullptr && dir[0] != '\0') {
+        base = dir;
+    } else {
+#if defined(_WIN32)
+        const char *la = std::getenv("LOCALAPPDATA");
+        const char *home = std::getenv("USERPROFILE");
+        if (la != nullptr && la[0] != '\0')
+            base = fs::path(la);
+        else if (home != nullptr)
+            base = fs::path(home) / "AppData" / "Local";
+        else
+            return;
+        base = base / "momwire" / "Cache" / "sommerfeld";
+#elif defined(__APPLE__)
+        const char *home = std::getenv("HOME");
+        if (home == nullptr) return;
+        base = fs::path(home) / "Library" / "Caches" / "momwire" / "sommerfeld";
+#else
+        const char *xdg = std::getenv("XDG_CACHE_HOME");
+        const char *home = std::getenv("HOME");
+        if (xdg != nullptr && xdg[0] != '\0')
+            base = fs::path(xdg);
+        else if (home != nullptr)
+            base = fs::path(home) / ".cache";
+        else
+            return;
+        base = base / "momwire" / "sommerfeld";
+#endif
+    }
+    // The tag names a directory: keep it to a portable alphabet.
+    std::string safe;
+    for (char c : tag) safe += (std::isalnum(static_cast<unsigned char>(c)) || c == '.' || c == '-') ? c : '_';
+    if (safe.empty()) return;
+    const char *mb = std::getenv("MOMWIRE_SOMM_CACHE_MAX_MB");
+    if (mb != nullptr && mb[0] != '\0') {
+        char *end = nullptr;
+        const double v = std::strtod(mb, &end);
+        if (end != mb && std::isfinite(v)) g_disk.max_bytes = static_cast<uint64_t>(std::max(v, 0.0) * (1 << 20));
+    }
+    g_disk.on = true;
+    g_disk.dir = base / "exe" / safe;
+    g_disk.tag = tag;
+}
+
+DiskStats disk_stats() { return g_stats; }
+
 namespace {
 
 using CKey = std::tuple<double, double, double, double, double>;  // eps re/im, r1b, lattice re/im
@@ -398,8 +721,18 @@ const Grid &norm_master(cd rung, double r1b_wl, cd lattice_eps) {
     const CKey key{rung.real(), rung.imag(), r1b_wl, lattice_eps.real(), lattice_eps.imag()};
     auto it = cache.find(key);
     if (it == cache.end()) {
-        auto g = std::make_unique<Grid>(
-            fill_grid(rung, K2_REF, r1b_wl, 1e-6, K2_REF * C_LIGHT, MU0, lattice_eps));
+        const double dkey[5] = {rung.real(), rung.imag(), r1b_wl, lattice_eps.real(),
+                                lattice_eps.imag()};
+        auto g = std::make_unique<Grid>();
+        if (g_disk.on && disk_load(dkey, *g)) {
+            g_stats.hits++;
+        } else {
+            *g = fill_grid(rung, K2_REF, r1b_wl, 1e-6, K2_REF * C_LIGHT, MU0, lattice_eps);
+            if (g_disk.on) {
+                g_stats.misses++;
+                disk_store(dkey, *g);
+            }
+        }
         it = cache.emplace(key, std::move(g)).first;
     }
     return *it->second;
