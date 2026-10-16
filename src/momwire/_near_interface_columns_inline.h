@@ -311,10 +311,10 @@ struct Scratch {
 // from its members: the slowest-decaying member, and so the one the extents
 // must be converged for.
 template <class ZB, class PB>
-static double s_min_of(const ZB &zb, const PB &pb, py::ssize_t lo,
-                       py::ssize_t hi) {
+static double s_min_of(const ZB &zb, const PB &pb, std::ptrdiff_t lo,
+                       std::ptrdiff_t hi) {
     double s_min = zb(lo) - pb(lo);
-    for (py::ssize_t i = lo + 1; i < hi; ++i)
+    for (std::ptrdiff_t i = lo + 1; i < hi; ++i)
         s_min = std::min(s_min, zb(i) - pb(i));
     return s_min;
 }
