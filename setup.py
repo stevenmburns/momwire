@@ -317,6 +317,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_bspline_static_moments_inline.h",
     "src/momwire/_bspline_ek_moments_inline.h",
     "src/momwire/_contour_engine_inline.h",
+    "src/momwire/_somm_below_six_inline.h",
     # The shared preamble of the split TUs (momwire#687): includes, the OpenMP
     # simd declarations and the cancellation machinery. Every accelerator TU
     # includes it, so an edit here must rebuild all of them -- the momwire#568
@@ -369,6 +370,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_buried_core.h",
     "src/momwire/_somm_below_proj_core.h",
     "src/momwire/_somm_below_grid_core.h",
+    "src/momwire/_somm_below_fill_core.h",
     "src/momwire/_near_interface_core.h",
     "src/momwire/_near_interface_eval.h",
     "src/momwire/_razor_crossing_core.h",
@@ -419,6 +421,10 @@ _ACCEL_SOURCES = [
     # The below/below grid's state, key and sources (momwire#1512 B2; its
     # fill is B5's). No float arithmetic beyond the key.
     "src/momwire/_somm_below_grid_core.cpp",
+    # B5: the below/below table filled with no Python (the integrand and the
+    # one-node contour are `_somm_below_six_inline.h`, which
+    # `_accel_mw568.cpp` includes too: one code, one set of bits).
+    "src/momwire/_somm_below_fill_core.cpp",
     # S3: the grid itself, which the C++ front half builds for the composing
     # ground (`_razor_front_core.cpp`, linked here as well).
     "src/momwire/_somm_grid_core.cpp",
@@ -528,6 +534,7 @@ _ACCEL_SOURCES = [
 # re-vendoring) one silently re-installs the old binary.
 _NEAR_HEADERS = [
     "src/momwire/_contour_engine_inline.h",
+    "src/momwire/_somm_below_six_inline.h",
     # The shared branch cut (#714) -- this extension carries the third
     # call site, so an edit to it must rebuild this .so too.
     "src/momwire/_branch_cut_inline.h",

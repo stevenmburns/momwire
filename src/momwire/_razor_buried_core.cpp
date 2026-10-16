@@ -4,6 +4,7 @@
 #include "_razor_crossing_core.h"
 
 #include "_somm_below_grid_core.h"
+#include "_somm_below_fill_core.h"
 #include "_somm_below_proj_core.h"
 #include "_somm_grid_core.h"
 #include "_somm_proj_core.h"
@@ -690,8 +691,8 @@ MediumPart medium_part(const Front &f, bool below) {
     return mp;
 }
 
-std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stages,
-                        uintptr_t cancel_flag) {
+static std::string fill_buried_inner(const Front &f, std::vector<cd> &out, BuriedStages *stages,
+                                     uintptr_t cancel_flag) {
     if (f.buried == Buried::none) throw std::invalid_argument("fill_buried: not a buried deck");
     const int64_t n = f.n_basis;
     const auto record = [&](const char *name) {
@@ -777,6 +778,17 @@ std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stag
     if (!f.load_rows.empty()) add_loading(f, out);
     record("final");
     return "";
+}
+
+// `fill_buried_inner`, with the below table's `_refuse_if_capped` raised as
+// the ValueError Python raises from the fill.
+std::string fill_buried(const Front &f, std::vector<cd> &out, BuriedStages *stages,
+                        uintptr_t cancel_flag) {
+    try {
+        return fill_buried_inner(f, out, stages, cancel_flag);
+    } catch (const somm_below::TailCapped &e) {
+        throw FrontError(FrontErrorKind::value_error, e.what(), true);
+    }
 }
 
 }  // namespace razor

@@ -693,6 +693,17 @@ void configure_disk_cache(const std::string &tag) {
 
 DiskStats disk_stats() { return g_stats; }
 
+bool disk_location(std::filesystem::path &dir, std::string &tag) {
+    if (!g_disk.on) return false;
+    dir = g_disk.dir;
+    tag = g_disk.tag;
+    return true;
+}
+
+void disk_evict(const std::filesystem::path &keep) {
+    if (g_disk.on) evict(keep);
+}
+
 namespace {
 
 using CKey = std::tuple<double, double, double, double, double>;  // eps re/im, r1b, lattice re/im
