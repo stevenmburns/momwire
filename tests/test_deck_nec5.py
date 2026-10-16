@@ -436,7 +436,9 @@ REFUSALS = [
     # that is neither 0 nor 1 refuses.
     pytest.param(("NH 2,1,1,1,0.,0.,0.,0.,0.,0.",), "NH", id="nh-coordinates-2"),
     pytest.param(("GX 0,101",), "GX", id="symmetry"),
-    pytest.param(("FR 0,3,0,0,14.,0.05",), "FR", id="fr-multipoint"),
+    # A stepping FR is served since momwire#1508; a stepping type NEC does
+    # not define is what still refuses.
+    pytest.param(("FR 2,3,0,0,14.,0.05",), "FR", id="fr-stepping-type-2"),
     pytest.param(("EX 4,1,-2,0,1.,0.",), "EX", id="node-minus-two"),
     pytest.param(("EX 4,1,0,0,1.,0.",), "EX", id="node-literal-zero"),
     pytest.param(("EX 4,1,12,0,1.,0.",), "EX", id="node-past-the-wire-end"),

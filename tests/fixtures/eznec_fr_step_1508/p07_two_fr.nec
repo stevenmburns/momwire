@@ -1,0 +1,10 @@
+CM momwire#1508 probe p07_two_fr
+CE
+GW 1 21 0 -2.5 10 0 2.5 10 0.001
+GE 0
+EX 0 1 11 0 1 0
+FR 0 2 0 0 28 1
+XQ
+FR 0 2 0 0 14 1
+XQ
+EN

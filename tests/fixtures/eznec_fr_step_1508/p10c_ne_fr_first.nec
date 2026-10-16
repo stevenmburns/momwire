@@ -1,0 +1,8 @@
+CM momwire#1508 probe p10c_ne_fr_first
+CE
+GW 1 21 0 -2.5 10 0 2.5 10 0.001
+GE 0
+FR 0 2 0 0 28 1
+EX 0 1 11 0 1 0
+NE 0 1 1 3 0 0 9 0 0 1
+EN
