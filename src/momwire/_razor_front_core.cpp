@@ -904,8 +904,7 @@ std::string Front::build(const FrontInputs &in) {
     // `_schedule.elem_rows(_CHUNK_ELEMS, n_path * n_basis)`
     window_rows = std::max<int64_t>(1, in.chunk_elems / std::max<int64_t>(1, 2 * n_basis));
     chunk_elems = in.chunk_elems;
-    // The correction's geometry-only tables; a radius step on a coaxial line
-    // needs the two-radius jobs, which this route does not serve yet.
+    // The correction's geometry-only tables.
     exact_plan.groups.clear();
     if (exact) {
         const std::string why = build_exact_plan(*this, exact_plan);

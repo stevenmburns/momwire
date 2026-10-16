@@ -45,9 +45,7 @@ namespace exact_kernel_point_1433 {
 #define MW_EK_RELEASE_GIL py::gil_scoped_release release;
 #include "_exact_kernel_point_inline.h"
 
-// momwire#1438's two-radius point moments (`PointCrossRows`), in the GIL
-// release scope's spelling this TU uses.
-#define MW_EK_RELEASE_GIL py::gil_scoped_release release;
+// momwire#1438's two-radius point moments (`PointCrossRows`).
 #include "_exact_kernel_cross_inline.h"
 
 static Rules make_rules(py::array_t<double, py::array::c_style | py::array::forcecast> xg,

@@ -30,12 +30,11 @@
 // ground (`ground_z` with no `ground_eps`, which is also what the NEC-5 seam
 // builds for a GD card), a real k, razor-2p's two-point path rule
 // (`nec5_quadrature=True`), with or without the extended kernel, and the
-// exact ring kernel where "auto" engages it on one radius per coaxial line
-// (`_razor_exact_core.h`). Anything else `build` declines BY NAME (returns
-// the reason) and the caller keeps the Python front half: a wire listed
-// twice (momwire#1042's merge), declared `junctions=`, a wire below the
-// plane (the shared buried sentences), `exact_kernel=True`, and a radius
-// step on a coaxial line ("exact-kernel-cross"). Inside the scope every refusal the Python front half raises is
+// exact ring kernel where "auto" engages it (`_razor_exact_core.h`, radius
+// steps included). Anything else `build` declines BY NAME (returns the
+// reason) and the caller keeps the Python front half: a wire listed twice
+// (momwire#1042's merge), declared `junctions=`, a wire below the plane
+// (the shared buried sentences), `exact_kernel=True`. Inside the scope every refusal the Python front half raises is
 // raised here as a `FrontError` of the same kind with the same message, in
 // the same order.
 //
