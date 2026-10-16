@@ -21,6 +21,7 @@
 #include <cfloat>
 #include <cmath>
 #include <complex>
+#include <new>
 #include <tuple>
 #include <functional>
 #include <cstdint>
@@ -106,7 +107,7 @@ std::string f(double x, int width, int digits) { return py_format_f(x, width, di
 // `_e_fortran`: a three-digit exponent drops its `E` to keep the width. A
 // non-finite value has no `E` to split on, and Python raises there.
 std::string e_fortran(double x, int width, int digits) {
-    if (!std::isfinite(x)) throw Decline{"a non-finite lower-medium range cell (Python raises)"};
+    if (!std::isfinite(x)) throw Decline{"a non-finite lower-medium range cell (the reference raises)"};
     std::string text = py_format_e(x, 0, digits);
     const std::size_t at = text.find('E');
     const int exponent = std::atoi(text.c_str() + at + 1);
@@ -132,7 +133,7 @@ cd py_cdiv(cd a, cd b) {
     const double abs_breal = b.real() < 0 ? -b.real() : b.real();
     const double abs_bimag = b.imag() < 0 ? -b.imag() : b.imag();
     if (abs_breal >= abs_bimag) {
-        if (abs_breal == 0.0) throw Decline{"a complex division by zero (Python raises)"};
+        if (abs_breal == 0.0) throw Decline{"a complex division by zero (the reference raises)"};
         const double ratio = b.imag() / b.real();
         const double denom = b.real() + b.imag() * ratio;
         return cd((a.real() + a.imag() * ratio) / denom, (a.imag() - a.real() * ratio) / denom);
@@ -533,7 +534,7 @@ std::vector<cd> np_solve(const NumpyLinalg &np, const CMat &a, const std::vector
     const np_int lda = std::max<np_int>(n, 1), ldb = lda;
     np_int info = 0;
     np.zgesv(&n, &nrhs, af.data(), &lda, ipiv.data(), x.data(), &ldb, &info);
-    if (info > 0) throw Decline{"a singular drive block (numpy raises)"};
+    if (info > 0) throw Decline{"a singular drive block (the reference raises)"};
     return x;
 }
 
@@ -564,7 +565,7 @@ CMat np_solve_matrix(const NumpyLinalg &np, const CMat &a, const CMat &b) {
         std::vector<np_int> ipiv(static_cast<std::size_t>(n));
         np_int info = 0;
         np.zgesv(&nn, &nrhs, af.data(), &lda, ipiv.data(), bf.data(), &ldb, &info);
-        if (info > 0) throw Decline{"a singular loaded admittance (numpy raises)"};
+        if (info > 0) throw Decline{"a singular loaded admittance (the reference raises)"};
     }
     CMat x(n, k);
     for (int64_t j = 0; j < k; j++)
@@ -928,7 +929,7 @@ NetSolve reduced_state(const Prepared &p, int64_t n, const std::vector<cd> &volt
               r.data(), cc.data(), b.data(), &nn, x.data(), &nn, &rcond, &ferr, &berr,
               work.data(), rwork.data(), &info, 1, 1, 1);
     if ((0 < info && info <= nn) || !std::isfinite(rcond) || rcond < 1e-12)
-        throw Decline{"a singular network (Python raises SingularNetworkError)"};
+        throw Decline{"a singular network (the reference raises SingularNetworkError)"};
     // `reduced_ports`
     NetSolve out;
     out.v_applied.assign(x.begin(), x.begin() + n);
@@ -1625,7 +1626,7 @@ std::vector<double> near_points(const Request &rq) {
     for (int i = 0; i < 3; i++)
         if (!rq.counts[i].fits_i64()) throw Decline{"a near-field count past 64 bits"};
     if (!rq.coordinates.fits_i64() || (rq.coordinates.i64() != 0 && rq.coordinates.i64() != 1))
-        throw Decline{"a near-field coordinate system other than 0 or 1 (Python raises)"};
+        throw Decline{"a near-field coordinate system other than 0 or 1 (the reference raises)"};
     const int64_t nx = rq.counts[0].i64(), ny = rq.counts[1].i64(), nz = rq.counts[2].i64();
     if (nx < 0 || ny < 0 || nz < 0 || nx * ny * nz > 10000000) throw Decline{"a near-field grid out of range"};
     std::vector<double> out;
@@ -3090,11 +3091,21 @@ PrintoutResult razor_printout(const std::string &text, const std::string &basis,
         out.raised_kind.clear();
         out.reason = dcl.reason;
         return out;
+    } catch (const std::bad_alloc &ex) {
+        out.raised_kind.clear();
+        out.reason = std::string("C++ printout failed: ") + ex.what();
+        out.cxx_failed = true;
+        out.failure_kind = "MemoryError";
+        out.failure_message = ex.what();
+        return out;
     } catch (const std::exception &ex) {
         // Nothing Python prints (memory, a layout this file does not
         // replay): never a printout of our own; the caller falls back.
         out.raised_kind.clear();
         out.reason = std::string("C++ printout failed: ") + ex.what();
+        out.cxx_failed = true;
+        out.failure_kind = "RuntimeError";
+        out.failure_message = ex.what();
         return out;
     }
     out.route = PrintoutResult::printed;
