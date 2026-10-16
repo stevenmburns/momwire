@@ -337,6 +337,12 @@ _ACCEL_HEADERS = [
     "src/momwire/_razor_solve_core.h",
     "src/momwire/_razor_front_core.h",
     "src/momwire/_razor_wire_loading_core.h",
+    # The exact ring kernel's point moments, Python-free (momwire#1479): the
+    # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
+    # and razor's exact-kernel plan and correction for the C++ route.
+    "src/momwire/_exact_kernel_point_inline.h",
+    "src/momwire/_exact_kernel_point_core.h",
+    "src/momwire/_razor_exact_core.h",
     # The frozen Gauss-Legendre rules, generated from `_leggauss_table.py`
     # (scripts/gen_leggauss_header.py), read by the front half.
     "src/momwire/_leggauss_table.h",
@@ -417,6 +423,12 @@ _ACCEL_SOURCES = [
     # the port columns), Python-free; `_accel_razor_solve.cpp` binds it too.
     # Its own TU: it calls no kernel and no kernel calls it.
     "src/momwire/_razor_front_core.cpp",
+    # The front half's exact ring kernel (momwire#1479): the plan and the
+    # correction, and the point moments' Python-free twin of
+    # `_accel_exact_kernel_point.cpp` (the same inline text, so the same
+    # bits). Their own TUs for 1410's reason.
+    "src/momwire/_razor_exact_core.cpp",
+    "src/momwire/_exact_kernel_point_core.cpp",
     "src/momwire/_accel_razor_solve.cpp",
     # The NEC-5 deck reader (unit 2a of the standalone razor-2p executable):
     # `deck/_nec5.py` and the EZNEC seam's text-level front in C++, Python-
