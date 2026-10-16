@@ -48,7 +48,8 @@ void dump_arrays(const std::string &dir, const std::vector<nec5::RunArrays> &arr
 }  // namespace
 
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
-            const std::string &arrays_dir, std::string &printout, std::string &reason) {
+            const std::string &arrays_dir, std::string &printout, std::string &reason, bool *failed,
+            std::string *failure_kind, std::string *failure_message, std::string *raised_kind) {
     razor::Lapack lp;
     lp.getrf = reinterpret_cast<razor::zgetrf_fn>(&MWX(zgetrf_));
     lp.getrs = reinterpret_cast<razor::zgetrs_fn>(&MWX(zgetrs_));
@@ -67,9 +68,13 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
                                                         arrays_dir.empty() ? nullptr : &arrays);
     if (r.route != nec5::PrintoutResult::printed) {
         reason = r.reason;
+        if (failed) *failed = r.cxx_failed;
+        if (failure_kind) *failure_kind = r.failure_kind;
+        if (failure_message) *failure_message = r.failure_message;
         return false;
     }
     printout = r.printout;
+    if (raised_kind) *raised_kind = r.raised_kind;
     if (!arrays_dir.empty()) dump_arrays(arrays_dir, arrays);
     return true;
 }

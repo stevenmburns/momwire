@@ -44,6 +44,8 @@
 //   MW_EXE_PYSTARTUP=FILE    the fallback execs FILE before answering
 //   MW_EXE_TIMES=1           a timing line on stderr
 //   MW_EXE_COPY=threads      one thread through the OpenMP copy, not the serial one
+//   MW_EXE_FAIL=alloc|runtime  (no-Python build) throw from the solve, to test
+//                            the INTERNAL ERROR printout
 #include "_nec5_deck_core.h"
 #include "_nec5_razor_printout_core.h"
 #include "route.h"
@@ -51,8 +53,10 @@
 #include "route.h"
 #undef mw
 
+#if !MW_EXE_NO_PYTHON
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>  // declarations and PyConfig's layout only; NOT linked
+#endif
 
 #if defined(_WIN32)
 #define NOMINMAX
@@ -60,7 +64,9 @@
 #else
 #include <dirent.h>
 #include <sched.h>
+#if !MW_EXE_NO_PYTHON
 #include <dlfcn.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -75,6 +81,8 @@
 #include <iterator>
 #include <sstream>
 #include <string>
+#include <new>
+#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -209,6 +217,7 @@ __attribute__((constructor(101))) void one_blas_thread_at_load() {
 }
 #endif
 
+#if !MW_EXE_NO_PYTHON
 // --- where momwire's Python lives -------------------------------------------
 // MOMWIRE_PYTHON_HOME names a venv (or an unpacked environment with the same
 // shape); else the build's MW_DEFAULT_PYTHON_HOME. The interpreter library is
@@ -288,14 +297,18 @@ std::string installed_version(const std::string &home) {
     return "";
 }
 
+#endif  // !MW_EXE_NO_PYTHON
+
 // --- the C++ route's preconditions ------------------------------------------
 
 // The C++ kernels are the avx2 variant's; they answer only where Python would
 // load that variant (`momwire._accel`: AVX2 + FMA, no MOMWIRE_FORCE_VARIANT
 // naming another).
 bool cxx_variant_ok() {
+#if !MW_EXE_NO_PYTHON
     const std::string forced = env("MOMWIRE_FORCE_VARIANT");
     if (!forced.empty() && forced != "avx2") return false;
+#endif
 #if defined(_WIN32)
     return IsProcessorFeaturePresent(40 /* PF_AVX2_INSTRUCTIONS_AVAILABLE */) != 0;
 #elif defined(__x86_64__) || defined(__i386__)
@@ -306,6 +319,7 @@ bool cxx_variant_ok() {
 #endif
 }
 
+#if !MW_EXE_NO_PYTHON
 // `_gmo.requests_gmo`, conservatively: any `GE` line that does not read
 // cleanly with a zero third field sends the deck to Python, which writes the
 // `.GMO` file the C++ route does not.
@@ -536,8 +550,11 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
     }
 }
 
+#endif  // !MW_EXE_NO_PYTHON
+
 }  // namespace
 
+#if !MW_EXE_NO_PYTHON
 int main(int argc, char **argv) {
     const std::vector<std::string> args(argv + 1, argv + argc);
 
@@ -628,3 +645,286 @@ int main(int argc, char **argv) {
     log_route("fallback:" + why, deck);
     return fallback(home, args);
 }
+#endif  // !MW_EXE_NO_PYTHON
+
+#if MW_EXE_NO_PYTHON
+// ============================================================================
+// The no-Python build (momwire#1512 step 1): `momwire-razor2p-standalone`.
+//
+// Everything the launcher does, in this process, with nothing loaded: the
+// client's argv rules (`momwire_eznec_client.main`: `-version`, 4nec2's
+// stdin form, its argument errors, SimNEC's refused streaming call) and the
+// one-shot shell's frame (`_shell.main` / `run`: an unreadable deck, the
+// deck closed by EN for the stdin form, the `.GMO` file, the printout
+// written CRLF, and the INTERNAL ERROR printout for anything that escapes,
+// re-reading the deck for its echo, with `UNABLE TO OPEN FILE <path>` on
+// stdout when the printout itself cannot be written). A deck the C++ route
+// declines -- the hybrid's fallback -- is a refusal printout naming why
+// ("not served by this build: ..."), and so is a CPU without AVX2 / FMA.
+// ============================================================================
+#include "launcher.h"
+
+#include <cerrno>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
+
+namespace {
+
+namespace ml = mw::launcher;
+
+// `momwire_eznec_client`'s argument errors (its own, not the shell's) and
+// its streaming refusal; `_shell.UNABLE_TO_OPEN` for an unwritable printout.
+const char *const ARGUMENT_ERROR_INPUT = "UNABLE TO OPEN FILE";
+const char *const ARGUMENT_ERROR_OUTPUT = "UNABLE TO OPEN SECOND FILE";
+const char *const UNABLE_TO_OPEN = "UNABLE TO OPEN FILE";
+const char *const STREAMING_REFUSAL =
+    "momwire does not serve the streaming mode ('- -': decks on stdin, printouts on stdout) that "
+    "SimNEC 5.4 uses for NEC5CL_a5x engines; give it two file paths, as SimNEC does for every "
+    "other NEC-5 engine (momwire#1395)";
+
+const mw::nec5::EngineStamp STAMP{VERSION, "avx2", ""};
+
+// `probe_version`: NEC5momwire.<major>.<minor>, this build's release.
+std::string probe_version() {
+    const std::string v = VERSION;
+    const std::size_t a = v.find('.');
+    const std::size_t b = a == std::string::npos ? a : v.find('.', a + 1);
+    if (a == std::string::npos) return "NEC5momwire.0.0";
+    const std::string minor = v.substr(a + 1, b == std::string::npos ? std::string::npos : b - a - 1);
+    return "NEC5momwire." + v.substr(0, a) + "." + minor;
+}
+
+// `_shell.read_deck`: the file's bytes, false for anything open/read refuses
+// (a directory included, as Python's IsADirectoryError).
+bool read_deck(const std::string &path, std::string &out) {
+    out.clear();
+#if !defined(_WIN32)
+    const int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) return false;
+    struct stat st;
+    if (fstat(fd, &st) != 0 || S_ISDIR(st.st_mode)) {
+        close(fd);
+        return false;
+    }
+    char buf[65536];
+    for (;;) {
+        const ssize_t r = read(fd, buf, sizeof buf);
+        if (r < 0) {
+            if (errno == EINTR) continue;
+            close(fd);
+            return false;
+        }
+        if (r == 0) break;
+        out.append(buf, static_cast<std::size_t>(r));
+    }
+    close(fd);
+    return true;
+#else
+    return read_file(path, out);
+#endif
+}
+
+// An `open(path, "w")` + write: 0, or the errno Python's OSError carries.
+int write_file(const std::string &path, const std::string &bytes) {
+    errno = 0;
+    std::FILE *w = std::fopen(path.c_str(), "wb");
+    if (w == nullptr) return errno ? errno : EIO;
+    const std::size_t n = std::fwrite(bytes.data(), 1, bytes.size(), w);
+    int err = n == bytes.size() ? 0 : (errno ? errno : EIO);
+    if (std::fclose(w) != 0 && err == 0) err = errno ? errno : EIO;
+    return err;
+}
+
+std::string refusal(const std::string *latin1, const std::string &utf8_reason) {
+    return mw::nec5::printout_bytes(mw::nec5::render_refusal(latin1, utf8_reason, BASIS, STAMP));
+}
+
+// The sentence for a deck the C++ route declines: what is not served, by
+// the route's own reason, in words where the reason is a short name.
+std::string not_served(std::string why) {
+    static const std::pair<const char *, const char *> words[] = {
+        {"finite-ground-buried", "a wire below a finite ground (GN 0 / GN 2), which this build does not solve yet"},
+        {"stepping-fr", "a stepping FR, which this build does not solve yet"},
+        {"duplicated-wire", "a deck in which two wires coincide"},
+        {"no-wires", "a deck with no wire to solve"},
+        {"segment-count", "a segment count past what this build sizes"},
+        {"non-finite-geometry", "a wire coordinate that is not a finite number"},
+        {"non-finite-radius", "a wire radius that is not a finite number"},
+        {"non-finite-frequency", "a frequency that is not a finite number"},
+        {"wire-loading-values", "a wire-loading value (LD 2 / LD 3 / LD 5) this build does not take"},
+        {"load-values", "a load value this build does not take"},
+        {"node-key-range", "a coordinate too large to place on the node grid"},
+        {"node-range", "a node number too large for this build"},
+        {"phantom-threshold", "a wire too close to the phantom-wire threshold to classify"},
+        {"crossing-tolerance", "a wire crossing the ground plane too close to call"},
+        {"source-text-encoding", "deck text this build does not read"},
+        {"network-card-order", "network cards in an order this build does not read"},
+    };
+    std::string head = why, tail;
+    const std::size_t colon = why.find(':');
+    if (colon != std::string::npos && why.compare(0, colon, "front") == 0) {
+        head = why.substr(colon + 1);
+        tail = " (front half)";
+    }
+    for (const auto &w : words)
+        if (head == w.first) return std::string("not served by this build: ") + w.second + tail;
+    // a sentence with Python's or numpy's name for its exception: the
+    // sentence alone (this build has neither)
+    const std::size_t paren = why.find(" (");
+    if (paren != std::string::npos) why = why.substr(0, paren);
+    return "not served by this build: " + why;
+}
+
+std::string internal_error_reason(const std::string &kind, const std::string &message) {
+    return "INTERNAL ERROR IN MOMWIRE ENGINE - " + kind + ": " + message;
+}
+
+// `_shell._report_internal_error`: the deck re-read for its echo; the
+// printout path itself unwritable -> stdout.
+void report_internal_error(const std::string &deck, const std::string &out,
+                           const std::string &reason) {
+    std::string text;
+    const bool readable = read_deck(deck, text);
+    if (write_file(out, refusal(readable ? &text : nullptr, reason)) != 0)
+        std::printf("%s %s\n", UNABLE_TO_OPEN, out.c_str());
+}
+
+// `_shell.render` for a deck's text, through the C++ route: the printout's
+// bytes. A route decline is a refusal; an escaped C++ exception is thrown
+// as the PyError the INTERNAL ERROR frame reports.
+std::string render(const std::string &deck_path, const std::string &text, int forced_threads,
+                   bool &raised) {
+    raised = false;
+    if (!cxx_variant_ok())
+        return refusal(&text,
+                       "not served by this build: this processor lacks AVX2 and FMA, which this "
+                       "build's kernels need");
+    const Clock::time_point t = Clock::now();
+    {
+        const std::string tag = std::string(VERSION) + "-" + __DATE__ + "-" + __TIME__;
+        mws::exe::configure_grid_cache(tag);
+        mw::exe::configure_grid_cache(tag);
+    }
+    int threads = forced_threads;
+    if (forced_threads <= 0) {
+        const long long n = mws::exe::largest_solve(text);
+        threads = n >= 0 ? threads_for(n) : 1;
+    }
+    const std::string arrays_dir = env("MW_EXE_ARRAYS");
+    std::string printout, why, kind, message, raised_kind;
+    bool failed = false, printed;
+    const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads";
+    if (serial) {
+        set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
+        printed = mws::exe::answer(text, VERSION, "avx2", arrays_dir, printout, why, &failed, &kind,
+                                   &message, &raised_kind);
+    } else {
+        set_threads(threads, true);
+        printed = mw::exe::answer(text, VERSION, "avx2", arrays_dir, printout, why, &failed, &kind,
+                                  &message, &raised_kind);
+    }
+    if (printed) {
+        // An exception Python's render raises (the INTERNAL ERROR printout
+        // the route wrote): `run` then writes no .GMO.
+        raised = !raised_kind.empty();
+        log_route(serial ? "cxx:serial" : "cxx:threads", deck_path);
+        if (env("MW_EXE_TIMES") == "1")
+            std::fprintf(stderr, "cxx: threads %d, answer %.3f ms, total %.3f ms\n", threads,
+                         ms_since(t), ms_since(T0));
+        return printout;
+    }
+    if (failed) throw ml::PyError{kind, message};
+    std::string logged = why;
+    for (char &c : logged)
+        if (c == ' ') c = '_';
+    log_route("refused:" + logged, deck_path);
+    return refusal(&text, not_served(why));
+}
+
+// `_shell.run` inside `_shell.main`'s last line of defence.
+int run_deck(const std::string &deck, const std::string &out, bool en_optional,
+             int forced_threads) {
+    try {
+        std::string text, printout, gmo;
+        bool has_gmo = false;
+        if (!read_deck(deck, text)) {
+            printout = refusal(nullptr, "UNABLE TO READ INPUT FILE " +
+                                            ml::os_bytes_to_utf8(ml::path_str(deck)));
+            log_route("unreadable", deck);
+        } else {
+            if (en_optional) text = ml::close_deck(text);
+            // gate hook: an exception from the solve, as memory would raise
+            const std::string inject = env("MW_EXE_FAIL");
+            if (inject == "alloc") throw std::bad_alloc();
+            if (inject == "runtime") throw std::runtime_error("injected by MW_EXE_FAIL");
+            bool raised = false;
+            printout = render(deck, text, forced_threads, raised);
+            if (!raised) try {
+                has_gmo = ml::gmo_text(text, gmo);
+            } catch (const ml::PyError &e) {
+                if (!e.kind.empty()) throw;
+                // a geometry this build does not lay out: say so in the
+                // printout rather than write a file Python would not
+                printout = refusal(&text, not_served(e.message));
+                has_gmo = false;
+            }
+        }
+        if (has_gmo) {
+            std::string crlf;
+            for (char c : gmo) {
+                if (c == '\n') crlf += '\r';
+                crlf += c;
+            }
+            const std::string path = ml::gmo_path(out);
+            if (const int err = write_file(path, crlf)) throw ml::os_error(err, path);
+        }
+        if (const int err = write_file(out, printout)) throw ml::os_error(err, out);
+        return 0;
+    } catch (const ml::PyError &e) {
+        report_internal_error(deck, out, internal_error_reason(e.kind, e.message));
+    } catch (const std::bad_alloc &e) {
+        report_internal_error(deck, out, internal_error_reason("MemoryError", e.what()));
+    } catch (const std::exception &e) {
+        report_internal_error(deck, out, internal_error_reason("RuntimeError", e.what()));
+    } catch (...) {
+        report_internal_error(deck, out,
+                              internal_error_reason("RuntimeError", "an unknown C++ exception"));
+    }
+    return 0;
+}
+
+}  // namespace
+
+int main(int argc, char **argv) {
+    std::vector<std::string> args(argv + 1, argv + argc);
+    if (args.size() == 1 && args[0] == "-version") {
+        std::printf("%s\n", probe_version().c_str());
+        return 0;
+    }
+    bool en_optional = false;
+    if (args.empty()) {
+        // 4nec2's form (momwire#1488): `ENGINE < nec2d.tmp`, the names on stdin
+        std::vector<std::string> from_stdin;
+        if (ml::stdin_paths(from_stdin)) {
+            args = from_stdin;
+            en_optional = true;
+        }
+    }
+    if (args.size() < 1) {
+        std::printf("%s\n", ARGUMENT_ERROR_INPUT);
+        return 0;
+    }
+    if (args.size() != 2) {
+        std::printf("%s\n", ARGUMENT_ERROR_OUTPUT);
+        return 0;
+    }
+    if (args[0] == "-" || args[1] == "-") {
+        std::fprintf(stderr, "%s\n", STREAMING_REFUSAL);
+        return 2;
+    }
+    const int forced_threads = std::atoi(env("MOMWIRE_THREADS").c_str());
+    return run_deck(args[0], args[1], en_optional, forced_threads);
+}
+#endif  // MW_EXE_NO_PYTHON
