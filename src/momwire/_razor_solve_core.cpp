@@ -68,6 +68,37 @@ view<T, 1> slice1(const view<T, 1> &v, ptrdiff_t r0, ptrdiff_t r1) {
                       shp, v.st);
 }
 
+// numpy's fused complex product (`_cmul.cmul`'s formula) and its complex
+// division (`CDOUBLE_divide`, Smith's), as the run path spells them.
+inline cd np_cmul(cd a, cd b) {
+    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
+              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+}
+inline cd np_cdiv(cd a, cd b) {
+    const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
+    const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
+    if (in2r_abs >= in2i_abs) {
+        if (in2r_abs == 0 && in2i_abs == 0) return cd(in1r / in2r_abs, in1i / in2i_abs);
+        const double rat = in2i / in2r;
+        const double scl = 1.0 / (in2r + in2i * rat);
+        return cd((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
+    }
+    const double rat = in2r / in2i;
+    const double scl = 1.0 / (in2i + in2r * rat);
+    return cd((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+}
+
+void moments(const SolveInputs &in, view<const double, 2> obs, const SourceSet &src,
+             bool need_m1, view<const int64_t, 1> gi, view<const double, 1> bo, view<cd, 2> m0,
+             view<cd, 2> m1) {
+    if (in.k_complex)
+        seg_moments_cplx(obs, src.seg_p0, src.seg_t, in.seg_h, in.a, in.xg, in.wg, in.k_c, need_m1,
+                         gi, src.group_j, src.a_ek, in.cancel_flag, bo, m0, m1);
+    else
+        seg_moments(obs, src.seg_p0, src.seg_t, in.seg_h, in.a, in.xg, in.wg, in.k, need_m1, gi,
+                    src.group_j, src.a_ek, in.cancel_flag, bo, m0, m1);
+}
+
 void poll(uintptr_t flag) {
     const volatile int32_t *p = reinterpret_cast<const volatile int32_t *>(flag);
     if (p && *p) throw AbortedError{};
@@ -119,9 +150,7 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
     reserve(m1_, plane);
     auto vm0 = c_view<cd, 2>(m0_.data(), {n_need, n_seg});
     auto vm1 = c_view<cd, 2>(m1_.data(), {n_need, n_seg});
-    seg_moments(c_view<const double, 2>(obs_.data(), {n_need, 3}), src.seg_p0, src.seg_t,
-                in.seg_h, in.a, in.xg, in.wg, in.k, true, gi, src.group_j, src.a_ek,
-                in.cancel_flag, bo, vm0, vm1);
+    moments(in, c_view<const double, 2>(obs_.data(), {n_need, 3}), src, true, gi, bo, vm0, vm1);
     counters.seg_moments_calls++;
 
     // T1, with each path point reading its centroid's moment row.
@@ -207,10 +236,25 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         }
         m0w = c_view<const cd, 2>(m0c_.data(), {n_need, n_seg});
     }
-    t2_rows(dst, &t1c, m0w, m0k,
-            c_view<const int64_t, 1>(plus_.data(), {nb}),
-            c_view<const int64_t, 1>(minus_.data(), {nb}), in.s_a, in.s_b, in.q_a, in.q_b,
-            in.c_a_imag, in.c_phi_imag);
+    if (!in.unfused) {
+        t2_rows(dst, &t1c, m0w, m0k,
+                c_view<const int64_t, 1>(plus_.data(), {nb}),
+                c_view<const int64_t, 1>(minus_.data(), {nb}), in.s_a, in.s_b, in.q_a, in.q_b,
+                in.c_a_imag, in.c_phi_imag);
+    } else {
+        // T2 alone, then `np.multiply(c_A, t1)`, `np.divide(t2, c_Phi)`,
+        // `np.subtract(t1, t2)`, elementwise in that order.
+        t2_rows(dst, nullptr, m0w, m0k,
+                c_view<const int64_t, 1>(plus_.data(), {nb}),
+                c_view<const int64_t, 1>(minus_.data(), {nb}), in.s_a, in.s_b, in.q_a, in.q_b,
+                in.c_a_imag, in.c_phi_imag);
+        for (ptrdiff_t r = 0; r < nb; r++)
+            for (ptrdiff_t j = 0; j < n; j++) {
+                const cd t1v = np_cmul(in.c_a, vt1(r, j));
+                const cd t2v = np_cdiv(dst(r, j), in.c_phi);
+                dst(r, j) = cd(t1v.real() - t2v.real(), t1v.imag() - t2v.imag());
+            }
+    }
     counters.t2_rows_calls++;
     if (compose) {
         // The remainder over the window's path points (`field_windows`,
@@ -219,10 +263,13 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         const Compose &c = in.comp;
         const ptrdiff_t m_obs = nb * np, s_src = c.rem_src.shape(0);
         reserve(proj_, static_cast<size_t>(m_obs * s_src));
-        somm_core::field_proj_batch(*c.grid, c.n_reg, m_obs, s_src,
-                                    &c.obs_pts(lo * np, 0), &c.obs_tans(lo * np, 0),
-                                    c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
-                                    proj_.data(), in.cancel_flag, true);
+        if (c.proj)
+            c.proj(lo * np, m_obs, proj_.data());
+        else
+            somm_core::field_proj_batch(*c.grid, c.n_reg, m_obs, s_src,
+                                        &c.obs_pts(lo * np, 0), &c.obs_tans(lo * np, 0),
+                                        c.rem_src.data(), c.rem_t_src.data(), c.ground_z, in.k,
+                                        proj_.data(), in.cancel_flag, true);
         reserve(mom_, static_cast<size_t>(m_obs * n_seg * 2));
         somm_core::moment_reduce(proj_.data(), c.W, 2, n_seg, c.n_qp, m_obs, mom_.data());
         reserve(q_row_, static_cast<size_t>(m_obs));
@@ -260,10 +307,8 @@ void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, boo
     ptrdiff_t z_shape[2] = {0, 0}, z_st[2] = {static_cast<ptrdiff_t>(sizeof(cd)),
                                               static_cast<ptrdiff_t>(sizeof(cd))};
     view<cd, 2> none(nullptr, z_shape, z_st);
-    seg_moments(in.chop_pts, src.seg_p0, src.seg_t, in.seg_h, in.a, in.xg, in.wg, in.k, false,
-                view<const int64_t, 1>(), view<const int64_t, 1>(), view<const double, 1>(),
-                in.cancel_flag, view<const double, 1>(),
-                c_view<cd, 2>(out.data(), {n_chop, n_seg}), none);
+    moments(in, in.chop_pts, src, false, view<const int64_t, 1>(), view<const double, 1>(),
+            c_view<cd, 2>(out.data(), {n_chop, n_seg}), none);
     counters.seg_moments_calls++;
     if (image && in.compose) {
         const cd c2 = in.comp.c2;
@@ -286,7 +331,7 @@ void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &
         throw std::invalid_argument("razor_solve: tans / wts need n_path rows per basis");
     if (in.window_rows < 1)
         throw std::invalid_argument("razor_solve: window_rows must be >= 1");
-    if (!(in.c_phi_imag != 0.0))
+    if (!in.unfused && !(in.c_phi_imag != 0.0))
         throw std::invalid_argument("razor_solve: c_Phi must be nonzero");
     require_contiguous(in.s_a, who, "s_a");
     require_contiguous(in.s_b, who, "s_b");
@@ -302,7 +347,7 @@ void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &
         throw std::invalid_argument("razor_solve: b_obs must be (n_seg,)");
     if (in.compose) {
         const Compose &c = in.comp;
-        if (!in.has_image || c.grid == nullptr || c.W == nullptr || c.n_qp < 1)
+        if (!in.has_image || (c.grid == nullptr && !c.proj) || c.W == nullptr || c.n_qp < 1)
             throw std::invalid_argument("razor_solve: a composing ground needs its image and remainder");
         if (c.obs_pts.shape(0) != n * 2 || c.obs_tans.shape(0) != n * 2 ||
             c.src_c.shape(0) != n_seg || c.src_t.shape(0) != n_seg ||

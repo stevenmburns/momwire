@@ -2,6 +2,7 @@
 #include "_mw_binding.h"
 #include "_nec5_razor_seam_core.h"
 #include "_razor_buried_core.h"
+#include "_somm_below_grid_core.h"
 #include "_razor_front_core.h"
 #include "_razor_solve_core.h"
 
@@ -505,8 +506,12 @@ std::pair<std::string, std::unique_ptr<mw::razor::Front>> build_front(const py::
 // momwire#1512 step 3's gate (`scripts/core_split/buried_z_compare.py`): a
 // buried solve's matrix at each stage the C++ fill reaches, from the
 // arguments the seam handed RazorSolver.
-py::dict razor_buried_stages(py::dict kw, int64_t chunk_elems) {
+py::dict razor_buried_stages(py::dict kw, int64_t chunk_elems, std::string below_tables) {
     py::dict out;
+    struct Restore {
+        ~Restore() { somm_below::set_source(nullptr); }
+    } restore;
+    if (!below_tables.empty()) somm_below::set_source(somm_below::bridge_source(below_tables));
     mw::razor::FrontInputs in;
     try {
         in = front_inputs(kw);
@@ -839,7 +844,7 @@ void register_razor_solve(py::module_ &m) {
 
     m.attr("razor_front_proto") = true;
     m.def("razor_buried_stages", &razor_buried_stages, py::arg("kwargs"),
-          py::arg("chunk_elems") = 2000000,
+          py::arg("chunk_elems") = 2000000, py::arg("below_tables") = std::string(),
           "momwire#1512 step 3's gate: a buried solve's matrix at each stage the "
           "C++ fill reaches ('above', 'below', 'cross', 'final'), column-major.");
     m.def("razor_front_build", &razor_front_build, py::arg("kwargs"),
