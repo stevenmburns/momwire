@@ -370,6 +370,8 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_below_proj_core.h",
     "src/momwire/_somm_below_grid_core.h",
     "src/momwire/_near_interface_core.h",
+    "src/momwire/_near_interface_eval.h",
+    "src/momwire/_razor_crossing_core.h",
     "src/momwire/_razor_wire_loading_core.h",
     # The exact ring kernel's point moments, Python-free (momwire#1479): the
     # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
@@ -486,6 +488,11 @@ _ACCEL_SOURCES = [
     # their fold, the cross blocks; Python-free. Its own TU: it only calls
     # the kernels and the solve core, across TU boundaries.
     "src/momwire/_razor_buried_core.cpp",
+    # The crossing blocks and the designed near-interface tables they read
+    # (momwire#1512 B4), Python-free, and the twin itself for this module.
+    "src/momwire/_razor_crossing_core.cpp",
+    "src/momwire/_near_interface_eval.cpp",
+    "src/momwire/_near_interface_core.cpp",
     # The front half's exact ring kernel (momwire#1479): the plan and the
     # correction, and the point moments' Python-free twin of
     # `_accel_exact_kernel_point.cpp` (the same inline text, so the same
@@ -629,7 +636,10 @@ for _suffix, _accel_args, _near_args in _VARIANTS:
         _variant(
             "_near_interface_accel",
             _suffix,
-            ["src/momwire/_near_interface_accel.cpp", "src/momwire/_near_interface_core.cpp"],
+            [
+                "src/momwire/_near_interface_accel.cpp",
+                "src/momwire/_near_interface_core.cpp",
+            ],
             depends=_NEAR_HEADERS,
             compile_args=_near_args,
             include_dirs=["extern/xsf/include"],

@@ -81,6 +81,9 @@ int main(int argc, char **argv) {
         std::printf("== %s\nroute %s\nkind %s\nmessage %s\n", argv[i], route[r.route],
                     r.error_kind.c_str(), hex(r.message).c_str());
         for (size_t k = 0; k < r.prepared.size(); k++) {
+            // A buried deck the fill cannot finish here (no below table)
+            // is kept unsolved, its route "declined": never solved.
+            if (r.prepared[k].unsolved) continue;
             const mw::razor::Front &front = *r.prepared[k].front;
             const int64_t n = front.n_basis, m = front.n_ports;
             std::vector<mw::cd> X(static_cast<size_t>(n * m));

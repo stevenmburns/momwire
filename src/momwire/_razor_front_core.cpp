@@ -11,6 +11,9 @@
 //   np.add.reduce(x) over a 1-D run -> numpy's pairwise sum (`pairwise_sum`);
 //   np.round(x, 9)                  -> rint(x * 1e9) / 1e9.
 #include "_razor_front_core.h"
+
+#include "_razor_buried_core.h"
+#include "_somm_below_grid_core.h"
 #include "_leggauss_table.h"
 #include "_accel_somm_proj_inline.h"
 
@@ -1527,7 +1530,9 @@ std::string Front::build(const FrontInputs &in_raw) {
     // A buried deck fills medium by medium (`_assemble_Z_crossing` /
     // `_assemble_Z_below_plane`, `_razor_buried_core.h`): the full geometry
     // keeps only its loading; each medium's front is built at the fill.
-    if (buried != Buried::none) return BURIED_FILL_PENDING;
+    // Served end to end once the below table has a source (B5's fill, or the
+    // gates' bridge); until then the deck declines here.
+    if (buried != Buried::none) return somm_below::source() != nullptr ? "" : BURIED_FILL_PENDING;
     if (compose) {
         const std::string why_c = prepare_compose(in.n_qp_sommerfeld);
         if (!why_c.empty()) return why_c;
@@ -1751,6 +1756,14 @@ int solve_ports(const Front &front, SolveContext &ctx, const Lapack &lp, cd *x,
     // `cols.astype(np.complex128)`, column-major.
     for (int64_t j = 0; j < m; j++)
         for (int64_t i = 0; i < n; i++) x[j * n + i] = cd(front.cols[i * m + j], 0.0);
+    if (front.buried != Buried::none) {
+        // The buried fill (`_razor_buried_core.h`), its loading included.
+        std::vector<cd> z;
+        const std::string why = fill_buried(front, z, nullptr, cancel_flag);
+        if (!why.empty()) throw std::runtime_error("the buried fill stopped at " + why);
+        ctx.set_z(z.data(), n);
+        return ctx.lu_solve(lp, x, static_cast<int>(m));
+    }
     fill_front(front, ctx, cancel_flag);
     if (!front.load_vals.empty())
         ctx.add_at(front.load_rows.data(), front.load_cols.data(), front.load_vals.data(),

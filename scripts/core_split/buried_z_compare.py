@@ -221,7 +221,9 @@ def main(argv):
                             {
                                 "stage": name,
                                 "shape": [list(a.shape), list(b.shape)],
-                                "n_diff": None if d is None else int(np.count_nonzero(a != b)),
+                                "n_diff": None
+                                if d is None
+                                else int(np.count_nonzero(a != b)),
                                 "max_rel": None
                                 if d is None
                                 else float(d.max() / max(np.abs(a).max(), 1e-300)),
