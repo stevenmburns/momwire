@@ -2545,7 +2545,7 @@ std::string load_row(const LoadRowC &row) {
     return canvas;
 }
 
-Lines loading(const RunDataC &data) {
+Lines loading(const RunDataC &data, bool allocate = true) {
     Lines lines = {sp(31) + "- - - STRUCTURE IMPEDANCE LOADING - - -", ""};
     if (data.loads.empty()) {
         lines.push_back(sp(35) + "THIS STRUCTURE IS NOT LOADED");
@@ -2558,7 +2558,8 @@ Lines loading(const RunDataC &data) {
         lines.push_back("");
         for (const LoadRowC &row : data.loads) lines.push_back(load_row(row));
     }
-    lines.push_back("ALLOCATE CM:" + d(data.unknown_count * data.unknown_count, 15));
+    // a stepping FR allocates once: its first frequency prints the line
+    if (allocate) lines.push_back("ALLOCATE CM:" + d(data.unknown_count * data.unknown_count, 15));
     return lines;
 }
 
@@ -2811,6 +2812,57 @@ std::string render_printout(const Deck &deck, const std::string &echo_text, cons
     return render_header(&echo_text, basis, stamp) + join(body) + "\n";
 }
 
+// `render_stepped_printout` (momwire#1508): the structure, the echoes through
+// the card that runs the sweep, a whole single-run body per frequency
+// (ALLOCATE CM: in the first only; one blank more between blocks), the
+// echoes after the sweep, EN and one RUN TIME.
+std::string render_stepped_printout(const Deck &deck, const std::string &echo_text,
+                                    const std::vector<RunDataC> &runs, const std::string &basis,
+                                    const EngineStamp &stamp, bool closing) {
+    const std::vector<Card> cards = post_ge_cards(echo_text);
+    const bool has_term = !cards.empty() && is_terminator(cards.back());
+    std::vector<std::pair<long long, const Card *>> numbered;
+    for (std::size_t k = 0; k < cards.size(); k++) {
+        if (has_term && k + 1 == cards.size()) continue;
+        numbered.emplace_back(static_cast<long long>(k) + 1, &cards[k]);
+    }
+    std::size_t run_at = numbered.size();
+    for (std::size_t k = 0; k < numbered.size(); k++)
+        if (numbered[k].second->mnemonic == "RP" || numbered[k].second->mnemonic == "XQ") {
+            run_at = k;
+            break;
+        }
+    if (run_at == numbered.size() || runs.empty())
+        throw PyRaise{"StopIteration", ""};  // `next(...)` with nothing to find
+    Lines body = head_sections(deck, runs[0]);
+    for (std::size_t k = 0; k <= run_at; k++)
+        body.push_back(card_echo(numbered[k].first, *numbered[k].second));
+    blanks(body, 4);
+    for (std::size_t k = 0; k < runs.size(); k++) {
+        const RunDataC &data = runs[k];
+        if (k) body.push_back("");
+        add(body, frequency(data));
+        blanks(body, 3);
+        add(body, environment(data));
+        blanks(body, 3);
+        add(body, loading(data, k == 0));
+        blanks(body, 3);
+        add(body, timing());
+        blanks(body, 3);
+        if (!data.networks.empty()) {
+            add(body, network_data(data));
+            blanks(body, 3);
+        }
+        add(body, run_sections(data));
+    }
+    body.push_back("");
+    for (std::size_t k = run_at + 1; k < numbered.size(); k++)
+        body.push_back(card_echo(numbered[k].first, *numbered[k].second));
+    if (has_term) body.push_back(card_echo(static_cast<long long>(cards.size()), cards.back()));
+    add(body, closing_lines(closing));
+    return render_header(&echo_text, basis, stamp) + join(body) + "\n";
+}
+
 // `render_multi_printout`
 std::string render_multi_printout(const Deck &deck, const std::string &echo_text,
                                   const std::vector<RunDataC> &runs, const std::string &basis,
@@ -3013,7 +3065,7 @@ PrintoutResult razor_printout(const std::string &text, const std::string &basis,
                               const razor::Lapack &lapack, const NumpyLinalg &np,
                               std::vector<RunArrays> *arrays) {
     PrintoutResult out;
-    const SeamResult r = razor_seam(text);
+    SeamResult r = razor_seam(text);
     out.seam = r.route;
     if (r.route == SeamResult::declined) {
         out.reason = r.message;
@@ -3066,10 +3118,20 @@ PrintoutResult razor_printout(const std::string &text, const std::string &basis,
                 } else if (o.kind == RunOutcome::raised) {
                     throw PyRaise{o.error_kind, o.message};
                 } else {
-                    const Prepared &p = r.prepared[static_cast<std::size_t>(o.prepared_index)];
+                    Prepared &p = r.prepared[static_cast<std::size_t>(o.prepared_index)];
                     const Solved &sol = solution(o.prepared_index);
-                    runs.push_back(
-                        finish(a.kind == Answer::multi ? a.runs[j] : a.deck, p, sol, np, arrays));
+                    if (a.kind == Answer::stepped) {
+                        // `replace(deck, frequency_mhz=f)`, finished before
+                        // the next frequency is solved; its front released
+                        Deck step = a.deck;
+                        step.frequency_mhz = a.deck.frequencies_mhz[j];
+                        runs.push_back(finish(step, p, sol, np, arrays));
+                        p.front.reset();
+                        solved[static_cast<std::size_t>(o.prepared_index)] = Solved();
+                    } else {
+                        runs.push_back(finish(a.kind == Answer::multi ? a.runs[j] : a.deck, p,
+                                              sol, np, arrays));
+                    }
                 }
             }
             if (stopped) break;
@@ -3077,6 +3139,8 @@ PrintoutResult razor_printout(const std::string &text, const std::string &basis,
                 throw std::logic_error("a declined run reached the writer");
             if (a.kind == Answer::multi)
                 printed += render_multi_printout(a.deck, echo, runs, basis, stamp, last);
+            else if (a.kind == Answer::stepped)
+                printed += render_stepped_printout(a.deck, echo, runs, basis, stamp, last);
             else
                 printed += render_printout(a.deck, echo, runs[0], basis, stamp, last);
         }
