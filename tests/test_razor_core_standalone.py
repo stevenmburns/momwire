@@ -70,6 +70,8 @@ CORE_SOURCES = (
     "_somm_kernel_core.cpp",
     "_somm_grid_core.cpp",
     "_somm_proj_core.cpp",
+    # The near-field remainder over a finite ground (S4).
+    "_somm_field_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
