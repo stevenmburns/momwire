@@ -743,12 +743,16 @@ def test_the_wire_loading_decks_print_their_loading(driver, tmp_path):
     WIRE / PER METER rows. Each committed deck answers as Python does --
     LD 5 on one wire of two, LD 5 and LD 2 on one wire, LD 3 over GN 1, LD 5
     on every wire under two sources with a pattern, LD 2's inductance alone
-    beside a lumped load, and LD 3's capacitance refused by name."""
+    beside a lumped load, LD 3's capacitance refused by name, and three
+    free-space twins of captured decks with LD 5 on every wire (tag 0) and
+    a network (0208's three TLs, 0215's NT pins, 0185's NT gyrator) -- the
+    purely imaginary j*omega*mu*sigma whose square root is libm's csqrt
+    (numpy's), not CPython's cmath.sqrt."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
     decks = sorted(WL_DECKS.glob("*.nec"))
-    assert len(decks) == 6
+    assert len(decks) == 9
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     for path, ans in zip(decks, answers, strict=True):
         refused = path.stem.endswith("_refused")
