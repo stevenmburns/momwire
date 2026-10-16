@@ -1,0 +1,31 @@
+spacing zone  band   worst/scale (soil)   median node   fraction moved
+fill  far   floor  8.11e-10 (salt1.8)  1.3e-10  1.00
+fill  far   graze  1.65e-10 (salt1.8)  6.2e-12  0.97
+fill  far   lo     7.35e-10 (salt1.8)  1.2e-10  1.00
+fill  far   mid    7.28e-10 (salt1.8)  1.1e-10  1.00
+fill  far   steep  2.17e-11 (dan6   )  0.0e+00  0.12
+fill  inner floor  7.44e-09 (salt1.8)  3.6e-11  0.92
+fill  inner graze  4.27e-11 (dan6   )  3.5e-13  0.92
+fill  inner lo     2.19e-09 (salt1.8)  1.9e-11  0.92
+fill  inner mid    4.11e-10 (salt1.8)  5.4e-12  0.92
+fill  inner steep  3.52e-12 (dan6   )  0.0e+00  0.40
+fill  near  floor  2.24e-09 (salt1.8)  1.7e-11  1.00
+fill  near  graze  5.28e-11 (dan6   )  7.7e-13  1.00
+fill  near  lo     1.51e-10 (dan6   )  1.5e-11  1.00
+fill  near  mid    5.78e-11 (dan6   )  8.2e-12  1.00
+fill  near  steep  1.75e-11 (dan6   )  0.0e+00  0.28
+point far   floor  9.12e-10 (salt1.8)  1.3e-10  1.00
+point far   graze  2.01e-10 (salt1.8)  6.3e-12  0.98
+point far   lo     8.06e-10 (salt1.8)  1.2e-10  1.00
+point far   mid    8.06e-10 (salt1.8)  1.1e-10  1.00
+point far   steep  2.47e-11 (dan6   )  0.0e+00  0.09
+point inner floor  3.06e-08 (salt1.8)  5.3e-11  0.96
+point inner graze  4.25e-11 (dan6   )  4.0e-13  0.96
+point inner lo     9.04e-09 (salt1.8)  1.9e-11  0.96
+point inner mid    3.32e-09 (salt1.8)  6.2e-12  0.96
+point inner steep  9.09e-12 (dan6   )  0.0e+00  0.39
+point near  floor  2.24e-09 (salt1.8)  1.7e-11  1.00
+point near  graze  5.27e-11 (dan6   )  8.1e-13  1.00
+point near  lo     1.51e-10 (dan6   )  1.5e-11  1.00
+point near  mid    5.74e-11 (dan6   )  7.7e-12  1.00
+point near  steep  2.15e-11 (dan6   )  0.0e+00  0.24
