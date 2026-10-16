@@ -49,7 +49,10 @@ def python_front(solver):
         "xg": np.asarray(t2.xg),
         "wg": np.asarray(t2.wg),
         "window_rows": razor._schedule.elem_rows(
-            razor._CHUNK_ELEMS, prepared["n_path"] * n
+            razor._WEIGHTED_CHUNK_ELEMS
+            if prepared["image"] is not None and prepared["image"]["weighted"]
+            else razor._CHUNK_ELEMS,
+            prepared["n_path"] * n,
         ),
         "k": float(solver.k),
         "c": float(solver.c),
@@ -75,6 +78,27 @@ def python_front(solver):
         assert np.array_equal(ti.obs, t2.obs) and np.array_equal(ti.a_ek, t2.a_ek)
     if t2.group_j.size:
         assert np.array_equal(t2.group_j, t2.group_i)
+    if image is not None and "src_l" in image:
+        # The composing ground (momwire#1479 S3): what `_source_block_rows`
+        # reads off the ground at the fill's omega and off the prepare.
+        ground = razor._potential_ground.potential_ground_for(
+            solver, geom, solver.k, omega
+        )
+        front["eps_t"] = complex(ground.eps_tilde)
+        front["c2"] = complex(ground.image_coefficient)
+        front["obs_pts"] = image["obs_pts"]
+        front["sig_a"] = geom["wing_sigma"][:, 0]
+        front["sig_b"] = geom["wing_sigma"][:, 1]
+        front["r1_max"] = razor._sommerfeld.max_image_distance(
+            image["src_l"], image["src_r"], solver.ground_z
+        )
+        front["n_qp_rem"] = razor._remainder_qp(
+            image["obs_pts"],
+            image["src_l"],
+            image["src_r"],
+            solver.ground_z,
+            solver.n_qp_sommerfeld,
+        )
     return geom, front, cols
 
 

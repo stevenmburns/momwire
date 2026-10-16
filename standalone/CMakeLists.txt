@@ -82,6 +82,11 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_nec5_razor_seam_core.cpp
   ${MW_SRC}/_nec5_razor_printout_core.cpp
   ${MW_SRC}/_razor_wire_loading_core.cpp
+  # The composing Sommerfeld ground (momwire#1479 S3): the six-integral
+  # kernel, the grid, and the remainder's projection and moments.
+  ${MW_SRC}/_somm_kernel_core.cpp
+  ${MW_SRC}/_somm_grid_core.cpp
+  ${MW_SRC}/_somm_proj_core.cpp
 )
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
 # `mw_core_serial`, the same sources with `mw` renamed `mws` and no OpenMP
@@ -104,7 +109,8 @@ target_include_directories(mw_core_serial PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURC
 target_compile_options(mw_core_serial PRIVATE ${MW_CORE_FLAGS})
 target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX} mw=mws
   xsf=mws_xsf  # the vendored xsf defines non-inline functions: one copy each
-  razor_cplx_brackets=mws_razor_cplx_brackets)  # the one free function
+  razor_cplx_brackets=mws_razor_cplx_brackets  # the one free function
+  somm_core=mws_somm_core)  # the Sommerfeld cores' namespace
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
 add_executable(momwire-razor2p momwire_razor2p.cpp $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)

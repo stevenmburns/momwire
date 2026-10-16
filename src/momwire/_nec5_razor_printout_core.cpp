@@ -2200,12 +2200,17 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     data.efficiency = p_in > 0 ? (100.0 * p_radiated) / p_in : 0.0;
     // `patterns=tuple(_pattern(...) for request in deck.requests if RP)`, over
     // `_far_ground(deck, medium)`: PEC for GN 1, the Fresnel-weighted image
-    // ("refl") for a bare GD's medium, free space otherwise.
+    // for a medium -- "refl" for a bare GD's, "sommerfeld" for GN 0 / GN 2's,
+    // which `_far_moments` serves as ONE branch above the plane (the seam
+    // declines a buried wire) -- and free space otherwise.
     // `near_fields=tuple(_near_field(...) for request if NE / NH)`: free
-    // space, or GN 1's image (the seam declines a near field over GD).
+    // space, or GN 1's image (a near field over GD or GN 0 / GN 2 declines).
     for (const Request &rq : deck.requests)
         if (rq.kind == Request::near_field && deck.ground.kind == Ground::mininec)
             throw Decline{"a near field over GD (its reflected-field remainder)"};
+    for (const Request &rq : deck.requests)
+        if (rq.kind == Request::near_field && deck.ground.kind == Ground::sommerfeld)
+            throw Decline{"a near field over a Sommerfeld ground"};
     for (const Request &rq : deck.requests)
         if (rq.kind == Request::near_field)
             data.near_fields.push_back(std::make_shared<NearBlockC>(
@@ -2216,10 +2221,8 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         FarGround fg = FarGround::free;
         if (deck.ground.kind == Ground::perfect)
             fg = FarGround::pec;
-        else if (p.has_medium) {
-            if (deck.ground.kind != Ground::mininec) throw Decline{"a pattern over a Sommerfeld ground"};
+        else if (p.has_medium)
             fg = FarGround::refl;
-        }
         std::vector<double> mid;
         std::vector<cd> moment;
         element_moments(fr, knots, mid, moment);
@@ -2883,8 +2886,8 @@ std::string echo_of(const StreamRead &s, std::size_t k, const std::string &text)
     return s.chained ? s.structures[k].echo_text() : text;
 }
 
-// Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH (LD 2 / 3 / 5,
-// networks, a Sommerfeld ground and a near field over GD decline in the seam).
+// Every run the seam serves prints: LD 0 / 1 / 4, RP, NE / NH (a near field
+// over GD or GN 0 / GN 2 declines in `run_data`).
 void check_scope(const Deck &run) { (void)run; }
 
 Solved solve(const Prepared &p, razor::SolveContext &ctx, const razor::Lapack &lapack,

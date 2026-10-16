@@ -12,6 +12,7 @@
 //   np.round(x, 9)                  -> rint(x * 1e9) / 1e9.
 #include "_razor_front_core.h"
 #include "_leggauss_table.h"
+#include "_accel_somm_proj_inline.h"
 
 // MSVC builds every TU /fp:fast (setup.py), which may fuse and reassociate.
 // This TU is numpy's elementwise arithmetic spelled one IEEE operation at a
@@ -42,6 +43,92 @@ namespace razor {
 
 // `_quadrature.leggauss(n)`: the frozen rule's half, mirrored as
 // `_quadrature._from_half` mirrors it (negation is exact).
+double max_image_distance(const double *seg_l, const double *seg_r, size_t n, double ground_z) {
+    // `np.unique(concat(seg_l, seg_r), axis=0)`, then the max over pairs of
+    // dx*dx + dy*dy + hz*hz, its root once, times 1.001. The pair value is
+    // bit-symmetric and max is exact, so the distinct set (exact duplicates
+    // dropped) and the order of the scan move no bit.
+    std::vector<std::array<double, 3>> ex;
+    ex.reserve(2 * n);
+    for (size_t i = 0; i < n; i++) ex.push_back({seg_l[3 * i], seg_l[3 * i + 1], seg_l[3 * i + 2]});
+    for (size_t i = 0; i < n; i++) ex.push_back({seg_r[3 * i], seg_r[3 * i + 1], seg_r[3 * i + 2]});
+    if (ex.empty()) return 0.0;
+    std::sort(ex.begin(), ex.end());
+    ex.erase(std::unique(ex.begin(), ex.end()), ex.end());
+    double s2 = 0.0;
+    const size_t m = ex.size();
+    for (size_t i = 0; i < m; i++)
+        for (size_t j = i; j < m; j++) {
+            const double dx = ex[i][0] - ex[j][0], dy = ex[i][1] - ex[j][1];
+            const double hz = (ex[i][2] - ground_z) + (ex[j][2] - ground_z);
+            const double v = dx * dx + dy * dy + hz * hz;
+            if (v > s2) s2 = v;
+        }
+    return std::sqrt(s2) * 1.001;
+}
+
+int64_t remainder_qp(const double *obs, size_t n_obs, const double *src_l, const double *src_r,
+                     size_t n_src, double ground_z, int64_t base, int64_t cap, double c) {
+    if (n_src == 0 || n_obs == 0) return base;
+    auto norm3 = [](double x, double y, double z) { return std::sqrt((x * x + y * y) + z * z); };
+    std::vector<double> mir_l(3 * n_src), d(3 * n_src), dd(n_src), len(n_src);
+    for (size_t j = 0; j < n_src; j++) {
+        double ml[3], mr[3];
+        for (int c3 = 0; c3 < 3; c3++) {
+            ml[c3] = src_l[3 * j + c3];
+            mr[c3] = src_r[3 * j + c3];
+        }
+        ml[2] = 2.0 * ground_z - src_l[3 * j + 2];
+        mr[2] = 2.0 * ground_z - src_r[3 * j + 2];
+        for (int c3 = 0; c3 < 3; c3++) {
+            mir_l[3 * j + c3] = ml[c3];
+            d[3 * j + c3] = mr[c3] - ml[c3];
+        }
+        const double *dj = &d[3 * j];
+        dd[j] = (dj[0] * dj[0] + dj[1] * dj[1]) + dj[2] * dj[2];
+        len[j] = norm3(src_r[3 * j] - src_l[3 * j], src_r[3 * j + 1] - src_l[3 * j + 1],
+                       src_r[3 * j + 2] - src_l[3 * j + 2]);
+    }
+    // The O(N) short-circuit: nothing near the plane returns `base`.
+    double h_l = src_l[2] - ground_z, h_r = src_r[2] - ground_z, h_o = obs[2] - ground_z;
+    for (size_t j = 1; j < n_src; j++) {
+        h_l = std::min(h_l, src_l[3 * j + 2] - ground_z);
+        h_r = std::min(h_r, src_r[3 * j + 2] - ground_z);
+    }
+    for (size_t i = 1; i < n_obs; i++) h_o = std::min(h_o, obs[3 * i + 2] - ground_z);
+    const double h_min = std::min(std::min(h_l, h_r), h_o);
+    if (h_min > 0.0) {
+        double lmax = len[0];
+        for (size_t j = 1; j < n_src; j++) lmax = std::max(lmax, len[j]);
+        const double bound = lmax / (2.0 * h_min);
+        if (static_cast<int64_t>(std::ceil(c * bound)) <= base) return base;
+    }
+    double worst = 0.0;
+    for (size_t j = 0; j < n_src; j++) {
+        if (len[j] <= 0.0) continue;
+        if (!(dd[j] > 0.0)) continue;  // a degenerate mirror has no broadside
+        const double *ml = &mir_l[3 * j], *dj = &d[3 * j];
+        bool any = false;
+        double r_min = 0.0;
+        for (size_t i = 0; i < n_obs; i++) {
+            const double *o = &obs[3 * i];
+            const double ax = o[0] - ml[0], ay = o[1] - ml[1], az = o[2] - ml[2];
+            const double t_raw = (ax * dj[0] + ay * dj[1] + az * dj[2]) / dd[j];
+            if (!(t_raw > 0.0 && t_raw < 1.0)) continue;  // broadside only
+            const double cx = ml[0] + t_raw * dj[0], cy = ml[1] + t_raw * dj[1],
+                         cz = ml[2] + t_raw * dj[2];
+            const double r = norm3(o[0] - cx, o[1] - cy, o[2] - cz);
+            if (!any || r < r_min) r_min = r;
+            any = true;
+        }
+        if (!any) continue;
+        if (r_min <= 0.0) return cap;
+        worst = std::max(worst, len[j] / r_min);
+    }
+    const int64_t need = worst > 0.0 ? static_cast<int64_t>(std::ceil(c * worst)) : 0;
+    return std::min(std::max(base, need), cap);
+}
+
 bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w) {
     if (n < 1 || n > leggauss_table::N_MAX) return false;
     const int lo = leggauss_table::OFFSET[n - 1], hi = leggauss_table::OFFSET[n];
@@ -222,6 +309,16 @@ std::string Front::scope(const FrontInputs &in) {
         }
     }
     if (in.exact_kernel == ExactKernel::on) return "exact-kernel";
+    if (in.ground_eps_given) {
+        // The reflection-coefficient ground's weighted fold is not here; the
+        // composing one is, on the shipped grid constants only.
+        if (!in.ground_sommerfeld) return "refl-coef-ground";
+        for (const char *name : {"MOMWIRE_SOMM_R1_CAP_LAMBDA", "MOMWIRE_SOMM_R1_NEAR_LAMBDA",
+                                 "MOMWIRE_SOMM_EPS_IM_BUCKET", "MOMWIRE_SOMM_R1_SWEEP_SLACK"}) {
+            const char *v = std::getenv(name);
+            if (v != nullptr && v[0] != '\0') return "somm-environment";
+        }
+    }
     return "";
 }
 
@@ -232,6 +329,10 @@ void Front::construct(const FrontInputs &in) {
     has_ground = in.has_ground;
     ground_z = in.ground_z;
     if (has_ground && !std::isfinite(ground_z)) value_error("ground_z must be finite");
+    if (in.ground_eps_given && !has_ground) value_error("ground_eps requires ground_z to be set");
+    compose = in.ground_eps_given;
+    ground_eps_r_ = in.ground_eps_r;
+    ground_sigma_ = in.ground_sigma;
     if ((in.n_qp_path_given && in.n_qp_path < 1) || in.n_qp_source < 1 ||
         in.n_qp_sommerfeld < 1)
         value_error("n_qp_path, n_qp_source and n_qp_sommerfeld must be >= 1");
@@ -901,8 +1002,14 @@ std::string Front::build(const FrontInputs &in) {
         loading = in.loading;
         loading_stencil();
     }
-    // `_schedule.elem_rows(_CHUNK_ELEMS, n_path * n_basis)`
-    window_rows = std::max<int64_t>(1, in.chunk_elems / std::max<int64_t>(1, 2 * n_basis));
+    if (compose) {
+        const std::string why_c = prepare_compose(in.n_qp_sommerfeld);
+        if (!why_c.empty()) return why_c;
+    }
+    // `_schedule.elem_rows(budget, n_path * n_basis)`, the budget
+    // `_WEIGHTED_CHUNK_ELEMS` (= `_CHUNK_ELEMS // 12`) under a weighted image.
+    const int64_t budget = compose ? in.chunk_elems / 12 : in.chunk_elems;
+    window_rows = std::max<int64_t>(1, budget / std::max<int64_t>(1, 2 * n_basis));
     chunk_elems = in.chunk_elems;
     // The correction's geometry-only tables.
     exact_plan.groups.clear();
@@ -910,6 +1017,90 @@ std::string Front::build(const FrontInputs &in) {
         const std::string why = build_exact_plan(*this, exact_plan);
         if (!why.empty()) return why;
     }
+    return "";
+}
+
+// The composing ground's per-solve half, at the fill's k and omega:
+// `potential_ground_for`'s eps~ and C2, the weighted rule's operands, and
+// `Remainder.field_windows`' grid, source nodes and moment weights, each
+// spelled as the Python expression it replaces.
+std::string Front::prepare_compose(int64_t n_qp_sommerfeld) {
+    const size_t n = static_cast<size_t>(n_basis), ns = static_cast<size_t>(n_seg);
+    // `complex(float(eps_r), -float(sigma) / (omega * eps0))`
+    eps_t = cd(ground_eps_r_, (-ground_sigma_) / (omega * EPS));
+    // `(eps_t - 1.0) / (eps_t + 1.0)`
+    c2 = somm_core::py_quot(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0),
+                            cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
+    // The path points (`_testing_paths`' NEC-5 branch: each wing's
+    // centroid) and the wing signs.
+    obs_pts.resize(6 * n);
+    sig_a.resize(n);
+    sig_b.resize(n);
+    for (size_t m = 0; m < n; m++) {
+        for (int c3 = 0; c3 < 3; c3++) {
+            obs_pts[6 * m + c3] = cent[3 * s_a[m] + c3];
+            obs_pts[6 * m + 3 + c3] = cent[3 * s_b[m] + c3];
+        }
+        sig_a[m] = wing_sigma[2 * m];
+        sig_b[m] = wing_sigma[2 * m + 1];
+    }
+    // The remainder's REAL source segments: seg_p0 and
+    // `seg_p0 + seg_h[:, None] * seg_t`.
+    std::vector<double> src_r(3 * ns);
+    for (size_t s = 0; s < ns; s++)
+        for (int c3 = 0; c3 < 3; c3++)
+            src_r[3 * s + c3] = seg_p0[3 * s + c3] + seg_h[s] * seg_t[3 * s + c3];
+    n_qp_rem = remainder_qp(obs_pts.data(), 2 * n, seg_p0.data(), src_r.data(), ns, ground_z,
+                            n_qp_sommerfeld, REMAINDER_QP_CAP, REMAINDER_QP_C);
+    r1_max = max_image_distance(seg_p0.data(), src_r.data(), ns, ground_z);
+    grid = &somm_core::get_grid(eps_t, k, r1_max, omega, MU);
+    std::vector<double> xq, wq;
+    if (!leggauss(n_qp_rem, xq, wq)) return "remainder-order";
+    const size_t q = static_cast<size_t>(n_qp_rem);
+    rem_src.resize(3 * ns * q);
+    rem_t_src.resize(3 * ns * q);
+    rem_W.resize(2 * ns * q);
+    for (size_t s = 0; s < ns; s++) {
+        double span[3];
+        for (int c3 = 0; c3 < 3; c3++) span[c3] = src_r[3 * s + c3] - seg_p0[3 * s + c3];
+        const double h = std::sqrt((span[0] * span[0] + span[1] * span[1]) + span[2] * span[2]);
+        for (size_t j = 0; j < q; j++) {
+            const double tq = 0.5 * (xq[j] + 1.0);
+            for (int c3 = 0; c3 < 3; c3++) {
+                rem_src[3 * (s * q + j) + c3] = seg_p0[3 * s + c3] + tq * span[c3];
+                rem_t_src[3 * (s * q + j) + c3] = seg_t[3 * s + c3];
+            }
+            const double u = h * tq, w_node = 0.5 * h * wq[j];
+            rem_W[s * q + j] = w_node * 1.0;          // u ** 0
+            rem_W[(ns + s) * q + j] = w_node * u;     // u ** 1
+        }
+    }
+    // `grid_cpp_args(grid)`: the regions flattened, theta split in radians
+    // (`math.radians(30.0)`), and the momwire#1258 far pack.
+    const somm_core::Grid &g = *grid;
+    n_reg = g.regions.size();
+    if (n_reg > somm_proj::MAX_REGIONS) return "grid-layout";
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cd *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS],
+        nth[somm_proj::MAX_REGIONS];
+    for (size_t r = 0; r < n_reg; r++) {
+        const somm_core::GridRegion &reg = g.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    grid_view = std::make_shared<somm_proj::GridView>(somm_proj::build_grid_view(
+        g.r1_max, g.r_break, 30.0 * (M_PI / 180.0), g.r_near, r0, dr, th0, dth, n_reg, vals,
+        shape0, nr, nth));
+    const std::vector<cd> far = somm_core::far_pack(g);
+    somm_proj::set_far(*grid_view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
     return "";
 }
 
@@ -954,6 +1145,26 @@ SolveInputs Front::solve_inputs(uintptr_t cancel_flag) const {
     s.real = source(seg_p0, seg_t, td_a, td_b);
     s.has_image = has_image;
     if (has_image) s.image = source(img_seg_p0, img_seg_t, img_td_a, img_td_b);
+    s.compose = compose;
+    if (compose) {
+        Compose &c = s.comp;
+        const ptrdiff_t nq = static_cast<ptrdiff_t>(n_qp_rem);
+        c.eps_t = eps_t;
+        c.c2 = c2;
+        c.ground_z = ground_z;
+        c.obs_pts = view<const double, 2>::contiguous(obs_pts.data(), {2 * n, 3});
+        c.obs_tans = s.tans;
+        c.src_c = s.cent;
+        c.src_t = s.real.seg_t;
+        c.sig_a = view<const double, 1>::contiguous(sig_a.data(), {n});
+        c.sig_b = view<const double, 1>::contiguous(sig_b.data(), {n});
+        c.grid = grid_view.get();
+        c.n_reg = n_reg;
+        c.rem_src = view<const double, 2>::contiguous(rem_src.data(), {ns * nq, 3});
+        c.rem_t_src = view<const double, 2>::contiguous(rem_t_src.data(), {ns * nq, 3});
+        c.W = rem_W.data();
+        c.n_qp = nq;
+    }
     s.window_rows = static_cast<ptrdiff_t>(window_rows);
     s.cancel_flag = cancel_flag;
     return s;

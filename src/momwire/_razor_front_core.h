@@ -26,12 +26,14 @@
 // table (`_leggauss_table.py`), which this front half reads through a header
 // generated from it (`_leggauss_table.h`, scripts/gen_leggauss_header.py).
 //
-// SCOPE: the class `_razor_solve_core.h` serves -- free space or a PERFECT
+// SCOPE: the class `_razor_solve_core.h` serves -- free space, a PERFECT
 // ground (`ground_z` with no `ground_eps`, which is also what the NEC-5 seam
-// builds for a GD card), a real k, razor-2p's two-point path rule
-// (`nec5_quadrature=True`), with or without the extended kernel, and the
-// exact ring kernel where "auto" engages it (`_razor_exact_core.h`, radius
-// steps included). Anything else `build` declines BY NAME (returns the
+// builds for a GD card) or the composing Sommerfeld ground
+// (`ground_eps=(eps_r, sigma)`, `ground_model="sommerfeld"`: the seam's GN 0
+// / GN 2, momwire#1479 S3; the grid is `_somm_grid_core.h`'s), a real k,
+// razor-2p's two-point path rule (`nec5_quadrature=True`), with or without
+// the extended kernel, and the exact ring kernel where "auto" engages it
+// (`_razor_exact_core.h`, radius steps included). Anything else `build` declines BY NAME (returns the
 // reason) and the caller keeps the Python front half: a wire listed twice
 // (momwire#1042's merge), declared `junctions=`, a wire below the plane
 // (the shared buried sentences), `exact_kernel=True`. Inside the scope every refusal the Python front half raises is
@@ -48,6 +50,7 @@
 #include "_razor_exact_core.h"
 #include "_razor_solve_core.h"
 #include "_razor_wire_loading_core.h"
+#include "_somm_grid_core.h"
 
 #include <memory>
 #include <string>
@@ -124,6 +127,11 @@ struct FrontInputs {
     WireLoading loading;
     bool has_ground = false;
     double ground_z = 0.0;
+    // `ground_eps=(eps_r, sigma)` (S/m) and `ground_model`: the composing
+    // ground when `ground_sommerfeld`; a reflection-coefficient one declines.
+    bool ground_eps_given = false;
+    double ground_eps_r = 0.0, ground_sigma = 0.0;
+    bool ground_sommerfeld = false;
     double wavelength = 22.0;
     bool extended_kernel = false;
     ExactKernel exact_kernel = ExactKernel::off;
@@ -213,6 +221,20 @@ class Front {
     std::vector<double> img_seg_p0, img_seg_t, img_td_a, img_td_b;
     int64_t window_rows = 1;
 
+    // --- the composing ground (`potential_ground_for` at the fill's omega,
+    // `fused_window_rule`, `remainder().field_windows`) --------------------
+    bool compose = false;
+    cd eps_t, c2;
+    std::vector<double> obs_pts;              // (2 n_basis, 3): the path points
+    std::vector<double> sig_a, sig_b;         // (n_basis)
+    double r1_max = 0.0;                      // `max_image_distance`
+    int64_t n_qp_rem = 0;                     // `_remainder_qp`
+    std::vector<double> rem_src, rem_t_src;   // (n_seg * n_qp_rem, 3)
+    std::vector<double> rem_W;                // (2, n_seg, n_qp_rem)
+    const somm_core::Grid *grid = nullptr;    // owned by get_grid's memo
+    std::shared_ptr<somm_proj::GridView> grid_view;
+    size_t n_reg = 0;
+
     // --- ports (`_port_columns`) ----------------------------------------
     int64_t n_ports = 0;
     std::vector<double> cols;  // (n_basis, n_ports), row-major as numpy's
@@ -247,6 +269,8 @@ class Front {
     void prepare();
     void port_columns();
     void loading_stencil();
+    std::string prepare_compose(int64_t n_qp_sommerfeld);
+    double ground_eps_r_ = 0.0, ground_sigma_ = 0.0;
     std::vector<Junction> groups_;  // `_find_junctions`
 };
 
@@ -269,6 +293,16 @@ std::string format_shape(const std::vector<int64_t> &shape);
 // `_quadrature.leggauss(n)` for a tabled order (1..192), from the frozen
 // table; false beyond it.
 bool leggauss(int64_t n, std::vector<double> &x, std::vector<double> &w);
+
+// `_sommerfeld.max_image_distance(seg_l, seg_r, ground_z)` (the 1.001
+// oversize included) and `_quadrature.remainder_qp(obs_pts, src_l, src_r,
+// ground_z, base, cap, c)`, over (n, 3) row-major arrays.
+double max_image_distance(const double *seg_l, const double *seg_r, size_t n, double ground_z);
+int64_t remainder_qp(const double *obs, size_t n_obs, const double *src_l, const double *src_r,
+                     size_t n_src, double ground_z, int64_t base, int64_t cap, double c);
+// razor's `_REMAINDER_QP_CAP` / `_REMAINDER_QP_C`.
+constexpr int64_t REMAINDER_QP_CAP = 192;
+constexpr double REMAINDER_QP_C = 1.0;
 // RazorSolver.eps / RazorSolver.mu, and the Python front half's tolerances:
 // `_junction_rule.JUNCTION_TOL`, `_feed_snap.AMBIGUITY_TOL_FRAC`,
 // `_exact_kernel_seam.EXACT_KERNEL_AUTO_H_OVER_A`. A test pins each to its

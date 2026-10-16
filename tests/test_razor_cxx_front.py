@@ -206,6 +206,44 @@ CASES = {
         feeds=[(0, 0.33, 1.0 + 0j)],
         ground_z=0.0,
     ),
+    # The composing Sommerfeld ground (momwire#1479 S3): an elevated dipole,
+    # a base-fed vertical's grounded row, a dipole low enough to raise the
+    # remainder's source order (momwire#510), and a radius step under the
+    # extended kernel.
+    "sommerfeld": dict(
+        wires=DIPOLE,
+        nsegs=21,
+        feed_arclength=5.0,
+        ground_z=0.0,
+        ground_eps=(13.0, 0.005),
+        ground_model="sommerfeld",
+    ),
+    "sommerfeld_contact": dict(
+        wires=[[(0.0, 0.0, 0.0), (0.0, 0.0, 5.2)]],
+        nsegs=12,
+        feeds=[(0, 0.0, 1.0 + 0j)],
+        ground_z=0.0,
+        ground_eps=(5.0, 0.001),
+        ground_model="sommerfeld",
+    ),
+    "sommerfeld_grazing": dict(
+        wires=[[(0.0, -5.0, 0.05), (0.0, 5.0, 0.05)]],
+        nsegs=21,
+        feed_arclength=5.0,
+        ground_z=0.0,
+        ground_eps=(5.0, 0.001),
+        ground_model="sommerfeld",
+    ),
+    "sommerfeld_radius_step_ek": dict(
+        wires=[[(0.0, -5.0, 6.0), (0.0, 0.0, 6.0)], [(0.0, 0.0, 6.0), (0.0, 5.0, 6.0)]],
+        n_per_edge_per_wire=[[10], [10]],
+        wire_radius=[0.002, 0.004],
+        feeds=[(0, 2.5, 1.0 + 0j)],
+        ground_z=0.0,
+        ground_eps=(15.0, 0.008),
+        ground_model="sommerfeld",
+        extended_kernel=True,
+    ),
     # One-segment wires joined at one end (momwire#608), and a scalar count.
     "one_segment_wires": dict(
         wires=[
@@ -263,6 +301,8 @@ def test_the_front_half_is_the_python_front_half_to_the_bit(monkeypatch, capture
     assert after["lu_calls"] == before["lu_calls"] + 1
     if CASES[name].get("ground_z") is not None:
         assert after["image_windows"] > before["image_windows"]
+    if CASES[name].get("ground_model") == "sommerfeld":
+        assert after["compose_windows"] > before["compose_windows"]
     geom, front, cols = fc.python_front(ref)
     assert fc.differences(geom, solver._cxx_geom) == []
     assert fc.differences(front, solver._cxx_front) == []
@@ -363,6 +403,12 @@ DECLINES = [
     # Read off the constructed solver (`_cxx_front_refusal`).
     (dict(lumped_loads=[(0, 5.0, 50 + 0j)]), "loading"),
     (dict(ground_z=0.0, ground_eps=13.0 - 1.2j), "finite-ground"),
+    # The composing ground spelled with a complex eps~ rather than the seam's
+    # (eps_r, sigma): the core reads only the seam's spelling.
+    (
+        dict(ground_z=0.0, ground_eps=13.0 - 1.2j, ground_model="sommerfeld"),
+        "malformed-args",
+    ),
     (dict(nec5_quadrature=False, n_qp_path=2), "path-rule"),
     (dict(exact_kernel=True), "exact-kernel"),
     (

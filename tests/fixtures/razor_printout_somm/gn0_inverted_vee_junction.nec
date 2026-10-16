@@ -1,0 +1,13 @@
+CM An inverted vee over GN 0 with a thicker centre stub: a junction, two radii
+CM (the extended kernel's per-observer tube) and the composing fill.
+CE
+GW 1,15,-5.,0.,8.,-.2,0.,10.,.001
+GW 2,3,-.2,0.,10.,.2,0.,10.,.004
+GW 3,15,.2,0.,10.,5.,0.,8.,.001
+GE 1
+FR 0,1,0,0,14.1
+GN 0,0,0,0,15.,.008
+EX 0,2,2,0,1.,0.
+PQ 0
+RP 0,10,1,1000,0.,0.,10.,0.
+EN

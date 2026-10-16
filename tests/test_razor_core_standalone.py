@@ -65,6 +65,11 @@ CORE_SOURCES = (
     "_nec5_razor_printout_core.cpp",
     # Wire loading (LD 5 / 2 / 3): the vendored xsf's Bessel ratio.
     "_razor_wire_loading_core.cpp",
+    # The composing Sommerfeld ground (GN 0 / GN 2): the six-integral
+    # kernel, the grid, and the remainder's projection and moments.
+    "_somm_kernel_core.cpp",
+    "_somm_grid_core.cpp",
+    "_somm_proj_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
 
@@ -705,28 +710,41 @@ def test_the_network_decks_print_their_networks(driver, tmp_path):
         ), path
 
 
-def test_the_sommerfeld_decks_refuse_or_decline_by_name(driver, tmp_path):
-    """GN 0 / GN 2 reach the C++ structure half (the Sommerfeld fill does
-    not): its refusals print here, byte for byte -- a near field at a
-    grounded base, a wire in the plane, a spherical grid reaching under a GD
-    -- and a deck Python would solve declines by name, at construction
-    (`front:finite-ground`) or, buried, before it (`finite-ground-buried`)."""
+def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
+    """GN 0 / GN 2 through the C++ path (momwire#1479 S3): the composing fill
+    -- the C2-weighted image, its scaled charge term and the smooth remainder
+    over the grid -- prints served decks byte for byte (an elevated dipole, a
+    base-fed vertical's grounded row, a dipole low enough to raise the
+    remainder's source order, a two-radius junction under the extended
+    kernel); the refusals print too (a near field at a grounded base, a wire
+    in the plane, a spherical grid reaching under a GD); and what is not in
+    C++ yet declines by name: a buried wire (`finite-ground-buried`) and a
+    near field over the Sommerfeld ground."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
     decks = sorted(SOMM_DECKS.glob("*.nec"))
-    assert len(decks) == 5
+    assert len(decks) == 9
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     routes = {
         p.stem: (a["route"], a["seam"], a["reason"])
         for p, a in zip(decks, answers, strict=True)
     }
+    served = ("printed", "served", "")
     assert routes == {
         "gd_nh_spherical_below": ("printed", "refused", ""),
         "gn0_buried_radial": ("declined", "declined", "finite-ground-buried"),
+        "gn0_inverted_vee_junction": served,
         "gn0_ne_at_contact": ("printed", "refused", ""),
-        "gn0_served_dipole": ("declined", "declined", "front:finite-ground"),
+        "gn0_served_dipole": served,
         "gn2_in_plane_wire": ("printed", "refused", ""),
+        "gn2_low_dipole_grazing": served,
+        "gn2_near_field_declines": (
+            "declined",
+            "served",
+            "a near field over a Sommerfeld ground",
+        ),
+        "gn2_vertical_contact": served,
     }, routes
     for path, ans in zip(decks, answers, strict=True):
         if ans["route"] == "printed":

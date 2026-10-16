@@ -378,6 +378,7 @@ from . import (
     _razor_class,
     _razor_exact_plan,
     _schedule,
+    _sommerfeld,
     _sommerfeld_below,
     _wire_loading,
     _wire_spec,
@@ -1946,6 +1947,8 @@ class RazorSolver(
             "feed_arclength": feed_arclength,
             "node_gaps": node_gaps,
             "ground_z": ground_z,
+            "ground_eps": ground_eps,
+            "ground_model": ground_model,
             "wavelength": wavelength,
             "extended_kernel": extended_kernel,
             "exact_kernel": exact_kernel,
@@ -6747,8 +6750,18 @@ class RazorSolver(
             return "buried-route"
         if self._loading_active or self.lumped_loads or self._has_jacket_charge():
             return "loading"
-        if self.ground_eps is not None:
+        if self.ground_eps is not None and self.ground_model != "sommerfeld":
+            # The composing ground is the C++ front half's (momwire#1479 S3);
+            # the reflection-coefficient one's weighted fold is not.
             return "finite-ground"
+        if self.ground_eps is not None and not (
+            _use_razor_weighted_accel()
+            and _use_razor_q_accel()
+            and _sommerfeld._PROJ_LANES
+            and _potential_ground._MOMENT_REDUCE
+        ):
+            # The composing fill's own kernels, which the core is the twin of.
+            return "numpy-route"
         if self.ground_phi_mode != "normal":
             return "ground-phi-mode"
         if self._wire_dedup is not None:

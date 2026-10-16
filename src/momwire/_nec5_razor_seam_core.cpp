@@ -947,10 +947,6 @@ Prepared prepare(const Deck &d) {
             if (std::min(piece.points[2], piece.points[5]) <
                 0.0 - touch_tol(piece.points, piece.points + 3))
                 throw Declined{"wire-below-plane"};
-    // GN 0 / GN 2 construct RazorSolver(ground_eps=..., ground_model=
-    // "sommerfeld"): the composing fill (the Sommerfeld grid and its
-    // remainder) is not in C++, so a deck that reaches construction declines.
-    if (d.ground.kind == Ground::sommerfeld) throw Declined{"front:finite-ground"};
     razor::FrontInputs &in = p.inputs;
     for (const SeamPiece &piece : mesh.pieces) {
         in.points.insert(in.points.end(), piece.points, piece.points + 6);
@@ -1022,6 +1018,14 @@ Prepared prepare(const Deck &d) {
     }
     in.has_ground = has_ground;
     in.ground_z = 0.0;
+    // `_ground_kwargs`: GN 0 / GN 2 add `ground_eps=(medium.eps_r,
+    // medium.sigma)` and `ground_model="sommerfeld"`, the composing fill.
+    if (d.ground.kind == Ground::sommerfeld) {
+        in.ground_eps_given = true;
+        in.ground_eps_r = p.medium_eps_r;
+        in.ground_sigma = p.medium_sigma;
+        in.ground_sommerfeld = true;
+    }
     in.wavelength = p.wavelength;
     in.extended_kernel = true;
     in.exact_kernel = razor::ExactKernel::automatic;
