@@ -1125,13 +1125,31 @@ SeamResult razor_seam(const std::string &text) {
             stop(o);
             stopped = true;
         } else if (a.kind == Answer::stepped) {
-            // A stepping FR (momwire#1508): not in the C++ route yet.
-            RunOutcome o;
-            o.kind = RunOutcome::declined;
-            o.message = "stepping-fr";
-            so.runs.push_back(o);
-            stop(o);
-            stopped = true;
+            // A stepping FR (momwire#1508): `_answer` serves
+            // `replace(deck, frequency_mhz=f)` for each frequency in turn,
+            // each through the one-point `_prepare` (the sweep state Python
+            // shares between them moves no byte), stopping at the first
+            // refusal or escape.
+            if (a.deck.frequencies_too_many) {
+                RunOutcome o;
+                o.kind = RunOutcome::declined;
+                o.message = "stepping-fr-count";
+                so.runs.push_back(o);
+                stop(o);
+                stopped = true;
+            } else {
+                for (double f : a.deck.frequencies_mhz) {
+                    Deck step = a.deck;
+                    step.frequency_mhz = f;
+                    RunOutcome o = run_one(step, r, nullptr);
+                    so.runs.push_back(o);
+                    if (o.kind != RunOutcome::prepared) {
+                        stop(o);
+                        stopped = true;
+                        break;
+                    }
+                }
+            }
         } else if (a.kind == Answer::single) {
             RunOutcome o = run_one(a.deck, r, nullptr);
             so.runs.push_back(o);

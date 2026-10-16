@@ -746,7 +746,7 @@ std::string refusal(const std::string *latin1, const std::string &utf8_reason) {
 std::string not_served(std::string why) {
     static const std::pair<const char *, const char *> words[] = {
         {"finite-ground-buried", "a wire below a finite ground (GN 0 / GN 2), which this build does not solve yet"},
-        {"stepping-fr", "a stepping FR, which this build does not solve yet"},
+        {"stepping-fr-count", "a stepping FR asking for more than a million frequencies"},
         {"duplicated-wire", "a deck in which two wires coincide"},
         {"no-wires", "a deck with no wire to solve"},
         {"segment-count", "a segment count past what this build sizes"},
