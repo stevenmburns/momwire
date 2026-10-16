@@ -523,6 +523,42 @@ _FORM_CODE = {None: 0, "J": 1, "H": 2}
 # `lanes=False`, the reference; tests flip it, nothing else should.
 _SIX_LANES = True
 
+# momwire#1441 step 4, OPT-IN: the lanes' transcendental functions through
+# glibc's libmvec rather than libm per lane, as a bit mask (the C++ side's
+# MW_SL_VM_*): 1 complex exp, 2 the Bessel asymptotics' sin/cos, 4 complex log,
+# 8 complex sqrt by the lanes' own principal root; 15 is all of them. 0, the
+# default, is libm per lane -- the scalar walk's bits. One switch for every
+# lane kernel (above/above, below/below, the near-interface columns), read at
+# call time; `MOMWIRE_LANES_VECMATH` is the whole-run spelling (a census, a
+# timing), `monkeypatch.setattr(_sommerfeld, "_LANES_VECMATH", 15)` the per-test
+# one. A non-zero mode is part of every key of a table the lanes fill
+# (`_vecmath_key`), so a table filled under one route is never served under
+# the other; libmvec is glibc-only and a build without it honours nothing, so
+# the key carries what the build actually ran.
+_LANES_VECMATH = int(os.environ.get("MOMWIRE_LANES_VECMATH") or "0")
+
+
+def _lanes_vecmath(mod, lanes=True):
+    """The vector-math mode a lane kernel in `mod` runs at this call: the
+    switch masked by what the build honours (`lanes_vecmath_1441`), and 0
+    when the call runs the scalar walk (`lanes=False`)."""
+    if not _LANES_VECMATH or mod is None or not lanes:
+        return 0
+    return int(_LANES_VECMATH) & int(getattr(mod, "lanes_vecmath_1441", 0))
+
+
+def _vecmath_kw(mod, lanes=True):
+    """`vecmath=` for a lane binding in `mod`, or nothing at the default."""
+    m = _lanes_vecmath(mod, lanes)
+    return {"vecmath": m} if m else {}
+
+
+def _vecmath_key(mod=None, lanes=True):
+    """The vector-math mode as a cache-key suffix: () at the default, so a
+    default key is unchanged."""
+    m = _lanes_vecmath(_acc if mod is None else mod, lanes)
+    return (("vecmath-1441", m),) if m else ()
+
 
 def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None, cancel_flag=0):
     """`_six_integrals` over parallel (ρ, h) arrays; returns (n, 6) complex.
@@ -548,6 +584,7 @@ def _six_integrals_batch(eps_t, k2, rho, h, rtol=1e-9, form=None, cancel_flag=0)
             if _SIX_LANES or not hasattr(_acc, "somm_six_lanes_1441")
             else {"lanes": False}
         )
+        kw.update(_vecmath_kw(_acc, _SIX_LANES))
         return _acc.somm_six_integrals_batch(
             eps_t,
             float(k2),
@@ -1609,7 +1646,7 @@ def _norm_master(rung, r1b_wl, lattice_eps, cancel_flag=0):
     """The normalized master for one ladder rung on one lattice, cached in
     `_NORM_CACHE` under (rung, r1 bucket, lattice rung). A cancelled fill
     raises SolveAborted out of the constructor before the insert."""
-    nkey = ("above", rung, r1b_wl, lattice_eps)
+    nkey = ("above", rung, r1b_wl, lattice_eps) + _vecmath_key(_acc, _SIX_LANES)
     master = _NORM_CACHE.get(nkey)
     if master is None:
         _evict_fifo(_NORM_CACHE, _NORM_CACHE_MAX)
@@ -1659,7 +1696,14 @@ def get_grid(eps_t, k2, r1_max, omega, mu=_MU0, cancel_flag=0):
     # into this same cache rather than forking it, so there is one FIFO
     # bound and one eviction rule. The view is keyed on the EXACT eps_t
     # when it is a blend and on the rung when it is one (momwire#902).
-    key = ("above", lo if lo == hi else eps_t, k2, r1b_wl, float(omega), float(mu))
+    key = (
+        "above",
+        lo if lo == hi else eps_t,
+        k2,
+        r1b_wl,
+        float(omega),
+        float(mu),
+    ) + _vecmath_key(_acc, _SIX_LANES)
     grid = _GRID_CACHE.get(key)
     if grid is None:
         # The pair's lattice is its demanding rung's (the larger |Im|).

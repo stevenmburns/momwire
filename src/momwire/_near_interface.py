@@ -205,10 +205,22 @@ _SIX_COLUMNS_LANES = True
 
 
 def _columns_lanes_kw():
-    """`near_interface_six_columns`' lanes switch, for a binding that has it."""
+    """`near_interface_six_columns`' lanes switch, for a binding that has it,
+    and the lanes' vector-math mode (momwire#1441 step 4,
+    `_sommerfeld._LANES_VECMATH`)."""
+    from . import _sommerfeld
+
+    kw = _sommerfeld._vecmath_kw(_nia, _SIX_COLUMNS_LANES)
     if _SIX_COLUMNS_LANES or not hasattr(_nia, "six_columns_lanes_1441"):
-        return {}
-    return {"lanes": False}
+        return kw
+    return {"lanes": False, **kw}
+
+
+def _columns_vecmath_key():
+    """The columns' vector-math mode as a key suffix (() at the default)."""
+    from . import _sommerfeld
+
+    return _sommerfeld._vecmath_key(_nia, _SIX_COLUMNS_LANES)
 
 
 # The tests' handle on the dispatch — parity gates drive BOTH machines inside
@@ -3106,7 +3118,7 @@ def _plane_sheet(
         _SHEET_P,
         _SHEET_WAVES,
         _SHEET_DEAD,
-    )
+    ) + _columns_vecmath_key()
     with _SHEET_LOCK:
         sheet = _SHEET_CACHE.pop(key, None)
         if sheet is None:

@@ -172,27 +172,14 @@ static inline void pq(V z, double mu, M act, V &Po, V &Qo) {
     }
 }
 
-MW_SL_INLINE V cos_libm(V x, int act) {
-    Buf r = spill(x);
-    for (int l = 0; l < W; ++l)
-        if (act & (1 << l)) r.v[l] = mw_fma::opaque(std::cos(mw_fma::opaque(r.v[l])));
-    return loadu(r.v);
-}
-MW_SL_INLINE V sin_libm(V x, int act) {
-    Buf r = spill(x);
-    for (int l = 0; l < W; ++l)
-        if (act & (1 << l)) r.v[l] = mw_fma::opaque(std::sin(mw_fma::opaque(r.v[l])));
-    return loadu(r.v);
-}
-
 // mw_contour::mw_bessel_asymptotic<double> on the lanes of `act`.
 static inline void asymptotic(V z, M act, V &j0, V &j1) {
     const int ab = bits(act);
     V P0, Q0, P1, Q1;
     pq(z, 0.0, act, P0, Q0);
     pq(z, 4.0, act, P1, Q1);
-    const V cz = cos_libm(z, ab);
-    const V sz = sin_libm(z, ab);
+    const V cz = cos_lanes(z, ab);
+    const V sz = sin_lanes(z, ab);
     const V pref = sqrt(div(set1(1.0), mul(set1(mw_contour::MW_PI), z)));
     j0 = mul(pref, fma(add(P0, Q0), cz, mul(sub(P0, Q0), sz)));
     j1 = mul(pref, fma(add(P1, Q1), sz, mul(sub(Q1, P1), cz)));
@@ -351,21 +338,14 @@ static inline void pq_c(C z, double mu, M act, C &Po, C &Qo) {
     }
 }
 
-struct CcosF {
-    cd operator()(const cd &v) const { return std::cos(v); }
-};
-struct CsinF {
-    cd operator()(const cd &v) const { return std::sin(v); }
-};
-
 // mw_contour::mw_bessel_asymptotic<cd> on the lanes of `act`.
 static inline void asymptotic_c(C z, M act, C &j0, C &j1) {
     const int ab = bits(act);
     C P0, Q0, P1, Q1;
     pq_c(z, 0.0, act, P0, Q0);
     pq_c(z, 4.0, act, P1, Q1);
-    const C cz = per_lane(z, CcosF(), ab);
-    const C sz = per_lane(z, CsinF(), ab);
+    C cz, sz;
+    ccos_csin(z, ab, cz, sz);
     const C pref = csqrt_libm(cdiv(1.0, cscale(mw_contour::MW_PI, z)), ab);
     j0 = cmul(pref, cmul_add(cadd(P0, Q0), cz, cmul(csub(P0, Q0), sz)));
     j1 = cmul(pref, cmul_add(cadd(P1, Q1), sz, cmul(csub(Q1, P1), cz)));

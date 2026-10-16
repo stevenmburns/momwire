@@ -407,7 +407,8 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     double lam_mult, int p, double detour, int n_threads,
     py::array_t<double, py::array::c_style | py::array::forcecast> gx,
     py::array_t<double, py::array::c_style | py::array::forcecast> gw,
-    uintptr_t cancel_flag = 0, py::object cache = py::none(), bool lanes = true) {
+    uintptr_t cancel_flag = 0, py::object cache = py::none(), bool lanes = true,
+    int vecmath = 0) {
     if (rho.ndim() != 1 || offsets.ndim() != 1 || z.ndim() != 1 ||
         zp.ndim() != 1)
         throw std::invalid_argument("rho, offsets, z and zp must be 1-D");
@@ -522,6 +523,8 @@ static py::array_t<std::complex<double>> near_interface_six_columns(
     {
         py::gil_scoped_release release;
         NI_CANCEL_SETUP(cancel_flag);
+        // momwire#1441 step 4: the lanes' vector-math mode for this call.
+        const mw_sl::VecmathScope vm_scope(lanes ? vecmath : 0);
         // Polled per column, and per member of a column too big to be one
         // work item; checked between those columns, whose rules are built
         // serially.
@@ -936,6 +939,7 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
           py::arg("detour"), py::arg("n_threads"), py::arg("gx"),
           py::arg("gw"), py::arg("cancel_flag") = 0,
           py::arg("cache") = py::none(), py::arg("lanes") = true,
+          py::arg("vecmath") = 0,
           "six_columns over CONCATENATED columns -> (n, 6) complex. Column c "
           "owns members offsets[c]..offsets[c+1], all at rho[c]; the answer "
           "keeps the members' order. Parallel over columns, and over the "
@@ -946,6 +950,8 @@ PYBIND11_MODULE(MOMWIRE_MODULE_NAME, m) {
     // momwire#1441 step 3: the rule's Bessel pairs and factors run four nodes
     // at a time; `lanes=False` is the scalar walk, gated bit for bit.
     m.attr("six_columns_lanes_1441") = true;
+    // momwire#1441 step 4: `vecmath`, as somm_six_integrals_batch's.
+    m.attr("lanes_vecmath_1441") = mw_sl::kVecmathBuilt;
     // The plane sheet's flag (momwire#1173 Design E), its own name for the
     // same reason as the two above.
     // Design E's sheets, on the strip grid (phase 2): their own flag, for the
