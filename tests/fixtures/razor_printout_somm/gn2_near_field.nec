@@ -1,5 +1,5 @@
-CM A near field over GN 2: the reflected-field remainder is not in C++ yet,
-CM so the deck declines by name.
+CM A near field over GN 2: direct + C2 image + the reflected-field remainder
+CM (`_somm_field_core`, momwire#1479 S4).
 CE
 GW 1,21,0.,-5.,10.,0.,5.,10.,.001
 GE 1

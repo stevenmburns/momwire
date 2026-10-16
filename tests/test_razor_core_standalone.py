@@ -719,14 +719,15 @@ def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
     base-fed vertical's grounded row, a dipole low enough to raise the
     remainder's source order, a two-radius junction under the extended
     kernel); the refusals print too (a near field at a grounded base, a wire
-    in the plane, a spherical grid reaching under a GD); and what is not in
-    C++ yet declines by name: a buried wire (`finite-ground-buried`) and a
-    near field over the Sommerfeld ground."""
+    in the plane, a spherical grid reaching under a GD); a near field over the
+    composing ground prints too (S4: `C2 image + remainder` through
+    `_somm_field_core`); and a buried wire declines by name
+    (`finite-ground-buried`)."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
     decks = sorted(SOMM_DECKS.glob("*.nec"))
-    assert len(decks) == 9
+    assert len(decks) == 11
     answers = pc.run_driver(driver[0]["nec5_razor_printout_driver"], decks, tmp_path)
     routes = {
         p.stem: (a["route"], a["seam"], a["reason"])
@@ -734,18 +735,16 @@ def test_the_sommerfeld_decks_print_refuse_or_decline_by_name(driver, tmp_path):
     }
     served = ("printed", "served", "")
     assert routes == {
+        "gd_ne_dipole": served,
         "gd_nh_spherical_below": ("printed", "refused", ""),
         "gn0_buried_radial": ("declined", "declined", "finite-ground-buried"),
         "gn0_inverted_vee_junction": served,
+        "gn0_nh_dipole": served,
         "gn0_ne_at_contact": ("printed", "refused", ""),
         "gn0_served_dipole": served,
         "gn2_in_plane_wire": ("printed", "refused", ""),
         "gn2_low_dipole_grazing": served,
-        "gn2_near_field_declines": (
-            "declined",
-            "served",
-            "a near field over a Sommerfeld ground",
-        ),
+        "gn2_near_field": served,
         "gn2_vertical_contact": served,
     }, routes
     for path, ans in zip(decks, answers, strict=True):
