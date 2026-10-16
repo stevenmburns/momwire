@@ -205,12 +205,12 @@ struct BelowRemainder {
 
     // `_served_extremes(obs, src, d_obs, d_src, r1_cap)` over observers
     // [o0, o0 + m): numpy's hypot / sqrt classification, libm's atan2.
-    bool served_extremes(ptrdiff_t o0, ptrdiff_t m, double &r1_hi_o, double &lo_o,
+    bool served_extremes(const double *pts, ptrdiff_t m, double &r1_hi_o, double &lo_o,
                          double &hi_o) const {
         double lo = std::numeric_limits<double>::infinity(), hi = -lo, r1_hi = -lo;
         const ptrdiff_t S = static_cast<ptrdiff_t>(d_src.size());
         for (ptrdiff_t i = 0; i < m; i++) {
-            const double *o = obs + 3 * (o0 + i);
+            const double *o = pts + 3 * i;
             const double d_o = gz - o[2];
             for (ptrdiff_t j = 0; j < S; j++) {
                 const double rho = std::hypot(o[0] - src[3 * j], o[1] - src[3 * j + 1]);
@@ -231,10 +231,10 @@ struct BelowRemainder {
     }
 
     // `_zero_past_cap`: numpy's hypot then the root.
-    void zero_past_cap(ptrdiff_t o0, ptrdiff_t m, cd *out) const {
+    void zero_past_cap(const double *pts, ptrdiff_t m, cd *out) const {
         const ptrdiff_t S = static_cast<ptrdiff_t>(d_src.size());
         for (ptrdiff_t i = 0; i < m; i++) {
-            const double *o = obs + 3 * (o0 + i);
+            const double *o = pts + 3 * i;
             const double d_o = gz - o[2];
             for (ptrdiff_t j = 0; j < S; j++) {
                 const double rho = std::hypot(o[0] - src[3 * j], o[1] - src[3 * j + 1]);
@@ -284,13 +284,13 @@ struct BelowRemainder {
         }
     }
 
-    // `_remainder_field_proj_below` for observers [o0, o0 + m), the C++
-    // branch: run, the past-cap extremes, the refusals, the lazy fill, the
-    // re-run, the zeroing.
-    void project(ptrdiff_t o0, ptrdiff_t m, cd *out) {
+    // `_remainder_field_proj_below` for m observers (points, tangents), the
+    // C++ branch: run, the past-cap extremes, the refusals, the lazy fill,
+    // the re-run, the zeroing.
+    void project(const double *pts, const double *tans, ptrdiff_t m, cd *out) {
         const ptrdiff_t S = static_cast<ptrdiff_t>(d_src.size());
         double dmin_o = std::numeric_limits<double>::infinity();
-        for (ptrdiff_t i = 0; i < m; i++) dmin_o = std::min(dmin_o, gz - obs[3 * (o0 + i) + 2]);
+        for (ptrdiff_t i = 0; i < m; i++) dmin_o = std::min(dmin_o, gz - pts[3 * i + 2]);
         double dmin_s = std::numeric_limits<double>::infinity();
         for (double d : d_src) dmin_s = std::min(dmin_s, d);
         if (dmin_o <= 0.0 || dmin_s <= 0.0) {
@@ -308,7 +308,7 @@ struct BelowRemainder {
         auto run = [&]() {
             somm_core::below_field_proj_batch(view, 15, grid->th_min, grid->th_band_floor_hi,
                                               grid->th_band_lo_hi, grid->th_band_hi, m, S,
-                                              obs + 3 * o0, t_obs + 3 * o0, src.data(),
+                                              pts, tans, src.data(),
                                               t_src.data(), gz, k_p, k_m, out, mx_r1, mn_th, mx_th,
                                               true, true);
         };
@@ -317,7 +317,7 @@ struct BelowRemainder {
         run();
         if (mx_r1 > grid->r1_cap && mn_th < grid->th_min) {
             double a, b, c;
-            if (!served_extremes(o0, m, a, b, c)) {
+            if (!served_extremes(pts, m, a, b, c)) {
                 std::fill(out, out + m * S, cd(0.0, 0.0));
                 return;
             }
@@ -330,7 +330,7 @@ struct BelowRemainder {
             refuse_out_of_domain(rr, tt, 2);
             double fr1 = q_r1, flo = mn_th, fhi = mx_th;
             const bool past_cap = mx_r1 > grid->r1_cap;
-            if (past_cap && !served_extremes(o0, m, fr1, flo, fhi)) {
+            if (past_cap && !served_extremes(pts, m, fr1, flo, fhi)) {
                 std::fill(out, out + m * S, cd(0.0, 0.0));
                 return;
             }
@@ -342,7 +342,7 @@ struct BelowRemainder {
                 run();
             }
             if (past_cap) {
-                zero_past_cap(o0, m, out);
+                zero_past_cap(pts, m, out);
                 bool finite = true;
                 for (ptrdiff_t i = 0; i < m * S && finite; i++)
                     finite = std::isfinite(out[i].real()) && std::isfinite(out[i].imag());
@@ -350,7 +350,7 @@ struct BelowRemainder {
                     somm_below::source()->ensure_for(*grid, q_r1, tt[0], tt[1]);
                     build_view();
                     run();
-                    zero_past_cap(o0, m, out);
+                    zero_past_cap(pts, m, out);
                 }
             }
         }
@@ -643,7 +643,9 @@ const cd *fill_part(const Front &s, SolveContext &ctx, uintptr_t cancel_flag,
         in.unfused = true;
         in.c_a = bm->c_a;
         in.c_phi = bm->c_phi;
-        in.comp.proj = [rem](ptrdiff_t o0, ptrdiff_t m, cd *out) { rem->project(o0, m, out); };
+        in.comp.proj = [rem](const double *pts, const double *tans, ptrdiff_t m, cd *out) {
+            rem->project(pts, tans, m, out);
+        };
     }
     ctx.fill(in);
     return ctx.z();
