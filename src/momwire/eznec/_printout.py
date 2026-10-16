@@ -704,6 +704,9 @@ class PatternBlock:
     # Over a finite ground the range form's LOWER MEDIUM line (momwire#1237).
     lower_range_mag: float | None = None
     lower_range_phase_deg: float | None = None
+    # XNDA's D digit 1 (momwire#1503): the rows are DIRECTIVE gains, and the
+    # first column line says so.
+    directive: bool = False
 
 
 @dataclass(frozen=True)
@@ -1539,8 +1542,16 @@ _PATTERN_ROW = (
 
 def _pattern(block: PatternBlock) -> list[str]:
     """One ``RP`` answer.  The 3-D trailer prints only when it is carried."""
+    columns = _PATTERN_COLUMNS
+    if block.directive:
+        columns = (
+            columns[0].replace(
+                "          - POWER GAINS -        ", "       - DIRECTIVE GAINS -       "
+            ),
+            *columns[1:],
+        )
     if block.range_m is None:
-        lines = [_PATTERN_HEADING, "", *_PATTERN_COLUMNS]
+        lines = [_PATTERN_HEADING, "", *columns]
     else:
         lines = [
             _PATTERN_HEADING,
@@ -1564,7 +1575,7 @@ def _pattern(block: PatternBlock) -> list[str]:
             ]
         lines += [
             "",
-            *_PATTERN_COLUMNS[:2],
+            *columns[:2],
             _PATTERN_RANGE_UNITS,
         ]
     lines += [_PATTERN_ROW % row for row in block.rows]

@@ -340,11 +340,12 @@ class Nec5Network:
 
 @dataclass(frozen=True)
 class Nec5FarFieldRequest:
-    """``RP 0`` — the pattern request, in the two ``XNDA`` forms observed.
+    """``RP 0`` — the pattern request, in the ``XNDA`` forms served.
 
     ``XNDA`` 1000 is the 2-D slice EZNEC's FF Plot asks for and 1001 the
-    3-D form; the two have distinct printout formats, which is the
-    renderer's business, not this module's.
+    3-D form; 1003 is 4nec2's default (momwire#1503), printed as 1001 is,
+    and 1002 prints the average-gain trailer with no rows.  The printout
+    formats are the renderer's business, not this module's.
     """
 
     n_theta: int
@@ -620,10 +621,50 @@ _MIN_FIELDS = MappingProxyType(
 # waves, EX 5's current-slope discontinuity — is off-vocabulary here.
 _EX_KINDS = frozenset({0, 4})
 
-# The two XNDA forms observed: 1000 (2-D slice) and 1001 (3-D).  The value is
-# a packed set of output-format flags, and an unobserved packing would be a
-# printout this seam has never been shown how to write.
-_RP_XNDA = frozenset({1000, 1001})
+# The XNDA forms served: X = 1 (vertical / horizontal gains), N = 0 (no
+# normalized-gain table), D = 0 or 1 (power or directive gain), and every
+# averaging digit A.
+# EZNEC writes 1000 (2-D slice) and 1001 (3-D); 4nec2's Generate > Far Field
+# writes 1003 by default (momwire#1503).  Measured black-box on the NEC-5
+# engine (momwire#1503's captures): A = 3 prints exactly what A = 1 prints
+# (the rows and the average-gain trailer), and A = 2 prints the heading and
+# the trailer with no rows; D = 1 heads the rows DIRECTIVE GAINS and
+# normalises them to the radiated power (the trailer unmoved).  X = 0 is
+# refused: the clean-room NEC-5 build heads its gains MAJOR / MINOR while
+# the licensed x13 prints X = 0 as X = 1, so the two black boxes disagree.
+# N >= 1 (a NORMALIZED GAIN table) is refused too, not yet reproduced.
+_RP_XNDA = frozenset({1000, 1001, 1002, 1003, 1010, 1011, 1012, 1013})
+
+
+def _rp_xnda_refusal(xnda: int) -> str:
+    """The sentence for an ``RP 0`` whose XNDA this engine does not print:
+    which digit asks for what, and what to set instead (4nec2 writes these
+    from its Generate > Far Field window's Expert settings)."""
+    served = (
+        "this engine prints XNDA 1000 to 1003 and 1010 to 1013: vertical and "
+        "horizontal gains (X = 1), no normalized-gain table (N = 0), power or "
+        "directive gain (D = 0 or 1), with any averaging digit A"
+    )
+    if not 0 <= xnda <= 9999:
+        return f"RP 0 with XNDA {xnda} is not an XNDA this engine reads; {served}"
+    x, n, d = xnda // 1000, xnda // 100 % 10, xnda // 10 % 10
+    asks = []
+    if x == 0:
+        asks.append("major / minor axis gains (X = 0)")
+    elif x != 1:
+        asks.append(f"output format X = {x}")
+    if n != 0:
+        asks.append(f"a normalized-gain table (N = {n})")
+    if d not in (0, 1):
+        asks.append(f"gain type D = {d}")
+    if not asks:
+        asks.append(f"averaging A = {xnda % 10}")
+    return (
+        f"RP 0 with XNDA {xnda} asks for {' and '.join(asks)}, which this engine "
+        f"does not print; {served}.  In 4nec2, set Generate > Far Field's Expert "
+        f"settings to X = 1 (vertical / horizontal) and N = 0 (no "
+        f"normalization)"
+    )
 
 
 _SP_SPHERE = (
@@ -1473,11 +1514,7 @@ class _Nec5Parser:
             )
         xnda = card.i(3)
         if xnda not in _RP_XNDA:
-            raise DeckError(
-                f"RP 0 with XNDA {xnda} is not part of this engine's nec5 dialect, "
-                f"which serves the two forms EZNEC emits: 1000 (2-D slice) and 1001 "
-                f"(3-D)"
-            )
+            raise DeckError(_rp_xnda_refusal(xnda))
         self.requests.append(
             Nec5FarFieldRequest(
                 mode=mode,
