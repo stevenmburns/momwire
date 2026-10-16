@@ -103,6 +103,8 @@ std::vector<PlaneCrossing> plane_crossings(const Deck &d);
 std::vector<Span> span_table(const Deck &d);
 std::set<NodeKey> crossing_nodes(const Deck &d);
 bool has_buried_wire(const Deck &d);
+// `_split_notes` (momwire#1281): one printout line per card split at z = 0.
+std::vector<std::string> split_notes(const Deck &d);
 
 // `_SplitElement`: a deck element cut in two at z = 0, read back on the
 // pieces holding its two end nodes, its charge at its old centre.
