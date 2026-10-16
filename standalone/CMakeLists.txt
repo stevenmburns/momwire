@@ -97,6 +97,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_somm_kernel_core.cpp
   ${MW_SRC}/_somm_grid_core.cpp
   ${MW_SRC}/_somm_proj_core.cpp
+  ${MW_SRC}/_somm_below_proj_core.cpp
   ${MW_SRC}/_somm_field_core.cpp
 )
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
