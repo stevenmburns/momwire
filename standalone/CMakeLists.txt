@@ -85,6 +85,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_accel_razor_cplx.cpp
   ${MW_SRC}/_razor_solve_core.cpp
   ${MW_SRC}/_razor_front_core.cpp
+  ${MW_SRC}/_razor_buried_core.cpp
   ${MW_SRC}/_razor_exact_core.cpp
   ${MW_SRC}/_exact_kernel_point_core.cpp
   ${MW_SRC}/_nec5_deck_core.cpp

@@ -177,6 +177,10 @@ struct BoolArray {
     bool *data() const { return p.get(); }
 };
 
+// `Front::build`'s reason while a buried deck's fill is not served end to
+// end in C++ (momwire#1512): the front is built, its loading prepared.
+constexpr const char *BURIED_FILL_PENDING = "buried-fill";
+
 class Front {
   public:
     // Build everything. Returns "" when this solve is covered, else the name
@@ -285,6 +289,20 @@ class Front {
     // The fill's arguments, as views into this object (valid while it is).
     SolveInputs solve_inputs(uintptr_t cancel_flag) const;
 
+    // `_assemble_Z_prepare`'s tables over this object's geometry, and the
+    // composing ground's (public for the buried fill's medium fronts,
+    // `_razor_buried_core.cpp`, which build a geometry and then prepare it).
+    void prepare();
+    std::string prepare_compose(int64_t n_qp_sommerfeld);
+    int64_t n_qp_sommerfeld = 3;
+    double ground_eps_r_ = 0.0, ground_sigma_ = 0.0;
+    // The chopped rows of a medium front (`_medium_geometry`'s `chop`,
+    // momwire#813 unit 2): sorted sub-rows, which half survives ("A":
+    // centroid(A) -> knot), and each one's knot observer.
+    std::vector<int64_t> chop_rows;
+    BoolArray chop_keep_a;
+    std::vector<double> chop_pts;
+
   private:
     double norm3(const double *v) const;
     void construct(const FrontInputs &in);
@@ -295,11 +313,8 @@ class Front {
                           std::vector<Junction> &groups);
     void build_geometry();
     void refuse_coincident_segments() const;
-    void prepare();
     void port_columns();
     void loading_stencil();
-    std::string prepare_compose(int64_t n_qp_sommerfeld);
-    double ground_eps_r_ = 0.0, ground_sigma_ = 0.0;
     std::vector<Junction> groups_;  // `_find_junctions`
 };
 
