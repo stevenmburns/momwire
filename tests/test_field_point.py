@@ -743,6 +743,50 @@ def test_the_point_dyad_and_the_fill_dyad_are_one_algebra():
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("magnetic", [False, True], ids=["E", "H"])
+def test_the_kernel_is_the_numpy_body_to_rounding(monkeypatch, magnetic):
+    """The C++ remainder (`_somm_field_core.cpp`, momwire#1479 S4) against the
+    numpy body it replaced, at 0113's grid with 0110's currents: the same
+    algebra, so they differ by rounding alone -- libm's atan2 against numpy's
+    arctan2, `std::polar` against `exp(-1j k R1) / R1`, a spelled stencil
+    against an einsum. Each route is counted, so the agreement cannot be the
+    numpy body against itself.
+
+    Measured 6.2e-16 (E) and 2.8e-13 (H, whose central differences amplify
+    the rounding by about 1/(k step)); the bars are 1e-12 and 1e-10.
+    """
+    if getattr(_field_point._acc, "reflected_field_batch", None) is None:
+        pytest.skip("no accelerator")
+    deck, mesh, solver, coeffs = _solved("0110")
+    _, points = _request_points(deck)
+    mid, moment, _, _ = solver.element_currents(coeffs, subdiv=_NEAR_FIELD_SUBDIV)
+    eps_t = _ground_spec.ground_config(solver, solver.omega).eps_tilde
+    evaluate = (
+        _field_point.reflected_h_field_at
+        if magnetic
+        else _field_point.reflected_field_at
+    )
+
+    def run(cxx):
+        monkeypatch.setattr(_field_point, "_CXX_REMAINDER", cxx)
+        before = dict(_field_point._ROUTES)
+        out = evaluate(points, mid, moment, eps_t, 0.0, solver.k, solver.omega)
+        key = "cxx" if cxx else "numpy"
+        assert _field_point._ROUTES[key] > before[key]
+        return out
+
+    ours, numpy_body = run(True), run(False)
+    bar = 1e-10 if magnetic else 1e-12
+    assert np.abs(ours - numpy_body).max() <= bar * np.abs(numpy_body).max()
+    # Each point is its own sum: a reordered grid reorders the rows, bit for
+    # bit (the OpenMP schedule cannot move a value).
+    order = np.arange(len(points))[::-1]
+    monkeypatch.setattr(_field_point, "_CXX_REMAINDER", True)
+    again = evaluate(points[order], mid, moment, eps_t, 0.0, solver.k, solver.omega)
+    assert again.tobytes() == ours[order].tobytes()
+
+
+@pytest.mark.integration
 def test_the_finite_difference_curl_floor_is_measured_away_from_any_ground():
     """The magnetic evaluator's own error, pinned without a ground in sight.
 
