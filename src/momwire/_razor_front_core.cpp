@@ -288,26 +288,9 @@ std::string Front::scope(const FrontInputs &in) {
     if (in.points.size() != 3 * total) return "malformed-args";
     for (double v : in.points)
         if (!std::isfinite(v)) return "non-finite-geometry";
-    // momwire#1042: a wire listed twice is MERGED by `drop_duplicated_wires`
-    // (or refused there). Any wire whose nanometre-rounded vertex list
-    // repeats an earlier one's, either direction, is that function's
-    // candidate; this declines on every candidate, which is a superset of
-    // what it merges.
-    {
-        std::set<std::vector<double>> seen;
-        size_t off = 0;
-        for (size_t w = 0; w < n_w; w++) {
-            const size_t m = static_cast<size_t>(in.wire_points[w]);
-            std::vector<double> fwd, rev;
-            for (size_t i = 0; i < m; i++)
-                for (int c = 0; c < 3; c++) fwd.push_back(round9(in.points[3 * (off + i) + c]) + 0.0);
-            for (size_t i = m; i-- > 0;)
-                for (int c = 0; c < 3; c++) rev.push_back(round9(in.points[3 * (off + i) + c]) + 0.0);
-            const std::vector<double> &key = std::min(fwd, rev);
-            if (!seen.insert(key).second) return "duplicated-wire";
-            off += m;
-        }
-    }
+    // momwire#1042: a wire listed twice is MERGED (or refused) by
+    // `drop_duplicated_wires` in `build` (`dedup`), before `construct`.
+    (void)n_w;
     if (in.exact_kernel == ExactKernel::on) return "exact-kernel";
     if (in.ground_eps_given) {
         // The reflection-coefficient ground's weighted fold is not here; the
@@ -385,29 +368,15 @@ void Front::ground_ends(std::vector<std::pair<int64_t, End>> &touching) {
     }
 }
 
-// `_detect_junctions` (detected, never declared: declared groups are
-// declined): `_junction_rule.grouped` over every wire end, then the groups
-// that carry a through-path or touch the plane.
-void Front::detect_junctions(const std::vector<std::pair<int64_t, End>> &grounded_ends,
-                             std::vector<Junction> &groups) {
-    const size_t n_pts = static_cast<size_t>(2 * n_wires);
-    std::vector<double> pts(3 * n_pts);
-    std::vector<std::pair<int64_t, End>> labels(n_pts);
-    for (int64_t w = 0; w < n_wires; w++) {
-        const double *first = points.data() + 3 * pt_off[w];
-        const double *last = points.data() + 3 * (pt_off[w + 1] - 1);
-        for (int c = 0; c < 3; c++) {
-            pts[3 * (2 * w) + c] = first[c];
-            pts[3 * (2 * w + 1) + c] = last[c];
-        }
-        labels[2 * w] = {w, End::start};
-        labels[2 * w + 1] = {w, End::end};
-    }
+// `_junction_rule.coincident_groups`: each point's representative (the
+// first point within JUNCTION_TOL of it, by the cell grid when it can
+// promise the walk's answer, else the walk). `pts` is (n_pts, 3).
+static std::vector<size_t> coincident_reps(const std::vector<double> &pts, size_t n_pts) {
     const double tol = JUNCTION_TOL;
     auto within = [&](size_t i, size_t j) {
         double d[3] = {pts[3 * i] - pts[3 * j], pts[3 * i + 1] - pts[3 * j + 1],
                        pts[3 * i + 2] - pts[3 * j + 2]};
-        return norm3(d) <= tol;
+        return std::sqrt((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]) <= tol;
     };
     // `coincident_groups`: the cell grid when it can promise the walk's
     // answer, else the walk.
@@ -469,6 +438,28 @@ void Front::detect_junctions(const std::vector<std::pair<int64_t, End>> &grounde
             }
         }
     }
+    return rep;
+}
+
+// `_detect_junctions` (detected, never declared: declared groups are
+// declined): `_junction_rule.grouped` over every wire end, then the groups
+// that carry a through-path or touch the plane.
+void Front::detect_junctions(const std::vector<std::pair<int64_t, End>> &grounded_ends,
+                             std::vector<Junction> &groups) {
+    const size_t n_pts = static_cast<size_t>(2 * n_wires);
+    std::vector<double> pts(3 * n_pts);
+    std::vector<std::pair<int64_t, End>> labels(n_pts);
+    for (int64_t w = 0; w < n_wires; w++) {
+        const double *first = points.data() + 3 * pt_off[w];
+        const double *last = points.data() + 3 * (pt_off[w + 1] - 1);
+        for (int c = 0; c < 3; c++) {
+            pts[3 * (2 * w) + c] = first[c];
+            pts[3 * (2 * w + 1) + c] = last[c];
+        }
+        labels[2 * w] = {w, End::start};
+        labels[2 * w + 1] = {w, End::end};
+    }
+    const std::vector<size_t> rep = coincident_reps(pts, n_pts);
     // `grouped`: label groups in creation order (a representative is first
     // seen at its own index).
     std::vector<ptrdiff_t> slot(n_pts, -1);
@@ -804,9 +795,219 @@ void Front::prepare() {
     }
 }
 
-std::string Front::build(const FrontInputs &in) {
-    const std::string why = scope(in);
+int64_t Front::solved_index(int64_t w) const {
+    if (!has_dedup) return w;
+    for (size_t i = 0; i < dedup_kept.size(); i++)
+        if (dedup_kept[i] == w) return static_cast<int64_t>(i);
+    return -1;
+}
+
+namespace {
+
+// `_wire_spec._same` on the per-wire values the seam passes.
+bool same_value(double a, double b) { return (std::isnan(a) && std::isnan(b)) || a == b; }
+bool same_rlc(const WireRLC &a, const WireRLC &b) {
+    if (a.kind == WireRLC::none || b.kind == WireRLC::none) return a.kind == b.kind;
+    return a.kind == b.kind && a.r == b.r && a.l == b.l && a.c == b.c;
+}
+
+}  // namespace
+
+// `_wire_spec.drop_duplicated_wires` for `RazorSolver` (inferred junctions,
+// no junction-indexed ports): false when no copy is merged (`in` stands);
+// else `out` is `in` on the kept wires, every wire index remapped, and the
+// map is recorded. Refusals are its ValueErrors.
+bool Front::dedup(const FrontInputs &in, FrontInputs &out) {
+    const size_t n = in.wire_points.size();
+    std::vector<size_t> off(n + 1, 0);
+    for (size_t w = 0; w < n; w++) off[w + 1] = off[w] + static_cast<size_t>(in.wire_points[w]);
+    // `find_duplicated_wires`: nanometre-rounded vertex keys, either
+    // direction, then equal within 1e-12 of the coordinate scale
+    double scale = 1.0;
+    bool any = false;
+    for (size_t w = 0; w < n; w++)
+        for (size_t i = 3 * off[w]; i < 3 * off[w + 1]; i++) {
+            scale = std::max(scale, std::fabs(in.points[i]));
+            any = true;
+        }
+    if (!any) return false;
+    const double tol = 1e-12 * scale;
+    struct Dup {
+        size_t copy, first;
+        bool rev;
+    };
+    std::vector<Dup> dups;
+    std::map<std::vector<double>, size_t> seen;
+    for (size_t w = 0; w < n; w++) {
+        const size_t m = off[w + 1] - off[w];
+        if (m == 0) continue;
+        std::vector<double> fwd, rev;
+        for (size_t i = 0; i < m; i++)
+            for (int c = 0; c < 3; c++) fwd.push_back(round9(in.points[3 * (off[w] + i) + c]) + 0.0);
+        for (size_t i = m; i-- > 0;)
+            for (int c = 0; c < 3; c++) rev.push_back(round9(in.points[3 * (off[w] + i) + c]) + 0.0);
+        const std::vector<double> &key = std::min(fwd, rev);
+        auto it = seen.find(key);
+        if (it == seen.end()) {
+            seen.emplace(key, w);
+            continue;
+        }
+        const size_t first = it->second;
+        if (off[first + 1] - off[first] != m) continue;
+        double d_fwd = 0.0, d_rev = 0.0;
+        for (size_t i = 0; i < m; i++)
+            for (int c = 0; c < 3; c++) {
+                const double a = in.points[3 * (off[first] + i) + c];
+                d_fwd = std::max(d_fwd, std::fabs(a - in.points[3 * (off[w] + i) + c]));
+                d_rev = std::max(d_rev, std::fabs(a - in.points[3 * (off[w] + m - 1 - i) + c]));
+            }
+        if (d_fwd <= tol)
+            dups.push_back({w, first, false});
+        else if (d_rev <= tol)
+            dups.push_back({w, first, true});
+    }
+    if (dups.empty()) return false;
+
+    // `_merge_connected_alike` over `coincident_end_groups` (inferred)
+    std::vector<double> ends(6 * n);
+    for (size_t w = 0; w < n; w++) {
+        const size_t m = off[w + 1] - off[w];
+        for (int c = 0; c < 3; c++) {
+            ends[3 * (2 * w) + c] = in.points[3 * off[w] + c];
+            ends[3 * (2 * w + 1) + c] = in.points[3 * (off[w] + m - 1) + c];
+        }
+    }
+    const std::vector<size_t> rep = coincident_reps(ends, 2 * n);
+    std::vector<int64_t> size_of(2 * n, 0), group_of(2 * n, -1);
+    for (size_t i = 0; i < 2 * n; i++) size_of[rep[i]]++;
+    {
+        int64_t next = 0;
+        std::vector<int64_t> id(2 * n, -1);
+        for (size_t i = 0; i < 2 * n; i++) {
+            if (size_of[rep[i]] < 2) continue;  // lone ends are no group
+            if (id[rep[i]] < 0) id[rep[i]] = next++;
+            group_of[i] = id[rep[i]];
+        }
+    }
+    // `joined(w, rev)`: ends named in the class's first wire's direction
+    const auto joined = [&](size_t w, bool rev) {
+        return std::make_pair(group_of[2 * w + (rev ? 1 : 0)], group_of[2 * w + (rev ? 0 : 1)]);
+    };
+    std::vector<size_t> class_order;
+    std::map<size_t, std::vector<std::pair<size_t, bool>>> classes;
+    for (const Dup &d : dups) {
+        auto it = classes.find(d.first);
+        if (it == classes.end()) {
+            class_order.push_back(d.first);
+            it = classes.emplace(d.first, std::vector<std::pair<size_t, bool>>{{d.first, false}}).first;
+        }
+        it->second.emplace_back(d.copy, d.rev);
+    }
+    std::vector<std::pair<size_t, std::pair<size_t, bool>>> removed;  // insertion order
+    for (size_t first : class_order) {
+        struct Rep {
+            size_t w;
+            bool rev;
+            std::pair<int64_t, int64_t> key;
+        };
+        std::vector<Rep> reps;
+        for (const auto &member : classes[first]) {
+            const auto key = joined(member.first, member.second);
+            const Rep *match = nullptr;
+            for (const Rep &r : reps)
+                if (r.key == key) {
+                    match = &r;
+                    break;
+                }
+            if (match == nullptr)
+                reps.push_back({member.first, member.second, key});
+            else
+                removed.push_back({member.first, {match->w, member.second != match->rev}});
+        }
+    }
+    if (removed.empty()) return false;
+
+    const auto refuse = [](size_t r, size_t twin, const std::string &why) {
+        value_error("RazorSolver: wires " + std::to_string(twin) + " and " + std::to_string(r) +
+                    " are the same wire listed twice, and " + why +
+                    ", so they cannot be merged into one conductor. Delete wire " +
+                    std::to_string(r) + ", or make the two copies identical - momwire#1042");
+    };
+    const bool radius_list = !in.radius_shape.empty() && in.radius.size() == n;
+    for (const auto &rm : removed) {
+        const size_t r = rm.first, twin = rm.second.first;
+        const bool rev = rm.second.second;
+        if (in.counts_given && in.counts.size() == n) {
+            std::vector<int64_t> a = in.counts[twin].v, b = in.counts[r].v;
+            if (rev) std::reverse(b.begin(), b.end());
+            if (a != b) refuse(r, twin, "their segment counts differ");
+        }
+        if (radius_list && !same_value(in.radius[r], in.radius[twin]))
+            refuse(r, twin, "their wire_radius entries differ");
+        if (in.loading.has_conductivity && in.loading.conductivity.size() == n &&
+            !same_value(in.loading.conductivity[r], in.loading.conductivity[twin]))
+            refuse(r, twin, "their wire_conductivity entries differ");
+        if (in.loading.has_rlc && in.loading.rlc.size() == n &&
+            !same_rlc(in.loading.rlc[r], in.loading.rlc[twin]))
+            refuse(r, twin, "their distributed_rlc entries differ");
+        for (const FeedSpec &f : in.feeds)
+            if (f.wire == static_cast<int64_t>(r) || f.wire == static_cast<int64_t>(twin))
+                refuse(r, twin, "feeds places a site on wire " + std::to_string(f.wire));
+        for (const NodeGapSpec &g : in.node_gaps)
+            if (g.wire == static_cast<int64_t>(r) || g.wire == static_cast<int64_t>(twin))
+                refuse(r, twin, "node_gaps places a site on wire " + std::to_string(g.wire));
+    }
+
+    std::vector<bool> dropped(n, false);
+    for (const auto &rm : removed) dropped[rm.first] = true;
+    std::vector<int64_t> new_index(n, -1);
+    out = in;
+    out.points.clear();
+    out.wire_points.clear();
+    out.counts.clear();
+    out.radius.clear();
+    out.loading.conductivity.clear();
+    out.loading.rlc.clear();
+    dedup_kept.clear();
+    for (size_t w = 0; w < n; w++) {
+        if (dropped[w]) continue;
+        new_index[w] = static_cast<int64_t>(dedup_kept.size());
+        dedup_kept.push_back(static_cast<int64_t>(w));
+        out.points.insert(out.points.end(), in.points.begin() + 3 * off[w], in.points.begin() + 3 * off[w + 1]);
+        out.wire_points.push_back(in.wire_points[w]);
+        if (in.counts_given && in.counts.size() == n) out.counts.push_back(in.counts[w]);
+        if (radius_list) out.radius.push_back(in.radius[w]);
+        if (in.loading.has_conductivity && in.loading.conductivity.size() == n)
+            out.loading.conductivity.push_back(in.loading.conductivity[w]);
+        if (in.loading.has_rlc && in.loading.rlc.size() == n) out.loading.rlc.push_back(in.loading.rlc[w]);
+    }
+    if (!(in.counts_given && in.counts.size() == n)) out.counts = in.counts;
+    if (radius_list)
+        out.radius_shape.assign(1, static_cast<int64_t>(dedup_kept.size()));
+    else
+        out.radius = in.radius;
+    if (!(in.loading.has_conductivity && in.loading.conductivity.size() == n))
+        out.loading.conductivity = in.loading.conductivity;
+    if (!(in.loading.has_rlc && in.loading.rlc.size() == n)) out.loading.rlc = in.loading.rlc;
+    for (FeedSpec &f : out.feeds)
+        if (f.wire >= 0 && f.wire < static_cast<int64_t>(n)) f.wire = new_index[static_cast<size_t>(f.wire)];
+    for (NodeGapSpec &g : out.node_gaps)
+        if (g.wire >= 0 && g.wire < static_cast<int64_t>(n)) g.wire = new_index[static_cast<size_t>(g.wire)];
+    std::sort(removed.begin(), removed.end());
+    dedup_removed.clear();
+    for (const auto &rm : removed)
+        dedup_removed.push_back({static_cast<int64_t>(rm.first), static_cast<int64_t>(rm.second.first),
+                                 rm.second.second});
+    has_dedup = true;
+    n_input_wires = static_cast<int64_t>(n);
+    return true;
+}
+
+std::string Front::build(const FrontInputs &in_raw) {
+    const std::string why = scope(in_raw);
     if (!why.empty()) return why;
+    FrontInputs reduced;
+    const FrontInputs &in = dedup(in_raw, reduced) ? reduced : in_raw;
     construct(in);
 
     std::vector<std::pair<int64_t, End>> touching;

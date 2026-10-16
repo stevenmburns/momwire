@@ -1166,6 +1166,57 @@ std::vector<std::vector<cd>> knot_currents(const razor::Front &fr, const std::ve
             if (end != by_end.end() && !end->second.empty()) out[w].back() = knot(end->second);
         }
     }
+    if (fr.has_dedup) {
+        // `reads_input_wires("per_wire")` (momwire#1042): the caller's
+        // numbering, each dropped copy at zero current, sized like its twin
+        std::vector<std::vector<cd>> input(static_cast<std::size_t>(fr.n_input_wires));
+        for (std::size_t i = 0; i < fr.dedup_kept.size(); i++)
+            input[static_cast<std::size_t>(fr.dedup_kept[i])] = std::move(out[i]);
+        for (const razor::Front::Dropped &d : fr.dedup_removed)
+            input[static_cast<std::size_t>(d.copy)].assign(input[static_cast<std::size_t>(d.twin)].size(),
+                                                           cd(0.0, 0.0));
+        return input;
+    }
+    return out;
+}
+
+// `element_currents`' walk (momwire#1042): the caller's wires, a dropped copy
+// over its twin's polyline (reversed when it runs the other way), with its
+// per-edge counts alike. `solved` is -1 for a dropped copy.
+struct WireWalk {
+    std::vector<double> polyline;  // (n_points, 3)
+    std::vector<int64_t> npe;
+    int64_t solved = -1;
+};
+std::vector<WireWalk> wire_walk(const razor::Front &fr) {
+    std::vector<WireWalk> out;
+    const int64_t n = fr.has_dedup ? fr.n_input_wires : fr.n_wires;
+    const auto of_solved = [&](int64_t s, WireWalk &ww) {
+        const int64_t p0 = fr.pt_off[static_cast<std::size_t>(s)], p1 = fr.pt_off[static_cast<std::size_t>(s) + 1];
+        ww.polyline.assign(fr.points.begin() + 3 * p0, fr.points.begin() + 3 * p1);
+        ww.npe = fr.npe[static_cast<std::size_t>(s)];
+    };
+    for (int64_t w = 0; w < n; w++) {
+        WireWalk ww;
+        ww.solved = fr.solved_index(w);
+        if (ww.solved >= 0) {
+            of_solved(ww.solved, ww);
+        } else {
+            for (const razor::Front::Dropped &d : fr.dedup_removed)
+                if (d.copy == w) {
+                    of_solved(fr.solved_index(d.twin), ww);
+                    if (d.reversed) {
+                        const std::size_t m = ww.polyline.size() / 3;
+                        std::vector<double> r(ww.polyline.size());
+                        for (std::size_t i = 0; i < m; i++)
+                            for (int c = 0; c < 3; c++) r[3 * i + c] = ww.polyline[3 * (m - 1 - i) + c];
+                        ww.polyline = r;
+                        std::reverse(ww.npe.begin(), ww.npe.end());
+                    }
+                }
+        }
+        out.push_back(std::move(ww));
+    }
     return out;
 }
 
@@ -1241,14 +1292,14 @@ void linspace3(const double *a, const double *b, int64_t num, std::vector<double
 // `(0.5 * (I1 + I0))[:, None] * (k1 - k0)`.
 void element_moments(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i,
                      std::vector<double> &mid, std::vector<cd> &moment) {
-    for (int64_t w = 0; w < fr.n_wires; w++) {
+    const std::vector<WireWalk> walk = wire_walk(fr);
+    for (std::size_t w = 0; w < walk.size(); w++) {
         std::vector<double> knots;
-        const int64_t p0 = fr.pt_off[static_cast<std::size_t>(w)];
-        const std::vector<int64_t> &npe = fr.npe[static_cast<std::size_t>(w)];
+        const std::vector<double> &poly = walk[w].polyline;
+        const std::vector<int64_t> &npe = walk[w].npe;
         for (std::size_t e = 0; e < npe.size(); e++) {
             std::vector<double> seg;
-            linspace3(&fr.points[static_cast<std::size_t>(3 * (p0 + e))],
-                      &fr.points[static_cast<std::size_t>(3 * (p0 + e + 1))], npe[e] + 1, seg);
+            linspace3(&poly[3 * e], &poly[3 * (e + 1)], npe[e] + 1, seg);
             knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
         }
         const std::vector<cd> &cur = knot_i[static_cast<std::size_t>(w)];
@@ -1679,14 +1730,14 @@ struct Elements {  // `element_currents(coeffs, subdiv)`'s (mid, moment, nodes, 
 Elements element_currents_sub(const razor::Front &fr, const std::vector<std::vector<cd>> &knot_i,
                               int64_t subdiv) {
     Elements el;
-    for (int64_t w = 0; w < fr.n_wires; w++) {
+    const std::vector<WireWalk> walk = wire_walk(fr);
+    for (std::size_t w = 0; w < walk.size(); w++) {
         std::vector<double> knots;
-        const int64_t p0 = fr.pt_off[static_cast<std::size_t>(w)];
-        const std::vector<int64_t> &npe = fr.npe[static_cast<std::size_t>(w)];
+        const std::vector<double> &poly = walk[w].polyline;
+        const std::vector<int64_t> &npe = walk[w].npe;
         for (std::size_t e = 0; e < npe.size(); e++) {
             std::vector<double> seg;
-            linspace3(&fr.points[static_cast<std::size_t>(3 * (p0 + e))],
-                      &fr.points[static_cast<std::size_t>(3 * (p0 + e + 1))], npe[e] * subdiv + 1, seg);
+            linspace3(&poly[3 * e], &poly[3 * (e + 1)], npe[e] * subdiv + 1, seg);
             knots.insert(knots.end(), seg.begin() + (e == 0 ? 0 : 3), seg.end());
         }
         const std::size_t nk = knots.size() / 3;
@@ -1699,17 +1750,18 @@ Elements element_currents_sub(const razor::Front &fr, const std::vector<std::vec
             run = q == 1 ? step : run + step;
             arcs[q] = run;
         }
-        const int64_t a0 = fr.seg_offsets[static_cast<std::size_t>(w)] + w;
-        const int64_t na = fr.seg_offsets[static_cast<std::size_t>(w) + 1] - fr.seg_offsets[static_cast<std::size_t>(w)] + 1;
+        std::vector<cd> cur(nk, cd(0.0, 0.0));  // a dropped copy: zeros (momwire#1042)
+        const int64_t s = walk[w].solved;
+        const int64_t a0 = s < 0 ? 0 : fr.seg_offsets[static_cast<std::size_t>(s)] + s;
+        const int64_t na = s < 0 ? 0 : fr.seg_offsets[static_cast<std::size_t>(s) + 1] - fr.seg_offsets[static_cast<std::size_t>(s)] + 1;
         const double *arc = &fr.arc_at_knot[static_cast<std::size_t>(a0)];
-        const std::vector<cd> &kc = knot_i[static_cast<std::size_t>(w)];
+        const std::vector<cd> &kc = knot_i[w];
         std::vector<double> re(kc.size()), im(kc.size());
         for (std::size_t q = 0; q < kc.size(); q++) {
             re[q] = kc[q].real();
             im[q] = kc[q].imag();
         }
-        std::vector<cd> cur(nk);
-        for (std::size_t q = 0; q < nk; q++) {
+        for (std::size_t q = 0; q < nk && s >= 0; q++) {
             const double ir = np_interp(arcs[q], arc, re.data(), na);
             const double ii = np_interp(arcs[q], arc, im.data(), na);
             const cd j_ii = np_cmul(cd(0.0, 1.0), cd(ii, 0.0));  // `1j * Iim`
@@ -2231,7 +2283,13 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
         const int64_t ne = piece.n_elements();
         const double step = piece.length() / static_cast<double>(ne);
         const std::vector<cd> &I = knots[w];
-        const double *arc = arc_of(fr, static_cast<int64_t>(w));
+        const int64_t solved = fr.solved_index(static_cast<int64_t>(w));
+        if (solved < 0) {
+            // a dropped copy (momwire#1042): zero slope at every centre
+            slopes.emplace_back(static_cast<std::size_t>(ne), cd(0.0, 0.0));
+            continue;
+        }
+        const double *arc = arc_of(fr, solved);
         const int64_t n_knots = static_cast<int64_t>(I.size()), nseg = n_knots - 1;
         std::vector<cd> slope(static_cast<std::size_t>(nseg));
         for (int64_t j = 0; j < nseg; j++) {
