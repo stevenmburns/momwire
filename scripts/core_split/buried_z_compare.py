@@ -115,6 +115,77 @@ def python_stages(text):
     return [s for s in solves if s["stages"]]
 
 
+def dump_below_grids(out_dir):
+    """Every below/below grid the Python route holds (`_sommerfeld._GRID_CACHE`
+    under a "below" key) as the test bridge's files (`_somm_below_grid_core.cpp`
+    documents the layout): the key, the routing edges, and each region's table
+    with its filled flag, as the Python route left them."""
+    import struct
+
+    from momwire import _sommerfeld
+
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for f in out_dir.glob("*.bin"):
+        f.unlink()
+    n = 0
+    for key, grid in list(_sommerfeld._GRID_CACHE.items()):
+        if not (isinstance(key, tuple) and key and key[0] == "below"):
+            continue
+        _tag, eps_t, k2, r1b_wl, omega, mu, spacing = key[:7]
+        blended = len(key) > 7
+        parts = [b"MWBELOW1"]
+        parts.append(
+            struct.pack(
+                "<9d",
+                complex(eps_t).real,
+                complex(eps_t).imag,
+                float(k2),
+                float(r1b_wl),
+                float(omega),
+                float(mu),
+                *[float(v) for v in spacing],
+            )
+        )
+        parts.append(struct.pack("<q", int(blended)))
+        km = complex(grid.k_m)
+        parts.append(
+            struct.pack(
+                "<12d",
+                float(grid.lam_m),
+                float(grid.r1_max),
+                float(grid.r1_cap),
+                float(grid.r_break),
+                float(grid.r_near),
+                float(grid.th_min),
+                float(grid.th_band_floor_hi),
+                float(grid.th_band_lo_hi),
+                float(grid.th_band_hi),
+                float(grid._th_split),
+                km.real,
+                km.imag,
+            )
+        )
+        for reg in grid._regions:
+            vals = np.ascontiguousarray(reg["vals"], dtype=np.complex128)
+            parts.append(
+                struct.pack(
+                    "<4d3q",
+                    float(reg["r0"]),
+                    float(reg["dr"]),
+                    float(reg["th0"]),
+                    float(reg["dth"]),
+                    int(reg["n_r"]),
+                    int(reg["n_th"]),
+                    int(bool(reg["filled"])),
+                )
+            )
+            parts.append(vals.tobytes())
+        (out_dir / f"grid{n:03d}.bin").write_bytes(b"".join(parts))
+        n += 1
+    return n
+
+
 def main(argv):
     from momwire import _accel
 
@@ -126,9 +197,12 @@ def main(argv):
     with out_path.open("w") as out:
         for deck in decks:
             text = deck.read_text(encoding="latin-1")
-            for k, py in enumerate(python_stages(text)):
+            solves = python_stages(text)
+            bridge = out_path.with_suffix(".tables")
+            dump_below_grids(bridge)
+            for k, py in enumerate(solves):
                 row = {"deck": str(deck), "solve": k}
-                got = acc.razor_buried_stages(py["kwargs"])
+                got = acc.razor_buried_stages(py["kwargs"], below_tables=str(bridge))
                 row["route"] = got.get("route")
                 row["reached"] = []
                 mism = []
