@@ -204,6 +204,12 @@ struct Deck {  // Nec5Deck, in its field order
     std::vector<Network> networks;
     bool has_frequency = false;
     double frequency_mhz = 0;
+    // A stepping FR's frequencies, in order, the first being frequency_mhz
+    // (momwire#1508); empty for a one-frequency deck. `frequencies_too_many`:
+    // the count was past what the reader materialises (the list then holds
+    // the first frequency only, and the seam declines the deck).
+    std::vector<double> frequencies_mhz;
+    bool frequencies_too_many = false;
     std::vector<Request> requests;
     bool has_pq = false;
     Int pq;
@@ -242,8 +248,12 @@ bool split_runs(const std::string &latin1_text, std::vector<std::string> &out);
 // serve (and the per-run decks of a multi-run deck), or the refusal it
 // prints (`refused`, the message), or the exception that escapes it
 // (`raised`, which `_shell.main`'s last line of defence then reports).
+// `stepped`: momwire#1508's stepping FR -- `deck` carries the frequencies,
+// and `multi_run` says whether the deck also split into XQ runs (which
+// `_stepping_refusal` then refuses).
 struct Answer {
-    enum Kind { refused, raised, single, multi } kind = refused;
+    enum Kind { refused, raised, single, multi, stepped } kind = refused;
+    bool multi_run = false;  // stepped
     ErrorKind error_kind = ErrorKind::deck_error;
     std::string message;  // UTF-8; refused / raised
     Deck deck;            // single / multi; source_text is the echo text
