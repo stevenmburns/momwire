@@ -151,6 +151,7 @@ def python_mesh(prepared):
                 "sign": s.sign,
                 "arclength": s.arclength,
                 "contact": s.contact,
+                "crossing": s.crossing,
                 "index": s.index,
                 "column": s.column,
                 "weight": s.weight,
@@ -158,12 +159,28 @@ def python_mesh(prepared):
         )
     medium = prepared.medium
     return {
-        "pieces": [(p.tag, p.first_node, p.last_node, p.radius) for p in mesh.pieces],
+        "pieces": [
+            (
+                p.tag,
+                p.first_node,
+                p.last_node,
+                p.radius,
+                p.cut_start,
+                p.cut_end,
+                tuple(float(v) for v in p.points[0]),
+                tuple(float(v) for v in p.points[1]),
+            )
+            for p in mesh.pieces
+        ],
         "junctions": [list(g) for g in mesh.junctions],
         "sites": sites,
         "feeds": [s.index for s in mesh.feeds],
         "gaps": [s.index for s in mesh.gaps],
         "element_of": [tuple(e) for e in mesh.element_of],
+        "split_elements": {
+            k: (v.lower, v.upper, v.centre_piece, v.centre_s)
+            for k, v in mesh.split_elements.items()
+        },
         "node_count": structure.node_count,
         "wire_element_count": structure.wire_element_count,
         "unknown_count": structure.unknown_count,
@@ -265,7 +282,7 @@ def compare(text, acc, fc):
         cmesh["source_sites"] = sorted(cmesh["source_sites"])
         cmesh["phantom_tags"] = sorted(cmesh["phantom_tags"])
         d += fc.differences(mesh, cmesh, f"prepared[{k}].mesh")
-        if "X" in p:
+        if "X" in p and "X" in c:
             y = c["cols"].T @ c["X"]
             x_same = _same_solution(p["X"], c["X"])
             y_same = _same_solution(p["Y"], y)

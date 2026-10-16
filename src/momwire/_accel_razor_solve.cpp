@@ -637,7 +637,9 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
     py::list pieces, junctions, sites, feeds, gaps;
     for (const auto &pc : m.pieces)
         pieces.append(py::make_tuple(py::int_(py::str(pc.tag.str())), pc.first_node,
-                                     pc.last_node, pc.radius));
+                                     pc.last_node, pc.radius, pc.cut_start, pc.cut_end,
+                                     py::make_tuple(pc.points[0], pc.points[1], pc.points[2]),
+                                     py::make_tuple(pc.points[3], pc.points[4], pc.points[5])));
     for (const auto &g : m.junctions) {
         py::list members;
         for (const auto &e : g) members.append(end_label(e));
@@ -654,6 +656,7 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
         x["sign"] = s.sign;
         x["arclength"] = s.arclength;
         x["contact"] = s.contact;
+        x["crossing"] = s.crossing;
         x["index"] = s.index;
         x["column"] = s.column;
         x["weight"] = s.weight;
@@ -669,6 +672,11 @@ py::dict seam_mesh(const mw::nec5::Prepared &p) {
     py::list element_of;
     for (const auto &e : m.element_of) element_of.append(py::make_tuple(e.first, e.second));
     d["element_of"] = element_of;
+    py::dict split;
+    for (const auto &kv : m.split_elements)
+        split[py::int_(kv.first)] = py::make_tuple(kv.second.lower, kv.second.upper,
+                                                    kv.second.centre_piece, kv.second.centre_s);
+    d["split_elements"] = split;
     d["node_count"] = p.structure.node_count;
     d["wire_element_count"] = p.structure.wire_element_count;
     d["unknown_count"] = p.structure.unknown_count;
@@ -739,7 +747,7 @@ py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
         const mw::razor::Front &f = *p.front;
         pd["cols"] = np2(f.cols, f.n_basis, f.n_ports);
         pd["ties"] = ties_list(f);
-        if (solve) {
+        if (solve && !p.unsolved) {
             const ptrdiff_t n = f.n_basis, m = f.n_ports;
             const mw::razor::Lapack &lp = scipy_lapack();
             py::array_t<cd, py::array::f_style> X({n, m});
