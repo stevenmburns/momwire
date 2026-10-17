@@ -383,6 +383,10 @@ _ACCEL_HEADERS = [
     # and razor's exact-kernel plan and correction for the C++ route.
     "src/momwire/_exact_kernel_point_inline.h",
     "src/momwire/_exact_kernel_point_core.h",
+    # The coaxial pair moments' shared text and its Python-free twin
+    # (momwire#1517 step 0): `_accel_exact_kernel.cpp` compiles the same text.
+    "src/momwire/_exact_kernel_coaxial_inline.h",
+    "src/momwire/_exact_kernel_coaxial_core.h",
     "src/momwire/_razor_exact_core.h",
     # The frozen Gauss-Legendre rules, generated from `_leggauss_table.py`
     # (scripts/gen_leggauss_header.py), read by the front half.
@@ -508,6 +512,11 @@ _ACCEL_SOURCES = [
     # bits). Their own TUs for 1410's reason.
     "src/momwire/_razor_exact_core.cpp",
     "src/momwire/_exact_kernel_point_core.cpp",
+    # The coaxial pair moments' Python-free twin of `_accel_exact_kernel.cpp`
+    # (the same inline text, so the same bits): the B-spline basis' exact
+    # kernel for the standalone path (momwire#1517 step 0). Its own TU for
+    # 1410's reason.
+    "src/momwire/_exact_kernel_coaxial_core.cpp",
     "src/momwire/_accel_razor_solve.cpp",
     # The NEC-5 deck reader (unit 2a of the standalone razor-2p executable):
     # `deck/_nec5.py` and the EZNEC seam's text-level front in C++, Python-
