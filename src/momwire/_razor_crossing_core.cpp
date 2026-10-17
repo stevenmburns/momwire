@@ -1,5 +1,6 @@
 // razor-2p's crossing blocks in C++: see `_razor_crossing_core.h`. Every
 // step names the `_crossing_fill.py` / razor.py function it replays.
+#include "_study_timers.h"
 #include "_razor_crossing_core.h"
 
 #include "_near_interface_eval.h"
@@ -481,6 +482,7 @@ int team(const BlockEval &be, size_t work) {
 // asked points: rho folded with the radius.
 void tables(BlockEval &be, double a_wire, const std::vector<double> &rho, const std::vector<double> &z,
             const std::vector<double> &zp, const std::vector<int64_t> *labels, std::vector<Six> &out) {
+    STUDY_T("cross.tables");
     std::vector<double> re(rho.size());
     for (size_t i = 0; i < rho.size(); i++) re[i] = std::hypot(rho[i], a_wire);
     out.resize(rho.size());
@@ -540,6 +542,7 @@ void axpy_gather(cd *__restrict y, const cd *__restrict tab, const uint32_t *__r
 // block of the five-term contraction, times c1 (zero outside rA x rB, then
 // times c1 as numpy multiplies the whole block).
 std::vector<cd> main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const Axis &A, const Axis &B) {
+    STUDY_T("cross.main_sandwich");
     const size_t nA = A.n_nodes(), nB = B.n_nodes();
     // The sheet plan, once per fill, from the node pairs.
     {
@@ -679,6 +682,7 @@ std::vector<cd> real_matvec(const CSR &M, const std::vector<cd> &v) {
 
 std::vector<EndVec> end_vectors(const Ctx &c, BlockEval &be, double a_wire, const std::vector<End> &ends,
                                 const Axis &line, bool end_above) {
+    STUDY_T("cross.end_vectors");
     std::vector<EndVec> out;
     const size_t n = line.n_nodes();
     if (ends.empty()) return out;
@@ -761,6 +765,7 @@ std::vector<EndVec> end_vectors(const Ctx &c, BlockEval &be, double a_wire, cons
 // scattered into t (nR x nC, row-major).
 void add_end_terms(const Ctx &c, BlockEval &be, double a_wire, const Axis &R, const Axis &C,
                    bool r_above, std::vector<cd> &t) {
+    STUDY_T("cross.add_end_terms");
     const int64_t nR = R.n_basis, nC = C.n_basis;
     auto live = [](const Axis &ax) {
         std::set<int64_t> s;
@@ -871,6 +876,7 @@ int n_physical_threads() {
 // each T2 endpoint of A (above rows) and P (below rows), np.add.at'ed.
 std::vector<cd> node_charges(const Ctx &c, const Axis &A, const Axis &P,
                              const std::vector<std::pair<int64_t, int>> &tents, uintptr_t cancel_flag) {
+    STUDY_T("cross.node_charges");
     const Front &f = *c.f;
     const size_t T = tents.size();
     const int64_t n = f.n_basis;
@@ -993,6 +999,7 @@ std::vector<cd> node_charges(const Ctx &c, const Axis &A, const Axis &P,
 
 void crossing_blocks(const Front &f, std::vector<cd> &z,
                      const std::vector<std::pair<int64_t, int>> &tents, uintptr_t cancel_flag) {
+    STUDY_T("cross.TOTAL");
     const Ctx c = make_ctx(f);
     const int64_t n = f.n_basis;
     const Axis A = crossing_path_axis(f, tents, false);

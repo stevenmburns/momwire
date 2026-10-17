@@ -34,6 +34,7 @@
 //             ...), W), arange, ...)
 //   rows    = razor_t2_rows(..., M0w, ...) + Q      (`C2 img + Q`, then the
 //             one `out[lo:hi] -= rows`)
+#include "_study_timers.h"
 #include "_razor_solve_core.h"
 
 #include "_razor_core.h"
@@ -95,6 +96,7 @@ inline cd np_cdiv(cd a, cd b) {
 void moments(const SolveInputs &in, view<const double, 2> obs, const SourceSet &src,
              bool need_m1, view<const int64_t, 1> gi, view<const double, 1> bo, view<cd, 2> m0,
              view<cd, 2> m1) {
+    STUDY_T(in.k_complex ? "razor.moments_cplx" : "razor.moments_real");
     if (in.k_complex)
         seg_moments_cplx(obs, src.seg_p0, src.seg_t, in.seg_h, in.a, in.xg, in.wg, in.k_c, need_m1,
                          gi, src.group_j, src.a_ek, in.cancel_flag, bo, m0, m1);
@@ -384,6 +386,7 @@ void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, boo
 void SolveContext::fill(const SolveInputs &in) { fill(in, nullptr); }
 
 void SolveContext::fill(const SolveInputs &in, const std::function<void(cd *)> &between) {
+    STUDY_T("razor.fill_part");
     const auto t0 = std::chrono::steady_clock::now();
     const ptrdiff_t n = in.s_a.shape(0);
     const char *who = "razor_solve";
@@ -505,6 +508,7 @@ void SolveContext::add_at(const int64_t *rows, const int64_t *cols, const cd *va
 }
 
 int SolveContext::lu_solve(const Lapack &lp, cd *b, int n_rhs) {
+    STUDY_T("lu_solve");
     if (lp.getrf == nullptr || lp.getrs == nullptr)
         throw std::invalid_argument("razor_solve: no LAPACK routines were supplied");
     const auto t0 = std::chrono::steady_clock::now();

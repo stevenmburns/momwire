@@ -1,4 +1,5 @@
 // razor-2p's buried fill in C++: see `_razor_buried_core.h`.
+#include "_study_timers.h"
 #include "_razor_buried_core.h"
 
 #include "_razor_crossing_core.h"
@@ -605,6 +606,7 @@ std::string grazing_refusal(const Front &s, const std::vector<double> &plan_skip
 // remainder read, the source nodes and moment weights at n_qp_sommerfeld
 // (flat: no grazing keying below), the grid radius and the grid.
 void prepare_below(Front &s, const BelowMedium &bm, BelowRemainder &rem) {
+    STUDY_T("buried.prepare_below");
     const size_t n = static_cast<size_t>(s.n_basis), ns = static_cast<size_t>(s.n_seg);
     s.eps_t = bm.eps_t;
     s.c2 = bm.a_m;  // the image coefficient through the windows: A_m
@@ -701,6 +703,7 @@ const cd *fill_part(const Front &s, SolveContext &ctx, uintptr_t cancel_flag,
 }  // namespace
 
 MediumPart medium_part(const Front &f, bool below) {
+    STUDY_T(below ? "buried.medium_part_below" : "buried.medium_part_above");
     MediumPart mp;
     mp.front.reset(new Front());
     Front &s = *mp.front;
@@ -814,6 +817,7 @@ MediumPart medium_part(const Front &f, bool below) {
 
 static std::string fill_buried_inner(const Front &f, std::vector<cd> &out, BuriedStages *stages,
                                      uintptr_t cancel_flag) {
+    STUDY_T("buried.TOTAL");
     if (f.buried == Buried::none) throw std::invalid_argument("fill_buried: not a buried deck");
     const int64_t n = f.n_basis;
     const auto record = [&](const char *name) {

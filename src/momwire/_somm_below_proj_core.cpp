@@ -6,6 +6,7 @@
 // (momwire#1194), as in every kernel TU. Not one operation moved: the binding's
 // outputs hash identically before and after (scripts/core_split/
 // below_proj_hash.py), and the buried fill's stage gate reads it.
+#include "_study_timers.h"
 #include "_mw_core.h"
 #include "_somm_below_proj_core.h"
 #include "_accel_somm_proj_inline.h"
@@ -453,6 +454,7 @@ void below_field_proj_batch(const somm_proj::GridView &G, size_t n_reg, double t
                             double ground_z, double k_p, std::complex<double> k_m,
                             std::complex<double> *out, double &mx_r1_out, double &mn_th_out,
                             double &mx_th_out, bool blocked, bool lanes) {
+    STUDY_T("proj.below_batch");
     using somm_proj::cd;
     using namespace mw568_below;
     const cd km(k_m);

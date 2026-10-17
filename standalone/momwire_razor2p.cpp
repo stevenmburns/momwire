@@ -46,6 +46,7 @@
 //   MW_EXE_COPY=threads      one thread through the OpenMP copy, not the serial one
 //   MW_EXE_FAIL=alloc|runtime  (no-Python build) throw from the solve, to test
 //                            the INTERNAL ERROR printout
+#include "_study_timers.h"
 #include "_nec5_deck_core.h"
 #include "_nec5_razor_printout_core.h"
 #include "route.h"
@@ -647,6 +648,7 @@ int main(int argc, char **argv) {
                     if (env("MW_EXE_TIMES") == "1")
                         std::fprintf(stderr, "cxx: threads %d, answer %.3f ms, total %.3f ms\n",
                                      threads, ms_since(t), ms_since(T0));
+                    study::dump();
                     return 0;
                 }
             }

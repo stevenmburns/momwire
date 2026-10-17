@@ -4,6 +4,7 @@
 // loop and lanes) and `_accel_mw568.cpp` (the moment reduction); those TUs
 // keep only the bindings. `_mw_core.h` comes first for the TU-wide
 // `omp declare simd` declarations (momwire#1194), as in every kernel TU.
+#include "_study_timers.h"
 #include "_mw_core.h"
 #include "_somm_proj_core.h"
 
@@ -137,6 +138,7 @@ void field_proj_batch(const somm_proj::GridView &G, size_t n_reg,
                       const double *t_src, double ground_z, double k,
                       std::complex<double> *out, uintptr_t cancel_flag,
                       bool lanes) {
+    STUDY_T("proj.above_batch");
     using somm_proj::cd;
     // Per-source constants (n-only): position + tangent decomposition.
     std::vector<double> sx(S), sy(S), sz(S), ux(S), uy(S), thsrc(S), tzsrc(S);
@@ -263,6 +265,7 @@ void field_proj_nodes(const somm_proj::GridView &G, std::ptrdiff_t M, std::ptrdi
 void moment_reduce(const std::complex<double> *proj, const double *W,
                    std::ptrdiff_t P, std::ptrdiff_t N, std::ptrdiff_t q,
                    std::ptrdiff_t M, std::complex<double> *out) {
+    STUDY_T("proj.moment_reduce");
     typedef std::complex<double> cd;
     #pragma omp parallel for schedule(static)
     for (std::ptrdiff_t o = 0; o < M; ++o) {

@@ -2,6 +2,7 @@
 // function names the Python it copies; the arithmetic is that Python's, one
 // IEEE operation at a time (this TU is built -ffp-contract=off; MSVC asks for
 // precise semantics below), the fused complex product spelled with std::fma.
+#include "_study_timers.h"
 #include "_somm_grid_core.h"
 
 #include "_somm_kernel_core.h"
@@ -109,6 +110,7 @@ struct Surf {  // the four surfaces at one node
 std::vector<Surf> iv_surfaces(cd eps_t, double k2, const std::vector<double> &r1,
                               const std::vector<double> &th, double rtol, double omega,
                               double mu) {
+    STUDY_T("above.iv_surfaces");
     const std::size_t n = r1.size();
     std::vector<Surf> out(n);
     const cd k1s = py_mul(cd(k2 * k2, 0.0), eps_t);  // k2 * k2 * eps_t
@@ -300,6 +302,7 @@ Grid layout_grid(cd eps_t, double k2, double r1_max, double omega, double mu, cd
 }
 
 size_t fill_nodes(Grid &g, const std::vector<std::vector<uint8_t>> &need, double rtol) {
+    STUDY_T("above.fill_nodes");
     // The nodes asked and not yet held, region-major in C order, through one
     // `iv_surfaces_direct` call: a node's surfaces are its own arithmetic
     // (the six integrals at its (rho, h), the R1 = 0 limits, the phase), so
@@ -333,6 +336,7 @@ size_t fill_nodes(Grid &g, const std::vector<std::vector<uint8_t>> &need, double
 
 Grid fill_grid(cd eps_t, double k2, double r1_max, double rtol, double omega, double mu,
                cd lattice_eps) {
+    STUDY_T("above.fill_grid");
     Grid g = layout_grid(eps_t, k2, r1_max, omega, mu, lattice_eps);
     std::vector<std::vector<uint8_t>> all;
     for (const GridRegion &R : g.regions) all.emplace_back(R.have.size(), 1);

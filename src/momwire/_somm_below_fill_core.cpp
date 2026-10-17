@@ -1,4 +1,5 @@
 // The below/below table filled in C++: see `_somm_below_fill_core.h`.
+#include "_study_timers.h"
 #include "_somm_below_fill_core.h"
 
 #include "_leggauss_table.h"
@@ -195,6 +196,7 @@ std::string py_repr(double x) {
 // nodes as `below_six_integrals_batch` runs them; `out` is (n, 6).
 void six_many(cd eps_t, double k_p, const std::vector<double> &rho, const std::vector<double> &h,
               cd *out, const double *w_r1, const double *w_th, uintptr_t cancel_flag) {
+    STUDY_T("below.six_many");
     const int64_t n = static_cast<int64_t>(rho.size());
     if (eps_t.real() == 1.0 && eps_t.imag() == 0.0) {
         std::fill(out, out + 6 * n, cd(0.0, 0.0));
@@ -349,6 +351,7 @@ void th_nodes_of(const Region &reg, double th0_deg, double dth_deg, std::vector<
 std::unique_ptr<Grid> make_grid(cd eps_t, double k2, double r1_max, double omega, double mu,
                                 const double spacing[3], bool eager, const Grid *seed,
                                 uintptr_t cancel_flag, bool lazy) {
+    STUDY_T("below.make_grid");
     if (lazy && seed != nullptr) throw std::logic_error("a lazy below grid takes no seed");
     std::unique_ptr<Grid> gp(new Grid());
     Grid &g = *gp;
@@ -471,6 +474,7 @@ std::unique_ptr<Grid> make_grid(cd eps_t, double k2, double r1_max, double omega
 }
 
 void fill_region(Grid &g, int idx, uintptr_t cancel_flag) {
+    STUDY_T("below.fill_region");
     Region &reg = g.regions[idx];
     if (reg.filled) return;
     std::vector<double> r_nodes(static_cast<size_t>(reg.n_r)), th_nodes;
@@ -531,6 +535,7 @@ bool activate(Grid &g, int idx) {
 // the call's other nodes move no bit); the floor band's shared columns are
 // the low band's nodes (`_fill_region`'s copy), filled there and copied.
 size_t fill_lazy(Grid &g, const std::vector<std::vector<uint8_t>> &need, uintptr_t cancel_flag) {
+    STUDY_T("below.fill_lazy");
     std::vector<std::pair<int, size_t>> at;
     std::vector<double> rr, tt;
     std::vector<std::vector<uint8_t>> queued(N_REGIONS);
