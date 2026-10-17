@@ -487,5 +487,107 @@ PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vec
     return out;
 }
 
+std::vector<std::vector<cdouble>> spline_readout(const Basis &b, const Geometry &g,
+                                                 const WireDedup &dd,
+                                                 const std::vector<cdouble> &coeffs,
+                                                 const std::vector<std::vector<double>> *s_array,
+                                                 bool derivative) {
+    using nec5::replay::np_cmul;
+    const int d = b.degree, nd = d + 1;
+    const size_t n_solved = g.per_wire.size();
+    // the solved wires' sample positions (`dedup.to_solved`)
+    std::vector<std::vector<double>> s_solved;
+    if (s_array != nullptr) {
+        if (dd.active) {
+            for (int64_t w : dd.kept) s_solved.push_back((*s_array)[static_cast<size_t>(w)]);
+        } else {
+            s_solved = *s_array;
+        }
+    }
+    std::vector<std::vector<cdouble>> solved(n_solved);
+    for (size_t w = 0; w < n_solved; w++) {
+        const std::vector<double> &arc = g.per_wire[w].arc_at_knot;
+        const std::vector<double> &kv = b.wire_knots[w];
+        const double lo = kv.front(), hi = kv.back();
+        std::vector<double> s_eval;
+        if (s_array == nullptr)
+            s_eval = arc;
+        else
+            s_eval = s_solved[w];
+        for (double &v : s_eval) v = std::min(std::max(v, lo), hi);  // np.clip (NaN stays NaN)
+        const size_t n = s_eval.size();
+        std::vector<cdouble> out(n, cdouble(0.0, 0.0));
+        if (n == 0) {
+            solved[w] = out;
+            continue;
+        }
+        if (!derivative)
+            for (double v : s_eval)
+                if (std::isnan(v)) throw FrontNotPorted("a NaN current sample position");
+        // `_wire_span_polynomials`: band[s, b] the polynomial of basis s + b
+        const size_t n_seg = arc.size() - 1;
+        std::vector<double> band(n_seg * nd * nd, 0.0);
+        std::vector<cdouble> band_c(n_seg * nd, cdouble(0.0, 0.0));
+        for (const auto &jm : b.wire_globals[w]) {
+            const int64_t j = jm.first, m = jm.second;
+            const int64_t seg_lo = std::max<int64_t>(0, j - d), seg_hi = std::min<int64_t>(static_cast<int64_t>(n_seg), j + 1);
+            for (int wi = 0; wi < nd; wi++) {
+                const int64_t span = seg_lo + wi;
+                if (!(span < seg_hi)) continue;
+                const int64_t bb = j - span;
+                for (int p = 0; p < nd; p++)
+                    band[(static_cast<size_t>(span) * nd + bb) * nd + p] =
+                        b.polys[(static_cast<size_t>(m) * nd + wi) * nd + p];
+                band_c[static_cast<size_t>(span) * nd + bb] = coeffs[static_cast<size_t>(m)];
+            }
+        }
+        std::vector<cdouble> sp(n_seg * nd, cdouble(0.0, 0.0));
+        for (int bb = 0; bb < nd; bb++)
+            for (size_t s2 = 0; s2 < n_seg; s2++)
+                for (int p = 0; p < nd; p++) {
+                    const cdouble t = np_cmul(band_c[s2 * nd + bb], cdouble(band[(s2 * nd + bb) * nd + p], 0.0));
+                    cdouble &o = sp[s2 * nd + p];
+                    o = cdouble(o.real() + t.real(), o.imag() + t.imag());
+                }
+        // `_eval_span_polynomials`
+        for (size_t q = 0; q < n; q++) {
+            const double sv = s_eval[q];
+            int64_t span = static_cast<int64_t>(std::upper_bound(arc.begin(), arc.end(), sv) - arc.begin()) - 1;
+            span = std::min<int64_t>(std::max<int64_t>(span, 0), static_cast<int64_t>(n_seg) - 1);
+            const double u = sv - arc[static_cast<size_t>(span)];
+            const cdouble *coef = &sp[static_cast<size_t>(span) * nd];
+            cdouble val;
+            if (!derivative) {
+                val = coef[d];
+                for (int p = d - 1; p >= 0; p--) {
+                    const cdouble t = np_cmul(val, cdouble(u, 0.0));
+                    val = cdouble(t.real() + coef[p].real(), t.imag() + coef[p].imag());
+                }
+                out[q] = cdouble(0.0 + val.real(), 0.0 + val.imag());  // `I_out += ...`
+            } else {
+                val = np_cmul(cdouble(static_cast<double>(d), 0.0), coef[d]);
+                for (int p = d - 1; p >= 1; p--) {
+                    const cdouble t = np_cmul(val, cdouble(u, 0.0));
+                    const cdouble pc = np_cmul(cdouble(static_cast<double>(p), 0.0), coef[p]);
+                    val = cdouble(t.real() + pc.real(), t.imag() + pc.imag());
+                }
+                if (std::isnan(sv)) val = cdouble(std::nan(""), std::nan(""));
+                out[q] = val;
+            }
+        }
+        solved[w] = out;
+    }
+    if (!dd.active) return solved;
+    // `dedup.to_input`: a dropped copy reads zeros
+    std::vector<std::vector<cdouble>> input(static_cast<size_t>(dd.n_input));
+    for (size_t i = 0; i < dd.kept.size(); i++) input[static_cast<size_t>(dd.kept[i])] = solved[i];
+    for (const auto &r : dd.removed) {
+        const size_t n = s_array != nullptr ? (*s_array)[static_cast<size_t>(r.copy)].size()
+                                            : input[static_cast<size_t>(r.twin)].size();
+        input[static_cast<size_t>(r.copy)].assign(n, cdouble(0.0, 0.0));
+    }
+    return input;
+}
+
 }  // namespace bspline
 }  // namespace mw

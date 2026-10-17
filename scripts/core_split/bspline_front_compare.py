@@ -73,9 +73,20 @@ def main():
     counts, mismatches = Counter(), 0
     for path in _decks(sys.argv[1:]):
         text = path.read_bytes().decode("latin-1")
-        for k, entry in enumerate(
-            acc.bspline_front_geometry(text.encode("latin-1"), syrk, blas)
-        ):
+        raw = text.encode("latin-1")
+        first = acc.bspline_front_geometry(raw)
+        samples = []
+        if first and "kwargs" in first[0]:
+            for wire, npe in zip(
+                first[0]["kwargs"]["wires"], first[0]["kwargs"]["n_per_edge_per_wire"]
+            ):
+                length = float(np.linalg.norm(wire[1] - wire[0]))
+                n = int(npe[0])
+                samples.append(
+                    [(i + 0.5) * length / n for i in range(n)]
+                    + [0.0, length, 0.37 * length]
+                )
+        for k, entry in enumerate(acc.bspline_front_geometry(raw, syrk, blas, samples)):
             try:
                 solver = BSplineSolver(**entry["kwargs"])
                 geom = solver._build_geometry()
@@ -155,6 +166,35 @@ def main():
                                     np.ascontiguousarray(Yp), entry["Y"], "Y"
                                 )
                                 counts["solve-compared"] += 1
+                                c0 = np.ascontiguousarray(Xp[:, 0])
+                                d += fc.differences(
+                                    [
+                                        np.asarray(v)
+                                        for v in solver.currents_at_knots(c0)
+                                    ],
+                                    list(entry["knot_currents"]),
+                                    "knot_currents",
+                                )
+                                if k == 0 and "sample_currents" in entry:
+                                    d += fc.differences(
+                                        [
+                                            np.asarray(v)
+                                            for v in solver.currents_at_knots(
+                                                c0, samples
+                                            )
+                                        ],
+                                        list(entry["sample_currents"]),
+                                        "sample_currents",
+                                    )
+                                    d += fc.differences(
+                                        [
+                                            np.asarray(v)
+                                            for v in solver.current_slopes(c0, samples)
+                                        ],
+                                        list(entry["sample_slopes"]),
+                                        "sample_slopes",
+                                    )
+                                    counts["readouts-compared"] += 1
                             except np.linalg.LinAlgError:
                                 if entry.get("solve_info", 0) == 0:
                                     d.append("solve: Python singular, C++ not")

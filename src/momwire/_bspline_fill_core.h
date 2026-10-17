@@ -58,6 +58,17 @@ PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vec
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np);
 
+// `currents_at_knots(coeffs, s_array)` (`derivative` false) and
+// `current_slopes(coeffs, s_array)` (true), per INPUT wire
+// (`reads_input_wires("per_wire")`: a dropped copy reads zeros, sized like
+// its own `s_array` entry, else like its twin's). `s_array` null: the mesh
+// knots. Built on `_wire_span_polynomials` / `_eval_span_polynomials`.
+std::vector<std::vector<cdouble>> spline_readout(const Basis &b, const Geometry &g,
+                                                 const WireDedup &dd,
+                                                 const std::vector<cdouble> &coeffs,
+                                                 const std::vector<std::vector<double>> *s_array,
+                                                 bool derivative);
+
 // `BSplineSolver.pair_order_ladder` for a free-space deck: the default
 // ladder's tiers below `n_qp_pair`, normalised.
 std::vector<std::pair<double, int64_t>> default_ladder(int64_t n_qp_pair);

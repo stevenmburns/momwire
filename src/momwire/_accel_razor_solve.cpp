@@ -953,7 +953,8 @@ py::dict nec5_bspline_seam(py::bytes latin1) {
 // PROTOTYPE (momwire#1517 step 1): the bspline front half's geometry for a
 // deck's preparations (`_bspline_front_core.h`), test-facing.
 py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
-                                std::vector<uintptr_t> blas) {
+                                std::vector<uintptr_t> blas,
+                                std::vector<std::vector<double>> samples) {
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
     py::list out;
@@ -1112,6 +1113,23 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                             std::copy(ps.Y.begin(), ps.Y.end(), Ya.mutable_data());
                             entry["X"] = Xa;
                             entry["Y"] = Ya;
+                            // the readouts on coeffs = X[:, 0]
+                            std::vector<std::complex<double>> c0(static_cast<size_t>(bs.n_basis));
+                            for (int64_t m = 0; m < bs.n_basis; m++) c0[static_cast<size_t>(m)] = ps.X[static_cast<size_t>(m * n_p)];
+                            auto lists = [](const std::vector<std::vector<std::complex<double>>> &v) {
+                                py::list l;
+                                for (const auto &a : v) {
+                                    py::array_t<cd> x(static_cast<ptrdiff_t>(a.size()));
+                                    std::copy(a.begin(), a.end(), x.mutable_data());
+                                    l.append(x);
+                                }
+                                return l;
+                            };
+                            entry["knot_currents"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, nullptr, false));
+                            if (!samples.empty()) {
+                                entry["sample_currents"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, &samples, false));
+                                entry["sample_slopes"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, &samples, true));
+                            }
                         }
                     }
                 }
@@ -1185,6 +1203,7 @@ void register_razor_solve(py::module_ &m) {
           "beyond the table).");
     m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
           py::arg("syrk_addr") = 0, py::arg("blas") = std::vector<uintptr_t>(),
+          py::arg("samples") = std::vector<std::vector<double>>(),
           "PROTOTYPE HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
     m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
