@@ -207,11 +207,6 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
             if (std::sqrt(h2) < 3.0 * fr->radii[w] * (1.0 + 1e-9)) return decline("bspline-exact-kernel");
         }
     }
-    // `_dense_tensor_fits_budget` at `swept_mem_mb=256`: past it Python takes
-    // the chunked fill, not ported yet
-    const double n_segs = static_cast<double>(fr->geom.n_segs_total);
-    if (9.0 * n_segs * n_segs * 16.0 > static_cast<double>(int64_t(256) << 20))
-        return decline("bspline-chunked-fill");
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

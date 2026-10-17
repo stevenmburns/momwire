@@ -33,6 +33,21 @@ struct FillParams {
 std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,
                                     const FillParams &fp);
 
+// `_compute_Z_dense_chunked(geom, k, supp_seg, polys)` (issue #136, the
+// route `_compute_Z_operator` takes when `_dense_tensor_fits_budget` says
+// no): observer-row windows of the off-edge moments accumulated straight
+// into Z through the windowed assembler, then each edge's same-edge
+// correction `(A_st + A_reg) - J` in row windows of its own. Windows cut at
+// `_schedule.mb_rows(swept_mem_mb, row_bytes)`, as Python cuts them, so the
+// sums are Python's. (n_basis, n_basis) C order.
+std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
+                                       const std::vector<double> &radius_per_wire, const FillParams &fp,
+                                       double omega, double eps, double mu, double swept_mem_mb);
+
+// `_dense_tensor_fits_budget(n_segs)`: one (d+1, d+1, N, N) complex tensor
+// within `swept_mem_mb`.
+bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);
+
 // numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
 // tangents.T` is numpy's syrk case (one operand and its transpose).
 using dsyrk_fn = nec5::cblas_dsyrk_fn;

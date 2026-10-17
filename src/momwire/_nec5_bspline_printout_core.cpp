@@ -54,10 +54,14 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     fp.ladder = bspline::default_ladder(8);
     fp.n_qp_same_edge = 4;
     fp.extended_kernel = fr.extended_kernel;
+    // `_compute_Z_operator`: the dense tensor within `swept_mem_mb` (256),
+    // else the chunked fill
     std::vector<cd> Z;
-    {
+    if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
         const std::vector<cd> J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
         Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
+    } else {
+        Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     }
     const bspline::PortSolve ps =
         bspline::solve_ports(Z, fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl, lapack_, np);

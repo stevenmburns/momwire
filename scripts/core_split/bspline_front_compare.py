@@ -70,8 +70,16 @@ def main():
             "scipy_zgesv_64_",
         )
     ]
+    args = list(sys.argv[1:])
+    # `--chunk-mb X`: also the chunked fill (`_compute_Z_dense_chunked`) at a
+    # budget of X MB (a float cuts small decks into several windows)
+    chunk_mb = 0.0
+    if "--chunk-mb" in args:
+        i = args.index("--chunk-mb")
+        chunk_mb = float(args[i + 1])
+        del args[i : i + 2]
     counts, mismatches = Counter(), 0
-    for path in _decks(sys.argv[1:]):
+    for path in _decks(args):
         text = path.read_bytes().decode("latin-1")
         raw = text.encode("latin-1")
         first = acc.bspline_front_geometry(raw)
@@ -86,7 +94,9 @@ def main():
                     [(i + 0.5) * length / n for i in range(n)]
                     + [0.0, length, 0.37 * length]
                 )
-        for k, entry in enumerate(acc.bspline_front_geometry(raw, syrk, blas, samples)):
+        for k, entry in enumerate(
+            acc.bspline_front_geometry(raw, syrk, blas, samples, chunk_mb)
+        ):
             try:
                 solver = BSplineSolver(**entry["kwargs"])
                 geom = solver._build_geometry()
@@ -151,6 +161,16 @@ def main():
                             Z = solver._assemble_Z(J, supp, polys, geom)
                             d += fc.differences(Z, entry["Z"], "Z")
                             counts["Z-compared"] += 1
+                            if "Z_chunked" in entry:
+                                solver.swept_mem_mb = chunk_mb
+                                Zc = solver._compute_Z_dense_chunked(
+                                    geom, solver.k, supp, polys
+                                )
+                                d += fc.differences(Zc, entry["Z_chunked"], "Z_chunked")
+                                counts["Z-chunked-compared"] += 1
+                                counts["Z-chunked-equals-dense"] += bool(
+                                    np.array_equal(Zc, Z)
+                                )
                             from momwire import _lapack
 
                             Bp, kcon = solver._port_columns(

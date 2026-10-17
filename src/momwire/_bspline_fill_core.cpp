@@ -40,6 +40,22 @@ nd::array_t<T, nd::array::c_style | nd::array::forcecast> borrow(const std::vect
     return nd::array_t<T, nd::array::c_style | nd::array::forcecast>::borrow(b);
 }
 
+// A writeable view (the assembler's output Z).
+template <class T>
+nd::array_t<T> borrow_mut(std::vector<T> &v, std::vector<nd::ssize_t> shape) {
+    nd::Buffer b;
+    b.ptr = v.data();
+    b.ndim = static_cast<int>(shape.size());
+    nd::ssize_t acc = sizeof(T);
+    for (int q = b.ndim - 1; q >= 0; q--) {
+        b.shape[q] = shape[static_cast<size_t>(q)];
+        b.strides[q] = acc;
+        acc *= shape[static_cast<size_t>(q)];
+    }
+    b.writeable = true;
+    return nd::array_t<T>::borrow(b);
+}
+
 constexpr double PHASE_KL_CEILING = 0.5;     // `_LADDER_PHASE_KL_CEILING`
 constexpr int64_t PHASE_LIMITED_BELOW = 8;   // `_LADDER_PHASE_LIMITED_BELOW`
 constexpr int BSPLINE_ACCEL_MAX_D = 3;
@@ -369,6 +385,166 @@ std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double>
         }
     }
     return J;
+}
+
+bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb) {
+    const int64_t nd = degree + 1;
+    return nd * nd * n_segs * n_segs * 16 <= (swept_mem_mb << 20);
+}
+
+std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
+                                       const std::vector<double> &radius_per_wire, const FillParams &fp,
+                                       double omega, double eps, double mu, double swept_mem_mb) {
+    const int d = fp.degree, nd = d + 1;
+    const int64_t N = g.n_segs_total, n_basis = b.n_basis;
+    std::vector<double> a_row;  // `_seg_radius`
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) a_row.push_back(radius_per_wire[w]);
+    Segs all;
+    all.l = g.seg_l;
+    all.r = g.seg_r;
+    EK ek;  // `_ek_spec(geom)`
+    if (fp.extended_kernel) {
+        ek.on = true;
+        ek.group_i.assign(static_cast<size_t>(N), 0);
+        ek.group_j.assign(static_cast<size_t>(N), 0);
+        bool all_eq = true;
+        for (double v : a_row) all_eq = all_eq && v == a_row[0];
+        if (!all_eq) {
+            ek.b_kind = EK::per_col;
+            ek.b_j = a_row;
+        }
+    }
+    std::vector<cdouble> Z(static_cast<size_t>(n_basis * n_basis), cdouble(0.0, 0.0));
+    nd::array_t<std::complex<double>> Za = borrow_mut(Z, {static_cast<nd::ssize_t>(n_basis),
+                                                          static_cast<nd::ssize_t>(n_basis)});
+    const CI sa = borrow(b.supp_seg, {static_cast<nd::ssize_t>(n_basis), nd});
+    const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(n_basis), nd, nd});
+    const CF ta = borrow(g.tangents, {static_cast<nd::ssize_t>(N), 3});
+    std::vector<int64_t> all_n(static_cast<size_t>(n_basis));
+    for (int64_t m = 0; m < n_basis; m++) all_n[static_cast<size_t>(m)] = m;
+    const auto touching = [&](int64_t lo, int64_t hi) {  // `_bases_touching`
+        std::vector<int64_t> out;
+        for (int64_t m = 0; m < n_basis; m++)
+            for (int q = 0; q < nd; q++) {
+                const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + q)];
+                if (sg >= lo && sg < hi) {
+                    out.push_back(m);
+                    break;
+                }
+            }
+        return out;
+    };
+    const auto accumulate = [&](const Block &J_win, int64_t i0, int64_t i1, int64_t j0, int64_t j1,
+                                const std::vector<int64_t> &m_idx, const std::vector<int64_t> &n_idx) {
+        const nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> Jw =
+            borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
+        const CI mi = borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())});
+        const CI ni = borrow(n_idx, {static_cast<nd::ssize_t>(n_idx.size())});
+        assemble_Z_bspline_windowed(Jw, sa, pa, ta, mi, ni, i0, i1, j0, j1, omega, eps, mu, Za, 0, nd::none(),
+                                    false);
+    };
+    const auto range = [](int64_t lo, int64_t hi) {
+        std::vector<size_t> v;
+        for (int64_t q = lo; q < hi; q++) v.push_back(static_cast<size_t>(q));
+        return v;
+    };
+    // `_schedule.mb_rows(swept_mem_mb, row_bytes)`: max(1, int(mb * 1024 * 1024 // row_bytes))
+    // (an int budget, as the solver holds it; a float one, which only a gate
+    // hands `_compute_Z_dense_chunked`, floors the true quotient)
+    const auto mb_rows = [&](int64_t row_bytes) {
+        if (swept_mem_mb == std::floor(swept_mem_mb))
+            return std::max<int64_t>(1, (static_cast<int64_t>(swept_mem_mb) * 1024 * 1024) / row_bytes);
+        return std::max<int64_t>(
+            1, static_cast<int64_t>(std::floor((swept_mem_mb * 1024 * 1024) / static_cast<double>(row_bytes))));
+    };
+    // the sweep: every observer window against every source
+    const int64_t chunk = mb_rows(static_cast<int64_t>(nd * nd) * N * 16);
+    for (int64_t w0 = 0; w0 < N; w0 += chunk) {
+        const int64_t w1 = std::min(w0 + chunk, N);
+        const std::vector<size_t> rows = range(w0, w1);
+        std::vector<double> a_sub(a_row.begin() + w0, a_row.begin() + w1);
+        const Block J_chunk = offedge(all.take(rows), all, a_sub, fp.k, d, fp.n_qp_pair,
+                                      ek_cut(ek, &rows, nullptr), fp.ladder);
+        accumulate(J_chunk, w0, w1, 0, N, touching(w0, w1), all_n);
+    }
+    // the same-edge fixup, per edge in wire order, in row windows
+    std::vector<double> t01, w01;
+    gl01(fp.n_qp_same_edge, t01, w01);
+    const size_t q = t01.size();
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        const WireGeometry &pw = g.per_wire[w];
+        const double a_w = radius_per_wire[w];
+        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+            const std::vector<double> &arc = pw.edge_arc_edges[e];
+            const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+            const size_t n = arc.size() - 1;
+            if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+            const double h = arc[1] - arc[0];
+            const nd::array_t<double> table =
+                fp.extended_kernel ? seg_seg_static_moments_bspline_uniform_ek_table(h, a_w, n, d, a_w)
+                                   : seg_seg_static_moments_bspline_uniform_table(h, a_w, n, d);
+            const CF tab = CF::borrow(table.buffer());
+            // `_seg_seg_reg_geometry`'s O(N) half
+            std::vector<double> s_q(n * q), u_q(n * q), w_q(n * q);
+            for (size_t i = 0; i < n; i++) {
+                const double hs = arc[i + 1] - arc[i];
+                for (size_t j = 0; j < q; j++) {
+                    s_q[i * q + j] = arc[i] + t01[j] * hs;
+                    u_q[i * q + j] = (t01[j] * hs) * 1.0;
+                    w_q[i * q + j] = (w01[j] * hs) * 1.0;
+                }
+            }
+            std::vector<double> wu(static_cast<size_t>(nd) * n * q);
+            for (int p = 0; p < nd; p++)
+                for (size_t i = 0; i < n * q; i++) {
+                    const double u = u_q[i];
+                    const double up = p == 0 ? 1.0 : p == 1 ? u : p == 2 ? u * u : std::pow(u, p);
+                    wu[static_cast<size_t>(p) * n * q + i] = w_q[i] * up;
+                }
+            const CF sq_all = borrow(s_q, {static_cast<nd::ssize_t>(n * q)});
+            const CF wu_col = borrow(wu, {nd, static_cast<nd::ssize_t>(n), static_cast<nd::ssize_t>(q)});
+            const std::vector<int64_t> e_idx = touching(s0, s1);
+            const std::vector<size_t> cols = range(s0, s1);
+            const int64_t corr_chunk = mb_rows(static_cast<int64_t>(nd * nd) * static_cast<int64_t>(n) * 16);
+            for (int64_t r0 = s0; r0 < s1; r0 += corr_chunk) {
+                const int64_t r1 = std::min(r0 + corr_chunk, s1);
+                const std::vector<size_t> rows = range(r0, r1);
+                std::vector<double> a_sub(a_row.begin() + r0, a_row.begin() + r1);
+                const Block J_win = offedge(all.take(rows), all.take(cols), a_sub, fp.k, d, fp.n_qp_pair,
+                                            ek_cut(ek, &rows, &cols), fp.ladder);
+                const size_t lo = static_cast<size_t>(r0 - s0), hi = static_cast<size_t>(r1 - s0);
+                const nd::array_t<double> A_st_w = toeplitz_gather_rows(tab, n, lo, hi);
+                // the row window's reg geometry: R (n_row q, n q), wu_row
+                std::vector<double> s_row(s_q.begin() + static_cast<std::ptrdiff_t>(lo * q),
+                                          s_q.begin() + static_cast<std::ptrdiff_t>(hi * q));
+                const CF sr = borrow(s_row, {static_cast<nd::ssize_t>(s_row.size())});
+                const nd::array_t<double> R = reg_distance_table(sr, sq_all, a_w * a_w);
+                std::vector<double> wu_r(static_cast<size_t>(nd) * (hi - lo) * q);
+                for (int p = 0; p < nd; p++)
+                    for (size_t i = 0; i < (hi - lo) * q; i++)
+                        wu_r[(static_cast<size_t>(p) * (hi - lo)) * q + i] =
+                            wu[static_cast<size_t>(p) * n * q + lo * q + i];
+                const CF wu_row = borrow(wu_r, {nd, static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(q)});
+                const std::vector<double> kv{fp.k};
+                const CF ka = borrow(kv, {1});
+                const CF Rv = CF::borrow(R.buffer());
+                const nd::array_t<std::complex<double>> A_reg =
+                    fp.extended_kernel ? seg_seg_reg_moments_bspline_swept_ek_window(Rv, wu_row, wu_col, ka, a_w)
+                                       : seg_seg_reg_moments_bspline_swept_window(Rv, wu_row, wu_col, ka);
+                // `[0]`: the k axis off (a contiguous leading slice)
+                std::vector<cdouble> reg0(A_reg.data(), A_reg.data() + A_reg.size());
+                const nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> regw =
+                    borrow(reg0, {nd, nd, static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(n)});
+                const nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> Jw =
+                    borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(hi - lo), static_cast<nd::ssize_t>(n)});
+                const CF stw = CF::borrow(A_st_w.buffer());
+                const nd::array_t<std::complex<double>> corr = same_edge_corr_combine(stw, regw, Jw);
+                accumulate(Block(corr.data(), corr.data() + corr.size()), r0, r1, s0, s1, touching(r0, r1), e_idx);
+            }
+        }
+    }
+    return Z;
 }
 
 std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, const Geometry &g,

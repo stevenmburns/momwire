@@ -954,7 +954,7 @@ py::dict nec5_bspline_seam(py::bytes latin1) {
 // deck's preparations (`_bspline_front_core.h`), test-facing.
 py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                                 std::vector<uintptr_t> blas,
-                                std::vector<std::vector<double>> samples) {
+                                std::vector<std::vector<double>> samples, double chunk_mb) {
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
     py::list out;
@@ -1089,6 +1089,13 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                                     static_cast<ptrdiff_t>(g.n_segs_total)});
                 std::copy(J.begin(), J.end(), Ja.mutable_data());
                 entry["J"] = Ja;
+                if (chunk_mb > 0) {
+                    const std::vector<std::complex<double>> Zc = mw::bspline::compute_Z_chunked(
+                        g, bs, radii, fp, omega, 8.8541878188e-12, 1.25663706127e-6, chunk_mb);
+                    py::array_t<cd> Zca({nb, nb});
+                    std::copy(Zc.begin(), Zc.end(), Zca.mutable_data());
+                    entry["Z_chunked"] = Zca;
+                }
                 if (syrk_addr != 0) {
                     const std::vector<std::complex<double>> Z = mw::bspline::assemble_Z(
                         J, bs, g, omega, 8.8541878188e-12, 1.25663706127e-6,
@@ -1206,7 +1213,7 @@ void register_razor_solve(py::module_ &m) {
           "beyond the table).");
     m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
           py::arg("syrk_addr") = 0, py::arg("blas") = std::vector<uintptr_t>(),
-          py::arg("samples") = std::vector<std::vector<double>>(),
+          py::arg("samples") = std::vector<std::vector<double>>(), py::arg("chunk_mb") = 0.0,
           "PROTOTYPE HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
     m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
