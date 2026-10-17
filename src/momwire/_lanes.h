@@ -4,7 +4,7 @@
 //
 // THE CONTRACT. Every operation is one IEEE operation per lane, rounded once,
 // exactly as the scalar expression it stands for: add/sub/mul/div/sqrt are
-// correctly rounded; `fmadd`/`fnmadd` are ONE fused op (std::fma per lane) and
+// correctly rounded; `fmadd`/`fnmadd` are ONE fused op (an fma per lane) and
 // exist only where a kernel spells the fusion on purpose; nothing here
 // contracts, reassociates or reduces across lanes. So a lane's floats are a
 // function of that lane's operands and the order the kernel writes, never of
@@ -48,6 +48,8 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+
+#include "_fma_inline.h"
 
 #if defined(__GNUC__)
 #define MW_LANES_INLINE static inline __attribute__((always_inline))
@@ -289,7 +291,8 @@ MW_LANES_INLINE void store_interleaved(double *o, vd re, vd im) {
 #elif defined(MW_LANES_PORTABLE)
 // ------------------------------------------------------------ portable ----
 // Plain arrays and std:: math, each lane the scalar expression. With the
-// build's -ffp-contract=off nothing here fuses; `fmadd` is std::fma.
+// build's -ffp-contract=off nothing here fuses; `fmadd` is mw_fma::exact
+// (std::fma, or its exact emulation where there is no FMA hardware).
 #ifndef MW_LANES_PORTABLE_WIDTH
 #define MW_LANES_PORTABLE_WIDTH 1
 #endif
@@ -322,8 +325,8 @@ MW_LANES_INLINE vd mul(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] * b.v[l]); }
 MW_LANES_INLINE vd div(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] / b.v[l]); }
 MW_LANES_INLINE vd sqrt(vd a) { MW_LANES_MAP_(vd, std::sqrt(a.v[l])); }
 MW_LANES_INLINE vd floor(vd a) { MW_LANES_MAP_(vd, std::floor(a.v[l])); }
-MW_LANES_INLINE vd fmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, std::fma(a.v[l], b.v[l], c.v[l])); }
-MW_LANES_INLINE vd fnmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, std::fma(-a.v[l], b.v[l], c.v[l])); }
+MW_LANES_INLINE vd fmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, mw_fma::exact(a.v[l], b.v[l], c.v[l])); }
+MW_LANES_INLINE vd fnmadd(vd a, vd b, vd c) { MW_LANES_MAP_(vd, mw_fma::exact(-a.v[l], b.v[l], c.v[l])); }
 MW_LANES_INLINE vd neg(vd a) { MW_LANES_MAP_(vd, -a.v[l]); }
 MW_LANES_INLINE vd min(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] < b.v[l] ? a.v[l] : b.v[l]); }
 MW_LANES_INLINE vd max(vd a, vd b) { MW_LANES_MAP_(vd, a.v[l] > b.v[l] ? a.v[l] : b.v[l]); }

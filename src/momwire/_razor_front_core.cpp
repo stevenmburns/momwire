@@ -11,6 +11,7 @@
 //   np.add.reduce(x) over a 1-D run -> numpy's pairwise sum (`pairwise_sum`);
 //   np.round(x, 9)                  -> rint(x * 1e9) / 1e9.
 #include "_razor_front_core.h"
+#include "_fma_inline.h"
 
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
@@ -1767,8 +1768,8 @@ void Front::loading_stencil() {
                 v *= ent[a].sigma * ent[b].sigma;
                 load_rows.push_back(ent[a].basis);
                 load_cols.push_back(ent[b].basis);
-                load_vals.push_back(cd(std::fma(z.real(), v, -(z.imag() * 0.0)),
-                                       std::fma(z.real(), 0.0, z.imag() * v)));
+                load_vals.push_back(cd(mw_fma::exact(z.real(), v, -(z.imag() * 0.0)),
+                                       mw_fma::exact(z.real(), 0.0, z.imag() * v)));
             }
         i = j;
     }
