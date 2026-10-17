@@ -88,6 +88,7 @@ struct BSplineFront {
     // `self.c`, `self.omega`, `self.k` as the constructor forms them
     double c = 0, omega = 0, k = 0;
     bool extended_kernel = false;
+    bool exact_kernel = false;  // "auto", resolved
     // `configure_loading`'s `wire_conductivity` / `distributed_rlc` per
     // solved wire (`_loading_active` is `loading.active()`), and the loading
     // Gram, built on the first solve (`_cached_loading_gram`)

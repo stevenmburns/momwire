@@ -4,6 +4,8 @@
 #include "_bspline_fill_core.h"
 
 #include "_bspline_core.h"
+#include "_exact_kernel_coaxial_core.h"
+#include "_razor_exact_core.h"
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
 #if defined(_MSC_VER)
@@ -12,6 +14,8 @@
 #endif
 
 #include <algorithm>
+#include <array>
+#include <climits>
 #include <cmath>
 #include <map>
 #include <stdexcept>
@@ -935,6 +939,894 @@ std::vector<std::vector<cdouble>> spline_readout(const Basis &b, const Geometry 
         input[static_cast<size_t>(r.copy)].assign(n, cdouble(0.0, 0.0));
     }
     return input;
+}
+
+// ---------------------------------------------------------------------------
+// The exact ring-kernel correction (momwire#1517 step 2)
+// ---------------------------------------------------------------------------
+namespace {
+
+inline double ndot3(const double *a, const double *b) { return (a[0] * b[0] + a[1] * b[1]) + a[2] * b[2]; }
+inline double nnorm3(const double *v) { return std::sqrt((v[0] * v[0] + v[1] * v[1]) + v[2] * v[2]); }
+
+// CPython's float `//` (`float_floor_div`).
+double py_floordiv(double vx, double wx) {
+    double mod = std::fmod(vx, wx);
+    double div = (vx - mod) / wx;
+    if (mod != 0.0) {
+        if ((wx < 0) != (mod < 0)) div -= 1.0;
+    }
+    double floordiv;
+    if (div != 0.0) {
+        floordiv = std::floor(div);
+        if (div - floordiv > 0.5) floordiv += 1.0;
+    } else {
+        floordiv = std::copysign(0.0, vx / wx);
+    }
+    return floordiv;
+}
+
+using Ranges = std::vector<std::pair<int64_t, int64_t>>;
+
+Ranges subtract_ranges(const Ranges &ranges, Ranges holes) {
+    Ranges out;
+    std::sort(holes.begin(), holes.end());
+    for (const auto &ab : ranges) {
+        int64_t cur = ab.first;
+        for (const auto &cd_ : holes) {
+            if (cd_.second <= cur || cd_.first >= ab.second) continue;
+            if (cd_.first > cur) out.push_back({cur, cd_.first});
+            cur = std::max(cur, cd_.second);
+        }
+        if (cur < ab.second) out.push_back({cur, ab.second});
+    }
+    return out;
+}
+
+Ranges merge_ranges(Ranges r) {
+    std::sort(r.begin(), r.end());
+    Ranges out;
+    for (const auto &ab : r) {
+        if (!out.empty() && out.back().second == ab.first)
+            out.back().second = ab.second;
+        else
+            out.push_back(ab);
+    }
+    return out;
+}
+
+constexpr int64_t TOEPLITZ_MIN_PAIRS = 4096;
+constexpr double RUN_TOL_EPS = 16.0;
+constexpr double TIE_REL = 1e-9;
+
+// One boundary pair per diagonal (`_boundary_pairs`): for each m, the first
+// of row 0, row nA - 1, column 0, column nB - 1 that holds it.
+struct Boundary {
+    bool row;
+    int64_t at;
+    std::vector<size_t> idx;      // positions into m
+    std::vector<int64_t> other;   // the other index
+};
+std::vector<Boundary> boundary_pairs(const std::vector<int64_t> &m, int64_t nA, int64_t nB, int64_t sA,
+                                     int64_t sB) {
+    std::vector<Boundary> out;
+    std::vector<bool> left(m.size(), true);
+    const std::pair<bool, int64_t> lines[4] = {{true, 0}, {true, nA - 1}, {false, 0}, {false, nB - 1}};
+    for (const auto &ln : lines) {
+        bool any_left = false;
+        for (bool v : left) any_left = any_left || v;
+        if (!any_left) break;
+        Boundary bd{ln.first, ln.second, {}, {}};
+        for (size_t q = 0; q < m.size(); q++) {
+            if (!left[q]) continue;
+            int64_t other;
+            bool ok;
+            if (ln.first) {
+                other = sB * (m[q] + sA * ln.second);
+                ok = other >= 0 && other < nB;
+            } else {
+                other = sA * (sB * ln.second - m[q]);
+                ok = other >= 0 && other < nA;
+            }
+            if (ok) {
+                bd.idx.push_back(q);
+                bd.other.push_back(other);
+                left[q] = false;
+            }
+        }
+        if (!bd.idx.empty()) out.push_back(std::move(bd));
+    }
+    for (bool v : left)
+        if (v) throw std::logic_error("a diagonal missed every boundary line");
+    return out;
+}
+
+// `_exact_kernel_base.BaseRows`, without the cross mode and without its
+// cross-window cache (a cached diagonal is the same representative's value,
+// so the cache moves no bit).
+class BaseRows {
+  public:
+    struct Edge {
+        int64_t l0, l1;
+        const std::vector<double> *arc;
+        double a_w;
+    };
+    BaseRows(const Geometry &g, const std::vector<double> &seg_a, const std::vector<int64_t> &S,
+             std::vector<Edge> edges, const FillParams &fp, const EK &ek)
+        : g_(g), seg_a_(seg_a), S_(S), n_(static_cast<int64_t>(S.size())), fp_(fp), ek_(ek),
+          nd_(fp.degree + 1), edges_(std::move(edges)) {
+        const int64_t n = n_;
+        std::vector<double> edge_of(static_cast<size_t>(n), -1.0);
+        std::vector<int64_t> edge_of_i(static_cast<size_t>(n), -1);
+        for (size_t e = 0; e < edges_.size(); e++)
+            for (int64_t q = edges_[e].l0; q < edges_[e].l1; q++) {
+                edge_of[static_cast<size_t>(q)] = static_cast<double>(e);
+                edge_of_i[static_cast<size_t>(q)] = static_cast<int64_t>(e);
+            }
+        for (const auto &e : edges_) edge_bounds_.push_back(e.l0);
+        std::sort(edge_bounds_.begin(), edge_bounds_.end());
+        const double *axis = &g.tangents[3 * static_cast<size_t>(S[0])];
+        std::vector<double> Ls(3 * static_cast<size_t>(n)), Rs(3 * static_cast<size_t>(n)), u(3 * static_cast<size_t>(n));
+        std::vector<double> h(static_cast<size_t>(n));
+        double X = 0.0;
+        for (int64_t i = 0; i < n; i++)
+            for (int c = 0; c < 3; c++) {
+                Ls[3 * i + c] = g.seg_l[3 * static_cast<size_t>(S[i]) + c];
+                Rs[3 * i + c] = g.seg_r[3 * static_cast<size_t>(S[i]) + c];
+            }
+        double xl = 0.0, xr = 0.0;
+        for (size_t q = 0; q < Ls.size(); q++) {
+            xl = std::max(xl, std::fabs(Ls[q]));
+            xr = std::max(xr, std::fabs(Rs[q]));
+            u[q] = Rs[q] - Ls[q];
+        }
+        X = n ? std::max(xl, xr) : 0.0;
+        for (int64_t i = 0; i < n; i++) h[i] = nnorm3(&u[3 * i]);
+        rho_ = (RUN_TOL_EPS * 2.220446049250313e-16) * X;
+        const double nan = std::nan("");
+        std::vector<double> sgn(static_cast<size_t>(n)), a(static_cast<size_t>(n)), gi(static_cast<size_t>(n)),
+            gj(static_cast<size_t>(n)), bi(static_cast<size_t>(n), nan), bj(static_cast<size_t>(n));
+        for (int64_t i = 0; i < n; i++) {
+            const size_t s = static_cast<size_t>(S[i]);
+            sgn[i] = ndot3(&g.tangents[3 * s], axis) >= 0.0 ? 1.0 : -1.0;
+            a[i] = seg_a[s];
+            gi[i] = ek.on ? static_cast<double>(ek.group_i[s]) : nan;
+            gj[i] = ek.on ? static_cast<double>(ek.group_j[s]) : nan;
+            bj[i] = (ek.on && ek.b_kind == EK::per_col) ? ek.b_j[s] : (ek.on && ek.b_kind == EK::scalar ? ek.b : nan);
+        }
+        // runs: the exact fields (RUN_FIELDS less "h") ...
+        std::vector<bool> change(static_cast<size_t>(n), false);
+        for (const std::vector<double> *f : {&edge_of, &sgn, &a, &gi, &gj, &bi, &bj})
+            for (int64_t i = 1; i < n; i++) {
+                const double x = (*f)[i], y = (*f)[i - 1];
+                const bool same = x == y || (std::isnan(x) && std::isnan(y));
+                if (!same) change[i] = true;
+            }
+        std::vector<int64_t> starts{0};
+        for (int64_t i = 1; i < n; i++)
+            if (change[i]) starts.push_back(i);
+        Ranges pieces;
+        if (n)
+            for (size_t q = 0; q < starts.size(); q++)
+                pieces.push_back({starts[q], q + 1 < starts.size() ? starts[q + 1] : n});
+        // ... then the geometric rule: `_same_vector`, `_progressions`
+        Ranges cut;
+        for (const auto &p : pieces) {
+            int64_t aa = p.first;
+            const int64_t s1 = p.second;
+            while (aa < s1) {
+                int64_t b = aa + 1, block = 64;
+                while (b < s1) {
+                    const int64_t e = std::min(s1, b + block);
+                    int64_t off = -1;
+                    for (int64_t q = b; q < e; q++) {
+                        double d[3];
+                        for (int c = 0; c < 3; c++) d[c] = u[3 * q + c] - u[3 * aa + c];
+                        if ((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2] > rho_ * rho_) {
+                            off = q;
+                            break;
+                        }
+                    }
+                    if (off >= 0) {
+                        b = off;
+                        break;
+                    }
+                    b = e;
+                    block *= 2;
+                }
+                cut.push_back({aa, b});
+                aa = b;
+            }
+        }
+        Ranges prog;
+        for (const auto &c0 : cut) {
+            Ranges out, todo{c0};
+            while (!todo.empty()) {
+                const auto ab = todo.back();
+                todo.pop_back();
+                const int64_t aa = ab.first, b = ab.second;
+                if (b - aa > 1) {
+                    double step[3];
+                    for (int c = 0; c < 3; c++)
+                        step[c] = (Ls[3 * (b - 1) + c] - Ls[3 * aa + c]) / static_cast<double>(b - 1 - aa);
+                    double dev = -1.0;
+                    for (const std::vector<double> *E : {&Ls, &Rs}) {
+                        double mx = -1.0;
+                        for (int64_t i = aa; i < b; i++) {
+                            double ssum = 0.0;
+                            for (int c = 0; c < 3; c++) {
+                                const double line = static_cast<double>(i - aa) * step[c];
+                                const double d = ((*E)[3 * i + c] - (*E)[3 * aa + c]) - line;
+                                ssum += d * d;
+                            }
+                            mx = std::max(mx, ssum);
+                        }
+                        dev = std::max(dev, mx);
+                    }
+                    if (dev > rho_ * rho_) {
+                        const int64_t mid = (aa + b) / 2;
+                        todo.push_back({aa, mid});
+                        todo.push_back({mid, b});
+                        continue;
+                    }
+                }
+                out.push_back(ab);
+            }
+            std::sort(out.begin(), out.end());
+            prog.insert(prog.end(), out.begin(), out.end());
+        }
+        for (const auto &p : prog) {
+            Run r{p.first, p.second, h[p.first], sgn[p.first], edge_of_i[p.first]};
+            runs_.push_back(r);
+            std::array<double, 3> st;
+            for (int c = 0; c < 3; c++)
+                st[c] = p.second - p.first > 1
+                            ? (Ls[3 * (p.second - 1) + c] - Ls[3 * p.first + c]) / static_cast<double>(p.second - 1 - p.first)
+                            : u[3 * p.first + c];
+            step_.push_back(st);
+        }
+        run_of_.assign(static_cast<size_t>(n), 0);
+        for (size_t r = 0; r < runs_.size(); r++)
+            for (int64_t q = runs_[r].s0; q < runs_[r].s1; q++) run_of_[q] = static_cast<int64_t>(r);
+        bool phase_limited = false;
+        for (const auto &t : fp.ladder) phase_limited = phase_limited || t.second < PHASE_LIMITED_BELOW;
+        for (const auto &r : runs_)
+            phase_tie_.push_back(phase_limited &&
+                                 std::fabs(std::fabs(fp.k) * r.h - PHASE_KL_CEILING) <= TIE_REL * PHASE_KL_CEILING);
+        for (const auto &t : fp.ladder) thresholds_.push_back(t.first);
+        std::vector<int64_t> order(runs_.size());
+        for (size_t r = 0; r < order.size(); r++) order[r] = static_cast<int64_t>(r);
+        std::stable_sort(order.begin(), order.end(), [&](int64_t x, int64_t y) { return runs_[x].h < runs_[y].h; });
+        class_of_.assign(runs_.size(), 0);
+        for (int64_t r : order) {
+            if (!classes_.empty() && runs_[r].h - runs_[classes_.back()[0]].h <= rho_)
+                classes_.back().push_back(r);
+            else
+                classes_.push_back({r});
+            class_of_[r] = static_cast<int64_t>(classes_.size()) - 1;
+        }
+        for (auto &c : classes_)
+            std::stable_sort(c.begin(), c.end(), [&](int64_t x, int64_t y) {
+                return -(runs_[x].s1 - runs_[x].s0) < -(runs_[y].s1 - runs_[y].s0);
+            });
+        edge_runs_.assign(edges_.size(), {});
+        for (size_t r = 0; r < runs_.size(); r++) edge_runs_[runs_[r].edge].push_back(static_cast<int64_t>(r));
+    }
+
+    int64_t cache_entries_needed() const {
+        int64_t need = 0;
+        for (const auto &c : classes_)
+            for (int64_t A : c) {
+                const int64_t la = runs_[A].s1 - runs_[A].s0;
+                for (int64_t B : c) {
+                    const int64_t lb = runs_[B].s1 - runs_[B].s0;
+                    if (!eligible(la, lb)) break;
+                    if (same_step(A, B)) need += la + lb - 1;
+                }
+            }
+        return need;
+    }
+
+    // out (nd, nd, r1 - r0, n) -= the base rows [r0, r1)
+    void subtract_from(std::vector<cdouble> &out, int64_t r0, int64_t r1) {
+        out_ = &out;
+        r0_ = r0;
+        nr_ = r1 - r0;
+        if (edges_.size() > 1) fill(r0, r1, false, -1);
+        for (size_t e = 0; e < edges_.size(); e++) {
+            const int64_t l0 = edges_[e].l0, l1 = edges_[e].l1;
+            const int64_t lo = std::max(l0, r0), hi = std::min(l1, r1);
+            if (lo >= hi) continue;
+            const int64_t A = run_of_[l0];
+            if (eligible(hi - lo, l1 - l0) && foldable(static_cast<int64_t>(e), A)) {
+                toeplitz(A, lo, hi, A, true, static_cast<int64_t>(e), true);
+                continue;
+            }
+            const Blk st = static_rows(static_cast<int64_t>(e), lo - l0, hi - l0);
+            if (edge_runs_[e].size() == 1 && !eligible(hi - lo, l1 - l0)) {
+                Blk rg = reg(static_cast<int64_t>(e), iota(lo, hi), iota(l0, l1));
+                // `static + reg`: the real block promoted, then added
+                for (size_t q = 0; q < rg.v.size(); q++)
+                    rg.v[q] = cdouble(st.v[q].real() + rg.v[q].real(), 0.0 + rg.v[q].imag());
+                put(lo, hi, l0, l1, rg, 0, 0);
+                continue;
+            }
+            put_real(lo, hi, l0, l1, st);
+            fill(lo, hi, true, static_cast<int64_t>(e));
+        }
+        out_ = nullptr;
+    }
+
+  private:
+    struct Run {
+        int64_t s0, s1;
+        double h, sgn;
+        int64_t edge;
+    };
+    // a (nd, nd, nr, nc) block, C order
+    struct Blk {
+        int64_t nr = 0, nc = 0;
+        std::vector<cdouble> v;
+        cdouble &at(int nd, int p, int q, int64_t i, int64_t j) {
+            return v[static_cast<size_t>(((static_cast<int64_t>(p) * nd + q) * nr + i) * nc + j)];
+        }
+    };
+
+    static std::vector<int64_t> iota(int64_t a, int64_t b) {
+        std::vector<int64_t> v;
+        for (int64_t q = a; q < b; q++) v.push_back(q);
+        return v;
+    }
+    static bool eligible(int64_t nr, int64_t nc) { return nr * nc >= std::max<int64_t>(TOEPLITZ_MIN_PAIRS, 2); }
+
+    bool same_step(int64_t A, int64_t B) const {
+        if (A == B) return true;
+        const Run &ra = runs_[A], &rb = runs_[B];
+        const int64_t steps = std::min(ra.s1 - ra.s0, rb.s1 - rb.s0) - 1;
+        if (steps <= 0) return true;
+        const double f = ra.sgn * rb.sgn;
+        double d[3];
+        for (int c = 0; c < 3; c++) d[c] = f * step_[B][c] - step_[A][c];
+        return static_cast<double>(steps) * nnorm3(d) <= rho_;
+    }
+
+    bool foldable(int64_t e, int64_t A) {
+        const Run &r = runs_[A];
+        if (r.s0 != edges_[e].l0 || r.s1 != edges_[e].l1) return false;
+        return is_toeplitz(*edges_[e].arc);
+    }
+
+    // `_seg_seg_static_moments(arc, a_w, d, ek_se, rows=[i0, i1))`: the
+    // Toeplitz table's gather (a non-uniform edge is numpy's dense branch)
+    const nd::array_t<double> &table(int64_t e) {
+        auto it = tables_.find(e);
+        if (it != tables_.end()) return it->second;
+        const auto &arc = *edges_[e].arc;
+        if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+        const double h = arc[1] - arc[0], a_w = edges_[e].a_w;
+        const size_t N = arc.size() - 1;
+        nd::array_t<double> t = fp_.extended_kernel
+                                    ? seg_seg_static_moments_bspline_uniform_ek_table(h, a_w, N, fp_.degree, a_w)
+                                    : seg_seg_static_moments_bspline_uniform_table(h, a_w, N, fp_.degree);
+        return tables_.emplace(e, std::move(t)).first->second;
+    }
+    // real (nd, nd, i1 - i0, N), as a Blk with zero imaginary parts kept apart
+    struct RBlk {
+        int64_t nr = 0, nc = 0;
+        std::vector<cdouble> v;  // real values in .real()
+    };
+    Blk static_rows(int64_t e, int64_t i0, int64_t i1) {
+        const nd::array_t<double> &t = table(e);
+        const int64_t N = static_cast<int64_t>(edges_[e].arc->size()) - 1;
+        Blk b;
+        b.nr = i1 - i0;
+        b.nc = N;
+        b.v.resize(static_cast<size_t>(nd_ * nd_ * b.nr * b.nc));
+        const double *tp = t.data();
+        const int64_t L = 2 * N - 1;
+        for (int p = 0; p < nd_; p++)
+            for (int q = 0; q < nd_; q++)
+                for (int64_t i = i0; i < i1; i++)
+                    for (int64_t j = 0; j < N; j++)
+                        b.at(nd_, p, q, i - i0, j) = cdouble(tp[(static_cast<int64_t>(p) * nd_ + q) * L + (j - i + N - 1)], 0.0);
+        return b;
+    }
+
+    Blk offedge_rows(const std::vector<int64_t> &rows, const std::vector<int64_t> &cols) {
+        Segs si, sj;
+        std::vector<size_t> gr, gc;
+        for (int64_t r : rows) gr.push_back(static_cast<size_t>(S_[r]));
+        for (int64_t c : cols) gc.push_back(static_cast<size_t>(S_[c]));
+        Segs all;
+        all.l = g_.seg_l;
+        all.r = g_.seg_r;
+        si = all.take(gr);
+        sj = all.take(gc);
+        std::vector<double> a_rows;
+        for (size_t s : gr) a_rows.push_back(seg_a_[s]);
+        const EK ekc = ek_cut(ek_, &gr, &gc);
+        Blk b;
+        b.nr = static_cast<int64_t>(rows.size());
+        b.nc = static_cast<int64_t>(cols.size());
+        b.v = offedge(si, sj, a_rows, fp_.k, fp_.degree, fp_.n_qp_pair, ekc, fp_.ladder);
+        return b;
+    }
+
+    // same-edge smooth-kernel moments of edge e (rows / cols group-local)
+    Blk reg(int64_t e, const std::vector<int64_t> &rows, const std::vector<int64_t> &cols) {
+        const int64_t l0 = edges_[e].l0;
+        const auto &arc = *edges_[e].arc;
+        const double a_w = edges_[e].a_w;
+        if (nodes_e_ != e) {
+            // `_seg_seg_reg_nodes`
+            std::vector<double> t01, w01;
+            gl01(fp_.n_qp_same_edge, t01, w01);
+            q_ = t01.size();
+            const size_t N = arc.size() - 1;
+            s_q_.assign(N * q_, 0.0);
+            wu_.assign(static_cast<size_t>(nd_) * N * q_, 0.0);
+            std::vector<double> u_q(N * q_), w_q(N * q_);
+            for (size_t i = 0; i < N; i++) {
+                const double hs = arc[i + 1] - arc[i];
+                for (size_t j = 0; j < q_; j++) {
+                    s_q_[i * q_ + j] = arc[i] + t01[j] * hs;
+                    u_q[i * q_ + j] = (t01[j] * hs) * 1.0;
+                    w_q[i * q_ + j] = (w01[j] * hs) * 1.0;
+                }
+            }
+            for (int p = 0; p < nd_; p++)
+                for (size_t i = 0; i < N * q_; i++) {
+                    const double uu = u_q[i];
+                    const double up = p == 0 ? 1.0 : p == 1 ? uu : p == 2 ? uu * uu : std::pow(uu, p);
+                    wu_[static_cast<size_t>(p) * N * q_ + i] = w_q[i] * up;
+                }
+            n_edge_ = N;
+            nodes_e_ = e;
+        }
+        const size_t q = q_, N = n_edge_;
+        const size_t nr = rows.size(), nc = cols.size();
+        std::vector<double> R(nr * q * nc * q);
+        const double a2 = a_w * a_w;
+        for (size_t i = 0; i < nr; i++)
+            for (size_t qi = 0; qi < q; qi++) {
+                const double sr = s_q_[static_cast<size_t>(rows[i] - l0) * q + qi];
+                for (size_t j = 0; j < nc; j++)
+                    for (size_t qj = 0; qj < q; qj++) {
+                        double d = sr - s_q_[static_cast<size_t>(cols[j] - l0) * q + qj];
+                        d *= d;
+                        d += a2;
+                        R[(i * q + qi) * nc * q + j * q + qj] = std::sqrt(d);
+                    }
+            }
+        std::vector<double> wr(static_cast<size_t>(nd_) * nr * q), wc(static_cast<size_t>(nd_) * nc * q);
+        for (int p = 0; p < nd_; p++) {
+            for (size_t i = 0; i < nr; i++)
+                for (size_t qi = 0; qi < q; qi++)
+                    wr[(static_cast<size_t>(p) * nr + i) * q + qi] =
+                        wu_[static_cast<size_t>(p) * N * q + static_cast<size_t>(rows[i] - l0) * q + qi];
+            for (size_t j = 0; j < nc; j++)
+                for (size_t qj = 0; qj < q; qj++)
+                    wc[(static_cast<size_t>(p) * nc + j) * q + qj] =
+                        wu_[static_cast<size_t>(p) * N * q + static_cast<size_t>(cols[j] - l0) * q + qj];
+        }
+        const CF Ra = borrow(R, {static_cast<nd::ssize_t>(nr * q), static_cast<nd::ssize_t>(nc * q)});
+        const CF wra = borrow(wr, {nd_, static_cast<nd::ssize_t>(nr), static_cast<nd::ssize_t>(q)});
+        const CF wca = borrow(wc, {nd_, static_cast<nd::ssize_t>(nc), static_cast<nd::ssize_t>(q)});
+        const std::vector<double> kv{fp_.k};
+        const CF ka = borrow(kv, {1});
+        const nd::array_t<std::complex<double>> A =
+            fp_.extended_kernel ? seg_seg_reg_moments_bspline_swept_ek_window(Ra, wra, wca, ka, a_w)
+                                : seg_seg_reg_moments_bspline_swept_window(Ra, wra, wca, ka);
+        Blk b;
+        b.nr = static_cast<int64_t>(nr);
+        b.nc = static_cast<int64_t>(nc);
+        b.v.assign(A.data(), A.data() + static_cast<size_t>(nd_ * nd_) * nr * nc);
+        return b;
+    }
+
+    Blk eval(bool is_reg, int64_t e, const std::vector<int64_t> &rows, const std::vector<int64_t> &cols) {
+        return is_reg ? reg(e, rows, cols) : offedge_rows(rows, cols);
+    }
+
+    // out[rows a:b, cols c:f] -= blk[rows bi.., cols bj..] (a sub-block of blk)
+    void put(int64_t a, int64_t b, int64_t c, int64_t f, Blk &blk, int64_t bi, int64_t bj) {
+        std::vector<cdouble> &o = *out_;
+        for (int p = 0; p < nd_; p++)
+            for (int q = 0; q < nd_; q++)
+                for (int64_t i = a; i < b; i++)
+                    for (int64_t j = c; j < f; j++) {
+                        cdouble &d = o[static_cast<size_t>(((static_cast<int64_t>(p) * nd_ + q) * nr_ + (i - r0_)) * n_ + j)];
+                        const cdouble s = blk.at(nd_, p, q, bi + (i - a), bj + (j - c));
+                        d = cdouble(d.real() - s.real(), d.imag() - s.imag());
+                    }
+    }
+    // out -= a real block (complex minus float: the imaginary part minus 0)
+    void put_real(int64_t a, int64_t b, int64_t c, int64_t f, const Blk &blk) {
+        std::vector<cdouble> &o = *out_;
+        for (int p = 0; p < nd_; p++)
+            for (int q = 0; q < nd_; q++)
+                for (int64_t i = a; i < b; i++)
+                    for (int64_t j = c; j < f; j++) {
+                        cdouble &d = o[static_cast<size_t>(((static_cast<int64_t>(p) * nd_ + q) * nr_ + (i - r0_)) * n_ + j)];
+                        const double s = blk.v[static_cast<size_t>(((static_cast<int64_t>(p) * nd_ + q) * blk.nr + (i - a)) * blk.nc + (j - c))].real();
+                        d = cdouble(d.real() - s, d.imag() - 0.0);
+                    }
+    }
+
+    Ranges span(bool is_reg, int64_t e) const {
+        const int64_t l0 = edges_[e].l0, l1 = edges_[e].l1;
+        if (is_reg) return {{l0, l1}};
+        Ranges r;
+        if (0 < l0) r.push_back({0, l0});
+        if (l1 < n_) r.push_back({l1, n_});
+        return r;
+    }
+
+    void direct(const Ranges &row_ranges, const Ranges &col_ranges, bool is_reg, int64_t e) {
+        std::vector<int64_t> rows, cols;
+        for (const auto &r : row_ranges)
+            for (int64_t q = r.first; q < r.second; q++) rows.push_back(q);
+        for (const auto &c : col_ranges)
+            for (int64_t q = c.first; q < c.second; q++) cols.push_back(q);
+        Blk vals = eval(is_reg, e, rows, cols);
+        int64_t i = 0;
+        for (const auto &r : row_ranges) {
+            int64_t j = 0;
+            for (const auto &c : col_ranges) {
+                put(r.first, r.second, c.first, c.second, vals, i, j);
+                j += c.second - c.first;
+            }
+            i += r.second - r.first;
+        }
+    }
+
+    void fill(int64_t lo, int64_t hi, bool is_reg, int64_t e) {
+        Ranges shorts;
+        for (int64_t A = run_of_[lo]; A <= run_of_[hi - 1]; A++) {
+            const Run &ra = runs_[A];
+            const int64_t ra0 = std::max(ra.s0, lo), ra1 = std::min(ra.s1, hi);
+            std::vector<int64_t> toe;
+            if (is_reg) {
+                for (int64_t B : edge_runs_[ra.edge]) {
+                    const Run &rb = runs_[B];
+                    if (class_of_[B] == class_of_[A] && eligible(ra1 - ra0, rb.s1 - rb.s0) && same_step(A, B))
+                        toe.push_back(B);
+                }
+            } else if (!phase_tie_[A]) {
+                for (int64_t B : classes_[class_of_[A]]) {
+                    const Run &rb = runs_[B];
+                    if (!eligible(ra1 - ra0, rb.s1 - rb.s0)) break;
+                    if (rb.edge != ra.edge && !phase_tie_[B] && same_step(A, B)) toe.push_back(B);
+                }
+            }
+            if (toe.empty()) {
+                shorts.push_back({ra0, ra1});
+                continue;
+            }
+            for (int64_t B : toe) toeplitz(A, ra0, ra1, B, is_reg, e, false);
+            Ranges holes;
+            for (int64_t B : toe) holes.push_back({runs_[B].s0, runs_[B].s1});
+            const Ranges rest = subtract_ranges(span(is_reg, ra.edge), holes);
+            if (!rest.empty()) direct({{ra0, ra1}}, rest, is_reg, e);
+        }
+        if (shorts.empty()) return;
+        shorts = merge_ranges(shorts);
+        if (is_reg) {
+            direct(shorts, {{edges_[e].l0, edges_[e].l1}}, is_reg, e);
+            return;
+        }
+        std::vector<int64_t> rows;
+        for (const auto &r : shorts)
+            for (int64_t q = r.first; q < r.second; q++) rows.push_back(q);
+        Blk vals = eval(false, e, rows, iota(0, n_));
+        int64_t i = 0;
+        for (const auto &r : shorts) {
+            const int64_t a = r.first, b = r.second;
+            // `_split_by_edge`: [a, b) cut at the edge starts
+            std::vector<int64_t> pts{a};
+            for (int64_t x : edge_bounds_)
+                if (a < x && x < b) pts.push_back(x);
+            pts.push_back(b);
+            for (size_t k2 = 0; k2 + 1 < pts.size(); k2++) {
+                const int64_t x = pts[k2], y = pts[k2 + 1];
+                const Edge &ed = edges_[runs_[run_of_[x]].edge];
+                for (int p = 0; p < nd_; p++)
+                    for (int q = 0; q < nd_; q++)
+                        for (int64_t ii = i + x - a; ii < i + y - a; ii++)
+                            for (int64_t j = ed.l0; j < ed.l1; j++) vals.at(nd_, p, q, ii, j) = cdouble(0.0, 0.0);
+            }
+            put(a, b, 0, n_, vals, i, 0);
+            i += b - a;
+        }
+    }
+
+    std::vector<int64_t> tie_diagonals(int64_t a0, int64_t b0, int64_t nA, int64_t nB, int64_t sA, int64_t sB,
+                                       int64_t m_min, int64_t size) const {
+        std::vector<int64_t> m(static_cast<size_t>(size));
+        for (int64_t q = 0; q < size; q++) m[q] = q + m_min;
+        std::vector<int64_t> ii(static_cast<size_t>(size)), jj(static_cast<size_t>(size));
+        for (const Boundary &bd : boundary_pairs(m, nA, nB, sA, sB))
+            for (size_t t = 0; t < bd.idx.size(); t++) {
+                ii[bd.idx[t]] = bd.row ? bd.at : bd.other[t];
+                jj[bd.idx[t]] = bd.row ? bd.other[t] : bd.at;
+            }
+        std::vector<int64_t> out;
+        for (int64_t q = 0; q < size; q++) {
+            const size_t I = static_cast<size_t>(S_[a0 + ii[q]]), J = static_cast<size_t>(S_[b0 + jj[q]]);
+            double dv[3], hi_[3], hj_[3];
+            for (int c = 0; c < 3; c++) {
+                dv[c] = 0.5 * (g_.seg_l[3 * I + c] + g_.seg_r[3 * I + c]) - 0.5 * (g_.seg_l[3 * J + c] + g_.seg_r[3 * J + c]);
+                hi_[c] = g_.seg_r[3 * I + c] - g_.seg_l[3 * I + c];
+                hj_[c] = g_.seg_r[3 * J + c] - g_.seg_l[3 * J + c];
+            }
+            const double ratio = nnorm3(dv) / std::max(nnorm3(hi_), nnorm3(hj_));
+            bool near = false;
+            for (double thr : thresholds_) near = near || std::fabs(ratio - thr) <= TIE_REL * thr;
+            if (near) out.push_back(q);
+        }
+        return out;
+    }
+
+    void toeplitz(int64_t A, int64_t ra0, int64_t ra1, int64_t B, bool is_reg, int64_t e, bool with_static) {
+        const Run &rA = runs_[A], &rB = runs_[B];
+        const int64_t a0 = rA.s0, a1 = rA.s1, b0 = rB.s0, b1 = rB.s1;
+        int64_t sA = static_cast<int64_t>(rA.sgn), sB = static_cast<int64_t>(rB.sgn);
+        if (is_reg) sA = sB = 1;
+        const int64_t nA = a1 - a0, nB = b1 - b0;
+        const int64_t m_min = std::min<int64_t>(0, sB * (nB - 1)) - std::max<int64_t>(0, sA * (nA - 1));
+        const int64_t size = nA + nB - 1;
+        const int nd2 = nd_ * nd_;
+        std::vector<cdouble> F(static_cast<size_t>(nd2 * size), cdouble(0.0, 0.0));  // (nd, nd, size)
+        std::vector<bool> have(static_cast<size_t>(size), false);
+        std::vector<int64_t> ties;
+        if (!is_reg && !thresholds_.empty()) {
+            ties = tie_diagonals(a0, b0, nA, nB, sA, sB, m_min, size);
+            for (int64_t t : ties) have[t] = true;
+        }
+        int64_t tlo = INT64_MAX, thi = INT64_MIN;
+        for (int64_t ip = ra0 - a0; ip < ra1 - a0; ip++)
+            for (int64_t t : {-sA * ip - m_min, sB * (nB - 1) - sA * ip - m_min}) {
+                tlo = std::min(tlo, t);
+                thi = std::max(thi, t);
+            }
+        std::vector<int64_t> need;
+        for (int64_t t = tlo; t <= thi; t++)
+            if (!have[t]) need.push_back(t);
+        if (!need.empty()) {
+            std::vector<int64_t> mm;
+            for (int64_t t : need) mm.push_back(t + m_min);
+            for (const Boundary &bd : boundary_pairs(mm, nA, nB, sA, sB)) {
+                if (bd.row) {
+                    std::vector<int64_t> cols;
+                    for (int64_t o : bd.other) cols.push_back(b0 + o);
+                    Blk vals = eval(is_reg, e, {a0 + bd.at}, cols);
+                    for (size_t t = 0; t < bd.idx.size(); t++)
+                        for (int pq = 0; pq < nd2; pq++)
+                            F[static_cast<size_t>(pq * size + need[bd.idx[t]])] = vals.v[static_cast<size_t>(pq) * cols.size() + t];
+                } else {
+                    std::vector<int64_t> rows;
+                    for (int64_t o : bd.other) rows.push_back(a0 + o);
+                    Blk vals = eval(is_reg, e, rows, {b0 + bd.at});
+                    for (size_t t = 0; t < bd.idx.size(); t++)
+                        for (int pq = 0; pq < nd2; pq++)
+                            F[static_cast<size_t>(pq * size + need[bd.idx[t]])] = vals.v[static_cast<size_t>(pq) * rows.size() + t];
+                }
+            }
+            if (with_static) {
+                // the static table IS the 2N - 1 diagonals (rows N-1 and 0 of its gather)
+                const nd::array_t<double> &tb = table(e);
+                const double *tp = tb.data();
+                for (int pq = 0; pq < nd2; pq++)
+                    for (int64_t t : need) {
+                        cdouble &f = F[static_cast<size_t>(pq * size + t)];
+                        f = cdouble(f.real() + tp[pq * size + t], f.imag() + 0.0);
+                    }
+            }
+        }
+        for (int64_t i = ra0; i < ra1; i++) {
+            const int64_t t0 = -sA * (i - a0) - m_min;
+            std::vector<cdouble> &o = *out_;
+            for (int pq = 0; pq < nd2; pq++)
+                for (int64_t j = 0; j < nB; j++) {
+                    const int64_t t = sB > 0 ? t0 + j : t0 - j;
+                    const cdouble s = F[static_cast<size_t>(pq * size + t)];
+                    cdouble &d = o[static_cast<size_t>((pq * nr_ + (i - r0_)) * n_ + b0 + j)];
+                    d = cdouble(d.real() - s.real(), d.imag() - s.imag());
+                }
+        }
+        if (!ties.empty()) {
+            for (int64_t i = ra0; i < ra1; i++) {
+                std::vector<int64_t> jp;
+                for (int64_t t : ties) {
+                    const int64_t j = sB * ((t + m_min) + sA * (i - a0));
+                    if (j >= 0 && j < nB) jp.push_back(j);
+                }
+                if (jp.empty()) continue;
+                std::vector<int64_t> cols;
+                for (int64_t j : jp) cols.push_back(b0 + j);
+                Blk vals = eval(is_reg, e, {i}, cols);
+                for (size_t c = 0; c < jp.size(); c++) put(i, i + 1, b0 + jp[c], b0 + jp[c] + 1, vals, 0, static_cast<int64_t>(c));
+            }
+        }
+    }
+
+    const Geometry &g_;
+    const std::vector<double> &seg_a_;
+    std::vector<int64_t> S_;
+    int64_t n_;
+    FillParams fp_;
+    EK ek_;
+    int nd_;
+    std::vector<Edge> edges_;
+    std::vector<int64_t> edge_bounds_;
+    double rho_ = 0;
+    std::vector<Run> runs_;
+    std::vector<std::array<double, 3>> step_;
+    std::vector<int64_t> run_of_;
+    std::vector<bool> phase_tie_;
+    std::vector<double> thresholds_;
+    std::vector<std::vector<int64_t>> classes_;
+    std::vector<int64_t> class_of_;
+    std::vector<std::vector<int64_t>> edge_runs_;
+    std::map<int64_t, nd::array_t<double>> tables_;
+    int64_t nodes_e_ = -1;
+    size_t q_ = 0, n_edge_ = 0;
+    std::vector<double> s_q_, wu_;
+    std::vector<cdouble> *out_ = nullptr;
+    int64_t r0_ = 0, nr_ = 0;
+};
+
+}  // namespace
+
+bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire) {
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) {
+            const size_t s = static_cast<size_t>(g.seg_offsets[w] + q);
+            double d[3];
+            for (int c = 0; c < 3; c++) d[c] = g.seg_r[3 * s + c] - g.seg_l[3 * s + c];
+            if (nnorm3(d) < 3.0 * radius_per_wire[w]) return true;
+        }
+    return false;
+}
+
+void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                          const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
+                          double eps, double mu, double swept_mem_mb) {
+    const int d = fp.degree, nd = d + 1;
+    const int64_t n_total = g.n_segs_total, n_basis = b.n_basis;
+    std::vector<double> seg_a;
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) seg_a.push_back(radius_per_wire[w]);
+    const std::vector<int64_t> labels = razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, seg_a);
+    // `coaxial_lines`: a line carrying a radius step is a cross job
+    {
+        double amax = seg_a.empty() ? 0.0 : seg_a[0];
+        for (double v : seg_a) amax = std::max(amax, v);
+        const std::vector<int64_t> line =
+            razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, std::vector<double>(seg_a.size(), amax));
+        std::map<int64_t, int64_t> first;
+        for (int64_t s = 0; s < n_total; s++) {
+            auto it = first.find(line[s]);
+            if (it == first.end())
+                first[line[s]] = labels[s];
+            else if (it->second != labels[s])
+                throw FrontNotPorted("a coaxial line with a radius step (the cross job)");
+        }
+    }
+    // the fill's EK spec
+    EK ek;
+    if (fp.extended_kernel) {
+        ek.on = true;
+        ek.group_i.assign(static_cast<size_t>(n_total), 0);
+        ek.group_j.assign(static_cast<size_t>(n_total), 0);
+        bool all_eq = true;
+        for (double v : seg_a) all_eq = all_eq && v == seg_a[0];
+        if (!all_eq) {
+            ek.b_kind = EK::per_col;
+            ek.b_j = seg_a;
+        }
+    }
+    // the groups, in label order, each with its edges (`_edge_ingredients`)
+    std::map<int64_t, std::vector<int64_t>> groups;
+    for (int64_t s = 0; s < n_total; s++) groups[labels[s]].push_back(s);
+    struct GEdge {
+        int64_t start, stop;
+        const std::vector<double> *arc;
+        double a_w;
+    };
+    std::map<int64_t, std::vector<GEdge>> edges;
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        const auto &pw = g.per_wire[w];
+        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+            const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+            edges[labels[s0]].push_back({s0, s1, &pw.edge_arc_edges[e], radius_per_wire[w]});
+        }
+    }
+    const mw::ek::PointRules rules = razor::point_rules();
+    const int64_t budget = static_cast<int64_t>(swept_mem_mb) * 1024 * 1024;
+    nd::array_t<std::complex<double>> Za =
+        borrow_mut(Z, {static_cast<nd::ssize_t>(n_basis), static_cast<nd::ssize_t>(n_basis)});
+    const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(n_basis), nd, nd});
+    for (const auto &gS : groups) {
+        const std::vector<int64_t> &S = gS.second;
+        const int64_t n = static_cast<int64_t>(S.size());
+        const size_t s0 = static_cast<size_t>(S[0]);
+        const double *axis = &g.tangents[3 * s0];
+        // `group_frame`
+        std::vector<double> x0(static_cast<size_t>(n)), sgn(static_cast<size_t>(n)), h(static_cast<size_t>(n));
+        double hmax = 0.0;
+        for (int64_t i = 0; i < n; i++) {
+            const size_t s = static_cast<size_t>(S[i]);
+            double dv[3], ev[3];
+            for (int c = 0; c < 3; c++) {
+                dv[c] = g.seg_l[3 * s + c] - g.seg_l[3 * s0 + c];
+                ev[c] = g.seg_r[3 * s + c] - g.seg_l[3 * s + c];
+            }
+            x0[i] = ndot3(dv, axis);
+            sgn[i] = ndot3(&g.tangents[3 * s], axis) >= 0.0 ? 1.0 : -1.0;
+            h[i] = nnorm3(ev);
+            hmax = std::max(hmax, h[i]);
+        }
+        const int64_t max_cached = std::max<int64_t>(1, budget / (nd * nd * 16 + 256));
+        mw::ek::CoaxialRows exact(x0.data(), sgn.data(), h.data(), n, seg_a[s0], fp.k, nd, max_cached,
+                                  n ? 1e-11 * hmax : 1.0, true, rules, 0);
+        // the bases relabelled onto the group's local order (sentinel n)
+        std::vector<int64_t> loc(static_cast<size_t>(n_total), n);
+        for (int64_t i = 0; i < n; i++) loc[static_cast<size_t>(S[i])] = i;
+        std::vector<int64_t> supp_loc(static_cast<size_t>(n_basis * nd));
+        std::vector<int64_t> Bs;
+        for (int64_t m = 0; m < n_basis; m++) {
+            bool any = false;
+            for (int a = 0; a < nd; a++) {
+                const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + a)];
+                const int64_t v = sg >= 0 ? loc[static_cast<size_t>(sg)] : n;
+                supp_loc[static_cast<size_t>(m * nd + a)] = v;
+                any = any || v < n;
+            }
+            if (any) Bs.push_back(m);
+        }
+        std::vector<double> tan_loc(static_cast<size_t>(3 * (n + 1)), 0.0);
+        for (int64_t i = 0; i < n; i++)
+            for (int c = 0; c < 3; c++) tan_loc[3 * i + c] = g.tangents[3 * static_cast<size_t>(S[i]) + c];
+        std::vector<BaseRows::Edge> ge;
+        for (const GEdge &e : edges[gS.first]) {
+            const int64_t l0 = loc[static_cast<size_t>(e.start)];
+            ge.push_back({l0, l0 + (e.stop - e.start), e.arc, e.a_w});
+        }
+        BaseRows base(g, seg_a, S, ge, fp, ek);
+        const int64_t entry = nd * nd * 16 + 1;
+        const int64_t reserve = std::min<int64_t>(budget / 16, base.cache_entries_needed() * entry);
+        const double window_mb = static_cast<double>(budget - reserve) / (1024.0 * 1024.0);
+        const int64_t nd2 = nd * nd;
+        const int64_t per_pair = 3 * nd2 * 16 + nd2 * 8 + 2 * 8 * fp.n_qp_same_edge * fp.n_qp_same_edge + 200;
+        const int64_t row_bytes = n * per_pair;
+        // `_schedule.mb_rows(window_mb, row_bytes)`: max(1, int(mb * 1024 * 1024 // row_bytes))
+        const int64_t chunk = std::max<int64_t>(
+            1, static_cast<int64_t>(py_floordiv(window_mb * 1024.0 * 1024.0, static_cast<double>(row_bytes))));
+        const CI sa = borrow(supp_loc, {static_cast<nd::ssize_t>(n_basis), nd});
+        const CF ta = borrow(tan_loc, {static_cast<nd::ssize_t>(n + 1), 3});
+        const CI Ba = borrow(Bs, {static_cast<nd::ssize_t>(Bs.size())});
+        for (int64_t r0 = 0; r0 < n; r0 += chunk) {
+            const int64_t r1 = std::min(n, r0 + chunk);
+            std::vector<cdouble> dJ(static_cast<size_t>(nd2 * (r1 - r0) * n));
+            exact.rows(r0, r1, dJ.data());
+            base.subtract_from(dJ, r0, r1);
+            std::vector<int64_t> M;
+            for (int64_t m : Bs) {
+                bool hit = false;
+                for (int a = 0; a < nd; a++) {
+                    const int64_t v = supp_loc[static_cast<size_t>(m * nd + a)];
+                    hit = hit || (v >= r0 && v < r1);
+                }
+                if (hit) M.push_back(m);
+            }
+            const nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> Jw =
+                borrow(dJ, {nd, nd, static_cast<nd::ssize_t>(r1 - r0), static_cast<nd::ssize_t>(n)});
+            const CI Ma = borrow(M, {static_cast<nd::ssize_t>(M.size())});
+            assemble_Z_bspline_windowed(Jw, sa, pa, ta, Ma, Ba, r0, r1, 0, n, omega, eps, mu, Za, 0, nd::none(),
+                                        false);
+        }
+    }
 }
 
 }  // namespace bspline

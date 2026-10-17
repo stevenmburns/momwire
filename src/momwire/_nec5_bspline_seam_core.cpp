@@ -210,19 +210,8 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         fr->loading.rlc.push_back(r);
     }
     // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
-    // segment is shorter than 3 radii. The correction is not ported, so a
-    // deck near that line declines (the margin keeps the decision Python's).
-    for (size_t w = 0; w < fr->geom.per_wire.size(); w++) {
-        const bspline::WireGeometry &wg = fr->geom.per_wire[w];
-        for (int64_t q = 0; q < wg.n_total; q++) {
-            double h2 = 0.0;
-            for (int c = 0; c < 3; c++) {
-                const double d = wg.seg_r[3 * q + c] - wg.seg_l[3 * q + c];
-                h2 += d * d;
-            }
-            if (std::sqrt(h2) < 3.0 * fr->radii[w] * (1.0 + 1e-9)) return decline("bspline-exact-kernel");
-        }
-    }
+    // segment is shorter than 3 radii (free space serves it)
+    fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii);
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

@@ -1,0 +1,8 @@
+CM a 1000-segment fat wire: the exact kernel's observer windows
+CE
+GW 1,1000,0.,-2.,0.,0.,2.,0.,.002
+GE 0
+FR 0,1,0,0,30.
+EX 0,1,500,0,1.,0.
+XQ
+EN

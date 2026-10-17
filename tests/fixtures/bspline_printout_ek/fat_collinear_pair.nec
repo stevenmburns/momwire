@@ -1,0 +1,10 @@
+CM two collinear fat wires, equal pitch: off-edge Toeplitz blocks and ladder ties
+CE
+GW 1,150,0.,-1.01,0.,0.,-.01,0.,.004
+GW 2,150,0.,.01,0.,0.,1.01,0.,.004
+GE 0
+FR 0,1,0,0,70.
+EX 0,1,75,0,1.,0.
+EX 0,2,76,0,1.,0.
+RP 0,1,19,1000,90.,0.,0.,10.,0.
+EN

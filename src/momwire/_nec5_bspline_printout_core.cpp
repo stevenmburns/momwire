@@ -61,6 +61,9 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     } else {
         Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     }
+    // `_add_exact_kernel_correction` (after the fill, before the loading)
+    if (fr.exact_kernel)
+        bspline::add_exact_correction(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     // `_apply_loading(Z)`: the distributed series loading, last
     if (fr.loading.active()) {
         BSplineFront &mf = const_cast<BSplineFront &>(fr);
