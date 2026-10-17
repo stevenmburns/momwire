@@ -52,6 +52,18 @@ _OPTIONAL_BUILD_ERRORS = (
 )
 
 
+def _host_runs_avx2() -> bool:
+    """Whether this build host's CPU runs the `_avx2` variant (AVX2 and FMA).
+    Read from /proc/cpuinfo on Linux; assumed elsewhere, where the double
+    build is MSVC's and the linker already refuses an unresolved symbol."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            flags = next((ln.split() for ln in f if ln.startswith("flags")), [])
+    except OSError:
+        return True
+    return "avx2" in flags and "fma" in flags
+
+
 class OptionalBuildExt(build_ext):
     def run(self):
         try:
@@ -79,6 +91,46 @@ class OptionalBuildExt(build_ext):
             self.build_temp = base_temp
         if os.environ.get("MOMWIRE_STRIP_SYMBOLS") == "1":
             self._split_debug(Path(self.get_ext_fullpath(ext.name)))
+        if os.environ.get("MOMWIRE_REQUIRE_ACCEL") == "1":
+            self._check_import(ext, Path(self.get_ext_fullpath(ext.name)))
+
+    @staticmethod
+    def _check_import(ext, so: Path) -> None:
+        """Import the extension just linked, in a fresh interpreter (momwire#1545).
+
+        A shared object links with undefined symbols, so a clean link is not
+        a loadable module: an sse2 build on glibc 2.35 linked `_ZGVbN4v_cos`,
+        which that libmvec does not export, and failed only at import. At
+        run time `_accel` imports ONE variant, the CPU's pick, so on an AVX2
+        box a broken sse2 build is never tried there either. A development
+        build (`make build`) therefore imports every variant it builds, and
+        a failure fails the build. An `_avx2` variant is skipped on a CPU
+        that cannot run it, where importing it could fault the interpreter.
+        """
+        name = ext.name.rsplit(".", 1)[-1]
+        if not so.exists():
+            return
+        if name.endswith("_avx2") and not _host_runs_avx2():
+            print(f"momwire: {name}: this CPU has no AVX2+FMA, import not checked")
+            return
+        code = (
+            "import importlib.util, sys\n"
+            "spec = importlib.util.spec_from_file_location(sys.argv[1], sys.argv[2])\n"
+            "spec.loader.exec_module(importlib.util.module_from_spec(spec))\n"
+        )
+        r = subprocess.run(
+            [sys.executable, "-c", code, ext.name, str(so)],
+            capture_output=True,
+            text=True,
+        )
+        if r.returncode != 0:
+            tail = (r.stderr.strip().splitlines() or ["(no output)"])[-1]
+            raise ImportError(
+                f"{so.name} linked but does not import: {tail}. MOMWIRE_REQUIRE_ACCEL=1 "
+                "is set, so this fails the build instead of leaving an "
+                "unloadable extension in place."
+            )
+        print(f"momwire: {name} imports")
 
     @staticmethod
     def _split_debug(so: Path) -> None:
