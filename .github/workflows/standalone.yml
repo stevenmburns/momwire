@@ -82,32 +82,47 @@ jobs:
         env:
           CC: ccache gcc
           CXX: ccache g++
-      - name: configure + build (no Python)
+      # Both variants of the executable's core, as the extension has them:
+      # avx2 (the default) and sse2 (MW_EXE_VARIANT).
+      - name: configure + build (no Python; avx2 and sse2)
         run: |
-          cmake -S standalone -B build-st -G Ninja -DMW_EXE_NO_PYTHON=ON \
-            -DMW_OPENBLAS_LIB=$HOME/mwx-openblas/libmwxp.a \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-          cmake --build build-st
+          for v in avx2 sse2; do
+            cmake -S standalone -B build-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
+              -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$HOME/mwx-openblas/libmwxp.a \
+              -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+            cmake --build build-$v
+          done
       - name: contract tests
         run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
         env:
-          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-st/momwire-razor2p-standalone
+          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-avx2/momwire-razor2p-standalone
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
-      - name: every fixture deck, as the launcher
+      - name: every fixture deck, as the launcher (avx2)
         run: |
-          python scripts/core_split/exe_compare.py exe-linux.jsonl --standalone \
-            --exe build-st/momwire-razor2p-standalone \
+          python scripts/core_split/exe_compare.py exe-linux-avx2.jsonl --standalone \
+            --exe build-avx2/momwire-razor2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 tests/fixtures
         env:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
+      # The sse2 executable against the launcher on the extension's sse2
+      # variant: the same code both sides.
+      - name: every fixture deck, as the launcher (sse2)
+        run: |
+          python scripts/core_split/exe_compare.py exe-linux-sse2.jsonl --standalone \
+            --exe build-sse2/momwire-razor2p-standalone \
+            --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 tests/fixtures
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+          MOMWIRE_FORCE_VARIANT: sse2
       - name: upload the comparison
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: standalone-linux-${{ github.run_id }}-${{ github.run_attempt }}
-          path: exe-linux.jsonl
+          path: exe-linux-*.jsonl
           if-no-files-found: ignore
 
   windows:

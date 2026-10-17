@@ -399,12 +399,14 @@ _PY_MODULES = {"below": below, "somm": somm, "ground_refl": _ground_refl}
 
 # None = the whole file (headers that are nothing but the engine).
 _CPP_CODE = {
-    "_accel_mw568.cpp": (
+    "_accel_mw568.cpp": ("below_six_integrals_batch",),
+    # The per-node integrals, Python-free since momwire#1512 B5 (the
+    # executable's below/below table fills through the same text).
+    "_somm_below_six_inline.h": (
         "d12",
         "SixBelow",
         "SixResult",
         "six_below_one",
-        "below_six_integrals_batch",
     ),
     "_contour_engine_inline.h": None,
     "_branch_cut_inline.h": None,
