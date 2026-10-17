@@ -151,11 +151,7 @@ using cd = std::complex<double>;
 // also excluded: Apple clang defines __GNUC__ but there is no libmvec on
 // macOS (and arm64 has no AVX2 simdlen(4) form either), so the sincos calls
 // stay scalar/NEON-autovectorized there too.
-// x86: the AVX2 build only (momwire#1545). Under the sse2 baseline GCC maps
-// simdlen(4) to the SSE 4-wide clones (`_ZGVbN4v_*`), which libmvec does not
-// export, so that build keeps the scalar libm calls the wheels already make.
-#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__) && \
-    (defined(__AVX2__) || !(defined(__x86_64__) || defined(__i386__)))
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double cos(double);
 

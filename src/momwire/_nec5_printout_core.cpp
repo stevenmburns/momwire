@@ -24,6 +24,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cctype>
+#include <charconv>
 #include <cmath>
 #include <complex>
 #include <new>
@@ -79,6 +81,26 @@ std::string rstrip_blanks(std::string s) {
 }
 
 std::string fmt_double(const char *conv, double x, int width, int digits) {
+#if defined(__cpp_lib_to_chars) && __cpp_lib_to_chars >= 201611L
+    // `std::to_chars` at a precision is the correctly rounded decimal of the
+    // binary value, as glibc's / the CRT's printf is, and spells the
+    // exponent as printf does (sign and at least two digits); `%E` only
+    // upper-cases it. Several times faster than snprintf, which a long
+    // current table pays per cell (momwire#1517).
+    char buf[400];
+    const bool sci = conv[0] == 'E';
+    const auto r = std::to_chars(buf, buf + sizeof buf, x, sci ? std::chars_format::scientific : std::chars_format::fixed,
+                                 digits);
+    if (r.ec == std::errc()) {
+        if (sci)
+            for (char *c = buf; c != r.ptr; c++) *c = static_cast<char>(std::toupper(static_cast<unsigned char>(*c)));
+        const std::size_t n = static_cast<std::size_t>(r.ptr - buf);
+        if (n >= static_cast<std::size_t>(width)) return std::string(buf, n);
+        std::string out(static_cast<std::size_t>(width) - n, ' ');
+        out.append(buf, n);
+        return out;
+    }
+#endif
     char fmt[32];
     std::snprintf(fmt, sizeof fmt, "%%%d.%d%s", width, digits, conv);
     return format_c_locale(fmt, x);

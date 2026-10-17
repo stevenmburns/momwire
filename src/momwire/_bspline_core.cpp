@@ -6412,70 +6412,38 @@ seg_seg_static_moments_bspline_table_impl(double h, double a, size_t N,
     auto v = out.mutable_unchecked<3>();
     py::gil_scoped_release release;
     const double inv_4pi = 1.0 / (4.0 * M_PI);
+    // momwire#1517 (speed): the offsets OUTSIDE, the (p, q) moments inside.
+    // The far series' derivative table g[] is a function of the offset and
+    // `a` alone -- every moment reads the same one -- so it is built once per
+    // offset rather than once per (p, q, offset), by the very expressions
+    // `bspline_J_static_far_with_coeffs` evaluates (so the same doubles); the
+    // near closed forms, the EK correction and the scaling are each moment's
+    // own, as before. The (p, q) range check and each moment's coefficients
+    // stay hoisted above the region.
+    std::vector<double> coefs(NM * NM * (BSPLINE_FAR_TERMS + 1));
     for (size_t p = 0; p < NM; p++) {
         for (size_t q = 0; q < NM; q++) {
-            // Hoisted out of the offset loop (momwire#1006): on this uniform
-            // edge every offset has h1 = h2 = h, so the far series' whole
-            // coefficient vector is the same for all 2N-1 of them.
-            //
-            // The range check happens HERE, once, outside the parallel region
-            // below -- see `J_static_dispatch_coeffs`. p and q are invariant
-            // across offsets, so this is the only place it can fire.
             if (p > (size_t)BSPLINE_MOMENT_MAX_D || q > (size_t)BSPLINE_MOMENT_MAX_D) {
                 bspline_unreachable_pq((int)p, (int)q, "J_static");
             }
-            double coef[BSPLINE_FAR_TERMS + 1];
-            bspline_far_coeffs((int)p, (int)q, h, h, coef);
-            // The offsets are independent and, since the hoist, this loop IS
-            // the cost of a table.
-            //
-            // NO DRAIN HERE, AND THE REASON IS NOT THAT CANCELLATION DOES NOT
-            // MATTER -- it is that this entry point has no cancel_flag to poll.
-            //
-            // What the flag is FOR: a user changes a knob in the app while a
-            // solve is running, so the in-flight run must stop and a new one be
-            // issued. The twelve entry points that take a `cancel_flag` are the
-            // O(N^2) fills where that latency is felt, and they use
-            // `_accel_common.h`'s drain -- set a flag, `continue` so the
-            // remaining iterations are no-ops, throw AFTER the loop, because an
-            // exception must never escape an OpenMP region and cancellation can
-            // become true part-way through one.
-            //
-            // The static-moment table is NOT one of those: `bspline.py` calls it
-            // separately from the cancellable fills, so it is an uncancellable
-            // window inside an otherwise-cancellable solve. Adding a drain here
-            // would mean threading a cancel_flag through this entry point and
-            // its Python caller, which is a real change and not this one.
-            //
-            // What #1006 did do is make that window small. Table build at
-            // max_d=2, this box:
-            //
-            //     N=81    25.6 ms -> 0.44 ms
-            //     N=401  130.2 ms -> 1.98 ms
-            //     N=801  264.9 ms -> 8.84 ms
-            //
-            // A knob-change used to wait out a quarter of a second on a long
-            // edge; now it waits ~9 ms. That is why the missing drain is
-            // tolerable rather than why it is unnecessary.
-            //
-            // Separately: nothing in this body can throw, so the region is safe
-            // as written. The only throw it ever had was `bspline_unreachable_pq`,
-            // a bound on (p, q), which do not vary across offsets -- so the check
-            // sits above the region and the throw site is not in here at all.
-            // That is stronger than a drain for THAT hazard, and it is not a
-            // substitute for cancellation, which is a different thing. If you add
-            // anything to this body that can throw, or a cancel_flag to poll,
-            // then the drain becomes necessary and this comment is wrong.
-            #pragma omp parallel for schedule(static)
-            for (long long di_s = 0; di_s < (long long)n_delta; di_s++) {
-                const size_t di = (size_t)di_s;
-                long long delta = (long long)di - (long long)(N - 1);
-                double alpha = 0.0;
-                double beta = h;
-                double A_ = (double)delta * h;
-                double B_ = ((double)delta + 1.0) * h;
-                double val = J_static_dispatch_coeffs((int)p, (int)q, alpha, beta,
-                                                      A_, B_, a, coef);
+            bspline_far_coeffs((int)p, (int)q, h, h, &coefs[(p * NM + q) * (BSPLINE_FAR_TERMS + 1)]);
+        }
+    }
+    #pragma omp parallel for schedule(static)
+    for (long long di_s = 0; di_s < (long long)n_delta; di_s++) {
+        const size_t di = (size_t)di_s;
+        long long delta = (long long)di - (long long)(N - 1);
+        double alpha = 0.0;
+        double beta = h;
+        double A_ = (double)delta * h;
+        double B_ = ((double)delta + 1.0) * h;
+        const bool far = bspline_far_ratio(alpha, beta, A_, B_, a) <= BSPLINE_FAR_RATIO;
+        double g[BSPLINE_FAR_TERMS + 2];
+        if (far) bspline_far_series(alpha, beta, A_, B_, a, g);
+        for (size_t p = 0; p < NM; p++) {
+            for (size_t q = 0; q < NM; q++) {
+                double val = far ? bspline_far_dot(g, &coefs[(p * NM + q) * (BSPLINE_FAR_TERMS + 1)])
+                                 : bspline_moment_J((int)p, (int)q, alpha, beta, A_, B_, a);
                 if (EK) {
                     val = val + D_ek_dispatch((int)p, (int)q, alpha, beta, A_, B_,
                                               a_ek);
