@@ -83,7 +83,11 @@
 
 #include "_fma_inline.h"
 
-#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+// x86: the AVX2 build only (momwire#1545). Under the sse2 baseline GCC maps
+// simdlen(4) to the SSE 4-wide clones (`_ZGVbN4v_*`), which libmvec does not
+// export, so that build keeps the scalar libm calls the wheels already make.
+#if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__) && \
+    (defined(__AVX2__) || !(defined(__x86_64__) || defined(__i386__)))
 #pragma omp declare simd notinbranch simdlen(4)
 extern "C" double exp(double);
 
