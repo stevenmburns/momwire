@@ -1,0 +1,10 @@
+CM All-below long wire past the remainder's cap, two ports (momwire#1517 step 4a)
+CE
+GW 1,240,0.,0.,-.3,120.,0.,-.3,.0012
+GE -1,-1
+FR 0,1,0,0,1.83
+GN 2,0,0,0,13.,.005
+EX 0,1,1,0,1.,0.
+EX 0,1,200,0,0.,1.
+XQ 0
+EN

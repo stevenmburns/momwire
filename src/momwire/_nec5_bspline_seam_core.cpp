@@ -181,7 +181,16 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         fr->radii = fr->args.radius;
         if (!fr->args.radius_per_wire) fr->radii.assign(fr->args.polylines.size(), fr->args.radius[0]);
         fr->basis = bspline::build_basis(fr->geom, fr->args.polylines, fr->args.junctions, fr->radii, in.has_ground,
-                                         in.ground_z, 2);
+                                         in.ground_z, 2, in.has_ground && in.ground_eps_given);
+        // a wire below the interface (momwire#1517 step 4): the buried fill,
+        // wholly below so far (step 4a); a crossing junction's ports are its
+        // own (`_node_gap_crossing_junctions`), so before the port columns
+        for (uint8_t v : fr->basis.below_wire) fr->buried = fr->buried || v != 0;
+        if (fr->buried) {
+            if (!fr->basis.crossing.empty()) return decline("bspline-buried-crossing");
+            for (uint8_t v : fr->basis.below_wire)
+                if (!v) return decline("bspline-buried-mixed");
+        }
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
     } catch (const bspline::FrontNotPorted &e) {
         return decline(std::string("bspline-") + e.what());
@@ -213,6 +222,7 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
     // segment is shorter than 3 radii (free space serves it)
     fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii);
+    if (fr->exact_kernel && fr->buried) return decline("bspline-buried-exact-kernel");
     if (fr->exact_kernel && bspline::exact_kernel_has_cross_job(fr->geom, fr->radii))
         return decline("bspline-exact-kernel-radius-step");
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
@@ -226,7 +236,7 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     fr->ground_z = in.ground_z;
     // the Sommerfeld composition (`ground_model="sommerfeld"`)
     fr->compose = in.has_ground && in.ground_eps_given;
-    if (fr->compose) {
+    if (fr->compose && !fr->buried) {
         // `_Z_sommerfeld_remainder`'s own check (a ValueError in the fill)
         double zl = INFINITY, zr = INFINITY;
         for (int64_t q = 0; q < fr->geom.n_segs_total; q++) {

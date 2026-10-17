@@ -55,19 +55,30 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     fp.n_qp_same_edge = 4;
     fp.extended_kernel = fr.extended_kernel;
     // `_compute_Z_operator`: the dense tensor within `swept_mem_mb` (256),
-    // else the chunked fill
+    // else the chunked fill; a deck with a wire below the plane takes the
+    // buried fill (`_compute_Z_operator_buried`) at the buried pair order
+    // (`BURIED_N_QP_PAIR`, `BURIED_PAIR_ORDER_LADDER`)
     std::vector<cd> Z;
-    if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
+    if (fr.buried) {
+        fp.n_qp_pair = 32;
+        fp.ladder = {{2.0, 8}, {16.0, 4}};
+        try {
+            Z = bspline::fill_buried(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, fr.ground_z,
+                                     fr.ground_eps_r, fr.ground_sigma, 3, 256, np);
+        } catch (const bspline::FrontNotPorted &e) {
+            throw PrintoutDecline{std::string("bspline: ") + e.what()};
+        }
+    } else if (bspline::dense_tensor_fits(fp.degree, fr.geom.n_segs_total, 256)) {
         const bspline::CArray J = bspline::build_J_blocks(fr.geom, fr.radii, fp);
         Z = bspline::assemble_Z(J, fr.basis, fr.geom, fr.omega, BSPLINE_EPS, BSPLINE_MU, np.dsyrk);
     } else {
         Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     }
     // `_add_exact_kernel_correction` (after the fill, before the loading)
-    if (fr.exact_kernel)
+    if (fr.exact_kernel && !fr.buried)
         bspline::add_exact_correction(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     // the ground's image term (`_accumulate_Z_image_chunked`)
-    if (fr.has_ground) {
+    if (fr.has_ground && !fr.buried) {
         bspline::ImageGround gr;
         gr.ground_z = fr.ground_z;
         cd eps_t;

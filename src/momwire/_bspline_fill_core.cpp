@@ -7,6 +7,9 @@
 #include "_exact_kernel_coaxial_core.h"
 #include "_razor_exact_core.h"
 #include "_somm_grid_core.h"
+#include "_somm_below_remainder_inline.h"
+#include "_somm_below_fill_core.h"
+#include "_field_galerkin_inline.h"
 #include "_somm_pairs_core.h"
 #include "_somm_remainder_core.h"
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
@@ -21,6 +24,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -134,8 +138,14 @@ EK ek_cut(const EK &ek, const std::vector<size_t> *rows, const std::vector<size_
 
 using Block = CArray;  // (nd, nd, Ni, Nj) C order
 
-Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows, double k, int d,
-              int64_t n_qp, const EK &ek, const Ladder &ladder_in);
+template <class K>
+Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows, K k, int d, int64_t n_qp,
+              const EK &ek, const Ladder &ladder_in);
+
+// `abs(k)`: a real k's magnitude, or CPython's complex abs (hypot) of the
+// lower medium's
+inline double kmag(double k) { return std::fabs(k); }
+inline double kmag(cdouble k) { return std::hypot(k.real(), k.imag()); }
 
 // Scatter `sub` (nd, nd, |ri|, |cj|) into `out` (nd, nd, Ni, Nj).
 void place(Block &out, size_t Ni, size_t Nj, const Block &sub, const std::vector<size_t> &ri,
@@ -162,9 +172,14 @@ Block from_nd(const nd::array_t<std::complex<double>> &a) {
     return Block::adopt(a);
 }
 
-// `_seg_seg_full_moments_offedge`, real k.
-Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows, double k, int d,
-              int64_t n_qp, const EK &ek, const Ladder &ladder) {
+// `_seg_seg_full_moments_offedge`: a real k, or a complex one (the lower
+// medium's, momwire#778: the plain kernel's COMPLEX_K instantiation, no
+// extended kernel).
+template <class K>
+Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows, K k, int d, int64_t n_qp,
+              const EK &ek, const Ladder &ladder) {
+    constexpr bool CPLX = std::is_same<K, cdouble>::value;
+    if (CPLX && ek.on) throw FrontNotPorted("the extended kernel at a complex k");
     const int nd = d + 1;
     const size_t Ni = si.n(), Nj = sj.n();
     // `_normalize_row_radius`
@@ -176,8 +191,8 @@ Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows,
     for (const auto &t : ladder) all_high = all_high && t.second >= PHASE_LIMITED_BELOW;
     if (!ladder.empty() && !all_high) {
         std::vector<size_t> ok_i, no_i, ok_j, no_j;
-        for (size_t i = 0; i < Ni; i++) (si.len(i) * std::fabs(k) <= PHASE_KL_CEILING ? ok_i : no_i).push_back(i);
-        for (size_t j = 0; j < Nj; j++) (sj.len(j) * std::fabs(k) <= PHASE_KL_CEILING ? ok_j : no_j).push_back(j);
+        for (size_t i = 0; i < Ni; i++) (si.len(i) * kmag(k) <= PHASE_KL_CEILING ? ok_i : no_i).push_back(i);
+        for (size_t j = 0; j < Nj; j++) (sj.len(j) * kmag(k) <= PHASE_KL_CEILING ? ok_j : no_j).push_back(j);
         const bool all_ok = no_i.empty() && no_j.empty();
         const bool any_ok = !ok_i.empty() && !ok_j.empty();
         if (!(all_ok || !any_ok)) {
@@ -205,7 +220,7 @@ Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows,
         for (size_t j = 0; j < Nj; j++) lj = std::max(lj, sj.len(j));
         // `max(float(norm3(..).max()), float(norm3(..).max()))`
         len_max = std::max(len_max, lj);
-        if (!(std::fabs(k) * len_max <= PHASE_KL_CEILING)) {
+        if (!(kmag(k) * len_max <= PHASE_KL_CEILING)) {
             Ladder kept;
             for (const auto &t : lad)
                 if (t.second >= PHASE_LIMITED_BELOW) kept.push_back(t);
@@ -275,19 +290,27 @@ Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows,
                  wa = borrow(ww, {static_cast<nd::ssize_t>(ww.size())}),
                  ra = borrow(ratios, {static_cast<nd::ssize_t>(ratios.size())});
         const CI oa = borrow(orders, {static_cast<nd::ssize_t>(orders.size())});
+        if constexpr (CPLX) {
+            return from_nd(seg_seg_full_moments_bspline_cplx_tiered(li, ri, lj, rj, a2, k, d, ta, wa, oa, ra, false));
+        } else {
         if (!ek.on)
             return from_nd(seg_seg_full_moments_bspline_tiered(li, ri, lj, rj, a2, k, d, ta, wa, oa, ra, false));
         const CI gi = borrow(ek.group_i, {static_cast<nd::ssize_t>(Ni)}),
                  gj = borrow(ek.group_j, {static_cast<nd::ssize_t>(Nj)});
         return from_nd(seg_seg_full_moments_bspline_ek_tiered(li, ri, lj, rj, a2, k, d, ta, wa, oa, ra, gi,
                                                                gj, a, false, a_src));
+        }
     }
     const CF ta = borrow(t01, {static_cast<nd::ssize_t>(t01.size())}),
              wa = borrow(w01, {static_cast<nd::ssize_t>(w01.size())});
-    if (!ek.on) return from_nd(seg_seg_full_moments_bspline(li, ri, lj, rj, a2, k, d, ta, wa, false));
-    const CI gi = borrow(ek.group_i, {static_cast<nd::ssize_t>(Ni)}),
-             gj = borrow(ek.group_j, {static_cast<nd::ssize_t>(Nj)});
-    return from_nd(seg_seg_full_moments_bspline_ek(li, ri, lj, rj, a2, k, d, ta, wa, gi, gj, a, false, a_src));
+    if constexpr (CPLX) {
+        return from_nd(seg_seg_full_moments_bspline_cplx(li, ri, lj, rj, a2, k, d, ta, wa, false));
+    } else {
+        if (!ek.on) return from_nd(seg_seg_full_moments_bspline(li, ri, lj, rj, a2, k, d, ta, wa, false));
+        const CI gi = borrow(ek.group_i, {static_cast<nd::ssize_t>(Ni)}),
+                 gj = borrow(ek.group_j, {static_cast<nd::ssize_t>(Nj)});
+        return from_nd(seg_seg_full_moments_bspline_ek(li, ri, lj, rj, a2, k, d, ta, wa, gi, gj, a, false, a_src));
+    }
 }
 
 // `_static_is_toeplitz`: np.allclose(h, h[0], rtol=1e-12, atol=1e-15).
@@ -3081,6 +3104,422 @@ void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core:
         const std::vector<cdouble> lo = pair_moments_fixed(g, view, gz, k, d1, {I[t]}, J[t], base);
         fixed.insert(fixed.end(), lo.begin(), lo.end());
     }
+}
+
+// ---------------------------------------------------------------------------
+// The buried fill (momwire#1517 step 4): `_below_interface.
+// compute_Z_operator_buried` on a deck whose every wire is below the plane
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr double PI_ = 3.141592653589793;
+
+// numpy's complex division (`CDOUBLE_divide`, Smith's)
+inline cdouble np_cdiv(cdouble a, cdouble b) {
+    const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
+    const double in2r_abs = std::fabs(in2r), in2i_abs = std::fabs(in2i);
+    if (in2r_abs >= in2i_abs) {
+        if (in2r_abs == 0 && in2i_abs == 0) return cdouble(in1r / in2r_abs, in1i / in2i_abs);
+        const double rat = in2i / in2r;
+        const double scl = 1.0 / (in2r + in2i * rat);
+        return cdouble((in1r + in1i * rat) * scl, (in1i - in1r * rat) * scl);
+    }
+    const double rat = in2r / in2i;
+    const double scl = 1.0 / (in2i + in2r * rat);
+    return cdouble((in1r * rat + in1i) * scl, (in1i * rat - in1r) * scl);
+}
+
+// `_seg_seg_reg_moments(arc, a, k, max_d, n_qp)` at a complex k (the lower
+// medium's): numpy's branch. R from `reg_distance_table`, the kernel
+// `expm1_neg_jkR(k, R) / (4 pi R)` element by element (libm's expm1, cos,
+// sin, exp; `re - 1j * im`; numpy's complex division by the real
+// denominator), then `einsum("piq,iqjr,Pjr->pPij", wu, G, wu)` as numpy's
+// iterator sums it: each output's (q, r) terms ((w G.re) v, (w G.im) v), r
+// innermost from zero and each q's partial added to the output in turn --
+// one run over (q, r) when the source axis has extent 1, which the iterator
+// drops. (nd, nd, n, n) C order.
+Block reg_moments_cplx(const std::vector<double> &arc, double a_w, cdouble k, int d, int64_t n_qp) {
+    const int nd = d + 1;
+    std::vector<double> t01, w01;
+    gl01(n_qp, t01, w01);
+    const size_t q = t01.size(), n = arc.size() - 1;
+    std::vector<double> s_q(n * q), u_q(n * q), w_q(n * q);
+    for (size_t i = 0; i < n; i++) {
+        const double hs = arc[i + 1] - arc[i];
+        for (size_t j = 0; j < q; j++) {
+            s_q[i * q + j] = arc[i] + t01[j] * hs;
+            u_q[i * q + j] = (t01[j] * hs) * 1.0;
+            w_q[i * q + j] = (w01[j] * hs) * 1.0;
+        }
+    }
+    const CF sq = borrow(s_q, {static_cast<nd::ssize_t>(n * q)});
+    const nd::array_t<double> R = reg_distance_table(sq, sq, a_w * a_w);
+    const double *Rp = R.data();
+    std::vector<double> wu(static_cast<size_t>(nd) * n * q);
+    for (int p = 0; p < nd; p++)
+        for (size_t i = 0; i < n * q; i++) {
+            const double u = u_q[i];
+            const double up = p == 0 ? 1.0 : p == 1 ? u : p == 2 ? u * u : std::pow(u, static_cast<double>(p));
+            wu[static_cast<size_t>(p) * n * q + i] = w_q[i] * up;
+        }
+    const size_t nq = n * q;
+    std::vector<double> Gr(nq * nq), Gi(nq * nq);
+    const double four_pi = 4.0 * PI_;
+    for (size_t t = 0; t < nq * nq; t++) {
+        const double r = Rp[t];
+        const double a = k.imag() * r, y = k.real() * r;
+        const double half = std::sin(0.5 * y);
+        double re = std::expm1(a) * std::cos(y);
+        re = re - 2.0 * half * half;
+        const double im = std::exp(a) * std::sin(y);
+        const cdouble g = np_cdiv(cdouble(re, 0.0 - im), cdouble(four_pi * r, 0.0));
+        Gr[t] = g.real();
+        Gi[t] = g.imag();
+    }
+    Block out(static_cast<size_t>(nd * nd) * n * n, false);
+    for (int p = 0; p < nd; p++)
+        for (int P = 0; P < nd; P++)
+            for (size_t i = 0; i < n; i++)
+                for (size_t j = 0; j < n; j++) {
+                    double ar = 0.0, ai = 0.0;
+                    if (n == 1) {
+                        for (size_t a = 0; a < q; a++)
+                            for (size_t b2 = 0; b2 < q; b2++) {
+                                const double w = wu[(static_cast<size_t>(p) * n + i) * q + a];
+                                const double v = wu[(static_cast<size_t>(P) * n + j) * q + b2];
+                                const size_t t = (i * q + a) * nq + j * q + b2;
+                                ar += (w * Gr[t]) * v;
+                                ai += (w * Gi[t]) * v;
+                            }
+                    } else {
+                        for (size_t a = 0; a < q; a++) {
+                            const double w = wu[(static_cast<size_t>(p) * n + i) * q + a];
+                            double lr = 0.0, li = 0.0;
+                            for (size_t b2 = 0; b2 < q; b2++) {
+                                const double v = wu[(static_cast<size_t>(P) * n + j) * q + b2];
+                                const size_t t = (i * q + a) * nq + j * q + b2;
+                                lr += (w * Gr[t]) * v;
+                                li += (w * Gi[t]) * v;
+                            }
+                            ar += lr;
+                            ai += li;
+                        }
+                    }
+                    out[((static_cast<size_t>(p) * nd + P) * n + i) * n + j] = cdouble(ar, ai);
+                }
+    return out;
+}
+
+// `numpy.searchsorted`-free `_schedule.runs`: a sorted index set's runs
+std::vector<std::pair<int64_t, int64_t>> index_runs(const std::vector<int64_t> &idx) {
+    std::vector<std::pair<int64_t, int64_t>> out;
+    for (size_t s0 = 0; s0 < idx.size();) {
+        size_t s1 = s0 + 1;
+        while (s1 < idx.size() && idx[s1] == idx[s1 - 1] + 1) s1++;
+        out.push_back({idx[s0], idx[s1 - 1] + 1});
+        s0 = s1;
+    }
+    return out;
+}
+
+}  // namespace
+
+void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                               const std::vector<double> &radius_per_wire, const FillParams &fp, cdouble k,
+                               const std::vector<int64_t> &seg_idx, bool mirror, cdouble eps, double scale,
+                               bool weighted, cdouble weight, double omega, double mu, double ground_z,
+                               int64_t swept_mem_mb, const nec5::NumpyLinalg &np) {
+    const int d = fp.degree, nd = d + 1;
+    const int64_t N = g.n_segs_total, n_basis = b.n_basis;
+    std::vector<double> a_row;  // `_seg_radius`
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) a_row.push_back(radius_per_wire[w]);
+    Segs real, src;
+    real.l = g.seg_l;
+    real.r = g.seg_r;
+    src = real;
+    std::vector<double> src_t(g.tangents);
+    if (mirror) {  // `_image_positions`, `mirror_tangents`
+        for (int64_t s2 = 0; s2 < N; s2++) {
+            src.l[3 * s2 + 2] = 2.0 * ground_z - g.seg_l[3 * s2 + 2];
+            src.r[3 * s2 + 2] = 2.0 * ground_z - g.seg_r[3 * s2 + 2];
+            src_t[3 * s2 + 2] = g.tangents[3 * s2 + 2] * -1.0;
+        }
+    }
+    if (weighted && (np.dgemm == nullptr || np.dgemv == nullptr || np.ddot == nullptr))
+        throw FrontNotPorted("no real BLAS for the image weights");
+    nd::array_t<std::complex<double>> Za =
+        borrow_mut(Z, {static_cast<nd::ssize_t>(n_basis), static_cast<nd::ssize_t>(n_basis)});
+    const CI sa = borrow(b.supp_seg, {static_cast<nd::ssize_t>(n_basis), nd});
+    const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(n_basis), nd, nd});
+    const CF ta = borrow(g.tangents, {static_cast<nd::ssize_t>(N), 3});
+    const auto touching = [&](int64_t lo, int64_t hi) {  // `_bases_touching`
+        std::vector<int64_t> out;
+        for (int64_t m = 0; m < n_basis; m++)
+            for (int q = 0; q < nd; q++) {
+                const int64_t sg = b.supp_seg[static_cast<size_t>(m * nd + q)];
+                if (sg >= lo && sg < hi) {
+                    out.push_back(m);
+                    break;
+                }
+            }
+        return out;
+    };
+    using CC = nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast>;
+    const auto accumulate = [&](Block J_win, int64_t i0, int64_t i1, int64_t j0, int64_t j1) {
+        const std::vector<int64_t> m_idx = touching(i0, i1), n_idx = touching(j0, j1);
+        if (m_idx.empty() || n_idx.empty()) return;
+        const CI mi = borrow(m_idx, {static_cast<nd::ssize_t>(m_idx.size())});
+        const CI ni = borrow(n_idx, {static_cast<nd::ssize_t>(n_idx.size())});
+        if (!weighted) {
+            if (scale != 1.0)
+                for (cdouble &v : J_win) v = cdouble(v.real() * scale, v.imag() * scale);
+            const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(i1 - i0), static_cast<nd::ssize_t>(j1 - j0)});
+            assemble_Z_bspline_windowed_cplx_eps(Jw, sa, pa, ta, mi, ni, i0, i1, j0, j1, omega, eps, mu, Za, 0,
+                                                 nd::none(), false);
+            return;
+        }
+        // w_A = weight * (tangents[i0:i1] @ src_t[j0:j1].T), w_Phi = weight
+        const int64_t m = i1 - i0, nn = j1 - j0;
+        std::vector<double> td(static_cast<size_t>(m * nn));
+        dmatmul(np, &g.tangents[3 * static_cast<size_t>(i0)], m, 3, 3, 1, &src_t[3 * static_cast<size_t>(j0)], nn, 1,
+                3, td.data());
+        std::vector<cdouble> wA(td.size()), wP(td.size(), weight);
+        for (size_t t = 0; t < td.size(); t++) wA[t] = nec5::replay::np_cmul(weight, cdouble(td[t], 0.0));
+        const CC Jw = borrow(J_win, {nd, nd, static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
+        const CC wa = borrow(wA, {static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
+        const CC wp = borrow(wP, {static_cast<nd::ssize_t>(m), static_cast<nd::ssize_t>(nn)});
+        assemble_Z_bspline_weighted_windowed_cplx_eps(Jw, sa, pa, wa, wp, mi, ni, i0, i1, j0, j1, omega, eps, mu,
+                                                      cdouble(scale, 0.0), Za, 0, nd::none(), false);
+    };
+    const auto range = [](int64_t lo, int64_t hi) {
+        std::vector<size_t> v;
+        for (int64_t q = lo; q < hi; q++) v.push_back(static_cast<size_t>(q));
+        return v;
+    };
+    const EK no_ek;
+    // the sweep: every (observer chunk x source run) window
+    const std::vector<std::pair<int64_t, int64_t>> runs = index_runs(seg_idx);
+    const int64_t n_sub = static_cast<int64_t>(seg_idx.size());
+    const int64_t row_bytes = static_cast<int64_t>(nd * nd) * n_sub * 16;
+    const int64_t chunk = std::max<int64_t>(1, (swept_mem_mb * 1024 * 1024) / row_bytes);
+    for (const auto &run : runs)
+        for (int64_t c0 = run.first; c0 < run.second; c0 += chunk) {
+            const int64_t c1 = std::min(c0 + chunk, run.second);
+            const std::vector<size_t> rows = range(c0, c1);
+            const std::vector<double> a_sub(a_row.begin() + c0, a_row.begin() + c1);
+            for (const auto &srun : runs) {
+                const std::vector<size_t> cols = range(srun.first, srun.second);
+                accumulate(offedge(real.take(rows), src.take(cols), a_sub, k, d, fp.n_qp_pair, no_ek, fp.ladder), c0,
+                           c1, srun.first, srun.second);
+            }
+        }
+    if (mirror) return;
+    // the same-edge fixup, per edge of each subset wire (wire order)
+    std::vector<bool> on_subset(static_cast<size_t>(N), false);
+    for (int64_t s2 : seg_idx) on_subset[static_cast<size_t>(s2)] = true;
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        const WireGeometry &pw = g.per_wire[w];
+        if (!on_subset[static_cast<size_t>(g.seg_offsets[w])]) continue;
+        const double a_w = radius_per_wire[w];
+        for (size_t e = 0; e + 1 < pw.edge_offsets.size(); e++) {
+            const std::vector<double> &arc = pw.edge_arc_edges[e];
+            const int64_t s0 = g.seg_offsets[w] + pw.edge_offsets[e], s1 = g.seg_offsets[w] + pw.edge_offsets[e + 1];
+            const size_t n = arc.size() - 1;
+            if (!is_toeplitz(arc)) throw FrontNotPorted("a non-uniform edge");
+            const double h = arc[1] - arc[0];
+            const nd::array_t<double> A_st = seg_seg_static_moments_bspline_uniform(h, a_w, n, d, 0, 0);
+            const Block A_reg = reg_moments_cplx(arc, a_w, k, d, fp.n_qp_same_edge);
+            const std::vector<size_t> rows = range(s0, s1);
+            const std::vector<double> a_sub(a_row.begin() + s0, a_row.begin() + s1);
+            const Block J_edge = offedge(real.take(rows), real.take(rows), a_sub, k, d, fp.n_qp_pair, no_ek, fp.ladder);
+            // corr = (A_st + A_reg) - J_edge
+            Block corr(A_reg.size(), false);
+            const double *st = A_st.data();
+            for (size_t t = 0; t < corr.size(); t++) {
+                const cdouble an(st[t] + A_reg[t].real(), 0.0 + A_reg[t].imag());
+                corr[t] = cdouble(an.real() - J_edge[t].real(), an.imag() - J_edge[t].imag());
+            }
+            accumulate(corr, s0, s1, s0, s1);
+        }
+    }
+}
+
+namespace {
+
+// a refusal on the buried route: Python's ValueError, which the caller
+// declines rather than words (the plan refuses every geometry first)
+struct BuriedRaise {
+    [[noreturn]] static void value(const std::string &m) { throw FrontNotPorted("buried-refusal: " + m); }
+};
+
+// `_below_interface.field_nodes(seg_l, seg_r, tangents, h, q)` over the
+// segments `idx` with the polynomial moment weights `W[p, i, j] = w_node *
+// float_power(u, p)` (`_buried_nodes`): nodes and tangents (n q, 3), W
+// (nd, n, q).
+void buried_nodes(const Geometry &g, const std::vector<int64_t> &idx, int64_t q, int nd, std::vector<double> &nodes,
+                  std::vector<double> &tans, std::vector<double> &W) {
+    std::vector<double> xg, wg;
+    if (!razor::leggauss(q, xg, wg)) throw FrontNotPorted("an untabled field order");
+    const size_t n = idx.size(), Q = static_cast<size_t>(q);
+    nodes.assign(3 * n * Q, 0.0);
+    tans.assign(3 * n * Q, 0.0);
+    W.assign(static_cast<size_t>(nd) * n * Q, 0.0);
+    for (size_t i = 0; i < n; i++) {
+        const size_t s2 = static_cast<size_t>(idx[i]);
+        const double h = g.h_per_seg[s2];
+        for (size_t j = 0; j < Q; j++) {
+            const double tq = 0.5 * (xg[j] + 1.0);
+            for (int c = 0; c < 3; c++) {
+                const double l = g.seg_l[3 * s2 + c], r = g.seg_r[3 * s2 + c];
+                nodes[3 * (i * Q + j) + c] = l + tq * (r - l);
+                tans[3 * (i * Q + j) + c] = g.tangents[3 * s2 + c];
+            }
+            const double u = h * tq, w_node = (0.5 * h) * wg[j];
+            for (int p = 0; p < nd; p++)
+                W[(static_cast<size_t>(p) * n + i) * Q + j] = w_node * std::pow(u, static_cast<double>(p));
+        }
+    }
+}
+
+}  // namespace
+
+BuriedMedium buried_medium(double eps_r, double sigma, double omega, double eps, double k) {
+    BuriedMedium m;
+    // `_ground_refl.eps_tilde`: complex(eps_r, -sigma / (omega * eps0))
+    m.eps_t = cdouble(eps_r, (-sigma) / (omega * eps));
+    m.k_p = k;
+    m.k_m = somm_below::k_medium(m.eps_t, k);
+    // `eps * eps_t`, `(eps_t - 1.0) / (eps_t + 1.0)`, `(1.0 - eps_t) /
+    // (1.0 + eps_t)`: CPython's complex arithmetic, a float promoted
+    m.eps_m = cdouble(eps * m.eps_t.real() - 0.0 * m.eps_t.imag(), eps * m.eps_t.imag() + 0.0 * m.eps_t.real());
+    m.c2 = somm_core::py_quot(cdouble(m.eps_t.real() - 1.0, m.eps_t.imag() - 0.0),
+                              cdouble(m.eps_t.real() + 1.0, m.eps_t.imag() + 0.0));
+    m.a_m = somm_core::py_quot(cdouble(1.0 - m.eps_t.real(), 0.0 - m.eps_t.imag()),
+                               cdouble(1.0 + m.eps_t.real(), 0.0 + m.eps_t.imag()));
+    return m;
+}
+
+std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
+                                 const FillParams &fp, double omega, double eps, double mu, double ground_z,
+                                 double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
+                                 const nec5::NumpyLinalg &np) {
+    const int d = fp.degree, nd = d + 1;
+    const int64_t N = g.n_segs_total, n_basis = b.n_basis;
+    for (uint8_t v : b.below_wire)
+        if (!v) throw FrontNotPorted("buried-mixed");
+    const BuriedMedium bm = buried_medium(eps_r, sigma, omega, eps, fp.k);
+    const double gz = ground_z;
+    // `plan_buried` on a wholly-below deck: every segment below, none above
+    std::vector<int64_t> b_idx(static_cast<size_t>(N));
+    for (int64_t s2 = 0; s2 < N; s2++) b_idx[static_cast<size_t>(s2)] = s2;
+    const int64_t q = std::max<int64_t>(n_qp_sommerfeld, 6);  // `n_qp_buried_field`
+    std::vector<double> obs_b, t_b, W_b;
+    buried_nodes(g, b_idx, q, nd, obs_b, t_b, W_b);
+    const size_t n_obs = obs_b.size() / 3;
+    // `serve_plan`: the below/below extents over the nodes (`_pair_extents_below`)
+    std::vector<double> d_b(n_obs);
+    for (size_t i = 0; i < n_obs; i++) d_b[i] = gz - obs_b[3 * i + 2];
+    double r1sq_max = 0.0, q_min = std::numeric_limits<double>::infinity();
+    for (size_t i = 0; i < n_obs; i++)
+        for (size_t j = i; j < n_obs; j++) {
+            const double dx = obs_b[3 * i] - obs_b[3 * j], dy = obs_b[3 * i + 1] - obs_b[3 * j + 1];
+            const double rho2 = dx * dx + dy * dy;
+            const double hh = d_b[i] + d_b[j];
+            const double hh2 = hh * hh;
+            const double r1sq = rho2 + hh2;
+            if (r1sq > r1sq_max) r1sq_max = r1sq;
+            const double qq = hh2 / rho2;
+            if (qq < q_min) q_min = qq;
+        }
+    const double r1_max = std::sqrt(r1sq_max), th_min = std::atan(std::sqrt(q_min));
+    const double lam_m = (2.0 * PI_) / std::hypot(bm.k_m.real(), bm.k_m.imag());
+    const double r1_cap = (somm_below::R1_CAP_LAMBDA_M * lam_m) * (1.0 + 1e-9);
+    const double floor = (0.05 - 2.0 * (0.05 / 3.0)) * (PI_ / 180.0);
+    if (r1_max > r1_cap && th_min < floor) throw FrontNotPorted("buried-capped-plan");
+    if (th_min < floor) throw FrontNotPorted("buried-grazing-refusal");
+
+    // the two moment blocks in the medium, chunked (`accumulate_Z_subset_chunked`)
+    std::vector<cdouble> Z(static_cast<size_t>(n_basis * n_basis), cdouble(0.0, 0.0));
+    accumulate_subset_chunked(Z, g, b, radius_per_wire, fp, bm.k_m, b_idx, false, bm.eps_m, 1.0, false,
+                              cdouble(0.0, 0.0), omega, mu, gz, swept_mem_mb, np);
+    accumulate_subset_chunked(Z, g, b, radius_per_wire, fp, bm.k_m, b_idx, true, bm.eps_m, -1.0, true, bm.a_m,
+                              omega, mu, gz, swept_mem_mb, np);
+
+    // the below/below remainder, field form, each unordered pair once
+    // (`_field_galerkin_block_symmetric`)
+    somm_below::Source *src = somm_below::source();
+    if (src == nullptr) throw FrontNotPorted("below-table");
+    somm_below::Remainder<BuriedRaise> rem;
+    try {
+        rem.grid = &src->get(bm.eps_t, bm.k_p, r1_max, omega, mu, somm_below::SPACING_FILL);
+    } catch (const somm_below::TailCapped &e) {
+        throw FrontNotPorted(std::string("buried-tail-capped: ") + e.what());
+    }
+    rem.build_view();
+    rem.gz = gz;
+    rem.k_p = bm.k_p;
+    rem.k_m = bm.k_m;
+    const int64_t n_b = static_cast<int64_t>(b_idx.size());
+    const int64_t chunk = std::max<int64_t>(1, (int64_t(1) << 19) / std::max<int64_t>(n_b * q * q, 1));
+    std::vector<int64_t> pos(static_cast<size_t>(N), -1);
+    for (int64_t i = 0; i < n_b; i++) pos[static_cast<size_t>(b_idx[static_cast<size_t>(i)])] = i;
+    const size_t Q = static_cast<size_t>(q);
+    for (int64_t i0 = 0; i0 < n_b; i0 += chunk) {
+        const int64_t i1 = std::min(i0 + chunk, n_b);
+        const size_t m = static_cast<size_t>(i1 - i0) * Q, S = static_cast<size_t>(n_b - i0) * Q;
+        rem.src.assign(obs_b.begin() + 3 * static_cast<std::ptrdiff_t>(i0) * q, obs_b.end());
+        rem.t_src.assign(t_b.begin() + 3 * static_cast<std::ptrdiff_t>(i0) * q, t_b.end());
+        rem.d_src.resize(S);
+        for (size_t j = 0; j < S; j++) rem.d_src[j] = gz - rem.src[3 * j + 2];
+        std::vector<cdouble> proj(m * S);
+        rem.project(&obs_b[3 * static_cast<size_t>(i0) * Q], &t_b[3 * static_cast<size_t>(i0) * Q],
+                    static_cast<std::ptrdiff_t>(m), proj.data());
+        std::vector<double> W_rows(static_cast<size_t>(nd) * (i1 - i0) * Q), W_cols(static_cast<size_t>(nd) * S);
+        for (int p = 0; p < nd; p++) {
+            std::copy(W_b.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i0) * q,
+                      W_b.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i1) * q,
+                      W_rows.begin() + static_cast<std::ptrdiff_t>(p) * (i1 - i0) * q);
+            std::copy(W_b.begin() + (static_cast<std::ptrdiff_t>(p) * n_b + i0) * q,
+                      W_b.begin() + (static_cast<std::ptrdiff_t>(p) + 1) * n_b * q,
+                      W_cols.begin() + static_cast<std::ptrdiff_t>(p) * (n_b - i0) * q);
+        }
+        std::vector<int64_t> pos_s(pos.size()), pos_m(pos.size());
+        for (size_t t = 0; t < pos.size(); t++) {
+            pos_s[t] = pos[t] >= i0 ? pos[t] - i0 : -1;
+            pos_m[t] = pos[t] >= i1 ? pos[t] - i0 : -1;
+        }
+        mw_fg::Args args;
+        args.pj = proj.data();
+        args.wo = W_rows.data();
+        args.ws = W_cols.data();
+        args.pl = b.polys.data();
+        args.ss = b.supp_seg.data();
+        args.po = pos.data();
+        args.ps = pos_s.data();
+        args.P = nd;
+        args.nc = i1 - i0;
+        args.q = q;
+        args.ns = n_b - i0;
+        args.nb = n_basis;
+        args.A = nd;
+        args.i0 = i0;
+        args.q_rows = n_basis;
+        args.Qp = Z.data();
+        args.sr = n_basis;
+        args.sc = 1;
+        args.fused = true;
+        args.scale = -1.0;
+        if (i1 < n_b) {  // the mirror through Z.T, in the same call (momwire#1290)
+            args.Q2 = Z.data();
+            args.sr2 = 1;
+            args.sc2 = n_basis;
+            args.ps2 = pos_m.data();
+        }
+        args.lanes = true;
+        mw_fg::assemble(args);
+    }
+    return Z;
 }
 
 }  // namespace bspline

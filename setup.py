@@ -360,6 +360,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_six_lanes_inline.h",
     # ... and the contour engine's tail integrand on them (`_accel_mw568.cpp`).
     "src/momwire/_contour_lanes_inline.h",
+    # The field-form Galerkin assembly's compute half, shared by
+    # `_accel_mw568.cpp`'s binding and bs2's buried fill (momwire#1517 step 4).
+    "src/momwire/_field_galerkin_inline.h",
     # The core/binding split: the Python-free preamble, the numpy -> view
     # seam, and the razor core's interface.
     "src/momwire/_mw_core.h",
@@ -371,6 +374,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_below_proj_core.h",
     "src/momwire/_somm_below_grid_core.h",
     "src/momwire/_somm_below_fill_core.h",
+    # The below/below remainder's batch projection, shared by razor's buried
+    # fill and bs2's (momwire#1517 step 4).
+    "src/momwire/_somm_below_remainder_inline.h",
     "src/momwire/_near_interface_core.h",
     "src/momwire/_near_interface_eval.h",
     # The column machinery the near-interface core's twin reads (momwire#1512

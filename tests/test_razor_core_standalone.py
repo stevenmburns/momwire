@@ -1091,6 +1091,7 @@ def test_the_bspline_kernels_in_cxx_alone_are_the_extensions(driver, accel, tmp_
 BSPLINE_KCL_SYM_DECKS = ROOT / "tests" / "fixtures" / "bspline_printout_kcl_sym"
 BSPLINE_CHUNKED_DECKS = SPLIT / "bspline_chunked_decks"
 BSPLINE_EXACT_DECKS = SPLIT / "bspline_exact_decks"
+BSPLINE_BURIED_DECKS = ROOT / "tests" / "fixtures" / "bspline_printout_buried"
 
 
 def _bspline_printouts(driver, decks, tmp_path):
@@ -1151,13 +1152,20 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     prints, and every finished run carries Python's Y, coefficients and port
     vectors -- wire loading (LD 5 / 2 / 3) and the exact ring-kernel
     correction (step 2), a perfect ground's image term (step 3a) and the
-    Sommerfeld composition with its graded raised pairs (steps 3b, 3c)
-    included. What it declines is a buried wire and the exact kernel's
-    radius-step cross job, by name, and nothing else."""
+    Sommerfeld composition with its graded raised pairs (steps 3b, 3c) and a
+    wholly-buried structure (step 4a) included. What it declines is a deck
+    with wires on both sides of the interface (the crossing fill and the
+    transmitted blocks, steps 4b and 4c), a geometry Python refuses by medium
+    (its sentence not yet ported) and the exact kernel's radius-step cross
+    job, by name, and nothing else."""
+    # The wholly-buried decks have their own test below (their Python fills
+    # are the slow ones), so this one keeps its pre-step-4 time.
     decks = [
         p
         for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
-        if p.is_file() and p.suffix in (".nec", ".deck")
+        if p.is_file()
+        and p.suffix in (".nec", ".deck")
+        and BSPLINE_BURIED_DECKS not in p.parents
     ]
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     # Not vacuous: results, refusals and the INTERNAL ERROR frame all print.
@@ -1165,9 +1173,28 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("raised|frame", 0) >= 3, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
-        "front:bspline-buried-wire",
+        "front:bspline-buried-crossing",
+        "front:bspline-buried-mixed",
+        "front:bspline-buried-refusal",
         "front:bspline-exact-kernel-radius-step",
     }, reasons
+
+
+def test_the_wholly_buried_decks_print_as_python(driver, tmp_path):
+    """momwire#1517 step 4a: every wire below a Sommerfeld ground. The plan's
+    below/below extents, the direct and A_m-weighted image blocks at the
+    medium's complex k (the subset windows, the complex same-edge moments as
+    numpy's einsum sums them), and the below/below remainder over the table
+    filled in C++, field form, each unordered pair once through the shared
+    assembler (`_field_galerkin_inline.h`) and projection
+    (`_somm_below_remainder_inline.h`) -- loaded, multi-frequency, bent and
+    hubbed, a pattern, and a wire long enough that the remainder's pairs
+    reach past the cap."""
+    decks = sorted(BSPLINE_BURIED_DECKS.glob("*.nec"))
+    assert len(decks) == 6
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    assert counts.get("served", 0) == 6 and not reasons, (counts, reasons)
+    assert counts.get("runs", 0) == 7, counts
 
 
 def test_an_exactly_symmetric_kcl_system_takes_scipys_symmetric_solver(

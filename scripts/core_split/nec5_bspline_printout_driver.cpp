@@ -5,6 +5,7 @@
 // tangents.T`). `scripts/core_split/printout_compare.py --basis bspline`
 // requires every printed byte to be `_shell.render(text, basis="bspline")`'s.
 #include "_nec5_bspline_printout_core.h"
+#include "_somm_below_fill_core.h"
 
 #include <dlfcn.h>
 
@@ -51,6 +52,9 @@ std::string hex(const std::string &s) {
 }  // namespace
 
 int main(int argc, char **argv) {
+    // the below/below table, filled here as the executable fills it
+    // (momwire#1512 B5): the buried fill's (momwire#1517 step 4)
+    somm_below::set_source(somm_below::fill_source());
     if (argc == 2 && std::string(argv[1]) == "--transliterate") {
         const std::string text((std::istreambuf_iterator<char>(std::cin)),
                                std::istreambuf_iterator<char>());
