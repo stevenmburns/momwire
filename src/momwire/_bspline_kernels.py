@@ -137,6 +137,20 @@ from ._accel import acc as _acc
 from ._accel import SAME_EDGE_MAX_N_QP as _SAME_EDGE_MAX_N_QP
 from ._accel import serves_n_qp as _serves_n_qp
 
+
+def _upow(u, p):
+    """``u ** p`` for a Python int ``p``, the same bits on every CPU.
+
+    numpy computes ``u ** 0`` / ``** 1`` / ``** 2`` without its ``power``
+    loop (its scalar fast paths), and those stay as written. From 3 up it
+    calls ``power``, which takes a vectorised AVX-512 route on an AVX-512
+    CPU that rounds differently from libm's ``pow`` (momwire#1517);
+    ``np.float_power`` is libm's everywhere, which is what ``power`` gives
+    on every AVX2 machine.
+    """
+    return u**p if p < 3 else np.float_power(u, p)
+
+
 _HAVE_BSPLINE_ACCEL = _acc is not None and hasattr(_acc, "seg_seg_full_moments_bspline")
 _HAVE_BSPLINE_STATIC_ACCEL = _acc is not None and hasattr(
     _acc, "seg_seg_static_moments_bspline_uniform"
@@ -877,7 +891,8 @@ def _seg_seg_reg_geometry(seg_endpoints, a, max_d, n_qp, *, ek=None, rows=None):
         np.sqrt(R, out=R)
 
     # u^p evaluated at every quadrature node, weight-folded
-    u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)  # (max_d+1, N, n_qp)
+    # (max_d+1, N, n_qp)
+    u_pow = np.stack([_upow(u_q, p) for p in range(max_d + 1)], axis=0)
     wu_pow = w_q[None, :, :] * u_pow
 
     geo = {"R": R, "wu_pow": wu_pow, "N": N, "n_qp": n_qp, "a": a, "ek": ek}
@@ -905,7 +920,7 @@ def _seg_seg_reg_nodes(seg_endpoints, max_d, n_qp):
     s_q = sl[:, None] + t01[None, :] * h_seg[:, None]
     u_q = (t01[None, :] * h_seg[:, None]) * np.ones((N, 1))
     w_q = (w01[None, :] * h_seg[:, None]) * np.ones((N, 1))
-    u_pow = np.stack([u_q**p for p in range(max_d + 1)], axis=0)
+    u_pow = np.stack([_upow(u_q, p) for p in range(max_d + 1)], axis=0)
     return s_q, w_q[None, :, :] * u_pow
 
 
@@ -1725,8 +1740,8 @@ def _seg_seg_full_moments_offedge(
             )
             G = G * fac
 
-        u_pow_i = np.stack([u_i**p for p in range(max_d + 1)], axis=0)
-        u_pow_j = np.stack([u_j**p for p in range(max_d + 1)], axis=0)
+        u_pow_i = np.stack([_upow(u_i, p) for p in range(max_d + 1)], axis=0)
+        u_pow_j = np.stack([_upow(u_j, p) for p in range(max_d + 1)], axis=0)
         wu_i = w_i[None, :, :] * u_pow_i
         wu_j = w_j[None, :, :] * u_pow_j
 

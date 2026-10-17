@@ -670,7 +670,7 @@ def _point_piece(v0, sgn, d, ell, a, k, nq):
 
     def powers(zeta):
         v = v0 + sgn * zeta
-        return v[:, None] ** np.arange(nq)[None, :]
+        return np.float_power(v[:, None], np.arange(nq)[None, :])
 
     def smooth(lo, hi):
         z, w = _gl_on(lo, hi)
@@ -1141,7 +1141,7 @@ def _point_piece2(v0, sgn, d, ell, a1, a2, k, nq):
             z, w = _gl_on(lo, hi)
             v = v0 + sgn * z
             return (w * ring_kernel2(z, a1, a2, k)) @ (
-                v[:, None] ** np.arange(nq)[None, :]
+                np.float_power(v[:, None], np.arange(nq)[None, :])
             )
 
         @staticmethod
