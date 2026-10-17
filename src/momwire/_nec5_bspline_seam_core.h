@@ -92,6 +92,8 @@ struct BSplineFront {
     // the ground (`ground_z` given): PEC, or the Sommerfeld composition
     bool has_ground = false;
     double ground_z = 0;
+    bool compose = false;  // Sommerfeld: (eps_r, sigma) of the lower medium
+    double ground_eps_r = 0, ground_sigma = 0;
     // `configure_loading`'s `wire_conductivity` / `distributed_rlc` per
     // solved wire (`_loading_active` is `loading.active()`), and the loading
     // Gram, built on the first solve (`_cached_loading_gram`)
