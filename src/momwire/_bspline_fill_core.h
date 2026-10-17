@@ -272,7 +272,8 @@ void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const
 std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
                                  const FillParams &fp, double omega, double eps, double mu, double ground_z,
                                  double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
-                                 const nec5::NumpyLinalg &np, bool stop_before_cross = false);
+                                 const nec5::NumpyLinalg &np, bool stop_before_cross = false,
+                                 struct CrossingStages *stages = nullptr);
 
 }  // namespace bspline
 }  // namespace mw

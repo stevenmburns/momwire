@@ -106,6 +106,8 @@ int main(int argc, char **argv) {
         sym_of(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
     np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
         sym_of(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
+    np.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
+        sym_of(numpy_lib, {"scipy_cblas_zdotc_sub64_", "cblas_zdotc_sub64_"}));
     np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym_of(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
     // the network solve's expert driver: SciPy's (`networks.MNASystem.solve`)
     np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(sym_of(scipy_lib, {"scipy_zgesvx_", "zgesvx_"}));

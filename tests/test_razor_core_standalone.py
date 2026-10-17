@@ -97,6 +97,7 @@ CORE_SOURCES = (
     "_nec5_bspline_seam_core.cpp",
     "_bspline_front_core.cpp",
     "_bspline_fill_core.cpp",
+    "_bspline_crossing_core.cpp",
     "_nec5_bspline_printout_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
@@ -1154,10 +1155,11 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     correction (step 2), a perfect ground's image term (step 3a) and the
     Sommerfeld composition with its graded raised pairs (steps 3b, 3c) and a
     wholly-buried structure (step 4a) included. What it declines is a deck
-    with wires on both sides of the interface (the crossing fill and the
-    transmitted blocks, steps 4b and 4c), a geometry Python refuses by medium
+    with wires on both sides of the interface and no crossing node (the
+    transmitted blocks, step 4c), a geometry Python refuses by medium
     (its sentence not yet ported) and the exact kernel's radius-step cross
-    job, by name, and nothing else."""
+    job, by name, and nothing else. A one-radius crossing node is served
+    (step 4b); a two-radius one and a node gap on one are declined."""
     # The wholly-buried decks have their own test below (their Python fills
     # are the slow ones), so this one keeps its pre-step-4 time.
     decks = [
@@ -1173,9 +1175,13 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("raised|frame", 0) >= 3, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
-        "front:bspline-buried-crossing",
+        "front:bspline-buried-crossing-gap",
+        "front:bspline-buried-two-radius",
         "front:bspline-buried-mixed",
-        "front:bspline-buried-refusal",
+        "front:bspline-buried-refusal-crossing",
+        "front:bspline-buried-refusal-medium",
+        "front:bspline-buried-refusal-contact",
+        "front:bspline-buried-refusal-unearned",
         "front:bspline-exact-kernel-radius-step",
     }, reasons
 
@@ -1195,6 +1201,32 @@ def test_the_wholly_buried_decks_print_as_python(driver, tmp_path):
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     assert counts.get("served", 0) == 6 and not reasons, (counts, reasons)
     assert counts.get("runs", 0) == 7, counts
+
+
+BSPLINE_CROSSING_DECKS = [
+    ROOT / "tests" / "fixtures" / rel
+    for rel in (
+        "eznec_split_1281/dan_through.nec",
+        "eznec_split_1281/thr_n21.nec",
+        "eznec_fr_step_1508/b01_buried_xq.nec",
+        "eznec_fr_step_1508/b02_buried_rp.nec",
+        "bspline_printout_crossing/aca_vertical_screen.nec",
+    )
+]
+
+
+def test_the_crossing_decks_print_as_python(driver, tmp_path):
+    """momwire#1517 step 4b: a one-radius crossing node. The crossing serve
+    (`_bspline_crossing_core.cpp`) -- the split's cluster partition, its
+    direct groups through one memo, the far blocks' ACA (the screen with a
+    vertical through the plane takes it), the ends and the designed corner,
+    and the self completions -- composed into Z as the buried fill composes
+    it, with the above blocks and both remainders around it."""
+    counts, reasons = _bspline_printouts(driver, BSPLINE_CROSSING_DECKS, tmp_path)
+    assert counts.get("served", 0) == len(BSPLINE_CROSSING_DECKS) and not reasons, (
+        counts,
+        reasons,
+    )
 
 
 def test_an_exactly_symmetric_kcl_system_takes_scipys_symmetric_solver(

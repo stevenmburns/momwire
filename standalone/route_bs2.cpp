@@ -39,6 +39,7 @@ void MWX(cblas_zgemm)(int, int, int, int, int, int, const void *, const void *, 
 void MWX(cblas_zgemv)(int, int, int, int, const void *, const void *, int, const void *, int, const void *,
                       void *, int);
 void MWX(cblas_zdotu_sub)(int, const void *, int, const void *, int, void *);
+void MWX(cblas_zdotc_sub)(int, const void *, int, const void *, int, void *);
 void MWX(zgesv_)(const int *, const int *, void *, const int *, int *, void *, const int *, int *);
 void MWX(zsytrf_)(char *, int *, std::complex<double> *, int *, int *, std::complex<double> *, int *, int *);
 void MWX(zsytrs_)(char *, int *, int *, std::complex<double> *, int *, int *, std::complex<double> *, int *,
@@ -79,6 +80,9 @@ void a_zgemv(int order, int trans, np_int m, np_int n, const void *alpha, const 
 }
 void a_zdotu(np_int n, const void *x, np_int incx, const void *y, np_int incy, void *out) {
     MWX(cblas_zdotu_sub)(i32(n), x, i32(incx), y, i32(incy), out);
+}
+void a_zdotc(np_int n, const void *x, np_int incx, const void *y, np_int incy, void *out) {
+    MWX(cblas_zdotc_sub)(i32(n), x, i32(incx), y, i32(incy), out);
 }
 void a_zgesv(const np_int *n, const np_int *nrhs, void *a, const np_int *lda, np_int *ipiv, void *b,
              const np_int *ldb, np_int *info) {
@@ -144,6 +148,7 @@ bool answer(const std::string &latin1_text, const std::string &version, const st
     np.zgemm = &a_zgemm;
     np.zgemv = &a_zgemv;
     np.zdotu_sub = &a_zdotu;
+    np.zdotc_sub = &a_zdotc;  // `np.vdot` (the crossing split's ACA)
     np.zgesv = &a_zgesv;
     np.zgesvx = &MWX(zgesvx_);  // the network solve's expert driver (SciPy's)
     nec5::EngineStamp stamp;
