@@ -31,6 +31,17 @@ struct FillParams {
 std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,
                                     const FillParams &fp);
 
+// numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
+// tangents.T` is numpy's syrk case (one operand and its transpose).
+using dsyrk_fn = void (*)(int order, int uplo, int trans, int64_t n, int64_t k, double alpha,
+                          const double *a, int64_t lda, double beta, double *c, int64_t ldc);
+
+// `_assemble_Z(J, supp_seg, polys, geom)` in free space: the C++ assembler
+// with `td_all = tangents @ tangents.T` as numpy forms it (dsyrk on the
+// upper triangle, then the triangle copied down). (n_basis, n_basis) C order.
+std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, const Geometry &g,
+                                double omega, double eps, double mu, dsyrk_fn syrk);
+
 // `BSplineSolver.pair_order_ladder` for a free-space deck: the default
 // ladder's tiers below `n_qp_pair`, normalised.
 std::vector<std::pair<double, int64_t>> default_ladder(int64_t n_qp_pair);

@@ -49,10 +49,23 @@ def main():
     if acc is None or not hasattr(acc, "bspline_front_geometry"):
         sys.exit("no accelerator with the bspline front prototype loaded")
     warnings.simplefilter("ignore")
+    # numpy's own ILP64 dsyrk, for `tangents @ tangents.T` (numpy's syrk case)
+    import ctypes
+    import glob
+    import os
+
+    lib = glob.glob(
+        os.path.join(
+            os.path.dirname(np.__file__), "..", "numpy.libs", "libscipy_openblas64_*"
+        )
+    )
+    syrk = ctypes.cast(ctypes.CDLL(lib[0]).scipy_cblas_dsyrk64_, ctypes.c_void_p).value
     counts, mismatches = Counter(), 0
     for path in _decks(sys.argv[1:]):
         text = path.read_bytes().decode("latin-1")
-        for k, entry in enumerate(acc.bspline_front_geometry(text.encode("latin-1"))):
+        for k, entry in enumerate(
+            acc.bspline_front_geometry(text.encode("latin-1"), syrk)
+        ):
             try:
                 solver = BSplineSolver(**entry["kwargs"])
                 geom = solver._build_geometry()
@@ -114,6 +127,9 @@ def main():
                                 )
                             d += dj
                             counts["J-compared"] += 1
+                            Z = solver._assemble_Z(J, supp, polys, geom)
+                            d += fc.differences(Z, entry["Z"], "Z")
+                            counts["Z-compared"] += 1
                         cols, _v = solver._node_gap_columns(_wbg, supp.shape[0])
                         d += fc.differences(
                             cols, entry["node_gap_cols"], "node_gap_cols"

@@ -371,5 +371,23 @@ std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double>
     return J;
 }
 
+std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, const Geometry &g,
+                                double omega, double eps, double mu, dsyrk_fn syrk) {
+    const int d = b.degree, nd = d + 1;
+    const int64_t N = g.n_segs_total;
+    std::vector<double> td(static_cast<size_t>(N * N), 0.0);
+    // numpy's DOUBLE_matmul syrk case: CblasRowMajor, CblasUpper, NoTrans
+    syrk(101, 121, 111, N, 3, 1.0, g.tangents.data(), 3, 0.0, td.data(), N);
+    for (int64_t i = 0; i < N; i++)
+        for (int64_t j = i + 1; j < N; j++) td[static_cast<size_t>(j * N + i)] = td[static_cast<size_t>(i * N + j)];
+    const nd::array_t<std::complex<double>, nd::array::c_style | nd::array::forcecast> Ja =
+        borrow(J, {nd, nd, static_cast<nd::ssize_t>(N), static_cast<nd::ssize_t>(N)});
+    const CI sa = borrow(b.supp_seg, {static_cast<nd::ssize_t>(b.n_basis), nd});
+    const CF pa = borrow(b.polys, {static_cast<nd::ssize_t>(b.n_basis), nd, nd});
+    const CF ta = borrow(td, {static_cast<nd::ssize_t>(N), static_cast<nd::ssize_t>(N)});
+    const nd::array_t<std::complex<double>> Z = assemble_Z_bspline(Ja, sa, pa, ta, omega, eps, mu, d, 0);
+    return std::vector<cdouble>(Z.data(), Z.data() + Z.size());
+}
+
 }  // namespace bspline
 }  // namespace mw
