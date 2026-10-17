@@ -55,6 +55,9 @@ CORE_SOURCES = (
     # the point moments' Python-free twin of the extension's TU.
     "_razor_exact_core.cpp",
     "_exact_kernel_point_core.cpp",
+    # The B-spline basis' exact kernel: the coaxial pair moments and their
+    # row windows (momwire#1517 step 0), the extension's 1410 text.
+    "_exact_kernel_coaxial_core.cpp",
     # The NEC-5 deck reader (unit 2a): the executable's first step, card text
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
@@ -168,6 +171,7 @@ def driver(accel, tmp_path_factory):
         "nec5_deck_driver",
         "nec5_razor_driver",
         "nec5_razor_printout_driver",
+        "exact_kernel_coaxial_driver",
     )
     sources = [PKG / s for s in CORE_SOURCES] + [SPLIT / f"{d}.cpp" for d in drivers]
     objects, deps, procs = {}, [], []
@@ -953,3 +957,77 @@ def test_the_printout_cells_are_pythons_format(driver):
             )
         )
         assert line == ref, hex(b)
+
+
+@pytest.mark.parametrize("symmetric", [True, False], ids=["symmetric", "numpy_key"])
+def test_the_coaxial_exact_kernel_in_cxx_alone_is_the_extensions(
+    driver, accel, symmetric, tmp_path
+):
+    """The B-spline basis' exact kernel (`_exact_kernel_coaxial_core.h`,
+    momwire#1517 step 0) built from the core TUs alone: a graded, mixed-
+    direction coaxial group's row windows (the second window over a warm
+    cache), every pair's moments by each route, and the ring kernel and its
+    split, byte for byte the extension's."""
+    from momwire import _exact_kernel as ek
+
+    exe = driver[0]["exact_kernel_coaxial_driver"]
+    n, a, nd = 24, 1e-3, 3
+    k = 2.0 * np.pi / 10.0
+    h = 0.05 * (1.0 + 0.15 * np.arange(n) ** 1.3 / n)
+    sgn = np.where(np.arange(n) % 5 == 3, -1.0, 1.0)
+    ends = np.concatenate([[0.0], np.cumsum(h)])
+    x0 = np.where(sgn > 0, ends[:-1], ends[1:])
+    q = 1e-11 * float(np.max(h))
+    r0, r1 = 9, n
+    xg, wg = ek._gl01(ek._N_GL)
+    xs, ws = ek._gl01(ek._N_SPLIT)
+    wls = ek._gl01_log(ek._N_SPLIT)
+    z = np.concatenate([np.linspace(-0.3, 0.3, 41), [1e-7, 2.5e-3, 5.9e-3, 6.1e-3]])
+    for name, v in (
+        ("x0", x0),
+        ("sgn", sgn),
+        ("h", h),
+        ("xg", xg),
+        ("wg", wg),
+        ("xs", xs),
+        ("ws", ws),
+        ("wls", wls),
+        ("z", z),
+    ):
+        np.ascontiguousarray(v, dtype=np.float64).tofile(tmp_path / f"{name}.bin")
+    (tmp_path / "params.txt").write_text(
+        f"{a!r} {k!r} {nd} -1 {q!r} {int(symmetric)} 1 {r0} {r1}\n"
+    )
+    run = subprocess.run([str(exe), str(tmp_path)], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+
+    rules = accel.ExactKernelRules(xg, wg, xs, ws, wls)
+    rows = accel.ExactKernelCoaxialRows(
+        x0, sgn, h, a, k, nd, -1, q, symmetric, rules, 1
+    )
+    first = np.empty((nd, nd, r0, n), dtype=np.complex128)
+    second = np.empty((nd, nd, r1 - r0, n), dtype=np.complex128)
+    rows.rows(0, r0, first)
+    rows.rows(r0, r1, second)
+    ref_rows = first.tobytes() + second.tobytes()
+    ref_pm = b"".join(
+        accel.exact_kernel_pair_moments(
+            h[i], h[j], x0[j] - x0[i], sgn[i], sgn[j], a, k, nd, rules, far
+        ).tobytes()
+        for i in range(n)
+        for j in range(n)
+        for far in (-1, 0, 1)
+    )
+    near = z[np.abs(z) < 6.0 * a]
+    split_a, split_b = accel.exact_kernel_ring_split(near, a, k)
+    for name, ref in (
+        ("rows", ref_rows),
+        ("pm", ref_pm),
+        ("ring", accel.exact_kernel_ring(z, a, k).tobytes()),
+        ("split_a", split_a.tobytes()),
+        ("split_b", split_b.tobytes()),
+    ):
+        assert len(ref) > 0
+        assert (tmp_path / f"drv_{name}.bin").read_bytes() == ref, name
+    counts = (tmp_path / "drv_counts.txt").read_text().split()
+    assert counts == [str(rows.evaluated), str(rows.cached)]
