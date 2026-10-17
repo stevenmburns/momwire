@@ -371,6 +371,42 @@ def _ray_integral(f_core, factor, lam0, direction, scale, rtol):
     raise RuntimeError("rotated tail did not go quiet inside the panel budget")
 
 
+def six_point_served(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
+    """`six_point` through its C++ twin when it is built, else the numpy walk.
+
+    The twin is the same walk, term for term, with different rounding (1e-15
+    relative). It is what every other designed evaluation here takes when
+    built (`designed_tables`' point route, the memo fill). The crossing
+    corner's V reads it too (momwire#1517 step 4), so that a C++ caller can
+    reproduce it bit for bit: a process with no Python has the twin and
+    nothing else.
+    """
+    if not _use_near_interface_accel():
+        return six_point(eps_t, k2, rho, z, zp, rtol=rtol, lam_mult=lam_mult)
+    k_p = float(k2)
+    k_m = k_medium(complex(eps_t), k_p)
+    rho, z, zp = float(rho), float(z), float(zp)
+    if not (z >= 0.0 and zp <= 0.0):
+        raise ValueError(f"need z >= 0 >= zp, got {(z, zp)!r}")
+    if rho < 0.0 or (z - zp) + rho <= 0.0:
+        raise ValueError(f"need R > 0, got rho={rho!r}, s={z - zp!r}")
+    return np.asarray(
+        _nia.near_interface_six_batch(
+            k_p,
+            k_m,
+            np.array([rho]),
+            np.array([z]),
+            np.array([zp]),
+            float(rtol),
+            float(lam_mult),
+            _ADAPT_DEPTH,
+            _DETOUR,
+            _GX,
+            _GW,
+        )
+    )[0]
+
+
 def six_point(eps_t, k2, rho, z, zp, rtol=1e-10, lam_mult=_LAM_MULT):
     """The six designed integrals at ONE (ρ, z, z′), z ≥ 0 ≥ z′,
     R = hypot(ρ, z − z′) > 0. Returns (6,) complex."""

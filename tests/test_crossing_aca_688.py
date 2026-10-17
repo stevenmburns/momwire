@@ -115,7 +115,8 @@ def test_g688_2_shared_memo_is_bit_identical_and_skips_reevaluation(monkeypatch)
 
 def test_g688_3_corner_routes_direct_at_corner_rtol(monkeypatch):
     """Structural: the split path evaluates the corner V(a) through
-    six_point at (a, 0, 0) with _CORNER_RTOL — never through the memo,
+    six_point_served (the C++ twin when built, momwire#1517 step 4) at
+    (a, 0, 0) with _CORNER_RTOL — never through the memo,
     the coarse axes, or a low-rank factor. Kernels are stubbed to zeros
     so this costs nothing and asserts pure routing."""
     _s, ctx, a_idx, b_idx = _deck_axes(fan_rise_deck())
@@ -137,7 +138,7 @@ def test_g688_3_corner_routes_direct_at_corner_rtol(monkeypatch):
         corner_calls.append((float(rho), float(z), float(zp), rtol))
         return np.ones(6, dtype=np.complex128)
 
-    monkeypatch.setattr(_near_interface, "six_point", spy_six)
+    monkeypatch.setattr(_near_interface, "six_point_served", spy_six)
     cf.cross_complete_block_split(ctx, a_idx, b_idx, A, B)
     assert corner_calls == [(A_WIRE, 0.0, 0.0, cf._CORNER_RTOL)]
 
