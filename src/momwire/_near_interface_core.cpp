@@ -7,6 +7,7 @@
 // columns vectorize as they did. The standalone executable links it.
 #define _USE_MATH_DEFINES
 
+#include "_study_timers.h"
 #include "_near_interface_core.h"
 
 #include <algorithm>
@@ -224,6 +225,7 @@ static size_t column_build(double rho, double k_p, const cd &kpc,
                            int ng, bool cached, double a_head, double lam_top,
                            const HeadMid *hm,
                            std::shared_ptr<const HeadMid> *fresh, Scratch &s) {
+    STUDY_T("nic.column_build");
     if (!cached) {
         column_rule(rho, k_p, km, s_min, lam_mult, p, detour, gx, gw, ng, s);
         column_factors(kpc, km, s);
@@ -261,6 +263,7 @@ void six_columns(double k_p, std::complex<double> k_m, const double *rho,
                  int n_threads, const double *gx, const double *gw, int ng,
                  uintptr_t cancel_flag, ColumnCache *cache, std::complex<double> *out,
                  bool lanes) {
+    STUDY_T("nic.six_columns");
     if (offsets[0] != 0 || offsets[nc] != n)
         throw std::invalid_argument("offsets must span 0 .. len(z)");
     for (std::ptrdiff_t c = 0; c < nc; ++c)
@@ -594,6 +597,7 @@ void grid_sheet(const double *sub, std::ptrdiff_t m, const std::ptrdiff_t *idx, 
                 const double *x, const double *bw, int p, const std::complex<double> *vals,
                 std::complex<double> *out, int n_threads, const std::int64_t *rpow, int nk,
                 bool generic) {
+    STUDY_T("nic.grid_sheet");
     (void)m;
     const bool fixed_ok = !generic;
     (void)fixed_ok;  // read only where the fixed route is built
@@ -708,6 +712,7 @@ void six_batch(double k_p, std::complex<double> k_m, const double *rb, const dou
                const double *pb, std::ptrdiff_t n, double rtol, double lam_mult, int depth,
                double detour, const double *gxp, const double *gwp, int ng,
                std::complex<double> *out) {
+    STUDY_T("nic.six_batch");
     // The Python walk's domain raises, verbatim and BEFORE the parallel
     // region (a throw cannot cross an omp boundary).
     for (std::ptrdiff_t i = 0; i < n; ++i) {

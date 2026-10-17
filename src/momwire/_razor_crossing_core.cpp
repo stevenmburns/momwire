@@ -573,8 +573,10 @@ std::vector<cd> main_sandwich(const Ctx &c, BlockEval &be, double a_wire, const 
                 zp[q] = B.nodes[3 * b + 2] - c.gz;
             }
         }
+        STUDY_T("cross.main_table_index");
         table_index(be, re, z, zp, nullptr, K);
     }
+    STUDY_T("cross.sandwich_after_index");
     const double k2sq = c.k_p * c.k_p;
     const std::vector<int64_t> rA = support_rows(A), rB = support_rows(B);
     const std::array<CSR, 4> P = row_weights(A, rA), Q = row_weights(B, rB);

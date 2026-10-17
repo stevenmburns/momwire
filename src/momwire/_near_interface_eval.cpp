@@ -1,5 +1,6 @@
 // The designed near-interface tables, Python-free: see `_near_interface_eval.h`.
 // Every rule below names the `_near_interface.py` function it replays.
+#include "_study_timers.h"
 #include "_near_interface_eval.h"
 
 #include "_razor_front_core.h"  // leggauss (the frozen Gauss table)
@@ -315,6 +316,7 @@ std::mutex g_sheet_mutex;
 std::map<std::tuple<bool, double, double, double, double, double>, std::unique_ptr<PlaneSheet>> g_sheets;
 
 PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth) {
+    STUDY_T("ni.plane_sheet");
     const auto key = std::make_tuple(height, height ? depth : -1.0, k_p, k_m.real(), k_m.imag(), zp);
     auto it = g_sheets.find(key);
     if (it == g_sheets.end())
@@ -328,6 +330,7 @@ PlaneSheet &plane_sheet(double k_p, cd k_m, double zp, bool height, double depth
 
 void column_twin(const Evaluator &ev, const double *sub, size_t m, const int64_t *labels,
                  ni_core::ColumnCache *cache, Six *out) {
+    STUDY_T("ni.column_twin");
     if (m == 0) return;
     // Groups: (label, rho) with -0.0 == 0.0, in first-seen order.
     struct GKey {
@@ -519,6 +522,7 @@ void Memo::insert(const double *row, const Six &v) {
 
 void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int64_t *labels,
                     const SheetPlan *plan, ni_core::ColumnCache *cache, Six *out) {
+    STUDY_T("ni.evaluate_fresh");
     if (m == 0) return;
     // `_sheet_take`
     std::vector<char> take(m, 0), on_plane(m, 0);
@@ -599,6 +603,7 @@ void evaluate_fresh(const Evaluator &ev, const double *rows, size_t m, const int
 void designed_index(const Evaluator &ev, Memo &memo, const double *rho, const double *z,
                     const double *zp, size_t n, const int64_t *labels, uint32_t *idx,
                     int n_threads) {
+    STUDY_T("ni.designed_index");
     // The memo's hits first (read-only, so any split). A row's hit or miss
     // depends on its triple alone, so the misses' first appearances are the
     // order `_unique_rows` then the memo filter would give the fresh rows.
@@ -1087,6 +1092,7 @@ void census(const std::vector<Side> &sides, bool height, double k_p, cd k_m, dou
 }  // namespace
 
 SheetPlan sheet_plan(double k_p, cd k_m, const std::vector<NodePair> &specs, double wire_radius) {
+    STUDY_T("ni.sheet_plan");
     std::vector<Side> sides;
     for (const NodePair &np_ : specs) {
         Side sd;
