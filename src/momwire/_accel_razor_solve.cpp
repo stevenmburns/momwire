@@ -2,6 +2,7 @@
 #include "_mw_binding.h"
 #include "_nec5_razor_seam_core.h"
 #include "_nec5_bspline_seam_core.h"
+#include "_bspline_front_core.h"
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
@@ -948,6 +949,62 @@ py::dict nec5_bspline_seam(py::bytes latin1) {
     return out;
 }
 
+// PROTOTYPE (momwire#1517 step 1): the bspline front half's geometry for a
+// deck's preparations (`_bspline_front_core.h`), test-facing.
+py::list bspline_front_geometry(py::bytes latin1) {
+    const std::string text = latin1;
+    const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
+    py::list out;
+    for (const auto &p : r.prepared) {
+        const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
+        std::vector<std::vector<double>> pls;
+        std::vector<std::vector<int64_t>> npe;
+        for (size_t w = 0; w < in.n_per_edge.size(); w++) {
+            pls.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
+            npe.push_back({in.n_per_edge[w]});
+        }
+        const mw::bspline::Geometry g = mw::bspline::build_geometry(pls, npe);
+        auto arr = [](const std::vector<double> &v, bool rows3) {
+            const ptrdiff_t n = static_cast<ptrdiff_t>(v.size());
+            py::array_t<double> a = rows3 ? py::array_t<double>({n / 3, static_cast<ptrdiff_t>(3)})
+                                          : py::array_t<double>(n);
+            std::copy(v.begin(), v.end(), a.mutable_data());
+            return a;
+        };
+        py::dict d;
+        py::list per_wire;
+        for (const auto &wg : g.per_wire) {
+            py::dict x;
+            x["seg_l"] = arr(wg.seg_l, true);
+            x["seg_r"] = arr(wg.seg_r, true);
+            x["tangents"] = arr(wg.tangents, true);
+            x["h_per_seg"] = arr(wg.h_per_seg, false);
+            py::list eo, ea;
+            for (int64_t v : wg.edge_offsets) eo.append(v);
+            for (const auto &e : wg.edge_arc_edges) ea.append(arr(e, false));
+            x["edge_offsets"] = eo;
+            x["edge_arc_edges"] = ea;
+            x["arc_at_knot"] = arr(wg.arc_at_knot, false);
+            x["n_total"] = wg.n_total;
+            per_wire.append(x);
+        }
+        py::list so;
+        for (int64_t v : g.seg_offsets) so.append(v);
+        d["per_wire"] = per_wire;
+        d["seg_offsets"] = so;
+        d["n_segs_total"] = g.n_segs_total;
+        d["h_per_seg"] = arr(g.h_per_seg, false);
+        d["tangents"] = arr(g.tangents, true);
+        d["seg_l"] = arr(g.seg_l, true);
+        d["seg_r"] = arr(g.seg_r, true);
+        py::dict entry;
+        entry["kwargs"] = bspline_kwargs(p);
+        entry["geom"] = d;
+        out.append(entry);
+    }
+    return out;
+}
+
 }  // namespace
 
 void register_razor_solve(py::module_ &m) {
@@ -1005,6 +1062,9 @@ void register_razor_solve(py::module_ &m) {
           },
           "TEST HOOK: the core's frozen Gauss-Legendre rule of order n (None "
           "beyond the table).");
+    m.def("bspline_front_geometry", &bspline_front_geometry, py::arg("latin1"),
+          "PROTOTYPE HOOK (momwire#1517 step 1): per bspline preparation, its "
+          "BSplineSolver keyword arguments and the C++ front half's geometry.");
     m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
           "PROTOTYPE HOOK (momwire#1517 step 1): the NEC-5 seam's structure half "
           "for bspline in C++: the route, each run's outcome, and per "
