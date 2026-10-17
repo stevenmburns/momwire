@@ -118,6 +118,8 @@ namespace py = mw::nd;
 // It exists so a caller can build one observer WINDOW of a same-edge block
 // instead of the whole (d+1, d+1, N, N) — the other half of momwire#966, whose
 // first half chunked everything except this and `A_st`.
+static constexpr size_t REG_LANES = 4;
+
 template <bool EK>
 static py::array_t<std::complex<double>>
 seg_seg_reg_moments_bspline_swept_impl(
@@ -179,6 +181,157 @@ seg_seg_reg_moments_bspline_swept_impl(
     // n_d^2 moment accumulation reuses each (q, r) Greg value across all
     // polynomial orders — the streaming property that avoids the numpy
     // einsum's (n_k, N*n_qp, N*n_qp) phase intermediate.
+    // momwire#1517 (speed): REG_LANES blocks (i, j..j+L-1) side by side for
+    // the moment sums -- each block's G formed exactly as below, then each
+    // lane's (p, P) sums the reference's products in the reference's (q, r)
+    // order, nothing fused or reassociated -- so the same bits.
+    auto gblock = [&](size_t i, size_t j, size_t kk, double *GreO, double *GimO) {
+            alignas(32) double R[64];
+        alignas(32) double inv_R_4pi[64];
+        alignas(32) double phases[64];
+        // sin(phase/2), not cos(phase): this kernel forms the REMAINDER,
+        // so the only thing it ever wanted `cos` for was `cos − 1`, and
+        // that is `-2 sin²(phase/2)` (momwire#799). Same two transcendental
+        // stages as before, one of them at half the argument.
+        alignas(32) double half_phases[64];
+        alignas(32) double sin_phases[64];
+        alignas(32) double Gre[64];
+        alignas(32) double Gim[64];
+        alignas(32) double t1v[64];
+        alignas(32) double t2v[64];
+        alignas(32) double scl[64];
+
+        for (size_t q = 0; q < n_qp; q++) {
+            size_t iq = i * n_qp + q;
+            for (size_t r = 0; r < n_qp; r++) {
+                R[q * n_qp + r] = Rr(iq, j * n_qp + r);
+            }
+        }
+        MW_OMP_SIMD()
+        for (size_t qr = 0; qr < n_pairs; qr++) {
+            inv_R_4pi[qr] = inv_4pi / R[qr];
+        }
+        if (EK) {
+            // `_ek_factor`'s r2/r4 and T1/T2, plus the reciprocal of the
+            // final 4πR divisor. All k-independent.
+            MW_OMP_SIMD()
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                double r2 = R[qr] * R[qr];
+                double r4 = r2 * r2;
+                t1v[qr] = 0.25 * a4_ek / r4;
+                t2v[qr] = 0.5 * a2_ek / r2;
+                scl[qr] = 1.0 / (four_pi * R[qr]);
+            }
+        }
+
+        {
+                double k = ka(kk);
+            MW_OMP_SIMD()
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                phases[qr] = -k * R[qr];
+            }
+            MW_OMP_SIMD()
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                half_phases[qr] = std::sin(0.5 * phases[qr]);
+            }
+            MW_OMP_SIMD()
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                sin_phases[qr] = std::sin(phases[qr]);
+            }
+            if (EK) {
+                MW_OMP_SIMD()
+                for (size_t qr = 0; qr < n_pairs; qr++) {
+                    double kr = k * R[qr];
+                    double kr2 = kr * kr;
+                    double t1 = t1v[qr];
+                    double t2 = t2v[qr];
+                    // C1 = 1 + jkR;  C2 = 3·C1 − (kR)².
+                    double c1r = 1.0;
+                    double c1i = kr;
+                    double c2r = 3.0 * c1r - kr2;
+                    double c2i = 3.0 * c1i;
+                    // fac = T1·C2;  fac -= T2·C1;  fac += 1.
+                    double facr = t1 * c2r;
+                    double faci = t1 * c2i;
+                    facr = facr - t2 * c1r;
+                    faci = faci - t2 * c1i;
+                    facr = facr + 1.0;
+                    // extra = T1·(3jkR − (kR)²);  extra -= T2·(jkR).
+                    double exr = t1 * (0.0 - kr2);
+                    double exi = t1 * (3.0 * kr);
+                    exi = exi - t2 * kr;
+                    // phase = e^{-jkR} − 1 = −2 sin²(kR/2) + j sin(-kR),
+                    // the reduced branch's bracket (momwire#799).
+                    double hp = half_phases[qr];
+                    double pr = -2.0 * hp * hp;
+                    double pim = sin_phases[qr];
+                    // num = phase·fac;  num += extra;  num /= 4πR.
+                    double numr = pr * facr - pim * faci;
+                    double numi = pr * faci + pim * facr;
+                    numr = numr + exr;
+                    numi = numi + exi;
+                    Gre[qr] = numr * scl[qr];
+                    Gim[qr] = numi * scl[qr];
+                }
+            } else {
+            MW_OMP_SIMD()
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                // exp(-j k R) - 1 = -2 sin²(kR/2) + j sin(-kR)
+                double hp = half_phases[qr];
+                Gre[qr] = (-2.0 * hp * hp) * inv_R_4pi[qr];
+                Gim[qr] = sin_phases[qr] * inv_R_4pi[qr];
+            }
+            }
+            for (size_t qr = 0; qr < n_pairs; qr++) {
+                GreO[qr] = Gre[qr];
+                GimO[qr] = Gim[qr];
+            }
+        }
+    };
+    if (n_col >= 2 * REG_LANES) {
+        const size_t n_blocks = (n_col + REG_LANES - 1) / REG_LANES;
+        #pragma omp parallel for schedule(static)
+        for (size_t ib = 0; ib < N * n_blocks; ib++) {
+            const size_t i = ib / n_blocks, j0 = (ib % n_blocks) * REG_LANES;
+            const size_t L = std::min(REG_LANES, n_col - j0);
+            alignas(32) double Gl_re[64][REG_LANES], Gl_im[64][REG_LANES];
+            alignas(32) double wc[8][8][REG_LANES];
+            for (size_t P = 0; P < n_d; P++)
+                for (size_t r = 0; r < n_qp; r++)
+                    for (size_t l = 0; l < REG_LANES; l++) wc[P][r][l] = wuc(P, l < L ? j0 + l : j0, r);
+            for (size_t kk = 0; kk < n_k; kk++) {
+                for (size_t l = 0; l < REG_LANES; l++) {
+                    alignas(32) double gr[64], gi[64];
+                    gblock(i, l < L ? j0 + l : j0, kk, gr, gi);
+                    for (size_t qr = 0; qr < n_pairs; qr++) {
+                        Gl_re[qr][l] = gr[qr];
+                        Gl_im[qr][l] = gi[qr];
+                    }
+                }
+                for (size_t p = 0; p < n_d; p++) {
+                    for (size_t P = 0; P < n_d; P++) {
+                        alignas(32) double mre[REG_LANES] = {}, mim[REG_LANES] = {};
+                        for (size_t q = 0; q < n_qp; q++) {
+                            const double wp = wu(p, i, q);
+                            for (size_t r = 0; r < n_qp; r++) {
+                                const size_t qr = q * n_qp + r;
+                                MW_OMP_SIMD()
+                                for (size_t l = 0; l < REG_LANES; l++) {
+                                    const double w = wp * wc[P][r][l];
+                                    mre[l] += w * Gl_re[qr][l];
+                                    mim[l] += w * Gl_im[qr][l];
+                                }
+                            }
+                        }
+                        for (size_t l = 0; l < L; l++)
+                            o(kk, p, P, i, j0 + l) = std::complex<double>(mre[l], mim[l]);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+
     MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t i = 0; i < N; i++) {
         for (size_t j = 0; j < n_col; j++) {
@@ -2009,6 +2162,8 @@ seg_seg_full_moments_bspline_swept_kernel_ek(
 //
 // Single-k for now (BSplineSolver doesn't have a swept path yet); the inputs
 // are scalar omega instead of an omega_array.
+static constexpr size_t ASM_LANES = 4;
+
 template<int D, bool COMPLEX_EPS>
 static py::array_t<std::complex<double>>
 assemble_Z_bspline_kernel(
@@ -2057,6 +2212,100 @@ assemble_Z_bspline_kernel(
     const double inv_omega_eps = 1.0 / (omega * eps_);
 
     MW_CANCEL_SETUP(cancel_flag);
+    // momwire#1517 (speed): ASM_LANES entries (m, n..n+L-1) side by side,
+    // each lane the reference loop below to the operation -- the same
+    // products, the same sums in the same (a, b, p, q) order, nothing fused
+    // (the build does not contract) or reassociated -- so the same bits.
+    if (!COMPLEX_EPS && n_basis >= 2 * ASM_LANES) {
+        const double *Jd = reinterpret_cast<const double *>(J.data());
+        const int64_t *SS = support_seg.data();
+        const double *PL = polys.data();
+        const double *TD = td_all.data();
+        const size_t ns = (size_t)J.shape(3);
+        const size_t nrow = (size_t)J.shape(2);
+        const size_t n_blocks = (n_basis + ASM_LANES - 1) / ASM_LANES;
+        #pragma omp parallel for schedule(static)
+        for (size_t mb = 0; mb < n_basis * n_blocks; mb++) {
+            MW_CANCEL_POLL();
+            const size_t m = mb / n_blocks, n0 = (mb % n_blocks) * ASM_LANES;
+            const size_t L = std::min(ASM_LANES, n_basis - n0);
+            alignas(32) double zA_re[ASM_LANES] = {}, zA_im[ASM_LANES] = {};
+            alignas(32) double zPhi_re[ASM_LANES] = {}, zPhi_im[ASM_LANES] = {};
+            for (int a = 0; a < NM; a++) {
+                const int64_t sm = SS[m * NM + a];
+                for (int b = 0; b < NM; b++) {
+                    alignas(32) size_t sn[ASM_LANES];
+                    alignas(32) double td[ASM_LANES];
+                    alignas(32) double nq[NM][ASM_LANES];
+                    alignas(32) double wA_re[ASM_LANES] = {}, wA_im[ASM_LANES] = {};
+                    alignas(32) double wPhi_re[ASM_LANES] = {}, wPhi_im[ASM_LANES] = {};
+                    for (size_t l = 0; l < ASM_LANES; l++) {
+                        const size_t nn = l < L ? n0 + l : n0;
+                        sn[l] = (size_t)SS[nn * NM + b];
+                        td[l] = TD[(size_t)sm * ns + sn[l]];
+                        for (int q = 0; q < NM; q++) nq[q][l] = PL[(nn * NM + b) * NM + q];
+                    }
+                    // the lanes' J entries, (p, q, lane) de-interleaved: a gather
+                    // on a scattered support, a run copy on consecutive ones
+                    alignas(32) double jr[NM * NM][ASM_LANES], ji[NM * NM][ASM_LANES];
+                    bool run = true;
+                    for (size_t l = 1; l < ASM_LANES; l++) run = run && sn[l] == sn[0] + l;
+                    for (int pq_ = 0; pq_ < NM * NM; pq_++) {
+                        const double *Jpq = Jd + 2 * (((size_t)pq_ * nrow + (size_t)sm) * ns);
+                        if (run) {
+                            const double *Jr = Jpq + 2 * sn[0];
+                            for (size_t l = 0; l < ASM_LANES; l++) {
+                                jr[pq_][l] = Jr[2 * l];
+                                ji[pq_][l] = Jr[2 * l + 1];
+                            }
+                        } else {
+                            for (size_t l = 0; l < ASM_LANES; l++) {
+                                jr[pq_][l] = Jpq[2 * sn[l]];
+                                ji[pq_][l] = Jpq[2 * sn[l] + 1];
+                            }
+                        }
+                    }
+                    for (int p = 0; p < NM; p++) {
+                        const double mp_ap = PL[(m * NM + a) * NM + p];
+                        for (int q = 0; q < NM; q++) {
+                            const double *Jre = jr[p * NM + q], *Jim = ji[p * NM + q];
+                            MW_OMP_SIMD()
+                            for (size_t l = 0; l < ASM_LANES; l++) {
+                                const double prod = mp_ap * nq[q][l];
+                                wA_re[l] += prod * Jre[l];
+                                wA_im[l] += prod * Jim[l];
+                            }
+                            if (p >= 1 && q >= 1) {
+                                const double *J1re = jr[(p - 1) * NM + (q - 1)], *J1im = ji[(p - 1) * NM + (q - 1)];
+                                const double pqd = (double)(p * q);
+                                MW_OMP_SIMD()
+                                for (size_t l = 0; l < ASM_LANES; l++) {
+                                    const double prod = mp_ap * nq[q][l];
+                                    const double pq = pqd * prod;
+                                    wPhi_re[l] += pq * J1re[l];
+                                    wPhi_im[l] += pq * J1im[l];
+                                }
+                            }
+                        }
+                    }
+                    MW_OMP_SIMD()
+                    for (size_t l = 0; l < ASM_LANES; l++) {
+                        zA_re[l] += td[l] * wA_re[l];
+                        zA_im[l] += td[l] * wA_im[l];
+                        zPhi_re[l] += wPhi_re[l];
+                        zPhi_im[l] += wPhi_im[l];
+                    }
+                }
+            }
+            for (size_t l = 0; l < L; l++) {
+                const double Zre = -omega_mu * zA_im[l] + zPhi_im[l] * inv_omega_eps;
+                const double Zim = omega_mu * zA_re[l] - zPhi_re[l] * inv_omega_eps;
+                z_view(m, n0 + l) = std::complex<double>(Zre, Zim);
+            }
+        }
+        MW_THROW_IF_ABORTED();
+        return Z;
+    }
     MW_OMP_PARALLEL_FOR_COLLAPSE2
     for (size_t m = 0; m < n_basis; m++) {
         for (size_t n = 0; n < n_basis; n++) {

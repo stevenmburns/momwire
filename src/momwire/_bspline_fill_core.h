@@ -32,10 +32,10 @@ using cdouble = std::complex<double>;
 class CArray {
   public:
     CArray() = default;
-    explicit CArray(std::size_t n) {  // zero-filled
+    explicit CArray(std::size_t n, bool zero = true) {  // zero-filled unless asked not to be
         nd::array_t<std::complex<double>> a({static_cast<nd::ssize_t>(n)});
         adopt_(a);
-        std::fill(p_, p_ + n_, cdouble(0.0, 0.0));
+        if (zero) std::fill(p_, p_ + n_, cdouble(0.0, 0.0));
     }
     CArray(const cdouble *b, const cdouble *e) : CArray(static_cast<std::size_t>(e - b)) { std::copy(b, e, p_); }
     static CArray adopt(const nd::array_t<std::complex<double>> &a) {
