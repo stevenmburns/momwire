@@ -461,7 +461,10 @@ CASES = {
     "rp xnda 1003": (deck("RP 0,1,361,1003,90.,0.,0.,1."), "parsed"),
     "rp xnda 1012": (deck("RP 0,1,361,1012,90.,0.,0.,1."), "parsed"),
     "rp xnda": (deck("RP 0,1,361,1100,90.,0.,0.,1."), "RP 0 with XNDA 1100 asks for"),
-    "rp xnda x0": (deck("RP 0,1,361,1,90.,0.,0.,1."), "RP 0 with XNDA 1 asks for major"),
+    "rp xnda x0": (
+        deck("RP 0,1,361,1,90.,0.,0.,1."),
+        "RP 0 with XNDA 1 asks for major",
+    ),
     "rp xnda d2 a5": (deck("RP 0,1,361,3025,90.,0.,0.,1."), "output format X = 3"),
     "rp xnda a4": (deck("RP 0,1,361,1004,90.,0.,0.,1."), "averaging A = 4"),
     "rp xnda past": (deck("RP 0,1,361,12000,90.,0.,0.,1."), "is not an XNDA"),

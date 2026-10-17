@@ -169,7 +169,14 @@ def main(argv=None):
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
             pool.submit(
-                _answer, exe, launcher, d, work / str(i), threads, launcher_env, standalone
+                _answer,
+                exe,
+                launcher,
+                d,
+                work / str(i),
+                threads,
+                launcher_env,
+                standalone,
             )
             for i, d in enumerate(decks)
         ]
@@ -197,12 +204,18 @@ def main(argv=None):
                 else:
                     for name in ("exe",) if standalone else ("exe", "fallback"):
                         if a[name] != ref:
-                            problems.append(f"{name}: " + pc.first_difference(ref, a[name]))
+                            problems.append(
+                                f"{name}: " + pc.first_difference(ref, a[name])
+                            )
                 # In auto mode the two routes run at different counts by design
                 # (the C++ route by size, the fallback at the launcher's
                 # default), and the LU's last bits follow the count: arrays are
                 # compared only at a fixed count; printouts always.
-                if a["route"].startswith("cxx") and threads != "auto" and not standalone:
+                if (
+                    a["route"].startswith("cxx")
+                    and threads != "auto"
+                    and not standalone
+                ):
                     if len(a["cxx_runs"]) != len(a["py_runs"]):
                         problems.append(
                             f"runs {len(a['py_runs'])} (python) / {len(a['cxx_runs'])} (c++)"
