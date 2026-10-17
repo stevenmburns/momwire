@@ -2,6 +2,7 @@
 // `_bspline_kernels.py` / `bspline.py` as written; the kernels are the
 // extension's own (`mw::bspline::*`, the default host).
 #include "_bspline_fill_core.h"
+#include "_bspline_crossing_core.h"
 
 #include "_bspline_core.h"
 #include "_exact_kernel_coaxial_core.h"
@@ -3473,7 +3474,7 @@ BuriedMedium buried_medium(double eps_r, double sigma, double omega, double eps,
 std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
                                  const FillParams &fp, double omega, double eps, double mu, double ground_z,
                                  double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
-                                 const nec5::NumpyLinalg &np, bool stop_before_cross) {
+                                 const nec5::NumpyLinalg &np, bool stop_before_cross, CrossingStages *stages) {
     const int d = fp.degree, nd = d + 1;
     const int64_t N = g.n_segs_total, n_basis = b.n_basis;
     const BuriedMedium bm = buried_medium(eps_r, sigma, omega, eps, fp.k);
@@ -3697,8 +3698,13 @@ std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::v
         args.lanes = true;
         mw_fg::assemble(args);
     }
-    // the crossing serve (`_crossing_fill`, momwire#524 phase 2): step 4b
-    if (crossing && !stop_before_cross) throw FrontNotPorted("buried-crossing-fill");
+    // the crossing serve (`_crossing_fill`, momwire#524 phase 2): the cross
+    // block's split fill and the self completions, on a one-radius deck
+    if (crossing && !stop_before_cross) {
+        for (double r : radius_per_wire)
+            if (r != radius_per_wire[0]) throw FrontNotPorted("buried-two-radius");
+        crossing_serve(Z, g, b, radius_per_wire[0], bm, gz, omega, mu, eps, a_idx, b_idx, np, stages);
+    }
     return Z;
 }
 }  // namespace bspline

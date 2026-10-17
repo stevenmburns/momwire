@@ -97,6 +97,7 @@ CORE_SOURCES = (
     "_nec5_bspline_seam_core.cpp",
     "_bspline_front_core.cpp",
     "_bspline_fill_core.cpp",
+    "_bspline_crossing_core.cpp",
     "_nec5_bspline_printout_core.cpp",
 )
 DECK = ROOT / "tests" / "fixtures" / "razor_front_deck.txt"
