@@ -527,7 +527,9 @@ class WorkerPool:
             # AVX-512 off in the worker before it imports numpy, whatever
             # started this server (momwire_serve_client.pin_cpu_env): on a CPU
             # without AVX-512, or with the variables already set, this adds
-            # nothing.
+            # nothing. The in-process fallback answers in THIS process's
+            # regime, which is pinned when a thin client or the frozen entry
+            # started the server, and is not when one was started by hand.
             env = dict(os.environ if self.env is None else self.env)
             _mech.pin_cpu_env(env)
             proc = subprocess.Popen(

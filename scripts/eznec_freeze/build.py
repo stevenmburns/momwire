@@ -632,6 +632,13 @@ def main() -> int:
         # cannot carry (`momwire.eznec._printout.engine_stamp`).
         "--copy-metadata",
         "momwire",
+        # numpy's version, read from its `.dist-info` by
+        # `momwire_serve_client.pin_cpu_env` (entry.py) to name numpy's
+        # AVX-512 targets in that release's own vocabulary. Without it the
+        # pin names both vocabularies and still works, at the cost of an
+        # (ignored) ImportWarning for the names this numpy does not know.
+        "--copy-metadata",
+        "numpy",
         # The baked version (momwire#1277), which the stamp reads BEFORE the
         # metadata above.  Hidden-imported because its only importer names it
         # through `importlib.import_module`, which PyInstaller cannot trace;

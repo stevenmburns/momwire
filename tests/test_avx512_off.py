@@ -75,7 +75,8 @@ def test_openblas_runs_no_avx512_core_in_this_session():
         for pool in threadpoolctl.threadpool_info()
         if pool.get("internal_api") == "openblas"
     }
-    assert cores, "no OpenBLAS loaded"
+    if not cores:
+        pytest.skip("no OpenBLAS in this process (macOS arm64: Accelerate)")
     assert not {c for c in cores if c[1] in _AVX512_CORES}, cores
 
 
@@ -203,3 +204,9 @@ def test_the_eznec_client_pins_before_anything_else(monkeypatch):
     monkeypatch.setattr(mech, "pin_cpu_env", lambda *a: calls.append(a) or {})
     assert momwire_eznec_client.main(["-version"]) == 0
     assert calls == [()]
+
+
+def test_the_numpy_version_is_read_without_importing_numpy():
+    import numpy
+
+    assert mech._numpy_version() == numpy.__version__
