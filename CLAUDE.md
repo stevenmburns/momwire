@@ -225,10 +225,16 @@ they moved 21 of the 108 golden printouts (every one a network deck, BLAS the
 bulk of it). So `momwire_serve_client.pin_cpu_env` sets
 `NPY_DISABLE_CPU_FEATURES` and `OPENBLAS_CORETYPE=Haswell` on an AVX-512 CPU
 (nothing on any other) in the thin clients, the frozen `entry.py`, the pool's
-worker env, the standalone exe's embedded Python, `scripts/golden_printouts.py`
-and `tests/conftest.py`; `standalone/build_openblas.sh` leaves SKYLAKEX out of
+worker env, the standalone exe's embedded Python, and the gates:
+`tests/conftest.py`, `scripts/golden_printouts.py`, `scripts/eznec_freeze/smoke.py`
+and `scripts/core_split/printout_compare.py` (so `exe_compare`/`stream_compare`); `standalone/build_openblas.sh` leaves SKYLAKEX out of
 `DYNAMIC_LIST`. With all of that, Rocketlake moves 1 of 108 (the
 `synthetic_ld5_virtual` bspline cancellation crumb).
+
+GitHub's runners are NOT all free of AVX-512: the Windows runner and some
+Linux ones have it (both found on PR #1533's dispatches). A gate that compares
+a pinned entry point against an in-process or `python -m momwire...`
+reference has to pin its own process too, or it fails on those runners only.
 
 The trap: a scratch script that imports numpy itself is NOT pinned, so a
 Rocketlake measurement taken with one moves against a Haswell or Skylake one

@@ -48,7 +48,16 @@ import warnings
 from collections import Counter
 from pathlib import Path
 
-import numpy as np
+import momwire_serve_client
+
+# AVX-512 off before numpy loads, in this process (its in-process python
+# reference) and in every child (the launcher, the executable's fallback):
+# exe_compare / stream_compare hold all of them to one byte, and GitHub's
+# runners can have AVX-512, where the launcher pins itself and a bare
+# in-process render would not.
+momwire_serve_client.pin_cpu_env()
+
+import numpy as np  # noqa: E402 - after the AVX-512 pin
 
 ROOT = Path(__file__).resolve().parents[2]
 PKG = ROOT / "src" / "momwire"
