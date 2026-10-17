@@ -6,6 +6,8 @@
 #include "_bspline_core.h"
 #include "_exact_kernel_coaxial_core.h"
 #include "_razor_exact_core.h"
+#include "_somm_grid_core.h"
+#include "_somm_remainder_core.h"
 #include "_razor_front_core.h"  // `leggauss`: `_quadrature.leggauss`'s frozen table
 
 #if defined(_MSC_VER)
@@ -2017,6 +2019,106 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
             assemble(corr, wAs, wPs, e_idx, e_idx, s0, s1, s0, s1);
         }
     }
+}
+
+
+// ---------------------------------------------------------------------------
+// The Sommerfeld remainder (momwire#1517 step 3b)
+// ---------------------------------------------------------------------------
+namespace {
+
+// `_quadrature.leggauss(n)` mapped to [0, 1]: (tq, wg) with tq = 0.5 (x + 1)
+void remainder_rule(int64_t q, std::vector<double> &tq, std::vector<double> &wg) {
+    std::vector<double> xg;
+    if (!razor::leggauss(q, xg, wg)) throw FrontNotPorted("a remainder order past the frozen rules");
+    tq.resize(xg.size());
+    for (size_t j = 0; j < xg.size(); j++) tq[j] = 0.5 * (xg[j] + 1.0);
+}
+
+// `seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]`
+std::vector<double> remainder_nodes(const Geometry &g, const std::vector<double> &tq) {
+    const size_t N = static_cast<size_t>(g.n_segs_total), q = tq.size();
+    std::vector<double> nodes(N * q * 3);
+    for (size_t s = 0; s < N; s++)
+        for (size_t j = 0; j < q; j++)
+            for (int c = 0; c < 3; c++)
+                nodes[(s * q + j) * 3 + c] = g.seg_l[3 * s + c] + tq[j] * (g.seg_r[3 * s + c] - g.seg_l[3 * s + c]);
+    return nodes;
+}
+
+constexpr double REMAINDER_GRADED_C = 4.0;  // `_REMAINDER_GRADED_C`
+
+}  // namespace
+
+bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_sommerfeld) {
+    const size_t N = static_cast<size_t>(g.n_segs_total);
+    if (N == 0) return true;
+    std::vector<double> tq, wg;
+    remainder_rule(n_qp_sommerfeld, tq, wg);
+    const std::vector<double> nodes = remainder_nodes(g, tq);
+    double lmax = -1.0, h_l = INFINITY, h_r = INFINITY, h_o = INFINITY;
+    for (size_t s = 0; s < N; s++) {
+        double d[3];
+        for (int c = 0; c < 3; c++) d[c] = g.seg_r[3 * s + c] - g.seg_l[3 * s + c];
+        lmax = std::max(lmax, nnorm3(d));
+        h_l = std::min(h_l, g.seg_l[3 * s + 2] - ground_z);
+        h_r = std::min(h_r, g.seg_r[3 * s + 2] - ground_z);
+    }
+    for (size_t t = 0; t < nodes.size() / 3; t++) h_o = std::min(h_o, nodes[3 * t + 2] - ground_z);
+    const double h_min = std::min(std::min(h_l, h_r), h_o);
+    if (!(h_min > 0.0)) return false;
+    const double bound = lmax / (2.0 * h_min);
+    return static_cast<int64_t>(std::ceil(REMAINDER_GRADED_C * bound)) <= n_qp_sommerfeld;
+}
+
+void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                                   double ground_z, cdouble eps_t, double k, double omega, double mu,
+                                   int64_t n_qp_sommerfeld) {
+    const int nd = b.degree + 1;
+    const int64_t N = g.n_segs_total, n_basis = b.n_basis;
+    std::vector<double> tq, wg;
+    remainder_rule(n_qp_sommerfeld, tq, wg);
+    const int64_t q = static_cast<int64_t>(tq.size());
+    const std::vector<double> nodes = remainder_nodes(g, tq);
+    // W[p, s, j] = (0.5 * h[s] * wg[j]) * np.float_power(h[s] * tq[j], p)
+    std::vector<double> W(static_cast<size_t>(nd * N * q));
+    for (int p = 0; p < nd; p++)
+        for (int64_t s = 0; s < N; s++)
+            for (int64_t j = 0; j < q; j++) {
+                const double h = g.h_per_seg[static_cast<size_t>(s)];
+                const double u = h * tq[static_cast<size_t>(j)];
+                const double w = (0.5 * h) * wg[static_cast<size_t>(j)];
+                W[static_cast<size_t>((p * N + s) * q + j)] = w * std::pow(u, static_cast<double>(p));
+            }
+    const double r1_max = razor::max_image_distance(g.seg_l.data(), g.seg_r.data(), static_cast<size_t>(N), ground_z);
+    const somm_core::Grid &G0 = somm_core::get_grid(eps_t, k, r1_max, omega, mu);
+    const size_t n_reg = G0.regions.size();
+    if (n_reg > somm_proj::MAX_REGIONS) throw FrontNotPorted("a grid layout past the view's regions");
+    double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
+        dth[somm_proj::MAX_REGIONS];
+    const cdouble *vals[somm_proj::MAX_REGIONS];
+    std::ptrdiff_t shape0[somm_proj::MAX_REGIONS], nr[somm_proj::MAX_REGIONS], nth[somm_proj::MAX_REGIONS];
+    for (size_t r = 0; r < n_reg; r++) {
+        const somm_core::GridRegion &reg = G0.regions[r];
+        r0[r] = reg.r0;
+        dr[r] = reg.dr;
+        th0[r] = reg.th0;
+        dth[r] = reg.dth;
+        vals[r] = reg.vals.data();
+        shape0[r] = 4;
+        nr[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+        nth[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+    }
+    // `grid_cpp_args(grid)`: theta split `math.radians(30.0)`, and the far pack
+    somm_proj::GridView view = somm_proj::build_grid_view(G0.r1_max, G0.r_break, 30.0 * (M_PI / 180.0), G0.r_near,
+                                                          r0, dr, th0, dth, n_reg, vals, shape0, nr, nth);
+    const std::vector<cdouble> far = somm_core::far_pack(G0);
+    somm_proj::set_far(view, far.data(), static_cast<std::ptrdiff_t>(far.size()));
+    std::vector<cdouble> Q(static_cast<size_t>(n_basis * n_basis));
+    somm_core::remainder_bspline_Q(view, ground_z, k, nodes.data(), g.tangents.data(), W.data(), N, nodes.data(),
+                                   g.tangents.data(), W.data(), N, q, nd, b.supp_seg.data(), b.polys.data(),
+                                   n_basis, b.supp_seg.data(), b.polys.data(), n_basis, true, 0, Q.data(), 0);
+    for (size_t t = 0; t < Z.size(); t++) Z[t] = cdouble(Z[t].real() - Q[t].real(), Z[t].imag() - Q[t].imag());
 }
 
 }  // namespace bspline

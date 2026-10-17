@@ -7,6 +7,8 @@
 #pragma fp_contract(off)
 #endif
 
+#include "_somm_grid_core.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
@@ -68,7 +70,20 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
     if (fr.has_ground) {
         bspline::ImageGround gr;
         gr.ground_z = fr.ground_z;
+        cd eps_t;
+        if (fr.compose) {
+            // `eps_tilde`: complex(float(eps_r), -float(sigma) / (omega * eps0));
+            // C2 = (eps_t - 1.0) / (eps_t + 1.0), CPython's complex arithmetic
+            eps_t = cd(fr.ground_eps_r, (-fr.ground_sigma) / (fr.omega * BSPLINE_EPS));
+            gr.compose = true;
+            gr.c2 = somm_core::py_quot(cd(eps_t.real() - 1.0, eps_t.imag() - 0.0),
+                                       cd(eps_t.real() + 1.0, eps_t.imag() + 0.0));
+        }
         bspline::accumulate_image(Z, fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, gr, 256.0, np);
+        // `Z -= remainder.evaluate(supp_seg, polys)`
+        if (fr.compose)
+            bspline::subtract_sommerfeld_remainder(Z, fr.geom, fr.basis, fr.ground_z, eps_t, fr.k, fr.omega,
+                                                   BSPLINE_MU, 3);
     }
     // `_apply_loading(Z)`: the distributed series loading, last
     if (fr.loading.active()) {
