@@ -1,0 +1,25 @@
+CM an NX chain in free space: a plain dipole, a loaded one, then a fat one
+CE
+GW 1,21,0.,-.5,0.,0.,.5,0.,.001
+GE 0
+FR 0,1,0,0,140.
+EX 0,1,11,0,1.,0.
+XQ
+NX
+CM second structure
+CE
+GW 1,31,0.,-.5,0.,0.,.5,0.,.001
+GE 0
+LD 5,1,0,0,3.5E7
+FR 0,2,0,0,140.,5.
+EX 0,1,16,0,1.,0.
+RP 0,1,7,1000,90.,0.,0.,30.,0.
+NX
+CM third structure, the exact kernel
+CE
+GW 1,121,0.,-.5,0.,0.,.5,0.,.004
+GE 0
+FR 0,1,0,0,140.
+EX 0,1,61,0,1.,0.
+XQ
+EN

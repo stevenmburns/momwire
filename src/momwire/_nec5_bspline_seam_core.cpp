@@ -212,6 +212,8 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
     // segment is shorter than 3 radii (free space serves it)
     fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii);
+    if (fr->exact_kernel && bspline::exact_kernel_has_cross_job(fr->geom, fr->radii))
+        return decline("bspline-exact-kernel-radius-step");
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

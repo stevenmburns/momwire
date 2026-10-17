@@ -1086,6 +1086,7 @@ def test_the_bspline_kernels_in_cxx_alone_are_the_extensions(driver, accel, tmp_
 
 BSPLINE_KCL_SYM_DECKS = ROOT / "tests" / "fixtures" / "bspline_printout_kcl_sym"
 BSPLINE_CHUNKED_DECKS = SPLIT / "bspline_chunked_decks"
+BSPLINE_EXACT_DECKS = SPLIT / "bspline_exact_decks"
 
 
 def _bspline_printouts(driver, decks, tmp_path):
@@ -1144,8 +1145,9 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     spline readouts and sampler, the run half and the writer. Every deck it
     prints is, byte for byte, what `_shell.render(text, basis="bspline")`
     prints, and every finished run carries Python's Y, coefficients and port
-    vectors. What it declines is steps 2-3's (ground, wire loading, the
-    exact kernel "auto" would engage), by name, and nothing else."""
+    vectors -- wire loading (LD 5 / 2 / 3) and the exact ring-kernel
+    correction (step 2) included. What it declines is step 3's ground and the
+    exact kernel's radius-step cross job, by name, and nothing else."""
     decks = [
         p
         for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
@@ -1158,8 +1160,7 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
         "front:bspline-ground",
-        "front:bspline-loading",
-        "front:bspline-exact-kernel",
+        "front:bspline-exact-kernel-radius-step",
     }, reasons
 
 
@@ -1182,6 +1183,18 @@ def test_the_chunked_fill_decks_print_as_python(driver, tmp_path):
     observer windows into the windowed assembler, then each edge's same-edge
     correction in windows. One deck carries a near-field request."""
     decks = sorted(BSPLINE_CHUNKED_DECKS.glob("*.nec"))
+    assert len(decks) == 2
+    counts, reasons = _bspline_printouts(driver, decks, tmp_path)
+    assert counts.get("served", 0) == 2 and not reasons, (counts, reasons)
+
+
+@pytest.mark.slow
+def test_the_exact_kernel_windows_print_as_python(driver, tmp_path):
+    """momwire#1517 step 2: fat wires long enough that the exact-kernel
+    correction walks several observer windows (1,000 segments) and follows
+    the chunked fill (1,500): CoaxialRows minus the BaseRows replay, its
+    Toeplitz gathers and ladder ties, window by window."""
+    decks = sorted(BSPLINE_EXACT_DECKS.glob("*.nec"))
     assert len(decks) == 2
     counts, reasons = _bspline_printouts(driver, decks, tmp_path)
     assert counts.get("served", 0) == 2 and not reasons, (counts, reasons)

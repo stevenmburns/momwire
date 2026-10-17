@@ -54,6 +54,10 @@ bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);
 // than `EXACT_KERNEL_AUTO_H_OVER_A` (3) of its radius.
 bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire);
 
+// Whether `coaxial_lines` lists a line carrying a radius step (momwire#1438's
+// cross job, which `add_exact_correction` does not serve).
+bool exact_kernel_has_cross_job(const Geometry &g, const std::vector<double> &radius_per_wire);
+
 // `_add_exact_kernel_correction(Z, geom, supp_seg, polys, k)` (momwire#1408,
 // #1411, #1421): per one-radius coaxial group, observer-row windows of the
 // exact ring-kernel moments (`mw::ek::CoaxialRows`) minus the base moments

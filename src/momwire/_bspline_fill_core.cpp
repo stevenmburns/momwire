@@ -1689,6 +1689,26 @@ bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_
     return false;
 }
 
+bool exact_kernel_has_cross_job(const Geometry &g, const std::vector<double> &radius_per_wire) {
+    std::vector<double> seg_a;
+    for (size_t w = 0; w < g.per_wire.size(); w++)
+        for (int64_t q = 0; q < g.per_wire[w].n_total; q++) seg_a.push_back(radius_per_wire[w]);
+    const std::vector<int64_t> labels = razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, seg_a);
+    double amax = seg_a.empty() ? 0.0 : seg_a[0];
+    for (double v : seg_a) amax = std::max(amax, v);
+    const std::vector<int64_t> line =
+        razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, std::vector<double>(seg_a.size(), amax));
+    std::map<int64_t, int64_t> first;
+    for (size_t s = 0; s < line.size(); s++) {
+        auto it = first.find(line[s]);
+        if (it == first.end())
+            first[line[s]] = labels[s];
+        else if (it->second != labels[s])
+            return true;
+    }
+    return false;
+}
+
 void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                           const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
                           double eps, double mu, double swept_mem_mb) {
@@ -1698,21 +1718,8 @@ void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basi
     for (size_t w = 0; w < g.per_wire.size(); w++)
         for (int64_t q = 0; q < g.per_wire[w].n_total; q++) seg_a.push_back(radius_per_wire[w]);
     const std::vector<int64_t> labels = razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, seg_a);
-    // `coaxial_lines`: a line carrying a radius step is a cross job
-    {
-        double amax = seg_a.empty() ? 0.0 : seg_a[0];
-        for (double v : seg_a) amax = std::max(amax, v);
-        const std::vector<int64_t> line =
-            razor::coaxial_labels(g.seg_l, g.seg_r, g.tangents, std::vector<double>(seg_a.size(), amax));
-        std::map<int64_t, int64_t> first;
-        for (int64_t s = 0; s < n_total; s++) {
-            auto it = first.find(line[s]);
-            if (it == first.end())
-                first[line[s]] = labels[s];
-            else if (it->second != labels[s])
-                throw FrontNotPorted("a coaxial line with a radius step (the cross job)");
-        }
-    }
+    if (exact_kernel_has_cross_job(g, radius_per_wire))
+        throw FrontNotPorted("a coaxial line with a radius step (the cross job)");
     // the fill's EK spec
     EK ek;
     if (fp.extended_kernel) {
