@@ -23,6 +23,7 @@ import warnings
 
 import numpy as np
 import pytest
+from _lane_gate import WIN32, lanes_match
 
 from momwire import RazorSolver, razor
 from momwire._accel import acc
@@ -311,6 +312,18 @@ def test_the_front_half_is_the_python_front_half_to_the_bit(monkeypatch, capture
     # already had the constructor build one (it resolves on the mesh).
     assert fc.differences(solver._cached_geometry, solver._cxx_geom) == []
 
+    if WIN32 and CASES[name].get("ground_model") == "sommerfeld":
+        # Windows needs no bit-compatibility: under MSVC's /fp:fast the core's
+        # Sommerfeld fill and the extension's (the same text, other TUs) may
+        # round differently, so there the derived lane tolerance applies.
+        assert lanes_match(solver._cxx_z, z_py)
+        assert lanes_match(cx.coeffs, py.coeffs)
+        assert lanes_match(cx.y, py.y)
+        assert lanes_match(
+            solver.currents_at_knots(cx.coeffs[:, 0]),
+            ref.currents_at_knots(py.coeffs[:, 0]),
+        )
+        return
     assert solver._cxx_z.tobytes() == z_py.tobytes()
     assert cx.coeffs.tobytes() == py.coeffs.tobytes()
     assert cx.y.tobytes() == py.y.tobytes()
