@@ -25,6 +25,24 @@ import momwire_serve_client as mech
 _AVX512_CORES = {"skylakex", "cooperlake", "sapphirerapids"}
 
 
+def _numpy_cpu():
+    """numpy's dispatch targets and its CPU feature table."""
+    try:
+        from numpy._core import _multiarray_umath as umath
+    except ImportError:  # numpy 1.x
+        from numpy.core import _multiarray_umath as umath
+    return umath.__cpu_dispatch__, umath.__cpu_features__
+
+
+def _avx512_targets(dispatch) -> list[str]:
+    targets = [n for n in dispatch if "AVX512" in n or n == "X86_V4"]
+    if not targets:
+        pytest.skip(
+            f"this numpy dispatches no AVX-512 target ({sys.platform}, not x86)"
+        )
+    return targets
+
+
 def _ours(name: str) -> bool:
     """Whether the session's value of ``name`` is the pin's, i.e. no user
     exported their own (a user's value is respected, so these checks would
@@ -36,14 +54,12 @@ def _ours(name: str) -> bool:
 def test_numpy_runs_no_avx512_target_in_this_session():
     if not _ours(mech.NPY_DISABLE_ENV) or mech.NPY_ENABLE_ENV in os.environ:
         pytest.skip("NPY_*_CPU_FEATURES exported by the user")
-    from numpy._core._multiarray_umath import __cpu_dispatch__, __cpu_features__
-
+    dispatch, features = _numpy_cpu()
     # The AVX-512 targets this numpy dispatches to. A disabled one reads False
     # (the CPU features beneath it, AVX512F and the rest, still read True:
     # numpy only stops dispatching); on a CPU without AVX-512 none was on.
-    targets = [n for n in __cpu_dispatch__ if "AVX512" in n or n == "X86_V4"]
-    assert targets, __cpu_dispatch__
-    on = [n for n in targets if __cpu_features__.get(n)]
+    targets = _avx512_targets(dispatch)
+    on = [n for n in targets if features.get(n)]
     assert on == [], on
 
 
@@ -137,12 +153,10 @@ def test_this_numpy_dispatches_every_name_the_pin_gives_it():
     hand it is one of its dispatch targets."""
     import numpy
 
-    try:
-        from numpy._core._multiarray_umath import __cpu_dispatch__
-    except ImportError:  # numpy 1.x
-        from numpy.core._multiarray_umath import __cpu_dispatch__
+    dispatch, _ = _numpy_cpu()
+    _avx512_targets(dispatch)
     names = mech.numpy_avx512_features(numpy.__version__).split()
-    assert set(names) <= set(__cpu_dispatch__), (names, __cpu_dispatch__)
+    assert set(names) <= set(dispatch), (names, dispatch)
 
 
 def test_the_pool_hands_its_workers_the_pin(monkeypatch):
