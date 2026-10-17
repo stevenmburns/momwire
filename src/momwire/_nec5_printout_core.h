@@ -15,7 +15,7 @@
 //     and `write_printout`'s CRLF and latin-1 transliteration).
 //
 // What the SOLVER answers -- `compute_port_solution` and the readouts
-// (`currents_at_knots`, `current_slopes`, `element_currents`,
+// (`currents_at_knots`, `current_slopes`, the element sampler,
 // `wire_loss_power`) -- is asked of a `PrintoutEngine` (below), with the
 // structure half's `SeamEngine`. razor-2p's is `_nec5_razor_printout_core.h`;
 // another basis plugs in the same way.
@@ -61,6 +61,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -216,6 +217,25 @@ struct ElementCurrents {
     std::vector<cd> moment, delta;
 };
 
+// One caller's wire as `element_currents` walks it (momwire#1042): its
+// polyline (n_points, 3) and per-edge counts -- a dropped copy's are its
+// twin's, reversed when it runs the other way -- and its solved index (-1:
+// a dropped copy, which carries no current).
+struct WireWalk {
+    std::vector<double> polyline;
+    std::vector<int64_t> npe;
+    int64_t solved = -1;
+};
+
+// The current at subdivided arcs along one walked, SOLVED wire `w` (`arcs`:
+// from its start, the walk's own chord sums), for one run.
+class CurrentSampler {
+  public:
+    virtual ~CurrentSampler() = default;
+    virtual std::vector<cd> at(std::size_t w, const WireWalk &ww,
+                               const std::vector<double> &arcs) const = 0;
+};
+
 // The run half's questions of one basis' constructed solver
 // (`compute_port_solution` and the readouts `_finish`, `_pattern` and
 // `_near_field` call), and the structure half it answers them for.
@@ -238,14 +258,18 @@ class PrintoutEngine {
     virtual std::vector<std::vector<cd>> current_slopes(
         const Prepared &p, const std::vector<cd> &coeffs, const std::vector<std::vector<cd>> &knots,
         const std::vector<std::vector<double>> &centres_per_piece) const = 0;
-    // `solver.element_currents(coeffs)` (subdiv 1): the far field's
-    // midpoints and moments, appended to `mid` and `moment`.
-    virtual void element_moments(const Prepared &p, const std::vector<std::vector<cd>> &knots,
-                                 std::vector<double> &mid, std::vector<cd> &moment) const = 0;
-    // `solver.element_currents(coeffs, subdiv)`: the near field's elements.
-    virtual ElementCurrents element_currents(const Prepared &p,
-                                             const std::vector<std::vector<cd>> &knots,
-                                             int64_t subdiv) const = 0;
+    // `element_currents`' walk: the caller's wires in the caller's numbering
+    // (a dropped duplicate over its twin's polyline, momwire#1042). The walk
+    // itself -- the subdivided knots, their arcs, the elements' midpoints,
+    // moments, nodes and steps -- is the run half's (`_ElementCurrents`, one
+    // mixin for every basis); what a basis decides is only how its current
+    // is SAMPLED at the subdivided arcs (`CurrentSampler`).
+    virtual std::vector<WireWalk> wire_walk(const Prepared &p) const = 0;
+    // The run's sampler (`currents_at_knots(coeffs, arcs)` at subdivided
+    // arcs): razor interpolates its knot currents; a spline basis evaluates
+    // its expansion. `knots` is `currents_at_knots(coeffs)`.
+    virtual std::unique_ptr<CurrentSampler> sampler(const Prepared &p, const std::vector<cd> &coeffs,
+                                                    const std::vector<std::vector<cd>> &knots) const = 0;
     // `solver.wire_loss_power(coeffs, omega)[0]`.
     virtual double wire_loss_power(const Prepared &p, const std::vector<cd> &coeffs,
                                    double omega) const = 0;
