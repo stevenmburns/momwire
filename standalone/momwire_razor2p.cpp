@@ -850,6 +850,7 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
         if (env("MW_EXE_TIMES") == "1")
             std::fprintf(stderr, "cxx: threads %d, answer %.3f ms, total %.3f ms\n", threads,
                          ms_since(t), ms_since(T0));
+        study::dump();
         return printout;
     }
     if (failed) throw ml::PyError{kind, message};
