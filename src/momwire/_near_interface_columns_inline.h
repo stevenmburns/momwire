@@ -773,8 +773,13 @@ static void column_member(const Scratch &s, size_t K, double z, double zp,
             }
             mw_lanes sr[3], si[3];
             for (int u = 0; u < 3; ++u) {
+#if defined(__GNUC__)
                 sr[u] = mw_lanes{0.0, 0.0, 0.0, 0.0};
                 si[u] = mw_lanes{0.0, 0.0, 0.0, 0.0};
+#else
+                // MSVC's lanes are an array, which is not assignable.
+                for (int l = 0; l < MW_LANES; ++l) sr[u][l] = si[u][l] = 0.0;
+#endif
             }
             int j = 0;
             for (; j + MW_LANES <= nb; j += MW_LANES) {
