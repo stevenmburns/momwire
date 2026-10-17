@@ -64,14 +64,8 @@ PKG = ROOT / "src" / "momwire"
 SPLIT = ROOT / "scripts" / "core_split"
 BASIS = "razor-2p"
 DRIVER = "nec5_razor_printout_driver"
-# momwire#1517 step 1: `--basis bspline` builds bs2's driver,
-# which also links the bspline front, fill and engine TUs.
-BSPLINE_SOURCES = (
-    "_nec5_bspline_seam_core.cpp",
-    "_bspline_front_core.cpp",
-    "_bspline_fill_core.cpp",
-    "_nec5_bspline_printout_core.cpp",
-)
+# `--basis bspline` (momwire#1517) builds bs2's driver; its TUs are among
+# the standalone test's CORE_SOURCES.
 
 
 def _decks(args):
@@ -200,15 +194,8 @@ def build_driver(out_dir: Path, basis: str = "razor-2p") -> Path:
         "-I",
         str(ROOT / "extern" / "xsf" / "include"),
     ]
-    driver = DRIVER
-    extra = ()
-    if basis == "bspline":
-        driver, extra = "nec5_bspline_printout_driver", BSPLINE_SOURCES
-    sources = (
-        [PKG / s for s in t.CORE_SOURCES]
-        + [PKG / s for s in extra]
-        + [SPLIT / f"{driver}.cpp"]
-    )
+    driver = "nec5_bspline_printout_driver" if basis == "bspline" else DRIVER
+    sources = [PKG / s for s in t.CORE_SOURCES] + [SPLIT / f"{driver}.cpp"]
     procs, objects = [], []
     for src in sources:
         obj = out_dir / (src.stem + ".o")
