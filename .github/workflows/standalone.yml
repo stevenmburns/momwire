@@ -1,24 +1,115 @@
-# momwire-razor2p (standalone/, unit 4) under MSVC: does it configure, build,
-# load CPython at run time and answer as the launcher does?
+# The standalone razor-2p executables (standalone/, momwire#1479 and #1512).
 #
-# Linux is gated byte for byte on the fleet (scripts/core_split/exe_compare.py
-# against a static OpenBLAS pinned to SciPy's build). Here the OpenBLAS is the
-# project's own Windows release (a DLL, unprefixed names: MW_BLAS_PREFIX
-# empty), which is NOT SciPy's Windows build, so the corpus comparison below
-# is recorded rather than required: what this job requires is the build and
-# the launcher contract (tests/test_standalone_exe.py). Windows identity is
-# measured on the Windows builder.
+# `linux`: the no-Python build (MW_EXE_NO_PYTHON) against the static OpenBLAS
+# pinned to SciPy's build (standalone/build_openblas.sh), then REQUIRED gates
+# run on the runner: the launcher-layer contract tests
+# (tests/test_standalone_nopython.py) and every fixture deck answered byte for
+# byte as this environment's `momwire-nec5-razor-2p` answers it
+# (scripts/core_split/exe_compare.py --standalone), at one thread. The full
+# corpus and harvest gates stay on the fleet (they need decks the repo does
+# not carry).
+#
+# `windows`: the hybrid build under MSVC. Its OpenBLAS is the project's own
+# Windows release (a DLL, unprefixed names: MW_BLAS_PREFIX empty), which is
+# NOT SciPy's Windows build, so the corpus comparison there is recorded
+# rather than required: what that job requires is the build and the launcher
+# contract (tests/test_standalone_exe.py). Windows identity is measured on
+# the Windows builder.
 name: standalone
 
 on:
   workflow_dispatch:
-  push:
-    branches: [proto/razor-cxx-solve]
+  pull_request:
+    branches: [main]
     paths:
       - "standalone/**"
+      - "src/**"
+      - "scripts/core_split/exe_compare.py"
+      - "scripts/core_split/printout_compare.py"
+      - "tests/test_standalone_*.py"
+      - "tests/fixtures/**"
+      - "setup.py"
+      - ".github/workflows/standalone.yml"
+  push:
+    branches: [main]
+    paths:
+      - "standalone/**"
+      - "src/**"
+      - "scripts/core_split/exe_compare.py"
+      - "scripts/core_split/printout_compare.py"
+      - "tests/test_standalone_*.py"
+      - "tests/fixtures/**"
+      - "setup.py"
       - ".github/workflows/standalone.yml"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event_name == 'push' && github.run_id || github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        id: py
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: ninja
+        run: sudo apt-get install -y -q ninja-build
+      # The archive is a pure function of the pinned commit and the script's
+      # make flags, so the script's hash keys it.
+      - name: static OpenBLAS (cached)
+        id: openblas
+        uses: actions/cache@v4
+        with:
+          path: ~/mwx-openblas/libmwxp.a
+          key: mwx-openblas-${{ runner.os }}-${{ hashFiles('standalone/build_openblas.sh') }}
+      - name: static OpenBLAS (build)
+        if: steps.openblas.outputs.cache-hit != 'true'
+        run: standalone/build_openblas.sh ~/mwx-openblas
+      - uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-py${{ steps.py.outputs.python-version }}
+          save: false
+      - name: momwire environment
+        run: |
+          pip install --upgrade pip
+          pip install "setuptools>=61.0" wheel pybind11
+          pip install -e .[test] --no-build-isolation
+        env:
+          CC: ccache gcc
+          CXX: ccache g++
+      - name: configure + build (no Python)
+        run: |
+          cmake -S standalone -B build-st -G Ninja -DMW_EXE_NO_PYTHON=ON \
+            -DMW_OPENBLAS_LIB=$HOME/mwx-openblas/libmwxp.a \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          cmake --build build-st
+      - name: contract tests
+        run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
+        env:
+          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-st/momwire-razor2p-standalone
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: every fixture deck, as the launcher
+        run: |
+          python scripts/core_split/exe_compare.py exe-linux.jsonl --standalone \
+            --exe build-st/momwire-razor2p-standalone \
+            --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 tests/fixtures
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: upload the comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: standalone-linux-${{ github.run_id }}-${{ github.run_attempt }}
+          path: exe-linux.jsonl
+          if-no-files-found: ignore
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 90

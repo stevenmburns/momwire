@@ -44,7 +44,9 @@ def _same(a, b):
     if isinstance(a, Exception) or isinstance(b, Exception):
         assert type(a) is type(b) and str(a) == str(b), (a, b)
     else:
-        assert a == b
+        # repr as well: a NaN field (LD 5's sigma=nan, served since momwire#1512
+        # step 4) is never == itself, and its repr is the same text.
+        assert a == b or repr(a) == repr(b), (a, b)
 
 
 def _families():
