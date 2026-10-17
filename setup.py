@@ -373,6 +373,9 @@ _ACCEL_HEADERS = [
     "src/momwire/_somm_below_fill_core.h",
     "src/momwire/_near_interface_core.h",
     "src/momwire/_near_interface_eval.h",
+    # The column machinery the near-interface core's twin reads (momwire#1512
+    # B4a), shared with `_near_interface_accel`.
+    "src/momwire/_near_interface_columns_inline.h",
     "src/momwire/_razor_crossing_core.h",
     "src/momwire/_razor_wire_loading_core.h",
     # The exact ring kernel's point moments, Python-free (momwire#1479): the
@@ -548,6 +551,9 @@ _NEAR_HEADERS = [
     "src/momwire/_contour_lanes_inline.h",
     # The column machinery both TUs of this extension share (momwire#1224).
     "src/momwire/_near_interface_columns_inline.h",
+    # The Python-free column twin and sheet interpolator's interface
+    # (momwire#1512 B4a), which this extension binds.
+    "src/momwire/_near_interface_core.h",
     # The SIMD lane layer (momwire#1372): the sheet's fixed-width cell sum.
     "src/momwire/_lanes.h",
 ] + sorted(glob.glob("extern/xsf/include/xsf/**/*.h", recursive=True))

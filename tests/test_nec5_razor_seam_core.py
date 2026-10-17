@@ -411,14 +411,17 @@ CASES = {
         "refused",
         "lies in the ground plane",
     ),
-    "declines_a_buried_wire_over_sommerfeld": (
+    "declines_a_buried_fill_to_the_run_half": (
         HEAD
         + "GW 1,10,0.,-2.5,-0.5,0.,2.5,-0.5,.002\n"
         + "GE 1,-1\nGN 0,0,0,0,13.,.005,1.,0.\nFR 0,1,0,0,30.\nEX 0,1,5,0,1.,0.\n"
         + RP
         + "EN\n",
+        # The seam's structure half serves a buried wire since momwire#1512
+        # B1; its front leaves the buried fill to the run half, which fills
+        # the below/below table (B5).
         "declined",
-        "finite-ground-buried",
+        "front:buried-fill",
     ),
     "refuses_a_near_field_below_gd": (
         HEAD

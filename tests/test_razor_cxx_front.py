@@ -465,12 +465,12 @@ def test_the_core_declines_what_the_attributes_cannot_see():
         acc.razor_front_build(dict(kw, exact_kernel=True))["decline"] == "exact-kernel"
     )
     assert acc.razor_front_build(dict(kw, wire_radius=0.4))["decline"] is None
-    assert (
+    # A wire below a perfect ground raises Python's ValueError since
+    # momwire#1512 B1, in its words, rather than declining.
+    with pytest.raises(ValueError, match="runs below the ground plane"):
         acc.razor_front_build(
             dict(kw, wires=[[(0.0, 0.0, -1.0), (0.0, 0.0, -3.0)]], ground_z=0.0)
-        )["decline"]
-        == "below-plane"
-    )
+        )
     # A duplicated wire is served since momwire#1512 step 4: the front drops
     # the copy (`drop_duplicated_wires`) as Python does.
     assert (
