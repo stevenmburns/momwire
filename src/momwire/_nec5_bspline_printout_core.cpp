@@ -7,8 +7,6 @@
 #pragma fp_contract(off)
 #endif
 
-#include "_bspline_fill_core.h"
-
 #include <algorithm>
 #include <cstdint>
 #include <stdexcept>
@@ -64,8 +62,10 @@ Solved BSplinePrintoutEngine::solve(const Prepared &p, const NumpyLinalg &np) {
         Z = bspline::compute_Z_chunked(fr.geom, fr.basis, fr.radii, fp, fr.omega, BSPLINE_EPS, BSPLINE_MU, 256.0);
     }
     const bspline::PortSolve ps =
-        bspline::solve_ports(Z, fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl, lapack_, np);
-    if (ps.info != 0) throw PrintoutRaise{"LinAlgError", "singular matrix"};
+        bspline::solve_ports(Z, fr.basis.n_basis, fr.B, fr.n_ports, fr.basis.kcl_A, fr.basis.n_kcl, lapack_, np,
+                             &sym_);
+    // A singular system: SciPy warns or raises in its own words, per solver
+    if (ps.info != 0) throw PrintoutDecline{"bspline: a singular system"};
     Solved s;
     s.n_basis = fr.basis.n_basis;
     s.n_ports = fr.n_ports;
@@ -161,9 +161,10 @@ double BSplinePrintoutEngine::solver_omega(const Prepared &p) const { return fro
 double BSplinePrintoutEngine::eps0() const { return BSPLINE_EPS; }
 
 PrintoutResult bspline_printout(const std::string &latin1_text, const std::string &basis,
-                                const EngineStamp &stamp, const razor::Lapack &lapack, const NumpyLinalg &np,
+                                const EngineStamp &stamp, const razor::Lapack &lapack,
+                                const bspline::SymLapack &sym, const NumpyLinalg &np,
                                 std::vector<RunArrays> *arrays, bool open_end) {
-    BSplinePrintoutEngine engine(lapack);
+    BSplinePrintoutEngine engine(lapack, sym);
     return printout(latin1_text, basis, stamp, engine, np, arrays, open_end);
 }
 

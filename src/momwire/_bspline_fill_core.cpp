@@ -567,7 +567,7 @@ std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, c
 
 PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
-                      const razor::Lapack &lp, const nec5::NumpyLinalg &np) {
+                      const razor::Lapack &lp, const nec5::NumpyLinalg &np, const SymLapack *sym) {
     using nec5::Op;
     PortSolve out;
     const size_t nb = static_cast<size_t>(n_b), np_ = static_cast<size_t>(n_p), nc = static_cast<size_t>(n_c);
@@ -622,26 +622,50 @@ PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vec
     } else {
         // general: no exact zero triangle, no exact symmetry (else scipy
         // detects a structure and takes another factorization)
-        bool lower0 = true, upper0 = true, sym = true, herm = true;
+        bool lower0 = true, upper0 = true, is_sym = true, herm = true;
         for (size_t i = 0; i < nc; i++)
             for (size_t j = 0; j < nc; j++) {
                 const cdouble a = AX[i * nc + j], at = AX[j * nc + i];
                 if (i > j && a != cdouble(0.0, 0.0)) lower0 = false;
                 if (i < j && a != cdouble(0.0, 0.0)) upper0 = false;
-                if (a != at) sym = false;
+                if (a != at) is_sym = false;
                 if (a != std::conj(at)) herm = false;
             }
-        if (lower0 || upper0 || sym || herm) throw FrontNotPorted("a structured KCL system");
+        // a triangular / diagonal / Hermitian system takes another of
+        // scipy's solvers: not ported
+        if (lower0 || upper0 || herm || (is_sym && (sym == nullptr || sym->sytrf == nullptr)))
+            throw FrontNotPorted("a structured KCL system");
         std::vector<cdouble> af(nc * nc), bf(nc * np_);
         for (size_t i = 0; i < nc; i++) {
             for (size_t j = 0; j < nc; j++) af[j * nc + i] = AX[i * nc + j];
             for (size_t j = 0; j < np_; j++) bf[j * nc + i] = AW[i * np_ + j];
         }
-        razor::SolveContext small;
-        small.set_z(af.data(), static_cast<ptrdiff_t>(n_c));
-        if (small.lu_solve(lp, bf.data(), static_cast<int>(n_p)) != 0) {
-            out.info = 1;
-            return out;
+        if (is_sym) {
+            // `assume_a="sym"`: zsytrf (upper, the optimal workspace) + zsytrs
+            char uplo = 'U';
+            int n = static_cast<int>(n_c), lda = n, info = 0, lwork = -1, nrhs = static_cast<int>(n_p);
+            std::vector<int> ipiv(nc);
+            cdouble wq(0.0, 0.0);
+            sym->sytrf(&uplo, &n, af.data(), &lda, ipiv.data(), &wq, &lwork, &info);
+            lwork = std::max(1, static_cast<int>(wq.real()));
+            std::vector<cdouble> work(static_cast<size_t>(lwork));
+            sym->sytrf(&uplo, &n, af.data(), &lda, ipiv.data(), work.data(), &lwork, &info);
+            if (info != 0) {
+                out.info = 1;
+                return out;
+            }
+            sym->sytrs(&uplo, &n, &nrhs, af.data(), &lda, ipiv.data(), bf.data(), &n, &info);
+            if (info != 0) {
+                out.info = 1;
+                return out;
+            }
+        } else {
+            razor::SolveContext small;
+            small.set_z(af.data(), static_cast<ptrdiff_t>(n_c));
+            if (small.lu_solve(lp, bf.data(), static_cast<int>(n_p)) != 0) {
+                out.info = 1;
+                return out;
+            }
         }
         for (size_t i = 0; i < nc; i++)
             for (size_t j = 0; j < np_; j++) Lam[i * np_ + j] = bf[j * nc + i];

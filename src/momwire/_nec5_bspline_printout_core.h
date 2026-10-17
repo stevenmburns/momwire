@@ -14,11 +14,12 @@
 //     and `wire_loss_power` (0: a loaded deck declines in the seam).
 //
 //     mw::nec5::PrintoutResult r = mw::nec5::bspline_printout(
-//         latin1_text, "bspline", stamp, lapack, numpy);
+//         latin1_text, "bspline", stamp, lapack, sym_lapack, numpy);
 //
 // `numpy.dsyrk` must be set (the assembler's `tangents @ tangents.T`).
 #pragma once
 
+#include "_bspline_fill_core.h"
 #include "_nec5_bspline_seam_core.h"
 #include "_nec5_printout_core.h"
 #include "_razor_solve_core.h"
@@ -32,7 +33,8 @@ namespace nec5 {
 
 class BSplinePrintoutEngine final : public PrintoutEngine {
   public:
-    explicit BSplinePrintoutEngine(const razor::Lapack &lapack) : lapack_(lapack) {}
+    BSplinePrintoutEngine(const razor::Lapack &lapack, const bspline::SymLapack &sym)
+        : lapack_(lapack), sym_(sym) {}
     const SeamEngine &seam() const override { return seam_; }
     Solved solve(const Prepared &p, const NumpyLinalg &np) override;
     void release(Prepared &p) override;
@@ -52,11 +54,13 @@ class BSplinePrintoutEngine final : public PrintoutEngine {
   private:
     BSplineSeamEngine seam_;
     const razor::Lapack &lapack_;
+    const bspline::SymLapack &sym_;
 };
 
 PrintoutResult bspline_printout(const std::string &latin1_text, const std::string &basis,
                                 const EngineStamp &stamp, const razor::Lapack &lapack,
-                                const NumpyLinalg &np, std::vector<RunArrays> *arrays = nullptr,
+                                const bspline::SymLapack &sym, const NumpyLinalg &np,
+                                std::vector<RunArrays> *arrays = nullptr,
                                 bool open_end = false);
 
 }  // namespace nec5

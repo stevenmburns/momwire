@@ -20,7 +20,7 @@
 
 namespace {
 
-void *sym(void *lib, const std::vector<std::string> &names) {
+void *sym_of(void *lib, const std::vector<std::string> &names) {
     for (const std::string &n : names) {
         void *p = dlsym(lib, n.c_str());
         if (p != nullptr) return p;
@@ -82,20 +82,23 @@ int main(int argc, char **argv) {
     void *scipy_lib = open_lib(argv[1]);
     void *numpy_lib = open_lib(argv[2]);
     mw::razor::Lapack lp;
-    lp.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(sym(scipy_lib, {"scipy_zgetrf_", "zgetrf_"}));
-    lp.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(sym(scipy_lib, {"scipy_zgetrs_", "zgetrs_"}));
+    lp.getrf = reinterpret_cast<mw::razor::zgetrf_fn>(sym_of(scipy_lib, {"scipy_zgetrf_", "zgetrf_"}));
+    lp.getrs = reinterpret_cast<mw::razor::zgetrs_fn>(sym_of(scipy_lib, {"scipy_zgetrs_", "zgetrs_"}));
+    mw::bspline::SymLapack sym;
+    sym.sytrf = reinterpret_cast<mw::bspline::zsytrf_fn>(sym_of(scipy_lib, {"scipy_zsytrf_", "zsytrf_"}));
+    sym.sytrs = reinterpret_cast<mw::bspline::zsytrs_fn>(sym_of(scipy_lib, {"scipy_zsytrs_", "zsytrs_"}));
     mw::nec5::NumpyLinalg np;
     np.dsyrk = reinterpret_cast<mw::nec5::cblas_dsyrk_fn>(
-        sym(numpy_lib, {"scipy_cblas_dsyrk64_", "cblas_dsyrk64_"}));
+        sym_of(numpy_lib, {"scipy_cblas_dsyrk64_", "cblas_dsyrk64_"}));
     np.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(
-        sym(numpy_lib, {"scipy_cblas_zgemm64_", "cblas_zgemm64_"}));
+        sym_of(numpy_lib, {"scipy_cblas_zgemm64_", "cblas_zgemm64_"}));
     np.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(
-        sym(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
+        sym_of(numpy_lib, {"scipy_cblas_zgemv64_", "cblas_zgemv64_"}));
     np.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(
-        sym(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
-    np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
+        sym_of(numpy_lib, {"scipy_cblas_zdotu_sub64_", "cblas_zdotu_sub64_"}));
+    np.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(sym_of(numpy_lib, {"scipy_zgesv_64_", "zgesv_64_"}));
     // the network solve's expert driver: SciPy's (`networks.MNASystem.solve`)
-    np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(sym(scipy_lib, {"scipy_zgesvx_", "zgesvx_"}));
+    np.zgesvx = reinterpret_cast<mw::nec5::zgesvx_fn>(sym_of(scipy_lib, {"scipy_zgesvx_", "zgesvx_"}));
     const std::string basis = argv[3];
     mw::nec5::EngineStamp stamp;
     stamp.version = argv[4];
@@ -110,7 +113,7 @@ int main(int argc, char **argv) {
         const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         std::vector<mw::nec5::RunArrays> arrays;
         const mw::nec5::PrintoutResult r =
-            mw::nec5::bspline_printout(text, basis, stamp, lp, np, dump ? &arrays : nullptr);
+            mw::nec5::bspline_printout(text, basis, stamp, lp, sym, np, dump ? &arrays : nullptr);
         const bool printed = r.route == mw::nec5::PrintoutResult::printed;
         std::printf("== %s\nroute %s\nseam %s\nraised %s\nreason %s\n", argv[i],
                     printed ? "printed" : "declined", seam[r.seam], r.raised_kind.c_str(),

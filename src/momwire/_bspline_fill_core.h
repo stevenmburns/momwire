@@ -71,9 +71,22 @@ struct PortSolve {
     std::vector<cdouble> X;
     std::vector<cdouble> Y;  // (n_p, n_p) C order
 };
+// SciPy's symmetric pair (`zsytrf` / `zsytrs`, LP64, the `cython_lapack`
+// signatures): what `scipy.linalg.solve` takes for an exactly symmetric
+// complex system (its structure detection), with the optimal workspace.
+using zsytrf_fn = void (*)(char *uplo, int *n, cdouble *a, int *lda, int *ipiv, cdouble *work, int *lwork,
+                           int *info);
+using zsytrs_fn = void (*)(char *uplo, int *n, int *nrhs, cdouble *a, int *lda, int *ipiv, cdouble *b,
+                           int *ldb, int *info);
+struct SymLapack {
+    zsytrf_fn sytrf = nullptr;
+    zsytrs_fn sytrs = nullptr;
+};
+
 PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
-                      const razor::Lapack &lp, const nec5::NumpyLinalg &np);
+                      const razor::Lapack &lp, const nec5::NumpyLinalg &np,
+                      const SymLapack *sym = nullptr);
 
 // One SOLVED wire's current (or slope) at arcs `s` (clipped to its knots):
 // `_wire_span_polynomials` + `_eval_span_polynomials`.

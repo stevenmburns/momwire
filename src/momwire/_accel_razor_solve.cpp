@@ -41,6 +41,18 @@ void *capsule_pointer(const py::dict &capi, const char *name) {
     return fn;
 }
 
+// PROTOTYPE (momwire#1517 step 1): SciPy's symmetric pair, for bs2's KCL
+// Schur solve (`scipy.linalg.solve`'s structure detection).
+const mw::bspline::SymLapack &scipy_sym_lapack() {
+    static mw::bspline::SymLapack lp;
+    if (lp.sytrf == nullptr) {
+        py::dict capi = py::module_::import("scipy.linalg.cython_lapack").attr("__pyx_capi__");
+        lp.sytrf = reinterpret_cast<mw::bspline::zsytrf_fn>(capsule_pointer(capi, "zsytrf"));
+        lp.sytrs = reinterpret_cast<mw::bspline::zsytrs_fn>(capsule_pointer(capi, "zsytrs"));
+    }
+    return lp;
+}
+
 const mw::razor::Lapack &scipy_lapack() {
     static mw::razor::Lapack lp;
     if (lp.getrf == nullptr) {
@@ -1111,7 +1123,7 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                         npl.zgesv = reinterpret_cast<mw::nec5::zgesv_fn>(blas[3]);
                         const int64_t n_p = static_cast<int64_t>(wa.feeds.size() + wa.node_gaps.size());
                         const mw::bspline::PortSolve ps = mw::bspline::solve_ports(
-                            Z, bs.n_basis, B, n_p, bs.kcl_A, bs.n_kcl, scipy_lapack(), npl);
+                            Z, bs.n_basis, B, n_p, bs.kcl_A, bs.n_kcl, scipy_lapack(), npl, &scipy_sym_lapack());
                         entry["solve_info"] = ps.info;
                         if (ps.info == 0) {
                             py::array_t<cd> Xa({nb, static_cast<ptrdiff_t>(n_p)});
