@@ -195,10 +195,29 @@ def python_mesh(prepared):
     }
 
 
-def compare(text, acc, fc):
-    """One deck: ``(row, mismatches)``."""
+# Windows needs no bit-compatibility (momwire's rule): MSVC builds /fp:fast,
+# so the core and the extension -- the same text in different translation
+# units -- may round a Sommerfeld fill differently there. On win32 a solution
+# is the same within the derived lane tolerance (tests/_lane_gate.py,
+# LANE_RTOL_WIN32, momwire#1371); everywhere else, bit for bit.
+_WIN32_RTOL = 1e-11
+
+
+def _same_solution(a, b) -> bool:
     import numpy as np
 
+    a = np.ascontiguousarray(a)
+    b = np.ascontiguousarray(b)
+    if sys.platform != "win32":
+        return a.tobytes() == b.tobytes()
+    if a.shape != b.shape:
+        return False
+    scale = float(np.max(np.abs(b))) if b.size else 0.0
+    return bool(np.max(np.abs(a - b), initial=0.0) <= _WIN32_RTOL * scale)
+
+
+def compare(text, acc, fc):
+    """One deck: ``(row, mismatches)``."""
     py = python_seam(text)
     cx = acc.nec5_razor_seam(text.encode("latin-1"), solve=True)
     row = {"route": cx["route"]}
@@ -237,15 +256,9 @@ def compare(text, acc, fc):
         cmesh["phantom_tags"] = sorted(cmesh["phantom_tags"])
         d += fc.differences(mesh, cmesh, f"prepared[{k}].mesh")
         if "X" in p:
-            x_same = (
-                np.ascontiguousarray(p["X"]).tobytes()
-                == np.ascontiguousarray(c["X"]).tobytes()
-            )
             y = c["cols"].T @ c["X"]
-            y_same = (
-                np.ascontiguousarray(p["Y"]).tobytes()
-                == np.ascontiguousarray(y).tobytes()
-            )
+            x_same = _same_solution(p["X"], c["X"])
+            y_same = _same_solution(p["Y"], y)
             if not x_same:
                 d.append(f"prepared[{k}]: X differs")
             if not y_same:
