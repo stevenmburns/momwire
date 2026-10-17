@@ -37,6 +37,8 @@ on:
       - "scripts/core_split/printout_compare.py"
       - "scripts/core_split/stream_compare.py"
       - "scripts/core_split/nx_decks/**"
+      - "scripts/core_split/nec5_bspline_printout_driver.cpp"
+      - "scripts/core_split/bspline_chunked_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -53,6 +55,8 @@ on:
       - "scripts/core_split/printout_compare.py"
       - "scripts/core_split/stream_compare.py"
       - "scripts/core_split/nx_decks/**"
+      - "scripts/core_split/nec5_bspline_printout_driver.cpp"
+      - "scripts/core_split/bspline_chunked_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -236,6 +240,20 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
           MOMWIRE_BELOW_ANCHORS: "off"
+      # bs2 (momwire#1517 step 1): the no-Python driver built from the core
+      # TUs with the loaded variant's flags, every fixture deck and the two
+      # chunked-fill decks against `_shell.render(text, basis="bspline")`,
+      # printouts and each run's arrays, byte for byte.
+      - name: bspline printouts, C++ alone vs python (avx2 and sse2)
+        run: |
+          python scripts/core_split/printout_compare.py exe-linux-bspline-avx2.jsonl \
+            --basis bspline --arrays tests/fixtures scripts/core_split/bspline_chunked_decks
+          MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/printout_compare.py \
+            exe-linux-bspline-sse2.jsonl --basis bspline --arrays \
+            tests/fixtures scripts/core_split/bspline_chunked_decks
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
       - name: upload the comparison
         if: always()
         uses: actions/upload-artifact@v7

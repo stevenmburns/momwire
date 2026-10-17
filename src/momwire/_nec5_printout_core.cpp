@@ -1978,7 +1978,9 @@ RunDataC finish(const Deck &deck, const Prepared &p, const Solved &s, const Nump
     const int64_t nc = p.mesh.n_columns(), ns = static_cast<int64_t>(p.mesh.sites.size());
     const std::vector<cd> tc = transform_c(p);
     const std::vector<cd> w = mv(np, Op{tc.data(), nc, ns, ns, 1}, st.v_gap);
-    const std::vector<cd> coeffs = mv(np, Op{s.x.data(), s.n_basis, s.n_ports, 1, s.n_basis}, w);
+    const Op x = s.x_c_order ? Op{s.x.data(), s.n_basis, s.n_ports, s.n_ports, 1}
+                             : Op{s.x.data(), s.n_basis, s.n_ports, 1, s.n_basis};
+    const std::vector<cd> coeffs = mv(np, x, w);
     if (arrays != nullptr)
         arrays->push_back(RunArrays{s.y.v, coeffs, st.v_applied, st.v_gap, st.i_port, st.i_source});
 
