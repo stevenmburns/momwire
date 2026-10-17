@@ -106,6 +106,7 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_nec5_deck_core.cpp
   ${MW_SRC}/_nec5_seam_core.cpp
   ${MW_SRC}/_nec5_razor_seam_core.cpp
+  ${MW_SRC}/_nec5_printout_core.cpp
   ${MW_SRC}/_nec5_razor_printout_core.cpp
   ${MW_SRC}/_razor_wire_loading_core.cpp
   # The composing Sommerfeld ground (momwire#1479 S3): the six-integral

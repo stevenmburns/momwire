@@ -68,6 +68,7 @@ CORE_SOURCES = (
     "_nec5_razor_seam_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, linked into `nec5_razor_printout_driver.cpp`.
+    "_nec5_printout_core.cpp",
     "_nec5_razor_printout_core.cpp",
     # Wire loading (LD 5 / 2 / 3): the vendored xsf's Bessel ratio.
     "_razor_wire_loading_core.cpp",
