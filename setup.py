@@ -383,6 +383,8 @@ _ACCEL_HEADERS = [
     # B4a), shared with `_near_interface_accel`.
     "src/momwire/_near_interface_columns_inline.h",
     "src/momwire/_razor_crossing_core.h",
+    # The crossing fill's shared pieces, razor's and bs2's (momwire#1517 step 4).
+    "src/momwire/_crossing_shared_inline.h",
     "src/momwire/_razor_wire_loading_core.h",
     # The exact ring kernel's point moments, Python-free (momwire#1479): the
     # text `_accel_exact_kernel_point.cpp` and its core twin both compile,
@@ -408,6 +410,7 @@ _ACCEL_HEADERS = [
     "src/momwire/_nec5_bspline_seam_core.h",
     "src/momwire/_bspline_front_core.h",
     "src/momwire/_bspline_fill_core.h",
+    "src/momwire/_bspline_crossing_core.h",
     "src/momwire/_nec5_bspline_printout_core.h",
     "src/momwire/_nec5_printout_core.h",
     "src/momwire/_nec5_razor_printout_core.h",
@@ -565,6 +568,7 @@ _ACCEL_SOURCES = [
     "src/momwire/_nec5_bspline_seam_core.cpp",
     "src/momwire/_bspline_front_core.cpp",
     "src/momwire/_bspline_fill_core.cpp",
+    "src/momwire/_bspline_crossing_core.cpp",
     "src/momwire/_nec5_bspline_printout_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, Python-free, for any basis (`_nec5_printout_core.cpp`),

@@ -4,6 +4,7 @@
 #include "_nec5_bspline_seam_core.h"
 #include "_bspline_front_core.h"
 #include "_bspline_fill_core.h"
+#include "_bspline_crossing_core.h"
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
@@ -1053,7 +1054,8 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
             std::vector<double> radii = wa.radius;
             if (!wa.radius_per_wire) radii.assign(wa.polylines.size(), wa.radius[0]);
             const mw::bspline::Basis bs = mw::bspline::build_basis(
-                g, wa.polylines, wa.junctions, radii, in.has_ground, in.ground_z, 2);
+                g, wa.polylines, wa.junctions, radii, in.has_ground, in.ground_z, 2,
+                in.has_ground && in.ground_eps_given);
             const ptrdiff_t nb = static_cast<ptrdiff_t>(bs.n_basis), W = 3;
             py::array_t<int64_t> ss({nb, W});
             std::copy(bs.supp_seg.begin(), bs.supp_seg.end(), ss.mutable_data());
@@ -1219,7 +1221,7 @@ py::list bspline_somm_pairs(py::bytes latin1, std::vector<uintptr_t> blas) {
 // TEST HOOK (momwire#1517 step 4): per preparation, the buried fill's Z
 // before the crossing serve and the loading -- (n_basis, n_basis), or the
 // reason it stopped.
-py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas) {
+py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas, bool cross) {
     const std::string text = latin1;
     const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text, false, true);
     // the below/below table filled in C++, as the executable fills it
@@ -1229,11 +1231,17 @@ py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas) {
     somm_below::set_source(somm_below::fill_source());
     py::list out;
     mw::nec5::NumpyLinalg npl;
-    if (blas.size() == 3) {
+    if (blas.size() >= 3) {
         npl.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(blas[0]);
         npl.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[1]);
         npl.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[2]);
     }
+    if (blas.size() >= 6) {
+        npl.zgemm = reinterpret_cast<mw::nec5::cblas_zgemm_fn>(blas[3]);
+        npl.zgemv = reinterpret_cast<mw::nec5::cblas_zgemv_fn>(blas[4]);
+        npl.zdotu_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[5]);
+    }
+    if (blas.size() >= 7) npl.zdotc_sub = reinterpret_cast<mw::nec5::cblas_zdotu_sub_fn>(blas[6]);
     for (const auto &p : r.prepared) {
         py::dict d;
         const auto &part = mw::nec5::bspline_part(p);
@@ -1251,12 +1259,18 @@ py::list bspline_buried_stages(py::bytes latin1, std::vector<uintptr_t> blas) {
         fp.extended_kernel = fr.extended_kernel;
         try {
             py::gil_scoped_release release;
+            mw::bspline::CrossingStages st;
             const std::vector<std::complex<double>> Z =
                 mw::bspline::fill_buried(fr.geom, fr.basis, fr.radii, fp, fr.omega, mw::nec5::BSPLINE_EPS,
                                          mw::nec5::BSPLINE_MU, fr.ground_z, fr.ground_eps_r, fr.ground_sigma, 3, 256,
-                                         npl, true);
+                                         npl, !cross, &st);
             py::gil_scoped_acquire acquire;
             d["Z"] = Z;
+            if (cross) {
+                d["t_main"] = st.t_main;
+                d["t_ab"] = st.t_ab;
+                d["completions"] = st.completions;
+            }
             d["n_basis"] = fr.basis.n_basis;
         } catch (const mw::bspline::FrontNotPorted &e) {
             d["stopped"] = std::string(e.what());
@@ -1328,7 +1342,7 @@ void register_razor_solve(py::module_ &m) {
           "TEST HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
     m.def("bspline_buried_stages", &bspline_buried_stages, py::arg("latin1"),
-          py::arg("blas") = std::vector<uintptr_t>(),
+          py::arg("blas") = std::vector<uintptr_t>(), py::arg("cross") = false,
           "TEST HOOK (momwire#1517 step 4): the buried fill's Z before the crossing serve and the loading.");
     m.def("bspline_somm_pairs", &bspline_somm_pairs, py::arg("latin1"), py::arg("blas") = std::vector<uintptr_t>(),
           "TEST HOOK (momwire#1517 step 3c): the raised remainder pairs and their moments.");

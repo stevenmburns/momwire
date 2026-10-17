@@ -362,9 +362,9 @@ std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polyline
                 if (pl[3 * i + 2] >= gz - t) ok = false;
             if (ts && !exempt.count({static_cast<int64_t>(w), true})) ok = false;
             if (te && !exempt.count({static_cast<int64_t>(w), false})) ok = false;
-            if (!ok) throw FrontNotPorted("buried-refusal");  // `crossing_refusal`
+            if (!ok) throw FrontNotPorted("buried-refusal-crossing");  // `crossing_refusal`
         }
-        if (!lower_medium) throw FrontNotPorted("buried-refusal");  // `buried_no_medium_refusal`
+        if (!lower_medium) throw FrontNotPorted("buried-refusal-medium");  // `buried_no_medium_refusal`
         below[w] = 1;
     }
     // `_ground_spec.contact_ends`, less the exempted
@@ -375,7 +375,7 @@ std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polyline
         if (std::fabs(pl[2] - gz) <= tol[w]) contacts.push_back({static_cast<int64_t>(w), true});
     }
     for (const auto &c : contacts)
-        if (!exempt.count(c)) throw FrontNotPorted("buried-refusal");  // `contact_with_buried_refusal`
+        if (!exempt.count(c)) throw FrontNotPorted("buried-refusal-contact");  // `contact_with_buried_refusal`
     // `crossing_junctions`: the grounded junctions joining the two media,
     // and the contacts they earn
     std::set<std::pair<int64_t, bool>> earned;
@@ -390,7 +390,7 @@ std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polyline
         }
     }
     for (const auto &c : contacts)
-        if (!earned.count(c)) throw FrontNotPorted("buried-refusal");
+        if (!earned.count(c)) throw FrontNotPorted("buried-refusal-unearned");
     return below;
 }
 

@@ -143,6 +143,8 @@ struct NumpyLinalg {
     cblas_zgemm_fn zgemm = nullptr;
     cblas_zgemv_fn zgemv = nullptr;
     cblas_zdotu_sub_fn zdotu_sub = nullptr;
+    // `np.vdot` (bs2's crossing ACA, momwire#1517 step 4): the same signature
+    cblas_zdotu_sub_fn zdotc_sub = nullptr;
     zgesv_fn zgesv = nullptr;
     // When `host.zgemm` is set, the Python run path runs with this table
     // published, and so does this: every product is `_lapack.matmul`'s ONE
