@@ -1,5 +1,6 @@
 """momwire-razor2p (standalone/, unit 4) against `momwire-nec5-razor-2p`, deck
-by deck, whole printout file against whole printout file.
+by deck, whole printout file against whole printout file; with `--basis
+bspline`, the bs2 executable against `momwire-nec5-bspline` (momwire#1517).
 
     OPENBLAS_NUM_THREADS=T OMP_NUM_THREADS=T \\
     python scripts/core_split/exe_compare.py OUT.jsonl --exe EXE [--launcher L] \\
@@ -141,6 +142,9 @@ def main(argv=None):
     exe = _arg(args, "--exe")
     launcher = _arg(args, "--launcher")
     workers = int(_arg(args, "--workers", "4"))
+    # `--basis bspline` (momwire#1517 Phase A): the bs2 executable, against
+    # `momwire-nec5-bspline` (pass it as --launcher) and bs2's python route
+    basis = _arg(args, "--basis", pc.BASIS)
     standalone = "--standalone" in args
     if standalone:
         args.remove("--standalone")
@@ -184,7 +188,9 @@ def main(argv=None):
         refusals = Counter()
         with open(out_path, "w") as out:
             for deck, fut in zip(decks, futures, strict=True):
-                python = pc.python_printout(deck.read_bytes().decode("latin-1"))
+                python = pc.python_printout(
+                    deck.read_bytes().decode("latin-1"), basis=basis
+                )
                 a = fut.result()
                 rec = {"deck": str(deck), "route": a["route"]}
                 routes[a["route"]] += 1

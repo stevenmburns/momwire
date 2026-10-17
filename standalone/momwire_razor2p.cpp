@@ -97,7 +97,15 @@ extern "C" void omp_set_num_threads(int);
 
 namespace {
 
-const char *const BASIS = "razor-2p";
+// The formulation this executable answers for, as the printout's stamp
+// names it (CMakeLists.txt's MW_EXE_BASIS), and the program's own name.
+#ifndef MW_EXE_BASIS_NAME
+#define MW_EXE_BASIS_NAME "razor-2p"
+#endif
+#ifndef MW_EXE_PROGRAM
+#define MW_EXE_PROGRAM "momwire-razor2p"
+#endif
+const char *const BASIS = MW_EXE_BASIS_NAME;
 const char *const VERSION = MW_VERSION;
 // The C++ core's variant, as the printout's stamp names it (CMakeLists.txt).
 #ifndef MW_EXE_VARIANT
@@ -393,7 +401,7 @@ std::string py_str(const std::string &s) {
 }
 
 [[noreturn]] void die(const std::string &what) {
-    std::fprintf(stderr, "momwire-razor2p: %s\n", what.c_str());
+    std::fprintf(stderr, MW_EXE_PROGRAM ": %s\n", what.c_str());
     std::exit(3);
 }
 

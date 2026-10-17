@@ -1,5 +1,7 @@
 # momwire-razor2p: `momwire-nec5-razor-2p` as one native executable
-# (momwire_razor2p.cpp's header says what it does).
+# (momwire_razor2p.cpp's header says what it does). -DMW_EXE_BASIS=bs2 with
+# MW_EXE_NO_PYTHON builds `momwire-bs2-standalone`, `momwire-nec5-bspline`'s
+# twin, from the same cores (momwire#1517).
 #
 #   cmake -S standalone -B build-exe -G Ninja \
 #         -DMW_OPENBLAS_LIB=/path/to/libmwxp.a \
@@ -31,6 +33,21 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 option(MW_EXE_NO_PYTHON "build momwire-razor2p-standalone, with no Python in it" OFF)
+# Which formulation the executable answers for (momwire#1517 Phase A): razor2p
+# (`momwire-nec5-razor-2p`, route.cpp) or bs2 (`momwire-nec5-bspline`,
+# route_bs2.cpp, no-Python builds only). Both from the same cores.
+set(MW_EXE_BASIS "razor2p" CACHE STRING "formulation: razor2p or bs2")
+set_property(CACHE MW_EXE_BASIS PROPERTY STRINGS razor2p bs2)
+if(MW_EXE_BASIS STREQUAL "bs2")
+  if(NOT MW_EXE_NO_PYTHON)
+    message(FATAL_ERROR "MW_EXE_BASIS=bs2 builds the no-Python executable only (MW_EXE_NO_PYTHON=ON)")
+  endif()
+  set(MW_ROUTE route_bs2.cpp)
+elseif(MW_EXE_BASIS STREQUAL "razor2p")
+  set(MW_ROUTE route.cpp)
+else()
+  message(FATAL_ERROR "MW_EXE_BASIS must be razor2p or bs2")
+endif()
 # Which of the extension's two x86-64 variants the C++ core is compiled as
 # (setup.py `_VARIANTS`): avx2 (-mavx2 -mfma), or sse2, the x86-64 baseline
 # the extension's `_sse2` modules are (its flags minus the AVX2 ones). The
@@ -122,6 +139,19 @@ set(MW_CORE_SOURCES
   ${MW_SRC}/_razor_crossing_core.cpp
   ${MW_SRC}/_somm_field_core.cpp
 )
+if(MW_EXE_BASIS STREQUAL "bs2")
+  # bs2 (momwire#1517): the B-spline kernels, the front half, the fill (its
+  # exact kernel and Sommerfeld remainder), the NEC-5 seam and run half
+  list(APPEND MW_CORE_SOURCES
+    ${MW_SRC}/_bspline_core.cpp
+    ${MW_SRC}/_exact_kernel_coaxial_core.cpp
+    ${MW_SRC}/_somm_remainder_core.cpp
+    ${MW_SRC}/_somm_pairs_core.cpp
+    ${MW_SRC}/_bspline_front_core.cpp
+    ${MW_SRC}/_bspline_fill_core.cpp
+    ${MW_SRC}/_nec5_bspline_seam_core.cpp
+    ${MW_SRC}/_nec5_bspline_printout_core.cpp)
+endif()
 # Two copies: `mw_core` (+ route.cpp) with OpenMP, the threaded fill; and
 # `mw_core_serial`, the same sources with `mw` renamed `mws` and no OpenMP
 # runtime at all (`omp simd` stays: -fopenmp-simd / MSVC's simd no-ops), so a
@@ -142,21 +172,35 @@ else()
   endif()
   set(MW_OMP_FLAG -fopenmp)
 endif()
-add_library(mw_core OBJECT ${MW_CORE_SOURCES} route.cpp)
+add_library(mw_core OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
 target_include_directories(mw_core PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core PRIVATE ${MW_CORE_FLAGS} ${MW_OMP_FLAG})
 target_compile_definitions(mw_core PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX})
-add_library(mw_core_serial OBJECT ${MW_CORE_SOURCES} route.cpp)
+add_library(mw_core_serial OBJECT ${MW_CORE_SOURCES} ${MW_ROUTE})
 target_include_directories(mw_core_serial PUBLIC ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR} ${MW_ROOT}/extern/xsf/include)
 target_compile_options(mw_core_serial PRIVATE ${MW_CORE_FLAGS})
 target_compile_definitions(mw_core_serial PRIVATE NDEBUG MW_BLAS_PREFIX=${MW_BLAS_PREFIX} mw=mws
   xsf=mws_xsf  # the vendored xsf defines non-inline functions: one copy each
   razor_cplx_brackets=mws_razor_cplx_brackets  # the one free function
   somm_core=mws_somm_core  # the Sommerfeld cores' namespace
-  somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval)  # the buried fill's cores (momwire#1512)
+  somm_below=mws_somm_below ni_core=mws_ni_core ni_eval=mws_ni_eval  # the buried fill's cores (momwire#1512)
+  offedge_lanes=mws_offedge_lanes somm_sym=mws_somm_sym)  # bs2's (momwire#1517)
 
 # main(): no AVX2 here -- it is what asks the CPU before any AVX2 code runs.
-if(MW_EXE_NO_PYTHON)
+if(MW_EXE_NO_PYTHON AND MW_EXE_BASIS STREQUAL "bs2")
+  set(MW_EXE momwire-bs2-standalone)
+  add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
+                 $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)
+  target_include_directories(${MW_EXE} PRIVATE ${MW_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_definitions(${MW_EXE} PRIVATE
+    NDEBUG
+    MW_EXE_NO_PYTHON=1
+    MW_EXE_VARIANT="${MW_EXE_VARIANT}"
+    MW_EXE_BASIS_NAME="bspline"
+    MW_EXE_PROGRAM="momwire-bs2"
+    MW_BLAS_PREFIX=${MW_BLAS_PREFIX}
+    MW_VERSION="${MW_VERSION}")
+elseif(MW_EXE_NO_PYTHON)
   set(MW_EXE momwire-razor2p-standalone)
   add_executable(${MW_EXE} momwire_razor2p.cpp launcher.cpp
                  $<TARGET_OBJECTS:mw_core> $<TARGET_OBJECTS:mw_core_serial>)

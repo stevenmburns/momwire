@@ -18,5 +18,13 @@ Needs: 64-bit x86 Linux with glibc 2.28 or newer (2018 onwards: RHEL/Alma 8,
 Debian 10, Ubuntu 18.10 and later). Everything else is built in.
 
 What it does not serve yet is refused in the printout, by name ("not served
-by this build: ..."); the Python command serves those decks. Only the
-razor-2p formulation is in this program; the other bases stay Python.
+by this build: ..."); the Python command serves those decks.
+
+momwire-nec5-bs2-linux is the same kind of program for momwire's default
+B-spline formulation (bs2): it answers a deck as the Python command
+`momwire-nec5-bspline` does, byte for byte, and takes the same three forms
+and the same picking (momwire-nec5-bs2-linux-avx2 / -sse2 beside it). It
+serves free space, wire loading, networks, the extended kernel, wires above
+a perfect or Sommerfeld ground and a structure wholly below a Sommerfeld
+ground; a deck with wires on both sides of the ground is refused by name
+for now.
