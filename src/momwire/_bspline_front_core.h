@@ -96,5 +96,30 @@ WireDedup drop_duplicated_wires(WireArgs &args);
 Geometry build_geometry(const std::vector<std::vector<double>> &polylines,
                         const std::vector<std::vector<int64_t>> &n_per_edge);
 
+// `_build_basis_polynomials` (with `_wire_endpoint_status` and
+// `_kcl_row_junctions`): per kept basis its (d+1) wing segments and their
+// polynomial coefficients, the KCL rows, and each wire's knots.
+struct Basis {
+    int degree = 2;
+    int64_t n_basis = 0;
+    std::vector<int64_t> supp_seg;  // (n_basis, d+1), 0 past a truncated wing
+    std::vector<double> polys;      // (n_basis, d+1, d+1)
+    int64_t n_kcl = 0;
+    std::vector<double> kcl_A;      // (n_kcl, n_basis)
+    std::vector<std::vector<double>> wire_knots;
+    // `_wire_endpoint_status`: per wire, "free" (-1), "ground" (-2) or the
+    // junction index, at the start and at the end
+    std::vector<int64_t> start_status, end_status;
+};
+
+// `ground_z` given or not; `radii` per wire (the conductor's, for the
+// stand-off floor). A buried or crossing deck (a wire in the lower medium)
+// and a wire below the stand-off floor throw FrontNotPorted; an edge lying in
+// the plane throws FrontValueError with Python's sentence.
+Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &polylines,
+                  const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
+                  const std::vector<double> &radii, bool has_ground, double ground_z,
+                  int degree = 2);
+
 }  // namespace bspline
 }  // namespace mw

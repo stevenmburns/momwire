@@ -8,6 +8,7 @@
 #endif
 
 #include <algorithm>
+#include <cstdint>
 #include <cmath>
 #include <map>
 #include <stdexcept>
@@ -272,6 +273,211 @@ Geometry build_geometry(const std::vector<std::vector<double>> &polylines,
     }
     g.n_segs_total = g.seg_offsets.back();
     return g;
+}
+
+namespace {
+
+// `_ground_spec.ground_touch_tol(polyline)`: 1e-6 of its length, each edge
+// `sqrt(add.reduce(d*d))`, the edges `add.reduce`d (pairwise past 8).
+double polyline_touch_tol(const std::vector<double> &pl) {
+    const size_t m = pl.size() / 3;
+    std::vector<double> len;
+    for (size_t e = 0; e + 1 < m; e++) {
+        double sq = 0.0;
+        for (int c = 0; c < 3; c++) {
+            const double dd = pl[3 * (e + 1) + c] - pl[3 * e + c];
+            sq += dd * dd;
+        }
+        len.push_back(std::sqrt(sq));
+    }
+    if (len.size() >= 8) throw FrontNotPorted("a polyline of 9 or more anchors");
+    double length = 0.0;
+    for (double l : len) length += l;
+    return 1e-6 * std::max(length, 1e-30);
+}
+
+// `np.searchsorted(t, x, side="right")`
+int64_t search_right(const std::vector<double> &t, double x) {
+    return static_cast<int64_t>(std::upper_bound(t.begin(), t.end(), x) - t.begin());
+}
+
+}  // namespace
+
+Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &polylines,
+                  const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
+                  const std::vector<double> &radii, bool has_ground, double ground_z,
+                  int degree) {
+    const int d = degree;
+    if (d < 1 || d > 3) throw FrontNotPorted("degree");
+    Basis b;
+    b.degree = d;
+    const size_t n_w = polylines.size();
+    const int64_t FREE = -1, GROUND = -2;
+    b.start_status.assign(n_w, FREE);
+    b.end_status.assign(n_w, FREE);
+    for (size_t j = 0; j < junctions.size(); j++)
+        for (const auto &m : junctions[j])
+            (m.second ? b.start_status : b.end_status)[static_cast<size_t>(m.first)] =
+                static_cast<int64_t>(j);
+    std::vector<bool> grounded_junction(junctions.size(), false);
+    if (has_ground) {
+        const double gz = ground_z;
+        for (size_t w = 0; w < n_w; w++) {
+            const std::vector<double> &pl = polylines[w];
+            const double tol = polyline_touch_tol(pl);
+            const size_t m = pl.size() / 3;
+            // a wire reaching below the plane: the lower medium's (buried,
+            // crossing), not ported here
+            for (size_t i = 0; i < m; i++)
+                if (pl[3 * i + 2] < gz - tol) throw FrontNotPorted("buried-wire");
+            std::vector<bool> z_at(m);
+            for (size_t i = 0; i < m; i++) z_at[i] = std::fabs(pl[3 * i + 2] - gz) <= tol;
+            for (size_t i = 0; i + 1 < m; i++)
+                if (z_at[i] && z_at[i + 1])
+                    throw FrontValueError("wire " + std::to_string(w) +
+                                          " has an edge lying in the ground plane (both endpoints "
+                                          "at ground_z) \xe2\x80\x94 degenerate over a conducting ground");
+            // the bare conductor's stand-off floor, 2a (momwire#865)
+            const double h_floor = 2.0 * radii[w];
+            std::vector<bool> low(m);
+            for (size_t i = 0; i < m; i++) {
+                const double h = pl[3 * i + 2] - gz;
+                low[i] = h > tol && h < h_floor;
+            }
+            for (size_t i = 0; i + 1 < m; i++)
+                if (low[i] && low[i + 1]) throw FrontNotPorted("low-stand-off");
+            if (b.start_status[w] == FREE && z_at[0]) b.start_status[w] = GROUND;
+            if (b.end_status[w] == FREE && z_at[m - 1]) b.end_status[w] = GROUND;
+        }
+        // `grounded_junctions`: the first member's end in the plane
+        for (size_t j = 0; j < junctions.size(); j++) {
+            const auto &m0 = junctions[j][0];
+            const std::vector<double> &pl = polylines[static_cast<size_t>(m0.first)];
+            const double z = m0.second ? pl[2] : pl[pl.size() - 1];
+            if (std::fabs(z - ground_z) <= polyline_touch_tol(pl)) grounded_junction[j] = true;
+        }
+    }
+
+    // `_V_UNIT_INV[d]`
+    static const double V1[4] = {1.0, 0.0, -1.0, 1.0};
+    static const double V2[9] = {1.0, 0.0, 0.0, -3.0, 4.0, -1.0, 2.0, -4.0, 2.0};
+    static const double V3[16] = {1.0, 0.0, 0.0, 0.0, -5.5, 9.0, -4.5, 1.0,
+                                  9.0, -22.5, 18.0, -4.5, -4.5, 13.5, -13.5, 4.5};
+    const double *V = d == 1 ? V1 : d == 2 ? V2 : V3;
+    const int W = d + 1;
+    std::vector<std::vector<std::pair<int64_t, double>>> junction_dirs(junctions.size());
+    int64_t m_global = 0;
+    for (size_t w = 0; w < g.per_wire.size(); w++) {
+        const WireGeometry &pw = g.per_wire[w];
+        const std::vector<double> &arc = pw.arc_at_knot;
+        const double wire_arc = arc.back();
+        std::vector<double> knots(static_cast<size_t>(d), 0.0);
+        knots.insert(knots.end(), arc.begin(), arc.end());
+        knots.insert(knots.end(), static_cast<size_t>(d), wire_arc);
+        b.wire_knots.push_back(knots);
+        const int64_t n_basis_w = static_cast<int64_t>(knots.size()) - d - 1;
+        struct Kept {
+            int64_t j;
+            int kind;  // 0 interior, 1 directional, 2 ground
+            int64_t junction;
+            bool start;
+        };
+        std::vector<Kept> kept;
+        if (b.start_status[w] == GROUND) kept.push_back({0, 2, -1, true});
+        else if (b.start_status[w] >= 0) kept.push_back({0, 1, b.start_status[w], true});
+        for (int64_t j = 1; j < n_basis_w - 1; j++) kept.push_back({j, 0, -1, false});
+        if (b.end_status[w] == GROUND) kept.push_back({n_basis_w - 1, 2, -1, false});
+        else if (b.end_status[w] >= 0) kept.push_back({n_basis_w - 1, 1, b.end_status[w], false});
+
+        const int64_t seg_off = g.seg_offsets[w];
+        const int64_t N = pw.n_total;
+        // the samples: `arc[:-1, None] + h[:, None] * linspace(0, 1, d + 1)`
+        const std::vector<double> unit = linspace(0.0, 1.0, W);
+        std::vector<double> x(static_cast<size_t>(N * W));
+        for (int64_t s2 = 0; s2 < N; s2++)
+            for (int i = 0; i < W; i++)
+                x[static_cast<size_t>(s2 * W + i)] =
+                    arc[static_cast<size_t>(s2)] + pw.h_per_seg[static_cast<size_t>(s2)] * unit[static_cast<size_t>(i)];
+        // `_bspline_basis_rows(x, knots, d)`
+        const int64_t n = static_cast<int64_t>(knots.size()) - d - 1;
+        const double lo = knots[static_cast<size_t>(d)], hi = knots[static_cast<size_t>(n)];
+        for (double v : x)
+            if (!std::isfinite(v) || v < lo || v > hi) throw FrontNotPorted("a sample outside the knots");
+        std::vector<double> vals(static_cast<size_t>(N * W * W));
+        std::vector<int64_t> first(static_cast<size_t>(N * W));
+        for (size_t q = 0; q < x.size(); q++) {
+            const double xv = x[q];
+            int64_t ell = search_right(knots, xv) - 1;
+            ell = std::min(std::max<int64_t>(ell, d), n - 1);
+            double h[4] = {1.0, 0.0, 0.0, 0.0}, hh[4];
+            for (int j = 1; j <= d; j++) {
+                for (int c = 0; c < j; c++) hh[c] = h[c];
+                h[0] = 0.0;
+                for (int nn = 1; nn <= j; nn++) {
+                    const double xb = knots[static_cast<size_t>(ell + nn)];
+                    const double xa = knots[static_cast<size_t>(ell + nn - j)];
+                    const bool same = xb == xa;
+                    const double wgt = hh[nn - 1] / (xb - xa);
+                    h[nn - 1] = same ? h[nn - 1] : h[nn - 1] + wgt * (xb - xv);
+                    h[nn] = same ? 0.0 : wgt * (xv - xa);
+                }
+            }
+            for (int c = 0; c < W; c++) vals[q * W + static_cast<size_t>(c)] = h[c];
+            first[q] = ell - d;
+        }
+        // `_design_matrix_band`, then `einsum("ij,sjk->sik", V, DM)` and the
+        // `h ** -p` scaling
+        std::vector<double> pps(static_cast<size_t>(N * W * W));  // (s, p, col)
+        for (int64_t s2 = 0; s2 < N; s2++) {
+            double DM[4][4] = {};
+            for (int i = 0; i < W; i++) {
+                const int64_t off = first[static_cast<size_t>(s2 * W + i)] - s2;
+                if (off < 0 || off > 1) throw FrontNotPorted("design-matrix span offset");
+                for (int c = 0; c < W; c++) {
+                    const int64_t col = c + off;
+                    const double v = vals[static_cast<size_t>((s2 * W + i) * W + c)];
+                    if (col == W) {
+                        if (v != 0.0) throw FrontNotPorted("design-matrix band");
+                    } else {
+                        DM[i][col] = v;
+                    }
+                }
+            }
+            const double hs = pw.h_per_seg[static_cast<size_t>(s2)];
+            for (int i = 0; i < W; i++) {
+                const double scale = std::pow(hs, -static_cast<double>(i));
+                for (int k = 0; k < W; k++) {
+                    double acc = 0.0;
+                    for (int j = 0; j < W; j++) acc += V[i * W + j] * DM[j][k];
+                    pps[static_cast<size_t>((s2 * W + i) * W + k)] = acc * scale;
+                }
+            }
+        }
+        for (const Kept &kb : kept) {
+            const int64_t seg_lo = std::max<int64_t>(0, kb.j - d);
+            const int64_t seg_hi = std::min<int64_t>(N, kb.j + 1);
+            for (int a = 0; a < W; a++) {
+                const int64_t s2 = seg_lo + a;
+                const bool on = s2 < seg_hi;
+                b.supp_seg.push_back(on ? seg_off + s2 : 0);
+                for (int p2 = 0; p2 < W; p2++)
+                    b.polys.push_back(on ? pps[static_cast<size_t>((s2 * W + p2) * W + (kb.j - s2))] : 0.0);
+            }
+            if (kb.kind == 1)
+                junction_dirs[static_cast<size_t>(kb.junction)].push_back({m_global, kb.start ? 1.0 : -1.0});
+            m_global++;
+        }
+    }
+    b.n_basis = m_global;
+    std::vector<size_t> rows;
+    for (size_t j = 0; j < junctions.size(); j++)
+        if (!grounded_junction[j]) rows.push_back(j);
+    b.n_kcl = static_cast<int64_t>(rows.size());
+    b.kcl_A.assign(static_cast<size_t>(b.n_kcl * b.n_basis), 0.0);
+    for (size_t r = 0; r < rows.size(); r++)
+        for (const auto &ms : junction_dirs[rows[r]])
+            b.kcl_A[r * static_cast<size_t>(b.n_basis) + static_cast<size_t>(ms.first)] = ms.second;
+    return b;
 }
 
 }  // namespace bspline

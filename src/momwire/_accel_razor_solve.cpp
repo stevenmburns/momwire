@@ -1033,6 +1033,26 @@ py::list bspline_front_geometry(py::bytes latin1) {
         d["seg_l"] = arr(g.seg_l, true);
         d["seg_r"] = arr(g.seg_r, true);
         entry["geom"] = d;
+        try {
+            std::vector<double> radii = wa.radius;
+            if (!wa.radius_per_wire) radii.assign(wa.polylines.size(), wa.radius[0]);
+            const mw::bspline::Basis bs = mw::bspline::build_basis(
+                g, wa.polylines, wa.junctions, radii, in.has_ground, in.ground_z, 2);
+            const ptrdiff_t nb = static_cast<ptrdiff_t>(bs.n_basis), W = 3;
+            py::array_t<int64_t> ss({nb, W});
+            std::copy(bs.supp_seg.begin(), bs.supp_seg.end(), ss.mutable_data());
+            py::array_t<double> pp({nb, W, W});
+            std::copy(bs.polys.begin(), bs.polys.end(), pp.mutable_data());
+            py::array_t<double> ka({static_cast<ptrdiff_t>(bs.n_kcl), nb});
+            std::copy(bs.kcl_A.begin(), bs.kcl_A.end(), ka.mutable_data());
+            py::list knots;
+            for (const auto &k : bs.wire_knots) knots.append(arr(k, false));
+            entry["basis"] = py::make_tuple(ss, pp, ka, knots);
+        } catch (const mw::bspline::FrontValueError &e) {
+            entry["basis_raised"] = py::make_tuple("ValueError", e.what());
+        } catch (const mw::bspline::FrontNotPorted &e) {
+            entry["basis_declined"] = e.what();
+        }
         out.append(entry);
     }
     return out;

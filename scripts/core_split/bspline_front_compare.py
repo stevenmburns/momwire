@@ -6,8 +6,9 @@
 For every deck the C++ seam prepares for bspline, `BSplineSolver` is built
 from the seam's own keyword arguments (no fill) and each ported unit's
 arrays are compared byte for byte (`front_compare.differences`). Units:
-`_wire_spec.drop_duplicated_wires` (the dedup and its refusals) and
-`_build_geometry`. Exit 1 on any mismatch.
+`_wire_spec.drop_duplicated_wires` (the dedup and its refusals),
+`_build_geometry` and `_build_basis_polynomials` (supp_seg, polys, kcl_A,
+the wire knots). Exit 1 on any mismatch.
 """
 
 from __future__ import annotations
@@ -38,6 +39,8 @@ def _py(value):
 
 
 def main():
+    import numpy as np
+
     from momwire import BSplineSolver, _accel
 
     acc = _accel.acc
@@ -74,6 +77,27 @@ def main():
             d = fc.differences(want, entry["dedup"], "dedup")
             counts["deduped"] += dd is not None
             d += fc.differences(_py(dict(geom)), entry["geom"], "geom")
+            if "basis_declined" in entry:
+                counts[f"basis-declined:{entry['basis_declined']}"] += 1
+            else:
+                try:
+                    supp, polys, kcl, knots, _wbg = solver._build_basis_polynomials(
+                        geom
+                    )
+                    want = (supp, polys, kcl, [np.asarray(k) for k in knots])
+                    got = entry.get("basis")
+                    if got is None:
+                        d.append(f"basis: C++ raised {entry['basis_raised']}")
+                    else:
+                        d += fc.differences(want, tuple(got), "basis")
+                        counts["basis-compared"] += 1
+                except Exception as exc:  # noqa: BLE001 -- compared by message
+                    want = ("ValueError", str(exc))
+                    if tuple(entry.get("basis_raised", ())) != want:
+                        d.append(
+                            f"basis: Python raised {want}, C++ {entry.get('basis_raised')}"
+                        )
+                    counts["basis-raised-alike"] += 1
             counts["compared"] += 1
             if d:
                 mismatches += 1
