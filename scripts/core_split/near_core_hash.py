@@ -35,7 +35,10 @@ def record(out_dir, decks, per=4):
 
     nia = _near_interface._nia
     out_dir.mkdir(parents=True, exist_ok=True)
-    origs = {name: getattr(nia, name) for name in ("near_interface_six_columns", "near_interface_grid_sheet")}
+    origs = {
+        name: getattr(nia, name)
+        for name in ("near_interface_six_columns", "near_interface_grid_sheet")
+    }
     count = {"n": 0}
     seen = {}
 
@@ -100,7 +103,9 @@ def replay(out_dir):
     for f in sorted(out_dir.glob("call*.pkl")):
         name, args, kw, ref = pickle.load(open(f, "rb"))
         fn = getattr(nia, name)
-        variants = [{}, {"n_threads": 1}] if name == "near_interface_six_columns" else [{}]
+        variants = (
+            [{}, {"n_threads": 1}] if name == "near_interface_six_columns" else [{}]
+        )
         for v in variants:
             a = list(args)
             if name == "near_interface_six_columns":
