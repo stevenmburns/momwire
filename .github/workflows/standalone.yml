@@ -26,6 +26,7 @@ on:
       - "src/**"
       - "scripts/core_split/exe_compare.py"
       - "scripts/core_split/printout_compare.py"
+      - "scripts/core_split/nx_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -37,6 +38,7 @@ on:
       - "src/**"
       - "scripts/core_split/exe_compare.py"
       - "scripts/core_split/printout_compare.py"
+      - "scripts/core_split/nx_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -117,6 +119,19 @@ jobs:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"
           MOMWIRE_FORCE_VARIANT: sse2
+      # The NX-chained decks (momwire#1512): Ward's 99-structure chain and its
+      # cut, and SimNEC's A4 stream decks. Anchors off: a chain swept in
+      # frequency engages them, and their seen-state depends on history.
+      - name: NX chains, as the launcher (avx2, anchors off)
+        run: |
+          python scripts/core_split/exe_compare.py exe-linux-nx.jsonl --standalone \
+            --exe build-avx2/momwire-razor2p-standalone \
+            --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
+            scripts/core_split/nx_decks
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+          MOMWIRE_BELOW_ANCHORS: "off"
       - name: upload the comparison
         if: always()
         uses: actions/upload-artifact@v7
