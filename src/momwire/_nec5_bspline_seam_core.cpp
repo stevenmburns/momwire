@@ -186,11 +186,17 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
     } catch (const bspline::FrontNotPorted &e) {
         return decline(std::string("bspline-") + e.what());
-    } catch (const std::exception &e) {
-        // Python raises here (a ValueError at construction or in the solve's
-        // front half); which frame prints it is not ported yet
-        (void)e;
-        return decline("bspline-raises");
+    } catch (const bspline::FrontValueError &e) {
+        // Python's ValueError, which escapes to the INTERNAL ERROR frame
+        b.kind = Built::raised;
+        b.error_kind = "ValueError";
+        b.message = e.what();
+        return b;
+    } catch (const std::invalid_argument &e) {  // `_build_geometry`'s zero-length edge
+        b.kind = Built::raised;
+        b.error_kind = "ValueError";
+        b.message = e.what();
+        return b;
     }
     fr->n_ports = static_cast<int64_t>(fr->args.feeds.size() + fr->args.node_gaps.size());
     // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
