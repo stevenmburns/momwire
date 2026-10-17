@@ -195,25 +195,35 @@ def python_mesh(prepared):
     }
 
 
-# Windows needs no bit-compatibility (momwire's rule): MSVC builds /fp:fast,
-# so the core and the extension -- the same text in different translation
-# units -- may round a Sommerfeld fill differently there. On win32 a solution
-# is the same within the derived lane tolerance (tests/_lane_gate.py,
-# LANE_RTOL_WIN32, momwire#1371); everywhere else, bit for bit.
-_WIN32_RTOL = 1e-11
+# The executable is Linux-only (momwire#1512), and its gates are bit for bit
+# there. Elsewhere the core and the extension may round the same solve
+# differently: on Windows MSVC builds /fp:fast (no bit-compatibility is
+# asked there), and on macOS arm64 a Sommerfeld deck's solve differs in the
+# last bits (numpy's complex scalar functions and BLAS order are not the
+# libm and the order the core reproduces on x86 Linux). Off Linux a
+# solution is the same within the derived lane tolerance
+# (tests/_lane_gate.py, LANE_RTOL_WIN32, momwire#1371).
+_OFF_LINUX_RTOL = 1e-11
+
+
+def _rel_diff(a, b) -> float:
+    import numpy as np
+
+    a = np.ascontiguousarray(a)
+    b = np.ascontiguousarray(b)
+    if a.shape != b.shape:
+        return float("inf")
+    scale = float(np.max(np.abs(b))) if b.size else 0.0
+    d = float(np.max(np.abs(a - b), initial=0.0))
+    return 0.0 if d == 0.0 else (d / scale if scale > 0.0 else float("inf"))
 
 
 def _same_solution(a, b) -> bool:
     import numpy as np
 
-    a = np.ascontiguousarray(a)
-    b = np.ascontiguousarray(b)
-    if sys.platform != "win32":
-        return a.tobytes() == b.tobytes()
-    if a.shape != b.shape:
-        return False
-    scale = float(np.max(np.abs(b))) if b.size else 0.0
-    return bool(np.max(np.abs(a - b), initial=0.0) <= _WIN32_RTOL * scale)
+    if sys.platform.startswith("linux"):
+        return np.ascontiguousarray(a).tobytes() == np.ascontiguousarray(b).tobytes()
+    return _rel_diff(a, b) <= _OFF_LINUX_RTOL
 
 
 def compare(text, acc, fc):
@@ -260,9 +270,9 @@ def compare(text, acc, fc):
             x_same = _same_solution(p["X"], c["X"])
             y_same = _same_solution(p["Y"], y)
             if not x_same:
-                d.append(f"prepared[{k}]: X differs")
+                d.append(f"prepared[{k}]: X differs ({_rel_diff(c['X'], p['X']):.2e})")
             if not y_same:
-                d.append(f"prepared[{k}]: Y differs")
+                d.append(f"prepared[{k}]: Y differs ({_rel_diff(y, p['Y']):.2e})")
             row.setdefault("solves", 0)
             row["solves"] += 1
         elif c.get("info") is not None and cx["route"] != "declined":
