@@ -3088,7 +3088,11 @@ class BSplineSolver(
             # poly coeffs (in u_local). Then divide by h_seg^p column-wise
             # to recover coeffs in u_local = h_seg · u_unit terms.
             V_unit_inv = _V_UNIT_INV[d]
-            inv_h_powers = h_per_seg_w[:, None] ** (-np.arange(d + 1))
+            # `np.float_power`, not `**`: numpy's `power` takes a vectorised
+            # AVX-512 route on an AVX-512 CPU that rounds differently from
+            # libm's `pow` (momwire#1517), and `float_power` is libm's
+            # everywhere -- the bits `power` gives on every AVX2 machine.
+            inv_h_powers = np.float_power(h_per_seg_w[:, None], -np.arange(d + 1))
             # → (N, d+1, d+1): for each segment, polynomial coeff p of
             # each in-band basis expressed as Σ_p coeffs_p · u_local^p
             poly_per_seg = np.einsum("ij,sjk->sik", V_unit_inv, DM_seg)
@@ -3305,7 +3309,9 @@ class BSplineSolver(
             nodes = sl[:, None, :] + tq[None, :, None] * (sr - sl)[:, None, :]
             u_phys = h[segs][:, None] * tq[None, :]
             w_node = 0.5 * h[segs][:, None] * wg[None, :]
-            W = w_node[None] * u_phys[None] ** np.arange(d1)[:, None, None]
+            W = w_node[None] * np.float_power(
+                u_phys[None], np.arange(d1)[:, None, None]
+            )
             return nodes, np.ascontiguousarray(tang[segs], dtype=np.float64), W
 
         nodes_o, tang_o, W_o = side(obs_segs)
@@ -4012,7 +4018,7 @@ class BSplineSolver(
         w_node = 0.5 * h[:, None] * wg[None, :]
         # Moment weights W[p, i, qi] = w_qi * u_qi^p — the quadrature dual
         # of the J-block u^p moments, so `polys` applies unchanged.
-        W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        W = w_node[None] * np.float_power(u_phys[None], np.arange(d + 1)[:, None, None])
 
         # Grid extent: obs-to-image-point distance is convex in the two
         # segment parameters, so its max over all pairs is attained at
@@ -4264,7 +4270,9 @@ class BSplineSolver(
         nodes_p = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
         u_phys = h[:, None] * tq[None, :]
         w_node = 0.5 * h[:, None] * wg[None, :]
-        Wm = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        Wm = w_node[None] * np.float_power(
+            u_phys[None], np.arange(d + 1)[:, None, None]
+        )
         obs_p = nodes_p.reshape(n_seg * q, 3)
         tobs_p = np.repeat(tang, q, axis=0)
 
@@ -5436,7 +5444,8 @@ class BSplineSolver(
         for s, entries in seg_map.items():
             hs = h_per_seg[s]
             # H[p, q] = ∫₀^h u^p·u^q du = h^(p+q+1)/(p+q+1)
-            H = hs**pq_sum / pq_sum
+            # libm's pow on every CPU (momwire#1517), not numpy's `power`
+            H = np.float_power(hs, pq_sum) / pq_sum
             C = coef[[m for m, _ in entries], [a for _, a in entries], :]
             M = C @ H @ C.T
             w = int(np.searchsorted(seg_offsets, s, side="right") - 1)
@@ -6549,7 +6558,7 @@ class BSplineSolver(
             self._n_qp_buried_field() * int(q_factor),
         )
         d = self.degree
-        W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        W = w_node[None] * np.float_power(u_phys[None], np.arange(d + 1)[:, None, None])
         return nodes, tang, W
 
     def _field_galerkin_block(

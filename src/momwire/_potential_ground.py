@@ -502,7 +502,9 @@ class Remainder:
         # Moment weights W[p, j, q] = w_q · u_q^p, the quadrature dual of
         # the source basis's own u^p moments — the same convention
         # `_Z_sommerfeld_remainder` builds for the B-spline polynomials.
-        W = w_node[None] * u_phys[None] ** np.arange(n_moment)[:, None, None]
+        W = w_node[None] * np.float_power(
+            u_phys[None], np.arange(n_moment)[:, None, None]
+        )
         src = nodes.reshape(n_src * n_qp, 3)
         t_src = np.repeat(src_t, n_qp, axis=0)
         # Collect, then fill: every window reads the observers' rows against
@@ -699,7 +701,9 @@ class RemainderBelow(Remainder):
         h = norm3(span)
         u_phys = h[:, None] * tq[None, :]
         w_node = 0.5 * h[:, None] * wg[None, :]
-        W = w_node[None] * u_phys[None] ** np.arange(n_moment)[:, None, None]
+        W = w_node[None] * np.float_power(
+            u_phys[None], np.arange(n_moment)[:, None, None]
+        )
         src = nodes.reshape(n_src * n_qp, 3)
         t_src = np.repeat(src_t, n_qp, axis=0)
 

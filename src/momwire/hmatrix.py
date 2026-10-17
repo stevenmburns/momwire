@@ -1180,7 +1180,7 @@ class HMatrixSolver(BSplineSolver):
         nodes = seg_l[:, None, :] + tq[None, :, None] * (seg_r - seg_l)[:, None, :]
         u_phys = h[:, None] * tq[None, :]
         w_node = 0.5 * h[:, None] * wg[None, :]
-        W = w_node[None] * u_phys[None] ** np.arange(d + 1)[:, None, None]
+        W = w_node[None] * np.float_power(u_phys[None], np.arange(d + 1)[:, None, None])
         gz = self.ground_z
         r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
         zmin = min(seg_l[:, 2].min(), seg_r[:, 2].min()) - gz

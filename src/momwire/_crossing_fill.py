@@ -104,6 +104,7 @@ import scipy.sparse as _sp
 
 from . import _accel, _aca, _cancel, _ground_refl, _near_interface, _sommerfeld_below
 from ._quadrature import leggauss as _leggauss_shared
+from ._bspline_kernels import _upow
 from ._sommerfeld_transmitted import _c1_moment
 
 
@@ -954,9 +955,9 @@ def _basis_samples(supp_seg, polys, seg_runs, u_phys):
     fdv = np.zeros(row.size, dtype=float)
     for p in range(n_p):
         c = np.repeat(coef[:, p], cnt)
-        fv += c * u**p
+        fv += c * _upow(u, p)
         if p >= 1:
-            fdv += (p * c) * u ** (p - 1)
+            fdv += (p * c) * _upow(u, p - 1)
     shape = (n_basis, n_nodes)
     F = _sp.csr_array((fv, (row, node)), shape=shape)
     Fd = _sp.csr_array((fdv, (row, node)), shape=shape)
@@ -1020,7 +1021,7 @@ def _end_values(supp_seg, polys, live, gseg, u, d):
             continue
         acc = np.zeros(rows.size)
         for p in range(d + 1):
-            acc = acc + polys[rows, a_, p] * u**p
+            acc = acc + polys[rows, a_, p] * _upow(u, p)
         fv[rows] += acc
     return fv
 
