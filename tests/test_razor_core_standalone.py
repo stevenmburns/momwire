@@ -741,6 +741,13 @@ BURIED_DECKS = [
         "eznec_split_1281/dan_through.nec",
         "eznec_split_1281/thr_n21.nec",
     )
+] + [
+    # NX chains of buried structures (momwire#1512): kept out of
+    # tests/fixtures, whose every deck the walks above run with the anchors on
+    # `auto` -- a chain swept in frequency engages them, and the driver and
+    # this process see different histories. Here the tables are exact.
+    SPLIT / "nx_decks" / name
+    for name in ("ward_many_nx_cut5.nec", "simnec_stream_2281440.nec")
 ]
 
 
