@@ -84,10 +84,18 @@
 #include "_fma_inline.h"
 
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+#if defined(MW_STUDY_SSE2_MVEC) && !defined(__AVX2__)
+#pragma omp declare simd notinbranch simdlen(2)
+#else
 #pragma omp declare simd notinbranch simdlen(4)
+#endif
 extern "C" double exp(double);
 
+#if defined(MW_STUDY_SSE2_MVEC) && !defined(__AVX2__)
+#pragma omp declare simd notinbranch simdlen(2)
+#else
 #pragma omp declare simd notinbranch simdlen(4)
+#endif
 extern "C" double sin(double);
 #endif
 

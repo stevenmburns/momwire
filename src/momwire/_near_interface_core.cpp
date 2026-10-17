@@ -64,13 +64,25 @@
 // libmvec and would choke on redeclaring the CRT's exp/sin/cos, and macOS
 // has neither libmvec nor the AVX2 simdlen(4) form.
 #if defined(__GNUC__) && !defined(_MSC_VER) && !defined(__APPLE__)
+#if defined(MW_STUDY_SSE2_MVEC) && !defined(__AVX2__)
+#pragma omp declare simd notinbranch simdlen(2)
+#else
 #pragma omp declare simd notinbranch simdlen(4)
+#endif
 extern "C" double exp(double);
 
+#if defined(MW_STUDY_SSE2_MVEC) && !defined(__AVX2__)
+#pragma omp declare simd notinbranch simdlen(2)
+#else
 #pragma omp declare simd notinbranch simdlen(4)
+#endif
 extern "C" double cos(double);
 
+#if defined(MW_STUDY_SSE2_MVEC) && !defined(__AVX2__)
+#pragma omp declare simd notinbranch simdlen(2)
+#else
 #pragma omp declare simd notinbranch simdlen(4)
+#endif
 extern "C" double sin(double);
 #endif
 
