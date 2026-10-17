@@ -1,0 +1,19 @@
+#!/bin/sh
+# momwire-nec5-bs2-linux: momwire's bs2 (B-spline) NEC-5 engine, no Python
+# (momwire#1517), `momwire-nec5-bspline`'s twin. Runs the build beside it
+# that this CPU runs, the way
+# momwire's own accelerator chooses (momwire._accel): avx2 on a CPU with
+# AVX2 and FMA, sse2 on any other x86-64 CPU. MOMWIRE_FORCE_VARIANT=avx2 or
+# sse2 overrides the choice; any other value is ignored.
+here=$(dirname -- "$(readlink -f -- "$0")")
+case "${MOMWIRE_FORCE_VARIANT:-}" in
+avx2 | sse2) variant=$MOMWIRE_FORCE_VARIANT ;;
+*)
+    variant=sse2
+    flags=$(grep -m1 '^flags' /proc/cpuinfo 2>/dev/null)
+    case " $flags " in
+    *" avx2 "*) case " $flags " in *" fma "*) variant=avx2 ;; esac ;;
+    esac
+    ;;
+esac
+exec "$here/momwire-nec5-bs2-linux-$variant" "$@"

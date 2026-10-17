@@ -1,4 +1,5 @@
-# The standalone razor-2p executables (standalone/, momwire#1479 and #1512).
+# The standalone executables (standalone/, momwire#1479 and #1512): razor-2p's,
+# and bs2's no-Python build beside it (momwire#1517 Phase A).
 #
 # `linux-artifact`: the Linux release artifact (momwire#1512),
 # momwire-nec5-razor2p-linux-x86_64.tar.gz -- the no-Python build
@@ -40,6 +41,7 @@ on:
       - "scripts/core_split/nec5_bspline_printout_driver.cpp"
       - "scripts/core_split/bspline_chunked_decks/**"
       - "scripts/core_split/bspline_exact_decks/**"
+      - "scripts/core_split/bs2_stream_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -59,6 +61,7 @@ on:
       - "scripts/core_split/nec5_bspline_printout_driver.cpp"
       - "scripts/core_split/bspline_chunked_decks/**"
       - "scripts/core_split/bspline_exact_decks/**"
+      - "scripts/core_split/bs2_stream_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -106,7 +109,19 @@ jobs:
             done
             ./momwire-nec5-razor2p-linux - - \
               < /io/scripts/core_split/nx_decks/simnec_stream_2281566.nec > /tmp/stream.out
-            echo "stream: $(grep -c "INPUT LINE .* NX " /tmp/stream.out) structures"'
+            echo "stream: $(grep -c "INPUT LINE .* NX " /tmp/stream.out) structures"
+            # bs2 (momwire#1517), the same checks
+            ldd momwire-nec5-bs2-linux-avx2
+            ./momwire-nec5-bs2-linux -version
+            for v in avx2 sse2; do
+              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec5-bs2-linux \
+                /io/tests/fixtures/razor_printout_3a/node_gap_two_sources.nec /tmp/bs2-$v.out
+              sed -n 2p /tmp/bs2-$v.out
+              if grep -q "NEC ERROR" /tmp/bs2-$v.out; then exit 1; fi
+            done
+            ./momwire-nec5-bs2-linux - - \
+              < /io/scripts/core_split/nx_decks/simnec_stream_2281566.nec > /tmp/bs2-stream.out
+            echo "bs2 stream: $(grep -c "INPUT LINE .* NX " /tmp/bs2-stream.out) structures"'
       - uses: actions/upload-artifact@v7
         with:
           name: momwire-nec5-razor2p-linux-x86_64
@@ -168,6 +183,7 @@ jobs:
           for v in avx2 sse2; do
             mkdir -p build-$v
             cp $R/momwire-nec5-razor2p-linux-$v build-$v/momwire-razor2p-standalone
+            cp $R/momwire-nec5-bs2-linux-$v build-$v/momwire-bs2-standalone
           done
           ldd build-avx2/momwire-razor2p-standalone
       # The picking script: the build this runner's CPU runs (avx2), and the
@@ -184,6 +200,13 @@ jobs:
           build-sse2/momwire-razor2p-standalone $D direct-sse2.out
           cmp via-script-sse2.out direct-sse2.out
           for f in via-script.out via-script-sse2.out; do sed -n 2p $f; done
+          # bs2's picking script (momwire#1517)
+          $R/momwire-nec5-bs2-linux $D bs2-via-script.out
+          build-avx2/momwire-bs2-standalone $D bs2-direct.out
+          cmp bs2-via-script.out bs2-direct.out
+          MOMWIRE_FORCE_VARIANT=sse2 $R/momwire-nec5-bs2-linux $D bs2-via-script-sse2.out
+          build-sse2/momwire-bs2-standalone $D bs2-direct-sse2.out
+          cmp bs2-via-script-sse2.out bs2-direct-sse2.out
       - name: contract tests
         run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
         env:
@@ -238,6 +261,45 @@ jobs:
             --exe build-sse2/momwire-razor2p-standalone \
             --launcher "$(command -v momwire-nec5-razor-2p)" --workers 4 \
             scripts/core_split/nx_decks/simnec_stream_*.nec
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: bs2 contract tests
+        run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
+        env:
+          MOMWIRE_RAZOR2P_STANDALONE_EXE: ${{ github.workspace }}/build-avx2/momwire-bs2-standalone
+          MOMWIRE_STANDALONE_BASIS: bspline
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      # The bs2 executable (momwire#1517 Phase A): every fixture deck and the
+      # NX chains as `momwire-nec5-bspline` answers them, avx2 and sse2 (its
+      # one static OpenBLAS standing in for both of numpy's and SciPy's), a
+      # deck it does not serve refused by name; and SimNEC's streaming call.
+      - name: bs2 executable, every fixture deck and the NX chains (avx2 and sse2)
+        run: |
+          L="$(command -v momwire-nec5-bspline)"
+          python scripts/core_split/exe_compare.py exe-linux-bs2-avx2.jsonl --standalone \
+            --basis bspline --exe build-avx2/momwire-bs2-standalone --launcher "$L" \
+            --workers 4 tests/fixtures scripts/core_split/nx_decks \
+            scripts/core_split/bs2_stream_decks
+          MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/exe_compare.py \
+            exe-linux-bs2-sse2.jsonl --standalone --basis bspline \
+            --exe build-sse2/momwire-bs2-standalone --launcher "$L" \
+            --workers 4 tests/fixtures scripts/core_split/nx_decks \
+            scripts/core_split/bs2_stream_decks
+        env:
+          OPENBLAS_NUM_THREADS: "1"
+          OMP_NUM_THREADS: "1"
+      - name: bs2 streaming call, as the launcher (avx2 and sse2)
+        run: |
+          L="$(command -v momwire-nec5-bspline)"
+          python scripts/core_split/stream_compare.py exe-linux-bs2-stream-avx2.jsonl \
+            --exe build-avx2/momwire-bs2-standalone --launcher "$L" --workers 4 \
+            scripts/core_split/bs2_stream_decks
+          MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/stream_compare.py \
+            exe-linux-bs2-stream-sse2.jsonl \
+            --exe build-sse2/momwire-bs2-standalone --launcher "$L" --workers 4 \
+            scripts/core_split/bs2_stream_decks
         env:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"

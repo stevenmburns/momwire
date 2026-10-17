@@ -29,6 +29,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "tests" / "fixtures"
 EXE = os.environ.get("MOMWIRE_RAZOR2P_STANDALONE_EXE")
+# Which formulation the executable is (momwire#1517 Phase A): razor-2p (the
+# default), or bspline for `momwire-bs2-standalone`, compared with
+# `momwire-nec5-bspline`.
+BASIS = os.environ.get("MOMWIRE_STANDALONE_BASIS", "razor-2p")
 
 pytestmark = pytest.mark.skipif(
     not EXE or sys.platform == "win32",
@@ -44,9 +48,8 @@ DECKS = (DIPOLE, REFUSES, RAISES, BURIED, EXAMPLE3)
 
 
 def _launcher() -> str:
-    found = shutil.which("momwire-nec5-razor-2p") or str(
-        Path(sys.executable).parent / "momwire-nec5-razor-2p"
-    )
+    name = f"momwire-nec5-{BASIS}"
+    found = shutil.which(name) or str(Path(sys.executable).parent / name)
     assert Path(found).exists(), found
     return found
 
@@ -293,7 +296,7 @@ def test_a_cxx_exception_is_the_internal_error_printout(fail, line, tmp_path):
     assert r.returncode == 0
     want = tmp_path / "want.out"
     text = DIPOLE.read_bytes().decode("latin-1")
-    _shell.write_printout(want, _printout.render_refusal(text, line, basis="razor-2p"))
+    _shell.write_printout(want, _printout.render_refusal(text, line, basis=BASIS))
     got = out.read_bytes()
     # the header's engine stamp is the executable's; the rest is the frame
     assert got.split(b"\r\n")[2:] == want.read_bytes().split(b"\r\n")[2:]
