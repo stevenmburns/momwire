@@ -140,12 +140,21 @@ Block offedge(const Segs &si, const Segs &sj, const std::vector<double> &a_rows,
 // Scatter `sub` (nd, nd, |ri|, |cj|) into `out` (nd, nd, Ni, Nj).
 void place(Block &out, size_t Ni, size_t Nj, const Block &sub, const std::vector<size_t> &ri,
            const std::vector<size_t> &cj, int nd) {
+    // the column list as runs of consecutive indices, each copied whole
+    std::vector<std::pair<size_t, size_t>> runs;  // (start in cj, length)
+    for (size_t b = 0; b < cj.size();) {
+        size_t e = b + 1;
+        while (e < cj.size() && cj[e] == cj[e - 1] + 1) e++;
+        runs.push_back({b, e - b});
+        b = e;
+    }
     for (int p = 0; p < nd; p++)
         for (int q = 0; q < nd; q++)
-            for (size_t a = 0; a < ri.size(); a++)
-                for (size_t b = 0; b < cj.size(); b++)
-                    out[((static_cast<size_t>(p) * nd + q) * Ni + ri[a]) * Nj + cj[b]] =
-                        sub[((static_cast<size_t>(p) * nd + q) * ri.size() + a) * cj.size() + b];
+            for (size_t a = 0; a < ri.size(); a++) {
+                cdouble *dst = &out[((static_cast<size_t>(p) * nd + q) * Ni + ri[a]) * Nj];
+                const cdouble *src = &sub[((static_cast<size_t>(p) * nd + q) * ri.size() + a) * cj.size()];
+                for (const auto &rn : runs) std::copy(src + rn.first, src + rn.first + rn.second, dst + cj[rn.first]);
+            }
 }
 
 // the kernel's output as it is (no copy)

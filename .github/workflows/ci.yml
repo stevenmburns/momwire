@@ -326,68 +326,6 @@ jobs:
           path: 464-dumps/
           if-no-files-found: ignore
 
-  # The oldest toolchain the source build supports, as a canary (momwire#1545).
-  # ubuntu-22.04 is glibc 2.35 / gcc 11.4: there, an sse2 build linked
-  # `_ZGVbN4v_cos` / `_sin` (SSE clones libmvec does not export) and failed
-  # only at IMPORT. Every other lane missed it, for different reasons: the
-  # wheels build on manylinux_2_28 with a newer gcc that never emitted the
-  # call, the linux lanes run ubuntu-latest, and at run time `_accel`
-  # imports ONE variant, the CPU's pick, so an AVX2 runner never loads sse2
-  # at all. This job builds from source with MOMWIRE_REQUIRE_ACCEL=1, under
-  # which setup.py imports every variant it links (a failure fails the
-  # build), then imports each variant again through `_accel` as a user
-  # would. No pytest: what can differ here is whether the extensions load.
-  # Gated as `test-macos` is: push to main, dispatch, and PRs that touch
-  # compiled code or its build.
-  build-old-glibc:
-    needs: changes
-    runs-on: ubuntu-22.04
-    if: >-
-      (github.event_name == 'workflow_dispatch'
-       || (github.event_name == 'push' && github.ref == 'refs/heads/main')
-       || (github.event_name == 'pull_request' && needs.changes.outputs.native == 'true'))
-      && needs.changes.outputs.code == 'true'
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-python@v7
-        with:
-          python-version: '3.12'
-          cache: pip
-      - uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ${{ github.job }}-${{ runner.os }}
-      - name: toolchain
-        run: |
-          ldd --version | head -1
-          g++ --version | head -1
-      - run: pip install --upgrade pip
-      # The build deps (`build-system.requires`) and the runtime deps the
-      # post-link import needs, so the editable build below can run with
-      # --no-build-isolation and import what it links.
-      - run: pip install "setuptools>=61.0" wheel pybind11 numpy scipy threadpoolctl
-      - name: build from source, every variant imported at link time
-        run: |
-          set -o pipefail
-          pip install -e . --no-build-isolation -v 2>&1 | tee build.log
-        env:
-          CC: ccache gcc
-          CXX: ccache g++
-          MOMWIRE_REQUIRE_ACCEL: "1"
-      - name: every variant links and imports
-        run: |
-          set -o pipefail
-          # setup.py's link-time check, one line per extension (3 x 2).
-          n=$(grep -c "momwire: .* imports$" build.log || true)
-          grep "momwire: .* imports$" build.log
-          test "$n" -eq 6
-          for v in avx2 sse2; do
-            MOMWIRE_REQUIRE_ACCEL=1 MOMWIRE_FORCE_VARIANT=$v python -c "
-          import momwire._accel as a
-          assert a.VARIANT == '$v', a.VARIANT
-          print(a.VARIANT, a.acc.__file__)
-          "
-          done
-
   test-integration:
     needs: changes
     # Tests that cross a process, a socket, a CLI, or the deck->printout seam

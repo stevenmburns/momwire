@@ -125,6 +125,30 @@ static inline void bspline_far_coeffs(int p, int q, double h1, double h2,
 }
 
 // The delta-DEPENDENT half: the derivative recurrence and the dot product.
+// `bspline_J_static_far_with_coeffs` in two halves (momwire#1517): the
+// derivative table g[], a function of the offset and `a` alone, and its dot
+// with one moment's coefficients. The same expressions in the same order, so
+// a caller that shares one g[] across the moments gets the same doubles.
+static inline void bspline_far_series(double alpha, double beta, double A, double B, double a,
+                                      double *g) {
+    const double xi0 = 0.5 * (alpha + beta) - 0.5 * (A + B);
+    const double den = xi0 * xi0 + a * a;
+    g[0] = 1.0 / std::sqrt(den);
+    g[1] = -xi0 / (den * std::sqrt(den));
+    for (int n = 1; n <= BSPLINE_FAR_TERMS; n++) {
+        g[n + 1] = -((2 * n + 1) * xi0 * g[n] + (double)n * g[n - 1]) /
+                   (den * (double)(n + 1));
+    }
+}
+
+static inline double bspline_far_dot(const double *g, const double *coef) {
+    double total = 0.0;
+    for (int n = 0; n <= BSPLINE_FAR_TERMS; n++) {
+        total += g[n] * coef[n];
+    }
+    return total;
+}
+
 static inline double bspline_J_static_far_with_coeffs(double alpha, double beta,
                                                       double A, double B,
                                                       double a,
