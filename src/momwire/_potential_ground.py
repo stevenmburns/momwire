@@ -479,6 +479,8 @@ class Remainder:
         # k-dependent, so it is built HERE — inside the per-solve, per-ω
         # object — and can never be cached across a wavenumber.
         r1_max = _sommerfeld.max_image_distance(seg_l, seg_r, gz)
+        # The lazy view (momwire#1512): only the nodes the windows read are
+        # filled, named below by the census of every window's pairs.
         grid = _sommerfeld.get_grid(
             self._eps_tilde,
             k,
@@ -486,6 +488,7 @@ class Remainder:
             omega=self._omega,
             mu=solver.mu,
             cancel_flag=cancel_flag,
+            lazy=True,
         )
 
         n_src = seg_l.shape[0]
@@ -502,6 +505,21 @@ class Remainder:
         W = w_node[None] * u_phys[None] ** np.arange(n_moment)[:, None, None]
         src = nodes.reshape(n_src * n_qp, 3)
         t_src = np.repeat(src_t, n_qp, axis=0)
+        # Collect, then fill: every window reads the observers' rows against
+        # `src`, so their census names every node any window will read.
+        need = _sommerfeld.proj_census(grid, obs_p, src, gz)
+        if need is None:
+            grid = _sommerfeld.get_grid(
+                self._eps_tilde,
+                k,
+                r1_max,
+                omega=self._omega,
+                mu=solver.mu,
+                cancel_flag=cancel_flag,
+            )
+        else:
+            _sommerfeld.ensure_nodes(grid, need, cancel_flag)
+        check = _sommerfeld.lazy_check()
 
         def field_moments(i0, i1, distinct=False):
             # `distinct` answers `(moments, None)`: every row its own.
@@ -515,6 +533,8 @@ class Remainder:
                 grid,
                 cancel_flag=cancel_flag,
             )
+            if check:
+                _sommerfeld.check_read(proj, "the above remainder window")
             mom = _arc_moments(proj, W)
             return (mom, None) if distinct else mom
 
@@ -666,6 +686,9 @@ class RemainderBelow(Remainder):
             cancel_flag=solver._cancel_flag,
             # A fill integrates the table: the fill spacing.
             spacing=_sommerfeld_below._SOMM_BELOW_SPACING_FILL,
+            # momwire#1512: only the nodes the projection reads are filled
+            # (`remainder_field_proj_below` takes their census per window).
+            lazy=True,
         )
 
         n_src = seg_l.shape[0]

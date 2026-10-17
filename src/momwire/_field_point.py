@@ -186,7 +186,7 @@ class _Regime(NamedTuple):
     pending: str | None
 
 
-def _reflected_wave_grid(points, src_mid, eps_t, ground_z, k, omega, mu):
+def _reflected_wave_grid(points, src_mid, eps_t, ground_z, k, omega, mu, lazy=False):
     """The cached `SommerfeldGrid` sized for these observer/source pairs.
 
     Observer points size `r1_max` exactly as segment endpoints do — the
@@ -206,7 +206,43 @@ def _reflected_wave_grid(points, src_mid, eps_t, ground_z, k, omega, mu):
     """
     ex = np.concatenate([np.asarray(points, dtype=float), np.asarray(src_mid)])
     r1_max = _sommerfeld.max_image_distance(ex, ex, ground_z)
-    return _sommerfeld.get_grid(eps_t, k, r1_max, omega, mu=mu)
+    return _sommerfeld.get_grid(eps_t, k, r1_max, omega, mu=mu, lazy=lazy)
+
+
+def _lazy_reflected_grid(regime, points, src_mid, eps_t, ground_z, k, omega, mu, h):
+    """The ("above", "above") grid for the C++ kernel's reads at `points`
+    (`h = (omega, mu, step)`: H's six offset points), filled only where those
+    reads take it (momwire#1512): the lazy view, the kernel's census, the
+    nodes. None when the kernel or its census is not here (the caller then
+    takes the whole grid its own way)."""
+    if (
+        regime.grid_for is not _reflected_wave_grid
+        or not _CXX_REMAINDER
+        or _acc is None
+    ):
+        return None
+    if not hasattr(_acc, "reflected_field_nodes"):
+        return None
+    sized = points
+    if h is not None:
+        step = h[2]
+        offsets = []
+        for axis in range(3):
+            for sign in (+1.0, -1.0):
+                shift = np.zeros(3)
+                shift[axis] = sign * step
+                offsets.append(points + shift)
+        sized = np.concatenate(offsets)
+    grid = _reflected_wave_grid(
+        sized, src_mid, eps_t, ground_z, k, omega, mu, lazy=True
+    )
+    need = _sommerfeld.reflected_census(
+        grid, points, src_mid, ground_z, h is not None, 0.0 if h is None else h[2]
+    )
+    if need is None:
+        return None
+    _sommerfeld.ensure_nodes(grid, need)
+    return grid
 
 
 def _reflected_wave_surfaces(points, src_mid, ground_z, k, grid):
@@ -408,6 +444,16 @@ def reflected_field_at(
     points = np.asarray(points, dtype=float)
     src_mid = np.asarray(src_mid, dtype=float)
     if grid is None:
+        lazy = _lazy_reflected_grid(
+            regime, points, src_mid, eps_t, ground_z, k, omega, mu, None
+        )
+        if lazy is not None:
+            out = _cxx_field(
+                _cxx_kernel(lazy), points, src_mid, src_moment, ground_z, k, lazy
+            )
+            if _sommerfeld.lazy_check():
+                _sommerfeld.check_read(out, "the near-field remainder")
+            return out
         grid = regime.grid_for(points, src_mid, eps_t, ground_z, k, omega, mu)
     kernel = _cxx_kernel(grid)
     if kernel is not None:
@@ -485,6 +531,23 @@ def reflected_h_field_at(
             shift[axis] = sign * step
             offsets.append(points + shift)
 
+    lazy = _lazy_reflected_grid(
+        regime, points, src_mid, eps_t, ground_z, k, omega, mu, (omega, mu, step)
+    )
+    if lazy is not None:
+        out = _cxx_field(
+            _cxx_kernel(lazy),
+            points,
+            src_mid,
+            src_moment,
+            ground_z,
+            k,
+            lazy,
+            h=(omega, mu, step),
+        )
+        if _sommerfeld.lazy_check():
+            _sommerfeld.check_read(out, "the near-field remainder (H)")
+        return out
     grid = regime.grid_for(
         np.concatenate(offsets), src_mid, eps_t, ground_z, k, omega, mu
     )

@@ -100,6 +100,9 @@ from ._sommerfeld import (
     _evict_fifo,
     _somm_r1_bucket_wl,
     SommerfeldGrid,
+    check_read,
+    lazy_check,
+    lazy_grids,
 )
 
 # Head-contour Gauss rule and adaptive depth (the phase-0 prototype's fine
@@ -1643,7 +1646,10 @@ class SommerfeldGridBelow(SommerfeldGrid):
         health=None,
         seed=None,
         spacing=None,
+        lazy=False,
     ):
+        if lazy and seed is not None:
+            raise ValueError("a lazy below grid takes no seed")
         self.eps_t = complex(eps_t)
         self.spacing = _spacing(spacing)
         s_dr, s_th, s_band = self.spacing
@@ -1766,6 +1772,30 @@ class SommerfeldGridBelow(SommerfeldGrid):
             # has are taken and only the rows past them are evaluated -- in
             # every region it has filled, deferred ones included.
             kept = _seed_rows(seed, ridx, r_start, dr, n_r, th0, dth, n_th)
+            if lazy:
+                # momwire#1512: in the table where the eager fill would fill it
+                # now (`active`), no node filled (`have`); `filled` keeps its
+                # meaning -- every node in -- for every reader that is not the
+                # census path, which completes a region before reading it.
+                self._regions.append(
+                    {
+                        "r0": r_start,
+                        "dr": dr,
+                        "n_r": n_r,
+                        "th0": np.radians(th0),
+                        "dth": np.radians(dth),
+                        "n_th": n_th,
+                        "vals": np.full(
+                            (len(_SURF_KEYS), n_r, n_th), np.nan, dtype=np.complex128
+                        ),
+                        "filled": False,
+                        "active": self._eager and ridx not in _DEFERRED_REGIONS,
+                        "have": np.zeros((n_r, n_th), dtype=bool),
+                        "r_nodes": r_nodes,
+                        "th_nodes": th_nodes,
+                    }
+                )
+                continue
             if kept is not None:
                 _cancel.poll()
                 surf = {
@@ -1914,6 +1944,24 @@ class SommerfeldGridBelow(SommerfeldGrid):
         reg = self._regions[idx]
         if reg["filled"]:
             return
+        if "have" in reg:
+            # A lazy grid (momwire#1512): the region's nodes not yet in --
+            # and, for the floor band, its low band's, which the eager fill
+            # fills with it -- the same values node by node.
+            self._activate(idx)
+            regs = [idx]
+            if idx in self._band_floor_idx:
+                regs.insert(0, region_index(idx // _N_BANDS, _BAND_LO))
+            need = [None] * len(self._regions)
+            for r in regs:
+                need[r] = np.ones(
+                    (self._regions[r]["n_r"], self._regions[r]["n_th"]), bool
+                )
+            self.fill_nodes(need)
+            for r in regs:
+                self._regions[r]["filled"] = True
+            _somm_disk_cache.note_mutated(self)
+            return
         _cancel.poll()
         th_nodes = reg["th_nodes"]
         shared, own, lo, joint = (), None, None, False
@@ -2009,7 +2057,7 @@ class SommerfeldGridBelow(SommerfeldGrid):
     def _band_floor_filled(self):
         return all(self._regions[i]["filled"] for i in self._band_floor_idx)
 
-    def _ensure_for(self, mx_r1, mn_th, mx_th):
+    def _ensure_for(self, mx_r1, mn_th, mx_th, lazy=False):
         """Fill every region a batch bounded by these extremes could touch.
 
         The C++ kernel takes all fifteen tables up front and reports only the
@@ -2041,7 +2089,146 @@ class SommerfeldGridBelow(SommerfeldGrid):
             bands.append(_BAND_STEEP)
         for z in zones:
             for b in bands:
-                self._fill_region(region_index(z, b))
+                if lazy and "have" in self._regions[region_index(z, b)]:
+                    # In the table only: the census names the nodes.
+                    self._activate(region_index(z, b))
+                else:
+                    self._fill_region(region_index(z, b))
+
+    # --- the lazy grid's regions and nodes (momwire#1512) ----------------
+
+    def _in_table(self):
+        """Which regions are in the table: filled whole, or (a lazy grid)
+        named by `_ensure_for` with their nodes still to come."""
+        return tuple(bool(r["filled"] or r.get("active")) for r in self._regions)
+
+    def _activate(self, idx):
+        """`_fill_region`'s table membership without its fill: the floor
+        band brings its low band in, as `_fill_region` fills it first."""
+        reg = self._regions[idx]
+        if reg["filled"] or reg.get("active"):
+            return
+        if idx in self._band_floor_idx:
+            self._activate(region_index(idx // _N_BANDS, _BAND_LO))
+        reg["active"] = True
+
+    def fill_nodes(self, need):
+        """The nodes of `need` (a bool (n_r, n_th) mask per region, None for
+        none) in the table's regions and not yet in, filled through one
+        `iv_surfaces_direct_below` call (a node's value does not depend on its
+        batch); the floor band's shared columns are the low band's nodes,
+        filled there and copied, as `_fill_region` does. Nodes of regions not
+        in the table stay NaN, as an eager table's whole region does. Returns
+        how many nodes were filled."""
+        at, rr, tt, copies = [], [], [], []
+        queued = {}
+
+        def queue(r, i, j):
+            reg = self._regions[r]
+            q = queued.setdefault(r, np.zeros(reg["have"].shape, bool))
+            if reg["have"][i, j] or q[i, j]:
+                return
+            q[i, j] = True
+            at.append((r, i, j))
+            rr.append(reg["r_nodes"][i])
+            tt.append(reg["th_nodes"][j])
+
+        shared = dict(_SOMM_BELOW_BAND_FLOOR_SHARED)
+        for r, (reg, nd) in enumerate(zip(self._regions, need, strict=True)):
+            if (
+                nd is None
+                or "have" not in reg
+                or not (reg["filled"] or reg.get("active"))
+            ):
+                continue
+            floor = r in self._band_floor_idx
+            lo_idx = region_index(r // _N_BANDS, _BAND_LO)
+            for i, j in zip(
+                *np.nonzero(np.asarray(nd, bool) & ~reg["have"]), strict=True
+            ):
+                j = int(j)
+                if floor and j in shared:
+                    queue(lo_idx, int(i), shared[j])
+                    copies.append((r, int(i), j, lo_idx, shared[j]))
+                else:
+                    queue(r, int(i), j)
+        if at:
+            _cancel.poll()
+            surf = iv_surfaces_direct_below(
+                self.eps_t,
+                self.k2,
+                np.asarray(rr),
+                np.asarray(tt),
+                rtol=self._rtol,
+                omega=self.omega,
+                mu=self.mu,
+                health=self._health,
+            )
+            for p, (r, i, j) in enumerate(at):
+                reg = self._regions[r]
+                for s_i, key in enumerate(_SURF_KEYS):
+                    reg["vals"][s_i, i, j] = surf[key][p]
+                reg["have"][i, j] = True
+        for r, i, j, lo_idx, jl in copies:
+            reg, lo = self._regions[r], self._regions[lo_idx]
+            reg["vals"][:, i, j] = lo["vals"][:, i, jl]
+            reg["have"][i, j] = True
+        return len(at) + len(copies)
+
+    def missing_in_table(self, need):
+        """Whether any node of `need` in a region in the table is not in."""
+        for reg, nd in zip(self._regions, need, strict=True):
+            if (
+                nd is None
+                or "have" not in reg
+                or not (reg["filled"] or reg.get("active"))
+            ):
+                continue
+            if np.any(np.asarray(nd, bool) & ~reg["have"]):
+                return True
+        return False
+
+    def take_nodes(self, other):
+        """The nodes `other` (this grid as another process stored it) holds
+        in regions this grid has in its table, copied in. Returns how many."""
+        if other is None or len(other._regions) != len(self._regions):
+            return 0
+        n = 0
+        for a, b in zip(self._regions, other._regions, strict=True):
+            if a["vals"].shape != b["vals"].shape or "have" not in a:
+                return n
+            if not (a["filled"] or a.get("active")):
+                continue
+            hb = b.get("have")
+            if hb is None:
+                hb = np.full(a["have"].shape, bool(b["filled"]))
+            m = hb & ~a["have"]
+            if m.any():
+                a["vals"][:, m] = b["vals"][:, m]
+                a["have"] |= m
+                n += int(m.sum())
+        return n
+
+    def merge_stored(self, other):
+        """What `note_mutated` writes for this lazy grid: a copy with the
+        stored grid's regions and nodes added (both runs' union)."""
+        if other is None or "have" not in self._regions[0]:
+            return self
+        out = object.__new__(type(self))
+        out.__dict__.update(self.__dict__)
+        out._regions = [
+            dict(r, vals=r["vals"].copy(), have=r["have"].copy()) for r in self._regions
+        ]
+        for a, b in zip(out._regions, other._regions, strict=True):
+            if a["vals"].shape != b["vals"].shape:
+                return self
+            if b["filled"] or b.get("active"):
+                a["active"] = a.get("active") or not a["filled"]
+        out.take_nodes(other)
+        for a in out._regions:
+            if not a["filled"] and a.get("active") and a["have"].all():
+                a["filled"] = True
+        return out
 
     def _interp(self, R1, theta):
         """The parent's bicubic, over THIS family's five-θ-band layout.
@@ -2565,7 +2752,15 @@ class SommerfeldGridBelowBlended(SommerfeldGridBelow):
 
 
 def get_grid_below(
-    eps_t, k2, r1_max, omega, mu=_MU0, health=None, cancel_flag=0, spacing=None
+    eps_t,
+    k2,
+    r1_max,
+    omega,
+    mu=_MU0,
+    health=None,
+    cancel_flag=0,
+    spacing=None,
+    lazy=False,
 ):
     """Cached `SommerfeldGridBelow`, sharing `_sommerfeld`'s grid cache.
 
@@ -2625,6 +2820,12 @@ def get_grid_below(
     `r1_max` is still bucketed up: the lattice spacing is fixed, so a grid
     tabulated further out has node positions that coincide exactly with the
     smaller one's and interpolates identically inside it.
+
+    `lazy` (momwire#1512): an exact grid whose regions join the table without
+    their nodes, which `remainder_field_proj_below` fills as its census names
+    them. Only that reader asks for one; it is its own cache entry (memory
+    and disk), so every other reader keeps a grid whose filled regions are
+    whole. A sweep's blended grid is served as before.
     """
     k2 = float(k2)
     eps_t = complex(eps_t)
@@ -2641,7 +2842,9 @@ def get_grid_below(
         spacing,
         _tail_rule(),
     )
-    grid = _GRID_CACHE.get(key)
+    lazy = bool(lazy) and health is None and lazy_grids()
+    exact_key = key + ("lazy",) if lazy else key
+    grid = _GRID_CACHE.get(exact_key)
     if grid is None and health is None:
         grid = _GRID_CACHE.get(key + _BLENDED_KEY)
     if grid is None:
@@ -2657,8 +2860,10 @@ def get_grid_below(
                 mu=float(mu),
                 health=health,
                 spacing=spacing,
+                lazy=lazy,
             )
 
+        base_key, key = key, exact_key
         # The disk level (momwire#1224). A caller asking for `health` wants
         # the tally of a fill it watched, so it gets a fresh one. `track`:
         # the band regions fill lazily, and each one re-writes the file.
@@ -2683,7 +2888,7 @@ def get_grid_below(
                         eps_t, k2, r1b_wl * lam_m, float(omega), float(mu), plan
                     )
                     SWEEP_STATS["blended_grids"] += 1
-                    key = key + _BLENDED_KEY
+                    key = base_key + _BLENDED_KEY
                 elif grid is None:
                     grid = _somm_disk_cache.fetch_or_fill(key, fill, track=True)
         _GRID_CACHE[key] = grid
@@ -2868,6 +3073,52 @@ def _remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid
         # actually reaching gets the regions it touches filled and the kernel
         # re-run. A refused geometry fills nothing.
         filled_before = tuple(r["filled"] for r in grid._regions)
+        # A lazy table (momwire#1512): `_ensure_for` puts regions in the table
+        # without their nodes. The run reads first, as on an eager table, and
+        # its extremes decide the regions exactly as there. A node not filled
+        # reads NaN and NaN survives every operation of a read, so when no
+        # region joined and every output that is kept (all of them, or with
+        # the pairs past the cap zeroed, the rest) is finite, every node the
+        # run read was in. Otherwise the census of this batch's reads names
+        # the nodes, they are filled in the table's regions, and it runs again.
+        lazy = (
+            bool(grid._regions)
+            and "have" in grid._regions[0]
+            and hasattr(_acc, "remainder_field_proj_nodes_below")
+        )
+        if lazy:
+            filled_before = grid._in_table()
+
+        def _census_fill_run(past_cap):
+            from ._sommerfeld import grid_cpp_args
+
+            kept, past, *_ = _acc.remainder_field_proj_nodes_below(
+                np.ascontiguousarray(obs),
+                np.ascontiguousarray(src),
+                float(ground_z),
+                float(grid.r1_cap),
+                float(grid.th_min),
+                float(grid.th_band_floor_hi),
+                float(grid.th_band_lo_hi),
+                float(grid.th_band_hi),
+                *grid_cpp_args(grid),
+            )
+            need = [
+                np.asarray(k, bool)
+                if past_cap
+                else np.asarray(k, bool) | np.asarray(p, bool)
+                for k, p in zip(kept, past, strict=True)
+            ]
+            if grid.missing_in_table(need):
+                # Another process may have filled them since this one read
+                # the file; then the rest are filled and the file re-written.
+                grid.take_nodes(_somm_disk_cache.stored_copy(grid))
+                if grid.fill_nodes(need):
+                    _somm_disk_cache.note_mutated(grid)
+            res = _run()
+            if past_cap:
+                _zero_past_cap(res[0], obs, src, d_obs, d_src, grid.r1_cap)
+            return res
 
         def _run():
             kw = {} if _BELOW_LANES or not _HAVE_BELOW_LANES else {"lanes": False}
@@ -2928,6 +3179,25 @@ def _remainder_field_proj_below(obs, t_obs, src, t_src, ground_z, k_p, k_m, grid
                 if fill is None:
                     _SERVED_FILL_ROUTES["zero"] += 1
                     return np.zeros_like(out)
+            if lazy:
+                grid._ensure_for(*fill, lazy=True)
+                if past_cap:
+                    _zero_past_cap(out, obs, src, d_obs, d_src, grid.r1_cap)
+                # The check mode always takes the census's way, so that it is
+                # the census whose completeness the finite check proves.
+                if (
+                    grid._in_table() != filled_before
+                    or not np.all(np.isfinite(out))
+                    or lazy_check()
+                ):
+                    out, mx_r1, mn_th, mx_th = _census_fill_run(past_cap)
+                if past_cap and not np.all(np.isfinite(out)):
+                    _SERVED_FILL_ROUTES["fallback"] += 1
+                    grid._ensure_for(*kernel_fill, lazy=True)
+                    out, mx_r1, mn_th, mx_th = _census_fill_run(past_cap)
+                if lazy_check():
+                    check_read(out, "the below remainder projection")
+                return out
             grid._ensure_for(*fill)
             if tuple(r["filled"] for r in grid._regions) != filled_before:
                 out, mx_r1, mn_th, mx_th = _run()

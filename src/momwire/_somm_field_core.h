@@ -8,6 +8,7 @@
 
 namespace somm_proj {
 struct GridView;
+struct NodeMarks;
 }
 
 namespace somm_core {
@@ -31,5 +32,15 @@ void reflected_h_field(const somm_proj::GridView &G, std::ptrdiff_t n_pts, const
                        std::ptrdiff_t n_src, const double *src_mid,
                        const std::complex<double> *src_moment, double ground_z, double k,
                        double omega, double mu, double step, std::complex<double> *out);
+
+// The lazy grids' census of the two (momwire#1512): every node their reads
+// take, marked (`proj_core`'s address over the same points, H's six offset
+// points formed as `reflected_h_field` forms them).
+void reflected_field_nodes(const somm_proj::GridView &G, std::ptrdiff_t n_pts, const double *points,
+                           std::ptrdiff_t n_src, const double *src_mid, double ground_z,
+                           somm_proj::NodeMarks &marks);
+void reflected_h_field_nodes(const somm_proj::GridView &G, std::ptrdiff_t n_pts,
+                             const double *points, std::ptrdiff_t n_src, const double *src_mid,
+                             double ground_z, double step, somm_proj::NodeMarks &marks);
 
 }  // namespace somm_core
