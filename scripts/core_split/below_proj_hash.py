@@ -25,9 +25,7 @@ def _decks(args):
     out = []
     for arg in args:
         p = Path(arg)
-        out += (
-            sorted(q for q in p.rglob("*.nec") if q.is_file()) if p.is_dir() else [p]
-        )
+        out += sorted(q for q in p.rglob("*.nec") if q.is_file()) if p.is_dir() else [p]
     return out
 
 
@@ -103,7 +101,9 @@ def replay(out_dir):
         for variant in (kw, {"lanes": False}, {"blocked": False}, {"lanes": True}):
             got = acc.remainder_field_proj_batch_below(*args, **variant)
             n += 1
-            same = got[0].tobytes() == ref and np.array_equal(np.array(got[1:]), z["ext"])
+            same = got[0].tobytes() == ref and np.array_equal(
+                np.array(got[1:]), z["ext"]
+            )
             if not same:
                 bad += 1
                 print(f"DIFFER {f.name} {variant}")
