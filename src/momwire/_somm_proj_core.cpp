@@ -34,7 +34,7 @@
 // reference the lanes are gated against (tests/test_somm_proj_lanes_1290.py);
 // the baseline and arm64 builds have only it. On MSVC (/fp:fast) the gate is
 // the derived win32 tolerance, not bit equality (momwire#1371).
-#if MW_LANES_SIMD && MW_LANES_PACKED
+#if MW_LANES_SIMD && MW_LANES_PACKED && !defined(MW_STUDY_SSE2_LANES_NI_ONLY)
 #define MW_SOMM_LANES 1
 #else
 #define MW_SOMM_LANES 0

@@ -19,7 +19,7 @@
 #endif
 
 #include "_lanes.h"
-#if MW_LANES_SIMD && MW_LANES_FUSED && MW_LANES_PACKED
+#if MW_LANES_SIMD && MW_LANES_FUSED && MW_LANES_PACKED && !defined(MW_STUDY_SSE2_LANES_NI_ONLY)
 #define MW568_LANES 1
 #else
 #define MW568_LANES 0
