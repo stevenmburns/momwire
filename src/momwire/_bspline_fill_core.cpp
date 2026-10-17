@@ -65,6 +65,7 @@ nd::array_t<T> borrow_mut(std::vector<T> &v, std::vector<nd::ssize_t> shape) {
     return nd::array_t<T>::borrow(b);
 }
 
+constexpr size_t OFFEDGE_SPLIT_MAX_EDGES = 32;
 constexpr double PHASE_KL_CEILING = 0.5;     // `_LADDER_PHASE_KL_CEILING`
 constexpr int64_t PHASE_LIMITED_BELOW = 8;   // `_LADDER_PHASE_LIMITED_BELOW`
 constexpr int BSPLINE_ACCEL_MAX_D = 3;
@@ -334,7 +335,30 @@ CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_w
                 ek.b_j = seg_a;
             }
         }
-        J = offedge(s, s, seg_a, fp.k, d, fp.n_qp_pair, ek, fp.ladder);
+        // The off-edge pairs only (momwire#1517 speed): each edge's rows
+        // against every column off it. `_build_J_blocks` fills every pair and
+        // then overwrites the same-edge blocks below, and a pair's moments do
+        // not depend on which pairs share its call (the per-pair phase guard
+        // and tier, momwire#920), so this is the same J with the overwritten
+        // half never computed. Few edges only: a deck of many short edges
+        // saves little and would pay a call per edge.
+        if (slices.size() <= OFFEDGE_SPLIT_MAX_EDGES) {
+            J = Block(static_cast<size_t>(nd * nd) * N * N);
+            for (const auto &sl : slices) {
+                std::vector<size_t> rows, cols;
+                for (size_t q = sl.first; q < sl.second; q++) rows.push_back(q);
+                for (size_t q = 0; q < N; q++)
+                    if (q < sl.first || q >= sl.second) cols.push_back(q);
+                if (cols.empty()) continue;
+                std::vector<double> a_rows;
+                for (size_t q : rows) a_rows.push_back(seg_a[q]);
+                const Block sub = offedge(s.take(rows), s.take(cols), a_rows, fp.k, d, fp.n_qp_pair,
+                                          ek_cut(ek, &rows, &cols), fp.ladder);
+                place(J, N, N, sub, rows, cols, nd);
+            }
+        } else {
+            J = offedge(s, s, seg_a, fp.k, d, fp.n_qp_pair, ek, fp.ladder);
+        }
     }
     // the same-edge blocks: `A_st + A_reg`
     for (size_t w = 0; w < g.per_wire.size(); w++) {

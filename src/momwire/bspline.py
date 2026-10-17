@@ -712,6 +712,10 @@ def _csr_expand(ptr, idx, rows):
 # (pairs, wings, wings) transient whatever the number of elevated pairs.
 _PAIR_SCATTER_CHUNK = 1 << 15
 
+# `_build_J_blocks` fills only the off-edge pairs, one kernel call per edge,
+# up to this many edges (momwire#1517); past it, one whole-mesh call.
+_OFFEDGE_SPLIT_MAX_EDGES = 32
+
 
 def _ek_slice(ek, rows=None, cols=None):
     """Restrict an `_EK` spec's per-segment labels to a block's rows/cols.
@@ -4661,6 +4665,32 @@ class BSplineSolver(
         # single-edge deck, so this is the commonest shape there is.
         if len(same_slices) == 1 and same_slices[0] == slice(0, n_total):
             J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
+        elif len(same_slices) <= _OFFEDGE_SPLIT_MAX_EDGES:
+            # The off-edge pairs only (momwire#1517): each edge's rows against
+            # every column off it. The same-edge blocks are overwritten below,
+            # and a pair's moments do not depend on which pairs share its call
+            # (the per-pair phase guard and tier, momwire#920), so this is the
+            # J the whole-mesh call gives, bit for bit, without computing the
+            # half it would throw away. Few edges only: many short edges would
+            # pay a call each for little.
+            ladder = self._fill_ladder(k, seg_l, seg_r, ek)
+            J = np.zeros((d + 1, d + 1, n_total, n_total), dtype=complex)
+            for sl in same_slices:
+                cols = np.r_[0 : sl.start, sl.stop : n_total]
+                if cols.size == 0:
+                    continue
+                J[:, :, sl, cols] = _seg_seg_full_moments_offedge(
+                    seg_l[sl],
+                    seg_r[sl],
+                    seg_l[cols],
+                    seg_r[cols],
+                    a_row[sl],
+                    k,
+                    d,
+                    self.n_qp_pair,
+                    ek=_ek_slice(ek, rows=sl, cols=cols),
+                    ladder=ladder,
+                )
         else:
             J = _seg_seg_full_moments_offedge(
                 seg_l,
