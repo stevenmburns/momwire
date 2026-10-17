@@ -102,7 +102,7 @@ const char *const VERSION = MW_VERSION;
 #ifndef MW_EXE_VARIANT
 #define MW_EXE_VARIANT "avx2"
 #endif
-const char *const VARIANT = MW_EXE_VARIANT;
+const char *const EXE_VARIANT = MW_EXE_VARIANT;
 
 using Clock = std::chrono::steady_clock;
 const Clock::time_point T0 = Clock::now();
@@ -324,10 +324,10 @@ bool cpu_has_avx2() {
 // MOMWIRE_FORCE_VARIANT naming one overrides the CPU). The no-Python build
 // has no Python to agree with: avx2 needs the CPU, sse2 runs anywhere.
 bool cxx_variant_ok() {
-    const bool avx2 = std::string(VARIANT) == "avx2";
+    const bool avx2 = std::string(EXE_VARIANT) == "avx2";
 #if !MW_EXE_NO_PYTHON
     const std::string forced = env("MOMWIRE_FORCE_VARIANT");
-    if (!forced.empty()) return forced == VARIANT && (!avx2 || cpu_has_avx2());
+    if (!forced.empty()) return forced == EXE_VARIANT && (!avx2 || cpu_has_avx2());
     return avx2 == cpu_has_avx2();
 #else
     return !avx2 || cpu_has_avx2();
@@ -556,7 +556,7 @@ void refuse_version(const std::string &deck, const std::string &out, const std::
     if (out.empty()) return;
     std::string text;
     const bool readable = read_file(deck, text);
-    mw::nec5::EngineStamp stamp{VERSION, VARIANT, ""};
+    mw::nec5::EngineStamp stamp{VERSION, EXE_VARIANT, ""};
     const std::string printout = mw::nec5::printout_bytes(
         mw::nec5::render_refusal(readable ? &text : nullptr, why, BASIS, stamp));
     if (std::FILE *w = std::fopen(out.c_str(), "wb")) {
@@ -631,10 +631,10 @@ int main(int argc, char **argv) {
             // thread-sensitive printout cell (a 1e10-ohm network pin's
             // reactance) prints the launcher's digits.
             set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
-            printed = mws::exe::answer(text, VERSION, VARIANT, arrays_dir, printout, why);
+            printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         } else {
             set_threads(threads, true);
-            printed = mw::exe::answer(text, VERSION, VARIANT, arrays_dir, printout, why);
+            printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why);
         }
         if (printed) {
             std::FILE *w = std::fopen(out.c_str(), "wb");
@@ -699,7 +699,7 @@ const char *const STREAMING_REFUSAL =
     "SimNEC 5.4 uses for NEC5CL_a5x engines; give it two file paths, as SimNEC does for every "
     "other NEC-5 engine (momwire#1395)";
 
-const mw::nec5::EngineStamp STAMP{VERSION, VARIANT, ""};
+const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
 
 // `probe_version`: NEC5momwire.<major>.<minor>, this build's release.
 std::string probe_version() {
@@ -833,11 +833,11 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     const bool serial = threads == 1 && env("MW_EXE_COPY") != "threads";
     if (serial) {
         set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
-        printed = mws::exe::answer(text, VERSION, VARIANT, arrays_dir, printout, why, &failed, &kind,
+        printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                    &message, &raised_kind);
     } else {
         set_threads(threads, true);
-        printed = mw::exe::answer(text, VERSION, VARIANT, arrays_dir, printout, why, &failed, &kind,
+        printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
                                   &message, &raised_kind);
     }
     if (printed) {
