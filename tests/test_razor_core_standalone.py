@@ -779,13 +779,14 @@ def test_the_buried_decks_print_with_their_tables_filled_in_cxx(
     node charges, the below/below table filled in C++ (`_somm_below_fill_core`,
     the integrand `_somm_below_six_inline.h` shared with the extension), and
     the run half's split rows and transmitted far field -- each deck printed,
-    none declined, and each printout the launcher's bytes. Exact tables
-    (MOMWIRE_BELOW_ANCHORS=off): the anchors' sweep state lives per process,
-    and the driver and this process see different histories."""
+    none declined, and each printout the launcher's bytes. Exact tables, the
+    default since momwire#1535: the anchors' sweep state lives per process,
+    and the driver and this process see different histories, so an inherited
+    opt-in is cleared."""
     pc = _printout_compare_module()
     if pc.scipy_openblas() is None or pc.numpy_openblas() is None:
         pytest.skip("no bundled OpenBLAS beside SciPy / numpy (not a wheel install)")
-    monkeypatch.setenv("MOMWIRE_BELOW_ANCHORS", "off")
+    monkeypatch.delenv("MOMWIRE_BELOW_ANCHORS", raising=False)
     answers = pc.run_driver(
         driver[0]["nec5_razor_printout_driver"], BURIED_DECKS, tmp_path
     )

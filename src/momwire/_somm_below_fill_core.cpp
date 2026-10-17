@@ -970,13 +970,14 @@ bool anchor_plan(cd eps_t, const double spacing[3], Plan &p) {
 
 std::string anchor_mode_env() {
     const char *e = std::getenv("MOMWIRE_BELOW_ANCHORS");
-    std::string v = e == nullptr ? "auto" : e;
+    // `anchor_mode()`: off unless asked for (momwire#1535).
+    std::string v = e == nullptr ? "off" : e;
     v.erase(0, v.find_first_not_of(" \t\n\r\f\v"));
     v.erase(v.find_last_not_of(" \t\n\r\f\v") + 1);
     for (char &c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    if (v == "0" || v == "off" || v == "false" || v == "no" || v == "exact") return "off";
+    if (v == "auto") return "auto";
     if (v == "1" || v == "on" || v == "true" || v == "yes" || v == "always") return "on";
-    return "auto";
+    return "off";
 }
 
 class FillSource : public Source {

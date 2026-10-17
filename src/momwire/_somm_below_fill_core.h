@@ -58,8 +58,8 @@ std::unique_ptr<Grid> make_grid(cd eps_t, double k2, double r1_max, double omega
 void fill_region(Grid &g, int idx, uintptr_t cancel_flag);
 
 // `get_grid_below` / `_ensure_for` with the anchors, as the process's Source.
-// `anchors` is `anchor_mode()` ("auto", "off", "on"; MOMWIRE_BELOW_ANCHORS
-// when empty).
+// `anchors` is `anchor_mode()` ("off", "auto", "on"; MOMWIRE_BELOW_ANCHORS
+// when empty, off when that is unset -- momwire#1535).
 std::shared_ptr<Source> fill_source(const std::string &anchors = "");
 
 // The executable's store (off until configured; the extension and the
