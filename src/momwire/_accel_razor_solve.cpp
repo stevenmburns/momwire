@@ -957,13 +957,48 @@ py::list bspline_front_geometry(py::bytes latin1) {
     py::list out;
     for (const auto &p : r.prepared) {
         const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
-        std::vector<std::vector<double>> pls;
-        std::vector<std::vector<int64_t>> npe;
+        mw::bspline::WireArgs wa;
         for (size_t w = 0; w < in.n_per_edge.size(); w++) {
-            pls.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
-            npe.push_back({in.n_per_edge[w]});
+            wa.polylines.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
+            wa.n_per_edge.push_back({in.n_per_edge[w]});
         }
-        const mw::bspline::Geometry g = mw::bspline::build_geometry(pls, npe);
+        wa.radius = in.radius;
+        wa.radius_per_wire = in.radius_per_wire;
+        wa.has_conductivity = in.has_conductivity;
+        wa.conductivity = in.conductivity;
+        wa.has_rlc = in.has_rlc;
+        for (const auto &e : in.rlc) wa.rlc.push_back({e.kind, e.r, e.l, e.c});
+        for (const auto &f : in.feeds) wa.feeds.push_back({f.wire, f.arc});
+        for (const auto &g : in.node_gaps) wa.node_gaps.push_back({g.wire, g.end == mw::nec5::End::start});
+        wa.junctions_given = !in.junctions.empty();
+        for (const auto &g : in.junctions) {
+            std::vector<std::pair<int64_t, bool>> mm;
+            for (const auto &e : g) mm.push_back({e.first, e.second == mw::nec5::End::start});
+            wa.junctions.push_back(mm);
+        }
+        py::dict entry;
+        entry["kwargs"] = bspline_kwargs(p);
+        mw::bspline::WireDedup dd;
+        try {
+            dd = mw::bspline::drop_duplicated_wires(wa);
+        } catch (const mw::bspline::FrontValueError &e) {
+            entry["raised"] = py::make_tuple("ValueError", e.what());
+            out.append(entry);
+            continue;
+        } catch (const mw::bspline::FrontNotPorted &e) {
+            entry["declined"] = e.what();
+            out.append(entry);
+            continue;
+        }
+        if (dd.active) {
+            py::list kept, removed;
+            for (int64_t w : dd.kept) kept.append(w);
+            for (const auto &r : dd.removed) removed.append(py::make_tuple(r.copy, r.twin, r.reversed));
+            entry["dedup"] = py::make_tuple(dd.n_input, py::tuple(kept), py::tuple(removed));
+        } else {
+            entry["dedup"] = py::none();
+        }
+        const mw::bspline::Geometry g = mw::bspline::build_geometry(wa.polylines, wa.n_per_edge);
         auto arr = [](const std::vector<double> &v, bool rows3) {
             const ptrdiff_t n = static_cast<ptrdiff_t>(v.size());
             py::array_t<double> a = rows3 ? py::array_t<double>({n / 3, static_cast<ptrdiff_t>(3)})
@@ -997,8 +1032,6 @@ py::list bspline_front_geometry(py::bytes latin1) {
         d["tangents"] = arr(g.tangents, true);
         d["seg_l"] = arr(g.seg_l, true);
         d["seg_r"] = arr(g.seg_r, true);
-        py::dict entry;
-        entry["kwargs"] = bspline_kwargs(p);
         entry["geom"] = d;
         out.append(entry);
     }

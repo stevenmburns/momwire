@@ -7,7 +7,9 @@
 #pragma fp_contract(off)
 #endif
 
+#include <algorithm>
 #include <cmath>
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -32,7 +34,188 @@ std::vector<double> linspace(double start, double stop, int64_t num) {
     return y;
 }
 
+// `np.round(x, 9)` (rint(x * 1e9) / 1e9), +0.0 so -0.0 keys as 0.0 does
+// in Python's tuple comparison.
+double round9(double x) { return std::nearbyint(x * 1e9) / 1e9 + 0.0; }
+
+// `_same` for floats (NaN equals NaN) and for RLC entries.
+bool same_value(double a, double b) { return (std::isnan(a) && std::isnan(b)) || a == b; }
+bool same_rlc(const WireArgs::RLC &a, const WireArgs::RLC &b) {
+    if (a.kind == 0 || b.kind == 0) return a.kind == b.kind;
+    return a.kind == b.kind && a.r == b.r && a.l == b.l && a.c == b.c;
+}
+
 }  // namespace
+
+WireDedup drop_duplicated_wires(WireArgs &args) {
+    WireDedup dd;
+    const size_t n = args.polylines.size();
+    // `find_duplicated_wires`
+    double scale = 1.0;
+    bool any = false;
+    for (const auto &pl : args.polylines)
+        for (double v : pl) {
+            scale = std::max(scale, std::fabs(v));
+            any = true;
+        }
+    if (!any) return dd;
+    const double tol = 1e-12 * scale;
+    struct Dup {
+        size_t copy, first;
+        bool rev;
+    };
+    std::vector<Dup> dups;
+    std::map<std::vector<double>, size_t> seen;
+    for (size_t w = 0; w < n; w++) {
+        const std::vector<double> &pl = args.polylines[w];
+        const size_t m = pl.size() / 3;
+        std::vector<double> fwd, rev;
+        for (size_t i = 0; i < m; i++)
+            for (int c = 0; c < 3; c++) fwd.push_back(round9(pl[3 * i + c]));
+        for (size_t i = m; i-- > 0;)
+            for (int c = 0; c < 3; c++) rev.push_back(round9(pl[3 * i + c]));
+        const std::vector<double> &key = std::min(fwd, rev);
+        auto it = seen.find(key);
+        if (it == seen.end()) {
+            seen.emplace(key, w);
+            continue;
+        }
+        const size_t first = it->second;
+        const std::vector<double> &tw = args.polylines[first];
+        if (tw.size() != pl.size()) continue;
+        double d_fwd = 0.0, d_rev = 0.0;
+        for (size_t i = 0; i < m; i++)
+            for (int c = 0; c < 3; c++) {
+                d_fwd = std::max(d_fwd, std::fabs(tw[3 * i + c] - pl[3 * i + c]));
+                d_rev = std::max(d_rev, std::fabs(tw[3 * i + c] - pl[3 * (m - 1 - i) + c]));
+            }
+        if (d_fwd <= tol)
+            dups.push_back({w, first, false});
+        else if (d_rev <= tol)
+            dups.push_back({w, first, true});
+    }
+    if (dups.empty()) return dd;
+    if (!args.junctions_given)
+        throw FrontNotPorted("dedup over inferred junctions");
+
+    // `_merge_connected_alike` over the declared junctions
+    std::map<std::pair<int64_t, bool>, int64_t> node;
+    for (size_t j = 0; j < args.junctions.size(); j++)
+        for (const auto &m : args.junctions[j]) node[m] = static_cast<int64_t>(j);
+    const auto at = [&](int64_t w, bool start) {
+        auto it = node.find({w, start});
+        return it == node.end() ? int64_t(-1) : it->second;
+    };
+    const auto joined = [&](size_t w, bool rev) {
+        const int64_t s = static_cast<int64_t>(w);
+        return std::make_pair(at(s, !rev), at(s, rev));  // ("start", "end") read in the first's direction
+    };
+    std::vector<size_t> class_order;
+    std::map<size_t, std::vector<std::pair<size_t, bool>>> classes;
+    for (const Dup &d : dups) {
+        auto it = classes.find(d.first);
+        if (it == classes.end()) {
+            class_order.push_back(d.first);
+            it = classes.emplace(d.first, std::vector<std::pair<size_t, bool>>{{d.first, false}}).first;
+        }
+        it->second.emplace_back(d.copy, d.rev);
+    }
+    std::map<size_t, std::pair<size_t, bool>> removed;
+    std::vector<size_t> removed_order;
+    for (size_t first : class_order) {
+        struct Rep {
+            size_t w;
+            bool rev;
+            std::pair<int64_t, int64_t> key;
+        };
+        std::vector<Rep> reps;
+        for (const auto &member : classes[first]) {
+            const auto key = joined(member.first, member.second);
+            const Rep *match = nullptr;
+            for (const Rep &r : reps)
+                if (r.key == key) {
+                    match = &r;
+                    break;
+                }
+            if (match == nullptr) {
+                reps.push_back({member.first, member.second, key});
+            } else {
+                removed[member.first] = {match->w, member.second != match->rev};
+                removed_order.push_back(member.first);
+            }
+        }
+    }
+    if (removed.empty()) return dd;
+    const auto refuse = [](size_t r, size_t twin, const std::string &why) {
+        throw FrontValueError("BSplineSolver: wires " + std::to_string(twin) + " and " +
+                              std::to_string(r) + " are the same wire listed twice, and " + why +
+                              ", so they cannot be merged into one conductor. Delete wire " +
+                              std::to_string(r) + ", or make the two copies identical - momwire#1042");
+    };
+    // in `removed`'s insertion order, as Python's dict iterates
+    for (size_t r : removed_order) {
+        const size_t twin = removed[r].first;
+        const bool rev = removed[r].second;
+        std::vector<int64_t> a = args.n_per_edge[twin], b = args.n_per_edge[r];
+        if (rev) std::reverse(b.begin(), b.end());
+        if (a != b) refuse(r, twin, "their segment counts differ");
+        if (args.radius_per_wire && !same_value(args.radius[r], args.radius[twin]))
+            refuse(r, twin, "their wire_radius entries differ");
+        if (args.has_conductivity && !same_value(args.conductivity[r], args.conductivity[twin]))
+            refuse(r, twin, "their wire_conductivity entries differ");
+        if (args.has_rlc && !same_rlc(args.rlc[r], args.rlc[twin]))
+            refuse(r, twin, "their distributed_rlc entries differ");
+        for (const auto &f : args.feeds)
+            if (f.wire == static_cast<int64_t>(r) || f.wire == static_cast<int64_t>(twin))
+                refuse(r, twin, "feeds places a site on wire " + std::to_string(f.wire));
+        for (const auto &g : args.node_gaps)
+            if (g.wire == static_cast<int64_t>(r) || g.wire == static_cast<int64_t>(twin))
+                refuse(r, twin, "node_gaps places a site on wire " + std::to_string(g.wire));
+    }
+    // the declared junctions without the dropped members (no
+    // junction-indexed ports here, so nothing is refused for it)
+    std::vector<std::vector<std::pair<int64_t, bool>>> junctions;
+    for (const auto &g : args.junctions) {
+        std::vector<std::pair<int64_t, bool>> kept;
+        for (const auto &m : g)
+            if (!removed.count(static_cast<size_t>(m.first))) kept.push_back(m);
+        if (!kept.empty()) junctions.push_back(kept);
+    }
+    dd.active = true;
+    dd.n_input = static_cast<int64_t>(n);
+    std::vector<int64_t> new_index(n, -1);
+    for (size_t w = 0; w < n; w++)
+        if (!removed.count(w)) {
+            new_index[w] = static_cast<int64_t>(dd.kept.size());
+            dd.kept.push_back(static_cast<int64_t>(w));
+        }
+    for (const auto &kv : removed)  // sorted by copy
+        dd.removed.push_back({static_cast<int64_t>(kv.first), static_cast<int64_t>(kv.second.first),
+                              kv.second.second});
+    WireArgs out = args;
+    out.polylines.clear();
+    out.n_per_edge.clear();
+    if (out.radius_per_wire) out.radius.clear();
+    out.conductivity.clear();
+    out.rlc.clear();
+    for (int64_t w : dd.kept) {
+        out.polylines.push_back(args.polylines[static_cast<size_t>(w)]);
+        out.n_per_edge.push_back(args.n_per_edge[static_cast<size_t>(w)]);
+        if (args.radius_per_wire) out.radius.push_back(args.radius[static_cast<size_t>(w)]);
+        if (args.has_conductivity) out.conductivity.push_back(args.conductivity[static_cast<size_t>(w)]);
+        if (args.has_rlc) out.rlc.push_back(args.rlc[static_cast<size_t>(w)]);
+    }
+    for (auto &f : out.feeds) f.wire = new_index[static_cast<size_t>(f.wire)];
+    for (auto &g : out.node_gaps) g.wire = new_index[static_cast<size_t>(g.wire)];
+    out.junctions.clear();
+    for (const auto &g : junctions) {
+        std::vector<std::pair<int64_t, bool>> mm;
+        for (const auto &m : g) mm.push_back({new_index[static_cast<size_t>(m.first)], m.second});
+        out.junctions.push_back(mm);
+    }
+    args = std::move(out);
+    return dd;
+}
 
 Geometry build_geometry(const std::vector<std::vector<double>> &polylines,
                         const std::vector<std::vector<int64_t>> &n_per_edge) {

@@ -5,6 +5,9 @@
 #pragma once
 
 #include <cstdint>
+#include <stdexcept>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace mw {
@@ -26,6 +29,66 @@ struct Geometry {
     int64_t n_segs_total = 0;
     std::vector<double> h_per_seg, tangents, seg_l, seg_r;  // global, concatenated
 };
+
+// The constructor's wire-indexed arguments, before and after
+// `_wire_spec.drop_duplicated_wires` (momwire#1042 / #1333).
+struct WireArgs {
+    std::vector<std::vector<double>> polylines;      // (n_points, 3) each
+    std::vector<std::vector<int64_t>> n_per_edge;    // per wire, per edge
+    // `wire_radius`: one value, or one per wire (`radius_per_wire`)
+    std::vector<double> radius;
+    bool radius_per_wire = false;
+    // `wire_conductivity` (NaN: none) and `distributed_rlc` (kind 0: None),
+    // per wire when given
+    bool has_conductivity = false;
+    std::vector<double> conductivity;
+    struct RLC {
+        int kind = 0;
+        double r = 0, l = 0, c = 0;
+    };
+    bool has_rlc = false;
+    std::vector<RLC> rlc;
+    // the sites' wire indices (`feeds` then `node_gaps`), with their payloads
+    struct Feed {
+        int64_t wire = 0;
+        double arc = 0;
+    };
+    std::vector<Feed> feeds;
+    struct Gap {
+        int64_t wire = 0;
+        bool at_start = true;
+    };
+    std::vector<Gap> node_gaps;
+    // declared `junctions`: (wire, at_start) members; none -> inferred
+    bool junctions_given = false;
+    std::vector<std::vector<std::pair<int64_t, bool>>> junctions;
+};
+
+// `WireDedup`: the caller's wire count, the kept wires (caller's indices)
+// and each dropped copy (copy, kept twin, reversed), sorted by copy.
+struct WireDedup {
+    bool active = false;
+    int64_t n_input = 0;
+    std::vector<int64_t> kept;
+    struct Dropped {
+        int64_t copy = 0, twin = 0;
+        bool reversed = false;
+    };
+    std::vector<Dropped> removed;
+};
+
+// Python's ValueError (its message) and NotImplementedError, from the front.
+struct FrontValueError : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+struct FrontNotPorted : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
+
+// `drop_duplicated_wires("BSplineSolver", ...)` with no junction-indexed
+// ports: `args` reduced in place, the dedup returned. Refuses as Python does
+// (FrontValueError); inferred junctions throw FrontNotPorted.
+WireDedup drop_duplicated_wires(WireArgs &args);
 
 // `polylines[w]`: (n_points, 3) row-major; `n_per_edge[w]`: one count per
 // edge. Throws std::invalid_argument("wire W edge E has zero length") where

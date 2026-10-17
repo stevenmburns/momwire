@@ -6,6 +6,7 @@
 For every deck the C++ seam prepares for bspline, `BSplineSolver` is built
 from the seam's own keyword arguments (no fill) and each ported unit's
 arrays are compared byte for byte (`front_compare.differences`). Units:
+`_wire_spec.drop_duplicated_wires` (the dedup and its refusals) and
 `_build_geometry`. Exit 1 on any mismatch.
 """
 
@@ -51,9 +52,28 @@ def main():
                 solver = BSplineSolver(**entry["kwargs"])
                 geom = solver._build_geometry()
             except Exception as exc:  # noqa: BLE001 -- counted by type
-                counts[f"python-raised:{type(exc).__name__}"] += 1
+                want = (type(exc).__name__, str(exc))
+                if "raised" in entry:
+                    counts["raised-alike"] += 1
+                    if tuple(entry["raised"]) != want:
+                        mismatches += 1
+                        print(f"MISMATCH {path}[{k}]: {entry['raised']} vs {want}")
+                else:
+                    counts[f"python-raised:{type(exc).__name__}"] += 1
                 continue
-            d = fc.differences(_py(dict(geom)), entry["geom"], "geom")
+            if "raised" in entry or "declined" in entry:
+                mismatches += 1
+                print(
+                    f"MISMATCH {path}[{k}]: C++ {entry.get('raised') or entry['declined']}"
+                )
+                continue
+            dd = solver._wire_dedup
+            want = (
+                None if dd is None else (dd.n_input, tuple(dd.kept), tuple(dd.removed))
+            )
+            d = fc.differences(want, entry["dedup"], "dedup")
+            counts["deduped"] += dd is not None
+            d += fc.differences(_py(dict(geom)), entry["geom"], "geom")
             counts["compared"] += 1
             if d:
                 mismatches += 1
