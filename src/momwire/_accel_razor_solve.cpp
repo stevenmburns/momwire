@@ -981,6 +981,7 @@ py::list bspline_front_geometry(py::bytes latin1) {
         mw::bspline::WireDedup dd;
         try {
             dd = mw::bspline::drop_duplicated_wires(wa);
+            mw::bspline::check_ports(wa);
         } catch (const mw::bspline::FrontValueError &e) {
             entry["raised"] = py::make_tuple("ValueError", e.what());
             out.append(entry);
@@ -1048,6 +1049,20 @@ py::list bspline_front_geometry(py::bytes latin1) {
             py::list knots;
             for (const auto &k : bs.wire_knots) knots.append(arr(k, false));
             entry["basis"] = py::make_tuple(ss, pp, ka, knots);
+            const std::vector<double> gc = mw::bspline::node_gap_columns(wa, bs);
+            py::array_t<double> gcol({nb, static_cast<ptrdiff_t>(wa.node_gaps.size())});
+            std::copy(gc.begin(), gc.end(), gcol.mutable_data());
+            entry["node_gap_cols"] = gcol;
+            py::list js, ngs, fs;
+            for (const auto &g2 : wa.junctions) {
+                py::list mm;
+                for (const auto &m : g2) mm.append(py::make_tuple(m.first, m.second ? "start" : "end"));
+                js.append(mm);
+            }
+            for (const auto &g2 : wa.node_gaps)
+                ngs.append(py::make_tuple(g2.wire, g2.at_start ? "start" : "end", cd(0.0, 0.0)));
+            for (const auto &f : wa.feeds) fs.append(py::make_tuple(f.wire, f.arc, cd(0.0, 0.0)));
+            entry["spec"] = py::make_tuple(js, ngs, fs);
         } catch (const mw::bspline::FrontValueError &e) {
             entry["basis_raised"] = py::make_tuple("ValueError", e.what());
         } catch (const mw::bspline::FrontNotPorted &e) {

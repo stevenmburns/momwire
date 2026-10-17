@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cmath>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -313,6 +314,8 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
     b.degree = d;
     const size_t n_w = polylines.size();
     const int64_t FREE = -1, GROUND = -2;
+    b.start_dir.assign(n_w, -1);
+    b.end_dir.assign(n_w, -1);
     b.start_status.assign(n_w, FREE);
     b.end_status.assign(n_w, FREE);
     for (size_t j = 0; j < junctions.size(); j++)
@@ -463,12 +466,15 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
                 for (int p2 = 0; p2 < W; p2++)
                     b.polys.push_back(on ? pps[static_cast<size_t>((s2 * W + p2) * W + (kb.j - s2))] : 0.0);
             }
-            if (kb.kind == 1)
+            if (kb.kind == 1) {
                 junction_dirs[static_cast<size_t>(kb.junction)].push_back({m_global, kb.start ? 1.0 : -1.0});
+                (kb.start ? b.start_dir : b.end_dir)[w] = m_global;
+            }
             m_global++;
         }
     }
     b.n_basis = m_global;
+    b.grounded_junction = grounded_junction;
     std::vector<size_t> rows;
     for (size_t j = 0; j < junctions.size(); j++)
         if (!grounded_junction[j]) rows.push_back(j);
@@ -478,6 +484,104 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
         for (const auto &ms : junction_dirs[rows[r]])
             b.kcl_A[r * static_cast<size_t>(b.n_basis) + static_cast<size_t>(ms.first)] = ms.second;
     return b;
+}
+
+void check_ports(const WireArgs &args) {
+    const int64_t n_w = static_cast<int64_t>(args.polylines.size());
+    if (args.feeds.empty() && args.node_gaps.empty())
+        throw FrontValueError("feeds must contain at least one entry");
+    for (size_t i = 0; i < args.feeds.size(); i++)
+        if (!(0 <= args.feeds[i].wire && args.feeds[i].wire < n_w))
+            throw FrontValueError("feeds[" + std::to_string(i) + "]: wire_index " +
+                                  std::to_string(args.feeds[i].wire) + " out of range [0, " +
+                                  std::to_string(n_w) + ")");
+    // `check_junction_coincidence`: every member within
+    // max(floor, 1e-3 of the shortest terminal segment) of the first
+    for (const auto &group : args.junctions) {
+        std::vector<const double *> anchors;
+        double min_seg = 0.0;
+        for (size_t q = 0; q < group.size(); q++) {
+            const std::vector<double> &pl = args.polylines[static_cast<size_t>(group[q].first)];
+            const std::vector<int64_t> &npe = args.n_per_edge[static_cast<size_t>(group[q].first)];
+            const size_t m = pl.size() / 3;
+            const double *a = group[q].second ? &pl[0] : &pl[3 * (m - 1)];
+            const double *o = group[q].second ? &pl[3] : &pl[3 * (m - 2)];
+            const double e[3] = {o[0] - a[0], o[1] - a[1], o[2] - a[2]};
+            const int64_t count = group[q].second ? npe.front() : npe.back();
+            const double len = std::sqrt((e[0] * e[0] + e[1] * e[1]) + e[2] * e[2]) /
+                               static_cast<double>(std::max<int64_t>(count, 1));
+            min_seg = q == 0 ? len : std::min(min_seg, len);
+            anchors.push_back(a);
+        }
+        // the floor is `_JUNCTION_COINCIDENCE_FLOOR`; a deck the seam meshed
+        // shares one node key, far inside any tolerance, so the check is
+        // asked conservatively here and anything near it declines
+        const double tol = 1e-3 * min_seg;
+        for (size_t q = 1; q < anchors.size(); q++) {
+            const double d[3] = {anchors[q][0] - anchors[0][0], anchors[q][1] - anchors[0][1],
+                                 anchors[q][2] - anchors[0][2]};
+            if (std::sqrt((d[0] * d[0] + d[1] * d[1]) + d[2] * d[2]) > tol)
+                throw FrontNotPorted("junction-coincidence");
+        }
+    }
+    // `normalize_node_gaps` (no junction ports)
+    std::map<std::pair<int64_t, bool>, size_t> end_to_junction;
+    for (size_t j = 0; j < args.junctions.size(); j++)
+        for (const auto &m : args.junctions[j]) end_to_junction[m] = j;
+    std::set<std::pair<int64_t, bool>> seen_members;
+    std::set<size_t> seen_junctions;
+    for (size_t i = 0; i < args.node_gaps.size(); i++) {
+        const auto &gp = args.node_gaps[i];
+        const std::string end = gp.at_start ? "start" : "end";
+        const std::string at = "node_gaps[" + std::to_string(i) + "]: ";
+        if (!(0 <= gp.wire && gp.wire < n_w))
+            throw FrontValueError(at + "wire_index " + std::to_string(gp.wire) + " out of range [0, " +
+                                  std::to_string(n_w) + ")");
+        const std::pair<int64_t, bool> member{gp.wire, gp.at_start};
+        auto it = end_to_junction.find(member);
+        if (it == end_to_junction.end())
+            throw FrontValueError(at + "the " + end + " of wire " + std::to_string(gp.wire) +
+                                  " is not a member of any junction group \xe2\x80\x94 a series node gap "
+                                  "lives at a junction; for a feed inside a wire use feeds=");
+        const size_t j = it->second;
+        if (args.junctions[j].size() < 2)
+            throw FrontValueError(at + "junction " + std::to_string(j) +
+                                  " has a single member \xe2\x80\x94 there is no through-current path "
+                                  "to be in series with (a lone-end attachment is junction_ports=)");
+        if (seen_members.count(member))
+            throw FrontValueError(at + "the " + end + " of wire " + std::to_string(gp.wire) +
+                                  " is listed twice");
+        if (seen_junctions.count(j) && args.junctions[j].size() == 2)
+            throw FrontValueError(at + "junction " + std::to_string(j) +
+                                  " already carries a node gap and joins only two wire ends, so a "
+                                  "gap through the other member is the far side of the same cut "
+                                  "\xe2\x80\x94 one series gap per two-wire junction (sum the EMFs "
+                                  "into one)");
+        seen_members.insert(member);
+        seen_junctions.insert(j);
+    }
+}
+
+std::vector<double> node_gap_columns(const WireArgs &args, const Basis &b) {
+    const size_t n_g = args.node_gaps.size();
+    std::vector<double> cols(static_cast<size_t>(b.n_basis) * n_g, 0.0);
+    std::map<std::pair<int64_t, bool>, size_t> end_to_junction;
+    for (size_t j = 0; j < args.junctions.size(); j++)
+        for (const auto &m : args.junctions[j]) end_to_junction[m] = j;
+    for (size_t p = 0; p < n_g; p++) {
+        const auto &gp = args.node_gaps[p];
+        const size_t j = end_to_junction.at({gp.wire, gp.at_start});
+        if (b.grounded_junction[j])
+            throw FrontValueError("node_gaps[" + std::to_string(p) + "]: junction " +
+                                  std::to_string(j) +
+                                  " is grounded \xe2\x80\x94 a series gap between a wire and the "
+                                  "ground stake is not supported (#151 grounds the node through "
+                                  "the image instead)");
+        const int64_t m = (gp.at_start ? b.start_dir : b.end_dir)[static_cast<size_t>(gp.wire)];
+        if (m < 0) throw std::logic_error("a node gap with no directional basis");
+        cols[static_cast<size_t>(m) * n_g + p] = gp.at_start ? 1.0 : -1.0;
+    }
+    return cols;
 }
 
 }  // namespace bspline

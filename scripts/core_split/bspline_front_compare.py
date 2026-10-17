@@ -7,8 +7,9 @@ For every deck the C++ seam prepares for bspline, `BSplineSolver` is built
 from the seam's own keyword arguments (no fill) and each ported unit's
 arrays are compared byte for byte (`front_compare.differences`). Units:
 `_wire_spec.drop_duplicated_wires` (the dedup and its refusals),
-`_build_geometry` and `_build_basis_polynomials` (supp_seg, polys, kcl_A,
-the wire knots). Exit 1 on any mismatch.
+`_build_geometry`, `_build_basis_polynomials` (supp_seg, polys, kcl_A,
+the wire knots), the port spec (`junctions`, `node_gaps`, `feeds` as the
+constructor normalises them) and `_node_gap_columns`. Exit 1 on any mismatch.
 """
 
 from __future__ import annotations
@@ -91,6 +92,16 @@ def main():
                     else:
                         d += fc.differences(want, tuple(got), "basis")
                         counts["basis-compared"] += 1
+                        spec = (
+                            [list(g) for g in solver.junctions],
+                            list(solver.node_gaps),
+                            list(solver.feeds),
+                        )
+                        d += fc.differences(spec, tuple(entry["spec"]), "spec")
+                        cols, _v = solver._node_gap_columns(_wbg, supp.shape[0])
+                        d += fc.differences(
+                            cols, entry["node_gap_cols"], "node_gap_cols"
+                        )
                 except Exception as exc:  # noqa: BLE001 -- compared by message
                     want = ("ValueError", str(exc))
                     if tuple(entry.get("basis_raised", ())) != want:

@@ -110,6 +110,10 @@ struct Basis {
     // `_wire_endpoint_status`: per wire, "free" (-1), "ground" (-2) or the
     // junction index, at the start and at the end
     std::vector<int64_t> start_status, end_status;
+    // per wire, the global index of its directional basis at the start /
+    // the end (-1: none), which a node gap's column names
+    std::vector<int64_t> start_dir, end_dir;
+    std::vector<bool> grounded_junction;
 };
 
 // `ground_z` given or not; `radii` per wire (the conductor's, for the
@@ -120,6 +124,17 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
                   const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
                   const std::vector<double> &radii, bool has_ground, double ground_z,
                   int degree = 2);
+
+// The constructor's port spec after the duplicate drop, in its order:
+// `feeds` (at least one entry unless node gaps drive), then
+// `normalize_junctions` (`check_junction_coincidence`) and
+// `normalize_node_gaps`. Throws FrontValueError with Python's sentence;
+// a non-coincident junction throws FrontNotPorted.
+void check_ports(const WireArgs &args);
+
+// `_node_gap_columns`: (n_basis, n_gaps) row-major, the sigma-signed unit
+// indicator of each named member's directional basis.
+std::vector<double> node_gap_columns(const WireArgs &args, const Basis &b);
 
 }  // namespace bspline
 }  // namespace mw
