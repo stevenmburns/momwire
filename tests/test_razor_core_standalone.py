@@ -59,7 +59,9 @@ CORE_SOURCES = (
     # to the parsed deck, linked into `nec5_deck_driver.cpp` below.
     "_nec5_deck_core.cpp",
     # The seam's structure half (unit 2b): the parsed deck to RazorSolver's
-    # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents).
+    # arguments, linked into `nec5_razor_driver.cpp` (deck text -> currents);
+    # the engine-neutral seam and razor-2p's engine over it.
+    "_nec5_seam_core.cpp",
     "_nec5_razor_seam_core.cpp",
     # The run half and the printout writer (unit 3a): deck text to the
     # printout's bytes, linked into `nec5_razor_printout_driver.cpp`.
