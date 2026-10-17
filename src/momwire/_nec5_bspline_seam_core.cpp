@@ -186,7 +186,7 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         // wholly below so far (step 4a); a crossing junction's ports are its
         // own (`_node_gap_crossing_junctions`), so before the port columns
         for (uint8_t v : fr->basis.below_wire) fr->buried = fr->buried || v != 0;
-        if (fr->buried) {
+        if (fr->buried && !partial_buried) {
             if (!fr->basis.crossing.empty()) return decline("bspline-buried-crossing");
             for (uint8_t v : fr->basis.below_wire)
                 if (!v) return decline("bspline-buried-mixed");
@@ -262,8 +262,10 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     return b;
 }
 
-SeamResult bspline_seam(const std::string &latin1_text, bool open_end) {
-    return seam(latin1_text, BSplineSeamEngine(), open_end);
+SeamResult bspline_seam(const std::string &latin1_text, bool open_end, bool partial_buried) {
+    BSplineSeamEngine engine;
+    engine.partial_buried = partial_buried;
+    return seam(latin1_text, engine, open_end);
 }
 
 }  // namespace nec5
