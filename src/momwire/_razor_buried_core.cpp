@@ -239,7 +239,7 @@ struct BelowRemainder {
             for (ptrdiff_t j = 0; j < S; j++) {
                 const double rho = std::hypot(o[0] - src[3 * j], o[1] - src[3 * j + 1]);
                 const double hh = d_o + d_src[j];
-                if (std::sqrt(rho * rho + hh * hh) > grid->r1_cap) out[i * S + j] = cd(0.0, 0.0);
+                if (somm_core::below_past_cap(rho, hh, grid->r1_cap)) out[i * S + j] = cd(0.0, 0.0);
             }
         }
     }
@@ -312,6 +312,45 @@ struct BelowRemainder {
                                               t_src.data(), gz, k_p, k_m, out, mx_r1, mn_th, mx_th,
                                               true, true);
         };
+        // A lazy table (momwire#1512). The run reads first, as on an eager
+        // table, and its extremes decide the regions exactly as there. A node
+        // not yet filled reads NaN and NaN survives every operation of a
+        // read, so when no region joined the table and every output that is
+        // kept (all of them, or with the pairs past the cap zeroed, the
+        // rest) is finite, every node the run read was in: that run is the
+        // answer. Otherwise the census of this batch's reads names the nodes,
+        // they are filled in the table's regions, and the batch runs again.
+        const bool lazy = grid->lazy;
+        auto all_finite = [&]() {
+            for (ptrdiff_t i = 0; i < m * S; i++)
+                if (!std::isfinite(out[i].real()) || !std::isfinite(out[i].imag())) return false;
+            return true;
+        };
+        auto fill_and_run = [&](bool past_cap) {
+            std::vector<std::vector<uint8_t>> kept_n(15), past_n(15);
+            somm_proj::NodeMarks km, pm;
+            km.n_reg = pm.n_reg = 15;
+            for (int r = 0; r < 15; r++) {
+                const somm_below::Region &reg = grid->regions[r];
+                kept_n[r].assign(static_cast<size_t>(reg.n_r * reg.n_th), 0);
+                past_n[r].assign(static_cast<size_t>(reg.n_r * reg.n_th), 0);
+                km.m[r] = kept_n[r].data();
+                pm.m[r] = past_n[r].data();
+                km.nR[r] = pm.nR[r] = static_cast<std::ptrdiff_t>(reg.n_r);
+                km.nTh[r] = pm.nTh[r] = static_cast<std::ptrdiff_t>(reg.n_th);
+            }
+            double a, b, c;
+            somm_core::below_field_proj_nodes(view, grid->th_min, grid->th_band_floor_hi,
+                                              grid->th_band_lo_hi, grid->th_band_hi, m, S, pts,
+                                              src.data(), gz, grid->r1_cap, km, pm, a, b, c);
+            if (!past_cap)
+                for (int r = 0; r < 15; r++)
+                    for (size_t q = 0; q < kept_n[r].size(); q++) kept_n[r][q] |= past_n[r][q];
+            somm_below::source()->fill_nodes(*grid, kept_n);
+            build_view();
+            run();
+            if (past_cap) zero_past_cap(pts, m, out);
+        };
         std::vector<char> before(15);
         for (int r = 0; r < 15; r++) before[r] = grid->regions[r].filled;
         run();
@@ -337,20 +376,28 @@ struct BelowRemainder {
             somm_below::source()->ensure_for(*grid, fr1, flo, fhi);
             bool changed = false;
             for (int r = 0; r < 15; r++) changed |= (grid->regions[r].filled != (before[r] != 0));
-            if (changed) {
-                build_view();
-                run();
-            }
-            if (past_cap) {
-                zero_past_cap(pts, m, out);
-                bool finite = true;
-                for (ptrdiff_t i = 0; i < m * S && finite; i++)
-                    finite = std::isfinite(out[i].real()) && std::isfinite(out[i].imag());
-                if (!finite) {
-                    somm_below::source()->ensure_for(*grid, q_r1, tt[0], tt[1]);
+            if (lazy) {
+                if (past_cap) zero_past_cap(pts, m, out);
+                // The check mode always takes the census's way, so that it is
+                // the census whose completeness the finite check proves.
+                if (changed || !all_finite() || somm_core::lazy_check()) fill_and_run(past_cap);
+            } else {
+                if (changed) {
                     build_view();
                     run();
-                    zero_past_cap(pts, m, out);
+                }
+                if (past_cap) zero_past_cap(pts, m, out);
+            }
+            if (past_cap) {
+                if (!all_finite()) {
+                    somm_below::source()->ensure_for(*grid, q_r1, tt[0], tt[1]);
+                    if (lazy) {
+                        fill_and_run(true);
+                    } else {
+                        build_view();
+                        run();
+                        zero_past_cap(pts, m, out);
+                    }
                 }
             }
         }

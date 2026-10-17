@@ -19,6 +19,12 @@ void field_proj_batch(const somm_proj::GridView &G, size_t n_reg,
                       std::complex<double> *out, uintptr_t cancel_flag,
                       bool lanes);
 
+// The lazy grids' census of `field_proj_batch` (momwire#1512): every node
+// its reads take over the M x S pairs, marked (tangents do not move a read).
+void field_proj_nodes(const somm_proj::GridView &G, std::ptrdiff_t M, std::ptrdiff_t S,
+                      const double *obs, const double *src, double ground_z,
+                      somm_proj::NodeMarks &marks);
+
 // Whether this build has the projection's lanes, and how many pairs went
 // through them in this process.
 bool proj_lanes_built();

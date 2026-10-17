@@ -1997,7 +1997,7 @@ std::vector<cd> near_remainder(const std::vector<double> &points, const Elements
     }
     ex.insert(ex.end(), el.mid.begin(), el.mid.end());
     const double r1_max = razor::max_image_distance(ex.data(), ex.data(), ex.size() / 3, 0.0);
-    const somm_core::Grid &g = somm_core::get_grid(eps_t, k, r1_max, omega, mu0);
+    const somm_core::Grid &g = somm_core::get_grid_lazy(eps_t, k, r1_max, omega, mu0);
     const std::size_t n_reg = g.regions.size();
     if (n_reg > somm_proj::MAX_REGIONS) throw Decline{"a near-field grid layout"};
     double r0[somm_proj::MAX_REGIONS], dr[somm_proj::MAX_REGIONS], th0[somm_proj::MAX_REGIONS],
@@ -2022,6 +2022,26 @@ std::vector<cd> near_remainder(const std::vector<double> &points, const Elements
     somm_proj::set_far(G, far.data(), static_cast<std::ptrdiff_t>(far.size()));
     std::vector<cd> out(3 * n);
     const std::ptrdiff_t n_src = static_cast<std::ptrdiff_t>(el.mid.size() / 3);
+    {
+        // Collect, then fill (momwire#1512): the nodes the kernel's reads
+        // take at these points (H: its six offset points), then the read.
+        std::vector<std::vector<uint8_t>> need(n_reg);
+        somm_proj::NodeMarks marks;
+        marks.n_reg = n_reg;
+        for (std::size_t r = 0; r < n_reg; r++) {
+            need[r].assign(static_cast<std::size_t>(nr[r] * nth[r]), 0);
+            marks.m[r] = need[r].data();
+            marks.nR[r] = nr[r];
+            marks.nTh[r] = nth[r];
+        }
+        if (magnetic)
+            somm_core::reflected_h_field_nodes(G, static_cast<std::ptrdiff_t>(n), points.data(),
+                                               n_src, el.mid.data(), 0.0, step, marks);
+        else
+            somm_core::reflected_field_nodes(G, static_cast<std::ptrdiff_t>(n), points.data(), n_src,
+                                             el.mid.data(), 0.0, marks);
+        somm_core::ensure_nodes(g, need);
+    }
     if (magnetic)
         somm_core::reflected_h_field(G, static_cast<std::ptrdiff_t>(n), points.data(), n_src,
                                      el.mid.data(), el.moment.data(), 0.0, k, omega, mu0, step,
@@ -2029,6 +2049,7 @@ std::vector<cd> near_remainder(const std::vector<double> &points, const Elements
     else
         somm_core::reflected_field(G, static_cast<std::ptrdiff_t>(n), points.data(), n_src,
                                    el.mid.data(), el.moment.data(), 0.0, k, out.data());
+    if (somm_core::lazy_check()) somm_core::check_read(out.data(), out.size(), "the near-field remainder");
     return out;
 }
 

@@ -361,9 +361,11 @@ void th_nodes_of(const Region &reg, double th0_deg, double dth_deg, std::vector<
 
 std::unique_ptr<Grid> make_grid(cd eps_t, double k2, double r1_max, double omega, double mu,
                                 const double spacing[3], bool eager, const Grid *seed,
-                                uintptr_t cancel_flag) {
+                                uintptr_t cancel_flag, bool lazy) {
+    if (lazy && seed != nullptr) throw std::logic_error("a lazy below grid takes no seed");
     std::unique_ptr<Grid> gp(new Grid());
     Grid &g = *gp;
+    g.lazy = lazy;
     g.key.eps_t = eps_t;
     g.key.k2 = k2;
     g.key.omega = omega;
@@ -446,7 +448,12 @@ std::unique_ptr<Grid> make_grid(cd eps_t, double k2, double r1_max, double omega
                 std::fabs(sr.dth - l.dth * DEG_TO_RAD) <= 1e-15)
                 kept = &sr;
         }
-        if (kept != nullptr) {
+        if (lazy) {
+            // In the table where the eager fill would fill it now, no node in.
+            reg.vals.assign(static_cast<size_t>(4 * n_r * n_th), cd(std::nan(""), std::nan("")));
+            reg.have.assign(static_cast<size_t>(n_r * n_th), 0);
+            reg.filled = eager && !deferred(ridx);
+        } else if (kept != nullptr) {
             const int64_t n_kept = std::min(kept->n_r, n_r);
             reg.vals.assign(static_cast<size_t>(4 * n_r * n_th), cd(0.0, 0.0));
             for (int s = 0; s < 4; s++)
@@ -518,6 +525,104 @@ void fill_region(Grid &g, int idx, uintptr_t cancel_flag) {
     reg.filled = true;
 }
 
+// ---- the lazy grid's regions and nodes (momwire#1512) -------------------------
+
+namespace {
+
+// `fill_region`'s table membership without its fill: the floor band brings
+// its low band in first, as `_fill_region` fills it first.
+bool activate(Grid &g, int idx) {
+    Region &reg = g.regions[idx];
+    if (reg.filled) return false;
+    if (idx % N_BANDS == BAND_FLOOR) activate(g, region_index(idx / N_BANDS, BAND_LO));
+    reg.filled = true;
+    return true;
+}
+
+// The asked nodes of the grid's filled regions not yet in, filled through
+// one `iv_surfaces_direct_below` call (a node's value is its own contour, so
+// the call's other nodes move no bit); the floor band's shared columns are
+// the low band's nodes (`_fill_region`'s copy), filled there and copied.
+size_t fill_lazy(Grid &g, const std::vector<std::vector<uint8_t>> &need, uintptr_t cancel_flag) {
+    std::vector<std::pair<int, size_t>> at;
+    std::vector<double> rr, tt;
+    std::vector<std::vector<uint8_t>> queued(N_REGIONS);
+    auto queue = [&](int r, size_t q) {
+        Region &reg = g.regions[r];
+        if (reg.have[q]) return;
+        if (queued[r].empty()) queued[r].assign(reg.have.size(), 0);
+        if (queued[r][q]) return;
+        queued[r][q] = 1;
+        const int64_t i = static_cast<int64_t>(q) / reg.n_th, j = static_cast<int64_t>(q) % reg.n_th;
+        at.emplace_back(r, q);
+        rr.push_back(reg.r0 + reg.dr * static_cast<double>(i));
+        tt.push_back((g.th0_deg[r] + g.dth_deg[r] * static_cast<double>(j)) * DEG_TO_RAD);
+    };
+    struct Copy {
+        int r;
+        size_t q;
+        int lo;
+        size_t q_lo;
+    };
+    std::vector<Copy> copies;
+    for (int r = 0; r < N_REGIONS; r++) {
+        Region &reg = g.regions[r];
+        if (!reg.filled || static_cast<size_t>(r) >= need.size() || need[r].empty()) continue;
+        if (need[r].size() != reg.have.size())
+            throw std::logic_error("below fill_nodes: a mask is not the region's");
+        const bool floor = r % N_BANDS == BAND_FLOOR;
+        const int lo_idx = region_index(r / N_BANDS, BAND_LO);
+        for (size_t q = 0; q < reg.have.size(); q++) {
+            if (!need[r][q] || reg.have[q]) continue;
+            const int64_t i = static_cast<int64_t>(q) / reg.n_th, j = static_cast<int64_t>(q) % reg.n_th;
+            int shared = -1;
+            if (floor)
+                for (const auto &fs : FLOOR_SHARED)
+                    if (fs[0] == j) shared = fs[1];
+            if (shared < 0) {
+                queue(r, q);
+            } else {
+                const Region &lo = g.regions[lo_idx];
+                if (!lo.filled || lo.n_r != reg.n_r || lo.r0 != reg.r0 || lo.dr != reg.dr)
+                    throw std::logic_error("the floor and low bands must share an R1 axis");
+                const size_t q_lo = static_cast<size_t>(i * lo.n_th + shared);
+                queue(lo_idx, q_lo);
+                copies.push_back(Copy{r, q, lo_idx, q_lo});
+            }
+        }
+    }
+    if (!at.empty()) {
+        const size_t n = at.size();
+        std::vector<cd> out(4 * n);
+        iv_surfaces(g.key.eps_t, g.key.k2, g.key.omega, g.key.mu, rr.data(), tt.data(), n, out.data(),
+                    cancel_flag);
+        for (size_t p = 0; p < n; p++) {
+            Region &reg = g.regions[at[p].first];
+            const size_t m = reg.have.size(), q = at[p].second;
+            for (int s = 0; s < 4; s++) reg.vals[s * m + q] = out[s * n + p];
+            reg.have[q] = 1;
+        }
+    }
+    for (const Copy &c : copies) {
+        Region &reg = g.regions[c.r];
+        const Region &lo = g.regions[c.lo];
+        const size_t m = reg.have.size(), m_lo = lo.have.size();
+        for (int s = 0; s < 4; s++) reg.vals[s * m + c.q] = lo.vals[s * m_lo + c.q_lo];
+        reg.have[c.q] = 1;
+    }
+    return at.size() + copies.size();
+}
+
+// A grid read from the store into the lazy form: masks everywhere, a filled
+// region with no mask (an eager file's) held whole.
+void give_masks(Grid &g) {
+    g.lazy = true;
+    for (Region &reg : g.regions)
+        if (reg.have.empty()) reg.have.assign(static_cast<size_t>(reg.n_r * reg.n_th), reg.filled ? 1 : 0);
+}
+
+}  // namespace
+
 // ---- get_grid_below, the anchors, the store ----------------------------------
 
 namespace {
@@ -574,10 +679,15 @@ struct SKey {
     }
 };
 
-const char MAGIC[] = "MWBELOWGRID1\n";
+// MWBELOWGRID1: a filled region's every node (the eager table's files).
+// MWBELOWGRID2 (momwire#1512): a region's node mask after its flag when the
+// grid is lazy, then its values (NaN where the mask is clear). Both read;
+// 2 is written.
+const char MAGIC1[] = "MWBELOWGRID1\n";
+const char MAGIC2[] = "MWBELOWGRID2\n";
 
 std::string serialize(const SKey &k, const Grid &g) {
-    std::string b(MAGIC);
+    std::string b(MAGIC2);
     const std::string id = g_store.tag + "|" + TAIL_RULE;
     put(b, static_cast<uint64_t>(id.size()));
     b += id;
@@ -597,6 +707,8 @@ std::string serialize(const SKey &k, const Grid &g) {
         put(b, reg.n_r);
         put(b, reg.n_th);
         put(b, static_cast<int64_t>(reg.filled));
+        put(b, static_cast<int64_t>(!reg.have.empty()));
+        if (!reg.have.empty()) b.append(reinterpret_cast<const char *>(reg.have.data()), reg.have.size());
         if (reg.filled) b.append(reinterpret_cast<const char *>(reg.vals.data()), reg.vals.size() * sizeof(cd));
     }
     put(b, fnv1a(b));
@@ -604,8 +716,11 @@ std::string serialize(const SKey &k, const Grid &g) {
 }
 
 bool deserialize(const std::string &b, const SKey &k, Grid &g) {
-    const size_t m = sizeof(MAGIC) - 1;
-    if (b.size() < m + 8 || b.compare(0, m, MAGIC) != 0) return false;
+    const size_t m = sizeof(MAGIC2) - 1;
+    static_assert(sizeof(MAGIC1) == sizeof(MAGIC2), "one magic length");
+    if (b.size() < m + 8) return false;
+    const bool v2 = b.compare(0, m, MAGIC2) == 0;
+    if (!v2 && b.compare(0, m, MAGIC1) != 0) return false;
     uint64_t sum;
     std::memcpy(&sum, b.data() + b.size() - sizeof sum, sizeof sum);
     if (fnv1a(b.substr(0, b.size() - sizeof sum)) != sum) return false;
@@ -632,16 +747,25 @@ bool deserialize(const std::string &b, const SKey &k, Grid &g) {
     g.th_band_hi = sc[8];
     g.th_split = sc[9];
     g.k_m = cd(sc[10], sc[11]);
+    g.lazy = false;
     for (int r = 0; r < N_REGIONS; r++) {
         Region &reg = g.regions[r];
-        int64_t filled;
+        int64_t filled, masked = 0;
         if (!get(b, at, reg.r0) || !get(b, at, reg.dr) || !get(b, at, reg.th0) || !get(b, at, reg.dth) ||
             !get(b, at, g.th0_deg[r]) || !get(b, at, g.dth_deg[r]) || !get(b, at, reg.n_r) ||
             !get(b, at, reg.n_th) || !get(b, at, filled))
             return false;
+        if (v2 && !get(b, at, masked)) return false;
         if (reg.n_r < 0 || reg.n_th < 0 || reg.n_r > (1 << 24) || reg.n_th > (1 << 24)) return false;
-        const size_t nv = static_cast<size_t>(4 * reg.n_r * reg.n_th);
+        const size_t nn = static_cast<size_t>(reg.n_r * reg.n_th), nv = 4 * nn;
         reg.filled = filled != 0;
+        reg.have.clear();
+        if (masked) {
+            if (nn > b.size() - at) return false;
+            reg.have.assign(b.data() + at, b.data() + at + nn);
+            at += nn;
+            g.lazy = true;
+        }
         if (reg.filled) {
             if (nv > (b.size() - at) / sizeof(cd)) return false;
             reg.vals.resize(nv);
@@ -696,6 +820,66 @@ void store_put(const char *kind, const SKey &k, const Grid &g) {
     const fs::path path = g_store.dir / (k.name(kind) + ".grid");
     write_atomic(path, serialize(k, g));
     somm_core::disk_evict(path);
+}
+
+// Whether two grids are one lattice to the bit (the store's copy of a lazy
+// grid and the grid in hand).
+bool one_lattice(const Grid &a, const Grid &b) {
+    auto same = [](double x, double y) { return bits(x) == bits(y); };
+    if (!same(a.r1_max, b.r1_max) || !same(a.r1_cap, b.r1_cap) || !same(a.r_break, b.r_break) ||
+        !same(a.r_near, b.r_near))
+        return false;
+    for (int r = 0; r < N_REGIONS; r++) {
+        const Region &x = a.regions[r], &y = b.regions[r];
+        if (!same(x.r0, y.r0) || !same(x.dr, y.dr) || !same(x.th0, y.th0) || !same(x.dth, y.dth) ||
+            x.n_r != y.n_r || x.n_th != y.n_th || !same(a.th0_deg[r], b.th0_deg[r]) ||
+            !same(a.dth_deg[r], b.dth_deg[r]))
+            return false;
+    }
+    return true;
+}
+
+// The stored copy's nodes into a lazy grid's filled regions where it does
+// not hold them yet (another process filled them; a node's value is the
+// fill's whoever filled it). `regions` too: the stored regions join the
+// table (only for the copy about to be written back, so the file is the
+// union of both runs). Returns how many nodes were taken, or -1.
+long long store_merge(const char *kind, const SKey &k, Grid &g, bool regions) {
+    if (!g_store.on || !g.lazy) return -1;
+    std::unique_ptr<Grid> d = store_fetch(kind, k, g.key);
+    if (d == nullptr || !one_lattice(*d, g)) return -1;
+    give_masks(*d);
+    long long taken = 0;
+    for (int r = 0; r < N_REGIONS; r++) {
+        Region &mine = g.regions[r];
+        const Region &theirs = d->regions[r];
+        if (!theirs.filled) continue;
+        if (!mine.filled) {
+            if (!regions) continue;
+            mine.filled = true;
+        }
+        const size_t m = mine.have.size();
+        for (size_t q = 0; q < m; q++) {
+            if (mine.have[q] || !theirs.have[q]) continue;
+            for (int s = 0; s < 4; s++) mine.vals[s * m + q] = theirs.vals[s * m + q];
+            mine.have[q] = 1;
+            taken++;
+        }
+    }
+    return taken;
+}
+
+// A lazy grid written back: the stored copy merged in first (regions and
+// nodes), into a copy, so the run's own table keeps the regions it named.
+void store_put_merged(const char *kind, const SKey &k, const Grid &g) {
+    if (!g_store.on) return;
+    if (!g.lazy) {
+        store_put(kind, k, g);
+        return;
+    }
+    Grid w = g;
+    store_merge(kind, k, w, true);
+    store_put(kind, k, w);
 }
 
 // `_somm_disk_cache.note_seen(tag, value)`: the values recorded under `tag`
@@ -796,7 +980,7 @@ std::string anchor_mode_env() {
 
 class FillSource : public Source {
   public:
-    explicit FillSource(std::string mode) : mode_(std::move(mode)) {}
+    explicit FillSource(std::string mode) : mode_(std::move(mode)), lazy_(somm_core::lazy_grids()) {}
 
     Grid &get(cd eps_t, double k2, double r1_max, double omega, double mu,
               const double spacing[3]) override {
@@ -814,7 +998,7 @@ class FillSource : public Source {
         std::unique_ptr<Grid> grid;
         if (have_plan && mode == "auto") {
             const bool sweep = is_sweep(plan, r1_wl);
-            grid = store_fetch("below", sk, key);
+            grid = fetch_exact(sk, key);
             if (grid == nullptr && !(sweep || anchors_ready(plan, r1_wl))) have_plan = false;
         }
         if (grid == nullptr && have_plan) {
@@ -828,10 +1012,11 @@ class FillSource : public Source {
                 if (!deferred(r)) blended_fill(*g, r);
             return *g;
         }
-        if (grid == nullptr) grid = store_fetch("below", sk, key);
+        if (grid == nullptr) grid = fetch_exact(sk, key);
         if (grid == nullptr) {
-            grid = make_grid(eps_t, k2, r1b_wl * lam_m, omega, mu, spacing, true, nullptr, 0);
-            store_put("below", sk, *grid);
+            grid = make_grid(eps_t, k2, r1b_wl * lam_m, omega, mu, spacing, true, nullptr, 0, lazy_);
+            grid->key = key;
+            store_put_merged("below", sk, *grid);
         }
         grid->key = key;
         stored_[grid.get()] = sk;
@@ -846,18 +1031,59 @@ class FillSource : public Source {
             if (g.regions[r].filled) continue;
             if (g.blended)
                 blended_fill(g, r);
+            else if (g.lazy)
+                activate(g, r);  // its nodes come from fill_nodes
             else
                 fill_region(g, r, 0);
             changed = true;
         }
+        if (changed && g.lazy && !lazy_) fill_lazy(g, whole(g), 0);
         // `note_mutated`: a stored exact grid re-written as it fills.
         auto it = stored_.find(&g);
-        if (changed && it != stored_.end()) store_put("below", it->second, g);
+        if (changed && it != stored_.end()) store_put_merged("below", it->second, g);
+    }
+
+    void fill_nodes(Grid &g, const std::vector<std::vector<uint8_t>> &need) override {
+        std::lock_guard<std::recursive_mutex> lock(mu_);
+        if (!g.lazy) return;
+        auto it = stored_.find(&g);
+        auto missing = [&]() {
+            for (int r = 0; r < N_REGIONS; r++) {
+                const Region &reg = g.regions[r];
+                if (!reg.filled || static_cast<size_t>(r) >= need.size() || need[r].empty()) continue;
+                for (size_t q = 0; q < reg.have.size(); q++)
+                    if (need[r][q] && !reg.have[q]) return true;
+            }
+            return false;
+        };
+        if (!missing()) return;
+        // Another process may have filled them since this one read the file.
+        if (it != stored_.end() && store_merge("below", it->second, g, false) > 0 && !missing()) return;
+        if (fill_lazy(g, need, 0) > 0 && it != stored_.end()) store_put_merged("below", it->second, g);
     }
 
   private:
     std::string mode_;
+    bool lazy_ = true;
     std::recursive_mutex mu_;
+
+    // Every node of every region: the eager mode's ask on a lazy grid.
+    static std::vector<std::vector<uint8_t>> whole(const Grid &g) {
+        std::vector<std::vector<uint8_t>> w(N_REGIONS);
+        for (int r = 0; r < N_REGIONS; r++) w[r].assign(g.regions[r].have.size(), 1);
+        return w;
+    }
+
+    // `store_fetch("below")`, in the form this process runs: a lazy grid
+    // with masks (an eager file's filled regions held whole), and, when the
+    // lazy grids are off, every node of a lazy file's filled regions in.
+    std::unique_ptr<Grid> fetch_exact(const SKey &sk, const Key &key) {
+        std::unique_ptr<Grid> g = store_fetch("below", sk, key);
+        if (g == nullptr) return g;
+        if (lazy_) give_masks(*g);
+        else if (g->lazy) fill_lazy(*g, whole(*g), 0);
+        return g;
+    }
     std::vector<std::unique_ptr<Grid>> exact_, blended_;
     std::map<const Grid *, Plan> plans_;
     std::map<const Grid *, SKey> stored_;

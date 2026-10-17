@@ -187,15 +187,10 @@ void field_proj_batch(const somm_proj::GridView &G, size_t n_reg,
                 // dx/dy/rho/hh and `proj_core`'s r1, theta (clamped) and g.
                 for (int b = 0; b < nq4; ++b) {
                     const std::ptrdiff_t n = n0 + b;
-                    dx[b] = ox - sx[n];
-                    dy[b] = oy - sy[n];
-                    rho[b] = std::hypot(dx[b], dy[b]);
-                    const double hh = (oz - ground_z) + (sz[n] - ground_z);
-                    r1[b] = std::sqrt(rho[b] * rho[b] + hh * hh);
-                    double theta = std::atan2(hh, rho[b]);
-                    if (theta < 0.0) theta = 0.0;
-                    else if (theta > G.half_pi) theta = G.half_pi;
-                    th[b] = theta;
+                    double hh;
+                    somm_proj::pair_geometry(ground_z, ox, oy, oz, sx[n], sy[n], sz[n],
+                                             dx[b], dy[b], rho[b], hh);
+                    somm_proj::proj_r1_theta(G, rho[b], hh, r1[b], th[b]);
                     const cd g = std::polar(1.0 / r1[b], -k * r1[b]);
                     gre[b] = g.real();
                     gim[b] = g.imag();
@@ -242,6 +237,27 @@ void field_proj_batch(const somm_proj::GridView &G, size_t n_reg,
         }
     }
     MW_THROW_IF_ABORTED();
+}
+
+void field_proj_nodes(const somm_proj::GridView &G, std::ptrdiff_t M, std::ptrdiff_t S,
+                      const double *obs, const double *src, double ground_z,
+                      somm_proj::NodeMarks &marks) {
+    // Every pair `field_proj_batch` reads (both of its loops take
+    // `pair_geometry`, `proj_r1_theta` and the address `proj_address` gives,
+    // the lanes' through `stencil_lanes`, which is the same address lane by
+    // lane), marked at its stencil.
+    for (std::ptrdiff_t m = 0; m < M; ++m) {
+        const double ox = obs[3 * m], oy = obs[3 * m + 1], oz = obs[3 * m + 2];
+        for (std::ptrdiff_t n = 0; n < S; ++n) {
+            double dx, dy, rho, hh, r1, theta, fr, ft;
+            int i0, j0;
+            somm_proj::pair_geometry(ground_z, ox, oy, oz, src[3 * n], src[3 * n + 1],
+                                     src[3 * n + 2], dx, dy, rho, hh);
+            somm_proj::proj_r1_theta(G, rho, hh, r1, theta);
+            const int reg = somm_proj::proj_address(G, r1, theta, fr, ft, i0, j0);
+            marks.mark(reg, i0, j0);
+        }
+    }
 }
 
 void moment_reduce(const std::complex<double> *proj, const double *W,
