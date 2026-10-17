@@ -304,10 +304,100 @@ int64_t search_right(const std::vector<double> &t, double x) {
 
 }  // namespace
 
+// `_medium_spec.wire_media` over the DECLARED junctions (bs2's
+// `_grounded_junction_ends`: `grounded_crossing_exemption`), then
+// `_below_interface.crossing_junctions`' census: per wire 1 when BELOW, the
+// crossing junctions' indices into `crossing`. Every refusal either raises
+// (the crossing mid-span, a buried wire with no lower medium, a ground
+// contact beside a buried wire) declines instead: step 4 ports the labels,
+// not the sentences.
+std::vector<uint8_t> wire_media(const std::vector<std::vector<double>> &polylines,
+                                const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
+                                double gz, bool lower_medium, std::vector<int64_t> &crossing) {
+    const size_t n_w = polylines.size();
+    std::vector<uint8_t> below(n_w, 0);
+    crossing.clear();
+    std::vector<double> tol(n_w), zmin(n_w), zmax(n_w);
+    bool any_below = false;
+    for (size_t w = 0; w < n_w; w++) {
+        const std::vector<double> &pl = polylines[w];
+        tol[w] = polyline_touch_tol(pl);
+        zmin[w] = zmax[w] = pl[2];
+        for (size_t i = 1; i < pl.size() / 3; i++) {
+            zmin[w] = std::min(zmin[w], pl[3 * i + 2]);
+            zmax[w] = std::max(zmax[w], pl[3 * i + 2]);
+        }
+        if (!(zmin[w] >= gz - tol[w])) any_below = true;
+    }
+    if (!any_below) return below;
+    const auto end_z = [&](int64_t w, bool start) {
+        const std::vector<double> &pl = polylines[static_cast<size_t>(w)];
+        return start ? pl[2] : pl[pl.size() - 1];
+    };
+    // `grounded_crossing_exemption`: >= 2 members, the first member's end in
+    // the plane, some member reaching above it
+    std::set<std::pair<int64_t, bool>> exempt;
+    for (const auto &grp : junctions) {
+        if (grp.size() < 2) continue;
+        const int64_t w0 = grp[0].first;
+        if (std::fabs(end_z(w0, grp[0].second) - gz) > tol[static_cast<size_t>(w0)]) continue;
+        bool reaches = false;
+        for (const auto &m : grp)
+            if (zmax[static_cast<size_t>(m.first)] > gz + tol[static_cast<size_t>(m.first)]) reaches = true;
+        if (!reaches) continue;
+        exempt.insert(grp.begin(), grp.end());
+    }
+    for (size_t w = 0; w < n_w; w++) {
+        const std::vector<double> &pl = polylines[w];
+        const size_t m = pl.size() / 3;
+        const double t = tol[w];
+        if (zmin[w] >= gz - t) continue;
+        if (zmax[w] >= gz - t) {
+            // `_is_crossing_below`: touching the plane only at exempted
+            // anchors, nothing above it
+            bool ok = !(zmax[w] > gz + t);
+            const bool ts = std::fabs(pl[2] - gz) <= t, te = std::fabs(pl[3 * (m - 1) + 2] - gz) <= t;
+            if (!(ts || te)) ok = false;
+            for (size_t i = 1; i + 1 < m; i++)
+                if (pl[3 * i + 2] >= gz - t) ok = false;
+            if (ts && !exempt.count({static_cast<int64_t>(w), true})) ok = false;
+            if (te && !exempt.count({static_cast<int64_t>(w), false})) ok = false;
+            if (!ok) throw FrontNotPorted("buried-refusal");  // `crossing_refusal`
+        }
+        if (!lower_medium) throw FrontNotPorted("buried-refusal");  // `buried_no_medium_refusal`
+        below[w] = 1;
+    }
+    // `_ground_spec.contact_ends`, less the exempted
+    std::vector<std::pair<int64_t, bool>> contacts;
+    for (size_t w = 0; w < n_w; w++) {
+        const std::vector<double> &pl = polylines[w];
+        if (std::fabs(pl[pl.size() - 1] - gz) <= tol[w]) contacts.push_back({static_cast<int64_t>(w), false});
+        if (std::fabs(pl[2] - gz) <= tol[w]) contacts.push_back({static_cast<int64_t>(w), true});
+    }
+    for (const auto &c : contacts)
+        if (!exempt.count(c)) throw FrontNotPorted("buried-refusal");  // `contact_with_buried_refusal`
+    // `crossing_junctions`: the grounded junctions joining the two media,
+    // and the contacts they earn
+    std::set<std::pair<int64_t, bool>> earned;
+    for (size_t j = 0; j < junctions.size(); j++) {
+        const auto &m0 = junctions[j][0];
+        if (!(std::fabs(end_z(m0.first, m0.second) - gz) <= tol[static_cast<size_t>(m0.first)])) continue;
+        bool a = false, b = false;
+        for (const auto &m : junctions[j]) (below[static_cast<size_t>(m.first)] ? b : a) = true;
+        if (a && b) {
+            crossing.push_back(static_cast<int64_t>(j));
+            earned.insert(junctions[j].begin(), junctions[j].end());
+        }
+    }
+    for (const auto &c : contacts)
+        if (!earned.count(c)) throw FrontNotPorted("buried-refusal");
+    return below;
+}
+
 Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &polylines,
                   const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
                   const std::vector<double> &radii, bool has_ground, double ground_z,
-                  int degree) {
+                  int degree, bool lower_medium) {
     const int d = degree;
     if (d < 1 || d > 3) throw FrontNotPorted("degree");
     Basis b;
@@ -323,16 +413,17 @@ Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &pol
             (m.second ? b.start_status : b.end_status)[static_cast<size_t>(m.first)] =
                 static_cast<int64_t>(j);
     std::vector<bool> grounded_junction(junctions.size(), false);
+    b.below_wire.assign(n_w, 0);
     if (has_ground) {
         const double gz = ground_z;
+        b.below_wire = wire_media(polylines, junctions, gz, lower_medium, b.crossing);
         for (size_t w = 0; w < n_w; w++) {
+            // strictly below the interface: no contact to tag, no in-plane
+            // edge to diagnose (`_wire_endpoint_status`)
+            if (b.below_wire[w]) continue;
             const std::vector<double> &pl = polylines[w];
             const double tol = polyline_touch_tol(pl);
             const size_t m = pl.size() / 3;
-            // a wire reaching below the plane: the lower medium's (buried,
-            // crossing), not ported here
-            for (size_t i = 0; i < m; i++)
-                if (pl[3 * i + 2] < gz - tol) throw FrontNotPorted("buried-wire");
             std::vector<bool> z_at(m);
             for (size_t i = 0; i < m; i++) z_at[i] = std::fabs(pl[3 * i + 2] - gz) <= tol;
             for (size_t i = 0; i + 1 < m; i++)

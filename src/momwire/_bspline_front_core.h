@@ -119,16 +119,22 @@ struct Basis {
     // per wire, (basis j of its knot vector, global basis index) per kept
     // basis: `wire_basis_global`'s mapping
     std::vector<std::vector<std::pair<int64_t, int64_t>>> wire_globals;
+    // `_wire_media`: per wire 1 when BELOW the interface (a buried wire);
+    // `_crossing_junctions`' census before its scope checks
+    std::vector<uint8_t> below_wire;
+    std::vector<int64_t> crossing;
 };
 
 // `ground_z` given or not; `radii` per wire (the conductor's, for the
-// stand-off floor). A buried or crossing deck (a wire in the lower medium)
-// and a wire below the stand-off floor throw FrontNotPorted; an edge lying in
-// the plane throws FrontValueError with Python's sentence.
+// stand-off floor); `lower_medium` the Sommerfeld ground's half-space. The
+// wires are labelled by medium (`below_wire`, `crossing`); a geometry Python
+// refuses by medium, and a wire below the stand-off floor, throw
+// FrontNotPorted; an edge lying in the plane throws FrontValueError with
+// Python's sentence.
 Basis build_basis(const Geometry &g, const std::vector<std::vector<double>> &polylines,
                   const std::vector<std::vector<std::pair<int64_t, bool>>> &junctions,
                   const std::vector<double> &radii, bool has_ground, double ground_z,
-                  int degree = 2);
+                  int degree = 2, bool lower_medium = false);
 
 // The constructor's port spec after the duplicate drop, in its order:
 // `feeds` (at least one entry unless node gaps drive), then

@@ -241,5 +241,38 @@ double wire_loss_power(const Triplets &t, const std::vector<cdouble> &coeffs,
 // ladder's tiers below `n_qp_pair`, normalised.
 std::vector<std::pair<double, int64_t>> default_ladder(int64_t n_qp_pair);
 
+// The lower medium (`_crossing_fill.buried_medium` at the solver's omega):
+// eps~, eps0 eps~, k_p, k_m on Im <= 0, C2 and A_m, CPython's arithmetic.
+struct BuriedMedium {
+    cdouble eps_t, eps_m, k_m, c2, a_m;
+    double k_p = 0;
+};
+BuriedMedium buried_medium(double eps_r, double sigma, double omega, double eps, double k);
+
+// `_accumulate_Z_subset_chunked(Z, geom, k, seg_idx, ...)` (momwire#915):
+// every (observer chunk x source run) off-edge window of the sorted segment
+// set `seg_idx` against itself or its mirror image, through the complex-eps~
+// windowed assemblers -- direct (`weighted` false: the tangent dot formed by
+// the assembler) or weighted (w_A = weight t_m . t_image_n, w_Phi = weight)
+// -- scaled by `scale`; a direct block's same-edge fixup after. A complex k
+// (the lower medium's); no extended kernel. Z (n_basis, n_basis) C order.
+void accumulate_subset_chunked(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                               const std::vector<double> &radius_per_wire, const FillParams &fp, cdouble k,
+                               const std::vector<int64_t> &seg_idx, bool mirror, cdouble eps, double scale,
+                               bool weighted, cdouble weight, double omega, double mu, double ground_z,
+                               int64_t swept_mem_mb, const nec5::NumpyLinalg &np);
+
+// `compute_Z_operator_buried` (before the loading) on a deck whose every wire
+// is below the plane (momwire#1517 step 4a): the plan's below/below extents
+// (a capped walk or a grazing refusal throws FrontNotPorted), the direct and
+// A_m-weighted image blocks at k_m in the medium, then the below/below
+// remainder over `get_grid_below` (the installed `somm_below::source()`),
+// field form, each unordered pair projected once. `fp` carries the buried
+// pair order (32) and ladder. (n_basis, n_basis) C order.
+std::vector<cdouble> fill_buried(const Geometry &g, const Basis &b, const std::vector<double> &radius_per_wire,
+                                 const FillParams &fp, double omega, double eps, double mu, double ground_z,
+                                 double eps_r, double sigma, int64_t n_qp_sommerfeld, int64_t swept_mem_mb,
+                                 const nec5::NumpyLinalg &np);
+
 }  // namespace bspline
 }  // namespace mw

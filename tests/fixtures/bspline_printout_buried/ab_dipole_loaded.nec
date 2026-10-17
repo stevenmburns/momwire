@@ -1,0 +1,11 @@
+CM All-below loaded dipole, two frequencies (momwire#1517 step 4a)
+CE
+GW 1,15,-4.,0.,-.3,4.,0.,-.3,.0015
+GE -1,-1
+LD 5,1,0,0,5.8e7
+LD 0,1,8,0,50.,1e-6,0.
+FR 0,2,0,0,3.6,0.4
+GN 2,0,0,0,20.,.01
+EX 0,1,8,0,1.,0.
+XQ 0
+EN
