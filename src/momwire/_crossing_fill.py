@@ -5249,7 +5249,9 @@ def _corner_v(cache, eps_t, k_p, a_wire, rho):
     if v is None:
         r_eff = a_wire if key == 0.0 else float(np.hypot(rho, a_wire))
         v = complex(
-            _near_interface.six_point(eps_t, k_p, r_eff, 0.0, 0.0, rtol=_CORNER_RTOL)[1]
+            _near_interface.six_point_served(
+                eps_t, k_p, r_eff, 0.0, 0.0, rtol=_CORNER_RTOL
+            )[1]
         )
         cache[key] = v
     return v
@@ -5380,7 +5382,7 @@ def _ends_and_corner(
     """The by-parts end terms + the designed corner, on the DENSE axes —
     linear in axis size, so the admissibility split never touches them
     (and the corner must never see coarse axes or a low-rank pass; its
-    V(a) rides `six_point` at `_CORNER_RTOL`, outside any memo).
+    V(a) rides `six_point_served` at `_CORNER_RTOL`, outside any memo).
 
     `test_ends` / `source_ends` select the two end loops — the above axis's
     ends (BT, TW: point tests at the node) and the below axis's (SQ, SW: the
