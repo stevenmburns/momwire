@@ -25,6 +25,7 @@ import os
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -189,6 +190,73 @@ def test_the_cap_is_cores_bounded_by_a_quarter_of_memory():
     assert default_max_workers(cores=8, memory=2 * gib) == 3
     assert default_max_workers(cores=8, memory=100 << 20) == 1
     assert default_max_workers(cores=4, memory=None) <= 4
+
+
+def test_the_cap_counts_physical_cores_not_hyperthreads(monkeypatch):
+    # The automatic cap asks physical_cores(), never the logical count: a
+    # 4-core/8-thread box gets 4 workers (momwire#1512 throughput grid).
+    gib = 1 << 30
+    monkeypatch.setattr(_pool, "physical_cores", lambda: 4)
+    monkeypatch.setattr(_pool, "usable_cores", lambda: 8)
+    monkeypatch.setattr(_pool, "physical_memory", lambda: 16 * gib)
+    assert default_max_workers() == 4
+    auto, why = configured_max_workers({})
+    assert auto == 4
+    assert why == f"automatic: 4 physical cores, {_pool.WORKER_MB} MB per worker"
+
+
+def test_physical_cores_falls_back_to_the_logical_count(monkeypatch):
+    monkeypatch.setattr(_pool, "usable_cores", lambda: 6)
+    monkeypatch.setattr(_pool, "_linux_physical_cores", lambda cpus: None)
+    monkeypatch.setattr(_pool, "_darwin_physical_cores", lambda: None)
+    monkeypatch.setattr(_pool, "_windows_physical_cores", lambda: None)
+    assert _pool.physical_cores() == 6
+
+
+def _fake_sysfs(root, topology):
+    for cpu, (package, core) in topology.items():
+        folder = root / f"cpu{cpu}" / "topology"
+        folder.mkdir(parents=True)
+        (folder / "physical_package_id").write_text(f"{package}\n")
+        (folder / "core_id").write_text(f"{core}\n")
+
+
+def test_linux_topology_counts_core_and_package_pairs(tmp_path):
+    # Two packages of two cores, two threads each: cpuN and cpuN+4 siblings.
+    topology = {
+        0: (0, 0), 1: (0, 1), 2: (1, 0), 3: (1, 1),
+        4: (0, 0), 5: (0, 1), 6: (1, 0), 7: (1, 1),
+    }  # fmt: skip
+    _fake_sysfs(tmp_path, topology)
+    root = str(tmp_path)
+    assert _pool._linux_physical_cores(range(8), root) == 4
+    # The affinity mask decides which cores count: siblings are one core,
+    # and core_id 0 on package 1 is not core_id 0 on package 0.
+    assert _pool._linux_physical_cores([0, 4], root) == 1
+    assert _pool._linux_physical_cores([0, 2], root) == 2
+    # A CPU with no topology: nothing is guessed.
+    assert _pool._linux_physical_cores([0, 9], root) is None
+
+
+def _core_record(mask, group=0, pointer=8):
+    body = bytes(24)  # Flags, EfficiencyClass, Reserved[20], GroupCount
+    body += mask.to_bytes(pointer, "little") + struct.pack("<H6x", group)
+    return struct.pack("<II", 0, 8 + len(body)) + body
+
+
+def test_windows_records_count_cores_that_meet_the_affinity_mask():
+    raw = b"".join(_core_record(0b11 << (2 * i)) for i in range(4))
+    assert _pool._count_windows_cores(raw, 0, 8) == 4
+    assert _pool._count_windows_cores(raw, 0b1111_1111, 8) == 4
+    assert _pool._count_windows_cores(raw, 0b0000_0011, 8) == 1
+    assert _pool._count_windows_cores(raw, 0b0001_0100, 8) == 2
+    # A core in another processor group is not filtered by group 0's mask.
+    raw += _core_record(0b1, group=1)
+    assert _pool._count_windows_cores(raw, 0b1, 8) == 2
+    # 32-bit layout.
+    raw32 = b"".join(_core_record(0b11 << (2 * i), pointer=4) for i in range(3))
+    assert _pool._count_windows_cores(raw32, 0, 4) == 3
+    assert _pool._count_windows_cores(b"", 0, 8) is None
 
 
 def test_the_environment_sets_or_disables_the_pool():

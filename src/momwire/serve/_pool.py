@@ -41,16 +41,25 @@ Sizing
   finds every live worker busy starts another, up to the cap, and meanwhile
   takes whichever worker frees first -- so a spawn never adds its start-up
   time to the frame that asked for it.
-* **The cap** is ``min(cores, RAM / 4 / 150 MB)``: one worker per core the
-  process may run on, and never more than a quarter of physical memory at the
-  ~150 MB budgeted per warm worker (measured 106-126 MB resident on the
-  SimNEC replay decks, Haswell; larger decks hold more). On an 8-thread box
-  with 8 GB that is 8 workers, ~1.2 GB in all. The front end itself holds
-  ~95 MB: it imports the package, but never solves.
+* **The cap** is ``min(physical cores, RAM / 4 / 150 MB)``: one worker per
+  PHYSICAL core the process may run on -- hyperthread siblings do not count --
+  and never more than a quarter of physical memory at the ~150 MB budgeted
+  per warm worker (measured 106-126 MB resident on the SimNEC replay decks,
+  Haswell; larger decks hold more). On a 4-core/8-thread box with 8 GB that
+  is 4 workers, ~0.6 GB in all. The front end itself holds ~95 MB: it
+  imports the package, but never solves.
+
+  Physical, not logical, because a sibling buys a solve nothing. On a
+  4-core/8-thread Skylake (momwire#1512 throughput grid, 2026-10-16, 714
+  runs) 4 and 8 resident workers gave the same throughput on the Dan sweep
+  (12.8 vs 12.0 s) while 8 held twice the memory with a worse p95, and a
+  solve given more threads than physical cores was slower on every call
+  measured (step41 17.6 vs 15.6 s at 8 vs 4 threads). Where the topology
+  cannot be read the logical count stands in (:func:`physical_cores`).
   ``MOMWIRE_SERVE_WORKERS=N`` overrides it; ``MOMWIRE_SERVE_WORKERS=0`` turns
   the pool off and answers in-process under the old lock.
 * **Threads are divided.** A frame is solved with its OpenMP pool limited to
-  ``cores // live workers`` and its BLAS pool to the same share but never
+  ``physical cores // live workers`` and its BLAS pool to the same share but never
   below two; a lone worker is not limited at all, so a single caller keeps
   exactly today's thread count. The floor is for the answers, not the
   speed: OpenBLAS's one-thread path rounds differently from its threaded
@@ -163,11 +172,129 @@ def read_message(stream):
 
 
 def usable_cores() -> int:
-    """The CPUs this process may run on (its affinity where the OS says)."""
+    """The logical CPUs this process may run on (its affinity where the OS
+    says), hyperthread siblings included."""
     try:
         return max(1, len(os.sched_getaffinity(0)))
     except (AttributeError, OSError):
         return max(1, os.cpu_count() or 1)
+
+
+def physical_cores() -> int:
+    """The PHYSICAL cores this process may run on; the logical count where the
+    topology cannot be read.
+
+    Linux reads ``/sys/devices/system/cpu`` for the CPUs in the affinity mask,
+    macOS asks ``hw.physicalcpu``, Windows walks
+    ``GetLogicalProcessorInformationEx``. Never more than
+    :func:`usable_cores`: a core counts only if a CPU of it may be used.
+    """
+    logical = usable_cores()
+    try:
+        if sys.platform.startswith("linux"):
+            found = _linux_physical_cores(sorted(os.sched_getaffinity(0)))
+        elif sys.platform == "darwin":
+            found = _darwin_physical_cores()
+        elif sys.platform == "win32":
+            found = _windows_physical_cores()
+        else:
+            found = None
+    except (AttributeError, OSError, ValueError, TypeError):
+        found = None
+    if not found:
+        return logical
+    return max(1, min(int(found), logical))
+
+
+def _linux_physical_cores(cpus, root: str = "/sys/devices/system/cpu") -> int | None:
+    """Distinct ``(physical_package_id, core_id)`` pairs among ``cpus``, or
+    None if any CPU's topology is missing (then nothing is guessed)."""
+    cores = set()
+    for cpu in cpus:
+        topology = os.path.join(root, f"cpu{int(cpu)}", "topology")
+        try:
+            with open(os.path.join(topology, "physical_package_id")) as f:
+                package = f.read().strip()
+            with open(os.path.join(topology, "core_id")) as f:
+                core = f.read().strip()
+        except OSError:
+            return None
+        cores.add((package, core))
+    return len(cores) or None
+
+
+def _darwin_physical_cores() -> int | None:
+    import ctypes  # noqa: PLC0415 - macOS only
+    import ctypes.util  # noqa: PLC0415 - macOS only
+
+    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    value = ctypes.c_int(0)
+    size = ctypes.c_size_t(ctypes.sizeof(value))
+    if libc.sysctlbyname(
+        b"hw.physicalcpu", ctypes.byref(value), ctypes.byref(size), None, 0
+    ):
+        return None
+    return value.value or None
+
+
+# GetLogicalProcessorInformationEx's relationship for one physical core.
+_RELATION_PROCESSOR_CORE = 0
+
+
+def _windows_physical_cores() -> int | None:
+    import ctypes  # noqa: PLC0415 - Windows only
+
+    kernel32 = ctypes.windll.kernel32
+    length = ctypes.c_uint32(0)
+    kernel32.GetLogicalProcessorInformationEx(
+        _RELATION_PROCESSOR_CORE, None, ctypes.byref(length)
+    )
+    if not length.value:
+        return None
+    buffer = ctypes.create_string_buffer(length.value)
+    if not kernel32.GetLogicalProcessorInformationEx(
+        _RELATION_PROCESSOR_CORE, buffer, ctypes.byref(length)
+    ):
+        return None
+    process_mask = ctypes.c_size_t(0)
+    system_mask = ctypes.c_size_t(0)
+    kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+    if not kernel32.GetProcessAffinityMask(
+        ctypes.c_void_p(kernel32.GetCurrentProcess()),
+        ctypes.byref(process_mask),
+        ctypes.byref(system_mask),
+    ):
+        process_mask.value = 0
+    return _count_windows_cores(
+        buffer.raw[: length.value], process_mask.value, ctypes.sizeof(ctypes.c_void_p)
+    )
+
+
+def _count_windows_cores(raw: bytes, process_mask: int, pointer: int) -> int | None:
+    """Count the ``RelationProcessorCore`` records in ``raw`` whose processors
+    meet ``process_mask``.
+
+    Each record is ``Relationship`` (u32), ``Size`` (u32), then a
+    PROCESSOR_RELATIONSHIP: ``Flags``, ``EfficiencyClass``, 20 reserved bytes,
+    ``GroupCount`` (u16) and, at offset 32, its first GROUP_AFFINITY (a
+    pointer-sized mask, then the u16 group). The affinity mask names group 0's
+    processors only, so it filters only cores in group 0; a mask of 0 (not
+    known) filters nothing.
+    """
+    count = 0
+    offset = 0
+    mask_format = "<Q" if pointer == 8 else "<I"
+    while offset + 8 <= len(raw):
+        relationship, size = struct.unpack_from("<II", raw, offset)
+        if size <= 0:
+            break
+        if relationship == _RELATION_PROCESSOR_CORE:
+            (mask,) = struct.unpack_from(mask_format, raw, offset + 32)
+            (group,) = struct.unpack_from("<H", raw, offset + 32 + pointer)
+            if not process_mask or group != 0 or mask & process_mask:
+                count += 1
+        offset += size
+    return count or None
 
 
 def physical_memory() -> int | None:
@@ -200,8 +327,8 @@ def physical_memory() -> int | None:
 
 
 def default_max_workers(cores: int | None = None, memory: int | None = None) -> int:
-    """``min(cores, RAM / 4 / WORKER_MB)``, and at least one."""
-    cap = usable_cores() if cores is None else cores
+    """``min(physical cores, RAM / 4 / WORKER_MB)``, and at least one."""
+    cap = physical_cores() if cores is None else cores
     memory = physical_memory() if memory is None else memory
     if memory:
         cap = min(cap, memory // 4 // (WORKER_MB << 20))
@@ -227,7 +354,9 @@ def configured_max_workers(environ=None) -> tuple[int, str]:
         auto = default_max_workers()
         return auto, f"{WORKERS_ENV}={raw!r} is not a count; using {auto}"
     auto = default_max_workers()
-    return auto, f"automatic: {usable_cores()} cores, {WORKER_MB} MB per worker"
+    return auto, (
+        f"automatic: {physical_cores()} physical cores, {WORKER_MB} MB per worker"
+    )
 
 
 def worker_command() -> list[str]:
@@ -242,7 +371,8 @@ def worker_command() -> list[str]:
 
 
 def thread_budget(live: int, cores: int) -> int | None:
-    """Each worker's share of the cores; None (no limit) for a lone worker."""
+    """Each worker's share of the (physical) cores; None (no limit) for a
+    lone worker."""
     if live <= 1:
         return None
     return max(1, cores // live)
@@ -330,7 +460,7 @@ class WorkerPool:
         self.log = log
         self.max_workers = max(1, int(max_workers))
         self.idle_timeout = idle_timeout
-        self.cores = usable_cores() if cores is None else max(1, int(cores))
+        self.cores = physical_cores() if cores is None else max(1, int(cores))
         self.command = worker_command() if command is None else list(command)
         self.env = env
         self.trace = (
