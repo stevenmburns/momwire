@@ -1,6 +1,7 @@
 #include "_accel_common.h"
 #include "_mw_binding.h"
 #include "_nec5_razor_seam_core.h"
+#include "_nec5_bspline_seam_core.h"
 #include "_razor_buried_core.h"
 #include "_somm_below_grid_core.h"
 #include "_somm_below_fill_core.h"
@@ -835,6 +836,118 @@ py::dict nec5_razor_seam(py::bytes latin1, bool solve) {
     return out;
 }
 
+// PROTOTYPE (momwire#1517 step 1): the bspline seam's structure half,
+// test-facing, as `nec5_razor_seam` is razor's: the route, each run's
+// outcome, and per preparation BSplineSolver's keyword arguments (spelled as
+// `construct_solver` spells them) and the mesh.
+py::dict bspline_kwargs(const mw::nec5::Prepared &p) {
+    const mw::nec5::BSplineFrontInputs &in = mw::nec5::bspline_part(p).inputs;
+    py::dict kw;
+    py::list wires, npe, feeds;
+    for (size_t w = 0; w < in.n_per_edge.size(); w++) {
+        py::array_t<double> a({static_cast<ptrdiff_t>(2), static_cast<ptrdiff_t>(3)});
+        std::copy(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6, a.mutable_data());
+        wires.append(a);
+        py::list c;
+        c.append(in.n_per_edge[w]);
+        npe.append(c);
+    }
+    kw["wires"] = wires;
+    kw["n_per_edge_per_wire"] = npe;
+    for (const auto &f : in.feeds) feeds.append(py::make_tuple(f.wire, f.arc, cd(0.0, 0.0)));
+    kw["feeds"] = feeds;
+    kw["wavelength"] = in.wavelength;
+    if (!in.radius_per_wire) {
+        kw["wire_radius"] = in.radius[0];
+    } else {
+        py::list r;
+        for (double v : in.radius) r.append(v);
+        kw["wire_radius"] = r;
+    }
+    kw["cancel"] = py::none();
+    if (!in.node_gaps.empty()) {
+        py::list gaps;
+        for (const auto &g : in.node_gaps)
+            gaps.append(py::make_tuple(g.wire, g.end == mw::nec5::End::start ? "start" : "end",
+                                       cd(0.0, 0.0)));
+        kw["node_gaps"] = gaps;
+    }
+    if (in.junctions.empty()) {
+        kw["junctions"] = py::none();
+    } else {
+        py::list js;
+        for (const auto &g : in.junctions) {
+            py::list members;
+            for (const auto &e : g)
+                members.append(py::make_tuple(e.first, e.second == mw::nec5::End::start ? "start" : "end"));
+            js.append(members);
+        }
+        kw["junctions"] = js;
+    }
+    if (in.extended_kernel) kw["extended_kernel"] = true;
+    if (in.has_conductivity) {
+        py::array_t<double> a(static_cast<ptrdiff_t>(in.conductivity.size()));
+        std::copy(in.conductivity.begin(), in.conductivity.end(), a.mutable_data());
+        kw["wire_conductivity"] = a;
+    }
+    if (in.has_rlc) {
+        py::object rlc_type = py::module_::import("momwire._wire_loading").attr("DistributedRLC");
+        py::list rlc;
+        for (const auto &e : in.rlc) {
+            if (e.kind == 0)
+                rlc.append(py::none());
+            else
+                rlc.append(rlc_type(e.kind == 1 ? "series" : "parallel", e.r, e.l, e.c));
+        }
+        kw["distributed_rlc"] = rlc;
+    }
+    if (in.has_ground) kw["ground_z"] = in.ground_z;
+    if (in.ground_eps_given) {
+        kw["ground_eps"] = py::make_tuple(in.ground_eps_r, in.ground_sigma);
+        kw["ground_model"] = "sommerfeld";
+    }
+    kw["exact_kernel"] = "auto";
+    return kw;
+}
+
+py::dict nec5_bspline_seam(py::bytes latin1) {
+    const std::string text = latin1;
+    mw::nec5::SeamResult r;
+    {
+        py::gil_scoped_release release;
+        r = mw::nec5::bspline_seam(text);
+    }
+    static const char *route[] = {"served", "refused", "raised", "declined"};
+    static const char *run[] = {"prepared", "shared", "refused", "raised", "declined"};
+    py::dict out;
+    out["route"] = route[r.route];
+    out["message"] = r.message;
+    out["error_kind"] = r.error_kind;
+    py::list structures;
+    for (const auto &so : r.structures) {
+        py::list runs;
+        for (const auto &o : so.runs) {
+            py::dict x;
+            x["kind"] = run[o.kind];
+            x["message"] = o.message;
+            x["error_kind"] = o.error_kind;
+            x["prepared"] = o.prepared_index;
+            runs.append(x);
+        }
+        structures.append(runs);
+    }
+    out["structures"] = structures;
+    py::list prepared;
+    for (const auto &p : r.prepared) {
+        py::dict pd;
+        pd["kwargs"] = bspline_kwargs(p);
+        pd["mesh"] = seam_mesh(p);
+        prepared.append(pd);
+    }
+    out["prepared"] = prepared;
+    return out;
+}
+
 }  // namespace
 
 void register_razor_solve(py::module_ &m) {
@@ -892,6 +1005,10 @@ void register_razor_solve(py::module_ &m) {
           },
           "TEST HOOK: the core's frozen Gauss-Legendre rule of order n (None "
           "beyond the table).");
+    m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
+          "PROTOTYPE HOOK (momwire#1517 step 1): the NEC-5 seam's structure half "
+          "for bspline in C++: the route, each run's outcome, and per "
+          "preparation BSplineSolver's keyword arguments and the mesh.");
     m.attr("nec5_razor_seam_proto") = true;
     m.def("nec5_razor_seam", &nec5_razor_seam, py::arg("latin1"), py::arg("solve") = false,
           "TEST HOOK: the NEC-5 seam's structure half for razor-2p in C++ "

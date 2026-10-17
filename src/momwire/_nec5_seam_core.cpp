@@ -880,10 +880,12 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
     // A phantom GW becomes NO piece (momwire#1139): its elements stay in
     // `element_of` against piece -1, and its addressed nodes are virtual. A
     // card crossing the plane is cut there (`_wire_runs`, momwire#1281).
-    // `cut = issubclass(solver_class, _CUT_SPELLING) and not crossing`: the
-    // cut spelling is not ported, so a basis that takes it declines here.
+    // `cut = issubclass(solver_class, _CUT_SPELLING) and not crossing`: a
+    // basis whose series EMF is a node gap has its GW cut at every node a
+    // card addresses inside it (`bounds`), and a K = 2 junction's source is
+    // that node gap (`_site_for`'s `node_gaps=cut`).
     const SeamBasis &basis = engine.basis();
-    if (basis.cut_spelling && crossing_nodes(d).empty()) throw Declined{"mesh:cut-spelling"};
+    const bool cut = basis.cut_spelling && crossing_nodes(d).empty();
     p.phantom_tags = phantom_tags(d, p.wavelength);
     const auto is_phantom = [&](const Int &tag) {
         for (const Int &t : p.phantom_tags)
@@ -954,12 +956,17 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             r.cut_start = r.cut_end = false;
             return r;
         };
+        // `bounds = [0, *addressed_inside, last] if cut else [0, last]`
+        std::set<long long> bounds{0, last};
+        if (cut) bounds.insert(inside_nodes.begin(), inside_nodes.end());
         if (c == nullptr) {
-            runs.push_back(plain(0, last));
+            std::vector<long long> v(bounds.begin(), bounds.end());
+            for (size_t q = 0; q + 1 < v.size(); q++) runs.push_back(plain(v[q], v[q + 1]));
         } else if (c->node >= 0) {
             const long long k = c->node;
-            std::set<long long> cut{0, last, k};
-            std::vector<long long> v(cut.begin(), cut.end());
+            std::set<long long> cuts(bounds);
+            cuts.insert(k);
+            std::vector<long long> v(cuts.begin(), cuts.end());
             for (size_t q = 0; q + 1 < v.size(); q++) {
                 Run r = plain(v[q], v[q + 1]);
                 if (r.a == k) std::copy(c->point, c->point + 3, r.start);
@@ -967,8 +974,13 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                 runs.push_back(r);
             }
         } else {
+            // the bounds at or before j (and j), the cut segment's two
+            // halves, the bounds after j (and j + 1)
             const long long j = c->segment;
-            if (j > 0) runs.push_back(plain(0, j));
+            std::set<long long> below{j}, above{j + 1};
+            for (long long n : bounds) (n <= j ? below : above).insert(n);
+            const std::vector<long long> vb(below.begin(), below.end()), va(above.begin(), above.end());
+            for (size_t q = 0; q + 1 < vb.size(); q++) runs.push_back(plain(vb[q], vb[q + 1]));
             Run lo = plain(j, j + 1);
             std::copy(c->point, c->point + 3, lo.end);
             lo.cut_end = true;
@@ -977,7 +989,7 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
             std::copy(c->point, c->point + 3, hi.start);
             hi.cut_start = true;
             runs.push_back(hi);
-            if (j + 1 < last) runs.push_back(plain(j + 1, last));
+            for (size_t q = 0; q + 1 < va.size(); q++) runs.push_back(plain(va[q], va[q + 1]));
         }
         long long lower_half = -1;
         for (const Run &r : runs) {
@@ -1141,7 +1153,7 @@ Prepared prepare(const Deck &d, const SeamEngine &engine) {
                                           " addresses a node where several wires meet IN the "
                                           "ground plane; a series source at a grounded junction is "
                                           "not served at this seam"};
-                        site.spelling = meeting >= 3 ? SeamSite::node : SeamSite::gap;
+                        site.spelling = cut || meeting >= 3 ? SeamSite::node : SeamSite::gap;
                         site.sign = start ? 1.0 : -1.0;
                     } else if (grounded) {
                         site.spelling = SeamSite::gap;
