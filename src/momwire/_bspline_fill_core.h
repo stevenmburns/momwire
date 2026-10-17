@@ -50,6 +50,26 @@ std::vector<cdouble> compute_Z_chunked(const Geometry &g, const Basis &b,
 // within `swept_mem_mb`.
 bool dense_tensor_fits(int degree, int64_t n_segs, int64_t swept_mem_mb);
 
+// `_resolve_exact_kernel_auto` on a free-space route: some segment shorter
+// than `EXACT_KERNEL_AUTO_H_OVER_A` (3) of its radius.
+bool exact_kernel_auto(const Geometry &g, const std::vector<double> &radius_per_wire);
+
+// Whether `coaxial_lines` lists a line carrying a radius step (momwire#1438's
+// cross job, which `add_exact_correction` does not serve).
+bool exact_kernel_has_cross_job(const Geometry &g, const std::vector<double> &radius_per_wire);
+
+// `_add_exact_kernel_correction(Z, geom, supp_seg, polys, k)` (momwire#1408,
+// #1411, #1421): per one-radius coaxial group, observer-row windows of the
+// exact ring-kernel moments (`mw::ek::CoaxialRows`) minus the base moments
+// the fill put there (`_exact_kernel_base.BaseRows`, its run / diagonal
+// dedup replayed so each gathered value is the same representative pair's),
+// assembled into Z (C order) by the windowed assembler. A coaxial line with
+// a radius step (momwire#1438's cross job, numpy-only in Python) throws
+// FrontNotPorted.
+void add_exact_correction(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
+                          const std::vector<double> &radius_per_wire, const FillParams &fp, double omega,
+                          double eps, double mu, double swept_mem_mb);
+
 // numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
 // tangents.T` is numpy's syrk case (one operand and its transpose).
 using dsyrk_fn = nec5::cblas_dsyrk_fn;
@@ -105,6 +125,26 @@ std::vector<std::vector<cdouble>> spline_readout(const Basis &b, const Geometry 
                                                  const std::vector<cdouble> &coeffs,
                                                  const std::vector<std::vector<double>> *s_array,
                                                  bool derivative);
+
+// `_overlap_triplets(geom, supp_seg, polys, polys)` (`_loading_gram`): per
+// shared segment, in the order Python's dict meets them, the closed-form
+// `C @ H @ C.T` on numpy's real BLAS (`np.dgemm` / `dgemv` / `ddot`), COO
+// with duplicates, tagged by wire.
+struct Triplets {
+    std::vector<int64_t> rows, cols, wire;
+    std::vector<double> vals;
+};
+Triplets loading_gram(const Geometry &g, const Basis &b, const nec5::NumpyLinalg &np);
+
+// `_add_wire_scaled(Z, triplets, z_wire)`: `np.add.at(Z, (rows, cols),
+// z_wire[wire] * vals)` into a C-ordered (n_basis, n_basis) Z.
+void add_wire_scaled(std::vector<cdouble> &Z, int64_t n_basis, const Triplets &t,
+                     const std::vector<cdouble> &z_wire);
+
+// `wire_loss_power(coeffs, omega)[0]` without a jacket: ½ Σ Re Z'_w ·
+// Re(conj(c_r) c_c) · val, `np.add.at` per wire, then the pairwise sum.
+double wire_loss_power(const Triplets &t, const std::vector<cdouble> &coeffs,
+                       const std::vector<cdouble> &z_wire, size_t n_wires);
 
 // `BSplineSolver.pair_order_ladder` for a free-space deck: the default
 // ladder's tiers below `n_qp_pair`, normalised.

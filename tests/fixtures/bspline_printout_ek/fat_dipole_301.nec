@@ -1,0 +1,8 @@
+CM fat dipole, h < 3a on every segment: the exact kernel by "auto", one uniform edge
+CE
+GW 1,301,0.,-1.,0.,0.,1.,0.,.004
+GE 0
+FR 0,1,0,0,70.
+EX 0,1,151,0,1.,0.
+RP 0,1,19,1000,90.,0.,0.,10.,0.
+EN

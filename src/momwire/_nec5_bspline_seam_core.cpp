@@ -147,13 +147,12 @@ bspline::WireArgs wire_args(const BSplineFrontInputs &in) {
     return wa;
 }
 
-bool any_loading(const BSplineFrontInputs &in) {
-    if (in.has_conductivity)
-        for (double c : in.conductivity)
-            if (!std::isnan(c)) return true;
-    if (in.has_rlc)
-        for (const auto &e : in.rlc)
-            if (e.kind != 0) return true;
+// `configure_loading`'s fail-fast checks this unit does not spell:
+// a conductivity at or below zero raises a ValueError there.
+bool loading_refused(const bspline::WireArgs &wa) {
+    if (wa.has_conductivity)
+        for (double c : wa.conductivity)
+            if (std::isfinite(c) && c <= 0.0) return true;
     return false;
 }
 
@@ -172,7 +171,6 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
     };
     // step 1's scope (momwire#1517): free space; ground is step 3
     if (in.has_ground) return decline("bspline-ground");
-    if (any_loading(in)) return decline("bspline-loading");
     auto fr = std::make_shared<BSplineFront>();
     fr->args = wire_args(in);
     try {
@@ -199,20 +197,23 @@ SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
         return b;
     }
     fr->n_ports = static_cast<int64_t>(fr->args.feeds.size() + fr->args.node_gaps.size());
-    // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
-    // segment is shorter than 3 radii. The correction is not ported, so a
-    // deck near that line declines (the margin keeps the decision Python's).
-    for (size_t w = 0; w < fr->geom.per_wire.size(); w++) {
-        const bspline::WireGeometry &wg = fr->geom.per_wire[w];
-        for (int64_t q = 0; q < wg.n_total; q++) {
-            double h2 = 0.0;
-            for (int c = 0; c < 3; c++) {
-                const double d = wg.seg_r[3 * q + c] - wg.seg_l[3 * q + c];
-                h2 += d * d;
-            }
-            if (std::sqrt(h2) < 3.0 * fr->radii[w] * (1.0 + 1e-9)) return decline("bspline-exact-kernel");
-        }
+    if (loading_refused(fr->args)) return decline("bspline-loading-refused");
+    fr->loading.has_conductivity = fr->args.has_conductivity;
+    fr->loading.conductivity = fr->args.conductivity;
+    fr->loading.has_rlc = fr->args.has_rlc;
+    for (const auto &e : fr->args.rlc) {
+        razor::WireRLC r;
+        r.kind = static_cast<razor::WireRLC::Kind>(e.kind);
+        r.r = e.r;
+        r.l = e.l;
+        r.c = e.c;
+        fr->loading.rlc.push_back(r);
     }
+    // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
+    // segment is shorter than 3 radii (free space serves it)
+    fr->exact_kernel = bspline::exact_kernel_auto(fr->geom, fr->radii);
+    if (fr->exact_kernel && bspline::exact_kernel_has_cross_job(fr->geom, fr->radii))
+        return decline("bspline-exact-kernel-radius-step");
     // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
     // `omega = 2 * np.pi * freq`, `k = omega / c`
     fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);

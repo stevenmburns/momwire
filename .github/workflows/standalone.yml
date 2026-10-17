@@ -39,6 +39,7 @@ on:
       - "scripts/core_split/nx_decks/**"
       - "scripts/core_split/nec5_bspline_printout_driver.cpp"
       - "scripts/core_split/bspline_chunked_decks/**"
+      - "scripts/core_split/bspline_exact_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -57,6 +58,7 @@ on:
       - "scripts/core_split/nx_decks/**"
       - "scripts/core_split/nec5_bspline_printout_driver.cpp"
       - "scripts/core_split/bspline_chunked_decks/**"
+      - "scripts/core_split/bspline_exact_decks/**"
       - "tests/test_standalone_*.py"
       - "tests/fixtures/**"
       - "setup.py"
@@ -247,10 +249,12 @@ jobs:
       - name: bspline printouts, C++ alone vs python (avx2 and sse2)
         run: |
           python scripts/core_split/printout_compare.py exe-linux-bspline-avx2.jsonl \
-            --basis bspline --arrays tests/fixtures scripts/core_split/bspline_chunked_decks
+            --basis bspline --arrays tests/fixtures scripts/core_split/bspline_chunked_decks \
+            scripts/core_split/bspline_exact_decks
           MOMWIRE_FORCE_VARIANT=sse2 python scripts/core_split/printout_compare.py \
             exe-linux-bspline-sse2.jsonl --basis bspline --arrays \
-            tests/fixtures scripts/core_split/bspline_chunked_decks
+            tests/fixtures scripts/core_split/bspline_chunked_decks \
+            scripts/core_split/bspline_exact_decks
         env:
           OPENBLAS_NUM_THREADS: "1"
           OMP_NUM_THREADS: "1"

@@ -23,6 +23,22 @@ namespace razor {
 class Front;
 using cd = std::complex<double>;
 
+// `_exact_kernel_seam.coaxial_groups`' labels (`_ek_axis_groups_coaxial`,
+// tol 1e-6): per segment (l, r, unit tangent t, radius a; (n, 3) row-major)
+// its coaxial equal-radius group, first met first. Shared with bs2's
+// correction (momwire#1517 step 2).
+std::vector<int64_t> coaxial_labels(const std::vector<double> &l, const std::vector<double> &r,
+                                    const std::vector<double> &t, const std::vector<double> &a);
+
+}  // namespace razor
+namespace ek {
+struct PointRules;
+}  // namespace ek
+namespace razor {
+
+// `_exact_kernel._point_rules()` / `_accel_rules()`: the five rules.
+mw::ek::PointRules point_rules();
+
 struct ExactWindow {
     int64_t o0 = 0, o1 = 0, e0 = 0, e1 = 0;
 };

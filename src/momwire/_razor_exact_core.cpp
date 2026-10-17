@@ -56,6 +56,8 @@ inline double dot3(const double *a, const double *b) {
 }
 inline double norm3(const double *v) { return std::sqrt((v[0] * v[0] + v[1] * v[1]) + v[2] * v[2]); }
 
+}  // namespace
+
 // `_bspline_kernels._ek_axis_groups_coaxial` (tol 1e-6), `_vec3.dot3` order.
 std::vector<int64_t> coaxial_labels(const std::vector<double> &l, const std::vector<double> &r,
                                     const std::vector<double> &t, const std::vector<double> &a) {
@@ -129,7 +131,6 @@ mw::ek::PointRules point_rules() {
     return R;
 }
 
-}  // namespace
 
 std::string build_exact_plan(const Front &f, ExactPlan &plan) {
     plan.groups.clear();

@@ -1,0 +1,9 @@
+CM a 1500-segment fat wire: the chunked fill, then the exact kernel's windows
+CE
+GW 1,750,0.,-3.01,0.,0.,-.01,0.,.0025
+GW 2,750,0.,.01,0.,0.,3.01,0.,.0025
+GE 0
+FR 0,1,0,0,20.
+EX 0,1,375,0,1.,0.
+XQ
+EN
