@@ -43,6 +43,10 @@ if(NOT MW_EXE_VARIANT STREQUAL "avx2" AND NOT MW_EXE_VARIANT STREQUAL "sse2")
   message(FATAL_ERROR "MW_EXE_VARIANT must be avx2 or sse2")
 endif()
 set(MW_OPENBLAS_LIB "" CACHE FILEPATH "static OpenBLAS, symbols prefixed mwx_")
+# The release build (standalone/build_release_linux.sh): libgomp linked in
+# from the toolchain's archive rather than taken from the system, so the
+# executable needs nothing but glibc.
+option(MW_EXE_STATIC_GOMP "link libgomp statically (Linux)" OFF)
 set(MW_DEFAULT_PYTHON_HOME "" CACHE PATH "momwire environment used when MOMWIRE_PYTHON_HOME is unset")
 set(MW_LIBPYTHON "" CACHE STRING "Python library opened for the fallback (default: this Python's)")
 # The static OpenBLAS's symbol prefix (blas.h): build_openblas.sh's `mwx_` on
@@ -191,12 +195,21 @@ if(MSVC)
       /NODEFAULTLIB:python${Python3_VERSION_MAJOR}${Python3_VERSION_MINOR}_d.lib
       /NODEFAULTLIB:python3.lib)
   endif()
+elseif(MW_EXE_STATIC_GOMP)
+  # Compiled -fopenmp (above), linked without it: the archive, not -lgomp.
+  execute_process(COMMAND ${CMAKE_CXX_COMPILER} -print-file-name=libgomp.a
+                  OUTPUT_VARIABLE MW_GOMP_ARCHIVE OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT EXISTS "${MW_GOMP_ARCHIVE}")
+    message(FATAL_ERROR "MW_EXE_STATIC_GOMP: the compiler has no libgomp.a")
+  endif()
+  target_link_libraries(${MW_EXE} PRIVATE "${MW_GOMP_ARCHIVE}")
 else()
   target_link_libraries(${MW_EXE} PRIVATE OpenMP::OpenMP_CXX)
 endif()
 if(UNIX AND NOT APPLE)
   # libstdc++ / libgcc static (the spike's cold-start measurement); libc,
-  # libm, libmvec and libgomp stay shared, as the extension has them.
+  # libm, libmvec and (unless MW_EXE_STATIC_GOMP) libgomp stay shared, as
+  # the extension has them.
   target_link_libraries(${MW_EXE} PRIVATE -static-libstdc++ -static-libgcc ${CMAKE_DL_LIBS} pthread m mvec)
 endif()
 

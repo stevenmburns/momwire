@@ -1,8 +1,16 @@
 # The standalone razor-2p executables (standalone/, momwire#1479 and #1512).
 #
-# `linux`: the no-Python build (MW_EXE_NO_PYTHON) against the static OpenBLAS
-# pinned to SciPy's build (standalone/build_openblas.sh), then REQUIRED gates
-# run on the runner: the launcher-layer contract tests
+# `linux-artifact`: the Linux release artifact (momwire#1512),
+# momwire-nec5-razor2p-linux-x86_64.tar.gz -- the no-Python build
+# (MW_EXE_NO_PYTHON) in avx2 and sse2 against the static OpenBLAS pinned to
+# SciPy's build (standalone/build_openblas.sh), and the script that picks one
+# by CPU -- built in the manylinux_2_28 image the wheels are built in
+# (standalone/build_release_linux.sh: glibc 2.28 floor, libstdc++, libgcc and
+# libgomp linked in), run once on AlmaLinux 8 (glibc 2.28), and uploaded as a
+# workflow artifact on every run: the dry run of what a tag attaches
+# (`release-linux`, pushed v* tags only).
+#
+# `linux`: those same bytes, gated. REQUIRED gates run on the runner: the launcher-layer contract tests
 # (tests/test_standalone_nopython.py) and every fixture deck answered byte for
 # byte as this environment's `momwire-nec5-razor-2p` answers it
 # (scripts/core_split/exe_compare.py --standalone), at one thread, and
@@ -33,8 +41,11 @@ on:
       - "tests/fixtures/**"
       - "setup.py"
       - ".github/workflows/standalone.yml"
+  # A tag builds the artifact and attaches it to the release; path filters
+  # do not apply to tag pushes.
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - "standalone/**"
       - "src/**"
@@ -52,7 +63,72 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  linux-artifact:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # The manylinux image's OpenBLAS (its own compiler): keyed apart from
+      # the runner's, by the same script hash.
+      - name: static OpenBLAS, manylinux_2_28 (cached)
+        uses: actions/cache@v4
+        with:
+          path: ~/mwx-openblas-manylinux/libmwxp.a
+          key: mwx-openblas-manylinux_2_28-${{ hashFiles('standalone/build_openblas.sh') }}
+      - name: build (manylinux_2_28)
+        run: |
+          mkdir -p ~/mwx-openblas-manylinux dist
+          docker run --rm -e MW_GLIBC_FLOOR=2.28 \
+            -v "$PWD:/io" -v "$HOME/mwx-openblas-manylinux:/ob" -w /io \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            standalone/build_release_linux.sh /ob /io/dist
+      # The floor, run rather than read: both builds and the picking script
+      # answer a deck and a stream on glibc 2.28.
+      - name: run on glibc 2.28 (AlmaLinux 8)
+        run: |
+          docker run --rm -v "$PWD:/io:ro" -w /tmp almalinux:8 sh -ec '
+            tar -xzf /io/dist/momwire-nec5-razor2p-linux-x86_64.tar.gz
+            cd momwire-nec5-razor2p-linux-x86_64
+            ldd --version | head -1
+            ldd momwire-nec5-razor2p-linux-avx2
+            ./momwire-nec5-razor2p-linux -version
+            for v in avx2 sse2; do
+              MOMWIRE_FORCE_VARIANT=$v ./momwire-nec5-razor2p-linux \
+                /io/tests/fixtures/razor_printout_3a/node_gap_two_sources.nec /tmp/$v.out
+              sed -n 2p /tmp/$v.out
+              if grep -q "NEC ERROR" /tmp/$v.out; then exit 1; fi
+            done
+            ./momwire-nec5-razor2p-linux - - \
+              < /io/scripts/core_split/nx_decks/simnec_stream_2281566.nec > /tmp/stream.out
+            echo "stream: $(grep -c "INPUT LINE .* NX " /tmp/stream.out) structures"'
+      - uses: actions/upload-artifact@v7
+        with:
+          name: momwire-nec5-razor2p-linux-x86_64
+          path: dist/momwire-nec5-razor2p-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  # A pushed tag only: a workflow_dispatch with a tag picked in the ref
+  # dropdown also has a refs/tags/ ref, and must not replace a published
+  # asset (eznec-dropin.yml's #711 guard). No release notes here: wheels.yml
+  # owns the body (#662, tests/test_release_notes.py).
+  release-linux:
+    name: attach the Linux executable to the release
+    needs: [linux-artifact, linux]
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: momwire-nec5-razor2p-linux-x86_64
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: momwire-nec5-razor2p-linux-x86_64.tar.gz
+          fail_on_unmatched_files: true
+
   linux:
+    needs: linux-artifact
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -62,19 +138,6 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - name: ninja
-        run: sudo apt-get install -y -q ninja-build
-      # The archive is a pure function of the pinned commit and the script's
-      # make flags, so the script's hash keys it.
-      - name: static OpenBLAS (cached)
-        id: openblas
-        uses: actions/cache@v4
-        with:
-          path: ~/mwx-openblas/libmwxp.a
-          key: mwx-openblas-${{ runner.os }}-${{ hashFiles('standalone/build_openblas.sh') }}
-      - name: static OpenBLAS (build)
-        if: steps.openblas.outputs.cache-hit != 'true'
-        run: standalone/build_openblas.sh ~/mwx-openblas
       - uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: linux-py${{ steps.py.outputs.python-version }}
@@ -87,16 +150,34 @@ jobs:
         env:
           CC: ccache gcc
           CXX: ccache g++
-      # Both variants of the executable's core, as the extension has them:
-      # avx2 (the default) and sse2 (MW_EXE_VARIANT).
-      - name: configure + build (no Python; avx2 and sse2)
+      # The release artifact's two builds, at the paths the gates below name:
+      # every gate is of the bytes a tag ships.
+      - uses: actions/download-artifact@v8
+        with:
+          name: momwire-nec5-razor2p-linux-x86_64
+      - name: the release build (avx2 and sse2)
         run: |
+          tar -xzf momwire-nec5-razor2p-linux-x86_64.tar.gz
+          R=momwire-nec5-razor2p-linux-x86_64
           for v in avx2 sse2; do
-            cmake -S standalone -B build-$v -G Ninja -DMW_EXE_NO_PYTHON=ON \
-              -DMW_EXE_VARIANT=$v -DMW_OPENBLAS_LIB=$HOME/mwx-openblas/libmwxp.a \
-              -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-            cmake --build build-$v
+            mkdir -p build-$v
+            cp $R/momwire-nec5-razor2p-linux-$v build-$v/momwire-razor2p-standalone
           done
+          ldd build-avx2/momwire-razor2p-standalone
+      # The picking script: the build this runner's CPU runs (avx2), and the
+      # forced sse2, each the very binary's bytes.
+      - name: the picking script
+        run: |
+          R=momwire-nec5-razor2p-linux-x86_64
+          D=tests/fixtures/razor_printout_3a/node_gap_two_sources.nec
+          test "$($R/momwire-nec5-razor2p-linux -version)" = "$(build-avx2/momwire-razor2p-standalone -version)"
+          $R/momwire-nec5-razor2p-linux $D via-script.out
+          build-avx2/momwire-razor2p-standalone $D direct.out
+          cmp via-script.out direct.out
+          MOMWIRE_FORCE_VARIANT=sse2 $R/momwire-nec5-razor2p-linux $D via-script-sse2.out
+          build-sse2/momwire-razor2p-standalone $D direct-sse2.out
+          cmp via-script-sse2.out direct-sse2.out
+          for f in via-script.out via-script-sse2.out; do sed -n 2p $f; done
       - name: contract tests
         run: pytest -q -n 0 tests/test_standalone_nopython.py -rs
         env:
