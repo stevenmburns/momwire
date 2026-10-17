@@ -90,6 +90,7 @@ CORE_SOURCES = (
     "_somm_field_core.cpp",
     # The B-spline remainder block's kernel (momwire#1517 step 3).
     "_somm_remainder_core.cpp",
+    "_somm_pairs_core.cpp",
     # bs2's NEC-5 seam, front half, fill and run half (momwire#1517 step 1):
     # deck text to printout bytes for the B-spline basis, linked into
     # `nec5_bspline_printout_driver.cpp`.

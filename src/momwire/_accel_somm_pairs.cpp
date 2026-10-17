@@ -1,5 +1,6 @@
 #include "_accel_common.h"
 #include "_accel_somm_proj_py.h"
+#include "_somm_pairs_core.h"
 
 // momwire#1201: the Sommerfeld remainder at LISTED (observer, source) pairs.
 //
@@ -146,40 +147,14 @@ static py::array_t<std::complex<double>> remainder_graded_inner(
     somm_proj::set_far(G, far);
 
     py::array_t<std::complex<double>> out({M, (py::ssize_t)d1});
-    auto om = out.mutable_unchecked<2>();
-
+    cd *outp = out.mutable_data();
+    const double *obp = obs.data(), *tobp = t_obs.data(), *ap = a0.data(), *dp = dvec.data(),
+                 *tsp = t_src.data(), *lp = len.data(), *p0p = p0.data(), *p1p = p1.data(),
+                 *xp = xg.data(), *wp = wg.data();
+    const int64_t *ptp = ptr.data();
     py::gil_scoped_release release;
-    MW_CANCEL_SETUP(cancel_flag);
-    #pragma omp parallel for schedule(dynamic, 64)
-    for (py::ssize_t m = 0; m < M; ++m) {
-        MW_CANCEL_POLL();
-        double ux, uy, th, tz;
-        somm_proj::tangent_decomp(ts(m, 0), ts(m, 1), ts(m, 2), ux, uy, th, tz);
-        const double ox = ob(m, 0), oy = ob(m, 1), oz = ob(m, 2);
-        const double tox = tob(m, 0), toy = tob(m, 1), toz = tob(m, 2);
-        const double L = Ln(m);
-        std::vector<cd> acc((size_t)d1, cd(0.0, 0.0));
-        for (py::ssize_t p = pt(m); p < pt(m + 1); ++p) {
-            const double half = 0.5 * (P1(p) - P0(p));
-            for (py::ssize_t g = 0; g < NG; ++g) {
-                const double t = P0(p) + half * (X(g) + 1.0);
-                const double sx = A(m, 0) + t * D(m, 0);
-                const double sy = A(m, 1) + t * D(m, 1);
-                const double sz = A(m, 2) + t * D(m, 2);
-                const cd F = somm_proj::proj_one(G, ground_z, k, ox, oy, oz, tox,
-                                                 toy, toz, sx, sy, sz, ux, uy,
-                                                 th, tz);
-                const double u = L * t;
-                cd term = F * (L * half * Wg(g));
-                for (int P = 0; P < d1; ++P) {
-                    acc[(size_t)P] += term;
-                    term *= u;
-                }
-            }
-        }
-        for (int P = 0; P < d1; ++P) om(m, P) = acc[(size_t)P];
-    }
-    MW_THROW_IF_ABORTED();
+    somm_core::remainder_graded_inner(G, ground_z, k, obp, tobp, ap, dp, tsp, lp, ptp, M, p0p, p1p, xp, wp, NG,
+                                      d1, outp, cancel_flag);
     return out;
 }
 
