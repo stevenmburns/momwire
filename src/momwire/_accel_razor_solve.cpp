@@ -1108,14 +1108,17 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                         entry["solve_info"] = ps.info;
                         if (ps.info == 0) {
                             py::array_t<cd> Xa({nb, static_cast<ptrdiff_t>(n_p)});
-                            std::copy(ps.X.begin(), ps.X.end(), Xa.mutable_data());
+                            for (int64_t i = 0; i < bs.n_basis; i++)
+                                for (int64_t j = 0; j < n_p; j++)
+                                    Xa.mutable_data()[i * n_p + j] =
+                                        ps.X[static_cast<size_t>(ps.x_c_order ? i * n_p + j : j * bs.n_basis + i)];
                             py::array_t<cd> Ya({static_cast<ptrdiff_t>(n_p), static_cast<ptrdiff_t>(n_p)});
                             std::copy(ps.Y.begin(), ps.Y.end(), Ya.mutable_data());
                             entry["X"] = Xa;
                             entry["Y"] = Ya;
                             // the readouts on coeffs = X[:, 0]
                             std::vector<std::complex<double>> c0(static_cast<size_t>(bs.n_basis));
-                            for (int64_t m = 0; m < bs.n_basis; m++) c0[static_cast<size_t>(m)] = ps.X[static_cast<size_t>(m * n_p)];
+                            for (int64_t m = 0; m < bs.n_basis; m++) c0[static_cast<size_t>(m)] = ps.X[static_cast<size_t>(ps.x_c_order ? m * n_p : m)];
                             auto lists = [](const std::vector<std::vector<std::complex<double>>> &v) {
                                 py::list l;
                                 for (const auto &a : v) {

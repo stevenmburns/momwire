@@ -35,8 +35,7 @@ std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double>
 
 // numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
 // tangents.T` is numpy's syrk case (one operand and its transpose).
-using dsyrk_fn = void (*)(int order, int uplo, int trans, int64_t n, int64_t k, double alpha,
-                          const double *a, int64_t lda, double beta, double *c, int64_t ldc);
+using dsyrk_fn = nec5::cblas_dsyrk_fn;
 
 // `_assemble_Z(J, supp_seg, polys, geom)` in free space: the C++ assembler
 // with `td_all = tangents @ tangents.T` as numpy forms it (dsyrk on the
@@ -51,7 +50,10 @@ std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, c
 // `Y = B^T X`. LU on SciPy's LAPACK (`lp`), products on numpy's (`np`).
 struct PortSolve {
     int info = 0;            // > 0: an exactly singular U(i, i) (LinAlgError)
-    std::vector<cdouble> X;  // (n_b, n_p) C order
+    // (n_b, n_p) in Python's layout: C order from the KCL Schur solve,
+    // column-major (`lu_solve`'s) when there are no constraint rows
+    bool x_c_order = true;
+    std::vector<cdouble> X;
     std::vector<cdouble> Y;  // (n_p, n_p) C order
 };
 PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vector<double> &B,

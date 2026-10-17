@@ -119,7 +119,14 @@ using zgesvx_fn = void (*)(const char *fact, const char *trans, const int *n, co
                            const int *ldx, double *rcond, double *ferr, double *berr, void *work,
                            double *rwork, int *info, std::size_t, std::size_t, std::size_t);
 
+// `scipy_cblas_dsyrk64_`: numpy's syrk case (a real operand times its own
+// transpose, `tangents @ tangents.T` in bs2's assembler).
+using cblas_dsyrk_fn = void (*)(int order, int uplo, int trans, np_int n, np_int k, double alpha,
+                                const double *a, np_int lda, double beta, double *c, np_int ldc);
+
 struct NumpyLinalg {
+    // null: an engine whose fill needs it declines (razor-2p's does not)
+    cblas_dsyrk_fn dsyrk = nullptr;
     cblas_zgemm_fn zgemm = nullptr;
     cblas_zgemv_fn zgemv = nullptr;
     cblas_zdotu_sub_fn zdotu_sub = nullptr;
@@ -205,6 +212,10 @@ struct CMat {
 // n_ports) and `.y` (C-ordered n_ports x n_ports).
 struct Solved {
     int64_t n_basis = 0, n_ports = 0;
+    // `x`'s layout: column-major (razor-2p's LU output) unless `x_c_order`
+    // (bs2's KCL Schur result, `W - X @ Lam`, which numpy allocates in C
+    // order); numpy's matmul chooses its BLAS call by these strides.
+    bool x_c_order = false;
     std::vector<cd> x;
     CMat y;
 };

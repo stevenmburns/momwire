@@ -17,11 +17,14 @@
 //     where any, the extended kernel by default and served in part over a
 //     buried wire (`extended_kernel_partial`), off only when every wire is
 //     below the plane;
-//   * `build`: the front half is not ported yet (`_bspline_front_core`,
-//     step 1's next unit), so every preparation declines
-//     "front:bspline-front" and is kept for the gates.
+//   * `build`: the constructor's front half (`_bspline_front_core.h`): the
+//     duplicate drop, the port checks, the geometry, the basis and the port
+//     columns. PROTOTYPE SCOPE: free space, unloaded, the dense moment tensor
+//     inside its budget and the exact kernel left off by "auto"; anything
+//     else declines (kept for the gates, never solved).
 #pragma once
 
+#include "_bspline_front_core.h"
 #include "_nec5_seam_core.h"
 
 #include <cstdint>
@@ -68,11 +71,34 @@ struct BSplineFrontInputs {
     double ground_eps_r = 0, ground_sigma = 0;
 };
 
+// The constructor's front half for one preparation (`BSplineSeamEngine::
+// build`): the wire arguments after the duplicate drop, the geometry, the
+// basis and the port columns -- what `compute_port_solution` reads before
+// its fill, and what the readouts read after it.
+struct BSplineFront {
+    bspline::WireArgs args;     // after `drop_duplicated_wires`
+    bspline::WireDedup dedup;
+    bspline::Geometry geom;
+    bspline::Basis basis;
+    std::vector<double> radii;  // per solved wire
+    std::vector<double> B;      // `_port_columns`' (n_basis, n_ports), row-major
+    int64_t n_ports = 0;
+    // `self.c`, `self.omega`, `self.k` as the constructor forms them
+    double c = 0, omega = 0, k = 0;
+    bool extended_kernel = false;
+};
+
 struct BSplinePrepared final : EnginePrepared {
     BSplineFrontInputs inputs;
+    std::shared_ptr<BSplineFront> front;  // set by `build`; reset on release
 };
 
 const BSplinePrepared &bspline_part(const Prepared &p);
+BSplinePrepared &bspline_part(Prepared &p);
+
+// bs2's constants (`BSplineSolver`'s eps / mu defaults).
+constexpr double BSPLINE_EPS = 8.8541878188e-12;
+constexpr double BSPLINE_MU = 1.25663706127e-6;
 
 class BSplineSeamEngine final : public SeamEngine {
   public:

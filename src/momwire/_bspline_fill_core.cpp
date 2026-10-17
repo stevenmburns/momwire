@@ -412,12 +412,11 @@ PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vec
             for (size_t j = 0; j < np_; j++) x[j * nb + i] = Bc[i * np_ + j];
         out.info = ctx.lu_solve(lp, x.data(), static_cast<int>(n_p));
         if (out.info != 0) return out;
-        for (size_t i = 0; i < nb; i++)
-            for (size_t j = 0; j < np_; j++) Xc[i * np_ + j] = x[j * nb + i];
         out.Y.assign(np_ * np_, cdouble(0.0, 0.0));
         nec5::replay::np_matmul(np, Op{Bc.data(), n_p, n_b, 1, n_p}, Op{x.data(), n_b, n_p, 1, n_b},
                                 out.Y.data(), n_p, 1);
-        out.X = Xc;
+        out.x_c_order = false;
+        out.X = std::move(x);
         return out;
     }
     // rhs = [V | A^T], F order

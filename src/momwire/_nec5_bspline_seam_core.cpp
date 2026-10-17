@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <string>
 #include <stdexcept>
 
 namespace mw {
@@ -17,6 +19,12 @@ namespace nec5 {
 
 const BSplinePrepared &bspline_part(const Prepared &p) {
     const BSplinePrepared *b = dynamic_cast<const BSplinePrepared *>(p.engine.get());
+    if (b == nullptr) throw std::logic_error("a preparation bspline's engine did not make");
+    return *b;
+}
+
+BSplinePrepared &bspline_part(Prepared &p) {
+    BSplinePrepared *b = dynamic_cast<BSplinePrepared *>(p.engine.get());
     if (b == nullptr) throw std::logic_error("a preparation bspline's engine did not make");
     return *b;
 }
@@ -113,12 +121,105 @@ void BSplineSeamEngine::solver_arguments(const Deck &d, Prepared &p, bool has_gr
     p.engine = std::move(part);
 }
 
+namespace {
+
+// The seam's arguments as the constructor's wire-indexed ones.
+bspline::WireArgs wire_args(const BSplineFrontInputs &in) {
+    bspline::WireArgs wa;
+    for (size_t w = 0; w < in.n_per_edge.size(); w++) {
+        wa.polylines.emplace_back(in.points.begin() + 6 * w, in.points.begin() + 6 * w + 6);
+        wa.n_per_edge.push_back({in.n_per_edge[w]});
+    }
+    wa.radius = in.radius;
+    wa.radius_per_wire = in.radius_per_wire;
+    wa.has_conductivity = in.has_conductivity;
+    wa.conductivity = in.conductivity;
+    wa.has_rlc = in.has_rlc;
+    for (const auto &e : in.rlc) wa.rlc.push_back({e.kind, e.r, e.l, e.c});
+    for (const auto &f : in.feeds) wa.feeds.push_back({f.wire, f.arc});
+    for (const auto &g : in.node_gaps) wa.node_gaps.push_back({g.wire, g.end == End::start});
+    wa.junctions_given = !in.junctions.empty();
+    for (const auto &g : in.junctions) {
+        std::vector<std::pair<int64_t, bool>> mm;
+        for (const auto &e : g) mm.push_back({e.first, e.second == End::start});
+        wa.junctions.push_back(mm);
+    }
+    return wa;
+}
+
+bool any_loading(const BSplineFrontInputs &in) {
+    if (in.has_conductivity)
+        for (double c : in.conductivity)
+            if (!std::isnan(c)) return true;
+    if (in.has_rlc)
+        for (const auto &e : in.rlc)
+            if (e.kind != 0) return true;
+    return false;
+}
+
+}  // namespace
+
 SeamEngine::Built BSplineSeamEngine::build(Prepared &p) const {
-    (void)p;
+    BSplinePrepared &part = bspline_part(p);
+    const BSplineFrontInputs &in = part.inputs;
     Built b;
-    b.kind = Built::declined;
-    b.message = "front:bspline-front";
-    b.unsolved = true;
+    const auto decline = [&](const std::string &why) {
+        part.front.reset();
+        b.kind = Built::declined;
+        b.message = "front:" + why;
+        b.unsolved = true;
+        return b;
+    };
+    // PROTOTYPE SCOPE (momwire#1517 step 1): the free-space fill only
+    if (in.has_ground) return decline("bspline-ground");
+    if (any_loading(in)) return decline("bspline-loading");
+    auto fr = std::make_shared<BSplineFront>();
+    fr->args = wire_args(in);
+    try {
+        fr->dedup = bspline::drop_duplicated_wires(fr->args);
+        bspline::check_ports(fr->args);
+        fr->geom = bspline::build_geometry(fr->args.polylines, fr->args.n_per_edge);
+        fr->radii = fr->args.radius;
+        if (!fr->args.radius_per_wire) fr->radii.assign(fr->args.polylines.size(), fr->args.radius[0]);
+        fr->basis = bspline::build_basis(fr->geom, fr->args.polylines, fr->args.junctions, fr->radii, false,
+                                         0.0, 2);
+        fr->B = bspline::port_columns(fr->args, fr->geom, fr->basis);
+    } catch (const bspline::FrontNotPorted &e) {
+        return decline(std::string("bspline-") + e.what());
+    } catch (const std::exception &e) {
+        // Python raises here (a ValueError at construction or in the solve's
+        // front half); which frame prints it is not ported yet
+        (void)e;
+        return decline("bspline-raises");
+    }
+    fr->n_ports = static_cast<int64_t>(fr->args.feeds.size() + fr->args.node_gaps.size());
+    // `exact_kernel="auto"` (`_resolve_exact_kernel_auto`): on when some
+    // segment is shorter than 3 radii. The correction is not ported, so a
+    // deck near that line declines (the margin keeps the decision Python's).
+    for (size_t w = 0; w < fr->geom.per_wire.size(); w++) {
+        const bspline::WireGeometry &wg = fr->geom.per_wire[w];
+        for (int64_t q = 0; q < wg.n_total; q++) {
+            double h2 = 0.0;
+            for (int c = 0; c < 3; c++) {
+                const double d = wg.seg_r[3 * q + c] - wg.seg_l[3 * q + c];
+                h2 += d * d;
+            }
+            if (std::sqrt(h2) < 3.0 * fr->radii[w] * (1.0 + 1e-9)) return decline("bspline-exact-kernel");
+        }
+    }
+    // `_dense_tensor_fits_budget` at `swept_mem_mb=256`: past it Python takes
+    // the chunked fill, not ported yet
+    const double n_segs = static_cast<double>(fr->geom.n_segs_total);
+    if (9.0 * n_segs * n_segs * 16.0 > static_cast<double>(int64_t(256) << 20))
+        return decline("bspline-chunked-fill");
+    // `self.c = 1 / np.sqrt(self.eps * self.mu)`, `freq = c / wavelength`,
+    // `omega = 2 * np.pi * freq`, `k = omega / c`
+    fr->c = 1.0 / std::sqrt(BSPLINE_EPS * BSPLINE_MU);
+    const double freq = fr->c / in.wavelength;
+    fr->omega = (2.0 * 3.141592653589793) * freq;
+    fr->k = fr->omega / fr->c;
+    fr->extended_kernel = in.extended_kernel;
+    part.front = std::move(fr);
     return b;
 }
 
