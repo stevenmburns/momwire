@@ -58,6 +58,11 @@ PortSolve solve_ports(const std::vector<cdouble> &Z, int64_t n_b, const std::vec
                       int64_t n_p, const std::vector<double> &kcl, int64_t n_c,
                       const razor::Lapack &lp, const nec5::NumpyLinalg &np);
 
+// One SOLVED wire's current (or slope) at arcs `s` (clipped to its knots):
+// `_wire_span_polynomials` + `_eval_span_polynomials`.
+std::vector<cdouble> spline_eval_wire(const Basis &b, const Geometry &g, const std::vector<cdouble> &coeffs,
+                                      size_t w, std::vector<double> s, bool derivative);
+
 // `currents_at_knots(coeffs, s_array)` (`derivative` false) and
 // `current_slopes(coeffs, s_array)` (true), per INPUT wire
 // (`reads_input_wires("per_wire")`: a dropped copy reads zeros, sized like
