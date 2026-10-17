@@ -11,6 +11,7 @@
 #include "_mw_nd.h"
 #include "_nec5_printout_core.h"
 #include "_razor_solve_core.h"
+#include "_somm_grid_core.h"
 
 #include <algorithm>
 #include <complex>
@@ -131,19 +132,34 @@ void accumulate_image(std::vector<cdouble> &Z, const Geometry &g, const Basis &b
 
 // `_remainder_qp_pairs`' O(N) short-circuit (`_quadrature.
 // remainder_qp_pairs` at the graded route's c = 4, base `n_qp_sommerfeld`):
-// true when it proves no segment pair is raised above the base order. A
-// deck it cannot clear takes the per-pair scan and, where pairs are listed,
-// the graded pair correction (not ported: such a deck declines).
+// true when it proves no segment pair is raised above the base order.
 bool remainder_pairs_cleared(const Geometry &g, double ground_z, int64_t n_qp_sommerfeld);
 
-// `Z -= _Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)` on a deck
-// `remainder_pairs_cleared` clears: the remainder's source nodes and
-// moment weights at `n_qp_sommerfeld`, the eager grid
-// (`_below_interface.somm_grid`, sized by `max_image_distance`) and the
-// fused kernel (`somm_core::remainder_bspline_Q`, the symmetric route).
+// `Z -= _Z_sommerfeld_remainder(geom, supp_seg, polys, eps_t)`: the
+// remainder's source nodes and moment weights at `n_qp_sommerfeld`, the
+// eager grid (`_below_interface.somm_grid`, sized by `max_image_distance`),
+// the fused kernel (`somm_core::remainder_bspline_Q`, the symmetric route),
+// then the raised pairs' graded correction (`_remainder_pair_correction`,
+// momwire#1189 / #1201).
 void subtract_sommerfeld_remainder(std::vector<cdouble> &Z, const Geometry &g, const Basis &b,
                                    double ground_z, cdouble eps_t, double k, double omega, double mu,
-                                   int64_t n_qp_sommerfeld);
+                                   int64_t n_qp_sommerfeld, const nec5::NumpyLinalg &np);
+
+// TEST HOOK: `_remainder_graded.pair_moments(..., I, J, ...)` on `grid`
+// (n, d1, d1) and the base-order `_remainder_pair_moments` of each (I[n],
+// J[n]) alone.
+void debug_pair_moments(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1,
+                        const std::vector<int64_t> &I, const std::vector<int64_t> &J, int64_t base,
+                        std::vector<cdouble> &graded, std::vector<cdouble> &fixed);
+
+void debug_chunk_pair(const Geometry &g, double gz, double k, const somm_core::Grid &grid, int d1, int64_t i,
+                      int64_t j, std::vector<int64_t> &o_pair, std::vector<double> &s_o, std::vector<double> &w_o,
+                      std::vector<cdouble> &v);
+
+// `_remainder_qp_pairs(seg_l, seg_r, gz)` on the graded route: (I, J, Q)
+// of the segment pairs raised above `base`, sorted by I then J.
+void remainder_raised_pairs(const Geometry &g, double gz, int64_t base, const nec5::NumpyLinalg &np,
+                            std::vector<int64_t> &I, std::vector<int64_t> &J, std::vector<int64_t> &Q);
 
 // numpy's ILP64 `cblas_dsyrk` (`scipy_cblas_dsyrk64_`): `tangents @
 // tangents.T` is numpy's syrk case (one operand and its transpose).

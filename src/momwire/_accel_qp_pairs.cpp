@@ -1,4 +1,5 @@
 #include "_accel_common.h"
+#include "_somm_pairs_core.h"
 
 #include <limits>
 #include <stdexcept>
@@ -39,13 +40,9 @@
 
 namespace qp_pairs {
 
-// Relative slack on every float the scan compares. See above.
-static const double SLACK = 1e-10;
-
-struct Hit {
-    int64_t row;
-    int64_t q;
-};
+// The scan and its relative slack are `_somm_pairs_core.cpp`'s
+// (momwire#1517 step 3).
+using Hit = somm_core::QpHit;
 
 }  // namespace qp_pairs
 
@@ -63,7 +60,6 @@ static py::tuple remainder_qp_pairs_scan(
     py::array_t<double, py::array::c_style | py::array::forcecast> lengths,
     int64_t base, int64_t cap, double c, double edge_tol) {
     using qp_pairs::Hit;
-    using qp_pairs::SLACK;
     if (obs.ndim() != 2 || obs.shape(1) != 3 || mir_l.ndim() != 2 ||
         mir_l.shape(1) != 3 || d.ndim() != 2 || d.shape(1) != 3)
         throw std::invalid_argument("obs, mir_l and d must be (*, 3)");
@@ -74,97 +70,17 @@ static py::tuple remainder_qp_pairs_scan(
     const py::ssize_t M = obs.shape(0);
     if (n_node < 1 || M % n_node != 0)
         throw std::invalid_argument("obs rows must be a whole number of segments");
-    const py::ssize_t n_seg = M / n_node;
     const double *O = obs.data();
     const double *ML = mir_l.data();
     const double *D = d.data();
     const double *DD = dd.data();
     const double *L = lengths.data();
-    const double lo_b = edge_tol != 0.0 ? -edge_tol : 0.0;
-    const double hi_b = edge_tol != 0.0 ? 1.0 + edge_tol : 1.0;
 
-    std::vector<std::vector<Hit>> hits(S);
-    std::vector<unsigned char> unsure(S, 0);
+    std::vector<std::vector<Hit>> hits;
+    std::vector<unsigned char> unsure;
     {
         py::gil_scoped_release release;
-        #pragma omp parallel for schedule(dynamic, 16)
-        for (py::ssize_t j = 0; j < S; ++j) {
-            const double len = L[j], ddj = DD[j];
-            if (len <= 0.0 || !(ddj > 0.0)) continue;  // numpy skips both
-            const double mx = ML[3 * j], my = ML[3 * j + 1], mz = ML[3 * j + 2];
-            const double dx = D[3 * j], dy = D[3 * j + 1], dz = D[3 * j + 2];
-            const double dmax =
-                std::max(std::fabs(dx), std::max(std::fabs(dy), std::fabs(dz)));
-            std::vector<Hit> &out = hits[j];
-            bool bad = false;
-            for (py::ssize_t s = 0; s < n_seg; ++s) {
-                // numpy's R_min for this observer segment lies in
-                // [r_lo, r_hi]: each interior node's dist within +-e of ours.
-                const double inf = std::numeric_limits<double>::infinity();
-                double r_min = inf, r_lo = inf, r_hi = inf;
-                for (int64_t n = 0; n < n_node; ++n) {
-                    const double *o = O + 3 * (s * n_node + n);
-                    const double ax = o[0] - mx, ay = o[1] - my, az = o[2] - mz;
-                    const double pd = ax * dx + ay * dy + az * dz;
-                    const double t_raw = pd / ddj;
-                    // |numpy's t_raw - ours|: a 3-term dot rounds within a few
-                    // eps sum|a_i d_i| whatever its order or fusion.
-                    const double mag =
-                        (std::fabs(ax * dx) + std::fabs(ay * dy) +
-                         std::fabs(az * dz)) / ddj;
-                    const double tol = SLACK * (mag + std::fabs(t_raw));
-                    if (std::fabs(t_raw - lo_b) <= tol ||
-                        std::fabs(t_raw - hi_b) <= tol) {
-                        bad = true;
-                        break;
-                    }
-                    if (!(t_raw > lo_b && t_raw < hi_b)) continue;
-                    const double t = t_raw < 0.0 ? 0.0 : (t_raw > 1.0 ? 1.0 : t_raw);
-                    const double cx = o[0] - (mx + t * dx);
-                    const double cy = o[1] - (my + t * dy);
-                    const double cz = o[2] - (mz + t * dz);
-                    const double dist = std::sqrt(cx * cx + cy * cy + cz * cz);
-                    // t can be off by tol, which moves `closest` by tol |d|;
-                    // every other float here rounds within SLACK of the
-                    // coordinates' scale.
-                    const double scale =
-                        std::max(std::max(std::fabs(o[0]), std::fabs(o[1])),
-                                 std::max(std::fabs(o[2]),
-                                          std::max(std::max(std::fabs(mx), std::fabs(my)),
-                                                   std::fabs(mz)))) +
-                        dmax + dist;
-                    const double e = tol * dmax + SLACK * scale;
-                    r_min = std::min(r_min, dist);
-                    r_lo = std::min(r_lo, dist - e);
-                    r_hi = std::min(r_hi, dist + e);
-                }
-                if (bad) break;
-                if (!(r_min < inf)) continue;  // no interior node: base order
-                // numpy: ratio = len / R_min (R_min > 0), need = ceil(c ratio),
-                // q = clip(need, base, cap); R_min == 0 -> cap. Certain only
-                // if every R_min in [r_lo, r_hi] gives the same q.
-                if (r_lo <= 0.0) {
-                    bad = true;
-                    break;
-                }
-                const double need = std::ceil(c * (len / r_min));
-                const double clo = std::ceil(c * (len / r_hi) * (1.0 - SLACK));
-                const double chi = std::ceil(c * (len / r_lo) * (1.0 + SLACK));
-                const double qn = std::min(std::max(need, (double)base), (double)cap);
-                const double ql = std::min(std::max(clo, (double)base), (double)cap);
-                const double qh = std::min(std::max(chi, (double)base), (double)cap);
-                if (ql != qn || qh != qn) {
-                    bad = true;
-                    break;
-                }
-                const int64_t q = static_cast<int64_t>(qn);
-                if (q > base) out.push_back(Hit{static_cast<int64_t>(s), q});
-            }
-            if (bad) {
-                unsure[j] = 1;
-                out.clear();
-            }
-        }
+        somm_core::remainder_qp_pairs_scan(O, M, n_node, ML, D, DD, L, S, base, cap, c, edge_tol, hits, unsure);
     }
 
     size_t total = 0;

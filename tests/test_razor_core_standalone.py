@@ -90,6 +90,7 @@ CORE_SOURCES = (
     "_somm_field_core.cpp",
     # The B-spline remainder block's kernel (momwire#1517 step 3).
     "_somm_remainder_core.cpp",
+    "_somm_pairs_core.cpp",
     # bs2's NEC-5 seam, front half, fill and run half (momwire#1517 step 1):
     # deck text to printout bytes for the B-spline basis, linked into
     # `nec5_bspline_printout_driver.cpp`.
@@ -1150,9 +1151,9 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     prints, and every finished run carries Python's Y, coefficients and port
     vectors -- wire loading (LD 5 / 2 / 3) and the exact ring-kernel
     correction (step 2), a perfect ground's image term (step 3a) and the
-    Sommerfeld composition where no segment pair grazes (step 3b) included.
-    What it declines is a grazing Sommerfeld deck, a buried wire and the
-    exact kernel's radius-step cross job, by name, and nothing else."""
+    Sommerfeld composition with its graded raised pairs (steps 3b, 3c)
+    included. What it declines is a buried wire and the exact kernel's
+    radius-step cross job, by name, and nothing else."""
     decks = [
         p
         for p in sorted((ROOT / "tests" / "fixtures").rglob("*"))
@@ -1164,7 +1165,6 @@ def test_deck_text_to_printout_in_cxx_alone_is_bsplines(driver, tmp_path):
     assert counts.get("raised|frame", 0) >= 3, counts
     assert counts.get("runs", 0) >= 100, counts
     assert set(reasons) <= {
-        "front:bspline-sommerfeld-grazing",
         "front:bspline-buried-wire",
         "front:bspline-exact-kernel-radius-step",
     }, reasons

@@ -1166,6 +1166,56 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
     return out;
 }
 
+
+// TEST HOOK (momwire#1517 step 3c): per bspline Sommerfeld preparation, the
+// raised pairs and their graded / base-order moments in C++.
+py::list bspline_somm_pairs(py::bytes latin1, std::vector<uintptr_t> blas) {
+    const std::string text = latin1;
+    const mw::nec5::SeamResult r = mw::nec5::bspline_seam(text);
+    py::list out;
+    mw::nec5::NumpyLinalg npl;
+    if (blas.size() == 3) {
+        npl.dgemm = reinterpret_cast<mw::nec5::cblas_dgemm_fn>(blas[0]);
+        npl.dgemv = reinterpret_cast<mw::nec5::cblas_dgemv_fn>(blas[1]);
+        npl.ddot = reinterpret_cast<mw::nec5::cblas_ddot_fn>(blas[2]);
+    }
+    for (const auto &p : r.prepared) {
+        py::dict d;
+        const auto &part = mw::nec5::bspline_part(p);
+        if (!part.front || !part.front->compose) {
+            out.append(d);
+            continue;
+        }
+        const auto &fr = *part.front;
+        std::vector<int64_t> I, J, Q;
+        mw::bspline::remainder_raised_pairs(fr.geom, fr.ground_z, 3, npl, I, J, Q);
+        d["I"] = I;
+        d["J"] = J;
+        d["Q"] = Q;
+        if (!I.empty()) {
+            const std::complex<double> eps_t(fr.ground_eps_r, (-fr.ground_sigma) / (fr.omega * mw::nec5::BSPLINE_EPS));
+            const double r1 = mw::razor::max_image_distance(fr.geom.seg_l.data(), fr.geom.seg_r.data(),
+                                                            static_cast<size_t>(fr.geom.n_segs_total), fr.ground_z);
+            const auto &grid = somm_core::get_grid(eps_t, fr.k, r1, fr.omega, mw::nec5::BSPLINE_MU);
+            std::vector<std::complex<double>> gr, fx;
+            mw::bspline::debug_pair_moments(fr.geom, fr.ground_z, fr.k, grid, 3, I, J, 3, gr, fx);
+            d["graded"] = gr;
+            d["fixed"] = fx;
+            py::list chunks;
+            for (size_t t = 0; t < I.size(); t++) {
+                std::vector<int64_t> op;
+                std::vector<double> so, wo;
+                std::vector<std::complex<double>> vv;
+                mw::bspline::debug_chunk_pair(fr.geom, fr.ground_z, fr.k, grid, 3, I[t], J[t], op, so, wo, vv);
+                chunks.append(py::make_tuple(op, so, wo, vv));
+            }
+            d["chunks"] = chunks;
+
+        }
+        out.append(d);
+    }
+    return out;
+}
 }  // namespace
 
 void register_razor_solve(py::module_ &m) {
@@ -1228,6 +1278,8 @@ void register_razor_solve(py::module_ &m) {
           py::arg("samples") = std::vector<std::vector<double>>(), py::arg("chunk_mb") = 0.0,
           "TEST HOOK (momwire#1517 step 1): per bspline preparation, its "
           "BSplineSolver keyword arguments and the C++ front half's geometry.");
+    m.def("bspline_somm_pairs", &bspline_somm_pairs, py::arg("latin1"), py::arg("blas") = std::vector<uintptr_t>(),
+          "TEST HOOK (momwire#1517 step 3c): the raised remainder pairs and their moments.");
     m.def("nec5_bspline_seam", &nec5_bspline_seam, py::arg("latin1"),
           "TEST HOOK (momwire#1517 step 1): the NEC-5 seam's structure half "
           "for bspline in C++: the route, each run's outcome, and per "
