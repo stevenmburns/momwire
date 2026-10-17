@@ -1,6 +1,7 @@
 // razor-2p's crossing blocks in C++: see `_razor_crossing_core.h`. Every
 // step names the `_crossing_fill.py` / razor.py function it replays.
 #include "_razor_crossing_core.h"
+#include "_fma_inline.h"
 
 #include "_near_interface_eval.h"
 #include "_somm_below_grid_core.h"
@@ -32,8 +33,8 @@ constexpr int K_U = 0, K_V = 1, K_W = 2, K_DZPW = 5;  // KEYS order
 
 // numpy's fused complex product (`_cmul.cmul`'s formula, operand order kept).
 inline cd np_cmul(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 // numpy's complex division (`CDOUBLE_divide`, Smith's).
 inline cd np_cdiv(cd a, cd b) {

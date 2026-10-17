@@ -3,6 +3,7 @@
 // IEEE operation at a time (this TU is built -ffp-contract=off; MSVC asks for
 // precise semantics below), the fused complex product spelled with std::fma.
 #include "_somm_grid_core.h"
+#include "_fma_inline.h"
 
 #include "_somm_kernel_core.h"
 
@@ -84,8 +85,8 @@ cd py_square(cd x) {  // `x ** 2`: c_powu(x, 2) = c_prod(c_1, c_prod(x, x))
 
 // numpy's elementwise complex multiply (fused, `_cmul`'s formula).
 inline cd np_mul(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 inline cd np_add(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }
 inline cd np_sub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }

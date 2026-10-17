@@ -3,6 +3,7 @@
 // complex product is its fused form, `_cmul.cmul` / numpy's AVX2 loop; a
 // complex `/` of Python scalars is CPython 3.12's `_Py_c_quot`).
 #include "_razor_exact_core.h"
+#include "_fma_inline.h"
 
 #include "_exact_kernel_point_core.h"
 #include "_razor_core.h"
@@ -26,8 +27,8 @@ namespace {
 
 // numpy's fused elementwise complex product (a real operand is (x, 0)).
 inline cd cmul_f(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 
 // CPython 3.12's `_Py_c_quot` (Smith's method).

@@ -35,6 +35,7 @@
 //   rows    = razor_t2_rows(..., M0w, ...) + Q      (`C2 img + Q`, then the
 //             one `out[lo:hi] -= rows`)
 #include "_razor_solve_core.h"
+#include "_fma_inline.h"
 
 #include "_razor_core.h"
 #include "_somm_proj_core.h"
@@ -75,8 +76,8 @@ view<T, 1> slice1(const view<T, 1> &v, ptrdiff_t r0, ptrdiff_t r1) {
 // numpy's fused complex product (`_cmul.cmul`'s formula) and its complex
 // division (`CDOUBLE_divide`, Smith's), as the run path spells them.
 inline cd np_cmul(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 inline cd np_cdiv(cd a, cd b) {
     const double in1r = a.real(), in1i = a.imag(), in2r = b.real(), in2i = b.imag();
@@ -268,8 +269,8 @@ void SolveContext::window(const SolveInputs &in, const SourceSet &src, ptrdiff_t
         cd *dst0 = m0c_.data();
         for (size_t i = 0; i < plane; i++) {
             const double ar = src0[i].real(), ai = src0[i].imag();
-            dst0[i] = cd(std::fma(ar, c2.real(), -(ai * c2.imag())),
-                         std::fma(ar, c2.imag(), ai * c2.real()));
+            dst0[i] = cd(mw_fma::exact(ar, c2.real(), -(ai * c2.imag())),
+                         mw_fma::exact(ar, c2.imag(), ai * c2.real()));
         }
         m0w = c_view<const cd, 2>(m0c_.data(), {n_need, n_seg});
     }
@@ -376,7 +377,7 @@ void SolveContext::knot_moments(const SolveInputs &in, const SourceSet &src, boo
         const cd c2 = in.comp.c2;
         for (cd &v : out) {
             const double ar = v.real(), ai = v.imag();
-            v = cd(std::fma(ar, c2.real(), -(ai * c2.imag())), std::fma(ar, c2.imag(), ai * c2.real()));
+            v = cd(mw_fma::exact(ar, c2.real(), -(ai * c2.imag())), mw_fma::exact(ar, c2.imag(), ai * c2.real()));
         }
     }
 }

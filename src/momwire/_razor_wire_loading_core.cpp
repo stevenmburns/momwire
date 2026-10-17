@@ -1,5 +1,6 @@
 // `_wire_loading.series_impedance_per_wire` in C++ -- see the header.
 #include "_razor_wire_loading_core.h"
+#include "_fma_inline.h"
 
 // MSVC builds every TU /fp:fast (setup.py); this one replays numpy's
 // arithmetic one IEEE operation at a time. GCC / clang: -ffp-contract=off.
@@ -25,8 +26,8 @@ constexpr double MU0 = 1.25663706127e-6;  // `_wire_loading.MU0`
 // numpy's array-loop complex multiply (fused, its x86-64-v3 loop: the C++
 // route runs only where numpy takes it).
 cd fused_mul(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 
 // numpy's scalar math (`cdouble_ctype_multiply`): two roundings.

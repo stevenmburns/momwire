@@ -1,6 +1,7 @@
 // The designed near-interface tables, Python-free: see `_near_interface_eval.h`.
 // Every rule below names the `_near_interface.py` function it replays.
 #include "_near_interface_eval.h"
+#include "_fma_inline.h"
 
 #include "_razor_front_core.h"  // leggauss (the frozen Gauss table)
 
@@ -211,7 +212,7 @@ class PlaneSheet {
                 for (int k = 0; k < N_KEYS; k++) {
                     const double f = KEY_RPOW[k] == 1 ? Rn : f2;
                     cd &v = vals[i * N_KEYS + k];
-                    v = cd(std::fma(v.real(), f, -(v.imag() * 0.0)), std::fma(v.real(), 0.0, v.imag() * f));
+                    v = cd(mw_fma::exact(v.real(), f, -(v.imag() * 0.0)), mw_fma::exact(v.real(), 0.0, v.imag() * f));
                 }
             }
         std::map<std::pair<int, int>, std::vector<cd>> blocks;

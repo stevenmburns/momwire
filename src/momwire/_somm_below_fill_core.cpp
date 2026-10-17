@@ -1,5 +1,6 @@
 // The below/below table filled in C++: see `_somm_below_fill_core.h`.
 #include "_somm_below_fill_core.h"
+#include "_fma_inline.h"
 
 #include "_leggauss_table.h"
 #include "_mw_core.h"
@@ -96,8 +97,8 @@ cd py_neg(cd a) { return cd(-a.real(), -a.imag()); }
 // numpy's array product: each part one fused multiply-add (the run path's
 // `np_cmul`, measured on AVX2 and AVX-512 alike); a real operand is (x, 0).
 cd np_mul(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 inline cd c_add(cd a, cd b) { return cd(a.real() + b.real(), a.imag() + b.imag()); }
 inline cd c_sub(cd a, cd b) { return cd(a.real() - b.real(), a.imag() - b.imag()); }

@@ -5,6 +5,7 @@
 // text it writes is that Python's, byte for byte, and so is the order in
 // which it computes (an exception escapes where Python's does).
 #include "_nec5_razor_printout_core.h"
+#include "_fma_inline.h"
 #include "_somm_field_core.h"
 #include "_somm_grid_core.h"
 #include "_accel_somm_proj_inline.h"
@@ -196,8 +197,8 @@ double py_degrees(double x) { return (180.0 / 3.141592653589793) * x; }
 // The elementwise complex multiply as the run path spells it (`_cmul.cmul`,
 // numpy's fused formula, on every CPU): each part one fused multiply-add.
 cd np_cmul(cd a, cd b) {
-    return cd(std::fma(a.real(), b.real(), -(a.imag() * b.imag())),
-              std::fma(a.real(), b.imag(), a.imag() * b.real()));
+    return cd(mw_fma::exact(a.real(), b.real(), -(a.imag() * b.imag())),
+              mw_fma::exact(a.real(), b.imag(), a.imag() * b.real()));
 }
 
 // numpy's complex add / subtract and the fused complex multiply of two
@@ -1337,7 +1338,7 @@ std::vector<cd> moments_of(const Grid &g, double k, const std::vector<double> &c
             const double *c = &centres[3 * m];
             const double phase = k * ((x * c[0] + z * c[2]) + y * c[1]);
             // `np.exp(1j * phase)`: (±0, phase) -> (cos, sin), exp(±0) = 1
-            const double re0 = std::fma(0.0, phase, -(1.0 * 0.0));
+            const double re0 = mw_fma::exact(0.0, phase, -(1.0 * 0.0));
             const double ex = std::exp(re0);
             const cd f(ex * std::cos(phase), ex * std::sin(phase));
             for (int cc = 0; cc < 3; cc++) {
@@ -2087,8 +2088,8 @@ NearBlockC near_block(const Request &rq, const razor::Front &fr,
             const std::vector<cd> rem = near_remainder(points, el, eps_t, k, omega, rq.magnetic);
             for (std::size_t q = 0; q < field.size(); q++) {
                 const cd im = image[q];
-                const cd scaled(std::fma(c2.real(), im.real(), -(c2.imag() * im.imag())),
-                                std::fma(c2.real(), im.imag(), c2.imag() * im.real()));
+                const cd scaled(mw_fma::exact(c2.real(), im.real(), -(c2.imag() * im.imag())),
+                                mw_fma::exact(c2.real(), im.imag(), c2.imag() * im.real()));
                 field[q] = c_add(field[q], c_add(scaled, rem[q]));
             }
         } else {
