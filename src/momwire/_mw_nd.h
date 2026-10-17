@@ -26,6 +26,7 @@
 
 #include <complex>
 #include <cstddef>
+#include <cstdlib>
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
@@ -33,6 +34,9 @@
 #include <string>
 #include <type_traits>
 #include <vector>
+#if defined(__linux__)
+#include <sys/mman.h>
+#endif
 
 namespace mw {
 namespace nd {
@@ -150,8 +154,25 @@ inline Buffer Host::allocate(dtype type, std::size_t itemsize, int ndim, const s
         b.strides[k] = acc;
         acc *= shape[k];
     }
-    // 64-byte aligned, as numpy's allocations are at least 16
     const std::size_t bytes = count * itemsize;
+#if defined(__linux__) && defined(MADV_HUGEPAGE)
+    // A large array on transparent huge pages, as numpy's allocator asks
+    // for them (`madvise(MADV_HUGEPAGE)` from 4 MiB): 2 MiB-aligned (so a
+    // multiple of the 64 below, and every kernel's lanes start alike), the
+    // advice a hint the kernel may ignore. Placement only, never values.
+    constexpr std::size_t HUGE_FROM = std::size_t(4) << 20, HUGE_ALIGN = std::size_t(2) << 20;
+    if (bytes >= HUGE_FROM) {
+        const std::size_t rounded = (bytes + HUGE_ALIGN - 1) / HUGE_ALIGN * HUGE_ALIGN;
+        void *p = std::aligned_alloc(HUGE_ALIGN, rounded);
+        if (p == nullptr) throw std::bad_alloc();
+        (void)madvise(p, rounded, MADV_HUGEPAGE);
+        b.owner = std::shared_ptr<void>(p, [](void *q) { std::free(q); });
+        b.ptr = p;
+        b.writeable = true;
+        return b;
+    }
+#endif
+    // 64-byte aligned, as numpy's allocations are at least 16
     void *raw = ::operator new(bytes + 64);
     void *aligned = reinterpret_cast<void *>((reinterpret_cast<std::uintptr_t>(raw) + 64) &
                                              ~static_cast<std::uintptr_t>(63));

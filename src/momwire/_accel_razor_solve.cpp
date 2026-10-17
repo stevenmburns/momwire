@@ -1095,7 +1095,7 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                 fp.ladder = mw::bspline::default_ladder(8);
                 fp.n_qp_same_edge = 4;
                 fp.extended_kernel = in.extended_kernel;
-                const std::vector<std::complex<double>> J = mw::bspline::build_J_blocks(g, radii, fp);
+                const mw::bspline::CArray J = mw::bspline::build_J_blocks(g, radii, fp);
                 py::array_t<cd> Ja({static_cast<ptrdiff_t>(3), static_cast<ptrdiff_t>(3),
                                     static_cast<ptrdiff_t>(g.n_segs_total),
                                     static_cast<ptrdiff_t>(g.n_segs_total)});
@@ -1148,7 +1148,7 @@ py::list bspline_front_geometry(py::bytes latin1, uintptr_t syrk_addr,
                                 return l;
                             };
                             entry["knot_currents"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, nullptr, false));
-                            if (!samples.empty()) {
+                            if (!samples.empty() && samples.size() == in.n_per_edge.size()) {
                                 entry["sample_currents"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, &samples, false));
                                 entry["sample_slopes"] = lists(mw::bspline::spline_readout(bs, g, dd, c0, &samples, true));
                             }

@@ -8,11 +8,14 @@
 #pragma once
 
 #include "_bspline_front_core.h"
+#include "_mw_nd.h"
 #include "_nec5_printout_core.h"
 #include "_razor_solve_core.h"
 
+#include <algorithm>
 #include <complex>
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -20,6 +23,45 @@ namespace mw {
 namespace bspline {
 
 using cdouble = std::complex<double>;
+
+// complex128 storage, C order, for the moment tensors: allocated through
+// the nd host (large ones on huge pages, `_mw_nd.h`) or a kernel's own
+// output adopted as it is, so a tensor the size of J is never copied.
+// Copies share the storage.
+class CArray {
+  public:
+    CArray() = default;
+    explicit CArray(std::size_t n) {  // zero-filled
+        nd::array_t<std::complex<double>> a({static_cast<nd::ssize_t>(n)});
+        adopt_(a);
+        std::fill(p_, p_ + n_, cdouble(0.0, 0.0));
+    }
+    CArray(const cdouble *b, const cdouble *e) : CArray(static_cast<std::size_t>(e - b)) { std::copy(b, e, p_); }
+    static CArray adopt(const nd::array_t<std::complex<double>> &a) {
+        CArray c;
+        c.adopt_(a);
+        return c;
+    }
+    cdouble *data() { return p_; }
+    const cdouble *data() const { return p_; }
+    std::size_t size() const { return n_; }
+    cdouble &operator[](std::size_t i) { return p_[i]; }
+    const cdouble &operator[](std::size_t i) const { return p_[i]; }
+    cdouble *begin() { return p_; }
+    cdouble *end() { return p_ + n_; }
+    const cdouble *begin() const { return p_; }
+    const cdouble *end() const { return p_ + n_; }
+
+  private:
+    void adopt_(const nd::array_t<std::complex<double>> &a) {
+        owner_ = a.buffer().owner;
+        p_ = static_cast<cdouble *>(a.buffer().ptr);
+        n_ = static_cast<std::size_t>(a.size());
+    }
+    std::shared_ptr<void> owner_;
+    cdouble *p_ = nullptr;
+    std::size_t n_ = 0;
+};
 
 struct FillParams {
     double k = 0;             // the solver's real wavenumber
@@ -32,7 +74,7 @@ struct FillParams {
 
 // `_build_J_blocks(geom, k)`: (d+1, d+1, N, N) C order. `radius_per_wire`:
 // the conductor radius of each wire.
-std::vector<cdouble> build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,
+CArray build_J_blocks(const Geometry &g, const std::vector<double> &radius_per_wire,
                                     const FillParams &fp);
 
 // `_compute_Z_dense_chunked(geom, k, supp_seg, polys)` (issue #136, the
@@ -110,7 +152,7 @@ using dsyrk_fn = nec5::cblas_dsyrk_fn;
 // `_assemble_Z(J, supp_seg, polys, geom)` in free space: the C++ assembler
 // with `td_all = tangents @ tangents.T` as numpy forms it (dsyrk on the
 // upper triangle, then the triangle copied down). (n_basis, n_basis) C order.
-std::vector<cdouble> assemble_Z(const std::vector<cdouble> &J, const Basis &b, const Geometry &g,
+std::vector<cdouble> assemble_Z(const CArray &J, const Basis &b, const Geometry &g,
                                 double omega, double eps, double mu, dsyrk_fn syrk);
 
 // `compute_port_solution`'s tail on a filled Z (C order, n_b x n_b):
