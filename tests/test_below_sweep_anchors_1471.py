@@ -48,13 +48,15 @@ def _grid(f_hz, r1_wl, **kw):
 
 @pytest.fixture
 def clean(monkeypatch):
-    """No grids, no anchors, no history, counters at zero."""
+    """No grids, no anchors, no history, counters at zero, and anchors opted
+    in (`auto`, the policy these tests are of; off by default since
+    momwire#1535)."""
     monkeypatch.setattr(sm, "_GRID_CACHE", {})
     monkeypatch.setattr(sb, "_GRID_CACHE", sm._GRID_CACHE)
     sb.reset_sweep_state()
     for k in sb.SWEEP_STATS:
         monkeypatch.setitem(sb.SWEEP_STATS, k, 0)
-    monkeypatch.delenv(sb.ENV_ANCHORS, raising=False)
+    monkeypatch.setenv(sb.ENV_ANCHORS, "auto")
     yield
     sb.reset_sweep_state()
 
@@ -144,10 +146,22 @@ def test_a_lossless_ground_has_no_ladder_and_keeps_the_exact_fill(standin, monke
 
 @pytest.mark.parametrize(
     "value,mode",
-    [("", "auto"), ("auto", "auto"), ("off", "off"), ("0", "off"), ("on", "on")],
+    [
+        (None, "off"),
+        ("", "off"),
+        ("bogus", "off"),
+        (" AUTO ", "auto"),
+        ("off", "off"),
+        ("0", "off"),
+        ("on", "on"),
+    ],
 )
 def test_the_switch(monkeypatch, value, mode):
-    monkeypatch.setenv(sb.ENV_ANCHORS, value)
+    """Off unless asked for (momwire#1535)."""
+    if value is None:
+        monkeypatch.delenv(sb.ENV_ANCHORS, raising=False)
+    else:
+        monkeypatch.setenv(sb.ENV_ANCHORS, value)
     assert sb.anchor_mode() == mode
 
 

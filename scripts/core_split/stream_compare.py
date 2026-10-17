@@ -1,7 +1,7 @@
 """SimNEC's streaming call (``- -``, momwire#1512), the no-Python executable
 against ``momwire-nec5-razor-2p``, through the same pipes.
 
-    OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MOMWIRE_BELOW_ANCHORS=off \\
+    OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 \\
     python scripts/core_split/stream_compare.py OUT.jsonl --exe EXE \\
         --launcher L [--workers W] [--timeout S] STREAM_OR_DIR...
 
