@@ -25,6 +25,10 @@ bit gates.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -120,9 +124,37 @@ def _interp(sheet, sub, generic):
 def test_the_avx2_build_has_the_fixed_route():
     """The gate below compares two routes only where the fixed one is built;
     on the AVX2 variant it must be, or the comparison is the generic loop
-    against itself."""
-    if _accel.VARIANT == "avx2":
+    against itself. So must the GCC/clang x86-64 baseline variant, whose
+    sheet runs the lane layer's unfused portable backend (_lanes.h,
+    MW_LANES_BASELINE_UNFUSED)."""
+    if _accel.VARIANT == "avx2" or (
+        _accel.VARIANT == "sse2" and sys.platform != "win32"
+    ):
         assert ni._nia.grid_sheet_fixed_1290 is True
+
+
+def test_the_baseline_variant_fixed_route_is_the_generic_loop_to_the_bit():
+    """This module again, in a child forced onto the x86-64 baseline variant
+    (the two variants cannot share a process): there `fmadd` is the unfused
+    a*b + c, as the walk's mw_fma::fma is, and the gates stay uint64."""
+    if _accel.VARIANT != "avx2" or sys.platform == "win32":
+        pytest.skip("needs the GCC/clang AVX2 variant with a baseline one beside it")
+    if not _accel._extension_built("_sse2"):
+        pytest.skip("the x86-64 baseline variant is not built")
+    if os.environ.get("MOMWIRE_FORCE_VARIANT"):
+        pytest.skip("already the child")
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-n0", "-p", "no:cacheprovider",
+         __file__, "-k", "not baseline_variant"],
+        env=dict(os.environ, MOMWIRE_FORCE_VARIANT="sse2"),
+        cwd=os.path.dirname(__file__),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )  # fmt: skip
+    out = done.stdout
+    assert done.returncode == 0, out[-4000:] + done.stderr[-2000:]
+    assert " passed" in out and "skipped" not in out, out[-2000:]
 
 
 @pytest.mark.parametrize("family", ["six", "point"])
