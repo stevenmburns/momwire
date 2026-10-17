@@ -1365,7 +1365,9 @@ std::string sniff_mnemonic(const std::string &line) {
 
 }  // namespace
 
-bool split_structures(const std::string &text, std::vector<Structure> &structures) {
+bool Structure::ends_on_nx() const { return has_terminator && sniff_mnemonic(terminator) == "NX"; }
+
+bool split_structures(const std::string &text, std::vector<Structure> &structures, bool open_end) {
     structures.clear();
     std::string body;
     bool broke = false;
@@ -1387,17 +1389,47 @@ bool split_structures(const std::string &text, std::vector<Structure> &structure
         }
     }
     if (!broke) {
-        if (!body.empty() || (!structures.empty() && structures.back().has_terminator)) {
+        if (!body.empty() ||
+            (!open_end && !structures.empty() && structures.back().has_terminator)) {
             Structure s;
             s.body = body;
             structures.push_back(s);
         }
     }
-    if (structures.size() < 2) {
+    bool any_nx = false;
+    for (const Structure &s : structures) any_nx = any_nx || s.ends_on_nx();
+    if (!any_nx) {
         structures.clear();
         return false;
     }
     return true;
+}
+
+bool next_structure(const std::string &text, bool final, std::size_t &end, bool &is_en) {
+    // `text.splitlines(keepends=True)`, one line at a time
+    std::size_t k = 0, start = 0;
+    while (start < text.size()) {
+        bool broken = false;
+        while (k < text.size()) {
+            const uc c = static_cast<uc>(text[k]);
+            if (py_linebreak(c)) {
+                if (c == '\r' && k + 1 < text.size() && text[k + 1] == '\n') ++k;
+                ++k;
+                broken = true;
+                break;
+            }
+            ++k;
+        }
+        if (!broken && !final) return false;
+        const std::string mn = sniff_mnemonic(text.substr(start, k - start));
+        if (mn == "NX" || mn == "EN") {
+            end = k;
+            is_en = mn == "EN";
+            return true;
+        }
+        start = k;
+    }
+    return false;
 }
 
 bool split_runs(const std::string &text, std::vector<std::string> &out) {
@@ -1570,9 +1602,9 @@ Answer answer(const std::string &text, const std::string *echo_text) {
     return a;
 }
 
-StreamRead read_stream(const std::string &text) {
+StreamRead read_stream(const std::string &text, bool open_end) {
     StreamRead s;
-    s.chained = split_structures(text, s.structures);
+    s.chained = split_structures(text, s.structures, open_end);
     if (!s.chained) {
         s.answers.push_back(answer(text, nullptr));
         return s;

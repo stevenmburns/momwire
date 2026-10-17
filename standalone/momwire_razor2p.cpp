@@ -2,6 +2,7 @@
 //
 //     momwire-razor2p DECK PRINTOUT        (EZNEC's and SimNEC's form)
 //     momwire-razor2p < PATHS              (4nec2's: the two names on stdin)
+//     momwire-razor2p - -                  (SimNEC's streaming call, momwire#1512)
 //     momwire-razor2p -version
 //
 // The contract is the launcher's (`momwire.eznec._shell`): the printout file
@@ -527,6 +528,9 @@ def _launcher(args):
         return 0
     deck_path, printout_path = args
     if "-" in (deck_path, printout_path):
+        if args == ["-", "-"]:
+            from momwire.eznec._shell import main as _main
+            return _main(args, basis="razor-2p")
         print(_c.STREAMING_REFUSAL, file=sys.stderr)
         return 2
     try:
@@ -668,7 +672,7 @@ int main(int argc, char **argv) {
 //
 // Everything the launcher does, in this process, with nothing loaded: the
 // client's argv rules (`momwire_eznec_client.main`: `-version`, 4nec2's
-// stdin form, its argument errors, SimNEC's refused streaming call) and the
+// stdin form, its argument errors, a refused '-') and the
 // one-shot shell's frame (`_shell.main` / `run`: an unreadable deck, the
 // deck closed by EN for the stdin form, the `.GMO` file, the printout
 // written CRLF, and the INTERNAL ERROR printout for anything that escapes,
@@ -676,13 +680,19 @@ int main(int argc, char **argv) {
 // stdout when the printout itself cannot be written). A deck the C++ route
 // declines -- the hybrid's fallback -- is a refusal printout naming why
 // ("not served by this build: ..."), and so is a CPU without AVX2 / FMA.
+// SimNEC's streaming call, `- -`, is `_shell.stream` (momwire#1512): each
+// structure answered as its NX arrives, its printout flushed to stdout.
 // ============================================================================
 #include "launcher.h"
 
 #include <cerrno>
+#include <csignal>
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
+#else
+#include <fcntl.h>
+#include <io.h>
 #endif
 
 namespace {
@@ -695,9 +705,8 @@ const char *const ARGUMENT_ERROR_INPUT = "UNABLE TO OPEN FILE";
 const char *const ARGUMENT_ERROR_OUTPUT = "UNABLE TO OPEN SECOND FILE";
 const char *const UNABLE_TO_OPEN = "UNABLE TO OPEN FILE";
 const char *const STREAMING_REFUSAL =
-    "momwire does not serve the streaming mode ('- -': decks on stdin, printouts on stdout) that "
-    "SimNEC 5.4 uses for NEC5CL_a5x engines; give it two file paths, as SimNEC does for every "
-    "other NEC-5 engine (momwire#1395)";
+    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only, "
+    "and only in its NEC-5 slot; give it '- -', or two file paths (momwire#1395, momwire#1512)";
 
 const mw::nec5::EngineStamp STAMP{VERSION, EXE_VARIANT, ""};
 
@@ -810,8 +819,9 @@ void report_internal_error(const std::string &deck, const std::string &out,
 // bytes. A route decline is a refusal; an escaped C++ exception is thrown
 // as the PyError the INTERNAL ERROR frame reports.
 std::string render(const std::string &deck_path, const std::string &text, int forced_threads,
-                   bool &raised) {
+                   bool &raised, bool open_end = false, bool *served = nullptr) {
     raised = false;
+    if (served) *served = false;
     if (!cxx_variant_ok())
         return refusal(&text,
                        "not served by this build: this processor lacks AVX2 and FMA, which this "
@@ -824,7 +834,7 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     }
     int threads = forced_threads;
     if (forced_threads <= 0) {
-        const long long n = mws::exe::largest_solve(text);
+        const long long n = mws::exe::largest_solve(text, open_end);
         threads = n >= 0 ? threads_for(n) : 1;
     }
     const std::string arrays_dir = env("MW_EXE_ARRAYS");
@@ -834,11 +844,11 @@ std::string render(const std::string &deck_path, const std::string &text, int fo
     if (serial) {
         set_threads(forced_threads > 0 ? 1 : std::min(2, hardware_threads()), false);
         printed = mws::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
-                                   &message, &raised_kind);
+                                   &message, &raised_kind, open_end, served);
     } else {
         set_threads(threads, true);
         printed = mw::exe::answer(text, VERSION, EXE_VARIANT, arrays_dir, printout, why, &failed, &kind,
-                                  &message, &raised_kind);
+                                  &message, &raised_kind, open_end, served);
     }
     if (printed) {
         // An exception Python's render raises (the INTERNAL ERROR printout
@@ -910,6 +920,108 @@ int run_deck(const std::string &deck, const std::string &out, bool en_optional,
     return 0;
 }
 
+// --- SimNEC's streaming call (`_shell.stream`, momwire#1512) -----------------
+
+// `_shell._stream_piece`: one piece of the stream as its printout's bytes;
+// `go_on` false once the stream is over (EN, the last piece, a refusal, a
+// decline, an exception).
+std::string stream_piece(const std::string &piece, bool cut_at_nx, int forced_threads,
+                         bool &go_on) {
+    go_on = false;
+    try {
+        const std::string inject = env("MW_EXE_FAIL");  // gate hook, as run_deck's
+        if (inject == "alloc") throw std::bad_alloc();
+        if (inject == "runtime") throw std::runtime_error("injected by MW_EXE_FAIL");
+        bool raised = false, served = false;
+        std::string printout = render("-", piece, forced_threads, raised, true, &served);
+        go_on = cut_at_nx && served;
+        return printout;
+    } catch (const ml::PyError &e) {
+        return refusal(&piece, internal_error_reason(e.kind, e.message));
+    } catch (const std::bad_alloc &e) {
+        return refusal(&piece, internal_error_reason("MemoryError", e.what()));
+    } catch (const std::exception &e) {
+        return refusal(&piece, internal_error_reason("RuntimeError", e.what()));
+    } catch (...) {
+        return refusal(&piece, internal_error_reason("RuntimeError", "an unknown C++ exception"));
+    }
+}
+
+bool write_all(const std::string &bytes) {
+    std::size_t done = 0;
+    while (done < bytes.size()) {
+#if defined(_WIN32)
+        const int w = _write(1, bytes.data() + done, static_cast<unsigned>(bytes.size() - done));
+#else
+        const ssize_t w = write(1, bytes.data() + done, bytes.size() - done);
+#endif
+        if (w < 0) {
+            if (errno == EINTR) continue;
+            return false;  // the caller stopped reading
+        }
+        done += static_cast<std::size_t>(w);
+    }
+    return true;
+}
+
+long read_some(char *buf, std::size_t n) {
+    for (;;) {
+#if defined(_WIN32)
+        const int r = _read(0, buf, static_cast<unsigned>(n));
+#else
+        const ssize_t r = read(0, buf, n);
+#endif
+        if (r < 0 && errno == EINTR) continue;
+        return r < 0 ? 0 : static_cast<long>(r);  // an unreadable stdin ends the stream
+    }
+}
+
+int stream(int forced_threads) {
+#if defined(_WIN32)
+    _setmode(0, _O_BINARY);
+    _setmode(1, _O_BINARY);
+#else
+    std::signal(SIGPIPE, SIG_IGN);  // a closed stdout is a write error, not a kill
+#endif
+    std::string pending;
+    bool swallow_lf = false, final = false;
+    std::vector<char> buf(65536);
+    while (!final) {
+        const long got = read_some(buf.data(), buf.size());
+        final = got == 0;
+        std::size_t skip = 0;
+        if (swallow_lf && got > 0) {
+            if (buf[0] == '\n') skip = 1;
+            swallow_lf = false;
+        }
+        if (got > 0) pending.append(buf.data() + skip, static_cast<std::size_t>(got) - skip);
+        for (;;) {
+            std::size_t end = 0;
+            bool is_en = false;
+            if (!mw::nec5::next_structure(pending, final, end, is_en)) {
+                if (final) {
+                    bool blank = true;
+                    for (char c : pending)
+                        blank = blank && mw::nec5::latin1_isspace(static_cast<unsigned char>(c));
+                    if (!blank) {
+                        bool go_on = false;
+                        write_all(stream_piece(pending, false, forced_threads, go_on));
+                    }
+                }
+                break;
+            }
+            const std::string piece = pending.substr(0, end);
+            pending.erase(0, end);
+            swallow_lf = piece.back() == '\r' && pending.empty() && !final;
+            bool go_on = false;
+            const std::string printout = stream_piece(piece, !is_en, forced_threads, go_on);
+            log_route(go_on ? "stream:structure" : "stream:last", "-");
+            if (!write_all(printout) || !go_on) return 0;
+        }
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char **argv) {
@@ -935,11 +1047,12 @@ int main(int argc, char **argv) {
         std::printf("%s\n", ARGUMENT_ERROR_OUTPUT);
         return 0;
     }
+    const int forced_threads = std::atoi(env("MOMWIRE_THREADS").c_str());
+    if (args[0] == "-" && args[1] == "-") return stream(forced_threads);
     if (args[0] == "-" || args[1] == "-") {
         std::fprintf(stderr, "%s\n", STREAMING_REFUSAL);
         return 2;
     }
-    const int forced_threads = std::atoi(env("MOMWIRE_THREADS").c_str());
     return run_deck(args[0], args[1], en_optional, forced_threads);
 }
 #endif  // MW_EXE_NO_PYTHON

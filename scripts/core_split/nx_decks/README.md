@@ -14,3 +14,8 @@ runs the first two.
   A4 Ward session (`simcap.py` captures, the calls that carry `NX` chains), 2
   to 15 structures with segmentation and frequency changing between them.
   They end at the last `NX`, as the stream does: SimNEC closes stdin there.
+
+`stream_compare.py` (momwire#1512) writes the `simnec_stream_*` decks to the
+engines' stdin the way SimNEC does -- `- -`, one structure at a time, each
+printout read to its `NX` echo before the next -- and holds the no-Python
+executable to the launcher's streaming mode, byte for byte.

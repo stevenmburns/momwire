@@ -14,7 +14,8 @@ namespace exe {
 
 // The largest solve (basis functions) the deck's served runs prepare, or -1
 // when the structure half does not serve it (the deck then goes elsewhere).
-long long largest_solve(const std::string &latin1_text);
+// `open_end`: the text is a stream's piece (momwire#1512).
+long long largest_solve(const std::string &latin1_text, bool open_end = false);
 
 // The Sommerfeld grid's persistent store for this copy (serial or threaded):
 // `tag` is the executable's identity, its version and build
@@ -28,10 +29,14 @@ void configure_grid_cache(const std::string &tag);
 // `failed`: declined because a C++ exception escaped (`failure_kind` is
 // "MemoryError" for std::bad_alloc, else "RuntimeError"; `failure_message`
 // its what()), which the no-Python build reports as an INTERNAL ERROR.
+// `open_end`: the text is a stream's piece (momwire#1512, `razor_printout`);
+// `served`: every structure solved and printed (no refusal, nothing raised),
+// so a stream goes on after it.
 bool answer(const std::string &latin1_text, const std::string &version, const std::string &variant,
             const std::string &arrays_dir, std::string &printout, std::string &reason,
             bool *failed = nullptr, std::string *failure_kind = nullptr,
-            std::string *failure_message = nullptr, std::string *raised_kind = nullptr);
+            std::string *failure_message = nullptr, std::string *raised_kind = nullptr,
+            bool open_end = false, bool *served = nullptr);
 
 }  // namespace exe
 }  // namespace mw

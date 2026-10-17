@@ -231,15 +231,24 @@ struct DeckOutcome {
 };
 std::vector<DeckOutcome> parse_nec5_shared(const std::vector<std::string> &latin1_texts);
 
-// `split_structures(text)`: false is Python's None (no NX before EN).
+// `split_structures(text, open_end=)`: false is Python's None (no NX before
+// EN). `open_end`: the streaming mode's (momwire#1512) -- an NX ending the
+// text opens a structure still to come, not an empty one to refuse.
 struct Structure {
     std::string body;  // latin-1, each line "\n"-terminated
     bool has_terminator = false;
     std::string terminator;  // latin-1, the NX / EN line stripped
     std::string deck_text() const;
     std::string echo_text() const;
+    bool ends_on_nx() const;  // `ends_on_nx(structure)`
 };
-bool split_structures(const std::string &latin1_text, std::vector<Structure> &out);
+bool split_structures(const std::string &latin1_text, std::vector<Structure> &out,
+                      bool open_end = false);
+
+// `next_structure(text, final=)`: true when a complete NX or EN line ends
+// the stream's first structure; `end` is the offset just past it and
+// `is_en` says which. `final`: the text is all there will be.
+bool next_structure(const std::string &latin1_text, bool final, std::size_t &end, bool &is_en);
 
 // `_serve.split_runs(text)`: false is None; throws ParseError(serve_refusal).
 bool split_runs(const std::string &latin1_text, std::vector<std::string> &out);
@@ -269,7 +278,7 @@ struct StreamRead {
     std::vector<Structure> structures;
     std::vector<Answer> answers;
 };
-StreamRead read_stream(const std::string &latin1_text);
+StreamRead read_stream(const std::string &latin1_text, bool open_end = false);
 
 // --- the comparison format ---------------------------------------------------
 // One line per field, in the reference's own spelling

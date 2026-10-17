@@ -141,6 +141,73 @@ def test_the_command_line_edges(argv, tmp_path):
     assert exe.stderr.strip() == ref.stderr.strip()
 
 
+def _cards(deck: Path) -> bytes:
+    """A deck's cards before its EN."""
+    data = deck.read_bytes()
+    return data[: data.rindex(b"EN")]
+
+
+_ONE = _cards(DIPOLE) + b"NX\n"
+_STREAMS = {
+    "empty": b"",
+    "two structures, no EN": _ONE + _ONE,
+    "EN closes it": _ONE + DIPOLE.read_bytes() + _ONE,
+    "a refusal mid-stream": REFUSES.read_bytes().replace(b"\nEN", b"\nNX") + _ONE,
+    "an exception mid-stream": _ONE + _cards(RAISES) + b"NX\n" + _ONE,
+    "stdin closes mid-structure": _ONE + _cards(DIPOLE)[:120],
+    "blank lines after the last NX": _ONE + b"\n  \r\n",
+    "CRLF": (_ONE + _ONE).replace(b"\n", b"\r\n"),
+    "bare CR": (_ONE + _ONE).replace(b"\n", b"\r"),
+    "starts on NX": b"NX\n" + _ONE,
+    "latin-1 comment": b"CM \xb5 \xe9\n" + _ONE,
+    "a buried structure": _cards(BURIED) + b"NX\n" + _ONE,
+}
+
+
+@pytest.mark.parametrize("stream", list(_STREAMS.values()), ids=list(_STREAMS))
+def test_the_streaming_call(stream, tmp_path):
+    """SimNEC's `- -` (momwire#1512): the same printouts on stdout, nothing
+    on stderr, exit 0, no file written."""
+    runs = []
+    for name, prog in (("exe", EXE), ("launcher", _launcher())):
+        d = tmp_path / name
+        d.mkdir()
+        runs.append(
+            subprocess.run(
+                [prog, "-", "-"], cwd=d, input=stream, capture_output=True, check=False
+            )
+        )
+        assert list(d.iterdir()) == []
+    exe, ref = runs
+    assert (
+        (exe.returncode, exe.stdout) == (ref.returncode, ref.stdout) == (0, ref.stdout)
+    )
+    assert exe.stderr == b""
+
+
+def test_the_streaming_call_answers_each_structure_before_the_next(tmp_path):
+    """SimNEC's lockstep, through real pipes: one structure written, its
+    printout read up to its NX echo before the next is written -- with the
+    second line break of a CRLF arriving only with the next structure."""
+    sys.path.insert(0, str(ROOT / "scripts" / "core_split"))
+    import stream_compare as sc
+
+    crlf = _ONE.replace(b"\n", b"\r\n")
+    data = crlf + crlf
+    segments = []
+    for prog in (EXE, _launcher()):
+        writes = [crlf[:-1], b"\n" + crlf]
+        r = sc.lockstep([prog], data, dict(os.environ), tmp_path, 120, writes)
+        assert r["states"] == ["nx", "nx", "close:eof"], r["states"]
+        assert r["rc"] == 0
+        segments.append(r["segments"])
+    assert segments[0] == segments[1]
+    whole = subprocess.run(
+        [EXE, "-", "-"], input=data, capture_output=True, check=False
+    ).stdout
+    assert b"".join(segments[0]) == whole
+
+
 @pytest.mark.parametrize(
     "stdin_text",
     [

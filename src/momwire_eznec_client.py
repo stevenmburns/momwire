@@ -29,7 +29,9 @@ feature is "as slow as today", never "the engine is broken":
 The shell's three rules bind this client exactly as they bind the engine:
 exit 0 always, always write the printout, and read stdin only when the
 command line is empty — 4nec2's form (momwire#1488), where the two file names
-arrive on stdin and the deck may end without ``EN``. A deck whose ``GE`` card
+arrive on stdin and the deck may end without ``EN`` — or is ``- -``, SimNEC's
+streaming call (momwire#1512), which a child one-shot shell answers on this
+process's own stdin and stdout. A deck whose ``GE`` card
 asks for a ``.GMO`` geometry file gets it back framed ahead of the printout
 (``momwire_serve_client.split_answer``), and this client writes it beside the
 printout.
@@ -244,14 +246,39 @@ def probe_version() -> str:
 
 
 STREAMING_REFUSAL = (
-    "momwire does not serve the streaming mode ('- -': decks on stdin, printouts on stdout) that SimNEC 5.4 uses for NEC5CL_a5x engines; give "
-    "it two file paths, as SimNEC does for every other NEC-5 engine (momwire#1395)"
+    "momwire serves the streaming mode (decks on stdin, printouts on stdout) as '- -' only, "
+    "and only in its NEC-5 slot; give it '- -', or two file paths (momwire#1395, momwire#1512)"
 )
 
 
+def _stream(basis: str | None) -> int:
+    """SimNEC's streaming call (``- -``, momwire#1512): the one-shot shell's
+    :func:`momwire.eznec._shell.stream`, in a child that inherits this
+    process's stdin and stdout. One interpreter start per stream, which is
+    the whole point of the mode; the resident server answers one deck per
+    connection, and a stream is one long conversation."""
+    import subprocess
+
+    kwargs = "" if basis is None else f", basis={basis!r}"
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; from momwire.eznec._shell import main; "
+        f"sys.exit(main(['-', '-']{kwargs}))",
+    ]
+    try:
+        return subprocess.run(command, check=False).returncode
+    except Exception as exc:  # noqa: BLE001 - stderr is this mode's only other channel
+        print(
+            f"MOMWIRE ENGINE UNAVAILABLE - {type(exc).__name__}: {exc}", file=sys.stderr
+        )
+        return 2
+
+
 def main(argv: list[str] | None = None) -> int:
-    """The process entry point. Returns 0, except for SimNEC's streaming call
-    (``- -``), which is refused with 2 (momwire#1395)."""
+    """The process entry point. Returns 0, except for a ``-`` that is not
+    SimNEC's streaming call (``- -``), which is refused with 2
+    (momwire#1395)."""
     args = list(sys.argv[1:] if argv is None else argv)
     prog = sys.argv[0] if argv is None else "momwire-eznec-client"
 
@@ -273,16 +300,19 @@ def main(argv: list[str] | None = None) -> int:
         print(ARGUMENT_ERROR_OUTPUT)
         return 0
     deck_path, printout_path = args
-    if "-" in (deck_path, printout_path):
-        # SimNEC 5.4's streaming call (momwire#1395): refused on stderr with a
-        # failing status rather than a printout written to a file named "-".
-        print(STREAMING_REFUSAL, file=sys.stderr)
-        return 2
-    dialect = "nec4" if is_nec4 else "nec5"
     if not is_nec4:
         basis = _mech.filename_basis(prog, _FILENAME_MARKER, consumed=_CLIENT_SEGMENT)
         if basis is None:
             basis = _mech.filename_basis(prog, _NEC5_MARKER)
+    if "-" in (deck_path, printout_path):
+        if args == ["-", "-"] and not is_nec4:
+            # SimNEC's streaming call (momwire#1512).
+            return _stream(basis)
+        # Any other '-' (momwire#1395): refused on stderr with a failing
+        # status rather than a printout written to a file named "-".
+        print(STREAMING_REFUSAL, file=sys.stderr)
+        return 2
+    dialect = "nec4" if is_nec4 else "nec5"
 
     try:
         with open(deck_path, "rb") as handle:
